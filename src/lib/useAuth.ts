@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
 
+import { isConfined } from "./cityConfinement";
+
 export type AppUser = {
   id: string;
   email: string;
@@ -154,6 +156,13 @@ export function canAccess(
   page: PageName,
 ): boolean {
   if (!appUser) return false;
+  // THE BOUNDARY IS CHECKED BEFORE THE is_admin SHORT-CIRCUIT, and beats it. Without this a
+  // confined account that also carried is_admin would be shown Finance, Tech and Back Office in
+  // the chrome — every one of which the server refuses. The rail must not offer a door the server
+  // will slam; see cityConfinement.ts for why is_admin loses here and wins for city managers.
+  if (isConfined(appUser)) {
+    return page === "matchops" || page === "chats";
+  }
   if (appUser.is_admin) return true;
   switch (page) {
     case "home":

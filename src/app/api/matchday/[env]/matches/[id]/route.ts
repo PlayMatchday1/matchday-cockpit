@@ -7,7 +7,7 @@
 
 import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
-import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth"; // GET is a Match Ops READ (Part D round 2); PUT stays admin + EDIT MATCHES
+import { authenticateMatchOpsRead, assertMatchInScope } from "@/lib/matchOpsAuth"; // GET is a Match Ops READ (Part D round 2); PUT stays admin + EDIT MATCHES
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, StageHostGuardError, StageConfigError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { EDITABLE_KEYS } from "@/lib/matchEditModel";
 import { realOccupancyFromRoster, type RosterRow } from "@/lib/gamedayModel";
@@ -51,6 +51,12 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; id
   const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { env, id } = await ctx.params;
+
+  // THE BOUNDARY ON THE ID ITSELF — filtering a list is not authorisation. See assertMatchInScope.
+  {
+    const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, id);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  }
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });
   if (!/^\d+$/.test(id)) return Response.json({ error: "Match id must be numeric" }, { status: 400 });
   try {
@@ -90,6 +96,13 @@ export async function PUT(req: Request, ctx: { params: Promise<{ env: string; id
   const auth = await authenticateCapability(req, "editMatches");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { env, id } = await ctx.params;
+
+  // THE SAME BOUNDARY ON THE WRITE PATH. A confined account must not act on a match it was never
+  // shown — and the list it was shown is a post-fetch filter, not a permission.
+  {
+    const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, id);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  }
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });
   if (!/^\d+$/.test(id)) return Response.json({ error: "Match id must be numeric" }, { status: 400 });
 

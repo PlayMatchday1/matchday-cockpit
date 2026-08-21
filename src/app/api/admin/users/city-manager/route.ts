@@ -54,25 +54,51 @@ export async function POST(req: Request) {
 
   const nextIsCm = body.isCityManager ?? t.is_city_manager;
 
-  // RULE 4 — the tier off means no scope. Sent explicitly as well as trusted to the trigger, so
-  // the intent is in the request body and in change_log, not only in a database side effect.
+  /* RULE 4, REWRITTEN — THE CITY IS NO LONGER OWNED BY THE TIER.
+   *
+   * It used to read "tier off means no scope", and clearing the City Manager box wiped the city.
+   * That is now wrong in both directions: a city_identifier means CONFINED TO THAT CITY, and the
+   * account this exists for — the person who runs Warsaw — has a city and no City Manager box.
+   * Wiping their scope when the box is off would unconfine them, which is the opposite of safe.
+   *
+   * SO THE TWO ARE INDEPENDENT: is_city_manager decides membership of the city-manager ledger and
+   * the pay pages; city_identifier decides what an account may see. A city manager still needs a
+   * city (checked below), because a city manager without one is an account whose every page is
+   * silently empty — but the reverse implication is gone.
+   */
+  const rawCity = body.cityIdentifier !== undefined ? body.cityIdentifier : t.city_identifier;
   let nextCity: string | null;
-  if (!nextIsCm) {
+  if (rawCity == null || rawCity === "") {
+    // Explicitly cleared, or never set. A city manager cannot be left without one.
+    if (nextIsCm) {
+      return Response.json({
+        error: "A city is required to make someone a City Manager — the tier scopes every page they see.",
+      }, { status: 400 });
+    }
     nextCity = null;
   } else {
-    const raw = body.cityIdentifier !== undefined ? body.cityIdentifier : t.city_identifier;
-    // RULE 2 — the allowlist. A city manager without a valid scope is not a partially-configured
-    // account; it is an account whose every page is silently empty.
-    const scope = resolveCityScope(raw);
+    // RULE 2 — the allowlist, applied to EVERY city now, not only a city manager's. An unknown
+    // value is not rejected by the database; it would confine the account to nothing and look
+    // correct in the grid.
+    const scope = resolveCityScope(rawCity);
     if (!scope) {
       return Response.json({
-        error: raw == null || raw === ""
-          ? "A city is required to make someone a City Manager — the tier scopes every page they see."
-          : `${JSON.stringify(String(raw))} is not a known city. Pick one of: ${CITY_IDENTIFIERS.join(", ")}. ` +
-            `An unknown value is not rejected by the database — it would scope this account to nothing and look correct in the grid.`,
+        error: `${JSON.stringify(String(rawCity))} is not a known city. Pick one of: ${CITY_IDENTIFIERS.join(", ")}. ` +
+          `An unknown value is not rejected by the database — it would confine this account to nothing and look correct in the grid.`,
       }, { status: 400 });
     }
     nextCity = scope.identifier;   // store the CANONICAL value, never the input string
+  }
+
+  /* A CITY CONFINES, SO IT IS REFUSED ON AN ADMIN. The predicate holds confinement above is_admin
+   * deliberately (see cityConfinement.ts), which means giving an admin a city would lock them out
+   * of their own tool — Finance, Tech, Back Office, and the grant screen itself. That rule exists
+   * to be SAFE if it ever happens, not to be a thing anyone can do from a dropdown. */
+  if (nextCity && t.is_admin) {
+    return Response.json({
+      error: "An admin cannot be confined to a city — a city scopes every page the account can see, "
+        + "and confinement outranks admin. Remove admin first if that is really the intent.",
+    }, { status: 400 });
   }
 
   // RULE 3 — mutually exclusive with ADMIN, refused at the ROUTE.

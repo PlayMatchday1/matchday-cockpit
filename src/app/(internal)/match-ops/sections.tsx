@@ -12,6 +12,7 @@
 
 import type { AppUser, PageName } from "@/lib/useAuth";
 import { canAccess } from "@/lib/useAuth";
+import { isConfined, CONFINED_RAIL_KEYS } from "@/lib/cityConfinement";
 
 // Phase 24 — Match Ops is TWO TABS: what you do today, and what you manage over weeks.
 // THE ROUTES DID NOT MOVE. Every href is still /match-ops/*, there is still ONE route group and
@@ -87,9 +88,16 @@ export function visibleSections(
   appUser: AppUser | null | undefined,
   tab?: MatchOpsTab,
 ): MatchOpsSection[] {
+  // A CONFINED ACCOUNT SEES EXACTLY SIX ITEMS — Back Office, Finance and Tech are ABSENT, not
+  // greyed. This is a COURTESY: every one of those pages is refused at the server too, and the
+  // rail has been wrong in both directions before (an item hidden that the server would serve, and
+  // an item hidden that the server already granted). The list is in cityConfinement.ts so the rail
+  // and the gate cannot drift into disagreeing about which six.
+  const bounded = isConfined(appUser ?? undefined);
   return MATCH_OPS_SECTIONS.filter((s) =>
     (tab === undefined || s.section === tab) &&
-    (s.access === "admin" ? !!appUser?.is_admin
+    (!bounded || CONFINED_RAIL_KEYS.includes(s.key)) &&
+    (s.access === "admin" ? !bounded && !!appUser?.is_admin
      : canAccess(appUser ?? null, s.access as PageName)),
   );
 }

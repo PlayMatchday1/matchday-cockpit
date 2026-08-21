@@ -14,6 +14,7 @@
 // behaviour (still is_admin) and stays that way until each route is moved deliberately.
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { isConfined, CONFINED_ERROR } from "./cityConfinement";
 
 export type AdminAuthResult =
   | { ok: true; supabase: SupabaseClient; appUserId: string; email: string; canEditMatches: boolean; canManagePlayers: boolean; canManagePromos: boolean }
@@ -105,6 +106,11 @@ export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> 
   // The tier is confined BEFORE the admin gate: a city manager holding a stray flag must not be
   // admitted by it. (is_admin wins inside isCityManagerConfined, so a real admin is unaffected.)
   if (isCityManagerConfined(r.row)) return { ok: false, status: 403, error: CITY_MANAGER_CONFINED_ERROR };
+  // THE BOUNDARY IS CHECKED HERE TOO, and before the admin gate for the same reason: an admin flag
+  // inside a boundary must not widen it. Every /api/admin/* route is outside the six by
+  // definition, so a confined account is refused all of them at the server — not merely denied a
+  // nav item. See cityConfinement.ts for why this disagrees with the line above it.
+  if (isConfined(r.row)) return { ok: false, status: 403, error: CONFINED_ERROR };
   const gate = adminGate(r.row);
   if (!gate.ok) return gate;
   return { ok: true, supabase: r.supabase, appUserId: r.row.id as string, email: r.email, ...deriveMatchOpsFlags(r.row) };

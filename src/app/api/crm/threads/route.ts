@@ -95,6 +95,36 @@ export async function GET(req: Request) {
   }
   const { supabase, appUserId: viewerId } = auth;
 
+  /* ── THE CITY BOUNDARY ON A TABLE WITH NO CITY ──────────────────────────────────────────────
+   * crm_threads carries no city and no match link. A thread belongs to a city through its
+   * ASSIGNEE: assignment is manual — a thread is handed to the Poland team when someone writes in
+   * about a Polish match or writes in Polish — so the tie fills forward, and an empty result today
+   * is the right answer rather than a broken filter.
+   *
+   * ONE COLUMN: city_identifier = 'WAW'. That covers both the people this rule was written for —
+   * a Warsaw city manager AND the Warsaw account itself — because confinement and the city-manager
+   * scope now read the same column. Assigning a thread straight to the Warsaw account puts it in
+   * their view; no extra account has to exist to make the filter work.
+   *
+   * UNASSIGNED THREADS BELONG TO NOBODY and are invisible here — 306 of 407 today, by design:
+   * .in() over a list that never contains null excludes them.
+   *
+   * RESOLVED HERE, ABOVE EVERY QUERY, because the COUNTS run before the list. A total that counts
+   * threads this account cannot open is a leak that shows a number instead of a row. */
+  let scopedAssignees: string[] | null = null;
+  if (auth.confinedCity) {
+    const ur = await supabase.from("app_users").select("id, city_identifier");
+    if (ur.error) {
+      return Response.json({ error: "Could not resolve city scope" }, { status: 500 });
+    }
+    const ids = (ur.data ?? [])
+      .filter((u) => u.city_identifier === auth.confinedCity)
+      .map((u) => String(u.id));
+    // No Warsaw user yet => nothing can belong to Warsaw. A sentinel that matches no row keeps the
+    // filter ON; dropping it would return every thread in the estate.
+    scopedAssignees = ids.length > 0 ? ids : ["00000000-0000-0000-0000-000000000000"];
+  }
+
   const url = new URL(req.url);
   const view = parseView(url.searchParams.get("view"));
 
@@ -143,12 +173,13 @@ export async function GET(req: Request) {
     }[] = [];
     let from = 0;
     while (from < 20000) {
-      const r = await supabase
+      let scan = supabase
         .from("crm_threads")
         .select("last_message_preview, last_message_at, no_reply_needed_at")
         .eq("status", "open")
-        .eq("last_message_direction", "inbound")
-        .range(from, from + INDEX_PAGE - 1);
+        .eq("last_message_direction", "inbound");
+      if (scopedAssignees) scan = scan.in("assigned_to_user_id", scopedAssignees);
+      const r = await scan.range(from, from + INDEX_PAGE - 1);
       if (r.error) {
         console.error("[crm:threads.list] awaiting count scan error", r.error);
         break;
@@ -169,8 +200,10 @@ export async function GET(req: Request) {
     ).length;
   })();
 
-  const countBase = () =>
-    supabase.from("crm_threads").select("id", { count: "exact", head: true });
+  const countBase = () => {
+    const q = supabase.from("crm_threads").select("id", { count: "exact", head: true });
+    return scopedAssignees ? q.in("assigned_to_user_id", scopedAssignees) : q;
+  };
   const countsPromise = (async () => {
     const [openR, closedR, mineR, awaiting] = await Promise.all([
       countBase().eq("status", "open"),
@@ -207,6 +240,7 @@ export async function GET(req: Request) {
 
   if (!emptyView) {
     let q = supabase.from("crm_threads").select(THREAD_COLS);
+    if (scopedAssignees) q = q.in("assigned_to_user_id", scopedAssignees);
     if (view === "open") {
       q = q.eq("status", "open");
     } else if (view === "closed") {

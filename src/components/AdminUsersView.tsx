@@ -7,6 +7,9 @@ import { type AppUser, useAuth } from "@/lib/useAuth";
 import AddUserModal from "./AddUserModal";
 import InlineEdit from "./InlineEdit";
 import { CITY_SCOPES, cityNameFor, isUnknownScope } from "@/lib/cityScope";
+import { confinementSummary, CONFINED_RAIL_KEYS } from "@/lib/cityConfinement";
+// The city rail's own list — the count in the sentence is its length, so the two cannot disagree.
+import { CITY_SECTIONS } from "@/app/(internal)/city/citySections";
 
 type PermissionKey =
   | "can_manage_promos"
@@ -466,9 +469,24 @@ export default function AdminUsersView() {
                         </div>
                       </td>
                       {/* CITY — A DROPDOWN, NEVER FREE TEXT. A typed value scopes the account to
-                          nothing and looks identical here, which is why this was SQL-only before. */}
+                          nothing and looks identical here, which is why this was SQL-only before.
+
+                          IT IS NO LONGER CITY-MANAGER-ONLY. A city_identifier now means CONFINED
+                          TO THAT CITY — six Match Ops pages, every route, every query — whether or
+                          not the City Manager box is ticked. That is the whole interaction for an
+                          account like the person who runs Warsaw: give them a city, leave the box
+                          alone, and their data stays out of the city-manager ledger.
+
+                          Options come from CITY_SCOPES, the same list cityNameFor() maps and every
+                          scoped route validates against. Never a literal array here. */}
                       <td className="px-2 py-2 align-middle text-center" data-testid="cell-city">
-                        {u.is_city_manager ? (
+                        {u.is_admin ? (
+                          // Confinement outranks admin, so a city would lock an admin out of their
+                          // own tool. Refused at the route too; this says why rather than greying.
+                          <span className="max-w-[130px] text-[9px] leading-tight text-deep-green/50" data-testid="city-admin-conflict">
+                            Admins can&rsquo;t be confined to a city
+                          </span>
+                        ) : (
                           <div className="flex flex-col items-center gap-1">
                             <select
                               data-testid="city-select"
@@ -477,6 +495,9 @@ export default function AdminUsersView() {
                               onChange={(e) => saveCityManager(u, { cityIdentifier: e.target.value })}
                               className="rounded-md border border-cream-line bg-white px-2 py-1 text-xs text-deep-green"
                             >
+                              {/* Unconfined is a real, normal state and needs a way back to it —
+                                  refused only when the City Manager box is on, by the route. */}
+                              <option value="">&mdash; none &mdash;</option>
                               {/* a stored value outside the list is shown as itself rather than
                                   silently re-pointed at a city this account was never scoped to */}
                               {isUnknownScope(u.city_identifier) && (
@@ -491,9 +512,21 @@ export default function AdminUsersView() {
                                 Not a known city — this account sees nothing
                               </span>
                             )}
+                            {/* THE CONSEQUENCE, ON SCREEN. This dropdown is a much sharper control
+                                than it looks: one selection cuts the account down to six pages. */}
+                            {/* WHAT THIS PERSON ACTUALLY GETS. The same city means two different
+                                things depending on the box beside it, and the page counts come
+                                from the very lists the two rails filter on — never a literal. */}
+                            {!isUnknownScope(u.city_identifier) && u.city_identifier && (
+                              <span className="max-w-[150px] text-[9px] leading-tight text-deep-green/55" data-testid="city-confined">
+                                {confinementSummary({
+                                  cityName: cityNameFor(u.city_identifier) ?? u.city_identifier,
+                                  isCityManager: !!u.is_city_manager,
+                                  pageCount: u.is_city_manager ? CITY_SECTIONS.length : CONFINED_RAIL_KEYS.length,
+                                })}
+                              </span>
+                            )}
                           </div>
-                        ) : (
-                          <span className="text-xs text-deep-green/35" data-testid="city-empty">&mdash;</span>
                         )}
                       </td>
                       {(() => {

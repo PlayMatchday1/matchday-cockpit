@@ -8,7 +8,7 @@
 
 import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
-import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth"; // GET is a Match Ops READ (Part D round 2); POST stays admin + EDIT MATCHES
+import { authenticateMatchOpsRead, assertMatchInScope } from "@/lib/matchOpsAuth"; // GET is a Match Ops READ (Part D round 2); POST stays admin + EDIT MATCHES
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { rosterRowCounts } from "@/lib/gamedayModel";
@@ -28,6 +28,12 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; ma
   const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { env, matchId } = await ctx.params;
+
+  // THE BOUNDARY ON THE ID ITSELF — filtering a list is not authorisation. See assertMatchInScope.
+  {
+    const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, matchId);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  }
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });
   if (!/^\d+$/.test(matchId)) return Response.json({ error: "matchId must be numeric" }, { status: 400 });
   const url = new URL(req.url);
@@ -115,6 +121,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; m
   const auth = await authenticateCapability(req, "editMatches");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { env, matchId } = await ctx.params;
+
+  // THE SAME BOUNDARY ON THE WRITE PATH. A confined account must not act on a match it was never
+  // shown — and the list it was shown is a post-fetch filter, not a permission.
+  {
+    const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, matchId);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  }
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });
   if (!/^\d+$/.test(matchId)) return Response.json({ error: "matchId must be numeric" }, { status: 400 });
   const op = (await req.json().catch(() => null)) as { kind?: string; playerId?: number; userMatchId?: number; teamId?: number; team?: number; playerNumber?: number; totalFakes?: number; fields?: Record<string, unknown>; saveId?: string; source?: string; matchName?: string } | null;

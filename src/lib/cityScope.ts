@@ -28,6 +28,15 @@ export const CITY_SCOPES: readonly CityScope[] = [
   { identifier: "OKC", name: "Oklahoma City" },
   { identifier: "SATX", name: "San Antonio" },
   { identifier: "STL", name: "St. Louis" },
+  // WAW opened after this list was written. It is here for TWO reasons and the second is the one
+  // that matters: it is the single place WAW ↔ "Warsaw" is mapped. Matches join on
+  // city_identifier ("WAW"); reviews carry only city_name ("Warsaw"). Two spellings of the same
+  // city inside one confinement is how a filter silently returns nothing, so neither call site
+  // spells either of them — both ask cityNameFor()/resolveCityScope() here.
+  //
+  // SIDE EFFECT, STATED: this list is also the allowlist for a CITY MANAGER's city_identifier, so
+  // adding WAW makes a Warsaw city-manager account grantable. Nothing is granted by this edit.
+  { identifier: "WAW", name: "Warsaw" },
 ] as const;
 
 export const CITY_IDENTIFIERS: readonly string[] = CITY_SCOPES.map((c) => c.identifier);

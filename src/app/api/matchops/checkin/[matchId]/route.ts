@@ -16,7 +16,7 @@
 // LANDED / FAILED / NOT APPLIED / UNKNOWN PER CALL and returns the live state of both spots.
 
 import { randomUUID } from "node:crypto";
-import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
+import { authenticateMatchOpsRead, assertMatchInScope } from "@/lib/matchOpsAuth";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, NotAuthorizedError } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
@@ -68,6 +68,12 @@ export async function GET(req: Request, ctx: { params: Promise<{ matchId: string
   const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { matchId } = await ctx.params;
+
+  // THE BOUNDARY ON THE ID ITSELF — filtering a list is not authorisation. See assertMatchInScope.
+  {
+    const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, matchId);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  }
   if (!/^\d+$/.test(matchId)) return Response.json({ error: "matchId must be numeric" }, { status: 400 });
 
   try {
@@ -109,6 +115,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ matchId: strin
   const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { matchId } = await ctx.params;
+
+  // THE BOUNDARY ON THE ID ITSELF — filtering a list is not authorisation. See assertMatchInScope.
+  {
+    const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, matchId);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  }
   if (!/^\d+$/.test(matchId)) return Response.json({ error: "matchId must be numeric" }, { status: 400 });
   const body = (await req.json().catch(() => null)) as
     { kind?: "mark" | "move" | "result"; playerId?: number; status?: string;
@@ -210,6 +222,12 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ matchId: str
   const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { matchId } = await ctx.params;
+
+  // THE BOUNDARY ON THE ID ITSELF — filtering a list is not authorisation. See assertMatchInScope.
+  {
+    const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, matchId);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  }
   if (!/^\d+$/.test(matchId)) return Response.json({ error: "matchId must be numeric" }, { status: 400 });
   const playerId = Number(new URL(req.url).searchParams.get("playerId"));
   if (!Number.isFinite(playerId)) return Response.json({ error: "playerId required" }, { status: 400 });

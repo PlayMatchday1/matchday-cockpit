@@ -55,7 +55,11 @@ export const LABEL: Record<Capability, string> = {
 };
 
 // Keyed on EMAIL, not full_name — a machine account must never hold a write, whatever its row says.
+import { isConfined, CONFINED_CAPABILITIES, CONFINED_ERROR, type ConfinableRow } from "./cityConfinement";
+
 export const E2E_SERVICE_EMAIL = "clubhouse-e2e@playmatchday.com";
+
+export { CONFINED_ERROR };
 
 export const CITY_MANAGER_CONFINED_ERROR =
   "City manager accounts are scoped to their own city. Use Manager Pay, Reviews or Gameday Ops under /city.";
@@ -63,6 +67,20 @@ export const CITY_MANAGER_CONFINED_ERROR =
 /** A city manager is confined to /city/* regardless of which boxes their row carries. */
 export function isCityManagerConfined(row: CapRow | null | undefined): boolean {
   return !!row && row.is_city_manager === true && row.is_admin !== true;
+}
+
+/* THE CITY BOUNDARY, IMPORTED — not a third copy of a predicate. */
+function confinedBlocks(row: CapRow | null | undefined, cap: Capability): boolean {
+  if (!isConfined(row as ConfinableRow)) return false;
+  // A confined account keeps EXACTLY the six pages' capabilities. It must NOT go down the
+  // isCityManagerConfined path below, which returns false for everything — that path locks an
+  // account out of Match Ops entirely, and these six pages ARE Match Ops.
+  if (CONFINED_CAPABILITIES.has(cap)) return false;
+  // Write grants still resolve on their own column. Confinement decides WHERE, not WHAT: it
+  // neither grants a write nor revokes one, it scopes the data the write acts on. can_manage_promos
+  // stays the only thing standing between this account and a 100%-off code, exactly as today.
+  if (NEEDS_MATCHOPS.has(cap)) return false;
+  return true;
 }
 
 function isServiceAccount(row: CapRow | null | undefined, email?: string | null): boolean {
@@ -84,11 +102,15 @@ export function can(row: CapRow | null | undefined, cap: Capability, email?: str
   if (!row) return false;
   if (isServiceAccount(row, email)) return false;
   if (isCityManagerConfined(row)) return false;
+  // BEFORE the is_admin term below, and before grantAccess — the boundary beats the flag.
+  if (confinedBlocks(row, cap)) return false;
   if (cap === "grantAccess") return row.is_admin === true;
   if (NEEDS_MATCHOPS.has(cap) && row.can_access_matchops !== true) return false;
   if (row[COLUMN[cap]] === true) return true;
   // is_admin remains sufficient for PAGE access only — never for a write grant, which must be
   // ticked explicitly even for an admin so the grid says what is true.
+  // is_admin is sufficient for page access — but NOT inside a boundary. confinedBlocks() has
+  // already returned true for every page outside the six, so this line cannot widen one.
   return !NEEDS_MATCHOPS.has(cap) && cap !== "editCredits" && cap !== "sendMessages"
     && row.is_admin === true;
 }
@@ -99,6 +121,7 @@ export function denial(row: CapRow | null | undefined, cap: Capability, email?: 
   if (!row) return "Not a cockpit user.";
   if (isServiceAccount(row, email)) return "Service accounts hold no permissions.";
   if (isCityManagerConfined(row)) return CITY_MANAGER_CONFINED_ERROR;
+  if (confinedBlocks(row, cap)) return CONFINED_ERROR;
   if (NEEDS_MATCHOPS.has(cap) && row.can_access_matchops !== true) {
     return `${LABEL[cap]} is exercised inside Match Ops — you need Match Ops access as well.`;
   }

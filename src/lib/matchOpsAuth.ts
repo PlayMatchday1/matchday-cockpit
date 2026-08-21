@@ -12,9 +12,16 @@
 
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { resolveSessionUser, deriveMatchOpsFlags, isCityManagerConfined, CITY_MANAGER_CONFINED_ERROR, type AppUserRow } from "./adminAuth";
+import { confinedCity, CONFINED_CITY_ERROR } from "./cityConfinement";
 
 export type MatchOpsAuthResult =
-  | { ok: true; supabase: SupabaseClient; appUserId: string; email: string; isAdmin: boolean; canEditMatches: boolean; canManagePlayers: boolean; canManagePromos: boolean }
+  | { ok: true; supabase: SupabaseClient; appUserId: string; email: string; isAdmin: boolean;
+      canEditMatches: boolean; canManagePlayers: boolean; canManagePromos: boolean;
+      // THE SCOPE EVERY MATCH-OPS ROUTE MUST PUSH INTO ITS QUERY. null = unconfined, and the route
+      // filters on nothing. Non-null = the route MUST add .eq() before fetching — filtering after
+      // the fetch leaks through pagination counts, which is the whole reason this is returned by
+      // the gate rather than left for each route to look up.
+      confinedCity: string | null }
   | { ok: false; status: number; error: string };
 
 // The E2E service account is blocked here EXPLICITLY, keyed on EMAIL (not full_name) — belt-and-
@@ -55,6 +62,45 @@ export async function authenticateMatchOpsRead(req: Request): Promise<MatchOpsAu
     appUserId: r.row.id as string,
     email: r.email,
     isAdmin: r.row.is_admin === true,
+    confinedCity: confinedCity(r.row),
     ...deriveMatchOpsFlags(r.row),
   };
+}
+
+
+/**
+ * THE BOUNDARY ON A MATCH ID — call this in every route that ACTS on one.
+ *
+ * FILTERING A LIST IS NOT AUTHORISATION. Gameday Ops can only filter after the fetch (the MatchDay
+ * admin API takes no city), so the list a confined account sees is a presentation decision. A match
+ * id is a number: it can be typed, guessed, kept from a bookmark, or read out of a screenshot. If
+ * the only thing standing between this account and another city's match were the list it was shown,
+ * there would be no boundary at all — just a shorter menu.
+ *
+ * DENY BY DEFAULT. The city comes from mdapi_matches, the mirror every other scoped query uses. A
+ * match the mirror does not carry cannot be proved in-scope, so a confined account is refused it.
+ * That is the safe direction: a sync lag costs a confined operator one refusal, where the other
+ * default would hand them another city's match every time the mirror was behind.
+ *
+ * Returns { ok: true } immediately for unconfined accounts — this adds no query to their path.
+ */
+export async function assertMatchInScope(
+  supabase: SupabaseClient,
+  scopeCity: string | null,
+  matchApiId: string | number | null | undefined,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  if (!scopeCity) return { ok: true };
+  const id = Number(matchApiId);
+  if (!Number.isFinite(id)) return { ok: false, status: 400, error: "match id required" };
+  const { data, error } = await supabase
+    .from("mdapi_matches")
+    .select("api_id, city_identifier")
+    .eq("api_id", id)
+    .maybeSingle();
+  if (error) return { ok: false, status: 500, error: "Could not verify the match's city" };
+  if (!data) return { ok: false, status: 403, error: CONFINED_CITY_ERROR };
+  if (String(data.city_identifier ?? "") !== scopeCity) {
+    return { ok: false, status: 403, error: CONFINED_CITY_ERROR };
+  }
+  return { ok: true };
 }

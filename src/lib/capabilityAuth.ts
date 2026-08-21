@@ -11,11 +11,14 @@
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { resolveSessionUser, type AppUserRow } from "./adminAuth";
 import { can, denial, type Capability } from "./capabilities";
+import { confinedCity } from "./cityConfinement";
 
 export type CapAuthResult =
   | {
       ok: true; supabase: SupabaseClient; appUserId: string; email: string; row: AppUserRow;
       isAdmin: boolean;
+      // null = unconfined. Non-null means the route MUST verify the resource's city before acting.
+      confinedCity: string | null;
       // The write grants, derived from the same predicate the panels use.
       canEditMatches: boolean; canManagePlayers: boolean; canManagePromos: boolean;
       canEditCredits: boolean; canSendMessages: boolean;
@@ -34,6 +37,10 @@ export async function authenticateCapability(req: Request, cap: Capability): Pro
     appUserId: r.row.id as string,
     email: r.email,
     row: r.row,
+    // THE CITY SCOPE, carried on the WRITE gate too. Every route that acts on a match id must be
+    // able to re-check the city before acting, whichever gate admitted it — a boundary that holds
+    // on reads and not on writes is not a boundary.
+    confinedCity: confinedCity(r.row),
     isAdmin: r.row.is_admin === true,
     canEditMatches: can(r.row, "editMatches", r.email),
     canManagePlayers: can(r.row, "managePlayers", r.email),

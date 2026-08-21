@@ -146,14 +146,19 @@ export async function GET(req: Request) {
   const upperMs = Date.now() + UPCOMING_WINDOW_DAYS * 24 * 60 * 60 * 1000;
   const upperIso = new Date(upperMs).toISOString();
 
-  const upcomingRes = await supabase
+  // THE CITY BOUNDARY, PUSHED INTO THE QUERY. mdapi_matches carries city_identifier, so this is a
+  // real .eq() rather than a post-filter — the SECTION_CAP limit is applied to the scoped set, so
+  // a confined account gets its own city's first N matches and not N minus whatever was dropped.
+  let upcomingQ = supabase
     .from("mdapi_matches")
     .select(
       "api_id, field_title, start_date_utc, city_identifier, manager_email, is_cancelled",
     )
     .gte("start_date_utc", nowIso)
     .lt("start_date_utc", upperIso)
-    .neq("is_cancelled", true)
+    .neq("is_cancelled", true);
+  if (auth.confinedCity) upcomingQ = upcomingQ.eq("city_identifier", auth.confinedCity);
+  const upcomingRes = await upcomingQ
     .order("start_date_utc", { ascending: true })
     .limit(SECTION_CAP);
   if (upcomingRes.error) {
@@ -175,12 +180,16 @@ export async function GET(req: Request) {
       .map((s) => Number(s))
       .filter((n) => Number.isFinite(n));
     if (idsNum.length > 0) {
-      const r = await supabase
+      let joinQ = supabase
         .from("mdapi_matches")
         .select(
           "api_id, field_title, start_date_utc, city_identifier, manager_email, is_cancelled",
         )
         .in("api_id", idsNum);
+      // A chat is only resolvable if ITS MATCH is in the boundary. Without this the join would
+      // hand back another city's match for a chat id typed into the URL.
+      if (auth.confinedCity) joinQ = joinQ.eq("city_identifier", auth.confinedCity);
+      const r = await joinQ;
       if (r.error) {
         console.error("[match-chats:active] match join failed", r.error);
       } else {

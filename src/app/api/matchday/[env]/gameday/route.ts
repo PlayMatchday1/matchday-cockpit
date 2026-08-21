@@ -10,6 +10,7 @@
 // sortColumn/sortDirection, page/limit. We over-fetch nothing and page to the end.
 
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
+import { cityNameFor } from "@/lib/cityScope";
 import { apiGet, StageHostGuardError, StageConfigError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 // The row shape is SHARED with /api/city/gameday — same board, same rows. See gamedayApiShape.
 import { trimMatch, type Raw } from "@/lib/gamedayApiShape";
@@ -40,7 +41,31 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
       const total = Array.isArray(res) ? rows.length : (res.totalItems ?? rows.length);
       if (rows.length < PAGE_LIMIT || out.length >= total) break;
     }
-    return Response.json({ date, env, matches: out.map(trimMatch) });
+    /* ── POST-FETCH BY NECESSITY, AND WHAT COMPENSATES ──────────────────────────────────────────
+     * THE RULE EVERYWHERE ELSE is: push the scope into the query, never discard rows afterwards,
+     * because a fetch-then-filter leaks through counts and pagination totals. THIS ROUTE CANNOT
+     * OBEY IT. It has no SQL — it pages the MatchDay ADMIN API, and that API exposes no city
+     * parameter (see the header comment). There is no .eq() to reach for.
+     *
+     * SO THE REASON FOR THE RULE IS ANSWERED TWO OTHER WAYS:
+     *
+     *   1. NO COUNT IS EVER TAKEN FROM THE RESPONSE. The filter runs here, on the server, before
+     *      serialization, and `matches` is the only array this endpoint returns. Anything the page
+     *      shows as "N matches" counts THIS array — the filtered one. The upstream totalItems is
+     *      used solely to decide when to stop paging and never reaches the client.
+     *   2. FILTERING A LIST IS NOT AUTHORISATION. A match id can be typed, bookmarked or guessed,
+     *      so every route that ACTS on one re-checks the city server-side before acting —
+     *      assertMatchInScope, on the read gate AND the write gate. Shortening a menu is not a
+     *      permission; that check is.
+     *
+     * The row's city NAME is what survives trimMatch, so the identifier is resolved to a name once
+     * via cityScope — the same list that maps WAW to "Warsaw" for Reviews. */
+    let matches = out.map(trimMatch);
+    if (auth.confinedCity) {
+      const want = cityNameFor(auth.confinedCity);
+      matches = matches.filter((m) => (m.field?.city?.name ?? null) === want);
+    }
+    return Response.json({ date, env, matches });
   } catch (e) {
     if (e instanceof StageHostGuardError) return Response.json({ error: e.message }, { status: 500 });
     if (e instanceof StageConfigError) return Response.json({ error: e.message }, { status: 500 });

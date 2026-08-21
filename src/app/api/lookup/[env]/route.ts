@@ -14,6 +14,8 @@
 // path with the EDIT MATCHES gate, deny-lists and recordWrite already on it.
 
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
+import { cityNameFor } from "@/lib/cityScope";
+import { CONFINED_CITY_ERROR } from "@/lib/cityConfinement";
 import { apiGet, StageHostGuardError, StageConfigError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { detectKind, serverQuery } from "@/lib/playerLookupModel";
 
@@ -73,6 +75,32 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
           .then((r) => (Array.isArray(r) ? r[0] : (r.data ?? [])[0]) ?? null)
           .catch(() => null),
       ]);
+      /* ── WHAT "A WARSAW PLAYER" IS ───────────────────────────────────────────────────────────
+       * The only city a PLAYER carries is preferableCity — their own declared city, on the list
+       * row. The alternatives were: (a) this field, (b) "has played ≥1 Warsaw match", (c) "has
+       * played ONLY Warsaw matches". (b) and (c) are derivations over match history, which the
+       * SEARCH endpoint does not return at all — so neither can filter a search without fetching
+       * every candidate's profile first.
+       *
+       * PICKED: (a) preferableCity — BUT IT IS A PREFERENCE, NOT A FACT, and nothing here should
+       * be read as though the platform knows where a player belongs. It is a setting the player
+       * chose. Both errors follow directly:
+       *   · a Warsaw regular who set "Austin" is INVISIBLE to the Warsaw account;
+       *   · an Austin regular who set "Warsaw" is VISIBLE to it.
+       * It is used because it is the only city that exists at player level, not because it is
+       * right. Treat it as a soft SORT of the search list, never as the boundary.
+       *
+       * THE BOUNDARY IS THIS REFUSAL. Omitting someone from a list does not stop ?id= being typed,
+       * so a request for a player outside the scope is refused outright — 403, not a filtered-empty
+       * result, so the difference between "no such player" and "not yours" stays visible to us and
+       * invisible to them. */
+      if (auth.confinedCity) {
+        const want = cityNameFor(auth.confinedCity);
+        const lr = (listRow ?? {}) as Record<string, unknown>;
+        const pc = (lr.preferableCity as Record<string, unknown> | undefined) ?? null;
+        const has = pc ? str(pc.name) : null;
+        if (has !== want) return Response.json({ error: CONFINED_CITY_ERROR }, { status: 403 });
+      }
       const d = (raw && typeof raw === "object" && "data" in raw ? (raw.data as Record<string, unknown>) : raw) ?? {};
       const now = Date.now();
 
@@ -195,7 +223,15 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
       const query = { ...serverQuery(d), limit: 15, page: 1 };
       const r = await apiGet<{ data?: Record<string, unknown>[] } | Record<string, unknown>[]>(env, `/admin/players`, query);
       const rows = Array.isArray(r) ? r : ((r as { data?: Record<string, unknown>[] }).data ?? []);
-      return Response.json({ kind: d.kind, results: rows.map(lightRow) });
+      // THE SEARCH LIST, SCOPED. Filtered on the server before serialization — the upstream
+      // /admin/players has no city parameter, so this cannot be an in-query filter; what it can be
+      // is a filter no row escapes, and a `results` array whose length is the filtered length.
+      let results = rows.map(lightRow);
+      if (auth.confinedCity) {
+        const want = cityNameFor(auth.confinedCity);
+        results = results.filter((r) => r.city === want);
+      }
+      return Response.json({ kind: d.kind, results });
     }
 
     return Response.json({ error: "q or id required" }, { status: 400 });

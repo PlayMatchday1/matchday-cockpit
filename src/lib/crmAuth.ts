@@ -14,9 +14,14 @@ import "server-only";
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { confinedCity } from "./cityConfinement";
 
 export type CrmAuthOk = {
   ok: true;
+  // THE CITY SCOPE, or null when unconfined. A route holding a non-null value MUST push it into
+  // the query — including the count queries. A total that counts threads the viewer cannot open
+  // is a leak even when the rows themselves are filtered.
+  confinedCity: string | null;
   appUserId: string | null;
   email: string | null;
   // True iff the authenticated app_user has is_admin = true. False
@@ -75,6 +80,8 @@ export async function authenticateCrm(req: Request): Promise<CrmAuthResult> {
     });
     return {
       ok: true,
+      // Cron runs with full server authority and is not a person; it is never confined.
+      confinedCity: null,
       appUserId: null,
       email: null,
       isAdmin: true,
@@ -100,7 +107,10 @@ export async function authenticateCrm(req: Request): Promise<CrmAuthResult> {
   });
   const appUser = await sb
     .from("app_users")
-    .select("id, is_admin, can_access_chats, can_send_messages")
+    // select("*"), NOT a column list — the same deliberate choice adminAuth makes. Code deploys
+    // before a migration applies, and naming a column that does not exist yet 500s every CRM route.
+    // A missing column reads as undefined, so the derived permission is false until it lands.
+    .select("*")
     .ilike("email", email)
     .maybeSingle();
   if (appUser.error || !appUser.data) {
@@ -111,6 +121,9 @@ export async function authenticateCrm(req: Request): Promise<CrmAuthResult> {
   // Send is its own right (Phase 19 Step 1) — NOT implied by is_admin or can_access_chats. Read
   // fresh here; the send route checks it and 403s early so no send path is reachable without it.
   const canSendMessages = appUser.data.can_send_messages === true;
+  // THE CITY BOUNDARY. Chats is one of the six a confined account keeps, so this does not refuse —
+  // it hands the route the scope it must push into its query.
+  const scopeCity = confinedCity(appUser.data);
   // Chats access gates the CRM API at the application layer. RLS on
   // crm_* tables enforces the same OR-clause underneath so this can't
   // be bypassed even if a route forgets to call authenticateCrm.
@@ -126,6 +139,7 @@ export async function authenticateCrm(req: Request): Promise<CrmAuthResult> {
     isAdmin,
     canAccessChats,
     canSendMessages,
+    confinedCity: scopeCity,
     supabase: sb,
   };
 }

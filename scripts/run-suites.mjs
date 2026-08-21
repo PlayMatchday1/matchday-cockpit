@@ -60,6 +60,9 @@ const NODE_SUITES = [
   // The gate's own router. It decides which lane every other suite here runs in, so it is guarded
   // like the writes are — on fixtures, not on the names of files whose imports can change.
   "scripts/gate-scope-test.mjs",
+  // The city boundary's decision table — including the one rule that disagrees with the
+  // city-manager tier on purpose (confinement beats is_admin).
+  "scripts/city-confinement-test.ts",
   "scripts/mutation-tests.ts",
   "scripts/prod-guard-test.ts",
   "scripts/stage-denylist-test.ts",

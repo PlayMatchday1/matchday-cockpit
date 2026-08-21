@@ -1,0 +1,26 @@
+-- ── ONE COLUMN MEANS "WHICH CITY", NOT TWO ─────────────────────────────────────────────────────
+--
+-- 0131 added app_users.confined_to_city. It was applied, and it was a second copy of something
+-- app_users.city_identifier already meant — the exact drift this codebase spent a night removing
+-- elsewhere (two cost paths, two event predicates, two city-name maps). 0131's file is gone; this
+-- migration undoes it in the database.
+--
+-- THE CHECK THAT MADE IT SAFE, run against production before any code changed:
+--
+--     rows with city_identifier set AND is_city_manager false  →  0
+--     rows with is_city_manager true AND no city_identifier    →  0
+--
+-- All five city-bearing accounts are city managers (SATX, DFW ×2, ATX, HOU), none is an admin. So
+-- "has a city_identifier" can now mean "is confined to that city" WITHOUT changing any existing
+-- account's behaviour: those five are already locked to /city/* by isCityManagerConfined and
+-- already pinned to their own city by cityManagerGate. What changes is which mechanism enforces
+-- it, not what anybody can reach.
+--
+-- is_city_manager STAYS INDEPENDENT. It decides whether an account belongs to the city-manager
+-- ledger and the pay pages — NOT whether it is confined. The Warsaw account gets a city and no
+-- city-manager box, which is what keeps its data out of that ledger.
+--
+-- NOTHING EVER WROTE TO THE DROPPED COLUMN: it shipped NULL by default and the account that would
+-- have used it was never created. IF EXISTS so this is safe to run whatever state you are in.
+ALTER TABLE public.app_users
+  DROP COLUMN IF EXISTS confined_to_city;
