@@ -99,7 +99,24 @@ export function assertConfinedScope(
   requested: string | null | undefined,
 ): { ok: true } | { ok: false; status: number; error: string } {
   if (!isConfined(row)) return { ok: true };
-  const scope = confinedCity(row);
+  return assertScope(confinedCity(row), requested, true);
+}
+
+/**
+ * THE SAME REFUSAL, for callers that already hold the RESOLVED scope rather than the row — the
+ * Match Ops and capability gates both hand one out, and re-deriving it from a shimmed row object
+ * at each call site is how a check ends up reading a field nobody sets.
+ *
+ * `confined` says whether the caller is bounded at all: a null scope means "unconfined" for an
+ * ordinary account and "confined to something unresolvable" for a bounded one, and those two must
+ * not collapse into the same answer.
+ */
+export function assertScope(
+  scope: string | null,
+  requested: string | null | undefined,
+  confined = true,
+): { ok: true } | { ok: false; status: number; error: string } {
+  if (!confined) return { ok: true };
   // Confined to a value the allowlist does not know: refuse everything that names a city.
   if (!scope) return { ok: false, status: 403, error: CONFINED_ERROR };
   // Nothing named => the account's own scope applies and the query filters on it.

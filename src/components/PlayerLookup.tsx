@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useAuth, canEditMatches, canManagePlayers, canEditCredits } from "@/lib/useAuth";
+import RegisteredPlayersTable from "./RegisteredPlayersTable";
 import { validateAdjustment, fmtUsd, MAX_ADJUSTMENT_CENTS, REASON_REQUIRED } from "@/lib/creditsModel";
 import { useDockSubject } from "@/lib/useDockSubject";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
@@ -281,6 +282,13 @@ export default function PlayerLookup() {
             ))}
           </div>
         </div>
+      )}
+
+      {/* ---------- REGISTERED PLAYERS ----------
+          Below the search, never instead of it. The search answers "find this person"; this
+          answers "who has joined", which is the question while a city is launching. */}
+      {!profile && !loadingProfile && (
+        <RegisteredPlayersTable onOpen={(id) => openProfile(id)} />
       )}
 
       {/* ---------- PROFILE VIEW ---------- */}
