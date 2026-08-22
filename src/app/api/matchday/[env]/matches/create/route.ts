@@ -21,6 +21,7 @@ import { authenticateCapability } from "@/lib/capabilityAuth";
 import { apiGet, apiWrite, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { supabaseLogStore } from "@/lib/changeLog";
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
+import { cityNameFor } from "@/lib/cityScope";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -91,6 +92,36 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
   const startDate = String(match.startDate);
 
   try {
+    /* ── THE CITY BOUNDARY, ON THE fieldId, FROM THE SERVER ──────────────────────────────────
+     * A confined account may only create a match on a field in ITS OWN city. The city comes from
+     * app_users.city_identifier via authenticateCapability — never from the request body, a query
+     * param or a header, because all three are the caller's to write.
+     *
+     * THE DROPDOWN CONTRIBUTES NOTHING TO THIS DECISION. Filtering the select is a convenience; a
+     * confined account can post any fieldId it likes and this is what refuses it. Until this
+     * existed, create was the one route under /api/matchday/ with no city check at all — the
+     * prefix allows the whole namespace, so every handler is reachable unless someone remembered.
+     *
+     * DENY BY DEFAULT ON A FAILED LOOKUP. If the field list cannot be read, `allowed` is empty and
+     * the create is refused. A lookup failure must never widen the boundary.
+     *
+     * AN UNCONFINED ACCOUNT SKIPS THIS ENTIRELY — identical behaviour to before. */
+    if (auth.confinedCity) {
+      const cityName = cityNameFor(auth.confinedCity);
+      const raw = await apiGet<unknown[]>(env, "/admin/fields").catch(() => []);
+      const allowed = (Array.isArray(raw) ? raw : [])
+        .map((f) => f as Record<string, unknown>)
+        .filter((f) => (((f.city as Record<string, unknown> | undefined)?.name as string | undefined) ?? null) === cityName)
+        .map((f) => Number(f.id));
+      if (!allowed.includes(fieldId)) {
+        console.warn(`[create-match] 403: ${auth.email} (confined to ${auth.confinedCity}) attempted fieldId ${fieldId}`);
+        return Response.json({
+          error: `Field ${fieldId} is not in ${cityName ?? auth.confinedCity}. This account can only create matches on its own city's fields.`,
+          field: "fieldId",
+        }, { status: 403 });
+      }
+    }
+
     // ── THE DUPLICATE GUARD ───────────────────────────────────────────────────────────────────
     // Asked of the API, not of our mirror: the mirror can be minutes behind, and a duplicate made
     // sixty seconds ago is exactly the one this is for. The window is the calendar DAY of the

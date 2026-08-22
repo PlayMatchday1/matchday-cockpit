@@ -1552,3 +1552,53 @@ New York City 350 · El Paso 83 · **Warsaw 5**.
 
 **Warsaw is five people.** The city the registered-players table was built for holds five preferred-
 city rows, so a Warsaw filter returns five. That is correct, not a bug.
+
+## A CAPABILITY GATE IS NOT A BOUNDARY (2026-08-22)
+
+Twice in one night the only thing between a confined account and an unscoped route was a permission
+nobody had granted yet — and both times the permission turned out to be **already granted**.
+
+**`CONFINED_ROUTE_PREFIXES` allows `/api/matchday/` wholesale**, so every route beneath it is
+reachable by a confined account and the only protection is whether the handler's author remembered
+a scope check. Audited 2026-08-22 — **four of six remembered**:
+
+| route | methods | scope check |
+|---|---|---|
+| `/api/matchday/[env]/gameday` | GET | yes |
+| `/api/matchday/[env]/matches/[id]` | GET, PUT | yes |
+| `/api/matchday/[env]/matches/[id]/cancel` | GET, POST | yes |
+| `/api/matchday/[env]/roster/[matchId]` | GET, POST | yes |
+| `/api/matchday/[env]/matches/create` | POST | **NONE** — fixed 2026-08-22 |
+| `/api/matchday/[env]/players/[playerId]/credits` | GET, POST | **NONE** — fixed 2026-08-22 |
+
+**Both Warsaw accounts held `can_edit_matches` AND `can_edit_credits` with no city check behind
+either route.** `rgmstrategicventures@gmail.com` from **14 August**, `jf@playmatchday.pl` from
+**21 August**. Neither had ever signed in (`last_login_at` null), so this was exposure rather than
+an incident — but the window was eight days, and the reasoning that made it feel safe ("nobody has
+that permission") was false the whole time.
+
+**THE RIGHT SHAPE IS THE INVERSE**: a confined account should get an explicit route allowlist, so a
+route added next month is denied by default rather than exposed by default. Not done — a design
+change, Ryan's call. Recorded so the size of it is known.
+
+## Credits are scoped by `preferable_city_name`, knowingly (2026-08-22)
+
+A confined account may read and adjust credits only for players whose stated city equals its own.
+The comparison is `preferableCity.abbr` from `GET /admin/players/{id}` against
+`app_users.city_identifier` — the same identifier string, so no name mapping is involved.
+**NULL is a REFUSAL**: 4,187 players have no preferred city and none of them belong to anybody.
+
+**WHY A STATED PREFERENCE AND NOT A ROSTER TEST.** There is no player-in-city definition to build
+one from: `GET /admin/players` rejects every city parameter, and a roster test breaks on real
+people — someone who plays in Warsaw but prefers Austin, someone who prefers Warsaw and has never
+played. In a NEW market there is no legacy overlap for a preference to be wrong about.
+
+**IT IS PLAYER-EDITABLE, AND THAT IS ACCEPTED.** A player can change their own preferable city, so
+this bounds WHO AN OPERATOR MAY ACT ON, not who may enter the set. A player switching to Warsaw does
+not credit themselves — it puts them in a list an operator still has to act on. The operator is the
+control, not the field. **Revisit if a confined market ever stops being new** — the moment a
+confined city has players who selected it without playing there, or who play there without
+selecting it, this test starts being wrong in both directions.
+
+Covered by `scripts/credits-city-scope-test.ts` (fast gate, 10 assertions) because the route's guard
+cannot be exercised without a confined login and it protects money.

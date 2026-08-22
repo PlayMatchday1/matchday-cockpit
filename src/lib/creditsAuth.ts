@@ -12,16 +12,18 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resolveSessionUser, type AppUserRow } from "./adminAuth";
+import { confinedCity } from "./cityConfinement";
 
 export type CreditsAuthResult =
-  | { ok: true; supabase: SupabaseClient; appUserId: string; email: string; canEditCredits: true }
+  /* confinedCity is carried so the ROUTE can bound WHICH PLAYER may be touched. It is not part of
+   * the gate: credits are player-grain and this route has no city dimension of its own, so the
+   * boundary lives where the player is known, not where the capability is decided. */
+  | { ok: true; supabase: SupabaseClient; appUserId: string; email: string; canEditCredits: true; confinedCity: string | null }
   | { ok: false; status: number; error: string };
 
 // PURE decision — testable offline, and the same function the census walks.
 export function creditsGate(row: AppUserRow | null): { ok: true } | { ok: false; status: number; error: string } {
   if (!row) return { ok: false, status: 403, error: "Not a cockpit user" };
-  // A service account can never move money. The database guard (0122) refuses to even STORE the
-  // grant on a service-account row; this is the second lock, in case a row is ever seeded around it.
   if (row.is_service_account === true) {
     return { ok: false, status: 403, error: "Service accounts cannot edit credits" };
   }
@@ -42,5 +44,6 @@ export async function authenticateCredits(req: Request): Promise<CreditsAuthResu
     appUserId: String(r.row.id ?? ""),
     email: r.email,
     canEditCredits: true,
+    confinedCity: confinedCity(r.row),
   };
 }

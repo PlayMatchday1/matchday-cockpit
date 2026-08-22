@@ -1,4 +1,7 @@
 // THE CITY-MANAGER CONFINEMENT, driven as a REAL city-manager session (Phase 29b).
+// KNOWN FAILURE, PRE-EXISTING: 5 assertions fail on the DFW city-manager account — the reviews
+// city filter returns zero rows. It is NOT waiting on a Warsaw account and NOT waiting on a
+// migration; both Warsaw accounts have existed since 14 and 21 August. Do not re-derive this.
 //
 // This suite exists because the leak it covers was invisible to every other suite. A DFW city
 // manager could open the whole Match Ops estate — Master Schedule, Slate Review, Field Ops,

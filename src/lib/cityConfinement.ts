@@ -216,3 +216,33 @@ export function assertConfinedRoute(
   if (isConfinedRouteAllowed(pathname)) return { ok: true };
   return { ok: false, status: 403, error: CONFINED_ERROR };
 }
+
+/* ── THE CITY BOUNDARY ON A PLAYER-GRAIN ROUTE ─────────────────────────────────────────────────
+ * A confined account may read and adjust credits ONLY for players whose stated city is its own.
+ * The city comes from app_users.city_identifier via the session — never from the request.
+ *
+ * WHY preferable_city_name AND NOT A ROSTER TEST. There is no player-in-city definition to build
+ * one from: GET /admin/players rejects every city parameter, and a roster-based test breaks on real
+ * people — someone who plays in Warsaw but prefers Austin, someone who prefers Warsaw and has never
+ * played. A stated preference is the only field that exists, and in a NEW market there is no legacy
+ * overlap for it to be wrong about.
+ *
+ * IT IS PLAYER-EDITABLE, KNOWINGLY. A player can change their own preferable city, so this bounds
+ * WHO AN OPERATOR MAY ACT ON, not who may enter the set. A player switching to Warsaw does not
+ * credit themselves — it puts them in a list an operator still has to act on. The operator is the
+ * control. Revisit if a confined market ever stops being new.
+ *
+ * NULL IS A REFUSAL. 4,187 players have no preferred city and none of them belong to anybody.
+ * Deny by default: an unreadable player, a missing city, or any mismatch is a 403 by id. */
+export function playerCityAllowed(confinedCity: string | null, player: Record<string, unknown>): boolean {
+  if (!confinedCity) return true; // unconfined accounts are unaffected
+  const pc = player.preferableCity as Record<string, unknown> | null | undefined;
+  if (!pc) return false;
+  // `abbr` IS the same identifier app_users stores ("WAW"), so the common path needs no name
+  // mapping at all. The name is a fallback for a payload that omits abbr, never the primary test.
+  const abbr = typeof pc.abbr === "string" ? pc.abbr.trim() : "";
+  if (abbr) return abbr === confinedCity;
+  const name = typeof pc.name === "string" ? pc.name.trim() : "";
+  const want = cityNameFor(confinedCity);
+  return !!name && !!want && name === want;
+}

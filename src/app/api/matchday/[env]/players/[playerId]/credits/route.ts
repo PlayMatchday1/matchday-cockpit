@@ -26,6 +26,7 @@ import { randomUUID } from "node:crypto";
 import { authenticateCredits } from "@/lib/creditsAuth";
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
+import { CONFINED_CITY_ERROR, playerCityAllowed } from "@/lib/cityConfinement";
 import { MAX_ADJUSTMENT_CENTS, raceCheck, fmtUsd } from "@/lib/creditsModel";
 import type { Change } from "@/lib/changeLogModel";
 
@@ -39,6 +40,7 @@ const balanceOf = (p: Record<string, unknown>): number => {
   return Number.isFinite(n) ? Math.round(n) : 0;
 };
 
+
 export async function GET(req: Request, ctx: { params: Promise<{ env: string; playerId: string }> }) {
   // The READ is gated on the same grant as the write. A balance is not secret, but there is no
   // reason to surface a money surface to someone who can never use it.
@@ -49,6 +51,11 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; pl
   if (!/^\d+$/.test(playerId)) return Response.json({ error: "playerId must be numeric" }, { status: 400 });
   try {
     const p = await apiGet<Record<string, unknown>>(env, `/admin/players/${playerId}`);
+    // REFUSED BY ID, FROM THE SERVER — not by a list that happened not to offer this player.
+    if (!playerCityAllowed(auth.confinedCity, p)) {
+      console.warn(`[credits] 403: ${auth.email} (confined to ${auth.confinedCity}) read player ${playerId}`);
+      return Response.json({ error: CONFINED_CITY_ERROR }, { status: 403 });
+    }
     return Response.json({ playerId: Number(playerId), balanceCents: balanceOf(p), canEditCredits: true });
   } catch (e) { return errToResponse(e); }
 }
@@ -82,7 +89,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; p
     // so if the player spent something since the screen was drawn, `expected + delta` would put
     // the spend back. Abort rather than re-base: the operator chose a number against facts they
     // were shown, and quietly acting on different ones is not the same instruction.
-    const before = balanceOf(await apiGet<Record<string, unknown>>(env, `/admin/players/${playerId}`));
+    const player = await apiGet<Record<string, unknown>>(env, `/admin/players/${playerId}`);
+    // THE BOUNDARY BEFORE THE MONEY. Refused by id, from the server, on the same read the race
+    // check uses — so a confined account cannot adjust a player outside its city even by posting
+    // the id directly. This returns BEFORE any write, like every other guard on this route.
+    if (!playerCityAllowed(auth.confinedCity, player)) {
+      console.warn(`[credits] 403: ${auth.email} (confined to ${auth.confinedCity}) attempted an adjustment on player ${playerId}`);
+      return Response.json({ error: CONFINED_CITY_ERROR }, { status: 403 });
+    }
+    const before = balanceOf(player);
     const race = raceCheck(expected, before);
     if (!race.ok) {
       return Response.json({ error: race.error, aborted: true, balanceCents: before, landed: false, outcome: "NOT APPLIED" }, { status: 409 });

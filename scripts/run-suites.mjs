@@ -63,6 +63,9 @@ const NODE_SUITES = [
   // The city boundary's decision table — including the one rule that disagrees with the
   // city-manager tier on purpose (confinement beats is_admin).
   "scripts/city-confinement-test.ts",
+  // The credits city scope. Its own suite because it guards MONEY on a route whose guard cannot be
+  // exercised without a confined login — the decision is pure, so it runs on every commit instead.
+  "scripts/credits-city-scope-test.ts",
   "scripts/mutation-tests.ts",
   "scripts/prod-guard-test.ts",
   "scripts/stage-denylist-test.ts",
