@@ -118,7 +118,7 @@ const baseTotal = num(base.count);
 // ── 2. EVERY FILTER NARROWS, AND THE COUNT STILL EXCEEDS A PAGE ───────────────────────────────
 console.log("\n── each filter narrows the set ──");
 {
-  const never = await apply("finder-act-never");
+  const never = await apply("finder-hist-never");
   const neverN = num(never.count);
   const { count: dbNever } = await db.from("player_finder_rows").select("id", { count: "exact", head: true }).eq("plays", 0);
   eq("Never played narrows the set", neverN < baseTotal, true);
@@ -127,7 +127,7 @@ console.log("\n── each filter narrows the set ──");
   // cannot have been counted from rows on screen or from a single unpaged read.
   eq("  …and that figure exceeds one page and the 1,000-row cap", neverN > 1000 && neverN > never.rows, true);
 
-  const once = await apply("finder-act-once");
+  const once = await apply("finder-hist-once");
   const onceN = num(once.count);
   eq("Played once is a different, smaller set", onceN < neverN && onceN > 0, true);
   eq("  …and still exceeds one page", onceN > 1000, true);
@@ -174,8 +174,8 @@ console.log("\n── a forced tile is dropped ──");
   eq("  control — the band still rendered other tiles", withCity.tileKeys.length > 0, true);
   await pick("finder-city", "");
 
-  const withAct = await apply("finder-act-once");
-  eq("with an activity filter, Never played is dropped", withAct.tileKeys.includes("Never played"), false);
+  const withAct = await apply("finder-hist-once");
+  eq("with a History filter, Never played is dropped", withAct.tileKeys.includes("Never played"), false);
   eq("  control — it was present before", unfiltered.tileKeys.includes("Never played"), true);
   await clearAll();
 }
@@ -206,15 +206,26 @@ console.log("\n── the occupancy figures ──");
     eq("  …and that denominator is the Matches tile", ofN, matches);
   }
 
-  // ── THE PLAYED IN WINDOW BITES ───────────────────────────────────────────────────────────────
-  const months = await page.evaluate(() => [...document.querySelectorAll('[data-testid="finder-win"] option')].map((o) => o.value).filter(Boolean));
-  eq("  control — the Played in select offers months", months.length > 0, true);
-  const win = await pick("finder-win", months[0]);
-  const winSpots = num(win.tiles.find((t) => t.k === "Spots occupied")?.v);
-  eq(`a month window is a strict subset of all time (${winSpots} < ${spots})`, winSpots < spots, true);
-  eq("  …and the player count is UNCHANGED — the two windows are separate",
-    num(win.count), num(occ.count));
-  await pick("finder-win", "");
+  // ── THE PLAYED WINDOW BITES, AND IT NARROWS THE ROWS TOO ────────────────────────────────────
+  // This is the whole point of the rework: the old month select moved the tiles and left the rows
+  // alone, so the band could describe a different set of people than the table under it.
+  const win30 = await apply("finder-play-30");
+  const winSpots = num(win30.tiles.find((t) => t.k === "Spots occupied")?.v);
+  eq(`a 30-day window is a strict subset of all time (${winSpots} < ${spots})`, winSpots < spots, true);
+  // A TILE THAT IGNORED THE WINDOW WOULD STILL LOOK PLAUSIBLE. The widening comparison is what
+  // catches it — an unchanged figure is the failure, not an implausible one.
+  eq("  control — the tile moved at all", winSpots !== spots, true);
+  eq("the PLAYED window narrows the ROWS as well as the tiles", num(win30.count) < num(occ.count), true);
+  /* THE SAME CALENDAR DAY THE ROUTE COMPUTES. The route takes a LOCAL date; toISOString() takes a
+   * UTC one, and in America/Chicago those are different days for five hours out of every
+   * twenty-four. That skew showed up as 212 vs 210 — small, wrong, and nothing to do with the code
+   * under test. */
+  const localDay = (n) => { const d = new Date(Date.now() - n * 86400000);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+  const { data: dbWin } = await db.rpc("player_finder_stats", {
+    p_member: "yes", p_play_mode: "window", p_play_from: localDay(30),
+  });
+  eq("  …to the server's own figure", num(win30.count), Number(dbWin?.[0]?.players));
   await clearAll();
 }
 
@@ -240,7 +251,7 @@ console.log("\n── a future booking is not a play ──");
      * containing it — the first run of this asserted a total of 1 and got 3. So the assertion is
      * that this player IS in the never-played set, which is the actual claim. */
     await type("finder-q", String(neverId));
-    const found = await apply("finder-act-never");
+    const found = await apply("finder-hist-never");
     const onScreen = await page.evaluate(() => [...document.querySelectorAll('[data-testid="finder-row"]')].map((r) => Number(r.getAttribute("data-pid"))));
     eq(`player ${neverId} is in the never-played set`, onScreen.includes(neverId), true);
     eq("  control — the set is not empty", num(found.count) >= 1, true);
@@ -290,7 +301,7 @@ console.log("\n── a future booking is not a play ──");
     const rows = await page.evaluate(() => [...document.querySelectorAll('[data-testid="finder-row"]')].map((r) => Number(r.getAttribute("data-pid"))));
     eq(`  …and the finder lists player ${onceId}`, rows.includes(onceId), true);
     eq("  control — that search isolates them", rows.length >= 1, true);
-    await apply("finder-act-never");
+    await apply("finder-hist-never");
     const stillThere = await page.evaluate(() => [...document.querySelectorAll('[data-testid="finder-row"]')].map((r) => Number(r.getAttribute("data-pid"))));
     eq("  …and never-played does NOT include them", stillThere.includes(onceId), false);
     await type("finder-q", "");
@@ -331,6 +342,126 @@ console.log("\n── export ──");
   const narrowed = await apply("finder-member-yes");
   eq("  …and follows the filter", num(narrowed.exportLabel), num(narrowed.count));
   await clearAll();
+}
+
+
+// ── 9. THE TWO WINDOW ROWS ARE THE SAME CONTROL TWICE ─────────────────────────────────────────
+console.log("\n── SIGNED UP and PLAYED are twins ──");
+{
+  await clearAll();
+  const shape = await page.evaluate(() => {
+    const row = (n) => document.querySelector(`[data-testid="finder-${n}-row"]`);
+    const presets = (n) => [...(row(n)?.querySelectorAll('[data-testid^="finder-' + n + '-"]') ?? [])]
+      .map((b) => b.getAttribute("data-testid")?.replace(`finder-${n}-`, ""))
+      .filter((v) => v && v !== "row" && v !== "why");
+    const dates = (n) => [`finder-${n}from`, `finder-${n}to`]
+      .map((t) => !!document.querySelector(`[data-testid="${t}"]`));
+    return { regPresets: presets("reg"), playPresets: presets("play"), regDates: dates("reg"), playDates: dates("play"),
+      histLabels: [...document.querySelectorAll('[data-testid^="finder-hist-"]')].map((b) => b.textContent?.trim()) };
+  });
+  // ASSERTED ON THE ACTUAL CONTROL SETS, not on a screenshot.
+  eq("  control — both rows rendered presets", shape.regPresets.length > 0 && shape.playPresets.length > 0, true);
+  eq("both rows carry a from and a to", [shape.regDates, shape.playDates], [[true, true], [true, true]]);
+  // STRUCTURALLY IDENTICAL BAR THE NEGATION: PLAYED is SIGNED UP plus `not60`, nothing else.
+  const regSet = [...shape.regPresets].sort();
+  const playSet = [...shape.playPresets].sort();
+  const extra = playSet.filter((v) => !regSet.includes(v));
+  const missing = regSet.filter((v) => !playSet.includes(v));
+  eq("PLAYED adds exactly one option SIGNED UP does not have", extra, ["not60"]);
+  eq("  …and drops none of them", missing, []);
+
+  // HISTORY IS A COUNT, NOT A CLOCK. No label may carry a time word or a day count — those moved to
+  // the PLAYED row where they are the general case.
+  /* A COUNT IS FINE — "Played 2+" is a count of matches, which is exactly what HISTORY now is. What
+   * it may not carry is a TIME word or a day count; those moved to the PLAYED row where they are
+   * the general case rather than two hardcoded specials. */
+  const timey = shape.histLabels.filter((l) => /\bday|\bweek|\bmonth|\byear|\d+\s*d\b|recent|lapsed|ago/i.test(l ?? ""));
+  eq("HISTORY carries no time word and no day count", timey, []);
+  eq("  control — the scan DOES catch one when present", /\bday/i.test("Played in 30 days"), true);
+  eq("  control — HISTORY does have labels to scan", shape.histLabels.length, 4);
+}
+
+// ── 10. NOT IN 60+ DAYS ───────────────────────────────────────────────────────────────────────
+console.log("\n── not in 60+ days ──");
+{
+  const lapsed = await apply("finder-play-not60");
+  eq("  control — the negation returns a non-empty set", num(lapsed.count) > 0, true);
+  const { data: dbLapsed } = await db.rpc("player_finder_stats", { p_play_mode: "lapsed" });
+  eq("  …matching the server's own figure", num(lapsed.count), Number(dbLapsed?.[0]?.players));
+  // THE THREE OCCUPANCY TILES ARE DROPPED. A negation has no window to total, and a figure
+  // labelled with one would be lying about its own scope.
+  for (const k of ["Spots occupied", "Matches", "Matches full"]) {
+    eq(`  the ${k} tile is absent`, lapsed.tileKeys.includes(k), false);
+  }
+  eq("  …and the server sent null rather than zero",
+    [dbLapsed?.[0]?.spots, dbLapsed?.[0]?.matches, dbLapsed?.[0]?.capacity], [null, null, null]);
+
+  // THE ROWS THEMSELVES: every one has played, and none within 60 days.
+  const ids = await page.evaluate(() => [...document.querySelectorAll('[data-testid="finder-row"]')].map((r) => Number(r.getAttribute("data-pid"))));
+  eq("  control — rows rendered to check", ids.length > 0, true);
+  const { data: chk } = await db.from("player_finder_rows").select("id, plays, last_played").in("id", ids);
+  const cutoff = new Date(Date.now() - 60 * 86400000).toISOString();
+  eq("every row has played at least once", (chk ?? []).every((r) => r.plays >= 1), true);
+  eq("  …and none within 60 days", (chk ?? []).every((r) => r.last_played < cutoff), true);
+  await clearAll();
+}
+
+// ── 11. NEVER PLAYED DISABLES THE PLAYED ROW ──────────────────────────────────────────────────
+console.log("\n── never played disables the window ──");
+{
+  const before = await page.evaluate(() => ({
+    disabled: document.querySelector('[data-testid="finder-play-row"]')?.getAttribute("data-disabled"),
+    pe: getComputedStyle(document.querySelector('[data-testid="finder-play-row"]')).pointerEvents,
+    why: document.querySelectorAll('[data-testid="finder-play-why"]').length,
+  }));
+  // POSITIVE CONTROL, BOTH WAYS: live before, inert after, live again after Clear.
+  eq("  control — the PLAYED row is live to begin with", [before.disabled, before.why], ["false", 0]);
+
+  await apply("finder-hist-never");
+  const off = await page.evaluate(() => ({
+    disabled: document.querySelector('[data-testid="finder-play-row"]')?.getAttribute("data-disabled"),
+    pe: getComputedStyle(document.querySelector('[data-testid="finder-play-row"]')).pointerEvents,
+    why: document.querySelector('[data-testid="finder-play-why"]')?.textContent ?? "",
+    btn: document.querySelector('[data-testid="finder-play-30"]')?.disabled,
+  }));
+  eq("History = Never played disables the PLAYED row", off.disabled, "true");
+  // POINTER-EVENTS, not opacity. A dimmed row that still fires is worse than no dimming.
+  eq("  …genuinely inert, not merely dimmed", off.pe, "none");
+  eq("  …its buttons disabled too", off.btn, true);
+  eq("  …with the reason on screen", off.why.trim(), "No play dates to filter on — History is set to Never played");
+
+  await clearAll();
+  const back = await page.evaluate(() => ({
+    disabled: document.querySelector('[data-testid="finder-play-row"]')?.getAttribute("data-disabled"),
+    why: document.querySelectorAll('[data-testid="finder-play-why"]').length,
+  }));
+  eq("Clear filters re-enables it", [back.disabled, back.why], ["false", 0]);
+}
+
+// ── 12. AN EXPLICIT RANGE OVERRIDES THE PRESET, AND CLEAR EMPTIES BOTH PAIRS ──────────────────
+console.log("\n── typed ranges ──");
+{
+  await apply("finder-play-30");
+  const from = new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10);
+  const to = new Date(Date.now() - 15 * 86400000).toISOString().slice(0, 10);
+  await act(() => page.fill('[data-testid="finder-playfrom"]', from));
+  const ranged = await act(() => page.fill('[data-testid="finder-playto"]', to)).then(read);
+  const lit = await page.evaluate(() => [...document.querySelectorAll('[data-testid^="finder-play-"]')]
+    .filter((b) => b.getAttribute("aria-pressed") === "true").map((b) => b.getAttribute("data-testid")));
+  eq("a typed play range unlights every preset", lit, []);
+  // THE TILE NAMES THE RANGE, so the figure's scope is readable without inferring it from a control.
+  const sub = ranged.tiles.find((t) => t.k === "Matches")?.s ?? "";
+  eq(`the Matches tile names the range (${from} → ${to})`, sub.includes(from) && sub.includes(to), true);
+  eq("  control — the tile is present to name anything", !!sub, true);
+
+  await act(() => page.fill('[data-testid="finder-regfrom"]', from));
+  const bothSet = await page.evaluate(() => ["finder-regfrom", "finder-playfrom", "finder-playto"]
+    .map((t) => document.querySelector(`[data-testid="${t}"]`)?.value));
+  eq("  control — both date pairs carry values before Clear", bothSet.every((v) => !!v), true);
+  await clearAll();
+  const emptied = await page.evaluate(() => ["finder-regfrom", "finder-regto", "finder-playfrom", "finder-playto"]
+    .map((t) => document.querySelector(`[data-testid="${t}"]`)?.value));
+  eq("Clear empties BOTH date pairs", emptied, ["", "", "", ""]);
 }
 
 eq("no uncaught page errors", errors, []);

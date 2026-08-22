@@ -32,26 +32,42 @@ type Stats = {
   heavy: number; named: number; cities: number;
   topCity: { name: string; n: number } | null;
   medianAgeDays: number | null; newest: string | null;
-  spots: number; matches: number; matchesFull: number; capacity: number;
+  // NULL when there is no window to total — a negation, or a set with no spots. Never 0.
+  spots: number | null; matches: number | null; matchesFull: number | null; capacity: number | null;
 };
 
 type Payload = {
   players: Player[]; total: number; page: number; size: number;
+  // WHAT THE SERVER APPLIED. The controls light from this rather than from local state, so a
+  // preset the server overrode cannot stay lit and a suppressed play window is visibly suppressed.
   applied: { q: string | null; reg: string; regFrom: string | null; regTo: string | null;
-    act: string; member: string; win: string | null; city: string | null };
+    hist: string; play: string; playFrom: string | null; playTo: string | null;
+    playMode: string; playSuppressed: boolean; member: string; city: string | null };
   stats: Stats; scope: string | null; scopeName: string | null; confined: boolean;
   syncedAt: string | null; error?: string;
 };
 
 type Filters = {
   q: string; reg: string; regFrom: string; regTo: string;
-  act: string; win: string; city: string; member: string;
+  hist: string; play: string; playFrom: string; playTo: string;
+  city: string; member: string;
 };
 
-const DEFAULTS: Filters = { q: "", reg: "all", regFrom: "", regTo: "", act: "any", win: "", city: "", member: "any" };
+const DEFAULTS: Filters = {
+  q: "", reg: "all", regFrom: "", regTo: "",
+  hist: "any", play: "all", playFrom: "", playTo: "", city: "", member: "any",
+};
 
+/* ── THE TWO WINDOW ROWS ARE THE SAME CONTROL TWICE ───────────────────────────────────────────
+ * Identical shape, identical override rules, one renderer — a preset strip plus a from–to pair.
+ * The ONE difference is `not60`, and it is a difference of meaning rather than of layout: a
+ * negation needs a set of events to be false across, and signing up is a single event. There is
+ * nothing to negate on the SIGNED UP row, so it is not offered there. */
 const REG_OPTS: [string, string][] = [["7", "Last 7 days"], ["30", "Last 30 days"], ["90", "Last 90 days"], ["all", "All time"]];
-const ACT_OPTS: [string, string][] = [["any", "Any"], ["never", "Never played"], ["once", "Played once"], ["active", "Played in 30d"], ["lapsed", "Lapsed 60d+"]];
+const PLAY_OPTS: [string, string][] = [...REG_OPTS.slice(0, 3), ["all", "Any time"], ["not60", "Not in 60+ days"]];
+// HISTORY IS A COUNT, NOT A CLOCK. "Played in 30d" and "Lapsed 60d+" moved to the PLAYED row where
+// they are the general case; nothing here may carry a time word or a day count.
+const HIST_OPTS: [string, string][] = [["any", "Any"], ["never", "Never played"], ["once", "Played once"], ["multi", "Played 2+"]];
 const MEM_OPTS: [string, string][] = [["any", "Any"], ["yes", "Members"], ["no", "Non-members"]];
 
 // The city select offers IDENTIFIERS, because that is what the server's allowlist accepts. A name
@@ -62,7 +78,6 @@ const CITIES: [string, string][] = [
   ["OKC", "Oklahoma City"], ["SATX", "San Antonio"], ["STL", "St. Louis"], ["WAW", "Warsaw"],
 ];
 
-const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const N = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString());
 
 const fmtDate = (iso: string | null): string => {
@@ -83,17 +98,6 @@ const fmtWhen = (iso: string | null): string => {
   return `${Math.round(hrs / 24)} day${Math.round(hrs / 24) === 1 ? "" : "s"} ago`;
 };
 
-/** The last 18 months, for the PLAYED IN select. Its own window — nothing to do with SIGNED UP. */
-function monthOptions(): [string, string][] {
-  const out: [string, string][] = [];
-  const now = new Date();
-  for (let i = 0; i < 18; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    out.push([`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`, `${MONTH_SHORT[d.getMonth()]} ${d.getFullYear()}`]);
-  }
-  return out;
-}
-
 type Tile = { k: string; v: string; s: string; dead: boolean };
 
 export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void }) {
@@ -105,7 +109,6 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
   const [open, setOpen] = useState(true);
   const [exporting, setExporting] = useState(false);
   const size = 50;
-  const months = useMemo(monthOptions, []);
   const seq = useRef(0);
 
   const query = useCallback((extra: Record<string, string> = {}) => {
@@ -117,8 +120,12 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
       if (f.regFrom) p.set("regFrom", f.regFrom);
       if (f.regTo) p.set("regTo", f.regTo);
     } else if (f.reg !== "all") p.set("reg", f.reg);
-    if (f.act !== "any") p.set("act", f.act);
-    if (f.win) p.set("win", f.win);
+    if (f.hist !== "any") p.set("hist", f.hist);
+    // THE SAME RULE AS SIGNED UP: an explicit range beats the preset, and only one is ever sent.
+    if (f.playFrom || f.playTo) {
+      if (f.playFrom) p.set("playFrom", f.playFrom);
+      if (f.playTo) p.set("playTo", f.playTo);
+    } else if (f.play !== "all") p.set("play", f.play);
     if (f.city) p.set("city", f.city);
     if (f.member !== "any") p.set("member", f.member);
     for (const [k, v] of Object.entries(extra)) p.set(k, v);
@@ -168,37 +175,46 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
   const tiles = useMemo<Tile[]>(() => {
     if (!st) return [];
     const pc = (v: number) => (total ? `${Math.round((v / total) * 100)}% of these` : "—");
-    const noPlay = f.act === "never";
-    const winWord = f.win ? (months.find(([v]) => v === f.win)?.[1] ?? f.win) : "all time";
+    /* THE OCCUPANCY TILES ARE DROPPED, NOT ZEROED, in two cases, and the server decides both by
+     * sending null rather than a number: HISTORY = never played (there are no spots), and
+     * PLAYED = Not in 60+ days (a negation has no window to total, and a figure labelled with one
+     * would be lying about its own scope). */
+    const noPlay = f.hist === "never" || st.spots == null;
+    // THE TILE NAMES ITS OWN WINDOW. A number whose scope is only knowable from a control three
+    // rows up is a number waiting to be quoted wrongly.
+    const winWord = f.playFrom || f.playTo
+      ? `${f.playFrom || "the start"} → ${f.playTo || "today"}`
+      : f.play === "all" ? "all time"
+      : (PLAY_OPTS.find(([v]) => v === f.play)?.[1] ?? f.play).toLowerCase();
 
     const OCC: Tile[] = [
       { k: "Spots occupied", v: N(st.spots),
-        s: st.capacity ? `${Math.round((st.spots / st.capacity) * 100)}% of the ${N(st.capacity)} spots in those matches` : "—",
+        s: st.capacity ? `${Math.round(((st.spots ?? 0) / st.capacity) * 100)}% of the ${N(st.capacity)} spots in those matches` : "—",
         dead: noPlay },
       { k: "Matches", v: N(st.matches), s: `they appear in · ${winWord}`, dead: noPlay },
-      { k: "Matches full", v: st.matches ? `${Math.round((st.matchesFull / st.matches) * 100)}%` : "—",
+      { k: "Matches full", v: st.matches ? `${Math.round(((st.matchesFull ?? 0) / st.matches) * 100)}%` : "—",
         // SPELLED OUT so nobody has to trust a bare percentage.
         s: st.matches ? `${N(st.matchesFull)} of ${N(st.matches)} they played in` : "—", dead: noPlay },
     ];
     const POOL: Tile[] = [
       { k: "Players", v: N(total), s: dirty ? "matching your filters" : "all registered", dead: false },
-      { k: "Never played", v: N(st.never), s: pc(st.never), dead: f.act !== "any" },
-      { k: "Members", v: N(st.members), s: pc(st.members), dead: f.member !== "any" || f.act === "never" },
+      { k: "Never played", v: N(st.never), s: pc(st.never), dead: f.hist !== "any" },
+      { k: "Members", v: N(st.members), s: pc(st.members), dead: f.member !== "any" || f.hist === "never" },
       { k: "New this week", v: N(st.week), s: "signed up in the last 7 days", dead: f.reg === "7" || range },
       { k: "Top city", v: st.topCity?.name ?? "—", s: st.topCity ? `${N(st.topCity.n)} players` : "—", dead: !!f.city },
-      { k: "Played 2+", v: N(st.heavy), s: pc(st.heavy), dead: f.act === "never" || f.act === "once" },
+      { k: "Played 2+", v: N(st.heavy), s: pc(st.heavy), dead: f.hist !== "any" },
       { k: "New in 30 days", v: N(st.month30), s: pc(st.month30), dead: f.reg === "7" || f.reg === "30" || range },
       { k: "Cities", v: N(st.cities), s: "represented here", dead: !!f.city },
       { k: "Has a name", v: N(st.named), s: pc(st.named), dead: false },
       { k: "Median signup age", v: st.medianAgeDays == null ? "—" : `${st.medianAgeDays}d`, s: "half are older than this", dead: false },
       { k: "Newest signup", v: fmtDate(st.newest), s: "most recent", dead: false },
     ];
-    const hot = f.member !== "any" || f.act !== "any" || !!f.win;
+    const hot = f.member !== "any" || f.hist !== "any" || f.play !== "all" || !!(f.playFrom || f.playTo);
     const full = hot ? [POOL[0], ...OCC, ...POOL.slice(1)] : [...POOL, ...OCC];
     // BACKSTOP for implications the predicates do not know about: "97 of 97" is never news whatever
     // produced it. A zero can still be news, so zeros stay.
     return full.filter((t, i) => !t.dead && !(i > 0 && total > 0 && t.v === N(total))).slice(0, 6);
-  }, [st, total, f, dirty, range, months]);
+  }, [st, total, f, dirty, range]);
 
   const clear = () => setF(DEFAULTS);
 
@@ -231,6 +247,48 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
     }
   };
 
+  /**
+   * ONE WINDOW ROW, RENDERED TWICE. A preset strip plus a from–to pair, with the rules that keep them
+   * from both being lit: picking a preset empties the dates, typing a date drops the preset back to
+   * its default. `disabled` dims the whole row and states why rather than hiding it.
+   *
+   * IT LIVES INSIDE THE COMPONENT, AND THAT IS LOAD-BEARING. styled-jsx's transform is LEXICAL: it
+   * adds the scoped class to JSX written inside the component that declares the <style jsx> block.
+   * As a top-level `function WindowRow(...)` both window rows rendered with className="" and NONE
+   * of this card's styles — no pill segments, no padding — while the History row beside them was
+   * styled correctly. `pointer-events: none` on the disabled state silently did nothing too, which
+   * is how the suite caught it. Moving the call site did not help; only moving the DECLARATION did.
+   */
+  const windowRow = ({ label, name, opts, preset, from, to, disabled = false, why, onPreset, onFrom, onTo }: {
+    label: string; name: string; opts: [string, string][];
+    preset: string; from: string; to: string; disabled?: boolean; why?: string;
+    onPreset: (v: string) => void; onFrom: (v: string) => void; onTo: (v: string) => void;
+  }) => {
+    // A TYPED RANGE WINS. While one is set, no preset is lit — two date filters both lit is a lie
+    // about what is on screen.
+    const ranged = !!(from || to);
+    return (
+      <div className={`pf-row${disabled ? " off" : ""}`} data-testid={`finder-${name}-row`} data-disabled={disabled ? "true" : "false"}>
+        <span className="pf-lbl">{label}</span>
+        <div className="pf-seg" role="group" aria-label={label}>
+          {opts.map(([v, t]) => (
+            <button key={v} type="button" data-testid={`finder-${name}-${v}`}
+              aria-pressed={preset === v && !ranged} disabled={disabled}
+              className={preset === v && !ranged ? "on" : ""}
+              onClick={() => onPreset(v)}>{t}</button>
+          ))}
+        </div>
+        <span className="pf-dates">
+          from <input type="date" data-testid={`finder-${name}from`} value={from} disabled={disabled}
+            onChange={(e) => onFrom(e.target.value)} />
+          to <input type="date" data-testid={`finder-${name}to`} value={to} disabled={disabled}
+            onChange={(e) => onTo(e.target.value)} />
+        </span>
+        {disabled && why && <span className="pf-why" data-testid={`finder-${name}-why`}>{why}</span>}
+      </div>
+    );
+  }
+
   const pages = Math.max(1, Math.ceil(total / size));
 
   return (
@@ -262,49 +320,46 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
               value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
           </div>
 
-          <div className="pf-row">
-            <span className="pf-lbl">Signed up</span>
-            <div className="pf-seg" role="group" aria-label="Signed up">
-              {REG_OPTS.map(([v, t]) => (
-                <button key={v} type="button" data-testid={`finder-reg-${v}`}
-                  // LIT FROM WHAT THE SERVER APPLIED, not from what was last clicked — a preset
-                  // overridden by a date range must not stay lit.
-                  aria-pressed={(applied?.reg ?? f.reg) === v && !range}
-                  className={(applied?.reg ?? f.reg) === v && !range ? "on" : ""}
-                  // PICKING A PRESET EMPTIES THE DATE BOXES. Two date filters both lit is a lie.
-                  onClick={() => setF({ ...f, reg: v, regFrom: "", regTo: "" })}>{t}</button>
-              ))}
-            </div>
-            <span className="pf-dates">
-              from <input type="date" data-testid="finder-regfrom" value={f.regFrom}
-                // TYPING A DATE OVERRIDES THE PRESET and the preset falls back to All time.
-                onChange={(e) => setF({ ...f, regFrom: e.target.value, reg: "all" })} />
-              to <input type="date" data-testid="finder-regto" value={f.regTo}
-                onChange={(e) => setF({ ...f, regTo: e.target.value, reg: "all" })} />
-            </span>
-          </div>
+          {/* ── THE TWO WINDOW ROWS, FROM ONE RENDERER ────────────────────────────────────────
+              Identical shape and identical rules is not a coincidence to be maintained by hand —
+              they are the same control, so they are the same code. A divergence between them
+              would otherwise be a copy-paste away, and the whole point of the rework is that
+              PLAYED behaves exactly as SIGNED UP already did. */}
+          {windowRow({
+            label: "Signed up", name: "reg", opts: REG_OPTS,
+            preset: applied?.reg ?? f.reg, from: f.regFrom, to: f.regTo,
+            onPreset: (v) => setF({ ...f, reg: v, regFrom: "", regTo: "" }),
+            onFrom: (v) => setF({ ...f, regFrom: v, reg: "all" }),
+            onTo: (v) => setF({ ...f, regTo: v, reg: "all" }),
+          })}
 
           <div className="pf-row">
-            <span className="pf-lbl">Activity</span>
-            <div className="pf-seg" role="group" aria-label="Activity">
-              {ACT_OPTS.map(([v, t]) => (
-                <button key={v} type="button" data-testid={`finder-act-${v}`}
-                  aria-pressed={f.act === v} className={f.act === v ? "on" : ""}
-                  onClick={() => setF({ ...f, act: v })}>{t}</button>
+            <span className="pf-lbl">History</span>
+            <div className="pf-seg" role="group" aria-label="History">
+              {HIST_OPTS.map(([v, t]) => (
+                <button key={v} type="button" data-testid={`finder-hist-${v}`}
+                  aria-pressed={f.hist === v} className={f.hist === v ? "on" : ""}
+                  // NEVER PLAYED CLEARS THE PLAY WINDOW as it disables it, so re-enabling later
+                  // cannot resurrect a filter the operator can no longer see.
+                  onClick={() => setF(v === "never"
+                    ? { ...f, hist: v, play: "all", playFrom: "", playTo: "" }
+                    : { ...f, hist: v })}>{t}</button>
               ))}
             </div>
           </div>
 
-          <div className="pf-row">
-            <span className="pf-lbl">Played in</span>
-            <select className="pf-sel" data-testid="finder-win" value={f.win} onChange={(e) => setF({ ...f, win: e.target.value })}>
-              <option value="">Any time</option>
-              {months.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
-            </select>
-            {/* SAID ON THE CONTROL, because the two windows are the thing most likely to be
-                misread: this one moves the occupancy figures and nothing else. */}
-            <span className="pf-hint">Spots and fullness read this window — not the signup one</span>
-          </div>
+          {/* NEVER PLAYED AND A PLAY WINDOW CANNOT BOTH BE TRUE. Dimmed and unclickable WITH THE
+              REASON ON SCREEN — not hidden, and never left live to return a silent zero. The
+              server ignores the window too; this is the courtesy, that is the rule. */}
+          {windowRow({
+            label: "Played", name: "play", opts: PLAY_OPTS,
+            preset: applied?.play ?? f.play, from: f.playFrom, to: f.playTo,
+            disabled: f.hist === "never",
+            why: "No play dates to filter on — History is set to Never played",
+            onPreset: (v) => setF({ ...f, play: v, playFrom: "", playTo: "" }),
+            onFrom: (v) => setF({ ...f, playFrom: v, play: "all" }),
+            onTo: (v) => setF({ ...f, playTo: v, play: "all" }),
+          })}
 
           <div className="pf-row">
             <span className="pf-lbl">City</span>
@@ -397,7 +452,17 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
         )}
       </div>
 
-      <style jsx>{`
+      {/* GLOBAL, DELIBERATELY, and every selector is `.pf-`-prefixed so nothing else can be hit.
+          styled-jsx's transform is LEXICAL: it only adds its scoped class to JSX it can statically
+          see in the component's own render. `windowRow` is a helper that RETURNS a tree, and no
+          arrangement of it — top-level function, function call, const declared inside the component
+          — got the class added. Both window rows therefore rendered with className="" and none of
+          these styles: no pill segments, no padding, and `pointer-events: none` on the disabled
+          state silently doing nothing. Measured, not guessed: the History row beside them carried
+          `jsx-9578503f9eb49537` and the PLAYED row carried nothing.
+          Scoped styles that do not reach half the card are worse than a namespaced global block.
+          styled-jsx still mounts and unmounts this with the component. */}
+      <style jsx global>{`
         .pf-head { display: flex; align-items: center; gap: 12px; padding: 14px 18px;
           border-bottom: 1px solid #eef2ec; cursor: pointer; user-select: none; }
         .pf-head h3 { margin: 0; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: #42513f; }
@@ -429,6 +494,10 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
         .pf-sel:disabled { background: #f4f7f3; color: #7d8a7c; }
         .pf-dates { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #7d8a7c; }
         .pf-hint { font-size: 12px; color: #9aa598; }
+        /* DIMMED AND UNCLICKABLE, with the reason beside it. pointer-events is what makes the row
+           genuinely inert — opacity alone leaves a control that looks dead and still fires. */
+        .pf-row.off { opacity: .45; pointer-events: none; }
+        .pf-why { font-size: 12px; color: #7a5b18; font-weight: 600; }
         .pf-clear { margin-left: auto; border: 0; background: transparent; color: #1c7a4a;
           font-size: 12.5px; font-weight: 600; cursor: pointer; text-decoration: underline; }
         .pf-band { display: grid; border-top: 1px solid #eef2ec; border-bottom: 1px solid #eef2ec;

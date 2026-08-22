@@ -1419,6 +1419,54 @@ search params without a server round trip. `FinanceShell.tsx` does this.
 **To reproduce any prod-only routing behaviour:** `npm run build && npx next start -p 3100`, then
 point a Playwright script at `BASE=http://localhost:3100`. Dev will not show it.
 
+## VERIFY THROUGH THE CALL PATH PRODUCTION USES (2026-08-22)
+
+**A test that constructs its own call shape tests a shape nobody ships.** Two instances in one
+session, the same failure twice:
+
+1. **The e2e lane runs `npm run dev` while `/admin/finance/*` builds as `○ (Static)`.** On a static
+   route `router.replace()` to the same pathname with different search params does not navigate.
+   Every suite passed; the whole period control was dead in production.
+
+2. **A `language sql` function called with defaults OMITTED has its parameter-guarded branches
+   constant-folded away; the route passes them as bind parameters and the planner must plan every
+   branch.** `player_finder_page` unfiltered: **494ms with the arguments omitted, an 8-second
+   statement timeout with the same values passed as explicit nulls.** Byte-identical function.
+   Verified direct calls were fast for weeks' worth of confidence and told us nothing.
+
+The rule: measure the shape the caller actually sends. For SQL, that means passing the argument
+object the route builds, not the convenient short form.
+
+## SQL: no correlated subquery behind a parameter guard (2026-08-22)
+
+`and (p_mode = 'window' and exists (select 1 from t where t.user_id = r.id and ...))` is a per-row
+subplan whenever `p_mode` is a parameter, because a branch reachable for SOME parameter value is
+planned for ALL of them. **Compute the set once and semi-join to it:**
+
+```sql
+with win as (select distinct user_id from t where p_mode = 'window' and ...)
+... and (p_mode <> 'window' or r.id in (select user_id from win))
+```
+
+Two more from the same function, both measured: `count(*) over ()` forces the WHOLE result set to
+materialise before `LIMIT` can take any of it — 30,245 rows on every request for a total the caller
+already had from elsewhere; and a multi-branch `CASE` in `ORDER BY` cannot be served by any index,
+so it sorts the full set by a per-row expression. Neither is visible until the set is large.
+
+## The Player Finder's SQL surface (0133–0137, 2026-08-22)
+
+`player_finder_ids` is the ONLY place a finder filter is expressed. `player_finder_page` and
+`player_finder_stats` both join to it, which is what stops the stats band describing a different set
+of people than the table under it. If a filter is not in that function it does not exist.
+
+`search_blob` is stored **lowercase** in `player_finder_rows`, and the predicate lowers the needle:
+`search_blob like '%' || lower(p_search) || '%'`. Case-insensitive end to end through the function —
+`Garcia`, `garcia`, `GARCIA` all return 337. **A caller querying the view directly does NOT get
+that**: raw PostgREST `like '%Garcia%'` returns 0. Go through the function.
+`p_search` is a bound parameter; there is no `EXECUTE`, `format()` or dynamic SQL anywhere in these
+functions. The leading `%` costs a ~260ms sequential scan over 30,245 rows — real but not the
+bottleneck; a `pg_trgm` GIN index on `search_blob` would remove it.
+
 ## Finance period: changing GRAIN loses the point in time (2026-08-21)
 
 `FinanceShell.tsx:84` derives the period from the URL alone — `periodFromUrl(searchParams.get("p"))`
