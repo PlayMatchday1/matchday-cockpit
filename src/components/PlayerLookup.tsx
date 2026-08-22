@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useAuth, canEditMatches, canManagePlayers, canEditCredits } from "@/lib/useAuth";
-import RegisteredPlayersTable from "./RegisteredPlayersTable";
+import PlayerFinder from "./PlayerFinder";
 import { validateAdjustment, fmtUsd, MAX_ADJUSTMENT_CENTS, REASON_REQUIRED } from "@/lib/creditsModel";
 import { useDockSubject } from "@/lib/useDockSubject";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
@@ -284,11 +284,13 @@ export default function PlayerLookup() {
         </div>
       )}
 
-      {/* ---------- REGISTERED PLAYERS ----------
-          Below the search, never instead of it. The search answers "find this person"; this
-          answers "who has joined", which is the question while a city is launching. */}
+      {/* ---------- PLAYER FINDER ----------
+          Below the search, never instead of it. The search answers "find this person"; this answers
+          "who joined, who never played, who can we approach" — set parameters, get the players.
+          IT REPLACED the registered-players table rather than sitting above it: with nothing set it
+          IS that table, and two lists over the same 30,245 people is two places to be wrong. */}
       {!profile && !loadingProfile && (
-        <RegisteredPlayersTable onOpen={(id) => openProfile(id)} />
+        <PlayerFinder onOpen={(id) => openProfile(id)} />
       )}
 
       {/* ---------- PROFILE VIEW ---------- */}

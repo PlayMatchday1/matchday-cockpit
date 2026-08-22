@@ -1445,3 +1445,62 @@ shell and no consumer.
 Covered by `verify-period-anchor.mjs`. **`verify-pace-grain.mjs` still cannot catch a regression
 here** — it clicks `period-jump` after every grain change, because half of what it asserts is only
 true of the current period, so it would stay green either way.
+
+## The 1,000-row cap: agreement below 100% is a TRUNCATION SUSPECT (2026-08-21)
+
+**A join or cross-check that agrees at less than 100% is a truncated read until the read is proven
+paged.** This is the fourth time the PostgREST 1,000-row cap has produced a plausible wrong answer.
+
+Most recent: checking roster spots against `mdapi_matches.player_count` over a year of matches
+reported **66% agreement, and 340 of 1,000 matches with a positive `player_count` but no roster
+rows at all** — which reads exactly like a data-quality problem and was one sentence away from
+being written up as one. The cause was `.in(...)` batches returning their first 1,000 rows with no
+paging. Paged properly the same comparison is **21,731 vs 21,731 — 1000/1000, 100.0%**. The data
+was fine.
+
+`.in()` is the usual carrier: it looks like one bounded lookup, and the cap applies to the whole
+response, not per key in the list. `.limit(20000)` does not lift it.
+
+## Roster spots in the mirror: the predicate that reproduces `player_count` (2026-08-21)
+
+`mdapi_matches.player_count` IS `_count.players` under another name — it is authoritative, and the
+per-row predicate that reproduces it from `mdapi_match_players` is `rosterRowCounts()` **plus one
+mirror-only condition**:
+
+```
+is_cancelled = false AND refunded IS NOT TRUE AND paid_status <> 'WAITING' AND deleted_at IS NULL
+```
+
+`deleted_at` is a soft delete the API model has no concept of, so `rosterRowCounts()` alone is NOT
+enough against the mirror — it over-counts by every soft-deleted row (15 of 81 on match 17516).
+Capacity is `mdapi_matches.max_player_count`. Proven over 1,000 matches / 33,399 roster rows:
+summed derived spots 21,731 = summed `player_count` 21,731, exact on every match.
+
+## Membership: there is NO tier, and the two member counts disagree by 27 (2026-08-21)
+
+**No plan, tier, product or SKU field exists on the membership record.** The raw payload is
+`price, status, userId, comment, lastName, firstName, absentOwed, canceledAt, memberEmail,
+phoneNumber, suspendedTo, cancelReason, membershipId, strikePoints, activationDate,
+membershipLength, cityIdentifierAndMemberId`. `city_member_slug` is a per-member identifier
+(`ATX597`) with one distinct value per row; `membership_length` is a day count. **Do not infer a
+tier from `price`.**
+
+**`mdapi_users.is_member` = 397 while `mdapi_subscriptions` status ACTIVE = 424 — a 27-row
+disagreement, source UNKNOWN.** Player Finder deliberately filters on **`mdapi_users.is_member`**:
+it is user-grain, the page already reads it, and it costs one fewer join. Not chased.
+
+**Observation, not a feature.** ACTIVE subscriptions cross-tabbed price × city fall into three
+bands: **$66** — ATX (104 of 191), SATX (72 of 79), HOU (64 of 68); **$30** — ATL (29 of 31),
+DFW (17 of 20), STL (15 of 23); **$15** — OKC (6 of 12). ATX also carries 57 at $0 and 25 at $49.
+So Oklahoma City does sit at a different price point from Austin and Houston. Nothing in the app
+names any price "discounted", no filter is built on it, and it is not on screen.
+
+## `mdapi_users.preferable_city_name` — the preferred-city column (2026-08-21)
+
+30,453 rows; **4,187 NULL (13.7%)**, zero empty strings, so `IS NULL` is the whole test. There is
+also `preferable_city_normalized`. Distinct values: Austin 12,504 · Houston 5,766 · *(null)* 4,187 ·
+San Antonio 3,319 · Dallas / Fort Worth 1,662 · Atlanta 1,275 · St. Louis 828 · Oklahoma City 474 ·
+New York City 350 · El Paso 83 · **Warsaw 5**.
+
+**Warsaw is five people.** The city the registered-players table was built for holds five preferred-
+city rows, so a Warsaw filter returns five. That is correct, not a bug.

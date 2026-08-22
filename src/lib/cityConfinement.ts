@@ -177,6 +177,10 @@ export const CONFINED_ROUTE_PREFIXES: readonly string[] = [
   // Player Lookup — search, profile, the two panels, and the registered list.
   "/api/lookup/",
   "/api/players/registered",
+  // Player Finder — the same page, the same mirror, the same scope check. A confined account
+  // reaches it and sees only its own city; the city SELECT is a convenience and this list plus
+  // assertScope() is the boundary.
+  "/api/players/finder",
   // Promo Codes — reads only; every write route gates on managePromos, which this account lacks.
   "/api/promos/list",
   "/api/promos/detail/",

@@ -85,13 +85,18 @@ const rel = (p: string) => p.replace("src/app/api/", "");
 // EXACTLY the intended routes are on the read gate — no more (a further move must edit this test).
 // Round 1 moved 3; round 2 moved 9 more (6 reads + the 3 dual-gate routes whose GET moved and whose
 // write stayed) — the ban route is on the read gate too, but with a MANAGE PLAYERS check on top.
-is("authenticateMatchOpsRead is imported by EXACTLY the 15 intended routes", importsMatchOpsRead.map(rel).sort(), [
+is("authenticateMatchOpsRead is imported by EXACTLY the 16 intended routes", importsMatchOpsRead.map(rel).sort(), [
   // Phase 30 — the Registered Players table under Player Lookup. A pure READ of the mdapi mirror
   // (mdapi_users + mdapi_match_players), so can_access_matchops gates the whole route with no
   // write flag on top. It is on this gate rather than the admin one BECAUSE a confined account
   // must reach it: the city boundary scopes the rows, and the gate is what hands the route its
   // scope. Adding it here is the explicit edit this census exists to force.
   "players/registered/route.ts",
+  // Phase 31 — Player Finder, the parameterised list that REPLACED the Registered Players table on
+  // the same page. Same gate for the same reason: a confined account must reach it, and this gate
+  // is what hands the route its scope. It reads the 0133/0134 views (player_finder_rows,
+  // player_finder_occupancy) rather than the base tables, but the auth surface is identical.
+  "players/finder/route.ts",
   // Phase 26 — Slate Review notes. Clubhouse's OWN table (slate_notes), not a MatchDay call:
   // can_access_matchops gates read AND write here, which is why the whole route is on this gate
   // with no write flag on top. Deliberately NOT recordWrite'd — change_log is for API writes.

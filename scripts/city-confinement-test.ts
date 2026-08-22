@@ -61,7 +61,7 @@ console.log("\n── the route allowlist ──");
 {
   const ALLOWED = [
     "/api/matchday/production/gameday", "/api/matchops/checkin/18215",
-    "/api/lookup/production", "/api/players/registered",
+    "/api/lookup/production", "/api/players/registered", "/api/players/finder",
     "/api/promos/list", "/api/promos/detail/99", "/api/reviews",
     "/api/match-chats/active", "/api/match-chats/18215/reply", "/api/crm/threads",
   ];
