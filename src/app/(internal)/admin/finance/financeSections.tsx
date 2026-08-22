@@ -43,12 +43,13 @@ function I({ children }: { children: React.ReactNode }) {
   );
 }
 
+/* REPORTS ORDER: Revenue · Cost · Cities · Cash Flow · OpEx.
+ * Revenue is the page opened most, so it leads. Cost sits with it because the two are read
+ * together, and Cities — which summarises both — follows rather than precedes them.
+ * ORDER ONLY: every label, href and key is unchanged, and no suite asserts on rail POSITION
+ * (verify-city-confinement maps rail items to names, verify-promo-read-gate keys off data-key),
+ * so nothing had to be rewritten to accommodate this. */
 export const FINANCE_SECTIONS: RailItem[] = [
-  {
-    key: "fin-cities", group: "Reports", label: "Cities", href: "/admin/finance/cities",
-    desc: "Every city on one line, ranked by net",
-    icon: <I><path d="M3 20h18" /><path d="M5 20V9l5-3.5V20" /><path d="M14 20V11l5 2.5V20" /><path d="M7.5 12.5v0M7.5 16v0" /></I>,
-  },
   {
     key: "fin-revenue", group: "Reports", label: "Revenue", href: "/admin/finance/revenue",
     desc: "What came in, by city, field and match",
@@ -58,6 +59,11 @@ export const FINANCE_SECTIONS: RailItem[] = [
     key: "fin-cost", group: "Reports", label: "Cost", href: "/admin/finance/cost",
     desc: "Field cost against the revenue it carried",
     icon: <I><path d="M3 20h18" /><path d="M6.5 20v-6" /><path d="M12 20V8" /><path d="M17.5 20v-9" /></I>,
+  },
+  {
+    key: "fin-cities", group: "Reports", label: "Cities", href: "/admin/finance/cities",
+    desc: "Every city on one line, ranked by net",
+    icon: <I><path d="M3 20h18" /><path d="M5 20V9l5-3.5V20" /><path d="M14 20V11l5 2.5V20" /><path d="M7.5 12.5v0M7.5 16v0" /></I>,
   },
   {
     key: "fin-cash-flow", group: "Reports", label: "Cash Flow", href: "/admin/finance/cash-flow",
