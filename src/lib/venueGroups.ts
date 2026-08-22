@@ -20,7 +20,11 @@ const COMBINE_BY_NAME: Array<{ primary: string; secondary: string }> = [
   { primary: "Soccer Central", secondary: "Soccer Central Tournament" },
 ];
 
-const COMBINED_LEG_LABELS: Record<string, string[]> = {
+/* EXPORTED so the Field Costs rate cell can name each leg's rate instead of stating the primary's
+ * as if it were the rate. ATH Katy is $140 weekday and $160 Sunday; showing "$140 / match" against
+ * 17 matches and $2,480 makes a correct number look wrong. Read in the given order — it is already
+ * per_match_rate ASC, matching how groupVenues sorts the legs — and never re-sorted. */
+export const COMBINED_LEG_LABELS: Record<string, string[]> = {
   // Display name → leg labels in per_match_rate ASC order. legs[0] = lowest
   // rate (e.g. weekday $140), legs[1] = next (e.g. Sunday $160).
   "ATH Katy": ["weekday", "Sunday"],

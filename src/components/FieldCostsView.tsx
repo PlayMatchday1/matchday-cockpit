@@ -15,6 +15,7 @@ import AddVenueDialog, { type AddVenueDraft } from "@/components/AddVenueDialog"
 import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
 import { logChange } from "@/lib/financeAudit";
 import { venueCategory } from "@/lib/venueResolver";
+import { COMBINED_LEG_LABELS } from "@/lib/venueGroups";
 import {
   buildFieldCostRows,
   fieldCostsFor,
@@ -1022,9 +1023,46 @@ function FieldCostTableRow({
   // An agreed rate differing from what we paid this month is normal.
   let rateMain: React.ReactNode;
   let rateSub = v?.charge_on_cancel ? "cancelled matches billed" : "cancels not billed";
+  /* HOW MANY RATES THIS CELL STATES. Asserted on, because the failure being fixed is a cell that
+   * states ONE rate the cost was never computed from. */
+  let rateCount = 1;
   // NO AMBER ON THIS CELL. A rate that differs from what we paid this month is normal under this
   // model, not a fault, so there is no warning state left for the rate to be in.
-  if (row.billingType === "per_match") {
+
+  /* ── A RATE THAT DRIVES NOTHING IS NOT A RATE ───────────────────────────────────────────────
+   * Crossbar Rowlett is stored per_match with a $100 rate, but autoCost checks the partner
+   * dashboard FIRST (financeCosts.ts:188) and returns match revenue minus manager pay — which is
+   * why $625 is not a multiple of $100 and never could be. Printing "$100 / match" there describes
+   * an arithmetic nobody performed.
+   *
+   * KEYED OFF THE BRANCH autoCost TOOK, never off a venue list, so the next per_match_minus_manager
+   * venue inherits this automatically. The three flat_percentage dashboards do NOT reach this
+   * branch and keep rendering "Share of revenue" exactly as they do today. */
+  if (row.dashboardPriced) {
+    rateMain = <>Partner <span className="font-semibold text-deep-green/45">payout</span></>;
+    rateSub = "match revenue minus manager pay";
+    rateCount = 0;
+  } else if (isCombined && new Set(row.legs.map((l) => l.rate)).size > 1) {
+    /* ── BOTH RATES, NAMED ───────────────────────────────────────────────────────────────────
+     * COMBINED_LEG_LABELS already holds "weekday"/"Sunday" and "normal"/"tournament" in
+     * per_match_rate ASC order — the same order groupVenues sorts the legs into — so they are read
+     * positionally and never re-sorted. A leg with no label falls back to its own venue name
+     * rather than going unlabelled. */
+    const labels = COMBINED_LEG_LABELS[row.displayName] ?? [];
+    rateCount = row.legs.length;
+    rateMain = (
+      <span className="inline-flex flex-wrap items-baseline gap-x-1.5">
+        {row.legs.map((l, i) => (
+          <span key={l.venueId} data-testid="fc-rate-leg">
+            {i > 0 && <span className="text-deep-green/30">· </span>}
+            {fmtMoney(l.rate, true)}
+            <span className="ml-0.5 font-semibold text-deep-green/45">{labels[i] ?? l.venueName}</span>
+          </span>
+        ))}
+      </span>
+    );
+    rateSub = `${row.legs.length} rates · ${rateSub}`;
+  } else if (row.billingType === "per_match") {
     if (v?.cost_per_match === 0 || v?.per_match_rate === 0) {
       rateMain = "Free";
       rateSub = "no charge from venue";
@@ -1080,9 +1118,12 @@ function FieldCostTableRow({
         </td>
 
         {/* RATE — unit is part of the value; pay-on-cancel folded into the sub-line. */}
-        <td className="px-3 py-2.5">
+        {/* data-rates is the count of per-match rates this cell STATES: 2 for a split-rate
+            combined venue, 0 where a partner payout decides the money, 1 everywhere else. It is
+            what the assertions read, because "renders one rate" is the exact claim being made. */}
+        <td className="px-3 py-2.5" data-testid="fc-rate" data-rates={rateCount}>
           <div className="text-[13.5px] font-bold text-deep-green">{rateMain}</div>
-          <div className="mt-0.5 text-[11px] text-deep-green/45">{rateSub}</div>
+          <div className="mt-0.5 text-[11px] text-deep-green/45" data-testid="fc-rate-sub">{rateSub}</div>
         </td>
 
         <td className={"px-3 py-2.5 text-right tabular-nums " + (row.matchCount === 0 ? "text-deep-green/30" : "text-deep-green")}>
@@ -1103,15 +1144,27 @@ function FieldCostTableRow({
 
         {/* MONTH COST — dim when zero. An amber sub-line only when the figure was entered by hand,
             and it only claims an auto figure for a billing type that HAS one. */}
-        <td className="px-3 py-2.5 text-right">
-          <div className={zero ? "text-[15px] font-semibold tabular-nums text-deep-green/30" : "text-[15px] font-extrabold tabular-nums text-deep-green"}>
-            {fmtMoney(row.amount)}
+        <td className="px-3 py-2.5 text-right" data-testid="fc-cost">
+          {/* ZERO IS A VALUE WHEN SOMEBODY KEYED IT.
+              fmtMoney renders 0 as an em dash unless signZero is set, so a deliberate $0 override
+              was indistinguishable from "nothing keyed and nothing billable". Seven of those exist
+              — Centennial Commons in FOUR consecutive months, plus San Juan Diego, Scissortail and
+              Lou Fusz Outdoor — and four straight months of dashes reads as "this venue is free".
+              signZero is passed exactly when an override exists, so a keyed zero prints $0 and an
+              unkeyed zero still prints —. The two are now different marks for different facts. */}
+          <div className={zero && !isOverride ? "text-[15px] font-semibold tabular-nums text-deep-green/30" : "text-[15px] font-extrabold tabular-nums text-deep-green"}
+               data-testid="fc-cost-amount">
+            {fmtMoney(row.amount, isOverride)}
           </div>
           {isOverride ? (
-            <div className="mt-0.5 text-[10.5px] font-bold text-[#8a5a00]">
-              {row.billingType === "per_match"
-                ? `set for ${monthFull(month)} · auto ${fmtMoney(autoAmount)}`
-                : `set for ${monthFull(month)}`}
+            /* ONE MARKER FOR ALL 31 KEYED VALUES. The keyed figure is the big number above and
+               wins on sight; the derived one is named beside it so a difference is legible rather
+               than hidden — Centennial's old "—" with "auto $300" beside it had the derived figure
+               winning the eye and the real one absent. Nothing here reads the reason string. */
+            <div className="mt-0.5 text-[10.5px] font-bold text-[#8a5a00]" data-testid="fc-keyed">
+              <span className="rounded-sm bg-[#8a5a00]/10 px-1 py-px">KEYED</span>{" "}
+              {monthFull(month)}
+              {row.billingType === "per_match" && <> · derived {fmtMoney(autoAmount, true)}</>}
             </div>
           ) : zero && hasAgreedRate ? (
             // THE STATE RYAN SCANS FOR. Plain, uncoloured: a venue with an agreed rate that we did

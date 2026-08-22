@@ -246,10 +246,14 @@ console.log("\n── write it, clear it, restore it ──");
     // figure entered. ATH Katy: 1,234.56 primary + its Sunday leg = $2,035 against an auto $2,480.
     // What must be true is that the total moved off the auto figure and the row says why.
     const autoTxt = (rowText.match(/auto \$([\d,]+)/) ?? [])[1] ?? "";
-    const totalTxt = (rowText.match(/\$([\d,]+)\s+set for/) ?? [])[1] ?? "";
+    /* THE MARKER READS "KEYED", NOT "set for". Changed deliberately: "set for August" was the only
+     * thing distinguishing a deliberate $0 from "nothing keyed", and it did not say what it was.
+     * These two lines pinned the old copy; the behaviour they guard — a keyed value replacing the
+     * computed one — is unchanged and still asserted. */
+    const totalTxt = (rowText.match(/\$([\d,]+)\s+KEYED/) ?? [])[1] ?? "";
     eq("after reload the row total is no longer the computed figure",
        totalTxt !== "" && totalTxt !== autoTxt, true);
-    eq("…and labels it 'set for <month>'", /set for \w+/i.test(rowText), true);
+    eq("…and labels it KEYED <month>", /KEYED \w+/.test(rowText), true);
     const body = await page.evaluate(() => document.body.innerText);
     eq("  …and still never says 'override'", /override/i.test(body), false);
 
@@ -281,8 +285,124 @@ console.log("\n── write it, clear it, restore it ──");
 await page.screenshot({ path: "/tmp/fc-panel.png", fullPage: false });
 console.log("  saved /tmp/fc-panel.png");
 
+// ── THE RATE COLUMN AND THE KEYED MARKER ──────────────────────────────────────────────────────
+// Three display faults, all of which made correct costs look wrong:
+//   · a combined venue stating ONE leg's rate — ATH Katy showed "$140 / match" against 17 matches
+//     and $2,480, an arithmetic nobody performed;
+//   · a rate that drives nothing — Crossbar Rowlett is priced by its partner dashboard, so its
+//     $100 never touched the money;
+//   · a keyed $0 rendering as an em dash, indistinguishable from "nothing keyed, nothing billable".
+// No cost logic changed. These assert the DISPLAY, and each carries the control that proves the
+// scan can tell the difference.
+console.log("\n── the rate column states only rates the cost used ──");
+{
+  const rows = await page.evaluate(() => [...document.querySelectorAll('[data-testid="fc-rate"]')].map((c) => {
+    const tr = c.closest("tr");
+    return {
+      name: tr?.querySelector("td")?.innerText.split("\n")[0]?.trim() ?? "",
+      rates: Number(c.getAttribute("data-rates")),
+      legs: tr.querySelectorAll('[data-testid="fc-rate-leg"]').length,
+      rateText: c.innerText.replace(/\s+/g, " ").trim(),
+      cost: tr?.querySelector('[data-testid="fc-cost-amount"]')?.textContent?.trim() ?? "",
+      keyed: tr?.querySelector('[data-testid="fc-keyed"]')?.textContent?.replace(/\s+/g, " ").trim() ?? null,
+    };
+  }));
+  eq("  control — the table rendered rows", rows.length > 0, true);
+
+  /* 29 ROWS, NOT 30. There are 30 venue GROUPS, but El Paso is a paused market and isCityHidden
+   * drops Galatzan Park before the table is built, so it never renders. The unchanged count is
+   * therefore 22 — the figure that says this change is contained. */
+  eq("the table renders 29 rows (30 groups, El Paso hidden)", rows.length, 29);
+
+  const combined = rows.filter((r) => r.rates > 1);
+  eq("exactly two rows state more than one rate", combined.map((r) => r.name).sort(),
+    ["ATH Katy", "Soccer Central"]);
+  for (const r of combined) {
+    eq(`  ${r.name} renders one rate per leg`, r.legs, r.rates);
+    eq(`  …and states ${r.rates} of them`, r.rates, 2);
+  }
+  // THE LABELS COME FROM COMBINED_LEG_LABELS, in per_match_rate ASC order, never re-sorted.
+  const katy = rows.find((r) => r.name === "ATH Katy");
+  eq("ATH Katy names its weekday rate before its Sunday rate",
+    /\$140\s*weekday.*\$160\s*Sunday/.test(katy?.rateText ?? ""), true);
+  const sc = rows.find((r) => r.name === "Soccer Central");
+  eq("Soccer Central names normal before tournament",
+    /\$80\s*normal.*\$120\s*tournament/.test(sc?.rateText ?? ""), true);
+
+  // A DASHBOARD-PRICED VENUE STATES NO PER-MATCH RATE AT ALL.
+  const cross = rows.find((r) => r.name === "Crossbar Rowlett");
+  eq("  control — Crossbar Rowlett is on the table", !!cross, true);
+  eq("Crossbar Rowlett states no per-match rate", cross?.rates, 0);
+  eq("  …and says what does decide the money", /Partner payout/.test(cross?.rateText ?? ""), true);
+  eq("  …with no per-match figure anywhere in the cell", /\/ match/.test(cross?.rateText ?? ""), false);
+
+  /* POSITIVE CONTROLS — the honest rows are untouched. The three flat_percentage dashboards still
+   * read "Share of revenue", and every other row still states exactly one rate. */
+  for (const n of ["Hattrick", "PAC Global", "PARMER Stadium"]) {
+    const r = rows.find((x) => x.name === n);
+    eq(`  control — ${n} still reads "Share of revenue"`, /Share of revenue/.test(r?.rateText ?? ""), true);
+  }
+  const plain = rows.filter((r) => r.rates === 1);
+  eq("every other row states exactly one rate", plain.length, rows.length - combined.length - 1);
+  /* TWO DIFFERENT COUNTS, and conflating them is how "22" first came out as 26.
+   *   26 rows state exactly ONE rate — their RATE cell is untouched.
+   *   22 rows are untouched ENTIRELY — the other four state one rate but had their COST cell
+   *      change, because they carry a keyed value.
+   * The containment claim is the second number, so it is computed as "one rate AND no keyed
+   * marker" rather than assumed to be the same set. */
+  const untouched = rows.filter((r) => r.rates === 1 && !r.keyed);
+  eq("  …and 22 rows are untouched entirely (29 rendered − 7 changed)", untouched.length, 22);
+  eq("  …the difference being the four keyed rows that still state one rate",
+    plain.length - untouched.length, 4);
+}
+
+console.log("\n── a keyed value is visibly keyed, and zero is a value ──");
+{
+  const rows = await page.evaluate(() => [...document.querySelectorAll('[data-testid="fc-cost"]')].map((c) => {
+    const tr = c.closest("tr");
+    return {
+      name: tr?.querySelector("td")?.innerText.split("\n")[0]?.trim() ?? "",
+      cost: c.querySelector('[data-testid="fc-cost-amount"]')?.textContent?.trim() ?? "",
+      keyed: c.querySelector('[data-testid="fc-keyed"]')?.textContent?.replace(/\s+/g, " ").trim() ?? null,
+    };
+  }));
+  const keyed = rows.filter((r) => r.keyed);
+  eq("all five August keyed values carry the marker", keyed.length, 5);
+  eq("  …and every marker says KEYED", keyed.every((r) => r.keyed.startsWith("KEYED")), true);
+
+  // ZERO IS A VALUE. A keyed $0 prints $0; an unkeyed zero still prints an em dash; and the two
+  // must be DIFFERENT marks, which is the whole point — four straight months of Centennial dashes
+  // read as "this venue is free".
+  const zeros = keyed.filter((r) => r.cost === "$0");
+  eq("  control — August has keyed zeros to check", zeros.length > 0, true);
+  eq("every keyed zero renders $0", keyed.filter((r) => r.cost === "—").length, 0);
+  const cent = rows.find((r) => r.name === "Centennial Commons");
+  eq("Centennial Commons renders $0, not a dash", cent?.cost, "$0");
+  eq("  …and names the derived figure beside it", /derived \$300/.test(cent?.keyed ?? ""), true);
+
+  // THE POSITIVE CONTROL FOR THE DASH: a row with nothing keyed and nothing billable still shows
+  // one, and it is a DIFFERENT mark from the keyed zero.
+  const unkeyed = rows.filter((r) => !r.keyed && r.cost === "—");
+  eq("  control — unkeyed, unbillable rows still render an em dash", unkeyed.length > 0, true);
+  eq("a keyed zero and an unkeyed zero are different marks", cent?.cost === unkeyed[0]?.cost, false);
+
+  /* SOCCER CENTRAL IS THE ROW IN BOTH CASES — two rates AND a keyed value — and is the one most
+   * likely to have one fix clobber the other. Ryan is still deciding its $5,600 against a $3,400
+   * derived, so this asserts the PRESENTATION, not the figure. */
+  const sc = rows.find((r) => r.name === "Soccer Central");
+  eq("Soccer Central carries its keyed marker", sc?.keyed?.startsWith("KEYED"), true);
+  eq("  …and names its derived figure", /derived/.test(sc?.keyed ?? ""), true);
+  const scRates = await page.evaluate(() => {
+    const tr = [...document.querySelectorAll("tr")].find((t) => t.innerText.startsWith("Soccer Central"));
+    return Number(tr?.querySelector('[data-testid="fc-rate"]')?.getAttribute("data-rates"));
+  });
+  eq("  …while still stating both of its rates", scRates, 2);
+}
+
+
 await closeContext(ctx);
 await closeBrowser(browser);
+
 console.log(`\n${PASS} passed, ${FAIL} failed`);
 if (fails.length) { console.log("\nFAILURES:"); for (const f of fails) console.log("  " + f); }
 process.exit(FAIL === 0 ? 0 : 1);

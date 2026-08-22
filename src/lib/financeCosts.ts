@@ -430,6 +430,10 @@ export type FieldCostRow = {
   override: FinVenueCostOverride | null;
   autoAmount: number;
   autoFormula: string;
+  /* WHICH BRANCH autoCost TOOK, carried so the rate cell can key off behaviour rather than off a
+   * venue list. Crossbar Rowlett is the only per_match_minus_manager row today; the next one added
+   * must inherit the correct display automatically rather than waiting to be noticed. */
+  dashboardPriced: boolean;
   legs: Array<{
     venueId: number;
     venueName: string;       // canonical (post-alias)
@@ -535,6 +539,7 @@ export function buildFieldCostRows(
         override,
         autoAmount,
         autoFormula,
+        dashboardPriced: legAutos.some((a) => a.kind === "per_match_minus_manager"),
         legs: g.legs.map((leg, i) => ({
           venueId: leg.id,
           venueName: leg.venue_name,
@@ -566,6 +571,7 @@ export function buildFieldCostRows(
       override: info.override,
       autoAmount: autoOnly.amount,
       autoFormula: autoOnly.formula,
+      dashboardPriced: autoOnly.kind === "per_match_minus_manager",
       legs:
         primary.billing_type === "per_match"
           ? [
