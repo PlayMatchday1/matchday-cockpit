@@ -24,6 +24,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { nameForVeo } from "@/lib/veoNameSync";
 import { useAuth, canEditMatches } from "@/lib/useAuth";
+import { isConfined } from "@/lib/cityConfinement";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { supabase } from "@/lib/supabase";
 import { downloadCsv, plural } from "@/components/growth/format";
@@ -159,6 +160,15 @@ export default function VeoMasterSchedule() {
   // flag would land, and the name write would 403 into a permanent unsynced state with a Retry that
   // could never succeed. Same predicate the route enforces.
   const { appUser } = useAuth();
+  /* A CONFINED ACCOUNT SEES ONE CITY, so two controls stop meaning anything.
+   * The chip row is REMOVED, not defaulted and not disabled — a filter that cannot change the
+   * answer is not a filter.
+   *
+   * VEO COVERAGE IS NOT DISABLED. It was, briefly, on my reasoning that Warsaw has no camera —
+   * inferred from an absent veo_codes row and a missing fin_venue_fields link. That inference was
+   * WRONG: Warsaw has a camera and those absences are a data gap. Reasoning from missing data to a
+   * missing thing is the same mistake twice tonight. */
+  const confined = isConfined(appUser);
   const mayWriteName = canEditMatches(appUser);
   const [nameFailed, setNameFailed] = useState<Map<number, string>>(new Map());
   // WHAT WE ACTUALLY WROTE, so the next toggle diffs against reality rather than the lagging
@@ -470,13 +480,15 @@ export default function VeoMasterSchedule() {
             <span className="vms-control-label">View</span>
             <div className="vms-segmented" role="tablist" aria-label="View">
               <button type="button" role="tab" aria-selected={view === "schedule"} className={"vms-seg-btn" + (view === "schedule" ? " vms-active" : "")} onClick={() => setView("schedule")}>Schedule</button>
-              <button type="button" role="tab" aria-selected={view === "veo"} className={"vms-seg-btn" + (view === "veo" ? " vms-active" : "")} onClick={() => setView("veo")}>Veo coverage</button>
+              <button type="button" role="tab" aria-selected={view === "veo"} data-testid="view-veo"
+                className={"vms-seg-btn" + (view === "veo" ? " vms-active" : "")}
+                onClick={() => setView("veo")}>Veo coverage</button>
             </div>
             <button type="button" className="vms-btn" onClick={exportWorklist} disabled={!week}>Export worklist</button>
           </div>
         </div>
 
-        {week && week.cities.length > 0 && (
+        {!confined && week && week.cities.length > 0 && (
           <div className="vms-filter" data-testid="city-filter" role="group" aria-label="Filter cities">
             <span className="vms-control-label">Cities</span>
             <button type="button" data-testid="city-chip-all" aria-pressed={cityFilter.size === 0}

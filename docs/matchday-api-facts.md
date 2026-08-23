@@ -1602,3 +1602,36 @@ selecting it, this test starts being wrong in both directions.
 
 Covered by `scripts/credits-city-scope-test.ts` (fast gate, 10 assertions) because the route's guard
 cannot be exercised without a confined login and it protects money.
+
+## CORRECTION: there is NO 400-match ceiling and no 501 (2026-08-23)
+
+**The 400-match cap and its 501 were deleted with the roster union in `b0a2430`.** There is no
+match-count ceiling anywhere in `src/` — `grep "status: 501"` returns nothing — and Master Schedule,
+being week-scoped, never had one.
+
+It was real: the registered-players table's roster half needed a match-by-match walk because
+`mdapi_match_players` has no foreign key to `mdapi_matches` and PostgREST cannot embed the join.
+That walk capped the feature at 400 matches and returned a 501 naming the missing FK. When Player
+Finder replaced that table the union went, and the ceiling went with it.
+
+**It was repeated as a live constraint for a whole session after it stopped being true.** Recorded
+here so it stops being folklore.
+
+## ABSENCE IS NOT EVIDENCE, in a young market (2026-08-23)
+
+**In a market that is weeks old, missing data means nobody has entered it yet — not that the thing
+does not exist.** This cost twice in one session:
+
+1. **Warsaw "has no Veo camera".** Inferred from an absent `veo_codes` row and a missing
+   `fin_venue_fields` link for field 1684. I built a disabled tab and on-screen copy saying so.
+   Warsaw HAS a camera; the absences were a data gap. The copy was false and was removed.
+2. **The roster mirror "is 34% incomplete".** Inferred from a summed comparison that came back at
+   66%. The data was fine; the read was truncated by the 1,000-row cap.
+
+Both were an absence read as a fact. The test before writing one down: *could this be missing
+because nobody has filled it in yet?* In a city with three matches and one field, the answer is
+almost always yes.
+
+Related and different: `mdapi_users.preferable_city_name` NULL on 4,187 players is NOT this — it is
+a real, populated field that those players genuinely have not set, which is why credits treat NULL
+as a refusal rather than a gap to be filled in later.

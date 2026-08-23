@@ -66,7 +66,12 @@ export type VeoWeek = {
 // `now` is the real clock (drives the per-day "today" flag + generatedAt);
 // `weekRef` selects WHICH week to assemble (any date within it). They are separate
 // so navigating to another week never marks one of its days as "today".
-export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date = now): Promise<VeoWeek> {
+/**
+ * @param scopeCity a confined caller's city_identifier ("WAW"), or null for an unconfined caller.
+ *   THE FILTER IS IN THE QUERY, not applied to the result, so a confined caller's rows never leave
+ *   the database. It comes from app_users via the route — never from a query param.
+ */
+export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date = now, scopeCity: string | null = null): Promise<VeoWeek> {
   const mon = weekMonday(weekRef);
   const sun = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 6);
   const todayIso = ymd(now);
@@ -76,12 +81,21 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
   });
 
   // live, non-cancelled matches this week
-  const { data: rows, error } = await sb
+  let q = sb
     .from("mdapi_matches")
     .select("api_id, name, city_identifier, field_title, start_date, is_cancelled, deleted_at")
     .is("deleted_at", null)
     .gte("start_date", ymd(mon))
     .lte("start_date", `${ymd(sun)}T23:59:59`);
+  /* THE BOUNDARY, IN SQL, AND ONLY WHEN THERE IS ONE. A confined caller cannot receive another
+   * city's matches even if the display map or a client filter later changes.
+   *
+   * APPLIED ONLY WHEN scopeCity IS SET. Writing this as one chained filter with a `not.is null`
+   * branch for the unconfined case would ALSO have dropped every match with a null
+   * city_identifier — a silent behaviour change for every existing user, to serve a boundary that
+   * does not apply to them. */
+  if (scopeCity) q = q.eq("city_identifier", scopeCity);
+  const { data: rows, error } = await q;
   if (error) throw new Error(`veo matches: ${error.message}`);
   const live = (rows ?? []).filter((r) => !r.is_cancelled && r.start_date);
 
@@ -125,12 +139,18 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
   const codesByCity = new Map<string, { code: string; confirmed: boolean }[]>();
   for (const c of codes ?? []) (codesByCity.get(c.city) ?? codesByCity.set(c.city, []).get(c.city)!).push({ code: c.code, confirmed: c.confirmed });
 
+  /* THE CITY LIST AND THE CODE REFERENCE ARE SCOPED TOO. The grid and the Schedule view both
+   * iterate `cities`, so leaving it unfiltered would show a confined account seven other city
+   * headings with no matches under them — and the codes reference is fleet data. */
+  const scopeName = scopeCity ? (CITY_CODE_TO_DISPLAY[scopeCity] ?? null) : null;
+  const keep = (city: string) => !scopeName || city === scopeName;
+
   return {
     weekStart: ymd(mon),
     days,
-    cities: (cams ?? []).map((c) => ({ city: c.city, cameras: c.cameras })),
+    cities: (cams ?? []).filter((c) => keep(c.city)).map((c) => ({ city: c.city, cameras: c.cameras })),
     matches,
-    codesRef: [...codesByCity.entries()].map(([city, codes]) => ({ city, codes })),
+    codesRef: [...codesByCity.entries()].filter(([city]) => keep(city)).map(([city, codes]) => ({ city, codes })),
     seededThisWeek,
     generatedAt: now.toISOString(),
   };

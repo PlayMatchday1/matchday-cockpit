@@ -77,6 +77,11 @@ export const CONFINED_CAPABILITIES: ReadonlySet<string> = new Set(["matchops", "
 /** The rail's six, by their MATCH_OPS_SECTIONS keys. The rail is a courtesy; the server decides. */
 export const CONFINED_RAIL_KEYS: readonly string[] = [
   "gameday", "player-lookup", "promos", "reviews", "match-chats", "player-chats",
+  /* SEVENTH, AND THE FIRST WRITE SURFACE A CONFINED ACCOUNT HAS. Everything above it is read-only;
+   * Master Schedule carries Copy match and the inline editor so a new market can build its own
+   * schedule. The write boundary is NOT this list — it is assertMatchInScope on the editor's save
+   * and the fieldId check on create (099147a). This only decides what appears in the rail. */
+  "master-schedule",
 ];
 
 export const CONFINED_ERROR =
@@ -194,14 +199,29 @@ export const CONFINED_ROUTE_PREFIXES: readonly string[] = [
   "/api/crm/",
 ];
 
+/* ── EXACT ROUTES, NOT SUBTREES ───────────────────────────────────────────────────────────────
+ * Master Schedule's week — and ONLY that path.
+ *
+ * IT IS HERE RATHER THAN IN THE PREFIX LIST BECAUSE A PREFIX WOULD HAVE OPENED /api/veo/codes,
+ * the camera-code admin surface that city-confinement-test explicitly refuses. Adding "/api/veo"
+ * above turned that assertion red, which is the allowlist behaving exactly as 099147a describes:
+ * a blanket prefix exposes everything beneath it, and the only thing that caught this was a test
+ * someone had already written naming the route that must stay shut.
+ *
+ * The week route is safe to open only because fetchVeoWeek is scoped to the caller's confined city
+ * in the same commit. /api/veo/cameras, /api/veo/codes, /api/veo/intent and /api/veo/inbound stay
+ * refused — a confined account reads its week and changes no fleet configuration. */
+const CONFINED_ROUTE_EXACT: readonly string[] = ["/api/veo"];
+
 /**
- * Is this path one of the six pages' routes?
+ * Is this path one of the confined pages' routes?
  *
  * The pathname is taken from the REQUEST, so it cannot be spoofed by a body or a header, and the
  * comparison is a plain prefix match on an allowlist — no regex to get subtly wrong.
  */
 export function isConfinedRouteAllowed(pathname: string): boolean {
   const p = (pathname || "").split("?")[0];
+  if (CONFINED_ROUTE_EXACT.includes(p)) return true;
   return CONFINED_ROUTE_PREFIXES.some((prefix) => p === prefix || p.startsWith(prefix));
 }
 

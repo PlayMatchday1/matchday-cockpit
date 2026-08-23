@@ -62,13 +62,21 @@ console.log("\n── the route allowlist ──");
   const ALLOWED = [
     "/api/matchday/production/gameday", "/api/matchops/checkin/18215",
     "/api/lookup/production", "/api/players/registered", "/api/players/finder",
+    // Master Schedule's week — the bare path only, and only because fetchVeoWeek is scoped to the
+    // caller's confined city in the same commit.
+    "/api/veo",
     "/api/promos/list", "/api/promos/detail/99", "/api/reviews",
     "/api/match-chats/active", "/api/match-chats/18215/reply", "/api/crm/threads",
   ];
   const REFUSED = [
     "/api/community/cities", "/api/community/settings", "/api/manager-pay/aliases",
     "/api/manager-pay/share-token", "/api/partner-dashboards", "/api/partner-dashboards/preview",
-    "/api/veo/codes", "/api/inventory/7", "/api/match-promotion", "/api/slate-notes",
+    /* THE VEO SUBTREE STAYS SHUT. Only the bare week route is open, and it is in an EXACT list
+     * rather than the prefix list for exactly this reason — "/api/veo" as a prefix opened
+     * /api/veo/codes, and this line is what caught it. A confined account reads its week and
+     * changes no fleet configuration. */
+    "/api/veo/codes", "/api/veo/cameras", "/api/veo/intent", "/api/veo/inbound",
+    "/api/inventory/7", "/api/match-promotion", "/api/slate-notes",
     "/api/admin/users/permissions", "/api/promos/create", "/api/promos/delete/12",
   ];
   for (const p of ALLOWED) {
@@ -100,6 +108,13 @@ console.log("\n── the sentence on the User access screen ──");
 // city managers who exist today.
 {
   const cm = confinementSummary({ cityName: "Dallas / Fort Worth", isCityManager: true, pageCount: 3 });
+  /* THE SEVENTH KEY, ASSERTED BY NAME. Master Schedule is the FIRST WRITE SURFACE a confined
+   * account has — everything else it reaches is read-only — so this list changing is a thing that
+   * should require an explicit edit here. */
+  t("the confined rail is exactly these seven, in order", () =>
+    assert.deepEqual([...CONFINED_RAIL_KEYS],
+      ["gameday", "player-lookup", "promos", "reviews", "match-chats", "player-chats", "master-schedule"]));
+
   const waw = confinementSummary({ cityName: "Warsaw", isCityManager: false, pageCount: CONFINED_RAIL_KEYS.length });
   t("a city manager is told about city manager pages", () => assert.match(cm, /city manager pages only$/));
   t("  …and NOT about Match Ops", () => assert.equal(/Match Ops/.test(cm), false));

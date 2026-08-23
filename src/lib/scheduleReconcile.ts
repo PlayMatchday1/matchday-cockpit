@@ -93,4 +93,12 @@ export const CITY_CODE_TO_DISPLAY: Record<string, string> = {
   STL: "St. Louis",
   OKC: "OKC",
   ELP: "El Paso",
+  /* WARSAW. Added 2026-08-23. It was absent, and its absence was silently DROPPING every Warsaw
+   * match at veoSchedule.ts:101 ("only fleet cities appear in the grid") — so a Warsaw operator saw
+   * an empty Master Schedule with the matches sitting in the payload behind it.
+   *
+   * Ten of this map's eleven consumers already fell back to the raw code, so Warsaw was rendering
+   * as the string "WAW" on dataRoom, scheduleReconcile, growth and retention. For those this is a
+   * spelling fix, not a new row: same rows, same totals, "WAW" becomes "Warsaw". */
+  WAW: "Warsaw",
 };

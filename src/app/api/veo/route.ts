@@ -17,7 +17,9 @@ export async function GET(req: Request) {
     const raw = new URL(req.url).searchParams.get("week");
     const m = raw?.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     const weekRef = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date();
-    const week = await fetchVeoWeek(auth.supabase, new Date(), weekRef);
+    // SCOPED FROM THE SESSION, never from the request. authenticateCrm resolves confinedCity from
+    // app_users on every request with no JWT caching, so a revoked confinement takes effect at once.
+    const week = await fetchVeoWeek(auth.supabase, new Date(), weekRef, auth.confinedCity ?? null);
     return Response.json(week, { status: 200, headers: { "Cache-Control": "no-store" } });
   } catch (e) {
     console.error("[api/veo] failed", e);
