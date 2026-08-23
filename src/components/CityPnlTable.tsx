@@ -123,6 +123,8 @@ export default function CityPnlTable() {
     { dpp: 0, memb: 0, total: 0, cost: 0, afterCost: 0, over: 0, net: 0 },
   );
 
+  const maxRev = Math.max(1, ...shown.map((k) => k.gross));
+
   return (
     <div className={styles.wrap}>
       <div className={styles.card}>
@@ -168,86 +170,79 @@ export default function CityPnlTable() {
           ))}
         </div>
 
-        {/* ── DESKTOP: the nine-column chain ───────────────────────────────── */}
-        <div className={styles.tblWrap}>
-          <table className={styles.tbl} data-testid="citypnl-table">
+        {/* SCALE IS INFORMATION. Every bar is drawn against the largest city's revenue, so a
+            27:1 gap reads as 27:1 instead of as two identical rows. */}
+        {/* ── DESKTOP: SIX COLUMNS, IN P&L ORDER ───────────────────────────
+            City · Revenue · − Field cost · − Overhead · Net P&L · Margin.
+            The minus signs live in the headers because it is a CHAIN, and the reader was
+            reconstructing revenue − field − overhead = net in their head on every row.
+            DPP rev, member rev, field net and field margin are not deleted — they moved into
+            the expansion, where they are the subject rather than four more numbers competing
+            with the answer. */}
+        <div className={`${styles.tblWrap} ${styles.tblWrap6}`}>
+          <table className={`${styles.tbl} ${styles.tbl6}`} data-testid="citypnl-table">
             <colgroup>
-              <col className={styles.cCity} />
-              <col className={styles.cNum} /><col className={styles.cNum} /><col className={styles.cNum} />
-              <col className={styles.cNum} /><col className={styles.cNum} />
-              <col className={styles.cMar} />
-              <col className={styles.cNum} /><col className={styles.cNum} />
-              <col className={styles.cMar} />
+              <col className={styles.c6City} /><col className={styles.c6Rev} />
+              <col className={styles.c6Num} /><col className={styles.c6Num} />
+              <col className={styles.c6Net} /><col className={styles.c6Mar} />
             </colgroup>
             <thead>
               <tr>
-                <th className={styles.thCity}>City</th>
-                <th>DPP rev</th>
-                {/* The equation, stated quietly in the header: DPP + Member = Total. */}
-                <th className={styles.plus}>Member rev</th>
-                <th className={styles.eq}>Total rev</th>
-                <th className={styles.gsep}>Field cost</th>
-                <th className={styles.gsep}>Field net</th>
-                <th className={styles.thMar}>Field margin</th>
-                <th className={styles.gsep}>Overhead</th>
-                <th className={styles.gsep}>Net P&amp;L</th>
-                <th className={styles.thMar}>Margin</th>
+                <th className={styles.thCity6}>City</th>
+                <th>Revenue</th>
+                <th>&minus; Field cost</th>
+                <th>&minus; Overhead</th>
+                <th>Net P&amp;L</th>
+                <th>Margin</th>
               </tr>
             </thead>
             <tbody>
-              {shown.map((k, i) => (
-                <CityRows key={k.city} k={k} rank={i + 1} open={open === k.city}
+              {shown.map((k) => (
+                <CityRows key={k.city} k={k} maxRev={maxRev} open={open === k.city}
                   onToggle={() => setOpen(open === k.city ? null : k.city)} />
               ))}
               {!single && blank.map((k) => (
                 <tr key={k.city} className={styles.blank} data-testid="citypnl-blank-row">
-                  <td className={styles.tdCity}><span className={styles.rkSpacer} />{k.city}</td>
-                  <td>—</td><td>—</td><td>—</td>
-                  <td className={styles.gsep}>—</td><td className={styles.gsep}>—</td>
-                  <td>—</td>
-                  <td className={styles.gsep}>—</td><td className={styles.gsep}>—</td>
-                  <td className={styles.tdMar}>—</td>
+                  <td className={styles.city6}>{k.city}</td>
+                  <td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
                 </tr>
               ))}
             </tbody>
             <tfoot>
               <tr data-testid="citypnl-total-row">
-                <td className={styles.tdCity}>{single ? scope : "All cities"}</td>
-                <td>{usd(T.dpp)}</td>
-                <td>{usd(T.memb)}</td>
-                <td>{usd(T.total)}</td>
-                <td className={`${styles.gsep} ${styles.cost}`}>{usdNeg(T.cost)}</td>
-                <td className={`${styles.gsep} ${T.afterCost < 0 ? styles.negv : ""}`}>{usd(T.afterCost)}</td>
-                <td className={styles.tdMar} data-testid="citypnl-fieldmargin">
-                  <span className={`${styles.pill} ${T.afterCost >= 0 ? styles.pillUp : styles.pillDn}`}>
-                    {T.total ? pctInt(T.afterCost / T.total) : "\u2014"}
-                  </span>
-                </td>
-                <td className={`${styles.gsep} ${styles.cost}`}>{usdNeg(T.over)}</td>
-                <td className={`${styles.gsep} ${styles.res} ${T.net >= 0 ? styles.up : styles.dn}`} data-testid="citypnl-total-net">{usd(T.net)}</td>
-                <td className={styles.tdMar}>
-                  <span className={`${styles.pill} ${T.net >= 0 ? styles.pillUp : styles.pillDn}`}>
-                    {T.total ? pctInt(T.net / T.total) : "—"}
-                  </span>
+                <td className={styles.city6}>{single ? scope : "All cities"}</td>
+                <td className={styles.rev6}>{usd(T.total)}</td>
+                <td className={styles.cost}>{usdNeg(T.cost)}</td>
+                <td className={styles.cost}>{usdNeg(T.over)}</td>
+                <td className={`${styles.net6} ${T.net < 0 ? styles.net6dn : ""}`} data-testid="citypnl-total-net">{usd(T.net)}</td>
+                <td className={styles.mar6} data-testid="citypnl-total-margin">
+                  {T.total ? pctInt(T.net / T.total) : "—"}
                 </td>
               </tr>
             </tfoot>
           </table>
         </div>
 
-        {/* ── PHONE: one card per city, the chain stacked ──────────────────── */}
-        <div className={styles.cards}>
-          {shown.map((k, i) => (
-            <CityCard key={k.city} k={k} rank={i + 1} open={open === k.city}
+        {/* ── PHONE: A CARD PER CITY. A six-column table does not survive 393px, so it is
+            not attempted. Name and Net P&L on the first line with the answer right-aligned and
+            dominant, the revenue bar full width beneath, then revenue / field / overhead
+            three-up. Tapping opens the same detail the desktop expansion carries. */}
+        <div className={styles.cards6}>
+          {shown.map((k) => (
+            <CityCard key={k.city} k={k} maxRev={maxRev} open={open === k.city}
               onToggle={() => setOpen(open === k.city ? null : k.city)} />
           ))}
-          <div className={`${styles.mcard} ${styles.mtotal}`} data-testid="citypnl-card-total">
-            <div className={styles.mhead}><span className={styles.mcity}>{single ? scope : "All cities"}</span>
-              <span className={`${styles.pill} ${T.net >= 0 ? styles.pillUp : styles.pillDn}`}>
-                {T.total ? pctInt(T.net / T.total) : "—"}
-              </span>
+          <div className={`${styles.card6} ${styles.mtotal}`} data-testid="citypnl-card-total">
+            <div className={styles.card6head}>
+              <span className={styles.card6city}>{single ? scope : "All cities"}</span>
+              <span className={`${styles.card6net} ${T.net < 0 ? styles.net6dn : ""}`}>{usd(T.net)}</span>
             </div>
-            <Chain dpp={T.dpp} memb={T.memb} total={T.total} cost={T.cost} afterCost={T.afterCost} over={T.over} net={T.net} />
+            <div className={styles.card6bar}><RevBar rev={T.total} net={T.net} maxRev={T.total} /></div>
+            <dl className={styles.card6three}>
+              <div><dt>Revenue</dt><dd className={styles.rev6}>{usd(T.total)}</dd></div>
+              <div><dt>&minus; Field</dt><dd className={styles.cost}>{usdNeg(T.cost)}</dd></div>
+              <div><dt>&minus; Overhead</dt><dd className={styles.cost}>{usdNeg(T.over)}</dd></div>
+            </dl>
           </div>
         </div>
 
@@ -279,15 +274,24 @@ function Chain({ dpp, memb, total, cost, afterCost, over, net }: {
   );
 }
 
-function CityCard({ k, rank, open, onToggle }: { k: CityPnl; rank: number; open: boolean; onToggle: () => void }) {
+function CityCard({ k, maxRev, open, onToggle }: { k: CityPnl; maxRev: number; open: boolean; onToggle: () => void }) {
+  const loss = k.net < 0;
   return (
-    <div className={styles.mcard} data-testid="citypnl-card">
-      <button type="button" className={styles.mhead} onClick={onToggle} aria-expanded={open}>
-        <span className={styles.mcity}><span className={styles.rk}>{rank}</span>{k.city}</span>
-        <span className={`${styles.pill} ${k.net >= 0 ? styles.pillUp : styles.pillDn}`}>{pctInt(k.margin)}</span>
+    <div className={`${styles.card6} ${loss ? styles.card6loss : ""}`} data-testid="citypnl-card"
+      data-city={k.city} data-loss={loss ? "true" : "false"}>
+      {/* NAME AND THE ANSWER ON THE FIRST LINE, the answer right-aligned and dominant. The whole
+          head is the tap target — 48px tall, never a chevron someone has to hit. */}
+      <button type="button" className={styles.card6head} onClick={onToggle} aria-expanded={open}
+        data-testid="citypnl-card-head">
+        <span className={styles.card6city}>{k.city}</span>
+        <span className={`${styles.card6net} ${loss ? styles.net6dn : ""}`} data-testid="citypnl-card-net">{usd(k.net)}</span>
       </button>
-      <Chain dpp={k.mappedDpp} memb={k.membership} total={k.gross} cost={k.fieldCost}
-        afterCost={k.netAfterFieldCost} over={k.overheadTotal} net={k.net} />
+      <div className={styles.card6bar}><RevBar rev={k.gross} net={k.net} maxRev={maxRev} /></div>
+      <dl className={styles.card6three}>
+        <div><dt>Revenue</dt><dd className={styles.rev6} data-testid="citypnl-card-rev">{usd(k.gross)}</dd></div>
+        <div><dt>&minus; Field</dt><dd className={styles.cost}>{usdNeg(k.fieldCost)}</dd></div>
+        <div><dt>&minus; Overhead</dt><dd className={styles.cost}>{usdNeg(k.overheadTotal)}</dd></div>
+      </dl>
       {open && (
         <div className={styles.mpitches}>
           <p className={styles.subhdText}>{k.city} · by pitch</p>
@@ -328,29 +332,56 @@ function pitchMeta(f: PnlField): string {
   return `${spots} · ${rate}`;
 }
 
-function CityRows({ k, rank, open, onToggle }: { k: CityPnl; rank: number; open: boolean; onToggle: () => void }) {
+
+/**
+ * THE REVENUE BAR — two facts in one control.
+ *   LENGTH        revenue against the largest city on screen.
+ *   GREEN PORTION what survives cost, so the green share IS the margin.
+ *
+ * THE EDGE CASE THIS EXISTS FOR: St. Louis earns $15 on $965. A true-to-scale green segment is
+ * 0.08px — "barely profitable" would draw identically to "losing", which is the one distinction
+ * the bar is for. ANY positive net therefore gets a minimum visible sliver; a loss gets none, and
+ * that asymmetry is deliberate rather than a rounding convenience.
+ */
+function RevBar({ rev, net, maxRev }: { rev: number; net: number; maxRev: number }) {
+  const revW = maxRev > 0 ? Math.max(0, Math.min(100, (rev / maxRev) * 100)) : 0;
+  // Clamped at 1, so a city spending more than it earns shows a fully consumed bar rather than a
+  // negative-width segment.
+  const costShare = rev > 0 ? Math.min(1, Math.max(0, (rev - net) / rev)) : 1;
+  const netShare = 1 - costShare;
+  return (
+    <div className={styles.barwrap6} data-testid="citypnl-bar"
+      title="bar length = revenue · green = what survives cost">
+      <div className={styles.barrev6} data-testid="citypnl-bar-rev" style={{ width: `${revW.toFixed(2)}%` }}>
+        <div className={styles.segcost6} data-testid="citypnl-bar-cost" style={{ width: `${(costShare * 100).toFixed(2)}%` }} />
+        <div className={styles.segnet6} data-testid="citypnl-bar-net"
+          style={{ width: `${(netShare * 100).toFixed(2)}%`, ...(net > 0 ? { minWidth: 2 } : null) }} />
+      </div>
+    </div>
+  );
+}
+
+function CityRows({ k, maxRev, open, onToggle }: { k: CityPnl; maxRev: number; open: boolean; onToggle: () => void }) {
+  const loss = k.net < 0;
   return (
     <>
-      <tr className={styles.row} onClick={onToggle} data-testid="citypnl-row">
-        <td className={styles.tdCity}>
-          <span className={styles.rk}>{rank}</span>
-          <span className={styles.city}>{k.city}</span>
-          <span className={styles.caret}>{open ? "▾" : "▸"}</span>
+      <tr className={`${styles.row6} ${loss ? styles.row6loss : ""}`} onClick={onToggle}
+        data-testid="citypnl-row" data-city={k.city} data-loss={loss ? "true" : "false"}>
+        <td className={styles.city6}>
+          <span className={styles.tw6}>{open ? "▾" : "▸"}</span>{k.city}
         </td>
-        <td className={styles.dim}>{usd(k.mappedDpp)}</td>
-        <td className={styles.dim}>{usd(k.membership)}</td>
-        <td className={styles.subT}>{usd(k.gross)}</td>
-        <td className={`${styles.gsep} ${styles.cost}`}>{usdNeg(k.fieldCost)}</td>
-        <td className={`${styles.gsep} ${k.netAfterFieldCost < 0 ? styles.negv : ""}`}>{usd(k.netAfterFieldCost)}</td>
-        <td className={styles.tdMar} data-testid="citypnl-fieldmargin">
-          <span className={`${styles.pill} ${k.netAfterFieldCost >= 0 ? styles.pillUp : styles.pillDn}`}>
-            {k.gross ? pctInt(k.netAfterFieldCost / k.gross) : "\u2014"}
-          </span>
+        <td>
+          <div className={styles.rev6} data-testid="citypnl-rev">{usd(k.gross)}</div>
+          <RevBar rev={k.gross} net={k.net} maxRev={maxRev} />
         </td>
-        <td className={`${styles.gsep} ${styles.cost}`}>{usdNeg(k.overheadTotal)}</td>
-        <td className={`${styles.gsep} ${styles.res} ${k.net >= 0 ? styles.up : styles.dn}`} data-testid="citypnl-net">{usd(k.net)}</td>
-        <td className={styles.tdMar}>
-          <span className={`${styles.pill} ${k.net >= 0 ? styles.pillUp : styles.pillDn}`}>{pctInt(k.margin)}</span>
+        <td className={styles.cost} data-testid="citypnl-field">{usdNeg(k.fieldCost)}</td>
+        <td className={styles.cost} data-testid="citypnl-overhead-cell">{usdNeg(k.overheadTotal)}</td>
+        <td className={`${styles.net6} ${loss ? styles.net6dn : ""}`} data-testid="citypnl-net">{usd(k.net)}</td>
+        {/* BADGES ONLY ON LOSSES. A pill on 69%, 80% and 82% is why the two red ones stopped
+            registering — if every row is badged the badge means nothing. */}
+        <td className={styles.mar6} data-testid="citypnl-margin">
+          {loss ? <span className={styles.flag6} data-testid="citypnl-loss-badge">{pctInt(k.margin)}</span>
+                : pctInt(k.margin)}
         </td>
       </tr>
       {open && <Drill k={k} />}
@@ -360,51 +391,54 @@ function CityRows({ k, rank, open, onToggle }: { k: CityPnl; rank: number; open:
 
 // The pitches, IN THE SAME NINE COLUMNS. No nested table, no second set of widths.
 function Drill({ k }: { k: CityPnl }) {
+  const fieldMargin = k.gross ? k.netAfterFieldCost / k.gross : null;
   return (
-    <>
-      <tr className={styles.subhd}><td colSpan={10}>{k.city} · by pitch</td></tr>
-      {k.fields.map((f) => (
-        <tr key={f.venue} className={styles.sub} data-testid="citypnl-pitch-row">
-          <td className={styles.tdCity}>
-            <span className={styles.ven}>{f.venue}</span>
-            <span className={styles.vmeta}>{pitchMeta(f)}</span>
-          </td>
-          <td className={styles.dim}>{usd(f.dppRev)}</td>
-          <td className={f.memberRev == null ? styles.na : styles.dim}>
-            {f.memberRev == null ? "—" : usd(f.memberRev)}
-            {f.memberRev != null && <i className={styles.alloc}>alloc</i>}
-          </td>
-          <td className={styles.subT}>{usd(f.totalRev)}</td>
-          <td className={`${styles.gsep} ${f.cost == null ? styles.na : styles.cost}`}>
-            {f.cost == null ? "—" : usdNeg(f.cost)}
-          </td>
-          <td className={`${styles.gsep} ${f.net == null ? styles.na : f.net < 0 ? styles.negv : ""}`}>
-            {f.net == null ? "—" : usd(f.net)}
-          </td>
-          {/* MEASURABLE AT A PITCH: its own revenue against its own venue cost. */}
-          <td className={styles.tdMar} data-testid="citypnl-pitch-fieldmargin">
-            {f.net == null || !f.totalRev ? <span className={styles.na}>—</span> : (
-              <span className={`${styles.pill} ${f.net >= 0 ? styles.pillUp : styles.pillDn}`}>
-                {pctInt(f.net / f.totalRev)}
-              </span>
-            )}
-          </td>
-          {/* A PITCH HAS NO OVERHEAD AND NO NET — those are city facts. */}
-          <td className={`${styles.gsep} ${styles.na}`}>—</td>
-          <td className={`${styles.gsep} ${styles.na}`}>—</td>
-          <td className={`${styles.tdMar} ${styles.na}`}>—</td>
-        </tr>
-      ))}
-      {k.untracked > 0 && (
-        <tr className={styles.sub}>
-          <td colSpan={10} className={styles.gapNote} data-testid="citypnl-untracked">
-            <b>{usd(k.untracked)} of DPP is untracked</b> — it sits at pitches with no cost basis on
-            file, so it is held out of DPP rev and Field net entirely rather than counted at $0.
-          </td>
-        </tr>
-      )}
-      <tr className={styles.ohrow}><td colSpan={10}><OverheadMakeup k={k} /></td></tr>
-    </>
+    <tr className={styles.exp6} data-testid="citypnl-expansion">
+      <td colSpan={6}>
+        <div className={styles.expWrap6}>
+          {/* THE FOUR COLUMNS THAT LEFT THE TOP LEVEL. Not deleted — moved here, where they are
+              the subject rather than four more numbers competing with the answer. */}
+          <p className={styles.expHead6}>{k.city} · revenue split and field result</p>
+          <div className={styles.split6} data-testid="citypnl-split">
+            <span>DPP rev <b data-testid="citypnl-dpp">{usd(k.mappedDpp)}</b></span>
+            <span>+ Member rev <b data-testid="citypnl-member">{usd(k.membership)}</b></span>
+            <span>= Total <b>{usd(k.gross)}</b></span>
+            <span>Field net <b data-testid="citypnl-fieldnet" className={k.netAfterFieldCost < 0 ? styles.negv : ""}>{usd(k.netAfterFieldCost)}</b></span>
+            <span>Field margin <b data-testid="citypnl-fieldmargin">{fieldMargin == null ? "—" : pctInt(fieldMargin)}</b></span>
+          </div>
+
+          <p className={styles.expHead6}>{k.city} · by pitch</p>
+          <table className={styles.ptable6} data-testid="citypnl-pitch-table">
+            <tbody>
+              {k.fields.map((f) => (
+                <tr key={f.venue} data-testid="citypnl-pitch-row">
+                  <td className={styles.city6}>
+                    <span className={styles.ven}>{f.venue}</span>
+                    <span className={styles.vmeta}>{pitchMeta(f)}</span>
+                  </td>
+                  <td className={styles.rev6} data-testid="citypnl-pitch-rev">{usd(f.totalRev)}</td>
+                  <td className={f.cost == null ? styles.na : styles.cost}>
+                    {f.cost == null ? "—" : usdNeg(f.cost)}
+                  </td>
+                  <td className={f.net == null ? styles.na : f.net < 0 ? styles.negv : ""} data-testid="citypnl-pitch-net">
+                    {f.net == null ? "—" : usd(f.net)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {k.untracked > 0 && (
+            <p className={styles.gapNote} data-testid="citypnl-untracked">
+              <b>{usd(k.untracked)} of DPP is untracked</b> — it sits at pitches with no cost basis
+              on file, so it is held out of DPP rev and Field net entirely rather than counted at $0.
+            </p>
+          )}
+
+          {/* THE OVERHEAD MAKEUP — the other half of what the top level now only totals. */}
+          <OverheadMakeup k={k} />
+        </div>
+      </td>
+    </tr>
   );
 }
 

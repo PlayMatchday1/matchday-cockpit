@@ -231,3 +231,102 @@
 }
 .basisNote b { color: #6b4600; }
 @media (max-width: 899px) { .basisNote { margin: 0 14px 12px; } }
+
+/* ══ THE SIX-COLUMN P&L ══════════════════════════════════════════════════════════════════════
+   City · Revenue · − Field cost · − Overhead · Net P&L · Margin, in that order, because a P&L is
+   a CHAIN and the reader was reconstructing the arithmetic in their head on every row. The four
+   cut columns (DPP, member, field net, field margin) moved into the expansion — still available,
+   one click down, where they are the subject rather than four more numbers competing with the
+   answer. */
+
+/* NO VERTICAL RULES. They chop a row that is meant to be read across. */
+.tbl6 { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 0; }
+.tbl6 th, .tbl6 td { border-left: 0 !important; border-right: 0 !important; }
+.tbl6 thead th {
+  font-size: 10px; letter-spacing: .07em; text-transform: uppercase; color: var(--mute);
+  font-weight: 700; text-align: right; padding: 10px 16px; border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.tbl6 thead th.thCity6 { text-align: left; }
+.tbl6 tbody td { padding: 13px 16px; border-bottom: 1px solid var(--line2); text-align: right;
+  font-variant-numeric: tabular-nums; }
+.c6City { width: 210px; } .c6Rev { width: 26%; } .c6Num { width: 15%; } .c6Net { width: 17%; } .c6Mar { width: 104px; }
+
+.row6 { cursor: pointer; }
+.row6:hover td { background: #fbfdfc; }
+/* A FAINT TINT ON A LOSS ROW — the badge says it, the tint makes it findable while scanning. */
+.row6loss td { background: #fdf6f4; }
+.row6loss:hover td { background: #fbf1ee; }
+
+.city6 { text-align: left !important; font-weight: 600; }
+.tw6 { display: inline-block; width: 14px; color: var(--mute); font-size: 11px; }
+
+/* ── THE REVENUE CELL CARRIES ITS OWN SCALE ───────────────────────────────────────────────────
+   Two facts in one bar: LENGTH is revenue against the largest city (Austin is 27x St. Louis and
+   the old table drew them identically), and the GREEN PORTION is what survives cost — so the
+   green share IS the margin. A city spending more than it earns shows no green at all. */
+.rev6 { color: #2f8f5b; font-weight: 600; }
+.barwrap6 { margin-top: 6px; height: 6px; border-radius: 3px; background: #f2f4f0; overflow: hidden; display: flex; }
+.barrev6 { display: flex; height: 100%; border-radius: 3px; overflow: hidden; }
+.segcost6 { background: #d8ddd4; }
+.segnet6 { background: #3f9c66; }
+
+/* NET P&L IS THE ANSWER, and it has to stay dominant now that Revenue is green: the largest
+   figure in the row, the heaviest, and a DARKER green than Revenue. If the eye stops landing here
+   first, the hierarchy is broken. */
+/* SPECIFICITY MATTERS HERE, and it caught me: `.tbl tbody td` sets 14.5px and outranks a bare
+   `.net6`, so Net P&L rendered at exactly the same size as Revenue — the hierarchy this redesign
+   exists for, silently absent. Measured at 14.5px against Revenue's 14.5px before this line.
+   Scoped to the cell so it wins on its own terms rather than with !important. */
+.tbl6 tbody td.net6, .tbl6 tfoot td.net6 {
+  font-size: 18px; font-weight: 800; letter-spacing: -.01em; color: #0f3d24;
+}
+.tbl6 tbody td.net6dn, .tbl6 tfoot td.net6dn, .net6dn { color: var(--red); }
+.net6 { font-size: 18px; font-weight: 800; letter-spacing: -.01em; color: #0f3d24; }
+
+/* A BADGE IS A SIGNAL, SO IT CANNOT BE ON EVERY ROW. Profitable margins are plain grey text;
+   only losses are flagged. Green pills on 69/80/82% made the two red ones stop registering. */
+.mar6 { color: var(--mute); font-size: 13.5px; }
+.flag6 { display: inline-block; background: var(--redbg); color: var(--red); border-radius: 999px;
+  padding: 3px 9px; font-weight: 700; font-size: 12.5px; }
+
+.tbl6 tfoot td { border-top: 2px solid var(--ink); border-bottom: 0; padding: 14px 16px 16px;
+  font-weight: 800; text-align: right; font-variant-numeric: tabular-nums; }
+.tbl6 tfoot td.city6 { text-align: left !important; }
+
+/* ── THE EXPANSION ────────────────────────────────────────────────────────────────────────── */
+.exp6 > td { padding: 0 !important; background: #fbfdfa; }
+.expWrap6 { padding: 14px 20px 18px; }
+.expHead6 { font-size: 10px; letter-spacing: .09em; text-transform: uppercase; color: var(--mute);
+  font-weight: 700; margin: 0 0 9px; }
+.split6 { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 14px; font-size: 13px; }
+.split6 b { font-variant-numeric: tabular-nums; }
+
+/* ── PHONE: A CARD PER CITY. A six-column table does not survive 393px, so it is not attempted. */
+@media (max-width: 1023px) {
+  .tblWrap6 { display: none; }
+  .cards6 { display: grid; gap: 10px; }
+}
+@media (min-width: 1024px) { .cards6 { display: none; } }
+
+.card6 { border: 1px solid var(--line); border-radius: 12px; background: #fff; overflow: hidden; }
+.card6loss { background: #fdf6f4; }
+/* 44px MINIMUM TAP TARGET, and the whole head is the target rather than a chevron. */
+.card6head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  width: 100%; min-height: 48px; padding: 12px 14px; background: none; border: 0; cursor: pointer;
+  font: inherit; text-align: left; }
+.card6city { font-weight: 600; font-size: 15px; }
+.card6net { font-size: 20px; font-weight: 800; letter-spacing: -.01em; color: #0f3d24;
+  font-variant-numeric: tabular-nums; margin-left: auto; }
+.card6net.net6dn { color: var(--red); }
+.card6bar { padding: 0 14px; }
+.card6three { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
+  padding: 10px 14px 12px; }
+.card6three dt { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--mute); font-weight: 700; }
+.card6three dd { margin: 2px 0 0; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.card6three .rev6 { font-weight: 600; }
+
+.ptable6 { width: 100%; border-collapse: collapse; }
+.ptable6 td { padding: 8px 0; border-bottom: 1px solid var(--line2); font-size: 13.5px;
+  text-align: right; font-variant-numeric: tabular-nums; }
+.ptable6 td.city6 { text-align: left; }
