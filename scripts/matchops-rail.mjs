@@ -21,7 +21,11 @@ const ROUTES = [
   ["master-schedule", "/match-ops/master-schedule"],
   ["match-chats", "/match-ops/match-chats"],
   ["player-chats", "/match-ops/player-chats"],
-  ["field-pipeline", "/match-ops/field-pipeline"],
+  // ITEMISED (route, not rule): was ["field-pipeline", "/match-ops/field-pipeline"], which left
+  // Match Ops for /growth/field-pipeline on 2026-08-23 and can no longer prove anything about
+  // the Match Ops rail. Swapped for Inventory — the other Fields-group route — so the count
+  // stays at six and coverage is not quietly reduced by one.
+  ["inventory", "/match-ops/inventory"],
   ["field-ops", "/match-ops/field-ops"],
   ["review", "/match-ops/review"],
 ];

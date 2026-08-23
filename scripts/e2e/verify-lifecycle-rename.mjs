@@ -17,6 +17,9 @@
 // one; no assertion BODY changed):
 //   * SECTION_ROOT   "/growth"      → "/lifecycle"
 //   * API_ROOT       "/api/growth"  → "/api/lifecycle"
+//   * topTabs read from data-tab rather than textContent — the fixture value is unchanged; the old
+//     extraction folded the Match Ops unread badge into the label, so the suite went red whenever a
+//     player thread happened to be awaiting a reply. Extraction fix, not an expectation change.
 // Everything below LEGACY (the redirect block), the permission block and the backfill block are
 // NEW assertions — they test the rename itself and could not exist before it.
 //
@@ -97,7 +100,10 @@ async function main() {
         cardTitles: q('[class*="cardTitle"]'),
         railItems: [...document.querySelectorAll('[data-testid="rail-item"]')].map((e) => e.innerText.trim().split("\n")[0]),
         railGroups: [...document.querySelectorAll('[data-testid="rail-group"]')].map((e) => e.textContent.trim()),
-        topTabs: [...document.querySelectorAll('[data-testid="topnav-tab"]')].map((e) => e.textContent.trim()),
+        // data-tab, NOT textContent: the Match Ops tab renders an unread-chat badge INSIDE the
+        // link, so textContent reads "Match Ops1" whenever a player thread is awaiting a reply and
+        // "Match Ops" when none is. The attribute carries the label alone.
+        topTabs: [...document.querySelectorAll('[data-testid="topnav-tab"]')].map((e) => e.getAttribute("data-tab")),
       };
     });
 
@@ -142,7 +148,7 @@ async function main() {
   const memb = await page.evaluate(() => ({
     railItems: [...document.querySelectorAll('[data-testid="rail-item"]')].map((e) => e.innerText.trim().split("\n")[0]),
     railGroups: [...document.querySelectorAll('[data-testid="rail-group"]')].map((e) => e.textContent.trim()),
-    topTabs: [...document.querySelectorAll('[data-testid="topnav-tab"]')].map((e) => e.textContent.trim()),
+    topTabs: [...document.querySelectorAll('[data-testid="topnav-tab"]')].map((e) => e.getAttribute("data-tab")),
     path: location.pathname,
   }));
   eq("membership — same seven rail items as the reports", memb.railItems, BASELINE.funnel.railItems);

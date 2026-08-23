@@ -25,6 +25,16 @@ const nextConfig: NextConfig = {
         destination: "/admin/finance/cost",
         permanent: true,
       },
+      // FIELD PIPELINE MOVED OUT OF MATCH OPS to /growth/field-pipeline (2026-08-23). It was the
+      // only Match Ops item gated on `tech` rather than `matchops`. 308 so the bookmark and the
+      // rail history land on it. NOTE the ordering below: this must not be confused with the
+      // /growth → /lifecycle rules, which are enumerated precisely so /growth/field-pipeline is
+      // left alone.
+      {
+        source: "/match-ops/field-pipeline",
+        destination: "/growth/field-pipeline",
+        permanent: true,
+      },
       // ═══ THE PLAYER LIFECYCLE SECTION MOVED: /growth → /lifecycle (2026-08-23) ═══════════════
       //
       // THESE ARE ENUMERATED, NOT A WILDCARD, AND THAT IS THE WHOLE POINT. `/growth/:path*` is one

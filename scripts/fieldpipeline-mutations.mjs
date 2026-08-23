@@ -47,7 +47,7 @@ const check = (name, cond, detail = "") => { (cond ? pass : fail).push(`${cond ?
 
 // wait for server
 for (let i = 0; i < 60; i++) {
-  try { const r = await fetch(BASE + "/match-ops/field-pipeline"); if (r.ok || r.status === 200) break; } catch {}
+  try { const r = await fetch(BASE + "/growth/field-pipeline"); if (r.ok || r.status === 200) break; } catch {}
   await new Promise((r) => setTimeout(r, 1000));
 }
 
@@ -59,7 +59,7 @@ const errs = [];
 pg.on("console", (m) => { if (m.type() === "error") errs.push(m.text()); });
 pg.on("pageerror", (e) => errs.push("[pageerror] " + e.message));
 
-const goto = async () => { await pg.goto(BASE + "/match-ops/field-pipeline", { waitUntil: "load", timeout: 60000 }); await pg.waitForTimeout(3500); };
+const goto = async () => { await pg.goto(BASE + "/growth/field-pipeline", { waitUntil: "load", timeout: 60000 }); await pg.waitForTimeout(3500); };
 const reload = async () => { await pg.reload({ waitUntil: "load" }); await pg.waitForTimeout(3500); };
 const card = () => pg.locator('[role="button"]', { hasText: "ZZ TEST" }).first();
 const column = (title) => pg.locator("section").filter({ hasText: title }).first();

@@ -78,7 +78,7 @@ const strip = (pg) => pg.evaluate(() => {
 const results = {};
 async function shot(name, { width = 1600, setup, stubEmptyTodos = false } = {}) {
   const { ctx, pg, errs } = await page(width, { stubEmptyTodos });
-  await pg.goto(BASE + "/match-ops/field-pipeline", { waitUntil: "load", timeout: 60000 });
+  await pg.goto(BASE + "/growth/field-pipeline", { waitUntil: "load", timeout: 60000 });
   await pg.waitForTimeout(4000);
   if (setup) await setup(pg);
   await pg.screenshot({ path: `${OUT}/fp_${name}.png` });
@@ -108,7 +108,7 @@ console.log("\nstate5 (R3b): aging/stalled chip present anywhere?", results["1_d
 // state 6: print the 5 column header texts (filter-honesty)
 {
   const { ctx, pg } = await page(1600);
-  await pg.goto(BASE + "/match-ops/field-pipeline", { waitUntil: "load" });
+  await pg.goto(BASE + "/growth/field-pipeline", { waitUntil: "load" });
   await pg.waitForTimeout(4000);
   await pg.fill("input[placeholder^='Search']", "Austin");
   await pg.waitForTimeout(700);

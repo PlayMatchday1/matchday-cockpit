@@ -1,0 +1,39 @@
+{
+  "capturedFrom": "/match-ops/field-pipeline",
+  "board": {
+    "h1": "Field PipelineEvery field by stage, grouped by city and owner.",
+    "stageTitles": [
+      "Field Backlog",
+      "Contacted",
+      "Ongoing Negotiation",
+      "Confirmed Fields",
+      "Archived Fields"
+    ],
+    "selectCount": 2,
+    "ownerOptions": [
+      "All owners",
+      "Mike",
+      "Nick"
+    ],
+    "cityOptions": [
+      "All cities",
+      "Atlanta",
+      "Austin",
+      "Dallas",
+      "El Paso",
+      "Fort Worth",
+      "Houston",
+      "Oklahoma City",
+      "Philadelphia",
+      "San Antonio",
+      "San Diego",
+      "St. Louis"
+    ],
+    "searchPlaceholder": "Search field, city, or owner…",
+    "boardButtons": [
+      "Grouped by city",
+      "To-dos shown",
+      "+ New card"
+    ]
+  }
+}

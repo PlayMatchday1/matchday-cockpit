@@ -12,7 +12,7 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { canAccess, firstAllowedPath, useAuth } from "@/lib/useAuth";
+import { firstAllowedPath, useAuth } from "@/lib/useAuth";
 import { matchOpsLandingHref } from "./sections";
 
 export default function MatchOpsIndex() {
@@ -23,7 +23,9 @@ export default function MatchOpsIndex() {
     if (isLoading || !appUser) return;
     const landing = matchOpsLandingHref(appUser);
     if (landing) router.replace(landing);
-    else if (canAccess(appUser, "tech")) router.replace("/match-ops/field-pipeline");
+    // THE FIELD-PIPELINE FALLBACK IS GONE WITH THE PAGE. It used to catch the tech-only viewer, and
+    // sending them out of Match Ops entirely would be worse than the /no-access path
+    // firstAllowedPath already picks for someone with nothing here to open.
     else router.replace(firstAllowedPath(appUser));
   }, [appUser, isLoading, router]);
 

@@ -23,7 +23,8 @@ const OUT_DIR = ".e2e-out";
 const ALL_ROUTES = [
   "/home", "/lifecycle", "/membership", "/data", "/docs", "/tech", "/tech/tech-roadmap",
   "/admin/finance", "/sms-log", "/inventory",
-  "/match-ops", "/match-ops/field-ops", "/match-ops/field-pipeline", "/match-ops/inventory",
+  "/growth/field-pipeline",
+  "/match-ops", "/match-ops/field-ops", "/match-ops/inventory",
   "/match-ops/manager-pay", "/match-ops/master-schedule", "/match-ops/match-chats",
   "/match-ops/match-chats/automation", "/match-ops/partner-dashboards", "/match-ops/player-chats",
   "/match-ops/reviews", "/match-ops/slate-review",
