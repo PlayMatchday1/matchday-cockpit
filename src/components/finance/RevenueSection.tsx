@@ -692,6 +692,15 @@ export default function RevenueSection() {
           {/* THE COUNT BELONGS TO THE TOGGLE — one place, and it moves with the view AND the
               filters. Match View printed it twice, here and inside the select grid. */}
           <span className={s.brkCount} data-testid="breakdown-count">{breakdownCount}</span>
+          {/* THE MONTH QUALIFIER, ONCE. It used to sit on four column headers, which is one fact
+              repeated four times. Field view names the exception by name: LAUNCHED is
+              fin_venues.launch_date and does not move with the period. Match view is not covered
+              because its rows are matches, each carrying its own date. */}
+          {grain !== "match" && (
+            <span className={s.brkCount} data-testid="breakdown-scope">
+              · Figures are for the selected month{grain === "field" ? ", except Launched" : ""}
+            </span>
+          )}
           <span className={s.brkGrow} />
           <button type="button" className={s.btn} data-testid="breakdown-export"
             onClick={exportTable}>Export</button>
@@ -731,7 +740,8 @@ export default function RevenueSection() {
             initialCity={cityFilter === "all" ? undefined : canonCity(cityFilter)}
           />
         ) : (
-          <GroupTable rows={shownFields} grain={grain} month={period.months[period.months.length - 1] ?? ""}
+          <GroupTable rows={shownFields} matchRows={shownMatchesBase} grain={grain}
+            month={period.months[period.months.length - 1] ?? ""}
             gapRows={gapRows} launchOf={launchOf}
             membershipOf={(c) => (data ? cityMembershipRevenueFor(data, c, period.months[period.months.length - 1] ?? "") : 0)}
             membershipScoped={membershipScoped} />
@@ -917,7 +927,8 @@ function NotMatchedInfo({ rows }: { rows: { key: string; month: string; gap: num
   );
 }
 
-// SCOPED TO ONE MONTH, which is what every "(in month)" header says. The previous table paired
+// SCOPED TO ONE MONTH, which the note beside the row count says once (the four "(in month)"
+// headers that used to say it four times are gone). The previous table paired
 // each thing with each month and ranked by DPP across the span; that answered a different question
 // and had none of the derived columns.
 //
@@ -929,8 +940,26 @@ function NotMatchedInfo({ rows }: { rows: { key: string; month: string; gap: num
 // NUMERATOR as the average. ATH Pearland — 0 matches, $6,972 of revenue — read "$6,972 avg
 // revenue / match", which is worse than Infinity because it looks like an answer. "No rows" never
 // catches it: there IS a row, and it has money on it.
-function GroupTable({ rows, grain, month, membershipOf, membershipScoped, gapRows, launchOf }: {
+function GroupTable({ rows, matchRows, grain, month, membershipOf, membershipScoped, gapRows, launchOf }: {
   rows: FieldMonth[]; grain: "city" | "field"; month: Q2Month;
+  /* THE MATCH ROWS ARE HERE FOR ONE REASON: membership at FIELD grain.
+   *
+   * A pitch does not sell memberships, so there is no membership row carrying a venue and there
+   * never will be. The allocation is the city's member revenue times the pitch's share of the
+   * city-month's MEMBER SPOTS — and it is ALREADY COMPUTED, once, by
+   * matchAllocatedMemberRevenueFor (financeStats.ts:1865), which buildMatchRows calls per match
+   * (fieldEconomics.ts:422). Summing those is the same number by construction.
+   *
+   * WHAT THIS DELIBERATELY IS NOT: a second allocation, and above all NOT a share derived from
+   * DPP. A DPP-share basis was proposed once, was wrong, and is recorded as wrong in
+   * docs/matchday-api-facts.md so that it is not re-proposed. Members and DPP players do not
+   * distribute the same way across pitches.
+   *
+   * JOINED ON fieldKey, NEVER ON A NAME. MatchRow.fieldKey IS FieldMonth.key — buildMatchRows sets
+   * it from the same FieldMonth it takes location from (fieldEconomics.ts:389). Venue names are
+   * not unique across cities (Houston's "The Hattrick" vs Austin's "Hattrick"), so a name join
+   * here would silently attach one city's members to another's pitch. */
+  matchRows: MatchRow[];
   membershipOf: (city: string) => number; membershipScoped: boolean;
   gapRows: { key: string; month: string; gap: number; pct: number }[];
   // LAUNCHED is field-only and is NEW data, not a relabelled column: fin_venues.launch_date was
@@ -942,29 +971,65 @@ function GroupTable({ rows, grain, month, membershipOf, membershipScoped, gapRow
   const scoped = rows.filter((r) => r.month === month);
   if (scoped.length === 0) return <div className={s.empty}>No rows for this selection.</div>;
 
-  const keyed = new Map<string, { label: string; city: string; venues: Set<string>; matches: number; dpp: number }>();
+  const keyed = new Map<string, { label: string; city: string; venues: Set<string>; keys: Set<string>; matches: number; dpp: number }>();
   for (const r of scoped) {
     const label = grain === "city" ? r.city : r.field;
     let e = keyed.get(label);
-    if (!e) { e = { label, city: r.city, venues: new Set(), matches: 0, dpp: 0 }; keyed.set(label, e); }
+    if (!e) { e = { label, city: r.city, venues: new Set(), keys: new Set(), matches: 0, dpp: 0 }; keyed.set(label, e); }
     e.venues.add(r.field);
+    e.keys.add(r.key);   // FieldMonth.key === MatchRow.fieldKey — the join, on an id
     e.matches += r.matches;
     e.dpp += r.revenue;
   }
-  // Membership is a CITY figure. In field view it cannot be narrowed to one pitch, so it is shown
-  // as — rather than split on a guess.
+
+  // The month's allocated member revenue and member spots, per field group.
+  const memberByKey = new Map<string, { rev: number; spots: number }>();
+  for (const m of matchRows) {
+    if (m.month !== month) continue;
+    const e = memberByKey.get(m.fieldKey) ?? { rev: 0, spots: 0 };
+    e.rev += m.memberRevenue;
+    e.spots += m.memberSpots;
+    memberByKey.set(m.fieldKey, e);
+  }
+  /* MEMBERSHIP IS number | null, AND THE DIFFERENCE IS THE POINT. null renders —, and means "no
+   * basis to allocate on". 0 would mean "we allocated and it came to nothing", which is a claim
+   * this table cannot make about a pitch no member played at. This mirrors cityPnl, where a pitch
+   * with no spot data gets null and never 0.
+   *
+   * FIELD GRAIN: null when the pitch had NO MEMBER SPOTS this month — including when the whole
+   * city has no member-spot data, in which case every allocation is 0 and printing $0 across a
+   * column would read as a measurement. */
   const list = [...keyed.values()].map((e) => {
-    const membership = grain === "city" && membershipScoped ? membershipOf(e.city) : 0;
-    const total = e.dpp + membership;
+    let membership: number | null;
+    if (grain === "city") {
+      membership = membershipScoped ? membershipOf(e.city) : null;
+    } else {
+      let rev = 0, spots = 0;
+      for (const k of e.keys) { const m = memberByKey.get(k); if (m) { rev += m.rev; spots += m.spots; } }
+      membership = spots > 0 ? rev : null;
+    }
+    const total = e.dpp + (membership ?? 0);
     return { ...e, membership, total, venueCount: e.venues.size };
   }).sort((a, b) => b.total - a.total);
 
   const T = list.reduce((a, r) => ({
     venues: a.venues + r.venueCount, matches: a.matches + r.matches,
-    total: a.total + r.total, dpp: a.dpp + r.dpp, membership: a.membership + r.membership,
-  }), { venues: 0, matches: 0, total: 0, dpp: 0, membership: 0 });
-  const showMembership = grain === "city" && membershipScoped;
-  const pct = (n: number, d: number) => `${((n / Math.max(1, d)) * 100).toFixed(1)}%`;
+    total: a.total + r.total, dpp: a.dpp + r.dpp,
+    // The total sums the rows that HAVE a figure. If none does, it stays null and prints — as they
+    // all do; summing nulls to 0 would invent a total the rows above it never claimed.
+    membership: r.membership == null ? a.membership : (a.membership ?? 0) + r.membership,
+  }), { venues: 0, matches: 0, total: 0, dpp: 0, membership: null as number | null });
+
+  /* MEMBER MIX — THE DEFINITION, WRITTEN DOWN BECAUSE DEFINITIONS DRIFT:
+   *
+   *     member mix = membership revenue ÷ TOTAL revenue,  total = DPP + membership
+   *
+   * It is a share of the whole, not a ratio to DPP, so it is bounded 0–100% and the DPP share is
+   * its complement. Computed from the two cells printed on the same row, so a reader can check any
+   * row by hand — the same rule the other derived columns follow. */
+  const mixOf = (membership: number | null, total: number) =>
+    membership == null || total <= 0 ? null : `${((membership / total) * 100).toFixed(1)}%`;
+  const money = (v: number | null) => (v == null ? "—" : fmtMoney(v));
 
   return (
     <>
@@ -983,13 +1048,20 @@ function GroupTable({ rows, grain, month, membershipOf, membershipScoped, gapRow
               {grain === "field" && <th className="l">Launched</th>}
               {grain === "city" && <th>Venues</th>}
               <th>Matches</th>
-              <th>Total revenue <i className={s.mut}>(in month)</i>
+              {/* "(in month)" USED TO RIDE ON FOUR OF THESE. It is one fact, and four copies of it
+                  read as clutter rather than as emphasis — so it is stated ONCE above the table,
+                  beside the row count. It was checked column by column first: Matches, Venues and
+                  every revenue column here ARE month-scoped (the table filters `rows` to `month`
+                  before it counts anything), and LAUNCHED is NOT — it is fin_venues.launch_date, a
+                  fixed date. That is why the note above says "except Launched" on Field view. A
+                  blanket statement that is untrue of one column is worse than four repetitions. */}
+              <th>Total revenue
                 {gapRows.length > 0 && <NotMatchedInfo rows={gapRows} />}</th>
               <th>Avg revenue / match</th>
               {grain === "city" && <th>Avg revenue / venue</th>}
-              <th>DPP revenue <i className={s.mut}>(in month)</i></th>
-              <th>Membership revenue <i className={s.mut}>(in month)</i></th>
-              <th>Member mix <i className={s.mut}>(in month)</i></th>
+              <th>DPP revenue</th>
+              <th>Membership revenue</th>
+              <th>Member mix</th>
             </tr>
           </thead>
           <tbody>
@@ -1006,8 +1078,8 @@ function GroupTable({ rows, grain, month, membershipOf, membershipScoped, gapRow
                 <td data-testid="gt-avgmatch">{r.matches > 0 ? fmtMoney(r.total / r.matches) : "—"}</td>
                 {grain === "city" && <td data-testid="gt-avgvenue">{r.venueCount > 0 ? fmtMoney(r.total / r.venueCount) : "—"}</td>}
                 <td data-testid="gt-dpp">{fmtMoney(r.dpp)}</td>
-                <td data-testid="gt-member">{showMembership ? fmtMoney(r.membership) : "—"}</td>
-                <td data-testid="gt-mix">{showMembership ? pct(r.membership, r.total) : "—"}</td>
+                <td data-testid="gt-member">{money(r.membership)}</td>
+                <td data-testid="gt-mix">{mixOf(r.membership, r.total) ?? "—"}</td>
               </tr>
             ))}
             <tr className={s.tot}>
@@ -1021,8 +1093,8 @@ function GroupTable({ rows, grain, month, membershipOf, membershipScoped, gapRow
               <td data-testid="gt-tot-avgmatch">{T.matches > 0 ? fmtMoney(T.total / T.matches) : "—"}</td>
               {grain === "city" && <td>{fmtMoney(T.total / Math.max(1, T.venues))}</td>}
               <td data-testid="gt-tot-dpp">{fmtMoney(T.dpp)}</td>
-              <td data-testid="gt-tot-member">{showMembership ? fmtMoney(T.membership) : "—"}</td>
-              <td>{showMembership ? pct(T.membership, T.total) : "—"}</td>
+              <td data-testid="gt-tot-member">{money(T.membership)}</td>
+              <td data-testid="gt-tot-mix">{mixOf(T.membership, T.total) ?? "—"}</td>
             </tr>
           </tbody>
         </table>

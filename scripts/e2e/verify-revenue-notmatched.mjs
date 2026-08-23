@@ -90,22 +90,26 @@ const setGrain = async (g) => {
 
 const cityHeads = await readHeads();
 eq("City View headers are exactly the specified list", cityHeads.heads,
-   ["#", "CITY", "VENUES", "MATCHES", "TOTAL REVENUE (IN MONTH)", "AVG REVENUE / MATCH",
-    "AVG REVENUE / VENUE", "DPP REVENUE (IN MONTH)", "MEMBERSHIP REVENUE (IN MONTH)",
-    "MEMBER MIX (IN MONTH)"]);
+   ["#", "CITY", "VENUES", "MATCHES", "TOTAL REVENUE", "AVG REVENUE / MATCH",
+    "AVG REVENUE / VENUE", "DPP REVENUE", "MEMBERSHIP REVENUE", "MEMBER MIX"]);
 eq("City View: every row's cell count equals the header count", cityHeads.cells, [cityHeads.heads.length]);
 
 await setGrain("field");
 const fieldHeads = await readHeads();
 eq("Field View headers are exactly the specified list", fieldHeads.heads,
-   ["#", "FIELD", "CITY", "LAUNCHED", "MATCHES", "TOTAL REVENUE (IN MONTH)", "AVG REVENUE / MATCH",
-    "DPP REVENUE (IN MONTH)", "MEMBERSHIP REVENUE (IN MONTH)", "MEMBER MIX (IN MONTH)"]);
+   ["#", "FIELD", "CITY", "LAUNCHED", "MATCHES", "TOTAL REVENUE", "AVG REVENUE / MATCH",
+    "DPP REVENUE", "MEMBERSHIP REVENUE", "MEMBER MIX"]);
 eq("Field View: every row's cell count equals the header count", fieldHeads.cells, [fieldHeads.heads.length]);
 
 // SHARED HEADERS: byte-identical, and in the same relative order.
 {
-  const shared = ["MATCHES", "TOTAL REVENUE (IN MONTH)", "AVG REVENUE / MATCH",
-                  "DPP REVENUE (IN MONTH)", "MEMBERSHIP REVENUE (IN MONTH)", "MEMBER MIX (IN MONTH)"];
+  /* ITEMISED — AN EXPECTATION CHANGE, NOT A SELECTOR EDIT. Four of these carried "(IN MONTH)"
+   * until 2026-08-23. It is one fact said four times, so it moved to a single note beside the row
+   * count (data-testid="breakdown-scope"), which verify-revenue-membership asserts appears exactly
+   * once and names LAUNCHED as the exception. The assertion bodies here are unchanged; what they
+   * compare against records the new headers. */
+  const shared = ["MATCHES", "TOTAL REVENUE", "AVG REVENUE / MATCH",
+                  "DPP REVENUE", "MEMBERSHIP REVENUE", "MEMBER MIX"];
   const orderIn = (heads) => shared.map((h) => heads.indexOf(h));
   eq("every shared header is present in City View", orderIn(cityHeads.heads).every((i) => i >= 0), true);
   eq("…and in Field View", orderIn(fieldHeads.heads).every((i) => i >= 0), true);
@@ -316,7 +320,17 @@ await setGrain("city");
   // asserted is that it costs NO MORE than that, which is what stops a regression from making it
   // arbitrarily wide. The measured cost is logged so the trade-off stays visible.
   const cost = before.w - after.w;
-  eq("the ⓘ widens its column by no more than its own hit area", cost <= 24, true);
+  /* THE BOUND IS MEASURED, NOT WRITTEN DOWN. It used to be the literal 24. When "(IN MONTH)" came
+   * off this header the label got shorter, the column stopped being sized by slack, and the ⓘ's
+   * cost went from partly absorbed to fully exposed: 25px against a 24×24 hit area. Bumping the
+   * literal to 25 would record that pixel as a rule; reading the button's OWN box and allowing the
+   * 1px inline gap beside it keeps the assertion about the thing it names. */
+  const hit = await page.evaluate(() => {
+    const b = document.querySelector('[data-testid="notmatched-info"]').getBoundingClientRect();
+    return Math.round(b.width);
+  });
+  eq("the ⓘ widens its column by no more than its own hit area plus the gap beside it",
+     cost <= hit + 2, true);
   console.log(`     header row ${before.h}px with and without · column ${after.w}px → ${before.w}px, the ⓘ costs ${cost}px`);
   eq("  control — the ⓘ is back on the page after the test removed it",
      await page.locator('[data-testid="notmatched-info"]').count(), 1);
@@ -409,6 +423,13 @@ eq("an outside click closes it", await isOpen(), false);
 // ── 7. IT SURVIVES A SIDEWAYS SCROLL, UNCLIPPED ───────────────────────────────────────────────
 console.log("\n── the table scrolls sideways and the panel keeps up ──");
 {
+  /* NARROWED ON PURPOSE, AND THIS IS WHY. At 1620px the table USED to overflow, so the control
+   * below passed by accident of width. Dropping "(IN MONTH)" from four headers made it narrower
+   * than the viewport, scrollLeft stayed 0, and the control failed — correctly: it exists to stop
+   * exactly this section from passing on a table that never scrolled. The fix is to give it a
+   * viewport where the table genuinely does scroll, not to relax the control. */
+  await page.setViewportSize({ width: 900, height: 1100 });
+  await page.waitForTimeout(400);
   // Reset the table's horizontal scroll and bring the trigger into view before clicking — a
   // previous assertion left the pointer elsewhere and the header can sit outside the scrollport.
   await page.evaluate(() => {
