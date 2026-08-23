@@ -17,6 +17,10 @@
 // one; no assertion BODY changed):
 //   * SECTION_ROOT   "/growth"      → "/lifecycle"
 //   * API_ROOT       "/api/growth"  → "/api/lifecycle"
+//   * the fixture's topTabs put "Growth" BEFORE "Player Lifecycle" — an EXPECTATION change, not a
+//     selector edit. The top nav was reordered to Home · Finance · Growth · Player Lifecycle ·
+//     Match Ops · Tech; the assertion body is unchanged and what it compares against records the
+//     new order.
 //   * the fixture's topTabs gained "Growth" — a BEHAVIOUR change, not a path edit. The Growth tab
 //     shipped after this fixture was captured, so the top nav legitimately has six entries now. The
 //     assertion body is unchanged; what it compares against records the new nav.

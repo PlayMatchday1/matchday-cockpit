@@ -75,6 +75,14 @@ const MOBILE_PRIMARY: MobilePrimary[] = [
     isActive: (p) => p.startsWith("/admin/finance"),
   },
   {
+    key: "growth",
+    href: "/growth",
+    label: "Growth",
+    icon: Sprout,
+    visible: (u) => canAccess(u, "growth"),
+    isActive: (p) => p.startsWith("/growth"),
+  },
+  {
     key: "lifecycle",
     href: "/lifecycle",
     label: "Player Lifecycle",
@@ -82,14 +90,6 @@ const MOBILE_PRIMARY: MobilePrimary[] = [
     icon: MapPin,
     visible: (u) => canAccess(u, "lifecycle") || canAccess(u, "membership"),
     isActive: (p) => p.startsWith("/lifecycle") || p.startsWith("/membership"),
-  },
-  {
-    key: "growth",
-    href: "/growth",
-    label: "Growth",
-    icon: Sprout,
-    visible: (u) => canAccess(u, "growth"),
-    isActive: (p) => p.startsWith("/growth"),
   },
   {
     key: "match-ops",
@@ -164,10 +164,17 @@ export default function MobileBottomNav({
    * three, so Finance fell into the sheet and cost two taps every time.
    *
    * Four tabs plus More at 320px gives 64px per slot, which is why the Lifecycle tab uses its barLabel. */
-  // GROWTH IS LAST ON PURPOSE. Four slots plus More at 320px is 64px per slot; a fifth is 51px, so
-  // the bar cannot grow. Tech already falls into the sheet for anyone holding all of these, and
-  // Growth is a weekly-cadence planning surface — it loses the seat to Home, Finance, Match Ops and
-  // Player Lifecycle on frequency, and sorts into More deterministically rather than by list order.
+  /* BAR_ORDER IS A PRIORITY RANKING, NOT THE NAV ORDER — and the two must not be conflated.
+   *
+   * MOBILE_PRIMARY above is the nav order and now reads Home · Finance · Growth · Player Lifecycle
+   * · Match Ops · Tech, matching the top nav. THIS list decides which four get a bar seat, and
+   * Growth stays LAST in it deliberately: moving it ahead of `lifecycle` here would hand it a seat
+   * and evict Player Lifecycle into More, which is the opposite of what the reorder asked for.
+   *
+   * Four slots plus More at 320px is 64px per slot; a fifth is 51px, so the bar cannot grow. Tech
+   * already falls into the sheet for anyone holding all of these, and Growth is a weekly-cadence
+   * planning surface — it loses the seat to Home, Finance, Match Ops and Player Lifecycle on
+   * frequency, and sorts into More deterministically rather than by list position. */
   const BAR_ORDER = ["home", "finance", "match-ops", "lifecycle", "tech", "growth"];
   const visiblePrimary = MOBILE_PRIMARY.filter((t) => t.visible(appUser));
   const prioritised = [...visiblePrimary].sort(

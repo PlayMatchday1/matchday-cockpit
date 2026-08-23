@@ -30,7 +30,7 @@ type GatedTab = Tab & {
   page: PageName;
 };
 
-// Primary header tabs, left→right: Home · Finance · Player Lifecycle ·
+// Primary header tabs, left→right: Home · Finance · Growth · Player Lifecycle ·
 // Match Ops · Tech (Test is appended separately, admin-only, unchanged).
 // A tab shows when the user can reach at least one thing under it. Chats and
 // Field Pipeline moved under Match Ops; Tech Roadmap under Tech; Membership
@@ -59,6 +59,14 @@ const PRIMARY_TABS: PrimaryTab[] = [
     match: (p) => p.startsWith("/admin/finance"),
   },
   {
+    // GROWTH — the tab whose name this app spent two pushes freeing. /growth and
+    // can_access_growth belonged to Player Lifecycle until 2026-08-23; both now mean this.
+    label: "Growth",
+    href: "/growth",
+    visible: (u) => canAccess(u, "growth"),
+    match: (p) => p.startsWith("/growth"),
+  },
+  {
     label: "Player Lifecycle",
     href: "/lifecycle",
     // Reachable on either permission: someone who holds only `membership` still has a section to
@@ -67,14 +75,6 @@ const PRIMARY_TABS: PrimaryTab[] = [
     // /membership is a section of this tab that lives outside its path, so it is matched here or
     // the tab would go dark on the page the user is standing on.
     match: (p) => p.startsWith("/lifecycle") || p.startsWith("/membership"),
-  },
-  {
-    // GROWTH — the tab whose name this app spent two pushes freeing. /growth and
-    // can_access_growth belonged to Player Lifecycle until 2026-08-23; both now mean this.
-    label: "Growth",
-    href: "/growth",
-    visible: (u) => canAccess(u, "growth"),
-    match: (p) => p.startsWith("/growth"),
   },
   // Phase 24 (corrected) — ONE Match Ops entry, as it always was. The Daily Ops / Back Office
   // split lives in the LEFT SIDEBAR, not up here: it is a switch between two halves of one
