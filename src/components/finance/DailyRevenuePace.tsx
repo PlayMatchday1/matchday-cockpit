@@ -265,6 +265,17 @@ export default function DailyRevenuePace() {
   const grain = period.grain;
   const today = useMemo(() => midnight(now), [now]);
 
+  /* ONE BREAKPOINT, READ ONCE. Matches the CSS module's 767px so the SVG and the surrounding
+   * layout cannot disagree about which mode they are in. */
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    const on = () => setNarrow(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+
   const [compare, setCompare] = useState<Compare>("period");
   const [city, setCity] = useState("All cities");
   const [field, setField] = useState("All fields");
@@ -385,7 +396,12 @@ export default function DailyRevenuePace() {
   const curData = useMemo(() => current.slice(0, Math.max(drawnTo, 1)), [current, drawnTo]);
 
   // ── the plot ────────────────────────────────────────────────────────────────────────────────
-  const W = 980, H = 260, ML = 68, MR = 24, MT = 18, MB = 34;
+  /* THE PLOT IS TALLER AND THE TYPE IS BIGGER ON A PHONE. A 980x260 viewBox squeezed into 393px
+   * renders 10px axis type at about 4px. Narrow uses a viewBox whose aspect ratio matches the space
+   * it actually gets, so nothing has to be scaled down to fit. */
+  const W = narrow ? 360 : 980;
+  const H = narrow ? 240 : 260;
+  const ML = narrow ? 42 : 68, MR = narrow ? 10 : 24, MT = 14, MB = narrow ? 26 : 34;
   const plotW = W - ML - MR, plotH = H - MT - MB;
   const nPts = Math.max(buckets.length || 1, compData.length);
   const peak = Math.max(1, ...curData, ...compData);
@@ -396,8 +412,11 @@ export default function DailyRevenuePace() {
   const y = (v: number) => MT + plotH - (v / maxY) * plotH;
   const path = (d: number[]) => d.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" ");
 
-  // Never crowd the axis: show every tick when there are few, thin them when there are many.
-  const tickEvery = Math.max(1, Math.ceil(nPts / 12));
+  /* NEVER CROWD THE AXIS — and on a phone "not crowded" is FIVE labels, not twelve.
+   * 31 labels across a 393px screen is ~6px of type: decoration, not a chart. The viewBox is fixed
+   * so the rendered font size scales with the container; the only lever that keeps the type
+   * readable is how many labels there are. */
+  const tickEvery = Math.max(1, Math.ceil(nPts / (narrow ? 5 : 12)));
 
   /* ── HOVER READOUT ────────────────────────────────────────────────────────────────────────
    * SNAPS TO THE NEAREST BUCKET FROM ANYWHERE IN THE PLOT, at any height. Hit-testing the line
@@ -407,6 +426,18 @@ export default function DailyRevenuePace() {
    * PINNED is the touch path. A tap sets it; a tap on another point moves it; a tap outside clears
    * it. Without that the chart is inert on a phone, where there is no hover at all.
    */
+  /* THE RAIL'S END STATE, measured from the element rather than assumed from the chip count —
+   * a rail that happens to fit has no more to reveal and must not wear a fade either. */
+  const railRef = useRef<HTMLDivElement | null>(null);
+  const [railAtEnd, setRailAtEnd] = useState(true);
+  const measureRail = useCallback(() => {
+    const el = railRef.current;
+    if (!el) return;
+    setRailAtEnd(el.scrollLeft + el.clientWidth >= el.scrollWidth - 1);
+  }, []);
+  const onRailScroll = useCallback(() => measureRail(), [measureRail]);
+  useEffect(() => { measureRail(); }, [measureRail, rows]);
+
   const [hoverAt, setHoverAt] = useState<number | null>(null);
   const [pinned, setPinned] = useState(false);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -483,7 +514,13 @@ export default function DailyRevenuePace() {
         <div className={s.ctrlStack}>
           <div className={s.ctrlGroup}>
             <span className={s.ctrlLab}>Compare with</span>
-            <div className={s.seg} role="group" aria-label="Comparison series">
+            {/* THE FADE IS DRIVEN BY MEASUREMENT, NOT BY A GUESS. data-atEnd flips once the rail is
+                scrolled to its end, which removes the gradient — a fade that never turns off tells
+                you there is more when there is not. */}
+            <div className={s.railWrap} data-testid="pace-cmp-rail"
+              data-atend={railAtEnd ? "true" : "false"}>
+            <div className={`${s.seg} ${s.rail}`} role="group" aria-label="Comparison series"
+              ref={railRef} onScroll={onRailScroll}>
               {([
                 ["period", `Previous ${grain}`],
                 ["quarter", "Previous quarter avg"],
@@ -501,8 +538,9 @@ export default function DailyRevenuePace() {
                     onClick={() => has && setCompare(v)}>{t}</button>
                 );
               })}
-            </div>
-          </div>
+            </div>{/* rail */}
+            </div>{/* railWrap */}
+          </div>{/* ctrlGroup */}
           <div className={s.ctrlGroup}>
             <span className={s.ctrlLab}>View</span>
             <select className={s.sel} data-testid="pace-city" value={city} onChange={(e) => setCity(e.target.value)}>
@@ -548,14 +586,14 @@ export default function DailyRevenuePace() {
             return (
               <g key={i}>
                 <line x1={ML} y1={yy} x2={ML + plotW} y2={yy} stroke="#e6e2d8" strokeWidth={1} />
-                <text x={ML - 10} y={yy + 4} textAnchor="end" fontSize={10} fill="#7b8b82">
+                <text x={ML - 8} y={yy + 4} textAnchor="end" fontSize={narrow ? 12 : 10} fill="#7b8b82">
                   {fmtMoney(maxY - (maxY * i) / 4)}
                 </text>
               </g>
             );
           })}
           {buckets.map((b, i) => (i % tickEvery === 0 || i === buckets.length - 1 ? (
-            <text key={i} x={x(i)} y={H - 12} textAnchor="middle" fontSize={10} fill="#7b8b82">{b.axis}</text>
+            <text key={i} x={x(i)} y={H - 9} textAnchor="middle" fontSize={narrow ? 12 : 10} fill="#7b8b82">{b.axis}</text>
           ) : null))}
           {compData.length > 0 && (
             <path d={path(compData)} fill="none" stroke="#3f7fd6" strokeWidth={2}

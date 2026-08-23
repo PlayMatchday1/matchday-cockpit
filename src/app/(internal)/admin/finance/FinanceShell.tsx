@@ -147,7 +147,10 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
       >
         <MatchOpsMobileBar items={FINANCE_SECTIONS} sheetTitle="Finance" showSwitch={false} />
 
-        <h1 data-testid="finance-title" className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
+        {/* THE WORDMARK IS DESKTOP-ONLY. On a phone it cost ~600px of scroll before the first
+            dollar, and MatchOpsMobileBar directly above it already says which page this is —
+            so it was the same word twice, the larger one pushing every figure off the screen. */}
+        <h1 data-testid="finance-title" className="hidden font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:block md:text-6xl">
           Finance
         </h1>
 

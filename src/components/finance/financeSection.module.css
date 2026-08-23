@@ -33,8 +33,18 @@
    now, so the rows come out equal on their own; measured 78px across all four at 1620, 1440 and
    1024, both rows included. Equal because the content is equal, not because one is stretched. */
 .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+
 @media (max-width: 1100px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 560px)  { .tiles { grid-template-columns: 1fr; } }
+/* TWO BY TWO ON A PHONE, NEVER ONE UP.
+   This rule used to be `1fr`, which made four full-width cards — four screens of scrolling before
+   the first chart, so the four figures that are the whole point of the row were never on screen
+   together. It sits after the 1100px rule deliberately: same specificity, later wins, and stacking
+   a third breakpoint above it would have been overridden by this one. */
+@media (max-width: 560px) {
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .tile { padding: 10px 12px; }
+  .tileVal { font-size: 20px; }
+}
 .tile {
   padding: 14px 16px; border: 1.5px solid var(--cream-line, #e6e2d8); border-radius: 16px;
   background: #fff; display: flex; flex-direction: column; gap: 4px; min-width: 0;
@@ -85,7 +95,12 @@
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px; vertical-align: middle; }
 
 /* ===== Tables ===== */
-.tblWrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+/* THE SCROLLER MUST BE ALLOWED TO BE NARROWER THAN ITS CONTENT. overflow-x:auto alone does not
+   clip: a grid/flex child defaults to min-width:auto, so the wrapper can grow to its 1293px table.
+   Defensive rather than the cure — MEASURED: removing this alone does not bring the zoom-out back,
+   because the control row below is what actually sets the floor. Kept so a future layout change
+   cannot make the table the widest thing again. */
+.tblWrap { overflow-x: auto; -webkit-overflow-scrolling: touch; min-width: 0; max-width: 100%; }
 .tbl { width: 100%; min-width: 640px; border-collapse: collapse; font-size: 12px; }
 .tbl th, .tbl td {
   padding: 9px 10px; text-align: right; white-space: nowrap;
@@ -156,6 +171,43 @@
   text-transform: none;
   color: color-mix(in srgb, var(--deep-green, #12352b) 62%, transparent);
 }
+/* ── THE CONTROL ROW IS WHAT WAS ZOOMING THE PAGE OUT ──────────────────────────────────────
+   MEASURED, and not what I first assumed. The three compare chips in an unwrapped flex row plus
+   three fixed-width selects came to ~591px, and a 393px phone cannot show that — so the browser
+   shrank the WHOLE APP to fit and window.innerWidth reported 591. The page never overflowed; it
+   zoomed, which is why nothing caught it.
+
+   The two rules below each hold the width down INDEPENDENTLY, which is why removing either one on
+   its own does not reproduce it — only reverting this whole block does. Neither is redundant: the
+   rail one keeps the third chip reachable, the select one keeps its label from truncating.
+
+   ── THE COMPARE RAIL, ON A PHONE ──────────────────────────────────────────────────────────
+   The third chip ("Previous year avg") was clipped with no hint it could be reached, and a
+   cut-off control with no affordance reads as a bug rather than as more content. The rail
+   scrolls and carries a right-edge fade; the fade is removed once it is scrolled to the end,
+   because a fade that stays on is lying about there being more. */
+@media (max-width: 767px) {
+  /* REAL HEIGHT, not a 90px strip. The SVG is width:100% with a viewBox, so without a height floor
+     it collapses to whatever the aspect ratio gives at 393px. */
+  .paceWrap svg { min-height: 240px; }
+  .railWrap { position: relative; min-width: 0; }
+  .railWrap::after {
+    content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 34px; pointer-events: none;
+    background: linear-gradient(to right, rgba(255,255,255,0), rgba(255,255,255,0.95));
+    transition: opacity .15s ease;
+  }
+  .railWrap[data-atEnd="true"]::after { opacity: 0; }
+  .rail { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .rail::-webkit-scrollbar { display: none; }
+  .rail > * { flex: 0 0 auto; }
+  /* THE VIEW SELECTS GO TWO-UP, THEN ONE FULL WIDTH. Never three across: at 393px that is 106px
+     each and "DPP + Membership" truncates inside its own box. */
+  .ctrlGroup { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .ctrlGroup > .sel:last-child { grid-column: 1 / -1; }
+  .ctrlLab { grid-column: 1 / -1; }
+  .sel { width: 100%; min-width: 0; }
+}
+
 .ctrlStack { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .sel {
   height: 30px;

@@ -9,6 +9,10 @@
    not have that side effect. */
 html {
   overflow-x: hidden;
+  /* A SCROLL AT THE TOP MUST NOT RUBBER-BAND THE WHOLE APP. In standalone PWA mode there is no
+     browser chrome to absorb it, so the overscroll drags the painted app away from the status bar
+     and exposes the unpainted strip underneath — the white band. */
+  overscroll-behavior-y: contain;
   /* A STICKY NAV OWNS THE TOP 64px OF THE VIEWPORT, so anything scrolled to the top of the
      document lands UNDERNEATH it — in-page anchors, scrollIntoView, and a browser restoring a
      scroll position. Reserving the nav's height on the scroll container is what keeps the target

@@ -46,6 +46,10 @@ type MobilePrimary = {
   key: string;
   href: string;
   label: string;
+  /* THE BAR LABEL, when the full one will not fit five across at 320px.
+   * "Player Lifecycle" is 16 characters in a 64px slot — it truncates, and a truncated tab label
+   * is a tab you have to guess at. The sheet keeps the full name; only the bar shortens. */
+  barLabel?: string;
   icon: LucideIcon;
   badge?: boolean;
   visible: (u: AppUser) => boolean;
@@ -74,6 +78,7 @@ const MOBILE_PRIMARY: MobilePrimary[] = [
     href: "/growth",
     // LABEL ONLY — the key, the href and the permission are untouched.
     label: "Player Lifecycle",
+    barLabel: "Players",
     icon: MapPin,
     visible: (u) => canAccess(u, "growth") || canAccess(u, "membership"),
     isActive: (p) => p.startsWith("/growth") || p.startsWith("/membership"),
@@ -146,16 +151,18 @@ export default function MobileBottomNav({
 
   const isAdmin = !!appUser.is_admin;
 
-  // Bottom bar holds the user's first three accessible sections by a mobile
-  // priority (Match Ops carries daily-use Chats, so it ranks above Finance);
-  // the rest fall into More. Nothing is dropped.
-  const BAR_ORDER = ["home", "match-ops", "growth", "finance", "tech"];
+  /* FIVE SLOTS: four sections plus More. Finance is SECOND, because it is the page opened most and
+   * it was previously buried — BAR_ORDER ranked match-ops and growth above it and the bar took only
+   * three, so Finance fell into the sheet and cost two taps every time.
+   *
+   * Four tabs plus More at 320px gives 64px per slot, which is why growth uses its barLabel. */
+  const BAR_ORDER = ["home", "finance", "match-ops", "growth", "tech"];
   const visiblePrimary = MOBILE_PRIMARY.filter((t) => t.visible(appUser));
   const prioritised = [...visiblePrimary].sort(
     (a, b) => BAR_ORDER.indexOf(a.key) - BAR_ORDER.indexOf(b.key),
   );
-  const barTabs = prioritised.slice(0, 3);
-  const overflowKeys = new Set(prioritised.slice(3).map((t) => t.key));
+  const barTabs = prioritised.slice(0, 4);
+  const overflowKeys = new Set(prioritised.slice(4).map((t) => t.key));
 
   const sheetItems: SheetItem[] = [
     // Primary sections that didn't fit the bar (kept in nav order).
@@ -182,9 +189,17 @@ export default function MobileBottomNav({
   ];
 
   const visibleSheetItems = sheetItems.filter((i) => i.visible);
+  /* MORE IS LIT ONLY WHEN NO PRIMARY TAB OWNS THE PAGE.
+   * The sheet carries { href: "/admin" }, and pathname.startsWith("/admin") is true for
+   * /admin/finance/revenue — so More lit on every Finance page, giving TWO lit tabs at once. That
+   * was survivable while Finance lived in the sheet; promoting it to the bar made it visible.
+   * Checking the bar first fixes the whole class, not just the /admin case: any sheet href that
+   * happens to prefix a bar tab's path would have done the same thing. */
+  const anyBarTabActive = barTabs.some((t) => t.isActive(pathname));
   const moreActive =
     sheetOpen ||
-    visibleSheetItems.some((i) => !i.disabled && i.href && pathname.startsWith(i.href));
+    (!anyBarTabActive &&
+      visibleSheetItems.some((i) => !i.disabled && i.href && pathname.startsWith(i.href)));
 
   return (
     <>
@@ -200,6 +215,9 @@ export default function MobileBottomNav({
           // var(--sab), not raw env(), so the home-indicator inset is
           // overridable and therefore testable in the notch harness.
           paddingBottom: "var(--sab)",
+          // EVERY TAB IS AT LEAST 44px OF TARGET. The row is h-14 (56px) plus the inset, so the
+          // bar GROWS by the home indicator rather than having its tappable area eaten by it.
+          minHeight: "calc(56px + var(--sab))",
         }}
       >
         {barTabs.map((t) => {
@@ -208,7 +226,7 @@ export default function MobileBottomNav({
             <NavTab
               key={t.key}
               href={t.href}
-              label={t.label}
+              label={t.barLabel ?? t.label}
               Icon={t.icon}
               active={active}
               badgeCount={t.badge ? awaiting : 0}
