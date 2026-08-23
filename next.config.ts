@@ -56,14 +56,11 @@ const nextConfig: NextConfig = {
         destination: "/lifecycle/:city",
         permanent: true,
       },
-      // THE BARE ROOT, AND THE ONE LINE THAT COMES OUT WHEN THE GROWTH TAB SHIPS. Until then
-      // /growth is still the Lifecycle landing; after it, /growth is the Growth tab's own page and
-      // this redirect must be DELETED, not repointed.
-      {
-        source: "/growth",
-        destination: "/lifecycle/funnel",
-        permanent: true,
-      },
+      // THE BARE-ROOT REDIRECT IS GONE, as its own comment said it must be. /growth was Player
+      // Lifecycle's landing until 2026-08-23 and 308'd to /lifecycle/funnel; it is now the Growth
+      // tab's own page (src/app/(internal)/growth/page.tsx). DELETED, not repointed — repointing
+      // would have made the tab unreachable. The fourteen enumerated /growth/<report> and
+      // /growth/<city> rules above stay forever, which is the whole reason they were enumerated.
       // Cities section renamed, route moved /cities → /growth on 2026-07-31 and → /lifecycle on
       // 2026-08-23. Pointed STRAIGHT at /lifecycle rather than chaining through /growth: once the
       // Growth tab takes that path, a chained redirect would land a /cities bookmark on a

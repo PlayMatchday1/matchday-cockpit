@@ -21,7 +21,8 @@
 // changed):
 //   * ROUTE  "/match-ops/field-pipeline" → "/growth/field-pipeline"
 // SHELL_EXPECTED.rail flipped true → false in the same edit, and that is a BEHAVIOUR change, not a
-// path edit — it is called out here so it is not read as one.
+// path edit — it is called out here so it is not read as one. LATER, in the Growth-tab push,
+// SHELL_EXPECTED.mobileOnlyBlocks flipped 0 → 1 for the same reason: Growth gave the page a shell.
 
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
@@ -37,10 +38,19 @@ const BASE = process.env.BASE || "http://localhost:3000";
 const ROUTE = "/growth/field-pipeline";
 const LEGACY = "/match-ops/field-pipeline";
 
-// The Match Ops shell is GONE at the new route: no rail, and no mobile screen-picker bar. Both are
-// asserted, and both are measured on a route that STILL has them in the same run so the zeros are
-// not zeros from a page that failed to load.
-const SHELL_EXPECTED = { rail: false, mobileOnlyBlocks: 0 };
+// THE SHELL: GONE, THEN GIVEN BACK.
+//
+// When this suite was written the page had just left /match-ops/layout.tsx and had no section shell
+// at all — SHELL_EXPECTED was { rail: false, mobileOnlyBlocks: 0 }, and asserting that loss is what
+// stopped "no functional change" being claimed for a move that plainly changed something. Growth
+// built its own shell one push later (GrowthRail), so the page has a rail and a mobile bar again —
+// its OWN, not Match Ops'. Updated to match: this is a BEHAVIOUR change, not a selector edit.
+//
+// WHAT IS STILL BEING ASSERTED HERE, and why this is not now a copy of verify-growth-tab: that the
+// rail on this route is NOT the Match Ops one. The nav[aria-label="Match Ops"] selector below is
+// specific to that section's rail, and it must still find nothing here while finding one on a real
+// Match Ops route in the same run.
+const SHELL_EXPECTED = { rail: false, mobileOnlyBlocks: 1 };
 // The mobile-only block in this app is `min-[900px]:hidden` (MatchOpsMobileBar), NOT `lg:hidden` —
 // which appears nowhere, so an assertion written against it passes on nothing. That is what the
 // first version of this suite did, and its own positive control is what caught it.
@@ -167,9 +177,11 @@ async function main() {
   eq("no mobile-only block is DISPLAYED at 1600px", layout.mobileOnlyShown, 0);
 
   // ═══ 4. THE SHELL IT LEFT BEHIND — asserted, not discovered ════════════════════════════════════
-  console.log(`\n── the Match Ops shell, deliberately gone`);
+  console.log(`\n── the MATCH OPS shell is gone; Growth's own is not`);
   eq("Match Ops rail is absent at the new route", layout.railPresent, SHELL_EXPECTED.rail);
-  eq("…and so is the mobile screen-picker bar", layout.mobileOnlyTotal, SHELL_EXPECTED.mobileOnlyBlocks);
+  // Growth's shell renders its own mobile bar. Expects exactly 1, so it is self-controlling: a
+  // page with no shell at all yields 0 and fails, which is what this line read before Push C.
+  eq("…and Growth's own mobile screen-picker bar is present", layout.mobileOnlyTotal, SHELL_EXPECTED.mobileOnlyBlocks);
 
   // POSITIVE CONTROLS for both absences: the SAME two selectors, and the SAME display measurement,
   // proven on a route that still has the shell — in this same run. Without this, a page that failed

@@ -17,6 +17,9 @@
 // one; no assertion BODY changed):
 //   * SECTION_ROOT   "/growth"      → "/lifecycle"
 //   * API_ROOT       "/api/growth"  → "/api/lifecycle"
+//   * the fixture's topTabs gained "Growth" — a BEHAVIOUR change, not a path edit. The Growth tab
+//     shipped after this fixture was captured, so the top nav legitimately has six entries now. The
+//     assertion body is unchanged; what it compares against records the new nav.
 //   * topTabs read from data-tab rather than textContent — the fixture value is unchanged; the old
 //     extraction folded the Match Ops unread badge into the label, so the suite went red whenever a
 //     player thread happened to be awaiting a reply. Extraction fix, not an expectation change.
@@ -174,7 +177,12 @@ async function main() {
     const got = await landing(`${LEGACY_ROOT}/${s}`);
     eq(`${LEGACY_ROOT}/${s} → ${SECTION_ROOT}/${s}`, got.path, `${SECTION_ROOT}/${s}`);
   }
-  eq(`${LEGACY_ROOT} → ${SECTION_ROOT}/funnel`, (await landing(LEGACY_ROOT)).path, `${SECTION_ROOT}/funnel`);
+  // THE BARE ROOT IS NO LONGER A REDIRECT AND MUST NOT BE. /growth 308'd to /lifecycle/funnel for
+  // exactly one push; the Growth tab then took the path, and that single line was DELETED from
+  // next.config.ts rather than repointed. Asserting where /growth lands now belongs to
+  // verify-growth-tab, which owns that page. What stays here is the fourteen ENUMERATED rules —
+  // the six reports and the eight city slugs — which is the whole reason they were enumerated.
+  eq(`${LEGACY_ROOT} is NOT redirected — it belongs to Growth now`, (await landing(LEGACY_ROOT)).path, LEGACY_ROOT);
   for (const c of CITY_SLUGS) {
     const got = await landing(`${LEGACY_ROOT}/${c}`);
     eq(`${LEGACY_ROOT}/${c} → ${SECTION_ROOT}/${c}`, got.path, `${SECTION_ROOT}/${c}`);
@@ -206,23 +214,31 @@ async function main() {
   // the permission this push renamed.
   eq("no right → refused BY NAME", /lifecycle/i.test(without.error ?? ""), true);
 
-  // ═══ 6. THE BACKFILL — counts, and the same accounts ══════════════════════════════════════════
-  console.log(`\n── the backfill: nobody lost the right, nobody gained it`);
+  // ═══ 6. THE RENAME DID NOT LOCK ANYONE OUT ════════════════════════════════════════════════════
+  //
+  // THIS BLOCK USED TO COMPARE THE TWO COLUMNS ROW FOR ROW — every account that held
+  // can_access_growth holds can_access_lifecycle, nobody gained it. That comparison is OVER, and
+  // not because it stopped mattering: migration 0140 reset can_access_growth to false on every row
+  // so the Growth tab could take the name, which means the old column no longer carries the old
+  // meaning and there is nothing left to compare against.
+  //
+  // THE COVERAGE IS NOT LOST, IT MOVED AND GOT STRONGER. scripts/growth-access-test.ts asserts the
+  // CODE guarantee — can_access_lifecycle does not grant Growth, can_access_growth does not grant
+  // Player Lifecycle, and the two capabilities resolve to different columns — on every commit,
+  // rather than a snapshot of one afternoon's rows. What is asserted here is the only part a data
+  // read can still settle: the section is reachable by somebody.
+  console.log(`\n── the rename did not lock anyone out`);
   const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
   });
   const { data: rows, error } = await netRetry(
-    () => sb.from("app_users").select("id, can_access_growth, can_access_lifecycle"),
+    () => sb.from("app_users").select("id, can_access_lifecycle"),
     "app_users read",
   );
-  if (error) { bad("backfill — could not read app_users", error.message); }
+  if (error) { bad("could not read app_users", error.message); }
   else {
-    const had = rows.filter((r) => r.can_access_growth === true).map((r) => r.id).sort();
-    const has = rows.filter((r) => r.can_access_lifecycle === true).map((r) => r.id).sort();
-    // Expects ≥ 1, so it is self-controlling: a read that returned nothing fails here.
-    atLeast("backfill — the old right was actually held by someone", had.length, 1);
-    eq("backfill — same count", has.length, had.length);
-    eq("backfill — the SAME accounts, id for id", has, had);
+    // Expects >= 1, so it is self-controlling: a read that returned nothing fails here.
+    atLeast("Player Lifecycle is still held by somebody", rows.filter((r) => r.can_access_lifecycle === true).length, 1);
   }
 
   eq("no page errors", pageErrors, []);

@@ -1,23 +1,16 @@
 "use client";
 
 // Field Pipeline — Home tab → Match Ops → Growth. Same component, same board, same behaviour;
-// only the route has ever changed.
+// only the route and the permission have ever changed.
 //
-// IT HAS NO SHELL YET. /match-ops/layout.tsx gave it the Match Ops rail, the 212px content offset
-// and the mobile screen-picker bar; leaving that section gives all three up, and Growth builds its
-// own in the next push. verify-fieldpipeline-move asserts the loss rather than letting it be
-// discovered — see SHELL_EXPECTED there.
+// NO PagePermissionGuard HERE. GrowthShell holds it for the whole section, so a new Growth page
+// cannot ship ungated by forgetting a wrapper.
 //
-// STILL GATED ON `tech`. The Growth right does not exist yet; changing the gate and moving the
-// route in one push would make a permission regression look like a routing one.
+// RE-GATED FROM `tech` TO `growth`. It was the one Match Ops item gated on tech, which is what
+// made it obvious it did not belong there.
 
-import PagePermissionGuard from "@/components/PagePermissionGuard";
 import FieldPipelineBoard from "@/components/FieldPipelineBoard";
 
 export default function FieldPipelinePage() {
-  return (
-    <PagePermissionGuard page="tech">
-      <FieldPipelineBoard />
-    </PagePermissionGuard>
-  );
+  return <FieldPipelineBoard />;
 }

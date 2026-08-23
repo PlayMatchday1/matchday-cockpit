@@ -23,7 +23,7 @@ export type CapRow = Record<string, unknown>;
 // A capability is a column on app_users. The name maps to the box on the User access screen.
 export type Capability =
   // Page access — the broad "can they open this section" flags.
-  | "home" | "finance" | "lifecycle" | "membership" | "matchops" | "chats" | "tech" | "org"
+  | "home" | "finance" | "lifecycle" | "growth" | "membership" | "matchops" | "chats" | "tech" | "org"
   // Write grants — each nested under Match Ops on the grid, each off by default.
   | "editMatches" | "managePlayers" | "managePromos" | "editCredits" | "sendMessages"
   // The ONE thing is_admin still means: who may grant permissions.
@@ -31,7 +31,7 @@ export type Capability =
 
 const COLUMN: Record<Capability, string> = {
   home: "can_access_home", finance: "can_access_finance", lifecycle: "can_access_lifecycle",
-  membership: "can_access_membership", matchops: "can_access_matchops", chats: "can_access_chats",
+  growth: "can_access_growth", membership: "can_access_membership", matchops: "can_access_matchops", chats: "can_access_chats",
   tech: "can_access_tech", org: "can_access_org",
   editMatches: "can_edit_matches", managePlayers: "can_manage_players",
   managePromos: "can_manage_promos", editCredits: "can_edit_credits",
@@ -47,7 +47,8 @@ const NEEDS_MATCHOPS: ReadonlySet<Capability> = new Set<Capability>([
 ]);
 
 export const LABEL: Record<Capability, string> = {
-  home: "Home", finance: "Finance", lifecycle: "Player Lifecycle", membership: "Membership",
+  home: "Home", finance: "Finance", lifecycle: "Player Lifecycle", growth: "Growth",
+  membership: "Membership",
   matchops: "Match Ops", chats: "Chats", tech: "Tech", org: "Org",
   editMatches: "EDIT MATCHES", managePlayers: "MANAGE PLAYERS", managePromos: "MANAGE PROMOS",
   editCredits: "EDIT CREDITS", sendMessages: "SEND MESSAGES",

@@ -68,6 +68,14 @@ const PRIMARY_TABS: PrimaryTab[] = [
     // the tab would go dark on the page the user is standing on.
     match: (p) => p.startsWith("/lifecycle") || p.startsWith("/membership"),
   },
+  {
+    // GROWTH — the tab whose name this app spent two pushes freeing. /growth and
+    // can_access_growth belonged to Player Lifecycle until 2026-08-23; both now mean this.
+    label: "Growth",
+    href: "/growth",
+    visible: (u) => canAccess(u, "growth"),
+    match: (p) => p.startsWith("/growth"),
+  },
   // Phase 24 (corrected) — ONE Match Ops entry, as it always was. The Daily Ops / Back Office
   // split lives in the LEFT SIDEBAR, not up here: it is a switch between two halves of one
   // section, not two top-level sections. tabForPath still derives which half is active — it just

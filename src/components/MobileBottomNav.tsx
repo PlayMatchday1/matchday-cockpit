@@ -28,6 +28,7 @@ import {
   MessageCircle,
   MoreHorizontal,
   Shield,
+  Sprout,
   Wrench,
   X,
   type LucideIcon,
@@ -81,6 +82,14 @@ const MOBILE_PRIMARY: MobilePrimary[] = [
     icon: MapPin,
     visible: (u) => canAccess(u, "lifecycle") || canAccess(u, "membership"),
     isActive: (p) => p.startsWith("/lifecycle") || p.startsWith("/membership"),
+  },
+  {
+    key: "growth",
+    href: "/growth",
+    label: "Growth",
+    icon: Sprout,
+    visible: (u) => canAccess(u, "growth"),
+    isActive: (p) => p.startsWith("/growth"),
   },
   {
     key: "match-ops",
@@ -155,7 +164,11 @@ export default function MobileBottomNav({
    * three, so Finance fell into the sheet and cost two taps every time.
    *
    * Four tabs plus More at 320px gives 64px per slot, which is why the Lifecycle tab uses its barLabel. */
-  const BAR_ORDER = ["home", "finance", "match-ops", "lifecycle", "tech"];
+  // GROWTH IS LAST ON PURPOSE. Four slots plus More at 320px is 64px per slot; a fifth is 51px, so
+  // the bar cannot grow. Tech already falls into the sheet for anyone holding all of these, and
+  // Growth is a weekly-cadence planning surface — it loses the seat to Home, Finance, Match Ops and
+  // Player Lifecycle on frequency, and sorts into More deterministically rather than by list order.
+  const BAR_ORDER = ["home", "finance", "match-ops", "lifecycle", "tech", "growth"];
   const visiblePrimary = MOBILE_PRIMARY.filter((t) => t.visible(appUser));
   const prioritised = [...visiblePrimary].sort(
     (a, b) => BAR_ORDER.indexOf(a.key) - BAR_ORDER.indexOf(b.key),

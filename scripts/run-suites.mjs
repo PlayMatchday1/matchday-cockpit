@@ -66,6 +66,11 @@ const NODE_SUITES = [
   // The credits city scope. Its own suite because it guards MONEY on a route whose guard cannot be
   // exercised without a confined login — the decision is pure, so it runs on every commit instead.
   "scripts/credits-city-scope-test.ts",
+  // The Growth right. can_access_growth meant Player Lifecycle until 2026-08-23 and now means the
+  // Growth tab; a stale grant read as a new one is the failure the whole rename exists to prevent,
+  // and no browser suite can see it — 0140 reset the column on every row, so the interesting rows
+  // do not exist to log in as.
+  "scripts/growth-access-test.ts",
   "scripts/mutation-tests.ts",
   "scripts/prod-guard-test.ts",
   "scripts/stage-denylist-test.ts",
