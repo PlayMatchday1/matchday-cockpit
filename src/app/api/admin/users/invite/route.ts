@@ -40,7 +40,7 @@ type PermissionFlags = {
   is_admin?: boolean;
   can_access_home?: boolean;
   can_access_finance?: boolean;
-  can_access_growth?: boolean;
+  can_access_lifecycle?: boolean;
   can_access_membership?: boolean;
   can_access_matchops?: boolean;
   can_access_chats?: boolean;
@@ -62,7 +62,7 @@ const PERMISSION_KEYS: BoolPermissionKey[] = [
   "is_city_manager",
   "can_access_home",
   "can_access_finance",
-  "can_access_growth",
+  "can_access_lifecycle",
   "can_access_membership",
   "can_access_matchops",
   "can_access_chats",
@@ -142,7 +142,7 @@ export async function POST(req: Request) {
   // are what actually opened the estate. Refusing here means the invite never reaches the CHECK,
   // so the operator gets a sentence rather than a database error.
   if (perms.is_city_manager === true) {
-    const broad = ["can_access_matchops", "can_access_home", "can_access_finance", "can_access_growth",
+    const broad = ["can_access_matchops", "can_access_home", "can_access_finance", "can_access_lifecycle",
       "can_access_membership", "can_access_chats", "can_access_tech", "can_access_org"] as const;
     const held = broad.filter((k) => (perms as unknown as Record<string, unknown>)[k] === true);
     if (held.length > 0) {

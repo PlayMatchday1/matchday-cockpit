@@ -7,7 +7,7 @@ type PermissionFlags = {
   is_admin: boolean;
   can_access_home: boolean;
   can_access_finance: boolean;
-  can_access_growth: boolean;
+  can_access_lifecycle: boolean;
   can_access_membership: boolean;
   can_access_matchops: boolean;
   can_access_chats: boolean;
@@ -18,7 +18,7 @@ const INITIAL_PERMISSIONS: PermissionFlags = {
   is_admin: false,
   can_access_home: true,
   can_access_finance: false,
-  can_access_growth: false,
+  can_access_lifecycle: false,
   can_access_membership: false,
   can_access_matchops: false,
   can_access_chats: false,
@@ -29,7 +29,7 @@ const PERMISSION_LABELS: { key: keyof PermissionFlags; label: string }[] = [
   { key: "is_admin", label: "Admin (full access + manage users)" },
   { key: "can_access_home", label: "Home" },
   { key: "can_access_finance", label: "Finance" },
-  { key: "can_access_growth", label: "Player Lifecycle" },
+  { key: "can_access_lifecycle", label: "Player Lifecycle" },
   { key: "can_access_membership", label: "Membership" },
   { key: "can_access_matchops", label: "Match Ops" },
   { key: "can_access_chats", label: "Chats (customer conversations · within Match Ops)" },

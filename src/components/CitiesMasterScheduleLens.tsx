@@ -335,7 +335,7 @@ export default function CitiesMasterScheduleLens({
   onWeekStartChange?: (next: string) => void;
   // S5 scope guard: ALL of S1/S2/S3/S7 (labelled tiles, ×N chips, duplicate
   // detection, collapsible banners) render only when this is true. Only the
-  // /match-ops/master-schedule page passes it; /growth, /growth/[city] and
+  // /match-ops/master-schedule page passes it; /lifecycle, /lifecycle/[city] and
   // /admin/finance leave it false and come out byte-identical.
   masterSchedule?: boolean;
 } = {}) {

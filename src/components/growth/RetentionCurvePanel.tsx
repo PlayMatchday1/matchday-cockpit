@@ -14,7 +14,7 @@ import {
 // x-axis runs from month 0 to the network span (axisMaxAge, months since the
 // first match ever); each city's line stops at ITS own oldest cohort. The
 // all-cities rollup is the incoming payload ("All Matchday"); a city selection
-// refetches /api/growth/retention?city=<display> and is cached.
+// refetches /api/lifecycle/retention?city=<display> and is cached.
 const NETWORK = "All Matchday";
 // New York City (a single-cohort non-market) is dropped from the selector.
 const HIDDEN_CITIES = new Set(["New York City", "NYC"]);
@@ -75,7 +75,7 @@ export default function RetentionCurvePanel({
       try {
         const fetched = await Promise.all(
           wanted.map(async (name) => {
-            const res = await fetch(`/api/growth/retention?city=${encodeURIComponent(name)}`, {
+            const res = await fetch(`/api/lifecycle/retention?city=${encodeURIComponent(name)}`, {
               headers: authHeaders,
             });
             return [name, (await res.json()) as CohortMatrixPayload] as const;

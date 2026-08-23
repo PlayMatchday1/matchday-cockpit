@@ -1,5 +1,5 @@
 // Growth-tab analytics engine. Pure, deterministic, server-side. Takes the raw
-// rows the /api/growth route reads (paginated, service-role) and produces the
+// rows the /api/lifecycle route reads (paginated, service-role) and produces the
 // single compact payload the client dashboard renders.
 //
 // THREE TIME FLOORS, not one (see AGENTS growth audit):

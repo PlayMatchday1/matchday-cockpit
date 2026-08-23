@@ -25,18 +25,48 @@ const nextConfig: NextConfig = {
         destination: "/admin/finance/cost",
         permanent: true,
       },
-      // Cities section renamed to Growth; route moved /cities → /growth on
-      // 2026-07-31. Permanent so bookmarks/hardcoded links don't 404. The
-      // /api/cities/* endpoints, city/cities data columns, and ?tab= lens
-      // values keep their names — only the user-facing section route moved.
+      // ═══ THE PLAYER LIFECYCLE SECTION MOVED: /growth → /lifecycle (2026-08-23) ═══════════════
+      //
+      // THESE ARE ENUMERATED, NOT A WILDCARD, AND THAT IS THE WHOLE POINT. `/growth/:path*` is one
+      // line and it would make the incoming top-level GROWTH TAB unreachable the day it ships:
+      // every request to /growth/field-pipeline or /growth/city-launches would 308 into a section
+      // that has no such page. Only the paths that existed under /growth are listed, so /growth
+      // stays available for its new occupant. Adding a report to Player Lifecycle means adding a
+      // line here — verify-lifecycle-rename asserts every one of them, and asserts that an
+      // unlisted path is NOT swallowed.
+      {
+        source: "/growth/:section(funnel|behavior|revenue-per-player|retention|churn|data-room)",
+        destination: "/lifecycle/:section",
+        permanent: true,
+      },
+      // The per-city detail pages. The slugs are citySlug() over CITIES (src/lib/types.ts) — the
+      // same closed set cityFromSlug() resolves, so this cannot widen to an arbitrary segment.
+      {
+        source: "/growth/:city(austin|dallas|houston|san-antonio|atlanta|st-louis|okc|el-paso)",
+        destination: "/lifecycle/:city",
+        permanent: true,
+      },
+      // THE BARE ROOT, AND THE ONE LINE THAT COMES OUT WHEN THE GROWTH TAB SHIPS. Until then
+      // /growth is still the Lifecycle landing; after it, /growth is the Growth tab's own page and
+      // this redirect must be DELETED, not repointed.
+      {
+        source: "/growth",
+        destination: "/lifecycle/funnel",
+        permanent: true,
+      },
+      // Cities section renamed, route moved /cities → /growth on 2026-07-31 and → /lifecycle on
+      // 2026-08-23. Pointed STRAIGHT at /lifecycle rather than chaining through /growth: once the
+      // Growth tab takes that path, a chained redirect would land a /cities bookmark on a
+      // different section entirely. The /api/cities/* endpoints, city/cities data columns, and
+      // ?tab= lens values keep their names — only the user-facing section route moved.
       {
         source: "/cities",
-        destination: "/growth",
+        destination: "/lifecycle/funnel",
         permanent: true,
       },
       {
         source: "/cities/:path*",
-        destination: "/growth/:path*",
+        destination: "/lifecycle/:path*",
         permanent: true,
       },
       // Clubhouse tab renamed to Home and its route moved /clubhouse → /home

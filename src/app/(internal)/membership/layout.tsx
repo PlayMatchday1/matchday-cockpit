@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 // Membership is a section of PLAYER LIFECYCLE now, not a top-nav tab of its own — but it stays at
-// /membership. Moving the URL under /growth would 308 every existing bookmark to buy nothing: the
+// /membership. Moving the URL under /lifecycle would 308 every existing bookmark to buy nothing: the
 // rail does not care what the path says.
 //
 // This layout exists so the page renders inside that rail. The page is a client component and

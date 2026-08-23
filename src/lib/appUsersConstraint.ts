@@ -13,9 +13,12 @@
 // error is how a real failure becomes a shrug.
 export const CITY_MANAGER_CONSTRAINT = "app_users_city_manager_is_exclusive";
 
+// BOTH lifecycle AND growth. The DB CHECK (0139) enumerates both columns, so a violation can be
+// caused by either; an array that named only one would build a message omitting the actual
+// conflict. can_access_growth is dormant today and becomes the Growth tab's permission later.
 const BROAD_FLAGS = [
   "is_admin", "can_access_matchops", "can_access_home", "can_access_finance",
-  "can_access_growth", "can_access_membership", "can_access_chats",
+  "can_access_lifecycle", "can_access_growth", "can_access_membership", "can_access_chats",
   "can_access_tech", "can_access_org",
 ] as const;
 

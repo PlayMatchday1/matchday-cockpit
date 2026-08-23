@@ -1,6 +1,6 @@
 // One in-process cached aggregate that serves BOTH growth endpoints. A single
 // keyset-paginated fetch (never OFFSET — a deep OFFSET on 232k match_players hits
-// the Postgres statement timeout, which is what 504'd /api/growth) feeds BOTH
+// the Postgres statement timeout, which is what 504'd /api/lifecycle) feeds BOTH
 // computeGrowth (funnel / behavior / ARPP / churn) and buildRetention (curve +
 // cohorts) from the SAME matches + players rows — no second participation fetch.
 // Cached keyed on the max match date, so a backfill lands a newer match and the

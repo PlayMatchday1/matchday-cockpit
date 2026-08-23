@@ -1,11 +1,11 @@
 // Client-side derivations over one CohortMatrixPayload (the pre-aggregated
-// growth_cohort_matrix, fetched from /api/growth/retention). Both the retention
+// growth_cohort_matrix, fetched from /api/lifecycle/retention). Both the retention
 // curve and the cohort table read these — no second data source, no masks. The
 // definitions still hold verbatim (cohort = first-match month, active = >=1
 // match in month, age = months since cohort); the set-subtraction churn and the
 // per-city split now come from their own endpoints, so they live in the panels.
 
-// The cohort matrix payload as returned by GET /api/growth/retention. Ages run
+// The cohort matrix payload as returned by GET /api/lifecycle/retention. Ages run
 // 0..12; ONLY non-zero (month, age) groups are present — a MISSING cell means 0
 // active. `cities` are display names for the city filter; `city` is which city
 // this payload is for ("all" or a display name).

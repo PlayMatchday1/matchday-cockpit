@@ -317,7 +317,7 @@ export default function FinanceInsightsGrid({
                 <div className="rounded-2xl border border-dashed border-cream-line bg-cream-soft/40 px-5 py-4 text-xs text-deep-green/65">
                   Membership Health moved to{" "}
                   <Link
-                    href="/growth"
+                    href="/lifecycle"
                     className="font-bold text-mint-hover hover:underline"
                   >
                     /cities → Membership lens

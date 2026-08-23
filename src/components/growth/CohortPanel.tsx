@@ -157,7 +157,7 @@ export default function CohortPanel({
   useEffect(() => {
     if (city === "all" || city in cityPayloads) return;
     let alive = true;
-    fetch(`/api/growth/retention?city=${encodeURIComponent(city)}`, { headers: authHeaders })
+    fetch(`/api/lifecycle/retention?city=${encodeURIComponent(city)}`, { headers: authHeaders })
       .then((r) => r.json())
       .then((p: CohortMatrixPayload) => {
         if (alive) setCityPayloads((prev) => ({ ...prev, [city]: p }));
@@ -398,7 +398,7 @@ export default function CohortPanel({
   );
 }
 
-// City split for one cohort — self-fetching over /api/growth/retention/cohort-cities.
+// City split for one cohort — self-fetching over /api/lifecycle/retention/cohort-cities.
 // Renders as a proper JSX <table> (NEVER innerHTML) so the nested thead/tfoot survive.
 function CityDetail({
   cohortRow,
@@ -423,7 +423,7 @@ function CityDetail({
     }
     let alive = true;
     setLoading(true);
-    fetch(`/api/growth/retention/cohort-cities?cohort=${key}`, { headers: authHeaders })
+    fetch(`/api/lifecycle/retention/cohort-cities?cohort=${key}`, { headers: authHeaders })
       .then((r) => r.json())
       .then((data: CohortCitiesResponse) => {
         cache.current.set(key, data);
@@ -512,7 +512,7 @@ function CityDetail({
 }
 
 // Age >= 1 lists the set-subtraction churn for (cohort, age). Self-fetching over
-// /api/growth/retention/players, cached by cohort+age+city. Reused verbatim.
+// /api/lifecycle/retention/players, cached by cohort+age+city. Reused verbatim.
 function CohortPlayersPanel({
   cohortKey,
   age,
@@ -544,7 +544,7 @@ function CohortPlayersPanel({
     }
     let alive = true;
     setLoading(true);
-    fetch(`/api/growth/retention/players?cohort=${cohortKey}&age=${age}&city=${encodeURIComponent(city)}`, {
+    fetch(`/api/lifecycle/retention/players?cohort=${cohortKey}&age=${age}&city=${encodeURIComponent(city)}`, {
       headers: authHeaders,
     })
       .then((r) => r.json())

@@ -1,7 +1,7 @@
 // Authenticated screenshot + assertion runner. Node-only.
 //
 //   node scripts/e2e/shot.mjs                 # all routes
-//   node scripts/e2e/shot.mjs /growth /home   # specific routes
+//   node scripts/e2e/shot.mjs /lifecycle /home   # specific routes
 //
 // Uses .auth/state.json (run auth.mjs first). Launches chromium at
 // PW_CHROMIUM_PATH (default /opt/pw-browsers/chromium — set the env var to a
@@ -21,7 +21,7 @@ const EXEC = process.env.PW_CHROMIUM_PATH || "/opt/pw-browsers/chromium";
 const OUT_DIR = ".e2e-out";
 
 const ALL_ROUTES = [
-  "/home", "/growth", "/membership", "/data", "/docs", "/tech", "/tech/tech-roadmap",
+  "/home", "/lifecycle", "/membership", "/data", "/docs", "/tech", "/tech/tech-roadmap",
   "/admin/finance", "/sms-log", "/inventory",
   "/match-ops", "/match-ops/field-ops", "/match-ops/field-pipeline", "/match-ops/inventory",
   "/match-ops/manager-pay", "/match-ops/master-schedule", "/match-ops/match-chats",
@@ -101,11 +101,11 @@ for (const [rgb, cls] of warm) {
   console.log(`  rgb(${rgb}) ${hex}  ${cls}`);
 }
 
-// print detailed failures for /growth if present
-const g = results.find((r) => r.route === "/growth");
+// print detailed failures for /lifecycle if present
+const g = results.find((r) => r.route === "/lifecycle");
 if (g?._failures?.length) {
-  console.log("\n/growth contrast failures (<4.5):");
+  console.log("\n/lifecycle contrast failures (<4.5):");
   for (const f of g._failures) console.log(`  ${f.ratio}  ${f.tag}.${f.cls}  “${f.text}”`);
 } else if (g) {
-  console.log(`\n/growth: no contrast failures <4.5; page min ${g.min} owned by ${g.owner}`);
+  console.log(`\n/lifecycle: no contrast failures <4.5; page min ${g.min} owned by ${g.owner}`);
 }

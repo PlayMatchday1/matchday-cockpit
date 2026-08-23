@@ -13,7 +13,7 @@ export type AppUser = {
   is_admin: boolean;
   can_access_home: boolean;
   can_access_finance: boolean;
-  can_access_growth: boolean;
+  can_access_lifecycle: boolean;
   can_access_membership: boolean;
   can_access_matchops: boolean;
   can_access_chats: boolean;
@@ -35,7 +35,7 @@ export type AppUser = {
 export type PageName =
   | "home"
   | "finance"
-  | "growth"
+  | "lifecycle"
   | "membership"
   | "matchops"
   | "chats"
@@ -169,8 +169,8 @@ export function canAccess(
       return appUser.can_access_home;
     case "finance":
       return appUser.can_access_finance;
-    case "growth":
-      return appUser.can_access_growth;
+    case "lifecycle":
+      return appUser.can_access_lifecycle;
     case "membership":
       return appUser.can_access_membership;
     case "matchops":
@@ -197,7 +197,7 @@ export function hasAnyAccess(appUser: AppUser | null): boolean {
   return (
     appUser.is_admin ||
     appUser.can_access_home ||
-    appUser.can_access_growth ||
+    appUser.can_access_lifecycle ||
     appUser.can_access_membership ||
     appUser.can_access_matchops ||
     appUser.can_access_tech ||
@@ -218,7 +218,7 @@ export function firstAllowedPath(appUser: AppUser | null): string {
   // they would land on /no-access.
   if (isCityManager(appUser) && !appUser.is_admin) return "/city/manager-pay";
   if (appUser.is_admin || appUser.can_access_home) return "/home";
-  if (appUser.can_access_growth) return "/growth";
+  if (appUser.can_access_lifecycle) return "/lifecycle";
   if (appUser.can_access_membership) return "/membership";
   if (appUser.can_access_matchops) return "/match-ops";
   if (appUser.can_access_finance) return "/admin/finance";

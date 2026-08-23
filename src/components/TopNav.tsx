@@ -59,15 +59,14 @@ const PRIMARY_TABS: PrimaryTab[] = [
     match: (p) => p.startsWith("/admin/finance"),
   },
   {
-    // LABEL ONLY. The route is still /growth — see growthSections.tsx.
     label: "Player Lifecycle",
-    href: "/growth",
+    href: "/lifecycle",
     // Reachable on either permission: someone who holds only `membership` still has a section to
     // open, and the tab now leads to a rail that will show them their half of it.
-    visible: (u) => canAccess(u, "growth") || canAccess(u, "membership"),
+    visible: (u) => canAccess(u, "lifecycle") || canAccess(u, "membership"),
     // /membership is a section of this tab that lives outside its path, so it is matched here or
     // the tab would go dark on the page the user is standing on.
-    match: (p) => p.startsWith("/growth") || p.startsWith("/membership"),
+    match: (p) => p.startsWith("/lifecycle") || p.startsWith("/membership"),
   },
   // Phase 24 (corrected) — ONE Match Ops entry, as it always was. The Daily Ops / Back Office
   // split lives in the LEFT SIDEBAR, not up here: it is a switch between two halves of one

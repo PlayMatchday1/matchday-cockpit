@@ -74,14 +74,13 @@ const MOBILE_PRIMARY: MobilePrimary[] = [
     isActive: (p) => p.startsWith("/admin/finance"),
   },
   {
-    key: "growth",
-    href: "/growth",
-    // LABEL ONLY — the key, the href and the permission are untouched.
+    key: "lifecycle",
+    href: "/lifecycle",
     label: "Player Lifecycle",
     barLabel: "Players",
     icon: MapPin,
-    visible: (u) => canAccess(u, "growth") || canAccess(u, "membership"),
-    isActive: (p) => p.startsWith("/growth") || p.startsWith("/membership"),
+    visible: (u) => canAccess(u, "lifecycle") || canAccess(u, "membership"),
+    isActive: (p) => p.startsWith("/lifecycle") || p.startsWith("/membership"),
   },
   {
     key: "match-ops",
@@ -155,8 +154,8 @@ export default function MobileBottomNav({
    * it was previously buried — BAR_ORDER ranked match-ops and growth above it and the bar took only
    * three, so Finance fell into the sheet and cost two taps every time.
    *
-   * Four tabs plus More at 320px gives 64px per slot, which is why growth uses its barLabel. */
-  const BAR_ORDER = ["home", "finance", "match-ops", "growth", "tech"];
+   * Four tabs plus More at 320px gives 64px per slot, which is why the Lifecycle tab uses its barLabel. */
+  const BAR_ORDER = ["home", "finance", "match-ops", "lifecycle", "tech"];
   const visiblePrimary = MOBILE_PRIMARY.filter((t) => t.visible(appUser));
   const prioritised = [...visiblePrimary].sort(
     (a, b) => BAR_ORDER.indexOf(a.key) - BAR_ORDER.indexOf(b.key),

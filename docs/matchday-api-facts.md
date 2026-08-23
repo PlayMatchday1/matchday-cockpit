@@ -1662,3 +1662,84 @@ pitchSum = gross + untracked        →        gross = pitchSum − untracked
 Houston, Aug 2026: pitches $14,591 − untracked $126 = **$14,464**, the city figure. Written the
 other way round it passed on six of seven cities, because only Houston carries any untracked
 revenue at all — an assertion that reconciles by having nothing to reconcile.
+
+## VENUE NAMES ARE NOT UNIQUE ACROSS CITIES — join on `(city, name)` (2026-08-23)
+
+Matching the Field Pipeline board (`kanban_cards`, `board_type='field_pipeline'`, city in the JSONB
+`data` column) against `fin_venues` by NAME ALONE produced a **confident wrong answer**: Houston's
+`The Hattrick` matched Austin's `Hattrick`. Houston's real row is `Hattrick T.`.
+
+A missed match is a gap and looks like one. A **false positive silently attaches one city's venue to
+another**, and every number downstream — cost per match, billing basis, P&L attribution — reads
+plausible. This is the same failure shape as `verify-finance-sections` asserting the quarter control
+existed via `querySelector("select")`: a selector broad enough to match a different subject passes on
+the wrong subject.
+
+**The rule, for Push D and anything else joining these two lists: join on `(city, name)`, never on
+name alone, and never by substring across the whole table.**
+
+### The four naming mismatches, recorded so they are not rediscovered
+
+Measured 2026-08-23 over 23 `confirmed` pipeline cards against all 32 `fin_venues` rows, with
+`fin_schedule` (1,082 rows, paged) as the corroborating evidence for which venue has actually been
+billed.
+
+| Pipeline card | `fin_venues.venue_name` | Evidence |
+| --- | --- | --- |
+| `ATX / RR MPC` | `Round Rock` (Austin) | 17 `fin_schedule` rows, last 2026-06-28 |
+| `HOU / Katy ISC` | `KISC (Katy Intl)` (Houston) | 52 rows, last 2026-09-29, active |
+| `STL / Lou Fusz Athletic Complex` | `Lou Fusz Outdoor` (St. Louis) | 128 rows, last 2026-09-30 — the only Lou Fusz string ever billed |
+| `STL / Lou Fusz Training Center` | `Lou Fusz Indoor` (St. Louis) | **PROBABLE, UNPROVEN.** The row exists (launch 2026-02-16, cpm 100) but has ZERO `fin_schedule` rows and `is_active=false`. Training Center ↔ Indoor is inferred from the names. |
+
+### `SATX / New Braunfels` is secured on the board and unknown to Finance
+
+No `fin_venues` row (San Antonio holds only `Soccer Central`, `Soccer Central Tournament`, `STAR`)
+and zero `fin_schedule` rows matching `/braunfels/i` anywhere in the table. A field marked locked
+that Finance has never heard of. Not a data-model defect — an operational gap for Ryan.
+
+## The Player Lifecycle route rename, and why the legacy redirects are ENUMERATED (2026-08-23)
+
+`/growth` → `/lifecycle`; `can_access_growth` → `can_access_lifecycle` (migration 0139, backfilled,
+10 of 16 accounts, verdict `10 / 10 / 0 / 0 / 16`). Nothing a user reads changed — the section has
+said "Player Lifecycle" on screen since the Membership move.
+
+**`/growth/:path*` would have been one line and it would have made the incoming Growth tab
+unreachable the day it shipped** — every request to `/growth/field-pipeline` or
+`/growth/city-launches` would 308 into a section with no such page, and nobody would connect the two
+changes. `next.config.ts` therefore lists the six report paths and the eight city slugs (`citySlug()`
+over `CITIES`, the same closed set `cityFromSlug()` resolves) plus the bare root as its own line.
+`verify-lifecycle-rename` asserts all fifteen redirect AND that `/growth/field-pipeline` is not
+swallowed, with the fifteen as its positive control in the same run.
+
+`can_access_growth` is left in place and unread rather than dropped: a dropped column racing a
+deploy 500s every admin route. It is freed for the Growth tab by an `UPDATE … WHERE`, not a
+`DROP`/re-`ADD`.
+
+**0139 also had to rewrite the 0124 city-manager exclusivity CHECK.** That constraint enumerates the
+broad `can_access_*` flags BY NAME, so it is silently weaker for every flag added after it — a city
+manager could have held `can_access_lifecycle` and the CHECK would have passed. Any future broad flag
+must be added to it in the same migration that creates the column.
+
+### A path rewrite matched a CSS-module import, and only the production build saw it
+
+The rename regex `(?<![\w-])/growth\b` matched `./growth.module.css` (a `.` is neither `\w` nor `-`),
+rewriting one import to a file that does not exist. `tsc --noEmit` passed — `*.module.css` is
+declared loosely — and so would any dev-server run of the pages. `scripts/seam-stripped-test.ts`
+caught it, because it does an isolated **production build**. A mechanical rename across a repo is not
+verified by typecheck alone.
+
+## `verify-city-confinement` section 6c is RED at HEAD — the identity was repurposed (2026-08-23)
+
+Five assertions in the "DFW city manager sees their own reviews" block fail:
+`city` reads `"all"` instead of `"Dallas / Fort Worth"`, volume 0, avg `—`.
+
+**The cause is the account row, not the code.** `CITY_MANAGER_DFW`
+(`rgmstrategicventures@gmail.com`, `verify-city-confinement.mjs:43`) now carries
+`is_city_manager=false, city_identifier=WAW` — it was repurposed as a **Warsaw** account during the
+Warsaw confined-view work. An account that is not a city manager is not confined, so the city control
+is not locked and the page renders unfiltered.
+
+Proven pre-existing by probing the same page with the same cached session against the working tree
+and again with the whole diff `git stash`ed: **byte-identical output both times**
+(`{city:"all", volume:"0", avg:"—"}`). The suite needs a live DFW city manager named, or the block
+retired — it is not currently testing what it says it tests.

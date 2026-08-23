@@ -4,8 +4,8 @@
 //
 // Growth used to be one scrolling page whose component fetched both aggregates and passed them
 // down. Splitting it into six routes without moving the fetch would have made every rail click
-// re-request /api/growth and /api/growth/retention — the same mistake as re-rendering a chart per
-// page. The layout does not remount between /growth/* routes, so mounting the provider there means
+// re-request /api/lifecycle and /api/lifecycle/retention — the same mistake as re-rendering a chart per
+// page. The layout does not remount between /lifecycle/* routes, so mounting the provider there means
 // ONE pair of requests per visit and instant section switching. Same reason Match Ops mounts its
 // conversation provider in its layout.
 //
@@ -65,8 +65,8 @@ export default function GrowthDataProvider({ children }: { children: React.React
         const headers = { Authorization: `Bearer ${token}` };
         if (alive) setAuthHeaders(headers);
         const [res, retRes] = await Promise.all([
-          fetch("/api/growth", { headers }),
-          fetch("/api/growth/retention", { headers }),
+          fetch("/api/lifecycle", { headers }),
+          fetch("/api/lifecycle/retention", { headers }),
         ]);
         if (!res.ok) {
           const body = (await res.json().catch(() => null)) as { error?: string } | null;

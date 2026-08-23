@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { fmtInt } from "./format";
 
-// PART 6: potential churn. Reads /api/growth/churn (growth_player_profile — one
+// PART 6: potential churn. Reads /api/lifecycle/churn (growth_player_profile — one
 // row per PLAYED player). The list is ranked server-side by MATCHES PLAYED desc,
 // days-inactive breaking ties, so the most deeply-involved lapsed players surface
 // first — NOT whoever has simply been gone longest. Rows arrive already ranked and
@@ -97,7 +97,7 @@ export default function ChurnPanel({
     let alive = true;
     setLoading(true);
     setError(null);
-    fetch(`/api/growth/churn?${buildQuery(applied)}`, { headers: authHeaders })
+    fetch(`/api/lifecycle/churn?${buildQuery(applied)}`, { headers: authHeaders })
       .then(async (r) => {
         if (!r.ok) throw new Error(`Request failed (${r.status})`);
         return (await r.json()) as ChurnResponse;
@@ -134,7 +134,7 @@ export default function ChurnPanel({
   }, []);
 
   async function downloadCsv() {
-    const url = `/api/growth/churn?${buildQuery(applied)}&format=csv`;
+    const url = `/api/lifecycle/churn?${buildQuery(applied)}&format=csv`;
     const res = await fetch(url, { headers: authHeaders });
     const blob = await res.blob();
     const objUrl = URL.createObjectURL(blob);

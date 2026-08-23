@@ -14,7 +14,7 @@
 // control that has never once written looks like.
 //
 // WHY NOBODY NOTICED: is_admin SHORT-CIRCUITS the page flags. canAccess() returns true for an admin
-// before it reads any can_access_* column, and authenticateMatchOpsRead / growthAuth / crmAuth are
+// before it reads any can_access_* column, and authenticateMatchOpsRead / lifecycleAuth / crmAuth are
 // all `is_admin OR the flag`. The people using this screen are admins, so toggling their own
 // can_access_* changed nothing observable in either direction.
 //
@@ -39,7 +39,7 @@ export const dynamic = "force-dynamic";
 // or city_identifier — through a route that only claims to flip permissions.
 const BOOLEAN_KEYS = [
   "is_admin",
-  "can_access_home", "can_access_finance", "can_access_growth", "can_access_membership",
+  "can_access_home", "can_access_finance", "can_access_lifecycle", "can_access_membership",
   "can_access_matchops", "can_access_chats", "can_access_tech", "can_access_org",
   "can_manage_promos", "can_edit_matches", "can_edit_credits", "can_send_messages",
 ] as const;
@@ -47,7 +47,7 @@ const TEXT_KEYS = ["full_name"] as const;
 
 const LABEL: Record<string, string> = {
   is_admin: "Admin",
-  can_access_home: "Home", can_access_finance: "Finance", can_access_growth: "Player Lifecycle",
+  can_access_home: "Home", can_access_finance: "Finance", can_access_lifecycle: "Player Lifecycle",
   can_access_membership: "Membership", can_access_matchops: "Match Ops", can_access_chats: "Chats",
   can_access_tech: "Tech", can_access_org: "Org",
   can_manage_promos: "Manage promos", can_edit_matches: "Edit matches",

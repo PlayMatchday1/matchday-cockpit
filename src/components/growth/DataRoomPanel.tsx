@@ -5,7 +5,7 @@ import type { Agg, Dim, DrilledPlayer, Metric, PivotConfig, PivotTable, ValueSpe
 import { monthLabel } from "./format";
 
 // Player Data Room — a live pivot builder over the server-side fact table
-// (POST /api/growth/dataroom). Every figure comes from the endpoint; clicking a
+// (POST /api/lifecycle/dataroom). Every figure comes from the endpoint; clicking a
 // value cell drills to the distinct players behind it (mode:"cell"). CSVs are
 // built server-side (mode:"tableCsv"/"cellCsv") — never in the browser. Two rules
 // the backend holds and the copy explains: Players/New players are DISTINCT (rows
@@ -92,7 +92,7 @@ export default function DataRoomPanel({
   );
 
   async function postJson<T>(body: unknown): Promise<T> {
-    const res = await fetch("/api/growth/dataroom", {
+    const res = await fetch("/api/lifecycle/dataroom", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders },
       body: JSON.stringify(body),
@@ -101,7 +101,7 @@ export default function DataRoomPanel({
   }
 
   async function downloadBlob(body: unknown, filename: string) {
-    const res = await fetch("/api/growth/dataroom", {
+    const res = await fetch("/api/lifecycle/dataroom", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders },
       body: JSON.stringify(body),

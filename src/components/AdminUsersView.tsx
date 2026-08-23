@@ -17,7 +17,7 @@ type PermissionKey =
   | "is_admin"
   | "can_access_home"
   | "can_access_finance"
-  | "can_access_growth"
+  | "can_access_lifecycle"
   | "can_access_membership"
   | "can_access_matchops"
   | "can_access_chats"
@@ -27,7 +27,7 @@ const PERMISSION_COLUMNS: { key: PermissionKey; label: string; hint?: string }[]
   { key: "is_admin", label: "Admin" },
   { key: "can_access_home", label: "Home" },
   { key: "can_access_finance", label: "Finance" },
-  { key: "can_access_growth", label: "Player Lifecycle" },
+  { key: "can_access_lifecycle", label: "Player Lifecycle" },
   { key: "can_access_membership", label: "Membership" },
   { key: "can_access_matchops", label: "Match Ops" },
   {

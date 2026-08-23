@@ -253,7 +253,7 @@ function BackLink() {
   return (
     <div className="mb-3 text-sm">
       <Link
-        href="/growth"
+        href="/lifecycle"
         className="text-deep-green/60 transition hover:text-deep-green"
       >
         ← All cities

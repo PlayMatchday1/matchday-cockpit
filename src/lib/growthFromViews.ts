@@ -1,7 +1,7 @@
 // Growth analytics rebuilt from the growth_* materialized views instead of the
 // 232k-row matches+players fetch. Produces the SAME GrowthData shape as
 // computeGrowth (validated deep-equal against it in production), EXCEPT players[]
-// is empty — the churn card now reads /api/growth/churn (paginated), the only
+// is empty — the churn card now reads /api/lifecycle/churn (paginated), the only
 // consumer that ever needed it. Everything play-derived is reconstructed from:
 //   growth_player_profile   one row/player: first/last, matches, city_counts, ev
 //   growth_play_dims        spots + amount by (month, city, field)   [additive]
@@ -463,7 +463,7 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
 
   // cohorts, retentionCurveOverall/ByCity, reconciliation and attribution are part
   // of the GrowthData type but NOTHING on the client reads them (the retention
-  // curve + cohort table now come from /api/growth/retention). Their derivations
+  // curve + cohort table now come from /api/lifecycle/retention). Their derivations
   // looped over all ~14k players × cohorts × cities — pure lambda CPU for a payload
   // nobody consumes — so they're intentionally omitted (empty in the return below).
   // If a future card needs them, prefer a dedicated view/endpoint over recomputing
@@ -517,7 +517,7 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
     funnelByMonth,
     funnelByMonthCity,
     funnelUnattributed,
-    players: [], // dropped from the payload — churn card reads /api/growth/churn
+    players: [], // dropped from the payload — churn card reads /api/lifecycle/churn
     behaviorOverall,
     behaviorByCity,
     behaviorByField,
@@ -528,7 +528,7 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
     arppOverall,
     arppByCity,
     arppDiagnostics,
-    cohorts: [], // see note above — not consumed; /api/growth/retention serves cohorts
+    cohorts: [], // see note above — not consumed; /api/lifecycle/retention serves cohorts
     retentionCurveOverall: [], // not consumed
     retentionCurveByCity: {}, // not consumed
     cities,

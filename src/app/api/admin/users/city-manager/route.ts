@@ -38,7 +38,11 @@ type Target = {
 // adminAuth rule about never NAMING permission columns applies to THAT file (code deploys
 // before migrations); these columns are long-established, and this route already 500s
 // meaningfully if they are missing.
-const SELECT = "id, email, is_admin, is_service_account, is_city_manager, city_identifier, can_access_matchops, can_access_home, can_access_finance, can_access_growth, can_access_membership, can_access_chats, can_access_tech, can_access_org";
+// can_access_growth IS NAMED HERE ON PURPOSE while it is dormant (0139). Ten rows still carry it
+// from before the lifecycle rename, the DB CHECK still counts it as a broad flag, and no screen
+// can clear it — so an account holding it would be refused by the DATABASE with nothing on the
+// grid to explain why. Reading it here makes the refusal below say so by name instead.
+const SELECT = "id, email, is_admin, is_service_account, is_city_manager, city_identifier, can_access_matchops, can_access_home, can_access_finance, can_access_lifecycle, can_access_growth, can_access_membership, can_access_chats, can_access_tech, can_access_org";
 
 export async function POST(req: Request) {
   const auth = await authenticateAdmin(req);
@@ -114,8 +118,9 @@ export async function POST(req: Request) {
   // so this is DEFENCE rather than the guarantee — but a state that cannot be created is a state
   // nobody has to notice later, and the grid is where it was created the first time.
   if (nextIsCm) {
-    const broad = ["can_access_matchops", "can_access_home", "can_access_finance", "can_access_growth",
-      "can_access_membership", "can_access_chats", "can_access_tech", "can_access_org"] as const;
+    const broad = ["can_access_matchops", "can_access_home", "can_access_finance", "can_access_lifecycle",
+      "can_access_growth", "can_access_membership", "can_access_chats", "can_access_tech",
+      "can_access_org"] as const;
     const held = broad.filter((k) => (t as unknown as Record<string, unknown>)[k] === true);
     if (held.length > 0) {
       return Response.json({

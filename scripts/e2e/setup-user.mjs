@@ -69,7 +69,7 @@ const row = {
   is_admin: false,
   can_access_home: true,
   can_access_finance: true,
-  can_access_growth: true,
+  can_access_lifecycle: true,
   can_access_membership: true,
   can_access_matchops: true,
   can_access_chats: true,
