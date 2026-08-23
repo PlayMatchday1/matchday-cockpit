@@ -1697,6 +1697,33 @@ No `fin_venues` row (San Antonio holds only `Soccer Central`, `Soccer Central To
 and zero `fin_schedule` rows matching `/braunfels/i` anywhere in the table. A field marked locked
 that Finance has never heard of. Not a data-model defect — an operational gap for Ryan.
 
+## AUSTIN IS THE DEGENERATE CITY — a fixture that is Austin cannot see a name bug (2026-08-23)
+
+**`cityScope`'s platform label and `cityMap`'s cockpit name are the same string in Austin, and only
+in Austin.** Everywhere else they differ: `DFW` is `"Dallas / Fort Worth"` against `"Dallas"`, and a
+comparison written against the wrong one of the pair matches in Austin and drops every row
+everywhere else.
+
+**The rule: name comparisons across `cityScope` and `cityMap` match in Austin and ONLY in Austin.
+Any test whose fixture is Austin cannot see a normalisation bug.** Pick a second city deliberately,
+or the suite is proving that one string equals itself.
+
+Two worked examples, found eleven days apart by different means, and they are the same failure —
+two systems that do not agree on names, with everything happening to be checked against the one city
+where they do:
+
+* **DFW reviews rendered ZERO** while the trailing-8-week strip on the same page showed **232**. The
+  strip is the one panel that ignores the page filters, which is the only reason it was visible at
+  all. Caught by `verify-city-confinement` section 6c — which has since been **deleted**, so this is
+  uncovered again; see the entry below.
+* **Houston's `"The Hattrick"` resolved onto Austin's `"Hattrick"`** when the Field Pipeline board
+  was matched against `fin_venues` by name. Houston's real row is `"Hattrick T."`. Caught by hand
+  while reading the match list. See the `(city, name)` rule above — it is the same lesson from the
+  join side.
+
+A miss shows up as a gap. **A false match silently attaches one city's data to another and every
+number downstream reads plausible.**
+
 ## The Player Lifecycle route rename, and why the legacy redirects are ENUMERATED (2026-08-23)
 
 `/growth` → `/lifecycle`; `can_access_growth` → `can_access_lifecycle` (migration 0139, backfilled,
@@ -1728,18 +1755,46 @@ declared loosely — and so would any dev-server run of the pages. `scripts/seam
 caught it, because it does an isolated **production build**. A mechanical rename across a repo is not
 verified by typecheck alone.
 
-## `verify-city-confinement` section 6c is RED at HEAD — the identity was repurposed (2026-08-23)
+## THE CITY-MANAGER TIER'S NON-DEGENERATE-CITY COVERAGE WAS DELETED (2026-08-23)
 
-Five assertions in the "DFW city manager sees their own reviews" block fail:
-`city` reads `"all"` instead of `"Dallas / Fort Worth"`, volume 0, avg `—`.
+`verify-city-confinement.mjs` section 6c — six assertions driving a **second** city manager, DFW —
+was removed on Ryan's call. The account behind it, `rgmstrategicventures@gmail.com`, had been
+repurposed as the **Warsaw** test account: `is_city_manager=false`, `city_identifier=WAW`. That makes
+it the CONFINED tier, not the city-manager tier, so the block asserted a locked city control on an
+account nothing locks. Five of its six assertions had been failing; the sixth passed as `0 === 0`
+and its own positive control was what said so.
 
-**The cause is the account row, not the code.** `CITY_MANAGER_DFW`
-(`rgmstrategicventures@gmail.com`, `verify-city-confinement.mjs:43`) now carries
-`is_city_manager=false, city_identifier=WAW` — it was repurposed as a **Warsaw** account during the
-Warsaw confined-view work. An account that is not a city manager is not confined, so the city control
-is not locked and the page renders unfiltered.
+### The tier itself is still covered — the gap is narrower and sharper than that
 
-Proven pre-existing by probing the same page with the same cached session against the working tree
-and again with the whole diff `git stash`ed: **byte-identical output both times**
-(`{city:"all", volume:"0", avg:"—"}`). The suite needs a live DFW city manager named, or the block
-retired — it is not currently testing what it says it tests.
+`isConfined(row)` is **`city_identifier` non-empty and nothing else** (`cityConfinement.ts:58`).
+`isCityManagerConfined(row)` is **`is_city_manager === true && is_admin !== true`**
+(`capabilities.ts:68`). They are different columns and different rules, and one account can satisfy
+both. `garrettsuits@gmail.com` — which the whole surviving suite runs as — holds
+`is_city_manager=true` AND `city_identifier=ATX`, so it satisfies both. The city-manager tier is
+still driven through a real `app_users` row against the real server.
+
+**The precedence differs between them, and it is worth stating because it is easy to get backwards:**
+
+```
+can():  if (isCityManagerConfined(row)) return false;   // has an is_admin term → is_admin WINS
+        if (confinedBlocks(row, cap))   return false;   // isConfined has none  → the boundary BEATS is_admin
+```
+
+### What is actually uncovered now
+
+**The only non-degenerate city name** — see *Austin is the degenerate city*, above. With 6c gone the
+entire remaining fixture is Austin, so a normalisation bug is invisible to it. That is precisely the
+bug 6c was written for.
+
+Nothing else covers it. `verify-city-manager.mjs` mocks the `app_users` row through a browser route
+handler and says so in its own header — it proves nothing about the server.
+`scripts/city-confinement-test.ts` uses `"Dallas / Fort Worth"` as an input label to a pure summary
+function, not as a join key.
+
+**To close it:** a real city-manager account scoped to a city whose platform label differs from its
+cockpit name. DFW, SATX and HOU city managers already exist, so this is a name away whenever it is
+wanted. Do not re-point the block at another account without first checking that the row actually
+holds `is_city_manager` — repurposing the account without checking is how this broke.
+
+**Tally on the record**, so the drop is not mistaken for suites quietly shrinking:
+`80 passed / 5 failed` → `79 passed / 0 failed`.

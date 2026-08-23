@@ -1,7 +1,35 @@
 // THE CITY-MANAGER CONFINEMENT, driven as a REAL city-manager session (Phase 29b).
-// KNOWN FAILURE, PRE-EXISTING: 5 assertions fail on the DFW city-manager account — the reviews
-// city filter returns zero rows. It is NOT waiting on a Warsaw account and NOT waiting on a
-// migration; both Warsaw accounts have existed since 14 and 21 August. Do not re-derive this.
+//
+// ═══ A COVERAGE GAP, DELIBERATE AND DATED: THE NON-DEGENERATE CITY NAME (2026-08-23) ═══════════
+//
+// Section 6c drove a SECOND city manager, DFW, and was deleted on Ryan's call because the account
+// behind it (rgmstrategicventures@gmail.com) was repurposed as the Warsaw test account. It now
+// carries is_city_manager=false with city_identifier=WAW, which makes it the CONFINED tier and not
+// the city-manager tier — so the block asserted a locked city control on an account that is not
+// confined that way, and had been failing 5 assertions since.
+//
+// WHAT WENT WITH IT, and it is not the tier. Everything above still drives the city-manager tier
+// through a real app_users row: garrettsuits@gmail.com holds is_city_manager=true AND
+// city_identifier=ATX, so it satisfies both isCityManagerConfined() and isConfined(). The tier is
+// covered. What is NOT covered any more is THE ONLY NON-DEGENERATE CITY. Austin is the one city
+// where cityScope's platform label and cityMap's cockpit name are the same string ("Austin"), so
+// the whole remaining fixture is the degenerate case: a filter comparing a raw name against a
+// normalised one matches in Austin and drops every row everywhere else, and nothing here can see
+// it. That is the exact bug 6c was written for — DFW reviews rendering all zeros while the
+// trailing-8-week strip on the same page showed 232.
+//
+// Nothing else covers it. verify-city-manager.mjs mocks the app_users row through a browser route
+// handler and says so — it proves nothing about the server. scripts/city-confinement-test.ts uses
+// "Dallas / Fort Worth" as an input label to a pure summary function, not as a join key.
+//
+// TO CLOSE IT: a real city-manager account scoped to a city whose PLATFORM LABEL DIFFERS FROM ITS
+// COCKPIT NAME. DFW, SATX and HOU city managers already exist, so this is a name away whenever it
+// is wanted. Do not re-point the block at another account without first checking that the row
+// actually holds is_city_manager — repurposing an account without checking is how this broke.
+//
+// THE PRECEDENCE PAIR, because it is the thing most likely to be got backwards next:
+//   isCityManagerConfined() carries an is_admin term, so IS_ADMIN WINS over that tier.
+//   isConfined() carries none, so THE BOUNDARY BEATS IS_ADMIN.
 //
 // This suite exists because the leak it covers was invisible to every other suite. A DFW city
 // manager could open the whole Match Ops estate — Master Schedule, Slate Review, Field Ops,
@@ -35,13 +63,6 @@ const SCOPE = "ATX";
 // (field.city.name), not identifiers — CITY_SCOPES pins the pair and city-scope-test.ts guards it.
 const SCOPE_NAME = "Austin";
 const OTHER_CITY = "DFW";
-// A SECOND CITY MANAGER, DELIBERATELY DFW. Everything else here runs as ATX — and Austin is the
-// ONE city where cityScope's platform label and cityMap's cockpit name are the same string
-// ("Austin"). That made the whole fixture the degenerate case: a filter comparing a raw name to a
-// normalised one matched in Austin and dropped every row everywhere else, and this suite could
-// not see it. DFW is "Dallas / Fort Worth" → "Dallas", so it is the case that exercises the join.
-const CITY_MANAGER_DFW = "rgmstrategicventures@gmail.com";
-const SCOPE_DFW = "DFW";
 const ADMIN = "rmancuso@playmatchday.com";
 // ONE day for every board assertion, so the city board and the admin board are compared over the
 // same matches. Not "today": a date with no matches would make every row/rail comparison pass by
@@ -469,57 +490,6 @@ async function main() {
     eq("Week + pay brings it back", await cm.$('[data-testid="week"]') !== null, true);
   }
 
-
-  // ── 6c. A SECOND CITY, WHERE THE TWO NAME MAPS DISAGREE ──────────────────
-  // Reviews rendered ALL ZEROS for DFW while the trailing-8-week strip on the same page showed 232
-  // reviews — the strip is the one panel that ignores the page filters. The city filter was
-  // comparing "Dallas / Fort Worth" against "Dallas" and dropping all 922 rows.
-  console.log("\na DFW city manager sees their own reviews (the non-degenerate city):");
-  {
-    // A THIRD NAMED IDENTITY, cached like the other two. `mint` was this suite's own helper and
-    // went with the switch to sessionFor.
-    const dfwSession = await sessionFor(CITY_MANAGER_DFW);
-    const dctx = await ctxFor(dfwSession);
-    const dfw = await dctx.newPage();
-    await dfw.goto(`${BASE}/city/reviews`, { waitUntil: "domcontentloaded" });
-    await dfw.waitForSelector('[data-rv="avg"]', { timeout: 45000 });
-    await dfw.waitForTimeout(600);
-
-    const shown = await dfw.evaluate(() => ({
-      month: [...document.querySelectorAll("select")][0]?.value ?? null,
-      city: [...document.querySelectorAll("select")][1]?.value ?? null,
-      volume: Number(document.querySelector('[data-rv="volume"]')?.textContent.trim().replace(/,/g, "")),
-      avg: document.querySelector('[data-rv="avg"]')?.textContent.trim(),
-    }));
-    eq("the city control is locked to their city", shown.city, "Dallas / Fort Worth");
-    // THE ASSERTION THAT WOULD HAVE CAUGHT IT: non-zero.
-    shown.volume > 0
-      ? ok(`REVIEW VOLUME is non-zero for DFW (${shown.volume})`)
-      : bad("DFW reviews render zero", "the city filter is dropping every row again");
-    eq("…and AVG RATING is a number, not a dash", /^\d/.test(shown.avg ?? ""), true);
-
-    // AND IT MATCHES THE FUNNEL: rows in the selected month, from the payload the page fetched.
-    const expected = await dfw.evaluate(async ([tok, month]) => {
-      const r = await fetch("/api/reviews", { headers: { Authorization: `Bearer ${tok}` }, cache: "no-store" });
-      const j = await r.json();
-      const parseLocal = (s) => { const q = (s || "").slice(0, 16).split(/[- T:]/); if (q.length < 5) return null;
-        const [y, mo, d, h, mi] = q.map(Number); return new Date(y, mo - 1, d, h, mi); };
-      const key = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      let n = 0, cities = new Set();
-      for (const x of (j.rows ?? [])) {
-        const sd = parseLocal(x.start_date);
-        if (!sd || x.star_rating === null) continue;
-        cities.add(x.city_name);
-        if (key(sd) === month) n++;
-      }
-      return { n, cities: [...cities], total: (j.rows ?? []).length };
-    }, [dfwSession.access_token, shown.month]);
-    eq("…and the tile equals the month-filtered payload count", shown.volume, expected.n);
-    eq("…over a payload that is DFW and nothing else", expected.cities, ["Dallas / Fort Worth"]);
-    // POSITIVE CONTROL: the payload was not empty, so the equality above is not 0 === 0.
-    eq("…and the payload really had rows (this is not 0 === 0)", expected.total > 0 && expected.n > 0, true);
-    await closeContext(dctx);
-  }
 
   // ── 7. WHERE THE BARE DOMAIN LANDS EACH TIER ─────────────────────────────
   // /home redirecting correctly is worth almost nothing on its own, because nobody TYPES /home.
