@@ -1635,3 +1635,30 @@ almost always yes.
 Related and different: `mdapi_users.preferable_city_name` NULL on 4,187 players is NOT this — it is
 a real, populated field that those players genuinely have not set, which is why credits treat NULL
 as a refusal rather than a gap to be filled in later.
+
+## A DESIGN CLAIM ABOUT SIZE IS ASSERTED ON THE COMPUTED SIZE (2026-08-23)
+
+**When the claim is "this element is bigger", assert the computed font size — never the presence of
+a class.** A class-presence check passes on a page that has lost its hierarchy.
+
+The City P&L redesign exists to make Net P&L the answer: largest figure in the row, heaviest, a
+darker green than Revenue. It shipped with `.net6 { font-size: 18px }` on the right element and
+rendered at **14.5px — exactly Revenue's size** — because `.tbl tbody td` sets 14.5px and
+outspecifies a single class. The markup was correct, the class was present, and the central claim
+of the redesign was silently absent. Only `getComputedStyle(el).fontSize` caught it.
+
+The same applies to weight, colour and anything else a reader is meant to notice first. The fix was
+to scope the rule to the cell (`.tbl6 tbody td.net6`) rather than reach for `!important`.
+
+## Pitch rows sum to the city MINUS untracked, not plus (2026-08-23)
+
+`cityPnl.ts:196` — a city's `gross` is `mappedDpp + membership`, and `mappedDpp` **excludes**
+unmapped fields. The pitch list renders **all** fields, mapped and not. So:
+
+```
+pitchSum = gross + untracked        →        gross = pitchSum − untracked
+```
+
+Houston, Aug 2026: pitches $14,591 − untracked $126 = **$14,464**, the city figure. Written the
+other way round it passed on six of seven cities, because only Houston carries any untracked
+revenue at all — an assertion that reconciles by having nothing to reconcile.

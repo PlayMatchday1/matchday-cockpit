@@ -293,17 +293,18 @@ function CityCard({ k, maxRev, open, onToggle }: { k: CityPnl; maxRev: number; o
         <div><dt>&minus; Overhead</dt><dd className={styles.cost}>{usdNeg(k.overheadTotal)}</dd></div>
       </dl>
       {open && (
-        <div className={styles.mpitches}>
+        <div className={styles.mpitches} data-testid="citypnl-mobile-expansion">
           <p className={styles.subhdText}>{k.city} · by pitch</p>
           {k.fields.map((f) => (
-            <div key={f.venue} className={styles.mpitch}>
+            <div key={f.venue} className={styles.mpitch} data-testid="citypnl-mobile-pitch">
               <span className={styles.ven}>{f.venue}</span>
               <span className={styles.vmeta}>{pitchMeta(f)}</span>
               <dl className={styles.chain}>
                 <div><dt>DPP rev</dt><dd>{usd(f.dppRev)}</dd></div>
                 <div><dt>+ Member rev <i className={styles.alloc}>alloc</i></dt>
                   <dd className={f.memberRev == null ? styles.na : ""}>{f.memberRev == null ? "—" : usd(f.memberRev)}</dd></div>
-                <div className={styles.chainSum}><dt>= Total rev</dt><dd>{usd(f.totalRev)}</dd></div>
+                <div className={styles.chainSum}><dt>= Total rev</dt>
+                  <dd data-testid="citypnl-mobile-pitch-rev">{usd(f.totalRev)}</dd></div>
                 <div><dt>Field cost</dt>
                   <dd className={f.cost == null ? styles.na : styles.cost}>{f.cost == null ? "—" : usdNeg(f.cost)}</dd></div>
                 <div className={styles.chainSum}><dt>= Field net</dt>
@@ -315,6 +316,15 @@ function CityCard({ k, maxRev, open, onToggle }: { k: CityPnl; maxRev: number; o
               </dl>
             </div>
           ))}
+          {/* THE UNTRACKED NOTE IS PART OF THE CONTENT, not desktop chrome — without it the pitch
+              rows simply do not add up to the city figure above them, and the reader is left to
+              wonder which number is wrong. */}
+          {k.untracked > 0 && (
+            <p className={styles.gapNote} data-testid="citypnl-mobile-untracked">
+              <b>{usd(k.untracked)} of DPP is untracked</b> — it sits at pitches with no cost basis
+              on file, so it is held out of DPP rev and Field net rather than counted at $0.
+            </p>
+          )}
           <OverheadMakeup k={k} />
         </div>
       )}

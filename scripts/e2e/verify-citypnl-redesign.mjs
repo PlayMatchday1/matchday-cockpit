@@ -204,8 +204,10 @@ for (const W of [1440, 1120]) {
       const m = t.replace(/[,\s]/g, "").match(/\$(\d+)/);
       return m ? Number(m[1]) : 0;
     });
-    eq(`  the pitch rows sum to the city revenue (${pitchSum} + ${untracked} vs ${rows[0].rev})`,
-      Math.abs(pitchSum + untracked - money(rows[0].rev)) <= 2, true);
+    // MINUS, for the reason spelled out in the phone block: the pitch list carries the unmapped
+    // fields that the city's gross deliberately holds out.
+    eq(`  the pitch rows sum to the city revenue (${pitchSum} − ${untracked} vs ${rows[0].rev})`,
+      Math.abs(pitchSum - untracked - money(rows[0].rev)) <= 2, true);
     await page.click(`[data-testid="citypnl-row"][data-city="${first}"]`);
     await page.waitForTimeout(200);
     eq("  …and it closes again", await page.locator('[data-testid="citypnl-expansion"]').count(), 0);
@@ -260,6 +262,100 @@ for (const [W, H] of [[393, 852], [320, 700]]) {
   });
   eq("  control — the tab bar and a last card both exist", clear != null, true);
   eq(`the last card clears the tab bar (${clear?.last} <= ${clear?.bar})`, clear.last <= clear.bar + 1, true);
+
+
+  // ── THE CARD EXPANSION ──────────────────────────────────────────────────────────────────────
+  // Same content as desktop, so the risk here is LAYOUT rather than arithmetic — the desktop pitch
+  // table has six columns and a phone has none to spare. Unverified is how that breaks quietly.
+  console.log("\n── the card expansion ──");
+  {
+    // POSITIVE CONTROL FIRST: closed cards show no pitch rows, so "present after tapping" cannot
+    // pass on a page that renders them all the time.
+    eq("  control — a collapsed card shows no pitch rows",
+      await page.locator('[data-testid="citypnl-mobile-pitch"]').count(), 0);
+
+    const first = await page.evaluate(() =>
+      document.querySelector('[data-testid="citypnl-card"]')?.getAttribute("data-city"));
+    eq("  control — there is a card to open", first != null, true);
+    await page.click(`[data-testid="citypnl-card"][data-city="${first}"] [data-testid="citypnl-card-head"]`);
+    await page.waitForSelector('[data-testid="citypnl-mobile-expansion"]', { timeout: 20000 });
+    await page.waitForTimeout(300);
+
+    const x = await page.evaluate(() => {
+      const pitches = [...document.querySelectorAll('[data-testid="citypnl-mobile-pitch"]')];
+      const card = document.querySelector('[data-testid="citypnl-card"]');
+      const untracked = document.querySelector('[data-testid="citypnl-mobile-untracked"]')?.textContent ?? "";
+      const um = untracked.replace(/[,\s]/g, "").match(/\$(\d+)/);
+      return {
+        n: pitches.length,
+        revs: pitches.map((p) => p.querySelector('[data-testid="citypnl-mobile-pitch-rev"]')?.textContent),
+        cardRev: card?.querySelector('[data-testid="citypnl-card-rev"]')?.textContent,
+        untracked: um ? Number(um[1]) : 0,
+        // READABLE: nothing under 11px, and no pitch block wider than the card that holds it.
+        minFont: Math.min(...pitches.map((p) => parseFloat(getComputedStyle(p).fontSize))),
+        overflowing: pitches.filter((p) => p.scrollWidth > p.clientWidth + 1).length,
+        widest: Math.max(...pitches.map((p) => Math.round(p.getBoundingClientRect().right))),
+        overhead: !!document.querySelector('[data-testid="citypnl-overhead"]'),
+        docW: document.documentElement.scrollWidth, inner: window.innerWidth,
+      };
+    });
+    eq("tapping a card expands it and the pitch rows are present", x.n > 0, true);
+    eq("  …and readable — nothing under 11px", x.minFont >= 11, true);
+    eq("  …with no pitch block overflowing its card", x.overflowing, 0);
+    eq("  …and the overhead makeup is there too", x.overhead, true);
+
+    // THE LIKELY FAILURE: six columns of pitch detail on a 320px phone.
+    eq("no horizontal scroll while expanded", x.docW <= x.inner, true);
+    eq(`  …and nothing extends past the viewport (${x.widest} <= ${W})`, x.widest <= W, true);
+
+    /* THE SAME ARITHMETIC AS DESKTOP — ON EVERY CARD, not just the first.
+     * Asserting only the first card passed while the untracked note was DELETED, because Austin
+     * happens to carry no untracked revenue. The note is exactly what makes the sum reconcile for
+     * the cities that do, so the assertion has to reach one of them to mean anything. */
+    const cities = await page.evaluate(() =>
+      [...document.querySelectorAll('[data-testid="citypnl-card"]')].map((c) => c.getAttribute("data-city")));
+    let withUntracked = 0;
+    for (const city of cities) {
+      const sel = `[data-testid="citypnl-card"][data-city="${city}"]`;
+      const alreadyOpen = await page.locator(`${sel} [data-testid="citypnl-mobile-expansion"]`).count();
+      if (!alreadyOpen) {
+        await page.click(`${sel} [data-testid="citypnl-card-head"]`);
+        await page.waitForTimeout(180);
+      }
+      const c = await page.evaluate((s2) => {
+        const card = document.querySelector(s2);
+        const revs = [...card.querySelectorAll('[data-testid="citypnl-mobile-pitch-rev"]')].map((e) => e.textContent);
+        const un = card.querySelector('[data-testid="citypnl-mobile-untracked"]')?.textContent ?? "";
+        const um = un.replace(/[,\s]/g, "").match(/\$(\d+)/);
+        return { revs, untracked: um ? Number(um[1]) : 0,
+          rev: card.querySelector('[data-testid="citypnl-card-rev"]')?.textContent };
+      }, sel);
+      if (c.untracked > 0) withUntracked += 1;
+      /* THE IDENTITY IS MINUS, NOT PLUS, and I had it backwards in both places.
+       * cityPnl.ts:196 — gross = mappedDpp + membership, and mappedDpp EXCLUDES unmapped fields.
+       * The pitch list renders ALL fields, mapped and not. So pitchSum = gross + untracked, which
+       * means gross = pitchSum − untracked. Houston: 14,591 − 126 = 14,465 against 14,464.
+       * The `+` version passed everywhere untracked was 0, which is six cities out of seven. */
+      const sum = c.revs.reduce((a, t) => a + (money(t) ?? 0), 0);
+      eq(`  ${city}: pitches ${sum} − untracked ${c.untracked} = ${c.rev}`,
+        Math.abs(sum - c.untracked - money(c.rev)) <= 2, true);
+      await page.click(`${sel} [data-testid="citypnl-card-head"]`);
+      await page.waitForTimeout(120);
+    }
+    // THE CONTROL FOR THE UNTRACKED NOTE ITSELF. If no city carries any, the note is unexercised
+    // and this run has NOT proven it — said out loud rather than left to look covered.
+    if (withUntracked === 0) {
+      bad("  the untracked note is exercised by at least one city", "no city has untracked revenue in this period — the note is UNPROVEN by this run");
+    } else {
+      ok(`  the untracked note is exercised by ${withUntracked} city(ies)`);
+    }
+
+    // THE LOOP ABOVE CLOSES EACH CARD AS IT GOES, so the page must end with none open. A trailing
+    // click here re-opened Austin and then asserted it was shut — the assertion was right and the
+    // step before it was wrong.
+    eq("  every card is closed again afterwards",
+      await page.locator('[data-testid="citypnl-mobile-pitch"]').count(), 0);
+  }
 
   await closeContext(ctx);
 }
