@@ -287,6 +287,37 @@ function spanOf(periods: FinancePeriod[], anchorPeriod: FinancePeriod, now: Date
     `${periods[0].label} – ${periods[periods.length - 1].label}`, anchorPeriod.key, now);
 }
 
+// ── THE MATCH PANEL'S OWN WINDOW ───────────────────────────────────────────────────────────────
+//
+// The Match panel is a BROWSE-EVERYTHING table and does not share the header's window. The header
+// compares the selected period against the prior three (comparisonSpan) because comparison is its
+// job; inheriting that made "All time" on the Match panel mean "the last four months" — 20.6% of
+// the record — with nothing on screen saying so.
+//
+// TWO WINDOWS, and the second is opt-in:
+//   ytd  — Jan 1 of the current year to today. DEFAULT. Measured at 2.07s against the 2.75s the
+//          old span-inherited default already cost, so it is wider AND faster (the concurrency
+//          rise in mdapiMatchesRead pays for it).
+//   all  — the whole record, back to RECORD_STARTS. ~14 quarters and ~232k registration rows;
+//          costs ~15s, so it is never automatic — the operator asks for it.
+//
+// `all` DELIBERATELY EXCEEDS what useFinancePeriodData can mount (a fixed four quarter loaders).
+// That is why the caller keeps the FINANCE tables on the ytd window and swaps only the
+// REGISTRATIONS: a match outside the loaded quarters still gets its revenue, spots and promos —
+// those come from its own rows — but its field cost is null, and the band reports the shortfall
+// rather than treating the gap as $0.
+export type MatchWindowKind = "ytd" | "all";
+
+export function matchPanelPeriod(kind: MatchWindowKind, now: Date): FinancePeriod {
+  const today = midnight(now);
+  const start = kind === "all"
+    ? new Date(FLOOR_YEAR, FLOOR_MONTH_INDEX, 1)
+    : new Date(Math.max(new Date(now.getFullYear(), 0, 1).getTime(),
+                        new Date(FLOOR_YEAR, FLOOR_MONTH_INDEX, 1).getTime()));
+  const label = kind === "all" ? `All time (from ${RECORD_STARTS})` : `${now.getFullYear()} to date`;
+  return build("year", today, start, today, label, kind, now);
+}
+
 // ── MATCH-ROW RANGES ───────────────────────────────────────────────────────────────────────────
 // The from/to bounds a component passes to useMatchRangeData. Dates are LOCAL calendar dates,
 // which is the right frame: mdapi_matches.start_date is local wall clock, and the fetch filters on

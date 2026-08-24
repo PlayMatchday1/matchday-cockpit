@@ -22,9 +22,12 @@ import { supabase } from "@/lib/supabase";
 import { useFinancePeriodData } from "@/lib/useFinancePeriodData";
 import { useMatchRangeData } from "@/lib/useMatchData";
 import { useFinancePeriod } from "@/lib/financePeriodContext";
-import { comparisonSpan, matchRange, projectMonthEnd } from "@/lib/financePeriod";
 import {
-  buildFieldMonths, buildMatchRows, byCity, byField, canonCity,
+  comparisonSpan, matchRange, matchPanelPeriod, projectMonthEnd,
+  type MatchWindowKind,
+} from "@/lib/financePeriod";
+import {
+  buildFieldCostSlots, buildFieldMonths, buildMatchRows, byCity, byField, canonCity, hasKickedOff,
   COST_BASIS_LABEL, type FieldMonth, type MatchRow,
 } from "@/lib/fieldEconomics";
 import { cityMembershipRevenueFor, CITY_DISPLAY_ORDER, type Q2Month } from "@/lib/financeStats";
@@ -91,6 +94,54 @@ export default function RevenueSection() {
     [data, matchRegistrations, fieldRows, windows],
   );
 
+  /* ── THE MATCH PANEL'S OWN WINDOW ──────────────────────────────────────────────────────────
+   * The panel does NOT inherit `span`. The header compares four periods because comparison is
+   * its job; the Match panel is a browse-everything table, and inheriting the comparison window
+   * made its "All time" preset mean "the last four months" — 20.6% of the record — while saying
+   * the opposite. City and Field views are unaffected and stay on `span` below.
+   *
+   * THE FINANCE TABLES STAY ON THE YTD WINDOW IN BOTH MODES. useFinancePeriodData mounts a fixed
+   * four quarter loaders (hooks cannot be conditional) and all-time is fourteen quarters, so the
+   * all-time mode widens the REGISTRATIONS only. A match outside the loaded quarters keeps its
+   * own revenue, spots and promos — those are summed from its own rows — and gets a NULL field
+   * cost, which the band reports as coverage rather than averaging in as free. */
+  const [matchWindow, setMatchWindow] = useState<MatchWindowKind>("ytd");
+  const mPeriod = useMemo(() => matchPanelPeriod(matchWindow, now), [matchWindow, now]);
+  const mCostPeriod = useMemo(() => matchPanelPeriod("ytd", now), [now]);
+  const { data: mData, loading: mCostLoading } = useFinancePeriodData(mCostPeriod);
+  /* EMPTY BOUNDS ARE THE ALL-TIME KEY. fetchJoinedMatchPlayers treats "no fromDate and no
+   * toDate" as the unfiltered whole-table path (count-then-fan-out at 8), and useMatchRangeData
+   * caches it under "r|||" — distinct from every windowed key, fetched once per session. */
+  const mBounds = useMemo(
+    () => (matchWindow === "all"
+      ? { fromDate: "", toDate: "" }
+      : matchRange(mPeriod.start, mPeriod.end)),
+    [matchWindow, mPeriod],
+  );
+  const { rows: mRegs, loading: mLoading, error: mError } = useMatchRangeData(mBounds.fromDate, mBounds.toDate);
+  /* THE PANEL GATES ON ITS OWN LOADERS, and the section does not gate on the panel's.
+   *
+   * The section-level gate (below) waits on the SPAN's loaders. It cannot also wait on these:
+   * the all-time pull is a deliberate ~20s and blanking the City and Field views for it would be
+   * a worse lie than the one this fixes. But rendering the band against half-merged data is not
+   * an option either — captured twice in a row on the same view, Field cost read $208,704 and
+   * then $219,434 as the third quarter's schedule landed. So the panel shows that it is still
+   * loading rather than printing a figure that is about to change under the reader. */
+  const mBusy = mLoading || (mCostLoading && !mData);
+  const mCostSlots = useMemo(
+    () => (mData ? buildFieldCostSlots(mData, mPeriod.months) : []),
+    [mData, mPeriod.months],
+  );
+  const panelRows = useMemo(
+    () => (mData ? buildMatchRows(mData, mRegs, mCostSlots, windows) : []),
+    [mData, mRegs, mCostSlots, windows],
+  );
+  /* The panel owns its filters, so the section-level Export cannot know what is on screen. It
+   * reports what it is showing here rather than the header exporting a different row set — which
+   * is what it did before, off `shownMatches` and the deleted thirteen-select state. */
+  const panelShownRef = useRef<MatchRow[]>([]);
+  const onPanelShown = useCallback((rows: MatchRow[]) => { panelShownRef.current = rows; }, []);
+
   // Filters apply to every grain and to the chart, so what the chart shows is what the table
   // adds up to. A filtered chart that silently stayed national would be the worse lie.
   const shownFields = useMemo(
@@ -108,11 +159,6 @@ export default function RevenueSection() {
   //
   // Scoped to Match View only — City and Field views keep the chips and the Field dropdown, which
   // the mockup drops entirely and which would be a real regression to lose.
-  const [mf, setMf] = useState<Record<string, string>>({});
-  const setMF = (k: string, v: string) => setMf((m) => ({ ...m, [k]: v }));
-  const clearMatchFilters = () => setMf({});
-  const matchFiltersOn = Object.values(mf).some((v) => v && v !== "all");
-
   const shownMatchesBase = useMemo(
     () => matchRows.filter(
       (r) => (cityFilter === "all" || r.city === canonCity(cityFilter)) &&
@@ -120,24 +166,6 @@ export default function RevenueSection() {
     ),
     [matchRows, cityFilter],
   );
-
-  const HOUR = (d: Date) => `${((d.getHours() + 11) % 12) + 1}${d.getHours() < 12 ? "am" : "pm"}`;
-  const dayName = (d: Date) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
-  const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  const shownMatches = useMemo(() => shownMatchesBase.filter((r) => {
-    const eq = (k: string, v: string) => !mf[k] || mf[k] === "all" || mf[k] === v;
-    return eq("date", ymd(r.start)) && eq("month", r.month) && eq("week", String(r.week))
-      && eq("weekday", dayName(r.start)) && eq("city", r.city) && eq("location", r.location)
-      && eq("hour", HOUR(r.start)) && eq("match", String(r.matchApiId))
-      && eq("members", String(r.memberSpots)) && eq("free", String(r.freeSpots))
-      && eq("dpps", String(r.dppSpots)) && eq("spots", String(r.totalSpots))
-      && eq("dpprev", String(Math.round(r.dppRevenue)));
-  }), [shownMatchesBase, mf]);
-
-  // Options come from the rows ALREADY narrowed by the chips, so the panel never offers a value
-  // that would return nothing.
-  const opts = (get: (r: MatchRow) => string) =>
-    [...new Set(shownMatchesBase.map(get))].filter(Boolean).sort();
 
   // Membership is a city fact, not a pitch fact, so the field filter cannot narrow it. When one
   // is applied the membership series is withheld rather than shown unnarrowed next to a narrowed
@@ -332,11 +360,20 @@ export default function RevenueSection() {
         : grain === "field" ? (n === 1 ? "field" : "fields")
         : (n === 1 ? "match" : "matches");
     if (grain === "match") {
-      /* THE TOGGLE COUNTS WHAT MATCH VIEW HAS TO WORK WITH; MATCH VIEW COUNTS WHAT IT IS SHOWING.
-       * They answer different questions and both are on screen, so neither is a second copy of the
-       * other — this one sizes the dataset, the context line under the band states the selection.
-       * The old "N of M" here read off the deleted select grid and would now always say N = M. */
-      return `${matchRows.length} ${noun(matchRows.length)}`;
+      /* THE HEADER COUNTS WHAT MATCH VIEW HAS TO WORK WITH; MATCH VIEW COUNTS WHAT IT IS SHOWING.
+       * They answer different questions and both are on screen, so neither is a second copy of
+       * the other — this one sizes the dataset, the context line under the band states the
+       * selection and names the window.
+       *
+       * panelRows, NOT matchRows: the panel has had its own window since it stopped inheriting
+       * the comparison span, and sizing it off the span's rows would print a number from a
+       * different dataset than the one below it.
+       *
+       * COMPLETED ONLY, through the SAME predicate the panel uses. A count on this page must not
+       * include matches that have not kicked off — which is the rule the band, the table and this
+       * line now share rather than each deciding for itself. */
+      const done = panelRows.filter((r) => hasKickedOff(r, now.getTime())).length;
+      return `${done} ${noun(done)}`;
     }
     const n = (grain === "city" ? byCity(shownFields) : byField(shownFields)).size;
     if (grain === "field" && cityFilter !== "all") {
@@ -344,7 +381,7 @@ export default function RevenueSection() {
       return `${n} of ${all} ${noun(all)}`;
     }
     return `${n} ${noun(n)}`;
-  }, [grain, shownFields, shownMatches, shownMatchesBase, cityFilter, fieldRows]);
+  }, [grain, shownFields, panelRows, cityFilter, fieldRows, now]);
 
   const anchorPoint = series.find((p) => p.key === period.key) ?? { month: period.label, key: period.key, dpp: 0, membership: 0 };
   // THE KPI CARDS READ GROSS TOO — they sat on the same roster-derived figure as the headline.
@@ -464,7 +501,7 @@ export default function RevenueSection() {
    *                  Field therefore starts at All. */
   const changeGrain = (next: Grain) => {
     if (next === grain) return;
-    if (next === "city") { setCityFilter("all"); setMf({}); }
+    if (next === "city") { setCityFilter("all"); }
     else if (next === "match") {
       /* THE CITY STAYS PUT AND MATCH VIEW READS IT. It used to be moved into the thirteen-select
        * grid's own City while cityFilter was cleared; that grid is gone, and Match View takes the
@@ -481,9 +518,9 @@ export default function RevenueSection() {
 
   function exportTable() {
     if (grain === "match") {
-      downloadCsv(`matchday-revenue-matches-${period.key}.csv`, [
+      downloadCsv(`matchday-revenue-matches-${mPeriod.key}.csv`, [
         ["Date", "Month", "Week", "Weekday", "City", "Location", "Hour", "Match", "Members Code", "Free Code", "DPP's", "Total Spots", "DPP Revenue", "Field Cost"],
-        ...shownMatches.map((r) => [
+        ...panelShownRef.current.map((r) => [
           dateLabel(r.start), r.month, r.week, WEEKDAY[r.start.getDay()], r.city, r.location,
           hourLabel(r.start), 1, r.memberSpots, r.freeSpots, r.dppSpots, r.totalSpots,
           r.dppRevenue.toFixed(2), r.fieldCost == null ? "" : r.fieldCost.toFixed(2),
@@ -736,8 +773,14 @@ export default function RevenueSection() {
             moved: MATCH duplicated Kick-off, and the others are the lens and table columns. */}
         {grain === "match" ? (
           <MatchView
-            rows={matchRows}
+            rows={panelRows}
             initialCity={cityFilter === "all" ? undefined : canonCity(cityFilter)}
+            windowKind={matchWindow}
+            windowLabel={mPeriod.label}
+            loading={mBusy}
+            error={mError}
+            onLoadAllHistory={() => setMatchWindow("all")}
+            onShown={onPanelShown}
           />
         ) : (
           <GroupTable rows={shownFields} matchRows={shownMatchesBase} grain={grain}

@@ -46,6 +46,7 @@ import {
   type MembershipWindowsByUserId,
 } from "./mdapiMatchesRead";
 import { isFakePlayerEmail } from "./mdapiFakePlayer";
+import { matchStartMs } from "./matchTime";
 
 // City comparison is canonical on BOTH sides. normalizeCity returns null for a name that is
 // already cockpit-canonical ("Dallas" is a value, not a key), so the `?? c` fallback is
@@ -248,6 +249,56 @@ export type FieldMonth = {
   costPerMatch: number | null;
 };
 
+/* WHAT buildMatchRows ACTUALLY NEEDS FROM A FieldMonth — the venue-month's identity and its
+ * per-match cost, and nothing else. FieldMonth satisfies this structurally, so the existing
+ * callers keep passing FieldMonth[] unchanged.
+ *
+ * THIS EXISTS BECAUSE OF COMPLEXITY, not tidiness. buildFieldMonths runs venuePartnerRevenueFor
+ * and privateRentalFor per group per month, each a pass over every registration. That is fine at
+ * four months, and it is ~285M iterations at all-time scale (≈30 groups × 41 months × 232k rows)
+ * — enough to lock the tab. The Match panel needs none of those figures: a match's revenue is
+ * summed from its OWN registrations in buildMatchRows. So the all-time path builds this instead,
+ * which touches only the schedule and the cost tables. */
+export type FieldCostSlot = {
+  key: string;
+  field: string;
+  city: string;
+  month: Q2Month;
+  venueIds: number[];
+  matches: number;
+  costPerMatch: number | null;
+};
+
+/* The venue-month cost index, WITHOUT the revenue passes. `months` may run far wider than the
+ * quarters actually loaded into `data`; for a month with no schedule rows groupMatchCount is 0
+ * and costPerMatch comes back NULL — never 0. That null is what the Match panel's band reads to
+ * report how many of its rows have a known field cost, rather than averaging a gap as free. */
+export function buildFieldCostSlots(
+  data: FinanceData,
+  months: Q2Month[],
+  mode: CostMode = "per_match",
+): FieldCostSlot[] {
+  const out: FieldCostSlot[] = [];
+  for (const g of groupVenues(data.venues)) {
+    if (isCityHidden(g.city)) continue;
+    const ids = g.legs.map((l) => l.id);
+    for (const month of months) {
+      const cost = groupCost(data, g, month, mode).amount;
+      const matches = groupMatchCount(data, g, month);
+      out.push({
+        key: `g-${g.legs[0].id}`,
+        field: g.displayName,
+        city: canonCity(g.city),
+        month,
+        venueIds: ids,
+        matches,
+        costPerMatch: cost == null ? null : matches > 0 ? cost / matches : null,
+      });
+    }
+  }
+  return out;
+}
+
 export function buildFieldMonths(
   data: FinanceData,
   matchRegistrations: JoinedMatchPlayerRow[],
@@ -335,7 +386,27 @@ export type MatchRow = {
    * matchAllocatedMemberRevenueFor already implements (financeStats.ts:1865) and cityPnl uses one
    * grain up. Derived, never looked up: there is no membership row carrying a venue. */
   memberRevenue: number;
+  /* THE MATCH'S TRUE UTC INSTANT (ms), from mdapi_matches.start_date_utc via matchStartMs.
+   * `start` above is WALL CLOCK wearing a fake +00:00 — comparing it against Date.now() runs
+   * 4-5h early and reports tonight's not-yet-played matches as finished. That exact bug has
+   * shipped three times (see mdapiWallClockGuard.finance-test.ts), so the has-it-happened
+   * question is answered from this field and never from `start`.
+   * Null when upstream has not populated start_date_utc — such a row is treated as NOT kicked
+   * off, because an unknown instant is not evidence that a match was played. */
+  startUtcMs: number | null;
 };
+
+/* HAS THIS MATCH KICKED OFF? THE ONE PREDICATE, used by the Match panel's band, its table and the
+ * header count above it. Three call sites agreeing by coincidence is how the four-month window
+ * and the "all time" label came to disagree in the first place.
+ *
+ * It reads startUtcMs (the true instant) and NEVER `start`, which is venue-local wall clock
+ * wearing a fake +00:00 — comparing that against a real now runs 4-5h early and reports tonight's
+ * matches as played. A NULL instant is not past: upstream has not populated start_date_utc, and
+ * an unknown time is not evidence a match happened. */
+export function hasKickedOff(m: Pick<MatchRow, "startUtcMs">, nowMs: number): boolean {
+  return m.startUtcMs != null && m.startUtcMs <= nowMs;
+}
 
 // ISO-8601 week: weeks start Monday and week 1 is the one containing the first Thursday.
 export function isoWeek(d: Date): number {
@@ -349,12 +420,12 @@ export function isoWeek(d: Date): number {
 export function buildMatchRows(
   data: FinanceData,
   matchRegistrations: JoinedMatchPlayerRow[],
-  fieldRows: FieldMonth[],
+  fieldRows: FieldCostSlot[],
   windows: MembershipWindowsByUserId,
 ): MatchRow[] {
   // venue id → the field row it belongs to, per month, so each match picks up its own field's
   // allocated cost rather than a venue-level constant.
-  const groupOfVenue = new Map<number, FieldMonth[]>();
+  const groupOfVenue = new Map<number, FieldCostSlot[]>();
   for (const r of fieldRows) {
     for (const id of r.venueIds) {
       const a = groupOfVenue.get(id);
@@ -392,6 +463,7 @@ export function buildMatchRows(
         promos: 0,
         memberRevenue: 0,
         fieldCost: fm.costPerMatch,
+        startUtcMs: matchStartMs(r.matchStartUtcIso, null),
       };
       acc.set(r.matchApiId, row);
     }

@@ -20,9 +20,10 @@
 //      so they change what the numbers are ABOUT. Revenue, profit and the head tile follow.
 //      FIELD COST DOES NOT — a lens on revenue must never move cost. Nor do promo redemptions.
 
-import { useMemo, useState } from "react";
-import type { MatchRow } from "@/lib/fieldEconomics";
+import { useEffect, useMemo, useState } from "react";
+import { hasKickedOff, type MatchRow } from "@/lib/fieldEconomics";
 import { fmtMoney, fmtInt } from "@/components/growth/format";
+import { RECORD_STARTS } from "@/lib/financePeriod";
 import s from "./financeSection.module.css";
 
 type LensKey = "all" | "member" | "dpp" | "free";
@@ -117,17 +118,25 @@ const SORT: Partial<Record<SelKey, (a: string, b: string) => number>> = {
   },
 };
 
+/* THE LAST PRESET'S LABEL IS NOT A CONSTANT. Clearing the date range shows everything LOADED,
+ * which is the whole record only after the operator has loaded it — so the button says "All
+ * loaded" until then and "All time" afterwards. It read "All time" unconditionally against a
+ * four-month window, which is the defect this panel was opened to fix: a control that answers a
+ * question it was never given the data for. */
 const PRESETS: [string, string, number | null][] = [
   ["14", "Last 2 weeks", 14],
   ["30", "Last 30 days", 30],
   ["90", "Last 90 days", 90],
-  ["all", "All time", null],
+  ["all", "All loaded", null],
 ];
 
 type Filters = { from: string; to: string; preset: string } & Record<SelKey, string>;
 const EMPTY: Filters = { from: "", to: "", preset: "all", month: "", weekof: "", dow: "", city: "", field: "", hour: "" };
 
-export default function MatchView({ rows, initialCity }: {
+export default function MatchView({
+  rows, initialCity, windowKind = "ytd", windowLabel, loading = false, error = null,
+  onLoadAllHistory, onShown, nowMs: nowMsProp,
+}: {
   rows: MatchRow[];
   /* A CITY CARRIED IN FROM FIELD VIEW LANDS IN THIS VIEW'S OWN CITY SELECT, rather than being
    * applied to the rows before they arrive. Filtering them upstream left the selection INVISIBLE
@@ -135,9 +144,50 @@ export default function MatchView({ rows, initialCity }: {
    * the same invisible-state fault the breakdown card was rebuilt to remove. Owned here, it shows
    * as a chip with an ×, exactly like a city picked in this view. */
   initialCity?: string;
+  /* Which window the rows came from. "ytd" is the default and is NOT the whole record; "all"
+   * means load-all-history has run and every preset below can finally mean what it says. */
+  windowKind?: "ytd" | "all";
+  /* Printed beside the row count. The window a table was built from is not derivable from the
+   * table — 1,419 rows look identical whether they are the year or the century. */
+  windowLabel?: string;
+  loading?: boolean;
+  /* A LOAD THAT FAILED MUST NOT READ AS A LOAD THAT FOUND NOTHING. Both render an empty table,
+   * and only one of them means "there were no matches" — so the failure is stated on the panel
+   * rather than swallowed into a zero. */
+  error?: string | null;
+  onLoadAllHistory?: () => void;
+  /* The rows currently on screen, reported up so the section-level Export sends what the
+   * operator is looking at rather than its own separately-filtered set. */
+  onShown?: (rows: MatchRow[]) => void;
+  /* Injectable clock. Whether a match has kicked off is a function of NOW, so a test that cannot
+   * set it can only assert on rows that are safely in the past and never on the boundary. */
+  nowMs?: number;
 }) {
   const [f, setF] = useState<Filters>(() => (initialCity ? { ...EMPTY, city: initialCity } : EMPTY));
   const [lens, setLens] = useState<LensKey>("all");
+  /* UPCOMING MATCHES ARE OFF BY DEFAULT and were never meant to be in the figures at all. On
+   * 24 Aug the table was topped by 29 and 30 Aug — two spots sold, field cost already allocated,
+   * profit deeply negative — and those rows dragged MATCHES, AVG REVENUE, AVG COST, MARGIN and
+   * PROFIT down with them. A match that has not kicked off has not finished selling. */
+  const [includeUpcoming, setIncludeUpcoming] = useState(false);
+
+  /* HAS THIS MATCH KICKED OFF? start_date is venue-LOCAL wall clock wearing a fake +00:00;
+   * comparing it against a real instant runs 4-5h early and reports tonight's matches as played.
+   * That bug has shipped three times, so MatchRow carries startUtcMs (true instant, from
+   * start_date_utc via matchStartMs) and this is the only comparison made.
+   *
+   * A NULL INSTANT IS NOT PAST. Upstream has not populated start_date_utc for that row, and an
+   * unknown time is not evidence a match happened — it stays out of the figures. */
+  const nowMs = nowMsProp ?? Date.now();
+  const kickedOff = (m: MatchRow) => hasKickedOff(m, nowMs);
+  const upcomingCount = useMemo(() => rows.filter((m) => !kickedOff(m)).length, [rows, nowMs]);
+
+  /* THE BASE the selects and the table both work from, so an option's count is the number of
+   * rows choosing it actually shows. */
+  const base = useMemo(
+    () => (includeUpcoming ? rows : rows.filter(kickedOff)),
+    [rows, includeUpcoming, nowMs],
+  );
 
   /** Does this match survive the filters, ignoring the ones the cascade says to skip? */
   const passes = useMemo(() => (m: MatchRow, skip: SelKey | null): boolean => {
@@ -151,12 +201,14 @@ export default function MatchView({ rows, initialCity }: {
     return true;
   }, [f]);
 
-  const shown = useMemo(() => rows.filter((m) => passes(m, null)), [rows, passes]);
+  const shown = useMemo(() => base.filter((m) => passes(m, null)), [base, passes]);
+
+  useEffect(() => { onShown?.(shown); }, [shown, onShown]);
 
   /** Options for one select, each with the count you get by choosing it. */
   const optionsFor = (k: SelKey) => {
     const seen = new Map<string, number>();
-    for (const m of rows) if (passes(m, k)) {
+    for (const m of base) if (passes(m, k)) {
       const v = VALUE[k](m);
       if (v) seen.set(v, (seen.get(v) ?? 0) + 1);
     }
@@ -192,31 +244,48 @@ export default function MatchView({ rows, initialCity }: {
   // ── THE BAND ────────────────────────────────────────────────────────────────────────────────
   const L = LENS[lens];
   const st = useMemo(() => {
-    const n = shown.length;
-    const rev = shown.reduce((a, m) => a + L.rev(m), 0);
-    const cost = shown.reduce((a, m) => a + (m.fieldCost ?? 0), 0);
-    const heads = shown.reduce((a, m) => a + L.heads(m), 0);
-    const spots = shown.reduce((a, m) => a + m.totalSpots, 0);
-    const promos = shown.reduce((a, m) => a + m.promos, 0);
-    const promoMatches = shown.filter((m) => m.promos > 0).length;
+    /* THE BAND MEASURES COMPLETED MATCHES ONLY, whatever the table is showing. Turning upcoming
+     * rows on is a request to SEE what is coming, never a claim that it has been earned — so
+     * this line, not `shown`, is what every figure below is built from. */
+    const done = shown.filter(kickedOff);
+    const n = done.length;
+    const rev = done.reduce((a, m) => a + L.rev(m), 0);
+    /* COST IS ONLY SUMMED OVER ROWS THAT HAVE ONE. `fieldCost ?? 0` treated a venue-month with no
+     * cost basis on file as free, which understates cost and overstates profit — the exact
+     * 0-for-unknown the rest of this file refuses. Outside the loaded finance quarters (every
+     * all-time row) that is the normal case, not an edge one. */
+    const costed = done.filter((m) => m.fieldCost != null);
+    const cost = costed.reduce((a, m) => a + (m.fieldCost ?? 0), 0);
+    const costedRev = costed.reduce((a, m) => a + L.rev(m), 0);
+    const heads = done.reduce((a, m) => a + L.heads(m), 0);
+    const spots = done.reduce((a, m) => a + m.totalSpots, 0);
+    const promos = done.reduce((a, m) => a + m.promos, 0);
+    const promoMatches = done.filter((m) => m.promos > 0).length;
     /* PROFIT IS DERIVED FROM WHAT THE OTHER TWO TILES PRINT, not from the unrounded pair.
      * Revenue and cost are each rounded to the dollar for display; a profit rounded independently
      * lands a dollar away from the subtraction a reader does on screen — measured: 271,844 −
      * 110,724 printed 161,121. The band has to reconcile on its face, so the rounding happens
      * once and profit and margin are built on top of it. */
-    const revShown = Math.round(rev);
+    /* PROFIT AND MARGIN RECONCILE OVER THE COSTED ROWS, and the tiles say so when that is a
+     * smaller set than the band's match count. Rounding once and deriving profit from the two
+     * printed figures is kept from the original: a profit rounded independently lands a dollar
+     * off the subtraction a reader does on screen. */
+    const costedRevShown = Math.round(costedRev);
     const costShown = Math.round(cost);
-    const profitShown = revShown - costShown;
+    const profitShown = costedRevShown - costShown;
+    const nCosted = costed.length;
     return {
-      n, rev, cost, heads, spots, promos, promoMatches,
-      profit: profitShown,
+      n, rev, cost, heads, spots, promos, promoMatches, nCosted,
+      profit: nCosted > 0 ? profitShown : null,
       // EVERY ONE OF THESE IS A REAL ZERO CHECK. n === 0 gives null, which renders a dash.
       avgRev: n > 0 ? rev / n : null,
-      avgCost: n > 0 ? cost / n : null,
-      margin: revShown !== 0 ? (profitShown / revShown) * 100 : null,
+      avgCost: nCosted > 0 ? cost / nCosted : null,
+      margin: nCosted > 0 && costedRevShown !== 0 ? (profitShown / costedRevShown) * 100 : null,
       perMatch: n > 0 ? heads / n : null,
     };
-  }, [shown, L]);
+  }, [shown, L, nowMs]);
+  // Partial cost coverage is the thing the sub-lines have to disclose; full coverage says nothing.
+  const partialCost = st.nCosted < st.n;
 
   const chips: { k: string; label: string; clear: () => void }[] = [];
   if (f.from || f.to) {
@@ -230,19 +299,40 @@ export default function MatchView({ rows, initialCity }: {
     if (f[k]) chips.push({ k, label: LABEL[k](f[k]), clear: () => setSel(k, "") });
   }
 
-  const context = shown.length === rows.length && chips.length === 0
-    ? `Showing all ${fmtInt(rows.length)} matches on record.`
-    : `Showing ${fmtInt(shown.length)} ${shown.length === 1 ? "match" : "matches"}${
-        chips.length ? ` — ${chips.map((c) => c.label).join(", ")}.` : "."}`;
+  /* THE WINDOW IS PART OF THE COUNT. "Showing all 1,419 matches on record" was false by two
+   * orders of magnitude — they were the four months the header happened to have loaded. The
+   * count now always names the window it was drawn from, and only says "on record" once the
+   * whole record is actually in memory. */
+  const scope = windowKind === "all"
+    ? "the full record"
+    : windowLabel ?? "the loaded window";
+  const filtered = chips.length > 0 || shown.length !== base.length;
+  const context = `Showing ${fmtInt(shown.length)} ${shown.length === 1 ? "match" : "matches"}`
+    + (filtered ? ` of ${fmtInt(base.length)}` : "")
+    + ` — ${scope}`
+    + (chips.length ? `, ${chips.map((c) => c.label).join(", ")}` : "")
+    + (includeUpcoming
+        ? `, upcoming included`
+        : upcomingCount > 0 ? `, ${fmtInt(upcomingCount)} upcoming hidden` : "")
+    + ".";
 
   const TILES: { key: string; label: string; value: string; sub?: string; neg?: boolean }[] = [
-    { key: "matches", label: "Matches", value: fmtInt(st.n), sub: st.n ? `${fmtInt(st.spots)} spots` : undefined },
+    { key: "matches", label: "Matches", value: fmtInt(st.n),
+      sub: st.n ? `${fmtInt(st.spots)} spots · completed only` : "completed only" },
     { key: "revenue", label: "Total revenue", value: fmtMoney(st.rev) },
     { key: "avgrev", label: "Avg revenue", value: st.avgRev == null ? "—" : fmtMoney(st.avgRev), sub: "per match" },
-    { key: "cost", label: "Field cost", value: fmtMoney(st.cost) },
-    { key: "avgcost", label: "Avg cost", value: st.avgCost == null ? "—" : fmtMoney(st.avgCost), sub: "per match" },
-    { key: "profit", label: "Profit", value: fmtMoney(st.profit), neg: st.profit < 0 },
-    { key: "margin", label: "Margin", value: st.margin == null ? "—" : `${st.margin.toFixed(1)}%`, neg: st.margin != null && st.margin < 0 },
+    // THE COSTED DENOMINATOR IS NAMED ON EVERY TILE THAT USES IT. Without it a reader subtracts
+    // Field cost from Total revenue, gets a different profit, and has no way to see why.
+    { key: "cost", label: "Field cost", value: fmtMoney(st.cost),
+      sub: partialCost ? `${fmtInt(st.nCosted)} of ${fmtInt(st.n)} costed` : undefined },
+    { key: "avgcost", label: "Avg cost", value: st.avgCost == null ? "—" : fmtMoney(st.avgCost),
+      sub: partialCost ? `per costed match` : "per match" },
+    { key: "profit", label: "Profit", value: st.profit == null ? "—" : fmtMoney(st.profit),
+      sub: partialCost ? `on ${fmtInt(st.nCosted)} costed` : undefined,
+      neg: st.profit != null && st.profit < 0 },
+    { key: "margin", label: "Margin", value: st.margin == null ? "—" : `${st.margin.toFixed(1)}%`,
+      sub: partialCost ? `on ${fmtInt(st.nCosted)} costed` : undefined,
+      neg: st.margin != null && st.margin < 0 },
     { key: "heads", label: L.noun, value: fmtInt(st.heads), sub: st.perMatch == null ? undefined : `${st.perMatch.toFixed(1)} per match` },
     // NOT A LENS FIGURE. A redemption is a redemption whichever way the match is counted.
     { key: "promos", label: "Promo codes", value: fmtInt(st.promos), sub: st.n ? `on ${fmtInt(st.promoMatches)} of ${fmtInt(st.n)} matches` : undefined },
@@ -257,7 +347,8 @@ export default function MatchView({ rows, initialCity }: {
           <div className={s.seg} role="group" aria-label="Date range preset">
             {PRESETS.map(([p, label, days]) => (
               <button key={p} type="button" data-testid={`mv-preset-${p}`}
-                className={f.preset === p ? s.on : ""} onClick={() => setPreset(p, days)}>{label}</button>
+                className={f.preset === p ? s.on : ""} onClick={() => setPreset(p, days)}>
+                {p === "all" && windowKind === "all" ? "All time" : label}</button>
             ))}
           </div>
           <label className={s.mvDate}>From
@@ -297,6 +388,39 @@ export default function MatchView({ rows, initialCity }: {
           </div>
         </div>
 
+        {/* ── ROWS — upcoming, and the record ─────────────────────────────────────────────────
+            THE TOGGLE ADDS ROWS TO THE TABLE, NOT TO THE FIGURES. Its label says so, because a
+            toggle that silently moved every average would be the defect it was built to fix. */}
+        <div className={s.mvRow}>
+          <span className={s.ctrlLab}>Rows</span>
+          <label className={s.mvToggle}>
+            <input type="checkbox" data-testid="mv-include-upcoming"
+              checked={includeUpcoming} disabled={upcomingCount === 0}
+              onChange={(e) => setIncludeUpcoming(e.target.checked)} />
+            <span>
+              Include upcoming
+              {upcomingCount > 0 ? ` (${fmtInt(upcomingCount)})` : " (none loaded)"}
+              {includeUpcoming ? " — listed, never counted" : ""}
+            </span>
+          </label>
+
+          <span className={s.brkGrow} />
+
+          {/* ONE DELIBERATE 15-SECOND LOAD, and it says so before it is pressed rather than
+              after. Once it has run the button is gone and the presets above mean what they
+              say — there is nothing left to load. */}
+          {windowKind === "all" ? (
+            <span className={s.mvNote} data-testid="mv-window-note">
+              Full record loaded — {RECORD_STARTS} to today.
+            </span>
+          ) : (
+            <button type="button" className={s.btn} data-testid="mv-load-all"
+              disabled={loading || !onLoadAllHistory} onClick={() => onLoadAllHistory?.()}>
+              {loading ? "Loading…" : "Load all history (~15s)"}
+            </button>
+          )}
+        </div>
+
         {/* ── CHIPS. A range set by a preset is invisible once you scroll past the buttons. ── */}
         {chips.length > 0 && (
           <div className={s.mvChips} data-testid="mv-chips">
@@ -313,8 +437,10 @@ export default function MatchView({ rows, initialCity }: {
         )}
       </div>
 
-      {/* ── THE BAND ─────────────────────────────────────────────────────────────────────── */}
-      <div className={s.mvBand} data-testid="mv-band">
+      {/* ── THE BAND ───────────────────────────────────────────────────────────────────────
+          HIDDEN WHILE LOADING, not rendered with the numbers it has so far. A tile that changes
+          after it has been read is worse than a tile that was not there yet. */}
+      <div className={s.mvBand} data-testid="mv-band" hidden={loading}>
         {TILES.map((t) => (
           <div key={t.key} className={`${s.mvTile}${t.neg ? " " + s.mvNeg : ""}`} data-testid={`mv-tile-${t.key}`}>
             <span className={s.mvTileLab}>{t.label}</span>
@@ -325,10 +451,18 @@ export default function MatchView({ rows, initialCity }: {
           </div>
         ))}
       </div>
-      <div className={s.mvContext} data-testid="mv-context">{context}</div>
+      {!loading && <div className={s.mvContext} data-testid="mv-context">{context}</div>}
 
       {/* ── THE EVIDENCE ─────────────────────────────────────────────────────────────────── */}
-      {shown.length === 0 ? (
+      {loading ? (
+        <div className={s.empty} data-testid="mv-loading">
+          Loading {windowKind === "all" ? "the full record" : windowLabel ?? "matches"}…
+        </div>
+      ) : error ? (
+        <div className={s.empty} data-testid="mv-error">
+          Could not load matches — {error}. The figures above are not a result; nothing was read.
+        </div>
+      ) : shown.length === 0 ? (
         <div className={s.empty} data-testid="mv-empty">No matches for this selection.</div>
       ) : (
         <div className={s.tblWrap}>
@@ -347,7 +481,11 @@ export default function MatchView({ rows, initialCity }: {
                 const cost = m.fieldCost ?? 0;
                 const profit = rev - cost;
                 return (
-                  <tr key={m.matchApiId} data-testid="mv-row" data-mid={m.matchApiId}>
+                  <tr key={m.matchApiId} data-testid="mv-row" data-mid={m.matchApiId}
+                      /* The row's LOCAL calendar date, machine-readable. The visible cell is
+                       * "Aug 30" with no year, which cannot be compared against today across a
+                       * multi-year window — and the future-match rule has to be assertable. */
+                      data-d={ymd(m.start)}>
                     <td className="l">{shortDate(ymd(m.start))}</td>
                     <td className="l">{dowOf(m.start)}</td>
                     <td className="l">{hourOf(m.start)}</td>

@@ -399,6 +399,18 @@
 .mvDate input { font: inherit; font-size: 12.5px; text-transform: none; letter-spacing: 0;
   font-weight: 500; padding: 5px 8px; border: 1px solid var(--cream-line, #e6e2d8);
   border-radius: 8px; background: #fff; color: var(--deep-green, #12352b); }
+/* ROWS row — the upcoming toggle and the load-all-history note. Sized to sit on the same band as
+   .seg buttons (38px) so the row does not jump height when the note replaces the button. */
+.mvToggle { display: inline-flex; align-items: center; gap: 7px; min-height: 38px;
+  font-size: 12.5px; font-weight: 600; color: var(--deep-green, #12352b); cursor: pointer; }
+.mvToggle input { width: 15px; height: 15px; accent-color: var(--deep-green, #12352b);
+  cursor: pointer; }
+.mvToggle input:disabled { cursor: not-allowed; }
+.mvToggle input:disabled + span { opacity: .5; }
+.mvNote { display: inline-flex; align-items: center; min-height: 38px; font-size: 12px;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--deep-green, #12352b) 60%, transparent); }
+
 .mvSelects { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
 @media (max-width: 1100px) { .mvSelects { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 640px)  { .mvSelects { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

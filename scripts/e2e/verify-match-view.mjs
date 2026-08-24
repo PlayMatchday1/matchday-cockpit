@@ -50,7 +50,7 @@ const read = () => page.evaluate(() => {
   const rows = [...document.querySelectorAll('[data-testid="mv-row"]')].map((tr) => {
     const c = [...tr.querySelectorAll("td")].map((x) => x.textContent.trim());
     return {
-      date: c[0], day: c[1], hour: c[2], city: c[3], field: c[4],
+      date: c[0], iso: tr.getAttribute("data-d") ?? "", mid: tr.getAttribute("data-mid") ?? "", day: c[1], hour: c[2], city: c[3], field: c[4],
       spots: num(c[5]), members: num(c[6]), dpp: num(c[7]), free: num(c[8]), promos: num(c[9]),
       rev: num(c[10]), cost: c[11] === "—" ? null : num(c[11]), profit: num(c[12]),
       cells: c.length,
@@ -62,6 +62,14 @@ const read = () => page.evaluate(() => {
     headers: document.querySelectorAll('[data-testid="mv-table"] thead th').length,
     empty: !!document.querySelector('[data-testid="mv-empty"]'),
     chips: [...document.querySelectorAll('[data-testid="mv-chip"]')].map((c) => c.getAttribute("data-chip")),
+    upcoming: (() => {
+      const el = document.querySelector('[data-testid="mv-include-upcoming"]');
+      return el ? { checked: el.checked, disabled: el.disabled, label: el.parentElement?.textContent?.trim() ?? "" } : null;
+    })(),
+    loadAll: (() => {
+      const el = document.querySelector('[data-testid="mv-load-all"]');
+      return el ? { text: el.textContent.trim(), disabled: el.disabled } : null;
+    })(),
     sideways: document.documentElement.scrollWidth > window.innerWidth + 1,
   };
 });
@@ -77,7 +85,14 @@ const checkBand = async (label) => {
   const r = st.rows;
   const n = r.length;
   const rev = r.reduce((a, x) => a + x.rev, 0);
-  const cost = r.reduce((a, x) => a + (x.cost ?? 0), 0);
+  /* COST, PROFIT AND AVG COST NOW RUN ON THE ROWS THAT HAVE A COST, not on every row with the
+   * missing ones counted as free. `?? 0` made a venue-month with no cost basis on file look like
+   * a $0 one; outside the loaded finance quarters that is most of them. The tiles disclose the
+   * denominator in their sub-line, and these three sums mirror it. */
+  const costedRows = r.filter((x) => x.cost != null);
+  const nCosted = costedRows.length;
+  const cost = costedRows.reduce((a, x) => a + x.cost, 0);
+  const costedRev = costedRows.reduce((a, x) => a + x.rev, 0);
   const spots = r.reduce((a, x) => a + x.spots, 0);
   const promos = r.reduce((a, x) => a + x.promos, 0);
   const promoMatches = r.filter((x) => x.promos > 0).length;
@@ -92,20 +107,31 @@ const checkBand = async (label) => {
   eq(`${label}: Matches tile equals the rows rendered`, money(st.tiles.matches.raw), n);
   eq(`${label}: Total revenue equals the rows' revenue (±$${tol})`,
      Math.abs(money(st.tiles.revenue.raw) - rev) <= tol, true);
-  eq(`${label}: Field cost equals the rows' cost (±$${tol})`,
+  eq(`${label}: Field cost equals the COSTED rows' cost (±$${tol})`,
      Math.abs(money(st.tiles.cost.raw) - cost) <= tol, true);
-  // PROFIT = REVENUE − COST, at every state. This is the identity that must never drift, and it is
-  // checked on the TILES themselves — no row rounding is involved, so it holds to the dollar.
-  eq(`${label}: Profit = revenue − cost, to the dollar`,
-     Math.round(money(st.tiles.profit.raw)),
-     Math.round(money(st.tiles.revenue.raw) - money(st.tiles.cost.raw)));
+  /* PROFIT = COSTED REVENUE − COST. The identity still must never drift; what changed is which
+   * revenue it reconciles against. Subtracting the costed rows' cost from EVERY row's revenue
+   * would print a profit belonging to no set of matches, which is why the tile names its
+   * denominator whenever the two sets differ. */
+  eq(`${label}: Profit = costed revenue − cost, to the dollar (±$${tol})`,
+     nCosted > 0 ? Math.abs(money(st.tiles.profit.raw) - (costedRev - cost)) <= tol : money(st.tiles.profit.raw) === null,
+     true);
   eq(`${label}: Promo codes equals the rows' redemptions`, money(st.tiles.promos.raw), promos);
   eq(`${label}:   …and its sub names the matches carrying them`,
      n > 0 ? st.tiles.promos.sub : "", n > 0 ? `on ${promoMatches.toLocaleString()} of ${n.toLocaleString()} matches` : "");
   if (n > 0) {
     eq(`${label}: Avg revenue = revenue ÷ matches`, Math.round(money(st.tiles.avgrev.raw)), Math.round(rev / n));
-    eq(`${label}: Avg cost = cost ÷ matches`, Math.round(money(st.tiles.avgcost.raw)), Math.round(cost / n));
-    eq(`${label}: Matches sub counts the spots`, st.tiles.matches.sub, `${spots.toLocaleString()} spots`);
+    eq(`${label}: Avg cost = cost ÷ COSTED matches`,
+       Math.round(money(st.tiles.avgcost.raw)), nCosted > 0 ? Math.round(cost / nCosted) : null);
+    /* "· completed only" IS PART OF THE SUB-LINE NOW. The band measures matches that have kicked
+     * off whatever the table is listing, and a figure that excludes rows has to say so where it
+     * is read, not in a comment. */
+    eq(`${label}: Matches sub counts the spots and names the basis`,
+       st.tiles.matches.sub, `${spots.toLocaleString()} spots · completed only`);
+    if (nCosted < n) {
+      eq(`${label}:   …and partial cost coverage is disclosed on the cost tile`,
+         st.tiles.cost.sub, `${nCosted.toLocaleString()} of ${n.toLocaleString()} costed`);
+    }
   }
   eq(`${label}: header count equals every row's cell count`,
      [...new Set(r.map((x) => x.cells))], n > 0 ? [st.headers] : []);
@@ -117,8 +143,65 @@ const checkBand = async (label) => {
 // ── 1. THE BAND, ON LOAD ──────────────────────────────────────────────────────────────────────
 console.log("\n── state 1: unfiltered ──");
 const base = await checkBand("unfiltered");
-eq("the context line says all matches are shown", /^Showing all [\d,]+ matches on record\.$/.test(base.context), true);
+/* THE CONTEXT LINE NAMES ITS WINDOW. It used to read "Showing all 1,419 matches on record" —
+ * false by two orders of magnitude, because those were the four months the header's comparison
+ * span happened to have loaded. The panel now has its own year-to-date window and says which
+ * one it drew from; "on record" is reserved for after load-all-history has run. */
+eq("the context line states the count and names the window",
+   /^Showing [\d,]+ matches — \d{4} to date(, [^.]*)?\.$/.test(base.context), true);
 eq("  control — and there are matches to show", base.rows.length > 0, true);
+eq("  …and it does NOT claim to be the whole record", /on record/.test(base.context), false);
+
+// ── 1b. FUTURE MATCHES ARE OUT OF THE FIGURES AND OFF THE TABLE ───────────────────────────────
+//
+// THE ABSENCE ASSERTION IS PAIRED WITH THE TOGGLE AS ITS POSITIVE CONTROL. "No row is dated after
+// today" passes just as well on a table that failed to render, so it is worth nothing until the
+// same comparison is proven to FIND future rows — which is exactly what switching the toggle on
+// does, in the same run, against the same selector and the same date parsing.
+console.log("\n── the future-match rule ──");
+{
+  const today = new Date();
+  const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const after = (rows) => rows.filter((x) => x.iso && x.iso > iso);
+
+  eq("every rendered row carries its ISO date", base.rows.every((x) => /^\d{4}-\d{2}-\d{2}$/.test(x.iso)), true);
+  eq("no match dated after today is listed by default", after(base.rows).length, 0);
+
+  const t = base.upcoming;
+  eq("the include-upcoming toggle is present and off", t && t.checked === false, true);
+  eq("  …and its label says the figures do not move", /listed, never counted|Include upcoming/.test(t?.label ?? ""), true);
+
+  if (t && !t.disabled) {
+    await page.click('[data-testid="mv-include-upcoming"]');
+    await page.waitForTimeout(700);
+    const on = await read();
+    // THE POSITIVE CONTROL: the same filter, the same parsing, now finding rows.
+    eq("  POSITIVE CONTROL — with upcoming on, future-dated rows DO appear", after(on.rows).length > 0, true);
+    /* THE BOUNDARY IS KICK-OFF, NOT THE CALENDAR DAY. Measured here: the toggle added 29 rows of
+     * which only 15 were dated after today — the other 14 are LATER TODAY and have correctly not
+     * kicked off yet. So the invariant is "every row the toggle adds is dated today or later",
+     * not "…is dated after today", which is what this assertion first (wrongly) said. */
+    const seen = new Set(base.rows.map((x) => x.mid));
+    const added = on.rows.filter((x) => !seen.has(x.mid));
+    eq("  …and the toggle only ever ADDS rows", on.rows.length - base.rows.length, added.length);
+    eq("  …and every added row is dated today or later",
+       added.length > 0 && added.every((x) => x.iso >= iso), true);
+    // THE FIGURES MUST NOT HAVE MOVED. This is the whole point of the toggle being a row control.
+    eq("  …while the Matches tile is unchanged", on.tiles.matches.raw, base.tiles.matches.raw);
+    eq("  …and Total revenue is unchanged", on.tiles.revenue.raw, base.tiles.revenue.raw);
+    eq("  …and Avg revenue is unchanged", on.tiles.avgrev.raw, base.tiles.avgrev.raw);
+    eq("  …and Avg cost is unchanged", on.tiles.avgcost.raw, base.tiles.avgcost.raw);
+    eq("  …and Margin is unchanged", on.tiles.margin.raw, base.tiles.margin.raw);
+    eq("  …and Profit is unchanged", on.tiles.profit.raw, base.tiles.profit.raw);
+    await page.click('[data-testid="mv-include-upcoming"]');
+    await page.waitForTimeout(700);
+  } else {
+    console.log("     (no upcoming matches loaded — toggle disabled, control not exercised)");
+  }
+
+  // The load-all-history action is offered, states its cost, and is not pretending to be loaded.
+  eq("load-all-history is offered and names its cost", /~15s/.test(base.loadAll?.text ?? ""), true);
+}
 
 // ── 2. EVERY OPTION CARRIES ITS COUNT, NONE IS ZERO, NONE IS DISABLED ─────────────────────────
 console.log("\n── the options ──");
@@ -266,7 +349,8 @@ console.log("\n── when ──");
   eq("clearing the date chip restores every match", restored.rows.length, all);
   const preset = await page.evaluate(() =>
     [...document.querySelectorAll('[data-testid^="mv-preset-"]')].find((b) => /__on|on/.test(b.className))?.getAttribute("data-testid"));
-  eq("  …and returns the preset to All time", preset, "mv-preset-all");
+  // The preset reads "All loaded" until the whole record is in memory, "All time" after.
+eq("  …and returns the preset to the all-loaded default", preset, "mv-preset-all");
 }
 
 // ── 8. THE BOUNDARY: ZERO MATCHES ─────────────────────────────────────────────────────────────

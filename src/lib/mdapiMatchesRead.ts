@@ -27,7 +27,7 @@
 // excluded.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { selectAll } from "./supabasePagination";
+import { selectAll, selectAllParallel } from "./supabasePagination";
 import { cityFromAbbr } from "./cityMap";
 import { canonicalVenueName } from "./venueResolver";
 import { isFakePlayerRow } from "./mdapiFakePlayer";
@@ -42,10 +42,22 @@ const PLAYERS_COLS =
 const IN_CHUNK = 200;
 
 // Max in-flight chunk requests when fan-out is parallel (filtered path
-// in fetchJoinedMatchPlayers). 4 keeps us well under any plausible
-// PostgREST/PgBouncer concurrency budget while still capturing most of
-// the wall-clock win versus the old sequential loop.
-const CHUNK_CONCURRENCY = 4;
+// in fetchJoinedMatchPlayers).
+//
+// RAISED 4 -> 12 to pay for the Match panel's year-to-date default. Measured
+// end-to-end (matches select + every player chunk), same machine, same data:
+//
+//   window                       conc 4     conc 12
+//   4-month span (the old default)  2.75s      1.41s
+//   year-to-date (3,549 matches)    4.58s      2.07s
+//   rolling 12 months               —          2.69s
+//
+// So YTD at 12 is FASTER than the four-month window was at 4. Chunk size
+// stays 200: widening to 400/500 was slower at every concurrency tried
+// (400x12 = 2.72s, 500x16 = 3.18s) because fewer, fatter chunks page
+// sequentially inside selectAll and lose more than the round trips save.
+// 12 is still far under any plausible PostgREST/PgBouncer budget.
+const CHUNK_CONCURRENCY = 12;
 
 // Minimal worker-pool fan-out. Caps concurrency at `limit` and rejects
 // on the first failure (matching the sequential loop's behavior — caller
@@ -626,16 +638,35 @@ export async function fetchJoinedMatchPlayers(
   );
   const players: PlayerSelect[] = [];
   if (!hasFilter) {
-    const all = await selectAll<PlayerSelect>(() =>
-      supabase
-        .from("mdapi_match_players")
-        .select(PLAYERS_COLS)
-        // Drop phantom registrations soft-deleted by the player tombstone
-        // pass (dropped from a match's roster upstream).
-        .is("deleted_at", null)
-        .order("api_id"),
+    // WHOLE-TABLE PULL — the Match panel's load-all-history action is the
+    // only caller that reaches here with no bounds. Sequential paging costs
+    // 63.7s over 232 pages; count-then-fan-out at 8 costs 15.0s for the same
+    // 231,748 rows. See selectAllParallel's header for what a concurrent
+    // soft-delete does to a fixed offset list, and why a browse table can
+    // wear that risk when a write path could not.
+    const all = await selectAllParallel<PlayerSelect>(
+      () =>
+        supabase
+          .from("mdapi_match_players")
+          .select(PLAYERS_COLS)
+          // Drop phantom registrations soft-deleted by the player tombstone
+          // pass (dropped from a match's roster upstream).
+          .is("deleted_at", null)
+          .order("api_id"),
+      () =>
+        supabase
+          .from("mdapi_match_players")
+          .select("api_id", { count: "exact", head: true })
+          .is("deleted_at", null),
+      8,
     );
-    players.push(...all);
+    /* NOT players.push(...all). SPREADING AN ARRAY IS PASSING IT AS ARGUMENTS, and the whole-table
+     * pull is ~232k of them — well past the engine's argument limit, so this line threw
+     * "Maximum call stack size exceeded" the first time the unbounded path was ever taken. The
+     * chunked branch below survives only because each chunk is ≤200 matches' worth. Measured in
+     * the browser: the fetch completed, the count was right, and the panel then rendered an empty
+     * table — the failure looked exactly like "no matches". */
+    for (const row of all) players.push(row);
   } else {
     const matchIds = [...matchById.keys()];
     const chunks: number[][] = [];
