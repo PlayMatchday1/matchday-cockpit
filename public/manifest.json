@@ -2,7 +2,7 @@
   "name": "MD Clubhouse",
   "short_name": "MD Clubhouse",
   "description": "Internal operator dashboard for MatchDay",
-  "start_url": "/match-ops/player-chats",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",

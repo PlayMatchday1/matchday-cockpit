@@ -66,7 +66,10 @@ const pageForRoute = (route: string): string | null => {
   const seg = route.replace(/^\/+/, "");
   for (const group of ["(internal)/", ""]) {
     for (const ext of ["tsx", "ts"]) {
-      const p = `src/app/${group}${seg}/page.${ext}`;
+      // COLLAPSE THE DOUBLE SLASH. start_url "/" leaves seg empty, which built
+      // "src/app/(internal)//page.tsx" — the OS resolves it, so existsSync said true and the
+      // assertion then failed on the STRING. Normalise so the path reported is the path checked.
+      const p = `src/app/${group}${seg}/page.${ext}`.replace(/\/{2,}/g, "/");
       if (existsSync(p)) return p;
     }
   }
@@ -85,9 +88,23 @@ const captures = (source: string, route: string): boolean => {
 };
 const hit = redirectSources.filter((s) => captures(s, NOTIF_ROUTE ?? ""));
 is("no next.config.ts redirect captures the notification route", hit, []);
-// the same check must hold for the PWA start_url
+/* THE SAME CHECK MUST HOLD FOR THE PWA start_url — but it is NOT the same ROUTE any more, and
+ * pinning it to the notification route's page was the assertion that made this suite go red when
+ * the manifest was fixed.
+ *
+ * ITEMISED — AN EXPECTATION CHANGE, NOT A SELECTOR EDIT. start_url was "/match-ops/player-chats",
+ * which no city manager can open: matchOpsReadGate refuses the tier, so every city manager launched
+ * the installed app onto a 403. It is now "/", which renders the shell and lets firstAllowedPath
+ * resolve a landing per account. The invariant that matters is unchanged — the launch route must
+ * resolve to a real page and must not be swallowed by a redirect. What is dropped is the claim
+ * that it is the SAME page as the push deep link; those are two routes with two jobs, and the
+ * notification route above still pins its own exact path.
+ *
+ * scripts/pwa-launch-door-test.ts asserts the part this file cannot: that the landing start_url
+ * produces is one the SERVER will actually serve, for every city-manager row. */
 const START = (JSON.parse(readFileSync("public/manifest.json", "utf8")) as { start_url: string }).start_url;
-is("manifest start_url resolves to a real page", pageForRoute(START), "src/app/(internal)/match-ops/player-chats/page.tsx");
+const startPage = pageForRoute(START);
+is(`manifest start_url ${JSON.stringify(START)} resolves to a real page (${startPage ?? "NONE"})`, startPage !== null, true);
 is("no next.config.ts redirect captures the manifest start_url", redirectSources.filter((s) => captures(s, START)), []);
 // prove the check has teeth: the OLD value must be caught by it
 is("(control) the old '/chats' WOULD have been caught by this same check", redirectSources.filter((s) => captures(s, "/chats")).length > 0, true);

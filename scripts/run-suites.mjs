@@ -71,6 +71,10 @@ const NODE_SUITES = [
   // and no browser suite can see it — 0140 reset the column on every row, so the interesting rows
   // do not exist to log in as.
   "scripts/growth-access-test.ts",
+  // THE PWA's LAUNCH ROUTE. verify-city-confinement drives /city/* directly and passes; an
+  // installed app opens manifest.json's start_url instead, which was a Match Ops page no city
+  // manager can open. The suite tested the rooms and nothing tested the door.
+  "scripts/pwa-launch-door-test.ts",
   "scripts/mutation-tests.ts",
   "scripts/prod-guard-test.ts",
   "scripts/stage-denylist-test.ts",

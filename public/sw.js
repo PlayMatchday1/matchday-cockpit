@@ -12,7 +12,13 @@
 // Users get the new assets on their NEXT page load after the SW
 // activates (we skipWaiting so activation is immediate).
 
-const CACHE_VERSION = "v46";
+// v47 — /manifest.json is in PRECACHE_URLS and served cache-first, so a manifest edit reaches an
+// installed client only when this bumps. v47 carries start_url "/" (was /match-ops/player-chats,
+// a page no city manager can open). NOTE for whoever ships the next manifest change: on iOS the
+// start_url is captured into the home-screen shortcut AT INSTALL, so an already-installed icon
+// keeps the old launch route until the app is removed and re-added. Bumping this is necessary and
+// not sufficient.
+const CACHE_VERSION = "v47";
 const CACHE_NAME = `matchday-static-${CACHE_VERSION}`;
 
 // Static assets to precache on install. Same-origin, GET-safe,
