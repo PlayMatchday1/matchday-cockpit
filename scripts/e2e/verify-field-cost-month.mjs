@@ -312,7 +312,10 @@ console.log("\n── the rate column states only rates the cost used ──");
   /* 29 ROWS, NOT 30. There are 30 venue GROUPS, but El Paso is a paused market and isCityHidden
    * drops Galatzan Park before the table is built, so it never renders. The unchanged count is
    * therefore 22 — the figure that says this change is contained. */
-  eq("the table renders 29 rows (30 groups, El Paso hidden)", rows.length, 29);
+  /* ITEMISED — AN EXPECTATION CHANGE, NOT A SELECTOR EDIT. 29 -> 30 (31 groups, El Paso hidden):
+   * migration 0142 created the San Antonio venue "New Braunfels" for MatchDay field 1618, so the
+   * ledger has one more row. Predicted before 0142 was applied. */
+  eq("the table renders 30 rows (31 groups, El Paso hidden)", rows.length, 30);
 
   const combined = rows.filter((r) => r.rates > 1);
   eq("exactly two rows state more than one rate", combined.map((r) => r.name).sort(),
@@ -351,7 +354,8 @@ console.log("\n── the rate column states only rates the cost used ──");
    * The containment claim is the second number, so it is computed as "one rate AND no keyed
    * marker" rather than assumed to be the same set. */
   const untouched = rows.filter((r) => r.rates === 1 && !r.keyed);
-  eq("  …and 22 rows are untouched entirely (29 rendered − 7 changed)", untouched.length, 22);
+  // 22 -> 23, the arithmetic below the row count above: 30 rendered − 7 changed.
+  eq("  …and 23 rows are untouched entirely (30 rendered − 7 changed)", untouched.length, 23);
   eq("  …the difference being the four keyed rows that still state one rate",
     plain.length - untouched.length, 4);
 }

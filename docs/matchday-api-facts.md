@@ -1798,3 +1798,197 @@ holds `is_city_manager` — repurposing the account without checking is how this
 
 **Tally on the record**, so the drop is not mistaken for suites quietly shrinking:
 `80 passed / 5 failed` → `79 passed / 0 failed`.
+
+## A GUARD FUNCTION LOST TWO TERMS TO A create-or-replace, and nobody saw it for a month (2026-08-23)
+
+`app_users_edit_matches_guard()` has been extended six times by REPLACING ITS WHOLE BODY — 0114
+created it, then 0116, 0117, 0118, 0120 and 0122 each rewrote it. **0122's rewrite does not contain
+the two terms 0120 added.** Confirmed by reading `prosrc` on the live database, not by reading the
+files.
+
+```
+lost:  raise 'Service account (%) cannot be a CITY MANAGER'
+lost:  is_city_manager = false  =>  city_identifier := null
+```
+
+Restored by 0141. **The rule, both halves:**
+
+> **Replacing a function body you cannot read is how a guard disappears.
+> Adding a separate function is how you avoid needing to.**
+
+0140 needed a service-account block for `can_access_growth` and added `app_users_growth_guard()` as
+its **own** function with its own trigger rather than extending this one — which is why that block
+is intact, and why 0141 had one function to repair instead of two. `pg_proc.prosrc` is the only
+authority on what a function currently is; the migration files are a history of intentions.
+
+### The second term was an ESCALATION ON DEMOTION, not lost defence in depth
+
+`isConfined()` (`cityConfinement.ts:58`) keys on **`city_identifier` alone** — it never reads
+`is_city_manager`. And `canAccess()` (`useAuth.ts:163`) **grants** on that:
+
+```js
+if (isConfined(appUser)) return page === "matchops" || page === "chats";
+```
+
+It never reads `can_access_matchops` or `can_access_chats`. A city manager holds no broad flags —
+`app_users_city_manager_is_exclusive` (0124) makes that unrepresentable — so demoting one leaves both
+false, and without the cascade the stale scope keeps the row confined. **The demoted account is
+offered Match Ops and Chats, including Match Chats and Player Chats, which it did not have as a city
+manager.**
+
+**Where it stops, measured across all four server gates:** `matchOpsAuth` reads
+`can_access_matchops`; `crmAuth` reads `can_access_chats`; `/api/reviews` and `capabilityAuth` both
+go through the pure `can()`, which unblocks on confinement but still requires the flag. Every
+request behind those doors 403s. So the escalation is the **chrome** — tab, rail, page shell — and
+not data exposure. Still a real defect: `useAuth`'s own comment says the rail must not offer a door
+the server will slam, and here it did.
+
+**`can()` and `canAccess()` are NOT the same predicate**, and this is the second place they diverge —
+`canAccess()` also has no service-account term at all, so a service account holding a page flag is
+offered the tab and refused the data on every page. Both divergences are asserted in
+`scripts/growth-access-test.ts` as disagreements, so neither can be rediscovered by assuming the two
+functions agree.
+
+**Population, measured 2026-08-23:** two accounts carry `city_identifier` with `is_city_manager`
+false — `rgmstrategicventures` and `jf`, both WAW. **Neither is a demoted city manager**: both are
+the Warsaw confined tier, created that way, holding matchops and chats on purpose. So the escalation
+is LATENT, not live. It arms the moment any of the four current city managers (ATX, DFW, HOU, SATX)
+is demoted. 0141 contains **no UPDATE** — a trigger only fires on a write, so it prevents the next
+stale scope and cleans nothing that exists.
+
+### `stale_scopes` IS CORRECT (was 2, now 1). It is not a defect and must not be "fixed"
+
+0141's verdict counts rows with `is_city_manager` false and a non-empty `city_identifier`, under the
+name **`stale_scopes`**. The name is wrong and the number is right.
+
+Those two rows — `jf@playmatchday.pl` and `rgmstrategicventures@gmail.com`, both `WAW` — are the
+**CONFINED tier**, which is legitimately `is_city_manager = false` **with** a city. That combination
+is the tier's definition, not a leftover:
+
+```
+isConfined(row)             = city_identifier non-empty, and nothing else   cityConfinement.ts:58
+isCityManagerConfined(row)  = is_city_manager === true && is_admin !== true  capabilities.ts:68
+```
+
+A metric called "stale" reads as "should be zero", and the obvious remedy — null the city — is
+exactly the escalation 0143 exists to prevent: it strips the confinement and hands the account the
+whole Match Ops estate across every city. **Read it as `confined_non_managers`.** The number to
+watch is not whether it is zero; it is whether it matches the count of accounts deliberately
+provisioned as confined. **It was 2; it is now 1** — `rgmstrategicventures@gmail.com` was
+re-provisioned as a SATX city manager on 2026-08-24, leaving `jf@playmatchday.pl` as the only
+confined non-manager. Expect 1, not 2, and expect it to move again: `fin_venue_fields` and
+`app_users` both carry admin writes with no `updated_at` and no `change_log` row.
+
+### A verdict query the SQL editor hides is not a verdict
+
+0141 originally asked **two** SELECTs. The Supabase editor shows only the last result set, so running
+it returned `stale_scopes` alone and said nothing about the function body — the trap 0140's own
+comment warns about. It also expected `service_account_terms = 6`; **the answer is 5**, because the
+expectation was counted with `grep -c` over the migration FILE, which matched the copy of the literal
+inside the verdict query itself. **Derive an expected value from the thing being counted, never from
+the file that counts it.** One query, one row, and columns proving the replacement kept what was
+already there — not only that it added what was missing.
+
+
+## AN INVARIANT STATED IN A COMMENT AND NOT ASSERTED IN A TEST IS A WISH (2026-08-24)
+
+Two of them surfaced in one night. Both were written confidently, both were wrong for months, and
+both were wrong in the direction the comment promised was impossible.
+
+**1. "the rail and the gate cannot drift into disagreeing about which six."**
+`sections.tsx` filters the confined rail on `CONFINED_RAIL_KEYS.includes(s.key)`. The section's key
+is `"master"`; the list said `"master-schedule"` — the HREF spelling. They never matched, so Master
+Schedule was filtered out of every confined rail from the day it was added: six items rendered, not
+seven. `scripts/city-confinement-test.ts` asserted the list's **contents** and passed the whole
+time, because it compared the string to itself and never asked whether the string resolved to a
+section.
+
+**2. `cityTimezones`: "callers fall back to UTC display (with a '(UTC)' suffix) so the gap is
+visible rather than silently wrong."** `formatMatchTitle` returned `isUtcFallback` and **no caller
+ever read it** — grep found the identifier only inside its own file. So an unmapped city rendered a
+wrong hour with nothing on screen to say so. Warsaw showed every kickoff **two hours early** in
+Match Chats, the Match Editor, the Match Drawer, and in the `{time}` token of a Notify Players SMS.
+
+**The rule.** A comment describing a guarantee is documentation of intent, not evidence of
+behaviour. If it says two things cannot drift, a test must compare them. If it says a fallback is
+visible, a test must read what the user sees. **A described mitigation that does not exist is worse
+than none, because it stops the next person looking** — both of these were read by people working
+in the file and neither was checked.
+
+**Where the check belongs.** Prefer the invariant over the value: asserting `CONFINED_RAIL_KEYS`
+equals a literal list did not catch a key that resolved to nothing, whereas asserting every key
+resolves to a real section would have. And prefer to keep a promise in the code that makes it
+(`formatMatchTitle` now appends the suffix itself) over a promise delegated to every caller —
+callers do not read headers.
+
+## A SUITE THAT WRITES TO PRODUCTION IS A DEPLOY, NOT A TEST (2026-08-24)
+
+`scripts/e2e/verify-counts-as-regular.mjs` flipped `fin_venue_fields.counts_as_regular_play` on
+MatchDay field 22 (ATH Pearland) with the **service role**, read four pages to compare the delta,
+and restored it in a `finally`. On 2026-08-24 it **exited 2 mid-run** — a harness fault, not an
+assertion — and the `finally` never completed. **The flag stayed ON.**
+
+The cost was not the flag. It was that the flag is invisible: `fin_venue_fields` has no
+`updated_at`, and that table's writes do not reach `change_log`. So a Finance-wide categorisation
+changed, ATH Pearland's match count and cost moved across every surface, and the only trace was the
+number on the page. An investigation into a genuine Pearland defect then read the flipped flag as
+the true state, concluded the bug was already fixed, published that, and built an argument on top of
+it. **Three separate reports were wrong because a test had deployed a change.**
+
+**The principle.** A test asserts; it does not change the system under test. If a suite needs a
+different world to observe an effect, it must build that world out of fixtures, a throwaway id, or a
+pure derivation — not by editing the live one and promising to put it back.
+
+**And a `try/finally` restore is the same shape as an invariant in a comment.** The block in that
+file is headed *"PUT IT BACK, WHATEVER HAPPENED ABOVE"*. "Whatever happened above" does not cover
+the process being killed, the machine being starved, or an exit-2 in the harness — and all three
+happened in one night. A restore that only runs when the code reaches it is a wish about the happy
+path, exactly like a comment claiming two lists cannot drift. See *an invariant stated in a comment
+and not asserted in a test is a wish* above; these are two instances of one failure.
+
+**Quarantine was not sufficient on its own.** Excluding the suite from the gate still leaves
+`npm run verify:e2e:quarantine` able to fire the write, so the file also refuses to run unless an
+explicit env override is set. Two locks, because the first one has a documented bypass.
+
+## READ THE DEPLOYED COMMIT OUT OF THE SERVED BUNDLE, NOT FROM `vercel ls` (2026-08-24)
+
+`vercel ls`'s Age column has now produced a wrong conclusion three times in two sessions — twice
+reported as "Vercel has not picked up the push" when the deployment had in fact built, and the row
+being read *was* the build. `vercel inspect --json` does not help either: on these deployments
+`meta` is `{}` and `gitSource` is `null`, so the CLI cannot say what commit is live.
+
+`next.config.ts` inlines `NEXT_PUBLIC_COMMIT_SHA` from `VERCEL_GIT_COMMIT_SHA` at build time, so
+the answer is in the bundle:
+
+```
+curl -s https://matchday-clubhouse.vercel.app -o /tmp/prod.html
+for c in $(grep -oE '/_next/static/chunks/[a-zA-Z0-9._-]+\.js' /tmp/prod.html | sort -u); do
+  curl -s "https://matchday-clubhouse.vercel.app$c" | grep -oE '[0-9a-f]{40}' | sort -u
+done
+```
+
+One chunk carries it. Compare against `git ls-remote origin refs/heads/main`. That is a fact about
+what is running; the dashboard row is a fact about when a build record was created, and the two
+answer different questions.
+
+## THREE DESIGN ITEMS, FILED NOT BUILT (2026-08-24)
+
+**1. Consolidate the four city name maps onto `cityScope`.** There are four, and two of them have
+confusingly similar names: **`cityMap.ts`** (`CSV_TO_COCKPIT_CITY`, `CITY_ABBR_TO_COCKPIT`) and
+**`cityNormalization.CITY_MAP`** — different files, different shapes, different jobs. That alone
+will cost someone an hour. `api/reviews/route.ts:40-44` already records the intent: *"adding it
+there would be a SECOND place the identifier↔name mapping lives, and two copies of a mapping is how
+a filter silently starts returning nothing."* Warsaw was extended into `cityNormalization.CITY_MAP`
+rather than consolidated because the fix was urgent and consolidation touches every city; the end
+state is still one map.
+
+**2. A NOT-OURS FLAG.** It has now come up three times, and `HIDDEN_CITIES` is the wrong tool for
+all three — that flag means *paused market of ours* and deliberately never filters historical data.
+The three cases: **Warsaw**, a partner market that must resolve as a city everywhere and never
+enter a P&L; **New York City's four field IDs**, 26 matches in a market we do not operate, which
+Phase-2 auto-create would otherwise turn into four live venues; and **the Phase-2 auto-create rule**
+itself, which needs somewhere to put a city it has never heard of.
+
+**3. `isUtcFallback` styling.** The suffix is now applied in the formatter, so the gap is stated.
+A caller that wants to *style* it still can — the flag remains on the type for that reason, and is
+no longer the only thing standing between a wrong hour and silence.

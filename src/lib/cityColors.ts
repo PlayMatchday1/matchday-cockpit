@@ -25,6 +25,7 @@ export const CITY_COLORS: Record<string, string> = {
   SATX: "#be185d",  // magenta
   STL: "#0d9488",   // teal
   ELP: "#ca8a04",   // mustard
+  WAW: "#0369a1",   // steel blue — partner market, distinct from DFW's brighter blue
   [UNKNOWN_CITY]: "#94a3b8", // slate gray — distinctly "not a city"
 };
 

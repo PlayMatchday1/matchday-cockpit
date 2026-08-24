@@ -19,6 +19,7 @@
 // If it ever comes back, that is why it went.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CITY_SCOPES } from "@/lib/cityScope";
 import { supabase } from "@/lib/supabase";
 
 type Player = {
@@ -73,10 +74,10 @@ const MEM_OPTS: [string, string][] = [["any", "Any"], ["yes", "Members"], ["no",
 // The city select offers IDENTIFIERS, because that is what the server's allowlist accepts. A name
 // typed here would be refused, which is the point — the filter is a convenience, the scope is the
 // boundary, and only the server decides.
-const CITIES: [string, string][] = [
-  ["ATL", "Atlanta"], ["ATX", "Austin"], ["DFW", "Dallas / Fort Worth"], ["HOU", "Houston"],
-  ["OKC", "Oklahoma City"], ["SATX", "San Antonio"], ["STL", "St. Louis"], ["WAW", "Warsaw"],
-];
+/* DERIVED, NOT COPIED. This was a hand-written duplicate of CITY_SCOPES — a second place the
+ * identifier↔name pair lived, and the kind of copy that goes stale the day a market opens. It
+ * happened to be right about Warsaw only because someone remembered to edit both. */
+const CITIES: [string, string][] = CITY_SCOPES.map((c) => [c.identifier, c.name]);
 
 const N = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString());
 

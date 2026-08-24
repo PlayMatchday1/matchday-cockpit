@@ -15,6 +15,12 @@ const ZONE: Record<string, { label: string; westRank: number }> = {
   "America/New_York": { label: "Eastern", westRank: 0 },
   "America/Chicago": { label: "Central", westRank: 1 },
   "America/Denver": { label: "Mountain", westRank: 2 },
+  /* EAST OF THE US GRID, so the rank is NEGATIVE — the scale is "how far west", one per hour, and
+   * Central European is 6 hours east of Eastern. Without this entry zoneOfCity resolved
+   * Europe/Warsaw and then fell through to the "UTC" label on the drawer chip, and tzShift
+   * returned null so a match moved between Warsaw and a US city raised no cross-timezone warning
+   * at all. */
+  "Europe/Warsaw": { label: "Central European", westRank: -6 },
 };
 
 export function zoneOfCity(cityName: string | null | undefined): string | null {

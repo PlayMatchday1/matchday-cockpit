@@ -174,7 +174,16 @@ console.log("\n── the figures ──");
       member: n(document.querySelector('[data-testid="gt-tot-member"]')?.innerText),
     };
   });
-  eq("venues 29", f.venues, 29);
+  /* ITEMISED — AN EXPECTATION CHANGE, NOT A SELECTOR EDIT. 29 -> 30: migration 0142 mapped MatchDay
+   * field 1618 ("Zipp Family Sports Park") and created the San Antonio venue "New Braunfels" for
+   * it, so the estate has one more venue. Predicted before 0142 was applied, and this is the
+   * assertion that was named as needing to move with it.
+   *
+   * A CONSTANT HERE IS DELIBERATE and survives that: unlike the match count and the membership
+   * total below — both of which were pinned, both of which drifted on live data, and both of which
+   * are now checked relationally — the venue count only changes when someone adds or removes a
+   * venue, which is exactly the thing worth being told about. */
+  eq("venues 30", f.venues, 30);
   // WAS PINNED AT 344 AND DRIFTED TO 346 — August is a live month and matches keep landing, so a
   // constant here fails on a page that is working. The Total is now checked against the column it
   // totals, which catches a broken or mis-summed column without dating the suite.

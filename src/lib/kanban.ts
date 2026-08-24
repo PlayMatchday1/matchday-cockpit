@@ -163,6 +163,7 @@ const CITY_DISPLAY: Record<string, string> = {
   SATX: "San Antonio",
   STL: "St. Louis",
   ELP: "El Paso",
+  WAW: "Warsaw",
 };
 
 export function isKnownCity(city: string): boolean {

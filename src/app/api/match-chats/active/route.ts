@@ -201,7 +201,24 @@ export async function GET(req: Request) {
   }
 
   // ---------------- Shape responses ----------------
-  const active: MatchChatInboxRow[] = activeChatIds.map((id) => {
+  /* THE LIST MUST SHOW ONLY WHAT THE DETAIL WILL OPEN.
+   *
+   * activeChatIds comes from a Firestore collection-group query over recent messages — Firestore
+   * carries no city, so that set is UNSCOPED. The join above is scoped, but it only decided whether
+   * `match` got populated: an out-of-city chat still emitted a row with match: null. A confined
+   * viewer therefore saw every active chat in the estate, and tapping one hit
+   * /api/match-chats/[chatId], where assertMatchInScope refused it. Ninety-six rows, three
+   * openable.
+   *
+   * Filtering on activeMatchById is the same boundary the detail route applies, expressed once:
+   * a chat is listed only if its match resolved inside the city. UNCONFINED VIEWERS ARE UNCHANGED —
+   * a chat whose match has no mirror row is still shown to them with match: null, which is a real
+   * state and not a leak. */
+  const listableChatIds = auth.confinedCity
+    ? activeChatIds.filter((id) => activeMatchById.has(id))
+    : activeChatIds;
+
+  const active: MatchChatInboxRow[] = listableChatIds.map((id) => {
     const accum = activeByChat.get(id)!;
     const m = activeMatchById.get(id) ?? null;
     return {
@@ -248,14 +265,20 @@ export async function GET(req: Request) {
   // be used. Newest end-time first.
   const pastLowerMs = Date.now() - PAST_WINDOW_DAYS * 24 * 60 * 60 * 1000;
   const pastLowerIso = new Date(pastLowerMs).toISOString();
-  const pastRes = await supabase
+  let pastQ = supabase
     .from("mdapi_matches")
     .select(
       "api_id, field_title, start_date_utc, city_identifier, manager_email, is_cancelled, end_date_utc",
     )
     .gte("end_date_utc", pastLowerIso)
     .lt("end_date_utc", nowIso)
-    .neq("is_cancelled", true)
+    .neq("is_cancelled", true);
+  /* THE BOUNDARY THIS QUERY NEVER HAD. Upcoming (above) and the active join both carry it; this one
+   * did not, so a confined viewer's Past section listed every recent match in the estate — 82 rows,
+   * none of them openable. Pushed into the query, not post-filtered, so SECTION_CAP applies to the
+   * scoped set rather than trimming the estate and leaving whatever survives. */
+  if (auth.confinedCity) pastQ = pastQ.eq("city_identifier", auth.confinedCity);
+  const pastRes = await pastQ
     .order("end_date_utc", { ascending: false })
     .limit(SECTION_CAP);
   if (pastRes.error) {

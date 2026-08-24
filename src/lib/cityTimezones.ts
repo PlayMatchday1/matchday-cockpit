@@ -26,11 +26,21 @@ const CITY_TIMEZONES: Record<KnownCityCode, string> = {
   OKC: "America/Chicago",
   ATL: "America/New_York",
   ELP: "America/Denver",
+  /* THE FIRST NON-US ZONE. Warsaw is UTC+2 in summer (CEST) and UTC+1 in winter; Intl handles the
+   * switch. Until this line existed, timezoneFor("WAW") returned null and formatMatchTitle fell
+   * back to UTC — rendering every Warsaw kickoff TWO HOURS EARLY in Match Chats, the Match Editor
+   * and the Match Drawer, and into the {time} token of a Notify Players SMS.
+   *
+   * GAMEDAY OPS WAS NEVER AFFECTED and this does not change it: that board reads the wall clock
+   * straight off startDate and the abbreviation off the API payload (gamedayModel.localClock /
+   * tzAbbr), so it never converts and never consulted this map. */
+  WAW: "Europe/Warsaw",
 };
 
 // Returns the IANA timezone for a city code, or null if unknown.
-// Callers fall back to UTC display (with a "(UTC)" suffix) so the
-// gap is visible rather than silently wrong.
+// formatMatchTitle below appends a "(UTC)" suffix to the rendered time when this returns null, so
+// the gap is visible rather than silently wrong. That suffix is applied in the formatter, not by
+// callers — it was a caller responsibility in prose for months and no caller ever honoured it.
 export function timezoneFor(cityCode: string | null | undefined): string | null {
   if (!cityCode) return null;
   const code = cityCode as KnownCityCode;
@@ -138,10 +148,21 @@ export function formatMatchTitle(opts: {
 
   const tz = timezoneFor(cityCode);
   const useZone = tz ?? "UTC";
+  /* THE "(UTC)" SUFFIX IS APPLIED HERE, NOT LEFT TO CALLERS. This header has promised since it was
+   * written that "callers fall back to UTC display (with a '(UTC)' suffix) so the gap is visible
+   * rather than silently wrong" — and NO caller ever read isUtcFallback. grep found it only inside
+   * this file. The mitigation was described and never built, so an unmapped city rendered a wrong
+   * hour with nothing on screen to say so: Warsaw showed every kickoff two hours early in Match
+   * Chats, the Match Editor, the Match Drawer, and in the {time} token of a Notify Players SMS.
+   *
+   * Putting it in the returned STRING keeps the promise for every caller, present and future,
+   * including ones that only interpolate `time` and have no place to render a flag. isUtcFallback
+   * stays on the type for callers that want to style the gap as well as state it. */
+  const time = formatTimeInZone(d, useZone);
   return {
     cityCode,
     date: formatDateInZone(d, useZone),
-    time: formatTimeInZone(d, useZone),
+    time: tz == null && time ? `${time} (UTC)` : time,
     venue,
     isUtcFallback: tz == null,
   };

@@ -37,6 +37,13 @@ const CITY_MAP: Record<string, string> = {
   stl: "STL",
   "el paso": "ELP",
   elp: "ELP",
+  /* WARSAW — a PARTNER market. It resolves as a city here so the app can answer "which city is
+   * this"; it is deliberately absent from types.CITIES and every financial list, which is a
+   * different question. Before this, normalizeCityName("Warsaw") returned null and the confinement
+   * check could not confirm Warsaw was the Warsaw operator's own city — his own matches were
+   * refused with "This account is confined to one city". */
+  warsaw: "WAW",
+  waw: "WAW",
 };
 
 // Cache so we only warn once per unmapped city per process.
@@ -78,6 +85,9 @@ export const KNOWN_CITY_CODES = [
   "SATX",
   "STL",
   "ELP",
+  // Partner market. In KNOWN_CITY_CODES so it normalizes, colors, resolves and gets a timezone —
+  // NOT in types.CITIES, so it never enters a P&L. See cityScope.ts for the identifier↔name pair.
+  "WAW",
 ] as const;
 
 export type KnownCityCode = (typeof KNOWN_CITY_CODES)[number];

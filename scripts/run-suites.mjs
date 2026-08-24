@@ -26,6 +26,13 @@ const QUARANTINE_ONLY = process.argv.includes("--quarantine"); // run ONLY the q
 const QUARANTINE = new Map([
   ["verify-cost-basis.mjs", "hardcodes live figures, drifts with data — see 2026-08-20"],
   ["verify-cost-tables.mjs", "hardcodes live figures, drifts with data — see 2026-08-20"],
+  // NOT A FLAKE — THIS ONE WRITES PRODUCTION. It flips fin_venue_fields.counts_as_regular_play on
+  // MatchDay field 22 (ATH Pearland) with the service role, reads four pages, and restores it in a
+  // finally. On 2026-08-24 it exited 2 mid-run and LEFT THE FLAG ON, which silently moved ATH
+  // Pearland's match count and cost across the estate and sent an investigation down the wrong
+  // path for an hour. Off until it is rewritten to prove the exception without mutating a live
+  // Finance flag. The suite itself also refuses to run — see its own header.
+  ["verify-counts-as-regular.mjs", "WRITES PRODUCTION (fin_venue_fields.counts_as_regular_play, field 22); left it flipped after an exit-2 on 2026-08-24 — off until rewritten without the write"],
 ]);
 
 // ── QUARANTINE DRIFT GUARD (Phase 21b item 1) ────────────────────────────────
@@ -75,6 +82,10 @@ const NODE_SUITES = [
   // installed app opens manifest.json's start_url instead, which was a Match Ops page no city
   // manager can open. The suite tested the rooms and nothing tested the door.
   "scripts/pwa-launch-door-test.ts",
+  // WARSAW — the first city that is not in types.CITIES. Nothing had ever tested one, which is how
+  // a half-registered city shipped: WAW was in CITY_SCOPES and nowhere else. Also holds the line
+  // the other way — a partner market must never appear in CITIES or CITY_DISPLAY_ORDER.
+  "scripts/warsaw-city-test.ts",
   "scripts/mutation-tests.ts",
   "scripts/prod-guard-test.ts",
   "scripts/stage-denylist-test.ts",

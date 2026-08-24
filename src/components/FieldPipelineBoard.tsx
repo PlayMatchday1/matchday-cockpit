@@ -43,6 +43,7 @@ const CITY_HUE: Record<string, string> = {
   "St. Louis": "#37aea4",
   "Oklahoma City": "#791d8c",
   "El Paso": "#7d8c2a",
+  Warsaw: "#0369a1",
 };
 const NEUTRAL_HUE = "#9aa8a1";
 const cityHue = (displayName: string) => CITY_HUE[displayName] ?? NEUTRAL_HUE;

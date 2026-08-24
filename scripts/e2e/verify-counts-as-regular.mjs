@@ -1,3 +1,25 @@
+// ⛔ DISABLED 2026-08-24 — THIS SUITE WRITES PRODUCTION AND MUST NOT RUN UNTIL IT IS REWRITTEN.
+//
+// setFlag() below issues a SERVICE-ROLE UPDATE against fin_venue_fields.counts_as_regular_play for
+// MatchDay field 22 (ATH Pearland), toggles it on to compare four pages, and restores it in a
+// finally. On 2026-08-24 the suite exited 2 mid-run — a harness fault, not an assertion — and the
+// finally never completed. The flag stayed ON, which moved ATH Pearland's match count and cost
+// across every Finance surface with NO change_log row and no updated_at to date it. An
+// investigation then read the flipped flag as the true state and spent an hour on the wrong
+// diagnosis.
+//
+// Quarantine alone was not enough: `npm run verify:e2e:quarantine` would still run it and fire the
+// write. This guard is the second lock. It is BEFORE every import that could write.
+//
+// TO REWRITE IT: prove the exception without mutating a live Finance flag — a fixture row, a
+// throwaway field id, or by asserting the pure derivation rather than driving four pages. A
+// try/finally is not a restore guarantee; it does not survive the process being killed.
+if (!process.env.ALLOW_PRODUCTION_WRITE_SUITE) {
+  console.log("⛔ verify-counts-as-regular is DISABLED — it writes production (fin_venue_fields.counts_as_regular_play, field 22).");
+  console.log("   See the header of this file. Rewrite it without the write; do not set the override to make a gate green.");
+  process.exit(1);
+}
+
 // THE PER-LINK EVENT EXCEPTION — fin_venue_fields.counts_as_regular_play (migration 0130).
 //
 // THE DEFECT IT ANSWERS. EVENT_MARKERS (venueResolver.ts:55) classifies a match as an event from

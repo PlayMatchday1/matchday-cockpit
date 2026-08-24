@@ -81,7 +81,12 @@ export const CONFINED_RAIL_KEYS: readonly string[] = [
    * Master Schedule carries Copy match and the inline editor so a new market can build its own
    * schedule. The write boundary is NOT this list — it is assertMatchInScope on the editor's save
    * and the fieldId check on create (099147a). This only decides what appears in the rail. */
-  "master-schedule",
+  /* "master", NOT "master-schedule". These are MATCH_OPS_SECTIONS keys, and that section's key is
+   * "master" while its href is /match-ops/master-schedule. The href spelling was written here and
+   * never matched, so Master Schedule has been filtered out of every confined rail since the day
+   * it was added — six items rendered, not seven. verify-confined-rail now asserts every entry in
+   * this list resolves to a real section key, which is what would have caught it. */
+  "master",
 ];
 
 export const CONFINED_ERROR =

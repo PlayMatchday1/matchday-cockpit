@@ -110,10 +110,20 @@ console.log("\n── the sentence on the User access screen ──");
   const cm = confinementSummary({ cityName: "Dallas / Fort Worth", isCityManager: true, pageCount: 3 });
   /* THE SEVENTH KEY, ASSERTED BY NAME. Master Schedule is the FIRST WRITE SURFACE a confined
    * account has — everything else it reaches is read-only — so this list changing is a thing that
-   * should require an explicit edit here. */
+   * should require an explicit edit here.
+   *
+   * ITEMISED — AN EXPECTATION CHANGE, NOT A SELECTOR EDIT. The seventh entry was
+   * "master-schedule", which is the HREF spelling; the MATCH_OPS_SECTIONS key is "master". They
+   * never matched, so sections.tsx filtered Master Schedule out of every confined rail from the day
+   * it was added — six items rendered, not seven — while this assertion passed the whole time,
+   * because it checked the STRING and never that the string resolves to a section.
+   *
+   * Asserting the contents was not enough and could not have caught it. scripts/warsaw-city-test.ts
+   * now asserts every key in this list resolves to a real MATCH_OPS_SECTIONS key, which is the
+   * check that had been stated in a comment and never written. */
   t("the confined rail is exactly these seven, in order", () =>
     assert.deepEqual([...CONFINED_RAIL_KEYS],
-      ["gameday", "player-lookup", "promos", "reviews", "match-chats", "player-chats", "master-schedule"]));
+      ["gameday", "player-lookup", "promos", "reviews", "match-chats", "player-chats", "master"]));
 
   const waw = confinementSummary({ cityName: "Warsaw", isCityManager: false, pageCount: CONFINED_RAIL_KEYS.length });
   t("a city manager is told about city manager pages", () => assert.match(cm, /city manager pages only$/));
