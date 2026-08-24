@@ -1,3 +1,27 @@
+// ⛔ DISABLED 2026-08-24 — THIS SUITE WRITES PRODUCTION AND MUST NOT RUN UNTIL IT IS REWRITTEN.
+//
+// It reads a REAL venue-month's fin_venue_cost_overrides amount, clears it through the UI, asserts
+// the cleared state, then types the value back — or, when there was no row to begin with, issues a
+// service-role DELETE against that (venue_id, month). All of it in straight-line code with NO
+// try/finally. A crash, a timeout, or a killed process anywhere between the clear and the restore
+// leaves a real cost override cleared or deleted, which changes a venue's cost for a month that may
+// already be closed.
+//
+// ON 2026-08-24 THE RESTORE COMPLETED ONLY BY LUCK: the assertion that failed (a row count moved by
+// migration 0142) sits AFTER the restore block, not before it.
+//
+// A FINALLY WOULD NOT BE ENOUGH. verify-counts-as-regular had one and still left a Finance flag
+// flipped when it exited 2 — "put it back whatever happened above" does not cover the process being
+// killed. The fix is not to restore better; it is not to write.
+//
+// TO REWRITE IT: assert the override arithmetic as a pure derivation, or drive a venue-month that
+// exists only for the test. Do not mutate a live money value to observe an effect.
+if (!process.env.ALLOW_PRODUCTION_WRITE_SUITE) {
+  console.log("⛔ verify-field-cost-month is DISABLED — it writes production (fin_venue_cost_overrides).");
+  console.log("   See the header of this file. Rewrite it without the write; do not set the override to make a gate green.");
+  process.exit(1);
+}
+
 // FIELD COSTS — ONE MONTH FIELD, AND THE WORD "OVERRIDE" IS GONE.
 //
 // WHAT CHANGED. The month cost used to be a read-only figure behind a Set/Edit button that opened a

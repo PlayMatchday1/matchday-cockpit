@@ -33,6 +33,12 @@ const QUARANTINE = new Map([
   // path for an hour. Off until it is rewritten to prove the exception without mutating a live
   // Finance flag. The suite itself also refuses to run — see its own header.
   ["verify-counts-as-regular.mjs", "WRITES PRODUCTION (fin_venue_fields.counts_as_regular_play, field 22); left it flipped after an exit-2 on 2026-08-24 — off until rewritten without the write"],
+  // ALSO A PRODUCTION WRITE, AND A WEAKER RESTORE THAN THE ONE ABOVE. It clears a REAL
+  // fin_venue_cost_overrides amount through the UI and then types it back — or DELETEs the row
+  // outright when there was none — in straight-line code with no finally at all. That is money: a
+  // cleared override changes a venue's cost for a closed month. On 2026-08-24 the restore
+  // completed only because the assertion that failed came AFTER it.
+  ["verify-field-cost-month.mjs", "WRITES PRODUCTION (fin_venue_cost_overrides — clears/deletes a real override, restores in straight-line code with NO finally); touches money and ran on every full gate — off until rewritten without the write"],
 ]);
 
 // ── QUARANTINE DRIFT GUARD (Phase 21b item 1) ────────────────────────────────

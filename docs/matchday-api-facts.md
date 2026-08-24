@@ -1921,6 +1921,26 @@ resolves to a real section would have. And prefer to keep a promise in the code 
 (`formatMatchTitle` now appends the suffix itself) over a promise delegated to every caller —
 callers do not read headers.
 
+## `match_promotion_plan` AND `fin_change_log` NEED A MARKER COLUMN (2026-08-24)
+
+`verify-match-promotion` deletes rows from both tables by **id alone** — `match_promotion_plan` by
+`match_api_id`, and its `fin_change_log` audit rows by `(table_name, row_id)`. Neither table carries
+anything that distinguishes a row a suite created from a row an operator created.
+
+That makes residue **unknowable, not merely unknown**. After a crashed run there is no query that
+separates a leftover probe from a real plan. The audit on 2026-08-24 found
+`match_promotion_plan` at 0 rows and 3 `fin_change_log` rows for that table, and **neither number
+can be judged** — 0 is consistent with clean and with a probe having deleted a real row, and the 3
+are consistent with legitimate history and with residue.
+
+**No suite should touch either table again until one of them carries a marker** — a nullable
+`created_by_suite` text column, or a reserved id range. Guessing which of the three log rows is real
+is worse than the gap: a wrong deletion is unrecoverable and a wrong keep is invisible.
+
+This is the second-order cost of the rule above. A suite that writes to production is a deploy; a
+suite that writes to production **without a marker** is a deploy you cannot roll back, because you
+cannot tell what it did.
+
 ## A SUITE THAT WRITES TO PRODUCTION IS A DEPLOY, NOT A TEST (2026-08-24)
 
 `scripts/e2e/verify-counts-as-regular.mjs` flipped `fin_venue_fields.counts_as_regular_play` on
@@ -1992,3 +2012,75 @@ itself, which needs somewhere to put a city it has never heard of.
 **3. `isUtcFallback` styling.** The suffix is now applied in the formatter, so the gap is stated.
 A caller that wants to *style* it still can — the flag remains on the type for that reason, and is
 no longer the only thing standing between a wrong hour and silence.
+
+## THE MATCH PANEL'S WINDOW, AND WHAT MEASURING IT TURNED UP (2026-08-24)
+
+**The Match panel had no window of its own.** It read `RevenueSection`'s `comparisonSpan` — the
+selected period plus the prior three, which the header needs because comparison is its job. So the
+panel's "All time" preset meant *the last four months*: 2,010 of 9,743 alive matches, **20.6% of the
+record**, with the context line reading `Showing all 1,419 matches on record`. Evidence:
+`useFinancePeriodData(span)` + `matchRange(span.start, span.end)` at `RevenueSection.tsx:59-66`.
+It now has `matchPanelPeriod()` (`financePeriod.ts`), year-to-date by default.
+
+**Not `quarterFetchBounds`.** That is `useFinanceData`, which backs the Cash-Flow surfaces. The two
+loaders are easy to confuse and they have different windows; check which one a component actually
+calls before reasoning about what it can see.
+
+**`push(...arr)` IS AN ARGUMENT LIST, and it broke the first unbounded pull.**
+`mdapiMatchesRead.ts` did `players.push(...all)`. On every windowed path `all` is a few thousand
+rows and it is fine; on the whole-table path it is **231,748 arguments** and V8 throws
+*"Maximum call stack size exceeded"*. The failure surfaced as **an empty table** — the fetch had
+succeeded, the count was right, and the panel rendered `0 matches` with every tile at `$0`. Use a
+loop for any array that is not bounded by a page size.
+
+**A LOAD THAT FAILED AND A LOAD THAT FOUND NOTHING RENDER IDENTICALLY.** That bug was invisible
+until the panel started printing the error. `useMatchRangeData` returns `error` and it was being
+dropped on the floor. Any surface that can show an empty result must say which of the two it is.
+
+**PostgREST paging, measured on `mdapi_match_players` (231,748 rows, 232 pages):**
+
+| path | time |
+|---|---|
+| `selectAll`, sequential | **63.7s** |
+| count-then-fan-out at concurrency 8 (`selectAllParallel`) | **15.0s** |
+
+Fixed offsets computed from a count assume row positions hold for the run. An INSERT lands past the
+last offset on an ascending key and is simply absent; a **soft-delete shifts every later offset down
+and can skip a row**. Acceptable for a browse table, never for anything a write is derived from.
+
+**Chunk fan-out, end-to-end, same machine and data** (`CHUNK_CONCURRENCY`, `IN_CHUNK` 200):
+
+| window | conc 4 | conc 12 |
+|---|---|---|
+| 4-month span (the old default) | 2.75s | 1.41s |
+| **year-to-date** (3,549 matches) | 4.58s | **2.07s** |
+| rolling 12 months | — | 2.69s |
+
+So **YTD at 12 is faster than the four-month window was at 4** — the wider default costs nothing.
+Widening the chunk was worse at every concurrency (400×12 = 2.72s, 500×16 = 3.18s): fatter chunks
+page sequentially *inside* `selectAll` and lose more than the round trips save.
+
+**FUTURE MATCHES WERE IN EVERY FIGURE, and no view excluded them.** The premise that City and Field
+already had this rule is **wrong** — checked: `buildFieldMonths` and `groupMatchCount` carry no
+now-based term, and the only future-exclusion in the finance stack is `isFutureMonth`, which drops
+whole future *months* and therefore never touches an unplayed match in the current one. The canonical
+per-match predicate is `matchTime.isPastMatch` and it had **no caller outside the CRM route**. The
+Match panel now uses one exported `hasKickedOff()` (`fieldEconomics.ts`) across its band, its table
+and the header count above it.
+
+**THE BOUNDARY IS KICK-OFF, NOT THE CALENDAR DAY.** Measured while writing the assertion: turning
+upcoming rows on added **29 rows, of which only 15 were dated after today**. The other 14 were
+*later that same day* and correctly had not kicked off. An assertion written as "no row dated after
+today" is true but does not test the rule.
+
+**A HALF-MERGED QUARTER PRINTS A REAL-LOOKING COST.** `useFinancePeriodData` merges up to four
+quarter loaders and exposes `loading`; rendering the band before it settled gave **Field cost
+$208,704 on one load and $219,434 on the next**, same view, same day. The panel now gates on its own
+loaders. The section-level gate deliberately does *not* wait on them — the all-time pull is ~20s and
+blanking City and Field for it would be the worse lie.
+
+**Cost coverage is partial and must be stated, not zero-filled.** `fieldCost ?? 0` treated a
+venue-month with no cost basis on file as free. At YTD that is 5 of 2,657 matches; across the full
+record it is most of them, because the finance tables stay on the YTD window while all-time widens
+only the registrations. Profit and margin now reconcile over the **costed** rows and every affected
+tile names that denominator.
