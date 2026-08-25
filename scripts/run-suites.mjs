@@ -209,14 +209,30 @@ if (E2E) {
 // itself is visible rather than felt.
 const RUN_T0 = Date.now();
 
+/* EVERY SUITE REPORTS ITS OWN WALL CLOCK. The run total was the only number printed, so "the e2e
+ * lane takes 19 minutes" could be answered but "which suites" could not — and the answer to that
+ * is what decides whether the fix is parallelism, a timeout, or deleting something. The slowest
+ * are listed again at the bottom so the tail is visible without re-reading 39 lines. */
 const results = [];
 for (const s of suites) {
-  process.stdout.write(`▶ ${s} … `); const r = await run(s); results.push(r); console.log(r.ok ? `ok (${r.passed} assertions)` : `FAIL — ${r.why}`);
+  process.stdout.write(`▶ ${s} … `);
+  const t0 = Date.now();
+  const r = await run(s);
+  r.ms = Date.now() - t0;
+  results.push(r);
+  console.log((r.ok ? `ok (${r.passed} assertions)` : `FAIL — ${r.why}`) + ` · ${(r.ms / 1000).toFixed(1)}s`);
 }
 if (devProc) { try { process.kill(-devProc.pid, "SIGKILL"); } catch {} }
 
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${"=".repeat(60)}\n${results.length} suites · ${results.length - failed.length} ok · ${failed.length} FAILED · ${Math.round((Date.now() - RUN_T0) / 1000)}s`);
+{
+  const slow = [...results].sort((a, b) => (b.ms ?? 0) - (a.ms ?? 0)).slice(0, 8);
+  const total = results.reduce((a, r) => a + (r.ms ?? 0), 0) || 1;
+  const top = slow.reduce((a, r) => a + (r.ms ?? 0), 0);
+  console.log(`\nslowest ${slow.length} — ${Math.round((top / total) * 100)}% of the run:`);
+  for (const r of slow) console.log(`    ${((r.ms ?? 0) / 1000).toFixed(1).padStart(6)}s  ${r.suite}`);
+}
 for (const f of failed) {
   console.log(`\n✗ ${f.suite} — ${f.why}`);
   console.log(f.out.split("\n").slice(-12).map((l) => "    " + l).join("\n"));

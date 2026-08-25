@@ -59,6 +59,44 @@ try {
   eq("plain + api together are FULL", decideGateScope([P.plain, P.api]).mode, "full");
   eq("  …and plain alone is still typecheck (the mix, not the count, decides)",
      decideGateScope([P.plain]).mode, "typecheck");
+
+  /* THE GATE'S OWN MACHINERY GETS THE FAST SET, NOT THE BROWSER LANE. These three were in
+   * FULL_GATE_ALWAYS and were the single largest source of false FULLs: two of tonight's pushes
+   * were routed to 19 minutes of browser suites by the quarantine list alone, while every source
+   * file in the diff routed to typecheck on its own. Real paths are named deliberately here —
+   * unlike the fixtures above, the POINT of the assertion is which list these specific files are
+   * on, so naming them is what is being tested rather than a detail that can drift. */
+  console.log("\nthe gate's own machinery:");
+  for (const f of ["scripts/run-suites.mjs", "scripts/gate-scope.mjs", "scripts/quarantine.pinned.json"]) {
+    eq(`${f} is VERIFY, not FULL`, decideGateScope([f]).mode, "verify");
+  }
+  eq("  …and a migration is still FULL", decideGateScope(["supabase/migrations/0143_x.sql"]).mode, "full");
+  eq("  …and the hook itself is still FULL", decideGateScope([".githooks/pre-push"]).mode, "full");
+  eq("  …and a permission suite is still FULL",
+     decideGateScope(["scripts/e2e/verify-user-permissions.mjs"]).mode, "full");
+  /* FULL BEATS VERIFY when a diff carries both — the stronger lane wins, which is the direction
+   * this router is supposed to fail in. */
+  eq("  …and full beats verify in a mixed diff",
+     decideGateScope(["scripts/run-suites.mjs", P.api]).mode, "full");
+
+  /* TWO DIFFERENT NOTHINGS. An empty commit has no file for any suite to exercise; an unreadable
+   * diff could contain anything. Answering FULL for both is what made an empty commit cost the
+   * browser lane, and answering SKIP for both would be the dangerous half of the same mistake. */
+  console.log("\nan empty diff versus an unreadable one:");
+  eq("an EMPTY diff skips entirely", decideGateScope(["--empty-diff"]).mode, "skip");
+  eq("an UNREADABLE diff is FULL", decideGateScope(["--unknown-diff"]).mode, "full");
+  eq("  …and a malformed call (no paths, no sentinel) is FULL", decideGateScope([]).mode, "full");
+
+  /* THE EXIT CODES ARE THE CONTRACT WITH THE SHELL. The hook branches on the status and never on
+   * the text, so a renumbering here that the hook did not follow would silently reroute a lane. */
+  console.log("\nthe exit codes the hook branches on:");
+  const { EXIT_CODE } = await import("./gate-scope.mjs");
+  eq("skip=12 typecheck=0 verify=11 full=10",
+     JSON.stringify(EXIT_CODE), JSON.stringify({ skip: 12, typecheck: 0, verify: 11, full: 10 }));
+  const hook = readFileSync(".githooks/pre-push", "utf8");
+  for (const [mode, code] of Object.entries(EXIT_CODE)) {
+    eq(`  the hook handles ${mode} (${code})`, new RegExp(`^\\s*${code}\\)`, "m").test(hook), true);
+  }
 } finally {
   try { chmodSync(P.unreadable, 0o644); } catch {}
   rmSync(DIR, { recursive: true, force: true });

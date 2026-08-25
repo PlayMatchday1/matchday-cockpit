@@ -5,44 +5,81 @@
 # Everything else gets typecheck. This hook used to run all nine minutes on every push regardless,
 # so a CSS change and a match-edit change cost the same.
 #
-# The decision lives in scripts/gate-scope.mjs as a named list, NOT in this shell — it is a safety
-# rule and it should be reviewable in a diff. That file allowlists what is SAFE, so anything
-# unrecognised falls to the full gate: a false full gate costs nine minutes, a false skip costs a
-# player.
+# The decision lives in scripts/gate-scope.mjs, NOT in this shell — it is a safety rule and it
+# should be reviewable in a diff. That file allowlists what is SAFE, so anything unrecognised falls
+# to the full gate: a false full gate costs minutes, a false skip costs a player.
+#
+# FOUR LANES, by exit status from that script:
+#   12  SKIP       the diff changes no files — nothing to gate
+#    0  TYPECHECK  cannot reach the MatchDay API
+#   11  VERIFY     the gate's own machinery — fast set, no browser suites
+#   10  FULL       reaches the API, a migration, the hook, or a permission carve-out
 #
 # `git push --no-verify` still bypasses everything. VERIFY_SKIP_E2E=1 still skips only the browser
 # set within a full run.
 set -e
 
-# What this push actually changes, against the remote's current tip. If the remote branch is
-# unknown (first push of a branch), RANGE stays empty and gate-scope takes the full gate.
+# WHAT THIS PUSH CHANGES — and, separately, WHETHER WE COULD FIND OUT. Those are different states
+# and only one of them justifies the full gate. An empty commit has nothing to test; a diff we
+# could not compute could contain anything.
+#
+# `git diff --name-only` prints nothing for BOTH "no files changed" and "the command failed", so
+# the exit status is captured before anything is piped or substituted. Reading emptiness alone is
+# what made an empty commit take the browser lane.
 REMOTE_REF=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo "")
-if [ -n "$REMOTE_REF" ]; then
-  CHANGED=$(git diff --name-only "$REMOTE_REF"...HEAD 2>/dev/null || echo "")
+if [ -z "$REMOTE_REF" ]; then
+  # First push of a branch: there is no baseline to diff against. Genuinely unknown.
+  ARGS="--unknown-diff"
 else
-  CHANGED=""
+  set +e
+  CHANGED=$(git diff --name-only "$REMOTE_REF"...HEAD 2>/dev/null)
+  DIFF_STATUS=$?
+  set -e
+  if [ "$DIFF_STATUS" -ne 0 ]; then
+    ARGS="--unknown-diff"
+  elif [ -z "$CHANGED" ]; then
+    ARGS="--empty-diff"
+  else
+    ARGS="$CHANGED"
+  fi
 fi
 
-# Exit 10 = full gate, 0 = typecheck. The decision and its reason are printed by that script, every
-# time, so which mode ran is never a mystery.
 set +e
 # shellcheck disable=SC2086
-node scripts/gate-scope.mjs $CHANGED
+node scripts/gate-scope.mjs $ARGS
 SCOPE=$?
 set -e
 
-if [ "$SCOPE" -ne 10 ]; then
-  echo "▶ pre-push: typecheck only (policy: the gate is for MatchDay writes)"
-  npx tsc --noEmit
-  echo "✓ pre-push: typecheck passed"
-  exit 0
-fi
-
-echo "▶ pre-push: npm run verify (fast set, ~9s) …"
-npm run verify
-if [ "${VERIFY_SKIP_E2E:-0}" = "1" ]; then
-  echo "⏭ pre-push: verify:e2e skipped via VERIFY_SKIP_E2E=1 (fast set still ran)"
-else
-  echo "▶ pre-push: npm run verify:e2e (browser suites) …"
-  npm run verify:e2e
-fi
+case "$SCOPE" in
+  12)
+    echo "⏭ pre-push: nothing to gate"
+    exit 0
+    ;;
+  0)
+    echo "▶ pre-push: typecheck only (policy: the gate is for MatchDay writes)"
+    npx tsc --noEmit
+    echo "✓ pre-push: typecheck passed"
+    exit 0
+    ;;
+  11)
+    echo "▶ pre-push: npm run verify (fast set) — the gate's own machinery, no browser suites …"
+    npm run verify
+    echo "✓ pre-push: fast set passed"
+    exit 0
+    ;;
+  10)
+    echo "▶ pre-push: npm run verify (fast set) …"
+    npm run verify
+    if [ "${VERIFY_SKIP_E2E:-0}" = "1" ]; then
+      echo "⏭ pre-push: verify:e2e skipped via VERIFY_SKIP_E2E=1 (fast set still ran)"
+    else
+      echo "▶ pre-push: npm run verify:e2e (browser suites) …"
+      npm run verify:e2e
+    fi
+    ;;
+  *)
+    echo "⛔ pre-push: gate-scope.mjs exited $SCOPE — unrecognised. Taking the full gate."
+    npm run verify
+    npm run verify:e2e
+    ;;
+esac

@@ -50,11 +50,34 @@ export const FULL_GATE_ALWAYS = [
   "package.json",
   "package-lock.json",
   "supabase/migrations/",
+  "scripts/e2e/verify-user-permissions.mjs",
+  "scripts/e2e/verify-user-delete.mjs",
+];
+
+/**
+ * THE GATE'S OWN MACHINERY — fast set, NOT the browser lane.
+ *
+ * These three used to sit in FULL_GATE_ALWAYS and they were the single biggest source of false
+ * FULLs. Measured on two of tonight's pushes: FULL was decided by `quarantine.pinned.json` and
+ * `run-suites.mjs` alone, with every one of the ten source files in the diff routing to typecheck
+ * on its own. Editing the quarantine list cost 19 minutes of browser suites that the edit could
+ * not possibly have affected.
+ *
+ * WHAT ACTUALLY VALIDATES A CHANGE TO THESE FILES IS THE FAST SET, and it already does:
+ * `gate-scope-test.mjs` guards the router and the pinned-list DRIFT GUARD lives in
+ * `run-suites.mjs` itself — both run under `npm run verify`, in ~70s. The e2e lane tests the
+ * product, not the runner. Routing the runner through it was a category error, not a safety
+ * margin: no browser suite asserts anything about the quarantine list.
+ *
+ * `.githooks/`, migrations and the two permission suites STAY at FULL. The hook chooses which
+ * gate runs (so nothing downstream can catch it breaking), a migration changes the database under
+ * everything, and the permission pair drives permissions through the browser and is the one thing
+ * a regression stays invisible in.
+ */
+export const VERIFY_GATE_ALWAYS = [
   "scripts/run-suites.mjs",
   "scripts/gate-scope.mjs",
   "scripts/quarantine.pinned.json",
-  "scripts/e2e/verify-user-permissions.mjs",
-  "scripts/e2e/verify-user-delete.mjs",
 ];
 
 /** Presentation and prose, wherever they live. */
@@ -151,9 +174,20 @@ export function matchdayUrlPrefixes() {
 
 const inList = (p, list) => list.some((f) => p === f || p.startsWith(f));
 
+/** Mode → process exit status, read by .githooks/pre-push. Keep the two in step. */
+export const EXIT_CODE = { skip: 12, typecheck: 0, verify: 11, full: 10 };
+
+/** Why this one path needs the fast set, or null. Checked BEFORE fullGateReason. */
+export function verifyGateReason(p) {
+  return inList(p, VERIFY_GATE_ALWAYS)
+    ? "the gate's own machinery — guarded by the fast set, not by the browser suites"
+    : null;
+}
+
 /** Why this one path takes the full gate, or null if it does not. */
 export function fullGateReason(p) {
-  if (inList(p, FULL_GATE_ALWAYS)) return "gate machinery, a migration, or a kept permission carve-out";
+  if (inList(p, VERIFY_GATE_ALWAYS)) return null;   // claimed by the tier above
+  if (inList(p, FULL_GATE_ALWAYS)) return "a migration, the hook itself, or a kept permission carve-out";
   if (TYPECHECK_ONLY_EXT.some((e) => p.toLowerCase().endsWith(e))) return null;
   if (!p.startsWith("src/") && !p.startsWith("scripts/")) return null;   // docs, mockups, public…
   if (!existsSync(p)) return "the file could not be read — taking the gate rather than guessing";
@@ -167,30 +201,64 @@ export function fullGateReason(p) {
 }
 
 /**
- * @param {string[]} changed repo-relative paths, as `git diff --name-only` prints them
- * @returns {{ mode: "full"|"typecheck", reason: string, deciding: {path:string,why:string}[] }}
+ * TWO DIFFERENT NOTHINGS, and only one of them is dangerous.
+ *
+ * This used to answer FULL for both, under one message — "no changed paths could be read from the
+ * diff" — which is true of an unreadable diff and false of an empty one. An empty commit changes
+ * no file, so there is nothing any gate could test; taking the browser lane for it is 19 minutes
+ * spent proving the previous push still works. An UNREADABLE diff is the opposite: the router has
+ * no idea what is in it, and that is exactly when it should refuse to guess.
+ *
+ * The hook can tell these apart and this function cannot, so the hook says which it saw. The
+ * sentinel is explicit rather than inferred from an empty argv, because "no arguments" is also
+ * what a broken invocation looks like.
+ */
+export const EMPTY_DIFF = "--empty-diff";
+export const UNKNOWN_DIFF = "--unknown-diff";
+
+/**
+ * @param {string[]} changed repo-relative paths, or one of the two sentinels above
+ * @returns {{ mode: "skip"|"typecheck"|"verify"|"full", reason: string, deciding: {path:string,why:string}[] }}
  */
 export function decideGateScope(changed) {
-  const paths = (changed ?? []).map((p) => p.trim()).filter(Boolean);
+  const raw = (changed ?? []).map((p) => p.trim()).filter(Boolean);
+  if (raw.includes(UNKNOWN_DIFF)) {
+    return { mode: "full", reason: "the diff could not be read — taking the gate rather than guessing", deciding: [] };
+  }
+  if (raw.includes(EMPTY_DIFF)) {
+    return { mode: "skip", reason: "the diff changes no files — there is nothing to gate", deciding: [] };
+  }
+  const paths = raw;
   if (paths.length === 0) {
-    return { mode: "full", reason: "no changed paths could be read from the diff", deciding: [] };
+    // Neither sentinel and no paths: a malformed call, which is an unknown diff by another name.
+    return { mode: "full", reason: "no paths and no sentinel — treating as an unreadable diff", deciding: [] };
   }
-  const deciding = [];
+  const full = [];
+  const verify = [];
   for (const p of paths) {
-    const why = fullGateReason(p);
-    if (why) deciding.push({ path: p, why });
+    const fw = fullGateReason(p);
+    if (fw) { full.push({ path: p, why: fw }); continue; }
+    const vw = verifyGateReason(p);
+    if (vw) verify.push({ path: p, why: vw });
   }
-  if (deciding.length === 0) {
+  if (full.length) {
     return {
-      mode: "typecheck",
-      reason: `none of the ${paths.length} changed path(s) can reach the MatchDay API`,
-      deciding: [],
+      mode: "full",
+      reason: `${full.length} of ${paths.length} changed path(s) can reach the MatchDay API or the gate itself`,
+      deciding: full.slice(0, 8),
+    };
+  }
+  if (verify.length) {
+    return {
+      mode: "verify",
+      reason: `${verify.length} of ${paths.length} changed path(s) touch the gate's own machinery — fast set, no browser suites`,
+      deciding: verify.slice(0, 8),
     };
   }
   return {
-    mode: "full",
-    reason: `${deciding.length} of ${paths.length} changed path(s) can reach the MatchDay API or the gate itself`,
-    deciding: deciding.slice(0, 8),
+    mode: "typecheck",
+    reason: `none of the ${paths.length} changed path(s) can reach the MatchDay API`,
+    deciding: [],
   };
 }
 
@@ -208,7 +276,8 @@ if (process.argv[1] && process.argv[1].endsWith("gate-scope.mjs")) {
   const d = decideGateScope(args);
   console.log(`▶ gate scope: ${d.mode.toUpperCase()} — ${d.reason}`);
   for (const { path, why } of d.deciding) console.log(`    · ${path} — ${why}`);
-  const total = args.filter((p) => fullGateReason(p)).length;
+  const total = args.filter((p) => (d.mode === "full" ? fullGateReason(p) : verifyGateReason(p))).length;
   if (total > d.deciding.length) console.log(`    · …and ${total - d.deciding.length} more`);
-  process.exit(d.mode === "full" ? 10 : 0);
+  // The shell branches on the STATUS, never on this text.
+  process.exit(EXIT_CODE[d.mode]);
 }
