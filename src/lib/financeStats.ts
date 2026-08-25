@@ -1534,7 +1534,10 @@ export function venueChargedMatchCountFor(
 //
 // For a single-leg group `leg === primary`, so this collapses to
 // (leg.cost_per_match ?? 0) — "blank = $0" per spec, unchanged.
-function legPerMatchUnitCost(leg: FinVenue, primary: FinVenue): number {
+// EXPORTED so Finance › Cost can pair this unit rule with its OWN realized match count without
+// re-implementing either. It is the rate half; chargedUnitCount is the count half; multiplying
+// them anywhere else would be a fourth derivation of a venue's cost.
+export function legPerMatchUnitCost(leg: FinVenue, primary: FinVenue): number {
   if (leg.cost_per_match != null) return leg.cost_per_match;
   if (leg.id !== primary.id && leg.per_match_rate != null) {
     return leg.per_match_rate;

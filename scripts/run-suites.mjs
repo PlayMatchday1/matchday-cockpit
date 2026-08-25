@@ -24,7 +24,15 @@ const QUARANTINE_ONLY = process.argv.includes("--quarantine"); // run ONLY the q
 // make it pass records the new behaviour instead of verifying the old one, and that is a decision
 // to take on its own, not inside an unrelated change.
 const QUARANTINE = new Map([
-  ["verify-cost-basis.mjs", "hardcodes live figures, drifts with data — see 2026-08-20"],
+  // verify-cost-basis.mjs is GONE, not merely un-quarantined. It existed to pin that Finance ›
+  // Cost opened on the SAME derivation as Field Costs, OpEx and Cash Flow — an override first,
+  // else per_match_rate × matches. That page no longer has a basis toggle and deliberately no
+  // longer agrees with the billed view: it derives from a rate and reads no override, and says so
+  // above its own table. A suite whose subject has been removed cannot be repaired, only rewritten
+  // as a different suite. What goes with it: the keyed-$0-vs-nothing-keyed distinction (an
+  // override question, moot here) and the "a dashed row contributes no 0% to any total" check.
+  // The second is still a live property of rollup(); scripts/cost-realized-test.ts covers the
+  // dash, not the total.
   ["verify-cost-tables.mjs", "hardcodes live figures, drifts with data — see 2026-08-20"],
   // NOT A FLAKE — THIS ONE WRITES PRODUCTION. It flips fin_venue_fields.counts_as_regular_play on
   // MatchDay field 22 (ATH Pearland) with the service role, reads four pages, and restores it in a
@@ -121,6 +129,10 @@ const NODE_SUITES = [
   // including the event-marker exclusion that let ATH Pearland bill $0 for 26 months. A wrong
   // preview is a wrong decision taken deliberately, and no screen check can see the arithmetic.
   "scripts/field-id-admin-test.ts",
+  // Finance › Cost, realized on both sides. Guards the wall-clock-as-instant trap (shipped three
+  // times) with fixtures whose two readings disagree on purpose, and pins that NO path on that
+  // page reads a cost override — the fixtures key one 100× the derived figure.
+  "scripts/cost-realized-test.ts",
 ];
 const ALL_E2E = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
 const GATED_E2E = ALL_E2E.filter((s) => !QUARANTINE.has(s.split("/").pop()));

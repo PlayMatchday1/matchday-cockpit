@@ -2300,3 +2300,93 @@ fact, unable to tell a `fetch` from a mention. Two fixes, both in `scripts/gate-
 `MatchPanel.tsx`, `MatchEditor.tsx`, `MatchDrawer.tsx`, `PlayerLookup.tsx` and every
 `verify-matchedit*` suite still route to FULL. The direction is unchanged: a false full gate costs
 nine minutes, a false skip costs a player.
+
+## FINANCE › COST — REALIZED ON BOTH SIDES, AND IT READS NO OVERRIDE (2026-08-25)
+
+The Basis and Structure toggles are gone. Every row is now **a per-match unit rate × the matches
+that have already kicked off**, or a share venue's own model, with the same cut applied to the
+revenue in the denominator. Nothing on the page reads `fin_venue_cost_overrides`.
+
+### THE MEASUREMENT, TAKEN OFF THE REAL PAGE BEFORE AND AFTER
+
+Aug 2026, 24 of 31 days elapsed, 23 field rows. **Header ratio 77.8% → 58.0%**; cost
+$41,972 → $30,863; revenue $53,983 → $53,215.
+
+The `today → AFTER` move decomposes into two independent effects, measured separately by running
+the page a third time on the alternative rate column:
+
+| field | today | AFTER | future-match Δ | override + rate-column Δ |
+|---|---|---|---|---|
+| Bicentennial Park | 601.9% | **463.0%** | −138.9 | 0 |
+| Lowell H. Strike M.S. | 390.3% | **323.4%** | −66.9 | 0 |
+| Ann Richards School | 300.0% | **200.0%** | −100.0 | 0 |
+| STAR | 145.2% | **96.8%** | −48.4 | 0 |
+| ATH Katy | 155.0% | **119.9%** | −35.1 | 0 |
+| Soccer Central | 91.7% | **46.4%** | −13.9 | −31.4 (Aug override $5,600) |
+| Westlake | 74.5% | **51.5%** | −11.5 | −11.5 |
+| Scissortail Park | 78.6% | **77.4%** | −23.2 | +22.0 (Aug override $1,641) |
+| Centennial Commons | 0.0% | **436.4%** | −109.1 | +545.5 (Aug override **$0**) |
+| PRUMC | 167.4% | **184.8%** | −54.3 | +71.7 |
+| ATH Pearland 64.3→49.2 · KISC 88.6→66.5 · LBJ 113.2→95.7 · NEMP 38.9→29.0 · Onion Creek 36.1→28.9 · New Braunfels 44.3→32.9 · Round Rock 71.3→57.0 | | | all future-match only | 0 |
+| Crossbar Rowlett 82.7→88.6 · Hattrick 50.0→51.9 | | | share venues: cost fixed, realized revenue smaller | |
+| PAC Global · PARMER Stadium · Lou Fusz Outdoor · Hattrick T. | | unchanged | | |
+
+**FOUR OF THE RED RATIOS WERE FUTURE MATCHES AND NOTHING ELSE** — Bicentennial, Lowell H. Strike,
+Ann Richards and STAR each fall by 35–139 points on the realized cut alone. **ATH Katy 155% → 120%**
+was a future-match artefact too, exactly as expected.
+
+**PRUMC WAS NOT.** It falls 54 points on realization and then rises 72 on the rate column, net
+**167% → 185%**. Its `cost_per_match` is **$120** against a `per_match_rate` of **$84** — 43%
+higher — and on $1,104 of realized revenue the pitch genuinely costs more than it earns. PRUMC's
+red is real and this change makes it *more* visible, not less. Same shape, smaller, at Scissortail
+($105 vs $84).
+
+**CENTENNIAL COMMONS 0.0% → 436.4% IS THE OVERRIDE COMING OFF.** Its August override is a keyed
+**$0** ("Custom billing month"), so the old page reported the pitch as free. Derived, it is
+4 realized matches × $60 = $240 against $55 of revenue. The $0 was true about the invoice and
+false about the pitch.
+
+### THE RATE COLUMN IS `cost_per_match`, AND THAT IS A CHOICE
+
+`legPerMatchUnitCost` (financeStats) resolves the leg's `cost_per_match`, falling back to a
+secondary leg's own `per_match_rate` (ATH Katy Sunday $160) and then the primary's. The
+alternative — `per_match_rate`, what the venue invoices — was measured on the same page: header
+**56.6%** instead of 58.0%, and it differs on exactly three fields: PRUMC 129.3% instead of 184.8%,
+Scissortail 61.9% instead of 77.4%, Westlake 61.0% instead of 51.5%. `cost_per_match` is used
+because this page measures **what a pitch costs to run**, not what it invoiced — the same reason it
+ignores overrides.
+
+### `start_date` CANNOT ANSWER "HAS THIS KICKED OFF"
+
+`FinMasterSchedule` now carries `start_utc_ms` from `mdapi_matches.start_date_utc`, and the cut
+goes through `fieldEconomics.hasKickedOff` — the SAME predicate the Match panel uses. `match_date`
+/ `match_time` are wall clock wearing a fake Z: at 3pm Central a 7pm fixture reads "19:00Z", which
+as an instant is an hour *ago*, so reading them would bill tonight's matches all afternoon. That
+bug has shipped three times. `scripts/cost-realized-test.ts` fixtures make the two readings
+disagree on purpose.
+
+**A CANCELLED MATCH IS JUDGED THE SAME WAY, AND CORRECTLY.** The predicate is about time, not
+play: a `charge_on_cancel` venue still bills a cancelled match whose scheduled instant has passed,
+and does not yet bill one still to come.
+
+### THE CUT HAS NO DEFAULT, BECAUSE A DEFAULT ALREADY BROKE ANOTHER PAGE
+
+The first draft gave `buildFieldMonths` a `nowMs = Date.now()` default. **Finance › Revenue calls
+the same builder** and silently became realized: Austin went from **172 matches to 132**, San
+Antonio 89 → 64, revenue down $168 in Austin alone. `realizedThroughMs` is now a required
+parameter — `number` cuts, `null` does not — and every call site states its answer. Revenue passes
+`null` and its 7 group rows and 4 summary rows are byte-identical to before. `cost-basis-confinement-test`
+asserts no builder carries a default and that every call site passes the argument.
+
+### WHAT WENT WITH THE TOGGLES
+
+`monthly_flat` now renders a **dash**: a flat month's figure lives only in an override and nothing
+here reads one. **No venue carries `monthly_flat` today** (30 `per_match`, 4 `profit_share`), so
+the branch is defence rather than a live case.
+
+`scripts/e2e/verify-cost-basis.mjs` was **deleted**, not un-quarantined — it existed to pin that
+this page opened on the same derivation as Field Costs, OpEx and Cash Flow, and that premise is
+now deliberately false. Removed from `quarantine.pinned.json` in the same commit. What went with
+it: the keyed-$0-vs-nothing-keyed distinction (an override question, moot here) and the "a dashed
+row contributes no 0% to any total" check — the second is still a live property of `rollup()` and
+is now uncovered by a browser suite.

@@ -27,14 +27,15 @@
 //
 // MONTH KEYS are Q2Month — "Aug 2026" — the same string financeStats uses.
 
-import { canonicalVenueCost, isEventSchedule, type VenueCostKind } from "./financeCosts";
+import { chargedUnitCount, isEventSchedule, perMatchMinusManagerOwed, type VenueCostKind } from "./financeCosts";
 import {
   cityMembershipRevenueFor,
-  groupPerMatchCostFor,
+  legPerMatchUnitCost,
   venuePartnerRevenueFor,
   matchAllocatedMemberRevenueFor,
   type Q2Month,
 } from "./financeStats";
+import { partnerPaymentOwedForMonth } from "./partnerStats";
 import { normalizeCity } from "./cityMap";
 import { groupVenues, type VenueGroup } from "./venueGroups";
 import { isCityHidden } from "./types";
@@ -84,9 +85,6 @@ export const COST_BASIS_LABEL: Record<CostBasis, string> = {
   monthly_flat: "Monthly flat",
 };
 
-// Which canonical kinds mean "we do not know what this cost". Everything else is a real figure.
-const UNKNOWN_KINDS: ReadonlySet<VenueCostKind> = new Set(["unknown", "needs_override"]);
-
 // The structure a venue is billed under, independent of whether this particular month has a
 // figure. per_match_minus_manager (Crossbar Rowlett) is stored as per_match but paid as a share
 // of match revenue, so it reads as profit_share here — the label has to describe how the money
@@ -99,70 +97,102 @@ export function basisOf(venue: FinVenue, data: FinanceData): CostBasis {
   return "per_match";
 }
 
-// ===== THE TWO COST BASES =====
+// ===== ONE COST DERIVATION, AND IT IS NEVER AN INVOICE =====
 //
-// The estate already models cost two ways, and they are different facts rather than one fact
-// entered twice. Cities exposes the same pair behind its gear popover; this page uses the same
-// helpers so the two cannot disagree.
+// THIS PAGE USED TO OFFER TWO BASES BEHIND A TOGGLE — "As Billed" (an override if one exists,
+// else per_match_rate × matches) and "Per Match" (cost_per_match × matches). BOTH ARE GONE, and
+// the toggle with them. What is left is one rule:
 //
-//   AS BILLED   — what the venue INVOICED. canonicalVenueCost: an override if one exists, else
-//                 per_match_rate × matches. A venue with per_match_rate = null does not invoice
-//                 per match — it lump-sums, and the lumps arrive as overrides. So $0 in a month
-//                 with no override is the truth: no invoice landed that month.
-//   PER MATCH   — the operator's NORMALIZED unit cost. groupPerMatchCostFor: cost_per_match ×
-//                 charged matches, deliberately bypassing billing-timing lumps so a venue's cost
-//                 stays steady month to month. This is the basis the brief specified, and the
-//                 default, matching Cities.
+//     per_match     → the leg's per-match unit rate × the matches that have ALREADY KICKED OFF
+//     profit_share  → the partner's own model: their share of revenue, from the dashboard
+//     monthly_flat  → UNKNOWN. A flat month's figure lives only in an override, and nothing here
+//                     reads an override. (No venue carries monthly_flat today; the branch exists
+//                     because a venue could be moved onto it, and a dash is the honest answer.)
 //
-// Reading cost_per_match in as-billed mode would manufacture an invoice nobody sent; reading
-// per_match_rate in per-match mode would reintroduce the lumps the mode exists to remove. Neither
-// column is a fallback for the other.
-export type CostMode = "per_match" | "as_billed";
+// NOTHING ON THIS PAGE READS fin_venue_cost_overrides. Ryan's ruling: an overridden month still
+// carries a rate, so the rate is what this page uses. An override is a BILLING-TIMING lump —
+// Soccer Central's $5,600 covering three months, NEMP's Q2 permit landing in June — and letting
+// it short-circuit the derivation is what made a month's ratio a fact about when an invoice
+// arrived rather than about what the pitch cost to run.
+//
+// THE CONSEQUENCE, STATED ON THE PAGE: these figures are DERIVED, NOT BILLED. For an overridden
+// month they will not equal what we paid, and they are not meant to reconcile to the bank.
+//
+// A COST IS NULL, NEVER ZERO, WHEN THERE IS NO BASIS. A venue billed per_match at a real rate of
+// $0 (Carroll Senior HS) is a number and renders as one.
+/** THE REALIZED CUT, AND IT HAS NO DEFAULT ANYWHERE.
+ *
+ *  A number = only matches whose true start instant is at or before it count.
+ *  `null`   = no cut; every match in the window counts.
+ *
+ *  There is deliberately no default value on any builder below. Finance › Cost is realized and
+ *  Finance › Revenue is not, and a default would have silently made one of them the other — which
+ *  it did, in the first draft of this change: Revenue's Austin row went from 172 matches to 132
+ *  because it inherited a default nobody had asked it to have. Every caller states its cut. */
+export type RealizedThroughMs = number | null;
 
-// A venue group, one month, one basis. null amount ⟺ NO COST BASIS ON FILE — never 0-for-unknown.
-function groupCost(
-  data: FinanceData,
-  group: VenueGroup,
-  month: Q2Month,
-  mode: CostMode,
-): { amount: number | null; kind: VenueCostKind } {
+type CostArgs = {
+  data: FinanceData;
+  group: VenueGroup;
+  month: Q2Month;
+  realizedThroughMs: RealizedThroughMs;
+};
+
+function groupCost({ data, group, month, realizedThroughMs }: CostArgs): { amount: number | null; kind: VenueCostKind } {
   const primary = group.legs[0];
   const basis = basisOf(primary, data);
 
-  // SHARE-LIKE IS ALWAYS THE DASHBOARD'S OWED, in either mode. Never rate × n, and never
-  // cost_per_match — which is precisely what keeps Crossbar Rowlett's placeholder zero
-  // unreachable instead of special-cased.
-  if (basis === "profit_share" || basis === "monthly_flat" || mode === "as_billed") {
+  // SHARE-LIKE IS THE PARTNER'S MODEL, never rate × n and never cost_per_match — which is what
+  // keeps Crossbar Rowlett's placeholder zero unreachable instead of special-cased. Read straight
+  // from the dashboard rather than through canonicalVenueCost, because that helper checks the
+  // override first and this page does not read overrides.
+  //
+  // NO REALIZED FILTER APPLIES HERE and none can: the payout is a percentage of revenue the
+  // dashboard computed, so it already scales with whatever revenue exists. Filtering it by
+  // kick-off would mean re-deriving the partner's own arithmetic, which is the one thing a share
+  // venue's cost must never be.
+  if (basis === "profit_share") {
     let sum = 0;
     let known = false;
     for (const leg of group.legs) {
-      const info = canonicalVenueCost(data, leg.id, month);
-      if (UNKNOWN_KINDS.has(info.kind)) continue;
-      // THE $0-WEARING-A-MAPPED-KIND TRAP, as-billed only: autoCost computes
-      // `rate = per_match_rate ?? 0`, so a venue with no per_match_rate returns kind "per_match"
-      // with amount 0 — a mapped-looking unknown. cityPnl.ts names this same trap.
-      //
-      // cost_per_match IS NOT PART OF THIS TEST. It was, and that was the bug: NEMP carries
-      // cost_per_match $77 and no per_match_rate, so the old condition judged it "known" and
-      // rendered $0 — a venue that bills monthly, reading as free. On the as-billed basis
-      // cost_per_match drives nothing, so it cannot be evidence that an invoice exists.
-      //
-      // A MONTH VALUE STILL WINS, including one keyed at exactly $0: canonicalVenueCost returns
-      // kind "override" for those, so they never reach this line. That is what keeps "keyed zero"
-      // (Centennial Commons, Scissortail June — a real, deliberate $0) distinct from
-      // "nothing keyed" (NEMP August — unknown, and rendered as a dash).
-      if (info.kind === "per_match" && leg.per_match_rate == null) continue;
+      const owed =
+        perMatchMinusManagerOwed(data, leg.id, month) ??
+        partnerPaymentOwedForMonth(data.partnerDashboards, data.partnerPayoutsByVenueMonth, leg.id, month);
+      if (owed == null) continue;   // no dashboard → unknown, not zero
       known = true;
-      sum += info.amount;
+      sum += owed;
     }
-    return known ? { amount: sum, kind: "override" } : { amount: null, kind: "needs_override" };
+    return known ? { amount: sum, kind: "profit_share" } : { amount: null, kind: "needs_override" };
   }
 
-  // PER-MATCH basis on a per_match venue. Unknown only when NO leg carries a unit cost in either
-  // column — Carroll Senior HS stores an explicit 0 and is therefore known, and free.
+  // A FLAT MONTH HAS NO RATE TO MULTIPLY. Its figure is the override, and this page does not read
+  // one — so it is unknown here and says so with a dash.
+  if (basis === "monthly_flat") return { amount: null, kind: "needs_override" };
+
+  // PER-MATCH. Unknown only when NO leg carries a unit cost in either column.
   const hasUnit = group.legs.some((l) => l.cost_per_match != null || l.per_match_rate != null);
   if (!hasUnit) return { amount: null, kind: "needs_override" };
-  return { amount: groupPerMatchCostFor(data, group, month), kind: "per_match" };
+  // legPerMatchUnitCost is the RATE half (financeStats) and chargedUnitCount is the COUNT half
+  // (financeCosts) — the same two helpers the estate's other cost paths use, paired here with a
+  // realized `keep`. Multiplying them by hand anywhere else would be a fourth derivation.
+  let total = 0;
+  for (const leg of group.legs) {
+    total += legPerMatchUnitCost(leg, primary) * chargedUnitCount(data, leg, month, (s) => kickedOffSchedule(s, realizedThroughMs));
+  }
+  return { amount: total, kind: "per_match" };
+}
+
+/* HAS THIS SCHEDULE ROW HAPPENED YET — the SAME predicate the Match panel uses, given the
+ * schedule row's own instant. There is no second definition of "already played" in this file:
+ * hasKickedOff is the one, and this is the adapter that hands it a FinMasterSchedule.
+ *
+ * IT READS start_utc_ms AND NEVER match_date, which is venue-local wall clock. A cancelled match
+ * is judged the same way, and correctly: the slot is spent when its scheduled instant passes, so
+ * a charge_on_cancel venue still bills a cancelled match that has gone by, and does not yet bill
+ * one still to come. */
+function kickedOffSchedule(s: { start_utc_ms: number | null }, realizedThroughMs: RealizedThroughMs): boolean {
+  if (realizedThroughMs == null) return true;   // no cut asked for
+  return hasKickedOff({ startUtcMs: s.start_utc_ms }, realizedThroughMs);
 }
 
 // EVENTS CARRY REVENUE BUT NO COST — and that asymmetry has to be handled, not inherited.
@@ -188,22 +218,40 @@ function eventMatchIds(data: FinanceData): Set<string> {
 }
 
 // Cost-driving match count, mirroring financeCosts.venueMatchCount: alive matches plus the
-// cancelled ones the venue charges for, events excluded (an event carries no venue cost).
-function groupMatchCount(data: FinanceData, group: VenueGroup, month: Q2Month): number {
+// cancelled ones the venue charges for, events excluded (an event carries no venue cost) — and
+// REALIZED, so a match still to be played is not counted on either side of the ratio.
+function groupMatchCount(data: FinanceData, group: VenueGroup, month: Q2Month, realizedThroughMs: RealizedThroughMs): number {
   const ids = new Set(group.legs.map((l) => l.id));
   let n = 0;
   for (const s of data.masterSchedule) {
     if (isEventSchedule(s)) continue;
+    if (!kickedOffSchedule(s, realizedThroughMs)) continue;
     if (s.venue_id != null && ids.has(s.venue_id) && s.month === month) n += 1;
   }
   for (const leg of group.legs) {
     if (!leg.charge_on_cancel) continue;
     for (const s of data.cancelledSchedule) {
       if (isEventSchedule(s)) continue;
+      if (!kickedOffSchedule(s, realizedThroughMs)) continue;
       if (s.venue_id === leg.id && s.month === month) n += 1;
     }
   }
   return n;
+}
+
+/* THE REVENUE SIDE OF THE SAME CUT. venuePartnerRevenueFor is shared with the partner dashboards,
+ * where a payout must count every registration whatever the clock says — so it is NOT changed.
+ * The registrations are filtered BEFORE they reach it instead, through the SAME hasKickedOff
+ * predicate the cost side uses, so both halves of the ratio describe the same matches.
+ *
+ * Private Rental is untouched by this: it is a landed fin_revenue line with no match behind it,
+ * read from data.revenue inside that helper. */
+export function realizedRegistrations(
+  rows: JoinedMatchPlayerRow[],
+  realizedThroughMs: RealizedThroughMs,
+): JoinedMatchPlayerRow[] {
+  if (realizedThroughMs == null) return rows;
+  return rows.filter((r) => hasKickedOff({ startUtcMs: matchStartMs(r.matchStartUtcIso, null) }, realizedThroughMs));
 }
 
 // The Private Rental half of venuePartnerRevenueFor, isolated. Mirrors that helper's own lookup
@@ -276,15 +324,15 @@ export type FieldCostSlot = {
 export function buildFieldCostSlots(
   data: FinanceData,
   months: Q2Month[],
-  mode: CostMode = "per_match",
+  realizedThroughMs: RealizedThroughMs,
 ): FieldCostSlot[] {
   const out: FieldCostSlot[] = [];
   for (const g of groupVenues(data.venues)) {
     if (isCityHidden(g.city)) continue;
     const ids = g.legs.map((l) => l.id);
     for (const month of months) {
-      const cost = groupCost(data, g, month, mode).amount;
-      const matches = groupMatchCount(data, g, month);
+      const cost = groupCost({ data, group: g, month, realizedThroughMs }).amount;
+      const matches = groupMatchCount(data, g, month, realizedThroughMs);
       out.push({
         key: `g-${g.legs[0].id}`,
         field: g.displayName,
@@ -301,12 +349,18 @@ export function buildFieldCostSlots(
 
 export function buildFieldMonths(
   data: FinanceData,
-  matchRegistrations: JoinedMatchPlayerRow[],
+  allRegistrations: JoinedMatchPlayerRow[],
   months: Q2Month[],
-  mode: CostMode = "per_match",
+  /** REALIZED THROUGH — see RealizedThroughMs. No default: Cost passes a clock, Revenue passes
+   *  null, and neither can inherit the other's answer by omission. */
+  realizedThroughMs: RealizedThroughMs,
 ): FieldMonth[] {
   const groups = groupVenues(data.venues);
   const events = eventMatchIds(data);
+  // ONE CUT, APPLIED ONCE, AND EVERY FIGURE BELOW READS THE FILTERED SET. Cost counts kicked-off
+  // matches; revenue must count the same ones, or the ratio compares a full month's cost against
+  // a partial month's takings — which is what put ATH Katy at 155% and PRUMC at 167%.
+  const matchRegistrations = realizedRegistrations(allRegistrations, realizedThroughMs);
   // DAILY PAID revenue at an EVENT match, keyed by venue and month, built in one pass.
   const eventRev = new Map<string, number>();
   for (const r of matchRegistrations) {
@@ -326,8 +380,8 @@ export function buildFieldMonths(
     const idSet = new Set(ids);
     const basis = basisOf(g.legs[0], data);
     for (const month of months) {
-      const cost = groupCost(data, g, month, mode).amount;
-      const matches = groupMatchCount(data, g, month);
+      const cost = groupCost({ data, group: g, month, realizedThroughMs }).amount;
+      const matches = groupMatchCount(data, g, month, realizedThroughMs);
       out.push({
         key: `g-${g.legs[0].id}`,
         field: g.displayName,

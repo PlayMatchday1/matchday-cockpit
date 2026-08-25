@@ -2,16 +2,28 @@
 
 // FINANCE › COST — field cost against the revenue it carried.
 //
-// NOTHING HERE IS A CONSTANT. A month's field cost is DERIVED, every time:
-//   per_match     → a unit rate × the matches that month. WHICH unit rate depends on the Basis
-//                   control: Per-Match reads cost_per_match (steady, lumps removed), As Billed
-//                   reads the override if one exists and otherwise per_match_rate (what was
-//                   actually invoiced). Those are two different facts, not one entered twice, and
-//                   four venues differ sharply between them — see fieldEconomics.CostMode.
-//   monthly_flat  → the flat amount recorded for the month; cost_per_match is never consulted
-//   profit_share  → the partner dashboard's own owed, computed by the same code the partner page
-//                   renders. cost_per_match is never read for a share venue, which is what makes
-//                   Crossbar Rowlett's placeholder zero UNREACHABLE rather than special-cased.
+// ONE DERIVATION. NO TOGGLES. Every row is a unit rate × the matches that have ALREADY KICKED
+// OFF, or a share venue's own model:
+//   per_match     → the leg's per-match unit rate × realized matches
+//   profit_share  → the partner dashboard's own owed — their share of revenue, which is what a
+//                   share venue's cost actually is. cost_per_match is never read for one, which
+//                   is what makes Crossbar Rowlett's placeholder zero UNREACHABLE.
+//   monthly_flat  → a dash. Its figure lives only in an override, and nothing here reads one.
+//
+// THE BASIS AND STRUCTURE TOGGLES ARE GONE. Basis offered a choice between two ways of being
+// wrong about the same month; Structure filtered the estate down and made the totals a subset
+// nobody had asked for. The COST STRUCTURE column stays, so each row still says which model it
+// used — that was the part carrying information.
+//
+// REALIZED ON BOTH SIDES. A scheduled match used to accrue a full month of cost while only part
+// of its revenue had come in, which is how ATH Katy read 155% and PRUMC 167% — a fact about the
+// calendar wearing the shape of a fact about the pitch. Cost and revenue now count the SAME
+// matches, through fieldEconomics.hasKickedOff, the same predicate the Match panel uses.
+//
+// DERIVED, NOT BILLED. Nothing here reads fin_venue_cost_overrides. For an overridden month
+// these figures will NOT equal what we paid — Soccer Central's $5,600 flat against its derived
+// per-match figure — and the page says so above the table. Do not reconcile it to the bank.
+//
 // All of that lives in fieldEconomics.ts; this file only arranges it.
 //
 // A DASH IS NOT A ZERO. A venue with no cost basis on file renders "—", is excluded from every
@@ -34,7 +46,7 @@ import { matchRange } from "@/lib/financePeriod";
 import {
   buildFieldMonths, byCity, byField, canonCity, costNotRecorded, highestRatioField, rollup,
   priorMonthOf, priorQuarterOf, pooledRatio, ratioBand,
-  COST_BASIS_LABEL, type CostBasis, type CostMode, type FieldMonth,
+  COST_BASIS_LABEL, type FieldMonth,
 } from "@/lib/fieldEconomics";
 import { CITY_DISPLAY_ORDER, type Q2Month } from "@/lib/financeStats";
 import { isCityHidden } from "@/lib/types";
@@ -42,10 +54,6 @@ import { downloadCsv, fmtInt, fmtMoney, fmtPct } from "@/components/growth/forma
 import s from "./financeSection.module.css";
 
 type Grain = "city" | "field";
-
-// The three real structures. hourly_rate is null on every fin_venues row and nothing is recorded
-// as an installation or a free-use arrangement, so the filter offers what exists and no more.
-const STRUCTURES: readonly CostBasis[] = ["per_match", "profit_share", "monthly_flat"];
 
 export default function CostSection() {
   // The window is the page's period. This card used to carry its own Jul/Aug/Sep segment, which
@@ -80,17 +88,12 @@ export default function CostSection() {
   const { fromDate, toDate } = useMemo(() => matchRange(windowStart, period.end), [windowStart, period]);
   const { rows: matchRegistrations, loading: matchLoading } = useMatchRangeData(fromDate, toDate);
 
-  const [structures, setStructures] = useState<Set<CostBasis>>(() => new Set(STRUCTURES));
   const [grain, setGrain] = useState<Grain>("city");
   const [cityFilter, setCityFilter] = useState<string>("all");
-  // BOTH BASES, DEFAULTING TO PER-MATCH — the basis the brief specified and the one Cities opens
-  // on. Offering only one would make this page disagree with Cities for four venues whose lumpy
-  // invoices land in months other than the ones they cover (NEMP, Onion Creek, Bicentennial Park,
-  // Lowell H. Strike), and the reader would have no way to see which number they were looking at.
-  // DEFAULT: AS BILLED — the same derivation Field Costs, OpEx and Cash Flow use, so the page
-  // opens on the number those three agree on. The per-match basis is unchanged and still one
-  // click away; the toggle is the explanation, so there is no sentence here saying so.
-  const [mode, setMode] = useState<CostMode>("as_billed");
+  // ONE CLOCK FOR THE WHOLE RENDER. Every realized cut — cost, revenue, the match counts and
+  // both prior columns — reads this same instant, so no two figures on the page can sit on
+  // opposite sides of a kick-off that happened while it rendered.
+  const realizedThroughMs = now.getTime();
 
   // THE PERIOD IS THE WINDOW. The tiles describe the whole of it, at whatever grain was asked
   // for, and it is partial exactly when the period bar says it is.
@@ -103,8 +106,8 @@ export default function CostSection() {
   // same derivation as the current one and cannot drift from it.
   const everyMonth = useMemo(() => [...new Set([...extraMonths, ...months])], [extraMonths, months]);
   const everyRow = useMemo(
-    () => (data ? buildFieldMonths(data, matchRegistrations, everyMonth, mode) : []),
-    [data, matchRegistrations, everyMonth, mode],
+    () => (data ? buildFieldMonths(data, matchRegistrations, everyMonth, realizedThroughMs) : []),
+    [data, matchRegistrations, everyMonth, realizedThroughMs],
   );
   const allRows = useMemo(() => everyRow.filter((r) => months.includes(r.month)), [everyRow, months]);
 
@@ -113,8 +116,8 @@ export default function CostSection() {
   // The structure filter narrows WHICH FIELDS are in scope. It is a filter on the estate, not on
   // the arithmetic — the totals below are always the sum of the rows on screen.
   const scoped = useMemo(
-    () => monthRows.filter((r) => structures.has(r.basis) && (cityFilter === "all" || r.city === canonCity(cityFilter))),
-    [monthRows, structures, cityFilter],
+    () => monthRows.filter((r) => cityFilter === "all" || r.city === canonCity(cityFilter)),
+    [monthRows, cityFilter],
   );
   // A field with neither cost nor revenue in the month did not trade; listing it adds a row of
   // dashes and nothing else.
@@ -124,9 +127,7 @@ export default function CostSection() {
   // by field so either grain can look itself up. pooledRatio is cost-summed ÷ revenue-summed over
   // the window — never an average of monthly ratios.
   const priorRatios = useMemo(() => {
-    const scopedAll = everyRow.filter(
-      (r) => structures.has(r.basis) && (cityFilter === "all" || r.city === canonCity(cityFilter)),
-    );
+    const scopedAll = everyRow.filter((r) => cityFilter === "all" || r.city === canonCity(cityFilter));
     const build = (monthsIn: string[]) => {
       const rows = scopedAll.filter((r) => monthsIn.includes(r.month));
       const cityMap = new Map<string, number | null>();
@@ -139,7 +140,7 @@ export default function CostSection() {
       month: build(priorMonth ? [priorMonth] : []),
       quarter: build(priorQuarter),
     };
-  }, [everyRow, structures, cityFilter, priorMonth, priorQuarter]);
+  }, [everyRow, cityFilter, priorMonth, priorQuarter]);
 
   // The same grouping the table performs — a second count computed another way is how a caption
   // and its table start disagreeing.
@@ -167,8 +168,8 @@ export default function CostSection() {
   // Chart: every month of the quarter under the same filters, so the selected month is read
   // against its neighbours rather than in isolation.
   const seriesRows = useMemo(
-    () => allRows.filter((r) => structures.has(r.basis) && (cityFilter === "all" || r.city === canonCity(cityFilter))),
-    [allRows, structures, cityFilter],
+    () => allRows.filter((r) => cityFilter === "all" || r.city === canonCity(cityFilter)),
+    [allRows, cityFilter],
   );
   const series = useMemo(
     () => months.map((m) => {
@@ -182,15 +183,6 @@ export default function CostSection() {
 
   if ((loading && !data) || matchLoading) return <div className={s.empty}>Loading…</div>;
   if (!data) return <div className={s.empty}>No finance data for this quarter.</div>;
-
-  const toggleStructure = (b: CostBasis) =>
-    setStructures((prev) => {
-      const next = new Set(prev);
-      // Never let the last one off — an empty estate is not a view, it is a blank screen.
-      if (next.has(b) && next.size > 1) next.delete(b);
-      else next.add(b);
-      return next;
-    });
 
   const max = Math.max(1, ...series.map((p) => Math.max(p.cost, p.revenue)));
 
@@ -219,31 +211,6 @@ export default function CostSection() {
   return (
     <div className={s.wrap} data-testid="finance-cost">
       <div className={s.ctrlRow}>
-        <div className={s.ctrlGroup}>
-          <span className={s.ctrlLab}>Basis</span>
-          <div className={s.seg}>
-            <button type="button" data-testid="basis-per-match" aria-pressed={mode === "per_match"}
-              className={mode === "per_match" ? s.on : ""} onClick={() => setMode("per_match")}
-              title="cost_per_match × charged matches. Steady month to month — billing-timing lumps removed.">
-              Per-Match
-            </button>
-            <button type="button" data-testid="basis-as-billed" aria-pressed={mode === "as_billed"}
-              className={mode === "as_billed" ? s.on : ""} onClick={() => setMode("as_billed")}
-              title="What the venue invoiced: an override where one exists, else per_match_rate × matches.">
-              As Billed
-            </button>
-          </div>
-        </div>
-        <div className={s.ctrlGroup}>
-          <span className={s.ctrlLab}>Structure</span>
-          <div className={s.seg}>
-            {STRUCTURES.map((b) => (
-              <button key={b} type="button" className={structures.has(b) ? s.on : ""} onClick={() => toggleStructure(b)}>
-                {COST_BASIS_LABEL[b]}
-              </button>
-            ))}
-          </div>
-        </div>
         <div className={s.ctrlGroup}>
           <span className={s.ctrlLab}>City</span>
           <div className={s.seg}>
@@ -337,6 +304,19 @@ export default function CostSection() {
           <button type="button" className={s.btn} onClick={exportTable}>Export</button>
         </div>
       </div>
+
+      {/* THE LABEL THIS PAGE HAS TO CARRY. Every figure below is derived from a rate and the
+          matches that have already kicked off. It is NOT what any venue invoiced, and for a month
+          carrying an override it will not equal what we paid. Saying so here is what stops someone
+          taking these numbers to the bank statement and concluding one of them is broken. */}
+      <p className={s.derivedNote} data-testid="cost-derived-note">
+        <b>Derived, not billed.</b> Every row is a per-match rate × the matches that have{" "}
+        <b>already kicked off</b>, or a share venue&apos;s own model — on both sides of the ratio, so
+        cost and revenue count the same matches. Nothing here reads a cost override, so an
+        overridden month will <b>not</b>{" "}equal what we paid: Soccer Central&apos;s $5,600 flat covers
+        three months and appears in none of them at that figure. This measures what a pitch costs to
+        run. It does not reconcile to the bank — Field Costs, OpEx and Cash Flow are the billed view.
+      </p>
 
       <EconomicsTable rows={live} grain={grain} total={T} prior={priorRatios} />
 

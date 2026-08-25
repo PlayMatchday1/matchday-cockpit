@@ -446,3 +446,20 @@
 .mvNeg .mvTileVal { color: #a4372f; }
 .mvContext { padding: 9px 16px 4px; font-size: 12px;
   color: color-mix(in srgb, var(--deep-green, #12352b) 60%, transparent); }
+
+/* FINANCE › COST — the derived-not-billed label. It sits directly above the table because that is
+   where the number is read; a footnote below it would be found after the reconciliation attempt,
+   not before. Coral-tinted rather than the neutral gap card: this is a warning about what the
+   figures are NOT, not a summary of what they are. */
+.derivedNote {
+  border: 1.5px solid color-mix(in srgb, var(--coral, #ff6955) 40%, transparent);
+  background: var(--coral-soft, #ffe0da);
+  border-radius: 14px;
+  padding: 12px 16px;
+  margin-bottom: 14px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--deep-green, #12352b);
+  max-width: 108ch;
+}
+.derivedNote b { font-weight: 800; }

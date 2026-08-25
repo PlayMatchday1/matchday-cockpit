@@ -85,7 +85,11 @@ export default function RevenueSection() {
   );
 
   const fieldRows = useMemo(
-    () => (data ? buildFieldMonths(data, matchRegistrations, span.months) : []),
+    /* NULL = NO REALIZED CUT, STATED RATHER THAN INHERITED. Finance › Cost counts only matches
+     * that have kicked off, on both sides of its ratio. This page does not: its match counts and
+     * DPP figures describe the whole window, and quietly adopting Cost's cut moved Austin from
+     * 172 matches to 132 the first time this parameter carried a default. */
+    () => (data ? buildFieldMonths(data, matchRegistrations, span.months, null) : []),
     [data, matchRegistrations, span.months],
   );
 
@@ -129,7 +133,7 @@ export default function RevenueSection() {
    * loading rather than printing a figure that is about to change under the reader. */
   const mBusy = mLoading || (mCostLoading && !mData);
   const mCostSlots = useMemo(
-    () => (mData ? buildFieldCostSlots(mData, mPeriod.months) : []),
+    () => (mData ? buildFieldCostSlots(mData, mPeriod.months, null) : []),   // see the note above — no realized cut here
     [mData, mPeriod.months],
   );
   const panelRows = useMemo(

@@ -31,6 +31,7 @@ import {
   type QuarterInfo,
 } from "./quarters";
 import { resolveSplitRateVenueId } from "./venueGroups";
+import { matchStartMs } from "./matchTime";
 
 // Pad the quarter window by 14d on each side so MTD-vs-prior-month
 // math (priorMonthSameDayMtdGross) and the +14d forward window for
@@ -118,6 +119,16 @@ export type FinMasterSchedule = {
   // title the classification was made from, rather than fin_venue_fields' link-time copy — a
   // field renamed upstream would otherwise be described by a name nothing reads any more.
   field_title: string;
+  /* THE MATCH'S TRUE UTC INSTANT (ms), from mdapi_matches.start_date_utc.
+   *
+   * match_date / match_time above are WALL CLOCK wearing a fake Z — reading them back as an
+   * instant runs 5h early and reports tonight's not-yet-played matches as finished. Cost cannot
+   * ask "has this happened yet" from those, so the real instant is carried here and every
+   * has-it-happened test goes through fieldEconomics.hasKickedOff, the SAME predicate the Match
+   * panel uses. Null when upstream has not populated start_date_utc — that is NOT past, because
+   * an unknown time is not evidence a match was played. (Measured 2026-08-25: 0 of 9,743 alive
+   * rows are null, so the branch is defence rather than a live case.) */
+  start_utc_ms: number | null;
 };
 
 export type FinVenue = {
@@ -462,6 +473,10 @@ function mapMdapiRowToSchedule(
   }
   return {
     field_title: cleanText(r.field_title),
+    // TRUE UTC ONLY — no fall back to start_date. start_date is the wall clock; using it as an
+    // instant is the trap this field exists to avoid, so an absent start_date_utc yields null
+    // and hasKickedOff reads null as "not yet", never as "already".
+    start_utc_ms: matchStartMs(cleanText(r.start_date_utc) || null, null),
     id: String(r.api_id ?? ""),
     city: v?.city ?? "",
     venue: v?.venue_name ?? "",
@@ -562,7 +577,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
         supabase
           .from("mdapi_matches")
           .select(
-            "api_id, field_id, field_title, start_date, max_player_count",
+            "api_id, field_id, field_title, start_date, start_date_utc, max_player_count",
           )
           .eq("is_cancelled", false)
           // Exclude soft-deleted phantoms (deleted upstream in MatchDay)
@@ -583,7 +598,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
         supabase
           .from("mdapi_matches")
           .select(
-            "api_id, field_id, field_title, start_date, max_player_count",
+            "api_id, field_id, field_title, start_date, start_date_utc, max_player_count",
           )
           .eq("is_cancelled", true)
           // Exclude soft-deleted phantoms here too: a cancelled match

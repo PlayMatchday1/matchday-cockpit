@@ -1,15 +1,13 @@
 {
-  "_comment": "PINNED quarantine set — the e2e gate (scripts/run-suites.mjs) FAILS if the live QUARANTINE map drifts from this list, so a suite can never leave the gate silently (see Phase 21b item 1: verify-week entered while adminpay left, count stayed 4, nobody noticed). Changing what is quarantined — adding, removing, OR swapping — must be an explicit, reviewable edit to THIS file in the same commit as the QUARANTINE map change. Keep it sorted.",
+  "_comment": "PINNED quarantine set \u2014 the e2e gate (scripts/run-suites.mjs) FAILS if the live QUARANTINE map drifts from this list, so a suite can never leave the gate silently (see Phase 21b item 1: verify-week entered while adminpay left, count stayed 4, nobody noticed). Changing what is quarantined \u2014 adding, removing, OR swapping \u2014 must be an explicit, reviewable edit to THIS file in the same commit as the QUARANTINE map change. Keep it sorted.",
   "quarantined": [
-    "verify-cost-basis.mjs",
     "verify-cost-tables.mjs",
     "verify-counts-as-regular.mjs",
     "verify-field-cost-month.mjs"
   ],
   "reasons": {
-    "verify-cost-basis.mjs": "hardcodes live figures, drifts with data — see 2026-08-20",
-    "verify-cost-tables.mjs": "hardcodes live figures, drifts with data — see 2026-08-20",
-    "verify-counts-as-regular.mjs": "WRITES PRODUCTION — flips fin_venue_fields.counts_as_regular_play on field 22 via the service role and restores it in a finally. Exited 2 mid-run on 2026-08-24 and left the flag ON, moving ATH Pearland's match count and cost estate-wide with no change_log row. Off until rewritten so it proves the exception without mutating a live Finance flag. A try/finally restore does not survive the process being killed.",
-    "verify-field-cost-month.mjs": "WRITES PRODUCTION — clears a real fin_venue_cost_overrides amount through the UI and types it back, or DELETEs the row when there was none, in straight-line code with NO finally. A cleared override changes a venue's cost for a closed month. Off until rewritten without the write. On 2026-08-24 its restore completed only because the failing assertion came after it."
+    "verify-cost-tables.mjs": "hardcodes live figures, drifts with data \u2014 see 2026-08-20",
+    "verify-counts-as-regular.mjs": "WRITES PRODUCTION \u2014 flips fin_venue_fields.counts_as_regular_play on field 22 via the service role and restores it in a finally. Exited 2 mid-run on 2026-08-24 and left the flag ON, moving ATH Pearland's match count and cost estate-wide with no change_log row. Off until rewritten so it proves the exception without mutating a live Finance flag. A try/finally restore does not survive the process being killed.",
+    "verify-field-cost-month.mjs": "WRITES PRODUCTION \u2014 clears a real fin_venue_cost_overrides amount through the UI and types it back, or DELETEs the row when there was none, in straight-line code with NO finally. A cleared override changes a venue's cost for a closed month. Off until rewritten without the write. On 2026-08-24 its restore completed only because the failing assertion came after it."
   }
 }

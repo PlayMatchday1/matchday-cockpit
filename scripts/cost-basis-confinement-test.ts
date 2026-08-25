@@ -1,9 +1,14 @@
-// CONFINEMENT — the normalized cost model must not spread.
+// CONFINEMENT — the normalized cost model must not spread, and Finance › Cost must not grow a
+// second one back.
 //
 // legPerMatchUnitCost and groupPerMatchCostFor are the PER-MATCH basis and the realized lens, and
-// nothing else. The Cost page now defaults to as-billed, which routes through canonicalVenueCost
-// with the rest of Finance; if a new caller appears outside those two paths, the page has grown a
-// second cost model again and this fails.
+// nothing else. If a new caller appears outside those paths, the estate has a second cost model
+// again and this fails.
+//
+// THE COST PAGE'S OWN INVARIANTS ARE PINNED HERE TOO, because none of them is visible on screen:
+// it reads NO override, it defines no second has-it-happened predicate, and every caller of the
+// two builders states its realized cut explicitly. That last one is not hypothetical — a default
+// on that parameter silently moved Finance › Revenue's Austin row from 172 matches to 132.
 //
 //   NODE_OPTIONS="--conditions=react-server" npx tsx scripts/cost-basis-confinement-test.ts
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -44,15 +49,55 @@ for (const sym of ["legPerMatchUnitCost", "groupPerMatchCostFor"]) {
   eq(`  control — ${sym} was actually found somewhere`, callers.length > 0, true);
 }
 
-// The as-billed basis must reach canonicalVenueCost, or the default is pointing at nothing.
-eq("fieldEconomics' as-billed branch calls canonicalVenueCost",
-   /canonicalVenueCost\(/.test(code("src/lib/fieldEconomics.ts")), true);
-// …and the Cost page must open on it.
-eq("the Cost page defaults to as_billed",
-   /useState<CostMode>\("as_billed"\)/.test(code("src/components/finance/CostSection.tsx")), true);
-// The per-match basis is NOT deleted — this was a default change.
-eq("the per-match basis is still selectable",
-   /setMode\("per_match"\)/.test(code("src/components/finance/CostSection.tsx")), true);
+// ── NOTHING ON THE COST PAGE READS AN OVERRIDE ────────────────────────────────────────────────
+// An override is a billing-timing lump (Soccer Central's $5,600 covering three months). Reading
+// one makes a month's ratio a fact about when an invoice arrived. canonicalVenueCost checks the
+// override first, so fieldEconomics must not call it at all.
+const fe = code("src/lib/fieldEconomics.ts");
+for (const sym of ["canonicalVenueCost", "findOverride", "data.overrides"]) {
+  eq(`fieldEconomics never calls ${sym}`, new RegExp(`\\b${sym.replace(".", "\\.")}\\b`).test(fe), false);
+}
+// CONTROL for those three falses: the file WAS read and does contain the cost code being scanned.
+eq("  control — fieldEconomics really was scanned (it defines groupCost)", /function groupCost\(/.test(fe), true);
+
+// ── THE BASIS AND STRUCTURE TOGGLES ARE GONE, AND STAY GONE ────────────────────────────────────
+const cost = code("src/components/finance/CostSection.tsx");
+for (const gone of ["CostMode", "as_billed", "basis-per-match", "basis-as-billed", "setStructures"]) {
+  eq(`the Cost page carries no ${gone}`, new RegExp(gone.replace("-", "\\-")).test(cost), false);
+}
+// CONTROL: the file was read and still renders the page.
+eq("  control — the Cost page really was scanned (it still builds field months)",
+   /buildFieldMonths\(/.test(cost), true);
+// The COST STRUCTURE column stays — each row must still say which model produced its figure.
+eq("the cost structure column survives the toggle removal", /COST_BASIS_LABEL/.test(cost), true);
+eq("  …and the derived-not-billed label is on the page", /cost-derived-note/.test(cost), true);
+
+// ── ONE PREDICATE FOR "HAS IT HAPPENED" ───────────────────────────────────────────────────────
+// The Match panel's hasKickedOff is the only one. A second definition is how the four-month
+// window and the "all time" label came to disagree in the first place.
+eq("the realized cut goes through hasKickedOff", /hasKickedOff\(/.test(fe), true);
+eq("  …and reads the true instant, never the wall-clock match_date",
+   /\bmatch_date\b[^\n]*now|now[^\n]*\bmatch_date\b/.test(fe), false);
+
+// ── EVERY CALLER STATES ITS REALIZED CUT ──────────────────────────────────────────────────────
+// A default on this parameter made Finance › Revenue realized without anyone asking. The builders
+// must declare it with no default, and every call site must pass a 4th / 3rd argument.
+eq("buildFieldMonths declares realizedThroughMs with NO default",
+   /realizedThroughMs: RealizedThroughMs,/.test(fe), true);
+eq("  …and no builder carries `= Date.now()`", /=\s*Date\.now\(\)/.test(fe), false);
+const callSites = files
+  .filter((f) => /\bbuildFieldMonths\s*\(|\bbuildFieldCostSlots\s*\(/.test(code(f)))
+  .filter((f) => f !== "src/lib/fieldEconomics.ts");
+eq("both builders have callers to check", callSites.length > 0, true);
+const lazy: string[] = [];
+for (const f of callSites) {
+  for (const m of code(f).matchAll(/\b(buildFieldMonths|buildFieldCostSlots)\s*\(([^)]*)\)/g)) {
+    const args = m[2].split(",").length;
+    const need = m[1] === "buildFieldMonths" ? 4 : 3;
+    if (args < need) lazy.push(`${f}: ${m[1]} got ${args} args, needs ${need}`);
+  }
+}
+eq("every call site states its realized cut explicitly", lazy, []);
 
 // And the dead ranking code stays dead.
 for (const sym of ["buildRankingRows", "RankingRow"]) {
