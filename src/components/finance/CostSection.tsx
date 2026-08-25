@@ -305,17 +305,14 @@ export default function CostSection() {
         </div>
       </div>
 
-      {/* THE LABEL THIS PAGE HAS TO CARRY. Every figure below is derived from a rate and the
-          matches that have already kicked off. It is NOT what any venue invoiced, and for a month
-          carrying an override it will not equal what we paid. Saying so here is what stops someone
-          taking these numbers to the bank statement and concluding one of them is broken. */}
+      {/* ONE LINE, AS A NOTE. This was a coral-bordered banner carrying six sentences — the
+          derivation, the override rule, the Soccer Central example, and a warning not to reconcile
+          it to the bank. A permanent box in an alarm colour reads as something being wrong, and
+          nothing here is wrong; it is simply how the number is made. The derivation is the part
+          worth keeping on screen, and it fits in one line. The rest is in the file header and in
+          docs/matchday-api-facts.md, which is where the reasoning lives. */}
       <p className={s.derivedNote} data-testid="cost-derived-note">
-        <b>Derived, not billed.</b> Every row is a per-match rate × the matches that have{" "}
-        <b>already kicked off</b>, or a share venue&apos;s own model — on both sides of the ratio, so
-        cost and revenue count the same matches. Nothing here reads a cost override, so an
-        overridden month will <b>not</b>{" "}equal what we paid: Soccer Central&apos;s $5,600 flat covers
-        three months and appears in none of them at that figure. This measures what a pitch costs to
-        run. It does not reconcile to the bank — Field Costs, OpEx and Cash Flow are the billed view.
+        Per-match rate × the matches that have already kicked off.
       </p>
 
       <EconomicsTable rows={live} grain={grain} total={T} prior={priorRatios} />
