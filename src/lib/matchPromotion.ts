@@ -40,15 +40,90 @@ export type PromoPlan = {
   updatedAt: string | null;
 };
 
+/* ── NEW TO THE SLATE ─────────────────────────────────────────────────────────────────────────
+ *
+ * WHAT MARKETING NEEDS TO KNOW. Copy-week carries a city's slate forward unchanged. What it does
+ * NOT carry is a field that was not there before, a slot moved to a different weekday, or a slot
+ * moved to a different time — and those are the three things a player would notice. So a match is
+ * NEW when its own field, or that field's weekday, or that field-weekday's kick-off time did not
+ * appear in the prior week's slate for its city.
+ *
+ * NOT FROM A CREATION DATE. A match created last month for a slot that has never run is still new
+ * to a player, and one created yesterday for the same slot as always is not. The comparison is
+ * against the slate, never against `created_at`.
+ *
+ * THE PRIOR SLATE INCLUDES CANCELLED MATCHES, and that is the load-bearing decision. A cancelled
+ * match was still scheduled, still published and still copied forward — the slot existed. Measured
+ * on 2026-08-25 across 109 matches: treating a cancelled slot as "did not run" flagged 31, and 21
+ * of those were slots that had run the week before and been cancelled. Bicentennial Park read as a
+ * NEW FIELD in Dallas when it had been on the previous slate and called off. With cancelled
+ * counted the rule flags 10, and every one is a real change.
+ *
+ * PER FIELD, NOT PER CITY. The three tests nest — the field, then that field's day, then that
+ * field-day's time. Testing each against the city's whole slate instead loses the case this exists
+ * for: NEMP running on a Friday for the first time does not flag if any Austin pitch played a
+ * Friday. Measured, the city-wide reading flags 13 of 109 and disagrees on 19, wrongly each time. */
+export type NewFlag = "field" | "day" | "time";
+
+/** Shown on the badge. The order of the keys is the precedence order below. */
+export const NEW_FLAG_LABEL: Record<NewFlag, string> = {
+  field: "NEW FIELD",
+  day: "NEW DAY",
+  time: "NEW TIME",
+};
+
+/** One city's prior-week slate, indexed for the three nested tests. */
+export type CitySlate = { venues: Set<string>; venueDay: Set<string>; venueDayTime: Set<string> };
+export type PriorSlate = Map<string, CitySlate>;
+
+/** Anything with the four fields the comparison reads. VeoMatch satisfies it structurally. */
+export type SlotLike = Pick<VeoMatch, "city" | "venue" | "dayIdx" | "minutes">;
+
+export function buildPriorSlate(prior: SlotLike[]): PriorSlate {
+  const out: PriorSlate = new Map();
+  for (const m of prior) {
+    let c = out.get(m.city);
+    if (!c) { c = { venues: new Set(), venueDay: new Set(), venueDayTime: new Set() }; out.set(m.city, c); }
+    c.venues.add(m.venue);
+    c.venueDay.add(`${m.venue}|${m.dayIdx}`);
+    c.venueDayTime.add(`${m.venue}|${m.dayIdx}|${m.minutes}`);
+  }
+  return out;
+}
+
+/**
+ * The most significant thing that is new about this slot, or null.
+ *
+ * PRECEDENCE IS FIELD, THEN DAY, THEN TIME, and it is a nesting rather than a ranking: a new field
+ * has a new day and a new time by definition, so reporting the day would be true and useless. Only
+ * the outermost thing that changed is worth a badge.
+ *
+ * A CITY ABSENT FROM THE PRIOR SLATE IS ALL-NEW. Warsaw's first week is the live case: no prior
+ * slate at all, so every field on it is a new field.
+ */
+export function newnessOf(m: SlotLike, slate: PriorSlate): NewFlag | null {
+  const c = slate.get(m.city);
+  if (!c) return "field";
+  if (!c.venues.has(m.venue)) return "field";
+  if (!c.venueDay.has(`${m.venue}|${m.dayIdx}`)) return "day";
+  if (!c.venueDayTime.has(`${m.venue}|${m.dayIdx}|${m.minutes}`)) return "time";
+  return null;
+}
+
 /** A match plus whatever plan exists for it. `plan` is null when no row has ever been written. */
 export type PromoMatch = VeoMatch & {
   plan: PromoPlan | null;
   /** planned | needs-decision | none — derived once here so no view re-derives it. */
   state: "planned" | "needs-decision" | "none";
+  /** The most significant thing new about this slot against the prior week's slate, or null. */
+  newFlag: NewFlag | null;
 };
 
 export type PromoWeek = {
   weekStart: string;
+  /** The Monday of the week the NEW test compared against — printed on the page so the rule is
+   *  legible without asking, and so a wrong week is visible rather than silent. */
+  priorWeekStart: string;
   days: { dow: string; date: number; iso: string; today: boolean }[];
   matches: PromoMatch[];
   /** False when match_promotion_plan is not in the database yet — every match reads as "no plan". */
@@ -114,15 +189,24 @@ export async function fetchPromoWeek(
   const ids = week.matches.map((m) => m.apiId);
   const { plans, ready } = await fetchPlans(sb, ids);
 
+  /* THE PRIOR WEEK — the same seven weekdays one week earlier, and its SLATE rather than its play.
+   * Built from the Monday of the week on screen, so paging back a week moves the comparison with
+   * it. `includeCancelled` is the whole point (see newnessOf). */
+  const [y, mo, d] = week.weekStart.split("-").map(Number);
+  const priorRef = new Date(y, mo - 1, d - 7);
+  const prior = await fetchVeoWeek(sb, now, priorRef, null, true);
+  const slate = buildPriorSlate(prior.matches);
+
   const matches: PromoMatch[] = week.matches.map((m) => {
     const plan = plans.get(m.apiId) ?? null;
-    return { ...m, plan, state: stateOf(plan) };
+    return { ...m, plan, state: stateOf(plan), newFlag: newnessOf(m, slate) };
   });
   // City, then day, then time. The grid renders in this order and so does the worklist fallback.
   matches.sort((a, b) => a.city.localeCompare(b.city) || a.dayIdx - b.dayIdx || a.minutes - b.minutes);
 
   return {
     weekStart: week.weekStart,
+    priorWeekStart: prior.weekStart,
     days: week.days,
     matches,
     planTableReady: ready,

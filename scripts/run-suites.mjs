@@ -144,6 +144,11 @@ const NODE_SUITES = [
   // times) with fixtures whose two readings disagree on purpose, and pins that NO path on that
   // page reads a cost override — the fixtures key one 100× the derived figure.
   "scripts/cost-realized-test.ts",
+  // Match Promotion's NEW badge. Both decisions that carry the rule are invisible in the DOM — the
+  // prior slate INCLUDING cancelled matches (excluding them mis-flagged 21 of 31), and the tests
+  // nesting per field rather than per city (a city-wide reading lost 19 cases). A badge is a badge
+  // on screen whichever way it was derived.
+  "scripts/match-promotion-new-test.ts",
 ];
 const ALL_E2E = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
 const GATED_E2E = ALL_E2E.filter((s) => !QUARANTINE.has(s.split("/").pop()));

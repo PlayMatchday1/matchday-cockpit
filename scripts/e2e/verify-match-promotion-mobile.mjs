@@ -128,19 +128,66 @@ for (const width of WIDTHS) {
   const sizes = await page.$$eval("input:not(.sr-only), textarea", (els) => els.map((e) => parseFloat(getComputedStyle(e).fontSize)));
   eq("  CONTROL — the font-size scan found inputs to measure", sizes.length > 0, true);
 
-  // ALL SIX CHIPS INSIDE THEIR ROW.
+  /* ONLY THE SELECTED CHANNELS, INSIDE THEIR ROW.
+   *
+   * ITEMISED — AN EXPECTATION CHANGE, NOT A SELECTOR EDIT. This asserted "every week row renders
+   * all six channel chips". It no longer does: six chips plus "No code" plus "No push planned" on
+   * every row was three lines of chrome stating one absence three times, on a phone. A chip now
+   * appears only when its channel is selected. The overflow measurement — the failure this row
+   * layout actually had — is unchanged and keeps its control. */
   const chipEsc = await page.evaluate(() => {
-    let escaped = 0, counts = [];
+    let escaped = 0, unlit = 0, lit = 0, over = 0, noPlanWithChips = 0, rows = 0, noPlan = 0;
     for (const row of document.querySelectorAll('[data-testid="m-row"]')) {
+      rows++;
+      if (row.getAttribute("data-state") === "none") noPlan++;
       const rb = row.getBoundingClientRect();
       const chips = [...row.querySelectorAll('[data-testid="m-chip"]')];
-      counts.push(chips.length);
+      lit += chips.length;
+      if (chips.length > 6) over++;
+      if (row.getAttribute("data-state") === "none" && chips.length > 0) noPlanWithChips++;
+      unlit += chips.filter((c) => c.getAttribute("data-on") === "0").length;
       escaped += chips.filter((c) => { const b = c.getBoundingClientRect(); return b.right > rb.right + 0.5 || b.left < rb.left - 0.5; }).length;
     }
-    return { escaped, distinct: [...new Set(counts)] };
+    return { escaped, unlit, lit, over, noPlanWithChips, rows, noPlan };
   });
-  eq("every week row renders all six channel chips", chipEsc.distinct, [6]);
+  eq("no unlit channel chip is rendered", chipEsc.unlit, 0);
+  eq("no row renders more than the six channels", chipEsc.over, 0);
+  eq("a row with no plan renders no chips", chipEsc.noPlanWithChips, 0);
   eq("…and none escapes its row", chipEsc.escaped, 0);
+  /* THE CONTROL, WITHOUT DATING THE SUITE. match_promotion_plan is frequently empty — on
+   * 2026-08-25 every row carried no plan — so "at least one lit chip" would be red on a working
+   * page. The zero is explained by the data instead, in both directions. */
+  eq("  PRESENCE: rows rendered, so an absence check means something", chipEsc.rows > 0, true);
+  if (chipEsc.lit === 0) {
+    eq("  zero chips is explained: every row carries no plan", chipEsc.noPlan, chipEsc.rows);
+  } else {
+    console.log(`     ${chipEsc.lit} lit chips across ${chipEsc.rows - chipEsc.noPlan} planned rows`);
+  }
+
+  // THE CHROME THAT WAS REMOVED STAYS REMOVED, proved against a week that rendered.
+  const weekText = await page.locator('[data-testid="m-week"]').innerText();
+  eq("  CONTROL — the week rendered and has text to search", weekText.length > 40, true);
+  for (const gone of ["No code", "No push planned"]) {
+    eq(`the week no longer prints "${gone}"`, weekText.includes(gone), false);
+  }
+
+  // THE NEW BADGE — at most one per row, and it reads one of the three labels.
+  const badges = await page.evaluate(() => {
+    const LABELS = ["NEW FIELD", "NEW DAY", "NEW TIME"];
+    let bad = 0, multi = 0, total = 0;
+    for (const row of document.querySelectorAll('[data-testid="m-row"]')) {
+      const b = [...row.querySelectorAll('[data-testid="m-new-badge"]')];
+      total += b.length;
+      if (b.length > 1) multi++;
+      for (const x of b) if (!LABELS.includes(x.innerText.trim())) bad++;
+    }
+    return { bad, multi, total };
+  });
+  eq("every NEW badge reads one of the three labels", badges.bad, 0);
+  eq("no row carries more than one NEW badge", badges.multi, 0);
+  // Not a fixed count: a week with no new slots is possible. The equality that matters is the
+  // desktop city count, asserted in verify-match-promotion; here the shape is what is checked.
+  console.log(`     ${badges.total} NEW badge(s) on the mobile week`);
 
   // THE PANEL: in flow, one column, next to its row.
   const panel = await page.evaluate(() => {

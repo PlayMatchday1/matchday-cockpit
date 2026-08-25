@@ -23,7 +23,7 @@ import { useFinanceData } from "@/lib/useFinanceData";
 import { getCancelPatterns } from "@/lib/cancelPatterns";
 import { mostRecentCompletedWeekMonday } from "@/lib/weekWindow";
 import {
-  CHANNELS, CHANNEL_KEYS, type ChannelKey, type PromoMatch, type PromoWeek,
+  CHANNELS, CHANNEL_KEYS, NEW_FLAG_LABEL, type ChannelKey, type PromoMatch, type PromoWeek,
 } from "@/lib/matchPromotion";
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -400,6 +400,17 @@ Which matches get promoted, on which channels, and when the push goes out.
   );
 }
 
+/** "Mon 17 Aug – Sun 23 Aug" for a Monday ISO date. Built component-wise from the string: these
+ *  are calendar dates with no zone, and re-parsing one through a Date with a time is the trap. */
+function weekRangeLabel(mondayIso: string): string {
+  const [y, m, d] = mondayIso.split("-").map(Number);
+  if (!y || !m || !d) return mondayIso;
+  const mon = new Date(y, m - 1, d);
+  const sun = new Date(y, m - 1, d + 6);
+  const M = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return `${DOW[0]} ${mon.getDate()} ${M[mon.getMonth()]} – ${DOW[6]} ${sun.getDate()} ${M[sun.getMonth()]}`;
+}
+
 function weekLabel(w: PromoWeek): string {
   const [y, m, d] = w.weekStart.split("-").map(Number);
   const mon = new Date(y, m - 1, d);
@@ -417,18 +428,35 @@ function Plan({ week, byCity, openId, onOpen, openCity, panel }: {
   // city to reach the editor. A panel that is correct but a page away is the bug.
   openCity: string | null; panel: React.ReactNode;
 }) {
+  const priorLabel = weekRangeLabel(week.priorWeekStart);
   return (
     <>
       <div className="px-5 pb-0.5 pt-1">
         <h2 className="m-0 text-[15px] font-extrabold uppercase tracking-[0.02em]">The week</h2>
         <p className="mt-1.5 max-w-[930px] text-[12.5px] text-deep-green/65">
-Click a match to plan it. All six channels show on every tile.
+          Click a match to plan it. A tile shows only what is planned — a channel chip means that
+          channel is selected, and a tile with nothing on it has no plan.
+        </p>
+        {/* THE RULE, ON THE PAGE. Marketing has to be able to read what NEW means without asking,
+            and printing the dates it compared makes a wrong week visible instead of silent. */}
+        <p className="mt-1.5 max-w-[930px] text-[12.5px] text-deep-green/65" data-testid="new-rule">
+          <b className="rounded-[4px] bg-deep-green px-[5px] py-px text-[8.5px] font-extrabold tracking-[0.04em] text-white align-[2px]">NEW</b>{" "}
+          marks a slot that was not on <b>last week&apos;s slate for the same city</b> — the same seven
+          weekdays one week earlier ({priorLabel}), <b>including matches that were cancelled</b>,
+          because a cancelled slot was still scheduled and still published. Compared per field:{" "}
+          <b>NEW FIELD</b>{" "}the pitch is new to the city, <b>NEW DAY</b>{" "}the pitch is not new but this
+          weekday is, <b>NEW TIME</b>{" "}the pitch and weekday ran but at another time. Nothing here
+          reads a match&apos;s creation date — a match booked last month for a slot that has never run
+          is still new to a player.
         </p>
       </div>
       {byCity.map(([city, matches]) => {
         const planned = matches.filter((m) => m.state === "planned").length;
         const check = matches.filter((m) => m.state === "needs-decision").length;
         const none = matches.filter((m) => m.state === "none").length;
+        // Counted from the SAME rows the grid renders, so the header can never describe a
+        // different set of tiles than the one below it.
+        const fresh = matches.filter((m) => m.newFlag !== null).length;
         return (
           <div key={city} className="px-5 pb-1" data-testid="city-block">
             <div className="flex items-baseline gap-2.5 pb-2 pt-3">
@@ -436,6 +464,11 @@ Click a match to plan it. All six channels show on every tile.
               <span className="text-[11.5px] font-bold text-deep-green/45">
                 {planned} planned{check ? ` · ${check} needs a decision` : ""}{none ? ` · ${none} no plan` : ""}
               </span>
+              {fresh > 0 && (
+                <span className="text-[11.5px] font-extrabold text-deep-green" data-testid="city-new-count">
+                  {fresh} new
+                </span>
+              )}
             </div>
             <div className="grid grid-cols-7 gap-2 pb-2.5">
               {week.days.map((d, i) => {
@@ -460,42 +493,73 @@ Click a match to plan it. All six channels show on every tile.
   );
 }
 
+/* THE TILE SHOWS WHAT IS THERE, AND NOTHING ELSE.
+ *
+ * It used to render all six channel chips, a "No code" pill and a "No push planned" line on EVERY
+ * tile — three rows of chrome on 109 matches, of which the great majority carry no plan at all. An
+ * unlit chip, an absent code and an absent push are all the same fact stated three times, and the
+ * city header already counts planned against no-plan.
+ *
+ * SO: a chip appears only when its channel is selected, the code pill only when there is a code,
+ * and the push line only when there is something to say. A tile with no plan is the time, the
+ * field, and — if it is new — its badge.
+ *
+ * PLANNED TILES STAY DISTINCT BY WEIGHT, NOT BY LABEL. A tile with a plan carries chips and a push
+ * line and a solid left rail; a tile without carries a dashed border and almost no ink. The eye
+ * finds the planned ones because they are the only ones with anything in them. */
 function Tile({ m, open, onOpen, weekStart }: { m: PromoMatch; open: boolean; onOpen: (m: PromoMatch, el: HTMLElement) => void; weekStart: string }) {
+  const lit = CHANNELS.filter((c) => m.plan?.channels[c.key] === true);
   const border =
     m.state === "needs-decision" ? "border-amber-300 bg-amber-50"
     : m.state === "none" ? "border-dashed border-cream-line"
-    : "border-cream-line";
+    : "border-cream-line border-l-[3px] border-l-mint";
   return (
     <div data-testid="match-tile" data-state={m.state} data-api-id={m.apiId} data-open={open ? "1" : "0"}
+      data-new={m.newFlag ?? ""}
       onClick={(e) => onOpen(m, e.currentTarget as HTMLElement)}
       className={`mb-1.5 cursor-pointer rounded-[9px] border bg-white p-[7px_8px] last:mb-0 ${border} ${open ? "border-deep-green shadow-[0_0_0_2px_#e6efe9]" : ""}`}>
-      <div className="text-[12.5px] font-extrabold">{m.time}</div>
-      <div className="mb-[5px] mt-px text-[11px] leading-[1.25] text-deep-green/65">{m.venue}</div>
-      {/* ALL SIX, ALWAYS, IN ORDER, AND THEY WRAP. flex-wrap + min-w-0 is what stops SMS running off
-          the tile edge at seven columns — the failure this layout had before. */}
-      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-        <span className="flex min-w-0 flex-wrap gap-[3px]" data-testid="chipset">
-          {CHANNELS.map((c) => {
-            const on = m.plan?.channels[c.key] === true;
-            return (
-              <i key={c.key} data-testid="chip" data-on={on ? "1" : "0"}
-                className={`inline-flex h-[18px] min-w-[24px] items-center justify-center rounded-[5px] border px-1 text-[9.5px] font-extrabold not-italic ${
-                  on ? "border-mint/40 bg-mint-soft/40 text-emerald-700" : "border-cream-line bg-white text-deep-green/25"}`}>
-                {c.short}
-              </i>
-            );
-          })}
-        </span>
-        <span className={`rounded-[5px] border px-[5px] py-px text-[9.5px] font-extrabold ${
-          m.plan?.promoCode ? "border-amber-300 bg-amber-50 text-amber-800" : "border-cream-line bg-[#f4f6f5] text-deep-green/30"}`}>
-          {m.plan?.promoCode ?? "No code"}
-        </span>
+      <div className="flex items-baseline justify-between gap-1.5">
+        <span className="text-[12.5px] font-extrabold">{m.time}</span>
+        {m.newFlag && (
+          <i data-testid="new-badge" data-flag={m.newFlag}
+            title={`This ${m.newFlag === "field" ? "field" : m.newFlag === "day" ? "weekday for this field" : "kick-off time for this field and weekday"} was not on last week's slate for ${m.city}.`}
+            className="shrink-0 rounded-[4px] bg-deep-green px-[5px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.04em] text-white">
+            {NEW_FLAG_LABEL[m.newFlag]}
+          </i>
+        )}
       </div>
-      <div className={`mt-[5px] text-[10px] font-bold ${m.state === "needs-decision" ? "text-amber-700" : m.state === "none" ? "text-deep-green/30" : "text-deep-green/45"}`}>
-        {m.state === "planned" && m.plan?.pushAt
-          ? <>Push <b className="text-deep-green/70">{fmtPushLocal(m.plan.pushAt).day} {fmtPushLocal(m.plan.pushAt).time}</b> · {leadLabel(m.plan.pushAt, weekStart, m.dayIdx, m.minutes)}</>
-          : m.state === "needs-decision" ? "Needs a decision · no push date set" : "No push planned"}
-      </div>
+      <div className="mt-px text-[11px] leading-[1.25] text-deep-green/65">{m.venue}</div>
+      {/* ONLY THE LIT CHANNELS. flex-wrap + min-w-0 still stops the widest chip running off the
+          tile edge at seven columns — the failure this layout had before, and the reason the
+          overflow measurement in verify-match-promotion is kept. */}
+      {(lit.length > 0 || m.plan?.promoCode) && (
+        <div className="mt-[5px] flex min-w-0 flex-wrap items-center gap-1.5">
+          {lit.length > 0 && (
+            <span className="flex min-w-0 flex-wrap gap-[3px]" data-testid="chipset">
+              {lit.map((c) => (
+                <i key={c.key} data-testid="chip" data-on="1"
+                  className="inline-flex h-[18px] min-w-[24px] items-center justify-center rounded-[5px] border border-mint/40 bg-mint-soft/40 px-1 text-[9.5px] font-extrabold not-italic text-emerald-700">
+                  {c.short}
+                </i>
+              ))}
+            </span>
+          )}
+          {m.plan?.promoCode && (
+            <span className="rounded-[5px] border border-amber-300 bg-amber-50 px-[5px] py-px text-[9.5px] font-extrabold text-amber-800">
+              {m.plan.promoCode}
+            </span>
+          )}
+        </div>
+      )}
+      {/* NO "No push planned". An empty tile already says it, and the city header counts it. */}
+      {m.state === "planned" && m.plan?.pushAt && (
+        <div className="mt-[5px] text-[10px] font-bold text-deep-green/45">
+          Push <b className="text-deep-green/70">{fmtPushLocal(m.plan.pushAt).day} {fmtPushLocal(m.plan.pushAt).time}</b> · {leadLabel(m.plan.pushAt, weekStart, m.dayIdx, m.minutes)}
+        </div>
+      )}
+      {m.state === "needs-decision" && (
+        <div className="mt-[5px] text-[10px] font-bold text-amber-700">Needs a decision · no push date set</div>
+      )}
     </div>
   );
 }

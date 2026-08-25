@@ -18,7 +18,7 @@
 // SAME DATA, SAME ROUTES, SAME WRITES. Every figure here is computed by the desktop's own helpers
 // and passed in; nothing is re-derived and no count is redefined.
 
-import { CHANNELS, CHANNEL_KEYS, type ChannelKey, type PromoMatch, type PromoWeek } from "@/lib/matchPromotion";
+import { CHANNELS, CHANNEL_KEYS, NEW_FLAG_LABEL, type ChannelKey, type PromoMatch, type PromoWeek } from "@/lib/matchPromotion";
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -135,18 +135,30 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode }) {
               <span className="ml-auto text-[11px] font-bold text-deep-green/45">
                 {dayMatches.length} match{dayMatches.length === 1 ? "" : "es"}
               </span>
+              {dayMatches.some((m) => m.newFlag) && (
+                <span className="text-[11px] font-extrabold text-deep-green" data-testid="m-day-new-count">
+                  {dayMatches.filter((m) => m.newFlag).length} new
+                </span>
+              )}
             </div>
             {dayMatches.map((m) => (
               <div key={m.apiId}>
                 <div data-testid="m-row" data-state={m.state} data-api-id={m.apiId}
                   onClick={(e) => onOpen(m, e.currentTarget as HTMLElement)}
+                  data-new={m.newFlag ?? ""}
                   className={`mb-2 rounded-[11px] border bg-white px-3 py-[11px] ${
                     m.state === "needs-decision" ? "border-amber-300 bg-amber-50"
-                    : m.state === "none" ? "border-dashed border-cream-line" : "border-cream-line"} ${
+                    : m.state === "none" ? "border-dashed border-cream-line" : "border-cream-line border-l-[3px] border-l-mint"} ${
                     m.apiId === openId ? "border-deep-green shadow-[0_0_0_2px_#e6efe9]" : ""}`}>
                   <div className="flex items-baseline gap-2">
                     <span className="text-[15px] font-black tabular-nums">{m.time}</span>
                     <span className="min-w-0 flex-1 truncate text-[13.5px] font-bold">{m.venue}</span>
+                    {m.newFlag && (
+                      <span data-testid="m-new-badge" data-flag={m.newFlag}
+                        className="whitespace-nowrap rounded-[5px] bg-deep-green px-[5px] py-0.5 text-[9px] font-extrabold tracking-[0.04em] text-white">
+                        {NEW_FLAG_LABEL[m.newFlag]}
+                      </span>
+                    )}
                     {/* THE CITY CHIP IS NOT OPTIONAL — the section header is the day now, so the
                         row is the only thing that can say where this match is. */}
                     <span data-testid="m-city"
@@ -154,19 +166,26 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode }) {
                       {m.city}
                     </span>
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-[7px]">
-                    <Chips m={m} />
-                    <span className={`rounded-[5px] border px-1.5 py-0.5 text-[9.5px] font-extrabold ${
-                      m.plan?.promoCode ? "border-amber-300 bg-amber-50 text-amber-800" : "border-cream-line bg-[#f4f6f5] text-deep-green/30"}`}>
-                      {m.plan?.promoCode ?? "No code"}
-                    </span>
-                  </div>
-                  <div className={`mt-[7px] text-[11.5px] font-bold ${
-                    m.state === "needs-decision" ? "text-amber-700" : m.state === "none" ? "text-deep-green/30" : "text-deep-green/45"}`}>
-                    {m.state === "planned" && m.plan?.pushAt
-                      ? <>Push <b className="text-deep-green/70">{fmtPush(m.plan.pushAt).day} {fmtPush(m.plan.pushAt).time}</b> · {leadLabel(m.plan.pushAt, week.weekStart, m.dayIdx, m.minutes)}</>
-                      : m.state === "needs-decision" ? "Needs a decision" : "No push planned"}
-                  </div>
+                  {/* ONLY WHAT IS PLANNED — see the Tile note in MatchPromotionView. An unlit chip,
+                      an absent code and an absent push are one fact stated three times. */}
+                  {(CHANNEL_KEYS.some((k) => m.plan?.channels[k]) || m.plan?.promoCode) && (
+                    <div className="mt-2 flex flex-wrap items-center gap-[7px]">
+                      <Chips m={m} litOnly />
+                      {m.plan?.promoCode && (
+                        <span className="rounded-[5px] border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9.5px] font-extrabold text-amber-800">
+                          {m.plan.promoCode}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {m.state === "planned" && m.plan?.pushAt && (
+                    <div className="mt-[7px] text-[11.5px] font-bold text-deep-green/45">
+                      Push <b className="text-deep-green/70">{fmtPush(m.plan.pushAt).day} {fmtPush(m.plan.pushAt).time}</b> · {leadLabel(m.plan.pushAt, week.weekStart, m.dayIdx, m.minutes)}
+                    </div>
+                  )}
+                  {m.state === "needs-decision" && (
+                    <div className="mt-[7px] text-[11.5px] font-bold text-amber-700">Needs a decision</div>
+                  )}
                 </div>
                 {/* The panel opens UNDER ITS OWN ROW. Not a modal — a modal on a phone loses your
                     place in a sixty-row list, and there is nothing here that needs to trap focus. */}

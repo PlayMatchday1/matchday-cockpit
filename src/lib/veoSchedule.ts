@@ -71,7 +71,19 @@ export type VeoWeek = {
  *   THE FILTER IS IN THE QUERY, not applied to the result, so a confined caller's rows never leave
  *   the database. It comes from app_users via the route — never from a query param.
  */
-export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date = now, scopeCity: string | null = null): Promise<VeoWeek> {
+/* INCLUDE CANCELLED — for callers that need the SLATE rather than the play.
+ *
+ * Match Promotion's NEW-match rule compares this week against the prior week's SLATE, and a
+ * cancelled match was still on it: scheduled, published, copied forward by copy-week, and seen by
+ * players. Measured 2026-08-25, treating a cancelled slot as "did not run" flagged 31 of 109
+ * matches as new and 21 of those were slots that had existed the week before and been cancelled —
+ * Bicentennial Park reading as a NEW FIELD in Dallas being the clearest.
+ *
+ * IT IS A PARAMETER RATHER THAN A SECOND QUERY because this function owns the wall-clock parse,
+ * the fleet-city filter and the deleted-row exclusion. A separate prior-week fetch would be a
+ * second place for the wall-clock trap to be got wrong, which is the thing this module exists to
+ * prevent. Default false: every existing caller keeps play-only semantics. */
+export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date = now, scopeCity: string | null = null, includeCancelled = false): Promise<VeoWeek> {
   const mon = weekMonday(weekRef);
   const sun = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 6);
   const todayIso = ymd(now);
@@ -97,7 +109,7 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
   if (scopeCity) q = q.eq("city_identifier", scopeCity);
   const { data: rows, error } = await q;
   if (error) throw new Error(`veo matches: ${error.message}`);
-  const live = (rows ?? []).filter((r) => !r.is_cancelled && r.start_date);
+  const live = (rows ?? []).filter((r) => (includeCancelled || !r.is_cancelled) && r.start_date);
 
   // intent for this week's matches
   const ids = live.map((r) => r.api_id);

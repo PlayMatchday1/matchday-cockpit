@@ -66,18 +66,53 @@ if (!tableReady) {
 }
 eq("no uncaught page errors", errors, []);
 
-// ── 2. ALL SIX CHIPS, INSIDE THE TILE, AT 1280 ────────────────────────────────────────────────
-console.log("\n── the six channel chips fit ──");
+// ── 2. ONLY THE SELECTED CHANNELS, INSIDE THE TILE, AT 1280 ───────────────────────────────────
+//
+// ITEMISED — AN EXPECTATION CHANGE, NOT A SELECTOR EDIT. This used to assert "every tile renders
+// all six chips". It no longer does, deliberately: six chips, a "No code" pill and a "No push
+// planned" line rendered on every one of 109 tiles was three rows of chrome saying the same thing
+// three times, and most tiles carry no plan at all. A chip now appears ONLY when its channel is
+// selected. What that assertion was really protecting — a chip running off the tile edge, which is
+// the failure this layout actually had — is unchanged below and still carries its control.
+console.log("\n── only the selected channels render, and they fit ──");
 for (const width of [1620, 1280]) {
   await page.setViewportSize({ width, height: 1200 });
   await page.waitForTimeout(250);
-  const perTile = await page.locator('[data-testid="match-tile"]').evaluateAll((els) =>
-    els.slice(0, 12).map((t) => t.querySelectorAll('[data-testid="chip"]').length));
-  eq(`  ${width}px — every tile renders all six chips`, [...new Set(perTile)], [6]);
+  // NO UNLIT CHIP EXISTS ANYWHERE. This is the new behaviour stated as an assertion rather than
+  // as an absence: an unlit chip would carry data-on="0", and none may be rendered.
+  const unlit = await page.locator('[data-testid="chip"][data-on="0"]').count();
+  eq(`  ${width}px — no unlit channel chip is rendered`, unlit, 0);
+  /* THE CONTROL FOR THAT ZERO, AND IT MUST NOT DATE THE SUITE. `match_promotion_plan` is
+   * frequently EMPTY — on 2026-08-25 all 109 tiles carried no plan, so "at least one lit chip
+   * exists" would have been red on a page that was working perfectly. The zero is instead
+   * explained by the data: chips appear only on tiles that HAVE a plan, so with every tile at
+   * state="none" a chip count of zero is the correct render, and with any planned tile present
+   * the chips must be there. Both directions are asserted, so neither can pass vacuously. */
+  const census = await page.locator('[data-testid="match-tile"]').evaluateAll((els) => ({
+    tiles: els.length,
+    noPlan: els.filter((t) => t.getAttribute("data-state") === "none").length,
+    chips: els.reduce((n, t) => n + t.querySelectorAll('[data-testid="chip"]').length, 0),
+    overSix: els.filter((t) => t.querySelectorAll('[data-testid="chip"]').length > 6).length,
+    chipsOnNoPlan: els.filter((t) => t.getAttribute("data-state") === "none"
+      && t.querySelectorAll('[data-testid="chip"]').length > 0).length,
+    planNoChips: els.filter((t) => t.getAttribute("data-state") === "needs-decision"
+      && t.querySelectorAll('[data-testid="chip"]').length === 0).length,
+  }));
+  eq(`  ${width}px — PRESENCE: tiles rendered, so an absence check means something`, census.tiles > 0, true);
+  eq(`  ${width}px — no tile renders more than the six channels`, census.overSix, 0);
+  eq(`  ${width}px — a tile with no plan renders no chips`, census.chipsOnNoPlan, 0);
+  // The other direction: a tile whose state says channels ARE lit must render them.
+  eq(`  ${width}px — a tile needing a decision has its lit channels drawn`, census.planNoChips, 0);
+  if (census.chips === 0) {
+    eq(`  ${width}px — zero chips is explained: every tile carries no plan`, census.noPlan, census.tiles);
+    console.log(`     no promotion plans exist this week — ${census.tiles} tiles, all state="none"`);
+  } else {
+    console.log(`     ${census.chips} lit chips across ${census.tiles - census.noPlan} planned tiles`);
+  }
 
   // OVERFLOW IS MEASURED, NOT ASSUMED: each chip's right edge must sit inside its tile's box.
   const escaped = await page.locator('[data-testid="match-tile"]').evaluateAll((els) =>
-    els.slice(0, 12).reduce((n, t) => {
+    els.reduce((n, t) => {
       const tb = t.getBoundingClientRect();
       return n + [...t.querySelectorAll('[data-testid="chip"]')]
         .filter((c) => { const b = c.getBoundingClientRect(); return b.right > tb.right + 0.5 || b.left < tb.left - 0.5; }).length;
@@ -85,8 +120,16 @@ for (const width of [1620, 1280]) {
   eq(`  ${width}px — no chip escapes its tile`, escaped, 0);
 }
 // POSITIVE CONTROL for those zeros: the same measurement DOES catch a chip pushed out of the box.
-const controlEscape = await page.locator('[data-testid="match-tile"]').first().evaluate((t) => {
-  const c = t.querySelector('[data-testid="chip"]');
+// The tile is chosen BY HAVING A CHIP — .first() no longer works now that most tiles have none.
+/* The control is measured on whatever inline element the tile actually has — a chip when one
+ * exists, otherwise the NEW badge, otherwise the venue line. The MEASUREMENT is what is being
+ * proved (that a box escaping its tile is detected), and it must not depend on this week having a
+ * promotion plan. Returns null only if the grid rendered nothing at all, which fails. */
+const controlEscape = await page.evaluate(() => {
+  const t = [...document.querySelectorAll('[data-testid="match-tile"]')][0];
+  if (!t) return null;
+  const c = t.querySelector('[data-testid="chip"]') ?? t.querySelector('[data-testid="new-badge"]') ?? t.lastElementChild;
+  if (!c) return null;
   const before = c.style.cssText;
   c.style.position = "relative"; c.style.left = "9999px";
   const tb = t.getBoundingClientRect(), b = c.getBoundingClientRect();
@@ -94,7 +137,62 @@ const controlEscape = await page.locator('[data-testid="match-tile"]').first().e
   c.style.cssText = before;
   return caught;
 });
-eq("  CONTROL — the overflow measurement catches a deliberately displaced chip", controlEscape, true);
+eq("  CONTROL — the overflow measurement catches a deliberately displaced box", controlEscape, true);
+
+// ── 2b. THE CHROME THAT WAS REMOVED STAYS REMOVED ─────────────────────────────────────────────
+console.log("\n── absence, proved against a page that rendered ──");
+const gridText = await page.locator('[data-testid="city-block"]').first().innerText();
+eq("  CONTROL — the grid rendered and has text to search", gridText.length > 40, true);
+for (const gone of ["No code", "No push planned"]) {
+  eq(`  the grid no longer prints "${gone}"`, gridText.includes(gone), false);
+}
+// A tile with no plan is the time, the field, and nothing else — so it carries no push line.
+const noPlanPush = await page.locator('[data-testid="match-tile"][data-state="none"]').evaluateAll((els) =>
+  els.filter((t) => /Push |Needs a decision/.test(t.innerText)).length);
+eq("  a tile with no plan carries no push line", noPlanPush, 0);
+eq("  CONTROL — there are no-plan tiles to check",
+   await page.locator('[data-testid="match-tile"][data-state="none"]').count() > 0, true);
+
+// ── 2c. THE NEW BADGE, AND THE CITY COUNT THAT DESCRIBES IT ───────────────────────────────────
+console.log("\n── NEW badges and their city counts ──");
+eq("the rule is stated on the page", await page.locator('[data-testid="new-rule"]').count(), 1);
+const ruleText = await page.locator('[data-testid="new-rule"]').innerText();
+for (const must of ["cancelled", "NEW FIELD", "NEW DAY", "NEW TIME"]) {
+  eq(`  the rule says "${must}"`, ruleText.includes(must), true);
+}
+const badgeAudit = await page.evaluate(() => {
+  const LABELS = ["NEW FIELD", "NEW DAY", "NEW TIME"];
+  const out = [];
+  let bad = 0;
+  for (const block of document.querySelectorAll('[data-testid="city-block"]')) {
+    const badges = [...block.querySelectorAll('[data-testid="new-badge"]')];
+    for (const b of badges) if (!LABELS.includes(b.innerText.trim())) bad++;
+    // ONE badge per tile at most — the brief is one badge saying which it is, not a set.
+    const multi = [...block.querySelectorAll('[data-testid="match-tile"]')]
+      .filter((t) => t.querySelectorAll('[data-testid="new-badge"]').length > 1).length;
+    const chipEl = block.querySelector('[data-testid="city-new-count"]');
+    out.push({
+      city: block.querySelector("h2")?.innerText.trim() ?? "?",
+      badges: badges.length,
+      claimed: chipEl ? Number(chipEl.innerText.replace(/\D/g, "")) : 0,
+      multi,
+    });
+  }
+  return { rows: out, bad };
+});
+eq("every badge reads one of the three labels", badgeAudit.bad, 0);
+eq("no tile carries more than one badge", badgeAudit.rows.filter((r) => r.multi > 0).map((r) => r.city), []);
+eq("every city's 'N new' equals the badges rendered under it",
+   badgeAudit.rows.filter((r) => r.badges !== r.claimed).map((r) => `${r.city} ${r.badges}≠${r.claimed}`), []);
+const totalBadges = badgeAudit.rows.reduce((n, r) => n + r.badges, 0);
+// THE CONTROL FOR THE EQUALITY ABOVE, which would hold vacuously if nothing were badged at all.
+// A week with no new slots is possible, so the check is two-directional rather than a fixed count:
+// either badges exist, or NO city claims any.
+if (totalBadges === 0) {
+  eq("  no new slots this week — and no city claims one", badgeAudit.rows.filter((r) => r.claimed > 0), []);
+} else {
+  eq(`  CONTROL — ${totalBadges} badges rendered, so the equality had something to compare`, totalBadges > 0, true);
+}
 
 // ── 3. THE STRIP COUNTS EQUAL WHAT IS RENDERED ────────────────────────────────────────────────
 console.log("\n── the next-48-hours counts equal the page ──");

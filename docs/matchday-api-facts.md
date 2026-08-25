@@ -2425,3 +2425,66 @@ a regression does not make a suite fail *less*.
 **THE ASYMMETRY IS THE TELL.** Run a failing suite against the parent commit before assuming the
 diff caused it. Four failures on the parent and one on the change is not a regression; it is a
 suite that was already red, plus a page that sometimes loads slowly.
+
+## MATCH PROMOTION — WHAT COUNTS AS A NEW SLOT (2026-08-25)
+
+The tiles carry a **NEW FIELD / NEW DAY / NEW TIME** badge, and the rule is printed on the page so
+marketing can read it without asking. A match is NEW when its own field, or that field's weekday,
+or that field-weekday's kick-off time did not appear in **the prior week's slate for its city** —
+the same seven weekdays one week earlier. **A match's creation date is never read**: one booked
+last month for a slot that has never run is still new to a player.
+
+### THE PRIOR SLATE INCLUDES CANCELLED MATCHES, AND THAT DECIDES MOST OF THE ANSWER
+
+`fetchVeoWeek` excludes cancelled matches, so the first build compared against **what was played**.
+Measured on 2026-08-25 over 109 matches against the week of 2026-08-17 (82 played, **29 cancelled**):
+
+| prior week is… | flagged | of 109 |
+|---|---|---|
+| what was **played** | 31 | 28% |
+| what was **scheduled** (cancelled included) | **10** | **9%** |
+
+**21 of the 31 were slots that had been on the previous slate and were called off.** Bicentennial
+Park read as a NEW FIELD in Dallas; PAC Global as a NEW FIELD in Houston; Centennial Commons as a
+NEW FIELD in St. Louis. None of them is new — each was scheduled the week before and cancelled. A
+cancelled match was still published, still copied forward by copy-week, and still seen by players,
+so the slot existed. `fetchVeoWeek` takes an `includeCancelled` flag rather than Match Promotion
+running a second query, because that function owns the wall-clock parse and the fleet-city filter.
+
+### PER FIELD, NOT PER CITY
+
+The three tests **nest**: the field, then that field's weekday, then that field-weekday's time.
+Testing each against the city's whole slate instead flags only 13 of 109 and **disagrees on 19,
+wrongly every time** — NEMP running on a Friday for the first time does not flag, because some
+other Austin pitch played a Friday. Precedence is a nesting rather than a ranking: a new field has
+a new day and a new time by definition, so reporting the day would be true and useless.
+
+### WHAT THE LIVE RULE FLAGS THIS WEEK — 10 of 109
+
+| city | badges |
+|---|---|
+| Warsaw | 3 × NEW FIELD — Hala Piłkarska Bemowo, the city's first week (no prior slate at all) |
+| Austin | 5 × NEW DAY — NEMP Fri 6:30/7:30/8:30 and Sun 6:30/7:30; NEMP ran Mon/Tue/Thu/Sat |
+| Houston | 1 × NEW TIME — ATH Pearland Sat 8:00, was 8:30 |
+| San Antonio | 1 × NEW TIME — Soccer Central Sun 9:00, Sundays were 7:00 and 8:00 |
+| Atlanta · Dallas · OKC · St. Louis | none |
+
+Reproduced as fixtures in `scripts/match-promotion-new-test.ts`, so the suite and this table fail
+together rather than drifting apart.
+
+### THE TILES CARRY ONLY WHAT IS PLANNED
+
+Six channel chips, a "No code" pill and a "No push planned" line rendered on **every** tile — three
+rows of chrome across 109 matches saying one absence three times, while the city header already
+counted planned against no-plan. Now a chip appears only when its channel is selected, the code
+pill only when there is a code, and the push line only when there is a push. A tile with no plan is
+the time, the field, and its badge if it has one. Planned tiles are distinguished by **weight** — a
+solid mint left rail and actual content — not by a label.
+
+**`match_promotion_plan` IS FREQUENTLY EMPTY, AND A SUITE MUST NOT ASSUME OTHERWISE.** On
+2026-08-25 **all 109 tiles carried no plan**, so `verify-match-promotion`'s natural control — "at
+least one lit chip is on the page" — would have been red on a page that was working perfectly. The
+control is two-directional instead: either chips exist, or every tile is proved to be `state="none"`,
+which is what makes a chip count of zero the correct render. The overflow measurement that the old
+"all six chips" assertion really protected is unchanged and now picks its control element by
+whatever the tile has.
