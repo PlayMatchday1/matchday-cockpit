@@ -19,7 +19,8 @@ import "server-only"; // no-op under --conditions=react-server
 
 import {
   buildPriorSlate, newnessOf, NEW_FLAG_LABEL,
-  type NewFlag, type SlotLike,
+  coverageCaption, coverageStateOf, coverageSummary,
+  type NewFlag, type PromoMatch, type SlotLike,
 } from "../src/lib/matchPromotion";
 
 let pass = 0, fail = 0;
@@ -145,6 +146,59 @@ console.log("\nTHE MEASURED WEEK, REPRODUCED — 2026-08-24 against 2026-08-17")
   for (const [label, m, want] of cases) is(label, newnessOf(m, prior), want);
   const flagged = cases.filter(([, m]) => newnessOf(m, prior) !== null).length;
   is("seven of the ten reproduce as new, three as unchanged", flagged, 7);
+}
+
+/* ── COVERAGE ─────────────────────────────────────────────────────────────────────────────────
+ * Both weeks have to be asserted here rather than in the browser: match_promotion_plan is empty in
+ * production, so a screen check can only ever see the no-plans half. The half that cannot be
+ * observed is exactly the half worth pinning. */
+console.log("\nCOVERAGE — colour marks the exception, and content carries the distinction");
+const pm = (city: string, dayIdx: number, pushAt: string | null): PromoMatch =>
+  ({ city, dayIdx, venue: "V", minutes: 1140, apiId: 1, state: pushAt ? "planned" : "none",
+     plan: pushAt ? { pushAt } : null } as unknown as PromoMatch);
+const days7 = Array.from({ length: 7 }, (_, i) => ({ dow: "x", date: i, iso: `d${i}`, today: false }));
+{
+  is("a day with no matches is 'none'", coverageStateOf([]), "none");
+  is("a day with matches and no push is 'open'", coverageStateOf([pm("Austin", 0, null)]), "open");
+  is("one push on the day makes it 'planned'", coverageStateOf([pm("Austin", 0, null), pm("Austin", 0, "2026-08-25T12:00:00Z")]), "planned");
+  is("...and a push on its own does too", coverageStateOf([pm("Austin", 0, "2026-08-25T12:00:00Z")]), "planned");
+}
+{
+  // THE WEEK NOBODY HAS STARTED — the live case on 2026-08-25, all 109 matches unplanned.
+  const week = { days: days7, matches: [pm("Austin", 0, null), pm("Austin", 0, null), pm("Houston", 3, null)] };
+  const s = coverageSummary(week);
+  is("no push anywhere → anyPlanned is false", s.anyPlanned, false);
+  is("...open days counted per city-day, not per match", s.openDays, 2);
+  is("...and the match count is what the banner quotes", s.openMatches, 3);
+  is("the caption says it ONCE, with the count", coverageCaption(s), "No pushes planned this week. 3 matches open.");
+  is("...and it is singular for one", coverageCaption({ ...s, openMatches: 1 }), "No pushes planned this week. 1 match open.");
+}
+{
+  // A WEEK WITH COVERAGE — now open is the exception and the caption changes shape.
+  const week = { days: days7, matches: [
+    pm("Austin", 0, "2026-08-25T12:00:00Z"), pm("Austin", 1, null), pm("Houston", 3, null), pm("Houston", 4, null),
+  ] };
+  const s = coverageSummary(week);
+  is("one push anywhere → anyPlanned is true", s.anyPlanned, true);
+  is("...covered days counted", s.plannedDays, 1);
+  is("...open days counted", s.openDays, 3);
+  is("the caption switches shape rather than repeating the banner",
+     coverageCaption(s), "1 covered day · 3 days with matches and no push (3 matches).");
+  is("  CONTROL — the two captions are not the same sentence",
+     coverageCaption(s) === coverageCaption({ ...s, anyPlanned: false }), false);
+}
+{
+  // THE DISTINCTION THIS VIEW EXISTS FOR must not depend on anyPlanned, because the colour does.
+  const empty = coverageStateOf([]);
+  const open = coverageStateOf([pm("Austin", 0, null)]);
+  is("'no matches' and 'matches, no push' stay different states", empty === open, false);
+  is("...and neither is 'planned'", empty === "planned" || open === "planned", false);
+  // A city with no matches at all contributes nothing rather than reading as open.
+  const s = coverageSummary({ days: days7, matches: [] });
+  is("an empty week has no open days", s.openDays, 0);
+  is("...no covered days", s.plannedDays, 0);
+  is("...and reports zero matches open", s.openMatches, 0);
+  is("  CONTROL — a non-empty week does report some", coverageSummary({ days: days7, matches: [pm("Austin", 0, null)] }).openMatches, 1);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -18,7 +18,7 @@
 // SAME DATA, SAME ROUTES, SAME WRITES. Every figure here is computed by the desktop's own helpers
 // and passed in; nothing is re-derived and no count is redefined.
 
-import { CHANNELS, CHANNEL_KEYS, NEW_FLAG_LABEL, type ChannelKey, type PromoMatch, type PromoWeek } from "@/lib/matchPromotion";
+import { CHANNELS, CHANNEL_KEYS, NEW_FLAG_LABEL, coverageCaption, coverageStateOf, coverageSummary, type ChannelKey, type PromoMatch, type PromoWeek } from "@/lib/matchPromotion";
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -310,25 +310,26 @@ function Ranking({ ranking, ready, total }: { ranking: MobileProps["ranking"]; r
 
 /* ── COVERAGE AS SEVEN DOTS ──────────────────────────────────────────────────────────────────── */
 
+/* SAME RULE AS THE DESKTOP GRID — colour marks the exception, and with nothing planned there is no
+ * exception to mark. See coverageSummary in lib/matchPromotion. The state letter still separates a
+ * day with matches and no push (·) from a day with no matches (–), so the distinction survives the
+ * colour going away. */
 function Coverage({ week }: { week: PromoWeek }) {
   const cities = [...new Set(week.matches.map((m) => m.city))].sort();
-  const openDays = cities.reduce((n, city) => n + week.days.filter((_, i) => {
-    const dm = week.matches.filter((m) => m.city === city && m.dayIdx === i);
-    return dm.length > 0 && dm.every((m) => !m.plan?.pushAt);
-  }).length, 0);
+  const summary = coverageSummary(week);
   return (
     <div data-testid="m-coverage">
       <div className="px-3 pb-0.5 pt-4">
         <h2 className="m-0 text-[11px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Coverage</h2>
-        <div className="mb-2 text-[11.5px] font-bold text-deep-green/65">
-          {cities.length} cit{cities.length === 1 ? "y" : "ies"} · {openDays} open day{openDays === 1 ? "" : "s"}
+        <div className={`mb-2 text-[11.5px] ${summary.anyPlanned ? "font-bold text-deep-green/65" : "font-extrabold text-deep-green"}`}
+          data-testid="m-coverage-caption" data-any-planned={summary.anyPlanned ? "1" : "0"}>
+          {coverageCaption(summary)}
         </div>
       </div>
       {cities.map((city) => {
         const perDay = week.days.map((_, i) => {
-          const dm = week.matches.filter((m) => m.city === city && m.dayIdx === i);
-          if (dm.length === 0) return "n" as const;                       // no matches
-          return dm.some((m) => m.plan?.pushAt) ? ("p" as const) : ("o" as const); // planned / open
+          const st = coverageStateOf(week.matches.filter((m) => m.city === city && m.dayIdx === i));
+          return st === "planned" ? ("p" as const) : st === "open" ? ("o" as const) : ("n" as const);
         });
         const planned = perDay.filter((x) => x === "p").length;
         const open = perDay.filter((x) => x === "o").length;
@@ -342,13 +343,18 @@ function Coverage({ week }: { week: PromoWeek }) {
             </div>
             <div className="grid grid-cols-7 gap-[5px]">
               {perDay.map((st, i) => (
-                <span key={i} data-testid="m-dot" data-st={st}
+                <span key={i} data-testid="m-dot" data-st={st} data-marked={st === "o" && summary.anyPlanned ? "1" : "0"}
                   className={`rounded-[7px] px-0 pb-[5px] pt-1.5 text-center text-[9px] font-extrabold uppercase tracking-[0.03em] ${
-                    st === "p" ? "border border-mint/50 bg-mint-soft/50 text-emerald-700"
-                    : st === "o" ? "border border-coral/40 bg-[#f8d5cd] text-[#a8321f]"
+                    st === "p" ? "border border-mint/60 bg-mint-soft text-emerald-700"
+                    : st === "o"
+                      ? (summary.anyPlanned
+                          ? "border border-cream-line border-l-2 border-l-coral/70 bg-white text-deep-green/70"
+                          : "border border-cream-line bg-white text-deep-green/55")
                     : "border border-cream-line/70 bg-[#fafbfa] text-deep-green/25"}`}>
                   {DOW[i]}
-                  <i className="mt-0.5 block text-[12px] not-italic">{st === "p" ? "✓" : st === "o" ? "!" : "–"}</i>
+                  {/* ✓ covered · · matches, no push · – no matches. The glyph carries the
+                      distinction so it survives with no colour at all. */}
+                  <i className="mt-0.5 block text-[12px] not-italic">{st === "p" ? "✓" : st === "o" ? "·" : "–"}</i>
                 </span>
               ))}
             </div>

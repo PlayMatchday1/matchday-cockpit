@@ -23,7 +23,8 @@ import { useFinanceData } from "@/lib/useFinanceData";
 import { getCancelPatterns } from "@/lib/cancelPatterns";
 import { mostRecentCompletedWeekMonday } from "@/lib/weekWindow";
 import {
-  CHANNELS, CHANNEL_KEYS, NEW_FLAG_LABEL, type ChannelKey, type PromoMatch, type PromoWeek,
+  CHANNELS, CHANNEL_KEYS, NEW_FLAG_LABEL, coverageCaption, coverageStateOf, coverageSummary,
+  type ChannelKey, type PromoMatch, type PromoWeek,
 } from "@/lib/matchPromotion";
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -564,16 +565,36 @@ function Tile({ m, open, onOpen, weekStart }: { m: PromoMatch; open: boolean; on
   );
 }
 
-/* ── COVERAGE ───────────────────────────────────────────────────────────────────────────────── */
+/* ── COVERAGE ─────────────────────────────────────────────────────────────────────────────────
+ *
+ * COLOUR MARKS THE EXCEPTION. Every open cell used to be a filled coral block reading OPEN, so on
+ * a week with no plans at all — which is most of them before anyone starts — the entire grid was
+ * coral and the colour said nothing. See the note on coverageSummary in lib/matchPromotion.
+ *
+ * THE COVERED CELL IS THE LOUD ONE, always: mint fill, mint rail, the push time and its channels.
+ * An open cell is quiet — its field and time in normal weight, with a thin coral edge ONLY when
+ * there is coverage for it to be an exception to.
+ *
+ * THE DISTINCTION THIS VIEW EXISTS FOR IS CARRIED BY CONTENT, NOT COLOUR: an open cell prints a
+ * field and a time, an empty one prints a dash. That holds when nothing is coloured at all. */
 function Coverage({ week }: { week: PromoWeek }) {
   const cities = [...new Set(week.matches.map((m) => m.city))].sort();
+  const summary = coverageSummary(week);
   return (
     <>
       <div className="px-5 pb-0.5 pt-1">
         <h2 className="m-0 text-[15px] font-extrabold uppercase tracking-[0.02em]">Push coverage</h2>
-        <p className="mt-1.5 max-w-[930px] text-[12.5px] text-deep-green/65">
-Coral is a day with matches and no push planned.
+        {/* SAID ONCE, ABOVE THE GRID, RATHER THAN IN EVERY CELL. */}
+        <p className={`mt-1.5 max-w-[930px] text-[12.5px] ${summary.anyPlanned ? "text-deep-green/65" : "font-bold text-deep-green"}`}
+          data-testid="coverage-caption" data-any-planned={summary.anyPlanned ? "1" : "0"}>
+          {coverageCaption(summary)}
         </p>
+        {summary.anyPlanned && (
+          <p className="mt-1 max-w-[930px] text-[12px] text-deep-green/55">
+            A mint cell is covered. A coral edge is a day with matches and no push. A dash is a day
+            with no matches.
+          </p>
+        )}
       </div>
       <div className="mx-5 mb-1.5 overflow-x-auto">
         <table className="w-full table-fixed border-collapse" data-testid="coverage-grid">
@@ -593,23 +614,32 @@ Coral is a day with matches and no push planned.
                 {week.days.map((d, i) => {
                   const dayMatches = week.matches.filter((m) => m.city === city && m.dayIdx === i);
                   const planned = dayMatches.filter((m) => m.plan?.pushAt);
-                  if (dayMatches.length === 0) {
-                    return <td key={d.iso} className="border-b border-l border-cream-line/60 p-1.5 align-top"><span className="block py-2 text-center text-[13px] text-deep-green/25">—</span></td>;
+                  const state = coverageStateOf(dayMatches);
+                  if (state === "none") {
+                    return <td key={d.iso} data-testid="coverage-day" data-cov="none" className="border-b border-l border-cream-line/60 p-1.5 align-top"><span className="block py-2 text-center text-[13px] text-deep-green/25">—</span></td>;
                   }
-                  if (planned.length === 0) {
+                  if (state === "open") {
                     return (
-                      <td key={d.iso} className="border-b border-l border-cream-line/60 p-1.5 align-top">
-                        <div data-testid="coverage-open" className="rounded-lg bg-[#f8d5cd] px-2 py-2.5 text-center text-[11px] font-extrabold uppercase tracking-[0.06em] text-[#a8321f]">
-                          Open
-                          <small className="mt-0.5 block text-[9px] font-bold normal-case tracking-normal opacity-85">{dayMatches[0].venue} {dayMatches[0].time}</small>
+                      <td key={d.iso} data-testid="coverage-day" data-cov="open" className="border-b border-l border-cream-line/60 p-1.5 align-top">
+                        {/* NORMAL WEIGHT, NO FILL, NO "OPEN". The thin coral edge appears only when
+                            some day in the week IS covered — otherwise open is the rule, not the
+                            exception, and the caption above has already said so once. */}
+                        <div data-testid="coverage-open" data-marked={summary.anyPlanned ? "1" : "0"}
+                          className={`px-2 py-1.5 ${summary.anyPlanned ? "rounded-r-lg border-l-2 border-coral/70 bg-coral-soft/20" : ""}`}>
+                          <div className="text-[11.5px] leading-[1.2] text-deep-green/80">{dayMatches[0].venue}</div>
+                          <div className="mt-px text-[10.5px] text-deep-green/55">
+                            {dayMatches[0].time}
+                            {dayMatches.length > 1 && <span className="text-deep-green/40"> · +{dayMatches.length - 1} more</span>}
+                          </div>
                         </div>
                       </td>
                     );
                   }
                   return (
-                    <td key={d.iso} className="border-b border-l border-cream-line/60 p-1.5 align-top">
+                    <td key={d.iso} data-testid="coverage-day" data-cov="planned" className="border-b border-l border-cream-line/60 p-1.5 align-top">
+                      {/* THE ONE THE EYE SHOULD LAND ON — the only filled cell in the grid. */}
                       {planned.map((m) => (
-                        <div key={m.apiId} data-testid="coverage-cell" className="mb-1 rounded-lg border-l-[3px] border-mint bg-mint-soft/40 px-2 py-1.5 last:mb-0">
+                        <div key={m.apiId} data-testid="coverage-cell" className="mb-1 rounded-lg border-l-[3px] border-mint bg-mint-soft/60 px-2 py-1.5 last:mb-0">
                           <div className="text-[11.5px] font-extrabold leading-[1.2]">{m.venue}</div>
                           <div className="mb-1 mt-px text-[10.5px] text-deep-green/65">
                             {m.time} · push {fmtPushLocal(m.plan!.pushAt!).day} {fmtPushLocal(m.plan!.pushAt!).time}

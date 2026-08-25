@@ -214,4 +214,61 @@ export async function fetchPromoWeek(
   };
 }
 
+/* ── COVERAGE ─────────────────────────────────────────────────────────────────────────────────
+ *
+ * COLOUR MARKS THE EXCEPTION, WHICH MEANS THE ANSWER DEPENDS ON THE WEEK.
+ *
+ * The Coverage grid used to fill every matches-but-no-push cell with a coral block reading OPEN.
+ * With `match_promotion_plan` empty — which it was on 2026-08-25, for all 109 matches — that is
+ * every cell in the grid, and a colour that is everywhere carries no information. It read as an
+ * alarm about the whole week when it was only saying "nobody has started yet".
+ *
+ * So: `anyPlanned` decides whether OPEN is worth marking at all. With no push anywhere, the page
+ * says so ONCE above the grid and the cells stay quiet. With pushes in place, the covered cell is
+ * the loud one and open carries a thin coral edge — the exception, marked quietly.
+ *
+ * WHAT MUST SURVIVE EITHER WAY is the distinction this view exists to answer: a day with matches
+ * and no push versus a day with no matches. That is carried by CONTENT, not by colour — an open
+ * cell prints its field and time, an empty one prints a dash — so it holds even when nothing is
+ * coloured at all. */
+export type CoverageState = "planned" | "open" | "none";
+
+/** One city-day. `planned` iff any match that day has a push instant on it. */
+export function coverageStateOf(dayMatches: PromoMatch[]): CoverageState {
+  if (dayMatches.length === 0) return "none";
+  return dayMatches.some((m) => m.plan?.pushAt) ? "planned" : "open";
+}
+
+export type CoverageSummary = {
+  cities: number;
+  plannedDays: number;
+  openDays: number;
+  /** Matches sitting on an open day — the number the banner quotes. */
+  openMatches: number;
+  /** False ⟺ not one push exists in the whole week. Drives the banner AND the colour. */
+  anyPlanned: boolean;
+};
+
+export function coverageSummary(week: Pick<PromoWeek, "matches" | "days">): CoverageSummary {
+  const cities = [...new Set(week.matches.map((m) => m.city))];
+  let plannedDays = 0, openDays = 0, openMatches = 0;
+  for (const city of cities) {
+    for (let i = 0; i < week.days.length; i++) {
+      const dm = week.matches.filter((m) => m.city === city && m.dayIdx === i);
+      const st = coverageStateOf(dm);
+      if (st === "planned") plannedDays++;
+      else if (st === "open") { openDays++; openMatches += dm.length; }
+    }
+  }
+  return { cities: cities.length, plannedDays, openDays, openMatches, anyPlanned: plannedDays > 0 };
+}
+
+/** The sentence shown above the grid. Two shapes, because the two weeks are different facts. */
+export function coverageCaption(s: CoverageSummary): string {
+  if (!s.anyPlanned) {
+    return `No pushes planned this week. ${s.openMatches} match${s.openMatches === 1 ? "" : "es"} open.`;
+  }
+  return `${s.plannedDays} covered day${s.plannedDays === 1 ? "" : "s"} · ${s.openDays} day${s.openDays === 1 ? "" : "s"} with matches and no push (${s.openMatches} match${s.openMatches === 1 ? "" : "es"}).`;
+}
+
 export { weekMonday };

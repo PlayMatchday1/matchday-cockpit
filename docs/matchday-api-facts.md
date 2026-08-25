@@ -2488,3 +2488,41 @@ control is two-directional instead: either chips exist, or every tile is proved 
 which is what makes a chip count of zero the correct render. The overflow measurement that the old
 "all six chips" assertion really protected is unchanged and now picks its control element by
 whatever the tile has.
+
+## COVERAGE — COLOUR MARKS THE EXCEPTION, AND THE EXCEPTION DEPENDS ON THE WEEK (2026-08-25)
+
+Every matches-but-no-push cell was a filled coral block reading **OPEN**. With
+`match_promotion_plan` empty — its state in production, for all 109 matches — that is **41 of the
+56 populated cells**, and a colour that is everywhere carries no information. It read as an alarm
+about the whole week when it was only saying nobody had started.
+
+**`anyPlanned` now decides whether OPEN is worth marking at all.**
+
+| week | caption | open cells marked | filled coral blocks |
+|---|---|---|---|
+| nothing planned (live, 2026-08-25) | *No pushes planned this week. 109 matches open.* | **0 of 41** | 0 |
+| with coverage (mocked, below) | *19 covered days · 22 days with matches and no push (52 matches).* | **22 of 22** | 0 |
+
+The covered cell is the only filled one in either week — mint fill, mint rail, push time and
+channels. An open cell is its field and time in normal weight, with a **2px coral left edge** only
+when there is coverage for it to be an exception to. An open cell with more than one match now says
+so (`+7 more`); it used to print one venue and time as if that were the day.
+
+**THE DISTINCTION THIS VIEW ANSWERS IS CARRIED BY CONTENT, NOT COLOUR.** An open cell prints a
+field and a time; a no-match cell prints a dash. That holds when nothing is coloured at all, which
+is the state the page is in today. On the phone the glyph does the same work: `✓` covered, `·`
+matches with no push, `–` no matches.
+
+### THE HALF THAT CANNOT BE OBSERVED IS THE HALF WORTH PINNING
+
+`match_promotion_plan` is empty, so **a browser suite can only ever see the no-plans week**. Both
+weeks are asserted as arithmetic in `scripts/match-promotion-new-test.ts` — the two caption shapes,
+the per-city-day counting, and that `none` and `open` stay distinct states. The browser suite
+asserts the DOM contract that half depends on, in **both directions**: with `anyPlanned=0` no open
+cell may carry the marker, and with `anyPlanned=1` every one must. Neither branch can pass
+vacuously on a week that happens to be empty.
+
+**THE WITH-PLANS STATE WAS CHECKED BY MOCKING THE API RESPONSE IN THE BROWSER**, never by seeding
+the table. `page.route("**/api/match-promotion*")` fetches the real payload and injects plans into
+it client-side. Production is untouched — which is the rule a suite that writes production already
+broke once here (see `verify-counts-as-regular`).

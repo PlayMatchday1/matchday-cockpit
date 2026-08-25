@@ -214,6 +214,56 @@ ok("Coverage renders its grid");
 const covRows = await page.locator('[data-testid="coverage-row"]').count();
 eq("Coverage has one row per city with matches", covRows > 0, true);
 eq("the cancel grid is NOT on the Coverage tab", await page.locator('[data-testid="cancel-patterns"]').count(), 0);
+
+/* COLOUR MARKS THE EXCEPTION. Every open cell used to be a filled coral block reading OPEN, so on
+ * a week with no plans the whole grid was coral and the colour said nothing. Both states are
+ * asserted as arithmetic in scripts/match-promotion-new-test.ts — production's plan table is
+ * empty, so a screen check can only ever observe the no-plans half. What is checked HERE is the
+ * DOM contract that half depends on. */
+const cov = await page.evaluate(() => {
+  const cells = [...document.querySelectorAll('[data-testid="coverage-day"]')];
+  const opens = [...document.querySelectorAll('[data-testid="coverage-open"]')];
+  const cap = document.querySelector('[data-testid="coverage-caption"]');
+  return {
+    caption: cap?.innerText.trim() ?? null,
+    anyPlanned: cap?.getAttribute("data-any-planned"),
+    byState: Object.fromEntries(["planned", "open", "none"].map((k) =>
+      [k, cells.filter((c) => c.getAttribute("data-cov") === k).length])),
+    saysOpenWord: opens.filter((e) => /\bOPEN\b/.test(e.innerText)).length,
+    marked: opens.filter((e) => e.getAttribute("data-marked") === "1").length,
+    // A FILLED coral block: opaque-ish, red-dominant. This is the thing that was removed.
+    filled: opens.filter((e) => {
+      const m = getComputedStyle(e).backgroundColor.match(/[\d.]+/g);
+      if (!m) return false;
+      const [r, g, b, a = 1] = m.map(Number);
+      return a > 0.35 && r > 200 && g < 190 && b < 190;
+    }).length,
+    // THE DISTINCTION THIS VIEW ANSWERS, read off the DOM rather than off the colour.
+    openHaveText: opens.every((e) => e.innerText.trim().length > 3),
+    noneAreDashes: cells.filter((c) => c.getAttribute("data-cov") === "none")
+      .every((c) => c.innerText.trim() === "—"),
+  };
+});
+eq("the caption is on the page", cov.caption !== null && cov.caption.length > 10, true);
+eq("  CONTROL — the grid rendered cells for it to describe", cov.byState.planned + cov.byState.open + cov.byState.none > 0, true);
+eq("no open cell is a filled coral block", cov.filled, 0);
+eq("no open cell prints the word OPEN", cov.saysOpenWord, 0);
+// THE DISTINCTION MUST SURVIVE THE COLOUR: content separates the two, not the fill.
+eq("every open cell names its field and time", cov.openHaveText, true);
+eq("every no-match cell is a dash", cov.noneAreDashes, true);
+eq("  CONTROL — both kinds of cell are present to be told apart",
+   cov.byState.open > 0 && cov.byState.none > 0, true);
+/* THE MARKER TRACKS anyPlanned IN BOTH DIRECTIONS, so neither branch passes vacuously on a week
+ * that happens to be empty — which every week is until someone plans a push. */
+if (cov.anyPlanned === "0") {
+  eq("nothing planned — the caption says so once", /^No pushes planned this week\./.test(cov.caption), true);
+  eq("  …and not one open cell carries the coral marker", cov.marked, 0);
+} else {
+  eq("coverage exists — the caption counts covered days", /covered day/.test(cov.caption), true);
+  eq("  …and every open cell carries the coral marker", cov.marked, cov.byState.open);
+  eq("  …and covered cells are present to be the loud ones", cov.byState.planned > 0, true);
+}
+console.log(`     coverage: ${cov.byState.planned} covered · ${cov.byState.open} open · ${cov.byState.none} no matches · anyPlanned=${cov.anyPlanned}`);
 await page.getByRole("button", { name: "plan", exact: false }).click();
 await page.waitForSelector('[data-testid="match-tile"]', { timeout: 15000 });
 ok("back on Plan, the week is rendered again");
