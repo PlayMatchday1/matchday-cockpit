@@ -87,6 +87,7 @@ const NODE_SUITES = [
   // installed app opens manifest.json's start_url instead, which was a Match Ops page no city
   // manager can open. The suite tested the rooms and nothing tested the door.
   "scripts/pwa-launch-door-test.ts",
+  "scripts/warsaw-city-test.ts",
   // WARSAW — the first city that is not in types.CITIES. Nothing had ever tested one, which is how
   // a half-registered city shipped: WAW was in CITY_SCOPES and nowhere else. Also holds the line
   // the other way — a partner market must never appear in CITIES or CITY_DISPLAY_ORDER.

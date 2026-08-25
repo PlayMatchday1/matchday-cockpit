@@ -79,10 +79,10 @@ Migrations land before the code that depends on them.
 
 ## The gate
 
-**NEVER add a test suite without Ryan's explicit approval.** Extending or fixing an
-existing suite is fine. Creating a new one is not — the lane is already the biggest
-drag on velocity, and every suite added is 30+ seconds on every full run forever. If
-you think one is needed, say what it would cover and ask.
+**NEVER add a BROWSER (e2e) suite without Ryan's explicit approval** — each is 30+
+seconds on every full run, forever. Node suites in the fast set are ~1s and do not
+need approval, but say what you added and why. Extending or fixing an existing suite
+is always fine.
 
 
 `npm run verify` and `npm run verify:e2e` must both pass. A suite reporting zero
