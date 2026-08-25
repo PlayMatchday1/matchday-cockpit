@@ -26,6 +26,9 @@ type Player = {
   id: number; name: string | null; email: string | null; phone: string | null;
   city: string | null; registered: string | null; last_match: string | null;
   member: boolean; plays: number;
+  // Set by the server when MatchDay has scrubbed the account (see shape() in the finder route).
+  // The client never re-derives it from the name — the marker is the server's call, once.
+  scrubbed?: boolean;
 };
 
 type Stats = {
@@ -276,9 +279,14 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
       const json = (await res.json()) as { players?: Player[]; error?: string };
       if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
       const rows = json.players ?? [];
+      /* email and phone ARRIVE null for a scrubbed account — the server drops them in shape(), so
+       * the export cannot leak what the table hides. A blank cell alone would read as "no email on
+       * file", which is a different fact, so `deleted` is carried explicitly and the sheet can
+       * filter on it. APPENDED LAST, deliberately: anything reading these columns by position
+       * keeps working. */
       const csv = [
-        ["id", "name", "email", "phone", "home_city", "registered", "last_match", "member"].join(","),
-        ...rows.map((r) => [r.id, r.name ?? "", r.email ?? "", r.phone ?? "", r.city ?? "", r.registered ?? "", r.last_match ?? "", r.member ? "yes" : "no"]
+        ["id", "name", "email", "phone", "home_city", "registered", "last_match", "member", "deleted"].join(","),
+        ...rows.map((r) => [r.id, r.name ?? "", r.email ?? "", r.phone ?? "", r.city ?? "", r.registered ?? "", r.last_match ?? "", r.member ? "yes" : "no", r.scrubbed ? "yes" : "no"]
           .map((v) => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v))).join(",")),
       ].join("\n");
       const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
@@ -564,9 +572,14 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
                       <td className="mono">
                         {onOpen ? <button type="button" className="pf-id" onClick={() => onOpen(p.id)}>{p.id}</button> : p.id}
                       </td>
-                      <td>{p.name ?? "—"}</td>
-                      <td>{p.email ?? "—"}</td>
-                      <td className="mono">{p.phone ?? "—"}</td>
+                      {/* A DELETED ACCOUNT SAYS SO, and says it once. The name already arrives as
+                          "Deleted Account" from MatchDay's own scrub; the marker makes it read as a
+                          state rather than as somebody unfortunately named. */}
+                      <td>{p.scrubbed ? <span className="pf-scrubbed">Deleted account</span> : (p.name ?? "—")}</td>
+                      {/* NOT "—". An em-dash here means "we have no email"; these rows HAVE one and
+                          it is a tombstone that bounces. Naming it stops anyone trying. */}
+                      <td>{p.scrubbed ? <span className="pf-scrubbed">deleted</span> : (p.email ?? "—")}</td>
+                      <td className="mono">{p.scrubbed ? <span className="pf-scrubbed">deleted</span> : (p.phone ?? "—")}</td>
                       {/* NOT SET, never blank — a blank cell reads as a rendering bug, and 13.7%
                           of players have no home city. */}
                       <td data-testid="finder-city-cell">{p.city ?? "Not set"}</td>
@@ -673,6 +686,9 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
         table.pf-tbl td { padding: 9px 14px; border-bottom: 1px solid #eef2ec; white-space: nowrap; color: #16241a; }
         table.pf-tbl td.mono { font-variant-numeric: tabular-nums; }
         .pf-id { all: unset; cursor: pointer; text-decoration: underline; color: #0f3d24; font-weight: 600; }
+        /* Quiet, not alarming. A deleted account is a normal end state, not an error — it just
+           must not read as a contact. Italic and faded is enough to stop a copy-paste. */
+        .pf-scrubbed { font-style: italic; color: #8a8f8b; }
         table.pf-tbl tbody tr:hover td { background: #f8fbf7; }
         .pf-pager { display: flex; align-items: center; gap: 12px; padding: 10px 18px; font-size: 12px; color: #7d8a7c; }
         .pf-pager button { border: 1px solid #e2e8de; background: #fff; border-radius: 8px;

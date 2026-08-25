@@ -448,12 +448,36 @@ async function exportAll(db: Db, args: Args) {
   return Response.json({ players: all.map(shape), total, exported: all.length });
 }
 
+/* A SCRUBBED ACCOUNT IS NOT A CONTACT ROW.
+ *
+ * When a player deletes their account MatchDay scrubs it IN PLACE and keeps serving it from
+ * /admin/players: first name "Deleted", last name "Account", phone NULL, and the email replaced by
+ * an opaque 44-character token at playmatchday.com. Measured on prod: 1,669 such rows, 1,669 of
+ * them on that exact name pair, 1,669 with a playmatchday.com address, ZERO partial scrubs, ZERO
+ * with a phone. The name pair is the marker — not the email domain, which six real staff accounts
+ * also carry.
+ *
+ * SO THE REAL PII IS ALREADY GONE UPSTREAM by the time we can see the marker, and this suppression
+ * is not what protects it. What it stops is the tombstone READING AS A CONTACT: 1,669 rows
+ * currently render a plausible address under a column headed Email and export as leads, and mail
+ * to any of them bounces. Blank is the truth here.
+ *
+ * THE ROWS THIS CANNOT HELP are the ones scrubbed upstream since we last fetched them — our copy
+ * predates the scrub, carries no marker, and still holds the real address and phone in BOTH the
+ * column and mdapi_users.raw. Nothing on the read path can detect those. Only re-syncing them can,
+ * and because the scrub is in place a plain re-sync overwrites all of it, raw included. */
+const isScrubbed = (r: PageRow) =>
+  (r.first_name ?? "").trim() === "Deleted" && (r.last_name ?? "").trim() === "Account";
+
 function shape(r: PageRow) {
+  const scrubbed = isScrubbed(r);
   return {
     id: Number(r.id),
     name: [r.first_name, r.last_name].filter(Boolean).join(" ").trim() || null,
-    email: r.email ?? null,
-    phone: r.phone_number ?? null,
+    // NULL, NOT THE TOMBSTONE. One shape() serves the table and the CSV, so both drop it together.
+    email: scrubbed ? null : (r.email ?? null),
+    phone: scrubbed ? null : (r.phone_number ?? null),
+    scrubbed,
     city: r.preferable_city_name ?? null,
     registered: r.created_at ?? null,
     last_match: r.last_played ?? null,

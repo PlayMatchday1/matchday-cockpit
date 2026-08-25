@@ -2899,3 +2899,45 @@ Ryan's call, and it is not needed to fix the above. Measured, so it is decided o
 | Houston | 5,822 | 3,919 | 6,198 | +376 |
 
 **1,293 players across five accounts.** Not applied.
+
+## A DELETED PLAYER IS SCRUBBED IN PLACE AND KEEPS BEING SERVED (2026-08-25)
+
+`GET /admin/players` does not drop a deleted account. It **scrubs the row and keeps returning it**:
+
+| field | after deletion |
+|---|---|
+| `firstName` | `"Deleted"` |
+| `lastName` | `"Account"` |
+| `phoneNumber` | **null** |
+| `email` | an opaque **44-character** token at `@playmatchday.com` |
+
+Measured on prod `mdapi_users`: **1,669** rows on that exact name pair — **1,669** with a
+playmatchday.com address, **0** partial scrubs, **0** retaining a phone. Oldest such row synced
+2026-06-07, newest 2026-08-23, so the mirror has been picking them up all along.
+
+**THE MARKER IS THE NAME PAIR, NOT THE EMAIL DOMAIN.** Six real staff accounts carry
+`@playmatchday.com` and are not deleted. The tombstone local-part is random — not derived from the
+id — so it cannot be reversed or matched to a person.
+
+### SO THE REAL PII IS ALREADY GONE BEFORE WE CAN SEE THE MARKER
+
+Which means UI suppression is NOT what protects it. What suppression stops is the tombstone
+**reading as a contact**: 1,669 rows rendered a plausible address under a column headed Email and
+exported as leads, and mail to any of them bounces. `shape()` in the finder route now returns
+`email: null, phone: null, scrubbed: true` for them — one function serves the table AND the export,
+so neither can leak what the other hides.
+
+### THE ROWS SUPPRESSION CANNOT REACH — AND WHY A RE-SYNC FIXES THEM
+
+An account scrubbed upstream **since we last fetched it** carries no marker here. Our copy predates
+the scrub and still holds the real address and phone in the column **and** in `mdapi_users.raw`.
+Prod id **88053** is one: still name + email + phone in Clubhouse, last synced 2026-08-23, scrubbed
+on MatchDay. Nothing on the read path can detect it.
+
+**Because the scrub is IN PLACE, a plain re-sync fixes it completely** — the upsert overwrites the
+name, nulls the phone, replaces the email with the tombstone, and rewrites `raw` wholesale. No
+id-set diff is needed to catch deletions, because deletions are not deletions: they are edits, and
+`mdapiUsersSync` never sees them only because the incremental walk stops at the watermark.
+
+`mdapiUsersSync.ts:39-42` ("We do NOT delete rows") is correct but reads as though the risk were
+row disappearance. It is not. The risk is a **stale edit**, and neither watermark mode catches one.
