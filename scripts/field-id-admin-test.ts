@@ -14,7 +14,8 @@ import "server-only"; // no-op under --conditions=react-server
 // either direction survives $0.00 and $100.00 and proves nothing.
 
 import {
-  addressPeers, buildFieldIdIndex, isRecent, previewAssignment, sortFieldRows,
+  addressPeers, buildFieldIdIndex, eventFlagAdvice, isRecent, previewAssignment,
+  RECURRING_DAYS, RECURRING_WEEKS, sortFieldRows,
   validateAssignment, visibleFieldRows, wallClockParts,
   type FieldIdRow, type MatchAggInput, type PlayerAggInput, type VenueOption,
 } from "../src/lib/fieldIdAdmin";
@@ -173,7 +174,8 @@ const field = (over: Partial<FieldIdRow> = {}): FieldIdRow => ({
   liveMatches: 9, cancelledMatches: 0, upcomingMatches: 2,
   firstMatch: "2026-07-20", lastMatch: "2026-09-02", dppRevenue: 1968.25, dppSpots: 170,
   billableLive: 0, billableCancelled: 0, billableSlotsLive: 0, billableSlotsWithCancelled: 0,
-  sundayLive: 0, mapping: null, ...over,
+  allSlotsLive: 9, allSlotsWithCancelled: 9,
+  sundayLive: 0, distinctLiveDays: 9, distinctLiveWeeks: 6, mapping: null, ...over,
 });
 
 console.log("\nTHE CONSEQUENCE — what the operator commits against");
@@ -230,6 +232,61 @@ console.log("\nTHE CONSEQUENCE — what the operator commits against");
   is("CONTROL — a matching, active venue raises no warnings at all", previewAssignment(field(), venue()).warnings.length, 0);
 }
 
+console.log("\nCADENCE — the event exception decided on rhythm, not on the name");
+{
+  // The thresholds are measured against production; these are the real scores.
+  const F = (title: string, days: number, weeks: number) => field({ title, distinctLiveDays: days, distinctLiveWeeks: weeks });
+  is(`the thresholds are ${RECURRING_DAYS} days / ${RECURRING_WEEKS} weeks`, `${RECURRING_DAYS}/${RECURRING_WEEKS}`, "4/4");
+
+  // GROUND TRUTH — the only two links in production carrying the flag ON.
+  is("field 22 'Tourney ATH Pearland' (468 days / 91 weeks) → ON", eventFlagAdvice(F("Tourney ATH Pearland", 468, 91)).recommend, true);
+  is("field 199 'Tourney at Soccer Central' (317 / 61) → ON", eventFlagAdvice(F("Tourney at Soccer Central", 317, 61)).recommend, true);
+  // GROUND TRUTH — three links carrying it OFF.
+  is("field 1123 'Soccer Central World Cup Tournament' (3 / 3) → OFF", eventFlagAdvice(F("Soccer Central World Cup Tournament", 3, 3)).recommend, false);
+  is("field 991 'Onion Creek - St Patty's Showdown' (1 / 1) → OFF", eventFlagAdvice(F("Onion Creek - St Patty's Showdown", 1, 1)).recommend, false);
+  is("field 992 'MD Combine at Lou Fusz' (1 / 1) → OFF", eventFlagAdvice(F("MD Combine at Lou Fusz Athletic Complex", 1, 1)).recommend, false);
+  // THE JOB THIS WAS BUILT FOR.
+  is("field 1552 'Tourney ATH Katy' (9 / 6) → ON", eventFlagAdvice(F("Tourney ATH Katy", 9, 6)).recommend, true);
+  is("field 496 'Tourney at Lou Fusz' (7 / 6) → ON", eventFlagAdvice(F("Tourney at Lou Fusz", 7, 6)).recommend, true);
+
+  // THE BOUNDARY, from both sides — 4/4 is the low edge of the real gap.
+  is("4 days / 4 weeks is ON", eventFlagAdvice(F("Tourney X", 4, 4)).recommend, true);
+  is("3 days / 4 weeks is OFF", eventFlagAdvice(F("Tourney X", 3, 4)).recommend, false);
+  is("4 days / 3 weeks is OFF", eventFlagAdvice(F("Tourney X", 4, 3)).recommend, false);
+  is("27 matches on ONE day is an event, however many there are", eventFlagAdvice(F("Brasileirão Cup", 1, 1)).recommend, false);
+
+  const plain = eventFlagAdvice(F("ATH Katy", 400, 90));
+  is("a title with NO event marker makes the flag inapplicable", plain.applicable, false);
+  is("...and it is never recommended on, however long the cadence", plain.recommend, false);
+  is("...and it says the exception changes nothing here", /changes nothing here/.test(plain.why), true);
+  is("CONTROL — the SAME cadence under an event title IS applicable", eventFlagAdvice(F("Tourney ATH Katy", 400, 90)).applicable, true);
+  is("the ON reason names the field-22 precedent rather than just asserting", /field 22/.test(eventFlagAdvice(F("Tourney X", 9, 6)).why), true);
+}
+
+console.log("\nTHE FLAG MOVES THE MONEY — the preview is computed FOR the box's state");
+{
+  const f = field(); // 9 live, all event-titled → 0 billable
+  const off = previewAssignment(f, venue(), false);
+  const on = previewAssignment(f, venue(), true);
+  is("OFF: no cost, and the exclusion is named", off.cost.amount, 0);
+  is("ON:  the same 9 matches now bill at $140", on.cost.amount, 1260);
+  is("...and the exclusion disappears because nothing is excluded", on.eventExclusion, null);
+  is("...and the preview records which state it was computed for", on.countsAsRegularPlay, true);
+  is("revenue does NOT move with the flag — attribution is not cost", off.revenueAttributed === on.revenueAttributed, true);
+  is("...nor does the match count", off.matchesGained === on.matchesGained, true);
+  // The reservation collapse has to follow the flag too, or a per-reservation
+  // venue would bill the EVENT-filtered slot set at the regular-play rate.
+  const r = field({ allSlotsLive: 5, billableSlotsLive: 0 });
+  is("ON with bills_per_reservation uses the ALL-slot set: 5 × $140", previewAssignment(r, venue({ billsPerReservation: true }), true).cost.amount, 700);
+  is("OFF with bills_per_reservation uses the billable set: 0", previewAssignment(r, venue({ billsPerReservation: true }), false).cost.amount, 0);
+  // charge_on_cancel and the flag compose.
+  const c = field({ cancelledMatches: 4, billableCancelled: 0 });
+  is("ON + charge_on_cancel bills the cancelled ones too: 13 × $140", previewAssignment(c, venue({ chargeOnCancel: true }), true).cost.amount, 1820);
+  is("a plain-titled field is unaffected by the flag either way",
+    previewAssignment(field({ title: "Plain", billableLive: 9 }), venue(), false).cost.amount,
+    previewAssignment(field({ title: "Plain", billableLive: 9 }), venue(), true).cost.amount);
+}
+
 // ── the validator: every refusal shown to REFUSE ─────────────────────────────
 console.log("\nTHE WRITE REQUEST — each guard mutation-tested");
 {
@@ -243,7 +300,7 @@ console.log("\nTHE WRITE REQUEST — each guard mutation-tested");
   is("ACCEPT — an unmapped field pointed at a real venue", good.ok, true);
   eq("...carrying the field's CURRENT title onto the link, for drift detection",
     good.ok ? good.request : null,
-    { mode: "existing", fieldId: 1552, venueId: 7, titleAtLink: "Tourney ATH Katy" });
+    { mode: "existing", fieldId: 1552, venueId: 7, titleAtLink: "Tourney ATH Katy", countsAsRegularPlay: false });
 
   is("REFUSE — a field with no matches at all", V({ fieldId: 99, mode: "existing", venueId: 7 }, null).ok, false);
   const already = V({ fieldId: 1552, mode: "existing", venueId: 8 }, mapped);
@@ -266,6 +323,17 @@ console.log("\nTHE WRITE REQUEST — each guard mutation-tested");
   is("REFUSE — a new venue whose (name, city) already exists, case-insensitively", dupe.ok, false);
   is("...pointing at the existing row instead", !dupe.ok && /#7/.test(dupe.error), true);
   is("ACCEPT — the SAME name in a DIFFERENT city is a different pitch", V({ fieldId: 1552, mode: "new", venueName: "ATH Katy", city: "Austin", billingType: "per_match" }).ok, true);
+
+  // THE FLAG IS A STRICT BOOLEAN. It moves a venue's whole cost basis, so a
+  // truthy string must never turn it on — "false" is truthy in JavaScript.
+  const flagOn = V({ fieldId: 1552, mode: "existing", venueId: 7, countsAsRegularPlay: true });
+  is("countsAsRegularPlay true is carried onto the request", flagOn.ok && flagOn.request.countsAsRegularPlay, true);
+  for (const bad of [undefined, null, "true", "false", 1, 0, "on"] as unknown[]) {
+    const r = V({ fieldId: 1552, mode: "existing", venueId: 7, countsAsRegularPlay: bad });
+    is(`  ${JSON.stringify(bad)} is NOT true — it is the DB default`, r.ok && r.request.countsAsRegularPlay, false);
+  }
+  const newFlag = V({ fieldId: 1552, mode: "new", venueName: "Katy Annex", city: "Houston", billingType: "per_match", countsAsRegularPlay: true });
+  is("the new-venue path carries the flag too", newFlag.ok && newFlag.request.countsAsRegularPlay, true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

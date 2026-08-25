@@ -168,13 +168,14 @@ is("no other route reads can_edit_credits directly",
 // is the failure this area keeps producing = 31.
 // ITEMISED: was 31, then 6 — is_admin gated ONE thing, the User access screen, which is who may
 // grant permissions; every other route reads the flag its checkbox grants.
-// +1 admin/fields — the field-ID → venue mapping admin. It is is_admin because it reads EVERY
-// match and EVERY paid registration in the estate to build the list, and because the mapping it
-// exists to edit is what Finance keys cost and revenue attribution off. There is no narrower flag
-// that means "may re-attribute money", and inventing one to avoid growing this list would be the
-// permission equivalent of a comment. THE CENSUS CAUGHT IT, which is what the census is for.
+// +2 admin/fields (read) and admin/fields/assign (write) — the field-ID → venue mapping admin.
+// is_admin because the read builds its list from EVERY match and EVERY paid registration in the
+// estate, and because the mapping the write edits is what Finance keys cost and revenue
+// attribution off. There is no narrower flag that means "may re-attribute money", and inventing
+// one to avoid growing this list would be the permission equivalent of a comment.
+// THE CENSUS CAUGHT BOTH, one at a time, which is exactly what it is for.
 is("authenticateAdmin guards the User access screen and the Fields mapping admin", importsAdmin.map(rel).sort(),
-   ["admin/fields/route.ts",
+   ["admin/fields/route.ts", "admin/fields/assign/route.ts",
     "admin/users/auth-status/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
     "admin/users/match-permissions/route.ts", "admin/users/permissions/route.ts",
     "admin/users/resend-invite/route.ts"].sort());

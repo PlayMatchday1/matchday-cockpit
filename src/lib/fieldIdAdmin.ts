@@ -70,8 +70,18 @@ export type FieldIdRow = {
   billableSlotsLive: number;
   /** DISTINCT (date, time) among billable live AND cancelled — chargedUnitCount adds both to ONE set. */
   billableSlotsWithCancelled: number;
+  /** The same two counts with the event marker IGNORED — what the venue bills once the link
+   *  carries counts_as_regular_play, because then every match is regular play. */
+  allSlotsLive: number;
+  allSlotsWithCancelled: number;
   /** Live matches falling on a Sunday — the ATH Katy split leg (venueGroups.resolveSplitRateVenueId). */
   sundayLive: number;
+  /** CADENCE — distinct calendar days and distinct calendar weeks carrying a live match.
+   *  This is the evidence that separates a real tournament from a pitch permanently NAMED after
+   *  one: an event is a burst (27 matches on one day), a schedule is a cadence (9 matches across
+   *  6 weeks). See eventFlagAdvice. */
+  distinctLiveDays: number;
+  distinctLiveWeeks: number;
 
   mapping: FieldMapping | null;
 };
@@ -203,7 +213,9 @@ export function buildFieldIdIndex(
     latestMs: number | null; latestTitle: string | null;
     billableLive: number; billableCancelled: number;
     slotsLive: Set<string>; slotsBoth: Set<string>;
+    allSlotsLive: Set<string>; allSlotsBoth: Set<string>;
     sundayLive: number;
+    days: Set<string>; weeks: Set<number>;
     dpp: number; spots: number;
   };
   const acc = new Map<number, Acc>();
@@ -215,7 +227,9 @@ export function buildFieldIdIndex(
         live: 0, cancelled: 0, upcoming: 0, firstMs: null, lastMs: null,
         latestMs: null, latestTitle: null,
         billableLive: 0, billableCancelled: 0,
-        slotsLive: new Set(), slotsBoth: new Set(), sundayLive: 0,
+        slotsLive: new Set(), slotsBoth: new Set(),
+        allSlotsLive: new Set(), allSlotsBoth: new Set(), sundayLive: 0,
+        days: new Set(), weeks: new Set(),
         dpp: 0, spots: 0,
       };
       acc.set(id, a);
@@ -247,9 +261,19 @@ export function buildFieldIdIndex(
 
     if (m.is_cancelled) {
       a.cancelled += 1;
+      a.allSlotsBoth.add(slot);
       if (billable) { a.billableCancelled += 1; a.slotsBoth.add(slot); }
     } else {
       a.live += 1;
+      a.allSlotsLive.add(slot);
+      a.allSlotsBoth.add(slot);
+      if (parts) {
+        a.days.add(parts.date);
+        // A week BUCKET, not an ISO week number: the calendar day floored to a
+        // 7-day grid. Only the COUNT of distinct buckets is read, so the grid's
+        // phase does not matter — two matches 7 days apart always land in two.
+        a.weeks.add(Math.floor(Date.UTC(Number(parts.date.slice(0, 4)), Number(parts.date.slice(5, 7)) - 1, Number(parts.date.slice(8, 10))) / (7 * 86_400_000)));
+      }
       if (ms != null) {
         if (a.firstMs == null || ms < a.firstMs) a.firstMs = ms;
         if (a.lastMs == null || ms > a.lastMs) a.lastMs = ms;
@@ -295,7 +319,11 @@ export function buildFieldIdIndex(
       billableCancelled: a.billableCancelled,
       billableSlotsLive: a.slotsLive.size,
       billableSlotsWithCancelled: a.slotsBoth.size,
+      allSlotsLive: a.allSlotsLive.size,
+      allSlotsWithCancelled: a.allSlotsBoth.size,
       sundayLive: a.sundayLive,
+      distinctLiveDays: a.days.size,
+      distinctLiveWeeks: a.weeks.size,
     });
   }
   return out;
@@ -343,6 +371,78 @@ export function addressPeers(row: FieldIdRow, all: FieldIdRow[]): FieldIdRow[] {
   );
 }
 
+// ── the event exception, decided on cadence and not on the name ─────────────
+
+/**
+ * THE THRESHOLDS. A field carrying a live match on this many distinct CALENDAR
+ * DAYS across this many distinct CALENDAR WEEKS is running a schedule, not an
+ * event — whatever its title says.
+ *
+ * MEASURED, NOT CHOSEN. Across all 19 event-titled field IDs in production on
+ * 2026-08-24 the two populations do not overlap and are not close:
+ *
+ *   schedules   field 22  468 days / 91 weeks   ·  199  317/61  ·  17  279/128
+ *               18  33/32  ·  14  65/25  ·  21  29/16  ·  15  19/14
+ *               1552  9/6  ·  496  7/6  ·  28  4/4
+ *   real events 1123  3 days / 3 weeks  ·  232  2/2  ·  265  2/1  ·  991  1/1
+ *               30  1/1  ·  31  1/1  ·  133  1/1  ·  24  1/1  ·  992  1/1
+ *
+ * The gap runs between 4/4 and 3/3, and 4 is the low side of it. THE THREE
+ * LINKS WHOSE FLAG IS SET ON EVIDENCE ALL AGREE with the rule: fields 22 and
+ * 199 carry counts_as_regular_play = true and score 468/91 and 317/61; fields
+ * 1123, 991 and 992 carry false and score 3/3, 1/1 and 1/1. See
+ * docs/matchday-api-facts.md.
+ */
+export const RECURRING_DAYS = 4;
+export const RECURRING_WEEKS = 4;
+
+export type EventFlagAdvice = {
+  /** Does the title fire EVENT_MARKERS at all? When false the flag changes nothing. */
+  applicable: boolean;
+  /** What counts_as_regular_play should be, on the evidence. */
+  recommend: boolean;
+  distinctDays: number;
+  distinctWeeks: number;
+  /** The sentence the dialog prints next to the box. */
+  why: string;
+};
+
+/**
+ * Should this link carry `counts_as_regular_play`?
+ *
+ * THE QUESTION EXISTS BECAUSE THE MARKER MATCHES A NAME, NOT A FACT.
+ * `venueCategory` reads "Tourney ATH Katy" and drops every match on that field
+ * out of venue cost. It is right about most fields it fires on and wrong about
+ * the ones permanently named after a tournament that carry the ordinary weekly
+ * schedule — which cost ATH Pearland's field 22 $83,040 across 26 months.
+ *
+ * CADENCE IS THE FACT. An event is a burst: 27 matches on one day. A schedule
+ * is a rhythm: 9 matches across 6 weeks. Nothing here reads the title beyond
+ * asking whether the marker fires, so the recommendation cannot be talked into
+ * agreeing with the name.
+ */
+export function eventFlagAdvice(row: FieldIdRow): EventFlagAdvice {
+  const applicable = venueCategory(row.title) === "event";
+  const d = row.distinctLiveDays;
+  const w = row.distinctLiveWeeks;
+  if (!applicable) {
+    return {
+      applicable: false, recommend: false, distinctDays: d, distinctWeeks: w,
+      why: "This field's title carries no event marker, so its matches already count toward venue cost. The exception changes nothing here.",
+    };
+  }
+  const recommend = d >= RECURRING_DAYS && w >= RECURRING_WEEKS;
+  return {
+    applicable: true,
+    recommend,
+    distinctDays: d,
+    distinctWeeks: w,
+    why: recommend
+      ? `The title fires the event marker, but this field has played on ${d} separate ${d === 1 ? "day" : "days"} across ${w} separate ${w === 1 ? "week" : "weeks"} — a schedule, not an event. Leaving the exception OFF is what let ATH Pearland's field 22 bill $0 for 26 months.`
+      : `The title fires the event marker and the play matches it: ${d} ${d === 1 ? "day" : "days"} across ${w} ${w === 1 ? "week" : "weeks"}. A genuine event carries no venue cost, so the exception stays OFF.`,
+  };
+}
+
 // ── the consequence preview ─────────────────────────────────────────────────
 
 export type CostConsequence = {
@@ -358,6 +458,9 @@ export type CostConsequence = {
 
 export type AssignPreview = {
   venueName: string;
+  /** The counts_as_regular_play the preview was computed FOR. Every figure below
+   *  moves with it, which is why the box lives in the same dialog as the numbers. */
+  countsAsRegularPlay: boolean;
   /** live matches the venue gains */
   matchesGained: number;
   upcomingGained: number;
@@ -389,14 +492,26 @@ export type AssignPreview = {
  *   · cancelled matches count only when the venue charges on cancel
  *   · a bills_per_reservation venue pays per (field, date, time) slot, not per row
  */
-export function previewAssignment(row: FieldIdRow, venue: VenueOption): AssignPreview {
+export function previewAssignment(
+  row: FieldIdRow,
+  venue: VenueOption,
+  /** The exception the link will be created WITH. Default false = the DB default. */
+  countsAsRegularPlay = false,
+): AssignPreview {
   const warnings: string[] = [];
 
   const chargeCancelled = venue.chargeOnCancel === true;
   const perReservation = venue.billsPerReservation === true;
+  // WITH THE EXCEPTION ON, EVERY MATCH IS REGULAR PLAY — so the billable counts
+  // are the raw ones. This mirrors useFinanceData's category assignment exactly:
+  // a link in countsAsRegular forces "regular" whatever the title says.
+  const billLive = countsAsRegularPlay ? row.liveMatches : row.billableLive;
+  const billCancelled = countsAsRegularPlay ? row.cancelledMatches : row.billableCancelled;
+  const slotsLive = countsAsRegularPlay ? row.allSlotsLive : row.billableSlotsLive;
+  const slotsBoth = countsAsRegularPlay ? row.allSlotsWithCancelled : row.billableSlotsWithCancelled;
   const units = perReservation
-    ? (chargeCancelled ? row.billableSlotsWithCancelled : row.billableSlotsLive)
-    : row.billableLive + (chargeCancelled ? row.billableCancelled : 0);
+    ? (chargeCancelled ? slotsBoth : slotsLive)
+    : billLive + (chargeCancelled ? billCancelled : 0);
   const unitNoun = perReservation ? (units === 1 ? "reservation" : "reservations") : (units === 1 ? "match" : "matches");
 
   const rate = venue.perMatchRate;
@@ -439,8 +554,8 @@ export function previewAssignment(row: FieldIdRow, venue: VenueOption): AssignPr
   // This is what let ATH Pearland's field 22 sit at $0 for 26 months and
   // $83,040 (migration 0130). The preview says it out loud rather than
   // rendering a $0 nobody can explain.
-  const excludedLive = row.liveMatches - row.billableLive;
-  const excludedCancelled = row.cancelledMatches - row.billableCancelled;
+  const excludedLive = row.liveMatches - billLive;
+  const excludedCancelled = row.cancelledMatches - billCancelled;
   const eventExclusion =
     excludedLive + excludedCancelled > 0
       ? {
@@ -475,6 +590,7 @@ export function previewAssignment(row: FieldIdRow, venue: VenueOption): AssignPr
 
   return {
     venueName: venue.venueName,
+    countsAsRegularPlay,
     matchesGained: row.liveMatches,
     upcomingGained: row.upcomingMatches,
     cancelledGained: row.cancelledMatches,
@@ -503,8 +619,8 @@ export function cityLooseMatch(a: string, b: string): boolean {
 // ── what the write path is allowed to be asked for ──────────────────────────
 
 export type AssignRequest =
-  | { mode: "existing"; fieldId: number; venueId: number; titleAtLink: string | null }
-  | { mode: "new"; fieldId: number; venueName: string; city: string; billingType: string; titleAtLink: string | null };
+  | { mode: "existing"; fieldId: number; venueId: number; titleAtLink: string | null; countsAsRegularPlay: boolean }
+  | { mode: "new"; fieldId: number; venueName: string; city: string; billingType: string; titleAtLink: string | null; countsAsRegularPlay: boolean };
 
 export type AssignValidation = { ok: true; request: AssignRequest } | { ok: false; error: string };
 
@@ -533,6 +649,7 @@ export function validateAssignment(
     venueName?: string | null;
     city?: string | null;
     billingType?: string | null;
+    countsAsRegularPlay?: unknown;
   },
   ctx: { row: FieldIdRow | null; venues: VenueOption[] },
 ): AssignValidation {
@@ -547,12 +664,16 @@ export function validateAssignment(
     };
   }
   const titleAtLink = row.title ?? null;
+  // STRICT BOOLEAN. A missing or non-boolean value is the DB default (false) and
+  // never a truthy string — this flag moves a venue's whole cost basis, so
+  // "on" arriving as the string "false" must not turn it on.
+  const countsAsRegularPlay = input.countsAsRegularPlay === true;
 
   if (input.mode === "existing") {
     const venueId = Number(input.venueId);
     if (!Number.isInteger(venueId)) return { ok: false, error: "Pick a venue." };
     if (!ctx.venues.some((v) => v.id === venueId)) return { ok: false, error: `Venue #${venueId} does not exist.` };
-    return { ok: true, request: { mode: "existing", fieldId: row.fieldId, venueId, titleAtLink } };
+    return { ok: true, request: { mode: "existing", fieldId: row.fieldId, venueId, titleAtLink, countsAsRegularPlay } };
   }
 
   if (input.mode === "new") {
@@ -581,7 +702,7 @@ export function validateAssignment(
         error: `"${venueName}" already exists in ${city} (#${clash.id}). Point this field at that venue instead of creating a second row.`,
       };
     }
-    return { ok: true, request: { mode: "new", fieldId: row.fieldId, venueName, city, billingType, titleAtLink } };
+    return { ok: true, request: { mode: "new", fieldId: row.fieldId, venueName, city, billingType, titleAtLink, countsAsRegularPlay } };
   }
 
   return { ok: false, error: `Unknown assignment mode ${JSON.stringify(input.mode)}.` };

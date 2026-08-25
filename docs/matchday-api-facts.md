@@ -2222,3 +2222,81 @@ not absent, on a match that was not cancelled, `amount` cents → dollars — wh
 links with. A player-cancelled row that was never refunded is deliberately **included**: the money
 was earned. Membership revenue is allocated at **city** grain and has no field to belong to, so it
 is not in this column and the page says so.
+
+## THE EVENT EXCEPTION IS DECIDABLE FROM CADENCE, NOT FROM THE NAME (2026-08-25)
+
+`venueCategory` classifies a match as an event by testing its `field_title` against
+`EVENT_MARKERS`. It is **matching a name, not a fact**, and when it is wrong the match keeps its
+venue and loses its cost — which is how ATH Pearland's field 22 billed $0 for 26 months and
+$83,040 (migration 0130). `counts_as_regular_play` is the per-link exception, and until now nothing
+told an operator when to set it.
+
+**THE DISCRIMINATOR IS RHYTHM.** An event is a burst — 27 matches on one day. A schedule is a
+cadence — 9 matches across 6 weeks. Measured over **all 19 event-titled field IDs in production**,
+the two populations do not overlap and are not close:
+
+| | distinct live days / distinct live weeks |
+|---|---|
+| **schedules** | 22 → 468/91 · 199 → 317/61 · 17 → 279/128 · 14 → 65/25 · 18 → 33/32 · 21 → 29/16 · 15 → 19/14 · 1552 → 9/6 · 496 → 7/6 · 28 → 4/4 |
+| **real events** | 1123 → 3/3 · 232 → 2/2 · 265 → 2/1 · 991 → 1/1 · 30 → 1/1 · 31 → 1/1 · 133 → 1/1 · 24 → 1/1 · 992 → 1/1 |
+
+The gap runs between **4/4 and 3/3**, so `RECURRING_DAYS = RECURRING_WEEKS = 4`
+(`src/lib/fieldIdAdmin.ts`). `eventFlagAdvice` reads the title only to ask whether the marker fires
+at all — never to decide the answer — so the recommendation cannot be talked into agreeing with the
+name.
+
+**IT AGREES WITH FIVE OF THE SEVEN LINKS THAT CARRY A FLAG.** Fields 22 and 199 are `true` and
+score 468/91 and 317/61. Fields 1123, 991 and 992 are `false` and score 3/3, 1/1 and 1/1.
+
+### THE TWO DISAGREEMENTS ARE FIELD 22 AGAIN, AND THEY ARE NOT FIXED
+
+Both are mapped links carrying `counts_as_regular_play = false` while playing an ordinary schedule
+under a tournament name. Both venues bill `per_match` at **$77** with `charge_on_cancel = true`:
+
+| field | title | venue | live + cancelled | span | cost not being counted |
+|---|---|---|---|---|---|
+| **17** | NEMP Tournaments | NEMP (#2) | 442 + 17 = 459 | 2024-03-12 → 2026-09-03 | **459 × $77 = $35,343** |
+| **18** | Round Rock Tournaments | Round Rock (#4) | 35 + 6 = 41 | 2024-03-15 → 2026-05-31 | **41 × $77 = $3,157** |
+
+**$38,500 across 30 months.** Nothing here changes them: flipping a flag on a mapped link moves
+cost across closed months and is a decision to take on its own, not a side effect of building the
+page that found it. Recorded so it is not found a third time.
+
+### WHAT THE ASSIGN DIALOG DOES WITH THIS
+
+The `counts_as_regular_play` box is in the dialog, **defaulted to what the cadence says** and shown
+with the day/week counts next to it. Turning it against the recommendation is allowed and says so
+in the moment. Assigning field 1552 with the box OFF would have recreated field 22 exactly —
+revenue in, cost out — which is why the flag could not be left on a second page.
+
+The preview recomputes for the box's state: with it ON, field 1552 → ATH Katy adds **9 × $140 =
+$1,260** of cost instead of $0. Revenue and match count do **not** move with the flag; only cost
+does. The reservation collapse follows it too — a `bills_per_reservation` venue bills the all-slot
+set once the exception is on, not the event-filtered one.
+
+## THE GATE ROUTED TO FULL ON A DIFF THAT COULD NOT REACH MATCHDAY (2026-08-25)
+
+Every source file in the Fields diff routed to `typecheck`, **including both new API routes** — the
+import-graph question worked exactly as designed. The nine-minute browser lane was decided by one
+path: **`scripts/matchops-auth-test.ts`**, the route→gate census, which `readFileSync`s route
+sources and asserts on them. It names `/api/city/gameday` in a **string literal**, as data, and
+issues no request at all.
+
+**The BY-HTTP rule was a substring scan over raw source text** — a text pattern standing in for a
+fact, unable to tell a `fetch` from a mention. Two fixes, both in `scripts/gate-scope.mjs`:
+
+1. **Comments are stripped before the scan.** A URL in a comment cannot send a request. This is the
+   same fix `matchops-auth-test.ts` already applies to its own detectors under *READ THE CODE, NOT
+   THE PROSE* — and it alone freed **31 of the 62** files the rule was catching, including
+   `syncLogging.ts`, `crmAuth.ts`, `mirrorWriteThrough.ts`, `gamedayApiShape.ts`, `ManagerPayGrid.tsx`
+   and every sync route that merely cites a sibling in its header.
+2. **`URL_IS_DATA_NOT_A_CALL`** — six named files that hold a route path as data because the path
+   *is* the subject. **The claim is asserted, not trusted**: `gate-scope-test.mjs` proves for each
+   entry that the file still exists, still names a prefix in code (a stale entry fails), and matches
+   **no** HTTP-issuing token. Add a `fetch(` to one and the fast set goes red until the entry comes
+   out. New fixtures also prove a comment-only mention routes to `typecheck` while a real `fetch`
+   still routes to FULL — the control, so the narrowing cannot pass by having stopped thinking.
+
+`MatchPanel.tsx`, `MatchEditor.tsx`, `MatchDrawer.tsx`, `PlayerLookup.tsx` and every
+`verify-matchedit*` suite still route to FULL. The direction is unchanged: a false full gate costs
+nine minutes, a false skip costs a player.

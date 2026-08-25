@@ -14,6 +14,7 @@ import { supabase } from "@/lib/supabase";
 import { CITIES } from "@/lib/types";
 import {
   addressPeers,
+  eventFlagAdvice,
   NEW_VENUE_BILLING_TYPES,
   previewAssignment,
   RECENT_MONTHS,
@@ -24,14 +25,19 @@ import {
   type VenueOption,
 } from "@/lib/fieldIdAdmin";
 
-// THE WRITE PATH IS NOT WIRED YET. The design and the field-ID list go to Ryan
-// first (that was the brief), so the dialog computes and shows the whole
-// consequence and the commit button is DISABLED with the reason on it. A
-// control that looks live and does nothing is the thing we do not ship; a
-// control that is visibly off and says why is the thing we do.
-const WRITE_ENABLED = false;
-const WRITE_DISABLED_REASON =
-  "Assignment writes are not enabled yet — the design and the field-ID list go for review first. Everything above is the real consequence, computed from live data.";
+// THE WRITE GOES THROUGH THE ROUTE, NEVER FROM HERE. The browser holds an anon
+// client that could reach fin_venue_fields directly; it must not, because a
+// direct write would skip both logs and the read-back that decides whether it
+// landed. One POST, one place.
+type AssignResult = {
+  ok?: boolean;
+  error?: string;
+  outcome?: string;
+  logRecorded?: boolean;
+  finLogRecorded?: boolean;
+  venueId?: number | null;
+  after?: { landed?: AssignPreview } | null;
+};
 
 const money = (n: number): string =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -44,6 +50,7 @@ export default function FieldIdAdminView() {
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
+  const [result, setResult] = useState<{ fieldId: number; res: AssignResult } | null>(null);
 
   const load = useCallback(async (refresh: boolean) => {
     setLoading(true);
@@ -98,6 +105,8 @@ export default function FieldIdAdminView() {
         <div className="rounded-md border border-coral/40 bg-coral-soft px-3 py-2 text-sm text-coral">{err}</div>
       )}
 
+      {result && <ResultBanner fieldId={result.fieldId} res={result.res} onDismiss={() => setResult(null)} />}
+
       <div className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-sm">
@@ -148,10 +157,19 @@ export default function FieldIdAdminView() {
 
       {openRow && data && (
         <AssignDialog
+          key={openRow.fieldId}
           row={openRow}
           all={rows}
           venues={data.venues}
           onClose={() => setOpen(null)}
+          onDone={(res) => {
+            setResult({ fieldId: openRow.fieldId, res });
+            setOpen(null);
+            // The list is re-read from the server rather than patched: a new
+            // venue changes the venue list too, and a patched row would be this
+            // browser's belief about what happened instead of the database's.
+            void load(false);
+          }}
         />
       )}
     </div>
@@ -287,9 +305,10 @@ function Row({ r, onAssign }: { r: FieldIdRow; onAssign: () => void }) {
 // ── the assignment dialog ───────────────────────────────────────────────────
 
 function AssignDialog({
-  row, all, venues, onClose,
+  row, all, venues, onClose, onDone,
 }: {
-  row: FieldIdRow; all: FieldIdRow[]; venues: VenueOption[]; onClose: () => void;
+  row: FieldIdRow; all: FieldIdRow[]; venues: VenueOption[];
+  onClose: () => void; onDone: (res: AssignResult) => void;
 }) {
   const [mode, setMode] = useState<"existing" | "new">("existing");
   // NOTHING IS PRESELECTED. An empty select is the honest starting state for a
@@ -298,6 +317,17 @@ function AssignDialog({
   const [newName, setNewName] = useState<string>(row.title ?? "");
   const [newCity, setNewCity] = useState<string>("");
   const [newBilling, setNewBilling] = useState<string>("per_match");
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+
+  /* THE EVENT EXCEPTION, DEFAULTED FROM THE CADENCE AND NOT FROM THE NAME.
+   * The box starts on whatever the evidence says is correct, so the ordinary
+   * path is one deliberate click on Commit. Turning it the other way is also
+   * deliberate — the dialog says, in the moment, that you are going against the
+   * cadence and what it will cost. Assigning field 1552 with this box off
+   * recreates field 22 exactly: revenue in, cost out. */
+  const advice = useMemo(() => eventFlagAdvice(row), [row]);
+  const [countsAsRegular, setCountsAsRegular] = useState<boolean>(advice.recommend);
 
   const peers = useMemo(() => addressPeers(row, all), [row, all]);
   const chosen = venues.find((v) => String(v.id) === venueId) ?? null;
@@ -314,7 +344,40 @@ function AssignDialog({
         }
       : null;
   const target = mode === "existing" ? chosen : draft;
-  const preview = target ? previewAssignment(row, target) : null;
+  const preview = target ? previewAssignment(row, target, countsAsRegular) : null;
+
+  async function commit(): Promise<void> {
+    if (!preview) return;
+    setSaving(true);
+    setSaveErr(null);
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token;
+      if (!token) throw new Error("Not signed in.");
+      const res = await fetch("/api/admin/fields/assign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(
+          mode === "existing"
+            ? { fieldId: row.fieldId, mode, venueId: Number(venueId), countsAsRegularPlay: countsAsRegular }
+            : {
+                fieldId: row.fieldId, mode, venueName: newName.trim(), city: newCity,
+                billingType: newBilling, countsAsRegularPlay: countsAsRegular,
+              },
+        ),
+      });
+      const body = (await res.json()) as AssignResult;
+      // A NON-OK STATUS IS A REFUSAL AND STAYS IN THE DIALOG, so the operator can
+      // fix the input. A 2xx is handed up WITH its outcome — which is not the
+      // same thing as success, and the banner says which.
+      if (!res.ok) { setSaveErr(body.error ?? `HTTP ${res.status}`); return; }
+      onDone(body);
+    } catch (e) {
+      setSaveErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-deep-green/40 p-6">
@@ -451,26 +514,126 @@ function AssignDialog({
           </div>
         )}
 
+        {advice.applicable && (
+          <div
+            className={`mt-4 rounded-xl border p-3 ${
+              countsAsRegular === advice.recommend
+                ? "border-cream-line bg-white"
+                : "border-coral/50 bg-coral-soft"
+            }`}
+            data-testid="counts-as-regular-block"
+          >
+            <label className="flex cursor-pointer items-start gap-3">
+              <input
+                type="checkbox"
+                checked={countsAsRegular}
+                onChange={(e) => setCountsAsRegular(e.target.checked)}
+                data-testid="counts-as-regular"
+                className="mt-0.5 h-4 w-4 accent-mint-hover"
+              />
+              <span>
+                <span className="text-sm font-bold text-deep-green">
+                  These matches count toward venue cost
+                </span>
+                <span className="ml-2 rounded bg-cream-soft px-1.5 py-0.5 font-mono text-[10px] text-deep-green/60">
+                  counts_as_regular_play
+                </span>
+                <span className="mt-1 block text-[11px] leading-relaxed text-deep-green/65" data-testid="counts-advice">
+                  {advice.why} Played on{" "}
+                  <strong>{advice.distinctDays}</strong> separate {advice.distinctDays === 1 ? "day" : "days"} across{" "}
+                  <strong>{advice.distinctWeeks}</strong> separate {advice.distinctWeeks === 1 ? "week" : "weeks"}.
+                </span>
+              </span>
+            </label>
+            {countsAsRegular !== advice.recommend && (
+              <p className="mt-2 border-t border-coral/30 pt-2 text-[11px] font-bold leading-relaxed text-coral" data-testid="counts-override">
+                You are setting this against the cadence. The evidence says it should be{" "}
+                {advice.recommend ? "ON" : "OFF"} — the figures below already reflect your choice, so read the cost
+                line before you commit.
+              </p>
+            )}
+          </div>
+        )}
+
         {preview ? <PreviewPanel p={preview} /> : (
           <p className="mt-5 rounded-xl border border-dashed border-cream-line px-3 py-6 text-center text-sm text-deep-green/45">
             Pick a venue to see what this assignment will move.
           </p>
         )}
 
+        {saveErr && (
+          <div className="mt-4 rounded-md border border-coral/40 bg-coral-soft px-3 py-2 text-sm text-coral" data-testid="assign-error">
+            {saveErr}
+          </div>
+        )}
+
         <div className="mt-5 flex items-center justify-end gap-3">
-          <span className="max-w-xl text-right text-[11px] leading-tight text-deep-green/55" data-testid="write-disabled-reason">
-            {WRITE_DISABLED_REASON}
+          <span className="max-w-xl text-right text-[11px] leading-tight text-deep-green/55">
+            One insert into <code className="font-mono text-[10.5px]">fin_venue_fields</code>, logged to{" "}
+            <code className="font-mono text-[10.5px]">change_log</code> with the verdict read back from the database, and
+            to <code className="font-mono text-[10.5px]">fin_change_log</code> as this table&apos;s history. Writes never
+            retry.
           </span>
           <button
             type="button"
-            disabled={!WRITE_ENABLED || !preview}
-            title={WRITE_DISABLED_REASON}
+            onClick={() => void commit()}
+            disabled={!preview || saving}
             data-testid="commit-assignment"
-            className="rounded-full bg-mint px-5 py-2 text-sm font-bold text-deep-green transition hover:bg-mint-hover disabled:cursor-not-allowed disabled:opacity-40"
+            className="whitespace-nowrap rounded-full bg-mint px-5 py-2 text-sm font-bold text-deep-green transition hover:bg-mint-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Commit assignment
+            {saving ? "Writing…" : "Commit assignment"}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* THE VERDICT, NOT A TOAST. `outcome` comes from recordWrite reading the row back
+ * after the insert — a 2xx does not mean the write landed, so the banner shows what
+ * the read-back found and whether BOTH logs recorded it. A logging hole is stated,
+ * never swallowed. */
+function ResultBanner({ fieldId, res, onDismiss }: { fieldId: number; res: AssignResult; onDismiss: () => void }) {
+  const landed = res.outcome === "landed";
+  const landedPreview = res.after?.landed;
+  return (
+    <div
+      className={`rounded-xl border-[1.5px] p-4 ${landed ? "border-mint-hover/50 bg-mint-soft" : "border-coral/50 bg-coral-soft"}`}
+      data-testid="assign-result"
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-sm font-extrabold tracking-tight text-deep-green">
+            Field {fieldId} → {landedPreview?.venueName ?? `venue #${res.venueId ?? "?"}`} ·{" "}
+            <span data-testid="assign-outcome" className={landed ? "text-deep-green" : "text-coral"}>
+              {(res.outcome ?? "unknown").toUpperCase()}
+            </span>
+          </div>
+          <div className="mt-1 text-[12px] leading-relaxed text-deep-green/70">
+            {landed
+              ? "The link was read back from the database after the write and matches what was sent."
+              : "The read-back did NOT confirm this write. Check Finance → Field Costs and the change log before retrying — writes never retry on their own, and a second attempt could double-link."}
+          </div>
+          {landedPreview && (
+            <div className="mt-2 font-mono text-[12px] text-deep-green/80" data-testid="assign-landed-figures">
+              +{landedPreview.matchesGained} matches ({landedPreview.venueMatchesBefore} →{" "}
+              {landedPreview.venueMatchesAfter}) · +{money2(landedPreview.revenueAttributed)} revenue ·{" "}
+              {landedPreview.cost.amount == null ? "cost UNTRACKED" : `+${money2(landedPreview.cost.amount)} cost`} ·
+              counts_as_regular_play {landedPreview.countsAsRegularPlay ? "ON" : "OFF"}
+            </div>
+          )}
+          <div className="mt-2 text-[11px] text-deep-green/55" data-testid="assign-logs">
+            change_log {res.logRecorded ? "recorded" : "NOT RECORDED"} · fin_change_log{" "}
+            {res.finLogRecorded ? "recorded" : "NOT RECORDED"}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="rounded-full border border-cream-line bg-white px-3 py-1 text-xs font-bold text-deep-green/70 hover:bg-cream-soft"
+        >
+          Dismiss
+        </button>
       </div>
     </div>
   );
@@ -546,6 +709,14 @@ function PreviewPanel({ p }: { p: AssignPreview }) {
       <p className="mt-3 text-[11px] leading-relaxed text-deep-green/65" data-testid="preview-cost-note">
         {p.cost.note}
       </p>
+
+      {p.countsAsRegularPlay && (
+        <p className="mt-3 rounded-lg border border-mint-hover/40 bg-mint-soft px-3 py-2 text-[11px] leading-relaxed text-deep-green/75" data-testid="preview-exception-on">
+          The cost above exists <strong>because the exception is on</strong>. Without{" "}
+          <code className="font-mono text-[10.5px]">counts_as_regular_play</code> this field&apos;s title fires the event
+          marker and every one of these matches carries $0 — the link would gain the revenue and none of the cost.
+        </p>
+      )}
 
       {p.eventExclusion && (
         <div className="mt-3 rounded-lg border border-coral/40 bg-coral-soft px-3 py-2 text-[11px] leading-relaxed text-coral" data-testid="preview-event-exclusion">

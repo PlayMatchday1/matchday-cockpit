@@ -23,6 +23,8 @@ const P = {
   api:        `${DIR}/api.ts`,
   unreadable: `${DIR}/unreadable.ts`,
   deleted:    `${DIR}/deleted.ts`,   // deliberately never written
+  mention:    `${DIR}/mention.ts`,   // names a MatchDay URL in a COMMENT only
+  caller:     `${DIR}/caller.ts`,    // the control: actually fetches one
 };
 
 try {
@@ -86,6 +88,38 @@ try {
   eq("an EMPTY diff skips entirely", decideGateScope(["--empty-diff"]).mode, "skip");
   eq("an UNREADABLE diff is FULL", decideGateScope(["--unknown-diff"]).mode, "full");
   eq("  …and a malformed call (no paths, no sentinel) is FULL", decideGateScope([]).mode, "full");
+
+  /* ── THE URL RULE: A MENTION IS NOT A CALL ────────────────────────────────────────────────
+   * Rule 2 matches a MatchDay URL prefix against a file's SOURCE TEXT, which cannot tell a fetch
+   * from a mention. Two fixtures prove it now can: one that only names the prefix in a comment,
+   * one that fetches it. Both are written here so neither can drift out from under the assertion.
+   */
+  console.log("\na URL prefix in a comment vs a URL prefix in a fetch:");
+  writeFileSync(P.mention, `// this route posts to /api/matchday/ and we do not\nexport const q = 1;\n`);
+  writeFileSync(P.caller, `export const go = () => fetch("/api/matchday/x");\n`);
+  eq("a file that only MENTIONS /api/matchday/ in a comment is typecheck", lane(P.mention), "typecheck");
+  eq("  …CONTROL — one that actually fetches it is FULL", lane(P.caller), "full");
+
+  /* ── THE NAMED EXEMPTIONS MUST NOT ROT ────────────────────────────────────────────────────
+   * URL_IS_DATA_NOT_A_CALL exempts files that hold a route path as DATA. That claim is asserted,
+   * not trusted: each entry must still exist, must still name a prefix (or the entry is stale and
+   * should be deleted), and must contain NO http-issuing call. Add a fetch to one of them and this
+   * goes red until the entry comes out.
+   */
+  console.log("\nthe named URL-is-data exemptions, each re-proved:");
+  const { URL_IS_DATA_NOT_A_CALL, HTTP_ISSUING, matchdayUrlPrefixes } = await import("./gate-scope.mjs");
+  const prefixes = matchdayUrlPrefixes();
+  eq("the exemption list is small enough to read", URL_IS_DATA_NOT_A_CALL.length <= 10, true);
+  for (const { file, why } of URL_IS_DATA_NOT_A_CALL) {
+    let src = null;
+    try { src = readFileSync(file, "utf8"); } catch {}
+    if (src == null) { bad(`${file} — exempted but missing; delete the entry`); continue; }
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    eq(`${file} still names a prefix in CODE (else the entry is stale)`, prefixes.some((u) => code.includes(u)), true);
+    eq(`  …and issues no request — the whole basis of the exemption`, HTTP_ISSUING.test(code), false);
+    eq(`  …and carries a reason`, typeof why === "string" && why.length > 20, true);
+    eq(`  …and therefore routes to typecheck`, lane(file), "typecheck");
+  }
 
   /* THE EXIT CODES ARE THE CONTRACT WITH THE SHELL. The hook branches on the status and never on
    * the text, so a renumbering here that the hook did not follow would silently reroute a lane. */

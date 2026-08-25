@@ -77,11 +77,58 @@ export const FULL_GATE_ALWAYS = [
 export const VERIFY_GATE_ALWAYS = [
   "scripts/run-suites.mjs",
   "scripts/gate-scope.mjs",
+  // THE ROUTER'S OWN GUARD, added for the same reason the router is here: it IS the fast set's
+  // check on this file, so routing it through the browser lane is the same category error.
+  // It also has to be listed rather than left to the rules below, because its CONTROL fixture
+  // writes `fetch("/api/matchday/x")` as a string literal — the URL-is-data case, in the very
+  // test that proves the URL-is-data case. Left alone it would route itself to FULL forever.
+  "scripts/gate-scope-test.mjs",
   "scripts/quarantine.pinned.json",
 ];
 
 /** Presentation and prose, wherever they live. */
 export const TYPECHECK_ONLY_EXT = [".css", ".md", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".ico", ".json"];
+
+/**
+ * ── FILES THAT NAME A MATCHDAY ROUTE AS DATA AND CANNOT CALL IT ───────────────
+ *
+ * THE DEFECT THIS FIXES. Rule 2 below asks "does this file's source mention a
+ * MatchDay-reaching URL prefix?" and takes the full gate if it does. That is a
+ * TEXT match standing in for a FACT, and it cannot tell a fetch from a mention.
+ * It cost a nine-minute browser lane on a push whose every source file routed to
+ * typecheck: the deciding path was `scripts/matchops-auth-test.ts`, a CENSUS
+ * suite that readFileSync's route files and asserts on their gates. It names
+ * `/api/city/gameday` in a string literal, as DATA, and issues no request at all.
+ *
+ * COMMENTS ARE NOW STRIPPED BEFORE THE SCAN (see fullGateReason), which is the
+ * same fix matchops-auth-test.ts already applies to its own detectors under the
+ * heading READ THE CODE, NOT THE PROSE — and it alone freed 31 of the 62 files
+ * the rule was catching, among them syncLogging.ts, crmAuth.ts,
+ * mirrorWriteThrough.ts and every sync route that merely cites a sibling.
+ *
+ * These are the rest: files that hold the URL in a literal because the URL IS
+ * the subject. Each is named, with the reason, and NONE of this is taken on
+ * trust — `gate-scope-test.mjs` asserts for every entry that the file still
+ * exists, still names a prefix (so a stale entry is removed rather than left to
+ * rot), and CONTAINS NO HTTP-ISSUING CALL. Add a `fetch(` or a `page.goto(` to
+ * one of these and the fast set goes red until the entry comes out.
+ *
+ * THE DIRECTION IS UNCHANGED: this is the only narrowing, it is explicit, and
+ * everything not on it still takes the gate. A false full gate costs nine
+ * minutes; a false skip costs a player.
+ */
+export const URL_IS_DATA_NOT_A_CALL = [
+  { file: "scripts/matchops-auth-test.ts", why: "the route→gate census — it reads route sources and asserts on them; the URLs are the data" },
+  { file: "scripts/write-routes-logged-test.ts", why: "scans route sources for bare apiWrite; the URLs are the endpoints it is enumerating" },
+  { file: "scripts/roster-edit-model-test.ts", why: "a pure model suite — the route path appears in the log payload it asserts on" },
+  { file: "scripts/mirror-writethrough-test.ts", why: "a pure model suite — the route path appears in the log payload it asserts on" },
+  { file: "scripts/city-confinement-test.ts", why: "the city boundary's decision table — the route paths are the rows being decided" },
+  { file: "src/lib/cityConfinement.ts", why: "names the confined route prefixes as DATA for the gate to test against; it makes no request" },
+];
+
+/** The tokens that mean a file can actually issue a request. Used by the rot guard
+ *  in gate-scope-test.mjs, exported so the guard and this list cannot drift. */
+export const HTTP_ISSUING = /\bfetch\s*\(|\.goto\s*\(|XMLHttpRequest|sendBeacon|new WebSocket|new EventSource|\baxios\b|page\.route\s*\(/;
 
 const SRC = "src";
 // WALK ROOTS. src/ alone could not see a suite file, which is why the blanket rule below was
@@ -192,10 +239,14 @@ export function fullGateReason(p) {
   if (!p.startsWith("src/") && !p.startsWith("scripts/")) return null;   // docs, mockups, public…
   if (!existsSync(p)) return "the file could not be read — taking the gate rather than guessing";
   if (matchdayReachable().has(p)) return "its import graph reaches the MatchDay API client";
+  if (URL_IS_DATA_NOT_A_CALL.some((e) => e.file === p)) return null;   // named, and guarded by the rot check
   let src;
   try { src = readFileSync(p, "utf8"); }
   catch { return "the file could not be read — taking the gate rather than guessing"; }
-  const hit = matchdayUrlPrefixes().find((u) => src.includes(u));
+  // READ THE CODE, NOT THE PROSE. A URL inside a comment cannot send a request,
+  // and half the files this rule was catching only ever cited one in a header.
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const hit = matchdayUrlPrefixes().find((u) => code.includes(u));
   if (hit) return `it sends requests to ${hit} — a route that reaches the MatchDay API`;
   return null;
 }
