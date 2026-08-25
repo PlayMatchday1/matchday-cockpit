@@ -215,6 +215,15 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
      * sending null rather than a number: HISTORY = never played (there are no spots), and
      * PLAYED = Not in 60+ days (a negation has no window to total, and a figure labelled with one
      * would be lying about its own scope). */
+    /* A TILE FORCED BY THE SCOPE IS AS DEAD AS ONE FORCED BY A FILTER, and until now only the
+     * second was noticed. `f.city` is what the operator TYPED; a confined account types nothing —
+     * the server imposes its city from the account row — so `!!f.city` was false for exactly the
+     * people who can only ever see one city. The result was backwards: the Warsaw operator got
+     * "Top city: Warsaw" and "Cities: 1", the filter read back at him, while the admin who typed
+     * Warsaw correctly got Median signup age and Newest signup in those slots.
+     *
+     * Read the EFFECTIVE scope — typed OR imposed — from the payload the server already sends. */
+    const cityFixed = !!f.city || !!data?.scope;
     const noPlay = f.hist === "never" || st.spots == null;
     // THE TILE NAMES ITS OWN WINDOW. A number whose scope is only knowable from a control three
     // rows up is a number waiting to be quoted wrongly.
@@ -237,10 +246,10 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
       { k: "Never played", v: N(st.never), s: pc(st.never), dead: f.hist !== "any" },
       { k: "Members", v: N(st.members), s: pc(st.members), dead: f.member !== "any" || f.hist === "never" },
       { k: "New this week", v: N(st.week), s: "signed up in the last 7 days", dead: f.reg === "7" || range },
-      { k: "Top city", v: st.topCity?.name ?? "—", s: st.topCity ? `${N(st.topCity.n)} players` : "—", dead: !!f.city },
+      { k: "Top city", v: st.topCity?.name ?? "—", s: st.topCity ? `${N(st.topCity.n)} players` : "—", dead: cityFixed },
       { k: "Played 2+", v: N(st.heavy), s: pc(st.heavy), dead: f.hist !== "any" },
       { k: "New in 30 days", v: N(st.month30), s: pc(st.month30), dead: f.reg === "7" || f.reg === "30" || range },
-      { k: "Cities", v: N(st.cities), s: "represented here", dead: !!f.city },
+      { k: "Cities", v: N(st.cities), s: "represented here", dead: cityFixed },
       { k: "Has a name", v: N(st.named), s: pc(st.named), dead: false },
       { k: "Median signup age", v: st.medianAgeDays == null ? "—" : `${st.medianAgeDays}d`, s: "half are older than this", dead: false },
       { k: "Newest signup", v: fmtDate(st.newest), s: "most recent", dead: false },
@@ -250,7 +259,7 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
     // BACKSTOP for implications the predicates do not know about: "97 of 97" is never news whatever
     // produced it. A zero can still be news, so zeros stay.
     return full.filter((t, i) => !t.dead && !(i > 0 && total > 0 && t.v === N(total))).slice(0, 6);
-  }, [st, total, f, dirty, range]);
+  }, [st, total, f, dirty, range, data?.scope]);
 
   const clear = () => setF(DEFAULTS);
 

@@ -2840,3 +2840,62 @@ would have argued for `REFRESH … CONCURRENTLY`, so a finder request landing du
 ~3s, hourly. Both matviews carry plain-column unique indexes so CONCURRENTLY is available — but it
 cannot run inside a transaction and every PostgREST rpc is one, so switching would mean moving the
 refresh to pg_cron. Recorded, not done.
+
+## A BOUNDARY IS NOT A FILTER — WARSAW SAW 5 OF 14 (2026-08-25)
+
+A confined Warsaw operator saw **5 players**; an admin filtering to Warsaw saw **14**. The 9 missing
+were exactly the signups with no match yet — the outreach list — and the NEVER PLAYED tile read 0.
+
+**THE CAUSE WAS ONE LINE, SHIPPED THE SAME DAY**, in the Played-at work:
+
+    let matchCity: string | null = auth.confinedCity;   // WRONG
+
+copied from the home-city scope directly above it. That set `p_match_city` on **every** confined
+request, whether or not the operator had touched the Played-at control, so confinement became
+**home-city AND played-in-city — an intersection**. Measured:
+
+    p_city='Warsaw'                            14
+    p_match_city='Warsaw'                      16
+    p_city='Warsaw' AND p_match_city='Warsaw'   5   ← what a confined account was getting
+
+**HOME CITY IS THE BOUNDARY. PLAYED-AT CITY IS A FILTER.** The fix is `= null`: no filter unless one
+is asked for. The boundary was never held by forcing the value — it is held by `assertScope`, which
+REFUSES a confined account naming another city rather than silently re-pointing it. Forcing the
+value only ever narrowed what its own operator could see.
+
+### THE FIRST EXPLANATION WAS WRONG, AND THE CONTROL STATE IS WHAT DISPROVED IT
+
+A play window reproduces the same two numbers — `p_city='Warsaw'` + any play window gives players 5,
+never 0 — so "the operator had a Played window set" fitted perfectly and was wrong. The screenshot
+showed PLAYED on "Any time" and HISTORY on "Any", and reading the actual request in that state
+proved it:
+
+    controls: Any time / Any     REQUEST: ?city=WAW&page=1&size=50
+                                 applied: playMode=any    total: 14
+
+**Two causes can produce the same number. The one that matches the OBSERVED INPUTS is the cause.**
+Reading the request rather than reasoning from the component is what separated them.
+
+## TILES WERE DEAD ON THE TYPED CITY, NOT THE EFFECTIVE ONE
+
+`Top city` and `Cities` are dropped when a city is chosen — "a Top city: Warsaw tile is the filter
+row read back at you". But the predicate was `!!f.city`, the city the operator **typed**. A confined
+account types nothing; the server imposes its city from the account row. So the check was false for
+exactly the people who can only ever see one city, and the result was backwards: **the Warsaw
+operator got "Top city: Warsaw" and "Cities: 1"** while the admin who typed Warsaw got the useful
+tiles. Now dead on the effective scope, typed **or** imposed.
+
+## STILL OPEN: THE UNION IS A POLICY DECISION, NOT A BUG FIX
+
+Whether a confined account should also see players who PLAYED in its city but live elsewhere is
+Ryan's call, and it is not needed to fix the above. Measured, so it is decided on numbers:
+
+| city | home-only | played-in | union | delta |
+|---|---|---|---|---|
+| Warsaw | 14 | 25 | 32 | +18 |
+| San Antonio | 3,355 | 2,281 | 3,664 | +309 |
+| Dallas / Fort Worth | 1,670 | 754 | 1,878 | +208 |
+| Austin | 12,553 | 7,550 | 12,935 | +382 |
+| Houston | 5,822 | 3,919 | 6,198 | +376 |
+
+**1,293 players across five accounts.** Not applied.

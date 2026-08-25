@@ -249,11 +249,22 @@ export async function GET(req: Request) {
    * A CONFINED ACCOUNT CANNOT WIDEN matchCity past its own boundary, for the same reason the home
    * city select cannot: the scope comes from the database row and the query string is a
    * convenience. assertScope refuses rather than silently re-pointing. */
+  /* HOME CITY IS THE BOUNDARY. PLAYED-AT CITY IS A FILTER. THEY ARE NOT THE SAME THING, and
+   * conflating them is what broke Warsaw: this block used to open `let matchCity =
+   * auth.confinedCity`, copied from the home-city scope above, which set p_match_city on EVERY
+   * confined request whether or not the operator had touched the control. A confined account then
+   * saw home-city AND played-in-city — an intersection — instead of home-city. Warsaw went from 14
+   * to 5, and the 9 missing were exactly the new signups who had not played yet, who are the
+   * outreach list.
+   *
+   * SO IT DEFAULTS TO NULL: no filter unless one is asked for. The boundary is still absolute, and
+   * it is assertScope that enforces it — a confined account naming another city is REFUSED above,
+   * not silently re-pointed. Forcing the value was never what kept the boundary; refusing is. */
   const matchCityAsked = url.searchParams.get("matchCity");
   const matchScope = assertScope(auth.confinedCity, matchCityAsked === "all" ? null : matchCityAsked, auth.confinedCity !== null);
   if (!matchScope.ok) return Response.json({ error: matchScope.error }, { status: matchScope.status });
-  let matchCity: string | null = auth.confinedCity;
-  if (!matchCity && matchCityAsked && matchCityAsked !== "all") {
+  let matchCity: string | null = null;
+  if (matchCityAsked && matchCityAsked !== "all") {
     if (!resolveCityScope(matchCityAsked)) {
       return Response.json({ error: `${JSON.stringify(matchCityAsked)} is not a known city.` }, { status: 400 });
     }
