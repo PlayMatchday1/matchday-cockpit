@@ -1,106 +1,43 @@
 #!/bin/sh
-# PRE-PUSH GATE, SCOPED TO WHAT THE DIFF CAN BREAK.
+# PRE-PUSH: TYPECHECK AND THE SECOND-SCALE GUARDS. NOTHING ELSE.
 #
-# The testing policy is that the gate exists for WRITES TO THE MATCHDAY API — those reach players.
-# Everything else gets typecheck. This hook used to run all nine minutes on every push regardless,
-# so a CSS change and a match-edit change cost the same.
+# THE POLICY CHANGED ON 2026-08-25, and this file is most of what it means.
 #
-# The decision lives in scripts/gate-scope.mjs, NOT in this shell — it is a safety rule and it
-# should be reviewable in a diff. That file allowlists what is SAFE, so anything unrecognised falls
-# to the full gate: a false full gate costs minutes, a false skip costs a player.
+# There is NO browser lane and NO E2E on any push. The gate used to route a diff to a twenty-minute
+# Playwright run; that run blocked six pushes in one day, and every single block was the lane rather
+# than the change — a suite that dated, a suite that timed out under contention, a suite testing a
+# working tree that was being edited while it ran. Twenty minutes to learn nothing is not a gate,
+# it is a tax.
 #
-# FOUR LANES, by exit status from that script:
-#   12  SKIP       the diff changes no files — nothing to gate
-#    0  TYPECHECK  cannot reach the MatchDay API
-#   11  VERIFY     the gate's own machinery — fast set, no browser suites
-#   10  FULL       reaches the API, a migration, the hook, or a permission carve-out
+# WHAT RUNS: `npm run verify` — typecheck plus the node suites, about twenty seconds.
 #
-# `git push --no-verify` still bypasses everything. VERIFY_SKIP_E2E=1 still skips only the browser
-# set within a full run.
+# WHY THOSE STAY. They are not a general test suite; they are the guards on the things that reach a
+# player — the stage deny-list, the production host guard, the wall-clock trap, the change-log hook,
+# the credits and roster and promo write models. That is exactly the carve-out the policy keeps:
+# checkout, bookings, payments, credits, and anything that changes what a match record says
+# happened. Twenty seconds, not twenty minutes.
+#
+# EVERYTHING ELSE — admin UI, reports, filters, layout, copy, read-only pages — is typecheck, look
+# at it in a browser, push. No new assertions. See "The bar" in CLAUDE.md.
+#
+# The browser suites still EXIST and still run on demand (`npm run verify:e2e`, or one file
+# directly) for the rare change where driving the page is genuinely the fastest way to see it. They
+# are a tool now, not a toll.
+#
+# `git push --no-verify` still bypasses this.
 set -e
 
-# WHAT THIS PUSH CHANGES — and, separately, WHETHER WE COULD FIND OUT. Those are different states
-# and only one of them justifies the full gate. An empty commit has nothing to test; a diff we
-# could not compute could contain anything.
-#
-# `git diff --name-only` prints nothing for BOTH "no files changed" and "the command failed", so
-# the exit status is captured before anything is piped or substituted. Reading emptiness alone is
-# what made an empty commit take the browser lane.
-REMOTE_REF=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo "")
-if [ -z "$REMOTE_REF" ]; then
-  # First push of a branch: there is no baseline to diff against. Genuinely unknown.
-  ARGS="--unknown-diff"
-else
-  set +e
-  CHANGED=$(git diff --name-only "$REMOTE_REF"...HEAD 2>/dev/null)
-  DIFF_STATUS=$?
-  set -e
-  if [ "$DIFF_STATUS" -ne 0 ]; then
-    ARGS="--unknown-diff"
-  elif [ -z "$CHANGED" ]; then
-    ARGS="--empty-diff"
-  else
-    ARGS="$CHANGED"
-  fi
-fi
+echo "▶ pre-push: npm run verify (typecheck + node guards, ~20s) …"
+npm run verify
+echo "✓ pre-push: passed"
 
-set +e
-# shellcheck disable=SC2086
-node scripts/gate-scope.mjs $ARGS
-SCOPE=$?
-set -e
-
-# THE PRODUCTION BUILD RUNS AFTER THE PUSH, NOT BEFORE IT.
-#
-# scripts/seam-artifact-check.ts builds an isolated production bundle and greps it for the realtime
-# test seam. It was 99s of a 128s fast set — 77% — on every push, and it was the single largest
-# drag on this repo's velocity. Nothing is lost by moving it: the STRUCTURAL half of that guard
-# (seam-stripped-test.ts) still runs inline in milliseconds and fails on the commit that introduces
-# a leak, and Vercel builds the same commit and fails the deploy on the same error.
-#
-# Detached, so the push is never waiting on it. It writes .seam-artifact-result and raises a
-# desktop notification if it fails. Skip with SEAM_ARTIFACT_SKIP=1.
-spawn_seam_artifact() {
-  [ "${SEAM_ARTIFACT_SKIP:-0}" = "1" ] && return 0
+# THE PRODUCTION BUILD RUNS AFTER THE PUSH, NOT BEFORE IT. seam-artifact-check builds an isolated
+# production bundle and greps it for the realtime test seam — ~100s, detached, so the push never
+# waits on it. The STRUCTURAL half (seam-stripped-test) runs inline in milliseconds, and Vercel
+# builds the same commit and fails the deploy on the same error. Skip with SEAM_ARTIFACT_SKIP=1.
+if [ "${SEAM_ARTIFACT_SKIP:-0}" != "1" ]; then
   rm -f .seam-artifact-result
   nohup npm run --silent verify:seam-artifact > /tmp/seam-artifact.log 2>&1 &
   echo "▶ post-push: seam artifact check running in the background (~100s)"
   echo "    verdict → .seam-artifact-result · log → /tmp/seam-artifact.log"
-}
-
-case "$SCOPE" in
-  12)
-    echo "⏭ pre-push: nothing to gate"
-    exit 0
-    ;;
-  0)
-    echo "▶ pre-push: typecheck only (policy: the gate is for MatchDay writes)"
-    npx tsc --noEmit
-    echo "✓ pre-push: typecheck passed"
-    spawn_seam_artifact
-    exit 0
-    ;;
-  11)
-    echo "▶ pre-push: npm run verify (fast set) — the gate's own machinery, no browser suites …"
-    npm run verify
-    echo "✓ pre-push: fast set passed"
-    spawn_seam_artifact
-    exit 0
-    ;;
-  10)
-    echo "▶ pre-push: npm run verify (fast set) …"
-    npm run verify
-    if [ "${VERIFY_SKIP_E2E:-0}" = "1" ]; then
-      echo "⏭ pre-push: verify:e2e skipped via VERIFY_SKIP_E2E=1 (fast set still ran)"
-    else
-      echo "▶ pre-push: npm run verify:e2e (browser suites) …"
-      npm run verify:e2e
-    fi
-    spawn_seam_artifact
-    ;;
-  *)
-    echo "⛔ pre-push: gate-scope.mjs exited $SCOPE — unrecognised. Taking the full gate."
-    npm run verify
-    npm run verify:e2e
-    ;;
-esac
+fi

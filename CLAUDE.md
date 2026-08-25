@@ -77,81 +77,71 @@ column that does not exist yet 500s every admin route.
 
 Migrations land before the code that depends on them.
 
-## The gate
+## The bar
 
-**NEVER add a BROWSER (e2e) suite without Ryan's explicit approval** — each is 30+
-seconds on every full run, forever. Node suites in the fast set are ~1s and do not
-need approval, but say what you added and why. Extending or fixing an existing suite
-is always fine.
+**Set 2026-08-25, replacing "the gate". There is no browser lane. There is no E2E on a push.**
 
+**The default, for everything: typecheck, look at it in a browser, push.** No new assertions, no
+new suites. Admin UI, reports, filters, layout, copy, read-only pages — all of it. If the change
+renders something, open it and look; that is the check.
 
-`npm run verify` and `npm run verify:e2e` must both pass. A suite reporting zero
-assertions is failing, not passing. The quarantine list is pinned in
-`scripts/quarantine.pinned.json` and the gate fails on any drift — growing it is
-an explicit, reviewable edit in the same commit.
+**The one exception: checkout, bookings, payments, credits — anything that changes what a player
+is CHARGED or what a match record says HAPPENED.** Those get a fast targeted check. Minutes, not
+twenty. Run the node guards that cover the path you touched and read the output; that is what they
+are for.
 
-**WHEN THE FULL GATE IS REQUIRED.** The full gate runs when the diff touches a
-route, anything under `src/lib`, a query, an auth path, a migration, or any
-write. That is the list.
+**Bucket the change BEFORE you reach for a test, not after.** If you cannot place it confidently,
+ask. Do not default to running everything — over-testing is not free, and a twenty-minute run that
+teaches nothing has a cost that lands on the next task.
 
-When the diff is confined to CSS, `className` strings, copy, and JSX that adds no
-new data access, run typecheck plus only the suites that assert on the files or
-selectors in the diff. **Say which suites you ran and which you skipped.** Then
-push.
+`npm run verify` — typecheck plus the node guards, about twenty seconds — runs on every push and
+is the whole pre-push gate. Those suites are not a general test suite: they are the guards on what
+reaches a player (the stage deny-list, the production host guard, the wall-clock trap, the
+change-log hook, the credits / roster / promo write models). A suite reporting zero assertions is
+failing, not passing.
 
-**If you are unsure which side a diff falls on, it is the full gate.**
+**The browser suites still exist and still run on demand** — `npm run verify:e2e`, or one file
+directly — for the rare change where driving the page is genuinely the fastest way to see it. They
+are a tool, not a toll. **There is no quarantine list**: nothing is mandatory, so a red browser
+suite is a suite you do not run, and bookkeeping about which ones those are is bookkeeping about
+nothing.
 
-Refactors get a characterization net first, and the existing assertion **bodies
-stay unchanged**. A test you edited to make pass records the new behaviour; it
-does not verify the old one. Selector-path edits are allowed and must be
-itemised.
+**WHY THIS CHANGED.** The browser lane blocked six pushes in one day and not one block was the
+change. It was a suite that had dated (a day-25 assertion, on the 25th), a suite that timed out
+under contention, a suite testing a working tree that was being edited while it ran, and a real
+$12 reporting gap that had nothing to do with any diff in front of it. Twenty minutes to learn
+nothing is a tax, not a gate.
 
-**Every screen suite asserts LAYOUT at 1600px, not just data.** At minimum: no
-mobile-only block is rendered (by computed display, not by the `hidden` attribute),
-and each row occupies a single band. A suite that only checks data will pass while
-the page is visibly broken — this has now happened twice.
+### If you do write a suite, these still hold
 
-**AN ABSENCE ASSERTION NEEDS A PRESENCE WAIT FIRST.** Checking that something is
-NOT on the page proves nothing until you have proven the page rendered. Wait on a
-positive ready signal before asserting anything is missing. A flat sleep is not a
-ready signal, and a loading screen satisfies almost every absence check you can
-write.
+Extending or fixing an existing suite is always fine. A refactor keeps the existing assertion
+**bodies unchanged** — a test edited to make it pass records the new behaviour, it does not verify
+the old one. Selector-path edits are allowed and must be itemised.
 
-**A COUNTING OR ABSENCE ASSERTION NEEDS A POSITIVE CONTROL.** Any assertion that
-counts matches, or asserts absence, must be paired with the same pattern or
-selector proven to find at least one match somewhere it definitely exists, in the
-same run. **An assertion whose needle is never proven present has not been run.**
-A regex that matches nothing, a selector that names a class nobody renders and a
-page that failed to load all produce the same zero, and zero is the answer these
-assertions are usually hoping for.
+**AN ABSENCE ASSERTION NEEDS A PRESENCE WAIT FIRST.** Checking that something is NOT on the page
+proves nothing until you have proven the page rendered. A flat sleep is not a ready signal, and a
+loading screen satisfies almost every absence check you can write.
 
-This applies to assertions whose **passing value is zero or absence** — expects of
-`0`, "not present", "no match", and upper bounds. An assertion that expects exactly
-N where N >= 1 is **already self-controlling**: a pattern that matches nothing
-yields 0 and fails. Do not add redundant controls to those.
+**A COUNTING OR ABSENCE ASSERTION NEEDS A POSITIVE CONTROL** — the same pattern proven to find at
+least one match somewhere it definitely exists, in the same run. A regex that matches nothing, a
+selector nobody renders, and a page that failed to load all produce the same zero, and zero is the
+answer these assertions are usually hoping for. This applies where the passing value is zero or
+absence; an assertion expecting exactly N >= 1 is already self-controlling.
 
-**ASSERT ON THE THING, NOT ON A SHAPE.** A selector broad enough to match a
-different element is not a positive control — it passes on the wrong subject.
-`verify-finance-sections` asserted the quarter control existed via
-`querySelector("select")`, which matched the Basis dropdown and kept passing after
-the quarter control was deleted.
+**ASSERT ON THE THING, NOT ON A SHAPE.** A selector broad enough to match a different element is
+not a positive control — it passes on the wrong subject.
 
-**Test effort is TIERED by what the change can cost.**
+**DERIVE, DO NOT PIN.** `verify-pace-readout` hardcoded days 25 and 31 as "days the month has not
+reached" and went red on the 25th. Derive the boundary from the data the page is showing.
 
-- **Writes and money** — credits, payouts, cancel, promo edit, roster moves:
-  full treatment. Mutation-test every guard, read back after every write,
-  report per-write outcomes. No exceptions.
-- **Numbers on screen** — counts, lists, derived figures: assert the numbers.
-  Layout only where it has already broken.
-- **Cosmetic** — deleting copy, spacing, labels, renaming: no new assertions.
-  Keep the existing ones passing and move on.
+**A SUITE MUST NOT WRITE PRODUCTION.** If it needs a different world, build it from fixtures or
+mock the response — never by editing the live one and promising to put it back. A `try/finally`
+restore does not survive the process being killed, and one did not.
 
-When a brief asks for more than the tier warrants, say so and do the tier
-rather than the brief.
-
-This corrects how the briefs have been written, not how the work has been done.
-Mutation tests and dual-breakpoint assertions have been demanded on changes that
-only delete paragraphs.
+**READ THE EXIT CODE BEFORE DIAGNOSING.** Exit 1 is a suite that decided something is wrong. Exit
+2 is a Playwright timeout — a suite that never got to decide. And the shape of a failure names its
+cause: one assertion with a specific wrong value is a DATED suite; every assertion failing
+including its own controls is a page that never loaded.
 
 ## Reading what a tool actually said
 

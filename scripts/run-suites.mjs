@@ -1,93 +1,25 @@
-// Suite runner + GUARD (Phase 18 harness fix). Runs each test suite in its own process
-// and FAILS the build if a suite: times out, exits non-zero, reports any failure, OR runs
-// ZERO assertions (no "N passed, M failed" line, or N == 0). The last case is the hole that
-// let rotted suites pass quietly — a suite whose mock no longer matches can load nothing,
-// assert nothing, and still exit 0. Not anymore.
+// SUITE RUNNER. Runs each suite in its own process and FAILS if a suite times out, exits non-zero,
+// reports any failure, OR runs ZERO assertions — a suite whose mock no longer matches can load
+// nothing, assert nothing, and exit 0, and that is the hole this guard exists for.
 //
-//   node scripts/run-suites.mjs         # the Node/tsx model+guard suites (in `npm run verify`)
-//   node scripts/run-suites.mjs --e2e   # the browser suites (needs `npm run dev` up)
+//   node scripts/run-suites.mjs         # the node guards — this is what `npm run verify` runs
+//   node scripts/run-suites.mjs --e2e   # the browser suites, ON DEMAND (needs `npm run dev` up)
+//
+// THERE IS NO QUARANTINE ANY MORE, and no drift guard for one. Quarantine existed because the
+// browser suites were MANDATORY on every push, so a red one had to be excluded loudly rather than
+// waved through. They are not mandatory now — the pre-push hook runs the node guards and nothing
+// else — so a browser suite that is red is simply a suite you do not run, and bookkeeping about
+// which ones those are is bookkeeping about nothing. See "The bar" in CLAUDE.md.
+//
+// The node suites below are NOT a general test suite. They are the guards on what reaches a player:
+// the stage deny-list, the production host guard, the wall-clock trap, the change-log hook, and the
+// credits / roster / promo write models. That is the whole reason they still run on every push.
 import { spawn } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import http from "node:http";
 
 const E2E = process.argv.includes("--e2e");
-const QUARANTINE_ONLY = process.argv.includes("--quarantine"); // run ONLY the quarantined suites
 
-// QUARANTINE — browser suites EXCLUDED from the gate. A mandatory gate that is red on every run
-// and waved through is not a gate; a quarantined suite is EXCLUDED and named loudly instead, with
-// why and what brings it back. Run them with `node scripts/run-suites.mjs --e2e --quarantine`
-// (npm run verify:e2e:quarantine). Each is quarantined, not fixed, because the fix is out of this
-// phase's scope; the reason + restore condition make the debt visible, not silent.
-// Two entries as of 2026-08-20. BOTH FAIL ON LIVE DATA, NOT ON A DEFECT — each pins a figure from
-// a month that is still filling up, and each was proved pre-existing by running it against a
-// stashed tree. They are quarantined rather than re-derived because rewriting an assertion body to
-// make it pass records the new behaviour instead of verifying the old one, and that is a decision
-// to take on its own, not inside an unrelated change.
-const QUARANTINE = new Map([
-  // verify-cost-basis.mjs is GONE, not merely un-quarantined. It existed to pin that Finance ›
-  // Cost opened on the SAME derivation as Field Costs, OpEx and Cash Flow — an override first,
-  // else per_match_rate × matches. That page no longer has a basis toggle and deliberately no
-  // longer agrees with the billed view: it derives from a rate and reads no override, and says so
-  // above its own table. A suite whose subject has been removed cannot be repaired, only rewritten
-  // as a different suite. What goes with it: the keyed-$0-vs-nothing-keyed distinction (an
-  // override question, moot here) and the "a dashed row contributes no 0% to any total" check.
-  // The second is still a live property of rollup(); scripts/cost-realized-test.ts covers the
-  // dash, not the total.
-  ["verify-cost-tables.mjs", "hardcodes live figures, drifts with data — see 2026-08-20"],
-  /* FLAKY UNDER LANE CONTENTION, NOT BROKEN. Proved PASSING ALONE at 81/81 on 2026-08-25, and red
-   * in 3 of 4 full-lane runs the same day. When it fails, EVERY assertion fails including its own
-   * positive controls — the header count reads 0 against 30,396, "a page of rows is rendered"
-   * reads false — which is a page that never finished loading, not a count that moved. The finder
-   * pages 30k rows and is the heaviest read in the lane; `next dev` compiles on demand and N
-   * browsers queue behind one compiler.
-   * RESTORE IT when the e2e lane runs against `next build && next start` instead of `next dev` —
-   * the ceiling-lift already identified in this file's own notes. The suite is not the problem. */
-  ["verify-player-finder.mjs", "FLAKY UNDER LANE CONTENTION — passes ALONE at 81/81, red in 3 of 4 full-lane runs on 2026-08-25, and when it fails every assertion including its controls fails together (a page that never loaded, not a figure that moved). Restore when the lane runs against `next start` rather than `next dev`."],
-  // RED BEFORE THIS SESSION'S CHANGES, PROVED BY RUNNING IT ON THE PARENT COMMIT. On 353bb9f it
-  // fails 4 assertions; on the Cost change it fails 1. The stable one is a REAL DEFECT and it is
-  // NOT in the Cost derivation: Finance › Revenue's field-grain Austin membership totals $7,737
-  // against the Cities page's $7,749 — a $12 gap on $8,024 of Austin August membership revenue
-  // (0.15%). Both pages allocate the SAME city-month figure by member spots and BOTH fall short of
-  // it, by different amounts, so at least one is allocating over a denominator the other does not
-  // share. The other three failures are load-dependent (every control fails together when the page
-  // has not finished its member-spot pass), which is the lane fragility already recorded for this
-  // suite on 2026-08-24.
-  // RESTORE IT when the two pages reconcile to the dollar — the gap is the bug, not the assertion.
-  ["verify-revenue-membership.mjs", "RED ON THE PARENT COMMIT TOO (4 failures on 353bb9f, 1 here). Stable failure is a real $12/0.15% reconciliation gap between Revenue field-grain membership and the Cities page for Austin, not a regression from any change in this session. Restore when the two pages agree to the dollar."],
-  // NOT A FLAKE — THIS ONE WRITES PRODUCTION. It flips fin_venue_fields.counts_as_regular_play on
-  // MatchDay field 22 (ATH Pearland) with the service role, reads four pages, and restores it in a
-  // finally. On 2026-08-24 it exited 2 mid-run and LEFT THE FLAG ON, which silently moved ATH
-  // Pearland's match count and cost across the estate and sent an investigation down the wrong
-  // path for an hour. Off until it is rewritten to prove the exception without mutating a live
-  // Finance flag. The suite itself also refuses to run — see its own header.
-  ["verify-counts-as-regular.mjs", "WRITES PRODUCTION (fin_venue_fields.counts_as_regular_play, field 22); left it flipped after an exit-2 on 2026-08-24 — off until rewritten without the write"],
-  // ALSO A PRODUCTION WRITE, AND A WEAKER RESTORE THAN THE ONE ABOVE. It clears a REAL
-  // fin_venue_cost_overrides amount through the UI and then types it back — or DELETEs the row
-  // outright when there was none — in straight-line code with no finally at all. That is money: a
-  // cleared override changes a venue's cost for a closed month. On 2026-08-24 the restore
-  // completed only because the assertion that failed came AFTER it.
-  ["verify-field-cost-month.mjs", "WRITES PRODUCTION (fin_venue_cost_overrides — clears/deletes a real override, restores in straight-line code with NO finally); touches money and ran on every full gate — off until rewritten without the write"],
-]);
-
-// ── QUARANTINE DRIFT GUARD (Phase 21b item 1) ────────────────────────────────
-// A suite must never leave the gate silently. The set of quarantined suites is PINNED in
-// scripts/quarantine.pinned.json; if the live QUARANTINE map above drifts from it — an
-// addition, a removal, OR a swap that keeps the count the same (exactly how verify-week
-// slipped in while adminpay left, both at 4) — the e2e gate FAILS until the pinned file is
-// updated in the SAME commit. Growing the quarantine is therefore an explicit, reviewable diff.
-function quarantineDrift() {
-  const live = [...QUARANTINE.keys()].sort();
-  let pinned;
-  try { pinned = (JSON.parse(readFileSync("scripts/quarantine.pinned.json", "utf8")).quarantined ?? []).slice().sort(); }
-  catch (e) { return { ok: false, msg: `cannot read scripts/quarantine.pinned.json (${e.message})` }; }
-  const added = live.filter((s) => !pinned.includes(s));
-  const removed = pinned.filter((s) => !live.includes(s));
-  if (added.length === 0 && removed.length === 0) return { ok: true, live };
-  const lines = [];
-  if (added.length) lines.push(`  + newly quarantined, NOT in the pinned list: ${added.join(", ")}`);
-  if (removed.length) lines.push(`  − pinned but no longer quarantined:        ${removed.join(", ")}`);
-  return { ok: false, live, msg: `quarantine set drifted from scripts/quarantine.pinned.json\n${lines.join("\n")}\n  → if intended, edit scripts/quarantine.pinned.json in THIS commit to match (keep it sorted).` };
-}
 
 // The Node suites, in the order `verify` ran them.
 // THE UNIT SUITES THAT SURVIVE THE TESTING RULE — writes to the MatchDay API, and the guards
@@ -98,9 +30,6 @@ function quarantineDrift() {
 // matchops-auth-test is KEPT despite testing reads: a route shipped with NO gate is invisible
 // on screen, which is exactly the case a suite has to cover.
 const NODE_SUITES = [
-  // The gate's own router. It decides which lane every other suite here runs in, so it is guarded
-  // like the writes are — on fixtures, not on the names of files whose imports can change.
-  "scripts/gate-scope-test.mjs",
   // The city boundary's decision table — including the one rule that disagrees with the
   // city-manager tier on purpose (confinement beats is_admin).
   "scripts/city-confinement-test.ts",
@@ -160,10 +89,8 @@ const NODE_SUITES = [
   "scripts/match-promotion-new-test.ts",
 ];
 const ALL_E2E = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
-const GATED_E2E = ALL_E2E.filter((s) => !QUARANTINE.has(s.split("/").pop()));
-const QUARANTINED_E2E = ALL_E2E.filter((s) => QUARANTINE.has(s.split("/").pop()));
-
-const suites = !E2E ? NODE_SUITES : QUARANTINE_ONLY ? QUARANTINED_E2E : GATED_E2E;
+// --e2e runs EVERY browser suite. Nothing is excluded, because nothing is mandatory.
+const suites = !E2E ? NODE_SUITES : ALL_E2E;
 // e2e: 240s per suite — verify-year runs a full-year reconciliation and legitimately needs
 // ~2-3 min; a shorter cap timed it out even though it passes.
 /* THE CAP SCALES WITH THE POOL, because it measures WALL CLOCK and a pooled suite spends part of
@@ -345,16 +272,4 @@ for (const f of failed) {
   console.log(f.out.split("\n").slice(-12).map((l) => "    " + l).join("\n"));
 }
 
-// The gate is only meaningful if what it excludes is VISIBLE. Print every quarantined suite,
-// why, and what brings it back — every gated e2e run, not buried in a config file.
-let driftFailed = false;
-if (E2E && !QUARANTINE_ONLY) {
-  const drift = quarantineDrift();
-  console.log(`\n${"─".repeat(60)}\n⚠ QUARANTINE: ${QUARANTINE.size} suite(s) excluded from this gate ${drift.ok ? "(matches the pinned list ✓)" : "(⛔ PIN MISMATCH)"} — run \`npm run verify:e2e:quarantine\` to run them:`);
-  for (const [base, q] of QUARANTINE) console.log(`  • ${base}\n      why:     ${q.why}\n      restore: ${q.restore}`);
-  if (!drift.ok) {
-    driftFailed = true;
-    console.log(`\n⛔ QUARANTINE DRIFT GUARD FAILED — ${drift.msg}`);
-  }
-}
-process.exit(failed.length || driftFailed ? 1 : 0);
+process.exit(failed.length ? 1 : 0);
