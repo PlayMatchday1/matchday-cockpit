@@ -15,7 +15,11 @@
 
 import type { FinVenue } from "./useFinanceData";
 
-const COMBINE_BY_NAME: Array<{ primary: string; secondary: string }> = [
+/* EXPORTED so /admin/fields can tell an operator, BEFORE they commit an assignment, that the venue
+ * they are pointing a field ID at splits its matches onto a second leg at a different rate. The
+ * page must not carry its own copy of this list — a duplicated pair list that drifts is exactly
+ * how one page comes to bill at a rate another page does not. */
+export const COMBINE_BY_NAME: Array<{ primary: string; secondary: string }> = [
   { primary: "ATH Katy", secondary: "ATH Katy Sunday" },
   { primary: "Soccer Central", secondary: "Soccer Central Tournament" },
 ];

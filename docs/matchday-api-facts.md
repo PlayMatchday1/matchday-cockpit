@@ -2133,3 +2133,92 @@ after 21.8s. That is interference, not a regression — and it is direct evidenc
 **READ THE OUTPUT, NOT THE NOTIFICATION.** The background-task notification reported
 `exit code 0` for two runs whose own summary line said `2 FAILED` and `1 FAILED`. The harness
 status and the suite's verdict are different facts.
+
+## THE FIELD-ID INVENTORY — 79 field IDs, 38 of them unmapped (2026-08-24)
+
+Measured with the shipped aggregate (`buildFieldIdIndex`, `src/lib/fieldIdAdmin.ts`) run against
+production: **9,743 alive `mdapi_matches` rows** and **94,353 DAILY PAID registrations**. Two runs
+20 minutes apart differed — 94,331 → 94,353 registrations, Scissortail 78 → 77 live matches — because
+the match sync ran between them. **These numbers move with the sync and are not a fixed census.**
+
+|  | field IDs | live matches | DPP revenue |
+|---|---|---|---|
+| **UNMAPPED** | **38** | **471** | **$22,172** |
+| …of those, with a live match in the last 12 months | 10 | 48 | $4,135 |
+| MAPPED | 41 | 7,217 | $790,465 |
+
+`fin_venue_fields` holds **41 links** across **33 `fin_venues` rows**. **No orphan links** — every
+`mdapi_field_id` in the table appears on at least one match. Two venues carry **no** link:
+`ATH Katy Sunday` (#23) and `Soccer Central Tournament` (#53), both inactive, both split-rate
+targets reached through `resolveSplitRateVenueId` rather than through a field ID. That is correct,
+not a gap.
+
+### The ten unmapped field IDs that are still live
+
+| field | title | city | live (upcoming) | range | revenue |
+|---|---|---|---|---|---|
+| **1552** | Tourney ATH Katy | Houston | 9 (2) | 2026-07-20 → 2026-09-02 | $1,968 |
+| 496 | Tourney at Lou Fusz | St. Louis | 7 | 2025-10-07 → 2025-11-25 | $1,026 |
+| 463 | Community Fieldhouse | Houston | 6 | 2025-10-01 → 2025-10-24 | $207 |
+| 1651 | Ann Richards School | Austin | 6 (4) | 2026-08-15 → 2026-09-06 | $360 |
+| 1684 | Hala Piłkarska Bemowo | Warsaw | 6 (5) | 2026-08-24 → 2026-09-02 | $0 |
+| 397 | NEMP Grass | Austin | 5 | 2025-11-17 → 2025-11-20 | $399 |
+| 529 | NYCSC at Pier 40 | New York City | 3 | 2025-10-10 → 2025-10-19 | $135 |
+| 727 | Dripping Springs | Austin | 3 | 2025-11-25 → 2025-12-09 | $40 |
+| 562 | NYCSC at Nike Field | New York City | 2 | 2025-10-12 → 2025-10-19 | $0 |
+| 596 | NYCSC at DeWitt Clinton Park | New York City | 1 | 2025-10-15 → 2025-10-15 | $0 |
+
+Warsaw and the four NYCSC pitches are **partner markets and must stay unmapped** until the
+not-ours flag exists — the rule migration 0142 set. Of the ten, **four are ours and unmapped**:
+1552, 496, 463, 1651 (397 is a second NEMP field ID; 727 is a one-off).
+
+### THE ADDRESS IS THE EVIDENCE, AND EVERY FIELD ID HAS ONE
+
+`field_address` and `field_zipcode` are populated on **every one of the 79 field IDs** — zero
+nulls. They are what proves a pair without touching a name:
+
+- field **1552** "Tourney ATH Katy" and field **892** "ATH Katy" both carry
+  `Memorial Hermann Sports Park, 23910 Katy Fwy, Katy, TX` / `77494`.
+- field **496** "Tourney at Lou Fusz" and field **664** "Lou Fusz Athletic Complex" both carry
+  `2155 Creve Coeur Mill Rd` / `63146`.
+
+**Only ONE field ID has ever been renamed upstream** (1024, now "The Hattrick L.", 2 distinct
+titles across its matches). So `field_title_at_link` drift is real but rare, and the title shown on
+`/admin/fields` is the one on the field's most recent match — not the link-time copy.
+
+### MAPPING FIELD 1552 ADDS $0 OF COST, AND THAT IS THE POINT
+
+Computed by `previewAssignment` against live data, for 1552 → ATH Katy (#7, `per_match`, $140):
+
+    matches gained     +9   (105 → 114)      revenue attributed  +$1,968  ($14,169 → $16,137)
+    cost added         $0                    event exclusion     9 live matches, $1,260 not counted
+
+All nine matches are titled "Tourney ATH Katy", which fires `EVENT_MARKERS` on `tourney`, so every
+one of them is classified **event** and carries **no venue cost** — the identical shape to ATH
+Pearland's field 22, which sat at $0 for 26 months and $83,040 until migration 0130 added
+`counts_as_regular_play`. **Assigning 1552 fixes the match count and the revenue and leaves the
+cost at zero.** The link's exception toggle has to be ticked separately on Finance → Field Costs.
+
+None of 1552's nine matches falls on a Sunday, so the ATH Katy → ATH Katy Sunday split
+(`venueGroups.resolveSplitRateVenueId`, $140 weekday vs $160 Sunday) moves nothing here.
+
+### `start_date` CANNOT ANSWER "IS THIS MATCH UPCOMING"
+
+`mdapi_matches.start_date` is the wall clock (the `Z` is a lie); `start_date_utc` is the true
+instant. Comparing `start_date` to `Date.now()` calls a match upcoming or past by the field's UTC
+offset — five or six hours, which is more than enough to move an evening match across midnight.
+`buildFieldIdIndex` reads `start_date_utc` for the upcoming test and `start_date` for the calendar
+date, the slot key and the day-of-week, and says so at each site. `wallClockParts` does **string
+surgery only** and never constructs a `Date` from the timestamp — `walltime-guard-test` caught the
+first draft doing exactly that.
+
+### REVENUE AT A FIELD ID IS DAILY PAID, AND IT IS NOT `fin_revenue`
+
+`fin_revenue` carries a venue **name string**, not a field ID, so it cannot be attributed to a
+field ID at all without the name canonicalization this page exists to replace. The figure on
+`/admin/fields` is the roster-derived one — `paid_status='PAID'`, no promocode, non-fake,
+not absent, on a match that was not cancelled, `amount` cents → dollars — which is exactly what
+`financeStats.venuePartnerRevenueFor` pays partners on and what migration 0142 justified two new
+links with. A player-cancelled row that was never refunded is deliberately **included**: the money
+was earned. Membership revenue is allocated at **city** grain and has no field to belong to, so it
+is not in this column and the page says so.

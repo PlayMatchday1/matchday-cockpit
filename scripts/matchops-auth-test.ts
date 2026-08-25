@@ -166,13 +166,19 @@ is("no other route reads can_edit_credits directly",
 // nothing unauthenticated. Its own route rather than a step inside app-store-installs, because that
 // step has been starved at +288s against a 300s ceiling and an archive that silently does not run
 // is the failure this area keeps producing = 31.
-// ITEMISED: was 31. is_admin now gates ONE thing — the User access screen, which is who may grant
-// permissions. Every other route reads the flag its checkbox grants.
-is("authenticateAdmin guards only the User access screen", importsAdmin.map(rel).sort(),
-   ["admin/users/auth-status/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
+// ITEMISED: was 31, then 6 — is_admin gated ONE thing, the User access screen, which is who may
+// grant permissions; every other route reads the flag its checkbox grants.
+// +1 admin/fields — the field-ID → venue mapping admin. It is is_admin because it reads EVERY
+// match and EVERY paid registration in the estate to build the list, and because the mapping it
+// exists to edit is what Finance keys cost and revenue attribution off. There is no narrower flag
+// that means "may re-attribute money", and inventing one to avoid growing this list would be the
+// permission equivalent of a comment. THE CENSUS CAUGHT IT, which is what the census is for.
+is("authenticateAdmin guards the User access screen and the Fields mapping admin", importsAdmin.map(rel).sort(),
+   ["admin/fields/route.ts",
+    "admin/users/auth-status/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
     "admin/users/match-permissions/route.ts", "admin/users/permissions/route.ts",
     "admin/users/resend-invite/route.ts"].sort());
-is("  …and every one of those is under admin/users", importsAdmin.map(rel).every((f) => f.startsWith("admin/users/")), true);
+is("  …and every one of those is under admin/", importsAdmin.map(rel).every((f) => f.startsWith("admin/")), true);
 
 // Phase 18d — every promo WRITE is gated on MANAGE PROMOS, and the check is in the route (not
 // only on the button). A route that forgot it would 200 for any admin.

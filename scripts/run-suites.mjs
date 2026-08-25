@@ -116,6 +116,11 @@ const NODE_SUITES = [
   "scripts/mirror-writethrough-test.ts",
   // The Gusto payroll CSV — proves the email alias moved no amount or memo.
   "scripts/gusto-alias-email-test.ts",
+  // /admin/fields — the field-ID → venue mapping. Not a write yet, but the number it will be
+  // committed against: matches gained, revenue attributed, and cost added at the venue's rate,
+  // including the event-marker exclusion that let ATH Pearland bill $0 for 26 months. A wrong
+  // preview is a wrong decision taken deliberately, and no screen check can see the arithmetic.
+  "scripts/field-id-admin-test.ts",
 ];
 const ALL_E2E = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
 const GATED_E2E = ALL_E2E.filter((s) => !QUARANTINE.has(s.split("/").pop()));

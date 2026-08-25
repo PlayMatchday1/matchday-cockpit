@@ -12,12 +12,13 @@ const TABS: Tab[] = [
   { href: "/admin", label: "User access" },
   { href: "/admin/reports", label: "Reports" },
   { href: "/admin/canned-responses", label: "Canned responses" },
+  { href: "/admin/fields", label: "Fields" },
 ];
 
 export default function AdminSubNav({
   active,
 }: {
-  active: "users" | "reports" | "canned-responses";
+  active: "users" | "reports" | "canned-responses" | "fields";
 }) {
   return (
     <div
@@ -30,7 +31,8 @@ export default function AdminSubNav({
           (active === "users" && t.href === "/admin") ||
           (active === "reports" && t.href === "/admin/reports") ||
           (active === "canned-responses" &&
-            t.href === "/admin/canned-responses");
+            t.href === "/admin/canned-responses") ||
+          (active === "fields" && t.href === "/admin/fields");
         return (
           <Link
             key={t.href}
