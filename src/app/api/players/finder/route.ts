@@ -317,6 +317,30 @@ export async function GET(req: Request) {
      * seven tile counts plus ten per-city counts plus a median plus a newest plus an occupancy
      * call: about twenty, every one of which had to agree with the others by construction rather
      * than by sharing a predicate. */
+    /* ── REFRESH MEANS REBUILD, BUT ONLY WHEN THERE IS SOMETHING TO REBUILD ────────────────────
+     * The button used to call this route and nothing else, which re-read a stale set and
+     * re-rendered the same staleness — honest, and useless to the person clicking it. It now
+     * rebuilds the precomputed set first.
+     *
+     * ONLY WHEN STALE. A rebuild is ~3s and takes a brief exclusive lock on both matviews, so
+     * firing one on every click would make a no-op button expensive and let repeated clicks queue
+     * locks behind each other. The staleness check is the rate limit: once the set is current, the
+     * second click is a plain re-read.
+     *
+     * BEST-EFFORT, LIKE THE SYNC'S. A failed rebuild must not fail the read — the page still has a
+     * set to show and a banner to say how old it is. 0147 shipped a refresh that threw on every
+     * call (pg_safeupdate, an UPDATE with no WHERE) and the only reason anyone noticed was that
+     * banner, so the read staying up is what makes the failure visible rather than fatal. */
+    let rebuilt = false;
+    if (url.searchParams.get("rebuild") === "1") {
+      const { data: pre } = await supabase.rpc("player_finder_freshness");
+      if (((pre ?? [])[0] as { stale?: boolean } | undefined)?.stale === true) {
+        const { error: refreshErr } = await supabase.rpc("refresh_player_finder_views");
+        if (refreshErr) console.warn("[finder] manual rebuild failed:", refreshErr.message);
+        else rebuilt = true;
+      }
+    }
+
     const [pageRes, statsRes, fields] = await Promise.all([
       supabase.rpc("player_finder_page", { ...compact(args), p_limit: size, p_offset: (page - 1) * size }),
       supabase.rpc("player_finder_stats", compact(args)),
@@ -347,7 +371,7 @@ export async function GET(req: Request) {
       players: rows.map(shape),
       total, page, size, sort, dir,
       // The set's own freshness — the page prints this instead of a count that looks current.
-      freshness: { refreshedAt: syncedAt, sourceSyncedAt, stale },
+      freshness: { refreshedAt: syncedAt, sourceSyncedAt, stale, rebuilt },
       // How many players carry NO home city. Printed beside the Home city control so "= Austin"
       // cannot silently drop them; counted over the whole estate, so it does not move with the
       // other filters.

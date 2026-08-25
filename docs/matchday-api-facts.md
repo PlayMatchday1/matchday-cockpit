@@ -2782,3 +2782,61 @@ It was right, and it said so instead of showing a confident number.
 **Verified in the browser:** Houston → ATH Katy returns **693**, the same figure 0145's verdict and
 0147's verdict both produced by different mechanisms. Plus kick-off from 21:00 and matches from
 2026-08-01 → 97. Home city = Not set → 4,010.
+
+## THE FINDER'S REFRESH HAD NEVER RUN — ONE MISSING `WHERE` (2026-08-25)
+
+Reported from two places ("Refresh does nothing"), and it was two bugs stacked.
+
+### THE BUTTON WAS HONEST AND USELESS
+
+Reproduced on production: the click fires, `GET /api/players/finder` goes out, returns **200**, and
+the page renders exactly what came back. Nothing is ignored. Refresh called `load()`, which
+re-fetches the route; the route reads the set and its freshness stamp and **rebuilds nothing**. So
+it faithfully re-read a stale set and faithfully re-rendered the same staleness.
+
+That was correct before 0147 — re-reading the mirror was all there was. 0147 made the button
+inadequate and did not change it.
+
+### AND THE SET HAD NEVER REBUILT AT ALL
+
+    select refresh_player_finder_views();
+    ERROR:  UPDATE requires a WHERE clause
+
+**`pg_safeupdate`.** 0147 ended the function with `update player_finder_refresh set refreshed_at =
+now();` — no `WHERE`. And because it is one plpgsql function in one transaction, **the throw rolls
+back the two matview refreshes that had already succeeded**. The set rebuilt and Postgres undid it,
+every hour, silently.
+
+    matches synced   18:44:46   (cron; 17:35, 16:41, 15:47 … all ran)
+    set rebuilt      17:29:20   (when 0147 was applied)
+
+The sync wiring was fine — it had been calling the function all along. `refreshPlayerFinderViews()`
+logs a warning and returns so a refresh failure never fails the sync, which is the right posture
+and is exactly why nobody saw it.
+
+**THIS RULE IS WRITTEN DOWN TWICE IN THIS REPO** — CLAUDE.md ("revoke SQL with a `WHERE` clause —
+`pg_safeupdate` rejects an unqualified UPDATE") and this file. 0147 broke it anyway. Fixed by 0148
+with `where only_row`, the one-row primary key, and a comment saying not to simplify it away.
+
+**THE ONLY REASON ANY OF IT SURFACED WAS THE STALENESS BANNER** — the thing that did work. A silent
+best-effort failure needs something else on screen telling the truth, or it is invisible until
+someone reports a symptom two layers away.
+
+### REFRESH NOW REBUILDS, BUT ONLY WHEN STALE
+
+`?rebuild=1` asks the route to rebuild before reading. It checks freshness first: **stale → rebuild;
+current → plain re-read.** A rebuild is ~3s under an exclusive lock, so firing one per click would
+make a no-op button expensive and let repeated clicks queue locks. The staleness check is the rate
+limit.
+
+Verified by backdating the stamp and driving it: banner stale → click → button reads "Rebuilding…"
+→ `rebuilt=true`, banner clears to "set rebuilt just now". **Second click on the now-current set
+returns `rebuilt=false`** — no wasted lock.
+
+### AND THE REFRESH DURATION, MEASURED AT LAST
+
+**3,120ms** for both matviews (182,000 rows, 13 indexes). That is over the one-second line that
+would have argued for `REFRESH … CONCURRENTLY`, so a finder request landing during a refresh waits
+~3s, hourly. Both matviews carry plain-column unique indexes so CONCURRENTLY is available — but it
+cannot run inside a transaction and every PostgREST rpc is one, so switching would mean moving the
+refresh to pg_cron. Recorded, not done.

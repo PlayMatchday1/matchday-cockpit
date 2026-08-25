@@ -49,7 +49,7 @@ type Payload = {
   /* THE AGE OF THE PRECOMPUTED SET, not of the mirror (migration 0147). `stale` means a sync
    * landed and the rebuild did not follow it — the one state a fast table can be in that a slow
    * view never could: confidently wrong. */
-  freshness?: { refreshedAt: string | null; sourceSyncedAt: string | null; stale: boolean };
+  freshness?: { refreshedAt: string | null; sourceSyncedAt: string | null; stale: boolean; rebuilt?: boolean };
   /** How many players carry NO home city. Printed beside the control so "= Austin" cannot
    *  silently drop them. Counted over the whole estate, so it does not move with the filters. */
   noHomeCity?: number;
@@ -165,13 +165,16 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
     return p.toString();
   }, [f]);
 
-  const load = useCallback(async () => {
+  /* `opts.rebuild` asks the SERVER to rebuild the precomputed set before reading it, and is sent
+   * only by the Refresh button. It is not part of `query`'s filter state — a rebuild is an action,
+   * not a filter, and it must not be replayed by the effect below every time a filter changes. */
+  const load = useCallback(async (opts?: { rebuild?: string }) => {
     const mine = ++seq.current;
     setLoading(true); setErr(null);
     try {
       const { data: sess } = await supabase.auth.getSession();
       const token = sess.session?.access_token;
-      const res = await fetch(`/api/players/finder?${query({ page: String(page), size: String(size) })}`, {
+      const res = await fetch(`/api/players/finder?${query({ page: String(page), size: String(size), ...(opts?.rebuild ? { rebuild: opts.rebuild } : {}) })}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {}, cache: "no-store",
       });
       const json = (await res.json()) as Payload;
@@ -356,7 +359,14 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
           ) : (
             <>Mirrored data · set rebuilt {fmtWhen(data?.freshness?.refreshedAt ?? data?.syncedAt ?? null)}. A signup newer than that is not here yet.</>
           )}
-          <button type="button" className="pf-btn" onClick={() => void load()} data-testid="finder-refresh">Refresh</button>
+          {/* REFRESH REBUILDS THE SET, it does not just re-read it. Clicking this used to re-fetch
+              a stale set and re-render the same banner — the button was honest about being a
+              re-fetch and useless to anyone reading its label. The server rebuilds only when the
+              set is actually behind, so a second click on a current set costs nothing. */}
+          <button type="button" className="pf-btn" disabled={loading}
+            onClick={() => void load({ rebuild: "1" })} data-testid="finder-refresh">
+            {loading ? "Rebuilding…" : "Refresh"}
+          </button>
         </div>
 
         <div className="pf-params">
