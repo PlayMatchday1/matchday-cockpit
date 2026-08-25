@@ -367,7 +367,23 @@ console.log("\n── days the current month has not reached ──");
   const early = await at(10);
   eq("  control — day 10 shows a figure for both series and a difference", 
      [early?.cur !== "—", early?.cmp !== "—", early?.hasDiff], [true, true, true]);
-  for (const d of [25, 31]) {
+  /* ITEMISED — A DATED ASSERTION, DERIVED. This read `for (const d of [25, 31])`, which was true
+   * when written and false on 2026-08-25: the current month HAD reached day 25 by then and it read
+   * $380, not a dash. The premise being tested is "a day the current month has not reached", so
+   * the days come from the CURRENT SERIES' OWN LENGTH — the same source the `beyond` block above
+   * already uses (`P.current.length`) — instead of from two numbers that expire.
+   *
+   * The month's last day is included when there is one, because the tail of the chart is the
+   * stretch that is newly drawn and was never on the scale before. */
+  const plotted = await page.evaluate(() =>
+    JSON.parse(document.querySelector('[data-testid="pace-chart"]').getAttribute("data-current")).length);
+  const lastDay = await page.evaluate(() =>
+    JSON.parse(document.querySelector('[data-testid="pace-chart"]').getAttribute("data-compare")).length);
+  const unreached = [...new Set([plotted + 1, lastDay])].filter((d) => d > plotted && d <= lastDay);
+  eq("  control — the current month has NOT reached the end, so there are days to test",
+     unreached.length > 0, true);
+  console.log(`     current series covers ${plotted} of ${lastDay} days — testing ${unreached.join(", ")}`);
+  for (const d of unreached) {
     const r = await at(d);
     eq(`day ${d}: the current month reads "—"`, r?.cur, "—");
     eq(`  …the comparison reads a real figure`, r?.cmp !== "—" && r?.cmp != null, true);

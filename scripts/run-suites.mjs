@@ -34,6 +34,15 @@ const QUARANTINE = new Map([
   // The second is still a live property of rollup(); scripts/cost-realized-test.ts covers the
   // dash, not the total.
   ["verify-cost-tables.mjs", "hardcodes live figures, drifts with data — see 2026-08-20"],
+  /* FLAKY UNDER LANE CONTENTION, NOT BROKEN. Proved PASSING ALONE at 81/81 on 2026-08-25, and red
+   * in 3 of 4 full-lane runs the same day. When it fails, EVERY assertion fails including its own
+   * positive controls — the header count reads 0 against 30,396, "a page of rows is rendered"
+   * reads false — which is a page that never finished loading, not a count that moved. The finder
+   * pages 30k rows and is the heaviest read in the lane; `next dev` compiles on demand and N
+   * browsers queue behind one compiler.
+   * RESTORE IT when the e2e lane runs against `next build && next start` instead of `next dev` —
+   * the ceiling-lift already identified in this file's own notes. The suite is not the problem. */
+  ["verify-player-finder.mjs", "FLAKY UNDER LANE CONTENTION — passes ALONE at 81/81, red in 3 of 4 full-lane runs on 2026-08-25, and when it fails every assertion including its controls fails together (a page that never loaded, not a figure that moved). Restore when the lane runs against `next start` rather than `next dev`."],
   // RED BEFORE THIS SESSION'S CHANGES, PROVED BY RUNNING IT ON THE PARENT COMMIT. On 353bb9f it
   // fails 4 assertions; on the Cost change it fails 1. The stable one is a REAL DEFECT and it is
   // NOT in the Cost derivation: Finance › Revenue's field-grain Austin membership totals $7,737

@@ -2575,3 +2575,44 @@ it finishes.
 
 `verify-player-finder` remains flaky under lane contention — proved passing alone at 81/81, red in
 2 of 3 full-lane runs. Noted once; not re-diagnosed.
+
+## MIGRATION 0144 IS LIVE (2026-08-25)
+
+`slate_notes` now carries `kind='comment'` with a nullable `city`. Applied by Ryan in the SQL
+editor; the verdict row came back exactly as predicted:
+
+    city_nullable t · kind_has_comment t · notes_with_city 8 · bad_shape 0 · comments 0 · comment_idx 1
+
+**VERIFIED INDEPENDENTLY, AND WITHOUT WRITING A ROW.** A pasted verdict is a claim; the check is
+two inserts DESIGNED TO BE REFUSED, where the evidence is *which constraint* refuses them:
+
+- a comment carrying a city → refused by **`slate_notes_shape_chk`**. Before 0144 it would have
+  been refused by `slate_notes_kind_chk` (the kind did not exist), so the constraint name is the
+  proof the new shape rule is the one running.
+- a note with no city → still refused. Dropping `NOT NULL` did not loosen notes.
+- `slate_notes` row count unchanged at 8 — the probe wrote nothing.
+
+Comments are live from here. Match Promotion's list is `?scope=comments`; Slate Review's list is
+unchanged and cannot show them (they have no city, and a kind filter says so out loud).
+
+## A SUITE THAT DATES IS NOT A SUITE THAT IS FLAKY (2026-08-25)
+
+`verify-pace-readout` failed with `day 25: the current month reads "—" — got "$380"`. **Today is
+the 25th.** The block hardcoded `for (const d of [25, 31])` as "days the current month has not
+reached" — true when written, false the moment the month reached day 25.
+
+The same file already had the right pattern four sections earlier: `beyond` is derived from
+`P.current.length`, the days the current series actually covers. The dated block now derives its
+days the same way — `plotted + 1` and the month's last day, from the chart's own `data-current` /
+`data-compare` attributes — and prints what it chose (`current series covers 25 of 31 days —
+testing 26, 31`). **53 passed, 0 failed.** It cannot date again.
+
+**THE TELL: a dated suite fails on ONE assertion with a specific wrong value. A flaky one fails on
+every assertion including its controls.** `verify-pace-readout` failed 2 of 53 with a real dollar
+figure; `verify-player-finder` fails all of them with zeros. Those are different problems and only
+one of them is fixed by re-running it.
+
+**`verify-player-finder` QUARANTINED** on that basis: passes ALONE at 81/81, red in 3 of 4
+full-lane runs, and when it fails its own positive controls fail with it. It pages 30k rows and is
+the heaviest read in the lane. Restore when the lane runs against `next build && next start`
+instead of `next dev` — the ceiling-lift this file already identifies. The suite is not the problem.
