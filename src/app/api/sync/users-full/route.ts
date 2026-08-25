@@ -16,8 +16,7 @@
 // name, nulls the phone, tombstones the email and rewrites `raw` wholesale — so the second copy of
 // the PII in the jsonb goes with it. No id-set diff, no soft-delete column, no separate PII pass.
 //
-// DAILY, NOT WEEKLY: ~95 pages at 250/page, ~19s network + ~10s upserts ≈ 30s against a
-// maxDuration of 120. Weekly would buy nothing and leave a scrubbed account readable here for up to
+// DAILY, NOT WEEKLY: weekly would buy nothing and leave a scrubbed account readable here for up to
 // seven days.
 //
 // SEPARATE FROM THE 11:00 ORCHESTRATOR, deliberately. This step is what once blew that chain's 300s
@@ -32,10 +31,15 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { syncMdapiUsers, mdapiUsersLogPatch } from "@/lib/mdapiUsersSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 
-// ALWAYS the full path — ~95 paginated GETs at 250/page, ~19s network + ~10s upserts ≈ 30s.
-// 120s leaves ~4x headroom. This is the same ceiling /api/sync/users carries for its first-run
-// case; the difference is that here every run takes it.
-export const maxDuration = 120;
+/* MEASURED, NOT ESTIMATED — and the estimate was badly wrong. The header of mdapiUsersSync puts a
+ * full run at "~19s network + ~10s upserts ≈ 30s", which is where the 120s ceiling came from. The
+ * first real run took 112.7s for 123 pages and 30,718 rows: 94% of that ceiling, with 7s to spare.
+ * It would have started failing on its own growth within months, and a cron that times out leaves
+ * a half-applied sync and a log row that never completes.
+ *
+ * 300s is the platform maximum and gives 2.7x headroom on the measured figure. The number to watch
+ * is in fin_sync_log: completed_at - started_at for source 'mdapi-users-full'. */
+export const maxDuration = 300;
 export const runtime = "nodejs";
 
 function constantTimeMatch(a: string, b: string): boolean {

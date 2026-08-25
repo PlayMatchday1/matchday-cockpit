@@ -26,6 +26,11 @@
 //      old behavior). A full run populates updated_at, so the next run
 //      can go incremental.
 //
+// TIMING, MEASURED 2026-08-25 — the "≈30s" above is an estimate and it is
+// WRONG. A real full run: 123 pages, 30,718 rows, 112.7s. The incremental
+// walk: 0.6s median, 0.8s max over six prod runs. Anything sizing a timeout
+// off this file should use 113s, not 30s.
+//
 // === Endpoint behavior (from probe, May 2026) ===
 //   - totalItems IS reliable on this endpoint (unlike subscriptions
 //     where it's broken). Use it to bound the page loop.

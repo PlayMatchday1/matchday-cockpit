@@ -21,10 +21,47 @@
 // control is how the halves come apart.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
+import { syncMdapiUsers, mdapiUsersLogPatch } from "@/lib/mdapiUsersSync";
+import { runWithLog } from "@/lib/syncLogging";
 import { assertScope } from "@/lib/cityConfinement";
 import { cityNameFor, resolveCityScope } from "@/lib/cityScope";
 
 export const runtime = "nodejs";
+/* Refresh does source-sync (0.6s measured) + rebuild (3.1s measured) + the page reads. 60s is
+ * generous; the read-only path is milliseconds. */
+export const maxDuration = 60;
+
+/* THE SET IS BUILT FROM TWO MIRRORS AND FRESHNESS MUST CONSIDER BOTH.
+ *
+ * player_finder_freshness() compares the set's stamp to mdapi_matches.synced_at ALONE — its
+ * `source_synced_at` is a name that claims more than it delivers. Players come from mdapi_users,
+ * synced by a different job on a different schedule, so the set could report "fresh" against
+ * matches while the users mirror was hours behind and new signups were missing with nothing saying
+ * so. The RPC is still used for `refreshed_at`, which is the one thing only it knows; its `stale`
+ * is deliberately NOT read. Fixing it in SQL would need a migration to change one boolean that the
+ * only caller can compute correctly itself. */
+async function freshnessOf(sb: SupabaseClient) {
+  const [fn, users] = await Promise.all([
+    sb.rpc("player_finder_freshness"),
+    sb.from("mdapi_users").select("synced_at").order("synced_at", { ascending: false }).limit(1),
+  ]);
+  const row = ((fn.data ?? [])[0] ?? {}) as { refreshed_at?: string; source_synced_at?: string };
+  const refreshedAt = row.refreshed_at ?? null;
+  const matchesSyncedAt = row.source_synced_at ?? null;
+  const usersSyncedAt = (users.data ?? [])[0]?.synced_at ?? null;
+  // THE NEWER OF THE TWO. The set is stale if EITHER mirror moved after it was built — taking the
+  // older would let a fresh mirror mask a stale one, which is the bug this replaces.
+  const ms = (v: string | null) => (v ? Date.parse(v) : NaN);
+  const newest = [matchesSyncedAt, usersSyncedAt].filter(Boolean)
+    .sort((a, b) => ms(a as string) - ms(b as string)).at(-1) as string | null ?? null;
+  const stale = Number.isFinite(ms(refreshedAt)) && Number.isFinite(ms(newest)) && ms(refreshedAt) < ms(newest);
+  return { refreshedAt, sourceSyncedAt: newest, matchesSyncedAt, usersSyncedAt, stale };
+}
+
+/* A double-click must not re-sync. The users mirror moving twice inside a minute is not a thing
+ * that happens, so its own age is the rate limit — the same shape as the rebuild's staleness gate
+ * below, and it needs no extra state. */
+const SOURCE_MIN_AGE_MS = 60_000;
 export const dynamic = "force-dynamic";
 
 const PAGE_SIZE = 50;
@@ -343,9 +380,42 @@ export async function GET(req: Request) {
      * call (pg_safeupdate, an UPDATE with no WHERE) and the only reason anyone noticed was that
      * banner, so the read staying up is what makes the failure visible rather than fatal. */
     let rebuilt = false;
+    let sourceSynced: { ran: boolean; rows?: number; error?: string } | null = null;
     if (url.searchParams.get("rebuild") === "1") {
-      const { data: pre } = await supabase.rpc("player_finder_freshness");
-      if (((pre ?? [])[0] as { stale?: boolean } | undefined)?.stale === true) {
+      /* SYNC THE SOURCE, THEN REBUILD. Rebuilding alone re-derived the set from a mirror that was
+       * itself behind, so pressing Refresh after a new signup showed nothing and reported success —
+       * the most useless answer a button can give. The mirror is the thing that was stale.
+       *
+       * THE INCREMENTAL WALK, NOT THE FULL ONE. Measured on prod: incremental 0.6s median / 0.8s
+       * max over six runs; a full re-sync is 112.7s and belongs on the daily cron, not behind a
+       * click. The walk is exactly what catches new signups, which is the reported symptom.
+       *
+       * BEST-EFFORT, AND SAID OUT LOUD. A failed sync must not fail the read — but unlike the
+       * rebuild below it is NOT swallowed into a console.warn, because the person clicking is
+       * entitled to know the page is not current. It goes back in the payload and the button says
+       * so. */
+      const pre = await freshnessOf(supabase);
+      const usersAgeMs = pre.usersSyncedAt ? Date.now() - Date.parse(pre.usersSyncedAt) : Infinity;
+      if (usersAgeMs > SOURCE_MIN_AGE_MS) {
+        const r = await runWithLog("mdapi-users", "manual", supabase, (sb) => syncMdapiUsers(sb), mdapiUsersLogPatch);
+        if (r.ok) {
+          sourceSynced = { ran: true, rows: r.result.upserted };
+        } else {
+          /* THE DETAIL STAYS SERVER-SIDE. Sync failures name env vars and upstream hosts — not
+           * secrets, but not the browser's business either, and this payload reaches every
+           * matchops account. The operator needs one fact: the page is not current. The cause is in
+           * the Vercel log and in fin_sync_log, where whoever can act on it is already looking. */
+          console.warn("[finder] source sync failed:", r.error);
+          sourceSynced = { ran: true, error: "sync failed" };
+        }
+      } else {
+        sourceSynced = { ran: false };
+      }
+
+      // Re-read AFTER the sync: it is what makes the set stale, so the pre-sync answer is the wrong
+      // one to gate on. Rebuild stays gated — ~3s and a brief exclusive lock on both matviews.
+      const post = await freshnessOf(supabase);
+      if (post.stale) {
         const { error: refreshErr } = await supabase.rpc("refresh_player_finder_views");
         if (refreshErr) console.warn("[finder] manual rebuild failed:", refreshErr.message);
         else rebuilt = true;
@@ -371,18 +441,22 @@ export async function GET(req: Request) {
      * precomputed set built FROM that mirror, and it is the set's age that governs what is on
      * screen. `stale` is true when a sync landed and the rebuild did not follow it, which is the
      * one state a fast table can be in that a slow view never could: confidently wrong. */
-    const { data: freshRows } = await supabase.rpc("player_finder_freshness");
-    const fresh = (freshRows ?? [])[0] as
-      { refreshed_at?: string; source_synced_at?: string; stale?: boolean } | undefined;
-    const syncedAt = fresh?.refreshed_at ?? null;
-    const sourceSyncedAt = fresh?.source_synced_at ?? null;
-    const stale = fresh?.stale === true;
+    const fresh = await freshnessOf(supabase);
+    const syncedAt = fresh.refreshedAt;
+    const sourceSyncedAt = fresh.sourceSyncedAt;
+    const stale = fresh.stale;
 
     return Response.json({
       players: rows.map(shape),
       total, page, size, sort, dir,
       // The set's own freshness — the page prints this instead of a count that looks current.
-      freshness: { refreshedAt: syncedAt, sourceSyncedAt, stale, rebuilt },
+      /* BOTH MIRROR STAMPS travel, not just the newer one, so the banner can NAME which source is
+       * behind instead of saying "stale" and leaving the operator to guess. */
+      freshness: {
+        refreshedAt: syncedAt, sourceSyncedAt, stale, rebuilt,
+        matchesSyncedAt: fresh.matchesSyncedAt, usersSyncedAt: fresh.usersSyncedAt,
+        sourceSynced,
+      },
       // How many players carry NO home city. Printed beside the Home city control so "= Austin"
       // cannot silently drop them; counted over the whole estate, so it does not move with the
       // other filters.

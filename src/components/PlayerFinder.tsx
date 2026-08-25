@@ -52,7 +52,13 @@ type Payload = {
   /* THE AGE OF THE PRECOMPUTED SET, not of the mirror (migration 0147). `stale` means a sync
    * landed and the rebuild did not follow it — the one state a fast table can be in that a slow
    * view never could: confidently wrong. */
-  freshness?: { refreshedAt: string | null; sourceSyncedAt: string | null; stale: boolean; rebuilt?: boolean };
+  freshness?: {
+    refreshedAt: string | null; sourceSyncedAt: string | null; stale: boolean; rebuilt?: boolean;
+    // BOTH mirror stamps, so the banner can name WHICH source is behind rather than say "stale".
+    matchesSyncedAt?: string | null; usersSyncedAt?: string | null;
+    // What Refresh did to the source mirror. null when this was an ordinary read.
+    sourceSynced?: { ran: boolean; rows?: number; error?: string } | null;
+  };
   /** How many players carry NO home city. Printed beside the control so "= Austin" cannot
    *  silently drop them. Counted over the whole estate, so it does not move with the filters. */
   noHomeCity?: number;
@@ -368,7 +374,7 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
           data-stale={data?.freshness?.stale ? "1" : "0"}>
           {data?.freshness?.stale ? (
             <>
-              <b>These counts are out of date.</b> New matches synced{" "}
+              <b>These counts are out of date.</b> The source synced{" "}
               {fmtWhen(data.freshness.sourceSyncedAt)} but this set was last rebuilt{" "}
               {fmtWhen(data.freshness.refreshedAt)} — anything since is missing. It rebuilds on the
               next sync.
@@ -376,13 +382,28 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
           ) : (
             <>Mirrored data · set rebuilt {fmtWhen(data?.freshness?.refreshedAt ?? data?.syncedAt ?? null)}. A signup newer than that is not here yet.</>
           )}
-          {/* REFRESH REBUILDS THE SET, it does not just re-read it. Clicking this used to re-fetch
-              a stale set and re-render the same banner — the button was honest about being a
-              re-fetch and useless to anyone reading its label. The server rebuilds only when the
-              set is actually behind, so a second click on a current set costs nothing. */}
+          {/* WHAT REFRESH ACTUALLY DID, said plainly. The failure case is the one that matters: a
+              source sync that errored leaves the page NOT current, and the old button reported
+              success regardless. `ran: false` is the rate limit, not a failure — it means the
+              mirror was synced within the last minute and there was nothing to fetch. */}
+          {data?.freshness?.sourceSynced?.error ? (
+            <b className="pf-sync-bad"> · Could not sync the source — this page is NOT current.</b>
+          ) : data?.freshness?.sourceSynced?.ran ? (
+            <span className="pf-sync-ok">
+              {" "}· Synced the source ({data.freshness.sourceSynced.rows?.toLocaleString()} rows)
+              {data.freshness.rebuilt ? " and rebuilt the set." : "; the set was already current."}
+            </span>
+          ) : data?.freshness?.sourceSynced ? (
+            <span className="pf-sync-ok"> · Source was synced under a minute ago; nothing to fetch.</span>
+          ) : null}
+          {/* REFRESH SYNCS THE SOURCE, THEN REBUILDS. Rebuilding alone re-derived the set from a
+              mirror that was itself behind, so pressing this after a new signup showed nothing and
+              still reported success. Measured: the incremental source sync is 0.6s and the rebuild
+              3.1s, so the whole thing sits behind a click comfortably. The FULL re-sync — the one
+              that catches deletions — is 113s and stays on the daily cron. */}
           <button type="button" className="pf-btn" disabled={loading}
             onClick={() => void load({ rebuild: "1" })} data-testid="finder-refresh">
-            {loading ? "Rebuilding…" : "Refresh"}
+            {loading ? "Syncing…" : "Refresh"}
           </button>
         </div>
 
@@ -664,6 +685,8 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
         .pf-sel-wide { max-width: 260px; }
         /* STALE IS NOT DECORATION. The set is fast and can be confidently wrong; when it is behind
            the mirror the strip stops being a grey footnote and says so. */
+        .pf-sync-ok { color: #4a7c59; }
+        .pf-sync-bad { color: #8a3b16; }
         .pf-sync-stale { background: #fff4ed; color: #8a3b16; border-bottom-color: #f2d3c0; }
         .pf-sync-stale b { color: #8a3b16; }
         .pf-clear { margin-left: auto; border: 0; background: transparent; color: #1c7a4a;

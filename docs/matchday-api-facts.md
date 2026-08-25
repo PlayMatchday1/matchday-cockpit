@@ -2941,3 +2941,68 @@ id-set diff is needed to catch deletions, because deletions are not deletions: t
 
 `mdapiUsersSync.ts:39-42` ("We do NOT delete rows") is correct but reads as though the risk were
 row disappearance. It is not. The risk is a **stale edit**, and neither watermark mode catches one.
+
+## FULL USERS RE-SYNC: 113 SECONDS, NOT 30 (2026-08-25)
+
+The first real run of `/api/sync/users-full`, on production:
+
+| | |
+|---|---|
+| pages fetched | **123** |
+| rows received / upserted | **30,718** |
+| duration | **112.7s** |
+| scrubbed rows seen | **1,959** |
+
+**THE ESTIMATE IN `mdapiUsersSync.ts` IS WRONG AND WAS LOAD-BEARING.** Its header says a full run
+is "~19s network + ~10s upserts ≈ 30s", and the route's `maxDuration = 120` was sized from it. The
+real figure is **112.7s — 94% of that ceiling**, with seven seconds to spare. It would have begun
+timing out on its own growth within months, leaving a half-applied sync and a log row that never
+completes. Raised to **300s**. The number to watch is `completed_at - started_at` in `fin_sync_log`
+for source `mdapi-users-full`.
+
+Measured alongside, from `fin_sync_log`:
+
+| sync | median | max |
+|---|---|---|
+| `mdapi-users` (incremental walk) | **0.6s** | 0.8s |
+| `mdapi-matches` | 15.0s | 17.6s |
+| `mdapi-users-full` | **112.7s** | — |
+
+### WHAT THE FIRST RUN CORRECTED
+
+| | before | after |
+|---|---|---|
+| rows | 30,691 | 30,718 |
+| scrubbed (`Deleted`/`Account`) | 1,669 | **1,959** |
+
+**290 accounts were showing stale contact details** — scrubbed on MatchDay, still readable here.
+
+Prod **88053**, the case that started it, fixed itself exactly as predicted:
+
+| | before | after |
+|---|---|---|
+| name | `Patryk` / `` | **`Deleted` / `Account`** |
+| column email | present, 20 chars (real) | 61-char tombstone |
+| column phone | present, 12 chars | **null** |
+| **raw email** | present, 20 chars (real) | 61-char tombstone |
+| **raw phone** | present, 12 chars | **null** |
+
+`raw` was overwritten wholesale, so the second copy of the PII went with it. No id-set diff, no
+soft-delete column, no separate PII pass — because a deletion here is an edit.
+
+## REFRESH SYNCS THE SOURCE BEFORE REBUILDING
+
+Refresh used to rebuild the set from a mirror that was itself behind, so pressing it after a new
+signup showed nothing **and reported success**. It now runs the incremental users walk first
+(0.6s), then rebuilds (3.1s) — about four seconds behind a click. The FULL re-sync is 113s and
+stays on the daily cron.
+
+Guards: a source sync within the last 60s is skipped (a double-click cannot re-sync); a FAILED sync
+is reported to the operator as "this page is NOT current" rather than swallowed, with the detail
+kept server-side.
+
+**And freshness now considers BOTH mirrors.** `player_finder_freshness()` compares the set only to
+`mdapi_matches.synced_at` — its `source_synced_at` claims more than it delivers, and players come
+from `mdapi_users` on a different schedule. The route takes the NEWER of the two stamps and computes
+`stale` itself; the RPC is still used for `refreshed_at`, which is the one thing only it knows. Its
+`stale` is deliberately not read.
