@@ -2616,3 +2616,23 @@ one of them is fixed by re-running it.
 full-lane runs, and when it fails its own positive controls fail with it. It pages 30k rows and is
 the heaviest read in the lane. Restore when the lane runs against `next build && next start`
 instead of `next dev` — the ceiling-lift this file already identifies. The suite is not the problem.
+
+## A COMPONENT SHARED WITH THE PHONE INHERITS THE PHONE'S FLOOR (2026-08-25)
+
+`PageComments` was written at the desktop grid's density — a 12.5px input — and rendered on the
+phone too. `verify-match-promotion-mobile` caught it: **every input must be at least 15px**,
+because below ~16px **iOS Safari zooms the page on focus**, and on a seven-column week view that
+means pinching back out after every keystroke.
+
+The fix is mobile-first, not a second component: `text-[15px] sm:text-[12.5px]` and
+`h-[38px] sm:h-[32px]`. One component, the phone's floor as the base, the desktop's density behind
+a breakpoint.
+
+**THE GENERAL RULE: a component that renders on both surfaces inherits the STRICTER one's
+constraints, and the phone is almost always stricter.** Lifting a component to share it — which is
+the right move — is also the moment its styling stops being about one page.
+
+`verify-matchpanel` exited **2** in the same lane and passes **147/147 alone**. Exit 2 is the
+harness's Playwright-timeout code, not an assertion failure: it is the wall-clock cap, and the cap
+measures queueing as well as work. **Read the exit code before diagnosing** — exit 1 is a suite
+that decided something is wrong, exit 2 is a suite that never got to decide.

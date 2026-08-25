@@ -110,9 +110,14 @@ export default function PageComments({
           onKeyDown={(e) => { if (e.key === "Enter") void add(); }}
           autoComplete="off" spellCheck={false} aria-label="Add a comment" data-testid="page-comment-input"
           placeholder={placeholder}
-          className="h-[32px] min-w-0 flex-1 rounded-[8px] border px-2.5 text-[12.5px]" style={{ borderColor: NOTE_C.chipLine }} />
+          /* 15px ON A PHONE, 12.5px FROM sm UP. Below ~16px iOS Safari ZOOMS THE PAGE on focus,
+             which on a seven-column week view means the operator is pinching back out every time
+             they type. verify-match-promotion-mobile enforces the floor on every input and caught
+             this at 12.5px — the desktop density was applied to a component that renders on both. */
+          className="h-[38px] min-w-0 flex-1 rounded-[8px] border px-2.5 text-[15px] sm:h-[32px] sm:text-[12.5px]"
+          style={{ borderColor: NOTE_C.chipLine }} />
         <button type="button" onClick={() => void add()} disabled={busy} data-testid="page-comment-add"
-          className="h-[32px] flex-none rounded-[8px] border px-3 text-[11.5px] font-bold disabled:opacity-50"
+          className="h-[38px] flex-none rounded-[8px] border px-3 text-[12.5px] font-bold disabled:opacity-50 sm:h-[32px] sm:text-[11.5px]"
           style={{ background: NOTE_C.chipBg, borderColor: NOTE_C.chipLine, color: NOTE_C.ink }}>
           {busy ? "Saving…" : "Add"}
         </button>
