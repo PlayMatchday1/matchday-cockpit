@@ -46,17 +46,33 @@ type Payload = {
     playMode: string; playSuppressed: boolean; member: string; city: string | null };
   stats: Stats; scope: string | null; scopeName: string | null; confined: boolean;
   syncedAt: string | null; error?: string;
+  /* THE AGE OF THE PRECOMPUTED SET, not of the mirror (migration 0147). `stale` means a sync
+   * landed and the rebuild did not follow it — the one state a fast table can be in that a slow
+   * view never could: confidently wrong. */
+  freshness?: { refreshedAt: string | null; sourceSyncedAt: string | null; stale: boolean };
+  /** How many players carry NO home city. Printed beside the control so "= Austin" cannot
+   *  silently drop them. Counted over the whole estate, so it does not move with the filters. */
+  noHomeCity?: number;
+  /** Every field that has hosted a match, with its city, for the Played-at Field select. */
+  fields?: { fieldId: number; title: string; city: string | null }[];
 };
 
 type Filters = {
   q: string; reg: string; regFrom: string; regTo: string;
   hist: string; play: string; playFrom: string; playTo: string;
+  /* HOME city — the city on the player's ACCOUNT. "unset" selects the 4,010 who have none, who a
+   * plain equality test has always dropped without saying so. */
   city: string; member: string;
+  // ── PLAYED AT — the matches they were actually at. A different question from every filter
+  // above, which describe the player rather than the play.
+  matchCity: string; fieldId: string; kickFrom: string; kickTo: string;
+  matchFrom: string; matchTo: string;
 };
 
 const DEFAULTS: Filters = {
   q: "", reg: "all", regFrom: "", regTo: "",
   hist: "any", play: "all", playFrom: "", playTo: "", city: "", member: "any",
+  matchCity: "", fieldId: "", kickFrom: "", kickTo: "", matchFrom: "", matchTo: "",
 };
 
 /* ── THE TWO WINDOW ROWS ARE THE SAME CONTROL TWICE ───────────────────────────────────────────
@@ -103,6 +119,14 @@ type Tile = { k: string; v: string; s: string; dead: boolean };
 
 export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void }) {
   const [f, setF] = useState<Filters>(DEFAULTS);
+  /* A FIELD BELONGS TO ONE CITY. With a city chosen the select offers only its fields; with none
+   * it offers all of them, labelled by city so two pitches with similar names stay apart. */
+  const fieldsForCity = (cityId: string) => {
+    const all = data?.fields ?? [];
+    if (!cityId) return all.map((x) => ({ ...x, title: x.city ? `${x.title} · ${x.city}` : x.title }));
+    const name = CITIES.find(([v]) => v === cityId)?.[1] ?? null;
+    return all.filter((x) => x.city === name);
+  };
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -127,8 +151,16 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
       if (f.playFrom) p.set("playFrom", f.playFrom);
       if (f.playTo) p.set("playTo", f.playTo);
     } else if (f.play !== "all") p.set("play", f.play);
-    if (f.city) p.set("city", f.city);
+    // "unset" is not a city — it is the absence of one, and the server reads it from its own key.
+    if (f.city === "unset") p.set("homeCity", "unset");
+    else if (f.city) p.set("city", f.city);
     if (f.member !== "any") p.set("member", f.member);
+    if (f.matchCity) p.set("matchCity", f.matchCity);
+    if (f.fieldId) p.set("fieldId", f.fieldId);
+    if (f.kickFrom) p.set("kickFrom", f.kickFrom);
+    if (f.kickTo) p.set("kickTo", f.kickTo);
+    if (f.matchFrom) p.set("matchFrom", f.matchFrom);
+    if (f.matchTo) p.set("matchTo", f.matchTo);
     for (const [k, v] of Object.entries(extra)) p.set(k, v);
     return p.toString();
   }, [f]);
@@ -233,7 +265,7 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
       if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
       const rows = json.players ?? [];
       const csv = [
-        ["id", "name", "email", "phone", "preferred_city", "registered", "last_match", "member"].join(","),
+        ["id", "name", "email", "phone", "home_city", "registered", "last_match", "member"].join(","),
         ...rows.map((r) => [r.id, r.name ?? "", r.email ?? "", r.phone ?? "", r.city ?? "", r.registered ?? "", r.last_match ?? "", r.member ? "yes" : "no"]
           .map((v) => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v))).join(",")),
       ].join("\n");
@@ -308,9 +340,22 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
       </div>
 
       <div id="finder-body" data-testid="finder-body" hidden={!open}>
-        <div className="pf-sync" data-testid="finder-freshness">
-          Mirrored data · last synced {fmtWhen(data?.syncedAt ?? null)}. A signup newer than that is
-          not here yet.
+        {/* THE SET'S AGE, NOT THE MIRROR'S. Since 0147 these figures come from a precomputed set
+            built FROM the mirror, so the set's age is what governs the screen. When a sync has
+            landed and the rebuild has not followed it, that is said outright — a fast table that
+            has gone stale is confidently wrong, which a slow view never was. */}
+        <div className={`pf-sync${data?.freshness?.stale ? " pf-sync-stale" : ""}`} data-testid="finder-freshness"
+          data-stale={data?.freshness?.stale ? "1" : "0"}>
+          {data?.freshness?.stale ? (
+            <>
+              <b>These counts are out of date.</b> New matches synced{" "}
+              {fmtWhen(data.freshness.sourceSyncedAt)} but this set was last rebuilt{" "}
+              {fmtWhen(data.freshness.refreshedAt)} — anything since is missing. It rebuilds on the
+              next sync.
+            </>
+          ) : (
+            <>Mirrored data · set rebuilt {fmtWhen(data?.freshness?.refreshedAt ?? data?.syncedAt ?? null)}. A signup newer than that is not here yet.</>
+          )}
           <button type="button" className="pf-btn" onClick={() => void load()} data-testid="finder-refresh">Refresh</button>
         </div>
 
@@ -363,7 +408,11 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
           })}
 
           <div className="pf-row">
-            <span className="pf-lbl">City</span>
+            {/* HOME CITY, NOT CITY. This reads preferable_city_name — the city on the player's
+                ACCOUNT — and it is a signup attribute, not where they played. Renamed because it
+                now sits next to a Played-at city and two controls called "City" is how someone
+                answers the wrong question confidently. */}
+            <span className="pf-lbl" title="The city on the player's account — not where they have played">Home city</span>
             <select className="pf-sel" data-testid="finder-city" value={f.city}
               // A CONFINED ACCOUNT CANNOT WIDEN THIS, and the disabled select is not why — the
               // server refuses any city but theirs. This is courtesy.
@@ -371,7 +420,15 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
               onChange={(e) => setF({ ...f, city: e.target.value })}>
               <option value="">All cities</option>
               {CITIES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+              {/* SELECTABLE, NOT JUST COUNTED. Picking a city excludes everyone with none; this is
+                  the only way to reach them, and without it they are invisible rather than filtered. */}
+              <option value="unset">Not set{data?.noHomeCity ? ` (${N(data.noHomeCity)})` : ""}</option>
             </select>
+            {!!data?.noHomeCity && (
+              <i className="pf-hint" data-testid="finder-nohome">
+                {N(data.noHomeCity)} players have no home city — picking one excludes them
+              </i>
+            )}
             <span className="pf-lbl pf-lbl2">Member</span>
             <div className="pf-seg" role="group" aria-label="Member">
               {MEM_OPTS.map(([v, t]) => (
@@ -382,6 +439,70 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
             </div>
             {dirty && <button type="button" className="pf-clear" data-testid="finder-clear" onClick={clear}>Clear filters</button>}
           </div>
+
+          {/* ── PLAYED AT — THE MATCHES, NOT THE PLAYER ───────────────────────────────────────
+              Every control above describes who someone IS: when they signed up, what their
+              account says, whether they hold a membership. These describe WHERE AND WHEN THEY
+              ACTUALLY PLAYED, which is the question "who was at this match" — and until 0147 it
+              took a database query because the finder could not ask it.
+
+              THE FIELD SELECT NARROWS TO THE CHOSEN CITY, because a field belongs to one city and
+              offering all 79 against a picked city is offering wrong answers. Picking a city
+              clears a field that does not belong to it rather than leaving a pair that returns
+              nothing. */}
+          <div className="pf-row pf-playedat" data-testid="finder-playedat">
+            <span className="pf-lbl" title="Where and when they actually played — not what their account says">Played at</span>
+
+            <select className="pf-sel" data-testid="finder-match-city" value={f.matchCity}
+              disabled={!!data?.confined}
+              onChange={(e) => {
+                const city = e.target.value;
+                const stillValid = fieldsForCity(city).some((x) => String(x.fieldId) === f.fieldId);
+                setF({ ...f, matchCity: city, fieldId: stillValid ? f.fieldId : "" });
+              }}>
+              <option value="">Any city</option>
+              {CITIES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+            </select>
+
+            <select className="pf-sel pf-sel-wide" data-testid="finder-field" value={f.fieldId}
+              onChange={(e) => setF({ ...f, fieldId: e.target.value })}>
+              <option value="">Any field</option>
+              {fieldsForCity(f.matchCity).map((x) => (
+                <option key={x.fieldId} value={x.fieldId}>{x.title}</option>
+              ))}
+            </select>
+
+          </div>
+
+          {/* THE SECOND HALF OF THE SAME GROUP. Kept on its own row because at 1600px the six
+              controls wrapped and dropped a lone date input onto a line of its own — a pair split
+              across rows reads as two filters. The empty label keeps it aligned under the first. */}
+          <div className="pf-row pf-playedat2">
+            <span className="pf-lbl" aria-hidden />
+            <span className="pf-lbl pf-lbl2" title="Kick-off time on the pitch">Kick-off</span>
+            <input type="time" className="pf-date" data-testid="finder-kickfrom" aria-label="Kick-off from"
+              value={f.kickFrom} onChange={(e) => setF({ ...f, kickFrom: e.target.value })} />
+            <span className="pf-to">to</span>
+            <input type="time" className="pf-date" data-testid="finder-kickto" aria-label="Kick-off to"
+              value={f.kickTo} onChange={(e) => setF({ ...f, kickTo: e.target.value })} />
+
+            <span className="pf-lbl pf-lbl2">Dates</span>
+            <input type="date" className="pf-date" data-testid="finder-matchfrom" aria-label="Match date from"
+              value={f.matchFrom} onChange={(e) => setF({ ...f, matchFrom: e.target.value })} />
+            <span className="pf-to">to</span>
+            <input type="date" className="pf-date" data-testid="finder-matchto" aria-label="Match date to"
+              value={f.matchTo} onChange={(e) => setF({ ...f, matchTo: e.target.value })} />
+          </div>
+
+          {/* NEVER PLAYED AND A MATCH FILTER CANNOT BOTH BE TRUE, and unlike the play window the
+              two do NOT contradict into an ignored filter — a player who never played genuinely
+              matches no match, so the honest result is empty. Said here rather than discovered. */}
+          {f.hist === "never" && (f.matchCity || f.fieldId || f.kickFrom || f.kickTo || f.matchFrom || f.matchTo) && (
+            <div className="pf-why" data-testid="finder-playedat-empty">
+              History is <b>Never played</b> and a Played-at filter is set — nobody can match both,
+              so this will return nothing. That is the real answer, not a bug.
+            </div>
+          )}
         </div>
 
         {err && <p className="empty" data-testid="finder-err"><b>Could not load players</b>{err}</p>}
@@ -415,7 +536,7 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
                 <thead>
                   <tr>
                     <th>ID</th><th>Name</th><th>Email</th><th>Phone</th>
-                    <th>Preferred city</th><th>Registered</th><th>Last match</th><th>Member</th>
+                    <th>Home city</th><th>Registered</th><th>Last match</th><th>Member</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -428,7 +549,7 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
                       <td>{p.email ?? "—"}</td>
                       <td className="mono">{p.phone ?? "—"}</td>
                       {/* NOT SET, never blank — a blank cell reads as a rendering bug, and 13.7%
-                          of players have no preferred city. */}
+                          of players have no home city. */}
                       <td data-testid="finder-city-cell">{p.city ?? "Not set"}</td>
                       <td data-iso={p.registered ?? ""}>{fmtDate(p.registered)}</td>
                       <td>{fmtDate(p.last_match)}</td>
@@ -499,6 +620,20 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
            genuinely inert — opacity alone leaves a control that looks dead and still fires. */
         .pf-row.off { opacity: .45; pointer-events: none; }
         .pf-why { font-size: 12px; color: #7a5b18; font-weight: 600; }
+        /* ── PLAYED AT (0147) ──────────────────────────────────────────────────────────────
+           Set apart by a rule and a tint rather than a heading: it is a DIFFERENT QUESTION from
+           the rows above — the matches someone was at, not who they are — and the eye should see
+           the seam without another label competing with "Home city" beside it. */
+        .pf-playedat { border-top: 1px dashed #e2e8de; padding-top: 12px; margin-top: 2px; }
+        .pf-playedat2 { margin-top: -4px; }
+        .pf-date { border: 1px solid #e2e8de; border-radius: 9px; padding: 6px 9px;
+          font: inherit; font-size: 12.5px; color: #16241a; background: #fff; }
+        .pf-to { font-size: 12px; color: #9aa598; }
+        .pf-sel-wide { max-width: 260px; }
+        /* STALE IS NOT DECORATION. The set is fast and can be confidently wrong; when it is behind
+           the mirror the strip stops being a grey footnote and says so. */
+        .pf-sync-stale { background: #fff4ed; color: #8a3b16; border-bottom-color: #f2d3c0; }
+        .pf-sync-stale b { color: #8a3b16; }
         .pf-clear { margin-left: auto; border: 0; background: transparent; color: #1c7a4a;
           font-size: 12.5px; font-weight: 600; cursor: pointer; text-decoration: underline; }
         .pf-band { display: grid; border-top: 1px solid #eef2ec; border-bottom: 1px solid #eef2ec;

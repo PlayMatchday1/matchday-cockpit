@@ -52,8 +52,19 @@ type Args = {
   p_play_mode: PlayMode;
   p_play_from: string | null;
   p_play_to: string | null;
+  /** HOME city — the city on the player's account (preferable_city_name). NOT where they played. */
   p_city: string | null;
   p_member: Member;
+  /** Home city IS NULL. 4,010 players have none, and a "= Austin" filter has always dropped them
+   *  silently; this is what makes them reachable. */
+  p_city_unset: boolean;
+  // ── PLAYED AT — filters on the MATCHES, not on the player (migration 0147) ──
+  p_match_city: string | null;
+  p_field_id: number | null;
+  p_kick_from: string | null;   // "HH:MM" wall clock
+  p_kick_to: string | null;
+  p_match_from: string | null;  // "YYYY-MM-DD" wall-clock day
+  p_match_to: string | null;
 };
 
 type PageRow = {
@@ -76,9 +87,15 @@ type PageRow = {
  * This is the production call path, so this is the shape that has to be fast. 0138 hardens the SQL
  * so a caller that does pass explicit nulls is merely slower rather than dead; until it is applied,
  * this is what keeps the page under a second. */
+/* OMIT WHAT IS AT ITS DEFAULT. This is not tidiness — 0136 measured it: an argument PASSED
+ * EXPLICITLY arrives as a parameter the planner cannot fold, and the same function that ran in
+ * 424ms with the argument omitted hit an 8-second timeout with it supplied. Every new filter below
+ * is listed here so an unused one is never sent. */
 const DEFAULTS: Record<string, unknown> = {
   p_search: null, p_reg_from: null, p_reg_to: null, p_history: "any",
   p_play_mode: "any", p_play_from: null, p_play_to: null, p_city: null, p_member: "any",
+  p_city_unset: false, p_match_city: null, p_field_id: null,
+  p_kick_from: null, p_kick_to: null, p_match_from: null, p_match_to: null,
 };
 function compact(args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -87,6 +104,54 @@ function compact(args: Record<string, unknown>): Record<string, unknown> {
     out[k] = v;
   }
   return out;
+}
+
+/* ── THE FIELD LIST FOR THE "PLAYED AT" CONTROL ───────────────────────────────────────────────
+ *
+ * One entry per mdapi field_id that has ever hosted a match, with its city, so the Field select
+ * can be narrowed to the chosen city. Built by paging mdapi_matches once and CACHED IN PROCESS —
+ * the alternative is ~10 paged reads on every keystroke, and this list changes when a new pitch
+ * opens, not when someone types.
+ *
+ * NOT from fin_venue_fields: only 41 of the 79 live field IDs are mapped to a venue, and a Field
+ * select that silently omits 38 pitches is worse than no select. This reads the matches, which is
+ * where the field actually appears.
+ *
+ * The TITLE is the one on the field's most recent match — MatchDay renames a field occasionally
+ * (one has, out of 79) and the current name is the one an operator recognises. */
+type FieldOption = { fieldId: number; title: string; city: string | null };
+let fieldCache: { at: number; list: FieldOption[] } | null = null;
+const FIELD_TTL_MS = 10 * 60 * 1000;
+
+async function fieldOptions(db: Db): Promise<FieldOption[]> {
+  if (fieldCache && Date.now() - fieldCache.at < FIELD_TTL_MS) return fieldCache.list;
+  const latest = new Map<number, { ms: number; title: string; city: string | null }>();
+  let last = 0;
+  for (;;) {
+    const { data, error } = await db
+      .from("mdapi_matches")
+      .select("api_id, field_id, field_title, city_name, start_date")
+      .is("deleted_at", null)
+      .gt("api_id", last)
+      .order("api_id")
+      .limit(1000);
+    if (error) break;                       // a field list that fails is an empty select, not a 500
+    const rows = (data ?? []) as { api_id: number; field_id: number | null; field_title: string | null; city_name: string | null; start_date: string | null }[];
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      if (r.field_id == null) continue;
+      const ms = Date.parse(String(r.start_date ?? "").slice(0, 10)) || 0;
+      const cur = latest.get(r.field_id);
+      if (!cur || ms > cur.ms) latest.set(r.field_id, { ms, title: r.field_title ?? `field ${r.field_id}`, city: r.city_name ?? null });
+    }
+    last = rows[rows.length - 1].api_id;
+    if (rows.length < 1000) break;
+  }
+  const list = [...latest.entries()]
+    .map(([fieldId, v]) => ({ fieldId, title: v.title, city: v.city }))
+    .sort((a, b) => (a.city ?? "").localeCompare(b.city ?? "") || a.title.localeCompare(b.title));
+  fieldCache = { at: Date.now(), list };
+  return list;
 }
 
 const ymd = (d: Date) =>
@@ -176,6 +241,49 @@ export async function GET(req: Request) {
     p_play_to = null;
   }
 
+  /* ── PLAYED AT: THE MATCH FILTERS ───────────────────────────────────────────────────────────
+   * These describe the MATCHES a player was at — a different question from every filter above,
+   * which describe the player. `homeCity=unset` is the one that needs saying out loud: it selects
+   * players whose account carries no city, which a home-city equality test has always excluded.
+   *
+   * A CONFINED ACCOUNT CANNOT WIDEN matchCity past its own boundary, for the same reason the home
+   * city select cannot: the scope comes from the database row and the query string is a
+   * convenience. assertScope refuses rather than silently re-pointing. */
+  const matchCityAsked = url.searchParams.get("matchCity");
+  const matchScope = assertScope(auth.confinedCity, matchCityAsked === "all" ? null : matchCityAsked, auth.confinedCity !== null);
+  if (!matchScope.ok) return Response.json({ error: matchScope.error }, { status: matchScope.status });
+  let matchCity: string | null = auth.confinedCity;
+  if (!matchCity && matchCityAsked && matchCityAsked !== "all") {
+    if (!resolveCityScope(matchCityAsked)) {
+      return Response.json({ error: `${JSON.stringify(matchCityAsked)} is not a known city.` }, { status: 400 });
+    }
+    matchCity = matchCityAsked;
+  }
+
+  const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+  const YMD = /^\d{4}-\d{2}-\d{2}$/;
+  const timeArg = (k: string) => {
+    const v = url.searchParams.get(k);
+    if (!v) return null;
+    if (!HHMM.test(v)) return undefined;      // undefined = reject, distinct from "not sent"
+    return `${v}:00`;
+  };
+  const dayArg = (k: string) => {
+    const v = url.searchParams.get(k);
+    if (!v) return null;
+    return YMD.test(v) ? v : undefined;
+  };
+  const p_kick_from = timeArg("kickFrom"), p_kick_to = timeArg("kickTo");
+  const p_match_from = dayArg("matchFrom"), p_match_to = dayArg("matchTo");
+  for (const [k, v] of Object.entries({ kickFrom: p_kick_from, kickTo: p_kick_to, matchFrom: p_match_from, matchTo: p_match_to })) {
+    if (v === undefined) return Response.json({ error: `${k} must be ${k.startsWith("kick") ? "HH:MM" : "YYYY-MM-DD"}` }, { status: 400 });
+  }
+  const fieldRaw = url.searchParams.get("fieldId");
+  const p_field_id = fieldRaw ? Number(fieldRaw) : null;
+  if (fieldRaw && !Number.isInteger(p_field_id)) {
+    return Response.json({ error: "fieldId must be an integer" }, { status: 400 });
+  }
+
   const args: Args = {
     p_search: (url.searchParams.get("q") ?? "").trim() || null,
     p_reg_from, p_reg_to,
@@ -183,6 +291,13 @@ export async function GET(req: Request) {
     p_play_mode, p_play_from, p_play_to,
     p_city: scope ? cityNameFor(scope) : null,
     p_member: member,
+    p_city_unset: url.searchParams.get("homeCity") === "unset",
+    p_match_city: matchCity ? cityNameFor(matchCity) : null,
+    p_field_id,
+    p_kick_from: p_kick_from ?? null,
+    p_kick_to: p_kick_to ?? null,
+    p_match_from: p_match_from ?? null,
+    p_match_to: p_match_to ?? null,
   };
 
   const wantExport = url.searchParams.get("export") === "1";
@@ -202,9 +317,10 @@ export async function GET(req: Request) {
      * seven tile counts plus ten per-city counts plus a median plus a newest plus an occupancy
      * call: about twenty, every one of which had to agree with the others by construction rather
      * than by sharing a predicate. */
-    const [pageRes, statsRes] = await Promise.all([
+    const [pageRes, statsRes, fields] = await Promise.all([
       supabase.rpc("player_finder_page", { ...compact(args), p_limit: size, p_offset: (page - 1) * size }),
       supabase.rpc("player_finder_stats", compact(args)),
+      fieldOptions(supabase),
     ]);
     if (pageRes.error) throw new Error(pageRes.error.message);
     if (statsRes.error) throw new Error(statsRes.error.message);
@@ -215,13 +331,29 @@ export async function GET(req: Request) {
     // reporting zero because there was nothing on page 4.
     const total = Number(s.players ?? 0);
 
-    const { data: fresh } = await supabase
-      .from("mdapi_users").select("synced_at").order("synced_at", { ascending: false }).limit(1);
-    const syncedAt = ((fresh ?? [])[0] as { synced_at?: string } | undefined)?.synced_at ?? null;
+    /* THE AGE OF THE SET, NOT THE AGE OF THE MIRROR. This used to read mdapi_users.synced_at,
+     * which answers "how old is the data we copied" — but since 0147 the finder reads a
+     * precomputed set built FROM that mirror, and it is the set's age that governs what is on
+     * screen. `stale` is true when a sync landed and the rebuild did not follow it, which is the
+     * one state a fast table can be in that a slow view never could: confidently wrong. */
+    const { data: freshRows } = await supabase.rpc("player_finder_freshness");
+    const fresh = (freshRows ?? [])[0] as
+      { refreshed_at?: string; source_synced_at?: string; stale?: boolean } | undefined;
+    const syncedAt = fresh?.refreshed_at ?? null;
+    const sourceSyncedAt = fresh?.source_synced_at ?? null;
+    const stale = fresh?.stale === true;
 
     return Response.json({
       players: rows.map(shape),
       total, page, size, sort, dir,
+      // The set's own freshness — the page prints this instead of a count that looks current.
+      freshness: { refreshedAt: syncedAt, sourceSyncedAt, stale },
+      // How many players carry NO home city. Printed beside the Home city control so "= Austin"
+      // cannot silently drop them; counted over the whole estate, so it does not move with the
+      // other filters.
+      noHomeCity: Number(s.no_home_city ?? 0),
+      // Every field that has hosted a match, with its city, so the Field select can narrow to it.
+      fields,
       // WHAT THE SERVER ACTUALLY APPLIED, not what was asked for. The client lights its controls
       // from this, so a preset overridden by a range cannot stay lit, and a play window suppressed
       // by History = never played is visibly suppressed rather than quietly ignored.
@@ -229,6 +361,10 @@ export async function GET(req: Request) {
         q: args.p_search, reg: regPreset, regFrom: regFromRaw, regTo: regToRaw,
         hist: history, play: playPreset, playFrom: playFromRaw, playTo: playToRaw,
         playMode: p_play_mode, playSuppressed, member, city: scope ?? null,
+        homeCity: args.p_city_unset ? "unset" : (scope ?? "all"),
+        matchCity: matchCity ?? null, fieldId: p_field_id,
+        kickFrom: url.searchParams.get("kickFrom"), kickTo: url.searchParams.get("kickTo"),
+        matchFrom: url.searchParams.get("matchFrom"), matchTo: url.searchParams.get("matchTo"),
       },
       stats: {
         players: total,

@@ -2732,3 +2732,53 @@ confidence than one sample could carry.
 "not slower". The finder is already at its ceiling under load, so adding filters at equal cost
 still leaves it timing out. The target is FASTER — which points at the precomputed set rather than
 at any arrangement of CTEs over `player_spots`.
+
+## PLAYER FINDER: MATCH FILTERS, AND "PLAYED" NOW MEANS MATCHES (2026-08-25)
+
+**0147 is live.** The finder reads two materialized views instead of a view over a view over a
+view. `player_finder_mv` (30,455 rows) and `player_match_mv` (151,890) are refreshed by
+`refresh_player_finder_views()`, called from the matches sync beside `refreshGrowthViews` —
+best-effort, never fails the sync.
+
+### THE UNIQUE INDEX FAILED FIRST, AND THAT WAS THE USEFUL PART
+
+`unique (user_id, match_api_id)` rejected (2183, 15323). Blake paid $24 for himself and brought a
+guest, and **the guest is recorded under his user_id** — one row `user_type PLAYER`, one `GUEST`,
+both passing the qualifying predicate. Measured across the whole set: **6,059 duplicate pairs,
+8,991 extra rows, 2,084 players**, one holding 18 spots in a single match. PLAYER 143,010 · GUEST
+7,593 · ADDITIONAL_SPOT 1,287 — and 7,593 + 1,287 = 8,880 against 8,991.
+
+The predicate was right and **the index was wrong**. The view stays SPOT-grained, keyed on the
+spot's own `api_id`: occupancy needs those guest rows counted individually, and the match filters
+already `select distinct user_id`, so they never cared.
+
+### AND IT EXPOSED A BUG LIVE SINCE 0133
+
+`plays` was `count(*)` over spots, so **a player who brought a guest to one match read as having
+played twice**. Now `count(distinct match_api_id)`:
+
+    Played once   5,831 → 6,174
+    Played 2+     8,963 → 8,620      343 players moved
+
+Both counts are in 0147's verdict row so the shift is on the record rather than discovered. A
+`change_log` entry says why the tile dropped.
+
+### THE TWO CITIES ARE NAMED APART
+
+`preferable_city_name` is the city on the player's **account** — a signup attribute, and **null for
+4,010 of 30,455 (13.2%)**, so "City = Austin" silently excluded every one of them. It is now
+**HOME CITY**, the count is printed beside it, and **"Not set" is selectable** so those players are
+reachable rather than invisible. The new **PLAYED AT** group — City, Field, Kick-off, Dates — is
+the other question, and the Field select narrows to the chosen city.
+
+### THE STALENESS BANNER FIRED ON ITS FIRST DAY
+
+A table can be fast and confidently wrong; a view could only be slow. `player_finder_freshness()`
+compares the set's stamp to the newest `mdapi_matches.synced_at`, and within an hour of applying
+0147 the page was already saying *"These counts are out of date. New matches synced 50 min ago but
+this set was last rebuilt 56 min ago"* — because a sync had landed before the refresh was wired.
+It was right, and it said so instead of showing a confident number.
+
+**Verified in the browser:** Houston → ATH Katy returns **693**, the same figure 0145's verdict and
+0147's verdict both produced by different mechanisms. Plus kick-off from 21:00 and matches from
+2026-08-01 → 97. Home city = Not set → 4,010.

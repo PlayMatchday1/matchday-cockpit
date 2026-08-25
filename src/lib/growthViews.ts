@@ -214,3 +214,20 @@ export async function refreshGrowthViews(sb: SupabaseClient): Promise<void> {
     console.warn("[growth] refresh_growth_views threw:", e instanceof Error ? e.message : String(e));
   }
 }
+
+/* THE PLAYER FINDER'S PRECOMPUTED SET (migration 0147), refreshed on the same trigger and with the
+ * same posture as the growth views: best-effort, never fails the sync. It lives beside them rather
+ * than in its own module because it is the same decision — a set built from the mirror has to be
+ * rebuilt when the mirror moves, or the page serves a fast, confident, wrong answer.
+ *
+ * IF THIS DOES NOT RUN, THE PAGE SAYS SO. player_finder_freshness() compares the set's stamp to
+ * the newest mdapi_matches.synced_at, and the finder prints "stale" rather than showing counts
+ * that look current. That is the whole reason a warning here is enough and a throw is not. */
+export async function refreshPlayerFinderViews(sb: SupabaseClient): Promise<void> {
+  try {
+    const { error } = await sb.rpc("refresh_player_finder_views");
+    if (error) console.warn("[finder] refresh_player_finder_views failed:", error.message);
+  } catch (e) {
+    console.warn("[finder] refresh_player_finder_views threw:", e instanceof Error ? e.message : String(e));
+  }
+}
