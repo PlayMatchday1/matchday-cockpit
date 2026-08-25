@@ -2390,3 +2390,38 @@ now deliberately false. Removed from `quarantine.pinned.json` in the same commit
 it: the keyed-$0-vs-nothing-keyed distinction (an override question, moot here) and the "a dashed
 row contributes no 0% to any total" check — the second is still a live property of `rollup()` and
 is now uncovered by a browser suite.
+
+## TWO SUITES BLOCKED A PUSH AND NEITHER WAS THE CHANGE (2026-08-25)
+
+The Cost change's push failed the e2e lane on `verify-revenue-notmatched` and
+`verify-revenue-membership`. **Both were proved pre-existing by running them against the parent
+commit `353bb9f` with the changed files checked out**, which is the only test that separates "my
+diff broke it" from "it was already red".
+
+**`verify-revenue-notmatched` — "venues 30, got 31".** `fin_venues` **#65 "Ann Richards School"
+(Austin)** was created **2026-08-25T02:18** through the Field Costs add-venue flow. Not a code
+change: the Fields assign route had made no write at that point and `fin_venue_fields` was still
+41 links. MatchDay field 1651 carries 6 live matches from 2026-08-15, so the venue is real. The
+constant was bumped to 31 with the reason — that suite's own header says the venue count "only
+changes when someone adds or removes a venue, which is exactly the thing worth being told about",
+and being told is what happened.
+
+**`verify-revenue-membership` — QUARANTINED, and it is red on the parent commit too.** On `353bb9f`
+it fails **4** assertions; on the Cost change it fails **1**. That asymmetry is itself the evidence:
+a regression does not make a suite fail *less*.
+
+- **The stable failure is a real defect and it is not in the Cost derivation.** Revenue's
+  field-grain Austin membership totals **$7,737** against the Cities page's **$7,749** — a **$12
+  gap on $8,024** of Austin August membership revenue (0.15%). Both pages allocate the SAME
+  city-month figure by member spots, and **both fall short of it**, by different amounts. So at
+  least one is allocating over a denominator the other does not share. Restore the suite when the
+  two pages reconcile to the dollar; the gap is the bug, not the assertion.
+- **The other three are load-dependent.** They fail together, controls included — "at least one
+  field carries NON-ZERO membership" reading 0 while the same page a minute later reads $17,912
+  across 7 rows. A whole-column zero with its own control down is a page that has not finished its
+  member-spot pass, not a measurement. Same lane fragility already recorded for this suite on
+  2026-08-24.
+
+**THE ASYMMETRY IS THE TELL.** Run a failing suite against the parent commit before assuming the
+diff caused it. Four failures on the parent and one on the change is not a regression; it is a
+suite that was already red, plus a page that sometimes loads slowly.

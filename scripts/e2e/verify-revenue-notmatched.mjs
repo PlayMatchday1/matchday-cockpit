@@ -179,11 +179,17 @@ console.log("\n── the figures ──");
    * it, so the estate has one more venue. Predicted before 0142 was applied, and this is the
    * assertion that was named as needing to move with it.
    *
+   * 30 -> 31: fin_venues #65 "Ann Richards School" (Austin) was created 2026-08-25T02:18 through
+   * the Field Costs add-venue flow. Not a code change and not this session's write path — the
+   * Fields assign route had made no write at that point, and fin_venue_fields was still 41 links.
+   * MatchDay field 1651 "Ann Richards School" carries 6 live matches from 2026-08-15, so the venue
+   * is real; it is on the Cost page's field table already.
+   *
    * A CONSTANT HERE IS DELIBERATE and survives that: unlike the match count and the membership
    * total below — both of which were pinned, both of which drifted on live data, and both of which
    * are now checked relationally — the venue count only changes when someone adds or removes a
-   * venue, which is exactly the thing worth being told about. */
-  eq("venues 30", f.venues, 30);
+   * venue, which is exactly the thing worth being told about. Being told is what just happened. */
+  eq("venues 31", f.venues, 31);
   // WAS PINNED AT 344 AND DRIFTED TO 346 — August is a live month and matches keep landing, so a
   // constant here fails on a page that is working. The Total is now checked against the column it
   // totals, which catches a broken or mis-summed column without dating the suite.
