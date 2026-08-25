@@ -133,6 +133,11 @@ export type MdapiUsersSyncResult = {
   upserted: number;
   rowsSkipped: number;      // rows missing required fields
   unmappedCities: string[]; // raw city names that didn't map (deduped)
+  // How many rows in THIS run arrived already scrubbed by MatchDay ("Deleted"/"Account").
+  // Only meaningful on a full run: an incremental walk never revisits an old row, which is
+  // precisely why the full one exists. Not logged to fin_sync_log — there is no column for it and
+  // borrowing one would make Recent Syncs lie about what it means.
+  scrubbedSeen: number;
   apiCalls: number;
   durationMs: number;
 };
@@ -248,8 +253,24 @@ async function readStoredMax(
   return Number.isNaN(t) ? null : t;
 }
 
+/* A DELETION IS AN EDIT, AND NEITHER WATERMARK MODE CATCHES ONE.
+ *
+ * When a player deletes their account MatchDay does not remove the row — it SCRUBS IT IN PLACE and
+ * keeps serving it from /admin/players (name "Deleted Account", phone null, email replaced by an
+ * opaque token). The header below says "we do NOT delete rows… deletion rate is presumed low",
+ * which aims at the wrong risk: nothing ever disappears, so no id-set diff is needed. What we miss
+ * is an EDIT to a row older than the watermark, and the walk stops at the watermark by design.
+ *
+ * Proven on prod: six consecutive runs, every one `incremental:createdAt`, every one carrying the
+ * advisory that /admin/players exposes no updatedAt. So edits are caught by NOTHING today, and id
+ * 88053 still showed a name, email and phone here while MatchDay had it scrubbed.
+ *
+ * forceFull is the fix and it is the whole fix — because the scrub is in place, re-fetching the row
+ * overwrites the name, nulls the phone, tombstones the email and rewrites `raw` wholesale. No new
+ * column, no soft-delete flag, no separate PII pass. */
 export async function syncMdapiUsers(
   supabase: SupabaseClient,
+  opts: { forceFull?: boolean } = {},
 ): Promise<MdapiUsersSyncResult> {
   const startedAt = Date.now();
   const client = getMatchdayApiClient();
@@ -304,7 +325,9 @@ export async function syncMdapiUsers(
   let walkField: WatermarkField | null = null;
   let cutoff: number | null = null;
 
-  for (const field of ["updatedAt", "createdAt"] as const) {
+  // FORCED FULL SKIPS DETECTION ENTIRELY. Not "detect and then override" — the detection loop
+  // costs two extra /admin/players calls whose only output is a mode we are about to discard.
+  for (const field of opts.forceFull ? [] : (["updatedAt", "createdAt"] as const)) {
     let sample: ApiPlayer[];
     try {
       const res = await getPage({
@@ -459,6 +482,12 @@ export async function syncMdapiUsers(
   // statement_timeout-style failure has more diagnostic data than
   // "offset N failed". Format: chunk index / total / row count / ms.
   const dbRows = [...dedupedById.values()];
+  /* Counted off the payload already in memory — no extra query, and counted AFTER the dedupe so a
+   * row seen on two pages is not counted twice. The name pair is MatchDay's marker; the email
+   * domain is not (six real staff accounts carry it). */
+  const scrubbedSeen = dbRows.filter(
+    (r) => (r.first_name ?? "").trim() === "Deleted" && (r.last_name ?? "").trim() === "Account",
+  ).length;
   const totalChunks = Math.ceil(dbRows.length / UPSERT_BATCH);
   let upserted = 0;
   for (let i = 0; i < dbRows.length; i += UPSERT_BATCH) {
@@ -489,6 +518,7 @@ export async function syncMdapiUsers(
     upserted,
     rowsSkipped,
     unmappedCities: [...unmappedSet].sort(),
+    scrubbedSeen,
     apiCalls,
     durationMs: Date.now() - startedAt,
   };

@@ -22,6 +22,10 @@ export type SourceName =
   | "mdapi-promocodes"
   | "mdapi-matches"
   | "mdapi-users"
+  // The DAILY FULL re-sync, distinct from the incremental walk above. Separate because it touches
+  // ~30,700 rows to the walk's ~150 and exists to catch EDITS the walk cannot see. Added to the DB
+  // CHECK by migration 0149 — runWithLog will not run the sync at all until that is applied.
+  | "mdapi-users-full"
   | "mdapi-users-lens-snapshot"
   | "membership-snapshots"
   | "membership-prices"
