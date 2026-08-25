@@ -2671,3 +2671,64 @@ nothing is mandatory. See **The bar** in CLAUDE.md.
 The browser lane blocked six pushes in one day and **not one block was the change**: a suite that
 had dated, a suite that timed out under contention, a suite testing a working tree being edited
 while it ran, and the $12 gap above. Twenty minutes to learn nothing is a tax, not a gate.
+
+## A BEFORE-AND-AFTER NUMBER CAUGHT WHAT A GREEN SUITE COULD NOT — TWICE (2026-08-25)
+
+**0145 was correct and slower, and every check said it was fine.** Its verdict query returned all
+six predicted values. Every node guard was green. `tsc` was clean. The function computed the right
+answer. It was only slower — and no correctness test can see that.
+
+The only reason it was caught is that the migration carried an **acceptance criterion**: re-run the
+same concurrency curve after applying, and it must not be worse than the number measured before.
+
+| `hist=multi` | before 0145 | after 0145 |
+|---|---|---|
+| conc 1 p50 | 1,382ms | 1,560–1,673ms |
+| conc 4 p50 | 3,583ms | 4,060–4,370ms |
+| conc 6 p50 | 5,271ms | 6,183 / 6,406 / 6,261ms |
+| conc 6 max | 6,816ms | 6,549 / 8,768 / 8,131ms |
+
+That is the second time in one session. The first was Finance › Cost, where the whole deliverable
+was a before/after table. **A number measured on both sides of a change finds things a green
+assertion cannot, and it costs one script.**
+
+### WHAT 0145 GOT WRONG WAS THE BUG ITS OWN HEADER WARNED ABOUT
+
+It merged 0136's `win` CTE and the new match filters into one grouped pass guarded by
+`(select match_on from cfg)` — a scalar subquery, referenced three times. 0136's finding is that
+**the planner cannot fold a parameter**, so that guard does not short-circuit; it relocates the
+per-row cost from an `EXISTS` into a subquery. It also added `group by s.user_id` where 0136 had a
+plain filtered scan. "One pass instead of two" traded two cheap guarded scans for one expensive
+grouped scan. Rolled back by 0146.
+
+## THE FINDER TIMES OUT AT CONCURRENCY 6, AND THE ROLLBACK DID NOT FIX THAT
+
+**Measured after 0146 landed, on the restored 0136 body:**
+
+    conc 1        p50 1,372ms   max 1,758ms        ← back to baseline
+    conc 4        p50 3,896ms   max 6,062ms        (baseline 3,583 / 3,871)
+    conc 6 run 1  p50 5,778ms   max 7,092ms
+    conc 6 run 2  p50 5,013ms   max 7,835ms
+    conc 6 run 3  p50 5,761ms   max 8,325ms   ← 6 of 30 returned HTTP 500:
+                                                 "canceling statement due to statement timeout"
+
+**The rollback was right — 0145 was measurably worse — but it did not restore the curve, and it
+did not fix the underlying fragility.** At six concurrent callers the finder now visibly tips past
+the 8,000ms statement timeout and returns 500s. A single user is fine at 1.4s.
+
+### AND THAT CORRECTS SOMETHING RECORDED EARLIER TODAY
+
+This file previously said the timeout theory for `verify-player-finder` "does not hold", on the
+strength of one clean run at concurrency 6. **It does hold.** That run was a quieter moment on
+production, not a disproof. The suite's signature — every assertion zero, its own positive controls
+failing with it — is precisely what a timed-out query renders, and here is the 500 with the exact
+error string to match.
+
+**The lesson is about the disproof, not the theory: one clean run does not disprove a load-dependent
+failure.** Three runs found what one missed, and the earlier conclusion was stated with more
+confidence than one sample could carry.
+
+**CONSEQUENCE FOR THE CORRECTIVE MIGRATION:** it is no longer enough for the match filters to be
+"not slower". The finder is already at its ceiling under load, so adding filters at equal cost
+still leaves it timing out. The target is FASTER — which points at the precomputed set rather than
+at any arrangement of CTEs over `player_spots`.
