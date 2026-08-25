@@ -19,6 +19,7 @@
 // and passed in; nothing is re-derived and no count is redefined.
 
 import { CHANNELS, CHANNEL_KEYS, NEW_FLAG_LABEL, coverageCaption, coverageStateOf, coverageSummary, type ChannelKey, type PromoMatch, type PromoWeek } from "@/lib/matchPromotion";
+import PageComments from "@/components/PageComments";
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -26,7 +27,6 @@ export type MobileDraft = {
   channels: Record<ChannelKey, boolean>;
   pushAt: string;
   promoCode: string;
-  comment: string;
 };
 
 export type MobileProps = {
@@ -248,13 +248,6 @@ function Panel(p: MobileProps) {
           className="w-full rounded-[9px] border border-cream-line bg-white px-[11px] py-2.5 text-[15px] font-semibold" />
       </div>
 
-      <div className="mt-3">
-        <label className="mb-1 block text-[9px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Comment</label>
-        <textarea data-testid="m-comment" value={draft.comment} placeholder="Offer, limit, who it targets"
-          onChange={(e) => setDraft({ ...draft, comment: e.target.value })}
-          className="min-h-[62px] w-full resize-y rounded-[9px] border border-cream-line bg-white px-[11px] py-2.5 text-[15px]" />
-      </div>
-
       <div className="mt-3 flex gap-2.5">
         <button type="button" data-testid="m-save" onClick={onSave} disabled={saving}
           className="flex-1 rounded-full bg-deep-green py-3 text-[14px] font-extrabold text-white disabled:opacity-50">
@@ -400,6 +393,8 @@ export default function MatchPromotionMobile(p: MobileProps) {
       )}
 
       {tab === "due" && <Due jobs={p.jobs} overdue={p.overdue} now={now} fmtPush={p.fmtPush} onOpen={p.onOpen} />}
+      {/* THE SAME LIST AS THE DESKTOP, from the same table and the same route. */}
+      <PageComments weekStart={week.weekStart} placeholder="Suggestion about this week" />
       {tab === "week" && <WeekByDay {...p} panel={<Panel {...p} />} />}
       {tab === "coverage" && <Coverage week={week} />}
       {tab === "week" && <Ranking ranking={p.ranking} ready={p.rankingReady} total={p.rankingTotal} />}

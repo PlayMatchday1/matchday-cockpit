@@ -2526,3 +2526,52 @@ vacuously on a week that happens to be empty.
 the table. `page.route("**/api/match-promotion*")` fetches the real payload and injects plans into
 it client-side. Production is untouched — which is the rule a suite that writes production already
 broke once here (see `verify-counts-as-regular`).
+
+## MATCH PROMOTION COMMENTS — ONE MECHANISM, AND ONE COLUMN THAT DIES QUIETLY (2026-08-25)
+
+Comments are `slate_notes` with `kind='comment'` (migration 0144), served by `/api/slate-notes`,
+rendered by the `NoteList` lifted out of `SlateReviewView`. **Not a second system**: same table,
+same route, same list, same author/week/delete semantics. What differs is only the composer —
+Slate Review's carries a live slot-parser readout, Match Promotion's is prose.
+
+**A COMMENT HAS NO CITY AND NO MATCH.** The grid shows every city at once, so a comment is about
+the week's promotion plan, not a market; and it is one list, not a thread per fixture. The scope
+rule is a CHECK constraint, not a convention in the route: a note has a city, a comment does not.
+
+**A COMMENT IS NOT PARSED.** `parseCapture` turns "8PM thurs Crossbar" into a proposed slot for
+Slate Review's day strip. Running it on prose would silently turn a sentence mentioning a time into
+a slot proposal on a different page.
+
+### `match_promotion_plan.comment` HAD NEVER HELD A VALUE
+
+Measured before deciding: **2 plan rows, 0 with a comment, 9 `fin_change_log` entries across two
+matches, none setting one.** It was a single unattributed string that whoever saved last overwrote
+— the exact shape of the problem comments exist to fix.
+
+The textarea is gone from both the desktop panel and the phone, and the column is **no longer
+written**. It is also **not rendered**: a read-only "earlier comment" fallback was designed and
+then dropped, because with 0 rows carrying a value it is unreachable code guarding a case that has
+never occurred — a thing someone deletes in six months wondering what it was for. The column stays
+in the table; nothing reads or writes it.
+
+**NO PER-TILE BADGE.** A comment is not attached to a match, so a tile has nothing to count. The
+count lives on the list header instead.
+
+### THE READ DEGRADES QUIETLY, THE WRITE FAILS LOUDLY
+
+Code deploys before a migration is applied — the normal order here. `?scope=comments` matches
+nothing while the kind does not exist, so the list is empty, which is exactly what is true. The
+POST names the migration instead of quoting a constraint: *"Comments need migration 0144
+(slate_notes kind='comment'), which is not applied yet. Nothing was saved."* Verified against the
+live pre-migration database, with the typed text left in the box.
+
+### RUNNING THE E2E LANE WHILE EDITING FILES TESTS A MOVING TARGET
+
+A push failed on `verify-pace-readout` and `verify-pace-grain` — suites nothing in the diff
+touches. The cause was not the diff and not the lane: **the gate drives `next dev`, which serves
+the WORKING TREE, not the committed HEAD.** Editing files during a 20-minute browser lane
+recompiles the app underneath the suites. Commit first, then push, then do not touch the tree until
+it finishes.
+
+`verify-player-finder` remains flaky under lane contention — proved passing alone at 81/81, red in
+2 of 3 full-lane runs. Noted once; not re-diagnosed.

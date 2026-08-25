@@ -390,8 +390,12 @@ console.log("\n── the panel and cancel grid stay stripped ──");
   eq("the panel is under 250px tall", h < 250, true);
   console.log(`     measured height: ${h}px`);
 
-  // NO TEXT NODE OF FIVE OR MORE WORDS anywhere inside the panel — excluding its title and the
-  // user's own comment, which are content rather than explanation.
+  /* NO TEXT NODE OF FIVE OR MORE WORDS anywhere inside the panel — excluding its title.
+   * The textarea carve-out below is now DEAD: the panel's Comment box was removed when comments
+   * became one attributed list for the page (slate_notes kind='comment'). It is kept because the
+   * carve-out costs nothing and the rule it encodes — a person's own words are content, not
+   * explanation — is still the right one if a text box ever returns here. Panel height is asserted
+   * above and got SMALLER, so this is not hiding a regression. */
   const longNodes = await page.locator('[data-testid="panel"]').evaluate((panel) => {
     const out = [];
     const walk = document.createTreeWalker(panel, NodeFilter.SHOW_TEXT);
@@ -399,7 +403,7 @@ console.log("\n── the panel and cancel grid stay stripped ──");
       const el = n.parentElement;
       if (!el) continue;
       if (el.closest("h3")) continue;                       // the title
-      if (el.tagName === "TEXTAREA" || el.closest("textarea")) continue; // the operator's comment
+      if (el.tagName === "TEXTAREA" || el.closest("textarea")) continue; // see above — no textarea here now
       const words = (n.textContent ?? "").trim().split(/\s+/).filter(Boolean);
       if (words.length >= 5) out.push(words.join(" "));
     }

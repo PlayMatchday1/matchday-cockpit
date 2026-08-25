@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import PageComments from "@/components/PageComments";
 import MatchPromotionMobile from "@/components/MatchPromotionMobile";
 import { useMatchData } from "@/lib/useMatchData";
 import { useFinanceData } from "@/lib/useFinanceData";
@@ -80,7 +81,6 @@ type Draft = {
   channels: Record<ChannelKey, boolean>;
   pushAt: string; // datetime-local value; "" = needs a decision
   promoCode: string;
-  comment: string;
 };
 
 const draftFrom = (m: PromoMatch): Draft => ({
@@ -89,7 +89,6 @@ const draftFrom = (m: PromoMatch): Draft => ({
   ) as Record<ChannelKey, boolean>,
   pushAt: dtLocalValue(m.plan?.pushAt ?? null),
   promoCode: m.plan?.promoCode ?? "",
-  comment: m.plan?.comment ?? "",
 });
 
 export default function MatchPromotionView() {
@@ -172,7 +171,13 @@ export default function MatchPromotionView() {
           // empty string here would be a third state nothing knows how to render.
           pushAt: draft.pushAt === "" ? null : new Date(draft.pushAt).toISOString(),
           promoCode: draft.promoCode,
-          comment: draft.comment,
+          /* match_promotion_plan.comment IS NO LONGER WRITTEN. Comments are one attributed list for
+           * the page (slate_notes kind='comment'), not a single unowned string per plan that
+           * whoever saved last overwrote. The column is left in place and never sent — measured
+           * 2026-08-25, it had never held a value: 2 plan rows, 0 comments, 9 audit entries, none
+           * setting one. It is not rendered either; an unreachable read-only fallback guarding a
+           * case that has never occurred is a thing someone deletes in six months wondering what
+           * it was for. */
         }),
       });
       const json = (await res.json()) as { outcome?: string; error?: string };
@@ -321,6 +326,12 @@ Which matches get promoted, on which channels, and when the push goes out.
           </div>
         </div>
 
+        {/* ONE LIST FOR THE PAGE, ABOVE THE GRID, ON BOTH TABS. Comments are about the week's
+            promotion plan, not about a city or a fixture — so they sit here rather than inside a
+            match panel, and the same list is present whichever tab is open. */}
+        <PageComments weekStart={week.weekStart}
+          placeholder="Suggestion about this week — anyone reviewing can add one" />
+
         {tab === "coverage"
           ? <Coverage week={week} />
           : <Plan week={week} byCity={byCity} openId={openId} onOpen={openMatch}
@@ -372,12 +383,6 @@ Which matches get promoted, on which channels, and when the push goes out.
                   </div>
                 </div>
 
-                <div className="px-[13px] pb-[9px] pt-[9px]">
-                  <div className="mb-1 text-[9px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Comment</div>
-                  <textarea data-testid="comment" value={draft.comment}
-                    onChange={(e) => setDraft({ ...draft, comment: e.target.value })}
-                    className="min-h-[58px] w-full resize-y rounded-[7px] border border-cream-line px-[9px] py-[7px] text-[12.5px]" />
-                </div>
               </div>
               <div className="mt-2 flex items-center gap-3">
                 <button onClick={() => void save()} disabled={saving} data-testid="save"
