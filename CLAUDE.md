@@ -79,6 +79,12 @@ Migrations land before the code that depends on them.
 
 ## The gate
 
+**NEVER add a test suite without Ryan's explicit approval.** Extending or fixing an
+existing suite is fine. Creating a new one is not — the lane is already the biggest
+drag on velocity, and every suite added is 30+ seconds on every full run forever. If
+you think one is needed, say what it would cover and ask.
+
+
 `npm run verify` and `npm run verify:e2e` must both pass. A suite reporting zero
 assertions is failing, not passing. The quarantine list is pinned in
 `scripts/quarantine.pinned.json` and the gate fails on any drift — growing it is

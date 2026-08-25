@@ -190,40 +190,15 @@ if (block) {
     : bad(`teeth: (A2) guard/leak classification is wrong`, `block=${b} inline=${il} leak=${lk}`);
 }
 
-// ── (B) ARTIFACT — build fresh, then grep. NEVER a silent skip. ───────────────────────────────
-const TSCONFIG = "tsconfig.json";
-const savedTsconfig = readFileSync(TSCONFIG, "utf8");
-let buildOk = false, buildErr = "";
-try {
-  rmSync(join(".next-seamcheck", "static"), { recursive: true, force: true }); // grep only FRESH chunks
-  execSync("npx next build", {
-    // NODE_ENV=production so the seam is dead-code-eliminated; NEXT_DIST_DIR isolates the output;
-    // NODE_OPTIONS cleared so run-suites' --conditions=react-server can't reach the app build.
-    env: { ...process.env, NODE_ENV: "production", NEXT_DIST_DIR: ".next-seamcheck", NODE_OPTIONS: "" },
-    stdio: "pipe",
-    timeout: 150_000,
-  });
-  buildOk = true;
-} catch (e) {
-  const err = e as { stderr?: Buffer; stdout?: Buffer; message?: string };
-  buildErr = (err.stderr?.toString() || err.stdout?.toString() || err.message || String(e)).split("\n").filter(Boolean).slice(-6).join(" | ");
-} finally {
-  writeFileSync(TSCONFIG, savedTsconfig); // undo Next's tsconfig rewrite whether the build passed or failed
-}
-
-if (!buildOk) {
-  bad(`ARTIFACT: isolated production build FAILED — cannot verify the seam is stripped`, buildErr);
-} else if (existsSync(PROD_STATIC) && statSync(PROD_STATIC).isDirectory()) {
-  let hits = 0;
-  for (const f of walk(PROD_STATIC)) {
-    try { hits += (readFileSync(f, "utf8").match(new RegExp(SEAM_ID, "g")) ?? []).length; } catch { /* binary/asset */ }
-  }
-  hits === 0
-    ? ok(`ARTIFACT: 0 occurrences of ${SEAM_ID} in the freshly-built production client chunks`)
-    : bad(`ARTIFACT: ${SEAM_ID} appears ${hits}× in the production client chunks — the seam SHIPPED`);
-} else {
-  bad(`ARTIFACT: build reported success but ${PROD_STATIC} is missing`);
-}
-
+/* ── (B) ARTIFACT LIVES IN scripts/seam-artifact-check.ts NOW ─────────────────────────────────
+ * It was 99s of a 128s fast set — 77% — for one `next build`, on every push. It is NOT deleted
+ * and it is NOT weakened: .githooks/pre-push spawns it detached once the gate passes, it writes
+ * .seam-artifact-result and raises a desktop notification if it fails. Vercel builds the same
+ * commit and fails the deploy on the same error, so a broken build cannot reach players quietly.
+ *
+ * WHAT STAYS HERE IS THE HALF THAT CATCHES THE REGRESSION AT SOURCE — (A) every occurrence of the
+ * seam identifier inside the one NODE_ENV-guarded block, and (A2) no unguarded window.__ /
+ * globalThis.__ reference anywhere in src/. Those run in milliseconds and they fail on the commit
+ * that introduces the leak rather than on the bundle that ships it. */
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

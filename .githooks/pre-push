@@ -50,6 +50,24 @@ node scripts/gate-scope.mjs $ARGS
 SCOPE=$?
 set -e
 
+# THE PRODUCTION BUILD RUNS AFTER THE PUSH, NOT BEFORE IT.
+#
+# scripts/seam-artifact-check.ts builds an isolated production bundle and greps it for the realtime
+# test seam. It was 99s of a 128s fast set — 77% — on every push, and it was the single largest
+# drag on this repo's velocity. Nothing is lost by moving it: the STRUCTURAL half of that guard
+# (seam-stripped-test.ts) still runs inline in milliseconds and fails on the commit that introduces
+# a leak, and Vercel builds the same commit and fails the deploy on the same error.
+#
+# Detached, so the push is never waiting on it. It writes .seam-artifact-result and raises a
+# desktop notification if it fails. Skip with SEAM_ARTIFACT_SKIP=1.
+spawn_seam_artifact() {
+  [ "${SEAM_ARTIFACT_SKIP:-0}" = "1" ] && return 0
+  rm -f .seam-artifact-result
+  nohup npm run --silent verify:seam-artifact > /tmp/seam-artifact.log 2>&1 &
+  echo "▶ post-push: seam artifact check running in the background (~100s)"
+  echo "    verdict → .seam-artifact-result · log → /tmp/seam-artifact.log"
+}
+
 case "$SCOPE" in
   12)
     echo "⏭ pre-push: nothing to gate"
@@ -59,12 +77,14 @@ case "$SCOPE" in
     echo "▶ pre-push: typecheck only (policy: the gate is for MatchDay writes)"
     npx tsc --noEmit
     echo "✓ pre-push: typecheck passed"
+    spawn_seam_artifact
     exit 0
     ;;
   11)
     echo "▶ pre-push: npm run verify (fast set) — the gate's own machinery, no browser suites …"
     npm run verify
     echo "✓ pre-push: fast set passed"
+    spawn_seam_artifact
     exit 0
     ;;
   10)
@@ -76,6 +96,7 @@ case "$SCOPE" in
       echo "▶ pre-push: npm run verify:e2e (browser suites) …"
       npm run verify:e2e
     fi
+    spawn_seam_artifact
     ;;
   *)
     echo "⛔ pre-push: gate-scope.mjs exited $SCOPE — unrecognised. Taking the full gate."

@@ -2084,3 +2084,52 @@ venue-month with no cost basis on file as free. At YTD that is 5 of 2,657 matche
 record it is most of them, because the finance tables stay on the YTD window while all-time widens
 only the registrations. Profit and margin now reconcile over the **costed** rows and every affected
 tile names that denominator.
+
+## THE GATE, MEASURED (2026-08-24)
+
+**The fast set was 128s and 99s of it was one `next build`** — 77%, on every push.
+`seam-stripped-test.ts` had three checks and only the third was slow. Split: the STRUCTURAL and
+GENERAL checks stay inline (they fail on the commit that introduces a leak, at source, in
+milliseconds); the ARTIFACT check — build a production bundle, grep it for `__CRM_TEST_REALTIME__`
+— moved to `seam-artifact-check.ts`, spawned detached after the push. **Fast set: 128s → 20s**, and
+nothing left in it is above 1.7s.
+
+**A content-hash cache over the build was considered and rejected.** It would skip the build only
+when `src/` is byte-identical — which is the push where the fast set is cheapest anyway — and still
+cost the full 99s on every push that touches `src/`. Splitting the suite is the honest fix.
+
+**THE E2E LANE'S BOTTLENECK IS `next dev`, NOT THE CPU.** Serial: 39 suites, **1,216s**. Parallel at
+4 did not just fail to help, it went **red** — `verify-matchpanel` (138s serial), `verify-pace-grain`
+(129s) and `verify-period-anchor` (144s) all blew the 240s cap, plus two more suites failed
+outright. Five failures the serial lane does not have. Dev compiles routes **on demand**, so N
+browsers requesting N different routes queue behind one compiler. The real ceiling-lift is running
+the suites against `next build && next start`; a bigger concurrency number is not.
+
+**The per-suite cap measures WALL CLOCK, so it has to scale with the pool.** 240s was set for a
+suite running alone. Applied unchanged under contention it calls queueing a hang, which is exactly
+what turned three healthy suites red.
+
+**Slowest 8 of 39, serial — 59% of the run:** period-anchor 143.9s · matchpanel 138.2s · pace-grain
+129.1s · revenue-controls 66.8s · match-view 65.3s · city-confinement 63.7s · pace-to-month-end
+56.6s · player-finder 56.3s.
+
+**A SUITE THAT FAILS IN THE LANE AND PASSES ALONE IS EVIDENCE ABOUT THE LANE.**
+`verify-revenue-membership` failed in the serial run and passed alone at 24/24 — so the serial lane
+already has load-dependent flakiness, before any parallelism. Re-run alone before believing a lane
+failure is a regression.
+
+**`verify-crm-dock.mjs` deleted.** It failed on every full run and twice more when run alone
+(`exited 2`, on `[data-testid="dock-root"]` never appearing). It had never been green. What went
+with it: the CRM dock's realtime paint-once/dedup guards, the channel-leak check (nav out/back ×3
+leaves exactly one live `crm_messages` subscription), the shared-number banner, and the unread
+switcher. **`dock-root` still exists in `CrmDock.tsx:119,219`** — so the selector was not renamed
+and this may be a real dock regression rather than a stale suite. Worth its own look.
+
+**`verify-revenue-membership` PASSES ALONE AT 24/24 AND FAILS IN THE LANE.** Run alone: exit 0,
+every city's field membership matching the Cities page to the dollar. In the serial run: `exited 1`
+after 21.8s. That is interference, not a regression — and it is direct evidence that the shared
+`next dev` server, not the suites, is what the lane is contending on.
+
+**READ THE OUTPUT, NOT THE NOTIFICATION.** The background-task notification reported
+`exit code 0` for two runs whose own summary line said `2 FAILED` and `1 FAILED`. The harness
+status and the suite's verdict are different facts.

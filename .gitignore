@@ -15,7 +15,10 @@
 
 # next.js
 /.next/
-# isolated production build dir for the seam-stripped proof (scripts/seam-stripped-test.ts)
+# the post-push artifact check's verdict (scripts/seam-artifact-check.ts)
+.seam-artifact-result
+
+# isolated production build dir for the seam-stripped proof (scripts/seam-artifact-check.ts)
 /.next-seamcheck/
 /out/
 

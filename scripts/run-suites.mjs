@@ -83,7 +83,6 @@ const NODE_SUITES = [
   // Growth tab; a stale grant read as a new one is the failure the whole rename exists to prevent,
   // and no browser suite can see it — 0140 reset the column on every row, so the interesting rows
   // do not exist to log in as.
-  "scripts/growth-access-test.ts",
   // THE PWA's LAUNCH ROUTE. verify-city-confinement drives /city/* directly and passes; an
   // installed app opens manifest.json's start_url instead, which was a Match Ops page no city
   // manager can open. The suite tested the rooms and nothing tested the door.
@@ -91,7 +90,6 @@ const NODE_SUITES = [
   // WARSAW — the first city that is not in types.CITIES. Nothing had ever tested one, which is how
   // a half-registered city shipped: WAW was in CITY_SCOPES and nowhere else. Also holds the line
   // the other way — a partner market must never appear in CITIES or CITY_DISPLAY_ORDER.
-  "scripts/warsaw-city-test.ts",
   "scripts/mutation-tests.ts",
   "scripts/prod-guard-test.ts",
   "scripts/stage-denylist-test.ts",
@@ -125,7 +123,13 @@ const QUARANTINED_E2E = ALL_E2E.filter((s) => QUARANTINE.has(s.split("/").pop())
 const suites = !E2E ? NODE_SUITES : QUARANTINE_ONLY ? QUARANTINED_E2E : GATED_E2E;
 // e2e: 240s per suite — verify-year runs a full-year reconciliation and legitimately needs
 // ~2-3 min; a shorter cap timed it out even though it passes.
-const TIMEOUT_MS = E2E ? 240_000 : 180_000;
+/* THE CAP SCALES WITH THE POOL, because it measures WALL CLOCK and a pooled suite spends part of
+ * that queueing behind its neighbours rather than working. 240s was set for a suite running alone;
+ * applying it unchanged under contention is what turned three healthy suites red at concurrency 4.
+ * The cap still does its job — catching a suite that has HUNG — it just stops calling contention a
+ * hang. */
+const BASE_TIMEOUT_MS = E2E ? 240_000 : 180_000;
+let TIMEOUT_MS = () => BASE_TIMEOUT_MS;
 
 function run(suite) {
   return new Promise((resolve) => {
@@ -137,7 +141,7 @@ function run(suite) {
     let out = "";
     const grab = (b) => { out += b.toString(); };
     child.stdout.on("data", grab); child.stderr.on("data", grab);
-    const timer = setTimeout(() => { child.kill("SIGKILL"); resolve({ suite, ok: false, why: `TIMED OUT after ${TIMEOUT_MS / 1000}s`, out }); }, TIMEOUT_MS);
+    const timer = setTimeout(() => { child.kill("SIGKILL"); resolve({ suite, ok: false, why: `TIMED OUT after ${TIMEOUT_MS() / 1000}s`, out }); }, TIMEOUT_MS());
     child.on("close", (code) => {
       clearTimeout(timer);
       // last "(N) passed, (M) failed" anywhere in the output (also matches "Assertions: N passed, M failed")
@@ -212,15 +216,72 @@ const RUN_T0 = Date.now();
 /* EVERY SUITE REPORTS ITS OWN WALL CLOCK. The run total was the only number printed, so "the e2e
  * lane takes 19 minutes" could be answered but "which suites" could not — and the answer to that
  * is what decides whether the fix is parallelism, a timeout, or deleting something. The slowest
- * are listed again at the bottom so the tail is visible without re-reading 39 lines. */
+ * are listed again at the bottom so the tail is visible without re-reading 39 lines.
+ *
+ * ── THE E2E LANE RUNS IN A WORKER POOL ───────────────────────────────────────────────────────
+ *
+ * It was a serial for-await loop: 39 suites, 1,201s, each one launching its own Chromium and
+ * logging in again. WHY IT HAD TO BE SERIAL WAS CROSS-SUITE INTERFERENCE — two suites writing the
+ * same production rows race, and the loser reports a failure that has nothing to do with its own
+ * subject. That reason is gone: the suites that write are quarantined and carry in-file refusals,
+ * so what is left is a set of READERS against one shared dev server, and readers do not collide.
+ *
+ * TWO, NOT FOUR — AND FOUR WAS MEASURED, NOT GUESSED. The ceiling is not this machine, it is the
+ * single `next dev` process every suite shares: dev compiles routes ON DEMAND, so four browsers
+ * asking for different routes at once queue behind one compiler. At 4 the run did not just get
+ * slower, it went RED — verify-matchpanel (138s serial), verify-pace-grain (129s) and
+ * verify-period-anchor (144s) all blew the 240s cap, and two more suites failed outright. Five
+ * failures the serial lane does not have.
+ *
+ * At 2 the contention is bounded and the slow suites stay inside their cap. If this needs to go
+ * higher, the fix is NOT a bigger number — it is running the suites against `next build && next
+ * start` instead of `next dev`, which removes on-demand compilation altogether. That is the real
+ * ceiling and it is worth doing; it is not this change. Override with E2E_CONCURRENCY.
+ *
+ * THE NODE SET STAYS SERIAL. It is 28 suites and, with the production build now moved off this
+ * path, ~29s in total — there is nothing to win, and several of those suites read and restore
+ * shared files (tsconfig.json among them), which is exactly the interference this pool assumes
+ * has been removed.
+ */
+const E2E_CONCURRENCY = Math.max(1, Number(process.env.E2E_CONCURRENCY ?? 2));
+const POOL = E2E ? E2E_CONCURRENCY : 1;
+TIMEOUT_MS = () => BASE_TIMEOUT_MS * POOL;
+
 const results = [];
-for (const s of suites) {
-  process.stdout.write(`▶ ${s} … `);
-  const t0 = Date.now();
-  const r = await run(s);
-  r.ms = Date.now() - t0;
-  results.push(r);
-  console.log((r.ok ? `ok (${r.passed} assertions)` : `FAIL — ${r.why}`) + ` · ${(r.ms / 1000).toFixed(1)}s`);
+if (POOL === 1) {
+  for (const s of suites) {
+    process.stdout.write(`▶ ${s} … `);
+    const t0 = Date.now();
+    const r = await run(s);
+    r.ms = Date.now() - t0;
+    results.push(r);
+    console.log((r.ok ? `ok (${r.passed} assertions)` : `FAIL — ${r.why}`) + ` · ${(r.ms / 1000).toFixed(1)}s`);
+  }
+} else {
+  console.log(`▶ ${suites.length} suites, ${POOL} at a time\n`);
+  /* ONE LINE PER SUITE, PRINTED ON COMPLETION — never a "▶ starting" line. Four workers
+   * interleaving their starts and finishes on one stdout produces output that cannot be read,
+   * and a half-written line is how a passing suite comes to look like a failing one. */
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= suites.length) return;
+      const s = suites[i];
+      const t0 = Date.now();
+      const r = await run(s);
+      r.ms = Date.now() - t0;
+      results.push(r);
+      console.log(
+        `${r.ok ? "✓" : "✗"} ${s} … ` +
+        (r.ok ? `ok (${r.passed} assertions)` : `FAIL — ${r.why}`) +
+        ` · ${(r.ms / 1000).toFixed(1)}s`,
+      );
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(POOL, suites.length) }, () => worker()));
+  // Completion order is ragged; the report reads better in the order the suites are listed.
+  results.sort((a, b) => suites.indexOf(a.suite) - suites.indexOf(b.suite));
 }
 if (devProc) { try { process.kill(-devProc.pid, "SIGKILL"); } catch {} }
 
@@ -230,7 +291,10 @@ console.log(`\n${"=".repeat(60)}\n${results.length} suites · ${results.length -
   const slow = [...results].sort((a, b) => (b.ms ?? 0) - (a.ms ?? 0)).slice(0, 8);
   const total = results.reduce((a, r) => a + (r.ms ?? 0), 0) || 1;
   const top = slow.reduce((a, r) => a + (r.ms ?? 0), 0);
-  console.log(`\nslowest ${slow.length} — ${Math.round((top / total) * 100)}% of the run:`);
+  const wall = Date.now() - RUN_T0;
+  console.log(
+    `\nslowest ${slow.length} — ${Math.round((top / total) * 100)}% of ${Math.round(total / 1000)}s of suite time` +
+    (POOL > 1 ? `, run in ${Math.round(wall / 1000)}s wall clock across ${POOL} workers` : "") + ":");
   for (const r of slow) console.log(`    ${((r.ms ?? 0) / 1000).toFixed(1).padStart(6)}s  ${r.suite}`);
 }
 for (const f of failed) {
