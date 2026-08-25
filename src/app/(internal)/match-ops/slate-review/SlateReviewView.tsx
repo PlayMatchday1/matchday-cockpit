@@ -23,6 +23,9 @@ import SlateWeekSchedule from "@/components/SlateWeekSchedule";
 import { fetchLegacyMatchRegistrations } from "@/lib/mdapiMatchesRead";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { detectDppPriceShifts, type DppPriceChange, type DppRegistration } from "@/lib/dppPriceHistory";
+// LIFTED OUT OF THIS FILE, imported back. Pure move — see src/lib/notes.ts.
+import NoteList from "@/components/NoteList";
+import { fmtWk, wkKeyToDate, type SlateNote } from "@/lib/notes";
 import {
   parseCapture, captureReadout, timeMinutes, CAPTURE_GRAMMAR, type Day,
 } from "@/lib/slateCapture";
@@ -53,18 +56,13 @@ const RAMP: Record<number, { bg: string; fg: string; border?: string }> = {
   4: { bg: "#d62015", fg: "#ffffff" },
 };
 const DAYS: Day[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 // One decimal for every non-zero value (40.9, 4.0, 3.9); a plain "0" for zero.
 const barFmt = (x: number) => (x === 0 ? "0" : x.toFixed(1));
-const fmtWk = (d: Date) => `${MON[d.getMonth()]} ${d.getDate()}`;
 
 // Phase 26 — the note box PERSISTS (table slate_notes, migration 0119, route /api/slate-notes).
 // It is a to-do list: a row sits there until someone takes the action and deletes it.
-type SlateNote = {
-  id: string; city: string; kind: "proposal" | "note"; raw: string;
-  day: string | null; timeTxt: string | null; timeMin: number | null; fieldTxt: string | null;
-  weekStart: string; createdBy: string; createdAt: string;
-};
+// The row type, the week chip, the author shortener and the list markup all moved to
+// src/lib/notes.ts + src/components/NoteList.tsx so Match Promotion renders the SAME list.
 
 async function authFetch(path: string, init?: RequestInit): Promise<Response> {
   const { data } = await supabase.auth.getSession();
@@ -75,9 +73,6 @@ async function authFetch(path: string, init?: RequestInit): Promise<Response> {
     cache: "no-store",
   });
 }
-// "who added it" — the local part of the email is enough on a shared screen.
-const shortWho = (email: string) => (email || "").split("@")[0] || email;
-
 export default function SlateReviewView() {
   const [city, setCity] = useState<string>("Austin");
   const [weekStart, setWeekStart] = useState<string>(() => {
@@ -352,32 +347,7 @@ function CaptureBar({ city, fields, weekStart }: { city: string; fields: string[
               <button type="button" onClick={copyAll} className="h-[28px] flex-none rounded-[8px] border px-3 text-[11px] font-bold" style={{ background: C.chipBg, borderColor: C.chipLine, color: C.forestDeep }}>Copy all</button>
             </span>
           </div>
-          {visible.map((c) => {
-            const wk = wkKeyToDate(c.weekStart);
-            return (
-              <div key={c.id} data-testid="slate-note-row" data-kind={c.kind} data-id={c.id} className="flex items-start gap-2.5 border-t py-[7px] first:border-t-0" style={{ borderColor: C.hair }}>
-                <span className="mt-0.5 flex-none rounded-[4px] border px-1.5 py-0.5 text-[9px] font-bold tracking-[0.7px]" style={c.kind === "proposal" ? { background: "#fdf3d9", borderColor: C.gold, color: C.goldInk } : { background: C.chipBg, borderColor: C.chipLine, color: C.muted }}>{c.kind === "proposal" ? "SLOT" : "NOTE"}</span>
-                <span className="min-w-0 flex-1" style={{ overflowWrap: "anywhere" }}>
-                  {c.kind === "proposal" ? (
-                    <>
-                      <span className="block text-[12.5px] font-semibold" style={{ color: C.ink }}>{c.day} {c.timeTxt} · {c.fieldTxt}</span>
-                      {/* the RAW text is stored and shown — the parser guesses, so the typed words stay reviewable */}
-                      <span className="block text-[11px]" style={{ color: C.muted }}>typed: “{c.raw}”</span>
-                    </>
-                  ) : (
-                    <span data-testid="slate-note-raw" className="block text-[12.5px] font-semibold" style={{ color: C.ink }}>{c.raw}</span>
-                  )}
-                  <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10.5px]" style={{ color: C.muted }}>
-                    {/* a note outlives its week, so it says which week it was written on */}
-                    <span data-testid="slate-note-week" className="rounded-[4px] border px-1 py-px font-bold" style={{ background: C.chipBg, borderColor: C.chipLine }}>week of {wk ? fmtWk(wk) : c.weekStart}</span>
-                    <span data-testid="slate-note-who">{shortWho(c.createdBy)}</span>
-                  </span>
-                </span>
-                <button type="button" onClick={() => void drop(c.id)} aria-label="Remove" data-testid="slate-note-delete"
-                  className="h-[28px] w-[28px] flex-none rounded-[8px] border text-[12px]" style={{ borderColor: C.chipLine, color: C.muted }}>✕</button>
-              </div>
-            );
-          })}
+          <NoteList notes={visible} onDelete={(id) => void drop(id)} />
           {copy === "manual" && (
             <textarea readOnly onClick={(e) => (e.target as HTMLTextAreaElement).select()} value={capText()} className="mt-2 h-[104px] w-full rounded-[8px] border p-2 text-[11.5px]" style={{ borderColor: C.colLine }} />
           )}
@@ -567,12 +537,6 @@ function PricesCard({ city }: { city: string }) {
 }
 
 // ── date helpers ─────────────────────────────────────────────────────────────
-function wkKeyToDate(key: string): Date | null {
-  // weekKey format "YYYY-MM-DD" (Monday). Parse locally.
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(key);
-  if (!m) return null;
-  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-}
 function addDays(d: Date, n: number): Date { return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); }
 // mdapi match_start is venue-local wall clock with a fake offset — read its parts as local.
 function parseLocalDate(s: string): Date | null {
