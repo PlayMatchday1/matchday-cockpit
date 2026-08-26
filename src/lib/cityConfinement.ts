@@ -216,7 +216,22 @@ export const CONFINED_ROUTE_PREFIXES: readonly string[] = [
  * The week route is safe to open only because fetchVeoWeek is scoped to the caller's confined city
  * in the same commit. /api/veo/cameras, /api/veo/codes, /api/veo/intent and /api/veo/inbound stay
  * refused — a confined account reads its week and changes no fleet configuration. */
-const CONFINED_ROUTE_EXACT: readonly string[] = ["/api/veo"];
+const CONFINED_ROUTE_EXACT: readonly string[] = [
+  "/api/veo",
+  /* THE DOOR TO THE CHATS PAGE, and it was shut while every room behind it was open.
+   *
+   * /api/match-chats/ is on the prefix list, so a confined account's chat LIST rendered perfectly —
+   * two active, one upcoming, two past, all Warsaw. The message pane then failed, because opening a
+   * thread needs a Firebase custom token and THIS route was on no list. The refusal reads "This
+   * account is confined to one city. That page is outside it.", which sent everyone looking for a
+   * city that did not resolve. Nothing about the city was wrong: city_identifier is "WAW" on both
+   * accounts, the list resolved it, and this guard never compares a city at all — it compares a
+   * PATHNAME against this allowlist.
+   *
+   * EXACT, NOT A PREFIX, for the reason the Veo entry above records: "/api/firebase" as a prefix
+   * would open anything added beneath it later. */
+  "/api/firebase-token",
+];
 
 /**
  * Is this path one of the confined pages' routes?

@@ -564,6 +564,63 @@ async function main() {
       : bad("NEG control", "the check fails even on a clean payload");
   }
 
+  /* ── THE DOOR, NOT JUST THE ROOMS ───────────────────────────────────────────────────────────
+   * THIS SUITE HAD EXACTLY THIS GAP ONCE: it navigated straight to /city/* and never checked what
+   * the page needed on the way in. Match Chats then broke for the two Warsaw accounts in the same
+   * shape — /api/match-chats/ was allowed so the LIST rendered perfectly, but opening a thread
+   * needs a Firebase custom token and /api/firebase-token was on no list. The refusal read "This
+   * account is confined to one city. That page is outside it.", which sends everyone looking for a
+   * city that did not resolve. Nothing about the city was wrong.
+   *
+   * A page is not reachable because its data routes are. Every route it needs ON THE WAY IN has to
+   * be listed, so this walks the door: list it, open it, read a message.
+   *
+   * Driven as the WARSAW account, not the Austin city manager — Warsaw is the only confinement we
+   * actually have, and the CM tier does not hold can_access_chats. */
+  console.log("\nTHE CHATS DOOR — driven as the Warsaw account:");
+  {
+    const WAW_EMAIL = "jf@playmatchday.pl";
+    const { data: wawRow } = await svc.from("app_users")
+      .select("email,city_identifier,can_access_chats,is_admin").eq("email", WAW_EMAIL).maybeSingle();
+    if (wawRow?.city_identifier !== "WAW" || wawRow?.can_access_chats !== true || wawRow?.is_admin !== false) {
+      bad("the Warsaw account under test", `expected a confined WAW chats account, got ${JSON.stringify(wawRow)}`);
+    } else {
+      ok("the account under test really is WAW-confined, non-admin, with chats access");
+      const wawSession = await sessionFor(WAW_EMAIL);
+      const H = { Authorization: `Bearer ${wawSession.access_token}` };
+
+      const list = await fetch(`${BASE}/api/match-chats/active`, { headers: H, cache: "no-store" });
+      const lj = await list.json().catch(() => ({}));
+      const chats = (lj.active ?? []).concat(lj.upcoming ?? [], lj.past ?? []);
+      list.ok ? ok(`1. the chat LIST opens (${chats.length} chats)`) : bad("1. the chat LIST opens", `status ${list.status}`);
+      const cities = [...new Set(chats.map((c) => c?.match?.city_identifier).filter(Boolean))];
+      cities.length && cities.every((c) => c === "WAW")
+        ? ok(`   …and every chat is Warsaw's (${JSON.stringify(cities)})`)
+        : bad("every listed chat is Warsaw's", `saw ${JSON.stringify(cities)}`);
+
+      /* 2. THE DOOR ITSELF. Without this route the list above renders and the message pane refuses,
+       *    which is precisely the bug this assertion exists to catch. */
+      const tok = await fetch(`${BASE}/api/firebase-token`, { method: "POST", headers: H, cache: "no-store" });
+      const tj = await tok.json().catch(() => ({}));
+      tok.ok ? ok("2. the Firebase token route opens — the message pane's door")
+             : bad("2. the Firebase token route opens", `status ${tok.status}: ${JSON.stringify(tj.error)}`);
+      if (tok.ok) {
+        const claims = JSON.parse(Buffer.from(String(tj.token).split(".")[1], "base64url").toString());
+        claims?.claims?.confined_city === "WAW"
+          ? ok("   …and the token carries confined_city=\"WAW\" for the Firestore rules")
+          : bad("the token carries the confined city", `got ${JSON.stringify(claims?.claims?.confined_city)}`);
+      }
+
+      // 3. AND THE BOUNDARY STILL HOLDS. Opening the door must not have opened the building.
+      const shut = await fetch(`${BASE}/api/veo/codes`, { headers: H, cache: "no-store" });
+      shut.status === 403 ? ok("3. an out-of-scope route is still refused (/api/veo/codes → 403)")
+                          : bad("an out-of-scope route is still refused", `got ${shut.status}`);
+      const sibling = await fetch(`${BASE}/api/admin/fields`, { headers: H, cache: "no-store" });
+      sibling.status === 403 ? ok("   …and so is an admin route")
+                             : bad("an admin route is still refused", `got ${sibling.status}`);
+    }
+  }
+
   console.log(`\n================ RESULT ================\nAssertions: ${PASS} passed, ${FAIL} failed`);
   if (fails.length) fails.forEach((f) => console.log("   FAILED: " + f));
   await browser.close();

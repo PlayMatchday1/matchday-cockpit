@@ -82,9 +82,25 @@ export async function POST(req: Request) {
   // tokens; we don't need to refresh the custom token itself.
   let token: string;
   try {
+    /* THE CONFINED CITY TRAVELS IN THE CLAIMS.
+     *
+     * This route is now reachable by a confined account — it has to be, or the Match Chats page it
+     * is allowed to open cannot render a message. But the token it mints is what the browser uses
+     * to open Firestore listeners DIRECTLY, and a listener does not go through /api/match-chats,
+     * which is where our city scoping lives.
+     *
+     * So the scope is stamped into the token. `confined_city` is null for an unconfined operator
+     * and the city identifier for a confined one, and Firestore security rules can filter on it.
+     *
+     * SAY WHAT THIS DOES NOT DO: the rules live in the Firebase console, not this repo, so nothing
+     * here can prove they read this claim. Until they do, the boundary on the Firestore layer is
+     * the UI showing only what /api/match-chats/active returned — which is a shorter menu, not a
+     * boundary. The claim is the half that can be shipped from here; the rule is the half that
+     * makes it enforcement. */
     token = await firebaseAuth().createCustomToken(appUserId, {
       cockpit_operator: true,
       operator_user_id: appUserId,
+      confined_city: auth.confinedCity ?? null,
     });
   } catch (err) {
     console.error("[firebase-token] mint failed", err);

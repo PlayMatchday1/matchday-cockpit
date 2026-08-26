@@ -3467,3 +3467,54 @@ never acted on.
 
 Outreach survives the sync: the ten-submission person set to `Interviewing / Ryan` was **UNTOUCHED**
 after a full run, with 647 submissions and 156 contacts unchanged.
+
+## MATCH CHATS, WARSAW — THE DOOR WAS SHUT WHILE EVERY ROOM WAS OPEN (2026-08-26)
+
+The chat LIST rendered perfectly for a WAW account — 2 active, 1 upcoming, 2 past, all Hala
+Piłkarska Bemowo. The message pane then refused with *"This account is confined to one city. That
+page is outside it."*
+
+**NOTHING ABOUT THE CITY WAS WRONG, and the guard never compares a city at all.**
+
+```
+app_users.city_identifier      "WAW"   (both accounts, 3 chars, no whitespace)
+chats returned by the list     ["WAW"]
+what the failing guard compares  the PATHNAME "/api/firebase-token"
+                                 against CONFINED_ROUTE_PREFIXES
+```
+
+Two paths, and they do **not** share a confinement helper:
+
+| | route | gate |
+|---|---|---|
+| **list** | `/api/match-chats/active` | `authenticateMatchOpsRead` → `auth.confinedCity` pushed into `.eq("city_identifier", …)` |
+| **message** | `/api/firebase-token` | `authenticateCrm` → `assertConfinedRoute(row, req.url)` |
+
+`/api/match-chats/` and `/api/crm/` are on the allowlist. **`/api/firebase-token` was on no list**,
+so the route that mints the Firebase token the message pane needs was refused. The error names a
+PAGE, which is what sent everyone looking for a city dictionary. WAW resolves correctly everywhere —
+`resolveCityScope` handles it, and the same account's Player Finder confinement already worked.
+
+**A page is not reachable because its data routes are.** Every route it needs on the way IN has to
+be listed.
+
+### THE FIX, AND WHAT IT DOES NOT DO
+
+`/api/firebase-token` added to `CONFINED_ROUTE_EXACT` — **exact, not a prefix**, for the reason the
+Veo entry beside it records: `"/api/veo"` as a prefix opened `/api/veo/codes`.
+
+The token now carries **`confined_city`** in its claims. **This is necessary and not sufficient.**
+The token is what the browser uses to open Firestore listeners DIRECTLY, and a listener does not go
+through `/api/match-chats`. The Firestore security rules live in the Firebase console, not this
+repo, so nothing here can prove they read the claim. **Until a rule filters on it, the boundary at
+the Firestore layer is the UI showing only what the list returned — a shorter menu, not a boundary.**
+
+### VERIFIED
+
+List → token → thread → **a real message read from Firestore**, driven as `jf@playmatchday.pl`:
+`MatchDay · 8:37 AM · https://app.veo.co/matches/20260825-…`, 14 players, no refusal, no Firestore
+error. Out-of-scope routes still 403: `/api/veo/codes`, `/api/admin/fields`,
+`/api/admin/users/permissions`, `/api/match-promotion`, `/api/slate-notes`.
+
+`verify-city-confinement` now walks the door itself — the suite that once passed the CM outage by
+navigating straight to `/city/*` and never checking what the page needed to get in. 86 assertions.

@@ -79,6 +79,29 @@ console.log("\n── the route allowlist ──");
     "/api/inventory/7", "/api/match-promotion", "/api/slate-notes",
     "/api/admin/users/permissions", "/api/promos/create", "/api/promos/delete/12",
   ];
+  /* ── THE DOOR, NOT JUST THE ROOMS ────────────────────────────────────────────────────────────
+   * /api/match-chats/ was allowed and the chat LIST rendered perfectly for a Warsaw account — two
+   * active, one upcoming, two past. Opening a thread then failed, because the message pane needs a
+   * Firebase custom token and /api/firebase-token was on no list. The refusal said the PAGE was
+   * outside the city, so everyone went looking for a city that did not resolve; city_identifier is
+   * "WAW", the list resolved it, and this guard never compares a city at all.
+   *
+   * verify-city-confinement had the same shape of gap once: it navigated straight to /city/* and
+   * never touched the door. A page is not reachable because its data routes are — every route the
+   * page needs on the way in has to be listed, and that is what these three assert together. */
+  t("the chats page's DOOR is open: the token route", () =>
+    assert.equal(isConfinedRouteAllowed("/api/firebase-token"), true));
+  t("…and so is the list it opens onto", () =>
+    assert.equal(isConfinedRouteAllowed("/api/match-chats/active"), true));
+  t("…and the reply route behind it", () =>
+    assert.equal(isConfinedRouteAllowed("/api/match-chats/abc123/reply"), true));
+  /* EXACT, NOT A PREFIX. "/api/firebase" as a prefix would open anything added beneath it later —
+   * the same mistake "/api/veo" made, caught by the line about /api/veo/codes above. */
+  t("but the token route is EXACT — a sibling is still refused", () =>
+    assert.equal(isConfinedRouteAllowed("/api/firebase-admin"), false));
+  t("…and so is a path beneath it", () =>
+    assert.equal(isConfinedRouteAllowed("/api/firebase-token/mint"), false));
+
   for (const p of ALLOWED) {
     t(`allowed: ${p}`, () => assert.equal(isConfinedRouteAllowed(p), true));
   }
