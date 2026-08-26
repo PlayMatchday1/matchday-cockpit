@@ -3188,3 +3188,56 @@ is the largest market — the mix has moved.
 $3,321.02 → $3,321.02, and a **sha256 over every column of every row unchanged at `cc8123c0`**.
 `dailyOnly` returns before the count query, so the delete never executes and `ownedBefore` comes
 back `-1` — "not inspected", deliberately distinct from "zero rows owned".
+
+## THE APR-JUL 2026 LOAD, AND EL PASO (2026-08-26)
+
+`2026-04-01 → 2026-07-31` into `fin_meta_ad_spend_daily` only, through the same `syncMetaAdSpend`
+with `dailyOnly: true`. 122 days, **974 rows, $9,339.93**, 945,354 impressions, 3.8s.
+
+**The daily CHECK needed no migration** — confirmed by exercising it rather than assuming: a
+2026-04-01 row inserts, a 2026-07-31 row inserts, a 2025-11-30 row is refused by
+`fin_meta_ad_spend_daily_floor`. Probe rows deleted, zero left behind. (PostgREST cannot serve
+`pg_constraint`, so the constraint is read empirically.)
+
+**The anticipated overlap did not exist: 974 new inserts, 0 updates.** The nightly window had never
+written a July day, because before the floor split `windowFor` clamped to 2026-08-01. Reported as a
+count rather than assumed, since an insert and an update look identical in a total.
+
+### COVERAGE IS CONTINUOUS
+
+2025-12-01 → 2026-08-26: **268 of 269 days have rows. The one gap is 2026-08-26 — today**, which had
+not accrued when the last sync ran. Nov 2025 and earlier remain absent by design.
+
+### THE MONTHLY DIFFERENCE IS REAL AND SMALL — STATED, NOT ROUNDED AWAY
+
+Meta rounds per day, so a sum of daily rows sits slightly above the monthly aggregate:
+
+| month | daily sum | account monthly | Δ |
+|---|---|---|---|
+| 2026-04 | $2,475.94 | $2,475.94 | **0.00** |
+| 2026-05 | $2,061.22 | $2,061.19 | +0.03 |
+| 2026-06 | $1,816.05 | $1,816.01 | +0.04 |
+| 2026-07 | $2,986.72 | $2,986.67 | +0.05 |
+| **TOTAL** | **$9,339.93** | **$9,339.81** | **+0.12** |
+
+### EL PASO IS A MARKET WE ADVERTISED IN AND DO NOT MAP
+
+Apr–Jul unmapped spend is **$375.10 (4.0%)** against 0.16% for Dec–Mar and 0.001% for August. It is
+not spillover dust — **$348.63 of it is `El Paso, TX`**, 93% of the total, plus $20.33 `Unknown` and
+$5.91 Albuquerque.
+
+This is the "unmapped is carried, never dropped" rule earning its keep: the money is visible and
+named. **El Paso also appears in the hand-entered April ledger at $533**, so it was a deliberate
+market, not a targeting accident. It has no city code in our system and is NOT in the seven-market
+mapping. Whether to add it is a decision, not a bug — until then its spend sits unmapped and
+counted.
+
+By city, Apr–Jul: **DFW $1,844.43 · HTX $1,622.84 · ATL $1,535.97 · OKC $1,413.68 · STL $1,047.94 ·
+ATX $865.52 · SATX $634.45 · unmapped $375.10**. Note the mix against Dec–Mar (ATL led) and August
+(HTX leads) — it moves materially.
+
+### fin_expenses UNTOUCHED
+
+Row count 322 → 322, August Meta $3,321.02 → $3,321.02, and a sha256 over every column of every row
+unchanged at `cc8123c0d6893b268795fb2ffbb3a4bb97dae4befe3862bd5eb631389c3fee44`. `dailyOnly` returns
+before the count query, so the delete never executes.
