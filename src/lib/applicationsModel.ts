@@ -118,8 +118,8 @@ export function buildPeople(
       company,
       role: field(pick(byLabel, "Job Role", "Role")),
       availability: field(pick(byLabel, "Availability")),
-      why: field(pick(byLabel, "Why MatchDay")),
-      vision: field(pick(byLabel, "Vision")),
+      why: field(pick(byLabel, "Why would you be a good fit for MatchDay?", "Why MatchDay")),
+      vision: field(pick(byLabel, "Share Your Vision", "Vision")),
       cityCode: city.code,
       cityName: city.code ? CITY_NAMES[city.code] ?? city.code : null,
       citySource: city.source,
@@ -156,7 +156,10 @@ export type Tiles = { k: string; v: string; h: string; tone?: "hot" | "good" }[]
 /** The five tiles, per the mockup — different sets per stream. */
 export function buildTiles(
   people: readonly Person[], stream: Stream, nowMs: number,
-  raw: { submissions: number; spam: number },
+  /* TWO DIFFERENT UNITS, NAMED SEPARATELY. `spamSubmissions` is rows (437); `spamSenders` is the
+   * distinct addresses behind them (24). The tile first read "SPAM FILTERED 24" beside "487 rows
+   * in" — two units in one card, and 24 looked like a rounding of nothing. */
+  raw: { submissions: number; spamSubmissions: number; spamSenders: number },
 ): Tiles {
   const n = people.length;
   const untouched = people.filter((p) => p.status === "New").length;
@@ -177,7 +180,7 @@ export function buildTiles(
     { k: "Partner leads", v: String(n), h: `${raw.submissions} rows in, deduped by email` },
     { k: "Not contacted", v: String(untouched), h: "no outreach recorded", tone: "hot" },
     { k: "Last 30 days", v: String(recent), h: "still warm" },
-    { k: "Spam filtered", v: String(raw.spam), h: "quarantined, not deleted" },
+    { k: "Quarantined", v: String(raw.spamSubmissions), h: `submissions from ${raw.spamSenders} addresses — kept, not deleted` },
     { k: "No city", v: String(noCity), h: "free-text location, unrecognised" },
   ];
 }

@@ -97,12 +97,23 @@ export function resolveFields(
     return { byLabel, unresolved: true };
   }
   const byLabel: Record<string, FieldValue> = {};
-  // Every label the form declares gets an entry, so "asked and blank" is distinguishable from
-  // "never asked" by presence rather than by an empty string.
+  /* EITHER KEY RESOLVES, and this is not laxity — the two sources genuinely differ.
+   *
+   * The live endpoint returns Elementor's FIELD IDS (`field_dff8b68`). The CSV export returns
+   * resolved LABELS as its column headers ("Company") and never the ids at all. Both describe the
+   * same submission on the same form, so both must land in the same shape or the historical rows
+   * and the synced rows would render differently on one page.
+   *
+   * The label is only accepted for the form that DECLARES it, so this cannot reintroduce the
+   * collision: "Company" resolves on f7eed00 because f7eed00 declares it, and on 4e61155c there is
+   * no such label to match. */
   for (const [fieldId, label] of Object.entries(form.labels)) {
-    byLabel[label] = Object.prototype.hasOwnProperty.call(fields, fieldId)
+    const has = (k: string) => Object.prototype.hasOwnProperty.call(fields, k);
+    byLabel[label] = has(fieldId)
       ? unescapeWpText(String(fields[fieldId] ?? ""))
-      : NOT_ASKED;
+      : has(label)
+        ? unescapeWpText(String(fields[label] ?? ""))
+        : NOT_ASKED;
   }
   return { byLabel, unresolved: false };
 }
@@ -237,7 +248,10 @@ export function resolveCity(rawCity: string | null | undefined, rawZip?: string 
  *
  * TWO OF THREE, and the row is KEPT with a flag. A rule that deletes cannot be audited when it is
  * wrong, and this one will be wrong eventually. */
-const SPAM_COMPANIES = new Set(["nokia", "google", "apple", "wallmart", "walmart", "aliexpress"]);
+/* SIX, NOT FIVE. The brief listed {Nokia, Google, Apple, Wallmart, AliExpress} = 380 rows. The
+ * export carries a sixth — FBI, 57 rows — and 380 + 57 is exactly the 437 the bot is known to have
+ * sent. Measured: nokia 85 · google 81 · apple 74 · wallmart 72 · aliexpress 68 · fbi 57. */
+const SPAM_COMPANIES = new Set(["nokia", "google", "apple", "wallmart", "walmart", "aliexpress", "fbi"]);
 
 export type SpamInput = { name?: string | null; email?: string | null; company?: string | null };
 
@@ -246,7 +260,11 @@ export function spamSignals(r: SpamInput): { skyncName: boolean; godaddyEmail: b
   const email = String(r.email ?? "").trim().toLowerCase();
   const company = normalizeCityText(String(r.company ?? ""));   // same punctuation-stripping normaliser
   return {
-    skyncName: /skync$/i.test(name.trim()),
+    /* CONTAINS, NOT ENDS-WITH — and this is the correction that mattered. The brief specified
+     * /Skync$/i "437 of 437". Against the export that regex matches ZERO rows: the token appears
+     * INSIDE the name, never at the end. Anchored, the signal contributed nothing and the rule
+     * caught 347 instead of 437. Measured: 437 of 437 contain it. */
+    skyncName: /skync/i.test(name),
     godaddyEmail: /(^|[@.])registry\.godaddy$/.test(email.split("@")[1] ?? ""),
     fakeCompany: SPAM_COMPANIES.has(company),
   };

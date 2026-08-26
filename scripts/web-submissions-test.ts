@@ -56,6 +56,17 @@ console.log("the same field id, two forms");
   // The failure this prevents, stated as an assertion: a company must never land in a surname.
   is("a COMPANY never lands in a surname", t.byLabel["Last Name"] === "Crossbar Sports", false);
   is("both forms are pinned by element_id", Object.keys(PINNED_FORMS).sort(), ["4e61155c", "f7eed00"]);
+
+  /* THE CSV KEYS BY LABEL, THE API KEYS BY FIELD ID — both must land identically or the historical
+   * rows and the synced rows would render differently on the same page. */
+  const fromCsv = resolveFields("f7eed00", { "First Name": "Sarah", Company: "Crossbar Sports", Location: "Atlanta" });
+  is("a CSV row keyed by LABEL resolves", fromCsv.byLabel["Company"], "Crossbar Sports");
+  is("…identically to the id-keyed row", fromCsv.byLabel["Company"], p.byLabel["Company"]);
+  /* AND IT CANNOT REINTRODUCE THE COLLISION: a label is only honoured on the form that declares
+   * it, so "Company" means nothing on the team application. */
+  const csvOnTeam = resolveFields("4e61155c", { Company: "Crossbar Sports" });
+  is("'Company' does not resolve on the team form", csvOnTeam.byLabel["Company"], undefined);
+  is("…and its Last Name is NOT the company", csvOnTeam.byLabel["Last Name"] === "Crossbar Sports", false);
 }
 
 // ── 2. AN UNKNOWN FORM IS FLAGGED, NEVER RELABELLED ────────────────────────────────────────────
@@ -129,7 +140,14 @@ console.log("\nzip derivation");
 // ── 7. SPAM — AND THE GEORGIA TRAP ─────────────────────────────────────────────────────────────
 console.log("\nspam quarantine");
 {
-  const bot = { name: "Damian Skync", email: "abuse@registry.godaddy", company: "Nokia" };
+  /* THE TOKEN IS INSIDE THE NAME, NOT AT THE END. /Skync$/i — the rule as first specified —
+   * matches ZERO of the 437 bot rows in the export; 437 of 437 CONTAIN it. Anchoring the regex
+   * cost 90 rows, so the fixture is deliberately shaped the way the real data is. */
+  const bot = { name: "Damian Skync Ltd", email: "abuse@registry.godaddy", company: "Nokia" };
+  is("an anchored /Skync$/ would have missed this row", /skync$/i.test(bot.name), false);
+  is("…and the contains rule catches it", spamSignals(bot).skyncName, true);
+  // FBI is the sixth fake company — 57 rows, and 380 + 57 = the 437 the bot is known to have sent.
+  is("FBI is a fake company", spamSignals({ name: "x", email: "a@b.c", company: "FBI" }).fakeCompany, true);
   is("the bot trips all three signals", spamSignals(bot), { skyncName: true, godaddyEmail: true, fakeCompany: true });
   is("…and is flagged", isSpam(bot), true);
   is("two of three is enough", isSpam({ name: "X Skync", email: "x@gmail.com", company: "Google" }), true);

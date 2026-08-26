@@ -3346,3 +3346,63 @@ passing are both true and neither means the deploy built.
 
 The marker was removed rather than worked around: the module is pure — its only imports are
 `partnerPayoutModel`, `gamedayModel` and `mdapiFakePlayer`, all pure by design.
+
+## APPLICATIONS — THE CSV IMPORT, AND THREE THINGS THE BRIEF GOT WRONG (2026-08-26)
+
+664 rows across six forms imported from the Elementor export. Final: **web_submissions 647,
+web_contacts 156 (115 team + 41 partner), web_form_labels 34 across all six forms.**
+
+### THE COUNT LADDER
+
+```
+TEAM     raw 172  ->  minus ours 12  =  160  ->  115 distinct people
+PARTNER  raw 492  ->  minus ours  5  =  487  ->  minus spam 437  =  50  ->  41 distinct people
+```
+
+### 1. `Skync` IS NOT A SUFFIX
+
+The rule was specified as `/Skync$/i`, "437 of 437". **Anchored, it matches ZERO of the 492 rows** —
+the token sits INSIDE the name, never at the end. With the signal dead the rule caught 347. As a
+contains-match it is 437 of 437.
+
+### 2. THERE IS A SIXTH FAKE COMPANY
+
+`nokia 85 · google 81 · apple 74 · wallmart 72 · aliexpress 68 · **fbi 57**`. The five named in the
+brief total 380; **380 + 57 = 437**, exactly the bot's known volume.
+
+### 3. THE CSVs CARRY A UTF-8 BOM — AND IT LOOKED LIKE A RULE PROBLEM
+
+The first header parses as `"﻿First Name"`, so `rec["First Name"]` was **undefined for every row
+in every file**. The bot's token lives in First Name, so with that column unreadable spam came out
+396 instead of 437 and read as "the spam rule is wrong" rather than "the parser is". Python's `csv`
+hides this behind `encoding="utf-8-sig"`; nothing in Node does. **Strip `charCodeAt(0) === 0xfeff`
+before parsing any WordPress export.**
+
+### 41, NOT 43 — RYAN'S CALL
+
+The brief's TEAM ladder has a "minus mine" step and its PARTNER ladder does not, so 43 counts
+Ryan's own test enquiries as two people — five rows under two addresses, companies `test`, `test`,
+`test`, `Applebees`, `Bob Vance Refrigeration`. Excluded from both streams: **41**.
+
+### THE CSV KEYS BY LABEL, THE API KEYS BY FIELD ID
+
+`resolveFields` accepts either, but a LABEL is only honoured on the form that DECLARES it — so
+`Company` resolves on f7eed00 and means nothing on 4e61155c. That is what stops label-keying
+reintroducing the id collision. Verified as stored: `f7eed00: Company=Company`,
+`4e61155c: Company=(none)`.
+
+### VERIFIED BY READ-BACK
+
+- **0 fields** carry a surviving backslash escape.
+- **101 submissions flagged `unresolved`** (the four unrecoverable forms, less our test rows).
+- **164 cities mapped · 17 derived from zip · 466 unmapped**, of which 437 are bot locations.
+- **29 emails have more than one submission, max 10.** Setting that person to
+  Interviewing/Ryan and re-running the import left it **UNTOUCHED**, with no row duplication —
+  `web_contacts` upserts with `ignoreDuplicates`, so outreach state can never be reset by a re-import.
+
+### UNMAPPED CITY STRINGS WORTH A DECISION (20 rows)
+
+`Okc` · `DFW` (abbreviations) · `Dallas (Irving)` · `Pflugerville (Austin area)` (parenthetical) ·
+`East Austin` · `San Antonio- Quickplay FC` · six full street addresses containing a mapped city or
+zip. **None were mapped** — the rule is map-never-guess and an address parser is a guesser.
+`El Paso, TX` stays unmapped: the same market that surfaced unmapped in the Meta ad spend.

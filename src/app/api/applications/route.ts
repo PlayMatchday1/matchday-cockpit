@@ -81,7 +81,9 @@ export async function GET(req: Request) {
     // SPAM IS QUARANTINED, NOT DELETED — hidden by default, counted, and viewable on request.
     const showSpam = url.searchParams.get("spam") === "1";
     const live = all.filter((p) => showSpam ? p.spam : !p.spam);
-    const spamCount = all.filter((p) => p.spam).length;
+    const spamSenders = all.filter((p) => p.spam).length;
+    // ROWS, not people — the tile counts submissions and says so. 437 rows from 24 addresses.
+    const spamSubmissions = rows.filter((r) => (r as unknown as { is_spam?: boolean }).is_spam === true).length;
 
     /* CONFINEMENT APPLIES AFTER SHAPING AND BEFORE ANYTHING IS RETURNED. A person with NO city
      * cannot be proved in scope, so a confined account does not see them — the safe direction,
@@ -91,9 +93,10 @@ export async function GET(req: Request) {
     return Response.json({
       stream,
       people: scoped,
-      tiles: buildTiles(scoped, stream, Date.now(), { submissions: rows.length, spam: spamCount }),
+      tiles: buildTiles(scoped, stream, Date.now(), { submissions: rows.length, spamSubmissions, spamSenders }),
       cityNames: CITY_NAMES,
-      spamCount,
+      spamCount: spamSenders,
+      spamSubmissions,
       showingSpam: showSpam,
       scope: scopeCity,
       confined: !!auth.confinedCity,

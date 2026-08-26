@@ -28,6 +28,7 @@ type Payload = {
   stream: "team" | "partner"; people: Person[]; tiles: Tiles;
   cityNames: Record<string, string>; spamCount: number; showingSpam: boolean;
   scope: string | null; confined: boolean; rawSubmissions: number; unresolvedSubmissions: number;
+  spamSubmissions: number;
   error?: string;
 };
 
