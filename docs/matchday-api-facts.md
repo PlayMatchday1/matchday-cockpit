@@ -3241,3 +3241,58 @@ ATX $865.52 · SATX $634.45 · unmapped $375.10**. Note the mix against Dec–Ma
 Row count 322 → 322, August Meta $3,321.02 → $3,321.02, and a sha256 over every column of every row
 unchanged at `cc8123c0d6893b268795fb2ffbb3a4bb97dae4befe3862bd5eb631389c3fee44`. `dailyOnly` returns
 before the count query, so the delete never executes.
+
+## PARMER: $1,815 vs $2,006 — TWO IMPLEMENTATIONS OF ONE PAYOUT (2026-08-26)
+
+`buildPartnerPayoutsByVenueMonth` had a **fixed argument list that could express exactly one deal**:
+`flat_percentage × revenue_share_pct`. `payout_model` was not a parameter, so
+`RENTAL_PLUS_PROFIT_SHARE` was unreachable; 0150's `revenueModelNext`/`From`/`perMatchFeeCents` were
+not passed, so the dated Crossbar model was unreachable too.
+
+PARMER's row still carries the seed values `revenue_model='flat_percentage'` and
+`revenue_share_pct=50` while its real deal is `RENTAL_PLUS_PROFIT_SHARE`. **The dashboard ignored
+those columns; the shared path was driven by them.** Field Costs, Cities, Cost, Revenue and Cash
+Flow all read the shared path.
+
+| | before | after |
+|---|---|---|
+| PARMER Aug | $1,815.00 | **$2,006.00** |
+| Crossbar Aug | $722.00 | **$700.00** (matches the dashboard) |
+
+### THE REVENUE BASES TIE TO THE CENT
+
+`$3,615.00 (dashboard) + $60.00 − $45.00 = $3,630.00 (Field Costs)`
+
+| rows | amount | why they differ |
+|---|---|---|
+| 1 × Aug 19, DAILY PAID, **refunded=true** | +$15.00 | `periodOwed`'s flat branch never checks `refunded`; the dashboard's `earnedRevenue` does |
+| 3 × Aug 27, **played=false** | +$45.00 | `matchActive` filters only `!match_canceled` — a scheduled match generated cost |
+| 9 × Aug 05, PROMOCODE | −$45.00 | real money at a discount; the DAILY-PAID-only filter drops it |
+| 40 × $0.00 MEMBER/PROMO/FREE | 0 | present on one side only, no money either way |
+
+**Spots 274 vs 278: four rows where the player CANCELLED and was never REFUNDED.** They paid, so
+`earnedRevenue` counts the money; they did not attend, so `occupiesSpot` (via `rosterRowCounts`)
+does not count the seat. Two carry $15 each. The two predicates are allowed to disagree — forcing
+them to agree produced a wrong number in each direction.
+
+### STALE COLUMNS — 2 OF 4 PARTNER ROWS
+
+| partner | payout_model | contradiction |
+|---|---|---|
+| **Parmer** | RENTAL_PLUS_PROFIT_SHARE | `revenue_model='flat_percentage'` + `revenue_share_pct=50` — **ignored by one path, load-bearing in the other** |
+| **Crossbar Rowlett** | PER_MATCH_MINUS_MANAGER | `revenue_share_pct=50` unused (0057 left it) |
+| Hattrick, PAC Global | REVENUE_SHARE | consistent |
+
+Not cleared — the list was the ask. A column ignored by one path and load-bearing in another is the
+defect, whichever way it is resolved.
+
+### THE INERT CONTROLS ON A SHARE VENUE
+
+`charge_on_cancel` is read only by `chargedUnitCount`, reached only from the **per-match** branch of
+`groupCost`. A share venue returns before that code exists, so PARMER's `charge_on_cancel = TRUE`
+has never affected a cent. The value is **left alone** (it matters again if the venue moves to a
+per-match rate) and the control is disabled with the reason. The month cost box is the same: this
+page does not read `fin_venue_cost_overrides` at all.
+
+**PARMER's August is now $2,006.00 on both paths.** Nothing is frozen —
+`partner_weekly_payments` has zero rows — so the three unplayed matches still move it.

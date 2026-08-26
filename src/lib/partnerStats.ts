@@ -10,6 +10,10 @@ import {
   loadMembershipWindowsByUserId,
 } from "./mdapiMatchesRead";
 import { isFakePlayerEmail } from "./mdapiFakePlayer";
+/* THE DASHBOARD'S OWN RENTAL COMPUTATION, imported rather than reimplemented. Two implementations
+ * of a payout is what made Field Costs and the partner page disagree by $191 on PARMER; a third
+ * would produce the next disagreement. */
+import { buildRentalDashboard } from "./partnerRentalDashboard";
 
 export type PartnerRegRow = {
   user_id: string;
@@ -313,6 +317,28 @@ function normalisePayoutModel(raw: unknown, revenueModel: PartnerRevenueModel): 
 // The parameters, or null if this partner is not on the rental model / is missing any of them.
 // Returning null rather than defaulting is deliberate: a partner with a half-filled parameter set
 // must render as unconfigured, not be paid on a guessed figure.
+/* ONE ROW PER MATCH, derived from the registration rows this function already has.
+ *
+ * `played` COMES FROM match_end_utc — the true instant. match_start is LOCAL WALL CLOCK wearing a
+ * Z, and reading it as an instant is what bills tonight's fixture all afternoon. A match with no
+ * end instant is NOT played: the safe direction, since the alternative bills for something we
+ * cannot show has happened. */
+export function matchListFromRegs(rows: PartnerRegRow[], now: Date): PartnerMatchRow[] {
+  const byId = new Map<number, PartnerMatchRow>();
+  const nowMs = now.getTime();
+  for (const r of rows) {
+    if (r.match_api_id == null) continue;
+    if (byId.has(r.match_api_id)) continue;
+    byId.set(r.match_api_id, {
+      matchApiId: r.match_api_id,
+      startYmd: r.match_start.slice(0, 10),
+      cancelled: !!r.match_canceled,
+      played: r.match_end_utc != null && Date.parse(r.match_end_utc) < nowMs,
+    });
+  }
+  return [...byId.values()];
+}
+
 export function rentalParamsOf(p: PartnerConfig): RentalProfitShareParams | null {
   if (p.payoutModel !== "RENTAL_PLUS_PROFIT_SHARE") return null;
   if (p.fieldRentalCents == null || p.matchManagerCents == null || p.partnerSharePct == null) return null;
@@ -1488,6 +1514,14 @@ export function buildPartnerPayoutsByVenueMonth(
     // the capacity threshold. flat_percentage partners ignore both.
     match_api_id?: number;
     max_player_count?: number | null;
+    /* THESE THREE ARE LOAD-BEARING and were not in this list, which is what made the first cut of
+     * the dispatch return $0.00 for both non-standard partners. Without match_end_utc no match ever
+     * reads as PLAYED, so payoutForMatch zeroes every one of them and the per-match fee bills
+     * nothing. paid_status and refunded drive rosterRowCounts / earnedRevenue — the difference
+     * between a seat and a payment. */
+    match_end_utc?: string | null;
+    paid_status?: string | null;
+    refunded?: boolean;
   }>,
   finRevRows: Array<{
     date: string;
@@ -1532,6 +1566,9 @@ export function buildPartnerPayoutsByVenueMonth(
         user_type: r.user_type,
         match_api_id: r.match_api_id,
         max_player_count: r.max_player_count,
+        match_end_utc: r.match_end_utc ?? null,
+        paid_status: r.paid_status ?? null,
+        refunded: r.refunded,
       }));
 
     // Filter fin_revenue rows: venue name match (case-insensitive
@@ -1555,6 +1592,46 @@ export function buildPartnerPayoutsByVenueMonth(
         notes: r.notes,
       }));
 
+    /* ── DISPATCH ON payout_model, THE SAME WAY buildPartnerDashboardData DOES ──────────────────
+     *
+     * THIS ARGUMENT LIST USED TO BE FIXED, and that was the whole defect. It could express exactly
+     * one deal — flat_percentage at revenue_share_pct — so any partner on a different model was
+     * computed on terms that were not theirs, silently, on every internal surface.
+     *
+     * PARMER IS WHAT IT COST. Its payout_model is RENTAL_PLUS_PROFIT_SHARE ($160 rental + 40% of
+     * the pool) but its row still carries the seed values revenue_model='flat_percentage' and
+     * revenue_share_pct=50. The dashboard branched on payout_model and showed $2,006.00; THIS
+     * function read the stale columns and produced 50% x $3,630 = $1,815.00 — and Field Costs,
+     * Cities, Cost, Revenue and Cash Flow all read THIS one. Austin's August field cost was
+     * understated by $191 everywhere except the page the partner sees.
+     *
+     * CROSSBAR WAS THE SAME SHAPE for a different reason: 0150's dated model lives in
+     * revenueModelNext / revenueModelFrom / perMatchFeeCents, none of which were passed, so August
+     * computed on the OLD revenue-minus-manager terms — $722 here against $600 on the dashboard.
+     *
+     * SO IT CALLS THE DASHBOARD'S OWN FUNCTIONS. buildRentalDashboard for the rental model, not a
+     * reimplementation of payoutForMatch — two implementations is exactly what produced this, and a
+     * third would produce the next one. partner-payout-parity-test.ts then requires every partner
+     * to agree across both paths, so a new non-standard deal fails the gate instead of quietly
+     * misstating a city. */
+    const rentalParams = rentalParamsOf(dash);
+    if (rentalParams) {
+      const rental = buildRentalDashboard(venueRegs, rentalParams, {
+        partnerName: dash.partnerName, venue: venue.venue_name,
+        spotPriceCents: dash.spotPriceCents, nowMs: now.getTime(),
+      });
+      /* payoutForMatch already zeroes a match that is CANCELLED or NOT YET PLAYED, deciding
+       * `played` from the match's true end instant — so the "a scheduled match cannot generate a
+       * cost" rule is satisfied here by construction rather than by a second filter. */
+      for (const mo of rental.months) {
+        const label = monthLabelFromYmd(`${mo.ym}-01`);
+        if (!label) continue;
+        const key = `${venue.id}|${label}`;
+        map.set(key, (map.get(key) ?? 0) + mo.totals.partnerTotalCents / 100);
+      }
+      continue;
+    }
+
     // per_match_minus_manager (Crossbar Rowlett) now flows through here
     // too — venueRegs carry match_api_id + max_player_count (threaded via
     // the matchRegs param above), so periodOwed groups revenue by match
@@ -1572,9 +1649,18 @@ export function buildPartnerPayoutsByVenueMonth(
         managerPayBase: dash.managerPayBase,
         managerPayHigh: dash.managerPayHigh,
         managerPayThreshold: dash.managerPayThreshold,
+        // 0150's DATED MODEL. Omitted before, which is why Crossbar's August read $722 here and
+        // $600 on the dashboard — the shared path computed it on the superseded terms.
+        revenueModelNext: dash.revenueModelNext,
+        revenueModelFrom: dash.revenueModelFrom,
+        perMatchFeeCents: dash.perMatchFeeCents,
       },
       [], // no persisted records needed for cost calc
       now,
+      // The per-match FEE bills matches, not registrations, so it needs the match list. Derived
+      // from the same venueRegs rather than a second fetch: one row per distinct match, with
+      // `played` from the true end instant, never match_start (wall clock wearing a Z).
+      matchListFromRegs(venueRegs, now),
     );
 
     // Bucket each row's owedAmount by the calendar month of its

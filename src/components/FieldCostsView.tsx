@@ -1270,10 +1270,12 @@ function FieldCostTableRow({
 function VenuePanel({
   row, venue, month, autoAmount, cellState, onSavePrice, onSaveBillingType,
   onSaveChargeOnCancel, onSaveBillingDay, onSaveCustomAmount, onSavePerReservation, isOverride, timing,
-  links, onSaveCountsAsRegular,
+  links, onSaveCountsAsRegular, dashboardDriven = false,
 }: {
   row: FieldCostRow;
   venue: FinVenue | null;
+  // True when this venue's cost comes from a partner-dashboard payout rather than a rate here.
+  dashboardDriven?: boolean;
   month: Q2Month;
   autoAmount: number;
   cellState: (field: CellStateKey) => CellState | null;
@@ -1294,6 +1296,11 @@ function VenuePanel({
   // a real, deliberate state for six venues — the money arrives as a monthly override instead.
   const autoBill = (venue?.per_match_rate ?? null) !== null;
   const perReservation = venue?.bills_per_reservation === true;
+  /* IS THIS VENUE'S COST THE PARTNER PAYOUT? groupCost's share branch returns before any per-match
+   * machinery exists, so on these venues the Cancels setting and the month cost box are both read
+   * by nothing. Keyed off the same two facts groupCost branches on — the venue's billing_type and
+   * the partner's payout model — never off a venue name. */
+  const shareDriven = venue?.billing_type === "profit_share" || dashboardDriven;
 
   // ONE RATE, TWO COLUMNS. The agreed rate always lands in cost_per_match. per_match_rate mirrors
   // it while auto-bill is on and is cleared when it is off, so the switch and the stored shape can
@@ -1445,21 +1452,44 @@ function VenuePanel({
             <b className="text-deep-green">{row.matchCount} reservations</b>.
           </div>
         )}
+        {/* CANCELS IS INERT ON A SHARE VENUE, and was silently so.
+            charge_on_cancel is read only by chargedUnitCount, which is reached only from the
+            PER-MATCH branch of groupCost. A profit-share or partner-payout venue returns before
+            that code exists, so the setting has never affected its cost by a cent. PARMER carries
+            charge_on_cancel = TRUE today and it has never done anything.
+            The value is LEFT ALONE — it becomes load-bearing again the moment the venue is moved
+            to a per-match rate, and clearing it would quietly change that future. It is disabled
+            and says why, because a control that looks live and does nothing is the thing we do not
+            ship. */}
         <div className={fld}>
           <label className={lab}>Cancels</label>
           <select
             value={venue?.charge_on_cancel ? "yes" : "no"}
             onChange={(e) => onSaveChargeOnCancel(e.target.value === "yes")}
-            className={inp + " w-[170px]"}
+            className={inp + " w-[170px]" + (shareDriven ? " opacity-50 cursor-not-allowed" : "")}
+            disabled={shareDriven}
+            data-testid="fc-cancels"
           >
             <option value="yes">Billed</option>
             <option value="no">Not billed</option>
           </select>
         </div>
+        {shareDriven && (
+          <p className="mb-2.5 ml-[116px] text-[11px] leading-snug text-deep-green/55" data-testid="fc-cancels-inert">
+            Not used by this venue. Its cost is the partner payout, which prices matches
+            individually — a cancelled match earns nothing and so shares nothing. This setting
+            applies only to a per-match rate.
+          </p>
+        )}
         {/* ONE FIELD, ONE RULE. There is no "override" — there is a month box, and if there is a
             number in it that number is the cost. Empty with auto-bill on computes; empty with it
             off means nothing has been entered. That is the whole thing, so there is no Set button
             to press, no mode to be in, and nothing to name. */}
+        {/* AND THE MONTH BOX IS INERT HERE TOO. This page does not read fin_venue_cost_overrides at
+            all (fieldEconomics.ts:112 — Ryan's ruling: an overridden month still carries a rate, so
+            the rate is what this page uses). For a share venue the figure comes from the partner
+            payout, so a number typed here would be stored and never shown. Disabled with the
+            reason rather than removed, so nobody wonders where the box went. */}
         <div className={fld}>
           <label className={lab}>{monthFull(month)} cost</label>
           <PriceCell
@@ -1467,8 +1497,9 @@ function VenuePanel({
             state={cellState("custom_amount")}
             onSave={(raw) => onSaveCustomAmount(raw)}
             // The placeholder is what leaving it empty actually produces.
-            placeholder={autoBill ? `auto ${fmtMoney(autoAmount)}` : "—"}
-            emptyOk={autoBill}
+            placeholder={shareDriven ? "from the partner payout" : autoBill ? `auto ${fmtMoney(autoAmount)}` : "—"}
+            emptyOk={autoBill || shareDriven}
+            disabled={shareDriven}
           />
         </div>
         <p className="mt-2 text-[11.5px] leading-relaxed text-deep-green/45" data-testid="month-help">
@@ -1477,7 +1508,10 @@ function VenuePanel({
                 // autoFormula already ends with its own total — appending one printed it twice.
                 ? <>Empty computes {row.autoFormula}.</>
                 : <>Empty computes {row.matchCount} × {fmtMoney(venue?.cost_per_match ?? 0)} = <b className="text-deep-green/70">{fmtMoney(autoAmount)}</b>.</>)
-            : <>This venue is not billed per match — enter {monthFull(month)}&rsquo;s cost.</>}
+            : shareDriven
+              ? <>This venue&rsquo;s cost IS the partner payout for {monthFull(month)}, computed from
+                  its own deal terms on the partner dashboard. Nothing entered here is read.</>
+              : <>This venue is not billed per match — enter {monthFull(month)}&rsquo;s cost.</>}
         </p>
       </div>
 
@@ -1952,6 +1986,9 @@ function PriceCell({
   onSave,
   placeholder = "—",
   emptyOk = false,
+  // A box whose value is read by nothing is disabled, never merely styled — a control that looks
+  // live and does nothing is the thing we do not ship.
+  disabled = false,
 }: {
   stored: number | null;
   state: CellState | null;
@@ -1962,6 +1999,7 @@ function PriceCell({
   // Suppresses the coral "you have not filled this in" ring. Empty is not a gap on the month
   // field; it is the normal state that means "use the computed figure".
   emptyOk?: boolean;
+  disabled?: boolean;
 }) {
   const [local, setLocal] = useState<string>(stored == null ? "" : String(stored));
 
@@ -2010,7 +2048,8 @@ function PriceCell({
             (e.currentTarget as HTMLInputElement).blur();
           }
         }}
-        disabled={showSaving}
+        // Disabled while saving, and permanently when the value is read by nothing.
+        disabled={showSaving || disabled}
         className="w-full bg-transparent py-1.5 pr-6 text-right font-mono text-xs tabular-nums text-deep-green placeholder:text-[10px] placeholder:font-bold placeholder:text-deep-green/35 focus:outline-none disabled:opacity-60"
       />
       {showSaving && (

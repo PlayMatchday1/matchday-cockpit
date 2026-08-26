@@ -52,6 +52,12 @@ const NODE_SUITES = [
   // ledger and rewrites them. Its three failure modes are all silent: a dropped market understates
   // spend, a widened ownership predicate eats hand-entered rows with no undo, and a float in the
   // money path is wrong for months before anyone notices. None are visible on the page.
+  // EVERY PARTNER'S COST MUST EQUAL THEIR PAYOUT. buildPartnerPayoutsByVenueMonth had a fixed
+  // argument list that could only express flat_percentage, so PARMER's RENTAL_PLUS_PROFIT_SHARE
+  // deal was computed on stale seed columns — $1,815 on every internal surface against $2,006 on
+  // the partner's own page. Structural, not numeric: it also fails if a NEW PayoutModel is added
+  // without a parity case, so the next non-standard deal cannot quietly misstate a city.
+  "scripts/partner-payout-parity-test.ts",
   "scripts/meta-ad-spend-test.ts",
   // THE LEDGER FLOOR IS NOT A TUNABLE. Its own suite because the reason it exists is not the
   // obvious one: fin_expenses has NO rows of any kind before 2026-04-30, so ad spend in Dec-Mar
