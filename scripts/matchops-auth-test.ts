@@ -85,7 +85,7 @@ const rel = (p: string) => p.replace("src/app/api/", "");
 // EXACTLY the intended routes are on the read gate — no more (a further move must edit this test).
 // Round 1 moved 3; round 2 moved 9 more (6 reads + the 3 dual-gate routes whose GET moved and whose
 // write stayed) — the ban route is on the read gate too, but with a MANAGE PLAYERS check on top.
-is("authenticateMatchOpsRead is imported by EXACTLY the 16 intended routes", importsMatchOpsRead.map(rel).sort(), [
+is("authenticateMatchOpsRead is imported by EXACTLY the 18 intended routes", importsMatchOpsRead.map(rel).sort(), [
   // Phase 30 — the Registered Players table under Player Lookup. A pure READ of the mdapi mirror
   // (mdapi_users + mdapi_match_players), so can_access_matchops gates the whole route with no
   // write flag on top. It is on this gate rather than the admin one BECAUSE a confined account
@@ -101,6 +101,17 @@ is("authenticateMatchOpsRead is imported by EXACTLY the 16 intended routes", imp
   // can_access_matchops gates read AND write here, which is why the whole route is on this gate
   // with no write flag on top. Deliberately NOT recordWrite'd — change_log is for API writes.
   "slate-notes/route.ts",
+  /* APPLICATIONS — Clubhouse's OWN tables (web_submissions, web_contacts), not a MatchDay call.
+   * On this gate because it carries REAL NAMES, EMAILS AND PHONES for 158 people who filled in a
+   * form on playmatchday.com, so it needs the same identity check player data does. A confined
+   * city manager is REFUSED another city here on the row from the database — assertScope, never a
+   * hidden chip — and a person whose city cannot be resolved is not shown to them at all. */
+  "applications/route.ts",
+  /* …and its ONE write: status / owner / notes on a contact. Deliberately NOT recordWrite'd —
+   * change_log is the audit of writes that reach the MatchDay API, and burying outreach churn in
+   * it would hide the writes that actually reach players. Confinement is re-checked against the
+   * database on the write rather than trusted from the client's screen. */
+  "applications/contact/route.ts",
   // Phase 26 — Manager Check-In. Marks/result are Clubhouse-only (no proven MatchDay write for
   // userStatus); the MOVE is a live MatchDay write and carries its own EDIT MATCHES check inside
   // the route, which is why the whole route sits on the read gate.
