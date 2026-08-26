@@ -293,3 +293,107 @@ export const contactKey = (stream: Stream, email: string): string =>
 export const STATUSES = ["New", "Contacted", "Interviewing", "Hired", "Passed"] as const;
 export type Status = (typeof STATUSES)[number];
 export const DEFAULT_STATUS: Status = "New";
+
+
+/* ── THE ONE ROW BUILDER, SHARED BY THE CSV IMPORT AND THE LIVE SYNC ───────────────────────────
+ *
+ * A submission that arrives by CSV and the same submission arriving by API must produce a
+ * BYTE-IDENTICAL row. Two builders would drift the first time either side changed — the exclusion
+ * of our own test rows, the escape decoding, the spam signals and the city mapping would all have
+ * to be kept in step by hand, and one of them would eventually not be.
+ *
+ * So there is one function and both callers use it. `web-submissions-parity-test` asserts the two
+ * paths agree on the same input.
+ *
+ * NOTE THE ASYMMETRY IT ABSORBS: the CSV keys fields by LABEL ("Company") and the API keys them by
+ * FIELD ID ("field_dff8b68"). resolveFields accepts either — but only on the form that DECLARES
+ * the label, which is what stops label-keying reintroducing the id collision. */
+export type RawSubmission = {
+  submissionId: number;
+  elementId: string;
+  formName: string | null;
+  referer: string | null;
+  /** Any parseable timestamp; stored as an ISO instant. */
+  createdAt: string | null;
+  /** Keyed by field id (API) or by label (CSV). Values may still carry escapes. */
+  fields: Record<string, unknown>;
+};
+
+export type SubmissionRowOut = {
+  submission_id: number;
+  element_id: string;
+  form_name: string | null;
+  referer: string | null;
+  created_at: string | null;
+  fields: Record<string, string>;
+  stream: Stream;
+  email: string | null;
+  city_code: string | null;
+  city_source: "city" | "zip" | "none";
+  city_raw: string | null;
+  is_spam: boolean;
+  unresolved: boolean;
+  imported_from: "csv" | "sync";
+};
+
+/** The partnerships form is the only partner stream; everything else is a team application. */
+export const streamFor = (elementId: string): Stream => (elementId === "f7eed00" ? "partner" : "team");
+
+export function toSubmissionRow(
+  raw: RawSubmission,
+  registry: Readonly<Record<string, FormLabels>>,
+  importedFrom: "csv" | "sync",
+): SubmissionRowOut | null {
+  const { byLabel, unresolved } = resolveFields(raw.elementId, raw.fields, registry);
+
+  // Values, unescaped exactly once, with NOT_ASKED collapsed away for storage — the table records
+  // what the form CARRIED, and "never asked" is recoverable from the registry on read.
+  const fields: Record<string, string> = {};
+  for (const [k, v] of Object.entries(byLabel)) {
+    if (v === NOT_ASKED) continue;
+    const clean = unescapeWpText(String(v));
+    if (hasSurvivingEscape(clean)) {
+      throw new Error(`escape survived unescape on submission ${raw.submissionId} field ${k}`);
+    }
+    fields[k] = clean;
+  }
+
+  const email = String(fields["Email"] ?? "").trim().toLowerCase();
+  // OUR OWN TEST ROWS NEVER REACH THE TABLE, by either path.
+  if (email && isOwnTestRow(email)) return null;
+
+  const stream = streamFor(raw.elementId);
+  const city = resolveCity(fields["City"] ?? fields["Location"] ?? "", fields["Zipcode"] ?? fields["Zip"] ?? "");
+
+  return {
+    submission_id: raw.submissionId,
+    element_id: raw.elementId,
+    form_name: raw.formName ?? null,
+    referer: raw.referer || null,
+    created_at: toIso(raw.createdAt),
+    fields,
+    stream,
+    email: email || null,
+    city_code: city.code,
+    city_source: city.source,
+    city_raw: city.raw || null,
+    // Spam is a PARTNER-stream judgement and never keys on location.
+    is_spam: stream === "partner" && isSpam({
+      name: `${fields["First Name"] ?? ""} ${fields["Last Name"] ?? ""}`,
+      email,
+      company: fields["Company"] ?? "",
+    }),
+    unresolved,
+    imported_from: importedFrom,
+  };
+}
+
+/** "2026-08-24 13:05:11" and "2026-08-24T13:05:11Z" both mean the same instant here — the export
+ *  uses a space, the API uses a T. An unparseable value is null, never a fabricated now(). */
+export function toIso(raw: string | null | undefined): string | null {
+  const t = String(raw ?? "").trim();
+  if (!t) return null;
+  const norm = /^\d{4}-\d{2}-\d{2} /.test(t) ? `${t.replace(" ", "T")}Z` : t;
+  const ms = Date.parse(norm);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}

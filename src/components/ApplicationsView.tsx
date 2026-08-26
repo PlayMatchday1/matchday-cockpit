@@ -29,6 +29,7 @@ type Payload = {
   cityNames: Record<string, string>; spamCount: number; showingSpam: boolean;
   scope: string | null; confined: boolean; rawSubmissions: number; unresolvedSubmissions: number;
   spamSubmissions: number;
+  unresolvedByElement: Record<string, number>;
   error?: string;
 };
 
@@ -124,12 +125,21 @@ export default function ApplicationsView() {
           be resolved are not shown — a city that cannot be proved is not a city you can be given.
         </p>
       )}
+      {/* THE FAILURE THAT WOULD OTHERWISE BE SILENT. Editing an Elementor form mints a NEW form id,
+          and new submissions then arrive under an id nothing recognises — resolving to nothing,
+          indefinitely, looking like a quiet week. This banner is on the PAGE and not only in the
+          sync log, and it NAMES the element_id so whoever goes to look knows which form to open. */}
       {data && data.unresolvedSubmissions > 0 && (
-        <p className="note" data-testid="apps-unresolved">
-          {data.unresolvedSubmissions} submissions come from forms that were edited or replaced on the
-          site. Their labels are not recoverable, so their fields are shown under the raw keys rather
-          than guessed at.
-        </p>
+        <div className="banner" data-testid="apps-unresolved">
+          <b>{data.unresolvedSubmissions} submissions are from forms this system cannot label.</b>{" "}
+          Their fields are shown under the website's raw keys rather than guessed at — a label
+          borrowed from another form would file a company into a surname. Form{" "}
+          {Object.entries(data.unresolvedByElement ?? {}).length ? "IDs" : "ID"}:{" "}
+          {Object.entries(data.unresolvedByElement ?? {})
+            .sort((a, b) => b[1] - a[1])
+            .map(([el, n]) => `${el} (${n})`).join(" · ")}
+          . <b>If this number grows, a live form was edited and minted a new ID.</b>
+        </div>
       )}
 
       <div className="tabs" role="tablist">
@@ -252,6 +262,8 @@ export default function ApplicationsView() {
         .h1 { font-size: 30px; font-weight: 900; letter-spacing: -.6px; margin: 0 0 6px }
         .sub, .note { font-size: 12.5px; color: rgba(16,35,26,.55); margin: 0 0 10px; max-width: 760px; line-height: 1.5 }
         .note { color: #B8730B }
+        .banner { border: 1px solid #F0D8A8; background: #FFF8EC; color: #7A5008; border-radius: 10px; padding: 11px 14px; font-size: 12.5px; line-height: 1.55; margin: 0 0 12px; max-width: 900px }
+        .banner b { color: #5E3D05 }
         .tabs { display: flex; gap: 6px; margin: 14px 0 } 
         .tabs button { border: 1px solid #E4EAE5; background: #fff; border-radius: 999px; padding: 7px 15px; font: inherit; font-size: 13px; font-weight: 700; color: rgba(16,35,26,.55); cursor: pointer }
         .tabs button.on { background: #0F3323; border-color: #0F3323; color: #fff }

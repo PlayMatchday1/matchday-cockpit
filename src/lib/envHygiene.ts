@@ -31,6 +31,9 @@ const DETECT_ONLY = [
   // used for ads. Sent as an Authorization header, never as an access_token query parameter, so it
   // cannot leak into a logged URL; see redactMetaError in metaAdSpend.ts for the second belt.
   "META_ADS_ACCESS_TOKEN",
+  /* The WordPress submissions key. Travels in an X-MD-Key HEADER, never a query parameter, so it
+   * cannot survive into a logged URL; redactWp in wpSubmissionsSync is the second belt. */
+  "WP_SUBMISSIONS_KEY",
   "WHATSAPP_VERIFY_TOKEN",
   "VEO_INBOUND_SECRET",
 ] as const;

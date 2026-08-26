@@ -103,10 +103,18 @@ export async function GET(req: Request) {
       // How many submissions are behind the list, so "115 people" and "172 rows" both appear and
       // neither has to be inferred from the other.
       rawSubmissions: rows.length,
-      unresolvedSubmissions: rows.filter((r) => {
+      /* BY element_id, NOT JUST A COUNT — and it is on the page, not only in the sync log.
+       * Editing an Elementor form can MINT A NEW FORM ID; that is how five Team Application forms
+       * and four dead ones came to exist. When it happens, new submissions arrive under an unseen
+       * id and resolve to nothing, and they keep arriving — which looks like a quiet week rather
+       * than a broken pipe. Someone has to be able to see it without opening a log, and they have
+       * to be able to name the form when they go and look. */
+      unresolvedByElement: rows.reduce<Record<string, number>>((acc, r) => {
         const el = String(r.element_id);
-        return !registry[el];
-      }).length,
+        if (!registry[el]) acc[el] = (acc[el] ?? 0) + 1;
+        return acc;
+      }, {}),
+      unresolvedSubmissions: rows.filter((r) => !registry[String(r.element_id)]).length,
     });
   } catch (e) {
     // NEVER the row's contents. A submission id is the most that may appear here.

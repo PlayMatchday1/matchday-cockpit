@@ -30,6 +30,9 @@ export type SourceName =
   // Meta ad spend, daily. Added to the DB CHECK by migration 0151 — runWithLog will not run the
   // sync at all until that is applied, and the route 503s saying so rather than reporting success.
   | "meta-ad-spend"
+  // playmatchday.com form submissions. Added to the DB CHECK by migration 0153 — runWithLog will
+  // not run the sync at all until that is applied, and the route 503s saying so.
+  | "wp-submissions"
   | "membership-snapshots"
   | "membership-prices"
   | "manager-pay-recompute"

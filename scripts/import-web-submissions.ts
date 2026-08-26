@@ -15,7 +15,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
 import {
   resolveCity, isSpam, isOwnTestRow, unescapeWpText, hasSurvivingEscape,
-  PINNED_FORMS, type Stream,
+  PINNED_FORMS, toSubmissionRow, type Stream, type FormLabels,
 } from "../src/lib/webSubmissions";
 
 const dir = process.argv[2];
@@ -169,23 +169,21 @@ async function write() {
   if (lb.error) { console.log("LABELS FAILED:", lb.error.message); process.exit(1); }
   console.log(`\nweb_form_labels: ${labelRows.length} rows LANDED`);
   
-  const subRows = parsed.filter((p) => !isOwnTestRow(p.email)).map((p) => {
-    const cityRaw = p.fields["City"] ?? p.fields["Location"] ?? "";
-    const c = resolveCity(cityRaw, p.fields["Zipcode"] ?? "");
-    return {
-      submission_id: p.submissionId, element_id: p.elementId, form_name: p.formName,
-      referer: p.referer || null,
-      created_at: p.createdAt ? new Date(p.createdAt.replace(" ", "T") + "Z").toISOString() : null,
-      fields: p.fields, stream: p.stream, email: p.email || null,
-      city_code: c.code, city_source: c.source, city_raw: c.raw || null,
-      is_spam: p.stream === "partner" && isSpam({
-        name: `${p.fields["First Name"] ?? ""} ${p.fields["Last Name"] ?? ""}`,
-        email: p.email, company: p.fields["Company"] ?? "",
-      }),
-      unresolved: !(p.elementId in PINNED_FORMS),
-      imported_from: "csv" as const,
-    };
-  });
+  /* THE SHARED BUILDER, not a second copy of these decisions. A submission arriving by CSV and the
+   * same submission arriving by API must produce a byte-identical row — web-submissions-parity-test
+   * asserts exactly that, and it can only hold while there is ONE builder. */
+  const registry: Record<string, FormLabels> = { ...PINNED_FORMS };
+  for (const l of labelRows) {
+    const cur = registry[l.element_id] ?? { elementId: l.element_id, formName: l.form_name, labels: {} as Record<string, string>, source: "csv" as const };
+    if (!(l.element_id in PINNED_FORMS)) { (cur.labels as Record<string, string>)[l.field_id] = l.label; registry[l.element_id] = cur; }
+  }
+  const subRows = parsed
+    .map((p) => toSubmissionRow({
+      submissionId: p.submissionId, elementId: p.elementId, formName: p.formName,
+      referer: p.referer, createdAt: p.createdAt, fields: p.fields,
+    }, registry, "csv"))
+    .filter((r): r is NonNullable<typeof r> => r !== null);
+
   for (let i = 0; i < subRows.length; i += 300) {
     const { error } = await sb.from("web_submissions").upsert(subRows.slice(i, i + 300), { onConflict: "submission_id" });
     if (error) { console.log(`SUBMISSIONS FAILED at ${i}:`, error.message); process.exit(1); }

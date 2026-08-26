@@ -20,6 +20,7 @@ import {
   PINNED_FORMS, resolveFields, wasAsked, hasValue, NOT_ASKED,
   unescapeWpText, hasSurvivingEscape,
   cityForText, cityForZip, resolveCity, normalizeCityText, CITY_ORDER,
+  toSubmissionRow, toIso, streamFor,
   spamSignals, isSpam, isOwnTestRow, contactKey, DEFAULT_STATUS, STATUSES,
 } from "../src/lib/webSubmissions";
 
@@ -175,6 +176,57 @@ console.log("\nexclusions and contact identity");
     contactKey("partner", "a@b.com") === contactKey("team", "a@b.com"), false);
   is("the default status is New", DEFAULT_STATUS, "New");
   is("the five statuses", STATUSES.slice(), ["New", "Contacted", "Interviewing", "Hired", "Passed"]);
+}
+
+
+// ── 9. THE CSV PATH AND THE SYNC PATH PRODUCE THE SAME ROW ─────────────────────────────────────
+// The CSV keys fields by LABEL and the API keys them by FIELD ID. Two row builders would drift the
+// first time either side changed, and the exclusion of our own rows, the escape decoding, the spam
+// signals and the city mapping would all have to be kept in step by hand. There is one builder;
+// this asserts both callers reach the same bytes through it.
+console.log("\nCSV path vs SYNC path");
+{
+  const viaApi = toSubmissionRow({
+    submissionId: 9001, elementId: "4e61155c", formName: "Team Application",
+    referer: "https://playmatchday.com/apply", createdAt: "2026-08-24T13:05:11Z",
+    fields: { name: "Ernesto", field_dff8b68: "Hernandez", email: "Netos1KRR@Gmail.com",
+              field_15bf1e3: "Austin, TX", field_9c3a201: "9152490370",
+              field_6b2d114: "Match Manager", message: "Mon-thurs 6-9\\r\\nSat 8am" },
+  }, PINNED_FORMS, "sync");
+  const viaCsv = toSubmissionRow({
+    submissionId: 9001, elementId: "4e61155c", formName: "Team Application",
+    referer: "https://playmatchday.com/apply", createdAt: "2026-08-24 13:05:11",
+    fields: { "First Name": "Ernesto", "Last Name": "Hernandez", Email: "Netos1KRR@Gmail.com",
+              City: "Austin, TX", Phone: "9152490370",
+              "Job Role": "Match Manager", Availability: "Mon-thurs 6-9\\r\\nSat 8am" },
+  }, PINNED_FORMS, "csv");
+  if (!viaApi || !viaCsv) { bad("both paths produce a row"); }
+  else {
+    ok("both paths produce a row");
+    const strip = (r: Record<string, unknown>) => { const c = { ...r }; delete c.imported_from; return c; };
+    is("the rows are byte-identical apart from imported_from",
+      JSON.stringify(strip(viaApi as unknown as Record<string, unknown>)),
+      JSON.stringify(strip(viaCsv as unknown as Record<string, unknown>)));
+    is("…including the decoded newline", viaApi.fields["Availability"], "Mon-thurs 6-9\nSat 8am");
+    is("…the lowercased email", viaApi.email, "netos1krr@gmail.com");
+    is("…and the mapped city", [viaApi.city_code, viaApi.city_source], ["ATX", "city"]);
+    is("imported_from is the ONE thing that differs", [viaApi.imported_from, viaCsv.imported_from], ["sync", "csv"]);
+  }
+  // OUR OWN TEST ROWS NEVER REACH THE TABLE BY EITHER PATH.
+  const mineApi = toSubmissionRow({ submissionId: 1, elementId: "4e61155c", formName: null, referer: null, createdAt: null, fields: { email: "rmancuso1@gmail.com" } }, PINNED_FORMS, "sync");
+  const mineCsv = toSubmissionRow({ submissionId: 1, elementId: "4e61155c", formName: null, referer: null, createdAt: null, fields: { Email: "RMancuso1@Gmail.com" } }, PINNED_FORMS, "csv");
+  is("our own row is dropped on the sync path", mineApi, null);
+  is("…and on the CSV path", mineCsv, null);
+  // AN UNSEEN FORM KEEPS ITS RAW KEYS AND IS FLAGGED — this is what happens the first time the
+  // live form is edited and mints a new id.
+  const unseen = toSubmissionRow({ submissionId: 2, elementId: "brandnew", formName: null, referer: null, createdAt: null, fields: { field_dff8b68: "Acme", email: "a@b.com" } }, PINNED_FORMS, "sync")!;
+  is("an unseen element_id is flagged unresolved", unseen.unresolved, true);
+  is("…keeps its raw key", unseen.fields["field_dff8b68"], "Acme");
+  is("…and borrows NO label from another form", unseen.fields["Company"], undefined);
+  is("the partnerships form is the only partner stream", [streamFor("f7eed00"), streamFor("4e61155c"), streamFor("brandnew")], ["partner", "team", "team"]);
+  is("a space-separated timestamp parses", toIso("2026-08-24 13:05:11"), "2026-08-24T13:05:11.000Z");
+  is("…identically to the T form", toIso("2026-08-24T13:05:11Z"), toIso("2026-08-24 13:05:11"));
+  is("an unparseable timestamp is null, never a fabricated now()", toIso("not a date"), null);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
