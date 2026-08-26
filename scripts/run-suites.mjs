@@ -62,6 +62,11 @@ const NODE_SUITES = [
   // column summed a window that excluded columns sitting right beside it, so rows with real May
   // and June money totalled $0.00. Structural — it asserts the chip, the row totals and the
   // booked total are the same figure at every grain.
+  // APPLICATIONS — the element_id collision. Elementor stores the field ID and never the label,
+  // and field_dff8b68 is Company on the partnerships form and Last Name on the team application.
+  // A global id->label map files partner companies into applicants' surnames. Also guards the
+  // rule that spam must never key on location: Georgia is a US state and Atlanta is in it.
+  "scripts/web-submissions-test.ts",
   "scripts/recurring-window-test.ts",
   "scripts/partner-payout-parity-test.ts",
   "scripts/meta-ad-spend-test.ts",
