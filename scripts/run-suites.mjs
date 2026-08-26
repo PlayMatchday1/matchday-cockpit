@@ -53,6 +53,11 @@ const NODE_SUITES = [
   // spend, a widened ownership predicate eats hand-entered rows with no undo, and a float in the
   // money path is wrong for months before anyone notices. None are visible on the page.
   "scripts/meta-ad-spend-test.ts",
+  // THE LEDGER FLOOR IS NOT A TUNABLE. Its own suite because the reason it exists is not the
+  // obvious one: fin_expenses has NO rows of any kind before 2026-04-30, so ad spend in Dec-Mar
+  // renders five months of P&L that read as complete and are not. Lowering the constant looks
+  // harmless and is not; this fails with the reason in the message.
+  "scripts/meta-expense-floor-test.ts",
   "scripts/mutation-tests.ts",
   "scripts/prod-guard-test.ts",
   "scripts/stage-denylist-test.ts",

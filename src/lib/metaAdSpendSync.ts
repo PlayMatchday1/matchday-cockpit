@@ -28,8 +28,8 @@
 
 import "server-only";
 import {
-  META_GRAPH_VERSION, META_FLOOR_YMD, META_WINDOW_DAYS, redactMetaError,
-  spendStringToCents, impressionsToInt, assertUsd, isAtOrAfterFloor, windowFor,
+  META_GRAPH_VERSION, META_EXPENSE_FLOOR_YMD, META_DAILY_FLOOR_YMD, META_WINDOW_DAYS, redactMetaError,
+  spendStringToCents, impressionsToInt, assertUsd, isAtOrAfterFloor, isAtOrAfterDailyFloor, windowFor,
   reconcileDay, toDailyRows, monthlyExpenseRows, cityForMarket,
   META_VENDOR, META_CATEGORY, UNALLOCATED_NOTE, UNALLOCATED_MARKET,
   type MetaBreakdownRow, type DailyRow,
@@ -105,7 +105,17 @@ async function pageAll(path: string, params: Record<string, string>): Promise<Re
   return out;
 }
 
-export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string): Promise<MetaSyncResult> {
+/* OPTIONS EXIST FOR THE HISTORICAL LOAD, and it deliberately runs THE SAME CODE as the nightly
+ * cron — same pull, same breakdown, same cents parser, same unmapped-to-null rule. A separate
+ * one-off script would have been a second implementation of the money path, and the two would
+ * drift the first time either changed.
+ *
+ * dailyOnly SKIPS THE LEDGER ENTIRELY. Not "writes an empty set" — the fin_expenses delete never
+ * executes, so a historical load is structurally incapable of touching the ledger even if the
+ * expense floor were somehow wrong. */
+export type MetaSyncOptions = { since?: string; until?: string; dailyOnly?: boolean };
+
+export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string, opts: MetaSyncOptions = {}): Promise<MetaSyncResult> {
   apiCalls = 0;
 
   // ── The account, and the currency gate. A non-USD account writes NOTHING and converts nothing.
@@ -123,9 +133,14 @@ export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string): Pro
   const account = withSpend.slice().sort((x, y) => y.spend - x.spend)[0];
   assertUsd(account.currency);
 
-  // ── The window, hard-floored. windowFor clamps, and isAtOrAfterFloor refuses again per row.
-  const { since, until } = windowFor(todayYmd, META_WINDOW_DAYS);
-  if (!isAtOrAfterFloor(since)) throw new Error(`meta: window start ${since} is before the ${META_FLOOR_YMD} floor`);
+  /* ── The window, hard-floored against the DAILY floor. An explicit window is still clamped —
+   * a caller asking for November gets December, never November. */
+  const auto = windowFor(todayYmd, META_WINDOW_DAYS);
+  const since = opts.since && opts.since > auto.since ? opts.since : (opts.since ?? auto.since);
+  const until = opts.until ?? auto.until;
+  if (!isAtOrAfterDailyFloor(since)) {
+    throw new Error(`meta: window start ${since} is before the ${META_DAILY_FLOOR_YMD} daily floor`);
+  }
 
   const common = { time_range: JSON.stringify({ since, until }), time_increment: "1", limit: "500" };
 
@@ -136,12 +151,12 @@ export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string): Pro
   const totalByDay = new Map<string, number>();
   for (const t of totals) {
     const d = String(t.date_start ?? "");
-    if (isAtOrAfterFloor(d)) totalByDay.set(d, spendStringToCents(t.spend));
+    if (isAtOrAfterDailyFloor(d)) totalByDay.set(d, spendStringToCents(t.spend));
   }
   const marketsByDay = new Map<string, MetaBreakdownRow[]>();
   for (const b of broken) {
     const d = String(b.date_start ?? "");
-    if (!isAtOrAfterFloor(d)) continue;                        // THE FLOOR, at the row level
+    if (!isAtOrAfterDailyFloor(d)) continue;                    // THE DAILY FLOOR, at the row level
     const market = String((b as Record<string, unknown>)[BREAKDOWN_PARAM] ?? "");
     if (!market) continue;
     const arr = marketsByDay.get(d) ?? [];
@@ -183,10 +198,30 @@ export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string): Pro
   /* THE THREE CLAUSES ARE APPLIED TOGETHER, ALWAYS. Written once as a helper so the count query
    * and the DELETE cannot drift apart — a delete with one clause missing is the failure that eats
    * hand-entered rows, and there is no undo on the finance ledger. */
+  /* THE LEDGER IS NOT TOUCHED AT ALL ON A DAILY-ONLY RUN. The early return is before the count,
+   * before the delete, before anything — the historical load cannot reach fin_expenses. */
+  if (opts.dailyOnly) {
+    return {
+      adAccountId: account.id, currency: account.currency, breakdownParam: BREAKDOWN_PARAM,
+      since, until,
+      daysPulled: marketsByDay.size,
+      marketRows: daily.filter((r) => r.marketRaw !== UNALLOCATED_MARKET).length,
+      unallocatedRows: daily.filter((r) => r.marketRaw === UNALLOCATED_MARKET).length,
+      spendCents: daily.reduce((s, r) => s + r.spendCents, 0),
+      impressions: daily.reduce((s, r) => s + (r.impressions ?? 0), 0),
+      varianceByDay,
+      varianceTotalCents: varianceByDay.reduce((s, v) => s + v.cents, 0),
+      unallocatedCents: varianceByDay.reduce((s, v) => s + (v.cents > 0 ? v.cents : 0), 0),
+      expenseRowsWritten: 0, expenseRowsDeleted: 0,
+      ownedBefore: -1, ownedAfter: -1,   // -1 = not inspected, distinct from "zero rows owned"
+      apiCalls,
+    };
+  }
+
   const countOwned = async (): Promise<number> => {
     const { count, error } = await sb.from("fin_expenses")
       .select("id", { count: "exact", head: true })
-      .eq("vendor", META_VENDOR).eq("manual_entry", false).gte("date", META_FLOOR_YMD);
+      .eq("vendor", META_VENDOR).eq("manual_entry", false).gte("date", META_EXPENSE_FLOOR_YMD);
     if (error) throw new Error(`fin_expenses count failed: ${error.message}`);
     return count ?? 0;
   };
@@ -195,7 +230,7 @@ export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string): Pro
 
   const del = await sb.from("fin_expenses")
     .delete({ count: "exact" })
-    .eq("vendor", META_VENDOR).eq("manual_entry", false).gte("date", META_FLOOR_YMD);
+    .eq("vendor", META_VENDOR).eq("manual_entry", false).gte("date", META_EXPENSE_FLOOR_YMD);
   if (del.error) throw new Error(`fin_expenses delete failed: ${del.error.message}`);
   const expenseRowsDeleted = del.count ?? 0;
 

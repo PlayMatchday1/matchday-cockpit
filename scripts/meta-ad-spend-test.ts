@@ -92,11 +92,26 @@ is("the day before is refused", isAtOrAfterFloor("2026-07-31"), false);
 is("April is refused", isAtOrAfterFloor("2026-04-30"), false);
 is("a malformed date is refused", isAtOrAfterFloor("2026-8-1"), false);
 is("an empty date is refused", isAtOrAfterFloor(""), false);
-// The window clamps rather than reaching back past the floor.
-is("a 28-day window early in August clamps to the floor",
-  windowFor("2026-08-05").since, "2026-08-01");
+/* THE WINDOW CLAMPS TO THE **DAILY** FLOOR, NOT THE LEDGER'S — and this assertion changed when the
+ * two floors were split. It previously required a 28-day window in early August to clamp to
+ * 2026-08-01, which was right only while one constant served both purposes. The daily store now
+ * floors at 2025-12-01, so the same window legitimately reaches back into July.
+ *
+ * THE BEHAVIOUR CHANGED ON PURPOSE; the test was not edited to go green. What protects the LEDGER
+ * is no longer the window — it is monthlyExpenseRows refusing any date before the expense floor,
+ * asserted directly below and again in meta-expense-floor-test.ts. */
+is("a 28-day window in early August reaches into July for the DAILY store",
+  windowFor("2026-08-05").since, "2026-07-09");
 is("…and still ends today", windowFor("2026-08-05").until, "2026-08-05");
-is("CONTROL — a later window is NOT clamped", windowFor("2026-09-30").since, "2026-09-03");
+is("CONTROL — a later window is not clamped at all", windowFor("2026-09-30").since, "2026-09-03");
+is("a window early in December clamps to the DAILY floor",
+  windowFor("2025-12-05").since, "2025-12-01");
+is("November can never be reached, however wide the window",
+  windowFor("2025-12-01", 400).since, "2025-12-01");
+// …and the reach-back must NOT become ledger rows.
+is("the July days that window reaches produce NO expense row",
+  monthlyExpenseRows(toDailyRows(
+    [{ date: "2026-07-09", marketRaw: "Houston, TX", spendCents: 5000, impressions: 1 }], "act_1", "USD")).length, 0);
 // A pre-floor row that somehow reached the roll-up is still refused at the write boundary.
 is("a pre-floor daily row never reaches an expense row",
   monthlyExpenseRows(toDailyRows(

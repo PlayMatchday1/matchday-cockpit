@@ -3145,3 +3145,46 @@ Window `2026-08-01 → 2026-08-26` (clamped from 28 days by the floor), 25 days,
 **$3,321.02** and 315,927 impressions, in **2.4s over 4 API calls**. Ledger: 8 rows — seven cities
 plus $0.05 unallocated. Idempotent: a second run through the route deleted 8 and wrote 8, leaving
 the predicate count at 8. **July's seven hand-entered rows are untouched at $3,450.00.**
+
+## TWO FLOORS, AND WHY THEY MUST NOT BE RE-MERGED (2026-08-26)
+
+| | floor | why |
+|---|---|---|
+| `fin_meta_ad_spend_daily` | **2025-12-01** | the table only ever claims to be ad spend |
+| `fin_expenses` ownership | **2026-08-01** | see below — this one is NOT a tunable |
+
+**THE LEDGER FLOOR IS NOT ABOUT DOUBLE-COUNTING.** That is the obvious reading and it is incomplete.
+`fin_expenses` **has no rows of any kind before 2026-04-30** — no venue cost, no match manager pay,
+no salaries, no agency fees. Loading ad spend into Dec–Mar would render five months of P&L showing
+marketing cost against **nothing else**: a statement that reads as COMPLETE and is not. A month with
+no data looks empty and invites the question; a month with only its marketing cost filled in looks
+finished and answers it wrongly.
+
+`scripts/meta-expense-floor-test.ts` fails if `META_EXPENSE_FLOOR_YMD` is ever set earlier, with
+that reason in the assertion message. To lower it legitimately: give those months their other costs
+first, then move `EARLIEST_SAFE` in the same commit.
+
+**A KNOCK-ON THE SPLIT CAUSED, recorded because the test changed with it.** `windowFor` now clamps
+to the DAILY floor, so the nightly trailing-28-day window reaches into the previous month — a run on
+2026-08-05 now pulls from 2026-07-09. Those days land in the daily store and are refused by
+`monthlyExpenseRows` at the ledger boundary. The old assertion required that window to clamp to
+2026-08-01, which was right only while one constant served both purposes. The behaviour changed on
+purpose; the assertion was not edited to go green.
+
+## THE HISTORICAL LOAD — DAILY TABLE ONLY (2026-08-26)
+
+`2025-12-01 → 2026-03-31`, run through the SAME `syncMetaAdSpend` as the nightly cron with
+`dailyOnly: true` (a separate script would have been a second implementation of the money path).
+121 days, 1,429 rows, **$10,458.55**, 1,241,960 impressions, 5.8s over 6 API calls.
+
+**November was skipped deliberately** — the breakdown covers only $1,992.14 of $2,181.24 (91.3%)
+and there is no way to say which city lost the remainder.
+
+Dec–Mar by city: **ATL $2,519.79 · DFW $2,088.99 · HTX $1,584.00 · SATX $1,294.39 · ATX $1,251.07 ·
+STL $1,064.21 · OKC $639.75 · unmapped $16.35 (0.16%)**. Worth noting against August, where Houston
+is the largest market — the mix has moved.
+
+**THE LEDGER WAS NOT TOUCHED, asserted three ways:** row count 322 → 322, August Meta total
+$3,321.02 → $3,321.02, and a **sha256 over every column of every row unchanged at `cc8123c0`**.
+`dailyOnly` returns before the count query, so the delete never executes and `ownedBefore` comes
+back `-1` — "not inspected", deliberately distinct from "zero rows owned".

@@ -19,8 +19,30 @@
 /** Graph API version. The console moved to v25; v21 is what whatsapp.ts uses for a different API. */
 export const META_GRAPH_VERSION = "v25.0";
 
-/** No date before this is ever requested from Meta or written to our tables. */
-export const META_FLOOR_YMD = "2026-08-01";
+/* ── TWO FLOORS, AND THEY ARE NOT THE SAME NUMBER ───────────────────────────────────────────────
+ *
+ * They were one constant until the historical reconciliation, and collapsing them again is the
+ * thing that must not happen. They exist for DIFFERENT reasons:
+ *
+ * META_EXPENSE_FLOOR_YMD (2026-08-01) — the fin_expenses ownership cutover. It is NOT arbitrary and
+ * it is NOT merely about double-counting the Apr–Jul hand rows. fin_expenses HAS NO ROWS OF ANY
+ * KIND BEFORE 2026-04-30: no venue cost, no manager pay, no salaries. Putting ad spend into
+ * Dec–Mar would render five months of P&L that show marketing cost against nothing else — a
+ * statement that reads as complete and is not. That is a worse failure than a missing number,
+ * because a missing number looks missing. DO NOT LOWER THIS until those months carry their other
+ * costs; meta-expense-floor-test.ts fails loudly if anyone tries.
+ *
+ * META_DAILY_FLOOR_YMD (2025-12-01) — the fin_meta_ad_spend_daily floor. That table only ever
+ * claims to be ad spend, so it has no such problem, and the daily series is what answers questions
+ * about campaign effect. It starts at December because Meta's comscore_market breakdown DOES NOT
+ * EXIST before 2025-11 (probed: zero rows, with Dec as the positive control) and November is only
+ * 91.3% covered — $1,992.14 of $2,181.24 — with no way to say which city lost the rest. */
+export const META_EXPENSE_FLOOR_YMD = "2026-08-01";
+export const META_DAILY_FLOOR_YMD = "2025-12-01";
+
+/** @deprecated Ambiguous now that the two floors differ. Kept pointing at the EXPENSE floor so any
+ *  unmigrated caller keeps the stricter of the two rather than silently widening. */
+export const META_FLOOR_YMD = META_EXPENSE_FLOOR_YMD;
 
 /** Trailing window re-pulled every run: Meta revises recent days, and an upsert makes it free. */
 export const META_WINDOW_DAYS = 28;
@@ -89,8 +111,13 @@ export function impressionsToInt(raw: unknown): number | null {
  *
  * YMD STRING COMPARISON, no Date parsing — same rule the rest of this codebase follows for dates
  * that are days rather than instants. */
-export function isAtOrAfterFloor(ymd: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}$/.test(ymd) && ymd >= META_FLOOR_YMD;
+export function isAtOrAfterFloor(ymd: string, floor: string = META_EXPENSE_FLOOR_YMD): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(ymd) && ymd >= floor;
+}
+
+/** The daily store's floor — deliberately earlier than the ledger's. See the block above. */
+export function isAtOrAfterDailyFloor(ymd: string): boolean {
+  return isAtOrAfterFloor(ymd, META_DAILY_FLOOR_YMD);
 }
 
 /** The request window, clamped to the floor. Never returns a `since` earlier than the floor. */
@@ -98,7 +125,7 @@ export function windowFor(todayYmd: string, days: number = META_WINDOW_DAYS): { 
   const d = new Date(`${todayYmd}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() - (days - 1));
   const since = d.toISOString().slice(0, 10);
-  return { since: since < META_FLOOR_YMD ? META_FLOOR_YMD : since, until: todayYmd };
+  return { since: since < META_DAILY_FLOOR_YMD ? META_DAILY_FLOOR_YMD : since, until: todayYmd };
 }
 
 /* ── CURRENCY ───────────────────────────────────────────────────────────────────────────────────
@@ -158,14 +185,14 @@ export function toDailyRows(rows: MetaBreakdownRow[], adAccountId: string, curre
  */
 export const META_VENDOR = "Meta";
 export const META_CATEGORY = "Marketing";
-export const META_CUTOVER_YMD = META_FLOOR_YMD;
+export const META_CUTOVER_YMD = META_EXPENSE_FLOOR_YMD;
 
 export type ExpenseRowish = { vendor: string | null; manual_entry: boolean | null; date: string };
 
 export function ownsExpenseRow(r: ExpenseRowish): boolean {
   if (r.vendor !== META_VENDOR) return false;
   if (r.manual_entry !== false) return false;      // true OR null → hand-entered, never ours
-  return isAtOrAfterFloor(r.date);
+  return isAtOrAfterFloor(r.date, META_EXPENSE_FLOOR_YMD);
 }
 
 export type MonthlyExpense = { month: string; date: string; city: string | null; amountCents: number; unallocated: boolean };
@@ -174,7 +201,9 @@ export type MonthlyExpense = { month: string; date: string; city: string | null;
 export function monthlyExpenseRows(rows: DailyRow[]): MonthlyExpense[] {
   const acc = new Map<string, { amountCents: number; city: string | null; unallocated: boolean }>();
   for (const r of rows) {
-    if (!isAtOrAfterFloor(r.date)) continue;       // the floor again, at the write boundary
+    // THE EXPENSE FLOOR, not the daily one. A December daily row is legitimate and must never
+    // reach the ledger — see the two-floors block at the top of this file.
+    if (!isAtOrAfterFloor(r.date, META_EXPENSE_FLOOR_YMD)) continue;
     const ym = r.date.slice(0, 7);
     const unallocated = r.marketKey == null;
     const key = `${ym}|${unallocated ? UNALLOCATED_MARKET : r.marketKey}`;
