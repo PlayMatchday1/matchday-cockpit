@@ -27,6 +27,9 @@ export type SourceName =
   // CHECK by migration 0149 — runWithLog will not run the sync at all until that is applied.
   | "mdapi-users-full"
   | "mdapi-users-lens-snapshot"
+  // Meta ad spend, daily. Added to the DB CHECK by migration 0151 — runWithLog will not run the
+  // sync at all until that is applied, and the route 503s saying so rather than reporting success.
+  | "meta-ad-spend"
   | "membership-snapshots"
   | "membership-prices"
   | "manager-pay-recompute"

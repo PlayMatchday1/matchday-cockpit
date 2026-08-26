@@ -3076,3 +3076,72 @@ August week), and all nine are `auto_canceled` with attendance below minimum.
 **`min_player_count` is NOT a standing setting** — it varies per match (7, 9, 10, 11). Across all
 four months, **8 of 22 cancellations were short by exactly one player**, every one at min 9 with 8
 booked. All eight would have run at a minimum of 8.
+
+## META MARKETING API — WHAT THE LIVE ACCOUNT ACTUALLY RETURNS (2026-08-26)
+
+Verified against `act_1613092135872657` with a system-user token, `ads_read` only. Every call is a
+**GET**; there is no POST or DELETE path to Graph in this integration.
+
+**`breakdowns=dma` IS DEAD.** Meta answers with a hard 400 that names its own replacement:
+
+> *(#100) dma breakdown is no longer supported; to retrieve market-level data, please instead use
+> comscore_market breakdown.*
+
+**`breakdowns=comscore_market` is the parameter**, on `v25.0`. It returns exactly the strings our
+mapping keys on — `"Atlanta, GA"`, `"Dallas-Ft. Worth, TX"`. `breakdowns=region` also works but is
+worldwide administrative regions (`"Adana Province"`) and is useless here.
+
+### SPEND CARRIES SUB-CENT PRECISION
+
+The first real row was **`"spend": "519.544921"` — six decimal places.** A two-decimal parser
+refuses every account-level breakdown row. `spendStringToCents` handles arbitrary decimals and
+rounds half-up **on digits**, never through a float: `Number("8.29") * 100` is `828.9999999999999`.
+
+### THE ACCOUNT
+
+One account is visible to this system user — `act_1613092135872657` "MatchDay", **USD**, lifetime
+spend $31,888.09. A second account exists in Business Manager but is **not assigned to this system
+user**, which is the tighter grant; the sync picks by highest lifetime spend, so it stays correct
+whether or not that ever changes.
+
+**TIMEZONE IS `America/Bogota`** (UTC-5, no DST) — Meta buckets a day in the AD ACCOUNT's timezone,
+not America/Chicago. For a monthly ledger figure the effect is confined to hours either side of a
+month boundary. Recorded so nobody later "fixes" a discrepancy that is not a bug.
+
+### POSITIVE CONTROL — MATCHED TO THE CENT
+
+Campaign `120249287691260381`, 2026-07-26 → 2026-08-24, against figures hand-read from Ads Manager:
+
+| market | API | hand-read | Δ | impressions Δ |
+|---|---|---|---|---|
+| Atlanta, GA | $132.79 | $132.79 | 0 | 0 |
+| Austin, TX | $117.74 | $117.74 | 0 | 0 |
+| Dallas-Ft. Worth, TX | $177.23 | $177.23 | 0 | 0 |
+| Houston, TX | $240.83 | $240.83 | 0 | 0 |
+| Oklahoma City, OK | $88.53 | $88.53 | 0 | 0 |
+| San Antonio, TX | $90.97 | $90.97 | 0 | 0 |
+| St. Louis, MO | $77.33 | $77.33 | 0 | 0 |
+| **TOTAL** | **$925.42** | **$925.42** | **0** | **0 (93,004)** |
+
+The campaign name in the brief was `"… - August"`; the real name is **`"… - August 2026"`**. Exactly
+one candidate matched, which is also why market mapping beats campaign-name parsing.
+
+### `Unknown` IS A REAL COMSCORE MARKET
+
+The first production run returned a market literally named **`Unknown`** — 3 days, $0.03, 5
+impressions. It maps to no city, so it carried into the unallocated row rather than vanishing. This
+is the designed behaviour proven on live data, not a hypothetical.
+
+### DAILY VARIANCE IS REAL BUT TINY
+
+Market rows do not always sum to the account total. First run: **6 of 25 days varied, net −$0.03**,
+every day ±1–2 cents. Positive variances become an unallocated row; **a negative day carries
+nothing** — a negative expense row would corrupt the total the other way — so *net* and *carried*
+are different numbers and the sync verdict prints both.
+
+### THE FIRST RUN
+
+Window `2026-08-01 → 2026-08-26` (clamped from 28 days by the floor), 25 days, 180 daily rows,
+**$3,321.02** and 315,927 impressions, in **2.4s over 4 API calls**. Ledger: 8 rows — seven cities
+plus $0.05 unallocated. Idempotent: a second run through the route deleted 8 and wrote 8, leaving
+the predicate count at 8. **July's seven hand-entered rows are untouched at $3,450.00.**

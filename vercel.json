@@ -7,6 +7,10 @@
     {
       "path": "/api/sync/users-full",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/sync/meta-ad-spend",
+      "schedule": "0 10 * * *"
     }
   ]
 }

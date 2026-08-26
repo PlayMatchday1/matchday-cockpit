@@ -143,7 +143,15 @@ throws("a non-numeric string refuses rather than becoming 0", () => spendStringT
 throws("an empty string refuses", () => spendStringToCents(""));
 throws("undefined refuses", () => spendStringToCents(undefined));
 throws("a negative refuses", () => spendStringToCents("-5.00"));
-throws("three decimal places refuse", () => spendStringToCents("1.234"));
+// SUB-CENT PRECISION IS REAL DATA, NOT A MALFORMED VALUE. This assertion previously required
+// three decimals to REFUSE. The first live call returned "519.544921" — six — so the old rule
+// would have rejected every account-level breakdown row. The BEHAVIOUR was wrong, not the test;
+// recorded here rather than quietly edited.
+is("six decimals — the real shape Meta returns", spendStringToCents("519.544921"), 51954);
+is("rounds half-up on the third digit", spendStringToCents("1.235"), 124);
+is("…and down below it", spendStringToCents("1.234"), 123);
+is("carrying into the next cent", spendStringToCents("0.999"), 100);
+is("carrying into the next dollar", spendStringToCents("9.999"), 1000);
 is("impressions absent is null, not zero", impressionsToInt(null), null);
 is("CONTROL — impressions parse", impressionsToInt("23770"), 23770);
 

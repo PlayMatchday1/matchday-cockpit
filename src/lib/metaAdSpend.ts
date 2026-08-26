@@ -62,10 +62,17 @@ export function spendStringToCents(raw: unknown): number {
   if (typeof raw === "number" && Number.isInteger(raw)) return raw * 100;
   if (typeof raw !== "string") throw new Error(`meta spend: expected a decimal string, got ${typeof raw}`);
   const s = raw.trim();
-  if (!/^\d+(\.\d{1,2})?$/.test(s)) throw new Error(`meta spend: unparseable value ${JSON.stringify(s)}`);
+  /* ARBITRARY PRECISION, NOT TWO PLACES. This regex was \d{1,2} until the first real call came
+   * back with "519.544921" — SIX decimals. Meta reports breakdown spend at sub-cent precision, so a
+   * two-place parser would have refused every account-level row on day one. The positive control is
+   * what caught it, before anything was written. */
+  if (!/^\d+(\.\d+)?$/.test(s)) throw new Error(`meta spend: unparseable value ${JSON.stringify(s)}`);
   const [whole, frac = ""] = s.split(".");
-  const cents = frac.padEnd(2, "0");
-  return Number(whole) * 100 + Number(cents);
+  const padded = frac.padEnd(3, "0");
+  /* HALF-UP ON THE THIRD DIGIT, done on digits. Not Math.round(Number(s) * 100): 8.29 * 100 is
+   * 828.9999999999999 and no amount of rounding afterwards makes that reliable. */
+  const cents = Number(whole) * 100 + Number(padded.slice(0, 2));
+  return Number(padded[2]) >= 5 ? cents + 1 : cents;
 }
 
 /** Impressions arrive as a string too. Absent is null, not 0 — they are different facts. */
