@@ -10,20 +10,12 @@
 // PagePermissionGuard page="membership" it used to declare itself, so the rail is not drawn for
 // someone the page would then refuse.
 
-import CitiesMembershipLens from "@/components/CitiesMembershipLens";
+import MembershipView from "@/components/MembershipView";
 
 export default function MembershipPage() {
   return (
     <>
-      <div className="mb-6">
-        <h1 className="text-3xl font-extrabold tracking-tight text-deep-green">
-          Membership
-        </h1>
-        <p className="mt-1 text-sm text-deep-green/70">
-          Members and retention across markets.
-        </p>
-      </div>
-      <CitiesMembershipLens />
+      <MembershipView />
     </>
   );
 }

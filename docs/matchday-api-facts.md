@@ -3518,3 +3518,55 @@ error. Out-of-scope routes still 403: `/api/veo/codes`, `/api/admin/fields`,
 
 `verify-city-confinement` now walks the door itself — the suite that once passed the CM outage by
 navigating straight to `/city/*` and never checking what the page needed to get in. 86 assertions.
+
+## MEMBERSHIP — WHAT THE PAGE WAS, AND FOUR THINGS THE DATA SETTLED (2026-08-26)
+
+**Before:** one route `/membership` → `CitiesMembershipLens` → six read-only components. **Nothing
+wrote.** Reads `members_monthly_snapshots` (captured) and `mdapi_subscriptions` (live).
+
+### THE MODEL IS MIRRORED; THE API IS AUTHORITATIVE
+
+`mdapi_subscriptions`, PK `membership_id`. **No renewal field** — cancel-and-rejoin creates a NEW
+row with the same `user_id` and a different `membership_id`, so renewal is row succession.
+
+Two schema comments are wrong and the data says so:
+
+- **`status` has TWO values in production**, not the nine the comment claims: `ACTIVE` 451 ·
+  `CANCELED` 2,225.
+- **`price` is DOLLARS.** The comment says "cents-vs-dollars TBD on first sync". Distribution: 49
+  ×1,326 · 66 ×827 · 30 ×305, against `fin_venues.member_price` of 49 / 72.99 / 66.5. Settled.
+
+### DEFINITIONS — FOUR EXISTED, ONE NEEDED SAYING OUT LOUD
+
+`active member` = `status='ACTIVE'` · `member spot` = `payment_type='MEMBER'` · `daily-play spot` =
+`'DAILY PAID'` · `promotion player` = `'PROMOCODE'`. All four already existed.
+
+**`churned` exists — but as a PLAYER concept, not a member one.** `/api/lifecycle/churn` already
+uses days-since-last-played with a 30/60/90/120 selector defaulting to **90**, so this page reuses it
+rather than inventing a second meaning. **A member who stops playing while still paying is churned
+by this definition and active by the membership one.** Both true, not the same number, and the tile
+says so.
+
+### THE RESIDUAL TRAP DOES NOT APPLY HERE
+
+The deck computes `fieldMember = fieldRevenue − fieldDpp`. **We do not.** Member revenue is an
+explicit CATEGORY (`fin_revenue.type='Membership'`, `financeStats.ts:1636`) then allocated pro-rata
+by member spots (`venueAllocatedMemberRevenueFor`, `:1810`). Measured for Aug 2026, every city
+allocates completely — **residue $0.00 across all seven**, Austin included at $6,438.75 / 795 spots
+= **$8.10**.
+
+**What DOES land nowhere: $2,745.47** of membership revenue across all months tagged to the
+pseudo-city **"Deleted Account Revenue"**, which no venue belongs to (Nov 2025 $334.88 · May 2026
+$229.47 · Jun 2026 $198.70). Right magnitude for the "~$275/month" in the brief, **but not Austin's**.
+
+**A landmine for anyone extending this page: 1,178 of 1,865 August member spots (63%) sit at fields
+with `counts_as_regular_play = false`** — Westlake, PARMER, Crossbar, Lou Fusz and ten others. That
+flag is a COST-side event exclusion. Adopt it here and member spots fall 63% with no visible reason.
+This page deliberately does not use it.
+
+### TWO NUMBERS FOR THE SAME MONTH, BOTH TRUE
+
+The all-time chart reads the last CAPTURED snapshot; the KPI reads `mdapi_subscriptions` LIVE. For
+Aug 2026 that is **383 captured against 451 live** — the capture is a point in time and members
+joined after it. The page prints both and names which is which, because "383 active" beside a KPI
+reading 451 with no explanation is how a page teaches people not to trust it.

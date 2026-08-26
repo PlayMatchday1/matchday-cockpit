@@ -67,6 +67,12 @@ const NODE_SUITES = [
   // A global id->label map files partner companies into applicants' surnames. Also guards the
   // rule that spam must never key on location: Georgia is a US state and Atlanta is in it.
   "scripts/web-submissions-test.ts",
+  // MEMBERSHIP CHARTS. Two of these guard bugs that were invisible by eye in the mockup: an axis
+  // whose top tick stops below the series max (the tallest bar then leaves the chart silently under
+  // overflow:visible) and a tooltip that escapes its card at either end of a series. The third
+  // comes from a shipped bug elsewhere — the Expenses page had a chip, a column total and a footer
+  // summing three different windows and nothing caught it.
+  "scripts/membership-chart-test.ts",
   "scripts/recurring-window-test.ts",
   "scripts/partner-payout-parity-test.ts",
   "scripts/meta-ad-spend-test.ts",
