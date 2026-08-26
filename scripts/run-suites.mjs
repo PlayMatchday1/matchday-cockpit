@@ -127,6 +127,14 @@ const NODE_SUITES = [
   // MatchDay API exposes neither endpoint, so enabling either button compiles fine and ships a
   // control that does nothing. Both failures are invisible on screen.
   "scripts/match-managers-test.ts",
+  // ASSIGNING A MANAGER TO A MATCH — the one write the API offers on this, and it decides WHO GETS
+  // PAID. In the fast set under the bar's exception: it changes what a match record says happened
+  // and what Manager Pay pays. Pins the detach value proven on staging (null detaches; "" is a 400;
+  // an omitted field changes nothing), that the diff is the body, that a null managerId cannot
+  // paint the first manager into the select, and that the confirmation names a person rather than
+  // an id. The $20/$30 figure is asserted AGAINST payAmount rather than restated — two paths
+  // answering one money question is the shape that cost four months on PARMER.
+  "scripts/manager-assign-test.ts",
 ];
 const ALL_E2E = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
 // --e2e runs EVERY browser suite. Nothing is excluded, because nothing is mandatory.

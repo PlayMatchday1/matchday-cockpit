@@ -29,6 +29,10 @@ import { supabase } from "@/lib/supabase";
 import { diffKeys, pick, MONEY_KEYS, TOGGLE_KEYS, NULLABLE_NUM } from "@/lib/matchEditModel";
 import { centsToDollars, dollarsToCents } from "@/lib/matchMoney";
 import {
+  pickerOptions, offeredCounts, confirmLines, normalizeManagerId,
+  CAN_UNASSIGN_MANAGER_FROM_MATCH, UNASSIGN_PROOF,
+} from "@/lib/managerAssign";
+import {
   emptyPending, normalizePending, pendingCount, sortedTeam, spotsOfTeam, planMove,
   savePlan, clearApplied, teamCountConsequence,
   type Pending, type RosterOrigin, type EditRow, type PlannedWrite,
@@ -108,6 +112,17 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   const [cur, setCur] = useState<Record<string, unknown>>({});
   const [when, setWhen] = useState<{ date: string; time: string }>({ date: "", time: "" });
   const [managers, setManagers] = useState<Manager[]>([]);
+  /* THE ESCAPE, AND IT IS OFF BY DEFAULT. `managers` is this match's CITY roster — 28 of the 87 for
+   * a typical Austin fixture. `managersAll` is every match manager, revealed by a visible control,
+   * with the people it adds LABELLED as off-city rather than mixed in unmarked. A manager covering
+   * a one-off outside their listed cities is real; silently hiding them turns a real assignment
+   * into an impossible one. */
+  const [managersAll, setManagersAll] = useState<Manager[]>([]);
+  const [showAllCities, setShowAllCities] = useState(false);
+  /* THE CONFIRMATION THIS WRITE NEEDS. Manager Pay pays per match on this attachment, so the wrong
+   * person here is a wrong PAYMENT. Save does not commit a manager change until this names the
+   * person, the match and the amount and is confirmed. */
+  const [mgrConfirm, setMgrConfirm] = useState<{ lines: string[]; keys: string[] } | null>(null);
   const [fields, setFields] = useState<FieldRow[]>([]);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -159,6 +174,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
       const m = j.match as MatchData;
       setOrig(m);
       setManagers(j.managers ?? []);
+      setManagersAll(j.managersAllCities ?? []);
       setFields(j.fields ?? []);
       const w = m.startDate ? parseWall(m.startDate) : { date: "", time: "" };
       setWhen(w);
@@ -443,9 +459,44 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     };
   };
 
-  const doSave = async () => {
+  /* THE MANAGER CONFIRMATION GATE.
+   *
+   * Every other field on this panel is a property of the match. THIS ONE DECIDES WHO GETS PAID —
+   * Manager Pay pays per match at $20/$30 on max_player_count, keyed on the attachment this write
+   * sets. So a manager change does not go out on the same "Save" as a name edit: it stops here
+   * first and names the person, the match and the amount. A yes/no on "Save changes?" confirms
+   * that something is about to happen, not what.
+   *
+   * It gates the WRITE, not the edit — the diff is unchanged, the body is unchanged, and cancelling
+   * sends nothing at all. */
+  const MGR_KEYS = ["managerId", "secondManagerId"] as const;
+  const doSave = async (confirmedMgr = false) => {
     if (!orig || saving) return;
     if (changed.length === 0 && pendingN === 0) return;
+    const mgrChanged = changed.filter((k) => (MGR_KEYS as readonly string[]).includes(k));
+    if (mgrChanged.length > 0 && !confirmedMgr) {
+      const lines: string[] = [];
+      for (const k of mgrChanged) {
+        const toId = normalizeManagerId(cur[k]);
+        const fromId = normalizeManagerId(orig[k]);
+        const opt = [...mgrOpts, ...mgrOpts2].find((o) => o.id === toId);
+        lines.push(...confirmLines({
+          matchName: orig.name == null ? null : String(orig.name),
+          whenText: when.date ? `${when.date}${when.time ? ` ${when.time}` : ""}` : null,
+          cityLabel: orig.cityName ?? null,
+          fromName: fromId == null ? null : mgrName(fromId),
+          toName: toId == null ? null : mgrName(toId),
+          maxPlayerCount: Number(cur.maxPlayerCount) || null,
+          // Co-managed pays $20 each. A SECOND manager on the match is what makes it co-managed,
+          // and that is exactly the field that may be changing in this same save.
+          coManaged: normalizeManagerId(cur.secondManagerId) != null,
+          offCity: !!opt?.offCity,
+        }).map((l) => (k === "secondManagerId" ? `Second manager — ${l}` : l)));
+      }
+      setMgrConfirm({ lines, keys: mgrChanged });
+      return;
+    }
+    setMgrConfirm(null);
     setSaving(true); setToast(null); setWriteResults([]);
     let rosterLanded = 0;
     // CAPTURE THE MATCH DIFF FIRST. The roster batch below re-reads the match, and a re-read
@@ -547,10 +598,29 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     setToast(null);
   };
 
+  /* THESE MEMOS SIT ABOVE THE EARLY RETURNS ON PURPOSE. They were first written next to mgrName,
+   * which is below `if (!orig) return <Loading/>` — so on the first render they did not run and on
+   * the second they did, and React logged "a change in the order of Hooks" and rendered nothing.
+   * A hook cannot live after a conditional return. */
+  const mgrOffered = useMemo(() => offeredCounts(managers, managersAll), [managers, managersAll]);
+  // The CURRENT manager is always an option even when they are on neither list — otherwise the
+  // control shows a different person than the match actually has.
+  const mgrOpts = useMemo(
+    () => pickerOptions(managers, managersAll, showAllCities,
+      cur.managerId == null ? null : { id: Number(cur.managerId), name: mgrNameIn([...managers, ...managersAll], cur.managerId) }),
+    [managers, managersAll, showAllCities, cur.managerId]);
+  const mgrOpts2 = useMemo(
+    () => pickerOptions(managers, managersAll, showAllCities,
+      cur.secondManagerId == null ? null : { id: Number(cur.secondManagerId), name: mgrNameIn([...managers, ...managersAll], cur.secondManagerId) }),
+    [managers, managersAll, showAllCities, cur.secondManagerId]);
+
   if (loadErr) return <div className="mp"><style>{CSS}</style><div className="mp-panel" data-testid="mp-panel"><div className="mp-err" data-testid="mp-load-error">{loadErr}</div></div></div>;
   if (!orig) return <div className="mp"><style>{CSS}</style><div className="mp-panel" data-testid="mp-panel"><div className="mp-loading">Loading match…</div></div></div>;
 
-  const mgrName = (id: unknown) => managers.find((m) => m.id === Number(id))?.name ?? (id == null || id === "" ? "—" : `id ${id}`);
+  /* THE NAME LOOKUP SEARCHES BOTH LISTS. It used to search the city roster only, so an off-city
+   * manager — and any manager who has since come off this city's roster — rendered as "id 41207"
+   * in the diff and in the confirmation. A confirmation that names an id is not naming a person. */
+  const mgrName = (id: unknown) => mgrNameIn([...managers, ...managersAll], id);
   const dollarInput = (k: string) => (cur[k] === "" || cur[k] == null ? "" : centsToDollars(cur[k]));
 
   return (
@@ -595,16 +665,32 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 )}</label>
             </div>
             <div className="mp-grid">
-              <label className="mp-f"><span className="mp-lb">MANAGER <em>send the id, choose the name</em></span>
-                <select data-testid="mp-mgr" value={Number(cur.managerId ?? 0)} className={isDirty("managerId") ? "mp-chg" : ""} onChange={(e) => setField("managerId", e.target.value === "" ? null : Number(e.target.value))}>
-                  {managers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              {/* THE PRIMARY MANAGER IS THE PAID ONE. Both selects use "none" as the detach
+                  sentinel rather than "": a cleared <select> yields "", the API rejects "" with a
+                  400, and normalizeManagerId is the one place that mapping lives. The value is a
+                  STRING so a null managerId selects the explicit "no manager" option — it used to
+                  be Number(cur.managerId ?? 0), which matches no option, so the browser displayed
+                  whichever manager happened to be first and a blind Save would have attached them. */}
+              <label className="mp-f"><span className="mp-lb">MANAGER <em>send the id, choose the name · {mgrOffered.city} in {orig.cityName ?? "this city"}{showAllCities ? ` · showing all ${mgrOffered.all}` : ""}</em></span>
+                <select data-testid="mp-mgr" value={cur.managerId == null ? "none" : String(cur.managerId)} className={isDirty("managerId") ? "mp-chg" : ""}
+                  onChange={(e) => setField("managerId", normalizeManagerId(e.target.value))}>
+                  <option value="none">{CAN_UNASSIGN_MANAGER_FROM_MATCH ? "— no manager —" : "— no manager (unavailable) —"}</option>
+                  {mgrOpts.map((m) => <option key={m.id} value={m.id}>{m.offCity ? `${m.name} · other city` : m.name}</option>)}
                 </select></label>
               <label className="mp-f"><span className="mp-lb">SECOND MANAGER <em>optional</em></span>
-                <select data-testid="mp-mgr2" value={cur.secondManagerId == null ? "" : Number(cur.secondManagerId)} className={isDirty("secondManagerId") ? "mp-chg" : ""} onChange={(e) => setField("secondManagerId", e.target.value === "" ? null : Number(e.target.value))}>
-                  <option value="">— none —</option>
-                  {managers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                <select data-testid="mp-mgr2" value={cur.secondManagerId == null ? "none" : String(cur.secondManagerId)} className={isDirty("secondManagerId") ? "mp-chg" : ""}
+                  onChange={(e) => setField("secondManagerId", normalizeManagerId(e.target.value))}>
+                  <option value="none">— none —</option>
+                  {mgrOpts2.map((m) => <option key={m.id} value={m.id}>{m.offCity ? `${m.name} · other city` : m.name}</option>)}
                 </select></label>
             </div>
+            {/* THE ESCAPE, VISIBLE. Not a hidden affordance and not a search box — a checkbox that
+                says how many people it adds, so the operator can see that the default is hiding
+                some and decide. */}
+            <label className="mp-allcities" data-testid="mp-mgr-allcities">
+              <input type="checkbox" checked={showAllCities} onChange={(e) => setShowAllCities(e.target.checked)} disabled={mgrOffered.hidden === 0} />
+              <span>Show managers from all cities <b>({mgrOffered.all})</b>{mgrOffered.hidden > 0 ? ` — ${mgrOffered.hidden} not on ${orig.cityName ?? "this city"}'s roster` : " — every manager already covers this city"}</span>
+            </label>
           </Section>
 
           {/* CAMERA lived here. Removed — Master Schedule carries the Veo toggle on every
@@ -967,7 +1053,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 {changed.map((k) => (
                   <li key={k} data-testid="mp-diff-item" data-key={k}>
                     <span className="mp-k">{LABELS[k] ?? k}</span>{" "}
-                    <span className="mp-to">{shownVal(k, cur[k], managers)}</span>
+                    <span className="mp-to">{shownVal(k, cur[k], [...managers, ...managersAll])}</span>
                   </li>
                 ))}
                 {/* the roster writes, IN THE ORDER THEY WILL BE SENT — team count first */}
@@ -980,6 +1066,20 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
               </ul>
             )}
           </div>
+          {/* THE CONFIRMATION SITS ON THE SAVE BAR, not in a window.confirm — it has to be readable,
+              it has to name the person and the amount, and it has to be assertable. Cancel sends
+              nothing; there is no request in flight while this is open. */}
+          {mgrConfirm && (
+            <div className="mp-mgrconfirm" data-testid="mp-mgr-confirm">
+              <b>This changes who gets paid for this match.</b>
+              <ul>{mgrConfirm.lines.map((l, i) => <li key={i}>{l}</li>)}</ul>
+              <div className="mp-mgrconfirm-b">
+                <button type="button" className="mp-btn" data-testid="mp-mgr-cancel" onClick={() => setMgrConfirm(null)}>Cancel — send nothing</button>
+                <button type="button" className="mp-btn mp-pri" data-testid="mp-mgr-go" disabled={saving} onClick={() => { void doSave(true); }}>
+                  {saving ? "Sending…" : "Confirm and send"}</button>
+              </div>
+            </div>
+          )}
           <div className="mp-btns">
             <span className="mp-sp" />
             {/* REVERT SENDS NOTHING. It discards intentions; it cannot take back a write, because
@@ -993,6 +1093,13 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
       </div>
     </div>
   );
+}
+
+/* ONE NAME LOOKUP, SEARCHING BOTH LISTS. It used to search the city roster only, so an off-city
+ * manager — and any manager who has since come off this city's roster — rendered as "id 41207" in
+ * the diff and in the confirmation. A confirmation that names an id is not naming a person. */
+function mgrNameIn(all: Manager[], id: unknown): string {
+  return all.find((m) => m.id === Number(id))?.name ?? (id == null || id === "" ? "—" : `id ${id}`);
 }
 
 function shownVal(k: string, v: unknown, managers: Manager[]): string {
@@ -1209,6 +1316,14 @@ const CSS = `
 .mp-cancelbtn:hover:not(:disabled){background:#8a1a12}
 .mp-cancelbtn:disabled{opacity:.5;cursor:not-allowed}
 .mp-cancelconfirm{display:block}
+.mp-allcities{display:flex;gap:8px;align-items:flex-start;margin-top:9px;font-size:12px;color:rgba(16,35,26,.62);line-height:1.45;cursor:pointer}
+.mp-allcities input{margin-top:2px;flex:none}
+.mp-allcities b{font-variant-numeric:tabular-nums;color:rgba(16,35,26,.8)}
+.mp-mgrconfirm{border:1px solid #F0C98A;background:#FFF7EA;border-radius:10px;padding:11px 13px;margin:0 0 10px;font-size:13px;color:#5E3D05;line-height:1.5}
+.mp-mgrconfirm b{display:block;margin-bottom:5px;color:#4A3004}
+.mp-mgrconfirm ul{margin:0 0 9px;padding-left:18px}
+.mp-mgrconfirm li{margin:2px 0}
+.mp-mgrconfirm-b{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
 .mp-cancel-line{font-size:13px;line-height:1.5;color:#5a1611;margin:0 0 12px}
 .mp-cancel-line b{font-weight:800;color:#3d0e0a}
 .mp-cancel-acts{display:flex;gap:9px;justify-content:flex-end;margin-top:12px}

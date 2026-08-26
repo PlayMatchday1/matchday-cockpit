@@ -19,6 +19,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { EDITABLE_KEYS, MONEY_KEYS as MONEY, TOGGLE_KEYS as TOGGLE, NULLABLE_NUM, fieldChanged, diffKeys, pick } from "@/lib/matchEditModel";
+/* THE SAME MODEL MATCH PANEL USES. Two surfaces can open the same match and both write managerId;
+ * giving each its own picker rule and its own confirmation wording is the two-paths-one-question
+ * shape that put $1,815 and $2,006 on two screens for four months. One model, one answer. */
+import {
+  pickerOptions, offeredCounts, confirmLines, normalizeManagerId,
+} from "@/lib/managerAssign";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { noteLogResponse } from "@/lib/logHealth";
 import LogHealthBanner from "@/components/LogHealthBanner";
@@ -44,9 +50,11 @@ const LADDER = ["fakeSpotLeft36h", "fakeSpotLeft24h", "fakeSpotLeft12h", "fakeSp
 const CATS: [string, string][] = [["OPEN", "Open — Open to all"], ["PREMIER", "Premier — four stars and up"], ["LEGENDS", "Legends"], ["ACADEMY", "Academy"], ["CO_ED", "Co-ed"], ["FEMINE", "Women’s"], ["TOURNAMENT", "Tournament"]];
 const TYPES: [string, string][] = [["REGULAR", "Regular"], ["EVENT", "Special event"], ["BRACKET", "Bracket"], ["GROUP", "Group"]];
 
-function specs(fields: FieldRow[], managers: { id: number; name: string }[] = []): Spec[] {
+function specs(fields: FieldRow[], managers: { id: number; name: string; offCity?: boolean }[] = []): Spec[] {
   const fieldOpts: [number, string][] = fields.map((f) => [f.id, `${f.city ? f.city + " — " : ""}${f.title}`]);
-  const mgrOpts: [number, string][] = managers.map((m) => [m.id, m.name]);
+  // An off-city person is LABELLED, never mixed in unmarked — the operator should be able to see
+  // that the picker has been widened.
+  const mgrOpts: [number, string][] = managers.map((m) => [m.id, m.offCity ? `${m.name} · other city` : m.name]);
   return [
     { key: "name", group: "match", kind: "text", label: "Name", wide: true },
     { key: "fieldId", group: "match", kind: "select", label: "Field", opts: fieldOpts },
@@ -160,6 +168,14 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
   // managerId as a raw id box while the drawer showed a name dropdown. The drawer's body is gone,
   // so reading them here is what keeps that capability alive.
   const [managers, setManagers] = useState<{ id: number; name: string }[]>([]);
+  /* THE ESCAPE, OFF BY DEFAULT. `managers` is this match's CITY roster — 28 of the 87 for a typical
+   * Austin fixture. A manager covering a one-off outside their listed cities is real, so the full
+   * roster is one visible checkbox away rather than unreachable. */
+  const [managersAll, setManagersAll] = useState<{ id: number; name: string }[]>([]);
+  const [showAllCities, setShowAllCities] = useState(false);
+  /* MANAGER CHANGES DO NOT RIDE ALONG ON "SAVE". This write decides who Manager Pay pays, so it
+   * stops here first and names the person, the match and the amount. */
+  const [mgrConfirm, setMgrConfirm] = useState<string[] | null>(null);
   const [players, setPlayers] = useState<Data[]>([]);
   const [meta, setMeta] = useState<Data | null>(null); // read-only bits (start/end, teams, isCancelled, occupancy)
   const [loaded, setLoaded] = useState<Data | null>(null);
@@ -169,7 +185,13 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
   const [msg, setMsg] = useState<{ kind: "ok" | "err" | "warn"; text: string } | null>(null);
   const [cancelArmed, setCancelArmed] = useState(false);
 
-  const FIELDS = useMemo(() => specs(fields, managers), [fields, managers]);
+  const mgrOffered = useMemo(() => offeredCounts(managers, managersAll), [managers, managersAll]);
+  const mgrPick = useMemo(() => pickerOptions(managers, managersAll, showAllCities),
+    [managers, managersAll, showAllCities]);
+  const FIELDS = useMemo(() => specs(fields, mgrPick), [fields, mgrPick]);
+  const mgrNameOf = (id: unknown) =>
+    [...managers, ...managersAll].find((m) => m.id === Number(id))?.name ??
+    (id == null || id === "" ? "—" : `id ${id}`);
 
   const ingest = useCallback((m: Data) => {
     const ed: Data = {};
@@ -208,7 +230,7 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
     const res = await authFetch(`/api/matchday/${FULL_EDITOR_ENV}/matches/${readId}`);
     const json = await res.json().catch(() => ({}));
     if (!res.ok) { setLoadErr(json?.error ?? `HTTP ${res.status}`); return; }
-    setFields(json.fields ?? []); setManagers(json.managers ?? []);
+    setFields(json.fields ?? []); setManagers(json.managers ?? []); setManagersAll(json.managersAllCities ?? []);
     setPlayers(mode === "create" ? [] : (json.players ?? []));
     ingest(json.match);
 
@@ -465,9 +487,34 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
     }
   };
 
-  const save = async () => {
+  const MGR_KEYS = ["managerId", "secondManagerId"];
+  const save = async (confirmedMgr = false) => {
     if (mode === "create") return createMatch();
     if (!changedKeys.length) return;
+    /* THE MANAGER GATE. Same rule and same wording as Match panel, because it is the same model —
+     * a confirmation that says something different on two screens about one write is worse than
+     * no confirmation, since whichever one you read feels authoritative. */
+    const mgrChanged = changedKeys.filter((k) => MGR_KEYS.includes(k));
+    if (mgrChanged.length > 0 && !confirmedMgr) {
+      const lines: string[] = [];
+      for (const k of mgrChanged) {
+        const toId = normalizeManagerId(state[k]);
+        const fromId = normalizeManagerId(loaded[k]);
+        lines.push(...confirmLines({
+          matchName: meta?.name == null ? null : String(meta.name),
+          whenText: meta?.startDate ? `${wallDate(String(meta.startDate))} ${wallTime(String(meta.startDate))}` : null,
+          cityLabel: (meta?.cityName as string | undefined) ?? null,
+          fromName: fromId == null ? null : mgrNameOf(fromId),
+          toName: toId == null ? null : mgrNameOf(toId),
+          maxPlayerCount: meta?.maxPlayerCount == null ? null : Number(meta.maxPlayerCount),
+          coManaged: normalizeManagerId(state.secondManagerId) != null,
+          offCity: !!mgrPick.find((o) => o.id === toId)?.offCity,
+        }).map((l) => (k === "secondManagerId" ? `Second manager — ${l}` : l)));
+      }
+      setMgrConfirm(lines);
+      return;
+    }
+    setMgrConfirm(null);
     setSaving(true); setMsg(null);
     // A DISTINCT SOURCE PER SURFACE. Without one, the drawer's writes logged as the route's
     // default and were indistinguishable from Match panel's — which is why an 8½-hour move on a
@@ -565,7 +612,17 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
         <div>
           {/* Match */}
           <section className="card"><div className="ch"><h2>Match</h2><span className="cnt" data-testid="cnt-match">{groupCount("match") ? `${groupCount("match")} changed` : ""}</span></div>
-            <div className="cb"><div className="grid">{inGroup("match").map(renderField)}
+            <div className="cb">
+              {/* THE ESCAPE, VISIBLE, AND IT SAYS WHAT IT ADDS. The default picker is this match's
+                  CITY roster; a manager covering a one-off outside their listed cities is real, and
+                  silently hiding them turns a real assignment into an impossible one. */}
+              <label className="allcities" data-testid="mgr-allcities">
+                <input type="checkbox" checked={showAllCities} onChange={(e) => setShowAllCities(e.target.checked)} disabled={mgrOffered.hidden === 0} />
+                <span>Show managers from all cities <b>({mgrOffered.all})</b>{mgrOffered.hidden > 0
+                  ? ` — ${mgrOffered.hidden} not on ${(meta?.cityName as string | undefined) ?? "this city"}'s roster`
+                  : " — every manager already covers this city"}</span>
+              </label>
+              <div className="grid">{inGroup("match").map(renderField)}
               {mode === "edit" ? (
                 <>
                   {/* DATE AND START TIME ARE EDITABLE. They were disabled here with a sentence
@@ -732,6 +789,19 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
             <div className="diffnote">Partial update: only these {changedKeys.length} field{changedKeys.length === 1 ? "" : "s"} are sent. Everything you did not touch is left exactly as it was.</div>
           </div></div>
         ) : null}
+        {/* THE MANAGER CONFIRMATION, ON THE SAVE BAR. Cancel sends nothing — there is no request in
+            flight while this is open. */}
+        {mgrConfirm && (
+          <div className="mgrconfirm" data-testid="mgr-confirm">
+            <b>This changes who gets paid for this match.</b>
+            <ul>{mgrConfirm.map((l, i) => <li key={i}>{l}</li>)}</ul>
+            <div className="mgrconfirm-b">
+              <button className="btn" data-testid="mgr-cancel" onClick={() => setMgrConfirm(null)}>Cancel — send nothing</button>
+              <button className="btn go" data-testid="mgr-go" disabled={saving} onClick={() => { void save(true); }}>
+                {saving ? "Sending…" : "Confirm and send"}</button>
+            </div>
+          </div>
+        )}
         <div className="sbin">
           <span className="sbtxt" data-testid="sb-text">{changedKeys.length ? <><b>{changedKeys.length}</b> {changedKeys.length === 1 ? "change" : "changes"} not saved</> : "No changes"}</span>
           {msg ? <span className="sbmsg" data-testid="sb-msg" style={{ color: msg.kind === "ok" ? "#046B45" : msg.kind === "warn" ? "#7A5200" : "#A83120" }}>{msg.kind === "warn" ? "⚠ " : ""}{msg.text}</span> : null}
@@ -739,7 +809,7 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
             <button className="btn" data-testid="revert" disabled={!changedKeys.length || saving} onClick={revert}>Revert</button>
             <button className="btn go" data-testid="save"
               disabled={saving || !canEdit || (mode === "edit" && !changedKeys.length)}
-              onClick={save} title={!canEdit ? "Read-only — you don't have EDIT MATCHES" : undefined}>
+              onClick={() => { void save(); }} title={!canEdit ? "Read-only — you don't have EDIT MATCHES" : undefined}>
               {saving ? (mode === "create" ? "Creating…" : "Saving…") : (mode === "create" ? "Create match" : "Save")}
             </button>
           </span>
@@ -830,6 +900,14 @@ const CSS = `
 .me .cnt.cap.over{color:#A83120;font-weight:800}.me .cnt.cap.over b{color:#A83120}
 .me .pfoot{font-size:11px;color:var(--muted);margin-top:10px;line-height:1.5}
 .me .savebar{position:fixed;left:0;right:0;bottom:0;background:var(--paper);border-top:1px solid var(--line);box-shadow:0 -8px 24px rgba(0,51,38,.09);z-index:60}
+.allcities{display:flex;gap:8px;align-items:flex-start;margin:0 0 12px;font-size:12px;color:rgba(16,35,26,.62);line-height:1.45;cursor:pointer}
+.allcities input{margin-top:2px;flex:none}
+.allcities b{font-variant-numeric:tabular-nums;color:rgba(16,35,26,.8)}
+.mgrconfirm{border-top:1px solid #F0C98A;background:#FFF7EA;padding:11px 16px;font-size:13px;color:#5E3D05;line-height:1.5}
+.mgrconfirm b{display:block;margin-bottom:5px;color:#4A3004}
+.mgrconfirm ul{margin:0 0 9px;padding-left:18px}
+.mgrconfirm li{margin:2px 0}
+.mgrconfirm-b{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
 /* PANEL MODE — the same content in Master Schedule's drawer. Only chrome changes: the drawer
    supplies the header and the production framing, so this stops claiming the viewport and the
    save bar sticks to the PANEL rather than spanning the screen behind it. */

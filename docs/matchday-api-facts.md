@@ -3708,3 +3708,58 @@ without shipping an endpoint fails the gate instead of shipping a button that do
 never rendered: `emailDisplay()` returns `Apple private relay · ID {n}`. **All 87 have a phone
 number**, so the ID and the phone carry the identity. Retool's add-manager modal searches **email
 only**, which cannot find any of those 14 — a weakness not rebuilt in Clubhouse.
+
+---
+
+## Assigning a match manager to a match (2026-08-26)
+
+**`PUT /admin/matches/{id}` with `{ managerId }` is the ONLY write the API offers on match
+managers.** Creating one and deleting one have no endpoint — see the section above.
+
+### DETACH — probed on staging match 3, each verified by reading the match back
+
+| body sent | result |
+|---|---|
+| `{ managerId: null }` | **DETACHED.** Read back `managerId: null`, `manager: null`. |
+| `{ managerId: "" }` | **HTTP 400 — rejected, did not land.** Manager still attached. |
+| field omitted (a different field sent instead) | **NOT APPLIED.** Manager still attached — PATCH semantics, exactly as the trap list says. |
+
+So **unassign works and stays enabled**, `null` is the only body that detaches, and **`""` must
+never reach the wire** — which matters because a cleared `<select>` yields `""`, not `null`.
+`normalizeManagerId()` (`src/lib/managerAssign.ts`) is the single place that mapping lives. The
+probe restored the original manager (398) and verified the restore.
+
+### Manager Pay reads manager_email, NOT manager_id — and that is a live coupling
+
+`managerPayCompute.ts` groups on **`mdapi_matches.manager_email`** (`if (m.manager_email)`) and
+keys its adjustments on that email. The write sets **`managerId`**. They are one source only
+because `refreshMatchMirror` rewrites `manager_id`, `manager_email`, `manager_first_name` and
+`manager_last_name` **from the same read-back payload** whenever `managerId` is among the written
+keys.
+
+**Measured 2026-08-26 on the mirror: 5,404 rows carry a `manager_id`, 5,404 carry a
+`manager_email`, ZERO have one without the other, and no `manager_id` maps to more than one
+email.** No drift today. But the thing holding them together is that one write-through — a path
+that set `manager_id` without it would keep paying the previous person. `manager-assign-test.ts`
+asserts the write-through touches `manager_email`, not only `manager_id`.
+
+### The picker, measured on production
+
+`GET /city-managers/users` with **no** `cityId` returns all **87**; with `cityId` it returns that
+city's roster. **A typical Austin fixture (cityId 1) offers 28 of the 87 by default**; the visible
+"show managers from all cities" control offers all 87, labelling the 59 extras as off-city.
+
+    cityId 1 ATX 28 · 2 HOU 17 · 3 SATX 15 · 4 ATL 8 · 5 STL 9
+    cityId 6 NYC 4 · 7 DFW 19 · 8 OKC 5 · 9 ELP 1 · 10 WAW 1
+
+### Two other things the API's list shape costs
+
+- `GET /admin/matches` returns **`{ data, limit, page, totalItems }`** — not an array. **`take` is
+  rejected 400** (`"property take should not exist"`); the parameter is **`limit`**.
+- **`second_manager_id` exists and 57 mirror rows carry one.** A co-managed match pays **$20 each**
+  rather than $30 — `payAmount(max, coManaged)` already encodes it.
+
+### Unmanaged upcoming matches, 2026-08-26
+
+**188 upcoming matches (start_date ≥ today, not cancelled); 5 have no manager attached** —
+WAW 3, ATX 2, all inside the next 14 days. Pay bands: 3 at max 14, 2 at max 22.

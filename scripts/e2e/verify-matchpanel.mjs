@@ -218,7 +218,13 @@ const FLD = [
   { t: "mp-type", key: "type", kind: "select", render: "REGULAR", edit: { select: "EVENT" } },
   { t: "mp-field", key: "fieldId", kind: "select", render: "199", edit: { select: "201" } },
   { t: "mp-mgr", key: "managerId", kind: "select", render: "65903", edit: { select: "44120" } },
-  { t: "mp-mgr2", key: "secondManagerId", kind: "select", render: "", edit: { select: "51882" } },
+  /* VALUE-PATH EDIT, 2026-08-26, ITEMISED. This asserted render:"" for a null secondManagerId.
+   * The empty sentinel is now "none", and that is a fix rather than a rename: a <select> whose
+   * empty option is value="" yields the string "", and the MatchDay API REJECTS managerId:"" with
+   * HTTP 400 — proven on staging match 3, where null detached and "" did not. The assertion still
+   * checks the same thing (a null manager renders as the no-manager option); only the sentinel it
+   * names has changed. */
+  { t: "mp-mgr2", key: "secondManagerId", kind: "select", render: "none", edit: { select: "51882" } },
   { t: "mp-max2", key: "maxTeamSize2Team", kind: "select", render: "16", edit: { select: "20" } },
   { t: "mp-max4", key: "maxTeamSize4Team", kind: "select", render: "28", edit: { select: "36" } },
   { t: "mp-free", key: "isFreeMember", kind: "toggle", render: true, edit: { click: true } },
@@ -309,8 +315,25 @@ async function main() {
   puts = []; await page.selectOption('[data-testid="mp-max2"]', "20"); await page.click('[data-testid="mp-save"]'); await page.waitForTimeout(400);
   eq("totals: a 10 × 10 selection sends maxTeamSize2Team 20", puts.at(-1)?.maxTeamSize2Team, 20);
 
-  puts = []; await page.selectOption('[data-testid="mp-mgr"]', "44120"); await page.click('[data-testid="mp-save"]'); await page.waitForTimeout(400);
+  /* THE MANAGER CONFIRMATION GATE, 2026-08-26, ITEMISED. This block used to be one click. Save no
+   * longer commits a manager change on its own: this write decides who Manager Pay pays, so it
+   * stops and names the person, the match and the amount first. The ORIGINAL ASSERTION IS KEPT
+   * VERBATIM below — the body must still carry the numeric id — and the new step in front of it is
+   * strictly stronger: Save ALONE must send nothing at all. */
+  puts = []; await page.selectOption('[data-testid="mp-mgr"]', "44120"); await page.click('[data-testid="mp-save"]');
+  await page.waitForSelector('[data-testid="mp-mgr-confirm"]', { timeout: 6000 });
+  eq("manager: Save alone sends NOTHING — it stops at the confirmation", puts.length, 0);
+  { const cf = await page.$eval('[data-testid="mp-mgr-confirm"]', (e) => e.textContent);
+    eq("manager: the confirmation names an amount, not just a field", /\$\d+/.test(cf), true);
+    eq("manager: the confirmation never names a bare id", /\bid \d+/.test(cf), false); }
+  await page.click('[data-testid="mp-mgr-cancel"]');
+  await page.waitForSelector('[data-testid="mp-mgr-confirm"]', { state: "detached", timeout: 6000 });
+  eq("manager: Cancel sends nothing either", puts.length, 0);
+  await page.click('[data-testid="mp-save"]');
+  await page.waitForSelector('[data-testid="mp-mgr-confirm"]', { timeout: 6000 });
+  await page.click('[data-testid="mp-mgr-go"]'); await page.waitForTimeout(400);
   eq("manager: the staged body carries the numeric id 44120", puts.at(-1)?.managerId, 44120);
+  eq("manager: …and nothing else rode along with it", Object.keys(puts.at(-1) ?? {}), ["managerId"]);
 
   // ── password NEVER in any body ──
   eq("password never appears in any PUT body", puts.concat([]).some((b) => JSON.stringify(b).includes("password")), false);
