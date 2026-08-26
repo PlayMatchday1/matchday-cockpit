@@ -3296,3 +3296,53 @@ page does not read `fin_venue_cost_overrides` at all.
 
 **PARMER's August is now $2,006.00 on both paths.** Nothing is frozen —
 `partner_weekly_payments` has zero rows — so the three unplayed matches still move it.
+
+## RECURRING EXPENSES — TWO PERIOD CONTROLS, NEITHER AUTHORITATIVE (2026-08-26)
+
+The page had a header picker (Month/Quarter/Year) AND a QUARTER row inside the grid. The grid
+obeyed the second; every label obeyed the first. With the header on **August 2026**:
+
+| readout | showed | should have shown |
+|---|---|---|
+| Marketing chip | $12,971 (Jul+Aug+Sep) | **$5,721** |
+| TOTAL column | the quarter | the window the header names |
+| pre-July rows | real May/June money, **total $0.00** | a dash — no spend in this window |
+
+`buildColumns` took a `QuarterInfo` plus a drill-down month, so it could only ever draw a quarter.
+It now takes **`FinancePeriod.months`** — whatever the header says, at any grain — and the in-grid
+control is gone. The Total header names its window (**TOTAL AUG**), and context columns are labelled
+CONTEXT rather than PRIOR Q since the window is no longer necessarily a quarter.
+
+**August 2026, all three readouts: $21,621.02.** Chip sum = sum of row totals = BOOKED TOTAL =
+visible column sum. `recurring-window-test.ts` (25 assertions) asserts that identity at month,
+quarter and year, plus that context columns never enter a total and a context-only row is flagged
+rather than rendered $0.00.
+
+**The "amount changes" indicator now reads 8, not 17.** Its detection logic is untouched — it counts
+non-context `changed` cells, and the window it counts over is now a month instead of a quarter. That
+is the fix working, not a second defect.
+
+## I BROKE THE PRODUCTION BUILD AND THE PUSH DID NOT LAND (2026-08-26)
+
+The PARMER fix made `partnerStats` import `buildRentalDashboard` — correct, since reusing the
+dashboard's own function is the point — but `partnerRentalDashboard.ts` carried `import
+"server-only"`, and `useFinanceData` is a CLIENT hook. Every finance page failed to compile:
+
+    ./src/lib/fieldEconomics.ts [Client Component SSR]
+      -> ./src/components/finance/CostSection.tsx
+        -> at ./src/lib/partnerRentalDashboard.ts:1:1
+
+**`npm run verify` passed** — it typechecks and runs node suites; it does not build the client
+bundle. The Vercel deploy went **● Error** and production kept serving the previous deployment, so
+`$1,815` was still live while the commit said it was fixed.
+
+**`verify:seam-artifact` caught it** — `FAIL 057e17f` with that exact chain — and it only caught it
+because `tsx` was changed to `npx tsx` that morning. Before that it printed "command not found" and
+recorded no verdict at all.
+
+**THE LESSON: read `.seam-artifact-result` after pushing.** It is the only check in this repo that
+compiles what the browser actually receives. `git push` reporting success and `npm run verify`
+passing are both true and neither means the deploy built.
+
+The marker was removed rather than worked around: the module is pure — its only imports are
+`partnerPayoutModel`, `gamedayModel` and `mdapiFakePlayer`, all pure by design.

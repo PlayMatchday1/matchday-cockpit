@@ -10,6 +10,7 @@ import type {
   RecurringColumn,
   RecurringSeries,
 } from "@/lib/recurringExpenses";
+import { isContextOnly } from "@/lib/recurringExpenses";
 import type { FinExpense } from "@/lib/useFinanceData";
 
 const money = (n: number) =>
@@ -21,6 +22,7 @@ export default function RecurringExpensesGrid({
   columns,
   colTotals,
   grandTotal,
+  windowLabel,
   onEditRow,
   onOpenCell,
   onFillCell,
@@ -29,6 +31,9 @@ export default function RecurringExpensesGrid({
   columns: RecurringColumn[];
   colTotals: number[];
   grandTotal: number;
+  /* WHAT THE TOTAL COLUMN SUMS, in the header. "TOTAL" alone sitting beside context columns it
+   * excludes is what made a row of real May and June money read $0.00 with no explanation. */
+  windowLabel: string;
   onEditRow: (row: FinExpense) => void; // single editable booked/changed cell
   onOpenCell: (series: RecurringSeries, cell: RecurringCell) => void; // multi-row cell
   onFillCell: (series: RecurringSeries, month: string) => void; // gap / empty / future
@@ -52,12 +57,16 @@ export default function RecurringExpensesGrid({
                   }`}
                 >
                   {c.month.split(" ")[0]}
+                  {/* NOT "PRIOR Q" — the window is whatever the header names, and these are the
+                      months before it whatever its grain. */}
                   {c.context && (
-                    <span className="block text-[7.5px] tracking-widest opacity-70">PRIOR Q</span>
+                    <span className="block text-[7.5px] tracking-widest opacity-70">CONTEXT</span>
                   )}
                 </th>
               ))}
-              <th className="px-4 py-3 text-right">Total</th>
+              <th className="px-4 py-3 text-right whitespace-nowrap" data-testid="rec-total-head">
+                Total {windowLabel}
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -103,8 +112,15 @@ export default function RecurringExpensesGrid({
                       />
                     </td>
                   ))}
-                  <td className="px-4 py-3 text-right font-black tabular-nums text-coral">
-                    {money(s.rowTotal)}
+                  {/* ZERO AND NOT-IN-THIS-WINDOW ARE DIFFERENT FACTS. A row whose only money is in
+                      the context columns has a window total of nothing — but rendering it as
+                      $0.00 says "this line was booked at zero", which is false and is exactly how
+                      the old grid displayed real May and June money against a $0.00 total. */}
+                  <td className={"px-4 py-3 text-right font-black tabular-nums "
+                    + (isContextOnly(s) ? "text-deep-green/30" : "text-coral")}
+                    data-testid="rec-row-total"
+                    title={isContextOnly(s) ? `No spend in this window. Context months carry ${money(s.cells.filter((c) => c.context).reduce((t, c) => t + c.amount, 0))}.` : undefined}>
+                    {isContextOnly(s) ? "—" : money(s.rowTotal)}
                   </td>
                 </tr>
               ))

@@ -110,34 +110,42 @@ export type RecurringSeries = {
 
 export type RecurringColumn = { month: string; ord: number; context: boolean };
 
-// Columns for a quarter: the two trailing months of the prior quarter (context,
-// greyed, excluded from totals) followed by the quarter's three months. When a
-// single month is filtered, only that column shows and there is no context.
+/* COLUMNS FOR THE WINDOW THE HEADER NAMES — and nothing else.
+ *
+ * THE BUG THIS REPLACES. This function took a QUARTER and a month drill-down, so the grid always
+ * rendered a quarter no matter what the page header said. With the header on August 2026 the grid
+ * drew Jul/Aug/Sep plus May/Jun as context, a second in-grid QUARTER control offered its own
+ * All/Jul/Aug/Sep, and the two never spoke. The category chips summed the quarter ($12,971 for
+ * Marketing) while the header said August ($5,721), and the TOTAL column summed the quarter too —
+ * so a row whose money was all in May and June displayed real figures and totalled $0.00.
+ *
+ * `inWindow` IS THE HEADER'S OWN MONTH LIST (FinancePeriod.months), so month/quarter/year all work
+ * without this function knowing which grain it was handed. There is no drill-down parameter: one
+ * period control, and it is the header.
+ *
+ * CONTEXT COLUMNS ARE STILL WORTH HAVING — they are how you spot a recurring line that did not get
+ * booked — but they are excluded from every total, and the Total header now NAMES the window it
+ * sums so a column headed plain TOTAL can never sit beside columns it excludes. */
 export function buildColumns(
-  quarter: QuarterInfo,
-  monthFilter: string | null,
+  inWindow: readonly { key: string }[] | readonly string[],
+  contextCount = 2,
+  floorOrd: number | null = null,
 ): RecurringColumn[] {
-  if (monthFilter) {
-    return [{ month: monthFilter, ord: monthOrd(monthFilter), context: false }];
+  const keys = (inWindow as readonly (string | { key: string })[]).map((m) =>
+    typeof m === "string" ? m : m.key,
+  );
+  if (keys.length === 0) return [];
+  const cols: RecurringColumn[] = keys.map((k) => ({ month: k, ord: monthOrd(k), context: false }));
+  const firstOrd = cols[0].ord;
+  const ctx: RecurringColumn[] = [];
+  for (let i = contextCount; i >= 1; i--) {
+    const ord = firstOrd - i;
+    // Never draw a month below the record floor: there is no data there, and a column of blanks
+    // reads as "nothing was booked" rather than "we do not hold this".
+    if (floorOrd != null && ord < floorOrd) continue;
+    ctx.push({ month: ordToMonthKey(ord), ord, context: true });
   }
-  const inQ: RecurringColumn[] = quarter.months.map((m) => ({
-    month: m.key,
-    ord: monthOrd(m.key),
-    context: false,
-  }));
-  // Prior quarter (may be null at EARLIEST_QUARTER) → last 2 months as context.
-  const priorQ =
-    quarter.quarter === 1
-      ? getQuarterByKey(`${quarter.year - 1}Q4`)
-      : getQuarterByKey(`${quarter.year}Q${quarter.quarter - 1}`);
-  const ctx: RecurringColumn[] = priorQ
-    ? priorQ.months.slice(-2).map((m) => ({
-        month: m.key,
-        ord: monthOrd(m.key),
-        context: true,
-      }))
-    : [];
-  return [...ctx, ...inQ];
+  return [...ctx, ...cols];
 }
 
 // Build the recurring series for a set of columns. `expenses` is the full
@@ -231,6 +239,21 @@ export function buildRecurringSeries(
   // Biggest line items first; stable tiebreak by label.
   out.sort((a, b) => b.rowTotal - a.rowTotal || a.label.localeCompare(b.label));
   return out;
+}
+
+/* THE SUM OF THE WINDOW, for the BOOKED TOTAL row. Context columns are excluded — the same rule
+ * rowTotal follows — so the chip, the row totals and this figure are three views of one number.
+ * partner-... no: recurring-window-test.ts asserts they agree, because they did not. */
+export function windowTotal(series: RecurringSeries[]): number {
+  return series.reduce((s, sr) => s + sr.rowTotal, 0);
+}
+
+/** Does this row have money ONLY in context columns? Then its window total is not zero — it is
+ *  NOT APPLICABLE, and the two must not render alike. */
+export function isContextOnly(sr: RecurringSeries): boolean {
+  const inWin = sr.cells.filter((c) => !c.context).reduce((s, c) => s + c.amount, 0);
+  const ctx = sr.cells.filter((c) => c.context).reduce((s, c) => s + c.amount, 0);
+  return inWin === 0 && ctx !== 0;
 }
 
 // Column totals (booked) over the visible series, per the same column order.

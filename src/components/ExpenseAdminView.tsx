@@ -24,6 +24,7 @@ import {
   type RecurringSeries,
 } from "@/lib/recurringExpenses";
 import { type Q2Month } from "@/lib/financeStats";
+import { useFinancePeriod } from "@/lib/financePeriodContext";
 import { useFinanceQuarter } from "@/lib/financeQuarter";
 import { useAuth } from "@/lib/useAuth";
 import { isCityHidden } from "@/lib/types";
@@ -97,6 +98,11 @@ export default function ExpenseAdminView() {
   const { data, loading } = useFinanceData();
   const { appUser } = useAuth();
   const quarter = useFinanceQuarter();
+  /* THE HEADER PICKER IS THE ONLY PERIOD CONTROL. The recurring grid used to render a fixed
+   * quarter and carry its own All/Jul/Aug/Sep row, so the page had two period controls with no
+   * relationship — the chips summed one window and the header named another. `period.months` is
+   * whatever the header says, month or quarter or year. */
+  const { period } = useFinancePeriod();
 
   const [monthFilter, setMonthFilter] = useState<MonthFilter>("ALL");
   const [rangeFrom, setRangeFrom] = useState("");
@@ -125,8 +131,8 @@ export default function ExpenseAdminView() {
   // Recurring vs Ledger view. Recurring is the default — it groups the flat
   // rows into line items so a missing month shows as a gap.
   const [view, setView] = useState<"rec" | "led">("rec");
-  // Single-month drill-down within the recurring grid (null = whole quarter).
-  const [gridMonth, setGridMonth] = useState<string | null>(null);
+  // NO GRID-LEVEL PERIOD STATE. There was a gridMonth drill-down here; the page header's picker
+  // is now the only period control, so the grid holds no window of its own to disagree with it.
   // Multi-month batch add drawer (+ optional seed from a clicked gap cell).
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchSeed, setBatchSeed] = useState<
@@ -175,7 +181,9 @@ export default function ExpenseAdminView() {
   // Per-category spend for the ACTIVE PERIOD — the number on the chip, and what decides which
   // chips open on.
   const categorySpend = useMemo(() => {
-    const months = new Set(quarter.months.map((m) => m.key));
+    // THE HEADER'S WINDOW, not the containing quarter. These chips read $12,971 for Marketing
+    // with August selected — Jul + Aug + Sep — while the header said August ($5,721).
+    const months = new Set(period.months);
     const out = new Map<string, number>();
     for (const c of selectableCategories) out.set(c, 0);
     for (const r of allRows) {
@@ -184,7 +192,7 @@ export default function ExpenseAdminView() {
       out.set(r.category, (out.get(r.category) ?? 0) + Number(r.amount || 0));
     }
     return out;
-  }, [allRows, selectableCategories, quarter]);
+  }, [allRows, selectableCategories, period.months]);
 
   const CHIP_KEY = "finance:expenses:categories";
   // Restore a remembered selection; otherwise open on "only the ones with spend".
@@ -310,16 +318,7 @@ export default function ExpenseAdminView() {
     return rows;
   }, [allRows, cityFilter, activeCats]);
 
-  // Ignore a single-month selection that isn't in the active quarter (e.g. the
-  // page-level ?q selector changed quarters while a month drill-down was set).
-  const effectiveGridMonth = useMemo(
-    () => (gridMonth && quarter.months.some((m) => m.key === gridMonth) ? gridMonth : null),
-    [gridMonth, quarter],
-  );
-  const columns = useMemo(
-    () => buildColumns(quarter, effectiveGridMonth),
-    [quarter, effectiveGridMonth],
-  );
+  const columns = useMemo(() => buildColumns(period.months), [period.months]);
   const series = useMemo(
     () => buildRecurringSeries(seriesRows, columns, nowOrd),
     [seriesRows, columns, nowOrd],
@@ -451,23 +450,15 @@ export default function ExpenseAdminView() {
 
       <div className="mb-5 flex flex-wrap items-end gap-3 rounded-2xl border-[1.5px] border-cream-line bg-white p-4 shadow-md shadow-deep-green/10">
         {view === "rec" ? (
-          <Filter label={`Quarter · ${quarter.label}`}>
-            <div className="inline-flex flex-wrap gap-1 rounded-lg border border-cream-line bg-cream-soft p-1">
-              <Seg on={gridMonth === null} onClick={() => setGridMonth(null)}>
-                All
-              </Seg>
-              {quarter.months.map((m) => (
-                <Seg
-                  key={m.key}
-                  on={gridMonth === m.key}
-                  onClick={() => setGridMonth(m.key)}
-                >
-                  {m.shortName}
-                  <span className="ml-1 text-[9px] opacity-60">{monthCounts[m.key] ?? 0}</span>
-                </Seg>
-              ))}
-            </div>
-          </Filter>
+          /* THE SECOND PERIOD CONTROL IS GONE. This row was a QUARTER selector with its own
+             All/Jul/Aug/Sep, sitting on a page whose header already names a period — two controls
+             with no relationship, and the grid obeyed this one while every label obeyed the other.
+             The header picker is now the only period control on the page. */
+          <div className="text-[11.5px] leading-snug text-deep-green/50" data-testid="rec-window">
+            Showing <b className="text-deep-green/70">{period.label}</b>
+            {period.months.length > 1 && <> · {period.months.length} months</>}
+            . Greyed columns before it are context and are not in any total.
+          </div>
         ) : (
           <>
             <Filter label="Month">
@@ -603,6 +594,9 @@ export default function ExpenseAdminView() {
             columns={columns}
             colTotals={colTot}
             grandTotal={grandTotal}
+            // The Total column must NAME the window it sums. A column headed plain TOTAL sitting
+            // beside context columns it excludes is the bug, not the columns.
+            windowLabel={period.grain === "month" ? period.label.split(" ")[0].slice(0, 3).toUpperCase() : period.label.toUpperCase()}
             onEditRow={openEdit}
             onOpenCell={(s, cell) => setMultiCell({ series: s, cell })}
             onFillCell={fillCell}

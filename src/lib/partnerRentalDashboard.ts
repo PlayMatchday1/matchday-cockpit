@@ -1,4 +1,23 @@
-import "server-only";
+/* NOT server-only, DELIBERATELY — and it used to be.
+ *
+ * This module is PURE: it takes rows and parameters and returns numbers. Its only imports are
+ * partnerPayoutModel, gamedayModel and mdapiFakePlayer, all of which are pure by design
+ * (gamedayModel says so on its first line). There is no client, no key and no query in it.
+ *
+ * The marker was removed when Field Costs began computing partner payouts through the SAME
+ * function the dashboard uses, rather than a second implementation of it. useFinanceData is a
+ * client hook, so the chain lib/partnerStats -> here now reaches the browser bundle, and
+ * `server-only` broke the production build on every finance page:
+ *
+ *   ./src/lib/fieldEconomics.ts [Client Component SSR]
+ *     -> ./src/components/finance/CostSection.tsx
+ *       -> at ./src/lib/partnerRentalDashboard.ts:1:1
+ *
+ * npm run verify does not build the client bundle, so it passed. verify:seam-artifact does, and
+ * caught it — see .seam-artifact-result. READ THAT VERDICT AFTER PUSHING; it is the only check
+ * that compiles what the browser actually receives.
+ *
+ * If anything server-side is ever added here, split it out rather than restoring this line. */
 
 // Builds the RENTAL_PLUS_PROFIT_SHARE dashboard from the SAME rows every other partner dashboard
 // reads (fetchPartnerRows → fetchLegacyMatchRegistrations). Nothing here re-queries and nothing

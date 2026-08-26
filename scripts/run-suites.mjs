@@ -57,6 +57,12 @@ const NODE_SUITES = [
   // deal was computed on stale seed columns — $1,815 on every internal surface against $2,006 on
   // the partner's own page. Structural, not numeric: it also fails if a NEW PayoutModel is added
   // without a parity case, so the next non-standard deal cannot quietly misstate a city.
+  // RECURRING EXPENSES — ONE WINDOW, THREE READOUTS, ONE NUMBER. The page had two period controls
+  // that never spoke: the chips summed the quarter while the header said August, and the TOTAL
+  // column summed a window that excluded columns sitting right beside it, so rows with real May
+  // and June money totalled $0.00. Structural — it asserts the chip, the row totals and the
+  // booked total are the same figure at every grain.
+  "scripts/recurring-window-test.ts",
   "scripts/partner-payout-parity-test.ts",
   "scripts/meta-ad-spend-test.ts",
   // THE LEDGER FLOOR IS NOT A TUNABLE. Its own suite because the reason it exists is not the
