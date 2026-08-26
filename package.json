@@ -10,7 +10,7 @@
     "verify": "tsc --noEmit && node scripts/run-suites.mjs",
     "verify:e2e": "node scripts/run-suites.mjs --e2e",
     "verify:e2e:quarantine": "node scripts/run-suites.mjs --e2e --quarantine",
-    "verify:seam-artifact": "NODE_OPTIONS=--conditions=react-server tsx scripts/seam-artifact-check.ts",
+    "verify:seam-artifact": "NODE_OPTIONS=--conditions=react-server npx tsx scripts/seam-artifact-check.ts",
     "postinstall": "git config core.hooksPath .githooks || true",
     "check:copy-match": "node scripts/e2e/check-copy-match.mjs",
     "check:one-editor": "node scripts/e2e/check-one-editor.mjs"

@@ -48,6 +48,11 @@ const NODE_SUITES = [
   // WARSAW — the first city that is not in types.CITIES. Nothing had ever tested one, which is how
   // a half-registered city shipped: WAW was in CITY_SCOPES and nowhere else. Also holds the line
   // the other way — a partner market must never appear in CITIES or CITY_DISPLAY_ORDER.
+  // META AD SPEND. In the fast set because it is a background job that DELETES rows in the finance
+  // ledger and rewrites them. Its three failure modes are all silent: a dropped market understates
+  // spend, a widened ownership predicate eats hand-entered rows with no undo, and a float in the
+  // money path is wrong for months before anyone notices. None are visible on the page.
+  "scripts/meta-ad-spend-test.ts",
   "scripts/mutation-tests.ts",
   "scripts/prod-guard-test.ts",
   "scripts/stage-denylist-test.ts",

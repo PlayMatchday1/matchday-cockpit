@@ -26,6 +26,11 @@ const DETECT_ONLY = [
   "MATCHDAY_PROD_API_PASSWORD",
   "MATCHDAY_STAGE_API_PASSWORD",
   "META_APP_SECRET",
+  // The ADS token — a Business Manager system user token, ads_read only. Distinct from
+  // META_ACCESS_TOKEN above, which is scoped for WhatsApp Business messaging and must never be
+  // used for ads. Sent as an Authorization header, never as an access_token query parameter, so it
+  // cannot leak into a logged URL; see redactMetaError in metaAdSpend.ts for the second belt.
+  "META_ADS_ACCESS_TOKEN",
   "WHATSAPP_VERIFY_TOKEN",
   "VEO_INBOUND_SECRET",
 ] as const;
