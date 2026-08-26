@@ -34,15 +34,18 @@ console.log("WEB SUBMISSIONS\n");
 
 // ── 1. THE COLLISION. The point of the whole module. ───────────────────────────────────────────
 console.log("the same field id, two forms");
+// FIXTURE IDS ARE THE LIVE ONES, read off ?forms=1 on 2026-08-26. They were transcribed from the
+// brief first and three were wrong — field_2a1c0f4, field_6b2d114 and field_9c3a201 do not exist.
+// A fixture built on a guess asserts the guess.
 {
   const partnerRow = {
     name: "Sarah", message: "Georgia", email: "s@example.com",
-    field_dff8b68: "Crossbar Sports", field_15bf1e3: "Atlanta", field_2a1c0f4: "Grow the game",
+    field_dff8b68: "Crossbar Sports", field_15bf1e3: "Atlanta", field_187a8c9: "Grow the game",
   };
   const teamRow = {
     name: "Ernesto", message: "Mon-thurs 6-9", email: "e@example.com",
-    field_dff8b68: "Hernandez", field_15bf1e3: "Austin", field_9c3a201: "9152490370",
-    field_6b2d114: "Match Manager", field_71ab0e5: "Soccer is a passion",
+    field_dff8b68: "Hernandez", field_15bf1e3: "Austin", field_ffeb63a: "9152490370",
+    field_cbcd9d0: "Match Manager", field_706ba38: "Soccer is a passion",
   };
   const p = resolveFields("f7eed00", partnerRow);
   const t = resolveFields("4e61155c", teamRow);
@@ -65,9 +68,23 @@ console.log("the same field id, two forms");
   is("…identically to the id-keyed row", fromCsv.byLabel["Company"], p.byLabel["Company"]);
   /* AND IT CANNOT REINTRODUCE THE COLLISION: a label is only honoured on the form that declares
    * it, so "Company" means nothing on the team application. */
+  /* BEHAVIOUR CHANGED HERE, ON PURPOSE. This used to assert that "Company" on the team form
+   * resolved to `undefined` — true while a known form with ZERO matching fields still counted as
+   * resolved. It does not any more: a form can be in the registry and still fail to describe a
+   * submission, and calling that a success hid a real bug (the four CSV-only forms matched nothing
+   * on an API row, every field came back "not asked", and our own test rows stopped being
+   * recognised — 655 rows built where 647 was right).
+   *
+   * So the row now keeps its RAW key and is FLAGGED. The thing that must never happen is unchanged
+   * and is still asserted: the company does not become somebody's surname. */
   const csvOnTeam = resolveFields("4e61155c", { Company: "Crossbar Sports" });
-  is("'Company' does not resolve on the team form", csvOnTeam.byLabel["Company"], undefined);
-  is("…and its Last Name is NOT the company", csvOnTeam.byLabel["Last Name"] === "Crossbar Sports", false);
+  is("a known form that matches NOTHING is flagged unresolved", csvOnTeam.unresolved, true);
+  is("…the value survives under its RAW key", csvOnTeam.byLabel["Company"], "Crossbar Sports");
+  is("…and it is NOT filed as a surname", csvOnTeam.byLabel["Last Name"], undefined);
+  // CONTROL: a form that DOES match is still resolved, so the rule cannot fire on a good row.
+  is("CONTROL — a matching row is still resolved", resolveFields("4e61155c", { name: "Jo" }).unresolved, false);
+  // An EMPTY submission is not this case and must not be flagged.
+  is("an empty submission is not flagged", resolveFields("4e61155c", {}).unresolved, false);
 }
 
 // ── 2. AN UNKNOWN FORM IS FLAGGED, NEVER RELABELLED ────────────────────────────────────────────
@@ -84,13 +101,13 @@ console.log("\nunresolvable forms (the 109 historical rows)");
 // ── 3. NOT ASKED IS NOT BLANK ──────────────────────────────────────────────────────────────────
 console.log("\nnot-asked vs blank");
 {
-  const noRole = resolveFields("4e61155c", { name: "Jo", field_6b2d114: undefined as unknown as string });
-  const askedBlank = resolveFields("4e61155c", { name: "Jo", field_6b2d114: "" });
+  const noRole = resolveFields("4e61155c", { name: "Jo", field_cbcd9d0: undefined as unknown as string });
+  const askedBlank = resolveFields("4e61155c", { name: "Jo", field_cbcd9d0: "" });
   is("a field the form never sent is NOT_ASKED", noRole.byLabel["Job Role"], "");
   is("…identified by wasAsked", wasAsked(resolveFields("4e61155c", { name: "Jo" }).byLabel["Job Role"]), false);
   is("CONTROL — asked but blank IS asked", wasAsked(askedBlank.byLabel["Job Role"]), true);
   is("…and has no value", hasValue(askedBlank.byLabel["Job Role"]), false);
-  is("a real answer has a value", hasValue(resolveFields("4e61155c", { field_6b2d114: "Match Manager" }).byLabel["Job Role"]), true);
+  is("a real answer has a value", hasValue(resolveFields("4e61155c", { field_cbcd9d0: "Match Manager" }).byLabel["Job Role"]), true);
   is("NOT_ASKED is a distinct sentinel", typeof NOT_ASKED, "symbol");
 }
 
@@ -190,8 +207,8 @@ console.log("\nCSV path vs SYNC path");
     submissionId: 9001, elementId: "4e61155c", formName: "Team Application",
     referer: "https://playmatchday.com/apply", createdAt: "2026-08-24T13:05:11Z",
     fields: { name: "Ernesto", field_dff8b68: "Hernandez", email: "Netos1KRR@Gmail.com",
-              field_15bf1e3: "Austin, TX", field_9c3a201: "9152490370",
-              field_6b2d114: "Match Manager", message: "Mon-thurs 6-9\\r\\nSat 8am" },
+              field_15bf1e3: "Austin, TX", field_ffeb63a: "9152490370",
+              field_cbcd9d0: "Match Manager", message: "Mon-thurs 6-9\\r\\nSat 8am" },
   }, PINNED_FORMS, "sync");
   const viaCsv = toSubmissionRow({
     submissionId: 9001, elementId: "4e61155c", formName: "Team Application",
@@ -223,6 +240,18 @@ console.log("\nCSV path vs SYNC path");
   is("an unseen element_id is flagged unresolved", unseen.unresolved, true);
   is("…keeps its raw key", unseen.fields["field_dff8b68"], "Acme");
   is("…and borrows NO label from another form", unseen.fields["Company"], undefined);
+  /* THE PINS MUST DESCRIBE THE FORMS THEY CLAIM TO. They were wrong in three field ids for a whole
+   * phase because nothing compared them to anything. This does not call the endpoint — it asserts
+   * the SHAPE that the endpoint was observed to have, so a hand-edit to the pins that invents an id
+   * fails here rather than resolving confidently to a wrong label. */
+  is("f7eed00 declares exactly the live field ids", Object.keys(PINNED_FORMS.f7eed00.labels).sort(),
+    ["email", "field_15bf1e3", "field_187a8c9", "field_dff8b68", "field_ffeb63a", "message", "name"]);
+  is("4e61155c declares exactly the live field ids", Object.keys(PINNED_FORMS["4e61155c"].labels).sort(),
+    ["email", "field_15bf1e3", "field_706ba38", "field_cbcd9d0", "field_dff8b68", "field_ffeb63a", "message", "name"]);
+  // A SHARED ID IS NOT AUTOMATICALLY A COLLISION: field_ffeb63a is Phone on both. The rule is that
+  // an id means whatever ITS OWN form says, not that shared ids must differ.
+  is("field_ffeb63a is Phone on BOTH forms",
+    [PINNED_FORMS.f7eed00.labels.field_ffeb63a, PINNED_FORMS["4e61155c"].labels.field_ffeb63a], ["Phone", "Phone"]);
   is("the partnerships form is the only partner stream", [streamFor("f7eed00"), streamFor("4e61155c"), streamFor("brandnew")], ["partner", "team", "team"]);
   is("a space-separated timestamp parses", toIso("2026-08-24 13:05:11"), "2026-08-24T13:05:11.000Z");
   is("…identically to the T form", toIso("2026-08-24T13:05:11Z"), toIso("2026-08-24 13:05:11"));

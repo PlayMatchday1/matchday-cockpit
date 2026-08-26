@@ -32,18 +32,38 @@ export type FormLabels = {
  * Only the two forms that still resolve from ?forms=1 are pinned here; the other four are loaded
  * from the CSV import and merged at runtime. The two pinned ones are the pair that PROVES the
  * collision, and they are the fixture the suite asserts against. */
+/* ── THE REGISTRY, KEYED ON element_id ─────────────────────────────────────────────────────────
+ * READ OFF THE LIVE ENDPOINT 2026-08-26, not transcribed from a description. An earlier version of
+ * this map was written from the brief and had THREE WRONG FIELD IDS — field_2a1c0f4 for the vision
+ * question (really field_187a8c9), and Job Role and Phone under ids that do not exist. Wrong pins
+ * are worse than none: they resolve confidently to the wrong label.
+ *
+ * These two are a FALLBACK AND A FIXTURE, not the authority. ?forms=1 wins wherever it answers, and
+ * the stored web_form_labels rows win over these — the merge order is
+ * { ...PINNED_FORMS, ...stored, ...live } everywhere. They exist so the pure model and its suite
+ * can assert the collision offline, and so a page read still labels these two forms if the labels
+ * table is empty.
+ *
+ * THE COLLISION, AS THE SITE ACTUALLY REPORTS IT:
+ *   field_dff8b68   Company   (f7eed00)   ->   Last Name    (4e61155c)
+ *   field_15bf1e3   Location              ->   City
+ *   message         Last Name             ->   Availability
+ *
+ * And one shared id that is NOT a collision: field_ffeb63a is "Phone" on both. Sameness is not the
+ * rule — the rule is that the id means whatever ITS OWN form says it means. */
 export const PINNED_FORMS: Readonly<Record<string, FormLabels>> = Object.freeze({
   f7eed00: {
     elementId: "f7eed00",
-    formName: "Partnerships",
+    formName: "Form partnerships",
     source: "forms-api",
     labels: Object.freeze({
       name: "First Name",
       message: "Last Name",
-      email: "Email",
       field_dff8b68: "Company",
+      email: "Email",
       field_15bf1e3: "Location",
-      field_2a1c0f4: "Vision",
+      field_ffeb63a: "Phone",
+      field_187a8c9: "Share Your Vision",
     }),
   },
   "4e61155c": {
@@ -52,13 +72,13 @@ export const PINNED_FORMS: Readonly<Record<string, FormLabels>> = Object.freeze(
     source: "forms-api",
     labels: Object.freeze({
       name: "First Name",
-      message: "Availability",
-      email: "Email",
       field_dff8b68: "Last Name",
+      email: "Email",
       field_15bf1e3: "City",
-      field_9c3a201: "Phone",
-      field_6b2d114: "Job Role",
-      field_71ab0e5: "Why MatchDay",
+      field_cbcd9d0: "Job Role",
+      field_ffeb63a: "Phone",
+      message: "Availability",
+      field_706ba38: "Why would you be a good fit for MatchDay?",
     }),
   },
 });
@@ -107,13 +127,34 @@ export function resolveFields(
    * The label is only accepted for the form that DECLARES it, so this cannot reintroduce the
    * collision: "Company" resolves on f7eed00 because f7eed00 declares it, and on 4e61155c there is
    * no such label to match. */
+  let matched = 0;
   for (const [fieldId, label] of Object.entries(form.labels)) {
     const has = (k: string) => Object.prototype.hasOwnProperty.call(fields, k);
-    byLabel[label] = has(fieldId)
-      ? unescapeWpText(String(fields[fieldId] ?? ""))
-      : has(label)
-        ? unescapeWpText(String(fields[label] ?? ""))
-        : NOT_ASKED;
+    if (has(fieldId)) { byLabel[label] = unescapeWpText(String(fields[fieldId] ?? "")); matched++; }
+    else if (has(label)) { byLabel[label] = unescapeWpText(String(fields[label] ?? "")); matched++; }
+    else byLabel[label] = NOT_ASKED;
+  }
+
+  /* KNOWN FORM, ZERO MATCHES — STILL UNRESOLVED.
+   *
+   * A form can be in the registry and STILL not resolve this submission, and the first cut of this
+   * function called that a success. The four forms the site can no longer describe have labels only
+   * from the CSV, where the "field id" IS the label ("Email" -> "Email"). Those entries resolve a
+   * CSV row perfectly and match NOTHING on an API row, which arrives keyed by real field ids
+   * (`name`, `email`, `field_...`).
+   *
+   * The result was silent: every field came back NOT_ASKED, the email was empty, and because the
+   * email was empty our own test rows stopped being recognised — the live pull built 655 rows where
+   * the CSV built 647. Nothing was flagged, because the element_id was "known".
+   *
+   * So the test is whether anything ACTUALLY matched. Incoming keys but none of them ours means we
+   * did not resolve this submission, whatever the registry claims, and the raw keys are kept.
+   * An empty submission is not this case and is not flagged. */
+  const incoming = Object.keys(fields).length;
+  if (incoming > 0 && matched === 0) {
+    const raw: Record<string, FieldValue> = {};
+    for (const [k, v] of Object.entries(fields)) raw[k] = unescapeWpText(String(v ?? ""));
+    return { byLabel: raw, unresolved: true };
   }
   return { byLabel, unresolved: false };
 }
@@ -359,8 +400,16 @@ export function toSubmissionRow(
   }
 
   const email = String(fields["Email"] ?? "").trim().toLowerCase();
-  // OUR OWN TEST ROWS NEVER REACH THE TABLE, by either path.
+
+  /* OUR OWN TEST ROWS NEVER REACH THE TABLE, BY EITHER PATH — including when the row did not
+   * resolve. On an UNRESOLVED row there is no "Email" label to read, so the address is invisible to
+   * the check above: the live pull built 655 rows where the CSV built 647, and the eight extra were
+   * ours on the four forms the site can no longer describe. So the raw VALUES are scanned too.
+   * Exact match only — a substring test would drop a real applicant whose message quoted us. */
   if (email && isOwnTestRow(email)) return null;
+  if (!email) {
+    for (const v of Object.values(fields)) if (isOwnTestRow(String(v))) return null;
+  }
 
   const stream = streamFor(raw.elementId);
   const city = resolveCity(fields["City"] ?? fields["Location"] ?? "", fields["Zipcode"] ?? fields["Zip"] ?? "");

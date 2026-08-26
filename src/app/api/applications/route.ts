@@ -21,8 +21,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-/** PINNED_FORMS merged with whatever the CSV import stored. Pinned wins: those two are the pair
- *  whose collision is asserted in the suite, and a CSV row must not quietly redefine them. */
+/** Stored labels over the pinned fallback — the SAME merge order the sync uses. Pinned last would
+ *  mean a label edited on the site never reached this page, and the pins were themselves wrong in
+ *  three field ids until they were read off ?forms=1. */
 async function loadRegistry(sb: ReturnType<typeof makeServerClient>): Promise<Record<string, FormLabels>> {
   const { data, error } = await sb.from("web_form_labels").select("element_id,field_id,label,form_name,source");
   const out: Record<string, FormLabels> = {};
@@ -38,7 +39,7 @@ async function loadRegistry(sb: ReturnType<typeof makeServerClient>): Promise<Re
     }
   }
   // Pre-migration or empty table simply yields the pinned pair — correct, not a crash.
-  return { ...out, ...PINNED_FORMS };
+  return { ...PINNED_FORMS, ...out };
 }
 
 export async function GET(req: Request) {

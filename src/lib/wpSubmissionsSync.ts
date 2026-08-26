@@ -36,6 +36,8 @@ export type WpSyncResult = {
   spamFlagged: number;
   unresolvedByElement: Record<string, number>;
   labelsRefreshed: number;
+  /** Unresolved rows NOT written because a correctly-labelled version is already held. */
+  downgradesRefused: number;
   unmappedCities: Record<string, number>;
   ownRowsSkipped: number;
   /** ?probe=1's count, and ours. REPORTED, NEVER ACTED ON — a shortfall means someone deleted a
@@ -108,22 +110,28 @@ async function wpGet(params: Record<string, string>): Promise<Record<string, unk
 }
 
 /** ?forms=1 → element_id -> labels. Fetched ONCE per run and cached for it. */
+/* ?forms=1 → element_id -> labels. Fetched ONCE per run and cached for it.
+ *
+ * THE SHAPE IS AN OBJECT KEYED ON element_id, and each field is NESTED as { label, type } — not the
+ * array of flat maps the first cut of this function expected. That version parsed zero forms and
+ * fell through to the pinned pair, so a label edited on a live form would never have been seen.
+ * Read off the real payload rather than assumed. */
 export async function fetchFormRegistry(): Promise<Record<string, FormLabels>> {
   const body = await wpGet({ forms: "1" });
   const out: Record<string, FormLabels> = {};
-  const forms = (body.forms ?? body.data ?? []) as Array<Record<string, unknown>>;
-  for (const f of Array.isArray(forms) ? forms : []) {
-    const el = String(f.element_id ?? f.id ?? "");
-    if (!el) continue;
+  for (const [el, raw] of Object.entries(body)) {
+    if (!raw || typeof raw !== "object") continue;
+    const f = raw as { form_name?: unknown; fields?: Record<string, unknown> };
+    if (!f.fields || typeof f.fields !== "object") continue;
     const labels: Record<string, string> = {};
-    const fields = (f.fields ?? {}) as Record<string, unknown>;
-    for (const [fid, label] of Object.entries(fields)) labels[fid] = String(label);
-    out[el] = { elementId: el, formName: String(f.form_name ?? f.name ?? ""), labels, source: "forms-api" };
+    for (const [fid, meta] of Object.entries(f.fields)) {
+      const label = meta && typeof meta === "object" ? (meta as { label?: unknown }).label : meta;
+      if (label != null && String(label) !== "") labels[fid] = String(label);
+    }
+    if (Object.keys(labels).length === 0) continue;
+    out[el] = { elementId: el, formName: String(f.form_name ?? ""), labels, source: "forms-api" };
   }
-  /* THE PINNED PAIR WINS. Those two are the fixture whose collision the suite asserts, and a
-   * remote edit must not quietly redefine them under this code's feet. Everything the site knows
-   * that we do not is merged in beneath. */
-  return { ...out, ...PINNED_FORMS };
+  return out;
 }
 
 export async function syncWpSubmissions(sb: SupabaseClient): Promise<WpSyncResult> {
@@ -140,7 +148,11 @@ export async function syncWpSubmissions(sb: SupabaseClient): Promise<WpSyncResul
     stored[el] = cur;
   }
   const live = await fetchFormRegistry();
-  const registry: Record<string, FormLabels> = { ...stored, ...live };
+  /* LIVE WINS. The pinned pair is a fallback and a fixture, never the authority — a label edited on
+   * the site must reach the page, and the pins were themselves wrong in three field ids until they
+   * were read off this endpoint. Stored CSV rows sit between: they are the only record of the four
+   * forms the site can no longer resolve. */
+  const registry: Record<string, FormLabels> = { ...PINNED_FORMS, ...stored, ...live };
 
   /* PERSIST WHAT THE SITE STILL KNOWS. Without this the page keeps reading the CSV snapshot
    * forever: a label edited on a live form would render under its old name indefinitely, and the
@@ -164,7 +176,7 @@ export async function syncWpSubmissions(sb: SupabaseClient): Promise<WpSyncResul
   let after = Number(maxRow?.[0]?.submission_id ?? 0);
 
   const rows: SubmissionRowOut[] = [];
-  let fetched = 0, ownSkipped = 0, guard = 0;
+  let fetched = 0, ownSkipped = 0, guard = 0, downgradesRefused = 0;
   for (;;) {
     if (guard++ > 200) throw new Error("wp: paging guard tripped");
     const body = await wpGet({ after_id: String(after), limit: String(PAGE) });
@@ -198,8 +210,21 @@ export async function syncWpSubmissions(sb: SupabaseClient): Promise<WpSyncResul
       const { data } = await sb.from("web_submissions").select("submission_id").in("submission_id", ids.slice(i, i + 500));
       for (const r of data ?? []) existing.add(Number(r.submission_id));
     }
-    for (let i = 0; i < rows.length; i += 300) {
-      const { error } = await sb.from("web_submissions").upsert(rows.slice(i, i + 300), { onConflict: "submission_id" });
+    /* NEVER DOWNGRADE A RESOLVED ROW TO AN UNRESOLVED ONE.
+     *
+     * The four forms the site can no longer describe have labels only from the CSV, so their rows
+     * are stored correctly labelled — but the same submissions arriving by API resolve to nothing
+     * and carry raw keys. A plain upsert would overwrite 109 good rows with worse ones on the first
+     * nightly run, quietly, and the page would stop showing those applicants' details.
+     *
+     * So an unresolved row is written only where we do not already hold a resolved one. */
+    const { data: resolvedHeld } = await sb.from("web_submissions")
+      .select("submission_id").eq("unresolved", false).in("submission_id", rows.filter((r) => r.unresolved).map((r) => r.submission_id));
+    const keepResolved = new Set((resolvedHeld ?? []).map((r) => Number(r.submission_id)));
+    const writable = rows.filter((r) => !(r.unresolved && keepResolved.has(r.submission_id)));
+    downgradesRefused = rows.length - writable.length;
+    for (let i = 0; i < writable.length; i += 300) {
+      const { error } = await sb.from("web_submissions").upsert(writable.slice(i, i + 300), { onConflict: "submission_id" });
       if (error) throw new Error(`web_submissions upsert failed: ${error.message}`);
     }
   }
@@ -243,6 +268,7 @@ export async function syncWpSubmissions(sb: SupabaseClient): Promise<WpSyncResul
     spamFlagged: rows.filter((r) => r.is_spam).length,
     unresolvedByElement, unmappedCities, ownRowsSkipped: ownSkipped,
     labelsRefreshed: liveLabels.length,
+    downgradesRefused,
     sourceCount, heldCount: held ?? 0,
     drift: sourceCount == null ? null : sourceCount - (held ?? 0),
     apiCalls,

@@ -3406,3 +3406,64 @@ reintroducing the id collision. Verified as stored: `f7eed00: Company=Company`,
 `East Austin` · `San Antonio- Quickplay FC` · six full street addresses containing a mapped city or
 zip. **None were mapped** — the rule is map-never-guess and an address parser is a guesser.
 `El Paso, TX` stays unmapped: the same market that surfaced unmapped in the Meta ad spend.
+
+## THE WORDPRESS SUBMISSIONS ENDPOINT, AS IT ACTUALLY ANSWERS (2026-08-26)
+
+`https://www.playmatchday.com/…` — GET only, key in an **X-MD-Key header**, never a query param.
+Host-guarded on the PARSED host, non-https refused, and **redirects refused rather than followed**
+(a 301 would hand the key to whatever it points at).
+
+| mode | shape |
+|---|---|
+| `?probe=1` | `{tables, columns, submission_count: 664}` |
+| `?forms=1` | **an OBJECT keyed on element_id**, each `{post_id, form_name, fields}` where fields is `{fieldId: {label, type}}` — **nested, not flat, and not an array** |
+| `?after_id=N&limit=` | `{submissions: [...], next_after_id}`; rows carry `id, element_id, form_name, post_id, referer, status, is_read, created_at, created_at_gmt, fields` |
+
+### THE PINNED LABELS WERE WRONG IN THREE FIELD IDS
+
+Transcribed from a description rather than read off the endpoint. `field_2a1c0f4`, `field_6b2d114`
+and `field_9c3a201` **do not exist**. The truth:
+
+```
+f7eed00   name·First Name  message·Last Name  field_dff8b68·Company  email·Email
+          field_15bf1e3·Location  field_ffeb63a·Phone  field_187a8c9·Share Your Vision
+4e61155c  name·First Name  field_dff8b68·Last Name  email·Email  field_15bf1e3·City
+          field_cbcd9d0·Job Role  field_ffeb63a·Phone  message·Availability
+          field_706ba38·Why would you be a good fit for MatchDay?
+```
+
+The documented collision holds exactly. **And one shared id is NOT a collision: `field_ffeb63a` is
+Phone on both.** Sameness is not the rule — an id means whatever ITS OWN form says.
+
+`?forms=1` now wins over the pins, which are a fallback and a fixture. A suite assertion pins the
+exact field-id sets so a hand-edit that invents an id fails loudly.
+
+## A KNOWN FORM CAN STILL FAIL TO RESOLVE — AND IT DID, SILENTLY
+
+The four forms the site can no longer describe carry labels only from the CSV, where the "field id"
+IS the label (`Email` → `Email`). Those entries resolve a CSV row perfectly and match **nothing** on
+an API row, which arrives keyed by real field ids (`name`, `email`, `field_…`).
+
+Every field came back `not asked`, the email was therefore empty, **our own test rows stopped being
+recognised**, and the live pull built **655** rows where the CSV built **647** — with nothing
+flagged, because the element_id was "known".
+
+**The test is now whether anything ACTUALLY matched.** Incoming keys but zero matches means the
+submission is unresolved whatever the registry claims; raw keys are kept and the row is flagged. An
+empty submission is not this case. Our own addresses are also scanned for in the raw VALUES, since
+an unresolved row has no `Email` label to read.
+
+**And an unresolved row never overwrites a resolved one.** A plain upsert would have replaced 109
+correctly-labelled CSV rows with raw-key versions on the first nightly run, quietly.
+
+### VERIFIED END TO END
+
+Walking from id 0: **2 pages, 664 rows fetched — matching `?probe=1` exactly** — building **647**,
+identical to what the CSV import holds. Incremental run from `max(submission_id)`: 0 fetched, which
+is correct and was proven by the walk rather than assumed.
+
+**DRIFT: source 664, held 647, difference 17** — our own 17 excluded test rows, exactly. Reported,
+never acted on.
+
+Outreach survives the sync: the ten-submission person set to `Interviewing / Ryan` was **UNTOUCHED**
+after a full run, with 647 submissions and 156 contacts unchanged.
