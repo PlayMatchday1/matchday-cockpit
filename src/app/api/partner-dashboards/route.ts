@@ -36,7 +36,11 @@ export const maxDuration = 30;
 async function fetchAllPartners(supabase: import("@supabase/supabase-js").SupabaseClient): Promise<(PartnerConfig & { slug: string; enabled: boolean; createdAt: string })[]> {
   const { data, error } = await supabase
     .from("partner_dashboards")
-    .select("id, slug, venue_id, partner_name, enabled, created_at, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence, revenue_model, manager_pay_base, manager_pay_high, manager_pay_threshold")
+    /* select("*"), NOT a column list — the same rule adminAuth follows for app_users. Code deploys
+     * before a migration applies, and a NAMED column that does not exist yet 500s the whole route.
+     * With "*", a pre-migration read simply returns the row without revenue_model_next and the
+     * dated model reads as absent, which is the correct behaviour until 0150 lands. */
+    .select("*")
     .order("created_at", { ascending: true });
   if (error || !data) return [];
   return data.map((r) => ({
@@ -46,6 +50,13 @@ async function fetchAllPartners(supabase: import("@supabase/supabase-js").Supaba
     partnerName: r.partner_name as string,
     enabled: !!r.enabled,
     createdAt: r.created_at as string,
+    // Dated successor (0150), read as a PAIR — a lone half is a rate change that looks configured
+    // and applies nothing, so it is treated as absent. Undefined pre-migration under select("*").
+    revenueModelNext: (r.revenue_model_next && r.revenue_model_from
+      ? (r.revenue_model_next as string) : null) as PartnerConfig["revenueModelNext"],
+    revenueModelFrom: r.revenue_model_next && r.revenue_model_from
+      ? String(r.revenue_model_from).slice(0, 10) : null,
+    perMatchFeeCents: r.per_match_fee_cents == null ? null : Number(r.per_match_fee_cents),
     revenueSharePct: (r.revenue_share_pct as number) ?? 50,
     paymentStartDate: (r.payment_start_date as string | null) ?? null,
     paymentDayOfWeek: (r.payment_day_of_week as number) ?? 0,

@@ -154,6 +154,30 @@ export type PartnerPaymentCadence = "weekly" | "monthly";
 //                             exceeds managerPayThreshold. Crossbar Rowlett.
 export type PartnerRevenueModel = "flat_percentage" | "per_match_minus_manager";
 
+/* THE SUCCESSOR MODEL. A partner's terms can change on a date, and only forward: `revenue_model`
+ * still governs every period before `revenueModelFrom`, so a settled month recomputes exactly as it
+ * was paid and never sprouts a divergence marker on the partner's own page. */
+export type PartnerRevenueModelNext = PartnerRevenueModel | "per_match_fee";
+
+/* ONE ROW PER MATCH — NOT PER REGISTRATION.
+ *
+ * The fee model bills matches, so it must count them from the MATCH list. Every other model here
+ * is driven off registration rows, and under those a match with no bookings simply produces no
+ * rows: invisible, and worth $0 either way. Under a per-match fee that same match RAN and owes the
+ * full fee, so a registration-driven count would silently underpay. Measured today: 0 of 25 played
+ * Crossbar matches have no rows, so this is not yet wrong — it is wrong the first time it happens,
+ * which is the point of closing it now.
+ *
+ * `played` IS DECIDED FROM end_date_utc, never from start_date/end_date — those are LOCAL WALL
+ * CLOCK wearing a Z and land hours off through new Date(). Same rule payoutForMatch already
+ * follows, and it is passed in as a boolean so this pure calculation never reads a clock. */
+export type PartnerMatchRow = {
+  matchApiId: number;
+  startYmd: string;      // YYYY-MM-DD local wall-clock date
+  cancelled: boolean;
+  played: boolean;
+};
+
 export type PartnerConfig = {
   id: string; // uuid
   venueId: number;
@@ -169,6 +193,13 @@ export type PartnerConfig = {
   managerPayBase: number | null;
   managerPayHigh: number | null;
   managerPayThreshold: number | null;
+  /* THE DATED SUCCESSOR (migration 0150). `revenueModel` above still governs every period before
+   * `revenueModelFrom`, which is what keeps a settled month recomputing exactly as it was paid.
+   * BOTH OR NEITHER: half of this pair is a rate change that looks configured and applies nothing,
+   * so modelForPeriod treats a lone half as absent and the database refuses to store one. */
+  revenueModelNext: PartnerRevenueModelNext | null;
+  revenueModelFrom: string | null;      // YYYY-MM-DD
+  perMatchFeeCents: number | null;      // CENTS — the name carries the unit deliberately
   // Phase 28 — the EXPLICIT payout selector and the rental-model parameters, in CENTS. `payoutModel`
   // is derived from revenueModel for every pre-existing row by migration 0123, so the two flat
   // partners and Crossbar keep the exact behaviour their live payments were computed with; only a
@@ -204,6 +235,13 @@ export type PartnerConfig = {
 // 0005, pre-0057); the older tiers live inline in fetchPartnerBySlug.
 // Phase 28 columns are appended to their OWN tier: code deploys before migrations apply, and a
 // named column that does not exist yet fails the whole select. The cascade below falls back.
+/* 0150's dated-model columns get their OWN tier at the top of the cascade, for exactly the reason
+ * the comment above gives: this deploys before the migration applies, and naming a column that does
+ * not exist yet fails the whole select — which for this table means every partner dashboard 500s.
+ * Pre-migration the read falls through to PAYOUT and the dated model reads as absent, which is the
+ * correct behaviour until 0150 lands. */
+const PARTNER_COLS_DATED =
+  "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence, revenue_model, manager_pay_base, manager_pay_high, manager_pay_threshold, payout_model, payout_share_pct, field_rental_cents, match_manager_cents, partner_share_pct, spot_price_cents, revenue_model_next, revenue_model_from, per_match_fee_cents";
 const PARTNER_COLS_PAYOUT =
   "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence, revenue_model, manager_pay_base, manager_pay_high, manager_pay_threshold, payout_model, payout_share_pct, field_rental_cents, match_manager_cents, partner_share_pct, spot_price_cents";
 const PARTNER_COLS_FULL =
@@ -225,6 +263,17 @@ function rowToPartnerConfig(row: Record<string, unknown>): PartnerConfig {
       : "flat_percentage";
   const numOrNull = (v: unknown): number | null =>
     v == null ? null : Number(v);
+  /* Read as a PAIR. A successor with no date never applies; a date with no successor applies
+   * nothing. Either alone is treated as absent here rather than half-configured — the same rule
+   * the DB constraint enforces, restated because a column can be added by hand. */
+  const rawNext = (row.revenue_model_next ?? null) as string | null;
+  const rawFrom = (row.revenue_model_from ?? null) as string | null;
+  const pairOk = rawNext != null && rawFrom != null;
+  const revenueModelNext: PartnerRevenueModelNext | null = !pairOk
+    ? null
+    : rawNext === "per_match_fee" || rawNext === "per_match_minus_manager" || rawNext === "flat_percentage"
+      ? (rawNext as PartnerRevenueModelNext)
+      : null;
   return {
     id: row.id as string,
     venueId: row.venue_id as number,
@@ -232,6 +281,9 @@ function rowToPartnerConfig(row: Record<string, unknown>): PartnerConfig {
     revenueSharePct: Number(row.revenue_share_pct ?? 50),
     paymentStartDate: (row.payment_start_date ?? null) as string | null,
     paymentDayOfWeek: Number(row.payment_day_of_week ?? 0),
+    revenueModelNext,
+    revenueModelFrom: revenueModelNext == null ? null : String(rawFrom).slice(0, 10),
+    perMatchFeeCents: numOrNull(row.per_match_fee_cents),
     paymentCadence: cadence,
     revenueModel,
     managerPayBase: numOrNull(row.manager_pay_base),
@@ -276,7 +328,7 @@ export async function fetchAllEnabledPartnerDashboards(
   let error: any = null;
   // Same newest-first cascade as fetchPartnerBySlug: 0123 cols, then 0057, then pre-0057. Code
   // deploys before migrations apply, and a named column that does not exist yet fails the select.
-  for (const cols of [PARTNER_COLS_PAYOUT, PARTNER_COLS_FULL, PARTNER_COLS_NO_MODEL]) {
+  for (const cols of [PARTNER_COLS_DATED, PARTNER_COLS_PAYOUT, PARTNER_COLS_FULL, PARTNER_COLS_NO_MODEL]) {
     const res = await supabase.from("partner_dashboards").select(cols).eq("enabled", true);
     data = res.data; error = res.error;
     if (!error) break;
@@ -301,6 +353,7 @@ export async function fetchPartnerBySlug(
   //   no-cadence  — incl. 0003 payment_* cols, no cadence
   //   legacy      — pre-0003 (id, venue_id, partner_name, enabled)
   const tiers = [
+    PARTNER_COLS_DATED,    // incl. 0150 dated-model cols
     PARTNER_COLS_PAYOUT,   // incl. 0123 payout-model cols
     PARTNER_COLS_FULL,
     PARTNER_COLS_NO_MODEL,
@@ -418,6 +471,7 @@ export async function fetchPartnerRows(
   rows: PartnerRegRow[];
   extra: PartnerExtraRevRow[];
   venueName: string;
+  matches: PartnerMatchRow[];
 }> {
   const { data: venue, error: venueErr } = await supabase
     .from("fin_venues")
@@ -442,6 +496,32 @@ export async function fetchPartnerRows(
     { fieldLike: `%${venue.venue_name}%` },
     membershipWindows,
   );
+
+  /* THE MATCH LIST — one row per match, for the per-match fee model.
+   *
+   * Same ILIKE-on-field_title filter as the registrations above, so the two describe the same
+   * venue by construction rather than by a second mapping that could drift.
+   *
+   * `played` COMES FROM end_date_utc, the true instant. start_date/end_date are LOCAL WALL CLOCK
+   * wearing a Z: new Date() re-shifts them and lands hours off, which under a per-match fee would
+   * bill a match on the day it was scheduled rather than the day it ran. A match with no
+   * end_date_utc is NOT played — the safe direction, since the alternative bills for something we
+   * cannot show has happened. */
+  const { data: mrows, error: mErr } = await supabase
+    .from("mdapi_matches")
+    .select("api_id, start_date, end_date_utc, is_cancelled, deleted_at")
+    .ilike("field_title", `%${venue.venue_name}%`);
+  if (mErr) throw new Error(`Match list fetch failed: ${mErr.message}`);
+  const nowMs = Date.now();
+  const matches: PartnerMatchRow[] = (mrows ?? [])
+    .filter((r) => !r.deleted_at)
+    .map((r) => ({
+      matchApiId: Number(r.api_id),
+      startYmd: String(r.start_date ?? "").slice(0, 10),
+      cancelled: r.is_cancelled === true,
+      played: r.end_date_utc != null && Date.parse(String(r.end_date_utc)) < nowMs,
+    }))
+    .filter((m) => m.startYmd.length === 10);
 
   // fin_revenue rows for this venue.
   //
@@ -469,7 +549,7 @@ export async function fetchPartnerRows(
     notes: r.notes ?? null,
   }));
 
-  return { rows: out, extra, venueName: venue.venue_name };
+  return { rows: out, extra, venueName: venue.venue_name, matches };
 }
 
 // ----- pure compute (mirrors pac_global_dashboard.html buildDashboard) -----
@@ -844,6 +924,9 @@ export function computePartnerStats(
 export type PartnerWeeklyPayment = {
   weekStartDate: string; // YYYY-MM-DD (Sunday for normal rows, through-date for pre-system)
   weekEndDate: string; // YYYY-MM-DD (Saturday for normal rows, same as weekStartDate for pre-system)
+  // Cancelled matches in the period. Shown BESIDE the billable count, never folded into it:
+  // "6 played, 9 cancelled" is a conversation worth having with a partner, not a figure to bury.
+  matchesCancelled?: number;
   qualifyingRevenue: number; // 0 for pre-system rows (UI renders "—")
   owedAmount: number; // qualifyingRevenue × pct/100 for normal rows; calculated_amount for pre-system
   // Additive presentation breakdown (see periodOwed). matches = distinct matches
@@ -875,6 +958,11 @@ export type PartnerPaymentInfo = {
   // "{pct}% of qualifying revenue"; 'per_match_minus_manager' →
   // "Match revenue minus manager pay".
   revenueModel: PartnerRevenueModel;
+  // The dated successor, carried so the VIEW can label each period by the model that governed it
+  // rather than by the partner's current terms. Null when no dated change is configured.
+  revenueModelNext: PartnerRevenueModelNext | null;
+  revenueModelFrom: string | null;
+  perMatchFeeCents: number | null;
   revenueSharePct: number;
   paymentStartDate: string | null;
   paymentDayOfWeek: number;
@@ -949,7 +1037,36 @@ type PeriodCalcConfig = {
   managerPayBase: number | null;
   managerPayHigh: number | null;
   managerPayThreshold: number | null;
+  // The dated successor. Both or neither — the DB enforces it (migration 0150) and so does
+  // modelForPeriod: half a rate change reads as configured and pays out the old terms forever.
+  revenueModelNext?: PartnerRevenueModelNext | null;
+  revenueModelFrom?: string | null;   // YYYY-MM-DD
+  perMatchFeeCents?: number | null;
+  matchList?: PartnerMatchRow[];
 };
+
+/* WHICH MODEL GOVERNS THIS PERIOD.
+ *
+ * YMD STRING COMPARISON, no Date parsing — this file's dates are local wall clock and a boundary
+ * computed through new Date() is the same class of bug as billing an unplayed match.
+ *
+ * BOTH-OR-NEITHER, enforced here as well as in the database. A successor with no date, or a date
+ * with no successor, is not "partially configured" — it is a rate change that does nothing while
+ * looking done, so it is treated as absent rather than half-applied. */
+/** Cancelled matches falling in the period. 0 when no match list was supplied — the figure is
+ *  simply unavailable to that caller, never a fabricated zero shown beside a real count. */
+function cancelledInPeriod(cfg: PeriodCalcConfig, periodStart: string, periodEnd: string): number {
+  return (cfg.matchList ?? []).filter(
+    (m) => m.cancelled && m.startYmd >= periodStart && m.startYmd <= periodEnd,
+  ).length;
+}
+
+export function modelForPeriod(cfg: PeriodCalcConfig, periodStart: string): PartnerRevenueModelNext {
+  const next = cfg.revenueModelNext ?? null;
+  const from = cfg.revenueModelFrom ?? null;
+  if (next == null || from == null) return cfg.revenueModel;
+  return periodStart >= from ? next : cfg.revenueModel;
+}
 
 // Compute { qualifyingRevenue, owedAmount } for one [periodStart,
 // periodEnd] window (YYYY-MM-DD inclusive). Shared by the weekly and
@@ -990,8 +1107,49 @@ export function periodOwed(
   periodStart: string,
   periodEnd: string,
   cfg: PeriodCalcConfig,
-): { qualifyingRevenue: number; owedAmount: number; matches: number; managerPay: number } {
-  if (cfg.revenueModel === "per_match_minus_manager") {
+): { qualifyingRevenue: number; owedAmount: number; matches: number; managerPay: number; matchesCancelled: number } {
+  const model = modelForPeriod(cfg, periodStart);
+
+  /* ── PER-MATCH FEE ──────────────────────────────────────────────────────────────────────────
+   * A flat fee for each match that ACTUALLY GOES AHEAD. Cancelled pays nothing; so does a match
+   * that has not happened yet, which is the distinction payoutForMatch already draws and the one
+   * that stops an open month reading as a bill.
+   *
+   * COUNTED OFF THE MATCH LIST, not off registrations — see PartnerMatchRow. Revenue is not part
+   * of this model at all: qualifyingRevenue is still reported (the column exists and the partner
+   * can see what the matches took) but it does not enter the payment.
+   *
+   * NO manager-pay deduction and no $0 floor: a fee cannot go negative. */
+  if (model === "per_match_fee") {
+    const feeCents = cfg.perMatchFeeCents ?? 0;
+    const inPeriod = (cfg.matchList ?? []).filter(
+      (m) => m.startYmd >= periodStart && m.startYmd <= periodEnd,
+    );
+    const billable = inPeriod.filter((m) => !m.cancelled && m.played);
+    const cancelled = inPeriod.filter((m) => m.cancelled);
+    // Revenue is still summed so the page can show what the played matches took, using the same
+    // DAILY-PAID definition as every other model here.
+    let qualifyingRevenue = 0;
+    for (const r of matchActive) {
+      const ymd = r.match_start.slice(0, 10);
+      if (ymd < periodStart || ymd > periodEnd) continue;
+      if (r.payment_type === "DAILY PAID") qualifyingRevenue += Number(r.match_price_paid ?? 0) || 0;
+    }
+    for (const x of finRevRows) {
+      if (x.date >= periodStart && x.date <= periodEnd && x.type !== "DPP" && x.type !== "Membership") {
+        qualifyingRevenue += Number(x.gross ?? 0) || 0;
+      }
+    }
+    return {
+      qualifyingRevenue,
+      owedAmount: Math.round(billable.length * feeCents) / 100,
+      matches: billable.length,
+      managerPay: 0,
+      matchesCancelled: cancelled.length,
+    };
+  }
+
+  if (model === "per_match_minus_manager") {
     const base = cfg.managerPayBase ?? 0;
     const high = cfg.managerPayHigh ?? base;
     // Missing threshold → no match ever clears it → always base rate.
@@ -1036,6 +1194,9 @@ export function periodOwed(
       owedAmount: Math.round(owed * 100) / 100,
       matches: byMatch.size,
       managerPay: totalManagerPay,
+      // Reported under every model once a match list is supplied — "6 played, 9 cancelled" is a
+      // conversation worth having with a partner, not a figure to bury.
+      matchesCancelled: cancelledInPeriod(cfg, periodStart, periodEnd),
     };
   }
 
@@ -1061,6 +1222,7 @@ export function periodOwed(
     owedAmount: Math.round(qualifyingRevenue * cfg.revenueSharePct) / 100,
     matches: flatMatches.size,
     managerPay: 0, // flat_percentage has no manager-pay subtraction
+    matchesCancelled: cancelledInPeriod(cfg, periodStart, periodEnd),
   };
 }
 
@@ -1096,9 +1258,18 @@ export function computeWeeklyPayments(
     managerPayBase?: number | null;
     managerPayHigh?: number | null;
     managerPayThreshold?: number | null;
+    // The dated successor model (migration 0150). Optional for the same reason: a caller that
+    // does not supply it gets today's behaviour exactly.
+    revenueModelNext?: PartnerRevenueModelNext | null;
+    revenueModelFrom?: string | null;
+    perMatchFeeCents?: number | null;
   },
   records: PartnerWeeklyPaymentRecord[] = [],
   now: Date = new Date(),
+  /* THE MATCH LIST, separate from the registration rows. Last and optional so every existing
+   * caller is untouched; the fee model is the only one that requires it, and without it a fee
+   * period bills nothing rather than guessing from registrations. */
+  matchList: PartnerMatchRow[] = [],
 ): PartnerPaymentInfo {
   const cadence: PartnerPaymentCadence = config.paymentCadence ?? "weekly";
   const revenueModel: PartnerRevenueModel =
@@ -1109,6 +1280,10 @@ export function computeWeeklyPayments(
     managerPayBase: config.managerPayBase ?? null,
     managerPayHigh: config.managerPayHigh ?? null,
     managerPayThreshold: config.managerPayThreshold ?? null,
+    revenueModelNext: config.revenueModelNext ?? null,
+    revenueModelFrom: config.revenueModelFrom ?? null,
+    perMatchFeeCents: config.perMatchFeeCents ?? null,
+    matchList,
   };
 
   // Pre-system rows are cadence-agnostic — they represent historical
@@ -1139,6 +1314,9 @@ export function computeWeeklyPayments(
       enabled: preSystemRows.length > 0,
       cadence,
       revenueModel,
+      revenueModelNext: config.revenueModelNext ?? null,
+      revenueModelFrom: config.revenueModelFrom ?? null,
+      perMatchFeeCents: config.perMatchFeeCents ?? null,
       revenueSharePct: config.revenueSharePct,
       paymentStartDate: null,
       paymentDayOfWeek: config.paymentDayOfWeek,
@@ -1164,7 +1342,7 @@ export function computeWeeklyPayments(
     let cursor = firstQualifyingPeriod;
     while (cursor <= today) {
       const monthEnd = lastDayOfMonth(cursor);
-      const { qualifyingRevenue, owedAmount, matches, managerPay } = periodOwed(
+      const { qualifyingRevenue, owedAmount, matches, managerPay, matchesCancelled } = periodOwed(
         matchActive,
         finRevRows,
         cursor,
@@ -1179,6 +1357,7 @@ export function computeWeeklyPayments(
         owedAmount,
         matches,
         managerPay,
+        matchesCancelled,
         status: rec?.status ?? "pending",
         recordId: rec?.id ?? null,
         calculatedAmount: rec?.calculated_amount ?? null,
@@ -1195,7 +1374,7 @@ export function computeWeeklyPayments(
     let cursor = firstQualifyingPeriod;
     while (cursor <= today) {
       const weekEnd = addDays(cursor, 6);
-      const { qualifyingRevenue, owedAmount, matches, managerPay } = periodOwed(
+      const { qualifyingRevenue, owedAmount, matches, managerPay, matchesCancelled } = periodOwed(
         matchActive,
         finRevRows,
         cursor,
@@ -1210,6 +1389,7 @@ export function computeWeeklyPayments(
         owedAmount,
         matches,
         managerPay,
+        matchesCancelled,
         status: rec?.status ?? "pending",
         recordId: rec?.id ?? null,
         calculatedAmount: rec?.calculated_amount ?? null,
@@ -1227,6 +1407,9 @@ export function computeWeeklyPayments(
     enabled: true,
     cadence,
     revenueModel,
+    revenueModelNext: config.revenueModelNext ?? null,
+    revenueModelFrom: config.revenueModelFrom ?? null,
+    perMatchFeeCents: config.perMatchFeeCents ?? null,
     revenueSharePct: config.revenueSharePct,
     paymentStartDate: config.paymentStartDate,
     paymentDayOfWeek: config.paymentDayOfWeek,

@@ -22,7 +22,11 @@ export async function GET(req: Request) {
 
   const { data, error } = await supabase
     .from("partner_dashboards")
-    .select("id, partner_name, venue_id, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence, revenue_model, manager_pay_base, manager_pay_high, manager_pay_threshold");
+    /* select("*"), NOT a column list — the same rule adminAuth follows for app_users. Code deploys
+     * before a migration applies, and a NAMED column that does not exist yet 500s the whole route.
+     * With "*", a pre-migration read simply returns the row without revenue_model_next and the
+     * dated model reads as absent, which is the correct behaviour until 0150 lands. */
+    .select("*");
   if (error) return Response.json({ error: error.message }, { status: 500 });
 
   const today = todayYmd();
@@ -45,6 +49,13 @@ export async function GET(req: Request) {
       // can select the rental model by accident — the public dashboard is the one surface that
       // reads the real columns.
       payoutModel: ((p.revenue_model as string) === "per_match_minus_manager" ? "PER_MATCH_MINUS_MANAGER" : "REVENUE_SHARE") as PartnerConfig["payoutModel"],
+      // Dated successor (0150), read as a pair — see rowToPartnerConfig for why a lone half is
+      // treated as absent rather than half-applied.
+      revenueModelNext: (p.revenue_model_next ?? null) && (p.revenue_model_from ?? null)
+        ? ((p.revenue_model_next as string) as PartnerConfig["revenueModelNext"]) : null,
+      revenueModelFrom: (p.revenue_model_next ?? null) && (p.revenue_model_from ?? null)
+        ? String(p.revenue_model_from).slice(0, 10) : null,
+      perMatchFeeCents: p.per_match_fee_cents == null ? null : Number(p.per_match_fee_cents),
       payoutSharePct: (p.revenue_share_pct as number) ?? 50,
       fieldRentalCents: null, matchManagerCents: null, partnerSharePct: null, spotPriceCents: null,
     };

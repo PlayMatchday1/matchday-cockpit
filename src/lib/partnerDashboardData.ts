@@ -7,6 +7,7 @@ import "server-only";
 // client over the preview API.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { PartnerRevenueModelNext } from "./partnerStats";
 import { computePartnerStats, computeWeeklyPayments, fetchPartnerBySlug, fetchPartnerRows, fetchPartnerWeeklyPayments, rentalParamsOf } from "./partnerStats";
 import { buildRentalDashboard, type RentalDashboardProps } from "./partnerRentalDashboard";
 import type { PeriodLedger } from "./partnerPayoutModel";
@@ -14,6 +15,14 @@ import { derivePartnerGrains } from "./partnerGrain";
 import { dfull, dshort, todayYmd } from "./partnerDashboardView";
 import type { PartnerV14Props } from "@/app/partners/[slug]/PartnerDashboardV14";
 import type { PartnerMonthlyProps } from "@/app/partners/[slug]/PartnerMonthlyView";
+
+const MONTH_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+/** The month BEFORE a change date, as YYYY-MM-01. STRING MATHS ONLY — the dates in this system are
+ *  local wall clock, and a month boundary computed through new Date() lands on the wrong side. */
+function prevMonthOf(ymd: string): string {
+  const y = Number(ymd.slice(0, 4)), m = Number(ymd.slice(5, 7));
+  return m === 1 ? `${y - 1}-12-01` : `${y}-${String(m - 1).padStart(2, "0")}-01`;
+}
 
 // Per-partner data-quality baseline (see the public page's history for why).
 export const PARTNER_DATA_BASELINE: Record<string, string> = {
@@ -33,7 +42,7 @@ export async function buildPartnerDashboardData(
   const partner = await fetchPartnerBySlug(supabase, slug);
   if (!partner) return null;
 
-  const { rows, extra, venueName } = await fetchPartnerRows(supabase, partner.venueId);
+  const { rows, extra, venueName, matches: matchList } = await fetchPartnerRows(supabase, partner.venueId);
 
   // ── RENTAL_PLUS_PROFIT_SHARE branches out FIRST, before any of the flat-model derivation runs.
   // Not a flag threaded through computePartnerStats/periodOwed: this model shares no arithmetic
@@ -82,7 +91,10 @@ export async function buildPartnerDashboardData(
     managerPayBase: partner.managerPayBase,
     managerPayHigh: partner.managerPayHigh,
     managerPayThreshold: partner.managerPayThreshold,
-  }, records);
+    revenueModelNext: partner.revenueModelNext,
+    revenueModelFrom: partner.revenueModelFrom,
+    perMatchFeeCents: partner.perMatchFeeCents,
+  }, records, now, matchList);
 
   const grains = derivePartnerGrains(statsRows, statsExtra, payment, now);
   const totalMatches = stats.weeks.reduce((s, w) => s + (w.voided ? 0 : w.matches), 0);
@@ -110,7 +122,30 @@ export async function buildPartnerDashboardData(
       `A private rental is a booking with no MatchDay match behind it — no players and no spots — so it adds to qualifying revenue but not to the match or spot counts. Rentals are listed separately inside the revenue column so you can see what you are being paid for. ` +
       `The opening period is a single settled payment with no match-level detail behind it, so it adds to the payment total but not to the counts.` +
       (running ? ` ${running.label} is still running and is not paid until the month closes, so it adds to the counts but not to the payment total.` : "");
-    return { kind: "monthly", monthly: { partnerName: partner.partnerName, sub: `${baseSub} · paid monthly at ${partner.revenueSharePct}% of qualifying revenue`, since, months: grains.monthRows, last8, footnote } };
+    /* THE TERMS LINE, DERIVED FROM THE MODEL — never from revenue_share_pct.
+     *
+     * This used to interpolate `partner.revenueSharePct`, which for Crossbar Rowlett reads 50 and
+     * always has. Migration 0057 moved them to per_match_minus_manager and left that column alone
+     * with the note "it is unused under the per-match model" — true of the arithmetic, false of
+     * this line. The result: a page the partner can open described their deal as a 50% share since
+     * May, while the payments were computed correctly as revenue minus manager pay. The Field Costs
+     * page has said the right thing all along.
+     *
+     * BOTH ERAS, NEITHER IMPLIED TO BE THE OTHER. A dated change means the sentence has to describe
+     * what governed the settled months AND what governs the next one, without the new terms reading
+     * back over history. */
+    const termsFor = (m: PartnerRevenueModelNext): string =>
+      m === "per_match_fee"
+        ? `$${((partner.perMatchFeeCents ?? 0) / 100).toFixed(0)} per match that goes ahead`
+        : m === "per_match_minus_manager"
+          ? "match revenue less match manager pay"
+          : `${partner.revenueSharePct}% of qualifying revenue`;
+    const monthName = (ymd: string) =>
+      `${MONTH_FULL[Number(ymd.slice(5, 7)) - 1]} ${ymd.slice(0, 4)}`;
+    const terms = partner.revenueModelNext && partner.revenueModelFrom
+      ? `${termsFor(partner.revenueModel)} through ${monthName(prevMonthOf(partner.revenueModelFrom))}, then ${termsFor(partner.revenueModelNext)} from ${monthName(partner.revenueModelFrom)}`
+      : termsFor(partner.revenueModel);
+    return { kind: "monthly", monthly: { partnerName: partner.partnerName, sub: `${baseSub} · paid monthly — ${terms}`, terms, since, months: grains.monthRows, last8, footnote } };
   }
 
   return {

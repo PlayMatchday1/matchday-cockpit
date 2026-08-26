@@ -3006,3 +3006,73 @@ kept server-side.
 from `mdapi_users` on a different schedule. The route takes the NEWER of the two stamps and computes
 `stale` itself; the RPC is still used for `refreshed_at`, which is the one thing only it knows. Its
 `stale` is deliberately not read.
+
+## CROSSBAR ROWLETT: THE LABEL WAS WRONG SINCE MAY, AND A DATED MODEL NOW EXISTS (2026-08-25)
+
+**Crossbar has NEVER been on a percentage.** Migration 0057 put them on `per_match_minus_manager` —
+`max(0, Σ match revenue − Σ manager pay)` — and left `revenue_share_pct` at 50 with the note *"it is
+unused under the per-match model"*. True of the arithmetic; **false of the UI**, which interpolated
+that column straight onto a page the partner can open. The payments were right the whole time; the
+description of the deal was not.
+
+Three surfaces stated or implied a share. Two are fixed, one was already honest:
+
+| surface | was | now |
+|---|---|---|
+| `partnerDashboardData` header | `paid monthly at 50% of qualifying revenue` (interpolated `revenue_share_pct`) | derived from the payout MODEL |
+| `PartnerMonthlyView` table note | `Your share is 50% of qualifying revenue` — **50 hardcoded in the JSX** | derived; correcting the DB alone would not have fixed this one |
+| `Your payment` column | — | unchanged; it says *payment*, not *share*, and has no tooltip |
+
+`PartnerPaymentInfo.revenueModel` already carried a doc comment specifying this exact copy, and
+`FieldCostsView` already used it. The monthly partner path was the one place that ignored it.
+
+### THE $20 IS A FACT ABOUT THE DATA, NOT A RULE
+
+Manager pay is `$20 base / $30 when the match's capacity ≥ 25`. Every Crossbar match May–Aug is at
+capacity **18 or 20**, and `fin_venues.max_players = 20`, so the $30 tier has never been reachable.
+**Raise that cap to 25 and the deduction silently becomes $30.** Moot for Crossbar from August — the
+fee model does not read manager pay at all.
+
+### DATED MODELS (migration 0150)
+
+`revenue_model_next` + `revenue_model_from` + `per_match_fee_cents`. The first rate history in this
+codebase: `fin_venues` carries one rate with no date dimension, and `fin_venue_cost_overrides` is a
+per-(venue, month) billing-timing lump that the Field Costs page deliberately does not read.
+
+**BOTH OR NEITHER**, enforced in the DB *and* in `modelForPeriod`. A successor with no date never
+applies; a date with no successor applies nothing. Either half alone is a rate change that reads as
+configured and pays the old terms forever.
+
+**Why dated rather than flipped in place:** `partner_weekly_payments` already freezes a paid amount
+and the view renders the frozen figure with a divergence marker when a recompute disagrees. Flipping
+the model would have kept the numbers right and still put a *"figures changed after payment"*
+asterisk on all three settled months, on the partner's own page. Verified after 0150: **no
+divergence markers**, and May/June/July still render $0 / $161 / $1,000.
+
+### THE FEE MODEL BILLS MATCHES, NOT REGISTRATIONS
+
+Every other model here is driven off registration rows, where a match with no bookings produces no
+rows — invisible, and worth $0 either way. **Under a per-match fee that match RAN and owes the full
+fee**, so a registration-driven count would silently underpay. Measured: 0 of 25 played Crossbar
+matches have no rows, so this was not yet wrong; it is wrong the first time it happens.
+`fetchPartnerRows` now returns a real match list and `played` comes from **`end_date_utc`**, never
+`start_date` — the wall-clock trap would bill a match on the day it was scheduled.
+
+**An open fee period shows its running total.** A revenue-share month in progress genuinely has no
+figure yet; a fee month's total is final for every match already played. Hiding a known $600 behind
+"Not yet calculated" understates money already earned.
+
+### AUGUST, AND THE CANCELLATION RATE
+
+August 2026: **6 played · 9 cancelled · 3 upcoming → $600**, with "9 cancelled, not billed" shown
+beside the billable count. Ryan's ruling: `$100` per match that goes ahead, a cancelled match pays
+nothing — consistent with `fin_venues.charge_on_cancel = false` already set on venue 51.
+
+**The cancellation rate is real, not an artefact of an open month.** On matches whose date has
+passed: May **4/7 (57%)**, June **6/12 (50%)**, July **3/13 (23%)**, August **8/15 (53%)**. August
+sits between May and June — **July is the outlier**. Cancellations are evenly spread (2 of 4 in every
+August week), and all nine are `auto_canceled` with attendance below minimum.
+
+**`min_player_count` is NOT a standing setting** — it varies per match (7, 9, 10, 11). Across all
+four months, **8 of 22 cancellations were short by exactly one player**, every one at min 9 with 8
+booked. All eight would have run at a minimum of 8.

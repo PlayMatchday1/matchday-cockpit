@@ -16,7 +16,11 @@ const dfull = (ymd: string) => `${MON[+ymd.slice(5, 7) - 1]} ${+ymd.slice(8, 10)
 export type MonthlySince = { spots: number; registered: number; guests: number; cancels: number; people: number; matches: number };
 export type MonthlyWeek = { label: string; spots: number; matches: number; revenue: number };
 export type PartnerMonthlyProps = {
-  partnerName: string; sub: string; since: MonthlySince; months: GrainRow[]; last8: MonthlyWeek[]; footnote: string;
+  partnerName: string; sub: string;
+  /* The payout terms in words, derived from the payout MODEL upstream. Never a percentage unless
+   * the partner is actually on one — see partnerDashboardData's termsFor. */
+  terms: string;
+  since: MonthlySince; months: GrainRow[]; last8: MonthlyWeek[]; footnote: string;
 };
 
 function rentalTotal(r: GrainRow) { return r.rentals.reduce((s, x) => s + x.amount, 0); }
@@ -35,10 +39,15 @@ function whenText(r: GrainRow) {
   return { cls: "", t: `Due ${dfull(r.dueDate)}` };
 }
 
-export default function PartnerMonthlyView({ partnerName, sub, since, months, last8, footnote }: PartnerMonthlyProps) {
+export default function PartnerMonthlyView({ partnerName, sub, terms, since, months, last8, footnote }: PartnerMonthlyProps) {
   const ordered = months.slice().sort((a, b) => a.key.localeCompare(b.key)); // newest LAST
   const detailed = ordered.filter((m) => m.matches != null);
+  /* MONTHS WITH A FIGURE — which is no longer the same as CLOSED months. A per-match-fee period
+   * carries an exact running total while it is still open (each played match has earned the fee and
+   * nothing later changes it), so it belongs in the total. The caption below says which case this
+   * is rather than asserting "closed months only" over a sum that now includes an open one. */
   const closed = ordered.filter((m) => m.payment != null);
+  const totalIncludesOpen = closed.some((m) => m.isOpen);
   const sum = (rows: GrainRow[], f: (r: GrainRow) => number | null) => rows.reduce((s, r) => s + (f(r) ?? 0), 0);
   const revTotal = sum(detailed, (m) => m.revenue);
   const rentTotal = sum(detailed, rentalTotal);
@@ -62,7 +71,13 @@ export default function PartnerMonthlyView({ partnerName, sub, since, months, la
 
       <div className="sech">Every month</div>
       <div className="card">
-        <div className="csub">Newest last. Your share is <b>50%</b> of qualifying revenue on every line. A month is paid once it closes.</div>
+        {/* THE TERMS, PASSED IN — NOT A LITERAL.
+            This line read "Your share is 50% of qualifying revenue on every line" with the 50
+            hardcoded in the JSX, which is worse than the header's stale interpolation: correcting
+            the database would not have fixed it. Crossbar has never been on a percentage. The copy
+            now comes from the payout model itself, so a partner cannot be told terms they are not
+            on, and a dated change is described rather than back-applied to settled months. */}
+        <div className="csub">Newest last. Your payment on every line is <b>{terms}</b>. A month is paid once it closes.</div>
         <table>
           <thead><tr>
             {["Period", "Matches", "Spots filled", "Daily players", "Guests", "Qualifying revenue", "Your payment", "Status", "When"].map((c) => <th key={c}>{c}</th>)}
@@ -74,7 +89,16 @@ export default function PartnerMonthlyView({ partnerName, sub, since, months, la
               return (
                 <tr key={m.key} className={`${m.isOpening ? "opening" : ""} ${m.isOpen ? "running" : ""}`} data-k={m.key} data-diverged={m.diverged ? "1" : undefined}>
                   <td>{m.label}{m.isOpening && <span className="tag">opening period</span>}{m.isOpen && <span className="sub">Partial — through today, not a full month</span>}</td>
-                  <td>{num(m.matches)}</td>
+                  {/* THE NUMBER THAT PRODUCED THE PAYMENT, and the one that did not, side by side.
+                      Under a per-match fee the billable count is what the money is; the cancelled
+                      count sits beside it rather than inside it or hidden — "6 played, 9 cancelled"
+                      is a conversation worth having with a partner. Other models are untouched. */}
+                  <td>
+                    {m.matchesBillable != null ? num(m.matchesBillable) : num(m.matches)}
+                    {m.matchesCancelled != null && m.matchesCancelled > 0 && (
+                      <span className="sub canc">{num(m.matchesCancelled)} cancelled, not billed</span>
+                    )}
+                  </td>
                   <td>{num(m.spots)}</td>
                   <td>{num(m.daily)}</td>
                   <td>{num(m.guests)}</td>
@@ -94,7 +118,7 @@ export default function PartnerMonthlyView({ partnerName, sub, since, months, la
               <td>{num(sum(detailed, (m) => m.daily))}</td>
               <td>{num(sum(detailed, (m) => m.guests))}</td>
               <td>{money(revTotal)}<span className="sub rent">{money(revTotal - rentTotal)} matches + {money(rentTotal)} rentals</span><span className="sub">{detailed.length} months with detail</span></td>
-              <td>{money(sum(closed, (m) => Math.round(m.payment ?? 0)))}<span className="sub">closed months only</span></td>
+              <td>{money(sum(closed, (m) => Math.round(m.payment ?? 0)))}<span className="sub">{totalIncludesOpen ? "includes the month in progress" : "closed months only"}</span></td>
               <td /><td />
             </tr>
           </tfoot>
@@ -138,6 +162,7 @@ const CSS = `
 .pm14 .tv{font-size:31px;font-weight:900;letter-spacing:-1.3px;color:var(--forest);margin-top:7px;line-height:1}
 .pm14 .tn{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.45}
 .pm14 .card{background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:0 9px 26px rgba(0,51,38,.06);overflow:hidden}
+.pm14 .canc{color:var(--muted)}
 .pm14 .csub{padding:14px 20px;border-bottom:1px solid var(--line);font-size:11.5px;color:var(--muted)}
 .pm14 table{width:100%;border-collapse:separate;border-spacing:0}
 .pm14 thead th{background:var(--slot);text-align:right;font-size:9px;font-weight:900;letter-spacing:.85px;text-transform:uppercase;color:var(--muted);padding:11px 14px;border-bottom:1px solid var(--line);white-space:nowrap}

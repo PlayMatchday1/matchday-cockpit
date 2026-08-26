@@ -30,6 +30,12 @@ export type RentalLine = { date: string; label: string; amount: number };
 export type GrainRow = {
   key: string; label: string; isOpening: boolean; isOpen: boolean;
   matches: number | null; spots: number | null; daily: number | null; guests: number | null;
+  /* PER-MATCH-FEE PERIODS ONLY. `matches` above is the registration-derived seat count and stays
+   * exactly as it was for every other model. Under a fee, the number beside a payment must be the
+   * number that PRODUCED it — billable matches — and the cancelled count sits next to it rather
+   * than inside it. Null when the period is not on a fee. */
+  matchesBillable: number | null;
+  matchesCancelled: number | null;
   revenue: number | null; rentals: RentalLine[];
   payment: number | null; paymentUnavailable: boolean;
   state: PeriodState; paidOn: string | null; dueDate: string; periodEnd: string;
@@ -64,9 +70,17 @@ function rentalsIn(extra: PartnerExtraRevRow[], start: string, end: string): Ren
 }
 const inPeriod = (rows: PartnerRegRow[], start: string, end: string) => rows.filter((r) => { const d = r.match_start.slice(0, 10); return d >= start && d <= end; });
 
+/* IS THIS PERIOD ON A FEE? Compared as YMD strings, never through new Date() — these dates are
+ * local wall clock and a boundary parsed as an instant lands on the wrong side of a month end.
+ * Both halves required: a successor with no date, or a date with no successor, applies nothing. */
+const feePeriodOf = (payment: PartnerPaymentInfo, periodStart: string): boolean =>
+  payment.revenueModelNext === "per_match_fee"
+  && payment.revenueModelFrom != null
+  && periodStart >= payment.revenueModelFrom;
+
 const divergence = (pw: PartnerWeeklyPayment) => (pw.status === "paid" && pw.calculatedAmount != null && Math.abs(pw.owedAmount - pw.calculatedAmount) > 1);
 
-function rowFromPeriod(pw: PartnerWeeklyPayment, pr: PeriodRow, rows: PartnerRegRow[], extra: PartnerExtraRevRow[], monthGrain: boolean): GrainRow {
+function rowFromPeriod(pw: PartnerWeeklyPayment, pr: PeriodRow, rows: PartnerRegRow[], extra: PartnerExtraRevRow[], monthGrain: boolean, isFee = false): GrainRow {
   const [start, end] = monthGrain
     ? [monthStart(pw.weekStartDate), monthEnd(pw.weekStartDate)]
     : [pw.weekStartDate, pw.weekEndDate];
@@ -75,6 +89,8 @@ function rowFromPeriod(pw: PartnerWeeklyPayment, pr: PeriodRow, rows: PartnerReg
   return {
     key: pw.weekStartDate, label: pr.label, isOpening: pw.isPreSystem, isOpen: pr.isOpen,
     matches: seats.matches, spots: seats.spots, daily: seats.daily, guests: seats.guests,
+    matchesBillable: isFee && !pw.isPreSystem ? pw.matches : null,
+    matchesCancelled: isFee && !pw.isPreSystem ? (pw.matchesCancelled ?? null) : null,
     revenue: pw.isPreSystem ? null : pr.qualifying,
     rentals: pw.isPreSystem ? [] : rentalsIn(extra, start, end),
     payment: pr.payment, paymentUnavailable: false,
@@ -103,6 +119,7 @@ function rollMonth(monthKey: string, weeks: { pw: PartnerWeeklyPayment; pr: Peri
   return {
     key: start, label, isOpening: false, isOpen: open,
     matches: seats.matches, spots: seats.spots, daily: seats.daily, guests: seats.guests,
+    matchesBillable: null, matchesCancelled: null,   // weekly roll-up; the fee partner is monthly
     revenue, rentals: rentalsIn(extra, start, end),
     payment: open ? null : payment, paymentUnavailable: false,
     state, paidOn, dueDate: "", periodEnd: end, diverged, frozenPaid: null, livePayment: null,
@@ -126,7 +143,7 @@ export function derivePartnerGrains(
 ): PartnerGrains {
   const today = ymd(now);
   const cadence = payment.cadence;
-  const periodRows: PeriodRow[] = payment.weeklyPayments.map((pw) => derivePeriodRow(pw, cadence, payment.revenueModel, today));
+  const periodRows: PeriodRow[] = payment.weeklyPayments.map((pw) => derivePeriodRow(pw, cadence, payment.revenueModel, today, feePeriodOf(payment, pw.weekStartDate)));
   const paired = payment.weeklyPayments.map((pw, i) => ({ pw, pr: periodRows[i] }));
   const opening = paired.filter((p) => p.pw.isPreSystem);
   const live = paired.filter((p) => !p.pw.isPreSystem);
@@ -152,6 +169,7 @@ export function derivePartnerGrains(
         weekRows.push({
           key: cur, label: `Week of ${MON[+cur.slice(5, 7) - 1]} ${+cur.slice(8, 10)}`, isOpening: false, isOpen: end >= today,
           matches: seats.matches, spots: seats.spots, daily: seats.daily, guests: seats.guests,
+          matchesBillable: null, matchesCancelled: null,   // display-only week strip; no payment
           revenue: null, rentals: rentalsIn(extra, cur, end),
           payment: null, paymentUnavailable: true, state: "nothing", paidOn: null, dueDate: "", periodEnd: end,
           diverged: false, frozenPaid: null, livePayment: null,
@@ -164,7 +182,7 @@ export function derivePartnerGrains(
   // ── MONTH grain ──
   let monthRows: GrainRow[];
   if (cadence === "monthly") {
-    monthRows = live.map((p) => rowFromPeriod(p.pw, p.pr, rows, extra, true));
+    monthRows = live.map((p) => rowFromPeriod(p.pw, p.pr, rows, extra, true, feePeriodOf(payment, p.pw.weekStartDate)));
   } else {
     const byMonth = new Map<string, { pw: PartnerWeeklyPayment; pr: PeriodRow }[]>();
     for (const p of live) { const m = monthOf(p.pw.weekStartDate); (byMonth.get(m) ?? byMonth.set(m, []).get(m)!).push(p); }

@@ -82,7 +82,9 @@ export type PeriodRow = {
   refunded: number | null; // always 0 → em dash; kept so charged−refunded=qualifying holds
   qualifying: number | null;
   managerPay: number; // per_match only; 0 for flat
-  payment: number | null; // null for the open period (not yet calculated)
+  // null for an open period whose figure genuinely is not settled yet. A per-match-fee period is
+  // the exception: its running total is final for every match already played — see derivePeriodRow.
+  payment: number | null;
   dueDate: string;
   paidOn: string | null;
   shortfall: number; // manager pay − qualifying, when the floor fired (>0); else 0
@@ -94,6 +96,15 @@ export function derivePeriodRow(
   cadence: PartnerPaymentCadence,
   revenueModel: PartnerRevenueModel,
   today: string,
+  /* IS THIS PERIOD ON A PER-MATCH FEE? It changes what an OPEN period can honestly show.
+   *
+   * A revenue-share month in progress genuinely has no figure yet — the total moves with every
+   * booking until the month closes, so "Not yet calculated" is the truth. A FEE month does not
+   * work that way: each match that has already gone ahead has earned exactly the fee, and no
+   * later booking can change it. Hiding a known, final $600 behind "Not yet calculated"
+   * understates money the partner has already earned, which is the one direction a payout page
+   * must never round. */
+  isFee = false,
 ): PeriodRow {
   const paymentDisplay = pw.status === "paid" && pw.calculatedAmount != null ? pw.calculatedAmount : pw.owedAmount;
   const isOpen = !pw.isPreSystem && pw.status === "pending" && pw.weekEndDate >= today;
@@ -121,7 +132,9 @@ export function derivePeriodRow(
     refunded: pw.isPreSystem ? null : 0,
     qualifying: pw.isPreSystem ? null : pw.qualifyingRevenue,
     managerPay: pw.managerPay,
-    payment: isOpen ? null : paymentDisplay,
+    // Open + fee → the running total, which is exact for matches already played. Open + any other
+    // model → null, unchanged.
+    payment: isOpen && !isFee ? null : paymentDisplay,
     dueDate,
     paidOn: pw.paidAt ? pw.paidAt.slice(0, 10) : null,
     shortfall,
