@@ -24,6 +24,7 @@ import { readFileSync } from "node:fs";
 import {
   foldToPeople, counts, neverRan, filterPeople, emailDisplay, isRelayEmail, isFindableEmail,
   CAN_ADD_MATCH_MANAGER, CAN_REMOVE_MATCH_MANAGER, NO_MUTATION_REASON,
+  ADD_MATCH_MANAGER_ENDPOINT, REMOVE_MATCH_MANAGER_ENDPOINT, ENDPOINTS_PROOF,
   type ApiAssignment,
 } from "../src/lib/matchManagers";
 
@@ -127,10 +128,13 @@ console.log("\nthe name: MATCH MANAGERS everywhere, and the API's word only in t
   if (banner && NEEDLE.test(banner[0])) ok("…and it is the banner that explains the API's naming");
   else bad("…and it is the banner that explains the API's naming", "the banner does not mention the API's word at all");
 
-  const rest = banner ? noComments.replace(banner[0], " ") : noComments;
+  /* THE ENDPOINT PATH IS NOT A LABEL. /city-managers is the API's own URL and the disabled-controls
+   * reason quotes it on purpose; stripping it keeps this assertion about what these PEOPLE are
+   * called. The control beneath proves the strip removed something. */
+  const rest = (banner ? noComments.replace(banner[0], " ") : noComments).replace(/\/city-managers/g, " ");
   const hits = rest.split("\n").map((l, i) => [i + 1, l] as const).filter(([, l]) => NEEDLE.test(l));
-  if (hits.length === 0) ok("no other rendered text in the panel says 'city manager'");
-  else bad("no other rendered text in the panel says 'city manager'", hits.map(([n, l]) => `L${n}: ${l.trim()}`).join(" | "));
+  if (hits.length === 0) ok("no other rendered text in the panel CALLS these people 'city managers'");
+  else bad("no other rendered text in the panel calls them that", hits.map(([n, l]) => `L${n}: ${l.trim()}`).join(" | "));
 
   // The SECTION HEADING, the testids and the route are the names an operator and the next dev see.
   if (/MATCH MANAGERS/.test(src)) ok("the section heading reads MATCH MANAGERS");
@@ -170,21 +174,40 @@ console.log("\napple private relay: labelled with the ID, and the token never re
 }
 
 // ── 4. THE CONTROLS ARE DISABLED, AND THE REASON IS THE API ───────────────────────────────────
-console.log("\nadd and remove: disabled while the API has no endpoint for either");
+console.log("\nadd and remove: off because Clubhouse has not built them — NOT because the API can't");
 {
-  /* THIS IS THE ASSERTION THAT NAMES THE REASON. Probed against production and read out of the
-   * Retool export: the /city-managers family is GET /city-managers and GET /city-managers/users and
-   * nothing else. Retool's whole cityManagers group is reads plus attachCityManagerToMatch — a PUT
-   * on a MATCH, which attaches an existing manager to one fixture and does not add or remove anyone
-   * from a city's roster. There is no createCityManager and no deleteCityManager anywhere in the
-   * export. So both constants are false, and flipping either without shipping an endpoint fails
-   * here rather than shipping a button that looks live and does nothing. */
-  is("REMOVE is off — the MatchDay API exposes no remove endpoint", CAN_REMOVE_MATCH_MANAGER, false);
-  is("ADD is off — the MatchDay API exposes no add endpoint", CAN_ADD_MATCH_MANAGER, false);
-  if (/no endpoint to add or remove/i.test(NO_MUTATION_REASON)) ok("the on-screen reason says the API has no endpoint");
-  else bad("the on-screen reason says the API has no endpoint", NO_MUTATION_REASON);
-  if (/MatchDay app/i.test(NO_MUTATION_REASON)) ok("…and says where the change has to be made instead");
-  else bad("…and says where the change has to be made instead", NO_MUTATION_REASON);
+  /* THIS ASSERTION USED TO RECORD A FALSE FINDING, AND IT IS THE POINT OF KEEPING IT.
+   *
+   * It read "REMOVE is off — the MatchDay API exposes no remove endpoint", and that was wrong. The
+   * claim came from grepping the Retool export for `createCityManager` and `deleteCityManager` —
+   * names I invented. Retool's queries are called exactly that, so the grep should have hit; it
+   * missed because I searched for a guessed name instead of tracing the button. Following
+   * addCityManagerBtn's own click handler found it immediately:
+   *
+   *   addCityManagerBtn    "ADD CITY MANAGER" -> POST   /city-managers  {userId, cityId}
+   *   deleteCityManagerBtn "DELETE"           -> DELETE /city-managers?userId=&cityId=
+   *
+   * Both proven on staging by reading the list back — POST 19 rows -> 20, DELETE 20 -> 19.
+   *
+   * AN ABSENCE PROVED BY GREP IS NOT AN ABSENCE. The controls stay off because CLUBHOUSE has not
+   * built the writes, and the reason on screen must say that: "the API has no endpoint" would stop
+   * the next person looking. */
+  is("REMOVE is off — Clubhouse has not built it", CAN_REMOVE_MATCH_MANAGER, false);
+  is("ADD is off — Clubhouse has not built it", CAN_ADD_MATCH_MANAGER, false);
+  if (!/no endpoint to add or remove/i.test(NO_MUTATION_REASON)) ok("the reason no longer blames the API for a limit it does not have");
+  else bad("the reason no longer blames the API", NO_MUTATION_REASON);
+  if (/POST \/city-managers/.test(NO_MUTATION_REASON)) ok("…it names the add endpoint that does exist");
+  else bad("…it names the add endpoint that does exist", NO_MUTATION_REASON);
+  if (/DELETE \/city-managers/.test(NO_MUTATION_REASON)) ok("…and the remove endpoint");
+  else bad("…and the remove endpoint", NO_MUTATION_REASON);
+  if (/Clubhouse has not built/i.test(NO_MUTATION_REASON)) ok("…and says whose gap it actually is");
+  else bad("…and says whose gap it actually is", NO_MUTATION_REASON);
+  if (/Retool|MatchDay app/i.test(NO_MUTATION_REASON)) ok("…and where the change can be made today");
+  else bad("…and where the change can be made today", NO_MUTATION_REASON);
+  is("the add endpoint is recorded verbatim", ADD_MATCH_MANAGER_ENDPOINT, "POST /city-managers {userId, cityId}");
+  is("the remove endpoint is recorded verbatim", REMOVE_MATCH_MANAGER_ENDPOINT, "DELETE /city-managers?userId=&cityId=");
+  if (/staging/i.test(ENDPOINTS_PROOF) && /19/.test(ENDPOINTS_PROOF)) ok("the proof names the staging probe and its row counts");
+  else bad("the proof names the staging probe", ENDPOINTS_PROOF);
 
   const src = readFileSync("src/components/MatchManagersPanel.tsx", "utf8");
   for (const [id, cap] of [["mm-remove", "canRemove"], ["mm-add", "canAdd"]] as const) {
@@ -195,8 +218,8 @@ console.log("\nadd and remove: disabled while the API has no endpoint for either
     if (btn && /title=\{[^}]*mutationReason\}/.test(btn[0])) ok(`${id} carries the reason as its tooltip`);
     else bad(`${id} carries the reason as its tooltip`, btn ? btn[0].replace(/\s+/g, " ").slice(0, 120) : "button not found");
   }
-  // NO SECOND SEARCH BOX. Retool's add modal searches EMAIL ONLY, which cannot find any of the 14
-  // relay people. The filter box here filters the roster; adding is the top-of-page player search.
+  // NO SECOND SEARCH BOX. Retool's add modal searches EMAIL ONLY (GET /admin/players?email=), which
+  // cannot find any of the 14 relay people. The filter box here filters the roster.
   const boxes = (src.match(/<input\b/g) ?? []).length;
   is("exactly one input in the section — the roster filter", boxes, 1);
 }

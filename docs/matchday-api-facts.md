@@ -3763,3 +3763,73 @@ city's roster. **A typical Austin fixture (cityId 1) offers 28 of the 87 by defa
 
 **188 upcoming matches (start_date ≥ today, not cancelled); 5 have no manager attached** —
 WAW 3, ATX 2, all inside the next 14 days. Pay bands: 3 at max 14, 2 at max 22.
+
+---
+
+## CORRECTION (2026-08-26): POST and DELETE /city-managers DO exist
+
+**The section above said "There is NO add and NO remove". That was wrong, and it is left in place
+above with this correction beneath it rather than quietly edited, because the way it was reached
+matters more than the fact.**
+
+**How it went wrong:** I grepped the Retool export for `createCityManager` and `deleteCityManager`
+— names I invented — found nothing, and reported an absence. Retool's queries are called *exactly*
+those two names, so the grep should have hit. Tracing the button instead of guessing the name found
+it in one step. **An absence proved by grep is not an absence.** Work backwards from the control.
+
+### Traced from the widgets' own click handlers
+
+| widget | text | fires | request |
+|---|---|---|---|
+| `addCityManagerBtn` | ADD CITY MANAGER | `addCityManager` | **`POST /city-managers`** |
+| `deleteCityManagerBtn` | DELETE | `deleteCityManager` | **`DELETE /city-managers?userId=&cityId=`** |
+| (intro text) | — | `updateCityManagerIntroText` | `PUT /city-managers/{id}` |
+
+All three are **REST queries against the MatchDay API** (`{{globalVar.value.serverApiUrl}}`), not
+direct SQL — Retool holds no database resource for this. Auth is
+`Authorization: Bearer {{localStorage.values.accessToken}}` on every one.
+
+### The full add request
+
+```
+POST {serverApiUrl}/city-managers
+Authorization: Bearer <token>
+Content-Type: application/json          (bodyType: json)
+
+{ "userId": <number>, "cityId": <number> }
+```
+
+**The modal collects exactly two things**, and neither is typed free-hand:
+
+- `usersForCityManagerTable.selectedRow.data.id` → `userId`. The table is fed by
+  **`GET /admin/players?email={{searchByEmailCityManager.value}}&limit=&page=`** — an **email-only**
+  search, which cannot find any of the **14 match managers on an Apple private relay address**.
+- `cityManagerCitySelect.value` → `cityId`. Options are `GET /cities`, `value = item.id`,
+  `label = item.name`.
+
+`requireConfirmation: false` on all three — Retool asks nothing before adding or deleting. On
+success `addCityManager` and `deleteCityManager` both re-run `getCityManagers`.
+
+### The remove request
+
+```
+DELETE {serverApiUrl}/city-managers?userId=<n>&cityId=<n>
+Authorization: Bearer <token>
+```
+
+No body. The pair comes from `cityManagersTable.selectedRow.data`. The DELETE button is **not
+disabled and not hidden**, and carries no tooltip or confirmation.
+
+### PROVEN ON STAGING, verified by reading the list back
+
+    /city-managers before                                  19 rows
+    POST   /city-managers {userId:2, cityId:6}   -> 20 rows, the row is there   LANDED
+    DELETE /city-managers?userId=2&cityId=6      -> 19 rows, the row is gone    REMOVED
+    state restored                                          YES
+
+### Can Clubhouse do this?
+
+**Yes — through the API, exactly as Retool does. Not by writing to the database; no direct SQL is
+involved anywhere in this flow.** The controls in Clubhouse are still disabled, but the reason is
+now stated honestly on screen: **Clubhouse has not built the writes**, which need a route, a
+confinement rule, a `change_log` entry and a confirmation. It is a build, not a blocker.

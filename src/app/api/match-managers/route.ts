@@ -1,7 +1,12 @@
 // GET /api/match-managers — the match-manager roster for Player Lookup.
 //
 // READ ONLY. This route issues exactly one GET to the MatchDay API and writes nothing anywhere.
-// There is no add and no remove, because the API has neither — see CAN_ADD_MATCH_MANAGER.
+//
+// IT IS READ-ONLY BY CHOICE, NOT BY LIMITATION. An earlier version of this comment said the API had
+// no add and no remove. That was wrong: Retool's ADD CITY MANAGER button fires POST /city-managers
+// {userId, cityId} and its DELETE button fires DELETE /city-managers?userId=&cityId=, both proven
+// on staging by reading the list back. Clubhouse has not built either write yet — see
+// NO_MUTATION_REASON, which now says that rather than blaming the API.
 //
 // THESE ARE NOT CLUBHOUSE CITY MANAGERS. The API calls them "city managers"; app_users
 // .is_city_manager is a login with city confinement and is a different population entirely —

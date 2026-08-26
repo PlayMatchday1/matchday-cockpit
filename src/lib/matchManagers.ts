@@ -130,17 +130,42 @@ export function filterPeople(people: readonly MatchManager[], q: string, city: s
   });
 }
 
-/* ── REMOVAL: THERE IS NO ENDPOINT ─────────────────────────────────────────────────────────────
- * Probed against production and read out of the Retool export: the /city-managers family exposes
- * GET /city-managers and GET /city-managers/users and NOTHING ELSE. Retool's entire cityManagers
- * group is reads plus attachCityManagerToMatch, which is a PUT on a MATCH — it attaches an existing
- * manager to one fixture; it does not add or remove anyone from a city's roster.
+/* ── ADD AND REMOVE: THE ENDPOINTS EXIST. I SAID THEY DID NOT, AND I WAS WRONG. ────────────────
  *
- * So the control is DISABLED and says why. A button that looks live and does nothing is the thing
- * we do not ship, and match-managers-test asserts this constant is false so that enabling the
- * control without an endpoint fails the gate loudly. */
+ * The first version of this file recorded "the /city-managers family exposes GET and NOTHING ELSE",
+ * on the strength of grepping the Retool export for `createCityManager` and `deleteCityManager` —
+ * NAMES I INVENTED. Retool's queries are called exactly that, so the grep should have hit; it did
+ * not because I searched for the guessed name instead of tracing the control. Ryan pointed at the
+ * ADD CITY MANAGER button in Retool, and following its click handler found the query in one step.
+ *
+ * READ THE BUTTON, NOT A NAME YOU EXPECT TO FIND. An absence proved by grep is not an absence.
+ *
+ * WHAT RETOOL ACTUALLY CALLS, traced from the widgets' own event handlers:
+ *
+ *   addCityManagerBtn   "ADD CITY MANAGER" -> POST   /city-managers  {userId, cityId}
+ *   deleteCityManagerBtn "DELETE"          -> DELETE /city-managers?userId=&cityId=
+ *   (intro text)                            -> PUT    /city-managers/{id} {introMatchText}
+ *
+ * BOTH PROVEN ON STAGING, each verified by reading the list back: POST took 19 rows to 20 and the
+ * row was there; DELETE took it back to 19 and the row was gone; the probe restored the state.
+ *
+ * SO WHY ARE THE CONTROLS STILL OFF? Not because the API cannot. Because CLUBHOUSE HAS NOT BUILT
+ * THE FLOW — there is no route, no confinement decision, no change_log wiring and no confirmation
+ * for either write, and adding a city manager is a permissions-shaped act that deserves all four.
+ * The on-screen reason says that, because "the API has no endpoint" was false and an operator
+ * reading it would stop looking. */
+export const ADD_MATCH_MANAGER_ENDPOINT = "POST /city-managers {userId, cityId}";
+export const REMOVE_MATCH_MANAGER_ENDPOINT = "DELETE /city-managers?userId=&cityId=";
+export const ENDPOINTS_PROOF =
+  "Traced from Retool's addCityManagerBtn / deleteCityManagerBtn click handlers, then proven on " +
+  "staging: POST took /city-managers from 19 rows to 20 and DELETE took it back to 19, each " +
+  "verified by reading the list back.";
+
+// Still false — but now for an honest reason, and the reason below says which.
 export const CAN_REMOVE_MATCH_MANAGER = false;
 export const CAN_ADD_MATCH_MANAGER = false;
 export const NO_MUTATION_REASON =
-  "The MatchDay API exposes no endpoint to add or remove a match manager — only to attach an " +
-  "existing one to a match. Changes have to be made in the MatchDay app.";
+  "The MatchDay API does support this — Retool adds with POST /city-managers and removes with " +
+  "DELETE /city-managers, both proven on staging. Clubhouse has not built the write yet: it needs " +
+  "a route, a confinement rule, a change_log entry and a confirmation. Until then, changes are " +
+  "made in Retool or the MatchDay app.";

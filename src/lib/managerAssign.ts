@@ -144,9 +144,13 @@ export function confirmLines(c: ConfirmInput): string[] {
   return out;
 }
 
-/* ── CREATE AND DELETE STAY SHUT ───────────────────────────────────────────────────────────────
- * Attaching an EXISTING manager to a match is the only write the API offers. Adding a person to a
- * city's roster and removing them from it have no endpoint at all — see matchManagers.ts. */
+/* ── THIS IS THE MATCH-LEVEL WRITE, AND IT IS NOT THE ONLY ONE ─────────────────────────────────
+ * Attaching an existing manager to a MATCH is what this module does. Adding a person to a CITY's
+ * roster and removing them from it are SEPARATE endpoints that DO exist — POST /city-managers and
+ * DELETE /city-managers?userId=&cityId=, both proven on staging — and Clubhouse has simply not
+ * built those two yet. An earlier version of this comment said they did not exist; it was wrong,
+ * because it was written from a grep for a guessed function name rather than from Retool's own
+ * button. See matchManagers.ts. */
 export const CAN_ASSIGN_MANAGER_TO_MATCH = true;
 export const CAN_UNASSIGN_MANAGER_FROM_MATCH = true;
 export const UNASSIGN_PROOF = DETACH_PROOF;

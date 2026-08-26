@@ -92,10 +92,17 @@ export default function MatchManagersPanel() {
                 <button type="button" className={`mmchip ${unrunOnly ? "mmon" : ""}`} onClick={() => setUnrunOnly((v) => !v)} data-testid="mm-unrun">
                   Never run a match <span className="mmn">{data.neverRan}</span>
                 </button>
-                {/* NO SECOND SEARCH BOX FOR ADDING. The operator finds the player in the Player
-                    Lookup search at the top — phone, email, name or ID — and the action lives on
-                    their card. Retool's modal searches EMAIL ONLY, which cannot find anyone on an
-                    Apple relay address; rebuilding that weakness here would be a step backwards. */}
+                {/* ADD IS OFF BECAUSE CLUBHOUSE HAS NOT BUILT IT, NOT BECAUSE THE API CANNOT.
+                    Retool's ADD CITY MANAGER button posts to /city-managers and its DELETE button
+                    deletes from it; both are proven on staging. The reason on screen says exactly
+                    that — the earlier wording blamed the API and would have stopped an operator
+                    from looking any further.
+
+                    WHEN IT IS BUILT: no second search box. The operator finds the player in the
+                    Player Lookup search at the top — phone, email, name or ID — and the action
+                    lives on their card. Retool's modal searches EMAIL ONLY (GET /admin/players
+                    ?email=), which cannot find any of the 14 people on an Apple relay address;
+                    rebuilding that weakness here would be a step backwards. */}
                 <button type="button" className="mmadd" disabled={!data.canAdd} title={data.canAdd ? "" : data.mutationReason}
                   data-testid="mm-add">+ Add match manager</button>
               </div>
