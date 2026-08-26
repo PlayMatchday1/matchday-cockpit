@@ -108,17 +108,37 @@ export const insideBox = (m: Box, plot: Box, eps = 1e-6): boolean =>
 
 /* ── THE MONTH SERIES ──────────────────────────────────────────────────────────────────────────*/
 export type MonthKey = string;             // "Aug 2026"
-export type SpotRow = { month: MonthKey; cls: PaymentClass; city: string | null; fieldId: number | null; amount: number };
+export type SpotRow = {
+  month: MonthKey; cls: PaymentClass; city: string | null; fieldId: number | null; amount: number;
+  /* THE IDENTITY PAIR. Needed because ONE MATCH IS ONE MATCH: a member who books a spot for a
+   * friend gets a second row under their OWN user_id, so counting rows counts the booking, not the
+   * playing. Exactly the trap 0147 fixed in player_play_stats, where `plays` was count(*) over
+   * spots and 343 players read as having played twice for one match they brought a guest to. */
+  userId: string | null; matchApiId: number | null;
+};
 
-export type MonthTotals = { month: MonthKey; member: number; daily: number; promo: number; other: number };
+export type MonthTotals = {
+  month: MonthKey; member: number; daily: number; promo: number; other: number;
+  /** DISTINCT (user_id, match_api_id) among MEMBER rows — one match is one match. */
+  memberMatches: number;
+};
 
 export function totalsByMonth(rows: readonly SpotRow[], months: readonly MonthKey[]): MonthTotals[] {
   const m = new Map<MonthKey, MonthTotals>();
-  for (const k of months) m.set(k, { month: k, member: 0, daily: 0, promo: 0, other: 0 });
+  const seen = new Map<MonthKey, Set<string>>();
+  for (const k of months) { m.set(k, { month: k, member: 0, daily: 0, promo: 0, other: 0, memberMatches: 0 }); seen.set(k, new Set()); }
   for (const r of rows) {
     const t = m.get(r.month);
     if (!t) continue;
-    if (r.cls === "MEMBER") t.member++;
+    if (r.cls === "MEMBER") {
+      t.member++;
+      /* ONE MATCH IS ONE MATCH. A row with no identity cannot be deduped, so it counts as its own
+       * appearance rather than collapsing into someone else's — the safe direction. */
+      const id = r.userId != null && r.matchApiId != null ? `${r.userId}|${r.matchApiId}` : null;
+      const set = seen.get(r.month)!;
+      if (id == null) t.memberMatches++;
+      else if (!set.has(id)) { set.add(id); t.memberMatches++; }
+    }
     else if (r.cls === "DAILY PAID") t.daily++;
     else if (r.cls === "PROMOCODE") t.promo++;
     else t.other++;
@@ -167,6 +187,9 @@ export function buildKpis(args: {
     activeMembers,
     // NULL, NOT ZERO, when there is nobody to divide by. "0 matches per member" is a claim about
     // behaviour; "—" is the absence of one.
+    /* THE NUMERATOR IS MATCHES, NOT SPOTS. `memberSpots` here is the DISTINCT (user, match) count
+     * — see MonthTotals.memberMatches. Counting rows counted a member who booked for a friend
+     * twice for one match. */
     avgMatchesPerMember: activeMembers > 0 ? memberSpots / activeMembers : null,
     /* AVG PRICE PER MEMBER SPOT = membership revenue / member spots.
      *

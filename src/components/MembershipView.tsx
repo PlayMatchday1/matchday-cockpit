@@ -120,7 +120,8 @@ export default function MembershipView() {
   const isPartial = !!part && part.elapsed < part.total;
   const kpis = buildKpis({
     activeMembers: activeThisMonth,
-    memberSpots: thisMonth?.member ?? 0,
+    // MATCHES, not spots — one match is one match.
+    memberSpots: thisMonth?.memberMatches ?? 0,
     membershipRevenue: revenue,
     // Churn is a PLAYER concept — days since last played, the 90-day floor /api/lifecycle/churn
     // already defaults to. It is not a membership status, and the two disagree by design.
@@ -187,7 +188,7 @@ export default function MembershipView() {
         <Small title="Avg matches per member" sub="Same months, its own scale"
           values={totals.map((t) => {
             const a = data?.activeByMonth[t.month] ?? 0;
-            return { k: t.month, v: a > 0 ? t.member / a : 0, partial: isPartialMonth(data, t.month) };
+            return { k: t.month, v: a > 0 ? t.memberMatches / a : 0, partial: isPartialMonth(data, t.month) };
           })}
           colour={SERIES[1].colour} fmt={(n) => n.toFixed(1)} />
       </div>

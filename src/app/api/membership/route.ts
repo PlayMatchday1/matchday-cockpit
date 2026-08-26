@@ -94,6 +94,8 @@ export async function GET(req: Request) {
       rows.push({
         month: monthKey(r.match_start), cls: classify(r.payment_type),
         city, fieldId: r.field_id ?? null, amount: Number(r.match_price_paid ?? 0) || 0,
+        userId: r.user_id != null ? String(r.user_id) : null,
+        matchApiId: r.match_api_id ?? null,
       });
       /* THE DAY GRAIN, for the 100% stacked mix. match_start is LOCAL WALL CLOCK wearing a Z — the
        * day is read off the string, never through new Date(), which would re-shift it and move a

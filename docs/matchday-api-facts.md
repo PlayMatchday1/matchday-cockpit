@@ -3607,3 +3607,48 @@ now ticks 1, 5, 10, 15, 20, 25 and the subtitle names the coverage: `Aug 2026 ·
 **STILL UNRECONCILED:** `members_monthly_snapshots.avg_matches_per_member` carries its own figures —
 7.96 / 8.06 / 8.08 / 6.98 — which agree with neither series above. Three numbers for one question;
 nothing on the page reads that column, and which is right is unestablished.
+
+## MEMBER SPOTS ARE NOT MEMBER MATCHES — AND THE SNAPSHOT WAS ASKING A DIFFERENT QUESTION (2026-08-26)
+
+"Avg matches per member" divided member SPOTS by members. A member who books a spot for a friend
+gets a second row under their OWN user_id, so that counted the booking, not the playing — the same
+trap 0147 fixed in `player_play_stats`, where `plays` was `count(*)` over spots and 343 players read
+as having played twice for one match they brought a guest to.
+
+Counting DISTINCT `(user_id, match_api_id)` instead:
+
+| month | active | spots | matches | before (spots ÷ active) | after (matches ÷ active) |
+|---|---|---|---|---|---|
+| May 2026 | 249 | 2,219 | **2,124** | 8.91 | **8.53** |
+| Jun 2026 | 392 | 2,515 | **2,431** | 6.42 | **6.20** |
+| Jul 2026 | 412 | 2,769 | **2,664** | 6.72 | **6.47** |
+| Aug 2026 | 383 | 1,902 | **1,837** | 4.97 | **4.80** |
+
+**Every MEMBER-typed row is `user_type = PLAYER`** — no GUEST or ADDITIONAL_SPOT row is typed
+MEMBER, because `derivePaymentType` reads the buyer's membership window. So the 65–105 rows that
+collapse each month are players holding **two or more PLAYER rows in the same match**, which is the
+same shape as the Blake case in 0147 and not visible from `user_type` at all.
+
+The price tile still divides by SPOTS, deliberately: **a spot is what was paid for.** Two
+denominators, on purpose, each named where it is used.
+
+### THE SNAPSHOT COLUMN IS CLOSED — BY EXPLANATION, NOT BY AGREEMENT
+
+`members_monthly_snapshots.avg_matches_per_member` reads 7.96 / 8.06 / 8.08 / 6.98 and matches
+neither series. `computeAvgMatchesPerMember` (`membershipStats.ts:244`) explains why — it is a
+**different question**:
+
+- **denominator** = `matchesByMember.size`, members who played **at least once that month**, not
+  active members. It is stored as `members_tracked` (340 / 359 / 383 / 334) and is not
+  `active_count`.
+- **numerator** = a count of MEMBER attendance ROWS — spots, the same trap, uncorrected there.
+- keyed on **email**, not `user_id`, and restricted to `isPaidExternalMember`.
+
+So it answers *"how often does a playing member play"* and the page answers *"how much does the
+member base play"*. Both legitimate, neither wrong, and **not comparable** — which is why they never
+converged. Nothing on the page reads that column.
+
+**A window difference worth keeping:** the route's `toDate` is TODAY, not the month end. A match on
+the 29th has not been played and must not count toward a partial August. A fixture built from a
+query ending 2026-08-31 gave 1,981 spots / 1,915 matches and disagreed with the page by 0.2 — the
+page was right.

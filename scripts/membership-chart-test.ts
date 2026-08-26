@@ -115,10 +115,10 @@ console.log("\nlabels: nothing overlaps the card title");
 console.log("\nagreement: one month, three readouts, one number");
 {
   const rows: SpotRow[] = [
-    ...Array.from({ length: 795 }, () => ({ month: "Aug 2026", cls: "MEMBER" as const, city: "Austin", fieldId: 1, amount: 0 })),
-    ...Array.from({ length: 210 }, () => ({ month: "Aug 2026", cls: "DAILY PAID" as const, city: "Austin", fieldId: 1, amount: 15 })),
-    ...Array.from({ length: 34 }, () => ({ month: "Aug 2026", cls: "PROMOCODE" as const, city: "Austin", fieldId: 1, amount: 5 })),
-    ...Array.from({ length: 12 }, () => ({ month: "Jul 2026", cls: "MEMBER" as const, city: "Austin", fieldId: 1, amount: 0 })),
+    ...Array.from({ length: 795 }, (_, i) => ({ month: "Aug 2026", cls: "MEMBER" as const, city: "Austin", fieldId: 1, amount: 0, userId: `u${i}`, matchApiId: i })),
+    ...Array.from({ length: 210 }, (_, i) => ({ month: "Aug 2026", cls: "DAILY PAID" as const, city: "Austin", fieldId: 1, amount: 15, userId: `d${i}`, matchApiId: i })),
+    ...Array.from({ length: 34 }, (_, i) => ({ month: "Aug 2026", cls: "PROMOCODE" as const, city: "Austin", fieldId: 1, amount: 5, userId: `p${i}`, matchApiId: i })),
+    ...Array.from({ length: 12 }, (_, i) => ({ month: "Jul 2026", cls: "MEMBER" as const, city: "Austin", fieldId: 1, amount: 0, userId: `j${i}`, matchApiId: i })),
   ];
   const months = ["Jul 2026", "Aug 2026"];
   const t = totalsByMonth(rows, months);
@@ -202,7 +202,15 @@ console.log("\nevery KPI equals its chart");
   const ACTIVE: Record<string, number> = { "May 2026": 249, "Jun 2026": 392, "Jul 2026": 412, "Aug 2026": 383 };
   // REAL member-spot counts, read off the route on 2026-08-26. A fixture invented to make the
   // arithmetic work asserts the arithmetic and nothing about the page.
+  // REAL member counts, read off the route on 2026-08-26. SPOTS are rows; MATCHES are distinct
+  // (user_id, match_api_id) pairs — a member who booked for a friend appears twice in the first
+  // and once in the second.
+  /* READ OFF THE ROUTE, not off a script with its own window. An earlier fixture took August from
+   * a query ending 2026-08-31 and got 1,981 spots / 1,915 matches; the ROUTE ends at TODAY, which
+   * is right — a match on the 29th has not been played and must not count toward a partial month.
+   * The fixture disagreed with the page by 0.2 and only the page was correct. */
   const SPOTS: Record<string, number> = { "May 2026": 2219, "Jun 2026": 2515, "Jul 2026": 2769, "Aug 2026": 1902 };
+  const MATCHES: Record<string, number> = { "May 2026": 2124, "Jun 2026": 2431, "Jul 2026": 2664, "Aug 2026": 1837 };
   const REV: Record<string, number> = { "May 2026": 15584.10, "Jun 2026": 16789.35, "Jul 2026": 17205.76, "Aug 2026": 14838.40 };
   const months = Object.keys(ACTIVE);
 
@@ -211,18 +219,20 @@ console.log("\nevery KPI equals its chart");
   is("…and none of them is the live subscription count", months.some((m) => ACTIVE[m] === 451), false);
 
   for (const m of months) {
-    const rows: SpotRow[] = Array.from({ length: SPOTS[m] }, () => ({ month: m, cls: "MEMBER" as const, city: "Austin", fieldId: 1, amount: 0 }));
+    const rows: SpotRow[] = Array.from({ length: SPOTS[m] }, (_, i) => ({ month: m, cls: "MEMBER" as const, city: "Austin", fieldId: 1, amount: 0, userId: `u${i}`, matchApiId: i }));
     const col = totalsByMonth(rows, [m])[0];
-    const k = buildKpis({ activeMembers: ACTIVE[m], memberSpots: col.member, membershipRevenue: REV[m], churnedNow: 9532, churnedPrior: 8737 });
+    const k = buildKpis({ activeMembers: ACTIVE[m], memberSpots: col.memberMatches, membershipRevenue: REV[m], churnedNow: 9532, churnedPrior: 8737 });
 
     // KPI 1 — active members. The chart draws the same number the KPI prints.
     is(`${m}: the active-members chart equals the KPI`, ACTIVE[m], k.activeMembers);
     // KPI 2 — avg matches per member. THE PAIR THAT DISAGREED.
-    const chartAvg = col.member / ACTIVE[m];
+    const chartAvg = col.memberMatches / ACTIVE[m];
     is(`${m}: the avg-matches BAR equals the KPI`, chartAvg, k.avgMatchesPerMember);
     is(`${m}: …to one decimal, as both render`, chartAvg.toFixed(1), (k.avgMatchesPerMember ?? 0).toFixed(1));
     // KPI 3 — avg price per member spot. The tile and the KPI are one calculation.
-    is(`${m}: the price TILE equals the KPI`, REV[m] / col.member, k.avgPricePerMemberSpot);
+    // The price tile is PER SPOT — that one genuinely divides by spots, because a spot is what was
+    // paid for. The avg-matches KPI divides by MATCHES. Two denominators, on purpose, each named.
+    is(`${m}: the price TILE equals the KPI`, REV[m] / col.memberMatches, k.avgPricePerMemberSpot);
     // KPI 4 — churn. Same two counts feed the tile and the percentage.
     is(`${m}: the churn KPI is derived from the two counts it prints`,
       k.churnedMoMPct, ((k.churnedNow - k.churnedPrior) / k.churnedPrior) * 100);
@@ -230,14 +240,20 @@ console.log("\nevery KPI equals its chart");
 
   // The specific regression, named: dividing every month by the live 451 produces a FALSE TREND.
   const falseTrend = months.map((m) => Number((SPOTS[m] / 451).toFixed(1)));
-  const realSeries = months.map((m) => Number((SPOTS[m] / ACTIVE[m]).toFixed(1)));
+  const realSeries = months.map((m) => Number((MATCHES[m] / ACTIVE[m]).toFixed(1)));
   /* THE ARTIFACT, PINNED. Dividing every month by the live 451 gave 4.9 / 5.6 / 6.1 / 4.2 — a rise
    * then a fall. The real series is 8.9 / 6.4 / 6.7 / 5.0: a fall, then flat, then a partial month.
    * Not a different value — a different SHAPE, and the shape is what anyone reads off a chart. */
   is("the false series is what the live divisor produced", falseTrend, [4.9, 5.6, 6.1, 4.2]);
-  is("the real series is a different shape entirely", realSeries, [8.9, 6.4, 6.7, 5.0]);
+  is("the real series is a different shape entirely", realSeries, [8.5, 6.2, 6.5, 4.8]);
+  /* SPOTS ALWAYS EXCEED MATCHES, never the other way — a member cannot play a match fewer times
+   * than they hold rows for it. A month where they were equal would mean nobody booked for anyone,
+   * which is possible; inverted would mean the dedupe is broken. */
+  is("spots >= matches, every month", months.every((m) => SPOTS[m] >= MATCHES[m]), true);
+  is("…and they genuinely differ, so the dedupe is doing work",
+    months.some((m) => SPOTS[m] > MATCHES[m]), true);
   is("…they are not the same series", falseTrend.join(",") === realSeries.join(","), false);
-  is("…and the real August value is 5.0, not 4.2", realSeries[3], 5.0);
+  is("…and the real August value is 4.8, as the page renders it", realSeries[3], 4.8);
   // The false series RISES into July; the real one FALLS. A reader takes opposite conclusions.
   is("the false series rises May->Jul", falseTrend[2] > falseTrend[0], true);
   is("the real series FALLS over the same months", realSeries[2] < realSeries[0], true);
