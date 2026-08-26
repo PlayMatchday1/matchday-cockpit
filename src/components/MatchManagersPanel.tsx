@@ -15,14 +15,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import {
-  filterPeople, emailDisplay, type MatchManager, type Counts,
+  filterPeople, emailDisplay, addConfirmLines, removeConfirmLines,
+  type MatchManager, type Counts,
 } from "@/lib/matchManagers";
 
+type CityOpt = { id: number; label: string };
 type Payload = {
   people: MatchManager[]; counts: Counts; neverRan: number;
-  canAdd: boolean; canRemove: boolean; mutationReason: string;
+  canAdd: boolean; canRemove: boolean; searchNote: string; cities: CityOpt[];
   scope: string | null; confined: boolean; error?: string;
 };
+type Pending =
+  | { op: "remove"; userId: number; name: string; cityId: number; cityLabel: string; lines: string[] }
+  | { op: "add"; userId: number; name: string; cityId: number; cityLabel: string; lines: string[] };
 
 const fmtDate = (d: string | null) =>
   d && /^\d{4}-\d{2}-\d{2}$/.test(d)
@@ -37,6 +42,13 @@ export default function MatchManagersPanel() {
   const [q, setQ] = useState("");
   const [city, setCity] = useState<string | null>(null);
   const [unrunOnly, setUnrunOnly] = useState(false);
+  /* THE CONFIRMATION, REQUIRED ON BOTH. Retool asks nothing — requireConfirmation is false on both
+   * of its queries, so one stray click puts someone on a roster or takes them off it. Nothing is
+   * sent while this is null, and Cancel just sets it back to null. */
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [addHint, setAddHint] = useState(false);
+  const [result, setResult] = useState<{ verdict: string; text: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
@@ -54,6 +66,35 @@ export default function MatchManagersPanel() {
   // LAZY. The roster is one API call and this section starts collapsed; fetching it on every
   // Player Lookup visit would spend a MatchDay round-trip on a panel nobody opened.
   useEffect(() => { if (open && !data && !loading) void load(); }, [open, data, loading, load]);
+
+  /* ONE WRITE, NEVER RETRIED. There is no retry button and no automatic re-send: a duplicate add
+   * is a duplicate roster row and a duplicate delete is a second person's row if the pair moved.
+   * The verdict comes from the ROUTE, which reads the roster back — not from the status code. */
+  const commit = useCallback(async () => {
+    if (!pending || busy) return;
+    setBusy(true); setResult(null);
+    try {
+      const { data: s } = await supabase.auth.getSession();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (s.session?.access_token) headers.Authorization = `Bearer ${s.session.access_token}`;
+      const r = pending.op === "add"
+        ? await fetch("/api/match-managers", { method: "POST", headers, body: JSON.stringify({ userId: pending.userId, cityId: pending.cityId }) })
+        : await fetch(`/api/match-managers?userId=${pending.userId}&cityId=${pending.cityId}`, { method: "DELETE", headers });
+      const j = (await r.json()) as { verdict?: string; error?: string };
+      const v = j.verdict ?? (r.ok ? "UNKNOWN" : "FAILED");
+      setResult({ verdict: v, text: v === "LANDED"
+        ? `${pending.name} is ${pending.op === "add" ? "on" : "off"} ${pending.cityLabel}'s roster — confirmed by reading the roster back.`
+        : v === "NOT APPLIED" ? `The request was accepted but the roster did not change. ${pending.name} is unchanged on ${pending.cityLabel}. Nothing was retried.`
+        : v === "UNKNOWN" ? `It is not known whether this landed. Re-open this panel and look before acting — do NOT press it again. ${j.error ?? ""}`
+        : `${j.error ?? "The write was rejected."} Nothing changed and nothing was retried.` });
+      setPending(null);
+      if (v === "LANDED") { setData(null); }   // force a re-read; never patch the list optimistically
+    } catch (e) {
+      // Same as the card: the thrown path is the least-informed case and says more, not less.
+      setResult({ verdict: "UNKNOWN", text: `${e instanceof Error ? e.message : String(e)} — it is not known whether this landed. Reload and look before acting; do NOT press it again.` });
+      setPending(null);
+    } finally { setBusy(false); }
+  }, [pending, busy]);
 
   const people = data?.people ?? [];
   const rows = useMemo(() => {
@@ -92,19 +133,20 @@ export default function MatchManagersPanel() {
                 <button type="button" className={`mmchip ${unrunOnly ? "mmon" : ""}`} onClick={() => setUnrunOnly((v) => !v)} data-testid="mm-unrun">
                   Never run a match <span className="mmn">{data.neverRan}</span>
                 </button>
-                {/* ADD IS OFF BECAUSE CLUBHOUSE HAS NOT BUILT IT, NOT BECAUSE THE API CANNOT.
-                    Retool's ADD CITY MANAGER button posts to /city-managers and its DELETE button
-                    deletes from it; both are proven on staging. The reason on screen says exactly
-                    that — the earlier wording blamed the API and would have stopped an operator
-                    from looking any further.
-
-                    WHEN IT IS BUILT: no second search box. The operator finds the player in the
-                    Player Lookup search at the top — phone, email, name or ID — and the action
-                    lives on their card. Retool's modal searches EMAIL ONLY (GET /admin/players
-                    ?email=), which cannot find any of the 14 people on an Apple relay address;
-                    rebuilding that weakness here would be a step backwards. */}
-                <button type="button" className="mmadd" disabled={!data.canAdd} title={data.canAdd ? "" : data.mutationReason}
-                  data-testid="mm-add">+ Add match manager</button>
+                {/* NO SECOND SEARCH BOX. Adding starts at the Player Lookup search already at the
+                    top of this page — phone, email, name OR ID — and the action lives on the
+                    player's own card once they are open. Retool's add modal searches
+                    GET /admin/players?email= — EMAIL ONLY — which cannot find a single one of the
+                    14 match managers on an @privaterelay.appleid.com token. Rebuilding that box
+                    here would rebuild exactly the weakness this feature exists to fix, so this
+                    button sends the operator to the search that can find those people. */}
+                <button type="button" className="mmadd" disabled={!data.canAdd} data-testid="mm-add"
+                  onClick={() => {
+                    const el = document.getElementById("pl-q") as HTMLInputElement | null;
+                    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+                    el?.focus();
+                    setAddHint(true);
+                  }}>+ Add match manager</button>
               </div>
 
               <div className="mmcities" data-testid="mm-cities">
@@ -119,8 +161,27 @@ export default function MatchManagersPanel() {
                 ))}
               </div>
 
-              {!data.canAdd && (
-                <p className="mmmut" data-testid="mm-no-mutation">{data.mutationReason}</p>
+              {addHint && (
+                <p className="mmhint" data-testid="mm-add-hint">{data.searchNote}</p>
+              )}
+              {result && (
+                <p className={`mmres v-${result.verdict.replace(/\s+/g, "")}`} data-testid="mm-result" data-verdict={result.verdict}>
+                  <b>{result.verdict}</b> — {result.text}
+                </p>
+              )}
+
+              {/* CANCEL SENDS NOTHING. There is no request in flight while this is open — the
+                  fetch is in commit() and commit() only runs from Confirm. */}
+              {pending && (
+                <div className="mmconfirm" data-testid="mm-confirm">
+                  <b>{pending.op === "add" ? "This puts someone on a city's roster." : "This takes someone off a city's roster."}</b>
+                  <ul>{pending.lines.map((l, i) => <li key={i}>{l}</li>)}</ul>
+                  <div className="mmconfirm-b">
+                    <button type="button" className="mmchip" data-testid="mm-confirm-cancel" onClick={() => setPending(null)}>Cancel — send nothing</button>
+                    <button type="button" className="mmadd" data-testid="mm-confirm-go" disabled={busy} onClick={() => { void commit(); }}>
+                      {busy ? "Sending…" : pending.op === "add" ? "Confirm and add" : "Confirm and remove"}</button>
+                  </div>
+                </div>
               )}
 
               <div className="mmtbl">
@@ -148,9 +209,21 @@ export default function MatchManagersPanel() {
                         unit. Both spans are display:none on the wide layout, where the head says it. */}
                     <div className="mmr mmmono">{p.matchesRun.toLocaleString("en-US")}<span className="mmsm"> matches run</span></div>
                     <div className="mmmono"><span className="mmsm">Last </span>{fmtDate(p.lastMatch)}</div>
-                    <div>
-                      <button type="button" className="mmrm" disabled={!data.canRemove}
-                        title={data.canRemove ? "" : data.mutationReason} data-testid="mm-remove">Remove</button>
+                    <div className="mmacts">
+                      {/* ONE REMOVE PER CITY. A person on three rosters has three chips and three
+                          removes — the API's key is the (userId, cityId) PAIR, so a single button
+                          would have to guess which one, and guessing is how the wrong person comes
+                          off the wrong city's pay list. */}
+                      {p.cities.map((c) => (
+                        <button key={c.cityId} type="button" className="mmrm" disabled={!data.canRemove || busy}
+                          data-testid="mm-remove" data-city={c.label} data-user={p.userId}
+                          onClick={() => { setResult(null); setPending({
+                            op: "remove", userId: p.userId, name: p.name, cityId: c.cityId, cityLabel: c.label,
+                            lines: removeConfirmLines({ name: p.name, cityLabel: c.label, matchesRun: p.matchesRun }),
+                          }); }}>
+                          Remove{p.cities.length > 1 ? ` · ${c.label}` : ""}
+                        </button>
+                      ))}
                     </div>
                   </div>
                 ))}
@@ -204,6 +277,17 @@ export default function MatchManagersPanel() {
         .mmpill { background: #F1F4F1; color: #3C4F44; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 700 }
         .mmmono { font-variant-numeric: tabular-nums; color: #3C4F44 }
         .mmempty, .mmmut { padding: 8px 2px; font-size: 12px; color: rgba(16,35,26,.5) }
+        .mmacts { display: flex; gap: 4px; flex-wrap: wrap }
+        .mmhint { margin: 0 0 10px; font-size: 12px; color: #5E3D05; background: #FFF8EC; border: 1px solid #F0D8A8; border-radius: 9px; padding: 8px 11px; line-height: 1.5 }
+        .mmconfirm { border: 1px solid #F0C98A; background: #FFF7EA; border-radius: 10px; padding: 11px 13px; margin: 0 0 11px; font-size: 13px; color: #5E3D05; line-height: 1.5 }
+        .mmconfirm b { display: block; margin-bottom: 5px; color: #4A3004 }
+        .mmconfirm ul { margin: 0 0 9px; padding-left: 18px }
+        .mmconfirm li { margin: 2px 0 }
+        .mmconfirm-b { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap }
+        .mmres { margin: 0 0 10px; font-size: 12.5px; line-height: 1.5; border-radius: 9px; padding: 8px 11px; border: 1px solid #E4EAE5; background: #F9FBF9; color: #3C4F44 }
+        .mmres.v-LANDED { border-color: #B7E0C9; background: #F1FAF4; color: #17593A }
+        .mmres.v-FAILED { border-color: #F3C4B8; background: #FEF4F1; color: #8C2A14 }
+        .mmres.v-UNKNOWN, .mmres.v-NOTAPPLIED { border-color: #F0D8A8; background: #FFF8EC; color: #7A5008 }
         .mmfoot { margin-top: 10px; font-size: 11.5px; color: rgba(16,35,26,.5); line-height: 1.55 }
         .mmerr { color: #E8492A; font-size: 12.5px }
         .mmsm { display: none }

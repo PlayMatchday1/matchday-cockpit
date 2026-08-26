@@ -16,11 +16,13 @@
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { assertScope } from "@/lib/cityConfinement";
 import { makeServerClient } from "@/lib/supabaseServer";
-import { apiGet } from "@/lib/matchdayStageApi";
+import { randomUUID } from "node:crypto";
+import { apiGet, apiWrite } from "@/lib/matchdayStageApi";
+import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import {
-  foldToPeople, counts, neverRan,
-  CAN_ADD_MATCH_MANAGER, CAN_REMOVE_MATCH_MANAGER, NO_MUTATION_REASON,
-  type ApiAssignment,
+  foldToPeople, counts, neverRan, cityLabel, scopeOfCityId, addBody, removePath, normalizeId,
+  CAN_ADD_MATCH_MANAGER, CAN_REMOVE_MATCH_MANAGER, SEARCH_NOTE,
+  type ApiAssignment, type ApiCity,
 } from "@/lib/matchManagers";
 
 export const runtime = "nodejs";
@@ -41,8 +43,11 @@ export async function GET(req: Request) {
   const scopeCity = auth.confinedCity ?? (asked && asked !== "all" ? asked : null);
 
   try {
-    // THE ONE CALL. Production, GET, no query — the collection is 107 rows and pages nowhere.
-    const rows = await apiGet<ApiAssignment[]>("production", "/city-managers");
+    // Production, GET. The roster is 107 rows and pages nowhere; /cities is 10.
+    const [rows, cityRows] = await Promise.all([
+      apiGet<ApiAssignment[]>("production", "/city-managers"),
+      apiGet<ApiCity[]>("production", "/cities").catch(() => [] as ApiCity[]),
+    ]);
 
     /* MATCHES RUN comes from OUR mirror, not from the API — mdapi_matches.manager_id is the
      * per-MATCH attachment, which is a SECOND mechanism from the city roster this route lists.
@@ -95,11 +100,135 @@ export async function GET(req: Request) {
       neverRan: neverRan(scoped),
       canAdd: CAN_ADD_MATCH_MANAGER,
       canRemove: CAN_REMOVE_MATCH_MANAGER,
-      mutationReason: NO_MUTATION_REASON,
+      searchNote: SEARCH_NOTE,
+      /* THE CITY LIST IS THE API'S OWN, BY ID. Ten cities — NYC and ELP are in it and in neither
+       * CITY_SCOPES nor the finance estate — so it is fetched rather than derived from anything of
+       * ours, and the client keys on the numeric id. A confined account gets only its own city,
+       * so its picker has one option and the ROUTE refuses the rest anyway. */
+      cities: cityRows
+        .filter((c) => !scopeCity || cityLabel(c) === scopeCity)
+        .map((c) => ({ id: Number(c.id), label: cityLabel(c) })),
       scope: scopeCity, confined: auth.confinedCity !== null,
     });
   } catch (e) {
     // Never the roster's contents: these are real names, emails and phones.
     return Response.json({ error: e instanceof Error ? e.message.slice(0, 160) : "read failed" }, { status: 500 });
+  }
+}
+
+/* ── THE WRITES ────────────────────────────────────────────────────────────────────────────────
+ *
+ * POST   /api/match-managers  { userId, cityId }   -> POST   /city-managers {userId, cityId}
+ * DELETE /api/match-managers?userId=&cityId=       -> DELETE /city-managers?userId=&cityId=
+ *
+ * WHO. authenticateMatchOpsRead — anyone with Match Ops access, NOT admins only. That deliberately
+ * includes the confined city-manager accounts, which is exactly why the confinement rule below is
+ * enforced on the route rather than by hiding a picker: a hidden control is a UI convenience and
+ * this is an authorisation boundary.
+ *
+ * THE CITY IS RESOLVED FROM GET /cities BY NUMERIC ID, never from a name and never from our own
+ * CITY_SCOPES list — the API has ten cities (NYC and ELP among them) against our eight, so a
+ * mapping written from our list would silently lose two of them.
+ *
+ * VERIFIED BY READING THE LIST BACK. A 2xx is not proof: recordWrite's before/after both come from
+ * GET /city-managers and `applied` asks whether the (userId, cityId) PAIR is present or absent —
+ * not whether the status code was cheerful. Verdict is LANDED / FAILED / NOT APPLIED / UNKNOWN.
+ *
+ * NEVER RETRIES. One apiWrite, one outcome. A duplicate add is a duplicate roster row.
+ *
+ * NO PII IN THE LOG LINE. The change_log body carries userId and cityId — two integers. The
+ * person's name, email and phone are never in it; change_log has different access rules from the
+ * roster and must not become a second copy of player contact details. */
+
+export async function POST(req: Request) {
+  return roster(req, "add");
+}
+
+export async function DELETE(req: Request) {
+  return roster(req, "remove");
+}
+
+async function roster(req: Request, op: "add" | "remove") {
+  const auth = await authenticateMatchOpsRead(req);
+  if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
+
+  // The pair. POST takes a body, DELETE takes a query string — the shapes the API itself uses.
+  const url = new URL(req.url);
+  const body = op === "add"
+    ? ((await req.json().catch(() => null)) as { userId?: unknown; cityId?: unknown } | null)
+    : null;
+  const userId = normalizeId(op === "add" ? body?.userId : url.searchParams.get("userId"));
+  const cityId = normalizeId(op === "add" ? body?.cityId : url.searchParams.get("cityId"));
+  if (userId === null) return Response.json({ error: "userId must be a positive integer" }, { status: 400 });
+  if (cityId === null) return Response.json({ error: "cityId must be a positive integer" }, { status: 400 });
+
+  try {
+    const cityRows = await apiGet<ApiCity[]>("production", "/cities");
+    /* THE CITY MUST EXIST IN THE API'S OWN LIST. An id nobody serves is refused here rather than
+     * posted and left to whatever the API does with it. */
+    const scope = scopeOfCityId(cityRows, cityId);
+    if (!scope) return Response.json({ error: `cityId ${cityId} is not a city the API knows` }, { status: 400 });
+
+    /* CONFINEMENT, ON THE PARSED IDENTITY. auth.confinedCity comes from the app_users row read
+     * fresh on this request — never from the body, never from a header, never from what the picker
+     * happened to show. A confined account naming another city is REFUSED, not re-pointed. */
+    const sc = assertScope(auth.confinedCity, scope, auth.confinedCity !== null);
+    if (!sc.ok) return Response.json({ error: sc.error }, { status: sc.status });
+
+    const listing = async (): Promise<Record<string, unknown>> => {
+      const r = await apiGet<ApiAssignment[]>("production", "/city-managers");
+      const rows = Array.isArray(r) ? r : [];
+      return { present: rows.some((x) => Number(x.userId) === userId && Number(x.cityId) === cityId), n: rows.length };
+    };
+
+    const saveId = randomUUID();
+    const path = op === "add" ? "/city-managers" : removePath(userId, cityId);
+    const sent = op === "add" ? addBody(userId, cityId) : {};
+
+    const { outcome, error, logged } = await recordWrite(
+      {
+        env: "production",
+        source: op === "add" ? "Match managers · add" : "Match managers · remove",
+        actorName: auth.email, actorEmail: auth.email, saveId,
+        // Not a match write. change_log's match columns are genuinely empty here and saying so is
+        // better than inventing an id to fill them.
+        matchId: null, matchName: null,
+        method: op === "add" ? "POST" : "DELETE", path,
+        // TWO INTEGERS. No name, no email, no phone — see the header.
+        body: sent, keys: ["userId", "cityId"], label: (k) => k,
+        // THE READ-BACK IS THE VERDICT. Present after an add, absent after a remove.
+        applied: (_before, after) => (after.present === true) === (op === "add"),
+        changes: [{
+          key: op === "add" ? "add" : "remove", field: `${scope} match-manager roster`,
+          before: op === "add" ? null : `userId ${userId}`,
+          after: op === "add" ? `userId ${userId}` : null,
+        }],
+      },
+      {
+        readResource: listing,
+        write: () => apiWrite("production", op === "add" ? "POST" : "DELETE", path,
+          op === "add" ? sent : undefined, { canEditMatches: true, email: auth.email, userId: auth.appUserId }),
+        now: () => new Date().toISOString(),
+      },
+      supabaseLogStore(),
+    );
+
+    // READ IT BACK ONCE MORE, OURSELVES, and answer from that rather than from `outcome` alone —
+    // the client renders this verdict and it must be the state of the roster, not of the request.
+    const after = await listing().catch(() => null);
+    /* A THROW IS NOT AUTOMATICALLY A FAILURE. recordWrite maps an AmbiguousWriteError to
+     * "unknown" — the request may have reached MatchDay and landed. Reporting that as FAILED would
+     * invite a retry, and this write never retries. */
+    const verdict = error
+      ? (outcome === "unknown" ? "UNKNOWN" : "FAILED")
+      : after === null ? "UNKNOWN"
+      : (after.present === true) === (op === "add") ? "LANDED" : "NOT APPLIED";
+
+    return Response.json({
+      verdict, outcome, logRecorded: logged, userId, cityId, city: scope,
+      error: error ? error.message.slice(0, 200) : undefined,
+    }, { status: verdict === "LANDED" ? 200 : verdict === "FAILED" ? 502 : 200 });
+  } catch (e) {
+    return Response.json({ verdict: "UNKNOWN", error: e instanceof Error ? e.message.slice(0, 200) : "write failed" }, { status: 500 });
   }
 }

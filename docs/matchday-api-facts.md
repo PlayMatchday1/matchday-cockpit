@@ -3833,3 +3833,73 @@ disabled and not hidden**, and carries no tooltip or confirmation.
 involved anywhere in this flow.** The controls in Clubhouse are still disabled, but the reason is
 now stated honestly on screen: **Clubhouse has not built the writes**, which need a route, a
 confinement rule, a `change_log` entry and a confirmation. It is a build, not a blocker.
+
+---
+
+## Match-manager add / remove — BUILT (2026-08-26)
+
+Clubhouse now writes the roster. Two routes on `/api/match-managers`, both on
+`authenticateMatchOpsRead` — **Match Ops access, not admins only**, which deliberately includes the
+confined city-manager accounts.
+
+```
+POST   /api/match-managers  { userId, cityId }   ->  POST   /city-managers {userId, cityId}
+DELETE /api/match-managers?userId=&cityId=       ->  DELETE /city-managers?userId=&cityId=  (no body)
+```
+
+### The city is resolved by numeric id from `GET /cities`, never by name
+
+The API has **ten** cities — ATX HOU SATX ATL STL NYC DFW OKC ELP WAW — against the eight in
+`CITY_SCOPES` and seven in the finance estate. **NYC and ELP exist upstream and nowhere else here**,
+so any mapping written from our own list would silently lose them, and any mapping written from a
+name breaks on the first upstream rename. `scopeOfCityId()` maps id → the API's own `abbr`, and
+that abbr is what the confinement compare uses.
+
+### Confinement is enforced at the route, on the parsed identity
+
+`assertScope(auth.confinedCity, scopeOfCityId(cities, cityId), confined)`. `auth.confinedCity` is
+read fresh from `app_users` on every request — never from the body, never from a header, never from
+what the picker happened to show. **A confined WAW account may add and remove in WAW and is refused
+403 for any other city; an unconfined Match Ops user may act on any city.** The picker is served
+only the account's own city as a convenience — hiding it was never the boundary.
+
+### The verdict comes from reading the roster back
+
+`recordWrite`'s before/after both call `GET /city-managers`, and `applied` asks whether the
+**(userId, cityId) pair** is present (add) or absent (remove). The route then reads the list once
+more itself and answers from that. **A 2xx is never taken as proof.** LANDED / FAILED / NOT APPLIED
+/ UNKNOWN — and an `AmbiguousWriteError` reports **UNKNOWN**, not FAILED, so nobody retries it into
+a duplicate roster row. There is no retry control anywhere in the flow.
+
+### No PII in the change_log line
+
+The logged body is **two integers** — `userId` and `cityId`. No name, no email, no phone.
+`change_log` has different access rules from the roster and must not become a second copy of player
+contact details.
+
+### The search is Player Lookup's, and that is the whole point
+
+Retool's add modal searches `GET /admin/players?email=` — **email only** — so it cannot find a
+single one of the **14 match managers on an `@privaterelay.appleid.com` token**. Clubhouse adds from
+the Player Lookup search already on the page (**phone, email, name or ID**), with the action on the
+player's own card. **There is no second search box**; the panel still has exactly one input, its
+roster filter, and the card has none. Proven in the browser by finding manager **ID 72729** — a
+relay-address account — by ID and adding from their card.
+
+### Confirmation on both, unlike Retool
+
+`requireConfirmation` is `false` on both of Retool's queries. Both Clubhouse writes stop at a
+confirmation naming the person, the city and the consequence:
+
+> Take Drea off ATX's match-manager roster.
+> They stop being assignable to ATX matches. Matches they have already run stay on the record and stay paid — 565 of them.
+> Sent once. It is never retried.
+
+Cancel sends nothing — asserted with a route interceptor counting requests at **zero**.
+
+### A defect the browser suite caught
+
+The profile card rendered **"Not a match manager anywhere"** while its fetch was still in flight,
+because `me` is null both when the person is on no roster and when the data has not arrived. That is
+a false claim about a real person on screen. `loaded` now separates the two and the card says
+"Reading the roster…" until it knows. **An absence is not a claim until the data has arrived.**

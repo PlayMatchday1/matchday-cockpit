@@ -54,14 +54,18 @@ async function main() {
     const addDis = await p.locator('[data-testid="mm-add"]').isDisabled();
     const rmDis = await p.locator('[data-testid="mm-remove"]').first().isDisabled();
     const leaks = (body.match(/privaterelay/gi) || []).length;
-    /* THE RULE IS ABOUT WHAT THESE PEOPLE ARE CALLED, NOT ABOUT THE API'S URL. The endpoint is
-     * literally /city-managers, and the disabled-controls reason now quotes it — "Retool adds with
-     * POST /city-managers" — which is the API naming itself, exactly like the banner. So the
-     * endpoint PATH is stripped before the check, and the control below proves the strip removed
-     * something rather than silently matching nothing. */
-    const withoutBanner = body.replace(banner, "");
-    const pathHits = (withoutBanner.match(/\/city-managers/g) || []).length;
-    const cmOutsideBanner = (withoutBanner.replace(/\/city-managers/g, " ").match(RE_CM) || []).length;
+    /* NO STRIP ANY MORE, AND THE POSITIVE CONTROL IS WHY.
+     *
+     * For one commit the panel printed the API's own path on screen ("Retool adds with POST
+     * /city-managers", in the reason the controls were disabled), so this stripped `/city-managers`
+     * before checking and paired the strip with a control proving it removed something. The
+     * controls are live now, that sentence is gone, and the control went RED — correctly: it
+     * refused to certify a zero produced by a strip that no longer strips anything.
+     *
+     * So the check is back to the plain one. If a future change legitimately prints the endpoint on
+     * this panel, this goes red and whoever sees it re-reads this comment and decides — which is
+     * the right amount of friction for the rule this is guarding. */
+    const cmOutsideBanner = (body.replace(banner, "").match(RE_CM) || []).length;
     const foot = await p.textContent('[data-testid="mm-foot"]');
 
     console.log(`  [${tag}] header="${counts.trim()}" rows=${rows} chips=${chips}`);
@@ -77,20 +81,17 @@ async function main() {
     is(`${tag}: control — the relay pattern fires when a token is present`,
        /privaterelay/i.test("a1b2c3@privaterelay.appleid.com"), true);
     is(`${tag}: no relay token is rendered`, leaks, 0);
-    is(`${tag}: control — the API's own path IS on screen (so the strip stripped something)`, pathHits > 0, true);
     is(`${tag}: nothing outside the banner CALLS these people "city managers"`, cmOutsideBanner, 0);
     is(`${tag}: the banner itself explains the API's word`, RE_CM.test(banner), true);
     is(`${tag}: at least one row is labelled as an Apple relay`, /Apple private relay · ID \d+/.test(body), true);
 
-    // OFF BECAUSE CLUBHOUSE HAS NOT BUILT THEM. The API does support both — Retool's ADD CITY
-    // MANAGER button posts to /city-managers and its DELETE button deletes from it, proven on
-    // staging. The earlier wording here asserted the opposite and was wrong.
-    is(`${tag}: ADD is disabled — Clubhouse has not built it`, addDis, true);
-    is(`${tag}: REMOVE is disabled — Clubhouse has not built it`, rmDis, true);
-    is(`${tag}: the reason is on screen, not only in a tooltip`, /Clubhouse has not built/i.test(body), true);
-    is(`${tag}: the reason names the endpoints that DO exist`,
-       /POST \/city-managers/.test(body) && /DELETE \/city-managers/.test(body), true);
-    is(`${tag}: …and never claims the API cannot do it`, /no endpoint to add or remove/i.test(body), false);
+    /* BOTH CONTROLS MUST BE LIVE. This block asserted the exact opposite for two commits, on the
+     * strength of a grep for an invented function name. The endpoints exist and are proven on
+     * staging by read-back, so a greyed button is now the bug and this fails on one. */
+    is(`${tag}: ADD is ENABLED — the endpoint exists`, addDis, false);
+    is(`${tag}: REMOVE is ENABLED — the endpoint exists`, rmDis, false);
+    is(`${tag}: nothing on screen claims the API cannot do it`, /no endpoint to add or remove/i.test(body), false);
+    is(`${tag}: …and nothing says Clubhouse has not built it`, /has not built/i.test(body), false);
 
     // THE CITY CHIPS FILTER, and the filter box narrows. Both proven against a live row count.
     const atx = p.locator('[data-testid="mm-cities"] button', { hasText: /^ATX/ });

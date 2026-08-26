@@ -130,30 +130,18 @@ export function filterPeople(people: readonly MatchManager[], q: string, city: s
   });
 }
 
-/* ── ADD AND REMOVE: THE ENDPOINTS EXIST. I SAID THEY DID NOT, AND I WAS WRONG. ────────────────
+/* ── ADD AND REMOVE: THE ENDPOINTS EXIST, AND CLUBHOUSE NOW USES THEM ─────────────────────────
  *
- * The first version of this file recorded "the /city-managers family exposes GET and NOTHING ELSE",
- * on the strength of grepping the Retool export for `createCityManager` and `deleteCityManager` —
- * NAMES I INVENTED. Retool's queries are called exactly that, so the grep should have hit; it did
- * not because I searched for the guessed name instead of tracing the control. Ryan pointed at the
- * ADD CITY MANAGER button in Retool, and following its click handler found the query in one step.
+ * An earlier version of this file recorded "the /city-managers family exposes GET and NOTHING
+ * ELSE", on the strength of grepping the Retool export for `createCityManager` and
+ * `deleteCityManager` — NAMES I INVENTED. Retool's queries are called exactly that, so the grep
+ * should have hit; it did not, because I searched for a guessed name instead of tracing the
+ * control. Following addCityManagerBtn's own click handler found it in one step.
  *
  * READ THE BUTTON, NOT A NAME YOU EXPECT TO FIND. An absence proved by grep is not an absence.
  *
- * WHAT RETOOL ACTUALLY CALLS, traced from the widgets' own event handlers:
- *
- *   addCityManagerBtn   "ADD CITY MANAGER" -> POST   /city-managers  {userId, cityId}
- *   deleteCityManagerBtn "DELETE"          -> DELETE /city-managers?userId=&cityId=
- *   (intro text)                            -> PUT    /city-managers/{id} {introMatchText}
- *
- * BOTH PROVEN ON STAGING, each verified by reading the list back: POST took 19 rows to 20 and the
- * row was there; DELETE took it back to 19 and the row was gone; the probe restored the state.
- *
- * SO WHY ARE THE CONTROLS STILL OFF? Not because the API cannot. Because CLUBHOUSE HAS NOT BUILT
- * THE FLOW — there is no route, no confinement decision, no change_log wiring and no confirmation
- * for either write, and adding a city manager is a permissions-shaped act that deserves all four.
- * The on-screen reason says that, because "the API has no endpoint" was false and an operator
- * reading it would stop looking. */
+ * Both proven on staging, each verified by reading the list back: POST took /city-managers from 19
+ * rows to 20 with the row present, DELETE took it back to 19 with the row gone, state restored. */
 export const ADD_MATCH_MANAGER_ENDPOINT = "POST /city-managers {userId, cityId}";
 export const REMOVE_MATCH_MANAGER_ENDPOINT = "DELETE /city-managers?userId=&cityId=";
 export const ENDPOINTS_PROOF =
@@ -161,11 +149,73 @@ export const ENDPOINTS_PROOF =
   "staging: POST took /city-managers from 19 rows to 20 and DELETE took it back to 19, each " +
   "verified by reading the list back.";
 
-// Still false — but now for an honest reason, and the reason below says which.
-export const CAN_REMOVE_MATCH_MANAGER = false;
-export const CAN_ADD_MATCH_MANAGER = false;
-export const NO_MUTATION_REASON =
-  "The MatchDay API does support this — Retool adds with POST /city-managers and removes with " +
-  "DELETE /city-managers, both proven on staging. Clubhouse has not built the write yet: it needs " +
-  "a route, a confinement rule, a change_log entry and a confirmation. Until then, changes are " +
-  "made in Retool or the MatchDay app.";
+export const CAN_ADD_MATCH_MANAGER = true;
+export const CAN_REMOVE_MATCH_MANAGER = true;
+
+/* ── THE CITY IS RESOLVED BY ID, FROM GET /cities, NEVER BY NAME ───────────────────────────────
+ * The API's /cities has TEN cities — ATX HOU SATX ATL STL NYC DFW OKC ELP WAW — against the seven
+ * markets the finance estate knows and the eight in CITY_SCOPES. NYC and ELP exist in the API and
+ * nowhere else here, so any mapping written from our own list would silently lose them, and any
+ * mapping written from a name would break the first time a city is renamed upstream. The numeric
+ * id from that endpoint is the only key. */
+export type ApiCity = { id: number; name?: string | null; abbr?: string | null };
+
+export const cityLabel = (c: ApiCity): string => c.abbr || c.name || String(c.id);
+
+/** The confinement key for a city id: the API's OWN abbr, which is what city_identifier holds. */
+export function scopeOfCityId(cities: readonly ApiCity[], cityId: number): string | null {
+  const c = cities.find((x) => Number(x.id) === Number(cityId));
+  return c ? (c.abbr || c.name || null) : null;
+}
+
+/* ── THE WRITE BODIES. THE DIFF IS THE REQUEST BODY. ──────────────────────────────────────────
+ * Add sends the two fields the API takes and nothing else. Remove sends NO BODY at all — the pair
+ * is in the query string, which is the shape Retool uses and the shape proven on staging. */
+export function addBody(userId: number, cityId: number): { userId: number; cityId: number } {
+  return { userId, cityId };
+}
+export function removePath(userId: number, cityId: number): string {
+  return `/city-managers?userId=${encodeURIComponent(String(userId))}&cityId=${encodeURIComponent(String(cityId))}`;
+}
+
+/** A userId/cityId off the wire. Anything that is not a positive integer is not an id. */
+export function normalizeId(raw: unknown): number | null {
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/* ── THE CONFIRMATION, REQUIRED ON BOTH ───────────────────────────────────────────────────────
+ * Retool asks NOTHING — requireConfirmation is false on both of its queries, so one stray click
+ * puts someone on a roster or takes them off it. Here both name the person, the city and the
+ * consequence, because the consequence is pay: a match manager is who Manager Pay pays, and taking
+ * someone off a city's roster takes them off the list anyone can be attached from. */
+export type RosterConfirm = { name: string; cityLabel: string; matchesRun?: number };
+
+export function addConfirmLines(c: RosterConfirm): string[] {
+  return [
+    `Put ${c.name} on ${c.cityLabel}'s match-manager roster.`,
+    `They become assignable to ${c.cityLabel} matches, and Manager Pay pays them per match they run.`,
+    "Sent once. It is never retried.",
+  ];
+}
+
+export function removeConfirmLines(c: RosterConfirm): string[] {
+  const ran = c.matchesRun && c.matchesRun > 0
+    ? `Matches they have already run stay on the record and stay paid — ${c.matchesRun.toLocaleString("en-US")} of them.`
+    : "They have not run a match in this city.";
+  return [
+    `Take ${c.name} off ${c.cityLabel}'s match-manager roster.`,
+    `They stop being assignable to ${c.cityLabel} matches. ${ran}`,
+    "Sent once. It is never retried.",
+  ];
+}
+
+/* ── THE SEARCH IS PLAYER LOOKUP'S, AND THAT IS THE POINT ──────────────────────────────────────
+ * Retool's add modal searches GET /admin/players?email= — EMAIL ONLY. Fourteen of the 87 match
+ * managers sign in with an @privaterelay.appleid.com token, so Retool's own add flow cannot find a
+ * single one of them. Clubhouse adds from the Player Lookup search already on this page, which
+ * takes phone, email, name or ID — and the ID is the handle a relay person actually has. There is
+ * NO second search box; rebuilding the email-only one is the thing this feature exists to avoid. */
+export const SEARCH_NOTE =
+  "Find the player with the search at the top of this page — phone, email, name or ID. " +
+  "Retool's add modal searches email only, which cannot find the 14 managers on an Apple relay address.";

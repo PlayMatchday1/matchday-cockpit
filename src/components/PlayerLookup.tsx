@@ -19,6 +19,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth, canEditMatches, canManagePlayers, canEditCredits } from "@/lib/useAuth";
 import PlayerFinder from "./PlayerFinder";
 import MatchManagersPanel from "./MatchManagersPanel";
+import MatchManagerRosterCard from "./MatchManagerRosterCard";
 import { validateAdjustment, fmtUsd, MAX_ADJUSTMENT_CENTS, REASON_REQUIRED } from "@/lib/creditsModel";
 import { useDockSubject } from "@/lib/useDockSubject";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
@@ -309,6 +310,11 @@ export default function PlayerLookup() {
       {profile && !loadingProfile && (
         <div id="profileview">
           <button className="back" data-testid="lookup-back" onClick={backToSearch}>‹ Back to search</button>
+          {/* THE ADD LIVES HERE, ON THE PLAYER THE SEARCH FOUND. That is the whole design: the
+              search at the top of this page takes phone, email, name OR ID, so it can reach the 14
+              match managers on an Apple relay address — which Retool's email-only add modal cannot.
+              Putting the action on their card means there is no second search box to rebuild. */}
+          <MatchManagerRosterCard playerId={profile.player.id} playerName={profile.player.name} />
           <ProfileView p={profile} fields={fields} canEdit={canEdit} canManage={canManage} canCredit={canCredit}
             onOpenMatch={(id) => router.push(`/match-ops/matches/${id}`)}
             onAdd={() => setModal({ type: "add" })}
