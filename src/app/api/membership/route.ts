@@ -205,7 +205,33 @@ export async function GET(req: Request) {
     const churnedNow = churnAt(endOfNewest);
     const churnedPrior = months.length > 1 ? churnAt(endOfPrior) : 0;
 
+    /* ACTIVE MEMBERS PER MONTH, FROM THE SNAPSHOT — the SAME source the all-time chart reads.
+     *
+     * The first cut sent one number, the LIVE mdapi_subscriptions count, and the page repeated it
+     * across every month: 451 for May, June, July and August alike. Two charts on one page then
+     * gave two answers for August — 451 on the bars, 383 on the line — and the avg-matches series
+     * was a numerator that moved over a denominator that did not, which renders as a trend and is
+     * an artifact. */
+    const activeByMonth: Record<string, number> = {};
+    for (const sn of snaps) activeByMonth[monthLabelFromIso(sn.month)] = sn.value;
+
+    /* PARTIAL PERIODS MUST SAY SO. August is 26 of 31 days; avg matches per member "falling" from
+     * 6.1 to 4.0 is mostly days that have not happened yet. A partial period rendered identically
+     * to a complete one reads as a collapse. */
+    const now = new Date();
+    const nowLabel = `${MON[now.getUTCMonth()]} ${now.getUTCFullYear()}`;
+    const daysInMonth = (key: string) => {
+      const [mon, yr] = key.split(" ");
+      return new Date(Date.UTC(Number(yr), MON.indexOf(mon) + 1, 0)).getUTCDate();
+    };
+    const partial: Record<string, { elapsed: number; total: number }> = {};
+    for (const m of months) {
+      const total = daysInMonth(m);
+      partial[m] = m === nowLabel ? { elapsed: now.getUTCDate(), total } : { elapsed: total, total };
+    }
+
     return Response.json({
+      activeByMonth, partial, currentMonth: nowLabel,
       churnedNow, churnedPrior, hasPriorMonth: months.length > 1,
       months,
       rows,
@@ -238,6 +264,9 @@ const CODE: Record<string, string> = {
   Atlanta: "ATL", OKC: "OKC", "St. Louis": "STL", Warsaw: "WAW",
 };
 const cityCodeOf = (display: string | null): string | null => (display ? CODE[display] ?? display : null);
+
+/** "2026-08-01" -> "Aug 2026". String surgery; a captured month is a label, not an instant. */
+const monthLabelFromIso = (ymd: string) => `${MON[Number(ymd.slice(5, 7)) - 1]} ${ymd.slice(0, 4)}`;
 
 /** "Aug 2026" -> the last instant of that month, as an ISO day. */
 function monthEndIso(key: string): string {

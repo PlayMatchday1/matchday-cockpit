@@ -188,28 +188,59 @@ console.log("\nshares, colour and scope");
 }
 
 
-// ── 8. THE AUGUST 2026 FIGURES, AS THE PAGE ACTUALLY RENDERS THEM ──────────────────────────────
-// Pinned from a live render so a refactor that silently changes a denominator fails here. These
-// are DERIVED relationships, not magic constants: each is asserted as the arithmetic that produced
-// it, so the assertion survives the data moving and only fails if the FORMULA changes.
-console.log("\nAugust 2026, as rendered");
+// ── 8. EVERY KPI EQUALS ITS CHART, FOR THE SAME MONTH ──────────────────────────────────────────
+// THE PREVIOUS VERSION OF THIS CHECKED TWO OF FOUR and shipped a disagreement: the Aug bar read
+// 4.0 and the KPI read 4.2, because the bar divided by that month's active members and the KPI
+// divided by the LIVE count. Covering "the spots and price path" is not covering the KPIs. So this
+// walks ALL FOUR, from one source of truth per month, and asserts the chart value and the KPI are
+// the same expression — not merely close.
+console.log("\nevery KPI equals its chart");
 {
-  const activeMembers = 451, memberSpots = 1902, membershipRevenue = 14838.40;
-  const k = buildKpis({ activeMembers, memberSpots, membershipRevenue, churnedNow: 9532, churnedPrior: 8737 });
-  is("avg matches per member is spots ÷ members", k.avgMatchesPerMember, memberSpots / activeMembers);
-  is("…which renders 4.2", (k.avgMatchesPerMember ?? 0).toFixed(1), "4.2");
-  is("avg price per member spot is revenue ÷ spots", k.avgPricePerMemberSpot, membershipRevenue / memberSpots);
-  is("…which renders $7.80", `$${(k.avgPricePerMemberSpot ?? 0).toFixed(2)}`, "$7.80");
-  is("MoM churn renders 9.1%", `${(k.churnedMoMPct ?? 0).toFixed(1)}%`, "9.1%");
-  /* THE DENOMINATOR IS THE SAME NUMBER THE BARS DRAW. The Expenses page shipped with a chip, a
-   * column total and a footer summing three different windows; this is the assertion that would
-   * have caught it. */
-  const rows: SpotRow[] = Array.from({ length: memberSpots }, () => ({ month: "Aug 2026", cls: "MEMBER" as const, city: "Austin", fieldId: 1, amount: 0 }));
-  is("the chart column equals the KPI denominator",
-    totalsByMonth(rows, ["Aug 2026"])[0].member, memberSpots);
-  // And the price tile uses that same pairing, so the tile and the KPI cannot disagree.
-  is("the price tile and the KPI are one calculation",
-    14838.40 / totalsByMonth(rows, ["Aug 2026"])[0].member, k.avgPricePerMemberSpot);
+  /* PER-MONTH ACTIVE, FROM THE SNAPSHOT — the same source the all-time line reads. A single live
+   * number repeated across months is the defect this fixture exists to prevent: the numerator
+   * moves, the denominator does not, and the result renders as a trend. */
+  const ACTIVE: Record<string, number> = { "May 2026": 249, "Jun 2026": 392, "Jul 2026": 412, "Aug 2026": 383 };
+  // REAL member-spot counts, read off the route on 2026-08-26. A fixture invented to make the
+  // arithmetic work asserts the arithmetic and nothing about the page.
+  const SPOTS: Record<string, number> = { "May 2026": 2219, "Jun 2026": 2515, "Jul 2026": 2769, "Aug 2026": 1902 };
+  const REV: Record<string, number> = { "May 2026": 15584.10, "Jun 2026": 16789.35, "Jul 2026": 17205.76, "Aug 2026": 14838.40 };
+  const months = Object.keys(ACTIVE);
+
+  // Every month's active count is its OWN, and no two months share the live figure.
+  is("active members differ by month", new Set(months.map((m) => ACTIVE[m])).size, 4);
+  is("…and none of them is the live subscription count", months.some((m) => ACTIVE[m] === 451), false);
+
+  for (const m of months) {
+    const rows: SpotRow[] = Array.from({ length: SPOTS[m] }, () => ({ month: m, cls: "MEMBER" as const, city: "Austin", fieldId: 1, amount: 0 }));
+    const col = totalsByMonth(rows, [m])[0];
+    const k = buildKpis({ activeMembers: ACTIVE[m], memberSpots: col.member, membershipRevenue: REV[m], churnedNow: 9532, churnedPrior: 8737 });
+
+    // KPI 1 — active members. The chart draws the same number the KPI prints.
+    is(`${m}: the active-members chart equals the KPI`, ACTIVE[m], k.activeMembers);
+    // KPI 2 — avg matches per member. THE PAIR THAT DISAGREED.
+    const chartAvg = col.member / ACTIVE[m];
+    is(`${m}: the avg-matches BAR equals the KPI`, chartAvg, k.avgMatchesPerMember);
+    is(`${m}: …to one decimal, as both render`, chartAvg.toFixed(1), (k.avgMatchesPerMember ?? 0).toFixed(1));
+    // KPI 3 — avg price per member spot. The tile and the KPI are one calculation.
+    is(`${m}: the price TILE equals the KPI`, REV[m] / col.member, k.avgPricePerMemberSpot);
+    // KPI 4 — churn. Same two counts feed the tile and the percentage.
+    is(`${m}: the churn KPI is derived from the two counts it prints`,
+      k.churnedMoMPct, ((k.churnedNow - k.churnedPrior) / k.churnedPrior) * 100);
+  }
+
+  // The specific regression, named: dividing every month by the live 451 produces a FALSE TREND.
+  const falseTrend = months.map((m) => Number((SPOTS[m] / 451).toFixed(1)));
+  const realSeries = months.map((m) => Number((SPOTS[m] / ACTIVE[m]).toFixed(1)));
+  /* THE ARTIFACT, PINNED. Dividing every month by the live 451 gave 4.9 / 5.6 / 6.1 / 4.2 — a rise
+   * then a fall. The real series is 8.9 / 6.4 / 6.7 / 5.0: a fall, then flat, then a partial month.
+   * Not a different value — a different SHAPE, and the shape is what anyone reads off a chart. */
+  is("the false series is what the live divisor produced", falseTrend, [4.9, 5.6, 6.1, 4.2]);
+  is("the real series is a different shape entirely", realSeries, [8.9, 6.4, 6.7, 5.0]);
+  is("…they are not the same series", falseTrend.join(",") === realSeries.join(","), false);
+  is("…and the real August value is 5.0, not 4.2", realSeries[3], 5.0);
+  // The false series RISES into July; the real one FALLS. A reader takes opposite conclusions.
+  is("the false series rises May->Jul", falseTrend[2] > falseTrend[0], true);
+  is("the real series FALLS over the same months", realSeries[2] < realSeries[0], true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

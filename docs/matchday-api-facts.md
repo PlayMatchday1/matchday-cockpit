@@ -3570,3 +3570,40 @@ The all-time chart reads the last CAPTURED snapshot; the KPI reads `mdapi_subscr
 Aug 2026 that is **383 captured against 451 live** — the capture is a point in time and members
 joined after it. The page prints both and names which is which, because "383 active" beside a KPI
 reading 451 with no explanation is how a page teaches people not to trust it.
+
+## MEMBERSHIP — A CONSTANT DENOMINATOR MADE A FALSE TREND (2026-08-26)
+
+The page sent ONE number — the live `mdapi_subscriptions` count, 451 — and repeated it across every
+month. Two charts on one page then gave two answers for August: **451 on the bars, 383 on the
+all-time line**, which reads the captured snapshot.
+
+**The consequence was worse than the wrong value.** Avg matches per member divided each month's
+spots by that constant, so the numerator moved and the denominator did not:
+
+| month | active (snapshot) | member spots | avg, correct | avg, with the live divisor |
+|---|---|---|---|---|
+| May 2026 | 249 | 2,219 | **8.9** | 4.9 |
+| Jun 2026 | 392 | 2,515 | **6.4** | 5.6 |
+| Jul 2026 | 412 | 2,769 | **6.7** | 6.1 |
+| Aug 2026 | 383 | 1,902 | **5.0** | 4.2 |
+
+**The false series RISES into July; the real one FALLS.** Not a different value — a different shape,
+and the shape is what anyone reads off a chart. Both series are pinned in
+`membership-chart-test.ts`, including the two opposite conclusions.
+
+Per-month active now comes from `members_monthly_snapshots.active_count`, the same source the
+all-time line reads. The live count is still shown, on the all-time subtitle, labelled as live.
+
+**The agreement assertion covered two of four KPIs and shipped a disagreement** — the Aug bar read
+4.0 and the KPI 4.2. It now walks ALL FOUR against their charts for every month.
+
+**PARTIAL PERIODS ARE MARKED.** August is 26 of 31 days, and a partial period drawn identically to a
+complete one reads as a collapse. Partial bars are hollow with a dashed edge, the axis label carries
+a bullet, and every subtitle and KPI says `partial, 26 of 31 days`.
+
+**The day axis was two end labels**, `01` and `25`, which says nothing about where day 12 sits. It
+now ticks 1, 5, 10, 15, 20, 25 and the subtitle names the coverage: `Aug 2026 · days 1–25 of 31`.
+
+**STILL UNRECONCILED:** `members_monthly_snapshots.avg_matches_per_member` carries its own figures —
+7.96 / 8.06 / 8.08 / 6.98 — which agree with neither series above. Three numbers for one question;
+nothing on the page reads that column, and which is right is unestablished.

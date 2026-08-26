@@ -33,6 +33,9 @@ type Payload = {
   snapshots: { month: string; value: number; avgMatches: number | null }[];
   churnDays: number; scope: string | null; confined: boolean;
   churnedNow: number; churnedPrior: number; hasPriorMonth: boolean;
+  activeByMonth: Record<string, number>;
+  partial: Record<string, { elapsed: number; total: number }>;
+  currentMonth: string;
   cities: string[]; fields: { fieldId: number; name: string }[];
   error?: string;
 };
@@ -41,6 +44,13 @@ const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","
 /** "2024-02-01" -> "Feb 2024". String surgery, never new Date() — a captured month is a label. */
 const monthLabel = (ymd: string) => `${MON[Number(ymd.slice(5, 7)) - 1]} ${ymd.slice(0, 4)}`;
 const money = (n: number) => `$${n.toFixed(2)}`;
+/** " · 26 of 31 days" when the period has not finished, and nothing when it has. */
+const partSuffix = (p?: { elapsed: number; total: number }) =>
+  p && p.elapsed < p.total ? ` · partial, ${p.elapsed} of ${p.total} days` : "";
+const isPartialMonth = (d: { partial?: Record<string, { elapsed: number; total: number }> } | null, m: string) => {
+  const p = d?.partial?.[m];
+  return !!p && p.elapsed < p.total;
+};
 const num = (n: number) => n.toLocaleString("en-US");
 
 /* ── ONE PLOT GEOMETRY, SHARED ─────────────────────────────────────────────────────────────────
@@ -101,8 +111,15 @@ export default function MembershipView() {
   const scope = scopeLabel(cityName, fieldName, cityName);
 
   const revenue = thisMonth ? (data?.revenueByMonth[thisMonth.month] ?? 0) : 0;
+  /* THE KPI READS THE SAME NUMBER THE CHART DRAWS. It used to read the LIVE subscription count
+   * while the chart beside it read the captured snapshot — 451 against 383 for the same month. The
+   * live figure has not gone away; it is stated on the all-time line where it belongs, as a
+   * separate fact with its own label. */
+  const activeThisMonth = thisMonth ? (data?.activeByMonth[thisMonth.month] ?? 0) : 0;
+  const part = thisMonth ? data?.partial?.[thisMonth.month] : undefined;
+  const isPartial = !!part && part.elapsed < part.total;
   const kpis = buildKpis({
-    activeMembers: data?.activeMembers ?? 0,
+    activeMembers: activeThisMonth,
     memberSpots: thisMonth?.member ?? 0,
     membershipRevenue: revenue,
     // Churn is a PLAYER concept — days since last played, the 90-day floor /api/lifecycle/churn
@@ -147,11 +164,12 @@ export default function MembershipView() {
 
       {/* ── FOUR KPIs ─────────────────────────────────────────────────────────────────────── */}
       <div className="kpis" data-testid="ms-kpis">
-        <Kpi k="Active members" v={num(kpis.activeMembers)} s={thisMonth?.month ?? ""} />
-        <Kpi k="Avg matches / member" v={kpis.avgMatchesPerMember == null ? "—" : kpis.avgMatchesPerMember.toFixed(1)} s={thisMonth?.month ?? ""} />
+        <Kpi k="Active members" v={num(kpis.activeMembers)} s={`${thisMonth?.month ?? ""}${partSuffix(part)}`} />
+        <Kpi k="Avg matches / member" v={kpis.avgMatchesPerMember == null ? "—" : kpis.avgMatchesPerMember.toFixed(1)}
+          s={`${thisMonth?.month ?? ""}${partSuffix(part)}`} />
         <Kpi k="Avg price / member spot"
           v={kpis.avgPricePerMemberSpot == null ? "—" : money(kpis.avgPricePerMemberSpot)}
-          s={`${thisMonth?.month ?? ""} · membership revenue ÷ member spots`} />
+          s={`${thisMonth?.month ?? ""} · membership revenue ÷ member spots${partSuffix(part)}`} />
         <Kpi k="MoM change in churned players" v={kpis.churnedMoMPct == null ? "—" : `${kpis.churnedMoMPct.toFixed(1)}%`}
           s={kpis.churnedNow > 0
             ? `${num(kpis.churnedNow)} players ${data?.churnDays ?? 90}+ days inactive, against ${num(kpis.churnedPrior)} the month before`
@@ -159,15 +177,22 @@ export default function MembershipView() {
       </div>
 
       <AllTime points={active} live={data?.activeMembers ?? null} />
-      <SpotsChart totals={totals} scope={scope} />
+      <SpotsChart totals={totals} scope={scope} partial={data?.partial ?? {}} />
       <div className="pair">
         {/* NOT ONE DUAL-AXIS FRAME. Two charts, same months, each with its own scale. */}
-        <Small title="Active members" sub="Selected months" values={totals.map((t) => ({ k: t.month, v: kpis.activeMembers }))} colour={SERIES[0].colour} fmt={num} />
+        {/* EACH MONTH'S OWN ACTIVE COUNT, from the snapshot. Not one live number repeated. */}
+        <Small title="Active members" sub="Selected months · captured monthly"
+          values={totals.map((t) => ({ k: t.month, v: data?.activeByMonth[t.month] ?? 0, partial: isPartialMonth(data, t.month) }))}
+          colour={SERIES[0].colour} fmt={num} />
         <Small title="Avg matches per member" sub="Same months, its own scale"
-          values={totals.map((t) => ({ k: t.month, v: kpis.activeMembers > 0 ? t.member / kpis.activeMembers : 0 }))}
+          values={totals.map((t) => {
+            const a = data?.activeByMonth[t.month] ?? 0;
+            return { k: t.month, v: a > 0 ? t.member / a : 0, partial: isPartialMonth(data, t.month) };
+          })}
           colour={SERIES[1].colour} fmt={(n) => n.toFixed(1)} />
       </div>
-      <DayMixChart rows={data?.dayMix ?? []} month={thisMonth?.month ?? ""} scope={scope} />
+      <DayMixChart rows={data?.dayMix ?? []} month={thisMonth?.month ?? ""} scope={scope}
+        daysInMonth={part?.total ?? 31} />
       <Breakdown totals={totals} scope={scope}
         byCity={data?.byCity ?? []} byField={data?.byField ?? []} />
       <PriceTiles totals={totals} revenueByMonth={data?.revenueByMonth ?? {}} />
@@ -276,7 +301,9 @@ const tipHtml = (p: ActivePoint) =>
                    : `<br>${p.delta > 0 ? "+" : ""}${p.delta} from last month`);
 
 /** Grouped bars, two series, one bar per month per series. */
-function SpotsChart({ totals, scope }: { totals: MonthTotals[]; scope: string }) {
+function SpotsChart({ totals, scope, partial }: {
+  totals: MonthTotals[]; scope: string; partial: Record<string, { elapsed: number; total: number }>;
+}) {
   const card = useRef<HTMLDivElement | null>(null);
   const { tip, show, hide } = useTip();
   const max = Math.max(1, ...totals.flatMap((t) => [t.member, t.daily]));
@@ -286,7 +313,11 @@ function SpotsChart({ totals, scope }: { totals: MonthTotals[]; scope: string })
     <div className="mscard" ref={card}>
       <div className="mshead">
         <div className="mstitle">Member and daily-play spots booked</div>
-        <div className="mssub">{totals[0]?.month} – {totals[totals.length - 1]?.month} · {scope}</div>
+        <div className="mssub">
+          {totals[0]?.month} – {totals[totals.length - 1]?.month} · {scope}
+          {(() => { const p = partial[totals[totals.length - 1]?.month ?? ""];
+            return p && p.elapsed < p.total ? ` · ${totals[totals.length - 1].month} is partial, ${p.elapsed} of ${p.total} days` : ""; })()}
+        </div>
       </div>
       <div className="legend">
         {SERIES.slice(0, 2).map((s) => <span key={s.key}><i style={{ background: s.colour }} />{s.label}</span>)}
@@ -300,6 +331,8 @@ function SpotsChart({ totals, scope }: { totals: MonthTotals[]; scope: string })
         ))}
         {totals.map((t, i) => {
           const cx = PLOT.x + (i + 0.5) * (PLOT.w / totals.length);
+          const pm = partial[t.month];
+          const isPart = !!pm && pm.elapsed < pm.total;
           return (
             <g key={t.month}>
               {[["member", t.member] as const, ["daily", t.daily] as const].map(([k, v], j) => {
@@ -308,7 +341,9 @@ function SpotsChart({ totals, scope }: { totals: MonthTotals[]; scope: string })
                 const s = SERIES.find((x) => x.key === k)!;
                 return (
                   <g key={k}>
-                    <rect x={bx} y={PLOT.y + PLOT.h - h} width={bw} height={h} fill={s.colour} rx="2"
+                    <rect x={bx} y={PLOT.y + PLOT.h - h} width={bw} height={h} rx="2"
+                      fill={isPart ? "#fff" : s.colour} stroke={s.colour} strokeWidth={isPart ? 1.5 : 0}
+                      strokeDasharray={isPart ? "3 2" : undefined}
                       data-testid="ms-bar"
                       onMouseEnter={() => show(bx + bw / 2, PLOT.y + PLOT.h - h, `<b>${t.month}</b><br>${s.label}: ${num(v)}`, card.current)}
                       onMouseLeave={hide} />
@@ -317,7 +352,7 @@ function SpotsChart({ totals, scope }: { totals: MonthTotals[]; scope: string })
                   </g>
                 );
               })}
-              <text x={cx} y={PLOT.y + PLOT.h + 15} textAnchor="middle" fontSize="10" fill="#6E8076">{t.month.split(" ")[0]}</text>
+              <text x={cx} y={PLOT.y + PLOT.h + 15} textAnchor="middle" fontSize="10" fill="#6E8076">{t.month.split(" ")[0]}{isPart ? " ·" : ""}</text>
             </g>
           );
         })}
@@ -329,7 +364,7 @@ function SpotsChart({ totals, scope }: { totals: MonthTotals[]; scope: string })
 
 /** A single-series month chart with its OWN scale — half of the pair that replaces the dual axis. */
 function Small({ title, sub, values, colour, fmt }: {
-  title: string; sub: string; values: { k: string; v: number }[]; colour: string; fmt: (n: number) => string;
+  title: string; sub: string; values: { k: string; v: number; partial?: boolean }[]; colour: string; fmt: (n: number) => string;
 }) {
   const max = Math.max(1, ...values.map((v) => v.v));
   const top = axisTop(max, 4);
@@ -344,9 +379,14 @@ function Small({ title, sub, values, colour, fmt }: {
           const bx = P.x + (i + 0.5) * (P.w / values.length) - bw / 2;
           return (
             <g key={d.k}>
-              <rect x={bx} y={P.y + P.h - h} width={bw} height={h} fill={colour} rx="2" data-testid="ms-bar" />
-              <text x={bx + bw / 2} y={P.y + P.h - h - 5} textAnchor="middle" fontSize="9" fontWeight="700" fill={colour}>{fmt(d.v)}</text>
-              <text x={bx + bw / 2} y={P.y + P.h + 14} textAnchor="middle" fontSize="9.5" fill="#6E8076">{d.k.split(" ")[0]}</text>
+              {/* A PARTIAL MONTH IS DRAWN DIFFERENTLY. Hollow with a dashed edge, and the axis
+                  label carries a bullet — a partial period rendered identically to a complete one
+                  reads as a collapse rather than as a month that has not finished. */}
+              <rect x={bx} y={P.y + P.h - h} width={bw} height={h} rx="2" data-testid="ms-bar"
+                fill={d.partial ? "#fff" : colour} stroke={colour} strokeWidth={d.partial ? 1.5 : 0}
+                strokeDasharray={d.partial ? "3 2" : undefined} />
+              <text x={bx + bw / 2} y={P.y + P.h - h - 5} textAnchor="middle" fontSize="9" fontWeight="700" fill={colour} data-testid="ms-bar-label">{fmt(d.v)}</text>
+              <text x={bx + bw / 2} y={P.y + P.h + 14} textAnchor="middle" fontSize="9.5" fill="#6E8076">{d.k.split(" ")[0]}{d.partial ? " ·" : ""}</text>
             </g>
           );
         })}
@@ -359,9 +399,9 @@ function Small({ title, sub, values, colour, fmt }: {
  * A DAY WITH NO PLAY IS DRAWN AS A GAP, not as three equal thirds. `shares()` marks it empty and
  * this skips it — inventing a 33/33/33 composition for a day nobody played would put a mix on
  * screen that never happened, and it would look exactly like a real one. */
-function DayMixChart({ rows, month, scope }: {
+function DayMixChart({ rows, month, scope, daysInMonth }: {
   rows: { day: string; member: number; daily: number; promo: number; total: number }[];
-  month: string; scope: string;
+  month: string; scope: string; daysInMonth: number;
 }) {
   const card = useRef<HTMLDivElement | null>(null);
   const { tip, show, hide } = useTip();
@@ -369,11 +409,22 @@ function DayMixChart({ rows, month, scope }: {
   const sh = shares(rows);
   const H = 220, P = { x: 46, y: 44, w: VB.w - 62, h: H - 44 - 26 };
   const cw = P.w / rows.length;
+  const dayNum = (d: string) => Number(d.slice(8, 10));
+  const first = dayNum(rows[0].day), lastDay = dayNum(rows[rows.length - 1].day);
+  /* AN AXIS, NOT TWO END LABELS. "01" at one end and "25" at the other tells you nothing about
+   * where day 12 is. Ticks every 5 days, plus day 1, and only where a column actually exists. */
+  const ticks = rows
+    .map((r, i) => ({ d: dayNum(r.day), i }))
+    .filter(({ d }) => d === 1 || d % 5 === 0);
   return (
     <div className="mscard" ref={card}>
       <div className="mshead">
         <div className="mstitle">Player population mix by day</div>
-        <div className="mssub">{month} · {scope}</div>
+        {/* NAME THE DAYS ACTUALLY COVERED. "Aug 2026" alone over 25 columns in a 31-day month
+            invites the reader to take the last column as the month's end. */}
+        <div className="mssub">
+          {month} · days {first}–{lastDay} of {daysInMonth}{first > 1 || lastDay < daysInMonth ? " · partial" : ""} · {scope}
+        </div>
       </div>
       <div className="legend">{SERIES.map((s) => <span key={s.key}><i style={{ background: s.colour }} />{s.label}</span>)}</div>
       <svg viewBox={`0 0 ${VB.w} ${H}`} width="100%" role="img" aria-label={`Player population mix by day, ${month}`}>
@@ -399,8 +450,13 @@ function DayMixChart({ rows, month, scope }: {
             </g>
           );
         })}
-        <text x={P.x} y={P.y + P.h + 15} fontSize="9.5" fill="#6E8076">{rows[0]?.day.slice(8)}</text>
-        <text x={P.x + P.w} y={P.y + P.h + 15} textAnchor="end" fontSize="9.5" fill="#6E8076">{rows[rows.length - 1]?.day.slice(8)}</text>
+        {ticks.map(({ d, i }) => (
+          <g key={d}>
+            <line x1={P.x + i * cw + cw / 2} x2={P.x + i * cw + cw / 2} y1={P.y + P.h} y2={P.y + P.h + 4} stroke="#C9D3CB" />
+            <text x={P.x + i * cw + cw / 2} y={P.y + P.h + 15} textAnchor="middle" fontSize="9.5" fill="#6E8076"
+              data-testid="ms-day-tick">{d}</text>
+          </g>
+        ))}
       </svg>
       <Tip tip={tip} />
     </div>
