@@ -3652,3 +3652,59 @@ converged. Nothing on the page reads that column.
 the 29th has not been played and must not count toward a partial August. A fixture built from a
 query ending 2026-08-31 gave 1,981 spots / 1,915 matches and disagreed with the page by 0.2 — the
 page was right.
+
+---
+
+## MATCH MANAGERS — and the three-way name collision (2026-08-26)
+
+**"City manager" names THREE unrelated things in this system. Conflating any two is how the next
+permissions bug gets written, so the names are settled here.**
+
+| # | Thing | Where | Population |
+|---|---|---|---|
+| 1 | `app_users.is_city_manager` | Clubhouse | a LOGIN with city confinement — **5 rows** |
+| 2 | the `city_managers` table | Supabase | one named contact + phone per city — **6 rows** |
+| 3 | the MatchDay API's `/city-managers` | MatchDay | the people who RUN MATCHES — **87 people** |
+
+**Measured overlap between (1) and (3), 2026-08-25: 6 of the 87 match managers hold an `app_users`
+row at all, and only 3 of those carry `is_city_manager`. Two of Clubhouse's 5 city managers are not
+match managers.** They are different populations that share a noun. **In Clubhouse (3) is called a
+MATCH MANAGER** — never "city manager" in a route, table, column, component, label or comment. The
+one sanctioned exception is the banner in `MatchManagersPanel.tsx` that explains the API's own word,
+and `scripts/match-managers-test.ts` asserts nothing else in the panel or the route says it.
+
+### The endpoints (probed against production 2026-08-25)
+
+- `GET /city-managers` → **107 rows**, keys `["id","userId","cityId","createdAt","updatedAt","user","city"]`.
+  A row is a **person-in-a-city**, not a person. `?cityId=1` → 28.
+- `GET /city-managers/users` → **87** — the distinct people.
+- `GET /cities` → 10.
+- `/admin/city-managers` → **HTML 404.** There is no `/admin` prefix on this family.
+
+**107 assignments, 87 people, 10 cities:** ATX 28 · DFW 19 · HOU 17 · SATX 15 · STL 9 · ATL 8 ·
+OKC 5 · NYC 4 · WAW 1 · ELP 1. **Exactly 3 people work more than one city; the busiest works 8.**
+(NYC and ELP are not Clubhouse `CITY_SCOPES` cities.)
+
+### There is NO add and NO remove — this is the reason the buttons are disabled
+
+Read out of the Retool production export and confirmed by probe: the whole `cityManagers` query
+group is **reads plus `attachCityManagerToMatch`**, which is `PUT /admin/matches/{id} {managerId}` —
+it attaches an existing manager to **one fixture**. There is no `createCityManager` and no
+`deleteCityManager` anywhere in the export. `CAN_ADD_MATCH_MANAGER` / `CAN_REMOVE_MATCH_MANAGER`
+(`src/lib/matchManagers.ts`) are `false` and the suite pins them there, so enabling a control
+without shipping an endpoint fails the gate instead of shipping a button that does nothing.
+
+### TWO MECHANISMS, and they are not the same set
+
+- **Per-CITY** — `/city-managers` (userId + cityId). Eligibility: who may be put on a match here.
+- **Per-MATCH** — `mdapi_matches.manager_id`, set by `attachCityManagerToMatch`. This is what
+  Manager Pay pays on. **5,404 matches carry a `manager_id`, 4,329 do not, and there are 100
+  distinct `manager_id`s against 87 people on the roster** — so neither set contains the other.
+  "Matches run" and "last match" on the Clubhouse panel come from the mirror, not from the roster.
+
+### Apple private relay
+
+**14 of the 87** sign in with `@privaterelay.appleid.com` — a random token and no name. The token is
+never rendered: `emailDisplay()` returns `Apple private relay · ID {n}`. **All 87 have a phone
+number**, so the ID and the phone carry the identity. Retool's add-manager modal searches **email
+only**, which cannot find any of those 14 — a weakness not rebuilt in Clubhouse.

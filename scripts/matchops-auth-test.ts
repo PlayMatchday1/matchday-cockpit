@@ -85,7 +85,7 @@ const rel = (p: string) => p.replace("src/app/api/", "");
 // EXACTLY the intended routes are on the read gate — no more (a further move must edit this test).
 // Round 1 moved 3; round 2 moved 9 more (6 reads + the 3 dual-gate routes whose GET moved and whose
 // write stayed) — the ban route is on the read gate too, but with a MANAGE PLAYERS check on top.
-is("authenticateMatchOpsRead is imported by EXACTLY the 18 intended routes", importsMatchOpsRead.map(rel).sort(), [
+is("authenticateMatchOpsRead is imported by EXACTLY the 19 intended routes", importsMatchOpsRead.map(rel).sort(), [
   // Phase 30 — the Registered Players table under Player Lookup. A pure READ of the mdapi mirror
   // (mdapi_users + mdapi_match_players), so can_access_matchops gates the whole route with no
   // write flag on top. It is on this gate rather than the admin one BECAUSE a confined account
@@ -115,6 +115,12 @@ is("authenticateMatchOpsRead is imported by EXACTLY the 18 intended routes", imp
   // Phase 26 — Manager Check-In. Marks/result are Clubhouse-only (no proven MatchDay write for
   // userStatus); the MOVE is a live MatchDay write and carries its own EDIT MATCHES check inside
   // the route, which is why the whole route sits on the read gate.
+  /* MATCH MANAGERS — the roster under Player Finder. On this gate for the same reason the finder
+   * above it is: a confined account must reach the page, and this gate is what hands the route its
+   * scope. It is a READ of the MatchDay API's /city-managers plus our own mdapi_matches mirror, and
+   * it carries real names and phones, so it needs the same identity check the player data does.
+   * The route has no write half — the API exposes no add and no remove. */
+  "match-managers/route.ts",
   "matchops/checkin/[matchId]/route.ts",
   // round 1
   "lookup/[env]/route.ts", "matchday/[env]/gameday/route.ts", "promos/list/route.ts",

@@ -120,6 +120,13 @@ const NODE_SUITES = [
   // nesting per field rather than per city (a city-wide reading lost 19 cases). A badge is a badge
   // on screen whichever way it was derived.
   "scripts/match-promotion-new-test.ts",
+  // MATCH MANAGERS. Not here for the arithmetic — here for the NAME and the DEAD CONTROL. "City
+  // manager" means three unrelated things in this codebase (a Clubhouse login with confinement, a
+  // 6-row directory table, and this 87-person roster), and a label using the API's word would read
+  // as correct forever while being wrong now. The other half pins CAN_ADD/CAN_REMOVE to false: the
+  // MatchDay API exposes neither endpoint, so enabling either button compiles fine and ships a
+  // control that does nothing. Both failures are invisible on screen.
+  "scripts/match-managers-test.ts",
 ];
 const ALL_E2E = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
 // --e2e runs EVERY browser suite. Nothing is excluded, because nothing is mandatory.

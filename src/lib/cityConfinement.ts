@@ -231,6 +231,15 @@ const CONFINED_ROUTE_EXACT: readonly string[] = [
    * EXACT, NOT A PREFIX, for the reason the Veo entry above records: "/api/firebase" as a prefix
    * would open anything added beneath it later. */
   "/api/firebase-token",
+  /* MATCH MANAGERS — the collapsible roster under Player Finder, on the SAME PAGE a confined
+   * account already reaches. Adding it here is the whole lesson of the firebase-token entry above:
+   * the page opened, the panel rendered, and one route it calls was on no list. The route scopes
+   * the roster to the caller's confined city in the same commit, and a confined account naming
+   * another city is refused by assertScope rather than quietly re-pointed.
+   *
+   * EXACT, NOT A PREFIX. There is nothing beneath this path today, and a prefix is a promise about
+   * routes that do not exist yet. */
+  "/api/match-managers",
 ];
 
 /**

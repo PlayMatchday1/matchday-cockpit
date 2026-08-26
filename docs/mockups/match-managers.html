@@ -1,0 +1,241 @@
+<title>Player Lookup — Clubhouse</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,400;0,500;0,600;0,700;1,700&family=Archivo+Black&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{--ink:#10231A;--ink2:#3C4F44;--mut:#6E8076;--line:#E4EAE5;--line2:#EFF3EF;--bg:#EDF2ED;
+ --hdr:#0F3323;--grn:#4FE07E;--grn-d:#0B7A3E;--grn-soft:#E4FBEC;--org:#E8492A;
+ --blu:#1E5FBF;--blu-soft:#EFF6FF;--blu-line:#BBD6F6;--amb:#B8730B;--amb-soft:#FFF6E3;--r:10px}
+html,body{margin:0}
+body{font-family:Archivo,"Helvetica Neue",Arial,sans-serif;color:var(--ink);background:var(--bg);
+ background-image:radial-gradient(rgba(16,35,26,.07) 1px,transparent 1px);background-size:22px 22px;
+ -webkit-font-smoothing:antialiased;font-size:14px;line-height:1.45}
+.top{background:var(--hdr);color:#fff;display:flex;align-items:center;gap:26px;padding:0 26px;height:62px;position:sticky;top:0;z-index:60}
+.brand{display:flex;align-items:baseline;gap:7px;font-weight:700}
+.brand .m{font-family:"Archivo Black","Arial Black",sans-serif;font-style:italic;font-size:21px;color:var(--grn);letter-spacing:-.5px}
+.brand .c{font-style:italic;font-size:14px}
+.topnav{display:flex;gap:4px;flex-wrap:wrap}
+.topnav a{padding:8px 15px;border-radius:999px;color:#D8E7DE;text-decoration:none;font-weight:600;white-space:nowrap}
+.topnav a.on{background:var(--grn);color:#08281A}
+.topnav .badge{display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:19px;padding:0 5px;margin-left:7px;border-radius:999px;background:var(--org);color:#fff;font-size:11px;font-weight:700}
+.topnav a.on .badge{background:#08281A;color:var(--grn)}
+.who{margin-left:auto;color:#D8E7DE;font-weight:600}
+.shell{display:flex;align-items:flex-start;min-height:calc(100vh - 62px)}
+.side{width:230px;flex:0 0 230px;background:#fff;border-right:1px solid var(--line);padding:16px 12px 40px;position:sticky;top:62px;align-self:stretch;height:calc(100vh - 62px);overflow:auto}
+.seg2{display:flex;background:#F2F5F2;border-radius:999px;padding:3px;margin:2px 4px 16px}
+.seg2 button{flex:1;border:0;background:none;font:inherit;font-weight:700;font-size:13px;color:var(--mut);padding:7px 0;border-radius:999px;cursor:pointer}
+.seg2 button.on{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(16,35,26,.14)}
+.slab{font-size:10.5px;font-weight:700;letter-spacing:.11em;color:#93A49A;padding:14px 12px 7px}
+.side a{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:9px;text-decoration:none;color:var(--ink2);font-weight:600}
+.side a:hover{background:#F4F7F4}
+.side a.on{background:var(--grn-soft);color:#0B3D24;font-weight:700}
+.side a .ic{width:16px;text-align:center;opacity:.6}
+.side a .n{margin-left:auto;font-size:11.5px;font-weight:700;color:#fff;background:#9FB0A5;border-radius:999px;padding:1px 7px}
+.main{flex:1;min-width:0;padding:24px 28px 80px;max-width:1500px}
+.card{background:#fff;border:1px solid var(--line);border-radius:var(--r);margin-bottom:14px}
+.pad{padding:20px 22px}
+h1{font-family:"Archivo Black","Arial Black",sans-serif;font-size:34px;letter-spacing:-1px;margin:0 0 5px;line-height:1}
+.sub{color:var(--mut);margin:0}
+.livechip{margin-left:auto;background:var(--hdr);color:#fff;border-radius:999px;padding:7px 15px;font-size:12px;font-weight:700;letter-spacing:.03em;white-space:nowrap}
+.livechip i{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--grn);margin-right:8px}
+.hrow{display:flex;align-items:flex-start;gap:16px}
+.searchrow{display:flex;gap:10px;margin:18px 0 8px}
+.search{flex:1;border:1px solid var(--line);border-radius:9px;padding:13px 16px;font:inherit;font-size:15px}
+.search:focus{outline:2px solid var(--grn);outline-offset:-1px}
+.search.flash{outline:2px solid var(--blu);outline-offset:-1px;background:var(--blu-soft)}
+.btn{border:1px solid var(--line);background:#fff;border-radius:9px;padding:0 18px;font:inherit;font-weight:700;color:var(--ink2);cursor:pointer}
+.hintline{color:var(--mut);font-size:12.5px}
+.slab2{font-size:10.5px;font-weight:700;letter-spacing:.11em;color:#8C9E93;padding:14px 22px 4px;border-bottom:1px solid var(--line2)}
+.lk{display:flex;align-items:center;padding:13px 22px;border-bottom:1px solid var(--line2)}
+.lk:last-child{border-bottom:0}
+.lk b{font-size:14.5px} .lk small{display:block;color:var(--mut);font-size:12.5px}
+.lk .re{margin-left:auto;color:var(--mut);font-style:italic;font-size:13px}
+
+/* collapsible */
+.acc{background:#fff;border:1px solid var(--line);border-radius:var(--r);margin-bottom:14px;overflow:hidden}
+.acch{display:flex;align-items:center;gap:12px;padding:14px 18px;cursor:pointer;user-select:none}
+.acch:hover{background:#FAFCFA}
+.caret{width:26px;height:26px;border:1px solid var(--line);border-radius:7px;display:grid;place-items:center;font-size:10px;color:var(--mut);flex:0 0 26px}
+.acct{font-family:"Archivo Black","Arial Black",sans-serif;font-size:14px;letter-spacing:.06em}
+.accm{margin-left:auto;color:var(--mut);font-size:13px;text-align:right}
+.accm b{color:var(--ink)}
+.accbody{display:none;border-top:1px solid var(--line)}
+.acc.open .accbody{display:block}
+.acc.open .caret{background:var(--grn-soft);color:var(--grn-d);border-color:#BDEBD1}
+
+.note{display:flex;gap:9px;margin:14px 18px;padding:9px 13px;border-radius:9px;background:var(--amb-soft);border:1px solid #F0DFB8;color:#7A4E06;font-size:12.5px}
+.note.blue{background:var(--blu-soft);border-color:var(--blu-line);color:#12406F}
+.bar{display:flex;gap:9px;align-items:center;flex-wrap:wrap;padding:12px 18px;border-bottom:1px solid var(--line2)}
+.lbl{font-size:10.5px;font-weight:700;letter-spacing:.09em;color:#93A49A;text-transform:uppercase}
+.chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 13px;font:inherit;font-size:13px;font-weight:600;color:var(--ink2);cursor:pointer;display:inline-flex;gap:8px;align-items:center;white-space:nowrap}
+.chip:hover{border-color:#CFDCD4}
+.chip .n{color:var(--mut);font-weight:700;font-size:12px}
+.chip.on{background:var(--hdr);border-color:var(--hdr);color:#fff}
+.chip.on .n{color:#9FE0BB}
+.mini{flex:1;min-width:170px;border:1px solid var(--line);border-radius:999px;padding:7px 14px;font:inherit;font-size:13px}
+.addbtn{background:var(--grn);border:0;border-radius:999px;padding:8px 17px;font:inherit;font-weight:700;color:#08281A;cursor:pointer}
+.addbtn:hover{filter:brightness(.96)}
+
+.thead,.trow{display:grid;grid-template-columns:minmax(186px,1.5fr) minmax(196px,1.3fr) 136px 88px 112px 150px;align-items:center;padding:0 18px}
+.thead{background:#F7FAF8;border-bottom:1px solid var(--line)}
+.thead div{font-size:10.5px;font-weight:700;letter-spacing:.09em;color:#8C9E93;text-transform:uppercase;padding:10px 8px}
+.trow{border-bottom:1px solid var(--line2)}
+.trow:last-child{border-bottom:0}
+.trow:hover{background:#FBFDFB}
+.trow>div{padding:11px 8px;min-width:0}
+.nm{font-weight:700;font-size:14.5px}
+.em{font-size:12.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.em.relay{color:var(--amb);font-weight:600}
+.tel{font-size:13.5px;color:var(--ink2);font-variant-numeric:tabular-nums;white-space:nowrap}
+.tel.none{color:#9FB0A5}
+.cchips{display:flex;gap:5px;flex-wrap:wrap}
+.cc{background:#F1F4F1;color:var(--ink2);border-radius:999px;padding:3px 9px;font-size:12px;font-weight:700;white-space:nowrap}
+.cc.hot{background:var(--grn-soft);color:var(--grn-d)}
+.num{font-weight:700;font-size:14px}
+.num.zero{color:#9FB0A5;font-weight:600}
+.dt{font-size:13px;color:var(--ink2)}
+.dt.none{color:#9FB0A5}
+.act{display:flex;gap:7px;justify-content:flex-end}
+.ghost{border:1px solid var(--line);background:#fff;border-radius:7px;padding:5px 11px;font:inherit;font-size:12.5px;font-weight:700;color:var(--ink2);cursor:pointer}
+.ghost[disabled]{color:#B9C6BE;cursor:not-allowed;background:#FBFCFB}
+.foot{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;color:var(--mut);font-size:12.5px;padding:12px 18px}
+.empty{padding:40px;text-align:center;color:var(--mut)}
+/* narrow: keep who / where / how to reach them; drop the counts */
+@media(max-width:1220px){.side{display:none}
+ .thead,.trow{grid-template-columns:minmax(160px,1.5fr) minmax(150px,1.2fr) 132px 130px}
+ .thead div:nth-child(4),.trow>div:nth-child(4),.thead div:nth-child(5),.trow>div:nth-child(5){display:none}}
+.hide{display:none!important}
+</style>
+<div class="top">
+  <div class="brand"><span class="m">MATCHDAY</span><span class="c">Clubhouse</span></div>
+  <nav class="topnav">
+    <a href="#">Home</a><a href="#">Finance</a><a href="#">Growth</a><a href="#">Player Lifecycle</a>
+    <a href="#" class="on">Match Ops <span class="badge">1</span></a><a href="#">Tech</a>
+  </nav>
+  <div class="who">Ryan Mancuso ▾</div>
+</div>
+<div class="shell">
+  <aside class="side">
+    <div class="seg2"><button class="on">Daily Ops</button><button>Back Office</button></div>
+    <div class="slab">OPERATIONS</div>
+    <a href="#"><span class="ic">◷</span>Gameday Ops</a>
+    <a href="#" class="on"><span class="ic">⌕</span>Player Lookup</a>
+    <a href="#"><span class="ic">◎</span>Promo Codes</a>
+    <a href="#"><span class="ic">☆</span>Reviews</a>
+    <div class="slab">CONVERSATIONS</div>
+    <a href="#"><span class="ic">◌</span>Match Chats</a>
+    <a href="#"><span class="ic">◍</span>Player Chats <span class="n">1</span></a>
+  </aside>
+
+  <main class="main">
+    <div class="card pad">
+      <div class="hrow">
+        <div><h1>Player Lookup</h1><p class="sub">One player — account, membership and matches. Add them to a match or take them out.</p></div>
+        <div class="livechip"><i></i>PRODUCTION · LIVE EDITS</div>
+      </div>
+      <div class="searchrow">
+        <input class="search" id="mainSearch" placeholder="Phone, email, name or player ID">
+        <button class="btn">Fields</button>
+      </div>
+      <div class="hintline" id="mainHint">Type anything — it works out whether you gave it a phone number, an email, an ID or a name.</div>
+    </div>
+
+    <div class="card">
+      <div class="slab2">RECENT LOOKUPS</div>
+      <div class="lk"><div><b>Mario Munoz</b><small>ID 87688</small></div><span class="re">reopen</span></div>
+      <div class="lk"><div><b>javi g</b><small>ID 87633</small></div><span class="re">reopen</span></div>
+      <div class="lk"><div><b>PRINCE</b><small>ID 57378</small></div><span class="re">reopen</span></div>
+      <div class="lk"><div><b>Adiael Valdez</b><small>ID 60765</small></div><span class="re">reopen</span></div>
+    </div>
+
+    <div class="acc" id="accFinder">
+      <div class="acch" onclick="toggle('accFinder')">
+        <div class="caret">▾</div><div class="acct">PLAYER FINDER</div>
+        <div class="accm"><b>30,565</b> players registered</div>
+      </div>
+      <div class="accbody"><div class="empty">Player Finder — unchanged.</div></div>
+    </div>
+
+    <div class="acc open" id="accMM">
+      <div class="acch" onclick="toggle('accMM')">
+        <div class="caret">▴</div><div class="acct">MATCH MANAGERS</div>
+        <div class="accm"><b id="mmPeople">—</b> people · <b id="mmAssign">—</b> city assignments</div>
+      </div>
+      <div class="accbody">
+        <div class="note">⚠ <span><b>The MatchDay API calls these “city managers”.</b> They are not the city managers in Clubhouse permissions — those are logins with city confinement. These are the people who run matches and are paid through Manager Pay.</span></div>
+
+        <div class="bar">
+          <input class="mini" id="mmq" placeholder="Search name, email, phone or ID…" oninput="render()">
+          <button class="chip" id="unassignedBtn" onclick="toggleUnrun()">Never run a match <span class="n" id="unrunN">0</span></button>
+          <button class="addbtn" onclick="startAdd()">+ Add match manager</button>
+        </div>
+        <div class="bar" id="cityRow"><span class="lbl">City</span></div>
+
+        <div class="note blue hide" id="addHint">🛈 <span><b>Find the player in the search at the top of this page</b> — phone, email, name or ID — then choose <b>Make match manager</b> on their card. Retool’s modal searches email only, which cannot find anyone using an Apple private-relay address.</span></div>
+
+        <div class="thead"><div>Match manager</div><div>Cities</div><div>Phone</div><div>Matches run</div><div>Last match</div><div></div></div>
+        <div id="mmRows"></div>
+        <div class="foot"><div id="footL"></div><div id="footR"></div></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+const DATA={"people":[{"name":"Bruno Cordero","email":"fprazz5i6i@privaterelay.appleid.com","phone":"+1 518 433 937xxx","cities":["San Antonio","Oklahoma City","St. Louis","Dallas-Ft Worth"],"state":"\u2014","relay":true,"id":"59793","matches":80,"last":"\u2014"},{"name":"Bryan Avendano","email":"mavendano@playmatchday.com","phone":"+1 316 620 2xxx","cities":["Austin","Houston"],"state":"Texas","relay":false,"id":"73908","matches":79,"last":"2026-08-19"},{"name":"Adiael Vega","email":"adiael.vega7@yahoo.com","phone":"+1 668 870 384xxx","cities":["Austin","Oklahoma City","St. Louis"],"state":"\u2014","relay":false,"id":"78164","matches":78,"last":"2026-05-04"},{"name":"Garrett Rosales","email":"xyf6e2b7a0@privaterelay.appleid.com","phone":"+1 823 273 182xxx","cities":["Austin"],"state":"\u2014","relay":true,"id":"79308","matches":78,"last":"2026-06-28"},{"name":"Ryan Mancuso","email":"rmancuso1@gmail.com","phone":"+1 434 825 9xxx","cities":["St. Louis","San Antonio","Dallas-Ft Worth","Austin"],"state":"Missouri","relay":false,"id":"72493","matches":74,"last":"2026-08-24"},{"name":"Jorge Lozano","email":"jorge.lozano23@yahoo.com","phone":"+1 394 389 923xxx","cities":["Atlanta","San Antonio"],"state":"\u2014","relay":false,"id":"27935","matches":68,"last":"2026-08-20"},{"name":"Pablo Herrera","email":"pablo.herrera1@gmail.com","phone":"+1 292 751 929xxx","cities":["San Antonio"],"state":"\u2014","relay":false,"id":"89747","matches":68,"last":"\u2014"},{"name":"Christian Boada","email":"cboada41@gmail.com","phone":"+1 713 858 9xxx","cities":["Austin","San Antonio","Dallas-Ft Worth"],"state":"Texas","relay":false,"id":"61185","matches":67,"last":"2026-05-04"},{"name":"Robson Da Silva","email":"rrsmarinho@hotmail.com","phone":"+1 346 307 6xxx","cities":["Houston"],"state":"Texas","relay":false,"id":"32916","matches":67,"last":"2026-07-31"},{"name":"Teresa Padilla","email":"14ka9edcnr@privaterelay.appleid.com","phone":"+1 534 651 705xxx","cities":["St. Louis","Dallas-Ft Worth","Atlanta","Houston","Oklahoma City"],"state":"\u2014","relay":true,"id":"35618","matches":67,"last":"2026-08-20"},{"name":"Diego Gallardo","email":"zenn6sma6c@privaterelay.appleid.com","phone":"+1 554 752 814xxx","cities":["Houston","St. Louis","Oklahoma City","Dallas-Ft Worth","San Antonio","Atlanta"],"state":"\u2014","relay":true,"id":"62894","matches":65,"last":"2026-08-13"},{"name":"Andres Bravo","email":"andres.bravo23@outlook.com","phone":"+1 798 343 704xxx","cities":["Oklahoma City","Atlanta","San Antonio"],"state":"\u2014","relay":false,"id":"52022","matches":64,"last":"\u2014"},{"name":"Victor Navarro","email":"ppbet24rdc@privaterelay.appleid.com","phone":"+1 743 785 234xxx","cities":["Houston"],"state":"\u2014","relay":true,"id":"22127","matches":64,"last":"\u2014"},{"name":"Nick MD","email":"zelfine.nick@gmail.com","phone":"+1 239 220 2xxx","cities":["Austin","Houston"],"state":"Texas","relay":false,"id":"88234","matches":63,"last":"2026-08-24"},{"name":"Andres Padilla","email":"s2x0545f98@privaterelay.appleid.com","phone":"+1 289 692 122xxx","cities":["Atlanta","Dallas-Ft Worth","St. Louis"],"state":"\u2014","relay":true,"id":"81546","matches":61,"last":"2026-08-22"},{"name":"Mateo Cordero","email":"mateo.cordero7@outlook.com","phone":"+1 216 556 616xxx","cities":["Oklahoma City","St. Louis"],"state":"\u2014","relay":false,"id":"60471","matches":58,"last":"2026-08-13"},{"name":"Rafael Reyes","email":"rafael.reyes7@gmail.com","phone":"+1 816 857 690xxx","cities":["Dallas-Ft Worth"],"state":"\u2014","relay":false,"id":"19716","matches":55,"last":"2026-07-31"},{"name":"Alan Pineda","email":"alan.pineda1@gmail.com","phone":"+1 344 248 744xxx","cities":["Houston","San Antonio","Austin"],"state":"\u2014","relay":false,"id":"49837","matches":50,"last":"2026-07-12"},{"name":"Michael Hollman","email":"mhollman@playmatchday.com","phone":"+1 405 802 9xxx","cities":["Austin","St. Louis","Atlanta"],"state":"Texas","relay":false,"id":"10047","matches":48,"last":"\u2014"},{"name":"Carlos Duarte","email":"8sr1s27u9m@privaterelay.appleid.com","phone":"+1 690 772 769xxx","cities":["Austin","San Antonio","Oklahoma City"],"state":"\u2014","relay":true,"id":"81697","matches":45,"last":"2026-08-13"},{"name":"Rafael Vega","email":"rafael.vega@yahoo.com","phone":"+1 606 629 174xxx","cities":["Oklahoma City","Dallas-Ft Worth","San Antonio"],"state":"\u2014","relay":false,"id":"86053","matches":40,"last":"2026-08-20"},{"name":"Ramon Vega","email":"ramon.vega1@icloud.com","phone":"+1 319 604 530xxx","cities":["Dallas-Ft Worth"],"state":"\u2014","relay":false,"id":"18553","matches":33,"last":"2026-07-31"},{"name":"Diego Pineda","email":"diego.pineda@gmail.com","phone":"+1 698 381 798xxx","cities":["St. Louis","Austin"],"state":"\u2014","relay":false,"id":"24554","matches":30,"last":"2026-08-22"},{"name":"Ivan Lozano","email":"ivan.lozano@outlook.com","phone":"+1 725 495 130xxx","cities":["San Antonio","Austin"],"state":"\u2014","relay":false,"id":"24886","matches":29,"last":"\u2014"},{"name":"Pablo Jimenez","email":"pablo.jimenez1@yahoo.com","phone":"+1 289 620 839xxx","cities":["Oklahoma City","San Antonio","Dallas-Ft Worth","Austin","Houston","Atlanta","St. Louis"],"state":"\u2014","relay":false,"id":"63371","matches":26,"last":"2026-05-04"},{"name":"Adiael Solano","email":"adiael.solano1@gmail.com","phone":"+1 934 326 318xxx","cities":["St. Louis","Oklahoma City","Dallas-Ft Worth"],"state":"\u2014","relay":false,"id":"12357","matches":25,"last":"2026-08-22"},{"name":"Sergio Padilla","email":"sergio.padilla7@outlook.com","phone":"+1 215 619 876xxx","cities":["Houston","Dallas-Ft Worth"],"state":"\u2014","relay":false,"id":"35592","matches":24,"last":"2026-08-24"},{"name":"Andres Medina","email":"andres.medina23@gmail.com","phone":"+1 217 901 100xxx","cities":["Dallas-Ft Worth","Austin"],"state":"\u2014","relay":false,"id":"52560","matches":23,"last":"2026-08-13"},{"name":"Mateo Rosales","email":"7sazvjn9kx@privaterelay.appleid.com","phone":"+1 447 534 514xxx","cities":["Dallas-Ft Worth","St. Louis","Atlanta"],"state":"\u2014","relay":true,"id":"31847","matches":23,"last":"2026-08-24"},{"name":"Deonna Mora","email":"deonna.mora23@icloud.com","phone":"+1 524 414 239xxx","cities":["Dallas-Ft Worth","San Antonio","Atlanta","Oklahoma City","Houston","St. Louis"],"state":"\u2014","relay":false,"id":"33727","matches":22,"last":"2026-08-22"},{"name":"Rafael Valdez","email":"rafael.valdez23@outlook.com","phone":"+1 663 528 176xxx","cities":["St. Louis","Atlanta","Dallas-Ft Worth"],"state":"\u2014","relay":false,"id":"15119","matches":17,"last":"\u2014"},{"name":"Diego Ortega","email":"diego.ortega1@yahoo.com","phone":"+1 824 536 950xxx","cities":["St. Louis","Dallas-Ft Worth","San Antonio"],"state":"\u2014","relay":false,"id":"78208","matches":16,"last":"2026-08-20"},{"name":"Luis Herrera","email":"luis.herrera@gmail.com","phone":"+1 661 682 381xxx","cities":["Houston","San Antonio","Austin"],"state":"\u2014","relay":false,"id":"44105","matches":12,"last":"2026-05-04"},{"name":"Victor Castro","email":"victor.castro1@icloud.com","phone":"+1 818 280 531xxx","cities":["Dallas-Ft Worth","St. Louis","Atlanta"],"state":"\u2014","relay":false,"id":"9327","matches":12,"last":"2026-08-20"},{"name":"Adiael Ortega","email":"adiael.ortega@outlook.com","phone":"+1 864 777 119xxx","cities":["Houston","Austin"],"state":"\u2014","relay":false,"id":"67564","matches":9,"last":"2026-08-24"},{"name":"Carlos Reyes","email":"carlos.reyes7@outlook.com","phone":"+1 693 268 848xxx","cities":["Austin","Atlanta","St. Louis"],"state":"\u2014","relay":false,"id":"31773","matches":9,"last":"2026-07-12"},{"name":"Bruno Solano","email":"bruno.solano@gmail.com","phone":"+1 954 245 854xxx","cities":["Houston","Austin"],"state":"\u2014","relay":false,"id":"20916","matches":3,"last":"2026-08-25"},{"name":"Hector Pineda","email":"hector.pineda1@gmail.com","phone":"+1 868 714 915xxx","cities":["Atlanta","Dallas-Ft Worth","San Antonio","Oklahoma City"],"state":"\u2014","relay":false,"id":"55910","matches":1,"last":"\u2014"}],"assignments":107,"cities":["Austin","San Antonio","Houston","Dallas-Ft Worth","Atlanta","Oklahoma City","St. Louis"]};
+const NAMES={"Austin":"Austin","San Antonio":"San Antonio","Houston":"Houston","Dallas-Ft Worth":"Dallas-Ft Worth","Atlanta":"Atlanta","Oklahoma City":"Oklahoma City","St. Louis":"St. Louis"};
+let CITY=null, UNRUN=false;
+const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function toggle(id){const a=document.getElementById(id);a.classList.toggle("open");
+  a.querySelector(".caret").textContent=a.classList.contains("open")?"▴":"▾"}
+function startAdd(){
+  document.getElementById("addHint").classList.remove("hide");
+  const s=document.getElementById("mainSearch");
+  s.scrollIntoView({behavior:"smooth",block:"center"}); s.focus(); s.classList.add("flash");
+  setTimeout(()=>s.classList.remove("flash"),1600);
+}
+function toggleUnrun(){UNRUN=!UNRUN;render()}
+function setCity(c){CITY=(CITY===c?null:c);render()}
+function match(p){
+  if(CITY && !p.cities.includes(CITY)) return false;
+  if(UNRUN && p.matches>0) return false;
+  const q=document.getElementById("mmq").value.trim().toLowerCase();
+  if(q && ![p.name,p.email,p.phone,p.id].join(" ").toLowerCase().includes(q)) return false;
+  return true;
+}
+function chips(){
+  const counts={}; DATA.cities.forEach(c=>counts[c]=DATA.people.filter(p=>p.cities.includes(c)).length);
+  let h='<span class="lbl">City</span>';
+  h+=`<button class="chip ${CITY===null?"on":""}" data-city="" onclick="setCity(null)">All <span class="n">${DATA.people.length}</span></button>`;
+  DATA.cities.forEach(c=>{h+=`<button class="chip ${CITY===c?"on":""}" data-city="${esc(c)}" onclick="setCity('${esc(c).replace(/'/g,"\\'")}')">${esc(NAMES[c])} <span class="n">${counts[c]}</span></button>`});
+  document.getElementById("cityRow").innerHTML=h;
+}
+function render(){
+  chips();
+  document.getElementById("mmPeople").textContent=DATA.people.length;
+  document.getElementById("mmAssign").textContent=DATA.assignments;
+  document.getElementById("unrunN").textContent=DATA.people.filter(p=>p.matches===0).length;
+  document.getElementById("unassignedBtn").classList.toggle("on",UNRUN);
+  const list=DATA.people.filter(match);
+  const box=document.getElementById("mmRows");
+  box.innerHTML = !list.length ? '<div class="empty">Nothing matches those filters.</div>' : list.map(p=>{
+    const em = p.relay
+      ? `<span class="em relay" title="${esc(p.email)}">Apple private relay · ID ${esc(p.id)}</span>`
+      : `<span class="em">${esc(p.email)}</span>`;
+    return `<div class="trow" data-email="${esc(p.email)}">
+      <div><div class="nm">${esc(p.name)}</div>${em}</div>
+      <div class="cchips">${p.cities.map(c=>`<span class="cc ${c===CITY?"hot":""}">${esc(NAMES[c])}</span>`).join("")}</div>
+      <div class="tel ${p.phone?"":"none"}">${p.phone?esc(p.phone):"not given"}</div>
+      <div class="num ${p.matches?"":"zero"}">${p.matches||"none"}</div>
+      <div class="dt ${p.last==="—"?"none":""}">${esc(p.last)}</div>
+      <div class="act">
+        <button class="ghost">Open player</button>
+        <button class="ghost" disabled title="The MatchDay API has no remove endpoint — removal happens in the MatchDay app">Remove</button>
+      </div></div>`;
+  }).join("");
+  document.getElementById("footL").textContent=`Showing ${list.length} of ${DATA.people.length} people`;
+  document.getElementById("footR").textContent=`${DATA.assignments} rows in Retool · ${DATA.people.length} people here — a person assigned to three cities is three rows there and one row here`;
+}
+render();
+
+</script>

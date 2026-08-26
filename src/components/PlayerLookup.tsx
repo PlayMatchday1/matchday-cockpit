@@ -18,6 +18,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useAuth, canEditMatches, canManagePlayers, canEditCredits } from "@/lib/useAuth";
 import PlayerFinder from "./PlayerFinder";
+import MatchManagersPanel from "./MatchManagersPanel";
 import { validateAdjustment, fmtUsd, MAX_ADJUSTMENT_CENTS, REASON_REQUIRED } from "@/lib/creditsModel";
 import { useDockSubject } from "@/lib/useDockSubject";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
@@ -292,6 +293,14 @@ export default function PlayerLookup() {
       {!profile && !loadingProfile && (
         <PlayerFinder onOpen={(id) => openProfile(id)} />
       )}
+
+      {/* ---------- MATCH MANAGERS ----------
+          UNDER the finder, collapsed by default, and it fetches nothing until it is opened. Same
+          page because it is the same question asked twice: the finder answers "who plays here",
+          this answers "who runs it". NOT the same population as Clubhouse's city-manager
+          permission — the section says so on screen, because two unrelated things sharing one noun
+          is how the next permissions bug gets written. */}
+      {!profile && !loadingProfile && <MatchManagersPanel />}
 
       {/* ---------- PROFILE VIEW ---------- */}
       {loadingProfile && <div className="panel"><p className="empty">Loading player…</p></div>}
