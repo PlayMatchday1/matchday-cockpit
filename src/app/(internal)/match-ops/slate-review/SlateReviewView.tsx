@@ -148,13 +148,8 @@ export default function SlateReviewView() {
       {/* prices */}
       <PricesCard city={city} />
 
-      {/* honesty note */}
-      <Card>
-        <SHead title="HOW THESE NUMBERS ARE BUILT" />
-        <p className="m-0 text-[12.5px] leading-[1.6]" style={{ color: C.muted }}>
-          Field cost is charged only to matches that actually ran; if we pay for a pitch when a match cancels, that sunk cost isn’t on any net figure here, so a field with real cancellations looks a little kinder than it was. The demand strip covers the last eight weeks including the current, in-progress week; Cancel Patterns and the Match P&L both use the last four completed weeks and leave the partial week out, since a part-week can’t be compared with a finished one. Player, spot and revenue counts exclude fake accounts and waitlist holds.
-        </p>
-      </Card>
+      {/* THE "HOW THESE NUMBERS ARE BUILT" CARD IS DELETED, no replacement. Every window it
+          described is already stated on the control that sets it. */}
     </div>
   );
 }

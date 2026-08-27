@@ -170,10 +170,11 @@ export default function SlateFieldPnL({ city }: { city: string }) {
     <div className="mb-[18px] rounded-2xl border p-[18px_18px_16px]" style={{ background: C.surface, borderColor: C.line }}>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
+          {/* NO SUBTITLE. The window is already stated in the control beside this heading and
+              "gross, before Stripe fees" is already the column subhead — the sentence repeated both
+              and explained the rest. If a figure here needs a sentence, the figure or its label is
+              wrong. */}
           <h2 className="m-0 text-[13px] font-bold uppercase tracking-[0.8px]" style={{ color: C.muted }}>MATCH P&amp;L BY FIELD</h2>
-          <p className="m-0 mt-1.5 max-w-[80ch] text-[12px] leading-[1.5]" style={{ color: C.muted }}>
-            Average economics of one match at each field, so a field that ran many matches compares directly with one that ran few. Ran matches only. Revenue is gross, before Stripe fees.
-          </p>
         </div>
         <div className="text-right">
           <div className="flex items-center gap-1.5">
@@ -220,9 +221,6 @@ export default function SlateFieldPnL({ city }: { city: string }) {
               )}
             </tbody>
           </table>
-          <p className="mt-3.5 text-[12px] leading-[1.5]" style={{ color: C.muted }}>
-            A field cost is never shown as $0. An unknown cost shows a dash and its bucket, so a genuinely free pitch and an unmapped one never look the same.
-          </p>
         </div>
       )}
     </div>
@@ -302,7 +300,6 @@ function Drill({ g }: { g: FieldAgg }) {
 
   return (
     <div className="px-3.5 pb-[18px] pt-4">
-      <p className="m-0 mb-3 text-[11px] font-extrabold uppercase tracking-[0.07em]" style={{ color: C.muted }}>Where one match at {g.label} earns and spends</p>
       <div className="flex max-w-[760px] flex-col gap-[9px]">
         <div className="grid items-center gap-3" style={{ gridTemplateColumns: "150px 1fr 96px 74px" }}>
           <span /><span />
@@ -314,11 +311,13 @@ function Drill({ g }: { g: FieldAgg }) {
         <Row label="Field cost" pm={g.costPM ?? 0} hue={C.loss} pct={costSharePct} cost />
       </div>
       <div className="mt-3.5 flex flex-wrap items-center gap-x-6 gap-y-2.5 border-t pt-3 text-[12.5px] tabular-nums" style={{ borderColor: C.line, color: C.nsInk }}>
-        <span>{parts.map((b, i) => <span key={b.label}>{i > 0 ? " + " : ""}{money(b.pm)}</span>)} = <b style={{ color: C.ink }}>{money(sumPM)}</b> revenue per match {foots ? <span className="font-extrabold" style={{ color: C.ok }}>✓ foots</span> : <span className="font-extrabold" style={{ color: C.loss }}>✗ does not foot</span>}</span>
-        <span>less <b style={{ color: C.ink }}>{money(g.costPM ?? 0)}</b> field cost = <b className="font-extrabold" style={{ color: (g.netPM ?? 0) < 0 ? C.loss : C.ok }}>{money(g.netPM ?? 0)}</b> net per match</span>
+        {/* ARITHMETIC ONLY. The column headers already carry "revenue per match", "field cost" and
+            "net per match"; naming them again in the sentence said each one twice. */}
+        <span>{parts.map((b, i) => <span key={b.label}>{i > 0 ? " + " : ""}{money(b.pm)}</span>)} = <b style={{ color: C.ink }}>{money(sumPM)}</b> {foots ? <span className="font-extrabold" style={{ color: C.ok }}>✓ foots</span> : <span className="font-extrabold" style={{ color: C.loss }}>✗ does not foot</span>}</span>
+        <span>less <b style={{ color: C.ink }}>{money(g.costPM ?? 0)}</b> = <b className="font-extrabold" style={{ color: (g.netPM ?? 0) < 0 ? C.loss : C.ok }}>{money(g.netPM ?? 0)}</b> per match</span>
       </div>
       <p className="m-0 mt-2.5 text-[12px] tabular-nums" style={{ color: C.muted }}>
-        Window totals: {g.matches} ran matches · {money(g.revenue)} gross · {money(g.cost ?? 0)} field cost · {money(g.revenue - (g.cost ?? 0))} net
+        {g.matches} matches · {money(g.revenue)} gross · {money(g.cost ?? 0)} cost · {money(g.revenue - (g.cost ?? 0))} net
         {g.twoPitchMatches > 0 && (
           <> · <b data-testid="fp-split">{g.onePitchMatches} on one pitch, {g.twoPitchMatches} on both</b> ({money(g.twoPitchCost)} of the cost is two-pitch)</>
         )}
