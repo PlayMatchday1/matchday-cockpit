@@ -25,6 +25,7 @@ import {
   swapAxes, canSwap, tableTitle,
   heatRange, heatStep, heatColour, contrastRatio, luminance, hexToRgb,
   planBands, factCacheStats, FACT_FETCH_CONCURRENCY,
+  stalenessKey, stalenessKeyForRows, legacyMonthKeyForRows,
   HEAT_STEPS, HEAT_INK, HEAT_MIN_ALPHA,
   type Fact, type PivotConfig, type Metric,
 } from "../src/lib/dataRoom";
@@ -295,6 +296,73 @@ console.log("\nkept: the presets, Export, every dimension and every measure");
   else bad("…and they render as chips");
 }
 
+// ── 8b. THE STALENESS KEY — THE PROPERTY, NOT THE TIMING ─────────────────────────────────────
+console.log("\nthe staleness key: does it move when a row lands?");
+{
+  /* THE OLD KEY WAS max(match_month), AND ITS FAILURE IS THE SERIOUS HALF. It only changes when a
+   * booking lands for a month LATER THAN ANY SEEN SO FAR. On production that value is "2026-09", so
+   * every new booking for August or September — nearly all of them — left it identical, and a warm
+   * instance served a fact table that no longer matched the data with nothing on screen to say so.
+   * The cache was invalidated about once a month, by accident, rather than when the facts changed.
+   *
+   * A TEST THAT ONLY CHECKED THE KEY WAS FASTER WOULD PASS ON THE BROKEN ONE. So this asserts the
+   * property — adding a participation row INSIDE the newest existing month must change the key —
+   * and asserts the old key FAILING that same property, because "the new key moved" proves nothing
+   * unless the old one demonstrably did not. */
+  const rows = [
+    { player_api_id: 302628, match_month: "2026-09" },
+    { player_api_id: 303740, match_month: "2026-08" },
+    { player_api_id: 303742, match_month: "2026-09" },
+    { player_api_id: 303745, match_month: "2026-08" },
+  ];
+  const before = stalenessKeyForRows(rows);
+  const beforeLegacy = legacyMonthKeyForRows(rows);
+
+  // A NEW ROW INSIDE THE NEWEST EXISTING MONTH — the exact case the old key was blind to.
+  const inNewestMonth = [...rows, { player_api_id: 303746, match_month: "2026-09" }];
+  is("a row inside the newest month CHANGES the key", stalenessKeyForRows(inNewestMonth) !== before, true);
+  is("…and the old key does NOT — this is the bug, asserted", legacyMonthKeyForRows(inNewestMonth), beforeLegacy);
+
+  // …and inside an EARLIER month, which the old key was equally blind to.
+  const inOlderMonth = [...rows, { player_api_id: 303747, match_month: "2026-08" }];
+  is("a row inside an earlier month changes the key too", stalenessKeyForRows(inOlderMonth) !== before, true);
+  is("…and the old key still does not", legacyMonthKeyForRows(inOlderMonth), beforeLegacy);
+
+  // A row in a BRAND NEW month is the one case the old key DID catch — the new key must too.
+  const newMonth = [...rows, { player_api_id: 303748, match_month: "2026-10" }];
+  is("a row in a new month changes the key", stalenessKeyForRows(newMonth) !== before, true);
+  is("control — the old key caught THIS case, which is why it looked like it worked",
+     legacyMonthKeyForRows(newMonth) !== beforeLegacy, true);
+
+  // NOTHING CHANGING MUST NOT CHANGE THE KEY, or every request rebuilds.
+  is("the same rows give the same key", stalenessKeyForRows([...rows]), before);
+  is("…and order does not matter", stalenessKeyForRows([...rows].reverse()), before);
+  is("an empty table has an empty key", stalenessKeyForRows([]), "");
+  is("a null max is an empty key, not the string 'null'", stalenessKey(null), "");
+  is("…and not 'undefined'", stalenessKey(undefined), "");
+  is("a numeric id becomes its own string", stalenessKey(303745), "303745");
+
+  /* THE GLOBAL MAX ID DOES NOT HAVE TO LIVE IN THE NEWEST MONTH — measured on production, the
+   * highest id 303745 is in 2026-08 while the newest month is 2026-09, because a September match
+   * was booked before an August one. The key is the max ID, not the id of the newest month, and the
+   * fixture above is built that way on purpose. */
+  is("the fixture reproduces that: the max id is not in the newest month",
+     rows.find((r) => String(r.player_api_id) === before)?.match_month, "2026-08");
+  is("…while the newest month is later", legacyMonthKeyForRows(rows), "2026-09");
+
+  const lib = readFileSync("src/lib/dataRoom.ts", "utf8");
+  const code = lib.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^\s*\/\/.*$/gm, " ");
+  if (/select\("player_api_id"\)\.order\("player_api_id", \{ ascending: false \}\)/.test(code))
+    ok("getFacts reads the max id, not the max month");
+  else bad("getFacts reads the max id", "THE STALE-CACHE BUG IS BACK");
+  if (!/select\("match_month"\)\.order\("match_month"/.test(code)) ok("…and the month ordering is gone from the code");
+  else bad("…the month ordering is gone", "it is still being used somewhere");
+  /* NO INDEX WAS ADDED. growth_participation is a VIEW: the index would land on a base column and
+   * whether the planner reaches it through the joins is not something to assume. */
+  const migrations = readFileSync("scripts/run-suites.mjs", "utf8");
+  void migrations;
+}
+
 // ── 9. THE PARTITIONED COLD FETCH ────────────────────────────────────────────────────────────
 console.log("\nthe cold fetch: eight bands that cover the id space exactly once");
 {
@@ -372,8 +440,13 @@ console.log("\nthe cold fetch: eight bands that cover the id space exactly once"
    * before reading the key at all — faster, and wrong: a warm instance would serve last month's
    * facts until it was recycled. The key read is the contract. */
   const gf = lib.slice(lib.indexOf("export async function getFacts"), lib.indexOf("async function buildFacts"));
-  if (/select\("match_month"\)/.test(gf)) ok("getFacts still reads the max month on EVERY call");
-  else bad("getFacts reads the max month on every call", "A NEW MONTH WOULD NEVER INVALIDATE THE CACHE");
+  /* ASSERTION EDITED 2026-08-27, ITEMISED. It read `select("match_month")` — pinning the key this
+   * change replaced. The INTENT is unchanged and is the reason it exists: the key must be read on
+   * EVERY call, before any early return, or a warm instance never notices new data. Only the column
+   * it names moved, because max(match_month) does not change when a booking lands inside the newest
+   * month and max(player_api_id) does. See the staleness-key block above for the property. */
+  if (/select\("player_api_id"\)/.test(gf)) ok("getFacts still reads the max ID on EVERY call");
+  else bad("getFacts reads the max ID on every call", "A NEW ROW WOULD NEVER INVALIDATE THE CACHE");
   if (/cache && cache\.key === key/.test(gf)) ok("…and only serves the cache when the key still matches");
   else bad("…only serves the cache when the key matches");
   const keyIdx = gf.indexOf("const key ="), cacheIdx = gf.indexOf("warmServes++");

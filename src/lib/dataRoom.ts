@@ -344,10 +344,35 @@ export async function getFacts(sb: SupabaseClient): Promise<FactCache> {
    * instance would never notice a new participation month and would serve last month's facts until
    * it was recycled. The key read is the contract; the single flight below is only about not paying
    * for the BUILD twice. */
+  /* ── THE STALENESS KEY IS max(player_api_id), NOT max(match_month) ────────────────────────────
+   *
+   * CORRECTNESS FIRST. `max(match_month)` only changes when a booking lands for a month LATER THAN
+   * ANY SEEN SO FAR. Today that value is "2026-09", so every new booking for August or September —
+   * which is nearly all of them — left the key identical, and a warm instance went on serving a
+   * fact table that no longer matched the data with nothing on screen to say so. The cache was
+   * invalidated roughly once a month, by accident, rather than when the facts changed.
+   *
+   * `player_api_id` is the participation row's own id: unique per row (151,654 distinct over
+   * 151,654 rows) and monotonic with time —
+   *     2023-04  ids     14 …    494
+   *     2025-06  ids 99,974 … 113,738
+   *     2026-09  ids 302,628 … 303,742
+   * so it moves the moment ANY new participation row lands, which is exactly the event the cache
+   * needs to hear about.
+   *
+   * SPEED IS THE SECOND REASON, not the first. `order match_month desc limit 1` sorts all 151,654
+   * rows to return one and measured 404 ms — the same as a full count. `player_api_id` is indexed
+   * and measures 80 ms, against a 76 ms plain-table round-trip baseline. NO INDEX WAS ADDED:
+   * growth_participation is a VIEW, so an index would land on a base column and whether the planner
+   * reaches it through the joins is not something to assume.
+   *
+   * WHAT NEITHER KEY DETECTS, stated rather than glossed: a DELETED row, or a backfill that lands
+   * with a LOWER id than the current maximum. Participation is append-only in normal operation, so
+   * this is the same class of gap the old key had and a strictly smaller one. */
   const keyT0 = Date.now();
-  const { data: maxRow } = await sb.from("growth_participation").select("match_month").order("match_month", { ascending: false }).limit(1).maybeSingle();
+  const { data: maxRow } = await sb.from("growth_participation").select("player_api_id").order("player_api_id", { ascending: false }).limit(1).maybeSingle();
   const keyMs = Date.now() - keyT0;
-  const key = String(maxRow?.match_month ?? "");
+  const key = stalenessKey(maxRow?.player_api_id ?? null);
   if (cache && cache.key === key) { warmServes++; lastKeyMs = keyMs; return cache; }
   lastKeyMs = keyMs;
   /* SOMEONE IS ALREADY BUILDING — await THEIR build instead of starting a second full fetch. */
@@ -357,6 +382,21 @@ export async function getFacts(sb: SupabaseClient): Promise<FactCache> {
 }
 
 let lastKeyMs = 0;
+
+/** The cache key from the highest participation row id. Its own function so the suite can pin the
+ *  PROPERTY — that it moves when a row lands — rather than the shape of a query string. */
+export const stalenessKey = (maxRowId: number | string | null | undefined): string =>
+  maxRowId == null ? "" : String(maxRowId);
+
+/** THE PROPERTY, AS CODE. Given the rows a fact table was built from, the key it should carry.
+ *  Exported so churn-style "does adding a row change it" assertions can run without a database. */
+export const stalenessKeyForRows = (rows: readonly { player_api_id: number; match_month: string }[]): string =>
+  stalenessKey(rows.length ? rows.reduce((a, r) => (r.player_api_id > a ? r.player_api_id : a), rows[0].player_api_id) : null);
+
+/** WHAT THE OLD KEY WAS. Kept ONLY so the suite can show it failing to move — an assertion that the
+ *  new key changes proves nothing unless the old one demonstrably did not. Nothing calls it. */
+export const legacyMonthKeyForRows = (rows: readonly { player_api_id: number; match_month: string }[]): string =>
+  rows.length ? rows.reduce((a, r) => (r.match_month > a ? r.match_month : a), rows[0].match_month) : "";
 
 async function buildFacts(sb: SupabaseClient, key: string): Promise<FactCache> {
   const buildStart = Date.now();

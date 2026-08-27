@@ -4182,5 +4182,31 @@ participation row (151,654 distinct values over 151,654 rows, range 14 … 30374
 indexed at ~80 ms, and it changes when *any* row lands — whereas `max(match_month)` does not change
 when a new match is added inside the current month, so today's key is both slow **and** weak.
 
-Not changed. Worth ~1 s on every cold open, and the key read is now the second-largest item on the
-critical path.
+**CHANGED 2026-08-27 — and correctness was the reason, not speed.**
+
+`max(match_month)` only moves when a booking lands for a month **later than any seen so far**. That
+value is `2026-09`, so every new booking for August or September — nearly all of them — left the key
+identical, and **a warm instance went on serving a fact table that no longer matched the data, with
+nothing on screen to say so.** The cache was invalidated roughly once a month, by accident, rather
+than when the facts changed.
+
+`player_api_id` is the participation row's own id: unique per row and monotonic with time —
+
+    2023-04  ids      14 …     494
+    2025-06  ids  99,974 … 113,738
+    2026-09  ids 302,628 … 303,742
+
+so it moves the moment **any** new participation row lands. Note the global maximum need not live in
+the newest month: id `303745` is in `2026-08` while the newest month is `2026-09`, because a
+September match was booked before an August one. The key is the max **id**, not the id of the newest
+month.
+
+**What neither key detects**, stated rather than glossed: a deleted row, or a backfill landing with
+a *lower* id than the current maximum. Participation is append-only in normal operation, so this is
+the same class of gap as before and a strictly smaller one.
+
+**NO INDEX WAS ADDED.** `growth_participation` is a view; the index would land on a base column and
+whether the planner reaches it through the joins is not something to assume.
+
+Measured after the swap: `keyMs` **1,266 ms → 155 ms** cold, and a **warm** serve — which pays this
+read on *every* request — **377–441 ms → 80–103 ms**. First cell 6,763 ms → 6,280 ms.
