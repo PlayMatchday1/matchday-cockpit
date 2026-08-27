@@ -135,6 +135,14 @@ const NODE_SUITES = [
   // an id. The $20/$30 figure is asserted AGAINST payAmount rather than restated — two paths
   // answering one money question is the shape that cost four months on PARMER.
   "scripts/manager-assign-test.ts",
+  // PLAYER LOOKUP'S SEARCH. In the fast set for the reason the bug survived so long: its own
+  // comment claimed ?email= was a universal fuzzy over email, NAME and phone "confirmed live", and
+  // it never matched a name at all — Anderson King was unfindable by his first name for the life of
+  // the feature because his email happens to hold his last. The suite's first block is the
+  // assertion that would have caught it and never existed: a player whose NAME contains the term
+  // and whose EMAIL does not. It also pins that a two-word query is two predicates, and that the
+  // header prints the TOTAL rather than the page size.
+  "scripts/player-lookup-search-test.ts",
 ];
 const ALL_E2E = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
 // --e2e runs EVERY browser suite. Nothing is excluded, because nothing is mandatory.

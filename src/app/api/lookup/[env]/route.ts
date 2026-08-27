@@ -1,8 +1,19 @@
 // Player Lookup read route (Phase 18) — READ-ONLY. Two shapes:
-//   GET ?q=<term>  -> search. Universal fuzzy: /admin/players?email=<term> matches
-//                     email, name AND phone-digits (confirmed live); a pure id uses
-//                     ?id=<n> (exact). Returns a light row per hit — no strikes, no
-//                     payments, no card data.
+//   GET ?q=<term>&page=<n>  -> search. Returns a light row per hit — no strikes, no
+//                     payments, no card data — plus the TRUE total and the page.
+//
+// ── THE CLAIM THIS HEADER SHIPPED WITH, AND THE CORRECTION ────────────────────────────────────
+// It read, verbatim:
+//
+//     GET ?q=<term>  -> search. Universal fuzzy: /admin/players?email=<term> matches
+//                       email, name AND phone-digits (confirmed live); a pure id uses
+//                       ?id=<n> (exact).
+//
+// CORRECTION (2026-08-26). `?email=` matches EMAIL and PHONE — NOT name. Measured on production
+// over four terms (153 hits): every hit has the term in its EMAIL and there are ZERO name-only
+// hits. Anderson King (id 395, kinga11592@gmail.com) was unreachable by "anderson" and always
+// reachable by "king" for exactly that reason. The API exposes no name parameter at all, so a
+// NAME is answered from our own mirror instead — see the search block below.
 //   GET ?id=<n>    -> one profile: identity, facts, membership, match history and the
 //                     read-only STRIKES summary (server-computed activeStrikes + per-log
 //                     reason joined from the user-match's userStatus). PAYMENTS and
@@ -17,7 +28,10 @@ import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { cityNameFor } from "@/lib/cityScope";
 import { CONFINED_CITY_ERROR } from "@/lib/cityConfinement";
 import { apiGet, StageHostGuardError, StageConfigError, type MatchdayEnv } from "@/lib/matchdayStageApi";
-import { detectKind, serverQuery } from "@/lib/playerLookupModel";
+import {
+  detectKind, serverQuery, usesMirror, splitNameTerms, nameOrFilter, SEARCH_PAGE_SIZE,
+} from "@/lib/playerLookupModel";
+import { makeServerClient } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -219,19 +233,95 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
     // ---- search ----
     if (q !== null) {
       const d = detectKind(q);
-      if (d.kind === "empty") return Response.json({ kind: d.kind, results: [] });
-      const query = { ...serverQuery(d), limit: 15, page: 1 };
-      const r = await apiGet<{ data?: Record<string, unknown>[] } | Record<string, unknown>[]>(env, `/admin/players`, query);
+      if (d.kind === "empty") return Response.json({ kind: d.kind, results: [], total: 0, page: 1, pageSize: SEARCH_PAGE_SIZE, totalKnown: true });
+      const pageN = Math.max(1, Number(url.searchParams.get("page") ?? 1) || 1);
+      const want = auth.confinedCity ? cityNameFor(auth.confinedCity) : null;
+
+      /* ── A NAME GOES TO THE MIRROR, AND ONLY FOR ITS IDS ──────────────────────────────────────
+       * The upstream endpoint has NO name parameter — `?email=` matches email and phone and
+       * nothing else — so a name cannot be asked of it at all.
+       *
+       * THE MIRROR IS NOT THE ANSWER, IT IS THE INDEX. Player Lookup goes to the API on purpose so
+       * every field on screen is live; returning mdapi_users rows would quietly make this the one
+       * screen showing yesterday's email and yesterday's ban state. So the mirror finds candidate
+       * IDs and each row shown is fetched FRESH from the API by id.
+       *
+       * THE COST OF THAT IS A STALENESS WINDOW ON DISCOVERY, not on detail: a player who registered
+       * after the last sync is not findable BY NAME until it runs. mdapi_users is refreshed twice a
+       * day — a full pass at 09:00 UTC and an incremental inside the 11:00 UTC cron — so the worst
+       * case is about 22 hours. They remain findable by EMAIL, PHONE and ID the moment they exist,
+       * because those three still go straight to the API. The response says so in `via`. */
+      if (usesMirror(d.kind)) {
+        const sb = makeServerClient();
+        const terms = splitNameTerms(q);
+        // ONE PREDICATE PER WORD, ANDed. "anderson king" is two predicates, not one impossible
+        // substring; order does not matter, so "king anderson" finds the same person.
+        let sel = sb.from("mdapi_users").select("id", { count: "exact" });
+        // ONE definition of "matches a name" — nameOrFilter is the query form of
+        // matchesNameTerms, and player-lookup-search-test asserts the two agree.
+        for (const t of terms) {
+          const f = nameOrFilter(t);
+          if (f) sel = sel.or(f);
+        }
+        // CONFINEMENT IN THE QUERY, not after it — otherwise the count is the unscoped one and the
+        // page is a filtered slice of somebody else's page.
+        if (want) sel = sel.eq("preferable_city_name", want);
+        const from = (pageN - 1) * SEARCH_PAGE_SIZE;
+        // Ordered the same way the API orders — first_name ascending — so the two paths agree
+        // about who is on page 1. last_name and id break ties so paging is deterministic.
+        const { data, count, error } = await sel
+          .order("first_name", { ascending: true }).order("last_name", { ascending: true }).order("id", { ascending: true })
+          .range(from, from + SEARCH_PAGE_SIZE - 1);
+        /* AN ERROR IS NOT AN EMPTY RESULT. `?.length ?? 0` on a failed PostgREST call renders a
+         * swallowed error and a genuinely empty search identically — that has already cost us a
+         * wrong answer on this very table. */
+        if (error) return Response.json({ error: `name search failed: ${error.message}` }, { status: 500 });
+
+        const ids = (data ?? []).map((r) => Number((r as { id: unknown }).id)).filter(Number.isFinite);
+        // LIVE DETAIL, one call per row on this page. `?id=` takes a single id — a comma list is a
+        // 400 — so these are parallel, bounded by the page size.
+        const settled = await Promise.all(ids.map((pid) =>
+          apiGet<{ data?: Record<string, unknown>[] } | Record<string, unknown>[]>(env, `/admin/players`, { id: pid, limit: 1, page: 1 })
+            .then((r) => (Array.isArray(r) ? r[0] : (r.data ?? [])[0]) ?? null)
+            .catch(() => null)));
+        const live = settled.filter((r): r is Record<string, unknown> => r !== null);
+        // A candidate the API no longer returns was deleted upstream since the sync. It is dropped
+        // rather than rendered from the mirror, and SAID — otherwise the count overstates the list.
+        const dropped = ids.length - live.length;
+        let results = live.map(lightRow);
+        if (want) results = results.filter((r) => r.city === want);
+        return Response.json({
+          kind: d.kind, results, page: pageN, pageSize: SEARCH_PAGE_SIZE,
+          total: count ?? 0, totalKnown: count != null, dropped,
+          via: "mirror", terms,
+        });
+      }
+
+      /* EMAIL, PHONE AND ID GO STRAIGHT TO THE API, and the header now reads the total the API has
+       * been returning all along. `limit: 15, page: 1` was hardcoded here; the 15 rows it produced
+       * were reported as "15 matches" for terms with 18, 69, 299 and 396 real hits. */
+      const query = { ...serverQuery(d), limit: SEARCH_PAGE_SIZE, page: pageN };
+      const r = await apiGet<{ data?: Record<string, unknown>[]; totalItems?: number } | Record<string, unknown>[]>(env, `/admin/players`, query);
       const rows = Array.isArray(r) ? r : ((r as { data?: Record<string, unknown>[] }).data ?? []);
+      const totalItems = Array.isArray(r) ? undefined : (r as { totalItems?: number }).totalItems;
       // THE SEARCH LIST, SCOPED. Filtered on the server before serialization — the upstream
       // /admin/players has no city parameter, so this cannot be an in-query filter; what it can be
       // is a filter no row escapes, and a `results` array whose length is the filtered length.
       let results = rows.map(lightRow);
+      let total = typeof totalItems === "number" ? totalItems : null;
       if (auth.confinedCity) {
-        const want = cityNameFor(auth.confinedCity);
+        const before = results.length;
         results = results.filter((r) => r.city === want);
+        /* A CONFINED ACCOUNT'S TOTAL IS NOT KNOWABLE FROM totalItems — that count is the unscoped
+         * one, and the filter runs after the page arrives. Printing it would tell a Warsaw operator
+         * there are 69 matches when they can see four. So the total is withheld, and the header
+         * says the total is not known rather than inventing one. */
+        if (before !== results.length || total !== null) total = null;
       }
-      return Response.json({ kind: d.kind, results });
+      return Response.json({
+        kind: d.kind, results, page: pageN, pageSize: SEARCH_PAGE_SIZE,
+        total: total ?? results.length, totalKnown: total !== null, dropped: 0, via: "api",
+      });
     }
 
     return Response.json({ error: "q or id required" }, { status: 400 });

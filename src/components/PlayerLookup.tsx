@@ -26,6 +26,7 @@ import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { envBadge } from "@/lib/matchEnvBadge";
 import {
   detectKind, SEARCH_HINT, money, openSpots as openSpotsOf, suggestSpot, STRIKE_LIMIT, strikeReasonLabel, isKnownStrikeReason,
+  SEARCH_PAGE_SIZE, resultHeader, pageCount,
   type SpotTeam, type SearchKind,
 } from "@/lib/playerLookupModel";
 
@@ -66,6 +67,8 @@ type Membership = { status: string; number: string | null; since: string | null;
 type StrikeLog = { penaltyPoint: number; active: boolean; reason: string | null; matchName: string | null; when: string | null; issued: string | null; canceledAt: string | null; hoursBefore: number | null };
 type Strikes = { activeCount: number; limit: number; isSuspended: boolean; suspendedTo: string | null; expiredAt: string | null; firstStrikeAt: string | null; logs: StrikeLog[] };
 type HistoryRow = { action: "suspend" | "expel"; reason: string | null; when: string | null; until: string | null; by: string | null };
+type SearchMeta = { total: number; totalKnown: boolean; page: number; pageSize: number; via: string; dropped: number };
+
 type Profile = {
   player: {
     id: number; name: string; email: string | null; phone: string | null; phoneVerified: boolean; city: string | null;
@@ -140,6 +143,11 @@ export default function PlayerLookup() {
   const [kind, setKind] = useState<SearchKind>("empty");
   const [results, setResults] = useState<SearchRow[] | null>(null);
   const [searching, setSearching] = useState(false);
+  /* WHAT THE HEADER IS ALLOWED TO SAY. `total` is the server's, not results.length; `totalKnown`
+   * is false when nobody can produce a real total (a confined account's page is filtered after the
+   * API counts, so the API's count is not theirs) and the header then says so rather than printing
+   * a number that is not one. */
+  const [meta, setMeta] = useState<SearchMeta | null>(null);
   const [searchErr, setSearchErr] = useState<string | null>(null);
 
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -160,26 +168,36 @@ export default function PlayerLookup() {
     setFields((prev) => { const next = { ...prev, [k]: on }; try { localStorage.setItem(FIELDS_LS, JSON.stringify(next)); } catch { /* ignore */ } return next; });
   };
 
-  const runSearch = useCallback(async (raw: string) => {
+  const runSearch = useCallback(async (raw: string, page = 1) => {
     const d = detectKind(raw);
     setKind(d.kind);
-    if (d.kind === "empty") { setResults(null); setSearchErr(null); return; }
+    if (d.kind === "empty") { setResults(null); setSearchErr(null); setMeta(null); return; }
     const my = ++seq.current;
     setSearching(true); setSearchErr(null);
     try {
-      const res = await authFetch(`/api/lookup/${ENV}?q=${encodeURIComponent(raw.trim())}`);
+      const res = await authFetch(`/api/lookup/${ENV}?q=${encodeURIComponent(raw.trim())}&page=${page}`);
       const j = await res.json();
       if (my !== seq.current) return; // a newer keystroke won
-      if (!res.ok) { setSearchErr(j?.error || `Search failed (${res.status})`); setResults([]); return; }
+      if (!res.ok) { setSearchErr(j?.error || `Search failed (${res.status})`); setResults([]); setMeta(null); return; }
       setResults((j.results ?? []) as SearchRow[]);
-    } catch (e) { if (my === seq.current) { setSearchErr(e instanceof Error ? e.message : String(e)); setResults([]); } }
+      /* THE HEADER'S NUMBER COMES FROM THE SERVER, NEVER FROM results.length. It used to be
+       * `${results.length} matches` over a page of 15 — which said "15 matches" for terms with 18,
+       * 69, 299 and 396 real hits. `totalKnown` is what lets the header say nothing rather than
+       * print a number it does not have. */
+      setMeta({
+        total: Number(j.total ?? 0), totalKnown: j.totalKnown === true,
+        page: Number(j.page ?? page), pageSize: Number(j.pageSize ?? SEARCH_PAGE_SIZE),
+        via: j.via ?? "api", dropped: Number(j.dropped ?? 0),
+      });
+    } catch (e) { if (my === seq.current) { setSearchErr(e instanceof Error ? e.message : String(e)); setResults([]); setMeta(null); } }
     finally { if (my === seq.current) setSearching(false); }
   }, []);
 
-  // debounce keystrokes
+  // debounce keystrokes. A NEW TERM ALWAYS RESTARTS AT PAGE 1 — staying on page 3 of the previous
+  // search would show an empty list for a term that has plenty of matches.
   useEffect(() => {
     if (profile) return; // typing is handled in onChange (which closes the profile)
-    const t = window.setTimeout(() => runSearch(q), 180);
+    const t = window.setTimeout(() => runSearch(q, 1), 180);
     return () => window.clearTimeout(t);
   }, [q, profile, runSearch]);
 
@@ -256,7 +274,15 @@ export default function PlayerLookup() {
         <div className="panel">
           <div className="ptitle">
             <h3>{kind === "empty" ? "RECENT LOOKUPS" : "RESULTS"}</h3>
-            <span className="note">{searching ? "searching…" : kind === "empty" ? "" : results ? `${results.length} match${results.length === 1 ? "" : "es"}` : ""}</span>
+            {/* IT USED TO READ `${results.length} matches` OVER A PAGE OF 15, so it said "15
+                matches" for terms with 18, 69, 299 and 396 real hits — a false statement, not a
+                rounding. The number is the SERVER's total now, and when nobody has a real total
+                the header says that instead of printing one. */}
+            <span className="note" data-testid="res-count">
+              {searching ? "searching…" : kind === "empty" ? "" : results && meta
+                ? resultHeader(results.length, meta.totalKnown ? { known: true, total: meta.total } : { known: false }, meta.page, meta.pageSize)
+                : ""}
+            </span>
           </div>
           <div className="reslist">
             {searchErr && <p className="empty" data-testid="search-err"><b>Search failed</b>{searchErr}</p>}
@@ -282,6 +308,35 @@ export default function PlayerLookup() {
                 <span className="rtags">{statusTags(r).map(([c, l]) => <span key={l} className={`tag ${c}`}>{l}</span>)}</span>
               </button>
             ))}
+
+            {/* THERE IS A WAY TO REACH THE REST. The old page-1-of-15 had none, and because the
+                results are ordered by first name it always dropped the END of the alphabet —
+                searching "anderson" lost three Wandersons with nothing on screen to say so. */}
+            {!searchErr && meta && meta.totalKnown && results && results.length > 0 && pageCount(meta.total, meta.pageSize) > 1 && (
+              <div className="pager" data-testid="res-pager">
+                <button type="button" className="pgb" data-testid="res-prev" disabled={meta.page <= 1 || searching}
+                  onClick={() => runSearch(q, meta.page - 1)}>‹ Previous</button>
+                <span className="pgn">Page <b>{meta.page}</b> of <b>{pageCount(meta.total, meta.pageSize)}</b></span>
+                <button type="button" className="pgb" data-testid="res-next"
+                  disabled={meta.page >= pageCount(meta.total, meta.pageSize) || searching}
+                  onClick={() => runSearch(q, meta.page + 1)}>Next ›</button>
+              </div>
+            )}
+
+            {/* THE STALENESS WINDOW, SAID OUT LOUD — and only on the path that has one. A NAME is
+                found through our mirror because the API has no name parameter, so a player who
+                registered since the last sync is not findable by name yet. Every row shown is still
+                fetched LIVE from the API by id, so nothing on screen is stale — only the finding
+                is. Email, phone and ID go straight to the API and have no such window. */}
+            {!searchErr && meta?.via === "mirror" && results && (
+              <p className="mirrornote" data-testid="res-mirror-note">
+                Names are matched against our player mirror, because the MatchDay API has no name
+                search — every row here is then read live from the API. The mirror refreshes twice a
+                day, so <b>someone who registered in the last few hours may not be findable by name
+                yet</b>. Their phone, email or ID will still find them.
+                {meta.dropped > 0 && <> {meta.dropped} candidate{meta.dropped === 1 ? "" : "s"} on this page no longer exist{meta.dropped === 1 ? "s" : ""} in the API and {meta.dropped === 1 ? "was" : "were"} dropped.</>}
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -1171,6 +1226,13 @@ const CSS = `
 .pl .empty b{display:block;color:var(--ink2);margin-bottom:4px}
 .pl .back{display:inline-flex;align-items:center;gap:7px;background:none;border:0;padding:6px 2px;margin:0 0 8px;font:inherit;font-weight:700;color:var(--ink2);cursor:pointer;min-height:32px}
 .pl .back:hover{color:var(--ink)}
+.pl .pager{display:flex;align-items:center;gap:12px;justify-content:center;padding:12px 16px;border-top:1px solid var(--line)}
+.pl .pgb{border:1px solid var(--line);background:var(--card);border-radius:9px;padding:7px 14px;font:inherit;font-size:13px;font-weight:600;color:var(--ink2);cursor:pointer;min-height:34px}
+.pl .pgb:disabled{opacity:.4;cursor:not-allowed}
+.pl .pgn{font-size:12.5px;color:var(--ink3);font-variant-numeric:tabular-nums}
+.pl .pgn b{color:var(--ink2)}
+.pl .mirrornote{margin:0;padding:11px 16px;border-top:1px solid var(--line);font-size:12px;line-height:1.55;color:var(--ink3);background:#fafcfb}
+.pl .mirrornote b{color:var(--ink2)}
 .pl .idcard{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:14px}
 .pl .idtop{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap}
 .pl .who{min-width:0}

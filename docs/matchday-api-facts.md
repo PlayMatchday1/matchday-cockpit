@@ -3903,3 +3903,52 @@ The profile card rendered **"Not a match manager anywhere"** while its fetch was
 because `me` is null both when the person is on no roster and when the data has not arrived. That is
 a false claim about a real person on screen. `loaded` now separates the two and the card says
 "Reading the roster…" until it knows. **An absence is not a claim until the data has arrived.**
+
+---
+
+## Player Lookup search — what `?email=` actually matches (2026-08-26)
+
+**`GET /admin/players?email=<term>` matches EMAIL and PHONE. It does NOT match name.** The code
+claimed otherwise, in writing, for the life of the feature: *"a UNIVERSAL fuzzy match (it hits
+email, name AND phone-digits — confirmed live)"*. Nobody had tested it.
+
+Measured on production over four terms — anderson (18 hits), smith (29), maria (37), king (69):
+**all 153 hits contain the term in their email; ZERO name-only hits.** The 12 of 18 "anderson"
+results whose *name* contains it are coincidence — their email does too, which is what made the
+claim look confirmed.
+
+**The counterexample:** Anderson King, **id 395**, `kinga11592@gmail.com`. His email holds "king"
+and not "anderson", so the app could never find him by his first name and always found him by his
+last. Five accounts match "anderson" by name with no "anderson" in their email, and **two of those
+are Apple private relay addresses** — for them a name search is not a convenience, it is the only
+route that exists.
+
+**The API exposes no name parameter at all**, so this was never fixable by changing a query string.
+
+### Other properties of that endpoint
+
+- **A term is one substring.** No whitespace splitting — and emails contain no spaces, so
+  `"anderson king"`, `"john smith"`, `"maria garcia"`, `"de la"` all returned **exactly zero,
+  always**. Not specific to any account.
+- **`totalItems` is returned on every response.** The route never read it. `limit: 15, page: 1` was
+  hardcoded, so the header said "15 matches" for terms with 18, 69, 299 and 396 real hits.
+- **Ordered by `firstName` ascending**, case- and accent-insensitive, NULLs last — zero collation
+  violations at n=299 under `Intl.Collator("en", {sensitivity:"base"})`. So the 15-cap always
+  dropped the **end of the alphabet**; for "anderson" the three lost were all Wandersons.
+- **`?id=` takes ONE id.** `?id=395,1124` is a 400 (`property take should not exist` is the sibling
+  error for `take`; the list parameter is `limit`, not `take`).
+- **Paging is sound here, unlike `/admin/promocodes`**: page1(100) + page2(60) = 160 distinct, zero
+  overlap, and the concatenation matches the single-call order exactly.
+
+### What Clubhouse does now
+
+A **name** is answered from `mdapi_users` — `first_name`/`last_name`, one `ilike` predicate per
+whitespace-separated word, ANDed, order-independent. **The mirror is the index, not the answer:** it
+supplies candidate IDs and every row shown is then fetched **live from the API by id**, so no field
+on screen is stale. Email, phone and ID still go straight to the API.
+
+**The staleness window is on DISCOVERY, not detail.** `mdapi_users` refreshes twice a day — a full
+pass at **09:00 UTC** (`/api/sync/users-full`) and an incremental inside the **11:00 UTC** cron — so
+a player who registers just after the incremental is **not findable by name for up to ~22 hours**.
+They are findable by phone, email or ID immediately. The page says so, on the name path only.
+Measured 2026-08-26: mirror 30,783 rows against the API's 30,800 — **17 behind**.
