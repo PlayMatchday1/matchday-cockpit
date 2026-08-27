@@ -126,6 +126,18 @@ async function main() {
   for (const s of SECTIONS) {
     await page.goto(`${BASE}${SECTION_ROOT}/${s}`, { waitUntil: "domcontentloaded" });
     await settle();
+    /* THE DATA ROOM NEEDS A SECOND READY SIGNAL, ADDED 2026-08-27, ITEMISED.
+     *
+     * settle() waits for the growth-section wrapper and its title. That was enough for every
+     * section including this one — but only because the "How these numbers are made" card rendered
+     * dates and counts instantly, so the "rendered figures, not a shell" check below found digits
+     * that belonged to the CARD, not to the pivot table. The card is deleted, and the check
+     * immediately read 0: the page genuinely has no figures until the fact table is built, which is
+     * seconds cold.
+     *
+     * THE ASSERTION IS UNCHANGED and is now testing what it always claimed to. What changed is the
+     * WAIT: this section is ready when a cell exists, not when a heading does. */
+    if (s === "data-room") await page.waitForSelector('[data-testid="dr-cell"]', { timeout: 240000 });
     eq(`${s} — identical to the pre-rename fixture`, await fingerprint(), BASELINE[s]);
 
     const live = await page.evaluate(() => {

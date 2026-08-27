@@ -1,6 +1,7 @@
 {
  "_itemised_edits": [
-  "TWO FIELDS EDITED, DELIBERATELY, IN THE DATA ROOM REBUILD. (1) periodBar true -> false: the panel has NEVER read the page period \u2014 it has always had its own Window control \u2014 so the bar changed nothing below it. That was invisible until the Total column started naming the window it covers, at which point the bar read 'Feb 2026 - Jul 2026' while the total beside it read 'Apr 2023 - Sep 2026'. SectionFrame's own rule is that period:false means the page genuinely does not follow it. (2) subtitle: extended to say so, which is what that same rule requires of a page without a bar. Nothing else in this fixture moved, and the assertion bodies in verify-lifecycle-rename.mjs are unchanged \u2014 only the recorded baseline for these two fields."
+  "TWO FIELDS EDITED, DELIBERATELY, IN THE DATA ROOM REBUILD. (1) periodBar true -> false: the panel has NEVER read the page period \u2014 it has always had its own Window control \u2014 so the bar changed nothing below it. That was invisible until the Total column started naming the window it covers, at which point the bar read 'Feb 2026 - Jul 2026' while the total beside it read 'Apr 2023 - Sep 2026'. SectionFrame's own rule is that period:false means the page genuinely does not follow it. (2) subtitle: extended to say so, which is what that same rule requires of a page without a bar. Nothing else in this fixture moved, and the assertion bodies in verify-lifecycle-rename.mjs are unchanged \u2014 only the recorded baseline for these two fields.",
+  "THIRD FIELD EDITED, 2026-08-27, ITEMISED: data-room.cardTitles [\"How these numbers are made\"] -> []. The 'How these numbers are made' card is DELETED \u2014 the component too, not just its mount \u2014 because 'no text under the table' meant the page. Every fact it rendered is now in docs/matchday-api-facts.md under 'How the Growth / Lifecycle numbers are made': the three start dates (2023-03 / 2024-02 / 2023-04), Apple's Aug 2025 floor and one-year retention, App Units vs user-installs, the aggregate-ratio caveat, the open month, and the 201 fake users / 33,809 fake rows. The assertion BODY in verify-lifecycle-rename.mjs is unchanged; only the recorded baseline for this one field moved, and it moved to empty because the card no longer exists."
  ],
  "funnel": {
   "title": "Player Funnel",
@@ -159,9 +160,7 @@
   "dataSection": "Player Data Room",
   "periodBar": false,
   "docTitle": "Player Lifecycle",
-  "cardTitles": [
-   "How these numbers are made"
-  ],
+  "cardTitles": [],
   "railItems": [
    "Player Funnel",
    "Player Behavior",

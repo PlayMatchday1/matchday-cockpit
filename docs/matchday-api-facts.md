@@ -3952,3 +3952,65 @@ pass at **09:00 UTC** (`/api/sync/users-full`) and an incremental inside the **1
 a player who registers just after the incremental is **not findable by name for up to ~22 hours**.
 They are findable by phone, email or ID immediately. The page says so, on the name path only.
 Measured 2026-08-26: mirror 30,783 rows against the API's 30,800 — **17 behind**.
+
+---
+
+## How the Growth / Lifecycle numbers are made (2026-08-27)
+
+**These were rendered on the Player Data Room as a "How these numbers are made" card. The card is
+deleted; the facts live here.** They are properties of the data, not captions for a table, and
+prose above a number competes with the number.
+
+### Three start dates, not one
+
+| series | begins | why |
+|---|---|---|
+| Registrations | **2023-03** | first account rows |
+| Memberships | **2024-02** | first subscription rows |
+| Everything play-derived — matches, spots, revenue, cohorts, retention, ARPP | **2023-04** | the first month any matches exist (confirmed: earliest `growth_participation.match_month` = `2023-04`) |
+
+**An empty region before a series' start means "no data yet", never zero.** The play floor is read
+from the data (`playFloor` in `growthAnalytics.ts`), not written down; the other two are constants
+in that same file.
+
+### App downloads have a fourth floor, and it is permanent
+
+- **Apple's monthly reports begin August 2025 and are retained for ONE YEAR ONLY.** Earlier iOS
+  months do not exist and **cannot be recovered** — Apple keeps yearly reports for ten years, but
+  with no monthly granularity. This is a permanent hole in the history, not a sync gap.
+- Google's reach back further; a combined figure is therefore both stores only from **Aug 2025**
+  onward. Rows in the funnel table that start earlier say so on the row itself.
+- **THE TWO STORES COUNT DIFFERENT THINGS.** Apple **App Units** are new downloads; Google
+  **user-installs** are user-deduped. A combined total is a convenience, **not a like-for-like
+  figure**.
+
+### Downloads → Registrations is an aggregate ratio, not a conversion
+
+Store installs **cannot be linked to a player** — Apple and Google never reveal who installed —
+unlike every later funnel step, which is a true cohort subset of the one before it. Any "conversion"
+between those two stages is a ratio of two independently-counted totals.
+
+### The funnel bars and the cohort
+
+Each bar is that stage as a share of the row's **largest** stage, so the funnel narrows left to
+right. The figure between two cells is the conversion from the left one to the right one, and is
+dashed whenever either side is unknown. Every row counts one period's **sign-up cohort** and how
+many went on to play that many non-cancelled matches **ever** — so each stage is a subset of the one
+before it.
+
+### An open month is never excluded or annualised
+
+The current month is part-elapsed and Apple's daily feed lags, so its denominator is still arriving.
+Its conversion is marked **"so far"** and is **not comparable** to the closed rows beneath it.
+
+### Fake players are excluded everywhere
+
+**201 fake users** (`mdapi_users.is_fake_player = true`, confirmed 2026-08-27) and **33,809 live fake
+rows** are removed before any figure is computed. Source is the live `mdapi_*` mirror plus
+`fin_revenue`, read-only.
+
+### Where the per-row marks stay
+
+The coverage marks inside the funnel table — "Android only", "Android only before Aug 2025" — are
+**data labels, not explanation**: they qualify one row's number and travel with it. They stay on the
+row. Moving them would leave a number stating more than it can support.

@@ -3,7 +3,6 @@
 // PLAYER DATA ROOM — moved verbatim. Follows the period, as it did before.
 
 import DataRoomPanel from "@/components/growth/DataRoomPanel";
-import HowNumbersAreMade from "@/components/growth/HowNumbersAreMade";
 import SectionFrame from "@/components/growth/SectionFrame";
 import { useGrowth } from "@/components/growth/GrowthDataProvider";
 
@@ -22,10 +21,13 @@ export default function LifecycleDataRoomPage() {
       title="Player Data Room"
       subtitle="The rows behind every number on the other five sections, and how each one is made. Set the window in the builder — this page does not follow the period bar."
     >
+      {/* NOTHING BELOW THE TABLE — ON THE PAGE, not just on the card. A "How these numbers are
+          made" card lived here and is deleted outright, component and all. Every fact it carried
+          is in docs/matchday-api-facts.md under "How the Growth / Lifecycle numbers are made":
+          the three start dates, Apple's Aug 2025 floor and its one-year retention, App Units vs
+          user-installs, the aggregate ratio, the open month, and the 201 fake users / 33,809 fake
+          rows. Those are properties of the data, not captions for a table. */}
       <DataRoomPanel authHeaders={g.authHeaders} />
-      {/* EVERY METHODOLOGICAL STATEMENT ON GROWTH, gathered here from the banner, the downloads
-          card and the funnel footnote. This is the page for how a number is made. */}
-      {g.data && <HowNumbersAreMade data={g.data} />}
     </SectionFrame>
   );
 }
