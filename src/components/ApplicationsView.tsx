@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import type { Person, Tiles } from "@/lib/applicationsModel";
+import type { Field, Person, Tiles } from "@/lib/applicationsModel";
 import { matchesSearch } from "@/lib/applicationsModel";
 import { STATUSES, CITY_ORDER, type Status } from "@/lib/webSubmissions";
 
@@ -37,6 +37,43 @@ const fmtDate = (ymd: string) =>
   /^\d{4}-\d{2}-\d{2}$/.test(ymd)
     ? new Date(`${ymd}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })
     : "—";
+
+/* ── PHONE ─────────────────────────────────────────────────────────────────────────────────────
+ * TABULAR, so the numbers line up vertically and a column of them can be scanned rather than read —
+ * the same treatment the Match Managers panel gives them.
+ *
+ * NEVER AN EMPTY CELL. A blank reads as data we failed to load; "not given" reads as a question the
+ * form never asked, which is what it is. Measured on the live data:
+ *
+ *   TEAM     115 people · 101 have a phone · 14 whose form never asked
+ *   PARTNER   65 people ·   0 have a phone · 65 whose submissions carry none
+ *
+ * The 14 come from the three oldest Team forms (37a43a2a, c6e12c3, 3a4c40bd — 17 submissions
+ * between them) which collected only First Name, Last Name, Email and Zipcode.
+ *
+ * THE PARTNER FORM DECLARES A PHONE FIELD AND NO STORED SUBMISSION CARRIES ONE. web_form_labels
+ * holds `f7eed00 Phone = "Phone"`, but the field keys across all 487 partner rows are exactly
+ * Email, Company, Location, First Name, Last Name. So every partner lead renders "not given" — that
+ * is the data, not a broken column, and the tooltip says which of the two reasons applies.
+ *
+ * THE TWO REASONS STAY DISTINGUISHABLE. The page separates "not asked" from "blank" everywhere else
+ * and it would be inconsistent to collapse them here, so both read "not given" — the operator's
+ * question is "can I call them", and the answer is no either way — while the title says which. */
+/* INLINE STYLES, NOT A CLASS, AND THAT IS NOT LAZINESS. styled-jsx scopes a `<style jsx>` block to
+ * the JSX inside the component that declares it. `Phone` is a SIBLING function component in this
+ * file, so its span rendered with `class="ph"` and NO jsx-<hash> scope class — the rule never
+ * matched and the numbers came out untabulated. Caught by measuring the computed
+ * font-variant-numeric in a browser, which read "normal"; nothing about the page looked wrong.
+ * Inline styles cannot miss a scope and cannot collide with the `.ph` that MatchManagersPanel
+ * already uses for the same idea. */
+const PHONE_STYLE: React.CSSProperties = { fontVariantNumeric: "tabular-nums", fontSize: 12.5, color: "#3C4F44", whiteSpace: "nowrap" };
+const NOT_GIVEN_STYLE: React.CSSProperties = { fontSize: 12, color: "#A9B5AD", fontStyle: "italic", whiteSpace: "nowrap" };
+
+function Phone({ f }: { f: Field }) {
+  if (!f.asked) return <span style={NOT_GIVEN_STYLE} data-testid="apps-phone" data-given="false" title="This form never asked for a phone number">not given</span>;
+  if (!f.value.trim()) return <span style={NOT_GIVEN_STYLE} data-testid="apps-phone" data-given="false" title="Asked, left blank">not given</span>;
+  return <span style={PHONE_STYLE} data-testid="apps-phone" data-given="true">{f.value}</span>;
+}
 
 /** The one place a mirrored value is drawn. Grey, padlocked, and never an input. */
 function Locked({ v, asked, hint }: { v: string; asked: boolean; hint?: string }) {
@@ -108,9 +145,13 @@ export default function ApplicationsView() {
   }
 
   const isTeam = tab === "team";
-  const head = isTeam
-    ? ["Applicant", "City", "Role", "Applied", "Status", "Owner", ""]
-    : ["Contact", "Company", "Location", "Enquired", "Status", "Owner", ""];
+  /* PHONE SITS DIRECTLY AFTER THE PERSON on both tabs — between Applicant and City on Team, and in
+   * the same place on Partner. Reaching someone is the first thing you want after knowing who. */
+  /* The `drop` flag lives WITH the label, so a head cell and its column can never disagree about
+   * whether they are visible — indices 3 and 4 are the two that go on a narrow screen. */
+  const head: { t: string; drop?: boolean }[] = isTeam
+    ? [{ t: "Applicant" }, { t: "Phone" }, { t: "City" }, { t: "Role", drop: true }, { t: "Applied", drop: true }, { t: "Status" }, { t: "Owner" }, { t: "" }]
+    : [{ t: "Contact" }, { t: "Phone" }, { t: "Company" }, { t: "Location", drop: true }, { t: "Enquired", drop: true }, { t: "Status" }, { t: "Owner" }, { t: "" }];
 
   return (
     <div className="apps">
@@ -193,7 +234,7 @@ export default function ApplicationsView() {
       {err && <p className="err" data-testid="apps-error">{err}</p>}
 
       <section className="card">
-        <div className={`thead ${isTeam ? "" : "p"}`}>{head.map((h, i) => <div key={i}>{h}</div>)}</div>
+        <div className={`thead ${isTeam ? "" : "p"}`}>{head.map((h, i) => <div key={i} className={h.drop ? "drop" : undefined}>{h.t}</div>)}</div>
         {loading ? (
           <div className="empty">Loading…</div>
         ) : !list.length ? (
@@ -209,9 +250,10 @@ export default function ApplicationsView() {
                   {p.submissions > 1 && <span className="pill multi" title={`First applied ${fmtDate(p.firstApplied)}`}>{p.submissions} submissions</span>}
                   {p.unresolved && <span className="pill warnp" title="This form's labels are not recoverable from the site">raw fields</span>}
                 </div>
+                <div><Phone f={p.phone} /></div>
                 <div>{isTeam ? <CityCell p={p} /> : <Locked v={p.company.value} asked={p.company.asked} />}</div>
-                <div>{isTeam ? <Locked v={p.role.value} asked={p.role.asked} /> : <CityCell p={p} />}</div>
-                <div className="mono">{fmtDate(p.applied)}</div>
+                <div className="drop">{isTeam ? <Locked v={p.role.value} asked={p.role.asked} /> : <CityCell p={p} />}</div>
+                <div className="mono drop">{fmtDate(p.applied)}</div>
                 {/* ── THE BLUE HALF. Everything left of here is the website's; everything from here
                        is ours, and the rule between them says so without a legend. ── */}
                 <div className="own">
@@ -282,11 +324,13 @@ export default function ApplicationsView() {
         .chip.warn.on { background: #B8730B; border-color: #B8730B }
         .chip .n { opacity: .55; margin-left: 5px; font-weight: 800 }
         .card { background: #fff; border: 1.5px solid #E4EAE5; border-radius: 14px; overflow: hidden }
-        .thead, .row { display: grid; grid-template-columns: minmax(220px,2.2fr) 150px 150px 110px 132px 128px 42px; gap: 10px; align-items: center; padding: 10px 14px }
+        .thead, .row { display: grid; grid-template-columns: minmax(200px,2fr) 132px 140px 140px 106px 128px 122px 42px; gap: 10px; align-items: center; padding: 10px 14px }
+        /* The phone cell's styles are INLINE — see the Phone component for why a class could not
+           work here. Nothing to declare in this block. */
         .thead { background: #F5F8F5; font-size: 9.5px; font-weight: 900; letter-spacing: .09em; text-transform: uppercase; color: rgba(16,35,26,.5) }
         .row { border-top: 1px solid #EFF3EF; font-size: 13px }
         /* THE RULE BETWEEN THE TWO HALVES. Everything left is the website's, everything right ours. */
-        .row .own:first-of-type, .thead div:nth-child(5) { border-left: 2px solid #BBD6F6; padding-left: 10px }
+        .row .own:first-of-type, .thead div:nth-child(6) { border-left: 2px solid #BBD6F6; padding-left: 10px }
         .who { display: flex; flex-direction: column; gap: 2px; min-width: 0 }
         .who .em { font-size: 11.5px; color: rgba(16,35,26,.45); overflow-wrap: anywhere }
         .pill { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 3px 9px; font-size: 12px; font-weight: 700; max-width: 100% }
@@ -304,7 +348,16 @@ export default function ApplicationsView() {
         .empty { padding: 30px; text-align: center; color: rgba(16,35,26,.5); font-size: 13.5px }
         .err { color: #E8492A; font-size: 12.5px }
         .mono { font-variant-numeric: tabular-nums }
-        @media (max-width: 900px) { .thead { display: none } .row { grid-template-columns: 1fr 1fr; gap: 8px } .row .own:first-of-type, .thead div:nth-child(5) { border-left: 0; padding-left: 0 } }
+        /* NARROW: Role/Location and the date go. APPLICANT, PHONE, CITY, STATUS and OWNER stay —
+           reaching someone matters more than knowing which field they mentioned, and the phone is
+           the reason this column was added. The head hides with the grid, so the drop class is on
+           the head cells too or the columns would stop lining up with their labels. */
+        @media (max-width: 900px) {
+          .thead { display: none }
+          .row { grid-template-columns: 1fr 1fr; gap: 8px }
+          .row .drop, .thead .drop { display: none }
+          .row .own:first-of-type, .thead div:nth-child(6) { border-left: 0; padding-left: 0 }
+        }
       `}</style>
     </div>
   );

@@ -23,6 +23,7 @@ import {
   toSubmissionRow, toIso, streamFor,
   spamSignals, isSpam, isOwnTestRow, contactKey, DEFAULT_STATUS, STATUSES,
 } from "../src/lib/webSubmissions";
+import { readFileSync } from "node:fs";
 
 let pass = 0, fail = 0;
 const ok = (n: string) => { pass++; console.log(`  ok  ${n}`); };
@@ -256,6 +257,73 @@ console.log("\nCSV path vs SYNC path");
   is("a space-separated timestamp parses", toIso("2026-08-24 13:05:11"), "2026-08-24T13:05:11.000Z");
   is("…identically to the T form", toIso("2026-08-24T13:05:11Z"), toIso("2026-08-24 13:05:11"));
   is("an unparseable timestamp is null, never a fabricated now()", toIso("not a date"), null);
+}
+
+// ── THE PHONE COLUMN ─────────────────────────────────────────────────────────────────────────
+console.log("\nphone: a number, or a stated reason there isn't one — never an empty cell");
+{
+  /* A BLANK CELL READS AS DATA WE FAILED TO LOAD. "not given" reads as a question the form never
+   * asked, which is what it is. Measured on the live data at the time this was written:
+   *
+   *   TEAM     115 people · 101 with a phone · 14 whose form never asked
+   *   PARTNER   65 people ·   0 with a phone · 65 whose submissions carry none
+   *
+   * The 14 come from the three oldest Team forms — 37a43a2a, c6e12c3 and 3a4c40bd, 17 submissions
+   * between them — which collected only First Name, Last Name, Email and Zipcode. The fixture below
+   * is those forms' actual field sets, not an invention. */
+  const WITH_PHONE = { elementId: "5e295156", formName: "Team Application", source: "csv" as const,
+    labels: { "First Name": "First Name", "Last Name": "Last Name", Email: "Email", Phone: "Phone", City: "City" } };
+  const NO_PHONE = { elementId: "3a4c40bd", formName: "Team Application", source: "csv" as const,
+    labels: { "First Name": "First Name", "Last Name": "Last Name", Email: "Email", Zipcode: "Zipcode" } };
+
+  const REG = { "5e295156": WITH_PHONE, "3a4c40bd": NO_PHONE };
+  const withPhone = resolveFields("5e295156", { "First Name": "Ana", "Last Name": "Diaz", Email: "a@b.com", Phone: "+15125550111", City: "Austin" }, REG).byLabel;
+  const noPhone = resolveFields("3a4c40bd", { "First Name": "Sam", "Last Name": "Ruiz", Email: "s@b.com", Zipcode: "78745" }, REG).byLabel;
+
+  /* THE POSITIVE CONTROL COMES FIRST: the fixture must actually contain a person whose form never
+   * asked, or "it shows the reason" passes over a case that does not exist. */
+  is("control — the fixture holds a person whose form never asked for a phone", wasAsked(noPhone.Phone), false);
+  is("control — …and one whose form did, so the two are distinguishable", wasAsked(withPhone.Phone), true);
+
+  is("a person with a phone shows the number", hasValue(withPhone.Phone) && String(withPhone.Phone), "+15125550111");
+  is("a person whose form never asked is NOT_ASKED, not empty string", noPhone.Phone, NOT_ASKED);
+  is("…which is not the same as an empty value", NOT_ASKED === "", false);
+  // ASKED-BUT-BLANK is the third state and must not be confused with either.
+  const blank = resolveFields("5e295156", { "First Name": "Kim", Email: "k@b.com", Phone: "" }, REG).byLabel;
+  is("asked-but-left-blank is asked", wasAsked(blank.Phone), true);
+  is("…and has no value", hasValue(blank.Phone), false);
+  is("…and is distinguishable from never-asked", blank.Phone === NOT_ASKED, false);
+
+  /* WHAT THE PAGE RENDERS. The cell must show the stated reason for BOTH no-phone cases and never
+   * an empty string — the operator's question is "can I call them", and the answer is no either
+   * way, while the tooltip says which. */
+  const view = readFileSync("src/components/ApplicationsView.tsx", "utf8");
+  const cell = view.slice(view.indexOf("function Phone("), view.indexOf("/** The one place a mirrored value is drawn"));
+  is("the never-asked branch renders 'not given'", /if \(!f\.asked\) return[\s\S]{0,220}>not given</.test(cell), true);
+  is("the asked-but-blank branch renders 'not given' too", /if \(!f\.value\.trim\(\)\) return[\s\S]{0,220}>not given</.test(cell), true);
+  is("neither branch can render an empty cell", /return null|return <\/|>\{""\}</.test(cell), false);
+  is("the two reasons stay distinguishable in the tooltip",
+     /never asked for a phone number/.test(cell) && /Asked, left blank/.test(cell), true);
+  is("the reason is muted, not styled as a value", /style=\{NOT_GIVEN_STYLE\}/.test(cell), true);
+  is("a real number is not muted", /style=\{PHONE_STYLE\}/.test(cell), true);
+
+  /* TABULAR — AND THE STYLE IS INLINE FOR A REASON. styled-jsx scopes a `<style jsx>` block to the
+   * JSX inside the component that declares it. `Phone` is a SIBLING function component in that
+   * file, so a `className="ph"` span rendered with NO jsx-<hash> scope class and the rule never
+   * matched: the numbers came out untabulated and nothing about the page looked wrong. Caught by
+   * reading the computed font-variant-numeric in a browser, which said "normal". */
+  is("the number is tabular-aligned", /fontVariantNumeric: "tabular-nums"/.test(view), true);
+  is("…via an inline style, which cannot miss a scope", /const PHONE_STYLE: React\.CSSProperties/.test(view), true);
+  is("…and cannot collide with the .ph MatchManagersPanel already uses", /\.ph \{/.test(view), false);
+  const phoneCell = view.match(/<div><Phone f=\{p\.phone\} \/><\/div>/);
+  is("the phone cell carries no drop class", !!phoneCell, true);
+  is("…while Role/Location and the date do", (view.match(/className="[^"]*\bdrop\b/g) ?? []).length >= 2, true);
+  is("the narrow rule hides the drop class", /\.row \.drop, \.thead \.drop \{ display: none \}/.test(view), true);
+  // A head label and its column must never disagree about being visible.
+  is("the head carries its own drop flag beside the label", /\{ t: "Role", drop: true \}/.test(view), true);
+  is("…on both tabs", /\{ t: "Location", drop: true \}/.test(view), true);
+  is("Phone is second on the Team tab, right after the person", /\{ t: "Applicant" \}, \{ t: "Phone" \}/.test(view), true);
+  is("…and second on the Partner tab too", /\{ t: "Contact" \}, \{ t: "Phone" \}/.test(view), true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
