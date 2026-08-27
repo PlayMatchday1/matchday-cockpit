@@ -143,6 +143,13 @@ const NODE_SUITES = [
   // and whose EMAIL does not. It also pins that a two-word query is two predicates, and that the
   // header prints the TOTAL rather than the page size.
   "scripts/player-lookup-search-test.ts",
+  // PLAYER DATA ROOM. In the fast set for the total, not the layout: a Total column that covered a
+  // different window than the columns beside it is the THIRD total in this app to disagree with
+  // what is on screen, after the Expenses chip/column/footer and the Membership KPI. It also pins
+  // the one thing the brief asked for that is NOT true — a row total equals the sum of its visible
+  // cells only for the ADDITIVE measures; for Players it is a distinct count and is deliberately
+  // smaller — and the heat ramp's contrast ceiling as a number rather than an opinion.
+  "scripts/data-room-test.ts",
 ];
 const ALL_E2E = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
 // --e2e runs EVERY browser suite. Nothing is excluded, because nothing is mandatory.

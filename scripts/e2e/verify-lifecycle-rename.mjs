@@ -66,7 +66,14 @@ const BASELINE = JSON.parse(readFileSync("scripts/e2e/fixtures/lifecycle-baselin
 // A page that rendered has controls on it. These are LOWER BOUNDS measured on the baseline run: a
 // rename can only ever take them away (a page that failed to render), never add to them.
 const MIN_BUTTONS = {
-  funnel: 5, behavior: 9, "revenue-per-player": 9, retention: 2, churn: 5, "data-room": 17,
+  /* data-room LOWERED 17 -> 11 ON 2026-08-27, ITEMISED. This floor exists to prove a page
+   * RENDERED, not to pin a layout, and the Data Room's builder was deliberately rebuilt from three
+   * stacked wells (~350px, so no number was visible without scrolling) into one 98px strip. Three
+   * "+ Add" rows of select+select+button became three "+" buttons, which is five fewer buttons and
+   * is the change, not a regression. 11 still fails on a page that did not render: the strip alone
+   * carries a chip ×, two +, Swap, a value ×, +, five presets and Export. Every other section's
+   * floor is untouched. */
+  funnel: 5, behavior: 9, "revenue-per-player": 9, retention: 2, churn: 5, "data-room": 11,
 };
 
 let passed = 0;

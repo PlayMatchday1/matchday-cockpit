@@ -1,0 +1,325 @@
+<title>Player Data Room — Clubhouse</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,400;0,500;0,600;0,700;1,700&family=Archivo+Black&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{--ink:#10231A;--ink2:#3C4F44;--mut:#6E8076;--line:#E4EAE5;--line2:#EFF3EF;--bg:#EDF2ED;
+ --hdr:#0F3323;--grn:#4FE07E;--grn-d:#0B7A3E;--grn-soft:#E4FBEC;--org:#E8492A;
+ --blu:#2a78d6;--blu-soft:#EFF6FF;--amb:#B8730B;--amb-soft:#FFF6E3;--r:10px}
+html,body{margin:0}
+body{font-family:Archivo,"Helvetica Neue",Arial,sans-serif;color:var(--ink);background:var(--bg);
+ background-image:radial-gradient(rgba(16,35,26,.07) 1px,transparent 1px);background-size:22px 22px;
+ -webkit-font-smoothing:antialiased;font-size:14px;line-height:1.45}
+.top{background:var(--hdr);color:#fff;display:flex;align-items:center;gap:26px;padding:0 26px;height:62px;position:sticky;top:0;z-index:80}
+.brand{display:flex;align-items:baseline;gap:7px;font-weight:700}
+.brand .m{font-family:"Archivo Black","Arial Black",sans-serif;font-style:italic;font-size:21px;color:var(--grn);letter-spacing:-.5px}
+.brand .c{font-style:italic;font-size:14px}
+.topnav{display:flex;gap:4px;flex-wrap:wrap}
+.topnav a{padding:8px 15px;border-radius:999px;color:#D8E7DE;text-decoration:none;font-weight:600;white-space:nowrap}
+.topnav a.on{background:var(--grn);color:#08281A}
+.who{margin-left:auto;color:#D8E7DE;font-weight:600}
+.shell{display:flex;align-items:flex-start;min-height:calc(100vh - 62px)}
+.side{width:220px;flex:0 0 220px;background:#fff;border-right:1px solid var(--line);padding:16px 12px 40px;position:sticky;top:62px;align-self:stretch;height:calc(100vh - 62px);overflow:auto}
+.slab{font-size:10.5px;font-weight:700;letter-spacing:.11em;color:#93A49A;padding:14px 12px 7px}
+.side a{display:flex;gap:11px;padding:9px 12px;border-radius:9px;text-decoration:none;color:var(--ink2);font-weight:600}
+.side a:hover{background:#F4F7F4}
+.side a.on{background:var(--grn-soft);color:#0B3D24;font-weight:700}
+.side a .ic{width:16px;text-align:center;opacity:.6}
+.main{flex:1;min-width:0;padding:20px 24px 70px}
+h1{font-family:"Archivo Black","Arial Black",sans-serif;font-size:32px;letter-spacing:-1px;margin:0 0 14px;line-height:1}
+.card{background:#fff;border:1px solid var(--line);border-radius:var(--r);margin-bottom:12px}
+
+/* ── the builder: one compact strip, not three tall boxes ── */
+.build{display:flex;align-items:center;gap:8px;padding:11px 14px;flex-wrap:wrap}
+.build + .build{border-top:1px solid var(--line2)}
+.zl{font-size:10px;font-weight:700;letter-spacing:.1em;color:#93A49A;text-transform:uppercase;margin-right:2px}
+.zone{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:3px;border-radius:9px;min-height:34px}
+.zone.drop{outline:2px dashed #BDEBD1;background:var(--grn-soft)}
+.fld{display:inline-flex;align-items:center;gap:7px;background:var(--grn-soft);border:1px solid #BDEBD1;color:#0B3D24;
+ border-radius:8px;padding:5px 8px 5px 11px;font-weight:700;font-size:13px;cursor:grab;user-select:none;white-space:nowrap}
+.fld.v{background:var(--blu-soft);border-color:#BBD6F6;color:#12406F}
+.fld .x{border:0;background:none;font:inherit;color:inherit;opacity:.5;cursor:pointer;padding:0 1px;line-height:1}
+.fld .x:hover{opacity:1}
+.fld select{appearance:none;border:0;background:rgba(255,255,255,.7);border-radius:5px;font:inherit;font-size:12px;font-weight:700;color:inherit;padding:2px 6px;cursor:pointer}
+.add{border:1px dashed #CFDCD4;background:#fff;border-radius:8px;padding:5px 11px;font:inherit;font-size:13px;font-weight:700;color:var(--mut);cursor:pointer}
+.add:hover{border-color:var(--grn-d);color:var(--grn-d)}
+.swap{margin-left:2px;border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 11px;font:inherit;font-size:13px;font-weight:700;color:var(--ink2);cursor:pointer}
+.swap:hover{border-color:#CFDCD4;background:#FAFCFA}
+.sel{border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px;font-weight:600;color:var(--ink2);background:#fff}
+.spacer{flex:1}
+.pre{border:1px solid var(--line);background:#fff;border-radius:999px;padding:5px 13px;font:inherit;font-size:12.5px;font-weight:600;color:var(--ink2);cursor:pointer;white-space:nowrap}
+.pre:hover{border-color:#CFDCD4}
+.pre.on{background:var(--hdr);border-color:var(--hdr);color:#fff}
+
+/* ── the table ── */
+.thead2{display:flex;align-items:baseline;gap:12px;padding:13px 16px 11px;border-top:1px solid var(--line);flex-wrap:wrap}
+.ttl{font-weight:700;font-size:16px;letter-spacing:-.25px}
+.tsub{color:var(--mut);font-size:12.5px}
+.tools{margin-left:auto;display:flex;gap:8px}
+.btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 14px;font:inherit;font-weight:700;font-size:13px;color:var(--ink2);cursor:pointer}
+.btn:hover{border-color:#CFDCD4}
+.btn.p{background:var(--grn);border-color:var(--grn);color:#08281A}
+.gwrap{overflow:auto;max-height:62vh;border-top:1px solid var(--line)}
+table.pv{border-collapse:separate;border-spacing:0;width:100%;font-variant-numeric:tabular-nums}
+table.pv th,table.pv td{padding:8px 12px;white-space:nowrap;border-bottom:1px solid var(--line2)}
+table.pv thead th{background:#F7FAF8;font-size:10.5px;letter-spacing:.09em;color:#8C9E93;text-transform:uppercase;
+ text-align:right;position:sticky;top:0;z-index:3;border-bottom:1px solid var(--line)}
+table.pv thead th:first-child{text-align:left;left:0;z-index:5}
+table.pv tbody th{text-align:left;font-weight:700;font-size:13.5px;background:#fff;position:sticky;left:0;z-index:2}
+table.pv td{text-align:right;font-size:13.5px}
+table.pv td.n{color:#C3CFC7}
+table.pv td button{border:0;background:none;font:inherit;font-size:13.5px;font-variant-numeric:tabular-nums;color:var(--ink);cursor:pointer;padding:3px 6px;border-radius:5px;width:100%;text-align:right;font-weight:600}
+table.pv td button:hover{outline:2px solid var(--blu);outline-offset:-2px}
+table.pv td.sel button{outline:2px solid var(--blu);outline-offset:-2px}
+table.pv .rt,table.pv thead th.rt{background:#F7FAF8;font-weight:700;position:sticky;right:0;z-index:2}
+table.pv thead th.rt{z-index:4}
+table.pv tfoot th,table.pv tfoot td{background:var(--hdr);color:#fff;font-weight:700;border-bottom:0;position:sticky;bottom:0;z-index:3}
+table.pv tfoot th{left:0;z-index:5;text-align:left}
+.heat{display:flex;align-items:center;gap:8px;padding:10px 16px;border-top:1px solid var(--line2);color:var(--mut);font-size:12px;flex-wrap:wrap}
+.ramp{display:flex;gap:2px}.ramp i{width:22px;height:11px;border-radius:2px;display:block}
+.note{padding:10px 16px;border-top:1px solid var(--line2);color:var(--mut);font-size:12.5px}
+.note b{color:var(--ink2)}
+
+/* ── drill-down ── */
+.drill{position:fixed;top:62px;right:0;bottom:0;width:min(560px,92vw);background:#fff;border-left:1px solid var(--line);
+ box-shadow:-14px 0 34px rgba(16,35,26,.13);transform:translateX(100%);transition:transform .18s ease;z-index:70;display:flex;flex-direction:column}
+.drill.on{transform:none}
+.dh{padding:16px 18px;border-bottom:1px solid var(--line);display:flex;align-items:flex-start;gap:12px}
+.dh .t{font-weight:700;font-size:16px}.dh .s{color:var(--mut);font-size:12.5px;margin-top:2px}
+.dx{margin-left:auto;border:1px solid var(--line);background:#fff;border-radius:8px;width:30px;height:30px;cursor:pointer;color:var(--mut);font-size:15px;line-height:1}
+.dbody{flex:1;overflow:auto}
+.prow{display:grid;grid-template-columns:1fr 118px 62px;gap:8px;align-items:center;padding:10px 18px;border-bottom:1px solid var(--line2)}
+.prow .nm{font-weight:700;font-size:13.5px}
+.prow .em{font-size:12px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prow .em.relay{color:var(--amb);font-weight:600}
+.prow .tel{font-size:12.5px;color:var(--ink2)}
+.prow .r{text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
+.dfoot{padding:12px 18px;border-top:1px solid var(--line);display:flex;gap:9px;align-items:center}
+.dfoot .c{color:var(--mut);font-size:12.5px;margin-right:auto}
+@media(max-width:1150px){.side{display:none}}
+</style>
+<div class="top">
+  <div class="brand"><span class="m">MATCHDAY</span><span class="c">Clubhouse</span></div>
+  <nav class="topnav"><a href="#">Home</a><a href="#">Finance</a><a href="#">Growth</a>
+    <a href="#" class="on">Player Lifecycle</a><a href="#">Match Ops</a><a href="#">Tech</a></nav>
+  <div class="who">Ryan Mancuso ▾</div>
+</div>
+<div class="shell">
+  <aside class="side">
+    <div class="slab">REPORTS</div>
+    <a href="#"><span class="ic">▽</span>Player Funnel</a>
+    <a href="#"><span class="ic">↗</span>Player Behavior</a>
+    <a href="#"><span class="ic">$</span>Revenue per Player</a>
+    <a href="#"><span class="ic">≋</span>Retention</a>
+    <a href="#"><span class="ic">⋉</span>Churn</a>
+    <a href="#" class="on"><span class="ic">▤</span>Player Data Room</a>
+    <div class="slab">MEMBERSHIP</div>
+    <a href="#"><span class="ic">♟</span>Membership</a>
+  </aside>
+  <main class="main">
+    <h1>PLAYER DATA ROOM</h1>
+
+    <div class="card">
+      <div class="build">
+        <span class="zl">Rows</span><div class="zone" id="zRows" data-zone="rows"></div>
+        <button class="add" onclick="openAdd('rows',this)">+</button>
+        <button class="swap" onclick="swap()" title="Swap rows and columns">⇄ Swap</button>
+        <span class="zl" style="margin-left:10px">Columns</span><div class="zone" id="zCols" data-zone="cols"></div>
+        <button class="add" onclick="openAdd('cols',this)">+</button>
+        <span class="zl" style="margin-left:10px">Values</span><div class="zone" id="zVals" data-zone="vals"></div>
+        <button class="add" onclick="openAdd('vals',this)">+</button>
+      </div>
+      <div class="build">
+        <span class="zl">Filter</span>
+        <select class="sel" id="fFrom"></select><span style="color:#93A49A">to</span><select class="sel" id="fTo"></select>
+        <select class="sel" id="fCity"></select>
+        <select class="sel" id="fField"></select>
+        <span class="spacer"></span>
+        <button class="pre" onclick="preset(0)">Players by city by month</button>
+        <button class="pre" onclick="preset(1)">Spots per player by field</button>
+        <button class="pre" onclick="preset(2)">Revenue by cohort year</button>
+      </div>
+
+      <div class="thead2">
+        <div><div class="ttl" id="ttl">—</div><div class="tsub" id="tsub"></div></div>
+        <div class="tools">
+          <button class="btn" onclick="flash(this,'Copied')">Copy</button>
+          <button class="btn p" onclick="flash(this,'Exported')">Export CSV</button>
+        </div>
+      </div>
+
+      <div class="gwrap"><table class="pv" id="pv"></table></div>
+
+    </div>
+  </main>
+</div>
+
+<div class="drill" id="drill">
+  <div class="dh">
+    <div><div class="t" id="dTitle">—</div><div class="s" id="dSub"></div></div>
+    <button class="dx" onclick="closeDrill()" aria-label="Close">×</button>
+  </div>
+  <div class="dbody" id="dBody"></div>
+  <div class="dfoot"><span class="c" id="dCount"></span>
+    <button class="btn" onclick="flash(this,'Copied')">Copy phones</button>
+    <button class="btn p" onclick="flash(this,'Exported')">Export these</button></div>
+</div>
+
+<script>
+const DATA={"cities":["Austin","Houston","San Antonio","Dallas","Atlanta","St. Louis","OKC","NYC","Warsaw"],"months":["Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026","Jul 2026","Aug 2026","Sep 2026"],"grid":{"Atlanta":[82,67,82,65,70,110,85,null],"Austin":[805,859,928,909,1006,1126,1077,2],"Dallas":[96,80,153,133,103,152,121,null],"Houston":[342,410,496,524,633,825,627,null],"NYC":[null,null,null,null,null,null,null,null],"OKC":[null,51,70,56,50,76,94,null],"San Antonio":[370,383,444,453,417,559,558,null],"St. Louis":[103,85,76,39,31,65,74,null],"Warsaw":[null,null,null,null,null,null,33,12]},"lifetime":{"Atlanta":450,"Austin":7450,"Dallas":589,"Houston":3726,"NYC":43,"OKC":233,"San Antonio":2089,"St. Louis":415,"Warsaw":34},"people":[{"name":"Felipe Cordero","id":10602,"email":"felipe.cordero10@gmail.com","relay":false,"phone":"+17194191614","city":"Austin","field":"NEMP","matches":2,"spend":26.67,"last":"2026-08-24","member":false},{"name":"Diego Amilcar","id":54993,"email":"diego.amilcar29@gmail.com","relay":false,"phone":"+12504261763","city":"Houston","field":"Katy Sports Park","matches":3,"spend":35.69,"last":"2026-08-19","member":false},{"name":"Ivan Duarte","id":74793,"email":"ivan.duarte82@icloud.com","relay":false,"phone":"+19292641976","city":"Houston","field":"Katy Sports Park","matches":2,"spend":27.93,"last":"2026-03-18","member":false},{"name":"Marvin Bravo","id":42354,"email":"marvin.bravo24@icloud.com","relay":false,"phone":"+17377066627","city":"Austin","field":"Pflugerville","matches":1,"spend":13.49,"last":"2025-11-22","member":false},{"name":"Javi Nunez","id":13173,"email":"javi.nunez20@outlook.com","relay":false,"phone":"+17717866140","city":"Austin","field":"PARMER Stadium","matches":2,"spend":31.91,"last":"2025-11-22","member":false},{"name":"Luis Amilcar","id":11519,"email":"luis.amilcar35@outlook.com","relay":false,"phone":"+12629486072","city":"San Antonio","field":"Cibolo","matches":5,"spend":73.9,"last":"2026-05-02","member":false},{"name":"Anderson Reyes","id":67709,"email":"anderson.reyes46@icloud.com","relay":false,"phone":"+12604235709","city":"Austin","field":"Onion Creek","matches":5,"spend":81.92,"last":"2026-06-14","member":false},{"name":"Javier Nunez","id":59429,"email":"javier.nunez71@yahoo.com","relay":false,"phone":"+17634857804","city":"Dallas","field":"Frisco Fieldhouse","matches":21,"spend":332.37,"last":"2026-06-14","member":false},{"name":"Ivan Pineda","id":80217,"email":"ivan.pineda30@gmail.com","relay":false,"phone":"+13864695619","city":"Austin","field":"NEMP","matches":3,"spend":31.37,"last":"2026-03-18","member":false},{"name":"Bruno Trejo","id":76304,"email":"bruno.trejo80@gmail.com","relay":false,"phone":"+16016077536","city":"Houston","field":"Brookshire","matches":3,"spend":30.11,"last":"2026-06-14","member":true},{"name":"Nico Herrera","id":77289,"email":"nico.herrera44@gmail.com","relay":false,"phone":"+13547492662","city":"Austin","field":"PARMER Stadium","matches":1,"spend":15.14,"last":"2026-08-24","member":false},{"name":"Felipe Rosales","id":18119,"email":"felipe.rosales45@yahoo.com","relay":false,"phone":"+16996778870","city":"Houston","field":"Brookshire","matches":3,"spend":36.36,"last":"2026-08-19","member":true},{"name":"Victor Jimenez","id":72239,"email":"victor.jimenez21@gmail.com","relay":false,"phone":"+15703509899","city":"Austin","field":"NEMP","matches":1,"spend":16.58,"last":"2026-07-30","member":false},{"name":"Victor Lozano","id":72807,"email":"victor.lozano22@yahoo.com","relay":false,"phone":"+17547146401","city":"San Antonio","field":"Cibolo","matches":8,"spend":89.84,"last":"2026-08-12","member":false},{"name":"Pablo Vega","id":39623,"email":"pablo.vega46@gmail.com","relay":false,"phone":"+16834654172","city":"San Antonio","field":"Cibolo","matches":34,"spend":511.75,"last":"2026-07-08","member":false},{"name":"Anderson Bravo","id":14112,"email":"gq6nxp6a6y@privaterelay.appleid.com","relay":true,"phone":"+18763227365","city":"St. Louis","field":"Lou Fusz Outdoor","matches":8,"spend":110.24,"last":"2026-08-19","member":false},{"name":"Javier Munoz","id":14130,"email":"javier.munoz93@outlook.com","relay":false,"phone":"+19423623785","city":"Houston","field":"Katy Sports Park","matches":3,"spend":27.83,"last":"2025-11-22","member":false},{"name":"Felipe Padilla","id":74864,"email":"felipe.padilla61@yahoo.com","relay":false,"phone":"+13342211233","city":"San Antonio","field":"Cibolo","matches":1,"spend":15.5,"last":"2026-03-18","member":false},{"name":"Jorge Amilcar","id":68688,"email":"jorge.amilcar4@yahoo.com","relay":false,"phone":"+14468006341","city":"Austin","field":"PARMER Stadium","matches":1,"spend":14.44,"last":"2026-08-19","member":true},{"name":"Marvin Serrano","id":68752,"email":"marvin.serrano67@outlook.com","relay":false,"phone":"+13337443487","city":"San Antonio","field":"Cibolo","matches":13,"spend":183.37,"last":"2026-05-02","member":false},{"name":"Felipe Nunez","id":45727,"email":"felipe.nunez80@gmail.com","relay":false,"phone":"+18987309695","city":"Houston","field":"Brookshire","matches":3,"spend":50.53,"last":"2026-08-24","member":false},{"name":"Jorge Mora","id":62289,"email":"g84be4w88n@privaterelay.appleid.com","relay":true,"phone":"+17207468832","city":"Austin","field":"Westlake","matches":5,"spend":92.08,"last":"2026-03-18","member":false},{"name":"Victor Medina","id":18941,"email":"victor.medina26@outlook.com","relay":false,"phone":"+16016526177","city":"St. Louis","field":"Lou Fusz Outdoor","matches":1,"spend":15.71,"last":"2026-06-14","member":true},{"name":"Mateo King","id":20990,"email":"mateo.king92@yahoo.com","relay":false,"phone":"+16784242542","city":"Houston","field":"Brookshire","matches":1,"spend":17.85,"last":"2026-08-19","member":false},{"name":"Hector Trejo","id":28656,"email":"hector.trejo66@outlook.com","relay":false,"phone":"+15655262510","city":"San Antonio","field":"Cibolo","matches":2,"spend":25.32,"last":"2026-07-08","member":false},{"name":"Carlos Cordero","id":11426,"email":"carlos.cordero80@yahoo.com","relay":false,"phone":"+13154342716","city":"Austin","field":"NEMP","matches":3,"spend":34.97,"last":"2026-08-25","member":false},{"name":"Bruno Amilcar","id":73333,"email":"bruno.amilcar87@yahoo.com","relay":false,"phone":"+17277849103","city":"Austin","field":"Pflugerville","matches":2,"spend":24.54,"last":"2026-07-30","member":true},{"name":"Prince Salas","id":13976,"email":"prince.salas3@gmail.com","relay":false,"phone":"+18224272091","city":"Houston","field":"Pearland","matches":13,"spend":229.16,"last":"2026-05-02","member":true},{"name":"Javi Mora","id":24161,"email":"javi.mora6@icloud.com","relay":false,"phone":"+14682513967","city":"Warsaw","field":"Hala Pi\u0142karska Bemowo","matches":21,"spend":384.77,"last":"2026-07-30","member":false},{"name":"Sujan Lozano","id":35826,"email":"sujan.lozano35@yahoo.com","relay":false,"phone":"+12372151302","city":"Austin","field":"Pflugerville","matches":13,"spend":182.74,"last":"2026-08-12","member":false},{"name":"Sujan Duarte","id":74553,"email":"sujan.duarte84@outlook.com","relay":false,"phone":"+16027186042","city":"Austin","field":"Pflugerville","matches":5,"spend":55.76,"last":"2026-08-12","member":false},{"name":"Bruno Cordero","id":84978,"email":"bruno.cordero7@icloud.com","relay":false,"phone":"+19584618057","city":"San Antonio","field":"Lowell H. Strike","matches":0,"spend":0.0,"last":"\u2014","member":false},{"name":"Teresa Padilla","id":23648,"email":"teresa.padilla38@gmail.com","relay":false,"phone":"+14756561059","city":"Austin","field":"PARMER Stadium","matches":3,"spend":37.92,"last":"2026-07-08","member":false},{"name":"Sergio Ortega","id":3140,"email":"sergio.ortega40@icloud.com","relay":false,"phone":"+15435902374","city":"Houston","field":"Brookshire","matches":2,"spend":23.58,"last":"2026-08-12","member":false},{"name":"Javier Mora","id":54639,"email":"javier.mora19@outlook.com","relay":false,"phone":"+12235065984","city":"San Antonio","field":"Cibolo","matches":5,"spend":56.64,"last":"2025-11-22","member":false},{"name":"Felipe Serrano","id":67774,"email":"felipe.serrano77@outlook.com","relay":false,"phone":"+13534903371","city":"San Antonio","field":"Lowell H. Strike","matches":8,"spend":137.99,"last":"2026-03-18","member":false},{"name":"Bruno Lozano","id":79554,"email":"bruno.lozano73@gmail.com","relay":false,"phone":"+19288994767","city":"San Antonio","field":"Lowell H. Strike","matches":13,"spend":121.05,"last":"2026-08-19","member":false},{"name":"Connor Amilcar","id":35054,"email":"connor.amilcar7@gmail.com","relay":false,"phone":"+17014701054","city":"St. Louis","field":"O'Fallon Park","matches":5,"spend":84.88,"last":"2026-03-18","member":false},{"name":"Luis Valdez","id":33773,"email":"luis.valdez33@gmail.com","relay":false,"phone":"+19469744362","city":"Austin","field":"Onion Creek","matches":13,"spend":213.18,"last":"2026-05-02","member":false},{"name":"Guy Serrano","id":22323,"email":"guy.serrano6@icloud.com","relay":false,"phone":"+15394605987","city":"Austin","field":"Westlake","matches":0,"spend":0.0,"last":"\u2014","member":true},{"name":"Alan Serrano","id":70703,"email":"alan.serrano28@outlook.com","relay":false,"phone":"+14926758633","city":"Austin","field":"Round Rock","matches":2,"spend":33.34,"last":"2026-03-18","member":true},{"name":"Guy Reyes","id":53704,"email":"guy.reyes10@outlook.com","relay":false,"phone":"+14144152222","city":"OKC","field":"Helix Park","matches":34,"spend":354.19,"last":"2026-03-18","member":false},{"name":"Alan Duarte","id":66719,"email":"alan.duarte30@outlook.com","relay":false,"phone":"+16032253606","city":"Austin","field":"NEMP","matches":21,"spend":388.49,"last":"2026-05-02","member":false},{"name":"Javi Bravo","id":47338,"email":"javi.bravo16@yahoo.com","relay":false,"phone":"+16073224207","city":"Houston","field":"Tomball","matches":0,"spend":0.0,"last":"\u2014","member":false},{"name":"Mario Cordero","id":59105,"email":"mario.cordero76@gmail.com","relay":false,"phone":"+19734811790","city":"Austin","field":"PARMER Stadium","matches":2,"spend":20.03,"last":"2026-07-30","member":false},{"name":"Alan Espinoza","id":59065,"email":"alan.espinoza25@yahoo.com","relay":false,"phone":"+12299797554","city":"Austin","field":"Westlake","matches":8,"spend":115.94,"last":"2026-08-24","member":true},{"name":"Sujan Padilla","id":75103,"email":"sujan.padilla83@yahoo.com","relay":false,"phone":"+13303748736","city":"San Antonio","field":"New Braunfels","matches":3,"spend":37.31,"last":"2026-07-30","member":false},{"name":"Victor Cordero","id":54690,"email":"victor.cordero39@outlook.com","relay":false,"phone":"+13223713648","city":"San Antonio","field":"Lowell H. Strike","matches":3,"spend":33.24,"last":"2026-05-02","member":false},{"name":"Adiael King","id":25897,"email":"adiael.king18@icloud.com","relay":false,"phone":"+15507692492","city":"Austin","field":"PARMER Stadium","matches":1,"spend":11.39,"last":"2026-07-30","member":false},{"name":"Carlos Valdez","id":30525,"email":"carlos.valdez50@outlook.com","relay":false,"phone":"+15854766541","city":"Austin","field":"NEMP","matches":8,"spend":111.85,"last":"2025-11-22","member":false},{"name":"Nico Salas","id":61439,"email":"nico.salas32@outlook.com","relay":false,"phone":"+16425191357","city":"Austin","field":"Onion Creek","matches":2,"spend":18.64,"last":"2026-05-02","member":false},{"name":"Luis Cordero","id":35566,"email":"luis.cordero68@outlook.com","relay":false,"phone":"+13114293529","city":"Houston","field":"Katy Sports Park","matches":34,"spend":483.6,"last":"2026-08-24","member":false},{"name":"Marvin Salas","id":33484,"email":"marvin.salas6@gmail.com","relay":false,"phone":"+17832385977","city":"Houston","field":"Katy Sports Park","matches":8,"spend":122.12,"last":"2026-03-18","member":false},{"name":"Mateo Duarte","id":87485,"email":"9n0sqaav5t@privaterelay.appleid.com","relay":true,"phone":"+14486869622","city":"Houston","field":"Katy Sports Park","matches":34,"spend":491.98,"last":"2026-08-25","member":false},{"name":"Garrett Ortega","id":58123,"email":"72fsq3zq7c@privaterelay.appleid.com","relay":true,"phone":"+15718987493","city":"Houston","field":"Katy Sports Park","matches":5,"spend":45.34,"last":"2026-07-30","member":false},{"name":"Nico Jimenez","id":32024,"email":"nico.jimenez40@icloud.com","relay":false,"phone":"+14719785832","city":"Houston","field":"Tomball","matches":1,"spend":18.52,"last":"2026-05-02","member":false},{"name":"Drea Espinoza","id":10124,"email":"drea.espinoza8@icloud.com","relay":false,"phone":"+14182243325","city":"Dallas","field":"Frisco Fieldhouse","matches":21,"spend":199.89,"last":"2026-08-25","member":true},{"name":"Yara Valdez","id":27315,"email":"yara.valdez11@icloud.com","relay":false,"phone":"+18687378661","city":"Austin","field":"NEMP","matches":2,"spend":24.24,"last":"2026-06-14","member":false},{"name":"Sujan Nunez","id":58074,"email":"sujan.nunez11@yahoo.com","relay":false,"phone":"+13267744398","city":"NYC","field":"Chelsea Piers","matches":1,"spend":12.57,"last":"2026-07-30","member":false},{"name":"Diego Trejo","id":50742,"email":"diego.trejo48@outlook.com","relay":false,"phone":"+19556851496","city":"Austin","field":"Pflugerville","matches":1,"spend":13.11,"last":"2026-06-14","member":true},{"name":"Luis Munoz","id":82379,"email":"luis.munoz33@icloud.com","relay":false,"phone":"+15475715461","city":"Austin","field":"PARMER Stadium","matches":8,"spend":148.62,"last":"2025-11-22","member":true},{"name":"Yara Mora","id":33653,"email":"yara.mora93@gmail.com","relay":false,"phone":"+13096868630","city":"San Antonio","field":"New Braunfels","matches":0,"spend":0.0,"last":"\u2014","member":false},{"name":"Bruno Jimenez","id":22833,"email":"bruno.jimenez95@yahoo.com","relay":false,"phone":"+18214416370","city":"San Antonio","field":"New Braunfels","matches":13,"spend":176.9,"last":"2025-11-22","member":true},{"name":"Hector Castro","id":74383,"email":"hector.castro84@gmail.com","relay":false,"phone":"+15333647988","city":"Austin","field":"NEMP","matches":3,"spend":56.63,"last":"2026-07-30","member":false},{"name":"Javi Jimenez","id":57636,"email":"javi.jimenez58@icloud.com","relay":false,"phone":"+16718354849","city":"Austin","field":"Pflugerville","matches":1,"spend":14.39,"last":"2026-08-24","member":false},{"name":"Alan Navarro","id":35431,"email":"alan.navarro33@yahoo.com","relay":false,"phone":"+13904514858","city":"Austin","field":"Onion Creek","matches":1,"spend":11.81,"last":"2025-11-22","member":true},{"name":"Victor Castro","id":7852,"email":"victor.castro30@gmail.com","relay":false,"phone":"+13042048778","city":"Austin","field":"Onion Creek","matches":5,"spend":87.03,"last":"2026-07-08","member":true},{"name":"Mateo Ortega","id":51789,"email":"mateo.ortega75@icloud.com","relay":false,"phone":"+17243828358","city":"Austin","field":"Westlake","matches":21,"spend":243.59,"last":"2026-08-25","member":true},{"name":"Anderson Vega","id":27267,"email":"xjcpscpaw2@privaterelay.appleid.com","relay":true,"phone":"+18355192276","city":"Houston","field":"Katy Sports Park","matches":5,"spend":46.57,"last":"2026-05-02","member":false},{"name":"Rafael Munoz","id":14947,"email":"rafael.munoz71@icloud.com","relay":false,"phone":"+18683677517","city":"Austin","field":"Pflugerville","matches":5,"spend":58.56,"last":"2026-07-30","member":false},{"name":"Diego Rivas","id":50681,"email":"diego.rivas46@outlook.com","relay":false,"phone":"+18594017401","city":"Austin","field":"Pflugerville","matches":2,"spend":26.1,"last":"2026-08-25","member":false},{"name":"Mateo Amilcar","id":24305,"email":"mateo.amilcar74@yahoo.com","relay":false,"phone":"+13332151846","city":"Austin","field":"Westlake","matches":3,"spend":31.27,"last":"2026-06-14","member":true},{"name":"Colin Valdez","id":71309,"email":"colin.valdez19@yahoo.com","relay":false,"phone":"+13752682782","city":"Houston","field":"Brookshire","matches":2,"spend":27.81,"last":"2026-08-12","member":false},{"name":"Andres Jimenez","id":84309,"email":"andres.jimenez78@outlook.com","relay":false,"phone":"+19043644638","city":"San Antonio","field":"Cibolo","matches":1,"spend":13.04,"last":"2026-08-12","member":false},{"name":"Nico Ortega","id":19129,"email":"nico.ortega67@icloud.com","relay":false,"phone":"+13534524155","city":"Austin","field":"NEMP","matches":2,"spend":35.68,"last":"2026-08-25","member":false},{"name":"Connor Padilla","id":43397,"email":"connor.padilla81@yahoo.com","relay":false,"phone":"+17964557975","city":"Austin","field":"Round Rock","matches":5,"spend":77.94,"last":"2026-05-02","member":false},{"name":"Miguel Padilla","id":84077,"email":"miguel.padilla60@icloud.com","relay":false,"phone":"+16693838753","city":"Austin","field":"Round Rock","matches":3,"spend":30.21,"last":"2026-08-19","member":false},{"name":"Sujan Lozano","id":13779,"email":"sujan.lozano6@gmail.com","relay":false,"phone":"+19515219380","city":"Austin","field":"NEMP","matches":5,"spend":47.71,"last":"2026-03-18","member":false},{"name":"Bruno Reyes","id":67470,"email":"bruno.reyes79@gmail.com","relay":false,"phone":"+14943694622","city":"Houston","field":"Tomball","matches":1,"spend":17.33,"last":"2025-11-22","member":false},{"name":"Alan Amilcar","id":37454,"email":"alan.amilcar33@outlook.com","relay":false,"phone":"+18307184889","city":"Austin","field":"PARMER Stadium","matches":1,"spend":12.72,"last":"2026-08-12","member":true},{"name":"Alan Serrano","id":37647,"email":"alan.serrano49@icloud.com","relay":false,"phone":"+13177431795","city":"Austin","field":"Pflugerville","matches":8,"spend":140.66,"last":"2026-05-02","member":false},{"name":"Rafael Mora","id":51688,"email":"rafael.mora81@outlook.com","relay":false,"phone":"+14715847044","city":"Houston","field":"Katy Sports Park","matches":8,"spend":100.82,"last":"2026-08-24","member":false},{"name":"Diego Rivas","id":79791,"email":"diego.rivas33@yahoo.com","relay":false,"phone":"+18795201029","city":"Austin","field":"Pflugerville","matches":5,"spend":46.69,"last":"2026-08-19","member":false},{"name":"Javi Lozano","id":83284,"email":"javi.lozano7@icloud.com","relay":false,"phone":"+18682461365","city":"Houston","field":"Tomball","matches":3,"spend":27.08,"last":"2026-07-08","member":false},{"name":"Pablo Espinoza","id":84779,"email":"pablo.espinoza76@icloud.com","relay":false,"phone":"+16863623207","city":"Houston","field":"Tomball","matches":1,"spend":18.37,"last":"2026-08-12","member":false},{"name":"Luis Rosales","id":37634,"email":"luis.rosales86@yahoo.com","relay":false,"phone":"+12112576739","city":"Austin","field":"Westlake","matches":2,"spend":30.91,"last":"2026-05-02","member":false},{"name":"Drea Castro","id":6306,"email":"drea.castro1@gmail.com","relay":false,"phone":"+16153904893","city":"Houston","field":"Katy Sports Park","matches":0,"spend":0.0,"last":"\u2014","member":false},{"name":"Jorge Pineda","id":25890,"email":"jorge.pineda67@outlook.com","relay":false,"phone":"+17205162044","city":"Austin","field":"PARMER Stadium","matches":13,"spend":198.38,"last":"2026-05-02","member":false},{"name":"Prince Valdez","id":16799,"email":"prince.valdez11@outlook.com","relay":false,"phone":"+14674371635","city":"Austin","field":"NEMP","matches":1,"spend":12.36,"last":"2026-07-30","member":false},{"name":"Prince Serrano","id":31442,"email":"prince.serrano67@yahoo.com","relay":false,"phone":"+12877191249","city":"Austin","field":"Onion Creek","matches":2,"spend":23.21,"last":"2026-08-12","member":false},{"name":"Hector Valdez","id":34348,"email":"hector.valdez25@outlook.com","relay":false,"phone":"+15888459787","city":"Austin","field":"Round Rock","matches":2,"spend":27.44,"last":"2026-03-18","member":false},{"name":"Prince Valdez","id":79720,"email":"prince.valdez40@icloud.com","relay":false,"phone":"+12797783810","city":"San Antonio","field":"Lowell H. Strike","matches":2,"spend":18.66,"last":"2026-08-24","member":true},{"name":"Anderson Pineda","id":87350,"email":"anderson.pineda4@gmail.com","relay":false,"phone":"+18492432111","city":"Atlanta","field":"PRUMC","matches":1,"spend":9.66,"last":"2025-11-22","member":false},{"name":"Luis Padilla","id":29964,"email":"luis.padilla92@outlook.com","relay":false,"phone":"+14083141554","city":"Austin","field":"NEMP","matches":1,"spend":18.49,"last":"2026-08-24","member":false},{"name":"Teresa Jimenez","id":47107,"email":"teresa.jimenez13@icloud.com","relay":false,"phone":"+16334671342","city":"Houston","field":"Pearland","matches":2,"spend":23.13,"last":"2026-07-30","member":true},{"name":"Yara King","id":84038,"email":"yara.king65@outlook.com","relay":false,"phone":"+19632317765","city":"San Antonio","field":"Lowell H. Strike","matches":13,"spend":173.74,"last":"2026-08-24","member":false},{"name":"Nico Trejo","id":3170,"email":"nico.trejo12@yahoo.com","relay":false,"phone":"+17364065724","city":"Houston","field":"Tomball","matches":1,"spend":9.04,"last":"2026-05-02","member":true},{"name":"Ivan Jimenez","id":23826,"email":"ivan.jimenez66@yahoo.com","relay":false,"phone":"+14904194793","city":"Houston","field":"Brookshire","matches":3,"spend":31.97,"last":"2026-08-24","member":false},{"name":"Rafael Rosales","id":14294,"email":"rafael.rosales13@outlook.com","relay":false,"phone":"+16328611412","city":"Warsaw","field":"Hala Pi\u0142karska Bemowo","matches":21,"spend":232.28,"last":"2026-07-30","member":false},{"name":"Hector Cordero","id":19630,"email":"hector.cordero81@icloud.com","relay":false,"phone":"+17448081555","city":"Houston","field":"Pearland","matches":21,"spend":311.13,"last":"2026-03-18","member":true},{"name":"Yara Nunez","id":19522,"email":"yara.nunez89@yahoo.com","relay":false,"phone":"+15426734898","city":"San Antonio","field":"Cibolo","matches":3,"spend":32.75,"last":"2026-07-30","member":false},{"name":"Felipe Valdez","id":48695,"email":"felipe.valdez32@yahoo.com","relay":false,"phone":"+13644416375","city":"San Antonio","field":"Lowell H. Strike","matches":5,"spend":57.93,"last":"2026-08-24","member":true},{"name":"Jorge Cordero","id":60006,"email":"jorge.cordero19@yahoo.com","relay":false,"phone":"+14804002790","city":"Houston","field":"Tomball","matches":8,"spend":94.46,"last":"2026-06-14","member":false},{"name":"Prince Trejo","id":21587,"email":"prince.trejo81@yahoo.com","relay":false,"phone":"+14638187630","city":"Austin","field":"NEMP","matches":3,"spend":49.23,"last":"2026-06-14","member":false},{"name":"Javi Padilla","id":87087,"email":"javi.padilla93@icloud.com","relay":false,"phone":"+13276648086","city":"Houston","field":"Pearland","matches":5,"spend":57.99,"last":"2026-08-24","member":false},{"name":"Mario Trejo","id":66274,"email":"mario.trejo21@yahoo.com","relay":false,"phone":"+16662207706","city":"Austin","field":"Westlake","matches":13,"spend":204.78,"last":"2026-08-19","member":false},{"name":"Miguel Cordero","id":31558,"email":"miguel.cordero14@gmail.com","relay":false,"phone":"+13649334273","city":"Austin","field":"Westlake","matches":1,"spend":12.48,"last":"2025-11-22","member":false},{"name":"Guy Lozano","id":83478,"email":"z9x25pm18h@privaterelay.appleid.com","relay":true,"phone":"+15648521927","city":"Austin","field":"PARMER Stadium","matches":8,"spend":93.95,"last":"2026-06-14","member":true},{"name":"Javi Rosales","id":42779,"email":"javi.rosales46@yahoo.com","relay":false,"phone":"+19596109635","city":"Austin","field":"Onion Creek","matches":1,"spend":18.94,"last":"2026-06-14","member":false},{"name":"Luis Munoz","id":32620,"email":"luis.munoz25@outlook.com","relay":false,"phone":"+13495617771","city":"Austin","field":"Round Rock","matches":5,"spend":94.81,"last":"2026-03-18","member":false},{"name":"Guy Bravo","id":36233,"email":"guy.bravo30@yahoo.com","relay":false,"phone":"+16368954045","city":"San Antonio","field":"New Braunfels","matches":8,"spend":72.22,"last":"2026-07-30","member":false},{"name":"Yara Jimenez","id":50504,"email":"yara.jimenez80@gmail.com","relay":false,"phone":"+13565107309","city":"Houston","field":"Tomball","matches":5,"spend":49.26,"last":"2025-11-22","member":false},{"name":"Bruno Lozano","id":30492,"email":"bruno.lozano82@gmail.com","relay":false,"phone":"+12738715800","city":"San Antonio","field":"New Braunfels","matches":5,"spend":75.41,"last":"2025-11-22","member":true},{"name":"Sujan Bravo","id":25008,"email":"sujan.bravo27@outlook.com","relay":false,"phone":"+18249042481","city":"Austin","field":"Pflugerville","matches":8,"spend":144.13,"last":"2026-03-18","member":false},{"name":"Jorge Jimenez","id":60486,"email":"jorge.jimenez68@gmail.com","relay":false,"phone":"+18873192940","city":"San Antonio","field":"New Braunfels","matches":8,"spend":105.52,"last":"2026-08-19","member":false},{"name":"Guy Herrera","id":24576,"email":"guy.herrera90@outlook.com","relay":false,"phone":"+17528131108","city":"Houston","field":"Katy Sports Park","matches":1,"spend":17.41,"last":"2026-05-02","member":false},{"name":"Teresa Amilcar","id":12882,"email":"teresa.amilcar55@outlook.com","relay":false,"phone":"+13848526904","city":"Houston","field":"Tomball","matches":34,"spend":312.99,"last":"2026-08-25","member":false},{"name":"Adiael Munoz","id":21938,"email":"adiael.munoz66@outlook.com","relay":false,"phone":"+12344187809","city":"Atlanta","field":"PRUMC","matches":3,"spend":37.16,"last":"2026-07-08","member":false},{"name":"Nico Rivas","id":40899,"email":"nico.rivas55@yahoo.com","relay":false,"phone":"+14995639089","city":"San Antonio","field":"New Braunfels","matches":3,"spend":37.01,"last":"2026-07-30","member":false},{"name":"Nico Rosales","id":42219,"email":"nico.rosales16@yahoo.com","relay":false,"phone":"+13308002434","city":"Austin","field":"NEMP","matches":1,"spend":12.99,"last":"2026-03-18","member":false},{"name":"Diego Cordero","id":65266,"email":"diego.cordero1@gmail.com","relay":false,"phone":"+18238731985","city":"Houston","field":"Brookshire","matches":1,"spend":15.17,"last":"2025-11-22","member":false},{"name":"Andres Serrano","id":26763,"email":"andres.serrano81@icloud.com","relay":false,"phone":"+12376312648","city":"Austin","field":"Pflugerville","matches":1,"spend":9.13,"last":"2026-08-19","member":false},{"name":"Victor Padilla","id":59449,"email":"victor.padilla54@gmail.com","relay":false,"phone":"+17798571894","city":"Houston","field":"Brookshire","matches":2,"spend":29.35,"last":"2026-08-25","member":false},{"name":"Javi Navarro","id":53743,"email":"javi.navarro52@outlook.com","relay":false,"phone":"+18088063544","city":"San Antonio","field":"New Braunfels","matches":0,"spend":0.0,"last":"\u2014","member":false},{"name":"Guy Vega","id":4222,"email":"guy.vega81@gmail.com","relay":false,"phone":"+19008852993","city":"Austin","field":"NEMP","matches":2,"spend":22.36,"last":"2026-08-24","member":true},{"name":"Sergio Herrera","id":21979,"email":"sergio.herrera24@gmail.com","relay":false,"phone":"+19479772381","city":"Austin","field":"PARMER Stadium","matches":2,"spend":30.57,"last":"2026-05-02","member":false},{"name":"Victor Ortega","id":88288,"email":"victor.ortega2@gmail.com","relay":false,"phone":"+19038332305","city":"St. Louis","field":"O'Fallon Park","matches":0,"spend":0.0,"last":"\u2014","member":false},{"name":"Drea Padilla","id":62343,"email":"z46kjhzk26@privaterelay.appleid.com","relay":true,"phone":"+14789726470","city":"Austin","field":"PARMER Stadium","matches":2,"spend":23.6,"last":"2025-11-22","member":false},{"name":"Adiael Padilla","id":43448,"email":"adiael.padilla2@icloud.com","relay":false,"phone":"+17986385032","city":"Houston","field":"Brookshire","matches":5,"spend":64.37,"last":"2026-06-14","member":false},{"name":"Sujan Rivas","id":23615,"email":"sujan.rivas42@yahoo.com","relay":false,"phone":"+18002435727","city":"Dallas","field":"Crossbar Rowlett","matches":1,"spend":17.12,"last":"2025-11-22","member":true},{"name":"Drea Bravo","id":29270,"email":"drea.bravo70@outlook.com","relay":false,"phone":"+19689394834","city":"OKC","field":"Helix Park","matches":8,"spend":120.55,"last":"2026-06-14","member":false},{"name":"Victor Navarro","id":73274,"email":"victor.navarro50@outlook.com","relay":false,"phone":"+15632644815","city":"Austin","field":"Round Rock","matches":3,"spend":44.39,"last":"2026-07-30","member":false},{"name":"Guy Lozano","id":26683,"email":"guy.lozano25@icloud.com","relay":false,"phone":"+19174966944","city":"Houston","field":"Pearland","matches":1,"spend":13.02,"last":"2026-03-18","member":false},{"name":"Drea Bravo","id":23467,"email":"drea.bravo48@outlook.com","relay":false,"phone":"+15238111497","city":"Austin","field":"PARMER Stadium","matches":8,"spend":94.44,"last":"2025-11-22","member":true},{"name":"Drea Navarro","id":61571,"email":"drea.navarro34@yahoo.com","relay":false,"phone":"+18078233144","city":"Austin","field":"PARMER Stadium","matches":2,"spend":34.87,"last":"2026-07-08","member":true},{"name":"Javier Reyes","id":69388,"email":"z57e1hfswq@privaterelay.appleid.com","relay":true,"phone":"+16023878345","city":"Austin","field":"Onion Creek","matches":5,"spend":63.55,"last":"2026-08-12","member":false},{"name":"Andres Mora","id":9165,"email":"andres.mora8@gmail.com","relay":false,"phone":"+14647258920","city":"Austin","field":"NEMP","matches":13,"spend":130.14,"last":"2026-07-08","member":false},{"name":"Garrett Navarro","id":51717,"email":"garrett.navarro98@gmail.com","relay":false,"phone":"+14635993033","city":"St. Louis","field":"O'Fallon Park","matches":3,"spend":41.44,"last":"2026-08-19","member":false},{"name":"Miguel Herrera","id":31908,"email":"miguel.herrera25@gmail.com","relay":false,"phone":"+12798337112","city":"San Antonio","field":"Cibolo","matches":1,"spend":10.4,"last":"2026-05-02","member":false},{"name":"Connor Amilcar","id":10435,"email":"e4xwq6hzjx@privaterelay.appleid.com","relay":true,"phone":"+13849308395","city":"Atlanta","field":"PRUMC","matches":1,"spend":13.39,"last":"2026-08-19","member":false}],"grand":[1793,1923,2243,2170,2300,2896,2653,14],"fieldList":["NEMP","Onion Creek","PARMER Stadium","Round Rock","Westlake","Tomball","Katy Sports Park","Pearland","Lowell H. Strike","Crossbar Rowlett","PRUMC","Lou Fusz Outdoor","Helix Park"],"fieldShare":{"NEMP":0.119,"Onion Creek":0.208,"PARMER Stadium":0.157,"Round Rock":0.225,"Westlake":0.231,"Tomball":0.069,"Katy Sports Park":0.054,"Pearland":0.293,"Lowell H. Strike":0.125,"Crossbar Rowlett":0.118,"PRUMC":0.339,"Lou Fusz Outdoor":0.186,"Helix Park":0.293}};
+const DIMS={city:"City",month:"Month",field:"Field",year:"Year",cohort:"Cohort year"};
+const PLURAL={city:"cities",month:"months",field:"fields",year:"years",cohort:"cohort years"};
+const MEASURES={players:"Players",newp:"New players",spots:"Spots booked",revenue:"Revenue",matches:"Matches"};
+const AGGS={count:"Count",sum:"Sum",avg:"Average"};
+// Sequential blue, light -> dark. One hue, never a rainbow. Text stays dark, so the
+// ramp stops well before the point where it would need light type.
+const RAMP=["#ffffff","#e8f1fd","#cde2fb","#b7d3f6","#9ec5f4","#86b6ef","#6da7ec"];
+let S={rows:["city"],cols:["month"],vals:[{m:"players",a:"count"}]};
+const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt=(v,m)=>v==null?null:(m==="revenue"?"$"+v.toLocaleString(undefined,{maximumFractionDigits:0}):v.toLocaleString());
+
+/* ---------- the cube: one pass over the grid, memoised ---------- */
+const CACHE=new Map();
+function cube(){
+  const key=JSON.stringify(S)+fFrom.value+fTo.value+fCity.value+fField.value;
+  if(CACHE.has(key)) return CACHE.get(key);
+  const M=DATA.months, mi=M.indexOf(fFrom.value), mj=M.indexOf(fTo.value);
+  const months=M.slice(Math.min(mi,mj),Math.max(mi,mj)+1);
+  const cities=(fCity.value==="All cities"?DATA.cities:[fCity.value]).slice().sort();
+  const measure=S.vals[0].m, agg=S.vals[0].a;
+  // scale the base player counts into whatever measure is asked for, deterministically
+  const k={players:1,newp:.31,spots:2.6,revenue:15.4,matches:1.9}[measure];
+  const rowKeys = S.rows[0]==="city"?cities : S.rows[0]==="month"?months : DATA.fieldList;
+  const colKeys = !S.cols.length?[] : S.cols[0]==="month"?months : S.cols[0]==="city"?cities : DATA.fieldList;
+  const at=(r,c)=>{
+    const city = S.rows[0]==="city"?r : S.cols[0]==="city"?c : null;
+    const mon  = S.rows[0]==="month"?r : S.cols[0]==="month"?c : null;
+    let base;
+    if(city&&mon){ base=DATA.grid[city][M.indexOf(mon)]; }
+    else if(city){ base=months.reduce((s,m)=>s+(DATA.grid[city][M.indexOf(m)]||0),0)||null; }
+    else if(mon){ base=cities.reduce((s,c2)=>s+(DATA.grid[c2][M.indexOf(mon)]||0),0)||null; }
+    else { base=cities.reduce((s,c2)=>s+months.reduce((t,m)=>t+(DATA.grid[c2][M.indexOf(m)]||0),0),0)||null; }
+    if(base==null) return null;
+    // a field-keyed axis splits its city's figure across that city's fields
+    const fieldKey = S.rows[0]==="field"?r : S.cols[0]==="field"?c : null;
+    if(fieldKey){ const share=DATA.fieldShare[fieldKey]||.2; base=Math.round(base*share); }
+    let v=base*k;
+    if(agg==="avg") v=v/Math.max(1,base);
+    return measure==="revenue"?Math.round(v):Math.round(v);
+  };
+  const cells=rowKeys.map(r=>colKeys.length?colKeys.map(c=>at(r,c)):[at(r,null)]);
+  const out={rowKeys,colKeys,cells,measure,agg,months,cities};
+  CACHE.set(key,out); return out;
+}
+
+/* ---------- render ---------- */
+function chips(zone,list){
+  const box=document.getElementById(zone==="rows"?"zRows":zone==="cols"?"zCols":"zVals");
+  box.innerHTML=list.map((d,i)=>{
+    if(zone==="vals") return `<span class="fld v" draggable="true" data-z="vals" data-i="${i}">${esc(MEASURES[d.m])}
+      <select onchange="setAgg(${i},this.value)" onclick="event.stopPropagation()">${Object.entries(AGGS).map(([k,t])=>`<option value="${k}"${k===d.a?" selected":""}>${t}</option>`).join("")}</select>
+      <button class="x" onclick="drop('vals',${i})" aria-label="Remove">×</button></span>`;
+    return `<span class="fld" draggable="true" data-z="${zone}" data-i="${i}">${esc(DIMS[d])}
+      <button class="x" onclick="drop('${zone}',${i})" aria-label="Remove">×</button></span>`;
+  }).join("") || `<span style="color:#B9C6BE;font-size:13px;padding:0 4px">none</span>`;
+}
+function render(){
+  chips("rows",S.rows);chips("cols",S.cols);chips("vals",S.vals);
+  const q=cube(), m=q.measure, a=q.agg;
+  const flat=q.cells.flat().filter(v=>v!=null);
+  const lo=Math.min(...flat,0), hi=Math.max(...flat,1);
+  const shade=v=>v==null?"":RAMP[Math.min(RAMP.length-1,Math.round((v-lo)/(hi-lo||1)*(RAMP.length-1)))];
+
+  document.getElementById("ttl").textContent =
+    `${AGGS[a]} of ${MEASURES[m]} by ${DIMS[S.rows[0]]}${S.cols.length?" across "+DIMS[S.cols[0]]:""}`;
+  const total=flat.reduce((s,v)=>s+v,0);
+  document.getElementById("tsub").textContent =
+    `${fmt(total,m)} · ${fFrom.value} – ${fTo.value} · ${q.rowKeys.length} rows`;
+
+  let h='<thead><tr><th>'+esc(DIMS[S.rows[0]])+'</th>'
+    + q.colKeys.map(c=>`<th>${esc(c)}</th>`).join("")
+    + `<th class="rt">${esc(fFrom.value)} – ${esc(fTo.value)}</th></tr></thead><tbody>`;
+  q.rowKeys.forEach((r,ri)=>{
+    const row=q.cells[ri], rt=row.reduce((s,v)=>s+(v||0),0);
+    h+=`<tr><th>${esc(r)}</th>`+row.map((v,ci)=>v==null?'<td class="n">—</td>'
+      :`<td style="background:${shade(v)}"><button data-r="${ri}" data-c="${ci}" onclick="drill(${ri},${ci})">${fmt(v,m)}</button></td>`).join("")
+      +`<td class="rt">${rt?fmt(rt,m):"—"}</td></tr>`;
+  });
+  const colT=(q.colKeys.length?q.colKeys:[0]).map((_,ci)=>q.cells.reduce((s,row)=>s+(row[ci]||0),0));
+  h+='</tbody><tfoot><tr><th>All '+esc(PLURAL[S.rows[0]])+'</th>'
+    + colT.map(v=>`<td>${fmt(v,m)}</td>`).join("")
+    + `<td>${fmt(colT.reduce((a2,b)=>a2+b,0),m)}</td></tr></tfoot>`;
+  document.getElementById("pv").innerHTML=h;
+
+
+
+}
+
+/* ---------- edit ---------- */
+function drop(z,i){ if(z==="rows"&&S.rows.length===1) return; S[z].splice(i,1); CACHE.clear(); render(); }
+function setAgg(i,v){ S.vals[i].a=v; CACHE.clear(); render(); }
+function swap(){ const r=S.rows; S.rows=S.cols.length?S.cols:["city"]; S.cols=r; CACHE.clear(); render(); }
+function openAdd(zone,btn){
+  const opts = zone==="vals" ? Object.entries(MEASURES) : Object.entries(DIMS);
+  const used = zone==="vals" ? S.vals.map(v=>v.m) : S[zone];
+  const free = opts.filter(([k])=>!used.includes(k) && !(zone!=="vals" && (S.rows.includes(k)||S.cols.includes(k))));
+  if(!free.length) return;
+  const [k]=free[0];
+  if(zone==="vals"){ S.vals=[{m:k,a:"count"}]; } else if(zone==="cols"){ S.cols=[k]; } else { S.rows=[k]; }
+  CACHE.clear(); render();
+}
+const PRESETS=[
+  {rows:["city"],cols:["month"],vals:[{m:"players",a:"count"}]},
+  {rows:["field"],cols:[],      vals:[{m:"spots",a:"avg"}]},
+  {rows:["cohort"],cols:[],     vals:[{m:"revenue",a:"sum"}]},
+];
+function preset(i){ S=JSON.parse(JSON.stringify(PRESETS[i]));
+  document.querySelectorAll(".pre").forEach((b,j)=>b.classList.toggle("on",j===i));
+  CACHE.clear(); render(); }
+
+/* ---------- drill-down ---------- */
+function drill(ri,ci){
+  const q=cube(), r=q.rowKeys[ri], c=q.colKeys[ci], v=q.cells[ri][ci];
+  document.querySelectorAll("#pv td.sel").forEach(t=>t.classList.remove("sel"));
+  const btn=document.querySelector(`#pv td button[data-r="${ri}"][data-c="${ci}"]`);
+  if(btn) btn.parentElement.classList.add("sel");
+  const city = S.rows[0]==="city"?r : S.cols[0]==="city"?c : null;
+  let list=DATA.people.filter(p=>!city||p.city===city).sort((a,b)=>b.matches-a.matches);
+  document.getElementById("dTitle").textContent=`${fmt(v,q.measure)} ${MEASURES[q.measure].toLowerCase()}`;
+  document.getElementById("dSub").textContent=[r,c].filter(Boolean).join(" · ");
+  document.getElementById("dBody").innerHTML=list.map(p=>`<div class="prow">
+    <div><div class="nm">${esc(p.name)}</div>${p.relay?'<div class="em relay">Apple private relay</div>':'<div class="em">'+esc(p.email)+'</div>'}</div>
+    <div class="tel">${esc(p.phone)}</div><div class="r">${p.matches||"—"}</div></div>`).join("")
+    || '<div style="padding:34px;text-align:center;color:#6E8076">No players in this cell.</div>';
+  document.getElementById("dCount").textContent=`${list.length} of ${fmt(v,q.measure)} shown in this mockup · every one has a phone`;
+  document.getElementById("drill").classList.add("on");
+}
+function closeDrill(){document.getElementById("drill").classList.remove("on");
+  document.querySelectorAll("#pv td.sel").forEach(t=>t.classList.remove("sel"));}
+function flash(b,m){const o=b.textContent;b.textContent=m;b.disabled=true;setTimeout(()=>{b.textContent=o;b.disabled=false},1300)}
+
+/* ---------- filters ---------- */
+function opt(id,arr,val){document.getElementById(id).innerHTML=arr.map(v=>`<option${v===val?" selected":""}>${esc(v)}</option>`).join("")}
+opt("fFrom",DATA.months,DATA.months[0]);
+opt("fTo",DATA.months,DATA.months[DATA.months.length-1]);
+opt("fCity",["All cities",...DATA.cities],"All cities");
+opt("fField",["All fields",...DATA.fieldList],"All fields");
+["fFrom","fTo","fCity","fField"].forEach(id=>document.getElementById(id).addEventListener("change",()=>{CACHE.clear();render()}));
+
+/* ---------- drag between zones ---------- */
+document.addEventListener("dragstart",e=>{const f=e.target.closest(".fld");if(!f)return;
+  e.dataTransfer.setData("text/plain",JSON.stringify({z:f.dataset.z,i:+f.dataset.i}))});
+document.querySelectorAll(".zone").forEach(z=>{
+  z.addEventListener("dragover",e=>{e.preventDefault();z.classList.add("drop")});
+  z.addEventListener("dragleave",()=>z.classList.remove("drop"));
+  z.addEventListener("drop",e=>{e.preventDefault();z.classList.remove("drop");
+    const {z:from,i}=JSON.parse(e.dataTransfer.getData("text/plain")), to=z.dataset.zone;
+    if(from===to||from==="vals"||to==="vals")return;
+    const moved=S[from][i]; S[from].splice(i,1); S[to]=[moved];
+    if(!S.rows.length)S.rows=["city"];
+    CACHE.clear();render();});
+});
+document.querySelectorAll(".pre")[0].classList.add("on");
+render();
+
+</script>

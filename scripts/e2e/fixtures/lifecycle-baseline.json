@@ -1,184 +1,187 @@
 {
-  "funnel": {
-    "title": "Player Funnel",
-    "subtitle": "Download to registration to a fifth match — where players arrive and where they fall away.",
-    "dataSection": "Player Funnel",
-    "periodBar": true,
-    "docTitle": "Player Lifecycle",
-    "cardTitles": [
-      "Player funnel comparison"
-    ],
-    "railItems": [
-      "Player Funnel",
-      "Player Behavior",
-      "Revenue per Player",
-      "Retention",
-      "Churn",
-      "Player Data Room",
-      "Membership"
-    ],
-    "railGroups": [
-      "Reports",
-      "Membership"
-    ],
-    "topTabs": [
-      "Home",
-      "Finance",
-      "Growth",
-      "Player Lifecycle",
-      "Match Ops",
-      "Tech"
-    ]
-  },
-  "behavior": {
-    "title": "Player Behavior",
-    "subtitle": "How playing habits change month over month — how many play once, occasionally, or every week.",
-    "dataSection": "Player Behavior",
-    "periodBar": true,
-    "docTitle": "Player Lifecycle",
-    "cardTitles": [
-      "Overall Matchday performance"
-    ],
-    "railItems": [
-      "Player Funnel",
-      "Player Behavior",
-      "Revenue per Player",
-      "Retention",
-      "Churn",
-      "Player Data Room",
-      "Membership"
-    ],
-    "railGroups": [
-      "Reports",
-      "Membership"
-    ],
-    "topTabs": [
-      "Home",
-      "Finance",
-      "Growth",
-      "Player Lifecycle",
-      "Match Ops",
-      "Tech"
-    ]
-  },
-  "revenue-per-player": {
-    "title": "Revenue per Player",
-    "subtitle": "What an active player is worth per month, and how that has moved.",
-    "dataSection": "Revenue per Player",
-    "periodBar": true,
-    "docTitle": "Player Lifecycle",
-    "cardTitles": [
-      "Average revenue per player"
-    ],
-    "railItems": [
-      "Player Funnel",
-      "Player Behavior",
-      "Revenue per Player",
-      "Retention",
-      "Churn",
-      "Player Data Room",
-      "Membership"
-    ],
-    "railGroups": [
-      "Reports",
-      "Membership"
-    ],
-    "topTabs": [
-      "Home",
-      "Finance",
-      "Growth",
-      "Player Lifecycle",
-      "Match Ops",
-      "Tech"
-    ]
-  },
-  "retention": {
-    "title": "Retention",
-    "subtitle": "All time, every cohort — the curve ignores the time period, and the matrix has its own cohort and city filters.",
-    "dataSection": "Retention",
-    "periodBar": false,
-    "docTitle": "Player Lifecycle",
-    "cardTitles": [],
-    "railItems": [
-      "Player Funnel",
-      "Player Behavior",
-      "Revenue per Player",
-      "Retention",
-      "Churn",
-      "Player Data Room",
-      "Membership"
-    ],
-    "railGroups": [
-      "Reports",
-      "Membership"
-    ],
-    "topTabs": [
-      "Home",
-      "Finance",
-      "Growth",
-      "Player Lifecycle",
-      "Match Ops",
-      "Tech"
-    ]
-  },
-  "churn": {
-    "title": "Churn",
-    "subtitle": "Who has stopped playing — set your own inactivity window below; this page does not follow the time period.",
-    "dataSection": "Churn",
-    "periodBar": false,
-    "docTitle": "Player Lifecycle",
-    "cardTitles": [],
-    "railItems": [
-      "Player Funnel",
-      "Player Behavior",
-      "Revenue per Player",
-      "Retention",
-      "Churn",
-      "Player Data Room",
-      "Membership"
-    ],
-    "railGroups": [
-      "Reports",
-      "Membership"
-    ],
-    "topTabs": [
-      "Home",
-      "Finance",
-      "Growth",
-      "Player Lifecycle",
-      "Match Ops",
-      "Tech"
-    ]
-  },
-  "data-room": {
-    "title": "Player Data Room",
-    "subtitle": "The rows behind every number on the other five sections, and how each one is made.",
-    "dataSection": "Player Data Room",
-    "periodBar": true,
-    "docTitle": "Player Lifecycle",
-    "cardTitles": [
-      "How these numbers are made"
-    ],
-    "railItems": [
-      "Player Funnel",
-      "Player Behavior",
-      "Revenue per Player",
-      "Retention",
-      "Churn",
-      "Player Data Room",
-      "Membership"
-    ],
-    "railGroups": [
-      "Reports",
-      "Membership"
-    ],
-    "topTabs": [
-      "Home",
-      "Finance",
-      "Growth",
-      "Player Lifecycle",
-      "Match Ops",
-      "Tech"
-    ]
-  }
+ "_itemised_edits": [
+  "TWO FIELDS EDITED, DELIBERATELY, IN THE DATA ROOM REBUILD. (1) periodBar true -> false: the panel has NEVER read the page period \u2014 it has always had its own Window control \u2014 so the bar changed nothing below it. That was invisible until the Total column started naming the window it covers, at which point the bar read 'Feb 2026 - Jul 2026' while the total beside it read 'Apr 2023 - Sep 2026'. SectionFrame's own rule is that period:false means the page genuinely does not follow it. (2) subtitle: extended to say so, which is what that same rule requires of a page without a bar. Nothing else in this fixture moved, and the assertion bodies in verify-lifecycle-rename.mjs are unchanged \u2014 only the recorded baseline for these two fields."
+ ],
+ "funnel": {
+  "title": "Player Funnel",
+  "subtitle": "Download to registration to a fifth match \u2014 where players arrive and where they fall away.",
+  "dataSection": "Player Funnel",
+  "periodBar": true,
+  "docTitle": "Player Lifecycle",
+  "cardTitles": [
+   "Player funnel comparison"
+  ],
+  "railItems": [
+   "Player Funnel",
+   "Player Behavior",
+   "Revenue per Player",
+   "Retention",
+   "Churn",
+   "Player Data Room",
+   "Membership"
+  ],
+  "railGroups": [
+   "Reports",
+   "Membership"
+  ],
+  "topTabs": [
+   "Home",
+   "Finance",
+   "Growth",
+   "Player Lifecycle",
+   "Match Ops",
+   "Tech"
+  ]
+ },
+ "behavior": {
+  "title": "Player Behavior",
+  "subtitle": "How playing habits change month over month \u2014 how many play once, occasionally, or every week.",
+  "dataSection": "Player Behavior",
+  "periodBar": true,
+  "docTitle": "Player Lifecycle",
+  "cardTitles": [
+   "Overall Matchday performance"
+  ],
+  "railItems": [
+   "Player Funnel",
+   "Player Behavior",
+   "Revenue per Player",
+   "Retention",
+   "Churn",
+   "Player Data Room",
+   "Membership"
+  ],
+  "railGroups": [
+   "Reports",
+   "Membership"
+  ],
+  "topTabs": [
+   "Home",
+   "Finance",
+   "Growth",
+   "Player Lifecycle",
+   "Match Ops",
+   "Tech"
+  ]
+ },
+ "revenue-per-player": {
+  "title": "Revenue per Player",
+  "subtitle": "What an active player is worth per month, and how that has moved.",
+  "dataSection": "Revenue per Player",
+  "periodBar": true,
+  "docTitle": "Player Lifecycle",
+  "cardTitles": [
+   "Average revenue per player"
+  ],
+  "railItems": [
+   "Player Funnel",
+   "Player Behavior",
+   "Revenue per Player",
+   "Retention",
+   "Churn",
+   "Player Data Room",
+   "Membership"
+  ],
+  "railGroups": [
+   "Reports",
+   "Membership"
+  ],
+  "topTabs": [
+   "Home",
+   "Finance",
+   "Growth",
+   "Player Lifecycle",
+   "Match Ops",
+   "Tech"
+  ]
+ },
+ "retention": {
+  "title": "Retention",
+  "subtitle": "All time, every cohort \u2014 the curve ignores the time period, and the matrix has its own cohort and city filters.",
+  "dataSection": "Retention",
+  "periodBar": false,
+  "docTitle": "Player Lifecycle",
+  "cardTitles": [],
+  "railItems": [
+   "Player Funnel",
+   "Player Behavior",
+   "Revenue per Player",
+   "Retention",
+   "Churn",
+   "Player Data Room",
+   "Membership"
+  ],
+  "railGroups": [
+   "Reports",
+   "Membership"
+  ],
+  "topTabs": [
+   "Home",
+   "Finance",
+   "Growth",
+   "Player Lifecycle",
+   "Match Ops",
+   "Tech"
+  ]
+ },
+ "churn": {
+  "title": "Churn",
+  "subtitle": "Who has stopped playing \u2014 set your own inactivity window below; this page does not follow the time period.",
+  "dataSection": "Churn",
+  "periodBar": false,
+  "docTitle": "Player Lifecycle",
+  "cardTitles": [],
+  "railItems": [
+   "Player Funnel",
+   "Player Behavior",
+   "Revenue per Player",
+   "Retention",
+   "Churn",
+   "Player Data Room",
+   "Membership"
+  ],
+  "railGroups": [
+   "Reports",
+   "Membership"
+  ],
+  "topTabs": [
+   "Home",
+   "Finance",
+   "Growth",
+   "Player Lifecycle",
+   "Match Ops",
+   "Tech"
+  ]
+ },
+ "data-room": {
+  "title": "Player Data Room",
+  "subtitle": "The rows behind every number on the other five sections, and how each one is made. Set the window in the builder \u2014 this page does not follow the period bar.",
+  "dataSection": "Player Data Room",
+  "periodBar": false,
+  "docTitle": "Player Lifecycle",
+  "cardTitles": [
+   "How these numbers are made"
+  ],
+  "railItems": [
+   "Player Funnel",
+   "Player Behavior",
+   "Revenue per Player",
+   "Retention",
+   "Churn",
+   "Player Data Room",
+   "Membership"
+  ],
+  "railGroups": [
+   "Reports",
+   "Membership"
+  ],
+  "topTabs": [
+   "Home",
+   "Finance",
+   "Growth",
+   "Player Lifecycle",
+   "Match Ops",
+   "Tech"
+  ]
+ }
 }
