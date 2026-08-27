@@ -187,6 +187,7 @@ const BOOTED_AT = new Date().toISOString();
 let coldBuilds = 0;
 let warmServes = 0;
 let lastBuildMs = 0;
+let lastBuildParts: FactCacheStats["lastBuildParts"] = null;
 
 export type FactCacheStats = {
   cold: boolean;          // did THIS call rebuild the table?
@@ -194,11 +195,14 @@ export type FactCacheStats = {
   warmServes: number;     // cache hits on this instance since boot
   bootedAt: string;
   lastBuildMs: number;    // how long the most recent rebuild took
+  /* THE BUILD, BROKEN DOWN. The whole build was one number, so "the fact table costs 3.3s" could
+   * not be turned into "which part". Populated on every rebuild, never estimated. */
+  lastBuildParts: { keyMs: number; partsMs: number; profsMs: number; mapMs: number; parts: number; profs: number } | null;
   concurrency: number;
   joinedBuild: number;    // callers that awaited someone else's in-flight build
 };
 export const factCacheStats = (cold: boolean): FactCacheStats =>
-  ({ cold, coldBuilds, warmServes, bootedAt: BOOTED_AT, lastBuildMs, concurrency: FACT_FETCH_CONCURRENCY, joinedBuild });
+  ({ cold, coldBuilds, warmServes, bootedAt: BOOTED_AT, lastBuildMs, concurrency: FACT_FETCH_CONCURRENCY, joinedBuild, lastBuildParts });
 
 /* ── SINGLE FLIGHT, AND THE COUNTER IS WHAT FOUND IT NECESSARY ────────────────────────────────
  * On the very first browser open after this counter shipped it read `coldBuilds: 2`. The page
@@ -340,18 +344,25 @@ export async function getFacts(sb: SupabaseClient): Promise<FactCache> {
    * instance would never notice a new participation month and would serve last month's facts until
    * it was recycled. The key read is the contract; the single flight below is only about not paying
    * for the BUILD twice. */
+  const keyT0 = Date.now();
   const { data: maxRow } = await sb.from("growth_participation").select("match_month").order("match_month", { ascending: false }).limit(1).maybeSingle();
+  const keyMs = Date.now() - keyT0;
   const key = String(maxRow?.match_month ?? "");
-  if (cache && cache.key === key) { warmServes++; return cache; }
+  if (cache && cache.key === key) { warmServes++; lastKeyMs = keyMs; return cache; }
+  lastKeyMs = keyMs;
   /* SOMEONE IS ALREADY BUILDING — await THEIR build instead of starting a second full fetch. */
   if (inFlight) { joinedBuild++; return inFlight; }
   inFlight = buildFacts(sb, key).finally(() => { inFlight = null; });
   return inFlight;
 }
 
+let lastKeyMs = 0;
+
 async function buildFacts(sb: SupabaseClient, key: string): Promise<FactCache> {
   const buildStart = Date.now();
+  let partsMs = 0, profsMs = 0;
 
+  const t0 = Date.now();
   const [parts, profs] = await Promise.all([
     // growth_participation is a VIEW (a 145k-row join), so OFFSET pagination
     // re-joins + deep-skips and hits the statement timeout on later pages. KEYSET
@@ -359,8 +370,11 @@ async function buildFacts(sb: SupabaseClient, key: string): Promise<FactCache> {
     keysetAll<{ player_api_id: number; user_id: number; match_month: string; city_identifier: string | null; field_title: string | null; field_id: number | null; total_amount: number | string }>(
       sb, "growth_participation", "player_api_id, user_id, match_month, city_identifier, field_title, field_id, total_amount", "player_api_id",
     ),
-    selectAll<{ user_id: number; first_match_month: string }>(sb, "growth_player_profile", "user_id, first_match_month", "user_id"),
+    selectAll<{ user_id: number; first_match_month: string }>(sb, "growth_player_profile", "user_id, first_match_month", "user_id")
+      .then((r) => { profsMs = Date.now() - t0; return r; }),
   ]);
+  partsMs = Date.now() - t0;   // the two run together, so this is the SLOWER of the pair
+  const mapT0 = Date.now();
   const cohortOf = new Map<number, number>();
   for (const p of profs) cohortOf.set(p.user_id, monthIdx(p.first_match_month));
 
@@ -387,6 +401,7 @@ async function buildFacts(sb: SupabaseClient, key: string): Promise<FactCache> {
   cache = { key, facts, monthsAvailable, cities, fieldsByCity: Object.fromEntries(Object.entries(fieldsByCity).map(([c, s]) => [c, [...s].sort()])) };
   coldBuilds++;
   lastBuildMs = Date.now() - buildStart;
+  lastBuildParts = { keyMs: lastKeyMs, partsMs, profsMs, mapMs: Date.now() - mapT0, parts: parts.length, profs: profs.length };
   console.log(`[dataroom] fact table BUILT in ${lastBuildMs}ms · ${facts.length} facts · ${FACT_FETCH_CONCURRENCY}-way · build #${coldBuilds} on this instance · ${joinedBuild} caller(s) joined instead of rebuilding (booted ${BOOTED_AT})`);
   return cache;
 }

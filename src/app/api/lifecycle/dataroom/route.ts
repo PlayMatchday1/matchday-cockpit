@@ -15,8 +15,18 @@ const money = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDi
 const cell = (r: (number | null)[] | number[]) => r;
 void cell;
 
+/* MODULE INIT. Set when this file is first evaluated, which on a serverless platform is once per
+ * instance — so `Date.now() - MODULE_INIT` on the first request is a lower bound on how long the
+ * instance has been alive before anyone asked it for anything. */
+const MODULE_INIT = Date.now();
+let firstRequestAt = 0;
+
 export async function POST(req: Request) {
+  const reqT0 = Date.now();
+  if (!firstRequestAt) firstRequestAt = reqT0;
+  const authT0 = Date.now();
   const auth = await authenticateLifecycle(req);
+  const authMs = Date.now() - authT0;
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const body = (await req.json().catch(() => ({}))) as { mode?: string; config?: PivotConfig; r?: string; c?: string };
   const cfg = body.config;
@@ -81,7 +91,9 @@ export async function POST(req: Request) {
      * 164 ms, while the same cube served from the cache costs 0 ms. A SWAP is the same facts read
      * the other way round, so it should never cost a recompute twice. Keyed on the fact table's own
      * cache key as well as the config, so a fresh fact table cannot be served a stale cube. */
+    const pivotT0 = Date.now();
     const { table: t, hit } = pivotCached(F.facts, cfg, F.key);
+    const pivotMs = Date.now() - pivotT0;
     if (body.mode === "tableCsv") {
       const showV = (v: number | null, vi: number) => (v == null ? "" : cfg.vals[vi].metric === "Revenue" ? money(v) : String(v));
       const head = [cfg.rows.join(" · "), ...(t.hasCols ? t.colKeys : [""]).flatMap((c) => cfg.vals.map((vv) => `${vv.agg} of ${vv.metric}${t.hasCols ? ` (${c})` : ""}`)), ...(t.hasCols ? cfg.vals.map((vv) => `${vv.agg} of ${vv.metric} (Total)`) : [])];
@@ -106,14 +118,28 @@ export async function POST(req: Request) {
         totalCol: totalHeader(cfg.filters.from, cfg.filters.to, cfg.vals[0]?.metric ?? "Players"),
         cached: hit,
         // THE COUNTER, ON THE WIRE. A week of logs answers the cold-hit fraction exactly.
-        facts: { ...stats, factMs },
+        /* THE WHOLE SERVER SIDE OF A COLD OPEN, IN ONE OBJECT. Measured, never estimated:
+         * authMs is the gate, factMs the fact table (broken down in lastBuildParts), pivotMs the
+         * cube, and sinceModuleInit says how long this instance had been alive when the first
+         * request reached it — the closest thing a function has to "boot cost". */
+        facts: { ...stats, factMs, authMs, pivotMs, totalMs: Date.now() - reqT0,
+                 sinceModuleInit: firstRequestAt - MODULE_INIT },
         meta: { monthsAvailable: F.monthsAvailable, cities: F.cities, fieldsByCity: F.fieldsByCity } },
       {
         status: 200,
         headers: {
           "Cache-Control": "private, max-age=30",
           // Readable in the network panel and in Vercel's logs without parsing a body.
-          "Server-Timing": `facts;dur=${factMs};desc="${stats.cold ? "cold" : "warm"}", cube;desc="${hit ? "cached" : "built"}"`,
+          "Server-Timing": [
+            `auth;dur=${authMs}`,
+            `facts;dur=${factMs};desc="${stats.cold ? "cold" : "warm"}"`,
+            stats.lastBuildParts ? `factsKey;dur=${stats.lastBuildParts.keyMs}` : "",
+            stats.lastBuildParts ? `participation;dur=${stats.lastBuildParts.partsMs}` : "",
+            stats.lastBuildParts ? `profiles;dur=${stats.lastBuildParts.profsMs}` : "",
+            stats.lastBuildParts ? `factMap;dur=${stats.lastBuildParts.mapMs}` : "",
+            `cube;dur=${pivotMs};desc="${hit ? "cached" : "built"}"`,
+            `total;dur=${Date.now() - reqT0}`,
+          ].filter(Boolean).join(", "),
         },
       },
     );
