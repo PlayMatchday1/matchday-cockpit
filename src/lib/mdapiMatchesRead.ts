@@ -619,7 +619,22 @@ export async function fetchJoinedMatchPlayers(
       .select(MATCHES_COLS)
       .is("deleted_at", null);
     if (opts.fromDate) q = q.gte("start_date", opts.fromDate);
-    if (opts.toDate) q = q.lte("start_date", opts.toDate);
+    /* A BARE DATE AGAINST A TIMESTAMP DROPS THE WHOLE LAST DAY.
+     *
+     * `start_date` is a timestamp; `toDate` is "2026-08-23". `lte` compares them as instants, so
+     * 2026-08-23T18:00 <= 2026-08-23T00:00 is FALSE and every match after midnight on the final day
+     * vanished — while the label above the figure still named that day. matchPnL.ts:324 already
+     * bounded its own match-meta query with `T23:59:59Z`, so the TWO QUERIES INSIDE ONE FUNCTION
+     * disagreed about which matches were in the window.
+     *
+     * NORMALISED HERE RATHER THAN AT THE CALL SITES because every caller passes a bare date —
+     * Slate Review, the Membership route, DPP Price History, useFinanceData's quarter and benchmark
+     * bounds, and matchPnL itself. Fixing six call sites leaves the seventh to be written wrong.
+     * A caller that already passes a full timestamp is untouched. */
+    if (opts.toDate) {
+      const to = /^\d{4}-\d{2}-\d{2}$/.test(opts.toDate) ? `${opts.toDate}T23:59:59.999Z` : opts.toDate;
+      q = q.lte("start_date", to);
+    }
     if (opts.fieldLike) q = q.ilike("field_title", opts.fieldLike);
     if (opts.cityIdentifier) q = q.eq("city_identifier", opts.cityIdentifier);
     return q.order("api_id");

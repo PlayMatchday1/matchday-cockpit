@@ -4374,3 +4374,88 @@ venue can be switched off today leaving no trace**, and that one silently suppre
 `match_id: null`, before/after for all three columns), which the schema accommodates because
 `match_id` is nullable. **That is one note, not an audit trail** — the durable fix is a migration
 adding `updated_at` and a trigger, which is not done here.
+
+---
+
+## The window off-by-one, and two stale fin_venues columns (2026-08-27)
+
+### A bare date against a timestamp drops the whole last day
+
+`mdapiMatchesRead.ts` filtered `lte("start_date", opts.toDate)` where `toDate` is `"2026-08-23"`.
+`start_date` is a **timestamp**, so `2026-08-23T18:00 <= 2026-08-23T00:00` is false and **every match
+after midnight on the final day vanished** — while the label above the figure still named that day.
+
+`matchPnL.ts:324` already bounded its own match-*meta* query with `T23:59:59Z`, so **two queries
+inside one function disagreed about which matches were in the window.**
+
+**EVERY caller passed a bare date:** Slate Review's demand strip, the Membership route, DPP Price
+History, `useFinanceData`'s quarter and benchmark bounds, and `matchPnL` itself. `partnerStats` is
+the only caller unaffected (it filters on `fieldLike`, no dates). **Normalised inside the helper**,
+so a caller passing a full timestamp is untouched and the seventh caller cannot be written wrong.
+
+    1 week  Aug 17–23     ran matches 72 → 82   (+10)
+    4 weeks Jul 27–Aug 23 ran matches 341 → 351 (+10)
+
+    +2 Tourney at Soccer Central · +2 The Hattrick L. · +1 each: Ann Richards School,
+    Tourney ATH Pearland, Scissortail Park, PRUMC, Westlake HS Field 3, Round Rock M.C.
+
+**The Soccer Central figures from earlier today are unaffected** — 405 / 389 / $70,020 came from
+direct `mdapi_matches` queries with explicit `T23:59:59` bounds, not through this helper.
+
+### fin_venues 16 PRUMC — two stale columns
+
+`per_match_rate 84 → 120` (**LANDED**, read back). Ryan's ruling: PRUM runs 1.5-hour matches and the
+84 was one-hour pricing. `cost_per_match` left at 120.
+
+**Field Costs reads `per_match_rate`; Slate Review reads `cost_per_match`** — so the same venue has
+been billed at **$84 on one page and $120 on the other, $36 apart**, across **107 ran matches**
+(2026-01 → 2026-09) = **$3,852 understated on the Field Costs side.** Not backfilled.
+
+`dpp_price` was **already 12** at write time — it read **7** earlier the same day and no write of
+mine touched it in between, so someone corrected it independently. My update was a no-op on that
+column.
+
+### Only three venues have the two rate columns disagreeing
+
+| id | venue | city | rate | cost | diff | 90d matches | swing |
+|---|---|---|---|---|---|---|---|
+| 49 | Westlake | Austin | $135 | $114 | **−21** | 37 | **−$777** |
+| 15 | Majestic Gardens | Dallas | $105 | $125 | +20 | 1 | +$20 *(inactive)* |
+| 17 | Hammond Park | Atlanta | $62.50 | $65 | +2.50 | 0 | $0 *(inactive)* |
+
+**Westlake is the only active one, and it runs the other way**: `per_match_rate` **higher** than
+`cost_per_match`, so there **Slate Review is the page understating**, by $21 × 37 = $777 over 90 days.
+Not widespread — 3 of 34 venues, and only one that matters.
+
+### dpp_price vs what was actually charged — 10 of 26 disagree
+
+Compared against the **modal** single-spot DPP amount over 90 days (a minimum or a mean is dragged by
+partials and multi-spot purchases — an earlier pass using the minimum produced nonsense like
+"Crossbar charges $1"):
+
+    DISAGREE  Onion Creek $5 vs $8 · KISC $9 vs $12 · PAC Global $9 vs $5 · Bicentennial $10 vs $9
+              Majestic Gardens $5 vs $9 · Scissortail $5 vs $9 · Hattrick T. null vs $9
+              New Braunfels null vs $8 · Ann Richards null vs $12
+
+**`dpp_price` is read in exactly one place**: `cityDppFor` (`financeStats.ts:2274`), which feeds the
+**revenue projection** for scheduled-but-unplayed matches. It never prices a played match — those come
+from `mdapi_match_players.amount`. So a stale value **misprojects future revenue** and never
+misstates history.
+
+### The Atlanta member-spot divisor — still UNKNOWN
+
+`buildMdapiMemberSpotIndex` (financeStats.ts:1939) counts a spot only when it is not match-cancelled,
+not player-cancelled, not `GUEST`, has `payment_type` in MEMBER / DAILY PAID / PROMOCODE, and its
+**`field_id` resolves through `fin_venue_fields`**.
+
+Reconciling Atlanta, Jul 2026:
+
+    all ATL member spots in July                              97
+    … minus GUEST rows                                        97
+    … minus player-cancelled rows                             97
+    … minus fields not in fin_venue_fields                    97
+    … and before the window fix (bare date dropped Jul 31)    89   ← what the page used
+
+**89 gives $26.39/match; the page showed $27.04.** The divisor is neither 89 nor 97 and I cannot
+reproduce it. **B1 (rendering the membership working on screen) stays unbuilt** — a formula resting
+on an unverified divisor is worse than no formula.
