@@ -299,64 +299,75 @@ export default function ApplicationsView() {
         })}
       </section>
 
-      <style jsx>{`
+      {/* ── global, AND EVERY SELECTOR IS PREFIXED .apps ─────────────────────────────────────
+          styled-jsx scopes a block to the JSX inside the COMPONENT THAT DECLARES IT. Locked,
+          CityCell, Phone and D are sibling function components in this file, so their elements got
+          the class name and not the scope hash — `.pill lock` computed to a TRANSPARENT background
+          with no padding, and the grey "from the form, not editable" chips have never rendered.
+          Nothing looked broken, which is why it survived; the page's own subtitle describes a grey
+          treatment that did not exist, so half its grammar was invisible.
+
+          `global` is what reaches a sibling component. The `.apps` prefix is what stops it reaching
+          the rest of the app — the root element carries that class, so every rule here is still
+          confined to this page, by DOM ancestry rather than by a scope hash. */}
+      <style jsx global>{`
         .apps { padding: 4px 0 40px }
-        .h1 { font-size: 30px; font-weight: 900; letter-spacing: -.6px; margin: 0 0 6px }
-        .sub, .note { font-size: 12.5px; color: rgba(16,35,26,.55); margin: 0 0 10px; max-width: 760px; line-height: 1.5 }
-        .note { color: #B8730B }
-        .banner { border: 1px solid #F0D8A8; background: #FFF8EC; color: #7A5008; border-radius: 10px; padding: 11px 14px; font-size: 12.5px; line-height: 1.55; margin: 0 0 12px; max-width: 900px }
-        .banner b { color: #5E3D05 }
-        .tabs { display: flex; gap: 6px; margin: 14px 0 } 
-        .tabs button { border: 1px solid #E4EAE5; background: #fff; border-radius: 999px; padding: 7px 15px; font: inherit; font-size: 13px; font-weight: 700; color: rgba(16,35,26,.55); cursor: pointer }
-        .tabs button.on { background: #0F3323; border-color: #0F3323; color: #fff }
-        .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); gap: 10px; margin-bottom: 14px }
-        .tile { background: #fff; border: 1px solid #E4EAE5; border-radius: 10px; padding: 13px 15px }
-        .tile.hot { border-color: #F2D3C0; background: #FFF6F2 } .tile.good { border-color: #BFE7CF; background: #F2FBF5 }
-        .tile .k { font-size: 10px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: #93A49A }
-        .tile .v { font-size: 23px; font-weight: 900; margin: 2px 0 1px } .tile .h { font-size: 11px; color: rgba(16,35,26,.45) }
-        .bar { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; margin-bottom: 9px }
-        .search { flex: 1; min-width: 220px; border: 1px solid #E4EAE5; border-radius: 9px; padding: 9px 12px; font: inherit; font-size: 15px }
-        @media (min-width: 640px) { .search { font-size: 13px } }
-        .cityRow { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; margin-bottom: 13px }
-        .lbl { font-size: 10.5px; font-weight: 800; letter-spacing: .09em; color: #93A49A; text-transform: uppercase }
-        .chip { border: 1px solid #E4EAE5; background: #fff; border-radius: 999px; padding: 6px 13px; font: inherit; font-size: 13px; font-weight: 600; color: rgba(16,35,26,.7); cursor: pointer; min-height: 34px }
-        .chip.on { background: #0F3323; border-color: #0F3323; color: #fff }
-        .chip.warn.on { background: #B8730B; border-color: #B8730B }
-        .chip .n { opacity: .55; margin-left: 5px; font-weight: 800 }
-        .card { background: #fff; border: 1.5px solid #E4EAE5; border-radius: 14px; overflow: hidden }
-        .thead, .row { display: grid; grid-template-columns: minmax(200px,2fr) 132px 140px 140px 106px 128px 122px 42px; gap: 10px; align-items: center; padding: 10px 14px }
+        .apps .h1 { font-size: 30px; font-weight: 900; letter-spacing: -.6px; margin: 0 0 6px }
+        .apps .sub, .apps .note { font-size: 12.5px; color: rgba(16,35,26,.55); margin: 0 0 10px; max-width: 760px; line-height: 1.5 }
+        .apps .note { color: #B8730B }
+        .apps .banner { border: 1px solid #F0D8A8; background: #FFF8EC; color: #7A5008; border-radius: 10px; padding: 11px 14px; font-size: 12.5px; line-height: 1.55; margin: 0 0 12px; max-width: 900px }
+        .apps .banner b { color: #5E3D05 }
+        .apps .tabs { display: flex; gap: 6px; margin: 14px 0 } 
+        .apps .tabs button { border: 1px solid #E4EAE5; background: #fff; border-radius: 999px; padding: 7px 15px; font: inherit; font-size: 13px; font-weight: 700; color: rgba(16,35,26,.55); cursor: pointer }
+        .apps .tabs button.on { background: #0F3323; border-color: #0F3323; color: #fff }
+        .apps .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); gap: 10px; margin-bottom: 14px }
+        .apps .tile { background: #fff; border: 1px solid #E4EAE5; border-radius: 10px; padding: 13px 15px }
+        .apps .tile.hot { border-color: #F2D3C0; background: #FFF6F2 } .apps .tile.good { border-color: #BFE7CF; background: #F2FBF5 }
+        .apps .tile .k { font-size: 10px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: #93A49A }
+        .apps .tile .v { font-size: 23px; font-weight: 900; margin: 2px 0 1px } .apps .tile .h { font-size: 11px; color: rgba(16,35,26,.45) }
+        .apps .bar { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; margin-bottom: 9px }
+        .apps .search { flex: 1; min-width: 220px; border: 1px solid #E4EAE5; border-radius: 9px; padding: 9px 12px; font: inherit; font-size: 15px }
+        @media (min-width: 640px) { .apps .search { font-size: 13px } }
+        .apps .cityRow { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; margin-bottom: 13px }
+        .apps .lbl { font-size: 10.5px; font-weight: 800; letter-spacing: .09em; color: #93A49A; text-transform: uppercase }
+        .apps .chip { border: 1px solid #E4EAE5; background: #fff; border-radius: 999px; padding: 6px 13px; font: inherit; font-size: 13px; font-weight: 600; color: rgba(16,35,26,.7); cursor: pointer; min-height: 34px }
+        .apps .chip.on { background: #0F3323; border-color: #0F3323; color: #fff }
+        .apps .chip.warn.on { background: #B8730B; border-color: #B8730B }
+        .apps .chip .n { opacity: .55; margin-left: 5px; font-weight: 800 }
+        .apps .card { background: #fff; border: 1.5px solid #E4EAE5; border-radius: 14px; overflow: hidden }
+        .apps .thead, .apps .row { display: grid; grid-template-columns: minmax(200px,2fr) 132px 140px 140px 106px 128px 122px 42px; gap: 10px; align-items: center; padding: 10px 14px }
         /* The phone cell's styles are INLINE — see the Phone component for why a class could not
            work here. Nothing to declare in this block. */
-        .thead { background: #F5F8F5; font-size: 9.5px; font-weight: 900; letter-spacing: .09em; text-transform: uppercase; color: rgba(16,35,26,.5) }
-        .row { border-top: 1px solid #EFF3EF; font-size: 13px }
+        .apps .thead { background: #F5F8F5; font-size: 9.5px; font-weight: 900; letter-spacing: .09em; text-transform: uppercase; color: rgba(16,35,26,.5) }
+        .apps .row { border-top: 1px solid #EFF3EF; font-size: 13px }
         /* THE RULE BETWEEN THE TWO HALVES. Everything left is the website's, everything right ours. */
-        .row .own:first-of-type, .thead div:nth-child(6) { border-left: 2px solid #BBD6F6; padding-left: 10px }
-        .who { display: flex; flex-direction: column; gap: 2px; min-width: 0 }
-        .who .em { font-size: 11.5px; color: rgba(16,35,26,.45); overflow-wrap: anywhere }
-        .pill { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 3px 9px; font-size: 12px; font-weight: 700; max-width: 100% }
-        .pill.lock { background: #F1F4F1; color: #3C4F44 } .pill.lock .pad { opacity: .5; font-size: 10px }
-        .pill.na { background: #FAFBFA; color: #A9B5AD; font-style: italic; font-weight: 600 }
-        .pill.derived { background: #EFECFD; color: #5B4BC4 } .pill.derived .pad { font-size: 9px; opacity: .7; letter-spacing: .06em }
-        .pill.multi { background: #EFF6FF; color: #1E5FBF; align-self: flex-start; font-size: 11px }
-        .pill.warnp { background: #FFF6E3; color: #B8730B; align-self: flex-start; font-size: 11px }
-        .sel, .inp { width: 100%; border: 1px solid #BBD6F6; background: #F7FBFF; border-radius: 8px; padding: 6px 8px; font: inherit; font-size: 12.5px; color: #10231A }
-        .exp { border: 1px solid #E4EAE5; background: #fff; border-radius: 8px; width: 28px; height: 28px; font-size: 15px; font-weight: 800; cursor: pointer; color: rgba(16,35,26,.55) }
-        .detail { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; padding: 4px 14px 16px; background: #FAFCFA; border-top: 1px dashed #E4EAE5 }
-        .detail .why { grid-column: 1/-1 }
-        .dk { font-size: 10px; font-weight: 800; letter-spacing: .09em; color: #93A49A; text-transform: uppercase; margin-bottom: 3px }
-        .dv { background: #fff; border: 1px solid #E4EAE5; border-radius: 8px; padding: 10px 12px; font-size: 13px; color: #3C4F44; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 200px; overflow: auto }
-        .empty { padding: 30px; text-align: center; color: rgba(16,35,26,.5); font-size: 13.5px }
-        .err { color: #E8492A; font-size: 12.5px }
-        .mono { font-variant-numeric: tabular-nums }
+        .apps .row .own:first-of-type, .apps .thead div:nth-child(6) { border-left: 2px solid #BBD6F6; padding-left: 10px }
+        .apps .who { display: flex; flex-direction: column; gap: 2px; min-width: 0 }
+        .apps .who .em { font-size: 11.5px; color: rgba(16,35,26,.45); overflow-wrap: anywhere }
+        .apps .pill { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 3px 9px; font-size: 12px; font-weight: 700; max-width: 100% }
+        .apps .pill.lock { background: #F1F4F1; color: #3C4F44 } .apps .pill.lock .pad { opacity: .5; font-size: 10px }
+        .apps .pill.na { background: #FAFBFA; color: #A9B5AD; font-style: italic; font-weight: 600 }
+        .apps .pill.derived { background: #EFECFD; color: #5B4BC4 } .apps .pill.derived .pad { font-size: 9px; opacity: .7; letter-spacing: .06em }
+        .apps .pill.multi { background: #EFF6FF; color: #1E5FBF; align-self: flex-start; font-size: 11px }
+        .apps .pill.warnp { background: #FFF6E3; color: #B8730B; align-self: flex-start; font-size: 11px }
+        .apps .sel, .apps .inp { width: 100%; border: 1px solid #BBD6F6; background: #F7FBFF; border-radius: 8px; padding: 6px 8px; font: inherit; font-size: 12.5px; color: #10231A }
+        .apps .exp { border: 1px solid #E4EAE5; background: #fff; border-radius: 8px; width: 28px; height: 28px; font-size: 15px; font-weight: 800; cursor: pointer; color: rgba(16,35,26,.55) }
+        .apps .detail { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; padding: 4px 14px 16px; background: #FAFCFA; border-top: 1px dashed #E4EAE5 }
+        .apps .detail .why { grid-column: 1/-1 }
+        .apps .dk { font-size: 10px; font-weight: 800; letter-spacing: .09em; color: #93A49A; text-transform: uppercase; margin-bottom: 3px }
+        .apps .dv { background: #fff; border: 1px solid #E4EAE5; border-radius: 8px; padding: 10px 12px; font-size: 13px; color: #3C4F44; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 200px; overflow: auto }
+        .apps .empty { padding: 30px; text-align: center; color: rgba(16,35,26,.5); font-size: 13.5px }
+        .apps .err { color: #E8492A; font-size: 12.5px }
+        .apps .mono { font-variant-numeric: tabular-nums }
         /* NARROW: Role/Location and the date go. APPLICANT, PHONE, CITY, STATUS and OWNER stay —
            reaching someone matters more than knowing which field they mentioned, and the phone is
            the reason this column was added. The head hides with the grid, so the drop class is on
            the head cells too or the columns would stop lining up with their labels. */
         @media (max-width: 900px) {
-          .thead { display: none }
-          .row { grid-template-columns: 1fr 1fr; gap: 8px }
-          .row .drop, .thead .drop { display: none }
-          .row .own:first-of-type, .thead div:nth-child(6) { border-left: 0; padding-left: 0 }
+          .apps .thead { display: none }
+          .apps .row { grid-template-columns: 1fr 1fr; gap: 8px }
+          .apps .row .drop, .apps .thead .drop { display: none }
+          .apps .row .own:first-of-type, .apps .thead div:nth-child(6) { border-left: 0; padding-left: 0 }
         }
       `}</style>
     </div>

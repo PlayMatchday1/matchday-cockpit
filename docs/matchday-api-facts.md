@@ -4210,3 +4210,53 @@ whether the planner reaches it through the joins is not something to assume.
 
 Measured after the swap: `keyMs` **1,266 ms → 155 ms** cold, and a **warm** serve — which pays this
 read on *every* request — **377–441 ms → 80–103 ms**. First cell 6,763 ms → 6,280 ms.
+
+---
+
+## styled-jsx scopes to the COMPONENT, not the file (2026-08-27)
+
+**A `<style jsx>` block only scopes the JSX inside the component that declares it. A sibling
+component in the same file gets the class name and NOT the scope hash, so the rule silently never
+matches — and nothing looks broken.**
+
+That is the whole trap. There is no error, no warning, no missing element. The markup is right, the
+class is right, the rule is right, and they simply never meet. The page renders looking a little
+plainer than intended, which reads as a design choice.
+
+**It cost two bugs on one page and neither was visible.**
+
+`ApplicationsView.tsx` declares its styles inside `ApplicationsView` and renders four sibling
+function components — `Phone`, `Locked`, `CityCell`, `D`. Every element those four produce came out
+unstyled:
+
+| element | class it carried | what it computed to |
+|---|---|---|
+| the phone number | `ph` | `font-variant-numeric: normal` — untabulated |
+| the grey "from the form" chips | `pill lock` | `background: rgba(0,0,0,0)`, padding `0px` |
+
+The second one mattered more than it looked: **the page's own subtitle says *"grey fields come from
+the form and cannot be edited here. Blue fields are yours."*** — describing a treatment that did not
+exist. Half the page's grammar was invisible for the life of the feature.
+
+### How to spot it
+
+**Read the computed style, not the class name.** A test asserting `className="pill lock"` **passes
+on exactly this bug** — the class was always correct. `getComputedStyle(el).backgroundColor` was
+`rgba(0, 0, 0, 0)`, and that is the tell.
+
+### The two fixes, and when each is right
+
+- **Inline styles** for one or two properties on a small component (`Phone` uses this). Cannot miss
+  a scope and cannot collide with another file's identically-named class — `.ph` is also used by
+  `MatchManagersPanel` for the same idea.
+- **`<style jsx global>` with every selector prefixed by the page's root class** for a whole
+  stylesheet. `global` is what reaches a sibling component; the prefix is what stops it reaching the
+  rest of the app — confinement by DOM ancestry instead of by a scope hash. `ApplicationsView` uses
+  this: every rule is `.apps …`, the root carries `className="apps"`, and
+  `verify-applications-pills` asserts that an element with those class names placed **outside**
+  `.apps` picks up nothing.
+
+**Prefix the stragglers.** When converting a block to `global`, a second rule sharing a line
+(`.a { } .b { }`) and the inner selector of a single-line `@media` are easy to miss and each one
+becomes an app-wide leak. Both existed in this file's block and were caught by re-scanning it for
+selectors not starting with the root class.

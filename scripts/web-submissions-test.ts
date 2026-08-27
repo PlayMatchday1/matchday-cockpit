@@ -318,7 +318,12 @@ console.log("\nphone: a number, or a stated reason there isn't one — never an 
   const phoneCell = view.match(/<div><Phone f=\{p\.phone\} \/><\/div>/);
   is("the phone cell carries no drop class", !!phoneCell, true);
   is("…while Role/Location and the date do", (view.match(/className="[^"]*\bdrop\b/g) ?? []).length >= 2, true);
-  is("the narrow rule hides the drop class", /\.row \.drop, \.thead \.drop \{ display: none \}/.test(view), true);
+  /* The selector text carries the .apps prefix now — the whole block became `global` so it could
+   * reach the sibling components, and the prefix is what keeps it on this page. Asserted loosely on
+   * the two parts rather than on one exact string, so a future re-prefix does not go red for a
+   * reason that is not the rule. */
+  is("the narrow rule hides the drop class", /\.row \.drop[\s\S]{0,40}\.thead \.drop \{ display: none \}/.test(view), true);
+  is("…and the rule is confined to this page by the root class", /\.apps \.row \.drop/.test(view), true);
   // A head label and its column must never disagree about being visible.
   is("the head carries its own drop flag beside the label", /\{ t: "Role", drop: true \}/.test(view), true);
   is("…on both tabs", /\{ t: "Location", drop: true \}/.test(view), true);
