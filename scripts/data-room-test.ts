@@ -24,6 +24,7 @@ import {
   windowLabel, totalHeader, isAdditive, ADDITIVE_METRICS, DISTINCT_METRICS,
   swapAxes, canSwap, tableTitle,
   heatRange, heatStep, heatColour, contrastRatio, luminance, hexToRgb,
+  planBands, factCacheStats, FACT_FETCH_CONCURRENCY,
   HEAT_STEPS, HEAT_INK, HEAT_MIN_ALPHA,
   type Fact, type PivotConfig, type Metric,
 } from "../src/lib/dataRoom";
@@ -292,6 +293,92 @@ console.log("\nkept: the presets, Export, every dimension and every measure");
   else bad("stacked rows are still reachable", "the preset that uses them would break");
   if (/data-testid="dr-chip-row"/.test(panel)) ok("…and they render as chips, not a hidden list");
   else bad("…and they render as chips");
+}
+
+// ── 9. THE PARTITIONED COLD FETCH ────────────────────────────────────────────────────────────
+console.log("\nthe cold fetch: eight bands that cover the id space exactly once");
+{
+  /* THE COLD START WAS 15.4s AND THE CUBE MEMO NEVER TOUCHED IT — that made SWAPPING fast, not
+   * OPENING. Sequential keyset is an index seek per page (~147ms) but SEQUENTIAL BY CONSTRUCTION:
+   * every page needs the previous page's last id, so 151,654 rows is 152 round trips in a row.
+   * Partitioning into 8 bands is the same seek with the waiting overlapped: 16,588ms -> 2,996ms,
+   * verified against a sequential fetch of the LIVE table as identical — same count, same rows,
+   * same sha256 after sort, same id endpoints (14 .. 303745).
+   *
+   * A FASTER FETCH THAT DROPS A PARTITION BOUNDARY IS THE WORST OUTCOME AVAILABLE HERE, and the
+   * live comparison cannot run in the fast set. So the BAND MATHS is pinned here instead: every id
+   * in [min, max] must fall in exactly one band. */
+  is("×8 is what ships, not ×12", FACT_FETCH_CONCURRENCY, 8);
+
+  const coversExactlyOnce = (min: number, max: number, n: number) => {
+    const bands = planBands(min, max, n);
+    for (let id = min; id <= max; id++) {
+      const hits = bands.filter((b) => id > b.after && id <= b.upto).length;
+      if (hits !== 1) return { ok: false, id, hits, bands };
+    }
+    return { ok: true, bands };
+  };
+  for (const [min, max, n] of [
+    [1, 100, 8], [14, 303745 % 977, 8], [0, 7, 8], [1, 8, 8], [1, 9, 8], [5, 5, 8],
+    [1, 1000, 4], [1, 1000, 1], [100, 103, 8], [-5, 5, 8], [1, 33, 7],
+  ] as [number, number, number][]) {
+    const r = coversExactlyOnce(min, max, n);
+    if (r.ok) ok(`[${min}..${max}] over ${n} bands: every id in exactly one band (${r.bands.length} bands)`);
+    else bad(`[${min}..${max}] over ${n} bands`, `id ${r.id} is in ${r.hits} bands — A ROW WOULD BE ${r.hits === 0 ? "DROPPED" : "DUPLICATED"}`);
+  }
+  // THE ENDS ARE THE PART THAT BREAKS. The first band must reach below the minimum (the query is
+  // `> after`), and the last must reach the maximum exactly.
+  for (const [min, max, n] of [[14, 303745, 8], [1, 100, 8], [7, 7000, 3]] as [number, number, number][]) {
+    const b = planBands(min, max, n);
+    is(`[${min}..${max}] first band starts below the minimum`, b[0].after, min - 1);
+    is(`[${min}..${max}] last band ends exactly at the maximum`, b[b.length - 1].upto, max);
+    is(`[${min}..${max}] bands are contiguous`, b.every((x, i) => i === 0 || x.after === b[i - 1].upto), true);
+  }
+  is("an empty range plans nothing rather than a bad band", planBands(5, 4, 8).length, 0);
+  is("a single id still gets a band that contains it", planBands(9, 9, 8).length >= 1 ? planBands(9, 9, 8)[0].upto : -1, 9);
+  is("…whose lower bound is below it", planBands(9, 9, 8)[0].after, 8);
+  is("more bands than ids does not produce empty bands", planBands(1, 3, 8).every((b) => b.upto > b.after), true);
+
+  // ── THE COLD/WARM COUNTER. "What fraction of visits hit a cold instance" was unanswerable —
+  // not hard, unanswerable: a module-level cache with no counter and no log line.
+  const s0 = factCacheStats(false);
+  for (const k of ["cold", "coldBuilds", "warmServes", "bootedAt", "lastBuildMs", "concurrency"])
+    if (k in s0) ok(`the counter reports ${k}`); else bad(`the counter reports ${k}`);
+  is("it reports the concurrency actually in force", s0.concurrency, FACT_FETCH_CONCURRENCY);
+  is("cold is whatever the caller was told, not a guess", factCacheStats(true).cold, true);
+  const route = readFileSync("src/app/api/lifecycle/dataroom/route.ts", "utf8");
+  if (/coldBuilds > buildsBefore/.test(route)) ok("cold is decided by the build counter MOVING across the call");
+  else bad("cold is decided by the counter moving", "a boolean set by hand would drift from the truth");
+  if (/Server-Timing/.test(route) && /facts;dur=/.test(route)) ok("…and rides on Server-Timing, readable without parsing a body");
+  else bad("…rides on Server-Timing");
+  const lib = readFileSync("src/lib/dataRoom.ts", "utf8");
+  if (/\[dataroom\] fact table BUILT/.test(lib))
+    ok("every rebuild logs itself, so a week of traffic answers the question");
+  else bad("every rebuild logs itself");
+
+  /* ── SINGLE FLIGHT, WHICH THE COUNTER IS WHAT FOUND ───────────────────────────────────────
+   * The first browser open after the counter shipped read coldBuilds: 2 — the page fires the pivot
+   * request and another moments later, BOTH landed before the first build finished, and each
+   * fetched all 151,654 rows. One instance paying the cold cost twice, in parallel, on every cold
+   * open, with nothing wrong on screen to show for it. After the fix: coldBuilds 1, joinedBuild 1. */
+  if (/if \(inFlight\) \{ joinedBuild\+\+; return inFlight; \}/.test(lib))
+    ok("a caller arriving mid-build joins it instead of starting a second full fetch");
+  else bad("a caller arriving mid-build joins it", "ONE COLD OPEN WOULD FETCH 151,654 ROWS TWICE");
+  if (/inFlight = buildFacts\(sb, key\)\.finally\(\(\) => \{ inFlight = null; \}\)/.test(lib))
+    ok("…and the in-flight slot is released even if the build throws");
+  else bad("…the in-flight slot is released on failure", "one failed build would wedge the instance forever");
+  is("the counter reports how many joined", "joinedBuild" in s0, true);
+  /* THE STALENESS CHECK MUST SURVIVE THE SINGLE FLIGHT. An earlier version of it returned `cache`
+   * before reading the key at all — faster, and wrong: a warm instance would serve last month's
+   * facts until it was recycled. The key read is the contract. */
+  const gf = lib.slice(lib.indexOf("export async function getFacts"), lib.indexOf("async function buildFacts"));
+  if (/select\("match_month"\)/.test(gf)) ok("getFacts still reads the max month on EVERY call");
+  else bad("getFacts reads the max month on every call", "A NEW MONTH WOULD NEVER INVALIDATE THE CACHE");
+  if (/cache && cache\.key === key/.test(gf)) ok("…and only serves the cache when the key still matches");
+  else bad("…only serves the cache when the key matches");
+  const keyIdx = gf.indexOf("const key ="), cacheIdx = gf.indexOf("warmServes++");
+  if (keyIdx >= 0 && keyIdx < cacheIdx) ok("…reading the key BEFORE any early return, not after");
+  else bad("…reading the key before any early return", "the cache would be returned unchecked");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

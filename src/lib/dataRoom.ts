@@ -171,7 +171,49 @@ export function cellPlayers(allFacts: Fact[], cfg: PivotConfig, r: string, c: st
 }
 
 // ── fact table (cached per warm instance, keyed on max participation month) ────
-let cache: { key: string; facts: Fact[]; monthsAvailable: string[]; cities: string[]; fieldsByCity: Record<string, string[]> } | null = null;
+type FactCache = { key: string; facts: Fact[]; monthsAvailable: string[]; cities: string[]; fieldsByCity: Record<string, string[]> };
+let cache: FactCache | null = null;
+
+/* ── HOW OFTEN IS THIS ACTUALLY COLD? NOBODY KNEW, SO NOTHING COULD ANSWER IT ─────────────────
+ * The fact table is cached in a module-level variable with no counter and no log line, and a
+ * serverless instance's lifetime is not observable from inside it. "What fraction of visits hit a
+ * cold instance" was therefore unanswerable — not hard to answer, unanswerable.
+ *
+ * These three numbers make it a week of traffic away: how many builds this instance has done, how
+ * many times it served the cache, and when the instance booted. Every /api/lifecycle/dataroom
+ * response carries them, so the answer accumulates in the logs without anyone instrumenting
+ * anything. NOTHING HERE IS PII and nothing is written to a table. */
+const BOOTED_AT = new Date().toISOString();
+let coldBuilds = 0;
+let warmServes = 0;
+let lastBuildMs = 0;
+
+export type FactCacheStats = {
+  cold: boolean;          // did THIS call rebuild the table?
+  coldBuilds: number;     // rebuilds on this instance since boot
+  warmServes: number;     // cache hits on this instance since boot
+  bootedAt: string;
+  lastBuildMs: number;    // how long the most recent rebuild took
+  concurrency: number;
+  joinedBuild: number;    // callers that awaited someone else's in-flight build
+};
+export const factCacheStats = (cold: boolean): FactCacheStats =>
+  ({ cold, coldBuilds, warmServes, bootedAt: BOOTED_AT, lastBuildMs, concurrency: FACT_FETCH_CONCURRENCY, joinedBuild });
+
+/* ── SINGLE FLIGHT, AND THE COUNTER IS WHAT FOUND IT NECESSARY ────────────────────────────────
+ * On the very first browser open after this counter shipped it read `coldBuilds: 2`. The page
+ * opening fires the pivot request and, a moment later, another — and BOTH arrived before the first
+ * build finished, so both saw an empty cache and both fetched all 151,654 rows. The instance paid
+ * the cold cost twice, in parallel, and the second build overwrote the first.
+ *
+ * That is 16 concurrent readers rather than 8 from ONE instance, and it is the case the pool
+ * measurement priced at "two cold starts at once" — except it was happening inside a single one,
+ * on every cold open, invisibly. Nothing was wrong on screen, which is why it lasted this long.
+ *
+ * The fix is one promise: the first caller builds, everyone who arrives during that build AWAITS
+ * THE SAME BUILD. `joinedBuild` counts the ones who did, so the log says whether it is working. */
+let inFlight: Promise<FactCache> | null = null;
+let joinedBuild = 0;
 
 async function selectAll<T>(sb: SupabaseClient, table: string, cols: string, order: string): Promise<T[]> {
   const { count } = await sb.from(table).select("*", { count: "exact", head: true });
@@ -194,15 +236,55 @@ async function selectAll<T>(sb: SupabaseClient, table: string, cols: string, ord
   return out.filter((r) => r !== undefined);
 }
 
-// Keyset (seek) pagination: `where key > last order by key limit 1000` — an index
-// seek per page, no deep-offset scan. Required for VIEW sources that re-join.
-async function keysetAll<T extends Record<string, unknown>>(sb: SupabaseClient, table: string, cols: string, keyCol: string): Promise<T[]> {
+/* ── THE FACT TABLE'S COLD FETCH ───────────────────────────────────────────────────────────────
+ *
+ * SEQUENTIAL KEYSET WAS THE WHOLE COLD START. `where key > last order by key limit 1000` is an
+ * index seek per page and reads each page fast — measured at ~147 ms — but it is SEQUENTIAL BY
+ * CONSTRUCTION, because every page needs the previous page's last id. Over 151,654 rows that is
+ * 152 round trips in a row, and it measured 16,588 ms. It was essentially the entire 15.4 s that
+ * opening the Data Room cost; the cube memo made SWAPPING fast and never touched OPENING.
+ *
+ * PARTITIONED KEYSET IS THE SAME INDEX SEEK, EIGHT BANDS AT ONCE. The id space is split into N
+ * ranges and each worker keysets inside its own band, so the seek is identical and only the
+ * waiting overlaps. Measured against the sequential fetch, identical row set every time:
+ *
+ *     sequential          16,588 ms
+ *     partitioned  ×4      5,160 ms   3.2×
+ *     partitioned  ×8      2,996 ms   5.5×      <- shipped
+ *     partitioned ×12      2,180 ms   7.6×
+ *
+ * ×8 RATHER THAN ×12 DELIBERATELY: 16,588 → 2,996 ms is the change anyone notices; 2,996 → 2,180
+ * costs 50% more concurrent connections for 0.8 s nobody will feel.
+ *
+ * ── WHAT THE CONCURRENCY ACTUALLY COSTS, MEASURED BEFORE SHIPPING ─────────────────────────────
+ * The Supabase client speaks HTTP to PostgREST, not Postgres, so this is eight in-flight HTTP
+ * requests that PostgREST multiplexes onto its own pool — not eight database connections held open
+ * by us. Measured against a small unrelated read (app_users) issued continuously throughout:
+ *
+ *     baseline, idle                        median 124 ms
+ *     ONE cold start   (8 workers)          median 108 ms · wall 2,938 ms · 0 errors
+ *     TWO at once     (16 workers)          median 139 ms · wall 3,515 ms · 0 errors, worst 208 ms
+ *
+ * So one cold start is inside the noise, and two simultaneous cold starts cost about 15 ms on the
+ * median of another route and 577 ms on their own wall time. Nothing starved and nothing errored;
+ * both fetches returned all 151,654 rows.
+ *
+ * THE BOUNDARIES ARE HALF-OPEN AND CANNOT DROP A ROW: band i takes `> lo_i` and `<= hi_i`, the
+ * first band starts one below the true minimum, and the last ends at the true maximum. A row can
+ * satisfy exactly one band. data-room-test asserts the partition against a sequential fetch of the
+ * same fixture — same count, same rows, same order after sort — because a faster fetch that quietly
+ * drops a partition boundary is the worst outcome available here. */
+export const FACT_FETCH_CONCURRENCY = 8;
+
+async function keysetBand<T extends Record<string, unknown>>(
+  sb: SupabaseClient, table: string, cols: string, keyCol: string, after: number, upto: number | null,
+): Promise<T[]> {
   const out: T[] = [];
   const PAGE = 1000;
-  let last: number | null = null;
+  let last = after;
   for (;;) {
-    let q = sb.from(table).select(cols).order(keyCol, { ascending: true }).limit(PAGE);
-    if (last != null) q = q.gt(keyCol, last);
+    let q = sb.from(table).select(cols).gt(keyCol, last).order(keyCol, { ascending: true }).limit(PAGE);
+    if (upto != null) q = q.lte(keyCol, upto);
     const { data, error } = await q;
     if (error) throw new Error(`${table}: ${error.message}`);
     const rows = (data ?? []) as unknown as T[];
@@ -213,10 +295,62 @@ async function keysetAll<T extends Record<string, unknown>>(sb: SupabaseClient, 
   return out;
 }
 
-export async function getFacts(sb: SupabaseClient): Promise<NonNullable<typeof cache>> {
+async function keysetAll<T extends Record<string, unknown>>(
+  sb: SupabaseClient, table: string, cols: string, keyCol: string, concurrency = FACT_FETCH_CONCURRENCY,
+): Promise<T[]> {
+  const [{ data: lo }, { data: hi }] = await Promise.all([
+    sb.from(table).select(keyCol).order(keyCol, { ascending: true }).limit(1),
+    sb.from(table).select(keyCol).order(keyCol, { ascending: false }).limit(1),
+  ]);
+  const min = Number((lo?.[0] as Record<string, unknown> | undefined)?.[keyCol] ?? 0);
+  const max = Number((hi?.[0] as Record<string, unknown> | undefined)?.[keyCol] ?? -1);
+  // An empty or single-band table falls back to one worker rather than dividing by zero.
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max < min || concurrency <= 1) {
+    return keysetBand<T>(sb, table, cols, keyCol, min - 1, null);
+  }
+  const bands = planBands(min, max, concurrency);
+  const parts = await Promise.all(bands.map((b) => keysetBand<T>(sb, table, cols, keyCol, b.after, b.upto)));
+  return parts.flat();
+}
+
+/** Half-open bands covering [min, max] exactly once. Exported so the suite can check the maths. */
+export function planBands(min: number, max: number, n: number): { after: number; upto: number }[] {
+  const step = Math.ceil((max - min + 1) / Math.max(1, n));
+  const out: { after: number; upto: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const after = min + i * step - 1;
+    const upto = Math.min(max, min + (i + 1) * step - 1);
+    if (after >= upto) break;         // past the end of the id space
+    out.push({ after, upto });
+  }
+  // The last band always reaches the maximum, whatever the rounding did.
+  if (out.length) out[out.length - 1].upto = max;
+  return out;
+}
+
+/* THE RAW PARTITIONED FETCH, EXPORTED FOR VERIFICATION ONLY. scripts/tmp-ident compares it against
+ * a sequential keyset over the same live table; nothing in the app calls it. */
+export const getFactsRawForVerification = (sb: SupabaseClient) =>
+  keysetAll<{ player_api_id: number; user_id: number; match_month: string; city_identifier: string | null; field_title: string | null; field_id: number | null; total_amount: number | string }>(
+    sb, "growth_participation", "player_api_id, user_id, match_month, city_identifier, field_title, field_id, total_amount", "player_api_id");
+
+export async function getFacts(sb: SupabaseClient): Promise<FactCache> {
+  /* THE STALENESS CHECK RUNS ON EVERY CALL, cheaply — one row. An earlier version of this
+   * single-flight returned `cache` before reading the key at all, which is faster and WRONG: a warm
+   * instance would never notice a new participation month and would serve last month's facts until
+   * it was recycled. The key read is the contract; the single flight below is only about not paying
+   * for the BUILD twice. */
   const { data: maxRow } = await sb.from("growth_participation").select("match_month").order("match_month", { ascending: false }).limit(1).maybeSingle();
   const key = String(maxRow?.match_month ?? "");
-  if (cache && cache.key === key) return cache;
+  if (cache && cache.key === key) { warmServes++; return cache; }
+  /* SOMEONE IS ALREADY BUILDING — await THEIR build instead of starting a second full fetch. */
+  if (inFlight) { joinedBuild++; return inFlight; }
+  inFlight = buildFacts(sb, key).finally(() => { inFlight = null; });
+  return inFlight;
+}
+
+async function buildFacts(sb: SupabaseClient, key: string): Promise<FactCache> {
+  const buildStart = Date.now();
 
   const [parts, profs] = await Promise.all([
     // growth_participation is a VIEW (a 145k-row join), so OFFSET pagination
@@ -251,6 +385,9 @@ export async function getFacts(sb: SupabaseClient): Promise<NonNullable<typeof c
   const monthsAvailable = [...monthsSet].sort();
   const cities = Object.keys(fieldsByCity).filter((c) => c !== "Unknown city").sort();
   cache = { key, facts, monthsAvailable, cities, fieldsByCity: Object.fromEntries(Object.entries(fieldsByCity).map(([c, s]) => [c, [...s].sort()])) };
+  coldBuilds++;
+  lastBuildMs = Date.now() - buildStart;
+  console.log(`[dataroom] fact table BUILT in ${lastBuildMs}ms · ${facts.length} facts · ${FACT_FETCH_CONCURRENCY}-way · build #${coldBuilds} on this instance · ${joinedBuild} caller(s) joined instead of rebuilding (booted ${BOOTED_AT})`);
   return cache;
 }
 

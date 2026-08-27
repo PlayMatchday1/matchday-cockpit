@@ -6,7 +6,7 @@
 //   "cellCsv" { config, r, c }      → the cell's players as CSV
 // Gated on can_access_lifecycle. Reads only; the fact table is derived from the views.
 import { authenticateLifecycle } from "@/lib/lifecycleAuth";
-import { getFacts, pivotCached, cellPlayers, measure, totalHeader, type PivotConfig } from "@/lib/dataRoom";
+import { getFacts, pivotCached, cellPlayers, measure, totalHeader, factCacheStats, type PivotConfig } from "@/lib/dataRoom";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -23,7 +23,14 @@ export async function POST(req: Request) {
   if (!cfg || !Array.isArray(cfg.rows) || !cfg.rows.length) return Response.json({ error: "config.rows required" }, { status: 400 });
 
   try {
+    /* COLD OR WARM, ON EVERY RESPONSE. `getFacts` caches per warm instance; whether a given visit
+     * paid for a rebuild was invisible, which is why "what fraction of visits hit a cold instance"
+     * had no answer. `wasCold` is decided by whether the build counter moved across this call. */
+    const buildsBefore = factCacheStats(false).coldBuilds;
+    const factT0 = Date.now();
     const F = await getFacts(auth.supabase);
+    const factMs = Date.now() - factT0;
+    const stats = factCacheStats(factCacheStats(false).coldBuilds > buildsBefore);
 
     /* CLAMP THE WINDOW TO THE MONTHS THAT EXIST, BEFORE ANYTHING READS IT.
      *
@@ -98,8 +105,17 @@ export async function POST(req: Request) {
          * Players a "total" is not the sum of the cells and must not be labelled as one. */
         totalCol: totalHeader(cfg.filters.from, cfg.filters.to, cfg.vals[0]?.metric ?? "Players"),
         cached: hit,
+        // THE COUNTER, ON THE WIRE. A week of logs answers the cold-hit fraction exactly.
+        facts: { ...stats, factMs },
         meta: { monthsAvailable: F.monthsAvailable, cities: F.cities, fieldsByCity: F.fieldsByCity } },
-      { status: 200, headers: { "Cache-Control": "private, max-age=30" } },
+      {
+        status: 200,
+        headers: {
+          "Cache-Control": "private, max-age=30",
+          // Readable in the network panel and in Vercel's logs without parsing a body.
+          "Server-Timing": `facts;dur=${factMs};desc="${stats.cold ? "cold" : "warm"}", cube;desc="${hit ? "cached" : "built"}"`,
+        },
+      },
     );
   } catch (e) {
     console.error("[api/lifecycle/dataroom] failed", e);

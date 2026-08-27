@@ -4014,3 +4014,74 @@ rows** are removed before any figure is computed. Source is the live `mdapi_*` m
 The coverage marks inside the funnel table — "Android only", "Android only before Aug 2025" — are
 **data labels, not explanation**: they qualify one row's number and travel with it. They stay on the
 row. Moving them would leave a number stating more than it can support.
+
+---
+
+## The Data Room's cold fact table (2026-08-27)
+
+**`getFacts` builds a 151,654-row fact table from `growth_participation`, cached per warm instance.
+Building it cost 15.4 s and that was the whole of "the Data Room is slow" — the cube memo made
+*swapping* fast and never touched *opening*.**
+
+### Where the time went
+
+Sequential keyset (`where key > last order by key limit 1000`) is an index seek per page — about
+147 ms — but **sequential by construction**: every page needs the previous page's last id, so
+151,654 rows is 152 round trips in a row. `growth_player_profile` (14,753 rows, already 8-way
+parallel) was ~0.3 s and irrelevant.
+
+### Partitioned keyset — the same seek, eight bands at once
+
+| | | |
+|---|---|---|
+| sequential | **16,588 ms** | |
+| partitioned ×4 | 5,160 ms | 3.2× |
+| **partitioned ×8** | **2,996 ms** | **5.5× — shipped** |
+| partitioned ×12 | 2,180 ms | 7.6× |
+
+×8 over ×12 deliberately: 16,588 → 2,996 is the change anyone notices; 2,996 → 2,180 costs 50% more
+concurrent connections for 0.8 s nobody will feel.
+
+**Row-set identity verified against a sequential fetch of the live table** — 151,654 vs 151,654,
+zero missing, zero extra, **identical sha256 over every row after sort**
+(`0c8cfe8b…3a852d`), same id endpoints (14 … 303745).
+
+### What the concurrency costs — measured, not assumed
+
+The Supabase client speaks **HTTP to PostgREST**, not Postgres, so this is eight in-flight HTTP
+requests that PostgREST multiplexes onto its own pool — *not* eight database connections we hold.
+Measured against a small unrelated read (`app_users`) issued continuously throughout:
+
+```
+baseline, idle                    median 124 ms
+ONE cold start   (8 workers)      median 108 ms · wall 2,938 ms · 0 errors
+TWO at once     (16 workers)      median 139 ms · wall 3,515 ms · 0 errors, worst 208 ms
+```
+
+**One cold start is inside the noise. Two simultaneous cold starts cost ~15 ms on another route's
+median and 577 ms on their own wall time. Nothing starved, nothing errored, both returned all
+151,654 rows.**
+
+### The counter, and the bug it found on its first run
+
+`getFacts` had no counter and no log line, so *"what fraction of visits hit a cold instance"* was
+**unanswerable** rather than merely unknown. Every `/api/lifecycle/dataroom` response now carries
+`facts: { cold, coldBuilds, warmServes, joinedBuild, bootedAt, lastBuildMs, concurrency, factMs }`
+and a `Server-Timing: facts;dur=…;desc="cold|warm"` header, and every rebuild logs itself.
+
+**On its very first browser open it read `coldBuilds: 2`.** The page fires the pivot request and
+another moments later; both arrived before the first build finished, both saw an empty cache, and
+**both fetched all 151,654 rows** — one instance paying the cold cost twice, in parallel, on every
+cold open, with nothing visibly wrong. Fixed with a single-flight promise: the first caller builds,
+later arrivals await the same build. Now `coldBuilds: 1, joinedBuild: 1`.
+
+**The staleness key is still read on every call.** A first version of the single flight returned the
+cache before reading `max(match_month)` — faster, and wrong: a warm instance would serve last
+month's facts until it was recycled.
+
+### Measured end to end in a browser
+
+First open, cold instance: **13.6 s → 10.2 s**; fact build **3,299 ms**; a later request on the same
+instance **384 ms warm**. Rejected: a warming cron (warms one instance; Vercel routes elsewhere) and
+narrowing the fact table (only 39% of rows are this year, and the default view spans Apr 2023 –
+Sep 2026, so narrowing the table narrows the page).
