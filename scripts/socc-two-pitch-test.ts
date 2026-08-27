@@ -128,5 +128,31 @@ console.log("\none line for Soccer Central");
   is("nothing rewrites venue 11's rate", /venue_name: "Soccer Central"[\s\S]{0,80}per_match_rate/.test(code), false);
 }
 
+// ── 7. THE TWO SURFACES AGREE ON THE COUNT, AND ONLY ON THE COUNT ────────────────────────────
+console.log("\nmatch-count parity: Slate Review and Field Cost");
+{
+  const fc = readFileSync("src/components/FieldCostsView.tsx", "utf8");
+  const code = fc.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\{\/\*[\s\S]*?\*\/\}/g, " ").replace(/^\s*\/\/.*$/gm, " ");
+  /* THE DISPLAYED COUNT DOUBLES; THE COST DOES NOT. Field Cost showed 1 for a match Slate Review
+   * showed as 2, so the two pages disagreed about how many matches Soccer Central ran. The slot
+   * count is computed IN THE VIEW, where nothing computes a cost — financeCosts must never see the
+   * rule, because a charged unit count of 2 against a rate of $180 bills $360. */
+  is("the displayed count adds the two-pitch extras", /row\.matchCount \+ slotExtra\.extra/.test(code), true);
+  is("…and the split is beside it", /data-testid="fc-two-pitch"/.test(fc), true);
+  is("the slot count is computed in the view, not in financeCosts", /const slotCountByVenue = useMemo/.test(code), true);
+  is("…from the schedule's own capacity", /isSoccerCentralTwoPitch\(s\.mdapi_field_id, s\.max_spots\)/.test(code), true);
+  /* THE COST CELL AND THE FORMULA MUST NOT SEE IT. Soccer Central is a combined group, so its
+   * formula renders autoFormula, which financeCosts builds per leg from each leg's charged count. */
+  is("no cost expression reads slotExtra", /amount[\s\S]{0,40}slotExtra|slotExtra[\s\S]{0,40}\* *rate/.test(code), false);
+  is("the amount still comes from the row", /row\.amount/.test(code), true);
+  const fcosts = readFileSync("src/lib/financeCosts.ts", "utf8");
+  is("financeCosts still knows nothing about it", /slotExtra|slotCount|isSoccerCentralTwoPitch/.test(fcosts), false);
+  is("…and its per-leg formula is untouched", /parts\.push\(`\$\{info\.matchCount\} \$\{label\} × \$\$\{group\.legs\[i\]\.per_match_rate \?\? 0\}`\)/.test(fcosts), true);
+  // POSITIVE CONTROL: the pattern does fire where the rule IS imported.
+  is("control — the pattern finds the import in the view", /isSoccerCentralTwoPitch/.test(fc), true);
+  // Cancelled matches are counted exactly where they are charged, never more widely.
+  is("a cancelled match counts only when the venue charges for it", /v\?\.charge_on_cancel\) add\(s\)/.test(code), true);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

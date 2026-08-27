@@ -25,6 +25,7 @@ import {
   totalOverrideAmountFor,
   type FieldCostRow,
 } from "@/lib/financeCosts";
+import { isSoccerCentralTwoPitch } from "@/lib/soccerCentralTwoPitch";
 import { useFinanceQuarter } from "@/lib/financeQuarter";
 // THE SINGLE BILLING-DATE DERIVATION — the same call OpEx makes. See its note in opexSources.ts.
 import { resolveBillingDates } from "@/lib/opexSources";
@@ -500,6 +501,45 @@ export default function FieldCostsView() {
     return buildFieldCostRows(data, month);
   }, [data, month]);
 
+  /* ── SLOT COUNT: THE DISPLAYED MATCH COUNT, AND NOTHING ELSE ─────────────────────────────────
+   * Slate Review counts a Soccer Central two-pitch match as 2 — it occupies both 9v9 pitches, so
+   * it is two of the slots that page's whole premise is built on. This page showed 1 for the same
+   * match, so the two disagreed about how many matches Soccer Central ran.
+   *
+   * IT IS COMPUTED HERE, IN THE VIEW, ON PURPOSE. financeCosts must never see the two-pitch rule:
+   * cost is rate × charged units, the rate already carries the doubling ($180 on fin_venues 53),
+   * and a charged unit count of 2 would bill $360. socc-two-pitch-test asserts that file does not
+   * import it, and this keeps that true — nothing below computes a cost.
+   *
+   * THE COST FORMULA IS UNAFFECTED. Soccer Central is a combined group (legs 11 + 53), so its
+   * formula line renders `autoFormula`, which financeCosts builds per leg from each leg's own
+   * charged count. The number this map produces is read by ONE cell. */
+  const slotCountByVenue = useMemo(() => {
+    const m = new Map<number, { extra: number; twoPitch: number }>();
+    if (!data) return m;
+    const add = (s: { venue_id: number | null; mdapi_field_id: number | null; max_spots: number; month: string }) => {
+      if (s.month !== month || s.venue_id == null) return;
+      if (!isSoccerCentralTwoPitch(s.mdapi_field_id, s.max_spots)) return;
+      const e = m.get(s.venue_id) ?? { extra: 0, twoPitch: 0 };
+      e.extra += 1; e.twoPitch += 1;      // one EXTRA unit each: 1 charged, 2 counted
+      m.set(s.venue_id, e);
+    };
+    for (const s of data.masterSchedule) add(s);
+    for (const s of data.cancelledSchedule) {
+      const v = data.venues.find((x) => x.id === s.venue_id);
+      if (v?.charge_on_cancel) add(s);    // counted exactly where it is charged
+    }
+    return m;
+  }, [data, month]);
+
+  /* Both legs of a combined group land on the same displayed row, so the extras are summed across
+   * every leg the row covers rather than looked up on the primary alone. */
+  const slotExtraFor = (row: FieldCostRow): { extra: number; twoPitch: number } =>
+    (row.legs ?? []).reduce((acc, l) => {
+      const e = slotCountByVenue.get(l.venueId);
+      return e ? { extra: acc.extra + e.extra, twoPitch: acc.twoPitch + e.twoPitch } : acc;
+    }, { extra: 0, twoPitch: 0 });
+
   const cityOptions = useMemo(() => {
     const set = new Set<string>();
     for (const r of allRows) set.add(r.city);
@@ -821,6 +861,7 @@ export default function FieldCostsView() {
                     <FieldCostTableRow
                       key={row.key}
                       row={row}
+                      slotExtra={slotExtraFor(row)}
                       expanded={expanded}
                       expandable={expandable}
                       onToggleExpand={() =>
@@ -955,6 +996,9 @@ export default function FieldCostsView() {
 
 function FieldCostTableRow({
   row,
+  // Display-only: how many of this row's matches took both pitches, and the extra units they add
+  // to the COUNT. Never reaches a cost expression — see slotCountByVenue.
+  slotExtra,
   expanded,
   expandable,
   onToggleExpand,
@@ -978,6 +1022,7 @@ function FieldCostTableRow({
   highlight,
 }: {
   row: FieldCostRow;
+  slotExtra: { extra: number; twoPitch: number };
   expanded: boolean;
   expandable: boolean;
   onToggleExpand: () => void;
@@ -1138,7 +1183,17 @@ function FieldCostTableRow({
               </span>
             </span>
           ) : (
-            <span data-testid="fc-matches">{row.matchCount}</span>
+            /* THE COUNT, WITH TWO-PITCH MATCHES COUNTED TWICE — display only. The cost cell beside
+               it is untouched: 1 × $180, never 2 × $180. */
+            <span data-testid="fc-matches">
+              {row.matchCount + slotExtra.extra}
+              {slotExtra.twoPitch > 0 && (
+                <span className="ml-1 text-[11px] font-bold text-deep-green/45" data-testid="fc-two-pitch"
+                  title={`${slotExtra.twoPitch} match${slotExtra.twoPitch === 1 ? "" : "es"} occupied both 9v9 pitches and counts as two. Cost is unaffected — each is billed once, at the two-pitch rate.`}>
+                  · {row.matchCount - slotExtra.twoPitch}+{slotExtra.twoPitch}×2
+                </span>
+              )}
+            </span>
           )}
         </td>
 

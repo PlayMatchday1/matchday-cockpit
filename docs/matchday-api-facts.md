@@ -4340,6 +4340,32 @@ those that survived the event drop; 366 of the 405 were being discarded as event
 
 Nothing was backfilled and no expense row was written.
 
+**CORRECTED 2026-08-27 (ran-only).** 405 counted rows dated to 2026-09-06, which is in the future.
+**389 have already been played — $70,020 understated.** The other **16 are future-dated and already
+on the books** (2026-08-27 → 2026-09-06), worth **$2,880** still to come.
+
+**The first affected month is 2025-04, not 2025-09.** Earliest two-pitch match: **id 5691,
+2025-04-21, field 102, capacity 40.** The earlier "every month from 2025-09" described where the
+volume becomes material, not where it starts — 2025-04 through 2025-08 carry 3, 1, 5, 3, 1.
+
+**BOTH SIDES, not just cost.** The event-dropped two-pitch matches were losing revenue as well:
+**350 played matches, $78,288 revenue against $63,000 cost — net +$15,288.** Restating them makes
+Soccer Central *better*, not worse. Monthly net runs −$54 (2025-06) to +$3,768 (2026-07); it turns
+positive from 2025-08 and stays there.
+
+**MATCH-COUNT PARITY.** Two surfaces display a Soccer Central match count and they now agree on the
+rule: Slate Review (`fp-matches`) and Field Costs (`fc-matches`). `cityPnl.matchCount` is computed
+but never rendered — there is no third surface. Field Costs' August row reads **115 · 19+48×2**
+while its derived cost is unchanged at **$10,350 = 19 × $90 + 48 × $180**, which is the separation
+holding: the count doubled, the charged units did not. The slot count is computed **in the view**,
+where nothing computes a cost, so `financeCosts` still knows nothing about the rule.
+
+**CAPACITY ZERO IS NOT AN UNDERCHARGE.** 24 matches on 102/199/1354 carry capacity 0 — all on two
+dates (**2025-04-12 ×15, 2026-05-16 ×9**), all on field 102, and **every one sold ZERO spots**
+(`player_count` 0 too). None seated more than the 22-spot one-pitch maximum, so **none is a
+disguised two-pitch match**: $0 undercharged. They look like scheduling artefacts rather than
+matches. Nothing reclassified.
+
 ### fin_venues has no audit trail
 
 There is no `updated_at` on the table and no `change_log` entry for the original deactivation — **a
