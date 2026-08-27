@@ -55,6 +55,9 @@ type FieldAgg = {
   // per-match (cents)
   dppPM: number; memberPM: number; promoPM: number; revPM: number; costPM: number | null; netPM: number | null;
   unmappedNames: string[];
+  /* THE SPLIT, SHOWN NOT BURIED. A merged Soccer Central line has to say which of its matches took
+   * both pitches, or a reader cannot tell a $90 night from a $180 one. */
+  onePitchMatches: number; twoPitchMatches: number; twoPitchCost: number;
 };
 
 // Three shares that sum to exactly 100.0 (1dp): round each, push drift onto the
@@ -104,14 +107,38 @@ export default function SlateFieldPnL({ city }: { city: string }) {
       if (r.venueId == null || !v || v.is_active === false) bucket = "unmapped";
       else if (v.billing_type === "per_match") bucket = "flat";
       else { bucket = "share"; costLabel = v.billing_type === "profit_share" ? "profit share" : "monthly flat"; }
-      const key = bucket === "unmapped" ? `unmapped:${r.venueId ?? r.venueRawName}` : `v:${r.venueId}`;
+      /* ── SOCCER CENTRAL IS ONE LINE. This venue only. ─────────────────────────────────────────
+       * Soccer Central runs on two 9v9 pitches side by side, and a tournament-size match occupies
+       * both. fin_venues carries that as a second row — 11 "Soccer Central" at $90 and 53 "Soccer
+       * Central Tournament" at $180 — which is the right DATA MODEL and the wrong thing to show:
+       * one pitch reading as two fields, one of which looks twice as expensive.
+       *
+       * SO THE MERGE IS HERE, AT THE PRESENTATION LAYER, AND NOWHERE ELSE. Venue 53 stays a real
+       * row carrying the real rate; nothing is folded into venue 11 and no rate is rewritten. The
+       * split is shown on the line rather than buried.
+       *
+       * NOT A GENERIC GROUPING RULE, deliberately. Finance already has one — COMBINE_BY_NAME in
+       * venueGroups.ts, which pairs exactly these two — and this is the same special case for the
+       * one panel that groups by venueId instead of by group. Two venues, named, and that is all. */
+      const SOCC_BASE = 11, SOCC_TOURNEY = 53;
+      const isSocc = r.venueId === SOCC_BASE || r.venueId === SOCC_TOURNEY;
+      const key = bucket === "unmapped" ? `unmapped:${r.venueId ?? r.venueRawName}`
+        : isSocc ? `v:${SOCC_BASE}` : `v:${r.venueId}`;
       let g = groups.get(key);
       if (!g) {
-        g = { key, label: fieldCode(canonicalVenueName(v?.venue_name ?? r.venueRawName)), fullName: v?.venue_name ?? r.venueRawName,
-          bucket, costLabel, matches: 0, dpp: 0, member: 0, promo: 0, promoSpots: 0, cost: bucket === "flat" ? 0 : null, unmappedNames: [] };
+        // The merged line is named for the BASE venue, never "Soccer Central Tournament".
+        const nm = isSocc ? (venueById.get(SOCC_BASE)?.venue_name ?? "Soccer Central") : (v?.venue_name ?? r.venueRawName);
+        g = { key, label: fieldCode(canonicalVenueName(nm)), fullName: nm,
+          bucket, costLabel, matches: 0, dpp: 0, member: 0, promo: 0, promoSpots: 0, cost: bucket === "flat" ? 0 : null, unmappedNames: [],
+          onePitchMatches: 0, twoPitchMatches: 0, twoPitchCost: 0 };
         groups.set(key, g);
       }
-      g.matches += 1;
+      /* TWO PITCHES IS TWO MATCHES — counts and denominators only. The COST doubling is already in
+       * the rate ($180 on venue 53) and the charged unit count stays 1; doubling both would bill
+       * $360. So this line adds units, and the cost line below adds r.fieldCost unchanged. */
+      g.matches += r.matchUnits;
+      if (r.matchUnits > 1) { g.twoPitchMatches += 1; g.twoPitchCost += r.fieldCost ?? 0; }
+      else { g.onePitchMatches += 1; }
       g.dpp += r.grossRevenue;
       g.member += r.allocatedMemberRev;
       g.promo += r.promoRevenue;
@@ -227,7 +254,16 @@ function FieldRows({ g, rank, open, onToggle }: { g: FieldAgg; rank?: number; op
           <span className="ml-2 text-[11.5px] font-semibold" style={{ color: C.muted }}>{g.fullName}</span>
           {g.bucket === "flat" && <span className="ml-2 text-[10px]" style={{ color: C.muted }}>{open ? "▾" : "▸"}</span>}
         </td>
-        <td style={{ ...td, color: C.nsInk, fontWeight: 600 }}>{g.matches}</td>
+        {/* A two-pitch match counts as the two slots it took, and the cell says so rather than
+            leaving a reader to wonder why the total exceeds the nights played. */}
+        <td style={{ ...td, color: C.nsInk, fontWeight: 600 }} data-testid="fp-matches">
+          {g.matches}
+          {g.twoPitchMatches > 0 && (
+            <span style={{ color: C.muted, fontWeight: 500, fontSize: 11 }} title={`${g.twoPitchMatches} match${g.twoPitchMatches === 1 ? "" : "es"} occupied both 9v9 pitches and counts as two`}>
+              {" "}({g.onePitchMatches}+{g.twoPitchMatches}×2)
+            </span>
+          )}
+        </td>
         <td style={td}>{money(g.revPM)}</td>
         <td style={td}>{costCell}</td>
         <td style={{ ...td, paddingRight: 10 }}>{netCell}</td>
@@ -283,6 +319,9 @@ function Drill({ g }: { g: FieldAgg }) {
       </div>
       <p className="m-0 mt-2.5 text-[12px] tabular-nums" style={{ color: C.muted }}>
         Window totals: {g.matches} ran matches · {money(g.revenue)} gross · {money(g.cost ?? 0)} field cost · {money(g.revenue - (g.cost ?? 0))} net
+        {g.twoPitchMatches > 0 && (
+          <> · <b data-testid="fp-split">{g.onePitchMatches} on one pitch, {g.twoPitchMatches} on both</b> ({money(g.twoPitchCost)} of the cost is two-pitch)</>
+        )}
       </p>
     </div>
   );

@@ -164,6 +164,12 @@ const NODE_SUITES = [
   // Also pins that SectionFrame's opt-out DEFAULTS to the old behaviour, so freeing one section
   // cannot silently free the five that genuinely read g.data.
   "scripts/shared-badge-fetch-test.ts",
+  // SOCCER CENTRAL'S TWO PITCHES. In the fast set because it guards a MONEY separation: the
+  // doubling lives in the RATE ($180 on fin_venues 53), the charged unit count stays 1, and the
+  // match count is 2 for denominators only. Double the rate and the units and a tournament bills
+  // $360. The suite asserts no cost path can see matchUnits, and that the capacity constant is
+  // behaviourally identical to the `> 22` it replaced across the whole integer range.
+  "scripts/socc-two-pitch-test.ts",
 ];
 const ALL_E2E = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
 // --e2e runs EVERY browser suite. Nothing is excluded, because nothing is mandatory.

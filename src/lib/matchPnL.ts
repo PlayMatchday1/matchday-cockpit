@@ -42,6 +42,7 @@ import {
 } from "./mdapiMatchesRead";
 import { buildFieldIdToVenueIdMap, resolveVenueForMatch } from "./venueNormalization";
 import { venueCategory } from "./venueResolver";
+import { isTwoPitchCapacity, survivesEventDrop, matchUnits } from "./soccerCentralTwoPitch";
 import { selectAll } from "./supabasePagination";
 
 // Allow-list of real-attendee payment types. Spots Booked counts every
@@ -132,6 +133,14 @@ export type MatchPnLRow = {
   // The Field P&L per-match view excludes these so a tournament can't dilute a
   // pitch's per-match average.
   isEvent: boolean;
+  /* HOW MANY MATCHES THIS ROW IS, for COUNTS AND DENOMINATORS ONLY — 2 for a Soccer Central
+   * two-pitch match, 1 for everything else. It occupies both 9v9 pitches, so Slate Review's
+   * premise ("one match at each field, so a field that ran many compares with one that ran few")
+   * is only honest if it counts as the two slots it took.
+   *
+   * IT IS NEVER A COST MULTIPLIER. The doubling is already in the RATE ($180 on fin_venues 53) and
+   * the charged unit count stays 1; multiplying both would bill $360. */
+  matchUnits: number;
 };
 
 export type MatchPnLSummary = {
@@ -323,7 +332,12 @@ export async function fetchWeekMatchPnL(
       k,
       m.max_player_count == null ? null : Number(m.max_player_count),
     );
-    matchIsEvent.set(k, venueCategory(m.field_title) === "event");
+    /* THE EVENT DROP, NARROWED. venueCategory drops 1,749 of 7,671 ran matches network-wide and
+     * stays exactly as it was for all of them — except a Soccer Central match that occupies both
+     * pitches, which is a regular match by Ryan's ruling and has been discarded here since this
+     * guard was written. Field 1123 is not in SOCC_TWO_PITCH_FIELD_IDS, so it keeps being dropped. */
+    const isEventByCategory = venueCategory(m.field_title) === "event";
+    matchIsEvent.set(k, isEventByCategory && !survivesEventDrop(m.field_id, m.max_player_count));
   }
 
   // Look up + re-resolve a registration's venue against the Soccer
@@ -350,7 +364,8 @@ export async function fetchWeekMatchPnL(
     const lookupKey = `${fieldId}|${matchStartIso.slice(0, 16)}`;
     const maxPlayerCount = matchMaxPlayer.get(lookupKey) ?? null;
     if (maxPlayerCount == null || maxPlayerCount <= 0) return null;
-    const isTournament = maxPlayerCount > 22;
+    // THE BOUNDARY IS A NAMED CONSTANT NOW — behaviourally identical to the `> 22` that shipped.
+    const isTournament = isTwoPitchCapacity(maxPlayerCount);
     const targetName = isTournament
       ? "Soccer Central Tournament"
       : "Soccer Central";
@@ -381,6 +396,9 @@ export async function fetchWeekMatchPnL(
   type Bucket = {
     matchStartIso: string;
     matchStart: Date;
+    // Carried so the two-pitch rule can be applied at row time without re-deriving the key.
+    fieldId: number | null;
+    maxPlayerCount: number | null;
     venueId: number | null;
     venueRawName: string;
     venueDisplayName: string;
@@ -438,6 +456,8 @@ export async function fetchWeekMatchPnL(
       b = {
         matchStartIso: r.match_start,
         matchStart,
+        fieldId: r.field_id ?? null,
+        maxPlayerCount: matchMaxPlayer.get(`${r.field_id}|${r.match_start.slice(0, 16)}`) ?? null,
         venueId,
         venueRawName: venue?.raw_venue_name ?? (r.field as string),
         venueDisplayName: venue?.venue_name ?? (r.field as string),
@@ -547,6 +567,7 @@ export async function fetchWeekMatchPnL(
       net,
       status: statusFor(net),
       isTournament: b.isTournament,
+      matchUnits: matchUnits(b.fieldId ?? null, b.maxPlayerCount ?? null),
       isEvent: b.isEvent,
     });
   }
@@ -611,6 +632,7 @@ export async function fetchWeekMatchPnL(
       fieldCost: cost,
       net: cost === null ? null : -cost,
       status: "canceled",
+      matchUnits: matchUnits(r.field_id ?? null, matchMaxPlayer.get(`${r.field_id}|${r.match_start.slice(0, 16)}`) ?? null),
       isTournament,
       isEvent,
     });

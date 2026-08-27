@@ -4260,3 +4260,91 @@ on exactly this bug** — the class was always correct. `getComputedStyle(el).ba
 (`.a { } .b { }`) and the inner selector of a single-line `@media` are easy to miss and each one
 becomes an app-wide leak. Both existed in this file's block and were caught by re-scanning it for
 selectors not starting with the root class.
+
+---
+
+## Soccer Central — two pitches, one line (2026-08-27)
+
+**Soccer Central has TWO 9v9 pitches side by side. A tournament-size match occupies BOTH**, so the
+venue charges $180 rather than $90, and it genuinely is two matches. Ryan's ruling.
+
+### The doubling lives in exactly one place
+
+Cost is `rate × charged units`. Double both and a tournament bills **$360**.
+
+- **THE RATE carries it.** `fin_venues` 53 "Soccer Central Tournament" now holds
+  `per_match_rate = 180` **and** `cost_per_match = 180`. **No expression multiplies anything to
+  reach $180** — every cost path multiplies that rate by a charged unit count of **1**.
+- **THE CHARGED UNIT COUNT stays 1.** `chargedUnitCount` and `venueMatchCount` (financeCosts) never
+  see this rule; `socc-two-pitch-test` asserts that no cost file imports it.
+- **THE MATCH COUNT is 2**, for counts and count-derived denominators only.
+
+Both rate columns were set, not just `per_match_rate`: `matchPnL.ts` (Slate Review) reads
+`cost_per_match`, and Field Costs' "agreed rate" cell reads it too. Setting one would have put $180
+on one page and $120 on the other.
+
+### The capacity boundary is a constant, not a memory
+
+`SOCC_TWO_PITCH_MIN_CAPACITY = 23`, behaviourally identical to the `> 22` that shipped. Ryan
+recalled "i think we said 24"; the boundary was **not** moved on a recollection. Full distribution
+over all 760 ran matches on fields 102/199/1354:
+
+    cap  0 → 24 · 14 → 4 · 16 → 11 · 18 → 248 · 20 → 19 · 22 → 49
+    cap 24 → 4  · 28 → 5 · 32 → 69 · 36 → 323 · 40 → 4
+
+**Four matches sit at capacity 24 and none at 23**, so a boundary of 23 and one of 25 disagree about
+exactly those four (405 vs 401 matches). Not moot, and not decided.
+
+### The fields are a named list
+
+`SOCC_TWO_PITCH_FIELD_IDS = [102, 199, 1354]`. **1123 "Soccer Central World Cup Tournament" is
+excluded by ID, never by a capacity or category test** — all 33 of its matches carry capacity 0, so
+a capacity test would exclude it today and include it the moment someone set one.
+
+**1552 is NOT Soccer Central.** It is "Tourney ATH Katy", 9 matches, city **HOU**. Any instruction
+to map it to Soccer Central is working from a wrong title.
+
+### The event drop was narrowed, not deleted
+
+`venueCategory(field_title) === "event"` discards **1,749 of 7,671** ran matches network-wide across
+19 fields. That guard is load-bearing for combines, cup brackets and "Special Events at …" rows.
+After narrowing: **1,383 dropped**, a difference of **366 — every one of them field 199 "Tourney at
+Soccer Central"**, and **zero matches moved outside fields 102/199/1354**. Field 1123 still drops all
+33.
+
+### One line, at the presentation layer only
+
+Finance already merges these two venues — `COMBINE_BY_NAME` in `venueGroups.ts` pairs
+`Soccer Central` + `Soccer Central Tournament`, labels `["normal","tournament"]`. Slate Review groups
+by `venueId`, so it needed the same special case, done in `SlateFieldPnL` alone. **Venue 53 stays a
+real row carrying the real rate**; nothing is folded into venue 11.
+
+    Field Cost:    Soccer Central · combined PER MATCH · $90 normal · $180 tournament · 2 rates
+    Slate Review:  SOCC Soccer Central · 102 (12+45×2) · $170.68 rev · $90.00 cost · $80.68 net
+
+**Cost per match lands back at $90 and that is the rule working**: a two-pitch match costs $180 and
+counts as 2, so its cost per slot equals a one-pitch match — which is what makes the field
+comparable, and is the whole reason the count doubles.
+
+### What it has cost
+
+**405 two-pitch matches, 2025-04-21 → 2026-09-06, carried ZERO venue cost** — they routed to venue
+53, which was inactive from creation (2026-05-22), so they landed in "unmapped" with dashes.
+
+**Understated venue cost: $72,900** at $180. (An earlier figure of 39 matches / $4,680 counted only
+those that survived the event drop; 366 of the 405 were being discarded as events as well.)
+
+    2025-04    3 · 2025-05  1 · 2025-06  5 · 2025-07  3 · 2025-08  1 · 2025-09 13
+    2025-10   19 · 2025-11 21 · 2025-12 24 · 2026-01 27 · 2026-02 26 · 2026-03 27
+    2026-04   33 · 2026-05 42 · 2026-06 48 · 2026-07 57 · 2026-08 47 · 2026-09  8
+
+Nothing was backfilled and no expense row was written.
+
+### fin_venues has no audit trail
+
+There is no `updated_at` on the table and no `change_log` entry for the original deactivation — **a
+venue can be switched off today leaving no trace**, and that one silently suppressed $72,900. A
+`change_log` row was written for this edit (`method: UPDATE`, `endpoint: fin_venues/53`,
+`match_id: null`, before/after for all three columns), which the schema accommodates because
+`match_id` is nullable. **That is one note, not an audit trail** — the durable fix is a migration
+adding `updated_at` and a trigger, which is not done here.
