@@ -18,6 +18,10 @@ export default function LifecycleDataRoomPage() {
      * exists to remove". The Window in the builder is the one control, and the total names it. */
     <SectionFrame
       period={false}
+      /* IT READS NOTHING FROM g.data. The only consumer was HowNumbersAreMade, which is deleted;
+       * the panel takes g.authHeaders and nothing else. It was waiting 2.6 s for a payload it never
+       * touches, and a panel that has not mounted cannot start its own fetch. */
+      needsGrowthData={false}
       title="Player Data Room"
       subtitle="The rows behind every number on the other five sections, and how each one is made. Set the window in the builder — this page does not follow the period bar."
     >

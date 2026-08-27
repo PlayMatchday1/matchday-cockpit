@@ -157,6 +157,13 @@ const NODE_SUITES = [
   // that the middle tier's LABEL is derived from the threshold, so the tile and the filter cannot
   // disagree. The number 10 is not pinned anywhere; the relationship is.
   "scripts/churn-test.ts",
+  // THE NAV BADGES AND THE MOUNT GATE. Not arithmetic — waste. Four hooks each fetched for
+  // themselves from four different trees, so a cold page load fired 4× awaiting-count, 2×
+  // manager-pay/week and 2× partner-dashboards/actionable at ~7s each. None of it blocks anything
+  // on screen, which is exactly why it survived: the cost is entirely server-side and invisible.
+  // Also pins that SectionFrame's opt-out DEFAULTS to the old behaviour, so freeing one section
+  // cannot silently free the five that genuinely read g.data.
+  "scripts/shared-badge-fetch-test.ts",
 ];
 const ALL_E2E = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
 // --e2e runs EVERY browser suite. Nothing is excluded, because nothing is mandatory.

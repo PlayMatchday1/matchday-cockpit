@@ -4085,3 +4085,102 @@ First open, cold instance: **13.6 s → 10.2 s**; fact build **3,299 ms**; a lat
 instance **384 ms warm**. Rejected: a warming cron (warms one instance; Vercel routes elsewhere) and
 narrowing the fact table (only 39% of rows are this year, and the default view spans Apr 2023 –
 Sep 2026, so narrowing the table narrows the page).
+
+---
+
+## The Lifecycle cold open — the other seven seconds (2026-08-27)
+
+Measured on a **production build** (not the dev server — Turbopack compiles a route on first
+request, which would have been most of what was being measured). An earlier "10.2 s" figure was a
+dev-server number; the real cold open was **7.6 s**.
+
+### Three defects, none of them the fact table
+
+**1. THE MOUNT GATE — the largest, and it is general.** `SectionFrame` held *every* section behind
+`g.data && g.activePeriod`, so a section reading neither still waited for a 1.4 s payload before it
+could mount — **and a panel that has not mounted cannot start its own fetch.** Proven on a run where
+the Data Room's fact table was already **warm**: the panel appeared at **3,465 ms**.
+
+Which sections are in that position:
+
+| section | reads `g.data`? | verdict |
+|---|---|---|
+| Player Funnel | yes (`KpiRow`, `PlayerFunnel`) | must wait |
+| Player Behavior | yes | must wait |
+| Revenue per Player | yes | must wait |
+| **Retention** | **no — reads `g.retention`**, a different and *faster* fetch (397 ms vs 1,468 ms) | **freed** |
+| **Player Data Room** | **no** — the only consumer was the deleted methodology card | **freed** |
+| Churn | only `g.data.cities`, for a dropdown | still waits — see below |
+
+`needsGrowthData` defaults to `true`, so nothing else changed.
+
+**2. `/api/partner-dashboards/actionable` — 6,985 ms, twice.** The route awaited
+`fetchPartnerRows` **and** `fetchPartnerWeeklyPayments` *inside a `for` loop*, so four partners meant
+eight strictly sequential queries:
+
+    Hattrick 1,421ms (3,043 regs) · PAC Global 935ms · Parmer 899ms · Crossbar 921ms
+    sequential 4,615ms   →   all four in parallel 1,443ms   (3.2×)
+
+Partners do not depend on each other; the waiting was the only thing being serialised. It feeds a
+**nav badge**, which is why a Lifecycle page requests it at all — `ChatsRail` and
+`MatchOpsSectionSheet` both live in the internal layout, so **every internal page pays it**:
+Finance, Growth and Match Ops included.
+
+**3. DUPLICATE BADGE FETCHES.** Four hooks each fetched for themselves, from four different trees
+(`ChatsRail`, `MatchOpsSectionSheet`, `TopNav`, `MobileBottomNav`).
+
+| request | before | after |
+|---|---|---|
+| `/api/crm/threads/awaiting-count` | **4×** | 1× |
+| `/api/manager-pay/week` | 2× | 1× |
+| `/api/partner-dashboards/actionable` | 2× | 1× |
+| `/api/crm/threads/unread-count` | 1× | 1× |
+| **total requests on a cold open** | **15** | **10** |
+
+`sharedBadgeFetch` is a single flight plus a 10 s TTL. Manager Pay is keyed on the **week**, because
+two components asking about different weeks are asking different questions. A failure is never
+cached and the in-flight slot is always released.
+
+### The result
+
+```
+                        before      after
+panel mounted           3,465ms      421ms
+first cell              7,644ms    6,763ms
+requests                    15         10
+actionable          2 × 6,985ms   1 × 2,405ms
+```
+
+**~11 s of server work removed per page load**, most of it on pages that never show a partner
+dashboard.
+
+### One thing the change exposed
+
+Mounting early meant the Data Room's first request went out **before `authHeaders` existed** and came
+back **401**, then retried. The frame's gate had been hiding it. The panel now waits for a token.
+
+### The 418 ms staleness key — it is the ORDER, not the round trip
+
+`getFacts` reads `growth_participation` ordered by `match_month desc limit 1` to decide whether its
+cache is stale. Measured, five runs each:
+
+    app_users select id limit 1 (plain table)             76ms   ← round-trip baseline
+    growth_participation, NO order, limit 1               83ms
+    growth_participation, order player_api_id desc        80ms   ← indexed
+    growth_participation, order match_month desc         404ms
+    growth_participation, order match_month asc          385ms
+    growth_participation, exact COUNT (full scan)        356ms
+
+**Ordering by `match_month` costs the same as a full scan**, because it sorts all 151,654 rows to
+return one. `player_api_id` is indexed and costs nothing. **It is a missing index — but the cheaper
+fix is not to add one.**
+
+`growth_participation` is a **VIEW**, so it cannot be indexed directly; the index would go on the
+underlying column of the base table, and whether the planner uses it through the view's joins is not
+something to assume. **`max(player_api_id)` is a strictly better key anyway**: it is unique per
+participation row (151,654 distinct values over 151,654 rows, range 14 … 303745), it is already
+indexed at ~80 ms, and it changes when *any* row lands — whereas `max(match_month)` does not change
+when a new match is added inside the current month, so today's key is both slow **and** weak.
+
+Not changed. Worth ~1 s on every cold open, and the key read is now the second-largest item on the
+critical path.

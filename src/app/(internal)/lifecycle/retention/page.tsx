@@ -23,6 +23,10 @@ export default function LifecycleRetentionPage() {
       title="Retention"
       subtitle="All time, every cohort — the curve ignores the time period, and the matrix has its own cohort and city filters."
       period={false}
+      /* IT READS g.retention, NOT g.data — a DIFFERENT fetch, and the faster of the two (408 ms
+       * against 1,443 ms). Gating it on g.data made it wait for the slower one for no reason. It
+       * already renders its own empty state while g.retention is null. */
+      needsGrowthData={false}
     >
       {g.retention ? (
         <>

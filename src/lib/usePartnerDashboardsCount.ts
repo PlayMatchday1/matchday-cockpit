@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { sharedFetch } from "@/lib/sharedBadgeFetch";
 import { canAccess, useAuth } from "@/lib/useAuth";
 
 const POLL_MS = 60_000;
@@ -23,18 +24,24 @@ export function usePartnerDashboardsCount(): number {
   const enabled = !!appUser?.is_admin || canAccess(appUser ?? null, "tech");
   const [count, setCount] = useState(0);
 
-  const refetch = useCallback(async () => {
+  const refetch = useCallback(async (force = false) => {
     if (!enabled) { setCount(0); return; }
     try {
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
       if (!token) return;
-      const res = await fetch("/api/partner-dashboards/actionable", {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: "no-store",
-      });
-      if (!res.ok) return;
-      const json = (await res.json()) as { count?: number };
+      /* SHARED, AND THIS IS THE ONE THAT MATTERED. ChatsRail and MatchOpsSectionSheet both mount
+       * this badge, so the route ran TWICE per page load at ~7s each — the largest single piece of
+       * server work in a cold-open trace, on pages that have nothing to do with partner dashboards.
+       * One request now, whoever asks. */
+      const json = await sharedFetch("partner:actionable", async () => {
+        const res = await fetch("/api/partner-dashboards/actionable", {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        return (await res.json()) as { count?: number };
+      }, force);
       if (typeof json.count === "number" && Number.isFinite(json.count)) setCount(Math.max(0, json.count));
     } catch {
       // keep last value silently

@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { sharedFetch } from "@/lib/sharedBadgeFetch";
 import { canAccess, useAuth } from "@/lib/useAuth";
 import { defaultManagerPayWeek } from "@/lib/managerPayView";
 
@@ -21,7 +22,7 @@ export function useManagerPayAttnCount(): number {
   const enabled = !!appUser?.is_admin || canAccess(appUser ?? null, "matchops");
   const [count, setCount] = useState(0);
 
-  const refetch = useCallback(async () => {
+  const refetch = useCallback(async (force = false) => {
     if (!enabled) {
       setCount(0);
       return;
@@ -30,12 +31,16 @@ export function useManagerPayAttnCount(): number {
       const week = defaultManagerPayWeek(new Date().toISOString().slice(0, 10));
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
-      const res = await fetch(`/api/manager-pay/week?week=${encodeURIComponent(week)}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        cache: "no-store",
-      });
-      if (!res.ok) return;
-      const json = (await res.json()) as { attention?: { count?: number } };
+      /* SHARED — keyed on the WEEK, because two components asking about different weeks are asking
+       * different questions and must not be collapsed into one answer. */
+      const json = await sharedFetch(`managerPay:${week}`, async () => {
+        const res = await fetch(`/api/manager-pay/week?week=${encodeURIComponent(week)}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          cache: "no-store",
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        return (await res.json()) as { attention?: { count?: number } };
+      }, force);
       const n = json.attention?.count;
       if (typeof n === "number" && Number.isFinite(n)) setCount(Math.max(0, n));
     } catch {

@@ -108,6 +108,12 @@ export default function DataRoomPanel({ authHeaders, scopeChip }: { authHeaders:
   }
 
   useEffect(() => {
+    /* WAIT FOR THE TOKEN. The frame used to hold this panel behind g.data, which incidentally meant
+     * authHeaders had long since arrived by the time it mounted. It mounts immediately now — which
+     * is the point — so it has to skip the fetch until the provider has a session, or the first
+     * request goes out unauthenticated and comes back 401. Harmless, retried a moment later, and
+     * still a wasted round trip and an error in the log for nothing. */
+    if (!Object.keys(authHeaders).length) return;
     let alive = true;
     setLoading(true);
     postJson<PivotResponse>({ mode: "pivot", config: requestConfig })
@@ -122,7 +128,7 @@ export default function DataRoomPanel({ authHeaders, scopeChip }: { authHeaders:
       .catch(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestConfig, postJson]);
+  }, [requestConfig, postJson, authHeaders]);
 
   useEffect(() => {
     if (!openCell) { setCellData(null); return; }

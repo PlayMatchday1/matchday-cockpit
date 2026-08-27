@@ -30,10 +30,25 @@ export async function GET(req: Request) {
   if (error) return Response.json({ error: error.message }, { status: 500 });
 
   const today = todayYmd();
-  let awaiting = 0, disputed = 0, diverged = 0;
-  const byPartner: { partner: string; awaiting: number; disputed: number; diverged: number }[] = [];
 
-  for (const p of data ?? []) {
+  /* ── ONE PARTNER AT A TIME WAS THE WHOLE COST ─────────────────────────────────────────────────
+   * This loop awaited fetchPartnerRows and fetchPartnerWeeklyPayments INSIDE a `for`, so four
+   * partners meant eight queries strictly one after another. Measured:
+   *
+   *     Hattrick          rows 1421ms (3043 regs) · payments  88ms
+   *     PAC Global        rows  935ms ( 571 regs) · payments  88ms
+   *     Parmer            rows  899ms ( 306 regs) · payments 136ms
+   *     Crossbar Rowlett  rows  921ms ( 601 regs) · payments 127ms
+   *     sequential total 4,615ms   ·   all four in parallel 1,443ms   (3.2×)
+   *
+   * The partners do not depend on each other, so the waiting is the only thing being serialised.
+   * The whole request measured ~7,000 ms in a cold-open trace and fired TWICE per page load,
+   * making it the largest single piece of server work in the trace — on pages that have nothing to
+   * do with partner dashboards, because it feeds a nav badge.
+   *
+   * ORDER IS PRESERVED: results are collected positionally and filtered afterwards, so byPartner
+   * comes out in the same order as before rather than in whatever order the queries returned. */
+  const perPartner = await Promise.all((data ?? []).map(async (p) => {
     const cfg: PartnerConfig = {
       id: p.id, venueId: p.venue_id, partnerName: p.partner_name,
       revenueSharePct: (p.revenue_share_pct as number) ?? 50,
@@ -59,13 +74,20 @@ export async function GET(req: Request) {
       payoutSharePct: (p.revenue_share_pct as number) ?? 50,
       fieldRentalCents: null, matchManagerCents: null, partnerSharePct: null, spotPriceCents: null,
     };
-    const { rows, extra } = await fetchPartnerRows(supabase, p.venue_id);
-    const records = await fetchPartnerWeeklyPayments(supabase, p.id);
+    // The two reads for ONE partner do not depend on each other either.
+    const [{ rows, extra }, records] = await Promise.all([
+      fetchPartnerRows(supabase, p.venue_id),
+      fetchPartnerWeeklyPayments(supabase, p.id),
+    ]);
     const payment = computeWeeklyPayments(rows, extra, cfg, records);
     const c = actionableCounts(derivePeriodRows(payment, today));
-    awaiting += c.awaiting; disputed += c.disputed; diverged += c.diverged;
-    if (c.total > 0) byPartner.push({ partner: p.partner_name, awaiting: c.awaiting, disputed: c.disputed, diverged: c.diverged });
-  }
+    return { partner: p.partner_name as string, awaiting: c.awaiting, disputed: c.disputed, diverged: c.diverged, total: c.total };
+  }));
+
+  let awaiting = 0, disputed = 0, diverged = 0;
+  for (const c of perPartner) { awaiting += c.awaiting; disputed += c.disputed; diverged += c.diverged; }
+  const byPartner = perPartner.filter((c) => c.total > 0)
+    .map(({ partner, awaiting: a, disputed: d, diverged: v }) => ({ partner, awaiting: a, disputed: d, diverged: v }));
 
   const total = awaiting + disputed + diverged;
   return Response.json({ count: total, awaiting, disputed, diverged, byPartner });

@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { sharedFetch } from "@/lib/sharedBadgeFetch";
 import { useAuth } from "@/lib/useAuth";
 
 const POLL_MS = 30_000;
@@ -23,7 +24,7 @@ export function useCrmUnreadCount(): number {
   const userId = appUser?.id ?? null;
   const [count, setCount] = useState(0);
 
-  const refetch = useCallback(async () => {
+  const refetch = useCallback(async (force = false) => {
     if (!isAdmin || !userId) {
       setCount(0);
       return;
@@ -32,14 +33,19 @@ export function useCrmUnreadCount(): number {
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
       if (!token) return;
-      const res = await fetch("/api/crm/threads/unread-count", {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: "no-store",
-      });
-      // Non-OK (including a forced 500) → leave the count as-is. No throw,
-      // no badge crash; the next poll reconciles.
-      if (!res.ok) return;
-      const json = (await res.json()) as { count?: number };
+      /* SHARED. TopNav and useFaviconUnreadDot both want this number and both used to fetch it.
+       * sharedFetch collapses concurrent callers into one request; a non-OK still leaves the count
+       * alone, because the throw below is caught by this function's own catch. */
+      const json = await sharedFetch("crm:unread", async () => {
+        const res = await fetch("/api/crm/threads/unread-count", {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        // Non-OK (including a forced 500) → leave the count as-is. No throw
+        // reaches the badge; the next poll reconciles.
+        if (!res.ok) throw new Error(String(res.status));
+        return (await res.json()) as { count?: number };
+      }, force);
       if (typeof json.count === "number" && Number.isFinite(json.count)) {
         setCount(Math.max(0, json.count));
       }

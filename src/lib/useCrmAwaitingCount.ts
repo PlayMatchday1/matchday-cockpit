@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { sharedFetch } from "@/lib/sharedBadgeFetch";
 import { useAuth } from "@/lib/useAuth";
 
 const POLL_MS = 30_000;
@@ -23,7 +24,7 @@ export function useCrmAwaitingCount(): number {
   const enabled = isAdmin || canChats;
   const [count, setCount] = useState(0);
 
-  const refetch = useCallback(async () => {
+  const refetch = useCallback(async (force = false) => {
     if (!enabled) {
       setCount(0);
       return;
@@ -32,12 +33,17 @@ export function useCrmAwaitingCount(): number {
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
       if (!token) return;
-      const res = await fetch("/api/crm/threads/awaiting-count", {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: "no-store",
-      });
-      if (!res.ok) return;
-      const json = (await res.json()) as { count?: number };
+      /* SHARED. ChatsRail, MatchOpsSectionSheet, TopNav and MobileBottomNav all mount badges that
+       * ask for this same number, and each used to fetch it for itself — four requests for one
+       * answer on every page. sharedFetch collapses them into one. */
+      const json = await sharedFetch("crm:awaiting", async () => {
+        const res = await fetch("/api/crm/threads/awaiting-count", {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        return (await res.json()) as { count?: number };
+      }, force);
       if (typeof json.count === "number" && Number.isFinite(json.count)) {
         setCount(Math.max(0, json.count));
       }
