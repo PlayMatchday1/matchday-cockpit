@@ -150,6 +150,13 @@ const NODE_SUITES = [
   // cells only for the ADDITIVE measures; for Players it is a distinct count and is deliberately
   // smaller — and the heat ramp's contrast ceiling as a number rather than an opinion.
   "scripts/data-room-test.ts",
+  // CHURN. In the fast set for the tile that did nothing: it was a <button> inside a <button>, the
+  // parser unnested it silently, and "click to show only these" was dead copy on a dead control —
+  // no error, no warning, and nothing on screen to say so. Also pins that the window really
+  // defaults to this year (all time was 9,427 people, a third of everyone who ever registered) and
+  // that the middle tier's LABEL is derived from the threshold, so the tile and the filter cannot
+  // disagree. The number 10 is not pinned anywhere; the relationship is.
+  "scripts/churn-test.ts",
 ];
 const ALL_E2E = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
 // --e2e runs EVERY browser suite. Nothing is excluded, because nothing is mandatory.
