@@ -271,8 +271,14 @@ function SnapshotStrip({ snapshot }: { snapshot: Snapshot | null }) {
     cells.push({
       k: "Active members",
       v: snapshot.activeMembers.toLocaleString("en-US"),
-      u: "paid memberships",
-      title: "mdapi_subscriptions with status = ACTIVE and price > 0, as of now.",
+      /* "AS OF NOW", NOT MONTH TO DATE. The strip header above says "month to date" and three of
+         these four tiles are; this one is a HEADCOUNT — it is not 28/31ths of anything, and it was
+         sitting under a period claim it does not answer, exactly as Active fields was. */
+      u: "paying · as of now",
+      title: "Paying, external, activated members with status ACTIVE, right now — membershipStats"
+        + ".countActiveMembers, the same predicate the Membership page and members_monthly_snapshots"
+        + " use. Excludes 64 subscriptions priced at 0 and 40 @playmatchday.com staff accounts, which"
+        + " is why this reads lower than the 455 ACTIVE rows in the table.",
     });
   if (snapshot.activeFields != null)
     cells.push({

@@ -20,6 +20,7 @@ import {
   computeMonthlySnapshot,
   type AttendanceRow,
   type MemberLike,
+  memberLikeFromSubscription,
 } from "./membershipStats";
 import { CITIES } from "./types";
 import { cityFromAbbr } from "./cityMap";
@@ -94,22 +95,17 @@ export async function refreshMembershipSnapshots(opts: {
     email: r.email,
   }));
 
-  // Map to MemberLike + skip unknown cities (matches useFinanceData
-  // behavior). cityFromAbbr returns null for any abbr not in our
-  // cockpit map — those rows would have nowhere to go in CITIES
-  // anyway, so dropping them is the correct call.
+  /* Map to MemberLike + skip unknown cities (matches useFinanceData behavior). cityFromAbbr
+   * returns null for any abbr not in our cockpit map — those rows have nowhere to go in CITIES.
+   * THE MAPPING MOVED to membershipStats.memberLikeFromSubscription so the Home tile can apply
+   * the identical one. It used to be inline here, which meant Home's tile could only match this
+   * number by re-deriving it — and it did not: Home counted 391 against this file's 387, the
+   * difference being four @playmatchday.com staff accounts this predicate excludes and Home's
+   * did not. membership-parity-test.ts now holds the two together. */
   const members: MemberLike[] = [];
   for (const r of rawMembers) {
-    const city = cityFromAbbr(r.city_identifier);
-    if (!city) continue;
-    members.push({
-      status: r.status ?? "",
-      price_cents: Math.round((r.price ?? 0) * 100),
-      email: r.member_email,
-      activation_date: r.activation_date,
-      canceled_at: r.canceled_at,
-      city,
-    });
+    const m = memberLikeFromSubscription(r);
+    if (m) members.push(m);
   }
 
   const refDates: Date[] = [now];
@@ -161,9 +157,15 @@ export async function refreshMembershipSnapshots(opts: {
       continue;
     }
 
+    /* captured_at IS SENT ON EVERY WRITE. It was absent from this payload, so the column kept
+     * whatever the DB default set on FIRST INSERT while the row itself was rewritten nightly —
+     * the August row read "captured 2026-08-01T11:52" on the 28th, having last been recomputed
+     * that morning at 11:01. Nothing read it (every captured_at reader in the app is on
+     * membership_price_snapshots, a different table with insert-on-change semantics), so it
+     * misinformed no one yet; it was a loaded gun for whoever first used it to judge staleness. */
     const { error } = await sb
       .from("members_monthly_snapshots")
-      .upsert(snap, { onConflict: "month" });
+      .upsert({ ...snap, captured_at: new Date().toISOString() }, { onConflict: "month" });
     if (error) {
       console.warn(
         `Membership snapshot upsert failed for ${snap.month}:`,

@@ -1,4 +1,5 @@
 import type { FinMember } from "./useFinanceData";
+import { cityFromAbbr } from "./cityMap";
 
 const INTERNAL_EMAIL_RX = /@matchday\.|@playmatchday\./i;
 
@@ -9,6 +10,44 @@ export type MemberLike = Pick<
   FinMember,
   "status" | "price_cents" | "email" | "activation_date" | "canceled_at" | "city"
 >;
+
+/* THE ONE MAPPING FROM A RAW mdapi_subscriptions ROW TO MemberLike.
+ *
+ * It lives here, beside the predicates that consume it, because the mapping IS part of the
+ * predicate: `price` is DOLLARS in the table and `price_cents` is what isPaidExternalMember tests,
+ * so a caller that forgets the ×100 does not get a type error — it gets a plausible number. The
+ * snapshot builder and the Home tile both call this; a second copy is how per_match_rate and
+ * cost_per_match ended up $36 apart.
+ *
+ * RETURNS NULL for a city_identifier outside the cockpit map, which is a SKIP, not a zero. The
+ * snapshot builder has always dropped those rows; Home must drop the same ones or the two tiles
+ * disagree the moment a new market appears in the API before it appears in cityMap. (Today: zero
+ * ACTIVE rows are affected, so this costs nothing and prevents the next Warsaw.) */
+export function memberLikeFromSubscription(r: {
+  status?: string | null; price?: number | null; member_email?: string | null;
+  activation_date?: string | null; canceled_at?: string | null; city_identifier?: string | null;
+}): MemberLike | null {
+  const city = cityFromAbbr(r.city_identifier ?? null);
+  if (!city) return null;
+  return {
+    status: r.status ?? "",
+    price_cents: Math.round((r.price ?? 0) * 100),
+    email: r.member_email ?? null,
+    activation_date: r.activation_date ?? null,
+    canceled_at: r.canceled_at ?? null,
+    city,
+  };
+}
+
+/** ACTIVE MEMBERS, THE ONE DEFINITION: paying, external, activated, status ACTIVE. Both the Home
+ *  tile and the Membership tile resolve to this — see membership-parity-test.ts. */
+export function countActiveMembers(
+  rows: readonly Parameters<typeof memberLikeFromSubscription>[0][], asOf: Date,
+): number {
+  let n = 0;
+  for (const r of rows) { const m = memberLikeFromSubscription(r); if (m && isActiveAsOf(m, asOf)) n++; }
+  return n;
+}
 
 export function isPaidExternalMember(m: MemberLike): boolean {
   if (m.price_cents <= 0) return false;

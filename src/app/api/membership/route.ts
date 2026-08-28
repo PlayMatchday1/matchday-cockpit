@@ -17,6 +17,7 @@
 
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { assertScope } from "@/lib/cityConfinement";
+import { countActiveMembers } from "@/lib/membershipStats";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { fetchLegacyMatchRegistrations, loadMembershipWindowsByUserId } from "@/lib/mdapiMatchesRead";
 import { classify, CHURN_DAYS, type SpotRow } from "@/lib/membershipModel";
@@ -110,14 +111,31 @@ export async function GET(req: Request) {
      * which is the worst kind of wrong. */
     const subs: { status: string | null }[] = [];
     for (let off = 0; ; off += 1000) {
-      let q = sb.from("mdapi_subscriptions").select("membership_id,city_identifier,status").order("membership_id").range(off, off + 999);
+      let q = sb.from("mdapi_subscriptions")
+        .select("membership_id,city_identifier,status,price,member_email,activation_date,canceled_at")
+        .order("membership_id").range(off, off + 999);
       if (scopeCity) q = q.eq("city_identifier", scopeCity);
       const { data, error } = await q;
       if (error) throw new Error(`mdapi_subscriptions read failed: ${error.message}`);
       subs.push(...(data ?? []));
       if ((data ?? []).length < 1000) break;
     }
+    /* TWO NUMBERS FROM ONE FETCH, and they are DIFFERENT QUESTIONS said out loud:
+     *
+     *   activeMembers      — every row with status ACTIVE. 455 today. A denominator: it includes
+     *                        64 subscriptions priced at 0 and 40 @playmatchday.com staff accounts.
+     *                        The chart line says so; it is not the headline.
+     *   activeMembersPaid  — paying, external, activated. 387 today. THE headline, and the same
+     *                        function the Home tile now calls (membershipStats.countActiveMembers)
+     *                        and the same predicate members_monthly_snapshots.active_count is
+     *                        built from.
+     *
+     * THE TILE READS THE LIVE ONE, NOT THE SNAPSHOT ROW IT USED TO. The snapshot for the current
+     * month is recomputed nightly, so the tile was showing last night's recomputation while Home
+     * showed this second — one number in name and two in practice, on top of the predicate gap.
+     * The monthly BARS still read the snapshot series; those are history and should not move. */
     const activeMembers = subs.filter((s) => s.status === "ACTIVE").length;
+    const activeMembersPaid = countActiveMembers(subs, new Date());
 
     // MEMBERSHIP REVENUE — AN EXPLICIT CATEGORY, never a residual. fin_revenue.type='Membership'.
     let revQ = sb.from("fin_revenue").select("month,city,net,type").eq("type", "Membership");
@@ -241,6 +259,7 @@ export async function GET(req: Request) {
       byCity: groupBy((r) => r.city),
       byField: groupBy((r) => (r.fieldId != null ? (fieldName.get(r.fieldId) ?? String(r.fieldId)) : null)),
       activeMembers,
+      activeMembersPaid,
       revenueByMonth: Object.fromEntries(revByMonth),
       snapshots: snaps,
       churnDays: CHURN_DAYS,

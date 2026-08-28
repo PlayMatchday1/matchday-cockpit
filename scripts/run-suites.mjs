@@ -92,6 +92,11 @@ const NODE_SUITES = [
   // Also the ONLY guard on an inverted pair — the API stores end-before-start without complaint
   // (staging 2557: 2xx, read back inverted), so nothing downstream will catch it.
   "scripts/matchwhen-test.ts",
+  // ACTIVE MEMBERS, ONE PREDICATE. Three surfaces showed 391 / 387 / 455 under one label on
+  // 2026-08-28. Nothing was broken — three code paths had each decided separately what a
+  // "member" is. Runs Home's fold and the snapshot's fold over one fixture and requires the
+  // same answer, with a control proving the fixture can tell the two apart.
+  "scripts/membership-parity-test.ts",
   "scripts/promo-model-test.ts",
   "scripts/cost-basis-confinement-test.ts",
   "scripts/cost-ratio-band-test.ts",

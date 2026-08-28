@@ -25,7 +25,12 @@ import {
 } from "@/lib/membershipModel";
 
 type Payload = {
-  months: string[]; rows: SpotRow[]; activeMembers: number;
+  months: string[]; rows: SpotRow[];
+  /* activeMembers      — EVERY row with status ACTIVE (455). The wider set: includes comped and
+   *                      staff. Drawn on the all-time chart line, never as a headline.
+   * activeMembersPaid  — paying, external, activated (387). THE headline, and the identical
+   *                      function the Home tile calls. See membership-parity-test.ts. */
+  activeMembers: number; activeMembersPaid: number;
   dayMix: { day: string; member: number; daily: number; promo: number; total: number }[];
   byCity: { name: string; member: number; daily: number; promo: number }[];
   byField: { name: string; member: number; daily: number; promo: number }[];
@@ -115,7 +120,12 @@ export default function MembershipView() {
    * while the chart beside it read the captured snapshot — 451 against 383 for the same month. The
    * live figure has not gone away; it is stated on the all-time line where it belongs, as a
    * separate fact with its own label. */
-  const activeThisMonth = thisMonth ? (data?.activeByMonth[thisMonth.month] ?? 0) : 0;
+  /* THE HEADLINE IS THE LIVE PAID-EXTERNAL COUNT, not the current month's snapshot row. Same
+   * function as the Home tile (membershipStats.countActiveMembers), so the two pages cannot
+   * disagree — membership-parity-test.ts holds them together. It used to read activeByMonth,
+   * which is recomputed nightly, so this tile lagged Home by up to a day on top of the four
+   * staff accounts the two predicates already disagreed about. */
+  const activeThisMonth = data?.activeMembersPaid ?? 0;
   const part = thisMonth ? data?.partial?.[thisMonth.month] : undefined;
   const isPartial = !!part && part.elapsed < part.total;
   const kpis = buildKpis({
@@ -165,7 +175,10 @@ export default function MembershipView() {
 
       {/* ── FOUR KPIs ─────────────────────────────────────────────────────────────────────── */}
       <div className="kpis" data-testid="ms-kpis">
-        <Kpi k="Active members" v={num(kpis.activeMembers)} s={`${thisMonth?.month ?? ""}${partSuffix(part)}`} />
+        {/* NO PARTIAL SUFFIX. "28 of 31 days" belongs to avg matches per member, which accrues
+            over a month; a headcount does not. It is not 28/31ths of anything. The suffix stays
+            on the two KPIs below, where the period is real. */}
+        <Kpi k="Active members" v={num(kpis.activeMembers)} s="paying, external · as of now" />
         <Kpi k="Avg matches / member" v={kpis.avgMatchesPerMember == null ? "—" : kpis.avgMatchesPerMember.toFixed(1)}
           s={`${thisMonth?.month ?? ""}${partSuffix(part)}`} />
         <Kpi k="Avg price / member spot"
@@ -260,15 +273,26 @@ function AllTime({ points, live }: { points: ActivePoint[]; live: number | null 
         <div className="mstitle">Active members · all-time</div>
         {/* TWO REAL NUMBERS FOR THE SAME MONTH, AND THE PAGE SAYS SO.
             This line reads the last CAPTURED snapshot; the KPI above reads mdapi_subscriptions
-            LIVE. For Aug 2026 that is 383 against 451 — the capture is a point in time and members
-            joined after it. Both are true. Printing "383 active" beside a KPI reading 451 with no
-            explanation is how a page teaches people not to trust it, so the difference is named
-            here rather than left to be discovered. */}
+            LIVE. Both are true, and printing one beside the other with no explanation is how a
+            page teaches people not to trust it — so the difference is named rather than left to
+            be discovered.
+
+            CORRECTED 2026-08-28. This used to read "For Aug 2026 that is 383 against 451", which
+            compared the capture to the wrong live number: 451/455 is EVERY row with status ACTIVE,
+            including 64 priced at 0 and 40 staff accounts, and it was never what the KPI meant to
+            answer. The KPI is now the paid-external count (387) on both this page and Home, and
+            the wider 455 is labelled below as the wider set it is. What remains genuinely
+            different here is TIME, not population: the captured value is a point in time and the
+            KPI is now. */}
         <div className="mssub">
           <b>{num(last.value)}</b> active when {last.month} was captured
           {last.delta != null && <> · <span style={{ color: last.delta < 0 ? "#E8492A" : "#0B7A3E" }}>{last.delta > 0 ? "+" : ""}{last.delta}</span> from the month before</>}
+          {/* THE WIDER SET, SAID AS A WIDER SET. Not a contradiction of the KPI above: every member
+              in that 387 is inside this 455, plus 64 subscriptions priced at 0 and 40 staff
+              accounts. A denominator, not a headline — it used to read "active live today", which
+              is the same words as the KPI for a different population. */}
           {live != null && live !== last.value && (
-            <> · <b>{num(live)}</b> active live today</>
+            <> · <b>{num(live)}</b> all ACTIVE subscriptions, comped and staff included</>
           )}
           {" "}· click any point for its figure
         </div>
