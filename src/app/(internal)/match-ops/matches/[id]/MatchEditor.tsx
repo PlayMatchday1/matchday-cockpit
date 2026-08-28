@@ -26,6 +26,7 @@ import {
   pickerOptions, confirmLines, normalizeManagerId, managerNameIn,
 } from "@/lib/managerAssign";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
+import { useCancelMatch, cancelStakes, CANCEL_WORD } from "@/lib/useCancelMatch";
 import { noteLogResponse } from "@/lib/logHealth";
 import LogHealthBanner from "@/components/LogHealthBanner";
 import { useAuth, canEditMatches } from "@/lib/useAuth";
@@ -184,7 +185,10 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ kind: "ok" | "err" | "warn"; text: string } | null>(null);
-  const [cancelArmed, setCancelArmed] = useState(false);
+  /* CANCEL USES THE SHARED HOOK — the same one Gameday Ops' drawer calls. This panel used to
+   * render a red "Confirm cancel" that fired nothing and admitted it in a footnote. A second
+   * implementation of a write that texts players and credits accounts is the worst possible place
+   * for drift, so there is one: useCancelMatch. */
 
   const mgrNameOf = (id: unknown) => managerNameIn([...managers, ...managersAll], id);
   /* THE CURRENT MANAGER IS ALWAYS AN OPTION — the same call the drawer makes, not a second
@@ -361,6 +365,19 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
     : v === null || v === undefined || v === "" ? "—" : String(v);
 
   const set = (k: string, v: unknown) => setState((s) => ({ ...(s as Data), [k]: v }));
+
+  /* ABOVE THE EARLY RETURNS. A hook after `if (!state) return …` runs on some renders and not
+   * others, and React refuses: "Rendered more hooks than during the previous render." This is the
+   * same trap the drawer's memos hit when they sat below `if (!orig) return`. */
+  const cancel = useCancelMatch({
+    env: FULL_EDITOR_ENV, matchId: id, source: "Master Schedule panel · cancel",
+    authHeaders: async () => {
+      const { data } = await supabase.auth.getSession();
+      const t = data.session?.access_token;
+      return t ? { Authorization: `Bearer ${t}` } : null;
+    },
+    onCancelled: load,
+  });
 
   if (loadErr) return <div style={{ padding: 24, fontFamily: "system-ui" }}><h1>Match {id}</h1><p style={{ color: "#A83120" }}>Couldn’t load: {loadErr}</p></div>;
   if (!state || !loaded || !meta) return <div style={{ padding: 24, fontFamily: "system-ui", color: "#5C6B62" }}>Loading match {id}…</div>;
@@ -746,13 +763,42 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
               ) : null}
             </div></section>
 
-          {/* Cancel — its own red card, never in the save bar */}
+          {/* Cancel — its own red card. NEVER part of Save: Save sends the field diff, this fires a
+              different endpoint with its own confirmation and its own verdict. */}
           <section className="card danger" data-testid="cancel-card"><div className="ch"><h2>Cancel this match</h2></div>
             <div className="cb"><div className="dz">
-              <p><b>{playerCount === 0 ? "No players are signed up." : `${playerCount} player${playerCount === 1 ? "" : "s"} ${playerCount === 1 ? "is" : "are"} signed up.`}</b> Cancelling notifies every one of them and starts refunds. It is not part of Save — it happens on its own.</p>
-              <button className="dbtn" data-testid="cancel-btn" aria-pressed={cancelArmed} onClick={() => setCancelArmed((a) => !a)}>{cancelArmed ? "Confirm cancel" : "Cancel match"}</button>
+              {/* ONE LINE, AND IT IS DATA. The count is the LIVE roster read at confirm time once
+                  the preview arrives, not the render-time occupancy — the sentence is a promise to
+                  real people. It says CREDITS, not refunds: the endpoint's own audit proved the
+                  wallet credit and the SMS are server-side effects of the one PATCH, and no card
+                  charge is reversed. */}
+              <p data-testid="cancel-stakes"><b>{cancelStakes(cancel.preview ? cancel.preview.count : playerCount)}</b></p>
+              {cancel.preview?.alreadyCancelled ? (
+                <div className="ladderNote" data-testid="cancel-already">This match is already cancelled — nothing to do.</div>
+              ) : !cancel.preview ? (
+                <button className="dbtn" data-testid="cancel-btn" disabled={cancel.busy || !canEdit}
+                  title={canEdit ? undefined : "Cancelling a match needs EDIT MATCHES."}
+                  onClick={() => void cancel.open()}>{cancel.busy ? "Reading…" : "Cancel match"}</button>
+              ) : (
+                <div data-testid="cancel-confirm">
+                  <label className="f" style={{ maxWidth: 260 }}>
+                    <span className="hint">Type {CANCEL_WORD} to confirm</span>
+                    <input data-testid="cancel-word" value={cancel.typed} placeholder={CANCEL_WORD}
+                      onChange={(e) => cancel.setTyped(e.target.value)} />
+                  </label>
+                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                    <button className="secondary" data-testid="cancel-abort" onClick={cancel.abort}>Keep the match</button>
+                    {/* DISABLES ON CLICK and stays disabled until the response returns — `busy` is
+                        set before the fetch. A control that stays clickable during a write that
+                        texts people is a control that texts them twice. */}
+                    <button className="dbtn" data-testid="cancel-do" disabled={cancel.busy || !cancel.ready}
+                      onClick={() => void cancel.run()}>{cancel.busy ? "Cancelling…" : "Cancel the match"}</button>
+                  </div>
+                </div>
+              )}
             </div>
-            {cancelArmed ? <div className="ladderNote" style={{ marginTop: 10 }}>Would call <code>PATCH /admin/matches/{id}/cancel</code> — a separate action, not wired in this phase.</div> : null}</div></section>
+            {cancel.result && <div className="ladderNote" data-testid="cancel-result" style={{ marginTop: 10 }}>{cancel.result}</div>}
+            </div></section>
         </div>
 
         {/* Roster — the ACTUAL roster: real names, grouped by real team + number. */}
