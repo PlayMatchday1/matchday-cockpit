@@ -97,6 +97,10 @@ const NODE_SUITES = [
   // "member" is. Runs Home's fold and the snapshot's fold over one fixture and requires the
   // same answer, with a control proving the fixture can tell the two apart.
   "scripts/membership-parity-test.ts",
+  // FIELDS. A field record decides what a match says it was played on, and the two traps here
+  // are silent: recommendedPlayerCount is a TOTAL (a 9v9 pitch stores 18, and the mockup sent
+  // 9), and the create DTO is a whitelist where one extra key 400s the whole create.
+  "scripts/fields-model-test.ts",
   "scripts/promo-model-test.ts",
   "scripts/cost-basis-confinement-test.ts",
   "scripts/cost-ratio-band-test.ts",

@@ -76,6 +76,9 @@ export const MATCH_OPS_SECTIONS: MatchOpsSection[] = [
   // FIELD PIPELINE LEFT MATCH OPS for /growth/field-pipeline. It was the one item here gated on
   // `tech` rather than `matchops` — chasing venues is a Growth activity that had been parked in an
   // operations rail. Nothing replaces it; the Fields group is Field Ops and Inventory now.
+  // FIELDS — the field records themselves: create, edit, and the venue mapping gap. Sits above
+  // Field Ops because Field Ops is about tonight and this is about the record.
+  { key: "fields", section: "back", group: "Fields", label: "Fields", href: "/match-ops/fields", desc: "Every pitch, and its venue mapping", access: "matchops", icon: <I><circle cx="12" cy="12" r="9" /><path d="M12 3v18M3 12h18" /></I> },
   { key: "ops", section: "back", group: "Fields", label: "Field Ops", href: "/match-ops/field-ops", desc: "Tonight's fields and staff", access: "matchops", icon: <I><rect x="2.5" y="5.5" width="19" height="13" rx="2" /><path d="M12 5.5v13" /><circle cx="12" cy="12" r="3" /></I> },
   { key: "inventory", section: "back", group: "Fields", label: "Inventory", href: "/match-ops/inventory", desc: "Balls, bibs and manager reports", access: "matchops", icon: <I><path d="M21 8l-9-5-9 5 9 5 9-5z" /><path d="M3 8v8l9 5 9-5V8" /><path d="M12 13v8" /></I> },
   { key: "manager-pay", section: "back", group: "People", label: "Manager Pay", href: "/match-ops/manager-pay", desc: "What each manager is owed, and the Gusto file", access: "matchops", icon: <I><rect x="2.5" y="6" width="19" height="12" rx="2.5" /><circle cx="12" cy="12" r="2.6" /><path d="M6 9.5v5M18 9.5v5" /></I>, badge: "manager-pay" },
