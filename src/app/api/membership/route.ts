@@ -58,7 +58,21 @@ export async function GET(req: Request) {
    * into an intersection. */
   const sc = assertScope(confined, askedCity === "all" ? null : askedCity, confined !== null);
   if (!sc.ok) return Response.json({ error: sc.error }, { status: sc.status });
-  const scopeCity = confined ?? (askedCity && askedCity !== "all" ? askedCity : null);
+  /* SCOPE IS A CITY CODE. EVERY CONSUMER BELOW EXPECTS ONE — the mdapi_subscriptions filter is
+   * `.eq("city_identifier", …)` and that column holds ATX / DFW / HOU, and the two display-name
+   * conversions further down are written as code -> display. But the CITY DROPDOWN emits the
+   * DISPLAY name, because it is built from fin_venues.city ("Dallas", "St. Louis"). So a picked
+   * city arrived here as "Dallas", was compared against "DFW", and matched nothing.
+   *
+   * EVERY CITY WAS BROKEN, not just Dallas — Austin returned 0 too. The single exception was OKC,
+   * where the display name and the code are the same five characters, which is exactly the kind of
+   * coincidence that makes a bug look like it works.
+   *
+   * THIS WAS NOT VISIBLE BEFORE the tiles moved onto the live count: the all-time chart reads the
+   * snapshot's by_city map, whose lookup ends in `?? scopeCity` and so landed on the display name
+   * it needed by accident. The chart kept plotting Dallas while every live figure beside it read
+   * zero — which is why the fix is ONE line here and not a patch at each reader. */
+  const scopeCity = cityCodeOf(confined ?? (askedCity && askedCity !== "all" ? askedCity : null));
   const fieldId = Number(url.searchParams.get("field") ?? "") || null;
 
   const sb = makeServerClient();
@@ -136,6 +150,16 @@ export async function GET(req: Request) {
      * The monthly BARS still read the snapshot series; those are history and should not move. */
     const activeMembers = subs.filter((s) => s.status === "ACTIVE").length;
     const activeMembersPaid = countActiveMembers(subs, new Date());
+    /* THE FIELD FILTER CANNOT REACH THIS NUMBER, and that is a property of the data, not a bug to
+     * fix here: mdapi_subscriptions has city_identifier and NO field column. A membership is
+     * bought from a city, not from a pitch. `fieldId` is applied to the match/spot rows above
+     * (which do carry field_id) and legitimately scopes every chart on this page; it is silently
+     * ignored by the member count, which is a DIFFERENT defect from the city one — an absent
+     * filter rather than a wrong one, and one no filter can supply.
+     *
+     * So the count stays CITY-scoped and says so, rather than being quietly presented as if it
+     * were the members of one field. */
+    const membersScope: "network" | "city" = scopeCity ? "city" : "network";
 
     // MEMBERSHIP REVENUE — AN EXPLICIT CATEGORY, never a residual. fin_revenue.type='Membership'.
     let revQ = sb.from("fin_revenue").select("month,city,net,type").eq("type", "Membership");
@@ -259,7 +283,7 @@ export async function GET(req: Request) {
       byCity: groupBy((r) => r.city),
       byField: groupBy((r) => (r.fieldId != null ? (fieldName.get(r.fieldId) ?? String(r.fieldId)) : null)),
       activeMembers,
-      activeMembersPaid,
+      activeMembersPaid, membersScope, fieldScoped: fieldId != null,
       revenueByMonth: Object.fromEntries(revByMonth),
       snapshots: snaps,
       churnDays: CHURN_DAYS,

@@ -31,6 +31,7 @@ type Payload = {
    * activeMembersPaid  — paying, external, activated (387). THE headline, and the identical
    *                      function the Home tile calls. See membership-parity-test.ts. */
   activeMembers: number; activeMembersPaid: number;
+  membersScope: "network" | "city"; fieldScoped: boolean;
   dayMix: { day: string; member: number; daily: number; promo: number; total: number }[];
   byCity: { name: string; member: number; daily: number; promo: number }[];
   byField: { name: string; member: number; daily: number; promo: number }[];
@@ -103,7 +104,18 @@ export default function MembershipView() {
       const j = (await r.json()) as Payload;
       if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
       setData(j);
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) {
+      /* A FAILED LOAD CLEARS THE DATA. It used to keep the last successful payload, so switching
+       * from Dallas to Houston with the route down left DALLAS's 20 members, 1.4 matches and
+       * $17.26 on screen while the dropdown read "Houston" — four wrong numbers under the right
+       * label, with only an error line to contradict them. Measured, not supposed.
+       *
+       * Now the tiles fall to their empty state and the error says why. An em-dash beside a
+       * visible error is "we could not read"; an em-dash with no error is "no members to divide
+       * by". Two different animals, and they no longer render identically. */
+      setErr(e instanceof Error ? e.message : String(e));
+      setData(null);
+    }
     finally { setLoading(false); }
   }, [city, field]);
   useEffect(() => { void load(); }, [load]);
@@ -178,7 +190,12 @@ export default function MembershipView() {
         {/* NO PARTIAL SUFFIX. "28 of 31 days" belongs to avg matches per member, which accrues
             over a month; a headcount does not. It is not 28/31ths of anything. The suffix stays
             on the two KPIs below, where the period is real. */}
-        <Kpi k="Active members" v={num(kpis.activeMembers)} s="paying, external · as of now" />
+        {/* THE SUBTITLE STATES THE NUMBER'S OWN SCOPE. Picking a FIELD narrows every chart on
+            this page but cannot narrow this count — a membership belongs to a city, and
+            mdapi_subscriptions has no field column. Saying so beats showing a city figure under
+            a field heading. */}
+        <Kpi k="Active members" v={num(kpis.activeMembers)}
+          s={`paying, external · as of now${data?.fieldScoped ? ` · ${data.membersScope === "city" ? "city" : "network"}-wide, not per field` : ""}`} />
         <Kpi k="Avg matches / member" v={kpis.avgMatchesPerMember == null ? "—" : kpis.avgMatchesPerMember.toFixed(1)}
           s={`${thisMonth?.month ?? ""}${partSuffix(part)}`} />
         <Kpi k="Avg price / member spot"

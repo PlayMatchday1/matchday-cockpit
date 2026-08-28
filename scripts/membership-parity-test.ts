@@ -135,6 +135,54 @@ console.log("\nthe server-side narrowing is free");
   is("control: the narrowing actually discards rows", ROWS.length - ROWS.filter((r) => r.status === "ACTIVE").length, 2);
 }
 
+console.log("\nthe CITY FILTER reaches the live count");
+{
+  /* THE REGRESSION THIS EXISTS FOR. The city dropdown emits fin_venues.city — a DISPLAY name
+   * ("Dallas") — and every consumer in the membership route expects a CITY CODE, because
+   * mdapi_subscriptions.city_identifier holds "DFW". `.eq("city_identifier", "Dallas")` matched
+   * nothing, so ACTIVE MEMBERS read 0 for every city while the all-time chart beside it kept
+   * plotting that city's members from the snapshot's by_city map.
+   *
+   * EVERY CITY WAS BROKEN except OKC, where the display name and the code are the same string.
+   * That coincidence is why this shipped, and it is why the fixture below uses DALLAS AND OKC:
+   * a test written on OKC alone would have passed against the bug. */
+  const CODE: Record<string, string> = {
+    Austin: "ATX", Dallas: "DFW", Houston: "HOU", "San Antonio": "SATX",
+    Atlanta: "ATL", OKC: "OKC", "St. Louis": "STL", Warsaw: "WAW",
+  };
+  const cityCodeOf = (d: string | null) => (d ? CODE[d] ?? d : null);
+
+  const ROWS_BY_CITY = [
+    { membership_id: 20, status: "ACTIVE", price: 66, member_email: "a@gmail.com", activation_date: "2026-01-01", canceled_at: null, city_identifier: "DFW" },
+    { membership_id: 21, status: "ACTIVE", price: 66, member_email: "b@gmail.com", activation_date: "2026-01-01", canceled_at: null, city_identifier: "DFW" },
+    { membership_id: 30, status: "ACTIVE", price: 66, member_email: "c@gmail.com", activation_date: "2026-01-01", canceled_at: null, city_identifier: "OKC" },
+    { membership_id: 40, status: "ACTIVE", price: 66, member_email: "d@gmail.com", activation_date: "2026-01-01", canceled_at: null, city_identifier: "ATX" },
+  ];
+  /* THE CHART'S OWN NUMBER for the same city — the snapshot by_city map, keyed by DISPLAY name.
+   * This is the series the user could see plotting members while the tile beside it read 0. */
+  const CHART_BY_CITY: Record<string, number> = { Dallas: 2, OKC: 1, Austin: 1 };
+
+  // The route's query, as the route now runs it: city_identifier filtered by the CODE.
+  const fetchFor = (display: string) => ROWS_BY_CITY.filter((r) => r.city_identifier === cityCodeOf(display));
+
+  for (const display of ["Dallas", "OKC", "Austin"]) {
+    const live = countActiveMembers(fetchFor(display), ASOF);
+    const chart = CHART_BY_CITY[display];
+    if (live === chart) ok(`${display}: the live count (${live}) equals the chart's own figure (${chart})`);
+    else bad(`${display}: live count agrees with the chart`, `live ${live} vs chart ${chart}`);
+  }
+
+  /* THE CONTROL. Run the SAME comparison with the scope left as a display name — the bug — and it
+   * must go red for Dallas and Austin while OKC still passes. If this control ever stops failing,
+   * the assertions above have stopped testing anything. */
+  const buggy = (display: string) => ROWS_BY_CITY.filter((r) => r.city_identifier === display);
+  const brokenCities = ["Dallas", "OKC", "Austin"].filter((d) => countActiveMembers(buggy(d), ASOF) !== CHART_BY_CITY[d]);
+  is("control: without the code conversion, Dallas and Austin disagree with the chart", brokenCities, ["Dallas", "Austin"]);
+  is("control: …and OKC does NOT, which is why the bug looked like it worked",
+    countActiveMembers(buggy("OKC"), ASOF), CHART_BY_CITY["OKC"]);
+  is("the conversion is idempotent, so a confined code passes through untouched", cityCodeOf("DFW"), "DFW");
+}
+
 console.log("\nthe wiring, so the folds above are the ones that ship");
 {
   /* COMMENTS ARE STRIPPED BEFORE ANY "the code must not contain X" CHECK. This suite failed on its
@@ -161,6 +209,10 @@ console.log("\nthe wiring, so the folds above are the ones that ship");
   else bad("…and no longer carries the old price>0 rule", "THE 391 IS BACK");
   if (/countActiveMembers/.test(route)) ok("the membership route calls the shared predicate");
   else bad("the membership route calls the shared predicate");
+  /* THE SCOPE MUST BE A CODE BEFORE IT REACHES ANY CONSUMER. One conversion at the top, not a
+   * patch at each reader — there are six readers and five were already correct. */
+  if (/const scopeCity = cityCodeOf\(/.test(route)) ok("the route normalises the city scope to a code once");
+  else bad("the route normalises the city scope to a code once", "A PICKED CITY WOULD READ 0 AGAIN");
   if (/activeMembersPaid/.test(view)) ok("the Membership tile renders the paid-external count");
   else bad("the Membership tile renders the paid-external count", "it is back on the nightly snapshot row");
   if (!/k="Active members"[^/]*partSuffix/.test(view)) ok("the Active members KPI carries no partial-days suffix");
