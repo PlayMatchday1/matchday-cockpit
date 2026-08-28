@@ -29,7 +29,7 @@ import { supabase } from "@/lib/supabase";
 import { diffKeys, pick, MONEY_KEYS, TOGGLE_KEYS, NULLABLE_NUM } from "@/lib/matchEditModel";
 import { centsToDollars, dollarsToCents } from "@/lib/matchMoney";
 import {
-  pickerOptions, offeredCounts, confirmLines, normalizeManagerId,
+  pickerOptions, offeredCounts, confirmLines, normalizeManagerId, managerNameIn,
   CAN_UNASSIGN_MANAGER_FROM_MATCH, UNASSIGN_PROOF,
 } from "@/lib/managerAssign";
 import {
@@ -606,11 +606,11 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   // control shows a different person than the match actually has.
   const mgrOpts = useMemo(
     () => pickerOptions(managers, managersAll, false,
-      cur.managerId == null ? null : { id: Number(cur.managerId), name: mgrNameIn([...managers, ...managersAll], cur.managerId) }),
+      cur.managerId == null ? null : { id: Number(cur.managerId), name: managerNameIn([...managers, ...managersAll], cur.managerId) }),
     [managers, managersAll, cur.managerId]);
   const mgrOpts2 = useMemo(
     () => pickerOptions(managers, managersAll, false,
-      cur.secondManagerId == null ? null : { id: Number(cur.secondManagerId), name: mgrNameIn([...managers, ...managersAll], cur.secondManagerId) }),
+      cur.secondManagerId == null ? null : { id: Number(cur.secondManagerId), name: managerNameIn([...managers, ...managersAll], cur.secondManagerId) }),
     [managers, managersAll, cur.secondManagerId]);
 
   if (loadErr) return <div className="mp"><style>{CSS}</style><div className="mp-panel" data-testid="mp-panel"><div className="mp-err" data-testid="mp-load-error">{loadErr}</div></div></div>;
@@ -619,7 +619,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   /* THE NAME LOOKUP SEARCHES BOTH LISTS. It used to search the city roster only, so an off-city
    * manager — and any manager who has since come off this city's roster — rendered as "id 41207"
    * in the diff and in the confirmation. A confirmation that names an id is not naming a person. */
-  const mgrName = (id: unknown) => mgrNameIn([...managers, ...managersAll], id);
+  const mgrName = (id: unknown) => managerNameIn([...managers, ...managersAll], id);
   const dollarInput = (k: string) => (cur[k] === "" || cur[k] == null ? "" : centsToDollars(cur[k]));
 
   return (
@@ -1079,13 +1079,6 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
       </div>
     </div>
   );
-}
-
-/* ONE NAME LOOKUP, SEARCHING BOTH LISTS. It used to search the city roster only, so an off-city
- * manager — and any manager who has since come off this city's roster — rendered as "id 41207" in
- * the diff and in the confirmation. A confirmation that names an id is not naming a person. */
-function mgrNameIn(all: Manager[], id: unknown): string {
-  return all.find((m) => m.id === Number(id))?.name ?? (id == null || id === "" ? "—" : `id ${id}`);
 }
 
 function shownVal(k: string, v: unknown, managers: Manager[]): string {

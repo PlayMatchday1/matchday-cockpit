@@ -23,7 +23,7 @@ import { EDITABLE_KEYS, MONEY_KEYS as MONEY, TOGGLE_KEYS as TOGGLE, NULLABLE_NUM
  * giving each its own picker rule and its own confirmation wording is the two-paths-one-question
  * shape that put $1,815 and $2,006 on two screens for four months. One model, one answer. */
 import {
-  pickerOptions, offeredCounts, confirmLines, normalizeManagerId,
+  pickerOptions, confirmLines, normalizeManagerId, managerNameIn,
 } from "@/lib/managerAssign";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { noteLogResponse } from "@/lib/logHealth";
@@ -50,11 +50,16 @@ const LADDER = ["fakeSpotLeft36h", "fakeSpotLeft24h", "fakeSpotLeft12h", "fakeSp
 const CATS: [string, string][] = [["OPEN", "Open — Open to all"], ["PREMIER", "Premier — four stars and up"], ["LEGENDS", "Legends"], ["ACADEMY", "Academy"], ["CO_ED", "Co-ed"], ["FEMINE", "Women’s"], ["TOURNAMENT", "Tournament"]];
 const TYPES: [string, string][] = [["REGULAR", "Regular"], ["EVENT", "Special event"], ["BRACKET", "Bracket"], ["GROUP", "Group"]];
 
-function specs(fields: FieldRow[], managers: { id: number; name: string; offCity?: boolean }[] = []): Spec[] {
+function specs(fields: FieldRow[], managers: { id: number; name: string; offCity?: boolean }[] = [],
+               managers2: { id: number; name: string; offCity?: boolean }[] = managers): Spec[] {
   const fieldOpts: [number, string][] = fields.map((f) => [f.id, `${f.city ? f.city + " — " : ""}${f.title}`]);
   // An off-city person is LABELLED, never mixed in unmarked — the operator should be able to see
   // that the picker has been widened.
-  const mgrOpts: [number, string][] = managers.map((m) => [m.id, m.offCity ? `${m.name} · other city` : m.name]);
+  const lbl = (m: { name: string; offCity?: boolean }) => (m.offCity ? `${m.name} \u00b7 other city` : m.name);
+  /* TWO LISTS, because each select injects ITS OWN attached manager. Sharing one list put
+   * Manager 1's off-roster person into Manager 2's dropdown as a selectable option. */
+  const mgrOpts: [number, string][] = managers.map((m) => [m.id, lbl(m)]);
+  const mgrOpts2: [number, string][] = managers2.map((m) => [m.id, lbl(m)]);
   return [
     { key: "name", group: "match", kind: "text", label: "Name", wide: true },
     { key: "fieldId", group: "match", kind: "select", label: "Field", opts: fieldOpts },
@@ -64,7 +69,7 @@ function specs(fields: FieldRow[], managers: { id: number; name: string; offCity
     // in the list stays selected and labelled; it is never blanked, because blanking would report
     // a change nobody made and then save it.
     { key: "managerId", group: "match", kind: "select", label: "Manager 1", opts: mgrOpts },
-    { key: "secondManagerId", group: "match", kind: "select", label: "Manager 2", opts: mgrOpts, hint: "Leave empty if only one" },
+    { key: "secondManagerId", group: "match", kind: "select", label: "Manager 2", opts: mgrOpts2, hint: "Leave empty if only one" },
     { key: "description", group: "match", kind: "textarea", label: "Description", wide: true },
     { key: "managerIntro", group: "match", kind: "textarea", label: "Manager intro", wide: true },
     { key: "registrationPrice", group: "price", kind: "money", label: "Price" },
@@ -168,11 +173,7 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
   // managerId as a raw id box while the drawer showed a name dropdown. The drawer's body is gone,
   // so reading them here is what keeps that capability alive.
   const [managers, setManagers] = useState<{ id: number; name: string }[]>([]);
-  /* THE ESCAPE, OFF BY DEFAULT. `managers` is this match's CITY roster — 28 of the 87 for a typical
-   * Austin fixture. A manager covering a one-off outside their listed cities is real, so the full
-   * roster is one visible checkbox away rather than unreachable. */
   const [managersAll, setManagersAll] = useState<{ id: number; name: string }[]>([]);
-  const [showAllCities, setShowAllCities] = useState(false);
   /* MANAGER CHANGES DO NOT RIDE ALONG ON "SAVE". This write decides who Manager Pay pays, so it
    * stops here first and names the person, the match and the amount. */
   const [mgrConfirm, setMgrConfirm] = useState<string[] | null>(null);
@@ -185,13 +186,22 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
   const [msg, setMsg] = useState<{ kind: "ok" | "err" | "warn"; text: string } | null>(null);
   const [cancelArmed, setCancelArmed] = useState(false);
 
-  const mgrOffered = useMemo(() => offeredCounts(managers, managersAll), [managers, managersAll]);
-  const mgrPick = useMemo(() => pickerOptions(managers, managersAll, showAllCities),
-    [managers, managersAll, showAllCities]);
-  const FIELDS = useMemo(() => specs(fields, mgrPick), [fields, mgrPick]);
-  const mgrNameOf = (id: unknown) =>
-    [...managers, ...managersAll].find((m) => m.id === Number(id))?.name ??
-    (id == null || id === "" ? "—" : `id ${id}`);
+  const mgrNameOf = (id: unknown) => managerNameIn([...managers, ...managersAll], id);
+  /* THE CURRENT MANAGER IS ALWAYS AN OPTION — the same call the drawer makes, not a second
+   * mechanism. Before this, an off-roster manager reached the select only through renderField's
+   * generic "id N — not in this list" fallback: the right OUTCOME by a different route, with a
+   * different label, and with pickerOptions' offCity flag never set. Measured on 17467 before the
+   * change — value="74440", selectedIndex=1 of 15, nothing on the wire for a blind Save — so this
+   * fixes a divergence, NOT a live mis-assignment. */
+  const mgrPick = useMemo(() => pickerOptions(managers, managersAll, false,
+    state?.managerId == null ? null
+      : { id: Number(state.managerId), name: managerNameIn([...managers, ...managersAll], state.managerId) }),
+    [managers, managersAll, state?.managerId]);
+  const mgrPick2 = useMemo(() => pickerOptions(managers, managersAll, false,
+    state?.secondManagerId == null ? null
+      : { id: Number(state.secondManagerId), name: managerNameIn([...managers, ...managersAll], state.secondManagerId) }),
+    [managers, managersAll, state?.secondManagerId]);
+  const FIELDS = useMemo(() => specs(fields, mgrPick, mgrPick2), [fields, mgrPick, mgrPick2]);
 
   const ingest = useCallback((m: Data) => {
     const ed: Data = {};
@@ -508,7 +518,7 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
           toName: toId == null ? null : mgrNameOf(toId),
           maxPlayerCount: meta?.maxPlayerCount == null ? null : Number(meta.maxPlayerCount),
           coManaged: normalizeManagerId(state.secondManagerId) != null,
-          offCity: !!mgrPick.find((o) => o.id === toId)?.offCity,
+          offCity: !![...mgrPick, ...mgrPick2].find((o) => o.id === toId)?.offCity,
         }).map((l) => (k === "secondManagerId" ? `Second manager — ${l}` : l)));
       }
       setMgrConfirm(lines);
@@ -613,15 +623,11 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
           {/* Match */}
           <section className="card"><div className="ch"><h2>Match</h2><span className="cnt" data-testid="cnt-match">{groupCount("match") ? `${groupCount("match")} changed` : ""}</span></div>
             <div className="cb">
-              {/* THE ESCAPE, VISIBLE, AND IT SAYS WHAT IT ADDS. The default picker is this match's
-                  CITY roster; a manager covering a one-off outside their listed cities is real, and
-                  silently hiding them turns a real assignment into an impossible one. */}
-              <label className="allcities" data-testid="mgr-allcities">
-                <input type="checkbox" checked={showAllCities} onChange={(e) => setShowAllCities(e.target.checked)} disabled={mgrOffered.hidden === 0} />
-                <span>Show managers from all cities <b>({mgrOffered.all})</b>{mgrOffered.hidden > 0
-                  ? ` — ${mgrOffered.hidden} not on ${(meta?.cityName as string | undefined) ?? "this city"}'s roster`
-                  : " — every manager already covers this city"}</span>
-              </label>
+              {/* THE "SHOW MANAGERS FROM ALL CITIES" ESCAPE STOOD HERE AND IS GONE, for the reason
+                  it went from the drawer: over 90 days it produced ZERO assignments, because every
+                  one of the 100 matches carrying an off-roster manager carries one of 8 people on
+                  NO city's roster — people this control never offered either. Two pages must not
+                  disagree about what the manager picker is. */}
               <div className="grid">{inGroup("match").map(renderField)}
               {mode === "edit" ? (
                 <>
@@ -900,9 +906,6 @@ const CSS = `
 .me .cnt.cap.over{color:#A83120;font-weight:800}.me .cnt.cap.over b{color:#A83120}
 .me .pfoot{font-size:11px;color:var(--muted);margin-top:10px;line-height:1.5}
 .me .savebar{position:fixed;left:0;right:0;bottom:0;background:var(--paper);border-top:1px solid var(--line);box-shadow:0 -8px 24px rgba(0,51,38,.09);z-index:60}
-.allcities{display:flex;gap:8px;align-items:flex-start;margin:0 0 12px;font-size:12px;color:rgba(16,35,26,.62);line-height:1.45;cursor:pointer}
-.allcities input{margin-top:2px;flex:none}
-.allcities b{font-variant-numeric:tabular-nums;color:rgba(16,35,26,.8)}
 .mgrconfirm{border-top:1px solid #F0C98A;background:#FFF7EA;padding:11px 16px;font-size:13px;color:#5E3D05;line-height:1.5}
 .mgrconfirm b{display:block;margin-bottom:5px;color:#4A3004}
 .mgrconfirm ul{margin:0 0 9px;padding-left:18px}

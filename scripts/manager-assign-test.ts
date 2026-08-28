@@ -205,6 +205,27 @@ console.log("\nthe panel: the select cannot paint a person nobody chose");
   else bad("control: the manager section still renders");
   if (!/Show managers from all cities/.test(src)) ok("the all-cities escape is gone from the panel");
   else bad("the all-cities escape is gone from the panel", "the checkbox is still rendered");
+
+  /* AND THE OTHER SURFACE MUST AGREE. Match editor kept its own copy of the escape, and its own
+   * private name lookup, and reached the off-roster manager through renderField's generic
+   * "not in this list" fallback instead of pickerOptions. Same outcome, three different routes —
+   * which is how two screens start telling an operator different things about one write. */
+  const ed = readFileSync("src/app/(internal)/match-ops/matches/[id]/MatchEditor.tsx", "utf8");
+  if (!/Show managers from all cities/.test(ed)) ok("Match editor's escape is gone too");
+  else bad("Match editor's escape is gone too", "the two pickers disagree again");
+  // POSITIVE CONTROL: we are reading the file we think we are.
+  if (/data-testid={`in-\$\{f\.key\}`}/.test(ed)) ok("control: MatchEditor.tsx was actually read");
+  else bad("control: MatchEditor.tsx was actually read", "the checks above pass on an empty string");
+  for (const [call, what] of [
+    [/pickerOptions\(managers, managersAll, false,[\s\S]{0,200}?state\.managerId/, "Manager 1"],
+    [/pickerOptions\(managers, managersAll, false,[\s\S]{0,200}?state\.secondManagerId/, "Manager 2"],
+  ] as const) {
+    if (call.test(ed)) ok(`Match editor injects the attached manager into ${what}'s picker`);
+    else bad(`Match editor injects the attached manager into ${what}'s picker`, "it would fall back to the generic option");
+  }
+  if (/managerNameIn\(/.test(ed) && /managerNameIn\(/.test(src))
+    ok("both surfaces resolve manager names through the SAME exported helper");
+  else bad("both surfaces share one name lookup", "a second copy can drift");
 }
 
 // ── 6. THE ROUTE STILL SENDS THE DIFF, AND ONLY OVER THE GUARDED CLIENT ───────────────────────

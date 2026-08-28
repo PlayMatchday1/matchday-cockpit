@@ -97,6 +97,16 @@ export function pickerOptions(
     Number(a.offCity) - Number(b.offCity) || a.name.localeCompare(b.name) || a.id - b.id);
 }
 
+/* ONE NAME LOOKUP, SEARCHING BOTH LISTS, SHARED BY BOTH SURFACES. It used to search the city
+ * roster only, so an off-city manager — and any manager who has since come off this city's roster
+ * — rendered as "id 41207" in the diff and in the confirmation. A confirmation that names an id is
+ * not naming a person. It lived in MatchPanel and Match editor had a near-identical private copy;
+ * two lookups that agree today are two lookups that can disagree tomorrow, on a string an operator
+ * reads before deciding who gets paid. */
+export function managerNameIn(all: readonly { id: number; name: string }[], id: unknown): string {
+  return all.find((m) => m.id === Number(id))?.name ?? (id == null || id === "" ? "\u2014" : `id ${id}`);
+}
+
 /** How many people the picker is offering, and how many it is holding back. */
 export function offeredCounts(
   cityManagers: readonly { id: number }[],
