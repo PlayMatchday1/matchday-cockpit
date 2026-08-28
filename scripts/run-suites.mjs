@@ -110,6 +110,11 @@ const NODE_SUITES = [
   // decides who gets paid, and it was wrong in both directions: NYC and El Paso offered NOBODY,
   // while SATX and DFW offered eight people on no roster at all.
   "scripts/city-manager-roster-test.ts",
+  // THE TEAM-COUNT CONTROL. Changing TEAMS used to send {teamNumbers} alone, leaving the mode it
+  // switched INTO holding a capacity nobody had set — production match 18125 landed on 4 teams
+  // reading a stale maxTeamSize4Team and showed players a FRACTIONAL team size. The rung fields
+  // are TOTALS, not per side, which is why the first assertion has a control on 9 vs 36.
+  "scripts/team-shape-test.ts",
   "scripts/promo-model-test.ts",
   "scripts/cost-basis-confinement-test.ts",
   "scripts/cost-ratio-band-test.ts",

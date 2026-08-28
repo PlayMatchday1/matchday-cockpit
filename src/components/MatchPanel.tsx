@@ -37,7 +37,7 @@ import {
 } from "@/lib/managerAssign";
 import {
   emptyPending, normalizePending, pendingCount, sortedTeam, spotsOfTeam, planMove,
-  savePlan, clearApplied,
+  savePlan, clearApplied, teamCountWrites, teamShapeError,
   type Pending, type RosterOrigin, type EditRow, type PlannedWrite,
 } from "@/lib/rosterEditModel";
 
@@ -294,8 +294,23 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
       return normalizePending({ ...prev, removes: on ? prev.removes.filter((x) => x !== p.umId) : [...prev.removes, p.umId] }, origin);
     });
   };
+  /* SWITCHING MODE CARRIES THE CAPACITY WITH IT. This used to stage the team count ALONE, so the
+   * only thing on the wire was PUT {teamNumbers: 4} and the match landed in 4-team mode reading a
+   * maxTeamSize4Team nobody had set for it. Production match 18125 did exactly that on 2026-08-28
+   * with 28 players on it, and the player app divided a stale 4-team total by 4 to show a
+   * FRACTIONAL team size.
+   *
+   * The per-team figure is the one on screen — SPOTS PER TEAM — so switching 2 -> 4 at 9 a side
+   * writes 36, and teamCountWrites puts it in maxPlayerCount AND in the target mode's rung. The
+   * totals are TOTALS: 36, never 9. */
   const stageTeamCount = (target: number) => {
+    const per = teamCount > 0 && capacity % teamCount === 0 ? capacity / teamCount : null;
     setPending((p) => normalizePending({ ...p, teamCount: target }, origin));
+    // A match whose stored capacity does not divide evenly has no honest per-team figure to carry,
+    // so the capacity is left exactly as stored rather than reshaped behind the operator.
+    if (per == null) return;
+    const writes = teamCountWrites(target, per);
+    setCur((c) => ({ ...c, ...writes }));
   };
   const stageRename = (teamId: number, value: string) => {
     setTeamDraft((d) => ({ ...d, [teamId]: value }));
@@ -440,6 +455,12 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   // only maxTeamSize2Team / maxTeamSize4Team), so a 3-team match's capacity lives in maxPlayerCount
   // alone — confirmed on 28 live 3-team matches, e.g. 15322: 21 total = 3 × 7, while its m2/m4 hold
   // the OTHER configurations and say nothing about the 3-team shape.
+  /* THE APP CAN RENDER A FRACTIONAL TEAM SIZE. Clubhouse must never be able to produce one — so a
+   * capacity that does not divide by the team count blocks the save and says why, rather than
+   * being rounded into a number nobody chose. Checked against the STAGED pair, so it catches a
+   * team-count change and a capacity edit alike. */
+  const shapeErr = teamShapeError(capacity, rosterTeamCount);
+
   const rungKey: "maxTeamSize2Team" | "maxTeamSize4Team" | null =
     teamCount === 2 ? "maxTeamSize2Team" : teamCount === 4 ? "maxTeamSize4Team" : null;
   // Sets the TOTAL from a per-team figure, and touches ONLY this rung. The other rung is the
@@ -497,6 +518,9 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
      * (staging 2557 returned 2xx and read back inverted), so the refusal lives on the path that
      * actually sends, not only on the control that starts it. */
     if (whenError(cur.startDate as string | undefined, cur.endDate as string | undefined)) return;
+    /* AND THE SHAPE, on the path rather than only on the button. A disabled button is a UI fact;
+     * this write decides what the players see when they arrive at the pitch. */
+    if (teamShapeError(Number(cur.maxPlayerCount) || 0, rosterTeamCount)) return;
     if (!orig || saving) return;
     if (changed.length === 0 && pendingN === 0) return;
     const mgrChanged = changed.filter((k) => (MGR_KEYS as readonly string[]).includes(k));
@@ -828,6 +852,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 </span>
               </div>
             </div>
+            {shapeErr && <div className="mp-err" data-testid="mp-shape-err">{shapeErr}</div>}
           </Section>
 
           <Section title="SPOTS SHOWN" dirty={secDirty(MARKS.map((h) => `fakeSpotLeft${h}h`))}>
@@ -1123,7 +1148,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 taking one back would BE another write. The label says so. */}
             <button type="button" className="mp-btn" data-testid="mp-revert" disabled={unsaved === 0} onClick={doRevert}
               title="Discards every unsaved change on this panel. Sends no request — it cannot undo anything already saved.">Revert <em className="mp-btnsub">discards, sends nothing</em></button>
-            <button type="button" className="mp-btn mp-pri" data-testid="mp-save" disabled={!mayWrite || unsaved === 0 || saving || !!whenErr} title={whenErr ?? (mayWrite ? undefined : (access.ok ? undefined : access.reason))} onClick={() => { if (mayWrite && !whenErr) void doSave(); }}>
+            <button type="button" className="mp-btn mp-pri" data-testid="mp-save" disabled={!mayWrite || unsaved === 0 || saving || !!whenErr || !!shapeErr} title={whenErr ?? shapeErr ?? (mayWrite ? undefined : (access.ok ? undefined : access.reason))} onClick={() => { if (mayWrite && !whenErr && !shapeErr) void doSave(); }}>
               {saving ? "Saving…" : unsaved ? `Save · ${unsaved} change${unsaved === 1 ? "" : "s"}` : "Save"}</button>
           </div>
         </div>

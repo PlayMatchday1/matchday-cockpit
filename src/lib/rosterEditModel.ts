@@ -217,6 +217,48 @@ export function clearApplied(p: Pending, w: PlannedWrite): Pending {
 // ── THE CONSEQUENCE LINE, before the click ───────────────────────────────────────────────────────
 // Same pattern as the manager-pay screen: say what this does to real people BEFORE it is chosen,
 // not in a dialog after. Returns null when the choice costs nothing.
+/* ── SWITCHING TEAM COUNT MUST CARRY THE CAPACITY WITH IT ─────────────────────────────────────
+ *
+ * WHAT WENT WRONG, on production match 18125 (San Antonio, 28 players) on 2026-08-28. The team
+ * count went 2 -> 4 and the ONLY thing on the wire was:
+ *
+ *     PUT /admin/matches/18125   {"teamNumbers": 4}          <- change_log, outcome "landed"
+ *
+ * The API changes nothing else: proven on staging, where PUT {teamNumbers:4} moved a match from 2
+ * teams to 4 and left maxPlayerCount, maxTeamSize2Team and maxTeamSize4Team exactly as they were.
+ * So the match landed in 4-team mode reading a maxTeamSize4Team NOBODY HAD EVER SET for it, and the
+ * player app divided that stale total by 4. A total that is not a multiple of 4 shows a FRACTIONAL
+ * team size — 22/4 = 5.5 — which is what the players saw.
+ *
+ * THE TOTALS ARE TOTALS. maxTeamSize2Team and maxTeamSize4Team are the WHOLE match, not per side:
+ * a 9-a-side 4-team match stores 36, not 9. This is the trap that a "10 x 10" control sending 20
+ * is on record for, and it is the reason this function exists rather than a line at the call site.
+ *
+ * SO A TEAM-COUNT CHANGE WRITES THE MODE'S TOTAL IN THE SAME SAVE. Never leave the mode you are
+ * switching INTO holding a number nobody chose.
+ *
+ * THREE TEAMS HAS NO RUNG. The API models only maxTeamSize2Team and maxTeamSize4Team, so a 3-team
+ * match's capacity lives in maxPlayerCount alone — confirmed on 28 live 3-team matches. We still
+ * write maxPlayerCount; there is simply no rung field to write beside it. */
+export function teamCountWrites(target: number, perTeam: number): Record<string, number> {
+  const total = Math.max(target, Math.round(perTeam) * target);
+  const out: Record<string, number> = { maxPlayerCount: total };
+  if (target === 2) out.maxTeamSize2Team = total;
+  else if (target === 4) out.maxTeamSize4Team = total;
+  return out;
+}
+
+/* THE BLOCK. The player app can render a fractional team size; Clubhouse must never be able to
+ * produce one. A total that does not divide by the team count is refused with the reason on
+ * screen, not rounded into something nobody asked for. */
+export function teamShapeError(total: number, teamCount: number): string | null {
+  if (!Number.isFinite(total) || !Number.isFinite(teamCount) || teamCount <= 0) return null;
+  if (total % teamCount !== 0) {
+    return `${total} spots does not divide into ${teamCount} teams — that shows as ${(total / teamCount).toFixed(1)} players per team in the app. Pick a total that is a multiple of ${teamCount}.`;
+  }
+  return null;
+}
+
 export function teamCountConsequence(origin: RosterOrigin, p: Pending, target: number): string | null {
   const now = teamCountOf(origin);
   if (target === now) return null;

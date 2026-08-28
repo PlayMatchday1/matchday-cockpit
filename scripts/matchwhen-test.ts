@@ -151,7 +151,11 @@ console.log("\nthe panel wiring");
   // The Save must be blocked, on the PATH and not only on the button.
   if (/if \(whenError\([\s\S]{0,120}?\)\) return;/.test(src)) ok("doSave refuses an inverted pair before sending");
   else bad("doSave refuses an inverted pair before sending", "a disabled button is the only guard");
-  if (/disabled=\{!mayWrite \|\| unsaved === 0 \|\| saving \|\| !!whenErr\}/.test(src)) ok("…and the Save control is disabled too");
+  /* SELECTOR PATH ONLY. The expression gained `|| !!shapeErr` when the team-count control learned
+   * to refuse a capacity that does not divide by the team count. The CLAIM is unchanged — the Save
+   * control is disabled on a wall-clock error — so this asserts that whenErr is one of the
+   * disabling conditions rather than pinning the whole expression, which is what made it brittle. */
+  if (/disabled=\{[^}]*!!whenErr[^}]*\}/.test(src)) ok("…and the Save control is disabled too");
   else bad("…and the Save control is disabled too");
 
   /* NO SECOND COPY OF THE WALL HELPERS. They moved to the lib; a private copy drifting from the
