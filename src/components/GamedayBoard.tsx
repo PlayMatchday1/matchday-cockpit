@@ -247,6 +247,8 @@ export default function GamedayBoard({
               <button className="marw" data-testid="m-day-prev" aria-label="Previous day" onClick={() => goDay(addDays(date, -1))}>‹</button>
               <span className="mdaylab"><b data-testid="m-daylab">{shortDay(date)}</b>{date === today && <i>TODAY</i>}</span>
               <button className="marw" data-testid="m-day-next" aria-label="Next day" onClick={() => goDay(addDays(date, 1))}>›</button>
+              <input type="date" className="daypick" data-testid="m-day-pick" aria-label="Jump to a date"
+                value={date} onChange={(e) => { if (e.target.value) goDay(e.target.value); }} />
             </span>
             <button className="chip mtoday" data-testid="m-day-today" disabled={date === today} onClick={() => goDay(today)}>Today</button>
           </div>
@@ -295,6 +297,14 @@ export default function GamedayBoard({
               <button className="arw" data-testid="day-prev" aria-label="Previous day" onClick={() => goDay(addDays(date, -1))}>‹</button>
               <div className="daylab"><b data-testid="daylab">{dayLabel(date)}</b><i>{date === today ? "TODAY" : ""}</i></div>
               <button className="arw" data-testid="day-next" aria-label="Next day" onClick={() => goDay(addDays(date, 1))}>›</button>
+              {/* THE PICKER DOES NO DATE ARITHMETIC AT ALL, and that is the whole design.
+                  <input type="date"> yields "YYYY-MM-DD" — the exact shape `date` already holds —
+                  so the value goes straight into goDay(), the same function the arrows call. There
+                  is no parse, no format, no new Date(), and therefore no way for the picker and the
+                  arrows to disagree about what day it is: they are the same state and the same
+                  setter. A day boundary can only be wrong here if it is already wrong for ‹ ›. */}
+              <input type="date" className="daypick" data-testid="day-pick" aria-label="Jump to a date"
+                value={date} onChange={(e) => { if (e.target.value) goDay(e.target.value); }} />
             </div>
             <button className="chip" data-testid="day-today" disabled={date === today} onClick={() => goDay(today)}>Today</button>
             <span className="filters">
@@ -514,6 +524,12 @@ const CSS = `
 .gdo .chips{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
 .gdo .daynav{display:flex;align-items:center;gap:8px;margin-right:4px}
 .gdo .arw{width:34px;height:34px;border-radius:8px;border:1px solid #DCE5E0;background:#fff;color:#20372C;line-height:1;font-size:16px}
+/* The match drawer's WHEN > DATE field, in this page's palette — same 1px border, same radius,
+   same white ground, sized to sit level with .arw rather than towering over it. Native picker;
+   nothing custom is drawn. */
+.gdo .daypick{height:34px;border:1px solid #DCE5E0;border-radius:8px;background:#fff;color:#20372C;
+  font:inherit;font-size:13.5px;padding:0 10px;min-width:0}
+.gdo .daypick:focus{outline:2px solid #4FE07E;outline-offset:-1px}
 .gdo .arw:hover{background:#F2F7F4}
 .gdo .daylab{min-width:184px;text-align:center}.gdo .daylab b{display:block;font-size:14.5px}.gdo .daylab i{display:block;font-style:normal;font-size:10px;letter-spacing:.1em;color:#046B45;font-weight:700;min-height:12px}
 .gdo .chip{border:1px solid #DCE5E0;background:#fff;border-radius:20px;padding:8px 14px;color:#1B3227;font-size:14px;min-height:34px}

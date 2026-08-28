@@ -55,10 +55,18 @@ SELECT
   m.city_identifier                                       AS city_identifier,
   m.field_title                                           AS field_title,
   m.field_id                                              AS field_id,
+  -- COLUMN ORDER IS LOAD-BEARING HERE. CREATE OR REPLACE VIEW may only APPEND columns — it
+  -- cannot rename or reorder existing ones, and the first cut of this migration put
+  -- amount_cents in position 8 and was refused:
+  --   ERROR 42P16: cannot change name of view column "total_amount" to "amount_cents"
+  -- So total_amount KEEPS its name and its position, with its SOURCE corrected to the pre-tax
+  -- column, and amount_cents is appended after it. Same value, two names, no rename.
+  --
+  -- DEPRECATED alias. Same pre-tax value. Kept in place only for the deploy-order window above;
+  -- scripts/revenue-pretax-test.ts asserts no code selects it.
+  COALESCE(p.amount, 0)                                   AS total_amount,
   -- REVENUE, PRE-TAX, in cents. The column every revenue path should read.
-  COALESCE(p.amount, 0)                                   AS amount_cents,
-  -- DEPRECATED alias, same pre-tax value, kept only for the deploy-order window above.
-  COALESCE(p.amount, 0)                                   AS total_amount
+  COALESCE(p.amount, 0)                                   AS amount_cents
 FROM public.mdapi_match_players p
 JOIN public.mdapi_matches m ON m.api_id = p.match_api_id
 WHERE p.deleted_at IS NULL
@@ -69,6 +77,10 @@ WHERE p.deleted_at IS NULL
   AND m.deleted_at IS NULL
   AND COALESCE(m.is_cancelled, false) = false
   AND m.start_date IS NOT NULL;
+
+-- The view's other dependents — growth_player_profile, growth_player_month and
+-- growth_cohort_matrix — do not read this column at all, so appending leaves them untouched and
+-- they do not need rebuilding. growth_play_dims is the only one that reads the money.
 
 -- ── 2. play dimensions ───────────────────────────────────────────────────────
 -- `amount` here was SUM(total_amount)/100 — dollars, but the tax-inclusive charge. The
