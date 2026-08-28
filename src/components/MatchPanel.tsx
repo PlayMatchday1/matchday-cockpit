@@ -29,6 +29,9 @@ import { supabase } from "@/lib/supabase";
 import { diffKeys, pick, MONEY_KEYS, TOGGLE_KEYS, NULLABLE_NUM } from "@/lib/matchEditModel";
 import { centsToDollars, dollarsToCents } from "@/lib/matchMoney";
 import {
+  parseWall, buildWall, movePair, moveEnd, durationLabel, whenError, wallInputsReady,
+} from "@/lib/matchWhen";
+import {
   pickerOptions, offeredCounts, confirmLines, normalizeManagerId, managerNameIn,
   CAN_UNASSIGN_MANAGER_FROM_MATCH, UNASSIGN_PROOF,
 } from "@/lib/managerAssign";
@@ -86,13 +89,6 @@ type MatchData = Record<string, unknown> & {
 // pull the labelled wall time back), do arithmetic in wall minutes, rebuild the string verbatim.
 // NEVER new Date(str) and read local getters — that re-reads the Z as UTC and lands hours off.
 const p2 = (n: number) => String(n).padStart(2, "0");
-function parseWall(z: string): { date: string; time: string } {
-  const d = new Date(z);
-  return { date: `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}`, time: `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}` };
-}
-function buildWall(date: string, time: string): string { return `${date}T${time}:00.000Z`; }
-function wallMin(z: string): number { const d = new Date(z); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes()) / 60000; }
-function fromWallMin(min: number): string { const d = new Date(min * 60000); return `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}T${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:00.000Z`; }
 function clock12(time: string): string { const [h, m] = time.split(":").map(Number); const hr = h % 12 === 0 ? 12 : h % 12; return `${hr}:${p2(m)} ${h < 12 ? "AM" : "PM"}`; }
 function prettyDate(date: string): string { const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]; const [y, mo, d] = date.split("-").map(Number); return `${MON[mo - 1]} ${d}, ${y}`; }
 
@@ -110,7 +106,8 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   const mayWrite = access.ok;
   const [orig, setOrig] = useState<MatchData | null>(null);
   const [cur, setCur] = useState<Record<string, unknown>>({});
-  const [when, setWhen] = useState<{ date: string; time: string }>({ date: "", time: "" });
+  const [when, setWhen] = useState<{ date: string; time: string; endDate: string; endTime: string }>(
+    { date: "", time: "", endDate: "", endTime: "" });
   const [managers, setManagers] = useState<Manager[]>([]);
   /* THE ESCAPE, AND IT IS OFF BY DEFAULT. `managers` is this match's CITY roster — 28 of the 87 for
    * a typical Austin fixture. `managersAll` is every match manager, revealed by a visible control,
@@ -176,7 +173,8 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
       setManagersAll(j.managersAllCities ?? []);
       setFields(j.fields ?? []);
       const w = m.startDate ? parseWall(m.startDate) : { date: "", time: "" };
-      setWhen(w);
+      const we = m.endDate ? parseWall(m.endDate) : { date: "", time: "" };
+      setWhen({ date: w.date, time: w.time, endDate: we.date, endTime: we.time });
       // seed the editable copy with the staged keys (+ startDate/endDate verbatim)
       const next: Record<string, unknown> = {};
       for (const k of STAGED_KEYS) next[k] = m[k] ?? null;
@@ -338,16 +336,40 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     } catch (e) { setCancelBusy(false); setCancelResult(`UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Reload before acting.`); }
   };
 
-  // Recompute the derived date pair whenever the WHEN inputs move: apply the start delta to the
-  // loaded end so DURATION is preserved, and send BOTH (the route rejects a lone date field).
+  /* DATE or START TIME moves the whole match and keeps its length; END TIME changes the length
+   * and moves nothing else. Both refuse to write a half-empty input: a cleared <input type=date>
+   * yields "", and buildWall("", "19:00") is the string "T19:00:00.000Z" — not empty, not a date,
+   * and it would reach the wire looking like a value. The staged pair is the base, so editing the
+   * end and THEN the date keeps the end the operator chose. */
   const applyWhen = (date: string, time: string) => {
-    setWhen({ date, time });
+    setWhen((w) => ({ ...w, date, time }));
     setCur((c) => {
-      if (!orig?.startDate || !orig?.endDate) return { ...c, startDate: buildWall(date, time) };
-      const newStart = buildWall(date, time);
-      const delta = wallMin(newStart) - wallMin(orig.startDate);
-      const newEnd = fromWallMin(wallMin(orig.endDate) + delta);
-      return { ...c, startDate: newStart, endDate: newEnd };
+      const curStart = String(c.startDate ?? orig?.startDate ?? "");
+      const curEnd = String(c.endDate ?? orig?.endDate ?? "");
+      if (!wallInputsReady(date, time)) return c;
+      if (!curStart || !curEnd) return { ...c, startDate: buildWall(date, time) };
+      const moved = movePair(curStart, curEnd, date, time);
+      if (!moved) return c;
+      setWhen((w) => ({ ...w, endDate: parseWall(moved.endDate).date, endTime: parseWall(moved.endDate).time }));
+      return { ...c, startDate: moved.startDate, endDate: moved.endDate };
+    });
+  };
+
+  /* END TIME. Editable at ANY time — no gate on roster, spots sold, or whether the match has
+   * already happened. That is deliberate: Retool's WEB app blocks this once players have joined
+   * and its MOBILE app does not, and the API sides with mobile — proven on staging 2560, a match
+   * with two players attached, where a lone endDate write LANDED and left startDate alone. A
+   * control that refused would be refusing something the server permits. */
+  const applyEnd = (endTime: string) => {
+    setWhen((w) => ({ ...w, endTime }));
+    setCur((c) => {
+      const curStart = String(c.startDate ?? orig?.startDate ?? "");
+      const curEnd = String(c.endDate ?? orig?.endDate ?? "");
+      if (!curStart || !curEnd) return c;
+      const next = moveEnd(curStart, curEnd, endTime);
+      if (!next) return c;
+      setWhen((w) => ({ ...w, endDate: parseWall(next).date }));
+      return { ...c, endDate: next };
     });
   };
 
@@ -470,6 +492,11 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
    * sends nothing at all. */
   const MGR_KEYS = ["managerId", "secondManagerId"] as const;
   const doSave = async (confirmedMgr = false) => {
+    /* THE SECOND HALF OF THE BLOCK. The button is disabled, but a disabled button is a UI fact
+     * and this is a match-record write: the API will happily store an end before a start
+     * (staging 2557 returned 2xx and read back inverted), so the refusal lives on the path that
+     * actually sends, not only on the control that starts it. */
+    if (whenError(cur.startDate as string | undefined, cur.endDate as string | undefined)) return;
     if (!orig || saving) return;
     if (changed.length === 0 && pendingN === 0) return;
     const mgrChanged = changed.filter((k) => (MGR_KEYS as readonly string[]).includes(k));
@@ -588,7 +615,9 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     const next: Record<string, unknown> = {};
     for (const k of STAGED_KEYS) next[k] = orig[k] ?? null;
     setCur(next);
-    setWhen(orig.startDate ? parseWall(orig.startDate) : { date: "", time: "" });
+    { const w = orig.startDate ? parseWall(orig.startDate) : { date: "", time: "" };
+      const we = orig.endDate ? parseWall(orig.endDate) : { date: "", time: "" };
+      setWhen({ date: w.date, time: w.time, endDate: we.date, endTime: we.time }); }
     setPending(emptyPending());
     setTeamDraft(Object.fromEntries((roster?.teams ?? []).map((t) => [t.id, t.name])));
     setMovePick(null);
@@ -601,6 +630,21 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
    * which is below `if (!orig) return <Loading/>` — so on the first render they did not run and on
    * the second they did, and React logged "a change in the order of Hooks" and rendered nothing.
    * A hook cannot live after a conditional return. */
+  /* THE DERIVED READOUT, in the same style CAPACITY uses — a value, not a sentence. The
+   * next-day tag is DATA too: with a time-only control, an end that rolls past midnight is
+   * otherwise invisible, and "ends 17 Aug" is the difference between a 1h match and a 25h one. */
+  const whenDuration = useMemo(
+    () => durationLabel(cur.startDate as string | undefined, cur.endDate as string | undefined),
+    [cur.startDate, cur.endDate]);
+  const whenErr = useMemo(
+    () => whenError(cur.startDate as string | undefined, cur.endDate as string | undefined),
+    [cur.startDate, cur.endDate]);
+  const whenEndsNextDay = useMemo(() => {
+    if (!cur.startDate || !cur.endDate) return null;
+    const a = parseWall(String(cur.startDate)).date, b = parseWall(String(cur.endDate)).date;
+    return a === b ? null : `ends ${b}`;
+  }, [cur.startDate, cur.endDate]);
+
   const mgrOffered = useMemo(() => offeredCounts(managers, managersAll), [managers, managersAll]);
   // The CURRENT manager is always an option even when they are on neither list — otherwise the
   // control shows a different person than the match actually has.
@@ -699,12 +743,19 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
               match card (VeoMasterSchedule posts the same /api/veo/intent), so nothing is lost and
               nothing shared went with it. */}
           <Section title="WHEN" dirty={secDirty(["startDate", "endDate"])}>
-            <div className="mp-grid">
+            <div className="mp-grid3">
               <label className="mp-f"><span className="mp-lb">DATE</span>
                 <input type="date" data-testid="mp-date" value={when.date} className={isDirty("startDate") ? "mp-chg" : ""} onChange={(e) => applyWhen(e.target.value, when.time)} /></label>
               <label className="mp-f"><span className="mp-lb">START TIME</span>
                 <input type="time" data-testid="mp-start" value={when.time} className={isDirty("startDate") ? "mp-chg" : ""} onChange={(e) => applyWhen(when.date, e.target.value)} /></label>
+              {/* END TIME — NEVER DISABLED. Not on players joined, not on spots sold, not on a
+                  match that has already been played. See applyEnd for the evidence. */}
+              <label className="mp-f"><span className="mp-lb">END TIME{whenEndsNextDay ? <em data-testid="mp-end-nextday">{whenEndsNextDay}</em> : null}</span>
+                <input type="time" data-testid="mp-end" value={when.endTime} className={isDirty("endDate") ? "mp-chg" : ""} onChange={(e) => applyEnd(e.target.value)} /></label>
             </div>
+            <label className="mp-f"><span className="mp-lb">DURATION <em>derived</em></span>
+              <span className="mp-ro" data-testid="mp-duration">{whenDuration ?? "\u2014"}</span></label>
+            {whenErr && <div className="mp-err" data-testid="mp-when-err">{whenErr}</div>}
           </Section>
 
           {/* MONEY */}
@@ -1072,7 +1123,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 taking one back would BE another write. The label says so. */}
             <button type="button" className="mp-btn" data-testid="mp-revert" disabled={unsaved === 0} onClick={doRevert}
               title="Discards every unsaved change on this panel. Sends no request — it cannot undo anything already saved.">Revert <em className="mp-btnsub">discards, sends nothing</em></button>
-            <button type="button" className="mp-btn mp-pri" data-testid="mp-save" disabled={!mayWrite || unsaved === 0 || saving} title={mayWrite ? undefined : (access.ok ? undefined : access.reason)} onClick={() => { if (mayWrite) void doSave(); }}>
+            <button type="button" className="mp-btn mp-pri" data-testid="mp-save" disabled={!mayWrite || unsaved === 0 || saving || !!whenErr} title={whenErr ?? (mayWrite ? undefined : (access.ok ? undefined : access.reason))} onClick={() => { if (mayWrite && !whenErr) void doSave(); }}>
               {saving ? "Saving…" : unsaved ? `Save · ${unsaved} change${unsaved === 1 ? "" : "s"}` : "Save"}</button>
           </div>
         </div>

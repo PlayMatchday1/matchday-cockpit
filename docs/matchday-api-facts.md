@@ -122,6 +122,42 @@ block any edit that would reach endDate) because:
 - A match that **loads already inverted** (`endDate` <= `startDate`) is shown as
   a warning and its date/time edit is held back - it is not silently rewritten.
 
+## endDate is independently writable, and the API does NOT validate the pair
+
+Proven 2026-08-28 on staging, by us, with read-back. This answers two questions Phase 7 left
+open — Phase 7 only ever exercised `{startDate}` alone and `{startDate, endDate}` together.
+
+**`endDate` alone lands, and moves nothing else.** Staging match **2560** ("HOU match"),
+`_count.players` **2** — a match with players attached:
+
+```
+PUT /admin/matches/2560   {"endDate":"2026-08-29T14:11:00.000Z"}
+  before  start 2026-08-28T13:41:23.873Z   end 2026-08-29T13:41:23.876Z
+  after   start 2026-08-28T13:41:23.873Z   end 2026-08-29T14:11:00.000Z     LANDED
+  startDate did not move · endDateUtc re-derived +5h (CDT) · startDateUtc unchanged
+```
+
+**So the "cannot edit times once players have joined" rule is RETOOL'S WEB UI, not the
+server.** Retool's mobile app allows it, the API allows it, and Clubhouse's drawer now allows
+it. A control that refused would be refusing something the server permits.
+
+**The API stores an inverted pair without complaint.** Staging **2557**, `_count.players` 0:
+
+```
+PUT /admin/matches/2557   {"endDate":"2026-08-27T21:47:00.000Z"}   ← one hour BEFORE startDate
+  2xx, and it read back inverted: start 22:47:59.226Z, end 21:47:00.000Z
+```
+
+This upgrades a previous inference to evidence. The facts doc already noted staging 2473 loads
+inverted and guessed Retool put it there; now we know **any** client can, because nothing
+server-side checks. **A client-side block is therefore the ONLY guard that exists** — it is not
+belt-and-braces on a server rule, and a date/time control must BLOCK the save rather than warn.
+Both staging matches were restored, verified by read-back.
+
+**Where this lives in the code:** `src/lib/matchWhen.ts` (`movePair`, `moveEnd`, `whenError`,
+`durationLabel`) with `scripts/matchwhen-test.ts` as its guard. The wall-clock primitives moved
+there from MatchPanel so both surfaces share one copy.
+
 ## Dates: startDate/endDate are LOCAL WALL-CLOCK wearing a Z
 
 This is the biggest landmine in the whole API.

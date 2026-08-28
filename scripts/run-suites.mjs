@@ -87,6 +87,11 @@ const NODE_SUITES = [
   "scripts/change-log-test.ts",
   "scripts/write-routes-logged-test.ts",
   "scripts/walltime-guard-test.ts",
+  // THE DRAWER'S DATE/TIME MODEL. A match-record write: a silent hour shift here moves
+  // kickoff for everyone holding a spot, and it looks correct on screen while it does so.
+  // Also the ONLY guard on an inverted pair — the API stores end-before-start without complaint
+  // (staging 2557: 2xx, read back inverted), so nothing downstream will catch it.
+  "scripts/matchwhen-test.ts",
   "scripts/promo-model-test.ts",
   "scripts/cost-basis-confinement-test.ts",
   "scripts/cost-ratio-band-test.ts",
