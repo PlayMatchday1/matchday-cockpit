@@ -262,7 +262,12 @@ export default function DataRoomPanel({ authHeaders, scopeChip }: { authHeaders:
           <div className="drZone">
             {vals.map((v, i) => (
               <span key={`${v.metric}-${i}`} className="drFld drV" data-testid="dr-chip-val">
-                {v.metric}
+                {/* ONE WORD, NOT A SENTENCE. Revenue here is the PRE-TAX price
+                    (mdapi_match_players.amount). It used to be the card charge, which carries
+                    5-9% city sales tax we collect and remit — money that was never ours and is
+                    booked nowhere as a liability. A 5-9% definition is invisible without the
+                    word, and the whole point of migration 0154 is that nobody re-derives it. */}
+                {v.metric === "Revenue" ? <>Revenue <em className="drTax">pre-tax</em></> : v.metric}
                 <select value={v.agg} aria-label={`${v.metric} aggregate`} onChange={(e) => changeAgg(i, e.target.value as Agg)}>
                   {METRICS[v.metric].map((a) => <option key={a} value={a}>{a}</option>)}
                 </select>
@@ -440,6 +445,8 @@ export default function DataRoomPanel({ authHeaders, scopeChip }: { authHeaders:
         .drDash { color: #93A49A; font-size: 12px }
         .drSpacer { flex: 1 }
         .drDiv { width: 1px; align-self: stretch; background: #EFF3EF; margin: 0 3px }
+        .drTax { font-style: normal; font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
+          text-transform: uppercase; color: #6E8076; margin-left: 5px }
         .drPre { border: 1px solid #E4EAE5; background: #fff; border-radius: 999px; padding: 4px 11px; font: inherit; font-size: 12px; font-weight: 600; color: #3C4F44; cursor: pointer; white-space: nowrap }
         .drPre.on { background: #0F3323; border-color: #0F3323; color: #fff }
         .drThead { display: flex; align-items: center; gap: 8px; padding: 8px 14px; flex-wrap: wrap; row-gap: 6px }

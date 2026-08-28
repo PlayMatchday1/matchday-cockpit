@@ -28,6 +28,7 @@ import {
   stalenessKey, stalenessKeyForRows, legacyMonthKeyForRows,
   HEAT_STEPS, HEAT_INK, HEAT_MIN_ALPHA,
   type Fact, type PivotConfig, type Metric,
+  FACT_MODEL_VERSION,
 } from "../src/lib/dataRoom";
 import { readFileSync } from "node:fs";
 
@@ -340,14 +341,24 @@ console.log("\nthe staleness key: does it move when a row lands?");
   is("an empty table has an empty key", stalenessKeyForRows([]), "");
   is("a null max is an empty key, not the string 'null'", stalenessKey(null), "");
   is("…and not 'undefined'", stalenessKey(undefined), "");
-  is("a numeric id becomes its own string", stalenessKey(303745), "303745");
+  /* THE KEY NOW CARRIES A MODEL VERSION as well as the id — migration 0154 changed what revenue
+   * MEANS, and max(player_api_id) cannot see that, so a warm instance would have served
+   * tax-inclusive numbers from a cache that believed itself fresh. This asserts the PROPERTY the
+   * header asks for (the id is in the key, and the version is too) rather than the literal shape,
+   * which is exactly what pinning "303745" turned out to be. */
+  if (stalenessKey(303745).includes("303745")) ok("the id is in the key");
+  else bad("the id is in the key", stalenessKey(303745));
+  if (stalenessKey(303745).startsWith(FACT_MODEL_VERSION)) ok("…and so is the model version");
+  else bad("…and so is the model version", stalenessKey(303745));
+  if (stalenessKey(303745) !== stalenessKey(303746)) ok("…and two different ids still give two different keys");
+  else bad("two different ids give two different keys");
 
   /* THE GLOBAL MAX ID DOES NOT HAVE TO LIVE IN THE NEWEST MONTH — measured on production, the
    * highest id 303745 is in 2026-08 while the newest month is 2026-09, because a September match
    * was booked before an August one. The key is the max ID, not the id of the newest month, and the
    * fixture above is built that way on purpose. */
   is("the fixture reproduces that: the max id is not in the newest month",
-     rows.find((r) => String(r.player_api_id) === before)?.match_month, "2026-08");
+     rows.find((r) => before.endsWith(`:${r.player_api_id}`))?.match_month, "2026-08");
   is("…while the newest month is later", legacyMonthKeyForRows(rows), "2026-09");
 
   const lib = readFileSync("src/lib/dataRoom.ts", "utf8");

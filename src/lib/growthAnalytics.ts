@@ -134,7 +134,7 @@ export type RawPlayer = {
   canceled_at: string | null;
   user_is_fake_player: boolean | null;
   deleted_at: string | null;
-  total_amount: number | null;
+  amount: number | null;          // PRE-TAX cents. NOT total_amount — see migration 0154.
 };
 export type RawUser = {
   id: number;
@@ -447,7 +447,9 @@ export function computeGrowth(input: RawInput): GrowthData {
       // can separate them — a tournament at NEMP is an event, NEMP is not.
       field: canonicalVenueName(m.field_title ?? "") || (m.field_id != null ? `Field ${m.field_id}` : "Unknown field"),
       isEvent: venueCategory(m.field_title) === "event",
-      amount: Number(p.total_amount ?? 0) / 100, // stored in cents
+      // PRE-TAX, in cents. This was total_amount — the card charge, which carries city sales
+      // tax we collect and remit and was never revenue. See migration 0154.
+      amount: Number(p.amount ?? 0) / 100,
     });
   }
 

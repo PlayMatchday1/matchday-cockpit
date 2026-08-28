@@ -101,6 +101,11 @@ const NODE_SUITES = [
   // are silent: recommendedPlayerCount is a TOTAL (a 9v9 pitch stores 18, and the mockup sent
   // 9), and the create DTO is a whitelist where one extra key 400s the whole create.
   "scripts/fields-model-test.ts",
+  // REVENUE IS PRE-TAX. mdapi_match_players carries two money columns that differ by the city's
+  // sales tax rate (5-9%), and reading the wrong one produces a number that looks fine. It did,
+  // for as long as the Data Room existed — and total_amount is only populated from 2025-12,
+  // which is why 32 months rendered $0.00.
+  "scripts/revenue-pretax-test.ts",
   "scripts/promo-model-test.ts",
   "scripts/cost-basis-confinement-test.ts",
   "scripts/cost-ratio-band-test.ts",

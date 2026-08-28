@@ -20,6 +20,9 @@ import { buildRetention, type RetentionAggregate } from "./retentionEngine";
 
 // Generic keyset pagination: `where key > last order by key limit 1000` — an
 // index seek per page, no offset scan.
+/** Bumped when a fact changes MEANING rather than when a row lands. See the key below. */
+export const GROWTH_MODEL_VERSION = "v2-pretax";
+
 async function keyset<T extends Record<string, unknown>>(
   sb: SupabaseClient,
   table: string,
@@ -65,7 +68,9 @@ async function build(sb: SupabaseClient, key: string): Promise<GrowthCache> {
     keyset<RawPlayer & { api_id: number }>(
       sb,
       "mdapi_match_players",
-      "api_id, user_id, match_api_id, paid_status, canceled_at, user_is_fake_player, deleted_at, total_amount",
+      // `amount` is the PRE-TAX price. total_amount is the card charge (base + city sales tax
+      // - credit) and is not revenue — migration 0154.
+      "api_id, user_id, match_api_id, paid_status, canceled_at, user_is_fake_player, deleted_at, amount",
       "api_id",
     ),
     keyset<RawUser & { id: number }>(
@@ -164,7 +169,11 @@ export async function getGrowthCache(
     .order("start_date", { ascending: false })
     .limit(1)
     .maybeSingle();
-  const key = (maxRow?.start_date ?? "").slice(0, 10);
+  /* THE MODEL VERSION RIDES IN THE KEY. max(start_date) moves when a MATCH lands and is blind
+   * to a change in what a COLUMN MEANS — so when revenue went from the tax-inclusive card charge
+   * to the pre-tax amount (migration 0154), a warm instance would have gone on serving the old
+   * numbers from a cache whose key had not moved. Bump it whenever a fact changes meaning. */
+  const key = `${GROWTH_MODEL_VERSION}:${(maxRow?.start_date ?? "").slice(0, 10)}`;
   const probeMs = Date.now() - t0;
   if (cache && cache.key === key) return { ...cache, cached: true, probeMs };
   // Dedup concurrent cold builds (the dashboard fires both endpoints at once).

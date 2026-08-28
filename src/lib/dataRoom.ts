@@ -335,8 +335,8 @@ export function planBands(min: number, max: number, n: number): { after: number;
 /* THE RAW PARTITIONED FETCH, EXPORTED FOR VERIFICATION ONLY. scripts/tmp-ident compares it against
  * a sequential keyset over the same live table; nothing in the app calls it. */
 export const getFactsRawForVerification = (sb: SupabaseClient) =>
-  keysetAll<{ player_api_id: number; user_id: number; match_month: string; city_identifier: string | null; field_title: string | null; field_id: number | null; total_amount: number | string }>(
-    sb, "growth_participation", "player_api_id, user_id, match_month, city_identifier, field_title, field_id, total_amount", "player_api_id");
+  keysetAll<{ player_api_id: number; user_id: number; match_month: string; city_identifier: string | null; field_title: string | null; field_id: number | null; amount_cents: number | string }>(
+    sb, "growth_participation", "player_api_id, user_id, match_month, city_identifier, field_title, field_id, amount_cents", "player_api_id");
 
 export async function getFacts(sb: SupabaseClient): Promise<FactCache> {
   /* THE STALENESS CHECK RUNS ON EVERY CALL, cheaply — one row. An earlier version of this
@@ -385,8 +385,15 @@ let lastKeyMs = 0;
 
 /** The cache key from the highest participation row id. Its own function so the suite can pin the
  *  PROPERTY — that it moves when a row lands — rather than the shape of a query string. */
+/* THE MODEL VERSION IS PART OF THE KEY. max(player_api_id) moves when a ROW lands and is
+ * blind to a change in what a COLUMN MEANS — so when revenue went from the tax-inclusive
+ * charge to the pre-tax amount (migration 0154), every warm instance would have kept serving
+ * the old numbers from a cache whose key had not moved. Bump this whenever the meaning of a
+ * fact changes; a new row is not the only way a fact table goes stale. */
+export const FACT_MODEL_VERSION = "v2-pretax";
+
 export const stalenessKey = (maxRowId: number | string | null | undefined): string =>
-  maxRowId == null ? "" : String(maxRowId);
+  maxRowId == null ? "" : `${FACT_MODEL_VERSION}:${maxRowId}`;
 
 /** THE PROPERTY, AS CODE. Given the rows a fact table was built from, the key it should carry.
  *  Exported so churn-style "does adding a row change it" assertions can run without a database. */
@@ -407,8 +414,8 @@ async function buildFacts(sb: SupabaseClient, key: string): Promise<FactCache> {
     // growth_participation is a VIEW (a 145k-row join), so OFFSET pagination
     // re-joins + deep-skips and hits the statement timeout on later pages. KEYSET
     // (seek on the indexed player_api_id) reads each page with an index seek.
-    keysetAll<{ player_api_id: number; user_id: number; match_month: string; city_identifier: string | null; field_title: string | null; field_id: number | null; total_amount: number | string }>(
-      sb, "growth_participation", "player_api_id, user_id, match_month, city_identifier, field_title, field_id, total_amount", "player_api_id",
+    keysetAll<{ player_api_id: number; user_id: number; match_month: string; city_identifier: string | null; field_title: string | null; field_id: number | null; amount_cents: number | string }>(
+      sb, "growth_participation", "player_api_id, user_id, match_month, city_identifier, field_title, field_id, amount_cents", "player_api_id",
     ),
     selectAll<{ user_id: number; first_match_month: string }>(sb, "growth_player_profile", "user_id, first_match_month", "user_id")
       .then((r) => { profsMs = Date.now() - t0; return r; }),
@@ -433,7 +440,9 @@ async function buildFacts(sb: SupabaseClient, key: string): Promise<FactCache> {
     (fieldsByCity[city] ?? (fieldsByCity[city] = new Set())).add(field);
     facts.push({
       id: r.user_id, city, field, month: r.match_month, cohortIdx,
-      spots: 1, matches: 1, revenue: Number(r.total_amount) / 100, isNew: cohortIdx === monthIdx(r.match_month),
+      // PRE-TAX. amount_cents is mdapi_match_players.amount; the tax-inclusive card charge
+      // (total_amount) is not revenue and is no longer read here. See migration 0154.
+      spots: 1, matches: 1, revenue: Number(r.amount_cents) / 100, isNew: cohortIdx === monthIdx(r.match_month),
     });
   }
   const monthsAvailable = [...monthsSet].sort();
