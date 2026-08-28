@@ -455,7 +455,7 @@ async function main() {
   await page.click('[data-testid="mp-remove-9003"]');
   await page.waitForSelector('[data-testid="mp-pending-remove"]', { timeout: 6000 });
   await page.fill('[data-testid="mp-tname-1"]', "Orange");
-  await page.click('[data-testid="mp-teamcount-4"]');
+  await page.click('[data-testid="mp-teams-4"]');
   await page.waitForTimeout(500);
   eq("item1b: a move, a removal, a rename and a team-count choice send NOTHING before Save",
     { roster: rosterPosts.length, matchPuts: puts.length }, { roster: 0, matchPuts: 0 });
@@ -467,9 +467,9 @@ async function main() {
       moveTag: !!document.querySelector('[data-testid="mp-pending-move"]'),
       removeTag: !!document.querySelector('[data-testid="mp-pending-remove"]'),
       rename: !!document.querySelector('[data-testid="mp-rename-pending-1"]'),
-      countPending: document.querySelector('[data-testid="mp-teamcount-pending"]')?.textContent,
+      countPending: document.querySelector('[data-testid="mp-teams-4"]')?.getAttribute("data-on"),
     }));
-    JSON.stringify(marks) === JSON.stringify({ move: "move", remove: "remove", moveTag: true, removeTag: true, rename: true, countPending: "4" })
+    JSON.stringify(marks) === JSON.stringify({ move: "move", remove: "remove", moveTag: true, removeTag: true, rename: true, countPending: "true" })
       ? ok("item1c: every pending edit is visibly marked as pending") : bad("item1c", JSON.stringify(marks)); }
 
   // ITEM 1d — THE SAVE LABEL REFLECTS THE PENDING COUNT
@@ -494,7 +494,7 @@ async function main() {
   delete rosterStates["17494"]; rosterPosts = []; puts = [];
   await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
-  await page.click('[data-testid="mp-teamcount-4"]');
+  await page.click('[data-testid="mp-teams-4"]');
   await page.click('[data-testid="mp-move-9001"]');
   await page.click('[data-testid="mp-movepick-team-2"]');
   await page.click('[data-testid="mp-movepick-spot-4"]');
@@ -537,7 +537,7 @@ async function main() {
   delete rosterStates["17494"]; rosterPosts = []; puts = [];
   await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
-  await page.click('[data-testid="mp-teamcount-4"]');
+  await page.click('[data-testid="mp-teams-4"]');
   await page.click('[data-testid="mp-move-9001"]');
   await page.click('[data-testid="mp-movepick-team-2"]');
   await page.click('[data-testid="mp-movepick-spot-9"]');   // FAILSPOT — the fixture rejects this one
@@ -548,7 +548,7 @@ async function main() {
   { const st = await page.evaluate(() => ({
       verdicts: [...document.querySelectorAll('[data-testid="mp-write-result"]')].map((e) => e.getAttribute("data-verdict")),
       stillPendingRemove: !!document.querySelector('[data-testid="mp-pending-remove"]'),
-      countPending: !!document.querySelector('[data-testid="mp-teamcount-pending"]'),
+      countPending: document.querySelector('[data-testid="mp-teams-4"]')?.getAttribute("data-on") === "true",
       toast: document.querySelector('[data-testid="mp-toast"]')?.textContent || "",
     }));
     const stopped = rosterPosts.filter((o) => o.kind === "remove").length === 0;
@@ -579,8 +579,9 @@ async function main() {
   delete rosterStates["17494"]; rosterPosts = []; puts = [];
   await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
-  eq("add says on itself that it sends on click, not on Save",
-    /sends on click, not on Save/i.test(await page.$eval('[data-testid="mp-add-immediate-note"]', (e) => e.textContent)), true);
+  // THE "sends on click, not on Save" ASSERTION WAS DELETED, not repointed: the caption it tested
+  // is gone by instruction. Add is still immediate — that is what the rest of this block proves,
+  // by watching the POST fire before any Save.
   await page.fill('[data-testid="mp-add-search"]', "new");
   await page.waitForSelector('[data-testid="mp-add-result"]', { timeout: 6000 });
   await page.click('[data-testid="mp-add-result"]');
@@ -620,18 +621,22 @@ async function main() {
     (marks.fakeRows >= 1 && marks.taggedFakes === marks.fakeRows && marks.taggedReal === 0)
       ? ok(`gate8: every fake player carries a FAKE mark (${marks.taggedFakes}) and no real player does`) : bad("gate8", JSON.stringify(marks)); }
 
-  // GATE 10 (kept, re-aimed) — the team-count CONSEQUENCE is stated BEFORE the click, not in a
-  // dialog after it, and choosing it still sends nothing.
+  // GATE 10 (narrowed) — the CONSEQUENCE RENDER is gone from the drawer, so its DOM half is gone
+  // from here. The claim itself is not lost: teamCountConsequence() is still asserted directly in
+  // scripts/roster-edit-model-test.ts ("Teams 3 and 4 are removed", "2 players move to teams 1
+  // and 2"). What stays here is the half only a browser can prove — choosing a team count sends
+  // NOTHING before Save.
   delete rosterStates["14444"]; rosterPosts = [];
   await page.goto(`${BASE}/match-ops/match-panel/14444`, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector('[data-testid="mp-teamcount-2"]', { timeout: 15000 });
-  { const line = await page.$eval('[data-testid="mp-teamcount-consequence"] li[data-n="2"]', (e) => e.textContent);
-    const named = /Teams 3 and 4 are removed/.test(line) && /2 players move to teams 1 and 2/.test(line);
-    await page.click('[data-testid="mp-teamcount-2"]');
+  await page.waitForSelector('[data-testid="mp-teams-2"]', { timeout: 15000 });
+  { await page.click('[data-testid="mp-teams-2"]');
     await page.waitForTimeout(400);
-    (named && rosterPosts.length === 0)
-      ? ok("gate10: 4→2 states its consequence BEFORE the click (teams removed + how many players move) and sends nothing")
-      : bad("gate10", `line=${JSON.stringify(line)} posts=${rosterPosts.length}`); }
+    const on = await page.$eval('[data-testid="mp-teams-2"]', (e) => e.getAttribute("data-on"));
+    // POSITIVE CONTROL: data-on must actually have moved to 2, or "sent nothing" is the answer a
+    // dead selector gives too.
+    (on === "true" && rosterPosts.length === 0)
+      ? ok("gate10: choosing 4\u21922 stages the choice and sends nothing before Save")
+      : bad("gate10", `data-on=${on} posts=${rosterPosts.length}`); }
 
   // ── ITEM 2 · THE MOVE CONTROL SCALES ─────────────────────────────────────────────────────────
   delete rosterStates["14444"];

@@ -34,7 +34,7 @@ import {
 } from "@/lib/managerAssign";
 import {
   emptyPending, normalizePending, pendingCount, sortedTeam, spotsOfTeam, planMove,
-  savePlan, clearApplied, teamCountConsequence,
+  savePlan, clearApplied,
   type Pending, type RosterOrigin, type EditRow, type PlannedWrite,
 } from "@/lib/rosterEditModel";
 
@@ -850,28 +850,13 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
              : <>
               {opToast && <div className={"mp-optoast" + (opToast.bad ? " bad" : "")} data-testid="mp-optoast">{opToast.text}</div>}
 
-              {/* TEAM COUNT — the consequence is stated BEFORE the click, not in a dialog after it.
-                  Same pattern as the manager-pay screen: the sentence that tells you what this does
-                  to real people is on screen while you are still deciding. */}
-              <div className="mp-countrow">
-                <span className="mp-lb" style={{ marginBottom: 0 }}>TEAM COUNT</span>
-                <div className="mp-countbtns">
-                  {[2, 3, 4].map((n) => (
-                    <button key={n} type="button" data-testid={`mp-teamcount-${n}`}
-                      className={"mp-cbtn" + (rosterTeamCount === n ? " on" : "") + (norm.teamCount === n ? " pend" : "")}
-                      aria-pressed={rosterTeamCount === n} disabled={!!opBusy} onClick={() => stageTeamCount(n)}>{n} teams</button>
-                  ))}
-                </div>
-                <span className="mp-help" style={{ marginTop: 0, marginLeft: "auto" }}>
-                  now <b>{roster.teams.length}</b>{norm.teamCount != null && <> → <b data-testid="mp-teamcount-pending">{norm.teamCount}</b> on Save</>}
-                </span>
-              </div>
-              <ul className="mp-conseq" data-testid="mp-teamcount-consequence">
-                {[2, 3, 4].filter((n) => n !== roster.teams.length).map((n) => {
-                  const line = teamCountConsequence(origin, pending, n);
-                  return line ? <li key={n} data-n={n} data-chosen={norm.teamCount === n ? "true" : "false"}><b>{n} teams:</b> {line}</li> : null;
-                })}
-              </ul>
+              {/* THE TEAM COUNT CONTROL THAT STOOD HERE IS GONE, and it was a DUPLICATE, not a
+                  second opinion: both it and the TEAMS segmented control in SPOTS called the same
+                  stageTeamCount(), which is the only writer of pending.teamCount. Proven before the
+                  cut rather than assumed — two controls writing to different fields would not be
+                  duplicates, and removing one would have silently dropped a real edit.
+                  teamCountConsequence() still exists and is still unit-tested; only its render is
+                  gone. The one surviving control is in SPOTS. */}
 
               {/* ADD — the one control here that still fires on click. It says so on itself. */}
               <div className="mp-addrow">
@@ -889,7 +874,6 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                   ))}</div>
                 )}
                 {pendingAdd && <span className="mp-addpending" data-testid="mp-add-pending">Adding <b>{pendingAdd.fake ? "a FAKE player" : pendingAdd.name}</b> — pick a team →<button type="button" className="mp-x" onClick={() => setPendingAdd(null)}>cancel</button></span>}
-                <span className="mp-help" data-testid="mp-add-immediate-note">sends on click, not on Save</span>
               </div>
 
               {!!roster.promo?.spots && (
@@ -1232,18 +1216,6 @@ const CSS = `
    other section uses, and the pink-tinted borders inside it are neutralised to the shared --line. */
 .mp-optoast{margin:11px 13px 0;font-size:12px;padding:8px 11px;border-radius:8px;background:#e6f3ea;border:1px solid #a9d3ba;color:#14512f}
 .mp-optoast.bad{background:#fbe7e4;border-color:#e6b0a8;color:#8a2018}
-.mp-countrow{display:flex;align-items:center;gap:10px;padding:4px 0}
-.mp-countbtns{display:inline-flex;border:1px solid var(--line2);border-radius:8px;overflow:hidden}
-.mp-cbtn{border:0;background:#fff;font:inherit;font-weight:700;color:var(--ink2);padding:8px 14px;min-height:38px;cursor:pointer}
-.mp-cbtn + .mp-cbtn{border-left:1px solid var(--line2)}
-.mp-cbtn.on{background:#e7efe9;color:var(--ink)}
-.mp-cbtn.pend{background:var(--grn);color:#fff}
-.mp-cbtn:disabled:not(.on){opacity:.55;cursor:not-allowed}
-/* the consequence, stated BEFORE the click */
-.mp-conseq{list-style:none;margin:6px 0 2px;padding:0;display:flex;flex-direction:column;gap:4px}
-.mp-conseq li{font-size:11.5px;line-height:1.45;color:var(--ink3);border-left:2px solid var(--line2);padding:2px 0 2px 8px}
-.mp-conseq li[data-chosen="true"]{border-left-color:var(--grn);color:var(--ink2);font-weight:600}
-.mp-conseq b{font-weight:800;color:var(--ink2)}
 .mp-addrow{position:relative;padding:10px 0 2px}
 .mp-addtop{display:flex;gap:7px;align-items:center}
 .mp-addsearch{flex:1;min-width:0;border:1px solid var(--line2);border-radius:9px;padding:9px 11px;font:inherit;font-size:13.5px;background:#fff;min-height:40px}
