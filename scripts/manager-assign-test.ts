@@ -181,16 +181,30 @@ console.log("\nthe panel: the select cannot paint a person nobody chose");
       ok(`${t} routes its value through normalizeManagerId`);
     else bad(`${t} routes its value through normalizeManagerId`, "a raw \"\" could reach the body");
   }
-  for (const t of ["mp-mgr-confirm", "mp-mgr-go", "mp-mgr-cancel", "mp-mgr-allcities"])
+  for (const t of ["mp-mgr-confirm", "mp-mgr-go", "mp-mgr-cancel"])
     if (src.includes(`data-testid="${t}"`)) ok(`${t} is on the panel`); else bad(`${t} is on the panel`);
   // SAVE MUST NOT COMMIT A MANAGER CHANGE UNCONFIRMED.
   if (/mgrChanged\.length > 0 && !confirmedMgr/.test(src)) ok("Save stops on a manager change until it is confirmed");
   else bad("Save stops on a manager change until it is confirmed");
   if (/setMgrConfirm\(null\)/.test(src)) ok("Cancel clears the confirmation and sends nothing");
   else bad("Cancel clears the confirmation and sends nothing");
-  // The escape must be a real control, not a hidden affordance.
-  if (/Show managers from all cities/.test(src)) ok("the show-all-cities escape is a visible, labelled control");
-  else bad("the show-all-cities escape is visible");
+  /* THE ALL-CITIES ESCAPE IS GONE FROM THE PANEL, and the assertion that it was visible went with
+   * it — it recorded behaviour that was removed on purpose, so repointing it would have been a
+   * test edited to pass. What replaces it is the claim that removal actually put at risk: a match
+   * attached to someone who is on NO city roster must still render THAT person. 100 matches in the
+   * last 90 days are in exactly that state. The model half is asserted above (withGone); this is
+   * the wiring half — the panel must pass the current manager into the picker, or the injection
+   * never happens and the select paints somebody else. */
+  for (const [t, field] of [["mp-mgr", "managerId"], ["mp-mgr2", "secondManagerId"]] as const) {
+    const call = new RegExp(`pickerOptions\\(managers, managersAll, false,[\\s\\S]{0,200}?cur\\.${field}`);
+    if (call.test(src)) ok(`${t}'s picker is given the attached manager, so an off-roster one still shows`);
+    else bad(`${t}'s picker is given the attached manager`, "AN OFF-ROSTER MANAGER WOULD VANISH FROM THE SELECT");
+  }
+  // POSITIVE CONTROL for the absence below: the select the escape sat under is still here.
+  if (src.includes('data-testid="mp-mgr"')) ok("control: the manager section still renders");
+  else bad("control: the manager section still renders");
+  if (!/Show managers from all cities/.test(src)) ok("the all-cities escape is gone from the panel");
+  else bad("the all-cities escape is gone from the panel", "the checkbox is still rendered");
 }
 
 // ── 6. THE ROUTE STILL SENDS THE DIFF, AND ONLY OVER THE GUARDED CLIENT ───────────────────────

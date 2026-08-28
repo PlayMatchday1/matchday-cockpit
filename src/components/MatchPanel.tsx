@@ -118,7 +118,6 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
    * a one-off outside their listed cities is real; silently hiding them turns a real assignment
    * into an impossible one. */
   const [managersAll, setManagersAll] = useState<Manager[]>([]);
-  const [showAllCities, setShowAllCities] = useState(false);
   /* THE CONFIRMATION THIS WRITE NEEDS. Manager Pay pays per match on this attachment, so the wrong
    * person here is a wrong PAYMENT. Save does not commit a manager change until this names the
    * person, the match and the amount and is confirmed. */
@@ -606,13 +605,13 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   // The CURRENT manager is always an option even when they are on neither list — otherwise the
   // control shows a different person than the match actually has.
   const mgrOpts = useMemo(
-    () => pickerOptions(managers, managersAll, showAllCities,
+    () => pickerOptions(managers, managersAll, false,
       cur.managerId == null ? null : { id: Number(cur.managerId), name: mgrNameIn([...managers, ...managersAll], cur.managerId) }),
-    [managers, managersAll, showAllCities, cur.managerId]);
+    [managers, managersAll, cur.managerId]);
   const mgrOpts2 = useMemo(
-    () => pickerOptions(managers, managersAll, showAllCities,
+    () => pickerOptions(managers, managersAll, false,
       cur.secondManagerId == null ? null : { id: Number(cur.secondManagerId), name: mgrNameIn([...managers, ...managersAll], cur.secondManagerId) }),
-    [managers, managersAll, showAllCities, cur.secondManagerId]);
+    [managers, managersAll, cur.secondManagerId]);
 
   if (loadErr) return <div className="mp"><style>{CSS}</style><div className="mp-panel" data-testid="mp-panel"><div className="mp-err" data-testid="mp-load-error">{loadErr}</div></div></div>;
   if (!orig) return <div className="mp"><style>{CSS}</style><div className="mp-panel" data-testid="mp-panel"><div className="mp-loading">Loading match…</div></div></div>;
@@ -671,7 +670,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                   STRING so a null managerId selects the explicit "no manager" option — it used to
                   be Number(cur.managerId ?? 0), which matches no option, so the browser displayed
                   whichever manager happened to be first and a blind Save would have attached them. */}
-              <label className="mp-f"><span className="mp-lb">MANAGER <em>send the id, choose the name · {mgrOffered.city} in {orig.cityName ?? "this city"}{showAllCities ? ` · showing all ${mgrOffered.all}` : ""}</em></span>
+              <label className="mp-f"><span className="mp-lb">MANAGER <em>send the id, choose the name · {mgrOffered.city} in {orig.cityName ?? "this city"}</em></span>
                 <select data-testid="mp-mgr" value={cur.managerId == null ? "none" : String(cur.managerId)} className={isDirty("managerId") ? "mp-chg" : ""}
                   onChange={(e) => setField("managerId", normalizeManagerId(e.target.value))}>
                   <option value="none">{CAN_UNASSIGN_MANAGER_FROM_MATCH ? "— no manager —" : "— no manager (unavailable) —"}</option>
@@ -684,13 +683,16 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                   {mgrOpts2.map((m) => <option key={m.id} value={m.id}>{m.offCity ? `${m.name} · other city` : m.name}</option>)}
                 </select></label>
             </div>
-            {/* THE ESCAPE, VISIBLE. Not a hidden affordance and not a search box — a checkbox that
-                says how many people it adds, so the operator can see that the default is hiding
-                some and decide. */}
-            <label className="mp-allcities" data-testid="mp-mgr-allcities">
-              <input type="checkbox" checked={showAllCities} onChange={(e) => setShowAllCities(e.target.checked)} disabled={mgrOffered.hidden === 0} />
-              <span>Show managers from all cities <b>({mgrOffered.all})</b>{mgrOffered.hidden > 0 ? ` — ${mgrOffered.hidden} not on ${orig.cityName ?? "this city"}'s roster` : " — every manager already covers this city"}</span>
-            </label>
+            {/* THE "SHOW MANAGERS FROM ALL CITIES" ESCAPE STOOD HERE AND IS GONE. It offered the
+                whole roster instead of this city's, and over 90 days it produced ZERO assignments:
+                every one of the 100 matches carrying an off-roster manager carried one of 8 people
+                who are on NO city's roster, so this control never offered them either. It was also
+                the "blank bordered box" in this section — .mp input (the text-field rule below)
+                gave the checkbox width:100% and min-height:40px, blowing it to 541x40 and shoving
+                its label off the panel edge. Removing it closes that gap.
+                AN OFF-ROSTER MANAGER IS STILL SHOWN. pickerOptions injects the currently-attached
+                person whatever the roster says (managerAssign.ts:93) and marks them "· other city";
+                that is what keeps match 17467 readable, and it is asserted below. */}
           </Section>
 
           {/* CAMERA lived here. Removed — Master Schedule carries the Veo toggle on every
@@ -1288,9 +1290,6 @@ const CSS = `
 .mp-cancelbtn:hover:not(:disabled){background:#8a1a12}
 .mp-cancelbtn:disabled{opacity:.5;cursor:not-allowed}
 .mp-cancelconfirm{display:block}
-.mp-allcities{display:flex;gap:8px;align-items:flex-start;margin-top:9px;font-size:12px;color:rgba(16,35,26,.62);line-height:1.45;cursor:pointer}
-.mp-allcities input{margin-top:2px;flex:none}
-.mp-allcities b{font-variant-numeric:tabular-nums;color:rgba(16,35,26,.8)}
 .mp-mgrconfirm{border:1px solid #F0C98A;background:#FFF7EA;border-radius:10px;padding:11px 13px;margin:0 0 10px;font-size:13px;color:#5E3D05;line-height:1.5}
 .mp-mgrconfirm b{display:block;margin-bottom:5px;color:#4A3004}
 .mp-mgrconfirm ul{margin:0 0 9px;padding-left:18px}

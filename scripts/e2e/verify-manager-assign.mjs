@@ -76,19 +76,17 @@ async function main() {
   const selectedText = await p.$eval('[data-testid="mp-mgr"]', (el) => el.options[el.selectedIndex].text);
   is("the attached manager is named, not shown as an id", /^id \d+$/.test(selectedText), false);
 
-  // THE ESCAPE.
-  const escape = p.locator('[data-testid="mp-mgr-allcities"]');
-  is("the escape is visible", await escape.isVisible(), true);
-  const escapeTxt = await escape.textContent();
-  is("…and says how many it adds", /\(\d+\)/.test(escapeTxt), true);
-  await escape.locator("input").check();
-  await p.waitForFunction((n) => document.querySelector('[data-testid="mp-mgr"]').options.length > n, cityOpts.length);
-  const allOpts = await opts();
-  ok(`expanded, the picker offers ${allOpts.length - 1} managers`);
-  is("expanding only ever adds people", allOpts.length > cityOpts.length, true);
-  is("the people it adds are labelled off-city", allOpts.filter((o) => /other city/.test(o.t)).length, allOpts.length - cityOpts.length);
-  is("the current selection survives expanding",
-     await p.$eval('[data-testid="mp-mgr"]', (el) => el.options[el.selectedIndex].text), selectedText);
+  // THE ESCAPE IS GONE. It offered the whole roster instead of this city's and produced zero
+  // assignments in 90 days; every off-roster manager on a match is on NO roster, so it never
+  // offered them either. The block that drove it is deleted rather than repointed.
+  // ABSENCE NEEDS A PRESENCE FIRST: cityOpts above is non-empty and came from a rendered select,
+  // which is what proves this page loaded before we assert something is missing from it.
+  is("control: the picker rendered before we check what is absent", cityOpts.length > 1, true);
+  is("the all-cities escape is not on the panel",
+     await p.locator('[data-testid="mp-mgr-allcities"]').count(), 0);
+  is("and nothing else re-introduced it", /all cities/i.test(await p.locator('[data-testid="mp-mgr"]')
+     .evaluate((el) => el.closest("section")?.textContent ?? "")), false);
+  const allOpts = cityOpts;   // the picker no longer expands; the confirmation below uses this list
 
   // THE CONFIRMATION. Pick a DIFFERENT manager and press Save.
   const curVal = await p.inputValue('[data-testid="mp-mgr"]');
