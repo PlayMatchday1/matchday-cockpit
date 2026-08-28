@@ -1,4 +1,5 @@
 import type { FinanceData, FinRevenue, FinVenue } from "./useFinanceData";
+import { preTaxOf } from "./salesTax";
 import type { MatchRow } from "./useMatchData";
 import type { JoinedMatchPlayerRow, LegacyMatchRegRow } from "./mdapiMatchesRead";
 import {
@@ -1638,11 +1639,38 @@ export function cityMembershipRevenueFor(
   city: string,
   month: Q2Month,
 ): number {
+  /* ── TAX-INCLUSIVE. Callers: the REVENUE page and the CITIES page, and nothing else. ──────────
+   *
+   * GROSS, NOT NET — an internal-consistency fix on the Cities page, which summed .net here while
+   * every neighbouring column summed .gross. For Jul 2026 that read $17,205.76 against a
+   * $17,856.94 gross, the $651.18 difference being Stripe fees no other column had subtracted.
+   *
+   * IF YOU ARE COMBINING MEMBERSHIP WITH ROSTER-DERIVED REVENUE, YOU WANT THE OTHER ONE.
+   * mdapi_match_players.amount is PRE-TAX, so joining this figure to it puts two bases inside one
+   * number. Use cityMembershipRevenuePreTaxFor. city-basis-test.ts asserts which callers use which
+   * and will not let the two cross. */
   return data.revenue
     .filter(
       (r) => r.city === city && r.month === month && r.type === "Membership",
     )
-    .reduce((s, r) => s + r.net, 0);
+    .reduce((s, r) => s + r.gross, 0);
+}
+
+/* ── PRE-TAX. Callers: Slate Review, Match P&L, cityPnl, fieldEconomics — every place membership
+ * is combined with roster-derived revenue, which is mdapi_match_players.amount and pre-tax.
+ *
+ * WHY IT EXISTS. Slate Review shows a DPP figure of $12.00 a spot — the sticker price, measured on
+ * PRUMC match 17905: 10 paid spots, $120.00. Its membership half must be on that same basis or the
+ * page's revenue is half pre-tax and half tax-inclusive.
+ *
+ * gross / (1 + rate), EXACT because gross is pre-fee. Never net. An unknown city THROWS rather
+ * than defaulting to 0%. */
+export function cityMembershipRevenuePreTaxFor(
+  data: FinanceData,
+  city: string,
+  month: Q2Month,
+): number {
+  return preTaxOf(cityMembershipRevenueFor(data, city, month), city);
 }
 
 // Stale-projection guard.
@@ -1824,7 +1852,10 @@ export function venueAllocatedMemberRevenueFor(
     data.mdapiMemberSpots.byCityMonth.get(`${venueRow.city}|${month}`)?.member ??
     0;
   if (cityTotal <= 0) return 0;
-  const cityMembership = cityMembershipRevenueFor(data, venueRow.city, month);
+  /* PRE-TAX, because every caller of this allocator joins it to roster-derived revenue. The
+   * venue share is a ratio of member spots, so pre-taxing the city total pre-taxes each venue's
+   * slice by construction and the slices still sum to the city figure. */
+  const cityMembership = cityMembershipRevenuePreTaxFor(data, venueRow.city, month);
   return (venueSpots / cityTotal) * cityMembership;
 }
 
@@ -1893,7 +1924,7 @@ export function matchAllocatedMemberRevenueFor(
     data.mdapiMemberSpots.byCityMonth.get(`${args.city}|${month}`)?.member ?? 0;
   if (cityTotal <= 0) return 0;
 
-  const cityMembership = cityMembershipRevenueFor(data, args.city, month);
+  const cityMembership = cityMembershipRevenuePreTaxFor(data, args.city, month);
   return (args.memberSpots / cityTotal) * cityMembership;
 }
 

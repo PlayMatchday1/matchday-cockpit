@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { cityMembershipRevenueFor } from "@/lib/financeStats";
+import { cityMembershipRevenuePreTaxFor } from "@/lib/financeStats";
 import { mostRecentCompletedMonth } from "@/lib/quarters";
 import {
   fetchWeekMatchPnL,
@@ -116,7 +116,7 @@ export default function SlateMatchPnLSection({ city }: { city: City }) {
   const benchmarkLabel = useMemo(() => {
     if (!data) return "";
     const { key: month, name } = mostRecentCompletedMonth();
-    const memberRev = cityMembershipRevenueFor(data, city, month);
+    const memberRev = cityMembershipRevenuePreTaxFor(data, city, month);
     const memberSpots =
       data.mdapiMemberSpots.byCityMonth.get(`${city}|${month}`)?.member ?? 0;
     return memberSpots > 0
@@ -127,7 +127,7 @@ export default function SlateMatchPnLSection({ city }: { city: City }) {
   const benchmarkLabelMobile = useMemo(() => {
     if (!data) return "";
     const { key: month, name } = mostRecentCompletedMonth();
-    const memberRev = cityMembershipRevenueFor(data, city, month);
+    const memberRev = cityMembershipRevenuePreTaxFor(data, city, month);
     const memberSpots =
       data.mdapiMemberSpots.byCityMonth.get(`${city}|${month}`)?.member ?? 0;
     return memberSpots > 0

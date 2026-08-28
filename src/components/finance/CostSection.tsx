@@ -325,8 +325,13 @@ export default function CostSection() {
               <span key={g.field} className={s.gapRow} data-testid="cost-gap-row">
                 <b>{g.field}</b> · {g.city}
                 <span className={`${s.bt} ${s.btNone}`}>{COST_BASIS_LABEL[g.basis]}</span>
-                carried {fmtMoney(g.revenue)} of revenue with no cost basis on file, so it is held
-                out of the ratio above rather than counted at $0.
+                {/* IT IS THE COST THAT IS HELD OUT, NOT THE REVENUE. This said "it is held out of
+                    the ratio", which reads as the revenue leaving the denominator — it does not.
+                    pooledRatio and rollup both divide by TOTAL revenue on purpose, so that the
+                    denominator is the number printed beside it (fieldEconomics.ts:598). One word;
+                    no maths changed. */}
+                carried {fmtMoney(g.revenue)} of revenue with no cost basis on file, so its cost is
+                held out of the ratio above rather than counted at $0.
               </span>
             ))}
           </div>

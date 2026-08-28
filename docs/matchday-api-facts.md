@@ -122,6 +122,43 @@ block any edit that would reach endDate) because:
 - A match that **loads already inverted** (`endDate` <= `startDate`) is shown as
   a warning and its date/time edit is held back - it is not silently rewritten.
 
+## Sales-tax rates come from GET /cities, never from measurement
+
+`GET /cities` serves **`stripeTaxRateValue`** per city. Read 2026-08-28:
+
+```
+ATX 8.25   HOU 8.25   SATX 8.25   DFW 8.25   ELP 8.25
+ATL 8.9    STL 9.68   NYC 8.875   OKC 8.625  WAW 0
+```
+
+**Reading beat inferring on two of the ten.** Both errors came from fitting a rate to data
+instead of asking the API:
+
+- **OKC is 8.625, not 8.65.** The 8.65 was the aggregate ratio of `total_amount` to `amount`
+  over 577 rows — close enough to look right and wrong enough to matter.
+- **Warsaw is 0.** Poland is not a US sales-tax jurisdiction. Applying the 8.25% that every
+  neighbouring city carries would have invented an 8% reduction out of nothing.
+
+A rate is a fact the API holds. `src/lib/salesTax.ts` carries the table and **throws** on a city
+it does not hold — a 0% default would leave tax sitting inside a figure labelled pre-tax, which
+is the failure the split exists to prevent. A new market must arrive in that table before its
+revenue can be reported pre-tax.
+
+**The relationship, proven on production:**
+`total_amount = round((amount − credit_amount) × (1 + city rate))`, fitting 93.1% of rows within
+a cent; the residual is credit rows. `amount` is the pre-tax price and reaches back to 2023-04;
+`total_amount` is the card charge and is only populated from 2025-12.
+
+**Two revenue bases live in the estate on purpose**, and no single figure may mix them:
+`fin_revenue` is TAX-INCLUSIVE (Revenue, Cities — money collected, ties to Stripe gross volume);
+`mdapi_match_players.amount` is PRE-TAX (Slate Review's DPP, Match P&L, Cost). Membership joined
+to the second must be pre-taxed first — `cityMembershipRevenuePreTaxFor`, guarded by
+`scripts/revenue-basis-test.ts`.
+
+**The Revenue page's "7-8% low every month" was this tax, not missing roster rows.** Measured
+7.65% network-wide for Jul 2026: $97,023.58 gross against $89,601.26 pre-tax. The comment in
+`RevenueSection.tsx` records the wrong diagnosis with the correction beneath it.
+
 ## endDate is independently writable, and the API does NOT validate the pair
 
 Proven 2026-08-28 on staging, by us, with read-back. This answers two questions Phase 7 left

@@ -28,7 +28,7 @@
 import type { FinanceData } from "@/lib/useFinanceData";
 import type { JoinedMatchPlayerRow } from "@/lib/mdapiMatchesRead";
 import {
-  cityMembershipRevenueFor,
+  cityMembershipRevenuePreTaxFor,
   cityOverheadFor,
   cityTotalMemberSpotsFor,
   groupPerMatchCostFor,
@@ -202,7 +202,7 @@ export function computeCityPnl(
   const oh = { matchManagerPay: 0, cityManager: 0, marketing: 0, equipment: 0, misc: 0 };
   let citySpots = 0;
   for (const m of months) {
-    membership += cityMembershipRevenueFor(data, city, m);
+    membership += cityMembershipRevenuePreTaxFor(data, city, m);
     const o = cityOverheadFor(data, city, m);
     oh.matchManagerPay += o.matchManagerPay;
     oh.cityManager += o.cityManager;

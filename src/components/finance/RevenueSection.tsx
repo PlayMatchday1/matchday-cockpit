@@ -193,6 +193,20 @@ export default function RevenueSection() {
   // ran 7-8% low every month, because money with no matching roster row, or at a field not mapped
   // to a venue, cannot appear in it.
   //
+  // ── THAT DIAGNOSIS WAS WRONG, and it is left above because a wrong reason left unmarked will
+  // justify the next wrong decision. THE 7-8% WAS SALES TAX.
+  //
+  // fin_revenue records the Stripe CHARGE, which includes the sales tax we collect and remit.
+  // Roster-derived revenue reads mdapi_match_players.amount, the PRE-TAX price. The gap between
+  // them is the tax rate, not missing rows: measured for Jul 2026 at 7.65% network-wide
+  // ($97,023.58 gross against $89,601.26 pre-tax), against per-city rates GET /cities serves
+  // directly — 8.25% in Texas, 8.9% Atlanta, 9.68% St. Louis, 8.625% OKC, 0% Warsaw.
+  //
+  // The switch to fin_revenue still stands: this page is deliberately TAX-INCLUSIVE, because it
+  // reports money collected and ties to Stripe's gross volume. What is corrected is WHY the two
+  // numbers differed. Nothing here needs re-deriving; the next person reading it needs to not
+  // spend a day looking for unmapped venues that were never the cause.
+  //
   // GROSS, NOT NET: fees and refunds are separate columns and are not subtracted, so this lines up
   // with Stripe's gross volume rather than its payout.
   //

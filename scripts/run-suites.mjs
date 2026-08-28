@@ -115,6 +115,11 @@ const NODE_SUITES = [
   // reading a stale maxTeamSize4Team and showed players a FRACTIONAL team size. The rung fields
   // are TOTALS, not per side, which is why the first assertion has a control on 9 vs 36.
   "scripts/team-shape-test.ts",
+  // TWO REVENUE BASES, AND NO FIGURE MAY MIX THEM. Slate Review showed a pre-tax $12.00 DPP
+  // beside a tax-inclusive membership share and called the sum revenue. This pins which call
+  // site reads which helper, and the tax rates as GET /cities SERVES them — I measured OKC at
+  // 8.65 and it is 8.625, and Warsaw is a real 0 that must never be divided.
+  "scripts/revenue-basis-test.ts",
   "scripts/promo-model-test.ts",
   "scripts/cost-basis-confinement-test.ts",
   "scripts/cost-ratio-band-test.ts",

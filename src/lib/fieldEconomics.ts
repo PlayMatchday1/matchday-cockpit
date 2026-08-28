@@ -29,7 +29,7 @@
 
 import { chargedUnitCount, isEventSchedule, perMatchMinusManagerOwed, type VenueCostKind } from "./financeCosts";
 import {
-  cityMembershipRevenueFor,
+  cityMembershipRevenuePreTaxFor,
   legPerMatchUnitCost,
   venuePartnerRevenueFor,
   matchAllocatedMemberRevenueFor,
@@ -818,7 +818,7 @@ export function revenueByMonth(
   return months.map((month) => {
     const dpp = (rowsByMonth.get(month) ?? []).reduce((s, r) => s + r.revenue, 0);
     let membership = 0;
-    for (const c of cities) membership += cityMembershipRevenueFor(data, c, month);
+    for (const c of cities) membership += cityMembershipRevenuePreTaxFor(data, c, month);
     return { month, dpp, membership, total: dpp + membership };
   });
 }

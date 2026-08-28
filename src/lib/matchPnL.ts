@@ -33,7 +33,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { FinanceData } from "./useFinanceData";
-import { cityMembershipRevenueFor } from "./financeStats";
+import { cityMembershipRevenuePreTaxFor } from "./financeStats";
 import { mostRecentCompletedMonth } from "./quarters";
 import {
   fetchLegacyMatchRegistrations,
@@ -527,7 +527,7 @@ export async function fetchWeekMatchPnL(
   const cityBenchRate = new Map<string, number>();
   for (const b of buckets.values()) {
     if (cityBenchRate.has(b.city)) continue;
-    const memberRev = cityMembershipRevenueFor(data, b.city, benchMonth);
+    const memberRev = cityMembershipRevenuePreTaxFor(data, b.city, benchMonth);
     const memberSpots =
       data.mdapiMemberSpots.byCityMonth.get(`${b.city}|${benchMonth}`)
         ?.member ?? 0;
