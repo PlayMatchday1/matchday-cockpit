@@ -278,8 +278,15 @@ function SnapshotStrip({ snapshot }: { snapshot: Snapshot | null }) {
     cells.push({
       k: "Active fields",
       v: snapshot.activeFields.toLocaleString("en-US"),
-      u: "used in the last 30 days",
-      title: "Distinct mdapi_matches.field_id with a non-cancelled match in the last 30 days.",
+      // "this month", so the tile agrees with the header above it and with its three neighbours.
+      u: "this month",
+      title:
+        "Distinct mapped field IDs (fin_venue_fields) with a non-cancelled match dated this " +
+        "calendar month, 1st to today — scheduled as well as ran. Counts pitches, not venues: " +
+        "Soccer Central's three fields count as three." +
+        (snapshot.activeFieldsUnmapped
+          ? ` ${snapshot.activeFieldsUnmapped} further field${snapshot.activeFieldsUnmapped === 1 ? " has" : "s have"} matches this month with no fin_venue_fields row and ${snapshot.activeFieldsUnmapped === 1 ? "is" : "are"} not counted.`
+          : ""),
     });
   if (cells.length === 0) return null;
   return (

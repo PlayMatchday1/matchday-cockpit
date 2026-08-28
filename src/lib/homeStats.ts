@@ -25,12 +25,23 @@ function monthStartISO(now = new Date()): string {
   const { y, m0 } = centralParts(now);
   return `${y}-${String(m0 + 1).padStart(2, "0")}-01T00:00:00`;
 }
+/* THE OTHER END OF THE MONTH, EXPLICIT. start_date is a TIMESTAMP; bounding it with a bare
+ * "2026-08-28" drops every match after midnight on the final day — that is the exact off-by-one
+ * mdapiMatchesRead carried, where the label named a day the arithmetic excluded. */
+function todayEndISO(now = new Date()): string {
+  const { y, m0 } = centralParts(now);
+  const d = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago", day: "2-digit" }).format(now);
+  return `${y}-${String(m0 + 1).padStart(2, "0")}-${d}T23:59:59.999`;
+}
 
 export type Snapshot = {
   revenueGross: number | null;
   monthlyPlayers: number | null;
   activeMembers: number | null;
   activeFields: number | null;
+  /* Fields with matches this month that have no fin_venue_fields row. Reported, never folded into
+   * the count and never dropped. */
+  activeFieldsUnmapped: number | null;
   monthLabel: string;
 };
 
@@ -70,22 +81,57 @@ async function fetchActiveMembers(): Promise<number | null> {
   return count ?? null;
 }
 
-// Active fields — COUNT(DISTINCT mdapi_matches.field_id) with a non-cancelled
-// match in the last 30 days (start_date >= now-30d).
-async function fetchActiveFields(): Promise<number | null> {
-  const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
-  const { data, error } = await supabase
-    .from("mdapi_matches")
-    .select("field_id")
-    .eq("is_cancelled", false)
-    .gte("start_date", since);
-  if (error) return null;
-  const s = new Set<number>();
-  for (const r of data ?? []) {
-    const f = (r as { field_id: number | null }).field_id;
-    if (f != null) s.add(f);
+/* ACTIVE FIELDS — distinct MAPPED field ids with a match this calendar month.
+ *
+ * IT USED TO BE A ROLLING 30 DAYS while sitting under a header reading "Aug 2026 · month to date",
+ * beside three tiles that are all month-to-date. One tile answering a different question than its
+ * own header is the kind of thing nobody notices and everybody half-remembers wrong.
+ *
+ * FOUR DECISIONS, all deliberate:
+ *   · CALENDAR MONTH, 1st to today — the same window as its neighbours.
+ *   · ANY non-cancelled match, SCHEDULED OR RAN. This is "fields we are using", not "fields we
+ *     billed", so tonight's fixture counts.
+ *   · DISTINCT MAPPED FIELD IDS, not venues. Soccer Central's 102 / 199 / 1354 are three pitches
+ *     under one venue and count as three — the presentation merge on Slate Review is a display
+ *     rule for that page and has no business in a network count.
+ *   · EXPLICIT T00:00:00 / T23:59:59.999 BOUNDS. See todayEndISO.
+ *
+ * UNMAPPED FIELDS ARE COUNTED SEPARATELY, NEVER SILENTLY DROPPED. A field with matches and no
+ * fin_venue_fields row is a data gap, and quietly excluding one is how 40 Soccer Central matches
+ * stayed invisible for months. The tile shows the mapped count and its tooltip names the gap.
+ *
+ * PAGED. The old query read one un-paged page: 992 rows this month, eight short of the 1000-row cap
+ * silently truncating it. It has not bitten yet; it is one busy month from doing so. */
+async function fetchActiveFields(): Promise<{ mapped: number; unmapped: number } | null> {
+  try {
+    const [rows, links] = await Promise.all([
+      pageAll<{ field_id: number | null }>((from, to) =>
+        supabase
+          .from("mdapi_matches")
+          .select("field_id")
+          .eq("is_cancelled", false)
+          .is("deleted_at", null)
+          .gte("start_date", monthStartISO())
+          .lte("start_date", todayEndISO())
+          .range(from, to),
+      ),
+      pageAll<{ mdapi_field_id: number | null }>((from, to) =>
+        supabase.from("fin_venue_fields").select("mdapi_field_id").range(from, to),
+      ),
+    ]);
+    const linked = new Set<number>();
+    for (const r of links) if (r.mdapi_field_id != null) linked.add(Number(r.mdapi_field_id));
+    const mapped = new Set<number>();
+    const unmapped = new Set<number>();
+    for (const r of rows) {
+      if (r.field_id == null) continue;
+      const f = Number(r.field_id);
+      (linked.has(f) ? mapped : unmapped).add(f);
+    }
+    return { mapped: mapped.size, unmapped: unmapped.size };
+  } catch {
+    return null;
   }
-  return s.size;
 }
 
 // Monthly players — COUNT(DISTINCT real player) who participated in a
@@ -128,5 +174,10 @@ export async function fetchSnapshot(): Promise<Snapshot> {
     fetchActiveMembers(),
     fetchActiveFields(),
   ]);
-  return { revenueGross, monthlyPlayers, activeMembers, activeFields, monthLabel: currentMonthLabel() };
+  return {
+    revenueGross, monthlyPlayers, activeMembers,
+    activeFields: activeFields?.mapped ?? null,
+    activeFieldsUnmapped: activeFields?.unmapped ?? null,
+    monthLabel: currentMonthLabel(),
+  };
 }
