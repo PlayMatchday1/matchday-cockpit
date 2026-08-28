@@ -28,6 +28,7 @@
 //
 // 6. NOTHING BELOW THE TOTALS ROW. No legend, no note, no explanation.
 
+import RevenueBasisNote from "@/components/RevenueBasisNote";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Agg, Dim, DrilledPlayer, Metric, PivotConfig, PivotTable, ValueSpec } from "@/lib/dataRoom";
 import { heatRange, heatStep, heatColour, isAdditive, tableTitle, swapAxes, canSwap, HEAT_STEPS } from "@/lib/dataRoom";
@@ -210,6 +211,7 @@ export default function DataRoomPanel({ authHeaders, scopeChip }: { authHeaders:
   return (
     <section className="drRoot" data-testid="dataroom">
       {/* ── ONE BUILDER STRIP ─────────────────────────────────────────────────────────────────── */}
+      <RevenueBasisNote basis="pre-tax" />
       <div className="drBuild" data-testid="dr-builder">
         <div className="drRow">
           <span className="drZl">Rows</span>
