@@ -106,6 +106,10 @@ const NODE_SUITES = [
   // for as long as the Data Room existed — and total_amount is only populated from 2025-12,
   // which is why 32 months rendered $0.00.
   "scripts/revenue-pretax-test.ts",
+  // THE CONFINED MANAGER DROPDOWN. It decides who a city manager can put on a match, which
+  // decides who gets paid, and it was wrong in both directions: NYC and El Paso offered NOBODY,
+  // while SATX and DFW offered eight people on no roster at all.
+  "scripts/city-manager-roster-test.ts",
   "scripts/promo-model-test.ts",
   "scripts/cost-basis-confinement-test.ts",
   "scripts/cost-ratio-band-test.ts",

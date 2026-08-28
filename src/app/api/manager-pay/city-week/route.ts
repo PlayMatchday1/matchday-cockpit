@@ -18,6 +18,7 @@ import { authenticateCityManager, assertCityScope } from "@/lib/cityManagerAuth"
 import { computeManagerPayForWeek, ISO_DATE_RX, weekdayUtc } from "@/lib/managerPayCompute";
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
+import { scopeOfCityId, type ApiCity } from "@/lib/matchManagers";
 import { refreshMatchMirror } from "@/lib/mirrorWriteThrough";
 
 export const runtime = "nodejs";
@@ -26,31 +27,51 @@ export const maxDuration = 30;
 
 const ENV = "production" as const;
 
-// The managers who can be assigned in this city. Derived from who has actually managed here over a
-// trailing window of THIS CITY's matches — server-scoped by construction.
-//
-// STATED LIMITATION: this is the roster of people who have worked in the city, not the MatchDay
-// city-manager directory (`GET /city-managers/users?cityId=`). That endpoint is keyed by a numeric
-// cityId which app_users does not carry — we hold `city_identifier` ("DFW"), and no mapping table
-// exists. Consequence: a manager who has never worked a match in this city cannot be picked yet.
-async function cityManagerOptions(supabase: SupabaseClient, city: string, weekStart: string) {
-  const from = new Date(`${weekStart}T00:00:00Z`);
-  from.setUTCDate(from.getUTCDate() - 84); // 12 weeks back
-  const { data } = await supabase
-    .from("mdapi_matches")
-    .select("manager_id, manager_email, manager_first_name, manager_last_name")
-    .eq("city_identifier", city)
-    .is("deleted_at", null)
-    .gte("start_date", from.toISOString().slice(0, 10))
-    .not("manager_id", "is", null);
-  const seen = new Map<number, { id: number; name: string; email: string | null }>();
-  for (const r of (data ?? []) as Array<Record<string, unknown>>) {
-    const id = Number(r.manager_id);
-    if (!Number.isFinite(id) || seen.has(id)) continue;
-    const name = [r.manager_first_name, r.manager_last_name].filter(Boolean).join(" ").trim() || `Manager ${id}`;
-    seen.set(id, { id, name, email: (r.manager_email as string | null) ?? null });
-  }
-  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+/* THE MANAGERS WHO CAN BE ASSIGNED IN THIS CITY — the ROSTER, not who has worked here.
+ *
+ * WHAT THIS REPLACED, and why it was wrong. It used to read mdapi_matches: distinct manager_id on
+ * this city's matches over a trailing 12 weeks. That is "who has worked here", which is a
+ * different set from "who may be assigned here", and the two had drifted badly:
+ *
+ *   city   roster   old dropdown        city   roster   old dropdown
+ *   NYC         3             0         ATL         8             2
+ *   ELP         1             0         STL         9             2
+ *   OKC         5             1         HOU        17             9
+ *   DFW        13            12         ATX        28            20
+ *
+ * A confined manager in New York or El Paso had an EMPTY dropdown — nobody assignable, because
+ * nobody had managed a match there inside the window. And it ran the other way too: SATX and DFW
+ * each offered four people who are on NO city's roster, so a manager Ryan had deliberately removed
+ * stayed selectable by the person who actually does the assigning.
+ *
+ * WORSE, IT WAS A CLOSED LOOP. A newly added manager appeared only after managing a match here —
+ * which they could not do until someone assigned them, which a confined manager could not do.
+ * Peter Rocha-Ramirez was added to the DFW roster on 2026-08-26 with zero matches ever, and no
+ * amount of waiting would have made him selectable.
+ *
+ * THE cityId RESOLVER IS THE ONE THAT ALREADY EXISTS. app_users holds "DFW" and the endpoint wants
+ * 7; GET /cities carries the mapping and matchManagers.scopeOfCityId already reads it. This calls
+ * that function rather than writing a second resolver — the whole lesson of per_match_rate and
+ * cost_per_match sitting $36 apart.
+ *
+ * ONE LIST. On the roster -> selectable on next load. Off it -> gone. No union, no annotation.
+ * There is no cache: /city-managers/users is read live on every request, so an add is visible
+ * immediately rather than after a sync. */
+async function cityManagerOptions(cityIdentifier: string) {
+  const cities = await apiGet<ApiCity[]>(ENV, "/cities");
+  const match = cities.find((c) => scopeOfCityId(cities, Number(c.id)) === cityIdentifier);
+  // A city_identifier the API does not serve is an EMPTY list, not every manager in the network.
+  // Failing closed is the only safe direction for a control that decides who gets paid.
+  if (!match) return [];
+  const raw = await apiGet<unknown>(ENV, "/city-managers/users", { cityId: Number(match.id) });
+  const arr = Array.isArray(raw) ? raw : ((raw as { data?: unknown[] })?.data ?? []);
+  return (arr as Record<string, unknown>[])
+    .map((u) => ({
+      id: Number(u.id),
+      name: [u.firstName, u.lastName].filter(Boolean).join(" ").trim() || `Manager ${u.id}`,
+      email: (u.email as string | null) ?? null,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export async function GET(req: Request) {
@@ -70,7 +91,7 @@ export async function GET(req: Request) {
   try {
     const payload = await computeManagerPayForWeek(auth.supabase, week, { isAdmin: true, city: auth.cityIdentifier });
     const city = payload.cities.find((c) => c.cityIdentifier === auth.cityIdentifier) ?? null;
-    const managers = await cityManagerOptions(auth.supabase, auth.cityIdentifier, week);
+    const managers = await cityManagerOptions(auth.cityIdentifier);
 
     // THE EMAIL-ONLY JOIN, MADE LOUD. Pay accumulates on lower(manager_email) and there is no id
     // fallback, so a manager whose MatchDay email differs from their Clubhouse login silently looks
