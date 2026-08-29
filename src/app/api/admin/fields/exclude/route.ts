@@ -185,8 +185,12 @@ export async function POST(req: Request) {
     : outcome === "landed" ? "NOT APPLIED"
     : outcome === "notapplied" ? "NOT APPLIED" : "UNKNOWN";
 
+  /* `excluded` IS THE READ-BACK, NOT THE INTENT. Returning `next` would report what we asked
+   * for, which is the same mistake as trusting a 2xx: the caller would render a sentence about a
+   * state nobody observed. landedState is what the UPDATE's own .select() came back with, so a
+   * verdict of LANDED and the state in the message can never disagree. */
   return Response.json({
-    verdict, fieldId, excluded: next, venueId: before.fin_venue_id,
+    verdict, fieldId, excluded: landedState, venueId: before.fin_venue_id,
     outcome, logRecorded: logged, finLogRecorded: finLogged,
   });
 }

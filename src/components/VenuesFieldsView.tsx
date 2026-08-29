@@ -36,6 +36,7 @@ type AssignResult = {
   venueId?: number | null;
 };
 
+const UN_OPEN_KEY = "vf.unattributed.open";
 const money = (n: number) => "$" + Math.round(n).toLocaleString("en-US");
 const num = (n: number) => n.toLocaleString("en-US");
 
@@ -47,6 +48,21 @@ export default function VenuesFieldsView() {
   const [city, setCity] = useState("");
   const [openIds, setOpenIds] = useState<Set<number>>(new Set());
   const [allOpen, setAllOpen] = useState(false);
+  /* "NOT ON A VENUE" IS COLLAPSED BY DEFAULT and remembers being shut. 32 open rows is most of
+   * the page, and it is a list to work through occasionally rather than the thing you came for.
+   *
+   * REMEMBERED IN localStorage, READ IN AN EFFECT, NOT IN useState. Reading it during the first
+   * render makes the server's HTML and the client's first paint disagree, which React reports as
+   * a hydration error. Defaulting to shut and opening it after mount is the honest order. */
+  const [unOpen, setUnOpen] = useState(false);
+  useEffect(() => {
+    try { if (window.localStorage.getItem(UN_OPEN_KEY) === "1") setUnOpen(true); } catch { /* private mode */ }
+  }, []);
+  const toggleUn = useCallback(() => setUnOpen((v) => {
+    const next = !v;
+    try { window.localStorage.setItem(UN_OPEN_KEY, next ? "1" : "0"); } catch { /* private mode */ }
+    return next;
+  }), []);
   /** fieldId → the verdict line for that assignment. Per row, because each assignment is its own
    *  write with its own outcome — a page-level banner would report one and hide the rest. */
   const [done, setDone] = useState<Map<number, string>>(new Map());
@@ -116,15 +132,15 @@ export default function VenuesFieldsView() {
     <div className="vf">
       {/* ── WARNING ONE: not on a venue. Live counts, never a constant. ── */}
       {u.fieldCount > 0 && (
+        /* THE NUMBERS AND THE NAMES, AND NOTHING ELSE. Every sentence that explained what the
+           figures meant is gone: if "$16,027 unattributed" needs a paragraph to land, the figure
+           or its label is wrong, not the reader. */
         <div className="vf-warn vf-warn-red" data-testid="unmapped-banner">
-          <b>{u.fieldCount} field{u.fieldCount === 1 ? " is" : "s are"} not on a venue.</b>{" "}
-          {num(u.liveMatches)} live match{u.liveMatches === 1 ? "" : "es"} · {num(u.spots)} spots ·{" "}
-          {money(u.revenue)} all-time carry no cost and no revenue attribution, and are missing from
-          every finance page. Assign each to a venue, or create one.
+          <b>{u.fieldCount} field{u.fieldCount === 1 ? "" : "s"} not on a venue</b>
+          {" · "}{num(u.liveMatches)} matches{" · "}{num(u.spots)} spots{" · "}{money(u.revenue)}
           {u.upcoming.length > 0 && (
             <div className="vf-warn-sub" data-testid="unmapped-upcoming">
-              And {u.upcoming.length === 1 ? "one is" : `${u.upcoming.length} are`} still generating:{" "}
-              {u.upcoming.map((x) => `${x.title ?? "untitled"} (#${x.fieldId}) — ${x.upcomingMatches} upcoming`).join(" · ")}.
+              Still generating: {u.upcoming.map((x) => `${x.title ?? "untitled"} #${x.fieldId} — ${x.upcomingMatches} upcoming`).join(" · ")}
             </div>
           )}
         </div>
@@ -134,17 +150,17 @@ export default function VenuesFieldsView() {
              sentence — the money IS attributed, it is just costed at zero. ── */}
       {view.rateless.length > 0 && (
         <div className="vf-warn vf-warn-amber" data-testid="rateless-banner">
-          <b>{view.rateless.length} venue{view.rateless.length === 1 ? " is" : "s are"} on the books with no rate.</b>{" "}
-          Their fields are attributed, and billed at nothing —{" "}
-          {view.rateless.map((v) => `${v.name} (#${v.venueId}${v.isActive ? ", active" : ""}, ${money(v.revenue)})`).join(" · ")}.
-          {" "}A rate you do not know is not a rate to invent; this names them rather than defaulting one.
+          <b>{view.rateless.length} venue{view.rateless.length === 1 ? "" : "s"} with no rate</b>
+          {" — "}{view.rateless.map((v) => `${v.name} #${v.venueId} ${money(v.revenue)}`).join(" · ")}
         </div>
       )}
 
       {/* THE ROLLUP CLAIM, STATED WITH ITS DENOMINATOR. */}
       <div className={"vf-roll" + (breaks.length ? " vf-roll-bad" : "")} data-testid="rollup">
+        {/* THE CLAIM IS ONLY WORTH WORDS WHEN IT FAILS. Passing is the counts alone; a break still
+            names the venue and the column, because that one needs saying. */}
         {breaks.length === 0
-          ? `${view.venues.length} venues · ${view.venues.reduce((a, v) => a + v.fieldCount, 0)} mapped fields — every venue total equals the sum of its fields.`
+          ? `${view.venues.length} venues · ${view.venues.reduce((a, v) => a + v.fieldCount, 0)} mapped fields`
           : `${breaks.length} venue total(s) do NOT equal the sum of their fields: ` +
             breaks.map((b) => `${b.name} ${b.column} ${b.venueTotal} vs ${b.fieldSum}`).join(" · ")}
       </div>
@@ -174,22 +190,27 @@ export default function VenuesFieldsView() {
 
       {/* ── NOT ON A VENUE — pinned at the top, always open, warning treatment. ── */}
       {u.fieldCount > 0 && (
-        <div className="vf-card vf-un" data-testid="unmapped-block">
-          <div className="vf-vh vf-vh-un">
+        <div className={"vf-card vf-un" + (unOpen ? " open" : "")} data-testid="unmapped-block" data-open={unOpen ? "true" : "false"}>
+          {/* SAME CARET BEHAVIOUR AS A VENUE BLOCK — one line of counts, click to open. */}
+          <div className="vf-vh vf-vh-un" role="button" tabIndex={0} data-testid="unmapped-head"
+            onClick={toggleUn}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleUn(); } }}>
             <div className="vf-vname">Not on a venue <span className="vf-tag vf-tag-red">unattributed</span></div>
             <div className="vf-city">—</div>
             <div className="vf-num">{u.fieldCount}</div>
             <div className="vf-num">{num(u.liveMatches)}<small>{num(u.cancelledMatches)} cancelled</small></div>
             <div className="vf-num">{num(u.spots)}</div>
             <div className="vf-rate">{money(u.revenue)}<small>no rate</small></div>
-            <div />
+            <div className="vf-caret">{unOpen ? "▾" : "▸"}</div>
           </div>
-          <div className="vf-body">
-            {u.fields.map((f) => (
-              <AssignRow key={f.fieldId} f={f} venues={view.venues} done={done.get(f.fieldId) ?? null}
-                onDone={(line) => { setDone((m) => new Map(m).set(f.fieldId, line)); void load(true); }} />
-            ))}
-          </div>
+          {unOpen && (
+            <div className="vf-body">
+              {u.fields.map((f) => (
+                <AssignRow key={f.fieldId} f={f} venues={view.venues} done={done.get(f.fieldId) ?? null}
+                  onDone={(line) => { setDone((m) => new Map(m).set(f.fieldId, line)); void load(true); }} />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -283,7 +304,11 @@ function ExcludeToggle({ f, onDone }: { f: VenueField; onDone: (line: string, ba
       if (!res.ok) { onDone(j.error ?? `HTTP ${res.status}`, true); return; }
       // THE VERDICT IS THE ROUTE'S, from its read-back â never the status code.
       if (j.verdict === "LANDED") {
-        onDone(`LANDED — field ${f.fieldId} ${next ? "excluded from" : "counts toward"} its venue.`
+        /* THE SENTENCE COMES FROM THE SERVER'S READ-BACK (j.excluded), never from `next`. Reading
+         * it off our own intent is how a message ends up describing a state nobody observed —
+         * and the two halves are parallel now, so neither can be read as the other. */
+        const now = j.excluded === true;
+        onDone(`LANDED — field ${f.fieldId} ${now ? "is excluded from" : "counts toward"} its venue.`
           + (j.logRecorded === false || j.finLogRecorded === false ? " A change-log write did not record." : ""), false);
       } else {
         onDone(`${j.verdict} — the read-back does not show the change on field ${f.fieldId}. Do not click again; refresh and check.`, true);
@@ -464,7 +489,8 @@ const CSS = `
 .vf-vh:hover{background:#FAFCFA}
 .vf-vh:focus-visible{outline:2px solid var(--grn);outline-offset:-2px}
 .vf-vh>div{padding:14px 8px;min-width:0}
-.vf-vh-un{background:var(--redBg);cursor:default}
+.vf-vh-un{background:var(--redBg)}
+.vf-vh-un:hover{background:#FCE3DC}
 .vf-vname{font-weight:700;font-size:16px;letter-spacing:-.2px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
 .vf-vid{font-size:11.5px;font-weight:700;color:var(--mut);background:#F1F4F1;border-radius:999px;padding:2px 8px;font-variant-numeric:tabular-nums}
 .vf-tag{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;border-radius:999px;padding:2px 8px;white-space:nowrap}

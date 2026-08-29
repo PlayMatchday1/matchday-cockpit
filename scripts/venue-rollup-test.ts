@@ -143,6 +143,42 @@ console.log("\nan EXCLUDED field stays on its venue and out of its numbers");
   is("…and the block reports zero exclusions", loose.unattributed.excludedCount, 0);
 }
 
+console.log("\nthe LANDED sentence states what happened, in BOTH directions");
+{
+  /* WHAT WENT WRONG. The message was built from `next` — the client's INTENT — and read
+   * "field 1123 counts toward its venue" for a field that had just been excluded. Reporting an
+   * intent as an outcome is the same mistake as trusting a 2xx: it describes a state nobody
+   * observed. It is built from the route's READ-BACK now, and the route returns the read-back
+   * rather than the request. */
+  const strip = (x: string) => x.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const view = strip(readFileSync("src/components/VenuesFieldsView.tsx", "utf8"));
+  const route = strip(readFileSync("src/app/api/admin/fields/exclude/route.ts", "utf8"));
+  if (/function ExcludeToggle/.test(view) && /export async function POST/.test(route))
+    ok("control: the view and the route were read");
+  else bad("control: the view and the route were read", "THE CHECKS BELOW WOULD PASS ON EMPTY STRINGS");
+
+  // THE SENTENCE, RENDERED. Both branches are exercised, not just inspected.
+  const say = (now: boolean, id: number) => `LANDED — field ${id} ${now ? "is excluded from" : "counts toward"} its venue.`;
+  is("excluding says excluded", say(true, 1123), "LANDED — field 1123 is excluded from its venue.");
+  is("re-including says counts toward", say(false, 1123), "LANDED — field 1123 counts toward its venue.");
+  /* THE CONTROL THAT WOULD HAVE CAUGHT THE BUG: the two directions must not produce the same
+   * sentence, and neither may contain the other's verb. A message that said "counts toward" for
+   * an exclusion passes any check that only looks for one of the two strings. */
+  is("control: the two directions differ", say(true, 1) !== say(false, 1), true);
+  is("control: the excluded sentence does not say 'counts toward'", say(true, 1).includes("counts toward"), false);
+  is("control: the included sentence does not say 'excluded'", say(false, 1).includes("excluded"), false);
+
+  // AND THE SHIPPED CODE USES EXACTLY THOSE TWO STRINGS, off the server's answer.
+  if (/const now = j\.excluded === true;/.test(view)) ok("the sentence reads the route's read-back, not the request");
+  else bad("the sentence reads the route's read-back", "AN INTENT REPORTED AS AN OUTCOME");
+  if (/now \? "is excluded from" : "counts toward"/.test(view)) ok("…and the two branches are the asserted strings");
+  else bad("the two branches are the asserted strings");
+  if (!/next \? "excluded from" : "counts toward"/.test(view)) ok("…and the old intent-based sentence is gone");
+  else bad("the message is still built from the client's intent", "THIS IS THE BUG");
+  if (/excluded: landedState/.test(route)) ok("the route returns the read-back state, not the request");
+  else bad("the route returns the read-back state", "THE CALLER CANNOT TELL THEM APART");
+}
+
 console.log("\nthe exclude flag is read strictly, and every finance surface reads it");
 {
   is("only a literal true excludes", [
