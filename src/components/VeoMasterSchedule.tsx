@@ -494,6 +494,25 @@ export default function VeoMasterSchedule() {
                   <span className={"vms-wktag" + (isCurrentWeek ? " vms-wktag-now" : "")}>{isCurrentWeek ? "This week" : "Not current week"}</span>
                 </div>
                 <button type="button" className="vms-navbtn" onClick={goNext} disabled={navBusy} aria-label="Next week" title="Next week">›</button>
+                {/* JUMP TO A WEEK. Same pattern and same reasoning as GamedayBoard's day picker —
+                    see the comment on `day-pick` there, which is written out in full. The short of
+                    it is that this control does NO date arithmetic: <input type="date"> yields
+                    "YYYY-MM-DD", fetchVeoWeek snaps ANY date inside a week to that week's Monday,
+                    and the value goes straight into navigate() — the same function ‹ › and Today
+                    call. No parse, no format, no new Date(), so the picker and the arrows cannot
+                    disagree about which week is showing: they are one state and one setter.
+
+                    THE VALUE IS week.weekStart, NOT weekRef. weekRef is "" for the current week
+                    and would render an empty box; weekStart is the displayed week's Monday, which
+                    is always a real date. It is also why picking a Wednesday visibly SNAPS: the
+                    server answers with that week's Monday and the input re-renders holding it.
+
+                    NOT <input type="week">. It is the semantically right control and Safari
+                    degrades it to a plain text box with no warning, which is worse than a day
+                    picker doing a week's job. */}
+                <input type="date" className="vms-wkpick" data-testid="week-pick" aria-label="Jump to a week"
+                  title="Jump to the week containing this date" disabled={navBusy}
+                  value={week.weekStart} onChange={(e) => { if (e.target.value) void navigate(e.target.value); }} />
                 <button type="button" data-testid="today" className={"vms-btn vms-todaybtn" + (isCurrentWeek ? "" : " vms-todaybtn-hot")} onClick={goToday} disabled={navBusy || isCurrentWeek} title="Jump to the current week">Today</button>
                 {/* COPY MATCH — one at a time, by construction: it acts on the SELECTED match, and
                     only one card can be selected. It navigates to the create form and writes
@@ -898,6 +917,13 @@ const CSS = `
   line-height:1;width:30px;height:30px;border-radius:9px;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;justify-content:center}
 .vms-navbtn:hover:not(:disabled){background:var(--slot)}
 .vms-navbtn:disabled{opacity:.5;cursor:default}
+/* The week picker sits with the arrows and takes their tokens, so it reads as one control group
+   rather than a form field that wandered in. */
+.vms-wkpick{border:1px solid var(--line);background:#fff;color:var(--forest);border-radius:9px;
+  padding:6px 9px;font:inherit;font-size:12.5px;font-weight:700;min-height:32px;cursor:pointer}
+.vms-wkpick:hover:not(:disabled){background:var(--slot)}
+.vms-wkpick:disabled{opacity:.5;cursor:default}
+.vms-wkpick:focus-visible{outline:2px solid var(--mint);outline-offset:1px}
 .vms-fresh{display:inline-flex;align-items:center;gap:8px;margin-left:4px}
 .vms-refresh{display:inline-flex;align-items:center;gap:6px;min-height:32px;border:1px solid var(--line);
   border-radius:9px;background:#fff;color:var(--forest);font:inherit;font-size:12px;font-weight:700;
