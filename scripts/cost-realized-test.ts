@@ -18,6 +18,7 @@ import "server-only"; // no-op under --conditions=react-server
 //      reads one is unmissable.
 
 import { buildFieldMonths, hasKickedOff, realizedRegistrations } from "../src/lib/fieldEconomics";
+import { emptyMdapiMemberSpotIndex } from "../src/lib/financeStats";
 import type { FinanceData } from "../src/lib/useFinanceData";
 import type { JoinedMatchPlayerRow } from "../src/lib/mdapiMatchesRead";
 
@@ -100,7 +101,10 @@ function financeData(over: Partial<Record<string, unknown>> = {}): FinanceData {
     partnerPayoutsByVenueMonth: new Map([["2|Aug 2026", 250]]),
     revenue: [], expenses: [], managerPay: [], pricing: [], memberSpots: [], members: [],
     venueAliases: new Map(), venueFields: new Map(), venueFieldLinks: [], config: {},
-    mdapiMemberSpots: { byCityMonth: new Map(), byMatch: new Map() },
+    /* FIXTURE COMPLETION, not an assertion change. This hand-built index was missing byVenueMonth,
+     * which buildFieldMonths now reads for the membership slice; the real helper is used instead of
+     * a third hand-written literal so the fixture cannot drift from the shape again. */
+    mdapiMemberSpots: emptyMdapiMemberSpotIndex(),
     ...over,
   } as unknown as FinanceData;
 }

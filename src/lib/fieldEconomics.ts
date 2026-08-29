@@ -30,6 +30,7 @@
 import { chargedUnitCount, isEventSchedule, perMatchMinusManagerOwed, type VenueCostKind } from "./financeCosts";
 import {
   cityMembershipRevenuePreTaxFor,
+  venueAllocatedMemberRevenueFor,
   legPerMatchUnitCost,
   venuePartnerRevenueFor,
   matchAllocatedMemberRevenueFor,
@@ -287,6 +288,18 @@ export type FieldMonth = {
   // fin_revenue line, not a gate. Without this, the match-grain table could never reconcile to
   // the field totals and the difference would look like a bug instead of a rental.
   privateRental: number;
+  /* THE MEMBERSHIP SLICE of `revenue`, allocated to this venue-month by its share of the city's
+   * member spots (venueAllocatedMemberRevenueFor). PRE-TAX, matching the roster-derived DPP it
+   * sits beside — the two halves of this number are on one basis.
+   *
+   * IT IS ADDED AT THE FIELD GRAIN ON PURPOSE. The city rows are aggregations of these, and the
+   * allocator's shares sum to the city total by construction, so the city grain gets membership
+   * for free AND reconciles to cityMembershipRevenuePreTaxFor without a second code path. Adding
+   * it separately at each grain is how two grains of one page start disagreeing.
+   *
+   * Cost divided into DPP alone read Dallas at 184.0% and Atlanta at 188.1% — a field cost against
+   * only part of the revenue that field carried. */
+  membership: number;
   // The EVENT slice of `revenue` — tournament and combine play, which carries no venue cost by
   // policy. Held out of the ratio denominator so cost and revenue count the same matches.
   eventRevenue: number;
@@ -390,8 +403,13 @@ export function buildFieldMonths(
         basis,
         venueIds: ids,
         cost,
-        revenue: venuePartnerRevenueFor(data, matchRegistrations, idSet, month),
+        // One venue-month's allocated share. A group's legs each carry their own share, so summing
+        // the group's legs is the group's membership — no double count, because the allocator is
+        // keyed on venue id and each leg is a distinct venue.
+        revenue: venuePartnerRevenueFor(data, matchRegistrations, idSet, month)
+          + ids.reduce((a, id) => a + venueAllocatedMemberRevenueFor(data, id, month), 0),
         privateRental: privateRentalFor(data, idSet, month),
+        membership: ids.reduce((a, id) => a + venueAllocatedMemberRevenueFor(data, id, month), 0),
         eventRevenue: ids.reduce((a, id) => a + (eventRev.get(`${id}|${month}`) ?? 0), 0),
         matches,
         costPerMatch: cost == null ? null : matches > 0 ? cost / matches : null,

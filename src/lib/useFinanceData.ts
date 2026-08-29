@@ -613,6 +613,12 @@ async function load(quarter: QuarterInfo): Promise<void> {
         supabase.from("fin_venues").select("*").order("id"),
       ),
       selectAll<Record<string, unknown>>(() =>
+        /* NOTHING READS THIS. fin_member_spots is a one-off manual upload — 21 rows, all
+         * "Apr 2026", keyed on free-text venue names — superseded by buildMdapiMemberSpotIndex
+         * (financeStats.ts), which derives the same counts live from match registrations keyed on
+         * field_id via fin_venue_fields. venueAllocatedMemberRevenueFor and Field Ranking both
+         * read the derived index. The table is kept because it is the only record of whatever
+         * produced those numbers; it is fetched here and consumed nowhere. */
         supabase.from("fin_member_spots").select("*").order("id"),
       ),
       selectAll<Record<string, unknown>>(() =>

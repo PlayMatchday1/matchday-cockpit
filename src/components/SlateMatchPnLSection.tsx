@@ -7,6 +7,7 @@
 // tab lands on. Canceled matches are excluded entirely — this is a
 // realized-matches view per the Slate Review framing.
 
+import RevenueBasisNote from "@/components/RevenueBasisNote";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { cityMembershipRevenuePreTaxFor } from "@/lib/financeStats";
@@ -146,6 +147,7 @@ export default function SlateMatchPnLSection({ city }: { city: City }) {
   if (rows === null) {
     return (
       <div className="space-y-3">
+        <RevenueBasisNote basis="pre-tax" />
         <WeekLine label={weekLabel} />
         <div className="rounded-2xl border-[1.5px] border-cream-line bg-white px-3 py-8 text-center text-sm text-deep-green/55 shadow-md shadow-deep-green/10">
           Loading match P&L…

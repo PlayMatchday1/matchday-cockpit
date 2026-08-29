@@ -110,6 +110,19 @@ console.log("\nthe allocator, and the wiring");
   if (/cityMembershipRevenuePreTaxFor/.test(alloc)) ok("the venue allocator pre-taxes the city total");
   else bad("the venue allocator pre-taxes the city total", "FIELD-LEVEL MEMBERSHIP WOULD CARRY TAX");
 
+  /* COST'S OWN MEMBERSHIP CALL. buildFieldMonths adds each venue-month's allocated share into
+   * `revenue`, and that allocator must be the PRE-TAX one — Cost divides into roster-derived
+   * money (mdapi_match_players.amount), so a tax-inclusive membership half would put two bases
+   * inside one ratio. Added at the FIELD grain so the city rows, which aggregate them, get it
+   * for free and reconcile to the city total by construction. */
+  const fe = strip(readFileSync("src/lib/fieldEconomics.ts", "utf8"));
+  if (/venueAllocatedMemberRevenueFor\(data, id, month\)/.test(fe)) ok("Cost adds allocated membership at the field grain");
+  else bad("Cost adds allocated membership at the field grain", "THE RATIO DIVIDES INTO DPP ALONE AGAIN");
+  if (/membership: ids\.reduce/.test(fe)) ok("…and carries it as its own slice of revenue");
+  else bad("…and carries it as its own slice of revenue");
+  if (!/cityMembershipRevenueFor\b/.test(fe)) ok("…and Cost never reads the tax-inclusive helper");
+  else bad("…and Cost never reads the tax-inclusive helper", "ONE RATIO, TWO BASES");
+
   const cost = readFileSync("src/components/finance/CostSection.tsx", "utf8");
   if (/its cost is\s*\n?\s*held\s*\n?\s*out of the ratio/.test(cost.replace(/\s+/g, " ")) || /its cost is held/.test(cost.replace(/\s+/g, " ")))
     ok("COST NOT RECORDED says the COST is held out, not the revenue");

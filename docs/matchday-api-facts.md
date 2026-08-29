@@ -122,6 +122,43 @@ block any edit that would reach endDate) because:
 - A match that **loads already inverted** (`endDate` <= `startDate`) is shown as
   a warning and its date/time edit is held back - it is not silently rewritten.
 
+## KNOWN REFINEMENT — member spots are counted by payment_type, not membership held
+
+`buildMdapiMemberSpotIndex` (`financeStats.ts`) buckets a spot as a member spot when
+`payment_type === "MEMBER"`. That is the payment the player made, not whether they **held a
+membership at match time** — and the two differ, because a member can pay full DPP.
+
+**Measured Apr 2026**, deriving per venue with `hasMembershipAtMatchTime` (the definition Slate
+Review already uses) against the manual `fin_member_spots` upload:
+
+```
+network            uploaded 1,987      derived 2,537      +27.7%
+San Juan Diego            657             740             +83
+NEMP                      311             455            +144
+ATH Pearland              273             333             +60
+Lou Fusz Outdoor           58             136             +78
+PRUMC                      61              87             +26
+```
+
+PRUMC's **+26** is the members-paying-DPP effect already on record there (290 memberSpots against
+264 rows typed MEMBER).
+
+**This is a SEPARATE DECISION and is deliberately not acted on.** Switching the predicate changes
+the denominator for every member-revenue allocation at once — Field Ranking, Match P&L and Cost's
+field grain — so per-venue shares move in both directions. It is one predicate in one function
+and it deserves its own change with its own before/after.
+
+Two venues never reconciled against the upload under any rule tested: **Round Rock** (uploaded 9,
+derived 7 under local wall clock, UTC and created_at alike) and **PAC Global** (uploaded 5,
+derived 4 — but exactly 5 under a UTC month boundary). Three spots, on the two smallest venues,
+0.5% of a 550-spot gap. Unexplained and accepted.
+
+**`fin_member_spots` reads nowhere.** It is a one-off upload — 21 rows, all "Apr 2026", keyed on
+free-text venue names — superseded by `buildMdapiMemberSpotIndex`, which derives the same counts
+live from match registrations keyed on `field_id` via `fin_venue_fields`. The table is kept as the
+only record of whatever produced those numbers; `useFinanceData.ts` still fetches it and nothing
+consumes it, which the comment there says.
+
 ## Sales-tax rates come from GET /cities, never from measurement
 
 `GET /cities` serves **`stripeTaxRateValue`** per city. Read 2026-08-28:
