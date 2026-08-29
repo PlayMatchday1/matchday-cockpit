@@ -126,6 +126,9 @@ is("authenticateMatchOpsRead is imported by EXACTLY the 19 intended routes", imp
   // FIELD PHOTOS. The upload (POST /files + a presigned S3 PUT) and the gallery delete. Same gate
   // as the rest of the fields surface: a field's photos are what a player sees before they pay.
   "fields/photos/route.ts",
+  // LAPSED-MEMBER SPOTS — a read-only list of free future spots and their holders' membership
+  // state. Same Match Ops gate as the rest: it names players and the matches they are on.
+  "lapsed-spots/route.ts",
   // Phase 26 — Manager Check-In. Marks/result are Clubhouse-only (no proven MatchDay write for
   // userStatus); the MOVE is a live MatchDay write and carries its own EDIT MATCHES check inside
   // the route, which is why the whole route sits on the read gate.

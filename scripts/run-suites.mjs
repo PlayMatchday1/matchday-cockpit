@@ -120,6 +120,11 @@ const NODE_SUITES = [
   // and not the total, a sort that drops one. The checker returns BREAKS, and an empty array is
   // both "reconciles" and "nothing was checked", so every assertion here carries a control.
   "scripts/venue-rollup-test.ts",
+  // LAPSED-MEMBER SPOTS. The page is near-empty by design — 4 of 90 today — so an empty render and
+  // a broken query look identical unless the denominator prints. The grouping is proven on a
+  // fixture that HAS lapsed holders, and membership state is ANY row ACTIVE: 153 people hold an
+  // ACTIVE and a CANCELED row at once, and newest-row logic would call every one of them lapsed.
+  "scripts/lapsed-spots-test.ts",
   // TWO REVENUE BASES, AND NO FIGURE MAY MIX THEM. Slate Review showed a pre-tax $12.00 DPP
   // beside a tax-inclusive membership share and called the sum revenue. This pins which call
   // site reads which helper, and the tax rates as GET /cities SERVES them — I measured OKC at
