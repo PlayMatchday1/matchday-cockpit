@@ -66,6 +66,28 @@ export default function FieldsView() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ lines: string[]; bad: boolean } | null>(null);
   const [delText, setDelText] = useState("");
+  /* PHOTO WRITES ARE THEIR OWN BUSY AND THEIR OWN MESSAGE, separate from Save's. They do not
+   * stage and they do not ride the field PUT — an upload is a different endpoint with a different
+   * verdict, and mixing it into the save bar would make one message stand for two writes. */
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoMsg, setPhotoMsg] = useState<{ text: string; bad: boolean } | null>(null);
+  const removePhoto = async (fieldId: number, imageId: number) => {
+    if (photoBusy) return;
+    const h = await headers(); if (!h) { setPhotoMsg({ text: "No active session — sign in again.", bad: true }); return; }
+    setPhotoBusy(true); setPhotoMsg(null);
+    try {
+      const r = await fetch(`/api/fields/photos?id=${fieldId}&imageId=${imageId}`, { method: "DELETE", headers: h });
+      const j = await r.json().catch(() => ({}));
+      // THE VERDICT IS THE ROUTE'S, from its read-back — never the status code.
+      if (!r.ok) { setPhotoMsg({ text: j.error ?? `HTTP ${r.status}`, bad: true }); return; }
+      setPhotoMsg(j.verdict === "LANDED"
+        ? { text: `LANDED — photo ${imageId} removed (read-back confirmed).`, bad: false }
+        : { text: `${j.verdict} — the read-back still shows photo ${imageId}. Refresh before trying again.`, bad: true });
+      await load();
+    } catch (e) {
+      setPhotoMsg({ text: `UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Refresh before acting.`, bad: true });
+    } finally { setPhotoBusy(false); }
+  };
   const drawerRef = useRef<HTMLDivElement | null>(null);
 
   const headers = useCallback(async () => {
@@ -463,19 +485,52 @@ export default function FieldsView() {
             <p className="fv-hint">These numbers get a text when a match at this field is cancelled. What triggers the send is MatchDay-side and not visible from Clubhouse.</p>
           </Sect>
 
-          {/* READ-ONLY, AND IT SAYS SO. Not a locked panel pretending it will unlock. */}
-          <Sect title="Photos">
-            <div className="fv-imgs" data-testid="fv-photos">
-              {(cur?.images ?? []).length === 0 && <span className="fv-hint">No photos on this field.</span>}
-              {(cur?.images ?? []).map((im) => (
-                <div key={im.id} className={"fv-thumb" + (cur?.cover === im.url ? " cover" : "")} data-testid="fv-photo">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={im.url} alt="" loading="lazy" />
+          {/* TWO CONTROLS, NOT ONE GRID. Cover and gallery are separate in the API — the only
+              difference between the two uploads is entityContent — and a single grid with a
+              "cover" badge would imply promoting an existing photo, which the API cannot do:
+              PUT /admin/fields/{id} has no cover key. Measured on all 44 production fields, the
+              two sets do not overlap (44 covers, 33 with gallery photos, 0 covers appearing in
+              images[]), so nothing on screen has to explain an overlap. */}
+          {mode === "edit" && cur?.id ? (
+            <>
+              <Sect title="Cover image">
+                <div className="fv-cover" data-testid="fv-cover">
+                  {cur.cover
+                    // eslint-disable-next-line @next/next/no-img-element
+                    ? <img src={cur.cover} alt="" loading="lazy" />
+                    : <span className="fv-hint">No cover on this field.</span>}
                 </div>
-              ))}
-            </div>
-            <p className="fv-hint" data-testid="fv-photos-note">{PHOTOS_READ_ONLY_NOTE}</p>
-          </Sect>
+                <PhotoUpload fieldId={cur.id} kind="cover" label={cur.cover ? "Replace cover" : "Add cover"}
+                  headers={headers} onDone={() => void load()} />
+                {/* REPLACE-ONLY, and that is the API, not a scope cut. Every query in the Retool
+                    export was searched: the only image delete is deleteImageFromField, which acts
+                    on gallery rows. There is no delete-cover. */}
+                <p className="fv-hint">A cover is replaced by uploading a new one. There is no
+                  remove-cover in the API, and a gallery photo cannot be promoted to cover.</p>
+              </Sect>
+
+              <Sect title="Photos">
+                <div className="fv-imgs" data-testid="fv-photos">
+                  {(cur.images ?? []).length === 0 && <span className="fv-hint">No photos on this field.</span>}
+                  {(cur.images ?? []).map((im) => (
+                    <div key={im.id} className="fv-thumb" data-testid="fv-photo">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={im.url} alt="" loading="lazy" />
+                      <button className="fv-rm" data-testid="fv-photo-rm" title={`Remove photo ${im.id}`}
+                        onClick={() => void removePhoto(cur.id!, im.id)} disabled={photoBusy}>×</button>
+                    </div>
+                  ))}
+                </div>
+                <PhotoUpload fieldId={cur.id} kind="gallery" label="Add photo"
+                  headers={headers} onDone={() => void load()} />
+                {photoMsg && <p className={"fv-hint" + (photoMsg.bad ? " fv-bad" : "")} data-testid="fv-photo-msg">{photoMsg.text}</p>}
+              </Sect>
+            </>
+          ) : (
+            <Sect title="Photos">
+              <p className="fv-hint" data-testid="fv-photos-note">{PHOTOS_READ_ONLY_NOTE}</p>
+            </Sect>
+          )}
 
           {mode === "edit" && (
             <Sect title="Danger zone">
@@ -521,6 +576,68 @@ export default function FieldsView() {
       </aside>
 
       <style jsx>{CSS}</style>
+    </div>
+  );
+}
+
+/* ONE UPLOAD CONTROL, USED TWICE. Cover and gallery differ ONLY by `kind`, which is the same
+ * thing that is true of the API — entityContent is the only difference between the two POSTs — so
+ * one component with a prop is the honest shape rather than two near-copies.
+ *
+ * FOUR STATES, AND PENDING IS NOT RED. The attach is asynchronous (~1.5s measured); past the
+ * route's window the bytes ARE in S3 and the record has not caught up. That reads as a plain note
+ * telling the operator to refresh, never as a failure and never as a success.
+ *
+ * NO RETRY. `busy` is set before the request and the input is cleared on completion; a second
+ * upload is a second deliberate file choice, not a second click on the same one. */
+function PhotoUpload({ fieldId, kind, label, headers, onDone }: {
+  fieldId: number; kind: "cover" | "gallery"; label: string;
+  headers: () => Promise<Record<string, string> | null>; onDone: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; tone: "ok" | "wait" | "bad" } | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const send = async (file: File) => {
+    if (busy) return;
+    const h = await headers();
+    if (!h) { setMsg({ text: "No active session — sign in again.", tone: "bad" }); return; }
+    setBusy(true); setMsg(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      // The multipart boundary must be the browser's, so Content-Type is deliberately NOT set.
+      const auth: Record<string, string> = { Authorization: h.Authorization };
+      const r = await fetch(`/api/fields/photos?id=${fieldId}&kind=${kind}`, { method: "POST", headers: auth, body: fd });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setMsg({ text: j.error ?? `HTTP ${r.status}`, tone: "bad" }); return; }
+      if (j.verdict === "LANDED") {
+        setMsg({ text: `LANDED — ${kind === "cover" ? "cover" : "photo"} uploaded and attached (read-back confirmed).`, tone: "ok" });
+        onDone();
+      } else if (j.verdict === "PENDING") {
+        /* THE HONEST THIRD STATE. Nothing is lost and nothing is claimed. */
+        setMsg({ text: "Uploaded. Not attached yet — refresh in a moment. The image is stored; the field record has not caught up.", tone: "wait" });
+      } else {
+        setMsg({ text: `${j.verdict ?? "UNKNOWN"} — ${j.error ?? "the outcome could not be read"}. Refresh before trying again.`, tone: "bad" });
+      }
+    } catch (e) {
+      setMsg({ text: `UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Refresh before acting.`, tone: "bad" });
+    } finally {
+      setBusy(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  };
+
+  return (
+    <div className="fv-up">
+      <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp" disabled={busy}
+        data-testid={`fv-up-${kind}`} id={`fv-up-${kind}-${fieldId}`} className="fv-upin"
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) void send(f); }} />
+      <label htmlFor={`fv-up-${kind}-${fieldId}`} className={"fv-add" + (busy ? " fv-add-off" : "")}>
+        {busy ? "Uploading…" : label}
+      </label>
+      <span className="fv-hint">JPEG, PNG or WebP · up to 10 MB</span>
+      {msg && <p className={"fv-hint fv-up-msg fv-up-" + msg.tone} data-testid={`fv-up-msg-${kind}`}>{msg.text}</p>}
     </div>
   );
 }
@@ -628,6 +745,29 @@ const CSS = `
 .fv-imgs{display:flex;gap:12px;flex-wrap:wrap}
 .fv-thumb{width:132px;height:88px;border-radius:8px;border:1px solid #E4EAE5;position:relative;overflow:hidden;background:#0F3323}
 .fv-thumb :global(img){width:100%;height:100%;object-fit:cover;display:block}
+/* THE COVER IS ONE SLOT, not a grid of one — it is a different thing from the gallery and it
+   should not look like a photo that happens to be first. */
+.fv-cover{width:100%;max-width:340px;aspect-ratio:16/9;border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;background:var(--slot);display:grid;place-items:center;margin-bottom:10px}
+.fv-cover :global(img){width:100%;height:100%;object-fit:cover;display:block}
+.fv-thumb{position:relative}
+/* Remove sits ON the thumbnail, so it is unambiguous which photo it acts on. */
+.fv-rm{position:absolute;right:5px;top:5px;width:22px;height:22px;border-radius:50%;border:0;
+  background:rgba(16,35,26,.72);color:#fff;font-size:14px;line-height:1;cursor:pointer;display:grid;place-items:center}
+.fv-rm:hover{background:#A5321B}
+.fv-rm:disabled{opacity:.4;cursor:default}
+.fv-up{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:4px}
+/* The real input is hidden but still the control — the label is its trigger, so keyboard and
+   screen readers reach it the ordinary way rather than through a click handler on a div. */
+.fv-upin{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
+.fv-upin:focus-visible + label{outline:2px solid #4FE07E;outline-offset:2px}
+.fv-add-off{opacity:.6;cursor:default}
+.fv-up-msg{flex-basis:100%;margin:2px 0 0}
+.fv-up-ok{color:#0B7A3E;font-weight:700}
+/* PENDING IS AMBER, NEVER RED. The bytes are safe; only the record has not caught up. */
+.fv-up-wait{color:#8A5A08;font-weight:700}
+.fv-up-bad{color:#A5321B;font-weight:700}
+.fv-bad{color:#A5321B;font-weight:700}
 .fv-thumb.cover::after{content:"COVER";position:absolute;left:7px;top:7px;background:#4FE07E;color:#08281A;font-size:9.5px;font-weight:700;letter-spacing:.08em;border-radius:999px;padding:2px 8px}
 .fv-drfoot{flex:0 0 auto;border-top:1px solid #E4EAE5;padding:14px 22px;display:flex;align-items:center;gap:10px;background:#FBFDFB}
 .fv-primary{background:#4FE07E;border:0;border-radius:9px;padding:11px 22px;font:inherit;font-weight:700;font-size:14.5px;color:#08281A;cursor:pointer}

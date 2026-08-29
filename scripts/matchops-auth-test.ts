@@ -123,6 +123,9 @@ is("authenticateMatchOpsRead is imported by EXACTLY the 19 intended routes", imp
    * on which field, never the number: a phone number is player-adjacent PII and change_log has
    * wider access than this endpoint does. */
   "fields/phones/route.ts",
+  // FIELD PHOTOS. The upload (POST /files + a presigned S3 PUT) and the gallery delete. Same gate
+  // as the rest of the fields surface: a field's photos are what a player sees before they pay.
+  "fields/photos/route.ts",
   // Phase 26 — Manager Check-In. Marks/result are Clubhouse-only (no proven MatchDay write for
   // userStatus); the MOVE is a live MatchDay write and carries its own EDIT MATCHES check inside
   // the route, which is why the whole route sits on the read gate.

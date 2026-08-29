@@ -217,19 +217,95 @@ console.log("\nthe wiring");
   else bad("the response carries a verdict");
 }
 
-console.log("\nphotos are read-only and the page says so");
+/* WHAT THIS SECTION USED TO ASSERT, AND WHY IT NO LONGER DOES.
+ *
+ * It asserted the ABSENCE of an upload control — "…and offers no upload control that would do
+ * nothing" — because at the time no upload endpoint could be found and a dead button would have
+ * been the worse failure. That assertion recorded a FACT ABOUT THE API that has since been
+ * disproved: the endpoint exists, it is POST /files, and it was in retool-export-prod.json the
+ * whole time. Four path guesses missed it because they all assumed a field endpoint and the
+ * entity is a body parameter.
+ *
+ * ONE ASSERTION WAS REPLACED, ITEMISED HERE: `!/Add photo/` -> the upload control must now be
+ * PRESENT and wired to the real route. Every other assertion body in this file is unchanged. */
+console.log("\nphotos upload through the /files broker, and the two kinds stay separate");
 {
   const view = readFileSync("src/components/FieldsView.tsx", "utf8");
-  if (/PHOTOS_READ_ONLY_NOTE/.test(view)) ok("the photos panel states that uploads are unavailable");
-  else bad("the photos panel states that uploads are unavailable");
-  if (!/Add photo/.test(view)) ok("…and offers no upload control that would do nothing");
-  else bad("an upload control is present", "SHIPPING A CONTROL THAT LOOKS LIVE AND IS NOT");
+  const route = readFileSync("src/app/api/fields/photos/route.ts", "utf8");
+  const model = readFileSync("src/lib/fieldPhotos.ts", "utf8");
+  // POSITIVE CONTROL FIRST: all three files were read and hold code, or the absence checks below
+  // pass on an empty string.
+  if (/function PhotoUpload/.test(view) && /export async function POST/.test(route) && /assertUploadHost/.test(model))
+    ok("control: the view, the route and the model were all read");
+  else bad("control: the three files were read", "THE CHECKS BELOW WOULD PASS ON EMPTY STRINGS");
+
+  if (/data-testid=\{`fv-up-\$\{kind\}`\}/.test(view)) ok("the upload control is present and wired");
+  else bad("the upload control is present", "THE PANEL IS STILL READ-ONLY");
+  if (/kind="cover"/.test(view) && /kind="gallery"/.test(view)) ok("cover and gallery are two separate controls");
+  else bad("cover and gallery are two separate controls", "ONE GRID IMPLIES PROMOTING A PHOTO TO COVER, WHICH THE API CANNOT DO");
+  /* NO COVER BADGE IN THE GALLERY. It would imply a promote-to-cover that does not exist, and the
+   * two sets do not even overlap — 0 of 44 production covers appear in images[]. */
+  if (!/cur\?\.cover === im\.url/.test(view)) ok("…and no cover badge is rendered inside the gallery");
+  else bad("a cover badge is rendered in the gallery", "IT IMPLIES AN OPERATION THE API DOES NOT HAVE");
+
+  // THE BROKER CONTRACT, pinned. The four dead guesses are in the facts doc; this pins the live one.
+  if (/"POST", "\/files"/.test(route)) ok("the upload posts to the /files broker");
+  else bad("the upload posts to /files", "A FIELD PATH WAS GUESSED AGAIN — ALL FOUR WERE 404s");
+  if (/entityContent: kind/.test(model)) ok("…and cover vs gallery is entityContent, the only difference between them");
+  else bad("cover vs gallery is entityContent");
+
+  /* THE PRESIGNED PUT IS HOST-GUARDED ON THE PARSED HOST. This URL arrives in an upstream
+   * response, which is exactly the case the standing rule exists for. */
+  if (/assertUploadHost\(uploadUrl, ENV\)/.test(route)) ok("the presigned URL is host-guarded before any byte is sent");
+  else bad("the presigned URL is host-guarded", "…amazonaws.com.evil.com WOULD BE ACCEPTED");
+  if (/u\.host !== expected/.test(model)) ok("…on the parsed host, by equality");
+  else bad("…on the parsed host, by equality", "A SUBSTRING CHECK IS NOT A HOST GUARD");
+  if (!/Authorization/.test(route.slice(route.indexOf("write: async"), route.indexOf("now: () =>"))))
+    ok("…and no Authorization is sent to S3, which would make it refuse the signature");
+  else bad("an Authorization header is sent to the presigned URL");
+
+  /* FOUR STATES, AND PENDING IS NOT A FAILURE. The attach is asynchronous — 1,551 ms measured on
+   * staging — so a bounded poll decides, and when it expires the bytes are still in S3. */
+  if (/"LANDED" \| "PENDING" \| "FAILED" \| "UNKNOWN"/.test(model)) ok("the verdict has a PENDING state the synchronous writes do not");
+  else bad("the verdict has a PENDING state", "AN ASYNC ATTACH REPORTED AS NOT APPLIED IS A LIE");
+  if (/attached \? "LANDED" : "PENDING"/.test(route)) ok("…and an unattached upload is PENDING, never FAILED");
+  else bad("an unattached upload is PENDING", "A RED FAILURE FOR A WRITE THAT IS PROBABLY FINE");
+  if (/verdict, kind, objectKey: key[\s\S]{0,200}\}\);/.test(route)) ok("…returned with a 200, so the page does not paint it red");
+  else bad("PENDING is returned with a 200");
+  if (/fv-up-wait\{color:#8A5A08/.test(view)) ok("…and PENDING renders amber, not red");
+  else bad("PENDING renders amber, not red");
+  if (/applied: \(\) => attached/.test(route)) ok("change_log's outcome comes from the same poll the operator sees");
+  else bad("change_log's outcome comes from the same observation", "THE LOG AND THE SCREEN WOULD DISAGREE");
+
+  /* THE TWO THINGS THE API CANNOT DO, asserted absent so neither is quietly added back.
+   *
+   * ON A CONTROL, NOT ON A WORD, AND WITH COMMENTS STRIPPED. Both phrases appear legitimately in
+   * this file — once in a comment explaining why the control is absent, once in the on-screen
+   * sentence telling the operator the same thing. Matching the word flagged the explanation as
+   * the offence. What must not exist is a HANDLER, so the check is for one. */
+  const stripped = view.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const handlers = (stripped.match(/onClick=\{[^}]*\}/g) ?? []).join(" ");
+  if (!/promote|makeCover|setCover/i.test(handlers)) ok("no control promotes a gallery photo to cover");
+  else bad("a promote-to-cover control exists", "PUT /admin/fields/{id} HAS NO cover KEY");
+  if (!/deleteCover|removeCover/i.test(handlers + route.replace(/\/\*[\s\S]*?\*\//g, "")))
+    ok("no control deletes a cover");
+  else bad("a delete-cover control exists", "NO SUCH QUERY EXISTS IN THE REFERENCE IMPLEMENTATION");
+  // CONTROL: the handler scan is not vacuous — the gallery delete IS found by the same method.
+  if (/removePhoto/.test(handlers)) ok("control: the handler scan does find the gallery delete");
+  else bad("control: the handler scan finds the gallery delete", "IT MATCHED NOTHING, SO IT PROVES NOTHING");
+
+  // NEVER THE SIGNED URL IN THE LOG — the signature is a bearer credential for 50 minutes.
+  if (/object_key: key/.test(route) && !/body: \{[^}]*uploadUrl/.test(route)) ok("the change_log body carries the object key, never the signed URL");
+  else bad("the change_log body carries the object key, never the signed URL", "A SIGNED URL IS A CREDENTIAL");
+
   /* THE ONE TARGETED READ, recorded: every images[].url and cover on production — 79 of them —
-   * is on a raw S3 bucket, not the API host. That is the shape of a presigned direct upload and
-   * explains why no /admin upload route exists. Reported, not acted on. */
+   * is on a raw S3 bucket, not the API host. That is the shape of a presigned direct upload, and
+   * it is now the bucket the host guard pins. */
   is("the image host is recorded as the S3 bucket", IMAGE_HOST, "playmatchday.s3.us-west-1.amazonaws.com");
   if (!/amazonaws/.test(IMAGE_HOST.replace("playmatchday.s3.us-west-1.amazonaws.com", "")) ) ok("control: the constant is the host and nothing else");
   else bad("control: the constant is the host and nothing else");
+  if (model.includes(`production: "${IMAGE_HOST}"`)) ok("…and the guard pins that same host for production");
+  else bad("the guard pins the recorded host", "THE GUARD AND THE MEASUREMENT WOULD DRIFT");
 }
 
 console.log(`\nfields-model: ${pass} passed, ${fails.length} failed`);

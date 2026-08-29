@@ -122,6 +122,263 @@ block any edit that would reach endDate) because:
 - A match that **loads already inverted** (`endDate` <= `startDate`) is shown as
   a warning and its date/time edit is held back - it is not silently rewritten.
 
+## FIELD IMAGES — the endpoint is POST /files, and it is not a field endpoint
+
+**FOUR PATH GUESSES, ALL 404, ALL WRONG THE SAME WAY.** Recorded so nobody spends the afternoon
+again: `/admin/fields/{id}/images`, `/admin/images`, `/admin/fields/images`, `/admin/upload`.
+Every one assumed a FIELD endpoint. **The entity is a body parameter**, so no path containing
+"field" could ever have hit it. The answer was in `retool-export-prod.json` the whole time
+(queries `getUploadedUrlField`, `getUploadedUrlFieldCover`).
+
+**THE BROKER.**
+
+```
+POST {api}/files            Authorization: Bearer <token>
+  { "contentType": "image/png", "entity": "field",
+    "entityContent": "cover" | "gallery", "entityId": <fieldId> }
+-> { "uploadURL": "https://<bucket>.s3.us-west-1.amazonaws.com/images/<uuid>?X-Amz-…" }
+```
+
+Staging returns **`uploadURL` and no other key**. Retool reads
+`getUploadedUrlField.data.header['x-amz-tagging']` for the PUT's header — that path does not
+exist, so it sends an empty header and the upload works anyway. Production's response shape is
+**UNKNOWN**; probing it is a non-GET against production.
+
+**THE PUT IS PRESIGNED.** SigV4, `X-Amz-Expires=3000` (50 min), `X-Amz-SignedHeaders=host` — only
+`host` is signed, so no header must match and **no Authorization may be sent**. The tag that
+drives the attach is already in the signed query string:
+`x-amz-tagging=field%3D<id>%26image%3D<cover|gallery>`. Content-Type is accepted but not required
+(both forms returned 200 with an identical ETag). A **signed URL is a bearer credential** — never
+log it; log the object key.
+
+Buckets: **`matchday-stage.s3.us-west-1.amazonaws.com`** / **`playmatchday.s3.us-west-1.amazonaws.com`**.
+
+**THE ATTACH IS ASYNCHRONOUS, AND THIS IS THE TRAP.** `POST /files` creates **no** row — measured.
+The PUT deposits bytes. The server then attaches off the object tag. **Measured staging 2026-08-29:
+the `images[]` row appeared 1,551 ms after the PUT returned 200**, and a cover upload repointed
+`field.cover` on the same delay. So a 2xx is not the write landing, and an immediate read-back
+reports NOT APPLIED for a write that is about to succeed. There is **no contract** saying the
+attach is bounded at all. `/api/fields/photos` polls for 8 s (~5× the measurement) and reports
+**LANDED / PENDING / FAILED / UNKNOWN** — PENDING is not a failure, the bytes are in S3.
+
+**ORPHANS ARE INVISIBLE FROM OUR SIDE.** If the attach never happens the S3 object exists with
+nothing referencing it. The only list the API exposes is the field's `images[]`, which is by
+definition the attached ones; there is no bucket-listing endpoint anywhere in the surface below.
+An orphan can be created but cannot be detected or cleaned up through the API.
+
+**TWO THINGS THE API CANNOT DO.**
+- **No promote-to-cover.** `PUT /admin/fields/{id}` (`updateField`) takes title, description,
+  parkingNote, address, zipcode, lat, lng, cityId, recommendedPlayerCount, abbr, orderPosition —
+  **no `cover` key.** A cover is set only by uploading one.
+- **No delete-cover.** The only image delete in the entire export is
+  `DELETE /admin/fields/{id}/images?imageId[]={id}` (`deleteImageFromField`), which acts on
+  gallery rows. The cover is replace-only.
+
+**COVER AND GALLERY ARE DISJOINT.** All 44 production fields: 44 have a cover, 33 have gallery
+photos, and the cover URL appears inside `images[]` **zero** times. (Positive control in the same
+pass: a gallery URL matched itself, so the comparison could have found an overlap.)
+
+## THE REFERENCE IMPLEMENTATION'S FULL API SURFACE
+
+From `retool-export-prod.json` (gitignored, `.gitignore:70`; never committed — verified with
+`git log --all`). 942 plugins, 253 REST queries, **183 distinct (verb, path, query name)** below,
+plus 89 SQL and 14 JS queries not listed. Path parameters are shown as `{}`.
+
+**This list is a MAP, NOT A LICENCE.** Nothing here has been probed except where this document
+says otherwise, and a path appearing below is not evidence of its request or response shape. It
+exists so nobody guesses an endpoint name again.
+
+The export holds **no live credential**: every `Authorization` header in all 147 authenticated
+queries is the template `Bearer {{ localStorage.values.accessToken }}` (42 and 44 chars, two
+whitespace variants). A scan for JWTs, `AKIA…` keys, `sk_live`/`sk_test`, literal Bearer/Basic
+values, `service_role` and hardcoded `password` fields returned **zero** of each.
+
+| verb | path | Retool query |
+|---|---|---|
+| `GET` | `/admin/cities` | `getAllCitiesForSpecialEventCreate` |
+| `GET` | `/admin/cities` | `getCities` |
+| `GET` | `/admin/cities` | `getCitiesForUpdate` |
+| `GET` | `/admin/cities` | `updateCitySelect` |
+| `PUT` | `/admin/cities/{}` | `updateCity` |
+| `GET` | `/admin/cities/{} /fields` | `getFieldsForSpecialEventCreate` |
+| `GET` | `/admin/cities/{}/fields` | `createMatchCityId` |
+| `GET` | `/admin/cities/{}/fields` | `getFieldsByCityId` |
+| `GET` | `/admin/cities/{}/fields` | `getFieldsByCityIdForCreateMatch` |
+| `GET` | `/admin/cities/{}/fields` | `globalVar` |
+| `GET` | `/admin/fields` | `getFields` |
+| `GET` | `/admin/fields` | `getFieldsForPromocodes` |
+| `GET` | `/admin/fields` | `getFieldsForSpecialEvents` |
+| `GET` | `/admin/fields` | `getFieldsForUpdatePromocodes` |
+| `POST` | `/admin/fields` | `createField` |
+| `POST` | `/admin/fields` | `updateZipcode` |
+| `DELETE` | `/admin/fields/{}` | `deleteField` |
+| `DELETE` | `/admin/fields/{}` | `teamsForAddPlayer` |
+| `PUT` | `/admin/fields/{}` | `createFieldBtn` |
+| `PUT` | `/admin/fields/{}` | `updateField` |
+| `GET` | `/admin/fields/{}/phone-numbers` | `getFieldPhoneNumbers` |
+| `POST` | `/admin/fields/{}/phone-numbers` | `addFieldPhoneNumber` |
+| `DELETE` | `/admin/fields/{}/phone-numbers/{}` | `deleteFieldPhoneNumber` |
+| `PATCH` | `/admin/fields/{}/phone-numbers/{}` | `newFieldPhoneNumberInput` |
+| `PATCH` | `/admin/fields/{}/phone-numbers/{}` | `updateFieldPhoneNumber` |
+| `PUT` | `/admin/leaderboard/1` | `updateCurrentLeaderboard` |
+| `GET` | `/admin/matches` | `getCanceledMatches` |
+| `GET` | `/admin/matches` | `getMatches` |
+| `GET` | `/admin/matches` | `getMatchesForPromocodes` |
+| `GET` | `/admin/matches` | `getMatchesForUpdatePromocodes` |
+| `POST` | `/admin/matches` | `createMatch` |
+| `POST` | `/admin/matches/clone-by-week` | `makeCopyMatchesByThisWeek` |
+| `POST` | `/admin/matches/copy-by-week` | `copyMatchesByWeekFromMondays` |
+| `POST` | `/admin/matches/copy-by-week` | `copyMatchesByWeekToMondays` |
+| `POST` | `/admin/matches/copy-by-week` | `makeCopyMatchesByFromToWeek` |
+| `GET` | `/admin/matches/reviews` | `getMatchReviews` |
+| `DELETE` | `/admin/matches/user-matches/{}` | `deletePlayerFromMatchById` |
+| `DELETE` | `/admin/matches/{}` | `deleteMatch` |
+| `GET` | `/admin/matches/{}` | `getMatchByID` |
+| `PUT` | `/admin/matches/{}` | `attachCityManager2ToMatch` |
+| `PUT` | `/admin/matches/{}` | `attachCityManagerToMatch` |
+| `PUT` | `/admin/matches/{}` | `removeCityManager2FromToMatch` |
+| `PUT` | `/admin/matches/{}` | `removeCityManagerFromMatch` |
+| `PUT` | `/admin/matches/{}` | `updateMatch` |
+| `POST` | `/admin/matches/{}/batch/fake-players` | `addFakePlayersByBatch` |
+| `PATCH` | `/admin/matches/{}/cancel` | `cancelMatch` |
+| `POST` | `/admin/matches/{}/copy` | `createCopyMatchById` |
+| `POST` | `/admin/matches/{}/copy` | `makeCopyMatchesByThisWeekBtn2` |
+| `POST` | `/admin/matches/{}/fake-players` | `addRandomPlayerToMatch` |
+| `GET` | `/admin/matches/{}/players` | `getPlayersByMatchId` |
+| `DELETE` | `/admin/matches/{}/players/{}` | `removePlayerFromMatch` |
+| `POST` | `/admin/matches/{}/players/{}` | `addPlayerToMatch` |
+| `PATCH` | `/admin/matches/{}/players/{}/refund-and-cancel` | `refundAndCancelPlayerMatch` |
+| `PATCH` | `/admin/matches/{}/user-matches/{}/absent` | `makeAbsentPlayerFromMatch` |
+| `GET` | `/admin/players` | `generateQueryForUsers` |
+| `GET` | `/admin/players` | `getPlayersForAddingToEventMatch` |
+| `GET` | `/admin/players` | `getPlayersForAddingToMatch` |
+| `GET` | `/admin/players` | `getUsers` |
+| `GET` | `/admin/players` | `getUsers2` |
+| `GET` | `/admin/players` | `getUsersForCaptain` |
+| `GET` | `/admin/players` | `getUsersForCityManagers` |
+| `GET` | `/admin/players` | `getUsersForMembership` |
+| `GET` | `/admin/players` | `getUsersForPromocodes` |
+| `GET` | `/admin/players` | `getUsersForUpdatePromocodes` |
+| `GET` | `/admin/players` | `transformPlayerMatch` |
+| `GET` | `/admin/players` | `updatedFieldId` |
+| `GET` | `/admin/players/banned` | `getBannedUsers` |
+| `GET` | `/admin/players/charts` | `getUsersForChart` |
+| `GET` | `/admin/players/deleted` | `getDeletedUsers` |
+| `GET` | `/admin/players/unverified` | `getUnverifiedUsers` |
+| `GET` | `/admin/players/{}` | `getUnverifiedUserById` |
+| `GET` | `/admin/players/{}` | `getUserById` |
+| `GET` | `/admin/players/{}` | `getUserByIdFromMembership` |
+| `DELETE` | `/admin/players/{}/ban` | `unExpellUser` |
+| `POST` | `/admin/players/{}/ban` | `expellUser` |
+| `POST` | `/admin/players/{}/ban` | `suspendUser` |
+| `PATCH` | `/admin/players/{}/fake-player` | `setOrResetUserAsFakePlayer` |
+| `PATCH` | `/admin/players/{}/fake-player` | `toggelFakePlayer` |
+| `PUT` | `/admin/players/{}/profile` | `updateUserCredit` |
+| `PUT` | `/admin/players/{}/profile` | `updateUserCredits` |
+| `POST` | `/admin/promocodes` | `createPromocode` |
+| `DELETE` | `/admin/promocodes/{}` | `deleteFuturePromocode` |
+| `GET` | `/admin/promocodes/{}` | `getFuturePromocodeById` |
+| `GET` | `/admin/promocodes/{}` | `getPreviousPromocodeById` |
+| `PATCH` | `/admin/promocodes/{}` | `updateFuturePromocode` |
+| `PATCH` | `/admin/promocodes/{}` | `updatePreviousPromocode` |
+| `PATCH` | `/admin/promocodes/{}/restore` | `restoreDeletedPromocode` |
+| `GET` | `/admin/sms-messages` | `createAbbrText` |
+| `GET` | `/admin/sms-messages` | `getMessages` |
+| `GET` | `/admin/sms-messages` | `updateAbbrText` |
+| `PUT` | `/admin/sms-messages/{}` | `updateMessage` |
+| `POST` | `/admin/special-events/bracket-matches` | `createSpecialEventMatchForBracket` |
+| `DELETE` | `/admin/special-events/divisions/{}` | `deleteDivisionFromSpecialEvent` |
+| `PUT` | `/admin/special-events/divisions/{}` | `updateDivision` |
+| `PUT` | `/admin/special-events/divisions/{}` | `updateDivisionBtn` |
+| `POST` | `/admin/special-events/divisions/{}/captains/{}` | `assignCaptainToDivision` |
+| `GET` | `/admin/special-events/divisions/{}/groups` | `getAllGroupsForCreatingMatch` |
+| `GET` | `/admin/special-events/divisions/{}/teams` | `getAllTeamsByDivision` |
+| `GET` | `/admin/special-events/divisions/{}/teams` | `getAllTeamsByDivisionIdForUpdateMatch` |
+| `GET` | `/admin/special-events/divisions/{}/teams` | `getAllTeamsForCreateMatchByDivision` |
+| `GET` | `/admin/special-events/divisions/{}/teams` | `updateTeamAwayForUpdateMatch` |
+| `POST` | `/admin/special-events/divisions/{}/teams` | `createTeamByDivisionId` |
+| `POST` | `/admin/special-events/divisions/{}/teams` | `specialEventCreateTeamPrice` |
+| `GET` | `/admin/special-events/events` | `getAllSpecialEventForCaptain` |
+| `GET` | `/admin/special-events/events` | `getAllSpecialEventsForCreatematch` |
+| `GET` | `/admin/special-events/events` | `getAllSpecialEventsForEvents` |
+| `GET` | `/admin/special-events/events` | `getAllSpecialEventsForSettings` |
+| `POST` | `/admin/special-events/events` | `createSpecialEvent` |
+| `DELETE` | `/admin/special-events/events/{}` | `deleteDivision` |
+| `DELETE` | `/admin/special-events/events/{}` | `deleteDivision2` |
+| `DELETE` | `/admin/special-events/events/{}` | `deleteEvent` |
+| `PUT` | `/admin/special-events/events/{}` | `updateSpecialEvent` |
+| `GET` | `/admin/special-events/events/{}/captains` | `getAllCaptainsByEvents` |
+| `GET` | `/admin/special-events/events/{}/divisions` | `divisionForStatisticSelect` |
+| `GET` | `/admin/special-events/events/{}/divisions` | `getAllDivisionsByEvent` |
+| `GET` | `/admin/special-events/events/{}/divisions` | `getAllDivisionsByEventForCaptain` |
+| `GET` | `/admin/special-events/events/{}/divisions` | `getAllDivisionsByEventForCreatingMatch` |
+| `GET` | `/admin/special-events/events/{}/divisions` | `getAllDivisionsByEventForGroupStatistics` |
+| `POST` | `/admin/special-events/events/{}/divisions` | `createDivisionBtn` |
+| `POST` | `/admin/special-events/events/{}/divisions` | `createDivisionByEvent` |
+| `POST` | `/admin/special-events/events/{}/divisions` | `createDivisionRosterSpot` |
+| `GET` | `/admin/special-events/events/{}/fields` | `getFieldsForSpecialEventMatchCreate` |
+| `GET` | `/admin/special-events/events/{}/matches` | `getAllSpecialEventMatchesByEventId` |
+| `GET` | `/admin/special-events/events/{}/players` | `getAllPlayersByEvent` |
+| `GET` | `/admin/special-events/events/{}/players` | `getAllSpecialEventPlayersByEventId` |
+| `POST` | `/admin/special-events/group-matches` | `createSpecialEventMatchForGroup` |
+| `GET` | `/admin/special-events/matches` | `getAllEventMatches` |
+| `GET` | `/admin/special-events/matches` | `getAllSpecialEventMatches` |
+| `DELETE` | `/admin/special-events/matches/{}` | `deleteSpecialEventMatchById` |
+| `DELETE` | `/admin/special-events/matches/{}` | `updateTeamAwaitScore` |
+| `PUT` | `/admin/special-events/matches/{}` | `createEventOpenModal` |
+| `PUT` | `/admin/special-events/matches/{}` | `updateSpecialEventMatch` |
+| `DELETE` | `/admin/special-events/teams/{}` | `deleteEventTeam` |
+| `PUT` | `/admin/special-events/teams/{}` | `updateTeamById` |
+| `PUT` | `/admin/special-events/teams/{}` | `updateTeamPriceSPEvent` |
+| `GET` | `/admin/special-events/teams/{}/players` | `getPlayersByEventTeamId` |
+| `DELETE` | `/admin/special-events/teams/{}/players/{}` | `deleteDivision4` |
+| `DELETE` | `/admin/special-events/teams/{}/players/{}` | `deletePlayerFromEventTeam` |
+| `DELETE` | `/admin/special-events/teams/{}/players/{}` | `userAddToEventTeamTeamPosition` |
+| `POST` | `/admin/special-events/teams/{}/players/{}/player-number/{}` | `addPlayerToEventTeamRequest` |
+| `POST` | `/admin/strikes` | `setStrike` |
+| `POST` | `/admin/strikes/cities/{}` | `changeStrikePrice` |
+| `DELETE` | `/admin/strikes/strike-logs/{}` | `removeStrike` |
+| `GET` | `/admin/subscriptions` | `getAllCanceledSubscribers` |
+| `GET` | `/admin/subscriptions` | `getAllSubscribers` |
+| `POST` | `/admin/subscriptions` | `changeMasterPrice` |
+| `GET` | `/admin/subscriptions/cities/{}` | `getSubscriptionByCityId` |
+| `POST` | `/admin/subscriptions/email` | `sendEmailForSubscribers` |
+| `POST` | `/admin/subscriptions/users/{}` | `getNewSubscriptionName` |
+| `POST` | `/admin/subscriptions/users/{}` | `subscribeUser` |
+| `POST` | `/admin/subscriptions/users/{}/free` | `subscribeUserAsFreeMember` |
+| `PATCH` | `/admin/subscriptions/{}` | `updateSubscriptionPriceForMember` |
+| `POST` | `/admin/subscriptions/{}/unsubscribe` | `unsibscribeMember` |
+| `PUT` | `/admin/teams/{}` | `updateTeam` |
+| `PUT` | `/admin/teams/{}` | `updateTeamPassword` |
+| `POST` | `/admin/user-matches` | `changePlayerTeamAndPosition` |
+| `GET` | `/api/reports/weekly/managers` | `getMatchesAndManagersByWeek` |
+| `POST` | `/api/reports/weekly/managers` | `query1` |
+| `POST` | `/api/reports/weekly/managers` | `regenerateManagerReport` |
+| `PUT` | `/api/reports/weekly/managers/{}` | `updateCityManagerWeeklyPayout` |
+| `GET` | `/api/v1/admin/promocodes` | `getFuturePromocodes` |
+| `GET` | `/api/v1/admin/promocodes` | `getPreviousPromocodes` |
+| `PUT` | `/api/v1/admin/user-subscriptions/{}` | `memberDetails` |
+| `PUT` | `/api/v1/admin/user-subscriptions/{}` | `updateUserSubscriptionComment` |
+| `DELETE` | `/city-managers` | `deleteCityManager` |
+| `GET` | `/city-managers` | `getCityManagers` |
+| `POST` | `/city-managers` | `addCityManager` |
+| `GET` | `/city-managers/users` | `getCityManagersForAttachToMatch` |
+| `PUT` | `/city-managers/{}` | `introMatchText` |
+| `PUT` | `/city-managers/{}` | `updateCityManagerIntroText` |
+| `PUT` | `/city-managers/{}` | `updateCityMangerText` |
+| `POST` | `/files` | `getUploadedUrlField` |
+| `POST` | `/files` | `getUploadedUrlFieldCover` |
+| `POST` | `/goals` | `createGoal` |
+| `DELETE` | `/goals/{}` | `deleteGoal` |
+| `POST` | `/goals/{}/dark` | `createGoalForDarkTeam` |
+| `POST` | `/goals/{}/white` | `createGoalForWhiteTeam` |
+| `GET` | `/leaderboard/name` | `getCurrentLeaderboard` |
+| `DELETE` | `/player/profile/{}` | `deleteUserById` |
+| `DELETE` | `/player/profile/{}` | `eventMasterPrice` |
+| `GET` | `/special-events/divisions/{}/matches` | `getStatisticsByDivisionId` |
+| `GET` | `/strikes/cities/{}` | `getStrikePriceByCityId` |
+| `GET` | `/time-zones` | `getTimeZones` |
+
 ## KNOWN REFINEMENT — member spots are counted by payment_type, not membership held
 
 `buildMdapiMemberSpotIndex` (`financeStats.ts`) buckets a spot as a member spot when
