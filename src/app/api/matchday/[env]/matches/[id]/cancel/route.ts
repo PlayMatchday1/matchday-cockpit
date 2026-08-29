@@ -17,6 +17,7 @@ import { authenticateMatchOpsRead, assertMatchInScope } from "@/lib/matchOpsAuth
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { rosterRowIsFake, rosterRowCancelled, type RosterRow } from "@/lib/gamedayModel";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
+import { refreshMatchMirror } from "@/lib/mirrorWriteThrough";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -114,6 +115,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
     // A 2xx is not proof — re-read and classify from match state.
     const after = await apiGet<Record<string, unknown>>(env, `/admin/matches/${id}`).catch(() => null);
     const landed = after?.isCancelled === true;
+    /* WRITE THE CANCEL THROUGH TO THE MIRROR — the shared helper, not a second path. Every
+     * Clubhouse screen that shows a schedule reads mdapi_matches, which one daily cron refreshes,
+     * so without this the match stays on the Master Schedule for up to ~24 hours after a cancel
+     * that demonstrably landed. refreshMatchMirror is production-only, landed-only, and takes the
+     * value from THIS re-read; a mirror hiccup cannot turn a landed cancel into a reported
+     * failure. */
+    if (landed && after) await refreshMatchMirror(auth.supabase, env, Number(id), ["isCancelled"], after, "landed");
     return Response.json({
       ok: true, outcome, logRecorded: logged, landed,
       status: landed ? "LANDED" : "NOT APPLIED",

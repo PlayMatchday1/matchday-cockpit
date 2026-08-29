@@ -66,7 +66,7 @@ async function authFetch(path: string, init?: RequestInit): Promise<Response> {
 }
 
 export default function MatchDrawer({
-  apiId, cardVeo, siblings, onClose, onDirtyChange, onSaved, onToggleVeo, onStep, onToast,
+  apiId, cardVeo, siblings, onClose, onDirtyChange, onSaved, onToggleVeo, onStep, onToast, onCancelLanded,
 }: {
   apiId: number; cardVeo: boolean; siblings: number[];
   onClose: () => void;
@@ -75,6 +75,9 @@ export default function MatchDrawer({
   onToggleVeo: (apiId: number, enabled: boolean) => void;
   onStep: (targetId: number) => void;
   onToast: (msg: string, warn?: boolean) => void;
+  /* PASS-THROUGH, deliberately not handled here. The drawer does not own the schedule behind it;
+   * the surface that does decides what a landed cancel means for its own view. */
+  onCancelLanded?: () => void;
 }) {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
@@ -186,6 +189,7 @@ export default function MatchDrawer({
         onDirtyChange={reportDirty}
         veo={cardVeo}
         onToggleVeo={(next: boolean) => onToggleVeo(apiId, next)}
+        onCancelLanded={onCancelLanded}
       />
 
     </aside>

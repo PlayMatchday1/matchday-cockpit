@@ -74,7 +74,10 @@ export function useCancelMatch(opts: {
   matchId: string | number;
   source: string;                                   // the change_log source, per surface
   authHeaders: () => Promise<Record<string, string> | null>;
-  onCancelled?: () => void | Promise<void>;
+  /* CALLED WITH THE VERDICT, not merely called. It fires on both LANDED and NOT APPLIED — the
+   * caller decides what each one means. A surface that repaints itself after NOT APPLIED is how
+   * an operator concludes a cancel worked when the re-read says it did not. */
+  onCancelled?: (landed: boolean) => void | Promise<void>;
 }): CancelState {
   const { env, matchId, source, authHeaders, onCancelled } = opts;
   const [busy, setBusy] = useState(false);
@@ -124,7 +127,7 @@ export function useCancelMatch(opts: {
       setResult(j.landed
         ? `LANDED — “${j.name}” is cancelled. ${j.count} player(s) credited $${dollars(j.totalCents)} and texted (re-read confirmed).`
         : `NOT APPLIED — the re-read shows the match is NOT cancelled; nothing was credited. Reload and check before retrying.`);
-      await onCancelled?.();
+      await onCancelled?.(!!j.landed);
     } catch (e) {
       setBusy(false);
       setResult(`UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Reload before acting.`);

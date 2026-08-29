@@ -135,7 +135,7 @@ const money = (cents: unknown) => "$" + (Number(cents ?? 0) / 100).toFixed(2);
  * overlaid onto `state` so the diff shows them as changed and one save sends them. That is why
  * create can take nine fields and a copy can still carry twenty-one.
  */
-export default function MatchEditor({ id, mode = "edit", sourceId, variant = "page", onDirtyChange, veo, onToggleVeo }: {
+export default function MatchEditor({ id, mode = "edit", sourceId, variant = "page", onDirtyChange, veo, onToggleVeo, onCancelLanded }: {
   id: string;
   mode?: "edit" | "create";
   /** The match being copied FROM — pre-fills create, and step two's overlay. */
@@ -159,6 +159,10 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
    * the editor owns the control and the wording. */
   veo?: boolean;
   onToggleVeo?: (next: boolean) => void;
+  /* A CANCEL THAT LANDED, reported up so the surface holding this panel can refresh itself. ONLY
+   * on landed: NOT APPLIED and UNKNOWN leave the caller's screen exactly as it was, with the
+   * message still on it. */
+  onCancelLanded?: () => void;
 }) {
   const { appUser } = useAuth();
   const router = useRouter();
@@ -376,7 +380,7 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
       const t = data.session?.access_token;
       return t ? { Authorization: `Bearer ${t}` } : null;
     },
-    onCancelled: load,
+    onCancelled: async (landed) => { await load(); if (landed) onCancelLanded?.(); },
   });
 
   if (loadErr) return <div style={{ padding: 24, fontFamily: "system-ui" }}><h1>Match {id}</h1><p style={{ color: "#A83120" }}>Couldn’t load: {loadErr}</p></div>;

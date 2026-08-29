@@ -28,6 +28,7 @@ import { isConfined } from "@/lib/cityConfinement";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { supabase } from "@/lib/supabase";
 import { downloadCsv, plural } from "@/components/growth/format";
+import RefreshIcon from "@/components/RefreshIcon";
 import MatchDrawer, { DRAWER_W, type DrawerMatch } from "@/components/MatchDrawer";
 
 type VeoDay = { dow: string; date: number; iso: string; today: boolean };
@@ -180,6 +181,21 @@ export default function VeoMasterSchedule() {
   // "" = current week; otherwise a date (YYYY-MM-DD) within the selected week.
   const [weekRef, setWeekRef] = useState<string>("");
   const [navBusy, setNavBusy] = useState(false);
+  /* FRESHNESS. Copied in shape from Gameday Ops, and it means something WEAKER here, which the
+   * button says out loud: Gameday Ops re-fetches the LIVE MatchDay API, this re-reads the
+   * mdapi_matches MIRROR that one daily cron (vercel.json "0 11 * * *") refreshes. Re-reading
+   * cannot make the mirror newer. What it does catch is everything that has already reached the
+   * mirror since this tab was opened — another operator's edit, the cron itself, and the cancel
+   * write-through — which on a tab left open for a week is the difference between a schedule and
+   * a screenshot.
+   *
+   * NO AUTO-POLLING, same reason as Gameday Ops: the drawer edits a match in place and a
+   * background refetch could move the card out from under it. Manual, plus the one automatic
+   * refresh after a cancel this page itself performed. */
+  const [refreshing, setRefreshing] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [staleFail, setStaleFail] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   // City filter (empty = all). Drawer state. drawerDirty is reported UP by the
   // drawer so week-nav / card-switch / filter can be blocked while edits pend.
   const [cityFilter, setCityFilter] = useState<Set<string>>(new Set());
@@ -195,7 +211,10 @@ export default function VeoMasterSchedule() {
 
   // ref selects the week; "" asks the server for the current week. Keeps the old
   // week on screen until the new one arrives (no blanking on navigation).
-  async function load(ref: string) {
+  async function load(ref: string, quiet = false) {
+    if (quiet) setRefreshing(true);
+    setStaleFail(false);
+    let landed = false;
     try {
       const { data: sess } = await supabase.auth.getSession();
       const token = sess.session?.access_token;
@@ -205,10 +224,17 @@ export default function VeoMasterSchedule() {
       const json = (await res.json()) as VeoWeek;
       setWeek(json);
       setError("");
+      landed = true;
     } catch {
-      setError("Couldn't load Veo coverage. Try again.");
+      // A FAILED QUIET REFRESH KEEPS THE WEEK ON SCREEN and says so on the stamp. Stale data the
+      // operator knows is stale beats an error where a schedule was.
+      if (quiet) setStaleFail(true); else setError("Couldn't load Veo coverage. Try again.");
     } finally {
       setLoading(false);
+      setRefreshing(false);
+      // THE STAMP MOVES ONLY WHEN DATA LANDED. A clock that ticks regardless is a clock
+      // pretending to be a freshness indicator.
+      if (landed) setUpdatedAt(Date.now());
     }
   }
 
@@ -228,6 +254,13 @@ export default function VeoMasterSchedule() {
   const goPrev = () => { if (week) void navigate(shiftWeek(week.weekStart, -1)); };
   const goNext = () => { if (week) void navigate(shiftWeek(week.weekStart, 1)); };
   const goToday = () => void navigate("");
+
+  // 15s, not 30s: this drives the freshness age, and at 30s the "2 minutes" threshold could be
+  // reported half a minute late — which reads as a stamp that is not ageing.
+  useEffect(() => { const t = setInterval(() => setNowMs(Date.now()), 15000); return () => clearInterval(t); }, []);
+  const updatedLabel = updatedAt == null ? "—" : new Date(updatedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const staleMins = updatedAt == null ? 0 : Math.floor((nowMs - updatedAt) / 60000);
+  const doRefresh = useCallback(() => { if (!refreshing && !navBusy) void load(weekRef, true); }, [refreshing, navBusy, weekRef]);
 
   async function post(url: string, body: unknown): Promise<boolean> {
     const { data: sess } = await supabase.auth.getSession();
@@ -475,6 +508,25 @@ export default function VeoMasterSchedule() {
                 >
                   {drawerId == null ? "Copy match" : `Copy match ${drawerId}`}
                 </button>
+                {/* REFRESH + FRESHNESS — same control, same stamp and same wording as Gameday Ops.
+                    The TITLE is where the two differ, and it is not decoration: this button
+                    re-reads the mirror, it does not fetch MatchDay. Saying "Refresh the schedule"
+                    and stopping there would imply a freshness it cannot deliver. */}
+                <span className="vms-fresh" data-testid="fresh">
+                  <button type="button" className="vms-refresh" data-testid="vms-refresh"
+                    disabled={refreshing || navBusy} aria-label="Re-read the schedule"
+                    title="Re-read the schedule. Clubhouse reads a mirror of MatchDay that syncs once a day, so this shows everything that has reached the mirror — it does not fetch MatchDay."
+                    onClick={doRefresh}>
+                    <RefreshIcon size={14} spinning={refreshing} />
+                    <span className="vms-rlab">{refreshing ? "Refreshing…" : "Refresh"}</span>
+                  </button>
+                  <span className={"vms-stamp" + (staleFail ? " vms-stamp-failed" : staleMins >= 2 ? " vms-stamp-stale" : "")} data-testid="updated-at">
+                    {staleFail ? `Couldn't refresh · showing ${updatedLabel}`
+                      : updatedAt == null ? "Loading…"
+                      : staleMins >= 2 ? `Updated ${updatedLabel} · ${staleMins}m ago`
+                      : `Updated ${updatedLabel}`}
+                  </span>
+                </span>
               </div>
             )}
             <span className="vms-control-label">View</span>
@@ -534,6 +586,12 @@ export default function VeoMasterSchedule() {
           onToggleVeo={(id, en) => void toggleIntent(id, en)}
           onStep={(id) => setDrawerId(id)}
           onToast={showToast}
+          /* ONLY ON LANDED. useCancelMatch fires its callback for NOT APPLIED too and hands over
+             the verdict; this passes nothing up unless the re-read confirmed the cancel, so a
+             failed or unknown outcome leaves the grid exactly as it was with the message still on
+             it. The write-through has already put is_cancelled into the mirror by the time this
+             runs, so the re-read genuinely drops the card. */
+          onCancelLanded={() => { showToast("Match cancelled — schedule refreshed."); void load(weekRef, true); }}
         />
       )}
 
@@ -840,6 +898,15 @@ const CSS = `
   line-height:1;width:30px;height:30px;border-radius:9px;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;justify-content:center}
 .vms-navbtn:hover:not(:disabled){background:var(--slot)}
 .vms-navbtn:disabled{opacity:.5;cursor:default}
+.vms-fresh{display:inline-flex;align-items:center;gap:8px;margin-left:4px}
+.vms-refresh{display:inline-flex;align-items:center;gap:6px;min-height:32px;border:1px solid var(--line);
+  border-radius:9px;background:#fff;color:var(--forest);font:inherit;font-size:12px;font-weight:700;
+  padding:0 10px;cursor:pointer}
+.vms-refresh:hover:not(:disabled){background:var(--slot)}
+.vms-refresh:disabled{opacity:.6;cursor:default}
+.vms-stamp{font-size:12px;color:#3D5349;white-space:nowrap}
+.vms-stamp-stale{color:#7C8A83}
+.vms-stamp-failed{color:#A8391A;font-weight:600}
 .vms-wklabel{display:flex;flex-direction:column;align-items:center;min-width:172px;line-height:1.15}
 .vms-cam.vms-unsynced{box-shadow:inset 0 0 0 1.5px #d08a00}
 .vms-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:#d08a00;margin-left:5px;vertical-align:middle}

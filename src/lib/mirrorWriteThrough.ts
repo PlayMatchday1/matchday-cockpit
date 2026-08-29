@@ -31,6 +31,12 @@ const COLUMN: Record<string, string> = {
   name: "name",
   managerId: "manager_id",
   secondManagerId: "second_manager_id",
+  /* CANCEL. The Master Schedule reads is_cancelled OUT of this mirror (veoSchedule.ts filters on
+   * it), so a cancel that landed in MatchDay left the match on the week grid until the daily cron
+   * — the operator cancelled it, watched it stay, and had no way to tell whether it worked. It is
+   * the same three rules as every other column here: production only, only on landed, from the
+   * re-read. */
+  isCancelled: "is_cancelled",
 };
 
 type Manager = { firstName?: unknown; lastName?: unknown; email?: unknown } | null | undefined;
