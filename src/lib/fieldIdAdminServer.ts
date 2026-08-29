@@ -23,6 +23,7 @@ import {
   type PlayerAggInput,
   type VenueOption,
 } from "./fieldIdAdmin";
+import { isExcludedLink } from "./venueLinkFilter";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const AGGREGATE_TTL_MS = 10 * 60 * 1000;
@@ -124,6 +125,8 @@ type LinkRow = {
   mdapi_field_id: number;
   field_title_at_link: string | null;
   counts_as_regular_play: boolean;
+  /** 0155. Optional because the read is select("*") and the column may not exist yet. */
+  excluded_from_venue?: unknown;
 };
 type VenueRow = {
   id: number;
@@ -142,9 +145,12 @@ const VENUE_COLS =
 
 /** Join the (cached) aggregate to a FRESH read of the mapping tables. */
 export async function fieldsPayload(sb: SupabaseClient, agg: FieldAggregate): Promise<FieldsPayload> {
+  /* `*`, NOT A COLUMN LIST. 0155 added excluded_from_venue and code deploys before migrations
+   * apply; a named column that does not exist yet 400s this whole page. isExcludedLink treats a
+   * missing column as false, which is the column's default and today's behaviour. */
   const links = await sb
     .from("fin_venue_fields")
-    .select("fin_venue_id, mdapi_field_id, field_title_at_link, counts_as_regular_play")
+    .select("*")
     .order("mdapi_field_id");
   if (links.error) throw new Error(`fin_venue_fields: ${links.error.message}`);
   const venueRows = await sb.from("fin_venues").select(VENUE_COLS).order("venue_name");
@@ -169,6 +175,8 @@ export async function fieldsPayload(sb: SupabaseClient, agg: FieldAggregate): Pr
             venueCity: v?.city ?? null,
             venueIsActive: v?.is_active === true,
             countsAsRegularPlay: l.counts_as_regular_play === true,
+            // STILL LINKED, just not counted. The row keeps its venue and stays in the list.
+            excludedFromVenue: isExcludedLink(l),
             titleAtLink: l.field_title_at_link ?? null,
           }
         : null,

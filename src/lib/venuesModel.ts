@@ -36,6 +36,8 @@ export type FieldTag = "counts as 2" | "renamed" | "special event";
 
 export type VenueField = {
   fieldId: number;
+  /** 0155 — on the venue, in the list, out of its numbers. */
+  excluded: boolean;
   title: string | null;
   address: string | null;
   city: string | null;
@@ -62,7 +64,13 @@ export type VenueBlock = {
   /** Attributed to a venue that bills at nothing. See the header. */
   ratelessWarning: boolean;
   fields: VenueField[];
+  /** COUNTED fields only. The excluded ones are still in `fields` and still render. */
   fieldCount: number;
+  excludedCount: number;
+  /** What the exclusions are keeping out, so the page can say it rather than silently drop it. */
+  excludedMatches: number;
+  excludedSpots: number;
+  excludedRevenue: number;
   liveMatches: number;
   cancelledMatches: number;
   spots: number;
@@ -71,7 +79,13 @@ export type VenueBlock = {
 
 export type UnattributedBlock = {
   fields: VenueField[];
+  /** COUNTED fields only. The excluded ones are still in `fields` and still render. */
   fieldCount: number;
+  excludedCount: number;
+  /** What the exclusions are keeping out, so the page can say it rather than silently drop it. */
+  excludedMatches: number;
+  excludedSpots: number;
+  excludedRevenue: number;
   liveMatches: number;
   cancelledMatches: number;
   spots: number;
@@ -124,6 +138,7 @@ function toVenueField(f: FieldIdRow): VenueField {
     title: f.title,
     address: f.address,
     city: f.city,
+    excluded: f.mapping?.excludedFromVenue === true,
     tags: tagsFor(f),
     liveMatches: f.liveMatches,
     cancelledMatches: f.cancelledMatches,
@@ -160,6 +175,8 @@ export function buildVenuesView(fields: FieldIdRow[], venues: VenueOption[]): Ve
     const rows = (mapped.get(v.id) ?? []).map(toVenueField)
       // Inside a venue, the field that earns the most reads first.
       .sort((a, b) => b.revenue - a.revenue || b.liveMatches - a.liveMatches || a.fieldId - b.fieldId);
+    const counted = rows.filter((r) => !r.excluded);
+    const skipped = rows.filter((r) => r.excluded);
     return {
       venueId: v.id,
       name: v.venueName,
@@ -171,13 +188,19 @@ export function buildVenuesView(fields: FieldIdRow[], venues: VenueOption[]): Ve
       // A venue with no field has nothing attributed to it, so it cannot be billing that at zero.
       ratelessWarning: rows.length > 0 && rateMissing(v),
       fields: rows,
-      /* THE VENUE TOTALS ARE THE SUM OF ITS FIELDS, computed here and nowhere else. Nothing on
-       * this page reads a venue-level count from the server — venueRollupBreaks asserts it. */
-      fieldCount: rows.length,
-      liveMatches: sum(rows, (r) => r.liveMatches),
-      cancelledMatches: sum(rows, (r) => r.cancelledMatches),
-      spots: sum(rows, (r) => r.spots),
-      revenue: sum(rows, (r) => r.revenue),
+      /* THE VENUE TOTALS ARE THE SUM OF ITS **INCLUDED** FIELDS, computed here and nowhere else.
+       * An excluded field stays in `fields` — it is still linked and still rendered, muted — and
+       * contributes to none of these five. venueRollupBreaks asserts exactly that split, so a
+       * total that quietly went back to summing everything goes red. */
+      fieldCount: counted.length,
+      excludedCount: skipped.length,
+      excludedMatches: sum(skipped, (r) => r.liveMatches),
+      excludedSpots: sum(skipped, (r) => r.spots),
+      excludedRevenue: sum(skipped, (r) => r.revenue),
+      liveMatches: sum(counted, (r) => r.liveMatches),
+      cancelledMatches: sum(counted, (r) => r.cancelledMatches),
+      spots: sum(counted, (r) => r.spots),
+      revenue: sum(counted, (r) => r.revenue),
     };
   }).sort((a, b) => b.revenue - a.revenue || b.liveMatches - a.liveMatches || a.name.localeCompare(b.name));
 
@@ -186,6 +209,10 @@ export function buildVenuesView(fields: FieldIdRow[], venues: VenueOption[]): Ve
     unattributed: {
       fields: lf,
       fieldCount: lf.length,
+      /* ALWAYS ZERO, and structurally so: the exclude flag lives on the LINK, and an unattributed
+       * field has no link to carry it. Stated rather than omitted so the shape matches a venue
+       * block and no caller has to special-case it. */
+      excludedCount: 0, excludedMatches: 0, excludedSpots: 0, excludedRevenue: 0,
       liveMatches: sum(lf, (r) => r.liveMatches),
       cancelledMatches: sum(lf, (r) => r.cancelledMatches),
       spots: sum(lf, (r) => r.spots),
@@ -215,13 +242,21 @@ export type RollupBreak = { venueId: number; name: string; column: string; venue
 export function venueRollupBreaks(blocks: VenueBlock[]): RollupBreak[] {
   const out: RollupBreak[] = [];
   for (const b of blocks) {
+    /* THE SUM IS OVER INCLUDED FIELDS ONLY — that is the claim the page makes, so that is the
+     * claim asserted. Summing b.fields here instead would make the checker agree with a total
+     * that had stopped honouring exclusions, which is the one regression this exists to catch. */
+    const inc = b.fields.filter((f) => !f.excluded);
+    const exc = b.fields.filter((f) => f.excluded);
     const cols: [string, number, number][] = [
-      ["fieldCount", b.fieldCount, b.fields.length],
-      ["liveMatches", b.liveMatches, sum(b.fields, (f) => f.liveMatches)],
-      ["cancelledMatches", b.cancelledMatches, sum(b.fields, (f) => f.cancelledMatches)],
-      ["spots", b.spots, sum(b.fields, (f) => f.spots)],
+      ["fieldCount", b.fieldCount, inc.length],
+      ["liveMatches", b.liveMatches, sum(inc, (f) => f.liveMatches)],
+      ["cancelledMatches", b.cancelledMatches, sum(inc, (f) => f.cancelledMatches)],
+      ["spots", b.spots, sum(inc, (f) => f.spots)],
       // Revenue is dollars with cents; compare at the cent, not at the float.
-      ["revenue", Math.round(b.revenue * 100), Math.round(sum(b.fields, (f) => f.revenue) * 100)],
+      ["revenue", Math.round(b.revenue * 100), Math.round(sum(inc, (f) => f.revenue) * 100)],
+      // And the excluded side is asserted too, or "excluded" could drift to mean nothing.
+      ["excludedCount", b.excludedCount, exc.length],
+      ["excludedMatches", b.excludedMatches, sum(exc, (f) => f.liveMatches)],
     ];
     for (const [column, venueTotal, fieldSum] of cols) {
       if (venueTotal !== fieldSum) out.push({ venueId: b.venueId, name: b.name, column, venueTotal, fieldSum });

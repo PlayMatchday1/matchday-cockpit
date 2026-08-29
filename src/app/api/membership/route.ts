@@ -16,6 +16,7 @@
 // intersection and losing nine Warsaw signups.
 
 import { authenticateCapability } from "@/lib/capabilityAuth";
+import { includedLinks } from "@/lib/venueLinkFilter";
 import { assertScope } from "@/lib/cityConfinement";
 import { countActiveMembers } from "@/lib/membershipStats";
 import { makeServerClient } from "@/lib/supabaseServer";
@@ -83,11 +84,13 @@ export async function GET(req: Request) {
 
     const [venuesRes, linksRes, subsWin] = await Promise.all([
       sb.from("fin_venues").select("id,venue_name,city"),
-      sb.from("fin_venue_fields").select("fin_venue_id,mdapi_field_id,field_title_at_link"),
+      // `*` and the shared filter: 0155 added excluded_from_venue, code deploys before migrations
+      // apply, and an excluded field must not count toward its venue here either.
+      sb.from("fin_venue_fields").select("*"),
       loadMembershipWindowsByUserId(sb),
     ]);
     const venues = venuesRes.data ?? [];
-    const links = linksRes.data ?? [];
+    const links = includedLinks(linksRes.data);  // an excluded field does not count toward its venue
     const vById = new Map(venues.map((v) => [v.id, v]));
     const venueOfField = new Map(links.map((l) => [l.mdapi_field_id, l.fin_venue_id]));
     const fieldName = new Map(links.map((l) => [l.mdapi_field_id, l.field_title_at_link]));

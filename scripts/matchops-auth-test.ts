@@ -207,6 +207,9 @@ is("no other route reads can_edit_credits directly",
 // THE CENSUS CAUGHT BOTH, one at a time, which is exactly what it is for.
 is("authenticateAdmin guards the User access screen and the Fields mapping admin", importsAdmin.map(rel).sort(),
    ["admin/fields/route.ts", "admin/fields/assign/route.ts",
+    // The exclude toggle — one boolean on fin_venue_fields, decided by the same right as the
+    // assignment it sits beside: both decide whether a field's money counts toward a venue.
+    "admin/fields/exclude/route.ts",
     "admin/users/auth-status/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
     "admin/users/match-permissions/route.ts", "admin/users/permissions/route.ts",
     "admin/users/resend-invite/route.ts"].sort());

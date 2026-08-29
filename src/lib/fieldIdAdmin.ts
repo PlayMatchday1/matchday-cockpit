@@ -34,6 +34,8 @@ export type FieldMapping = {
   venueIsActive: boolean;
   /** fin_venue_fields.counts_as_regular_play — the per-link event exception (migration 0130). */
   countsAsRegularPlay: boolean;
+  /** 0155 — linked, listed, and left OUT of the venue's matches / spots / revenue / cost. */
+  excludedFromVenue: boolean;
   /** field_title_at_link — the title captured when the link was made, for drift detection. */
   titleAtLink: string | null;
 };

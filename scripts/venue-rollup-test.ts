@@ -18,6 +18,7 @@
 
 import { readFileSync } from "node:fs";
 import { buildVenuesView, venueRollupBreaks, tagsFor } from "../src/lib/venuesModel";
+import { isExcludedLink, includedLinks, excludedLinks } from "../src/lib/venueLinkFilter";
 import type { FieldIdRow, VenueOption } from "../src/lib/fieldIdAdmin";
 
 let pass = 0; const fails: string[] = [];
@@ -39,7 +40,8 @@ const field = (o: Partial<FieldIdRow> & { fieldId: number }): FieldIdRow => ({
 } as FieldIdRow);
 
 const link = (venueId: number, venueName: string, counts = false) =>
-  ({ venueId, venueName, venueCity: "Austin", venueIsActive: true, countsAsRegularPlay: counts, titleAtLink: null });
+  ({ venueId, venueName, venueCity: "Austin", venueIsActive: true, countsAsRegularPlay: counts,
+     excludedFromVenue: false, titleAtLink: null });
 
 const venue = (o: Partial<VenueOption> & { id: number; venueName: string }): VenueOption => ({
   id: o.id, venueName: o.venueName, city: o.city ?? "Austin", isActive: o.isActive ?? true,
@@ -81,6 +83,103 @@ console.log("\na venue's five totals ARE its fields', added up");
     ["fieldCount", "liveMatches", "cancelledMatches", "spots", "revenue"]);
   // CONTROL 3: an EMPTY venue list returns [] too — which is why the page states its denominator.
   is("control: an empty list also returns [], which is why the banner states the count", venueRollupBreaks([]), []);
+}
+
+console.log("\nan EXCLUDED field stays on its venue and out of its numbers");
+{
+  const on = (id: number, vid: number, name: string, excl: boolean, m: number, sp: number, rev: number) =>
+    field({ fieldId: id, liveMatches: m, cancelledMatches: 2, dppSpots: sp, dppRevenue: rev,
+      mapping: { ...link(vid, name), excludedFromVenue: excl } });
+  const v = buildVenuesView(
+    [on(199, 11, "Soccer Central", false, 423, 8461, 83742),
+     on(102, 11, "Soccer Central", false, 392, 4158, 34902),
+     on(1123, 11, "Soccer Central", true, 33, 0, 0)],
+    [venue({ id: 11, venueName: "Soccer Central" })]);
+  const sc = v.venues[0];
+
+  /* THE POINT OF THE WHOLE FEATURE: 1123 is still on Soccer Central, still rendered, and out of
+   * every one of the five totals. */
+  is("the excluded field is still in the venue's field list",
+    sc.fields.map((f) => f.fieldId).sort((a, b) => a - b), [102, 199, 1123]);
+  is("…and is marked as excluded", sc.fields.find((f) => f.fieldId === 1123)?.excluded, true);
+  is("…and the counted field count leaves it out", sc.fieldCount, 2);
+  is("…and matches leave it out", sc.liveMatches, 423 + 392);
+  is("…and spots leave it out", sc.spots, 8461 + 4158);
+  is("…and revenue leaves it out", Math.round(sc.revenue), 83742 + 34902);
+  is("…and cancelled leaves it out", sc.cancelledMatches, 4);
+  is("what it is keeping out is reported, not silently dropped",
+    [sc.excludedCount, sc.excludedMatches, sc.excludedSpots, sc.excludedRevenue], [1, 33, 0, 0]);
+
+  /* CONTROL: the exclusion is DOING something. The same three fields with the flag off give the
+   * full totals — so the numbers above are not just what this fixture always produces. */
+  const all = buildVenuesView(
+    [on(199, 11, "Soccer Central", false, 423, 8461, 83742),
+     on(102, 11, "Soccer Central", false, 392, 4158, 34902),
+     on(1123, 11, "Soccer Central", false, 33, 0, 0)],
+    [venue({ id: 11, venueName: "Soccer Central" })]).venues[0];
+  is("control: with the flag OFF the same fields give 3 and 848", [all.fieldCount, all.liveMatches], [3, 423 + 392 + 33]);
+  is("control: …and nothing is reported as excluded", all.excludedCount, 0);
+  /* CONTROL: a field whose exclusion costs REAL money moves the total by that money — the $0 case
+   * above would pass a broken implementation that only ever subtracted zero. */
+  const costly = buildVenuesView(
+    [on(199, 11, "Soccer Central", true, 423, 8461, 83742),
+     on(102, 11, "Soccer Central", false, 392, 4158, 34902)],
+    [venue({ id: 11, venueName: "Soccer Central" })]).venues[0];
+  is("control: excluding the $83,742 field moves revenue by $83,742", Math.round(costly.revenue), 34902);
+  is("control: …and says so", Math.round(costly.excludedRevenue), 83742);
+
+  // THE ROLLUP SUMS INCLUDED FIELDS ONLY, which is the claim the page prints.
+  is("the rollup reconciles with an exclusion in place", venueRollupBreaks(v.venues), []);
+  /* CONTROL: and it CATCHES a total that went back to counting everything — the exact regression
+   * this whole section exists for. */
+  const regressed = [{ ...sc, liveMatches: 423 + 392 + 33, fieldCount: 3 }];
+  is("control: a total that counts the excluded field again is caught",
+    venueRollupBreaks(regressed).map((b) => b.column).sort(), ["fieldCount", "liveMatches"]);
+
+  /* AN UNMAPPED FIELD CANNOT BE EXCLUDED — the flag lives on the link, so there is nowhere to
+   * hold it. Asserted so the unattributed block's zeros are structural, not incidental. */
+  const loose = buildVenuesView([field({ fieldId: 14, liveMatches: 141, dppRevenue: 5503 })], []);
+  is("an unattributed field is never excluded", loose.unattributed.fields[0]?.excluded, false);
+  is("…and the block reports zero exclusions", loose.unattributed.excludedCount, 0);
+}
+
+console.log("\nthe exclude flag is read strictly, and every finance surface reads it");
+{
+  is("only a literal true excludes", [
+    isExcludedLink({ excluded_from_venue: true }),
+    isExcludedLink({ excluded_from_venue: false }),
+    isExcludedLink({ excluded_from_venue: null }),
+    isExcludedLink({}),                                 // the column does not exist yet
+    isExcludedLink({ excluded_from_venue: "true" }),    // a string is not a yes
+    isExcludedLink({ excluded_from_venue: 1 }),
+    isExcludedLink(null),
+  ], [true, false, false, false, false, false, false]);
+  is("includedLinks keeps the counted ones",
+    includedLinks([{ mdapi_field_id: 1 }, { mdapi_field_id: 2, excluded_from_venue: true }]).map((r) => r.mdapi_field_id), [1]);
+  is("…and excludedLinks is its complement",
+    excludedLinks([{ mdapi_field_id: 1 }, { mdapi_field_id: 2, excluded_from_venue: true }]).map((r) => r.mdapi_field_id), [2]);
+
+  /* THE FILTER IS APPLIED WHERE THE FIELD->VENUE MAP IS BUILT, not per surface. Filtering later,
+   * once per page, is how one page ends up disagreeing with another by exactly one field. */
+  const strip = (x: string) => x.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const fin = strip(readFileSync("src/lib/useFinanceData.ts", "utf8"));
+  if (/import \{ includedLinks \} from ".\/venueLinkFilter"/.test(fin)) ok("control: useFinanceData was read and imports the filter");
+  else bad("control: useFinanceData imports the filter", "THE CHECKS BELOW WOULD PASS ON AN EMPTY STRING");
+  if (/for \(const f of includedLinks\(vfRows\)\)/.test(fin)) ok("the field->venue map is built from INCLUDED links only");
+  else bad("the field->venue map is built from included links only", "EXCLUDED FIELDS WOULD STILL COUNT ON COST AND FIELD ECONOMICS");
+  /* SELECT * , NOT A COLUMN LIST. Code deploys before migrations apply; naming a column that does
+   * not exist yet 400s the entire finance load, not just this table. */
+  if (!/select\("fin_venue_id, mdapi_field_id, field_title_at_link, counts_as_regular_play"\)/.test(fin))
+    ok("…and it selects * so a pre-migration deploy does not 400");
+  else bad("useFinanceData still names columns", "0155 WOULD 400 THE WHOLE FINANCE LOAD BEFORE IT APPLIES");
+
+  const mem = strip(readFileSync("src/app/api/membership/route.ts", "utf8"));
+  if (/includedLinks\(linksRes\.data\)/.test(mem)) ok("the membership venue filter reads included links only");
+  else bad("the membership venue filter reads included links only");
+
+  const srv = strip(readFileSync("src/lib/fieldIdAdminServer.ts", "utf8"));
+  if (/excludedFromVenue: isExcludedLink\(l\)/.test(srv)) ok("the page's own payload carries the flag");
+  else bad("the page's own payload carries the flag");
 }
 
 console.log("\nthe unattributed block is the fields with no venue, and only those");
@@ -177,10 +276,21 @@ console.log("\nthe UI adds nothing to the write path");
   const view = strip(readFileSync("src/components/VenuesFieldsView.tsx", "utf8"));
   if (/fetch\("\/api\/admin\/fields\/assign"/.test(view)) ok("it posts to the route that already exists");
   else bad("it posts to /api/admin/fields/assign", "A SECOND WRITE PATH");
-  /* NO SECOND WRITE. The only non-GET this file may make is that one POST. Any other insert,
-   * update or Supabase write here would bypass recordWrite's verdict and fin_change_log entirely. */
-  const posts = view.match(/method:\s*"(POST|PUT|PATCH|DELETE)"/g) ?? [];
-  is("…and it is the ONLY non-GET the view makes", posts.length, 1);
+  /* NO WRITE THAT IS NOT ONE OF THE TWO GUARDED ROUTES.
+   *
+   * THIS ASSERTION WAS `posts.length === 1` AND IS NOW A WHITELIST — itemised because it is a
+   * loosened check. The count stood in for the real rule ("no path that bypasses recordWrite"),
+   * and it broke the moment a second legitimate guarded route was added. Counting would have to
+   * be relaxed again for the third; naming the endpoints does not, and it still fails on exactly
+   * what the count was protecting: a fetch to anywhere else, or a Supabase write. */
+  const ALLOWED_WRITE_URLS = ["/api/admin/fields/assign", "/api/admin/fields/exclude"];
+  const writeFetches = [...view.matchAll(/fetch\(\s*"([^"]+)"[\s\S]{0,200}?method:\s*"(POST|PUT|PATCH|DELETE)"/g)]
+    .map((m2) => m2[1]);
+  is("every non-GET goes to a guarded route, and only those",
+    writeFetches.filter((u) => !ALLOWED_WRITE_URLS.includes(u)), []);
+  // CONTROL: the scan finds writes at all — an empty result satisfies the line above for free.
+  is("control: the write scan is not empty", writeFetches.length, 2);
+  is("control: …and it found both of them", [...writeFetches].sort(), [...ALLOWED_WRITE_URLS].sort());
   if (!/supabase\.from\(/.test(view)) ok("…and the view never writes Supabase directly");
   else bad("the view touches Supabase directly", "THAT PATH HAS NO VERDICT AND NO CHANGE LOG");
 

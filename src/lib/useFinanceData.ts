@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { includedLinks } from "./venueLinkFilter";
 import { supabase } from "./supabase";
 import { selectAll } from "./supabasePagination";
 import { cityFromAbbr } from "./cityMap";
@@ -628,9 +629,12 @@ async function load(quarter: QuarterInfo): Promise<void> {
       // mdapi field_id and fin_venues.id. Loaded once per quarter
       // (~35 rows today) and surfaced as data.venueFields below.
       selectAll<Record<string, unknown>>(() =>
+        /* `*`, NOT A COLUMN LIST — 0155 added excluded_from_venue and code deploys before
+         * migrations apply. A named column that does not exist yet 400s the WHOLE finance load,
+         * not just this table. The filter below treats a missing column as false. */
         supabase
           .from("fin_venue_fields")
-          .select("fin_venue_id, mdapi_field_id, field_title_at_link, counts_as_regular_play")
+          .select("*")
           .order("mdapi_field_id"),
       ),
       // Phase 3b: switched from fin_members to mdapi_subscriptions.
@@ -714,7 +718,12 @@ async function load(quarter: QuarterInfo): Promise<void> {
   // already accounts for it, and none of them needs to know this column exists.
   const countsAsRegular = new Set<number>();
   const venueFieldLinks: FinVenueFieldLink[] = [];
-  for (const f of vfRows) {
+  /* EXCLUDED FIELDS NEVER ENTER THE MAP. `venueFields` is what resolves a match to a venue, so
+   * dropping the link here removes the field from matches, spots, revenue AND cost on every
+   * surface downstream — Cost, Field Economics, City Economics, Field Ranking — without any of
+   * them knowing the column exists. Filtering later, per surface, is how one page ends up
+   * disagreeing with another by exactly one field. See venueLinkFilter for why it is `=== true`. */
+  for (const f of includedLinks(vfRows)) {
     const fieldId = Number(f.mdapi_field_id);
     const venueId = Number(f.fin_venue_id);
     if (Number.isFinite(fieldId) && Number.isFinite(venueId)) {

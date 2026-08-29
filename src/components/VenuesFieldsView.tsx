@@ -68,6 +68,15 @@ export default function VenuesFieldsView() {
     } finally { setLoading(false); }
   }, []);
   useEffect(() => { void load(false); }, [load]);
+  /* THE EXCLUDE MESSAGE IS PAGE-LEVEL AND THE ASSIGNMENTS' ARE PER ROW, on purpose: an assignment
+   * is one deliberate act on one field, while excluding is a pass down a list of 48. A verdict
+   * pinned to each row would leave 48 stale lines behind; one line that names the field is what a
+   * pass actually needs. It reloads on success so the venue totals move immediately. */
+  const [excMsg, setExcMsg] = useState<{ text: string; bad: boolean } | null>(null);
+  const onExcludeDone = useCallback((text: string, bad: boolean) => {
+    setExcMsg({ text, bad });
+    if (!bad) void load(true);
+  }, [load]);
 
   const view = useMemo(() => data ? buildVenuesView(data.fields, data.venues) : null, [data]);
 
@@ -140,6 +149,8 @@ export default function VenuesFieldsView() {
             breaks.map((b) => `${b.name} ${b.column} ${b.venueTotal} vs ${b.fieldSum}`).join(" · ")}
       </div>
 
+      {excMsg && <div className={"vf-roll" + (excMsg.bad ? " vf-roll-bad" : " vf-roll-ok")} data-testid="exclude-msg">{excMsg.text}</div>}
+
       <div className="vf-bar">
         <input className="vf-search" value={q} onChange={(e) => setQ(e.target.value)}
           placeholder="Venue, field name, address or ID" data-testid="vf-search" />
@@ -197,8 +208,13 @@ export default function VenuesFieldsView() {
                 {v.ratelessWarning && <span className="vf-tag vf-tag-amber">no rate</span>}
               </div>
               <div className="vf-city">{v.city ?? "—"}</div>
-              <div className="vf-num">{v.fieldCount}</div>
-              <div className="vf-num">{num(v.liveMatches)}<small>{num(v.cancelledMatches)} cancelled</small></div>
+              <div className="vf-num">{v.fieldCount}{v.excludedCount > 0 && <small data-testid="vf-exc-count">+{v.excludedCount} excluded</small>}</div>
+              {/* THE EXCLUSION IS SAID, NOT SILENTLY APPLIED. "854 matches · 33 excluded" —
+                  otherwise a venue whose total dropped looks like a data loss. */}
+              <div className="vf-num">{num(v.liveMatches)}
+                <small>{v.excludedCount > 0
+                  ? `${num(v.excludedMatches)} excluded · ${num(v.cancelledMatches)} cancelled`
+                  : `${num(v.cancelledMatches)} cancelled`}</small></div>
               <div className="vf-num">{num(v.spots)}</div>
               {/* THE RATE IS cost_per_match, the column Field Economics reads. Where per_match_rate
                   disagrees BOTH are shown with a marker — nothing is picked silently. */}
@@ -214,7 +230,7 @@ export default function VenuesFieldsView() {
               <div className="vf-body">
                 {v.fields.length === 0
                   ? <div className="vf-empty">No field IDs are mapped to this venue.</div>
-                  : v.fields.map((f) => <FieldRow key={f.fieldId} f={f} />)}
+                  : v.fields.map((f) => <FieldRow key={f.fieldId} f={f} onDone={onExcludeDone} />)}
               </div>
             )}
           </div>
@@ -236,16 +252,72 @@ function Tags({ tags }: { tags: VenueField["tags"] }) {
   ))}</>;
 }
 
-function FieldRow({ f }: { f: VenueField }) {
+/* THE EXCLUDE TOGGLE. On = the field stays on its venue, stays in this list, and is left out of
+ * the venue's matches, spots, revenue and cost â and out of every finance surface, because the
+ * filter is applied where useFinanceData builds the field->venue map.
+ *
+ * NO CONFIRMATION, BY RULING, and the reason is a property of the write: reversible, visible on
+ * the row, nothing destroyed. A confirm on every click is what makes a list of 48 unusable. The
+ * consequence rides on the control instead â "-33 matches, -$0" â so it is legible without a
+ * dialog, and it is computed from this field's own figures rather than described in words.
+ *
+ * NO RETRY: `busy` is set before the request. A failed flip leaves the row exactly as it was. */
+function ExcludeToggle({ f, onDone }: { f: VenueField; onDone: (line: string, bad: boolean) => void }) {
+  const [busy, setBusy] = useState(false);
+  const next = !f.excluded;
+  const hint = f.excluded
+    ? `+${num(f.liveMatches)} matches, +${money(f.revenue)}`
+    : `−${num(f.liveMatches)} matches, −${money(f.revenue)}`;
+  const flip = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token;
+      if (!token) { onDone("Not signed in.", true); return; }
+      const res = await fetch("/api/admin/fields/exclude", {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ fieldId: f.fieldId, excluded: next }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) { onDone(j.error ?? `HTTP ${res.status}`, true); return; }
+      // THE VERDICT IS THE ROUTE'S, from its read-back â never the status code.
+      if (j.verdict === "LANDED") {
+        onDone(`LANDED — field ${f.fieldId} ${next ? "excluded from" : "counts toward"} its venue.`
+          + (j.logRecorded === false || j.finLogRecorded === false ? " A change-log write did not record." : ""), false);
+      } else {
+        onDone(`${j.verdict} — the read-back does not show the change on field ${f.fieldId}. Do not click again; refresh and check.`, true);
+      }
+    } catch (e) {
+      onDone(`UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Refresh before acting.`, true);
+    } finally { setBusy(false); }
+  };
   return (
-    <div className="vf-fr" data-testid="field-row" data-field={f.fieldId}>
+    <div className="vf-exc">
+      <button type="button" role="switch" aria-checked={f.excluded} disabled={busy}
+        data-testid="vf-exclude" data-field={f.fieldId} data-on={f.excluded ? "true" : "false"}
+        className={"vf-sw" + (f.excluded ? " on" : "")} onClick={flip}
+        title={f.excluded ? "Count this field toward its venue again" : "Exclude this field from its venue's figures"}>
+        <i />
+      </button>
+      <span className="vf-exch" data-testid="vf-exclude-hint">{busy ? "saving…" : hint}</span>
+    </div>
+  );
+}
+
+function FieldRow({ f, onDone }: { f: VenueField; onDone: (line: string, bad: boolean) => void }) {
+  return (
+    <div className={"vf-fr" + (f.excluded ? " vf-fr-exc" : "")} data-testid="field-row"
+      data-field={f.fieldId} data-excluded={f.excluded ? "true" : "false"}>
       <div className="vf-fid">{f.fieldId}</div>
-      <div className="vf-fname">{f.title ?? "untitled"} <Tags tags={f.tags} /></div>
+      <div className="vf-fname">{f.title ?? "untitled"} <Tags tags={f.tags} />
+        {f.excluded && <span className="vf-mini exc" data-testid="vf-exc-chip">excluded</span>}</div>
       <div className="vf-faddr" title={f.address ?? ""}>{f.address ?? "no address"}</div>
-      <div className="vf-num">{num(f.liveMatches)}<small>{f.upcomingMatches ? `${f.upcomingMatches} upcoming` : " "}</small></div>
+      <div className="vf-num">{num(f.liveMatches)}<small>{f.upcomingMatches ? `${f.upcomingMatches} upcoming` : " "}</small></div>
       <div className="vf-span">{f.span ?? "—"}</div>
       <div className="vf-num">{num(f.spots)}</div>
       <div className="vf-rate">{money(f.revenue)}</div>
+      <ExcludeToggle f={f} onDone={onDone} />
       <style jsx>{CSS}</style>
     </div>
   );
@@ -409,7 +481,7 @@ const CSS = `
 .vf-caret{width:26px;height:26px;border:1px solid var(--line);border-radius:7px;display:grid;place-items:center;font-size:10px;color:var(--mut);justify-self:end}
 .vf-body{background:#FBFDFB;border-top:1px solid var(--line2)}
 .vf-empty{padding:16px 34px;color:var(--mut);font-size:13px}
-.vf-fr{display:grid;grid-template-columns:64px minmax(180px,1.4fr) minmax(150px,1fr) 106px 150px 100px 130px;
+.vf-fr{display:grid;grid-template-columns:64px minmax(180px,1.4fr) minmax(150px,1fr) 106px 150px 100px 130px 190px;
   align-items:center;padding:0 18px 0 34px;border-bottom:1px solid var(--line2)}
 .vf-fr>div{padding:10px 8px;min-width:0}
 .vf-fr-un{border-bottom:0}
@@ -421,6 +493,23 @@ const CSS = `
 .vf-mini.c2{background:var(--grnBg);color:var(--grn)}
 .vf-mini.ren{background:var(--bluBg);color:var(--blu);border:1px solid var(--bluLine)}
 .vf-mini.ev{background:#F1F4F1;color:var(--mut)}
+.vf-mini.exc{background:var(--ambBg);color:var(--amb);border:1px solid var(--ambLine)}
+/* MUTED, NOT HIDDEN. An excluded field is still on the venue and still in the list — it just does
+   not count. Greying it says that; removing it would say something false. */
+.vf-fr-exc{background:#FBFAF6}
+.vf-fr-exc .vf-fname,.vf-fr-exc .vf-num,.vf-fr-exc .vf-rate,.vf-fr-exc .vf-fid{opacity:.55}
+.vf-exc{display:flex;align-items:center;gap:8px;padding:10px 8px;min-width:0;justify-content:flex-end}
+.vf-sw{width:38px;height:22px;border-radius:999px;border:1px solid var(--line);background:#E7EBE7;
+  position:relative;cursor:pointer;flex:none;padding:0}
+.vf-sw i{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.2);transition:left .15s}
+.vf-sw.on{background:var(--amb);border-color:var(--amb)}
+.vf-sw.on i{left:18px}
+.vf-sw:disabled{opacity:.5;cursor:default}
+.vf-sw:focus-visible{outline:2px solid var(--grn);outline-offset:2px}
+/* The consequence, on the control. Tabular so a column of them lines up while scanning. */
+.vf-exch{font-size:11px;color:var(--mut);white-space:nowrap;font-variant-numeric:tabular-nums}
+.vf-roll-ok{color:var(--grn);font-weight:700}
 .vf-asr{display:flex;align-items:center;gap:10px;padding:0 18px 14px 42px;flex-wrap:wrap;border-bottom:1px solid var(--line2)}
 .vf-aslbl{font-size:10.5px;font-weight:700;letter-spacing:.09em;color:#93A49A;text-transform:uppercase}
 .vf-assel{border:1px solid var(--line);border-radius:8px;padding:8px 11px;font:inherit;font-size:13.5px;background:#fff;min-width:280px;max-width:100%}
@@ -435,6 +524,6 @@ const CSS = `
 @media(max-width:1280px){
   .vf-thead,.vf-vh{grid-template-columns:minmax(180px,1.5fr) 100px 96px 116px 40px}
   .vf-thead div:nth-child(5),.vf-thead div:nth-child(6),.vf-vh>div:nth-child(5),.vf-vh>div:nth-child(6){display:none}
-  .vf-fr{grid-template-columns:56px minmax(150px,1.4fr) 106px 130px}
+  .vf-fr{grid-template-columns:56px minmax(150px,1.4fr) 106px 130px 150px}
   .vf-fr>div:nth-child(3),.vf-fr>div:nth-child(5),.vf-fr>div:nth-child(6){display:none}}
 `;
