@@ -115,6 +115,11 @@ const NODE_SUITES = [
   // reading a stale maxTeamSize4Team and showed players a FRACTIONAL team size. The rung fields
   // are TOTALS, not per side, which is why the first assertion has a control on 9 vs 36.
   "scripts/team-shape-test.ts",
+  // A VENUE'S TOTALS ARE ITS FIELDS', ADDED UP. Venues & Fields computes five per-venue numbers
+  // the server never sent, so they are the ones that will drift — a filter applied to the rows
+  // and not the total, a sort that drops one. The checker returns BREAKS, and an empty array is
+  // both "reconciles" and "nothing was checked", so every assertion here carries a control.
+  "scripts/venue-rollup-test.ts",
   // TWO REVENUE BASES, AND NO FIGURE MAY MIX THEM. Slate Review showed a pre-tax $12.00 DPP
   // beside a tax-inclusive membership share and called the sum revenue. This pins which call
   // site reads which helper, and the tax rates as GET /cities SERVES them — I measured OKC at
