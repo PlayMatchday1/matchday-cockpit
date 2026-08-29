@@ -78,6 +78,24 @@ export default function PayPeriodBar(p: PayPeriodBarProps) {
           onClick={() => p.onWeek(addDays(p.weekStart, 7))}
           className="flex h-[30px] w-[30px] items-center justify-center rounded-[8px] border"
           style={{ background: C.railA, borderColor: C.chipLine, color: C.forest }}>›</button>
+        {/* JUMP TO A WEEK. Same pattern as Master Schedule's and GamedayBoard's — see the comment
+            on `day-pick` in GamedayBoard, which is written out in full.
+
+            THIS COMPONENT DOES NO DATE ARITHMETIC FOR THE PICKER, and that was the whole reason
+            the server changed rather than this file: /api/manager-pay/week and /city-week now snap
+            ANY day to that week's Monday, exactly as fetchVeoWeek does, so the clicked value goes
+            straight into onWeek() — the same callback ‹ › already use. Snapping here instead would
+            have put a week-boundary calculation into a shared component with TWO callers, both of
+            which would inherit it.
+
+            THE VALUE IS p.weekStart, so the input always holds the displayed week's Monday and
+            visibly snaps back to it after a mid-week pick. The picker and the arrows are one
+            state and one setter and cannot disagree. */}
+        <input type="date" aria-label="Jump to a week" data-testid="pay-week-pick"
+          title="Jump to the week containing this date"
+          value={p.weekStart} onChange={(e) => { if (e.target.value) p.onWeek(e.target.value); }}
+          className="h-[30px] rounded-[8px] border px-2 text-[12.5px] font-[700]"
+          style={{ background: C.surface, borderColor: C.chipLine, color: C.forest }} />
       </div>
 
       <span className="rounded-full border px-[9px] py-[3px] text-[10.5px] font-[800] tracking-[0.05em]"

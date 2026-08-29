@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 import { getArrivalInfo } from "@/lib/managerPayArrival";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateCityManager, assertCityScope } from "@/lib/cityManagerAuth";
-import { computeManagerPayForWeek, ISO_DATE_RX, weekdayUtc } from "@/lib/managerPayCompute";
+import { computeManagerPayForWeek, ISO_DATE_RX, mondayOf } from "@/lib/managerPayCompute";
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { scopeOfCityId, type ApiCity } from "@/lib/matchManagers";
@@ -86,10 +86,13 @@ export async function GET(req: Request) {
 
   const week = (url.searchParams.get("week") ?? "").trim();
   if (!ISO_DATE_RX.test(week)) return Response.json({ error: "week must be YYYY-MM-DD" }, { status: 400 });
-  if (weekdayUtc(week) !== 1) return Response.json({ error: "week must be a Monday" }, { status: 400 });
+  /* ANY DAY IN THE WEEK, snapped — see the same block in ../week/route.ts. A Monday in is that
+   * Monday out, so nothing an existing caller sends changes. */
+  const weekStart = mondayOf(week);
+  if (!weekStart) return Response.json({ error: "week is not a real date (YYYY-MM-DD)" }, { status: 400 });
 
   try {
-    const payload = await computeManagerPayForWeek(auth.supabase, week, { isAdmin: true, city: auth.cityIdentifier });
+    const payload = await computeManagerPayForWeek(auth.supabase, weekStart, { isAdmin: true, city: auth.cityIdentifier });
     const city = payload.cities.find((c) => c.cityIdentifier === auth.cityIdentifier) ?? null;
     const managers = await cityManagerOptions(auth.cityIdentifier);
 
@@ -102,7 +105,7 @@ export async function GET(req: Request) {
     // THE SAME PAY-RUN AND ARRIVAL THE ADMIN BAR SHOWS. Read-only here: a city manager sees when
     // the money runs and when it should land, and cannot move either — pay-arrival is admin-gated,
     // so the write is refused at the route regardless of what the page renders.
-    const arrival = await getArrivalInfo(auth.supabase, week);
+    const arrival = await getArrivalInfo(auth.supabase, weekStart);
 
     return Response.json({
       weekStart: payload.weekStart, weekEnd: payload.weekEnd, payDate: payload.payDate,

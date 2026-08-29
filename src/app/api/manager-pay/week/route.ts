@@ -13,7 +13,7 @@
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { computeManagerPayForWeek, ISO_DATE_RX, weekdayUtc } from "@/lib/managerPayCompute";
+import { computeManagerPayForWeek, ISO_DATE_RX, mondayOf } from "@/lib/managerPayCompute";
 import { getArrivalInfo } from "@/lib/managerPayArrival";
 
 export const runtime = "nodejs";
@@ -65,8 +65,17 @@ export async function GET(req: Request) {
   if (!weekParam || !ISO_DATE_RX.test(weekParam)) {
     return Response.json({ error: "Missing or malformed ?week=YYYY-MM-DD" }, { status: 400 });
   }
-  if (weekdayUtc(weekParam) !== 1) {
-    return Response.json({ error: "?week must be a Monday (YYYY-MM-DD)" }, { status: 400 });
+  /* ANY DAY IN THE WEEK, SNAPPED TO ITS MONDAY — the same contract fetchVeoWeek has, so a date
+   * picker can point at this without doing arithmetic of its own. A MONDAY IS UNCHANGED: mondayOf
+   * of a Monday is that Monday, so every existing caller and every existing URL behaves exactly as
+   * before. Only the set of inputs that are ACCEPTED widened.
+   *
+   * A BAD DATE STILL 400s. ISO_DATE_RX checks the shape, not the calendar, so "2026-13-45" gets
+   * this far; mondayOf returns null for it and it is refused here, deliberately, rather than by
+   * the accident of NaN !== 1 that used to catch it. */
+  const weekStart = mondayOf(weekParam);
+  if (!weekStart) {
+    return Response.json({ error: "?week is not a real date (YYYY-MM-DD)" }, { status: 400 });
   }
 
   const supabase = createClient(supabaseUrl, serviceKey, {
@@ -74,8 +83,8 @@ export async function GET(req: Request) {
   });
 
   try {
-    const payload = await computeManagerPayForWeek(supabase, weekParam, { isAdmin: true });
-    const arrival = await getArrivalInfo(supabase, weekParam);
+    const payload = await computeManagerPayForWeek(supabase, weekStart, { isAdmin: true });
+    const arrival = await getArrivalInfo(supabase, weekStart);
     return Response.json({
       ...payload,
       payRun: arrival.payRun,

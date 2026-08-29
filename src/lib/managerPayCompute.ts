@@ -169,6 +169,31 @@ export function weekdayUtc(yyyyMmDd: string): number {
   return new Date(`${yyyyMmDd}T00:00:00.000Z`).getUTCDay();
 }
 
+/* SNAP ANY DAY IN A WEEK TO ITS MONDAY, or null if the string is not a real date.
+ *
+ * WHY IT EXISTS. The read routes used to demand a Monday and 400 anything else, so a date picker
+ * could not be pointed at them — every pick that was not a Monday failed. Master Schedule does not
+ * have that problem because fetchVeoWeek snaps; this is the same move, so PayPeriodBar's picker
+ * can hand over whatever day was clicked and do NO date arithmetic of its own. The component has
+ * two callers and neither should have to know what a week boundary is.
+ *
+ * IT RETURNS null RATHER THAN THROWING ON A BAD DATE, and that is load-bearing: ISO_DATE_RX only
+ * checks the SHAPE, so "2026-13-45" reaches here looking like a date. Before this existed,
+ * weekdayUtc gave NaN on it and the `!== 1` comparison rejected it by accident. Snapping would
+ * have turned that accident into a crash (toISOString on an Invalid Date throws), so validity is
+ * now checked on purpose and the caller still returns 400.
+ *
+ * UTC THROUGHOUT, matching weekdayUtc and addDays directly above. These are calendar dates with no
+ * time in them; going through a local Date would let a machine's zone move the boundary. */
+export function mondayOf(yyyyMmDd: string): string | null {
+  const d = new Date(`${yyyyMmDd}T00:00:00.000Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  // getUTCDay: 0 = Sunday. Sunday belongs to the week that ENDS on it, so it goes back six days.
+  const back = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - back);
+  return d.toISOString().slice(0, 10);
+}
+
 export function addDays(yyyyMmDd: string, n: number): string {
   const d = new Date(`${yyyyMmDd}T00:00:00.000Z`);
   d.setUTCDate(d.getUTCDate() + n);
