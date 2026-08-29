@@ -26,7 +26,12 @@ import {
   pickerOptions, confirmLines, normalizeManagerId, managerNameIn,
 } from "@/lib/managerAssign";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
-import { useCancelMatch, cancelStakes, CANCEL_WORD } from "@/lib/useCancelMatch";
+import { useCancelMatch, cancelStakes } from "@/lib/useCancelMatch";
+/* THE SHAPE OF A MATCH COMES FROM ONE PLACE. teamCountWrites and teamShapeError are the same two
+ * functions Match panel calls — pure functions of (teamCount, perTeam) and (total, teamCount), so
+ * there is nothing panel-specific in them and nothing to fork. Reimplementing either here would
+ * bring back the stale-rung bug that put production match 18125 at 5.5 players a team. */
+import { teamCountWrites, teamShapeError } from "@/lib/rosterEditModel";
 import { noteLogResponse } from "@/lib/logHealth";
 import LogHealthBanner from "@/components/LogHealthBanner";
 import { useAuth, canEditMatches } from "@/lib/useAuth";
@@ -87,8 +92,8 @@ function specs(fields: FieldRow[], managers: { id: number; name: string; offCity
     // maxTeamSize fields are what it would hold if it became a 2- or 4-team match
     // (the auto-bump growth path). 0 means that format is unavailable. Rendered
     // with per-side hints by the capacity block below (not renderField).
-    { key: "maxTeamSize2Team", group: "auto", kind: "number", label: "Total spots as 2 teams", cond: (s) => !!s.isAutoBump },
-    { key: "maxTeamSize4Team", group: "auto", kind: "number", label: "Total spots as 4 teams", cond: (s) => !!s.isAutoBump },
+    { key: "maxTeamSize2Team", group: "auto", kind: "number", label: "Max spots, 2 teams" },
+    { key: "maxTeamSize4Team", group: "auto", kind: "number", label: "Max spots, 4 teams" },
     { key: "maxPlayerCount", group: "auto", kind: "number", label: "Capacity now", hint: "Total spots the match holds now. Blank or 0 = special event (no cap)." },
   ];
 }
@@ -338,16 +343,28 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
     return (dDate !== "" && dDate !== wallDate(si)) || (dTime !== "" && dTime !== wallTime(si));
   }, [mode, inverted, meta, dDate, dTime]);
 
+  /* TEAM COUNT MOVED. teamNumbers is WRITE_ONLY on the route (accepted on a PUT, absent from the
+   * GET), so it is not in EDITABLE_KEYS and diffKeys can never see it. It is compared against the
+   * STORED count — meta.teams.length — exactly as the date pair is compared against meta. */
+  const teamsMoved = useMemo(() => {
+    const staged = state?.teamNumbers;
+    if (staged == null) return false;
+    const stored = Array.isArray(meta?.teams) ? (meta!.teams as unknown[]).length : 0;
+    return Number(staged) !== stored;
+  }, [state, meta]);
+
   const changedKeys = useMemo(() => {
     if (!state || !loaded) return [];
     const keys = diffKeys(EDITABLE_KEYS, loaded, state);
     // THE PAIR IS ONE CHANGE TO A READER AND TWO KEYS TO THE API. Both are listed so the diff the
     // user reads is the request that is sent — the route refuses one without the other.
-    return dateMoved ? [...keys, "startDate", "endDate"] : keys;
-  }, [state, loaded, dateMoved]);
+    const withDate = dateMoved ? [...keys, "startDate", "endDate"] : keys;
+    return teamsMoved ? [...withDate, "teamNumbers"] : withDate;
+  }, [state, loaded, dateMoved, teamsMoved]);
 
   // THE PAYLOAD — the same key set the diff shows. Shared pick() with the drawer.
   const payload = useMemo(() => {
+    // teamNumbers rides through pick() like any other staged key — it is in changedKeys above.
     const p = pick(state ?? {}, changedKeys.filter((k) => k !== "startDate" && k !== "endDate"));
     if (dateMoved && meta?.startDate && meta?.endDate) {
       const newStart = buildStartDate(dDate, dTime);
@@ -389,7 +406,33 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
   const groupCount = (g: Spec["group"]) => changedKeys.filter((k) => FIELDS.find((f) => f.key === k)?.group === g).length;
   const ladderVals = LADDER.map((k) => Number(state[k]));
   const descending = ladderVals.every((v, i) => i === 0 || v <= ladderVals[i - 1]);
-  const teamCount = Array.isArray(meta.teams) && (meta.teams as unknown[]).length >= 4 ? 4 : 2;
+  /* THE STORED TEAM COUNT, not a guess between two. This read `>= 4 ? 4 : 2`, so every 3-team
+   * match was reported as 2 — production 18136 is 3 × 6 and this panel said "18 total, 9 a side".
+   * 28 of 711 non-cancelled matches over 8 weeks run 3 teams, so 3 is not a corner case. */
+  const originTeams = Array.isArray(meta.teams) ? (meta.teams as unknown[]).length : 0;
+  /* THE STAGED COUNT. teamNumbers is WRITE_ONLY on the route — accepted on a PUT, absent from the
+   * GET — so it cannot be diffed out of `loaded` the way every other field is. It rides the same
+   * explicit route the start/end pair does: appended to changedKeys and set on the payload when
+   * it differs from the stored value. */
+  const teamCount = state.teamNumbers == null ? originTeams : Number(state.teamNumbers);
+  const capacityNow = capNum(state.maxPlayerCount) ?? 0;
+  const perTeamNow = teamCount > 0 && capacityNow % teamCount === 0 ? capacityNow / teamCount : null;
+  const shapeErr = teamShapeError(capacityNow, teamCount);
+  /* SWITCHING MODE CARRIES THE CAPACITY WITH IT — the whole point of teamCountWrites. Staging the
+   * count alone is what put a match into 4-team mode reading a rung nobody had set. A capacity
+   * that does not divide has no honest per-team figure to carry, so it is left exactly as stored
+   * rather than reshaped behind the operator. */
+  const stageTeams = (target: number) => {
+    set("teamNumbers", target);
+    if (perTeamNow == null) return;
+    const writes = teamCountWrites(target, perTeamNow);
+    for (const [k, v] of Object.entries(writes)) set(k, v);
+  };
+  const setPerTeam = (per: number) => {
+    if (per < 1) return;
+    const writes = teamCountWrites(teamCount, per);
+    for (const [k, v] of Object.entries(writes)) set(k, v);
+  };
   const capContradiction = capacityContradiction(state, teamCount);
 
   // Blank/NaN numeric → empty box. A cleared numeric input stays "" in state, which
@@ -398,16 +441,25 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
 
   // A capacity input + its per-side hint. divisor = teams the total is split across
   // (teamCount for capacity-now, 2 or 4 for the format totals). 0 = not available.
-  const capField = (key: string, label: string, divisor: number, zeroMsg: string) => {
+  const capField = (key: string, label: string, divisor: number, zeroMsg: string, disabled = false) => {
     const dirty = fieldChanged(key, loaded[key], state[key]);
     const n = capNum(state[key]);
+    /* THE TOTAL, STATED THE WAY MATCH PANEL STATES IT. These are TOTALS, not team sizes — the
+     * standing trap: a "10 × 10" control sends 20. The 2-team rung reads "9 v 9 = 18 spots" and
+     * the 4-team rung "4 × 9 = 36 spots", so the total is always the number on the right of the
+     * equals sign and can never be mistaken for the per-side figure. Capacity-now keeps the
+     * "N total, M a side" form because its divisor is the match's OWN team count, which is 3 as
+     * often as it is 2 and has no v-notation. */
+    const per = Math.round((n ?? 0) / divisor);
     const hint = n === null ? "—"
       : n === 0 ? zeroMsg
+      : key === "maxTeamSize2Team" ? `${per} v ${per} = ${n} spots`
+      : key === "maxTeamSize4Team" ? `4 × ${per} = ${n} spots`
       : `${n} total, ${Math.round((n / divisor) * 10) / 10} a side`;
     return (
       <div className={`f${dirty ? " dirty" : ""}`} key={key} data-f={key}>
         <label>{label}</label>
-        <input type="number" data-testid={`in-${key}`} value={blank(state[key]) ? "" : String(state[key])}
+        <input type="number" data-testid={`in-${key}`} value={blank(state[key]) ? "" : String(state[key])} disabled={disabled}
           onChange={(e) => set(key, e.target.value === "" ? (NULLABLE_NUM.has(key) ? null : "") : Number(e.target.value))} />
         <span className="hint" data-testid={`perside-${key}`}>{hint}</span>
       </div>
@@ -546,6 +598,9 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
       return;
     }
     setMgrConfirm(null);
+    /* REFUSED ON THE PATH. Same rule as Match panel: a disabled button is a UI fact, and this is
+     * the guard. A fractional team size is a thing the player app will render to real people. */
+    if (teamShapeError(capNum(state.maxPlayerCount) ?? 0, Number(state.teamNumbers ?? (Array.isArray(meta?.teams) ? (meta!.teams as unknown[]).length : 0)))) return;
     setSaving(true); setMsg(null);
     // A DISTINCT SOURCE PER SURFACE. Without one, the drawer's writes logged as the route's
     // default and were indistinguishable from Match panel's — which is why an 8½-hour move on a
@@ -755,10 +810,65 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
               {/* Capacity + growth path. Three independent TOTALS (not team sizes),
                   each with the implied per-side number. 0 = format unavailable.
                   maxTeamSize{2,4} keep the auto-bump-driven show/hide. */}
+              {/* NOBODY DECIDES "36". They decide how many teams and how many a side, and the
+                  capacity falls out — so the two controls are TEAMS and SPOTS PER TEAM and the
+                  total is derived and read-only. Same three controls, same wording and the same
+                  two shared functions as Match panel.
+
+                  THE PICKER OFFERS 2 / 3 / 4 and 3 is real: 28 of 711 non-cancelled matches over
+                  8 weeks run 3 teams. What 3 lacks is a RUNG — the API models only
+                  maxTeamSize2Team and maxTeamSize4Team — so selecting it writes maxPlayerCount
+                  alone, which is what teamCountWrites does and why it is not reimplemented here. */}
+              <div className="grid" data-testid="shape">
+                <div className="f" data-f="teamNumbers">
+                  <label>Teams{teamsMoved ? <span className="hint">staged — was {originTeams}</span> : null}</label>
+                  <div className="seg" role="group" aria-label="Team count" data-testid="me-teams-seg">
+                    {[2, 3, 4].map((n) => (
+                      <button type="button" key={n} data-testid={`me-teams-${n}`} data-on={teamCount === n ? "true" : "false"}
+                        aria-pressed={teamCount === n} className={teamCount === n ? "on" : ""}
+                        disabled={!canEdit} onClick={() => stageTeams(n)}>{n}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="f">
+                  <label>Spots per team<span className="hint">{teamCount} teams</span></label>
+                  {perTeamNow != null ? (
+                    <div className="step" data-testid="me-step">
+                      <button type="button" data-testid="me-spt-minus" aria-label="Fewer per team"
+                        disabled={!canEdit || capacityNow <= teamCount} onClick={() => setPerTeam(perTeamNow - 1)}>−</button>
+                      <span className="stepv" data-testid="me-spt">{perTeamNow}</span>
+                      <button type="button" data-testid="me-spt-plus" aria-label="More per team"
+                        disabled={!canEdit} onClick={() => setPerTeam(perTeamNow + 1)}>+</button>
+                    </div>
+                  ) : (
+                    // The TRUE stored total, never a rounded one — a match that got here must not
+                    // be silently reshaped into something the stepper could say.
+                    <span className="ro" data-testid="me-spt-na">{teamCount > 0
+                      ? `${capacityNow} total doesn't divide evenly into ${teamCount} teams — shown as stored.`
+                      : `Team count unknown — stored capacity is ${capacityNow}.`}</span>
+                  )}
+                </div>
+                <div className="f">
+                  <label>Capacity<span className="hint">derived</span></label>
+                  <span className="ro" data-testid="me-capacity" data-value={capacityNow}>
+                    {perTeamNow != null ? `${capacityNow} total — ${teamCount} teams × ${perTeamNow}` : `${capacityNow} total`}
+                  </span>
+                </div>
+              </div>
+              {/* THE BLOCK. A total that does not divide by the team count shows as a FRACTIONAL
+                  team size in the player app — 22 across 4 teams reads 5.5 — so it is refused with
+                  the reason on screen and Save is disabled. Same function, same message as Match
+                  panel; the check on the save PATH is below, because a disabled button is a UI
+                  fact and not a guard. */}
+              {shapeErr && <div className="ladderNote bad" data-testid="me-shape-err" style={{ marginTop: 4 }}>{shapeErr}</div>}
               <div className="grid" data-testid="capacity">
                 {capField("maxPlayerCount", "Capacity now", teamCount, "special event (no cap)")}
-                {state.isAutoBump ? capField("maxTeamSize2Team", "Total spots as 2 teams", 2, "not available as a 2-team match") : null}
-                {state.isAutoBump ? capField("maxTeamSize4Team", "Total spots as 4 teams", 4, "not available as a 4-team match") : null}
+                {/* ALWAYS RENDERED, as Match panel renders them. The 4-team rung GREYS OUT when
+                    auto bump is off rather than vanishing: a control that disappears reads as
+                    "this match has no 4-team total", which is a different claim from "this match
+                    will not grow into one". The stored number is still shown either way. */}
+                {capField("maxTeamSize2Team", "Max spots, 2 teams", 2, "not available as a 2-team match")}
+                {capField("maxTeamSize4Team", "Max spots, 4 teams", 4, "not available as a 4-team match", !state.isAutoBump)}
               </div>
               {capContradiction ? (
                 <div className="ladderNote" data-testid="cap-contradiction" style={{ marginTop: 4 }}>
@@ -784,20 +894,17 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
                   title={canEdit ? undefined : "Cancelling a match needs EDIT MATCHES."}
                   onClick={() => void cancel.open()}>{cancel.busy ? "Reading…" : "Cancel match"}</button>
               ) : (
-                <div data-testid="cancel-confirm">
-                  <label className="f" style={{ maxWidth: 260 }}>
-                    <span className="hint">Type {CANCEL_WORD} to confirm</span>
-                    <input data-testid="cancel-word" value={cancel.typed} placeholder={CANCEL_WORD}
-                      onChange={(e) => cancel.setTyped(e.target.value)} />
-                  </label>
-                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                    <button className="secondary" data-testid="cancel-abort" onClick={cancel.abort}>Keep the match</button>
-                    {/* DISABLES ON CLICK and stays disabled until the response returns — `busy` is
-                        set before the fetch. A control that stays clickable during a write that
-                        texts people is a control that texts them twice. */}
-                    <button className="dbtn" data-testid="cancel-do" disabled={cancel.busy || !cancel.ready}
-                      onClick={() => void cancel.run()}>{cancel.busy ? "Cancelling…" : "Cancel the match"}</button>
-                  </div>
+                /* YES / NO. The type-to-confirm box is gone — it rendered as grey placeholder
+                   text that reads DISABLED, and it was never a requirement. Two buttons, both
+                   legible, neither wrapping: .cancelrow gives them room and .nowrap holds them
+                   on one line. */
+                <div data-testid="cancel-confirm" className="cancelrow">
+                  <button className="secondary nowrap" data-testid="cancel-abort" onClick={cancel.abort}>Keep the match</button>
+                  {/* DISABLES ON CLICK and stays disabled until the response returns — `busy` is
+                      set before the fetch. A control that stays clickable during a write that
+                      texts people is a control that texts them twice. */}
+                  <button className="dbtn nowrap" data-testid="cancel-do" disabled={cancel.busy}
+                    onClick={() => void cancel.run()}>{cancel.busy ? "Cancelling…" : "Cancel the match"}</button>
                 </div>
               )}
             </div>
@@ -840,7 +947,7 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
           <div className="diff"><div className="diffin">
             <h3>About to change — this list is the request body</h3>
             <div className="dl" data-testid="diff-list">{changedKeys.map((k) => (
-              <span className="di" data-testid="diff-item" data-key={k} data-from={JSON.stringify(loaded[k] ?? null)} data-to={JSON.stringify(state[k] ?? null)} key={k}>{FIELDS.find((f) => f.key === k)?.label} <s>{fmt(k, loaded[k])}</s> → <b>{fmt(k, state[k])}</b></span>
+              <span className="di" data-testid="diff-item" data-key={k} data-from={JSON.stringify(k === "teamNumbers" ? originTeams : (loaded[k] ?? null))} data-to={JSON.stringify(state[k] ?? null)} key={k}>{k === "teamNumbers" ? "Teams" : FIELDS.find((f) => f.key === k)?.label} <s>{k === "teamNumbers" ? originTeams : fmt(k, loaded[k])}</s> → <b>{fmt(k, state[k])}</b></span>
             ))}</div>
             <div className="diffnote">Partial update: only these {changedKeys.length} field{changedKeys.length === 1 ? "" : "s"} are sent. Everything you did not touch is left exactly as it was.</div>
           </div></div>
@@ -864,7 +971,7 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
           <span className="sbact">
             <button className="btn" data-testid="revert" disabled={!changedKeys.length || saving} onClick={revert}>Revert</button>
             <button className="btn go" data-testid="save"
-              disabled={saving || !canEdit || (mode === "edit" && !changedKeys.length)}
+              disabled={saving || !canEdit || !!shapeErr || (mode === "edit" && !changedKeys.length)}
               onClick={() => { void save(); }} title={!canEdit ? "Read-only — you don't have EDIT MATCHES" : undefined}>
               {saving ? (mode === "create" ? "Creating…" : "Saving…") : (mode === "create" ? "Create match" : "Save")}
             </button>
@@ -942,6 +1049,34 @@ const CSS = `
 .me .dz p b{color:var(--ink);font-weight:850}
 .me .dbtn{margin-left:auto;background:#fff;border:1px solid var(--coralEdge);color:var(--coralInk);font-family:inherit;font-size:12px;font-weight:900;border-radius:9px;padding:9px 15px;cursor:pointer;white-space:nowrap;flex:none}
 .me .dbtn[aria-pressed=true]{background:var(--coralInk);border-color:var(--coralInk);color:#fff}
+/* THE TWO CANCEL BUTTONS. "Keep the match" was an unstyled <button class="secondary"> — there was
+   no .secondary rule in this stylesheet — so it inherited the browser default, took no width in a
+   flex row that had already given .dbtn margin-left:auto, and wrapped onto THREE LINES. Both now
+   have a real style, room, and white-space:nowrap. The row owns the margin-left:auto so .dbtn
+   stops pushing against its sibling. */
+/* TEAMS / SPOTS PER TEAM / CAPACITY — the same three controls Match panel renders, styled to
+   this panel's own tokens rather than importing its stylesheet. */
+.me .seg{display:inline-flex;background:var(--slot);border-radius:10px;padding:3px;gap:3px}
+.me .seg button{border:0;background:transparent;border-radius:8px;padding:6px 16px;min-height:32px;
+  font:inherit;font-size:13px;font-weight:800;color:var(--muted);cursor:pointer}
+.me .seg button.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.10)}
+.me .seg button:disabled{opacity:.5;cursor:not-allowed}
+.me .step{display:inline-flex;align-items:center;gap:4px}
+.me .step button{width:32px;height:32px;border:1px solid var(--line);background:#fff;border-radius:8px;
+  font:inherit;font-size:15px;font-weight:900;color:var(--forest);cursor:pointer;flex:none}
+.me .step button:disabled{opacity:.45;cursor:not-allowed}
+.me .stepv{min-width:34px;text-align:center;font-size:14px;font-weight:900;color:var(--ink);
+  font-variant-numeric:tabular-nums}
+.me .ro{font-size:12.5px;font-weight:800;color:var(--ink);padding:7px 0;line-height:1.45}
+.me .ladderNote.bad{border-color:var(--coralEdge);background:var(--coral);color:var(--coralInk);font-weight:800}
+.me .cancelrow{margin-left:auto;display:flex;align-items:center;gap:10px;flex:none}
+.me .cancelrow .dbtn{margin-left:0}
+.me .nowrap{white-space:nowrap}
+.me .secondary{background:#fff;border:1px solid var(--line);color:var(--forest);font-family:inherit;
+  font-size:12px;font-weight:900;border-radius:9px;padding:9px 15px;cursor:pointer;flex:none}
+.me .secondary:hover{background:var(--slot)}
+/* The stakes sentence keeps the room it needs; the buttons take theirs. */
+.me .dz p{flex:1 1 auto;min-width:0}
 .me .roster{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 .me .teamcol{border:1px solid var(--line);border-radius:10px;padding:8px;min-width:0}
 .me .tch{font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:7px;display:flex;align-items:center;gap:6px}

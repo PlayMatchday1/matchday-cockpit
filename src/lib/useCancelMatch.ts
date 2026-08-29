@@ -16,7 +16,7 @@
  * TWO STEPS, AND THE FIRST IS A LIVE READ.
  *   preview()  GET  — { name, count, totalCents, alreadyCancelled } read AT CONFIRM TIME, so the
  *                     number in the confirmation is the roster now, not the roster when the panel
- *                     was opened.
+ *                     was opened. The two buttons — keep / cancel — are the whole confirmation.
  *   run()      POST — fires ONCE. Writes never retry: there is no Idempotency-Key on this API and
  *                     a duplicate cancel could double-notify or double-credit a real person.
  *
@@ -44,9 +44,16 @@ export type CancelPreview = {
   alreadyCancelled: boolean;
 };
 
-/** The word the operator types. Lowercase, exact, trimmed — a decision, not a transcription
- *  exercise. The friction belongs in the CONSEQUENCE stated above the box, not in copying a name. */
-export const CANCEL_WORD = "cancel";
+/* THERE IS NO TYPE-TO-CONFIRM, and there never was a requirement for one. It rendered as grey
+ * placeholder text that reads DISABLED, so the commonest reading of the confirmation was that the
+ * whole thing was switched off. The friction that matters is the CONSEQUENCE sentence above the
+ * buttons — "Cancelling notifies all 18 players and credits each account", with the count read
+ * live at confirm time — plus two clearly-labelled choices. A word to copy is not a decision.
+ *
+ * THE SERVER CHECK IS UNCHANGED AND IS NOT THE SAME THING. The POST still sends confirmName from
+ * the PREVIEW, and the route re-reads the match LIVE and refuses if the names differ. That guard
+ * catches a stale client — a match renamed between the preview and the press — which is a thing
+ * typing could never have caught anyway. */
 
 /** THE ONE LINE, and it is data. N is the live roster count read at confirm time. */
 export function cancelStakes(count: number): string {
@@ -60,13 +67,10 @@ const dollars = (cents: number) => (cents / 100).toLocaleString("en-US", { minim
 export type CancelState = {
   busy: boolean;
   preview: CancelPreview | null;
-  typed: string;
   result: string | null;
-  setTyped: (s: string) => void;
   open: () => Promise<void>;
   abort: () => void;
   run: () => Promise<void>;
-  ready: boolean;
 };
 
 export function useCancelMatch(opts: {
@@ -82,7 +86,6 @@ export function useCancelMatch(opts: {
   const { env, matchId, source, authHeaders, onCancelled } = opts;
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<CancelPreview | null>(null);
-  const [typed, setTyped] = useState("");
   const [result, setResult] = useState<string | null>(null);
   const path = `/api/matchday/${env}/matches/${matchId}/cancel`;
 
@@ -98,18 +101,18 @@ export function useCancelMatch(opts: {
       const j = await res.json();
       setBusy(false);
       if (!res.ok) { setResult(`Couldn't read the cancellation preview: ${j.error || res.status}`); return; }
-      setPreview(j as CancelPreview); setTyped("");
+      setPreview(j as CancelPreview);
     } catch (e) {
       setBusy(false);
       setResult(`UNKNOWN — ${e instanceof Error ? e.message : String(e)}.`);
     }
   }, [busy, authHeaders, path]);
 
-  const abort = useCallback(() => { setPreview(null); setTyped(""); }, []);
+  const abort = useCallback(() => setPreview(null), []);
 
   const run = useCallback(async () => {
     // NO RETRIES, and no second firing while the first is in flight.
-    if (!preview || busy || typed.trim() !== CANCEL_WORD) return;
+    if (!preview || busy) return;
     const headers = await authHeaders();
     if (!headers) { setResult("No active session — sign in again."); return; }
     setBusy(true); setResult(null);
@@ -132,7 +135,7 @@ export function useCancelMatch(opts: {
       setBusy(false);
       setResult(`UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Reload before acting.`);
     }
-  }, [preview, busy, typed, authHeaders, path, source, onCancelled]);
+  }, [preview, busy, authHeaders, path, source, onCancelled]);
 
-  return { busy, preview, typed, result, setTyped, open, abort, run, ready: typed.trim() === CANCEL_WORD };
+  return { busy, preview, result, open, abort, run };
 }

@@ -23,6 +23,7 @@
 // model; never re-implement it).
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCancelMatch, cancelStakes } from "@/lib/useCancelMatch";
 import { useAuth } from "@/lib/useAuth";
 import { matchEditAccess } from "@/lib/matchEditAccess";
 import { supabase } from "@/lib/supabase";
@@ -48,7 +49,6 @@ const EXPOSED_TYPES: Record<string, string> = { REGULAR: "Regular", EVENT: "Spec
 const MARKS = [36, 24, 12, 6, 3] as const;
 // EXACT, lowercase, trimmed. "Cancel" and " cancel " with inner spaces are refused — trimmed means
 // the surrounding whitespace only, not a fuzzy match.
-const CANCEL_WORD = "cancel";
 const SIZES = [4, 5, 6, 7, 8, 9, 10, 11, 12] as const;
 
 // The API keys this panel stages. (category is EDITABLE but out of scope this step, so it is never
@@ -155,10 +155,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   // cannot be undone, so the friction is deliberately the opposite of the chat composer: live numbers
   // read at confirm time + the match NAME typed, not a yes/no.
   const [cancelOpen, setCancelOpen] = useState(false);
-  const [cancelPreview, setCancelPreview] = useState<{ name: string; count: number; perPlayerCents: number; totalCents: number; alreadyCancelled: boolean } | null>(null);
-  const [cancelTyped, setCancelTyped] = useState("");
-  const [cancelBusy, setCancelBusy] = useState(false);
-  const [cancelResult, setCancelResult] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     setLoadErr(null);
     const headers = await authHeaders();
@@ -317,39 +314,20 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     setPending((p) => normalizePending({ ...p, names: { ...p.names, [teamId]: value } }, origin));
   };
 
-  const cancelPath = `/api/matchday/${env}/matches/${matchId}/cancel`;
-  const openCancel = async () => {
-    if (cancelBusy) return;
-    const headers = await authHeaders(); if (!headers) { setCancelResult("No active session — sign in again."); return; }
-    setCancelBusy(true); setCancelResult(null);
-    try {
-      const res = await fetch(cancelPath, { headers, cache: "no-store" }); // LIVE preview, read at confirm time
-      const j = await res.json();
-      setCancelBusy(false);
-      if (!res.ok) { setCancelResult(`Couldn't read the cancellation preview: ${j.error || res.status}`); return; }
-      setCancelPreview(j); setCancelTyped(""); setCancelOpen(true);
-    } catch (e) { setCancelBusy(false); setCancelResult(`UNKNOWN — ${e instanceof Error ? e.message : String(e)}.`); }
-  };
-  const doCancel = async () => {
-    // The typed word is "cancel" — lowercase, exact, trimmed. Typing a match name was a
-    // transcription exercise, not a decision; this is still a deliberate act but the friction is
-    // in the CONSEQUENCE stated above it, not in the copying.
-    if (!cancelPreview || cancelBusy || cancelTyped.trim() !== CANCEL_WORD) return;
-    const headers = await authHeaders(); if (!headers) { setCancelResult("No active session — sign in again."); return; }
-    setCancelBusy(true); setCancelResult(null);
-    try {
-      const res = await fetch(cancelPath, { method: "POST", headers, body: JSON.stringify({ confirmName: cancelPreview.name, source: "Match panel · cancel" }) });
-      const j = await res.json();
-      setCancelBusy(false);
-      if (!res.ok) { setCancelResult(`Cancel failed: ${j.error || res.status}. Nothing was credited.`); return; }
-      setCancelOpen(false); noteImmediate("cancelled the match");
-      // Report from match state (server re-read of isCancelled), NOT the status code.
-      setCancelResult(j.landed
-        ? `LANDED — “${j.name}” is cancelled. ${j.count} player(s) credited $${centsToDollars(j.totalCents)} and texted (re-read confirmed).`
-        : `NOT APPLIED — the re-read shows the match is NOT cancelled; nothing was credited. Reload and check before retrying.`);
+  /* THE SHARED HOOK, NOT A SECOND COPY. This panel carried its own openCancel/doCancel — the
+   * same GET-preview, one-POST, verdict-from-the-re-read flow, written twice. useCancelMatch's
+   * own header already claimed both surfaces called it; only the Master Schedule editor did. A
+   * write that texts every signed-up player and credits every account is the worst possible place
+   * for two implementations to drift, so there is now one.
+   *
+   * NO TYPE-TO-CONFIRM on either. Two buttons, and the friction is the consequence sentence. */
+  const cancel = useCancelMatch({
+    env, matchId, source: "Match panel · cancel", authHeaders,
+    onCancelled: async (landed) => {
+      if (landed) noteImmediate("cancelled the match");
       await load(); await loadRoster();
-    } catch (e) { setCancelBusy(false); setCancelResult(`UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Reload before acting.`); }
-  };
+    },
+  });
 
   /* DATE or START TIME moves the whole match and keeps its length; END TIME changes the length
    * and moves nothing else. Both refuse to write a half-empty input: a cleared <input type=date>
@@ -1069,24 +1047,31 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
           {/* ── CANCEL (Part C) — the danger zone. Separate, immediate, irreversible. ── */}
           <div className="mp-danger" data-testid="mp-danger">
             <div className="mp-danger-hd">DANGER ZONE · CANCEL THE MATCH</div>
-            {!cancelOpen ? (
-              <button type="button" className="mp-cancelbtn" data-testid="mp-cancel-open" disabled={cancelBusy} onClick={() => void openCancel()}>{cancelBusy ? "Reading…" : "Cancel this match…"}</button>
-            ) : cancelPreview?.alreadyCancelled ? (
+            {!cancel.preview ? (
+              <button type="button" className="mp-cancelbtn" data-testid="mp-cancel-open" disabled={cancel.busy} onClick={() => void cancel.open()}>{cancel.busy ? "Reading…" : "Cancel this match…"}</button>
+            ) : cancel.preview.alreadyCancelled ? (
               <div className="mp-note warn" data-testid="mp-cancel-already">This match is already cancelled — nothing to do.</div>
-            ) : cancelPreview ? (
+            ) : (
               <div className="mp-cancelconfirm" data-testid="mp-cancel-confirm">
+                {/* THE PINNED SENTENCE, from the shared helper, so both panels say it in the same
+                    words with the same live count. The paragraph under it is this panel's and it
+                    is kept: it names the credit TOTAL and says CREDIT rather than refund, which is
+                    strictly more than the one-liner carries and is not something to drop for
+                    symmetry. */}
+                <p className="mp-cancel-line" data-testid="mp-cancel-stakes"><b>{cancelStakes(cancel.preview.count)}</b></p>
                 <p className="mp-cancel-line" data-testid="mp-cancel-line">
-                  <b>{cancelPreview.count} player{cancelPreview.count === 1 ? "" : "s"} will be credited ${centsToDollars(cancelPreview.totalCents)}</b> and texted that “{cancelPreview.name}” is off. Each gets a <b>CREDIT</b> of the match value to their MatchDay account — nothing leaves Stripe and no money returns to a card. This fires once and cannot be undone.
+                  <b>{cancel.preview.count} player{cancel.preview.count === 1 ? "" : "s"} will be credited ${centsToDollars(cancel.preview.totalCents)}</b> and texted that “{cancel.preview.name}” is off. Each gets a <b>CREDIT</b> of the match value to their MatchDay account — nothing leaves Stripe and no money returns to a card. This fires once and cannot be undone.
                 </p>
-                <label className="mp-f"><span className="mp-lb">TYPE <em>cancel</em></span>
-                  <input data-testid="mp-cancel-name" value={cancelTyped} placeholder={CANCEL_WORD} onChange={(e) => setCancelTyped(e.target.value)} /></label>
+                {/* YES / NO. The type box is gone — grey placeholder text that reads disabled. */}
                 <div className="mp-cancel-acts">
-                  <button type="button" className="mp-btn" data-testid="mp-cancel-abort" onClick={() => { setCancelOpen(false); setCancelTyped(""); }}>Keep the match</button>
-                  <button type="button" className="mp-cancelbtn" data-testid="mp-cancel-do" disabled={cancelBusy || cancelTyped.trim() !== CANCEL_WORD} onClick={() => void doCancel()}>{cancelBusy ? "Cancelling…" : "Cancel the match"}</button>
+                  <button type="button" className="mp-btn mp-nowrap" data-testid="mp-cancel-abort" onClick={cancel.abort}>Keep the match</button>
+                  {/* DISABLES ON CLICK: `busy` is set before the fetch and cleared only when it
+                      resolves. Writes never retry. */}
+                  <button type="button" className="mp-cancelbtn mp-nowrap" data-testid="mp-cancel-do" disabled={cancel.busy} onClick={() => void cancel.run()}>{cancel.busy ? "Cancelling…" : "Cancel the match"}</button>
                 </div>
               </div>
-            ) : null}
-            {cancelResult && <div className="mp-note info" data-testid="mp-cancel-result" style={{ marginTop: 10 }}>{cancelResult}</div>}
+            )}
+            {cancel.result && <div className="mp-note info" data-testid="mp-cancel-result" style={{ marginTop: 10 }}>{cancel.result}</div>}
           </div>
         </div>
 
@@ -1366,7 +1351,10 @@ const CSS = `
 .mp-mgrconfirm-b{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
 .mp-cancel-line{font-size:13px;line-height:1.5;color:#5a1611;margin:0 0 12px}
 .mp-cancel-line b{font-weight:800;color:#3d0e0a}
-.mp-cancel-acts{display:flex;gap:9px;justify-content:flex-end;margin-top:12px}
+.mp-cancel-acts{display:flex;gap:10px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap}
+/* NEITHER BUTTON WRAPS. "Keep the match" is three words and a flex item with no minimum — give
+   it nowrap and it keeps its one line at any panel width. */
+.mp-nowrap{white-space:nowrap;flex:none}
 @media (min-width:1100px){.mp-panel{max-width:860px}}
 @media (max-width:560px){.mp-grid,.mp-grid3{grid-template-columns:1fr}.mp-teamgrid{grid-template-columns:1fr}}
 `;

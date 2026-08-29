@@ -108,5 +108,83 @@ console.log("\nthe wiring");
   else bad("…with the reason on screen");
 }
 
+console.log("\nand the Master Schedule editor is the SAME implementation, not a copy");
+{
+  /* WHY THIS SECTION EXISTS. Master Schedule's editor had NO team-count control at all and read
+   * the count as `teams.length >= 4 ? 4 : 2`, so every 3-team match was reported as 2 — production
+   * 18136 is 3 x 6 and the panel said "18 total, 9 a side". Adding the control was the fix; adding
+   * it by REIMPLEMENTING the shape is how the 5.5-players-a-team bug comes back on a second
+   * screen. These assert the reuse, not the arithmetic — the arithmetic is asserted above, once. */
+  const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const ed = strip(readFileSync("src/app/(internal)/match-ops/matches/[id]/MatchEditor.tsx", "utf8"));
+
+  // POSITIVE CONTROL FIRST: the file was read and still holds code. Every check below is a
+  // regex over a string, and an empty string passes the negative ones for free.
+  if (/export default function MatchEditor/.test(ed)) ok("control: MatchEditor was read");
+  else bad("control: MatchEditor was read", "THE CHECKS BELOW WOULD PASS ON AN EMPTY STRING");
+
+  if (/import \{ teamCountWrites, teamShapeError \} from "@\/lib\/rosterEditModel"/.test(ed))
+    ok("it imports both shared functions");
+  else bad("it imports both shared functions", "A SECOND COPY OF THE SHAPE");
+  if (/teamCountWrites\(target, perTeamNow\)/.test(ed)) ok("a team-count change goes through teamCountWrites");
+  else bad("a team-count change goes through teamCountWrites", "PUT {teamNumbers} ALONE IS BACK ON THIS SCREEN");
+  if (/teamCountWrites\(teamCount, per\)/.test(ed)) ok("…and so does the spots-per-team stepper");
+  else bad("…and so does the spots-per-team stepper");
+
+  /* THE COUNT IS READ, NOT GUESSED BETWEEN TWO. The old expression is asserted ABSENT by its
+   * exact shape, because that is the bug: it silently reported 3-team matches as 2-team. */
+  if (!/length >= 4 \? 4 : 2/.test(ed)) ok("the 3-team match is no longer reported as 2");
+  else bad("the 3-team match is no longer reported as 2", "18136 IS 3 x 6 AND THIS SAYS 9 A SIDE");
+  if (/teams as unknown\[\]\)\.length : 0/.test(ed)) ok("…the stored team count is read as stored");
+  else bad("…the stored team count is read as stored");
+
+  // BLOCKED ON THE SAVE PATH, not only on the button — the same rule Match panel follows.
+  if (/if \(teamShapeError\([\s\S]{0,180}?\)\) return;/.test(ed)) ok("save refuses a fractional shape before sending");
+  else bad("save refuses a fractional shape before sending", "a disabled button is the only guard");
+  if (/!!shapeErr \|\|/.test(ed)) ok("…and the Save control is disabled too");
+  else bad("…and the Save control is disabled too");
+  if (/data-testid="me-shape-err"/.test(ed)) ok("…with the reason on screen");
+  else bad("…with the reason on screen");
+
+  /* teamNumbers IS WRITE_ONLY on the route — accepted on a PUT, absent from the GET — so diffKeys
+   * can never see it. If it stops being appended explicitly, the control renders, the operator
+   * moves it, and NOTHING IS SENT: a change that looks made and was not. */
+  if (/teamsMoved \? \[\.\.\.withDate, "teamNumbers"\] : withDate/.test(ed))
+    ok("teamNumbers reaches the diff, which is the request body");
+  else bad("teamNumbers reaches the diff", "THE CONTROL WOULD MOVE AND SEND NOTHING");
+}
+
+console.log("\nand the cancel confirmation is yes / no on BOTH panels, from one hook");
+{
+  const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const hook = strip(readFileSync("src/lib/useCancelMatch.ts", "utf8"));
+  const panel = strip(readFileSync("src/components/MatchPanel.tsx", "utf8"));
+  const ed = strip(readFileSync("src/app/(internal)/match-ops/matches/[id]/MatchEditor.tsx", "utf8"));
+  if (/export function useCancelMatch/.test(hook)) ok("control: the hook was read");
+  else bad("control: the hook was read");
+
+  /* ONE IMPLEMENTATION. Match panel carried its own openCancel/doCancel — a second copy of a
+   * write that texts every signed-up player and credits every account. */
+  for (const [name, code] of [["Match panel", panel], ["Master Schedule editor", ed]] as const) {
+    if (/useCancelMatch\(\{/.test(code)) ok(`${name} calls the shared hook`);
+    else bad(`${name} calls the shared hook`, "A SECOND COPY OF THE CANCEL WRITE");
+    if (!/const doCancel|const openCancel/.test(code)) ok(`…and holds no cancel implementation of its own`);
+    else bad(`${name} still has its own cancel implementation`, "TWO WRITES THAT CREDIT REAL ACCOUNTS");
+    if (!/CANCEL_WORD|cancelTyped|cancel\.typed/.test(code)) ok(`…and has no type-to-confirm box`);
+    else bad(`${name} still types to confirm`, "GREY PLACEHOLDER TEXT THAT READS DISABLED");
+  }
+  if (!/CANCEL_WORD/.test(hook)) ok("the hook no longer exports a word to type");
+  else bad("the hook no longer exports a word to type");
+
+  /* WHAT REPLACED IT IS NOT NOTHING. The consequence sentence carries the LIVE count, and the
+   * server still re-reads the match and refuses a stale confirmName. */
+  if (/export function cancelStakes/.test(hook)) ok("the consequence sentence is still the friction");
+  else bad("the consequence sentence is still the friction");
+  if (/confirmName: preview\.name/.test(hook)) ok("…and the POST still sends confirmName for the server's live re-check");
+  else bad("…and the POST still sends confirmName", "THE STALE-CLIENT GUARD WOULD BE GONE TOO");
+  if (/if \(!preview \|\| busy\) return;/.test(hook)) ok("…and a second press while in flight is still refused");
+  else bad("…and a second press while in flight is refused", "WRITES NEVER RETRY");
+}
+
 console.log(`\nteam-shape: ${pass} passed, ${fails.length} failed`);
 if (fails.length) { for (const f of fails) console.log(`  FAILED: ${f}`); process.exit(1); }
