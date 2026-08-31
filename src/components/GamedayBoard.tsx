@@ -494,7 +494,7 @@ const CSS = `
 .gdo .gmain.drawering{margin-right:var(--drawer-w,480px)}
 /* the in-place match panel (replaces the old drawer). Fixed right edge; the right offset is set
    inline to the dock width when they coexist (>=1600) so the two never overlap. */
-.gdo .gpanel{position:fixed;top:0;bottom:0;width:var(--panel-w,600px);max-width:100vw;background:#eef2f0;border-left:1px solid #d4e0da;box-shadow:-8px 0 26px rgba(4,26,18,.12);z-index:60;display:flex;flex-direction:column}
+.gdo .gpanel{position:fixed;top:0;bottom:0;height:100dvh;width:var(--panel-w,600px);max-width:100vw;background:#eef2f0;border-left:1px solid #d4e0da;box-shadow:-8px 0 26px rgba(4,26,18,.12);z-index:60;display:flex;flex-direction:column}
 /* SAFE AREA. The panel is position:fixed top:0, so without this the header renders beneath the iOS
    status bar and the Dynamic Island — "× Close" was drawn straight through the clock and could not
    be tapped without rotating the device. The bar is STICKY and starts BELOW the inset; the body
@@ -511,10 +511,26 @@ const CSS = `
 .gdo .gpanel-step button:disabled{opacity:.4;cursor:not-allowed}
 .gdo .gpanel-notice{display:flex;align-items:center;gap:10px;background:#fdf2e0;border-bottom:1px solid #e8c383;color:#6b4400;font-size:12px;line-height:1.4;padding:9px 12px;flex:0 0 auto}
 .gdo .gpanel-notice button{margin-left:auto;border:1px solid #e8c383;background:#fff;border-radius:6px;padding:4px 10px;font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap}
-/* the home indicator: the body is the only scroller, so its bottom padding is what keeps the last
-   control clear of it. */
-.gdo .gpanel-body{flex:1;min-height:0;overflow-y:auto;padding:12px;
-  padding-bottom:calc(12px + var(--sab))}
+/* THE DRAWER NO LONGER SCROLLS — THE PANEL INSIDE IT DOES, and that is the whole of the save-bar
+   fix. This was overflow-y:auto, so MatchPanel sat inside it as ordinary content: .mp-panel's own
+   display:flex + overflow:hidden never received a bounded height, it grew to its content, and
+   .mp-foot scrolled away with it — measured at top:2782px in a 950px viewport on desktop and
+   top:4112px in 780px on a phone. Master Schedule never had the problem because MatchDrawer mounts
+   MatchEditor as a direct flex child and the EDITOR owns its scroll. This makes the Gameday drawer
+   do the same thing.
+   The bottom padding moves to .mp-foot, which is now the element actually touching the bottom. */
+.gdo .gpanel-body{flex:1;min-height:0;overflow:hidden;padding:12px;display:flex;flex-direction:column}
+/* Only in the drawer. The standalone /match-ops/match-panel/[id] page is a document that scrolls
+   with the window, and giving it a viewport height there would trap it in a box. */
+.gdo .gpanel-body>.mp{min-height:0;flex:1 1 auto;display:flex}
+.gdo .gpanel-body>.mp>.mp-panel{height:100%}
+/* THE FIELDSET IS THE FLEX CHILD, not .mp-body. .mp-body lives inside <fieldset class="mp-fs">,
+   which wraps the whole form so a read-only viewer gets a genuinely disabled control set rather
+   than one that only looks disabled. Without this the fieldset takes its content height, .mp-body
+   never shrinks (measured 2626px inside an 864px panel) and the foot is pushed off the bottom —
+   which is what the first attempt at this fix missed. */
+.gdo .gpanel-body>.mp>.mp-panel>.mp-fs{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.gdo .gpanel-body>.mp>.mp-panel>.mp-fs>.mp-body{flex:1 1 auto;min-height:0}
 .gdo .panel{background:#fff;border:1px solid #DCE5E0;border-radius:14px}
 .gdo .head{padding:18px 20px 16px;margin-bottom:14px;position:relative}
 .gdo .r1{display:flex;align-items:baseline;gap:12px}.gdo h1{margin:0;font-size:23px;letter-spacing:-.2px}

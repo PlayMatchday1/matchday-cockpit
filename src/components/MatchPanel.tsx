@@ -1243,7 +1243,12 @@ const CSS = `
 .mp-tog input:focus-visible + .mp-knob{outline:2px solid var(--focus);outline-offset:2px}
 .mp-tt b{display:block;font-size:14px;font-weight:800}
 .mp-tt em{display:block;font-style:normal;font-size:12px;color:var(--ink3);margin-top:1px}
-.mp-foot{border-top:1px solid var(--line);background:#fafcfb;padding:11px 16px}
+/* PINNED. flex:0 0 auto so it never shrinks or scrolls with the body — .mp-body above it is
+   overflow:auto + min-height:0 and takes the remaining height, so the form scrolls UNDER this.
+   The safe-area padding lives here because this is the element that touches the bottom of the
+   drawer; it was on the drawer body, which no longer reaches the bottom. */
+.mp-foot{border-top:1px solid var(--line);background:#fafcfb;padding:11px 16px;flex:0 0 auto;
+  padding-bottom:calc(11px + var(--sab, env(safe-area-inset-bottom, 0px)))}
 .mp-diffbox{margin-bottom:10px}
 .mp-diffhd{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;font:inherit;text-align:left;cursor:pointer;padding:0 2px;min-height:32px;font-size:12.5px;color:var(--ink2)}
 .mp-diffhd:disabled{cursor:default;opacity:.7}
