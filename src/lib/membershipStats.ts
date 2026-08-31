@@ -93,20 +93,26 @@ export function lastNMonths(n: number, now: Date): Date[] {
   return out;
 }
 
-// 25-day cancel-policy window: cancellations on the 6th of one month
-// through the 5th of the next month roll off at end of that next
-// month. So "currently churning" = members who cancelled in the
-// rolling window aligned to the cycle that ends on the 5th of THIS
-// month: [6th of prior month, 5th of this month] inclusive, still
-// flagged ACTIVE. Cancellations from the 6th of THIS month onward
-// belong to the next cycle and aren't churning yet.
+// The cancel-policy window: cancellations from the 6th of one month through the 6th of the next
+// roll off at the end of that next month. So "currently churning" = members who cancelled in the
+// rolling window aligned to the cycle ending on the 6th of THIS month: [6th of prior month, 6th of
+// this month] INCLUSIVE OF BOTH ENDS, still flagged ACTIVE. Cancellations from the 7th of THIS
+// month onward belong to the next cycle and aren't churning yet.
+//
+// ── BOUNDARY CHANGED 2026-08-31: THE 6th IS NOW IN-WINDOW ────────────────────────────────────
+// This was [6th of M-1, 6th of M) — exclusive at the far end, so a cancellation stamped ON the
+// 6th fell through into the next cycle. Members by City states the same window as "Jul 6 – Aug 6"
+// and reads it inclusive; two coexisting definitions of one window is exactly the class of
+// ambiguity that produced the 395-vs-406 confusion, so the estate now holds ONE. Measured effect
+// on production 2026-08-31: the live Churning KPI on the Membership page moves 81 -> 82. One
+// person cancelled on 2026-08-06 and had been silently excluded.
 export function isChurning(m: MemberLike, now: Date): boolean {
   if (!isPaidExternalMember(m)) return false;
   if (m.status !== "ACTIVE") return false;
   const canceled = parseMemberDate(m.canceled_at);
   if (!canceled) return false;
   const windowStart = new Date(now.getFullYear(), now.getMonth() - 1, 6);
-  const windowEnd = new Date(now.getFullYear(), now.getMonth(), 6); // exclusive — covers all of the 5th
+  const windowEnd = new Date(now.getFullYear(), now.getMonth(), 7); // exclusive — covers all of the 6th
   return canceled >= windowStart && canceled < windowEnd;
 }
 
@@ -122,18 +128,21 @@ export function isPastDueMember(m: MemberLike): boolean {
   return m.status === "PAST_DUE" && isPaidExternalMember(m);
 }
 
-// First moment a cancellation no longer counts as active. Mirrors the
-// 25-day grace cycle in isChurning: a cancellation on day [6, 31] of
-// month M rolls off at start of day 6 of M+1. A cancellation on day
-// [1, 5] of month M rolls off at start of day 6 of M (caught by the
-// same cycle ending on the 5th of M).
+// First moment a cancellation no longer counts as active. Mirrors the grace cycle in isChurning:
+// a cancellation on day [7, 31] of month M rolls off at start of day 7 of M+1. A cancellation on
+// day [1, 6] of month M rolls off at start of day 7 of M (caught by the same cycle ending on the
+// 6th of M).
+//
+// CURRENTLY UNCALLED. Nothing in src or scripts references it; it is kept in step with isChurning
+// on the 2026-08-31 inclusive-boundary change so that a future caller does not inherit the old
+// exclusive rule and reintroduce the two-definitions problem.
 function rollOffDate(canceled: Date): Date {
   const day = canceled.getDate();
-  const monthOffset = day >= 6 ? 1 : 0;
+  const monthOffset = day >= 7 ? 1 : 0;
   return new Date(
     canceled.getFullYear(),
     canceled.getMonth() + monthOffset,
-    6,
+    7,
   );
 }
 
@@ -143,9 +152,11 @@ function rollOffDate(canceled: Date): Date {
 // paying member on this date." Anyone in their cancellation cycle is
 // counted as churning by isChurning, not as active here.
 //
-// Legacy data note: ~439 CANCELED rows have canceled_at=NULL and are
-// excluded from historical buckets entirely. Earlier months in the
-// All-Time chart undercount slightly as a result.
+// Legacy data note: CANCELED rows with canceled_at=NULL are excluded from historical buckets
+// entirely. This said "~439" and was 47% understated: measured on production 2026-08-31 it is
+// 644 of 2,200 non-$0 cancellations, or 29.3%, and every one of them also has cancel_reason NULL
+// — no cancellation event was ever recorded for them. Earlier months in the All-Time chart
+// undercount as a result, and by more than this note used to imply.
 export function isActiveAsOf(m: MemberLike, asOf: Date): boolean {
   if (!isPaidExternalMember(m)) return false;
   const activated = parseMemberDate(m.activation_date);
@@ -164,17 +175,18 @@ export function isPastDueAsOf(m: MemberLike, asOf: Date): boolean {
   return m.status === "PAST_DUE";
 }
 
-// Point-in-time variant of isChurning. Same rolling [6th of M-1,
-// 6th of M) window as isChurning, but anchored on asOf's calendar
-// month rather than now's. "Active at asOf" replaces the m.status
-// check for the same reason as isActiveAsOf.
+// Point-in-time variant of isChurning. Same rolling [6th of M-1, 6th of M] INCLUSIVE window as
+// isChurning — changed in step with it on 2026-08-31 — but anchored on asOf's calendar month
+// rather than now's. "Active at asOf" replaces the m.status check for the same reason as
+// isActiveAsOf. This one feeds members_monthly_snapshots.churning_count, so already-written
+// snapshot rows keep their old value until the nightly cron rewrites the current month.
 export function isChurningAsOf(m: MemberLike, asOf: Date): boolean {
   if (!isPaidExternalMember(m)) return false;
   if (!isActiveAsOf(m, asOf)) return false;
   const canceled = parseMemberDate(m.canceled_at);
   if (!canceled) return false;
   const windowStart = new Date(asOf.getFullYear(), asOf.getMonth() - 1, 6);
-  const windowEnd = new Date(asOf.getFullYear(), asOf.getMonth(), 6); // exclusive
+  const windowEnd = new Date(asOf.getFullYear(), asOf.getMonth(), 7); // exclusive — covers all of the 6th
   return canceled >= windowStart && canceled < windowEnd;
 }
 

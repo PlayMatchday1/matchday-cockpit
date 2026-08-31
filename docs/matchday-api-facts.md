@@ -4903,3 +4903,156 @@ Reconciling Atlanta, Jul 2026:
 **89 gives $26.39/match; the page showed $27.04.** The divisor is neither 89 nor 97 and I cannot
 reproduce it. **B1 (rendering the membership working on screen) stays unbuilt** — a formula resting
 on an unverified divisor is worse than no formula.
+
+## MEMBERS BY CITY — the subscriptions table, settled (2026-08-31)
+
+Evidence throughout: `mdapi_subscriptions`, production, **2,700 rows pulled against a server
+`count: "exact"` of 2,700**, paged in 1,000-row windows and asserted complete. One sync stamp on
+every row: `synced_at = 2026-08-31T11:00:52Z`.
+
+### The four "missing" active members are STAFF — this is the rule for the facts doc
+
+**410 rows hold `status = ACTIVE` with `price > 0`; 406 are members. The four excluded all carry
+`@playmatchday.com` addresses and are refused by `isPaidExternalMember`'s `INTERNAL_EMAIL_RX`.**
+`memberships 37795 (SATX, $66), 37951 (HOU, $66), 38148 (HOU, $66), 39339 (HOU, $66)` — one of
+them activated and cancelled 65 seconds apart, which is what a staff test account looks like.
+
+> **THE RULE:** an ACTIVE subscription on an `@matchday.` or `@playmatchday.` address is a staff
+> account, not a member, and is excluded from every membership count by design.
+
+**406 is correct.** There is no bug and nothing to fix. `homeStats.ts:107` and
+`api/membership/route.ts:155` both call `countActiveMembers(rows, new Date())`, so Home and
+Membership are the same function over the same rows and cannot disagree; the number is $264/mo of
+staff comps, not a discrepancy.
+
+### 395 was never a fact — it is a value the live count passed through
+
+`countActiveMembers` walked **353 (Aug 20) → 369 (23) → 383 (25) → 394 (27) → 398 (28) → 406 (30,
+31)**. 395 fell between the 27th and the 28th. Active moves 4–5 people a day; **any literal
+headcount in code, a doc or a screenshot is stale within 48 hours.** Assert equality against the
+helper, never against a number.
+
+### `isActiveAsOf` IS NOT A HISTORICAL QUERY
+
+It reads *current* status, so "active as of X" means "ACTIVE today AND activated by X". At
+Aug 6 it returns 287 — the 119-person gap to 406 is people who activated since, not people who
+left. It silently omits anyone who has cancelled since X. **A column claiming to describe a past
+date reads `members_monthly_snapshots` or it does not ship.**
+
+### THE CORRECTED MODEL: a cancellation does not flip `status` until roll-off
+
+Of 406 active people, **149 already carry a `canceled_at`** (2026-07-13 → 2026-08-31). Only 3
+non-$0 rows are dated after the cutoff *and* already `CANCELED`, and all three activated after it.
+So both cancellation cohorts are **SUBSETS of the active set**, never additions:
+
+```
+Active                    406
+  cancelled Jul 6-Aug 6    82   subset — rolls off end of August
+  cancelled after Aug 6    67   subset — owes one more cycle
+Being charged             324   = Active MINUS the in-window cohort
+Billing next cycle    $17,919   summed per person, never headcount x nominal
+```
+
+Adding the cohorts instead of subtracting one overstates billing by **$8,218** and every number
+still looks plausible. Guarded by `scripts/members-by-city-test.ts` (85 assertions, each with a
+control; demonstrated red by making the subtraction an identity).
+
+### ONE WINDOW DEFINITION, INCLUSIVE OF BOTH ENDS (changed 2026-08-31)
+
+`isChurning` / `isChurningAsOf` were `[6th of M-1, 6th of M)` — **exclusive** at the far end, so a
+cancellation stamped ON the 6th fell into the next cycle. They are now `[6th, 6th]` **inclusive**,
+matching how Members by City states "Jul 6 – Aug 6". **Measured effect: the live Churning KPI on
+the Membership page moved 81 → 82.** One person cancelled on 2026-08-06. `rollOffDate` (currently
+uncalled) was moved in step. Two coexisting definitions of one window is what produced the
+395-vs-406 confusion.
+
+### `canceled_at` is TRUE UTC — the opposite model from match dates
+
+Proven, not assumed, on 1,556 dated non-$0 cancellations: the column suffix is `+00:00`,
+`raw.canceledAt` carries `Z`, and **the two never disagree on the instant (0 mismatches)**. Read as
+UTC the hour histogram troughs at **UTC 05–12 (130 stamps, 7.5%)** — the real Central night —
+against **UTC 00–06 (632, 36.4%)**. `activation_date` shows the same shape.
+**`mdapi_matches.start_date` carries a `Z` it does not mean. Never share a date helper between
+them.**
+
+### 644 cancellations have no date AND no reason — 29.3%, not the "~439" the code said
+
+```
+non-$0 CANCELED rows              2200
+  with a canceled_at              1556
+  with NO canceled_at              644   (29.3%)   <- all 644 also have cancel_reason NULL
+```
+
+**CORRECTION to my own earlier reading.** My first reason breakdown summed to 899 of 1,556 because
+I reported only the canned values. The full distribution:
+
+```
+1471  one of the 8 canned reasons (Removed by Retool 579, Moving 568, Budget Concerns 126,
+      Not enough time 95, Other 41, Unhappy with the product 32, Found another alternative 24,
+      Injured 2 + 2 whitespace-variant)
+  84  free-text write-ins ("Just had a baby", "Broken wrist", "Price increase", …)
+   1  empty string
+   0  NULL
+1556  TOTAL
+```
+
+**"Every dated cancellation carries a reason" is FALSE by exactly one row** — one carries an empty
+string. It survives in substance: **0 dated rows have a NULL reason, and 0 undated rows have a
+non-null one.** The correlation is total, so a null date does mean no cancellation event was
+recorded. Whether those 644 cancelled in Stripe, by hand or simply lapsed is **UNKNOWN**.
+The comment in `membershipStats.ts` saying "~439" was understated by 47% and has been corrected.
+
+### Prices: eleven distinct non-$0 values, not three
+
+After excluding $0 and collapsing to people (1,908 people from 2,610 rows):
+
+```
+$500: 2   $66: 648   $50: 5   $49: 915   $35: 1   $30: 247
+ $29: 1    $25: 3    $15: 10   $13: 1     $1: 75
+```
+
+$66 / $49 / $30 cover **390 of 410** active people. **$1 × 75 people (15 of them active) sits above
+the $0 exclusion line and is kept** — whether $1 is a comp is an open ruling. **Cancelled rows
+RETAIN their price** — all 2,200 non-$0 CANCELED rows keep a positive value, zero are nulled or
+zeroed, so post-cutoff cancellers can be billed.
+
+### The collapse, and city
+
+`user_id`: 0 nulls. `membership_id`: 0 duplicates. **419 people hold more than one non-$0 row and
+142 hold a live membership beside a dead one; NOBODY holds two ACTIVE rows**, so the
+"highest price wins" tie-break never fires today. `countActiveMembers` counts **rows**; Members by
+City counts **people**. They agree at 406 only because that duplicate term is currently zero.
+
+`city_identifier`: 7 codes, 0 nulls, **all seven map through `cityFromAbbr`** — nothing is silently
+skipped. **4 people hold rows in two cities** (5919, 31386, 5538 → ATX/SATX; 57378 → SATX/HOU);
+the collapse takes the surviving row's city, so per-person city is not stable across history.
+
+### `membership_length` is NOT a term — and there is NO billing anchor anywhere
+
+`membership_length` equals days-since-`activation_date` minus one on every row checked (912 vs 913,
+908 vs 909, 901 vs 902). It is an age counter computed at sync.
+
+**There is no renewal date, period end, or next-charge date in this data** — not in the 20 columns,
+not in `raw`'s 17 keys (nothing matching period/renew/next/bill/charge/due/invoice). Activation
+days-of-month are spread evenly across all 31, so no common cycle date can be inferred. **A
+"billing this month" column keyed on a renewal date is UNKNOWN and cannot be built.** The only
+derivable reading is the roll-off cycle: all 406 billed in August, 324 bill in September.
+
+### `members_monthly_snapshots` is ALIVE — do not treat it as a second dead table
+
+31 rows, `2024-01-01` → `2026-08-01`. Columns: `id, month, active_count, new_count,
+cancelled_count, churning_count, by_city (jsonb), captured_at, source_file_name,
+avg_matches_per_member, members_tracked, past_due_count`.
+
+- **Written** by `refreshMembershipSnapshots` (`src/lib/membershipSnapshots.ts:139,167`), called
+  from the nightly cron orchestrator (`/api/sync/cron`, 11:00 UTC), the manual
+  `/api/sync/snapshots` route behind the SyncCard on `/data`, and
+  `scripts/refresh-membership-snapshots.ts`. Recent rows carry `source_file_name = "cron"`.
+- **Read** by `MembershipActiveChart.tsx:42`, `useMembershipSnapshots.ts:87` (every prior-month
+  view on the Membership tab), `api/membership/route.ts:192`, `MembershipHealthTable`,
+  `CitiesMembershipLens`, and `scripts/exec-summary-data.ts:175`. **It is not fin_member_spots.**
+- **Per-city AND totals.** `by_city` is keyed by FRIENDLY name (`Austin`, `San Antonio`), not by
+  code, and holds `{new, active, pastDue, cancelled}` per city. `El Paso` is present at 0.
+- **No price, no dollars, anywhere.** No column and no `by_city` key carries money.
+- `active_count` uses **`isActiveAsOf`** via `computeMonthlySnapshot`, and `2026-08-01` stores
+  **406** — it agrees with 406, not 410.

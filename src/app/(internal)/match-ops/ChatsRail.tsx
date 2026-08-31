@@ -56,6 +56,17 @@ export default function ChatsRail({
 
   let lastGroup: string | undefined;
 
+  /* MOST SPECIFIC WINS. A plain startsWith lights every item whose href is a PREFIX of the current
+   * path, so on /membership/by-city both "Membership" (/membership) and "Members by City" went
+   * dark-green at once and the rail claimed you were standing in two places. Pick the LONGEST
+   * matching href first, then compare against it — a general rule, so the next nested section does
+   * not have to rediscover this. */
+  const matchesPath = (href: string) => pathname === href || pathname.startsWith(href + "/");
+  const deepestHref = items.reduce(
+    (best, it) => (matchesPath(it.href) && it.href.length > best.length ? it.href : best),
+    "",
+  );
+
   return (
     <nav
       aria-label={label}
@@ -69,7 +80,7 @@ export default function ChatsRail({
           is a control that looks live and goes nowhere. */}
       {showSwitch && <SectionSwitch collapsed={collapsed} />}
       {items.map((it) => {
-        const active = pathname === it.href || pathname.startsWith(it.href + "/");
+        const active = it.href === deepestHref;
         const count = badgeCount(it.badge);
         const header =
           !showGroups ? null

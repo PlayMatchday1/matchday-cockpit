@@ -61,12 +61,19 @@ export const LIFECYCLE_SECTIONS: RailItem[] = [
     desc: "The rows behind every number on the other five",
     icon: <I><ellipse cx="12" cy="6" rx="7.5" ry="3" /><path d="M4.5 6v12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6" /><path d="M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3" /></I>,
   },
-  // ONE ITEM, ONE GROUP. Membership was a single-page top-nav tab with no sub-rail of its own, so
-  // there is nothing here to flatten and no structure lost in the move.
+  // TWO ITEMS NOW. Membership arrived here as a single-page top-nav tab with no sub-rail of its
+  // own; Members by City is the second page of that section and sits immediately after it, named
+  // by its neighbour rather than by its position. Both are gated on the MEMBERSHIP permission,
+  // not on `lifecycle` — see SECTION_PAGE below.
   {
     key: "membership", group: "Membership", label: "Membership", href: "/membership",
     desc: "Members and retention across markets",
     icon: <I><circle cx="9" cy="8.5" r="3.2" /><path d="M3.5 19.5c0-3 2.5-5 5.5-5s5.5 2 5.5 5" /><path d="M16 5.6a3.2 3.2 0 0 1 0 5.8" /><path d="M17.5 14.9c1.9.6 3 2.3 3 4.6" /></I>,
+  },
+  {
+    key: "membership-by-city", group: "Membership", label: "Members by City", href: "/membership/by-city",
+    desc: "Active, cancelling and billing per market",
+    icon: <I><path d="M3.5 20.5h17" /><path d="M5.5 20.5V9.5l6-4.5 6 4.5v11" /><path d="M9.5 20.5v-5h4v5" /></I>,
   },
 ];
 
@@ -75,4 +82,5 @@ export const LIFECYCLE_SECTIONS: RailItem[] = [
 // only their half rather than links that bounce off a guard.
 export const SECTION_PAGE: Record<string, "lifecycle" | "membership"> = {
   membership: "membership",
+  "membership-by-city": "membership",
 };

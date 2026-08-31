@@ -229,6 +229,7 @@ const NODE_SUITES = [
   // $360. The suite asserts no cost path can see matchUnits, and that the capacity constant is
   // behaviourally identical to the `> 22` it replaced across the whole integer range.
   "scripts/socc-two-pitch-test.ts",
+  "scripts/members-by-city-test.ts",
 ];
 const ALL_E2E = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
 // --e2e runs EVERY browser suite. Nothing is excluded, because nothing is mandatory.
