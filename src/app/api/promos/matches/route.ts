@@ -26,7 +26,13 @@ export async function GET(req: Request) {
 
   try {
     const client = getMatchdayApiClient();
-    const r = await client.get<{ data?: ApiMatch[]; totalItems?: number }>("/admin/matches", { fromDate: from, toDate: to, limit: 100, page: 1, sortColumn: "startDateUtc", sortDirection: "ASC" });
+    /* sortDirection IS LOWERCASE. "ASC" returns 400 with the reason spelled out:
+     *   {"message":["sortDirection must be one of the following values: asc, desc"], …}
+     * which is what the picker's "match search HTTP 400" was. Nothing to do with the dates, the
+     * city, or a missing parameter — the same rule mdapiSubscriptionsSync already records for
+     * /admin/subscriptions. Measured on production 2026-08-31: with "asc" this returns 100 of 467
+     * for a September range. */
+    const r = await client.get<{ data?: ApiMatch[]; totalItems?: number }>("/admin/matches", { fromDate: from, toDate: to, limit: 100, page: 1, sortColumn: "startDateUtc", sortDirection: "asc" });
     const matches = (r.data ?? []).filter((m) => !m.isCancelled).map((m) => ({
       id: m.id, name: m.name ?? `Match ${m.id}`,
       venue: m.field?.title ?? "—", city: m.field?.city?.name ?? "—", cityId: m.field?.city?.id ?? null,

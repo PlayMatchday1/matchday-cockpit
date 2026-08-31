@@ -322,7 +322,7 @@ export default function PromoCodes() {
           <div className="htop">
             <div>
               <h1 className="h1">Promo Codes</h1>
-              <p className="hsub">Live codes and past ones. Search reaches both — there are 6,260, so search is faster than scroll.</p>
+
             </div>
             <span className="newwrap">
               <button className="btn primary" data-testid="promo-new" disabled={!mayManage}
@@ -340,7 +340,7 @@ export default function PromoCodes() {
           <p className="hint" data-testid="promo-hint">{
             mode === "id" ? <>All digits — showing the code with that <b>ID</b> and any code <b>containing</b> those digits.</>
             : mode === "search" ? <>Reading that as a <b>code</b> — substring, case-insensitive. Searches both tables, including deleted codes.</>
-            : <>Type a code or an ID — all digits is read as an ID, anything else as a code.</>
+            : null
           }</p>
         </div>
 
@@ -352,7 +352,7 @@ export default function PromoCodes() {
             <div className="ghead">
               <span className="gtitle">LIVE</span>
               <span className="gsub" data-testid="live-sub">{mode === "browse"
-                ? <>{shown.liveTotal.toLocaleString()} live codes, <b>newest first</b> <span className="nosort" data-testid="nosort-note">— the API returns no order, so the sort is ours: every row is fetched, then sorted by CREATED</span>{assembly && !assembly.live.complete && <span className="nosort" data-testid="assembly-short"> · only {assembly.live.distinct.toLocaleString()} of {assembly.live.total.toLocaleString()} rows loaded — NOT sorted</span>}</>
+                ? <>{shown.liveTotal.toLocaleString()} live codes · newest first{assembly && !assembly.live.complete && <span className="nosort" data-testid="assembly-short"> · only {assembly.live.distinct.toLocaleString()} of {assembly.live.total.toLocaleString()} rows loaded — NOT sorted</span>}</>
                 : `${shown.liveTotal.toLocaleString()} live match${shown.liveTotal === 1 ? "" : "es"}`}</span>
             </div>
             <PromoTable rows={shown.liveRows} nowIso={nowIso} onOpen={setDetailId} redeemed={redeemed}
@@ -582,7 +582,10 @@ function DetailDrawer({ id, onClose, onEdit, onChanged, mayManage, noWrite }: {
 // 2026-08-15 (stable keyset read): 70 of 812 redeemed per-user-capped codes have been exceeded by
 // a real player — 8.6%, worst case a cap of 1 redeemed 4 times. The server does not hard-stop at
 // the cap, so a screen showing "cap 2" without this note implies something the API does not do.
-const CAP_ADVISORY = "Advisory — the server does not enforce this; 70 of 812 redeemed capped codes have been exceeded.";
+/* THE CAP ADVISORY IS GONE FROM THE FORM. The fact is real and costs money — the server does NOT
+ * enforce uses-per-person, and 70 of 812 redeemed capped codes have been exceeded — so it lives in
+ * docs/matchday-api-facts.md rather than being lost. It is not something the create form should be
+ * explaining while someone is typing a number into it. */
 
 
 // ── WHO ACTUALLY USED IT (docs/mockups/promo-uses-v1_1.html) ──────────────────────────────────
@@ -847,7 +850,7 @@ function CreateDrawer({ onClose, onCreated, editing, onEdited }: {
       <div className="drawer" role="dialog" aria-modal="true" aria-label={isEdit ? "Edit promo code" : "New promo code"}>
         <div className="dhead"><h2 data-testid="drawer-title">{isEdit ? `Edit ${editing?.code}` : "New promo code"}</h2><button className="x" aria-label="Close" onClick={onClose}>×</button></div>
         <div className="dbody">
-          <span className="tzline">All promo times are <b>{PROMO_TZ_LABEL}</b>, entered here and stored as a true UTC instant. Clubhouse converts for you (and is DST-correct, unlike Retool).</span>
+          <span className="tzline">Central</span>
 
           <div className="fgrid one">
             <label className="fld"><span className="lb">CODE <span className="req">*</span></span>
@@ -897,10 +900,7 @@ function CreateDrawer({ onClose, onCreated, editing, onEdited }: {
               <input data-testid="f-uses" inputMode="numeric" value={f.uses} onChange={(e) => set({ uses: e.target.value })} />
               <span className="help" data-testid="f-uses-help">{f.which === "TOTAL_USAGE"
                 ? "A TOTAL cap across everyone — the code stops after this many redemptions in all."
-                : "Per person. Starts at 1 (Retool defaults it to 0, which nobody can redeem). Becomes a total cap under “All Matches (total cap)”."}</span>
-              {/* The cap is not a guarantee and the form says so where it is being SET — the one
-                  moment someone forms an expectation about what it will do. */}
-              <span className="help capadv" data-testid="cap-note-create">{CAP_ADVISORY}</span>
+                : "Per person."}</span>
             </label>
           </div>
 
@@ -935,7 +935,7 @@ function CreateDrawer({ onClose, onCreated, editing, onEdited }: {
                 ? <span className="summary" data-testid="f-consequence"><b>WHAT THIS CHANGES</b>{pendingConsequence}</span>
                 : <span className="summary bad" data-testid="f-consequence"><b>WHAT THIS CHANGES</b>Nothing yet — edit a field and this line will say exactly what changes on save.</span>)
             : (summary ? <span className="summary" data-testid="f-summary"><b>WHAT THIS DOES</b>{summary}</span>
-                       : <span className="summary bad" data-testid="f-summary"><b>WHAT THIS DOES</b>Enter a code and a value and this line will say, in plain words, exactly what you are about to create.</span>)}
+                       : null)}
           {isEdit && pendingDiff && pendingDiff.pairedIn.length > 0 && (
             <span className="help" data-testid="f-paired">
               Also sent, because this endpoint requires them together: {pendingDiff.pairedIn.join(", ")}.
@@ -1247,7 +1247,6 @@ const CSS = `
 .promo .ugrp{border:1px solid var(--line);border-radius:12px;margin-bottom:10px;overflow:hidden}
 /* the advisory sentence on the CREATE form — the one place the cap is chosen, so the one place
    it still says so. The short badge that repeated it on the list and in the drawer is gone. */
-.promo .capadv{display:block;margin-top:5px;color:#3f5a4b}
 .promo .ulist{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
 .promo .uline{display:grid;grid-template-columns:170px 1fr auto;gap:12px;align-items:baseline;
   padding:9px 14px;border-bottom:1px solid #f0f4f0;font-size:13.5px}

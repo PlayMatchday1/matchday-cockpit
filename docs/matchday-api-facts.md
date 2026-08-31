@@ -122,6 +122,39 @@ block any edit that would reach endDate) because:
 - A match that **loads already inverted** (`endDate` <= `startDate`) is shown as
   a warning and its date/time edit is held back - it is not silently rewritten.
 
+## PROMO CAPS ARE ADVISORY — the server does not enforce uses-per-person
+
+**70 of 812 redeemed capped codes have been exceeded.** Setting `uses` on a promo code does not
+stop the redemption; nothing server-side refuses the transaction when a person is over their cap.
+The number is a statement of intent, not a limit, and every one of those 70 is money that left on
+a code that should have stopped.
+
+This used to be printed on the create form, next to the field. It is here instead: the form is
+where someone types a number, not where they should be reading about the API's guarantees.
+
+## /admin/matches — sortDirection is LOWERCASE
+
+`sortDirection: "ASC"` returns **400** and says so exactly:
+
+```
+{"message":["sortDirection must be one of the following values: asc, desc"],
+ "error":"Bad Request","statusCode":400}
+```
+
+That was the Promo Codes match picker's "match search HTTP 400" — nothing to do with the dates,
+the city, or a missing parameter. Measured on production 2026-08-31: the identical request with
+`"asc"` returns 100 of 467 for a September range.
+
+**The same endpoint also 400s on an unknown param** — `date` gives `"property date should not
+exist"` (it wants `fromDate`/`toDate`). And `/admin/subscriptions` 500s with no `sortColumn` /
+`sortDirection` at all. The sort params are load-bearing on these list endpoints and their
+casing is checked.
+
+**`/admin/matches` HAS NO CITY FILTER.** The promo picker fetches the range and narrows by city on
+the client. Measured over 2026-09-01..09-30: 94 matches across 8 cities, and every city has at
+least one — Atlanta 7, Austin 34, DFW 7, Houston 14, OKC 5, San Antonio 22, St. Louis 3, Warsaw 2.
+Picking a city narrows; it never empties.
+
 ## THE DATE PAIR — a lone endDate is fine, a lone startDate is not
 
 **MEASURED 2026-08-31**, one throwaway staging match, two writes:
