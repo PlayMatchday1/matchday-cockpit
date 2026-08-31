@@ -19,6 +19,7 @@
 import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { apiGet, apiWrite, type MatchdayEnv } from "@/lib/matchdayStageApi";
+import { EDITABLE_KEYS } from "@/lib/matchEditModel";
 import { supabaseLogStore } from "@/lib/changeLog";
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
 import { cityNameFor } from "@/lib/cityScope";
@@ -29,9 +30,44 @@ export const dynamic = "force-dynamic";
 const isEnv = (x: string): x is MatchdayEnv => x === "staging" || x === "production";
 
 /** The nine the endpoint requires. Built explicitly — never spread from a source match. */
-const CREATE_FIELDS = [
+/* ── WHAT A COPY MAY SEND, AND WHAT IT MUST ──────────────────────────────────────────────────
+ *
+ * THESE WERE ONE LIST AND THAT IS HOW A MATCH WENT LIVE AT $0. CREATE_FIELDS was nine keys doing
+ * double duty as "required" AND "allowed", so registrationPrice was not merely un-required — it
+ * was REFUSED as `not creatable`. Production 18408 was copied on 2026-08-25, landed with no price,
+ * and the API defaults an absent price to 0: 44 spots taken, 14 of them marked PAID with no
+ * payment intent, against $15 siblings. All three copies ever made landed at 0 (18408, and staging
+ * 2530/2531), so it was the button, not the match.
+ *
+ * REQUIRED is what the API itself demands — measured on staging 2026-08-31 by omitting them:
+ * leaving out description and isFreeMember returns 400 "description must be a string",
+ * "isFreeMember must be a boolean value".
+ *
+ * ALLOWED is now REQUIRED plus EDITABLE_KEYS — the exact set step two stages from the source. That
+ * is the point: step one sends what step two would have staged, so step two becomes a confirmation
+ * rather than a repair, and the price is right from the first millisecond.
+ *
+ * EVERY ONE OF THE 24 EDITABLE_KEYS IS ACCEPTED AND STORED. Measured on staging: one POST carrying
+ * all of them came back with all 24 persisted verbatim, managerId included (a real id, 260, not
+ * just an accepted null). NOTHING IS REFUSED — there is no constraint to list.
+ *
+ * teamNumbers is neither: it is write-only on the API (accepted on a write, absent from the GET),
+ * which is why it sits in REQUIRED rather than in EDITABLE_KEYS.
+ *
+ * ── AND THERE IS NO PAUSED STATE TO FALL BACK ON ─────────────────────────────────────────────
+ * Measured on staging 2026-08-31: a match object has no published / hidden / draft / visible /
+ * active field of any kind — the only lifecycle flag is isCancelled, and this endpoint refuses it
+ * outright: "property isCancelled should not exist". A created match is joinable from the first
+ * millisecond, so there is no way to create it dark and release it on Save. That is why the body
+ * being right AT CREATION is the whole of the safety, and why this list is the fix. */
+const CREATE_REQUIRED = [
   "name", "description", "type", "startDate", "endDate",
   "fieldId", "maxPlayerCount", "teamNumbers", "isFreeMember",
+] as const;
+
+const CREATE_FIELDS = [
+  ...CREATE_REQUIRED,
+  ...EDITABLE_KEYS.filter((k) => !(CREATE_REQUIRED as readonly string[]).includes(k)),
 ] as const;
 
 const MATCH_TYPES = new Set(["EVENT", "REGULAR", "BRACKET", "GROUP"]);
@@ -68,7 +104,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
   // ── VALIDATION, BEFORE ANY NETWORK CALL ─────────────────────────────────────────────────────
   // THE DATE IS NAMED SEPARATELY because it is the one field a copy deliberately arrives without.
   // "startDate is required" has to say WHICH field, or the form cannot point at it.
-  const missing = CREATE_FIELDS.filter((k) => match[k] === undefined || match[k] === null || match[k] === "");
+  /* REQUIRED, not ALLOWED. Checking the whole allowed set here would demand a managerId on every
+   * copy — the nullable ones are optional by design and the API takes them as null. */
+  const missing = CREATE_REQUIRED.filter((k) => match[k] === undefined || match[k] === null || match[k] === "");
   if (missing.includes("startDate") || missing.includes("endDate")) {
     return Response.json({
       error: "Pick a date and time for the copy — it is deliberately blank so a copy cannot arrive carrying the original's date.",
@@ -159,8 +197,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
 
     // ── THE WRITE ─────────────────────────────────────────────────────────────────────────────
     const actor = { canEditMatches: auth.canEditMatches, email: auth.email, userId: auth.appUserId };
+    /* ONLY WHAT WAS SUPPLIED. An absent optional stays absent rather than going over as an
+     * explicit undefined — the diff IS the request body, here as everywhere. */
     const payload: Record<string, unknown> = {};
-    for (const k of CREATE_FIELDS) payload[k] = match[k];
+    for (const k of CREATE_FIELDS) if (k in match) payload[k] = match[k];
 
     const saveId = body?.saveId || randomUUID();
     let created: Record<string, unknown> | null = null;

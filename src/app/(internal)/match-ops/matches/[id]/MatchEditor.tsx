@@ -534,8 +534,25 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
     }
     setSaving(true); setMsg(null); setDupe(null);
     const iso = (local: string) => `${local.replace("T", "T")}:00.000Z`;
+    /* THE COPY SENDS WHAT STEP TWO WOULD HAVE STAGED — every EDITABLE_KEY, not the nine
+     * structural ones. Sending nine is how production 18408 went live at $0: registrationPrice
+     * was not in the body, and the API defaults an absent price to 0. Step two still runs and
+     * still shows the diff, but it is a confirmation now rather than the only thing standing
+     * between a live match and the wrong price.
+     *
+     * `state` IS THE SOURCE at this point — createMatch only runs in create mode, where the
+     * editor was loaded from `sourceId`. So this is the source's own values, not defaults. */
+    const copied: Record<string, unknown> = {};
+    for (const k of EDITABLE_KEYS) {
+      const v = state?.[k];
+      // Absent stays absent; the route sends only what it is given.
+      if (v !== undefined) copied[k] = v;
+    }
     const body = {
       match: {
+        ...copied,
+        // The structural nine win over the copied values: the date is deliberately the operator's,
+        // and the shape fields come from the source's live meta rather than its editable state.
         name: String(state?.name ?? ""),
         description: String(state?.description ?? ""),
         type: String(state?.type ?? "REGULAR"),

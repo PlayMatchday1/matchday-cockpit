@@ -125,6 +125,12 @@ const NODE_SUITES = [
   // fixture that HAS lapsed holders, and membership state is ANY row ACTIVE: 153 people hold an
   // ACTIVE and a CANCELED row at once, and newest-row logic would call every one of them lapsed.
   "scripts/lapsed-spots-test.ts",
+  // A COPY CARRIES ITS PRICE. CREATE_FIELDS was nine keys doing double duty as required AND
+  // allowed, so registrationPrice was actively REFUSED on create and the API defaults an absent
+  // price to 0. Production 18408 sold 44 spots at $0 against $15 siblings. There is no paused
+  // state to fall back on — the create endpoint refuses isCancelled — so the body being right at
+  // creation is the whole of the safety.
+  "scripts/copy-match-body-test.ts",
   // TWO REVENUE BASES, AND NO FIGURE MAY MIX THEM. Slate Review showed a pre-tax $12.00 DPP
   // beside a tax-inclusive membership share and called the sum revenue. This pins which call
   // site reads which helper, and the tax rates as GET /cities SERVES them — I measured OKC at
