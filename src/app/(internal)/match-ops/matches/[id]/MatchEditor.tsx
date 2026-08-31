@@ -27,6 +27,7 @@ import {
 } from "@/lib/managerAssign";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { useCancelMatch, cancelStakes } from "@/lib/useCancelMatch";
+import MoneyInput from "@/components/MoneyInput";
 /* THE SHAPE OF A MATCH COMES FROM ONE PLACE. teamCountWrites and teamShapeError are the same two
  * functions Match panel calls — pure functions of (teamCount, perTeam) and (total, teamCount), so
  * there is nothing panel-specific in them and nothing to fork. Reimplementing either here would
@@ -491,10 +492,13 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
         {(f.opts ?? []).map(([v, l]) => <option key={String(v)} value={String(v)}>{l}</option>)}
       </select>
     );
+    /* MoneyInput, shared with Match panel. It reformatted on every render here too — value was
+       (cents/100).toFixed(2) — so the caret landed in the cents on every keystroke. The cents
+       conversion is unchanged; only the display timing moved to focus/blur. */
     else if (f.kind === "money") ctl = (
       <div className="money"><span>$</span>
-        <input type="number" step="0.01" data-testid={`in-${f.key}`} value={blank(state[f.key]) ? "" : (Number(state[f.key]) / 100).toFixed(2)}
-          onChange={(e) => set(f.key, e.target.value === "" ? "" : Math.round(parseFloat(e.target.value) * 100))} /></div>
+        <MoneyInput data-testid={`in-${f.key}`} cents={blank(state[f.key]) ? "" : (state[f.key] as number)}
+          onCents={(v) => set(f.key, v)} /></div>
     );
     else if (f.kind === "number") ctl = (
       <input type="number" data-testid={`in-${f.key}`} value={blank(state[f.key]) ? "" : String(state[f.key])}

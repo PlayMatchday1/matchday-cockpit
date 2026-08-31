@@ -24,6 +24,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useCancelMatch, cancelStakes } from "@/lib/useCancelMatch";
+import MoneyInput from "@/components/MoneyInput";
 import { useAuth } from "@/lib/useAuth";
 import { matchEditAccess } from "@/lib/matchEditAccess";
 import { supabase } from "@/lib/supabase";
@@ -666,7 +667,6 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
    * manager — and any manager who has since come off this city's roster — rendered as "id 41207"
    * in the diff and in the confirmation. A confirmation that names an id is not naming a person. */
   const mgrName = (id: unknown) => managerNameIn([...managers, ...managersAll], id);
-  const dollarInput = (k: string) => (cur[k] === "" || cur[k] == null ? "" : centsToDollars(cur[k]));
 
   return (
     <div className="mp">
@@ -763,12 +763,17 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
           {/* MONEY */}
           <Section title="MONEY" dirty={secDirty(["registrationPrice", "additionalSpotPrice", "guestCount", "isFreeMember"])}>
             <div className="mp-grid3">
+              {/* MoneyInput, shared with the Master Schedule editor: select-all on focus, verbatim
+                  while typing, two decimals on blur. The cents conversion is unchanged — onCents
+                  hands back exactly what the old onChange computed. */}
               <label className="mp-f"><span className="mp-lb">PRICE <em>$</em></span>
-                <input data-testid="mp-price" inputMode="decimal" value={dollarInput("registrationPrice")} className={isDirty("registrationPrice") ? "mp-chg" : ""}
-                  onChange={(e) => setField("registrationPrice", e.target.value.trim() === "" ? "" : dollarsToCents(e.target.value))} /></label>
+                <MoneyInput data-testid="mp-price" cents={cur.registrationPrice as number | string | null}
+                  className={isDirty("registrationPrice") ? "mp-chg" : ""}
+                  onCents={(v) => setField("registrationPrice", v)} /></label>
               <label className="mp-f"><span className="mp-lb">SPOT PRICE <em>$</em></span>
-                <input data-testid="mp-spot" inputMode="decimal" placeholder="—" value={dollarInput("additionalSpotPrice")} className={isDirty("additionalSpotPrice") ? "mp-chg" : ""}
-                  onChange={(e) => setField("additionalSpotPrice", e.target.value.trim() === "" ? "" : dollarsToCents(e.target.value))} /></label>
+                <MoneyInput data-testid="mp-spot" placeholder="—" cents={cur.additionalSpotPrice as number | string | null}
+                  className={isDirty("additionalSpotPrice") ? "mp-chg" : ""}
+                  onCents={(v) => setField("additionalSpotPrice", v)} /></label>
               <label className="mp-f"><span className="mp-lb">GUEST COUNT</span>
                 <input data-testid="mp-guests" inputMode="numeric" value={cur.guestCount == null ? "" : String(cur.guestCount)} className={isDirty("guestCount") ? "mp-chg" : ""}
                   onChange={(e) => setField("guestCount", e.target.value.trim() === "" ? "" : Number(e.target.value))} /></label>

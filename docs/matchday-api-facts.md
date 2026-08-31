@@ -122,6 +122,50 @@ block any edit that would reach endDate) because:
 - A match that **loads already inverted** (`endDate` <= `startDate`) is shown as
   a warning and its date/time edit is held back - it is not silently rewritten.
 
+## THE DATE PAIR — a lone endDate is fine, a lone startDate is not
+
+**MEASURED 2026-08-31**, one throwaway staging match, two writes:
+
+```
+lone endDate    -> start 18:00 unchanged, end 19:00 -> 20:00.  LANDED, startDate untouched.
+lone startDate  -> start 18:00 -> 16:00, and the END STAYED at 20:00.
+                   Duration went 2h -> 4h. The server does NOT carry the end with it.
+```
+
+So `PUT /admin/matches/{id}` does **not** require the pair. An end-time edit legitimately sends
+`{ endDate }` alone — the same result `matchWhen.ts` already recorded on staging 2560. A **start**
+change without the end silently rewrites the duration, which is the half worth refusing.
+
+**OUR OWN GUARD WAS WRONG, AND IT IS ALSO THE ONLY REASON NOTHING IS CORRUPT.** Clubhouse refused
+*any* lone date key — "startDate and endDate must be sent together" — carried from Phase 7 with no
+measurement behind it. It blocked a legitimate save on production 18292. It also blocked every
+save of the roll-forward bug below: **595 future matches, zero with an implausible duration**
+(nothing over 6h, nothing non-positive, nothing ending more than a day after its start; the whole
+spread is 0.75h ×5, 1.00h ×565, 1.50h ×25). A wrong rule stopped a real bug from reaching the data
+for however long both have existed. The guard now refuses a lone `startDate` and allows a lone
+`endDate`.
+
+## END-TIME ROLL-FORWARD — derive from the START, never from the previous end
+
+`moveEnd` built the new end on `parseWall(curEnd).date` — the **previous end's** date — and rolled
+only FORWARD. That made it sticky and one-directional.
+
+`<input type="time">` fires `onChange` on PARTIAL values and always will. On production 18292
+(start 20:00, end 20:45, same day) editing the end to 9pm passed through a momentary time at or
+before the start, which rolled the end to the next day; nothing ever rolled it back, so the
+finishing keystroke inherited it and the panel read **DURATION 25h on a one-hour match**.
+
+It is now a **pure function of (staged start, typed time)**: the date comes from the start and
+rolls forward at most once. The next keystroke corrects rather than inherits.
+
+**THE MIDDLE GROUND DOES NOT WORK** — preserving the previous end's whole-day *offset* was tried
+and measured, and still lands at 25h, because the offset is itself poisoned by the same partial
+keystroke. Only dropping the dependency entirely corrects.
+
+**WHAT IT GIVES UP:** a match longer than ~48h can no longer be reached by typing an end time. A
+stored 34h fixture is untouched by loading or by any other edit, but editing *its* end time now
+yields under 48h. A time alone cannot say "the day after tomorrow"; that needs a date control.
+
 ## FIELD IMAGES — the endpoint is POST /files, and it is not a field endpoint
 
 **FOUR PATH GUESSES, ALL 404, ALL WRONG THE SAME WAY.** Recorded so nobody spends the afternoon

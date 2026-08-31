@@ -88,8 +88,29 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
   // The date pair is all-or-nothing: a lone startDate can silently invert a match
   // against its untouched endDate. The drawer always sends both; enforce it here
   // too so no client can send half a move.
+  /* ── A LONE startDate IS REFUSED. A LONE endDate IS NOT. ─────────────────────────────────────
+   * This was "the pair is all-or-nothing", carried from Phase 7 with no measurement behind it,
+   * and it REFUSED A LEGITIMATE SAVE: an end-time edit changes the length and nothing else, so the
+   * diff is `{ endDate }` and the diff IS the body. Editing production 18292's end time hit
+   * "startDate and endDate must be sent together".
+   *
+   * MEASURED on staging 2026-08-31, one throwaway match, two writes:
+   *   lone endDate   -> start 18:00 unchanged, end 19:00 -> 20:00. Landed, startDate untouched.
+   *                     (matchWhen.ts already recorded the same on staging 2560.)
+   *   lone startDate -> start 18:00 -> 16:00 and the END STAYED at 20:00. The duration went from
+   *                     two hours to four, silently. The server does NOT carry the end with it.
+   *
+   * So the guard was right about one half and wrong about the other. A lone startDate is a silent
+   * duration change and stays refused; a lone endDate is exactly what the control produces.
+   *
+   * AND IT IS NOT PADDED. Sending an unchanged startDate alongside would make the body stop being
+   * the diff, which is the rule this guard was breaking in the first place. */
   const dateKeys = keys.filter((k) => DATE_PAIR.has(k));
-  if (dateKeys.length === 1) return Response.json({ error: "startDate and endDate must be sent together (the pair preserves duration)" }, { status: 400 });
+  if (dateKeys.length === 1 && dateKeys[0] === "startDate") {
+    return Response.json({
+      error: "A start-time change must send endDate too — measured: the server leaves the end where it is, so the duration would change silently.",
+    }, { status: 400 });
+  }
 
   // EDIT MATCHES check — before any MatchDay read or write (staging is still a match
   // write). Read-only Match Ops users produce zero network calls.

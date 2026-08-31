@@ -131,6 +131,11 @@ const NODE_SUITES = [
   // state to fall back on — the create endpoint refuses isCancelled — so the body being right at
   // creation is the whole of the safety.
   "scripts/copy-match-body-test.ts",
+  // A MONEY FIELD YOU CAN TYPE IN. Both panels bound `value` to a formatted string on every
+  // render, so the field reformatted on every keystroke and the caret landed in the cents.
+  // Asserts focus -> type "12" -> blur reads 12.00 with 1200 on the wire, with a control that
+  // fails if the field reformats mid-type.
+  "scripts/money-input-test.ts",
   // TWO REVENUE BASES, AND NO FIGURE MAY MIX THEM. Slate Review showed a pre-tax $12.00 DPP
   // beside a tax-inclusive membership share and called the sum revenue. This pins which call
   // site reads which helper, and the tax rates as GET /cities SERVES them — I measured OKC at

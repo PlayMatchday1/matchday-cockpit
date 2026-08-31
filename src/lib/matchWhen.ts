@@ -95,22 +95,42 @@ export function movePair(curStart: string, curEnd: string, date: string, time: s
  * so an end-only edit sends `{ endDate }` alone — proven writable on its own against staging 2560
  * (a match with players attached), startDate untouched.
  *
- * THE AFTER-MIDNIGHT CASE. The control is a time, but the end carries a DATE too. The end's date
- * component is kept as staged and only rolled FORWARD, by whole days, if the chosen time would
- * otherwise land at or before the start. So 23:00 -> 00:30 becomes the next morning rather than
- * a negative duration, and the end date is never clamped back to the start date.
+ * ── IT IS A PURE FUNCTION OF (STAGED START, TYPED TIME). THAT IS THE WHOLE POINT ───────────────
+ * The result does NOT depend on the previous end. It used to: the date came from
+ * `parseWall(curEnd).date` and the roll only ever went FORWARD, so the state was sticky and
+ * one-directional.
  *
- * KEEPING THE DATE (rather than always deriving it from the start) is what lets a match longer
- * than 24 hours keep its length: staging carries 24h and 34h fixtures, and deriving "same day, or
- * next day if the time is earlier" would silently collapse those to under a day. */
+ * WHAT THAT COST. <input type="time"> fires onChange on PARTIAL values and always will. Editing
+ * production 18292 (start 20:00, end 20:45, same day) to 9pm passed through a momentary time at
+ * or before the start; that rolled the end to the 2nd; and because nothing ever rolled it BACK,
+ * the finishing keystroke inherited the 2nd and the panel read DURATION 25h on a one-hour match.
+ *
+ * The fix is not to sanitise the keystrokes — it is that the NEXT keystroke CORRECTS rather than
+ * inherits. Deriving from the start's own date does that by construction: whatever the previous
+ * value was, the next one is computed fresh. Measured on the real functions: the offset-preserving
+ * middle ground does NOT fix it (the offset itself gets poisoned by the same partial keystroke and
+ * still lands at 25h) — only dropping the dependency entirely does.
+ *
+ * IT IS NOT A CLAMP. An 11pm -> 1am match still rolls to the next day, because the roll fires on
+ * "at or before the start", not on "different date". Overnight matches are real and survive.
+ *
+ * ── WHAT THIS GIVES UP, STATED ────────────────────────────────────────────────────────────────
+ * A match longer than ~48h can no longer be REACHED by typing an end time: the output is the
+ * start's date plus at most one day. Staging's 24h and 34h fixtures are untouched by loading or
+ * by any other edit — nothing here rewrites a stored end — but editing THAT match's END TIME now
+ * yields a duration under 48h. A time alone cannot express "three days later", and the previous
+ * behaviour bought that expressiveness with the 25h bug above. If a >48h end is ever needed, the
+ * date has to come from a date control, not from this one. */
 export function moveEnd(curStart: string, curEnd: string, endTime: string): string | null {
-  const endDate = parseWall(curEnd).date;
-  if (!wallInputsReady(endDate, endTime)) return null;
+  // curEnd is accepted for the call signature and deliberately unread — see the header.
+  void curEnd;
+  const startDate = parseWall(curStart).date;
+  if (!wallInputsReady(startDate, endTime)) return null;
   const startM = wallMin(curStart);
-  let out = buildWall(endDate, endTime);
-  // At most two rolls: one covers "past midnight", the second only matters for a pair that was
-  // already inverted on load. Bounded so a pathological pair cannot spin.
-  for (let i = 0; i < 2 && wallMin(out) <= startM; i++) out = fromWallMin(wallMin(out) + 1440);
+  let out = buildWall(startDate, endTime);
+  // AT MOST ONCE. A second roll could only fire on a pair this function did not produce, and
+  // rolling twice is what let a stale value compound.
+  if (wallMin(out) <= startM) out = fromWallMin(wallMin(out) + 1440);
   return out;
 }
 

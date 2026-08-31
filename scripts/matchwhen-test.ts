@@ -88,12 +88,49 @@ console.log("\nthe end moves alone, and rolls past midnight rather than invertin
   is("…so it never produces a negative duration", durationMin(S, moveEnd(S, E, "00:30")!) > 0, true);
   is("an end equal to the start also rolls forward", durationMin(S, moveEnd(S, E, "19:00")!), 1440);
 
-  /* A MATCH LONGER THAN A DAY KEEPS ITS DATE. Staging carries 24h and 34h fixtures; deriving the
-   * end date from the start ("same day, or next if earlier") would silently collapse them. */
+  /* ── TWO ASSERTION BODIES CHANGED HERE, AND THIS IS THE ONLY PLACE ─────────────────────────
+   * They asserted that a 34h match KEEPS its end date when the end time is edited, because the
+   * date came from the previous end. That dependency is exactly what made the roll sticky:
+   * <input type="time"> fires on PARTIAL values, one of those rolled production 18292's end to
+   * the next day, and nothing ever rolled it back — the finishing keystroke inherited it and the
+   * panel read 25h on a one-hour match.
+   *
+   * The offset-preserving middle ground was tried and MEASURED: it still lands at 25h, because
+   * the day offset is itself poisoned by the same partial keystroke. Only dropping the dependency
+   * on the previous end corrects.
+   *
+   * So the new truth, asserted below: a >48h end cannot be REACHED by typing a time. The stored
+   * fixture is untouched — nothing rewrites an end that is not edited — but editing that match's
+   * END TIME now yields under 48h. A time alone cannot express "three days later". */
   const LS = "2026-09-29T09:00:00.000Z", LE = "2026-09-30T19:15:00.000Z";
-  is("a 34h match keeps its end DATE when only the time is edited",
-    moveEnd(LS, LE, "20:00"), "2026-09-30T20:00:00.000Z");
-  is("…so its length stays over a day", durationMin(LS, moveEnd(LS, LE, "20:00")!) > 1440, true);
+  is("editing a 34h match's END TIME now derives from the START's date",
+    moveEnd(LS, LE, "20:00"), "2026-09-29T20:00:00.000Z");
+  is("…which is 11h, not 34h — a time alone cannot say 'the day after tomorrow'",
+    durationMin(LS, moveEnd(LS, LE, "20:00")!), 660);
+  is("…and the stored pair is untouched until the end time is actually edited", [LS, LE],
+    ["2026-09-29T09:00:00.000Z", "2026-09-30T19:15:00.000Z"]);
+
+  /* ── THE BUG ITSELF, and the assertion most likely to have been left out ───────────────────
+   * A partial keystroke that momentarily rolls, followed by a valid one. The second must CORRECT
+   * the first, not inherit it. This is production 18292 exactly. */
+  const PS = "2026-09-01T20:00:00.000Z", PE = "2026-09-01T20:45:00.000Z";
+  const partial = moveEnd(PS, PE, "09:00")!;              // 9am is before an 8pm start -> rolls
+  is("a partial keystroke does roll, as it must", partial, "2026-09-02T09:00:00.000Z");
+  const corrected = moveEnd(PS, partial, "21:00")!;       // …and the NEXT keystroke corrects it
+  is("…and the next keystroke CORRECTS it rather than inheriting the roll",
+    corrected, "2026-09-01T21:00:00.000Z");
+  is("…so 8pm -> 9pm is one hour, not twenty-five", durationMin(PS, corrected), 60);
+  /* CONTROL: the correction is not a clamp — feed the SAME stale end an overnight time and it
+   * still rolls. Without this, "corrected" could just mean "always same-day". */
+  is("control: from the same stale end, 11pm -> 1am still rolls",
+    moveEnd("2026-09-01T23:00:00.000Z", partial, "01:00"), "2026-09-02T01:00:00.000Z");
+  is("control: …and that one is two hours",
+    durationMin("2026-09-01T23:00:00.000Z", moveEnd("2026-09-01T23:00:00.000Z", partial, "01:00")!), 120);
+  /* CONTROL: PURE. The same (start, time) gives the same answer from ANY previous end — which is
+   * the property that makes a partial keystroke harmless. */
+  const ends = [PE, partial, "2026-09-05T03:00:00.000Z", "2025-01-01T00:00:00.000Z"];
+  is("control: the result is independent of the previous end",
+    new Set(ends.map((e) => moveEnd(PS, e, "21:00"))).size, 1);
 
   is("moveEnd refuses an empty time", moveEnd(S, E, ""), null);
 }
