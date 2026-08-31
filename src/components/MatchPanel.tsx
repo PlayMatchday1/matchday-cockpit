@@ -322,6 +322,49 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
    * for two implementations to drift, so there is now one.
    *
    * NO TYPE-TO-CONFIRM on either. Two buttons, and the friction is the consequence sentence. */
+  /* CONVERT TO 4 TEAMS. Two calls: GET the plan for the confirmation (writes nothing), then POST.
+   * The confirmation shows REAL FIGURES computed at click time — spots before and after and how
+   * many players get dealt — because a control that changes a match's capacity should not be
+   * asking anyone to trust a number that was rendered when the drawer opened. */
+  const [cv, setCv] = useState<{ summary: string; spotsBefore: number; spotsAfter: number; playerCount: number;
+    moveCount: number; keptCount: number; refusal: string | null; shapeError: string | null } | null>(null);
+  const [cvBusy, setCvBusy] = useState(false);
+  const [cvResults, setCvResults] = useState<{ kind: string; label: string; verdict: string; detail?: string }[] | null>(null);
+  const [cvMsg, setCvMsg] = useState<{ text: string; bad: boolean } | null>(null);
+
+  const openConvert = async () => {
+    if (cvBusy) return;
+    const h = await authHeaders(); if (!h) { setCvMsg({ text: "No active session — sign in again.", bad: true }); return; }
+    setCvBusy(true); setCvMsg(null); setCvResults(null);
+    try {
+      const r = await fetch(`/api/matchday/${env}/matches/${matchId}/convert-4`, { headers: h, cache: "no-store" });
+      const j = await r.json();
+      if (!r.ok) { setCvMsg({ text: j.error ?? `HTTP ${r.status}`, bad: true }); return; }
+      setCv(j);
+    } catch (e) { setCvMsg({ text: `UNKNOWN — ${e instanceof Error ? e.message : String(e)}.`, bad: true }); }
+    finally { setCvBusy(false); }
+  };
+
+  const runConvert = async () => {
+    /* NO RETRY. busy is set before the request and the confirmation closes on completion; a second
+     * press would re-deal players someone may have moved in between. */
+    if (!cv || cvBusy) return;
+    const h = await authHeaders(); if (!h) { setCvMsg({ text: "No active session — sign in again.", bad: true }); return; }
+    setCvBusy(true); setCvMsg(null);
+    try {
+      const r = await fetch(`/api/matchday/${env}/matches/${matchId}/convert-4`, {
+        method: "POST", headers: { ...h, "Content-Type": "application/json" }, body: JSON.stringify({}),
+      });
+      const j = await r.json();
+      setCv(null);
+      setCvResults(j.results ?? null);
+      setCvMsg({ text: j.message ?? j.error ?? `HTTP ${r.status}`, bad: !j.ok });
+      await load(); await loadRoster();
+    } catch (e) {
+      setCvMsg({ text: `UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Reload before acting.`, bad: true });
+    } finally { setCvBusy(false); }
+  };
+
   const cancel = useCancelMatch({
     env, matchId, source: "Match panel · cancel", authHeaders,
     onCancelled: async (landed) => {
@@ -905,6 +948,51 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
              Save and Revert did not reach it. All three are gone, because the thing they warned
              about is gone: these edits now stage and land on Save with everything else. ── */}
           <Section title="TEAMS · ROSTER · TEAM COUNT" dirty={pendingN > 0}>
+            {/* CONVERT TO 4 TEAMS. Offered only on a 2-team match, and only when the match has
+                not been played — the refusal comes from the server's own plan so the button and
+                the write cannot disagree about whether it is allowed. */}
+            {rosterTeamCount === 2 && (
+              <div className="mp-cv" data-testid="mp-convert">
+                {!cv ? (
+                  <>
+                    <button type="button" className="mp-btn" data-testid="mp-convert-open" disabled={cvBusy || !mayWrite}
+                      onClick={() => void openConvert()}>{cvBusy ? "Reading…" : "Convert to 4 teams"}</button>
+                    <span className="mp-cvsub">Opens capacity for more players. This is not auto-bump.</span>
+                  </>
+                ) : cv.refusal || cv.shapeError ? (
+                  <div className="mp-note warn" data-testid="mp-convert-refusal">
+                    {cv.refusal ?? cv.shapeError}
+                    <button type="button" className="mp-btn" style={{ marginLeft: 10 }} onClick={() => setCv(null)}>Close</button>
+                  </div>
+                ) : (
+                  <div className="mp-cvconfirm" data-testid="mp-convert-confirm">
+                    {/* THE NUMBERS, computed at click time from the match in front of you. */}
+                    <b data-testid="mp-convert-summary">{cv.summary}</b>
+                    <div className="mp-cvnote">
+                      {cv.moveCount} write{cv.moveCount === 1 ? "" : "s"} after the shape, one per player, sent one at a
+                      time. Each reports its own result. Nothing retries.
+                    </div>
+                    <div className="mp-cv-acts">
+                      <button type="button" className="mp-btn mp-nowrap" data-testid="mp-convert-cancel" onClick={() => setCv(null)}>Keep 2 teams</button>
+                      <button type="button" className="mp-btn mp-pri mp-nowrap" data-testid="mp-convert-go" disabled={cvBusy}
+                        onClick={() => void runConvert()}>{cvBusy ? "Converting…" : "Convert to 4 teams"}</button>
+                    </div>
+                  </div>
+                )}
+                {cvMsg && <div className={"mp-note " + (cvMsg.bad ? "warn" : "info")} data-testid="mp-convert-msg">{cvMsg.text}</div>}
+                {/* ONE ROW PER WRITE. A single outcome for eleven writes would be a lie. */}
+                {cvResults && (
+                  <ul className="mp-wres" data-testid="mp-convert-results">
+                    {cvResults.map((r, i) => (
+                      <li key={i} data-testid="mp-convert-result" data-verdict={r.verdict}>
+                        <span className="v">{r.verdict}</span>
+                        <span>{r.label}{r.detail ? ` — ${r.detail}` : ""}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
             <div data-testid="mp-teams">
             {rosterErr ? <div className="mp-err" data-testid="mp-teams-error">Couldn’t load teams: {rosterErr}</div>
              : !roster ? <div className="mp-loading" data-testid="mp-teams-loading">Loading teams…</div>
@@ -1372,6 +1460,12 @@ const CSS = `
 .mp-mgrconfirm-b{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
 .mp-cancel-line{font-size:13px;line-height:1.5;color:#5a1611;margin:0 0 12px}
 .mp-cancel-line b{font-weight:800;color:#3d0e0a}
+.mp-cv{margin:0 0 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.mp-cvsub{font-size:11.5px;color:var(--ink3)}
+.mp-cvconfirm{flex-basis:100%;border:1px solid var(--line2);background:#f7fbf9;border-radius:10px;padding:11px 13px}
+.mp-cvconfirm b{display:block;font-size:13px;margin-bottom:5px}
+.mp-cvnote{font-size:11.5px;color:var(--ink3);line-height:1.5}
+.mp-cv-acts{display:flex;gap:10px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap}
 .mp-cancel-acts{display:flex;gap:10px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap}
 /* NEITHER BUTTON WRAPS. "Keep the match" is three words and a flex item with no minimum — give
    it nowrap and it keeps its one line at any panel width. */

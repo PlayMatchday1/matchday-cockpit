@@ -136,6 +136,11 @@ const NODE_SUITES = [
   // Asserts focus -> type "12" -> blur reads 12.00 with 1200 on the wire, with a control that
   // fails if the field reformats mid-type.
   "scripts/money-input-test.ts",
+  // CONVERT TO 4 TEAMS. It must not drift into auto-bump: the server's own bump stacks players on
+  // team 1, never uses team 4, and sets a capacity of 28 that nothing derives. Ours is even, in
+  // signup order, and the shape comes from teamCountWrites. Also pins the shape-first ordering,
+  // the before-map, and that a partial failure names who is stranded.
+  "scripts/convert-four-test.ts",
   // TWO REVENUE BASES, AND NO FIGURE MAY MIX THEM. Slate Review showed a pre-tax $12.00 DPP
   // beside a tax-inclusive membership share and called the sum revenue. This pins which call
   // site reads which helper, and the tax rates as GET /cities SERVES them — I measured OKC at
