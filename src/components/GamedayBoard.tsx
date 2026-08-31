@@ -47,10 +47,14 @@ async function authFetch(path: string): Promise<Response> {
 }
 
 const PANEL_W = 600; // the in-place match panel (replaces the old side drawer + "Open full editor")
-// WIDER WHEN THERE IS ROOM. The panel's teams grid holds a name AND a phone number per row, two
-// columns of them at four teams; 600px squeezed both. It only widens when the chat dock is NOT
-// sharing the edge — coexisting at 600 + 360 already leaves the board little enough.
-const PANEL_W_WIDE = 820;
+/* CAPPED AT 760, the same width the Fields drawer uses (FieldsView: min(760px,96vw)).
+ *
+ * IT WAS 820 AND THAT ATE THE LIST. At 1600 the panel took 820px of edge and the board's rows were
+ * clipped mid-bar — the SPOTS column rendered "36 total of 3…" with the rest running under the
+ * panel. A drawer that makes the thing behind it unreadable is not a wider drawer, it is a modal
+ * that forgot to say so. 760 keeps the teams grid's name-plus-phone rows (the reason it widened in
+ * the first place) and gives the board back 60px at every width above 1600. */
+const PANEL_W_WIDE = 760;
 const DOCK_W = 360;  // the CRM chat dock's expanded width — they sit side-by-side at ≥1600
 
 // ONE BOARD, TWO CALLERS. Match Ops renders it bare; the city-manager tier passes three props.
@@ -494,7 +498,7 @@ const CSS = `
 .gdo .gmain.drawering{margin-right:var(--drawer-w,480px)}
 /* the in-place match panel (replaces the old drawer). Fixed right edge; the right offset is set
    inline to the dock width when they coexist (>=1600) so the two never overlap. */
-.gdo .gpanel{position:fixed;top:0;bottom:0;height:100dvh;width:var(--panel-w,600px);max-width:100vw;background:#eef2f0;border-left:1px solid #d4e0da;box-shadow:-8px 0 26px rgba(4,26,18,.12);z-index:60;display:flex;flex-direction:column}
+.gdo .gpanel{position:fixed;top:0;bottom:0;height:100dvh;width:min(var(--panel-w,600px),96vw);max-width:100vw;background:#eef2f0;border-left:1px solid #d4e0da;box-shadow:-8px 0 26px rgba(4,26,18,.12);z-index:60;display:flex;flex-direction:column}
 /* SAFE AREA. The panel is position:fixed top:0, so without this the header renders beneath the iOS
    status bar and the Dynamic Island — "× Close" was drawn straight through the clock and could not
    be tapped without rotating the device. The bar is STICKY and starts BELOW the inset; the body

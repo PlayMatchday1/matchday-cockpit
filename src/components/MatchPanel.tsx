@@ -1090,11 +1090,12 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
               ))}
             </ul>
           )}
+          {/* THE EXPANDED DIFF STAYS ABOVE THE ROW; the TOGGLE itself moved down into it. The bar was
+              two stacked lines — the dirty state on its own, then the buttons — which is 105px of a
+              panel that already scrolls. The Master Schedule editor's bar is one line and this now
+              matches it. The list is unchanged: it is still the request body, still itemised, and
+              still only rendered when opened. */}
           <div className="mp-diffbox">
-            <button type="button" className="mp-diffhd" data-testid="mp-diffhd" aria-expanded={diffOpen} disabled={unsaved === 0} onClick={() => setDiffOpen((o) => !o)}>
-              <span className="mp-caret">{unsaved ? (diffOpen ? "▾" : "▸") : "·"}</span>
-              <span data-testid="mp-diffcount">{unsaved ? `${unsaved} change${unsaved === 1 ? "" : "s"} will be sent` : "No changes"}</span>
-            </button>
             {unsaved > 0 && diffOpen && (
               <ul className="mp-difflist" data-testid="mp-diff">
                 {changed.map((k) => (
@@ -1128,11 +1129,15 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
             </div>
           )}
           <div className="mp-btns">
+            <button type="button" className="mp-diffhd" data-testid="mp-diffhd" aria-expanded={diffOpen} disabled={unsaved === 0} onClick={() => setDiffOpen((o) => !o)}>
+              <span className="mp-caret">{unsaved ? (diffOpen ? "▾" : "▸") : "·"}</span>
+              <span data-testid="mp-diffcount">{unsaved ? `${unsaved} change${unsaved === 1 ? "" : "s"} will be sent` : "No changes"}</span>
+            </button>
             <span className="mp-sp" />
             {/* REVERT SENDS NOTHING. It discards intentions; it cannot take back a write, because
                 taking one back would BE another write. The label says so. */}
             <button type="button" className="mp-btn" data-testid="mp-revert" disabled={unsaved === 0} onClick={doRevert}
-              title="Discards every unsaved change on this panel. Sends no request — it cannot undo anything already saved.">Revert <em className="mp-btnsub">discards, sends nothing</em></button>
+              title="Discards every unsaved change on this panel. Sends no request — it cannot undo anything already saved.">Revert</button>
             <button type="button" className="mp-btn mp-pri" data-testid="mp-save" disabled={!mayWrite || unsaved === 0 || saving || !!whenErr || !!shapeErr} title={whenErr ?? shapeErr ?? (mayWrite ? undefined : (access.ok ? undefined : access.reason))} onClick={() => { if (mayWrite && !whenErr && !shapeErr) void doSave(); }}>
               {saving ? "Saving…" : unsaved ? `Save · ${unsaved} change${unsaved === 1 ? "" : "s"}` : "Save"}</button>
           </div>
@@ -1189,7 +1194,9 @@ const CSS = `
 .mp-name{font-size:18px;font-weight:800;letter-spacing:-.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mp-meta{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-top:6px;font-size:11.5px;color:var(--ink3)}
 .mp-tag{display:inline-flex;border-radius:6px;padding:2px 7px;font-size:10.5px;font-weight:800;border:1px solid var(--line2);background:#eef4f1;color:var(--ink2)}
-.mp-body{overflow:auto;min-height:0;padding:0 0 8px}
+/* NO TRAILING PAD. The content scrolls right up under the bar; an 8px gap under the last section
+   read as dead space because the bar is pinned directly below it. */
+.mp-body{overflow:auto;min-height:0;padding:0}
 .mp-seg{display:inline-flex;border:1px solid #D8E2DC;border-radius:10px;overflow:hidden}
 .mp-seg button{min-width:44px;min-height:40px;border:0;background:#fff;color:#41514A;font:inherit;font-weight:800;font-size:13px;cursor:pointer;border-left:1px solid #D8E2DC}
 .mp-seg button:first-child{border-left:0}
@@ -1247,18 +1254,22 @@ const CSS = `
    overflow:auto + min-height:0 and takes the remaining height, so the form scrolls UNDER this.
    The safe-area padding lives here because this is the element that touches the bottom of the
    drawer; it was on the drawer body, which no longer reaches the bottom. */
-.mp-foot{border-top:1px solid var(--line);background:#fafcfb;padding:11px 16px;flex:0 0 auto;
-  padding-bottom:calc(11px + var(--sab, env(safe-area-inset-bottom, 0px)))}
-.mp-diffbox{margin-bottom:10px}
-.mp-diffhd{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;font:inherit;text-align:left;cursor:pointer;padding:0 2px;min-height:32px;font-size:12.5px;color:var(--ink2)}
+.mp-foot{border-top:1px solid var(--line);background:#fafcfb;padding:10px 16px;flex:0 0 auto;
+  padding-bottom:calc(10px + var(--sab, env(safe-area-inset-bottom, 0px)))}
+/* Only the expanded list lives here now, so it has no margin when it is empty. */
+.mp-diffbox:not(:empty){margin-bottom:8px}
+/* width:auto now — it shares a row with the buttons instead of owning a line. min-width:0 plus
+   the ellipsis keeps a long "N changes will be sent" from shoving Save off the edge on a phone. */
+.mp-diffhd{display:flex;align-items:center;gap:8px;min-width:0;border:0;background:none;font:inherit;text-align:left;cursor:pointer;padding:0 2px;font-size:12.5px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mp-diffhd:disabled{cursor:default;opacity:.7}
 .mp-difflist{list-style:none;margin:8px 0 0;padding:9px 11px;background:#fff;border:1px solid var(--line);border-radius:9px;font-size:12px;max-height:150px;overflow:auto}
 .mp-difflist li{padding:3px 0;border-bottom:1px solid #f0f5f2}
 .mp-difflist li:last-child{border-bottom:0}
 .mp-k{font-weight:800}
 .mp-to{color:var(--grn);font-weight:700}
-.mp-btns{display:flex;gap:9px;align-items:center}
-.mp-btnsub{font-style:normal;font-weight:600;font-size:10px;color:var(--ink3);margin-left:6px}
+/* ONE ROW, VERTICALLY CENTRED: dirty state left, Revert and Save right. .mp-sp is the spacer
+   between them. Matching the Master Schedule bar, which is 12px 24px on a single line. */
+.mp-btns{display:flex;gap:9px;align-items:center;min-height:40px}
 .mp-sp{flex:1 1 auto}
 .mp-btn{border:1px solid var(--line2);background:var(--card);border-radius:9px;padding:0 14px;font:inherit;font-weight:700;cursor:pointer;color:var(--ink2);min-height:40px}
 .mp-btn:disabled{opacity:.5;cursor:not-allowed}
