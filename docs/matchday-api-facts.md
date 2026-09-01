@@ -5307,3 +5307,19 @@ monthly figures in this estate, check which side of this line each one sits on:
   buckets on Player Behavior; every wall-clock match date (which is Chicago by construction).
 - **UTC** — `members_monthly_snapshots`, and `mdapi_subscriptions` activation/cancellation
   timestamps when sliced as text rather than converted.
+
+### `registration_price` — CENTS, never null in the mirror, and 0 is a real value
+
+**Evidence: `mdapi_matches` counted on production 2026-09-01.**
+
+- 10,170 non-deleted rows. `registration_price IS NULL` → **0**. Proven by the complementary
+  count rather than trusted: `registration_price >= 0` returns **10,170**, the full total, so
+  there is no null hiding behind a filter that matches nothing.
+- `registration_price = 0` → **347 rows**, of which 18 fall in June 2026 and 12 in May 2026.
+  **Zero is a genuine free match, not a missing price.** Anything rendering a price must keep the
+  two apart: null renders nothing, 0 renders $0.00. Collapsing them relabels 347 real matches.
+- **CENTS.** Distinct values seen in Jun–Sep 2026: 0, 100, 300, 500, 600, 800, 900, 990, 1200,
+  1500, 3900, 5500. 1500 is $15.00. `src/lib/monthGrid.ts` `priceLabel()` is the only place the
+  division by 100 happens.
+- The column is nullable, so the null branch is kept as a defence — a create that omits the field
+  would land one. It is not currently load-bearing.
