@@ -14,6 +14,7 @@ import { readFileSync } from "node:fs";
 import {
   weekKey, addWeeks, lastWeeks, weekEnd, weekRangeLabel, weekTick, isoDow,
   chicagoYmd, wallClockYmd, changeColumnLabel, changeColumnTitle,
+  weeksInMonthRange, monthStart, monthEnd, addDays, MAX_WEEKS,
 } from "../src/lib/weekBuckets";
 import { mondayOf } from "../src/lib/managerPayCompute";
 
@@ -101,7 +102,18 @@ console.log("\nTHE CHANGE COLUMN IS RELABELLED — a WoW delta must not be heade
 
 console.log("\nTHE ROUTE READS THE RIGHT CLOCK FOR EACH SOURCE, AND PAGES PAST THE CAP");
 {
+  /* COMMENTS BLANKED FIRST — for the FIFTH time in this codebase's history, an absence scan
+   * matched a comment ABOUT the thing rather than the thing. The route's `reconcile` note carries a
+   * paragraph explaining that it used to say "the monthly view is UTC", and the control below,
+   * reading the raw file, found that sentence and reported the stale claim was still live. A guard
+   * that cannot tell code from prose about code is not a guard. */
   const R = readFileSync("src/app/api/lifecycle/behavior-weekly/route.ts", "utf8");
+  /* TWO VIEWS OF THE SAME FILE, ON PURPOSE, AND THEY ARE NOT INTERCHANGEABLE. `R` is raw, for the
+   * assertions that ask "is this DOCUMENTED" — those want the comments. `Rcode` is comment-blanked,
+   * for the assertions that ask "is this IN THE CODE". Scanning the wrong one is how this file
+   * briefly reported that a claim removed from the route was still live: the removal note quoted
+   * the old sentence, and the raw scan found the quotation. */
+  const Rcode = R.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
   const code = R.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
   is("  signups go through chicagoYmd", /weekKey\(chicagoYmd\(String\(u\.completed_sign_up_at\)\)\)/.test(code), true);
   is("  matches go through wallClockYmd", /weekKey\(wallClockYmd\(String\(m\.start_date\)\)\)/.test(code), true);
@@ -114,7 +126,18 @@ console.log("\nTHE ROUTE READS THE RIGHT CLOCK FOR EACH SOURCE, AND PAGES PAST T
   is("  …and stops on a short page", /if \(\(data \?\? \[\]\)\.length < 1000\) break;/.test(code), true);
   is("  fake players and cancelled rows are excluded", /p\.is_cancelled === true \|\| p\.user_is_fake_player === true/.test(code), true);
   is("  totalPlayers is DISTINCT people, not spots", /activeByWeek\.get\(w\).*\.add\(uid\)/.test(code) || /\.add\(uid\)/.test(code), true);
-  is("  the reconciliation gap is returned, not hidden", /reconcile:/.test(code) && /monthlyTimezone: "UTC"/.test(code), true);
+  /* CHANGED BY THIS TASK, DELIBERATELY. Migration 0157 moved growth_registration to Chicago, so
+   * the route's note now says BOTH sides are Chicago. It used to say monthly was UTC, and leaving
+   * that assertion green would have pinned a sentence the page no longer has any business saying. */
+  /* A MALFORMED RANGE IS A 400, NOT A SHRUG. If the route ignored an unparseable start/end and
+   * fell back to its default window, the picker would be inert again for exactly the inputs most
+   * likely to be wrong, and the chart would look fine. */
+  is("  a malformed month pair is rejected", /must both be YYYY-MM/.test(code), true);
+  is("  …and a backwards one too", /start must not be after end/.test(code), true);
+  is("  the read is bounded at BOTH ends once the window can end in the past",
+    /\.lt\("completed_sign_up_at", upper\)/.test(code) && /\.lt\("start_date", upper\)/.test(code), true);
+  is("  the reconciliation gap is returned, not hidden", /reconcile:/.test(code) && /monthlyTimezone: "America\/Chicago"/.test(code), true);
+  is("  control: the route no longer claims monthly is UTC", /monthlyTimezone: "UTC"/.test(code), false);
   is("  a failed read is an ERROR, never an empty chart", /status: 502/.test(code), true);
 }
 
@@ -123,12 +146,38 @@ console.log("\nAND THE MONTHLY BUCKETS ARE UTC — stated where it can be checke
   /* THE FACT THE WEEKLY VIEW CANNOT RECONCILE WITH. growth_registration buckets signups with
    * AT TIME ZONE 'UTC'; weekly is Chicago. This asserts the monthly definition has not silently
    * changed underneath the note that explains the gap. */
-  const MIG = readFileSync("supabase/migrations/0096_growth_materialized_views.sql", "utf8");
-  is("  growth_registration buckets in UTC", /AT TIME ZONE 'UTC', 'YYYY-MM'\) END AS signup_month/.test(MIG), true);
-  is("  control: the scan would notice a Chicago rewrite", /America\/Chicago.*signup_month/.test(MIG), false);
+  /* THE LIVE DEFINITION IS 0157, NOT 0096. This guard used to read 0096 and assert UTC. 0096 is
+   * still on disk and still says UTC — it is history and correctly so — which is exactly why
+   * pointing at it was no longer a guard: it would have gone on passing forever while describing a
+   * view that had been replaced. It reads the migration that is actually in effect. */
+  const MIG = readFileSync("supabase/migrations/0157_growth_registration_chicago.sql", "utf8");
+  is("  growth_registration buckets in America/Chicago", /AT TIME ZONE 'America\/Chicago', 'YYYY-MM'\) END AS signup_month/.test(MIG), true);
+  // CONTROL: the same scan run against the SUPERSEDED migration finds UTC — so the pattern above
+  // is discriminating between the two files and not just matching any signup_month line.
+  const MIG96 = readFileSync("supabase/migrations/0096_growth_materialized_views.sql", "utf8");
+  is("  control: the superseded 0096 still reads UTC", /AT TIME ZONE 'UTC', 'YYYY-MM'\) END AS signup_month/.test(MIG96), true);
+  is("  control: …and 0157 is not a copy of it", /AT TIME ZONE 'UTC', 'YYYY-MM'\) END AS signup_month/.test(MIG), false);
+  /* COMMENTS BLANKED FIRST — for the FIFTH time in this codebase's history, an absence scan
+   * matched a comment ABOUT the thing rather than the thing. The route's `reconcile` note carries a
+   * paragraph explaining that it used to say "the monthly view is UTC", and the control below,
+   * reading the raw file, found that sentence and reported the stale claim was still live. A guard
+   * that cannot tell code from prose about code is not a guard. */
   const R = readFileSync("src/app/api/lifecycle/behavior-weekly/route.ts", "utf8");
-  is("  and the route says the two will not sum", /will not sum to each other/.test(R), true);
-  is("  …naming BOTH reasons, not just the timezone", /weeks do not align to month boundaries/.test(R), true);
+  /* TWO VIEWS OF THE SAME FILE, ON PURPOSE, AND THEY ARE NOT INTERCHANGEABLE. `R` is raw, for the
+   * assertions that ask "is this DOCUMENTED" — those want the comments. `Rcode` is comment-blanked,
+   * for the assertions that ask "is this IN THE CODE". Scanning the wrong one is how this file
+   * briefly reported that a claim removed from the route was still live: the removal note quoted
+   * the old sentence, and the raw scan found the quotation. */
+  const Rcode = R.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  is("  and the route says the two will not sum", /will not sum to /.test(Rcode) && /each other/.test(Rcode), true);
+  /* THE SURVIVING REASON, AND ONLY IT. Timezone was reason 1 and is now resolved; weeks not
+   * aligning to months is calendar arithmetic and is permanent. The note must still carry it. */
+  is("  …naming the reason that survives 0157", /belongs wholly to neither month/.test(Rcode), true);
+  is("  control: the note no longer blames the timezone", /monthly view is UTC/.test(Rcode), false);
+  // CONTROL FOR THE BLANKING ITSELF: an absence that only holds because the scan is empty is not
+  // an absence. The stripped source must still contain the note it is being scanned for.
+  is("  control: the stripped source still has the reconcile note", /monthlyTimezone/.test(Rcode), true);
+  is("  control: …and the comment really was removed", /UPDATED FOR MIGRATION 0157/.test(Rcode), false);
 }
 
 console.log("\nTHE PANEL TOGGLE — monthly untouched, weekly normalised into the same shape");
@@ -140,7 +189,18 @@ console.log("\nTHE PANEL TOGGLE — monthly untouched, weekly normalised into th
   is("  the toggle renders both options", /data-testid="behavior-gran-monthly"/.test(code) && /data-testid="behavior-gran-weekly"/.test(code), true);
   is("  the selection is persisted", /localStorage\.setItem\(BEHAVIOR_GRAN_KEY/.test(code), true);
   is("  …and read back on mount", /localStorage\.getItem\(BEHAVIOR_GRAN_KEY\)/.test(code), true);
-  is("  weekly asks for 13", /const WEEKS = 13/.test(code), true);
+  /* THE PICKER IS WIRED. This used to assert `const WEEKS = 13` — the constant that MADE the
+   * period picker inert. The constant is gone and the request now carries the picker's range. */
+  is("  weekly asks for the SELECTED PERIOD, not a fixed window",
+    /behavior-weekly\?start=\$\{encodeURIComponent\(period\.start\)\}&end=\$\{encodeURIComponent\(period\.end\)\}/.test(code), true);
+  is("  control: the fixed 13-week constant is gone", /const WEEKS = 13/.test(code), false);
+  is("  …and the fetch re-runs when the window changes", /\[gran, winKey, period\.start, period\.end\]/.test(code), true);
+  /* THE STALE-CHART GUARD. Without the clear, the previous window's bars stay on screen under the
+   * new window's caption while the new read is in flight, and nothing on the page says so. */
+  is("  …clearing the old window's data first", /setWeekly\(null\); setWeeklyErr\(null\);/.test(code), true);
+  is("  the window is cached so a pill round-trip does not refetch", /weeklyCache\.current\.get\(winKey\)/.test(code), true);
+  is("  the count's UNIT follows the granularity", /gran === "weekly" \? "week" : "month"/.test(code), true);
+  is("  a capped window says how many weeks it dropped", /not shown \(53-week maximum\)/.test(code), true);
 
   /* THE WHOLE DESIGN IN ONE ASSERTION. Weekly is normalised to the monthly point shape — `w`
    * becomes `m` — so every downstream consumer is untouched. If this stops being true the panel
@@ -165,7 +225,7 @@ console.log("\nTHE PANEL TOGGLE — monthly untouched, weekly normalised into th
   console.log("  -- city and field detail follow the granularity --");
   is("  the city list reads src", /Object\.keys\(src\.behaviorByCity\)/.test(code), true);
   is("  the field list reads src", /Object\.keys\(src\.behaviorByField\)/.test(code), true);
-  is("  the model recomputes on a granularity change", /\[cityMode, fieldMode, detailMode, src, months, cities, fields, metric, gran\]/.test(code), true);
+  is("  the model recomputes on a granularity change", /\[cityMode, fieldMode, detailMode, src, months, cities, fields, metric, gran, weekly\]/.test(code), true);
   // A failed weekly fetch must be an error, not an empty chart.
   is("  a failed weekly fetch is an ERROR", /this is not an empty chart/.test(P), true);
   is("  …and loading says so", /data-testid="behavior-weekly-loading"/.test(code), true);
@@ -173,7 +233,18 @@ console.log("\nTHE PANEL TOGGLE — monthly untouched, weekly normalised into th
 
 console.log("\nTHE FIELD BREAKDOWN IS IN THE ROUTE, AND REGISTRATIONS ARE NOT FAKED PER FIELD");
 {
+  /* COMMENTS BLANKED FIRST — for the FIFTH time in this codebase's history, an absence scan
+   * matched a comment ABOUT the thing rather than the thing. The route's `reconcile` note carries a
+   * paragraph explaining that it used to say "the monthly view is UTC", and the control below,
+   * reading the raw file, found that sentence and reported the stale claim was still live. A guard
+   * that cannot tell code from prose about code is not a guard. */
   const R = readFileSync("src/app/api/lifecycle/behavior-weekly/route.ts", "utf8");
+  /* TWO VIEWS OF THE SAME FILE, ON PURPOSE, AND THEY ARE NOT INTERCHANGEABLE. `R` is raw, for the
+   * assertions that ask "is this DOCUMENTED" — those want the comments. `Rcode` is comment-blanked,
+   * for the assertions that ask "is this IN THE CODE". Scanning the wrong one is how this file
+   * briefly reported that a claim removed from the route was still live: the removal note quoted
+   * the old sentence, and the raw scan found the quotation. */
+  const Rcode = R.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
   const code = R.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
   is("  byField is returned", /byField,/.test(code), true);
   is("  …keyed on field_title", /matchField\.set\(Number\(m\.api_id\), String\(m\.field_title/.test(code), true);
@@ -196,6 +267,69 @@ console.log("\nTHE MONTHLY BUCKETS ARE CHICAGO NOW — one clock across the page
   const FACTS = readFileSync("docs/matchday-api-facts.md", "utf8");
   is("  the snapshots divergence is on the record", /TWO CLOCKS IN THE ESTATE, ON PURPOSE/.test(FACTS), true);
   is("  …naming members_monthly_snapshots as the UTC side", /members_monthly_snapshots.*stays UTC|stays \*\*UTC\*\*/.test(FACTS), true);
+}
+
+console.log("\nTHE PERIOD PICKER DRIVES THE WEEKLY WINDOW — the picker used to be inert here");
+{
+  is("monthStart is the first of the month", monthStart("2026-03"), "2026-03-01");
+  is("monthEnd finds 31 where there are 31", monthEnd("2026-03"), "2026-03-31");
+  is("monthEnd finds 30 where there are 30", monthEnd("2026-04"), "2026-04-30");
+  is("monthEnd handles February", monthEnd("2026-02"), "2026-02-28");
+  // THE LEAP YEAR. 2028 is one; getting this wrong drops a day off the axis once every four years.
+  is("monthEnd handles a leap February", monthEnd("2028-02"), "2028-02-29");
+  is("monthEnd handles December, where the year rolls", monthEnd("2026-12"), "2026-12-31");
+  is("addDays crosses a month boundary", addDays("2026-08-31", 2), "2026-09-02");
+
+  /* THE HEADLINE CLAIM: a 3-month period is about 13 weeks and a 6-month period about 26. "About"
+   * is the point — these are DERIVED from the calendar, not assumed, because months are not four
+   * weeks long and pinning the number is the mistake verify-pace-readout made. */
+  const q3 = weeksInMonthRange("2026-06", "2026-08");
+  const q6 = weeksInMonthRange("2026-03", "2026-08");
+  const q12 = weeksInMonthRange("2025-09", "2026-08");
+  is("a 3-month period yields 13 or 14 weeks", q3.axis.length >= 13 && q3.axis.length <= 14, true);
+  is("a 6-month period yields 26 or 27 weeks", q6.axis.length >= 26 && q6.axis.length <= 27, true);
+  is("a 12-month period yields 52 or 53 weeks", q12.axis.length >= 52 && q12.axis.length <= 53, true);
+  /* CONTROL FOR ALL THREE: the counts must DIFFER. If weeksInMonthRange ignored its arguments and
+   * returned a constant, every range above would still be "a number of weeks" and every assertion
+   * that only checked a range could pass. This is the assertion that the window actually moves. */
+  is("  control: the three windows are different lengths", new Set([q3.axis.length, q6.axis.length, q12.axis.length]).size, 3);
+  is("  control: and different starts", new Set([q3.axis[0], q6.axis[0], q12.axis[0]]).size, 3);
+
+  // EVERY KEY IS A MONDAY, and every one is inside the range. The rule the caption states.
+  is("every key is a Monday", q6.axis.every((w) => isoDow(w) === 1), true);
+  is("every Monday is inside the month range", q6.axis.every((w) => w >= "2026-03-01" && w <= "2026-08-31"), true);
+  is("  …the first is the first Monday on or after the 1st", q6.axis[0], "2026-03-02");
+  is("  …the last is the last Monday on or before the 31st", q6.axis[q6.axis.length - 1], "2026-08-31");
+  /* CONTROL: 2026-03-01 is a SUNDAY, so the first Monday is the 2nd and NOT the 1st. If the code
+   * had used weekKey(lo) without stepping forward it would have returned 2026-02-23 — a Monday in
+   * FEBRUARY, outside the period the picker selected. That is the specific bug this pins. */
+  is("  control: March 1 2026 is indeed a Sunday", isoDow("2026-03-01"), 7);
+  is("  control: the axis does NOT reach back into February", q6.axis.includes("2026-02-23"), false);
+  // …and the opposite case: a period starting ON a Monday keeps that Monday.
+  const onMon = weeksInMonthRange("2026-06", "2026-06");
+  is("  control: June 1 2026 is a Monday", isoDow("2026-06-01"), 1);
+  is("  …and a period starting on a Monday keeps it", onMon.axis[0], "2026-06-01");
+
+  is("the axis is sorted oldest first", q6.axis.slice().sort().join() === q6.axis.join(), true);
+  is("the axis has no duplicates", new Set(q6.axis).size, q6.axis.length);
+  is("consecutive keys are exactly 7 days apart",
+    q6.axis.every((w, i) => i === 0 || addWeeks(q6.axis[i - 1], 1) === w), true);
+
+  /* THE CEILING IS ANNOUNCED, NOT APPLIED SILENTLY. A silent truncation reads as "this is the
+   * whole period"; the caller renders `dropped`. */
+  const long = weeksInMonthRange("2023-01", "2026-08");
+  is("a very long period is capped at MAX_WEEKS", long.axis.length, MAX_WEEKS);
+  is("  …and says how many it dropped", long.dropped > 0, true);
+  is("  …keeping the MOST RECENT weeks, not the oldest", long.axis[long.axis.length - 1], q12.axis[q12.axis.length - 1]);
+  // CONTROL: a period that fits reports dropped 0, so `dropped > 0` above is not vacuously true.
+  is("  control: a period that fits drops nothing", q6.dropped, 0);
+  is("  control: …and q3 too", q3.dropped, 0);
+
+  // A ONE-MONTH PERIOD IS THE FLOOR THE PICKER ALLOWS, and it must never come back empty.
+  for (const ym of ["2026-01", "2026-02", "2026-09", "2028-02"]) {
+    const r = weeksInMonthRange(ym, ym);
+    is(`a single month (${ym}) yields 4 or 5 weeks`, r.axis.length >= 4 && r.axis.length <= 5, true);
+  }
 }
 
 console.log(`\nweek-buckets: ${pass} passed, ${fails.length} failed`);

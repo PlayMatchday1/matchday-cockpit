@@ -7,7 +7,7 @@
 // metric. All series/values come from the shared computation (growthMetricGrid /
 // GrowthData) so this card can never disagree with the Player Data Room.
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { GrowthData, BehaviorPoint } from "@/lib/growthAnalytics";
 import type { Period } from "./GlobalPeriod";
 import { METRIC_LABEL, networkSeries, metricValue, IS_RATE, type GridMetric } from "@/lib/growthMetricGrid";
@@ -26,10 +26,8 @@ type WeeklyPayload = {
   overall: WeekPoint[];
   byCity: Record<string, WeekPoint[]>;
   byField?: Record<string, { label: string; city: string; points: WeekPoint[] }>;
+  window?: { start: string | null; end: string | null; weeks: number; dropped: number };
 };
-
-/** 13 weeks — a quarter, and enough to see a trend without the axis becoming unreadable. */
-const WEEKS = 13;
 const BEHAVIOR_GRAN_KEY = "behavior:granularity";
 
 type BehaviorMetric = "registrations" | "newPlayers" | "totalPlayers" | "spots";
@@ -159,8 +157,11 @@ export default function BehaviorPanel({
    * networkSeries, indexPoints, toRow, buildChart, the city and field branches — keys on `.m` and
    * neither knows nor cares what the string means. Only the LABELS and the axis change.
    *
-   * WEEKLY DOES NOT USE `period`. The global period picker selects months; the 13-week window is
-   * its own range, so weekly ignores it rather than intersecting two incompatible selections. */
+   * WEEKLY OBEYS THE PERIOD PICKER, exactly as monthly does. It did not at first — weekly rendered
+   * a fixed last-13-weeks and the picker above it did nothing, which is a control that looks live
+   * and is not one. The picker's month range now IS the weekly window: every week whose Monday
+   * falls inside it. "Last 3 months" gives 13 or 14 weeks and "Last 6 months" 26 or 27 — derived
+   * from the calendar, because months are not four weeks long. */
   const [gran, setGran] = useState<Granularity>("monthly");
   const [weekly, setWeekly] = useState<WeeklyPayload | null>(null);
   const [weeklyErr, setWeeklyErr] = useState<string | null>(null);
@@ -173,26 +174,38 @@ export default function BehaviorPanel({
   useEffect(() => {
     try { window.localStorage.setItem(BEHAVIOR_GRAN_KEY, gran); } catch { /* private mode */ }
   }, [gran]);
+  /* ONE FETCH PER WINDOW, CACHED BY IT. The period bar's quick pills are one click apart, so
+   * flipping 6 → 3 → 6 must not re-run the read three times. The cache is a ref rather than state
+   * because writing to it must not itself render. */
+  const weeklyCache = useRef(new Map<string, WeeklyPayload>());
+  const winKey = `${period.start}:${period.end}`;
   useEffect(() => {
-    if (gran !== "weekly" || weekly) return;
+    if (gran !== "weekly") return;
+    const cached = weeklyCache.current.get(winKey);
+    if (cached) { setWeekly(cached); setWeeklyErr(null); return; }
     let dead = false;
+    /* CLEARED FIRST. Without this the previous window's chart stays on screen while the new one
+     * loads, under the new window's caption — the reader would be looking at Mar–Aug's bars
+     * labelled Jun–Sep and have no way to tell. */
+    setWeekly(null); setWeeklyErr(null);
     (async () => {
       try {
         const { data: sess } = await supabase.auth.getSession();
         const token = sess.session?.access_token;
-        const res = await fetch(`/api/lifecycle/behavior-weekly?weeks=${WEEKS}`, {
-          cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
+        const res = await fetch(
+          `/api/lifecycle/behavior-weekly?start=${encodeURIComponent(period.start)}&end=${encodeURIComponent(period.end)}`,
+          { cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {} },
+        );
         const j = await res.json();
         if (!res.ok) throw new Error(j?.error ?? `HTTP ${res.status}`);
-        if (!dead) setWeekly(j as WeeklyPayload);
+        if (!dead) { weeklyCache.current.set(winKey, j as WeeklyPayload); setWeekly(j as WeeklyPayload); }
       } catch (e) {
         // A FAILED FETCH IS AN ERROR, never an empty chart — the two look identical otherwise.
         if (!dead) setWeeklyErr(e instanceof Error ? e.message : String(e));
       }
     })();
     return () => { dead = true; };
-  }, [gran, weekly]);
+  }, [gran, winKey, period.start, period.end]);
 
   /* THE WEEKLY DATA, WEARING THE MONTHLY SHAPE. `w` becomes `m`; nothing downstream changes. */
   const weeklyData = useMemo<GrowthData | null>(() => {
@@ -351,10 +364,17 @@ export default function BehaviorPanel({
     }
 
     const chart = series.length && months.length ? buildChart(series, months, gran) : null;
+    /* THE CEILING, SAID OUT LOUD. A custom range longer than 53 weeks keeps the most recent 53;
+     * without this line the chart would read as the whole period and be short by the difference. */
+    const dropped = gran === "weekly" ? (weekly?.window?.dropped ?? 0) : 0;
+    if (dropped > 0) chartSub += ` · earliest ${dropped} week${dropped === 1 ? "" : "s"} of this period not shown (53-week maximum)`;
     return { chart, rows, chartTitle, chartSub, detailTitle, scope };
-  }, [cityMode, fieldMode, detailMode, src, months, cities, fields, metric, gran]);
+  }, [cityMode, fieldMode, detailMode, src, months, cities, fields, metric, gran, weekly]);
 
-  const metricPeriodText = `${months.length} month${months.length === 1 ? "" : "s"} · oldest to newest`;
+  /* THE UNIT FOLLOWS THE GRANULARITY. This read "26 months · oldest to newest" in weekly mode,
+   * because `months` is the axis whatever the axis is made of. A count is not unit-free. */
+  const unit = gran === "weekly" ? "week" : "month";
+  const metricPeriodText = `${months.length} ${unit}${months.length === 1 ? "" : "s"} · oldest to newest`;
   const firstColHead = fieldMode ? "Field" : cityMode ? "City" : "Metric";
 
   const exportCsv = () => {
@@ -505,7 +525,7 @@ export default function BehaviorPanel({
           <b>The weekly data could not be loaded — this is not an empty chart.</b> {weeklyErr}
         </div>
       ) : gran === "weekly" && !weekly ? (
-        <div className={styles.chart} data-testid="behavior-weekly-loading" style={{ padding: 24 }}>Loading the last {WEEKS} weeks…</div>
+        <div className={styles.chart} data-testid="behavior-weekly-loading" style={{ padding: 24 }}>Loading {monthLabel(period.start)} – {monthLabel(period.end)} by week…</div>
       ) : (
       <>
       {/* chart */}

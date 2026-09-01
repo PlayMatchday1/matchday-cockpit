@@ -50,6 +50,8 @@ export type VeoMatch = {
   // string on a row already being selected, and the alternative is a GET per chip.
   rawName: string;
   veo: boolean; // Clubhouse intent (veo_intent.enabled)
+  /** registration_price, in CENTS, straight off the mirror. Formatted by priceLabel, never here. */
+  price: number | null;
   hasEmoji: boolean; // 🎥 present in the raw MatchDay name
 };
 
@@ -101,7 +103,7 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
      * from the moment it READ the mirror, which says when the query ran and nothing at all about
      * how old the data is. max(synced_at) is the data's own age — the cron's write, or a
      * write-through, whichever touched a row last. */
-    .select("api_id, name, city_identifier, field_title, start_date, is_cancelled, deleted_at, synced_at")
+    .select("api_id, name, city_identifier, field_title, start_date, registration_price, is_cancelled, deleted_at, synced_at")
     .is("deleted_at", null)
     .gte("start_date", ymd(mon))
     .lte("start_date", `${ymd(sun)}T23:59:59`);
@@ -148,6 +150,7 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
       name: stripCameraEmoji(r.name),
       rawName: (r.name as string) ?? "",
       veo: rec?.enabled ?? false,
+      price: (r as { registration_price?: number | null }).registration_price ?? null,
       hasEmoji: hasCameraEmoji(r.name),
     });
   }
@@ -218,7 +221,7 @@ export async function fetchVeoRange(
 ): Promise<VeoRange> {
   let q = sb
     .from("mdapi_matches")
-    .select("api_id, name, city_identifier, field_title, start_date, is_cancelled, deleted_at, synced_at")
+    .select("api_id, name, city_identifier, field_title, start_date, registration_price, is_cancelled, deleted_at, synced_at")
     .is("deleted_at", null)
     .gte("start_date", from)
     .lte("start_date", `${to}T23:59:59`);
@@ -251,6 +254,8 @@ export async function fetchVeoRange(
       name: stripCameraEmoji(r.name),
       rawName: (r.name as string) ?? "",
       veo: intent.get(r.api_id) ?? false,
+      // CENTS, UNTOUCHED. `?? null` and not `?? 0`: absent and free are different facts.
+      price: (r as { registration_price?: number | null }).registration_price ?? null,
       hasEmoji: hasCameraEmoji(r.name),
     });
   }

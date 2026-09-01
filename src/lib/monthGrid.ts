@@ -16,7 +16,30 @@
 export type GridMatch = {
   apiId: number; city: string; date: string; time: string; minutes: number;
   venue: string; name: string; veo: boolean;
+  /** `mdapi_matches.registration_price`, in CENTS. See priceLabel — null is not zero. */
+  price?: number | null;
 };
+
+/* ── THE PRICE, IN CENTS, AND NULL IS NOT ZERO ─────────────────────────────────────────────────
+ * registration_price is CENTS: 1500 is $15.00, not $1,500. Dividing by 100 is the whole
+ * conversion and there is nowhere else in this file it may be done.
+ *
+ * A NULL RENDERS NOTHING. Not "$0.00", not "—", not "free". A missing price and a genuinely free
+ * match are different facts and $0.00 asserts the second one. The caller omits the element
+ * entirely when this returns null, so the entry is `time · field` with no gap where a price was.
+ *
+ * A ZERO RENDERS "$0.00", because that is what it is. This is not hypothetical: 347 of the 10,170
+ * matches in the mirror carry price 0 — 18 in June 2026 alone. Collapsing zero into the null case
+ * would hide every free match on the calendar.
+ *
+ * MEASURED 2026-09-01: 0 of 10,170 non-deleted matches have a NULL price — proven by the
+ * complementary count, `registration_price >= 0` returning all 10,170. The null branch is
+ * therefore defensive rather than load-bearing, and it is kept because the column is nullable and
+ * a create that omits the field would land one. */
+export function priceLabel(cents: number | null | undefined): string | null {
+  if (cents == null || typeof cents !== "number" || !Number.isFinite(cents)) return null;
+  return `$${(cents / 100).toFixed(2)}`;
+}
 
 export type GridDay = {
   iso: string;

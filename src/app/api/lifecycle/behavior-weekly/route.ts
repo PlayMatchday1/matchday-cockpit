@@ -1,4 +1,10 @@
-/* GET /api/lifecycle/behavior-weekly?weeks=13 — Player Behavior's four metrics, per WEEK. READ ONLY.
+/* GET /api/lifecycle/behavior-weekly?start=2026-03&end=2026-08 — Player Behavior's four metrics,
+ * per WEEK, over the window the page's PERIOD PICKER selected. READ ONLY.
+ *
+ * ── THE WINDOW COMES FROM THE CALLER ──────────────────────────────────────────────────────────
+ * `start` and `end` are month keys, the same pair the monthly view uses, and the axis is every
+ * week whose MONDAY falls inside them (see weeksInMonthRange). `?weeks=N` remains as a fallback
+ * for a caller with no period in hand — it means "the last N weeks ending today".
  *
  * ── WHY THIS EXISTS INSTEAD OF READING THE GROWTH VIEWS ───────────────────────────────────────
  * Every growth_* materialized view is pre-aggregated to a MONTH — growth_registration exposes
@@ -12,19 +18,19 @@
  * Swapping those two produces plausible numbers and wrong ones. See weekBuckets.ts.
  *
  * ── THIS WILL NOT SUM TO THE MONTHLY VIEW, FOR TWO REASONS, BOTH STRUCTURAL ───────────────────
- *   1. The monthly buckets are UTC — growth_registration does `AT TIME ZONE 'UTC'` explicitly.
- *      Weekly is Chicago. Measured on 27,029 completed users: 218 (0.81%) fall in a different
- *      MONTH under the two zones, up to ±15 in a single month.
- *   2. WEEKS DO NOT ALIGN TO MONTHS. A week running Aug 31 – Sep 6 belongs wholly to neither
+ *   1. (RESOLVED BY MIGRATION 0157, 2026-09-01.) The monthly buckets used to be UTC while weekly
+ *      was Chicago — 218 of 27,064 users (0.81%) fell in a different month under the two zones.
+ *      growth_registration is now America/Chicago too, so this reason no longer applies.
+ *   2. WEEKS DO NOT ALIGN TO MONTHS. This one is permanent. A week running Aug 31 – Sep 6 belongs wholly to neither
  *      August nor September, so "the weekly buckets summed over a month" is not a defined
  *      quantity unless that month happens to start on a Monday and end on a Sunday. This one is
  *      unavoidable and has nothing to do with timezones.
- * Both are reported to the caller in `reconcile` rather than left to be discovered.
+ * The survivor is reported to the caller in `reconcile` rather than left to be discovered.
  */
 
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { selectAll } from "@/lib/supabasePagination";
-import { chicagoYmd, wallClockYmd, weekKey, lastWeeks } from "@/lib/weekBuckets";
+import { chicagoYmd, wallClockYmd, weekKey, lastWeeks, weeksInMonthRange, weekEnd, addDays, MAX_WEEKS } from "@/lib/weekBuckets";
 import { cityFromAbbr } from "@/lib/cityMap";
 
 export const runtime = "nodejs";
@@ -37,14 +43,39 @@ export async function GET(req: Request) {
   const auth = await authenticateCapability(req, "lifecycle");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
-  const n = Number(new URL(req.url).searchParams.get("weeks") ?? 13);
-  const weeks = Number.isInteger(n) && n >= 1 && n <= 52 ? n : 13;
+  const qs = new URL(req.url).searchParams;
+  const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
+  const start = qs.get("start");
+  const end = qs.get("end");
+  const n = Number(qs.get("weeks") ?? 13);
+  const weeks = Number.isInteger(n) && n >= 1 && n <= MAX_WEEKS ? n : 13;
   const sb = auth.supabase;
 
   try {
+    /* THE AXIS. A valid month pair wins; anything else falls back to "the last N weeks ending
+     * today". A MALFORMED PAIR IS REJECTED, not quietly ignored — a picker that silently reverted
+     * to a default window is the bug this parameter exists to fix. */
+    if ((start != null || end != null) && !(start && end && MONTH.test(start) && MONTH.test(end))) {
+      return Response.json({ error: "start and end must both be YYYY-MM" }, { status: 400 });
+    }
+    if (start && end && start > end) {
+      return Response.json({ error: "start must not be after end" }, { status: 400 });
+    }
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
-    const axis = lastWeeks(today, weeks);
+    const ranged = start && end ? weeksInMonthRange(start, end) : null;
+    const axis = ranged ? ranged.axis : lastWeeks(today, weeks);
     const first = axis[0];
+    /* THE UPPER BOUND, WHICH THE FIXED WINDOW NEVER NEEDED. The old axis always ended today, so
+     * `.gte(first)` alone bounded the read. A period ending in the past does not: without this the
+     * route would fetch every row from `first` to now and throw almost all of it away.
+     *
+     * TWO DAYS OF SLACK, ON PURPOSE, AND IT IS NOT THE SAME SLACK FOR BOTH READS. Chicago is
+     * behind UTC, so an instant whose CHICAGO day is the last Sunday can carry the following UTC
+     * day; the match read is wall clock and needs only the day itself. One margin covers both and
+     * `inAxis` does the exact filtering either way — the bound is for the query planner, never for
+     * correctness. */
+    const lastDay = weekEnd(axis[axis.length - 1]);
+    const upper = addDays(lastDay, 2);
     const inAxis = new Set(axis);
 
     /* ── REGISTRATIONS. A UTC instant, bucketed by its CHICAGO day. Fake players excluded, the
@@ -54,7 +85,7 @@ export async function GET(req: Request) {
       sb.from("mdapi_users")
         .select("id, completed_sign_up_at, is_fake_player, preferable_city_name")
         .not("completed_sign_up_at", "is", null)
-        .gte("completed_sign_up_at", first)
+        .gte("completed_sign_up_at", first).lt("completed_sign_up_at", upper)
         .order("id"),
     );
     const regByWeek = new Map<string, number>();
@@ -78,7 +109,7 @@ export async function GET(req: Request) {
       sb.from("mdapi_matches")
         .select("api_id, start_date, city_identifier, field_title, is_cancelled, deleted_at")
         .is("deleted_at", null).eq("is_cancelled", false)
-        .gte("start_date", first)
+        .gte("start_date", first).lt("start_date", upper)
         .order("api_id"),
     );
     const matchWeek = new Map<number, string>();
@@ -222,11 +253,22 @@ export async function GET(req: Request) {
       cities,
       fields,
       /* SAID OUT LOUD, not left to be discovered. The panel renders this beside the chart. */
+      /* WHAT THE WINDOW ACTUALLY IS, so the panel states it rather than implying it. */
+      window: { start: start ?? null, end: end ?? null, weeks: axis.length, dropped: ranged?.dropped ?? 0 },
+      /* SAID OUT LOUD, not left to be discovered.
+       * UPDATED FOR MIGRATION 0157. This used to read "the monthly view is UTC" and name the two
+       * zones as the first reason weeks and months disagree. That reason is GONE: 0157 moved
+       * growth_registration's signup_month to America/Chicago, so both granularities are now on
+       * one clock. The SECOND reason survives and always will — it is calendar arithmetic, not a
+       * setting. Leaving the old note would have had the page explaining a discrepancy with a
+       * cause that no longer exists. */
       reconcile: {
         weeklyTimezone: "America/Chicago",
-        monthlyTimezone: "UTC",
-        note: "Weekly buckets are Chicago; the monthly view is UTC (growth_registration uses AT TIME ZONE 'UTC'). "
-          + "They will not sum to each other, and weeks do not align to month boundaries in any case.",
+        monthlyTimezone: "America/Chicago",
+        note: "Weekly and monthly are both bucketed in America/Chicago. They still will not sum to "
+          + "each other: a week running Aug 31 – Sep 6 belongs wholly to neither month, so "
+          + "\"the weeks of a month\" is not a defined quantity unless that month happens to start "
+          + "on a Monday and end on a Sunday.",
       },
       generatedAt: new Date().toISOString(),
     }, { headers: { "Cache-Control": "no-store" } });

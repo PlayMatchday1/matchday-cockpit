@@ -87,3 +87,62 @@ export const changeColumnLabel = (g: Granularity): string => (g === "weekly" ? "
 export const changeColumnTitle = (g: Granularity): string =>
   g === "weekly" ? "Week over week — the last full week against the one before it"
     : "Month over month — the last month against the one before it";
+
+/* ── THE PERIOD PICKER DRIVES THE WEEKLY WINDOW ────────────────────────────────────────────────
+ * Behavior's weekly mode used to render a fixed "last 13 weeks" and ignore the page's period
+ * picker entirely. That made the picker a control that looked live and did nothing — you could
+ * move it to 2024 and the weekly chart would not flinch. These four helpers give weekly the same
+ * window the monthly view already obeys.
+ *
+ * A WEEK IS IN THE WINDOW IF ITS MONDAY IS. Not "overlaps" — overlapping would drag in a leading
+ * week that mostly belongs to the previous period, and the first column would then be a partial
+ * that looks like a collapse. "Weeks BEGINNING in Mar 1 – Aug 31" is a rule a reader can hold, and
+ * it is what the axis label says.
+ *
+ * Six months of Mondays is 26 or 27 weeks, not exactly 26 — months are not four weeks long. The
+ * count is derived from the calendar, never assumed. */
+
+export const addDays = (ymd: string, n: number): string => {
+  const d = D(ymd);
+  d.setUTCDate(d.getUTCDate() + n);
+  return out(d);
+};
+
+/** First calendar day of a "YYYY-MM". */
+export const monthStart = (ym: string): string => `${ym}-01`;
+
+/** Last calendar day of a "YYYY-MM". Day 0 of the NEXT month is the last of this one. */
+export const monthEnd = (ym: string): string => {
+  const [y, m] = ym.split("-").map(Number);
+  return out(new Date(Date.UTC(y, m, 0)));
+};
+
+/* THE CEILING, AND IT IS ANNOUNCED RATHER THAN APPLIED SILENTLY.
+ * 53 covers every quick pill the period bar offers — "Last 12 months" is 52 or 53 Mondays. A
+ * custom range longer than that produces a table with more columns than a screen has, so the axis
+ * keeps the MOST RECENT 53 and returns how many it dropped. A silent truncation here would read
+ * as "this is the whole period" when it is not; the panel renders the number. */
+export const MAX_WEEKS = 53;
+
+/**
+ * The week keys whose Monday falls inside [start of `startYm`, end of `endYm`], oldest first,
+ * with the count dropped from the FRONT if the range exceeds `max`.
+ */
+export function weeksInMonthRange(
+  startYm: string,
+  endYm: string,
+  max: number = MAX_WEEKS,
+): { axis: string[]; dropped: number } {
+  const lo = monthStart(startYm);
+  const hi = monthEnd(endYm);
+  const all: string[] = [];
+  // The first Monday ON OR AFTER lo. weekKey() looks backwards, so step forward when it lands short.
+  let w = weekKey(lo);
+  if (w < lo) w = addWeeks(w, 1);
+  for (; w <= hi; w = addWeeks(w, 1)) all.push(w);
+  // A range with no Monday in it cannot happen for a whole month (every month has four), but an
+  // empty axis would render as a blank chart rather than an error, so it is never returned.
+  if (all.length === 0) return { axis: [weekKey(lo)], dropped: 0 };
+  if (all.length <= max) return { axis: all, dropped: 0 };
+  return { axis: all.slice(all.length - max), dropped: all.length - max };
+}

@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { buildCopyBody, droppedByCopy, copyConfirmLine, wallClockLabel, COPY_FIELDS } from "../src/lib/copyMatch";
 import {
   buildMonthGrid, applyFilters, fieldsAvailable, reconcileFields, fieldCountLabel,
-  defaultRange, rangeTitle, isoDow, mondayOnOrBefore, sundayOnOrAfter, type GridMatch,
+  defaultRange, rangeTitle, isoDow, mondayOnOrBefore, sundayOnOrAfter, priceLabel, type GridMatch,
 } from "../src/lib/monthGrid";
 import { EDITABLE_KEYS } from "../src/lib/matchEditModel";
 
@@ -197,7 +197,7 @@ console.log("\nTHE FILTERS: city single, field MULTI, count always honest");
   is("  singular is handled", fieldCountLabel(new Set(["a"]), ["a"]), "1 of 1 field");
 }
 
-console.log("\nTHE MONTH VIEW SHARES THE WEEK VIEW'S EDITOR, AND ITS CELLS DO NOT STRETCH");
+console.log("\nTHE MONTH VIEW SHARES THE WEEK VIEW'S EDITOR, AND ITS ROWS GROW TO FIT");
 {
   const VIEW = readFileSync("src/components/VeoMasterSchedule.tsx", "utf8");
   const code = VIEW.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
@@ -209,10 +209,37 @@ console.log("\nTHE MONTH VIEW SHARES THE WEEK VIEW'S EDITOR, AND ITS CELLS DO NO
   // In-place update on save already exists and is shared.
   is("  saving patches the card in place", /onSaved=\{\(id, patch\) => patchCard\(id, patch\)\}/.test(code), true);
 
-  /* FIXED HEIGHT, SCROLLS INSIDE. A Saturday with nine matches must not make every other Saturday
-   * nine rows tall. */
-  is("  a day cell has a fixed height", /\.vms-mcell\{height:126px/.test(VIEW), true);
-  is("  …and its list scrolls inside itself", /\.vms-mlist\{flex:1;min-height:0;overflow-y:auto/.test(VIEW), true);
+  /* CHANGED DELIBERATELY, 2026-09-01. These two assertions used to pin the OPPOSITE: a fixed
+   * 126px cell whose list scrolled inside itself. That hid most of a busy day — September 2026 has
+   * days holding 21 matches and the cell showed about five, behind a 5px scrollbar. The row now
+   * grows to its busiest day. Both assertions are inverted rather than deleted, so the old
+   * behaviour cannot come back unnoticed. */
+  is("  a day cell has a MINIMUM height, not a fixed one", /\.vms-mcell\{min-height:126px/.test(VIEW), true);
+  is("  control: the fixed height is gone", /\.vms-mcell\{height:126px/.test(VIEW), false);
+  is("  …and its list does NOT scroll inside itself", /overflow-y:auto/.test(VIEW), false);
+  is("  control: …the list rule is still present to have been checked", /\.vms-mlist\{padding:0 6px 6px/.test(VIEW), true);
+  is("  the webkit scrollbar styling went with it", /vms-mlist::-webkit-scrollbar/.test(VIEW), false);
+  /* EQUAL HEIGHTS PER ROW come from the grid, so the grid must still be a grid. If .vms-mweek ever
+   * became a flex row, cells would size independently and the row would go ragged. */
+  is("  a week is a 7-column grid, which is what equalises the row",
+    /\.vms-mweek\{display:grid;grid-template-columns:repeat\(7,1fr\)\}/.test(VIEW), true);
+
+  console.log("  -- the price --");
+  is("  the entry renders a price element", /data-testid="month-price"/.test(code), true);
+  is("  …only when priceLabel returns non-null", /priceLabel\(m\.price\) !== null &&/.test(code), true);
+  is("  …and it never truncates", /\.vms-mprice\{flex:0 0 auto;[^}]*white-space:nowrap/.test(VIEW), true);
+  is("  control: the price rule carries NO ellipsis", /\.vms-mprice\{[^}]*text-overflow/.test(VIEW), false);
+  is("  control: the FIELD beside it is the one that ellipses", /\.vms-mitem span\{[^}]*text-overflow:ellipsis/.test(VIEW), true);
+  is("  the tooltip carries the untruncated text, price included", /title=\{\[m\.time, m\.venue, m\.name, priceLabel\(m\.price\)\]/.test(code), true);
+  is("  the mirror read actually selects the column", /registration_price/.test(readFileSync("src/lib/veoSchedule.ts", "utf8")), true);
+  is("  …and carries it through as null, never 0", /registration_price \?\? null/.test(readFileSync("src/lib/veoSchedule.ts", "utf8")), true);
+
+  /* THE BACKTICK TRAP, NOW GUARDED. This file's CSS lives in a template literal, so a single
+   * backtick inside a CSS comment ends the literal and the rest of the stylesheet becomes
+   * JavaScript. It cost a broken build twice, most recently while writing the comment above. */
+  const CSS = VIEW.slice(VIEW.indexOf(".vms-mdow{"), VIEW.indexOf(".vms-mempty{"));
+  is("  no backtick anywhere inside the CSS template literal", CSS.includes("`"), false);
+  is("  control: the slice really is the stylesheet", CSS.includes(".vms-mcell{") && CSS.length > 500, true);
   is("  the day's count renders in the corner", /data-testid="month-daycount"/.test(code), true);
   is("  one compact line: time then field", /<b>\{m\.time\}<\/b>/.test(code), true);
   is("  …or the NAME when the filter is one field", /singleField \? m\.name : m\.venue/.test(code), true);
@@ -224,6 +251,43 @@ console.log("\nTHE MONTH VIEW SHARES THE WEEK VIEW'S EDITOR, AND ITS CELLS DO NO
   is("  the view and filters are persisted", /localStorage\.setItem\(VMS_PREFS/.test(code), true);
   // A failed range read is an error, never an empty grid.
   is("  a failed range is an ERROR, not an empty month", /this is not an empty month/i.test(VIEW), true);
+}
+
+console.log("\nTHE PRICE IS CENTS, AND NULL IS NOT ZERO");
+{
+  is("1500 cents is $15.00, not $1,500", priceLabel(1500), "$15.00");
+  is("500 cents is $5.00", priceLabel(500), "$5.00");
+  is("900 cents is $9.00", priceLabel(900), "$9.00");
+  is("990 cents keeps both decimals", priceLabel(990), "$9.90");
+  is("3900 cents is $39.00", priceLabel(3900), "$39.00");
+  is("100 cents is $1.00", priceLabel(100), "$1.00");
+  is("a cent is not lost", priceLabel(1), "$0.01");
+
+  /* THE WHOLE POINT. Null renders NOTHING and zero renders $0.00, and these are different facts:
+   * a match with no price recorded is not a free match. 347 of the 10,170 matches in the mirror
+   * carry a real 0 — collapsing the two would relabel every one of them. */
+  is("null renders NOTHING", priceLabel(null), null);
+  is("undefined renders NOTHING", priceLabel(undefined), null);
+  is("ZERO renders $0.00, because that is what it is", priceLabel(0), "$0.00");
+  /* CONTROL: the two cases must not agree. If priceLabel ever returned null for 0 — or "$0.00"
+   * for null — every assertion above that only checked one of them could still pass. */
+  is("  control: null and zero do not produce the same thing", priceLabel(null) === priceLabel(0), false);
+  is("  control: …and zero is not falsy-swallowed into null", priceLabel(0) === null, false);
+  // Garbage in does not become $NaN on the page.
+  is("a non-number renders NOTHING", priceLabel("1500" as unknown as number), null);
+  is("NaN renders NOTHING", priceLabel(Number.NaN), null);
+  is("Infinity renders NOTHING", priceLabel(Number.POSITIVE_INFINITY), null);
+
+  /* THE GRID CARRIES IT. A price that never reaches GridMatch cannot be rendered, and the type
+   * being optional means a missing one is a type-level non-event rather than a crash. */
+  const withPrice: GridMatch = {
+    apiId: 1, city: "Austin", date: "2026-09-08", time: "7:00 PM", minutes: 1140,
+    venue: "PARMER", name: "Match", veo: false, price: 1500,
+  };
+  const grid = buildMonthGrid("2026-09-01", "2026-09-30", [withPrice], "2026-09-01");
+  const cell = grid.flat().find((d) => d.iso === "2026-09-08");
+  is("  the grid preserves the price through bucketing", cell?.matches[0]?.price, 1500);
+  is("  control: the match was actually placed", cell?.matches.length, 1);
 }
 
 console.log(`\nmonth-and-copy: ${pass} passed, ${fails.length} failed`);

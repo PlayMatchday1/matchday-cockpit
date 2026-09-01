@@ -32,7 +32,7 @@ import RefreshIcon from "@/components/RefreshIcon";
 import { buildCopyBody, copyConfirmLine, type SourceMatch } from "@/lib/copyMatch";
 import {
   buildMonthGrid, applyFilters, fieldsAvailable, reconcileFields, fieldCountLabel,
-  defaultRange, rangeTitle, type GridDay, type GridMatch,
+  defaultRange, rangeTitle, priceLabel, type GridDay, type GridMatch,
 } from "@/lib/monthGrid";
 import MatchDrawer, { DRAWER_W, type DrawerMatch } from "@/components/MatchDrawer";
 
@@ -1199,8 +1199,16 @@ const CSS = `
 .vms-mdow div{padding:7px 10px;font-size:10.5px;font-weight:700;letter-spacing:.09em;color:#8C9E93;text-transform:uppercase;border-right:1px solid #EFF3EF}
 .vms-mdow div:last-child{border-right:0}
 .vms-mweek{display:grid;grid-template-columns:repeat(7,1fr)}
-/* FIXED HEIGHT. A Saturday with nine matches must not make every other Saturday nine rows tall. */
-.vms-mcell{height:126px;display:flex;flex-direction:column;min-width:0;background:#fff;border-right:1px solid #EFF3EF;border-bottom:1px solid #EFF3EF}
+/* THE ROW GROWS TO ITS BUSIEST DAY. This was height:126px with the list scrolling inside it,
+ * which meant a Saturday with twenty matches showed about five and hid the rest behind a 5px
+ * scrollbar most people never saw. A calendar that silently omits most of a day is worse than no
+ * calendar. min-height keeps a quiet week from collapsing to a strip.
+ *
+ * CELLS IN A ROW STAY EQUAL. The week is display:grid, whose items stretch to the tallest track
+ * by default — so equal height per row is the grid's own behaviour and needs no rule. What it does
+ * need is for nothing inside to force a height, which is why the fixed one had to go rather than
+ * be raised. */
+.vms-mcell{min-height:126px;display:flex;flex-direction:column;min-width:0;background:#fff;border-right:1px solid #EFF3EF;border-bottom:1px solid #EFF3EF}
 .vms-mcell:nth-child(7n){border-right:0}
 .vms-mout{background:#FAFCFA}
 .vms-mout .vms-mnum{color:#C3CFC7}
@@ -1208,16 +1216,19 @@ const CSS = `
 .vms-mhead{display:flex;align-items:center;gap:6px;padding:5px 9px 2px}
 .vms-mnum{font-weight:700;font-size:13px}
 .vms-mcount{margin-left:auto;font-size:10px;font-weight:800;color:#8A5A08;background:#FFF6E3;border-radius:999px;padding:1px 6px}
-/* SCROLLS INSIDE ITSELF rather than growing the row. */
-.vms-mlist{flex:1;min-height:0;overflow-y:auto;padding:0 6px 6px;display:flex;flex-direction:column;gap:3px}
-.vms-mlist::-webkit-scrollbar{width:5px}
-.vms-mlist::-webkit-scrollbar-thumb{background:#D6DFD8;border-radius:3px}
+/* NO INTERNAL SCROLL. Every match the day holds is on the page; the page scrolls, not the cell. */
+.vms-mlist{padding:0 6px 6px;display:flex;flex-direction:column;gap:3px}
 .vms-mitem{display:flex;align-items:baseline;gap:6px;flex:0 0 auto;min-width:0;text-align:left;background:#F4F8F5;border:1px solid #E3ECE6;border-radius:6px;padding:3px 6px;font:inherit;cursor:pointer}
 .vms-mitem:hover{background:#E4FBEC;border-color:#BCE8CD}
 .vms-msel{background:#E4FBEC;border-color:#35c77f}
 .vms-mitem b{font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
 .vms-mitem span{min-width:0;flex:1;font-size:11px;color:#3C4F44;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .vms-mveo{width:6px;height:6px;border-radius:50%;background:#0B7A3E;flex:0 0 auto}
+/* THE PRICE NEVER TRUNCATES. flex:0 0 auto + nowrap and NO overflow rule — it takes the width
+ * it needs and the FIELD gives way, because "$15.0" and "$1" are wrong numbers rather than short
+ * ones. The field beside it is the one that ellipses, and it carries a tooltip that does not.
+ * tabular-nums so a column of prices lines up on the decimal point. */
+.vms-mprice{flex:0 0 auto;font-style:normal;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;color:#2C6B45;margin-left:auto}
 .vms-mempty{padding:40px 18px;text-align:center;color:#6E8076;font-size:13px}
 .vms-refresh{display:inline-flex;align-items:center;gap:6px;min-height:32px;border:1px solid var(--line);
   border-radius:9px;background:#fff;color:var(--forest);font:inherit;font-size:12px;font-weight:700;
@@ -1417,13 +1428,20 @@ function MonthView({ weeks, count, onOpen, selectedId, singleField }: {
                   <button type="button" key={m.apiId} data-testid="month-match" data-id={m.apiId}
                     className={"vms-mitem" + (selectedId === m.apiId ? " vms-msel" : "")}
                     onClick={() => onOpen(m.apiId)}
-                    title={`${m.time} · ${m.venue} · ${m.name}`}>
+                    /* THE TOOLTIP CARRIES THE UNTRUNCATED TEXT. The field ellipses in a narrow
+                       cell; this is where the whole of it lives, price included. */
+                    title={[m.time, m.venue, m.name, priceLabel(m.price)].filter(Boolean).join(" · ")}>
                     <b>{m.time}</b>
                     {/* ONE COMPACT LINE. The field, unless the filter is already down to a single
                         field — at which point the field is a constant and the NAME is the thing
                         that distinguishes one entry from another. */}
                     <span>{singleField ? m.name : m.venue}</span>
                     {m.veo && <i className="vms-mveo" aria-label="Veo" />}
+                    {/* NULL RENDERS NOTHING — no element, no placeholder, no gap. priceLabel
+                        returns null only for a missing price; a real 0 comes back "$0.00". */}
+                    {priceLabel(m.price) !== null && (
+                      <em className="vms-mprice" data-testid="month-price">{priceLabel(m.price)}</em>
+                    )}
                   </button>
                 ))}
               </div>
