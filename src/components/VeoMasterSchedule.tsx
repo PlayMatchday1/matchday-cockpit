@@ -47,6 +47,8 @@ type VeoWeek = {
   codesRef: VeoCodesRef[];
   seededThisWeek: number;
   generatedAt: string;
+  /** max(synced_at) over the week — the DATA's age, not the read's. Null on an empty week. */
+  dataAsOf: string | null;
 };
 
 type Unit = { venue: string; times: string[] };
@@ -193,7 +195,7 @@ export default function VeoMasterSchedule() {
    * background refetch could move the card out from under it. Manual, plus the one automatic
    * refresh after a cancel this page itself performed. */
   const [refreshing, setRefreshing] = useState(false);
-  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [resyncFail, setResyncFail] = useState<string | null>(null);
   const [staleFail, setStaleFail] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   // City filter (empty = all). Drawer state. drawerDirty is reported UP by the
@@ -211,20 +213,42 @@ export default function VeoMasterSchedule() {
 
   // ref selects the week; "" asks the server for the current week. Keeps the old
   // week on screen until the new one arrives (no blanking on navigation).
-  async function load(ref: string, quiet = false) {
+  /* `repull` = "go to MatchDay first". Refresh sets it; week navigation and the initial load do
+   * not — moving between weeks should be instant and does not need the source of truth. */
+  async function load(ref: string, quiet = false, repull = false) {
     if (quiet) setRefreshing(true);
     setStaleFail(false);
-    let landed = false;
+    setResyncFail(null);
     try {
       const { data: sess } = await supabase.auth.getSession();
       const token = sess.session?.access_token;
+      const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+
+      /* RE-PULL THE VISIBLE WEEK FROM MATCHDAY BEFORE RE-READING. Re-reading a mirror cannot make
+       * it newer; this is what makes the button mean what it says. Scoped to the week on screen
+       * and skipping the roster crawl, so it is a button and not a sync.
+       *
+       * A FAILED RE-PULL IS SAID OUT LOUD AND THE READ STILL HAPPENS: showing the mirror is
+       * better than showing nothing, but claiming it is fresh would be the original lie. */
+      if (repull) {
+        try {
+          const q = ref ? `?week=${encodeURIComponent(ref)}` : "";
+          const rs = await fetch(`/api/veo/resync${q}`, { method: "POST", headers, cache: "no-store" });
+          if (!rs.ok) {
+            const j = await rs.json().catch(() => ({}));
+            setResyncFail(String(j?.error ?? `HTTP ${rs.status}`));
+          }
+        } catch (e) {
+          setResyncFail(e instanceof Error ? e.message : String(e));
+        }
+      }
+
       const url = ref ? `/api/veo?week=${encodeURIComponent(ref)}` : "/api/veo";
-      const res = await fetch(url, { cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const res = await fetch(url, { cache: "no-store", headers });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = (await res.json()) as VeoWeek;
       setWeek(json);
       setError("");
-      landed = true;
     } catch {
       // A FAILED QUIET REFRESH KEEPS THE WEEK ON SCREEN and says so on the stamp. Stale data the
       // operator knows is stale beats an error where a schedule was.
@@ -232,9 +256,11 @@ export default function VeoMasterSchedule() {
     } finally {
       setLoading(false);
       setRefreshing(false);
-      // THE STAMP MOVES ONLY WHEN DATA LANDED. A clock that ticks regardless is a clock
-      // pretending to be a freshness indicator.
-      if (landed) setUpdatedAt(Date.now());
+      /* THE STAMP IS NOT SET HERE ANY MORE. It used to be Date.now() on every successful fetch,
+       * which reported the moment the QUERY ran and said nothing about the age of the data — the
+       * button read "Updated 1:04 PM" over rows the 11:00 cron had written and nothing since.
+       * It now comes from the payload's own dataAsOf (max synced_at), so it moves when the DATA
+       * moved and not when the page merely asked again. */
     }
   }
 
@@ -258,9 +284,18 @@ export default function VeoMasterSchedule() {
   // 15s, not 30s: this drives the freshness age, and at 30s the "2 minutes" threshold could be
   // reported half a minute late — which reads as a stamp that is not ageing.
   useEffect(() => { const t = setInterval(() => setNowMs(Date.now()), 15000); return () => clearInterval(t); }, []);
+  /* THE STAMP IS THE DATA'S AGE, NOT THE READ'S. `dataAsOf` is max(synced_at) over the week's
+   * rows — the cron's write or a write-through, whichever touched one last. Pressing Refresh on a
+   * week nothing has changed leaves it exactly where it was, which is the point: the button
+   * reports what it found, not that it ran. */
+  const dataAsOfMs = week?.dataAsOf ? Date.parse(week.dataAsOf) : null;
+  const updatedAt = Number.isFinite(dataAsOfMs as number) ? (dataAsOfMs as number) : null;
   const updatedLabel = updatedAt == null ? "—" : new Date(updatedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  /* HOURS, NOT MINUTES. The mirror's normal age is measured from an 11:00 UTC cron, so a
+   * minutes-only readout said "412m ago" by mid-afternoon on a perfectly healthy week. */
   const staleMins = updatedAt == null ? 0 : Math.floor((nowMs - updatedAt) / 60000);
-  const doRefresh = useCallback(() => { if (!refreshing && !navBusy) void load(weekRef, true); }, [refreshing, navBusy, weekRef]);
+  const staleLabel = staleMins >= 120 ? `${Math.floor(staleMins / 60)}h ago` : `${staleMins}m ago`;
+  const doRefresh = useCallback(() => { if (!refreshing && !navBusy) void load(weekRef, true, true); }, [refreshing, navBusy, weekRef]);
 
   async function post(url: string, body: unknown): Promise<boolean> {
     const { data: sess } = await supabase.auth.getSession();
@@ -527,23 +562,30 @@ export default function VeoMasterSchedule() {
                 >
                   {drawerId == null ? "Copy match" : `Copy match ${drawerId}`}
                 </button>
-                {/* REFRESH + FRESHNESS — same control, same stamp and same wording as Gameday Ops.
-                    The TITLE is where the two differ, and it is not decoration: this button
-                    re-reads the mirror, it does not fetch MatchDay. Saying "Refresh the schedule"
-                    and stopping there would imply a freshness it cannot deliver. */}
+                {/* REFRESH + FRESHNESS. THE TITLE WAS TRUE AND IS NOT ANY MORE, so it changed with the
+                    behaviour: it used to say this button re-reads the mirror and does not fetch
+                    MatchDay, which was honest about a button that could not deliver freshness. It
+                    now re-pulls the visible week from MatchDay first (POST /api/veo/resync), so
+                    "Refresh the schedule" is finally what it does.
+
+                    THE STAMP CHANGED WITH IT. It read "Updated <read time>" — the moment the query
+                    ran, which said nothing about the age of the data and moved on every press,
+                    including presses that fetched nothing. It now reads "Data as of <max
+                    synced_at>" and only moves when the DATA did. */}
                 <span className="vms-fresh" data-testid="fresh">
                   <button type="button" className="vms-refresh" data-testid="vms-refresh"
-                    disabled={refreshing || navBusy} aria-label="Re-read the schedule"
-                    title="Re-read the schedule. Clubhouse reads a mirror of MatchDay that syncs once a day, so this shows everything that has reached the mirror — it does not fetch MatchDay."
+                    disabled={refreshing || navBusy} aria-label="Refresh the schedule from MatchDay"
+                    title="Refresh the schedule. Re-pulls this week from MatchDay into Clubhouse, then re-reads it — so an edit made anywhere shows up without waiting for the nightly sync."
                     onClick={doRefresh}>
                     <RefreshIcon size={14} spinning={refreshing} />
                     <span className="vms-rlab">{refreshing ? "Refreshing…" : "Refresh"}</span>
                   </button>
                   <span className={"vms-stamp" + (staleFail ? " vms-stamp-failed" : staleMins >= 2 ? " vms-stamp-stale" : "")} data-testid="updated-at">
                     {staleFail ? `Couldn't refresh · showing ${updatedLabel}`
+                      : resyncFail ? `Couldn't reach MatchDay · showing data from ${updatedLabel}`
                       : updatedAt == null ? "Loading…"
-                      : staleMins >= 2 ? `Updated ${updatedLabel} · ${staleMins}m ago`
-                      : `Updated ${updatedLabel}`}
+                      : staleMins >= 2 ? `Data as of ${updatedLabel} · ${staleLabel}`
+                      : `Data as of ${updatedLabel}`}
                   </span>
                 </span>
               </div>

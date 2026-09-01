@@ -60,7 +60,9 @@ export type VeoWeek = {
   matches: VeoMatch[];
   codesRef: { city: string; codes: { code: string; confirmed: boolean }[] }[];
   seededThisWeek: number; // matches this week whose intent came from the emoji seed
-  generatedAt: string;
+  generatedAt: string;     // when this response was assembled — NOT a freshness claim
+  /** max(synced_at) over the week's rows: how old the DATA is. Null when the week is empty. */
+  dataAsOf: string | null;
 };
 
 // `now` is the real clock (drives the per-day "today" flag + generatedAt);
@@ -95,7 +97,11 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
   // live, non-cancelled matches this week
   let q = sb
     .from("mdapi_matches")
-    .select("api_id, name, city_identifier, field_title, start_date, is_cancelled, deleted_at")
+    /* synced_at IS SELECTED FOR THE FRESHNESS STAMP. The page used to stamp "Updated 1:04 PM"
+     * from the moment it READ the mirror, which says when the query ran and nothing at all about
+     * how old the data is. max(synced_at) is the data's own age — the cron's write, or a
+     * write-through, whichever touched a row last. */
+    .select("api_id, name, city_identifier, field_title, start_date, is_cancelled, deleted_at, synced_at")
     .is("deleted_at", null)
     .gte("start_date", ymd(mon))
     .lte("start_date", `${ymd(sun)}T23:59:59`);
@@ -165,5 +171,11 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
     codesRef: [...codesByCity.entries()].filter(([city]) => keep(city)).map(([city, codes]) => ({ city, codes })),
     seededThisWeek,
     generatedAt: now.toISOString(),
+    /* THE HONEST STAMP. A week with no matches has no freshness to report — null, so the page
+     * says "no data" rather than inventing a time. */
+    dataAsOf: (rows ?? []).reduce<string | null>(
+      (acc, r) => { const v = (r as { synced_at?: string | null }).synced_at ?? null; return v && (!acc || v > acc) ? v : acc; },
+      null,
+    ),
   };
 }

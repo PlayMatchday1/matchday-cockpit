@@ -332,7 +332,11 @@ for (const r of ["list", "detail/[id]", "fields", "matches", "check"]) {
     "veo/codes/[id]/route.ts": "capability",  // ITEMISED: was "admin" — now Match Ops
     "veo/codes/route.ts": "capability",       // ITEMISED: was "admin" — now Match Ops
     "veo/inbound/route.ts": "shared-secret", // machine-to-machine from the Gmail forwarder, no session
-    "veo/intent/route.ts": "crm",            // GET (read one match's intent) + POST (toggle it)
+    "veo/intent/route.ts": "crm",
+    /* ADDED 2026-09-01. Re-pulls one week of matches from MatchDay into the mirror for Master
+     * Schedule's Refresh. It writes the MIRROR, never MatchDay, so it is gated as a Match Ops
+     * action (capability "matchops") rather than as a match write. */
+    "veo/resync/route.ts": "capability",            // GET (read one match's intent) + POST (toggle it)
     "veo/route.ts": "crm",
   });
   // and the one unauthenticated route really does compare its secret rather than merely mention it

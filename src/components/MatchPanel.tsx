@@ -632,9 +632,22 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
         if (JSON.stringify(after[k] ?? null) === JSON.stringify((changes as Record<string, unknown>)[k] ?? null)) landed++;
         else notApplied.push(k);
       }
+      /* THE MIRROR IS PART OF THE OUTCOME NOW. The MatchDay write landing and the Clubhouse row
+       * being right are two different facts, and until 2026-09-01 only the first was reported —
+       * an edited time landed, the mirror kept the old one, and every Clubhouse screen showed
+       * stale data with nothing on screen to say so. A write-through that did not happen is said
+       * out loud; `mirrorReason` is null only when it genuinely refreshed.
+       *
+       * "not production" and "no mirrored fields" are NOT failures and do not warn: staging has no
+       * mirror row to keep, and an edit touching only unmirrored fields has nothing to go stale. */
+      const mirrorWarn = j.mirrored === false
+        && j.mirrorReason !== "not production" && j.mirrorReason !== "no mirrored fields";
       setToast(
         `Outcome ${j.outcome ?? "?"} — ${landed}/${sentKeys.length} field(s) LANDED (re-read confirmed).` +
-        (notApplied.length ? ` NOT APPLIED: ${notApplied.map((k) => LABELS[k] ?? k).join(", ")}.` : ""),
+        (notApplied.length ? ` NOT APPLIED: ${notApplied.map((k) => LABELS[k] ?? k).join(", ")}.` : "") +
+        (mirrorWarn
+          ? ` — BUT THE CLUBHOUSE COPY WAS NOT UPDATED (${j.mirrorReason ?? "unknown"}). Other screens will show the old value until the nightly sync. Run the matches sync on /data.`
+          : ""),
       );
     } catch (e) {
       setToast(`UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Reload before acting.`);

@@ -181,9 +181,17 @@ export async function PUT(req: Request, ctx: { params: Promise<{ env: string; id
     // WRITE THROUGH TO THE MIRROR. Extracted to mirrorWriteThrough.ts when manager assignment
     // needed the same thing — one implementation, one set of rules (production only, LANDED only,
     // the read-back value, best-effort). `cached` is recordWrite's own after-read.
-    await refreshMatchMirror(auth.supabase, env, Number(id), keys, cached, outcome);
+    const mirror = await refreshMatchMirror(auth.supabase, env, Number(id), keys, cached, outcome);
 
-    return Response.json({ ok: true, outcome, logRecorded: logged, match: pickMatch(cached) });
+    /* THE WRITE-THROUGH'S RESULT IS REPORTED, NOT SWALLOWED. It stays best-effort — the MatchDay
+     * write already landed and a mirror hiccup must never be reported as a failed edit — but the
+     * caller is told, because the alternative is the operator seeing a stale row and no reason.
+     * `reason` distinguishes the three cases that are NOT failures: staging (the mirror holds
+     * production ids), a non-landed outcome, and an edit that touched only unmirrored fields. */
+    return Response.json({
+      ok: true, outcome, logRecorded: logged, match: pickMatch(cached),
+      mirrored: mirror.refreshed, mirrorReason: mirror.reason ?? null,
+    });
   } catch (e) {
     return errToResponse(e);
   }
