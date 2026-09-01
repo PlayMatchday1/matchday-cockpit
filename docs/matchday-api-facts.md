@@ -5187,3 +5187,63 @@ brought any.
 
 **What is still UNKNOWN:** whether a guest can attend without their host present is a policy
 question about the pitch, not an API one. The data says the spot survives.
+
+## THE MANAGER ROSTER IS `GET /city-managers`, AND IT IS CITY-SCOPED (2026-09-01)
+
+**What backs Retool's CITY MANAGERS section.** Read out of `retool-export-prod.json`, not guessed:
+
+```
+getCityManagers                  GET /city-managers?cityId={{ filterCityMnagersCity.value }}
+getCityManagersForAttachToMatch  GET /city-managers/users?email={{ search }}&cityId={{ match city }}
+delete                           DELETE /city-managers?userId=…&cityId=…
+```
+
+No `/admin` prefix. **`cityId` is the column that carries the city**, and each row nests the whole
+city object — `city.abbr` is exactly the `ATX` / `HOU` / `SATX` code the pay sheet groups by, so no
+mapping table is needed.
+
+Row shape: `{ id, userId, cityId, createdAt, updatedAt, user{ id, email, firstName, lastName, … },
+city{ id, name, abbr, stripeTaxRateValue, timeZone, … } }`.
+
+### 100 rows, and 100 is the REAL total — not a page cap
+
+The endpoint **ignores `page` and `limit`**: asking for page 2 with limit 500 returns the same 100
+rows. The way to prove 100 is complete is that the per-city queries sum to exactly it:
+
+```
+cityId  ABBR   CITY                 PEOPLE   WITH GUSTO   WITHOUT
+     1  ATX    Austin                  28            4        24
+     2  HOU    Houston                 17            3        14
+     3  SATX   San Antonio             15            2        13
+     7  DFW    Dallas / Fort Worth     13            0        13
+     5  STL    St. Louis                9            0         9
+     4  ATL    Atlanta                  8            1         7
+     8  OKC    Oklahoma City            5            1         4
+     6  NYC    New York City            3            0         3
+     9  ELP    El Paso                  1            0         1
+    10  WAW    Warsaw                   1            0         1
+                                      ---          ---       ---
+                                      100           11        89
+```
+
+### Only 11 of 100 can be paid
+
+`manager_gusto_aliases` holds **11 rows**. The join is `lower(user.email)` ↔
+`lower(manager_email)` — the same email key the whole pay path uses. **89 of the roster have no
+Gusto mapping and cannot be paid at all**, so a picker that lists everyone is offering a choice
+that will be refused on save. DFW, STL, NYC, ELP and WAW have **zero** mapped people between them.
+
+### Clubhouse already reads this family, in three places
+
+`/city-managers/users` in `matchday/[env]/matches/[id]/route.ts:92` (the drawer's manager dropdown)
+and `manager-pay/city-week/route.ts:66`; `/city-managers` in `match-managers/route.ts:48`. So there
+was never an access problem — the manager-pay directory had simply been built on the wrong list.
+
+### BEING ON A CITY ROSTER IS NOT HAVING RUN A MATCH
+
+**72 of the 100 have ever been assigned a match, and neither set contains the other.** The old
+manager-pay directory derived its people from `mdapi_matches.manager_email` — every manager ever
+assigned, any city, 102 people, 11 payable, unsorted. That answers "who has worked", which is a
+different question from "who may be paid in this city". `match-managers/route.ts` already records
+the same distinction from the other side: 100 distinct `manager_id`s appear on matches against 87
+people on the roster.

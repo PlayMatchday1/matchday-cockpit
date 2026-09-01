@@ -133,10 +133,15 @@ console.log("\n3. A PERSON WITH NO GUSTO MAPPING CANNOT BE SAVED");
   // CONTROL: the picker SHOWS the Gusto name when there is one, the same way the rows do.
   if (/Gusto: \{p\.gusto\.firstName\} \{p\.gusto\.lastName\}/.test(VIEW)) ok('control: a mapped person shows "Gusto: First Last", as existing rows do');
   else bad("the picker shows the Gusto mapping", "THE OPERATOR CANNOT SEE WHAT WILL REACH PAYROLL");
-  // ...and the directory returns gusto:null rather than hiding the person.
+  /* CHANGED 2026-09-01 (assertion body, itemised): the directory was rewritten onto the MatchDay
+   * city-manager roster, so the alias lookup is a Map rather than an inline ternary. The property
+   * is unchanged and is the one that matters — an unmapped person is RETURNED with gusto:null,
+   * never filtered out server-side. The dialog hides them behind a toggle; the API does not. */
   const DIR = readFileSync("src/app/api/manager-pay/directory/route.ts", "utf8");
-  if (/gusto: gusto\.firstName \|\| gusto\.lastName \? gusto : null/.test(DIR)) ok("  the directory returns gusto:null rather than omitting the person");
+  if (/gusto: aliasByEmail\.get\(email\) \?\? null/.test(DIR)) ok("  the directory returns gusto:null rather than omitting the person");
   else bad("the directory returns unmapped people", "OMITTING THEM READS AS 'DOES NOT EXIST'");
+  if (!/\.filter\([^)]*gusto/.test(DIR)) ok("  …and never filters on the mapping server-side");
+  else bad("the directory does not filter unmapped people out", "THE TOGGLE COULD NEVER SHOW THEM");
 }
 
 console.log("\n4. A PERSON WHO ALREADY HAS A ROW THAT WEEK IS REFUSED");
@@ -318,6 +323,75 @@ console.log("\n10. THE CONTROL IS SCOPED BY THE BLOCK, NOT BY TYPING");
   else bad("the better path renders above the form", `indices ${order} / ${form}`);
   if (/unassigned\.length > 0 &&/.test(VIEW)) ok("  and it is omitted when there are none — not an empty box");
   else bad("the unassigned block is conditional");
+}
+
+console.log("\n12. THE PICKER IS CITY-SCOPED, SORTED, AND MAPPED-ONLY BY DEFAULT");
+{
+  const VIEW = readFileSync("src/app/(internal)/match-ops/manager-pay/ManagerPayView.tsx", "utf8");
+  const code = VIEW.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const DIR = readFileSync("src/app/api/manager-pay/directory/route.ts", "utf8");
+
+  console.log("  -- the source --");
+  {
+    if (/apiGet<[^>]*>\("production", "\/city-managers"\)/.test(DIR)) ok("    the directory reads GET /city-managers, the roster behind Retool's CITY MANAGERS");
+    else bad("the directory reads /city-managers", "THE OLD SOURCE WAS 'EVERY MANAGER EVER ASSIGNED' — 102 PEOPLE, 11 PAYABLE");
+    if (/mdapi_matches/.test(DIR)) bad("the directory no longer derives people from match history", "BEING ON A ROSTER AND HAVING RUN A MATCH ARE DIFFERENT QUESTIONS");
+    else ok("    …and no longer derives the list from match history");
+    if (/r\.city\?\.abbr/.test(DIR)) ok("    the city comes from the roster row's nested city.abbr");
+    else bad("the city comes from city.abbr", "cityId IS NUMERIC AND DOES NOT MATCH THE PAY SHEET'S CODES");
+    // Sorted ONCE, in the route, so no consumer has to remember.
+    if (/\.sort\(\(a, b\) => a\.name\.localeCompare\(b\.name\)\)/.test(DIR)) ok("    sorted alphabetically by name in the route");
+    else bad("the directory is sorted", "THE OLD PICKER WAS UNSORTED");
+    // One entry per person PER CITY — collapsing on email alone loses a second city.
+    if (/`\$\{email\}\|\$\{city \?\? ""\}`/.test(DIR)) ok("    keyed on email+city, so a two-city manager appears in both");
+    else bad("the key is email+city");
+  }
+
+  console.log("  -- the default view --");
+  {
+    if (/\(people \?\? \[\]\)\.filter\(\(p\) => p\.city === city\)/.test(code)) ok("    default view is THIS city only");
+    else bad("the default view is city-scoped", "AN OPERATOR ADDING TO ATL SAW EVERY CITY");
+    if (/inCity\.filter\(\(p\) => p\.gusto\)/.test(code)) ok("    …and mapped people only");
+    else bad("the default view hides unmapped people", "THEY CANNOT BE SAVED — LISTING THEM OFFERS A CHOICE THAT WILL BE REFUSED");
+    if (/useState\(false\)/.test(code.slice(code.indexOf("showAll") - 200, code.indexOf("showAll") + 200))) ok("    the toggle is OFF by default");
+    else bad("showAll defaults to false");
+    if (/data-testid="mp-add-showall"/.test(code) && /Show all managers/.test(code)) ok("    the toggle exists, at the foot of the list");
+    else bad("the Show all toggle exists");
+    if (/opacity: p\.gusto \? 1 : 0\.55/.test(code)) ok("    an unmapped person is greyed when shown");
+    else bad("unmapped people are greyed");
+    if (/NO GUSTO MAPPING/.test(code)) ok("    …and keeps its chip");
+    else bad("the unmapped chip survives");
+  }
+
+  console.log("  -- the count, and the search that looks wider --");
+  {
+    if (/data-testid="mp-add-count"/.test(code)) ok("    the count renders above the list");
+    else bad("the count renders");
+    if (/<b style=\{\{ color: C\.ink \}\}>\{shown\.length\}<\/b>/.test(code)) ok("    …and it is shown.length — the rows actually rendered");
+    else bad("the count equals the rendered rows", "A COUNT THAT IS NOT THE LIST IS WORSE THAN NO COUNT");
+    if (/shown\.map\(\(p\) =>/.test(code)) ok("    …and the same array is what maps to rows");
+    else bad("the list renders `shown`");
+    if (/if \(showAll \|\| !t \|\| shown\.length > 0\) return \[\];/.test(code)) ok("    a search that misses here still looks everywhere");
+    else bad("the search looks beyond the city", "AN EMPTY LIST READS AS 'DOES NOT EXIST'");
+    if (/data-testid="mp-add-elsewhere"/.test(code) && /Show all managers/.test(code)) ok("    …and offers the toggle, naming the person and their city");
+    else bad("the elsewhere message offers the toggle");
+    // CONTROL: the empty-list branch still exists for a genuine miss.
+    if (/Nobody in the directory matches that/.test(code)) ok("    control: a genuine miss still says so");
+    else bad("control: a genuine miss has its own message");
+  }
+
+  console.log("  -- what must NOT have moved --");
+  {
+    const ROUTE = readFileSync("src/app/api/manager-pay/added/route.ts", "utf8");
+    is("    the Gusto save block is untouched", /has no Gusto mapping/.test(ROUTE), true);
+    is("    the required reason is untouched", /A reason is required/.test(ROUTE), true);
+    is("    the duplicate refusal is untouched", /already has a pay row for the week of/.test(ROUTE), true);
+    is("    the pay-run lock is untouched", (ROUTE.match(/payRunHasGone\(/g) ?? []).length >= 3, true);
+    is("    recordWrite is untouched", (ROUTE.match(/await recordWrite\(/g) ?? []).length, 2);
+    // The dialog's own block still fires on an unmapped pick, toggle or not.
+    is("    an unmapped pick still blocks the save", /const noGusto = !!picked && !picked\.gusto/.test(code), true);
+    is("    …and Save is still gated on it", /noGusto \|\|/.test(code), true);
+  }
 }
 
 console.log(`\nmanager-pay-added: ${pass} passed, ${fails.length} failed`);

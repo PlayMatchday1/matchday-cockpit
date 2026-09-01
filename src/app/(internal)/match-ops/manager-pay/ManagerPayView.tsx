@@ -595,7 +595,11 @@ function ShareLinkModal({ onClose }: { onClose: () => void }) {
  * THE PERSON IS CHOSEN, NEVER TYPED. A hand-typed name has no Gusto mapping and reaches payroll as
  * a row that does not pay while looking exactly like one that does.
  */
-type DirEntry = { email: string; name: string; gusto: { firstName: string; lastName: string } | null; onSchedule: boolean };
+type DirEntry = {
+  email: string; name: string;
+  gusto: { firstName: string; lastName: string } | null;
+  city: string | null; cityName: string | null;
+};
 
 function AddSomeoneModal({ city, weekStart, unassigned, existingEmails, onClose, onSave }: {
   city: string; weekStart: string; unassigned: MatchSummary[]; existingEmails: Set<string>;
@@ -605,6 +609,9 @@ function AddSomeoneModal({ city, weekStart, unassigned, existingEmails, onClose,
   const [people, setPeople] = useState<DirEntry[] | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [q, setQ] = useState("");
+  /* OFF BY DEFAULT. The default view is THIS city's roster, mapped people only — the set that can
+   * actually be saved. Everything else is one toggle away. */
+  const [showAll, setShowAll] = useState(false);
   const [picked, setPicked] = useState<DirEntry | null>(null);
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
@@ -629,11 +636,26 @@ function AddSomeoneModal({ city, weekStart, unassigned, existingEmails, onClose,
     return () => { dead = true; };
   }, []);
 
-  const matches = useMemo(() => {
+  const hit = useCallback((p: DirEntry, t: string) => !t || p.name.toLowerCase().includes(t) || p.email.includes(t), []);
+
+  /* THE DEFAULT VIEW: this city, with a Gusto mapping, alphabetical (the route sorts once). An
+   * unmapped person cannot be saved — the route refuses them — so listing them by default is
+   * offering a choice that will be taken away. */
+  const inCity = useMemo(() => (people ?? []).filter((p) => p.city === city), [people, city]);
+  const defaultSet = useMemo(() => inCity.filter((p) => p.gusto), [inCity]);
+  const shown = useMemo(() => {
     const t = q.trim().toLowerCase();
-    const all = people ?? [];
-    return (t ? all.filter((p) => p.name.toLowerCase().includes(t) || p.email.includes(t)) : all).slice(0, 40);
-  }, [people, q]);
+    return (showAll ? (people ?? []) : defaultSet).filter((p) => hit(p, t));
+  }, [people, defaultSet, showAll, q, hit]);
+
+  /* SEARCHING THE DEFAULT VIEW STILL LOOKS EVERYWHERE. If the term finds nobody here but somebody
+   * elsewhere, the dialog says who and where and offers the toggle — an empty list would read as
+   * "this person does not exist" when they are one click away. */
+  const elsewhere = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    if (showAll || !t || shown.length > 0) return [];
+    return (people ?? []).filter((p) => hit(p, t));
+  }, [people, showAll, q, shown.length, hit]);
 
   const amt = Number(amount);
   const dupe = !!picked && existingEmails.has(picked.email.toLowerCase());
@@ -682,26 +704,59 @@ function AddSomeoneModal({ city, weekStart, unassigned, existingEmails, onClose,
               placeholder="Search the manager directory…" data-testid="mp-add-search"
               className="mb-1.5 w-full rounded-[8px] border px-2.5 py-2 text-[13px]" style={{ borderColor: C.chipLine }} />
             {!picked && (
-              <div className="mb-2 max-h-[190px] overflow-y-auto rounded-[8px] border" style={{ borderColor: C.chipLine }}>
-                {matches.length === 0 ? (
-                  /* NOT IN THE DIRECTORY IS A FULL STOP, and it says where to go. */
-                  <div className="p-3 text-[12px]" style={{ color: C.muted }}>
-                    Nobody in the directory matches that. If they are new, they need setting up in Gusto first — this control cannot create a person.
-                  </div>
-                ) : matches.map((p) => (
-                  <button type="button" key={p.email} data-testid="mp-add-option" data-email={p.email}
-                    onClick={() => { setPicked(p); setQ(""); }}
-                    className="flex w-full items-center gap-2 border-b px-2.5 py-1.5 text-left text-[12.5px] last:border-b-0"
-                    style={{ borderColor: C.hair }}>
-                    <span className="font-bold" style={{ color: C.forestDeep }}>{p.name}</span>
-                    {/* THE GUSTO MAPPING, SHOWN THE SAME WAY THE ROWS SHOW IT. */}
-                    {p.gusto
-                      ? <span className="rounded-[5px] px-[6px] py-[2px] text-[9.5px] font-[800]" style={{ background: C.mint, color: C.ok }}>Gusto: {p.gusto.firstName} {p.gusto.lastName}</span>
-                      : <span className="rounded-full border px-[7px] py-[2px] text-[9.5px] font-[800]" style={{ background: C.critBg, borderColor: C.critLine, color: C.critInk }}>NO GUSTO MAPPING</span>}
-                    <span className="ml-auto text-[11px]" style={{ color: C.muted }}>{p.email}</span>
-                  </button>
-                ))}
-              </div>
+              <>
+                {/* THE COUNT, ABOVE THE LIST, so a filtered set is never mistaken for the whole. */}
+                <div className="mb-1 flex items-baseline gap-2 text-[11.5px]" style={{ color: C.muted }} data-testid="mp-add-count">
+                  <b style={{ color: C.ink }}>{shown.length}</b>
+                  <span>{showAll ? "managers across every city" : `manager${shown.length === 1 ? "" : "s"} in ${city}`}</span>
+                  {!showAll && inCity.length > defaultSet.length && (
+                    <span data-testid="mp-add-hidden">· {inCity.length - defaultSet.length} in {city} with no Gusto mapping, hidden</span>
+                  )}
+                </div>
+                <div className="mb-2 max-h-[190px] overflow-y-auto rounded-[8px] border" style={{ borderColor: C.chipLine }}>
+                  {shown.length === 0 ? (
+                    elsewhere.length > 0 ? (
+                      /* FOUND, BUT NOT HERE. Naming the city and the person is the difference
+                         between "does not exist" and "one click away". */
+                      <div className="p-3 text-[12px]" data-testid="mp-add-elsewhere" style={{ color: C.warnInk, background: C.warnBg }}>
+                        Nobody in {city} matches that. {elsewhere.length === 1
+                          ? <><b>{elsewhere[0].name}</b> is in <b>{elsewhere[0].cityName ?? elsewhere[0].city ?? "another city"}</b>.</>
+                          : <><b>{elsewhere.length} people</b> match in other cities.</>}{" "}
+                        Turn on “Show all managers” below to pick them.
+                      </div>
+                    ) : (
+                      /* NOT IN THE DIRECTORY IS A FULL STOP, and it says where to go. */
+                      <div className="p-3 text-[12px]" style={{ color: C.muted }}>
+                        Nobody in the directory matches that. If they are new, they need setting up in Gusto first — this control cannot create a person.
+                      </div>
+                    )
+                  ) : shown.map((p) => (
+                    <button type="button" key={`${p.email}|${p.city ?? ""}`} data-testid="mp-add-option"
+                      data-email={p.email} data-city={p.city ?? ""} data-gusto={p.gusto ? "yes" : "no"}
+                      onClick={() => { setPicked(p); setQ(""); }}
+                      className="flex w-full items-center gap-2 border-b px-2.5 py-1.5 text-left text-[12.5px] last:border-b-0"
+                      /* GREYED WHEN UNSAVEABLE. It stays clickable so the block below can explain
+                         itself on the row the operator actually chose. */
+                      style={{ borderColor: C.hair, opacity: p.gusto ? 1 : 0.55 }}>
+                      <span className="font-bold" style={{ color: C.forestDeep }}>{p.name}</span>
+                      {/* THE GUSTO MAPPING, SHOWN THE SAME WAY THE ROWS SHOW IT. */}
+                      {p.gusto
+                        ? <span className="rounded-[5px] px-[6px] py-[2px] text-[9.5px] font-[800]" style={{ background: C.mint, color: C.ok }}>Gusto: {p.gusto.firstName} {p.gusto.lastName}</span>
+                        : <span className="rounded-full border px-[7px] py-[2px] text-[9.5px] font-[800]" style={{ background: C.critBg, borderColor: C.critLine, color: C.critInk }}>NO GUSTO MAPPING</span>}
+                      {/* The city only matters once the list stops being one city. */}
+                      {showAll && p.city && p.city !== city && (
+                        <span className="rounded-[5px] px-[6px] py-[2px] text-[9.5px] font-[800]" style={{ background: C.railA, color: C.muted }}>{p.city}</span>
+                      )}
+                      <span className="ml-auto text-[11px]" style={{ color: C.muted }}>{p.email}</span>
+                    </button>
+                  ))}
+                </div>
+                <label className="mb-2 flex items-center gap-2 text-[12px]" style={{ color: C.muted }}>
+                  <input type="checkbox" checked={showAll} data-testid="mp-add-showall"
+                    onChange={(e) => setShowAll(e.target.checked)} />
+                  Show all managers
+                </label>
+              </>
             )}
 
             {noGusto && (
