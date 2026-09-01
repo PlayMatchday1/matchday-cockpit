@@ -65,7 +65,7 @@ type ApiCount = {
   fakePlayers?: number;
 };
 
-type ApiMatch = {
+export type ApiMatch = {
   id: number;
   fieldId?: number;
   field?: ApiField;
@@ -146,7 +146,7 @@ type MatchPage = {
 
 // ===== DB row shapes (snake_case) =====
 
-type MatchDbRow = {
+export type MatchDbRow = {
   api_id: number;
   field_id: number;
   field_title: string | null;
@@ -765,7 +765,12 @@ async function tombstonePlayersMissing(
 
 // ===== Mappers =====
 
-function mapMatchToRow(m: ApiMatch, syncedAt: string): MatchDbRow {
+/* EXPORTED 2026-09-01 so the create write-through builds its row from the SAME mapper the sync
+ * uses. A second hand-written mapper would be a second place for "how an API match becomes a
+ * mirror row" to drift — and the fields most likely to drift are startDate/endDate, which are
+ * LOCAL WALL CLOCK despite the Z and must be stored byte-identical to what the API returned.
+ * There is no Date constructed anywhere below, and none may be added. */
+export function mapMatchToRow(m: ApiMatch, syncedAt: string): MatchDbRow {
   return {
     api_id: m.id,
     field_id: m.fieldId as number,

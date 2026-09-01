@@ -358,7 +358,16 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
       const j = await r.json();
       setCv(null);
       setCvResults(j.results ?? null);
-      setCvMsg({ text: j.message ?? j.error ?? `HTTP ${r.status}`, bad: !j.ok });
+      /* THE MIRROR IS PART OF THE OUTCOME, same rule as a field edit. A conversion that landed in
+       * MatchDay but did not reach the mirror leaves every Clubhouse screen showing the old spot
+       * count, and until 2026-09-01 said nothing about it. */
+      const cvMirrorWarn = j.ok && j.mirrored === false
+        && j.mirrorReason !== "not production" && j.mirrorReason !== "no mirrored fields";
+      setCvMsg({
+        text: (j.message ?? j.error ?? `HTTP ${r.status}`)
+          + (cvMirrorWarn ? ` — BUT THE CLUBHOUSE COPY STILL SHOWS THE OLD SPOT COUNT (${j.mirrorReason ?? "unknown"}). Run the matches sync on /data.` : ""),
+        bad: !j.ok || cvMirrorWarn,
+      });
       await load(); await loadRoster();
     } catch (e) {
       setCvMsg({ text: `UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Reload before acting.`, bad: true });

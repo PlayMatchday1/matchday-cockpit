@@ -581,6 +581,17 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
     }
     if (!res.ok) { setMsg({ kind: "err", text: json?.error ?? `HTTP ${res.status}` }); return; }
     setCreated({ id: Number(json.id), outcome: String(json.outcome) });
+    /* THE MIRROR ROW. A created match has none until this route inserts one, and without it the
+     * match is invisible on Master Schedule — the page Copy match is launched from — until the
+     * nightly cron. A failure here does NOT block the create: the match exists in MatchDay and
+     * step two still runs. It is said out loud instead of leaving the operator to wonder why the
+     * match they just made is not on the grid. */
+    if (json.outcome === "LANDED" && json.mirrored === false
+        && json.mirrorReason !== "not production" && json.mirrorReason !== "no read-back") {
+      setMsg({ kind: "warn", text:
+        `The match was created, but the Clubhouse copy was not (${json.mirrorReason ?? "unknown"}). ` +
+        `It will not appear on Master Schedule until the nightly sync — run the matches sync on /data.` });
+    }
     if (json.outcome === "LANDED" && json.id) {
       // STEP TWO. The remaining fields ride the PUT that already works.
       router.push(`/match-ops/matches/${json.id}?copyFrom=${sourceId ?? ""}`);

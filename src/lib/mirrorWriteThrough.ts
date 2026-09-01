@@ -139,3 +139,65 @@ export async function refreshMatchMirror(
   }
   return { refreshed: true };
 }
+
+/* ── A CREATED MATCH HAS NO ROW TO PATCH ──────────────────────────────────────────────────────
+ * refreshMatchMirror UPDATEs by api_id. A match that has just been created has no row at all, so
+ * every one of those updates matches zero rows and reports success — the mirror stays empty and
+ * the match is invisible in Clubhouse until the nightly cron. That is the bug behind "Copy match
+ * is on the Master Schedule toolbar and the match I create there does not appear on the page I
+ * created it from".
+ *
+ * THE ROW IS BUILT BY THE SYNC'S OWN MAPPER, not by hand. mapMatchToRow is the single definition
+ * of how an API match becomes a mirror row; a second hand-written one here would be a second place
+ * for it to drift, and the fields most likely to drift are exactly the dangerous ones —
+ * start_date and end_date are LOCAL WALL CLOCK despite the Z, and are written byte-identical to
+ * what the API returned. No Date is constructed on this path.
+ *
+ * SAME THREE RULES as the patch: production only, landed only, from the read-back. Same
+ * best-effort contract: the match already exists in MatchDay, so a mirror failure is reported to
+ * the caller and never turns a successful create into a reported failure.
+ *
+ * ── THE ONE COLUMN THE READ-BACK CANNOT FILL ─────────────────────────────────────────────────
+ * `_count` on GET /admin/matches/{id} carries `players` and NOT `fakePlayers` — measured on both
+ * staging and production. So fake_player_count is written NULL rather than guessed at 0.
+ *
+ * NULL IS SAFE HERE AND 0 WOULD ALSO BE TRUE, which is exactly why null is the right answer: a
+ * brand-new match has no fake players, so both values happen to be correct today, and the moment
+ * one is not, a guessed 0 is a number nobody can distinguish from a measured one. The next cron
+ * fills it from the LIST endpoint, which does carry _count.fakePlayers.
+ *
+ * NOTHING ON MASTER SCHEDULE READS IT. veoSchedule selects name, city_identifier, field_title,
+ * start_date and is_cancelled — the row renders correctly with fake_player_count null.
+ *
+ * AND EVERY CONSUMER ALREADY COALESCES. Checked, not assumed: managerPayCompute.ts:313 and :481,
+ * managerYearReport.ts:70 and match-chats/ChatPane.tsx:74 all read
+ * `(m.player_count ?? 0) - (m.fake_player_count ?? 0)`. A null therefore behaves as 0 everywhere
+ * it is read, which for a brand-new match is also the true value.
+ */
+export async function insertMatchMirror(
+  supabase: SupabaseClient,
+  env: string,
+  after: Record<string, unknown>,
+  outcome: string,
+): Promise<{ inserted: boolean; reason?: string }> {
+  if (env !== "production") return { inserted: false, reason: "not production" };
+  if (outcome !== "landed") return { inserted: false, reason: `outcome ${outcome}` };
+  const apiId = Number((after as { id?: unknown }).id);
+  if (!Number.isFinite(apiId) || apiId <= 0) return { inserted: false, reason: "no match id in the read-back" };
+  /* field_id IS NOT NULL IN THE SCHEMA. A read-back without one cannot make a valid row, and
+   * refusing is better than inserting a row the next query cannot render. */
+  if ((after as { fieldId?: unknown }).fieldId == null) return { inserted: false, reason: "no fieldId in the read-back" };
+
+  const { mapMatchToRow } = await import("./mdapiMatchesSync");
+  const row = mapMatchToRow(after as never, new Date().toISOString());
+
+  /* UPSERT, NOT INSERT. The cron may have raced us to the same match between the create and here;
+   * a duplicate-key error would be reported as a mirror failure when the row is in fact present
+   * and correct. onConflict api_id makes the outcome the same either way. */
+  const { error } = await supabase.from("mdapi_matches").upsert(row, { onConflict: "api_id" });
+  if (error) {
+    console.warn(`[mirror] mdapi_matches row not created for ${apiId}: ${error.message}`);
+    return { inserted: false, reason: error.message };
+  }
+  return { inserted: true };
+}

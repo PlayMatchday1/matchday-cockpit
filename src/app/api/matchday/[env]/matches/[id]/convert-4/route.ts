@@ -31,6 +31,7 @@ import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { apiGet, apiWrite } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
+import { refreshMatchMirror } from "@/lib/mirrorWriteThrough";
 import { assertMatchInScope } from "@/lib/matchOpsAuth";
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
 import {
@@ -164,6 +165,25 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
     }, { status: 502 });
   }
 
+  /* ── THE MIRROR, AFTER THE SHAPE LANDED ───────────────────────────────────────────────────
+   * maxPlayerCount and maxTeamSize4Team are both mirrored columns, and this route was the last
+   * match-writing path that did not write through — a conversion moved a match from 22 spots to
+   * 44 in MatchDay and every Clubhouse screen kept saying 22 until the nightly cron.
+   *
+   * The re-read is the shape write's own, so this is the read-back value and not the intent.
+   * Best-effort and after the guard above, so a mirror hiccup can neither block the moves nor
+   * turn a landed shape write into a failure. */
+  let mirrored = false, mirrorReason: string | null = "no read-back";
+  try {
+    const afterShape = await apiGet<Record<string, unknown>>(env, `/admin/matches/${id}`);
+    const r = await refreshMatchMirror(
+      auth.supabase, env, Number(id), ["maxPlayerCount", "maxTeamSize4Team", "maxTeamSize2Team"], afterShape, "landed",
+    );
+    mirrored = r.refreshed; mirrorReason = r.reason ?? null;
+  } catch (e) {
+    mirrorReason = e instanceof Error ? e.message : String(e);
+  }
+
   /* ── 2. THE MOVES, SEQUENTIALLY, EACH WITH ITS OWN VERDICT ────────────────────────────────
    * NO RETRIES. Same endpoint the drawer's Move buttons use — rosterModel.ts:136 — and the same
    * body shape, so there is one mover in the estate and not two. */
@@ -217,6 +237,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
     results,
     movesAttempted: plan.moves.length, movesLanded: landed, movesFailed: failed,
     stranded,
+    mirrored, mirrorReason,
     message: failed === 0
       ? `Converted. 4 teams, ${plan.spotsAfter} spots, ${landed} player(s) dealt.`
       // A PARTIAL SAYS WHO, BY NAME. "Some moves failed" is not something anyone can act on.

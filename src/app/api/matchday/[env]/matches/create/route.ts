@@ -19,6 +19,7 @@
 import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { apiGet, apiWrite, type MatchdayEnv } from "@/lib/matchdayStageApi";
+import { insertMatchMirror } from "@/lib/mirrorWriteThrough";
 import { EDITABLE_KEYS } from "@/lib/matchEditModel";
 import { supabaseLogStore } from "@/lib/changeLog";
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
@@ -256,6 +257,19 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
       console.error("[create-match] audit insert failed", e);
     }
 
+    /* ── THE MIRROR ROW ───────────────────────────────────────────────────────────────────────
+     * A created match has NO mdapi_matches row, so refreshMatchMirror's UPDATE would match zero
+     * rows and report success over an empty mirror. Master Schedule reads that mirror, which is
+     * why a match created from its own Copy button did not appear on the page that created it.
+     *
+     * Built from `created` — the same read-back the outcome above is classified from — through
+     * the sync's own mapper. Production only, landed only, best-effort: the match exists in
+     * MatchDay whatever happens here, so a mirror failure is reported and never turns a landed
+     * create into a failure. */
+    const mirror = created && outcome === "LANDED"
+      ? await insertMatchMirror(auth.supabase, env, created, "landed")
+      : { inserted: false, reason: outcome === "LANDED" ? "no read-back" : `outcome ${outcome}` };
+
     return Response.json({
       ok: outcome === "LANDED",
       outcome,
@@ -263,6 +277,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
       match: created,
       logRecorded: logged,
       saveId,
+      mirrored: mirror.inserted,
+      mirrorReason: mirror.reason ?? null,
     }, { status: outcome === "LANDED" ? 200 : 502 });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

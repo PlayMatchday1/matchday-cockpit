@@ -14,7 +14,7 @@
 
 import { readFileSync } from "node:fs";
 import { readFileSync } from "node:fs";
-import { refreshMatchMirror } from "../src/lib/mirrorWriteThrough";
+import { refreshMatchMirror, insertMatchMirror } from "../src/lib/mirrorWriteThrough";
 
 let PASS = 0, FAIL = 0;
 const ok = (n: string) => { PASS++; console.log(`  ok  ${n}`); };
@@ -131,7 +131,89 @@ async function main() {
     is("a mirror failure is reported, not thrown", { refreshed: r.refreshed, reason: r.reason }, { refreshed: false, reason: "boom" });
   }
 
-  console.log("\nthe map covers what Master Schedule renders — the reason this bug existed:");
+  console.log("\na CREATED match gets a ROW, not a patch that matches nothing:");
+{
+  const CREATED = {
+    id: 9001, fieldId: 77, name: "New match", type: "REGULAR", category: "OPEN", description: "d",
+    startDate: "2031-11-05T19:00:00.000Z", startDateUtc: "2031-11-06T01:00:00.000Z",
+    endDate: "2031-11-05T20:00:00.000Z", endDateUtc: "2031-11-06T02:00:00.000Z",
+    maxPlayerCount: 16, minPlayerCount: 0, registrationPrice: 1500, isCancelled: false,
+    field: { title: "NEMP", address: "A", zipcode: 78726, city: { abbr: "ATX", name: "Austin" } },
+    _count: { players: 0 },
+  };
+  const fakeIns = () => { const rows: Record<string, unknown>[] = []; 
+    return { rows, sb: { from: () => ({ upsert: async (r: Record<string, unknown>) => { rows.push(r); return { error: null }; } }) } } as never as { rows: Record<string, unknown>[]; sb: never }; };
+
+  { const { rows, sb } = fakeIns();
+    const r = await insertMatchMirror(sb, "production", CREATED, "landed");
+    is("it inserts", { inserted: r.inserted, writes: rows.length }, { inserted: true, writes: 1 });
+    const row = rows[0];
+    /* THE ONE THAT MATTERS. start_date is LOCAL WALL CLOCK despite the Z; a Date anywhere on this
+     * path re-shifts it and a late-evening match lands on the wrong day. */
+    is("  start_date is BYTE-IDENTICAL to the read-back", row.start_date, CREATED.startDate);
+    is("  …and end_date", row.end_date, CREATED.endDate);
+    is("  the field is denormalised", [row.field_id, row.field_title, row.city_identifier], [77, "NEMP", "ATX"]);
+    is("  the NOT NULL columns are all filled", [row.api_id, row.field_id, row.raw != null, typeof row.synced_at], [9001, 77, true, "string"]);
+    /* THE ONE COLUMN THE SINGLE-GET CANNOT FILL. _count carries players and NOT fakePlayers —
+     * measured on staging and production — so it is NULL, never a guessed 0. Every consumer
+     * coalesces it (managerPayCompute:313/:481, managerYearReport:70, ChatPane:74). */
+    is("  fake_player_count is NULL, not a guessed 0", row.fake_player_count, null);
+    is("  …and player_count comes from the read-back", row.player_count, 0);
+    // CONTROL: the row is not mostly-null — an insert that filled nothing would also "pass" above.
+    const filled = Object.values(row).filter((v) => v !== null && v !== undefined).length;
+    if (filled >= 20) ok(`  control: ${filled} columns filled, so the row is real`);
+    else bad("control: the inserted row is populated", `only ${filled} — AN EMPTY ROW WOULD PASS THE CHECKS ABOVE`);
+  }
+  { const { rows, sb } = fakeIns();
+    const r = await insertMatchMirror(sb, "staging", CREATED, "landed");
+    is("a STAGING create does not touch the production mirror", { inserted: r.inserted, reason: r.reason, writes: rows.length },
+       { inserted: false, reason: "not production", writes: 0 }); }
+  { const { rows, sb } = fakeIns();
+    const r = await insertMatchMirror(sb, "production", CREATED, "unknown");
+    is("an UNKNOWN create inserts nothing", { inserted: r.inserted, writes: rows.length }, { inserted: false, writes: 0 }); }
+  { const { rows, sb } = fakeIns();
+    const r = await insertMatchMirror(sb, "production", { ...CREATED, fieldId: null }, "landed");
+    is("a read-back with no fieldId is REFUSED — field_id is NOT NULL in the schema",
+       { inserted: r.inserted, reason: r.reason, writes: rows.length }, { inserted: false, reason: "no fieldId in the read-back", writes: 0 }); }
+  { const sb = { from: () => ({ upsert: async () => ({ error: { message: "boom" } }) }) } as never;
+    const r = await insertMatchMirror(sb, "production", CREATED, "landed");
+    is("a failing insert is REPORTED, not thrown", { inserted: r.inserted, reason: r.reason }, { inserted: false, reason: "boom" }); }
+  // It UPSERTS, so a cron that raced us is not reported as a mirror failure.
+  const LIB = readFileSync("src/lib/mirrorWriteThrough.ts", "utf8");
+  is("it upserts on api_id rather than a bare insert", /upsert\(row, \{ onConflict: "api_id" \}\)/.test(LIB), true);
+  // And it uses the SYNC'S mapper, not a second hand-written one.
+  is("the row comes from the sync's own mapMatchToRow", /await import\("\.\/mdapiMatchesSync"\)/.test(LIB), true);
+  if (!/start_date:\s*[^m]/.test(LIB.slice(LIB.indexOf("insertMatchMirror")))) ok("…so no column is mapped by hand in the insert");
+  else bad("the insert maps no column by hand", "A SECOND MAPPER IS A SECOND PLACE FOR THE WALL-CLOCK RULE TO DRIFT");
+}
+
+console.log("\nthe two paths that had no write-through now have one:");
+{
+  const CREATE = readFileSync("src/app/api/matchday/[env]/matches/create/route.ts", "utf8");
+  is("create calls insertMatchMirror", /await insertMatchMirror\(auth\.supabase, env, created, "landed"\)/.test(CREATE), true);
+  is("  …from the read-back it already classified the outcome from", /created && outcome === "LANDED"/.test(CREATE), true);
+  is("  …and reports the result", /mirrored: mirror\.inserted/.test(CREATE), true);
+  const CV = readFileSync("src/app/api/matchday/[env]/matches/[id]/convert-4/route.ts", "utf8");
+  is("convert-4 calls refreshMatchMirror", /refreshMatchMirror\(\s*auth\.supabase, env, Number\(id\)/.test(CV), true);
+  is("  …with the spot-count keys", /"maxPlayerCount", "maxTeamSize4Team", "maxTeamSize2Team"/.test(CV), true);
+  is("  …only AFTER the shape write landed", CV.indexOf("if (!shapeOk)") < CV.indexOf("refreshMatchMirror("), true);
+  is("  …and reports the result", /mirrored, mirrorReason,/.test(CV), true);
+  // Neither may block the write it follows.
+  /* THE CALL SITE, NOT THE IMPORT. indexOf("insertMatchMirror") finds the import at the top of
+   * the file, which is before everything — the check passed on nothing. Anchored on the actual
+   * invocation instead. */
+  is("control: create's mirror call is after the audit and before the response",
+     CREATE.indexOf("await insertMatchMirror(") > CREATE.indexOf("logged = true")
+     && CREATE.indexOf("await insertMatchMirror(") < CREATE.indexOf("return Response.json({\n      ok: outcome"), true);
+  // THE UI SAYS SO. A silent mirror failure is the thing this whole pass exists to remove.
+  const ED = readFileSync("src/app/(internal)/match-ops/matches/[id]/MatchEditor.tsx", "utf8");
+  is("the create screen surfaces a failed mirror insert", /the Clubhouse copy was not/.test(ED), true);
+  const MP = readFileSync("src/components/MatchPanel.tsx", "utf8");
+  is("the drawer surfaces a failed convert mirror", /STILL SHOWS THE OLD SPOT COUNT/.test(MP), true);
+  is("  …and a failed edit mirror", /THE CLUBHOUSE COPY WAS NOT UPDATED/.test(MP), true);
+}
+
+console.log("\nthe map covers what Master Schedule renders — the reason this bug existed:");
 {
   const LIB = readFileSync("src/lib/mirrorWriteThrough.ts", "utf8");
   const SCHED = readFileSync("src/lib/veoSchedule.ts", "utf8");
