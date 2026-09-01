@@ -912,7 +912,11 @@ function MgrRow({ r, isAdmin, open, editing, alias, onToggle, onEditAdj, onCance
         </div>
         <div style={{ padding: "11px 0" }}>
           <div className="text-[13px] font-[800]">{r.matchCount}</div>
-          <div className="mt-0.5 text-[10.5px] font-bold" style={{ color: C.muted }}>{tny ? `${r.matchCount - tny} at ${money(20)} · ${tny} at ${money(30)}` : `all at ${money(20)}`}</div>
+          {/* NO RATE UNDER A ZERO. "all at $20" beneath 0 matches is a rate for matches that do
+              not exist — it read as a broken row on the first added one. */}
+          {r.matchCount > 0 && (
+            <div className="mt-0.5 text-[10.5px] font-bold" style={{ color: C.muted }}>{tny ? `${r.matchCount - tny} at ${money(20)} · ${tny} at ${money(30)}` : `all at ${money(20)}`}</div>
+          )}
         </div>
         <div className="text-right" style={{ padding: "11px 0" }}><span className="text-[13.5px] font-[800] tabular-nums" style={{ color: r.baseTotal ? C.ink : C.muted2 }}>{money(r.baseTotal)}</span></div>
         <div style={{ padding: "11px 0", minWidth: 0 }} onClick={(e) => e.stopPropagation()}>
@@ -923,7 +927,11 @@ function MgrRow({ r, isAdmin, open, editing, alias, onToggle, onEditAdj, onCance
                 <div className="overflow-hidden text-ellipsis whitespace-nowrap text-[10.5px]" style={{ color: r.adjustmentNotes ? C.muted : C.warnInk }} title={r.adjustmentNotes ?? "No reason written down"}>
                   {r.adjustmentNotes ?? "No reason written down"}{r.adjustmentAt ? ` · ${dshort(r.adjustmentAt.slice(0, 10))}` : ""}
                 </div>
-                {isAdmin && r.managerEmail && <button type="button" onClick={onEditAdj} className="mt-0.5 self-start text-[10.5px] font-bold underline" style={{ color: C.ok }}>Edit</button>}
+                {/* NO INLINE EDIT ON AN ADDED ROW. That control posts to /api/manager-pay/adjustments,
+                    which predates change_log and does NOT go through recordWrite — editing an added
+                    row there would silently change a payroll amount with no audit entry. Remove and
+                    re-add instead; both halves of that are logged. */}
+                {isAdmin && r.managerEmail && !r.addedManually && <button type="button" onClick={onEditAdj} className="mt-0.5 self-start text-[10.5px] font-bold underline" style={{ color: C.ok }}>Edit</button>}
               </div>
             ) : isAdmin && r.managerEmail ? (
               <button type="button" onClick={onEditAdj} className="self-start rounded-[7px] border border-dashed px-[9px] py-[5px] text-[11.5px] font-bold" style={{ background: C.railA, borderColor: C.chipLine, color: C.muted }}>+ Add adjustment</button>

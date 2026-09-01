@@ -276,6 +276,29 @@ console.log("\n9. THE AUDIT TRAIL, AND WHAT IT MAY NOT CARRY");
   else bad("the delete confirm is specific", '"ARE YOU SURE?" IS NOT A CONFIRMATION');
 }
 
+console.log("\n11. THE ADDED ROW SHOWS A NAME, NOT AN EMAIL");
+{
+  /* FOUND BY THE 2026-08-31 STAGING-EQUIVALENT ROUND-TRIP, not by reading the code: the row
+   * rendered "adam60670@yahoo.com" in the MANAGER column, because the adjustment row carries an
+   * email and nothing else. The export was saved by the alias map the page always passes, so this
+   * was visible ONLY on screen — the kind of defect a code read does not surface. */
+  const COMPUTE = readFileSync("src/lib/managerPayCompute.ts", "utf8");
+  if (/managerName: nameByEmail\.get\(key\) \?\? key/.test(COMPUTE)) ok("  the name is resolved before falling back to the email");
+  else bad("the added row resolves a display name", "THE MANAGER COLUMN WOULD SHOW AN EMAIL ADDRESS");
+  if (/manager_gusto_aliases"\)\.select\("\*"\)\.in\("manager_email", addedKeys\)/.test(COMPUTE))
+    ok("  …from the Gusto alias, which the add route guarantees exists");
+  else bad("the name comes from the alias table", "ANY OTHER SOURCE CAN DISAGREE WITH THE CSV");
+  if (/if \(addedKeys\.length > 0\) \{/.test(COMPUTE)) ok("  …and the extra read only happens when there is something to name");
+  else bad("the alias read is conditional", "EVERY PAY WEEK WOULD PAY FOR A LOOKUP IT DOES NOT NEED");
+  // CONTROL: the export splits managerName on a space when no alias is supplied, which is exactly
+  // how an email became First="adam60670@yahoo.com" Last="". Prove that path still behaves so.
+  const bare = buildGustoRows(payload([{ ...ADDED, managerName: "someone@example.com" }]), "ALL", {})[0];
+  is("control: with no alias, an email-as-name splits into First=email Last=''",
+    [bare.firstName, bare.lastName], ["someone@example.com", ""]);
+  const named = buildGustoRows(payload([{ ...ADDED, managerName: "Cover Person" }]), "ALL", {})[0];
+  is("  …and a real name splits correctly", [named.firstName, named.lastName], ["Cover", "Person"]);
+}
+
 console.log("\n10. THE CONTROL IS SCOPED BY THE BLOCK, NOT BY TYPING");
 {
   const VIEW = readFileSync("src/app/(internal)/match-ops/manager-pay/ManagerPayView.tsx", "utf8");

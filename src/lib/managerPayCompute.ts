@@ -619,14 +619,32 @@ export async function computeManagerPayForWeek(
    * ZERO MATCHES, ZERO MATCH PAY. matchCount 0 and baseTotal 0 are what keep every matches-worked
    * and matches-paid figure on the page unchanged: the city's matchCount is a sum over managers,
    * and adding 0 to it changes nothing. The money lives entirely in `adjustment`. */
+  const addedKeys = [...adjByEmail].filter(([k, a]) => a.city && !accByEmail.has(k)).map(([k]) => k);
+  /* THE DISPLAY NAME. The adjustment row carries an email, not a name, and rendering the email
+   * where a name belongs is how "adam60670@yahoo.com" ended up in the MANAGER column during the
+   * 2026-08-31 round-trip. The Gusto alias is the right source AND is guaranteed to exist — the
+   * add route refuses anyone without one — so it is also the name that will reach payroll, which
+   * means the sheet and the CSV cannot disagree about who this is.
+   *
+   * ONE EXTRA READ, AND ONLY WHEN THERE IS SOMETHING TO NAME. The normal path (no manually added
+   * rows) does not touch the alias table at all. */
+  const nameByEmail = new Map<string, string>();
+  if (addedKeys.length > 0) {
+    const { data: aliasData } = await supabase
+      .from("manager_gusto_aliases").select("*").in("manager_email", addedKeys);
+    for (const a of (aliasData ?? []) as Record<string, unknown>[]) {
+      const nm = [a.gusto_first_name, a.gusto_last_name].filter(Boolean).join(" ").trim();
+      if (nm) nameByEmail.set(String(a.manager_email).toLowerCase(), nm);
+    }
+  }
+
   for (const [key, adj] of adjByEmail) {
     if (!adj.city) continue;                 // an inline cell, not a manual add
     if (accByEmail.has(key)) continue;       // they have matches — the row above already has it
     managerRows.push({
       managerEmail: isAdmin ? key : null,
-      // The directory name is not carried on the adjustment row; the email is the identity and the
-      // view resolves the display name from the manager directory it already loads.
-      managerName: key,
+      // The email is the LAST resort, not the default — see nameByEmail above.
+      managerName: nameByEmail.get(key) ?? key,
       managerId: adj.managerId,
       cityIdentifier: adj.city,
       matches: [],
