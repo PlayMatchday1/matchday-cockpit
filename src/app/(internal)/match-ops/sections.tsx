@@ -89,6 +89,7 @@ export const MATCH_OPS_SECTIONS: MatchOpsSection[] = [
    * hiding a chip. */
   { key: "applications", section: "back", group: "People", label: "Applications", href: "/match-ops/applications", desc: "Team applications and partner leads from the website", access: "matchops", icon: <I><path d="M6 3.5h9l4 4V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1z" /><path d="M14.5 3.5V8H19M8.5 12.5h7M8.5 16h5" /></I> },
   { key: "partner-dashboards", section: "back", group: "People", label: "Partner Dashboards", href: "/match-ops/partner-dashboards", desc: "Per-venue revenue pages partners see at their link", access: "tech", icon: <I><rect x="3" y="4" width="18" height="14" rx="2" /><path d="M7 20h10M7 9h5M7 13h9" /></I>, badge: "partner-dashboards" },
+  { key: "lapsed-spots", section: "back", group: "People", label: "Lapsed Spots", href: "/match-ops/lapsed-spots", desc: "Free future spots held by someone who is no longer a member", access: "matchops", icon: <I><path d="M12 21s-7.5-4.6-7.5-10A4.5 4.5 0 0 1 12 8.4 4.5 4.5 0 0 1 19.5 11c0 5.4-7.5 10-7.5 10z" /><path d="M9 3.5 15 9" /></I> },
   { key: "change-log", section: "back", group: "System", label: "Change Log", href: "/match-ops/change-log", desc: "Every production write, and whether it landed", access: "matchops", icon: <I><path d="M4 5h16v14H4z" /><path d="M8 9h8M8 13h6" /><circle cx="17.5" cy="16.5" r="2.2" /></I> },
 ];
 

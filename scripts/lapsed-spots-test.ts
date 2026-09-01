@@ -110,7 +110,10 @@ console.log("\nthe grouping, on a fixture that HAS lapsed holders");
   is("…and the reason is carried", g("LAPSED")[0].lapseReason, "Moving");
   is("ACTIVE is its own group", g("ACTIVE").map((r) => r.email), ["u13@example.com"]);
   is("NEVER_A_MEMBER is separate from LAPSED", g("NEVER_A_MEMBER").map((r) => r.email).sort(), ["u14@example.com", "u15@example.com"]);
-  is("groups are ordered lapsed-first", v.groups.map((x) => x.state), ["LAPSED", "ACTIVE", "NEVER_A_MEMBER"]);
+  /* CHANGED 2026-08-31 (assertion body, itemised): PAST_DUE was split out of LAPSED into its own
+   * bucket, so the expected list grew from three to four. The ORDER property this pins is
+   * unchanged — removal candidates first, context after. */
+  is("groups are ordered lapsed-first", v.groups.map((x) => x.state), ["LAPSED", "PAST_DUE", "ACTIVE", "NEVER_A_MEMBER"]);
 
   /* THE RULE THAT PROTECTS EVERYONE: a PAID spot is never listed, and user 16 IS lapsed — so this
    * is the paid-lapsed-member case, not merely an active member being skipped. */
@@ -172,11 +175,29 @@ console.log("\nthe page is READ ONLY, and the sentence stays");
     ok("control: the view and the route were read");
   else bad("control: the view and the route were read", "THE ABSENCE CHECKS BELOW WOULD PASS ON EMPTY STRINGS");
 
-  /* NO WRITE PATH. Not a disabled button, not a hidden one — none. */
-  if (!/method:\s*"(POST|PUT|PATCH|DELETE)"/.test(view)) ok("the view makes no non-GET request");
-  else bad("the view makes a write request", "THIS PASS HAS NO REMOVAL CONTROL");
-  if (!/export async function (POST|PUT|PATCH|DELETE)/.test(route)) ok("the route exposes only GET");
-  else bad("the route exposes a write handler", "THIS PASS IS READ-ONLY");
+  /* ── INVERTED 2026-08-31 (assertion body, itemised) ─────────────────────────────────────────
+   * This used to assert the view makes NO non-GET request, because the first pass shipped
+   * deliberately read-only. The removal control is now built, so that assertion would pin the
+   * absence of a feature that exists. It is INVERTED rather than deleted: the property worth
+   * holding is no longer "no writes" but "the ONLY write is the shared roster route".
+   *
+   * THAT IS THE STRONGER GUARD. A second write path would be one that does not go through
+   * recordWrite, does not read back, and does not answer to the endpoint deny-list. */
+  // Both quoting styles: the read is a plain string, the write a template literal.
+  const posts = [...view.matchAll(/fetch\(\s*[`"']([^`"']+)[`"']/g)].map((m) => m[1]);
+  is("the view's only fetch targets are the lapsed read and the roster route",
+    posts.map((u) => u.replace(/\$\{[^}]+\}/g, "{}")).sort(),
+    ["/api/lapsed-spots", "/api/matchday/{}/roster/{}"]);
+  if (/method: "POST"/.test(view)) ok("…and the write is a POST of an op, never a client-supplied path");
+  else bad("the view posts an op", "THE REMOVAL CONTROL IS NOT WIRED");
+  // CONTROL: prove the scan can see a fetch at all, so an empty list is not a silent pass.
+  if (posts.length >= 2) ok(`control: the scan found ${posts.length} fetch targets`);
+  else bad("control: the fetch scan found targets", "THE ASSERTION ABOVE WOULD PASS ON AN EMPTY ARRAY");
+  /* THE ROUTE ITSELF STAYS READ-ONLY. The removal goes through the roster route, which already
+   * carries the capability check, the scope check, recordWrite and the read-back. A POST added
+   * here would be a second write path with none of that. */
+  if (!/export async function (POST|PUT|PATCH|DELETE)/.test(route)) ok("the lapsed-spots route still exposes only GET");
+  else bad("the lapsed-spots route exposes a write handler", "THE REMOVAL MUST GO THROUGH THE ROSTER ROUTE, NOT A SECOND PATH");
   /* THE ENDPOINT SHAPE, not the word "players" — mdapi_match_players is a table this page reads
    * and matching it flagged the SELECT. What must be absent is /matches/{id}/players/{id} and the
    * refund path. */

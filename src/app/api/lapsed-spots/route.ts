@@ -62,10 +62,12 @@ export async function GET(req: Request) {
       if (error) throw new Error(`mdapi_match_players: ${error.message}`);
       spots.push(...((data ?? []) as unknown as SpotRow[]));
     }
+    // member_email is read for the STAFF FILTER only. A staff member can hold a subscription
+    // under an address different from the one on the roster row, so both are tested.
     const subs: SubRow[] = [];
     for (let from = 0; ; from += PAGE) {
       const { data, error } = await sb.from("mdapi_subscriptions")
-        .select("user_id, status, canceled_at, cancel_reason").range(from, from + PAGE - 1);
+        .select("user_id, status, canceled_at, cancel_reason, member_email").range(from, from + PAGE - 1);
       if (error) throw new Error(`mdapi_subscriptions: ${error.message}`);
       subs.push(...((data ?? []) as unknown as SubRow[]));
       if ((data ?? []).length < PAGE) break;

@@ -1,7 +1,11 @@
 import type { FinMember } from "./useFinanceData";
 import { cityFromAbbr } from "./cityMap";
 
-const INTERNAL_EMAIL_RX = /@matchday\.|@playmatchday\./i;
+/* THE ONE DEFINITION OF "INTERNAL". Exported since 2026-08-31 so lapsedSpots can apply the same
+ * staff filter to the removal list — it had none, and a staff row would have been listed as
+ * removable. A second copy of this regex is how the four @playmatchday.com accounts read as
+ * members for a month. */
+export const INTERNAL_EMAIL_RX = /@matchday\.|@playmatchday\./i;
 
 // Structural subset that all membership predicates need. FinMember
 // (read path) and MemberRow (import path before insert, no id yet)

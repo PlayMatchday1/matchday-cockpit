@@ -1038,9 +1038,9 @@ marked where it occurs, because the move control writes `playerNumber` and a rar
 wrong state that draws as normal survives forever.
 
 CONFLICTS with the mockup / Phase-6 inventory (API wins):
-  - REMOVE is DELETE /admin/matches/user-matches/{userMatchId}. The inventory's
-    DELETE /admin/matches/{id}/players/{playerId} returns 403 USER_NOT_JOINED — so
-    remove keys on userMatchId, NOT playerId.
+  - REMOVE is DELETE /admin/matches/user-matches/{userMatchId}. **CORRECTED 2026-08-31 —
+    see "The remove endpoint, re-measured" below. The 403 claim here is STALE: that path
+    now succeeds on staging.** Remove still keys on userMatchId, for a stronger reason.
   - MARK-ABSENT: the documented PATCH /admin/matches/{id}/user-matches/{umId}/absent
     (and 3 variants) all 404 "Cannot PATCH" on staging — the route is not
     registered. Retool's export DOES call this path, so it is either unregistered
@@ -5056,3 +5056,70 @@ avg_matches_per_member, members_tracked, past_due_count`.
 - **No price, no dollars, anywhere.** No column and no `by_city` key carries money.
 - `active_count` uses **`isActiveAsOf`** via `computeMonthlySnapshot`, and `2026-08-01` stores
   **406** — it agrees with 406, not 410.
+
+
+## The remove endpoint, re-measured (2026-08-31)
+
+Measured on **staging** match 2608 while building the lapsed-spot removal control. Two entries
+above were wrong, and one thing the brief assumed is wrong too. Evidence is a read-back in every
+case, never an HTTP status.
+
+### `DELETE /admin/matches/{id}/players/{userId}` DOES NOT 403 ANY MORE
+
+The conflict entry above recorded it returning `403 USER_NOT_JOINED`. It does not. On staging
+2026-08-31 it returned **2xx with the removed row as its body** — `{"id":5531,"userId":287,
+"matchId":2608,"paidStatus":"FREE","team":2,…}` — and the roster went **6 rows → 5**, target
+absent on read-back. That is a **LANDED** removal, not a refusal.
+
+An earlier probe against the same path in the same session returned 2xx and changed **nothing**
+(7 rows before, 7 after, target still present) — a **NOT APPLIED**. So the endpoint's behaviour
+varies with roster state in a way I did not pin down. **Do not use it, and do not trust the old
+403 line.**
+
+### THE REAL REASON TO KEY ON `userMatchId`, and it is not the 403
+
+**One `userId` routinely holds MORE THAN ONE live row on the same match, so `players/{userId}`
+cannot name which row to remove.** Measured on production future matches, 2026-08-31:
+
+```
+future live rows (non-cancelled, non-fake)     602
+distinct (match, user) pairs                   506
+pairs where ONE userId holds >1 live row        65   (12.8%)
+  ...of which involve a GUEST                   34
+worst case: match 18279, user 18714             7 rows
+            PLAYER/PAID + 4 x GUEST/PAID + ADDITIONAL_SPOT/WAITING + ADDITIONAL_SPOT/PAID
+```
+
+A guest shares its host's `user_id` and carries no other link; `ADDITIONAL_SPOT` rows do too.
+`DELETE …/players/{userId}` is therefore **ambiguous by construction** on 13% of pairs, and which
+row it picks is UNKNOWN — I did not determine it and did not guess. `user-matches/{userMatchId}`
+names exactly one row and cannot be ambiguous. **That is the argument. It does not depend on a
+status code that has since changed.**
+
+This also settles the open "does it cancel the guest first" question the right way: the question
+only exists for the endpoint we do not use.
+
+### AN ALREADY-ABSENT ROW REPORTS **FAILED**, NOT NOT APPLIED
+
+Re-firing `DELETE /admin/matches/user-matches/5531` on a row that had just been removed returned
+**HTTP 404**, body `{"message":"User has not joined…"}`. `apiWrite` raises `WriteFailedError`, and
+`outcomeForThrow` maps that to **FAILED**.
+
+That is correct and it is a *different fact* from NOT APPLIED: FAILED means cleanly rejected,
+definitely did not happen, safe to retry. NOT APPLIED is reserved for a 2xx whose read-back shows
+no change — which is exactly what the wrong endpoint produced above, so the distinction earns its
+keep. **The half that matters for a path with no undo holds either way: an absent row is never
+reported LANDED.**
+
+### The deny-list discriminates the two DELETEs, proven on the parsed segment list
+
+```
+DELETE /admin/matches/user-matches/999    -> ALLOW
+DELETE /admin/matches/user-matches/999/   -> ALLOW   (trailing slash)
+DELETE /admin/matches/999                 -> DENY    (destroys the match)
+DELETE /admin/matches/999?x=1             -> DENY    (query string does not evade it)
+PATCH  /admin/matches/9/players/3/refund-and-cancel -> DENY  (moves money)
+```
+
+Four segments vs three: `assertAllowedEndpoint` compares `segs.length` before the wildcards, so
+the near-miss is not caught and the real one cannot slip through.
