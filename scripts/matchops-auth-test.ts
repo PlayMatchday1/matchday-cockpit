@@ -336,6 +336,9 @@ for (const r of ["list", "detail/[id]", "fields", "matches", "check"]) {
     /* ADDED 2026-09-01. Re-pulls one week of matches from MatchDay into the mirror for Master
      * Schedule's Refresh. It writes the MIRROR, never MatchDay, so it is gated as a Match Ops
      * action (capability "matchops") rather than as a match write. */
+    /* ADDED 2026-09-01. The Month view's data: a date RANGE instead of a Monday-anchored week.
+     * Same gate and same session-resolved city scope as /api/veo — it is the same read. */
+    "veo/range/route.ts": "crm",
     "veo/resync/route.ts": "capability",            // GET (read one match's intent) + POST (toggle it)
     "veo/route.ts": "crm",
   });

@@ -179,3 +179,91 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
     ),
   };
 }
+
+/* ── THE MONTH VIEW'S DATA: A DATE RANGE, NOT A WEEK ──────────────────────────────────────────
+ * fetchVeoWeek anchors everything on a Monday and returns a dayIdx of 0-6. A range spanning weeks
+ * or months has no such anchor, so this returns each match's ISO DATE and lets the caller bucket
+ * it into a grid. Everything else is deliberately identical to fetchVeoWeek and mostly lifted from
+ * it: the same wall-clock parse, the same fleet-city filter, the same veo_intent join, the same
+ * emoji strip. A second query with its own date handling is exactly how the wall-clock trap gets
+ * re-introduced.
+ *
+ * WALL CLOCK, AS TEXT, AT BOTH ENDS. start_date carries a Z it does not mean. The bounds are
+ * YYYY-MM-DD strings compared lexicographically — which for that format is chronological — and the
+ * upper bound is `${to}T23:59:59` so the last day is INCLUSIVE. A Date on either side would move
+ * a late-evening match across midnight.
+ */
+export type VeoRangeMatch = Omit<VeoMatch, "dayIdx"> & {
+  /** YYYY-MM-DD, wall clock — the day the match is played at the pitch. */
+  date: string;
+};
+
+export type VeoRange = {
+  from: string;
+  to: string;
+  today: string;
+  matches: VeoRangeMatch[];
+  /** Every city that has a match in the range, for the city filter. */
+  cities: string[];
+  /** Every field that has a match in the range — the field filter is built from THIS, so it can
+   *  never offer a field with nothing behind it. */
+  fields: string[];
+  /** max(synced_at) over the range: the DATA's age, the same honest stamp the week view uses. */
+  dataAsOf: string | null;
+  generatedAt: string;
+};
+
+export async function fetchVeoRange(
+  sb: SupabaseClient, now: Date, from: string, to: string, scopeCity: string | null = null,
+): Promise<VeoRange> {
+  let q = sb
+    .from("mdapi_matches")
+    .select("api_id, name, city_identifier, field_title, start_date, is_cancelled, deleted_at, synced_at")
+    .is("deleted_at", null)
+    .gte("start_date", from)
+    .lte("start_date", `${to}T23:59:59`);
+  // THE BOUNDARY, IN SQL — identical to fetchVeoWeek's, and for the identical reason.
+  if (scopeCity) q = q.eq("city_identifier", scopeCity);
+  const { data: rows, error } = await q;
+  if (error) throw new Error(`veo range: ${error.message}`);
+  const live = (rows ?? []).filter((r) => !r.is_cancelled && r.start_date);
+
+  const ids = live.map((r) => r.api_id);
+  const intent = new Map<number, boolean>();
+  for (let i = 0; i < ids.length; i += 1000) {
+    const { data: vi } = await sb.from("veo_intent").select("match_api_id, enabled").in("match_api_id", ids.slice(i, i + 1000));
+    for (const r of vi ?? []) intent.set(r.match_api_id, !!r.enabled);
+  }
+
+  const matches: VeoRangeMatch[] = [];
+  for (const r of live) {
+    const city = CITY_CODE_TO_DISPLAY[r.city_identifier ?? ""] ?? null;
+    if (!city) continue;                       // only fleet cities, same as the week view
+    const d = local(r.start_date as string);
+    matches.push({
+      apiId: r.api_id,
+      city,
+      date: String(r.start_date).slice(0, 10),  // wall clock, straight off the string
+      time: fmtTime(d),
+      minutes: d.getHours() * 60 + d.getMinutes(),
+      venue: canonicalVenueName(r.field_title ?? "") || (r.field_title ?? "Unknown"),
+      fieldRaw: (r.field_title as string) ?? "",
+      name: stripCameraEmoji(r.name),
+      rawName: (r.name as string) ?? "",
+      veo: intent.get(r.api_id) ?? false,
+      hasEmoji: hasCameraEmoji(r.name),
+    });
+  }
+  matches.sort((a, b) => a.date.localeCompare(b.date) || a.minutes - b.minutes || a.venue.localeCompare(b.venue));
+
+  return {
+    from, to, today: ymd(now), matches,
+    cities: [...new Set(matches.map((m) => m.city))].sort(),
+    fields: [...new Set(matches.map((m) => m.venue))].sort(),
+    dataAsOf: (rows ?? []).reduce<string | null>(
+      (acc, r) => { const v = (r as { synced_at?: string | null }).synced_at ?? null; return v && (!acc || v > acc) ? v : acc; },
+      null,
+    ),
+    generatedAt: now.toISOString(),
+  };
+}

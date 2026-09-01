@@ -29,6 +29,11 @@ import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { supabase } from "@/lib/supabase";
 import { downloadCsv, plural } from "@/components/growth/format";
 import RefreshIcon from "@/components/RefreshIcon";
+import { buildCopyBody, copyConfirmLine, type SourceMatch } from "@/lib/copyMatch";
+import {
+  buildMonthGrid, applyFilters, fieldsAvailable, reconcileFields, fieldCountLabel,
+  defaultRange, rangeTitle, type GridDay, type GridMatch,
+} from "@/lib/monthGrid";
 import MatchDrawer, { DRAWER_W, type DrawerMatch } from "@/components/MatchDrawer";
 
 type VeoDay = { dow: string; date: number; iso: string; today: boolean };
@@ -52,7 +57,11 @@ type VeoWeek = {
 };
 
 type Unit = { venue: string; times: string[] };
-type View = "schedule" | "veo";
+type View = "schedule" | "veo" | "month";
+
+/* ONE KEY FOR THE WHOLE PREFERENCE BLOB. The view, the range, the city and the field selection are
+ * read and written together — four keys would let them drift out of step on a partial write. */
+const VMS_PREFS = "vms:prefs";
 
 // ── derived helpers (pure over VeoWeek) ─────────────────────────────────────
 const camerasOf = (w: VeoWeek, city: string) => w.cities.find((c) => c.city === city)?.cameras ?? 0;
@@ -178,7 +187,26 @@ export default function VeoMasterSchedule() {
   // mirror. Without this, toggling on then straight off computes from the stale (un-emoji'd) name,
   // finds no 🎥 to strip, sends nothing, and leaves the camera on a match whose flag is off.
   const [wroteName, setWroteName] = useState<Map<number, string>>(new Map());
+  /* THE VIEW AND THE FILTERS SURVIVE A RELOAD. Read in an effect rather than in the initialiser:
+   * this component renders on the server first, and touching localStorage there throws. */
   const [view, setView] = useState<View>("schedule");
+  const [range, setRange] = useState<{ from: string; to: string } | null>(null);
+  const [monthData, setMonthData] = useState<{ matches: GridMatch[]; dataAsOf: string | null } | null>(null);
+  const [monthBusy, setMonthBusy] = useState(false);
+  const [monthErr, setMonthErr] = useState<string | null>(null);
+  const [fieldSel, setFieldSel] = useState<Set<string>>(new Set());
+  const [droppedFields, setDroppedFields] = useState<string[]>([]);
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(VMS_PREFS);
+      if (!raw) return;
+      const p = JSON.parse(raw) as { view?: View; from?: string; to?: string; fields?: string[]; city?: string[] };
+      if (p.view === "month" || p.view === "veo" || p.view === "schedule") setView(p.view);
+      if (p.from && p.to) setRange({ from: p.from, to: p.to });
+      if (Array.isArray(p.fields)) setFieldSel(new Set(p.fields));
+      if (Array.isArray(p.city)) setCityFilter(new Set(p.city));
+    } catch { /* private mode, or a prefs blob from an older shape — defaults are fine */ }
+  }, []);
   const [busy, setBusy] = useState(false);
   // "" = current week; otherwise a date (YYYY-MM-DD) within the selected week.
   const [weekRef, setWeekRef] = useState<string>("");
@@ -266,6 +294,72 @@ export default function VeoMasterSchedule() {
 
   useEffect(() => { void load(""); }, []);
 
+  /* ── THE MONTH RANGE ────────────────────────────────────────────────────────────────────────
+   * Its own fetch, its own state. The week view keeps its own payload untouched, so switching to
+   * Month and back leaves the week exactly as it was — no shared cache to invalidate. */
+  const loadRange = useCallback(async (r: { from: string; to: string }, repull = false) => {
+    setMonthBusy(true); setMonthErr(null);
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token;
+      const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+      /* REFRESH RE-PULLS THE WHOLE VISIBLE RANGE, not just a week — one resync per week in it, so
+       * the button means the same thing in Month as it does in Schedule. */
+      if (repull) {
+        for (let cur = r.from; cur <= r.to; ) {
+          await fetch(`/api/veo/resync?week=${encodeURIComponent(cur)}`, { method: "POST", headers, cache: "no-store" })
+            .catch(() => {});
+          const d = new Date(`${cur}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + 7);
+          cur = d.toISOString().slice(0, 10);
+        }
+      }
+      const res = await fetch(`/api/veo/range?from=${r.from}&to=${r.to}`, { headers, cache: "no-store" });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j?.error ?? `HTTP ${res.status}`);
+      setMonthData({ matches: j.matches as GridMatch[], dataAsOf: j.dataAsOf ?? null });
+    } catch (e) {
+      // A FAILED RANGE IS AN ERROR, never an empty grid — the two look identical otherwise.
+      setMonthErr(e instanceof Error ? e.message : String(e));
+    } finally { setMonthBusy(false); }
+  }, []);
+
+  // Default the range to the current calendar month the first time Month is opened.
+  useEffect(() => {
+    if (view !== "month" || range) return;
+    setRange(defaultRange(new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" })));
+  }, [view, range]);
+  useEffect(() => { if (view === "month" && range) void loadRange(range); }, [view, range, loadRange]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(VMS_PREFS, JSON.stringify({
+        view, from: range?.from, to: range?.to, fields: [...fieldSel], city: [...cityFilter],
+      }));
+    } catch { /* private mode */ }
+  }, [view, range, fieldSel, cityFilter]);
+
+  /* ── THE FILTERED SET, AND THE CHIPS BUILT FROM IT ──────────────────────────────────────────
+   * The field list comes from the matches actually in the range, so it can never offer a filter
+   * with nothing behind it. When the range or the city changes, a selection that no longer has
+   * matches is DROPPED and SAID — silently keeping it would filter the grid to nothing on a chip
+   * the operator can no longer see. */
+  const monthCity = useMemo(() => (cityFilter.size === 1 ? [...cityFilter][0] : null), [cityFilter]);
+  const monthFields = useMemo(
+    () => fieldsAvailable(monthData?.matches ?? [], monthCity), [monthData, monthCity]);
+  useEffect(() => {
+    if (view !== "month" || !monthData) return;
+    const { kept, dropped } = reconcileFields(fieldSel, monthFields);
+    if (dropped.length === 0) { if (droppedFields.length) setDroppedFields([]); return; }
+    setFieldSel(kept); setDroppedFields(dropped);
+  }, [view, monthData, monthFields, fieldSel, droppedFields.length]);
+
+  const monthVisible = useMemo(
+    () => applyFilters(monthData?.matches ?? [], monthCity, fieldSel), [monthData, monthCity, fieldSel]);
+  const monthWeeks = useMemo(
+    () => (range ? buildMonthGrid(range.from, range.to, monthVisible,
+      new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" })) : []),
+    [range, monthVisible]);
+
   // Week navigation: shift from the displayed Monday (always a Monday), or jump
   // back to the current week. Shared by both views (it lives in the card header).
   async function navigate(ref: string) {
@@ -288,14 +382,24 @@ export default function VeoMasterSchedule() {
    * rows — the cron's write or a write-through, whichever touched one last. Pressing Refresh on a
    * week nothing has changed leaves it exactly where it was, which is the point: the button
    * reports what it found, not that it ran. */
-  const dataAsOfMs = week?.dataAsOf ? Date.parse(week.dataAsOf) : null;
+  /* THE STAMP FOLLOWS THE VIEW. Month has its own payload and its own max(synced_at); reading the
+   * week's stamp while looking at a range would report the freshness of data that is not on
+   * screen. Neither moves on a no-op: both come from the DATA, not from the fetch. */
+  const asOfSrc = view === "month" ? (monthData?.dataAsOf ?? null) : (week?.dataAsOf ?? null);
+  const dataAsOfMs = asOfSrc ? Date.parse(asOfSrc) : null;
   const updatedAt = Number.isFinite(dataAsOfMs as number) ? (dataAsOfMs as number) : null;
   const updatedLabel = updatedAt == null ? "—" : new Date(updatedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   /* HOURS, NOT MINUTES. The mirror's normal age is measured from an 11:00 UTC cron, so a
    * minutes-only readout said "412m ago" by mid-afternoon on a perfectly healthy week. */
   const staleMins = updatedAt == null ? 0 : Math.floor((nowMs - updatedAt) / 60000);
   const staleLabel = staleMins >= 120 ? `${Math.floor(staleMins / 60)}h ago` : `${staleMins}m ago`;
-  const doRefresh = useCallback(() => { if (!refreshing && !navBusy) void load(weekRef, true, true); }, [refreshing, navBusy, weekRef]);
+  const doRefresh = useCallback(() => {
+    if (refreshing || navBusy) return;
+    // SAME MEANING IN BOTH VIEWS: re-pull the visible span from MatchDay, then re-read.
+    if (view === "month" && range) { void loadRange(range, true); return; }
+    void load(weekRef, true, true);
+  }, [refreshing, navBusy, weekRef, view, range, loadRange]);
+
 
   async function post(url: string, body: unknown): Promise<boolean> {
     const { data: sess } = await supabase.auth.getSession();
@@ -447,6 +551,64 @@ export default function VeoMasterSchedule() {
   const drawerCity = useMemo(() => (drawerId != null && week ? week.matches.find((m) => m.apiId === drawerId)?.city ?? null : null), [drawerId, week]);
   const drawerVeo = useMemo(() => (drawerId != null && week ? !!week.matches.find((m) => m.apiId === drawerId)?.veo : false), [drawerId, week]);
   const drawerSiblings = useMemo(() => (drawerId != null && week ? siblingsOf(week, drawerId) : []), [drawerId, week]);
+  /* ── COPY MATCH ─────────────────────────────────────────────────────────────────────────────
+   * It used to navigate to /matches/new?from=N — a form to fill in, which is not a copy. Now it
+   * reads the source, asks once, creates an identical match, and opens the editor on the NEW one.
+   *
+   * THE COPY IS LIVE THE MOMENT IT IS CONFIRMED. A player can register against it before the date
+   * is changed. That is the accepted tradeoff — there is deliberately no draft state, because a
+   * draft is a second lifecycle for a match and the API has none. */
+  const [copyBusy, setCopyBusy] = useState(false);
+  const doCopy = useCallback(async () => {
+    if (drawerId == null || copyBusy) return;
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) { showToast("No active session — sign in again.", true); return; }
+    const headers: Record<string, string> = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    setCopyBusy(true);
+    try {
+      /* READ THE SOURCE LIVE, not off the week payload. The grid carries five fields; a copy needs
+       * all 27, and reading the mirror would copy whatever the last sync happened to hold. */
+      const sres = await fetch(`/api/matchday/production/matches/${drawerId}`, { headers, cache: "no-store" });
+      const sj = await sres.json();
+      if (!sres.ok) { showToast(`Couldn't read the match to copy: ${sj?.error ?? sres.status}`, true); return; }
+      const src = (sj.match ?? sj) as SourceMatch;
+
+      if (!window.confirm(copyConfirmLine(src))) return;
+
+      const res = await fetch(`/api/matchday/production/matches/create`, {
+        method: "POST", headers,
+        body: JSON.stringify({ match: buildCopyBody(src), source: "Master Schedule · copy match", allowDuplicate: true }),
+      });
+      const j = await res.json();
+      /* A FAILED CREATE OPENS NOTHING. The old flow navigated to a form regardless, so a refusal
+       * left the operator on a blank create screen with no idea a write had been attempted. */
+      if (!res.ok || j.outcome !== "LANDED" || !j.id) {
+        showToast(`Copy ${j.outcome ?? "FAILED"} — ${j.error ?? "nothing was created"}. Nothing was opened.`, true);
+        return;
+      }
+
+      /* THE VEO FLAG IS CLUBHOUSE-SIDE, so it is copied by a second write rather than riding the
+       * create body. veo_intent is our own table keyed on match_api_id; MatchDay has no camera
+       * field at all. Best-effort: the match exists either way and the chip can be toggled. */
+      if (drawerVeo) {
+        await fetch("/api/veo/intent", {
+          method: "POST", headers, body: JSON.stringify({ matchApiId: j.id, enabled: true }),
+        }).catch(() => {});
+      }
+
+      if (j.mirrored === false) {
+        showToast(`Copied to match ${j.id}, but the schedule will not show it until the next sync (${j.mirrorReason ?? "mirror insert failed"}).`, true);
+      }
+      /* THE EDITOR OPENS ON THE NEW MATCH. Same drawer the grid uses — the copy is a match like
+       * any other and there is no separate "just copied" screen to get out of step. */
+      await load(weekRef, true);
+      setDrawerId(Number(j.id));
+    } catch (e) {
+      showToast(`UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Reload before pressing again.`, true);
+    } finally { setCopyBusy(false); }
+  }, [drawerId, copyBusy, drawerVeo, weekRef, showToast]);
+
 
   const openCard = useCallback((id: number) => {
     if (drawerId != null && drawerId !== id && drawerDirty) { showToast("Save or revert the open match first.", true); return; }
@@ -556,11 +718,11 @@ export default function VeoMasterSchedule() {
                   type="button"
                   data-testid="copy-match"
                   className="vms-btn"
-                  disabled={drawerId == null}
-                  title={drawerId == null ? "Select a match first" : `Copy match ${drawerId}`}
-                  onClick={() => { if (drawerId != null) window.location.href = `/match-ops/matches/new?from=${drawerId}`; }}
+                  disabled={drawerId == null || copyBusy}
+                  title={drawerId == null ? "Select a match first" : `Create an identical copy of match ${drawerId}`}
+                  onClick={() => void doCopy()}
                 >
-                  {drawerId == null ? "Copy match" : `Copy match ${drawerId}`}
+                  {copyBusy ? "Copying…" : drawerId == null ? "Copy match" : `Copy match ${drawerId}`}
                 </button>
                 {/* REFRESH + FRESHNESS. THE TITLE WAS TRUE AND IS NOT ANY MORE, so it changed with the
                     behaviour: it used to say this button re-reads the mirror and does not fetch
@@ -574,7 +736,7 @@ export default function VeoMasterSchedule() {
                     synced_at>" and only moves when the DATA did. */}
                 <span className="vms-fresh" data-testid="fresh">
                   <button type="button" className="vms-refresh" data-testid="vms-refresh"
-                    disabled={refreshing || navBusy} aria-label="Refresh the schedule from MatchDay"
+                    disabled={refreshing || navBusy || monthBusy} aria-label="Refresh the schedule from MatchDay"
                     title="Refresh the schedule. Re-pulls this week from MatchDay into Clubhouse, then re-reads it — so an edit made anywhere shows up without waiting for the nightly sync."
                     onClick={doRefresh}>
                     <RefreshIcon size={14} spinning={refreshing} />
@@ -596,8 +758,10 @@ export default function VeoMasterSchedule() {
               <button type="button" role="tab" aria-selected={view === "veo"} data-testid="view-veo"
                 className={"vms-seg-btn" + (view === "veo" ? " vms-active" : "")}
                 onClick={() => setView("veo")}>Veo coverage</button>
+              <button type="button" role="tab" aria-selected={view === "month"} data-testid="view-month"
+                className={"vms-seg-btn" + (view === "month" ? " vms-active" : "")}
+                onClick={() => setView("month")}>Month</button>
             </div>
-            <button type="button" className="vms-btn" onClick={exportWorklist} disabled={!week}>Export worklist</button>
           </div>
         </div>
 
@@ -629,6 +793,59 @@ export default function VeoMasterSchedule() {
         <div className="vms-card"><div className="vms-state">Loading Veo coverage…</div></div>
       ) : error && !week ? (
         <div className="vms-card"><div className="vms-state">{error} <button type="button" className="vms-btn" onClick={() => { setLoading(true); void load(weekRef); }}>Retry</button></div></div>
+      ) : view === "month" ? (
+        <>
+          {/* THE RANGE AND THE FIELD CHIPS. Only in Month — the week view's own controls are
+              untouched, which is what keeps "switch to Month and back" a no-op. */}
+          <div className="vms-card vms-mbar" data-testid="month-bar">
+            <div className="vms-mbarrow">
+              <span className="vms-lbl">From</span>
+              <input type="date" className="vms-date" data-testid="month-from" value={range?.from ?? ""}
+                onChange={(e) => range && e.target.value && setRange({ ...range, from: e.target.value })} />
+              <span className="vms-lbl">To</span>
+              <input type="date" className="vms-date" data-testid="month-to" value={range?.to ?? ""}
+                onChange={(e) => range && e.target.value && setRange({ ...range, to: e.target.value })} />
+              <button type="button" className="vms-btn" data-testid="month-this"
+                onClick={() => setRange(defaultRange(new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" })))}>
+                This month
+              </button>
+              <span className="vms-mtitle" data-testid="month-title">{range ? rangeTitle(range.from, range.to) : ""}</span>
+              <span className="vms-mstat" data-testid="month-count">
+                {monthBusy ? "Loading…" : `${monthVisible.length} match${monthVisible.length === 1 ? "" : "es"}`}
+                {" · "}{fieldCountLabel(fieldSel, monthFields)}
+              </span>
+            </div>
+            {/* FIELD IS MULTI-SELECT. Same chip language as the city row above it: click to add,
+                click to remove, and All fields clears. */}
+            <div className="vms-mbarrow vms-mchips">
+              <span className="vms-lbl">Field</span>
+              <button type="button" data-testid="month-allfields"
+                className={"vms-chip" + (fieldSel.size === 0 ? " vms-chip-on" : "")}
+                onClick={() => setFieldSel(new Set())}>All fields</button>
+              {monthFields.map((f) => (
+                <button type="button" key={f} data-testid="month-field" data-field={f}
+                  className={"vms-chip" + (fieldSel.has(f) ? " vms-chip-on" : "")}
+                  onClick={() => setFieldSel((prev) => {
+                    const n = new Set(prev); if (n.has(f)) n.delete(f); else n.add(f); return n;
+                  })}>{f}</button>
+              ))}
+              {/* A DROPPED FILTER IS SAID, not silently kept or silently removed. */}
+              {droppedFields.length > 0 && (
+                <span className="vms-mdrop" data-testid="month-dropped">
+                  {droppedFields.join(", ")} {droppedFields.length === 1 ? "has" : "have"} no matches in this range — removed from the filter
+                </span>
+              )}
+            </div>
+          </div>
+          {monthErr ? (
+            <div className="vms-card vms-merr" data-testid="month-error">
+              <b>The range could not be loaded — this is not an empty month.</b> {monthErr}
+            </div>
+          ) : (
+            <MonthView weeks={monthWeeks} count={monthVisible.length} onOpen={openCard}
+              selectedId={drawerId} singleField={fieldSel.size === 1} />
+          )}
+        </>
       ) : !week || !fweek ? null : view === "schedule" ? (
         <ScheduleView week={fweek} busy={busy} onToggle={toggleIntent} onRetry={retryName} onOpen={openCard} selectedId={drawerId} failed={nameFailed} />
       ) : (
@@ -967,6 +1184,41 @@ const CSS = `
 .vms-wkpick:disabled{opacity:.5;cursor:default}
 .vms-wkpick:focus-visible{outline:2px solid var(--mint);outline-offset:1px}
 .vms-fresh{display:inline-flex;align-items:center;gap:8px;margin-left:4px}
+.vms-mbar{padding:10px 14px;display:flex;flex-direction:column;gap:8px}
+.vms-mbarrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.vms-lbl{font-size:10.5px;font-weight:700;letter-spacing:.09em;color:#93A49A;text-transform:uppercase}
+.vms-date{border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px;font-weight:600;background:#fff}
+.vms-mtitle{font-size:14px;font-weight:800;margin-left:6px}
+.vms-mstat{margin-left:auto;font-size:12px;font-weight:600;color:#6E8076}
+.vms-chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:5px 12px;font:inherit;font-size:12.5px;font-weight:600;color:#3C4F44;cursor:pointer;white-space:nowrap}
+.vms-chip-on{background:#0F3323;border-color:#0F3323;color:#fff}
+.vms-mdrop{font-size:11.5px;color:#8A5A08;background:#FFF6E3;border:1px solid #F0DFB8;border-radius:8px;padding:3px 9px}
+.vms-merr{padding:14px 16px;font-size:13px;color:#7C2412;background:#FDECE8;border-color:#F2C6BC}
+.vms-month{overflow:hidden}
+.vms-mdow{display:grid;grid-template-columns:repeat(7,1fr);background:#F7FAF8;border-bottom:1px solid var(--line)}
+.vms-mdow div{padding:7px 10px;font-size:10.5px;font-weight:700;letter-spacing:.09em;color:#8C9E93;text-transform:uppercase;border-right:1px solid #EFF3EF}
+.vms-mdow div:last-child{border-right:0}
+.vms-mweek{display:grid;grid-template-columns:repeat(7,1fr)}
+/* FIXED HEIGHT. A Saturday with nine matches must not make every other Saturday nine rows tall. */
+.vms-mcell{height:126px;display:flex;flex-direction:column;min-width:0;background:#fff;border-right:1px solid #EFF3EF;border-bottom:1px solid #EFF3EF}
+.vms-mcell:nth-child(7n){border-right:0}
+.vms-mout{background:#FAFCFA}
+.vms-mout .vms-mnum{color:#C3CFC7}
+.vms-mtoday{box-shadow:inset 0 0 0 2px #35c77f}
+.vms-mhead{display:flex;align-items:center;gap:6px;padding:5px 9px 2px}
+.vms-mnum{font-weight:700;font-size:13px}
+.vms-mcount{margin-left:auto;font-size:10px;font-weight:800;color:#8A5A08;background:#FFF6E3;border-radius:999px;padding:1px 6px}
+/* SCROLLS INSIDE ITSELF rather than growing the row. */
+.vms-mlist{flex:1;min-height:0;overflow-y:auto;padding:0 6px 6px;display:flex;flex-direction:column;gap:3px}
+.vms-mlist::-webkit-scrollbar{width:5px}
+.vms-mlist::-webkit-scrollbar-thumb{background:#D6DFD8;border-radius:3px}
+.vms-mitem{display:flex;align-items:baseline;gap:6px;flex:0 0 auto;min-width:0;text-align:left;background:#F4F8F5;border:1px solid #E3ECE6;border-radius:6px;padding:3px 6px;font:inherit;cursor:pointer}
+.vms-mitem:hover{background:#E4FBEC;border-color:#BCE8CD}
+.vms-msel{background:#E4FBEC;border-color:#35c77f}
+.vms-mitem b{font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.vms-mitem span{min-width:0;flex:1;font-size:11px;color:#3C4F44;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vms-mveo{width:6px;height:6px;border-radius:50%;background:#0B7A3E;flex:0 0 auto}
+.vms-mempty{padding:40px 18px;text-align:center;color:#6E8076;font-size:13px}
 .vms-refresh{display:inline-flex;align-items:center;gap:6px;min-height:32px;border:1px solid var(--line);
   border-radius:9px;background:#fff;color:var(--forest);font:inherit;font-size:12px;font-weight:700;
   padding:0 10px;cursor:pointer}
@@ -1127,3 +1379,58 @@ span.vms-cam:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
 .vms-toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:var(--coralInk);color:#fff;
   font-size:12.5px;font-weight:700;padding:9px 16px;border-radius:999px;z-index:80}
 `;
+
+/* ── MONTH VIEW ────────────────────────────────────────────────────────────────────────────────
+ * A calendar grid over a date RANGE. It is an addition: the week view is untouched and the two
+ * share the page's drawer, so clicking a match here opens the SAME editor the week view opens —
+ * MatchDrawer is mounted once at page level and both views call the same openCard.
+ *
+ * DENSITY. Cells are a FIXED height and never stretch their row: a Saturday with nine matches must
+ * not make every other Saturday nine rows tall. A cell with more entries than fit scrolls inside
+ * itself and shows the day's count in its corner, so a full day is visibly full rather than
+ * silently truncated.
+ */
+function MonthView({ weeks, count, onOpen, selectedId, singleField }: {
+  weeks: GridDay[][]; count: number; onOpen: (id: number) => void;
+  selectedId: number | null; singleField: boolean;
+}) {
+  return (
+    <div className="vms-card vms-month" data-testid="month-grid">
+      <div className="vms-mdow">
+        {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => <div key={d}>{d}</div>)}
+      </div>
+      {count === 0 ? (
+        <div className="vms-mempty">No matches in this range with these filters.</div>
+      ) : weeks.map((week, wi) => (
+        <div className="vms-mweek" key={wi}>
+          {week.map((d) => (
+            <div key={d.iso}
+              className={"vms-mcell" + (d.inRange ? "" : " vms-mout") + (d.isToday ? " vms-mtoday" : "")}
+              data-testid="month-cell" data-iso={d.iso} data-inrange={d.inRange ? "1" : "0"}>
+              <div className="vms-mhead">
+                <span className="vms-mnum">{d.day}</span>
+                {/* THE DAY'S COUNT, in the corner, so a scrolling cell says how much it holds. */}
+                {d.matches.length > 0 && <span className="vms-mcount" data-testid="month-daycount">{d.matches.length}</span>}
+              </div>
+              <div className="vms-mlist">
+                {d.matches.map((m) => (
+                  <button type="button" key={m.apiId} data-testid="month-match" data-id={m.apiId}
+                    className={"vms-mitem" + (selectedId === m.apiId ? " vms-msel" : "")}
+                    onClick={() => onOpen(m.apiId)}
+                    title={`${m.time} · ${m.venue} · ${m.name}`}>
+                    <b>{m.time}</b>
+                    {/* ONE COMPACT LINE. The field, unless the filter is already down to a single
+                        field — at which point the field is a constant and the NAME is the thing
+                        that distinguishes one entry from another. */}
+                    <span>{singleField ? m.name : m.venue}</span>
+                    {m.veo && <i className="vms-mveo" aria-label="Veo" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}

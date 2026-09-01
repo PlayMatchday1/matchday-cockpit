@@ -43,9 +43,35 @@ const offenders: string[] = [];
 for (const f of files) {
   const rel = f.replace(/\\/g, "/");
   if (ALLOW.some((a) => rel.includes(a.file))) continue; // allowlisted
-  const lines = readFileSync(f, "utf8").split("\n");
+  /* COMMENTS ARE STRIPPED BEFORE THE SCAN — and the line numbering survives, because each comment
+   * is blanked in place rather than removed.
+   *
+   * WHY: this guard flagged a COMMENT in copyMatch.ts whose whole purpose was to warn the next
+   * reader against `new Date(m.startDate)`. A guard that fires on the sentence explaining the trap
+   * teaches people to delete the explanation, which is the opposite of what it is for. A comment
+   * cannot re-shift a date; only code can.
+   *
+   * IT CANNOT WEAKEN THE GUARD. Blanking comments strictly removes false positives — no executable
+   * statement lives inside a comment, so nothing real can hide there. The control below proves the
+   * scan still fires on the same pattern in live code. */
+  const src = readFileSync(f, "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/(^|[^:])\/\/[^\n]*/g, (m, p1) => p1 + " ".repeat(Math.max(0, m.length - p1.length)));
+  const lines = src.split("\n");
   lines.forEach((line, i) => { if (RE.test(line)) offenders.push(`${rel}:${i + 1}  ${line.trim().slice(0, 90)}`); });
 }
+
+/* CONTROL: the scan still catches the pattern in LIVE code. Without this, stripping comments could
+ * quietly turn the whole guard into a no-op and every run would report a clean estate. */
+RE.test("  const d = new Date(m.startDate);")
+  ? ok("control: the scan still fires on `new Date(m.startDate)` in real code")
+  : bad("control: the wall-clock scan still works", "STRIPPING COMMENTS HAS DISABLED THE GUARD");
+RE.test("  const d = new Date(match.endDate).toISOString();")
+  ? ok("control: …and on endDate")
+  : bad("control: the scan fires on endDate");
+RE.test("  const d = new Date(m.startDateUtc);")
+  ? bad("control: *Utc must NOT be flagged", "IT IS A TRUE INSTANT AND new Date ON IT IS CORRECT")
+  : ok("control: startDateUtc is correctly NOT flagged");
 
 offenders.length === 0
   ? ok("no `new Date(...)` on a match startDate/endDate wall-clock string (outside the allowlist)")
