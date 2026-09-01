@@ -54,6 +54,16 @@ type RemovedRow = {
   date: string; city: string; field: string; removedAt: string; by: string; verdict: string;
 };
 
+/* "Sep 1 · 18:30" — one line, from two text fields. Built with a UTC Date because the inputs are
+ * a plain YYYY-MM-DD and a plain HH:MM that were already read off the wall clock; parsing the date
+ * alone at UTC midnight and formatting in UTC cannot shift the day. */
+const whenLabel = (ymd: string, kickoff: string): string => {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  const day = Number.isNaN(d.getTime()) ? ymd
+    : d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  return kickoff ? `${day} · ${kickoff}` : day;
+};
+
 const money = (cents: number) => "$" + (cents / 100).toFixed(2);
 const num = (n: number) => n.toLocaleString("en-US");
 
@@ -136,6 +146,7 @@ export default function LapsedSpotsView() {
   const [inFlight, setInFlight] = useState<LapsedSpot | null>(null);
   const [results, setResults] = useState<RemovalResult[] | null>(null);
   const [halted, setHalted] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const ranAt = useRef<string>("");
 
   const runRemoval = useCallback(async () => {
@@ -187,6 +198,26 @@ export default function LapsedSpotsView() {
     setInFlight(null); setRunning(false);
   }, [selected]);
 
+  /* COPY — the VISIBLE tab, tab-separated. It reads the same arrays the tables render from, so it
+   * cannot drift from the screen, and it is scoped by `tab` so the Removed history never lands on
+   * the clipboard while the operator is looking at the live list. */
+  const copyVisible = useCallback(async () => {
+    if (!data) return;
+    const rows = tab === "removed"
+      ? [["Player", "Match", "Match date", "City", "Removed", "By", "Verdict"].join("\t"),
+         ...data.removed.map((r) => [r.name, r.matchName, r.date, r.city, r.removedAt.slice(0, 16).replace("T", " "), r.by, r.verdict.toUpperCase()].join("\t"))]
+      : [["Player", "Email", "When", "Match", "Field", "City", "Membership", "Status"].join("\t"),
+         ...candidates.map((r) => [
+           r.name, r.email, whenLabel(r.date, r.kickoff), r.matchName, r.field, r.city,
+           r.state === "LAPSED" ? `lapsed ${r.lapsedOn ?? "date unknown"}` : r.state === "PAST_DUE" ? "payment pending" : r.state,
+           [r.guard.reason, r.contextChip, r.isFirstMatch ? "first match" : null].filter(Boolean).join(" · "),
+         ].join("\t"))];
+    try {
+      await navigator.clipboard.writeText(rows.join("\n"));
+      setCopied(true); setTimeout(() => setCopied(false), 1600);
+    } catch { setErr("Could not write to the clipboard."); }
+  }, [data, tab, candidates]);
+
   const downloadCsv = useCallback(() => {
     if (!results?.length) return;
     const blob = new Blob([removalCsv(results, ranAt.current)], { type: "text/csv;charset=utf-8" });
@@ -203,6 +234,9 @@ export default function LapsedSpotsView() {
           <h1>Lapsed-member spots</h1>
           <p className="ls-sub">Free spots on future matches, grouped by whether the holder is still a member. Removing a spot cannot be undone.</p>
         </div>
+        <button type="button" className="ls-btn" onClick={() => void copyVisible()} data-testid="ls-copy">
+          {copied ? "Copied" : "Copy"}
+        </button>
         <button type="button" className="ls-btn" onClick={() => void load()} disabled={loading} data-testid="ls-refresh">
           {loading ? "Loading…" : "Refresh"}
         </button>
@@ -311,9 +345,7 @@ export default function LapsedSpotsView() {
                 <div className="ls-tbl">
                   <div className={"ls-tr ls-th" + (SELECTABLE_STATES.has(g.state) ? " ls-pick" : "")}>
                     {SELECTABLE_STATES.has(g.state) ? <div /> : null}
-                    <div>Player</div><div>Email</div><div>Match</div><div>Date</div><div>Kick-off</div>
-                    <div>Field</div><div>City</div><div className="r">Spot</div>
-                    <div>First match</div><div>Membership</div><div className="r">Guests</div>
+                    <div>Player</div><div>When</div><div>Match</div><div>City</div><div>Membership</div>
                   </div>
                   {g.rows.map((r, i) => (
                     <div className={"ls-tr" + (SELECTABLE_STATES.has(g.state) ? " ls-pick" : "")
@@ -339,8 +371,12 @@ export default function LapsedSpotsView() {
                           ) : null}
                         </div>
                       ) : null}
+                      {/* PLAYER — name, the FULL email beneath, chips under both. The email is a
+                          real text node and is user-selectable: a truncated email cannot be
+                          copied, and copying it is most of what it is for. */}
                       <div className="ls-nm">
-                        {r.name}
+                        <span className="ls-nmtop">{r.name}</span>
+                        <span className="ls-mail">{r.email}</span>
                         {/* WHY THIS ROW IS NOT TICKED, UNDER THE NAME. It was in the membership
                             cell (clipped by nowrap) and then in a trailing column (past the
                             horizontal scroll, so invisible at every real width). A reason nobody
@@ -355,17 +391,25 @@ export default function LapsedSpotsView() {
                         {r.contextChip ? (
                           <span className="ls-chip ls-chip-blue" data-testid="ls-context-chip">{r.contextChip}</span>
                         ) : null}
+                        {/* A CHIP ONLY WHERE IT IS TRUE. As a column this was "—" on every row. */}
+                        {r.isFirstMatch ? (
+                          <span className="ls-chip ls-chip-blue" data-testid="ls-firstmatch">first match</span>
+                        ) : null}
                       </div>
-                      <div className="ls-em" title={r.email}>{r.email}</div>
-                      <div className="ls-mt" title={r.matchName}>{r.matchName}</div>
-                      <div className="ls-dt">{r.date}{r.isToday ? <span className="ls-todaytag">today</span> : null}</div>
-                      {/* THE KICKOFF, so "already started" is checkable rather than trusted. */}
-                      <div className="ls-dt">{r.kickoff || "—"}</div>
-                      <div className="ls-fl" title={r.field}>{r.field}</div>
-                      <div>{r.city}</div>
-                      <div className="r ls-amt">{money(r.amountCents)}</div>
-                      {/* SHOWN SO A FIRST-MATCH-FREE IS VISIBLE rather than read as a member spot. */}
-                      <div>{r.isFirstMatch ? <span className="ls-chip ls-chip-blue">first match</span> : <span className="ls-dash">—</span>}</div>
+                      {/* WHEN — date and kickoff on one line. SPOT and FIRST MATCH are gone as
+                          columns: both were a constant on every row ($0.00 and "—"). A paid spot
+                          already says so on its chip, and a first match now says so on a chip too
+                          — a column that is the same on every row is not information. */}
+                      <div className="ls-when">
+                        {whenLabel(r.date, r.kickoff)}
+                        {r.isToday ? <span className="ls-todaytag">today</span> : null}
+                      </div>
+                      {/* MATCH — name, field beneath. Both full, neither truncated. */}
+                      <div className="ls-mt">
+                        <span className="ls-mtop">{r.matchName}</span>
+                        <span className="ls-fl">{r.field}</span>
+                      </div>
+                      <div className="ls-city">{r.city}</div>
                       <div className="ls-ms">
                         {r.state === "LAPSED"
                           ? <>lapsed {r.lapsedOn ?? "date unknown"}{r.lapseReason ? <span className="ls-rsn"> · {r.lapseReason}</span> : null}</>
@@ -375,12 +419,6 @@ export default function LapsedSpotsView() {
                             stated reason is indistinguishable from an unchecked box the operator
                             ticked off themselves. */}
                       </div>
-                      {/* GUESTS ARE NOT LISTED AS REMOVABLE — a guest shares its host's user_id and
-                          carries no other link. The count sits beside the decision because acting
-                          on a host is not a decision only about the host. */}
-                      <div className="r">{r.guestsOnMatch > 0
-                        ? <span className="ls-chip ls-chip-amber" data-testid="ls-guests">{r.guestsOnMatch} on this match</span>
-                        : <span className="ls-dash">—</span>}</div>
 
                     </div>
                   ))}
@@ -448,7 +486,7 @@ export default function LapsedSpotsView() {
       ) : null}
 
       <style jsx>{`
-        .ls{--ink:#10231A;--mut:#6E8076;--line:#E4EAE5;--line2:#EFF3EF;--forest:#0F3323;--slot:#F4F7F4;
+        .ls{max-width:100%;overflow-x:hidden;--ink:#10231A;--mut:#6E8076;--line:#E4EAE5;--line2:#EFF3EF;--forest:#0F3323;--slot:#F4F7F4;
           --red:#A5321B;--redBg:#FDECE8;--redLine:#F2C6BC;--amb:#8A5A08;--ambBg:#FFF6E3;--ambLine:#F0DFB8;
           --blu:#12406F;--bluBg:#EFF6FF;--bluLine:#BBD6F6;--grn:#0B7A3E;
           font-size:14px;color:var(--ink);padding:22px 26px 70px;max-width:1560px}
@@ -474,15 +512,25 @@ export default function LapsedSpotsView() {
         .ls-grpc{margin-left:auto;background:#fff;border:1px solid var(--line);border-radius:999px;
           padding:2px 10px;font-variant-numeric:tabular-nums}
         .ls-empty{padding:16px;color:var(--mut);font-size:12.5px}
-        .ls-tbl{overflow-x:auto}
-        .ls-tr{display:grid;grid-template-columns:130px minmax(180px,1fr) minmax(130px,1fr) 96px 76px minmax(120px,1fr) 96px 74px 92px minmax(190px,1fr) 120px;
-          align-items:center;border-bottom:1px solid var(--line2);min-width:1256px}
+        .ls-tbl{overflow-x:visible}
+        .ls-tr{display:grid;grid-template-columns:minmax(190px,1.25fr) 132px minmax(180px,1.35fr) 104px minmax(170px,1.15fr);
+          align-items:start;border-bottom:1px solid var(--line2)}
         .ls-tr:last-child{border-bottom:0}
-        .ls-tr>div{padding:9px 8px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        /* NOTHING TRUNCATES. Every cell wraps; no ellipsis anywhere. A truncated email cannot be
+           copied, and copying it is most of what it is for. */
+        .ls-tr>div{padding:9px 10px;min-width:0;overflow-wrap:anywhere;word-break:break-word;white-space:normal;line-height:1.35}
         .ls-th{background:#FBFDFB;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#8C9E93}
         .r{text-align:right}
         .ls-nm{font-weight:700}
-        .ls-em,.ls-fl,.ls-mt{color:var(--mut);font-size:12.5px}
+        .ls-nm,.ls-mt{display:flex;flex-direction:column;gap:3px;align-items:flex-start}
+        .ls-nmtop{font-weight:700;font-size:13.5px}
+        .ls-mtop{font-weight:600;font-size:13px}
+        /* THE FULL EMAIL, selectable — a real text node, not a title attribute. */
+        .ls-mail{font-size:11.5px;color:var(--mut);user-select:all;overflow-wrap:anywhere}
+        .ls-fl{font-size:11.5px;color:var(--mut)}
+        .ls-em{color:var(--mut);font-size:12px}
+        .ls-when{font-variant-numeric:tabular-nums;font-size:12.5px;font-weight:600}
+        .ls-city{font-size:12.5px}
         .ls-dt,.ls-amt{font-variant-numeric:tabular-nums}
         .ls-ms{font-size:12.5px}
         .ls-rsn{color:var(--mut)}
@@ -499,12 +547,15 @@ export default function LapsedSpotsView() {
         .ls-tabs button.on .ls-tabn{background:rgba(255,255,255,.2)}
         .ls-todaytag{margin-left:6px;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
           border-radius:999px;padding:1px 6px;background:var(--forest);color:#fff}
-        .ls-tr.ls-rem{grid-template-columns:150px minmax(190px,1fr) 104px 110px 132px minmax(150px,1fr) 104px;min-width:960px}
+        .ls-tr.ls-rem{grid-template-columns:minmax(150px,1fr) minmax(180px,1.3fr) 104px 108px 128px minmax(150px,1fr) 96px}
 
         .ls-pastdue .ls-grph{background:var(--ambBg);color:#7A4E06}
         .ls-pastdue{border-color:var(--ambLine)}
 
-        .ls-bar{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+        /* PINNED TO THE BOTTOM OF THE VIEWPORT. Sticky-to-top left it above the fold and out of
+           sight once the operator scrolled into the list — the count and the button must be
+           readable at the moment a box is ticked, not before it. */
+        .ls-bar{position:sticky;bottom:12px;top:auto;z-index:5;box-shadow:0 6px 22px rgba(16,35,26,.13);display:flex;align-items:center;gap:12px;flex-wrap:wrap;
           background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:14px}
         .ls-barn{font-size:13px;font-weight:700}
         .ls-barb{font-size:12px;color:var(--red)}
@@ -512,7 +563,7 @@ export default function LapsedSpotsView() {
           padding:8px 18px;font:inherit;font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap}
         .ls-danger:disabled{opacity:.45;cursor:default}
 
-        .ls-tr.ls-pick{grid-template-columns:104px minmax(196px,auto) minmax(170px,1fr) minmax(130px,1fr) 96px 76px minmax(110px,1fr) 92px 74px 92px minmax(190px,1fr) 116px;min-width:1406px}
+        .ls-tr.ls-pick{grid-template-columns:92px minmax(190px,1.25fr) 128px minmax(175px,1.35fr) 100px minmax(165px,1.15fr)}
         /* The name cell is the only one that stacks: name on top, the reason chip beneath it. */
         .ls-pick .ls-nm{white-space:normal;overflow:visible;display:flex;flex-direction:column;align-items:flex-start;gap:4px;line-height:1.3}
         .ls-pick .ls-nm .ls-chip{white-space:normal;text-align:left}

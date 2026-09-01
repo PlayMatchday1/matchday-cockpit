@@ -79,7 +79,6 @@ export type LapsedSpot = {
   state: MembershipState;
   lapsedOn: string | null;      // yyyy-mm-dd, LAPSED only
   lapseReason: string | null;
-  guestsOnMatch: number;        // guests sharing this match, adjacent to the decision
   /* THE REMOVAL CALL KEYS ON THIS. mdapi_match_players.api_id IS the roster row's `id`, which the
    * API calls userMatchId. It is NOT the player's userId. DELETE /admin/matches/user-matches/{id}
    * takes this; DELETE /admin/matches/{id}/players/{userId} returns 403 USER_NOT_JOINED and is
@@ -153,7 +152,7 @@ export function membershipStateOf(userId: unknown, subsByUser: Map<string, SubRo
 /* THE GUARD, PER SPOT. Everything the confirm dialog and the checkbox read comes from here, so
  * the reason chip on screen and the reason a row is unchecked cannot drift apart. */
 export function guardFor(args: {
-  amountCents: number; isStaff: boolean; state: MembershipState; guestsOnMatch: number;
+  amountCents: number; isStaff: boolean; state: MembershipState;
   alreadyStarted?: boolean;
 }): SpotGuard {
   // BLOCKED FIRST, and it is absolute. Removal is not a refund; refund-and-cancel is on the
@@ -166,9 +165,14 @@ export function guardFor(args: {
    * record of who was there. */
   if (args.alreadyStarted) return { selectability: "caution", reason: "Already started" };
   if (args.isStaff) return { selectability: "caution", reason: "Internal staff account" };
-  if (args.guestsOnMatch > 0) {
-    return { selectability: "caution", reason: `${args.guestsOnMatch} guest${args.guestsOnMatch === 1 ? "" : "s"} on this match` };
-  }
+  /* THE GUEST GUARD IS GONE (2026-09-01), AND IT WAS WRONG TWICE OVER.
+   *   MEASURED: DELETE /admin/matches/user-matches/{userMatchId} removes exactly the row it names.
+   *   Staging match 4, two independent hosts: 3 of 3 guests survived, then 1 of 1. None cancelled,
+   *   none vanished, the match's live count fell by exactly one each time. Removing a host is NOT
+   *   a decision about their guest.
+   *   AND IT COUNTED MATCH-LEVEL, NOT PER-PERSON: three unrelated people on the Sep 1 21:00 Soccer
+   *   Central match each read "4 guests on this match" when none of them had brought any. A chip
+   *   that unticks a row for something the person did not do is worse than no chip. */
   /* PAST_DUE IS NOT AN EXCLUSION ANY MORE (2026-09-01). It was caution — unticked — on the
    * reasoning that a member mid-dunning has not left. The ruling reversed it: removing them IS
    * the lever that gets a failed card fixed, so they are ticked like anyone else. The dunning
@@ -212,12 +216,6 @@ export function buildLapsedSpots(
   const fake = live.filter((s) => s.user_is_fake_player === true);
   const real = live.filter((s) => s.user_is_fake_player !== true);
 
-  /* GUESTS ARE NOT LISTED AS REMOVABLE. A guest shares its host's user_id and carries no other
-   * link, so the only honest thing to show is how many sit on the same match — adjacent to the
-   * decision, because acting on the host is not a decision only about the host. */
-  const guestsByMatch = new Map<number, number>();
-  for (const s of real) if (s.user_type === "GUEST") guestsByMatch.set(s.match_api_id, (guestsByMatch.get(s.match_api_id) ?? 0) + 1);
-
   const free = real.filter((s) => s.paid_status === "FREE" && s.user_type === "PLAYER");
 
   const subsByUser = new Map<string, SubRow[]>();
@@ -238,7 +236,6 @@ export function buildLapsedSpots(
     const subEmails = (subsByUser.get(String(s.user_id)) ?? []).map((r) => String(r.member_email ?? ""));
     const isStaff = INTERNAL_EMAIL_RX.test(String(s.user_email ?? "")) || subEmails.some((e) => INTERNAL_EMAIL_RX.test(e));
     const amountCents = Number(s.amount) || 0;
-    const guestsOnMatch = guestsByMatch.get(s.match_api_id) ?? 0;
     return {
       spotId: s.api_id, matchId: s.match_api_id,
       // api_id IS the roster row id the API calls userMatchId. Carried under its API name so the
@@ -249,11 +246,11 @@ export function buildLapsedSpots(
       field: String(m.field_title ?? "—"), city: String(m.city_name ?? "—"),
       amountCents, isFirstMatch: s.is_first_match === true,
       state, lapsedOn: lapse.on, lapseReason: lapse.reason,
-      guestsOnMatch, isStaff,
+      isStaff,
       kickoff: kickoffOf(m.start_date),
       alreadyStarted: started,
       isToday: String(m.start_date ?? "").slice(0, 10) === todayYmd,
-      guard: guardFor({ amountCents, isStaff, state, guestsOnMatch, alreadyStarted: started }),
+      guard: guardFor({ amountCents, isStaff, state, alreadyStarted: started }),
       contextChip: contextChipFor(state),
     };
   });

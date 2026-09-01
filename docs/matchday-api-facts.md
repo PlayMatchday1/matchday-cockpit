@@ -5149,3 +5149,41 @@ lapsed member's benefit.
 upper bound that includes first-match frees, comps and anything else given away. It is good enough
 to decide who to look at; it is not good enough to bill, reconcile, or report as membership usage.
 The header of `src/lib/lapsedSpots.ts` carries the same text beside the code that depends on it.
+
+## REMOVING A HOST DOES NOT TOUCH THEIR GUESTS (2026-09-01)
+
+**Measured on staging, twice, on two independent hosts. Read-back, not inference.**
+
+`DELETE /admin/matches/user-matches/{userMatchId}` removes **exactly the one roster row it names**.
+A guest shares its host's `user_id` and has no other link to them, and the endpoint keys on the ROW,
+so the guest's row is simply not addressed.
+
+```
+staging match 4, user 832        staging match 4, user 569
+  BEFORE  5233 PLAYER              BEFORE  4271 PLAYER
+          5234 GUEST                       4387 ADDITIONAL_SPOT
+          5235 GUEST                       4694 ADDITIONAL_SPOT
+          5236 GUEST                       4695 GUEST
+  DELETE user-matches/5233         DELETE user-matches/4271
+  AFTER   5234 GUEST  live                 4387 ADDITIONAL_SPOT live
+          5235 GUEST  live                 4694 ADDITIONAL_SPOT live
+          5236 GUEST  live                 4695 GUEST           live
+  live rows on the match 28 -> 27    live rows on the match 27 -> 26
+```
+
+**3 of 3 guests survived; 0 cancelled; 0 vanished. Then 1 of 1. `ADDITIONAL_SPOT` rows survive
+too.** The match's live count fell by exactly one each time — the host, and nothing else.
+
+**THIS RETIRES THE OLD BELIEF FOR GOOD.** The doc previously carried an unproven line that removal
+"cancels the GUEST first". That was about `DELETE /admin/matches/{id}/players/{userId}` — the
+endpoint that keys on a PERSON, is ambiguous when one user holds several rows, and which we do not
+use. It was never true of the row-keyed endpoint and it is now measured false.
+
+**CONSEQUENCE.** The lapsed-spots page held rows back from selection when their match carried
+guests, on the theory that removing a host was a decision about the guest too. It is not, and that
+guard was removed on 2026-09-01. The chip was also counting MATCH-LEVEL rather than per-person, so
+three unrelated people on one match each read "4 guests on this match" when none of them had
+brought any.
+
+**What is still UNKNOWN:** whether a guest can attend without their host present is a policy
+question about the pitch, not an API one. The data says the spot survives.

@@ -136,10 +136,17 @@ console.log("\nthe grouping, on a fixture that HAS lapsed holders");
   is("a past match's spot is never listed", g("LAPSED").some((r) => r.matchId === 200), false);
   is("a cancelled match's spot is never listed", g("LAPSED").some((r) => r.matchId === 201), false);
   is("first-match-free is visible on the row", g("NEVER_A_MEMBER").find((r) => r.email === "u15@example.com")?.isFirstMatch, true);
-  /* GUESTS ARE COUNTED PER MATCH, beside the decision — acting on a host is not a decision only
-   * about the host. */
-  is("the guest count rides on every row of that match", g("LAPSED").map((r) => r.guestsOnMatch), [1, 1]);
-  is("a match with no guest reports zero", g("ACTIVE")[0].guestsOnMatch, 0);
+  /* ── INVERTED 2026-09-01 (assertion body, itemised) ───────────────────────────────────────────
+   * This asserted a per-match guest COUNT rode on every row, "beside the decision". Measured on
+   * staging twice: DELETE /admin/matches/user-matches/{userMatchId} removes exactly the row it
+   * names and guests survive untouched (3 of 3, then 1 of 1). So acting on a host IS a decision
+   * only about the host, the count was never relevant, and it was match-level anyway — three
+   * unrelated people on one match each read "4 guests". The field is gone.
+   *
+   * A GUEST ROW IS STILL NEVER LISTED (asserted above, u17) — that filter is untouched. */
+  is("no row carries a guest count any more", "guestsOnMatch" in (g("LAPSED")[0] as object), false);
+  // CONTROL: the row object is real and still carries the fields that DID survive.
+  is("control: the row still carries isStaff and kickoff", ["isStaff", "kickoff"].every((k) => k in (g("LAPSED")[0] as object)), true);
   is("the spot cost is carried", g("LAPSED")[0].amountCents, 0);
 
   /* ── THE CONTROL THE BRIEF ASKED FOR ──────────────────────────────────────────────────────

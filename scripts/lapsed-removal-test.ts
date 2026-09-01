@@ -103,10 +103,10 @@ console.log("\n1. A SPOT WITH paid > $0 CANNOT BE SELECTED");
   if (/Paid \$12\.99/.test(paid.guard.reason ?? "")) ok("  and the chip states the amount");
   else bad("the blocked chip states the amount", paid.guard.reason ?? "(none)");
   // CONTROL: an otherwise identical row at $0 IS selectable — so "blocked" is the money, not the model.
-  const free = guardFor({ amountCents: 0, isStaff: false, state: "LAPSED", guestsOnMatch: 0 });
+  const free = guardFor({ amountCents: 0, isStaff: false, state: "LAPSED" });
   is("  control: the same row at $0 is selectable", [free.selectability, defaultChecked(free)], ["ok", true]);
   // ...and one cent is enough.
-  is("  one cent is enough to block it", guardFor({ amountCents: 1, isStaff: false, state: "LAPSED", guestsOnMatch: 0 }).selectability, "blocked");
+  is("  one cent is enough to block it", guardFor({ amountCents: 1, isStaff: false, state: "LAPSED" }).selectability, "blocked");
   /* THE VIEW MUST ENFORCE IT TWICE: disabled in the markup AND filtered out of the resolved
    * selection. A checkbox is a control and a control can be driven by something other than a
    * click. */
@@ -164,9 +164,9 @@ console.log("\n3. A PAST_DUE MEMBER DOES NOT APPEAR IN LAPSED");
     is("  control: a plain LAPSED row has no context chip", bySpotUser("LAPSED", 1)!.contextChip, null);
     // CONTROL: the guard still refuses the things it always refused, on a PAST_DUE row too.
     is("  control: a PAID past-due row is still BLOCKED",
-      guardFor({ amountCents: 500, isStaff: false, state: "PAST_DUE", guestsOnMatch: 0 }).selectability, "blocked");
+      guardFor({ amountCents: 500, isStaff: false, state: "PAST_DUE" }).selectability, "blocked");
     is("  control: a STAFF past-due row is still caution",
-      guardFor({ amountCents: 0, isStaff: true, state: "PAST_DUE", guestsOnMatch: 0 }).selectability, "caution");
+      guardFor({ amountCents: 0, isStaff: true, state: "PAST_DUE" }).selectability, "caution");
   }
   // ORDER: PAST_DUE beats a stale ACTIVE row on the same person.
   const both = new Map<string, SubRow[]>([["50", [
@@ -415,7 +415,10 @@ console.log("\n12. THE FIVE CHANGES OF 2026-09-01");
     const FACTS = readFileSync("docs/matchday-api-facts.md", "utf8");
     is("    the caveat is in the lib header", /FREE DOES NOT MEAN "MEMBER BENEFIT"/.test(LIB), true);
     is("    …and in the facts doc", /FREE IS NOT "MEMBER BENEFIT"/.test(FACTS), true);
-    is("    IS FIRST MATCH stays on the page", /First match/.test(VIEW), true);
+    /* CHANGED 2026-09-01: first-match is a CHIP now, not a column — as a column it read "—" on
+     * every row. The signal is kept; only the empty column went. */
+    is("    first-match is kept, as a chip", /data-testid="ls-firstmatch"/.test(code), true);
+    is("    …rendered only where it is true", /r\.isFirstMatch \? \(/.test(code), true);
   }
 
   console.log("  -- two tabs, and the Removed one is durable --");
@@ -448,11 +451,89 @@ console.log("\n12. THE FIVE CHANGES OF 2026-09-01");
 
   console.log("  -- what must NOT have changed --");
   {
-    is("    paid > $0 is still BLOCKED", guardFor({ amountCents: 1, isStaff: false, state: "LAPSED", guestsOnMatch: 0 }).selectability, "blocked");
-    is("    staff is still caution", guardFor({ amountCents: 0, isStaff: true, state: "LAPSED", guestsOnMatch: 0 }).selectability, "caution");
-    is("    guests still caution", guardFor({ amountCents: 0, isStaff: false, state: "LAPSED", guestsOnMatch: 2 }).selectability, "caution");
-    is("    a clean row is still ok", guardFor({ amountCents: 0, isStaff: false, state: "LAPSED", guestsOnMatch: 0 }).selectability, "ok");
-    is("    paid still outranks already-started", guardFor({ amountCents: 500, isStaff: false, state: "LAPSED", guestsOnMatch: 0, alreadyStarted: true }).selectability, "blocked");
+    is("    paid > $0 is still BLOCKED", guardFor({ amountCents: 1, isStaff: false, state: "LAPSED" }).selectability, "blocked");
+    is("    staff is still caution", guardFor({ amountCents: 0, isStaff: true, state: "LAPSED" }).selectability, "caution");
+    /* ── INVERTED 2026-09-01 (assertion body, itemised): the guest guard is GONE. Proven on
+     * staging that removing a host leaves every guest row live, so a row on a match with guests
+     * is ticked like any other. */
+    is("    a row on a match with guests is now OK — the guard is gone", guardFor({ amountCents: 0, isStaff: false, state: "LAPSED" }).selectability, "ok");
+    is("    guardFor no longer accepts a guest count", "guestsOnMatch" in guardFor({ amountCents: 0, isStaff: false, state: "LAPSED" }), false);
+    is("    a clean row is still ok", guardFor({ amountCents: 0, isStaff: false, state: "LAPSED" }).selectability, "ok");
+    is("    paid still outranks already-started", guardFor({ amountCents: 500, isStaff: false, state: "LAPSED", alreadyStarted: true }).selectability, "blocked");
+  }
+}
+
+console.log("\n13. THE GUEST GUARD IS GONE, AND THE TABLE FITS");
+{
+  const VIEW = readFileSync("src/components/LapsedSpotsView.tsx", "utf8");
+  const LIB = readFileSync("src/lib/lapsedSpots.ts", "utf8");
+  const code = VIEW.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const libCode = LIB.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  console.log("  -- no guest chip, nothing held back for guests --");
+  {
+    is("    the view has no guest chip", /ls-guests|guestsOnMatch/.test(code), false);
+    is("    the model has no guest count", /guestsOnMatch|guestsByMatch/.test(libCode), false);
+    // CONTROL: the scans see a class and a field that ARE still there.
+    is("    control: the scans still find ls-guard-chip and isStaff", [/ls-guard-chip/.test(code), /isStaff/.test(libCode)], [true, true]);
+    /* THE TICK MOVED. A row that a guest count used to hold back is now ok. */
+    is("    a row on a guest-carrying match is OK", guardFor({ amountCents: 0, isStaff: false, state: "LAPSED" }).selectability, "ok");
+    /* AND THE FILTER THAT DID NOT MOVE: a GUEST row is still never listed at all. */
+    const guestRow = buildLapsedSpots(MATCHES, [spot({ user_id: 99, match_api_id: 900, user_type: "GUEST", user_email: "g@gmail.com" })],
+      [{ user_id: 99, status: "CANCELED", canceled_at: "2026-08-02T10:00:00Z", member_email: "g@gmail.com" }], TODAY, "12:00");
+    is("    control: a GUEST row is still never listed", guestRow.groups.flatMap((g) => g.rows).length, 0);
+    // The finding is written down where the next reader will look.
+    const FACTS = readFileSync("docs/matchday-api-facts.md", "utf8");
+    is("    the staging measurement is in the facts doc", /REMOVING A HOST DOES NOT TOUCH THEIR GUESTS/.test(FACTS), true);
+    is("    …and the old unproven belief is retired by name", /THIS RETIRES THE OLD BELIEF FOR GOOD/.test(FACTS), true);
+  }
+
+  console.log("  -- four columns dropped, nothing truncates --");
+  {
+    for (const gone of ["Kick-off", "First match"]) {
+      if (!new RegExp(`<div>${gone}</div>`).test(code)) ok(`    the ${gone} column is gone`);
+      else bad(`the ${gone} column is gone`, "IT WAS THE SAME VALUE ON EVERY ROW");
+    }
+    is("    no SPOT column, and no money() call in a row", /className="r ls-amt"/.test(code), false);
+    is("    the header is the six that remain",
+      /<div>Player<\/div><div>When<\/div><div>Match<\/div><div>City<\/div><div>Membership<\/div>/.test(code), true);
+    /* NOTHING TRUNCATES — the rule the old sheet broke on every cell. SCANNED ON THE STRIPPED
+     * SOURCE: the comment explaining this rule contains the word "ellipsis" and an unstripped
+     * scan flagged the sentence promising the thing it was checking for. Third time in this
+     * estate; the fix is always the same. */
+    is("    no text-overflow / ellipsis anywhere", /text-overflow|ellipsis/.test(code), false);
+    // CONTROL: the scan fires on real CSS, so the absence is not a dead regex.
+    is("    control: the ellipsis scan fires on real CSS", /text-overflow|ellipsis/.test(".x{text-overflow:ellipsis}"), true);
+    is("    cells wrap instead", /overflow-wrap:anywhere/.test(code), true);
+    is("    …and no grid carries a min-width that would force a sideways scroll", /min-width:1\d{3}px/.test(code), false);
+    is("    the table container no longer scrolls horizontally", /\.ls-tbl\{overflow-x:visible\}/.test(code), true);
+    // CONTROL: a min-width scan that WOULD fire, so the absence is not a dead regex.
+    is("    control: the min-width scan fires on a string that has one", /min-width:1\d{3}px/.test(".x{min-width:1330px}"), true);
+    // THE FULL EMAIL IS A TEXT NODE, not a title attribute.
+    is("    the email renders as text", /<span className="ls-mail">\{r\.email\}<\/span>/.test(code), true);
+    is("    …and is selectable", /user-select:all/.test(code), true);
+    is("    control: no title= carries the email any more", /title=\{r\.email\}/.test(code), false);
+  }
+
+  console.log("  -- the bar is pinned, and Copy takes the visible tab --");
+  {
+    is("    the action bar is pinned to the viewport", /\.ls-bar\{position:sticky;bottom:12px/.test(code), true);
+    is("    the page cannot scroll sideways", /\.ls\{max-width:100%;overflow-x:hidden/.test(code), true);
+    is("    a Copy button exists", /data-testid="ls-copy"/.test(code), true);
+    is("    …and it branches on the visible tab", /tab === "removed"\s*\?/.test(code), true);
+    is("    …reading the same arrays the tables render", /candidates\.map\(\(r\) =>/.test(code) && /data\.removed\.map\(\(r\) =>/.test(code), true);
+    is("    tab-separated", /join\("\\t"\)/.test(code), true);
+    is("    the CSV download is untouched", /data-testid="ls-csv"/.test(code) && /removalCsv\(results/.test(code), true);
+  }
+
+  console.log("  -- and the guards that must not have moved --");
+  {
+    is("    paid > $0 still BLOCKED", guardFor({ amountCents: 1, isStaff: false, state: "LAPSED" }).selectability, "blocked");
+    is("    staff still caution", guardFor({ amountCents: 0, isStaff: true, state: "LAPSED" }).selectability, "caution");
+    is("    already-started still caution", guardFor({ amountCents: 0, isStaff: false, state: "LAPSED", alreadyStarted: true }).selectability, "caution");
+    is("    PAST_DUE still ticked", defaultChecked(guardFor({ amountCents: 0, isStaff: false, state: "PAST_DUE" })), true);
+    is("    …and still its own group", V.groups.map((g) => g.state).includes("PAST_DUE"), true);
+    is("    a paid row shows the paid chip", guardFor({ amountCents: 1299, isStaff: false, state: "LAPSED" }).reason, "Paid $12.99 — cannot be removed here");
   }
 }
 
