@@ -5247,3 +5247,63 @@ assigned, any city, 102 people, 11 payable, unsorted. That answers "who has work
 different question from "who may be paid in this city". `match-managers/route.ts` already records
 the same distinction from the other side: 100 distinct `manager_id`s appear on matches against 87
 people on the roster.
+
+## TWO CLOCKS IN THE ESTATE, ON PURPOSE — Lifecycle is Chicago, membership snapshots are UTC (2026-09-01)
+
+`growth_registration.signup_month` moved from **UTC to America/Chicago** (migration 0157).
+`members_monthly_snapshots` did **NOT** move and stays **UTC**. That is deliberate, and it means
+the two disagree. This entry exists so the next person finds that out here rather than by
+reconciling two pages and assuming one is broken.
+
+### What moved, and why
+
+Player Behavior gained a WEEKLY granularity. Weekly buckets are Chicago: a signup at `03:36Z` on
+the 1st happened at **22:36 on the 31st** at the pitch, and on a weekly bucket a shifted day
+crosses a boundary **one time in seven** rather than one in thirty. Leaving monthly on UTC would
+have put two clocks on one page.
+
+Measured before the change on **27,064 completed non-fake users**:
+
+```
+218 users (0.81%) fall in a different MONTH under the two zones
+933 users (3.45%) fall in a different WEEK          <- 4x, which is why weekly forced the issue
+largest absolute move in any month: 11 USERS (2026-05, 1308 -> 1297)
+the total is unchanged: 27,064 either way — nobody is created or lost
+```
+
+### What did NOT move, and by how much it now disagrees
+
+`members_monthly_snapshots` rows are **frozen history and some have been quoted to people**, so
+they stay UTC. Against a Chicago-bucketed Lifecycle page they differ by **±1 member per month**:
+
+```
+MONTH     snapshots (UTC)   Chicago equivalent   DELTA
+2026-03              104                  104        0
+2026-04              109                  110       +1
+2026-05              111                  111        0
+2026-06              120                  119       -1
+2026-07              165                  166       +1
+2026-08              137                  136       -1
+```
+
+**Never more than one member.** If a Membership figure and a Lifecycle figure differ by one, this
+is why, and neither is wrong.
+
+### The blast radius of 0157
+
+`growth_registration` is read in exactly one place — `growthFromViews.ts:813`, which backs
+`/api/lifecycle`. `GrowthDataProvider` fetches that once and feeds **every Player Lifecycle
+report**: Player Funnel, Player Behavior, Revenue per Player, Retention, Churn, Player Data Room.
+All six shifted by the same small amounts on 2026-09-01.
+
+**The Growth tab does NOT read it. The exec summary does NOT read it.** Neither moved.
+
+### The rule that comes out of this
+
+**A month is only comparable to another month on the same clock.** Before reconciling any two
+monthly figures in this estate, check which side of this line each one sits on:
+
+- **America/Chicago** — `growth_registration` and everything under `/api/lifecycle`; the weekly
+  buckets on Player Behavior; every wall-clock match date (which is Chicago by construction).
+- **UTC** — `members_monthly_snapshots`, and `mdapi_subscriptions` activation/cancellation
+  timestamps when sliced as text rather than converted.

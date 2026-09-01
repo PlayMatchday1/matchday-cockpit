@@ -76,18 +76,24 @@ export async function GET(req: Request) {
      * match by the server's offset, which is the trap this estate has hit repeatedly. */
     const matches = await selectAll<Record<string, unknown>>(() =>
       sb.from("mdapi_matches")
-        .select("api_id, start_date, city_identifier, is_cancelled, deleted_at")
+        .select("api_id, start_date, city_identifier, field_title, is_cancelled, deleted_at")
         .is("deleted_at", null).eq("is_cancelled", false)
         .gte("start_date", first)
         .order("api_id"),
     );
     const matchWeek = new Map<number, string>();
     const matchCity = new Map<number, string>();
+    /* THE FIELD, for Behavior's field mode. Same aggregation keyed on field_title instead of city —
+     * a genuinely small addition, which is why it is here rather than deferred. Registrations are
+     * NOT broken out by field and must not be: a registration carries the city declared at signup
+     * and never a pitch, so a per-field registration figure would be invented. */
+    const matchField = new Map<number, string>();
     for (const m of matches) {
       const w = weekKey(wallClockYmd(String(m.start_date)));
       if (!inAxis.has(w)) continue;
       matchWeek.set(Number(m.api_id), w);
       matchCity.set(Number(m.api_id), cityFromAbbr(String(m.city_identifier ?? "")) ?? "");
+      matchField.set(Number(m.api_id), String(m.field_title ?? "").trim());
     }
 
     const ids = [...matchWeek.keys()];
@@ -99,6 +105,9 @@ export async function GET(req: Request) {
      * and is what the monthly path's cohort logic ultimately rests on too. */
     const newByWeek = new Map<string, number>();
     const newByWeekCity = new Map<string, Map<string, number>>();
+    const spotsByWeekField = new Map<string, Map<string, number>>();
+    const newByWeekField = new Map<string, Map<string, number>>();
+    const activeByWeekField = new Map<string, Map<string, Set<number>>>();
 
     /* ── THE 1,000-ROW CAP, WHICH THIS CODE GOT WRONG ONCE ────────────────────────────────────
      * PostgREST caps EVERY response at 1,000 rows regardless of what is asked for. Chunking the
@@ -144,8 +153,20 @@ export async function GET(req: Request) {
           (cm.get(w) ?? cm.set(w, new Set()).get(w)!).add(uid);
           activeByWeekCity.set(city, cm);
         }
+        const field = matchField.get(Number(p.match_api_id)) ?? "";
+        if (field) {
+          const fm = spotsByWeekField.get(field) ?? new Map<string, number>();
+          fm.set(w, (fm.get(w) ?? 0) + 1); spotsByWeekField.set(field, fm);
+          const fa = activeByWeekField.get(field) ?? new Map<string, Set<number>>();
+          (fa.get(w) ?? fa.set(w, new Set()).get(w)!).add(uid);
+          activeByWeekField.set(field, fa);
+        }
         if (p.is_first_match === true) {
           newByWeek.set(w, (newByWeek.get(w) ?? 0) + 1);
+          if (field) {
+            const fm = newByWeekField.get(field) ?? new Map<string, number>();
+            fm.set(w, (fm.get(w) ?? 0) + 1); newByWeekField.set(field, fm);
+          }
           if (city) {
             const m = newByWeekCity.get(city) ?? new Map<string, number>();
             m.set(w, (m.get(w) ?? 0) + 1); newByWeekCity.set(city, m);
@@ -174,11 +195,32 @@ export async function GET(req: Request) {
       }));
     }
 
+    const fields = [...spotsByWeekField.keys()].sort();
+    const byField: Record<string, { label: string; city: string; points: WeekPoint[] }> = {};
+    for (const f of fields) {
+      // The field's city, from any match played there in the window.
+      const anyId = [...matchField].find(([, v]) => v === f)?.[0];
+      byField[f] = {
+        label: f,
+        city: (anyId != null ? matchCity.get(anyId) : "") || "",
+        points: axis.map((w) => ({
+          w,
+          // REGISTRATIONS STAY NULL PER FIELD — see the note by matchField.
+          registrations: 0,
+          newPlayers: newByWeekField.get(f)?.get(w) ?? 0,
+          totalPlayers: activeByWeekField.get(f)?.get(w)?.size ?? 0,
+          spots: spotsByWeekField.get(f)?.get(w) ?? 0,
+        })),
+      };
+    }
+
     return Response.json({
       axis,
       overall: axis.map(point),
       byCity,
+      byField,
       cities,
+      fields,
       /* SAID OUT LOUD, not left to be discovered. The panel renders this beside the chart. */
       reconcile: {
         weeklyTimezone: "America/Chicago",

@@ -131,5 +131,72 @@ console.log("\nAND THE MONTHLY BUCKETS ARE UTC — stated where it can be checke
   is("  …naming BOTH reasons, not just the timezone", /weeks do not align to month boundaries/.test(R), true);
 }
 
+console.log("\nTHE PANEL TOGGLE — monthly untouched, weekly normalised into the same shape");
+{
+  const P = readFileSync("src/components/growth/BehaviorPanel.tsx", "utf8");
+  const code = P.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  is("  monthly is the default", /useState<Granularity>\("monthly"\)/.test(code), true);
+  is("  the toggle renders both options", /data-testid="behavior-gran-monthly"/.test(code) && /data-testid="behavior-gran-weekly"/.test(code), true);
+  is("  the selection is persisted", /localStorage\.setItem\(BEHAVIOR_GRAN_KEY/.test(code), true);
+  is("  …and read back on mount", /localStorage\.getItem\(BEHAVIOR_GRAN_KEY\)/.test(code), true);
+  is("  weekly asks for 13", /const WEEKS = 13/.test(code), true);
+
+  /* THE WHOLE DESIGN IN ONE ASSERTION. Weekly is normalised to the monthly point shape — `w`
+   * becomes `m` — so every downstream consumer is untouched. If this stops being true the panel
+   * has grown a second code path and monthly is no longer guaranteed unchanged. */
+  is("  weekly wears the monthly shape (w -> m)", /m: p\.w, registrations: p\.registrations/.test(code), true);
+  is("  …and monthly resolves to exactly the old expression",
+    /data\.behaviorOverall\.map\(\(p\) => p\.m\)\.filter\(\(m\) => m >= period\.start && m <= period\.end\)/.test(code), true);
+  is("  the source switches, the consumers do not",
+    /const src = gran === "weekly" && weeklyData \? weeklyData : data;/.test(code), true);
+  // CONTROL: no consumer still reads the raw monthly maps directly, which would ignore the toggle.
+  is("  control: nothing reads data.behaviorByCity/ByField any more", /data\.behaviorBy(City|Field)\[/.test(code), false);
+  is("  control: …and networkSeries is fed src", /networkSeries\(src,/.test(code), true);
+
+  console.log("  -- labels and the change column --");
+  is("  the change column relabels", /Latest \{changeColumnLabel\(gran\)\}/.test(code), true);
+  is("  …in the CSV header too", /`Latest \$\{changeColumnLabel\(gran\)\}`/.test(code), true);
+  is("  …with a tooltip saying which", /title=\{changeColumnTitle\(gran\)\}/.test(code), true);
+  is("  bucket labels follow the granularity", /const bucketLabel = \(k: string, g: Granularity\)/.test(code), true);
+  is("  …and the chart axis uses the short form", /bucketTick\(m, gran\)/.test(code), true);
+  is("  the range caption follows too", /gran === "weekly"\s*\?\s*`\$\{weekTick\(months\[0\]\)\}/.test(code), true);
+
+  console.log("  -- city and field detail follow the granularity --");
+  is("  the city list reads src", /Object\.keys\(src\.behaviorByCity\)/.test(code), true);
+  is("  the field list reads src", /Object\.keys\(src\.behaviorByField\)/.test(code), true);
+  is("  the model recomputes on a granularity change", /\[cityMode, fieldMode, detailMode, src, months, cities, fields, metric, gran\]/.test(code), true);
+  // A failed weekly fetch must be an error, not an empty chart.
+  is("  a failed weekly fetch is an ERROR", /this is not an empty chart/.test(P), true);
+  is("  …and loading says so", /data-testid="behavior-weekly-loading"/.test(code), true);
+}
+
+console.log("\nTHE FIELD BREAKDOWN IS IN THE ROUTE, AND REGISTRATIONS ARE NOT FAKED PER FIELD");
+{
+  const R = readFileSync("src/app/api/lifecycle/behavior-weekly/route.ts", "utf8");
+  const code = R.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  is("  byField is returned", /byField,/.test(code), true);
+  is("  …keyed on field_title", /matchField\.set\(Number\(m\.api_id\), String\(m\.field_title/.test(code), true);
+  is("  …with the same three play metrics", /newPlayers: newByWeekField/.test(code) && /totalPlayers: activeByWeekField/.test(code) && /spots: spotsByWeekField/.test(code), true);
+  /* A REGISTRATION HAS NO FIELD. It carries the city declared at signup and nobody registers at a
+   * pitch, so a per-field registration figure would be invented. The monthly path says the same. */
+  is("  registrations are NOT broken out per field", /registrations: 0,/.test(code), true);
+  is("  …and the reason is written down", /never a pitch/.test(R), true);
+}
+
+console.log("\nTHE MONTHLY BUCKETS ARE CHICAGO NOW — one clock across the page");
+{
+  const MIG = readFileSync("supabase/migrations/0157_growth_registration_chicago.sql", "utf8");
+  is("  0157 moves signup_month to America/Chicago", /AT TIME ZONE 'America\/Chicago', 'YYYY-MM'\) END AS signup_month/.test(MIG), true);
+  is("  …and recreates the UNIQUE index REFRESH CONCURRENTLY needs",
+    /CREATE UNIQUE INDEX growth_registration_pk/.test(MIG), true);
+  is("  …and the second index too", /CREATE INDEX growth_registration_signup/.test(MIG), true);
+  // CONTROL: it is a DROP + CREATE, because a materialized view cannot be replaced in place.
+  is("  control: it drops first, as a materialized view requires", /DROP MATERIALIZED VIEW IF EXISTS/.test(MIG), true);
+  const FACTS = readFileSync("docs/matchday-api-facts.md", "utf8");
+  is("  the snapshots divergence is on the record", /TWO CLOCKS IN THE ESTATE, ON PURPOSE/.test(FACTS), true);
+  is("  …naming members_monthly_snapshots as the UTC side", /members_monthly_snapshots.*stays UTC|stays \*\*UTC\*\*/.test(FACTS), true);
+}
+
 console.log(`\nweek-buckets: ${pass} passed, ${fails.length} failed`);
 if (fails.length) { for (const f of fails) console.log(`  FAILED: ${f}`); process.exit(1); }

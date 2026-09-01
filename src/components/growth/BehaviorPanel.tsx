@@ -13,6 +13,24 @@ import type { Period } from "./GlobalPeriod";
 import { METRIC_LABEL, networkSeries, metricValue, IS_RATE, type GridMetric } from "@/lib/growthMetricGrid";
 import { downloadCsv } from "./format";
 import styles from "./playerBehavior.module.css";
+import { supabase } from "@/lib/supabase";
+import {
+  changeColumnLabel, changeColumnTitle, weekRangeLabel, weekTick, type Granularity,
+} from "@/lib/weekBuckets";
+
+/* THE WEEKLY PAYLOAD, as /api/lifecycle/behavior-weekly returns it. `w` is a Monday YYYY-MM-DD;
+ * it is renamed to `m` on the way in so the rest of this file is unchanged. */
+type WeekPoint = { w: string; registrations: number; newPlayers: number; totalPlayers: number; spots: number };
+type WeeklyPayload = {
+  axis: string[];
+  overall: WeekPoint[];
+  byCity: Record<string, WeekPoint[]>;
+  byField?: Record<string, { label: string; city: string; points: WeekPoint[] }>;
+};
+
+/** 13 weeks — a quarter, and enough to see a trend without the axis becoming unreadable. */
+const WEEKS = 13;
+const BEHAVIOR_GRAN_KEY = "behavior:granularity";
 
 type BehaviorMetric = "registrations" | "newPlayers" | "totalPlayers" | "spots";
 
@@ -44,6 +62,12 @@ const NEUTRAL_COLOR = "#65716b"; // fallback for any unexpected city
 
 const MON_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const monthLabel = (m: string) => `${MON_ABBR[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
+/* ONE LABELLER FOR BOTH GRANULARITIES. A weekly key is a Monday YYYY-MM-DD and reads as its full
+ * date range — "Aug 24 – Aug 30", never a week number. A monthly key is YYYY-MM and is unchanged. */
+const bucketLabel = (k: string, g: Granularity) => (g === "weekly" ? weekRangeLabel(k) : monthLabel(k));
+/* THE CHART AXIS gets the short form: 13 full ranges will not fit across a chart, so the tick is
+ * the Monday and the table below carries both ends. */
+const bucketTick = (k: string, g: Granularity) => (g === "weekly" ? weekTick(k) : monthLabel(k));
 const fmt = (n: number) => n.toLocaleString("en-US");
 const pctChange = (a: number, b: number) => (b === 0 ? (a === 0 ? 0 : 100) : ((a - b) / b) * 100);
 
@@ -72,7 +96,7 @@ const tickLabel = (v: number) => (v >= 1000 && v % 1000 === 0 ? v / 1000 + "K" :
 
 type Series = { data: number[]; color: string; label: string; width: number };
 
-function buildChart(series: Series[], months: string[]) {
+function buildChart(series: Series[], months: string[], gran: Granularity = "monthly") {
   const flat = series.flatMap((s) => s.data);
   const ticks = niceTicks(Math.max(1, ...flat), 5);
   const top = ticks[ticks.length - 1];
@@ -80,7 +104,7 @@ function buildChart(series: Series[], months: string[]) {
   const xAt = (i: number) => M.l + (months.length === 1 ? IW / 2 : (i * IW) / (months.length - 1));
 
   const gridlines = ticks.map((t) => ({ y: yAt(t), label: tickLabel(t) }));
-  const monthTicks = months.map((m, i) => ({ x: xAt(i), label: monthLabel(m) }));
+  const monthTicks = months.map((m, i) => ({ x: xAt(i), label: bucketTick(m, gran) }));
 
   const polys = series.map((s) => ({
     d: s.data.map((v, i) => `${i ? "L" : "M"}${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`).join(" "),
@@ -127,9 +151,74 @@ export default function BehaviorPanel({
   const [view, setView] = useState<"matchday" | "city" | "field">("matchday");
   const [metric, setMetric] = useState<BehaviorMetric>("totalPlayers");
 
+  /* ── GRANULARITY ────────────────────────────────────────────────────────────────────────────
+   * MONTHLY IS THE DEFAULT AND IS UNTOUCHED. Weekly is normalised into the SAME point shape the
+   * monthly path already uses — `{ m, registrations, newPlayers, totalPlayers, spots }` where `m`
+   * is a Monday YYYY-MM-DD instead of a YYYY-MM. That is the whole trick, and it is why this is a
+   * ~40-line change to a 498-line panel rather than a rewrite: every downstream consumer —
+   * networkSeries, indexPoints, toRow, buildChart, the city and field branches — keys on `.m` and
+   * neither knows nor cares what the string means. Only the LABELS and the axis change.
+   *
+   * WEEKLY DOES NOT USE `period`. The global period picker selects months; the 13-week window is
+   * its own range, so weekly ignores it rather than intersecting two incompatible selections. */
+  const [gran, setGran] = useState<Granularity>("monthly");
+  const [weekly, setWeekly] = useState<WeeklyPayload | null>(null);
+  const [weeklyErr, setWeeklyErr] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const g = window.localStorage.getItem(BEHAVIOR_GRAN_KEY);
+      if (g === "weekly" || g === "monthly") setGran(g);
+    } catch { /* private mode */ }
+  }, []);
+  useEffect(() => {
+    try { window.localStorage.setItem(BEHAVIOR_GRAN_KEY, gran); } catch { /* private mode */ }
+  }, [gran]);
+  useEffect(() => {
+    if (gran !== "weekly" || weekly) return;
+    let dead = false;
+    (async () => {
+      try {
+        const { data: sess } = await supabase.auth.getSession();
+        const token = sess.session?.access_token;
+        const res = await fetch(`/api/lifecycle/behavior-weekly?weeks=${WEEKS}`, {
+          cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j?.error ?? `HTTP ${res.status}`);
+        if (!dead) setWeekly(j as WeeklyPayload);
+      } catch (e) {
+        // A FAILED FETCH IS AN ERROR, never an empty chart — the two look identical otherwise.
+        if (!dead) setWeeklyErr(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => { dead = true; };
+  }, [gran, weekly]);
+
+  /* THE WEEKLY DATA, WEARING THE MONTHLY SHAPE. `w` becomes `m`; nothing downstream changes. */
+  const weeklyData = useMemo<GrowthData | null>(() => {
+    if (!weekly) return null;
+    const pt = (p: WeekPoint): BehaviorPoint => ({
+      m: p.w, registrations: p.registrations, newPlayers: p.newPlayers,
+      totalPlayers: p.totalPlayers, spots: p.spots,
+    });
+    const byCity: Record<string, BehaviorPoint[]> = {};
+    for (const [c, ps] of Object.entries(weekly.byCity)) byCity[c] = ps.map(pt);
+    const byField: GrowthData["behaviorByField"] = {};
+    for (const [f, v] of Object.entries(weekly.byField ?? {})) {
+      byField[f] = { label: v.label, city: v.city, points: v.points.map(pt) };
+    }
+    // Spread the real payload so anything this panel does not touch keeps working.
+    return { ...data, behaviorOverall: weekly.overall.map(pt), behaviorByCity: byCity, behaviorByField: byField };
+  }, [weekly, data]);
+
+  /* FROM HERE DOWN, `src` REPLACES `data` AND `months` IS THE AXIS. Monthly resolves to exactly
+   * what it resolved to before — same array, same filter, same order. */
+  const src = gran === "weekly" && weeklyData ? weeklyData : data;
   const months = useMemo(
-    () => data.behaviorOverall.map((p) => p.m).filter((m) => m >= period.start && m <= period.end),
-    [data.behaviorOverall, period],
+    () => (gran === "weekly" && weekly
+      ? weekly.axis
+      : data.behaviorOverall.map((p) => p.m).filter((m) => m >= period.start && m <= period.end)),
+    [gran, weekly, data.behaviorOverall, period],
   );
 
   // The play-markets IN THE SELECTED PERIOD: cities with any spots > 0 across the
@@ -140,10 +229,10 @@ export default function BehaviorPanel({
   // established markets.
   const cities = useMemo(() => {
     const inPeriod = new Set(months);
-    return Object.keys(data.behaviorByCity)
-      .filter((c) => data.behaviorByCity[c].some((p) => inPeriod.has(p.m) && (p.spots ?? 0) > 0))
+    return Object.keys(src.behaviorByCity)
+      .filter((c) => src.behaviorByCity[c].some((p) => inPeriod.has(p.m) && (p.spots ?? 0) > 0))
       .sort((a, b) => a.localeCompare(b));
-  }, [data.behaviorByCity, months]);
+  }, [src.behaviorByCity, months]);
 
   const cityMode = view === "city";
   const fieldMode = view === "field";
@@ -173,10 +262,10 @@ export default function BehaviorPanel({
   // THE PITCHES IN THE SELECTED PERIOD, same rule as cities: any spots in a displayed month.
   const fields = useMemo(() => {
     const inPeriod = new Set(months);
-    return Object.keys(data.behaviorByField)
-      .filter((f) => data.behaviorByField[f].points.some((p) => inPeriod.has(p.m) && (p.spots ?? 0) > 0))
+    return Object.keys(src.behaviorByField)
+      .filter((f) => src.behaviorByField[f].points.some((p) => inPeriod.has(p.m) && (p.spots ?? 0) > 0))
       .sort((a, b) => a.localeCompare(b));
-  }, [data.behaviorByField, months]);
+  }, [src.behaviorByField, months]);
 
   const model = useMemo(() => {
     // series + table rows follow the current view.
@@ -187,8 +276,12 @@ export default function BehaviorPanel({
     let detailTitle: string;
     let scope: string;
 
-    const monthRange =
-      months.length > 0 ? `${monthLabel(months[0])} – ${monthLabel(months[months.length - 1])}` : "";
+    /* THE CAPTION NAMES THE ACTUAL RANGE. Weekly reads "Jun 8 – Jun 14 – Aug 31 – Sep 6", which is
+     * unreadable, so it names the first Monday and the last Sunday instead — one range, not two. */
+    const monthRange = months.length === 0 ? ""
+      : gran === "weekly"
+        ? `${weekTick(months[0])} – ${weekRangeLabel(months[months.length - 1]).split(" – ")[1]}`
+        : `${monthLabel(months[0])} – ${monthLabel(months[months.length - 1])}`;
 
     // A RATE MOVES IN PERCENTAGE POINTS, NOT PERCENT. "% recurring went from 40% to 44%" is +4
     // POINTS, not +10%. Reporting the relative change of a percentage is a classic way to overstate
@@ -208,7 +301,7 @@ export default function BehaviorPanel({
     // rendering the overall series under the Field Detail heading.
     if (!detailMode) {
       series = METRIC_DEFS.map((md) => ({
-        data: networkSeries(data, md.key, months).map((v) => v ?? 0),
+        data: networkSeries(src, md.key, months).map((v) => v ?? 0),
         color: md.color,
         label: METRIC_LABEL[md.key],
         width: 3,
@@ -219,7 +312,7 @@ export default function BehaviorPanel({
       // moved, so the rate is the one that carries the signal — and the rate alone hides the size
       // of the group it describes.
       for (const rm of ["recurring", "pctRecurring"] as GridMetric[]) {
-        rows.push(toRow(METRIC_LABEL[rm], networkSeries(data, rm, months).map((v) => v ?? 0), undefined, rm === "pctRecurring"));
+        rows.push(toRow(METRIC_LABEL[rm], networkSeries(src, rm, months).map((v) => v ?? 0), undefined, rm === "pctRecurring"));
       }
       chartTitle = "Overall Matchday performance";
       chartSub = `${monthRange} · registrations, new players, total players and spots booked`;
@@ -227,11 +320,11 @@ export default function BehaviorPanel({
       scope = "All Matchday";
     } else if (fieldMode) {
       const idxByField: Record<string, Map<string, BehaviorPoint>> = {};
-      for (const f of fields) idxByField[f] = new Map(data.behaviorByField[f].points.map((p) => [p.m, p]));
+      for (const f of fields) idxByField[f] = new Map(src.behaviorByField[f].points.map((p) => [p.m, p]));
       series = fields.map((f, k) => ({
         data: months.map((m) => metricValue(idxByField[f].get(m), metric as GridMetric) ?? 0),
         color: FIELD_COLORS[k % FIELD_COLORS.length],
-        label: data.behaviorByField[f].label,
+        label: src.behaviorByField[f].label,
         width: 2.4,
       }));
       rows = series.map((s2, k) => toRow(s2.label, s2.data, { rank: k + 1, dot: s2.color }));
@@ -242,7 +335,7 @@ export default function BehaviorPanel({
       scope = "All fields";
     } else {
       const idxByCity: Record<string, Map<string, BehaviorPoint>> = {};
-      for (const c of cities) idxByCity[c] = new Map(data.behaviorByCity[c].map((p) => [p.m, p]));
+      for (const c of cities) idxByCity[c] = new Map(src.behaviorByCity[c].map((p) => [p.m, p]));
       series = cities.map((c) => ({
         data: months.map((m) => metricValue(idxByCity[c].get(m), metric as GridMetric) ?? 0),
         color: CITY_COLORS[c] ?? NEUTRAL_COLOR,
@@ -257,15 +350,15 @@ export default function BehaviorPanel({
       scope = "All cities";
     }
 
-    const chart = series.length && months.length ? buildChart(series, months) : null;
+    const chart = series.length && months.length ? buildChart(series, months, gran) : null;
     return { chart, rows, chartTitle, chartSub, detailTitle, scope };
-  }, [cityMode, fieldMode, detailMode, data, months, cities, fields, metric]);
+  }, [cityMode, fieldMode, detailMode, src, months, cities, fields, metric, gran]);
 
   const metricPeriodText = `${months.length} month${months.length === 1 ? "" : "s"} · oldest to newest`;
   const firstColHead = fieldMode ? "Field" : cityMode ? "City" : "Metric";
 
   const exportCsv = () => {
-    const header = [firstColHead, ...months.map(monthLabel), "Selected period", "Latest MoM"];
+    const header = [firstColHead, ...months.map((k) => bucketLabel(k, gran)), "Selected period", `Latest ${changeColumnLabel(gran)}`];
     const body = model.rows.map((r) => [
       r.name,
       // A rate is written with its unit so a spreadsheet cannot mistake 44 for a count.
@@ -282,7 +375,7 @@ export default function BehaviorPanel({
     if (detailMode) {
       const scopes = fieldMode ? fields : cities;
       const pointsOf = (k: string) =>
-        new Map((fieldMode ? data.behaviorByField[k].points : data.behaviorByCity[k]).map((p) => [p.m, p]));
+        new Map((fieldMode ? src.behaviorByField[k].points : src.behaviorByCity[k]).map((p) => [p.m, p]));
       for (const rm of ["newPlayers", "totalPlayers", "recurring", "pctRecurring"] as GridMetric[]) {
         for (const k of scopes) {
           const idx = pointsOf(k);
@@ -291,7 +384,7 @@ export default function BehaviorPanel({
           const last = cells[cells.length - 1] ?? 0;
           const prev = cells[cells.length - 2] ?? 0;
           body.push([
-            `${fieldMode ? data.behaviorByField[k].label : k} · ${METRIC_LABEL[rm]}`,
+            `${fieldMode ? src.behaviorByField[k].label : k} · ${METRIC_LABEL[rm]}`,
             ...cells.map((c) => (rate ? `${c.toFixed(1)}%` : String(c))),
             rate ? `${last.toFixed(1)}%` : String(cells.reduce((a, b) => a + b, 0)),
             rate
@@ -339,6 +432,29 @@ export default function BehaviorPanel({
           </div>
         </div>
         <div className={styles.behaviorControls}>
+          {/* GRANULARITY. Monthly is the default and is what this panel has always shown; Weekly
+              is an addition beside it, using the same segmented control the view switcher uses so
+              the two read as peers rather than one being a mode of the other. */}
+          <div className={styles.segmented} id="growthBehaviorGranularity" data-testid="behavior-granularity">
+            <button
+              type="button"
+              className={`${styles.segBtn} ${gran === "monthly" ? styles.segBtnActive : ""}`}
+              data-value="monthly"
+              data-testid="behavior-gran-monthly"
+              onClick={() => setGran("monthly")}
+            >
+              Monthly
+            </button>
+            <button
+              type="button"
+              className={`${styles.segBtn} ${gran === "weekly" ? styles.segBtnActive : ""}`}
+              data-value="weekly"
+              data-testid="behavior-gran-weekly"
+              onClick={() => setGran("weekly")}
+            >
+              Weekly
+            </button>
+          </div>
           <div className={styles.segmented} id="growthBehaviorView">
             <button
               type="button"
@@ -384,6 +500,14 @@ export default function BehaviorPanel({
         </div>
       </div>
 
+      {gran === "weekly" && weeklyErr ? (
+        <div className={styles.chart} data-testid="behavior-weekly-error" style={{ padding: 24, color: "#a8391a" }}>
+          <b>The weekly data could not be loaded — this is not an empty chart.</b> {weeklyErr}
+        </div>
+      ) : gran === "weekly" && !weekly ? (
+        <div className={styles.chart} data-testid="behavior-weekly-loading" style={{ padding: 24 }}>Loading the last {WEEKS} weeks…</div>
+      ) : (
+      <>
       {/* chart */}
       <div className={styles.chart}>
         <svg
@@ -461,7 +585,7 @@ export default function BehaviorPanel({
                 <th key={m}>{monthLabel(m)}</th>
               ))}
               <th>Selected period</th>
-              <th>Latest MoM</th>
+              <th title={changeColumnTitle(gran)}>Latest {changeColumnLabel(gran)}</th>
             </tr>
           </thead>
           <tbody id="growthSummaryBody">
@@ -493,6 +617,8 @@ export default function BehaviorPanel({
           </tbody>
         </table>
       </div>
+      </>
+      )}
     </div>
   );
 }
