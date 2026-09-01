@@ -83,6 +83,14 @@ export type ManagerRow = {
   adjustmentNotes: string | null;
   adjustmentAt: string | null; // when the adjustment was entered (created_at)
   total: number;
+  /* ADDED BY THE "not on the schedule" CONTROL — a person with NO matches this week.
+   * Derived from manager_pay_adjustments.city_identifier being non-null: an inline Additional Pay
+   * cell never carries a city (its city comes from the matches), so the column IS the marker and
+   * there is no second boolean to drift out of step with it. */
+  addedManually: boolean;
+  /* The adjustments row id, so the delete control names one row rather than re-deriving it from
+   * (email, week) at delete time. null for every row that was not manually added. */
+  adjustmentId: number | null;
 };
 
 export type CitySection = {
@@ -390,19 +398,33 @@ export async function computeManagerPayForWeek(
     }
   }
 
+  /* select("*") DELIBERATELY, the same reason adminAuth does it. city_identifier ships in
+   * migration 0156 and code deploys before migrations apply — naming a column that does not exist
+   * yet turns every Manager Pay request into a 500. With "*" the field is simply undefined until
+   * the migration lands, and an undefined city means "not manually added", which is exactly the
+   * behaviour this page had before the column existed. */
   const { data: adjData, error: adjErr } = await supabase
     .from("manager_pay_adjustments")
-    .select("manager_email, amount, notes, created_at")
+    .select("*")
     .eq("week_start", weekStart);
   if (adjErr) {
     throw new Error(`manager_pay_adjustments read failed: ${adjErr.message}`);
   }
-  const adjByEmail = new Map<string, { amount: number; notes: string | null; at: string | null }>();
-  for (const row of (adjData ?? []) as AdjustmentRow[]) {
+  type AdjRow = AdjustmentRow & { id?: number; city_identifier?: string | null; manager_id?: number | null };
+  const adjByEmail = new Map<string, {
+    amount: number; notes: string | null; at: string | null;
+    city: string | null; id: number | null; managerId: number | null;
+  }>();
+  for (const row of (adjData ?? []) as AdjRow[]) {
     const key = row.manager_email.toLowerCase();
     const amt =
       typeof row.amount === "number" ? row.amount : Number(row.amount) || 0;
-    adjByEmail.set(key, { amount: amt, notes: row.notes, at: row.created_at });
+    adjByEmail.set(key, {
+      amount: amt, notes: row.notes, at: row.created_at,
+      city: (row.city_identifier ?? null) || null,
+      id: typeof row.id === "number" ? row.id : null,
+      managerId: typeof row.manager_id === "number" ? row.manager_id : null,
+    });
   }
 
   function resolveSecond(m: MatchRow): { email: string | null; name: string | null } {
@@ -579,6 +601,43 @@ export async function computeManagerPayForWeek(
       adjustmentNotes: adj?.notes ?? null,
       adjustmentAt: adj?.at ?? null,
       total: baseTotal + (adj?.amount ?? 0),
+      /* A row built from MATCHES is never a manual add, even if its adjustment happens to carry a
+       * city. That case means someone was added and has since been assigned a match: the money
+       * attaches here, to the real row, and the synthetic row below is skipped — one row, one
+       * payment. Two rows for one person in one week is a double-pay in Gusto. */
+      addedManually: false,
+      adjustmentId: adj?.id ?? null,
+    });
+  }
+
+  /* ── THE PEOPLE WITH NO MATCHES THIS WEEK ───────────────────────────────────────────────────
+   * A manager with zero assignments produces no accumulator above, so no row, so their adjustment
+   * would be read and then silently dropped. These are the rows the "Add someone not on the
+   * schedule" control creates, and they are recognisable by carrying a city_identifier — an
+   * inline Additional Pay cell never does, because its city comes from its matches.
+   *
+   * ZERO MATCHES, ZERO MATCH PAY. matchCount 0 and baseTotal 0 are what keep every matches-worked
+   * and matches-paid figure on the page unchanged: the city's matchCount is a sum over managers,
+   * and adding 0 to it changes nothing. The money lives entirely in `adjustment`. */
+  for (const [key, adj] of adjByEmail) {
+    if (!adj.city) continue;                 // an inline cell, not a manual add
+    if (accByEmail.has(key)) continue;       // they have matches — the row above already has it
+    managerRows.push({
+      managerEmail: isAdmin ? key : null,
+      // The directory name is not carried on the adjustment row; the email is the identity and the
+      // view resolves the display name from the manager directory it already loads.
+      managerName: key,
+      managerId: adj.managerId,
+      cityIdentifier: adj.city,
+      matches: [],
+      matchCount: 0,
+      baseTotal: 0,
+      adjustment: adj.amount,
+      adjustmentNotes: adj.notes,
+      adjustmentAt: adj.at,
+      total: adj.amount,
+      addedManually: true,
+      adjustmentId: adj.id,
     });
   }
 

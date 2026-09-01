@@ -126,6 +126,52 @@ export default function ManagerPayView() {
     setRefreshKey((k) => k + 1);
   }, [weekStart]);
 
+  /* ── ADD SOMEONE NOT ON THE SCHEDULE ────────────────────────────────────────────────────────
+   * A manager with zero assigned matches has no row, so there is no "+ Add adjustment" to click.
+   * This opens a dialog scoped to the city block it was pressed in; the city and the week are
+   * never typed. */
+  const [addFor, setAddFor] = useState<{ city: string; unassigned: MatchSummary[] } | null>(null);
+
+  const submitAdded = useCallback(async (b: {
+    city: string; managerEmail: string; managerId: number | null; amount: number; reason: string;
+  }): Promise<string | null> => {
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) return "No active session.";
+    const res = await fetch("/api/manager-pay/added", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        managerEmail: b.managerEmail, managerId: b.managerId, weekStart,
+        cityIdentifier: b.city, amount: b.amount, reason: b.reason,
+      }),
+    });
+    const json = await res.json().catch(() => ({}));
+    // THE VERDICT IS THE SERVER'S READ-BACK, never the HTTP status alone.
+    if (!res.ok) return (json?.error as string) ?? `HTTP ${res.status}`;
+    if (json?.outcome !== "landed") return `The row was not saved (${json?.outcome ?? "unknown"}). Reload and check before retrying.`;
+    setAddFor(null);
+    setRefreshKey((k) => k + 1);
+    return null;
+  }, [weekStart]);
+
+  const deleteAdded = useCallback(async (r: ManagerRow) => {
+    if (r.adjustmentId == null) return;
+    const who = r.managerName || r.managerEmail || "this person";
+    // A CONFIRM THAT NAMES THE PERSON AND THE AMOUNT. "Are you sure?" is not a confirmation.
+    if (!window.confirm(`Remove ${who} from the ${r.cityIdentifier} pay sheet for the week of ${weekStart}, and their ${money(r.adjustment)}?\n\nThis cannot be undone.`)) return;
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) { alert("Sign in to remove a row."); return; }
+    const res = await fetch(`/api/manager-pay/added?id=${r.adjustmentId}`, {
+      method: "DELETE", headers: { Authorization: `Bearer ${token}` },
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) { alert(json?.error ?? `HTTP ${res.status}`); return; }
+    if (json?.outcome !== "landed") { alert(`The row was not removed (${json?.outcome ?? "unknown"}). Reload and check.`); return; }
+    setRefreshKey((k) => k + 1);
+  }, [weekStart]);
+
   // Admin: set / reset the estimated-arrival override for this week.
   const saveArrival = useCallback(async (arrivalDate: string, reason: string): Promise<string | null> => {
     const { data: sess } = await supabase.auth.getSession();
@@ -376,9 +422,21 @@ export default function ManagerPayView() {
                     onToggle={() => setOpen((prev) => { const n = new Set(prev); const k = rowKey(r); if (n.has(k)) n.delete(k); else n.add(k); return n; })}
                     onEditAdj={() => setAdjEdit(rowKey(r))} onCancelAdj={() => setAdjEdit(null)}
                     onSaveAdj={(amt, notes) => saveAdjustment(r, amt, notes)}
+                    onDeleteAdded={() => void deleteAdded(r)}
                     onSaveAlias={saveAlias} />
                 ))}
                 {un.map((m) => <UnRow key={m.matchId} m={m} />)}
+
+                {/* ADD SOMEONE NOT ON THE SCHEDULE. City comes from the band, week from the page —
+                    neither is typed, so neither can be typed wrong. */}
+                <div className="border-b px-4 py-2.5" style={{ borderColor: C.hair }}>
+                  <button type="button" data-testid="mp-add-someone" data-city={c.cityIdentifier}
+                    onClick={() => setAddFor({ city: c.cityIdentifier, unassigned: un })}
+                    className="rounded-[7px] border border-dashed px-[11px] py-[6px] text-[11.5px] font-bold"
+                    style={{ background: C.railA, borderColor: C.chipLine, color: C.muted }}>
+                    + Add someone not on the schedule
+                  </button>
+                </div>
 
                 {/* per-city total — suppressed when only one band renders */}
                 {nBands > 1 && rows.length > 0 && (
@@ -417,6 +475,11 @@ export default function ManagerPayView() {
         </div>
       </section>
 
+      {addFor && (
+        <AddSomeoneModal city={addFor.city} weekStart={weekStart} unassigned={addFor.unassigned}
+          existingEmails={new Set(payload.cities.flatMap((c) => c.managers).map((m) => (m.managerEmail ?? "").toLowerCase()).filter(Boolean))}
+          onClose={() => setAddFor(null)} onSave={submitAdded} />
+      )}
       {conflicts && <ConflictModal conflicts={conflicts} onClose={() => setConflicts(null)} onSaveAlias={saveAlias} />}
       {shareOpen && <ShareLinkModal onClose={() => setShareOpen(false)} />}
     </div>
@@ -517,6 +580,173 @@ function ShareLinkModal({ onClose }: { onClose: () => void }) {
           <button type="button" onClick={onClose} className="rounded-[8px] border px-3 py-1.5 text-[12.5px] font-bold" style={{ borderColor: C.chipLine, color: C.muted }}>Close</button>
           <button type="button" disabled={busy} onClick={rotate} className="rounded-[8px] px-4 py-1.5 text-[12.5px] font-bold disabled:opacity-40" style={{ background: C.forest, color: "#fff" }}>{busy ? "Rotating…" : hasToken ? "Rotate link" : "Generate link"}</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── ADD SOMEONE NOT ON THE SCHEDULE ───────────────────────────────────────────────────────────
+ * THE BETTER PATH IS OFFERED FIRST, AND NOT FORCED. If the city has a match with no manager, the
+ * correct fix is almost always to assign someone to it: they are then paid by the normal rule and
+ * the match count is right, where a manual row leaves the match still unassigned and the pay
+ * arithmetic silently disconnected from the schedule. So the unassigned matches are listed at the
+ * top with that sentence, and the manual form sits below them. The operator decides.
+ *
+ * THE PERSON IS CHOSEN, NEVER TYPED. A hand-typed name has no Gusto mapping and reaches payroll as
+ * a row that does not pay while looking exactly like one that does.
+ */
+type DirEntry = { email: string; name: string; gusto: { firstName: string; lastName: string } | null; onSchedule: boolean };
+
+function AddSomeoneModal({ city, weekStart, unassigned, existingEmails, onClose, onSave }: {
+  city: string; weekStart: string; unassigned: MatchSummary[]; existingEmails: Set<string>;
+  onClose: () => void;
+  onSave: (b: { city: string; managerEmail: string; managerId: number | null; amount: number; reason: string }) => Promise<string | null>;
+}) {
+  const [people, setPeople] = useState<DirEntry[] | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+  const [picked, setPicked] = useState<DirEntry | null>(null);
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token;
+      if (!token) { setLoadErr("No active session."); return; }
+      try {
+        const res = await fetch("/api/manager-pay/directory", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j?.error ?? `HTTP ${res.status}`);
+        // A FAILED LOAD IS AN ERROR, NOT AN EMPTY PICKER. An empty picker reads as
+        // "nobody exists" and sends the operator looking for a free-text box.
+        if (!dead) setPeople((j.people ?? []) as DirEntry[]);
+      } catch (e) { if (!dead) setLoadErr(e instanceof Error ? e.message : String(e)); }
+    })();
+    return () => { dead = true; };
+  }, []);
+
+  const matches = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    const all = people ?? [];
+    return (t ? all.filter((p) => p.name.toLowerCase().includes(t) || p.email.includes(t)) : all).slice(0, 40);
+  }, [people, q]);
+
+  const amt = Number(amount);
+  const dupe = !!picked && existingEmails.has(picked.email.toLowerCase());
+  const noGusto = !!picked && !picked.gusto;
+  const blocked = !picked || dupe || noGusto || !Number.isFinite(amt) || amt === 0 || reason.trim() === "";
+
+  const submit = async () => {
+    if (blocked || !picked) return;
+    setBusy(true); setErr(null);
+    const e = await onSave({ city, managerEmail: picked.email, managerId: null, amount: amt, reason: reason.trim() });
+    setBusy(false);
+    if (e) setErr(e);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-5" style={{ background: "rgba(16,35,26,.42)" }}
+      role="dialog" aria-modal="true" aria-labelledby="mp-add-h" data-testid="mp-add-modal">
+      <div className="w-full max-w-[600px] overflow-y-auto rounded-[12px] bg-white p-5" style={{ maxHeight: "88vh", boxShadow: "0 18px 48px rgba(16,35,26,.28)" }}>
+        <h2 id="mp-add-h" className="m-0 mb-1 text-[17px] font-[800]" style={{ color: C.forestDeep }}>Add someone not on the schedule</h2>
+        <div className="mb-3.5 text-[12px]" style={{ color: C.muted }}>{city} · week of {weekStart}</div>
+
+        {/* THE BETTER PATH, FIRST. */}
+        {unassigned.length > 0 && (
+          <div className="mb-4 rounded-[9px] border p-3" data-testid="mp-add-unassigned"
+            style={{ background: C.warnBg, borderColor: C.warnLine, color: C.warnInk }}>
+            <div className="text-[12.5px] font-[800]">These matches have no manager. Assigning one pays them automatically.</div>
+            <ul className="mt-1.5 mb-0 pl-4 text-[12px]">
+              {unassigned.map((m) => (
+                <li key={m.matchId}>{m.centralWeekday} {m.centralDate} · {m.fieldTitle ?? m.name} · {money(m.payPerManager)}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {loadErr ? (
+          <div className="rounded-[9px] border p-3 text-[12.5px]" style={{ background: C.critBg, borderColor: C.critLine, color: C.critInk }}>
+            <b>The directory could not be loaded — this is not an empty list.</b> {loadErr}
+          </div>
+        ) : people === null ? (
+          <div className="py-6 text-center text-[12.5px]" style={{ color: C.muted }}>Loading the manager directory…</div>
+        ) : (
+          <>
+            <label className="mb-1 block text-[10.5px] font-[800] tracking-[0.08em]" style={{ color: C.muted }}>PERSON</label>
+            <input value={picked ? `${picked.name} · ${picked.email}` : q}
+              onChange={(e) => { setPicked(null); setQ(e.target.value); }}
+              placeholder="Search the manager directory…" data-testid="mp-add-search"
+              className="mb-1.5 w-full rounded-[8px] border px-2.5 py-2 text-[13px]" style={{ borderColor: C.chipLine }} />
+            {!picked && (
+              <div className="mb-2 max-h-[190px] overflow-y-auto rounded-[8px] border" style={{ borderColor: C.chipLine }}>
+                {matches.length === 0 ? (
+                  /* NOT IN THE DIRECTORY IS A FULL STOP, and it says where to go. */
+                  <div className="p-3 text-[12px]" style={{ color: C.muted }}>
+                    Nobody in the directory matches that. If they are new, they need setting up in Gusto first — this control cannot create a person.
+                  </div>
+                ) : matches.map((p) => (
+                  <button type="button" key={p.email} data-testid="mp-add-option" data-email={p.email}
+                    onClick={() => { setPicked(p); setQ(""); }}
+                    className="flex w-full items-center gap-2 border-b px-2.5 py-1.5 text-left text-[12.5px] last:border-b-0"
+                    style={{ borderColor: C.hair }}>
+                    <span className="font-bold" style={{ color: C.forestDeep }}>{p.name}</span>
+                    {/* THE GUSTO MAPPING, SHOWN THE SAME WAY THE ROWS SHOW IT. */}
+                    {p.gusto
+                      ? <span className="rounded-[5px] px-[6px] py-[2px] text-[9.5px] font-[800]" style={{ background: C.mint, color: C.ok }}>Gusto: {p.gusto.firstName} {p.gusto.lastName}</span>
+                      : <span className="rounded-full border px-[7px] py-[2px] text-[9.5px] font-[800]" style={{ background: C.critBg, borderColor: C.critLine, color: C.critInk }}>NO GUSTO MAPPING</span>}
+                    <span className="ml-auto text-[11px]" style={{ color: C.muted }}>{p.email}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {noGusto && (
+              <div className="mb-2 rounded-[8px] border p-2.5 text-[12px]" data-testid="mp-add-nogusto"
+                style={{ background: C.critBg, borderColor: C.critLine, color: C.critInk }}>
+                <b>{picked?.name} has no Gusto mapping, so this cannot be saved.</b> A row without one reaches payroll looking
+                identical to one that pays, and does not pay. Set them up in Gusto and add the mapping first.
+              </div>
+            )}
+            {dupe && (
+              <div className="mb-2 rounded-[8px] border p-2.5 text-[12px]" data-testid="mp-add-dupe"
+                style={{ background: C.critBg, borderColor: C.critLine, color: C.critInk }}>
+                <b>{picked?.name} already has a row this week.</b> Use “+ Add adjustment” on their existing row instead —
+                two rows for one person in one week double-pays them in Gusto.
+              </div>
+            )}
+
+            <div className="mt-2 grid grid-cols-[130px_1fr] gap-2.5">
+              <div>
+                <label className="mb-1 block text-[10.5px] font-[800] tracking-[0.08em]" style={{ color: C.muted }}>AMOUNT</label>
+                <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder="0.00"
+                  data-testid="mp-add-amount" className="w-full rounded-[8px] border px-2.5 py-2 text-[13px] tabular-nums" style={{ borderColor: C.chipLine }} />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10.5px] font-[800] tracking-[0.08em]" style={{ color: C.muted }}>REASON (REQUIRED)</label>
+                <input value={reason} onChange={(e) => setReason(e.target.value)} data-testid="mp-add-reason"
+                  placeholder="Covered Tuesday at NEMP" className="w-full rounded-[8px] border px-2.5 py-2 text-[13px]" style={{ borderColor: C.chipLine }} />
+              </div>
+            </div>
+            <div className="mt-1 text-[11px]" style={{ color: C.muted }}>
+              The reason appears on the sheet and in the Gusto memo — it is the only account of why this was paid.
+            </div>
+
+            {err && <div className="mt-2.5 rounded-[8px] border p-2.5 text-[12px]" data-testid="mp-add-error"
+              style={{ background: C.critBg, borderColor: C.critLine, color: C.critInk }}>{err}</div>}
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" onClick={onClose} data-testid="mp-add-cancel"
+                className="rounded-[8px] border px-3.5 py-2 text-[12.5px] font-bold" style={{ background: C.surface, borderColor: C.chipLine, color: C.forest }}>Cancel</button>
+              <button type="button" onClick={() => void submit()} disabled={blocked || busy} data-testid="mp-add-save"
+                className="rounded-[8px] px-3.5 py-2 text-[12.5px] font-[800] disabled:opacity-45"
+                style={{ background: C.forest, color: "#fff" }}>{busy ? "Saving…" : "Add to the sheet"}</button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -656,9 +886,10 @@ function MatchCard({ m, onClick }: { m: MatchSummary; onClick: () => void }) {
   );
 }
 
-function MgrRow({ r, isAdmin, open, editing, alias, onToggle, onEditAdj, onCancelAdj, onSaveAdj, onSaveAlias }: {
+function MgrRow({ r, isAdmin, open, editing, alias, onToggle, onEditAdj, onCancelAdj, onSaveAdj, onDeleteAdded, onSaveAlias }: {
   r: ManagerRow; isAdmin: boolean; open: boolean; editing: boolean; alias: Alias | undefined;
-  onToggle: () => void; onEditAdj: () => void; onCancelAdj: () => void; onSaveAdj: (amt: number, notes: string | null) => void; onSaveAlias: SaveAlias;
+  onToggle: () => void; onEditAdj: () => void; onCancelAdj: () => void; onSaveAdj: (amt: number, notes: string | null) => void;
+  onDeleteAdded: () => void; onSaveAlias: SaveAlias;
 }) {
   const flags = managerRowFlags(r, isAdmin);
   const tny = r.matches.filter((m) => m.payAmount === 30).length;
@@ -673,6 +904,9 @@ function MgrRow({ r, isAdmin, open, editing, alias, onToggle, onEditAdj, onCance
             {alias && <span title={`Exports to Gusto as "${alias.firstName} ${alias.lastName}"`} className="rounded-[5px] px-[6px] py-[2px] text-[9.5px] font-[800]" style={{ background: C.mint, color: C.ok }}>Gusto: {alias.firstName} {alias.lastName}</span>}
             {flags.includes("noEmail") && <span className="rounded-full border px-[7px] py-[2px] text-[9.5px] font-[800]" style={{ background: C.critBg, borderColor: C.critLine, color: C.critInk }}>NO PAYROLL EMAIL</span>}
             {flags.includes("bareReason") && <span className="rounded-full border px-[7px] py-[2px] text-[9.5px] font-[800]" style={{ background: C.warnBg, borderColor: C.warnLine, color: C.warnInk }}>NO REASON</span>}
+            {/* A ZERO-MATCH ROW SAYS SO ON ITS FACE. Without this it reads as a manager who worked
+                nothing and was paid anyway, which is the same shape as a bug. */}
+            {r.addedManually && <span data-testid="mp-added-chip" className="rounded-full border px-[7px] py-[2px] text-[9.5px] font-[800]" style={{ background: C.railA, borderColor: C.chipLine, color: C.muted }}>NOT ON THE SCHEDULE</span>}
           </div>
           <div className="mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap text-[11px]" style={{ color: C.muted }}>{isAdmin ? (r.managerEmail ?? "—") : "\u00a0"}</div>
         </div>
@@ -694,6 +928,14 @@ function MgrRow({ r, isAdmin, open, editing, alias, onToggle, onEditAdj, onCance
             ) : isAdmin && r.managerEmail ? (
               <button type="button" onClick={onEditAdj} className="self-start rounded-[7px] border border-dashed px-[9px] py-[5px] text-[11.5px] font-bold" style={{ background: C.railA, borderColor: C.chipLine, color: C.muted }}>+ Add adjustment</button>
             ) : <span className="text-[11.5px]" style={{ color: C.muted2 }}>—</span>}
+          {/* REMOVE, only on a row this control created. The confirm names the person and the
+              amount — it is raised by the caller, which holds both. */}
+          {r.addedManually && isAdmin && (
+            <button type="button" data-testid="mp-delete-added" data-adj={r.adjustmentId ?? ""}
+              onClick={onDeleteAdded} className="mt-1 self-start text-[10.5px] font-bold underline" style={{ color: C.critInk }}>
+              Remove this row
+            </button>
+          )}
         </div>
         <div className="text-right" style={{ padding: "11px 0" }}><span className="text-[13.5px] font-[800] tabular-nums" style={{ color: C.ink }}>{money(r.total)}</span></div>
         <div style={{ padding: "11px 0" }}><span className="inline-flex h-[26px] w-[26px] items-center justify-center rounded-[7px] text-[13px]" style={{ color: C.muted }}>{open ? "▾" : "▸"}</span></div>

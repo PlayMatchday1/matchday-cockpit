@@ -231,6 +231,7 @@ const NODE_SUITES = [
   "scripts/socc-two-pitch-test.ts",
   "scripts/members-by-city-test.ts",
   "scripts/lapsed-removal-test.ts",
+  "scripts/manager-pay-added-test.ts",
 ];
 const ALL_E2E = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
 // --e2e runs EVERY browser suite. Nothing is excluded, because nothing is mandatory.

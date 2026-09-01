@@ -10,6 +10,10 @@ export type GustoManager = {
   managerName: string;
   matchCount: number;
   total: number;
+  /* ADDED-ROW FIELDS. Optional so every existing caller and fixture is unchanged, and so an
+   * absent pair produces byte-identical output to before these existed. */
+  addedManually?: boolean;
+  adjustmentNotes?: string | null;
 };
 export type GustoCity = { cityIdentifier: string; managers: GustoManager[] };
 export type GustoPayload = { weekStart: string; cities: GustoCity[] };
@@ -73,7 +77,16 @@ export function buildGustoRows(
         firstName = first ?? "";
         lastName = rest.join(" ");
       }
-      const memo = `${m.matchCount} match${m.matchCount === 1 ? "" : "es"} · ${city.cityIdentifier} · week of ${payload.weekStart}`;
+      /* THE MEMO IS THE ONLY PLACE THE REASON CAN REACH PAYROLL. Gusto's contractor importer takes
+       * five fixed columns and Memo is the only free one, so a manually added row states its
+       * reason THERE — not merely in the database. "0 matches · $120" with no explanation is the
+       * row nobody can account for three weeks later, and the person approving the file in Gusto
+       * never sees the Clubhouse page.
+       *
+       * "Added:" prefixes it so the row is identifiable in Gusto's own UI without cross-checking. */
+      const memo = m.addedManually
+        ? `Added: ${(m.adjustmentNotes ?? "").trim() || "no reason given"} · ${city.cityIdentifier} · week of ${payload.weekStart}`
+        : `${m.matchCount} match${m.matchCount === 1 ? "" : "es"} · ${city.cityIdentifier} · week of ${payload.weekStart}`;
       rows.push({
         email: csvEmail,
         scheduleEmail: email,
