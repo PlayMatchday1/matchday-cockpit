@@ -25,7 +25,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import {
-  STATE_LABEL, FREE_IS_NOT_MEMBER_NOTE, defaultChecked, confirmSentence, confirmCounts,
+  STATE_LABEL, defaultChecked, confirmSentence, confirmCounts,
   removalCsv, HALTS_RUN,
   type LapsedSpotsView as View, type LapsedSpot, type RemovalResult, type RemovalVerdict,
 } from "@/lib/lapsedSpots";
@@ -43,11 +43,25 @@ const WRITE_ENV = "production";
  * would read as "not yet" rather than "never". */
 const SELECTABLE_STATES = new Set(["LAPSED", "PAST_DUE"]);
 
+/* THE GROUPS THAT RENDER. ACTIVE and NEVER_A_MEMBER are computed exactly as before and still feed
+ * the funnel — the classification is untouched — but they are not drawn. This sheet is for people
+ * being removed; a current member on a page where a wrong click cannot be undone is noise, and
+ * noise next to a live checkbox is a hazard rather than context. */
+const RENDERED_STATES = SELECTABLE_STATES;
+
+type RemovedRow = {
+  id: string; name: string; matchId: number | null; matchName: string;
+  date: string; city: string; field: string; removedAt: string; by: string; verdict: string;
+};
+
 const money = (cents: number) => "$" + (cents / 100).toFixed(2);
 const num = (n: number) => n.toLocaleString("en-US");
 
 export default function LapsedSpotsView() {
-  const [data, setData] = useState<(View & { today: string }) | null>(null);
+  const [data, setData] = useState<(View & { today: string; nowHm: string; removed: RemovedRow[] }) | null>(null);
+  /* TWO TABS. "To remove" is the live list and the default; "Removed" is what this page has
+   * already taken off a roster, read from change_log so it survives a reload. */
+  const [tab, setTab] = useState<"live" | "removed">("live");
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -194,9 +208,6 @@ export default function LapsedSpotsView() {
         </button>
       </div>
 
-      {/* THE SENTENCE THAT STAYS. */}
-      <p className="ls-note" data-testid="ls-free-note">{FREE_IS_NOT_MEMBER_NOTE}</p>
-
       {err ? (
         <div className="ls-err" data-testid="ls-error">
           <b>The query failed — this is NOT an empty list.</b> {err}{" "}
@@ -209,11 +220,59 @@ export default function LapsedSpotsView() {
           {/* THE DENOMINATOR. Printed whether or not anything was found — these numbers are what
               prove the query ran, and they are the difference between "nobody lapsed" and "it
               broke". They come before the rows for exactly that reason. */}
+          {/* TWO TABS. A removed row leaves the first and appears in the second; the header count
+              and the Remove button read only the first, so neither is inflated by history. */}
+          <div className="ls-tabs" role="tablist" data-testid="ls-tabs">
+            <button type="button" role="tab" aria-selected={tab === "live"} data-testid="ls-tab-live"
+              className={tab === "live" ? "on" : ""} onClick={() => setTab("live")}>
+              To remove <span className="ls-tabn">{num(candidates.length)}</span>
+            </button>
+            <button type="button" role="tab" aria-selected={tab === "removed"} data-testid="ls-tab-removed"
+              className={tab === "removed" ? "on" : ""} onClick={() => setTab("removed")}>
+              Removed <span className="ls-tabn">{num(data.removed.length)}</span>
+            </button>
+          </div>
+
+          {tab === "removed" ? (
+            <section className="ls-grp" data-testid="ls-removed-tab">
+              <div className="ls-grph"><span className="ls-grpn">Removed by this page — newest first</span>
+                <span className="ls-grpc">{data.removed.length}</span></div>
+              {data.removed.length === 0 ? (
+                <div className="ls-empty">This page has not removed anyone yet.</div>
+              ) : (
+                <div className="ls-tbl">
+                  <div className="ls-tr ls-th ls-rem">
+                    <div>Player</div><div>Match</div><div>Match date</div><div>City</div>
+                    <div>Removed</div><div>By</div><div>Verdict</div>
+                  </div>
+                  {data.removed.map((r) => (
+                    <div className="ls-tr ls-rem" key={r.id} data-testid="ls-removed-row" data-verdict={r.verdict}>
+                      <div className="ls-nm">{r.name}</div>
+                      <div className="ls-mt" title={r.matchName}>{r.matchName}</div>
+                      <div className="ls-dt">{r.date}</div>
+                      <div>{r.city}</div>
+                      <div className="ls-dt">{r.removedAt.slice(0, 16).replace("T", " ")}</div>
+                      <div className="ls-em" title={r.by}>{r.by}</div>
+                      <div><span className={"ls-v ls-v-" + r.verdict}>{r.verdict.toUpperCase()}</span></div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          ) : (
+          <>
           <div className="ls-denom" data-testid="ls-denominator">
             <b>{num(data.futureMatches)}</b> future matches ·{" "}
             <b>{num(data.liveSpots)}</b> live spots ·{" "}
             <b>{num(data.freeSpots)}</b> free ·{" "}
-            <b data-testid="ls-lapsed-count">{num(lapsedCount)}</b> held by a lapsed member
+            <b data-testid="ls-lapsed-count">{num(lapsedCount)}</b> held by a lapsed member ·{" "}
+            {/* ACTIVE and NEVER_A_MEMBER are not drawn any more, so the funnel is the only place
+                they are still counted — the classification did not weaken, only the rendering. */}
+            <b data-testid="ls-today-count">{num(data.todaySpots)}</b> on matches starting today ·{" "}
+            <span data-testid="ls-unrendered">
+              {num(data.groups.find((g) => g.state === "ACTIVE")?.rows.length ?? 0)} active-member ·{" "}
+              {num(data.groups.find((g) => g.state === "NEVER_A_MEMBER")?.rows.length ?? 0)} never-a-member (not listed)
+            </span>
             <span className="ls-fakes" data-testid="ls-fakes">
               {num(data.fakeSpots)} fake player{data.fakeSpots === 1 ? "" : "s"} excluded
             </span>
@@ -239,7 +298,7 @@ export default function LapsedSpotsView() {
             </div>
           ) : null}
 
-          {data.groups.map((g) => (
+          {data.groups.filter((g) => RENDERED_STATES.has(g.state)).map((g) => (
             <section key={g.state} className={"ls-grp ls-" + g.state.toLowerCase()} data-testid="ls-group" data-state={g.state}>
               <div className="ls-grph">
                 <span className="ls-grpn">{STATE_LABEL[g.state]}</span>
@@ -252,7 +311,7 @@ export default function LapsedSpotsView() {
                 <div className="ls-tbl">
                   <div className={"ls-tr ls-th" + (SELECTABLE_STATES.has(g.state) ? " ls-pick" : "")}>
                     {SELECTABLE_STATES.has(g.state) ? <div /> : null}
-                    <div>Player</div><div>Email</div><div>Match</div><div>Date</div>
+                    <div>Player</div><div>Email</div><div>Match</div><div>Date</div><div>Kick-off</div>
                     <div>Field</div><div>City</div><div className="r">Spot</div>
                     <div>First match</div><div>Membership</div><div className="r">Guests</div>
                   </div>
@@ -290,10 +349,18 @@ export default function LapsedSpotsView() {
                           <span className={"ls-chip " + (r.guard.selectability === "blocked" ? "ls-chip-red" : "ls-chip-amber")}
                             data-testid="ls-guard-chip" data-guard={r.guard.selectability}>{r.guard.reason}</span>
                         ) : null}
+                        {/* CONTEXT, NOT AN EXCLUSION. The dunning note sits beside a TICKED box on
+                            purpose — it says what state the person is in, not that they are being
+                            skipped. It is styled differently from a guard chip for that reason. */}
+                        {r.contextChip ? (
+                          <span className="ls-chip ls-chip-blue" data-testid="ls-context-chip">{r.contextChip}</span>
+                        ) : null}
                       </div>
                       <div className="ls-em" title={r.email}>{r.email}</div>
                       <div className="ls-mt" title={r.matchName}>{r.matchName}</div>
-                      <div className="ls-dt">{r.date}</div>
+                      <div className="ls-dt">{r.date}{r.isToday ? <span className="ls-todaytag">today</span> : null}</div>
+                      {/* THE KICKOFF, so "already started" is checkable rather than trusted. */}
+                      <div className="ls-dt">{r.kickoff || "—"}</div>
                       <div className="ls-fl" title={r.field}>{r.field}</div>
                       <div>{r.city}</div>
                       <div className="r ls-amt">{money(r.amountCents)}</div>
@@ -321,6 +388,9 @@ export default function LapsedSpotsView() {
               )}
             </section>
           ))}
+
+          </>
+          )}
 
           {/* ── THE CONFIRM. The sentence is computed from the selection by confirmSentence, the
               same function the suite asserts against — not assembled here, where it could quietly
@@ -388,8 +458,6 @@ export default function LapsedSpotsView() {
         .ls-btn{margin-left:auto;border:1px solid var(--line);background:#fff;border-radius:999px;
           padding:7px 15px;font:inherit;font-size:13px;font-weight:700;color:#3C4F44;cursor:pointer;white-space:nowrap}
         .ls-btn:disabled{opacity:.6;cursor:default}
-        .ls-note{background:var(--ambBg);border:1px solid var(--ambLine);color:#7A4E06;border-radius:10px;
-          padding:11px 14px;font-size:12.5px;line-height:1.55;margin:0 0 12px}
         .ls-err{background:var(--redBg);border:1px solid var(--redLine);color:#7C2412;border-radius:10px;
           padding:12px 15px;font-size:13px;line-height:1.55}
         .ls-state{padding:34px;text-align:center;color:var(--mut)}
@@ -407,8 +475,8 @@ export default function LapsedSpotsView() {
           padding:2px 10px;font-variant-numeric:tabular-nums}
         .ls-empty{padding:16px;color:var(--mut);font-size:12.5px}
         .ls-tbl{overflow-x:auto}
-        .ls-tr{display:grid;grid-template-columns:130px minmax(180px,1fr) minmax(130px,1fr) 96px minmax(120px,1fr) 96px 74px 92px minmax(190px,1fr) 120px;
-          align-items:center;border-bottom:1px solid var(--line2);min-width:1180px}
+        .ls-tr{display:grid;grid-template-columns:130px minmax(180px,1fr) minmax(130px,1fr) 96px 76px minmax(120px,1fr) 96px 74px 92px minmax(190px,1fr) 120px;
+          align-items:center;border-bottom:1px solid var(--line2);min-width:1256px}
         .ls-tr:last-child{border-bottom:0}
         .ls-tr>div{padding:9px 8px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .ls-th{background:#FBFDFB;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#8C9E93}
@@ -423,6 +491,15 @@ export default function LapsedSpotsView() {
         .ls-chip-blue{background:var(--bluBg);color:var(--blu);border:1px solid var(--bluLine)}
         .ls-chip-amber{background:var(--ambBg);color:var(--amb);border:1px solid var(--ambLine)}
         .ls-chip-red{background:var(--redBg);color:var(--red);border:1px solid var(--redLine)}
+        .ls-tabs{display:flex;gap:6px;margin:0 0 12px}
+        .ls-tabs button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 15px;
+          font:inherit;font-size:13px;font-weight:700;color:#3C4F44;cursor:pointer;display:flex;align-items:center;gap:7px}
+        .ls-tabs button.on{background:var(--forest);border-color:var(--forest);color:#fff}
+        .ls-tabn{font-size:11px;font-weight:800;border-radius:999px;padding:1px 7px;background:rgba(0,0,0,.07)}
+        .ls-tabs button.on .ls-tabn{background:rgba(255,255,255,.2)}
+        .ls-todaytag{margin-left:6px;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
+          border-radius:999px;padding:1px 6px;background:var(--forest);color:#fff}
+        .ls-tr.ls-rem{grid-template-columns:150px minmax(190px,1fr) 104px 110px 132px minmax(150px,1fr) 104px;min-width:960px}
 
         .ls-pastdue .ls-grph{background:var(--ambBg);color:#7A4E06}
         .ls-pastdue{border-color:var(--ambLine)}
@@ -435,7 +512,7 @@ export default function LapsedSpotsView() {
           padding:8px 18px;font:inherit;font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap}
         .ls-danger:disabled{opacity:.45;cursor:default}
 
-        .ls-tr.ls-pick{grid-template-columns:104px minmax(196px,auto) minmax(170px,1fr) minmax(130px,1fr) 96px minmax(110px,1fr) 92px 74px 92px minmax(190px,1fr) 116px;min-width:1330px}
+        .ls-tr.ls-pick{grid-template-columns:104px minmax(196px,auto) minmax(170px,1fr) minmax(130px,1fr) 96px 76px minmax(110px,1fr) 92px 74px 92px minmax(190px,1fr) 116px;min-width:1406px}
         /* The name cell is the only one that stacks: name on top, the reason chip beneath it. */
         .ls-pick .ls-nm{white-space:normal;overflow:visible;display:flex;flex-direction:column;align-items:flex-start;gap:4px;line-height:1.3}
         .ls-pick .ls-nm .ls-chip{white-space:normal;text-align:left}

@@ -2,11 +2,18 @@
  *
  * ── THE ONE THING THIS PAGE MUST NOT LET YOU BELIEVE ─────────────────────────────────────────
  * FREE DOES NOT MEAN "MEMBER BENEFIT". No column anywhere records that a spot was taken on a
- * membership. `match_registrations.payment_type = 'MEMBER'` is a stale manual upload whose last
- * match is 2026-05-12 and which holds ZERO future rows; `mdapi_match_players.user_is_member` is
- * `false` on all 246,216 rows. FREE is the nearest available signal, and `is_first_match` is
- * carried per row so a first-match-free is visible rather than mistaken for a lapsed member.
- * That sentence is on the page. It is load-bearing and it does not come out.
+ * membership:
+ *   - `match_registrations.payment_type = 'MEMBER'` is a STALE MANUAL UPLOAD whose last match is
+ *     2026-05-12, and it holds ZERO future rows. It cannot answer a question about next week.
+ *   - `mdapi_match_players.user_is_member` is `false` on ALL 246,216 rows. The column exists and
+ *     has never been populated.
+ * FREE is therefore the NEAREST AVAILABLE SIGNAL, not proof of a member benefit. `is_first_match`
+ * is carried per row so a first-match-free is visible rather than mistaken for a lapsed member.
+ *
+ * THIS USED TO BE AN AMBER BOX ON THE PAGE. It was removed on 2026-09-01 — the caveat is real and
+ * unchanged, it is simply not screen furniture on a sheet where the operator is deciding who to
+ * remove. It lives HERE and in docs/matchday-api-facts.md, and it does not get weaker for being
+ * off-screen. Anyone about to treat FREE as "was a member" must read this first.
  *
  * ── MEMBERSHIP STATE HAS THREE VALUES AND THEY ARE THE REAL ONES ─────────────────────────────
  * mdapi_subscriptions.status holds exactly two values in production — ACTIVE (467) and CANCELED
@@ -62,6 +69,12 @@ export type LapsedSpot = {
   spotId: number; matchId: number;
   name: string; email: string;
   matchName: string; date: string; field: string; city: string;
+  /** HH:MM wall clock, straight off start_date. "" when the string carries no time. */
+  kickoff: string;
+  /** Today only: the match has already kicked off. Shown, never hidden — but never ticked. */
+  alreadyStarted: boolean;
+  /** Today's match, at any hour. Drives the "today first" sort and the funnel line. */
+  isToday: boolean;
   amountCents: number; isFirstMatch: boolean;
   state: MembershipState;
   lapsedOn: string | null;      // yyyy-mm-dd, LAPSED only
@@ -75,6 +88,8 @@ export type LapsedSpot = {
   userId: number;
   isStaff: boolean;
   guard: SpotGuard;
+  /** Context that does NOT affect selection — see contextChipFor. */
+  contextChip: string | null;
 };
 
 export type LapsedSpotsView = {
@@ -83,14 +98,38 @@ export type LapsedSpotsView = {
   liveSpots: number;
   fakeSpots: number;
   freeSpots: number;
+  /** Free spots whose match starts TODAY — the number the old `>` predicate hid entirely. */
+  todaySpots: number;
   groups: { state: MembershipState; rows: LapsedSpot[] }[];
 };
 
 /** WALL CLOCK, AS TEXT. start_date carries a Z it does not mean, so it is compared as
  *  YYYY-MM-DD string against today's YYYY-MM-DD — never through a Date, which would re-shift it
- *  by the machine's offset and move matches across the midnight boundary. */
+ *  by the machine's offset and move matches across the midnight boundary.
+ *
+ *  ── TODAY IS IN, AS OF 2026-09-01 ───────────────────────────────────────────────────────────
+ *  This was `>` and it silently discarded everything the SQL had already fetched: route.ts asks
+ *  for `.gte("start_date", today)` and the model then threw the same day away. Measured on the
+ *  morning it was fixed: 21 matches and 8 lapsed-member spots hidden, including five people
+ *  playing that evening — the people most likely to walk onto a pitch before anyone looks.
+ *  A match earlier today is NOT excluded here; it is shown and left unticked (see hasStarted). */
 export const isFutureWall = (startDate: unknown, todayYmd: string): boolean =>
-  typeof startDate === "string" && startDate.slice(0, 10) > todayYmd;
+  typeof startDate === "string" && startDate.slice(0, 10) >= todayYmd;
+
+/** THE KICKOFF, AS TEXT. Same wall-clock rule: HH:MM straight out of the string, never a Date. */
+export const kickoffOf = (startDate: unknown): string =>
+  typeof startDate === "string" && startDate.length >= 16 ? startDate.slice(11, 16) : "";
+
+/** HAS IT ALREADY KICKED OFF? Only today's matches can have. Compared in America/Chicago against
+ *  the caller's `nowHm`, which the route derives in that zone — the two must be the same clock or
+ *  a 7pm match reads as started at 2pm somewhere else. A future day is never "started". */
+export const hasStarted = (startDate: unknown, todayYmd: string, nowHm: string): boolean => {
+  if (typeof startDate !== "string") return false;
+  const d = startDate.slice(0, 10);
+  if (d !== todayYmd) return false;
+  const t = kickoffOf(startDate);
+  return t !== "" && t <= nowHm;
+};
 
 /** ANY row ACTIVE, never the newest. See the header — 153 people would be wrong the other way.
  *
@@ -115,19 +154,33 @@ export function membershipStateOf(userId: unknown, subsByUser: Map<string, SubRo
  * the reason chip on screen and the reason a row is unchecked cannot drift apart. */
 export function guardFor(args: {
   amountCents: number; isStaff: boolean; state: MembershipState; guestsOnMatch: number;
+  alreadyStarted?: boolean;
 }): SpotGuard {
   // BLOCKED FIRST, and it is absolute. Removal is not a refund; refund-and-cancel is on the
   // endpoint deny-list; what happens to the charge is UNCONFIRMED. There is no undo.
   if (args.amountCents > 0) {
     return { selectability: "blocked", reason: `Paid $${(args.amountCents / 100).toFixed(2)} — cannot be removed here` };
   }
+  /* ALREADY KICKED OFF. Shown, never hidden — the operator asked to see them — but never ticked:
+   * removing someone from a match that is under way frees a spot nobody can take and erases a
+   * record of who was there. */
+  if (args.alreadyStarted) return { selectability: "caution", reason: "Already started" };
   if (args.isStaff) return { selectability: "caution", reason: "Internal staff account" };
-  if (args.state === "PAST_DUE") return { selectability: "caution", reason: "Payment pending — still in dunning" };
   if (args.guestsOnMatch > 0) {
     return { selectability: "caution", reason: `${args.guestsOnMatch} guest${args.guestsOnMatch === 1 ? "" : "s"} on this match` };
   }
+  /* PAST_DUE IS NOT AN EXCLUSION ANY MORE (2026-09-01). It was caution — unticked — on the
+   * reasoning that a member mid-dunning has not left. The ruling reversed it: removing them IS
+   * the lever that gets a failed card fixed, so they are ticked like anyone else. The dunning
+   * note survives as CONTEXT on the row (see contextChipFor), not as a reason to skip them —
+   * a chip that says "excluded" beside a ticked checkbox is worse than no chip. */
   return { selectability: "ok", reason: null };
 }
+
+/** CONTEXT, NOT AN EXCLUSION. Rendered on the row beside the guard chip; never changes whether a
+ *  row is ticked. Today this is the dunning note, which the operator asked to keep. */
+export const contextChipFor = (state: MembershipState): string | null =>
+  state === "PAST_DUE" ? "Payment pending — still in dunning" : null;
 
 /** Checked on arrival = "ok" only. caution and blocked both start unchecked; blocked can never
  *  be checked at all, which the view enforces by disabling the input. */
@@ -146,6 +199,9 @@ const ORDER: MembershipState[] = ["LAPSED", "PAST_DUE", "ACTIVE", "NEVER_A_MEMBE
 
 export function buildLapsedSpots(
   matches: MatchRow[], spots: SpotRow[], subs: SubRow[], todayYmd: string,
+  /** HH:MM in America/Chicago, from the caller. Defaults to end-of-day, which makes every one of
+   *  today's matches "already started" — the SAFE default: it never ticks something by accident. */
+  nowHm = "23:59",
 ): LapsedSpotsView {
   const future = matches.filter((m) => m.is_cancelled !== true && isFutureWall(m.start_date, todayYmd));
   const byMatch = new Map(future.map((m) => [m.api_id, m]));
@@ -172,6 +228,7 @@ export function buildLapsedSpots(
 
   const rows: LapsedSpot[] = free.map((s) => {
     const m = byMatch.get(s.match_api_id)!;
+    const started = hasStarted(m.start_date, todayYmd, nowHm);
     const state = membershipStateOf(s.user_id, subsByUser);
     const lapse = state === "LAPSED" || state === "PAST_DUE" ? lapseInfoOf(s.user_id, subsByUser) : { on: null, reason: null };
     const nm = `${s.user_first_name ?? ""} ${s.user_last_name ?? ""}`.trim();
@@ -193,7 +250,11 @@ export function buildLapsedSpots(
       amountCents, isFirstMatch: s.is_first_match === true,
       state, lapsedOn: lapse.on, lapseReason: lapse.reason,
       guestsOnMatch, isStaff,
-      guard: guardFor({ amountCents, isStaff, state, guestsOnMatch }),
+      kickoff: kickoffOf(m.start_date),
+      alreadyStarted: started,
+      isToday: String(m.start_date ?? "").slice(0, 10) === todayYmd,
+      guard: guardFor({ amountCents, isStaff, state, guestsOnMatch, alreadyStarted: started }),
+      contextChip: contextChipFor(state),
     };
   });
 
@@ -201,7 +262,12 @@ export function buildLapsedSpots(
    * the top on its own; a window is a number to get wrong and would hide anyone outside it.
    * A lapse with no date sorts last within its group rather than first — an unknown date is not
    * evidence of recency. */
+  /* TODAY FIRST — it is the only day that can still be acted on before it happens, so it leads
+   * regardless of when the person lapsed. Within today, by kickoff, so the next match to start is
+   * at the top. After that the original rule: newest lapse first, then date. */
   const sortRows = (a: LapsedSpot, b: LapsedSpot) =>
+    (a.isToday ? 0 : 1) - (b.isToday ? 0 : 1) ||
+    (a.isToday ? a.kickoff.localeCompare(b.kickoff) : 0) ||
     String(b.lapsedOn ?? "").localeCompare(String(a.lapsedOn ?? "")) ||
     a.date.localeCompare(b.date) || a.email.localeCompare(b.email);
 
@@ -210,6 +276,7 @@ export function buildLapsedSpots(
     liveSpots: live.length,
     fakeSpots: fake.length,
     freeSpots: free.length,
+    todaySpots: rows.filter((r) => r.isToday).length,
     groups: ORDER.map((state) => ({ state, rows: rows.filter((r) => r.state === state).sort(sortRows) })),
   };
 }
@@ -221,12 +288,7 @@ export const STATE_LABEL: Record<MembershipState, string> = {
   NEVER_A_MEMBER: "Never a member — no subscription row has ever existed",
 };
 
-/** The sentence that must stay. Exported so the page cannot drift from it and the suite can pin it. */
-export const FREE_IS_NOT_MEMBER_NOTE =
-  "FREE does not mean “member benefit”. No column anywhere records that a spot was taken on a " +
-  "membership — match_registrations.payment_type is a stale upload ending in May, and user_is_member is " +
-  "false on all 246,216 rows. FREE is the nearest available signal, and IS FIRST MATCH is shown so a " +
-  "first-match-free is visible.";
+
 
 
 /* ── THE CONFIRM SENTENCE ──────────────────────────────────────────────────────────────────────

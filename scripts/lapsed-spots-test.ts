@@ -14,7 +14,7 @@
 import { readFileSync } from "node:fs";
 import {
   buildLapsedSpots, membershipStateOf, lapseInfoOf, isFutureWall,
-  FREE_IS_NOT_MEMBER_NOTE, type SubRow, type SpotRow, type MatchRow,
+  hasStarted, kickoffOf, type SubRow, type SpotRow, type MatchRow,
 } from "../src/lib/lapsedSpots";
 
 let pass = 0; const fails: string[] = [];
@@ -36,14 +36,26 @@ const sub = (userId: number, status: string, canceled_at: string | null = null, 
 
 console.log("\nthe wall clock is TEXT, and September is not decided by a Date");
 {
-  is("tomorrow is future", isFutureWall("2026-09-01T19:00:00.000Z", TODAY), true);
-  is("today is NOT future — the match may already have kicked off", isFutureWall("2026-08-31T19:00:00.000Z", TODAY), false);
-  is("yesterday is not future", isFutureWall("2026-08-30T23:59:00.000Z", TODAY), false);
-  /* THE TRAP. start_date carries a Z it does not mean. A late-evening match read through a Date in
-   * a US timezone shifts to the NEXT day; compared as text it cannot. Asserted on the value that
-   * would flip: 23:30 on the boundary day is still not future. */
-  is("23:30 on today is still not future — no Date shifts it forward", isFutureWall("2026-08-31T23:30:00.000Z", TODAY), false);
-  is("a null start_date is not future", isFutureWall(null, TODAY), false);
+  is("tomorrow is in", isFutureWall("2026-09-01T19:00:00.000Z", TODAY), true);
+  /* ── INVERTED 2026-09-01 (assertion body, itemised) ─────────────────────────────────────────
+   * This asserted `today is NOT future`, which is what the `>` predicate did — and what hid 21
+   * matches and 8 lapsed-member spots, including five people playing that evening. The SQL had
+   * already fetched them; the model threw them away. TODAY IS NOW IN. A match that has already
+   * kicked off is handled by hasStarted — shown, unticked — never by hiding the day. */
+  is("TODAY is in — the SQL fetched it and the model no longer discards it", isFutureWall("2026-08-31T19:00:00.000Z", TODAY), true);
+  is("yesterday is not", isFutureWall("2026-08-30T23:59:00.000Z", TODAY), false);
+  /* THE TRAP IS UNCHANGED. start_date carries a Z it does not mean. A late-evening match read
+   * through a Date in a US timezone shifts to the NEXT day; compared as text it cannot. The value
+   * that would flip is now the one BEFORE the boundary: 23:30 yesterday must stay out. */
+  is("23:30 YESTERDAY is still out — no Date shifts it forward", isFutureWall("2026-08-30T23:30:00.000Z", TODAY), false);
+  is("a null start_date is not in", isFutureWall(null, TODAY), false);
+
+  /* THE ALREADY-STARTED RULE, which is what replaced excluding the day. */
+  is("a match earlier today HAS started", hasStarted("2026-08-31T14:00:00.000Z", TODAY, "19:30"), true);
+  is("a match later today has NOT", hasStarted("2026-08-31T21:00:00.000Z", TODAY, "19:30"), false);
+  is("on the minute counts as started", hasStarted("2026-08-31T19:30:00.000Z", TODAY, "19:30"), true);
+  is("control: tomorrow is never 'started', whatever the clock says", hasStarted("2026-09-01T08:00:00.000Z", TODAY, "23:59"), false);
+  is("the kickoff is read as text", kickoffOf("2026-08-31T19:30:00.000Z"), "19:30");
 }
 
 console.log("\nmembership state is ANY row ACTIVE — never the newest");
@@ -207,12 +219,21 @@ console.log("\nthe page is READ ONLY, and the sentence stays");
   if (/mdapi_match_players/.test(route)) ok("control: the route really does mention players (the table)");
   else bad("control: the route mentions the players table");
 
-  // THE SENTENCE. Pinned by content, not by presence of a variable.
-  if (view.includes("FREE_IS_NOT_MEMBER_NOTE")) ok("the page renders the FREE-is-not-member note");
-  else bad("the page renders the note", "IT IS LOAD-BEARING AND DOES NOT COME OUT");
-  for (const phrase of ["FREE does not mean", "stale upload ending in May", "false on all 246,216 rows", "IS FIRST MATCH is shown"]) {
-    if (FREE_IS_NOT_MEMBER_NOTE.includes(phrase)) ok(`…and it still says “${phrase}”`);
-    else bad(`the note still says “${phrase}”`);
+  /* ── INVERTED 2026-09-01 (assertion body, itemised) ─────────────────────────────────────────
+   * This asserted the page RENDERS the caveat as an amber box. The box was removed; the caveat
+   * was not. Deleting the assertion would have let the fact quietly disappear, so it is inverted:
+   * ABSENT from the page, PRESENT in the two places that outlive a screen. */
+  if (!/FREE_IS_NOT_MEMBER_NOTE|ls-free-note|ls-note/.test(view)) ok("the amber box is gone from the page — element, testid and class");
+  else bad("the amber callout is absent", "IT WAS REMOVED ON 2026-09-01 AND MUST NOT COME BACK BY ACCIDENT");
+  const LIB_SRC = readFileSync("src/lib/lapsedSpots.ts", "utf8");
+  const FACTS = readFileSync("docs/matchday-api-facts.md", "utf8");
+  for (const phrase of ["FREE DOES NOT MEAN", "2026-05-12", "246,216", "NEAREST AVAILABLE SIGNAL"]) {
+    if (LIB_SRC.toUpperCase().includes(phrase.toUpperCase())) ok(`the file header still carries “${phrase}”`);
+    else bad(`the header carries “${phrase}”`, "THE CAVEAT WAS DELETED, NOT MOVED");
+  }
+  for (const phrase of ["match_registrations.payment_type", "2026-05-12", "246,216", "nearest available signal"]) {
+    if (FACTS.includes(phrase)) ok(`the facts doc records “${phrase}”`);
+    else bad(`the facts doc records “${phrase}”`, "OFF-SCREEN AND UNDOCUMENTED IS DELETED");
   }
 
   // THE DENOMINATOR IS RENDERED, not merely computed.
@@ -226,7 +247,13 @@ console.log("\nthe page is READ ONLY, and the sentence stays");
   if (!/new Date\(/.test(model)) ok("the model constructs no Date at all");
   else bad("the model constructs a Date", "start_date CARRIES A Z IT DOES NOT MEAN");
   const dates = route.match(/new Date\(/g) ?? [];
-  is("the route constructs exactly one Date, for today", dates.length, 1);
+  /* CHANGED 2026-09-01 (assertion body, itemised): the route now constructs TWO Dates — today's
+   * date and the current HH:MM, both for the already-started rule, both in America/Chicago. The
+   * property being guarded is unchanged and is the one that matters: neither is ever handed a
+   * start_date. `new Date()` with no argument cannot re-shift a match across midnight; `new
+   * Date(m.start_date)` would, and that is the trap. */
+  is("every Date the route constructs is argument-free — none parses a start_date", (route.match(/new Date\(\)/g) ?? []).length, 2);
+  is("…and no Date is ever given an argument", /new Date\([^)]/.test(route), false);
   if (/new Date\(\)\)/.test(route)) ok("…and it takes no argument, so no start_date is parsed");
   else bad("the route's Date takes an argument", "IT MAY BE PARSING A MATCH DATE");
 }

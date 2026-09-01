@@ -19,7 +19,7 @@
 import { readFileSync } from "node:fs";
 import {
   buildLapsedSpots, guardFor, defaultChecked, membershipStateOf,
-  confirmSentence, confirmCounts, removalCsv, HALTS_RUN, INTERNAL_EMAIL_RX,
+  confirmSentence, confirmCounts, removalCsv, HALTS_RUN, INTERNAL_EMAIL_RX, hasStarted,
   type SubRow, type SpotRow, type MatchRow, type LapsedSpot, type RemovalResult,
 } from "../src/lib/lapsedSpots";
 import { assertAllowedEndpoint, DeniedEndpointError } from "../src/lib/matchdayStageApi";
@@ -151,8 +151,22 @@ console.log("\n3. A PAST_DUE MEMBER DOES NOT APPEAR IN LAPSED");
   const pd = group("PAST_DUE").rows[0];
   if (!pd) bad("PAST_DUE has a row to inspect", "THE BUCKET IS EMPTY — THE SPLIT IS NOT WORKING");
   else {
-    is("  unchecked by default", defaultChecked(pd.guard), false);
-    is("  with a stated reason", pd.guard.reason, "Payment pending — still in dunning");
+    /* ── INVERTED 2026-09-01 (assertion body, itemised) ───────────────────────────────────────
+     * This asserted PAST_DUE was UNCHECKED with the dunning text as its guard reason. The ruling
+     * reversed it: removing a past-due member IS the lever that gets a failed card fixed, so they
+     * are TICKED like anyone else. The dunning note survives as CONTEXT on the row — a chip that
+     * said "excluded" beside a ticked box would be copy contradicting the checkbox, which is
+     * worse than no copy. The SEPARATION is unchanged and still asserted above. */
+    is("  TICKED by default — removal is the lever, not the exclusion", defaultChecked(pd.guard), true);
+    is("  …so it carries no guard reason", pd.guard.reason, null);
+    is("  …and the dunning note moved to the context chip", pd.contextChip, "Payment pending — still in dunning");
+    // CONTROL: the context chip is not on every row — it would say nothing if it were.
+    is("  control: a plain LAPSED row has no context chip", bySpotUser("LAPSED", 1)!.contextChip, null);
+    // CONTROL: the guard still refuses the things it always refused, on a PAST_DUE row too.
+    is("  control: a PAID past-due row is still BLOCKED",
+      guardFor({ amountCents: 500, isStaff: false, state: "PAST_DUE", guestsOnMatch: 0 }).selectability, "blocked");
+    is("  control: a STAFF past-due row is still caution",
+      guardFor({ amountCents: 0, isStaff: true, state: "PAST_DUE", guestsOnMatch: 0 }).selectability, "caution");
   }
   // ORDER: PAST_DUE beats a stale ACTIVE row on the same person.
   const both = new Map<string, SubRow[]>([["50", [
@@ -334,6 +348,112 @@ console.log("\n9. THE RESULT TABLE SURVIVES UNTIL DISMISSED, AND IS DOWNLOADABLE
   // The env is a constant, not a control.
   if (/const WRITE_ENV = "production"/.test(VIEW)) ok("  the write environment is a constant, not a picker");
   else bad("WRITE_ENV is a constant", "READING PRODUCTION AND DELETING STAGING BY THE SAME IDS IS THE WORST FAILURE AVAILABLE");
+}
+
+console.log("\n12. THE FIVE CHANGES OF 2026-09-01");
+{
+  const VIEW = readFileSync("src/components/LapsedSpotsView.tsx", "utf8");
+  const ROUTE = readFileSync("src/app/api/lapsed-spots/route.ts", "utf8");
+  const code = VIEW.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  console.log("  -- today is in, started rows are shown but never ticked --");
+  {
+    /* Built at 19:30 so the 14:00 match has started and the 21:00 one has not. */
+    const M: MatchRow[] = [
+      { api_id: 910, name: "Earlier today", start_date: `${TODAY}T14:00:00Z`, is_cancelled: false, city_name: "Austin", field_title: "NEMP" },
+      { api_id: 911, name: "Later today", start_date: `${TODAY}T21:00:00Z`, is_cancelled: false, city_name: "Austin", field_title: "NEMP" },
+      { api_id: 912, name: "Yesterday", start_date: "2026-08-30T19:00:00Z", is_cancelled: false, city_name: "Austin", field_title: "NEMP" },
+      { api_id: 913, name: "Next week", start_date: "2026-09-07T19:00:00Z", is_cancelled: false, city_name: "Austin", field_title: "NEMP" },
+    ];
+    const S: SpotRow[] = [
+      spot({ user_id: 20, match_api_id: 910, user_email: "e@gmail.com", user_first_name: "Earlier" }),
+      spot({ user_id: 21, match_api_id: 911, user_email: "l@gmail.com", user_first_name: "Later" }),
+      spot({ user_id: 22, match_api_id: 912, user_email: "y@gmail.com", user_first_name: "Yesterday" }),
+      spot({ user_id: 23, match_api_id: 913, user_email: "n@gmail.com", user_first_name: "NextWeek" }),
+    ];
+    const U: SubRow[] = [20, 21, 22, 23].map((u) => ({ user_id: u, status: "CANCELED", canceled_at: "2026-08-02T10:00:00Z", member_email: `x${u}@gmail.com` }));
+    const V2 = buildLapsedSpots(M, S, U, TODAY, "19:30");
+    const rows = V2.groups.find((g) => g.state === "LAPSED")!.rows;
+    const byName = (n: string) => rows.find((r) => r.name.startsWith(n));
+    is("    a match starting LATER today is in the list", !!byName("Later"), true);
+    is("    …and is ticked", defaultChecked(byName("Later")!.guard), true);
+    is("    a match that started EARLIER today is in the list", !!byName("Earlier"), true);
+    is("    …but is NOT ticked", defaultChecked(byName("Earlier")!.guard), false);
+    is("    …with the chip", byName("Earlier")!.guard.reason, "Already started");
+    is("    YESTERDAY is NOT in the list", !!byName("Yesterday"), false);
+    // CONTROL: yesterday's spot exists in the fixture, so the absence is a filter, not an empty input.
+    is("    control: yesterday's spot IS in the input", S.some((x) => x.match_api_id === 912), true);
+    is("    the kickoff is carried per row", [byName("Earlier")!.kickoff, byName("Later")!.kickoff], ["14:00", "21:00"]);
+    is("    the funnel counts today's spots", V2.todaySpots, 2);
+    // TODAY FIRST, and within today by kickoff.
+    is("    today sorts first, earliest kickoff first", rows.map((r) => r.name.split(" ")[0]), ["Earlier", "Later", "NextWeek"]);
+    // CONTROL: the default nowHm is end-of-day, which marks every today row started — the SAFE
+    // default. A caller that forgets to pass the clock under-ticks; it never over-ticks.
+    const safe = buildLapsedSpots(M, S, U, TODAY);
+    is("    control: with no clock supplied, today's rows are all unticked (safe default)",
+      safe.groups.find((g) => g.state === "LAPSED")!.rows.filter((r) => r.isToday && defaultChecked(r.guard)).length, 0);
+  }
+
+  console.log("  -- only two groups render, but four are still classified --");
+  {
+    if (/RENDERED_STATES = SELECTABLE_STATES/.test(code)) ok("    RENDERED_STATES is the two selectable ones");
+    else bad("    ACTIVE and NEVER_A_MEMBER are not rendered", "THEY ARE NOISE BESIDE A LIVE CHECKBOX");
+    if (/data\.groups\.filter\(\(g\) => RENDERED_STATES\.has\(g\.state\)\)\.map/.test(code)) ok("    …and the group map filters on it");
+    else bad("    the group render is filtered");
+    is("    control: the MODEL still returns all four groups", V.groups.map((g) => g.state), ["LAPSED", "PAST_DUE", "ACTIVE", "NEVER_A_MEMBER"]);
+    is("    control: …and ACTIVE still has rows to classify", V.groups.find((g) => g.state === "ACTIVE")!.rows.length > 0, true);
+    if (/ls-unrendered/.test(code) && /never-a-member \(not listed\)/.test(code)) ok("    the funnel still counts both, and says they are not listed");
+    else bad("    the funnel counts the unrendered groups", "DROPPING THEM FROM THE COUNT WOULD WEAKEN THE CLASSIFICATION");
+  }
+
+  console.log("  -- the amber box is gone, element, class and all --");
+  {
+    is("    no FREE_IS_NOT_MEMBER_NOTE, no ls-free-note, no ls-note", /FREE_IS_NOT_MEMBER_NOTE|ls-free-note|ls-note/.test(VIEW), false);
+    // CONTROL: the scan can see a class that IS still there, so "absent" is not a dead regex.
+    is("    control: the scan still finds a live class (ls-denom)", /ls-denom/.test(VIEW), true);
+    const LIB = readFileSync("src/lib/lapsedSpots.ts", "utf8");
+    const FACTS = readFileSync("docs/matchday-api-facts.md", "utf8");
+    is("    the caveat is in the lib header", /FREE DOES NOT MEAN "MEMBER BENEFIT"/.test(LIB), true);
+    is("    …and in the facts doc", /FREE IS NOT "MEMBER BENEFIT"/.test(FACTS), true);
+    is("    IS FIRST MATCH stays on the page", /First match/.test(VIEW), true);
+  }
+
+  console.log("  -- two tabs, and the Removed one is durable --");
+  {
+    if (/data-testid="ls-tab-live"/.test(code) && /data-testid="ls-tab-removed"/.test(code)) ok("    both tabs render");
+    else bad("    two tabs render");
+    if (/useState<"live" \| "removed">\("live"\)/.test(code)) ok("    …and 'To remove' is the default");
+    else bad("    the live tab is the default");
+    if (/from\("change_log"\)/.test(ROUTE) && /eq\("source", "Lapsed spots"\)/.test(ROUTE))
+      ok("    Removed is read from change_log, scoped to this page's source — durable across a reload");
+    else bad("    the Removed tab reads change_log", "SESSION STATE WOULD LOSE THE HISTORY ON RELOAD");
+    if (/removedUmIds/.test(ROUTE) && /r\.outcome === "landed"/.test(ROUTE))
+      ok("    …and a LANDED removal is suppressed from the live list, so a row leaves one tab and appears in the other");
+    else bad("    a removed row leaves the live list", "THE MIRROR IS NIGHTLY — IT WOULD LINGER ALL AFTERNOON, STILL TICKED");
+    if (/filter\(\(r\) => r\.outcome === "landed"\)/.test(ROUTE)) ok("    …and ONLY landed — a FAILED removal keeps its spot in the list");
+    else bad("    only landed removals suppress");
+    // The counts read the live tab only.
+    if (/To remove <span className="ls-tabn">\{num\(candidates\.length\)\}/.test(code)) ok("    the header count is the live candidates");
+    else bad("    the header count reads the live tab");
+    // The button text is a TEMPLATE LITERAL, not a JSX expression — match ${selected.length}.
+    if (/Remove \$\{selected\.length\} spot/.test(code) && /disabled=\{selected\.length === 0/.test(code))
+      ok("    …and the Remove button counts and gates on the live selection");
+    else bad("    the Remove button counts the live selection", "IT WOULD BE INFLATED BY HISTORY");
+    // CONTROL: `selected` is derived from `candidates`, which is the live groups only.
+    if (/candidates\.filter\(\(r\) => picked\.has\(r\.spotId\)/.test(code)) ok("    control: the selection derives from the live candidates, not from data.removed");
+    else bad("    control: the selection derives from candidates");
+    if (/data-testid="ls-csv"/.test(code) && /removalCsv\(results/.test(code)) ok("    the per-run CSV download is untouched");
+    else bad("    the CSV download survives");
+  }
+
+  console.log("  -- what must NOT have changed --");
+  {
+    is("    paid > $0 is still BLOCKED", guardFor({ amountCents: 1, isStaff: false, state: "LAPSED", guestsOnMatch: 0 }).selectability, "blocked");
+    is("    staff is still caution", guardFor({ amountCents: 0, isStaff: true, state: "LAPSED", guestsOnMatch: 0 }).selectability, "caution");
+    is("    guests still caution", guardFor({ amountCents: 0, isStaff: false, state: "LAPSED", guestsOnMatch: 2 }).selectability, "caution");
+    is("    a clean row is still ok", guardFor({ amountCents: 0, isStaff: false, state: "LAPSED", guestsOnMatch: 0 }).selectability, "ok");
+    is("    paid still outranks already-started", guardFor({ amountCents: 500, isStaff: false, state: "LAPSED", guestsOnMatch: 0, alreadyStarted: true }).selectability, "blocked");
+  }
 }
 
 console.log(`\nlapsed-removal: ${pass} passed, ${fails.length} failed`);

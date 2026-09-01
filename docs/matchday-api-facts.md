@@ -5123,3 +5123,29 @@ PATCH  /admin/matches/9/players/3/refund-and-cancel -> DENY  (moves money)
 
 Four segments vs three: `assertAllowedEndpoint` compares `segs.length` before the wildcards, so
 the near-miss is not caught and the real one cannot slip through.
+
+## FREE IS NOT "MEMBER BENEFIT" — the signal, and the two columns that cannot answer (2026-09-01)
+
+Moved here from an amber callout on `/match-ops/lapsed-spots`, which was removed the same day. The
+caveat is unchanged; it is simply not screen furniture on a sheet where the operator is deciding
+who to remove from a match. **Anyone about to treat a FREE spot as proof of a membership must read
+this first.**
+
+**No column anywhere records that a spot was taken on a membership.** Two look like they should
+and neither can:
+
+- **`match_registrations.payment_type = 'MEMBER'`** is a **stale manual upload**. Its last match is
+  **2026-05-12** and it holds **ZERO future rows**. It cannot answer a question about next week,
+  and any join through it silently returns nothing for every match that has not happened.
+- **`mdapi_match_players.user_is_member`** is **`false` on all 246,216 rows**. The column exists in
+  the mirror and in the API payload and has never been populated with anything else.
+
+So `paid_status = 'FREE'` is the **nearest available signal**, not proof of a member benefit. It is
+what the lapsed-spots page filters on, and the page carries **IS FIRST MATCH** per row for the same
+reason: a first-match-free is a real thing and must stay visible rather than being read as a
+lapsed member's benefit.
+
+**What this means for anything built on top:** a count of "member spots" derived from FREE is an
+upper bound that includes first-match frees, comps and anything else given away. It is good enough
+to decide who to look at; it is not good enough to bill, reconcile, or report as membership usage.
+The header of `src/lib/lapsedSpots.ts` carries the same text beside the code that depends on it.
