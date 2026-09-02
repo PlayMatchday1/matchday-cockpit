@@ -110,7 +110,19 @@ async function main() {
       tagUnchanged: (r.find((x) => x.kind === "note")?.week ?? "") === weekTagBefore,
       tagged: /^week of \w+ \d+$/.test(r.find((x) => x.kind === "note")?.week ?? ""),
     })), { kinds: ["note"], tagUnchanged: true, tagged: true });
-    eq("gate3b: no proposal chip renders on the other week either", await page.$$eval('[data-testid="slate-proposal"]', (els, m) => nonEmpty(els, "els").filter((e) => e.innerText.includes(m)).length, MARK), 0);
+    /* THE GUARD CANNOT LIVE INSIDE THE BROWSER CALLBACK — nonEmpty is a Node import and does not
+     * exist in page context. My sweep put it there and this suite threw ReferenceError on the next
+     * run. And it was the wrong guard anyway: ZERO IS THE EXPECTED ANSWER here, so an emptiness
+     * check is not what makes this assertion honest — a positive control is. */
+    eq("gate3b: no proposal chip renders on the other week either",
+      await page.$$eval('[data-testid="slate-proposal"]', (els, m) => els.filter((e) => e.innerText.includes(m)).length, MARK), 0);
+    /* THE POSITIVE CONTROL: the same selector and the same MARK DO match on the week that has the
+     * proposal. Without it, a renamed testid and an absent chip look identical. */
+    /* BACK TO THE WEEK THAT HAS THE PROPOSAL — the suite moved forward one week at gate 3. */
+    await page.click('button[aria-label="Previous week"]');
+    await page.waitForTimeout(500);
+    eq("  control: the same selector finds it on the week that HAS one",
+      (await page.$$eval('[data-testid="slate-proposal"]', (els, m) => els.filter((e) => e.innerText.includes(m)).length, MARK)) > 0, true);
 
     // ── GATE 5 — layout at 1600 and 390 (asserted before the delete empties it) ──
     const layout = async (w) => {
@@ -151,6 +163,65 @@ async function main() {
       { goneNow, afterReload: (await mine(page)).length, inDb: (dbLeft.data ?? []).length }, { goneNow: 0, afterReload: 0, inDb: 0 });
 
     await ctx.close();
+
+    /* ── THE WEEK GRID FITS ITS COLUMNS AT EVERY WIDTH ─────────────────────────────────────────
+     * MEASURED at 390px before the fix: repeat(7, minmax(0,1fr)) produced 34.9px columns and
+     * SHEARED 57 ELEMENTS — the day header needed 58px in a 17px box, every cell 52px in 20px.
+     * The ZERO in minmax(0,...) is what allows it: a track may shrink below its own content, so
+     * the grid fits the screen perfectly and says nothing legible. Nothing overflowed, so nothing
+     * looked wrong.
+     *
+     * GEOMETRY, NOT TEXT. Every one of those 57 elements had correct textContent. */
+    for (const w of [390, 430, 768, 1024, 1500]) {
+      const cw = await browser.newContext({ viewport: { width: w, height: 844 }, storageState,
+        ...(w < 640 ? { isMobile: true, hasTouch: true } : {}) });
+      const pw = await cw.newPage();
+      await pw.goto(SLATE, { waitUntil: "domcontentloaded" });
+      await pw.waitForSelector(".ms-grid", { timeout: 120000 });
+      await pw.waitForTimeout(2000);
+      const g = await pw.evaluate(() => {
+        const el = document.querySelector(".ms-grid");
+        const cs = getComputedStyle(el);
+        const clipped = [...el.querySelectorAll("*")]
+          .filter((e) => e.scrollWidth > e.clientWidth + 1 && e.clientWidth > 0)
+          .map((e) => ({ cls: String(e.className).slice(0, 18), need: e.scrollWidth, has: e.clientWidth }));
+        return { cols: cs.gridTemplateColumns.split(" ").length, overflowX: cs.overflowX,
+          colW: Math.round(parseFloat(cs.gridTemplateColumns)), sw: el.scrollWidth, cw: el.clientWidth,
+          days: el.children.length, clipped,
+          pageH: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 };
+      });
+      eq(`${w}: seven day columns`, g.days, 7);
+      eq(`${w}: nothing in the grid is sheared`, g.clipped, []);
+      eq(`${w}: the page never scrolls sideways`, g.pageH, false);
+      if (w < 640) {
+        eq(`${w}: the grid is its own scroll container`, g.overflowX, "auto");
+        eq(`${w}: ...and its columns have a real minimum`, g.colW, 132);
+        const reach = await pw.evaluate(() => {
+          const el = document.querySelector(".ms-grid");
+          const vw = document.documentElement.clientWidth;
+          el.scrollLeft = el.scrollWidth;
+          const last = el.lastElementChild.getBoundingClientRect();
+          return { moved: el.scrollLeft > 0, lastVisible: last.right <= vw + 1 && last.left >= -1 };
+        });
+        eq(`${w}: scrolling reaches the last day`, reach, { moved: true, lastVisible: true });
+        /* CONTROL: restore minmax(0,1fr) and show the columns collapse and shear again. Both axes
+         * of overflow must be reset — overflow-x: visible COMPUTES TO auto while overflow-y is
+         * hidden, so setting only the x axis is a no-op. */
+        const regressed = await pw.evaluate(() => {
+          const el = document.querySelector(".ms-grid");
+          const prev = el.style.cssText;
+          el.style.gridTemplateColumns = "repeat(7,minmax(0,1fr))";
+          el.style.overflow = "visible";
+          const n = [...el.querySelectorAll("*")].filter((e) => e.scrollWidth > e.clientWidth + 1 && e.clientWidth > 0).length;
+          el.style.cssText = prev;
+          return n;
+        });
+        eq(`${w}: CONTROL — minmax(0,1fr) DOES shear the grid (${regressed} elements)`, regressed > 20, true);
+      } else {
+        eq(`${w}: on desktop seven columns fit without scrolling`, g.sw <= g.cw + 1, true);
+      }
+      await cw.close();
+    }
   } finally {
     await wipe();
     await browser.close();

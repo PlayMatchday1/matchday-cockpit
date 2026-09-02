@@ -437,7 +437,12 @@ const CSS = `
 .ms-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;align-items:start}
 .ms-col{background:#f9fbfa;border:1px solid #e0e8e3;border-radius:12px;padding:8px 8px 10px;min-width:0}
 .ms-col.is-today{border-color:#35c77f;box-shadow:inset 3px 0 0 #35c77f}
-.ms-colhead{display:flex;align-items:baseline;justify-content:space-between;gap:6px;padding:4px 4px 9px;margin-bottom:2px;border-bottom:1px solid #e0e8e3}
+/* WRAP RATHER THAN SHEAR. The TODAY column's header carries an extra badge, so at tablet widths
+   it needed 80px in a 68px track and the day number was clipped — measured at 768 and 1024. It is
+   the only element on this grid that does not fit its column, and letting it take a second line
+   costs nothing while a sheared date costs the reader the day they are looking at. */
+.ms-colhead{display:flex;align-items:baseline;justify-content:space-between;gap:6px;flex-wrap:wrap;
+  min-width:0;padding:4px 4px 9px;margin-bottom:2px;border-bottom:1px solid #e0e8e3}
 .ms-dow{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#626f68}
 .ms-col.is-today .ms-dow{color:#12704a}
 .ms-dnum{font-size:14px;font-weight:800;color:#566661;font-variant-numeric:tabular-nums}
@@ -495,4 +500,23 @@ const CSS = `
 .ms-row-field{font-size:12.5px;font-weight:500;color:#566661;min-width:0;line-height:1.35}
 .ms-row.is-drop .ms-row-time{color:#8f2d15}
 .ms-row-tag{margin-left:auto;flex:0 0 auto;font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#8f2d15;background:#fbe9e3;border-radius:999px;padding:2px 8px}
+
+/* ── THE WEEK GRID ON A PHONE ─────────────────────────────────────────────────────────────────
+   NO BACKTICK MAY APPEAR IN THIS BLOCK - it sits inside a template literal.
+
+   MEASURED at 390px: repeat(7, minmax(0,1fr)) gave columns of 34.9px and sheared 57 elements -
+   the day header needed 58px in a 17px box, and every cell 52px in 20px. The ZERO in minmax(0,...)
+   is what permits that: it lets a track shrink below its own content rather than overflowing, so
+   the grid fits the screen perfectly and says nothing legible.
+
+   Below 640px the minimum becomes a real one and the grid scrolls itself. The page still never
+   scrolls sideways. Desktop is untouched - minmax(0,1fr) is right there, where seven columns fit. */
+@media (max-width: 639.98px) {
+  .ms-grid{grid-template-columns:repeat(7,minmax(132px,1fr));overflow-x:auto;overflow-y:hidden;
+    -webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;scrollbar-width:none;
+    scroll-snap-type:x proximity;padding-bottom:2px}
+  .ms-grid::-webkit-scrollbar{display:none}
+  .ms-grid > *{scroll-snap-align:start}
+}
+
 `;
