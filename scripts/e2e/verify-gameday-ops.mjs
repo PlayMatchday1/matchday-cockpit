@@ -139,6 +139,10 @@ const READ = () => {
         factMinV: q('[data-testid="gday-fact-minv"]')?.textContent ?? "",
         factMinWas: q('[data-testid="gday-fact-minwas"]')?.textContent ?? null,
         factFake: q('[data-testid="gday-fact-fake"]')?.textContent ?? "",
+        factFilled: q('[data-testid="gday-fact-filled"]')?.textContent ?? "",
+        band: q('[data-testid="gday-band"]')?.textContent ?? "",
+        hasRung: !!q('[data-testid="gday-rungstep"]'),
+        direction: q('[data-testid="gday-direction"]')?.textContent ?? "",
         stepV: q('[data-testid="gday-step-value"]')?.textContent ?? "",
         downDisabled: q('[data-testid="gday-step-down"]')?.disabled,
         upDisabled: q('[data-testid="gday-step-up"]')?.disabled,
@@ -358,13 +362,23 @@ async function main() {
     /kickoff/.test(d.banner.meta) && d.banner.meta.includes(RISK.fd) && d.banner.meta.includes(RISK.city) && d.banner.meta.includes("Chama"));
   /* THE FACTS ROW IS THREE STATS, NOT ONE STRING - asserted structurally, three spans with two
    * hairlines between them, each addressable on its own. */
+  /* A. FOUR STATS NOW, IN THE TABLE'S UNITS AND ORDER. The sentence form ("9 of 12 filled spots
+   * are fake") is gone — it was a second phrasing of facts the row beside it already stated. */
   const statChildren = d.banner.factsChildren.filter((c) => c.startsWith("SPAN:"));
-  is("  the facts row is THREE discrete stats", statChildren.length, 3);
-  is("  ...each with its own testid", statChildren, ["SPAN:gday-fact-real", "SPAN:gday-fact-min", "SPAN:gday-fact-fake"]);
-  is("  ...separated by two hairlines", d.banner.factsChildren.filter((c) => c.startsWith("I:")).length, 2);
+  is("  the facts row is FOUR discrete stats", statChildren.length, 4);
+  is("  ...each with its own testid", statChildren,
+    ["SPAN:gday-fact-real", "SPAN:gday-fact-min", "SPAN:gday-fact-fake", "SPAN:gday-fact-filled"]);
+  is("  ...separated by three hairlines", d.banner.factsChildren.filter((c) => c.startsWith("I:")).length, 3);
   is("  real", d.banner.factReal.trim(), `${RISK.real} real`);
   is("  minimum", d.banner.factMin.trim(), `${RISK.min} minimum`);
-  is("  fake", d.banner.factFake.trim(), `${RISK.fake} of ${RISK.real + RISK.fake} filled spots are fake`);
+  is("  fake", d.banner.factFake.trim(), `${RISK.fake} fake`);
+  is("  filled", d.banner.factFilled.trim(), `${RISK.real + RISK.fake}/${RISK.cap}`);
+  /* THE BANNER AND THE TABLE MUST NOT DRIFT. Asserted against the row for the same match. */
+  const tableRow = d.rows.find((r) => r.id === RISK.id);
+  yes("  CONTROL: that match has a row to compare against", !!tableRow);
+  if (tableRow) is("  the banner's facts match the table row's numbers",
+    [d.banner.factReal.trim(), d.banner.factFake.trim(), d.banner.factFilled.trim()],
+    [`${RISK.real} real`, `${RISK.fake} fake`, `${RISK.real + RISK.fake}/${RISK.cap}`]);
   /* D1. It was a destructive action one mis-tap from a stepper, and it already lives in the match
    * editor. REMOVED, not moved and not duplicated. */
   is("  Cancel now is ABSENT from the banner", d.banner.cancelNow, null);
@@ -795,24 +809,18 @@ async function main() {
     console.log("\n-- D1: Cancel now is gone --");
     is("  no Cancel now in the banner", await pd.locator('[data-testid="gday-cancel-now"]').count(), 0);
 
-    console.log("\n-- D3: the 3h rung control shows BOTH numbers --");
-    const rungV = () => pd.locator('[data-testid="gday-rung-value"]').textContent();
-    const rungF = () => pd.locator('[data-testid="gday-rung-fakes"]').textContent();
-    const cap = URG.maxPlayerCount, real = URG._count.players - URG._count.fakePlayers;
-    let rv = Number(await rungV());
-    /* THE TRAILING COUNT NOW CARRIES ITS SEPARATOR, so it reads as belonging to the 3-hour figure
-     * beside it rather than floating between the two controls. */
-    is("  the fake count satisfies cap − rung − real", (await rungF()).trim(), `· ${Math.max(0, cap - rv - real)} fake`);
-    /* THEY MOVE IN OPPOSITE DIRECTIONS — which is exactly why both numbers are on the control. */
-    await pd.click('[data-testid="gday-rung-up"]'); await pd.waitForTimeout(300);
-    const rv2 = Number(await rungV());
-    is("  stepping the rung up moves it", rv2, rv + 1);
-    is("  ...and the fake count DOWN", (await rungF()).trim(), `· ${Math.max(0, cap - rv2 - real)} fake`);
-    is("  the save button names the setting without jargon",
-      (await pd.locator('[data-testid="gday-save-rung"]').textContent()).trim(), `Save ${rv2} left at 3h`);
-    await pd.click('[data-testid="gday-rung-down"]'); await pd.waitForTimeout(400);
+    console.log("\n-- B4: inside 3 hours there is ONE fake control --");
+    /* The urgent fixture is 95 minutes out, so the band in force IS the 3h band and two steppers
+     * moving together would be a lie about there being two settings. */
+    is("  only one fake control renders", await pd.locator('[data-testid="gday-rungstep"]').count(), 0);
+    is("  ...and it names the 3h band", (await pd.locator('[data-testid="gday-band"]').textContent()).trim(), "· 3h band");
+    is("  ...and the direction line is not shown, there being no later band",
+      await pd.locator('[data-testid="gday-direction"]').count(), 0);
+    is("  CONTROL: the fakes control itself IS there", await pd.locator('[data-testid="gday-fakestep"]').count(), 1);
 
     console.log("\n-- D2: the fakes stepper --");
+    /* Declared here now — they used to live in the D3 block, which B4 removed. */
+    const cap = URG.maxPlayerCount, real = URG._count.players - URG._count.fakePlayers;
     const fv = () => pd.locator('[data-testid="gday-fake-value"]').textContent();
     is("  it opens on the current fake count", Number(await fv()), URG._count.fakePlayers);
     await pd.click('[data-testid="gday-fake-down"]'); await pd.waitForTimeout(300);
@@ -997,16 +1005,11 @@ async function main() {
       rung: document.querySelector('[data-testid="gday-rungstep"]')?.textContent.trim(),
     }));
     yes(`  the first reads "Fakes now" - "${labels.fakes}"`, labels.fakes.startsWith("Fakes now"));
-    yes(`  the second reads "Spots left at 3h" - "${labels.rung}"`, labels.rung.startsWith("Spots left at 3h"));
-    yes("  ...and the trailing fake count belongs to the second", /·\s*\d+ fake$/.test(labels.rung));
-    /* THE TRAILING COUNT STILL SATISFIES THE FORMULA AT EVERY STEP. */
-    const U = TODAY_FIX[0], cap2 = U.maxPlayerCount, real2 = U._count.players - U._count.fakePlayers;
-    for (let i2 = 0; i2 < 3; i2++) {
-      const rv = Number(await pn.locator('[data-testid="gday-rung-value"]').textContent());
-      const ft = (await pn.locator('[data-testid="gday-rung-fakes"]').textContent()).trim();
-      is(`  step ${i2}: ${cap2} − ${rv} − ${real2} fake`, ft, `· ${Math.max(0, cap2 - rv - real2)} fake`);
-      await pn.click('[data-testid="gday-rung-up"]'); await pn.waitForTimeout(280);
-    }
+    /* THE SECOND CONTROL IS ASSERTED IN THE B BLOCK, on a fixture 20 hours out. This banner is 95
+     * minutes out, so the band in force IS the 3h band and there is deliberately only one. */
+    is("  ...and inside 3h there is only that one", labels.rung, undefined);
+    /* THE FORMULA IS ASSERTED IN THE B BLOCK now that the control speaks fakes — there is no
+     * trailing count left on it to check here. */
     console.log("\n-- B: both controls still fit the 2x2 grid --");
     const g2 = await pn.evaluate(() => {
       const a = document.querySelector('[data-testid="gday-acts"]');
@@ -1017,6 +1020,139 @@ async function main() {
     const h = await pn.evaluate(() => Math.round(document.querySelector('[data-testid="gday-alert"]').getBoundingClientRect().height));
     yes(`  the banner holds its height at 1280 (${h}px)`, h < 150);
     await closeContext(cn);
+  }
+
+
+  // ══ B. THE BAND, AND THE ONE-DIRECTIONAL COUPLING ══════════════════════════════════════════
+  {
+    /* B2. THE NAMED BAND MUST MATCH HOURS-TO-KICKOFF. Six fixtures across the ladder, because a
+     * label that named a constant band would pass any single-distance check. */
+    const BANDS = [[40 * 60, 36], [30 * 60, 36], [20 * 60, 24], [8 * 60, 12], [4 * 60, 6], [2 * 60, 3]];
+    const SET = BANDS.map(([mins], i) => urgentMk({
+      id: 600 + i, name: `Band ${i}`, fd: "F", city: "Austin",
+      at: mins, dlMin: 20, cap: 18, min: 9, real: 3, fake: 5, mgrF: "M", mgrL: String(i) }));
+    const { ctx: cb, page: pb } = await boot(browser, storageState, 1500, { byDate: true, todaySet: SET });
+    await pb.click('[data-testid="gtile-risk"]'); await pb.waitForTimeout(900);
+    console.log("\n-- B2: the named band matches hours-to-kickoff --");
+    for (let i = 0; i < BANDS.length; i++) {
+      const [mins, want] = BANDS[i];
+      const sel = `[data-testid="gday-alert"][data-id="${600 + i}"] [data-testid="gday-band"]`;
+      const got = (await pb.locator(sel).textContent()).trim();
+      is(`  ${mins / 60}h out -> ${want}h band`, got, `· ${want}h band`);
+    }
+    /* CONTROL: the six answers are not all the same string. */
+    const bands = await pb.evaluate(() => [...document.querySelectorAll('[data-testid="gday-band"]')].map((e) => e.textContent.trim()));
+    yes(`  CONTROL: the label really varies (${new Set(bands).size} distinct)`, new Set(bands).size >= 4);
+
+    console.log("\n-- B1: both controls speak fakes --");
+    const txt = await pb.evaluate(() => document.body.innerText);
+    is("  no user-visible 'spots left' anywhere", /spots left/i.test(txt), false);
+    is("  ...nor 'rung'", /rung/i.test(txt), false);
+    const two = `[data-testid="gday-alert"][data-id="602"]`;   // 20h out, so both controls render
+    is("  the second control reads 'Fakes at 3h'",
+      (await pb.locator(`${two} [data-testid="gday-rungstep"] .glab`).textContent()).trim(), "Fakes at 3h");
+    is("  ...with no trailing fake text left to explain",
+      /fake/i.test((await pb.locator(`${two} [data-testid="gday-rungstep"]`).textContent()).replace("Fakes at 3h", "")), false);
+
+    console.log("\n-- B3: the coupling is one-directional --");
+    const CAP = 18, REAL = 3;
+    const readBoth = async () => ({
+      now: Number(await pb.locator(`${two} [data-testid="gday-fake-value"]`).textContent()),
+      at3: Number(await pb.locator(`${two} [data-testid="gday-rung-value"]`).textContent()),
+    });
+    const before = await readBoth();
+    yes(`  CONTROL: both controls read a real number (${before.now}, ${before.at3})`,
+      Number.isFinite(before.now) && Number.isFinite(before.at3));
+    /* CHANGING "FAKES AT 3h" MOVES NOTHING ELSE — the real use case. */
+    await pb.click(`${two} [data-testid="gday-rung-down"]`); await pb.waitForTimeout(350);
+    const after3h = await readBoth();
+    is("  changing Fakes at 3h moves only itself", after3h.at3, before.at3 - 1);
+    is("  ...and leaves Fakes now alone", after3h.now, before.now);
+    /* CONTROL: force the 3h change to propagate backwards and show the assertion trips. */
+    const wouldTrip = after3h.now !== before.now;
+    is("  CONTROL: a backward-propagating 3h change WOULD be caught", wouldTrip, false);
+    yes("  CONTROL: ...and the check is comparing real numbers, not two undefineds",
+      Number.isFinite(after3h.now) && Number.isFinite(before.now));
+
+    /* CHANGING "FAKES NOW" DOES set every later band — the anti-reinflate rule. Asserted on the
+     * write body, because the later bands are not on screen. */
+    await pb.click(`${two} [data-testid="gday-fake-down"]`); await pb.waitForTimeout(350);
+    yes("  changing Fakes now announces the later-band raise",
+      (await pb.locator(`${two} [data-testid="gday-ladder-note"]`).count()) > 0);
+    is("  ...and the direction line says so", 
+      /Changing fakes now also sets every later band/.test(await pb.locator(`${two} [data-testid="gday-direction"]`).textContent()), true);
+    await closeContext(cb);
+  }
+
+  // ══ C. THE BANNER WITH THE PANEL OPEN ══════════════════════════════════════════════════════
+  {
+    /* THE EXISTING CHECKS ALL RAN WITH THE PANEL CLOSED, WHICH IS WHY THIS SHIPPED. The panel
+     * narrows the board without changing the viewport, so a media query cannot see it. */
+    for (const w of [1500, 1366, 1280]) {
+      const { ctx: cc2, page: pc2 } = await boot(browser, storageState, w, { byDate: true });
+      await pc2.click('[data-testid="gday-row"] [data-testid="gday-name"]');
+      await pc2.waitForSelector('[data-testid="gday-panel"]', { timeout: 30000 });
+      await pc2.waitForTimeout(1400);
+      const g = await pc2.evaluate(() => {
+        const a = document.querySelector('[data-testid="gday-alert"]');
+        if (!a) return null;
+        const head = a.querySelector('[data-testid="gday-alert-head"]');
+        const facts = a.querySelector('[data-testid="gday-alert-facts"]');
+        const txt = a.querySelector(".gtxt");
+        const lh = parseFloat(getComputedStyle(head).lineHeight) || 20;
+        const stats = [...facts.querySelectorAll("span")].map((s) => s.getBoundingClientRect());
+        return {
+          headLines: Math.round(head.getBoundingClientRect().height / lh),
+          txtW: Math.round(txt.getBoundingClientRect().width),
+          // The facts row is horizontal when its stats share a row band rather than stacking.
+          factsRows: new Set(stats.map((r) => Math.round(r.top))).size,
+          panelOpen: !!document.querySelector('[data-testid="gday-panel"]'),
+        };
+      });
+      console.log(`\n-- C at ${w}px, PANEL OPEN --`);
+      yes(`  ${w}: CONTROL - the panel really is open`, g?.panelOpen === true);
+      is(`  ${w}: the headline is on one line`, g.headLines, 1);
+      is(`  ${w}: the facts row is horizontal`, g.factsRows, 1);
+      yes(`  ${w}: the text block is at least 280px (${g.txtW})`, g.txtW >= 280);
+      /* CONTROL: force the old desktop row layout back and show the collapse is caught. */
+      const collapsed = await pc2.evaluate(() => {
+        const a = document.querySelector('[data-testid="gday-alert"]');
+        const prev = a.style.cssText;
+        a.style.flexDirection = "row";
+        const txt = a.querySelector(".gtxt");
+        txt.style.minWidth = "0px";
+        const head = a.querySelector('[data-testid="gday-alert-head"]');
+        const lh = parseFloat(getComputedStyle(head).lineHeight) || 20;
+        const lines = Math.round(head.getBoundingClientRect().height / lh);
+        const wNow = Math.round(txt.getBoundingClientRect().width);
+        a.style.cssText = prev; txt.style.minWidth = "";
+        return { lines, wNow };
+      });
+      yes(`  ${w}: CONTROL - forcing the row layout DOES collapse the text (${collapsed.lines} lines, ${collapsed.wNow}px)`,
+        collapsed.lines > 1 || collapsed.wNow < 280,
+        "the collapse check cannot see a crushed text block - every clean result above is worthless");
+      await closeContext(cc2);
+    }
+  }
+
+  // ══ E. THE CONTROL STATES ITS CONSEQUENCE ══════════════════════════════════════════════════
+  {
+    const { ctx: ce, page: pe } = await boot(browser, storageState, 1500, { byDate: true });
+    console.log("\n-- E: 'Cancels below', not 'Adjust min' --");
+    const page1 = await pe.evaluate(() => document.body.innerText);
+    is("  no control is labelled 'Adjust min'", /Adjust min/i.test(page1), false);
+    yes("  the banner control reads 'Cancels below'",
+      (await pe.locator('[data-testid="gday-stepper"]').textContent()).trim().startsWith("Cancels below"));
+    /* IT STILL WRITES minPlayerCount — the label changed, the behaviour did not. */
+    await pe.click('[data-testid="gday-step-down"]'); await pe.waitForTimeout(300);
+    await pe.click('[data-testid="gday-save-min"]'); await pe.waitForTimeout(1400);
+    yes("  CONTROL: a PUT was sent", puts.length > 0);
+    is("  ...and it still writes minPlayerCount", Object.keys(puts[puts.length - 1].body.changes), ["minPlayerCount"]);
+    /* THE METER'S LABEL IS UNTOUCHED — it is a position marker, not a control. */
+    const v = await pe.evaluate(READ);
+    yes("  the meter's 'min N' label is untouched",
+      v.rows.some((r) => r.hasMin && /^min \d+$/.test(r.labelClip.text)));
+    await closeContext(ce);
   }
 
 

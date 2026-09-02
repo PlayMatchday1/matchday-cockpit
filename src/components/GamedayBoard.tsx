@@ -480,17 +480,22 @@ export default function GamedayBoard({
   const step3h = (id: number, d: number) => {
     const m = matches.find((x) => x.id === id); if (!m) return;
     const cap = capacity(m) ?? 0, real = realCount(m);
-    const cur = pending3h[id] ?? Number(m.fakeSpotLeft3h ?? 0);
-    const next = Math.max(0, Math.min(cap, cur + d));
-    if (next === cur) return;
+    /* THE OPERATOR STEPS FAKES; THE STORE HOLDS A RUNG. Converting here keeps the inversion in one
+     * place — a control that stepped the rung would move the fake count the opposite way from the
+     * button that was pressed. */
+    const curRung = pending3h[id] ?? Number(m.fakeSpotLeft3h ?? 0);
+    const curFakes = fakesFor(cap, curRung, real);
+    const nextFakes = Math.max(0, Math.min(Math.max(0, cap - real), curFakes + d));
+    const next = rungFor(cap, nextFakes, real);
+    if (next === curRung) return;
     setSaveState((p) => { const n = { ...p }; delete n[id]; return n; });
     setPending3h((p) => { const n = { ...p }; if (next === Number(m.fakeSpotLeft3h ?? 0)) delete n[id]; else n[id] = next; return n; });
-    void real;
   };
   const save3h = (id: number) => {
     const m = matches.find((x) => x.id === id); if (!m) return;
     const target = pending3h[id]; if (target == null) return;
-    void saveRungs(id, { fakeSpotLeft3h: target }, `3h rung set to ${target}`,
+    const cap3 = capacity(m) ?? 0, real3 = realCount(m);
+    void saveRungs(id, { fakeSpotLeft3h: target }, `${fakesFor(cap3, target, real3)} fake spots at 3h`,
       () => setPending3h((p) => { const n = { ...p }; delete n[id]; return n; }));
   };
 
@@ -1411,6 +1416,37 @@ const CSS = `
   .gdo .gpanel-tabs button{padding:12px 16px;font-size:14px}
 }
 
+
+/* ── C. THE BANNER RESTACKS ON ITS OWN WIDTH, NOT THE WINDOW'S ────────────────────────────────
+   With the match panel open the board narrows to roughly 900px inside a 1500px window, and the
+   headline collapsed to one word per line — "The / Hattrick / (Leander) / is 6 / players / short"
+   — while the action grid held its width and crushed the text block to a sliver.
+
+   A MEDIA QUERY CANNOT SEE THIS. The trigger is the panel, not the screen: the viewport never
+   changed. A CONTAINER QUERY asks the right question — how much room does this banner actually
+   have — and answers it identically whether the width was taken by a small screen or by a panel.
+
+   The alert-slot is the container; the banner queries it. Below 860px the banner becomes a column:
+   text block full width first, then the countdown, then the action grid beneath. */
+.gdo [data-testid="gday-alertslot"]{container-type:inline-size;container-name:gbanner}
+@container gbanner (max-width: 860px) {
+  .gdo .galert{flex-direction:column;align-items:stretch;gap:12px}
+  .gdo .galert .gbang{display:none}
+  .gdo .galert .gclock{text-align:left;display:flex;align-items:baseline;gap:8px}
+  /* minmax(0,…) SO THE COLUMNS CAN SHRINK. auto auto sizes to content and, on a 390px phone,
+     pushed the page into a horizontal scroll — the container query fires there too, and a track
+     that cannot shrink is a track that overflows. */
+  .gdo .galert .gacts{grid-template-columns:minmax(0,1fr) minmax(0,1fr);justify-items:stretch}
+}
+/* AND A PHONE STILL GETS ONE COLUMN. This sits after the container query on purpose: below 640px
+   the viewport is the binding constraint, whatever the container says. */
+@media (max-width: 639.98px) { .gdo .galert .gacts{grid-template-columns:1fr} }
+/* THE TEXT BLOCK NEVER GETS CRUSHED — but only where there is room for the floor to mean anything.
+   280px on a 390px screen is the whole width; the phone layout stacks instead and needs no floor. */
+@container gbanner (min-width: 640px) { .gdo .gtxt{min-width:280px} }
+.gdo .galert .gacts{flex:0 1 auto;min-width:0}
+.gdo .gdirection{grid-column:1 / -1;font-size:10.5px;color:#66786E;line-height:1.45}
+
 `;
 
 /* ── THE STAT STRIP ─────────────────────────────────────────────────────────────────────────────
@@ -1631,8 +1667,14 @@ function AlertBanner({ m, now, pending, pendingFakes, pending3h, onStep, onStepF
   const savedFakes = fakeCount(m);
   const shownFakes = pendingFakes ?? savedFakes;
   const fakesMoved = pendingFakes != null && pendingFakes !== savedFakes;
+  /* THE BAND IN FORCE, live off the countdown, so the label moves as the match crosses a boundary. */
+  const bandNow = markInForce(minsToKick / 60);
+  /* THE 3h CONTROL IN FAKES. The rung is stored; the operator reads and writes the fake count it
+   * produces. pending3h holds a RUNG, so it is converted for display and back on the way out —
+   * the ladder translation stays in the model and never reaches the label. */
   const saved3h = Number(m.fakeSpotLeft3h ?? 0);
   const shown3h = pending3h ?? saved3h;
+  const fakesAt3h = fakesFor(cap, shown3h, real);
   const rungMoved = pending3h != null && pending3h !== saved3h;
   /* WHICH LATER RUNGS THIS CHANGE WOULD HAVE TO RAISE - computed for the note, from the same
    * helper that builds the write, so the note cannot describe a different write. */
@@ -1672,7 +1714,11 @@ function AlertBanner({ m, now, pending, pendingFakes, pending3h, onStep, onStepF
             {moved && <em data-testid="gday-fact-minwas">was {savedMin}</em>}
           </span>
           <i aria-hidden />
-          <span className="gf" data-testid="gday-fact-fake"><b>{fk}</b> of {real + fk} filled spots are fake</span>
+          {/* A. THE SAME UNITS AND ORDER AS THE TABLE ROW — "3 real · 9 fake · 12/18". Two phrasings
+              for one set of facts on one screen was the defect; the sentence form is gone. */}
+          <span className="gf" data-testid="gday-fact-fake"><b>{fk}</b> fake</span>
+          <i aria-hidden />
+          <span className="gf" data-testid="gday-fact-filled"><b>{real + fk}</b>/{cap}</span>
         </div>
       </div>
       <div className="gclock" onClick={stop}>
@@ -1688,8 +1734,10 @@ function AlertBanner({ m, now, pending, pendingFakes, pending3h, onStep, onStepF
           href={`/match-ops/match-chats?chatId=${encodeURIComponent(String(m.id))}`}
           onClick={(e) => { stop(e); e.preventDefault(); onChat(m.id); }}>Open match chat</a>
 
-        <span className="gstep" data-testid="gday-stepper" title={stepperReason ?? "Adjust the match minimum"}>
-          Adjust min
+        <span className="gstep" data-testid="gday-stepper" title={stepperReason ?? "Below this many real players the match auto-cancels"}>
+          {/* E. THE CONSEQUENCE, NOT THE FIELD NAME. "Adjust min" is ambiguous — minimum what. The
+              editor already says "MIN PLAYERS — below this, it cancels"; this is that, at a glance. */}
+          Cancels below
           <button type="button" className="gsb" data-testid="gday-step-down" aria-label="Lower the minimum"
             disabled={!canEdit || shownMin <= 2}
             onClick={(e) => { stop(e); onStep(m.id, -1); }}>−</button>
@@ -1699,14 +1747,18 @@ function AlertBanner({ m, now, pending, pendingFakes, pending3h, onStep, onStepF
             onClick={(e) => { stop(e); onStep(m.id, 1); }}>+</button>
         </span>
 
-        {/* ── ADJUST FAKES ────────────────────────────────────────────────────────────────────
-         * Reads and writes in FAKES because that is how the operator thinks, and translates to
-         * RUNGS because a fake count is derived and writing one writes to nothing. Stripping
-         * fakes also raises every LATER rung, or the ladder puts them straight back at the next
-         * mark - the note says so rather than leaving it to be discovered. */}
+        {/* ── B. BOTH CONTROLS ARE IN FAKES ────────────────────────────────────────────────────
+         * Fakes and spots-shown-as-left are inverses (fake = capacity − rung − real), so putting
+         * one control in each unit made the same lever at two points in time read as two unrelated
+         * settings. Both speak fakes now; the ladder translation stays entirely in the model.
+         *
+         * B2. THE BAND IS NAMED. "Fakes now" writes whichever rung is in force by hours-to-kickoff
+         * and nothing said which — a match 7.5 hours out is writing the 12h band and the operator
+         * could not know it. Derived from the live countdown, so it moves as the match crosses a
+         * boundary. */}
         <span className="gstep" data-testid="gday-fakestep"
-          title={`Fake spots are derived from the "most spots shown as left" settings. Changing this updates the ${markInForce(minsToKick / 60)}-hour setting and every later one, so the count cannot creep back up.`}>
-          Fakes now
+          title={`Fake spots are derived from the "most spots shown as left" settings. This writes the ${bandNow}-hour band and every later one, so the count cannot creep back up.`}>
+          <span className="glab">Fakes now <i data-testid="gday-band">· {bandNow}h band</i></span>
           <button type="button" className="gsb" data-testid="gday-fake-down" aria-label="Remove a fake spot"
             disabled={!canEdit || shownFakes <= 0}
             onClick={(e) => { stop(e); onStepFakes(m.id, -1); }}>−</button>
@@ -1716,29 +1768,22 @@ function AlertBanner({ m, now, pending, pendingFakes, pending3h, onStep, onStepF
             onClick={(e) => { stop(e); onStepFakes(m.id, 1); }}>+</button>
         </span>
 
-        {/* ── THE 3H RUNG, LABELLED WITH BOTH NUMBERS ─────────────────────────────────────────
-         * "3h rung 4" reads as four fakes and means four spots SHOWN LEFT - the opposite
-         * direction. Both numbers are on the control, and the fake count moves as the rung steps. */}
-        <span className="gstep" data-testid="gday-rungstep"
-          title="The most spots shown as left from three hours before kickoff. Showing FEWER spots left means MORE fake spots.">
-          {/* "RUNG" WAS BORROWED JARGON AND IT LEAKED ONTO THE SCREEN. Nothing in MatchDay calls it
-              that; the editor calls it "most spots shown as left". The word stays in the code and
-              the facts doc, where the ladder metaphor is useful, and is gone from the UI.
-              AND THE TWO NUMBERS ARE NOW LABELLED. "Fakes now 9" beside "3h rung 2 · 13 fake" was
-              two different counts of the same thing with nothing saying which was which — one is
-              the count now, the other the count from three hours out. */}
-          <span className="glab">Spots left at 3h</span>
-          <button type="button" className="gsb" data-testid="gday-rung-down" aria-label="Show fewer spots left from three hours before kickoff"
-            disabled={!canEdit || shown3h <= 0}
-            onClick={(e) => { stop(e); onStep3h(m.id, -1); }}>−</button>
-          <b data-testid="gday-rung-value">{shown3h}</b>
-          <button type="button" className="gsb" data-testid="gday-rung-up" aria-label="Show more spots left from three hours before kickoff"
-            disabled={!canEdit || shown3h >= cap}
-            onClick={(e) => { stop(e); onStep3h(m.id, 1); }}>+</button>
-          {/* THE TRAILING COUNT BELONGS TO THE 3-HOUR FIGURE, and now sits after it rather than
-              floating between the two controls. */}
-          <i className="gtrail" data-testid="gday-rung-fakes">· {fakesFor(cap, shown3h, real)} fake</i>
-        </span>
+        {/* B4. INSIDE THREE HOURS the band in force IS the 3h band, so the two controls are the
+         * same number and two steppers moving together is a lie about there being two settings.
+         * One control, and the label above already says "3h band". */}
+        {bandNow !== 3 && (
+          <span className="gstep" data-testid="gday-rungstep"
+            title="Fake spots from three hours before kickoff. Set this after 'Fakes now' if you want fewer at the end.">
+            <span className="glab">Fakes at 3h</span>
+            <button type="button" className="gsb" data-testid="gday-rung-down" aria-label="Remove a fake spot at three hours"
+              disabled={!canEdit || fakesAt3h <= 0}
+              onClick={(e) => { stop(e); onStep3h(m.id, -1); }}>−</button>
+            <b data-testid="gday-rung-value">{fakesAt3h}</b>
+            <button type="button" className="gsb" data-testid="gday-rung-up" aria-label="Add a fake spot at three hours"
+              disabled={!canEdit || fakesAt3h >= Math.max(0, cap - real)}
+              onClick={(e) => { stop(e); onStep3h(m.id, 1); }}>+</button>
+          </span>
+        )}
 
         {/* ONE SAVE, FOR WHICHEVER VALUE MOVED. Green only when the minimum change actually clears
             the shortfall - an adjustment is not a rescue. */}
@@ -1753,16 +1798,25 @@ function AlertBanner({ m, now, pending, pendingFakes, pending3h, onStep, onStepF
                 : `Sets the minimum to ${shownMin}. Still ${shortNow} short of ${real} real players, so the auto-cancel will still fire.`)
               : fakesMoved
                 ? fakesWriteNote(shownFakes, laterRaised)
-                : `Shows at most ${shown3h} spot${shown3h === 1 ? "" : "s"} left from three hours before kickoff — ${fakesFor(cap, shown3h, real)} fake spots.`}
+                : `Sets the fake spots from three hours before kickoff to ${fakesAt3h}. Does not change "Fakes now".`}
             onClick={(e) => { stop(e); if (moved) onSave(m.id); else if (fakesMoved) onSaveFakes(m.id); else onSave3h(m.id); }}>
             {saveState?.s === "saving" ? "Saving…"
               : moved ? `Save min ${shownMin}`
               : fakesMoved ? `Save ${shownFakes} fake${shownFakes === 1 ? "" : "s"}`
-              : `Save ${shown3h} left at 3h`}
+              : `Save ${fakesAt3h} fake${fakesAt3h === 1 ? "" : "s"} at 3h`}
           </button>
         )}
         {fakesMoved && laterRaised.length > 0 && (
           <span className="gladdernote" data-testid="gday-ladder-note">{fakesWriteNote(shownFakes, laterRaised)}</span>
+        )}
+        {/* B3. THE COUPLING IS ONE-DIRECTIONAL AND THAT IS THE POINT. Fakes now sets every later
+            band (the anti-reinflate rule), so the 3h figure follows it and nobody adjusts both.
+            Fakes at 3h moves nothing else — which is the real use case: keep a match looking busy
+            while it can still sell, then strip it bare before it cancels. */}
+        {bandNow !== 3 && (
+          <span className="gdirection" data-testid="gday-direction">
+            Changing fakes now also sets every later band. Set the 3h figure after if you want fewer at the end.
+          </span>
         )}
         {saveState && saveState.s !== "saving" && (
           <span className={"gverdict " + saveState.s} data-testid="gday-save-verdict" data-state={saveState.s}>
