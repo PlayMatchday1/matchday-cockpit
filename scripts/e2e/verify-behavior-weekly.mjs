@@ -349,23 +349,48 @@ async function main() {
     }
 
     console.log("\n-- Field Detail sums to its overall series too --");
-    await page.click('[data-testid="behavior-gran-weekly"]');
-    await page.waitForTimeout(900);
-    await setView("matchday");
-    const ovW = Object.fromEntries((await readRows()).map((r) => [r.name, r]));
+    /* CHECKED AGAINST THE PAYLOAD, NOT THE TABLE — and that changed on purpose. Field Detail now
+     * draws a SELECTION (top 5 by default, capped at 8), so the rendered table is 5 of 41 rows and
+     * summing it would correctly not reach the overall series. The property worth guarding was
+     * never "the table adds up"; it is "the AGGREGATION loses no rows", which is about the route
+     * and is now tested where it lives. This is strictly stronger than the table version: it sees
+     * all 41 fields rather than the handful on screen. */
+    const payload = await page.evaluate(async () => {
+      const key = Object.keys(window.localStorage).find((k) => /^sb-.*-auth-token$/.test(k));
+      const token = key ? JSON.parse(window.localStorage.getItem(key)).access_token : null;
+      const r = await fetch("/api/lifecycle/behavior-weekly?start=2026-03&end=2026-08",
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      if (!r.ok) return { error: `HTTP ${r.status}` };
+      return r.json();
+    });
+    yes("  the weekly payload was read", !payload.error, `route said ${payload.error}`);
+    if (!payload.error) {
+      const nf = Object.keys(payload.byField).length;
+      yes(`  CONTROL: it carries every field, not a selection (${nf})`, nf > 20);
+      const overallSpots = payload.overall.map((p) => p.spots);
+      const fieldSums = payload.axis.map((_, i) =>
+        Object.values(payload.byField).reduce((a, f) => a + (f.points[i]?.spots ?? 0), 0));
+      is("  spots: every field bucket sums to the overall series exactly",
+        fieldSums.map((v, i) => (v === overallSpots[i] ? null : { i, sum: v, overall: overallSpots[i] })).filter(Boolean), []);
+      is("  …and the period total too",
+        fieldSums.reduce((a, b) => a + b, 0), overallSpots.reduce((a, b) => a + b, 0));
+      /* CONTROL: the comparison is proven able to fail — drop the largest field and it must not
+       * reconcile. "0 mismatched" is also what a broken comparison returns. */
+      const biggest = Object.values(payload.byField)
+        .sort((a, b) => b.points.reduce((x, p) => x + p.spots, 0) - a.points.reduce((x, p) => x + p.spots, 0))[0];
+      const short = fieldSums.map((v, i) => v - (biggest.points[i]?.spots ?? 0));
+      yes(`  CONTROL: removing ${biggest.label} DOES break the sum`, short.some((v, i) => v !== overallSpots[i]));
+      yes(`  CONTROL: the overall series is non-zero (${overallSpots.reduce((a, b) => a + b, 0)})`,
+        overallSpots.reduce((a, b) => a + b, 0) > 0);
+      /* REGISTRATIONS STAY ZERO PER FIELD, BY DESIGN. A registration carries a city but never a
+       * pitch. Asserted so the absence stays deliberate rather than becoming another silent zero. */
+      is("  …and registrations are 0 for every field, deliberately",
+        Object.values(payload.byField).every((f) => f.points.every((p) => p.registrations === 0)), true);
+    }
     await setView("field");
     await pickMetric("Spots booked");
     const frows = await readRows();
-    const fsum = frows.reduce((a, r) => a + r.total, 0);
-    is("  Spots booked: field rows sum to the overall series exactly", fsum, ovW["Spots booked"].total);
-    const n2 = ovW["Spots booked"].cells.length;
-    const fbuckets = Array.from({ length: n2 }, (_, i) => frows.reduce((a, r) => a + (r.cells[i] ?? 0), 0));
-    is("  …and in every bucket", fbuckets.map((v, i) => (v === ovW["Spots booked"].cells[i] ? null : i)).filter((x) => x !== null), []);
-    yes(`  CONTROL: there are many field rows to sum (${frows.length})`, frows.length > 5);
-    yes("  CONTROL: dropping one field breaks it",
-      fsum - frows[0].total !== ovW["Spots booked"].total);
-    /* FIELD DETAIL OFFERS NO REGISTRATIONS, BY DESIGN — a registration carries a city but never a
-     * pitch. Asserted so the absence stays deliberate rather than becoming another silent zero. */
+    yes(`  the table itself shows a SELECTION, not all 41 (${frows.length} rows)`, frows.length > 0 && frows.length <= 8);
     const opts = await page.evaluate(() => [...document.querySelectorAll('[data-testid="behavior-metric"] option')].map((o) => o.textContent));
     is("  …and Field Detail still does not offer Registrations", opts.includes("Registrations"), false);
     is("  CONTROL: …while City Detail does", await (async () => { await setView("city"); await page.waitForTimeout(500);

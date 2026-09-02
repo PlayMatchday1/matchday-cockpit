@@ -231,7 +231,7 @@ console.log("\nTHE PANEL TOGGLE — monthly untouched, weekly normalised into th
   console.log("  -- city and field detail follow the granularity --");
   is("  the city list reads src", /Object\.keys\(src\.behaviorByCity\)/.test(code), true);
   is("  the field list reads src", /Object\.keys\(src\.behaviorByField\)/.test(code), true);
-  is("  the model recomputes on a granularity change", /\[cityMode, fieldMode, detailMode, src, months, cities, fields, metric, gran, weekly, complete, cmp\]/.test(code), true);
+  is("  the model recomputes on a granularity change", /\[cityMode, fieldMode, detailMode, src, months, cities, fields, selectedFields, usingDefault, metric, gran, weekly, complete, cmp\]/.test(code), true);
   // A failed weekly fetch must be an error, not an empty chart.
   is("  a failed weekly fetch is an ERROR", /this is not an empty chart/.test(P), true);
   is("  …and loading says so", /data-testid="behavior-weekly-loading"/.test(code), true);
@@ -485,6 +485,55 @@ console.log("\nONE CITY VOCABULARY — the weekly path used to group on two");
    * on — you would not know whether to fix a mapping or chase a signup form. */
   is("  control: …and is distinct from UNKNOWN_CITY", /export const UNKNOWN_CITY = "Unknown city";/.test(ga), true);
   is("  control: …with different values", /UNASSIGNED_CITY = "Unassigned"/.test(ga), true);
+}
+
+console.log("\nFIELD DETAIL'S PICKER — nothing selected must not mean draw everything");
+{
+  const panel = readFileSync("src/components/growth/BehaviorPanel.tsx", "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  /* THE STATE MACHINE. `null` means "I have not chosen" and re-derives the default; a Set is the
+   * operator's own choice. Collapsing the two — an empty Set for "no choice" — is what makes Clear
+   * produce an empty chart, and an empty chart is indistinguishable from a broken one. */
+  is("  the selection is Set | null, not just a Set", /useState<Set<string> \| null>\(null\)/.test(panel), true);
+  is("  null draws the DEFAULT, never every field", /if \(fieldSel === null\) return defaultFields;/.test(panel), true);
+  is("  control: the series map is over the SELECTION, not over `fields`",
+    /series = selectedFields\.map\(\(f, k\) =>/.test(panel), true);
+  is("  control: …the old all-fields map is gone", /series = fields\.map\(\(f, k\) =>/.test(panel), false);
+  is("  an empty stored selection falls back to the default rather than an empty chart",
+    /return live\.length \? live\.slice\(0, FIELD_MAX\) : defaultFields;/.test(panel), true);
+  is("  …and taking the last chip off returns to the default too",
+    /return base\.size === 0 \? null : base;/.test(panel), true);
+  is("  Clear goes back to null, i.e. to the default five", /setFieldQuery\(""\); setFieldSel\(null\);/.test(panel), true);
+
+  /* THE DEFAULT IS RANKED BY THE FIGURE THE TABLE ALREADY SHOWS — a sum for a count, the latest
+   * value for a rate. A second definition of "biggest" would put five fields on the chart that are
+   * not the five largest rows beneath it, and nobody could check it by looking. */
+  is("  the ranking matches the table's period figure", /rate \? \(cells\[cells\.length - 1\] \?\? 0\) : cells\.reduce\(\(a, b\) => a \+ b, 0\)/.test(panel), true);
+  is("  …tie-broken by name, so the default is stable across reloads", /b\.score - a\.score \|\| a\.f\.localeCompare\(b\.f\)/.test(panel), true);
+
+  is("  the cap is 8 and is a named constant", /const FIELD_MAX = 8;/.test(panel), true);
+  is("  …enforced on add", /if \(base\.size >= FIELD_MAX\) \{ setCapHit\(true\); return prev; \}/.test(panel), true);
+  is("  …and explained on the control rather than swallowed", /data-testid="behavior-field-cap"/.test(panel), true);
+  /* THE PALETTE IS NOT THE CONSTRAINT — the eye is. 8 < 12 means no two selected fields can share
+   * a colour, which is the property the cap has to preserve. */
+  const colors = (panel.match(/const FIELD_COLORS = \[[^\]]*\]/s) ?? [""])[0];
+  is("  control: the palette has more entries than the cap", (colors.match(/#/g) ?? []).length >= 8, true);
+
+  is("  search filters the CHIPS", /visibleGroups/.test(panel) && /fieldQuery/.test(panel), true);
+  is("  control: …and never the selection", /const visibleGroups[\s\S]{0,400}?setFieldSel/.test(panel), false);
+  is("  the chips are grouped by city", /data-testid="behavior-field-group"/.test(panel), true);
+  is("  …in the City Detail order", /const order = \[\.\.\.cities,/.test(panel), true);
+  is("  …with an Unassigned group rather than a drop", /src\.behaviorByField\[f\]\?\.city\?\.trim\(\) \|\| UNASSIGNED_CITY/.test(panel), true);
+  is("  the selection is persisted", /localStorage\.setItem\(BEHAVIOR_FIELDS_KEY/.test(panel), true);
+  is("  …and read back on mount", /localStorage\.getItem\(BEHAVIOR_FIELDS_KEY\)/.test(panel), true);
+  is("  control: an empty persisted array is NOT restored as an empty selection",
+    /Array\.isArray\(arr\) && arr\.length > 0/.test(panel), true);
+  is("  the CSV follows the selection too", /const scopes = fieldMode \? selectedFields : cities;/.test(panel), true);
+
+  /* CITY DETAIL IS UNTOUCHED — 8 series there is fine and was explicitly out of scope. */
+  is("  control: City Detail still maps over every city", /series = cities\.map\(\(c\) =>/.test(panel), true);
+  is("  control: …and has no picker of its own", /fieldMode \? \(\s*<div className=\{styles\.fieldPicker\}/.test(panel), true);
 }
 
 console.log(`\nweek-buckets: ${pass} passed, ${fails.length} failed`);

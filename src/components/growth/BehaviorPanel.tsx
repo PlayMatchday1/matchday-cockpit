@@ -29,6 +29,13 @@ type WeeklyPayload = {
   window?: { start: string | null; end: string | null; weeks: number; dropped: number; futureDropped?: number; today?: string };
 };
 const BEHAVIOR_GRAN_KEY = "behavior:granularity";
+const BEHAVIOR_FIELDS_KEY = "behavior:fields";
+/* EIGHT. Past this the lines are indistinguishable whatever the palette does — the standard one
+ * has 12 entries and it is not the constraint; the eye is. The cap is stated on the control at the
+ * moment it bites rather than silently ignoring the ninth click. */
+const FIELD_MAX = 8;
+/** How many pitches to draw before the operator has chosen any. */
+const FIELD_DEFAULT_N = 5;
 
 type BehaviorMetric = "registrations" | "newPlayers" | "totalPlayers" | "spots";
 
@@ -312,7 +319,6 @@ export default function BehaviorPanel({
        * it between St. Louis and Warsaw as though it were one. */
       .sort((a, b) => (a === UNASSIGNED_CITY ? 1 : b === UNASSIGNED_CITY ? -1 : 0) || a.localeCompare(b));
   }, [src.behaviorByCity, months]);
-
   const cityMode = view === "city";
   const fieldMode = view === "field";
   const detailMode = cityMode || fieldMode;
@@ -338,6 +344,35 @@ export default function BehaviorPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
+  /* ── FIELD SELECTION ──────────────────────────────────────────────────────────────────────────
+   * Field Detail plotted all 43 pitches at once. Forty-three lines through one 4-colour palette is
+   * not a chart, and the legend for it filled a third of the card.
+   *
+   * `null` MEANS "I HAVE NOT CHOSEN", NOT "NOTHING". That distinction is the whole state machine:
+   * null re-derives the top N whenever the metric changes, a Set is the operator's own choice and
+   * survives a metric change untouched. Clear goes back to null — to the default five, never to an
+   * empty chart, because an empty chart is indistinguishable from a broken one.
+   *
+   * NOTHING SELECTED MUST NOT MEAN DRAW EVERYTHING. That is the rule the old code broke. */
+  const [fieldSel, setFieldSel] = useState<Set<string> | null>(null);
+  const [fieldQuery, setFieldQuery] = useState("");
+  const [capHit, setCapHit] = useState(false);
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(BEHAVIOR_FIELDS_KEY);
+      if (!raw) return;
+      const arr = JSON.parse(raw);
+      // An empty array persisted would restore an empty chart; null is the only "no choice" value.
+      if (Array.isArray(arr) && arr.length > 0) setFieldSel(new Set(arr.map(String)));
+    } catch { /* private mode, or an older blob */ }
+  }, []);
+  useEffect(() => {
+    try {
+      if (fieldSel === null) window.localStorage.removeItem(BEHAVIOR_FIELDS_KEY);
+      else window.localStorage.setItem(BEHAVIOR_FIELDS_KEY, JSON.stringify([...fieldSel]));
+    } catch { /* private mode */ }
+  }, [fieldSel]);
+
   // THE PITCHES IN THE SELECTED PERIOD, same rule as cities: any spots in a displayed month.
   const fields = useMemo(() => {
     const inPeriod = new Set(months);
@@ -345,6 +380,101 @@ export default function BehaviorPanel({
       .filter((f) => src.behaviorByField[f].points.some((p) => inPeriod.has(p.m) && (p.spots ?? 0) > 0))
       .sort((a, b) => a.localeCompare(b));
   }, [src.behaviorByField, months]);
+
+
+  /* ── THE DEFAULT FIVE ─────────────────────────────────────────────────────────────────────────
+   * Ranked by THE SAME FIGURE THE TABLE'S "Selected period" COLUMN SHOWS — a sum for a count and
+   * the latest value for a rate. Not a second definition of "biggest": if the ranking used a mean
+   * while the table showed a sum, the top five would not be the five largest rows on screen and
+   * nobody could check it by looking. */
+  const fieldRank = useMemo(() => {
+    const rate = IS_RATE.has(metric as GridMetric);
+    const score = (f: string) => {
+      const idx = new Map(src.behaviorByField[f].points.map((p) => [p.m, p]));
+      const cells = months.map((m) => metricValue(idx.get(m), metric as GridMetric) ?? 0);
+      return rate ? (cells[cells.length - 1] ?? 0) : cells.reduce((a, b) => a + b, 0);
+    };
+    return fields.map((f) => ({ f, score: score(f) }))
+      // TIE-BROKEN BY NAME so the default is stable across reloads. An unstable default would
+      // change the chart on refresh with nothing having happened.
+      .sort((a, b) => b.score - a.score || a.f.localeCompare(b.f));
+  }, [fields, src.behaviorByField, months, metric]);
+
+  const defaultFields = useMemo(
+    () => fieldRank.slice(0, FIELD_DEFAULT_N).map((r) => r.f),
+    [fieldRank],
+  );
+
+  /* WHAT IS ACTUALLY DRAWN. A stored selection is intersected with the fields that exist in this
+   * period — a pitch with no matches this window would otherwise be an invisible member of the
+   * selection, counted in the cap and drawn as a flat zero. If nothing survives, fall back to the
+   * default rather than to an empty chart. */
+  const selectedFields = useMemo(() => {
+    if (fieldSel === null) return defaultFields;
+    const live = fields.filter((f) => fieldSel.has(f));
+    return live.length ? live.slice(0, FIELD_MAX) : defaultFields;
+  }, [fieldSel, fields, defaultFields]);
+  const usingDefault = fieldSel === null || fields.filter((f) => fieldSel.has(f)).length === 0;
+
+  /* THE CHIPS, GROUPED BY CITY. City order follows the City Detail table exactly — same array,
+   * same sort — so the two controls read in one order rather than two.
+   *
+   * A FIELD THAT CANNOT BE PLACED GETS AN "Unassigned" HEADING, NOT A DROP. 0 of 43 land there
+   * today (measured 2026-09-01: every field carries a city_identifier that normalizeMatchCity
+   * maps). The group exists so an unplaceable pitch is visible the day one appears. */
+  const fieldGroups = useMemo(() => {
+    const byCity = new Map<string, string[]>();
+    for (const f of fields) {
+      const c = src.behaviorByField[f]?.city?.trim() || UNASSIGNED_CITY;
+      (byCity.get(c) ?? byCity.set(c, []).get(c)!).push(f);
+    }
+    const order = [...cities, ...[...byCity.keys()].filter((c) => !cities.includes(c))];
+    return order
+      .filter((c) => byCity.has(c))
+      .sort((a, b) => (a === UNASSIGNED_CITY ? 1 : b === UNASSIGNED_CITY ? -1 : 0))
+      .map((c) => ({ city: c, fields: byCity.get(c)!.slice().sort((a, b) => a.localeCompare(b)) }));
+  }, [fields, src.behaviorByField, cities]);
+  const unplaceableFields = useMemo(
+    () => fieldGroups.find((g) => g.city === UNASSIGNED_CITY)?.fields.length ?? 0,
+    [fieldGroups],
+  );
+
+  /* SEARCH FILTERS THE CHIPS, NEVER THE SELECTION. Typing "hattrick" must not silently deselect
+   * the pitches that scrolled out of view — the chart would change while the operator was only
+   * looking for something. */
+  const visibleGroups = useMemo(() => {
+    const q = fieldQuery.trim().toLowerCase();
+    if (!q) return fieldGroups;
+    return fieldGroups
+      .map((g) => ({ ...g, fields: g.fields.filter((f) => f.toLowerCase().includes(q)) }))
+      .filter((g) => g.fields.length > 0);
+  }, [fieldGroups, fieldQuery]);
+  const visibleCount = useMemo(() => visibleGroups.reduce((a, g) => a + g.fields.length, 0), [visibleGroups]);
+
+  const toggleField = (f: string) => {
+    setCapHit(false);
+    setFieldSel((prev) => {
+      const base = prev === null ? new Set(defaultFields) : new Set(prev);
+      if (base.has(f)) {
+        base.delete(f);
+        // The last chip off returns to the default rather than clearing the chart.
+        return base.size === 0 ? null : base;
+      }
+      if (base.size >= FIELD_MAX) { setCapHit(true); return prev; }
+      base.add(f);
+      return base;
+    });
+  };
+  /* "SELECT ALL" TAKES THE VISIBLE ONES UP TO THE CAP, and says so when it truncates. It is most
+   * useful after a search — "hattrick" then Select all — and with 43 unfiltered chips an honest
+   * eight beats a button that does nothing. */
+  const selectAllVisible = () => {
+    const all = visibleGroups.flatMap((g) => g.fields);
+    setCapHit(all.length > FIELD_MAX);
+    setFieldSel(new Set(all.slice(0, FIELD_MAX)));
+  };
+  const clearFields = () => { setCapHit(false); setFieldQuery(""); setFieldSel(null); };
+
 
   const model = useMemo(() => {
     // series + table rows follow the current view.
@@ -407,20 +537,30 @@ export default function BehaviorPanel({
       detailTitle = "Historical Matchday metrics";
       scope = "All Matchday";
     } else if (fieldMode) {
+      /* ONLY THE SELECTED PITCHES. This mapped over every field in the period — 43 of them — so
+       * the palette wrapped four times, the legend filled a third of the card, and no individual
+       * line could be followed. COLOURS ARE ASSIGNED BY POSITION IN THE SELECTION, so they are
+       * reassigned whenever the selection changes and are never stretched across 43 series. With
+       * the cap at 8 and a 12-entry palette, no two selected fields can share a colour. */
       const idxByField: Record<string, Map<string, BehaviorPoint>> = {};
-      for (const f of fields) idxByField[f] = new Map(src.behaviorByField[f].points.map((p) => [p.m, p]));
-      series = fields.map((f, k) => ({
+      for (const f of selectedFields) idxByField[f] = new Map(src.behaviorByField[f].points.map((p) => [p.m, p]));
+      series = selectedFields.map((f, k) => ({
         data: months.map((m) => metricValue(idxByField[f].get(m), metric as GridMetric) ?? 0),
         color: FIELD_COLORS[k % FIELD_COLORS.length],
         label: src.behaviorByField[f].label,
         width: 2.4,
       }));
+      // THE TABLE FOLLOWS THE CHART, in the same order — rows are built from the same array.
       rows = series.map((s2, k) => toRow(s2.label, s2.data, { rank: k + 1, dot: s2.color }));
       const label = METRIC_LABEL[metric as GridMetric];
       chartTitle = `${label} by field`;
-      chartSub = `${monthRange} · every pitch with matches in the period`;
+      /* THE HEADER SAYS WHAT IT IS SHOWING AND OUT OF HOW MANY. A chart drawing 5 of 43 lines
+       * without saying so reads as "these are the pitches". */
+      chartSub = usingDefault
+        ? `${monthRange} · Top ${selectedFields.length} of ${fields.length} fields by ${label.toLowerCase()}`
+        : `${monthRange} · ${selectedFields.length} of ${fields.length} fields selected`;
       detailTitle = `${label} field detail`;
-      scope = "All fields";
+      scope = usingDefault ? `Top ${selectedFields.length} of ${fields.length}` : `${selectedFields.length} of ${fields.length} selected`;
     } else {
       const idxByCity: Record<string, Map<string, BehaviorPoint>> = {};
       for (const c of cities) idxByCity[c] = new Map(src.behaviorByCity[c].map((p) => [p.m, p]));
@@ -447,7 +587,7 @@ export default function BehaviorPanel({
     const dropped = gran === "weekly" ? (weekly?.window?.dropped ?? 0) : 0;
     if (dropped > 0) chartSub += ` · earliest ${dropped} week${dropped === 1 ? "" : "s"} of this period not shown (53-week maximum)`;
     return { chart, rows, chartTitle, chartSub, detailTitle, scope, legend };
-  }, [cityMode, fieldMode, detailMode, src, months, cities, fields, metric, gran, weekly, complete, cmp]);
+  }, [cityMode, fieldMode, detailMode, src, months, cities, fields, selectedFields, usingDefault, metric, gran, weekly, complete, cmp]);
 
   /* ── HOVER ────────────────────────────────────────────────────────────────────────────────────
    * The chart had nothing to hover. The other Clubhouse charts put a marker on the series and name
@@ -499,7 +639,9 @@ export default function BehaviorPanel({
     // be missing from the file entirely. Both are appended per scope, and they reconcile against
     // total and new by construction: recurring = total − new, % = recurring / total.
     if (detailMode) {
-      const scopes = fieldMode ? fields : cities;
+      // THE EXPORT FOLLOWS THE SELECTION, like the table. A CSV carrying all 43 pitches under a
+      // chart showing 5 is two different answers to one question.
+      const scopes = fieldMode ? selectedFields : cities;
       const pointsOf = (k: string) =>
         new Map((fieldMode ? src.behaviorByField[k].points : src.behaviorByCity[k]).map((p) => [p.m, p]));
       for (const rm of ["newPlayers", "totalPlayers", "recurring", "pctRecurring"] as GridMetric[]) {
@@ -646,6 +788,73 @@ export default function BehaviorPanel({
         {/* THE LEGEND, above the plot. This replaces four end-of-line labels that overlapped in
             the right margin; a horizontal row cannot collide however many series there are, it
             wraps. */}
+        {/* FIELD MODE GETS CHIPS INSTEAD OF A LEGEND. The chips ARE the legend — each carries its
+            series colour — and they are also the control, so one row does both jobs where the old
+            legend did one badly across 43 entries. City and Overall keep the plain legend; 8
+            series there is fine and needs no control. */}
+        {fieldMode ? (
+          <div className={styles.fieldPicker} data-testid="behavior-field-picker">
+            <div className={styles.fieldBar}>
+              <input
+                className={styles.fieldSearch}
+                data-testid="behavior-field-search"
+                type="search"
+                placeholder={`Search ${fields.length} fields…`}
+                aria-label="Search fields"
+                value={fieldQuery}
+                onChange={(e) => setFieldQuery(e.target.value)}
+              />
+              <button type="button" className={styles.fieldBtn} data-testid="behavior-field-all"
+                onClick={selectAllVisible}>
+                Select all{fieldQuery.trim() ? ` (${visibleCount})` : ""}
+              </button>
+              <button type="button" className={styles.fieldBtn} data-testid="behavior-field-clear"
+                onClick={clearFields} title={`Return to the top ${FIELD_DEFAULT_N} by the selected metric`}>
+                Clear
+              </button>
+              <span className={styles.fieldCount} data-testid="behavior-field-count">
+                {selectedFields.length} of {fields.length} selected
+                {usingDefault ? ` · default top ${selectedFields.length}` : ""}
+              </span>
+            </div>
+            {/* THE CAP, EXPLAINED WHERE IT BITES rather than by a click that does nothing. */}
+            {capHit && (
+              <div className={styles.fieldCap} data-testid="behavior-field-cap">
+                {FIELD_MAX} fields is the maximum — beyond that the lines are indistinguishable
+                whatever the palette does. Remove one to add another.
+              </div>
+            )}
+            {visibleCount === 0 && (
+              <div className={styles.fieldCap} data-testid="behavior-field-noresults">
+                No field matches “{fieldQuery}”. The selection is unchanged.
+              </div>
+            )}
+            {visibleGroups.map((g) => (
+              <div key={g.city} className={styles.fieldGroup} data-testid="behavior-field-group" data-city={g.city}>
+                <span className={styles.fieldGroupName}>{g.city}</span>
+                {g.fields.map((f) => {
+                  const k = selectedFields.indexOf(f);
+                  const on = k >= 0;
+                  return (
+                    <button
+                      type="button"
+                      key={f}
+                      data-testid="behavior-field-chip"
+                      data-field={f}
+                      data-on={on ? "1" : "0"}
+                      aria-pressed={on}
+                      className={`${styles.fieldChip}${on ? ` ${styles.fieldChipOn}` : ""}`}
+                      onClick={() => toggleField(f)}
+                    >
+                      {on && <i className={styles.legendSwatch} style={{ background: FIELD_COLORS[k % FIELD_COLORS.length] }} />}
+                      {src.behaviorByField[f]?.label ?? f}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        ) : (
         <div className={styles.legend} data-testid="behavior-legend">
           {model.legend.map((l) => (
             <span key={l.label} className={styles.legendItem} data-testid="behavior-legend-item">
@@ -660,6 +869,7 @@ export default function BehaviorPanel({
             </span>
           )}
         </div>
+        )}
         <div className={styles.plotWrap}>
         <svg
           ref={svgRef}
