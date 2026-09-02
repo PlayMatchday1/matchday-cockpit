@@ -667,7 +667,7 @@ export default function GamedayBoard({
               {!bannerMode && (
               <div className="gcard" data-testid="snapshot">
                 <div className="gcolhead">
-                  <div>Kickoff</div><div>Match · field</div><div>Spots vs minimum</div><div>Manager</div><div />
+                  <div>Kickoff</div><div>Match · field</div><div>Spots vs minimum</div><div>Manager</div>
                 </div>
                 {shown.length === 0 ? (
                   /* AN EXPLICIT EMPTY STATE, not a blank card — a filter combination that matches
@@ -685,10 +685,17 @@ export default function GamedayBoard({
                       <span className="n" data-testid={`gday-seccount-${B.k}`}>{rows.length}</span>
                       <span className="car">{openSec[B.k] ? "Hide ▴" : "Show ▾"}</span>
                     </button>
-                    {openSec[B.k] && rows.map((m) => (
-                      <GRow key={m.id} m={m} now={now} selected={drawerId === m.id}
-                        onOpen={openDrawer} money={money} atRiskRow={atRisk(m, now)} />
-                    ))}
+                    {/* THE LIST IS THE GUTTER. Bands need ground between them and around them,
+                        and that ground belongs to the list rather than to each band's margin —
+                        margins collapse, gaps do not. */}
+                    {openSec[B.k] && (
+                      <div className="glist">
+                        {rows.map((m) => (
+                          <GRow key={m.id} m={m} now={now} selected={drawerId === m.id}
+                            onOpen={openDrawer} money={money} atRiskRow={atRisk(m, now)} />
+                        ))}
+                      </div>
+                    )}
                   </section>
                 ))}
               </div>
@@ -1191,10 +1198,35 @@ const CSS = `
 .gdo .gchip.on.risk u{color:#ffd9d6}
 
 /* ── the card, its sections and its rows ── */
-.gdo .gcard{background:#fff;border:1px solid #DCE5E0;border-radius:14px;overflow:hidden}
-.gdo .gcolhead,.gdo .grow{display:grid;grid-template-columns:96px minmax(0,1fr) 310px 128px 34px;gap:14px;align-items:center}
-.gdo .gcolhead{padding:9px 16px;font-size:10px;letter-spacing:.9px;text-transform:uppercase;
+/* THE CARD IS A SIZE CONTAINER, and the row grid keys off IT rather than the viewport.
+   The tracks are chosen by how much room the TABLE has, and the table is not the window: with the
+   match panel open at a 1500px viewport the card is 558px, the four fixed tracks need 612, and
+   minmax(0,1fr) did exactly what it is asked to and collapsed the match column to ZERO WIDTH.
+   The name and the price then rendered outside a zero-wide track. A viewport media query cannot
+   see that, which is why it shipped: every panel-closed width was fine.
+
+   The banner already uses this pattern for the same reason (gbanner, below). */
+.gdo .gcard{background:#fff;border:1px solid #DCE5E0;border-radius:14px;overflow:hidden;
+  container-type:inline-size;container-name:gtable}
+/* ── B. EACH ROW IS A BAND, NOT A SLAB OF TINT TO BOTH EDGES ─────────────────────────────────
+ * Two adjacent at-risk matches read as one block — Scissortail and Onion Creek do exactly that on
+ * a live board. A band with its own border and its own ground cannot merge with the one below it.
+ *
+ * THE COLUMNS DO NOT MOVE, which is the constraint this lives or dies on. The header's horizontal
+ * padding is therefore DERIVED from the band's geometry rather than guessed: list padding 8 +
+ * band border 1 + band padding 14 = 23px, so a band's first column starts exactly where the header
+ * says it does.
+ *
+ * MANAGER 128 -> 164 and the avatar 21 -> 23. ONE MOVEMENT, STATED TWICE, NOT TWO TO BE SUMMED:
+ * the spec says "manager goes to 164px" and, separately, "give the kebab's 34px to the manager
+ * column" - and 128 + 34 = 162, while the name's own requirement is 130px for "Peter
+ * Rocha-Ramirez" + a 23px avatar + the 7px gap = 160. Both roads arrive at ~164, so 164 IS the
+ * reallocated kebab column; adding another 34 on top would be double-counting it and would take
+ * the width off the flexible match column for nothing. "RM" also overflowed a 21px circle. */
+.gdo .gcolhead,.gdo .grow{display:grid;grid-template-columns:96px minmax(0,1fr) 310px 164px;gap:14px;align-items:center}
+.gdo .gcolhead{padding:9px 23px;font-size:10px;letter-spacing:.9px;text-transform:uppercase;
   color:#8C9E93;font-weight:700;background:#F7FAF8;border-bottom:1px solid #DCE5E0}
+.gdo .glist{padding:8px;display:flex;flex-direction:column;gap:6px}
 .gdo .gsec{display:flex;align-items:center;gap:9px;width:100%;border:0;background:#f7f9f7;
   padding:7px 16px;border-top:1px solid #DCE5E0;text-align:left;cursor:pointer;font:inherit}
 .gdo .gsec .tw{font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;font-weight:700;color:#20372C}
@@ -1202,9 +1234,10 @@ const CSS = `
 .gdo .gsec .car{margin-left:auto;color:#66786E;font-size:11px}
 .gdo .gsec.live .tw{color:#046B45}
 /* ROWS UNDER 62px. 9px padding + a 21px avatar + the meter's 8px bar and 13px label gutter. */
-.gdo .grow{padding:9px 16px;border-top:1px solid #EFF3EF;cursor:pointer;background:#fff}
-.gdo .grow:hover{background:#fafcfa}
-.gdo .grow.risk{background:#FDF3F2;box-shadow:inset 3px 0 0 #C0392B}
+.gdo .grow{padding:10px 14px;border:1px solid #DCE5E0;border-radius:10px;background:#fff;cursor:pointer}
+.gdo .grow:hover{background:#fafcfa;border-color:#c9d3cc}
+/* THE RISK TINT AND ITS RED EDGE, CONTAINED. Same signal, inside the band's own rounded box. */
+.gdo .grow.risk{background:#FDF3F2;border-color:#f0cfcb;box-shadow:inset 3px 0 0 #C0392B}
 .gdo .grow.risk:hover{background:#fce5e3}
 .gdo .grow.done{opacity:.62}
 .gdo .grow.sel{background:#F2F7F4}
@@ -1212,12 +1245,22 @@ const CSS = `
 .gdo .gk b{font-size:13.5px;font-weight:700;letter-spacing:-.2px}
 .gdo .gk b i{font-style:normal;font-size:10px;color:#66786E;font-weight:600;margin-left:2px}
 .gdo .gk span{display:block;font-size:11px;color:#66786E;margin-top:1px}
-.gdo .gm{min-width:0}
+/* THE MATCH CELL IS A GRID so the CANCELS chip can sit beside the name on desktop and drop to the
+   field line on a phone, as ONE element rather than two with one test id. */
+.gdo .gm{min-width:0;display:grid;grid-template-columns:minmax(0,1fr) auto;
+  grid-template-areas:"n chip" "sub sub";align-items:baseline;column-gap:6px}
+.gdo .gm .n{grid-area:n}
+.gdo .gm > .gtag{grid-area:chip;align-self:center}
+.gdo .gm .sub{grid-area:sub}
 .gdo .gm .n{font-weight:600;font-size:13.5px;display:flex;align-items:center;gap:6px;min-width:0}
 .gdo .gm .n s{text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .gdo .gm .sub{font-size:11.5px;color:#66786E;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gdo .gtag{flex:0 0 auto;font-size:9.5px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;
-  border-radius:5px;padding:2px 6px;background:#EEF1EF;color:#66786E}
+  border-radius:5px;padding:2px 6px;background:#EEF1EF;color:#66786E;
+  /* NOWRAP. The chip sits in an auto-sized grid track, and once the match column is tight enough
+     that the track cannot take its max-content width, "CANCELS IN 19H 0M" broke across two lines
+     and took the whole band from 64px to 73px. A chip is one token; it has no second line. */
+  white-space:nowrap}
 .gdo .gtag.hot{background:#FBD9D6;color:#A83120}
 .gdo .gpz{flex:0 0 auto;font-size:11px;color:#66786E;font-variant-numeric:tabular-nums}
 .gdo .gs{display:flex;align-items:center;gap:9px;min-width:0;overflow:hidden}
@@ -1260,11 +1303,10 @@ const CSS = `
    the name wins the space over the avatar. */
 .gdo .gmg{display:flex;align-items:center;gap:7px;min-width:0}
 .gdo .gmg span:last-child{font-size:12.5px;white-space:nowrap}
-.gdo .gav{width:21px;height:21px;flex:0 0 21px;border-radius:99px;background:#dde5e0;color:#046B45;
+.gdo .gav{width:23px;height:23px;flex:0 0 23px;border-radius:99px;background:#dde5e0;color:#046B45;
   display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700}
-.gdo .gkebab{border:0;background:none;color:#66786E;border-radius:6px;padding:3px 6px;line-height:1;
-  font-size:16px;cursor:pointer;justify-self:end}
-.gdo .gkebab:hover{background:#eef1ef;color:#1B3227}
+/* THE KEBAB'S STYLING WAS HERE AND IS GONE, with its element and its column. Dead rules for a
+   deleted control are how a removed affordance comes back by accident. */
 .gdo .gmore{display:block;width:100%;border:1px dashed #E9B6AC;background:#FDF3F2;color:#A83120;
   border-radius:10px;padding:9px 14px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;
   margin-bottom:12px;text-align:left}
@@ -1283,30 +1325,6 @@ const CSS = `
    reason the page exists and it is not the thing that gets dropped on the small screen. It stops
    being 104px and takes the width it is given. */
 @media (max-width: 639.98px) {
-  .gdo .gcolhead{display:none}
-  /* THE ROW BECOMES A CARD. Areas rather than source order, so the price can sit on line 1 with
-     the kickoff while staying a single element in the DOM - two prices, one hidden per
-     breakpoint, would mean two elements answering to one test id. */
-  .gdo .grow{
-    grid-template-columns:minmax(0,1fr) auto;
-    grid-template-areas:"k k" "m m" "s s" "mg kb";
-    gap:7px 10px;padding:11px 14px;align-items:start;position:relative}
-  .gdo .gk{grid-area:k;display:flex;align-items:baseline;gap:8px}
-  .gdo .gk span{margin-top:0}
-  .gdo .gm{grid-area:m;min-width:0}
-  .gdo .gs{grid-area:s;gap:10px}
-  .gdo .gmg{grid-area:mg;align-self:center}
-  .gdo .gkebab{grid-area:kb;align-self:center}
-  /* LINE 1, PUSHED RIGHT. Hoisted out of the match cell by position, not by a second element. */
-  .gdo .gm .gpz{position:absolute;top:11px;right:14px;font-size:12px;font-weight:600}
-  .gdo .gm .n{flex-wrap:wrap}
-  /* THE METER TAKES THE ROOM IT IS GIVEN. Wider track means the notch and its label are easier to
-     read on the small screen, not harder. */
-  .gdo .gmeter{flex:1 1 auto;min-width:0}
-  .gdo .gnum{font-size:12px}
-  .gdo .grow{border-top:1px solid #E4EAE6}
-  .gdo .grow.risk{box-shadow:inset 3px 0 0 #C0392B}
-
   /* THE STRIP: three across, not five. */
   .gdo .gstrip{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
   .gdo .gtile{padding:9px 10px}
@@ -1342,17 +1360,107 @@ const CSS = `
 .gdo .gcities .gchip{flex:0 0 auto}
 .gdo .gcities{flex-wrap:nowrap;min-width:0}
 
-/* TABLET: the grid survives, but the SPOTS COLUMN MUST STILL FIT ITS CONTENTS. At 232px it did
+/* THE COMPACT GRID. It used to fire at 1023.98px of VIEWPORT, a breakpoint chosen for the name of
+   a device rather than for where the columns stop fitting: at a 1024px window the page chrome left
+   652px of row, the match column was handed FORTY PIXELS and every name wrapped to three lines -
+   measured 87px bands against a 62px bar.
+
+   TABLET: the grid survives, but the SPOTS COLUMN MUST STILL FIT ITS CONTENTS. At 232px it did
    not - meter 84 + numbers + delta needs about 246 - and the delta chip spilled into the manager
    cell on every row. The overlap walk caught it at 768; eleven content assertions had not. The
    match column gives up the width instead, because a truncated field name has a tooltip and a
    collided delta chip has nothing. */
-@media (min-width: 640px) and (max-width: 1023.98px) {
-  .gdo .gcolhead,.gdo .grow{grid-template-columns:76px minmax(0,1fr) 258px 96px 30px;gap:10px}
+/* CARD WIDTH, NOT WINDOW WIDTH — and three tiers, derived rather than named after devices.
+   A card of width W gives its bands W - 48 of track room (2 card border + 16 list padding +
+   2 band border + 28 band padding). The wide tier's fixed tracks are 96 + 310 + 164 + 42 of gap
+   = 612, so it needs W >= 810 before the match column clears 150px. The compact tier's are
+   76 + 258 + 156 + 30 = 520, needing W >= 640 for the same. Below that no four-track grid fits and
+   the band stacks instead — see the card tier further down. */
+@container gtable (max-width: 810px) {
+  .gdo .gcolhead,.gdo .grow{grid-template-columns:76px minmax(0,1fr) 258px 156px;gap:10px}
   .gdo .gmeter{flex:0 0 76px}
   .gdo .gnum{font-size:11px}
+  /* THE CHIP GIVES BACK ~20px HERE, and the price is what gets it. The match column is ~132px at
+     1024; the cancels chip sits in an auto track and takes its max-content width first, so a
+     full-size "CANCELS IN 1H 19M" left the price rendering as "$8." and, on one row, as "$".
+     Shrinking the chip is the right giver: it is a duration anyone can still read at 8.5px, and
+     the price is a figure that is wrong if it is cut. */
+  .gdo .gm > .gtag{font-size:8.5px;padding:2px 4px;letter-spacing:.2px}
+}
+
+/* THE STAT STRIP AND THE STICKY SECTION HEADER KEEP THE OLD 1023.98 BOUNDARY. They are about how
+   much horizontal room the PAGE has, not about whether the table's four tracks fit, and the two
+   answers stopped being the same when the row grid's boundary moved to 1184. Folded together, a
+   1024px screen lost its five-across strip to a change that was only ever about the table. */
+@media (min-width: 640px) and (max-width: 1023.98px) {
   .gdo .gstrip{grid-template-columns:repeat(3,minmax(0,1fr))}
   .gdo .gsec{position:sticky;top:0;z-index:3}
+}
+
+/* ── THE CARD TIER: BELOW 640px OF CARD, A BAND STOPS BEING A ROW ─────────────────────────────
+ * KEYED ON THE CARD, NOT THE WINDOW, and that is the whole reason it is a container query. A
+ * 390px phone reaches this tier, but so does a 1500px desktop WITH THE MATCH PANEL OPEN: the panel
+ * leaves the card 576px, and at 1280 it leaves it 356px. Under the old viewport media query those
+ * desktop cases kept the four-track grid, minmax(0,1fr) did what it is asked to, and the match
+ * column collapsed to ZERO WIDTH — the name and the price rendered outside a zero-wide track. No
+ * viewport query can see that, which is why every panel-closed width looked fine.
+ *
+ * THE FOUR-TRACK GRID DOES NOT SURVIVE THIS WIDTH and must not be made to scroll sideways - a
+ * horizontal scroll on a band is how you lose the delta chip and never know it. Each match becomes
+ * a stacked card, and the METER KEEPS ITS NOTCH, ITS LABEL AND ITS CLAMP: it is the reason the page
+ * exists and it is not the thing that gets dropped when the room runs out. It stops being 104px
+ * and takes the width it is given. */
+@container gtable (max-width: 640px) {
+  .gdo .gcolhead{display:none}
+  /* THE ROW BECOMES A CARD. Areas rather than source order, so the price can sit on line 1 with
+     the kickoff while staying a single element in the DOM - two prices, one hidden per
+     breakpoint, would mean two elements answering to one test id. */
+  /* ── A. EACH MATCH IS A CARD ────────────────────────────────────────────────────────────────
+   * A match's tint used to run to both screen edges with a 1px divider, so two adjacent at-risk
+   * matches read as one block. A card with its own ground, border and radius cannot merge with the
+   * one below it — and the risk signal moves to the HEADER STRIP so the whole card is not washed
+   * red, which is what made adjacent ones indistinguishable.
+   *
+   * THE BETWEEN-CARD GAP MUST EXCEED THE LARGEST GAP INSIDE A CARD. That ratio is what makes the
+   * boundary read; the absolute number is not the point. 12px out, 11px the largest within. */
+  .gdo .glist{padding:4px 12px 16px;gap:12px}
+  .gdo .grow{
+    grid-template-columns:minmax(0,1fr);
+    grid-template-areas:"k" "m" "s" "mg";
+    gap:0;padding:0;align-items:stretch;position:relative;
+    border:1px solid #DCE5E0;border-radius:14px;overflow:hidden;
+    background:#fff;box-shadow:0 1px 2px rgba(16,40,28,.05)}
+  .gdo .grow:hover{background:#fff}
+  /* AN AT-RISK CARD TAKES A RED BORDER, not a red bleed. */
+  .gdo .grow.risk{background:#fff;border-color:#f0cfcb;box-shadow:0 1px 2px rgba(120,20,14,.09)}
+  .gdo .grow.risk:hover{background:#fff}
+
+  /* A3. THE HEADER STRIP — kickoff, relative time and price on their own tinted band. */
+  .gdo .gk{grid-area:k;display:flex;align-items:center;gap:8px;
+    padding:8px 13px;background:#F7F9F8;border-bottom:1px solid #EFF3EF}
+  .gdo .grow.risk .gk{background:#FBE3E0;border-bottom-color:#F3D2CE}
+  .gdo .gk span{margin-top:0;font-size:11.5px}
+  .gdo .grow.risk .gk span{color:#9a6560}
+  /* The price rides the header strip, pushed right — still one element, positioned not duplicated. */
+  .gdo .gm .gpz{position:absolute;top:9px;right:13px;font-size:12px;font-weight:700;color:#20372C}
+
+  /* THE BODY. */
+  .gdo .gm{grid-area:m;padding:11px 13px 0;grid-template-areas:"n n" "sub chip";
+    grid-template-columns:minmax(0,1fr) auto;row-gap:2px}
+  .gdo .gm .n{font-size:15.5px;letter-spacing:-.2px;line-height:1.25}
+  .gdo .gm .n s{white-space:normal;overflow:visible;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .gdo .gm .sub{font-size:12px}
+  .gdo .gs{grid-area:s;gap:11px;padding:11px 13px 12px;overflow:visible}
+
+  /* A4. THE FOOTER STRIP — the manager on their own faintly tinted band. */
+  .gdo .gmg{grid-area:mg;align-self:auto;padding:8px 13px;
+    border-top:1px solid #EFF3EF;background:#FCFDFC}
+  .gdo .grow.risk .gmg{background:#FEF7F6;border-top-color:#F6E0DD}
+
+  /* A6. THE METER takes the card's width and reserves room for its label. 15px clips it. */
+  .gdo .gmeter{flex:1 1 auto;min-width:0;padding-bottom:28px}
+  .gdo .gnum{font-size:12px}
+
 }
 
 /* THE EDITOR IS A BOTTOM SHEET ON A PHONE, not a 600px side drawer on a 390px screen. Full height,
@@ -1545,7 +1653,7 @@ function MinLabel({ pct, n }: { pct: number; n: number }) {
 }
 
 /* ── A ROW ──────────────────────────────────────────────────────────────────────────────────────
- * Five columns: kickoff 96 / match·field flex / spots 310 / manager 128 / kebab 34. The standalone
+ * Four columns: kickoff 96 / match·field flex / spots 310 / manager 164. The standalone
  * vs MIN, CANCEL TIME and PRICE columns are gone — the first two are now the delta chip and the
  * "cancels in" chip, and price is a muted chip beside the name, which is where it is read.
  *
@@ -1591,10 +1699,6 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
       <div className="gm">
         <div className="n">
           <s data-testid="gday-name">{m.name}</s>
-          {/* PAST THE DEADLINE IT READS "now" RATHER THAN VANISHING — a chip that disappears at the
-              moment the thing becomes true is the wrong way round, and it would also break the
-              chip/banner agreement, since the banner does not stop at zero either. */}
-          {ac != null && <span className="gtag hot" data-testid="gday-cancels">{ac > 0 ? `cancels in ${fmtDur(ac)}` : "cancels now"}</span>}
           {/* THE "MORE FAKE" CHIP WAS HERE AND IS GONE. It fired when fake exceeded real, which
               on a real board is almost exactly the set of rows already styled red — and the spots
               cell two columns over says the same thing with the actual numbers
@@ -1602,6 +1706,17 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
               cost of width the field name needs. The counts themselves are untouched. */}
           <span className="gpz" data-testid="gday-price">{money(m.registrationPrice)}</span>
         </div>
+        {/* THE CHIP IS A DIRECT CHILD OF .gm, NOT OF .n, AND THAT IS THE WHOLE POINT.
+            Inside .n it shared the title's inline flow, so a long name pushed it onto a line of its
+            own — "STAR Soccer Complex Field 13" does exactly that. Out here it is placed by GRID
+            AREA, which lets the two layouts put it in different places from one DOM: desktop keeps
+            it on the title row (areas "n chip" / "sub sub"), mobile drops it onto the field · city
+            row (areas "n n" / "sub chip") so the title gets the full card width.
+
+            PAST THE DEADLINE IT READS "now" RATHER THAN VANISHING — a chip that disappears at the
+            moment the thing becomes true is the wrong way round, and it would also break the
+            chip/banner agreement, since the banner does not stop at zero either. */}
+        {ac != null && <span className="gtag hot" data-testid="gday-cancels">{ac > 0 ? `cancels in ${fmtDur(ac)}` : "cancels now"}</span>}
         <div className="sub">{m.field?.title ?? "—"} · {m.field?.city?.name ?? "—"}</div>
       </div>
 
@@ -1634,9 +1749,10 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
 
       <div className="gmg" data-testid="gday-mgr"><span className="gav">{initials}</span><span>{mgr || "none"}</span></div>
 
-      {/* THE KEBAB MUST NOT OPEN THE EDITOR — see the guard on the row's click handler. */}
-      <button type="button" className="gkebab" data-testid="gday-kebab" aria-label={`More for ${m.name}`}
-        onClick={(e) => { e.stopPropagation(); }}>⋯</button>
+      {/* THE KEBAB WAS HERE AND IS GONE. It read as the affordance for opening the editor and was
+          the one element on the row that did NOT open it — the click guard excludes buttons, and
+          nothing was ever wired behind it. An affordance that does nothing is worse than no
+          affordance. Its 34px went to the manager column, which was clipping names. */}
     </div>
   );
 }

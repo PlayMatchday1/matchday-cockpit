@@ -106,7 +106,11 @@ const READ = () => {
       track: bar ? bb(bar) : null,
       realW: q('[data-testid="gday-real"]')?.getBoundingClientRect().width ?? 0,
       fakeW: q('[data-testid="gday-fake"]')?.getBoundingClientRect().width ?? 0,
-      chain: ["METER", '[data-testid="gday-nums"]', '[data-testid="gday-delta"]', '[data-testid="gday-mgr"]', '[data-testid="gday-kebab"]']
+      /* THE KEBAB IS GONE FROM THE WALK because it is gone from the row. The manager cell is
+         the last column now, and it is the one this walk most needs to cover: it grew 128->164px
+         to stop clipping "Peter Rocha-Ramirez", and a column that grows is a column that can
+         start overlapping the one before it. */
+      chain: ["METER", '[data-testid="gday-nums"]', '[data-testid="gday-delta"]', '[data-testid="gday-mgr"]']
         .map((sel) => { const n = sel === "METER" ? meter : q(sel); return n ? { sel, ...bb(n) } : null; }),
     };
   });
@@ -198,15 +202,133 @@ const TOMO_FIX = Array.from({ length: 9 }, (_, i) => urgentMk({
   city: ["Austin", "Houston", "Dallas", "San Antonio", "Atlanta", "OKC", "St. Louis", "Austin", "Houston"][i],
   at: 1200 + i * 10, dlMin: i === 8 ? 30 : 1140, cap: 18, min: 9, real: 2, fake: 1, mgrF: "Mgr", mgrL: String(i) }));
 
+/* ── THE SEPARATION FIXTURE ─────────────────────────────────────────────────────────────────────
+ * Built for one job the live board cannot be relied on to do: PUT TWO AT-RISK MATCHES NEXT TO EACH
+ * OTHER. Separation is the whole change, and the case it exists for is the one where the old
+ * edge-to-edge tint made two adjacent red rows read as a single block. A fixture that happens to
+ * have its at-risk rows scattered would pass every gap assertion below while proving nothing about
+ * the case that motivated them, so the pair is built in deliberately and asserted to BE adjacent
+ * before anything is measured about it.
+ *
+ * It also carries, on purpose:
+ *   - "Peter Rocha-Ramirez" (601), the name that clipped at a 128px manager column. 164px is the
+ *     new width and this is the name that decides whether it was enough.
+ *   - a match with NO MINIMUM (604), so the "no min" label is exercised rather than assumed.
+ *   - a very long field title (602), for the two-line title ceiling.
+ *   - two healthy rows, without which "the at-risk header strip is tinted differently" has nothing
+ *     to be different FROM and passes on a page where every strip is the same colour.
+ *
+ * All five sit in one bucket so they land in one .glist and the gaps between them are real
+ * between-band gaps rather than the space between two sections. */
+const SEP_FIX = [
+  /* THE PAIR. Kickoffs ten minutes apart, both short of their minimum, nothing between them. */
+  mk({ id: 601, name: "Soccer Central Field 4", fd: "Soccer Central Complex", city: "San Antonio",
+    at: 300, cap: 18, min: 9, real: 3, fake: 11, acm: 60, mgrF: "Peter", mgrL: "Rocha-Ramirez" }),
+  mk({ id: 602, name: "STAR Soccer Complex Field 13", fd: "STAR Soccer Complex Northeast", city: "San Antonio",
+    at: 310, cap: 18, min: 8, real: 2, fake: 10, acm: 60, mgrF: "Jorge Luis", mgrL: "Gonzalez" }),
+  /* HEALTHY, and immediately after the pair - the control for every "the risk band differs" check. */
+  mk({ id: 603, name: "NEMP - Field 12", fd: "NEMP Tournaments", city: "Austin",
+    at: 320, cap: 40, min: 11, real: 30, fake: 0, mgrF: "Moncho", mgrL: "Perez" }),
+  /* NO MINIMUM: minPlayerCount 0. No notch, and the label reads "no min". */
+  mk({ id: 604, name: "Kirkwood Park", fd: "Kirkwood", city: "St. Louis",
+    at: 330, cap: 18, min: 0, real: 5, fake: 2, mgrF: "Nate", mgrL: "B" }),
+  mk({ id: 605, name: "Parmer - Field 1", fd: "Parmer Fields", city: "Austin",
+    at: 340, cap: 18, min: 11, real: 18, fake: 0, mgrF: "Drea", mgrL: "M" }),
+];
+
+/* ── THE GEOMETRY PROBE ─────────────────────────────────────────────────────────────────────────
+ * Everything the separation assertions read, measured in the page in one pass. Deliberately
+ * separate from READ: READ is about what the board SAYS, this is about where it PUTS it, and
+ * mixing the two produced a probe neither half could be changed without breaking the other.
+ *
+ * GAPS ARE MEASURED PER LIST, never across the whole page. Sections each render their own .glist,
+ * so the space between the last band of one section and the first of the next is a section break,
+ * not a between-band gap, and folding it in would let a generous section break disguise bands that
+ * are touching. */
+const GEO = () => {
+  const n = (v) => (parseFloat(v) || 0);
+  const R = (e) => { const b = e.getBoundingClientRect();
+    return { t: +b.top.toFixed(2), l: +b.left.toFixed(2), r: +b.right.toFixed(2),
+      b: +b.bottom.toFixed(2), w: +b.width.toFixed(2), h: +b.height.toFixed(2) }; };
+  const cs = (e) => getComputedStyle(e);
+  const head = document.querySelector(".gcolhead");
+  const lists = [...document.querySelectorAll(".glist")].map((L) => {
+    const st = cs(L);
+    const bands = [...L.querySelectorAll('[data-testid="gday-row"]')].map((r) => {
+      const s2 = cs(r);
+      const kids = [...r.children];
+      const nm = r.querySelector('[data-testid="gday-name"]');
+      const mgrEl = r.querySelector('[data-testid="gday-mgr"]');
+      const mgrTxt = mgrEl ? mgrEl.querySelector("span:last-child") : null;
+      const av = r.querySelector(".gav");
+      const gk = r.querySelector(".gk");
+      const chip = r.querySelector('[data-testid="gday-cancels"]');
+      const sub = r.querySelector(".gm .sub");
+      const lh = nm ? n(cs(nm).lineHeight) : 0;
+      return {
+        id: Number(r.dataset.id), risk: r.dataset.risk === "1", box: R(r),
+        radius: n(s2.borderTopLeftRadius), border: n(s2.borderTopWidth),
+        borderColor: s2.borderTopColor, bg: s2.backgroundColor, shadow: s2.boxShadow,
+        /* THE COLUMN TEST IS ON THE BAND'S OWN CHILDREN, in DOM order. Comparing computed
+           grid-template-columns instead would compare the rule, not the result. */
+        colLefts: kids.map((c) => +c.getBoundingClientRect().left.toFixed(2)),
+        kids: kids.map((c) => R(c)),
+        gk: gk ? { box: R(gk), bg: cs(gk).backgroundColor, borderBottom: n(cs(gk).borderBottomWidth) } : null,
+        mgr: mgrEl ? { box: R(mgrEl), bg: cs(mgrEl).backgroundColor, borderTop: n(cs(mgrEl).borderTopWidth) } : null,
+        /* CLIPPED IS THE TEXT'S RIGHT EDGE PAST ITS CELL'S, NOT scrollWidth > clientWidth.
+           The span holding the name sets no overflow, so its scrollWidth and clientWidth are
+           always equal and that comparison is true for nothing - it reported zero clipped names
+           at every width from 1500 down to 700 while "Peter Rocha-Ramirez" was visibly spilling
+           18px out of a 136px cell. Boxes do not lie about where they are. */
+        mgrText: mgrTxt ? mgrTxt.textContent : "",
+        mgrOver: mgrTxt ? +(mgrTxt.getBoundingClientRect().right - mgrEl.getBoundingClientRect().right).toFixed(2) : null,
+        mgrClipped: mgrTxt ? mgrTxt.getBoundingClientRect().right > mgrEl.getBoundingClientRect().right + 0.5 : null,
+        av: av ? { box: R(av), clipped: av.scrollWidth > av.clientWidth + 1, text: av.textContent } : null,
+        name: nm ? { box: R(nm), lines: lh > 0 ? Math.round(nm.getBoundingClientRect().height / lh) : 0 } : null,
+        chip: chip ? R(chip) : null,
+        /* THE PRICE, AND WHETHER ITS TRACK CUT IT. Same lesson as the manager name: the element
+           sets no overflow of its own, so only its box against the cell's box tells the truth.
+           "$8.00" rendering as "$8." is a figure that is wrong, not merely tight. */
+        price: (() => { const z = r.querySelector('[data-testid="gday-price"]');
+          if (!z) return null;
+          const zb = z.getBoundingClientRect(), nb = z.parentElement.getBoundingClientRect();
+          return { text: z.textContent, over: +(zb.right - nb.right).toFixed(2),
+            cut: zb.right > nb.right + 0.5 || zb.width < 1 }; })(),
+        sub: sub ? R(sub) : null,
+        nomin: !!r.querySelector('[data-testid="gday-nomin"]'),
+      };
+    });
+    return {
+      box: R(L),
+      pad: { t: n(st.paddingTop), r: n(st.paddingRight), b: n(st.paddingBottom), l: n(st.paddingLeft) },
+      bands,
+      /* THE GROUND BETWEEN ADJACENT BANDS, measured off the rendered boxes rather than read off
+         the gap property - a margin, a border or a transform would all move the real answer
+         without moving `gap`. */
+      gaps: bands.slice(1).map((b, i) => +(b.box.t - bands[i].box.b).toFixed(2)),
+      pairs: bands.slice(1).map((b, i) => [bands[i].id, b.id]),
+    };
+  });
+  return {
+    lists,
+    headCols: head ? [...head.children].map((c) => +c.getBoundingClientRect().left.toFixed(2)) : null,
+    headBox: head ? R(head) : null,
+    /* EVERY WAY THE KEBAB COULD STILL BE ON THE PAGE, not just its test id. */
+    kebabs: document.querySelectorAll('[data-testid="gday-kebab"], .gkeb, .gkebab').length,
+    vw: document.documentElement.clientWidth,
+    hscroll: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+  };
+};
+
 async function boot(browser, storageState, width = 1500, opts = {}) {
-  const ctx = await browser.newContext({ storageState, viewport: { width, height: 1000 },
+  const ctx = await browser.newContext({ storageState, viewport: { width, height: opts.height ?? 1000 },
     ...(opts.mobile ? { isMobile: true, hasTouch: true } : {}) });
   const puts = [];
   await ctx.route("**/api/matchday/*/gameday*", (r) => {
     const date = new URL(r.request().url()).searchParams.get("date");
     const body = opts.byDate
       ? (date === TOMORROW ? TOMO_FIX : (opts.todaySet ?? TODAY_FIX))
-      : FIX;
+      : (opts.fix ?? FIX);
     return r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matches: body }) });
   });
   /* THE STEPPER WRITE IS INTERCEPTED AND COUNTED, never forwarded. The assertion is about what we
@@ -217,7 +339,7 @@ async function boot(browser, storageState, width = 1500, opts = {}) {
      * switch" assertion cannot even type into the field it is about. */
     if (r.request().method() === "GET") {
       const id = Number(r.request().url().match(/matches\/(\d+)/)?.[1]);
-      const pool = [...FIX, ...TODAY_FIX, ...TODAY_FIVE, ...TOMO_FIX];
+      const pool = [...FIX, ...SEP_FIX, ...TODAY_FIX, ...TODAY_FIVE, ...TOMO_FIX];
       const m = pool.find((x) => x.id === id);
       if (!m) return r.continue();
       /* THE ENVELOPE IS { match, managers, fields }, not the match itself — MatchPanel reads
@@ -310,7 +432,7 @@ async function main() {
     yes(`  #${r.id} label centre within 1px of the notch centre`,
       Math.abs(r.minLabel.box.cx - r.notch.box.cx) <= 1,
       `label ${r.minLabel.box.cx.toFixed(2)} vs notch ${r.notch.box.cx.toFixed(2)}`);
-    yes(`  #${r.id} row is under 62px (${r.h})`, r.h < 62);
+    yes(`  #${r.id} band is under 72px (${r.h})`, r.h < 72);
     is(`  #${r.id} manager name is not truncated`, r.mgr.includes(m.manager.firstName) && r.mgr.includes(m.manager.lastName), true);
   }
   /* THE CLAMP MUST NOT FIRE ON REALISTIC DATA. It exists so a minimum at 0 or at capacity keeps its
@@ -445,23 +567,12 @@ async function main() {
 
   console.log("\n-- the interaction contract --");
   is("  CONTROL: no editor open to begin with", (await page.evaluate(READ)).drawer, 0);
-  /* THE KEBAB MUST NOT OPEN THE EDITOR. */
-  await page.click('[data-testid="gday-row"] [data-testid="gday-kebab"]');
-  await page.waitForTimeout(600);
-  is("  clicking the kebab does NOT open the editor", (await page.evaluate(READ)).drawer, 0);
-  /* CONTROL FOR THE GUARD: remove the stopPropagation and show the editor DOES open, then reload
-   * and show it does not. Without this, "the kebab did not open it" is also what a page with no
-   * editor at all would report. */
-  const leaked = await page.evaluate(() => {
-    const row = document.querySelector('[data-testid="gday-row"]');
-    let sawRowClick = false;
-    const probe = () => { sawRowClick = true; };
-    row.addEventListener("click", probe);
-    row.querySelector('[data-testid="gday-kebab"]').click();
-    row.removeEventListener("click", probe);
-    return sawRowClick;
-  });
-  is("  CONTROL: with the guard removed the click WOULD reach the row", leaked, true);
+  /* THE CLICK GUARD IS RE-ANCHORED, and this is where it USED to be. It pointed at the row kebab,
+   * which no longer exists — and an assertion aimed at a selector that matches nothing does not
+   * fail, it passes, silently, forever. The three controls that actually sit inside a
+   * click-to-open container are asserted in their own block further down, against a fixture that
+   * still has a banner: by this point in the run the save above has cleared 101's shortfall and
+   * there is no banner left on this page to click. */
   /* CLICKING THE ROW ITSELF DOES OPEN IT. */
   await page.click('[data-testid="gday-row"] [data-testid="gday-name"]');
   await page.waitForSelector('[data-testid="gday-panel"]', { timeout: 30000 });
@@ -480,7 +591,7 @@ async function main() {
     is(`  ${w}px: no horizontal page scroll`, v.hscroll, false);
     is(`  ${w}px: every min label still inside its track`,
       nonEmpty(v.rows, "v.rows").filter((r) => r.minLabel.box.l < r.track.l - 14 || r.minLabel.box.r > r.track.r + 14).map((r) => r.id), []);
-    is(`  ${w}px: rows still under 62px`, nonEmpty(v.rows, "v.rows").filter((r) => r.h >= 62).map((r) => r.id), []);
+    is(`  ${w}px: bands stay under 72px`, nonEmpty(v.rows, "v.rows").filter((r) => r.h >= 72).map((r) => r.id), []);
     is(`  ${w}px: no row overlaps`, (() => { const o = [];
       for (const r of nonEmpty(v.rows, "v.rows")) for (let i = 1; i < r.chain.length; i++) {
         const a = r.chain[i - 1], b = r.chain[i];
@@ -625,7 +736,10 @@ async function main() {
         /* ROWS ARE STACKED CARDS - taller than the desktop row and no longer a five-column grid. */
         yes(`  ${w}: rows are stacked cards (${v.rows[0].h}px)`, v.rows[0].h > 90);
         const gridCols = await pm.evaluate(() => getComputedStyle(document.querySelector('[data-testid="gday-row"]')).gridTemplateColumns.split(" ").length);
-        is(`  ${w}: the five-column grid is gone`, gridCols, 2);
+        /* A CARD IS ONE COLUMN. It was two while the row was a stacked grid with the kebab pinned
+           to the right; with the kebab gone the four blocks - header strip, match, spots, footer
+           strip - stack full width. */
+        is(`  ${w}: the desktop column grid is gone - a card is one column`, gridCols, 1);
         /* THE STEPPER'S TARGETS. 44x44 minimum - they were 22px squares on a control that changes
          * what a match costs a player. */
         await pm.click('[data-testid="gtile-risk"]'); await pm.waitForTimeout(700);
@@ -879,7 +993,7 @@ async function main() {
         v.rows.filter((r) => r.labelClip && r.labelClip.outside.length > 0)
           .map((r) => [r.id, r.labelClip.outside]), []);
       if (w >= 1024) {
-        is(`  ${w}: rows are still under 62px`, v.rows.filter((r) => r.h >= 62).map((r) => [r.id, r.h]), []);
+        is(`  ${w}: bands are still under 72px`, v.rows.filter((r) => r.h >= 72).map((r) => [r.id, r.h]), []);
         /* THE 768 OVERLAP WALK IS KEPT — a label-height change is exactly what can reintroduce it. */
         const ov = [];
         for (const r of v.rows) for (let i2 = 1; i2 < r.chain.length; i2++) {
@@ -1374,6 +1488,391 @@ async function main() {
   }
 
 
+  // ══ SEPARATION: EVERY MATCH IS ITS OWN OBJECT ══════════════════════════════════════════════
+  /* The change under test is that a match no longer runs to both screen edges with a 1px divider
+   * under it. On desktop it becomes a BAND inside a padded list; on a phone it becomes a CARD.
+   *
+   * EVERY ASSERTION HERE IS GEOMETRIC AND MEASURED OFF THE RENDERED BOXES. Reading `gap` or
+   * `border-radius` off the computed style would only prove the rule was written, not that it
+   * survived a media query, a transform, or an ancestor that clips.
+   *
+   * THE ZERO-GAP CONTROL IS THE POINT OF THE WHOLE BLOCK. "Adjacent bands are >= 5px apart" is
+   * also what a page that failed to render its second band reports, and what a measurement that is
+   * silently reading the wrong pair of boxes reports. So the list's gap is forced to 0, the SAME
+   * measurement is re-run, and it must come back 0 — which proves the number moves with the thing
+   * it claims to measure before any conclusion is drawn from it. */
+  {
+    const measure = async (pg) => pg.evaluate(GEO);
+    /* Force one CSS declaration, re-measure, put it back. Returns the measurement taken under it. */
+    const under = async (pg, css) => {
+      await pg.evaluate((c) => {
+        const st = document.createElement("style");
+        st.id = "__ctl"; st.textContent = c; document.head.appendChild(st);
+      }, css);
+      await pg.waitForTimeout(250);
+      const v = await pg.evaluate(GEO);
+      await pg.evaluate(() => document.getElementById("__ctl")?.remove());
+      await pg.waitForTimeout(250);
+      return v;
+    };
+
+    // ── B. DESKTOP: EACH MATCH IS A BAND ───────────────────────────────────────────────────────
+    /* THE BAND CONTRACT IS ASSERTED WITH THE PANEL CLOSED. With it OPEN the table card drops to
+     * 576px at a 1500px viewport and 356px at 1280 - below the tier where any four-track grid
+     * fits - and the band correctly BECOMES A CARD. That case has its own contract, asserted in
+     * the block after this one; running the band assertions against it would either fail on a
+     * layout that is right, or, worse, be relaxed until they passed on the layout that was wrong. */
+    for (const panelOpen of [false]) {
+      const { ctx: cb, page: pb } = await boot(browser, storageState, 1500, { fix: SEP_FIX });
+      const label = panelOpen ? "panel OPEN" : "panel closed";
+
+      /* 1100 IS IN THE LIST DELIBERATELY. 1500/1366/1280 all use the wide four-track grid; the
+       * compact grid below 1184 is a different manager column and it is the one that was
+       * overflowing. Sweeping only the three wide widths is how the 136px cell passed. */
+      for (const w of [1500, 1366, 1280, 1100]) {
+        await pb.setViewportSize({ width: w, height: 1000 });
+        await pb.waitForTimeout(450);
+        const g = await measure(pb);
+        const tag = `  ${w}px ${label}:`;
+
+        const lists = nonEmpty(g.lists.filter((L) => L.bands.length > 1), `lists with >1 band @${w} ${label}`);
+        const allGaps = lists.flatMap((L) => L.gaps);
+        nonEmpty(allGaps, `between-band gaps @${w} ${label}`);
+
+        is(`${tag} every adjacent pair of bands has >= 5px of ground between them`,
+          lists.flatMap((L) => L.gaps.map((gp, i) => (gp >= 5 ? null : [L.pairs[i], gp])).filter(Boolean)), []);
+
+        /* THE PAIR THIS CHANGE EXISTS FOR. Two at-risk matches next to each other used to read as
+         * one block; they are asserted to BE adjacent first, because a fixture that quietly
+         * separated them would satisfy the gap check without ever testing the case. */
+        const riskPairs = lists.flatMap((L) => L.pairs
+          .map((pr, i) => ({ pr, gap: L.gaps[i], a: L.bands[i], b: L.bands[i + 1] }))
+          .filter((x) => x.a.risk && x.b.risk));
+        yes(`${tag} CONTROL: the fixture really does put two AT-RISK bands next to each other (${riskPairs.map((x) => x.pr.join("+")).join(",")})`,
+          riskPairs.length > 0);
+        is(`${tag} TWO ADJACENT AT-RISK BANDS ARE SEPARATED`,
+          riskPairs.filter((x) => x.gap < 5).map((x) => [x.pr, x.gap]), []);
+
+        is(`${tag} the list insets every band by >= 6px on both sides`,
+          lists.filter((L) => L.pad.l < 6 || L.pad.r < 6).map((L) => L.pad), []);
+        is(`${tag} ...and the bands sit inside that inset`,
+          lists.flatMap((L) => L.bands.filter((bd) => bd.box.l < L.box.l + 5.5 || bd.box.r > L.box.r - 5.5).map((bd) => bd.id)), []);
+
+        is(`${tag} every band is rounded (>= 8px) and bordered (>= 1px)`,
+          lists.flatMap((L) => L.bands.filter((bd) => bd.radius < 8 || bd.border < 1).map((bd) => [bd.id, bd.radius, bd.border])), []);
+        is(`${tag} every band paints its own background`,
+          lists.flatMap((L) => L.bands.filter((bd) => /rgba\(0, 0, 0, 0\)|transparent/.test(bd.bg)).map((bd) => bd.id)), []);
+        /* B2: the at-risk band keeps its tint AND an inset left edge, CONTAINED by the radius —
+         * asserted as an inset shadow rather than a border-left, which is how it is drawn. */
+        const risky = lists.flatMap((L) => L.bands.filter((bd) => bd.risk));
+        yes(`${tag} CONTROL: there are at-risk bands to check (${risky.length})`, risky.length > 0);
+        is(`${tag} every at-risk band carries an inset left edge`,
+          risky.filter((bd) => !/inset/.test(bd.shadow)).map((bd) => bd.id), []);
+        is(`${tag} ...and a tint distinct from a healthy band`, (() => {
+          const healthy = lists.flatMap((L) => L.bands.filter((bd) => !bd.risk));
+          if (healthy.length === 0) return "NO HEALTHY BAND - the comparison is vacuous";
+          return risky.filter((bd) => bd.bg === healthy[0].bg).map((bd) => bd.id);
+        })(), []);
+
+        /* B3: COLUMNS DO NOT MOVE. Every band's column left edges are identical to every other
+         * band's, and to the header's, within 9px. */
+        const bands = lists.flatMap((L) => L.bands);
+        const first = bands[0].colLefts;
+        is(`${tag} every band's columns start in the same places`,
+          bands.filter((bd) => bd.colLefts.length !== first.length
+            || bd.colLefts.some((x, i) => Math.abs(x - first[i]) > 0.5)).map((bd) => [bd.id, bd.colLefts]), []);
+        is(`${tag} ...and the header's columns agree with them within 9px`, (() => {
+          if (!g.headCols || g.headCols.length !== first.length) return `HEADER ${JSON.stringify(g.headCols)} vs BAND ${JSON.stringify(first)}`;
+          return g.headCols.map((x, i) => (Math.abs(x - first[i]) > 9 ? [i, x, first[i]] : null)).filter(Boolean);
+        })(), []);
+
+        const priced = bands.filter((bd) => bd.price);
+        yes(`${tag} CONTROL: there are prices to check (${priced.length})`, priced.length > 0);
+        is(`${tag} no price is sheared by its track`,
+          priced.filter((bd) => bd.price.cut).map((bd) => [bd.id, bd.price.text, bd.price.over]), []);
+        is(`${tag} no manager name spills out of its cell`,
+          bands.filter((bd) => bd.mgrClipped).map((bd) => [bd.id, bd.mgrText, bd.mgrOver]), []);
+        yes(`${tag} CONTROL: the long name IS on the board ("${bands.map((bd) => bd.mgrText).find((t) => /Rocha/.test(t)) ?? "MISSING"}")`,
+          bands.some((bd) => /Peter Rocha-Ramirez/.test(bd.mgrText)));
+        is(`${tag} every initials avatar is >= 23px and fits its text`,
+          bands.filter((bd) => !bd.av || bd.av.box.w < 22.5 || bd.av.clipped).map((bd) => [bd.id, bd.av?.box.w, bd.av?.clipped]), []);
+        is(`${tag} no horizontal page scroll`, g.hscroll, false);
+        is(`${tag} no kebab survives anywhere on the page`, g.kebabs, 0);
+      }
+
+      /* THE TWO CONTROLS. Both are run at 1500 only - they prove the MEASUREMENT, and a
+       * measurement that moves at one width moves at all of them. */
+      await pb.setViewportSize({ width: 1500, height: 1000 });
+      await pb.waitForTimeout(400);
+      {
+        const z = await under(pb, ".gdo .glist{gap:0 !important}");
+        const zg = nonEmpty(z.lists.flatMap((L) => L.gaps), "gaps under the zero-gap control");
+        is(`  ${label}: CONTROL - forcing gap:0 really does close the ground to 0`,
+          zg.filter((x) => x > 0.5), []);
+        const back = await measure(pb);
+        yes(`  ${label}: CONTROL - ...and removing it opens it again`,
+          nonEmpty(back.lists.flatMap((L) => L.gaps), "gaps after the control").every((x) => x >= 5));
+      }
+      {
+        /* THE COLUMN-IDENTITY CONTROL. One band gets a different grid template; the same equality
+         * check must now FAIL. Without this, "every band's columns agree" is also what a probe
+         * reading one band twice would report. */
+        const c = await under(pb, '.gdo [data-testid="gday-row"][data-id="603"]{grid-template-columns:150px minmax(0,1fr) 200px 120px !important}');
+        const bs = nonEmpty(c.lists.flatMap((L) => L.bands), "bands under the column control");
+        const ref = bs.find((x) => x.id !== 603)?.colLefts ?? [];
+        const moved = bs.find((x) => x.id === 603);
+        yes(`  ${label}: CONTROL - the check CAN fail: moving one band's tracks moves its columns`,
+          !!moved && moved.colLefts.some((x, i) => Math.abs(x - ref[i]) > 0.5));
+      }
+      await closeContext(cb);
+    }
+
+    // ── THE PANEL-OPEN CONTRACT: THE TABLE STACKS RATHER THAN COLLAPSING A COLUMN ──────────────
+    /* THE DEFECT THIS BLOCK EXISTS FOR. The row grid used to switch tiers on the VIEWPORT, so with
+     * the match panel open at 1500px the card was 576px, the four fixed tracks needed 660, and
+     * minmax(0,1fr) did exactly what it is asked to: the match column went to ZERO WIDTH and the
+     * name and price rendered outside it. It got worse as the window narrowed - 356px of card at
+     * 1280, 100px at 1024 - and no viewport query could see any of it, because every one of those
+     * cases is a WIDE window. The tier is chosen by the card now, and this asserts the result. */
+    {
+      const { ctx: co, page: po } = await boot(browser, storageState, 1500, { fix: SEP_FIX });
+      await po.click('[data-testid="gday-row"][data-id="605"] [data-testid="gday-name"]');
+      await po.waitForSelector('[data-testid="gday-panel"]', { timeout: 30000 });
+      await po.waitForTimeout(800);
+      for (const w of [1500, 1366, 1280]) {
+        await po.setViewportSize({ width: w, height: 1000 });
+        await po.waitForTimeout(500);
+        const g = await measure(po);
+        const tag = `  ${w}px panel OPEN:`;
+        const bands = nonEmpty(g.lists.flatMap((L) => L.bands), `bands @${w} panel open`);
+        const cardW = await po.evaluate(() => {
+          const c = document.querySelector('[data-testid="snapshot"]');
+          return c ? +c.getBoundingClientRect().width.toFixed(2) : null;
+        });
+        yes(`${tag} CONTROL: the panel really has narrowed the table (card ${cardW}px)`, cardW !== null && cardW < 700);
+
+        /* THE ASSERTION THE OLD LAYOUT FAILED. Zero is the value that shipped. */
+        is(`${tag} NO COLUMN IS COLLAPSED TO ZERO WIDTH`,
+          bands.flatMap((bd) => bd.kids.map((k, i) => (k.w < 1 ? [bd.id, i, k.w] : null)).filter(Boolean)), []);
+        is(`${tag} the bands have stacked to one column`,
+          bands.filter((bd) => bd.colLefts.length > 1
+            && bd.colLefts.some((x) => Math.abs(x - bd.colLefts[0]) > 0.5)).map((bd) => [bd.id, bd.colLefts]), []);
+        is(`${tag} separation survives the stack`,
+          g.lists.flatMap((L) => L.gaps.map((gp, i) => (gp >= 5 ? null : [L.pairs[i], gp])).filter(Boolean)), []);
+        is(`${tag} no price is sheared`, bands.filter((bd) => bd.price?.cut).map((bd) => [bd.id, bd.price.text]), []);
+        is(`${tag} no manager name spills out of its cell`,
+          bands.filter((bd) => bd.mgrClipped).map((bd) => [bd.id, bd.mgrText, bd.mgrOver]), []);
+        is(`${tag} no horizontal page scroll`, g.hscroll, false);
+        is(`${tag} no kebab survives`, g.kebabs, 0);
+      }
+      await closeContext(co);
+    }
+
+    // ── A. MOBILE: EACH MATCH IS A CARD ────────────────────────────────────────────────────────
+    for (const w of [390, 430]) {
+      const { ctx: cm, page: pm } = await boot(browser, storageState, w, { fix: SEP_FIX, mobile: true, height: 844 });
+      const g = await measure(pm);
+      const tag = `  ${w}px:`;
+      const lists = nonEmpty(g.lists.filter((L) => L.bands.length > 1), `card lists @${w}`);
+      const cards = lists.flatMap((L) => L.bands);
+      nonEmpty(cards, `cards @${w}`);
+
+      is(`${tag} every adjacent pair of cards has >= 10px of ground between them`,
+        lists.flatMap((L) => L.gaps.map((gp, i) => (gp >= 10 ? null : [L.pairs[i], gp])).filter(Boolean)), []);
+
+      const riskPairs = lists.flatMap((L) => L.pairs
+        .map((pr, i) => ({ pr, gap: L.gaps[i], a: L.bands[i], b: L.bands[i + 1] }))
+        .filter((x) => x.a.risk && x.b.risk));
+      yes(`${tag} CONTROL: two AT-RISK cards really are adjacent (${riskPairs.map((x) => x.pr.join("+")).join(",")})`, riskPairs.length > 0);
+      is(`${tag} TWO ADJACENT AT-RISK CARDS ARE SEPARATED`, riskPairs.filter((x) => x.gap < 10).map((x) => [x.pr, x.gap]), []);
+
+      is(`${tag} the gutter insets every card by >= 10px on both sides`,
+        lists.filter((L) => L.pad.l < 10 || L.pad.r < 10).map((L) => L.pad), []);
+      is(`${tag} ...and every card sits inside it`,
+        cards.filter((c) => c.box.l < 9.5 || c.box.r > g.vw - 9.5).map((c) => [c.id, c.box.l, c.box.r]), []);
+      is(`${tag} every card is rounded >= 10px with a real 1px border`,
+        cards.filter((c) => c.radius < 10 || c.border < 1).map((c) => [c.id, c.radius, c.border]), []);
+      is(`${tag} every card paints its own background`,
+        cards.filter((c) => /rgba\(0, 0, 0, 0\)|transparent/.test(c.bg)).map((c) => c.id), []);
+      is(`${tag} every card carries a shadow`, cards.filter((c) => !c.shadow || c.shadow === "none").map((c) => c.id), []);
+
+      /* A1: THE GAP BETWEEN CARDS MUST BEAT EVERY GAP INSIDE ONE, or the cards read as one column
+       * of blocks again. "Inside" is measured between the card's own top-level blocks. */
+      const insideMax = Math.max(...cards.map((c) => {
+        const k = c.kids;
+        return Math.max(0, ...k.slice(1).map((x, i) => x.t - k[i].b));
+      }));
+      const betweenMin = Math.min(...lists.flatMap((L) => L.gaps));
+      /* THE LARGEST IN-CARD GAP IS ZERO, and a zero that is not controlled is worthless: `x > 2*0`
+       * is true for every positive x, and it is equally true when the measurement is reading the
+       * wrong boxes and finding nothing. So the same measurement is re-run with a row-gap forced
+       * INTO the card, and it must come back with that gap. Only then does the real zero mean the
+       * card's four strips genuinely abut. */
+      const forced = await under(pm, '.gdo [data-testid="gday-row"]{row-gap:9px !important}');
+      const forcedInside = Math.max(...forced.lists.flatMap((L) => L.bands).map((c) => {
+        const k = c.kids; return Math.max(0, ...k.slice(1).map((x, i) => x.t - k[i].b));
+      }));
+      yes(`${tag} CONTROL: the in-card measurement finds a gap when there is one (forced 9px, read ${forcedInside.toFixed(2)}px)`,
+        forcedInside >= 8.5);
+      yes(`${tag} between-card gap (${betweenMin}px) is more than twice the largest gap inside a card (${insideMax.toFixed(2)}px)`,
+        betweenMin > 2 * insideMax && betweenMin >= 10);
+
+      /* A3/A4: THE HEADER AND FOOTER STRIPS. Both must be tinted (not the card's own background)
+       * and the at-risk header must differ from a healthy one - that tint IS the risk signal now
+       * that the full-card wash is gone. */
+      is(`${tag} every card has a header strip and a footer strip`,
+        cards.filter((c) => !c.gk || !c.mgr).map((c) => c.id), []);
+      is(`${tag} the header strip is tinted, not the card ground`,
+        cards.filter((c) => c.gk.bg === c.bg).map((c) => [c.id, c.gk.bg]), []);
+      is(`${tag} the footer strip is tinted, not the card ground`,
+        cards.filter((c) => c.mgr.bg === c.bg).map((c) => [c.id, c.mgr.bg]), []);
+      is(`${tag} the header strip has a hairline beneath it`, cards.filter((c) => c.gk.borderBottom < 1).map((c) => c.id), []);
+      is(`${tag} the footer strip has a hairline above it`, cards.filter((c) => c.mgr.borderTop < 1).map((c) => c.id), []);
+      is(`${tag} AN AT-RISK HEADER STRIP IS A DIFFERENT COLOUR FROM A HEALTHY ONE`, (() => {
+        const r = cards.filter((c) => c.risk), h = cards.filter((c) => !c.risk);
+        if (r.length === 0 || h.length === 0) return `VACUOUS: risk=${r.length} healthy=${h.length}`;
+        return r.filter((c) => c.gk.bg === h[0].gk.bg).map((c) => [c.id, c.gk.bg, h[0].gk.bg]);
+      })(), []);
+
+      /* A5: THE CHIP IS ON THE FIELD LINE, not the title line. Measured against the two rows it
+       * could be on rather than against a pixel constant. */
+      const chipped = cards.filter((c) => c.chip);
+      yes(`${tag} CONTROL: there are cancels chips to place (${chipped.length})`, chipped.length > 0);
+      is(`${tag} THE CANCELS CHIP IS ON THE FIELD LINE, NOT THE TITLE LINE`,
+        chipped.filter((c) => Math.abs(c.chip.t - c.sub.t) > 4 || Math.abs(c.chip.t - c.name.t) < 4)
+          .map((c) => [c.id, c.chip.t, c.name.t, c.sub.t]), []);
+      is(`${tag} no title wraps beyond two lines`,
+        cards.filter((c) => c.name.lines > 2).map((c) => [c.id, c.name.lines]), []);
+      yes(`${tag} CONTROL: the long title IS in the fixture`, cards.some((c) => c.name.box.w > 0) && lists.length > 0);
+
+      is(`${tag} no horizontal page scroll`, g.hscroll, false);
+      is(`${tag} no kebab survives anywhere on the page`, g.kebabs, 0);
+      is(`${tag} no manager name is clipped`, cards.filter((c) => c.mgrClipped).map((c) => [c.id, c.mgrText]), []);
+
+      /* A6: THE METER. Label inside the track on BOTH axes and inside every clipping ancestor,
+       * >= 28px reserved beneath the bar, and a width that follows the card rather than 104px. */
+      const mv = await pm.evaluate(READ);
+      const mrows = nonEmpty(mv.rows, `mobile rows @${w}`);
+      const clipped = mrows.filter((r) => r.labelClip);
+      yes(`${tag} CONTROL: there are meter labels to measure (${clipped.length} of ${mrows.length})`, clipped.length > 0);
+      is(`${tag} every meter label is inside its track horizontally`,
+        clipped.filter((r) => r.labelClip.pastTrackLeft > 0.5 || r.labelClip.pastTrackRight > 0.5)
+          .map((r) => [r.id, r.labelClip.text, r.labelClip.pastTrackLeft, r.labelClip.pastTrackRight]), []);
+      is(`${tag} ...and inside every ancestor that clips`,
+        clipped.filter((r) => r.labelClip.outside.length > 0).map((r) => [r.id, r.labelClip.outside]), []);
+      is(`${tag} no label spills past the bottom of its meter`,
+        clipped.filter((r) => r.labelClip.belowMeter > -0.5).map((r) => [r.id, r.labelClip.belowMeter]), []);
+      /* THE RESERVE ITSELF, not just containment. "The label is inside the meter" is satisfied by a
+       * meter with no room at all if the label happens to be short; the spec asked for >= 28px of
+       * ground beneath the BAR, and 15px is what clipped it in the mock. Measured meter-bottom
+       * minus bar-bottom, per card. */
+      const reserve = await pm.evaluate(() => [...document.querySelectorAll('[data-testid="gday-row"]')].map((r) => {
+        const mt = r.querySelector(".gmeter"), br2 = r.querySelector(".gbar");
+        if (!mt || !br2) return null;
+        return { id: Number(r.dataset.id),
+          px: +(mt.getBoundingClientRect().bottom - br2.getBoundingClientRect().bottom).toFixed(2) };
+      }).filter(Boolean));
+      yes(`${tag} CONTROL: there are meters to measure the reserve on (${reserve.length})`, reserve.length > 0);
+      is(`${tag} the meter reserves >= 28px below the bar for the label`,
+        reserve.filter((r) => r.px < 27.5), []);
+      is(`${tag} the meter takes card width, not a fixed 104px`,
+        mrows.filter((r) => r.track && r.track.w <= 110).map((r) => [r.id, r.track.w]), []);
+      yes(`${tag} CONTROL: there are cards WITH a minimum to measure (${mrows.filter((r) => r.hasMin).length})`,
+        mrows.filter((r) => r.hasMin).length > 0);
+      /* THE NO-MINIMUM CARD. Its label reads "no min" and it has no notch to centre on. */
+      const nomin = cards.filter((c) => c.nomin);
+      yes(`${tag} CONTROL: the fixture carries a match with no minimum`, nomin.length === 1);
+      is(`${tag} ...and exactly the matches with no minimum say "no min"`,
+        nomin.map((c) => c.id), [604]);
+      is(`${tag} ...and none of them draws a notch`,
+        mrows.filter((r) => r.id === 604 && r.notch !== null).map((r) => r.id), []);
+
+      await closeContext(cm);
+    }
+
+    // ── THE RE-ANCHORED CLICK GUARD ────────────────────────────────────────────────────────────
+    /* THE KEBAB WAS THE OLD ANCHOR AND IT IS GONE. These three controls are the ones that are
+     * genuinely INSIDE a click-to-open container: the banner is itself role="button" with an
+     * onClick that opens the panel (GamedayBoard.tsx:1754), and each control stops the click.
+     *
+     * Each is asserted TWICE: it must not open the panel, AND it must still do its own job. The
+     * second half is what the old assertion never had - a control wired to nothing at all also
+     * "does not open the panel". */
+    {
+      const { ctx: cg, page: pg, puts: gputs } = await boot(browser, storageState, 1500, { byDate: true });
+      is("  CONTROL: a banner is on the page to click into", await pg.locator('[data-testid="gday-alert"]').count(), 1);
+      is("  CONTROL: no panel open to begin with", (await pg.evaluate(READ)).drawer, 0);
+
+      /* THE BANNER REALLY IS CLICK-TO-OPEN. Without this the three guards below are all satisfied
+       * by a banner that opens nothing no matter where you click it. */
+      await pg.click('[data-testid="gday-alert-head"]');
+      await pg.waitForSelector('[data-testid="gday-panel"]', { timeout: 30000 });
+      is("  CONTROL: clicking the banner's headline DOES open the panel", (await pg.evaluate(READ)).drawer, 1);
+      await pg.click('[data-testid="gday-panel-close"]');
+      await pg.waitForTimeout(900);
+      is("  CONTROL: ...and it closes again", (await pg.evaluate(READ)).drawer, 0);
+
+      const stepV = () => pg.locator('[data-testid="gday-step-value"]').textContent();
+      const spotV = () => pg.locator('[data-testid="gday-spots-value"]').textContent();
+
+      const minBefore = await stepV();
+      await pg.click('[data-testid="gday-step-down"]');
+      await pg.waitForTimeout(500);
+      is("  the Cancels below stepper does NOT open the panel", (await pg.evaluate(READ)).drawer, 0);
+      const minAfter = await stepV();
+      yes(`  ...and it still steps the minimum (${minBefore} -> ${minAfter})`, Number(minAfter) === Number(minBefore) - 1);
+
+      const spotsBefore = await spotV();
+      await pg.click('[data-testid="gday-spots-down"]');
+      await pg.waitForTimeout(500);
+      is("  the Spots left now stepper does NOT open the panel", (await pg.evaluate(READ)).drawer, 0);
+      const spotsAfter = await spotV();
+      yes(`  ...and it still steps the spots (${spotsBefore} -> ${spotsAfter})`, Number(spotsAfter) === Number(spotsBefore) - 1);
+
+      const putsBefore = gputs.length;
+      await pg.click('[data-testid="gday-save-min"]');
+      await pg.waitForTimeout(1800);
+      is("  the banner Save does NOT open the panel", (await pg.evaluate(READ)).drawer, 0);
+      yes(`  ...and it still sent exactly one write (${gputs.length - putsBefore})`, gputs.length - putsBefore === 1);
+
+      /* THE GUARD CONTROL, kept and re-pointed. React attaches its handlers at the root, so a
+       * native listener bound directly on the banner fires on the way up REGARDLESS of the
+       * synthetic stopPropagation - which is precisely the demonstration wanted: the click really
+       * does reach the container, and the only reason the panel stayed shut is the guard. */
+      const leaked = await pg.evaluate(() => {
+        const b = document.querySelector('[data-testid="gday-alert"]');
+        const btn = b.querySelector('[data-testid="gday-step-down"]');
+        if (!b || !btn) return "MISSING";
+        let saw = false;
+        const probe = () => { saw = true; };
+        b.addEventListener("click", probe);
+        btn.click();
+        b.removeEventListener("click", probe);
+        return saw;
+      });
+      is("  CONTROL: the click DOES reach the banner - only the guard stops the panel", leaked, true);
+      await closeContext(cg);
+    }
+
+    // ── HOW MANY FIT A SCREEN, MEASURED RATHER THAN ESTIMATED ──────────────────────────────────
+    /* Reported, not asserted. Separation costs list height and that cost was accepted up front;
+     * an assertion here would only be a place to argue with the decision later. */
+    for (const [w, h, mob] of [[390, 844, true], [1500, 900, false]]) {
+      const { ctx: cf, page: pf } = await boot(browser, storageState, w, { fix: SEP_FIX, mobile: mob, height: h });
+      const fit = await pf.evaluate(() => {
+        const rows = [...document.querySelectorAll('[data-testid="gday-row"]')];
+        if (rows.length === 0) return { fully: 0, pitch: null };
+        const vh = window.innerHeight;
+        const pitch = rows.length > 1 ? +(rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().top).toFixed(2) : null;
+        return { fully: rows.filter((r) => r.getBoundingClientRect().bottom <= vh).length, pitch,
+          firstTop: +rows[0].getBoundingClientRect().top.toFixed(2) };
+      });
+      console.log(`  FIT ${w}x${h}: ${fit.fully} matches fully visible, pitch ${fit.pitch}px, list starts at ${fit.firstTop}px`);
+      yes(`  CONTROL: the ${w}px board rendered something to count`, fit.pitch !== null);
+      await closeContext(cf);
+    }
+  }
+
   /* ── THE LIVE BOARD ─────────────────────────────────────────────────────────────────────────
    * No intercept. The clamp and the layout claims are about REAL matches, and a fixture I chose
    * cannot settle them - I picked min 4 of 18 above precisely because min 2 of 18 tripped the
@@ -1395,7 +1894,7 @@ async function main() {
       is(`  ${w}px: every label sits within 1px of its notch`,
         v.rows.filter((r) => r.minLabel && Math.abs(r.minLabel.box.cx - r.notch.box.cx) > 1).map((r) => r.id), []);
       is(`  ${w}px: no horizontal page scroll`, v.hscroll, false);
-      is(`  ${w}px: rows under 62px`, v.rows.filter((r) => r.h >= 62).map((r) => r.id), []);
+      is(`  ${w}px: bands under 72px`, v.rows.filter((r) => r.h >= 72).map((r) => r.id), []);
       is(`  ${w}px: no row overlaps`, (() => { const o = [];
         for (const r of v.rows) for (let i = 1; i < r.chain.length; i++) {
           const a = r.chain[i - 1], b = r.chain[i];
