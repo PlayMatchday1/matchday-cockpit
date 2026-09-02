@@ -31,11 +31,11 @@ import {
   type ApiMatch, type BoardFilter, type MatchGroup, GROUPS, byKickoff, matchGroup, minsUntil, fmtDur, localClock, deadlineClock, tzAbbr,
   realCount, fakeCount, capacity, openSpots, teamCount, short, shortBy, fill, flags, attention,
   acLevel, minsToDeadline, nextRelease, nextMark, inCities, passesFilter, stillToCome, riskTier, snapRail, vsMin, vsMinDelta, STD_LEAD, MARKS, autoCancels,
-  atRisk, realFillPct, dayBucket, DAY_BUCKETS, passesStrip, meter, type DayBucket, type StripKey,
+  atRisk, realFillPct, dayBucket, DAY_BUCKETS, passesStrip, meter, showsDeadline, type DayBucket, type StripKey,
   bannerUrgent, defaultBanners, riskSubtitle, BANNER_LEAD_MINUTES, DEFAULT_BANNER_CAP,
 } from "@/lib/gamedayModel";
 import {
-  fakesFor, rungFor, markInForce, rungKey, fakesWriteDiff, fakesWriteNote, type Ladder,
+  fakesFor, rungFor, markInForce, rungKey, spotsLeftWriteDiff, spotsLeftNow, type Ladder,
 } from "@/lib/fakeLadder";
 
 const ENV = DRAWER_ENV; // the board reads and edits the same environment as the drawer
@@ -125,8 +125,8 @@ export default function GamedayBoard({
   const [pendingMin, setPendingMin] = useState<Record<number, number>>({});
   /* THE OTHER TWO PENDING VALUES. Fakes and the 3h rung follow the same local-then-save shape as
    * the minimum: step freely, nothing leaves the browser until Save. */
-  const [pendingFakes, setPendingFakes] = useState<Record<number, number>>({});
-  const [pending3h, setPending3h] = useState<Record<number, number>>({});
+  /* ONE PENDING VALUE FOR THE ONE FAKE CONTROL: the spots-shown-as-left rung. */
+  const [pendingSpots, setPendingSpots] = useState<Record<number, number>>({});
   /* ── ONE PANEL, TWO TABS ──────────────────────────────────────────────────────────────────────
    * Not a second drawer. Open match chat opens the SAME panel on Chat; a row opens it on Details.
    * The tab is panel state, so switching does not unmount MatchPanel and unsaved edits survive —
@@ -394,8 +394,7 @@ export default function GamedayBoard({
      * sees 7 pre-filled, assumes it is stored, and saves it. Discarding is the only rule that
      * cannot produce that. It is also why the stepper resets to the SAVED value on close. */
     setPendingMin({});
-    setPendingFakes({});
-    setPending3h({});
+    setPendingSpots({});
     setSaveState({});
     setPanelTab("details");
     setDrawerId(id);
@@ -406,7 +405,7 @@ export default function GamedayBoard({
   const openChat = (id: number) => {
     if (onOpenMatch) { router.push(`/match-ops/match-chats?chatId=${encodeURIComponent(String(id))}`); return; }
     if (drawerId != null && drawerId !== id && !guardLeave()) return;
-    if (drawerId !== id) { setPendingMin({}); setPendingFakes({}); setPending3h({}); setSaveState({}); }
+    if (drawerId !== id) { setPendingMin({}); setPendingSpots({}); setSaveState({}); }
     setPanelTab("chat");
     setDrawerId(id);
   };
@@ -425,7 +424,14 @@ export default function GamedayBoard({
    * count would report FAILED for a write that landed perfectly and simply has not been applied
    * yet. The rung reads back immediately; that is what LANDED means here. */
   const saveRungs = async (id: number, diff: Ladder, note: string, clear: () => void) => {
-    if (Object.keys(diff).length === 0) return;
+    /* AN EMPTY DIFF STILL REPORTS. It used to return silently — the operator pressed Save, nothing
+     * was sent because every band already held the value, and NOTHING APPEARED. A save that
+     * produces no visible outcome is indistinguishable from one that failed. */
+    if (Object.keys(diff).length === 0) {
+      setSaveState((p) => ({ ...p, [id]: { s: "landed", msg: `LANDED - ${note} (already stored)` } }));
+      clear();
+      return;
+    }
     setSaveState((p) => ({ ...p, [id]: { s: "saving", msg: "Saving…" } }));
     try {
       const { data } = await supabase.auth.getSession();
@@ -457,46 +463,28 @@ export default function GamedayBoard({
     }
   };
 
-  const stepFakes = (id: number, d: number) => {
+  const stepSpots = (id: number, d: number) => {
     const m = matches.find((x) => x.id === id); if (!m) return;
     const cap = capacity(m) ?? 0, real = realCount(m);
-    const cur = pendingFakes[id] ?? fakeCount(m);
-    /* FLOOR 0, CEILING capacity − real. The buttons are disabled at the bound; this is the second
-     * line of defence, not the first. */
+    const cur = pendingSpots[id] ?? spotsLeftNow(ladderOf(m), minsUntil(m, now) / 60);
+    /* FLOOR 0 (every spot shown taken) AND CEILING capacity minus real (no fakes at all). The
+     * buttons are disabled at the bound; this is the second line of defence. */
     const next = Math.max(0, Math.min(Math.max(0, cap - real), cur + d));
     if (next === cur) return;
     setSaveState((p) => { const n = { ...p }; delete n[id]; return n; });
-    setPendingFakes((p) => { const n = { ...p }; if (next === fakeCount(m)) delete n[id]; else n[id] = next; return n; });
+    setPendingSpots((p) => {
+      const saved = spotsLeftNow(ladderOf(m), minsUntil(m, now) / 60);
+      const n = { ...p }; if (next === saved) delete n[id]; else n[id] = next; return n;
+    });
   };
-  const saveFakes = (id: number) => {
+  const saveSpots = (id: number) => {
     const m = matches.find((x) => x.id === id); if (!m) return;
-    const target = pendingFakes[id]; if (target == null) return;
+    const target = pendingSpots[id]; if (target == null) return;
     const cap = capacity(m) ?? 0, real = realCount(m);
-    const w = fakesWriteDiff(ladderOf(m), cap, real, minsUntil(m, now) / 60, target);
-    void saveRungs(id, w.diff, fakesWriteNote(target, w.laterRaised),
-      () => setPendingFakes((p) => { const n = { ...p }; delete n[id]; return n; }));
-  };
-
-  const step3h = (id: number, d: number) => {
-    const m = matches.find((x) => x.id === id); if (!m) return;
-    const cap = capacity(m) ?? 0, real = realCount(m);
-    /* THE OPERATOR STEPS FAKES; THE STORE HOLDS A RUNG. Converting here keeps the inversion in one
-     * place — a control that stepped the rung would move the fake count the opposite way from the
-     * button that was pressed. */
-    const curRung = pending3h[id] ?? Number(m.fakeSpotLeft3h ?? 0);
-    const curFakes = fakesFor(cap, curRung, real);
-    const nextFakes = Math.max(0, Math.min(Math.max(0, cap - real), curFakes + d));
-    const next = rungFor(cap, nextFakes, real);
-    if (next === curRung) return;
-    setSaveState((p) => { const n = { ...p }; delete n[id]; return n; });
-    setPending3h((p) => { const n = { ...p }; if (next === Number(m.fakeSpotLeft3h ?? 0)) delete n[id]; else n[id] = next; return n; });
-  };
-  const save3h = (id: number) => {
-    const m = matches.find((x) => x.id === id); if (!m) return;
-    const target = pending3h[id]; if (target == null) return;
-    const cap3 = capacity(m) ?? 0, real3 = realCount(m);
-    void saveRungs(id, { fakeSpotLeft3h: target }, `${fakesFor(cap3, target, real3)} fake spots at 3h`,
-      () => setPending3h((p) => { const n = { ...p }; delete n[id]; return n; }));
+    const w = spotsLeftWriteDiff(ladderOf(m), minsUntil(m, now) / 60, target);
+    void saveRungs(id, w.diff,
+      `${target} spot${target === 1 ? "" : "s"} showing as left · ${fakesFor(cap, target, real)} fake`,
+      () => setPendingSpots((p) => { const n = { ...p }; delete n[id]; return n; }));
   };
 
   /* CLOSING RE-READS THE MATCH, so the banner, the row and the Needs attention tile all reflect
@@ -656,10 +644,9 @@ export default function GamedayBoard({
                   {banners.map((m) => (
                     <AlertBanner key={m.id} m={m} now={now}
                       pending={pendingMin[m.id] ?? null}
-                      pendingFakes={pendingFakes[m.id] ?? null}
-                      pending3h={pending3h[m.id] ?? null}
-                      onStep={stepMin} onStepFakes={stepFakes} onStep3h={step3h}
-                      onSave={saveMin} onSaveFakes={saveFakes} onSave3h={save3h}
+                      pendingSpots={pendingSpots[m.id] ?? null}
+                      onStep={stepMin} onStepSpots={stepSpots}
+                      onSave={saveMin} onSaveSpots={saveSpots}
                       onOpen={openDrawer} onChat={openChat}
                       saveState={saveState[m.id]}
                       canEdit={canEditMin} stepperReason={stepperReason} />
@@ -1402,9 +1389,23 @@ const CSS = `
 
 /* THE ACTION AREA IS A 2x2 GRID. Four controls in one row measured 608px and crushed the banner
    text; as a 2x2 it is 324px and the banner holds its height down to 1280. */
-.gdo .gacts{display:grid;grid-template-columns:auto auto;gap:8px;align-items:center;
-  justify-items:stretch;flex:0 0 auto}
-.gdo .gacts .gsave,.gdo .gacts .gladdernote{grid-column:1 / -1}
+/* minmax(0,auto) SO A SPANNING ITEM CANNOT WIDEN THE TRACKS. With plain auto, the direction
+   sentence and the save button span both columns and their min-content is distributed across them,
+   so the whole grid grew to 498px the moment a value was stepped. The tracks size to the two
+   controls that actually sit in them; everything spanning wraps inside that width. */
+.gdo .gacts{display:grid;grid-template-columns:minmax(0,auto) minmax(0,auto);gap:8px;
+  align-items:center;justify-items:stretch;flex:0 0 auto}
+.gdo .gacts .gsave,.gdo .gacts [data-testid="gday-spotstep"]{min-width:0}
+/* A SPANNING ITEM STILL SIZES THE TRACKS IT SPANS. The explanatory sentence spans both columns, so
+   its max-content was distributed across them and pushed the grid from 308px to 498px — measured,
+   after two wrong guesses at the cause. width:0 with min-width:100% removes it from intrinsic
+   sizing entirely while still laying it out across the full row. */
+.gdo .gdirection{overflow-wrap:anywhere;width:0;min-width:100%}
+/* THREE CONTROLS, NOT FOUR, AND THE THIRD SPANS. "Spots left now − 8 + · 5 fake" is the widest of
+   the three; leaving it in a column forced BOTH columns to its width — the action area went from
+   324px to 498px and the banner from 101px to 180px at 1280. Spanning it sizes the two columns by
+   the narrower pair and puts it on its own row, which is where three items want to sit anyway. */
+.gdo .gacts .gsave,.gdo .gacts .gdirection,.gdo .gacts [data-testid="gday-spotstep"]{grid-column:1 / -1}
 .gdo .gstep .glab{display:inline-flex;align-items:baseline;gap:3px;white-space:nowrap}
 .gdo .gstep .glab b{min-width:0;font-size:13.5px}
 .gdo .gstep .glab i{font-style:normal;font-size:11px;color:#66786E;font-weight:600}
@@ -1445,7 +1446,7 @@ const CSS = `
    280px on a 390px screen is the whole width; the phone layout stacks instead and needs no floor. */
 @container gbanner (min-width: 640px) { .gdo .gtxt{min-width:280px} }
 .gdo .galert .gacts{flex:0 1 auto;min-width:0}
-.gdo .gdirection{grid-column:1 / -1;font-size:10.5px;color:#66786E;line-height:1.45}
+.gdo .gdirection{font-size:10.5px;color:#66786E;line-height:1.45}
 
 `;
 
@@ -1567,7 +1568,9 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
   const d = vsMinDelta(m);
   const t = minsUntil(m, now);
   const when = b === "live" ? "in play" : b === "done" ? "finished" : b === "cx" ? "cancelled" : `in ${fmtDur(t)}`;
-  const ac = autoCancels(m) && b === "soon" ? minsToDeadline(m, now) : null;
+  /* THE CHIP FOLLOWS showsDeadline, NOT "is it armed". A match 25 players over its minimum carried
+   * a countdown before this — see the model. */
+  const ac = showsDeadline(m, now) ? minsToDeadline(m, now) : null;
   const mgr = m.manager ? [m.manager.firstName, m.manager.lastName].filter(Boolean).join(" ").trim() : "";
   /* THE FULL NAME, NEVER TRUNCATED. "Moncho P..." and "Chama🔥 r..." were what the old 96px cell
    * produced. Initials are stripped of non-letters first so an emoji in a name cannot become one. */
@@ -1588,7 +1591,10 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
       <div className="gm">
         <div className="n">
           <s data-testid="gday-name">{m.name}</s>
-          {ac != null && ac > 0 && <span className="gtag hot" data-testid="gday-cancels">cancels in {fmtDur(ac)}</span>}
+          {/* PAST THE DEADLINE IT READS "now" RATHER THAN VANISHING — a chip that disappears at the
+              moment the thing becomes true is the wrong way round, and it would also break the
+              chip/banner agreement, since the banner does not stop at zero either. */}
+          {ac != null && <span className="gtag hot" data-testid="gday-cancels">{ac > 0 ? `cancels in ${fmtDur(ac)}` : "cancels now"}</span>}
           {/* THE "MORE FAKE" CHIP WAS HERE AND IS GONE. It fired when fake exceeded real, which
               on a real board is almost exactly the set of rows already styled red — and the spots
               cell two columns over says the same thing with the actual numbers
@@ -1646,13 +1652,12 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
  * THE FACTS ROW IS THREE DISCRETE STATS separated by hairlines, each a bold number over a muted
  * label. Collapsing it back into "3 real, 9 minimum, 11 of 14 fake" is the thing not to do.
  */
-function AlertBanner({ m, now, pending, pendingFakes, pending3h, onStep, onStepFakes, onStep3h,
-  onSave, onSaveFakes, onSave3h, onOpen, onChat, saveState, canEdit, stepperReason }: {
-  m: ApiMatch; now: number; pending: number | null; pendingFakes: number | null; pending3h: number | null;
+function AlertBanner({ m, now, pending, pendingSpots, onStep, onStepSpots,
+  onSave, onSaveSpots, onOpen, onChat, saveState, canEdit, stepperReason }: {
+  m: ApiMatch; now: number; pending: number | null; pendingSpots: number | null;
   onStep: (id: number, d: number) => void;
-  onStepFakes: (id: number, d: number) => void;
-  onStep3h: (id: number, d: number) => void;
-  onSave: (id: number) => void; onSaveFakes: (id: number) => void; onSave3h: (id: number) => void;
+  onStepSpots: (id: number, d: number) => void;
+  onSave: (id: number) => void; onSaveSpots: (id: number) => void;
   onOpen: (id: number) => void; onChat: (id: number) => void;
   saveState?: { s: "saving" | "landed" | "failed" | "unknown"; msg: string };
   canEdit: boolean; stepperReason: string | null;
@@ -1664,26 +1669,15 @@ function AlertBanner({ m, now, pending, pendingFakes, pending3h, onStep, onStepF
   const shortNow = Math.max(0, shownMin - real);
   const ac = minsToDeadline(m, now);
   const minsToKick = minsUntil(m, now);
-  const savedFakes = fakeCount(m);
-  const shownFakes = pendingFakes ?? savedFakes;
-  const fakesMoved = pendingFakes != null && pendingFakes !== savedFakes;
-  /* THE BAND IN FORCE, live off the countdown, so the label moves as the match crosses a boundary. */
-  const bandNow = markInForce(minsToKick / 60);
-  /* THE 3h CONTROL IN FAKES. The rung is stored; the operator reads and writes the fake count it
-   * produces. pending3h holds a RUNG, so it is converted for display and back on the way out —
-   * the ladder translation stays in the model and never reaches the label. */
-  const saved3h = Number(m.fakeSpotLeft3h ?? 0);
-  const shown3h = pending3h ?? saved3h;
-  const fakesAt3h = fakesFor(cap, shown3h, real);
-  const rungMoved = pending3h != null && pending3h !== saved3h;
-  /* WHICH LATER RUNGS THIS CHANGE WOULD HAVE TO RAISE - computed for the note, from the same
-   * helper that builds the write, so the note cannot describe a different write. */
-  const laterRaised = fakesWriteDiff(
-    { fakeSpotLeft36h: Number(m.fakeSpotLeft36h ?? 0), fakeSpotLeft24h: Number(m.fakeSpotLeft24h ?? 0),
-      fakeSpotLeft12h: Number(m.fakeSpotLeft12h ?? 0), fakeSpotLeft6h: Number(m.fakeSpotLeft6h ?? 0),
-      fakeSpotLeft3h: Number(m.fakeSpotLeft3h ?? 0) },
-    cap, real, minsToKick / 60, shownFakes,
-  ).laterRaised;
+  /* THE RUNG IN FORCE — the value the one control steps, read from hours-to-kickoff. */
+  const ladder: Ladder = {
+    fakeSpotLeft36h: Number(m.fakeSpotLeft36h ?? 0), fakeSpotLeft24h: Number(m.fakeSpotLeft24h ?? 0),
+    fakeSpotLeft12h: Number(m.fakeSpotLeft12h ?? 0), fakeSpotLeft6h: Number(m.fakeSpotLeft6h ?? 0),
+    fakeSpotLeft3h: Number(m.fakeSpotLeft3h ?? 0),
+  };
+  const savedSpots = spotsLeftNow(ladder, minsToKick / 60);
+  const shownSpots = pendingSpots ?? savedSpots;
+  const spotsMoved = pendingSpots != null && pendingSpots !== savedSpots;
 
   /* THE HEADLINE FOLLOWS THE PENDING VALUE. Stepping the minimum below the real count turns
    * "is 6 players short" into "clears its minimum at 3" — the operator sees the consequence of the
@@ -1747,75 +1741,52 @@ function AlertBanner({ m, now, pending, pendingFakes, pending3h, onStep, onStepF
             onClick={(e) => { stop(e); onStep(m.id, 1); }}>+</button>
         </span>
 
-        {/* ── B. BOTH CONTROLS ARE IN FAKES ────────────────────────────────────────────────────
-         * Fakes and spots-shown-as-left are inverses (fake = capacity − rung − real), so putting
-         * one control in each unit made the same lever at two points in time read as two unrelated
-         * settings. Both speak fakes now; the ladder translation stays entirely in the model.
+        {/* ── ONE FAKE CONTROL, AND IT STEPS THE VALUE THAT PERSISTS ────────────────────────────
+         * SPOTS-SHOWN-AS-LEFT IS STORED; the fake count is derived from it and DRIFTS as real
+         * players join. A stepper on a drifting number reads as a save that came undone — set
+         * 5 fakes, two people sign up, and it says 3 with nothing having gone wrong. So the control
+         * steps the rung and shows the fake count as a read-out beside it.
          *
-         * B2. THE BAND IS NAMED. "Fakes now" writes whichever rung is in force by hours-to-kickoff
-         * and nothing said which — a match 7.5 hours out is writing the 12h band and the operator
-         * could not know it. Derived from the live countdown, so it moves as the match crosses a
-         * boundary. */}
-        <span className="gstep" data-testid="gday-fakestep"
-          title={`Fake spots are derived from the "most spots shown as left" settings. This writes the ${bandNow}-hour band and every later one, so the count cannot creep back up.`}>
-          <span className="glab">Fakes now <i data-testid="gday-band">· {bandNow}h band</i></span>
-          <button type="button" className="gsb" data-testid="gday-fake-down" aria-label="Remove a fake spot"
-            disabled={!canEdit || shownFakes <= 0}
-            onClick={(e) => { stop(e); onStepFakes(m.id, -1); }}>−</button>
-          <b data-testid="gday-fake-value">{shownFakes}</b>
-          <button type="button" className="gsb" data-testid="gday-fake-up" aria-label="Add a fake spot"
-            disabled={!canEdit || shownFakes >= Math.max(0, cap - real)}
-            onClick={(e) => { stop(e); onStepFakes(m.id, 1); }}>+</button>
+         * ONE CONTROL, NOT TWO. Setting a different value for the 3h band than for now is no longer
+         * possible from the banner — accepted deliberately; the full ladder stays in the editor. */}
+        <span className="gstep" data-testid="gday-spotstep"
+          title="How many spots the match shows as left, now and through to kickoff. Fewer spots shown means more fake spots.">
+          <span className="glab">Spots left now</span>
+          <button type="button" className="gsb" data-testid="gday-spots-down" aria-label="Show fewer spots left"
+            disabled={!canEdit || shownSpots <= 0}
+            onClick={(e) => { stop(e); onStepSpots(m.id, -1); }}>−</button>
+          <b data-testid="gday-spots-value">{shownSpots}</b>
+          <button type="button" className="gsb" data-testid="gday-spots-up" aria-label="Show more spots left"
+            disabled={!canEdit || shownSpots >= Math.max(0, cap - real)}
+            onClick={(e) => { stop(e); onStepSpots(m.id, 1); }}>+</button>
+          {/* READ-ONLY. What the setting does to the match, not a second thing to adjust. */}
+          <i className="gtrail" data-testid="gday-spots-fakes">· {fakesFor(cap, shownSpots, real)} fake</i>
         </span>
-
-        {/* B4. INSIDE THREE HOURS the band in force IS the 3h band, so the two controls are the
-         * same number and two steppers moving together is a lie about there being two settings.
-         * One control, and the label above already says "3h band". */}
-        {bandNow !== 3 && (
-          <span className="gstep" data-testid="gday-rungstep"
-            title="Fake spots from three hours before kickoff. Set this after 'Fakes now' if you want fewer at the end.">
-            <span className="glab">Fakes at 3h</span>
-            <button type="button" className="gsb" data-testid="gday-rung-down" aria-label="Remove a fake spot at three hours"
-              disabled={!canEdit || fakesAt3h <= 0}
-              onClick={(e) => { stop(e); onStep3h(m.id, -1); }}>−</button>
-            <b data-testid="gday-rung-value">{fakesAt3h}</b>
-            <button type="button" className="gsb" data-testid="gday-rung-up" aria-label="Add a fake spot at three hours"
-              disabled={!canEdit || fakesAt3h >= Math.max(0, cap - real)}
-              onClick={(e) => { stop(e); onStep3h(m.id, 1); }}>+</button>
-          </span>
-        )}
 
         {/* ONE SAVE, FOR WHICHEVER VALUE MOVED. Green only when the minimum change actually clears
             the shortfall - an adjustment is not a rescue. */}
-        {(moved || fakesMoved || rungMoved) && (
+        {(moved || spotsMoved) && (
           <button type="button" className={"gpri gsave" + (moved && shortNow === 0 ? " ok" : "")}
-            data-testid={moved ? "gday-save-min" : fakesMoved ? "gday-save-fakes" : "gday-save-rung"}
+            data-testid={moved ? "gday-save-min" : "gday-save-spots"}
             data-clears={moved ? (shortNow === 0 ? "1" : "0") : null}
             disabled={saveState?.s === "saving"}
             title={moved
               ? (shortNow === 0
                 ? `Sets the minimum to ${shownMin}, which ${real} real players already meet — this prevents the auto-cancel.`
                 : `Sets the minimum to ${shownMin}. Still ${shortNow} short of ${real} real players, so the auto-cancel will still fire.`)
-              : fakesMoved
-                ? fakesWriteNote(shownFakes, laterRaised)
-                : `Sets the fake spots from three hours before kickoff to ${fakesAt3h}. Does not change "Fakes now".`}
-            onClick={(e) => { stop(e); if (moved) onSave(m.id); else if (fakesMoved) onSaveFakes(m.id); else onSave3h(m.id); }}>
+              : `Holds ${shownSpots} spot${shownSpots === 1 ? "" : "s"} showing as left through to kickoff.`}
+            onClick={(e) => { stop(e); if (moved) onSave(m.id); else onSaveSpots(m.id); }}>
             {saveState?.s === "saving" ? "Saving…"
               : moved ? `Save min ${shownMin}`
-              : fakesMoved ? `Save ${shownFakes} fake${shownFakes === 1 ? "" : "s"}`
-              : `Save ${fakesAt3h} fake${fakesAt3h === 1 ? "" : "s"} at 3h`}
+              : `Save ${shownSpots} left`}
           </button>
         )}
-        {fakesMoved && laterRaised.length > 0 && (
-          <span className="gladdernote" data-testid="gday-ladder-note">{fakesWriteNote(shownFakes, laterRaised)}</span>
-        )}
-        {/* B3. THE COUPLING IS ONE-DIRECTIONAL AND THAT IS THE POINT. Fakes now sets every later
-            band (the anti-reinflate rule), so the 3h figure follows it and nobody adjusts both.
-            Fakes at 3h moves nothing else — which is the real use case: keep a match looking busy
-            while it can still sell, then strip it bare before it cancels. */}
-        {bandNow !== 3 && (
+        {/* ONE SENTENCE, STATING WHAT PERSISTS. The old pair needed a paragraph explaining which
+            control fed which; one control needs one line. */}
+        {spotsMoved && (
           <span className="gdirection" data-testid="gday-direction">
-            Changing fakes now also sets every later band. Set the 3h figure after if you want fewer at the end.
+            Holds {shownSpots} spot{shownSpots === 1 ? "" : "s"} showing as left through to kickoff.
+            Fakes come off automatically as real players join.
           </span>
         )}
         {saveState && saveState.s !== "saving" && (

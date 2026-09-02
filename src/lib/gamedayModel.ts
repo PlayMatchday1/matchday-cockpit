@@ -485,6 +485,27 @@ export function passesStrip(m: ApiMatch, now: number, key: StripKey | null): boo
  * Everything else that is short is a ROW, and the Needs attention tile is how you ask for the list.
  */
 
+/**
+ * THE ONE CONDITION UNDER WHICH A DEADLINE IS SURFACED AT ALL — chip, banner, tooltip, anywhere.
+ *
+ * IT USED TO BE "auto-cancel is armed", and that turned a warning into wallpaper: on a real board
+ * most rows are armed, so most rows carried a countdown, including matches 25 players OVER their
+ * minimum that were never going to cancel. When most rows carry the warning, the ones that matter
+ * stop standing out.
+ *
+ * A DEADLINE IS ONLY A DEADLINE IF THE MATCH WOULD ACTUALLY MISS IT. Short on REAL players (fakes
+ * do not count toward the minimum — proven on staging), and armed. A match with no minimum can
+ * never be short, so it never shows one.
+ *
+ * IT IS A LIVE CONDITION, NOT A DECISION. If real players drop back below the minimum the chip
+ * returns; if they rise above it, it goes. Nothing is latched.
+ *
+ * EVERY SURFACE ROUTES THROUGH THIS so the chip and the banner cannot disagree — a match with no
+ * chip must never appear as a banner, and that is true by construction rather than by review.
+ */
+export const showsDeadline = (m: ApiMatch, now: number): boolean =>
+  atRisk(m, now) && autoCancels(m);
+
 /** Minutes before the auto-cancel deadline at which a short match earns a banner unasked. */
 export const BANNER_LEAD_MINUTES = 90;
 
@@ -498,8 +519,9 @@ export const BANNER_LEAD_MINUTES = 90;
  */
 export function bannerUrgent(m: ApiMatch, now: number, isToday: boolean): boolean {
   if (!isToday) return false;
-  if (!atRisk(m, now)) return false;
-  if (!autoCancels(m)) return false;   // no deadline means no decision point
+  /* THE SAME PREDICATE THE CHIP USES. The banner is a STRICT SUBSET of the chip: everything that
+   * banners also chips, so "no chip but a banner" is not a state this can produce. */
+  if (!showsDeadline(m, now)) return false;
   return minsToDeadline(m, now) <= BANNER_LEAD_MINUTES;
 }
 

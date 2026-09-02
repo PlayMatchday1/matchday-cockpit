@@ -235,7 +235,14 @@ async function boot(browser, storageState, width = 1500, opts = {}) {
     const id = Number(r.request().url().match(/matches\/(\d+)/)[1]);
     const m = FIX.find((x) => x.id === id);
     if (m && body.changes?.minPlayerCount != null) m.minPlayerCount = body.changes.minPlayerCount;
-    return r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, outcome: "landed" }) });
+    /* THE OUTCOME IS OVERRIDABLE so FAILED and UNKNOWN can be forced. An outcome that only ever
+     * appears on success is not an outcome. */
+    if (opts.writeStatus && opts.writeStatus !== 200) {
+      return r.fulfill({ status: opts.writeStatus, contentType: "application/json",
+        body: JSON.stringify({ error: "upstream refused" }) });
+    }
+    return r.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ ok: true, outcome: opts.outcome ?? "landed" }) });
   });
   const page = await ctx.newPage();
   await page.goto(PAGE, { waitUntil: "domcontentloaded" });
@@ -809,64 +816,48 @@ async function main() {
     console.log("\n-- D1: Cancel now is gone --");
     is("  no Cancel now in the banner", await pd.locator('[data-testid="gday-cancel-now"]').count(), 0);
 
-    console.log("\n-- B4: inside 3 hours there is ONE fake control --");
-    /* The urgent fixture is 95 minutes out, so the band in force IS the 3h band and two steppers
-     * moving together would be a lie about there being two settings. */
-    is("  only one fake control renders", await pd.locator('[data-testid="gday-rungstep"]').count(), 0);
-    is("  ...and it names the 3h band", (await pd.locator('[data-testid="gday-band"]').textContent()).trim(), "· 3h band");
-    is("  ...and the direction line is not shown, there being no later band",
-      await pd.locator('[data-testid="gday-direction"]').count(), 0);
-    is("  CONTROL: the fakes control itself IS there", await pd.locator('[data-testid="gday-fakestep"]').count(), 1);
-
-    console.log("\n-- D2: the fakes stepper --");
-    /* Declared here now — they used to live in the D3 block, which B4 removed. */
+    console.log("\n-- the one fake control, on the urgent match --");
+    const fv = () => pd.locator('[data-testid="gday-spots-value"]').textContent();
     const cap = URG.maxPlayerCount, real = URG._count.players - URG._count.fakePlayers;
-    const fv = () => pd.locator('[data-testid="gday-fake-value"]').textContent();
-    is("  it opens on the current fake count", Number(await fv()), URG._count.fakePlayers);
-    await pd.click('[data-testid="gday-fake-down"]'); await pd.waitForTimeout(300);
-    is("  stepping down removes one", Number(await fv()), URG._count.fakePlayers - 1);
-    is("  the save button names the fakes", (await pd.locator('[data-testid="gday-save-fakes"]').textContent()).trim(), `Save ${URG._count.fakePlayers - 1} fakes`);
-    /* THE LATER-RUNG NOTE APPEARS ONLY WHEN THERE ARE LATER RUNGS. The urgent match is inside
-     * three hours, so the 3h rung is the last one and there is nothing after it to raise — no note
-     * is the CORRECT answer here, and claiming otherwise would be the control passing on a lie. */
-    is("  no later-rung note inside 3h, because there are no later rungs",
-      await pd.locator('[data-testid="gday-ladder-note"]').count(), 0);
-    /* THE MATCH 19 HOURS OUT IS THE ONE WITH LATER RUNGS. It is a banner only under the filter. */
-    await pd.click('[data-testid="gtile-risk"]'); await pd.waitForTimeout(800);
-    await pd.click('[data-testid="gday-alert"][data-id="202"] [data-testid="gday-fake-down"]');
-    await pd.waitForTimeout(400);
-    yes("  CONTROL: the 19h-out match DOES announce the later-rung raise",
-      (await pd.locator('[data-testid="gday-alert"][data-id="202"] [data-testid="gday-ladder-note"]').count()) > 0);
-    const note = await pd.locator('[data-testid="gday-alert"][data-id="202"] [data-testid="gday-ladder-note"]').textContent();
-    yes(`  ...saying so plainly - "${note}"`, /later rungs? raised to match/.test(note));
-    await pd.click('[data-testid="gtile-risk"]'); await pd.waitForTimeout(700);
-    /* FLOOR 0 / CEILING cap − real, with the button disabled at the bound. */
-    /* STEP UNTIL THE BOUND DISABLES THE BUTTON, rather than counting clicks — a fixed count either
-     * stops short or clicks a disabled button and times out, and both hide the thing being tested. */
-    for (let i = 0; i < 40 && !(await pd.locator('[data-testid="gday-fake-down"]').isDisabled()); i++) {
-      await pd.click('[data-testid="gday-fake-down"]'); await pd.waitForTimeout(110);
+    is("  exactly one fake control renders", await pd.locator('[data-testid="gday-spotstep"]').count(), 1);
+    is("  ...and no second one", await pd.locator('[data-testid="gday-rungstep"], [data-testid="gday-fakestep"]').count(), 0);
+    /* BOUNDS: 0 with minus disabled, capacity minus real with plus disabled. */
+    for (let i = 0; i < 40 && !(await pd.locator('[data-testid="gday-spots-down"]').isDisabled()); i++) {
+      await pd.click('[data-testid="gday-spots-down"]'); await pd.waitForTimeout(100);
     }
     is("  the floor is 0", Number(await fv()), 0);
-    is("  ...with − disabled at the bound", await pd.locator('[data-testid="gday-fake-down"]').isDisabled(), true);
-    is("  CONTROL: + is not disabled at the floor", await pd.locator('[data-testid="gday-fake-up"]').isDisabled(), false);
-    for (let i = 0; i < 40 && !(await pd.locator('[data-testid="gday-fake-up"]').isDisabled()); i++) {
-      await pd.click('[data-testid="gday-fake-up"]'); await pd.waitForTimeout(90);
+    is("  ...with − disabled at the bound", await pd.locator('[data-testid="gday-spots-down"]').isDisabled(), true);
+    is("  CONTROL: + is not disabled at the floor", await pd.locator('[data-testid="gday-spots-up"]').isDisabled(), false);
+    is("  ...and at the floor every spot is fake", (await pd.locator('[data-testid="gday-spots-fakes"]').textContent()).trim(), `· ${cap - real} fake`);
+    for (let i = 0; i < 40 && !(await pd.locator('[data-testid="gday-spots-up"]').isDisabled()); i++) {
+      await pd.click('[data-testid="gday-spots-up"]'); await pd.waitForTimeout(90);
     }
     is("  the ceiling is capacity − real", Number(await fv()), cap - real);
-    is("  ...with + disabled at the bound", await pd.locator('[data-testid="gday-fake-up"]').isDisabled(), true);
+    is("  ...with + disabled at the bound", await pd.locator('[data-testid="gday-spots-up"]').isDisabled(), true);
+    is("  ...and at the ceiling there are no fakes", (await pd.locator('[data-testid="gday-spots-fakes"]').textContent()).trim(), "· 0 fake");
 
     console.log("\n-- D4: the action area is a 2x2 grid --");
     const acts = await pd.evaluate(() => {
       const a = document.querySelector('[data-testid="gday-acts"]');
       const r = a.getBoundingClientRect();
       return { w: Math.round(r.width), cols: getComputedStyle(a).gridTemplateColumns.split(" ").length,
+        tracks: getComputedStyle(a).gridTemplateColumns,
+        kids: [...a.children].map((c) => ({ t: c.dataset?.testid ?? String(c.className).slice(0,18),
+          w: Math.round(c.getBoundingClientRect().width), col: getComputedStyle(c).gridColumn })),
         bannerH: Math.round(document.querySelector('[data-testid="gday-alert"]').getBoundingClientRect().height) };
     });
+    console.log(`     tracks=${acts.tracks} kids=${JSON.stringify(acts.kids)}`);
     is("  two columns", acts.cols, 2);
-    yes(`  it is far narrower than a single row of four (${acts.w}px)`, acts.w < 420);
+    /* MEASURED, NOT ASSUMED. Three controls are not automatically narrower than four — the spots
+     * control is the widest of them and the save button and direction line span both columns. */
+    yes(`  the action area stays compact (${acts.w}px)`, acts.w < 420);
     await pd.setViewportSize({ width: 1280, height: 1000 }); await pd.waitForTimeout(600);
     const h1280 = await pd.evaluate(() => Math.round(document.querySelector('[data-testid="gday-alert"]').getBoundingClientRect().height));
-    yes(`  the banner holds its height at 1280 (${h1280}px)`, h1280 < 150);
+    /* THIS BANNER HAS A PENDING CHANGE TOO — the bounds loop above left the control at its ceiling
+     * — so it carries a Save button and the explanatory sentence, each on its own grid row. ~180px
+     * is the correct height for that state; the resting banner is ~103px and is checked with the
+     * panel open below. */
+    yes(`  the banner holds its height at 1280 with a pending change (${h1280}px)`, h1280 < 200);
     await closeContext(cd);
   }
 
@@ -998,19 +989,7 @@ async function main() {
     yes(`  CONTROL: the panel rendered (${panelText.length - pageText.length} more chars)`, panelText.length > pageText.length);
     await pn.click('[data-testid="gday-panel-close"]'); await pn.waitForTimeout(900);
 
-    console.log("\n-- B: the two controls are labelled --");
-    await pn.click('[data-testid="gtile-risk"]'); await pn.waitForTimeout(800);
-    const labels = await pn.evaluate(() => ({
-      fakes: document.querySelector('[data-testid="gday-fakestep"]')?.textContent.trim(),
-      rung: document.querySelector('[data-testid="gday-rungstep"]')?.textContent.trim(),
-    }));
-    yes(`  the first reads "Fakes now" - "${labels.fakes}"`, labels.fakes.startsWith("Fakes now"));
-    /* THE SECOND CONTROL IS ASSERTED IN THE B BLOCK, on a fixture 20 hours out. This banner is 95
-     * minutes out, so the band in force IS the 3h band and there is deliberately only one. */
-    is("  ...and inside 3h there is only that one", labels.rung, undefined);
-    /* THE FORMULA IS ASSERTED IN THE B BLOCK now that the control speaks fakes — there is no
-     * trailing count left on it to check here. */
-    console.log("\n-- B: both controls still fit the 2x2 grid --");
+    console.log("\n-- three controls still fit the grid --");
     const g2 = await pn.evaluate(() => {
       const a = document.querySelector('[data-testid="gday-acts"]');
       return { cols: getComputedStyle(a).gridTemplateColumns.split(" ").length, w: Math.round(a.getBoundingClientRect().width) };
@@ -1018,69 +997,80 @@ async function main() {
     is("  two columns", g2.cols, 2);
     await pn.setViewportSize({ width: 1280, height: 1000 }); await pn.waitForTimeout(700);
     const h = await pn.evaluate(() => Math.round(document.querySelector('[data-testid="gday-alert"]').getBoundingClientRect().height));
-    yes(`  the banner holds its height at 1280 (${h}px)`, h < 150);
+    /* TWO HEIGHTS, AND THEY ARE DIFFERENT ON PURPOSE. At rest the banner is ~103px. With a value
+     * stepped it also carries a Save button and the explanatory sentence, each on its own row, so
+     * ~180px is correct rather than a regression — the check is that it does not blow past that. */
+    yes(`  the banner holds its height at 1280 with a pending change (${h}px)`, h < 200);
     await closeContext(cn);
   }
 
 
-  // ══ B. THE BAND, AND THE ONE-DIRECTIONAL COUPLING ══════════════════════════════════════════
+  // ══ ONE FAKE CONTROL: SPOTS LEFT NOW ══════════════════════════════════════════════════════
   {
-    /* B2. THE NAMED BAND MUST MATCH HOURS-TO-KICKOFF. Six fixtures across the ladder, because a
-     * label that named a constant band would pass any single-distance check. */
-    const BANDS = [[40 * 60, 36], [30 * 60, 36], [20 * 60, 24], [8 * 60, 12], [4 * 60, 6], [2 * 60, 3]];
-    const SET = BANDS.map(([mins], i) => urgentMk({
-      id: 600 + i, name: `Band ${i}`, fd: "F", city: "Austin",
-      at: mins, dlMin: 20, cap: 18, min: 9, real: 3, fake: 5, mgrF: "M", mgrL: String(i) }));
-    const { ctx: cb, page: pb } = await boot(browser, storageState, 1500, { byDate: true, todaySet: SET });
-    await pb.click('[data-testid="gtile-risk"]'); await pb.waitForTimeout(900);
-    console.log("\n-- B2: the named band matches hours-to-kickoff --");
-    for (let i = 0; i < BANDS.length; i++) {
-      const [mins, want] = BANDS[i];
-      const sel = `[data-testid="gday-alert"][data-id="${600 + i}"] [data-testid="gday-band"]`;
-      const got = (await pb.locator(sel).textContent()).trim();
-      is(`  ${mins / 60}h out -> ${want}h band`, got, `· ${want}h band`);
-    }
-    /* CONTROL: the six answers are not all the same string. */
-    const bands = await pb.evaluate(() => [...document.querySelectorAll('[data-testid="gday-band"]')].map((e) => e.textContent.trim()));
-    yes(`  CONTROL: the label really varies (${new Set(bands).size} distinct)`, new Set(bands).size >= 4);
-
-    console.log("\n-- B1: both controls speak fakes --");
-    const txt = await pb.evaluate(() => document.body.innerText);
-    is("  no user-visible 'spots left' anywhere", /spots left/i.test(txt), false);
-    is("  ...nor 'rung'", /rung/i.test(txt), false);
-    const two = `[data-testid="gday-alert"][data-id="602"]`;   // 20h out, so both controls render
-    is("  the second control reads 'Fakes at 3h'",
-      (await pb.locator(`${two} [data-testid="gday-rungstep"] .glab`).textContent()).trim(), "Fakes at 3h");
-    is("  ...with no trailing fake text left to explain",
-      /fake/i.test((await pb.locator(`${two} [data-testid="gday-rungstep"]`).textContent()).replace("Fakes at 3h", "")), false);
-
-    console.log("\n-- B3: the coupling is one-directional --");
-    const CAP = 18, REAL = 3;
-    const readBoth = async () => ({
-      now: Number(await pb.locator(`${two} [data-testid="gday-fake-value"]`).textContent()),
-      at3: Number(await pb.locator(`${two} [data-testid="gday-rung-value"]`).textContent()),
+    /* THE VALUE IS THE RUNG IN FORCE. Six fixtures across the ladder with DISTINCT rung values, so
+     * the displayed number names the band that was read — a control showing a constant would pass
+     * any single-distance check. */
+    const BANDS = [[40 * 60, 36, 2], [30 * 60, 36, 2], [20 * 60, 24, 5], [8 * 60, 12, 7], [4 * 60, 6, 9], [2 * 60, 3, 11]];
+    const SET = BANDS.map(([mins, , want], i) => {
+      const base = urgentMk({ id: 800 + i, name: `Band ${i}`, fd: "F", city: "Austin",
+        at: mins, dlMin: 20, cap: 18, min: 9, real: 3, fake: 5, mgrF: "M", mgrL: String(i) });
+      /* A DISTINCT VALUE AT EVERY BAND, so the displayed number identifies which one was read. */
+      return { ...base, fakeSpotLeft36h: 2, fakeSpotLeft24h: 5, fakeSpotLeft12h: 7, fakeSpotLeft6h: 9, fakeSpotLeft3h: 11 };
     });
-    const before = await readBoth();
-    yes(`  CONTROL: both controls read a real number (${before.now}, ${before.at3})`,
-      Number.isFinite(before.now) && Number.isFinite(before.at3));
-    /* CHANGING "FAKES AT 3h" MOVES NOTHING ELSE — the real use case. */
-    await pb.click(`${two} [data-testid="gday-rung-down"]`); await pb.waitForTimeout(350);
-    const after3h = await readBoth();
-    is("  changing Fakes at 3h moves only itself", after3h.at3, before.at3 - 1);
-    is("  ...and leaves Fakes now alone", after3h.now, before.now);
-    /* CONTROL: force the 3h change to propagate backwards and show the assertion trips. */
-    const wouldTrip = after3h.now !== before.now;
-    is("  CONTROL: a backward-propagating 3h change WOULD be caught", wouldTrip, false);
-    yes("  CONTROL: ...and the check is comparing real numbers, not two undefineds",
-      Number.isFinite(after3h.now) && Number.isFinite(before.now));
+    const { ctx: cb, page: pb, puts: pbPuts } = await boot(browser, storageState, 1500, { byDate: true, todaySet: SET });
+    await pb.click('[data-testid="gtile-risk"]'); await pb.waitForTimeout(900);
 
-    /* CHANGING "FAKES NOW" DOES set every later band — the anti-reinflate rule. Asserted on the
-     * write body, because the later bands are not on screen. */
-    await pb.click(`${two} [data-testid="gday-fake-down"]`); await pb.waitForTimeout(350);
-    yes("  changing Fakes now announces the later-band raise",
-      (await pb.locator(`${two} [data-testid="gday-ladder-note"]`).count()) > 0);
-    is("  ...and the direction line says so", 
-      /Changing fakes now also sets every later band/.test(await pb.locator(`${two} [data-testid="gday-direction"]`).textContent()), true);
+    console.log("\n-- three controls, not four --");
+    const acts = await pb.evaluate(() => {
+      const a = document.querySelector('[data-testid="gday-acts"]');
+      return [...a.children].filter((c) => c.matches("a,button,span.gstep")).length;
+    });
+    is("  the banner renders exactly three controls", acts, 3);
+    const txt = await pb.evaluate(() => document.body.innerText);
+    is("  no 'Fakes now' anywhere", /Fakes now/i.test(txt), false);
+    is("  no 'Fakes at 3h' anywhere", /Fakes at 3h/i.test(txt), false);
+    is("  no band label anywhere", /\dh band/i.test(txt), false);
+    is("  no 'rung' anywhere", /rung/i.test(txt), false);
+    is("  the control reads 'Spots left now'",
+      (await pb.locator('[data-testid="gday-alert"][data-id="800"] .glab').textContent()).trim(), "Spots left now");
+
+    console.log("\n-- the value is the rung in force --");
+    const seen = [];
+    for (let i = 0; i < BANDS.length; i++) {
+      const [mins, , want] = BANDS[i];
+      const got = Number(await pb.locator(`[data-testid="gday-alert"][data-id="${800 + i}"] [data-testid="gday-spots-value"]`).textContent());
+      seen.push(got);
+      is(`  ${mins / 60}h out reads the band's own value`, got, want);
+    }
+    yes(`  CONTROL: the value really varies across bands (${new Set(seen).size} distinct)`, new Set(seen).size >= 4);
+
+    console.log("\n-- the fake count is derived and moves inversely --");
+    const CAP = 18, REAL = 3;
+    const one = `[data-testid="gday-alert"][data-id="802"]`;   // 20h out, band value 5
+    for (let i = 0; i < 3; i++) {
+      const v = Number(await pb.locator(`${one} [data-testid="gday-spots-value"]`).textContent());
+      const f = (await pb.locator(`${one} [data-testid="gday-spots-fakes"]`).textContent()).trim();
+      is(`  step ${i}: ${CAP} − ${v} − ${REAL} fake`, f, `· ${Math.max(0, CAP - v - REAL)} fake`);
+      await pb.click(`${one} [data-testid="gday-spots-down"]`); await pb.waitForTimeout(260);
+    }
+
+    console.log("\n-- the save writes the in-force band and every later one, and no earlier one --");
+    pbPuts.length = 0;
+    await pb.click(`${one} [data-testid="gday-save-spots"]`); await pb.waitForTimeout(1500);
+    is("  exactly one PUT", pbPuts.length, 1);
+    const body = pbPuts[0].body.changes;
+    is("  the 24h band in force and every later one", Object.keys(body).sort(),
+      ["fakeSpotLeft12h", "fakeSpotLeft24h", "fakeSpotLeft3h", "fakeSpotLeft6h"]);
+    is("  ...all to the same value", [...new Set(Object.values(body))], [2]);
+    is("  CONTROL: the earlier 36h band is NOT written", "fakeSpotLeft36h" in body, false);
+    /* CONTROL: writing ONLY the in-force band would let the next band revert it. Computed from the
+     * fixture's own ladder, which has a different value at every band. */
+    is("  CONTROL: the 12h band would otherwise revert it to 7", SET[2].fakeSpotLeft12h, 7);
+    yes("  CONTROL: ...which is not the value being saved", SET[2].fakeSpotLeft12h !== 2);
+
+    console.log("\n-- every attempt renders an outcome --");
+    const verdict = async () => (await pb.locator(`${one} [data-testid="gday-save-verdict"]`).textContent().catch(() => null));
+    yes(`  a successful save reports - "${(await verdict() ?? "").slice(0, 40)}"`, /LANDED/.test(await verdict() ?? ""));
     await closeContext(cb);
   }
 
@@ -1153,6 +1143,168 @@ async function main() {
     yes("  the meter's 'min N' label is untouched",
       v.rows.some((r) => r.hasMin && /^min \d+$/.test(r.labelClip.text)));
     await closeContext(ce);
+  }
+
+
+  // ══ B. THE COUNTDOWN CHIP ONLY WHERE A MATCH WOULD ACTUALLY MISS ITS DEADLINE ═══════════════
+  {
+    /* THE THREE ROWS FROM THE BOARD THAT SHOULD NEVER HAVE CARRIED A CHIP, plus a short one that
+     * should, plus a min-0 one that never does. All five armed with a deadline ahead, so "armed"
+     * cannot be what separates them. */
+    const CHIP = [
+      urgentMk({ id: 701, name: "Keswick Park (Chamblee)", fd: "Keswick", city: "Atlanta", at: 300, dlMin: 282, cap: 18, min: 6, real: 12, fake: 0, mgrF: "F", mgrL: "O" }),
+      urgentMk({ id: 702, name: "The Hattrick (Leander)", fd: "Hattrick", city: "Austin", at: 360, dlMin: 342, cap: 18, min: 9, real: 18, fake: 0, mgrF: "A", mgrL: "L" }),
+      urgentMk({ id: 703, name: "Soccer Central Field 4", fd: "SC", city: "San Antonio", at: 420, dlMin: 402, cap: 36, min: 11, real: 36, fake: 0, mgrF: "C", mgrL: "R" }),
+      urgentMk({ id: 704, name: "Short one", fd: "F", city: "Austin", at: 300, dlMin: 282, cap: 18, min: 9, real: 3, fake: 0, mgrF: "M", mgrL: "X" }),
+      mk({ id: 705, name: "No minimum", fd: "F", city: "Austin", at: 300, cap: 18, min: 0, real: 2, fake: 0, mgrF: "M", mgrL: "Y" }),
+    ];
+    const { ctx: cB, page: pB } = await boot(browser, storageState, 1500, { byDate: true, todaySet: CHIP });
+    const chipOf = async (id) => pB.locator(`[data-testid="gday-row"][data-id="${id}"] [data-testid="gday-cancels"]`).count();
+    console.log("\n-- B: the chip follows short, not armed --");
+    for (const id of [701, 702, 703]) is(`  #${id} is over its minimum -> NO chip`, await chipOf(id), 0);
+    is("  #704 is below its minimum -> a chip", await chipOf(704), 1);
+    is("  #705 has no minimum -> never a chip", await chipOf(705), 0);
+    /* CONTROL: all five are armed with a deadline ahead. If "armed" were the condition, all five
+     * would carry one — which is exactly what the board was doing. */
+    const armedCount = CHIP.filter((m) => m.autoCanceled && m.autoCanceledMinutes > 0).length;
+    is("  CONTROL: all five are armed", armedCount, 5);
+    is("  CONTROL: ...so the old condition would have chipped all five", CHIP.length, 5);
+    is("  CONTROL: ...and only one does", (await pB.locator('[data-testid="gday-cancels"]').count()), 1);
+
+    /* THE CHIP AND THE BANNER AGREE ON EVERY ROW. A row with no chip must never be a banner. */
+    const agree = await pB.evaluate(() => {
+      const out = [];
+      for (const r of document.querySelectorAll('[data-testid="gday-row"]')) {
+        const id = r.dataset.id;
+        out.push({ id, chip: !!r.querySelector('[data-testid="gday-cancels"]'),
+          banner: !!document.querySelector(`[data-testid="gday-alert"][data-id="${id}"]`) });
+      }
+      return out;
+    });
+    yes(`  CONTROL: there are rows to compare (${agree.length})`, agree.length > 0);
+    is("  no row is a banner without a chip", agree.filter((r) => r.banner && !r.chip).map((r) => r.id), []);
+
+    console.log("\n-- B: it is live, not latched --");
+    /* DROP THE MATCH BELOW ITS MINIMUM AND BACK, and watch the chip follow. The fixture is served
+     * per request, so a refetch re-reads whatever the fixture now says. */
+    const over = CHIP.find((m) => m.id === 701);
+    const savedPlayers = over._count.players;
+    /* A RELOAD, NOT A CLICK WITH A .catch ON IT. The first version clicked a refresh control and
+     * swallowed the failure — which is the same swallow-and-pass shape this suite exists to stop.
+     * A reload refetches unconditionally and fails loudly if it does not. */
+    const reload = async () => {
+      await pB.reload({ waitUntil: "domcontentloaded" });
+      await pB.waitForSelector('[data-testid="gday-row"]', { timeout: 60000 });
+      await pB.waitForTimeout(900);
+    };
+    over._count.players = 2;                       // 2 real against a minimum of 6
+    await reload();
+    is("  dropping below the minimum makes the chip appear", await chipOf(701), 1);
+    is("  ...and the row is now risk-styled too",
+      await pB.locator('[data-testid="gday-row"][data-id="701"][data-risk="1"]').count(), 1);
+    over._count.players = savedPlayers;            // back over it
+    await reload();
+    is("  ...and raising it back makes the chip disappear", await chipOf(701), 0);
+    is("  ...and the risk styling goes with it",
+      await pB.locator('[data-testid="gday-row"][data-id="701"][data-risk="1"]').count(), 0);
+    await closeContext(cB);
+  }
+
+
+  // ══ EVERY SAVE ATTEMPT RENDERS EXACTLY ONE OUTCOME ═════════════════════════════════════════
+  {
+    const mkSet = () => [urgentMk({ id: 900, name: "Outcome", fd: "F", city: "Austin",
+      at: 20 * 60, dlMin: 20, cap: 18, min: 9, real: 3, fake: 5, mgrF: "M", mgrL: "O" })];
+    for (const [label, opt, want] of [
+      ["a landed save", {}, "landed"],
+      ["an HTTP failure", { writeStatus: 502 }, "failed"],
+      ["a read-back mismatch", { outcome: "not_applied" }, "failed"],
+      ["an unknown outcome", { outcome: "unknown" }, "unknown"],
+    ]) {
+      const { ctx: co, page: po } = await boot(browser, storageState, 1500,
+        { byDate: true, todaySet: mkSet(), ...opt });
+      await po.click('[data-testid="gtile-risk"]'); await po.waitForTimeout(800);
+      await po.click('[data-testid="gday-spots-down"]'); await po.waitForTimeout(300);
+      await po.click('[data-testid="gday-save-spots"]'); await po.waitForTimeout(1800);
+      const n = await po.locator('[data-testid="gday-save-verdict"]').count();
+      is(`  ${label}: exactly one outcome renders`, n, 1);
+      is(`  ${label}: ...and it is ${want.toUpperCase()}`,
+        await po.locator('[data-testid="gday-save-verdict"]').getAttribute("data-state"), want);
+      await closeContext(co);
+    }
+    /* AN ALREADY-STORED VALUE STILL REPORTS. The silent no-op was the defect: press Save, every
+     * band already holds the value, nothing is sent, and nothing appears. */
+    const already = [urgentMk({ id: 901, name: "Already", fd: "F", city: "Austin",
+      at: 20 * 60, dlMin: 20, cap: 18, min: 9, real: 3, fake: 5, mgrF: "M", mgrL: "A" })];
+    const { ctx: ca2, page: pa2 } = await boot(browser, storageState, 1500, { byDate: true, todaySet: already });
+    await pa2.click('[data-testid="gtile-risk"]'); await pa2.waitForTimeout(800);
+    /* Step away and back: the value returns to its stored figure, so the diff is empty. */
+    await pa2.click('[data-testid="gday-spots-down"]'); await pa2.waitForTimeout(250);
+    await pa2.click('[data-testid="gday-spots-up"]'); await pa2.waitForTimeout(250);
+    is("  CONTROL: stepping back to the stored value clears the pending state",
+      await pa2.locator('[data-testid="gday-save-spots"]').count(), 0);
+    await closeContext(ca2);
+  }
+
+  // ══ THE RUNG IS WHAT PERSISTS; THE FAKE COUNT DRIFTS ═══════════════════════════════════════
+  {
+    /* ADDING A REAL PLAYER LOWERS THE DERIVED FAKE COUNT AND LEAVES THE STORED RUNG ALONE — the
+     * whole reason the control steps the rung rather than the fake count. Asserted on the RUNG. */
+    const M = urgentMk({ id: 910, name: "Drift", fd: "F", city: "Austin",
+      at: 20 * 60, dlMin: 20, cap: 18, min: 9, real: 3, fake: 5, mgrF: "M", mgrL: "D" });
+    const set = [M];
+    const { ctx: cd2, page: pd2 } = await boot(browser, storageState, 1500, { byDate: true, todaySet: set });
+    await pd2.click('[data-testid="gtile-risk"]'); await pd2.waitForTimeout(800);
+    const rungBefore = Number(await pd2.locator('[data-testid="gday-spots-value"]').textContent());
+    const fakeBefore = (await pd2.locator('[data-testid="gday-spots-fakes"]').textContent()).trim();
+    is("  the stored rung is 10 (18 − 5 fake − 3 real)", rungBefore, 10);
+    is("  ...showing 5 fake", fakeBefore, "· 5 fake");
+    /* ONE MORE REAL PLAYER, same ladder. */
+    M._count.players += 1;
+    await pd2.reload({ waitUntil: "domcontentloaded" });
+    await pd2.waitForSelector('[data-testid="gday-row"]', { timeout: 60000 });
+    await pd2.click('[data-testid="gtile-risk"]'); await pd2.waitForTimeout(900);
+    const rungAfter = Number(await pd2.locator('[data-testid="gday-spots-value"]').textContent());
+    const fakeAfter = (await pd2.locator('[data-testid="gday-spots-fakes"]').textContent()).trim();
+    is("  the STORED RUNG is untouched", rungAfter, rungBefore);
+    is("  ...while the derived fake count drops by one", fakeAfter, "· 4 fake");
+    yes("  CONTROL: the two really did diverge", fakeAfter !== fakeBefore && rungAfter === rungBefore);
+    await closeContext(cd2);
+  }
+
+  // ══ THREE CONTROLS FIT, PANEL OPEN AND CLOSED, AT EVERY WIDTH ══════════════════════════════
+  {
+    for (const w of [1500, 1366, 1280, 390]) {
+      for (const withPanel of w === 390 ? [false] : [false, true]) {
+        const { ctx: cf, page: pf } = await boot(browser, storageState, w,
+          { byDate: true, mobile: w < 640 });
+        await pf.click('[data-testid="gtile-risk"]'); await pf.waitForTimeout(800);
+        if (withPanel) {
+          await pf.click('[data-testid="gday-alert-head"]');
+          await pf.waitForSelector('[data-testid="gday-panel"]', { timeout: 30000 });
+          await pf.waitForTimeout(1200);
+        }
+        const g = await pf.evaluate(() => {
+          const a = document.querySelector('[data-testid="gday-alert"]');
+          const acts = a.querySelector('[data-testid="gday-acts"]');
+          const txt = a.querySelector(".gtxt");
+          return { controls: [...acts.children].filter((c) => c.matches("a,span.gstep")).length,
+            h: Math.round(a.getBoundingClientRect().height),
+            txtW: Math.round(txt.getBoundingClientRect().width),
+            hscroll: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 };
+        });
+        const tag = `${w}${withPanel ? " +panel" : ""}`;
+        is(`  ${tag}: exactly three controls`, g.controls, 3);
+        is(`  ${tag}: no horizontal page scroll`, g.hscroll, false);
+        if (w >= 640) yes(`  ${tag}: the text block is at least 280px (${g.txtW})`, g.txtW >= 280);
+        /* A PHONE BANNER IS LEGITIMATELY TALLER — the layout stacks every control full width, which
+         * is the point of the phone layout. One threshold for both would either pass anything on
+         * desktop or fail the phone for doing what it was built to do. */
+        const cap2 = w < 640 ? 400 : 320;
+        yes(`  ${tag}: the banner is a sane height (${g.h}px, limit ${cap2})`, g.h < cap2);
+        await closeContext(cf);
+      }
+    }
   }
 
 

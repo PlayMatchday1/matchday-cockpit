@@ -12,8 +12,8 @@
 import { readFileSync } from "node:fs";
 import {
   realFillPct, atRisk, meter, dayBucket, DAY_BUCKETS, FILTERING_TILES,
-  realCount, fakeCount, capacity, short, shortBy, vsMinDelta, passesStrip, inCities,
-  bannerUrgent, defaultBanners, riskSubtitle, BANNER_LEAD_MINUTES, DEFAULT_BANNER_CAP, type ApiMatch,
+  realCount, fakeCount, capacity, short, shortBy, vsMinDelta, passesStrip, inCities, minsToDeadline,
+  bannerUrgent, defaultBanners, riskSubtitle, BANNER_LEAD_MINUTES, DEFAULT_BANNER_CAP, showsDeadline, type ApiMatch,
 } from "../src/lib/gamedayModel";
 
 let pass = 0; const fails: string[] = [];
@@ -168,6 +168,49 @@ console.log("\nCITY AND BUCKET FILTERS COMPOSE — neither widens the other");
   is("  'fill' passes everything", compose([], "fill"), [1, 2, 3]);
 }
 
+console.log("\nA DEADLINE IS ONLY SURFACED WHEN THE MATCH WOULD ACTUALLY MISS IT");
+{
+  const armed = (o: any) => ({ ...mk(o), autoCanceled: true, autoCanceledMinutes: o.acm } as ApiMatch);
+  /* THE THREE ROWS FROM THE BOARD THAT SHOULD NEVER HAVE CARRIED A CHIP. Each is comfortably over
+   * its minimum with auto-cancel armed and a deadline hours ahead. */
+  const over1 = armed({ id: 1, players: 12, fakePlayers: 0, cap: 18, min: 6, offsetMin: 300, acm: 20 });   // +6
+  const over2 = armed({ id: 2, players: 18, fakePlayers: 0, cap: 18, min: 9, offsetMin: 360, acm: 20 });   // +9
+  const over3 = armed({ id: 3, players: 36, fakePlayers: 0, cap: 36, min: 11, offsetMin: 420, acm: 20 });  // +25
+  const short1 = armed({ id: 4, players: 3, fakePlayers: 0, cap: 18, min: 9, offsetMin: 300, acm: 20 });
+  is("a match +6 over its minimum surfaces no deadline", showsDeadline(over1, NOW), false);
+  is("  …nor +9", showsDeadline(over2, NOW), false);
+  is("  …nor +25", showsDeadline(over3, NOW), false);
+  is("a match BELOW its minimum does", showsDeadline(short1, NOW), true);
+  /* CONTROL: all four are armed with a deadline ahead, so "armed" is not what separates them. */
+  is("  control: all four are armed", [over1, over2, over3, short1].map((m) => m.autoCanceled), [true, true, true, true]);
+  is("  control: …and all four still have a deadline ahead",
+    [over1, over2, over3, short1].every((m) => minsToDeadline(m, NOW) > 0), true);
+  is("  control: the OLD condition would have shown all four",
+    [over1, over2, over3, short1].filter((m) => m.autoCanceled === true).length, 4);
+
+  /* NOT ARMED MEANS NO DEADLINE, however short. */
+  is("an unarmed short match surfaces none", showsDeadline({ ...short1, autoCanceled: false } as ApiMatch, NOW), false);
+  /* A MATCH WITH NO MINIMUM CAN NEVER BE SHORT. */
+  is("a min-0 match never surfaces one", showsDeadline(armed({ id: 5, players: 0, fakePlayers: 0, cap: 18, min: 0, offsetMin: 300, acm: 20 }), NOW), false);
+  /* FAKES DO NOT COUNT toward the minimum — 3 real behind 11 fakes is still short. */
+  is("fakes do not lift a match out of it", showsDeadline(armed({ id: 6, players: 14, fakePlayers: 11, cap: 18, min: 9, offsetMin: 300, acm: 20 }), NOW), true);
+  /* IT IS LIVE, NOT LATCHED: the same match either side of the minimum. */
+  const at9 = armed({ id: 7, players: 9, fakePlayers: 0, cap: 18, min: 9, offsetMin: 300, acm: 20 });
+  const at8 = armed({ id: 7, players: 8, fakePlayers: 0, cap: 18, min: 9, offsetMin: 300, acm: 20 });
+  is("at the minimum: no deadline", showsDeadline(at9, NOW), false);
+  is("one below it: a deadline", showsDeadline(at8, NOW), true);
+
+  /* THE BANNER IS A STRICT SUBSET — a row with no chip can never be a banner. */
+  /* ONE OF THEM MUST ACTUALLY BANNER or the subset check below is vacuous — every fixture above is
+   * 300+ minutes out with a 20-minute lead, so none is inside the 90-minute banner window. The
+   * control caught that; this is the fixture it demanded. */
+  const urgentShort = armed({ id: 8, players: 3, fakePlayers: 0, cap: 18, min: 9, offsetMin: 95, acm: 72 }); // deadline +23
+  const all = [over1, over2, over3, short1, at9, at8, urgentShort];
+  is("every banner also surfaces a deadline",
+    all.filter((m) => bannerUrgent(m, NOW, true) && !showsDeadline(m, NOW)).map((m) => m.id), []);
+  is("  control: …and at least one of them banners", all.some((m) => bannerUrgent(m, NOW, true)), true);
+}
+
 console.log("\nA BANNER IS AN INTERRUPT, SO MOST SHORT MATCHES DO NOT GET ONE");
 {
   /* Nine banners about tomorrow pushed the match table off the screen. The default view now
@@ -219,16 +262,27 @@ console.log("\nCANCEL NOW IS OFF THE BANNER, AND THE FAKE CONTROLS WRITE RUNGS")
    * where a destructive action belongs — behind the editor, not beside a stepper. */
   const editor = readFileSync("src/components/MatchPanel.tsx", "utf8");
   is("  control: cancelling a match still exists in the editor", /cancel/i.test(editor), true);
-  /* D2/D3. A fake count is DERIVED - a control that writes one writes to nothing. */
-  is("  the fakes stepper writes a rung DIFF, not a fake count", /fakesWriteDiff\(ladderOf\(m\)/.test(code), true);
+  /* ONE FAKE CONTROL, AND IT STEPS THE VALUE THAT PERSISTS. The two-control version stepped the
+   * DERIVED fake count, which drifts as real players join — a save that reads as undone. */
+  is("  the one control writes a rung DIFF, not a fake count", /spotsLeftWriteDiff\(ladderOf\(m\)/.test(code), true);
   is("  control: no raw fake count is ever sent", /changes: \{ *fakePlayers/.test(code), false);
-  is("  ...and it raises every later rung", /marksFrom/.test(readFileSync("src/lib/fakeLadder.ts", "utf8")), true);
-  is("  the 3h rung control writes only that field", /\{ fakeSpotLeft3h: target \}/.test(code), true);
+  is("  ...and it writes every later band", /marksFrom/.test(readFileSync("src/lib/fakeLadder.ts", "utf8")), true);
+  is("  control: ...and never an earlier one", /marksFrom\(mark\)/.test(readFileSync("src/lib/fakeLadder.ts", "utf8")), true);
+  is("  control: the two-control version is gone", /stepFakes|step3h|pendingFakes|pending3h/.test(code), false);
+  /* EVERY ATTEMPT RENDERS AN OUTCOME, including one that was already stored. A silent no-op is
+   * indistinguishable from a failure to the person who pressed the button. */
+  is("  an empty diff still reports LANDED", /already stored/.test(code), true);
+  is("  control: ...rather than returning silently", /if \(Object\.keys\(diff\)\.length === 0\) return;/.test(code), false);
   is("  the verdict is judged on the RUNG read-back, not the fake count",
     /THE VERDICT IS JUDGED ON THE RUNG, NOT ON THE FAKE COUNT/.test(board), true);
   is("  one attempt, never a retry", /retry|attempt\s*\+\+/.test(code), false);
   /* D4. Four controls in one row measured 608px and crushed the banner text. */
-  is("  the action area is a 2x2 grid", /\.gdo \.gacts\{display:grid;grid-template-columns:auto auto/.test(board), true);
+  is("  the action area is a two-column grid",
+    /\.gdo \.gacts\{display:grid;grid-template-columns:minmax\(0,auto\) minmax\(0,auto\)/.test(board), true);
+  /* minmax(0,…) IS LOAD-BEARING: a spanning item still sizes the tracks it spans, and the
+   * explanatory sentence pushed the grid from 308px to 498px until it was taken out of intrinsic
+   * sizing. */
+  is("  ...and the explanatory line cannot size the tracks", /\.gdo \.gdirection\{[^}]*width:0;min-width:100%/.test(board), true);
   /* THE DEAD STATE IS GONE. */
   is("  the all/att/upc filter state is removed", /useState<BoardFilter>/.test(code), false);
   is("  control: ...and so is the dead SnapRow component", /function SnapRow\(/.test(code), false);

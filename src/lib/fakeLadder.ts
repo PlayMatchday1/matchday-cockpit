@@ -97,3 +97,36 @@ export function fakesWriteNote(targetFakes: number, laterRaised: RungMark[]): st
   if (laterRaised.length === 0) return base;
   return `${base} · later rung${laterRaised.length === 1 ? "" : "s"} raised to match`;
 }
+
+
+/**
+ * THE ONE FAKE CONTROL'S WRITE: set the spots-shown-as-left to `targetRung`, now and through to
+ * kickoff.
+ *
+ * SPOTS-SHOWN-AS-LEFT IS THE VALUE THAT PERSISTS. The fake count is derived from it and drifts as
+ * real players join, so a stepper on the fake count reads as a save that came undone — the operator
+ * sets 5 fakes, two people sign up, and it says 3. The rung does not move; only its consequence
+ * does. So the control steps the rung and DISPLAYS the consequence.
+ *
+ * IN FORCE AND EVERY LATER BAND, never an earlier one. Earlier bands are already past and writing
+ * them changes nothing; later ones would re-inflate the value the moment the match crossed them,
+ * which is the whole reason this is a single save rather than five.
+ */
+export function spotsLeftWriteDiff(
+  ladder: Ladder, hoursToKickoff: number, targetRung: number,
+): { diff: Ladder; mark: RungMark; marks: RungMark[] } {
+  const mark = markInForce(hoursToKickoff);
+  const marks = marksFrom(mark);
+  const diff: Ladder = {};
+  for (const m of marks) {
+    const k = rungKey(m);
+    /* ONLY WHAT CHANGED — the diff IS the request body. A band already at the target is left out. */
+    if (Number(ladder[k] ?? 0) === targetRung) continue;
+    diff[k] = targetRung;
+  }
+  return { diff, mark, marks };
+}
+
+/** The value the control shows: the rung in force right now. */
+export const spotsLeftNow = (ladder: Ladder, hoursToKickoff: number): number =>
+  Number(ladder[rungKey(markInForce(hoursToKickoff))] ?? 0);
