@@ -31,7 +31,24 @@
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { selectAll } from "@/lib/supabasePagination";
 import { chicagoYmd, wallClockYmd, weekKey, lastWeeks, weeksInMonthRange, weekEnd, addDays, MAX_WEEKS } from "@/lib/weekBuckets";
-import { cityFromAbbr } from "@/lib/cityMap";
+/* ONE CITY VOCABULARY, AND IT IS THE ONE MONTHLY ALREADY USES.
+ *
+ * This route used to group registrations on the RAW `preferable_city_name` and play on
+ * `cityFromAbbr(city_identifier)`. Those are two different vocabularies and they do not meet:
+ *
+ *     registrations keyed   "Dallas / Fort Worth"   play keyed   "Dallas"
+ *     registrations keyed   "Oklahoma City"         play keyed   "OKC"
+ *
+ * so Dallas and OKC read 0 registrations in every bucket while their real 1,074 and 483 sat in the
+ * payload under keys the panel never lists. Measured over Mar–Aug 2026: 1,802 of 9,482
+ * registrations — 19% — attributed to no listed city.
+ *
+ * `normalizeDeclared` and `normalizeMatchCity` are the two halves growthFromViews has always used,
+ * and they agree with each other by construction. cityFromAbbr is NOT interchangeable with
+ * normalizeMatchCity: it is backed by a second, older map that never got Warsaw, and it returns
+ * null for an unknown code where normalizeMatchCity falls back to the code itself. That difference
+ * alone was dropping 85 Warsaw spots and hiding the city completely. */
+import { normalizeDeclared, normalizeMatchCity, UNASSIGNED_CITY } from "@/lib/growthAnalytics";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -105,11 +122,13 @@ export async function GET(req: Request) {
       const w = weekKey(chicagoYmd(String(u.completed_sign_up_at)));
       if (!inAxis.has(w)) continue;
       regByWeek.set(w, (regByWeek.get(w) ?? 0) + 1);
-      const city = String(u.preferable_city_name ?? "").trim();
-      if (city) {
-        const m = regByWeekCity.get(city) ?? new Map<string, number>();
-        m.set(w, (m.get(w) ?? 0) + 1); regByWeekCity.set(city, m);
-      }
+      /* A REGISTRATION WITHOUT A CITY GETS A ROW, NOT A BIN. `if (city)` dropped it, and a
+       * dropped row is one the city table can never be reconciled against — the sum is short and
+       * nothing on the page says by how much. Zero rows land here today (0 of 9,482 in
+       * Mar–Aug 2026), which is exactly why it has to be built now rather than when it bites. */
+      const city = normalizeDeclared(u.preferable_city_name as string | null) ?? UNASSIGNED_CITY;
+      const m = regByWeekCity.get(city) ?? new Map<string, number>();
+      m.set(w, (m.get(w) ?? 0) + 1); regByWeekCity.set(city, m);
     }
 
     /* ── PLAY. Matches in the window give the DATE and the CITY; the roster gives who played.
@@ -133,7 +152,7 @@ export async function GET(req: Request) {
       const w = weekKey(wallClockYmd(String(m.start_date)));
       if (!inAxis.has(w)) continue;
       matchWeek.set(Number(m.api_id), w);
-      matchCity.set(Number(m.api_id), cityFromAbbr(String(m.city_identifier ?? "")) ?? "");
+      matchCity.set(Number(m.api_id), normalizeMatchCity(String(m.city_identifier ?? "")));
       matchField.set(Number(m.api_id), String(m.field_title ?? "").trim());
     }
 

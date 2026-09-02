@@ -22,6 +22,7 @@ import {
   type ArppPoint,
   CANONICAL_CITIES,
   UNKNOWN_CITY,
+  UNASSIGNED_CITY,
   monthKey,
   normalizeDeclared,
   normalizeMatchCity,
@@ -244,7 +245,7 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
 
   // ── city + field universe ────────────────────────────────────────────────────
   const declaredCitySet = new Set<string>();
-  for (const u of completedUsers) { const c = normalizeDeclared(u.declared_city_raw); if (c) declaredCitySet.add(c); }
+  for (const u of completedUsers) { declaredCitySet.add(normalizeDeclared(u.declared_city_raw) ?? UNASSIGNED_CITY); }
   const playLocCitySet = new Set<string>();
   const fieldCityMap = new Map<string, string>();
   for (const d of playDims) {
@@ -339,7 +340,12 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
     .sort((a, b) => b.spots - a.spots);
 
   const regByMonthCity = new Map<string, Map<string, number>>();
-  for (const u of completedUsers) { const city = normalizeDeclared(u.declared_city_raw); if (city) inc2(regByMonthCity, city, u.signup_month!); }
+  /* SAME RULE AS THE WEEKLY PATH. `if (city)` dropped a registration with no declared city, so the
+   * monthly city rows could not sum to the monthly overall series either. 0 rows land here today;
+   * the branch exists so the sum is a guarantee rather than a coincidence. */
+  for (const u of completedUsers) {
+    inc2(regByMonthCity, normalizeDeclared(u.declared_city_raw) ?? UNASSIGNED_CITY, u.signup_month!);
+  }
 
   const behaviorOverall = behaviorAxis.map<BehaviorPoint>((m) => ({
     m,

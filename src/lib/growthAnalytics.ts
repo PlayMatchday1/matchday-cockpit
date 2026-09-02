@@ -43,6 +43,16 @@ export const CANONICAL_CITIES = [
 // never spread across cities (DECISION 2).
 export const UNKNOWN_CITY = "Unknown city";
 
+/* A REGISTRATION WHOSE DECLARED CITY IS ABSENT. Deliberately NOT UNKNOWN_CITY: that bucket means
+ * "carried a city we could not map" and is an ATTRIBUTION outcome on the revenue and play axes.
+ * This one means "the player never told us", which is a different fact about a different field, and
+ * folding them together would make a row that cannot be acted on — you would not know whether to
+ * fix a mapping or chase a signup form.
+ *
+ * It exists so the city rows SUM to the overall series. Registrations with no city used to be
+ * dropped on both the weekly and monthly paths, which is a silent shortfall by construction. */
+export const UNASSIGNED_CITY = "Unassigned";
+
 // Free-text preferable_city_name → canonical. Anything unmapped (e.g. "New York
 // City", where MatchDay has no matches) is kept verbatim so it stays visible.
 const DECLARED_TO_CANONICAL: Record<string, string> = {

@@ -256,6 +256,173 @@ async function main() {
     await closeContext(ctx);
   }
 
+
+  // ══ CITY DETAIL MUST SUM TO THE OVERALL SERIES, EXACTLY ════════════════════════════════════
+  {
+    /* THE DEFECT. Registrations were grouped on the RAW preferable_city_name while play was
+     * grouped on cityFromAbbr(city_identifier) — "Dallas / Fort Worth" against "Dallas",
+     * "Oklahoma City" against "OKC". Dallas and OKC read 0 in all 27 buckets, Warsaw was missing
+     * entirely (cityFromAbbr has no WAW), and 1,802 of 9,482 registrations — 19% — belonged to no
+     * listed row.
+     *
+     * ONLY ADDITIVE METRICS CAN SUM. Registrations, spots and new players are one row per thing
+     * and add up across cities. TOTAL PLAYERS IS DISTINCT PEOPLE: someone who played in Austin and
+     * Houston is one person overall and two rows here, so the city rows SHOULD exceed the overall
+     * series and an exact-sum assertion on it would be wrong. It is asserted as >= instead. */
+    const { ctx, page } = await boot(browser, storageState, 1500);
+
+    const readRows = () => page.evaluate(() => {
+      const rows = [...document.querySelectorAll("#growthSummaryBody tr")];
+      return rows.map((tr) => {
+        const tds = [...tr.querySelectorAll("td")];
+        return {
+          name: tds[0].textContent.trim(),
+          cells: tds.slice(1, -2).map((td) => Number(td.textContent.replace(/[,%]/g, ""))),
+          total: Number(tds[tds.length - 2].textContent.replace(/[,%]/g, "")),
+        };
+      });
+    });
+    const pickMetric = async (label) => {
+      await page.selectOption('[data-testid="behavior-metric"]', { label });
+      await page.waitForTimeout(500);
+    };
+    const setView = async (v) => {
+      await page.click(`[data-value="${v}"]`);
+      await page.waitForTimeout(700);
+    };
+
+    // The overall series, per bucket, straight off Overall Matchday mode.
+    await setView("matchday");
+    const overall = Object.fromEntries((await readRows()).map((r) => [r.name, r]));
+
+    for (const gran of ["weekly", "monthly"]) {
+      if (gran === "monthly") {
+        await page.click('[data-testid="behavior-gran-monthly"]');
+        await page.waitForTimeout(900);
+        await setView("matchday");
+        const o = Object.fromEntries((await readRows()).map((r) => [r.name, r]));
+        Object.assign(overall, o);
+      }
+      console.log(`\n-- ${gran}: city rows sum to the overall series, exactly --`);
+      await setView("city");
+      for (const metric of ["Registrations", "Spots booked"]) {
+        await pickMetric(metric);
+        const rows = await readRows();
+        const ov = overall[metric];
+        const n = ov.cells.length;
+        const sums = Array.from({ length: n }, (_, i) => rows.reduce((a, r) => a + (r.cells[i] ?? 0), 0));
+        const mismatched = sums.map((v, i) => (v === ov.cells[i] ? null : { i, sum: v, overall: ov.cells[i] })).filter(Boolean);
+        is(`  ${metric}: every one of the ${n} buckets sums exactly`, mismatched, []);
+        is(`  ${metric}: the selected-period total sums exactly`,
+          rows.reduce((a, r) => a + r.total, 0), ov.total);
+        /* CONTROL: the sum check is proven able to fail. Drop the largest city and the same
+         * comparison must report a mismatch — otherwise "0 mismatched" is what a broken
+         * comparison returns just as readily as a correct one. */
+        const biggest = rows.slice().sort((a, b) => b.total - a.total)[0];
+        const short = sums.map((v, i) => v - (biggest.cells[i] ?? 0));
+        yes(`    CONTROL: removing ${biggest.name} DOES break the sum`,
+          short.some((v, i) => v !== ov.cells[i]),
+          "the comparison cannot detect a missing city — every exact-sum result above is worthless");
+        yes(`    CONTROL: the overall series is non-zero (${ov.total})`, ov.total > 0);
+        yes(`    CONTROL: there is more than one city row (${rows.length})`, rows.length > 3);
+      }
+      /* TOTAL PLAYERS IS NOT ADDITIVE, and the suite says so rather than asserting the wrong
+       * thing. Cross-city players make the row sum EXCEED the distinct overall count. */
+      await pickMetric("Total players");
+      const tp = await readRows();
+      const ovTp = overall["Total players"];
+      yes(`  Total players: rows sum >= overall (distinct people, not additive) — ${tp.reduce((a, r) => a + r.total, 0)} vs ${ovTp.total}`,
+        tp.reduce((a, r) => a + r.total, 0) >= ovTp.total);
+
+      console.log(`  -- ${gran}: the three cities that were lost --`);
+      await pickMetric("Registrations");
+      const rows = await readRows();
+      for (const c of ["Dallas", "OKC", "Warsaw"]) {
+        const r = rows.find((x) => x.name.replace(/^\d+\s*/, "").trim() === c);
+        yes(`    ${c} is listed`, !!r, `${c} is missing from ${rows.map((x) => x.name).join(", ")}`);
+        if (r) yes(`    …with a real figure, not zero (${r.total})`, r.total > 0);
+      }
+      /* CONTROL: these were the three that failed as STRINGS — DFW vs Dallas, OKC vs Oklahoma
+       * City, WAW vs Warsaw. A city that never had a naming problem must also still work. */
+      const austin = rows.find((x) => /Austin/.test(x.name));
+      yes(`    CONTROL: Austin, which never had a name mismatch, still reports (${austin?.total})`, (austin?.total ?? 0) > 0);
+    }
+
+    console.log("\n-- Field Detail sums to its overall series too --");
+    await page.click('[data-testid="behavior-gran-weekly"]');
+    await page.waitForTimeout(900);
+    await setView("matchday");
+    const ovW = Object.fromEntries((await readRows()).map((r) => [r.name, r]));
+    await setView("field");
+    await pickMetric("Spots booked");
+    const frows = await readRows();
+    const fsum = frows.reduce((a, r) => a + r.total, 0);
+    is("  Spots booked: field rows sum to the overall series exactly", fsum, ovW["Spots booked"].total);
+    const n2 = ovW["Spots booked"].cells.length;
+    const fbuckets = Array.from({ length: n2 }, (_, i) => frows.reduce((a, r) => a + (r.cells[i] ?? 0), 0));
+    is("  …and in every bucket", fbuckets.map((v, i) => (v === ovW["Spots booked"].cells[i] ? null : i)).filter((x) => x !== null), []);
+    yes(`  CONTROL: there are many field rows to sum (${frows.length})`, frows.length > 5);
+    yes("  CONTROL: dropping one field breaks it",
+      fsum - frows[0].total !== ovW["Spots booked"].total);
+    /* FIELD DETAIL OFFERS NO REGISTRATIONS, BY DESIGN — a registration carries a city but never a
+     * pitch. Asserted so the absence stays deliberate rather than becoming another silent zero. */
+    const opts = await page.evaluate(() => [...document.querySelectorAll('[data-testid="behavior-metric"] option')].map((o) => o.textContent));
+    is("  …and Field Detail still does not offer Registrations", opts.includes("Registrations"), false);
+    is("  CONTROL: …while City Detail does", await (async () => { await setView("city"); await page.waitForTimeout(500);
+      return page.evaluate(() => [...document.querySelectorAll('[data-testid="behavior-metric"] option')].map((o) => o.textContent).includes("Registrations")); })(), true);
+    await closeContext(ctx);
+  }
+
+  // ══ AN UNASSIGNED REGISTRATION GETS A ROW ══════════════════════════════════════════════════
+  {
+    /* ZERO ROWS HAVE NO CITY TODAY — 0 of 9,482 over Mar–Aug 2026 — so the live page cannot
+     * exercise this. The payload is replaced with one that HAS an Unassigned bucket, which tests
+     * the thing the browser is responsible for: that the row renders and is counted. The
+     * aggregation half is pinned in week-buckets-test.ts against the route's source. */
+    const ctx = await browser.newContext({ storageState, viewport: { width: 1500, height: 1000 } });
+    const AX = ["2026-08-03", "2026-08-10", "2026-08-17"];
+    const pt = (w, r) => ({ w, registrations: r, newPlayers: 0, totalPlayers: 0, spots: 0 });
+    await ctx.route("**/api/lifecycle/behavior-weekly**", (route) => route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({
+        axis: AX,
+        overall: [pt(AX[0], 30), pt(AX[1], 30), pt(AX[2], 30)],
+        byCity: {
+          Austin: [pt(AX[0], 10), pt(AX[1], 10), pt(AX[2], 10)],
+          Dallas: [pt(AX[0], 13), pt(AX[1], 13), pt(AX[2], 13)],
+          // THE RESIDUAL. 7 per week that belong to no city and must not disappear.
+          Unassigned: [pt(AX[0], 7), pt(AX[1], 7), pt(AX[2], 7)],
+        },
+        byField: {}, cities: ["Austin", "Dallas", "Unassigned"], fields: [],
+        window: { start: "2026-08", end: "2026-08", weeks: 3, dropped: 0, futureDropped: 0, today: "2026-08-25" },
+        reconcile: {}, generatedAt: "2026-08-25T12:00:00.000Z",
+      }),
+    }));
+    const page = await ctx.newPage();
+    await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('[data-testid="behavior-gran-weekly"]', { timeout: 120000 });
+    await page.click('[data-testid="behavior-gran-weekly"]');
+    await page.waitForSelector('[data-testid="behavior-col-head"]', { timeout: 120000 });
+    await page.click('[data-value="city"]');
+    await page.waitForTimeout(800);
+    await page.selectOption('[data-testid="behavior-metric"]', { label: "Registrations" });
+    await page.waitForTimeout(600);
+    const rows = await page.evaluate(() => [...document.querySelectorAll("#growthSummaryBody tr")].map((tr) => {
+      const tds = [...tr.querySelectorAll("td")];
+      return { name: tds[0].textContent.replace(/^\d+\s*/, "").trim(), total: Number(tds[tds.length - 2].textContent.replace(/,/g, "")) };
+    }));
+    console.log("\n-- a registration with no city is a visible row, not a silent shortfall --");
+    const un = rows.find((r) => r.name === "Unassigned");
+    yes("an Unassigned row is rendered", !!un, `rows were: ${rows.map((r) => r.name).join(", ")}`);
+    is("  …carrying its 21 registrations", un?.total, 21);
+    is("  …and the rows still sum to the overall 90", rows.reduce((a, r) => a + r.total, 0), 90);
+    // CONTROL: it is not merely present — it is LAST, and the real cities are still there.
+    is("  …sorted last, because it is a residual and not a market", rows[rows.length - 1].name, "Unassigned");
+    is("  CONTROL: the real cities are unaffected", rows.filter((r) => r.name !== "Unassigned").map((r) => r.name).sort(), ["Austin", "Dallas"]);
+    yes("  CONTROL: without it the sum would be short by exactly 21", 90 - (un?.total ?? 0) === 69);
+    await closeContext(ctx);
+  }
+
   await closeBrowser(browser);
   console.log(`\nbehavior-weekly: ${PASS} passed, ${FAIL} failed`);
   if (FAIL) { for (const f of fails) console.log(`  FAILED: ${f}`); process.exit(1); }

@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { GrowthData, BehaviorPoint } from "@/lib/growthAnalytics";
 import type { Period } from "./GlobalPeriod";
 import { METRIC_LABEL, networkSeries, metricValue, IS_RATE, type GridMetric } from "@/lib/growthMetricGrid";
+import { UNASSIGNED_CITY } from "@/lib/growthAnalytics";
 import { downloadCsv } from "./format";
 import styles from "./playerBehavior.module.css";
 import { supabase } from "@/lib/supabase";
@@ -287,17 +288,29 @@ export default function BehaviorPanel({
   const cmp = useMemo(() => lastTwoComplete(complete), [complete]);
   const partialIdx = complete.lastIndexOf(false);
 
-  // The play-markets IN THE SELECTED PERIOD: cities with any spots > 0 across the
-  // displayed months, sorted alphabetically. Scoping to the period (not all time)
-  // is what keeps declared-only / one-off markets out — e.g. NYC had a single
-  // match in 2025-10 (85 spots) but zero in Feb–Jul, and El Paso / New York City
-  // have no matches at all. For the default Feb–Jul period this is the seven
-  // established markets.
+  /* ── THE CITY LIST: ANY ACTIVITY IN THE PERIOD, NOT JUST PLAY ─────────────────────────────────
+   * THIS FILTER WAS `spots > 0` AND THAT IS WHY THE ROWS DID NOT SUM. A city with registrations
+   * and no matches — New York City (102) and El Paso (90) over Mar–Aug 2026 — was computed,
+   * returned in the payload, and then dropped on the way to the screen. The table showed seven
+   * cities totalling 7,680 under an overall series reading 9,482 and nothing accounted for the
+   * difference.
+   *
+   * The old rule was deliberate: it kept "declared-only markets" out of a list meant to show
+   * places MatchDay operates. That trade is now reversed on purpose. A market with a hundred
+   * signups and no pitch is a fact worth seeing, and a table whose rows do not add up to its own
+   * header teaches the reader to distrust every number on the page.
+   *
+   * A city qualifies on ANY metric being non-zero, not on spots alone. It is still scoped to the
+   * PERIOD, so a city that existed only in 2024 stays out of a 2026 window. */
   const cities = useMemo(() => {
     const inPeriod = new Set(months);
+    const active = (p: BehaviorPoint) =>
+      (p.spots ?? 0) > 0 || (p.registrations ?? 0) > 0 || (p.totalPlayers ?? 0) > 0 || (p.newPlayers ?? 0) > 0;
     return Object.keys(src.behaviorByCity)
-      .filter((c) => src.behaviorByCity[c].some((p) => inPeriod.has(p.m) && (p.spots ?? 0) > 0))
-      .sort((a, b) => a.localeCompare(b));
+      .filter((c) => src.behaviorByCity[c].some((p) => inPeriod.has(p.m) && active(p)))
+      /* UNASSIGNED SORTS LAST. It is a residual, not a market, and alphabetical order would file
+       * it between St. Louis and Warsaw as though it were one. */
+      .sort((a, b) => (a === UNASSIGNED_CITY ? 1 : b === UNASSIGNED_CITY ? -1 : 0) || a.localeCompare(b));
   }, [src.behaviorByCity, months]);
 
   const cityMode = view === "city";

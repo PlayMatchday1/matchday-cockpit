@@ -425,5 +425,67 @@ console.log("\nTHE WEEKLY PANEL AND ROUTE — the wiring behind the browser suit
   is("  the plot has a baseline", /\.baseline \{ stroke: #003326;/.test(CSS), true);
 }
 
+console.log("\nONE CITY VOCABULARY — the weekly path used to group on two");
+{
+  const rt = readFileSync("src/app/api/lifecycle/behavior-weekly/route.ts", "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const gv = readFileSync("src/lib/growthFromViews.ts", "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const panel = readFileSync("src/components/growth/BehaviorPanel.tsx", "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  /* THE CAUSE. Registrations were keyed on the RAW preferable_city_name and play on
+   * cityFromAbbr(city_identifier) — "Dallas / Fort Worth" against "Dallas", "Oklahoma City"
+   * against "OKC" — so 1,802 of 9,482 registrations belonged to no listed row. */
+  is("  weekly registrations are NORMALISED, not raw", /normalizeDeclared\(u\.preferable_city_name/.test(rt), true);
+  is("  control: the raw grouping is gone", /String\(u\.preferable_city_name \?\? ""\)\.trim\(\)/.test(rt), false);
+  is("  weekly play uses normalizeMatchCity", /normalizeMatchCity\(String\(m\.city_identifier/.test(rt), true);
+  /* cityFromAbbr IS NOT INTERCHANGEABLE with normalizeMatchCity. It is a second, older map that
+   * never received Warsaw and returns null for an unknown code where normalizeMatchCity falls back
+   * to the code. That difference alone dropped 85 Warsaw spots and hid the city entirely. */
+  is("  control: cityFromAbbr is no longer called in this route", /cityFromAbbr\(/.test(rt), false);
+  const cityMap = readFileSync("src/lib/cityMap.ts", "utf8");
+  const sched = readFileSync("src/lib/scheduleReconcile.ts", "utf8");
+  is("  control: cityFromAbbr's map genuinely still lacks Warsaw", /WAW/.test(cityMap), false);
+  is("  control: …while normalizeMatchCity's map has it", /WAW: "Warsaw"/.test(sched), true);
+  is("  control: …which is why the two are not interchangeable",
+    /return CITY_ABBR_TO_COCKPIT\[trimmed\] \?\? null;/.test(cityMap), true);
+
+  // BOTH PATHS USE THE SAME TWO NORMALISERS, or the vocabularies drift apart again.
+  is("  monthly uses the same declared normaliser", /normalizeDeclared\(u\.declared_city_raw\)/.test(gv), true);
+
+  /* A REGISTRATION WITH NO CITY IS A ROW, NOT A DROP. Both paths had `if (city)` and both were
+   * therefore short by construction. 0 rows land here today, which is the only reason nobody had
+   * seen it — the branch exists so the sum is a guarantee rather than a coincidence. */
+  is("  weekly buckets the city-less into Unassigned", /\?\? UNASSIGNED_CITY;/.test(rt), true);
+  is("  monthly does too", /normalizeDeclared\(u\.declared_city_raw\) \?\? UNASSIGNED_CITY/.test(gv), true);
+  is("  control: monthly no longer drops them", /const city = normalizeDeclared\(u\.declared_city_raw\); if \(city\) inc2/.test(gv), false);
+  is("  …and the monthly city INDEX knows about the bucket, or the row is computed and never shown",
+    /declaredCitySet\.add\(normalizeDeclared\(u\.declared_city_raw\) \?\? UNASSIGNED_CITY\)/.test(gv), true);
+
+  /* THE DISPLAY HALF. The panel listed only cities with spots > 0, so New York City (102) and
+   * El Paso (90) — registrations, no pitch — were computed, returned, and dropped on the way to
+   * the screen. That is what made MONTHLY short too: 9,269 against 9,460. */
+  is("  the city list qualifies on ANY metric, not spots alone",
+    /\(p\.spots \?\? 0\) > 0 \|\| \(p\.registrations \?\? 0\) > 0/.test(panel), true);
+  /* SCOPED TO THE CITY LIST, not to "any spots-only filter anywhere". The first version of this
+   * control matched the FIELD list, which filters on spots legitimately — a pitch with no spots is
+   * not a pitch anyone played at, and Field Detail carries no registrations to lose. A control
+   * that fires on the wrong subject is not a control. */
+  is("  control: the spots-only CITY filter is gone",
+    /behaviorByCity\[c\]\.some\(\(p\) => inPeriod\.has\(p\.m\) && \(p\.spots \?\? 0\) > 0\)/.test(panel), false);
+  is("  control: …while the FIELD list still filters on spots, deliberately",
+    /behaviorByField\[f\]\.points\.some\(\(p\) => inPeriod\.has\(p\.m\) && \(p\.spots \?\? 0\) > 0\)/.test(panel), true);
+  is("  Unassigned sorts last, being a residual and not a market", /a === UNASSIGNED_CITY \? 1 :/.test(panel), true);
+
+  const ga = readFileSync("src/lib/growthAnalytics.ts", "utf8");
+  is("  UNASSIGNED_CITY is defined once", (ga.match(/export const UNASSIGNED_CITY/g) ?? []).length, 1);
+  /* IT IS NOT UNKNOWN_CITY. That bucket means "carried a city we could not map" on the revenue and
+   * play axes; this one means "the player never told us". Folding them makes a row nobody can act
+   * on — you would not know whether to fix a mapping or chase a signup form. */
+  is("  control: …and is distinct from UNKNOWN_CITY", /export const UNKNOWN_CITY = "Unknown city";/.test(ga), true);
+  is("  control: …with different values", /UNASSIGNED_CITY = "Unassigned"/.test(ga), true);
+}
+
 console.log(`\nweek-buckets: ${pass} passed, ${fails.length} failed`);
 if (fails.length) { for (const f of fails) console.log(`  FAILED: ${f}`); process.exit(1); }
