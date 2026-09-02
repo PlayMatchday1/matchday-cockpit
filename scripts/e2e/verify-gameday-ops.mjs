@@ -118,11 +118,54 @@ const READ = () => {
   };
 };
 
-async function boot(browser, storageState, width = 1500) {
-  const ctx = await browser.newContext({ storageState, viewport: { width, height: 1000 } });
+/* ── DATE-AWARE FIXTURES ────────────────────────────────────────────────────────────────────────
+ * The banner rules turn on WHICH DATE the board is showing, so the intercept has to answer per
+ * date. TODAY gets one urgent match (deadline 23 minutes out) beside one that is short but
+ * 19 hours from its deadline - the pair that separates "the decision point has arrived" from
+ * "this day has not sold yet". TOMORROW gets nine short matches, none of them urgent. */
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const TODAY = ymd(new Date());
+const TOMORROW = ymd(new Date(Date.now() + 86400000));
+/* An urgent match: short, armed, and its deadline `dlMin` minutes away. autoCanceledMinutes is
+ * minutes BEFORE kickoff, so kickoff at +K with acm = K - dlMin puts the deadline at +dlMin. */
+const urgentMk = (o) => mk({ ...o, acm: o.at - o.dlMin });
+const TODAY_FIX = [
+  urgentMk({ id: 201, name: "Soccer Central Field 4", fd: "Soccer Central Complex", city: "San Antonio",
+    at: 95, dlMin: 23, cap: 18, min: 9, real: 3, fake: 11, mgrF: "Chama", mgrL: "rodriguez" }),
+  /* SHORT, BUT NINETEEN HOURS FROM ITS DEADLINE. Must NOT be a banner in the default view. */
+  urgentMk({ id: 202, name: "Late Night Kirkwood", fd: "Kirkwood", city: "St. Louis",
+    at: 1200, dlMin: 1140, cap: 18, min: 9, real: 2, fake: 0, mgrF: "Nate", mgrL: "B" }),
+  mk({ id: 203, name: "The Hattrick (Leander)", fd: "The Hattrick L.", city: "Austin", at: -30, cap: 18, min: 11, real: 16, fake: 2, mgrF: "Jorge Luis", mgrL: "Gonzalez" }),
+  mk({ id: 204, name: "Parmer - Field 1", fd: "Parmer Fields", city: "Austin", at: -200, cap: 18, min: 11, real: 18, fake: 0, mgrF: "Drea", mgrL: "M" }),
+];
+/* FIVE URGENT, to prove the cap of 3 and the "+2 more" line. */
+const TODAY_FIVE = [0, 1, 2, 3, 4].map((i) => urgentMk({
+  id: 300 + i, name: `Urgent ${i + 1}`, fd: "Field " + i, city: ["Austin", "Houston", "Dallas", "Austin", "Houston"][i],
+  at: 90 + i * 5, dlMin: 20 + i * 4, cap: 18, min: 9, real: 3, fake: 5, mgrF: "Mgr", mgrL: String(i) }));
+/* NINE SHORT MATCHES ON TOMORROW, spread across cities.
+ *
+ * EIGHT ARE FAR FROM THEIR DEADLINE. THE NINTH IS NOT, AND THAT ONE IS THE POINT: a match on
+ * TOMORROW'S board whose auto-cancel deadline is 30 minutes from NOW - possible because
+ * autoCanceledMinutes is minutes before kickoff and can be twenty hours. It passes the
+ * 90-minute test and fails only the isToday test, so it is the ONLY fixture that isolates that
+ * guard. Without it, removing `if (!isToday) return false` changes nothing and the control that
+ * is supposed to prove the guard works proves nothing instead. */
+const TOMO_FIX = Array.from({ length: 9 }, (_, i) => urgentMk({
+  id: 400 + i, name: `Tomorrow ${i + 1}`, fd: "Field " + i,
+  city: ["Austin", "Houston", "Dallas", "San Antonio", "Atlanta", "OKC", "St. Louis", "Austin", "Houston"][i],
+  at: 1200 + i * 10, dlMin: i === 8 ? 30 : 1140, cap: 18, min: 9, real: 2, fake: 1, mgrF: "Mgr", mgrL: String(i) }));
+
+async function boot(browser, storageState, width = 1500, opts = {}) {
+  const ctx = await browser.newContext({ storageState, viewport: { width, height: 1000 },
+    ...(opts.mobile ? { isMobile: true, hasTouch: true } : {}) });
   const puts = [];
-  await ctx.route("**/api/matchday/*/gameday*", (r) =>
-    r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matches: FIX }) }));
+  await ctx.route("**/api/matchday/*/gameday*", (r) => {
+    const date = new URL(r.request().url()).searchParams.get("date");
+    const body = opts.byDate
+      ? (date === TOMORROW ? TOMO_FIX : (opts.todaySet ?? TODAY_FIX))
+      : FIX;
+    return r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matches: body }) });
+  });
   /* THE STEPPER WRITE IS INTERCEPTED AND COUNTED, never forwarded. The assertion is about what we
    * SEND and what we do with the verdict - not about MatchDay. */
   await ctx.route("**/api/matchday/*/matches/*", (r) => {
@@ -362,6 +405,253 @@ async function main() {
   }
 
   await closeContext(ctx);
+
+  // ══ A. THE BANNERS ═════════════════════════════════════════════════════════════════════════
+  {
+    const { ctx: c2, page: p2 } = await boot(browser, storageState, 1500, { byDate: true });
+    console.log("\n-- A1/A3: today's default view banners only the urgent one --");
+    let v = await p2.evaluate(READ);
+    is("  exactly one banner in the default view", v.bannerCount, 1);
+    is("  ...and it is the match 23 minutes from its deadline", v.banner.id, 201);
+    /* THE PAIR THAT MAKES THIS MEAN SOMETHING. 202 is short by SEVEN real players - more short
+     * than 201 - and is not a banner, because its deadline is nineteen hours away. */
+    is("  CONTROL: the 19-hours-out match is NOT a banner",
+      await p2.locator('[data-testid="gday-alert"][data-id="202"]').count(), 0);
+    is("  CONTROL: ...but it IS on the board as a row",
+      await p2.locator('[data-testid="gday-row"][data-id="202"]').count(), 1);
+    is("  the table starts within the first screen",
+      await p2.evaluate(() => document.querySelector('[data-testid="snapshot"]').getBoundingClientRect().top < window.innerHeight), true);
+
+    console.log("\n-- A4: today's tile subtitle names the split --");
+    yes(`  reads "${v.tiles.risk.s}"`, /auto-cancels? in /.test(v.tiles.risk.s) && /still fillable/.test(v.tiles.risk.s));
+
+    console.log("\n-- A2: Needs attention shows banners and no rows --");
+    await p2.click('[data-testid="gtile-risk"]'); await p2.waitForTimeout(700);
+    v = await p2.evaluate(READ);
+    is("  every short match renders as a banner", v.bannerCount, 2);
+    is("  ...and no rows are drawn", v.rows.length, 0);
+    is("  ...the card is not drawn at all", await p2.locator('[data-testid="snapshot"]').count(), 0);
+    await p2.click('[data-testid="gtile-risk"]'); await p2.waitForTimeout(700);
+    v = await p2.evaluate(READ);
+    is("  clicking again returns rows", v.rows.length > 0, true);
+    is("  ...and the default banner set", v.bannerCount, 1);
+
+    console.log("\n-- A2: every other filter shows rows, never extra banners --");
+    for (const k of ["soon", "live"]) {
+      await p2.click(`[data-testid="gtile-${k}"]`); await p2.waitForTimeout(600);
+      const f = await p2.evaluate(READ);
+      is(`  ${k}: still only the default urgent banner`, f.bannerCount, 1);
+      await p2.click(`[data-testid="gtile-${k}"]`); await p2.waitForTimeout(500);
+    }
+
+    console.log("\n-- A1/A4/A5: tomorrow --");
+    await p2.click('[data-testid="day-next"]');
+    await p2.waitForFunction(() => document.querySelectorAll('[data-testid="gday-row"]').length === 9, null, { timeout: 40000 });
+    await p2.waitForTimeout(700);
+    v = await p2.evaluate(READ);
+    is("  nine short matches on tomorrow", v.rows.length, 9);
+    is("  ZERO banners in the default view", v.bannerCount, 0);
+    /* ...INCLUDING the one whose deadline is 30 minutes away. On a future date the deadline does
+     * not matter: there is nothing to decide about tomorrow tonight. */
+    is("  ...including the match whose deadline is 30 minutes from now",
+      await p2.locator('[data-testid="gday-alert"][data-id="408"]').count(), 0);
+    is("  CONTROL: that match is on the board as a row", await p2.locator('[data-testid="gday-row"][data-id="408"]').count(), 1);
+    is("  the table starts within the first screen",
+      await p2.evaluate(() => document.querySelector('[data-testid="snapshot"]').getBoundingClientRect().top < window.innerHeight), true);
+    is("  A4: the subtitle reads 'not yet at minimum'", v.tiles.risk.s, "not yet at minimum");
+    is("  CONTROL: ...and the tile still counts them", v.tiles.risk.v, "9");
+    const tomoChips = v.cityChips.filter((c) => c.name !== "all" && Number.isFinite(c.n));
+    is("  A5: no city chip is risk-styled on a future date", tomoChips.filter((c) => c.risk).map((c) => c.name), []);
+    yes(`  CONTROL: there are chips to have been styled (${tomoChips.length})`, tomoChips.length >= 5);
+
+    console.log("\n-- A2 on tomorrow --");
+    await p2.click('[data-testid="gtile-risk"]'); await p2.waitForTimeout(800);
+    v = await p2.evaluate(READ);
+    is("  all nine render as banners", v.bannerCount, 9);
+    is("  ...and no rows", v.rows.length, 0);
+    await p2.click('[data-testid="gtile-risk"]'); await p2.waitForTimeout(700);
+    is("  clicking again returns to no banners", (await p2.evaluate(READ)).bannerCount, 0);
+    await closeContext(c2);
+  }
+
+  // ══ A3: THE CAP OF THREE, AND THE +N LINE ══════════════════════════════════════════════════
+  {
+    const { ctx: c3, page: p3 } = await boot(browser, storageState, 1500, { byDate: true, todaySet: TODAY_FIVE });
+    const v = await p3.evaluate(READ);
+    console.log("\n-- A3: five qualifying, three shown --");
+    is("  exactly three banners", v.bannerCount, 3);
+    is("  ...soonest deadline first", await p3.evaluate(() =>
+      [...document.querySelectorAll('[data-testid="gday-alert"]')].map((a) => Number(a.dataset.id))), [300, 301, 302]);
+    is("  ...with a +2 more line", (await p3.locator('[data-testid="gday-more-risk"]').textContent()).trim(), "+2 more need attention");
+    await p3.click('[data-testid="gday-more-risk"]');
+    await p3.waitForTimeout(800);
+    const after = await p3.evaluate(READ);
+    is("  clicking it lands on the Needs attention filter", after.bannerCount, 5);
+    is("  ...and the tile is selected", await p3.locator('[data-testid="gtile-risk"]').getAttribute("data-on"), "1");
+    is("  ...and no rows are drawn", after.rows.length, 0);
+    await closeContext(c3);
+  }
+
+
+  // ══ B. MOBILE ══════════════════════════════════════════════════════════════════════════════
+  {
+    /* PHONE FIRST. Every assertion here is about a box the browser built, and none of them can be
+     * answered from the stylesheet: whether anything overflows 390px, whether a 44px target really
+     * measures 44px, whether the notch still has its label when the meter changed width. */
+    const OVER = () => {
+      const vw = document.documentElement.clientWidth;
+      const out = [];
+      for (const r of document.querySelectorAll('[data-testid="gday-row"]')) {
+        for (const el of r.querySelectorAll("*")) {
+          const b = el.getBoundingClientRect();
+          if (b.width > 0 && b.right > vw + 0.5) out.push([r.dataset.id, String(el.className).slice(0, 26), Math.round(b.right)]);
+        }
+      }
+      return { vw, out, hscroll: document.documentElement.scrollWidth > vw + 1 };
+    };
+    for (const w of [390, 430, 768, 1024, 1500]) {
+      const phone = w < 640;
+      const { ctx: cm, page: pm } = await boot(browser, storageState, w, { byDate: true, mobile: phone });
+      const o = await pm.evaluate(OVER);
+      const v = await pm.evaluate(READ);
+      console.log(`\n-- B at ${w}px --`);
+      is(`  ${w}: no horizontal page scroll`, o.hscroll, false);
+      is(`  ${w}: nothing overflows the viewport`, o.out, []);
+      yes(`  ${w}: CONTROL - there are rows to check (${v.rows.length})`, v.rows.length > 0);
+      /* THE METER SURVIVES AT EVERY WIDTH. It is the reason the page exists. */
+      is(`  ${w}: every row still has a notch and a min label`,
+        v.rows.filter((r) => !r.notch || !r.minLabel).map((r) => r.id), []);
+      is(`  ${w}: every label within 1px of its notch`,
+        v.rows.filter((r) => Math.abs(r.minLabel.box.cx - r.notch.box.cx) > 1).map((r) => r.id), []);
+      is(`  ${w}: the 12-88% clamp does not fire`,
+        v.rows.filter((r) => Math.abs(r.minLabel.pct - r.notch.pct) > 0.001).map((r) => r.id), []);
+      /* THE STRIP: three across on a phone, five on the desktop. Read off the computed grid. */
+      const cols = await pm.evaluate(() => getComputedStyle(document.querySelector(".gstrip")).gridTemplateColumns.split(" ").length);
+      is(`  ${w}: the strip is ${phone || w < 1024 ? 3 : 5} across`, cols, phone || w < 1024 ? 3 : 5);
+      is(`  ${w}: display-only tiles are still not buttons`, [v.tiles.all.isButton, v.tiles.fill.isButton], [false, false]);
+      /* THE CITY CHIPS SCROLL IN THEIR OWN BOX, and that is why the page does not. */
+      const chips = await pm.evaluate(() => {
+        const c = document.querySelector(".mchips") ?? document.querySelector(".gcities .cityf");
+        if (!c || c.clientWidth === 0) return null;
+        return { over: c.scrollWidth > c.clientWidth, ox: getComputedStyle(c).overflowX };
+      });
+      yes(`  ${w}: the chip row is its own scroll container`, chips == null || chips.ox === "auto" || chips.ox === "scroll",
+        `overflowX was ${chips?.ox}`);
+
+      if (phone) {
+        /* ROWS ARE STACKED CARDS - taller than the desktop row and no longer a five-column grid. */
+        yes(`  ${w}: rows are stacked cards (${v.rows[0].h}px)`, v.rows[0].h > 90);
+        const gridCols = await pm.evaluate(() => getComputedStyle(document.querySelector('[data-testid="gday-row"]')).gridTemplateColumns.split(" ").length);
+        is(`  ${w}: the five-column grid is gone`, gridCols, 2);
+        /* THE STEPPER'S TARGETS. 44x44 minimum - they were 22px squares on a control that changes
+         * what a match costs a player. */
+        await pm.click('[data-testid="gtile-risk"]'); await pm.waitForTimeout(700);
+        const btns = await pm.evaluate(() => ["down", "up"].map((d) => {
+          const b = document.querySelector(`[data-testid="gday-step-${d}"]`);
+          const r = b.getBoundingClientRect(); return { d, w: Math.round(r.width), h: Math.round(r.height) };
+        }));
+        for (const b of btns) yes(`  ${w}: the ${b.d} stepper is at least 44x44 (${b.w}x${b.h})`, b.w >= 44 && b.h >= 44);
+        await pm.click('[data-testid="gtile-risk"]'); await pm.waitForTimeout(600);
+        /* THE EDITOR IS A FULL-HEIGHT SHEET, and Save is reachable without scrolling the form. */
+        await pm.click('[data-testid="gday-row"] [data-testid="gday-name"]');
+        await pm.waitForSelector('[data-testid="gday-panel"]', { timeout: 30000 });
+        await pm.waitForTimeout(1200);
+        const sheet = await pm.evaluate(() => {
+          const p = document.querySelector('[data-testid="gday-panel"]');
+          const r = p.getBoundingClientRect();
+          const save = [...p.querySelectorAll("button")].find((b) => /save/i.test(b.textContent));
+          const sr = save?.getBoundingClientRect();
+          return { w: Math.round(r.width), vw: document.documentElement.clientWidth,
+            h: Math.round(r.height), vh: window.innerHeight,
+            saveVisible: sr ? sr.top >= 0 && sr.bottom <= window.innerHeight + 1 : null };
+        });
+        yes(`  ${w}: the editor fills the width (${sheet.w} of ${sheet.vw})`, sheet.w >= sheet.vw - 1);
+        yes(`  ${w}: ...and the height (${sheet.h} of ${sheet.vh})`, sheet.h >= sheet.vh - 2);
+        is(`  ${w}: Save is reachable without scrolling`, sheet.saveVisible, true);
+        await pm.click('[data-testid="gday-panel-close"]'); await pm.waitForTimeout(800);
+
+        /* CONTROL: force a fixed-width element into a phone row and prove the overflow walk sees it. */
+        const caught = await pm.evaluate(() => {
+          const row = document.querySelector('[data-testid="gday-row"]');
+          const el = row.querySelector('[data-testid="gday-nums"]');
+          const prev = el.style.cssText;
+          el.style.width = "900px"; el.style.flex = "0 0 900px";
+          const vw = document.documentElement.clientWidth;
+          const seen = el.getBoundingClientRect().right > vw + 0.5;
+          el.style.cssText = prev;
+          return seen;
+        });
+        yes(`  ${w}: CONTROL - a forced 900px element IS caught by the overflow walk`, caught,
+          "the overflow walk cannot see an overflow - every clean result above is worthless");
+      } else {
+        /* THE DESKTOP OVERLAP WALK STAYS, at 1024 and above. */
+        const ov = [];
+        for (const r of v.rows) for (let i = 1; i < r.chain.length; i++) {
+          const a = r.chain[i - 1], b = r.chain[i];
+          if (a && b && a.r > b.l + 0.5) ov.push([r.id, a.sel, b.sel]);
+        }
+        is(`  ${w}: no row overlaps`, ov, []);
+        const forced = await pm.evaluate(() => {
+          const row = document.querySelector('[data-testid="gday-row"]');
+          const nums = row.querySelector('[data-testid="gday-nums"]');
+          const prev = nums.style.cssText;
+          nums.style.position = "relative"; nums.style.left = "260px";
+          const seen = nums.getBoundingClientRect().right > row.querySelector('[data-testid="gday-delta"]').getBoundingClientRect().left + 0.5;
+          nums.style.cssText = prev;
+          return seen;
+        });
+        yes(`  ${w}: CONTROL - a forced overlap IS detected`, forced);
+      }
+      await closeContext(cm);
+    }
+  }
+
+  // ══ C. OPEN MATCH CHAT ═════════════════════════════════════════════════════════════════════
+  {
+    console.log("\n-- C1: Match Chats loads clean with no parameters --");
+    const cc = await browser.newContext({ storageState, viewport: { width: 1500, height: 1000 } });
+    const pc = await cc.newPage();
+    const cerr = [];
+    pc.on("pageerror", (e) => cerr.push(String(e).slice(0, 200)));
+    const resp = await pc.goto(`${BASE}/match-ops/match-chats`, { waitUntil: "domcontentloaded" });
+    await pc.waitForTimeout(8000);
+    is("  HTTP 200", resp?.status(), 200);
+    is("  no uncaught page errors", cerr, []);
+    /* ASSERTED ON RENDERED CONTENT, NOT A 200. A 200 that renders an empty shell is still broken. */
+    const txt = await pc.evaluate(() => document.body.innerText);
+    yes("  the inbox rendered its tabs and counts", /Active/.test(txt) && /Upcoming/.test(txt) && /Past/.test(txt));
+    yes(`  ...with real threads in it`, txt.length > 400);
+    await closeContext(cc);
+
+    console.log("\n-- C3: the banner link lands on that match's thread --");
+    const { ctx: c4, page: p4 } = await boot(browser, storageState, 1500, { byDate: true });
+    const href = await p4.locator('[data-testid="gday-chat"]').first().getAttribute("href");
+    const chatId = await p4.locator('[data-testid="gday-chat"]').first().getAttribute("data-chat-id");
+    yes(`  the href targets the real route - ${href}`, href.startsWith("/match-ops/match-chats?chatId="));
+    is("  ...carrying that match's id", href, `/match-ops/match-chats?chatId=${chatId}`);
+    is("  CONTROL: the old broken path is gone", /match-ops\/chats\?match=/.test(href), false);
+    is("  the button is enabled", await p4.locator('[data-testid="gday-chat"]').first().getAttribute("aria-disabled"), null);
+
+    /* THE LINK ACTUALLY LANDS. Followed for real, and the selected thread's id is read back off
+     * the URL the chat shell keeps - chatId IS the match api_id, proven on live data. */
+    await p4.goto(`${BASE}${href}`, { waitUntil: "domcontentloaded" });
+    await p4.waitForTimeout(7000);
+    const landed = new URL(p4.url());
+    is("  following it keeps the chatId", landed.searchParams.get("chatId"), chatId);
+    is("  ...on the Match Chats route", landed.pathname, "/match-ops/match-chats");
+    const paneTxt = await p4.evaluate(() => document.body.innerText);
+    is("  CONTROL: it is not sitting on the empty 'Nothing selected' state",
+      /Nothing selected/.test(paneTxt), false);
+
+    /* CONTROL: a match id with no thread must render an explicit empty state, not crash. */
+    await p4.goto(`${BASE}/match-ops/match-chats?chatId=99999999`, { waitUntil: "domcontentloaded" });
+    await p4.waitForTimeout(6000);
+    const emptyTxt = await p4.evaluate(() => document.body.innerText);
+    yes("  CONTROL: an id with no thread does not crash the page", emptyTxt.length > 300);
+    yes("  CONTROL: ...and the inbox still renders", /Active/.test(emptyTxt) && /Upcoming/.test(emptyTxt));
+    await closeContext(c4);
+  }
+
 
   /* ── THE LIVE BOARD ─────────────────────────────────────────────────────────────────────────
    * No intercept. The clamp and the layout claims are about REAL matches, and a fixture I chose

@@ -12,7 +12,8 @@
 import { readFileSync } from "node:fs";
 import {
   realFillPct, atRisk, meter, dayBucket, DAY_BUCKETS, FILTERING_TILES,
-  realCount, fakeCount, capacity, short, shortBy, vsMinDelta, passesStrip, inCities, type ApiMatch,
+  realCount, fakeCount, capacity, short, shortBy, vsMinDelta, passesStrip, inCities,
+  bannerUrgent, defaultBanners, riskSubtitle, BANNER_LEAD_MINUTES, DEFAULT_BANNER_CAP, type ApiMatch,
 } from "../src/lib/gamedayModel";
 
 let pass = 0; const fails: string[] = [];
@@ -25,7 +26,7 @@ const near = (m: string, got: number, want: number, tol = 0.01) =>
 
 const NOW = Date.parse("2026-09-01T20:00:00.000Z");
 /* A MATCH FIXTURE. startDateUtc is what kickoffMs parses; startDate is the wall-clock string. */
-const mk = (o: Partial<ApiMatch> & { players: number; fakePlayers: number; cap: number; min: number; offsetMin: number }): ApiMatch => ({
+const mk = (o: Partial<ApiMatch> & { players: number; fakePlayers: number; cap: number; min: number; offsetMin: number; acm?: number }): ApiMatch => ({
   id: o.id ?? 1,
   name: o.name ?? "M",
   startDate: new Date(NOW + o.offsetMin * 60000).toISOString(),
@@ -165,6 +166,46 @@ console.log("\nCITY AND BUCKET FILTERS COMPOSE — neither widens the other");
   // The display-only tiles pass everything — the board does not offer them as filters at all.
   is("  'all' passes everything", compose([], "all"), [1, 2, 3]);
   is("  'fill' passes everything", compose([], "fill"), [1, 2, 3]);
+}
+
+console.log("\nA BANNER IS AN INTERRUPT, SO MOST SHORT MATCHES DO NOT GET ONE");
+{
+  /* Nine banners about tomorrow pushed the match table off the screen. The default view now
+   * interrupts for one case only: today, and the decision point has arrived. */
+  const armed = (o: any) => ({ ...mk(o), autoCanceled: true, autoCanceledMinutes: o.acm } as ApiMatch);
+  // kickoff at +offsetMin, acm minutes before it -> deadline at (offsetMin - acm) minutes from now.
+  const urgent = armed({ id: 1, players: 3, fakePlayers: 0, cap: 18, min: 9, offsetMin: 95, acm: 72 });   // deadline +23
+  const farOut = armed({ id: 2, players: 2, fakePlayers: 0, cap: 18, min: 9, offsetMin: 1200, acm: 60 }); // deadline +1140
+  const unarmed = { ...armed({ id: 3, players: 2, fakePlayers: 0, cap: 18, min: 9, offsetMin: 95, acm: 72 }), autoCanceled: false } as ApiMatch;
+  const healthy = armed({ id: 4, players: 12, fakePlayers: 0, cap: 18, min: 9, offsetMin: 95, acm: 72 });
+
+  is("the constant is 90 minutes", BANNER_LEAD_MINUTES, 90);
+  is("a short match inside the lead time, TODAY, interrupts", bannerUrgent(urgent, NOW, true), true);
+  /* THE FOUR WAYS IT MUST NOT. Each fails exactly one clause, so each proves that clause carries
+   * weight - a predicate that ignored any of them would pass three of these four. */
+  is("  CONTROL: ...but not on another date", bannerUrgent(urgent, NOW, false), false);
+  is("  CONTROL: ...not 19 hours out", bannerUrgent(farOut, NOW, true), false);
+  is("  CONTROL: ...not when the match does not auto-cancel", bannerUrgent(unarmed, NOW, true), false);
+  is("  CONTROL: ...and not when it meets its minimum", bannerUrgent(healthy, NOW, true), false);
+  is("  CONTROL: ...and the far-out one really is short, by MORE", shortBy(farOut) > shortBy(urgent), true);
+
+  /* THE CAP, AND WHAT IS LEFT OVER. */
+  const five = [0, 1, 2, 3, 4].map((i) => armed({ id: 10 + i, players: 3, fakePlayers: 0, cap: 18, min: 9, offsetMin: 95 + i * 5, acm: 72 - i * 4 + i * 5 }));
+  const db = defaultBanners(five, NOW, true);
+  is("the default view caps at three", db.show.length, DEFAULT_BANNER_CAP);
+  is("  ...and says how many are left", db.more, 2);
+  is("  ...soonest deadline first", db.show.map((m) => m.id), [10, 11, 12]);
+  is("  CONTROL: a future date shows none of them", defaultBanners(five, NOW, false).show.length, 0);
+  is("  CONTROL: ...and reports nothing left over either", defaultBanners(five, NOW, false).more, 0);
+
+  /* THE SUBTITLE. "9 short of the minimum" on tomorrow's board describes a day that has not sold
+   * yet, which is not a problem and must not read as one. */
+  is("a future date reads 'not yet at minimum'", riskSubtitle([urgent, farOut], NOW, false), "not yet at minimum");
+  is("today names the split", riskSubtitle([urgent, farOut], NOW, true), "1 auto-cancels in 23m · 1 still fillable");
+  is("  ...and drops the second clause when there is nothing else", riskSubtitle([urgent], NOW, true), "1 auto-cancels in 23m");
+  is("  ...and says fillable when nothing is urgent yet", riskSubtitle([farOut], NOW, true), "1 still fillable");
+  is("  nothing at risk at all", riskSubtitle([healthy], NOW, true), "nothing at risk");
+  is("  CONTROL: ...on a future date too", riskSubtitle([healthy], NOW, false), "nothing at risk");
 }
 
 console.log("\nTHE STEPPER IS KEYED ON A PERMISSION, NOT ON A PROP");

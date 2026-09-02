@@ -31,6 +31,7 @@ import {
   realCount, fakeCount, capacity, openSpots, teamCount, short, shortBy, fill, flags, attention,
   acLevel, minsToDeadline, nextRelease, nextMark, inCities, passesFilter, stillToCome, riskTier, snapRail, vsMin, vsMinDelta, STD_LEAD, MARKS, autoCancels,
   atRisk, realFillPct, dayBucket, DAY_BUCKETS, passesStrip, meter, type DayBucket, type StripKey,
+  bannerUrgent, defaultBanners, riskSubtitle, BANNER_LEAD_MINUTES, DEFAULT_BANNER_CAP,
 } from "@/lib/gamedayModel";
 
 const ENV = DRAWER_ENV; // the board reads and edits the same environment as the drawer
@@ -223,7 +224,8 @@ export default function GamedayBoard({
     const f = realFillPct(scope);
     const cityCount = new Set(scope.map((m) => m.field?.city?.name).filter(Boolean)).size;
     const nextKick = soon.length ? soon.slice().sort(byKickoff)[0] : null;
-    return { soon, live, risk, fill: f, cityCount, nextKick, allCount: scope.length };
+    return { soon, live, risk, fill: f, cityCount, nextKick, allCount: scope.length,
+             riskSub: riskSubtitle(scope, now, date === today) };
   }, [scope, now]);
 
   /* THE GRID. City first, then the bucket — the two COMPOSE, so Austin + In play is Austin
@@ -236,18 +238,36 @@ export default function GamedayBoard({
     () => DAY_BUCKETS.map((B) => ({ B, rows: shown.filter((m) => dayBucket(m, now) === B.k) })),
     [shown, now],
   );
-  /* THE BANNER'S POPULATION. Scoped to the city selection like everything else, but NOT to the
-   * bucket filter: an at-risk match must not vanish from the banner because the operator is
-   * looking at In play. The alert is about the day, not about the current view. */
+  const isToday = date === today;
+  /* ── WHICH BANNERS RENDER, AND WHEN ───────────────────────────────────────────────────────────
+   * DEFAULT VIEW: only matches that are urgent TODAY - short, armed, and inside
+   * BANNER_LEAD_MINUTES of their deadline. Capped, soonest deadline first, with a line offering
+   * the rest. On any other date the default view shows no banners at all: nine interrupts about
+   * tomorrow pushed the match table off the screen and taught the operator to scroll past them.
+   *
+   * NEEDS ATTENTION: every short match, as a banner INSTEAD of a row. That filter is what the
+   * banner format is for - the operator asked for the list, so the list is the interrupt.
+   *
+   * EVERY OTHER FILTER: rows, never banners. */
   const risky = useMemo(() => scope.filter((m) => atRisk(m, now)).sort(byKickoff), [scope, now]);
+  const bannerMode = strip === "risk";
+  const defaults = useMemo(() => defaultBanners(scope, now, isToday), [scope, now, isToday]);
+  const banners = bannerMode
+    ? risky.slice().sort((a, b) => minsToDeadline(a, now) - minsToDeadline(b, now))
+    : defaults.show;
+  const moreCount = bannerMode ? 0 : defaults.more;
   /* CITIES HOLDING AN AT-RISK MATCH, for the chip's risk style. Derived from `matches`, not
    * `scope`: selecting Austin must not stop Houston's chip from showing that Houston has a
    * problem — that is the one moment the operator most needs to see it. */
+  /* ONLY CITIES WITH AN URGENT MATCH. It used to be every city holding a short match, which on
+   * tomorrow's board is EVERY city - a row of red chips that means "this day has not sold yet",
+   * which is not what red is for. Restricted to the same predicate the default banner uses, so on
+   * a future date no chip is red. */
   const riskCities = useMemo(() => {
     const set = new Set<string>();
-    for (const m of matches) if (atRisk(m, now)) { const c = m.field?.city?.name; if (c) set.add(c); }
+    for (const m of matches) if (bannerUrgent(m, now, date === today)) { const c = m.field?.city?.name; if (c) set.add(c); }
     return set;
-  }, [matches, now]);
+  }, [matches, now, date, today]);
 
   /* ── THE ONE WRITE ON THIS PAGE ───────────────────────────────────────────────────────────────
    * KEYED ON THE ACTUAL EDIT MATCHES RIGHT, not on whether a callback was passed.
@@ -422,18 +442,21 @@ export default function GamedayBoard({
             <button className="chip mtoday" data-testid="m-day-today" disabled={date === today} onClick={() => goDay(today)}>Today</button>
           </div>
           {/* ONE scroller: filters + cities together, the only horizontal scroll on the page. */}
+          {/* THE MOBILE PILL ROW LOST ITS FILTERS TOO. It duplicated the stat strip directly below
+              it - two controls for one selection, and on a 390px screen the second one was clipped
+              at the right edge. Cities stay: this is where they live on a phone. */}
           <div className="mchips" data-testid="mchips">
-            <button className={"chip" + (filter === "all" ? " on" : "")} onClick={() => setFilter("all")}>All<span className="b">{counts.all}</span></button>
-            <button className={"chip att" + (filter === "att" ? " on" : "")} onClick={() => setFilter("att")}>Needs attention<span className="b">{counts.att}</span></button>
-            <button className={"chip" + (filter === "upc" ? " on" : "")} onClick={() => setFilter("upc")}>Still to come<span className="b">{counts.upc}</span></button>
-            <span className="msep" aria-hidden />
             {/* LOCKED, NOT REMOVED — the control still says which city this is. */}
             {lockedCity ? (
               <button className="chip on" data-testid="city-locked" disabled aria-disabled="true"
                 title={`Scoped to ${lockedCity}`}>{lockedCity}<span className="b">{counts.all}</span></button>
             ) : (<>
               <button className={"chip" + (cities.size === 0 ? " on" : "")} onClick={() => toggleCity("")}>All cities</button>
-              {cityNames.map(([c, n]) => <button key={c} className={"chip" + (cities.has(c) ? " on" : "")} onClick={() => toggleCity(c)}>{c}<span className="b">{n}</span></button>)}
+              {cityNames.map(([c, n]) => (
+                <button key={c} className={"chip gchip" + (cities.has(c) ? " on" : "") + (riskCities.has(c) ? " risk" : "")}
+                  data-testid={`mcity-${c}`} data-risk={riskCities.has(c) ? "1" : "0"}
+                  onClick={() => toggleCity(c)}>{c}<u>{n}</u></button>
+              ))}
             </>)}
           </div>
         </div>
@@ -507,20 +530,31 @@ export default function GamedayBoard({
               <StatStrip s={strips} active={strip} clockOf={localClock}
                 onPick={(k) => setStrip((prev) => (prev === k ? null : k))} />
 
-              {/* ONE BANNER PER AT-RISK MATCH, and the slot renders nothing at all when there are
-                  none — an empty box that is always there stops being looked at. */}
-              {risky.length > 0 && (
-                <div data-testid="gday-alertslot">
-                  {risky.map((m) => (
+              {/* The slot renders nothing at all when there is nothing urgent - an empty box that
+                  is always there stops being looked at. */}
+              {banners.length > 0 && (
+                <div data-testid="gday-alertslot" data-mode={bannerMode ? "filter" : "default"}>
+                  {banners.map((m) => (
                     <AlertBanner key={m.id} m={m} now={now}
                       pending={pendingMin[m.id] ?? null}
                       onStep={stepMin} onSave={saveMin} onOpen={openDrawer}
                       saveState={saveState[m.id]}
                       canEdit={canEditMin} stepperReason={stepperReason} />
                   ))}
+                  {/* THE REST, ONE CLICK AWAY. The cap keeps the table on the first screen; this
+                      line keeps the others from being hidden by it. */}
+                  {moreCount > 0 && (
+                    <button type="button" className="gmore" data-testid="gday-more-risk"
+                      onClick={() => setStrip("risk")}>
+                      +{moreCount} more need attention
+                    </button>
+                  )}
                 </div>
               )}
 
+              {/* NEEDS ATTENTION RENDERS BANNERS INSTEAD OF ROWS - the card is not drawn at all,
+                  so there is no empty table under the list. Every other filter draws the table. */}
+              {!bannerMode && (
               <div className="gcard" data-testid="snapshot">
                 <div className="gcolhead">
                   <div>Kickoff</div><div>Match · field</div><div>Spots vs minimum</div><div>Manager</div><div />
@@ -548,8 +582,14 @@ export default function GamedayBoard({
                   </section>
                 ))}
               </div>
+              )}
+              {bannerMode && banners.length === 0 && (
+                <div className="gcard"><div className="empty" data-testid="empty">
+                  Nothing needs attention{cities.size ? ` in ${[...cities].join(", ")}` : ""} on {dayLabel(date)}.
+                </div></div>
+              )}
               <p className="gfoot" data-testid="gday-foot">
-                {shown.length} of {scope.length} matches
+                {bannerMode ? banners.length : shown.length} of {scope.length} matches
                 {cities.size ? ` · ${[...cities].join(", ")}` : ""}
                 {" · the tick and its label are the match minimum · fake spots are hatched and do not count toward it"}
               </p>
@@ -1163,7 +1203,7 @@ const CSS = `
   border-radius:5px;padding:2px 6px;background:#EEF1EF;color:#66786E}
 .gdo .gtag.hot{background:#FBD9D6;color:#A83120}
 .gdo .gpz{flex:0 0 auto;font-size:11px;color:#66786E;font-variant-numeric:tabular-nums}
-.gdo .gs{display:flex;align-items:center;gap:9px;min-width:0}
+.gdo .gs{display:flex;align-items:center;gap:9px;min-width:0;overflow:hidden}
 /* THE METER. 104px track, 8px bar, and a 13px gutter beneath it for the min label. */
 .gdo .gmeter{position:relative;flex:0 0 104px;padding-bottom:13px}
 .gdo .gbar{position:relative;height:8px;border-radius:99px;background:#e6eae7;overflow:hidden}
@@ -1196,7 +1236,116 @@ const CSS = `
 .gdo .gkebab{border:0;background:none;color:#66786E;border-radius:6px;padding:3px 6px;line-height:1;
   font-size:16px;cursor:pointer;justify-self:end}
 .gdo .gkebab:hover{background:#eef1ef;color:#1B3227}
+.gdo .gmore{display:block;width:100%;border:1px dashed #E9B6AC;background:#FDF3F2;color:#A83120;
+  border-radius:10px;padding:9px 14px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;
+  margin-bottom:12px;text-align:left}
+.gdo .gmore:hover{background:#fce5e3}
 .gdo .gfoot{margin:10px 2px 0;font-size:11.5px;color:#66786E;line-height:1.5}
+
+
+/* ══ PHONE FIRST BELOW 640px ═══════════════════════════════════════════════════════════════════
+   NO BACKTICK MAY APPEAR IN THIS BLOCK - it is inside a template literal.
+
+   BREAKPOINTS: phone under 640, tablet 640-1023, desktop 1024 and up.
+
+   THE FIVE-COLUMN GRID DOES NOT SURVIVE A 390px SCREEN and must not be made to scroll sideways -
+   a horizontal scroll on a row is how you lose the delta chip and never know it. Each match
+   becomes a stacked card, and the METER KEEPS ITS NOTCH, ITS LABEL AND ITS CLAMP: it is the
+   reason the page exists and it is not the thing that gets dropped on the small screen. It stops
+   being 104px and takes the width it is given. */
+@media (max-width: 639.98px) {
+  .gdo .gcolhead{display:none}
+  /* THE ROW BECOMES A CARD. Areas rather than source order, so the price can sit on line 1 with
+     the kickoff while staying a single element in the DOM - two prices, one hidden per
+     breakpoint, would mean two elements answering to one test id. */
+  .gdo .grow{
+    grid-template-columns:minmax(0,1fr) auto;
+    grid-template-areas:"k k" "m m" "s s" "mg kb";
+    gap:7px 10px;padding:11px 14px;align-items:start;position:relative}
+  .gdo .gk{grid-area:k;display:flex;align-items:baseline;gap:8px}
+  .gdo .gk span{margin-top:0}
+  .gdo .gm{grid-area:m;min-width:0}
+  .gdo .gs{grid-area:s;gap:10px}
+  .gdo .gmg{grid-area:mg;align-self:center}
+  .gdo .gkebab{grid-area:kb;align-self:center}
+  /* LINE 1, PUSHED RIGHT. Hoisted out of the match cell by position, not by a second element. */
+  .gdo .gm .gpz{position:absolute;top:11px;right:14px;font-size:12px;font-weight:600}
+  .gdo .gm .n{flex-wrap:wrap}
+  /* THE METER TAKES THE ROOM IT IS GIVEN. Wider track means the notch and its label are easier to
+     read on the small screen, not harder. */
+  .gdo .gmeter{flex:1 1 auto;min-width:0}
+  .gdo .gnum{font-size:12px}
+  .gdo .grow{border-top:1px solid #E4EAE6}
+  .gdo .grow.risk{box-shadow:inset 3px 0 0 #C0392B}
+
+  /* THE STRIP: three across, not five. */
+  .gdo .gstrip{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+  .gdo .gtile{padding:9px 10px}
+  .gdo .gtile .v{font-size:20px}
+  .gdo .gtile .k{font-size:9.5px;letter-spacing:.5px}
+  .gdo .gtile .s{font-size:10px}
+
+  /* THE BANNER RESTACKS. Countdown under the facts, actions full-width and stacked. */
+  .gdo .galert{flex-direction:column;align-items:stretch;gap:12px;padding:13px 14px}
+  .gdo .gbang{display:none}
+  .gdo .gfacts{gap:9px 12px}
+  .gdo .gclock{text-align:left;display:flex;align-items:baseline;gap:8px}
+  .gdo .gclock .n{font-size:19px}
+  .gdo .gacts{flex-direction:column;align-items:stretch;gap:8px}
+  .gdo .gacts>*{width:100%}
+  .gdo .gbtn,.gdo .gpri{text-align:center;padding:11px 12px;font-size:13.5px}
+  .gdo .gstep{justify-content:space-between;padding:5px 6px 5px 13px;font-size:13.5px}
+  /* 44x44 MINIMUM. These were 22px squares - a target you miss twice before you hit it, on a
+     control that changes what a match costs a player. */
+  .gdo .gstep .gsb{width:44px;height:44px;font-size:19px;border-radius:9px}
+  .gdo .gstep b{min-width:34px;font-size:16px}
+
+  /* SECTION HEADERS STAY PUT while the list scrolls under them. */
+  .gdo .gsec{position:sticky;top:0;z-index:3}
+  .gdo .gfoot{font-size:11px}
+}
+
+/* THE CITY CHIPS SCROLL IN THEIR OWN CONTAINER at every width, with momentum and no visible
+   scrollbar. The PAGE never scrolls sideways - that is the point of confining it here. */
+.gdo .gcities .cityf{display:flex;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
+  -webkit-overflow-scrolling:touch;scrollbar-width:none;gap:7px;padding-bottom:2px;max-width:100%}
+.gdo .gcities .cityf::-webkit-scrollbar{display:none}
+.gdo .gcities .gchip{flex:0 0 auto}
+.gdo .gcities{flex-wrap:nowrap;min-width:0}
+
+/* TABLET: the grid survives, but the SPOTS COLUMN MUST STILL FIT ITS CONTENTS. At 232px it did
+   not - meter 84 + numbers + delta needs about 246 - and the delta chip spilled into the manager
+   cell on every row. The overlap walk caught it at 768; eleven content assertions had not. The
+   match column gives up the width instead, because a truncated field name has a tooltip and a
+   collided delta chip has nothing. */
+@media (min-width: 640px) and (max-width: 1023.98px) {
+  .gdo .gcolhead,.gdo .grow{grid-template-columns:76px minmax(0,1fr) 258px 96px 30px;gap:10px}
+  .gdo .gmeter{flex:0 0 76px}
+  .gdo .gnum{font-size:11px}
+  .gdo .gstrip{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .gdo .gsec{position:sticky;top:0;z-index:3}
+}
+
+/* THE EDITOR IS A BOTTOM SHEET ON A PHONE, not a 600px side drawer on a 390px screen. Full height,
+   every field kept including the highlighted minimum, and the footer pinned so Save and Cancel are
+   reachable without scrolling past the form. */
+@media (max-width: 639.98px) {
+  .gdo .gpanel{position:fixed;inset:0;left:0;right:0;width:100vw;max-width:100vw;
+    border-radius:14px 14px 0 0;display:flex;flex-direction:column;z-index:60}
+  .gdo .gpanel-body{flex:1 1 auto;min-height:0;overflow:hidden}
+  .gdo .gpanel-bar{flex:0 0 auto}
+  .gdo .gpanel-body>.mp>.mp-panel>.mp-fs>.mp-foot{position:sticky;bottom:0;background:#fff;
+    border-top:1px solid #DCE5E0;padding-bottom:max(env(safe-area-inset-bottom),10px)}
+}
+
+
+/* THE MOBILE CHIP ROW is the one a phone actually shows - the desktop .row2 is hidden there. Same
+   contract: it scrolls inside itself, with momentum and no visible scrollbar, so the PAGE never
+   scrolls sideways. */
+.gdo .mchips{display:flex;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
+  -webkit-overflow-scrolling:touch;scrollbar-width:none;gap:7px;max-width:100%}
+.gdo .mchips::-webkit-scrollbar{display:none}
+.gdo .mchips>*{flex:0 0 auto}
 
 `;
 
@@ -1217,14 +1366,14 @@ type StripStats = {
   cityCount: number; nextKick: ApiMatch | null; allCount: number;
 };
 function StatStrip({ s, active, onPick, clockOf }: {
-  s: StripStats; active: StripKey | null; onPick: (k: StripKey) => void; clockOf: (m: ApiMatch) => string;
+  s: StripStats & { riskSub: string }; active: StripKey | null; onPick: (k: StripKey) => void; clockOf: (m: ApiMatch) => string;
 }) {
   const pct = s.fill.pct;
   const T: { k: StripKey; lab: string; val: string; sub: string; can: boolean; warn?: boolean }[] = [
     { k: "all", lab: "All matches", val: String(s.allCount),
       sub: `${s.cityCount} ${s.cityCount === 1 ? "city" : "cities"}`, can: false },
     { k: "risk", lab: "Needs attention", val: String(s.risk.length),
-      sub: s.risk.length ? "short of the minimum" : "nothing at risk", can: true, warn: true },
+      sub: s.riskSub, can: true, warn: true },
     { k: "soon", lab: "Still to come", val: String(s.soon.length),
       sub: s.nextKick ? `next at ${clockOf(s.nextKick)}` : "none left today", can: true },
     { k: "live", lab: "In play", val: String(s.live.length), sub: "kicked off", can: true },
@@ -1397,8 +1546,22 @@ function AlertBanner({ m, now, pending, onStep, onSave, onOpen, saveState, canEd
         <div className="l">until auto-cancel</div>
       </div>
       <div className="gacts" onClick={stop}>
-        {/* THE EXISTING MATCH CHAT ROUTE, not a new one. */}
-        <a className="gbtn" data-testid="gday-chat" href={`/match-ops/chats?match=${m.id}`}
+        {/* ── OPEN MATCH CHAT ────────────────────────────────────────────────────────────────────
+         * THIS WAS BROKEN IN TWO SEPARATE WAYS AND BOTH ARE FIXED HERE.
+         *
+         *   1. THE PATH. It pointed at /match-ops/chats, which does not exist. It 308-redirects to
+         *      /match-ops/match-chats AND DROPS THE QUERY STRING on the way, so the click landed
+         *      on the thread list with no selection - which is exactly what "it did not land on
+         *      that match's chat" looks like from the outside.
+         *   2. THE PARAMETER. The chat shell reads `chatId` (MatchChatsClient.tsx:63). `match` is
+         *      a name it has never known, so even on the right path it would have selected nothing.
+         *
+         * chatId IS THE MATCH api_id. Proven, not inferred: /api/match-chats/active builds
+         * `chat_id: String(m.api_id)` for upcoming and past rows, and on live data every active row
+         * came back with chat_id === String(match.api_id). Navigating to ?chatId=18342 selected
+         * that match's thread. */}
+        <a className="gbtn" data-testid="gday-chat" data-chat-id={String(m.id)}
+          href={`/match-ops/match-chats?chatId=${encodeURIComponent(String(m.id))}`}
           onClick={stop}>Open match chat</a>
         <span className="gstep" data-testid="gday-stepper" title={stepperReason ?? "Adjust the match minimum"}>
           Adjust min

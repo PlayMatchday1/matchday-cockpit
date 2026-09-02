@@ -450,3 +450,57 @@ export function passesStrip(m: ApiMatch, now: number, key: StripKey | null): boo
   const b = dayBucket(m, now);
   return key === "soon" ? b === "soon" : key === "live" ? b === "live" : true;
 }
+
+
+/* ── WHEN A BANNER IS AN INTERRUPT AND WHEN IT IS NOISE ────────────────────────────────────────
+ * A banner interrupts. On tomorrow's board nine of them stacked up, every one 19-20 hours from its
+ * auto-cancel, and they pushed the match table off the screen. Nine interrupts about tomorrow is
+ * not urgency, it is a wall.
+ *
+ * THE DEFAULT VIEW SHOWS A BANNER FOR ONE CASE ONLY: today, and the decision point has arrived.
+ * Everything else that is short is a ROW, and the Needs attention tile is how you ask for the list.
+ */
+
+/** Minutes before the auto-cancel deadline at which a short match earns a banner unasked. */
+export const BANNER_LEAD_MINUTES = 90;
+
+/**
+ * True when a match should interrupt: it is TODAY, it is short on real players, it actually
+ * auto-cancels, and its deadline is inside BANNER_LEAD_MINUTES.
+ *
+ * `isToday` is passed rather than derived, because the board can be looking at any date and the
+ * "now" it reasons about is the wall clock, not the date in the picker. A short match on a future
+ * board never qualifies however short it is - there is nothing to decide yet.
+ */
+export function bannerUrgent(m: ApiMatch, now: number, isToday: boolean): boolean {
+  if (!isToday) return false;
+  if (!atRisk(m, now)) return false;
+  if (!autoCancels(m)) return false;   // no deadline means no decision point
+  return minsToDeadline(m, now) <= BANNER_LEAD_MINUTES;
+}
+
+/** The default view's banners: the urgent ones, soonest deadline first, capped. */
+export const DEFAULT_BANNER_CAP = 3;
+export function defaultBanners(ms: readonly ApiMatch[], now: number, isToday: boolean): { show: ApiMatch[]; more: number } {
+  const urgent = ms.filter((m) => bannerUrgent(m, now, isToday))
+    .sort((a, b) => minsToDeadline(a, now) - minsToDeadline(b, now));
+  return { show: urgent.slice(0, DEFAULT_BANNER_CAP), more: Math.max(0, urgent.length - DEFAULT_BANNER_CAP) };
+}
+
+/**
+ * THE NEEDS ATTENTION TILE'S SUBTITLE.
+ *
+ * "9 short of the minimum" describes a problem. On tomorrow's board it describes a day that has
+ * not sold yet, which is not the same thing and reads as an emergency that is not one.
+ */
+export function riskSubtitle(ms: readonly ApiMatch[], now: number, isToday: boolean): string {
+  const risky = ms.filter((m) => atRisk(m, now));
+  if (risky.length === 0) return "nothing at risk";
+  if (!isToday) return "not yet at minimum";
+  const urgent = risky.filter((m) => bannerUrgent(m, now, isToday));
+  if (urgent.length === 0) return `${risky.length} still fillable`;
+  const soonest = urgent.slice().sort((a, b) => minsToDeadline(a, now) - minsToDeadline(b, now))[0];
+  const rest = risky.length - urgent.length;
+  const head = `${urgent.length} auto-cancel${urgent.length === 1 ? "s" : ""} in ${fmtDur(Math.max(0, minsToDeadline(soonest, now)))}`;
+  return rest > 0 ? `${head} · ${rest} still fillable` : head;
+}
