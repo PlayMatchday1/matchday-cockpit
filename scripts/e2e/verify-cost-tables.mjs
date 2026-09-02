@@ -8,7 +8,7 @@
 //
 //   node scripts/e2e/verify-cost-tables.mjs
 import { chromium } from "playwright";
-import { installHarnessGuard, closeContext, closeBrowser, storageStateFor } from "./_session.mjs";
+import { installHarnessGuard, closeContext, closeBrowser, storageStateFor , nonEmpty } from "./_session.mjs";
 installHarnessGuard();
 process.loadEnvFile(".env.local");
 
@@ -133,7 +133,7 @@ console.log("\n── the pill agrees with the number inside it ──");
     return r.band !== want;
   });
   eq("no pill disagrees with its printed ratio", wrong.map((r) => `${r.name} ${r.ratio}/${r.band}`), []);
-  eq("  control — pills were rendered to be checked", field.rows.filter((r) => r.band).length > 3, true);
+  eq("  control — pills were rendered to be checked", nonEmpty(field.rows, "field.rows").filter((r) => r.band).length > 3, true);
 }
 
 // ── 5. RANKS ──────────────────────────────────────────────────────────────────────────────────
@@ -245,7 +245,7 @@ console.log("\n── every city equals the sum of its fields ──");
   await page.waitForTimeout(2000);
   const c = await readTable();
   const mismatches = [];
-  for (const r of c.rows) {
+  for (const r of nonEmpty(c.rows, "c.rows")) {
     const f2 = byCity[r.name];
     if (!f2) { mismatches.push(`${r.name}: no fields`); continue; }
     if (Math.abs(f2.revenue - money(r.revenue)) > 1) mismatches.push(`${r.name} revenue ${money(r.revenue)} vs fields ${f2.revenue}`);

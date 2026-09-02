@@ -10,7 +10,7 @@
 // footer. Nothing is pinned: these are live production numbers and they move nightly.
 
 import { chromium } from "playwright";
-import { installHarnessGuard, closeContext, closeBrowser, storageStateFor } from "./_session.mjs";
+import { installHarnessGuard, closeContext, closeBrowser, storageStateFor , nonEmpty } from "./_session.mjs";
 
 installHarnessGuard();
 process.loadEnvFile(".env.local");
@@ -158,7 +158,7 @@ for (const W of [1440, 1120]) {
   // ── THE ARITHMETIC ─────────────────────────────────────────────────────────────────────────
   console.log("\n── revenue − field − overhead = net ──");
   {
-    for (const r of rows) {
+    for (const r of nonEmpty(rows, "rows")) {
       const calc = money(r.rev) + money(r.field) + money(r.over);
       eq(`  ${r.city}: ${r.rev} ${r.field} ${r.over} = ${r.net}`, Math.abs(calc - money(r.net)) <= 1, true);
     }

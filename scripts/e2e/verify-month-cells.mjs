@@ -14,7 +14,7 @@
 //
 //   node scripts/e2e/verify-month-cells.mjs
 import { chromium } from "playwright";
-import { installHarnessGuard, fatal, closeContext, closeBrowser, storageStateFor } from "./_session.mjs";
+import { installHarnessGuard, fatal, closeContext, closeBrowser, storageStateFor , nonEmpty } from "./_session.mjs";
 installHarnessGuard();
 
 const BASE = process.env.BASE || "http://localhost:3000";
@@ -179,8 +179,8 @@ async function main() {
     is("  …and the day's count badge agrees",
       await page.locator(`[data-iso="${PEAK_DAY}"] [data-testid="month-daycount"]`).textContent(), "21");
     is("NO CELL SCROLLS INSIDE ITSELF", m.overflowing, []);
-    is("every entry has a real box", m.entries.filter((e) => e.h > 0 && e.w > 0).length, TOTAL);
-    is("every entry is inside its own cell, not clipped by it", m.entries.filter((e) => !e.contained).map((e) => e.id), []);
+    is("every entry has a real box", nonEmpty(m.entries, "m.entries").filter((e) => e.h > 0 && e.w > 0).length, TOTAL);
+    is("every entry is inside its own cell, not clipped by it", nonEmpty(m.entries, "m.entries").filter((e) => !e.contained).map((e) => e.id), []);
 
     /* CONTROL FOR THE OVERFLOW CHECK. "No cell overflows" is the answer a broken measurement gives
      * too. Force the old fixed height back onto the peak cell IN THE PAGE and prove the same code
@@ -229,8 +229,8 @@ async function main() {
     yes("  null and zero do not look the same", m.prices.find((p) => p.id === PRICE_ZERO_ID)?.text === "$0.00"
       && (await page.locator(`[data-id="${PRICE_NULL_ID}"] [data-testid="month-price"]`).count()) === 0);
 
-    is("NO price is truncated at 1600px", m.prices.filter((p) => p.clipped).map((p) => p.text), []);
-    is("  …and none carries an ellipsis rule", m.prices.filter((p) => p.ellipsis).length, 0);
+    is("NO price is truncated at 1600px", nonEmpty(m.prices, "m.prices").filter((p) => p.clipped).map((p) => p.text), []);
+    is("  …and none carries an ellipsis rule", nonEmpty(m.prices, "m.prices").filter((p) => p.ellipsis).length, 0);
     await closeContext(ctx);
   }
 
@@ -247,8 +247,8 @@ async function main() {
       "nothing is truncating at this width, so 'the price is not truncated' is not being tested");
     is("  CONTROL: …by an ellipsis, as designed",
       await page.locator('[data-testid="month-match"] span').first().evaluate((e) => getComputedStyle(e).textOverflow), "ellipsis");
-    is("NO price is truncated at 900px either", m.prices.filter((p) => p.clipped).map((p) => p.text), []);
-    is("  …every price still reads in full", m.prices.filter((p) => /^\$\d+\.\d{2}$/.test(p.text)).length, m.prices.length);
+    is("NO price is truncated at 900px either", nonEmpty(m.prices, "m.prices").filter((p) => p.clipped).map((p) => p.text), []);
+    is("  …every price still reads in full", nonEmpty(m.prices, "m.prices").filter((p) => /^\$\d+\.\d{2}$/.test(p.text)).length, m.prices.length);
     is("  …and $39.00 in particular is whole", m.prices.find((p) => p.id === PRICE_3900_ID)?.text, "$39.00");
     await closeContext(ctx);
   }
@@ -307,8 +307,8 @@ async function main() {
     console.log(`   MONTH GRID HEIGHT         ${m.gridHeight} px`);
     console.log(`   FULL PAGE HEIGHT          ${m.pageHeight} px   (${(m.pageHeight / 1000).toFixed(1)} screens at 1000px)`);
     is("  the real page has no scrolling cell either", m.overflowing, []);
-    is("  every row is internally equal on real data", m.rows.filter((r) => r.distinct !== 1).length, 0);
-    is("  no price truncates on real data", m.prices.filter((p) => p.clipped).length, 0);
+    is("  every row is internally equal on real data", nonEmpty(m.rows, "m.rows").filter((r) => r.distinct !== 1).length, 0);
+    is("  no price truncates on real data", nonEmpty(m.prices, "m.prices").filter((p) => p.clipped).length, 0);
     yes("  CONTROL: this really is a month of real matches, not the fixture", m.matchCount > 100 && m.matchCount !== TOTAL);
     await closeContext(ctx);
   }

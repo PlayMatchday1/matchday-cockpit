@@ -14,7 +14,7 @@
 //   node scripts/e2e/verify-revenue-controls.mjs
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
-import { installHarnessGuard, closeContext, closeBrowser, storageStateFor } from "./_session.mjs";
+import { installHarnessGuard, closeContext, closeBrowser, storageStateFor , nonEmpty } from "./_session.mjs";
 installHarnessGuard();
 process.loadEnvFile(".env.local");
 
@@ -344,7 +344,7 @@ console.log("\n── the four cards ──");
     // ROW BY ROW. At 1024px the grid is two columns; four equal heights spread across two rows
     // passes a naive check, so the rows are grouped by their own top and each checked.
     const rows = [...new Set(G.map((g) => g.top))].sort((a, b) => a - b);
-    for (const t of rows) {
+    for (const t of nonEmpty(rows, "rows")) {
       const inRow = G.filter((g) => g.top === t);
       eq(`  …row at y=${t}: ${inRow.length} cards, one height`, [...new Set(inRow.map((g) => g.h))].length, 1);
     }

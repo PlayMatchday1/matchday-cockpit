@@ -289,3 +289,31 @@ export async function storageStateFor(email, base) {
     token: session.access_token,
   };
 }
+
+/* ── D2. THE EMPTINESS GUARD ───────────────────────────────────────────────────────────────────
+ * ANY ASSERTION OVER A FILTERED COLLECTION PASSES TRIVIALLY WHEN THE COLLECTION IS EMPTY.
+ * `is("no row overlaps", rows.filter(bad).map(id), [])` is green when `rows` is empty, when the
+ * selector changed, when the page failed to render, and when the field being filtered on is
+ * undefined. All four look identical to a passing test.
+ *
+ * MEASURED 2026-09-02: 27 assertion sites across 10 browser suites were in that shape. One of them
+ * had been green for a round while testing nothing, because `r.hasMin` was never set and
+ * `undefined && x` is always false.
+ *
+ * Route the collection through this before asserting on it. It throws on empty with a message
+ * naming what was expected to be there, so an empty set fails LOUDLY.
+ *
+ *     is("no row overlaps", nonEmpty(rows, "rows on the board").filter(bad).map(id), []);
+ */
+export function nonEmpty(coll, label) {
+  const n = Array.isArray(coll) ? coll.length : (coll?.length ?? (coll?.size ?? -1));
+  if (n === -1) throw new Error(`nonEmpty(${label}): not a collection — got ${typeof coll}`);
+  if (n === 0) {
+    throw new Error(
+      `EMPTY COLLECTION: expected at least one ${label}, found none. ` +
+      `An assertion over an empty set passes without testing anything, so this fails instead. ` +
+      `Either the page did not render, the selector is wrong, or the field being filtered on is undefined.`,
+    );
+  }
+  return coll;
+}

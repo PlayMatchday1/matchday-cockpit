@@ -12,7 +12,7 @@
 // the roster link and Veo control are SPANS with role + keyboard handling, because a
 // <button> cannot nest inside a <button> (it silently ends the outer one).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { envBadge } from "@/lib/matchEnvBadge";
@@ -1255,7 +1255,9 @@ const CSS = `
 .gdo .gmnl{position:absolute;top:12px;transform:translateX(-50%);white-space:nowrap;font-size:9.5px;
   font-weight:400;letter-spacing:.2px;color:#66786E;font-variant-numeric:tabular-nums}
 .gdo .grow.risk .gmnl{color:#A83120}
-.gdo .gnomin{color:#9AA8A0;font-style:italic}
+/* LEFT-ALIGNED, NOT CENTRED. It describes the whole bar, not a point on it, so it starts where the
+   track starts and carries no transform to pull it off the left edge. */
+.gdo .gnomin{color:#9AA8A0;font-style:italic;left:0;transform:none}
 .gdo .gnum{font-size:11.5px;color:#66786E;font-variant-numeric:tabular-nums;white-space:nowrap}
 .gdo .gnum b{color:#1B3227;font-weight:600}
 .gdo .gdelta{margin-left:auto;flex:0 0 auto;font-size:11px;font-weight:700;border-radius:6px;padding:2px 7px;
@@ -1424,7 +1426,7 @@ const CSS = `
  */
 type StripStats = {
   soon: ApiMatch[]; live: ApiMatch[]; risk: ApiMatch[];
-  fill: { pct: number | null; real: number; cap: number; fake: number };
+  fill: { pct: number | null; real: number; cap: number; fake: number; bumped: number };
   cityCount: number; nextKick: ApiMatch | null; allCount: number;
 };
 function StatStrip({ s, active, onPick, clockOf }: {
@@ -1442,7 +1444,13 @@ function StatStrip({ s, active, onPick, clockOf }: {
     /* THE FILL IS A RATIO OF SUMS, computed in the model — see realFillPct. "—" and not "0%" when
      * nothing has capacity, because 0% is a claim about a day that had no spots to fill. */
     { k: "fill", lab: "Real spots filled", val: pct == null ? "—" : `${Math.round(pct)}%`,
-      sub: pct == null ? "no capacity today" : `${s.fill.real} of ${s.fill.cap} · ${s.fill.fake} fake`, can: false },
+      /* THE BUMP COUNT, ONLY WHEN THERE IS ONE. A match that grew to four teams grew its own
+       * denominator with it on the manual convert path, so the percentage can fall while the night
+       * improves. Saying nothing when none have bumped keeps the line short on an ordinary night. */
+      sub: pct == null ? "no capacity today"
+        : `${s.fill.real} of ${s.fill.cap} · ${s.fill.fake} fake`
+          + (s.fill.bumped > 0 ? ` · ${s.fill.bumped} match${s.fill.bumped === 1 ? "" : "es"} bumped` : ""),
+      can: false },
   ];
   return (
     <div className="gstrip" data-testid="gday-strip">
@@ -1462,6 +1470,40 @@ function StatStrip({ s, active, onPick, clockOf }: {
           : <div key={t.k} className={cls} data-testid={`gtile-${t.k}`} data-static="1">{inner}</div>;
       })}
     </div>
+  );
+}
+
+/* ── THE MIN LABEL, CLAMPED BY ITS OWN MEASURED WIDTH ─────────────────────────────────────────
+ * C2. The clamp was a hard-coded 12-88%, chosen for "min 9" and wrong for anything longer — the
+ * same class of defect as the vertical clip: a magic number that happened to fit the string it was
+ * written for. A wider clamp would just be a bigger magic number.
+ *
+ * THE RULE IS DERIVED, NOT GUESSED: the label's centre must sit at least HALF ITS OWN RENDERED
+ * WIDTH from each end of the track, so its edges land exactly on the track's edges in the worst
+ * case and inside it everywhere else. That needs the rendered width, which only the browser knows,
+ * so it is measured in a layout effect and applied before paint.
+ *
+ * Before the measurement lands the label renders at its unclamped position; useLayoutEffect runs
+ * before the browser paints, so there is no flash of a mispositioned label. */
+function MinLabel({ pct, n }: { pct: number; n: number }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [clamped, setClamped] = useState(pct);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const track = el?.parentElement?.querySelector(".gbar") as HTMLElement | null;
+    if (!el || !track) { setClamped(pct); return; }
+    const tw = track.offsetWidth;
+    if (tw <= 0) { setClamped(pct); return; }
+    const halfPct = (el.offsetWidth / 2 / tw) * 100;
+    /* A LABEL WIDER THAN ITS TRACK cannot satisfy both bounds; centre it and let it use the full
+     * width rather than pinning it to one edge. */
+    const lo = Math.min(halfPct, 50), hi = Math.max(100 - halfPct, 50);
+    setClamped(Math.max(lo, Math.min(hi, pct)));
+  }, [pct, n]);
+  return (
+    <div ref={ref} className="gmnl" data-testid="gday-minlabel" data-min={n}
+      data-pct={clamped.toFixed(4)} data-raw={pct.toFixed(4)}
+      style={{ left: `${clamped}%` }}>min {n}</div>
   );
 }
 
@@ -1511,8 +1553,11 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
         <div className="n">
           <s data-testid="gday-name">{m.name}</s>
           {ac != null && ac > 0 && <span className="gtag hot" data-testid="gday-cancels">cancels in {fmtDur(ac)}</span>}
-          {/* MORE FAKE, on exactly the rows where fake exceeds real. */}
-          {fk > real && <span className="gtag" data-testid="gday-morefake">more fake</span>}
+          {/* THE "MORE FAKE" CHIP WAS HERE AND IS GONE. It fired when fake exceeded real, which
+              on a real board is almost exactly the set of rows already styled red — and the spots
+              cell two columns over says the same thing with the actual numbers
+              ("3 real · 9 fake · 12/18"). A chip restating a fact stated better beside it, at the
+              cost of width the field name needs. The counts themselves are untouched. */}
           <span className="gpz" data-testid="gday-price">{money(m.registrationPrice)}</span>
         </div>
         <div className="sub">{m.field?.title ?? "—"} · {m.field?.city?.name ?? "—"}</div>
@@ -1528,12 +1573,13 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
               {g.hasMin && <div className="mn" data-testid="gday-notch" data-pct={g.minPct.toFixed(4)} style={{ left: `${g.minPct}%` }} />}
             </div>
             {g.hasMin
-              ? <div className="gmnl" data-testid="gday-minlabel" data-min={min} data-pct={g.labelPct.toFixed(4)}
-                  style={{ left: `${g.labelPct}%` }}>min {min}</div>
-              : /* "no min", not "minimum" and not "min 0". A match with no minimum cannot be short
-                   and can never auto-cancel for a shortfall; the label says so in the width the
-                   track actually has. */
-                <div className="gmnl gnomin" data-testid="gday-nomin" style={{ left: "12%" }}>no min</div>}
+              ? <MinLabel pct={g.minPct} n={min} />
+              : /* C1. A MATCH WITH NO MINIMUM HAS NO NOTCH, so the label has nothing to be centred
+                   on. It describes the whole bar, so it is LEFT-ALIGNED to the start of the track
+                   and not clamped at all. Centre-positioning it at a 12% clamp is what sheared
+                   "no min" down to "o min": ~32px of text with its centre 12.5px from the left edge
+                   puts its left edge at about -3.5px. */
+                <div className="gmnl gnomin" data-testid="gday-nomin">no min</div>}
           </div>
         ) : <div className="gmeter" />}
         <div className="gnum" data-testid="gday-nums">

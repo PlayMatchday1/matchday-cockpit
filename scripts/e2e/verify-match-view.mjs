@@ -9,7 +9,7 @@
 //
 //   node scripts/e2e/verify-match-view.mjs
 import { chromium } from "playwright";
-import { installHarnessGuard, closeContext, closeBrowser, storageStateFor } from "./_session.mjs";
+import { installHarnessGuard, closeContext, closeBrowser, storageStateFor , nonEmpty } from "./_session.mjs";
 installHarnessGuard();
 process.loadEnvFile(".env.local");
 
@@ -247,10 +247,10 @@ console.log("\n── the cascade runs one way ──");
   const cityRows = (await read()).rows;
   const cityFields = new Set(cityRows.map((r) => r.field));
   const offered = fieldOpts.map((o) => o.value);
-  eq("field offers only this city's fields", offered.filter((v) => !cityFields.has(v)), []);
-  const elsewhere = base.rows.filter((r) => !cityFields.has(r.field)).map((r) => r.field);
+  eq("field offers only this city's fields", nonEmpty(offered, "offered").filter((v) => !cityFields.has(v)), []);
+  const elsewhere = nonEmpty(base.rows, "base.rows").filter((r) => !cityFields.has(r.field)).map((r) => r.field);
   eq("  control — fields exist in the data under other cities", elsewhere.length > 0, true);
-  eq("  …and none of them is offered", offered.filter((v) => elsewhere.includes(v)), []);
+  eq("  …and none of them is offered", nonEmpty(offered, "offered").filter((v) => elsewhere.includes(v)), []);
 
   // SELECTING A FIELD MUST NOT SHORTEN THE CITY LIST. This is the corner with no exit.
   await pick("field", fieldOpts[0].value);

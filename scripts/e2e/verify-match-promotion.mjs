@@ -13,7 +13,7 @@
 //   node scripts/e2e/verify-match-promotion.mjs
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
-import { installHarnessGuard, closeContext, closeBrowser, storageStateFor } from "./_session.mjs";
+import { installHarnessGuard, closeContext, closeBrowser, storageStateFor , nonEmpty } from "./_session.mjs";
 installHarnessGuard();
 process.loadEnvFile(".env.local");
 
@@ -181,9 +181,9 @@ const badgeAudit = await page.evaluate(() => {
   return { rows: out, bad };
 });
 eq("every badge reads one of the three labels", badgeAudit.bad, 0);
-eq("no tile carries more than one badge", badgeAudit.rows.filter((r) => r.multi > 0).map((r) => r.city), []);
+eq("no tile carries more than one badge", nonEmpty(badgeAudit.rows, "badgeAudit.rows").filter((r) => r.multi > 0).map((r) => r.city), []);
 eq("every city's 'N new' equals the badges rendered under it",
-   badgeAudit.rows.filter((r) => r.badges !== r.claimed).map((r) => `${r.city} ${r.badges}≠${r.claimed}`), []);
+   nonEmpty(badgeAudit.rows, "badgeAudit.rows").filter((r) => r.badges !== r.claimed).map((r) => `${r.city} ${r.badges}≠${r.claimed}`), []);
 const totalBadges = badgeAudit.rows.reduce((n, r) => n + r.badges, 0);
 // THE CONTROL FOR THE EQUALITY ABOVE, which would hold vacuously if nothing were badged at all.
 // A week with no new slots is possible, so the check is two-directional rather than a fixed count:
@@ -283,7 +283,7 @@ if (chips === 0) {
   // Worst day card must name the weekday column carrying the most chips.
   const perDay = await page.locator('[data-testid="cancel-row"]').evaluateAll((els) => {
     const c = [0, 0, 0, 0, 0, 0, 0];
-    for (const r of els) [...r.querySelectorAll("td")].slice(1).forEach((td, i) => {
+    for (const r of nonEmpty(els, "els")) [...r.querySelectorAll("td")].slice(1).forEach((td, i) => {
       c[i] += td.querySelectorAll('[data-testid="cancel-chip"]').length;
     });
     return c;

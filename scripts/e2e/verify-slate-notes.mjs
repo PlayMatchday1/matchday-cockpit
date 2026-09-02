@@ -7,7 +7,7 @@
 //   node scripts/e2e/verify-slate-notes.mjs
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
-import { netRetry, installHarnessGuard, fatal, sessionFor } from "./_session.mjs";
+import { netRetry, installHarnessGuard, fatal, sessionFor , nonEmpty } from "./_session.mjs";
 installHarnessGuard();
 
 const BASE = process.env.BASE || "http://localhost:3000";
@@ -110,7 +110,7 @@ async function main() {
       tagUnchanged: (r.find((x) => x.kind === "note")?.week ?? "") === weekTagBefore,
       tagged: /^week of \w+ \d+$/.test(r.find((x) => x.kind === "note")?.week ?? ""),
     })), { kinds: ["note"], tagUnchanged: true, tagged: true });
-    eq("gate3b: no proposal chip renders on the other week either", await page.$$eval('[data-testid="slate-proposal"]', (els, m) => els.filter((e) => e.innerText.includes(m)).length, MARK), 0);
+    eq("gate3b: no proposal chip renders on the other week either", await page.$$eval('[data-testid="slate-proposal"]', (els, m) => nonEmpty(els, "els").filter((e) => e.innerText.includes(m)).length, MARK), 0);
 
     // ── GATE 5 — layout at 1600 and 390 (asserted before the delete empties it) ──
     const layout = async (w) => {

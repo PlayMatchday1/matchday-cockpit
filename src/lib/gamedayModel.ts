@@ -381,16 +381,27 @@ export const atRisk = (m: ApiMatch, now: number): boolean => stillToCome(m, now)
  * Matches with no capacity contribute to neither side. Returns null when nothing has capacity,
  * because 0/0 rendered as "0%" is a claim about a day that had no spots to fill.
  */
-export function realFillPct(ms: readonly ApiMatch[]): { pct: number | null; real: number; cap: number; fake: number } {
-  let real = 0, cap = 0, fake = 0;
+/* A MATCH THAT HAS GROWN TO FOUR TEAMS. The denominator is maxPlayerCount, and it MOVES on the
+ * manual convert path: convert-4 writes maxPlayerCount = perTeam x 4, so 22 across two teams
+ * becomes 44 and the percentage FALLS when a match gets more popular. (MatchDay's own auto-bump
+ * does not move it — proven on staging: writing teamNumbers 4 alone left maxPlayerCount at 22, and
+ * production 18360 sits at four teams with maxPlayerCount 32 against a 4-team total of 40.)
+ *
+ * Keeping current capacity is right for "how full is tonight". Being SILENT about the churn is not,
+ * so the subtitle names it when it has happened. */
+export const isBumped = (m: ApiMatch): boolean => teamCount(m) >= 4;
+
+export function realFillPct(ms: readonly ApiMatch[]): { pct: number | null; real: number; cap: number; fake: number; bumped: number } {
+  let real = 0, cap = 0, fake = 0, bumped = 0;
   for (const m of ms) {
     const c = capacity(m);
     if (c == null || c <= 0) continue;
     real += realCount(m);
     fake += fakeCount(m);
     cap += c;
+    if (isBumped(m)) bumped++;
   }
-  return { pct: cap > 0 ? (real / cap) * 100 : null, real, cap, fake };
+  return { pct: cap > 0 ? (real / cap) * 100 : null, real, cap, fake, bumped };
 }
 
 /* THE SECTIONS, IN RENDER ORDER.

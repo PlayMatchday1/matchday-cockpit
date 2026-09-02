@@ -15,7 +15,7 @@
 //
 //   node scripts/e2e/verify-revenue-notmatched.mjs
 import { chromium } from "playwright";
-import { installHarnessGuard, closeContext, closeBrowser, storageStateFor } from "./_session.mjs";
+import { installHarnessGuard, closeContext, closeBrowser, storageStateFor , nonEmpty } from "./_session.mjs";
 installHarnessGuard();
 process.loadEnvFile(".env.local");
 
@@ -194,7 +194,7 @@ console.log("\n── the figures ──");
   // constant here fails on a page that is working. The Total is now checked against the column it
   // totals, which catches a broken or mis-summed column without dating the suite.
   eq("the Total row's match count equals the sum of the rows", f.matches, f.rowMatches.reduce((a, b) => a + b, 0));
-  eq("  control — the column carried rows with matches in them", f.rowMatches.filter((x) => x > 0).length > 0, true);
+  eq("  control — the column carried rows with matches in them", nonEmpty(f.rowMatches, "f.rowMatches").filter((x) => x > 0).length > 0, true);
   /* WAS PINNED AT $17,690 AND DRIFTED TO $17,781 — August is a live month and memberships keep
    * arriving, so a constant here fails on a page that is working. Proved pre-existing by running
    * this against a stashed tree. What must hold whatever the amount is: the parts add to the

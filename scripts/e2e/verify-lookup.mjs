@@ -5,7 +5,7 @@
 //   node scripts/e2e/verify-lookup.mjs
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
-import { netRetry, installHarnessGuard, fatal, sessionFor } from "./_session.mjs";
+import { netRetry, installHarnessGuard, fatal, sessionFor , nonEmpty } from "./_session.mjs";
 installHarnessGuard();
 import { overflow } from "./checks.mjs";
 
@@ -319,7 +319,7 @@ async function main() {
       const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
       const L = (c) => 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
       const ratio = (a, b) => { const x = L(a), y = L(b), hi = Math.max(x, y), lo = Math.min(x, y); return (hi + 0.05) / (lo + 0.05); };
-      for (const e of els) { const st = e.getAttribute("data-status"); if (seen[st]) continue; seen[st] = 1; const cs = getComputedStyle(e); const bg = pc(cs.backgroundColor), fg = pc(cs.color); out.push({ st, bg: cs.backgroundColor, textContrast: Math.round(ratio(fg, bg) * 100) / 100 }); }
+      for (const e of nonEmpty(els, "els")) { const st = e.getAttribute("data-status"); if (seen[st]) continue; seen[st] = 1; const cs = getComputedStyle(e); const bg = pc(cs.backgroundColor), fg = pc(cs.color); out.push({ st, bg: cs.backgroundColor, textContrast: Math.round(ratio(fg, bg) * 100) / 100 }); }
       return out;
     });
     const minText = Math.min(...chips.map((c) => c.textContrast));

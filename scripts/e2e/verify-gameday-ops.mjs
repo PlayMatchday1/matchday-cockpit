@@ -11,7 +11,7 @@
 //
 //   node scripts/e2e/verify-gameday-ops.mjs
 import { chromium } from "playwright";
-import { installHarnessGuard, fatal, closeContext, closeBrowser, storageStateFor } from "./_session.mjs";
+import { installHarnessGuard, fatal, closeContext, closeBrowser, storageStateFor , nonEmpty } from "./_session.mjs";
 installHarnessGuard();
 
 const BASE = process.env.BASE || "http://localhost:3000";
@@ -93,8 +93,13 @@ const READ = () => {
               left: +(b.left - lb.left).toFixed(2) });
           }
         }
-        return { text: el.textContent.trim(), h: +lb.height.toFixed(2),
+        const tr = m2.querySelector(".gbar").getBoundingClientRect();
+        return { text: el.textContent.trim(), h: +lb.height.toFixed(2), w: +lb.width.toFixed(2),
           belowMeter: +(lb.bottom - mb.bottom).toFixed(2),
+          /* BOTH AXES. The vertical check added last round would not have caught the "o min"
+           * shear, because that one clips horizontally. */
+          pastTrackLeft: +(tr.left - lb.left).toFixed(2),
+          pastTrackRight: +(lb.right - tr.right).toFixed(2),
           outside: clippers.filter((c) => c.below > 0.5 || c.right > 0.5 || c.left > 0.5) };
       })(),
       notch: notch ? { pct: Number(notch.dataset.pct), box: bb(notch) } : null,
@@ -284,7 +289,7 @@ async function main() {
   yes("  CONTROL: other cities do not", cityRows.some((c) => !c.risk));
 
   console.log("\n-- rows: delta, meter, notch and the min label --");
-  for (const r of d.rows) {
+  for (const r of nonEmpty(d.rows, "d.rows")) {
     const m = FIX.find((x) => x.id === r.id);
     is(`  #${r.id} delta = real ${REAL(m)} minus min ${m.minPlayerCount}`, r.delta, REAL(m) - m.minPlayerCount);
     is(`  #${r.id} min label reads its own minimum`, r.minLabel?.n, m.minPlayerCount);
@@ -302,7 +307,7 @@ async function main() {
    * sitting over the notch it describes. Checked here on the fixture and again below on the LIVE
    * board, because "realistic" is a claim about real matches. */
   is("  the 12-88% clamp never fires on this data",
-    d.rows.filter((r) => Math.abs(r.minLabel.pct - r.notch.pct) > 0.001).map((r) => r.id), []);
+    nonEmpty(d.rows, "d.rows").filter((r) => Math.abs(r.minLabel.pct - r.notch.pct) > 0.001).map((r) => r.id), []);
   /* CONTROL: the clamp is reachable - a minimum below 12% of capacity DOES move the label, so the
    * assertion above is about the data and not about a clamp that never does anything. */
   const clampWorks = await page.evaluate(() => {
@@ -310,10 +315,11 @@ async function main() {
     return el != null;
   });
   yes("  CONTROL: labels are present to have been checked", clampWorks);
-  const moreFake = d.rows.filter((r) => r.moreFake).map((r) => r.id).sort();
-  const wantMoreFake = FIX.filter((m) => FAKE(m) > REAL(m)).map((m) => m.id).filter((id) => d.rows.some((r) => r.id === id)).sort();
-  is("  MORE FAKE appears exactly where fake exceeds real", moreFake, wantMoreFake);
-  yes("  CONTROL: ...and that is not simply every row", moreFake.length > 0 && moreFake.length < d.rows.length);
+  /* THE "MORE FAKE" ASSERTIONS ARE GONE WITH THE CHIP. They existed only to test it, and the fact
+   * it stated is still asserted where it is stated better — the spots cell's own numbers. */
+  is("  no MORE FAKE chip is rendered", await page.locator('[data-testid="gday-morefake"]').count(), 0);
+  is("  CONTROL: ...and the fake counts it restated are still on the row",
+    d.rows.filter((r) => FAKE(FIX.find((m) => m.id === r.id)) > 0).length > 0, true);
   is("  CONTROL: a more-fake row that meets its minimum is not risk-styled",
     d.rows.find((r) => r.id === 104)?.risk, false);
   is("  ...while the at-risk row is", d.rows.find((r) => r.id === 101)?.risk, true);
@@ -452,10 +458,10 @@ async function main() {
     const v = await page.evaluate(READ);
     is(`  ${w}px: no horizontal page scroll`, v.hscroll, false);
     is(`  ${w}px: every min label still inside its track`,
-      v.rows.filter((r) => r.minLabel.box.l < r.track.l - 14 || r.minLabel.box.r > r.track.r + 14).map((r) => r.id), []);
-    is(`  ${w}px: rows still under 62px`, v.rows.filter((r) => r.h >= 62).map((r) => r.id), []);
+      nonEmpty(v.rows, "v.rows").filter((r) => r.minLabel.box.l < r.track.l - 14 || r.minLabel.box.r > r.track.r + 14).map((r) => r.id), []);
+    is(`  ${w}px: rows still under 62px`, nonEmpty(v.rows, "v.rows").filter((r) => r.h >= 62).map((r) => r.id), []);
     is(`  ${w}px: no row overlaps`, (() => { const o = [];
-      for (const r of v.rows) for (let i = 1; i < r.chain.length; i++) {
+      for (const r of nonEmpty(v.rows, "v.rows")) for (let i = 1; i < r.chain.length; i++) {
         const a = r.chain[i - 1], b = r.chain[i];
         if (a && b && a.r > b.l + 0.5) o.push([r.id, a.sel, b.sel]); } return o; })(), []);
   }
@@ -642,7 +648,7 @@ async function main() {
       } else {
         /* THE DESKTOP OVERLAP WALK STAYS, at 1024 and above. */
         const ov = [];
-        for (const r of v.rows) for (let i = 1; i < r.chain.length; i++) {
+        for (const r of nonEmpty(v.rows, "v.rows")) for (let i = 1; i < r.chain.length; i++) {
           const a = r.chain[i - 1], b = r.chain[i];
           if (a && b && a.r > b.l + 0.5) ov.push([r.id, a.sel, b.sel]);
         }
@@ -676,7 +682,9 @@ async function main() {
     /* ASSERTED ON RENDERED CONTENT, NOT A 200. A 200 that renders an empty shell is still broken. */
     const txt = await pc.evaluate(() => document.body.innerText);
     yes("  the inbox rendered its tabs and counts", /Active/.test(txt) && /Upcoming/.test(txt) && /Past/.test(txt));
-    yes(`  ...with real threads in it`, txt.length > 400);
+    /* THE INBOX'S OWN CONTENT, not a character count — the nav chrome alone clears 400 chars, so
+     * that threshold was measuring the shell rather than the threads. */
+    yes("  ...with real threads in it", /\d+\s*\n?\s*(Upcoming|Past)/.test(txt) && /Invite link|kickoff|PM|AM/.test(txt));
     await closeContext(cc);
 
     console.log("\n-- C3: the banner link lands on that match's thread --");
@@ -881,6 +889,11 @@ async function main() {
         }
         is(`  ${w}: no row overlaps`, ov, []);
       }
+      /* BOTH EDGES AGAINST THE TRACK. The vertical check alone missed the "o min" shear. */
+      is(`  ${w}: no label runs past the LEFT edge of its track`,
+        v.rows.filter((r) => r.labelClip && r.labelClip.pastTrackLeft > 0.5).map((r) => [r.id, r.labelClip.text, r.labelClip.pastTrackLeft]), []);
+      is(`  ${w}: no label runs past the RIGHT edge of its track`,
+        v.rows.filter((r) => r.labelClip && r.labelClip.pastTrackRight > 0.5).map((r) => [r.id, r.labelClip.text, r.labelClip.pastTrackRight]), []);
       /* CONTROL: put the 13px back and prove the assertion trips at this width. */
       const trips = await pa.evaluate(() => {
         const m2 = document.querySelector(".gmeter");
@@ -901,7 +914,14 @@ async function main() {
   {
     /* A MATCH WITH NO MINIMUM. It cannot be short and can never auto-cancel for a shortfall, so it
      * must be out of every risk surface as well as labelled honestly. */
+    /* THE CLAMP MUST BE EXERCISED AT BOTH BOUNDS or it is not tested. A minimum of 1 of 40 puts the
+     * notch at 2.5% and a minimum of 39 of 40 at 97.5% — both far outside any label's half-width,
+     * so the derived clamp has to move the label in each direction. */
     const NOMIN = [
+      mk({ id: 503, name: "Low notch", fd: "F", city: "Austin", at: 120, cap: 40, min: 1, real: 30, fake: 0, mgrF: "A", mgrL: "B" }),
+      /* REAL 39 AGAINST A MINIMUM OF 39 — it MEETS its minimum, so it exercises the high clamp
+       * bound without joining Needs attention and changing the counts this block also asserts. */
+      mk({ id: 504, name: "High notch", fd: "F", city: "Austin", at: 125, cap: 40, min: 39, real: 39, fake: 0, mgrF: "A", mgrL: "B" }),
       mk({ id: 501, name: "Hala Pilkarska Bemowo", fd: "Hala", city: "Warsaw", at: 100, cap: 14, min: 0, real: 2, fake: 0, mgrF: "Kuba", mgrL: "W" }),
       mk({ id: 502, name: "Parmer Stadium", fd: "Parmer", city: "Austin", at: 110, cap: 36, min: 0, real: 15, fake: 0, mgrF: "Drea", mgrL: "M" }),
       TODAY_FIX[0],
@@ -917,6 +937,37 @@ async function main() {
       is(`  #${id} carries no risk styling`, r?.risk, false);
       is(`  #${id} is not a banner`, await pn.locator(`[data-testid="gday-alert"][data-id="${id}"]`).count(), 0);
     }
+    console.log("\n-- C2: the derived clamp, exercised at BOTH bounds --");
+    for (const [id, where] of [[503, "low"], [504, "high"]]) {
+      const r = v.rows.find((x) => x.id === id);
+      yes(`  #${id} (${where} notch) exists`, !!r, "fixture row missing");
+      if (!r) continue;
+      /* THE CLAMP FIRED: the rendered position differs from the raw notch position. */
+      const raw = Number(r.minLabel.pct), rawNotch = Number(r.notch.pct);
+      yes(`  #${id} the clamp moved the label (${rawNotch.toFixed(1)}% notch -> ${raw.toFixed(1)}% label)`,
+        Math.abs(raw - rawNotch) > 0.5);
+      is(`  #${id} ...and it stayed inside the track`,
+        [r.labelClip.pastTrackLeft > 0.5, r.labelClip.pastTrackRight > 0.5], [false, false]);
+      /* AND IT IS DERIVED FROM THE MEASURED WIDTH, not a fixed 12/88: the clamped centre sits
+       * exactly half the label's own width from the edge. */
+      const halfPct = (r.labelClip.w / 2 / r.track.w) * 100;
+      const wantPct = where === "low" ? halfPct : 100 - halfPct;
+      yes(`  #${id} clamped to half its own width (${raw.toFixed(2)}% vs ${wantPct.toFixed(2)}%)`,
+        Math.abs(raw - wantPct) < 1.5);
+    }
+    /* CONTROL: restore the fixed 12% clamp and show a min-0 row trips the edge assertion. */
+    const tripped = await pn.evaluate(() => {
+      const el = document.querySelector('[data-testid="gday-nomin"]');
+      const track = el.closest(".gmeter").querySelector(".gbar");
+      const prev = el.style.cssText;
+      el.style.left = "12%"; el.style.transform = "translateX(-50%)";
+      const seen = track.getBoundingClientRect().left - el.getBoundingClientRect().left > 0.5;
+      el.style.cssText = prev;
+      return seen;
+    });
+    yes("  CONTROL: the fixed 12% clamp DOES shear a no-min label off the left", tripped,
+      "the horizontal edge check cannot see the shear - every clean result above is worthless");
+
     is("  Needs attention counts only the real one", v.tiles.risk.v, "1");
     is("  CONTROL: ...and that one IS risk-styled", v.rows.find((x) => x.id === TODAY_FIX[0].id)?.risk, true);
     await pn.click('[data-testid="gtile-risk"]'); await pn.waitForTimeout(700);
@@ -928,6 +979,7 @@ async function main() {
     /* THE WHOLE PAGE'S RENDERED TEXT, not one component. Borrowed jargon leaks. */
     const pageText = await pn.evaluate(() => document.body.innerText);
     is("  no user-visible 'rung' anywhere on the page", /rung/i.test(pageText), false);
+    is("  no 'MORE FAKE' anywhere on the page either", /more fake/i.test(pageText), false);
     yes(`  CONTROL: the page really did render (${pageText.length} chars)`, pageText.length > 500);
     /* AND IN THE PANEL TOO, since the editor is where the ladder lives. */
     await pn.click('[data-testid="gday-row"] [data-testid="gday-name"]');
