@@ -25,13 +25,20 @@ import MatchOpsSectionSheet from "@/app/(internal)/match-ops/MatchOpsSectionShee
 import MatchOpsMobileBar from "@/app/(internal)/match-ops/MatchOpsMobileBar";
 import type { RailItem } from "@/app/(internal)/match-ops/sections";
 import RefreshIcon from "@/components/RefreshIcon";
+import { useAuth, canEditMatches } from "@/lib/useAuth";
 import {
   type ApiMatch, type BoardFilter, type MatchGroup, GROUPS, byKickoff, matchGroup, minsUntil, fmtDur, localClock, deadlineClock, tzAbbr,
   realCount, fakeCount, capacity, openSpots, teamCount, short, shortBy, fill, flags, attention,
   acLevel, minsToDeadline, nextRelease, nextMark, inCities, passesFilter, stillToCome, riskTier, snapRail, vsMin, vsMinDelta, STD_LEAD, MARKS, autoCancels,
+  atRisk, realFillPct, dayBucket, DAY_BUCKETS, passesStrip, meter, type DayBucket, type StripKey,
 } from "@/lib/gamedayModel";
 
 const ENV = DRAWER_ENV; // the board reads and edits the same environment as the drawer
+
+/** The strip tiles' names, for the empty state — so it says which filter found nothing. */
+const STRIP_LABEL: Record<StripKey, string> = {
+  all: "All matches", risk: "Needs attention", soon: "Still to come", live: "In play", fill: "Real spots filled",
+};
 
 const localYMD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const addDays = (ymd: string, n: number) => { const [y, m, d] = ymd.split("-").map(Number); const dt = new Date(y, m - 1, d + n); return localYMD(dt); };
@@ -85,6 +92,7 @@ export default function GamedayBoard({
   nav?: { items: RailItem[]; title: string };
 } = {}) {
   const router = useRouter();
+  const { appUser } = useAuth();
   const [today] = useState(() => localYMD(new Date()));
   const [date, setDate] = useState(today);
   const [matches, setMatches] = useState<ApiMatch[]>([]);
@@ -96,6 +104,19 @@ export default function GamedayBoard({
   const [refreshing, setRefreshing] = useState(false);
   const [staleFail, setStaleFail] = useState(false); // last manual refresh failed; rows are old but kept
   const [filter, setFilter] = useState<BoardFilter>("all");
+  /* ── THE STAT STRIP'S SELECTION ───────────────────────────────────────────────────────────────
+   * `null` is "no bucket filter". Only risk / soon / live are selectable; All matches and Real
+   * spots filled are read-outs, and the board does not wire them as filters at all rather than
+   * wiring them to a no-op. Clicking the active tile again clears, which is why this is a single
+   * nullable key and not a set. */
+  const [strip, setStrip] = useState<StripKey | null>(null);
+  /* WHICH SECTIONS ARE OPEN. Finished starts CLOSED — it is the largest section by the end of a
+   * day and it is the one nobody is acting on. */
+  const [openSec, setOpenSec] = useState<Record<DayBucket, boolean>>({ soon: true, live: true, done: false, cx: false });
+  /* PENDING MINIMUM ADJUSTMENTS, per match id, from the banner stepper. A value here means the
+   * operator has stepped but not saved. It is DISCARDED when the editor opens — see openDrawer. */
+  const [pendingMin, setPendingMin] = useState<Record<number, number>>({});
+  const [saveState, setSaveState] = useState<Record<number, { s: "saving" | "landed" | "failed" | "unknown"; msg: string }>>({});
   const [cities, setCities] = useState<Set<string>>(new Set());
   const [drawerId, setDrawerId] = useState<number | null>(null);
   const [drawerDirty, setDrawerDirty] = useState(false);
@@ -192,6 +213,135 @@ export default function GamedayBoard({
   }, [matches]);
   const visible = useMemo(() => scope.filter((m) => passesFilter(m, now, filter)).sort(byKickoff), [scope, now, filter]);
 
+  /* ── THE STRIP ────────────────────────────────────────────────────────────────────────────────
+   * Every figure derives from `scope` — the CITY-filtered set — not from `matches`. A tile that
+   * counted the whole day while the grid showed one city would be describing a different page. */
+  const strips = useMemo(() => {
+    const soon = scope.filter((m) => dayBucket(m, now) === "soon");
+    const live = scope.filter((m) => dayBucket(m, now) === "live");
+    const risk = scope.filter((m) => atRisk(m, now));
+    const f = realFillPct(scope);
+    const cityCount = new Set(scope.map((m) => m.field?.city?.name).filter(Boolean)).size;
+    const nextKick = soon.length ? soon.slice().sort(byKickoff)[0] : null;
+    return { soon, live, risk, fill: f, cityCount, nextKick, allCount: scope.length };
+  }, [scope, now]);
+
+  /* THE GRID. City first, then the bucket — the two COMPOSE, so Austin + In play is Austin
+   * matches in play and nothing else. Neither ever widens the other. */
+  const shown = useMemo(
+    () => scope.filter((m) => passesStrip(m, now, strip)).sort(byKickoff),
+    [scope, now, strip],
+  );
+  const sections = useMemo(
+    () => DAY_BUCKETS.map((B) => ({ B, rows: shown.filter((m) => dayBucket(m, now) === B.k) })),
+    [shown, now],
+  );
+  /* THE BANNER'S POPULATION. Scoped to the city selection like everything else, but NOT to the
+   * bucket filter: an at-risk match must not vanish from the banner because the operator is
+   * looking at In play. The alert is about the day, not about the current view. */
+  const risky = useMemo(() => scope.filter((m) => atRisk(m, now)).sort(byKickoff), [scope, now]);
+  /* CITIES HOLDING AN AT-RISK MATCH, for the chip's risk style. Derived from `matches`, not
+   * `scope`: selecting Austin must not stop Houston's chip from showing that Houston has a
+   * problem — that is the one moment the operator most needs to see it. */
+  const riskCities = useMemo(() => {
+    const set = new Set<string>();
+    for (const m of matches) if (atRisk(m, now)) { const c = m.field?.city?.name; if (c) set.add(c); }
+    return set;
+  }, [matches, now]);
+
+  /* ── THE ONE WRITE ON THIS PAGE ───────────────────────────────────────────────────────────────
+   * KEYED ON THE ACTUAL EDIT MATCHES RIGHT, not on whether a callback was passed.
+   *
+   * The first version of this read `!onOpenMatch` — inferring write capability from the presence
+   * of a prop. That is a proxy, and it fails the day someone wires onOpenMatch into
+   * /city/gameday for any reason: the stepper would go live for a tier that must never reach a
+   * write, and nothing in the diff would look wrong. `canEditMatches` is the same permission the
+   * write route enforces server-side; this is the courtesy half of that check, and the route is
+   * still what actually holds. */
+  const canEditMin = canEditMatches(appUser);
+  /* LOWERING THE MINIMUM GENUINELY RESCUES THE MATCH — PROVEN, NOT ASSUMED.
+   *
+   * Staging experiment, 2026-09-01. Two identical matches, both armed (autoCanceled true,
+   * autoCanceledMinutes 20) and both short (0 real against a minimum of 9), deadline 20:55:34:
+   *   A CONTROL   left at min 9  -> isCancelled TRUE  by 21:00
+   *   B TREATMENT min -> 0 at 20:51 -> isCancelled FALSE, still false at 21:07
+   * The control firing is what makes the treatment mean anything: it proves the mechanism is live
+   * and observable, so B staying up is a prevented cancel and not a quiet worker. B was watched for
+   * twelve minutes past A's cancellation, so it is not merely slower.
+   *
+   * The cancel fires LATE by a VARIABLE margin — 10 seconds past nominal in one run, about four
+   * minutes forty in another. The countdown is a guide, not a contract, and the banner does not
+   * promise otherwise.
+   *
+   * AND FAKE SPOTS DO NOT COUNT TOWARD THE MINIMUM — proven the same evening with a fixture where
+   * the two hypotheses disagree: real 0, fake 16, minimum 3. Total was five times the minimum and
+   * it cancelled anyway. So the countdown is REAL for exactly the matches this page was built for:
+   * a match propped up by fakes still cancels, and `short()` keying on realCount is right. */
+  const stepperReason = canEditMin
+    ? "Lowering the minimum TO OR BELOW the real player count prevents the pending auto-cancel — proven on staging 2026-09-01. A smaller reduction that still leaves a shortfall does not."
+    : "You have read-only Match Ops access. EDIT MATCHES is required to change a match minimum.";
+
+  const stepMin = (id: number, d: number) => {
+    const m = matches.find((x) => x.id === id);
+    if (!m) return;
+    const cap = capacity(m) ?? Number(m.maxPlayerCount ?? 0);
+    const cur = pendingMin[id] ?? Number(m.minPlayerCount ?? 0);
+    /* FLOOR 2, CEILING CAPACITY. The buttons are disabled at the bound rather than clamping
+     * silently — a − that does nothing and says nothing is a control that looks live. This clamp
+     * is the second line of defence, not the first. */
+    const next = Math.max(2, Math.min(cap, cur + d));
+    if (next === cur) return;
+    setSaveState((p) => { const n = { ...p }; delete n[id]; return n; });
+    setPendingMin((p) => {
+      const saved = Number(m.minPlayerCount ?? 0);
+      const n = { ...p };
+      // Stepping back to the saved value is not a pending change — it restores Cancel now.
+      if (next === saved) delete n[id]; else n[id] = next;
+      return n;
+    });
+  };
+
+  /* SAVE. ONE ATTEMPT, NEVER A RETRY — there is no Idempotency-Key on this API and a duplicate
+   * write is visible to a player. The route reads the match back and returns its own verdict; a
+   * 2xx alone is not a landed write and is never treated as one.
+   *
+   * ON UNKNOWN, LOCAL STATE IS NOT MUTATED. The board refetches instead, because the one thing
+   * worse than not knowing is showing a number nobody has confirmed. */
+  const saveMin = async (id: number) => {
+    const next = pendingMin[id];
+    if (next == null) return;
+    setSaveState((p) => ({ ...p, [id]: { s: "saving", msg: "Saving…" } }));
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      const res = await fetch(`/api/matchday/${ENV}/matches/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        // THE DIFF IS THE REQUEST BODY. Only the field that changed.
+        body: JSON.stringify({ changes: { minPlayerCount: next }, source: "gameday-stepper" }),
+      });
+      const j = await res.json().catch(() => null);
+      if (!res.ok) {
+        setSaveState((p) => ({ ...p, [id]: { s: "failed", msg: `FAILED — ${j?.error ?? `HTTP ${res.status}`}` } }));
+        return;
+      }
+      const outcome = String(j?.outcome ?? "").toLowerCase();
+      if (outcome === "landed") {
+        setSaveState((p) => ({ ...p, [id]: { s: "landed", msg: `LANDED — minimum is ${next}` } }));
+        setPendingMin((p) => { const n = { ...p }; delete n[id]; return n; });
+        await load(date, true);   // the row's notch, label and delta all move off the refetch
+      } else if (outcome === "failed" || outcome === "not_applied" || outcome === "not applied") {
+        setSaveState((p) => ({ ...p, [id]: { s: "failed", msg: `${outcome.toUpperCase()} — the minimum did not change` } }));
+      } else {
+        setSaveState((p) => ({ ...p, [id]: { s: "unknown", msg: "UNKNOWN — refetching rather than guessing" } }));
+        setPendingMin((p) => { const n = { ...p }; delete n[id]; return n; });
+        await load(date, true);
+      }
+    } catch (e) {
+      setSaveState((p) => ({ ...p, [id]: { s: "failed", msg: `FAILED — ${e instanceof Error ? e.message : String(e)}` } }));
+    }
+  };
+
   const drawerSiblings = useMemo(() => visible.map((m) => m.id), [visible]);
 
   const money = (c: number | null | undefined) => (c == null ? "—" : "$" + centsToDollars(c));
@@ -200,7 +350,22 @@ export default function GamedayBoard({
   const openDrawer = (id: number) => {
     if (onOpenMatch) { onOpenMatch(id); return; }
     if (drawerId != null && drawerId !== id && !guardLeave()) return;
+    /* ── THE EDITOR IS THE SINGLE SOURCE OF TRUTH ONCE OPEN ────────────────────────────────────
+     * Any pending stepper value is DISCARDED here, not merged and not used to pre-fill. The
+     * stepper and the editor write the same field, and two live drafts of one field is how a
+     * value nobody chose gets saved: the operator steps to 7, opens the editor to check something,
+     * sees 7 pre-filled, assumes it is stored, and saves it. Discarding is the only rule that
+     * cannot produce that. It is also why the stepper resets to the SAVED value on close. */
+    setPendingMin({});
+    setSaveState({});
     setDrawerId(id);
+  };
+  /* CLOSING RE-READS THE MATCH, so the banner, the row and the Needs attention tile all reflect
+   * whatever the editor did — including an edit that did not touch the minimum. */
+  const closeDrawer = () => {
+    if (!guardLeave()) return;
+    setDrawerId(null);
+    void load(date, true);
   };
   const stepIdx = drawerId != null ? drawerSiblings.indexOf(drawerId) : -1;
   const step = (d: number) => { if (!guardLeave()) return; const i = stepIdx + d; if (i >= 0 && i < drawerSiblings.length) setDrawerId(drawerSiblings[i]); };
@@ -311,20 +476,25 @@ export default function GamedayBoard({
                 value={date} onChange={(e) => { if (e.target.value) goDay(e.target.value); }} />
             </div>
             <button className="chip" data-testid="day-today" disabled={date === today} onClick={() => goDay(today)}>Today</button>
-            <span className="filters">
-              <button className={"chip" + (filter === "all" ? " on" : "")} data-testid="filter-all" onClick={() => setFilter("all")}>All<span className="b">{counts.all}</span></button>
-              <button className={"chip att" + (filter === "att" ? " on" : "")} data-testid="filter-att" onClick={() => setFilter("att")}>Needs attention<span className="b">{counts.att}</span></button>
-              <button className={"chip" + (filter === "upc" ? " on" : "")} data-testid="filter-upc" onClick={() => setFilter("upc")}>Still to come<span className="b">{counts.upc}</span></button>
-            </span>
+            {/* THE PILL ROW IS GONE — the stat strip below the header is the filter now, and it
+                carries the counts these pills used to. Keeping both would be two controls for one
+                selection. */}
           </div>
-          <div className="row2"><span className="lb">CITIES</span>
+          {/* COMPACT CHIPS. A city holding an at-risk match carries the risk style, so the row
+              above the grid answers "where is tonight's problem" without reading the grid. */}
+          <div className="row2 gcities"><span className="lb">CITIES</span>
             <span className="cityf" data-testid="cityf">
               {lockedCity ? (
-                <button className="chip on" data-testid="city-locked" disabled aria-disabled="true"
-                  title={`Scoped to ${lockedCity}`}>{lockedCity}<span className="b">{counts.all}</span></button>
+                <button className="chip gchip on" data-testid="city-locked" disabled aria-disabled="true"
+                  title={`Scoped to ${lockedCity}`}>{lockedCity}<u>{counts.all}</u></button>
               ) : (<>
-                <button className={"chip" + (cities.size === 0 ? " on" : "")} data-testid="city-all" onClick={() => toggleCity("")}>All cities</button>
-                {cityNames.map(([c, n]) => <button key={c} className={"chip" + (cities.has(c) ? " on" : "")} data-testid={`city-${c}`} onClick={() => toggleCity(c)}>{c}<span className="b">{n}</span></button>)}
+                <button className={"chip gchip" + (cities.size === 0 ? " on" : "")} data-testid="city-all"
+                  onClick={() => toggleCity("")}>All cities<u data-testid="city-all-n">{matches.length}</u></button>
+                {cityNames.map(([c, n]) => (
+                  <button key={c} className={"chip gchip" + (cities.has(c) ? " on" : "") + (riskCities.has(c) ? " risk" : "")}
+                    data-testid={`city-${c}`} data-risk={riskCities.has(c) ? "1" : "0"}
+                    onClick={() => toggleCity(c)}>{c}<u>{n}</u></button>
+                ))}
               </>)}
             </span>
           </div>
@@ -333,16 +503,57 @@ export default function GamedayBoard({
 
         {loading ? <div className="empty" data-testid="loading">Loading {dayLabel(date)}…</div>
           : err ? <div className="empty err" data-testid="board-err">Couldn’t load the board: {err}</div>
-          : !anyRows ? <div className="empty" data-testid="empty">Nothing to show for {dayLabel(date)} with these filters.</div>
-          : <div className="sheet" data-testid="snapshot">
-                <div className="colhead"><span /><span>KICKOFF</span><span>MATCH · FIELD</span><span>SPOTS</span><span>vs MIN</span><span>CANCEL TIME</span><span>MANAGER</span><span className="ra">PRICE</span></div>
-                {grouped.map(({ G, rows }) => (
-                  <section className={"grp grp-" + G.k} data-testid={`snap-group-${G.k}`} key={G.k}>
-                    <h2 className="grouphd">{G.t}<span className="n">{rows.length}</span></h2>
-                    <div className="rowlist">{rows.map((m) => <SnapRow key={m.id} m={m} now={now} group={G.k} selected={drawerId === m.id} onOpen={openDrawer} money={money} />)}</div>
+          : <>
+              <StatStrip s={strips} active={strip} clockOf={localClock}
+                onPick={(k) => setStrip((prev) => (prev === k ? null : k))} />
+
+              {/* ONE BANNER PER AT-RISK MATCH, and the slot renders nothing at all when there are
+                  none — an empty box that is always there stops being looked at. */}
+              {risky.length > 0 && (
+                <div data-testid="gday-alertslot">
+                  {risky.map((m) => (
+                    <AlertBanner key={m.id} m={m} now={now}
+                      pending={pendingMin[m.id] ?? null}
+                      onStep={stepMin} onSave={saveMin} onOpen={openDrawer}
+                      saveState={saveState[m.id]}
+                      canEdit={canEditMin} stepperReason={stepperReason} />
+                  ))}
+                </div>
+              )}
+
+              <div className="gcard" data-testid="snapshot">
+                <div className="gcolhead">
+                  <div>Kickoff</div><div>Match · field</div><div>Spots vs minimum</div><div>Manager</div><div />
+                </div>
+                {shown.length === 0 ? (
+                  /* AN EXPLICIT EMPTY STATE, not a blank card — a filter combination that matches
+                     nothing must say so, or it reads as a failed load. */
+                  <div className="empty" data-testid="empty">
+                    Nothing matches {strip ? `“${STRIP_LABEL[strip]}”` : "this view"}
+                    {cities.size ? ` in ${[...cities].join(", ")}` : ""} on {dayLabel(date)}.
+                  </div>
+                ) : sections.map(({ B, rows }) => rows.length === 0 ? null : (
+                  <section key={B.k} data-testid={`gday-section-${B.k}`}>
+                    <button type="button" className={"gsec" + (B.k === "live" ? " live" : "")}
+                      data-testid={`gday-sec-${B.k}`} aria-expanded={openSec[B.k]}
+                      onClick={() => setOpenSec((p) => ({ ...p, [B.k]: !p[B.k] }))}>
+                      <span className="tw">{B.t}</span>
+                      <span className="n" data-testid={`gday-seccount-${B.k}`}>{rows.length}</span>
+                      <span className="car">{openSec[B.k] ? "Hide ▴" : "Show ▾"}</span>
+                    </button>
+                    {openSec[B.k] && rows.map((m) => (
+                      <GRow key={m.id} m={m} now={now} selected={drawerId === m.id}
+                        onOpen={openDrawer} money={money} atRiskRow={atRisk(m, now)} />
+                    ))}
                   </section>
                 ))}
-              </div>}
+              </div>
+              <p className="gfoot" data-testid="gday-foot">
+                {shown.length} of {scope.length} matches
+                {cities.size ? ` · ${[...cities].join(", ")}` : ""}
+                {" · the tick and its label are the match minimum · fake spots are hatched and do not count toward it"}
+              </p>
+            </>}
       </div>
 
       {/* NOT HIDDEN — NOT BUILT. A read-only caller sets onOpenMatch, drawerId therefore never
@@ -352,7 +563,7 @@ export default function GamedayBoard({
       {drawerId != null && !onOpenMatch && (
         <aside className={"gpanel" + (coexist ? " coexist" : "")} data-testid="gday-panel" style={{ ["--panel-w" as string]: `${panelW}px`, right: coexist ? DOCK_W : 0 }}>
           <div className="gpanel-bar">
-            <button className="gpanel-x" data-testid="gday-panel-close" aria-label="Close panel" onClick={() => { if (guardLeave()) setDrawerId(null); }}>✕ Close</button>
+            <button className="gpanel-x" data-testid="gday-panel-close" aria-label="Close panel" onClick={closeDrawer}>✕ Close</button>
             <span className="gpanel-step">
               <button data-testid="gday-prev" aria-label="Previous match" disabled={stepIdx <= 0} onClick={() => step(-1)}>‹</button>
               <button data-testid="gday-next" aria-label="Next match" disabled={stepIdx < 0 || stepIdx >= drawerSiblings.length - 1} onClick={() => step(1)}>›</button>
@@ -844,4 +1055,392 @@ const CSS = `
   .gdo .sheet .m1{white-space:normal;overflow:visible;text-overflow:clip}   /* match name never truncates */
   .gdo .sheet .t1{display:inline}.gdo .sheet .t2{display:inline;margin-left:8px}
 }
+
+/* ══ THE REBUILT GAMEDAY SURFACE ═══════════════════════════════════════════════════════════════
+   NO BACKTICK MAY APPEAR ANYWHERE BELOW. This whole block is a template literal, so one backtick
+   inside a comment ends the stylesheet and the rest becomes JavaScript. It has cost a broken build
+   before; the guard in gameday-strip-test.ts now scans for it. */
+
+/* ── the stat strip ── */
+.gdo .gstrip{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px}
+.gdo .gtile{background:#fff;border:1px solid #DCE5E0;border-radius:11px;padding:11px 13px;
+  text-align:left;display:block;position:relative;font:inherit;color:inherit;width:100%}
+.gdo button.gtile{cursor:pointer}
+.gdo button.gtile:hover{border-color:#c9d3cc}
+.gdo .gtile.on{border-color:#046B45;box-shadow:0 0 0 1px #046B45 inset}
+.gdo .gtile .k{font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:#66786E;font-weight:600}
+.gdo .gtile .v{font-size:25px;font-weight:700;letter-spacing:-.8px;margin-top:3px;line-height:1;
+  font-variant-numeric:tabular-nums}
+.gdo .gtile .s{font-size:11px;color:#66786E;margin-top:3px}
+/* RED ONLY WHEN NON-ZERO. A tile that is permanently red reading 0 trains the eye to skip it. */
+.gdo .gtile.warn{background:#FDF3F2;border-color:#f2d3d0}
+.gdo .gtile.warn .v,.gdo .gtile.warn .k{color:#A83120}
+.gdo .gtile.warn.zero{background:#fff;border-color:#DCE5E0}
+.gdo .gtile.warn.zero .v{color:inherit}
+.gdo .gtile.warn.zero .k{color:#66786E}
+
+/* ── the alert banner ── */
+.gdo .galert{border:1px solid #f0cfcb;background:linear-gradient(180deg,#fef4f3,#fff);border-radius:12px;
+  padding:14px 16px;margin-bottom:12px;display:flex;align-items:center;gap:18px;cursor:pointer;
+  text-align:left;width:100%}
+.gdo .galert:hover{background:linear-gradient(180deg,#fdecea,#fff)}
+.gdo .gbang{width:30px;height:30px;flex:0 0 30px;border-radius:99px;background:#C0392B;color:#fff;
+  display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px}
+.gdo .gtxt{min-width:0;flex:1 1 auto}
+.gdo .gt1{font-weight:700;font-size:14.5px;color:#A83120;letter-spacing:-.15px}
+.gdo .gmeta{font-size:11.5px;color:#66786E;margin-top:3px}
+/* THREE DISCRETE STATS, not a sentence. The hairlines are what make them read as three. */
+.gdo .gfacts{display:flex;align-items:center;gap:13px;margin-top:8px;flex-wrap:wrap}
+.gdo .gf{display:flex;align-items:baseline;gap:4px;font-size:11.5px;color:#66786E;white-space:nowrap}
+.gdo .gf b{font-size:15px;font-weight:700;color:#1B3227;letter-spacing:-.3px;font-variant-numeric:tabular-nums}
+.gdo .gf.bad b{color:#A83120}
+.gdo .gf.moved b{color:#046B45}
+.gdo .gf em{font-style:normal;font-size:10.5px;color:#66786E;text-decoration:line-through}
+.gdo .gfacts>i{width:1px;height:15px;background:#efd2cf;display:block;flex:0 0 1px}
+.gdo .gclock{text-align:right;flex:0 0 auto;cursor:default}
+.gdo .gclock .n{font-size:22px;font-weight:700;letter-spacing:-.6px;color:#A83120;font-variant-numeric:tabular-nums}
+.gdo .gclock .l{font-size:9.5px;letter-spacing:.8px;text-transform:uppercase;color:#66786E;font-weight:600}
+.gdo .gacts{display:flex;align-items:center;gap:8px;flex:0 0 auto;flex-wrap:wrap;cursor:default}
+.gdo .gbtn{border:1px solid #DCE5E0;background:#fff;border-radius:8px;padding:6px 11px;font-size:12.5px;
+  font-weight:600;color:#20372C;text-decoration:none;white-space:nowrap}
+.gdo .gbtn:hover{background:#F2F7F4}
+.gdo .gstep{display:flex;align-items:center;gap:2px;border:1px solid #DCE5E0;background:#fff;
+  border-radius:8px;padding:3px 4px 3px 11px;font-size:12.5px;color:#20372C;white-space:nowrap}
+.gdo .gstep b{min-width:20px;text-align:center;font-size:13.5px;font-weight:700;color:#1B3227;
+  font-variant-numeric:tabular-nums}
+.gdo .gsb{border:0;background:#f1f4f2;border-radius:6px;width:22px;height:22px;line-height:1;font-size:14px;
+  font-weight:700;color:#20372C;display:flex;align-items:center;justify-content:center;padding:0;cursor:pointer}
+.gdo .gsb:hover:not(:disabled){background:#e2e8e4}
+.gdo .gsb:disabled{opacity:.35;cursor:not-allowed}
+.gdo .gpri{border:1px solid #DCE5E0;background:#fff;color:#20372C;border-radius:8px;padding:6px 12px;
+  font-size:12.5px;font-weight:700;white-space:nowrap;cursor:pointer}
+/* GREEN ONLY WHEN THE SHORTFALL ACTUALLY REACHES ZERO. An adjustment that still leaves the match
+   short does not rescue it, and must not look like it does. */
+.gdo .gpri.ok{background:#046B45;border-color:#046B45;color:#fff}
+.gdo .gpri:disabled{opacity:.45;cursor:not-allowed}
+.gdo .gverdict{font-size:11.5px;font-weight:700;border-radius:7px;padding:4px 9px;white-space:nowrap}
+.gdo .gverdict.landed{background:#DCF6E8;color:#046B45}
+.gdo .gverdict.failed{background:#FBD9D6;color:#A83120}
+.gdo .gverdict.unknown{background:#FFF6E3;color:#8A5A08}
+
+/* ── compact city chips ── */
+.gdo .gcities .gchip{padding:4px 11px;font-size:12px;min-height:0;border-radius:99px;
+  display:inline-flex;align-items:center;gap:6px;line-height:1.3}
+.gdo .gchip u{text-decoration:none;color:#66786E;font-size:11px;font-variant-numeric:tabular-nums}
+.gdo .gchip.on u{color:#8fd3ab}
+.gdo .gchip.risk{border-color:#f0cfcb;background:#FDF3F2;color:#A83120}
+.gdo .gchip.risk u{color:#A83120}
+.gdo .gchip.on.risk{background:#A83120;border-color:#A83120;color:#fff}
+.gdo .gchip.on.risk u{color:#ffd9d6}
+
+/* ── the card, its sections and its rows ── */
+.gdo .gcard{background:#fff;border:1px solid #DCE5E0;border-radius:14px;overflow:hidden}
+.gdo .gcolhead,.gdo .grow{display:grid;grid-template-columns:96px minmax(0,1fr) 310px 128px 34px;gap:14px;align-items:center}
+.gdo .gcolhead{padding:9px 16px;font-size:10px;letter-spacing:.9px;text-transform:uppercase;
+  color:#8C9E93;font-weight:700;background:#F7FAF8;border-bottom:1px solid #DCE5E0}
+.gdo .gsec{display:flex;align-items:center;gap:9px;width:100%;border:0;background:#f7f9f7;
+  padding:7px 16px;border-top:1px solid #DCE5E0;text-align:left;cursor:pointer;font:inherit}
+.gdo .gsec .tw{font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;font-weight:700;color:#20372C}
+.gdo .gsec .n{background:#e4eae6;color:#20372C;border-radius:99px;padding:1px 7px;font-size:10.5px;font-weight:700}
+.gdo .gsec .car{margin-left:auto;color:#66786E;font-size:11px}
+.gdo .gsec.live .tw{color:#046B45}
+/* ROWS UNDER 62px. 9px padding + a 21px avatar + the meter's 8px bar and 13px label gutter. */
+.gdo .grow{padding:9px 16px;border-top:1px solid #EFF3EF;cursor:pointer;background:#fff}
+.gdo .grow:hover{background:#fafcfa}
+.gdo .grow.risk{background:#FDF3F2;box-shadow:inset 3px 0 0 #C0392B}
+.gdo .grow.risk:hover{background:#fce5e3}
+.gdo .grow.done{opacity:.62}
+.gdo .grow.sel{background:#F2F7F4}
+.gdo .gk{font-variant-numeric:tabular-nums}
+.gdo .gk b{font-size:13.5px;font-weight:700;letter-spacing:-.2px}
+.gdo .gk b i{font-style:normal;font-size:10px;color:#66786E;font-weight:600;margin-left:2px}
+.gdo .gk span{display:block;font-size:11px;color:#66786E;margin-top:1px}
+.gdo .gm{min-width:0}
+.gdo .gm .n{font-weight:600;font-size:13.5px;display:flex;align-items:center;gap:6px;min-width:0}
+.gdo .gm .n s{text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.gdo .gm .sub{font-size:11.5px;color:#66786E;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gdo .gtag{flex:0 0 auto;font-size:9.5px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;
+  border-radius:5px;padding:2px 6px;background:#EEF1EF;color:#66786E}
+.gdo .gtag.hot{background:#FBD9D6;color:#A83120}
+.gdo .gpz{flex:0 0 auto;font-size:11px;color:#66786E;font-variant-numeric:tabular-nums}
+.gdo .gs{display:flex;align-items:center;gap:9px;min-width:0}
+/* THE METER. 104px track, 8px bar, and a 13px gutter beneath it for the min label. */
+.gdo .gmeter{position:relative;flex:0 0 104px;padding-bottom:13px}
+.gdo .gbar{position:relative;height:8px;border-radius:99px;background:#e6eae7;overflow:hidden}
+.gdo .gbar .r{position:absolute;left:0;top:0;bottom:0;background:#35c77f;border-radius:99px}
+.gdo .gbar.short .r{background:#C0392B}
+/* FAKE IS HATCHED and does not count toward the minimum. */
+.gdo .gbar .f{position:absolute;top:0;bottom:0;background-color:#fbe9cb;
+  background-image:repeating-linear-gradient(-45deg,#e8b96a 0 3px,transparent 3px 6px)}
+/* THE NOTCH: 1px, square-ended, spanning exactly the bar height, with a 1px white edge each side so
+   it stays legible over the solid fill, over the hatch and over the bare track alike. No overhang
+   (which would read as a range) and no rounded cap (which would read as a draggable handle). */
+.gdo .gbar .mn{position:absolute;top:0;bottom:0;width:1px;border-radius:0;background:#0b1d15;
+  box-shadow:-1px 0 0 rgba(255,255,255,.9),1px 0 0 rgba(255,255,255,.9)}
+/* THE LABEL sits directly beneath the notch. No connector stub: proximity does that work. */
+.gdo .gmnl{position:absolute;top:12px;transform:translateX(-50%);white-space:nowrap;font-size:9.5px;
+  font-weight:400;letter-spacing:.2px;color:#66786E;font-variant-numeric:tabular-nums}
+.gdo .grow.risk .gmnl{color:#A83120}
+.gdo .gnum{font-size:11.5px;color:#66786E;font-variant-numeric:tabular-nums;white-space:nowrap}
+.gdo .gnum b{color:#1B3227;font-weight:600}
+.gdo .gdelta{margin-left:auto;flex:0 0 auto;font-size:11px;font-weight:700;border-radius:6px;padding:2px 7px;
+  font-variant-numeric:tabular-nums;background:#DCF6E8;color:#046B45}
+.gdo .gdelta.bad{background:#FBD9D6;color:#A83120}
+.gdo .gdelta.mut{background:#EEF1EF;color:#66786E}
+/* THE MANAGER NAME IS NOT TRUNCATED. "Moncho P..." was the old 96px cell; this one is 128px and
+   the name wins the space over the avatar. */
+.gdo .gmg{display:flex;align-items:center;gap:7px;min-width:0}
+.gdo .gmg span:last-child{font-size:12.5px;white-space:nowrap}
+.gdo .gav{width:21px;height:21px;flex:0 0 21px;border-radius:99px;background:#dde5e0;color:#046B45;
+  display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700}
+.gdo .gkebab{border:0;background:none;color:#66786E;border-radius:6px;padding:3px 6px;line-height:1;
+  font-size:16px;cursor:pointer;justify-self:end}
+.gdo .gkebab:hover{background:#eef1ef;color:#1B3227}
+.gdo .gfoot{margin:10px 2px 0;font-size:11.5px;color:#66786E;line-height:1.5}
+
 `;
+
+/* ── THE STAT STRIP ─────────────────────────────────────────────────────────────────────────────
+ * Five tiles across the top, replacing the All / Needs attention / Still to come pill row.
+ *
+ * ONLY THREE OF THEM FILTER. All matches and Real spots filled are read-outs, and they are
+ * rendered as <div>, never as a disabled <button> — a control that looks live and does nothing is
+ * the one thing this estate does not ship, and the cheapest way to keep that promise is for the
+ * non-controls not to be controls in the DOM.
+ *
+ * NEEDS ATTENTION IS RED ONLY WHEN IT IS NON-ZERO. A permanently red tile reading 0 trains the
+ * operator to ignore the colour, which is the only thing the colour is for.
+ */
+type StripStats = {
+  soon: ApiMatch[]; live: ApiMatch[]; risk: ApiMatch[];
+  fill: { pct: number | null; real: number; cap: number; fake: number };
+  cityCount: number; nextKick: ApiMatch | null; allCount: number;
+};
+function StatStrip({ s, active, onPick, clockOf }: {
+  s: StripStats; active: StripKey | null; onPick: (k: StripKey) => void; clockOf: (m: ApiMatch) => string;
+}) {
+  const pct = s.fill.pct;
+  const T: { k: StripKey; lab: string; val: string; sub: string; can: boolean; warn?: boolean }[] = [
+    { k: "all", lab: "All matches", val: String(s.allCount),
+      sub: `${s.cityCount} ${s.cityCount === 1 ? "city" : "cities"}`, can: false },
+    { k: "risk", lab: "Needs attention", val: String(s.risk.length),
+      sub: s.risk.length ? "short of the minimum" : "nothing at risk", can: true, warn: true },
+    { k: "soon", lab: "Still to come", val: String(s.soon.length),
+      sub: s.nextKick ? `next at ${clockOf(s.nextKick)}` : "none left today", can: true },
+    { k: "live", lab: "In play", val: String(s.live.length), sub: "kicked off", can: true },
+    /* THE FILL IS A RATIO OF SUMS, computed in the model — see realFillPct. "—" and not "0%" when
+     * nothing has capacity, because 0% is a claim about a day that had no spots to fill. */
+    { k: "fill", lab: "Real spots filled", val: pct == null ? "—" : `${Math.round(pct)}%`,
+      sub: pct == null ? "no capacity today" : `${s.fill.real} of ${s.fill.cap} · ${s.fill.fake} fake`, can: false },
+  ];
+  return (
+    <div className="gstrip" data-testid="gday-strip">
+      {T.map((t) => {
+        const on = t.can && active === t.k;
+        const cls = "gtile"
+          + (t.warn ? (Number(t.val) > 0 ? " warn" : " warn zero") : "")
+          + (on ? " on" : "") + (t.can ? "" : " static");
+        const inner = (<>
+          <div className="k">{t.lab}</div>
+          <div className="v" data-testid={`gtile-v-${t.k}`}>{t.val}</div>
+          <div className="s" data-testid={`gtile-s-${t.k}`}>{t.sub}</div>
+        </>);
+        return t.can
+          ? <button key={t.k} type="button" className={cls} data-testid={`gtile-${t.k}`} data-on={on ? "1" : "0"}
+              aria-pressed={on} onClick={() => onPick(t.k)}>{inner}</button>
+          : <div key={t.k} className={cls} data-testid={`gtile-${t.k}`} data-static="1">{inner}</div>;
+      })}
+    </div>
+  );
+}
+
+/* ── A ROW ──────────────────────────────────────────────────────────────────────────────────────
+ * Five columns: kickoff 96 / match·field flex / spots 310 / manager 128 / kebab 34. The standalone
+ * vs MIN, CANCEL TIME and PRICE columns are gone — the first two are now the delta chip and the
+ * "cancels in" chip, and price is a muted chip beside the name, which is where it is read.
+ *
+ * THE MINIMUM IS A NOTCH, NOT A MARKER. A 1px square-ended hairline spanning exactly the bar
+ * height, with a 1px white edge each side via box-shadow so it stays legible over the solid fill,
+ * over the hatch and over the bare track alike. No overhang and no rounded cap: a marker that
+ * overhangs reads as a range, and a rounded one reads as a handle you can drag.
+ *
+ * THE LABEL SITS DIRECTLY BENEATH IT with no connector stub — proximity does that work, and a stub
+ * at this size is three more pixels of ink saying what adjacency already says.
+ */
+function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
+  m: ApiMatch; now: number; selected: boolean; onOpen: (id: number) => void;
+  money: (c: number | null | undefined) => string; atRiskRow: boolean;
+}) {
+  const b = dayBucket(m, now);
+  const cap = capacity(m), real = realCount(m), fk = fakeCount(m);
+  const min = Number(m.minPlayerCount ?? 0);
+  const g = meter(m);
+  const d = vsMinDelta(m);
+  const t = minsUntil(m, now);
+  const when = b === "live" ? "in play" : b === "done" ? "finished" : b === "cx" ? "cancelled" : `in ${fmtDur(t)}`;
+  const ac = autoCancels(m) && b === "soon" ? minsToDeadline(m, now) : null;
+  const mgr = m.manager ? [m.manager.firstName, m.manager.lastName].filter(Boolean).join(" ").trim() : "";
+  /* THE FULL NAME, NEVER TRUNCATED. "Moncho P..." and "Chama🔥 r..." were what the old 96px cell
+   * produced. Initials are stripped of non-letters first so an emoji in a name cannot become one. */
+  const initials = (mgr || "—").replace(/[^A-Za-z ]/g, "").trim().split(/\s+/).filter(Boolean)
+    .map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "—";
+  const clock = localClock(m);
+  const [hh, ap] = [clock.replace(/\s*(AM|PM)$/i, ""), (clock.match(/(AM|PM)$/i) ?? [""])[0]];
+
+  return (
+    <div className={"grow" + (atRiskRow ? " risk" : "") + (b === "done" ? " done" : "") + (selected ? " sel" : "")}
+      data-testid="gday-row" data-id={m.id} data-city={m.field?.city?.name ?? ""} data-bucket={b}
+      data-risk={atRiskRow ? "1" : "0"} role="button" tabIndex={0}
+      onClick={() => onOpen(m.id)}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(m.id); } }}>
+
+      <div className="gk"><b>{hh}<i>{ap}</i></b><span data-testid="gday-when">{when}</span></div>
+
+      <div className="gm">
+        <div className="n">
+          <s data-testid="gday-name">{m.name}</s>
+          {ac != null && ac > 0 && <span className="gtag hot" data-testid="gday-cancels">cancels in {fmtDur(ac)}</span>}
+          {/* MORE FAKE, on exactly the rows where fake exceeds real. */}
+          {fk > real && <span className="gtag" data-testid="gday-morefake">more fake</span>}
+          <span className="gpz" data-testid="gday-price">{money(m.registrationPrice)}</span>
+        </div>
+        <div className="sub">{m.field?.title ?? "—"} · {m.field?.city?.name ?? "—"}</div>
+      </div>
+
+      <div className="gs">
+        {g ? (
+          <div className="gmeter">
+            <div className={"gbar" + (d < 0 ? " short" : "")}>
+              <div className="r" data-testid="gday-real" style={{ width: `${g.realPct}%` }} />
+              <div className="f" data-testid="gday-fake" style={{ left: `${g.realPct}%`, width: `${g.fakePct}%` }} />
+              <div className="mn" data-testid="gday-notch" data-pct={g.minPct.toFixed(4)} style={{ left: `${g.minPct}%` }} />
+            </div>
+            <div className="gmnl" data-testid="gday-minlabel" data-min={min} data-pct={g.labelPct.toFixed(4)}
+              style={{ left: `${g.labelPct}%` }}>min {min}</div>
+          </div>
+        ) : <div className="gmeter" />}
+        <div className="gnum" data-testid="gday-nums">
+          <b>{real}</b> real{fk > 0 ? <> · {fk} fake</> : null} · {real + fk}/{cap ?? "—"}
+        </div>
+        <div className={"gdelta" + (d < 0 ? " bad" : b === "done" ? " mut" : "")} data-testid="gday-delta" data-d={d}>
+          {d >= 0 ? "+" : "−"}{Math.abs(d)}
+        </div>
+      </div>
+
+      <div className="gmg" data-testid="gday-mgr"><span className="gav">{initials}</span><span>{mgr || "none"}</span></div>
+
+      {/* THE KEBAB MUST NOT OPEN THE EDITOR — see the guard on the row's click handler. */}
+      <button type="button" className="gkebab" data-testid="gday-kebab" aria-label={`More for ${m.name}`}
+        onClick={(e) => { e.stopPropagation(); }}>⋯</button>
+    </div>
+  );
+}
+
+/* ── THE ALERT BANNER ───────────────────────────────────────────────────────────────────────────
+ * One per at-risk match, and rendered only when at least one exists — an empty banner slot that
+ * always occupies space teaches the operator to stop looking at it.
+ *
+ * IT IS NOT A SENTENCE. Headline, meta line and a three-stat facts row are separate elements on
+ * purpose: an operator scanning this at 10pm needs the shortfall, the kickoff and the three
+ * numbers to be findable individually, and a paragraph makes all three equally hard to find.
+ *
+ * THE FACTS ROW IS THREE DISCRETE STATS separated by hairlines, each a bold number over a muted
+ * label. Collapsing it back into "3 real, 9 minimum, 11 of 14 fake" is the thing not to do.
+ */
+function AlertBanner({ m, now, pending, onStep, onSave, onOpen, saveState, canEdit, stepperReason }: {
+  m: ApiMatch; now: number; pending: number | null;
+  onStep: (id: number, d: number) => void; onSave: (id: number) => void; onOpen: (id: number) => void;
+  saveState?: { s: "saving" | "landed" | "failed" | "unknown"; msg: string };
+  canEdit: boolean; stepperReason: string | null;
+}) {
+  const real = realCount(m), fk = fakeCount(m), cap = capacity(m) ?? 0;
+  const savedMin = Number(m.minPlayerCount ?? 0);
+  const shownMin = pending ?? savedMin;
+  const moved = pending != null && pending !== savedMin;
+  const shortNow = Math.max(0, shownMin - real);
+  const ac = minsToDeadline(m, now);
+
+  /* THE HEADLINE FOLLOWS THE PENDING VALUE. Stepping the minimum below the real count turns
+   * "is 6 players short" into "clears its minimum at 3" — the operator sees the consequence of the
+   * change before committing it, which is the whole reason the stepper is inline and not a modal. */
+  const head = shortNow > 0
+    ? `${m.name} is ${shortNow} player${shortNow === 1 ? "" : "s"} short`
+    : `${m.name} clears its minimum at ${shownMin}`;
+
+  const mgr = m.manager ? [m.manager.firstName, m.manager.lastName].filter(Boolean).join(" ").trim() : "";
+  const stop = (e: React.MouseEvent) => e.stopPropagation();
+
+  return (
+    <div className="galert" data-testid="gday-alert" data-id={m.id} data-moved={moved ? "1" : "0"}
+      role="button" tabIndex={0}
+      onClick={() => onOpen(m.id)}
+      onKeyDown={(e) => { if (e.key === "Enter") onOpen(m.id); }}>
+      <div className="gbang" aria-hidden>!</div>
+      <div className="gtxt">
+        <div className="gt1" data-testid="gday-alert-head">{head}</div>
+        <div className="gmeta" data-testid="gday-alert-meta">
+          {localClock(m)} kickoff · {m.field?.title ?? "—"} · {m.field?.city?.name ?? "—"} · {mgr || "no manager"}
+        </div>
+        <div className="gfacts" data-testid="gday-alert-facts">
+          <span className="gf bad" data-testid="gday-fact-real"><b>{real}</b> real</span>
+          <i aria-hidden />
+          <span className={"gf" + (moved ? " moved" : "")} data-testid="gday-fact-min">
+            <b data-testid="gday-fact-minv">{shownMin}</b> minimum
+            {moved && <em data-testid="gday-fact-minwas">was {savedMin}</em>}
+          </span>
+          <i aria-hidden />
+          <span className="gf" data-testid="gday-fact-fake"><b>{fk}</b> of {real + fk} filled spots are fake</span>
+        </div>
+      </div>
+      <div className="gclock" onClick={stop}>
+        <div className="n" data-testid="gday-countdown">{ac > 0 ? fmtDur(ac) : "now"}</div>
+        <div className="l">until auto-cancel</div>
+      </div>
+      <div className="gacts" onClick={stop}>
+        {/* THE EXISTING MATCH CHAT ROUTE, not a new one. */}
+        <a className="gbtn" data-testid="gday-chat" href={`/match-ops/chats?match=${m.id}`}
+          onClick={stop}>Open match chat</a>
+        <span className="gstep" data-testid="gday-stepper" title={stepperReason ?? "Adjust the match minimum"}>
+          Adjust min
+          <button type="button" className="gsb" data-testid="gday-step-down" aria-label="Lower the minimum"
+            disabled={!canEdit || shownMin <= 2}
+            onClick={(e) => { stop(e); onStep(m.id, -1); }}>−</button>
+          <b data-testid="gday-step-value">{shownMin}</b>
+          <button type="button" className="gsb" data-testid="gday-step-up" aria-label="Raise the minimum"
+            disabled={!canEdit || shownMin >= cap}
+            onClick={(e) => { stop(e); onStep(m.id, 1); }}>+</button>
+        </span>
+        {moved ? (
+          /* ── AN ADJUSTMENT IS NOT A RESCUE ───────────────────────────────────────────────────
+           * The mechanism is real < min, proven on staging. Going 9 -> 7 with 3 real STILL
+           * CANCELS. So the button only turns green — the affordance that reads as "this fixes
+           * it" — when the shortfall has actually reached zero. While a shortfall remains it is a
+           * plain button and says nothing about the cancel, because it does nothing about it.
+           * The headline above obeys the same rule: it flips to "clears its minimum at N" only
+           * when shortNow is 0. */
+          <button type="button" className={"gpri" + (shortNow === 0 ? " ok" : "")}
+            data-testid="gday-save-min" data-clears={shortNow === 0 ? "1" : "0"}
+            disabled={saveState?.s === "saving"}
+            title={shortNow === 0
+              ? `Sets the minimum to ${shownMin}, which ${real} real players already meet — this prevents the auto-cancel.`
+              : `Sets the minimum to ${shownMin}. Still ${shortNow} short of ${real} real players, so the auto-cancel will still fire.`}
+            onClick={(e) => { stop(e); onSave(m.id); }}>
+            {saveState?.s === "saving" ? "Saving…" : `Save min ${shownMin}`}
+          </button>
+        ) : (
+          /* DISABLED, WITH THE REASON ON THE CONTROL. Cancelling a match is not wired, and a
+           * button that looks live and does nothing is exactly what this page must not ship. */
+          <button type="button" className="gpri" data-testid="gday-cancel-now" disabled
+            title="Cancelling a match from this page is not wired yet — cancel it in the match editor.">
+            Cancel now
+          </button>
+        )}
+        {saveState && saveState.s !== "saving" && (
+          <span className={"gverdict " + saveState.s} data-testid="gday-save-verdict" data-state={saveState.s}>
+            {saveState.msg}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}

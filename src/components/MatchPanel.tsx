@@ -936,9 +936,22 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
               <label className="mp-f"><span className="mp-lb">AUTO-CANCEL MINUTES <em>before kickoff</em></span>
                 <input data-testid="mp-acmin" inputMode="numeric" value={cur.autoCanceledMinutes == null ? "" : String(cur.autoCanceledMinutes)} disabled={!cur.autoCanceled}
                   className={isDirty("autoCanceledMinutes") ? "mp-chg" : ""} onChange={(e) => setField("autoCanceledMinutes", e.target.value.trim() === "" ? "" : Number(e.target.value))} /></label>
-              <label className="mp-f"><span className="mp-lb">MIN PLAYERS <em>below this, it cancels</em></span>
+              {/* ── THE FIELD THE GAMEDAY BANNER STEPPER ALSO WRITES ────────────────────────────
+                  Highlighted and said out loud, with the live real-player count beside it, because
+                  two surfaces writing one field is exactly where a stale draft gets saved. The
+                  banner discards its pending value when this editor opens; this label is the other
+                  half of that contract — it tells the operator which number they are looking at.
+                  BELOW THIS, IT CANCELS — and the comparison is against REAL players. Proven on
+                  staging 2026-09-01: a match with 0 real and 11 fake against a minimum of 9 was
+                  watched through its deadline. */}
+              <label className="mp-f mp-linked" data-testid="mp-min-field">
+                <span className="mp-lb">MIN PLAYERS <em>below this, it cancels</em></span>
                 <input data-testid="mp-min" inputMode="numeric" value={cur.minPlayerCount == null ? "" : String(cur.minPlayerCount)} disabled={!cur.autoCanceled}
-                  className={isDirty("minPlayerCount") ? "mp-chg" : ""} onChange={(e) => setField("minPlayerCount", e.target.value.trim() === "" ? "" : Number(e.target.value))} /></label>
+                  className={isDirty("minPlayerCount") ? "mp-chg" : ""} onChange={(e) => setField("minPlayerCount", e.target.value.trim() === "" ? "" : Number(e.target.value))} />
+                <span className="mp-linknote" data-testid="mp-min-note">
+                  Also set by the Gameday Ops banner stepper.{` ${realPlayers} real player${realPlayers === 1 ? "" : "s"} in right now.`}
+                </span>
+              </label>
             </div>
 
             <Toggle id="mp-bump" on={!!cur.isAutoBump} dirty={isDirty("isAutoBump")} onToggle={(v) => setField("isAutoBump", v)}
@@ -1336,6 +1349,13 @@ const CSS = `
    gaps the paragraphs used to fill. */
 .mp-f + .mp-f,.mp-grid + .mp-grid,.mp-grid + .mp-help{margin-top:9px}
 .mp-lb{display:flex;align-items:baseline;gap:6px;font-size:9.5px;font-weight:800;letter-spacing:.11em;color:var(--ink3);margin-bottom:5px}
+/* THE MINIMUM IS WRITTEN FROM TWO SURFACES — this editor and the Gameday Ops banner stepper — so
+   it is marked as such rather than sitting anonymously among the automation fields. The banner
+   discards its pending value when this panel opens; the note is the half the operator can see. */
+.mp-linked{position:relative;border-radius:9px;padding:8px;margin:-8px;background:#F2F7F4;
+  box-shadow:inset 0 0 0 1px #CFE3D8}
+.mp-linknote{display:block;margin-top:5px;font-size:10.5px;line-height:1.45;color:#4B5F55}
+
 .mp-lb em{margin-left:auto;font-style:normal;font-size:9.5px;font-weight:700;color:var(--ink3);text-transform:none}
 .mp input,.mp select,.mp textarea{width:100%;min-width:0;border:1px solid var(--line2);border-radius:9px;padding:9px 11px;font:inherit;font-size:13.5px;background:#fbfdfc;color:var(--ink);min-height:40px}
 .mp textarea{min-height:80px;resize:vertical}

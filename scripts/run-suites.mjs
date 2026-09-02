@@ -156,6 +156,12 @@ const NODE_SUITES = [
   "scripts/matchops-auth-test.ts",
   "scripts/crm-push-test.ts",
   "scripts/verify-checkin-model.ts",
+  /* GAMEDAY OPS' STAT STRIP AND METER. Here because the fill percentage is the number an operator
+   * judges a day by and the wrong definition of it is plausible (an average of per-match
+   * percentages), and because `atRisk` decides which matches the page shouts about — a match that
+   * is about to auto-cancel with too few real players is a match record about to say it did not
+   * happen. */
+  "scripts/gameday-strip-test.ts",
   "scripts/roster-edit-model-test.ts",
   "scripts/credits-model-test.ts",
   "scripts/promo-edit-model-test.ts",

@@ -358,3 +358,95 @@ export function passesFilter(m: ApiMatch, now: number, filter: BoardFilter): boo
 export function inCities(m: ApiMatch, cities: Set<string>): boolean {
   return cities.size === 0 || cities.has(m.field?.city?.name ?? "");
 }
+
+/* ── THE STAT STRIP AND THE ALERT BANNER ──────────────────────────────────────────────────────
+ * Pure. Nothing here fetches and nothing renders; the board reads these so the tiles, the banner
+ * and the rows cannot disagree about who is at risk.
+ */
+
+/** AT RISK = still to come AND short on REAL players. The banner's population, and the strip's. */
+export const atRisk = (m: ApiMatch, now: number): boolean => stillToCome(m, now) && short(m);
+
+/**
+ * REAL SPOTS FILLED, for the whole day: sum(real) / sum(capacity).
+ *
+ * NOT AN AVERAGE OF PER-MATCH PERCENTAGES. A 4-of-4 match and a 2-of-40 match average to 52%
+ * and are together 6 of 44, which is 14%. Averaging percentages weights a tiny match the same as
+ * a huge one, and on a day with one small full match it reads as a good day when it was not.
+ *
+ * FAKES ARE OUT OF THE NUMERATOR AND IN THE DENOMINATOR — they occupy a spot that a real player
+ * could have taken, so they belong to capacity and never to fill. That is the whole point of the
+ * measure: it answers "how much of today did real people actually buy".
+ *
+ * Matches with no capacity contribute to neither side. Returns null when nothing has capacity,
+ * because 0/0 rendered as "0%" is a claim about a day that had no spots to fill.
+ */
+export function realFillPct(ms: readonly ApiMatch[]): { pct: number | null; real: number; cap: number; fake: number } {
+  let real = 0, cap = 0, fake = 0;
+  for (const m of ms) {
+    const c = capacity(m);
+    if (c == null || c <= 0) continue;
+    real += realCount(m);
+    fake += fakeCount(m);
+    cap += c;
+  }
+  return { pct: cap > 0 ? (real / cap) * 100 : null, real, cap, fake };
+}
+
+/* THE SECTIONS, IN RENDER ORDER.
+ *
+ * THE SPEC ASKED FOR THREE — Still to come, In play, Finished. CANCELLED IS A FOURTH, ADDED
+ * DELIBERATELY, and it is a deviation worth stating: on a live board today 10 of 24 matches were
+ * cancelled. With three sections the footer read "24 of 24 matches" above 14 rows, and ten matches
+ * simply were not on the page. A board that silently drops 40% of the day is worse than one with an
+ * extra heading, so cancelled gets a section — collapsed by default, because nobody is acting on it. */
+export type DayBucket = "soon" | "live" | "done" | "cx";
+export const DAY_BUCKETS: { k: DayBucket; t: string }[] = [
+  { k: "soon", t: "Still to come" },
+  { k: "live", t: "In play" },
+  { k: "done", t: "Finished" },
+  { k: "cx", t: "Cancelled" },
+];
+export function dayBucket(m: ApiMatch, now: number): DayBucket {
+  if (m.isCancelled) return "cx";
+  if (stillToCome(m, now)) return "soon";
+  if (inPlay(m, now)) return "live";
+  return "done";
+}
+
+/** The strip's five tiles. Only three of them filter; `all` and `fill` are display-only. */
+export type StripKey = "all" | "risk" | "soon" | "live" | "fill";
+export const FILTERING_TILES: readonly StripKey[] = ["risk", "soon", "live"];
+
+/**
+ * THE METER'S GEOMETRY, in percent of the track. Real and fake are stacked and TOGETHER CLAMPED to
+ * 100 — a roster that somehow exceeds capacity must not paint past the track and out of the cell.
+ * `minPct` is the notch. `labelPct` is the label's centre, clamped into 12–88% so a minimum at 0 or
+ * at capacity still has its text inside the track rather than hanging off the end.
+ */
+export type Meter = { realPct: number; fakePct: number; minPct: number; labelPct: number };
+export function meter(m: ApiMatch): Meter | null {
+  const cap = capacity(m);
+  if (cap == null || cap <= 0) return null;
+  const realPct = Math.max(0, Math.min(100, (realCount(m) / cap) * 100));
+  const fakePct = Math.max(0, Math.min(100 - realPct, (fakeCount(m) / cap) * 100));
+  const minPct = Math.max(0, Math.min(100, (n(m.minPlayerCount) / cap) * 100));
+  return { realPct, fakePct, minPct, labelPct: Math.max(12, Math.min(88, minPct)) };
+}
+
+/**
+ * THE BUCKET HALF OF THE FILTER. The city half is `inCities`, and the two COMPOSE — the board
+ * applies city first and then this, so "Austin + In play" is Austin matches in play and nothing
+ * else. Neither ever widens the other.
+ *
+ * `all` and `fill` are display-only tiles and pass everything; a tile that looked like a filter
+ * and did not filter would be a control that does nothing, which this estate does not ship — so
+ * the board does not make them clickable-as-filters in the first place. This returning `true` is
+ * the second half of that statement, not a substitute for it.
+ */
+export function passesStrip(m: ApiMatch, now: number, key: StripKey | null): boolean {
+  if (key == null || key === "all" || key === "fill") return true;
+  if (key === "risk") return atRisk(m, now);
+  const b = dayBucket(m, now);
+  return key === "soon" ? b === "soon" : key === "live" ? b === "live" : true;
+}

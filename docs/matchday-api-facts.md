@@ -1263,14 +1263,43 @@ against 17325's numbers (3 real), not via the sum. NOTE: the single-match GET
 /admin/matches/{id} returns `_count = {players}` with NO fakePlayers key; the LIST
 endpoint returns both — the board reads the LIST, which is correct here.
 
-OPEN QUESTION (Q3) — does MatchDay's auto-cancel count fakes toward minPlayerCount? The
-API does not say (minPlayerCount, autoCanceledMinutes, autoCanceled, isCancelled, and the
-fakeSpotLeft ladder are exposed; none states the comparison basis). The screen now
-assumes REAL players only (short = realCount < minPlayerCount) — the operationally-safe
-reading, since a fake won't show up to play. Before the fix the code effectively counted
-fakes (realCount was filled). If the backend actually counts fakes toward the minimum,
-flip realCount -> filledCount on the two lines flagged in gamedayModel (short/shortBy).
-UNCONFIRMED — verify with the backend dev.
+**Q3 — ANSWERED 2026-09-01 BY OBSERVATION ON STAGING. THE AUTO-CANCEL READS REAL PLAYERS ONLY;
+FAKE SPOTS DO NOT COUNT TOWARD `minPlayerCount`.** The screen's assumption was right, and it is now
+evidence rather than a reading.
+
+The discriminating fixture is one where the two hypotheses give opposite answers — real BELOW the
+minimum but real+fake ABOVE it. Measured at the last sample before the deadline:
+
+```
+G CONTROL  real=0 fake=0  total=0   min=9  ->  isCancelled TRUE
+H DISCRIM  real=0 fake=16 total=16  min=3  ->  isCancelled TRUE
+           (sampled 21:59:46, deadline 21:59:53, cancelled 22:00:03)
+```
+
+H's total was **five times its minimum** and it cancelled regardless, so the comparison cannot be
+against the total. G firing is what makes that mean anything — it proves the worker ran in the
+window, so H cancelling is a decision and not a coincidence.
+
+THREE EARLIER ATTEMPTS DID NOT DISCRIMINATE and are recorded so the mistake is not repeated:
+- 0 real / 0 fake against min 9 cancels under BOTH rules. It proves nothing about the basis.
+- Fakes seeded via `POST /admin/matches/{id}/batch/fake-players` **DRAIN within about a minute**,
+  at any distance from kickoff and with `fakeSpotLeft{36,24,12,6,3}h` pinned high. Two fixtures
+  leaked this way (11 -> 8, then 14 -> 4) and by the deadline the total had fallen below the
+  minimum, making them non-discriminating again. The fix is to **lower the minimum under the
+  surviving fake count** rather than to fight the drain, and to SAMPLE THE TOTAL AT THE DEADLINE
+  rather than assume it held.
+
+CONSEQUENCE: `short()` / `shortBy()` in `src/lib/gamedayModel.ts` keying on `realCount` is correct
+and must not be flipped to `filledCount`. The Gameday Ops countdown is real for exactly the matches
+it was built for — a match propped up by fakes still cancels.
+
+ALSO MEASURED: the cancel fires LATE and by a VARIABLE margin — 10 seconds past nominal in this
+run, about 4 minutes 40 seconds in an earlier one. The countdown is a guide, not a contract.
+
+AND: lowering `minPlayerCount` to or below the real count PREVENTS the pending cancel (proven
+separately the same evening: control left at min 9 cancelled, treatment lowered to 0 did not, and
+was watched for twelve minutes past the control's cancellation). A reduction that still leaves a
+shortfall does NOT rescue the match, because the rule is real < min.
 
 ## STRIKES — the real model (Phase 18 investigation, confirmed by Ryan + live probe)
 
