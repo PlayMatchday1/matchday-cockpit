@@ -15,7 +15,7 @@ import {
   weekKey, addWeeks, lastWeeks, weekEnd, weekRangeLabel, weekTick, isoDow,
   chicagoYmd, wallClockYmd, changeColumnLabel, changeColumnTitle,
   weeksInMonthRange, monthStart, monthEnd, addDays, MAX_WEEKS,
-  isWeekComplete, lastTwoComplete,
+  isWeekComplete, isMonthComplete, isBucketComplete, lastTwoComplete,
 } from "../src/lib/weekBuckets";
 import { mondayOf } from "../src/lib/managerPayCompute";
 
@@ -222,8 +222,12 @@ console.log("\nTHE PANEL TOGGLE — monthly untouched, weekly normalised into th
    * two buckets compared, which is what stops a partial week hiding inside the badge again.
    * changeColumnTitle is still the monthly branch of cmpTitle. */
   is("  …with a tooltip saying which", /title=\{cmpTitle\}/.test(code), true);
-  is("  …and the tooltip names the actual pair", /against \$\{weekRangeLabel\(months\[cmp\.prev\]\)\}/.test(code), true);
-  is("  control: the generic title is still used for monthly", /: changeColumnTitle\(gran\)\)/.test(code), true);
+  /* CHANGED DELIBERATELY. The tooltip used to name its pair only in weekly and fall back to the
+   * generic changeColumnTitle for monthly — which was consistent with monthly having no partial
+   * buckets to exclude. Monthly now has both, so it names its pair too. */
+  is("  …and the tooltip names the actual pair", /against \$\{bucketLabel\(months\[cmp\.prev\], gran\)\}/.test(code), true);
+  is("  control: the generic monthly fallback is gone", /: changeColumnTitle\(gran\)\)/.test(code), false);
+  is("  …and BOTH granularities get a named pair", /\$\{gran === "weekly" \? "Week over week" : "Month over month"\}/.test(code), true);
   is("  bucket labels follow the granularity", /const bucketLabel = \(k: string, g: Granularity\)/.test(code), true);
   is("  …and the chart axis uses the short form", /bucketTick\(m, gran\)/.test(code), true);
   is("  the range caption follows too", /gran === "weekly"\s*\?\s*`\$\{weekTick\(months\[0\]\)\}/.test(code), true);
@@ -401,7 +405,12 @@ console.log("\nTHE WEEKLY PANEL AND ROUTE — the wiring behind the browser suit
   is("  control: the header no longer calls monthLabel unconditionally", /<th key=\{m\}>\{monthLabel\(m\)\}<\/th>/.test(code), false);
   is("  completeness is judged in the payload's clock, not the browser's",
     /weekly\?\.window\?\.today \?\? chicagoToday\(\)/.test(code), true);
-  is("  MONTHLY IS UNTOUCHED — every monthly bucket is complete", /gran === "weekly" \? months\.map\(\(m\) => isWeekComplete\(m, todayYmd\)\) : months\.map\(\(\) => true\)/.test(code), true);
+  /* THE OPPOSITE OF WHAT THIS ONCE PINNED. It asserted that monthly treated every bucket as
+   * complete — correct at the time, and flagged in that same commit as a known gap. The gap is
+   * closed; the assertion is inverted rather than deleted so the old behaviour cannot return. */
+  is("  MONTHLY NOW OBEYS THE SAME RULE", /months\.map\(\(m\) => isBucketComplete\(m, todayYmd, gran\)\)/.test(code), true);
+  is("  control: the hardcoded all-complete monthly branch is gone",
+    /months\.map\(\(\) => true\)/.test(code), false);
   is("  the end-of-line series labels are gone", /serieslab/.test(raw), false);
   is("  …replaced by a legend", /data-testid="behavior-legend"/.test(code), true);
   is("  the axis is thinned from the NEWEST bucket backwards", /\(months\.length - 1 - i\) % every === 0/.test(code), true);
@@ -534,6 +543,88 @@ console.log("\nFIELD DETAIL'S PICKER — nothing selected must not mean draw eve
   /* CITY DETAIL IS UNTOUCHED — 8 series there is fine and was explicitly out of scope. */
   is("  control: City Detail still maps over every city", /series = cities\.map\(\(c\) =>/.test(panel), true);
   is("  control: …and has no picker of its own", /fieldMode \? \(\s*<div className=\{styles\.fieldPicker\}/.test(panel), true);
+}
+
+console.log("\nA PARTIAL MONTH IS NOT A COLLAPSE EITHER — the same rule, on the other bucket");
+{
+  is("the current month is NOT complete", isMonthComplete("2026-09", "2026-09-02"), false);
+  is("  …nor on its last day", isMonthComplete("2026-09", "2026-09-30"), false);
+  is("  …and becomes complete the day after", isMonthComplete("2026-09", "2026-10-01"), true);
+  is("a past month is complete", isMonthComplete("2026-08", "2026-09-02"), true);
+  is("  …a future month is not", isMonthComplete("2026-12", "2026-09-02"), false);
+  // MONTH LENGTHS ARE NOT ASSUMED — monthEnd does the calendar, including February and leap years.
+  is("February is complete on March 1", isMonthComplete("2026-02", "2026-03-01"), true);
+  is("  …and not on Feb 28", isMonthComplete("2026-02", "2026-02-28"), false);
+  is("a leap February is not complete on the 29th", isMonthComplete("2028-02", "2028-02-29"), false);
+  is("  …and is on March 1", isMonthComplete("2028-02", "2028-03-01"), true);
+  is("December rolls the year", isMonthComplete("2026-12", "2027-01-01"), true);
+  /* CONTROL: it is not returning a constant. The old code was literally `() => true` for every
+   * month, which satisfies every "a past month is complete" assertion above on its own. */
+  is("  control: it returns both answers", new Set([
+    isMonthComplete("2026-08", "2026-09-02"), isMonthComplete("2026-09", "2026-09-02")]).size, 2);
+
+  /* ONE PREDICATE FOR BOTH BUCKETS, so the two granularities cannot drift apart again. */
+  is("isBucketComplete routes weekly", isBucketComplete("2026-08-31", "2026-09-02", "weekly"), isWeekComplete("2026-08-31", "2026-09-02"));
+  is("  …and monthly", isBucketComplete("2026-09", "2026-09-02", "monthly"), isMonthComplete("2026-09", "2026-09-02"));
+  // CONTROL: the two branches genuinely differ, or the routing is untested.
+  is("  control: the same date answers differently per granularity",
+    isBucketComplete("2026-08", "2026-09-02", "monthly"), true);
+  is("  control: …while the week containing it does not", isBucketComplete("2026-08-31", "2026-09-02", "weekly"), false);
+
+  /* END TO END on the shape that exposed it: a hand-picked range ending in the current month. */
+  const axis = ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09"];
+  const comp = axis.map((m) => isMonthComplete(m, "2026-09-02"));
+  is("  five of six months are complete", comp.filter(Boolean).length, 5);
+  const pair = lastTwoComplete(comp);
+  is("  the change compares Aug against Jul", [axis[pair.prev], axis[pair.last]], ["2026-07", "2026-08"]);
+  is("  control: the partial month is neither end", [pair.last, pair.prev].includes(5), false);
+}
+
+console.log("\nEVERY MONTHLY-BUCKET CALL SITE — changed, or already handled");
+{
+  const panel = readFileSync("src/components/growth/BehaviorPanel.tsx", "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  // ── CHANGED 1: Player Behavior.
+  is("  Behavior applies completeness to BOTH granularities",
+    /months\.map\(\(m\) => isBucketComplete\(m, todayYmd, gran\)\)/.test(panel), true);
+  is("  control: monthly is no longer hardcoded complete", /months\.map\(\(\) => true\)/.test(panel), false);
+  is("  the partial column tag is not weekly-only", /data-partial=\{!complete\[i\] \? "1" : "0"\}/.test(panel), true);
+  is("  control: …the weekly gate on it is gone", /gran === "weekly" && !complete\[i\]/.test(panel), false);
+  is("  the legend note is not weekly-only", /\{partialIdx >= 0 && \(/.test(panel), true);
+  is("  the axis note names the right unit", /gran === "weekly" \? "partial week" : "partial month"/.test(panel), true);
+  is("  the tooltip badge is not weekly-only", /\{!complete\[hoverIdx\] && <span/.test(panel), true);
+  is("  the change tooltip names both buckets in either granularity", /Both are COMPLETE \$\{bucketUnit\}s/.test(panel), true);
+
+  /* ── THE EXPORT, WHICH IS THE ONE THAT WAS MISSED LAST TIME ───────────────────────────────────
+   * Three separate things have to be true of the file, and the third is the one nobody checks. */
+  is("  the CSV labels the partial column", /complete\[i\] \? bucketLabel\(k, gran\) : `\$\{bucketLabel\(k, gran\)\} \(partial\)`/.test(panel), true);
+  is("  the CSV header names the compared pair", /Latest \$\{changeColumnLabel\(gran\)\} \(\$\{cmpSub\}\)/.test(panel), true);
+  is("  BOTH change sites read the same complete pair", (panel.match(/const li = cmp \? cmp\.last/g) ?? []).length, 2);
+  is("  control: no unconditional last-two survives",
+    /const li = cells\.length - 1;\s*const pi = cells\.length - 2;/.test(panel), false);
+
+  // ── CHANGED 2: the membership churn tile, a STOCK asked about a future date.
+  const memb = readFileSync("src/app/api/membership/route.ts", "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  is("  the churn 'as of' instant is clamped to now", /const endOfNewest = projected > nowIso \? nowIso : projected;/.test(memb), true);
+  is("  control: it no longer projects to a future month end", /const endOfNewest = monthEndIso\(newest\);/.test(memb), false);
+  is("  …and the PRIOR month end is left alone, being a real one", /const endOfPrior = monthEndIso\(months\[months\.length - 2\] \?\? newest\);/.test(memb), true);
+
+  /* ── ALREADY HANDLED, asserted so they stay that way ──────────────────────────────────────────
+   * These are not changes. Each already avoids the partial-bucket trap by its own means, and each
+   * assertion here pins the mechanism that does it. */
+  const pc = readFileSync("src/lib/periodCompare.ts", "utf8");
+  is("  periodCompare uses SAME-DAY-OF-MONTH windows, so every period is like-for-like",
+    /const endDay = Math\.min\(todayDay, lastDayOfMonth\);/.test(pc), true);
+  is("  …and flags the in-progress one", /inProgress: offset === 0,/.test(pc), true);
+  const heat = readFileSync("src/components/CancelHeatmap.tsx", "utf8");
+  is("  CancelHeatmap deliberately reads the cell BEFORE the current one",
+    /weeks\.length >= 2 \? weeks\[weeks\.length - 2\]/.test(heat), true);
+  const fin = readFileSync("src/lib/financeStats.ts", "utf8");
+  is("  financeStats compares prior month SAME-DAY MTD", /export function priorMonthSameDayMtdGross/.test(fin), true);
+  const act = readFileSync("src/components/MembershipActiveChart.tsx", "utf8");
+  is("  MembershipActiveChart marks its in-progress point", /isCurrent \? "url\(#active-current-stripes\)"/.test(act), true);
 }
 
 console.log(`\nweek-buckets: ${pass} passed, ${fails.length} failed`);

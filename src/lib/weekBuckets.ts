@@ -175,6 +175,18 @@ export function lastTwoComplete(
   return idx.length === 2 ? { last: idx[0], prev: idx[1] } : null;
 }
 
+/* A MONTH IS COMPLETE WHEN ITS LAST DAY HAS PASSED — the same rule as a week, on the other bucket.
+ *
+ * This was missing and monthly treated EVERY bucket as complete. It did not bite on the default
+ * view only because the period bar's quick pills already end on the last complete month; a
+ * hand-picked range ending inside the current month had exactly the defect weekly had, and the
+ * change column compared a part-month against a whole one. */
+export const isMonthComplete = (ym: string, todayYmd: string): boolean => monthEnd(ym) < todayYmd;
+
+/** Completeness for either bucket, chosen by granularity. One call site, one rule. */
+export const isBucketComplete = (key: string, todayYmd: string, g: Granularity): boolean =>
+  g === "weekly" ? isWeekComplete(key, todayYmd) : isMonthComplete(key, todayYmd);
+
 /** Today's date in America/Chicago — the clock every bucket on this page is cut in. */
 export const chicagoToday = (): string =>
   new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());

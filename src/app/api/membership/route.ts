@@ -247,7 +247,20 @@ export async function GET(req: Request) {
       }
       return n;
     };
-    const endOfNewest = monthEndIso(newest);
+    /* ── THE "AS OF" INSTANT IS CLAMPED TO NOW ────────────────────────────────────────────────
+     * `months` is monthsBack(now, 4), so `newest` IS THE CURRENT MONTH and monthEndIso projected
+     * it to a date in the FUTURE — 2026-09-30 while today was 2026-09-01. churnAt then cut at
+     * endIso − 90 days, so it counted as churned every player whose last match fell in the 29 days
+     * between the true cut and the projected one: people who have not run out of time yet.
+     *
+     * THIS IS A STOCK, NOT A FLOW, so the fix is not the one Player Behavior needed. Excluding the
+     * partial month would throw away the only up-to-date number on the tile. A point-in-time count
+     * is not distorted by its month being incomplete — it is distorted by being asked about a date
+     * that has not happened. Asking it about TODAY is both correct and what the tile claims to
+     * show. The prior month is a real month end and is left alone. */
+    const nowIso = new Date().toISOString();
+    const projected = monthEndIso(newest);
+    const endOfNewest = projected > nowIso ? nowIso : projected;
     const endOfPrior = monthEndIso(months[months.length - 2] ?? newest);
     const churnedNow = churnAt(endOfNewest);
     const churnedPrior = months.length > 1 ? churnAt(endOfPrior) : 0;

@@ -16,7 +16,7 @@ import { downloadCsv } from "./format";
 import styles from "./playerBehavior.module.css";
 import { supabase } from "@/lib/supabase";
 import {
-  changeColumnLabel, changeColumnTitle, weekRangeLabel, weekTick, type Granularity, isWeekComplete, lastTwoComplete, chicagoToday } from "@/lib/weekBuckets";
+  changeColumnLabel, weekRangeLabel, weekTick, type Granularity, isWeekComplete, isBucketComplete, lastTwoComplete, chicagoToday } from "@/lib/weekBuckets";
 
 /* THE WEEKLY PAYLOAD, as /api/lifecycle/behavior-weekly returns it. `w` is a Monday YYYY-MM-DD;
  * it is renamed to `m` on the way in so the rest of this file is unchanged. */
@@ -279,15 +279,14 @@ export default function BehaviorPanel({
    * America/Chicago and a viewer in another zone would otherwise mark the wrong week partial.
    * chicagoToday() is the fallback for the first render, before the payload lands.
    *
-   * MONTHLY IS DELIBERATELY LEFT ALONE. Every monthly bucket is treated as complete here, which is
-   * how this panel has always behaved and what "do not change monthly mode" asks for. It is not
-   * because the question does not arise: the current month is partial in exactly the same way, and
-   * the only reason it does not bite is that the period bar's quick pills already end on the last
-   * COMPLETE month. A hand-picked period ending in the current month has the same flaw monthly
-   * that weekly had. Reported rather than fixed, because fixing it was explicitly out of scope. */
+   * MONTHLY NOW OBEYS THE SAME RULE. It used to treat every month as complete — flagged when the
+   * weekly fix landed and fixed here. It did not bite on arrival because the period bar's quick
+   * pills already end on the last COMPLETE month; a hand-picked range ending inside the current
+   * month had precisely the defect weekly had, and the change column compared a part-month against
+   * a whole one. One predicate, isBucketComplete, so the two granularities cannot drift. */
   const todayYmd = weekly?.window?.today ?? chicagoToday();
   const complete = useMemo(
-    () => (gran === "weekly" ? months.map((m) => isWeekComplete(m, todayYmd)) : months.map(() => true)),
+    () => months.map((m) => isBucketComplete(m, todayYmd, gran)),
     [gran, months, todayYmd],
   );
   /* THE PAIR THE CHANGE COLUMN COMPARES. The last two COMPLETE buckets — never the partial one,
@@ -612,18 +611,34 @@ export default function BehaviorPanel({
   const metricPeriodText = `${months.length} ${unit}${months.length === 1 ? "" : "s"} · oldest to newest`;
   const firstColHead = fieldMode ? "Field" : cityMode ? "City" : "Metric";
   /* WHICH TWO BUCKETS THE CHANGE COLUMN USED, named on the column itself and in its tooltip. */
-  const cmpSub = cmp && gran === "weekly" ? `${weekTick(months[cmp.prev])} → ${weekTick(months[cmp.last])}` : "";
-  const cmpTitle = cmp
+  const bucketUnit = gran === "weekly" ? "week" : "month";
+  const cmpSub = cmp
     ? (gran === "weekly"
-      ? `Week over week — ${weekRangeLabel(months[cmp.last])} against ${weekRangeLabel(months[cmp.prev])}. `
-        + `Both are COMPLETE weeks; a week still running is never used here.`
-      : changeColumnTitle(gran))
-    : "Not enough complete buckets in this period to compute a change.";
+      ? `${weekTick(months[cmp.prev])} → ${weekTick(months[cmp.last])}`
+      : `${monthLabel(months[cmp.prev])} → ${monthLabel(months[cmp.last])}`)
+    : "";
+  const cmpTitle = cmp
+    ? `${gran === "weekly" ? "Week over week" : "Month over month"} — ${bucketLabel(months[cmp.last], gran)} `
+      + `against ${bucketLabel(months[cmp.prev], gran)}. Both are COMPLETE ${bucketUnit}s; `
+      + `a ${bucketUnit} still running is never used here.`
+    : `Not enough complete ${bucketUnit}s in this period to compute a change.`;
 
   const exportCsv = () => {
-    /* THE FILE SAYS WHICH TWO BUCKETS ITS CHANGE COLUMN COMPARED, for the same reason the screen
-     * does: a bare "Latest WoW" is how a partial week hid inside these numbers. */
-    const header = [firstColHead, ...months.map((k) => bucketLabel(k, gran)), "Selected period",
+    /* ── THE EXPORT CARRIES ALL THREE RULES, NOT JUST THE ARITHMETIC ─────────────────────────────
+     * The change figure already follows `cmp`, so it excludes a partial bucket by construction.
+     * The other two rules have to be written into the file itself, because a CSV has no dashed
+     * line and no amber tag to inherit:
+     *
+     *   1. THE PARTIAL COLUMN IS LABELLED. "Sep 2026 (partial)" in the header, so a column that is
+     *      three days of a month cannot be read as a month.
+     *   2. THE CHANGE COLUMN NAMES ITS PAIR, exactly as the screen does.
+     *
+     * This is the specific failure being guarded against: when the weekly fix landed, the screen
+     * was corrected and the export kept shipping the old number. It is the same `cmp` and the same
+     * `complete` array on both sides now, so they cannot diverge without both moving. */
+    const header = [firstColHead,
+      ...months.map((k, i) => (complete[i] ? bucketLabel(k, gran) : `${bucketLabel(k, gran)} (partial)`)),
+      "Selected period",
       cmpSub ? `Latest ${changeColumnLabel(gran)} (${cmpSub})` : `Latest ${changeColumnLabel(gran)}`];
     const body = model.rows.map((r) => [
       r.name,
@@ -862,10 +877,12 @@ export default function BehaviorPanel({
               {l.label}
             </span>
           ))}
-          {gran === "weekly" && partialIdx >= 0 && (
+          {/* BOTH GRANULARITIES. A part-month is as misleading as a part-week and is marked the
+              same way — the label is the only thing that differs. */}
+          {partialIdx >= 0 && (
             <span className={styles.legendItem} data-testid="behavior-legend-partial">
               <i className={styles.legendDash} />
-              {weekRangeLabel(months[partialIdx])} is still running — partial
+              {bucketLabel(months[partialIdx], gran)} is still running — partial
             </span>
           )}
         </div>
@@ -928,7 +945,7 @@ export default function BehaviorPanel({
                     x2={c.pts[c.partialIdx].x} y2={c.plot.b} />
                   <text data-testid="behavior-partial-note" className={styles.partialNote}
                     x={c.pts[c.partialIdx].x} y={VH - M.b + 36} textAnchor="end">
-                    partial week
+                    {gran === "weekly" ? "partial week" : "partial month"}
                   </text>
                 </>
               )}
@@ -961,7 +978,7 @@ export default function BehaviorPanel({
           >
             <div className={styles.tipHead} data-testid="behavior-tooltip-bucket">
               {bucketLabel(months[hoverIdx], gran)}
-              {gran === "weekly" && !complete[hoverIdx] && <span className={styles.tipPartial}>partial</span>}
+              {!complete[hoverIdx] && <span className={styles.tipPartial}>partial</span>}
             </div>
             {model.legend.map((l, k) => (
               <div key={l.label} className={styles.tipRow}>
@@ -1002,10 +1019,10 @@ export default function BehaviorPanel({
                   labeller the CSV already used and it names the full range: "Jun 1 – Jun 7". */}
               {months.map((m, i) => (
                 <th key={m} data-testid="behavior-col-head"
-                    data-partial={gran === "weekly" && !complete[i] ? "1" : "0"}
-                    className={gran === "weekly" && !complete[i] ? styles.thPartial : undefined}>
+                    data-partial={!complete[i] ? "1" : "0"}
+                    className={!complete[i] ? styles.thPartial : undefined}>
                   {bucketLabel(m, gran)}
-                  {gran === "weekly" && !complete[i] && <span className={styles.thPartialTag}>partial</span>}
+                  {!complete[i] && <span className={styles.thPartialTag}>partial</span>}
                 </th>
               ))}
               <th>Selected period</th>
