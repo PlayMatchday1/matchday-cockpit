@@ -51,7 +51,22 @@ export default function MatchOpsSectionSheet({ open, onClose, items: itemsProp, 
   return (
     <div className="fixed inset-0 z-[60] flex flex-col justify-end" role="dialog" aria-modal="true" aria-label={`Go to ${title} screen`} data-testid="screen-sheet">
       <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-x-0 bottom-0" style={{ top: "var(--sat)", background: "rgba(6,26,18,.42)" }} />
-      <div className="relative max-h-[86%] overflow-y-auto rounded-t-[22px]" style={{ background: "#ffffff", boxShadow: "0 -2px 8px rgba(7,42,32,.06), 0 -26px 60px -20px rgba(7,42,32,.42)", paddingBottom: "calc(14px + var(--sab))" }}>
+      {/* THE SHEET MUST CLEAR THE FIXED BOTTOM NAV, and it did not.
+        *
+        * MEASURED at 390x844: the panel ran to y=844 (the viewport floor) while the bottom nav
+        * starts at y=787, so the last row — Player Chats — rendered at y=830, BEHIND the nav.
+        * And it could not be scrolled to, because there was nothing to scroll: scrollHeight and
+        * clientHeight were both 515. The list fitted its own max-height perfectly and was simply
+        * occluded, which is why it reads as "it doesn't let me scroll" rather than as a clipped row.
+        *
+        * --bottom-nav-h already exists for exactly this (globals.css:137, 0 on desktop). Adding it
+        * to the padding pushes the last row clear; subtracting it from the max-height means a
+        * longer list becomes genuinely scrollable instead of growing under the nav. */}
+      <div className="relative overflow-y-auto overscroll-contain rounded-t-[22px]"
+        style={{ background: "#ffffff",
+          boxShadow: "0 -2px 8px rgba(7,42,32,.06), 0 -26px 60px -20px rgba(7,42,32,.42)",
+          maxHeight: "calc(86% - var(--bottom-nav-h))",
+          paddingBottom: "calc(14px + var(--sab) + var(--bottom-nav-h))" }}>
         <div className="flex justify-center pb-1 pt-2"><span className="h-[5px] w-[38px] rounded-full" style={{ background: "#dbe3df" }} /></div>
         <div className="flex items-center gap-2.5 px-[18px] pb-2.5 pt-1.5">
           <h2 className="text-[17px] font-[760] tracking-[-0.02em]" style={{ color: "#12241d" }}>{title}</h2>

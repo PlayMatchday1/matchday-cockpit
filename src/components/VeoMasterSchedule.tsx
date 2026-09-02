@@ -1271,6 +1271,7 @@ const CSS = `
 .vms-city-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap}
 .vms-city-name{font-size:14px;font-weight:900;color:var(--forest)}
 .vms-city-tag{font-size:10px;font-weight:850;color:var(--muted);background:var(--slot);border:1px solid var(--line);border-radius:99px;padding:4px 10px}
+
 .vms-days{display:grid;grid-template-columns:repeat(7,1fr);gap:9px}
 .vms-day{border:1px solid var(--line);border-radius:11px;padding:9px;min-height:96px;background:#fff}
 .vms-day.vms-today{border-color:var(--mint);box-shadow:0 0 0 2px var(--mintSoft)}
@@ -1389,6 +1390,29 @@ span.vms-cam:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
 .vms-wl td.vms-nm{font-weight:800}
 .vms-toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:var(--coralInk);color:#fff;
   font-size:12.5px;font-weight:700;padding:9px 16px;border-radius:999px;z-index:80}
+/* ── THE WEEK GRID SCROLLS ON A PHONE ─────────────────────────────────────────────────────────
+   NO BACKTICK MAY APPEAR IN THIS BLOCK - it sits inside a template literal.
+
+   MEASURED at 390px: .vms-days held 687px of content in a 348px box with overflow-x visible and NO
+   ancestor scrolling, so only Mon-Thu were reachable and Fri, Sat and Sun could not be got to at
+   all. The page itself correctly does not scroll sideways, which is exactly why the days had to -
+   without it the content is not clipped-and-obvious, it is silently absent.
+
+   repeat(7, 1fr) cannot overflow: 1fr resolves against the container, so the columns just squash
+   until they fit. A minimum width is what makes the row wider than its box and therefore
+   scrollable. 132px keeps a time and a venue name legible. */
+@media (max-width: 639.98px) {
+  .vms-days{grid-template-columns:repeat(7,minmax(132px,1fr));overflow-x:auto;overflow-y:hidden;
+    -webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;scrollbar-width:none;
+    scroll-snap-type:x proximity;padding-bottom:2px}
+  .vms-days::-webkit-scrollbar{display:none}
+  .vms-day{scroll-snap-align:start}
+  /* THE MONTH GRID HAS THE SAME SHAPE and the same problem — seven columns in a 348px box. */
+  .vms-mweek{grid-template-columns:repeat(7,minmax(112px,1fr));overflow-x:auto;overflow-y:hidden;
+    -webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;scrollbar-width:none}
+  .vms-mweek::-webkit-scrollbar{display:none}
+  .vms-mdow{grid-template-columns:repeat(7,minmax(112px,1fr));overflow-x:hidden}
+}
 `;
 
 /* ── MONTH VIEW ────────────────────────────────────────────────────────────────────────────────

@@ -313,6 +313,84 @@ async function main() {
     await closeContext(ctx);
   }
 
+  // ══ THE WEEK AND MONTH GRIDS SCROLL ON A PHONE ═════════════════════════════════════════════
+  {
+    /* REPORTED AS "it only shows Mon through Thursday and can't scroll", and both halves were true.
+     * MEASURED at 390px: .vms-days held 687px of content in a 348px box with overflow-x visible and
+     * NO ancestor scrolling, so Fri, Sat and Sun could not be reached at all. The page itself
+     * correctly refuses to scroll sideways, which is exactly why the grid had to — otherwise the
+     * missing days are not clipped-and-obvious, they are silently absent. */
+    for (const [w, label] of [[390, "phone"], [430, "phone"], [1024, "desktop"]]) {
+      const ctxW = await browser.newContext({ storageState, viewport: { width: w, height: 844 },
+        ...(w < 640 ? { isMobile: true, hasTouch: true } : {}) });
+      const pw = await ctxW.newPage();
+      await pw.goto(PAGE, { waitUntil: "domcontentloaded" });
+      await pw.waitForSelector(".vms-days", { timeout: 120000 });
+      await pw.waitForTimeout(1500);
+      const g = await pw.evaluate(() => {
+        const el = document.querySelector(".vms-days");
+        const cs = getComputedStyle(el);
+        return { cols: cs.gridTemplateColumns.split(" ").length, overflowX: cs.overflowX,
+          sw: el.scrollWidth, cw: el.clientWidth, days: el.children.length,
+          pageH: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 };
+      });
+      console.log(`\n-- the week grid at ${w}px (${label}) --`);
+      is(`  ${w}: seven day columns`, g.days, 7);
+      is(`  ${w}: the page never scrolls sideways`, g.pageH, false);
+      if (w < 640) {
+        is(`  ${w}: the grid is its own scroll container`, g.overflowX, "auto");
+        yes(`  ${w}: ...and it genuinely overflows (${g.sw} in ${g.cw})`, g.sw > g.cw + 1);
+        /* EVERY DAY REACHABLE. Not "the first few are visible" — the complaint was about the ones
+         * that were not. */
+        const reach = await pw.evaluate(() => {
+          const el = document.querySelector(".vms-days");
+          const vw = document.documentElement.clientWidth;
+          el.scrollLeft = el.scrollWidth;
+          const last = el.lastElementChild.getBoundingClientRect();
+          return { lastVisible: last.right <= vw + 1 && last.left >= -1, scrollLeft: Math.round(el.scrollLeft) };
+        });
+        yes(`  ${w}: scrolling to the end brings the LAST day fully into view`, reach.lastVisible);
+        yes(`  ${w}: CONTROL - it actually scrolled (${reach.scrollLeft}px)`, reach.scrollLeft > 0);
+        /* CONTROL: TAKE THE SCROLLER AWAY and show the days become unreachable again.
+         *
+         * MY FIRST CONTROL HERE WAS WRONG ABOUT THE MECHANISM and failed, which is the point of
+         * having one. It assumed repeat(7,1fr) could not overflow — but 1fr is minmax(auto,1fr),
+         * and the auto minimum is min-content, so the original grid was ALREADY 687px wide in a
+         * 348px box. The columns never squashed; they overflowed with overflow-x visible and
+         * nothing to scroll them. The min-width makes the columns legible; overflow-x:auto is what
+         * makes the days reachable, so that is what this control removes. */
+        const unreachable = await pw.evaluate(() => {
+          const el = document.querySelector(".vms-days");
+          const prev = el.style.cssText;
+          el.scrollLeft = 0;
+          /* BOTH AXES. Per CSS overflow, `overflow-x: visible` COMPUTES TO `auto` when overflow-y
+           * is anything other than visible — and this grid sets overflow-y: hidden. Setting only
+           * the x axis was therefore a no-op, and the control passed by accident twice before this
+           * was measured. */
+          el.style.overflow = "visible";
+          const vw = document.documentElement.clientWidth;
+          const last = el.lastElementChild.getBoundingClientRect();
+          /* With no scroller the last day is off-screen and cannot be brought back. */
+          /* THE COMPLAINT WAS "can't scroll", so the control asserts exactly that: with no scroll
+           * box, scrollLeft cannot move off zero however hard it is pushed. Comparing the last
+           * day's position after the fact measured layout, not scrollability, and layout does not
+           * change when the scroller is removed — which is why that version passed when it should
+           * not have. */
+          el.scrollLeft = 99999;
+          const cannotScroll = el.scrollLeft === 0;
+          el.style.cssText = prev;
+          return { offToBeginWith: last.right > vw + 1, cannotScroll };
+        });
+        yes(`  ${w}: CONTROL - without overflow-x the last day starts off-screen`, unreachable.offToBeginWith);
+        yes(`  ${w}: CONTROL - ...and scrollLeft cannot move off zero`, unreachable.cannotScroll,
+          "the scrollability check cannot tell a scrollable grid from an unscrollable one");
+      } else {
+        yes(`  ${w}: on desktop all seven fit without scrolling (${g.sw} in ${g.cw})`, g.sw <= g.cw + 1);
+      }
+      await closeContext(ctxW);
+    }
+  }
+
   await closeBrowser(browser);
   console.log(`\nmonth-cells: ${PASS} passed, ${FAIL} failed`);
   if (FAIL) { for (const f of fails) console.log(`  FAILED: ${f}`); process.exit(1); }

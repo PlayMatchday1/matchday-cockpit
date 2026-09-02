@@ -1308,6 +1308,72 @@ async function main() {
   }
 
 
+  // ══ THE MATCH OPS SECTION SHEET CLEARS THE BOTTOM NAV ══════════════════════════════════════
+  {
+    /* REPORTED AS "it doesn't let me scroll", and the panel genuinely was not scrollable —
+     * scrollHeight and clientHeight were both 515. The list fitted its own max-height exactly and
+     * the last row was simply OCCLUDED by the fixed bottom nav: row bottom 830 against a nav
+     * starting at 787. Nothing to scroll and nothing reachable is a worse failure than a clipped
+     * row, because there is no affordance suggesting anything is missing. */
+    const READ_SHEET = () => {
+      const sheet = document.querySelector('[data-testid="screen-sheet"]');
+      const panel = sheet.querySelector(".overflow-y-auto");
+      const items = [...panel.querySelectorAll("a,button")].filter((e) => e.textContent.trim().length > 3);
+      const nav = [...document.querySelectorAll("nav,div")].find((e) =>
+        getComputedStyle(e).position === "fixed"
+        && e.getBoundingClientRect().bottom >= window.innerHeight - 2
+        && e.getBoundingClientRect().height > 40 && e.getBoundingClientRect().height < 120);
+      return {
+        items: items.map((e) => ({ t: e.textContent.trim().slice(0, 18), bottom: Math.round(e.getBoundingClientRect().bottom) })),
+        navTop: nav ? Math.round(nav.getBoundingClientRect().top) : null,
+        scrollable: panel.scrollHeight > panel.clientHeight + 1,
+        scrollTo: () => { panel.scrollTop = panel.scrollHeight; },
+      };
+    };
+    for (const vh of [844, 700, 600]) {
+      const ctxS = await browser.newContext({ storageState, viewport: { width: 390, height: vh }, isMobile: true, hasTouch: true });
+      await ctxS.route("**/api/matchday/*/gameday*", (r) =>
+        r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matches: TODAY_FIX }) }));
+      const ps = await ctxS.newPage();
+      await ps.goto(PAGE, { waitUntil: "domcontentloaded" });
+      await ps.waitForSelector('[data-testid="gday-row"]', { timeout: 120000 });
+      await ps.waitForTimeout(1200);
+      await ps.click('[data-testid="mo-screen-picker"]');
+      await ps.waitForSelector('[data-testid="screen-sheet"]', { timeout: 30000 });
+      await ps.waitForTimeout(700);
+      /* SCROLL TO THE END FIRST — the question is whether the last row is reachable AT ALL, not
+       * whether it happens to be visible before scrolling. */
+      await ps.evaluate(() => { const el = document.querySelector('[data-testid="screen-sheet"] .overflow-y-auto'); el.scrollTop = el.scrollHeight; });
+      await ps.waitForTimeout(400);
+      const v = await ps.evaluate(READ_SHEET);
+      console.log(`\n-- the section sheet at 390x${vh} --`);
+      yes(`  ${vh}: CONTROL - the sheet has rows (${v.items.length})`, v.items.length > 4);
+      yes(`  ${vh}: CONTROL - the bottom nav was found (top ${v.navTop})`, v.navTop != null);
+      is(`  ${vh}: every row clears the bottom nav`,
+        v.items.filter((it) => it.bottom > v.navTop).map((it) => [it.t, it.bottom]), []);
+      /* CONTROL: put the old padding back and show the last row goes behind the nav again. */
+      const regressed = await ps.evaluate(() => {
+        const el = document.querySelector('[data-testid="screen-sheet"] .overflow-y-auto');
+        const prevPad = el.style.paddingBottom, prevMax = el.style.maxHeight;
+        el.style.paddingBottom = "14px"; el.style.maxHeight = "86%";
+        el.scrollTop = el.scrollHeight;
+        const items = [...el.querySelectorAll("a,button")].filter((e) => e.textContent.trim().length > 3);
+        const last = items[items.length - 1].getBoundingClientRect().bottom;
+        const nav = [...document.querySelectorAll("nav,div")].find((e) =>
+          getComputedStyle(e).position === "fixed"
+          && e.getBoundingClientRect().bottom >= window.innerHeight - 2
+          && e.getBoundingClientRect().height > 40 && e.getBoundingClientRect().height < 120);
+        const navTop = nav.getBoundingClientRect().top;
+        el.style.paddingBottom = prevPad; el.style.maxHeight = prevMax;
+        return last > navTop;
+      });
+      yes(`  ${vh}: CONTROL - the old 14px padding DOES hide the last row`, regressed,
+        "the occlusion check cannot see a row behind the nav - every clean result above is worthless");
+      await closeContext(ctxS);
+    }
+  }
+
+
   /* ── THE LIVE BOARD ─────────────────────────────────────────────────────────────────────────
    * No intercept. The clamp and the layout claims are about REAL matches, and a fixture I chose
    * cannot settle them - I picked min 4 of 18 above precisely because min 2 of 18 tripped the
