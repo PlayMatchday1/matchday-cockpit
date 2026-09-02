@@ -72,6 +72,31 @@ const READ = () => {
       moreFake: !!q('[data-testid="gday-morefake"]'),
       mgr: q('[data-testid="gday-mgr"]')?.textContent.trim() ?? "",
       minLabel: lab ? { n: Number(lab.dataset.min), pct: Number(lab.dataset.pct), box: bb(lab) } : null,
+      /* hasMin WAS MISSING AND SEVERAL ASSERTIONS WERE PASSING VACUOUSLY ON IT — `undefined && x`
+       * is always false, so every "filter the rows with a minimum" check returned an empty array
+       * whatever the layout did. It is set here. */
+      hasMin: !!lab, noMin: !!q('[data-testid="gday-nomin"]'),
+      /* THE LABEL'S BOX AGAINST ITS CONTAINER AND EVERY CLIPPING ANCESTOR. A clipped label still
+       * passes a textContent check, which is exactly how the clip shipped. */
+      labelClip: (() => {
+        const el = lab ?? q('[data-testid="gday-nomin"]');
+        if (!el) return null;
+        const m2 = el.closest(".gmeter");
+        const lb = el.getBoundingClientRect(), mb = m2.getBoundingClientRect();
+        const clippers = [];
+        for (let n = el.parentElement; n && n !== document.body; n = n.parentElement) {
+          const cs = getComputedStyle(n);
+          if (cs.overflow === "hidden" || cs.overflowY === "hidden" || cs.overflowX === "hidden") {
+            const b = n.getBoundingClientRect();
+            clippers.push({ cls: String(n.className).slice(0, 20),
+              below: +(lb.bottom - b.bottom).toFixed(2), right: +(lb.right - b.right).toFixed(2),
+              left: +(b.left - lb.left).toFixed(2) });
+          }
+        }
+        return { text: el.textContent.trim(), h: +lb.height.toFixed(2),
+          belowMeter: +(lb.bottom - mb.bottom).toFixed(2),
+          outside: clippers.filter((c) => c.below > 0.5 || c.right > 0.5 || c.left > 0.5) };
+      })(),
       notch: notch ? { pct: Number(notch.dataset.pct), box: bb(notch) } : null,
       track: bar ? bb(bar) : null,
       realW: q('[data-testid="gday-real"]')?.getBoundingClientRect().width ?? 0,
@@ -767,13 +792,16 @@ async function main() {
     const rungF = () => pd.locator('[data-testid="gday-rung-fakes"]').textContent();
     const cap = URG.maxPlayerCount, real = URG._count.players - URG._count.fakePlayers;
     let rv = Number(await rungV());
-    is("  the fake count satisfies cap − rung − real", (await rungF()).trim(), `${Math.max(0, cap - rv - real)} fake`);
+    /* THE TRAILING COUNT NOW CARRIES ITS SEPARATOR, so it reads as belonging to the 3-hour figure
+     * beside it rather than floating between the two controls. */
+    is("  the fake count satisfies cap − rung − real", (await rungF()).trim(), `· ${Math.max(0, cap - rv - real)} fake`);
     /* THEY MOVE IN OPPOSITE DIRECTIONS — which is exactly why both numbers are on the control. */
     await pd.click('[data-testid="gday-rung-up"]'); await pd.waitForTimeout(300);
     const rv2 = Number(await rungV());
     is("  stepping the rung up moves it", rv2, rv + 1);
-    is("  ...and the fake count DOWN", (await rungF()).trim(), `${Math.max(0, cap - rv2 - real)} fake`);
-    is("  the save button names the rung", (await pd.locator('[data-testid="gday-save-rung"]').textContent()).trim(), `Save 3h rung ${rv2}`);
+    is("  ...and the fake count DOWN", (await rungF()).trim(), `· ${Math.max(0, cap - rv2 - real)} fake`);
+    is("  the save button names the setting without jargon",
+      (await pd.locator('[data-testid="gday-save-rung"]').textContent()).trim(), `Save ${rv2} left at 3h`);
     await pd.click('[data-testid="gday-rung-down"]'); await pd.waitForTimeout(400);
 
     console.log("\n-- D2: the fakes stepper --");
@@ -824,6 +852,119 @@ async function main() {
     const h1280 = await pd.evaluate(() => Math.round(document.querySelector('[data-testid="gday-alert"]').getBoundingClientRect().height));
     yes(`  the banner holds its height at 1280 (${h1280}px)`, h1280 < 150);
     await closeContext(cd);
+  }
+
+
+  // ══ A. THE MIN LABEL IS NOT CLIPPED, AT ANY WIDTH ══════════════════════════════════════════
+  {
+    /* GEOMETRY, NOT TEXT. The label rendered correct content the whole time and had its bottom
+     * 5.25px sheared off by .gs — the overflow:hidden added to stop the delta chip spilling into
+     * the manager cell. One fix made the other. A textContent check passes through all of it. */
+    for (const w of [390, 768, 1024, 1500]) {
+      const { ctx: ca, page: pa } = await boot(browser, storageState, w, { byDate: true, mobile: w < 640 });
+      const v = await pa.evaluate(READ);
+      console.log(`\n-- A1 at ${w}px --`);
+      yes(`  ${w}: CONTROL - there are labels to check (${v.rows.length})`, v.rows.length > 0);
+      is(`  ${w}: every label's bottom sits inside its meter`,
+        v.rows.filter((r) => r.labelClip && r.labelClip.belowMeter > 0).map((r) => [r.id, r.labelClip.belowMeter]), []);
+      /* EVERY CLIPPING ANCESTOR, not just the meter — the shear came from two levels up. */
+      is(`  ${w}: no label falls outside any overflow:hidden ancestor`,
+        v.rows.filter((r) => r.labelClip && r.labelClip.outside.length > 0)
+          .map((r) => [r.id, r.labelClip.outside]), []);
+      if (w >= 1024) {
+        is(`  ${w}: rows are still under 62px`, v.rows.filter((r) => r.h >= 62).map((r) => [r.id, r.h]), []);
+        /* THE 768 OVERLAP WALK IS KEPT — a label-height change is exactly what can reintroduce it. */
+        const ov = [];
+        for (const r of v.rows) for (let i2 = 1; i2 < r.chain.length; i2++) {
+          const a = r.chain[i2 - 1], b = r.chain[i2];
+          if (a && b && a.r > b.l + 0.5) ov.push([r.id, a.sel, b.sel]);
+        }
+        is(`  ${w}: no row overlaps`, ov, []);
+      }
+      /* CONTROL: put the 13px back and prove the assertion trips at this width. */
+      const trips = await pa.evaluate(() => {
+        const m2 = document.querySelector(".gmeter");
+        const prev = m2.style.paddingBottom;
+        m2.style.paddingBottom = "13px";
+        const el = m2.querySelector('[data-testid="gday-minlabel"],[data-testid="gday-nomin"]');
+        const seen = el.getBoundingClientRect().bottom - m2.getBoundingClientRect().bottom > 0;
+        m2.style.paddingBottom = prev;
+        return seen;
+      });
+      yes(`  ${w}: CONTROL - restoring 13px DOES trip the assertion`, trips,
+        "the clip check cannot see a clipped label - every clean result above is worthless");
+      await closeContext(ca);
+    }
+  }
+
+  // ══ A2/A3 + B. NO-MIN MATCHES, AND NO JARGON ON SCREEN ═════════════════════════════════════
+  {
+    /* A MATCH WITH NO MINIMUM. It cannot be short and can never auto-cancel for a shortfall, so it
+     * must be out of every risk surface as well as labelled honestly. */
+    const NOMIN = [
+      mk({ id: 501, name: "Hala Pilkarska Bemowo", fd: "Hala", city: "Warsaw", at: 100, cap: 14, min: 0, real: 2, fake: 0, mgrF: "Kuba", mgrL: "W" }),
+      mk({ id: 502, name: "Parmer Stadium", fd: "Parmer", city: "Austin", at: 110, cap: 36, min: 0, real: 15, fake: 0, mgrF: "Drea", mgrL: "M" }),
+      TODAY_FIX[0],
+    ];
+    const { ctx: cn, page: pn } = await boot(browser, storageState, 1500, { byDate: true, todaySet: NOMIN });
+    const v = await pn.evaluate(READ);
+    console.log("\n-- A2: a match with no minimum says so --");
+    for (const id of [501, 502]) {
+      const r = v.rows.find((x) => x.id === id);
+      is(`  #${id} renders "no min"`, r?.labelClip?.text, "no min");
+      is(`  #${id} draws no notch`, r?.notch, null);
+      /* A3: OUT OF EVERY RISK SURFACE. */
+      is(`  #${id} carries no risk styling`, r?.risk, false);
+      is(`  #${id} is not a banner`, await pn.locator(`[data-testid="gday-alert"][data-id="${id}"]`).count(), 0);
+    }
+    is("  Needs attention counts only the real one", v.tiles.risk.v, "1");
+    is("  CONTROL: ...and that one IS risk-styled", v.rows.find((x) => x.id === TODAY_FIX[0].id)?.risk, true);
+    await pn.click('[data-testid="gtile-risk"]'); await pn.waitForTimeout(700);
+    const filtered = await pn.evaluate(READ);
+    is("  CONTROL: the Needs attention filter shows one banner, not three", filtered.bannerCount, 1);
+    await pn.click('[data-testid="gtile-risk"]'); await pn.waitForTimeout(600);
+
+    console.log("\n-- B: 'rung' is off the screen --");
+    /* THE WHOLE PAGE'S RENDERED TEXT, not one component. Borrowed jargon leaks. */
+    const pageText = await pn.evaluate(() => document.body.innerText);
+    is("  no user-visible 'rung' anywhere on the page", /rung/i.test(pageText), false);
+    yes(`  CONTROL: the page really did render (${pageText.length} chars)`, pageText.length > 500);
+    /* AND IN THE PANEL TOO, since the editor is where the ladder lives. */
+    await pn.click('[data-testid="gday-row"] [data-testid="gday-name"]');
+    await pn.waitForSelector('[data-testid="gday-panel"]', { timeout: 30000 });
+    await pn.waitForTimeout(1500);
+    const panelText = await pn.evaluate(() => document.body.innerText);
+    is("  ...nor with the editor panel open", /rung/i.test(panelText), false);
+    yes(`  CONTROL: the panel rendered (${panelText.length - pageText.length} more chars)`, panelText.length > pageText.length);
+    await pn.click('[data-testid="gday-panel-close"]'); await pn.waitForTimeout(900);
+
+    console.log("\n-- B: the two controls are labelled --");
+    await pn.click('[data-testid="gtile-risk"]'); await pn.waitForTimeout(800);
+    const labels = await pn.evaluate(() => ({
+      fakes: document.querySelector('[data-testid="gday-fakestep"]')?.textContent.trim(),
+      rung: document.querySelector('[data-testid="gday-rungstep"]')?.textContent.trim(),
+    }));
+    yes(`  the first reads "Fakes now" - "${labels.fakes}"`, labels.fakes.startsWith("Fakes now"));
+    yes(`  the second reads "Spots left at 3h" - "${labels.rung}"`, labels.rung.startsWith("Spots left at 3h"));
+    yes("  ...and the trailing fake count belongs to the second", /·\s*\d+ fake$/.test(labels.rung));
+    /* THE TRAILING COUNT STILL SATISFIES THE FORMULA AT EVERY STEP. */
+    const U = TODAY_FIX[0], cap2 = U.maxPlayerCount, real2 = U._count.players - U._count.fakePlayers;
+    for (let i2 = 0; i2 < 3; i2++) {
+      const rv = Number(await pn.locator('[data-testid="gday-rung-value"]').textContent());
+      const ft = (await pn.locator('[data-testid="gday-rung-fakes"]').textContent()).trim();
+      is(`  step ${i2}: ${cap2} − ${rv} − ${real2} fake`, ft, `· ${Math.max(0, cap2 - rv - real2)} fake`);
+      await pn.click('[data-testid="gday-rung-up"]'); await pn.waitForTimeout(280);
+    }
+    console.log("\n-- B: both controls still fit the 2x2 grid --");
+    const g2 = await pn.evaluate(() => {
+      const a = document.querySelector('[data-testid="gday-acts"]');
+      return { cols: getComputedStyle(a).gridTemplateColumns.split(" ").length, w: Math.round(a.getBoundingClientRect().width) };
+    });
+    is("  two columns", g2.cols, 2);
+    await pn.setViewportSize({ width: 1280, height: 1000 }); await pn.waitForTimeout(700);
+    const h = await pn.evaluate(() => Math.round(document.querySelector('[data-testid="gday-alert"]').getBoundingClientRect().height));
+    yes(`  the banner holds its height at 1280 (${h}px)`, h < 150);
+    await closeContext(cn);
   }
 
 

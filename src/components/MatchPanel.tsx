@@ -926,9 +926,9 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
               })}
             </div>
             <span className="mp-note" data-testid="mp-laddernote">
-              Each rung is the most spots shown as LEFT from that point, so a HIGHER rung means
-              FEWER fakes. A rung may be higher than an earlier one — that is how fakes come off a
-              match near kickoff, and it is intentional.
+              Each figure is the most spots shown as LEFT from that point, so showing FEWER spots
+              left means MORE fake spots. A later figure may be higher than an earlier one — that is
+              how fake spots come off a match near kickoff, and it is intentional.
             </span>
           </Section>
 

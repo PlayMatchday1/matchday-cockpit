@@ -888,8 +888,8 @@ const CSS = `
 .gdo .minlab .tag.togo{background:#FDEEEB;color:#A83120;border:1px solid #E9B6AC}
 .gdo .minlab .nn{margin-left:7px}.gdo .minlab .nn b{color:#0B1F17}
 .gdo .rungs{display:flex;gap:7px}
-.gdo .rung{border:1px solid #DCE5E0;border-radius:7px;padding:4px 9px;background:#fff;font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;min-height:28px}
-.gdo .rung b{color:#1B4F9C}.gdo .rung.next{border-color:#C9DBF3;background:#F2F7FE}.gdo .rung.dash{color:#5C6B62}
+/* .rung / .rung.next / .rung.dash WERE HERE. Dead since the row rebuild — nothing carried the
+   class, and the word is off the screen now anyway. */
 .gdo .nx{display:block;font-size:11.5px;color:#1B4F9C;margin-top:5px;font-variant-numeric:tabular-nums}.gdo .nx.none{color:#5C6B62}
 /* DECIDE BY on the card (21b item 3): absolute clock leads, then "N left"/"passed". */
 .gdo .ac .clk{display:block;font-size:14px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.1px}
@@ -1230,7 +1230,16 @@ const CSS = `
 .gdo .gpz{flex:0 0 auto;font-size:11px;color:#66786E;font-variant-numeric:tabular-nums}
 .gdo .gs{display:flex;align-items:center;gap:9px;min-width:0;overflow:hidden}
 /* THE METER. 104px track, 8px bar, and a 13px gutter beneath it for the min label. */
-.gdo .gmeter{position:relative;flex:0 0 104px;padding-bottom:13px}
+/* THE SPACE BELOW THE BAR MUST FIT THE LABEL'S OWN BOX, not just its baseline.
+ *
+ * It was 13px against a label at top:12px that renders 14.25px tall — so the label ended 5.25px
+ * past its container and .gs (overflow:hidden, added to stop the delta chip spilling into the
+ * manager cell at 768px) sheared exactly that sliver off. One fix created the other.
+ *
+ * 28 = 12 top offset + 14.25 rendered height + a little. NOT FIXED BY REMOVING THE OVERFLOW: that
+ * container clips for a reason, and trading a clipped label for a delta chip on top of the manager
+ * name is a worse defect that the overlap walk would then have to catch again. */
+.gdo .gmeter{position:relative;flex:0 0 104px;padding-bottom:28px}
 .gdo .gbar{position:relative;height:8px;border-radius:99px;background:#e6eae7;overflow:hidden}
 .gdo .gbar .r{position:absolute;left:0;top:0;bottom:0;background:#35c77f;border-radius:99px}
 .gdo .gbar.short .r{background:#C0392B}
@@ -1392,6 +1401,7 @@ const CSS = `
 .gdo .gstep .glab{display:inline-flex;align-items:baseline;gap:3px;white-space:nowrap}
 .gdo .gstep .glab b{min-width:0;font-size:13.5px}
 .gdo .gstep .glab i{font-style:normal;font-size:11px;color:#66786E;font-weight:600}
+.gdo .gtrail{font-style:normal;font-size:11px;color:#66786E;font-weight:600;white-space:nowrap;margin-left:2px}
 .gdo .gladdernote{font-size:11px;color:#8A5A08;background:#FFF6E3;border:1px solid #F0DFB8;
   border-radius:7px;padding:4px 9px;text-align:center}
 @media (max-width: 639.98px) {
@@ -1520,7 +1530,10 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
             {g.hasMin
               ? <div className="gmnl" data-testid="gday-minlabel" data-min={min} data-pct={g.labelPct.toFixed(4)}
                   style={{ left: `${g.labelPct}%` }}>min {min}</div>
-              : <div className="gmnl gnomin" data-testid="gday-nomin" style={{ left: "12%" }}>no minimum</div>}
+              : /* "no min", not "minimum" and not "min 0". A match with no minimum cannot be short
+                   and can never auto-cancel for a shortfall; the label says so in the width the
+                   track actually has. */
+                <div className="gmnl gnomin" data-testid="gday-nomin" style={{ left: "12%" }}>no min</div>}
           </div>
         ) : <div className="gmeter" />}
         <div className="gnum" data-testid="gday-nums">
@@ -1646,8 +1659,8 @@ function AlertBanner({ m, now, pending, pendingFakes, pending3h, onStep, onStepF
          * fakes also raises every LATER rung, or the ladder puts them straight back at the next
          * mark - the note says so rather than leaving it to be discovered. */}
         <span className="gstep" data-testid="gday-fakestep"
-          title={`Fakes are derived from the spots-shown-left ladder (fake = capacity − rung − real). Changing this writes the ${markInForce(minsToKick / 60)}h rung and every later one, so the ladder cannot re-inflate.`}>
-          Adjust fakes
+          title={`Fake spots are derived from the "most spots shown as left" settings. Changing this updates the ${markInForce(minsToKick / 60)}-hour setting and every later one, so the count cannot creep back up.`}>
+          Fakes now
           <button type="button" className="gsb" data-testid="gday-fake-down" aria-label="Remove a fake spot"
             disabled={!canEdit || shownFakes <= 0}
             onClick={(e) => { stop(e); onStepFakes(m.id, -1); }}>−</button>
@@ -1661,14 +1674,24 @@ function AlertBanner({ m, now, pending, pendingFakes, pending3h, onStep, onStepF
          * "3h rung 4" reads as four fakes and means four spots SHOWN LEFT - the opposite
          * direction. Both numbers are on the control, and the fake count moves as the rung steps. */}
         <span className="gstep" data-testid="gday-rungstep"
-          title="The most spots shown as LEFT from three hours before kickoff. A HIGHER rung means FEWER fakes.">
-          <span className="glab">3h rung <b data-testid="gday-rung-value">{shown3h}</b> · <i data-testid="gday-rung-fakes">{fakesFor(cap, shown3h, real)} fake</i></span>
-          <button type="button" className="gsb" data-testid="gday-rung-down" aria-label="Lower the 3 hour rung"
+          title="The most spots shown as left from three hours before kickoff. Showing FEWER spots left means MORE fake spots.">
+          {/* "RUNG" WAS BORROWED JARGON AND IT LEAKED ONTO THE SCREEN. Nothing in MatchDay calls it
+              that; the editor calls it "most spots shown as left". The word stays in the code and
+              the facts doc, where the ladder metaphor is useful, and is gone from the UI.
+              AND THE TWO NUMBERS ARE NOW LABELLED. "Fakes now 9" beside "3h rung 2 · 13 fake" was
+              two different counts of the same thing with nothing saying which was which — one is
+              the count now, the other the count from three hours out. */}
+          <span className="glab">Spots left at 3h</span>
+          <button type="button" className="gsb" data-testid="gday-rung-down" aria-label="Show fewer spots left from three hours before kickoff"
             disabled={!canEdit || shown3h <= 0}
             onClick={(e) => { stop(e); onStep3h(m.id, -1); }}>−</button>
-          <button type="button" className="gsb" data-testid="gday-rung-up" aria-label="Raise the 3 hour rung"
+          <b data-testid="gday-rung-value">{shown3h}</b>
+          <button type="button" className="gsb" data-testid="gday-rung-up" aria-label="Show more spots left from three hours before kickoff"
             disabled={!canEdit || shown3h >= cap}
             onClick={(e) => { stop(e); onStep3h(m.id, 1); }}>+</button>
+          {/* THE TRAILING COUNT BELONGS TO THE 3-HOUR FIGURE, and now sits after it rather than
+              floating between the two controls. */}
+          <i className="gtrail" data-testid="gday-rung-fakes">· {fakesFor(cap, shown3h, real)} fake</i>
         </span>
 
         {/* ONE SAVE, FOR WHICHEVER VALUE MOVED. Green only when the minimum change actually clears
@@ -1684,12 +1707,12 @@ function AlertBanner({ m, now, pending, pendingFakes, pending3h, onStep, onStepF
                 : `Sets the minimum to ${shownMin}. Still ${shortNow} short of ${real} real players, so the auto-cancel will still fire.`)
               : fakesMoved
                 ? fakesWriteNote(shownFakes, laterRaised)
-                : `Sets the 3h rung to ${shown3h} — ${fakesFor(cap, shown3h, real)} fake spots from three hours out.`}
+                : `Shows at most ${shown3h} spot${shown3h === 1 ? "" : "s"} left from three hours before kickoff — ${fakesFor(cap, shown3h, real)} fake spots.`}
             onClick={(e) => { stop(e); if (moved) onSave(m.id); else if (fakesMoved) onSaveFakes(m.id); else onSave3h(m.id); }}>
             {saveState?.s === "saving" ? "Saving…"
               : moved ? `Save min ${shownMin}`
               : fakesMoved ? `Save ${shownFakes} fake${shownFakes === 1 ? "" : "s"}`
-              : `Save 3h rung ${shown3h}`}
+              : `Save ${shown3h} left at 3h`}
           </button>
         )}
         {fakesMoved && laterRaised.length > 0 && (
