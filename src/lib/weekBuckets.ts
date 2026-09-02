@@ -146,3 +146,35 @@ export function weeksInMonthRange(
   if (all.length <= max) return { axis: all, dropped: 0 };
   return { axis: all.slice(all.length - max), dropped: all.length - max };
 }
+
+/* ── A PARTIAL BUCKET IS NOT A COLLAPSE ────────────────────────────────────────────────────────
+ * The week containing today has had only some of its days happen. Rendered unmarked it looks like
+ * every line falling off a cliff, and — far worse — it was what the "Latest WoW" badge measured
+ * against: on 2026-09-01 the panel read −68.4%, −58.6%, −46.6%, −56.0% and −44.4%, every one of
+ * them one day of data compared with seven.
+ *
+ * A WEEK IS COMPLETE WHEN ITS SUNDAY HAS PASSED. Not "when it has data" — a genuinely quiet week
+ * that really did see two signups is complete and its −80% is a fact worth showing. The test is
+ * the calendar, never the values, because a rule that skipped low weeks would hide real collapses.
+ */
+
+/** True when every day of the week has already happened, in the caller's clock. */
+export const isWeekComplete = (mondayYmd: string, todayYmd: string): boolean =>
+  weekEnd(mondayYmd) < todayYmd;
+
+/**
+ * Indices into `axis` of the last two COMPLETE buckets, for a change figure.
+ * `null` when there are not two — a WoW that cannot be computed must be reported as absent, never
+ * as 0%, which reads as "no change" rather than "no answer".
+ */
+export function lastTwoComplete(
+  complete: readonly boolean[],
+): { last: number; prev: number } | null {
+  const idx: number[] = [];
+  for (let i = complete.length - 1; i >= 0 && idx.length < 2; i--) if (complete[i]) idx.push(i);
+  return idx.length === 2 ? { last: idx[0], prev: idx[1] } : null;
+}
+
+/** Today's date in America/Chicago — the clock every bucket on this page is cut in. */
+export const chicagoToday = (): string =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());

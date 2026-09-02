@@ -15,8 +15,7 @@ import { downloadCsv } from "./format";
 import styles from "./playerBehavior.module.css";
 import { supabase } from "@/lib/supabase";
 import {
-  changeColumnLabel, changeColumnTitle, weekRangeLabel, weekTick, type Granularity,
-} from "@/lib/weekBuckets";
+  changeColumnLabel, changeColumnTitle, weekRangeLabel, weekTick, type Granularity, isWeekComplete, lastTwoComplete, chicagoToday } from "@/lib/weekBuckets";
 
 /* THE WEEKLY PAYLOAD, as /api/lifecycle/behavior-weekly returns it. `w` is a Monday YYYY-MM-DD;
  * it is renamed to `m` on the way in so the rest of this file is unchanged. */
@@ -26,7 +25,7 @@ type WeeklyPayload = {
   overall: WeekPoint[];
   byCity: Record<string, WeekPoint[]>;
   byField?: Record<string, { label: string; city: string; points: WeekPoint[] }>;
-  window?: { start: string | null; end: string | null; weeks: number; dropped: number };
+  window?: { start: string | null; end: string | null; weeks: number; dropped: number; futureDropped?: number; today?: string };
 };
 const BEHAVIOR_GRAN_KEY = "behavior:granularity";
 
@@ -69,8 +68,14 @@ const bucketTick = (k: string, g: Granularity) => (g === "weekly" ? weekTick(k) 
 const fmt = (n: number) => n.toLocaleString("en-US");
 const pctChange = (a: number, b: number) => (b === 0 ? (a === 0 ? 0 : 100) : ((a - b) / b) * 100);
 
-// ── chart geometry (ported verbatim from the mockup) ────────────────────────
-const VW = 1120, VH = 350, M = { l: 70, r: 132, t: 20, b: 46 };
+/* ── CHART GEOMETRY ───────────────────────────────────────────────────────────────────────────
+ * THE RIGHT GUTTER WAS 132px AND HELD THE END-OF-LINE SERIES LABELS. Those labels collided —
+ * "Registrations" at y=293 and "New players" at y=306 were 13px apart at font-size 11 weight 900,
+ * i.e. touching — and no amount of nudging fixes four labels competing for one margin. They are a
+ * legend above the plot now, which is what the rest of Clubhouse does, so the gutter shrinks to a
+ * hair and the plot gets the 106px back. That extra width is also what lets the x axis carry twice
+ * as many labels without them touching. */
+const VW = 1120, VH = 350, M = { l: 70, r: 26, t: 20, b: 46 };
 const IW = VW - M.l - M.r, IH = VH - M.t - M.b;
 
 // Steps only by (1|2|5|10)×10^n and loops until the final tick is >= hi, so the
@@ -94,7 +99,10 @@ const tickLabel = (v: number) => (v >= 1000 && v % 1000 === 0 ? v / 1000 + "K" :
 
 type Series = { data: number[]; color: string; label: string; width: number };
 
-function buildChart(series: Series[], months: string[], gran: Granularity = "monthly") {
+function buildChart(
+  series: Series[], months: string[], gran: Granularity = "monthly",
+  complete: readonly boolean[] = [],
+) {
   const flat = series.flatMap((s) => s.data);
   const ticks = niceTicks(Math.max(1, ...flat), 5);
   const top = ticks[ticks.length - 1];
@@ -102,37 +110,61 @@ function buildChart(series: Series[], months: string[], gran: Granularity = "mon
   const xAt = (i: number) => M.l + (months.length === 1 ? IW / 2 : (i * IW) / (months.length - 1));
 
   const gridlines = ticks.map((t) => ({ y: yAt(t), label: tickLabel(t) }));
-  const monthTicks = months.map((m, i) => ({ x: xAt(i), label: bucketTick(m, gran) }));
+  /* THE BASELINE. The gridlines used to float with nothing closing the plot at the bottom, so a
+   * value near zero had no edge to sit on. MembershipActiveChart draws its zero line the same
+   * weight as the rest; this is that line, at y = 0. */
+  const baseline = yAt(0);
 
+  /* ── X LABELS, THINNED SO THEY CANNOT TOUCH ───────────────────────────────────────────────────
+   * MEASURED BEFORE THIS CHANGE: at a 1500px viewport, 15 of 28 adjacent label pairs sat closer
+   * than 4px and several overlapped outright — "Mar 16Mar 23" ran together as one word.
+   *
+   * The step is DERIVED from the width each label actually needs, never pinned: a weekly tick is
+   * "Aug 31" at ~34px and a monthly one is "Aug 2026" at ~48px, and the count changes with the
+   * period. LABEL_W is the widest label plus the smallest gap that still reads as two labels.
+   *
+   * ANCHORED TO THE RIGHT. `(n - 1 - i) % every` keeps the NEWEST bucket labelled and thins
+   * backwards from it; thinning forwards from index 0 drops the most recent week, which is the one
+   * the reader came for. The hover tooltip names every week exactly, so nothing is lost. */
+  const LABEL_W = gran === "weekly" ? 46 : 62;
+  const every = Math.max(1, Math.ceil((months.length * LABEL_W) / Math.max(1, IW)));
+  const monthTicks = months.map((m, i) => ({
+    x: xAt(i),
+    label: bucketTick(m, gran),
+    show: (months.length - 1 - i) % every === 0,
+  }));
+
+  /* ── THE PARTIAL BUCKET IS DRAWN DIFFERENTLY ──────────────────────────────────────────────────
+   * Its incoming segment is dashed and its marker is hollow. Not a separate colour: the series
+   * must stay identifiable, and a fifth colour on a four-colour chart reads as a fifth series. */
+  const partialIdx = complete.length === months.length ? complete.lastIndexOf(false) : -1;
+  const isPartial = (i: number) => i === partialIdx && i === months.length - 1;
+
+  const seg = (data: number[], from: number, to: number) =>
+    data.slice(from, to + 1)
+      .map((v, k) => `${k ? "L" : "M"}${xAt(from + k).toFixed(1)},${yAt(v).toFixed(1)}`).join(" ");
+
+  const last = months.length - 1;
   const polys = series.map((s) => ({
-    d: s.data.map((v, i) => `${i ? "L" : "M"}${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`).join(" "),
+    // The solid run stops at the last COMPLETE bucket when the final one is partial.
+    d: seg(s.data, 0, isPartial(last) ? Math.max(0, last - 1) : last),
+    // …and the partial tail is its own dashed path. Empty when nothing is partial.
+    dPartial: isPartial(last) && last > 0 ? seg(s.data, last - 1, last) : "",
     color: s.color,
     width: s.width,
-    cx: xAt(s.data.length - 1),
-    cy: yAt(s.data[s.data.length - 1]),
+    cx: xAt(last),
+    cy: yAt(s.data[last] ?? 0),
   }));
 
-  // Direct labels are the legend, so they must stay legible and inside the plot
-  // band. Push down for a 13px min gap; if the stack overruns the bottom slide
-  // the whole group up; if the top then rises above TOP, clamp and re-space.
-  const labels = series.map((s) => ({
-    y: yAt(s.data[s.data.length - 1]),
-    color: s.color,
-    text: s.label,
+  /* HOVER GEOMETRY. One x per bucket and every series' y at it, so the render can put a marker on
+   * each line and a tooltip beside them without recomputing the scale. */
+  const pts = months.map((m, i) => ({
+    i, key: m, x: xAt(i),
+    ys: series.map((s) => yAt(s.data[i] ?? 0)),
+    vals: series.map((s) => s.data[i] ?? 0),
   }));
-  labels.sort((a, b) => a.y - b.y);
-  const GAP = 13, TOP = M.t + 5, BOT = M.t + IH - 2;
-  for (let i = 1; i < labels.length; i++)
-    if (labels[i].y - labels[i - 1].y < GAP) labels[i].y = labels[i - 1].y + GAP;
-  const over = labels[labels.length - 1].y - BOT;
-  if (over > 0) labels.forEach((l) => (l.y -= over));
-  if (labels[0].y < TOP) {
-    labels[0].y = TOP;
-    for (let i = 1; i < labels.length; i++)
-      if (labels[i].y - labels[i - 1].y < GAP) labels[i].y = labels[i - 1].y + GAP;
-  }
 
-  return { gridlines, monthTicks, polys, labels };
+  return { gridlines, baseline, monthTicks, polys, pts, partialIdx, plot: { l: M.l, r: M.l + IW, t: M.t, b: M.t + IH } };
 }
 
 type Row = { name: string; cells: number[]; total: number; mom: number; rank?: number; dot?: string; points?: boolean };
@@ -234,6 +266,27 @@ export default function BehaviorPanel({
     [gran, weekly, data.behaviorOverall, period],
   );
 
+  /* ── WHICH BUCKETS ARE FINISHED ───────────────────────────────────────────────────────────────
+   * The clock comes from the PAYLOAD, not from this browser: the buckets were cut in
+   * America/Chicago and a viewer in another zone would otherwise mark the wrong week partial.
+   * chicagoToday() is the fallback for the first render, before the payload lands.
+   *
+   * MONTHLY IS DELIBERATELY LEFT ALONE. Every monthly bucket is treated as complete here, which is
+   * how this panel has always behaved and what "do not change monthly mode" asks for. It is not
+   * because the question does not arise: the current month is partial in exactly the same way, and
+   * the only reason it does not bite is that the period bar's quick pills already end on the last
+   * COMPLETE month. A hand-picked period ending in the current month has the same flaw monthly
+   * that weekly had. Reported rather than fixed, because fixing it was explicitly out of scope. */
+  const todayYmd = weekly?.window?.today ?? chicagoToday();
+  const complete = useMemo(
+    () => (gran === "weekly" ? months.map((m) => isWeekComplete(m, todayYmd)) : months.map(() => true)),
+    [gran, months, todayYmd],
+  );
+  /* THE PAIR THE CHANGE COLUMN COMPARES. The last two COMPLETE buckets — never the partial one,
+   * which is what produced −68.4% from one day against seven. */
+  const cmp = useMemo(() => lastTwoComplete(complete), [complete]);
+  const partialIdx = complete.lastIndexOf(false);
+
   // The play-markets IN THE SELECTED PERIOD: cities with any spots > 0 across the
   // displayed months, sorted alphabetically. Scoping to the period (not all time)
   // is what keeps declared-only / one-off markets out — e.g. NYC had a single
@@ -301,11 +354,20 @@ export default function BehaviorPanel({
     // a move by a factor of the base, and it is the one thing this metric makes easy to get wrong.
     const isRate = IS_RATE.has(metric as GridMetric);
     const toRow = (name: string, cells: number[], extra?: { rank: number; dot: string }, rateRow = false): Row => {
-      const last = cells[cells.length - 1] ?? 0;
-      const prev = cells[cells.length - 2] ?? 0;
+      /* THE CHANGE IS BETWEEN THE LAST TWO COMPLETE BUCKETS. It used to be the last two cells
+       * whatever they were, so on 2026-09-01 every row compared one day of Aug 31 – Sep 6 against
+       * a whole week and reported a 45–68% collapse that had not happened.
+       *
+       * THE "SELECTED PERIOD" TOTAL STILL INCLUDES THE PARTIAL WEEK, on purpose — it is a sum of
+       * what actually happened in the window, and a partial week's registrations really did occur.
+       * Only the CHANGE is a comparison, and only a comparison needs like for like. */
+      const li = cmp ? cmp.last : cells.length - 1;
+      const pi = cmp ? cmp.prev : cells.length - 2;
+      const last = cells[li] ?? 0;
+      const prev = cells[pi] ?? 0;
       const rate = rateRow || (isRate && !!extra);
       // A rate's "period" figure is its LATEST value, never a sum — summing percentages is meaningless.
-      const total = rate ? last : cells.reduce((a, b) => a + b, 0);
+      const total = rate ? cells[cells.length - 1] ?? 0 : cells.reduce((a, b) => a + b, 0);
       const mom = rate ? last - prev : pctChange(last, prev);
       return { name, cells, total, mom, points: rate, ...extra };
     };
@@ -363,22 +425,53 @@ export default function BehaviorPanel({
       scope = "All cities";
     }
 
-    const chart = series.length && months.length ? buildChart(series, months, gran) : null;
+    const chart = series.length && months.length ? buildChart(series, months, gran, complete) : null;
+    /* THE LEGEND, replacing the end-of-line labels that overlapped. Colour and name in reading
+     * order, above the plot, where four of them fit on one line and none can collide. */
+    const legend = series.map((sx) => ({ label: sx.label, color: sx.color }));
     /* THE CEILING, SAID OUT LOUD. A custom range longer than 53 weeks keeps the most recent 53;
      * without this line the chart would read as the whole period and be short by the difference. */
     const dropped = gran === "weekly" ? (weekly?.window?.dropped ?? 0) : 0;
     if (dropped > 0) chartSub += ` · earliest ${dropped} week${dropped === 1 ? "" : "s"} of this period not shown (53-week maximum)`;
-    return { chart, rows, chartTitle, chartSub, detailTitle, scope };
-  }, [cityMode, fieldMode, detailMode, src, months, cities, fields, metric, gran, weekly]);
+    return { chart, rows, chartTitle, chartSub, detailTitle, scope, legend };
+  }, [cityMode, fieldMode, detailMode, src, months, cities, fields, metric, gran, weekly, complete, cmp]);
+
+  /* ── HOVER ────────────────────────────────────────────────────────────────────────────────────
+   * The chart had nothing to hover. The other Clubhouse charts put a marker on the series and name
+   * the bucket, which is also what makes thinning the x axis safe: a label that is not printed is
+   * still one hover away. Index-based, resolved from the pointer's x in VIEWBOX units — the svg is
+   * width:100% so client pixels are the wrong scale. */
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const c = model.chart;
+    if (!c || !c.pts.length) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const vx = ((e.clientX - r.left) / r.width) * VW;
+    let best = 0, bd = Infinity;
+    for (const pt of c.pts) { const d = Math.abs(pt.x - vx); if (d < bd) { bd = d; best = pt.i; } }
+    setHoverIdx(best);
+  };
 
   /* THE UNIT FOLLOWS THE GRANULARITY. This read "26 months · oldest to newest" in weekly mode,
    * because `months` is the axis whatever the axis is made of. A count is not unit-free. */
   const unit = gran === "weekly" ? "week" : "month";
   const metricPeriodText = `${months.length} ${unit}${months.length === 1 ? "" : "s"} · oldest to newest`;
   const firstColHead = fieldMode ? "Field" : cityMode ? "City" : "Metric";
+  /* WHICH TWO BUCKETS THE CHANGE COLUMN USED, named on the column itself and in its tooltip. */
+  const cmpSub = cmp && gran === "weekly" ? `${weekTick(months[cmp.prev])} → ${weekTick(months[cmp.last])}` : "";
+  const cmpTitle = cmp
+    ? (gran === "weekly"
+      ? `Week over week — ${weekRangeLabel(months[cmp.last])} against ${weekRangeLabel(months[cmp.prev])}. `
+        + `Both are COMPLETE weeks; a week still running is never used here.`
+      : changeColumnTitle(gran))
+    : "Not enough complete buckets in this period to compute a change.";
 
   const exportCsv = () => {
-    const header = [firstColHead, ...months.map((k) => bucketLabel(k, gran)), "Selected period", `Latest ${changeColumnLabel(gran)}`];
+    /* THE FILE SAYS WHICH TWO BUCKETS ITS CHANGE COLUMN COMPARED, for the same reason the screen
+     * does: a bare "Latest WoW" is how a partial week hid inside these numbers. */
+    const header = [firstColHead, ...months.map((k) => bucketLabel(k, gran)), "Selected period",
+      cmpSub ? `Latest ${changeColumnLabel(gran)} (${cmpSub})` : `Latest ${changeColumnLabel(gran)}`];
     const body = model.rows.map((r) => [
       r.name,
       // A rate is written with its unit so a spreadsheet cannot mistake 44 for a count.
@@ -401,12 +494,19 @@ export default function BehaviorPanel({
           const idx = pointsOf(k);
           const cells = months.map((m) => metricValue(idx.get(m), rm) ?? 0);
           const rate = rm === "pctRecurring";
-          const last = cells[cells.length - 1] ?? 0;
-          const prev = cells[cells.length - 2] ?? 0;
+          /* THE SAME COMPLETE-BUCKETS RULE AS THE TABLE. This is the second place a change is
+           * computed from these buckets and it had the same defect: the exported file compared the
+           * partial week against a whole one, so a CSV opened in a spreadsheet carried the -68%
+           * that the screen no longer shows. Two change figures for the same pair of weeks, one
+           * right and one wrong, is worse than the original bug. */
+          const li = cmp ? cmp.last : cells.length - 1;
+          const pi = cmp ? cmp.prev : cells.length - 2;
+          const last = cells[li] ?? 0;
+          const prev = cells[pi] ?? 0;
           body.push([
             `${fieldMode ? src.behaviorByField[k].label : k} · ${METRIC_LABEL[rm]}`,
             ...cells.map((c) => (rate ? `${c.toFixed(1)}%` : String(c))),
-            rate ? `${last.toFixed(1)}%` : String(cells.reduce((a, b) => a + b, 0)),
+            rate ? `${(cells[cells.length - 1] ?? 0).toFixed(1)}%` : String(cells.reduce((a, b) => a + b, 0)),
             rate
               ? `${last - prev >= 0 ? "+" : ""}${(last - prev).toFixed(1)} pts`
               : `${pctChange(last, prev) >= 0 ? "+" : ""}${pctChange(last, prev).toFixed(1)}%`,
@@ -530,14 +630,38 @@ export default function BehaviorPanel({
       <>
       {/* chart */}
       <div className={styles.chart}>
+        {/* THE LEGEND, above the plot. This replaces four end-of-line labels that overlapped in
+            the right margin; a horizontal row cannot collide however many series there are, it
+            wraps. */}
+        <div className={styles.legend} data-testid="behavior-legend">
+          {model.legend.map((l) => (
+            <span key={l.label} className={styles.legendItem} data-testid="behavior-legend-item">
+              <i className={styles.legendSwatch} style={{ background: l.color }} />
+              {l.label}
+            </span>
+          ))}
+          {gran === "weekly" && partialIdx >= 0 && (
+            <span className={styles.legendItem} data-testid="behavior-legend-partial">
+              <i className={styles.legendDash} />
+              {weekRangeLabel(months[partialIdx])} is still running — partial
+            </span>
+          )}
+        </div>
+        <div className={styles.plotWrap}>
         <svg
+          ref={svgRef}
           className={styles.chartSvg}
           id="playerBehaviorChart"
           viewBox={`0 0 ${VW} ${VH}`}
           preserveAspectRatio="xMidYMid meet"
+          onMouseMove={onMove}
+          onMouseLeave={() => setHoverIdx(null)}
         >
           {c && (
             <>
+              {/* GRIDLINES FIRST, so every line draws on top of them — the order
+                  MembershipActiveChart uses, and the reason its lines read as data rather than as
+                  more grid. */}
               {c.gridlines.map((g, i) => (
                 <g key={`g${i}`}>
                   <line className={styles.gl} x1={M.l} y1={g.y.toFixed(1)} x2={M.l + IW} y2={g.y.toFixed(1)} />
@@ -546,38 +670,86 @@ export default function BehaviorPanel({
                   </text>
                 </g>
               ))}
-              {c.monthTicks.map((t, i) => (
-                <text key={`m${i}`} className={styles.axis} x={t.x.toFixed(1)} y={VH - M.b + 24} textAnchor="middle">
+              {/* THE BASELINE. Darker than a gridline; the plot needs a floor to sit on. */}
+              <line className={styles.baseline} x1={M.l} y1={c.baseline.toFixed(1)} x2={M.l + IW} y2={c.baseline.toFixed(1)} />
+
+              {/* THINNED X LABELS — see buildChart. `show` is false for the ones that would touch. */}
+              {c.monthTicks.map((t, i) => (t.show ? (
+                <text key={`m${i}`} data-testid="behavior-axis-tick" className={styles.axis}
+                  x={t.x.toFixed(1)} y={VH - M.b + 24} textAnchor="middle">
                   {t.label}
                 </text>
-              ))}
+              ) : null))}
+
               {c.polys.map((p, i) => (
                 <g key={`p${i}`}>
-                  <path
-                    d={p.d}
-                    fill="none"
-                    stroke={p.color}
-                    strokeWidth={p.width}
-                    strokeLinejoin="round"
-                    strokeLinecap="round"
-                  />
-                  <circle cx={p.cx.toFixed(1)} cy={p.cy.toFixed(1)} r={3.6} fill={p.color} />
+                  <path d={p.d} fill="none" stroke={p.color} strokeWidth={p.width}
+                    strokeLinejoin="round" strokeLinecap="round" />
+                  {/* THE PARTIAL TAIL, DASHED. Same colour — it is the same series, not a fifth one. */}
+                  {p.dPartial && (
+                    <path data-testid="behavior-partial-seg" d={p.dPartial} fill="none" stroke={p.color}
+                      strokeWidth={p.width} strokeDasharray="5 4" strokeLinecap="round" opacity={0.75} />
+                  )}
+                  {/* A HOLLOW end marker when the last bucket is partial, filled when it is not.
+                      MembershipActiveChart marks its in-progress point the same way. */}
+                  <circle cx={p.cx.toFixed(1)} cy={p.cy.toFixed(1)} r={3.6}
+                    fill={p.dPartial ? "#fff" : p.color} stroke={p.color} strokeWidth={p.dPartial ? 2 : 0} />
                 </g>
               ))}
-              {c.labels.map((l, i) => (
-                <text
-                  key={`l${i}`}
-                  className={styles.serieslab}
-                  x={M.l + IW + 10}
-                  y={(l.y + 4).toFixed(1)}
-                  fill={l.color}
-                >
-                  {l.text}
-                </text>
-              ))}
+
+              {/* THE PARTIAL BUCKET, NAMED ON THE AXIS. A dashed line says "different"; only the
+                  word says WHAT is different. */}
+              {c.partialIdx >= 0 && c.partialIdx === c.pts.length - 1 && (
+                <>
+                  <line className={styles.partialRule} x1={c.pts[c.partialIdx].x} y1={M.t}
+                    x2={c.pts[c.partialIdx].x} y2={c.plot.b} />
+                  <text data-testid="behavior-partial-note" className={styles.partialNote}
+                    x={c.pts[c.partialIdx].x} y={VH - M.b + 36} textAnchor="end">
+                    partial week
+                  </text>
+                </>
+              )}
+
+              {/* HOVER: a rule, a marker on every series, and a tooltip naming the bucket. */}
+              {hoverIdx != null && c.pts[hoverIdx] && (
+                <g data-testid="behavior-hover">
+                  <line className={styles.hoverRule} x1={c.pts[hoverIdx].x} y1={M.t} x2={c.pts[hoverIdx].x} y2={c.plot.b} />
+                  {c.pts[hoverIdx].ys.map((y, k) => (
+                    <circle key={`h${k}`} data-testid="behavior-hover-dot"
+                      cx={c.pts[hoverIdx].x.toFixed(1)} cy={y.toFixed(1)} r={5}
+                      fill="#fff" stroke={model.legend[k]?.color ?? "#888"} strokeWidth={2.5} />
+                  ))}
+                </g>
+              )}
             </>
-          )}
-        </svg>
+          )}        </svg>
+        {/* THE TOOLTIP — HTML rather than SVG text, so it can have a background, padding and wrap
+            without hand-laying every box. Positioned in PERCENT of the plot, because the svg
+            scales to the container and viewBox units are not client pixels. */}
+        {hoverIdx != null && c && c.pts[hoverIdx] && (
+          <div
+            className={styles.tip}
+            data-testid="behavior-tooltip"
+            style={{
+              left: `${(c.pts[hoverIdx].x / VW) * 100}%`,
+              // Flip to the left of the rule past the midpoint so the tip never leaves the card.
+              transform: c.pts[hoverIdx].x > VW / 2 ? "translate(-100%, 0)" : "translate(0, 0)",
+            }}
+          >
+            <div className={styles.tipHead} data-testid="behavior-tooltip-bucket">
+              {bucketLabel(months[hoverIdx], gran)}
+              {gran === "weekly" && !complete[hoverIdx] && <span className={styles.tipPartial}>partial</span>}
+            </div>
+            {model.legend.map((l, k) => (
+              <div key={l.label} className={styles.tipRow}>
+                <i className={styles.legendSwatch} style={{ background: l.color }} />
+                <span className={styles.tipName}>{l.label}</span>
+                <span className={styles.tipVal}>{fmt(c.pts[hoverIdx].vals[k] ?? 0)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        </div>
       </div>
 
       {/* detail head */}
@@ -601,11 +773,25 @@ export default function BehaviorPanel({
           <thead id="growthSummaryHead">
             <tr>
               <th>{firstColHead}</th>
-              {months.map((m) => (
-                <th key={m}>{monthLabel(m)}</th>
+              {/* THE HEADER IS THE BUCKET, NOT ITS MONTH. `monthLabel` was used unconditionally,
+                  so in weekly mode five consecutive columns all read "Jun 2026" — 21 of 27 headers
+                  were duplicates and the table could not be read at all. bucketLabel is the same
+                  labeller the CSV already used and it names the full range: "Jun 1 – Jun 7". */}
+              {months.map((m, i) => (
+                <th key={m} data-testid="behavior-col-head"
+                    data-partial={gran === "weekly" && !complete[i] ? "1" : "0"}
+                    className={gran === "weekly" && !complete[i] ? styles.thPartial : undefined}>
+                  {bucketLabel(m, gran)}
+                  {gran === "weekly" && !complete[i] && <span className={styles.thPartialTag}>partial</span>}
+                </th>
               ))}
               <th>Selected period</th>
-              <th title={changeColumnTitle(gran)}>Latest {changeColumnLabel(gran)}</th>
+              {/* THE COLUMN SAYS WHICH TWO BUCKETS IT COMPARED. "Latest WoW" over an unnamed pair
+                  is how a partial week hid inside a −68% badge for as long as it did. */}
+              <th title={cmpTitle} data-testid="behavior-change-head">
+                Latest {changeColumnLabel(gran)}
+                {cmpSub && <span className={styles.thSub} data-testid="behavior-change-sub">{cmpSub}</span>}
+              </th>
             </tr>
           </thead>
           <tbody id="growthSummaryBody">

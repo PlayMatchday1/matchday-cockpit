@@ -63,7 +63,17 @@ export async function GET(req: Request) {
     }
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
     const ranged = start && end ? weeksInMonthRange(start, end) : null;
-    const axis = ranged ? ranged.axis : lastWeeks(today, weeks);
+    const full = ranged ? ranged.axis : lastWeeks(today, weeks);
+    /* WEEKS THAT HAVE NOT STARTED ARE DROPPED, not rendered as zero. A period ending in the
+     * current or a future month contains weeks whose Monday is still ahead; they can only ever
+     * plot as 0 and a run of zeros at the right edge reads as a collapse, which is the same lie
+     * the partial last week was telling. The week CONTAINING today is kept — it is partial, and
+     * the panel marks it as such rather than hiding this week's numbers from a weekly report. */
+    const axis = full.filter((w) => w <= today);
+    const futureDropped = full.length - axis.length;
+    if (axis.length === 0) {
+      return Response.json({ error: "that period is entirely in the future" }, { status: 400 });
+    }
     const first = axis[0];
     /* THE UPPER BOUND, WHICH THE FIXED WINDOW NEVER NEEDED. The old axis always ended today, so
      * `.gte(first)` alone bounded the read. A period ending in the past does not: without this the
@@ -254,7 +264,13 @@ export async function GET(req: Request) {
       fields,
       /* SAID OUT LOUD, not left to be discovered. The panel renders this beside the chart. */
       /* WHAT THE WINDOW ACTUALLY IS, so the panel states it rather than implying it. */
-      window: { start: start ?? null, end: end ?? null, weeks: axis.length, dropped: ranged?.dropped ?? 0 },
+      /* `today` TRAVELS WITH THE DATA. The panel decides which buckets are complete, and it must
+       * decide it against the clock the buckets were CUT in — America/Chicago — not against the
+       * viewer's laptop, which in another zone would mark the wrong week partial. */
+      window: {
+        start: start ?? null, end: end ?? null, weeks: axis.length,
+        dropped: ranged?.dropped ?? 0, futureDropped, today,
+      },
       /* SAID OUT LOUD, not left to be discovered.
        * UPDATED FOR MIGRATION 0157. This used to read "the monthly view is UTC" and name the two
        * zones as the first reason weeks and months disagree. That reason is GONE: 0157 moved

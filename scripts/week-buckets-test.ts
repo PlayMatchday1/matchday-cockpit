@@ -15,6 +15,7 @@ import {
   weekKey, addWeeks, lastWeeks, weekEnd, weekRangeLabel, weekTick, isoDow,
   chicagoYmd, wallClockYmd, changeColumnLabel, changeColumnTitle,
   weeksInMonthRange, monthStart, monthEnd, addDays, MAX_WEEKS,
+  isWeekComplete, lastTwoComplete,
 } from "../src/lib/weekBuckets";
 import { mondayOf } from "../src/lib/managerPayCompute";
 
@@ -217,7 +218,12 @@ console.log("\nTHE PANEL TOGGLE — monthly untouched, weekly normalised into th
   console.log("  -- labels and the change column --");
   is("  the change column relabels", /Latest \{changeColumnLabel\(gran\)\}/.test(code), true);
   is("  …in the CSV header too", /`Latest \$\{changeColumnLabel\(gran\)\}`/.test(code), true);
-  is("  …with a tooltip saying which", /title=\{changeColumnTitle\(gran\)\}/.test(code), true);
+  /* CHANGED DELIBERATELY. The tooltip used to be the generic changeColumnTitle; it now NAMES the
+   * two buckets compared, which is what stops a partial week hiding inside the badge again.
+   * changeColumnTitle is still the monthly branch of cmpTitle. */
+  is("  …with a tooltip saying which", /title=\{cmpTitle\}/.test(code), true);
+  is("  …and the tooltip names the actual pair", /against \$\{weekRangeLabel\(months\[cmp\.prev\]\)\}/.test(code), true);
+  is("  control: the generic title is still used for monthly", /: changeColumnTitle\(gran\)\)/.test(code), true);
   is("  bucket labels follow the granularity", /const bucketLabel = \(k: string, g: Granularity\)/.test(code), true);
   is("  …and the chart axis uses the short form", /bucketTick\(m, gran\)/.test(code), true);
   is("  the range caption follows too", /gran === "weekly"\s*\?\s*`\$\{weekTick\(months\[0\]\)\}/.test(code), true);
@@ -225,7 +231,7 @@ console.log("\nTHE PANEL TOGGLE — monthly untouched, weekly normalised into th
   console.log("  -- city and field detail follow the granularity --");
   is("  the city list reads src", /Object\.keys\(src\.behaviorByCity\)/.test(code), true);
   is("  the field list reads src", /Object\.keys\(src\.behaviorByField\)/.test(code), true);
-  is("  the model recomputes on a granularity change", /\[cityMode, fieldMode, detailMode, src, months, cities, fields, metric, gran, weekly\]/.test(code), true);
+  is("  the model recomputes on a granularity change", /\[cityMode, fieldMode, detailMode, src, months, cities, fields, metric, gran, weekly, complete, cmp\]/.test(code), true);
   // A failed weekly fetch must be an error, not an empty chart.
   is("  a failed weekly fetch is an ERROR", /this is not an empty chart/.test(P), true);
   is("  …and loading says so", /data-testid="behavior-weekly-loading"/.test(code), true);
@@ -330,6 +336,93 @@ console.log("\nTHE PERIOD PICKER DRIVES THE WEEKLY WINDOW — the picker used to
     const r = weeksInMonthRange(ym, ym);
     is(`a single month (${ym}) yields 4 or 5 weeks`, r.axis.length >= 4 && r.axis.length <= 5, true);
   }
+}
+
+console.log("\nA PARTIAL WEEK IS NOT A COLLAPSE — the change compares COMPLETE buckets only");
+{
+  /* THE DEFECT, IN ONE LINE. On 2026-09-01 the last bucket was Aug 31 – Sep 6 with ONE day in it,
+   * and "Latest WoW" compared it against a whole week: -68.4%, -58.6%, -46.6%, -56.0%, -44.4%. */
+  is("the week containing today is NOT complete", isWeekComplete("2026-08-31", "2026-09-01"), false);
+  is("  …nor on its final day", isWeekComplete("2026-08-31", "2026-09-06"), false);
+  is("  …and becomes complete the day after its Sunday", isWeekComplete("2026-08-31", "2026-09-07"), true);
+  is("a week wholly in the past is complete", isWeekComplete("2026-08-24", "2026-09-01"), true);
+  // CONTROL: the test is the CALENDAR, not the data. A quiet week is still a complete week, and a
+  // rule that skipped low weeks would hide the real collapses this column exists to show.
+  is("  control: completeness does not depend on any value", isWeekComplete("2026-08-24", "2026-09-01"), isWeekComplete("2026-08-24", "2099-01-01"));
+  is("  control: a FUTURE week is not complete either", isWeekComplete("2026-09-14", "2026-09-01"), false);
+
+  /* THE PAIR THE CHANGE COLUMN USES. Indices into the axis, newest first. */
+  is("the last two complete buckets are picked", lastTwoComplete([true, true, true, false]), { last: 2, prev: 1 });
+  is("  …skipping a partial in the middle too", lastTwoComplete([true, true, false, true]), { last: 3, prev: 1 });
+  is("  …and using the last two when nothing is partial", lastTwoComplete([true, true, true]), { last: 2, prev: 1 });
+  /* NOT ENOUGH IS null, NOT ZERO. A change reported as 0% reads as "nothing moved"; the honest
+   * answer when there is nothing to compare is that there is no answer. */
+  is("one complete bucket yields NO pair", lastTwoComplete([false, true]), null);
+  is("  …and none at all yields no pair", lastTwoComplete([false, false]), null);
+  is("  …and an empty axis yields no pair", lastTwoComplete([]), null);
+  // CONTROL: the two indices are always distinct and ordered, or the change compares a bucket
+  // with itself and reports 0% forever.
+  const pr = lastTwoComplete([true, false, true, true, false]);
+  is("  control: prev is strictly older than last", pr !== null && pr.prev < pr.last, true);
+  is("  control: …and it skipped the partials", pr, { last: 3, prev: 2 });
+
+  /* THE REAL SHAPE, END TO END. 27 weeks Mar 2 – Aug 31 with today = 2026-09-01: the axis ends on
+   * the partial Aug 31, so the comparison must be Aug 24 against Aug 17. Measured in the browser
+   * as exactly that pair. */
+  const axis = weeksInMonthRange("2026-03", "2026-08").axis;
+  const comp = axis.map((w) => isWeekComplete(w, "2026-09-01"));
+  is("  the real axis is 27 weeks", axis.length, 27);
+  is("  …of which exactly one is incomplete", comp.filter((c) => !c).length, 1);
+  is("  …and it is the last", comp[comp.length - 1], false);
+  const pair = lastTwoComplete(comp);
+  is("  the change compares Aug 24 against Aug 17",
+    [axis[pair.prev], axis[pair.last]], ["2026-08-17", "2026-08-24"]);
+  // CONTROL: it is NOT comparing the partial week, which is what produced -68.4%.
+  is("  control: the partial week is not either end of the pair",
+    [pair.last, pair.prev].includes(axis.length - 1), false);
+}
+
+console.log("\nTHE WEEKLY PANEL AND ROUTE — the wiring behind the browser suite");
+{
+  const raw = readFileSync("src/components/growth/BehaviorPanel.tsx", "utf8");
+  const code = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const rt = readFileSync("src/app/api/lifecycle/behavior-weekly/route.ts", "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  is("  the change reads the complete pair, not the last two cells", /const li = cmp \? cmp\.last : cells\.length - 1;/.test(code), true);
+  /* BOTH CHANGE SITES, NOT ONE. The CSV export computes its own change for the detail rows and
+   * had the identical defect — it is only visible in a downloaded file, which is exactly the kind
+   * of place a wrong number survives. This absence scan is what found it. */
+  is("  control: NO unconditional last-two survives anywhere in the file",
+    /const last = cells\[cells\.length - 1\] \?\? 0;\s*const prev = cells\[cells\.length - 2\]/.test(code), false);
+  is("  the CSV's detail rows use the same complete pair", (code.match(/const li = cmp \? cmp\.last/g) ?? []).length, 2);
+  is("  …and the CSV header names the pair", /Latest \$\{changeColumnLabel\(gran\)\} \(\$\{cmpSub\}\)/.test(code), true);
+  is("  the table header is the BUCKET, not its month", /<th key=\{m\} data-testid="behavior-col-head"/.test(code) && /\{bucketLabel\(m, gran\)\}/.test(code), true);
+  is("  control: the header no longer calls monthLabel unconditionally", /<th key=\{m\}>\{monthLabel\(m\)\}<\/th>/.test(code), false);
+  is("  completeness is judged in the payload's clock, not the browser's",
+    /weekly\?\.window\?\.today \?\? chicagoToday\(\)/.test(code), true);
+  is("  MONTHLY IS UNTOUCHED — every monthly bucket is complete", /gran === "weekly" \? months\.map\(\(m\) => isWeekComplete\(m, todayYmd\)\) : months\.map\(\(\) => true\)/.test(code), true);
+  is("  the end-of-line series labels are gone", /serieslab/.test(raw), false);
+  is("  …replaced by a legend", /data-testid="behavior-legend"/.test(code), true);
+  is("  the axis is thinned from the NEWEST bucket backwards", /\(months\.length - 1 - i\) % every === 0/.test(code), true);
+  is("  …by a step derived from label width, not pinned", /Math\.ceil\(\(months\.length \* LABEL_W\) \/ Math\.max\(1, IW\)\)/.test(code), true);
+  is("  the partial tail is dashed", /strokeDasharray="5 4"/.test(code), true);
+  is("  hover is wired", /onMouseMove=\{onMove\}/.test(code) && /data-testid="behavior-tooltip"/.test(code), true);
+
+  is("  the route drops weeks that have not started", /full\.filter\(\(w\) => w <= today\)/.test(rt), true);
+  is("  …and reports how many", /futureDropped/.test(rt), true);
+  is("  …and refuses an entirely future period rather than drawing nothing",
+    /entirely in the future/.test(rt), true);
+  is("  today travels with the payload", /dropped: ranged\?\.dropped \?\? 0, futureDropped, today,/.test(rt), true);
+
+  const CSS = readFileSync("src/components/growth/playerBehavior.module.css", "utf8");
+  is("  the name column is sticky, which is the 'missing labels' fix", /position: sticky; left: 0;/.test(CSS), true);
+  is("  …with a solid background, or the columns slide under it", /position: sticky; left: 0; z-index: 2; background: var\(--surface\);/.test(CSS), true);
+  is("  gridlines match MembershipActiveChart", /\.gl \{ stroke: #003326; stroke-opacity: 0\.08; stroke-width: 1; \}/.test(CSS), true);
+  const REF = readFileSync("src/components/MembershipActiveChart.tsx", "utf8");
+  is("  control: …which is genuinely what that chart uses",
+    /stroke="#003326"/.test(REF) && /strokeOpacity=\{0\.08\}/.test(REF), true);
+  is("  the plot has a baseline", /\.baseline \{ stroke: #003326;/.test(CSS), true);
 }
 
 console.log(`\nweek-buckets: ${pass} passed, ${fails.length} failed`);
