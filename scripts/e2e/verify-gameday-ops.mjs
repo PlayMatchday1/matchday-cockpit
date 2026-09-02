@@ -34,6 +34,12 @@ const mk = (o) => ({
   isCancelled: !!o.cx, autoCanceled: o.armed !== false, autoCanceledMinutes: o.acm ?? 30,
   teams: [{ id: 1 }, { id: 2 }],
   _count: { players: o.real + o.fake, fakePlayers: o.fake },
+  /* THE LADDER THAT PRODUCES THIS FAKE COUNT. fake = capacity − rung − real, so the rung is
+   * cap − fake − real. Without it the fixture declares 11 fakes while its ladder implies 15, and
+   * the later-rung logic is being exercised against a match that could not exist. */
+  fakeSpotLeft36h: Math.max(0, o.cap - o.fake - o.real), fakeSpotLeft24h: Math.max(0, o.cap - o.fake - o.real),
+  fakeSpotLeft12h: Math.max(0, o.cap - o.fake - o.real), fakeSpotLeft6h: Math.max(0, o.cap - o.fake - o.real),
+  fakeSpotLeft3h: Math.max(0, o.cap - o.fake - o.real),
   field: { id: 1, title: o.fd, city: { id: 1, name: o.city, timeZone: { abbr: "CDT" } } },
   manager: { id: 1, firstName: o.mgrF, lastName: o.mgrL },
 });
@@ -133,8 +139,11 @@ const TODAY_FIX = [
   urgentMk({ id: 201, name: "Soccer Central Field 4", fd: "Soccer Central Complex", city: "San Antonio",
     at: 95, dlMin: 23, cap: 18, min: 9, real: 3, fake: 11, mgrF: "Chama", mgrL: "rodriguez" }),
   /* SHORT, BUT NINETEEN HOURS FROM ITS DEADLINE. Must NOT be a banner in the default view. */
+  /* FAKES ON THIS ONE, because it is the fixture that exercises the LATER-RUNG raise: 19 hours out
+   * means the 24h rung is in force and 12h, 6h and 3h all come after it. A match with no fakes has
+   * a disabled minus button and cannot exercise it at all. */
   urgentMk({ id: 202, name: "Late Night Kirkwood", fd: "Kirkwood", city: "St. Louis",
-    at: 1200, dlMin: 1140, cap: 18, min: 9, real: 2, fake: 0, mgrF: "Nate", mgrL: "B" }),
+    at: 1200, dlMin: 1140, cap: 18, min: 9, real: 2, fake: 6, mgrF: "Nate", mgrL: "B" }),
   mk({ id: 203, name: "The Hattrick (Leander)", fd: "The Hattrick L.", city: "Austin", at: -30, cap: 18, min: 11, real: 16, fake: 2, mgrF: "Jorge Luis", mgrL: "Gonzalez" }),
   mk({ id: 204, name: "Parmer - Field 1", fd: "Parmer Fields", city: "Austin", at: -200, cap: 18, min: 11, real: 18, fake: 0, mgrF: "Drea", mgrL: "M" }),
 ];
@@ -169,6 +178,23 @@ async function boot(browser, storageState, width = 1500, opts = {}) {
   /* THE STEPPER WRITE IS INTERCEPTED AND COUNTED, never forwarded. The assertion is about what we
    * SEND and what we do with the verdict - not about MatchDay. */
   await ctx.route("**/api/matchday/*/matches/*", (r) => {
+    /* THE DETAIL GET, SERVED FROM THE SAME FIXTURE. Without it MatchPanel fetches a match id that
+     * does not exist, every field comes back disabled, and the "unsaved edits survive a tab
+     * switch" assertion cannot even type into the field it is about. */
+    if (r.request().method() === "GET") {
+      const id = Number(r.request().url().match(/matches\/(\d+)/)?.[1]);
+      const pool = [...FIX, ...TODAY_FIX, ...TODAY_FIVE, ...TOMO_FIX];
+      const m = pool.find((x) => x.id === id);
+      if (!m) return r.continue();
+      /* THE ENVELOPE IS { match, managers, fields }, not the match itself — MatchPanel reads
+       * j.match. Returning the bare object left every field null and the form disabled. */
+      return r.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({
+          match: { ...m, realOccupancy: m._count.players - m._count.fakePlayers,
+            occupancy: m._count.players, cityName: m.field.city.name, fieldTitle: m.field.title },
+          managers: [], managersAllCities: [], fields: [],
+        }) });
+    }
     if (r.request().method() !== "PUT") return r.continue();
     const body = JSON.parse(r.request().postData() || "{}");
     puts.push({ url: r.request().url(), body });
@@ -308,8 +334,13 @@ async function main() {
   is("  real", d.banner.factReal.trim(), `${RISK.real} real`);
   is("  minimum", d.banner.factMin.trim(), `${RISK.min} minimum`);
   is("  fake", d.banner.factFake.trim(), `${RISK.fake} of ${RISK.real + RISK.fake} filled spots are fake`);
-  is("  Cancel now is DISABLED in the DOM", d.banner.cancelNow?.disabled, true);
-  yes("  ...with a title saying why", (d.banner.cancelNow?.title ?? "").length > 20);
+  /* D1. It was a destructive action one mis-tap from a stepper, and it already lives in the match
+   * editor. REMOVED, not moved and not duplicated. */
+  is("  Cancel now is ABSENT from the banner", d.banner.cancelNow, null);
+  is("  CONTROL: ...while the banner's other actions are present",
+    (await page.locator('[data-testid="gday-chat"]').count()) > 0, true);
+
+
 
   console.log("\n-- the stepper --");
   const step = async (dir, n = 1) => { for (let i = 0; i < n; i++) { await page.click(`[data-testid="gday-step-${dir}"]`); await page.waitForTimeout(220); } };
@@ -650,6 +681,149 @@ async function main() {
     yes("  CONTROL: an id with no thread does not crash the page", emptyTxt.length > 300);
     yes("  CONTROL: ...and the inbox still renders", /Active/.test(emptyTxt) && /Upcoming/.test(emptyTxt));
     await closeContext(c4);
+  }
+
+
+  /* THE DATE-AWARE FIXTURE'S URGENT MATCH — the one the banner renders on today's board. RISK
+   * belongs to the OTHER fixture and is not on this board at all. */
+  const URG = TODAY_FIX[0];
+  // ══ C. THE CHAT PANEL ══════════════════════════════════════════════════════════════════════
+  {
+    const { ctx: cp, page: pp } = await boot(browser, storageState, 1500, { byDate: true });
+    console.log("\n-- C1: one panel, two tabs --");
+    is("  CONTROL: no panel to start with", await pp.locator('[data-testid="gday-panel"]').count(), 0);
+    await pp.click('[data-testid="gday-row"] [data-testid="gday-name"]');
+    await pp.waitForSelector('[data-testid="gday-panel"]', { timeout: 30000 });
+    await pp.waitForTimeout(900);
+    is("  clicking a row opens the panel on Details",
+      await pp.locator('[data-testid="gday-tab-details"]').getAttribute("aria-selected"), "true");
+    /* EXACTLY ONE PANEL. A second drawer is the thing this must not become. */
+    is("  there is exactly ONE panel in the DOM", await pp.locator('[data-testid="gday-panel"]').count(), 1);
+    await pp.click('[data-testid="gday-panel-close"]'); await pp.waitForTimeout(900);
+
+    console.log("\n-- C1/C2: Open match chat opens the SAME panel on Chat --");
+    await pp.click('[data-testid="gday-chat"]');
+    await pp.waitForSelector('[data-testid="gday-panel"]', { timeout: 30000 });
+    await pp.waitForTimeout(1500);
+    is("  it did not navigate away", new URL(pp.url()).pathname, "/match-ops/gameday");
+    is("  the panel opened on Chat",
+      await pp.locator('[data-testid="gday-tab-chat"]').getAttribute("aria-selected"), "true");
+    is("  still exactly one panel", await pp.locator('[data-testid="gday-panel"]').count(), 1);
+    /* THE THREAD IS RESOLVED BY MATCH ID — asserted on the id, not on a title. */
+    is("  the Chat pane carries that match's id",
+      await pp.locator('[data-testid="gday-panel-chat"]').getAttribute("data-chat-id"), String(URG.id));
+
+    console.log("\n-- C3: unsaved edits survive the tab switch --");
+    await pp.click('[data-testid="gday-tab-details"]'); await pp.waitForTimeout(900);
+    const minBefore = await pp.locator('[data-testid="mp-min"]').inputValue().catch(() => null);
+    yes("  CONTROL: the editor's minimum field is readable", minBefore != null, `got ${minBefore}`);
+    await pp.locator('[data-testid="mp-min"]').fill(String(Number(minBefore) + 3));
+    await pp.waitForTimeout(400);
+    const edited = await pp.locator('[data-testid="mp-min"]').inputValue();
+    await pp.click('[data-testid="gday-tab-chat"]'); await pp.waitForTimeout(700);
+    await pp.click('[data-testid="gday-tab-details"]'); await pp.waitForTimeout(700);
+    is("  the pending change survived the round trip", await pp.locator('[data-testid="mp-min"]').inputValue(), edited);
+    yes("  CONTROL: ...and it really was a change", edited !== minBefore);
+
+    console.log("\n-- C4: the board stays put --");
+    /* A CLEAN PANEL. The one above has an unsaved edit in it and the leave-guard correctly refuses
+     * to close — testing "the board stays put" through a confirm dialog would be testing the
+     * dialog. Reloaded, then opened fresh. */
+    await pp.reload({ waitUntil: "domcontentloaded" });
+    await pp.waitForSelector('[data-testid="gday-row"]', { timeout: 60000 });
+    await pp.waitForTimeout(900);
+    const before = await pp.evaluate(() => ({ y: window.scrollY, strip: document.querySelector('[data-testid="gtile-risk"]')?.dataset.on }));
+    await pp.click('[data-testid="gday-chat"]');
+    await pp.waitForSelector('[data-testid="gday-panel"]', { timeout: 30000 });
+    await pp.waitForTimeout(900);
+    await pp.click('[data-testid="gday-tab-details"]'); await pp.waitForTimeout(500);
+    await pp.click('[data-testid="gday-tab-chat"]'); await pp.waitForTimeout(500);
+    await pp.click('[data-testid="gday-panel-close"]'); await pp.waitForTimeout(1200);
+    const after = await pp.evaluate(() => ({ y: window.scrollY, strip: document.querySelector('[data-testid="gtile-risk"]')?.dataset.on }));
+    is("  scroll position unchanged", after.y, before.y);
+    is("  the active filter is unchanged", after.strip, before.strip);
+    is("  and the panel closed", await pp.locator('[data-testid="gday-panel"]').count(), 0);
+    await closeContext(cp);
+
+    console.log("\n-- C6: the standalone page still works --");
+    const cs = await browser.newContext({ storageState, viewport: { width: 1500, height: 1000 } });
+    const ps = await cs.newPage();
+    const r = await ps.goto(`${BASE}/match-ops/match-chats?chatId=18342`, { waitUntil: "domcontentloaded" });
+    await ps.waitForTimeout(7000);
+    is("  it still loads", r?.status(), 200);
+    is("  ...keeping its chatId", new URL(ps.url()).searchParams.get("chatId"), "18342");
+    yes("  ...and renders the inbox", /Active/.test(await ps.evaluate(() => document.body.innerText)));
+    await closeContext(cs);
+  }
+
+  // ══ D. THE FAKE CONTROLS ═══════════════════════════════════════════════════════════════════
+  {
+    const { ctx: cd, page: pd } = await boot(browser, storageState, 1500, { byDate: true });
+    console.log("\n-- D1: Cancel now is gone --");
+    is("  no Cancel now in the banner", await pd.locator('[data-testid="gday-cancel-now"]').count(), 0);
+
+    console.log("\n-- D3: the 3h rung control shows BOTH numbers --");
+    const rungV = () => pd.locator('[data-testid="gday-rung-value"]').textContent();
+    const rungF = () => pd.locator('[data-testid="gday-rung-fakes"]').textContent();
+    const cap = URG.maxPlayerCount, real = URG._count.players - URG._count.fakePlayers;
+    let rv = Number(await rungV());
+    is("  the fake count satisfies cap − rung − real", (await rungF()).trim(), `${Math.max(0, cap - rv - real)} fake`);
+    /* THEY MOVE IN OPPOSITE DIRECTIONS — which is exactly why both numbers are on the control. */
+    await pd.click('[data-testid="gday-rung-up"]'); await pd.waitForTimeout(300);
+    const rv2 = Number(await rungV());
+    is("  stepping the rung up moves it", rv2, rv + 1);
+    is("  ...and the fake count DOWN", (await rungF()).trim(), `${Math.max(0, cap - rv2 - real)} fake`);
+    is("  the save button names the rung", (await pd.locator('[data-testid="gday-save-rung"]').textContent()).trim(), `Save 3h rung ${rv2}`);
+    await pd.click('[data-testid="gday-rung-down"]'); await pd.waitForTimeout(400);
+
+    console.log("\n-- D2: the fakes stepper --");
+    const fv = () => pd.locator('[data-testid="gday-fake-value"]').textContent();
+    is("  it opens on the current fake count", Number(await fv()), URG._count.fakePlayers);
+    await pd.click('[data-testid="gday-fake-down"]'); await pd.waitForTimeout(300);
+    is("  stepping down removes one", Number(await fv()), URG._count.fakePlayers - 1);
+    is("  the save button names the fakes", (await pd.locator('[data-testid="gday-save-fakes"]').textContent()).trim(), `Save ${URG._count.fakePlayers - 1} fakes`);
+    /* THE LATER-RUNG NOTE APPEARS ONLY WHEN THERE ARE LATER RUNGS. The urgent match is inside
+     * three hours, so the 3h rung is the last one and there is nothing after it to raise — no note
+     * is the CORRECT answer here, and claiming otherwise would be the control passing on a lie. */
+    is("  no later-rung note inside 3h, because there are no later rungs",
+      await pd.locator('[data-testid="gday-ladder-note"]').count(), 0);
+    /* THE MATCH 19 HOURS OUT IS THE ONE WITH LATER RUNGS. It is a banner only under the filter. */
+    await pd.click('[data-testid="gtile-risk"]'); await pd.waitForTimeout(800);
+    await pd.click('[data-testid="gday-alert"][data-id="202"] [data-testid="gday-fake-down"]');
+    await pd.waitForTimeout(400);
+    yes("  CONTROL: the 19h-out match DOES announce the later-rung raise",
+      (await pd.locator('[data-testid="gday-alert"][data-id="202"] [data-testid="gday-ladder-note"]').count()) > 0);
+    const note = await pd.locator('[data-testid="gday-alert"][data-id="202"] [data-testid="gday-ladder-note"]').textContent();
+    yes(`  ...saying so plainly - "${note}"`, /later rungs? raised to match/.test(note));
+    await pd.click('[data-testid="gtile-risk"]'); await pd.waitForTimeout(700);
+    /* FLOOR 0 / CEILING cap − real, with the button disabled at the bound. */
+    /* STEP UNTIL THE BOUND DISABLES THE BUTTON, rather than counting clicks — a fixed count either
+     * stops short or clicks a disabled button and times out, and both hide the thing being tested. */
+    for (let i = 0; i < 40 && !(await pd.locator('[data-testid="gday-fake-down"]').isDisabled()); i++) {
+      await pd.click('[data-testid="gday-fake-down"]'); await pd.waitForTimeout(110);
+    }
+    is("  the floor is 0", Number(await fv()), 0);
+    is("  ...with − disabled at the bound", await pd.locator('[data-testid="gday-fake-down"]').isDisabled(), true);
+    is("  CONTROL: + is not disabled at the floor", await pd.locator('[data-testid="gday-fake-up"]').isDisabled(), false);
+    for (let i = 0; i < 40 && !(await pd.locator('[data-testid="gday-fake-up"]').isDisabled()); i++) {
+      await pd.click('[data-testid="gday-fake-up"]'); await pd.waitForTimeout(90);
+    }
+    is("  the ceiling is capacity − real", Number(await fv()), cap - real);
+    is("  ...with + disabled at the bound", await pd.locator('[data-testid="gday-fake-up"]').isDisabled(), true);
+
+    console.log("\n-- D4: the action area is a 2x2 grid --");
+    const acts = await pd.evaluate(() => {
+      const a = document.querySelector('[data-testid="gday-acts"]');
+      const r = a.getBoundingClientRect();
+      return { w: Math.round(r.width), cols: getComputedStyle(a).gridTemplateColumns.split(" ").length,
+        bannerH: Math.round(document.querySelector('[data-testid="gday-alert"]').getBoundingClientRect().height) };
+    });
+    is("  two columns", acts.cols, 2);
+    yes(`  it is far narrower than a single row of four (${acts.w}px)`, acts.w < 420);
+    await pd.setViewportSize({ width: 1280, height: 1000 }); await pd.waitForTimeout(600);
+    const h1280 = await pd.evaluate(() => Math.round(document.querySelector('[data-testid="gday-alert"]').getBoundingClientRect().height));
+    yes(`  the banner holds its height at 1280 (${h1280}px)`, h1280 < 150);
+    await closeContext(cd);
   }
 
 

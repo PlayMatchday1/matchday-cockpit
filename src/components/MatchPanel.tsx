@@ -462,14 +462,18 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
 
   const realPlayers = Math.max(0, Number(orig?.realOccupancy ?? 0));
   const fakesNeeded = (ceiling: number) => Math.max(0, capacity - realPlayers - ceiling);
-  const ladderBreak = useMemo(() => {
-    for (let i = 1; i < MARKS.length; i++) {
-      const prev = Number(cur[`fakeSpotLeft${MARKS[i - 1]}h`]) || 0;
-      const here = Number(cur[`fakeSpotLeft${MARKS[i]}h`]) || 0;
-      if (here > prev) return { prevMark: MARKS[i - 1], prevN: prev, mark: MARKS[i], n: here };
-    }
-    return null;
-  }, [cur]);
+  /* THE MONOTONIC LADDER CHECK IS GONE, DELIBERATELY.
+   *
+   * It warned whenever a rung rose as kickoff approached, on the reasoning that fakes coming back
+   * off a match makes it "empty out instead of filling up". THAT IS THE INTENDED OPERATION. Near
+   * kickoff you strip the fakes so a match does not look full when it should have cancelled, and
+   * doing that means raising the 3h rung ABOVE the earlier ones. The warning flagged the correct
+   * action as a mistake.
+   *
+   * It was a UI caution only and never blocked Save — the server does not enforce it, confirmed on
+   * staging by writing 3H above 36H and reading the values back intact. The only remaining bounds
+   * are the real ones: each rung between 0 and capacity.
+   */
 
   // The EFFECTIVE team count — the pending one if the operator has chosen a different shape, else
   // what the server last said. SPOTS derives capacity and the rung field from this, so the derived
@@ -909,11 +913,11 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
               {MARKS.map((h) => {
                 const ceiling = Number(cur[`fakeSpotLeft${h}h`]) || 0;
                 const need = fakesNeeded(ceiling);
-                const bad = ladderBreak?.mark === h;
+
                 return (
                   <div className="mp-relcol" key={h} data-mark={h}>
                     <span className="mp-relmk">{h} H</span>
-                    <input data-testid={`mp-fake${h}`} className={"mp-relin" + (bad ? " mp-bad" : "")} inputMode="numeric" value={ceiling}
+                    <input data-testid={`mp-fake${h}`} className="mp-relin" inputMode="numeric" value={ceiling}
                       aria-label={`Most spots shown as left from ${h} hours before kickoff`}
                       onChange={(e) => setField(`fakeSpotLeft${h}h`, e.target.value.trim() === "" ? "" : Number(e.target.value))} />
                     <span className="mp-relfk" data-testid={`mp-fakeneed${h}`}>{need === 0 ? "no fakes" : `${need} fake`}</span>
@@ -921,11 +925,11 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 );
               })}
             </div>
-            {ladderBreak && (
-              <span className="mp-note warn" data-testid="mp-ladderwarn">
-                <b>{ladderBreak.n} at {ladderBreak.mark} H is higher than {ladderBreak.prevN} at {ladderBreak.prevMark} H.</b> A ceiling that RISES as kickoff approaches takes fake players back OFF the match, so players watch it empty out instead of filling up. (This is a UI caution — the server does not enforce it, so Save is not blocked.)
-              </span>
-            )}
+            <span className="mp-note" data-testid="mp-laddernote">
+              Each rung is the most spots shown as LEFT from that point, so a HIGHER rung means
+              FEWER fakes. A rung may be higher than an earlier one — that is how fakes come off a
+              match near kickoff, and it is intentional.
+            </span>
           </Section>
 
           {/* AUTOMATION */}

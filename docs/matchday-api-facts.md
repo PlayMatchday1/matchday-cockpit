@@ -1247,6 +1247,34 @@ NOT the emergency stop: migration 0115 `revoke insert,update,delete on change_lo
 anon, authenticated` protects the AUDIT LOG from tampering — it has nothing to do with
 stopping MatchDay writes. Do not confuse the two.
 
+## FAKE PLAYERS ARE DERIVED FROM THE LADDER, NOT STORED
+
+**`fake = capacity - rung - real`**, floored at 0. Exact, not an approximation — it is literally
+`Math.max(0, capacity - realPlayers - ceiling)` at `src/components/MatchPanel.tsx:464`. The floor is
+the only qualification: when `rung + real > capacity` the count clamps to 0 rather than going
+negative.
+
+Confirmed on production match 18360 (ATH Katy, capacity 32, 1 real) at all five rungs:
+
+| rung | spots shown left | fakes | check |
+|---|---|---|---|
+| 36H | 16 | 15 | 32 − 15 − 1 = 16 |
+| 24H | 12 | 19 | 32 − 19 − 1 = 12 |
+| 12H |  6 | 25 | 32 − 25 − 1 =  6 |
+|  6H |  4 | 27 | 32 − 27 − 1 =  4 |
+|  3H |  2 | 29 | 32 − 29 − 1 =  2 |
+
+**THE CONSEQUENCE FOR ANY CONTROL: a fake count is a READ-OUT, and writing one writes to a derived
+value that the ladder overwrites at the next evaluation. Fake controls must write RUNGS.** And a
+control that writes only the rung currently in force is a lie — the later rungs put the fakes
+straight back as the match crosses them, so a fakes change has to move every subsequent rung too.
+
+The rung fields are all editable: `fakeSpotLeft36h`, `fakeSpotLeft24h`, `fakeSpotLeft12h`,
+`fakeSpotLeft6h`, `fakeSpotLeft3h` (`src/lib/matchEditModel.ts:25-26`).
+
+**THE LADDER IS NOT REQUIRED TO BE MONOTONIC.** Raising the 3H rung ABOVE the earlier ones is the
+whole point of stripping fakes near kickoff, and is legal.
+
 ## Gameday Ops fake double-count fix + the auto-cancel minimum basis (Phase 17 follow-up)
 
 BUG (production, match 17325): the card showed "6 real · 3 fake · 9 open of 18" for a
@@ -1282,11 +1310,16 @@ window, so H cancelling is a decision and not a coincidence.
 
 THREE EARLIER ATTEMPTS DID NOT DISCRIMINATE and are recorded so the mistake is not repeated:
 - 0 real / 0 fake against min 9 cancels under BOTH rules. It proves nothing about the basis.
-- Fakes seeded via `POST /admin/matches/{id}/batch/fake-players` **DRAIN within about a minute**,
-  at any distance from kickoff and with `fakeSpotLeft{36,24,12,6,3}h` pinned high. Two fixtures
-  leaked this way (11 -> 8, then 14 -> 4) and by the deadline the total had fallen below the
-  minimum, making them non-discriminating again. The fix is to **lower the minimum under the
-  surviving fake count** rather than to fight the drain, and to SAMPLE THE TOTAL AT THE DEADLINE
+- **CORRECTED 2026-09-02. This entry previously said fakes "DRAIN within about a minute". THAT WAS
+  WRONG AND SOMEONE WOULD HAVE BUILT ON IT.** Nothing drained. THE FAKE COUNT IS DERIVED FROM THE
+  LADDER, and both fixtures were showing exactly the value their own rung settings dictated:
+  capacity 18, real 0, every rung pinned to 14, so `18 - 14 - 0 = 4`. I set 14 fakes, set a rung
+  that means 4 fakes, and then recorded the recomputation as a leak. The observation was right and
+  the explanation was invented.
+  The real lesson is the one below: **a raw fake count is not a stored value**, so seeding one via
+  `POST /admin/matches/{id}/batch/fake-players` is overwritten the moment the ladder is evaluated.
+  To hold a fake count you must set the RUNG that produces it. The fixture was still salvaged the
+  same way — lower the MINIMUM under the surviving fake count, and SAMPLE THE TOTAL AT THE DEADLINE
   rather than assume it held.
 
 CONSEQUENCE: `short()` / `shortBy()` in `src/lib/gamedayModel.ts` keying on `realCount` is correct

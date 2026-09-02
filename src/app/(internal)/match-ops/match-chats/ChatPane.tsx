@@ -92,20 +92,33 @@ export default function ChatPane({
   chatId,
   showOnMobile,
   onBack,
+  embedded = false,
 }: {
   chatId: string | null;
   showOnMobile: boolean;
   onBack: () => void;
+  /* EMBEDDED: this pane is inside the Gameday Ops side panel rather than the three-pane console.
+   *
+   * The console's visibility classes are built for that console — hidden below lg, and a
+   * fixed inset-0 full-screen push on mobile. Both are wrong inside a panel that is already the
+   * full-screen surface. Embedded just fills its parent at every width.
+   *
+   * ONE CHAT COMPONENT, ONE LOOKUP. The alternative was a second pane for the panel, which would
+   * have meant two implementations of "which thread belongs to this match" — and that question
+   * has exactly one answer (chatId is String(match.api_id)) which is already proven. */
+  embedded?: boolean;
 }) {
   // On mobile the open thread is a full-screen push that COVERS the bottom tab
   // bar (fixed inset-0), so the composer — not the tab bar — is the bottom
   // element and can own var(--sab). On desktop it stays an in-flow pane.
-  const visibility = `${showOnMobile ? "fixed inset-0 z-40 flex" : "hidden"} lg:static lg:z-auto lg:flex lg:flex-1`;
+  const visibility = embedded
+    ? "flex flex-1 min-h-0"
+    : `${showOnMobile ? "fixed inset-0 z-40 flex" : "hidden"} lg:static lg:z-auto lg:flex lg:flex-1`;
 
   if (!chatId) {
     return (
       <section className={`min-w-0 flex-col items-center justify-center ${visibility}`} style={{ background: "#ffffff" }}>
-        <div className="hidden max-w-[34ch] flex-col items-center gap-3.5 px-10 text-center lg:flex">
+        <div className={`${embedded ? "flex" : "hidden lg:flex"} max-w-[34ch] flex-col items-center gap-3.5 px-10 text-center`} data-testid="chatpane-empty">
           <div
             className="flex h-[52px] w-[52px] items-center justify-center rounded-full"
             style={{ background: "radial-gradient(circle at 35% 30%,#eafaf1,#d6efe1)", color: "#17724c", boxShadow: "0 0 0 7px rgba(224,242,231,.5)" }}

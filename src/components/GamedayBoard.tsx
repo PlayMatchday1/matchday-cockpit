@@ -25,6 +25,7 @@ import MatchOpsSectionSheet from "@/app/(internal)/match-ops/MatchOpsSectionShee
 import MatchOpsMobileBar from "@/app/(internal)/match-ops/MatchOpsMobileBar";
 import type { RailItem } from "@/app/(internal)/match-ops/sections";
 import RefreshIcon from "@/components/RefreshIcon";
+import ChatPane from "@/app/(internal)/match-ops/match-chats/ChatPane";
 import { useAuth, canEditMatches } from "@/lib/useAuth";
 import {
   type ApiMatch, type BoardFilter, type MatchGroup, GROUPS, byKickoff, matchGroup, minsUntil, fmtDur, localClock, deadlineClock, tzAbbr,
@@ -33,6 +34,9 @@ import {
   atRisk, realFillPct, dayBucket, DAY_BUCKETS, passesStrip, meter, type DayBucket, type StripKey,
   bannerUrgent, defaultBanners, riskSubtitle, BANNER_LEAD_MINUTES, DEFAULT_BANNER_CAP,
 } from "@/lib/gamedayModel";
+import {
+  fakesFor, rungFor, markInForce, rungKey, fakesWriteDiff, fakesWriteNote, type Ladder,
+} from "@/lib/fakeLadder";
 
 const ENV = DRAWER_ENV; // the board reads and edits the same environment as the drawer
 
@@ -104,7 +108,9 @@ export default function GamedayBoard({
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [staleFail, setStaleFail] = useState(false); // last manual refresh failed; rows are old but kept
-  const [filter, setFilter] = useState<BoardFilter>("all");
+  /* THE all/att/upc FILTER STATE IS GONE. Both pill rows that drove it were replaced by the stat
+   * strip, so nothing could set it and nothing but its own reader could read it — state that looks
+   * like a control and is not is how the next person ships a bug against it. */
   /* ── THE STAT STRIP'S SELECTION ───────────────────────────────────────────────────────────────
    * `null` is "no bucket filter". Only risk / soon / live are selectable; All matches and Real
    * spots filled are read-outs, and the board does not wire them as filters at all rather than
@@ -117,6 +123,15 @@ export default function GamedayBoard({
   /* PENDING MINIMUM ADJUSTMENTS, per match id, from the banner stepper. A value here means the
    * operator has stepped but not saved. It is DISCARDED when the editor opens — see openDrawer. */
   const [pendingMin, setPendingMin] = useState<Record<number, number>>({});
+  /* THE OTHER TWO PENDING VALUES. Fakes and the 3h rung follow the same local-then-save shape as
+   * the minimum: step freely, nothing leaves the browser until Save. */
+  const [pendingFakes, setPendingFakes] = useState<Record<number, number>>({});
+  const [pending3h, setPending3h] = useState<Record<number, number>>({});
+  /* ── ONE PANEL, TWO TABS ──────────────────────────────────────────────────────────────────────
+   * Not a second drawer. Open match chat opens the SAME panel on Chat; a row opens it on Details.
+   * The tab is panel state, so switching does not unmount MatchPanel and unsaved edits survive —
+   * see the render, where Details is HIDDEN rather than removed. */
+  const [panelTab, setPanelTab] = useState<"details" | "chat">("details");
   const [saveState, setSaveState] = useState<Record<number, { s: "saving" | "landed" | "failed" | "unknown"; msg: string }>>({});
   const [cities, setCities] = useState<Set<string>>(new Set());
   const [drawerId, setDrawerId] = useState<number | null>(null);
@@ -212,7 +227,6 @@ export default function GamedayBoard({
     for (const m of matches) { const c = m.field?.city?.name; if (c) map.set(c, (map.get(c) ?? 0) + 1); }
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [matches]);
-  const visible = useMemo(() => scope.filter((m) => passesFilter(m, now, filter)).sort(byKickoff), [scope, now, filter]);
 
   /* ── THE STRIP ────────────────────────────────────────────────────────────────────────────────
    * Every figure derives from `scope` — the CITY-filtered set — not from `matches`. A tile that
@@ -249,6 +263,9 @@ export default function GamedayBoard({
    * banner format is for - the operator asked for the list, so the list is the interrupt.
    *
    * EVERY OTHER FILTER: rows, never banners. */
+  /* `visible` fed the old grouping and now only supplies the panel's prev/next siblings. It
+   * follows the strip, which is the only selection the page still has. */
+  const visible = shown;
   const risky = useMemo(() => scope.filter((m) => atRisk(m, now)).sort(byKickoff), [scope, now]);
   const bannerMode = strip === "risk";
   const defaults = useMemo(() => defaultBanners(scope, now, isToday), [scope, now, isToday]);
@@ -377,9 +394,106 @@ export default function GamedayBoard({
      * sees 7 pre-filled, assumes it is stored, and saves it. Discarding is the only rule that
      * cannot produce that. It is also why the stepper resets to the SAVED value on close. */
     setPendingMin({});
+    setPendingFakes({});
+    setPending3h({});
     setSaveState({});
+    setPanelTab("details");
     setDrawerId(id);
   };
+  /* THE SAME PANEL, OPENED ON CHAT. It does not navigate — losing your place on the board to read
+   * one message is the behaviour this replaces. A read-only caller still routes out, because that
+   * tier does not mount the panel at all. */
+  const openChat = (id: number) => {
+    if (onOpenMatch) { router.push(`/match-ops/match-chats?chatId=${encodeURIComponent(String(id))}`); return; }
+    if (drawerId != null && drawerId !== id && !guardLeave()) return;
+    if (drawerId !== id) { setPendingMin({}); setPendingFakes({}); setPending3h({}); setSaveState({}); }
+    setPanelTab("chat");
+    setDrawerId(id);
+  };
+  const ladderOf = (m: ApiMatch): Ladder => ({
+    fakeSpotLeft36h: Number(m.fakeSpotLeft36h ?? 0), fakeSpotLeft24h: Number(m.fakeSpotLeft24h ?? 0),
+    fakeSpotLeft12h: Number(m.fakeSpotLeft12h ?? 0), fakeSpotLeft6h: Number(m.fakeSpotLeft6h ?? 0),
+    fakeSpotLeft3h: Number(m.fakeSpotLeft3h ?? 0),
+  });
+
+  /* ── ONE WRITE HELPER FOR BOTH RUNG CONTROLS ──────────────────────────────────────────────────
+   * Same contract as saveMin and for the same reasons: the diff IS the body, one attempt, never a
+   * retry, and the verdict comes from the route's read-back rather than from a 2xx.
+   *
+   * THE VERDICT IS JUDGED ON THE RUNG, NOT ON THE FAKE COUNT. Measured on staging: the worker
+   * takes about 150 seconds to recompute fakes after a rung changes. Judging the write on the fake
+   * count would report FAILED for a write that landed perfectly and simply has not been applied
+   * yet. The rung reads back immediately; that is what LANDED means here. */
+  const saveRungs = async (id: number, diff: Ladder, note: string, clear: () => void) => {
+    if (Object.keys(diff).length === 0) return;
+    setSaveState((p) => ({ ...p, [id]: { s: "saving", msg: "Saving…" } }));
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      const res = await fetch(`/api/matchday/${ENV}/matches/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ changes: diff, source: "gameday-fakes" }),
+      });
+      const j = await res.json().catch(() => null);
+      if (!res.ok) {
+        setSaveState((p) => ({ ...p, [id]: { s: "failed", msg: `FAILED — ${j?.error ?? `HTTP ${res.status}`}` } }));
+        return;
+      }
+      const outcome = String(j?.outcome ?? "").toLowerCase();
+      if (outcome === "landed") {
+        setSaveState((p) => ({ ...p, [id]: { s: "landed", msg: `LANDED — ${note}` } }));
+        clear();
+        await load(date, true);
+      } else if (outcome === "failed" || outcome === "not_applied" || outcome === "not applied") {
+        setSaveState((p) => ({ ...p, [id]: { s: "failed", msg: `${outcome.toUpperCase()} — the ladder did not change` } }));
+      } else {
+        setSaveState((p) => ({ ...p, [id]: { s: "unknown", msg: "UNKNOWN — refetching rather than guessing" } }));
+        clear();
+        await load(date, true);
+      }
+    } catch (e) {
+      setSaveState((p) => ({ ...p, [id]: { s: "failed", msg: `FAILED — ${e instanceof Error ? e.message : String(e)}` } }));
+    }
+  };
+
+  const stepFakes = (id: number, d: number) => {
+    const m = matches.find((x) => x.id === id); if (!m) return;
+    const cap = capacity(m) ?? 0, real = realCount(m);
+    const cur = pendingFakes[id] ?? fakeCount(m);
+    /* FLOOR 0, CEILING capacity − real. The buttons are disabled at the bound; this is the second
+     * line of defence, not the first. */
+    const next = Math.max(0, Math.min(Math.max(0, cap - real), cur + d));
+    if (next === cur) return;
+    setSaveState((p) => { const n = { ...p }; delete n[id]; return n; });
+    setPendingFakes((p) => { const n = { ...p }; if (next === fakeCount(m)) delete n[id]; else n[id] = next; return n; });
+  };
+  const saveFakes = (id: number) => {
+    const m = matches.find((x) => x.id === id); if (!m) return;
+    const target = pendingFakes[id]; if (target == null) return;
+    const cap = capacity(m) ?? 0, real = realCount(m);
+    const w = fakesWriteDiff(ladderOf(m), cap, real, minsUntil(m, now) / 60, target);
+    void saveRungs(id, w.diff, fakesWriteNote(target, w.laterRaised),
+      () => setPendingFakes((p) => { const n = { ...p }; delete n[id]; return n; }));
+  };
+
+  const step3h = (id: number, d: number) => {
+    const m = matches.find((x) => x.id === id); if (!m) return;
+    const cap = capacity(m) ?? 0, real = realCount(m);
+    const cur = pending3h[id] ?? Number(m.fakeSpotLeft3h ?? 0);
+    const next = Math.max(0, Math.min(cap, cur + d));
+    if (next === cur) return;
+    setSaveState((p) => { const n = { ...p }; delete n[id]; return n; });
+    setPending3h((p) => { const n = { ...p }; if (next === Number(m.fakeSpotLeft3h ?? 0)) delete n[id]; else n[id] = next; return n; });
+    void real;
+  };
+  const save3h = (id: number) => {
+    const m = matches.find((x) => x.id === id); if (!m) return;
+    const target = pending3h[id]; if (target == null) return;
+    void saveRungs(id, { fakeSpotLeft3h: target }, `3h rung set to ${target}`,
+      () => setPending3h((p) => { const n = { ...p }; delete n[id]; return n; }));
+  };
+
   /* CLOSING RE-READS THE MATCH, so the banner, the row and the Needs attention tile all reflect
    * whatever the editor did — including an edit that did not touch the minimum. */
   const closeDrawer = () => {
@@ -537,7 +651,11 @@ export default function GamedayBoard({
                   {banners.map((m) => (
                     <AlertBanner key={m.id} m={m} now={now}
                       pending={pendingMin[m.id] ?? null}
-                      onStep={stepMin} onSave={saveMin} onOpen={openDrawer}
+                      pendingFakes={pendingFakes[m.id] ?? null}
+                      pending3h={pending3h[m.id] ?? null}
+                      onStep={stepMin} onStepFakes={stepFakes} onStep3h={step3h}
+                      onSave={saveMin} onSaveFakes={saveFakes} onSave3h={save3h}
+                      onOpen={openDrawer} onChat={openChat}
                       saveState={saveState[m.id]}
                       canEdit={canEditMin} stepperReason={stepperReason} />
                   ))}
@@ -615,8 +733,27 @@ export default function GamedayBoard({
               <button onClick={() => setDockNotice(false)} aria-label="Dismiss">Got it</button>
             </div>
           )}
-          <div className="gpanel-body">
+          {/* THE TAB STRIP. Two tabs, one panel. */}
+          <div className="gpanel-tabs" role="tablist" data-testid="gday-panel-tabs">
+            <button type="button" role="tab" data-testid="gday-tab-details"
+              aria-selected={panelTab === "details"} className={panelTab === "details" ? "on" : ""}
+              onClick={() => setPanelTab("details")}>Details</button>
+            <button type="button" role="tab" data-testid="gday-tab-chat"
+              aria-selected={panelTab === "chat"} className={panelTab === "chat" ? "on" : ""}
+              onClick={() => setPanelTab("chat")}>Chat</button>
+          </div>
+          {/* DETAILS IS HIDDEN, NOT UNMOUNTED. Unmounting it would throw away unsaved edits on
+              every tab switch — the operator changes the minimum, flips to Chat to ask the manager
+              about it, comes back and the change is gone. */}
+          <div className={"gpanel-body" + (panelTab === "details" ? "" : " gpanel-hide")}
+            data-testid="gday-panel-details" aria-hidden={panelTab !== "details"}>
             <MatchPanel key={drawerId} matchId={String(drawerId)} onDirtyChange={setDrawerDirty} />
+          </div>
+          {/* CHAT RESOLVES THE THREAD THE WAY IT WAS PROVEN TO RESOLVE: chatId is the match api_id.
+              No second lookup, and the same ChatPane the standalone console uses. */}
+          <div className={"gpanel-body gpanel-chat" + (panelTab === "chat" ? "" : " gpanel-hide")}
+            data-testid="gday-panel-chat" aria-hidden={panelTab !== "chat"} data-chat-id={String(drawerId)}>
+            <ChatPane chatId={String(drawerId)} showOnMobile={false} embedded onBack={() => setPanelTab("details")} />
           </div>
         </aside>
       )}
@@ -626,122 +763,10 @@ export default function GamedayBoard({
   );
 }
 
-function SnapRow({ m, now, group, selected, onOpen, money }: {
-  m: ApiMatch; now: number; group: MatchGroup; selected: boolean; onOpen: (id: number) => void; money: (c: number | null | undefined) => string;
-}) {
-  const isTodo = group === "todo", isCx = group === "cancelled", isDone = group === "finished", isInPlay = group === "inplay";
-  const cap = capacity(m), real = realCount(m), fk = fakeCount(m), open = openSpots(m), total = real + fk;
-  const min = Number(m.minPlayerCount ?? 0);
-  const rk = riskTier(m, now), rail = snapRail(m, now), t = minsUntil(m, now);
-  const f = fill(m);
-  const moreFake = fk > real;
-  const mgr = m.manager ? [m.manager.firstName, m.manager.lastName].filter(Boolean).join(" ").trim() || "—" : "none";
-  const price = money(m.registrationPrice);
-  // Countdown reads off the GROUP, not a second time threshold — §0 unified the predicate, so
-  // a STILL TO COME row is always "in Xm" and only an IN PLAY row ever says "in play".
-  const cd = isCx ? "was due" : isDone ? `finished ${fmtDur(t)} ago` : isInPlay ? "in play" : `in ${fmtDur(t)}`;
-  // ── vs MIN (§3/§5): ONE relationship — real − min — drives the marker glyph+fill AND this
-  // chip AND the printed minimum, so they are consistent by construction. over/at/short. ──
-  const vm = vsMin(m), d = vsMinDelta(m); // d is signed: +over / 0 / −short
-  const gapNum = vm === "over" ? `+${d}` : vm === "at" ? "0" : `−${Math.abs(d)}`; // prominent number
-  const gapWord = vm === "over" ? "over" : vm === "at" ? "at min" : "short";       // one short word
-  const vsMinCls = vm === "over" ? "over" : vm === "at" ? "atmin" : "short";
-  const markGlyph = vm === "short" ? "!" : "✓";                 // only below-min gets the bang (§3)
-  const markTitle = vm === "short" ? `${Math.abs(d)} short of the ${min} real players needed` : `Minimum ${min} real players`;
-  const ac = minsToDeadline(m, now);
-  // CANCEL TIME (cancel-time-v1). Kickoff is a FIXED POINT; this is a COUNTDOWN. They used to
-  // share a format — both 16px tabular clocks — so a row read as two kickoffs. The cell is now a
-  // DURATION over a caption, and the clock moves to the title attribute, leaving exactly ONE
-  // time-shaped thing in the row. `left`/`passed` wording goes with it: the duration IS the
-  // budget, and "1h 56m left / until auto-cancel" says it twice.
-  const decideDur = ac <= 0 ? "passed" : fmtDur(ac);
-  const leadDiffers = Number(m.autoCanceledMinutes ?? 0) !== STD_LEAD; // name the lead only if non-standard (§7e)
-  // OVER THE MINIMUM = NO LIVE DEADLINE. Auto-cancel only fires below the minimum, so a match
-  // that has made it has nothing counting down. On a healthy day that is most rows, and drawing a
-  // countdown on all of them was most of the noise. At-min is NOT over — it is one drop from
-  // short — so it keeps its countdown.
-  const hasLiveDeadline = isTodo && autoCancels(m) && vm !== "over";
-  // The clock, and the lead when it is not the standard one, live HERE now — hover on desktop.
-  // There is no tooltip on touch, which is why mobile shows the countdown and not the clock.
-  const decideTitle = `Auto-cancels at ${deadlineClock(m)} ${tzAbbr(m)}`
-    + (leadDiffers ? ` · ${m.autoCanceledMinutes ?? 0} minutes before kickoff` : "");
-  // Risk rail ONLY for still-to-come (green/amber/red incl. the at-min amber); in-play &
-  // finished = grey (muted), cancelled = red.
-  const railCls = isCx ? "cxrow" : (isDone || isInPlay) ? "donerow" : "tier-" + rail;
-  return (
-    <button className={"r " + railCls + (selected ? " sel" : "")} data-testid="snap-row" data-id={m.id} data-group={group}
-      data-risk={isTodo ? rk : ""} data-rail={isTodo ? rail : (isCx ? "cx" : "done")} data-vsmin={isTodo ? vm : ""}
-      data-real={real} data-fake={fk} data-open={open ?? ""} data-total={total} data-min={min} data-short={shortBy(m)}
-      onClick={() => onOpen(m.id)} aria-label={`${m.name} at ${m.field?.title ?? ""}, ${localClock(m)} ${tzAbbr(m)}`}>
-      <span className="rail" />
-      <span className="cell c-time"><span className="t1">{localClock(m)}<em>{tzAbbr(m)}</em></span><span className="t2">{cd}</span></span>
-      <span className="cell c-match">
-        <span className="m1">{m.name}{isTodo && moreFake && <span className="flag" data-testid="more-fake">MORE FAKE</span>}</span>
-        <span className="m2">{(m.field?.title ?? "—")} · {m.field?.city?.name ?? "—"}</span>
-      </span>
-      <span className="cell c-spots">
-        {cap == null ? <span className="spotln" data-testid="snap-spots">special event · no cap</span> : <>
-          {/* Bar in flow; the marker (centred on it) and the printed minimum (below it) are its
-              children so the marker stays centred whatever the bar height and the label hangs
-              directly under the line. Marker reads the SOLID edge only — hatch may run past it. */}
-          <span className="barwrap">
-            <span className="bar">
-              <span className="seg1" style={{ width: `${Math.min(100, f!.realPct)}%` }} />
-              {/* clamp the hatch to the track (over-redemption can push real+fake past capacity);
-                  the bar is overflow:visible for the marker, so an unclamped hatch would spill. */}
-              {fk > 0 && <span className="seg2" style={{ left: `${Math.min(100, f!.realPct)}%`, width: `${Math.max(0, Math.min(f!.fakePct, 100 - f!.realPct))}%` }} />}
-              {isTodo && <span className="minlab" data-testid="snap-min" style={{ left: `clamp(20px, ${f!.minPct}%, calc(100% - 20px))` }}>min {min}</span>}
-              {isTodo && <span className={"marker " + vsMinCls} data-testid="snap-marker" data-state={vm} style={{ left: `${f!.minPct}%` }} title={markTitle}>{markGlyph}</span>}
-            </span>
-            {/* §1: real · fake · TOTAL of CAP spots — four numbers, no "open", no arithmetic to do. */}
-            <span className="spotln" data-testid="snap-spots"><b>{real}</b> real · <span className={"fk" + (fk === 0 ? " z" : "")}><b>{fk}</b> fake</span> · <b>{total}</b> total <span className="ofcap">of {cap} spots</span></span>
-          </span>
-        </>}
-      </span>
-      <span className="cell c-short">
-        {/* §5: one prominent signed number + one short word. Cancelled keeps its solid badge;
-            in-play/finished have no minimum to make, so a dash. Only still-to-come shows vs MIN. */}
-        {isCx ? <span className="vsmin cxbadge" data-testid="snap-cx-badge">CANCELLED</span>
-          : (isDone || isInPlay) ? <span className="vsmin none" data-testid="snap-short">—</span>
-          : cap == null ? <span className="vsmin none" data-testid="snap-short">—</span>
-          : <span className={"vsmin " + vsMinCls} data-testid="snap-short"><b>{gapNum}</b>{" "}<span className="w">{gapWord}</span></span>}
-        {/* MOBILE ONLY — the deadline joins the shortfall here, because they are ONE THOUGHT:
-            this match is two short, and in 1h 56m that becomes final. Desktop hides it (the cell
-            carries it). THE CLOCK IS NOT HERE, DELIBERATELY: there is no tooltip on touch, and
-            putting 6:45 back inline restores the second time-shaped thing that was the bug. */}
-        {hasLiveDeadline && (
-          <span className="mcnt" data-testid="snap-cxl-mcnt"><span className="w">cancels in</span> {decideDur}</span>
-        )}
-        {/* Auto-cancel switched off keeps its state on the phone too. Without this the card would
-            be indistinguishable from an over-the-minimum one, which is a different fact. */}
-        {isTodo && !autoCancels(m) && (
-          <span className="mnoac" data-testid="snap-cxl-mnoac">no auto-cancel</span>
-        )}
-      </span>
-      <span className="cell c-cxl" title={isTodo && autoCancels(m) ? decideTitle : undefined}>
-        {/* NO AUTO-CANCEL => NO DECIDE-BY. The minutes field is still populated upstream on these
-            matches, so drawing a countdown from it invented a deadline that can never arrive. */}
-        {isTodo && !autoCancels(m) ? <>
-          <span className="c1 dash" data-testid="snap-noac">—</span>
-          <span className="c2" style={{ color: "#5C6B62" }}>no auto-cancel</span>
-        </> : hasLiveDeadline ? <>
-          {/* A duration where a time used to be, over a caption naming what it counts down to.
-              No box, no border — shape does the work. */}
-          <span className="cxbig" data-testid="snap-cxl-dur">{decideDur}</span>
-          <span className="cxcap">until <b>auto-cancel</b></span>
-        </> : (
-          <span className="c1 dash" data-testid="snap-cxl-none">—</span>
-        )}
-        {/* THE META LINE (mobile only): who and how much. Nothing else. The deadline used to sit
-            here in a run-on line with the manager and the price — four unrelated facts, one
-            weight, the same dots. It now lives in the status stack with the shortfall. */}
-        <span className="cxlmob" data-testid="snap-cxlmob">{mgr} · {price}</span>
-      </span>
-      <span className="cell c-mgr"><span className="mgr">{mgr}</span></span>
-      <span className="cell c-price"><span className="price">{price}</span></span>
-    </button>
-  );
-}
+/* SnapRow WAS HERE AND IS GONE. It was the old eight-column row, left behind when the five-
+ * column rebuild replaced it with GRow. Nothing referenced it. Dead code that still compiles
+ * is the next person's trap: it looked like the row component and was not, and an edit made
+ * to it would have had no effect anyone could see. */
 
 const CSS = `
 .gdo{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;color:#0B1F17;background:#EDF2EF;min-height:100vh}
@@ -1221,6 +1246,7 @@ const CSS = `
 .gdo .gmnl{position:absolute;top:12px;transform:translateX(-50%);white-space:nowrap;font-size:9.5px;
   font-weight:400;letter-spacing:.2px;color:#66786E;font-variant-numeric:tabular-nums}
 .gdo .grow.risk .gmnl{color:#A83120}
+.gdo .gnomin{color:#9AA8A0;font-style:italic}
 .gdo .gnum{font-size:11.5px;color:#66786E;font-variant-numeric:tabular-nums;white-space:nowrap}
 .gdo .gnum b{color:#1B3227;font-weight:600}
 .gdo .gdelta{margin-left:auto;flex:0 0 auto;font-size:11px;font-weight:700;border-radius:6px;padding:2px 7px;
@@ -1347,6 +1373,32 @@ const CSS = `
 .gdo .mchips::-webkit-scrollbar{display:none}
 .gdo .mchips>*{flex:0 0 auto}
 
+
+/* ── THE PANEL'S TWO TABS ──────────────────────────────────────────────────────────────────── */
+.gdo .gpanel-tabs{display:flex;gap:2px;padding:0 12px;border-bottom:1px solid #DCE5E0;flex:0 0 auto;background:#fff}
+.gdo .gpanel-tabs button{border:0;background:none;font:inherit;font-size:12.5px;font-weight:700;
+  color:#66786E;padding:9px 14px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.gdo .gpanel-tabs button:hover{color:#1B3227}
+.gdo .gpanel-tabs button.on{color:#046B45;border-bottom-color:#046B45}
+/* HIDDEN, NOT UNMOUNTED - display:none keeps the React tree alive so unsaved edits survive. */
+.gdo .gpanel-hide{display:none !important}
+.gdo .gpanel-chat{padding:0;display:flex;flex-direction:column;min-height:0}
+
+/* THE ACTION AREA IS A 2x2 GRID. Four controls in one row measured 608px and crushed the banner
+   text; as a 2x2 it is 324px and the banner holds its height down to 1280. */
+.gdo .gacts{display:grid;grid-template-columns:auto auto;gap:8px;align-items:center;
+  justify-items:stretch;flex:0 0 auto}
+.gdo .gacts .gsave,.gdo .gacts .gladdernote{grid-column:1 / -1}
+.gdo .gstep .glab{display:inline-flex;align-items:baseline;gap:3px;white-space:nowrap}
+.gdo .gstep .glab b{min-width:0;font-size:13.5px}
+.gdo .gstep .glab i{font-style:normal;font-size:11px;color:#66786E;font-weight:600}
+.gdo .gladdernote{font-size:11px;color:#8A5A08;background:#FFF6E3;border:1px solid #F0DFB8;
+  border-radius:7px;padding:4px 9px;text-align:center}
+@media (max-width: 639.98px) {
+  .gdo .gacts{grid-template-columns:1fr}
+  .gdo .gpanel-tabs button{padding:12px 16px;font-size:14px}
+}
+
 `;
 
 /* ── THE STAT STRIP ─────────────────────────────────────────────────────────────────────────────
@@ -1462,10 +1514,13 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
             <div className={"gbar" + (d < 0 ? " short" : "")}>
               <div className="r" data-testid="gday-real" style={{ width: `${g.realPct}%` }} />
               <div className="f" data-testid="gday-fake" style={{ left: `${g.realPct}%`, width: `${g.fakePct}%` }} />
-              <div className="mn" data-testid="gday-notch" data-pct={g.minPct.toFixed(4)} style={{ left: `${g.minPct}%` }} />
+              {/* NO MINIMUM, NO NOTCH — see meter(). A tick at 0% claims a threshold that is not set. */}
+              {g.hasMin && <div className="mn" data-testid="gday-notch" data-pct={g.minPct.toFixed(4)} style={{ left: `${g.minPct}%` }} />}
             </div>
-            <div className="gmnl" data-testid="gday-minlabel" data-min={min} data-pct={g.labelPct.toFixed(4)}
-              style={{ left: `${g.labelPct}%` }}>min {min}</div>
+            {g.hasMin
+              ? <div className="gmnl" data-testid="gday-minlabel" data-min={min} data-pct={g.labelPct.toFixed(4)}
+                  style={{ left: `${g.labelPct}%` }}>min {min}</div>
+              : <div className="gmnl gnomin" data-testid="gday-nomin" style={{ left: "12%" }}>no minimum</div>}
           </div>
         ) : <div className="gmeter" />}
         <div className="gnum" data-testid="gday-nums">
@@ -1496,9 +1551,14 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
  * THE FACTS ROW IS THREE DISCRETE STATS separated by hairlines, each a bold number over a muted
  * label. Collapsing it back into "3 real, 9 minimum, 11 of 14 fake" is the thing not to do.
  */
-function AlertBanner({ m, now, pending, onStep, onSave, onOpen, saveState, canEdit, stepperReason }: {
-  m: ApiMatch; now: number; pending: number | null;
-  onStep: (id: number, d: number) => void; onSave: (id: number) => void; onOpen: (id: number) => void;
+function AlertBanner({ m, now, pending, pendingFakes, pending3h, onStep, onStepFakes, onStep3h,
+  onSave, onSaveFakes, onSave3h, onOpen, onChat, saveState, canEdit, stepperReason }: {
+  m: ApiMatch; now: number; pending: number | null; pendingFakes: number | null; pending3h: number | null;
+  onStep: (id: number, d: number) => void;
+  onStepFakes: (id: number, d: number) => void;
+  onStep3h: (id: number, d: number) => void;
+  onSave: (id: number) => void; onSaveFakes: (id: number) => void; onSave3h: (id: number) => void;
+  onOpen: (id: number) => void; onChat: (id: number) => void;
   saveState?: { s: "saving" | "landed" | "failed" | "unknown"; msg: string };
   canEdit: boolean; stepperReason: string | null;
 }) {
@@ -1508,6 +1568,21 @@ function AlertBanner({ m, now, pending, onStep, onSave, onOpen, saveState, canEd
   const moved = pending != null && pending !== savedMin;
   const shortNow = Math.max(0, shownMin - real);
   const ac = minsToDeadline(m, now);
+  const minsToKick = minsUntil(m, now);
+  const savedFakes = fakeCount(m);
+  const shownFakes = pendingFakes ?? savedFakes;
+  const fakesMoved = pendingFakes != null && pendingFakes !== savedFakes;
+  const saved3h = Number(m.fakeSpotLeft3h ?? 0);
+  const shown3h = pending3h ?? saved3h;
+  const rungMoved = pending3h != null && pending3h !== saved3h;
+  /* WHICH LATER RUNGS THIS CHANGE WOULD HAVE TO RAISE - computed for the note, from the same
+   * helper that builds the write, so the note cannot describe a different write. */
+  const laterRaised = fakesWriteDiff(
+    { fakeSpotLeft36h: Number(m.fakeSpotLeft36h ?? 0), fakeSpotLeft24h: Number(m.fakeSpotLeft24h ?? 0),
+      fakeSpotLeft12h: Number(m.fakeSpotLeft12h ?? 0), fakeSpotLeft6h: Number(m.fakeSpotLeft6h ?? 0),
+      fakeSpotLeft3h: Number(m.fakeSpotLeft3h ?? 0) },
+    cap, real, minsToKick / 60, shownFakes,
+  ).laterRaised;
 
   /* THE HEADLINE FOLLOWS THE PENDING VALUE. Stepping the minimum below the real count turns
    * "is 6 players short" into "clears its minimum at 3" — the operator sees the consequence of the
@@ -1545,24 +1620,15 @@ function AlertBanner({ m, now, pending, onStep, onSave, onOpen, saveState, canEd
         <div className="n" data-testid="gday-countdown">{ac > 0 ? fmtDur(ac) : "now"}</div>
         <div className="l">until auto-cancel</div>
       </div>
-      <div className="gacts" onClick={stop}>
-        {/* ── OPEN MATCH CHAT ────────────────────────────────────────────────────────────────────
-         * THIS WAS BROKEN IN TWO SEPARATE WAYS AND BOTH ARE FIXED HERE.
-         *
-         *   1. THE PATH. It pointed at /match-ops/chats, which does not exist. It 308-redirects to
-         *      /match-ops/match-chats AND DROPS THE QUERY STRING on the way, so the click landed
-         *      on the thread list with no selection - which is exactly what "it did not land on
-         *      that match's chat" looks like from the outside.
-         *   2. THE PARAMETER. The chat shell reads `chatId` (MatchChatsClient.tsx:63). `match` is
-         *      a name it has never known, so even on the right path it would have selected nothing.
-         *
-         * chatId IS THE MATCH api_id. Proven, not inferred: /api/match-chats/active builds
-         * `chat_id: String(m.api_id)` for upcoming and past rows, and on live data every active row
-         * came back with chat_id === String(match.api_id). Navigating to ?chatId=18342 selected
-         * that match's thread. */}
+      {/* ── THE ACTION AREA IS A 2x2 GRID, NOT A ROW ────────────────────────────────────────────
+       * Four controls in one row measured 608px - half the banner - and crushed the text: the meta
+       * line wrapped at 1500 and the banner grew to 187px at 1280. As a 2x2 it is 324px and the
+       * banner holds at 101px down to 1280. */}
+      <div className="gacts" data-testid="gday-acts" onClick={stop}>
         <a className="gbtn" data-testid="gday-chat" data-chat-id={String(m.id)}
           href={`/match-ops/match-chats?chatId=${encodeURIComponent(String(m.id))}`}
-          onClick={stop}>Open match chat</a>
+          onClick={(e) => { stop(e); e.preventDefault(); onChat(m.id); }}>Open match chat</a>
+
         <span className="gstep" data-testid="gday-stepper" title={stepperReason ?? "Adjust the match minimum"}>
           Adjust min
           <button type="button" className="gsb" data-testid="gday-step-down" aria-label="Lower the minimum"
@@ -1573,30 +1639,61 @@ function AlertBanner({ m, now, pending, onStep, onSave, onOpen, saveState, canEd
             disabled={!canEdit || shownMin >= cap}
             onClick={(e) => { stop(e); onStep(m.id, 1); }}>+</button>
         </span>
-        {moved ? (
-          /* ── AN ADJUSTMENT IS NOT A RESCUE ───────────────────────────────────────────────────
-           * The mechanism is real < min, proven on staging. Going 9 -> 7 with 3 real STILL
-           * CANCELS. So the button only turns green — the affordance that reads as "this fixes
-           * it" — when the shortfall has actually reached zero. While a shortfall remains it is a
-           * plain button and says nothing about the cancel, because it does nothing about it.
-           * The headline above obeys the same rule: it flips to "clears its minimum at N" only
-           * when shortNow is 0. */
-          <button type="button" className={"gpri" + (shortNow === 0 ? " ok" : "")}
-            data-testid="gday-save-min" data-clears={shortNow === 0 ? "1" : "0"}
+
+        {/* ── ADJUST FAKES ────────────────────────────────────────────────────────────────────
+         * Reads and writes in FAKES because that is how the operator thinks, and translates to
+         * RUNGS because a fake count is derived and writing one writes to nothing. Stripping
+         * fakes also raises every LATER rung, or the ladder puts them straight back at the next
+         * mark - the note says so rather than leaving it to be discovered. */}
+        <span className="gstep" data-testid="gday-fakestep"
+          title={`Fakes are derived from the spots-shown-left ladder (fake = capacity − rung − real). Changing this writes the ${markInForce(minsToKick / 60)}h rung and every later one, so the ladder cannot re-inflate.`}>
+          Adjust fakes
+          <button type="button" className="gsb" data-testid="gday-fake-down" aria-label="Remove a fake spot"
+            disabled={!canEdit || shownFakes <= 0}
+            onClick={(e) => { stop(e); onStepFakes(m.id, -1); }}>−</button>
+          <b data-testid="gday-fake-value">{shownFakes}</b>
+          <button type="button" className="gsb" data-testid="gday-fake-up" aria-label="Add a fake spot"
+            disabled={!canEdit || shownFakes >= Math.max(0, cap - real)}
+            onClick={(e) => { stop(e); onStepFakes(m.id, 1); }}>+</button>
+        </span>
+
+        {/* ── THE 3H RUNG, LABELLED WITH BOTH NUMBERS ─────────────────────────────────────────
+         * "3h rung 4" reads as four fakes and means four spots SHOWN LEFT - the opposite
+         * direction. Both numbers are on the control, and the fake count moves as the rung steps. */}
+        <span className="gstep" data-testid="gday-rungstep"
+          title="The most spots shown as LEFT from three hours before kickoff. A HIGHER rung means FEWER fakes.">
+          <span className="glab">3h rung <b data-testid="gday-rung-value">{shown3h}</b> · <i data-testid="gday-rung-fakes">{fakesFor(cap, shown3h, real)} fake</i></span>
+          <button type="button" className="gsb" data-testid="gday-rung-down" aria-label="Lower the 3 hour rung"
+            disabled={!canEdit || shown3h <= 0}
+            onClick={(e) => { stop(e); onStep3h(m.id, -1); }}>−</button>
+          <button type="button" className="gsb" data-testid="gday-rung-up" aria-label="Raise the 3 hour rung"
+            disabled={!canEdit || shown3h >= cap}
+            onClick={(e) => { stop(e); onStep3h(m.id, 1); }}>+</button>
+        </span>
+
+        {/* ONE SAVE, FOR WHICHEVER VALUE MOVED. Green only when the minimum change actually clears
+            the shortfall - an adjustment is not a rescue. */}
+        {(moved || fakesMoved || rungMoved) && (
+          <button type="button" className={"gpri gsave" + (moved && shortNow === 0 ? " ok" : "")}
+            data-testid={moved ? "gday-save-min" : fakesMoved ? "gday-save-fakes" : "gday-save-rung"}
+            data-clears={moved ? (shortNow === 0 ? "1" : "0") : null}
             disabled={saveState?.s === "saving"}
-            title={shortNow === 0
-              ? `Sets the minimum to ${shownMin}, which ${real} real players already meet — this prevents the auto-cancel.`
-              : `Sets the minimum to ${shownMin}. Still ${shortNow} short of ${real} real players, so the auto-cancel will still fire.`}
-            onClick={(e) => { stop(e); onSave(m.id); }}>
-            {saveState?.s === "saving" ? "Saving…" : `Save min ${shownMin}`}
+            title={moved
+              ? (shortNow === 0
+                ? `Sets the minimum to ${shownMin}, which ${real} real players already meet — this prevents the auto-cancel.`
+                : `Sets the minimum to ${shownMin}. Still ${shortNow} short of ${real} real players, so the auto-cancel will still fire.`)
+              : fakesMoved
+                ? fakesWriteNote(shownFakes, laterRaised)
+                : `Sets the 3h rung to ${shown3h} — ${fakesFor(cap, shown3h, real)} fake spots from three hours out.`}
+            onClick={(e) => { stop(e); if (moved) onSave(m.id); else if (fakesMoved) onSaveFakes(m.id); else onSave3h(m.id); }}>
+            {saveState?.s === "saving" ? "Saving…"
+              : moved ? `Save min ${shownMin}`
+              : fakesMoved ? `Save ${shownFakes} fake${shownFakes === 1 ? "" : "s"}`
+              : `Save 3h rung ${shown3h}`}
           </button>
-        ) : (
-          /* DISABLED, WITH THE REASON ON THE CONTROL. Cancelling a match is not wired, and a
-           * button that looks live and does nothing is exactly what this page must not ship. */
-          <button type="button" className="gpri" data-testid="gday-cancel-now" disabled
-            title="Cancelling a match from this page is not wired yet — cancel it in the match editor.">
-            Cancel now
-          </button>
+        )}
+        {fakesMoved && laterRaised.length > 0 && (
+          <span className="gladdernote" data-testid="gday-ladder-note">{fakesWriteNote(shownFakes, laterRaised)}</span>
         )}
         {saveState && saveState.s !== "saving" && (
           <span className={"gverdict " + saveState.s} data-testid="gday-save-verdict" data-state={saveState.s}>

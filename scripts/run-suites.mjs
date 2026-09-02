@@ -162,6 +162,12 @@ const NODE_SUITES = [
    * is about to auto-cancel with too few real players is a match record about to say it did not
    * happen. */
   "scripts/gameday-strip-test.ts",
+  /* THE FAKE-SPOT LADDER. Here because a fake count is DERIVED (fake = capacity - rung - real), so
+   * a control that writes one writes to nothing, and a control that writes only the rung in force
+   * silently reverses an hour later when the match crosses the next mark. Both are invisible at the
+   * moment of the write and visible to a player as a match that looks full when it should have
+   * cancelled. */
+  "scripts/fake-ladder-test.ts",
   "scripts/roster-edit-model-test.ts",
   "scripts/credits-model-test.ts",
   "scripts/promo-edit-model-test.ts",

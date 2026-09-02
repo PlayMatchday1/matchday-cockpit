@@ -208,6 +208,32 @@ console.log("\nA BANNER IS AN INTERRUPT, SO MOST SHORT MATCHES DO NOT GET ONE");
   is("  CONTROL: ...on a future date too", riskSubtitle([healthy], NOW, false), "nothing at risk");
 }
 
+console.log("\nCANCEL NOW IS OFF THE BANNER, AND THE FAKE CONTROLS WRITE RUNGS");
+{
+  const board = readFileSync("src/components/GamedayBoard.tsx", "utf8");
+  const code = board.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  /* D1. A destructive action one mis-tap from a stepper, and it already lives in the editor. */
+  is("  the banner has no Cancel now control", /data-testid="gday-cancel-now"/.test(code), false);
+  is("  control: ...and the banner still has its other actions", /data-testid="gday-chat"/.test(code), true);
+  /* IT WAS NOT DELETED FROM THE PRODUCT, ONLY FROM THE BANNER. Cancelling a match still lives
+   * where a destructive action belongs — behind the editor, not beside a stepper. */
+  const editor = readFileSync("src/components/MatchPanel.tsx", "utf8");
+  is("  control: cancelling a match still exists in the editor", /cancel/i.test(editor), true);
+  /* D2/D3. A fake count is DERIVED - a control that writes one writes to nothing. */
+  is("  the fakes stepper writes a rung DIFF, not a fake count", /fakesWriteDiff\(ladderOf\(m\)/.test(code), true);
+  is("  control: no raw fake count is ever sent", /changes: \{ *fakePlayers/.test(code), false);
+  is("  ...and it raises every later rung", /marksFrom/.test(readFileSync("src/lib/fakeLadder.ts", "utf8")), true);
+  is("  the 3h rung control writes only that field", /\{ fakeSpotLeft3h: target \}/.test(code), true);
+  is("  the verdict is judged on the RUNG read-back, not the fake count",
+    /THE VERDICT IS JUDGED ON THE RUNG, NOT ON THE FAKE COUNT/.test(board), true);
+  is("  one attempt, never a retry", /retry|attempt\s*\+\+/.test(code), false);
+  /* D4. Four controls in one row measured 608px and crushed the banner text. */
+  is("  the action area is a 2x2 grid", /\.gdo \.gacts\{display:grid;grid-template-columns:auto auto/.test(board), true);
+  /* THE DEAD STATE IS GONE. */
+  is("  the all/att/upc filter state is removed", /useState<BoardFilter>/.test(code), false);
+  is("  control: ...and so is the dead SnapRow component", /function SnapRow\(/.test(code), false);
+}
+
 console.log("\nTHE STEPPER IS KEYED ON A PERMISSION, NOT ON A PROP");
 {
   const board = readFileSync("src/components/GamedayBoard.tsx", "utf8");
@@ -235,8 +261,12 @@ console.log("\nTHE STEPPER IS KEYED ON A PERMISSION, NOT ON A PROP");
 
   /* AN ADJUSTMENT IS NOT A RESCUE. The mechanism is real < min: 9 -> 7 with 3 real still cancels,
    * so the green affordance appears only when the shortfall actually reaches zero. */
-  is("  the save button turns green only when the shortfall clears",
-    /className=\{"gpri" \+ \(shortNow === 0 \? " ok" : ""\)\}/.test(code), true);
+  /* THE SAVE BUTTON NOW SERVES THREE VALUES - minimum, fakes and the 3h rung - so the green
+   * affordance is gated on the MINIMUM having moved AND its shortfall reaching zero. A fakes
+   * change is never a rescue and must never wear the colour that says it is. */
+  is("  the save button turns green only when a MINIMUM change clears the shortfall",
+    /className=\{"gpri gsave" \+ \(moved && shortNow === 0 \? " ok" : ""\)\}/.test(code), true);
+  is("  control: a fakes change cannot turn it green", /fakesMoved \? .*ok/.test(code), false);
   is("  ...and the headline flips on the same condition", /shortNow > 0/.test(code), true);
   is("  ...with the two-outcome title spelled out", /the auto-cancel will still fire/.test(code), true);
 

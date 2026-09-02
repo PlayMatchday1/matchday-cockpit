@@ -424,14 +424,27 @@ export const FILTERING_TILES: readonly StripKey[] = ["risk", "soon", "live"];
  * `minPct` is the notch. `labelPct` is the label's centre, clamped into 12–88% so a minimum at 0 or
  * at capacity still has its text inside the track rather than hanging off the end.
  */
-export type Meter = { realPct: number; fakePct: number; minPct: number; labelPct: number };
+export type Meter = { realPct: number; fakePct: number; minPct: number; labelPct: number; hasMin: boolean };
 export function meter(m: ApiMatch): Meter | null {
   const cap = capacity(m);
   if (cap == null || cap <= 0) return null;
   const realPct = Math.max(0, Math.min(100, (realCount(m) / cap) * 100));
   const fakePct = Math.max(0, Math.min(100 - realPct, (fakeCount(m) / cap) * 100));
   const minPct = Math.max(0, Math.min(100, (n(m.minPlayerCount) / cap) * 100));
-  return { realPct, fakePct, minPct, labelPct: Math.max(12, Math.min(88, minPct)) };
+  /* A MATCH WITH NO MINIMUM DRAWS NO NOTCH AND NO LABEL.
+   *
+   * `minPlayerCount: 0` means no minimum is set — the match cannot be short of anything. Two of
+   * the thirteen matches on the board today are like that (18316 cap 36, 18391 cap 14). Drawing a
+   * notch at 0% claims a threshold that does not exist, and "min 0" reads as a real setting rather
+   * than an absent one.
+   *
+   * IT ALSO RESOLVES A GENUINE CONFLICT between two requirements. The label is clamped into
+   * 12–88% so it cannot hang off the end of the track, and it is supposed to sit within 1px of the
+   * notch it describes. At min 0 those cannot both hold: the notch is at 0% and the clamp puts the
+   * label at 12%. Not drawing either is the only answer that keeps both true for every mark that
+   * is actually rendered — and it is the more honest one. */
+  const hasMin = n(m.minPlayerCount) > 0;
+  return { realPct, fakePct, minPct, labelPct: Math.max(12, Math.min(88, minPct)), hasMin };
 }
 
 /**
