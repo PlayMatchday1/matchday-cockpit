@@ -230,7 +230,8 @@ console.log("\nTHE MONTH VIEW SHARES THE WEEK VIEW'S EDITOR, AND ITS ROWS GROW T
   is("  …and it never truncates", /\.vms-mprice\{flex:0 0 auto;[^}]*white-space:nowrap/.test(VIEW), true);
   is("  control: the price rule carries NO ellipsis", /\.vms-mprice\{[^}]*text-overflow/.test(VIEW), false);
   is("  control: the FIELD beside it is the one that ellipses", /\.vms-mitem span\{[^}]*text-overflow:ellipsis/.test(VIEW), true);
-  is("  the tooltip carries the untruncated text, price included", /title=\{\[m\.time, m\.venue, m\.name, priceLabel\(m\.price\)\]/.test(code), true);
+  is("  the tooltip carries the untruncated text, count and price included",
+    /title=\{\[m\.time, m\.venue, m\.name, countLabel\(m\), priceLabel\(m\.price\)/.test(code), true);
   is("  the mirror read actually selects the column", /registration_price/.test(readFileSync("src/lib/veoSchedule.ts", "utf8")), true);
   is("  …and carries it through as null, never 0", /registration_price \?\? null/.test(readFileSync("src/lib/veoSchedule.ts", "utf8")), true);
 
@@ -255,20 +256,32 @@ console.log("\nTHE MONTH VIEW SHARES THE WEEK VIEW'S EDITOR, AND ITS ROWS GROW T
 
 console.log("\nTHE PRICE IS CENTS, AND NULL IS NOT ZERO");
 {
-  is("1500 cents is $15.00, not $1,500", priceLabel(1500), "$15.00");
-  is("500 cents is $5.00", priceLabel(500), "$5.00");
-  is("900 cents is $9.00", priceLabel(900), "$9.00");
+  /* THE CONTRACT CHANGED HERE, DELIBERATELY, and these expectations changed with it: the cents
+   * are dropped when there are none. $12.00 was noise in a 145px cell. What did NOT change is
+   * that a price is never ROUNDED — 990 is still $9.90, because $10 is a price nobody is charged
+   * — and that null and zero stay different facts. Those are the assertions below that still
+   * carry the same values they always did. */
+  is("1500 cents is $15, not $1,500 and not $15.00", priceLabel(1500), "$15");
+  is("500 cents is $5", priceLabel(500), "$5");
+  is("900 cents is $9", priceLabel(900), "$9");
+  is("1200 cents is $12", priceLabel(1200), "$12");
   is("990 cents keeps both decimals", priceLabel(990), "$9.90");
-  is("3900 cents is $39.00", priceLabel(3900), "$39.00");
-  is("100 cents is $1.00", priceLabel(100), "$1.00");
+  is("  …and is NOT rounded to a price nobody is charged", priceLabel(990) === "$10", false);
+  is("1250 cents keeps them too", priceLabel(1250), "$12.50");
+  is("3900 cents is $39", priceLabel(3900), "$39");
+  is("100 cents is $1", priceLabel(100), "$1");
   is("a cent is not lost", priceLabel(1), "$0.01");
+  /* CONTROL: the two branches must actually differ. If the whole-dollar branch ever swallowed the
+   * other, every assertion above that only checked a whole dollar would still pass. */
+  is("  control: a whole dollar and a part dollar render differently",
+    [priceLabel(1200), priceLabel(1250)], ["$12", "$12.50"]);
 
-  /* THE WHOLE POINT. Null renders NOTHING and zero renders $0.00, and these are different facts:
+  /* THE WHOLE POINT. Null renders NOTHING and zero renders $0, and these are different facts:
    * a match with no price recorded is not a free match. 347 of the 10,170 matches in the mirror
    * carry a real 0 — collapsing the two would relabel every one of them. */
   is("null renders NOTHING", priceLabel(null), null);
   is("undefined renders NOTHING", priceLabel(undefined), null);
-  is("ZERO renders $0.00, because that is what it is", priceLabel(0), "$0.00");
+  is("ZERO renders $0, because that is what it is", priceLabel(0), "$0");
   /* CONTROL: the two cases must not agree. If priceLabel ever returned null for 0 — or "$0.00"
    * for null — every assertion above that only checked one of them could still pass. */
   is("  control: null and zero do not produce the same thing", priceLabel(null) === priceLabel(0), false);

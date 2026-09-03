@@ -199,6 +199,20 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
 export type VeoRangeMatch = Omit<VeoMatch, "dayIdx"> & {
   /** YYYY-MM-DD, wall clock — the day the match is played at the pitch. */
   date: string;
+  /* ── FOUR MORE COLUMNS OFF THE SAME ROW ───────────────────────────────────────────────────
+   * All four are columns on `mdapi_matches`, which this query already reads, so they cost one
+   * extra field each in the SELECT and NOT a second read. Measured on 439 September 2026 rows:
+   * every one of them is non-null.
+   *
+   * `players` and `fakePlayers` are `player_count` / `fake_player_count`, written by the mirror
+   * sync straight from `_count.players` / `_count.fakePlayers` (mdapiMatchesSync.ts:810-811).
+   * BOTH are carried because the real count is the difference — see monthGrid.realCount. Sending
+   * one occupancy number instead would overstate every match that holds a fake, and look right. */
+  cancelled: boolean;
+  players: number | null;
+  fakePlayers: number | null;
+  capacity: number | null;
+  minPlayers: number | null;
 };
 
 export type VeoRange = {
@@ -221,7 +235,7 @@ export async function fetchVeoRange(
 ): Promise<VeoRange> {
   let q = sb
     .from("mdapi_matches")
-    .select("api_id, name, city_identifier, field_title, start_date, registration_price, is_cancelled, deleted_at, synced_at")
+    .select("api_id, name, city_identifier, field_title, start_date, registration_price, is_cancelled, player_count, fake_player_count, min_player_count, max_player_count, deleted_at, synced_at")
     .is("deleted_at", null)
     .gte("start_date", from)
     .lte("start_date", `${to}T23:59:59`);
@@ -229,7 +243,11 @@ export async function fetchVeoRange(
   if (scopeCity) q = q.eq("city_identifier", scopeCity);
   const { data: rows, error } = await q;
   if (error) throw new Error(`veo range: ${error.message}`);
-  const live = (rows ?? []).filter((r) => !r.is_cancelled && r.start_date);
+  /* CANCELLED IS CARRIED, NOT DROPPED. This filtered `!r.is_cancelled` and threw the flag away,
+   * which is why the month grid could not offer a "Show cancelled" toggle: the rows never
+   * arrived. They are kept here and the CLIENT decides whether to draw them. A row with no
+   * start_date still goes, because it cannot be placed on a day at all. */
+  const live = (rows ?? []).filter((r) => r.start_date);
 
   const ids = live.map((r) => r.api_id);
   const intent = new Map<number, boolean>();
@@ -257,14 +275,21 @@ export async function fetchVeoRange(
       // CENTS, UNTOUCHED. `?? null` and not `?? 0`: absent and free are different facts.
       price: (r as { registration_price?: number | null }).registration_price ?? null,
       hasEmoji: hasCameraEmoji(r.name),
+      cancelled: !!r.is_cancelled,
+      players: (r as { player_count?: number | null }).player_count ?? null,
+      fakePlayers: (r as { fake_player_count?: number | null }).fake_player_count ?? null,
+      capacity: (r as { max_player_count?: number | null }).max_player_count ?? null,
+      minPlayers: (r as { min_player_count?: number | null }).min_player_count ?? null,
     });
   }
   matches.sort((a, b) => a.date.localeCompare(b.date) || a.minutes - b.minutes || a.venue.localeCompare(b.venue));
 
   return {
     from, to, today: ymd(now), matches,
-    cities: [...new Set(matches.map((m) => m.city))].sort(),
-    fields: [...new Set(matches.map((m) => m.venue))].sort(),
+    // BUILT FROM THE UNCANCELLED MATCHES ONLY. The grid hides cancelled by default, so a filter
+    // offering a city or field whose every match is cancelled would filter to an empty grid.
+    cities: [...new Set(matches.filter((m) => !m.cancelled).map((m) => m.city))].sort(),
+    fields: [...new Set(matches.filter((m) => !m.cancelled).map((m) => m.venue))].sort(),
     dataAsOf: (rows ?? []).reduce<string | null>(
       (acc, r) => { const v = (r as { synced_at?: string | null }).synced_at ?? null; return v && (!acc || v > acc) ? v : acc; },
       null,

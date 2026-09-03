@@ -32,7 +32,8 @@ import RefreshIcon from "@/components/RefreshIcon";
 import { buildCopyBody, copyConfirmLine, type SourceMatch } from "@/lib/copyMatch";
 import {
   buildMonthGrid, applyFilters, fieldsAvailable, reconcileFields, fieldCountLabel,
-  defaultRange, rangeTitle, priceLabel, type GridDay, type GridMatch,
+  defaultRange, rangeTitle, priceLabel, shiftRangeMonth, countLabel, fillTone,
+  type GridDay, type GridMatch,
 } from "@/lib/monthGrid";
 import MatchDrawer, { DRAWER_W, type DrawerMatch } from "@/components/MatchDrawer";
 
@@ -192,6 +193,13 @@ export default function VeoMasterSchedule() {
   const [view, setView] = useState<View>("schedule");
   const [range, setRange] = useState<{ from: string; to: string } | null>(null);
   const [monthData, setMonthData] = useState<{ matches: GridMatch[]; dataAsOf: string | null } | null>(null);
+  /* CANCELLED IS OFF BY DEFAULT and the label is "Show cancelled in grid" — the exact wording
+   * SlateWeekSchedule.tsx:287 already uses. One control, one name, across two pages. */
+  const [showCx, setShowCx] = useState(false);
+  /* WHICH DAYS HAVE BEEN EXPANDED past the six-match cap, by ISO date. Six is the cap because
+   * Friday the 11th holds nine: uncapped, one busy night makes its whole week row tall and the
+   * month stops being a grid. Expanding is per-day and deliberate. */
+  const [expandedDays, setExpandedDays] = useState<ReadonlySet<string>>(new Set());
   const [monthBusy, setMonthBusy] = useState(false);
   const [monthErr, setMonthErr] = useState<string | null>(null);
   const [fieldSel, setFieldSel] = useState<Set<string>>(new Set());
@@ -353,8 +361,13 @@ export default function VeoMasterSchedule() {
     setFieldSel(kept); setDroppedFields(dropped);
   }, [view, monthData, monthFields, fieldSel, droppedFields.length]);
 
-  const monthVisible = useMemo(
+  const monthAll = useMemo(
     () => applyFilters(monthData?.matches ?? [], monthCity, fieldSel), [monthData, monthCity, fieldSel]);
+  // WHAT THE GRID DRAWS. The header count is computed from this same list, so "165 matches" always
+  // describes the grid underneath it rather than a set that includes rows nobody can see.
+  const monthVisible = useMemo(
+    () => (showCx ? monthAll : monthAll.filter((m) => !m.cancelled)), [monthAll, showCx]);
+  const monthCxCount = useMemo(() => monthAll.filter((m) => m.cancelled).length, [monthAll]);
   const monthWeeks = useMemo(
     () => (range ? buildMonthGrid(range.from, range.to, monthVisible,
       new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" })) : []),
@@ -371,8 +384,23 @@ export default function VeoMasterSchedule() {
     await load(ref);
     setNavBusy(false);
   }
-  const goPrev = () => { if (week) void navigate(shiftWeek(week.weekStart, -1)); };
-  const goNext = () => { if (week) void navigate(shiftWeek(week.weekStart, 1)); };
+  /* ── THE ARROWS STEP WHAT YOU ARE LOOKING AT ────────────────────────────────────────────────
+   * These unconditionally moved `week.weekStart`. The month grid is built from `range` and never
+   * reads the week, so in Month view the arrows refetched a week nobody could see, relabelled the
+   * header, and left the grid exactly where it was. A week control left live in a view that does
+   * not use weeks — the same fault that put a red "Not current week" flag above a September grid.
+   *
+   * They now write the state the visible grid is actually built from. In Month that is `range`,
+   * which is also what the from/to inputs edit: ONE piece of state, two ways to set it, so the
+   * two controls cannot disagree. */
+  const goPrev = () => {
+    if (view === "month") { if (range) setRange(shiftRangeMonth(range, -1)); return; }
+    if (week) void navigate(shiftWeek(week.weekStart, -1));
+  };
+  const goNext = () => {
+    if (view === "month") { if (range) setRange(shiftRangeMonth(range, 1)); return; }
+    if (week) void navigate(shiftWeek(week.weekStart, 1));
+  };
   const goToday = () => void navigate("");
 
   // 15s, not 30s: this drives the freshness age, and at 30s the "2 minutes" threshold could be
@@ -683,7 +711,22 @@ export default function VeoMasterSchedule() {
             <div className="vms-h-sub">Mark the matches a Veo camera will cover, then switch to Veo coverage to see the week as one grid — which nights are covered, which are open, and where a camera is idle or short. Click a match to edit it.</div>
           </div>
           <div className="vms-h-right">
-            {week && (
+            {/* MONTH GETS A MONTH NAV. Not the week nav with different handlers — the week range
+                label and the "Not current week" flag are statements about a week, and neither is
+                true or even meaningful above a month grid. They do not render here at all. */}
+            {view === "month" && (
+              <div className="vms-wknav" data-testid="month-nav">
+                <button type="button" className="vms-navbtn" onClick={goPrev} disabled={monthBusy}
+                  aria-label="Previous month" title="Previous month">‹</button>
+                <div className="vms-wklabel">
+                  <span className="vms-wkrange" data-testid="month-nav-title">{range ? rangeTitle(range.from, range.to) : ""}</span>
+                  <span className="vms-wktag vms-wktag-now">Month</span>
+                </div>
+                <button type="button" className="vms-navbtn" onClick={goNext} disabled={monthBusy}
+                  aria-label="Next month" title="Next month">›</button>
+              </div>
+            )}
+            {view !== "month" && week && (
               <div className="vms-wknav" aria-busy={navBusy}>
                 <button type="button" className="vms-navbtn" onClick={goPrev} disabled={navBusy} aria-label="Previous week" title="Previous week">‹</button>
                 <div className={"vms-wklabel" + (isCurrentWeek ? "" : " vms-wklabel-away")}>
@@ -809,6 +852,12 @@ export default function VeoMasterSchedule() {
                 onClick={() => setRange(defaultRange(new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" })))}>
                 This month
               </button>
+              <label className="vms-mtoggle" data-testid="month-showcx">
+                <input type="checkbox" checked={showCx} onChange={(e) => setShowCx(e.target.checked)} />
+                <span className="vms-mtrack"><span className="vms-mknob" /></span>
+                <span>Show cancelled in grid</span>
+                {monthCxCount > 0 && <i className="vms-mcxn">{monthCxCount}</i>}
+              </label>
               <span className="vms-mtitle" data-testid="month-title">{range ? rangeTitle(range.from, range.to) : ""}</span>
               <span className="vms-mstat" data-testid="month-count">
                 {monthBusy ? "Loading…" : `${monthVisible.length} match${monthVisible.length === 1 ? "" : "es"}`}
@@ -843,7 +892,9 @@ export default function VeoMasterSchedule() {
             </div>
           ) : (
             <MonthView weeks={monthWeeks} count={monthVisible.length} onOpen={openCard}
-              selectedId={drawerId} singleField={fieldSel.size === 1} />
+              selectedId={drawerId} singleField={fieldSel.size === 1}
+              expandedDays={expandedDays}
+              onExpand={(iso) => setExpandedDays((prev) => new Set(prev).add(iso))} />
           )}
         </>
       ) : !week || !fweek ? null : view === "schedule" ? (
@@ -1218,17 +1269,55 @@ const CSS = `
 .vms-mcount{margin-left:auto;font-size:10px;font-weight:800;color:#8A5A08;background:#FFF6E3;border-radius:999px;padding:1px 6px}
 /* NO INTERNAL SCROLL. Every match the day holds is on the page; the page scrolls, not the cell. */
 .vms-mlist{padding:0 6px 6px;display:flex;flex-direction:column;gap:3px}
-.vms-mitem{display:flex;align-items:baseline;gap:6px;flex:0 0 auto;min-width:0;text-align:left;background:#F4F8F5;border:1px solid #E3ECE6;border-radius:6px;padding:3px 6px;font:inherit;cursor:pointer}
+.vms-mitem{display:flex;align-items:baseline;gap:5px;flex:0 0 auto;min-width:0;text-align:left;background:#F4F8F5;border:1px solid #E3ECE6;border-radius:6px;padding:3px 6px;font:inherit;cursor:pointer}
 .vms-mitem:hover{background:#E4FBEC;border-color:#BCE8CD}
 .vms-msel{background:#E4FBEC;border-color:#35c77f}
 .vms-mitem b{font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
 .vms-mitem span{min-width:0;flex:1;font-size:11px;color:#3C4F44;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.vms-mveo{width:6px;height:6px;border-radius:50%;background:#0B7A3E;flex:0 0 auto}
 /* THE PRICE NEVER TRUNCATES. flex:0 0 auto + nowrap and NO overflow rule — it takes the width
  * it needs and the FIELD gives way, because "$15.0" and "$1" are wrong numbers rather than short
  * ones. The field beside it is the one that ellipses, and it carries a tooltip that does not.
  * tabular-nums so a column of prices lines up on the decimal point. */
-.vms-mprice{flex:0 0 auto;font-style:normal;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;color:#2C6B45;margin-left:auto}
+.vms-mprice{flex:0 0 auto;font-style:normal;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;color:#2C6B45}
+/* THE COUNT — real players over capacity. Plain ink by default: on a month grid almost every
+   match is legitimately unfilled, so "not full yet" is the norm and gets no colour at all. */
+.vms-mcnt{flex:0 0 auto;font-style:normal;font-size:10.5px;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap;color:#12241d;margin-left:auto;order:4}
+/* FOUR THINGS IN ONE CELL, AND THE CELL IS 143px AT 1280. On one line the field was crushed to a
+   single letter — "H", "O", "C" — which is not a field name, it is a smaller lie than an ellipsis.
+   Below 1440 the row breaks after the field: time and field on top, count and price beneath,
+   right-aligned. Every row breaks the same way, so the grid stays a grid. */
+.vms-mitem b{order:1}
+.vms-mitem span{order:2}
+.vms-mitem .vms-mprice{order:5}
+@media (max-width:1439px){
+  .vms-mitem{flex-wrap:wrap;row-gap:1px}
+  .vms-mitem::after{content:"";order:3;flex:0 0 100%;height:0}
+}
+.vms-mfull{color:#046B45}
+/* AMBER IS TODAY ONLY. 143 of Austin's 165 September matches are below their minimum; colouring
+   that everywhere would light 87% of the grid permanently and mean nothing. */
+.vms-mlow{color:#8a6300}
+/* PAST DAYS RECEDE. A day that has run has nothing left to decide. The numbers stay legible —
+   this is a step back, not a hide. */
+.vms-mpast .vms-mitem{opacity:.62;background:#F7F8F7;border-color:#EAEEEA}
+.vms-mpast .vms-mnum{color:#6d7b74}
+.vms-mtd{font-size:9px;letter-spacing:.7px;text-transform:uppercase;font-weight:800;color:#046B45;background:#e0f2e7;border-radius:999px;padding:1px 6px}
+/* CANCELLED — struck through with a red left edge, and no count colour to read. */
+.vms-mcx{background:#fdeae4;border-color:#f0bda9;box-shadow:inset 2px 0 0 #a8391a}
+.vms-mcx b,.vms-mcx span{color:#a8391a;text-decoration:line-through;text-decoration-thickness:1px}
+.vms-mcx .vms-mcnt,.vms-mcx .vms-mprice{color:#a8391a;opacity:.75}
+.vms-mmore{border:0;background:none;padding:2px 4px;font:inherit;font-size:10.5px;font-weight:700;color:#046B45;cursor:pointer;text-align:left}
+.vms-mmore:hover{text-decoration:underline}
+.vms-mcount u{text-decoration:none;color:#a8391a;font-weight:700}
+/* The cancelled toggle — same shape and same accent as Slate Review's. */
+.vms-mtoggle{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:#3d5245;cursor:pointer;user-select:none}
+.vms-mtoggle input{position:absolute;opacity:0;width:0;height:0}
+.vms-mtrack{width:32px;height:18px;border-radius:999px;background:#dfe6e2;position:relative;transition:background .15s;flex:none}
+.vms-mknob{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:999px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.18);transition:left .15s}
+.vms-mtoggle input:checked + .vms-mtrack{background:#35c77f}
+.vms-mtoggle input:checked + .vms-mtrack .vms-mknob{left:16px}
+.vms-mtoggle input:focus-visible + .vms-mtrack{outline:2px solid #046B45;outline-offset:2px}
+.vms-mcxn{font-style:normal;font-size:10px;font-weight:800;color:#a8391a;background:#fdeae4;border:1px solid #f0bda9;border-radius:999px;padding:0 6px}
 .vms-mempty{padding:40px 18px;text-align:center;color:#6E8076;font-size:13px}
 .vms-refresh{display:inline-flex;align-items:center;gap:6px;min-height:32px;border:1px solid var(--line);
   border-radius:9px;background:#fff;color:var(--forest);font:inherit;font-size:12px;font-weight:700;
@@ -1425,9 +1514,23 @@ span.vms-cam:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
  * itself and shows the day's count in its corner, so a full day is visibly full rather than
  * silently truncated.
  */
-function MonthView({ weeks, count, onOpen, selectedId, singleField }: {
+/* ── THE MONTH CELL ───────────────────────────────────────────────────────────────────────────
+ * One line per match: time, field, count, price. Four things, in that order, every row the same
+ * shape — the old entry was three pieces of text with no hierarchy and a 6px green dot.
+ *
+ * NO FILL BAR. A bar drawn beside the count is the same fact twice in a 145px cell, and the cell
+ * has four things to fit already.
+ *
+ * NOTHING VEO. It has its own tab. The dot that used to sit before the price was unreadable as a
+ * camera by anyone who had not been told it was one, and the width it took back belongs to the
+ * count.
+ */
+const MONTH_CAP = 6;
+
+function MonthView({ weeks, count, onOpen, selectedId, singleField, expandedDays, onExpand }: {
   weeks: GridDay[][]; count: number; onOpen: (id: number) => void;
   selectedId: number | null; singleField: boolean;
+  expandedDays: ReadonlySet<string>; onExpand: (iso: string) => void;
 }) {
   return (
     <div className="vms-card vms-month" data-testid="month-grid">
@@ -1439,40 +1542,74 @@ function MonthView({ weeks, count, onOpen, selectedId, singleField }: {
       ) : weeks.map((week, wi) => (
         <div className="vms-mweek" key={wi}>
           {week.map((d) => (
-            <div key={d.iso}
-              className={"vms-mcell" + (d.inRange ? "" : " vms-mout") + (d.isToday ? " vms-mtoday" : "")}
-              data-testid="month-cell" data-iso={d.iso} data-inrange={d.inRange ? "1" : "0"}>
-              <div className="vms-mhead">
-                <span className="vms-mnum">{d.day}</span>
-                {/* THE DAY'S COUNT, in the corner, so a scrolling cell says how much it holds. */}
-                {d.matches.length > 0 && <span className="vms-mcount" data-testid="month-daycount">{d.matches.length}</span>}
-              </div>
-              <div className="vms-mlist">
-                {d.matches.map((m) => (
-                  <button type="button" key={m.apiId} data-testid="month-match" data-id={m.apiId}
-                    className={"vms-mitem" + (selectedId === m.apiId ? " vms-msel" : "")}
-                    onClick={() => onOpen(m.apiId)}
-                    /* THE TOOLTIP CARRIES THE UNTRUNCATED TEXT. The field ellipses in a narrow
-                       cell; this is where the whole of it lives, price included. */
-                    title={[m.time, m.venue, m.name, priceLabel(m.price)].filter(Boolean).join(" · ")}>
-                    <b>{m.time}</b>
-                    {/* ONE COMPACT LINE. The field, unless the filter is already down to a single
-                        field — at which point the field is a constant and the NAME is the thing
-                        that distinguishes one entry from another. */}
-                    <span>{singleField ? m.name : m.venue}</span>
-                    {m.veo && <i className="vms-mveo" aria-label="Veo" />}
-                    {/* NULL RENDERS NOTHING — no element, no placeholder, no gap. priceLabel
-                        returns null only for a missing price; a real 0 comes back "$0.00". */}
-                    {priceLabel(m.price) !== null && (
-                      <em className="vms-mprice" data-testid="month-price">{priceLabel(m.price)}</em>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <MonthCell key={d.iso} d={d} onOpen={onOpen} selectedId={selectedId}
+              singleField={singleField} expanded={expandedDays.has(d.iso)} onExpand={onExpand} />
           ))}
         </div>
       ))}
+    </div>
+  );
+}
+
+function MonthCell({ d, onOpen, selectedId, singleField, expanded, onExpand }: {
+  d: GridDay; onOpen: (id: number) => void; selectedId: number | null;
+  singleField: boolean; expanded: boolean; onExpand: (iso: string) => void;
+}) {
+  const over = d.matches.length - MONTH_CAP;
+  const shown = expanded ? d.matches : d.matches.slice(0, MONTH_CAP);
+  const cx = d.matches.filter((m) => m.cancelled).length;
+  return (
+    <div
+      className={"vms-mcell" + (d.inRange ? "" : " vms-mout") + (d.isToday ? " vms-mtoday" : "")
+        + (d.isPast ? " vms-mpast" : "")}
+      data-testid="month-cell" data-iso={d.iso} data-inrange={d.inRange ? "1" : "0"}
+      data-past={d.isPast ? "1" : "0"} data-today={d.isToday ? "1" : "0"}>
+      <div className="vms-mhead">
+        <span className="vms-mnum">{d.day}</span>
+        {d.isToday && <span className="vms-mtd">Today</span>}
+        {/* THE DAY'S COUNT, in the corner, so a scrolling cell says how much it holds. */}
+        {d.matches.length > 0 && (
+          <span className="vms-mcount" data-testid="month-daycount">
+            {d.matches.length}{cx > 0 && <u> · {cx} cx</u>}
+          </span>
+        )}
+      </div>
+      <div className="vms-mlist">
+        {shown.map((m) => {
+          /* AMBER IS TODAY-ONLY, and fillTone is where that rule lives — never re-tested here.
+             Green (at capacity) applies on any day. */
+          const tone = fillTone(m, d.isToday);
+          return (
+            <button type="button" key={m.apiId} data-testid="month-match" data-id={m.apiId}
+              data-cancelled={m.cancelled ? "1" : "0"} data-tone={tone || "none"}
+              className={"vms-mitem" + (selectedId === m.apiId ? " vms-msel" : "")
+                + (m.cancelled ? " vms-mcx" : "")}
+              onClick={() => onOpen(m.apiId)}
+              /* THE TOOLTIP CARRIES THE UNTRUNCATED TEXT. The field ellipses in a narrow cell;
+                 this is where the whole of it lives, count and price included. */
+              title={[m.time, m.venue, m.name, countLabel(m), priceLabel(m.price),
+                m.cancelled ? "CANCELLED" : null].filter(Boolean).join(" · ")}>
+              <b>{m.time}</b>
+              {/* The field, unless the filter is already down to a single field — at which point
+                  the field is a constant and the NAME is what distinguishes one entry from another. */}
+              <span>{singleField ? m.name : m.venue}</span>
+              {/* REAL PLAYERS. countLabel subtracts the fakes; see monthGrid.realCount. */}
+              <i className={"vms-mcnt" + (tone ? ` vms-m${tone}` : "")} data-testid="month-count-cell">
+                {countLabel(m)}
+              </i>
+              {/* NULL RENDERS NOTHING — no element, no placeholder, no gap. priceLabel returns
+                  null only for a missing price; a real 0 comes back "$0". */}
+              {priceLabel(m.price) !== null && (
+                <em className="vms-mprice" data-testid="month-price">{priceLabel(m.price)}</em>
+              )}
+            </button>
+          );
+        })}
+        {over > 0 && !expanded && (
+          <button type="button" className="vms-mmore" data-testid="month-more"
+            onClick={() => onExpand(d.iso)}>+{over} more</button>
+        )}
+      </div>
     </div>
   );
 }
