@@ -9,6 +9,8 @@
 export type Manager = {
   name: string;
   city: string; // Sheet/standalone label (e.g. "North Austin", "DFW", "St Louis")
+  /** city_identifier (cityScope.ts) — the key anything joining to this manager must use. */
+  cityId: string;
   payDay: number; // day of month
   amount: number; // monthly $
 };
@@ -18,13 +20,26 @@ export type Manager = {
 // list drives the calendar rows, payment cards, and the one-card-per-
 // manager grid. Array order = calendar row order (top to bottom) and
 // the tie-break order within a shared pay day on the payment cards.
+/* NAMES AND SPELLINGS TAKEN FROM THE REAL DATA, not from a mockup. The check-in Sheet carries NO
+ * name column — only a city and an email — so these were resolved by joining the submitting emails
+ * to app_users where is_city_manager is true. Two were misspelt here: "Yarra" is Yara Usheta and
+ * "Willfried" is Wilfried Nyamsi.
+ *
+ * `cityId` is the city_identifier (src/lib/cityScope.ts) and it is what the meeting action items
+ * are keyed on. The `city` string above it is the loose label the SHEET matcher needs, and the two
+ * must not be conflated: the repo already spells one city three ways ("DFW" here, "Dallas" in
+ * types.CITIES, "Dallas-Fort Worth" in the goals export), which is exactly why anything that has to
+ * JOIN uses the identifier.
+ *
+ * ATLANTA HAS NO MANAGER. It has goals in the September export and has never filed a check-in, so
+ * it is absent here rather than invented — the mock guessed a name for it. */
 export const MANAGERS: Manager[] = [
-  { name: "Yarra", city: "Houston", payDay: 1, amount: 500 },
-  { name: "Garrett", city: "Austin", payDay: 1, amount: 500 },
-  { name: "Rodrigo", city: "OKC", payDay: 1, amount: 500 },
-  { name: "Willfried", city: "St Louis", payDay: 1, amount: 500 },
-  { name: "Chris", city: "DFW", payDay: 15, amount: 800 },
-  { name: "Abraham", city: "San Antonio", payDay: 15, amount: 500 },
+  { name: "Yara Usheta", city: "Houston", cityId: "HOU", payDay: 1, amount: 500 },
+  { name: "Garrett Suits", city: "Austin", cityId: "ATX", payDay: 1, amount: 500 },
+  { name: "Rodrigo", city: "OKC", cityId: "OKC", payDay: 1, amount: 500 },
+  { name: "Wilfried Nyamsi", city: "St Louis", cityId: "STL", payDay: 1, amount: 500 },
+  { name: "Chris Padilla", city: "DFW", cityId: "DFW", payDay: 15, amount: 800 },
+  { name: "Abraham Garcia", city: "San Antonio", cityId: "SATX", payDay: 15, amount: 500 },
 ];
 
 export const CHECK_INS_SHEET_URL =
@@ -172,18 +187,32 @@ function cityMatch(sheetCity: string, managerCity: string): boolean {
   return false;
 }
 
-export async function fetchCheckIns(): Promise<CheckInsData> {
+export async function fetchCheckIns(month?: string): Promise<CheckInsData> {
   const url = CHECK_INS_SHEET_URL + "&_t=" + Date.now();
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const text = await res.text();
   const rows = parseCSV(text);
-  return buildCheckInsData(rows, new Date());
+  return buildCheckInsData(rows, new Date(), month);
+}
+
+/* WHICH MONTH A CHECK-IN IS ABOUT — the "Month Ending Date" the manager typed, not the timestamp
+ * the form recorded. They are routinely different and the difference is not noise: of the twelve
+ * submissions in the sheet, one filed on 17 April reports month-ending 31 March, and one filed on
+ * 20 February reports month-ending 3 March. Bucketing those by the filing date would file March's
+ * check-in under April.
+ *
+ * Falls back to the timestamp when the column is missing or unparseable, because a check-in with no
+ * readable month is better placed under when it arrived than dropped off the page entirely. */
+export function checkInMonth(monthEndingRaw: string, timestamp: Date): string {
+  const d = monthEndingRaw ? new Date(monthEndingRaw) : null;
+  const use = d && !Number.isNaN(d.getTime()) ? d : timestamp;
+  return `${use.getFullYear()}-${String(use.getMonth() + 1).padStart(2, "0")}`;
 }
 
 // Pure transformer split out for testability and so the hook can
 // inject a fake `now` if needed.
-export function buildCheckInsData(rows: string[][], now: Date): CheckInsData {
+export function buildCheckInsData(rows: string[][], now: Date, month?: string): CheckInsData {
   if (rows.length < 2) {
     return {
       statuses: MANAGERS.map((m) => ({
@@ -201,6 +230,7 @@ export function buildCheckInsData(rows: string[][], now: Date): CheckInsData {
 
   const idx = {
     timestamp: findCol(headers, ["timestamp"]),
+    monthEnding: findCol(headers, ["month ending"]),
     city: findCol(headers, ["city"]),
     rating: findCol(headers, ["rating", "overall"]),
     fieldsContacted: findCol(headers, [
@@ -223,7 +253,12 @@ export function buildCheckInsData(rows: string[][], now: Date): CheckInsData {
   const get = (row: string[], i: number) =>
     i >= 0 ? (row[i] || "").trim() : "";
 
-  // Latest submission per raw Sheet city.
+  // Latest submission per raw Sheet city, WITHIN the month being viewed.
+  //
+  // `month` undefined keeps the original behaviour exactly — latest ever, regardless of month —
+  // so every existing caller is unchanged. With a month, a city that filed nothing that month
+  // shows nothing, which is the honest answer: the alternative is July's check-in rendered under a
+  // September heading.
   type Acc = { ts: Date; row: string[] };
   const latestByCity = new Map<string, Acc>();
   for (const row of data) {
@@ -231,6 +266,7 @@ export function buildCheckInsData(rows: string[][], now: Date): CheckInsData {
     const tsRaw = idx.timestamp >= 0 ? row[idx.timestamp] : "";
     const ts = tsRaw ? new Date(tsRaw) : new Date(0);
     if (Number.isNaN(ts.getTime())) continue;
+    if (month && checkInMonth(get(row, idx.monthEnding), ts) !== month) continue;
     const cur = latestByCity.get(cityRaw);
     if (!cur || ts > cur.ts) {
       latestByCity.set(cityRaw, { ts, row });
@@ -265,7 +301,11 @@ export function buildCheckInsData(rows: string[][], now: Date): CheckInsData {
       marketingChannels: get(r, idx.marketingEfforts),
       marketingResults: get(r, idx.marketingResults),
     };
-    return { manager: m, entry, submitted: match.ts >= monthStart };
+    /* WITH A MONTH, THE ROWS ARE ALREADY THAT MONTH'S, so an entry existing IS a submission —
+     * comparing its timestamp to THIS month's start would mark every on-time August check-in
+     * "Overdue" the moment you stepped back to look at August. Without a month the original rule
+     * stands untouched: latest ever, submitted only if it landed this calendar month. */
+    return { manager: m, entry, submitted: month ? true : match.ts >= monthStart };
   });
 
   const submittedCount = statuses.filter((s) => s.submitted).length;

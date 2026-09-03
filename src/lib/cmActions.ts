@@ -1,0 +1,136 @@
+/* CITY MANAGER MEETING ACTION ITEMS — pure. Nothing here fetches, nothing renders.
+ *
+ * The month's city goals, the team's things to try, and the month's takeaways. One month and one
+ * city filter govern the whole page (see CheckInsView), so every derivation those two controls
+ * drive lives here and has exactly one implementation.
+ */
+
+import { CITY_SCOPES } from "./cityScope";
+
+/* ── THE FOUR STATUSES, AND THEY ARE THE GOALS TOOL'S ─────────────────────────────────────────
+ * Slugs, labels, order and colours are matchday-goals.html's own (STATUSES/LABEL at line 165 and
+ * the --green/--coral tokens), so the two can never disagree about what green means. They cycle in
+ * this order, which is also that file's.
+ *
+ * NOT src/lib/types.ts's five. That vocabulary belongs to the quarterly goals tool — it carries an
+ * "In progress" these do not have, and six of its ten live rows sit on it. Sharing one enum would
+ * have meant rewriting those rows to suit a different feature. */
+export const CM_STATUSES = ["open", "ontrack", "atrisk", "done"] as const;
+export type CmStatus = (typeof CM_STATUSES)[number];
+
+export const CM_STATUS_LABEL: Record<CmStatus, string> = {
+  open: "Open", ontrack: "On track", atrisk: "At risk", done: "Done",
+};
+
+/** matchday-goals.html's tokens, verbatim. */
+export const CM_GREEN = "#0C7A44";
+export const CM_GREEN_TINT = "#EAF4EC";
+export const CM_CORAL = "#C2452D";
+export const CM_CORAL_TINT = "#F7ECE8";
+
+export const nextStatus = (s: CmStatus): CmStatus =>
+  CM_STATUSES[(CM_STATUSES.indexOf(s) + 1) % CM_STATUSES.length];
+
+export type CmUpdate = {
+  id: string; item_id: string; reported_on: string; author: string | null; body: string;
+  created_at: string;
+};
+
+export type CmItem = {
+  id: string;
+  month: string;                       // 'YYYY-MM'
+  scope: "city" | "team";
+  kind: "goal" | "try" | "takeaway";
+  city: string | null;                 // city_identifier; null for team items
+  body: string;
+  status: CmStatus | null;             // null ONLY on a takeaway
+  owner: string | null;
+  source: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+/* ── THE MONTH KEY ────────────────────────────────────────────────────────────────────────────
+ * 'YYYY-MM' throughout, and every step is done on the STRING or on UTC-midnight parts. A month is
+ * a calendar bucket, not an instant; running it through a local Date is how a September board
+ * renders as August for somebody in a different timezone. */
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+export const isMonthKey = (m: string): boolean => MONTH_RE.test(m);
+
+export function shiftMonth(month: string, delta: number): string {
+  const y = Number(month.slice(0, 4)), m = Number(month.slice(5, 7));
+  const total = y * 12 + (m - 1) + delta;
+  const ny = Math.floor(total / 12), nm = (total % 12) + 1;
+  return `${ny}-${String(nm).padStart(2, "0")}`;
+}
+
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"];
+export const monthLabel = (month: string): string =>
+  `${MONTH_NAMES[Number(month.slice(5, 7)) - 1]} ${month.slice(0, 4)}`;
+
+/** The calendar month containing `todayIso` (YYYY-MM-DD). Sliced, never parsed. */
+export const monthOf = (todayIso: string): string => todayIso.slice(0, 7);
+
+/** Strictly before the current month — the record of a month that has run. */
+export const isPastMonth = (month: string, currentMonth: string): boolean => month < currentMonth;
+
+/* ── THE ROLLUP ───────────────────────────────────────────────────────────────────────────────
+ * DERIVED FROM THE LIST, NEVER STORED. A summary that can disagree with what is under it is worse
+ * than no summary — so cycling a status moves these because they are recomputed from the same
+ * array the board renders, not because something remembered to update a counter.
+ *
+ * Takeaways are excluded: they carry no status, so counting them as "not started" would invent a
+ * task out of a thing we simply now know. `total` therefore counts action items, which is what the
+ * label says. */
+export type CmRollup = { total: number } & Record<CmStatus, number>;
+
+export function deriveRollup(items: readonly CmItem[]): CmRollup {
+  const withStatus = items.filter((i) => i.kind !== "takeaway" && i.status !== null);
+  const out: CmRollup = { total: withStatus.length, open: 0, ontrack: 0, atrisk: 0, done: 0 };
+  for (const i of withStatus) out[i.status as CmStatus] += 1;
+  return out;
+}
+
+/* ── GROUPING ─────────────────────────────────────────────────────────────────────────────────
+ * City goals, by city, in CITY_SCOPES order so the board does not reshuffle when a city's goals
+ * are all deleted and re-added. Cities with nothing this month are dropped rather than rendered
+ * empty. */
+export const CM_CITIES = CITY_SCOPES.map((c) => c.identifier);
+export const cityNameOf = (identifier: string): string =>
+  CITY_SCOPES.find((c) => c.identifier === identifier)?.name ?? identifier;
+
+export function cityGoals(items: readonly CmItem[], city: string): CmItem[] {
+  return items
+    .filter((i) => i.scope === "city" && i.city === city)
+    .sort((a, b) => a.sort_order - b.sort_order || a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+}
+
+/** The cities with at least one goal this month, honouring the city filter. `null` = all. */
+export function citiesWithGoals(items: readonly CmItem[], filter: string | null): string[] {
+  return CM_CITIES.filter((c) => (!filter || c === filter) && items.some((i) => i.scope === "city" && i.city === c));
+}
+
+/* TEAM ITEMS ARE ORG-WIDE, so no function here takes a city filter. Filtering to Atlanta must not
+ * hide a decision that applies to Atlanta — that is why these are read straight off `items` with
+ * the city argument absent rather than optional. */
+export function teamItems(items: readonly CmItem[], kind: "try" | "takeaway"): CmItem[] {
+  return items
+    .filter((i) => i.scope === "team" && i.kind === kind)
+    .sort((a, b) => a.sort_order - b.sort_order || a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+}
+
+/** The latest update for an item: the day reported about, then when it was written. */
+export function latestUpdate(updates: readonly CmUpdate[], itemId: string): CmUpdate | null {
+  const mine = updates.filter((u) => u.item_id === itemId);
+  if (mine.length === 0) return null;
+  return mine.sort((a, b) =>
+    b.reported_on.localeCompare(a.reported_on) || b.created_at.localeCompare(a.created_at))[0];
+}
+
+/** "Sep 2" — from a YYYY-MM-DD, sliced. Never through a local Date. */
+export function shortDate(isoDate: string): string {
+  const m = Number(isoDate.slice(5, 7)), d = Number(isoDate.slice(8, 10));
+  return `${MONTH_NAMES[m - 1]?.slice(0, 3) ?? "?"} ${d}`;
+}

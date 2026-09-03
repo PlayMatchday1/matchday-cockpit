@@ -23,6 +23,11 @@ const INITIAL: State = {
   autoRefresh: true,
 };
 
+/* WHICH MONTH THIS STORE IS HOLDING. The store is a module-level singleton, so the month has to
+ * live beside the cache rather than in a component: two mounts asking for two different months
+ * would otherwise race and the loser would silently paint the other one's data. `undefined` is the
+ * original behaviour — latest ever — and is what every caller that passes no month still gets. */
+let currentMonth: string | undefined = undefined;
 let cached: State = INITIAL;
 let pending: Promise<void> | null = null;
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
@@ -37,7 +42,7 @@ function publish(next: State) {
 async function load(): Promise<void> {
   publish({ ...cached, syncing: true, error: null });
   try {
-    const data = await fetchCheckIns();
+    const data = await fetchCheckIns(currentMonth);
     publish({
       ...cached,
       data,
@@ -83,7 +88,7 @@ function attachVisibilityListener() {
   });
 }
 
-export function useCheckIns(): State & {
+export function useCheckIns(month?: string): State & {
   refresh: () => Promise<void>;
   setAutoRefresh: (on: boolean) => void;
 } {
@@ -91,7 +96,14 @@ export function useCheckIns(): State & {
 
   useEffect(() => {
     subscribers.add(setS);
-    if (cached.data) {
+    if (month !== currentMonth) {
+      // The month changed under the singleton. Drop the cached payload rather than showing it
+      // while the new one loads — a September card sitting under an August heading for a second
+      // is a wrong answer, not a slow one.
+      currentMonth = month;
+      publish({ ...cached, data: null, loading: true });
+      pending = load().finally(() => { pending = null; });
+    } else if (cached.data) {
       setS(cached);
     } else if (!pending) {
       pending = load().finally(() => {
@@ -105,7 +117,7 @@ export function useCheckIns(): State & {
       // Keep timer alive across mounts — singleton store. Stops only
       // when autoRefresh is toggled off.
     };
-  }, []);
+  }, [month]);
 
   return {
     ...s,
