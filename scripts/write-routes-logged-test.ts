@@ -21,7 +21,9 @@ const WRITE_ENDPOINTS = [
   "POST /admin/matches/{id}/fake-players",          // add fake
   "POST /admin/matches/{id}/batch/fake-players",    // bulk fake
   "POST /admin/user-matches",                       // move / swap
-  "DELETE /admin/matches/user-matches/{um}",        // REMOVE from match
+  "DELETE /admin/matches/user-matches/{um}",        // REMOVE from match + reduce the fake count
+                                                    //   (batch/fake-players only ADDS — measured
+                                                    //   2026-09-02; see matchday-api-facts.md)
   "PATCH /admin/players/{id}/fake-player",          // toggle fake
 ];
 
@@ -59,7 +61,7 @@ bareOffenders.length === 0
   : bad("a route calls apiWrite OUTSIDE recordWrite (unlogged write!)", bareOffenders.join(", "));
 
 // 2) Every known write route routes through recordWrite (incl. the Phase 18 ban route).
-for (const f of ["src/app/api/matchday/[env]/matches/[id]/route.ts", "src/app/api/matchday/[env]/roster/[matchId]/route.ts", "src/app/api/lookup/[env]/ban/route.ts"]) {
+for (const f of ["src/app/api/matchday/[env]/matches/[id]/route.ts", "src/app/api/matchday/[env]/roster/[matchId]/route.ts", "src/app/api/lookup/[env]/ban/route.ts", "src/app/api/matchday/[env]/matches/[id]/fakes/route.ts"]) {
   const src = readFileSync(f, "utf8");
   src.includes("recordWrite(") ? ok(`${f.split("/").slice(-2)[0]} routes writes through recordWrite`) : bad(`${f} does NOT call recordWrite`);
 }
@@ -77,6 +79,7 @@ missing.length === 0 ? ok(`roster route handles all ${kinds.length} write kinds 
 const WRITE_ROUTES = [
   "src/app/api/matchday/[env]/matches/[id]/route.ts",
   "src/app/api/matchday/[env]/roster/[matchId]/route.ts",
+  "src/app/api/matchday/[env]/matches/[id]/fakes/route.ts",
   "src/app/api/stage/matches/[id]/route.ts",
 ];
 let cliOffenders: string[] = [];

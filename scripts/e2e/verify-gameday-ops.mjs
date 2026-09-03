@@ -324,12 +324,57 @@ async function boot(browser, storageState, width = 1500, opts = {}) {
   const ctx = await browser.newContext({ storageState, viewport: { width, height: opts.height ?? 1000 },
     ...(opts.mobile ? { isMobile: true, hasTouch: true } : {}) });
   const puts = [];
+  /* EVERY FIXTURE THIS CONTEXT COULD BE SERVING, including the sets built at the call site and
+   * passed in as opts. The intercepts below look matches up here; a pool hard-coded to the module's
+   * static arrays answered "no fixture" for every dynamically-built banner set, which is a mock
+   * failing rather than a page failing and reads identically in the output if you do not check. */
+  const pool = () => [...FIX, ...SEP_FIX, ...TODAY_FIX, ...TODAY_FIVE, ...TOMO_FIX,
+    ...(opts.fix ?? []), ...(opts.todaySet ?? [])];
   await ctx.route("**/api/matchday/*/gameday*", (r) => {
     const date = new URL(r.request().url()).searchParams.get("date");
     const body = opts.byDate
       ? (date === TOMORROW ? TOMO_FIX : (opts.todaySet ?? TODAY_FIX))
       : (opts.fix ?? FIX);
     return r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matches: body }) });
+  });
+  /* ── THE ROSTER WRITE, INTERCEPTED AND SIMULATED ──────────────────────────────────────────────
+   * "Spots left now" now makes TWO writes: the ladder (PUT /matches/{id}) and the roster
+   * (POST /matches/{id}/fakes). This intercept stands in for the second. It NEVER REACHES MATCHDAY
+   * and it does not reach our own route either - the route's own behaviour is covered by
+   * fake-roster-plan-test, and what this suite is for is the BANNER: what the operator is told and
+   * what the board shows afterwards.
+   *
+   * IT MOVES THE FIXTURE'S FAKE COUNT, which is the whole point. The old mock swallowed the rung
+   * write and no roster write existed, so the board always re-read its original numbers and the
+   * disagreement between the two fake counts could not appear. This one applies the target to
+   * `_count`, exactly as a landed roster write would, and the assertions then read the RESULTING
+   * count off the re-rendered banner rather than the number that was sent. */
+  const fakeWrites = [];
+  await ctx.route("**/api/matchday/*/matches/*/fakes", async (r) => {
+    const body = JSON.parse(r.request().postData() || "{}");
+    const id = Number(r.request().url().match(/matches\/(\d+)\/fakes/)?.[1]);
+    const m = pool().find((x) => x.id === id);
+    const target = Number(body.targetFakes);
+    fakeWrites.push({ id, target, url: r.request().url(), headers: r.request().headers() });
+    /* THE FAILURE INJECTION. opts.fakesStatus forces the roster half to fail so the half-applied
+     * case can be asserted; without it a "does not report LANDED" assertion has nothing to fail. */
+    if (opts.fakesStatus && opts.fakesStatus !== 200) {
+      return r.fulfill({ status: opts.fakesStatus, contentType: "application/json",
+        body: JSON.stringify({ ok: false, outcome: "failed", error: "roster refused" }) });
+    }
+    if (!m) return r.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: "no fixture" }) });
+    const before = m._count.fakePlayers;
+    const real = m._count.players - m._count.fakePlayers;
+    /* ONLY FAKES MOVE. `players` is recomputed as real + the new fake count, so the real half of
+     * the fixture is arithmetically incapable of being changed by this route - the same property
+     * the real route guarantees by only ever deleting fake rows. */
+    const after = opts.fakesLandShort ? Math.max(0, target - 1) : target;
+    m._count.fakePlayers = after;
+    m._count.players = real + after;
+    return r.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ ok: true, outcome: after === target ? "landed" : "not_applied",
+        target, fakesBefore: before, fakesAfter: after,
+        added: Math.max(0, target - before), removed: Math.max(0, before - target) }) });
   });
   /* THE STEPPER WRITE IS INTERCEPTED AND COUNTED, never forwarded. The assertion is about what we
    * SEND and what we do with the verdict - not about MatchDay. */
@@ -339,8 +384,7 @@ async function boot(browser, storageState, width = 1500, opts = {}) {
      * switch" assertion cannot even type into the field it is about. */
     if (r.request().method() === "GET") {
       const id = Number(r.request().url().match(/matches\/(\d+)/)?.[1]);
-      const pool = [...FIX, ...SEP_FIX, ...TODAY_FIX, ...TODAY_FIVE, ...TOMO_FIX];
-      const m = pool.find((x) => x.id === id);
+      const m = pool().find((x) => x.id === id);
       if (!m) return r.continue();
       /* THE ENVELOPE IS { match, managers, fields }, not the match itself — MatchPanel reads
        * j.match. Returning the bare object left every field null and the form disabled. */
@@ -355,8 +399,15 @@ async function boot(browser, storageState, width = 1500, opts = {}) {
     const body = JSON.parse(r.request().postData() || "{}");
     puts.push({ url: r.request().url(), body });
     const id = Number(r.request().url().match(/matches\/(\d+)/)[1]);
-    const m = FIX.find((x) => x.id === id);
+    const m = pool().find((x) => x.id === id);
     if (m && body.changes?.minPlayerCount != null) m.minPlayerCount = body.changes.minPlayerCount;
+    /* THE RUNG WRITE IS APPLIED TO THE FIXTURE, and it was not before. On the real API a ladder
+     * write lands immediately and reads back immediately - it is the DERIVED FAKE COUNT that lags.
+     * The mock used to swallow rung changes entirely, so every reload handed the board back its
+     * ORIGINAL ladder and the forecast snapped back to agreeing with the observed count. That is
+     * precisely why 627 assertions never noticed that saving spots-left moves nothing on the
+     * roster: the fixture healed the bug between the save and the read. */
+    if (m) for (const k of Object.keys(body.changes ?? {})) if (/^fakeSpotLeft\d+h$/.test(k)) m[k] = body.changes[k];
     /* THE OUTCOME IS OVERRIDABLE so FAILED and UNKNOWN can be forced. An outcome that only ever
      * appears on success is not an outcome. */
     if (opts.writeStatus && opts.writeStatus !== 200) {
@@ -370,7 +421,7 @@ async function boot(browser, storageState, width = 1500, opts = {}) {
   await page.goto(PAGE, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="gday-row"]', { timeout: 120000 });
   await page.waitForTimeout(700);
-  return { ctx, page, puts };
+  return { ctx, page, puts, fakeWrites };
 }
 
 async function main() {
@@ -1131,7 +1182,7 @@ async function main() {
       /* A DISTINCT VALUE AT EVERY BAND, so the displayed number identifies which one was read. */
       return { ...base, fakeSpotLeft36h: 2, fakeSpotLeft24h: 5, fakeSpotLeft12h: 7, fakeSpotLeft6h: 9, fakeSpotLeft3h: 11 };
     });
-    const { ctx: cb, page: pb, puts: pbPuts } = await boot(browser, storageState, 1500, { byDate: true, todaySet: SET });
+    const { ctx: cb, page: pb, puts: pbPuts, fakeWrites: pbFakes } = await boot(browser, storageState, 1500, { byDate: true, todaySet: SET });
     await pb.click('[data-testid="gtile-risk"]'); await pb.waitForTimeout(900);
 
     console.log("\n-- three controls, not four --");
@@ -1169,6 +1220,11 @@ async function main() {
     }
 
     console.log("\n-- the save writes the in-force band and every later one, and no earlier one --");
+    /* SNAPSHOT THE LADDER BEFORE THE SAVE. The PUT mock now APPLIES rung writes to the fixture, as
+     * the real API does, so reading SET[2] after the click reads the POST-save value - the two
+     * controls below were asserting "the 12h band is 7" against a band the save had just set to 2.
+     * They are about the state the save started from, so that is what is captured. */
+    const ladderBefore = { ...SET[2] };
     pbPuts.length = 0;
     await pb.click(`${one} [data-testid="gday-save-spots"]`); await pb.waitForTimeout(1500);
     is("  exactly one PUT", pbPuts.length, 1);
@@ -1179,12 +1235,154 @@ async function main() {
     is("  CONTROL: the earlier 36h band is NOT written", "fakeSpotLeft36h" in body, false);
     /* CONTROL: writing ONLY the in-force band would let the next band revert it. Computed from the
      * fixture's own ladder, which has a different value at every band. */
-    is("  CONTROL: the 12h band would otherwise revert it to 7", SET[2].fakeSpotLeft12h, 7);
-    yes("  CONTROL: ...which is not the value being saved", SET[2].fakeSpotLeft12h !== 2);
+    is("  CONTROL: the 12h band would otherwise revert it to 7", ladderBefore.fakeSpotLeft12h, 7);
+    yes("  CONTROL: ...which is not the value being saved", ladderBefore.fakeSpotLeft12h !== 2);
+    is("  ...and the save really did move it to 2", SET[2].fakeSpotLeft12h, 2);
 
     console.log("\n-- every attempt renders an outcome --");
     const verdict = async () => (await pb.locator(`${one} [data-testid="gday-save-verdict"]`).textContent().catch(() => null));
     yes(`  a successful save reports - "${(await verdict() ?? "").slice(0, 40)}"`, /LANDED/.test(await verdict() ?? ""));
+
+    /* ── THE ROSTER WRITE ──────────────────────────────────────────────────────────────────────
+     * The save must send a SECOND write that brings the fake roster to capacity − real − target,
+     * and every assertion below reads the RESULTING count rather than the number that was sent.
+     * The fixture is capacity 18, 3 real; the save above set the rung to 2, so the target is 13. */
+    console.log("\n-- the save moves the roster, not only the ladder --");
+    is("  exactly one roster write was sent", pbFakes.length, 1);
+    is("  ...to that match's own fakes route", /\/matches\/802\/fakes$/.test(pbFakes[0]?.url ?? ""), true);
+    is("  ...carrying capacity minus real minus the target spots (18 - 3 - 2)", pbFakes[0]?.target, 13);
+    is("  no Idempotency-Key is sent", "idempotency-key" in (pbFakes[0]?.headers ?? {}), false);
+    /* THE RESULT, READ OFF THE BOARD. The fixture applied the target, so the row's own observed
+     * count must now be 13 - and this is read from the rendered page, not from the request. */
+    {
+      const nums = await pb.locator(`[data-testid="gday-alert"][data-id="802"] [data-testid="gday-fact-fake"] b`).textContent();
+      is("  the OBSERVED fake count on the board is now the target", Number(nums), 13);
+    }
+
+    console.log("\n-- lowering spots ADDS fakes; raising them REMOVES fakes --");
+    {
+      /* TWO DIRECTIONS, ON TWO FRESH BANNERS, because the direction is the thing that decides
+       * whether the route adds or deletes and a single-direction test would miss half of it. */
+      const dirSet = [
+        { ...urgentMk({ id: 850, name: "Lower", fd: "F", city: "Austin", at: 20 * 60, dlMin: 20, cap: 18, min: 9, real: 3, fake: 5 }),
+          fakeSpotLeft36h: 10, fakeSpotLeft24h: 10, fakeSpotLeft12h: 10, fakeSpotLeft6h: 10, fakeSpotLeft3h: 10 },
+        { ...urgentMk({ id: 851, name: "Raise", fd: "F", city: "Austin", at: 20 * 60, dlMin: 20, cap: 18, min: 9, real: 3, fake: 5 }),
+          fakeSpotLeft36h: 10, fakeSpotLeft24h: 10, fakeSpotLeft12h: 10, fakeSpotLeft6h: 10, fakeSpotLeft3h: 10 },
+      ];
+      const { ctx: cd, page: pd, fakeWrites: df } = await boot(browser, storageState, 1500, { byDate: true, todaySet: dirSet });
+      await pd.click('[data-testid="gtile-risk"]'); await pd.waitForTimeout(900);
+      const obs = async (id) => Number(await pd.locator(`[data-testid="gday-alert"][data-id="${id}"] [data-testid="gday-fact-fake"] b`).textContent());
+
+      const before850 = await obs(850);
+      yes(`  CONTROL: 850 starts at ${before850} fakes (18 - 10 - 3 would be 5)`, before850 === 5);
+      // Spots 10 -> 8 means fakes 5 -> 7: FEWER spots shown means MORE fakes.
+      await pd.click('[data-testid="gday-alert"][data-id="850"] [data-testid="gday-spots-down"]');
+      await pd.click('[data-testid="gday-alert"][data-id="850"] [data-testid="gday-spots-down"]');
+      await pd.waitForTimeout(300);
+      await pd.click('[data-testid="gday-alert"][data-id="850"] [data-testid="gday-save-spots"]');
+      await pd.waitForTimeout(1800);
+      const after850 = await obs(850);
+      is("  LOWERING spots left adds fakes - the roster count RESULT is 7", after850, 7);
+      yes("  CONTROL: it really moved", after850 !== before850);
+      is("  ...and the write asked for 7, not for the spots number", df.find((w) => w.id === 850)?.target, 7);
+
+      const before851 = await obs(851);
+      // Spots 10 -> 12 means fakes 5 -> 3: MORE spots shown means FEWER fakes, i.e. removals.
+      await pd.click('[data-testid="gday-alert"][data-id="851"] [data-testid="gday-spots-up"]');
+      await pd.click('[data-testid="gday-alert"][data-id="851"] [data-testid="gday-spots-up"]');
+      await pd.waitForTimeout(300);
+      await pd.click('[data-testid="gday-alert"][data-id="851"] [data-testid="gday-save-spots"]');
+      await pd.waitForTimeout(1800);
+      const after851 = await obs(851);
+      is("  RAISING spots left removes fakes - the roster count RESULT is 3", after851, 3);
+      yes("  CONTROL: it really moved", after851 !== before851);
+
+      /* ONLY FAKES MOVED. The real count on both banners is untouched - a removal that took a real
+       * player would show here, and this is the board-level half of the guarantee that
+       * fake-roster-plan-test asserts on the plan itself. */
+      const realOf = async (id) => Number(await pd.locator(`[data-testid="gday-alert"][data-id="${id}"] [data-testid="gday-fact-real"] b`).textContent());
+      is("  NO REAL PLAYER WAS REMOVED by the add", await realOf(850), 3);
+      is("  NO REAL PLAYER WAS REMOVED by the removal", await realOf(851), 3);
+      await closeContext(cd);
+    }
+
+    console.log("\n-- a roster write that fails does NOT report LANDED --");
+    {
+      const failSet = [{ ...urgentMk({ id: 860, name: "Half", fd: "F", city: "Austin", at: 20 * 60, dlMin: 20, cap: 18, min: 9, real: 3, fake: 5 }),
+        fakeSpotLeft36h: 10, fakeSpotLeft24h: 10, fakeSpotLeft12h: 10, fakeSpotLeft6h: 10, fakeSpotLeft3h: 10 }];
+      const { ctx: cf, page: pf, puts: ff, fakeWrites: fw } = await boot(browser, storageState, 1500,
+        { byDate: true, todaySet: failSet, fakesStatus: 500 });
+      await pf.click('[data-testid="gtile-risk"]'); await pf.waitForTimeout(900);
+      await pf.click('[data-testid="gday-alert"][data-id="860"] [data-testid="gday-spots-down"]');
+      await pf.waitForTimeout(250);
+      ff.length = 0;
+      await pf.click('[data-testid="gday-alert"][data-id="860"] [data-testid="gday-save-spots"]');
+      await pf.waitForTimeout(2200);
+      const v = (await pf.locator('[data-testid="gday-alert"][data-id="860"] [data-testid="gday-save-verdict"]').textContent().catch(() => "")) ?? "";
+      yes("  CONTROL: the LADDER half really was written first", ff.length === 1);
+      yes("  CONTROL: ...and the roster half really was attempted", fw.length === 1);
+      is("  the verdict does NOT say LANDED", /LANDED/.test(v), false);
+      yes(`  it says PARTLY APPLIED and names both halves - "${v.slice(0, 72)}"`,
+        /PARTLY APPLIED/.test(v) && /ladder/i.test(v) && /roster/i.test(v));
+      /* THE COPY MUST NAME THE RECONCILER AND ITS SLOW FIGURE. This sentence is only honest
+       * because a reconciler was PROVEN to exist (staging 2026-09-02, both directions, 93/103s to
+       * add and 294/298s to remove). If it had not, telling an operator the count fixes itself
+       * would have been worse than the bug. Five minutes is the removal figure, deliberately —
+       * quoting the fast one would understate the case an operator hits when freeing spots. */
+      yes("  ...and says the roster catches up on its own", /catches up on its own/i.test(v));
+      yes("  ...quoting the SLOW figure, five minutes", /five minutes/i.test(v));
+      is("  ...and does not still claim two minutes", /2 minutes|two minutes/i.test(v), false);
+      is("  the verdict is styled as a failure, not a success",
+        await pf.locator('[data-testid="gday-alert"][data-id="860"] [data-testid="gday-save-verdict"]').getAttribute("data-state"), "failed");
+      await closeContext(cf);
+    }
+
+    console.log("\n-- a roster write that lands SHORT reports NOT APPLIED, not LANDED --");
+    {
+      const shortSet = [{ ...urgentMk({ id: 870, name: "Short", fd: "F", city: "Austin", at: 20 * 60, dlMin: 20, cap: 18, min: 9, real: 3, fake: 5 }),
+        fakeSpotLeft36h: 10, fakeSpotLeft24h: 10, fakeSpotLeft12h: 10, fakeSpotLeft6h: 10, fakeSpotLeft3h: 10 }];
+      const { ctx: cs, page: ps } = await boot(browser, storageState, 1500,
+        { byDate: true, todaySet: shortSet, fakesLandShort: true });
+      await ps.click('[data-testid="gtile-risk"]'); await ps.waitForTimeout(900);
+      await ps.click('[data-testid="gday-alert"][data-id="870"] [data-testid="gday-spots-down"]');
+      await ps.waitForTimeout(250);
+      await ps.click('[data-testid="gday-alert"][data-id="870"] [data-testid="gday-save-spots"]');
+      await ps.waitForTimeout(2200);
+      const v = (await ps.locator('[data-testid="gday-alert"][data-id="870"] [data-testid="gday-save-verdict"]').textContent().catch(() => "")) ?? "";
+      is("  a short landing does NOT say LANDED", /LANDED/.test(v), false);
+      yes(`  it says NOT APPLIED and quotes both numbers - "${v.slice(0, 78)}"`, /NOT APPLIED/.test(v) && /\d+ fakes rather than \d+/.test(v));
+      await closeContext(cs);
+    }
+
+    /* ── THE ASSERTION THAT WOULD HAVE CAUGHT THE REPORTED BUG ─────────────────────────────────
+     * The banner prints the fake count TWICE from TWO DIFFERENT SOURCES:
+     *
+     *   gday-fact-fake    the OBSERVED roster count, _count.fakePlayers
+     *   gday-spots-fakes  a FORECAST, fakesFor(capacity, rung, real)
+     *
+     * Before this change "Spots left now" wrote LADDER RUNGS ONLY. The forecast moved, the roster
+     * did not, and the same banner showed "10 fake" beside "6 fake" while reporting LANDED. On
+     * production 18318 an operator saved 7 spots left, was told it landed, opened the panel and
+     * found all ten fakes still sitting there.
+     *
+     * A SAVE MUST MAKE THE TWO AGREE, because after it the forecast is no longer a forecast - the
+     * roster has been brought to it. This reads both numbers off the rendered banner after the
+     * save and its reload, so it is testing what the operator is actually looking at. */
+    console.log("\n-- THE TWO FAKE NUMBERS AGREE AFTER A SAVE --");
+    {
+      const twoNumbers = async () => pb.evaluate((sel) => {
+        const a = document.querySelector(sel);
+        if (!a) return { err: "NO BANNER" };
+        const obs = a.querySelector('[data-testid="gday-fact-fake"] b');
+        const fc = a.querySelector('[data-testid="gday-spots-fakes"]');
+        if (!obs || !fc) return { err: `missing element obs=${!!obs} forecast=${!!fc}` };
+        return { observed: Number(obs.textContent), forecast: Number((fc.textContent.match(/(\d+)/) ?? [])[1]) };
+      }, one);
+      const n = await twoNumbers();
+      yes(`  CONTROL: both numbers are on the banner and are numbers (${JSON.stringify(n)})`,
+        !n.err && Number.isFinite(n.observed) && Number.isFinite(n.forecast));
+      is(`  the OBSERVED roster count and the FORECAST agree after saving`, n.observed, n.forecast);
+    }
     await closeContext(cb);
   }
 

@@ -134,10 +134,14 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   // rosterEditModel so they are testable and cannot drift from what the UI draws.
   //
   // STILL IMMEDIATE, AND DELIBERATELY SO: adding a player, adding a fake and the bulk-fake count.
-  // Those were not in the brief's list of four, and bulk-fake in particular sets a TOTAL rather than
-  // describing a delta, so it has no coherent pending form. They say so on themselves, in the
-  // section's own voice rather than a red banner. See the report — this is the one place the
-  // section does not behave like the others, and it is flagged rather than hidden.
+  // Those were not in the brief's list of four. They say so on themselves, in the section's own
+  // voice rather than a red banner. See the report — this is the one place the section does not
+  // behave like the others, and it is flagged rather than hidden.
+  //
+  // CORRECTED 2026-09-02: this comment used to say bulk-fake "sets a TOTAL rather than describing
+  // a delta". IT IS A DELTA. Measured on staging match 2470 (capacity 10): six fakes on the roster
+  // and totalFakes:2 produced EIGHT, not two. The parameter name is a misnomer. See
+  // src/lib/fakeRosterPlan.ts for the full probe.
   const [roster, setRoster] = useState<RosterState | null>(null);
   const [rosterErr, setRosterErr] = useState<string | null>(null);
   const [teamDraft, setTeamDraft] = useState<Record<number, string>>({}); // teamId → typed name (the pending rename)
@@ -263,7 +267,15 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     const r = await rosterPost(op, isFake ? "Add fake player" : `Add ${nm}`);
     if (await afterOp(r, `${nm} added to team ${teamNumber} — saved (re-read confirmed).`, `added ${nm} to team ${teamNumber}`)) { setPendingAdd(null); setQ(""); setResults([]); }
   };
-  // bulk fakes — one call sets the match's fake count (kind:"bulk-fake" → /batch/fake-players {totalFakes}).
+  /* BULK FAKES — kind:"bulk-fake" → POST /batch/fake-players {totalFakes}.
+   *
+   * IT ADDS, IT DOES NOT SET, whatever the parameter is called. CORRECTED 2026-09-02 by probe on
+   * staging match 2470 (capacity 10):
+   *     6 fakes + totalFakes:6  -> 403 NO_SPOTS_LEFT      (a SET would be a no-op)
+   *     6 fakes + totalFakes:2  -> 8 fakes                (a lower "total" ADDED two)
+   *     8 fakes + totalFakes:0  -> 403 INVALID_TOTAL_FAKES
+   * The button says "Add fakes" and the toast says "added" because that is what it does. There is
+   * NO endpoint that lowers a fake count; reducing is one DELETE per user-match row. */
   const addFakesBulk = async () => {
     if (!roster || opBusy) return;
     const n = Number(bulkFakes);

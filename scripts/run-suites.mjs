@@ -168,6 +168,7 @@ const NODE_SUITES = [
    * moment of the write and visible to a player as a match that looks full when it should have
    * cancelled. */
   "scripts/fake-ladder-test.ts",
+  "scripts/fake-roster-plan-test.ts",
   /* AN ASSERTION OVER AN EMPTY COLLECTION PASSES WITHOUT TESTING ANYTHING. 27 sites across 10
    * browser suites were in that shape, and one had been green for a round while testing nothing.
    * This keeps the count at zero. */

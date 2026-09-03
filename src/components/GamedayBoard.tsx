@@ -423,14 +423,21 @@ export default function GamedayBoard({
    * takes about 150 seconds to recompute fakes after a rung changes. Judging the write on the fake
    * count would report FAILED for a write that landed perfectly and simply has not been applied
    * yet. The rung reads back immediately; that is what LANDED means here. */
-  const saveRungs = async (id: number, diff: Ladder, note: string, clear: () => void) => {
+  /* IT RETURNS WHETHER IT LANDED, and takes two options so a caller that has a SECOND write to do
+   * can sequence on the answer. `silent` suppresses the LANDED message (the caller will post its
+   * own once both halves are done — two verdicts for one button is how a half-applied save reads as
+   * a whole one); `reload` suppresses the refetch, which the caller does after its own write so the
+   * board is not fetched twice for one action. Neither changes what is SENT. */
+  const saveRungs = async (id: number, diff: Ladder, note: string, clear: () => void,
+    opts: { silent?: boolean; reload?: boolean } = {}): Promise<boolean> => {
+    const reload = opts.reload !== false;
     /* AN EMPTY DIFF STILL REPORTS. It used to return silently — the operator pressed Save, nothing
      * was sent because every band already held the value, and NOTHING APPEARED. A save that
      * produces no visible outcome is indistinguishable from one that failed. */
     if (Object.keys(diff).length === 0) {
-      setSaveState((p) => ({ ...p, [id]: { s: "landed", msg: `LANDED - ${note} (already stored)` } }));
+      if (!opts.silent) setSaveState((p) => ({ ...p, [id]: { s: "landed", msg: `LANDED - ${note} (already stored)` } }));
       clear();
-      return;
+      return true;
     }
     setSaveState((p) => ({ ...p, [id]: { s: "saving", msg: "Saving…" } }));
     try {
@@ -444,22 +451,26 @@ export default function GamedayBoard({
       const j = await res.json().catch(() => null);
       if (!res.ok) {
         setSaveState((p) => ({ ...p, [id]: { s: "failed", msg: `FAILED — ${j?.error ?? `HTTP ${res.status}`}` } }));
-        return;
+        return false;
       }
       const outcome = String(j?.outcome ?? "").toLowerCase();
       if (outcome === "landed") {
-        setSaveState((p) => ({ ...p, [id]: { s: "landed", msg: `LANDED — ${note}` } }));
+        if (!opts.silent) setSaveState((p) => ({ ...p, [id]: { s: "landed", msg: `LANDED — ${note}` } }));
         clear();
-        await load(date, true);
+        if (reload) await load(date, true);
+        return true;
       } else if (outcome === "failed" || outcome === "not_applied" || outcome === "not applied") {
         setSaveState((p) => ({ ...p, [id]: { s: "failed", msg: `${outcome.toUpperCase()} — the ladder did not change` } }));
+        return false;
       } else {
         setSaveState((p) => ({ ...p, [id]: { s: "unknown", msg: "UNKNOWN — refetching rather than guessing" } }));
         clear();
-        await load(date, true);
+        if (reload) await load(date, true);
+        return false;
       }
     } catch (e) {
       setSaveState((p) => ({ ...p, [id]: { s: "failed", msg: `FAILED — ${e instanceof Error ? e.message : String(e)}` } }));
+      return false;
     }
   };
 
@@ -477,14 +488,110 @@ export default function GamedayBoard({
       const n = { ...p }; if (next === saved) delete n[id]; else n[id] = next; return n;
     });
   };
-  const saveSpots = (id: number) => {
+  /* ── "SPOTS LEFT NOW" MOVES THE ROSTER, IT DOES NOT ONLY FORECAST IT ──────────────────────────
+   * THE BUG THIS REPLACES. This used to call saveRungs alone. The ladder is a forward schedule, so
+   * the fake count it implies does not reach the roster until MatchDay's worker next evaluates it —
+   * about 150 seconds. On production 18318 an operator set 7 spots left, was told "LANDED — 7 spots
+   * showing as left · 6 fake", opened the panel and found all TEN fakes still on it. The same
+   * banner was showing "10 fake" in its facts row and "6 fake" beside the stepper: one reading the
+   * observed roster, the other reading the forecast, both correct about different things.
+   *
+   * A control an operator reaches for in the last hour before kickoff has to be true when it says
+   * it is. So the roster is brought to the target as well.
+   *
+   * ── THE ORDER IS RUNG FIRST, AND IT IS CHOSEN FOR THE FAILURE CASE ────────────────────────────
+   * Either write can fail, and the two orders leave very different wreckage:
+   *
+   *   RUNG then ROSTER  — rung fails: nothing was sent to the roster, nothing changed anywhere.
+   *                       roster fails: the ladder is correct and MatchDay's own reconciler brings
+   *                       the roster to it. The end state is RIGHT; it is merely late. Reported as
+   *                       PARTLY APPLIED with that sentence, never as LANDED.
+   *
+   *   ROSTER then RUNG  — rung fails after the roster moved: the roster is right for a few minutes
+   *                       and then the untouched ladder pulls it back to the OLD value. The
+   *                       operator sees their save undo itself with no explanation.
+   *
+   * The first order self-heals and the second self-destructs, so the rung goes first.
+   *
+   * ── THE RECONCILER IS REAL, AND IT IS SLOWER THAN THIS FILE USED TO CLAIM ────────────────────
+   * PROVEN ON STAGING 2026-09-02, both directions, ladder moved with the roster untouched:
+   *
+   *     match 2620  ADD     0 -> 10 fakes   reconciled on its own at  93s
+   *     match 2620  ADD     0 -> 12 fakes   reconciled on its own at 103s
+   *     match 2619  REMOVE 16 ->  4 fakes   reconciled on its own at 294s
+   *     match 2620  REMOVE 12 ->  2 fakes   reconciled on its own at 298s
+   *
+   * So the reported bug was LATENCY, NOT A BREAK — and this change makes it immediate. It is worth
+   * making immediate anyway: five minutes is a long time in the last hour before kickoff, and the
+   * banner gave no sign that one of its two fake counts was a pending value rather than a wrong
+   * one. REMOVALS ARE THE SLOW DIRECTION, which is the direction an operator uses to free spots. */
+  const saveSpots = async (id: number) => {
     const m = matches.find((x) => x.id === id); if (!m) return;
     const target = pendingSpots[id]; if (target == null) return;
     const cap = capacity(m) ?? 0, real = realCount(m);
+    const targetFakes = fakesFor(cap, target, real);
     const w = spotsLeftWriteDiff(ladderOf(m), minsUntil(m, now) / 60, target);
-    void saveRungs(id, w.diff,
-      `${target} spot${target === 1 ? "" : "s"} showing as left · ${fakesFor(cap, target, real)} fake`,
-      () => setPendingSpots((p) => { const n = { ...p }; delete n[id]; return n; }));
+    const label = `${target} spot${target === 1 ? "" : "s"} showing as left · ${targetFakes} fake`;
+    const clear = () => setPendingSpots((p) => { const n = { ...p }; delete n[id]; return n; });
+
+    /* STEP 1 — THE LADDER. saveRungs owns the diff-is-the-body rule, the single attempt and the
+     * read-back verdict; it is not reimplemented here. It returns false for anything that is not a
+     * clean landing, and its own message is already on screen, so the roster write is not sent. */
+    const rungOk = await saveRungs(id, w.diff, label, () => {}, { silent: true, reload: false });
+    /* THE PENDING VALUE SURVIVES A FAILED LADDER WRITE. saveRungs deliberately does not clear on
+     * failure so the operator can press Save again without re-stepping; clearing here would throw
+     * their edit away and make a retry mean re-deriving the number they already chose. */
+    if (!rungOk) return;
+
+    // STEP 2 — THE ROSTER. One call; the route plans the adds or deletes and judges itself on a
+    // re-read of the roster rather than on the number we just sent it.
+    setSaveState((p) => ({ ...p, [id]: { s: "saving", msg: "Saving…" } }));
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      const res = await fetch(`/api/matchday/${ENV}/matches/${id}/fakes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ targetFakes, source: "gameday-spots", matchName: m.name }),
+      });
+      const j = await res.json().catch(() => null);
+      const outcome = String(j?.outcome ?? "").toLowerCase();
+      /* AMBIGUOUS IS NOT A FAILURE. A 502 from the write client means the request may have landed;
+       * saying "the roster write failed" would be a claim we cannot support, and an operator who
+       * believes it will re-run a save that has no idempotency key behind it. */
+      if (j?.ambiguous || outcome === "unknown") {
+        setSaveState((p) => ({ ...p, [id]: { s: "unknown",
+          msg: `UNKNOWN — the ladder is set to ${target}; the roster write may or may not have landed (${j?.error ?? `HTTP ${res.status}`}). Reload and check before saving again.` } }));
+        clear();
+        await load(date, true);
+        return;
+      }
+      if (!res.ok || outcome === "failed" || outcome === "refused") {
+        /* PARTLY APPLIED IS ITS OWN VERDICT AND IS NOT A SUCCESS. The ladder landed and the roster
+         * did not; saying LANDED here is exactly the lie the original bug told. */
+        setSaveState((p) => ({ ...p, [id]: { s: "failed",
+          msg: `PARTLY APPLIED — the ladder is set to ${target}, but the roster write failed (${j?.error ?? `HTTP ${res.status}`}). The roster catches up on its own, usually within five minutes. Reload to confirm before acting.` } }));
+        clear();
+        await load(date, true);
+        return;
+      }
+      if (outcome === "landed") {
+        const n = Number(j?.fakesAfter);
+        setSaveState((p) => ({ ...p, [id]: { s: "landed",
+          msg: `LANDED — ${label}${Number.isFinite(n) ? ` · roster now holds ${n}` : ""}` } }));
+      } else if (outcome === "not_applied") {
+        setSaveState((p) => ({ ...p, [id]: { s: "failed",
+          msg: `NOT APPLIED — the ladder is set to ${target}, but the roster came back holding ${j?.fakesAfter} fakes rather than ${targetFakes}.` } }));
+      } else {
+        setSaveState((p) => ({ ...p, [id]: { s: "unknown", msg: "UNKNOWN — refetching rather than guessing" } }));
+      }
+      clear();
+      await load(date, true);
+    } catch (e) {
+      setSaveState((p) => ({ ...p, [id]: { s: "failed",
+        msg: `PARTLY APPLIED — the ladder is set to ${target}, but the roster write failed (${e instanceof Error ? e.message : String(e)}). The roster catches up on its own, usually within five minutes. Reload to confirm before acting.` } }));
+      clear();
+    }
   };
 
   /* CLOSING RE-READS THE MATCH, so the banner, the row and the Needs attention tile all reflect

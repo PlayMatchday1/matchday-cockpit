@@ -1007,7 +1007,7 @@ All proven to round-trip on staging (match 2470, cleaned up), and the two ids
 matter (getting them wrong targets the wrong record):
   add player   POST   /admin/matches/{id}/players/{playerId}   {team, playerNumber}
   add fake     POST   /admin/matches/{id}/fake-players          {team, playerNumber}
-  add fakes    POST   /admin/matches/{id}/batch/fake-players    {totalFakes}
+  add fakes    POST   /admin/matches/{id}/batch/fake-players    {totalFakes}  ** ADDS, see below **
   move         POST   /admin/user-matches                       {userMatchId, team, playerNumber}
   set/unset fake PATCH /admin/players/{playerId}/fake-player     (playerId = userId)
   remove       DELETE /admin/matches/user-matches/{userMatchId}
@@ -1333,6 +1333,94 @@ AND: lowering `minPlayerCount` to or below the real count PREVENTS the pending c
 separately the same evening: control left at min 9 cancelled, treatment lowered to 0 did not, and
 was watched for twelve minutes past the control's cancellation). A reduction that still leaves a
 shortfall does NOT rescue the match, because the rule is real < min.
+
+## `batch/fake-players` ADDS. IT DOES NOT SET A TOTAL. (2026-09-02)
+
+**MEASURED ON STAGING, match 2470, capacity 10.** `scripts/stage-bulkfake-probe.ts` reproduces it.
+The parameter is called `totalFakes` and two comments in this codebase said it "sets the match's
+fake count". Neither had a probe behind it, and both were wrong.
+
+```
+empty roster,  totalFakes 6  ->  6 fakes                      (consistent with SET and with ADD)
+6 fakes,       totalFakes 6  ->  403 NO_SPOTS_LEFT            (a SET would be a no-op)
+6 fakes,       totalFakes 2  ->  8 fakes   <-- DISCRIMINATOR  (a LOWER "total" ADDED two)
+8 fakes,       totalFakes 0  ->  403 INVALID_TOTAL_FAKES      (zero is not a way to clear)
+```
+
+The 403 on step two is the capacity check: 6 + 6 = 12 against a capacity of 10. So the call is
+`add n, refuse if they will not fit`.
+
+**THERE IS NO ENDPOINT THAT LOWERS A FAKE COUNT.** Reducing is one
+`DELETE /admin/matches/user-matches/{userMatchId}` per row — measured landing on a fake in the same
+run (8 fakes -> 7). That is the same remove endpoint the roster editor uses, and it keys on
+`userMatchId` for the reason recorded under "The remove endpoint, re-measured": one `userId` holds
+several rows on 13% of match/user pairs.
+
+**A FAKE IS NOT A ROW WITHOUT A USER.** A fake roster row carries a real `userId` with an email and
+a 2024 `completedSignUpAt` — they are drawn from a pool of accounts flagged `isFakePlayer`. The only
+discriminator is that flag (`rosterRowIsFake`). Code that tried to spot a fake by a missing user
+would delete real people.
+
+**THE API PICKS THE TEAMS WHEN IT ADDS, AND NOT DETERMINISTICALLY.** The same `totalFakes:6` onto an
+empty roster gave `{team 1: 3, team 2: 3}` on one run and `{team 1: 2, team 2: 4}` on the next. Team
+balance can therefore only be managed on the way OUT, by choosing which rows to delete.
+
+**`_count.fakePlayers` ON THE LIST ENDPOINT TRACKS THE ROSTER IMMEDIATELY** — 7 fake rows read back
+as `{"players":7,"fakePlayers":7}` in the same probe. It is the LADDER-derived recomputation that
+lags ~150s, not this count.
+
+CONSEQUENCE — and this is the bug it was found chasing: a control that speaks in fakes must write
+BOTH. The rung is the forward schedule and is what persists; a direct roster write is what makes the
+number true before the worker next runs. `src/lib/fakeRosterPlan.ts` plans it and
+`/api/matchday/{env}/matches/{id}/fakes` executes it, verdict from a re-read of the roster.
+
+## A RECONCILER EXISTS. It brings the roster to the ladder, both ways. (2026-09-02)
+
+**THE CLAIM THIS REPLACES.** `fakeLadder.ts` said the recomputation "took about 150 seconds",
+recorded from one observation, and that figure had reached operator-facing copy telling people the
+count would fix itself "in about 2 minutes". Measured properly with
+`scripts/stage-fake-reconciler-probe.mjs` — the LADDER moved, the ROSTER deliberately left alone,
+sampled at 10–15s:
+
+```
+match 2620   ADD      0 -> 10 fakes    reconciled at   93s
+match 2620   ADD      0 -> 12 fakes    reconciled at  103s
+match 2619   REMOVE  16 ->  4 fakes    reconciled at  294s
+match 2620   REMOVE  12 ->  2 fakes    reconciled at  298s
+```
+
+Both fixtures started RECONCILED (roster equal to `capacity − rung − real`), so the move is the
+reconciler acting, not a fixture settling. Nothing wrote to either roster during the window.
+
+**ADDS TAKE ~100s. REMOVALS TAKE ~295s — three times longer, and consistently so.** Two clean pairs
+rather than one sample. Any "it will catch up" copy must quote the SLOW figure; ours says five
+minutes. Removal is also the direction an operator uses to FREE SPOTS before kickoff, so it is the
+one where the lag costs most.
+
+**CONSEQUENCE FOR THE 18318 REPORT:** it was LATENCY, NOT A BREAK. The ladder write had landed and
+the roster would have caught up. It is still worth writing the roster directly — five minutes is a
+long time in the last hour, and the banner showed two contradictory fake counts with no sign that
+one was pending rather than wrong.
+
+**WHAT THE RECONCILER IS** — a periodic MatchDay-side job — is inferred from the timing, not read.
+We do not have its source. What is PROVEN is the observable behaviour above.
+
+## `batch/fake-players` UNDER-DELIVERS SILENTLY (2026-09-02)
+
+Same match 2470, capacity 10, empty roster:
+
+```
+totalFakes 8   -> HTTP 201, landed 8   teams {1:3, 2:5}
+totalFakes 9   -> HTTP 201, landed 8   teams {1:4, 2:4}
+totalFakes 10  -> HTTP 201, landed 8   teams {1:4, 2:4}
+totalFakes 12  -> HTTP 403 NO_SPOTS_LEFT, landed 0
+```
+
+**It caps at 8 on a capacity-10 match and says nothing about it** — a 201 with a body, and two
+fewer rows than asked for. This is "a 2xx does not mean the write landed" with a live example on an
+endpoint we call. `/api/matchday/{env}/matches/{id}/fakes` re-reads the roster and reports
+`not_applied` with both numbers rather than believing the status; asserted end to end in
+`scripts/e2e/verify-fakes-route-staging.mjs` (asked 9, got 8, reported not_applied).
 
 ## STRIKES — the real model (Phase 18 investigation, confirmed by Ryan + live probe)
 

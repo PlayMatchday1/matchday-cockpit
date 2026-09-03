@@ -23,11 +23,25 @@
  * The in-force rung is the SMALLEST MARK AT OR ABOVE hours-to-kickoff, and it stays on 3h once
  * inside three hours. Read-back values, not computed ones.
  *
- * ── THE WORKER LAGS ───────────────────────────────────────────────────────────────────────────
- * The recomputation took about 150 seconds to appear in the same fixtures. A rung write lands
- * immediately and reads back immediately; THE DERIVED FAKE COUNT DOES NOT. Any verdict on a fakes
- * write must therefore be judged on the RUNG read-back — judging it on the fake count would report
- * FAILED for a write that landed perfectly and simply has not been applied yet.
+ * ── THE RECONCILER LAGS, AND BY MORE THAN THIS FILE USED TO SAY ───────────────────────────────
+ * A rung write lands immediately and reads back immediately; THE DERIVED FAKE COUNT DOES NOT.
+ *
+ * "About 150 seconds" was recorded here from a single observation. MEASURED PROPERLY 2026-09-02 —
+ * the ladder moved, the roster deliberately left alone, sampled at 10-15s resolution:
+ *
+ *     match 2620  ADD     0 -> 10 fakes    93s
+ *     match 2620  ADD     0 -> 12 fakes   103s
+ *     match 2619  REMOVE 16 ->  4 fakes   294s
+ *     match 2620  REMOVE 12 ->  2 fakes   298s
+ *
+ * SOMETHING REAL RECONCILES THE ROSTER TO THE LADDER, IN BOTH DIRECTIONS. Adds land in about a
+ * minute and a half; REMOVALS TAKE ABOUT FIVE MINUTES, consistently and about three times longer.
+ * Any operator-facing "it will catch up" copy must quote the SLOW figure.
+ *
+ * Any verdict on a rung-only write must still be judged on the RUNG read-back — judging it on the
+ * fake count would report FAILED for a write that landed perfectly and has not been applied yet.
+ * A control that also writes the roster directly (see src/lib/fakeRosterPlan.ts) is judged on the
+ * roster instead, because it has made the count true rather than merely scheduled it.
  */
 
 /** The ladder's marks, in hours before kickoff, longest first. */
