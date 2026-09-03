@@ -26,6 +26,11 @@ export function trimMatch(m: Raw) {
   return {
     id: m.id as number, name: (m.name as string) ?? "",
     startDate: m.startDate as string, startDateUtc: m.startDateUtc as string,
+    /* THE END INSTANT, for "how long since the whistle". TRUE UTC, like startDateUtc — endDate
+     * carries a Z it does not mean and must never be parsed. Needed because a row only reaches the
+     * finished band 90 minutes PAST KICKOFF, so an age measured from kickoff can never read less
+     * than 90 minutes and the "just whistled, nothing in yet" state would be unreachable. */
+    endDateUtc: (m.endDateUtc as string) ?? null,
     isCancelled: !!m.isCancelled, autoCanceledMinutes: num(m.autoCanceledMinutes) ?? 0,
     // THE AUTO-CANCEL SWITCH ITSELF. Without it the board could only see the MINUTES field and so
     // drew a decide-by countdown for every match that had one, whether or not the match can
@@ -37,6 +42,14 @@ export function trimMatch(m: Raw) {
     fakeSpotLeft12h: num(m.fakeSpotLeft12h) ?? 0, fakeSpotLeft6h: num(m.fakeSpotLeft6h) ?? 0,
     fakeSpotLeft3h: num(m.fakeSpotLeft3h) ?? 0,
     isAutoBump: !!m.isAutoBump, category: (m.category as string) ?? null, type: (m.type as string) ?? null,
+    /* THE RATING, AND IT COSTS NOTHING. `starRating` and `starRatingCount` are ALREADY on the
+     * /admin/matches LIST rows this route pages through — measured on production 2026-09-02, all
+     * 22 rows for a past day carried both. They were simply not being passed through. The board
+     * therefore needs NO second read: no extra request, no extra latency on refresh.
+     *
+     * starRating is 0 (not null) when nothing has been left, so COUNT is the field that says
+     * whether a rating exists. Never test the average for zero — a genuine 0.00 would vanish. */
+    starRating: num(m.starRating) ?? 0, starRatingCount: num(m.starRatingCount) ?? 0,
     _count: { players: m._count?.players ?? 0, fakePlayers: m._count?.fakePlayers ?? 0 },
     field: { title: ((field.title as string | undefined) ?? "").trim() || null,
       city: { id: (city.id as number) ?? null, name: (city.name as string) ?? null,

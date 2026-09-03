@@ -21,6 +21,7 @@ export type ApiMatch = {
   name: string;
   startDate: string;          // wall-clock local time at the field's city
   startDateUtc: string;       // the true kickoff instant (used for ordering)
+  endDateUtc?: string | null; // the true END instant — how long since the whistle
   isCancelled?: boolean;      // the real did-it-happen flag (READONLY)
   autoCanceled?: boolean;     // THE SWITCH. false => this match can never auto-cancel.
   autoCanceledMinutes?: number; // MINUTES before kickoff (spec says hours; spec is wrong)
@@ -31,6 +32,10 @@ export type ApiMatch = {
   fakeSpotLeft6h?: number; fakeSpotLeft3h?: number;
   isAutoBump?: boolean;
   category?: string; type?: string;
+  /* THE RATING, carried on the /admin/matches list rows the gameday route already pages through —
+   * no second read. starRating is 0 rather than null when nothing has been left, so COUNT is the
+   * field that says whether a rating exists. See src/lib/gamedayReviews.ts. */
+  starRating?: number; starRatingCount?: number;
   _count?: ApiCount;
   field?: { title?: string | null; city?: { id?: number; name?: string | null; timeZone?: { abbr?: string | null; name?: string | null } | null } | null } | null;
   manager?: { firstName?: string; lastName?: string } | null;

@@ -34,6 +34,7 @@ import {
   atRisk, realFillPct, dayBucket, DAY_BUCKETS, passesStrip, meter, showsDeadline, type DayBucket, type StripKey,
   bannerUrgent, defaultBanners, riskSubtitle, BANNER_LEAD_MINUTES, DEFAULT_BANNER_CAP,
 } from "@/lib/gamedayModel";
+import { reviewCell } from "@/lib/gamedayReviews";
 import {
   fakesFor, rungFor, markInForce, rungKey, spotsLeftWriteDiff, spotsLeftNow, type Ladder,
 } from "@/lib/fakeLadder";
@@ -774,7 +775,7 @@ export default function GamedayBoard({
               {!bannerMode && (
               <div className="gcard" data-testid="snapshot">
                 <div className="gcolhead">
-                  <div>Kickoff</div><div>Match · field</div><div>Spots vs minimum</div><div>Manager</div>
+                  <div>Kickoff</div><div>Match · field</div><div>Spots vs minimum</div><div>Manager</div><div>Reviews</div>
                 </div>
                 {shown.length === 0 ? (
                   /* AN EXPLICIT EMPTY STATE, not a blank card — a filter combination that matches
@@ -1330,7 +1331,13 @@ const CSS = `
  * Rocha-Ramirez" + a 23px avatar + the 7px gap = 160. Both roads arrive at ~164, so 164 IS the
  * reallocated kebab column; adding another 34 on top would be double-counting it and would take
  * the width off the flexible match column for nothing. "RM" also overflowed a 21px circle. */
-.gdo .gcolhead,.gdo .grow{display:grid;grid-template-columns:96px minmax(0,1fr) 310px 164px;gap:14px;align-items:center}
+/* FIVE TRACKS. The fifth is on the HEADER and on EVERY ROW, live ones included — that is the only
+   way something can sit at the end of a row without moving a single column, and column-left
+   identity is the constraint the separation work turned on. It is the shape the deleted kebab
+   column had; the difference is that this one carries information.
+   136px measured against the longest string it holds; it comes out of the flexible match column,
+   which keeps ~372px at 1500. */
+.gdo .gcolhead,.gdo .grow{display:grid;grid-template-columns:96px minmax(0,1fr) 310px 164px 136px;gap:14px;align-items:center}
 .gdo .gcolhead{padding:9px 23px;font-size:10px;letter-spacing:.9px;text-transform:uppercase;
   color:#8C9E93;font-weight:700;background:#F7FAF8;border-bottom:1px solid #DCE5E0}
 .gdo .glist{padding:8px;display:flex;flex-direction:column;gap:6px}
@@ -1412,6 +1419,28 @@ const CSS = `
 .gdo .gmg span:last-child{font-size:12.5px;white-space:nowrap}
 .gdo .gav{width:23px;height:23px;flex:0 0 23px;border-radius:99px;background:#dde5e0;color:#046B45;
   display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700}
+
+/* ── THE REVIEW CELL, the fifth column ────────────────────────────────────────────────────────
+   Value on line 1, count on line 2 — the same two-line rhythm the meter uses, so the row reads as
+   one grid rather than four unrelated cells.
+
+   THE ONLY COLOURED THING IS THE RATING ITSELF. Line 2 is always muted: the board already spends
+   red on at-risk rows, and a second red competing with it would blunt both. Thresholds come from
+   reviewsDerive via gamedayReviews.ts, never restated here.
+
+   NOTHING IN THIS CELL ELLIPSISES. It is sized to its longest string; a cell that quietly truncates
+   passes an overflow check and still cannot be read. The match name is the only element on the row
+   allowed to ellipsis. */
+.gdo .grv{min-width:0}
+.gdo .grv .v{font-size:14px;font-weight:800;letter-spacing:-.2px;font-variant-numeric:tabular-nums;
+  line-height:15px;display:flex;align-items:baseline;gap:1px;white-space:nowrap}
+.gdo .grv .v u{text-decoration:none;font-size:11px;font-weight:700}
+.gdo .grv .lab{font-size:9.5px;font-weight:600;color:#66786E;margin-top:2px;
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.gdo .grv.ok .v{color:#12704a}
+.gdo .grv.crit .v{color:#a8391a}
+.gdo .grv.thin .v{color:#1B3227}
+.gdo .grv.none .v{color:#9AA8A0;font-weight:600;font-size:13px;font-style:italic}
 /* THE KEBAB'S STYLING WAS HERE AND IS GONE, with its element and its column. Dead rules for a
    deleted control are how a removed affordance comes back by accident. */
 .gdo .gmore{display:block;width:100%;border:1px dashed #E9B6AC;background:#FDF3F2;color:#A83120;
@@ -1479,12 +1508,19 @@ const CSS = `
    collided delta chip has nothing. */
 /* CARD WIDTH, NOT WINDOW WIDTH — and three tiers, derived rather than named after devices.
    A card of width W gives its bands W - 48 of track room (2 card border + 16 list padding +
-   2 band border + 28 band padding). The wide tier's fixed tracks are 96 + 310 + 164 + 42 of gap
-   = 612, so it needs W >= 810 before the match column clears 150px. The compact tier's are
-   76 + 258 + 156 + 30 = 520, needing W >= 640 for the same. Below that no four-track grid fits and
-   the band stacks instead — see the card tier further down. */
-@container gtable (max-width: 810px) {
-  .gdo .gcolhead,.gdo .grow{grid-template-columns:76px minmax(0,1fr) 258px 156px;gap:10px}
+   2 band border + 28 band padding).
+
+   RE-DERIVED WHEN THE REVIEWS COLUMN LANDED. Five tracks are wider than four, and the old
+   boundaries were computed for four: at a 1200px window the match column fell to SIXTY-SIX pixels
+   and at 1024 to FOUR, which is not a narrow column, it is a collapsed one — the name was not
+   clickable and the suite timed out trying.
+
+     wide     96 + 310 + 164 + 136 + 4x14 gap = 762   match = W - 810   >= 150 at W >= 960
+     compact  76 + 258 + 156 + 118 + 4x10 gap = 648   match = W - 696   >= 150 at W >= 846
+
+   Below 846 no five-track grid fits and the band stacks — see the card tier further down. */
+@container gtable (max-width: 960px) {
+  .gdo .gcolhead,.gdo .grow{grid-template-columns:76px minmax(0,1fr) 258px 156px 118px;gap:10px}
   .gdo .gmeter{flex:0 0 76px}
   .gdo .gnum{font-size:11px}
   /* THE CHIP GIVES BACK ~20px HERE, and the price is what gets it. The match column is ~132px at
@@ -1504,7 +1540,7 @@ const CSS = `
   .gdo .gsec{position:sticky;top:0;z-index:3}
 }
 
-/* ── THE CARD TIER: BELOW 640px OF CARD, A BAND STOPS BEING A ROW ─────────────────────────────
+/* ── THE CARD TIER: BELOW 846px OF CARD, A BAND STOPS BEING A ROW ─────────────────────────────
  * KEYED ON THE CARD, NOT THE WINDOW, and that is the whole reason it is a container query. A
  * 390px phone reaches this tier, but so does a 1500px desktop WITH THE MATCH PANEL OPEN: the panel
  * leaves the card 576px, and at 1280 it leaves it 356px. Under the old viewport media query those
@@ -1517,7 +1553,7 @@ const CSS = `
  * a stacked card, and the METER KEEPS ITS NOTCH, ITS LABEL AND ITS CLAMP: it is the reason the page
  * exists and it is not the thing that gets dropped when the room runs out. It stops being 104px
  * and takes the width it is given. */
-@container gtable (max-width: 640px) {
+@container gtable (max-width: 846px) {
   .gdo .gcolhead{display:none}
   /* THE ROW BECOMES A CARD. Areas rather than source order, so the price can sit on line 1 with
      the kickoff while staying a single element in the DOM - two prices, one hidden per
@@ -1533,7 +1569,7 @@ const CSS = `
   .gdo .glist{padding:4px 12px 16px;gap:12px}
   .gdo .grow{
     grid-template-columns:minmax(0,1fr);
-    grid-template-areas:"k" "m" "s" "mg";
+    grid-template-areas:"k" "m" "s" "rv" "mg";
     gap:0;padding:0;align-items:stretch;position:relative;
     border:1px solid #DCE5E0;border-radius:14px;overflow:hidden;
     background:#fff;box-shadow:0 1px 2px rgba(16,40,28,.05)}
@@ -1558,6 +1594,15 @@ const CSS = `
   .gdo .gm .n s{white-space:normal;overflow:visible;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .gdo .gm .sub{font-size:12px}
   .gdo .gs{grid-area:s;gap:11px;padding:11px 13px 12px;overflow:visible}
+
+  /* THE REVIEW CELL ON A CARD. It keeps its own strip between the meter and the manager rather
+     than being hidden: a phone is where an operator checks last night's ratings, and a column that
+     only exists on a desktop is a fact that only exists on a desktop. Empty on a live row still
+     means empty — the block renders nothing and collapses, so a live card is unchanged. */
+  .gdo .grvcell{grid-area:rv}
+  .gdo .grvcell:not(:empty){padding:0 13px 11px}
+  .gdo .grv{display:flex;align-items:baseline;gap:7px}
+  .gdo .grv .lab{margin-top:0;font-size:11px}
 
   /* A4. THE FOOTER STRIP — the manager on their own faintly tinted band. */
   .gdo .gmg{grid-area:mg;align-self:auto;padding:8px 13px;
@@ -1791,6 +1836,17 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
    * produced. Initials are stripped of non-letters first so an emoji in a name cannot become one. */
   const initials = (mgr || "—").replace(/[^A-Za-z ]/g, "").trim().split(/\s+/).filter(Boolean)
     .map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "—";
+  /* THE REVIEW FIGURES. Straight off the payload — starRating/starRatingCount ride along on the
+   * list rows the gameday route already fetches, so this costs no request. COUNT decides whether a
+   * rating exists; starRating comes back as 0 rather than null when nothing has been left, and
+   * testing the average would hide a real 0.00 behind "none yet". */
+  const rvAvg = Number(m.starRating ?? 0), rvCount = Number(m.starRatingCount ?? 0);
+  /* SINCE THE WHISTLE, not since kickoff. endDateUtc is a TRUE UTC instant (endDate is wall clock
+   * carrying a Z it does not mean and must never be parsed). Without an end the match falls back to
+   * kickoff plus an hour, which is the shape of nearly every fixture on this board. */
+  const endMs = m.endDateUtc ? Date.parse(m.endDateUtc) : Number.NaN;
+  const minsSinceEnd = Number.isFinite(endMs) ? (now - endMs) / 60000 : -minsUntil(m, now) - 60;
+  const rv = reviewCell({ avg: rvAvg, count: rvCount, minsSinceEnd });
   const clock = localClock(m);
   const [hh, ap] = [clock.replace(/\s*(AM|PM)$/i, ""), (clock.match(/(AM|PM)$/i) ?? [""])[0]];
 
@@ -1855,6 +1911,24 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
       </div>
 
       <div className="gmg" data-testid="gday-mgr"><span className="gav">{initials}</span><span>{mgr || "none"}</span></div>
+
+      {/* THE FIFTH CELL. It is rendered on EVERY row — a cell that only appears on finished rows
+          would leave the grid with four tracks on some rows and five on others, and the columns
+          would move. On a live row it is EMPTY: no dash, no placeholder, nothing to read.
+
+          FINISHED ONLY, and finished means the "done" band (>90 min past kickoff). A cancelled
+          match is not finished — it never happened, so there is nothing to have rated. */}
+      <div className="grvcell" data-testid="gday-rvcell" data-state={b === "done" ? "filled" : "empty"}>
+        {b === "done" && (
+          <div className={"grv " + rv.tone} data-testid="gday-review" data-tone={rv.tone}
+            data-avg={rvCount > 0 ? rvAvg.toFixed(2) : ""} data-count={rvCount}>
+            <div className="v" data-testid="gday-review-v">
+              {rv.value}{rv.hasRating && <u>★</u>}
+            </div>
+            <div className="lab" data-testid="gday-review-lab">{rv.label}</div>
+          </div>
+        )}
+      </div>
 
       {/* THE KEBAB WAS HERE AND IS GONE. It read as the affordance for opening the editor and was
           the one element on the row that did NOT open it — the click guard excludes buttons, and

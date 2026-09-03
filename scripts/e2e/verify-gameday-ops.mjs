@@ -40,6 +40,11 @@ const mk = (o) => ({
   fakeSpotLeft36h: Math.max(0, o.cap - o.fake - o.real), fakeSpotLeft24h: Math.max(0, o.cap - o.fake - o.real),
   fakeSpotLeft12h: Math.max(0, o.cap - o.fake - o.real), fakeSpotLeft6h: Math.max(0, o.cap - o.fake - o.real),
   fakeSpotLeft3h: Math.max(0, o.cap - o.fake - o.real),
+  /* THE RATING RIDES ALONG on the list rows, so the fixture carries it the same way the API does.
+     starRating is 0 rather than null when nothing has been left — the fixture must reproduce that,
+     because a fixture using null would let a component that tests the average instead of the count
+     pass here and fail on production. */
+  starRating: o.avg ?? 0, starRatingCount: o.rv ?? 0,
   field: { id: 1, title: o.fd, city: { id: 1, name: o.city, timeZone: { abbr: "CDT" } } },
   manager: { id: 1, firstName: o.mgrF, lastName: o.mgrL },
 });
@@ -110,7 +115,13 @@ const READ = () => {
          the last column now, and it is the one this walk most needs to cover: it grew 128->164px
          to stop clipping "Peter Rocha-Ramirez", and a column that grows is a column that can
          start overlapping the one before it. */
-      chain: ["METER", '[data-testid="gday-nums"]', '[data-testid="gday-delta"]', '[data-testid="gday-mgr"]']
+      /* IS THIS A TABLE ROW OR A STACKED CARD? The tier is chosen by the CARD's width, not the
+         viewport's, so a viewport number cannot answer it — at 1024 the card is 700px and the row
+         stacks. Every table-only assertion below asks this instead of asking the window. */
+      tableRow: (() => { const k = [...el.children]; return k.length > 1
+        && k.some((c) => Math.abs(c.getBoundingClientRect().left - k[0].getBoundingClientRect().left) > 1); })(),
+      chain: ["METER", '[data-testid="gday-nums"]', '[data-testid="gday-delta"]', '[data-testid="gday-mgr"]',
+        '[data-testid="gday-rvcell"]']
         .map((sel) => { const n = sel === "METER" ? meter : q(sel); return n ? { sel, ...bb(n) } : null; }),
     };
   });
@@ -236,6 +247,42 @@ const SEP_FIX = [
     at: 340, cap: 18, min: 11, real: 18, fake: 0, mgrF: "Drea", mgrL: "M" }),
 ];
 
+/* ── THE REVIEW FIXTURE ─────────────────────────────────────────────────────────────────────────
+ * Every state the fifth column can be in, plus live rows so "empty on a live row" has something to
+ * be true of. A row reaches the FINISHED band only at 90 minutes past kickoff (DONE_MIN), and the
+ * zero-review age is measured from the WHISTLE, so `at` is chosen for both at once: -100 is
+ * finished (100 > 90) and ended 40 minutes ago, which is the only way to reach the fresh state.
+ *
+ * The averages and counts are the mock's, which are the real Sep 1 figures from the Reviews page.
+ * 910 is the one the mock does not have and the code most needs: a REAL 0.00 with four reviews.
+ * Any implementation that tests the average instead of the count renders it as "no reviews yet". */
+const RV_FIX = [
+  mk({ id: 901, name: "Live, nothing to review", fd: "Soccer Central Complex", city: "San Antonio",
+    at: 200, cap: 18, min: 9, real: 12, fake: 2, mgrF: "Ricki", mgrL: "" }),
+  mk({ id: 902, name: "Live and at risk", fd: "Scissortail Park", city: "Oklahoma City",
+    at: 120, cap: 18, min: 11, real: 3, fake: 7, acm: 30, mgrF: "Rodrigo", mgrL: "Silva" }),
+  /* FRESH ZERO: finished 100 min after kickoff, whistle 40 min ago -> "40m ago". */
+  mk({ id: 903, name: "Just whistled, nothing in yet", fd: "Hala Pilkarska Bemowo", city: "Warsaw",
+    at: -100, cap: 14, min: 0, real: 14, fake: 0, mgrF: "Ola", mgrL: "K" }),
+  /* STALE ZERO: ten hours past kickoff, nine since the whistle -> "none · 9h". */
+  mk({ id: 904, name: "Nothing came in at all", fd: "The Hattrick L.", city: "Austin",
+    at: -600, cap: 18, min: 9, real: 18, fake: 0, mgrF: "ale", mgrL: "" }),
+  mk({ id: 905, name: "One review is not an average", fd: "Lou Fusz Athletic Complex", city: "St. Louis",
+    at: -200, cap: 18, min: 9, real: 16, fake: 0, avg: 5.00, rv: 1, mgrF: "Liam", mgrL: "Russell" }),
+  mk({ id: 906, name: "Two, still under the threshold", fd: "Zipp Family Sports Park", city: "San Antonio",
+    at: -210, cap: 18, min: 9, real: 14, fake: 2, avg: 2.50, rv: 2, mgrF: "Jorge Luis", mgrL: "Gonzalez" }),
+  mk({ id: 907, name: "Needs attention", fd: "NEMP Tournaments", city: "Austin",
+    at: -220, cap: 18, min: 9, real: 17, fake: 1, avg: 3.33, rv: 3, mgrF: "Moncho", mgrL: "Perez" }),
+  mk({ id: 908, name: "A standout", fd: "PARMER Stadium", city: "Austin",
+    at: -230, cap: 44, min: 0, real: 44, fake: 0, avg: 4.88, rv: 8, mgrF: "garrett", mgrL: "" }),
+  /* THE LONGEST STRING THE COLUMN HOLDS. If 136px is not enough this is the row that says so. */
+  mk({ id: 909, name: "Middle of the road", fd: "NEMP Tournaments", city: "Austin",
+    at: -240, cap: 40, min: 11, real: 40, fake: 0, avg: 4.45, rv: 20, mgrF: "Moncho", mgrL: "Perez" }),
+  /* A REAL 0.00, WITH REVIEWS. Not "none yet" — the worst-rated match on the board. */
+  mk({ id: 910, name: "Rated zero by four people", fd: "Kirkwood", city: "St. Louis",
+    at: -250, cap: 18, min: 9, real: 11, fake: 5, avg: 0, rv: 4, mgrF: "Nate", mgrL: "B" }),
+];
+
 /* ── THE GEOMETRY PROBE ─────────────────────────────────────────────────────────────────────────
  * Everything the separation assertions read, measured in the page in one pass. Deliberately
  * separate from READ: READ is about what the board SAYS, this is about where it PUTS it, and
@@ -296,6 +343,29 @@ const GEO = () => {
             cut: zb.right > nb.right + 0.5 || zb.width < 1 }; })(),
         sub: sub ? R(sub) : null,
         nomin: !!r.querySelector('[data-testid="gday-nomin"]'),
+        /* THE FIFTH CELL. `filled` is the cell's own data-state; `rv` is null when the cell is
+           empty, which is what a live row must produce. */
+        rvState: r.querySelector('[data-testid="gday-rvcell"]')?.dataset.state ?? null,
+        rvEmpty: (r.querySelector('[data-testid="gday-rvcell"]')?.textContent ?? "").trim() === "",
+        rv: (() => { const e = r.querySelector('[data-testid="gday-review"]');
+          if (!e) return null;
+          const v = e.querySelector('[data-testid="gday-review-v"]');
+          const l = e.querySelector('[data-testid="gday-review-lab"]');
+          const cs2 = getComputedStyle(v);
+          return { tone: e.dataset.tone, avg: e.dataset.avg, count: Number(e.dataset.count),
+            value: v.textContent.trim(), label: l.textContent.trim(), colour: cs2.color,
+            box: R(e) }; })(),
+        /* TRUNCATION IS scrollWidth > clientWidth, on every text-bearing element in the row.
+           An overflow check passes on an ellipsis while the operator still cannot read the text —
+           which is exactly how the mock shipped truncated. The match NAME is the one element
+           allowed to ellipsis, so it is exempted BY SELECTOR and the allowance stays visible. */
+        clipped: [...r.querySelectorAll("div,span,b,i,u,s")]
+          .filter((e) => !e.closest('[data-testid="gday-name"]'))
+          .filter((e) => e.children.length === 0 && (e.textContent ?? "").trim() !== "")
+          .filter((e) => e.scrollWidth > e.clientWidth + 1)
+          .map((e) => ({ t: (e.textContent ?? "").trim().slice(0, 28),
+            sw: e.scrollWidth, cw: e.clientWidth,
+            cls: String(e.className || e.parentElement?.className || "?").slice(0, 24) })),
       };
     });
     return {
@@ -328,7 +398,7 @@ async function boot(browser, storageState, width = 1500, opts = {}) {
    * passed in as opts. The intercepts below look matches up here; a pool hard-coded to the module's
    * static arrays answered "no fixture" for every dynamically-built banner set, which is a mock
    * failing rather than a page failing and reads identically in the output if you do not check. */
-  const pool = () => [...FIX, ...SEP_FIX, ...TODAY_FIX, ...TODAY_FIVE, ...TOMO_FIX,
+  const pool = () => [...FIX, ...SEP_FIX, ...RV_FIX, ...TODAY_FIX, ...TODAY_FIVE, ...TOMO_FIX,
     ...(opts.fix ?? []), ...(opts.todaySet ?? [])];
   await ctx.route("**/api/matchday/*/gameday*", (r) => {
     const date = new URL(r.request().url()).searchParams.get("date");
@@ -832,13 +902,18 @@ async function main() {
         yes(`  ${w}: CONTROL - a forced 900px element IS caught by the overflow walk`, caught,
           "the overflow walk cannot see an overflow - every clean result above is worthless");
       } else {
-        /* THE DESKTOP OVERLAP WALK STAYS, at 1024 and above. */
+        /* THE OVERLAP WALK IS FOR TABLE ROWS, and "1024 and above" stopped meaning that when the
+         * row grid moved onto a container query: a 1024px window leaves the card 700px and the row
+         * STACKS, where every cell is full width and each one's right edge is past the next one's
+         * left by design. Asking the tier instead of the window. */
+        const tableRows = nonEmpty(v.rows, "v.rows").filter((r) => r.tableRow);
         const ov = [];
-        for (const r of nonEmpty(v.rows, "v.rows")) for (let i = 1; i < r.chain.length; i++) {
+        for (const r of tableRows) for (let i = 1; i < r.chain.length; i++) {
           const a = r.chain[i - 1], b = r.chain[i];
           if (a && b && a.r > b.l + 0.5) ov.push([r.id, a.sel, b.sel]);
         }
         is(`  ${w}: no row overlaps`, ov, []);
+        if (tableRows.length === 0) ok(`  ${w}: CONTROL - the rows have stacked, so the walk does not apply`);
         const forced = await pm.evaluate(() => {
           const row = document.querySelector('[data-testid="gday-row"]');
           const nums = row.querySelector('[data-testid="gday-nums"]');
@@ -1043,21 +1118,30 @@ async function main() {
       is(`  ${w}: no label falls outside any overflow:hidden ancestor`,
         v.rows.filter((r) => r.labelClip && r.labelClip.outside.length > 0)
           .map((r) => [r.id, r.labelClip.outside]), []);
-      if (w >= 1024) {
-        is(`  ${w}: bands are still under 72px`, v.rows.filter((r) => r.h >= 72).map((r) => [r.id, r.h]), []);
+      /* THE GUARD IS THE TIER, NOT THE WIDTH. This read `w >= 1024`, which stopped being the same
+       * question when the row grid moved onto a container query: a 1024px window leaves the card
+       * 700px and the row STACKS, at which point "under 72px" and "no left-to-right overlap" are
+       * assertions about a layout that is not on screen. Rows stack full-width by design, so both
+       * would fail on a page that is perfectly correct. */
+      const tableRows = v.rows.filter((r) => r.tableRow);
+      if (tableRows.length > 0) {
+        is(`  ${w}: bands are still under 72px`, tableRows.filter((r) => r.h >= 72).map((r) => [r.id, r.h]), []);
         /* THE 768 OVERLAP WALK IS KEPT — a label-height change is exactly what can reintroduce it. */
         const ov = [];
-        for (const r of v.rows) for (let i2 = 1; i2 < r.chain.length; i2++) {
+        for (const r of tableRows) for (let i2 = 1; i2 < r.chain.length; i2++) {
           const a = r.chain[i2 - 1], b = r.chain[i2];
           if (a && b && a.r > b.l + 0.5) ov.push([r.id, a.sel, b.sel]);
         }
         is(`  ${w}: no row overlaps`, ov, []);
+      } else {
+        is(`  ${w}: CONTROL - the rows have stacked, so the table checks do not apply`,
+          v.rows.filter((r) => r.tableRow).length, 0);
       }
       /* BOTH EDGES AGAINST THE TRACK. The vertical check alone missed the "o min" shear. */
       is(`  ${w}: no label runs past the LEFT edge of its track`,
-        v.rows.filter((r) => r.labelClip && r.labelClip.pastTrackLeft > 0.5).map((r) => [r.id, r.labelClip.text, r.labelClip.pastTrackLeft]), []);
+        nonEmpty(v.rows, `rows @${w}`).filter((r) => r.labelClip && r.labelClip.pastTrackLeft > 0.5).map((r) => [r.id, r.labelClip.text, r.labelClip.pastTrackLeft]), []);
       is(`  ${w}: no label runs past the RIGHT edge of its track`,
-        v.rows.filter((r) => r.labelClip && r.labelClip.pastTrackRight > 0.5).map((r) => [r.id, r.labelClip.text, r.labelClip.pastTrackRight]), []);
+        nonEmpty(v.rows, `rows @${w}`).filter((r) => r.labelClip && r.labelClip.pastTrackRight > 0.5).map((r) => [r.id, r.labelClip.text, r.labelClip.pastTrackRight]), []);
       /* CONTROL: put the 13px back and prove the assertion trips at this width. */
       const trips = await pa.evaluate(() => {
         const m2 = document.querySelector(".gmeter");
@@ -1724,10 +1808,12 @@ async function main() {
       const { ctx: cb, page: pb } = await boot(browser, storageState, 1500, { fix: SEP_FIX });
       const label = panelOpen ? "panel OPEN" : "panel closed";
 
-      /* 1100 IS IN THE LIST DELIBERATELY. 1500/1366/1280 all use the wide four-track grid; the
-       * compact grid below 1184 is a different manager column and it is the one that was
-       * overflowing. Sweeping only the three wide widths is how the 136px cell passed. */
-      for (const w of [1500, 1366, 1280, 1100]) {
+      /* 1280 IS THE COMPACT TIER NOW, which is why 1100 came off this list. With five tracks the
+       * boundaries moved (wide needs 960px of card, compact 846), so at 1280 the card is 956px and
+       * takes the compact grid — the tier that was previously only reachable at 1100. 1100 itself
+       * leaves the card 776px and STACKS, where none of the band assertions below apply. So the
+       * compact grid is still covered, at the width that actually uses it. */
+      for (const w of [1500, 1366, 1280]) {
         await pb.setViewportSize({ width: w, height: 1000 });
         await pb.waitForTimeout(450);
         const g = await measure(pb);
@@ -1986,6 +2072,128 @@ async function main() {
         mrows.filter((r) => r.id === 604 && r.notch !== null).map((r) => r.id), []);
 
       await closeContext(cm);
+    }
+
+    // ══ THE FIFTH COLUMN: REVIEWS ON FINISHED ROWS ════════════════════════════════════════════
+    /* The rating and count come from the payload the board already fetches — starRating and
+     * starRatingCount ride along on the /admin/matches list rows, so there is no second read and
+     * nothing here is about latency. What these assert is the SHAPE: a fifth column that exists on
+     * every row, so the columns cannot move, and a cell that is empty on a live row and readable on
+     * a finished one. */
+    for (const w of [1500, 1366, 1280]) {
+      const { ctx: cr, page: pr } = await boot(browser, storageState, w, { fix: RV_FIX });
+      const tag = `  ${w}px:`;
+      /* THE FINISHED SECTION IS COLLAPSED BY DEFAULT (openSec done:false) and this whole block is
+       * about finished rows. Without the click the fixture's eight finished matches are not in the
+       * DOM at all and every assertion below filters to an empty set — which the empty-collection
+       * guard turns into a failure rather than a silent pass, which is how this was caught. */
+      await pr.click('[data-testid="gday-sec-done"]');
+      await pr.waitForTimeout(600);
+      is(`${tag} CONTROL: the Finished section is open`,
+        await pr.locator('[data-testid="gday-sec-done"]').getAttribute("aria-expanded"), "true");
+      const g = await measure(pr);
+      const v = await pr.evaluate(READ);
+      const bands = nonEmpty(g.lists.flatMap((L) => L.bands), `rows @${w}`);
+      const rows = nonEmpty(v.rows, `READ rows @${w}`);
+
+      // ── B3: FIVE CELLS, AND THE COLUMNS DO NOT MOVE ─────────────────────────────────────────
+      is(`${tag} every row has exactly five cells`,
+        bands.filter((b) => b.colLefts.length !== 5).map((b) => [b.id, b.colLefts.length]), []);
+      const first = bands[0].colLefts;
+      is(`${tag} every row's five column lefts are identical`,
+        bands.filter((b) => b.colLefts.some((x, i) => Math.abs(x - first[i]) > 0.5))
+          .map((b) => [b.id, b.colLefts]), []);
+      is(`${tag} the header has five columns too`, g.headCols?.length, 5);
+      is(`${tag} ...and they agree with the rows within 9px`,
+        (g.headCols ?? []).map((x, i) => (Math.abs(x - first[i]) > 9 ? [i, x, first[i]] : null)).filter(Boolean), []);
+
+      // ── EMPTY ON LIVE, FILLED ON FINISHED ───────────────────────────────────────────────────
+      const live = bands.filter((b) => [901, 902].includes(b.id));
+      const done = bands.filter((b) => b.id >= 903);
+      yes(`${tag} CONTROL: the fixture has both live (${live.length}) and finished (${done.length}) rows`,
+        live.length === 2 && done.length === 8);
+      is(`${tag} EVERY LIVE ROW'S REVIEW CELL IS EMPTY`,
+        live.filter((b) => !b.rvEmpty || b.rv !== null || b.rvState !== "empty")
+          .map((b) => [b.id, b.rvState, b.rv]), []);
+      is(`${tag} EVERY FINISHED ROW'S REVIEW CELL IS FILLED`,
+        done.filter((b) => b.rv === null || b.rvState !== "filled").map((b) => b.id), []);
+      /* THE LIVE CELL STILL OCCUPIES ITS TRACK. An empty cell that collapsed would be a cell that
+       * is not holding the column open, which is the whole reason it is rendered at all. */
+      is(`${tag} ...and an empty cell still sits in the fifth track`,
+        live.filter((b) => Math.abs(b.colLefts[4] - first[4]) > 0.5).map((b) => b.id), []);
+
+      // ── NOTHING IS TRUNCATED. scrollWidth, not overflow. ────────────────────────────────────
+      /* An ellipsis satisfies an overflow check while the operator still cannot read the text.
+       * The match NAME is the one element allowed to ellipsis and is exempted by selector in the
+       * probe, so the allowance is visible rather than buried in a threshold. */
+      is(`${tag} NOTHING IN ANY ROW IS TRUNCATED (the match name excepted)`,
+        bands.flatMap((b) => b.clipped.map((c) => [b.id, c.cls, c.t, `${c.sw}>${c.cw}`])), []);
+      yes(`${tag} CONTROL: the probe CAN see truncation`, await (async () => {
+        /* Squeeze the review column to nothing and the same measurement must find the clipping it
+         * reports none of above. Without this, "nothing is truncated" is also what a probe that
+         * measures the wrong elements returns. */
+        const c2 = await under(pr, ".gdo .gcolhead,.gdo .grow{grid-template-columns:96px minmax(0,1fr) 310px 164px 18px !important}");
+        return c2.lists.flatMap((L) => L.bands).some((b) => b.clipped.length > 0);
+      })());
+
+      // ── THE GEOMETRIC WALK, now five wide ───────────────────────────────────────────────────
+      is(`${tag} no cell overlaps the one to its right`, (() => { const o = [];
+        for (const r of nonEmpty(rows, `chain rows @${w}`)) for (let i = 1; i < r.chain.length; i++) {
+          const a2 = r.chain[i - 1], b2 = r.chain[i];
+          if (a2 && b2 && a2.r > b2.l + 0.5) o.push([r.id, a2.sel, b2.sel]); } return o; })(), []);
+      is(`${tag} no horizontal page scroll`, g.hscroll, false);
+
+      // ── THE COLOUR RULES ────────────────────────────────────────────────────────────────────
+      const byId = (id) => bands.find((b) => b.id === id);
+      const RED = "rgb(168, 57, 26)", GREEN = "rgb(18, 112, 74)";
+      is(`${tag} 1 review is NOT coloured`, byId(905)?.rv?.tone, "thin");
+      is(`${tag} 2 reviews are NOT coloured`, byId(906)?.rv?.tone, "thin");
+      yes(`${tag} ...and neither renders red or green (${byId(906)?.rv?.colour})`,
+        ![byId(905)?.rv?.colour, byId(906)?.rv?.colour].some((c) => c === RED || c === GREEN));
+      is(`${tag} 3 reviews below 3.50 IS red`, byId(907)?.rv?.tone, "crit");
+      is(`${tag} ...and renders red`, byId(907)?.rv?.colour, RED);
+      is(`${tag} 8 reviews at 4.88 IS green`, byId(908)?.rv?.tone, "ok");
+      is(`${tag} ...and renders green`, byId(908)?.rv?.colour, GREEN);
+      is(`${tag} 20 reviews at 4.45 is plain`, byId(909)?.rv?.tone, "thin");
+      /* A REAL 0.00 IS A RATING, NOT AN ABSENCE. Any implementation testing the average rather
+       * than the count renders the worst match on the board as "nothing in yet". */
+      is(`${tag} a real 0.00 with 4 reviews is RED, not 'none'`, byId(910)?.rv?.tone, "crit");
+      is(`${tag} ...and shows the number`, byId(910)?.rv?.value, "0.00★");
+
+      yes(`${tag} CONTROL: the colour check CAN fail`, await (async () => {
+        /* Repaint the plain tone green and the 2-review row must then read green — proving the
+         * assertion above is reading a rendered colour and not a class name it half-believes. */
+        const c2 = await under(pr, ".gdo .grv.thin .v{color:#12704a !important}");
+        return c2.lists.flatMap((L) => L.bands).find((b) => b.id === 906)?.rv?.colour === GREEN;
+      })());
+
+      // ── THE ZERO STATES ARE TWO DIFFERENT FACTS ────────────────────────────────────────────
+      /* DERIVE, DO NOT PIN. The fixture's whistle is 40 minutes before the run STARTS, and this
+       * block runs minutes later — "40m ago" became "44m ago" and a correct page went red. What
+       * matters is the FORM: a fresh row reads as an age in minutes, a stale one leads with the
+       * absence. Both are pinned to their shape and to each other, not to a clock. */
+      yes(`${tag} a just-whistled row reads its age ("${byId(903)?.rv?.label}")`,
+        /^\d+m ago$/.test(byId(903)?.rv?.label ?? ""));
+      yes(`${tag} ...and it is a plausible age, not a stale one`,
+        Number((byId(903)?.rv?.label ?? "").match(/^(\d+)m/)?.[1] ?? -1) >= 35);
+      is(`${tag} a stale row reads the absence first`, byId(904)?.rv?.label, "none · 9h");
+      yes(`${tag} CONTROL: the fresh row does NOT use the stale form`,
+        !/none/.test(byId(903)?.rv?.label ?? "x"));
+      is(`${tag} both show a dash for a value`, [byId(903)?.rv?.value, byId(904)?.rv?.value], ["—", "—"]);
+      yes(`${tag} CONTROL: the two zero states really differ`, byId(903)?.rv?.label !== byId(904)?.rv?.label);
+
+      // ── PLURALS ────────────────────────────────────────────────────────────────────────────
+      is(`${tag} one review is singular`, byId(905)?.rv?.label, "1 review");
+      const labels = nonEmpty(done.map((b) => b.rv?.label ?? ""), `review labels @${w}`);
+      is(`${tag} NOTHING IS MIS-PLURALISED`, labels.filter((l) => /\b1 (reviews|comments)\b/.test(l)), []);
+
+      // ── ROW HEIGHTS STAY EVEN ──────────────────────────────────────────────────────────────
+      const hs = nonEmpty(bands.map((b) => b.box.h), `row heights @${w}`);
+      yes(`${tag} row heights stay even (${Math.min(...hs)}–${Math.max(...hs)}px)`,
+        Math.max(...hs) - Math.min(...hs) <= 1.5);
+      is(`${tag} ...and no row exceeds 72px`, bands.filter((b) => b.box.h >= 72).map((b) => [b.id, b.box.h]), []);
+
+      await closeContext(cr);
     }
 
     // ── THE RE-ANCHORED CLICK GUARD ────────────────────────────────────────────────────────────
