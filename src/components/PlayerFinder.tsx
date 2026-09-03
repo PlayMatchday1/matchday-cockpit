@@ -18,7 +18,7 @@
 // it never narrowed anything. Phone and email are COLUMNS — worth seeing, not worth filtering on.
 // If it ever comes back, that is why it went.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { CITY_SCOPES } from "@/lib/cityScope";
 import { supabase } from "@/lib/supabase";
 
@@ -208,6 +208,94 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
   const applied = data?.applied;
   const range = !!(f.regFrom || f.regTo);
 
+  /* ── THE CHIP BAR ─────────────────────────────────────────────────────────────────────────────
+   * Seven stacked rows of controls became one search field and six chips. NOTHING ABOUT WHAT A
+   * FILTER DOES CHANGED: same option sets, same state shape, same query params, same server. This
+   * is where the controls live, not what they mean.
+   *
+   * A CHIP IS QUIET UNTIL IT IS DOING SOMETHING. At rest it shows the filter's name in grey. Only
+   * a filter moved off its DEFAULT is lit, carries its value and grows an × to clear it — so the
+   * bar reads as "nothing is filtered" at a glance, and the narrowing you applied is the only
+   * thing on it with colour. `set` below is that test and nothing else; a chip that merely exists
+   * never counts.
+   */
+  const [openChip, setOpenChip] = useState<string | null>(null);
+  const barRef = useRef<HTMLDivElement | null>(null);
+  const popRef = useRef<HTMLDivElement | null>(null);
+
+  // Click away or press Escape to close. Clicks INSIDE the bar are ignored here so that using a
+  // control in the popover does not close the popover under your finger.
+  useEffect(() => {
+    if (!openChip) return;
+    const onDown = (e: MouseEvent) => { if (!barRef.current?.contains(e.target as Node)) setOpenChip(null); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpenChip(null); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [openChip]);
+
+  /* NO POPOVER MAY SPILL OUTSIDE THE CARD. Anchored under its own chip, every chip in the
+   * right-hand half of a narrow card would push one off the edge — and which chips those are
+   * depends on where the row wrapped, which only layout knows. So it is MEASURED once on open and
+   * shifted left by exactly the overhang, never past the card's left edge. Set on the node rather
+   * than through state: it is a layout correction, and a state round-trip would paint the
+   * uncorrected position first.
+   *
+   * ON A PHONE THERE IS NOTHING TO CORRECT — the popover is a bottom sheet (see .pf-pop in the
+   * styles), full width and fixed to the bottom of the viewport, so it is skipped. */
+  useLayoutEffect(() => {
+    const pop = popRef.current;
+    if (!pop) return;
+    pop.style.marginLeft = "0px";
+    if (window.matchMedia("(max-width: 640px)").matches) return;
+    const card = pop.closest(".pf") as HTMLElement | null;
+    if (!card) return;
+    const p = pop.getBoundingClientRect(), c = card.getBoundingClientRect();
+    const over = p.right - (c.right - 12);
+    if (over > 0) pop.style.marginLeft = `${-Math.min(over, Math.max(0, p.left - (c.left + 12)))}px`;
+  }, [openChip]);
+
+  const lab = (opts: [string, string][], v: string) => opts.find(([o]) => o === v)?.[1] ?? v;
+  const cityName = (v: string) => (v === "unset" ? "Not set" : CITIES.find(([c]) => c === v)?.[1] ?? v);
+  const rangeLab = (a: string, b: string) => (a || b ? `${a || "start"} → ${b || "today"}` : null);
+
+  // PLAYED AT IS SIX CONTROLS BEHIND ONE CHIP, so its value has to summarise them. The most
+  // specific thing set wins, because that is what the operator will recognise.
+  const atSet = !!(f.matchCity || f.fieldId || f.kickFrom || f.kickTo || f.matchFrom || f.matchTo);
+  const atLabel = f.fieldId
+    ? ((data?.fields ?? []).find((x) => String(x.fieldId) === f.fieldId)?.title ?? "a field")
+    : f.matchCity ? cityName(f.matchCity)
+    : rangeLab(f.matchFrom, f.matchTo)
+      ?? (f.kickFrom || f.kickTo ? `${f.kickFrom || "any"}–${f.kickTo || "any"}` : "");
+
+  // NEVER PLAYED AND A PLAY WINDOW CANNOT BOTH BE TRUE — the existing rule, unchanged.
+  const playOff = f.hist === "never";
+  // A CONFINED ACCOUNT CANNOT WIDEN A CITY. The server refuses any city but theirs; dimming is the
+  // courtesy, and it must reach the chip too — a chip that opens onto a dead select is a control
+  // that looks live and does nothing.
+  const cityLocked = !!data?.confined;
+
+  type Chip = { id: string; name: string; value: string; set: boolean; off: boolean; why?: string; onClear: () => void };
+  const chips: Chip[] = [
+    { id: "reg", name: "Signed up", set: f.reg !== "all" || !!f.regFrom || !!f.regTo, off: false,
+      value: rangeLab(f.regFrom, f.regTo) ?? lab(REG_OPTS, applied?.reg ?? f.reg),
+      onClear: () => setF({ ...f, reg: "all", regFrom: "", regTo: "" }) },
+    { id: "hist", name: "History", set: f.hist !== "any", off: false,
+      value: lab(HIST_OPTS, f.hist), onClear: () => setF({ ...f, hist: "any" }) },
+    { id: "play", name: "Played", set: f.play !== "all" || !!f.playFrom || !!f.playTo, off: playOff,
+      why: "No play dates to filter on — History is set to Never played",
+      value: rangeLab(f.playFrom, f.playTo) ?? lab(PLAY_OPTS, applied?.play ?? f.play),
+      onClear: () => setF({ ...f, play: "all", playFrom: "", playTo: "" }) },
+    { id: "city", name: "Home city", set: !!f.city, off: cityLocked,
+      why: "Your account is confined to one city — the server refuses any other",
+      value: cityName(f.city), onClear: () => setF({ ...f, city: "" }) },
+    { id: "mem", name: "Member", set: f.member !== "any", off: false,
+      value: lab(MEM_OPTS, f.member), onClear: () => setF({ ...f, member: "any" }) },
+    { id: "at", name: "Played at", set: atSet, off: false, value: atLabel,
+      onClear: () => setF({ ...f, matchCity: "", fieldId: "", kickFrom: "", kickTo: "", matchFrom: "", matchTo: "" }) },
+  ];
+  const chipsOn = chips.filter((c) => c.set).length;
+
   /* ── THE BAND ────────────────────────────────────────────────────────────────────────────────
    * A tile whose value is FORCED by an active filter tells you nothing you did not just type. With
    * City = Warsaw, a "Top city: Warsaw" tile is the filter row read back at you. Each metric
@@ -318,35 +406,158 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
    * styled correctly. `pointer-events: none` on the disabled state silently did nothing too, which
    * is how the suite caught it. Moving the call site did not help; only moving the DECLARATION did.
    */
-  const windowRow = ({ label, name, opts, preset, from, to, disabled = false, why, onPreset, onFrom, onTo }: {
+  const windowPop = ({ label, name, opts, preset, from, to, onPreset, onFrom, onTo }: {
     label: string; name: string; opts: [string, string][];
-    preset: string; from: string; to: string; disabled?: boolean; why?: string;
+    preset: string; from: string; to: string;
     onPreset: (v: string) => void; onFrom: (v: string) => void; onTo: (v: string) => void;
   }) => {
     // A TYPED RANGE WINS. While one is set, no preset is lit — two date filters both lit is a lie
     // about what is on screen.
     const ranged = !!(from || to);
     return (
-      <div className={`pf-row${disabled ? " off" : ""}`} data-testid={`finder-${name}-row`} data-disabled={disabled ? "true" : "false"}>
-        <span className="pf-lbl">{label}</span>
-        <div className="pf-seg" role="group" aria-label={label}>
+      <>
+        <h4 className="pf-poph">{label}</h4>
+        <div className="pf-opts" role="group" aria-label={label}>
           {opts.map(([v, t]) => (
             <button key={v} type="button" data-testid={`finder-${name}-${v}`}
-              aria-pressed={preset === v && !ranged} disabled={disabled}
+              aria-pressed={preset === v && !ranged}
               className={preset === v && !ranged ? "on" : ""}
-              onClick={() => onPreset(v)}>{t}</button>
+              onClick={() => onPreset(v)}>
+              {t}{preset === v && !ranged ? <span className="pf-tick" aria-hidden>✓</span> : null}
+            </button>
           ))}
         </div>
-        <span className="pf-dates">
-          from <input type="date" data-testid={`finder-${name}from`} value={from} disabled={disabled}
+        <div className="pf-subhd">Or an exact range</div>
+        <div className="pf-two">
+          <input type="date" data-testid={`finder-${name}from`} aria-label={`${label} from`} value={from}
             onChange={(e) => onFrom(e.target.value)} />
-          to <input type="date" data-testid={`finder-${name}to`} value={to} disabled={disabled}
+          <span>to</span>
+          <input type="date" data-testid={`finder-${name}to`} aria-label={`${label} to`} value={to}
             onChange={(e) => onTo(e.target.value)} />
-        </span>
-        {disabled && why && <span className="pf-why" data-testid={`finder-${name}-why`}>{why}</span>}
-      </div>
+        </div>
+      </>
     );
   }
+
+  // The contents of each chip's popover. Keyed by chip id so the bar renders exactly one.
+  const POPS: Record<string, () => React.ReactNode> = {
+    reg: () => windowPop({
+      label: "Signed up", name: "reg", opts: REG_OPTS,
+      preset: applied?.reg ?? f.reg, from: f.regFrom, to: f.regTo,
+      onPreset: (v) => setF({ ...f, reg: v, regFrom: "", regTo: "" }),
+      onFrom: (v) => setF({ ...f, regFrom: v, reg: "all" }),
+      onTo: (v) => setF({ ...f, regTo: v, reg: "all" }),
+    }),
+    play: () => windowPop({
+      label: "Played", name: "play", opts: PLAY_OPTS,
+      preset: applied?.play ?? f.play, from: f.playFrom, to: f.playTo,
+      onPreset: (v) => setF({ ...f, play: v, playFrom: "", playTo: "" }),
+      onFrom: (v) => setF({ ...f, playFrom: v, play: "all" }),
+      onTo: (v) => setF({ ...f, playTo: v, play: "all" }),
+    }),
+    hist: () => (
+      <>
+        <h4 className="pf-poph">History</h4>
+        <div className="pf-opts" role="group" aria-label="History">
+          {HIST_OPTS.map(([v, t]) => (
+            <button key={v} type="button" data-testid={`finder-hist-${v}`}
+              aria-pressed={f.hist === v} className={f.hist === v ? "on" : ""}
+              // NEVER PLAYED CLEARS THE PLAY WINDOW as it disables it, so re-enabling later
+              // cannot resurrect a filter the operator can no longer see.
+              onClick={() => setF(v === "never"
+                ? { ...f, hist: v, play: "all", playFrom: "", playTo: "" }
+                : { ...f, hist: v })}>
+              {t}{f.hist === v ? <span className="pf-tick" aria-hidden>✓</span> : null}
+            </button>
+          ))}
+        </div>
+        <p className="pf-pophint">A count of matches played, not a date window.</p>
+      </>
+    ),
+    city: () => (
+      <>
+        {/* HOME CITY, NOT CITY. This reads preferable_city_name — the city on the player's ACCOUNT
+            — and it is a signup attribute, not where they played. The Played-at chip is the other
+            question, and two controls called "City" is how someone answers the wrong one. */}
+        <h4 className="pf-poph">Home city</h4>
+        <select className="pf-sel pf-popsel" data-testid="finder-city" value={f.city}
+          disabled={cityLocked}
+          onChange={(e) => setF({ ...f, city: e.target.value })}>
+          <option value="">All cities</option>
+          {CITIES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+          {/* SELECTABLE, NOT JUST COUNTED. Picking a city excludes everyone with none; this is
+              the only way to reach them, and without it they are invisible rather than filtered. */}
+          <option value="unset">Not set{data?.noHomeCity ? ` (${N(data.noHomeCity)})` : ""}</option>
+        </select>
+        {!!data?.noHomeCity && (
+          <p className="pf-pophint" data-testid="finder-nohome">
+            {N(data.noHomeCity)} players have no home city — picking one excludes them.
+          </p>
+        )}
+      </>
+    ),
+    mem: () => (
+      <>
+        <h4 className="pf-poph">Member</h4>
+        <div className="pf-opts" role="group" aria-label="Member">
+          {MEM_OPTS.map(([v, t]) => (
+            <button key={v} type="button" data-testid={`finder-member-${v}`}
+              aria-pressed={f.member === v} className={f.member === v ? "on" : ""}
+              onClick={() => setF({ ...f, member: v })}>
+              {t}{f.member === v ? <span className="pf-tick" aria-hidden>✓</span> : null}
+            </button>
+          ))}
+        </div>
+      </>
+    ),
+    /* ── PLAYED AT — THE MATCHES, NOT THE PLAYER ──────────────────────────────────────────────
+       Every chip before this one describes who someone IS: when they signed up, what their account
+       says, whether they hold a membership. These describe WHERE AND WHEN THEY ACTUALLY PLAYED.
+       Four controls that only make sense together, which is exactly what one chip is for.
+
+       THE FIELD SELECT NARROWS TO THE CHOSEN CITY, because a field belongs to one city and
+       offering all 79 against a picked city is offering wrong answers. */
+    at: () => (
+      <>
+        <h4 className="pf-poph">Played at</h4>
+        <select className="pf-sel pf-popsel" data-testid="finder-match-city" value={f.matchCity}
+          aria-label="Played-at city" disabled={cityLocked}
+          onChange={(e) => {
+            const city = e.target.value;
+            const stillValid = fieldsForCity(city).some((x) => String(x.fieldId) === f.fieldId);
+            setF({ ...f, matchCity: city, fieldId: stillValid ? f.fieldId : "" });
+          }}>
+          <option value="">Any city</option>
+          {CITIES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+        </select>
+        <select className="pf-sel pf-popsel" data-testid="finder-field" value={f.fieldId}
+          aria-label="Played-at field"
+          onChange={(e) => setF({ ...f, fieldId: e.target.value })}>
+          <option value="">Any field</option>
+          {fieldsForCity(f.matchCity).map((x) => (
+            <option key={x.fieldId} value={x.fieldId}>{x.title}</option>
+          ))}
+        </select>
+        <div className="pf-subhd">Kick-off between</div>
+        <div className="pf-two">
+          <input type="time" data-testid="finder-kickfrom" aria-label="Kick-off from"
+            value={f.kickFrom} onChange={(e) => setF({ ...f, kickFrom: e.target.value })} />
+          <span>to</span>
+          <input type="time" data-testid="finder-kickto" aria-label="Kick-off to"
+            value={f.kickTo} onChange={(e) => setF({ ...f, kickTo: e.target.value })} />
+        </div>
+        <div className="pf-subhd">On dates</div>
+        <div className="pf-two">
+          <input type="date" data-testid="finder-matchfrom" aria-label="Match date from"
+            value={f.matchFrom} onChange={(e) => setF({ ...f, matchFrom: e.target.value })} />
+          <span>to</span>
+          <input type="date" data-testid="finder-matchto" aria-label="Match date to"
+            value={f.matchTo} onChange={(e) => setF({ ...f, matchTo: e.target.value })} />
+        </div>
+        <p className="pf-pophint">The matches they were actually at — a different question from Home city.</p>
+      </>
+    ),
+  };
 
   const pages = Math.max(1, Math.ceil(total / size));
 
@@ -407,140 +618,75 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
           </button>
         </div>
 
-        <div className="pf-params">
-          <div className="pf-row">
-            <span className="pf-lbl">Search</span>
+        <div className="pf-params" data-testid="finder-params" ref={barRef}>
+          {/* SEARCH STAYS A REAL FIELD. It is the thing you came to do, not a filter, so it does
+              not go behind a chip. */}
+          <div className="pf-searchrow">
             <input type="search" className="pf-search" data-testid="finder-q" placeholder="Name, email, phone or ID"
               value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
           </div>
 
-          {/* ── THE TWO WINDOW ROWS, FROM ONE RENDERER ────────────────────────────────────────
-              Identical shape and identical rules is not a coincidence to be maintained by hand —
-              they are the same control, so they are the same code. A divergence between them
-              would otherwise be a copy-paste away, and the whole point of the rework is that
-              PLAYED behaves exactly as SIGNED UP already did. */}
-          {windowRow({
-            label: "Signed up", name: "reg", opts: REG_OPTS,
-            preset: applied?.reg ?? f.reg, from: f.regFrom, to: f.regTo,
-            onPreset: (v) => setF({ ...f, reg: v, regFrom: "", regTo: "" }),
-            onFrom: (v) => setF({ ...f, regFrom: v, reg: "all" }),
-            onTo: (v) => setF({ ...f, regTo: v, reg: "all" }),
-          })}
+          <div className="pf-chips" data-testid="finder-chips">
+            {chips.map((c) => {
+              const opened = openChip === c.id;
+              return (
+                <div className="pf-chipwrap" key={c.id}>
+                  <button type="button" data-testid={`finder-chip-${c.id}`} data-chip={c.id}
+                    data-set={c.set ? "true" : "false"} data-disabled={c.off ? "true" : "false"}
+                    aria-expanded={opened} aria-disabled={c.off}
+                    className={`pf-chip${c.set ? " on" : ""}${c.off ? " off" : ""}`}
+                    onClick={() => { if (!c.off) setOpenChip(opened ? null : c.id); }}>
+                    <span className="pf-chipn">{c.name}</span>
+                    {c.set && c.value ? <span className="pf-chipv" data-testid={`finder-chipv-${c.id}`}>{c.value}</span> : null}
+                    <span className="pf-caret" aria-hidden>▾</span>
+                    {c.set && (
+                      // The × clears this filter without opening the popover. stopPropagation, or
+                      // clearing would also toggle the popover open under the pointer.
+                      <span role="button" tabIndex={0} className="pf-x" data-testid={`finder-chipx-${c.id}`}
+                        aria-label={`Clear ${c.name}`}
+                        onClick={(e) => { e.stopPropagation(); c.onClear(); setOpenChip(null); }}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); c.onClear(); setOpenChip(null); } }}>×</span>
+                    )}
+                  </button>
+                  {opened && !c.off && (
+                    <>
+                      {/* The scrim only exists on a phone, where the popover is a bottom sheet
+                          (see .pf-scrim in the styles). On desktop it is display:none. */}
+                      <span className="pf-scrim" aria-hidden onClick={() => setOpenChip(null)} />
+                      <div className={`pf-pop${c.id === "at" ? " wide" : ""}`} ref={popRef}
+                        data-testid="finder-pop" data-pop={c.id} role="dialog" aria-label={c.name}>
+                        {POPS[c.id]()}
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })}
 
-          <div className="pf-row">
-            <span className="pf-lbl">History</span>
-            <div className="pf-seg" role="group" aria-label="History">
-              {HIST_OPTS.map(([v, t]) => (
-                <button key={v} type="button" data-testid={`finder-hist-${v}`}
-                  aria-pressed={f.hist === v} className={f.hist === v ? "on" : ""}
-                  // NEVER PLAYED CLEARS THE PLAY WINDOW as it disables it, so re-enabling later
-                  // cannot resurrect a filter the operator can no longer see.
-                  onClick={() => setF(v === "never"
-                    ? { ...f, hist: v, play: "all", playFrom: "", playTo: "" }
-                    : { ...f, hist: v })}>{t}</button>
-              ))}
-            </div>
-          </div>
-
-          {/* NEVER PLAYED AND A PLAY WINDOW CANNOT BOTH BE TRUE. Dimmed and unclickable WITH THE
-              REASON ON SCREEN — not hidden, and never left live to return a silent zero. The
-              server ignores the window too; this is the courtesy, that is the rule. */}
-          {windowRow({
-            label: "Played", name: "play", opts: PLAY_OPTS,
-            preset: applied?.play ?? f.play, from: f.playFrom, to: f.playTo,
-            disabled: f.hist === "never",
-            why: "No play dates to filter on — History is set to Never played",
-            onPreset: (v) => setF({ ...f, play: v, playFrom: "", playTo: "" }),
-            onFrom: (v) => setF({ ...f, playFrom: v, play: "all" }),
-            onTo: (v) => setF({ ...f, playTo: v, play: "all" }),
-          })}
-
-          <div className="pf-row">
-            {/* HOME CITY, NOT CITY. This reads preferable_city_name — the city on the player's
-                ACCOUNT — and it is a signup attribute, not where they played. Renamed because it
-                now sits next to a Played-at city and two controls called "City" is how someone
-                answers the wrong question confidently. */}
-            <span className="pf-lbl" title="The city on the player's account — not where they have played">Home city</span>
-            <select className="pf-sel" data-testid="finder-city" value={f.city}
-              // A CONFINED ACCOUNT CANNOT WIDEN THIS, and the disabled select is not why — the
-              // server refuses any city but theirs. This is courtesy.
-              disabled={!!data?.confined}
-              onChange={(e) => setF({ ...f, city: e.target.value })}>
-              <option value="">All cities</option>
-              {CITIES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
-              {/* SELECTABLE, NOT JUST COUNTED. Picking a city excludes everyone with none; this is
-                  the only way to reach them, and without it they are invisible rather than filtered. */}
-              <option value="unset">Not set{data?.noHomeCity ? ` (${N(data.noHomeCity)})` : ""}</option>
-            </select>
-            {!!data?.noHomeCity && (
-              <i className="pf-hint" data-testid="finder-nohome">
-                {N(data.noHomeCity)} players have no home city — picking one excludes them
-              </i>
+            {chipsOn > 0 || dirty ? (
+              <>
+                {dirty && <button type="button" className="pf-clear" data-testid="finder-clear" onClick={clear}>Clear all</button>}
+                <span className="pf-fcount" data-testid="finder-filtercount">
+                  {chipsOn > 0
+                    ? `${chipsOn} filter${chipsOn === 1 ? "" : "s"} on`
+                    : "No filters beyond the search"}
+                </span>
+              </>
+            ) : (
+              <span className="pf-fcount" data-testid="finder-filtercount">
+                No filters — all {N(total)} players
+              </span>
             )}
-            <span className="pf-lbl pf-lbl2">Member</span>
-            <div className="pf-seg" role="group" aria-label="Member">
-              {MEM_OPTS.map(([v, t]) => (
-                <button key={v} type="button" data-testid={`finder-member-${v}`}
-                  aria-pressed={f.member === v} className={f.member === v ? "on" : ""}
-                  onClick={() => setF({ ...f, member: v })}>{t}</button>
-              ))}
+          </div>
+
+          {/* THE REASON IS TEXT IN THE BAR, NOT A TOOLTIP. The Played chip is dimmed and opens
+              nothing, and a disabled control is the one thing nobody hovers — so a `title` would
+              be a reason that is never read. It stays where the old row put it: on screen. */}
+          {playOff && (
+            <div className="pf-why" data-testid="finder-play-why">
+              Played is off — no play dates to filter on when History is <b>Never played</b>.
             </div>
-            {dirty && <button type="button" className="pf-clear" data-testid="finder-clear" onClick={clear}>Clear filters</button>}
-          </div>
-
-          {/* ── PLAYED AT — THE MATCHES, NOT THE PLAYER ───────────────────────────────────────
-              Every control above describes who someone IS: when they signed up, what their
-              account says, whether they hold a membership. These describe WHERE AND WHEN THEY
-              ACTUALLY PLAYED, which is the question "who was at this match" — and until 0147 it
-              took a database query because the finder could not ask it.
-
-              THE FIELD SELECT NARROWS TO THE CHOSEN CITY, because a field belongs to one city and
-              offering all 79 against a picked city is offering wrong answers. Picking a city
-              clears a field that does not belong to it rather than leaving a pair that returns
-              nothing. */}
-          <div className="pf-row pf-playedat" data-testid="finder-playedat">
-            <span className="pf-lbl" title="Where and when they actually played — not what their account says">Played at</span>
-
-            <select className="pf-sel" data-testid="finder-match-city" value={f.matchCity}
-              disabled={!!data?.confined}
-              onChange={(e) => {
-                const city = e.target.value;
-                const stillValid = fieldsForCity(city).some((x) => String(x.fieldId) === f.fieldId);
-                setF({ ...f, matchCity: city, fieldId: stillValid ? f.fieldId : "" });
-              }}>
-              <option value="">Any city</option>
-              {CITIES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
-            </select>
-
-            <select className="pf-sel pf-sel-wide" data-testid="finder-field" value={f.fieldId}
-              onChange={(e) => setF({ ...f, fieldId: e.target.value })}>
-              <option value="">Any field</option>
-              {fieldsForCity(f.matchCity).map((x) => (
-                <option key={x.fieldId} value={x.fieldId}>{x.title}</option>
-              ))}
-            </select>
-
-          </div>
-
-          {/* THE SECOND HALF OF THE SAME GROUP. Kept on its own row because at 1600px the six
-              controls wrapped and dropped a lone date input onto a line of its own — a pair split
-              across rows reads as two filters. The empty label keeps it aligned under the first. */}
-          <div className="pf-row pf-playedat2">
-            <span className="pf-lbl" aria-hidden />
-            <span className="pf-lbl pf-lbl2" title="Kick-off time on the pitch">Kick-off</span>
-            <input type="time" className="pf-date" data-testid="finder-kickfrom" aria-label="Kick-off from"
-              value={f.kickFrom} onChange={(e) => setF({ ...f, kickFrom: e.target.value })} />
-            <span className="pf-to">to</span>
-            <input type="time" className="pf-date" data-testid="finder-kickto" aria-label="Kick-off to"
-              value={f.kickTo} onChange={(e) => setF({ ...f, kickTo: e.target.value })} />
-
-            <span className="pf-lbl pf-lbl2">Dates</span>
-            <input type="date" className="pf-date" data-testid="finder-matchfrom" aria-label="Match date from"
-              value={f.matchFrom} onChange={(e) => setF({ ...f, matchFrom: e.target.value })} />
-            <span className="pf-to">to</span>
-            <input type="date" className="pf-date" data-testid="finder-matchto" aria-label="Match date to"
-              value={f.matchTo} onChange={(e) => setF({ ...f, matchTo: e.target.value })} />
-          </div>
+          )}
 
           {/* NEVER PLAYED AND A MATCH FILTER CANNOT BOTH BE TRUE, and unlike the play window the
               two do NOT contradict into an ignored filter — a player who never played genuinely
@@ -652,7 +798,81 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
         .pf-btn { border: 1px solid #e2e8de; background: #fff; border-radius: 8px; padding: 5px 11px;
           font: inherit; font-size: 12px; font-weight: 600; color: #42513f; cursor: pointer; }
         .pf-btn:disabled { opacity: .45; cursor: default; }
-        .pf-params { padding: 14px 18px 4px; }
+        .pf-params { padding: 12px 18px 12px; display: flex; flex-direction: column; gap: 9px; }
+        .pf-searchrow { display: flex; align-items: center; gap: 9px; }
+
+        /* ── THE CHIP BAR ────────────────────────────────────────────────────────────────────
+           A chip is QUIET until it is doing something: grey border, grey name, no value. The .on
+           class is "moved off its default" and nothing else — the only colour in the bar, which is
+           what makes "nothing is filtered" readable at a glance. */
+        .pf-chips { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+        .pf-chipwrap { position: relative; display: inline-flex; }
+        .pf-chip { display: inline-flex; align-items: center; gap: 6px; height: 30px;
+          border: 1px solid #e2e8de; background: #fff; border-radius: 999px; padding: 0 11px;
+          font: inherit; font-size: 12.5px; font-weight: 600; color: #42513f; cursor: pointer;
+          white-space: nowrap; }
+        .pf-chip:hover { border-color: #c3d2c8; }
+        .pf-chip.on { background: #d6ecdd; border-color: #b9dcc6; color: #0f3d24; }
+        .pf-chipv { color: #16241a; font-weight: 700; max-width: 190px; overflow: hidden;
+          text-overflow: ellipsis; }
+        .pf-chip.on .pf-chipv { color: #0f3d24; }
+        .pf-caret { color: #9aa8a0; font-size: 9px; }
+        .pf-chip.on .pf-caret { color: #6ba585; }
+        .pf-x { width: 15px; height: 15px; border-radius: 999px; display: inline-flex;
+          align-items: center; justify-content: center; font-size: 11px; line-height: 1;
+          background: rgba(15,61,36,.12); color: #0f3d24; }
+        .pf-x:hover { background: rgba(15,61,36,.22); }
+        /* DIMMED AND UNCLICKABLE, with the reason in the bar rather than a title. pointer-events
+           is what makes it genuinely inert — opacity alone leaves a control that looks dead and
+           still fires. */
+        .pf-chip.off { opacity: .45; pointer-events: none; }
+        .pf-fcount { font-size: 11.5px; color: #7d8a7c; margin-left: 2px; }
+
+        /* ── THE POPOVER ─────────────────────────────────────────────────────────────────────
+           Anchored under its chip on a desktop. Its left offset is corrected in a layout effect
+           so it can never spill past the card's right edge. */
+        .pf-pop { position: absolute; top: 36px; left: 0; z-index: 30; background: #fff;
+          border: 1px solid #e2e8de; border-radius: 12px; box-shadow: 0 10px 28px rgba(16,40,28,.14);
+          padding: 11px; min-width: 262px; max-width: min(430px, calc(100vw - 32px));
+          white-space: normal; }
+        .pf-pop.wide { min-width: 300px; width: 400px; max-width: calc(100vw - 32px); }
+        .pf-poph { margin: 0 0 8px; font-size: 10px; letter-spacing: .09em; text-transform: uppercase;
+          color: #7d8a7c; font-weight: 700; }
+        .pf-opts { display: flex; flex-direction: column; gap: 2px; }
+        .pf-opts button { display: flex; align-items: center; gap: 8px; border: 0; background: none;
+          border-radius: 8px; padding: 7px 9px; font: inherit; font-size: 12.5px; font-weight: 600;
+          color: #42513f; cursor: pointer; text-align: left; width: 100%; }
+        .pf-opts button:hover { background: #f4f7f3; }
+        .pf-opts button.on { background: #d6ecdd; color: #0f3d24; font-weight: 700; }
+        .pf-tick { margin-left: auto; font-size: 11px; }
+        .pf-subhd { margin: 10px 0 6px; font-size: 10px; letter-spacing: .09em; text-transform: uppercase;
+          color: #7d8a7c; font-weight: 700; border-top: 1px solid #eef2ec; padding-top: 9px; }
+        .pf-two { display: flex; align-items: center; gap: 7px; }
+        .pf-two input { flex: 1; min-width: 0; border: 1px solid #e2e8de; border-radius: 9px;
+          padding: 6px 9px; font: inherit; font-size: 12.5px; color: #16241a; background: #fff; }
+        .pf-two span { font-size: 11.5px; color: #9aa598; }
+        .pf-popsel { width: 100%; margin-bottom: 7px; }
+        .pf-pophint { margin: 9px 0 0; font-size: 11.5px; color: #7d8a7c; line-height: 1.45; }
+        .pf-scrim { display: none; }
+
+        /* ── ON A PHONE THE POPOVER IS A BOTTOM SHEET ────────────────────────────────────────
+           A popover anchored under a chip is the wrong shape on a 390px screen: the chips wrap to
+           three rows, so "under the chip" is the middle of the screen, and a 262px card next to a
+           chip sitting at x=280 has nowhere to go. A sheet needs no anchoring at all, cannot run
+           off an edge at any width, gives the option list a real tap target, and opens where the
+           thumb already is. Same markup, same test ids — only the container moves. */
+        @media (max-width: 640px) {
+          .pf-pop { position: fixed; top: auto; left: 0; right: 0; bottom: 0; width: auto;
+            min-width: 0; max-width: none; margin-left: 0 !important; border-radius: 14px 14px 0 0;
+            padding: 14px 16px calc(16px + env(safe-area-inset-bottom));
+            max-height: 72vh; overflow-y: auto; box-shadow: 0 -8px 28px rgba(16,40,28,.18); }
+          .pf-pop.wide { width: auto; }
+          .pf-scrim { display: block; position: fixed; inset: 0; z-index: 29;
+            background: rgba(7,42,32,.28); }
+          .pf-opts button { padding: 11px 10px; font-size: 13.5px; }
+          .pf-search { width: 100%; }
+        }
+
         .pf-row { display: flex; align-items: center; gap: 12px; margin-bottom: 11px; flex-wrap: wrap; }
         .pf-lbl { width: 74px; flex: none; font-size: 10.5px; letter-spacing: .09em;
           text-transform: uppercase; color: #7d8a7c; font-weight: 600; }
