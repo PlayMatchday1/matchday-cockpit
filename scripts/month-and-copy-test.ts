@@ -216,7 +216,15 @@ console.log("\nTHE MONTH VIEW SHARES THE WEEK VIEW'S EDITOR, AND ITS ROWS GROW T
    * behaviour cannot come back unnoticed. */
   is("  a day cell has a MINIMUM height, not a fixed one", /\.vms-mcell\{min-height:126px/.test(VIEW), true);
   is("  control: the fixed height is gone", /\.vms-mcell\{height:126px/.test(VIEW), false);
-  is("  …and its list does NOT scroll inside itself", /overflow-y:auto/.test(VIEW), false);
+  /* SCOPED TO THE CELL'S OWN RULE, 2026-09-03. This scanned the WHOLE stylesheet for
+   * `overflow-y:auto`, which meant it failed the moment anything else on the page scrolled — the
+   * phone layout's field sheet holds 23 fields and must. A selector broad enough to match a
+   * different element passes and fails on the wrong subject; the thing being asserted is that the
+   * DAY CELL's list does not scroll, so that is the rule it now reads. */
+  const MLIST = VIEW.slice(VIEW.indexOf(".vms-mlist{"), VIEW.indexOf("}", VIEW.indexOf(".vms-mlist{")));
+  is("  control: the cell's list rule was located", MLIST.startsWith(".vms-mlist{") && MLIST.length > 20, true);
+  is("  …and its list does NOT scroll inside itself", /overflow-y:auto/.test(MLIST), false);
+  is("  control: the scan WOULD catch it there", /overflow-y:auto/.test(".vms-mlist{overflow-y:auto}"), true);
   is("  control: …the list rule is still present to have been checked", /\.vms-mlist\{padding:0 6px 6px/.test(VIEW), true);
   is("  the webkit scrollbar styling went with it", /vms-mlist::-webkit-scrollbar/.test(VIEW), false);
   /* EQUAL HEIGHTS PER ROW come from the grid, so the grid must still be a grid. If .vms-mweek ever

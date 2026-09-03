@@ -21,7 +21,7 @@
 // city-day is a loud coral cell (the to-do). The dark inversion lives only on the
 // Schedule cards, where a Veo match is the exception among many.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { nameForVeo } from "@/lib/veoNameSync";
 import { useAuth, canEditMatches } from "@/lib/useAuth";
 import { isConfined } from "@/lib/cityConfinement";
@@ -33,6 +33,7 @@ import { buildCopyBody, copyConfirmLine, type SourceMatch } from "@/lib/copyMatc
 import {
   buildMonthGrid, applyFilters, fieldsAvailable, reconcileFields, fieldCountLabel,
   defaultRange, rangeTitle, priceLabel, shiftRangeMonth, countLabel, fillTone,
+  fieldCounts, busiestDay, isoDow,
   type GridDay, type GridMatch,
 } from "@/lib/monthGrid";
 import MatchDrawer, { DRAWER_W, type DrawerMatch } from "@/components/MatchDrawer";
@@ -200,6 +201,25 @@ export default function VeoMasterSchedule() {
    * Friday the 11th holds nine: uncapped, one busy night makes its whole week row tall and the
    * month stops being a grid. Expanding is per-day and deliberate. */
   const [expandedDays, setExpandedDays] = useState<ReadonlySet<string>>(new Set());
+  /* PHONE ONLY. Which bottom sheet is open, and which day the map has inked. Both are inert above
+   * 640px because nothing renders the controls that set them. */
+  const [sheet, setSheet] = useState<null | "city" | "field">(null);
+  const [pickedDay, setPickedDay] = useState<string | null>(null);
+  /* IS THIS A PHONE. CSS alone would have been simpler, but it leaves the whole phone layout in
+   * the DOM at every width — on this board that is an agenda of 428 rows built, laid out and
+   * hidden on every desktop render. The phone work must not reach the desktop, and "invisible" is
+   * not the same as "not there".
+   *
+   * useLayoutEffect, not useEffect: it runs BEFORE paint, so a phone never shows a frame of the
+   * desktop grid first. Starts false so the server render and the first client render agree. */
+  const [isPhone, setIsPhone] = useState(false);
+  useLayoutEffect(() => {
+    const mq = window.matchMedia("(max-width: 639.98px)");
+    const sync = () => setIsPhone(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
   const [monthBusy, setMonthBusy] = useState(false);
   const [monthErr, setMonthErr] = useState<string | null>(null);
   const [fieldSel, setFieldSel] = useState<Set<string>>(new Set());
@@ -715,7 +735,7 @@ export default function VeoMasterSchedule() {
                 label and the "Not current week" flag are statements about a week, and neither is
                 true or even meaningful above a month grid. They do not render here at all. */}
             {view === "month" && (
-              <div className="vms-wknav" data-testid="month-nav">
+              <div className="vms-wknav vms-wknav-month" data-testid="month-nav">
                 <button type="button" className="vms-navbtn" onClick={goPrev} disabled={monthBusy}
                   aria-label="Previous month" title="Previous month">‹</button>
                 <div className="vms-wklabel">
@@ -808,8 +828,11 @@ export default function VeoMasterSchedule() {
           </div>
         </div>
 
+        {/* The month modifier exists so the phone layout can hide THIS row without touching the
+            week view's copy of it — the row is shared by all three views. */}
         {!confined && week && week.cities.length > 0 && (
-          <div className="vms-filter" data-testid="city-filter" role="group" aria-label="Filter cities">
+          <div className={"vms-filter" + (view === "month" ? " vms-filter-month" : "")}
+            data-testid="city-filter" role="group" aria-label="Filter cities">
             <span className="vms-control-label">Cities</span>
             <button type="button" data-testid="city-chip-all" aria-pressed={cityFilter.size === 0}
               className={"vms-chip" + (cityFilter.size === 0 ? " vms-chip-on" : "")} onClick={() => toggleCity(null)}>All cities</button>
@@ -840,6 +863,63 @@ export default function VeoMasterSchedule() {
         <>
           {/* THE RANGE AND THE FIELD CHIPS. Only in Month — the week view's own controls are
               untouched, which is what keeps "switch to Month and back" a no-op. */}
+          {/* ── THE PHONE BAR ─────────────────────────────────────────────────────────────────
+              TWO buttons and a switch. Below 640px the wrapped chip rows above are 491px of
+              screen — 59% of a 390px phone — before a match is on it, and the field the operator
+              is filtering on is the thing the grid then drops.
+
+              TWO, NOT THREE, AND THE ARITHMETIC IS WHY. Three equal buttons across 350px give each
+              112px, leaving 77px for a label plus a count badge, and "All fields" with a 23 badge
+              is 89px. A third dropdown here truncates its own label, which is the grid's crime one
+              row higher up. Cancelled is a BOOLEAN, not a picker: it belongs on the line that
+              already states what is on screen, and moving it is what buys the other two the width
+              to say what they mean. */}
+          {isPhone && (
+          <div className="vms-card vms-mob" data-testid="month-mobile-bar">
+            <div className="vms-mobnav">
+              <button type="button" className="vms-mobnavb" onClick={goPrev} aria-label="Previous month">‹</button>
+              <div className="vms-mobtitle" data-testid="mob-title">{range ? rangeTitle(range.from, range.to) : ""}</div>
+              <button type="button" className="vms-mobnavb" onClick={goNext} aria-label="Next month">›</button>
+              <button type="button" className="vms-mobtoday"
+                onClick={() => setRange(defaultRange(new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" })))}>
+                Today
+              </button>
+            </div>
+            <div className="vms-mobfbar">
+              <button type="button" className={"vms-mobfb" + (monthCity ? " on" : "")}
+                data-testid="mob-city" onClick={() => setSheet("city")}>
+                <span className="lab">{monthCity ?? "All cities"}</span>
+                <span className="car" aria-hidden>▼</span>
+              </button>
+              <button type="button" className={"vms-mobfb" + (fieldSel.size > 0 ? " on" : "")}
+                data-testid="mob-field" onClick={() => setSheet("field")}>
+                <span className="lab">{fieldSel.size > 0 ? "Fields" : "All fields"}</span>
+                <span className="n">{fieldSel.size > 0 ? `${fieldSel.size} of ${monthFields.length}` : String(monthFields.length)}</span>
+                <span className="car" aria-hidden>▼</span>
+              </button>
+            </div>
+            <div className="vms-mobsum">
+              <span className="txt" data-testid="mob-summary">
+                <b>{monthBusy ? "…" : `${monthVisible.length} match${monthVisible.length === 1 ? "" : "es"}`}</b>
+                {" · "}{monthCity ?? "all cities"}{" · "}{fieldCountLabel(fieldSel, monthFields)}
+              </span>
+              {monthCxCount > 0 && (
+                <button type="button" className={"vms-mobcx" + (showCx ? " on" : "")}
+                  data-testid="mob-showcx" aria-pressed={showCx} onClick={() => setShowCx((v) => !v)}>
+                  <i aria-hidden /> {monthCxCount} cancelled
+                </button>
+              )}
+            </div>
+            {/* A DROPPED FILTER IS SAID HERE TOO — it is said on the desktop bar, and that bar is
+                not on screen at this width. */}
+            {droppedFields.length > 0 && (
+              <div className="vms-mobdrop" data-testid="mob-dropped">
+                {droppedFields.join(", ")} {droppedFields.length === 1 ? "has" : "have"} no matches in this range — removed from the filter
+              </div>
+            )}
+          </div>
+          )}
+
           <div className="vms-card vms-mbar" data-testid="month-bar">
             <div className="vms-mbarrow">
               <span className="vms-lbl">From</span>
@@ -891,10 +971,43 @@ export default function VeoMasterSchedule() {
               <b>The range could not be loaded — this is not an empty month.</b> {monthErr}
             </div>
           ) : (
-            <MonthView weeks={monthWeeks} count={monthVisible.length} onOpen={openCard}
-              selectedId={drawerId} singleField={fieldSel.size === 1}
-              expandedDays={expandedDays}
-              onExpand={(iso) => setExpandedDays((prev) => new Set(prev).add(iso))} />
+            <>
+              <MonthView weeks={monthWeeks} count={monthVisible.length} onOpen={openCard}
+                selectedId={drawerId} singleField={fieldSel.size === 1}
+                expandedDays={expandedDays}
+                onExpand={(iso) => setExpandedDays((prev) => new Set(prev).add(iso))} />
+              {/* THE PHONE'S TWO HALVES. Not rendered at all above 640px; the grid above is
+                  hidden by CSS below it. */}
+              {isPhone && <MonthMap weeks={monthWeeks} picked={pickedDay}
+                onPick={(iso) => {
+                  setPickedDay(iso);
+                  document.querySelector(`[data-testid="mob-day"][data-iso="${iso}"]`)
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }} />}
+              {isPhone && <MonthAgenda weeks={monthWeeks} allMatches={monthAll} showCx={showCx}
+                picked={pickedDay} onOpen={openCard} />}
+            </>
+          )}
+          {isPhone && sheet && (
+            <PickerSheet
+              kind={sheet}
+              onClose={() => setSheet(null)}
+              cities={(week?.cities ?? []).map((c) => c.city)}
+              city={monthCity}
+              onPickCity={(c) => { setCityFilter(c ? new Set([c]) : new Set()); setSheet(null); }}
+              fields={monthFields}
+              /* THE UNFILTERED RANGE, city-scoped only. `monthAll` has the FIELD filter already
+                 applied, so counting from it made every unselected field read 0 — which is the
+                 opposite of what this count is for: it exists so an empty filter is visibly empty
+                 BEFORE you apply it. fieldCounts applies the city scope itself. */
+              counts={fieldCounts(monthData?.matches ?? [], monthCity)}
+              selected={fieldSel}
+              onToggleField={(f) => setFieldSel((prev) => {
+                const n = new Set(prev); if (n.has(f)) n.delete(f); else n.add(f); return n;
+              })}
+              onAllFields={() => setFieldSel(new Set())}
+              dropped={droppedFields}
+            />
           )}
         </>
       ) : !week || !fweek ? null : view === "schedule" ? (
@@ -1490,17 +1603,163 @@ span.vms-cam:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
    repeat(7, 1fr) cannot overflow: 1fr resolves against the container, so the columns just squash
    until they fit. A minimum width is what makes the row wider than its box and therefore
    scrollable. 132px keeps a time and a venue name legible. */
+/* ── THE PHONE LAYOUT (below 640px) ───────────────────────────────────────────────────────────
+   HIDDEN BY DEFAULT, so nothing above 640px changes: the desktop grid, both chip rows and the
+   tablet range are untouched, and the only thing the media query below does to them is switch
+   them off. */
+.vms-mob,.vms-map,.vms-ag,.vms-sheet,.vms-scrim{display:none}
+
 @media (max-width: 639.98px) {
   .vms-days{grid-template-columns:repeat(7,minmax(132px,1fr));overflow-x:auto;overflow-y:hidden;
     -webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;scrollbar-width:none;
     scroll-snap-type:x proximity;padding-bottom:2px}
   .vms-days::-webkit-scrollbar{display:none}
   .vms-day{scroll-snap-align:start}
-  /* THE MONTH GRID HAS THE SAME SHAPE and the same problem — seven columns in a 348px box. */
-  .vms-mweek{grid-template-columns:repeat(7,minmax(112px,1fr));overflow-x:auto;overflow-y:hidden;
-    -webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;scrollbar-width:none}
-  .vms-mweek::-webkit-scrollbar{display:none}
-  .vms-mdow{grid-template-columns:repeat(7,minmax(112px,1fr));overflow-x:hidden}
+  /* THE MONTH GRID IS NOT SHOWN ON A PHONE AT ALL, and the horizontal scroll goes with it.
+     It used to be seven columns at minmax(112px,1fr) — 784px of grid in a 366px box — with
+     .vms-mdow set to overflow-x:hidden above a row that scrolled, so the Mon…Sun labels could not
+     follow the columns they label and every one was mislabelled after a swipe. Deleting the scroll
+     deletes that bug rather than papering it: there is no header left to desync. */
+  .vms-month{display:none}
+  .vms-mbar{display:none}
+  .vms-filter-month{display:none}
+  /* The phone bar carries its own month nav, so the desktop one would be a second title and a
+     second pair of arrows stacked above it. The VIEW switcher beside it stays — it is how you
+     reach Month in the first place. */
+  .vms-wknav-month{display:none}
+
+  .vms-mob{display:block;padding:8px 10px}
+  .vms-mobnav{display:flex;align-items:center;gap:8px}
+  .vms-mobnavb{border:1px solid var(--line);background:#fff;border-radius:9px;width:34px;height:34px;
+    flex:none;font:inherit;font-size:16px;font-weight:700;color:#3d5245;line-height:1}
+  .vms-mobtitle{font-size:15px;font-weight:800;letter-spacing:-.2px;flex:1;min-width:0;text-align:center;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .vms-mobtoday{border:1px solid var(--line);background:#fff;border-radius:9px;height:34px;padding:0 12px;
+    flex:none;font:inherit;font-size:12.5px;font-weight:700;color:#3d5245}
+  /* TWO BUTTONS. A third would leave 77px for a label plus a count badge, and "All fields" with a
+     23 badge is 89px — it would truncate its own label. */
+  .vms-mobfbar{display:flex;gap:6px;margin-top:8px}
+  .vms-mobfb{flex:1 1 0;min-width:0;height:38px;border:1px solid var(--line);background:#fff;
+    border-radius:10px;display:flex;align-items:center;gap:5px;padding:0 9px;font:inherit;
+    font-size:12.5px;font-weight:700;color:#3d5245;text-align:left}
+  .vms-mobfb .lab{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .vms-mobfb .car{flex:none;font-size:9px;color:#9AA8A0}
+  .vms-mobfb .n{flex:none;background:#0d3b2e;color:#fff;border-radius:99px;font-size:10.5px;
+    font-weight:800;padding:1px 6px;line-height:1.35}
+  .vms-mobfb.on{background:#0d3b2e;border-color:#0d3b2e;color:#fff}
+  .vms-mobfb.on .car{color:#9fc9b5}
+  .vms-mobfb.on .n{background:rgba(255,255,255,.24)}
+  .vms-mobsum{margin-top:8px;display:flex;align-items:center;gap:8px;font-size:11.5px;
+    color:#6d7b74;font-weight:600}
+  .vms-mobsum .txt{flex:1;min-width:0}
+  .vms-mobsum b{color:#12241d;font-weight:800}
+  /* CANCELLED IS A BOOLEAN, so it sits on the line that already states what is on screen rather
+     than in the row of pickers. */
+  .vms-mobcx{flex:none;display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;
+    color:#3d5245;background:none;border:0;padding:4px 0;min-height:32px}
+  .vms-mobcx i{width:30px;height:17px;border-radius:99px;background:#dfe6e2;position:relative;flex:none}
+  .vms-mobcx i::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;
+    border-radius:99px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.18);transition:left .15s}
+  .vms-mobcx.on i{background:#35c77f}
+  .vms-mobcx.on i::after{left:15px}
+  .vms-mobdrop{margin-top:7px;font-size:11.5px;color:#8a6300;background:#fdf1d0;
+    border:1px solid #e3c369;border-radius:8px;padding:6px 8px;line-height:1.4}
+
+  /* ── the map: seven columns that hold no text, so 52px a column is enough ── */
+  .vms-map{display:block;margin-top:8px;overflow:hidden}
+  .vms-mapdow{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));background:#F7FAF8;
+    border-bottom:1px solid var(--line)}
+  .vms-mapdow div{padding:5px 0;text-align:center;font-size:9.5px;font-weight:800;
+    letter-spacing:.06em;color:#8C9E93;text-transform:uppercase}
+  .vms-mapwk{display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}
+  .vms-mapc{height:38px;border-right:1px solid #EFF3EF;border-bottom:1px solid #EFF3EF;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+    background:#fff;font:inherit;padding:0;min-width:0}
+  .vms-mapc:nth-child(7n){border-right:0}
+  .vms-mapwk:last-of-type .vms-mapc{border-bottom:0}
+  .vms-mapc b{font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+  /* SOLID INK, 5px. A 4px hairline reads as an underline nobody would ask about — the same
+     failure the green Veo dot and the fill bars were removed from the desktop grid for. */
+  .vms-mapc .dot{height:5px;border-radius:99px;background:#5EA97F;min-width:5px}
+  .vms-mapc.out{background:#FAFCFA}
+  .vms-mapc.out b{color:#C3CFC7}
+  .vms-mapc.past b{color:#93A49A}
+  .vms-mapc.past .dot{background:#C3D4CA}
+  .vms-mapc.today{background:#E9FAF0;box-shadow:inset 0 0 0 2px #35c77f}
+  .vms-mapc.today b{color:#046B45;font-weight:800}
+  .vms-mapc.sel{background:#0d3b2e}
+  .vms-mapc.sel b{color:#fff}
+  .vms-mapc.sel .dot{background:#7fd3a6}
+  /* THE LEGEND IS NOT OPTIONAL. An unlabelled mark on this view has had to be explained aloud
+     twice ("what are the yellow lines"). Explain it or drop it. */
+  .vms-mapleg{display:flex;align-items:center;gap:5px;padding:5px 9px;border-top:1px solid #EFF3EF;
+    background:#FBFDFB;font-size:10.5px;font-weight:600;color:#6d7b74}
+  .vms-mapleg s{text-decoration:none;height:5px;border-radius:99px;background:#5EA97F;flex:none}
+
+  /* ── the agenda: one match, one full-width row ── */
+  .vms-ag{display:block;margin-top:8px;overflow:hidden}
+  .vms-agempty{padding:22px 12px;text-align:center;font-size:12.5px;color:#6d7b74}
+  .vms-agdh{display:flex;align-items:baseline;gap:7px;padding:8px 12px 6px;background:#F7FAF8;
+    border-bottom:1px solid #EFF3EF;border-top:1px solid #EFF3EF}
+  .vms-ag>div:first-child .vms-agdh{border-top:0}
+  .vms-agdh b{font-size:12.5px;font-weight:800}
+  .vms-agdh .td{font-size:9.5px;font-weight:900;letter-spacing:.06em;text-transform:uppercase;
+    color:#fff;background:#35c77f;border-radius:4px;padding:1px 5px}
+  .vms-agdh .n{margin-left:auto;font-size:11px;font-weight:700;color:#6d7b74;
+    font-variant-numeric:tabular-nums;text-align:right}
+  .vms-agdh.past b,.vms-agdh.past .n{color:#93A49A}
+  .vms-agi{display:flex;align-items:center;gap:9px;width:100%;padding:9px 12px;border:0;
+    border-bottom:1px solid #EFF3EF;background:#fff;font:inherit;text-align:left;min-height:44px}
+  .vms-agi:last-child{border-bottom:0}
+  .vms-agi>b{flex:none;width:62px;font-size:12.5px;font-weight:800;font-variant-numeric:tabular-nums;
+    white-space:nowrap}
+  /* THE FIELD WRAPS. It does NOT ellipse — a truncated field is the grid's failure in miniature,
+     and an agenda row can grow because nothing sits beside it to be knocked out of alignment. */
+  .vms-agi>span{flex:1;min-width:0;font-size:12.5px;font-weight:600;color:#3d5245;
+    white-space:normal;overflow-wrap:anywhere;line-height:1.3}
+  .vms-agi>i{flex:none;font-style:normal;font-size:11.5px;font-weight:800;
+    font-variant-numeric:tabular-nums;white-space:nowrap;color:#12241d}
+  .vms-agfull{color:#046B45}
+  .vms-aglow{color:#8a6300}
+  .vms-agi>em.pr{flex:none;font-style:normal;font-size:11.5px;font-weight:700;
+    font-variant-numeric:tabular-nums;white-space:nowrap;color:#046B45;width:44px;text-align:right}
+  .vms-agi.cx{background:#FDF6F4}
+  .vms-agi.cx>b,.vms-agi.cx>span,.vms-agi.cx>i,.vms-agi.cx>em{color:#b08278}
+  .vms-agi.cx>span{text-decoration:line-through}
+  .vms-agi .cxtag{flex:none;font-style:normal;font-size:9.5px;font-weight:900;letter-spacing:.05em;
+    color:#a8391a;background:#fdeae4;border-radius:4px;padding:1px 5px}
+
+  /* ── the sheet ── */
+  .vms-scrim{display:block;position:fixed;inset:0;z-index:60;background:rgba(18,36,29,.42)}
+  .vms-sheet{display:flex;flex-direction:column;position:fixed;left:0;right:0;bottom:0;z-index:61;
+    background:#fff;border-radius:16px 16px 0 0;max-height:82vh;
+    padding-bottom:env(safe-area-inset-bottom);box-shadow:0 -8px 28px rgba(16,40,28,.2)}
+  .vms-sh{display:flex;align-items:center;gap:8px;padding:12px 14px 10px;border-bottom:1px solid #EFF3EF}
+  .vms-sh b{font-size:14px;font-weight:800}
+  .vms-sh .cnt{font-size:11.5px;color:#6d7b74;font-weight:600}
+  .vms-sh .x{margin-left:auto;border:1px solid #0d3b2e;background:#0d3b2e;color:#fff;border-radius:9px;
+    height:32px;padding:0 12px;font:inherit;font-size:12.5px;font-weight:700}
+  .vms-ssearch{margin:10px 14px 8px;height:38px;border:1px solid var(--line);border-radius:10px;
+    padding:0 10px;font:inherit;font-size:13px;color:#12241d;background:#fff}
+  .vms-sall{margin:0 14px 8px;display:flex;gap:6px}
+  .vms-sall button{flex:1;height:34px;border:1px solid var(--line);background:#fff;border-radius:9px;
+    font:inherit;font-size:12px;font-weight:700;color:#3d5245}
+  .vms-sall button.on{background:#0d3b2e;border-color:#0d3b2e;color:#fff}
+  .vms-sdrop{margin:0 14px 8px;font-size:11.5px;color:#8a6300;background:#fdf1d0;
+    border:1px solid #e3c369;border-radius:8px;padding:6px 8px;line-height:1.4}
+  .vms-slist{flex:1;min-height:0;overflow-y:auto;border-top:1px solid #EFF3EF}
+  .vms-sempty{padding:18px 14px;font-size:12.5px;color:#6d7b74}
+  .vms-sit{display:flex;align-items:center;gap:10px;width:100%;padding:0 14px;min-height:46px;
+    border:0;border-bottom:1px solid #EFF3EF;background:#fff;font:inherit;font-size:13px;
+    font-weight:600;color:#3d5245;text-align:left}
+  .vms-sit .bx{flex:none;width:19px;height:19px;border-radius:5px;border:1.5px solid #C6D4CC;
+    background:#fff;position:relative}
+  .vms-sit.on .bx{background:#0d3b2e;border-color:#0d3b2e}
+  .vms-sit.on .bx::after{content:"";position:absolute;left:6px;top:2px;width:5px;height:10px;
+    border:solid #fff;border-width:0 2px 2px 0;transform:rotate(42deg)}
+  .vms-sit .nm{flex:1;min-width:0;white-space:normal;overflow-wrap:anywhere;line-height:1.3;padding:8px 0}
+  .vms-sit .ct{flex:none;font-size:11px;font-weight:700;color:#9AA8A0;font-variant-numeric:tabular-nums}
+  .vms-sit.on{color:#12241d;font-weight:700}
 }
 `;
 
@@ -1548,6 +1807,190 @@ function MonthView({ weeks, count, onOpen, selectedId, singleField, expandedDays
         </div>
       ))}
     </div>
+  );
+}
+
+/* ── THE MONTH MAP (phone only) ───────────────────────────────────────────────────────────────
+ * Seven columns that hold NO TEXT. That is the whole trick: the desktop cell has to carry a time,
+ * a field, a count and a price — four things needing ~112px — and seven of those is 784px of grid
+ * in a 366px box, which is why Fri, Sat and Sun were only reachable by a sideways swipe. A day
+ * number and a density bar fit in 52px, so Saturday is on screen and nothing scrolls sideways.
+ *
+ * THE BAR IS MEASURED AGAINST THE BUSIEST DAY IN THE RANGE, not a constant: against a constant it
+ * says nothing in a quiet month and saturates in a busy one. It has a legend under it because an
+ * unlabelled mark on this exact view has already had to be explained out loud twice.
+ */
+function MonthMap({ weeks, picked, onPick }: {
+  weeks: GridDay[][]; picked: string | null; onPick: (iso: string) => void;
+}) {
+  const peak = busiestDay(weeks);
+  return (
+    <div className="vms-card vms-map" data-testid="month-map">
+      <div className="vms-mapdow">
+        {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => <div key={i}>{d}</div>)}
+      </div>
+      {weeks.map((wk, wi) => (
+        <div className="vms-mapwk" data-testid="mob-mapweek" key={wi}>
+          {wk.map((d) => {
+            const n = d.inRange ? d.matches.length : 0;
+            // FLOOR 5px so a single match is a visible mark rather than a hairline nobody sees;
+            // hidden outright on a genuinely empty day, so "none" and "one" are not the same width.
+            const w = peak > 0 && n > 0 ? Math.max(5, Math.round((n / peak) * 30)) : 5;
+            return (
+              <button type="button" key={d.iso} data-testid="mob-mapcell" data-iso={d.iso} data-n={n}
+                aria-label={`${d.iso}, ${n} match${n === 1 ? "" : "es"}`}
+                className={"vms-mapc" + (d.inRange ? "" : " out") + (d.isToday ? " today" : "")
+                  + (d.isPast ? " past" : "") + (picked === d.iso ? " sel" : "")}
+                onClick={() => n > 0 && onPick(d.iso)}>
+                <b>{d.day}</b>
+                <span className="dot" style={{ width: w, visibility: n > 0 ? "visible" : "hidden" }} />
+              </button>
+            );
+          })}
+        </div>
+      ))}
+      <div className="vms-mapleg" data-testid="mob-maplegend">
+        <s style={{ width: 5 }} /><s style={{ width: 16 }} /><s style={{ width: 30 }} />
+        <span>Bar = that day&rsquo;s match count, against the busiest day in the range.</span>
+      </div>
+    </div>
+  );
+}
+
+/* ── THE AGENDA (phone only) ──────────────────────────────────────────────────────────────────
+ * One match, one full-width row. 350px of content instead of 112 means the field is written out
+ * rather than being the flex item that gives way.
+ *
+ * ONLY DAYS WITH MATCHES GET A SECTION. Thirty empty headers to scroll past is the same defect
+ * pointing the other way; the map above still shows every day, so the month stays complete.
+ *
+ * NO +N MORE. A day here is a section, not a fixed-height cell, so it has no height to overflow —
+ * MONTH_CAP exists to stop one busy night making its whole week row tall, and there are no week
+ * rows here.
+ */
+const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** "Thu 3 Sep". isoDow does the weekday on a UTC-midnight date — a calendar bound, not an instant,
+ *  so it cannot shift — and the day and month are sliced straight off the string. */
+function agendaDate(iso: string): string {
+  return `${DOW[isoDow(iso) - 1]} ${Number(iso.slice(8, 10))} ${MON[Number(iso.slice(5, 7)) - 1]}`;
+}
+
+function MonthAgenda({ weeks, allMatches, showCx, picked, onOpen }: {
+  weeks: GridDay[][]; allMatches: GridMatch[]; showCx: boolean;
+  picked: string | null; onOpen: (id: number) => void;
+}) {
+  // How many cancelled the toggle is HIDING on each day — so a day can say so rather than just
+  // being quietly shorter than the map above it claims.
+  const hiddenCx = new Map<string, number>();
+  if (!showCx) for (const m of allMatches) if (m.cancelled) hiddenCx.set(m.date, (hiddenCx.get(m.date) ?? 0) + 1);
+
+  const days = weeks.flat().filter((d) => d.inRange && d.matches.length > 0);
+  return (
+    <div className="vms-card vms-ag" data-testid="month-agenda">
+      {days.length === 0 ? (
+        <div className="vms-agempty">No matches in this range with these filters.</div>
+      ) : days.map((d) => {
+        const cx = hiddenCx.get(d.iso) ?? 0;
+        return (
+          <div key={d.iso}>
+            <div className={"vms-agdh" + (d.isPast ? " past" : "")} data-testid="mob-day" data-iso={d.iso}
+              style={picked === d.iso ? { background: "#E9FAF0" } : undefined}>
+              <b>{agendaDate(d.iso)}</b>
+              {d.isToday && <span className="td">Today</span>}
+              <span className="n">
+                {d.matches.length} match{d.matches.length === 1 ? "" : "es"}
+                {cx > 0 && ` · ${cx} cancelled hidden`}
+              </span>
+            </div>
+            {d.matches.map((m) => {
+              // AMBER ONLY ON TODAY, and fillTone is where that lives — never re-tested here.
+              const tone = fillTone(m, d.isToday);
+              return (
+                <button type="button" key={m.apiId} className={"vms-agi" + (m.cancelled ? " cx" : "")}
+                  data-testid="mob-match" data-id={m.apiId} data-tone={tone || "none"}
+                  data-cancelled={m.cancelled ? "1" : "0"} onClick={() => onOpen(m.apiId)}>
+                  <b>{m.time}</b>
+                  {/* THE FIELD WRAPS, IT DOES NOT ELLIPSE. "LBJ Early College High School" is 207px
+                      of text in a 173px column; an ellipsis there makes the check pass while the
+                      operator reads a truncated field, which is the grid's failure in miniature. An
+                      agenda can grow a row because nothing sits beside it to be knocked out of
+                      alignment — the same property that made this an agenda at all. */}
+                  <span>{m.venue}</span>
+                  {m.cancelled && <em className="cxtag">CX</em>}
+                  <i className={tone ? `vms-ag${tone}` : undefined}>{countLabel(m)}</i>
+                  {priceLabel(m.price) !== null && <em className="pr">{priceLabel(m.price)}</em>}
+                </button>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ── THE PICKER SHEET (phone only) ────────────────────────────────────────────────────────────
+ * The same control Player Finder got, for the same reason: the filter you are NOT using should
+ * cost nothing on screen. The button that opens it carries the current selection, so the bar
+ * states what is filtered without listing what is not.
+ *
+ * SELECTING NOTHING STILL MEANS ALL — applyFilters is untouched, only its control changed. */
+function PickerSheet({ kind, onClose, cities, city, onPickCity, fields, counts, selected, onToggleField, onAllFields, dropped }: {
+  kind: "city" | "field"; onClose: () => void;
+  cities: string[]; city: string | null; onPickCity: (c: string | null) => void;
+  fields: string[]; counts: Map<string, number>; selected: ReadonlySet<string>;
+  onToggleField: (f: string) => void; onAllFields: () => void; dropped: string[];
+}) {
+  const [q, setQ] = useState("");
+  const isCity = kind === "city";
+  // 23 fields is already past scanning and the board grows, which is what the search is for.
+  const list = (isCity ? cities : fields).filter((x) => x.toLowerCase().includes(q.trim().toLowerCase()));
+  return (
+    <>
+      <div className="vms-scrim" data-testid="mob-scrim" onClick={onClose} />
+      <div className="vms-sheet" data-testid="mob-sheet" data-kind={kind} role="dialog" aria-label={isCity ? "City" : "Field"}>
+        <div className="vms-sh">
+          <b>{isCity ? "City" : "Field"}</b>
+          <span className="cnt" data-testid="mob-sheet-count">
+            {isCity ? (city ?? "All cities") : `${selected.size || fields.length} of ${fields.length} selected`}
+          </span>
+          <button type="button" className="x" data-testid="mob-sheet-done" onClick={onClose}>Done</button>
+        </div>
+        <input className="vms-ssearch" data-testid="mob-sheet-search" value={q} onChange={(e) => setQ(e.target.value)}
+          placeholder={isCity ? `Search ${cities.length} cities` : `Search ${fields.length} fields`} />
+        <div className="vms-sall">
+          {/* NOT LIT WHILE A SUBSET IS SELECTED — that would contradict the count beside it. */}
+          <button type="button" data-testid="mob-sheet-all"
+            className={(isCity ? !city : selected.size === 0) ? "on" : ""}
+            onClick={() => (isCity ? onPickCity(null) : onAllFields())}>
+            {isCity ? "All cities" : "All fields"}
+          </button>
+          {!isCity && <button type="button" data-testid="mob-sheet-clear" onClick={onAllFields}>Clear</button>}
+        </div>
+        {dropped.length > 0 && !isCity && (
+          <div className="vms-sdrop" data-testid="mob-sheet-dropped">
+            {dropped.join(", ")} {dropped.length === 1 ? "has" : "have"} no matches in this range — removed from the filter
+          </div>
+        )}
+        <div className="vms-slist">
+          {list.length === 0 ? (
+            <div className="vms-sempty">Nothing matches &ldquo;{q}&rdquo;.</div>
+          ) : list.map((x) => {
+            const on = isCity ? city === x : selected.has(x);
+            return (
+              <button type="button" key={x} className={"vms-sit" + (on ? " on" : "")}
+                data-testid="mob-sheet-item" data-name={x} data-on={on ? "1" : "0"}
+                onClick={() => (isCity ? onPickCity(x) : onToggleField(x))}>
+                <span className="bx" aria-hidden />
+                <span className="nm">{x}</span>
+                {!isCity && <span className="ct">{counts.get(x) ?? 0}</span>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </>
   );
 }
 

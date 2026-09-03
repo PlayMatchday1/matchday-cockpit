@@ -181,6 +181,39 @@ export function applyFilters(
 export const fieldsAvailable = (matches: readonly GridMatch[], city: string | null): string[] =>
   [...new Set(matches.filter((m) => !city || m.city === city).map((m) => m.venue))].sort();
 
+/* ── WHAT THE PHONE'S CONTROLS NEED ───────────────────────────────────────────────────────────
+ * All three are derivations of what is ALREADY on screen, so the phone layout cannot disagree
+ * with the desktop grid about the same range. None of them filters — they count what a filter
+ * would give you, which is the point: an empty filter must be visibly empty BEFORE it is applied.
+ */
+
+/** How many matches each field has in the range, honouring the CITY filter but not the field one —
+ *  a field's count must not change because a different field is selected. */
+export function fieldCounts(
+  matches: readonly GridMatch[], city: string | null,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const m of matches) {
+    if (city && m.city !== city) continue;
+    out.set(m.venue, (out.get(m.venue) ?? 0) + 1);
+  }
+  return out;
+}
+
+/** iso -> how many matches that day holds, over the days actually in range. */
+export function dayMatchCounts(weeks: readonly (readonly GridDay[])[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const w of weeks) for (const d of w) if (d.inRange) out.set(d.iso, d.matches.length);
+  return out;
+}
+
+/* THE DENSITY BAR'S DENOMINATOR: the busiest day in the RANGE, not a fixed number. A bar drawn
+ * against a constant says nothing on a quiet month and saturates on a busy one; drawn against the
+ * month's own peak it always spans the full width somewhere, which is what makes the other days
+ * readable as relative. Returns 0 for an empty range, and the caller must not divide by it. */
+export const busiestDay = (weeks: readonly (readonly GridDay[])[]): number =>
+  Math.max(0, ...[...dayMatchCounts(weeks).values()]);
+
 /**
  * RECONCILE A SELECTION AGAINST WHAT IS NOW AVAILABLE. When the range or the city changes, a
  * selected field may no longer have any matches. Keeping it would silently filter the grid down to
