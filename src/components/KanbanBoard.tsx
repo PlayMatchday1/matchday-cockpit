@@ -20,6 +20,7 @@ import {
   firstName,
   isKnownCity,
   ownerName,
+  sortOrderForDrop,
   type BoardType,
   type ChecklistItem,
   type KanbanCard,
@@ -110,22 +111,11 @@ export default function KanbanBoard({ boardType }: { boardType: BoardType }) {
       .filter((c) => c.stage === stageId && c.id !== id)
       .sort((a, b) => a.sort_order - b.sort_order);
 
-    let newOrder: number;
-    if (grouped || !beforeId) {
-      newOrder = siblings.reduce((m, c) => Math.max(m, c.sort_order), 0) + 1;
-    } else {
-      const idx = siblings.findIndex((c) => c.id === beforeId);
-      if (idx === -1) {
-        newOrder =
-          siblings.reduce((m, c) => Math.max(m, c.sort_order), 0) + 1;
-      } else {
-        const before = siblings[idx];
-        const prev = siblings[idx - 1];
-        newOrder = prev
-          ? (prev.sort_order + before.sort_order) / 2
-          : before.sort_order - 1;
-      }
-    }
+    // A grouped column (Field Pipeline's per-city accordions) has no single
+    // linear position to drop into, so it always appends — passing a null
+    // beforeId says exactly that. The maths itself is shared with the Tech
+    // Roadmap; see sortOrderForDrop in lib/kanban.ts.
+    const newOrder = sortOrderForDrop(siblings, grouped ? null : beforeId);
     if (moving.stage === stageId && moving.sort_order === newOrder) return;
     await api.updateCard(id, { stage: stageId, sort_order: newOrder });
   }

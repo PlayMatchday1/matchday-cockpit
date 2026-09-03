@@ -19,6 +19,7 @@ import {
   ROADMAP_COLS, STALE_ACTIVE_DAYS, STALE_IDEA_DAYS, FRESH_WINDOW_DAYS,
   daysInColumn, movedAtMs, createdAtMs, daysSince, dfull, staleLimitFor,
   isStale, isFresh, wantsEstimate, columnMetaLine, deriveStateBar, plural,
+  roadmapBoardOf as boardOf, columnCards, planMove, planReorder, stepTarget,
 } from "@/lib/roadmap";
 
 const C = {
@@ -36,8 +37,6 @@ const BOARDS: Record<RoadmapBoard, { name: string; sub: string }> = {
   clubhouse: { name: "Clubhouse Roadmap", sub: "What is being built for Clubhouse itself — the internal tools MatchDay Ops runs on." },
 };
 
-const boardOf = (c: KanbanCard): RoadmapBoard => (c.board === "clubhouse" ? "clubhouse" : "app");
-
 // `board` comes from the URL (/tech/tech-roadmap/app|clubhouse) — the section
 // sidebar is the single roadmap picker now; this component has no rail.
 export default function RoadmapView({ board }: { board: RoadmapBoard }) {
@@ -54,6 +53,10 @@ export default function RoadmapView({ board }: { board: RoadmapBoard }) {
   const [creating, setCreating] = useState(false);
   const dragId = useRef<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
+  // The card an insertion line is drawn above while dragging. Set only where a
+  // drop would actually change the order, so the cue never promises a move that
+  // resolves to a no-op.
+  const [dropCue, setDropCue] = useState<string | null>(null);
 
   // A single clock for the whole render so every age is consistent.
   const nowMs = useMemo(() => Date.now(), [cards]);
@@ -92,17 +95,61 @@ export default function RoadmapView({ board }: { board: RoadmapBoard }) {
   }, [boardCards, ownersById]);
   const anyNoOwner = useMemo(() => boardCards.some((c) => !c.owner_user_id), [boardCards]);
 
-  // ── move: only write when the column actually changes; stamp the clock ──
+  // ── move between columns: only write when the column actually changes ──
+  // The card lands at the end of the target column and its stale clock resets;
+  // stage_entered_at is authoritatively reset by the DB trigger, and the local
+  // value only stops the on-screen age lagging until the next reload.
   const moveCard = useCallback(async (id: string, toStage: string) => {
     if (!isAdmin) return;
-    const card = cards.find((c) => c.id === id);
-    if (!card || card.stage === toStage) return;
-    const maxOrder = cards.filter((c) => boardOf(c) === boardOf(card) && c.stage === toStage)
-      .reduce((m, c) => Math.max(m, c.sort_order), 0);
-    // stage_entered_at is authoritatively reset by the DB trigger; we also set it
-    // locally so the age updates immediately without waiting for a reload.
-    await api.updateCard(id, { stage: toStage, sort_order: maxOrder + 1, stage_entered_at: new Date().toISOString() });
+    const plan = planMove(cards, id, toStage, new Date().toISOString());
+    if (plan.kind === "noop") return;
+    await api.updateCard(id, plan.patch);
   }, [isAdmin, cards, api]);
+
+  // ── reorder INSIDE a column: sort_order and nothing else ──
+  // Not a stage change, so the stale clock must not see it. planReorder returns
+  // a patch of exactly { sort_order }; there is no stage_entered_at in this
+  // path, deliberately (see lib/roadmap.ts). It writes ONE row — the card that
+  // moved gets the midpoint between its new neighbours, and the column is not
+  // renumbered.
+  const reorder = useCallback(async (id: string, beforeId: string | null) => {
+    if (!isAdmin) return;
+    const card = cards.find((c) => c.id === id);
+    if (!card) return;
+    const plan = planReorder(columnCards(cards, boardOf(card), card.stage), id, beforeId);
+    if (plan.kind === "noop") return;
+    await api.updateCard(id, plan.patch);
+  }, [isAdmin, cards, api]);
+
+  // A drop resolves to one or the other: same column → reposition, different
+  // column → move (which appends, as it always has; beforeId is not honoured
+  // across a column boundary).
+  const handleDrop = useCallback((colId: string, beforeId: string | null) => {
+    const id = dragId.current;
+    dragId.current = null;
+    setDragOver(null);
+    setDropCue(null);
+    if (!id || !isAdmin) return;
+    const card = cards.find((c) => c.id === id);
+    if (!card) return;
+    if (card.stage === colId) void reorder(id, beforeId);
+    else void moveCard(id, colId);
+  }, [cards, isAdmin, reorder, moveCard]);
+
+  // Where to draw the insertion line while a card is dragged over another card.
+  // null in two cases, both deliberate: the drop would not change the order
+  // (dropping on yourself, or on the card directly below you), and a
+  // CROSS-column drag, which appends to the end of the target column rather
+  // than landing where the pointer is — a line pointing at a position the card
+  // will not take is worse than no line.
+  const cueFor = useCallback((overId: string, colId: string): string | null => {
+    const id = dragId.current;
+    if (!id || !isAdmin) return null;
+    const card = cards.find((c) => c.id === id);
+    if (!card || card.stage !== colId) return null;
+    const plan = planReorder(columnCards(cards, boardOf(card), card.stage), id, overId);
+    return plan.kind === "write" ? overId : null;
+  }, [cards, isAdmin]);
 
   const clearFilters = () => { setQ(""); setOwnerF(""); setPriF(""); setStaleOnly(false); };
 
@@ -160,16 +207,21 @@ export default function RoadmapView({ board }: { board: RoadmapBoard }) {
           {/* board */}
           <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2 xl:grid-cols-4" data-testid="board">
             {ROADMAP_COLS.map((col) => {
-              const total = boardCards.filter((c) => c.stage === col.id);
+              // sort_order ASCENDING, with created_at then id breaking ties —
+              // one comparator, in lib/kanban.ts, so the rendered order and the
+              // drag maths cannot disagree. This used to be a bare filter that
+              // inherited whatever order the fetch returned, so a card kept its
+              // stale position after any optimistic write until a reload.
+              const total = columnCards(cards, board, col.id);
               const vis = total.filter(passes);
               const meta = columnMetaLine(col.id, total, nowMs);
               // FIXED height (h-, not max-h): all four columns run to the same
               // bottom edge and each scrolls independently, so a 2-card column
               // shows empty space, not a short box — no ragged bottom.
               return (
-                <div key={col.id} data-col={col.id} onDragOver={(e) => { if (isAdmin && dragId.current) { e.preventDefault(); setDragOver(col.id); } }}
+                <div key={col.id} data-col={col.id} onDragOver={(e) => { if (isAdmin && dragId.current) { e.preventDefault(); setDragOver(col.id); setDropCue(null); } }}
                   onDragLeave={() => setDragOver((d) => (d === col.id ? null : d))}
-                  onDrop={(e) => { e.preventDefault(); const id = dragId.current; dragId.current = null; setDragOver(null); if (id) void moveCard(id, col.id); }}
+                  onDrop={(e) => { e.preventDefault(); handleDrop(col.id, null); }}
                   className="flex h-[min(66vh,700px)] flex-col overflow-hidden rounded-[12px] border" style={{ background: C.board, borderColor: dragOver === col.id ? C.accent : C.line }}>
                   <div className="flex flex-none items-center gap-2 border-b px-3 pb-2.5 pt-2.5" style={{ background: C.surface, borderColor: C.line }}>
                     <span className="flex h-5 w-5 flex-none items-center justify-center rounded-full text-[11px] font-[800] text-white" style={{ background: C.forestDeep }}>{ROADMAP_COLS.indexOf(col) + 1}</span>
@@ -183,8 +235,11 @@ export default function RoadmapView({ board }: { board: RoadmapBoard }) {
                     {vis.length === 0
                       ? <div className="px-3 py-4 text-center text-[12px]" style={{ color: C.muted }}>{total.length ? "No card here matches the filters." : `Nothing in ${col.title.toLowerCase()}.`}</div>
                       : vis.map((c) => <Card key={c.id} c={c} nowMs={nowMs} owner={ownerLabelOf(c)} selected={selId === c.id} draggable={isAdmin}
+                          cue={dropCue === c.id}
                           onOpen={() => setSelId(c.id)}
-                          onDragStart={() => { dragId.current = c.id; }} onDragEnd={() => { dragId.current = null; setDragOver(null); }} />)}
+                          onDragStart={() => { dragId.current = c.id; }} onDragEnd={() => { dragId.current = null; setDragOver(null); setDropCue(null); }}
+                          onDragOverCard={() => { setDragOver(col.id); setDropCue(cueFor(c.id, col.id)); }}
+                          onDropBefore={() => handleDrop(col.id, c.id)} />)}
                   </div>
                 </div>
               );
@@ -195,6 +250,11 @@ export default function RoadmapView({ board }: { board: RoadmapBoard }) {
 
       {sel && <Drawer card={sel} nowMs={nowMs} boardName={BOARDS[boardOf(sel)].name} owner={sel.owner_user_id ? ownerName(ownersById.get(sel.owner_user_id)) : cardOwnerLabel(sel)}
         isAdmin={isAdmin} owners={owners}
+        column={columnCards(cards, boardOf(sel), sel.stage)}
+        onStep={(delta) => {
+          const t = stepTarget(columnCards(cards, boardOf(sel), sel.stage), sel.id, delta);
+          if (t) void reorder(sel.id, t.beforeId);
+        }}
         onClose={() => setSelId(null)}
         onMove={(to) => moveCard(sel.id, to)}
         onPatch={(patch) => isAdmin && api.updateCard(sel.id, patch)}
@@ -239,9 +299,10 @@ function Stat({ children }: { children: React.ReactNode }) {
 }
 
 // ── card ───────────────────────────────────────────────────────────────────
-function Card({ c, nowMs, owner, selected, draggable, onOpen, onDragStart, onDragEnd }: {
-  c: KanbanCard; nowMs: number; owner: string; selected: boolean; draggable: boolean;
+function Card({ c, nowMs, owner, selected, draggable, cue, onOpen, onDragStart, onDragEnd, onDragOverCard, onDropBefore }: {
+  c: KanbanCard; nowMs: number; owner: string; selected: boolean; draggable: boolean; cue: boolean;
   onOpen: () => void; onDragStart: () => void; onDragEnd: () => void;
+  onDragOverCard: () => void; onDropBefore: () => void;
 }) {
   const pri = cardPriority(c);
   const est = cardEstimatedHours(c);
@@ -261,12 +322,19 @@ function Card({ c, nowMs, owner, selected, draggable, onOpen, onDragStart, onDra
     // top of the neighbour's meta row, hiding it). A muted "Details ›" marker
     // sits in the corner of EVERY card, visible whether or not the pointer is
     // near — aria-hidden because the whole card is already a labelled button.
-    <div data-testid="card" data-card-id={c.id} data-stage={c.stage} data-idea={isIdea ? "1" : "0"}
+    // A card is BOTH a drag source and a drop target: dropping onto it inserts
+    // the dragged card ahead of it, which is what reordering inside a column
+    // is. stopPropagation keeps the column's own "drop at the end" handler from
+    // also firing on the same event.
+    <div data-testid="card" data-card-id={c.id} data-stage={c.stage} data-idea={isIdea ? "1" : "0"} data-cue={cue ? "1" : "0"}
       draggable={draggable} onDragStart={onDragStart} onDragEnd={onDragEnd}
+      onDragOver={(e) => { if (!draggable) return; e.preventDefault(); e.stopPropagation(); onDragOverCard(); }}
+      onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onDropBefore(); }}
       onClick={onOpen} role="button" tabIndex={0} aria-label={`Open ${c.title}`}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }}
       className="relative flex-none cursor-pointer overflow-hidden rounded-[10px] border pl-[11px] pr-[10px] pt-[9px] pb-2"
       style={{ background: C.surface, borderColor: selected ? C.accent : C.line, boxShadow: selected ? `0 0 0 2px rgba(53,199,127,.22)` : "0 1px 1px rgba(13,59,46,.03)" }}>
+      {cue && <span aria-hidden data-testid="drop-cue" className="absolute inset-x-0 top-0 h-[3px]" style={{ background: C.accent }} />}
       <span aria-hidden className="absolute inset-y-0 left-0 w-[3px]" style={{ background: pri ? PRI_STRIPE[pri] : C.chipLine }} />
       <div className="flex items-start gap-2 text-[12.5px] font-[800] leading-[1.3]" style={{ color: C.forestDeep }}>
         <span className="min-w-0 flex-1">{c.title}</span>
@@ -285,8 +353,9 @@ function Card({ c, nowMs, owner, selected, draggable, onOpen, onDragStart, onDra
 }
 
 // ── drawer ─────────────────────────────────────────────────────────────────
-function Drawer({ card, nowMs, boardName, owner, isAdmin, owners, onClose, onMove, onPatch, onDelete }: {
+function Drawer({ card, nowMs, boardName, owner, isAdmin, owners, column, onStep, onClose, onMove, onPatch, onDelete }: {
   card: KanbanCard; nowMs: number; boardName: string; owner: string; isAdmin: boolean; owners: KanbanOwner[];
+  column: KanbanCard[]; onStep: (delta: -1 | 1) => void;
   onClose: () => void; onMove: (to: string) => void; onPatch: (patch: { owner_user_id?: string | null; data?: Record<string, unknown> }) => void; onDelete: () => void;
 }) {
   const stale = isStale(card, nowMs);
@@ -342,15 +411,46 @@ function Drawer({ card, nowMs, boardName, owner, isAdmin, owners, onClose, onMov
                   </button>
                 ))}
               </div>
-              <div className="mt-[7px] text-[12px]" style={{ color: C.muted }}>Moving a card resets its stale clock. Dragging it between columns does the same thing.</div>
+              <div className="mt-[7px] text-[12px]" style={{ color: C.muted }}>Moving a card to another column resets its stale clock. Dragging it between columns does the same thing. Changing its order inside a column does not — that is not a move.</div>
             </Sec>
           )}
+          {isAdmin && <OrderInColumn card={card} column={column} colTitle={colTitle} onStep={onStep} />}
           {isAdmin && <DrawerEdit card={card} owners={owners} onPatch={onPatch} onDelete={onDelete} />}
         </div>
       </aside>
     </>
   );
 }
+// Up / down inside the column. Drag is unusable on a phone, and this board is
+// read on one — these buttons are the same write path as the drag (they hand a
+// drop target to the same planReorder), not a second implementation. An end
+// button is disabled rather than hidden so the position readout beside it
+// stays meaningful.
+function OrderInColumn({ card, column, colTitle, onStep }: {
+  card: KanbanCard; column: KanbanCard[]; colTitle: string; onStep: (delta: -1 | 1) => void;
+}) {
+  const pos = column.findIndex((c) => c.id === card.id);
+  // pos === -1 would mean the drawer is open on a card that is not in the
+  // column it claims to be in — render nothing rather than a lying "0 of N".
+  if (pos === -1) return null;
+  const btn = (enabled: boolean) => ({
+    background: C.surface, borderColor: C.chipLine,
+    color: enabled ? C.forest : C.muted2, opacity: enabled ? 1 : 0.45,
+  });
+  return (
+    <Sec title="ORDER IN THIS COLUMN">
+      <div className="flex items-center gap-1.5">
+        <button type="button" data-testid="order-up" disabled={pos === 0} onClick={() => onStep(-1)}
+          className="min-h-[30px] rounded-[8px] border px-2.5 text-[11.5px] font-bold disabled:cursor-default" style={btn(pos > 0)}>↑ Move up</button>
+        <button type="button" data-testid="order-down" disabled={pos === column.length - 1} onClick={() => onStep(1)}
+          className="min-h-[30px] rounded-[8px] border px-2.5 text-[11.5px] font-bold disabled:cursor-default" style={btn(pos < column.length - 1)}>↓ Move down</button>
+        <span data-testid="order-pos" className="text-[11.5px] font-bold" style={{ color: C.muted }}>{pos + 1} of {plural(column.length, "card")} in {colTitle}</span>
+      </div>
+      <div className="mt-[7px] text-[12px]" style={{ color: C.muted }}>Order is the one thing on this board nobody derives — it is whatever you put it in, and it survives a reload. Changing it does not touch the stale clock.</div>
+    </Sec>
+  );
+}
+
 function Sec({ title, children }: { title: string; children: React.ReactNode }) {
   return <div className="mb-4"><h4 className="m-0 mb-1.5 text-[10.5px] font-[800] tracking-[0.08em]" style={{ color: C.muted }}>{title}</h4>{children}</div>;
 }
@@ -445,7 +545,7 @@ function Footer({ cards, nowMs, boardName }: { cards: KanbanCard[]; nowMs: numbe
   const noDesc = cards.filter((c) => !(typeof c.data?.description === "string" && (c.data.description as string).trim())).length;
 
   const text = cards.length === 0
-    ? `This board has no cards yet. Ages are counted in whole days from today, ${dfull(nowMs)}. Nothing on this page writes anywhere except moving a card between columns, which resets that card's clock.`
+    ? `This board has no cards yet. Ages are counted in whole days from today, ${dfull(nowMs)}. Nothing on this page writes anywhere except moving a card between columns, which resets that card's clock, and changing a card's order inside a column, which does not — reordering is not a move.`
     : `This board holds ${plural(cards.length, "card")}; each column header counts the cards in it, and shows "N of M" when a filter is hiding some. ` +
       `A card is flagged when it has not moved for longer than its column allows: ${STALE_ACTIVE_DAYS} days for In plan and In progress, ${STALE_IDEA_DAYS} days for Ideas, and never for Shipped — ` +
       `${stale.length} card${stale.length === 1 ? " is" : "s are"} flagged right now, of which ${staleIdeas} ${staleIdeas === 1 ? "is an idea" : "are ideas"}. ` +
@@ -454,7 +554,7 @@ function Footer({ cards, nowMs, boardName }: { cards: KanbanCard[]; nowMs: numbe
       `Estimates are typed by hand and most cards do not carry one: ${withEst.length} of ${cards.length} do, totalling ${plural(hrs, "hour")}, and the other ${noEst} have none — which is why this page prints no board total, because a total across ${withEst.length} of ${plural(cards.length, "card")} is not the board's total. ` +
       `Priority is typed by hand too, and ${byP[topP]} of the ${plural(cards.length, "card")} ${cards.length === 1 ? "is" : "are"} marked ${topP}${byP[topP] > cards.length / 2 ? ", so priority is not currently separating one card from another" : ""}. ` +
       `${noOwn} card${noOwn === 1 ? " has" : "s have"} no owner and ${noDesc} ${noDesc === 1 ? "has" : "have"} no description written, so those cannot be picked up without asking somebody. ` +
-      `Ages are counted in whole days from today, ${dfull(nowMs)}. Nothing on this page writes anywhere except moving a card between columns, which resets that card's clock.`;
+      `Ages are counted in whole days from today, ${dfull(nowMs)}. Nothing on this page writes anywhere except moving a card between columns, which resets that card's clock, and changing a card's order inside a column, which does not — reordering is not a move.`;
 
   return <div data-testid="footer" className="mt-3.5 rounded-[12px] border p-[14px_16px] text-[12px] leading-[1.65]" style={{ background: C.surface, borderColor: C.line, color: C.muted }}>{text}</div>;
 }

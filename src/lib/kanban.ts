@@ -48,6 +48,67 @@ export type KanbanOwner = {
   full_name: string | null;
 };
 
+// ── ordering cards inside one column ───────────────────────────────────────
+// Both boards order a column the same way, so the maths lives here once and
+// KanbanBoard (Field Pipeline) and RoadmapView (Tech Roadmap) both read it.
+
+// The minimum a card needs to be placed. Kept narrow so the ordering maths can
+// be exercised without building a whole card.
+export type Orderable = { id: string; sort_order: number };
+
+// The order a column renders in.
+//
+// Both tiebreaks are load-bearing, not decoration. sort_order is
+// `double precision NOT NULL DEFAULT 0` (migration 0066), so any two rows that
+// were never explicitly ordered are both 0; and the Clubhouse seed insert
+// (migration 0090) wrote several rows in one statement, giving them the SAME
+// created_at to the microsecond — so created_at alone cannot separate those.
+// id is the final tiebreak, which is what makes this a TOTAL order: the same
+// list on every load, whatever order Postgres happens to hand the rows back in.
+// An order that reshuffles on reload is worse than no order at all.
+export function compareBoardOrder(
+  a: { sort_order: number; created_at?: string; id: string },
+  b: { sort_order: number; created_at?: string; id: string },
+): number {
+  return (
+    (a.sort_order ?? 0) - (b.sort_order ?? 0) ||
+    (a.created_at ?? "").localeCompare(b.created_at ?? "") ||
+    a.id.localeCompare(b.id)
+  );
+}
+
+// Where a card lands when it is dropped ahead of `beforeId`. `siblings` is the
+// target column, already in compareBoardOrder order, with the moving card
+// REMOVED. `beforeId` null — or naming a card that is not in `siblings` — means
+// append to the end.
+//
+// The midpoint between the two neighbours is the whole point: a move writes ONE
+// row. Renumbering the column would write every row in it, and the audit
+// trigger (migration 0066) deliberately files no audit row for a pure
+// sort_order change — so a renumber would be a silent N-row write on every
+// drag. sort_order is `double precision`, so the midpoint is exact for the ~50
+// successive halvings of one gap it takes to exhaust a double; past that the
+// two neighbours tie and compareBoardOrder's created_at/id tiebreak still
+// yields a stable order rather than a shuffling one.
+//
+// The `0` seed on the max is deliberate and harmless: a column whose every
+// sort_order is negative appends at 1, which is still after all of them.
+export function sortOrderForDrop(
+  siblings: Orderable[],
+  beforeId: string | null,
+): number {
+  const append = () =>
+    siblings.reduce((m, c) => Math.max(m, c.sort_order), 0) + 1;
+  if (!beforeId) return append();
+  const idx = siblings.findIndex((c) => c.id === beforeId);
+  if (idx === -1) return append();
+  const before = siblings[idx];
+  const prev = siblings[idx - 1];
+  return prev
+    ? (prev.sort_order + before.sort_order) / 2
+    : before.sort_order - 1;
+}
+
 export type StageDef = {
   id: string;
   title: string;
