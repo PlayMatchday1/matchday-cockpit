@@ -53,6 +53,11 @@ export default function CmActionItems({ month, setMonth, city, setCity, currentM
   const takeaways = useMemo(() => teamItems(items, "takeaway"), [items]);
   const hasAnything = items.length > 0;
 
+  /* WHICH ADD FORM IS OPEN, by key. The trigger moved into each card's header as a small +, so the
+   * form and its button are no longer the same element and the open state has to live above both.
+   * One at a time: two half-filled add forms on one board is not a thing anybody wants. */
+  const [addOpen, setAddOpen] = useState<string | null>(null);
+
   const cycle = (it: CmItem) => {
     if (past || it.status === null) return;
     void api.setStatus(it.id, nextStatus(it.status));
@@ -152,7 +157,9 @@ export default function CmActionItems({ month, setMonth, city, setCity, currentM
         </div>
       ) : (
         <>
-          <div data-testid="cm-board" className="grid grid-cols-1 lg:grid-cols-2">
+          {/* items-start: a two-goal Atlanta is not padded out to a four-goal Austin. Same rule
+              as the calendar's out-of-range padding day. */}
+          <div data-testid="cm-board" className="grid grid-cols-1 items-start lg:grid-cols-2">
             {cities.map((id, i) => {
               const gs = cityGoals(items, id);
               const mgr = MANAGERS.find((m) => m.cityId === id);
@@ -168,6 +175,13 @@ export default function CmActionItems({ month, setMonth, city, setCity, currentM
                       {mgr ? mgr.name : "No manager"}
                     </span>
                     <span className="ml-auto text-[11px] font-bold" style={{ color: C.mut }}>{done}/{gs.length} done</span>
+                    {/* THE ADD CONTROL LIVES IN THE HEADER, in the same place on every card. Seven
+                        footer links sat at seven different heights because the cards hold different
+                        numbers of goals — a ragged green edge down the page — and each one reprinted
+                        the city name the title already carries two lines above. The destination
+                        survives in aria-label; it is only the visible text that got shorter. */}
+                    {rw && <AddButton testid={`cm-add-goal-${id}`} label={`Add a goal for ${cityNameOf(id)}`}
+                      on={addOpen === `goal:${id}`} onClick={() => setAddOpen(addOpen === `goal:${id}` ? null : `goal:${id}`)} />}
                   </div>
                   {gs.map((g) => (
                     <Row key={g.id} item={g} rw={rw} onCycle={() => cycle(g)}
@@ -175,8 +189,10 @@ export default function CmActionItems({ month, setMonth, city, setCity, currentM
                   ))}
                   {/* THE CITY COMES FROM THE CARD, never a free field: cm_ai_city_shape requires
                       one and the card already knows which. */}
-                  {rw && <AddRow label={`+ Add a goal for ${cityNameOf(id)}`} testid={`cm-add-goal-${id}`}
-                    onSubmit={(v) => api.addItem({ kind: "goal", city: id, body: v.body })} />}
+                  {rw && addOpen === `goal:${id}` && (
+                    <AddForm testid={`cm-add-goal-${id}`} onCancel={() => setAddOpen(null)}
+                      onSubmit={(v) => { void api.addItem({ kind: "goal", city: id, body: v.body }); setAddOpen(null); }} />
+                  )}
                 </div>
               );
             })}
@@ -200,7 +216,11 @@ export default function CmActionItems({ month, setMonth, city, setCity, currentM
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2">
                 <div className="px-4 pb-3.5 pt-1.5 md:border-r" style={{ borderColor: C.line2 }}>
-                  <div className="pb-1 pt-1.5 text-[10px] font-bold uppercase tracking-wider" style={{ color: "#8C9E93" }}>Things to try</div>
+                  <div className="flex items-center gap-2 pb-1 pt-1.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "#8C9E93" }}>Things to try</span>
+                    {rw && <AddButton testid="cm-add-try" label="Add a thing to try" className="ml-auto"
+                      on={addOpen === "try"} onClick={() => setAddOpen(addOpen === "try" ? null : "try")} />}
+                  </div>
                   {tries.map((t) => (
                     <Row key={t.id} item={t} rw={rw} onCycle={() => cycle(t)}
                       updates={updates} api={api} author={author} siblings={tries} />
@@ -213,11 +233,17 @@ export default function CmActionItems({ month, setMonth, city, setCity, currentM
                   )}
                   {/* city IS NOT PASSED. cm_ai_team_shape requires null, and the city filter above
                       is a view, not a property of an org-wide decision. */}
-                  {rw && <AddRow label="+ Add a thing to try" testid="cm-add-try" owner
-                    onSubmit={(v) => api.addItem({ kind: "try", body: v.body, owner: v.extra })} />}
+                  {rw && addOpen === "try" && (
+                    <AddForm testid="cm-add-try" owner onCancel={() => setAddOpen(null)}
+                      onSubmit={(v) => { void api.addItem({ kind: "try", body: v.body, owner: v.extra }); setAddOpen(null); }} />
+                  )}
                 </div>
                 <div className="px-4 pb-3.5 pt-1.5">
-                  <div className="pb-1 pt-1.5 text-[10px] font-bold uppercase tracking-wider" style={{ color: "#8C9E93" }}>Takeaways</div>
+                  <div className="flex items-center gap-2 pb-1 pt-1.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "#8C9E93" }}>Takeaways</span>
+                    {rw && <AddButton testid="cm-add-takeaway" label="Add a takeaway" className="ml-auto"
+                      on={addOpen === "takeaway"} onClick={() => setAddOpen(addOpen === "takeaway" ? null : "takeaway")} />}
+                  </div>
                   {/* A TAKEAWAY IS NOT A TASK. No status pill, no owner, no chasing — a source and
                       a date and nothing else. The database refuses one a status too
                       (cm_ai_takeaway_shape), so this is not the only thing holding the line. */}
@@ -238,8 +264,10 @@ export default function CmActionItems({ month, setMonth, city, setCity, currentM
                   )}
                   {/* REQUIRED SOURCE, NO STATUS CONTROL. cm_ai_takeaway_shape rejects a takeaway
                       that carries a status or an owner, and rejects one with no source. */}
-                  {rw && <AddRow label="+ Add a takeaway" testid="cm-add-takeaway" sourceRequired
-                    onSubmit={(v) => api.addItem({ kind: "takeaway", body: v.body, source: v.extra })} />}
+                  {rw && addOpen === "takeaway" && (
+                    <AddForm testid="cm-add-takeaway" sourceRequired onCancel={() => setAddOpen(null)}
+                      onSubmit={(v) => { void api.addItem({ kind: "takeaway", body: v.body, source: v.extra }); setAddOpen(null); }} />
+                  )}
                 </div>
               </div>
           </div>
@@ -295,7 +323,7 @@ function Row({ item, rw, onCycle, updates, api, author, siblings }: {
     : { color: C.mut, borderColor: C.line, background: "#fff", dot: C.line };
 
   return (
-    <div data-testid="cm-row" data-id={item.id} data-status={s} className="border-t py-[7px]" style={{ borderColor: C.line2 }}>
+    <div data-testid="cm-row" data-id={item.id} data-status={s} className="group border-t py-[7px]" style={{ borderColor: C.line2 }}>
       <div className="flex items-start gap-2.5">
         <button type="button" data-testid="cm-status" data-status={s} disabled={!rw} onClick={onCycle}
           aria-label={`Status: ${CM_STATUS_LABEL[s]}${rw ? " — click to cycle" : " (read only)"}`}
@@ -331,6 +359,22 @@ function Row({ item, rw, onCycle, updates, api, author, siblings }: {
                 </button>
               )}
             </div>
+          ) : rw ? (
+            /* THE ABSENCE BECAME THE BUTTON. The row used to state "No progress reported" and then
+               offer "+ Report progress" on a separate line — the same fact and its remedy, stacked,
+               once per row and nineteen times per board. One quiet line does both.
+
+               NO INLINE AFFORDANCE ON A ROW THAT ALREADY HAS AN UPDATE: it wraps behind a real
+               update and duplicates the menu's Report progress. The invitation belongs where there
+               is nothing to click; once there is an update, the menu carries it. */
+            mode === "progress" ? null : (
+              <button type="button" data-testid="cm-report" onClick={() => setMode("progress")}
+                className="mt-1 inline-flex items-center gap-1.5 text-[11.5px] font-bold"
+                style={{ color: CM_GREEN }}>
+                <span aria-hidden>+</span>Add progress
+                {item.owner ? <span className="font-semibold" style={{ color: C.faint }}>· owner {item.owner}</span> : null}
+              </button>
+            )
           ) : (
             <div className="mt-1 text-[11.5px] italic" style={{ color: C.faint }}>
               No progress reported{item.owner ? ` · owner ${item.owner}` : ""}
@@ -346,17 +390,19 @@ function Row({ item, rw, onCycle, updates, api, author, siblings }: {
             <ProgressForm author={author} onCancel={() => setMode(null)}
               onSave={(body, on) => { void api.addUpdate(item.id, body, author, on); setMode(null); }} />
           )}
-          {/* A ROW THAT ALREADY HAS AN UPDATE STILL OFFERS ANOTHER — cm_action_updates is history,
-              not a field that gets overwritten. */}
-          {rw && mode === null && (
-            <button type="button" data-testid="cm-report" onClick={() => setMode("progress")}
-              className="mt-1 text-[11.5px] font-bold underline" style={{ color: CM_GREEN }}>+ Report progress</button>
-          )}
+          {/* A ROW THAT ALREADY HAS AN UPDATE STILL TAKES ANOTHER — cm_action_updates is history,
+              not a field that gets overwritten. That path is the row menu's Report progress; it is
+              no longer a second link under a line that already says something. */}
         </div>
         {rw && (
           <div className="relative flex-none">
+            {/* AT REST IT IS INVISIBLE, NOT ABSENT. Nineteen bordered boxes down the right edge
+                were nineteen things competing with the goals. It keeps its box in the layout so
+                nothing shifts, resolves the moment the cursor is on the row, and stays focusable —
+                focus-visible brings it back for a keyboard, and the menu is reachable regardless. */}
             <button type="button" data-testid="cm-menu" aria-label="Row actions" onClick={() => setMenu((v) => !v)}
-              className="rounded-[7px] border px-2 py-0.5 text-[13px] leading-none"
+              className={"rounded-[7px] border px-2 py-0.5 text-[13px] leading-none transition-opacity focus-visible:opacity-100 group-hover:opacity-100 "
+                + (menu ? "opacity-100" : "opacity-0")}
               style={{ borderColor: C.line, color: C.mut, minHeight: 24 }}>⋯</button>
             {menu && (
               <>
@@ -435,41 +481,54 @@ function ProgressForm({ author, onSave, onCancel }: {
   );
 }
 
-/* ADD. One shape for all three kinds; `owner` and `sourceRequired` say which second field it
- * carries. A takeaway's source is REQUIRED because cm_ai_takeaway_shape rejects a row without one,
- * and a takeaway form has NO status control because the same constraint rejects a status. */
-function AddRow({ label, testid, owner, sourceRequired, onSubmit }: {
-  label: string; testid: string; owner?: boolean; sourceRequired?: boolean;
-  onSubmit: (v: { body: string; extra: string }) => void;
+/* THE ADD TRIGGER — a small square +, in the card header, the same place on every card.
+ * The destination it opens is in aria-label ("Add a goal for Atlanta"), so a screen reader still
+ * hears which card it belongs to; only the VISIBLE text got shorter. */
+function AddButton({ testid, label, on, onClick, className }: {
+  testid: string; label: string; on: boolean; onClick: () => void; className?: string;
 }) {
-  const [open, setOpen] = useState(false);
+  return (
+    <button type="button" data-testid={testid} aria-label={label} title={label} aria-expanded={on}
+      onClick={onClick}
+      className={`flex h-[22px] w-[22px] flex-none items-center justify-center rounded-[7px] border text-[14px] leading-none ${className ?? ""}`}
+      style={on
+        ? { background: CM_GREEN, borderColor: CM_GREEN, color: "#fff" }
+        : { background: "#fff", borderColor: C.line, color: C.mut }}>
+      {on ? "\u00d7" : "+"}
+    </button>
+  );
+}
+
+/* THE FORM, opened by that button and rendered at the foot of the card it belongs to. One shape
+ * for all three kinds; `owner` and `sourceRequired` say which second field it carries. A takeaway's
+ * source is REQUIRED because cm_ai_takeaway_shape rejects a row without one, and a takeaway form
+ * has NO status control because the same constraint rejects a status. */
+function AddForm({ testid, owner, sourceRequired, onSubmit, onCancel }: {
+  testid: string; owner?: boolean; sourceRequired?: boolean;
+  onSubmit: (v: { body: string; extra: string }) => void; onCancel: () => void;
+}) {
   const [body, setBody] = useState("");
   const [extra, setExtra] = useState("");
   const ok = body.trim().length > 0 && (!sourceRequired || extra.trim().length > 0);
-  if (!open) {
-    return (
-      <button type="button" data-testid={testid} onClick={() => setOpen(true)}
-        className="mt-1.5 text-[12px] font-bold underline" style={{ color: CM_GREEN }}>{label}</button>
-    );
-  }
   return (
     <div className="mt-1.5 rounded-[9px] border p-2" data-testid={`${testid}-form`} style={{ borderColor: C.line, background: "#FAFCFB" }}>
       <input autoFocus value={body} onChange={(e) => setBody(e.target.value)} data-testid={`${testid}-body`}
         aria-label="What" placeholder="What is it?" className="w-full rounded-[8px] border px-2 text-[12.5px]"
+        onKeyDown={(e) => { if (e.key === "Escape") onCancel(); }}
         style={{ borderColor: C.line, minHeight: 32 }} />
       {(owner || sourceRequired) && (
         <input value={extra} onChange={(e) => setExtra(e.target.value)} data-testid={`${testid}-extra`}
           aria-label={sourceRequired ? "Source" : "Owner"}
           placeholder={sourceRequired ? "Where did this come from? (required)" : "Owner (optional)"}
+          onKeyDown={(e) => { if (e.key === "Escape") onCancel(); }}
           className="mt-1.5 w-full rounded-[8px] border px-2 text-[12.5px]" style={{ borderColor: C.line, minHeight: 32 }} />
       )}
       <div className="mt-1.5 flex items-center gap-1.5">
         <button type="button" data-testid={`${testid}-save`} disabled={!ok}
-          onClick={() => { onSubmit({ body, extra }); setBody(""); setExtra(""); setOpen(false); }}
+          onClick={() => onSubmit({ body, extra })}
           className="rounded-[8px] px-2.5 text-[11.5px] font-bold text-white disabled:opacity-40"
           style={{ background: C.forest, minHeight: 30 }}>Add</button>
-        <button type="button" onClick={() => { setOpen(false); setBody(""); setExtra(""); }}
-          className="text-[11.5px] font-bold" style={{ color: C.mut }}>Cancel</button>
+        <button type="button" onClick={onCancel} className="text-[11.5px] font-bold" style={{ color: C.mut }}>Cancel</button>
       </div>
     </div>
   );
