@@ -6,6 +6,10 @@
  */
 
 import { CITY_SCOPES } from "./cityScope";
+// THE ORDERING MATHS IS NOT KANBAN-SPECIFIC — it operates on { id, sort_order } and nothing else.
+// Imported rather than copied: a second implementation of "where does this row land" is how two
+// lists start disagreeing about what up means. See the comment on sortOrderForDrop.
+import { sortOrderForDrop } from "./kanban";
 
 /* ── THE FOUR STATUSES, AND THEY ARE THE GOALS TOOL'S ─────────────────────────────────────────
  * Slugs, labels, order and colours are matchday-goals.html's own (STATUSES/LABEL at line 165 and
@@ -133,4 +137,65 @@ export function latestUpdate(updates: readonly CmUpdate[], itemId: string): CmUp
 export function shortDate(isoDate: string): string {
   const m = Number(isoDate.slice(5, 7)), d = Number(isoDate.slice(8, 10));
   return `${MONTH_NAMES[m - 1]?.slice(0, 3) ?? "?"} ${d}`;
+}
+
+
+/* ── MOVING A ROW ─────────────────────────────────────────────────────────────────────────────
+ * One place, so the menu's Up and Down cannot disagree with each other.
+ *
+ * `siblings` is the list the row lives in, IN RENDER ORDER. Returns the sort_order to write, or
+ * null when the row is already at that end and the control should be disabled. One row is written,
+ * never the whole list renumbered.
+ *
+ * The `beforeId` shape comes from sortOrderForDrop: it names the row the moving one lands AHEAD
+ * of, in the list with the moving row removed. Removing index i shifts everything after it down
+ * one, which is why moving DOWN reaches two places along.
+ */
+export function stepOrder(siblings: readonly CmItem[], id: string, delta: -1 | 1): number | null {
+  const i = siblings.findIndex((x) => x.id === id);
+  if (i === -1) return null;
+  const at = i + delta;
+  if (at < 0 || at > siblings.length - 1) return null;
+  const rest = siblings.filter((x) => x.id !== id);
+  const anchor = delta === -1 ? siblings[at] : siblings[at + 1];
+  return sortOrderForDrop(rest, anchor ? anchor.id : null);
+}
+
+/** The next sort_order at the end of a list — where a newly added row goes. */
+export const nextOrder = (siblings: readonly CmItem[]): number =>
+  siblings.reduce((m, x) => Math.max(m, x.sort_order), 0) + 1;
+
+/** Every update for an item, newest first. The table keeps the history; this is how it is read. */
+export function updateHistory(updates: readonly CmUpdate[], itemId: string): CmUpdate[] {
+  return updates.filter((u) => u.item_id === itemId)
+    .sort((a, b) => b.reported_on.localeCompare(a.reported_on) || b.created_at.localeCompare(a.created_at));
+}
+
+/* ── WHAT AN INSERT MUST LOOK LIKE ────────────────────────────────────────────────────────────
+ * Built here rather than in the form, because migration 0158's CHECK constraints are not
+ * advisory and a form that ignores one builds a row Postgres rejects:
+ *
+ *   cm_ai_takeaway_shape — a takeaway MUST carry a source and MUST NOT carry a status or an owner.
+ *   cm_ai_city_shape     — a city goal must have a city, kind 'goal', and a status.
+ *   cm_ai_team_shape     — a team item must have city = NULL. The city FILTER must never leak in:
+ *                          adding a thing to try while the board is filtered to Austin still
+ *                          writes null, because the item is org-wide and the filter is a view.
+ */
+export type NewItem =
+  | { kind: "goal"; city: string; body: string }
+  | { kind: "try"; body: string; owner: string | null }
+  | { kind: "takeaway"; body: string; source: string };
+
+export function buildInsert(month: string, input: NewItem, sort_order: number): Record<string, unknown> {
+  if (input.kind === "goal") {
+    return { month, scope: "city", kind: "goal", city: input.city, body: input.body.trim(),
+      status: "open", owner: null, source: null, sort_order };
+  }
+  if (input.kind === "try") {
+    return { month, scope: "team", kind: "try", city: null, body: input.body.trim(),
+      status: "open", owner: input.owner?.trim() || null, source: null, sort_order };
+  }
+  // A TAKEAWAY IS NOT A TASK: no status, no owner, and it must say where it came from.
+  return { month, scope: "team", kind: "takeaway", city: null, body: input.body.trim(),
+    status: null, owner: null, source: input.source.trim(), sort_order };
 }

@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "./supabase";
-import type { CmItem, CmStatus, CmUpdate } from "./cmActions";
+import { buildInsert, nextOrder, stepOrder, type CmItem, type CmStatus, type CmUpdate, type NewItem } from "./cmActions";
 
 export type CmApi = {
   items: CmItem[];
@@ -16,8 +16,13 @@ export type CmApi = {
   error: string | null;
   reload: () => Promise<void>;
   setStatus: (id: string, status: CmStatus) => Promise<void>;
-  addUpdate: (itemId: string, body: string, author: string | null) => Promise<void>;
+  addUpdate: (itemId: string, body: string, author: string | null, reportedOn?: string) => Promise<void>;
   carryForward: (fromMonth: string, toMonth: string) => Promise<number>;
+  addItem: (input: NewItem) => Promise<void>;
+  updateItem: (id: string, patch: { body?: string; owner?: string | null; source?: string }) => Promise<void>;
+  deleteItem: (id: string) => Promise<void>;
+  /** Move a row one place within the list it is rendered in. Writes ONE row. */
+  reorder: (siblings: readonly CmItem[], id: string, delta: -1 | 1) => Promise<void>;
 };
 
 export function useCmActions(month: string): CmApi {
@@ -63,12 +68,59 @@ export function useCmActions(month: string): CmApi {
     }
   }, [reload]);
 
-  const addUpdate = useCallback(async (itemId: string, body: string, author: string | null) => {
+  /* THE CALL SITE THIS FUNCTION NEVER HAD. cm_action_updates is HISTORY: an item that already
+   * carries an update can take another, and the old one stays. reported_on is the day being
+   * reported about — a calendar day, not an instant — and defaults to today at the database. */
+  const addUpdate = useCallback(async (itemId: string, body: string, author: string | null, reportedOn?: string) => {
     const ins = await supabase.from("cm_action_updates")
-      .insert({ item_id: itemId, body, author }).select("*").single();
+      .insert({ item_id: itemId, body: body.trim(), author, ...(reportedOn ? { reported_on: reportedOn } : {}) })
+      .select("*").single();
     if (ins.error || !ins.data) { setError(ins.error?.message ?? "Could not save the update"); return; }
     setUpdates((prev) => [...prev, ins.data as CmUpdate]);
   }, []);
+
+  /* ── ADD ─────────────────────────────────────────────────────────────────────────────────────
+   * The row shape is built by buildInsert, where 0158's three CHECK constraints live in one place.
+   * NOT optimistic: the id and the defaults come back from the insert, and a row that Postgres
+   * rejects must never appear on screen first. */
+  const addItem = useCallback(async (input: NewItem) => {
+    setError(null);
+    const siblings = items.filter((i) =>
+      input.kind === "goal" ? i.scope === "city" && i.city === input.city : i.scope === "team" && i.kind === input.kind);
+    const ins = await supabase.from("cm_action_items")
+      .insert(buildInsert(month, input, nextOrder(siblings))).select("*").single();
+    if (ins.error || !ins.data) { setError(ins.error?.message ?? "Could not add that"); return; }
+    setItems((prev) => [...prev, ins.data as CmItem]);
+  }, [items, month]);
+
+  const updateItem = useCallback(async (id: string, patch: { body?: string; owner?: string | null; source?: string }) => {
+    setError(null);
+    const clean = { ...patch, ...(patch.body !== undefined ? { body: patch.body.trim() } : {}) };
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...clean } as CmItem : i)));
+    const upd = await supabase.from("cm_action_items").update(clean).eq("id", id);
+    if (upd.error) { setError(upd.error.message); void reload(); }
+  }, [reload]);
+
+  /* DELETE TAKES THE UPDATES WITH IT — cm_action_updates is ON DELETE CASCADE (0158), so the
+   * history goes with the row rather than being orphaned. Cleared locally too, or the page would
+   * hold updates pointing at an item that no longer exists. */
+  const deleteItem = useCallback(async (id: string) => {
+    setError(null);
+    setItems((prev) => prev.filter((i) => i.id !== id));
+    setUpdates((prev) => prev.filter((u) => u.item_id !== id));
+    const del = await supabase.from("cm_action_items").delete().eq("id", id);
+    if (del.error) { setError(del.error.message); void reload(); }
+  }, [reload]);
+
+  /* ONE ROW, NOT A RENUMBER. stepOrder returns the midpoint between the new neighbours, so moving
+   * a row writes that row and nothing else. */
+  const reorder = useCallback(async (siblings: readonly CmItem[], id: string, delta: -1 | 1) => {
+    const next = stepOrder(siblings, id, delta);
+    if (next === null) return;
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, sort_order: next } : i)));
+    const upd = await supabase.from("cm_action_items").update({ sort_order: next }).eq("id", id);
+    if (upd.error) { setError(upd.error.message); void reload(); }
+  }, [reload]);
 
   /* CARRY FORWARD copies the goals only — not their statuses and not their progress. A goal that
    * was at risk in September starts October open, because it is a fresh month's target and
@@ -91,5 +143,6 @@ export function useCmActions(month: string): CmApi {
     return rows.length;
   }, [reload]);
 
-  return { items, updates, loading, error, reload, setStatus, addUpdate, carryForward };
+  return { items, updates, loading, error, reload, setStatus, addUpdate, carryForward,
+    addItem, updateItem, deleteItem, reorder };
 }
