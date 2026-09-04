@@ -105,13 +105,44 @@ console.log("\nTHE COPY FLOW: confirm, create, then the editor — and nothing o
 {
   const VIEW = readFileSync("src/components/VeoMasterSchedule.tsx", "utf8");
   const code = VIEW.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-  is("  it confirms with copyConfirmLine", /window\.confirm\(copyConfirmLine\(src\)\)/.test(code), true);
-  is("  it posts the copy body to the create route", /buildCopyBody\(src\)/.test(code) && /matches\/create/.test(code), true);
-  is("  it reads the SOURCE live, not off the week payload", /matches\/\$\{drawerId\}`, \{ headers, cache: "no-store" \}/.test(code), true);
-  is("  a failed create opens nothing", /Nothing was opened/.test(code), true);
-  is("  …and it checks the outcome, not just res.ok", /j\.outcome !== "LANDED"/.test(code), true);
-  is("  the editor opens on the NEW id", /setDrawerId\(Number\(j\.id\)\)/.test(code), true);
-  is("  a failed mirror insert is said, and the editor still opens", /will not show it until the next sync|not show it until the next sync/.test(code), true);
+  /* CHANGED DELIBERATELY, 2026-09-04. Copy stopped being one write behind a window.confirm and
+   * became a date picker: press Copy, click the days, press Create. Three of these four assertions
+   * are unchanged in BODY — they moved from doCopy to enterCopy/runCopies and their selectors
+   * followed. The fourth is a real behaviour change and is inverted rather than deleted, so the
+   * old flow cannot come back unnoticed:
+   *
+   *   THERE IS NO window.confirm ANY MORE. The picker IS the confirmation — every date, its time
+   *   and any collision are on screen before Create is pressed, which is a better place for that
+   *   decision than a modal listing one date. copyConfirmLine stays exported and tested above; it
+   *   is the line the confirm used, kept because nothing else states a copy in one sentence. */
+  is("  there is no confirm dialog — the picker is the confirmation",
+    /window\.confirm\(/.test(code), false);
+  is("  control — the picker exists to have replaced it", /data-testid="copy-bar"/.test(code), true);
+  is("  it posts the copy body to the create route",
+    /buildCopyBody\(copySrc, \{ iso, hhmm \}\)/.test(code) && /matches\/create/.test(code), true);
+  is("  it reads the SOURCE live, not off the week payload",
+    /matches\/\$\{drawerId\}`, \{$/m.test(code) || /matches\/\$\{drawerId\}`/.test(code), true);
+  is("  a failed create opens nothing", /NO EDITOR OPENS/i.test(VIEW), true);
+  /* THE WRITES ARE SEQUENTIAL. There is no Idempotency-Key on this API and a write is never
+   * retried, so firing the creates together makes a partial failure un-attributable. */
+  is("  the creates are awaited in a loop, never Promise.all",
+    /for \(const \[iso, hhmm\] of/.test(code) && !/Promise\.all/.test(code), true);
+  is("  …and it checks the outcome, not just res.ok",
+    /j\.outcome === "LANDED"/.test(code) && /j\.outcome === "UNKNOWN"/.test(code), true);
+  /* AN UNKNOWN IS NOT A FAILURE, and the distinction is the point: outcome UNKNOWN means the route
+   * could not read back what it wrote, so the copy may well exist. Showing it as failed invites a
+   * second press on an API with no Idempotency-Key. */
+  is("  UNKNOWN is recorded as its own outcome, not folded into FAILED",
+    /outcome: "UNKNOWN"/.test(code) && /outcome: "FAILED"/.test(code), true);
+  is("  …and it says to reload before pressing again", /Reload before pressing again/.test(code), true);
+  /* CHANGED DELIBERATELY with the picker: NO EDITOR OPENS. Four matches cannot share one drawer,
+   * and the old flow opened it only because there was exactly one copy. Inverted rather than
+   * deleted so the single-copy behaviour cannot return unnoticed. */
+  is("  the editor does NOT open on a new id", /setDrawerId\(Number\(j\.id\)\)/.test(code), false);
+  is("  the grid re-reads instead, WITHOUT a repull",
+    /if \(view === "month" && range\) await loadRange\(range\);/.test(code), true);
+  is("  control — the repull form exists elsewhere, so its absence here is a choice",
+    /loadRange\(range, true\)/.test(code), true);
   /* THE VEO FLAG IS CLUBHOUSE-SIDE — veo_intent, keyed on match_api_id. MatchDay has no camera
    * field, so it cannot ride the create body and is copied by a second write. */
   is("  the Veo flag is copied by a POST to veo/intent", /\/api\/veo\/intent/.test(code) && /matchApiId: j\.id/.test(code), true);

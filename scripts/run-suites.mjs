@@ -131,6 +131,12 @@ const NODE_SUITES = [
   // state to fall back on — the create endpoint refuses isCancelled — so the body being right at
   // creation is the whole of the safety.
   "scripts/copy-match-body-test.ts",
+  /* COPY ONTO PICKED DATES. In the mandatory set because a copy is a LIVE MATCH on production that
+   * a player can register against, and because its one hard rule fails silently: endDate is
+   * SHIFTED by the start's delta, never retargeted onto the picked date. Get that wrong and a
+   * match ends before it starts, or a midnight-crossing fixture is truncated by a day — both of
+   * which render as a perfectly ordinary card in the grid. This is the only place that is visible. */
+  "scripts/copy-retarget-test.ts",
   // A MONEY FIELD YOU CAN TYPE IN. Both panels bound `value` to a formatted string on every
   // render, so the field reformatted on every keystroke and the caret landed in the cents.
   // Asserts focus -> type "12" -> blur reads 12.00 with 1200 on the wire, with a control that

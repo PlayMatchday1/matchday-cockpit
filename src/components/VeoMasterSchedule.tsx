@@ -207,6 +207,16 @@ export default function VeoMasterSchedule() {
   /* PHONE ONLY. Which bottom sheet is open, and which day the map has inked. Both are inert above
    * 640px because nothing renders the controls that set them. */
   const [sheet, setSheet] = useState<null | "city" | "field">(null);
+  /* ── COPY ONTO PICKED DATES ────────────────────────────────────────────────────────────────
+   * The month grid IS the picker. It is already a calendar of the right month, already knows
+   * which days are past, and already sits under the button — a separate date control in a dialog
+   * would be a second calendar disagreeing with the first about what month is showing.
+   *
+   * A Map of ISO date → "HH:MM", HELD ABOVE THE GRID and never on a cell, which is what lets the
+   * ‹ › arrows work mid-pick and carry the picks with them. A multi-month copy is one operation. */
+  const [copySrc, setCopySrc] = useState<SourceMatch | null>(null);
+  const [picks, setPicks] = useState<Map<string, string>>(new Map());
+  const [copyRun, setCopyRun] = useState<{ iso: string; hhmm: string; outcome: string; id?: number; error?: string }[] | null>(null);
   const [pickedDay, setPickedDay] = useState<string | null>(null);
   // IS THIS A PHONE — lib/usePhone, shared with Slate Review so the two views cannot disagree
   // about where a phone ends. Same breakpoint, same pre-paint timing, one implementation.
@@ -602,55 +612,103 @@ export default function VeoMasterSchedule() {
    * is changed. That is the accepted tradeoff — there is deliberately no draft state, because a
    * draft is a second lifecycle for a match and the API has none. */
   const [copyBusy, setCopyBusy] = useState(false);
-  const doCopy = useCallback(async () => {
+  /* ── STEP ONE: READ THE SOURCE, THEN HAND THE GRID OVER ────────────────────────────────────
+   * The source is read LIVE from the API, not off the grid payload: the grid carries five fields
+   * and a copy needs all 27. Reading the mirror would copy whatever the last sync happened to
+   * hold. Unchanged from the single-copy flow — only what happens next is new. */
+  const enterCopy = useCallback(async () => {
     if (drawerId == null || copyBusy) return;
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) { showToast("No active session — sign in again.", true); return; }
+    setCopyBusy(true);
+    try {
+      const sres = await fetch(`/api/matchday/production/matches/${drawerId}`, {
+        headers: { Authorization: `Bearer ${token}` }, cache: "no-store",
+      });
+      const sj = await sres.json();
+      if (!sres.ok) { showToast(`Couldn't read the match to copy: ${sj?.error ?? sres.status}`, true); return; }
+      setCopySrc((sj.match ?? sj) as SourceMatch);
+      setPicks(new Map());
+      setCopyRun(null);
+      setDrawerId(null);          // the drawer would cover the calendar you are about to pick on
+    } catch (e) {
+      showToast(`Couldn't read the match to copy: ${e instanceof Error ? e.message : String(e)}`, true);
+    } finally { setCopyBusy(false); }
+  }, [drawerId, copyBusy, showToast]);
+
+  const exitCopy = useCallback(() => { setCopySrc(null); setPicks(new Map()); }, []);
+
+  /** The source's own time, which every picked date opens at. */
+  const srcHHMM = typeof copySrc?.startDate === "string" ? String(copySrc.startDate).slice(11, 16) : "";
+
+  const togglePick = useCallback((iso: string) => {
+    setPicks((prev) => {
+      const n = new Map(prev);
+      if (n.has(iso)) n.delete(iso); else n.set(iso, srcHHMM);
+      return n;
+    });
+  }, [srcHHMM]);
+
+  /* ── STEP TWO: THE WRITES, ONE AT A TIME ───────────────────────────────────────────────────
+   * SEQUENTIAL, awaited. Not Promise.all. There is no Idempotency-Key on this API and a write is
+   * never retried, so firing four creates together makes a partial failure un-attributable —
+   * exactly the condition the create route was written to avoid.
+   *
+   * NOTHING IS EVER RETRIED, automatically or on a timer. A second press is a fresh operator
+   * decision, not a retry. */
+  const runCopies = useCallback(async () => {
+    if (!copySrc || picks.size === 0 || copyBusy) return;
     const { data: sess } = await supabase.auth.getSession();
     const token = sess.session?.access_token;
     if (!token) { showToast("No active session — sign in again.", true); return; }
     const headers: Record<string, string> = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
     setCopyBusy(true);
+    const out: { iso: string; hhmm: string; outcome: string; id?: number; error?: string }[] = [];
+    setCopyRun([]);
     try {
-      /* READ THE SOURCE LIVE, not off the week payload. The grid carries five fields; a copy needs
-       * all 27, and reading the mirror would copy whatever the last sync happened to hold. */
-      const sres = await fetch(`/api/matchday/production/matches/${drawerId}`, { headers, cache: "no-store" });
-      const sj = await sres.json();
-      if (!sres.ok) { showToast(`Couldn't read the match to copy: ${sj?.error ?? sres.status}`, true); return; }
-      const src = (sj.match ?? sj) as SourceMatch;
-
-      if (!window.confirm(copyConfirmLine(src))) return;
-
-      const res = await fetch(`/api/matchday/production/matches/create`, {
-        method: "POST", headers,
-        body: JSON.stringify({ match: buildCopyBody(src), source: "Master Schedule · copy match", allowDuplicate: true }),
-      });
-      const j = await res.json();
-      /* A FAILED CREATE OPENS NOTHING. The old flow navigated to a form regardless, so a refusal
-       * left the operator on a blank create screen with no idea a write had been attempted. */
-      if (!res.ok || j.outcome !== "LANDED" || !j.id) {
-        showToast(`Copy ${j.outcome ?? "FAILED"} — ${j.error ?? "nothing was created"}. Nothing was opened.`, true);
-        return;
+      for (const [iso, hhmm] of [...picks.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+        try {
+          const res = await fetch(`/api/matchday/production/matches/create`, {
+            method: "POST", headers,
+            body: JSON.stringify({
+              match: buildCopyBody(copySrc, { iso, hhmm }),
+              source: "Master Schedule · copy to dates",
+              /* allowDuplicate STAYS. A day that already holds the fixture is SHOWN, not refused —
+               * the preview row lands in the same cell two rows under the existing match, so the
+               * collision is visible at pick time, before anything is written, which is a better
+               * place for it than a 409 afterwards. */
+              allowDuplicate: true,
+            }),
+          });
+          const j = await res.json();
+          if (res.ok && j.outcome === "LANDED" && j.id) {
+            out.push({ iso, hhmm, outcome: "LANDED", id: Number(j.id) });
+            // THE VEO FLAG IS CLUBHOUSE-SIDE — a second write, best-effort, exactly as before.
+            if (drawerVeo) {
+              await fetch("/api/veo/intent", { method: "POST", headers,
+                body: JSON.stringify({ matchApiId: j.id, enabled: true }) }).catch(() => {});
+            }
+          } else if (j.outcome === "UNKNOWN") {
+            out.push({ iso, hhmm, outcome: "UNKNOWN", error: j.error ?? "the route could not read back what it wrote" });
+          } else {
+            out.push({ iso, hhmm, outcome: "FAILED", error: j.error ?? `HTTP ${res.status}` });
+          }
+        } catch (e) {
+          // A THROW IS UNKNOWN, NOT FAILED. It may have landed; the route could not tell us.
+          out.push({ iso, hhmm, outcome: "UNKNOWN", error: e instanceof Error ? e.message : String(e) });
+        }
+        setCopyRun([...out]);
       }
-
-      /* THE VEO FLAG IS CLUBHOUSE-SIDE, so it is copied by a second write rather than riding the
-       * create body. veo_intent is our own table keyed on match_api_id; MatchDay has no camera
-       * field at all. Best-effort: the match exists either way and the chip can be toggled. */
-      if (drawerVeo) {
-        await fetch("/api/veo/intent", {
-          method: "POST", headers, body: JSON.stringify({ matchApiId: j.id, enabled: true }),
-        }).catch(() => {});
-      }
-
-      if (j.mirrored === false) {
-        showToast(`Copied to match ${j.id}, but the schedule will not show it until the next sync (${j.mirrorReason ?? "mirror insert failed"}).`, true);
-      }
-      /* THE EDITOR OPENS ON THE NEW MATCH. Same drawer the grid uses — the copy is a match like
-       * any other and there is no separate "just copied" screen to get out of step. */
-      await load(weekRef, true);
-      setDrawerId(Number(j.id));
-    } catch (e) {
-      showToast(`UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Reload before pressing again.`, true);
+      /* NO EDITOR OPENS. Four matches cannot share one drawer, and the old flow opened it only
+       * because there was exactly one copy. The grid re-reads WITHOUT repull — the data is already
+       * right in Clubhouse, and a repull would resync every week in the range for writes just made. */
+      if (view === "month" && range) await loadRange(range);
+      else await load(weekRef, true);
+      setPicks(new Map());
+      setCopySrc(null);
     } finally { setCopyBusy(false); }
-  }, [drawerId, copyBusy, drawerVeo, weekRef, showToast]);
+  }, [copySrc, picks, copyBusy, drawerVeo, view, range, loadRange, weekRef, showToast]);
 
 
   const openCard = useCallback((id: number) => {
@@ -844,19 +902,6 @@ export default function VeoMasterSchedule() {
                   title="Jump to the week containing this date" disabled={navBusy}
                   value={week.weekStart} onChange={(e) => { if (e.target.value) void navigate(e.target.value); }} />
                 <button type="button" data-testid="today" className={"vms-btn vms-todaybtn" + (isCurrentWeek ? "" : " vms-todaybtn-hot")} onClick={goToday} disabled={navBusy || isCurrentWeek} title="Jump to the current week">Today</button>
-                {/* COPY MATCH — one at a time, by construction: it acts on the SELECTED match, and
-                    only one card can be selected. It navigates to the create form and writes
-                    nothing; the copy exists only in that form until Create is pressed. */}
-                <button
-                  type="button"
-                  data-testid="copy-match"
-                  className="vms-btn"
-                  disabled={drawerId == null || copyBusy}
-                  title={drawerId == null ? "Select a match first" : `Create an identical copy of match ${drawerId}`}
-                  onClick={() => void doCopy()}
-                >
-                  {copyBusy ? "Copying…" : drawerId == null ? "Copy match" : `Copy match ${drawerId}`}
-                </button>
                 {/* REFRESH + FRESHNESS. THE TITLE WAS TRUE AND IS NOT ANY MORE, so it changed with the
                     behaviour: it used to say this button re-reads the mirror and does not fetch
                     MatchDay, which was honest about a button that could not deliver freshness. It
@@ -869,6 +914,28 @@ export default function VeoMasterSchedule() {
                     synced_at>" and only moves when the DATA did. */}
               </div>
             )}
+            {/* ── COPY RENDERS IN EVERY VIEW, for the same reason Refresh does. It sat inside the
+                `view !== "month"` branch, so Month — the view with a calendar in it, the one place
+                a date picker belongs — was the one view without it. */}
+            {/* IT CREATES LIVE. This comment used to say the button "navigates to the create
+                form and writes nothing; the copy exists only in that form until Create is
+                pressed" — untrue since the rewrite, and a comment describing the opposite of
+                the code is worse than none. Copy now hands the grid over as a date picker and
+                the writes happen on Create, one per picked date. */}
+            {/* THE BUTTON NAMES THE MATCH IT WILL COPY, because on a 163-match month grid the
+                selected card can be scrolled out of sight — and it ends in "to…" so it reads
+                as a step, not as the write. */}
+            <button
+              type="button"
+              data-testid="copy-match"
+              className="vms-btn"
+              disabled={drawerId == null || copyBusy}
+              title={drawerId == null ? "Select a match first" : `Copy match ${drawerId} onto the dates you pick`}
+              onClick={() => void enterCopy()}
+            >
+              {copyBusy ? "Reading…" : drawerId == null ? "Select a match first" : `Copy match ${drawerId} to…`}
+            </button>
+
             {/* ── REFRESH RENDERS IN EVERY VIEW ─────────────────────────────────────────────────
                 doRefresh has always branched for Month — `if (view === "month" && range) { void
                 loadRange(range, true); return; }` — and loadRange's own comment says the button is
@@ -1105,7 +1172,15 @@ export default function VeoMasterSchedule() {
                   phone. Same rule as the phone layout not reaching the desktop. */}
               {!isPhone && (
                 <MonthView weeks={monthWeeks} count={monthVisible.length} onOpen={openCard}
-                  selectedId={drawerId} singleField={fieldSel.size === 1} />
+                  selectedId={drawerId} singleField={fieldSel.size === 1}
+                  pick={copySrc ? {
+                    srcId: Number(copySrc.id ?? 0),
+                    srcIso: String(copySrc.startDate ?? "").slice(0, 10),
+                    srcHHMM,
+                    srcVenue: srcVenueName(copySrc),
+                    picks, todayIso: todayIso(),
+                    onToggle: togglePick,
+                  } : undefined} />
               )}
               {/* THE PHONE'S TWO HALVES. Not rendered at all above 640px; the grid above is
                   hidden by CSS below it. */}
@@ -1145,6 +1220,77 @@ export default function VeoMasterSchedule() {
         <ScheduleView week={fweek} busy={busy} onToggle={toggleIntent} onRetry={retryName} onOpen={openCard} selectedId={drawerId} failed={nameFailed} />
       ) : (
         <VeoView week={fweek} stats={stats!} busy={busy} onCameras={setCameras} needEmoji={needEmoji} needClubhouse={needClubhouse} onExport={exportWorklist} />
+      )}
+
+      {/* ── THE PICK FOOTER ─────────────────────────────────────────────────────────────────────
+          The count appears three times on this bar and comes from ONE picks.size, so it cannot
+          disagree with itself. */}
+      {copySrc && (
+        <div className="vms-copybar" data-testid="copy-bar">
+          <div className="vms-copyhead">
+            <b>Picking dates for {String(copySrc.id ?? "")}</b>
+            <span className="vms-copysub">
+              {hhmmTo12(srcHHMM)} · {srcVenueName(copySrc)}
+            </span>
+            <span className="vms-copyn" data-testid="copy-count">
+              {picks.size} date{picks.size === 1 ? "" : "s"} selected · {picks.size} match{picks.size === 1 ? "" : "es"} will be created
+            </span>
+            <label className="vms-copyall">
+              Set them all to
+              <input type="time" data-testid="copy-setall" defaultValue={srcHHMM}
+                onChange={(e) => { const v = e.target.value; if (v) setPicks((p) => new Map([...p].map(([k]) => [k, v]))); }} />
+            </label>
+          </div>
+          {picks.size > 0 && (
+            <div className="vms-copypills" data-testid="copy-pills">
+              {[...picks.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([iso, hhmm]) => {
+                const outside = !range || iso < range.from || iso > range.to;
+                return (
+                  <span key={iso} className={"vms-copypill" + (hhmm !== srcHHMM ? " chg" : "")}
+                    data-testid="copy-pill" data-iso={iso} data-hhmm={hhmm} data-changed={hhmm !== srcHHMM ? "1" : "0"}>
+                    <b>{dayLabel(iso)}</b>
+                    {outside && <i className="vms-copyout">next month</i>}
+                    {/* THE TIME IS PER DATE and opens at the source's, so the common case is no
+                        work. A date changed by hand is marked — a run of eight copies with one at
+                        the wrong hour must not look like eight identical ones. Derived by comparing
+                        to the source, never stored, so the mark cannot drift from the value. */}
+                    <input type="time" value={hhmm} data-testid="copy-pill-time"
+                      onChange={(e) => { const v = e.target.value; if (v) setPicks((p) => new Map(p).set(iso, v)); }} />
+                    <button type="button" aria-label={`Remove ${iso}`} data-testid="copy-pill-x"
+                      onClick={() => setPicks((p) => { const n = new Map(p); n.delete(iso); return n; })}>×</button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          {[...picks.keys()].some((iso) => !range || iso < range.from || iso > range.to) && (
+            <div className="vms-copynote" data-testid="copy-outnote">
+              A date outside this range is still created — it will not appear in this grid until you page to it.
+            </div>
+          )}
+          {copyRun && copyRun.length > 0 && (
+            <div className="vms-copyres" data-testid="copy-results">
+              {copyRun.map((r) => (
+                <div key={r.iso} data-testid="copy-result" data-outcome={r.outcome} data-iso={r.iso}>
+                  <b>{dayLabel(r.iso)} {hhmmTo12(r.hhmm)}</b>{" "}
+                  <span className={`vms-oc oc-${r.outcome.toLowerCase()}`}>{r.outcome}</span>{" "}
+                  {r.id ? <span>match {r.id}</span> : null}
+                  {/* AN UNKNOWN IS NOT A FAILURE. outcome UNKNOWN means the route could not read
+                      back what it wrote — it may well have landed. */}
+                  {r.outcome === "UNKNOWN" && <span> — {r.error}. Reload before pressing again.</span>}
+                  {r.outcome === "FAILED" && <span> — {r.error}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="vms-copyact">
+            <button type="button" className="vms-btn" data-testid="copy-cancel" onClick={exitCopy}>Cancel</button>
+            <button type="button" className="vms-btn vms-btn-go" data-testid="copy-create"
+              disabled={picks.size === 0 || copyBusy} onClick={() => void runCopies()}>
+              {copyBusy ? "Creating…" : `Create ${picks.size} cop${picks.size === 1 ? "y" : "ies"}`}
+            </button>
+          </div>
+        </div>
       )}
 
       {drawerOpen && drawerId != null && (
@@ -1514,6 +1660,46 @@ const CSS = `
 .vms-fdisc:hover{background:#f4f7f3;border-color:#b7c8bd}
 .vms-fx{opacity:.6;font-weight:800}
 .vms-mout{background:#FAFCFA;align-self:start;min-height:86px}
+/* ── COPY-TO-DATES: the grid as a picker ── */
+.vms-mpickable{cursor:pointer}
+.vms-mpickable:hover{background:#F4FBF7}
+.vms-mpick{box-shadow:inset 0 0 0 2px #35c77f;background:#F2FBF6}
+.vms-mtick{font-size:11px;font-weight:800;color:#046B45}
+.vms-msrc{font-size:9px;font-weight:800;letter-spacing:.06em;color:#42513f;background:#EEF3F0;border:1px solid #E2EAE5;border-radius:999px;padding:0 5px}
+.vms-mprev{display:flex;align-items:baseline;gap:5px;margin-top:3px;padding:3px 6px;border:1px dashed #8fd3ae;border-radius:6px;background:#F6FDF9;font-size:10.5px}
+.vms-mprev b{font-weight:800;color:#0F6B4F;font-variant-numeric:tabular-nums;white-space:nowrap}
+.vms-mprev span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#3d5245}
+.vms-mprev i{margin-left:auto;font-style:normal;font-weight:800;color:#0F6B4F}
+/* A TIME CHANGED BY HAND IS BLUE, in the cell and in its pill — a run of copies must not quietly
+   contain one at the wrong hour. Derived from the value, never a stored flag. */
+.vms-mprev.chg{border-color:#8ab6e8;background:#F4F9FE}
+.vms-mprev.chg b,.vms-mprev.chg i{color:#1B5FA8}
+/* AMBER: this day already holds the fixture at this time. Created anyway — shown, not refused. */
+.vms-mprev.clash{border-color:#e3c369;background:#FDF7E6}
+.vms-mprev.clash b,.vms-mprev.clash i{color:#8a6300}
+.vms-mcell[data-clash="1"] .vms-mitem{background:#FDF7E6;border-color:#e3c369}
+
+.vms-copybar{position:sticky;bottom:0;z-index:35;margin-top:10px;background:#fff;border:1px solid #DCE5E0;border-radius:14px;padding:11px 14px;box-shadow:0 -6px 22px rgba(16,40,28,.10)}
+.vms-copyhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.vms-copyhead b{font-size:13.5px;font-weight:800}
+.vms-copysub{font-size:12px;color:#6d7b74;font-weight:600}
+.vms-copyn{font-size:12px;font-weight:700;color:#0F6B4F}
+.vms-copyall{margin-left:auto;display:inline-flex;align-items:center;gap:7px;font-size:11.5px;font-weight:700;color:#3d5245}
+.vms-copyall input,.vms-copypill input{border:1px solid #DCE5E0;border-radius:8px;padding:3px 6px;font:inherit;font-size:11.5px}
+.vms-copypills{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.vms-copypill{display:inline-flex;align-items:center;gap:6px;border:1px solid #DCE5E0;border-radius:999px;padding:3px 5px 3px 11px;font-size:11.5px;background:#F9FBFA}
+.vms-copypill b{font-weight:800;color:#12241d}
+.vms-copypill.chg{border-color:#8ab6e8;background:#F4F9FE}
+.vms-copypill.chg b{color:#1B5FA8}
+.vms-copyout{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.05em;color:#8a6300;background:#fdf1d0;border-radius:4px;padding:1px 5px}
+.vms-copypill button{border:0;background:none;color:#9AA8A0;font:inherit;font-size:13px;line-height:1;cursor:pointer;padding:0 3px}
+.vms-copynote{margin-top:8px;font-size:11.5px;color:#8a6300;background:#fdf1d0;border:1px solid #e3c369;border-radius:8px;padding:6px 9px;line-height:1.4}
+.vms-copyres{margin-top:9px;display:flex;flex-direction:column;gap:3px;font-size:12px;max-height:150px;overflow-y:auto}
+.vms-oc{font-weight:800;font-size:10.5px;letter-spacing:.04em}
+.oc-landed{color:#0F6B4F}.oc-failed{color:#a8391a}.oc-unknown{color:#8a6300}
+.vms-copyact{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
+.vms-btn-go{background:#0d3b2e;border-color:#0d3b2e;color:#fff}
+.vms-btn-go:disabled{opacity:.45}
 .vms-mout .vms-mnum{color:#C3CFC7}
 .vms-mtoday{box-shadow:inset 0 0 0 2px #35c77f}
 .vms-mhead{display:flex;align-items:center;gap:6px;padding:5px 9px 2px}
@@ -1933,9 +2119,9 @@ span.vms-cam:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
  * camera by anyone who had not been told it was one, and the width it took back belongs to the
  * count.
  */
-function MonthView({ weeks, count, onOpen, selectedId, singleField }: {
+function MonthView({ weeks, count, onOpen, selectedId, singleField, pick }: {
   weeks: GridDay[][]; count: number; onOpen: (id: number) => void;
-  selectedId: number | null; singleField: boolean;
+  selectedId: number | null; singleField: boolean; pick?: PickMode;
 }) {
   return (
     <div className="vms-card vms-month" data-testid="month-grid">
@@ -1948,7 +2134,7 @@ function MonthView({ weeks, count, onOpen, selectedId, singleField }: {
         <div className="vms-mweek" key={wi}>
           {week.map((d) => (
             <MonthCell key={d.iso} d={d} onOpen={onOpen} selectedId={selectedId}
-              singleField={singleField} />
+              singleField={singleField} pick={pick} />
           ))}
         </div>
       ))}
@@ -2014,6 +2200,36 @@ function MonthMap({ weeks, picked, onPick }: {
  * The desktop grid's cap is gone too (see the density note above), so the two views agree: every
  * match a day holds is on screen in both.
  */
+/* THE SOURCE'S FIELD. The detail route FLATTENS field.city.name and field.title onto the match as
+ * `cityName` / `fieldTitle` (pickMatch in matchday/[env]/matches/[id]/route.ts), so `src.field` is
+ * not there to read — the nested shape is kept as a fallback for anything handing over the raw
+ * API object. Canonicalised, because that is the vocabulary the grid's own venue holds and the
+ * preview is compared against it to spot a collision. */
+function srcVenueName(src: SourceMatch | null): string {
+  if (!src) return "";
+  const flat = typeof src.fieldTitle === "string" ? src.fieldTitle : "";
+  const nested = typeof (src.field as { title?: unknown } | null)?.title === "string"
+    ? String((src.field as { title?: unknown }).title) : "";
+  return canonicalVenueName(flat || nested);
+}
+
+/** "2026-09-18" → "Fri Sep 18". A CALENDAR DATE at UTC midnight, which cannot shift. */
+function dayLabel(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getUTCDay()]} ${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getUTCMonth()]} ${d.getUTCDate()}`;
+}
+
+/** Today at the pitch, in the timezone the rest of Clubhouse reads operator dates in. */
+const todayIso = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+
+/** "19:30" → "7:30 PM". Five characters in, a label out — no Date, no zone. */
+function hhmmTo12(hhmm: string): string {
+  const [H, M] = hhmm.split(":").map(Number);
+  if (!Number.isFinite(H)) return hhmm;
+  return `${(H % 12) || 12}:${String(M).padStart(2, "0")} ${H >= 12 ? "PM" : "AM"}`;
+}
+
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 /** "Thu 3 Sep". isoDow does the weekday on a UTC-midnight date — a calendar bound, not an instant,
@@ -2140,22 +2356,46 @@ function PickerSheet({ kind, onClose, cities, city, onPickCity, fields, counts, 
   );
 }
 
-function MonthCell({ d, onOpen, selectedId, singleField }: {
+/* PICK MODE. Passed down rather than read from a context so a cell stays a pure function of its
+ * props — the picks live above the grid, which is what lets the ‹ › arrows carry them. */
+export type PickMode = {
+  srcId: number; srcIso: string; srcHHMM: string; srcVenue: string;
+  picks: Map<string, string>; todayIso: string;
+  onToggle: (iso: string) => void;
+};
+
+function MonthCell({ d, onOpen, selectedId, singleField, pick }: {
   d: GridDay; onOpen: (id: number) => void; selectedId: number | null;
-  singleField: boolean;
+  singleField: boolean; pick?: PickMode;
 }) {
   // EVERY MATCH THE DAY HOLDS. No slice, so the cell's badge and its row count are the same
   // number by construction rather than by agreement.
   const shown = d.matches;
   const cx = d.matches.filter((m) => m.cancelled).length;
+  /* EVERY DAY IS PICKABLE EXCEPT ONE ALREADY PAST — including the padding days of the neighbouring
+     months, because "copy this Friday through October" is the actual use. */
+  const picked = pick?.picks.has(d.iso) ?? false;
+  const pickable = !!pick && !d.isPast;
+  const pickTime = pick?.picks.get(d.iso) ?? "";
+  const changed = picked && pickTime !== pick?.srcHHMM;
+  /* THE COLLISION, COMPUTED ON EVERY RENDER AND NEVER STORED. A day already holding this fixture
+     at this time is marked, not refused — the copy still lands. */
+  const clash = picked && d.matches.some((m) => m.venue === pick?.srcVenue && m.time === hhmmTo12(pickTime));
   return (
     <div
       className={"vms-mcell" + (d.inRange ? "" : " vms-mout") + (d.isToday ? " vms-mtoday" : "")
-        + (d.isPast ? " vms-mpast" : "")}
+        + (d.isPast ? " vms-mpast" : "") + (picked ? " vms-mpick" : "") + (pickable ? " vms-mpickable" : "")}
       data-testid="month-cell" data-iso={d.iso} data-inrange={d.inRange ? "1" : "0"}
-      data-past={d.isPast ? "1" : "0"} data-today={d.isToday ? "1" : "0"}>
+      data-past={d.isPast ? "1" : "0"} data-today={d.isToday ? "1" : "0"}
+      data-picked={picked ? "1" : "0"} data-clash={clash ? "1" : "0"}
+      onClick={pickable ? () => pick!.onToggle(d.iso) : undefined}>
       <div className="vms-mhead">
         <span className="vms-mnum">{d.day}</span>
+        {/* THE TICK AND THE SOURCE BADGE GO IN THE HEADER'S FLOW, never absolutely positioned:
+            placed top-right they landed straight on the day's match count, so picking a day
+            silently hid the number saying how busy it is. */}
+        {picked && <span className="vms-mtick" data-testid="pick-tick" aria-label="picked">✓</span>}
+        {pick && d.iso === pick.srcIso && <span className="vms-msrc" data-testid="pick-source">SOURCE</span>}
         {d.isToday && <span className="vms-mtd">Today</span>}
         {/* THE DAY'S COUNT, in the corner, so a scrolling cell says how much it holds. */}
         {d.matches.length > 0 && (
@@ -2174,7 +2414,10 @@ function MonthCell({ d, onOpen, selectedId, singleField }: {
               data-cancelled={m.cancelled ? "1" : "0"} data-tone={tone || "none"}
               className={"vms-mitem" + (selectedId === m.apiId ? " vms-msel" : "")
                 + (m.cancelled ? " vms-mcx" : "")}
-              onClick={() => onOpen(m.apiId)}
+              /* IN PICK MODE THE WHOLE CELL IS THE CONTROL, matches included. Otherwise clicking a
+                 day that holds matches both picks it and opens the editor over the calendar you
+                 are picking on. */
+              onClick={(e) => { if (pick) { e.stopPropagation(); pick.onToggle(d.iso); return; } onOpen(m.apiId); }}
               /* THE TOOLTIP CARRIES THE UNTRUNCATED TEXT. The field ellipses in a narrow cell;
                  this is where the whole of it lives, count and price included. */
               title={[m.time, m.venue, m.name, countLabel(m), priceLabel(m.price),
@@ -2195,6 +2438,14 @@ function MonthCell({ d, onOpen, selectedId, singleField }: {
             </button>
           );
         })}
+        {picked && (
+          <div className={"vms-mprev" + (changed ? " chg" : "") + (clash ? " clash" : "")}
+            data-testid="pick-preview" data-changed={changed ? "1" : "0"}>
+            <b>{hhmmTo12(pickTime)}</b>
+            <span>{pick?.srcVenue}</span>
+            <i>{clash ? "2nd" : "copy"}</i>
+          </div>
+        )}
       </div>
     </div>
   );
