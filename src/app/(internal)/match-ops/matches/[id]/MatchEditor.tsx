@@ -67,6 +67,13 @@ function Section({ id, title, summary, dirty, danger, open, onToggle, children }
   );
 }
 
+/** What a grid needs after a save. Everything the week and month cells render and the editor
+ *  knows — player counts are deliberately absent, because a field edit cannot change them. */
+export type SavedPatch = {
+  name: string; startDate: string; endDate: string | null; venue: string | null; city: string | null;
+  price: number | null; capacity: number | null; minPlayers: number | null; cancelled: boolean;
+};
+
 /** "Thu 17 Sep". A CALENDAR DATE, formatted at UTC midnight — these are wall-clock dates, and
  *  parsing one as a local instant is the trap that lands a Thursday match on Wednesday. */
 function dayLabel(ymd: string): string {
@@ -180,7 +187,7 @@ const money = (cents: unknown) => "$" + (Number(cents ?? 0) / 100).toFixed(2);
  * overlaid onto `state` so the diff shows them as changed and one save sends them. That is why
  * create can take nine fields and a copy can still carry twenty-one.
  */
-export default function MatchEditor({ id, mode = "edit", sourceId, variant = "page", onDirtyChange, veo, onToggleVeo, onCancelLanded }: {
+export default function MatchEditor({ id, mode = "edit", sourceId, variant = "page", onDirtyChange, veo, onToggleVeo, onCancelLanded, onSaved }: {
   id: string;
   mode?: "edit" | "create";
   /** The match being copied FROM — pre-fills create, and step two's overlay. */
@@ -198,6 +205,11 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
   variant?: "page" | "panel";
   /** Panel mode reports dirtiness up so the drawer can block week-nav and card-switching. */
   onDirtyChange?: (dirty: boolean) => void;
+  /* A SAVE THAT LANDED, reported up with the fields a grid draws, so the surface holding this
+   * panel can patch its one card instead of refetching. This prop did not exist: MatchDrawer
+   * declared an onSaved and had nothing to call it from, so the patch path below it had never
+   * run once — a save left both grids showing the old values. */
+  onSaved?: (id: number, patch: SavedPatch) => void;
   /* VEO COVERAGE, MOVED IN FROM THE DRAWER. Camera intent is a Clubhouse concept, not a MatchDay
    * one: it posts to /api/veo/intent and is NOT part of the match PUT — a separate call, exactly
    * as it was. The caller owns the value because it also owns the card badge that has to update;
@@ -783,6 +795,20 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
     if (!res.ok) { setMsg({ kind: json?.ambiguous ? "warn" : "err", text: json?.error ?? `HTTP ${res.status}` }); return; }
     noteLogResponse(json); // the write landed; surface a Change Log recording hole loudly
     ingest(json.match); setMsg({ kind: "ok", text: "Saved." });
+    /* REPORTED UP, from the SAVED RECORD the route read back — not from local state, which is
+       what the operator typed rather than what landed. */
+    const m = (json.match ?? {}) as Data;
+    onSaved?.(Number(id), {
+      name: String(m.name ?? ""),
+      startDate: String(m.startDate ?? ""),
+      endDate: m.endDate == null ? null : String(m.endDate),
+      venue: m.fieldTitle == null ? null : String(m.fieldTitle),
+      city: m.cityName == null ? null : String(m.cityName),
+      price: m.registrationPrice == null ? null : Number(m.registrationPrice),
+      capacity: m.maxPlayerCount == null ? null : Number(m.maxPlayerCount),
+      minPlayers: m.minPlayerCount == null ? null : Number(m.minPlayerCount),
+      cancelled: !!m.isCancelled,
+    });
   };
   const revert = () => setState(JSON.parse(JSON.stringify(loaded)));
 

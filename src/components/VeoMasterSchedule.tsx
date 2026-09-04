@@ -38,6 +38,7 @@ import {
   type GridDay, type GridMatch,
 } from "@/lib/monthGrid";
 import MatchDrawer, { DRAWER_W, type DrawerMatch } from "@/components/MatchDrawer";
+import type { DrawerPatch } from "./MatchDrawer";
 
 type VeoDay = { dow: string; date: number; iso: string; today: boolean };
 type VeoCity = { city: string; cameras: number };
@@ -654,22 +655,67 @@ export default function VeoMasterSchedule() {
 
   const closeDrawer = useCallback(() => { setDrawerId(null); setDrawerDirty(false); }, []);
 
-  // Patch the ONE card after a save — never refetch the whole week.
-  const patchCard = useCallback((id: number, patch: { name: string; startDate: string; venue: string | null; city: string | null }) => {
+  /* ── AFTER A SAVE: PATCH THE ONE CARD, IN BOTH GRIDS ─────────────────────────────────────────
+   * Never refetch the whole week — that property is right and a round trip per save would be a
+   * regression. What was missing is that this only ever touched `week`, so a save made from Month
+   * left that grid on the old values; and the payload carried four fields while the month cell
+   * renders price, capacity, players and a cancelled flag, so even in the week view a price edit
+   * did not show.
+   *
+   * TWO CASES A PATCH CANNOT EXPRESS, and both re-read instead:
+   *   the DATE MOVED — the month grid buckets by `date`, so the match must leave one cell and
+   *     appear in another, or leave the visible range entirely; patching in place would draw it
+   *     on the wrong day;
+   *   the match was CANCELLED — whether it is drawn at all depends on the "Show cancelled"
+   *     toggle, and the header's cancelled count has to move.
+   *
+   * The re-read is loadRange(range) WITHOUT repull. The data is already correct in Clubhouse the
+   * moment the save returns; only the local copy is stale, and a repull would fire a resync per
+   * week across the whole range for a change you just made yourself. */
+  const patchCard = useCallback((id: number, patch: DrawerPatch) => {
+    const hhmm = patch.startDate ? patch.startDate.slice(11, 16) : "";
+    const newDate = patch.startDate ? patch.startDate.slice(0, 10) : "";
+
     setWeek((w) => {
       if (!w) return w;
       return {
         ...w,
         matches: w.matches.map((m) => {
           if (m.apiId !== id) return m;
-          const time = patch.startDate ? patch.startDate.slice(11, 16) : m.time;
+          const time = hhmm || m.time;
           const [H, M] = time.split(":").map(Number);
           const h12 = `${(H % 12) || 12}:${String(M).padStart(2, "0")} ${H >= 12 ? "PM" : "AM"}`;
           return { ...m, name: patch.name || m.name, time: h12, minutes: H * 60 + M, venue: patch.venue || m.venue, city: patch.city || m.city };
         }),
       };
     });
-  }, []);
+
+    const moved = !!newDate && monthData?.matches.some((m) => m.apiId === id && m.date !== newDate);
+    const cancelChanged = monthData?.matches.some((m) => m.apiId === id && !!m.cancelled !== patch.cancelled);
+    if ((moved || cancelChanged) && range) { void loadRange(range); return; }
+
+    setMonthData((d) => {
+      if (!d) return d;
+      return {
+        ...d,
+        matches: d.matches.map((m) => {
+          if (m.apiId !== id) return m;
+          const [H, M] = (hhmm || "00:00").split(":").map(Number);
+          return {
+            ...m,
+            name: patch.name || m.name,
+            venue: patch.venue || m.venue,
+            city: patch.city || m.city,
+            ...(hhmm ? { time: `${(H % 12) || 12}:${String(M).padStart(2, "0")} ${H >= 12 ? "PM" : "AM"}`, minutes: H * 60 + M } : {}),
+            price: patch.price,
+            capacity: patch.capacity,
+            minPlayers: patch.minPlayers,
+            cancelled: patch.cancelled,
+          };
+        }),
+      };
+    });
+  }, [monthData, range, loadRange]);
 
   // City filter toggle. Selecting/deselecting a chip; empty set = all. If the open
   // drawer's city drops out of view, the drawer closes.
@@ -786,10 +832,24 @@ export default function VeoMasterSchedule() {
                     ran, which said nothing about the age of the data and moved on every press,
                     including presses that fetched nothing. It now reads "Data as of <max
                     synced_at>" and only moves when the DATA did. */}
-                <span className="vms-fresh" data-testid="fresh">
+              </div>
+            )}
+            {/* ── REFRESH RENDERS IN EVERY VIEW ─────────────────────────────────────────────────
+                doRefresh has always branched for Month — `if (view === "month" && range) { void
+                loadRange(range, true); return; }` — and loadRange's own comment says the button is
+                meant to mean the same thing there. It simply sat inside the `view !== "month"`
+                branch above, so Month never rendered it. The behaviour was built; only the control
+                was missing.
+
+                THE STAMP ALREADY READS THE RIGHT CLOCK: asOfSrc picks monthData.dataAsOf in Month
+                and the week's everywhere else, so moving the block does not make Month show the
+                week's timestamp. */}
+            <span className="vms-fresh" data-testid="fresh">
                   <button type="button" className="vms-refresh" data-testid="vms-refresh"
                     disabled={refreshing || navBusy || monthBusy} aria-label="Refresh the schedule from MatchDay"
-                    title="Refresh the schedule. Re-pulls this week from MatchDay into Clubhouse, then re-reads it — so an edit made anywhere shows up without waiting for the nightly sync."
+                    title={view === "month"
+                      ? "Refresh the schedule. Re-pulls every week in this range from MatchDay into Clubhouse, then re-reads it — so an edit made anywhere shows up without waiting for the nightly sync."
+                      : "Refresh the schedule. Re-pulls this week from MatchDay into Clubhouse, then re-reads it — so an edit made anywhere shows up without waiting for the nightly sync."}
                     onClick={doRefresh}>
                     <RefreshIcon size={14} spinning={refreshing} />
                     <span className="vms-rlab">{refreshing ? "Refreshing…" : "Refresh"}</span>
@@ -802,8 +862,6 @@ export default function VeoMasterSchedule() {
                       : `Data as of ${updatedLabel}`}
                   </span>
                 </span>
-              </div>
-            )}
             <span className="vms-control-label">View</span>
             <div className="vms-segmented" role="tablist" aria-label="View">
               <button type="button" role="tab" aria-selected={view === "schedule"} className={"vms-seg-btn" + (view === "schedule" ? " vms-active" : "")} onClick={() => setView("schedule")}>Schedule</button>

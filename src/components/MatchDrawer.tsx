@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { tzLabelOfCity } from "@/lib/matchTimezone";
+import type { SavedPatch } from "@/app/(internal)/match-ops/matches/[id]/MatchEditor";
 import MatchEditor from "@/app/(internal)/match-ops/matches/[id]/MatchEditor";
 import { DRAWER_ENV, FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { noteLogResponse } from "@/lib/logHealth";
@@ -31,7 +32,8 @@ export const DRAWER_W = 480;
 // it would send the operator from a production match to a different-env editor.
 const SAME_ENV_AS_EDITOR = DRAWER_ENV === FULL_EDITOR_ENV;
 
-export type DrawerPatch = { name: string; startDate: string; fieldId: number; venue: string | null; city: string | null };
+// THE PATCH SHAPE LIVES WITH THE EDITOR that produces it — one definition, not two.
+export type DrawerPatch = SavedPatch;
 export type DrawerMatch = { apiId: number; veo: boolean; siblings: number[] };
 
 type FieldRow = { id: number; title: string; city: string | null };
@@ -190,6 +192,7 @@ export default function MatchDrawer({
         veo={cardVeo}
         onToggleVeo={(next: boolean) => onToggleVeo(apiId, next)}
         onCancelLanded={onCancelLanded}
+        onSaved={onSaved}
       />
 
     </aside>
