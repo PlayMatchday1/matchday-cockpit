@@ -43,6 +43,45 @@ import { tzShift } from "@/lib/matchTimezone";
 // startDateUtc). NEVER `new Date()` them — that re-shifts to the viewer's timezone and
 // shows a wrong clock. Read the wall parts by slicing, exactly like the drawer.
 const hhmm12 = (t: string) => { const [H, M] = t.split(":").map(Number); const ap = H >= 12 ? "PM" : "AM"; const h = H % 12 === 0 ? 12 : H % 12; return `${h}:${String(M).padStart(2, "0")} ${ap}`; };
+/* ── A SECTION THAT STATES ITS VALUES WHILE SHUT ──────────────────────────────────────────────
+ * All shut by default. The rule is the folded field chips': state what IS set, never what is
+ * available — so the summary is the current values, not a list of what lives inside.
+ *
+ * A SHUT SECTION MUST NOT HIDE A PENDING CHANGE, so `dirty` puts a dot on the header. Without it
+ * the save bar could list three changes with every section closed and nothing saying where they
+ * are.
+ */
+function Section({ id, title, summary, dirty, danger, open, onToggle, children }: {
+  id: string; title: string; summary?: React.ReactNode; dirty?: boolean; danger?: boolean;
+  open: boolean; onToggle: () => void; children: React.ReactNode;
+}) {
+  return (
+    <section className={"card" + (danger ? " danger" : "")} data-testid={`sec-${id}`} data-open={open ? "1" : "0"} data-dirty={dirty ? "1" : "0"}>
+      <button type="button" className="ch chbtn" data-testid={`sec-${id}-head`} aria-expanded={open} onClick={onToggle}>
+        <h2>{title}{dirty ? <i className="dot" data-testid={`sec-${id}-dot`} aria-label="unsaved changes" /> : null}</h2>
+        {!open && summary ? <span className="sum" data-testid={`sec-${id}-sum`}>{summary}</span> : null}
+        <span className="caret" aria-hidden>{open ? "\u25b4" : "\u25be"}</span>
+      </button>
+      {open && <div className="cb">{children}</div>}
+    </section>
+  );
+}
+
+/** "Thu 17 Sep". A CALENDAR DATE, formatted at UTC midnight — these are wall-clock dates, and
+ *  parsing one as a local instant is the trap that lands a Thursday match on Wednesday. */
+function dayLabel(ymd: string): string {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return ymd;
+  return `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getUTCDay()]} ${d.getUTCDate()} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getUTCMonth()]}`;
+}
+
+/** "one-hour" / "90-minute" — the duration a shifted match keeps, said the way a person would. */
+function matchLengthLabel(startIso: string, endIso: string): string {
+  const mins = Math.round((Date.parse(endIso) - Date.parse(startIso)) / 60000);
+  if (!Number.isFinite(mins) || mins <= 0) return "same";
+  if (mins % 60 === 0) { const h = mins / 60; return h === 1 ? "one-hour" : `${h}-hour`; }
+  return `${mins}-minute`;
+}
 const wallStamp = (iso: string) => `${wallDate(iso)} ${hhmm12(wallTime(iso))}`; // "2026-08-09 8:00 PM"
 
 type FieldRow = { id: number; title: string; city: string | null };
@@ -388,6 +427,54 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
 
   const set = (k: string, v: unknown) => setState((s) => ({ ...(s as Data), [k]: v }));
 
+  /* NOTHING IS OPEN BY DEFAULT. Shut, the drawer is a readable summary of the match; open, it is
+   * the editor it always was. */
+  const [openSec, setOpenSec] = useState<Record<string, boolean>>({});
+  const toggleSec = (k: string) => setOpenSec((o) => ({ ...o, [k]: !o[k] }));
+  /* WHICH LONG FIELDS ARE OPEN. Neither renders a textarea until asked — Description and Manager
+   * intro were ~130px of blank box each on a match that has neither. */
+  const [openLong, setOpenLong] = useState<Record<string, boolean>>({});
+
+  /* ── THE CHANGE LIST, AS ROWS ─────────────────────────────────────────────────────────────────
+   * ONE LIST STILL DRIVES BOTH the panel and the request body — this shapes changedKeys for
+   * reading, it does not decide what is sent. payload above is unchanged.
+   *
+   * THE BUG THIS FIXES. changedKeys appends "startDate" and "endDate" when the date moves, but
+   * specs() defines neither, so FIELDS.find(...)?.label was undefined and fmt() returned "—" for
+   * both sides — `loaded` carries the dates in meta, not in state. The panel whose whole job is to
+   * say what is about to change rendered "— → —" for the date and the time, which are the two most
+   * edited fields on a schedule.
+   *
+   * endDate IS NOT A ROW. It moves because the start moved — the duration is preserved to the
+   * minute — so it is a clause on the Start row rather than a fourth change nobody made. */
+  const diffRows = useMemo(() => {
+    if (!state || !loaded) return [] as { key: string; label: string; from: string; to: string; note?: string }[];
+    const rows: { key: string; label: string; from: string; to: string; note?: string }[] = [];
+    for (const k of changedKeys) {
+      if (k === "startDate" || k === "endDate") continue;   // handled as one pair below
+      if (k === "teamNumbers") { rows.push({ key: k, label: "Teams", from: String(Array.isArray(meta?.teams) ? (meta!.teams as unknown[]).length : 0), to: String(state[k] ?? "") }); continue; }
+      rows.push({ key: k, label: FIELDS.find((f) => f.key === k)?.label ?? k, from: fmt(k, loaded[k]), to: fmt(k, state[k]) });
+    }
+    if (dateMoved && meta?.startDate) {
+      const si = String(meta.startDate);
+      const oldDate = wallDate(si), oldTime = wallTime(si);
+      if (dDate && dDate !== oldDate) {
+        rows.push({ key: "startDate", label: "Date", from: dayLabel(oldDate), to: dayLabel(dDate) });
+      }
+      if (dTime && dTime !== oldTime) {
+        // THE CONSEQUENCE, STATED. The end moves with the start and the match keeps its length —
+        // that is a fact the operator did not type and would otherwise have to infer.
+        const newEnd = meta.endDate ? wallTime(shiftedEndDate(si, String(meta.endDate), buildStartDate(dDate || oldDate, dTime))) : null;
+        rows.push({
+          key: "startTime", label: "Start", from: hhmm12(oldTime), to: hhmm12(dTime),
+          note: newEnd ? `Ends ${hhmm12(newEnd)} — the match keeps its ${matchLengthLabel(si, String(meta.endDate))} length.` : undefined,
+        });
+      }
+    }
+    return rows;
+  }, [changedKeys, state, loaded, FIELDS, dateMoved, meta, dDate, dTime]);
+
+
   /* ABOVE THE EARLY RETURNS. A hook after `if (!state) return …` runs on some renders and not
    * others, and React refuses: "Rendered more hooks than during the previous render." This is the
    * same trap the drawer's memos hit when they sat below `if (!orig) return`. */
@@ -467,6 +554,37 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
     );
   };
 
+  /* ── WHAT A SHUT SECTION SAYS ─────────────────────────────────────────────────────────────────
+   * The current values, never a list of what the section contains. Same rule as the folded field
+   * chips: state what IS set. A summary that read "price, spot price, guests" would tell an
+   * operator nothing they could not guess from the heading. */
+  const nz = (v: unknown) => v !== null && v !== undefined && v !== "" && Number(v) !== 0;
+  const sumWhen = meta?.startDate
+    ? `${dayLabel(dDate || wallDate(String(meta.startDate)))} \u00b7 ${hhmm12(dTime || wallTime(String(meta.startDate)))}${meta.endDate ? ` \u2013 ${hhmm12(wallTime(String(meta.endDate)))}` : ""}`
+    : "not set";
+  const sumMatch = [
+    fields.find((f) => f.id === Number(state.fieldId))?.title,
+    CATS.find((c) => c[0] === state.category)?.[1],
+    mgrPick.find((m) => m.id === Number(state.managerId))?.name,
+  ].filter(Boolean).join(" · ") || "not set";
+  const sumMoney = [
+    nz(state.registrationPrice) ? money(state.registrationPrice) : "free",
+    nz(state.additionalSpotPrice) ? `${money(state.additionalSpotPrice)} spot` : "no spot price",
+    `${Number(state.guestCount ?? 0)} guest${Number(state.guestCount ?? 0) === 1 ? "" : "s"}`,
+  ].join(" · ");
+  const sumSpots = LADDER.map((k) => (blank(state[k]) ? "—" : String(state[k]))).join(" → ");
+  const sumAuto = [
+    state.autoCanceled
+      ? `Cancels ${Number(state.autoCanceledMinutes ?? 0)} min out under ${Number(state.minPlayerCount ?? 0)}`
+      : "No auto-cancel",
+    state.isFreeMember ? "free to members" : null,
+    state.isAutoBump ? "bumps to tourney" : null,
+  ].filter(Boolean).join(" · ");
+  const sumCapacity = [
+    `${Number(state.maxPlayerCount ?? 0)} total`,
+    nz(state.maxTeamSize2Team) ? `2 teams \u00d7 ${Math.floor(Number(state.maxTeamSize2Team) / 2)}` : null,
+  ].filter(Boolean).join(" · ");
+
   const renderField = (f: Spec) => {
     if (f.cond && !f.cond(state)) return null;
     const dirty = fieldChanged(f.key, loaded[f.key], state[f.key]);
@@ -504,7 +622,26 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
       <input type="number" data-testid={`in-${f.key}`} value={blank(state[f.key]) ? "" : String(state[f.key])}
         onChange={(e) => set(f.key, e.target.value === "" ? (NULLABLE_NUM.has(f.key) ? null : "") : Number(e.target.value))} />
     );
-    else if (f.kind === "textarea") ctl = <textarea data-testid={`in-${f.key}`} value={String(state[f.key] ?? "")} onChange={(e) => set(f.key, e.target.value)} />;
+    else if (f.kind === "textarea") {
+      /* NO TEXTAREA IN THE DOM UNTIL ASKED. Set shows a two-line preview with Edit; empty says
+         "Not set" and the button says Add — the VERB tells you which state it is in, which a
+         disabled-looking empty box never did. */
+      const txt = String(state[f.key] ?? "").trim();
+      const isOpen = !!openLong[f.key];
+      ctl = isOpen ? (
+        <div className="longopen">
+          <textarea data-testid={`in-${f.key}`} value={String(state[f.key] ?? "")} onChange={(e) => set(f.key, e.target.value)} />
+          <button type="button" className="longb" data-testid={`long-done-${f.key}`}
+            onClick={() => setOpenLong((o) => ({ ...o, [f.key]: false }))}>Done</button>
+        </div>
+      ) : (
+        <div className="longshut" data-testid={`long-${f.key}`} data-set={txt ? "1" : "0"}>
+          <span className={"longtxt" + (txt ? "" : " none")}>{txt || "Not set"}</span>
+          <button type="button" className="longb" data-testid={`long-open-${f.key}`}
+            onClick={() => setOpenLong((o) => ({ ...o, [f.key]: true }))}>{txt ? "Edit" : "Add"}</button>
+        </div>
+      );
+    }
     else ctl = <input type="text" data-testid={`in-${f.key}`} value={String(state[f.key] ?? "")} onChange={(e) => set(f.key, e.target.value)} />;
     return <div className={cls} key={f.key} data-f={f.key}>{lbl}{ctl}</div>;
   };
@@ -726,17 +863,47 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
         </div>
       )}
 
+      {/* ── THE HEADER CARRIES THE MATCH ──────────────────────────────────────────────────────────
+          The four facts you open a match to check, on one line, before any section is opened:
+          when, how long, how full, what it costs.
+
+          VEO IS HERE AND NOT A SECTION. It is one boolean that saves on its own the instant it is
+          flipped — that does not earn a heading, a card and two lines of architecture. The switch
+          says which state it is in rather than what it would do. */}
+      {mode === "edit" && (
+        <div className="mfacts" data-testid="ed-facts">
+          <div className="mf1">
+            <span className="mfcity">{meta.cityName ? String(meta.cityName) : ""}</span>
+            <b className="mfname">{String(state.name ?? "")}</b>
+          </div>
+          <div className="mf2" data-testid="ed-facts-line">
+            <span>{meta.startDate ? dayLabel(wallDate(String(meta.startDate))) : "—"}</span>
+            <span>{meta.startDate ? hhmm12(wallTime(String(meta.startDate))) : "—"}{meta.endDate ? ` – ${hhmm12(wallTime(String(meta.endDate)))}` : ""}</span>
+            <span>{occupancy}{cap != null ? ` of ${cap}` : " · no cap"}</span>
+            <span>{money(state.registrationPrice)}</span>
+          </div>
+          <div className="mf3">
+            <span className="chip id">ID {String(meta.id)}</span>
+            {meta.cityName ? <span className="chip">{String(meta.cityName)}</span> : null}
+            <span className={`chip ${meta.isCancelled ? "warn" : "live"}`}>{meta.isCancelled ? "Cancelled" : "Live"}</span>
+            {typeof veo === "boolean" && onToggleVeo && (
+              <button type="button" role="switch" aria-checked={veo} data-testid="ed-veo-switch"
+                className={"veosw2" + (veo ? " on" : "")} onClick={() => onToggleVeo(!veo)}>
+                <i /> {veo ? "Covered" : "No camera"}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="cols">
         <div>
-          {/* Match */}
-          <section className="card"><div className="ch"><h2>Match</h2><span className="cnt" data-testid="cnt-match">{groupCount("match") ? `${groupCount("match")} changed` : ""}</span></div>
-            <div className="cb">
-              {/* THE "SHOW MANAGERS FROM ALL CITIES" ESCAPE STOOD HERE AND IS GONE, for the reason
-                  it went from the drawer: over 90 days it produced ZERO assignments, because every
-                  one of the 100 matches carrying an off-roster manager carries one of 8 people on
-                  NO city's roster — people this control never offered either. Two pages must not
-                  disagree about what the manager picker is. */}
-              <div className="grid">{inGroup("match").map(renderField)}
+          {/* WHEN. Split out of Match, where the date and the time sat in the same grid as the
+              name, the field and two manager pickers. They are the first thing looked up and the
+              most edited pair on the drawer; they are not a property of the match's description. */}
+          <Section id="when" title="When" open={!!openSec.when} onToggle={() => toggleSec("when")}
+            dirty={dateMoved} summary={sumWhen}>
+            <div className="grid">
               {mode === "edit" ? (
                 <>
                   {/* DATE AND START TIME ARE EDITABLE. They were disabled here with a sentence
@@ -795,50 +962,65 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
                   {dateErr && <div className="f" data-testid="create-dateerr" style={{ color: "#b3261e" }}>{dateErr}</div>}
                 </>
               )}
-            </div></div></section>
+            </div>
+          </Section>
 
-          {/* VEO COVERAGE — a separate call from the match PUT, and it says so. */}
-          {typeof veo === "boolean" && onToggleVeo && (
-            <section className="card" data-testid="ed-veo"><div className="ch"><h2>Veo coverage</h2><span className="cnt" /></div>
-              <div className="cb"><div className="veorow">
-                <div>
-                  <div className="veolab">Camera assigned</div>
-                  <div className="veosub">{veo ? "Counted in this week's camera nights." : "This match is not covered."}</div>
-                </div>
-                <button type="button" role="switch" aria-checked={veo} data-testid="ed-veo-switch"
-                  aria-label="Camera assigned" className={"veosw" + (veo ? " on" : "")}
-                  onClick={() => onToggleVeo(!veo)}><i /></button>
-              </div>
-              <div className="veohint">Veo lives in Clubhouse, not the MatchDay API — it saves the instant you flip it and is not part of the list below.</div>
-              </div></section>
-          )}
+          {/* Match */}
+          <Section id="match" title="Match" open={!!openSec.match} onToggle={() => toggleSec("match")}
+            dirty={groupCount("match") > 0} summary={sumMatch}>
+            <div>
+              {/* THE "SHOW MANAGERS FROM ALL CITIES" ESCAPE STOOD HERE AND IS GONE, for the reason
+                  it went from the drawer: over 90 days it produced ZERO assignments, because every
+                  one of the 100 matches carrying an off-roster manager carries one of 8 people on
+                  NO city's roster — people this control never offered either. Two pages must not
+                  disagree about what the manager picker is. */}
+              <div className="grid">{inGroup("match").map(renderField)}</div>
+            </div>
+          </Section>
 
-          {/* Teams (read-only this phase) */}
-          <section className="card"><div className="ch"><h2>Teams</h2><span className="cnt" data-testid="cnt-teams" /></div>
+          <section className="card">
             <div className="cb"><div id="teamsRO">{(Array.isArray(meta.teams) ? meta.teams as Data[] : []).map((t) => (
               <div className="team" key={String(t.id)}><span className="nm"><i className="sw" style={{ background: Number(t.teamNumber) === 1 ? "#fff" : "#14352A" }} />{String(t.name)}</span>
                 <div className="ro">{t.price == null ? "no price" : money(t.price)}{t.locked ? " · locked" : ""}</div></div>
             ))}</div>
-            <div className="ladderNote">Team prices use a separate endpoint (<code>PUT /admin/teams/&#123;id&#125;</code>) and are edited with the roster actions — read-only here.</div></div></section>
+            </div></section>
 
-          {/* Pricing */}
-          <section className="card"><div className="ch"><h2>Pricing</h2><span className="cnt" data-testid="cnt-price">{groupCount("price") ? `${groupCount("price")} changed` : ""}</span></div>
-            <div className="cb"><div className="grid three">{inGroup("price").map(renderField)}</div></div></section>
+          <Section id="money" title="Money" open={!!openSec.money} onToggle={() => toggleSec("money")}
+            dirty={groupCount("price") > 0} summary={sumMoney}>
+            <div className="grid">{["registrationPrice", "additionalSpotPrice"].map((k) => renderField(inGroup("price").find((f) => f.key === k)!))}</div>
+            {/* GUEST COUNT ON ITS OWN ROW. The three-across grid was repeat(3,1fr), and `1fr` is
+                minmax(AUTO,1fr) — a track cannot shrink below its own min-content, so the two money
+                inputs took what they needed and the third collapsed onto its longest word. Measured
+                at 580px: a 43px column wrapping nine words over seven lines. Given the row to
+                itself, the hint sits beside the input at full width. */}
+            <div className="guestrow">{renderField(inGroup("price").find((f) => f.key === "guestCount")!)}</div>
+          </Section>
 
-          {/* Spots ladder */}
-          <section className="card"><div className="ch"><h2>Spots released before kick-off</h2><span className="cnt" data-testid="cnt-ladder">{groupCount("ladder") ? `${groupCount("ladder")} changed` : ""}</span></div>
-            <div className="cb"><div className="ladder">{inGroup("ladder").map(renderField)}</div>
+          <Section id="spots" title="Spots shown" open={!!openSec.spots} onToggle={() => toggleSec("spots")}
+            dirty={groupCount("ladder") > 0} summary={sumSpots}>
+            <div><div className="ladder">{inGroup("ladder").map(renderField)}</div>
               <div className="ladderNote" data-testid="ladder-note">{descending
                 ? "Spots still unsold are released back at each mark. Each number should be no higher than the one before it."
-                : <><b>These should descend.</b> {ladderVals.join(" → ")} rises at some point, which releases more spots closer to kick-off than further out.</>}</div></div></section>
+                : <><b>These should descend.</b> {ladderVals.join(" → ")} rises at some point, which releases more spots closer to kick-off than further out.</>}</div></div>
+          </Section>
 
-          {/* Automation */}
-          <section className="card"><div className="ch"><h2>Automation</h2><span className="cnt" data-testid="cnt-auto">{groupCount("auto") ? `${groupCount("auto")} changed` : ""}</span></div>
-            <div className="cb">
+          <Section id="auto" title="Automation" open={!!openSec.auto} onToggle={() => toggleSec("auto")}
+            dirty={groupCount("auto") > 0} summary={sumAuto}>
+            <div>
               {renderToggle(inGroup("auto").find((f) => f.key === "autoCanceled")!)}
               <div className="grid">{["autoCanceledMinutes", "minPlayerCount"].map((k) => renderField(inGroup("auto").find((f) => f.key === k)!))}</div>
               {renderToggle(inGroup("auto").find((f) => f.key === "isFreeMember")!)}
               {renderToggle(inGroup("auto").find((f) => f.key === "isAutoBump")!)}
+            </div>
+          </Section>
+
+          {/* CAPACITY IS ITS OWN SECTION. It lived inside Automation, but "how many people fit"
+              is not an automation rule — it is the first thing looked up and the last thing
+              guessed at, and it was three scrolls down inside a card about auto-cancelling. */}
+          <Section id="capacity" title="Capacity" open={!!openSec.capacity} onToggle={() => toggleSec("capacity")}
+            dirty={["maxPlayerCount", "maxTeamSize2Team", "maxTeamSize4Team", "teamNumbers"].some((k) => changedKeys.includes(k))}
+            summary={sumCapacity}>
+            <div>
               {/* Capacity + growth path. Three independent TOTALS (not team sizes),
                   each with the implied per-side number. 0 = format unavailable.
                   maxTeamSize{2,4} keep the auto-bump-driven show/hide. */}
@@ -907,11 +1089,12 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
                   <b>Capacity contradiction.</b> {capContradiction} Nothing is changed for you.
                 </div>
               ) : null}
-            </div></section>
+            </div>
+          </Section>
 
           {/* Cancel — its own red card. NEVER part of Save: Save sends the field diff, this fires a
               different endpoint with its own confirmation and its own verdict. */}
-          <section className="card danger" data-testid="cancel-card"><div className="ch"><h2>Cancel this match</h2></div>
+          <section className="card danger" data-testid="cancel-card">
             <div className="cb"><div className="dz">
               {/* ONE LINE, AND IT IS DATA. The count is the LIVE roster read at confirm time once
                   the preview arrives, not the render-time occupancy — the sentence is a promise to
@@ -945,13 +1128,11 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
         </div>
 
         {/* Roster — the ACTUAL roster: real names, grouped by real team + number. */}
-        <div className="card sticky">
-          <div className="ch"><h2>Players in the match</h2>
-            <span className={"cnt cap" + (over > 0 ? " over" : "")} data-testid="pcount">
-              {occupancy}{cap != null ? <> of {cap}{over > 0 ? <b data-testid="cap-over"> · over by {over}</b> : occupancy === cap ? " · full" : ""}</> : " · no cap (special event)"}
-            </span>
-          </div>
-          <div className="cb">
+        <Section id="roster" title="Roster" open={!!openSec.roster} onToggle={() => toggleSec("roster")}
+          summary={<span className={over > 0 ? "over" : undefined} data-testid="pcount">
+            {occupancy}{cap != null ? <> of {cap}{over > 0 ? <b data-testid="cap-over"> · over by {over}</b> : occupancy === cap ? " · full" : ""}</> : " · no cap (special event)"}
+          </span>}>
+          <div>
             <div className="roster real" data-testid="roster">
               {rosterTeams.length === 0 && <div className="pfoot">No teams on this match.</div>}
               {rosterTeams.map((c) => (
@@ -968,22 +1149,34 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
                 </div>
               ))}
             </div>
-            <div className="pfoot">Real roster from MatchDay. {occupancy} counted toward the cap{activePlayers.length !== occupancy ? ` (${activePlayers.length} signed up)` : ""}. Add / Move / Remove are separate endpoints — use the roster editor.</div>
+            <div className="pfoot">{occupancy} counted toward the cap{activePlayers.length !== occupancy ? ` (${activePlayers.length} signed up)` : ""} — use the roster editor to add, move or remove.</div>
           </div>
-        </div>
+        </Section>
       </div>
 
       {/* Sticky save bar — diff panel IS the payload; Cancel is NOT here */}
       <div className="savebar" data-testid="savebar">
-        {changedKeys.length ? (
+        {diffRows.length ? (
           <div className="diff"><div className="diffin">
-            <h3>About to change — this list is the request body</h3>
-            <div className="dl" data-testid="diff-list">{changedKeys.map((k) => (
-              <span className="di" data-testid="diff-item" data-key={k} data-from={JSON.stringify(k === "teamNumbers" ? originTeams : (loaded[k] ?? null))} data-to={JSON.stringify(state[k] ?? null)} key={k}>{k === "teamNumbers" ? "Teams" : FIELDS.find((f) => f.key === k)?.label} <s>{k === "teamNumbers" ? originTeams : fmt(k, loaded[k])}</s> → <b>{fmt(k, state[k])}</b></span>
+            {/* THE IDEA IS UNCHANGED — one list drives both this panel and the request body. Only
+                the language changed: it was written as a note to an engineer about PUT semantics,
+                and the person reading it is deciding whether to press save. */}
+            <h3>{diffRows.length} change{diffRows.length === 1 ? "" : "s"} ready to save</h3>
+            {/* ROWS, NOT CHIPS. A chip wraps badly the moment a value is a field name, and these
+                values are field names, times and money. */}
+            <div className="dl" data-testid="diff-list">{diffRows.map((r) => (
+              <div className="di" data-testid="diff-item" data-key={r.key}
+                data-from={JSON.stringify(r.from)} data-to={JSON.stringify(r.to)} key={r.key}>
+                <span className="dk">{r.label}</span>
+                <s>{r.from}</s>
+                <span className="dar" aria-hidden>→</span>
+                <b>{r.to}</b>
+                {r.note && <span className="dn" data-testid="diff-note">{r.note}</span>}
+              </div>
             ))}</div>
-            <div className="diffnote">Partial update: only these {changedKeys.length} field{changedKeys.length === 1 ? "" : "s"} are sent. Everything you did not touch is left exactly as it was.</div>
+            <div className="diffnote">Nothing else on this match is touched.</div>
           </div></div>
-        ) : null}
+        ) : <div className="nochanges" data-testid="no-changes">No changes yet.</div>}
         {/* THE MANAGER CONFIRMATION, ON THE SAVE BAR. Cancel sends nothing — there is no request in
             flight while this is open. */}
         {mgrConfirm && (
@@ -1032,6 +1225,15 @@ const CSS = `
 .me .chip.prod{background:#E5121B;color:#fff;border:1px solid #E5121B;box-shadow:0 0 0 2px rgba(229,18,27,.30)}
 .me .cols{display:grid;grid-template-columns:1fr 400px;gap:18px;align-items:start;padding:0 24px}
 @media(max-width:1100px){.me .cols{grid-template-columns:1fr}}
+/* THE CHANGE LIST — a label column, the old value struck through, an arrow, the new value bold.
+   The consequence line (the end time moving with the start) spans the row underneath it. */
+.me .dl{display:flex;flex-direction:column;gap:7px}
+.me .di{display:grid;grid-template-columns:104px auto 14px 1fr;align-items:baseline;gap:8px;font-size:12.5px}
+.me .di .dk{font-weight:800;color:var(--ink)}
+.me .di s{color:var(--faint);text-decoration:line-through}
+.me .di .dar{color:var(--faint)}
+.me .di b{font-weight:800;color:var(--ink)}
+.me .di .dn{grid-column:2/-1;font-size:11.5px;font-weight:600;color:var(--faint);line-height:1.4}
 .me .card{background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:0 9px 26px rgba(0,51,38,.06);margin-bottom:16px;overflow:hidden}
 .me .card.sticky{position:sticky;top:16px}
 .me .ch{display:flex;align-items:center;gap:11px;padding:13px 18px;border-bottom:1px solid var(--line)}
@@ -1040,6 +1242,40 @@ const CSS = `
 .me .cb{padding:15px 18px}
 .me .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:13px}
 .me .grid.three{grid-template-columns:repeat(3,1fr)}
+/* Guest count: the control on the left at its natural width, the hint beside it with the rest. */
+.me .guestrow{margin-top:13px}
+.me .guestrow .f{display:grid;grid-template-columns:120px 1fr;align-items:start;gap:12px}
+.me .guestrow .f label{grid-column:1;font-size:11px}
+.me .guestrow .f label .hint{display:none}
+.me .guestrow .f input{grid-column:1;grid-row:2}
+.me .guestrow .f::after{content:"Spots a player can buy for someone with no account";grid-column:2;grid-row:1/3;align-self:center;font-size:11.5px;font-weight:600;color:var(--faint);line-height:1.45}
+/* Long fields, folded. */
+.me .longshut{display:flex;align-items:flex-start;gap:10px}
+.me .longtxt{flex:1;min-width:0;font-size:12.5px;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.me .longtxt.none{color:var(--faint);font-style:italic}
+.me .longb{flex:none;border:1px solid var(--line);background:var(--paper);border-radius:8px;padding:5px 11px;font:inherit;font-size:11.5px;font-weight:700;color:var(--ink);cursor:pointer}
+.me .longopen{display:flex;flex-direction:column;gap:7px;align-items:flex-start}
+.me .longopen textarea{width:100%}
+/* Collapsible section chrome. */
+.me .chbtn{width:100%;background:none;border:0;border-bottom:1px solid var(--line);text-align:left;cursor:pointer;font:inherit}
+.me .chbtn h2{display:flex;align-items:center;gap:7px}
+.me .chbtn .dot{width:7px;height:7px;border-radius:50%;background:#C9721B;flex:none}
+.me .chbtn .sum{margin-left:auto;font-size:11.5px;font-weight:600;color:var(--muted);text-align:right;min-width:0}
+.me .mfacts{background:var(--paper);border:1px solid var(--line);border-radius:16px;padding:13px 16px;margin-bottom:16px}
+.me .mf1{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.me .mfcity{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+.me .mfname{font-size:16px;font-weight:800;letter-spacing:-.2px;min-width:0}
+.me .mf2{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:5px;font-size:13px;font-weight:700;color:var(--ink)}
+.me .mf2 span+span::before{content:"\\00b7";margin-right:12px;color:var(--faint);font-weight:400}
+.me .mf3{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:9px}
+.me .veosw2{display:inline-flex;align-items:center;gap:7px;margin-left:auto;border:1px solid var(--line);background:var(--paper);border-radius:999px;padding:4px 11px 4px 5px;font:inherit;font-size:11.5px;font-weight:700;color:var(--muted);cursor:pointer}
+.me .veosw2 i{width:30px;height:17px;border-radius:999px;background:#E7EBE7;position:relative;flex:none;transition:background .15s}
+.me .veosw2 i::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:left .15s}
+.me .veosw2.on{color:#0F6B4F;border-color:#BEDCCB}
+.me .veosw2.on i{background:#0F6B4F}
+.me .veosw2.on i::after{left:15px}
+.me .nochanges{font-size:12px;font-weight:600;color:var(--faint);padding:2px 2px 6px}
+.me .chbtn .caret{margin-left:9px;flex:none;color:var(--faint);font-size:11px}
 .me .f{display:flex;flex-direction:column;gap:6px}
 .me .f.wide{grid-column:1/-1}
 .me label{font-size:10px;font-weight:900;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
