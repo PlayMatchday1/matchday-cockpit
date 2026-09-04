@@ -29,7 +29,7 @@ import {
   parseVeoSubject,
   processingDateFromSlug,
   resolveMatchDates,
-  resolveVeoCode,
+  resolveVeoCodeScored,
   type VeoCandidateRow,
   type VeoFieldCode,
 } from "@/lib/veo";
@@ -94,7 +94,9 @@ async function buildLoader(
   const empty = () => [] as VeoCandidateRow[];
   const parsed = parseVeoSubject(subject);
   if (!parsed.ok) return empty;
-  const venue = resolveVeoCode(parsed.value.code, codes);
+  // Must resolve the SAME way classifyVeo does, or a fuzzily-read code ("ATH K")
+  // pre-loads no candidates and the classifier sees an empty day.
+  const venue = resolveVeoCodeScored(parsed.value.code, codes).field;
   if (!venue) return empty;
   const dates = resolveMatchDates(parsed.value, processingDateFromSlug(slug));
   const byDate = new Map<string, VeoCandidateRow[]>();
@@ -169,9 +171,12 @@ export async function POST(req: Request) {
   // batch keyed on deterministic doc ids, so re-driving a not-yet-'posted'
   // recording safely re-attempts it (writes both, or no-ops if already posted).
   const runDecision = async (rowId: string): Promise<Response> => {
-    const codes = await getVeoCodesMap(supabase); // DB map (cached), constant fallback
+    // DB map (cached), constant fallback. `authoritative` is false when the
+    // veo_codes read failed: the fallback names a code for the review UI, it
+    // does not authorize a post.
+    const { map: codes, authoritative: codesAuthoritative } = await getVeoCodesMap(supabase);
     const loadCandidates = await buildLoader(supabase, subject, ref.slug, codes);
-    const decision = classifyVeo({ subject, slug: ref.slug, loadCandidates, codes });
+    const decision = classifyVeo({ subject, slug: ref.slug, loadCandidates, codes, codesAuthoritative });
 
     const parsedFields = {
       parsed_code: decision.code,

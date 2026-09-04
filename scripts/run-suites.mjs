@@ -185,6 +185,10 @@ const NODE_SUITES = [
   "scripts/promo-edit-model-test.ts",
   // The 🎥 name transform — a MatchDay match-name write that reaches players in the live app.
   "scripts/veo-name-sync-test.ts",
+  // THE VEO MATCHER — which recording is posted into which match chat. Every decision here lands
+  // as a message players read, and the looser thresholds mean a mis-read title now posts rather
+  // than queueing. src/lib/veo.test.ts ran under no command until this line existed.
+  "scripts/veo-matcher-test.ts",
   // The mirror write-through: only on LANDED, only the read-back value, production only.
   "scripts/mirror-writethrough-test.ts",
   // The Gusto payroll CSV — proves the email alias moved no amount or memo.

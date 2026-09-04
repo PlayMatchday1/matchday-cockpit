@@ -58,23 +58,27 @@ export function veoCodeRowsToMap(rows: VeoCodeRow[]): Record<string, VeoFieldCod
 // Cached resolver map for the hot matching path (inbound). Short TTL so an
 // admin edit (confirm/rename) takes effect within ~a minute across instances;
 // the editor's own reads use fetchVeoCodeRows (fresh) so the UI is never stale.
-// Falls back to the in-code constant if the table read fails, so posting still
-// works during a DB blip.
+// On a read failure it falls back to the in-code constant AND SAYS SO
+// (`authoritative: false`), because the constant is only good enough to NAME a
+// code for the review UI. Callers must not post off it — see classifyVeo's
+// `codesAuthoritative` and the `codes_unavailable` queue reason.
+export type VeoCodesMap = { map: Record<string, VeoFieldCode>; authoritative: boolean };
+
 let cache: { map: Record<string, VeoFieldCode>; at: number } | null = null;
 const TTL_MS = 60_000;
 
 export async function getVeoCodesMap(
   supabase: SupabaseClient,
-): Promise<Record<string, VeoFieldCode>> {
+): Promise<VeoCodesMap> {
   const nowMs = Date.now();
-  if (cache && nowMs - cache.at < TTL_MS) return cache.map;
+  if (cache && nowMs - cache.at < TTL_MS) return { map: cache.map, authoritative: true };
   try {
     const map = veoCodeRowsToMap(await fetchVeoCodeRows(supabase));
     cache = { map, at: nowMs };
-    return map;
+    return { map, authoritative: true };
   } catch (err) {
-    console.error("[veo:codes] load failed — falling back to constant", err);
-    return VEO_FIELD_CODES;
+    console.error("[veo:codes] load failed — falling back to constant (identify only, no post)", err);
+    return { map: VEO_FIELD_CODES, authoritative: false };
   }
 }
 

@@ -59,6 +59,8 @@ const REASON_META: Record<string, { label: string; tone: "coral" | "amber" | "bl
   multiple_matches: { label: "Multiple matches", tone: "amber" },
   field_mismatch: { label: "Field disagrees with code", tone: "amber" },
   ambiguous_time: { label: "Ambiguous time (am/pm)", tone: "amber" },
+  low_confidence: { label: "Read too loosely to post", tone: "amber" },
+  codes_unavailable: { label: "Code list unavailable — not posted", tone: "coral" },
   post_failed: { label: "Post failed — retry", tone: "coral" },
 };
 
