@@ -20,6 +20,7 @@ import { supabase } from "@/lib/supabase";
 import { selectAll } from "@/lib/supabasePagination";
 import { canonicalVenueName } from "@/lib/venueResolver";
 import { CITY_CODE_TO_DISPLAY } from "@/lib/scheduleReconcile";
+import { usePhone } from "@/lib/usePhone";
 
 const CODE_BY_DISPLAY: Record<string, string> = Object.fromEntries(
   Object.entries(CITY_CODE_TO_DISPLAY).map(([code, display]) => [display, code]),
@@ -240,6 +241,7 @@ const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 export default function SlateWeekSchedule({
   city, weekStart, onWeekStartChange,
 }: { city: string; weekStart: string; onWeekStartChange: (next: string) => void }) {
+  const isPhone = usePhone();
   const [showCx, setShowCx] = useState(false);
   const wk = useSlateWeek(city, weekStart);
 
@@ -291,6 +293,39 @@ export default function SlateWeekSchedule({
         {wk.loading && wk.days.length === 0 ? (
           <div className="ms-empty">Loading schedule…</div>
         ) : (
+          isPhone ? (
+          /* ── DAY SECTIONS ON A PHONE ────────────────────────────────────────────────────────
+             SAME SHAPE AS THE MASTER SCHEDULE'S MOBILE AGENDA, deliberately: these are the two
+             views a manager moves between, and they must not give two different answers to "what
+             is a day on a phone".
+
+             THIS REPLACES the minmax(132px,1fr) horizontal scroll below. That rule was a correct
+             fix for the shear — the grid fitted the screen and said nothing legible — but it is
+             superseded rather than reverted: the seven columns are gone on a phone, so there is no
+             scrolling row left for a day header to desync from. */
+          <div className="ms-agenda" data-testid="ms-agenda">
+            {wk.days.map((day) => {
+              const slots = day.slots.filter((s) => s.state !== "cx" || showCx);
+              const hiddenCx = showCx ? 0 : day.slots.filter((s) => s.state === "cx").length;
+              // ONLY DAYS WITH SOMETHING ON THEM get a section — seven empty headers to scroll
+              // past is the same defect pointing the other way.
+              if (slots.length === 0 && hiddenCx === 0) return null;
+              return (
+                <div key={day.dow}>
+                  <div className={"ms-agday" + (day.today ? " is-today" : "")} data-testid="ms-agday" data-dow={day.dow}>
+                    <b>{day.dow} {day.num}</b>
+                    {day.today && <span className="ms-todaychip">Today</span>}
+                    <span className="ms-agn">
+                      {slots.length} match{slots.length === 1 ? "" : "es"}
+                      {hiddenCx > 0 && ` \u00b7 ${hiddenCx} cancelled hidden`}
+                    </span>
+                  </div>
+                  {slots.map((s) => <AgendaRow key={s.key} s={s} />)}
+                </div>
+              );
+            })}
+          </div>
+          ) : (
           <div className="ms-grid">
             {wk.days.map((day) => (
               <div key={day.dow} className={"ms-col" + (day.today ? " is-today" : "")}>
@@ -304,6 +339,7 @@ export default function SlateWeekSchedule({
               </div>
             ))}
           </div>
+          )
         )}
 
         <div className="ms-legend">
@@ -368,6 +404,29 @@ function Count({ n, l, cx }: { n: number; l: string; cx?: boolean }) {
     <div className="ms-count">
       <div className={"ms-count-n" + (cx ? " is-cx" : "")}>{n}</div>
       <div className="ms-count-l">{l}</div>
+    </div>
+  );
+}
+
+/* ONE SLOT, ONE FULL-WIDTH ROW. The field is written out and WRAPS rather than ellipsing — a
+ * truncated field name is the same swallow the seven-column grid commits, and an agenda row can
+ * grow because nothing sits beside it to be knocked out of alignment. */
+function AgendaRow({ s }: { s: Slot }) {
+  const stateClass = { ran: "", cx: " is-cx", upcoming: " is-planned", flag: " is-flag" }[s.state];
+  const hasFig = (s.state === "ran" || s.state === "cx") && s.booked != null && s.cap != null;
+  const over = hasFig && s.booked! > s.cap!;
+  const full = hasFig && s.booked! >= s.cap!;
+  const isCx = s.state === "cx";
+  return (
+    <div className={"ms-agrow" + stateClass} data-testid="ms-agrow" data-state={s.state}>
+      <b className="ms-agtime">{s.time}</b>
+      <span className="ms-agfield">{s.field}</span>
+      {hasFig ? (
+        <span className={"ms-agnum" + (isCx ? " is-cx" : over ? " is-over" : full ? " is-full" : "")}>{s.booked} / {s.cap}</span>
+      ) : s.state === "flag" ? (
+        <span className="ms-flagchip">Not on MatchDay</span>
+      ) : null}
+      {isCx && <span className="ms-agcx">CX</span>}
     </div>
   );
 }
@@ -511,12 +570,33 @@ const CSS = `
 
    Below 640px the minimum becomes a real one and the grid scrolls itself. The page still never
    scrolls sideways. Desktop is untouched - minmax(0,1fr) is right there, where seven columns fit. */
-@media (max-width: 639.98px) {
-  .ms-grid{grid-template-columns:repeat(7,minmax(132px,1fr));overflow-x:auto;overflow-y:hidden;
-    -webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;scrollbar-width:none;
-    scroll-snap-type:x proximity;padding-bottom:2px}
-  .ms-grid::-webkit-scrollbar{display:none}
-  .ms-grid > *{scroll-snap-align:start}
-}
+/* THE AGENDA. Only rendered below 640px - the seven-column grid is not rendered there at all, so
+   the horizontal scroll that used to carry it is gone rather than adjusted. There is no scrolling
+   row left for a day header to desync from. */
+.ms-agenda{display:flex;flex-direction:column}
+.ms-agday{display:flex;align-items:baseline;gap:7px;padding:8px 2px 6px;border-top:1px solid #eff3f1}
+.ms-agenda > div:first-child .ms-agday{border-top:0}
+.ms-agday b{font-size:12.5px;font-weight:800;color:#12241d}
+.ms-agday.is-today b{color:#12704a}
+.ms-agn{margin-left:auto;font-size:11px;font-weight:700;color:#626f68;font-variant-numeric:tabular-nums}
+.ms-agrow{display:flex;align-items:center;gap:9px;min-height:44px;padding:7px 10px;margin-bottom:5px;
+  border:1px solid #e2ebe6;border-radius:10px;background:#f9fbfa}
+.ms-agrow.is-planned{background:#ffffff}
+.ms-agrow.is-flag{background:#fdf6ec;border-color:#e8d3ae}
+.ms-agrow.is-cx{background:#fbeee9;border-color:#f0cec2}
+.ms-agtime{flex:0 0 62px;font-size:12.5px;font-weight:800;color:#12241d;font-variant-numeric:tabular-nums;
+  white-space:nowrap}
+/* THE FIELD WRAPS, IT DOES NOT ELLIPSE. overflow-wrap:break-word breaks a long WORD only as a last
+   resort; it does not shatter every word into one character per line the way anywhere does. */
+.ms-agfield{flex:1;min-width:0;font-size:12.5px;font-weight:600;color:#566661;line-height:1.3;
+  overflow-wrap:break-word}
+.ms-agrow.is-cx .ms-agfield{text-decoration:line-through;color:#a4796d}
+.ms-agnum{flex:0 0 auto;font-size:11.5px;font-weight:800;color:#12241d;font-variant-numeric:tabular-nums;
+  white-space:nowrap}
+.ms-agnum.is-full{color:#12704a}
+.ms-agnum.is-over{color:#8f2d15}
+.ms-agnum.is-cx{color:#a4796d}
+.ms-agcx{flex:0 0 auto;font-size:9.5px;font-weight:900;letter-spacing:.05em;color:#8f2d15;
+  background:#fbe9e3;border-radius:4px;padding:1px 5px}
 
 `;

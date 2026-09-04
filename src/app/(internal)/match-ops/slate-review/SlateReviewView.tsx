@@ -11,6 +11,8 @@
 // prices → honesty note.
 
 import { useEffect, useMemo, useState } from "react";
+import { usePhone } from "@/lib/usePhone";
+import CancelRanking, { type RankTone } from "@/components/CancelRanking";
 import { supabase } from "@/lib/supabase";
 import { useMatchWindowData } from "@/lib/useMatchData";
 import { getCancelHeatmap, type SlotRow } from "@/lib/cityStats";
@@ -75,6 +77,8 @@ async function authFetch(path: string, init?: RequestInit): Promise<Response> {
 }
 export default function SlateReviewView() {
   const [city, setCity] = useState<string>("Austin");
+  const isPhone = usePhone();
+  const [citySheet, setCitySheet] = useState(false);
   const [weekStart, setWeekStart] = useState<string>(() => {
     const d = new Date(); const day = d.getDay(); const diff = day === 0 ? -6 : 1 - day;
     const mon = new Date(d.getFullYear(), d.getMonth(), d.getDate() + diff);
@@ -102,31 +106,82 @@ export default function SlateReviewView() {
 
   return (
     <div className="mx-auto max-w-[1180px] px-5 pb-16" style={{ color: C.ink }}>
-      {/* city chips */}
-      <div className="mb-5 flex flex-wrap gap-2">
-        {VISIBLE_CITIES.map((c) => {
-          const on = c === city;
-          return (
-            <button key={c} type="button" onClick={() => setCity(c)}
-              className="min-h-[30px] rounded-full border px-[14px] py-1.5 text-[13px] font-semibold"
-              style={on ? { background: C.forestDeep, borderColor: C.forestDeep, color: "#fff" } : { background: "#f5f7f6", borderColor: C.colLine, color: C.forest }}>
-              {c}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* head — title + window range only (lede removed) */}
-      <div className="mb-4 flex items-baseline justify-between gap-4">
-        <h1 className="m-0 text-[19px] font-bold tracking-[-0.2px]" style={{ color: C.forestDeep }}>Slate Review · {city}</h1>
-        <span className="text-[12px]" style={{ color: C.muted }}>{rangeLabel}</span>
-      </div>
+      {/* CITY — chips on a desktop, one button and a sheet on a phone. Seven chips wrap to two
+          rows at 390px and the filter you are not changing should cost nothing on screen. Single
+          select either way; the semantics are identical. */}
+      {isPhone ? (
+        <>
+          <button type="button" data-testid="slate-city-btn" onClick={() => setCitySheet(true)}
+            className="mb-3 flex w-full items-center gap-2 rounded-[10px] border px-3 text-[13.5px] font-bold"
+            style={{ borderColor: C.colLine, background: C.surface, color: C.forestDeep, minHeight: 44 }}>
+            <span className="min-w-0 flex-1 text-left">{city}</span>
+            <span aria-hidden className="flex-none text-[9px]" style={{ color: C.muted }}>▼</span>
+          </button>
+          {citySheet && (
+            <>
+              <div data-testid="slate-city-scrim" onClick={() => setCitySheet(false)}
+                className="fixed inset-0 z-[60]" style={{ background: "rgba(18,36,29,.42)" }} />
+              <div data-testid="slate-city-sheet" role="dialog" aria-label="City"
+                className="fixed inset-x-0 bottom-0 z-[61] flex flex-col rounded-t-[16px] bg-white"
+                style={{ maxHeight: "82vh", paddingBottom: "env(safe-area-inset-bottom)", boxShadow: "0 -8px 28px rgba(16,40,28,.2)" }}>
+                <div className="flex items-center gap-2 border-b px-3.5 pb-2.5 pt-3" style={{ borderColor: C.hair }}>
+                  <b className="text-[14px]">City</b>
+                  <button type="button" data-testid="slate-city-done" onClick={() => setCitySheet(false)}
+                    className="ml-auto rounded-[9px] px-3 text-[12.5px] font-bold text-white"
+                    style={{ background: C.forest, minHeight: 34 }}>Done</button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto">
+                  {/* SEVEN, NOT EIGHT — El Paso is in HIDDEN_CITIES and VISIBLE_CITIES is the list
+                      the chips already used. Same source, same set. */}
+                  {VISIBLE_CITIES.map((c) => (
+                    <button key={c} type="button" data-testid="slate-city-item" data-name={c} data-on={c === city ? "1" : "0"}
+                      onClick={() => { setCity(c); setCitySheet(false); }}
+                      className="flex w-full items-center gap-2.5 border-b px-3.5 text-left text-[13.5px]"
+                      style={{ borderColor: C.hair, minHeight: 48, fontWeight: c === city ? 800 : 600, color: c === city ? C.ink : C.forest }}>
+                      <span aria-hidden className="flex h-[19px] w-[19px] flex-none items-center justify-center rounded-full border"
+                        style={{ borderColor: c === city ? C.forest : "#C6D4CC", background: c === city ? C.forest : "#fff" }}>
+                        {c === city && <i className="block h-[7px] w-[7px] rounded-full bg-white" />}
+                      </span>
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+          {/* STACKED. "Slate Review · San Antonio" plus a range does not fit one 350px line, and
+              the city is already named on the button above it. */}
+          <div className="mb-4">
+            <h1 className="m-0 text-[19px] font-bold tracking-[-0.2px]" style={{ color: C.forestDeep }}>Slate Review</h1>
+            <span className="mt-0.5 block text-[12px]" style={{ color: C.muted }}>{rangeLabel}</span>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="mb-5 flex flex-wrap gap-2">
+            {VISIBLE_CITIES.map((c) => {
+              const on = c === city;
+              return (
+                <button key={c} type="button" onClick={() => setCity(c)}
+                  className="min-h-[30px] rounded-full border px-[14px] py-1.5 text-[13px] font-semibold"
+                  style={on ? { background: C.forestDeep, borderColor: C.forestDeep, color: "#fff" } : { background: "#f5f7f6", borderColor: C.colLine, color: C.forest }}>
+                  {c}
+                </button>
+              );
+            })}
+          </div>
+          <div className="mb-4 flex items-baseline justify-between gap-4">
+            <h1 className="m-0 text-[19px] font-bold tracking-[-0.2px]" style={{ color: C.forestDeep }}>Slate Review · {city}</h1>
+            <span className="text-[12px]" style={{ color: C.muted }}>{rangeLabel}</span>
+          </div>
+        </>
+      )}
 
       {/* games per week strip */}
       <Card>
         <SHead title="GAMES PER WEEK · LAST 8 WEEKS" />
         <p className="m-0 mb-3.5 text-[12.5px]" style={{ color: C.muted }}>Total spots booked ÷ 18 · excludes waitlist</p>
-        <GamesStrip weekly={weekly} />
+        {isPhone ? <GamesBars weekly={weekly} /> : <GamesStrip weekly={weekly} />}
       </Card>
 
       {/* quick capture (in-memory, in-meeting) — separate tool, kept */}
@@ -202,6 +257,49 @@ function GamesStrip({ weekly }: { weekly: DemandWeek[] }) {
   );
 }
 
+/* ── GAMES PER WEEK, TURNED ON ITS SIDE (phone) ───────────────────────────────
+ * Eight vertical bars need eight columns, and at 390px that is 31.4px against a "Aug 3" label of
+ * 34px, so every label shears — as does "in progress", which renders as in / prog / ress. Rotated,
+ * each row has the full width and the label is simply text on a line.
+ *
+ * ALL THREE STATES SURVIVE THE ROTATION, and that is the point of writing it out rather than
+ * reusing the vertical component with a transform. NO DATA IS NOT ZERO: a week with no source rows
+ * is hatched, labelled "no data", and excluded from the scale — collapsing it into a 0 would state
+ * that the city ran no games in a week nobody measured. */
+function GamesBars({ weekly }: { weekly: DemandWeek[] }) {
+  const max = Math.max(1, ...weekly.filter((w) => w.hasData).map((w) => w.ratio));
+  return (
+    <div data-testid="games-bars" className="flex flex-col gap-1.5">
+      {weekly.map((w) => {
+        const noData = !w.hasData;
+        const pct = noData ? 100 : Math.max(2, Math.round((w.ratio / max) * 100));
+        return (
+          <div key={w.weekStart.toISOString()} data-testid="games-bar" data-nodata={noData ? "1" : "0"}
+            className="flex items-center gap-2" style={{ minHeight: 26 }}>
+            <span className="flex-none text-[11.5px] font-semibold" style={{ width: 54, color: C.muted }}>{fmtWk(w.weekStart)}</span>
+            <span className="min-w-0 flex-1 overflow-hidden rounded-[4px]" style={{ height: 14, background: C.hair }}>
+              <span className="block h-full rounded-[4px]" style={{
+                width: `${pct}%`,
+                opacity: noData ? 0.55 : 1,
+                background: noData
+                  ? "repeating-linear-gradient(135deg,#c8d4ce 0 5px,#e2e9e6 5px 10px)"
+                  : w.isCurrent ? "repeating-linear-gradient(135deg,#35c77f 0 5px,#a6e6c6 5px 10px)" : C.accent,
+              }} />
+            </span>
+            <span className="flex-none text-right text-[12.5px] font-bold tabular-nums"
+              style={{ width: 34, color: noData ? C.muted : C.forestDeep }}>{noData ? "–" : barFmt(w.ratio)}</span>
+            {(noData || w.isCurrent) && (
+              <span className="flex-none whitespace-nowrap text-[10.5px] font-semibold" style={{ color: C.muted }}>
+                {noData ? "no data" : "in progress"}
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── quick capture — PERSISTED (Phase 26) ─────────────────────────────────────
 //
 // NOTES ARE NOT WEEK-SCOPED: a note stays visible for its city whatever week is selected, tagged
@@ -209,6 +307,7 @@ function GamesStrip({ weekly }: { weekly: DemandWeek[] }) {
 // their week — a proposed slot means nothing against a different week, so changing week hides it.
 // No auto-expiry and no "show more": the list is the to-do list, and it shrinks by being done.
 function CaptureBar({ city, fields, weekStart }: { city: string; fields: string[]; weekStart: string }) {
+  const isPhone = usePhone();
   const [val, setVal] = useState("");
   const [caps, setCaps] = useState<SlateNote[]>([]);
   const [copy, setCopy] = useState<"" | "ok" | "manual">("");
@@ -307,8 +406,29 @@ function CaptureBar({ city, fields, weekStart }: { city: string; fields: string[
       {err && <div data-testid="slate-note-error" className="mt-1.5 rounded-[8px] border px-2.5 py-1.5 text-[11.5px] font-semibold" style={{ background: "#fdeeea", borderColor: "#f2c4b8", color: C.red, overflowWrap: "anywhere" }}>{err}</div>}
       <div className="min-h-[32px] px-0.5 py-1.5 text-[11.5px] leading-[1.35]" style={{ color: C.muted }}>{readout || <span style={{ color: C.muted }}>{CAPTURE_GRAMMAR}</span>}</div>
 
-      {/* proposals day-aligned strip (the reused Master Schedule grid renders below) */}
-      {props.length > 0 && (
+      {/* PROPOSALS. On a phone the seven-column strip gives each day 38px, and the chip inside it
+          carries `overflowWrap:anywhere` — which is why it rendered ONE CHARACTER PER LINE instead
+          of overflowing. Without that property the layout would have broken visibly and been
+          reported on day one; with it, it fits the screen perfectly and says nothing.
+
+          THE DAY IS WRITTEN IN WORDS. The strip encoded the day by POSITION, so a list that simply
+          drops the column loses information the grid was carrying. */}
+      {isPhone && props.length > 0 && (
+        <div className="mb-1 flex flex-col gap-1.5" data-testid="proposal-list">
+          {DAYS.flatMap((ab) => props.filter((p) => p.day === ab).map((p) => (
+            <div key={p.id} data-testid="slate-proposal" data-day={p.day}
+              className="flex items-center gap-2 rounded-[10px] border border-dashed px-2.5 py-1.5"
+              style={{ borderColor: C.gold, background: "#fffdf6", minHeight: 44 }}>
+              <span className="flex-none text-[12px] font-extrabold" style={{ color: C.goldInk, width: 30 }}>{ab}</span>
+              <span className="flex-none text-[12px] font-bold tabular-nums" style={{ color: C.goldInk }}>{p.timeTxt}</span>
+              <span className="min-w-0 flex-1 text-[12px]" style={{ color: "#77673c", overflowWrap: "break-word", lineHeight: 1.3 }}>{p.fieldTxt}</span>
+              <span className="flex-none rounded-[4px] border px-1 text-[9px] font-bold"
+                style={{ background: "#fdf3d9", borderColor: C.gold, color: C.goldInk }}>NEW</span>
+            </div>
+          )))}
+        </div>
+      )}
+      {!isPhone && props.length > 0 && (
         <div className="mb-1 grid grid-cols-7 gap-2">
           {DAYS.map((ab) => {
             const here = props.filter((p) => p.day === ab); // `props` is already sorted by timeMin
@@ -363,7 +483,7 @@ function CancelCard({ rows, city, fields }: { rows: Parameters<typeof getCancelH
   return (
     <Card>
       <SHead title="CANCEL PATTERNS" />
-      <Patterns hm={hmCx} codes={codes} />
+      <Patterns hm={hmCx} codes={codes} city={city} />
     </Card>
   );
 }
@@ -373,7 +493,29 @@ function completedWeeks(weeks: string[]): string[] {
   return done.slice(-4);
 }
 
-function Patterns({ hm, codes }: { hm: { weeks: string[]; slots: SlotRow[] }; codes: Record<string, string> }) {
+/* SLOT → RANKED ROW. One row per slot, sorted by CancelRanking (most chronic first, then by spots
+ * booked descending: a slot dying with 30 people on it is a bigger problem than one dying empty).
+ * `booked` is the spots on the weeks it actually cancelled — the size of the problem, not a total
+ * across weeks it ran fine. */
+function PatternsRanking({ hm, wks, cxCount, city }: {
+  hm: { weeks: string[]; slots: SlotRow[] }; wks: string[]; cxCount: (s: SlotRow) => number; city: string;
+}) {
+  const slots = hm.slots
+    .map((s) => {
+      const n = cxCount(s);
+      const booked = wks.reduce((a, w) => a + (s.weeks[w]?.cancelled ? (s.weeks[w]?.spots ?? 0) : 0), 0);
+      return { key: `${s.field}|${s.time}`, name: s.field, when: `${s.dow} ${s.time}`, booked, city, n };
+    })
+    .filter((x) => x.n > 0);
+  return (
+    <CancelRanking slots={slots} outOf={wks.length} ramp={RAMP as Record<number, RankTone>}
+      collapseOnes wrapName
+      emptyText="No slot cancelled in these four weeks." />
+  );
+}
+
+function Patterns({ hm, codes, city }: { hm: { weeks: string[]; slots: SlotRow[] }; codes: Record<string, string>; city: string }) {
+  const isPhone = usePhone();
   const wks = completedWeeks(hm.weeks); // oldest→newest among the 4
   const order = [...wks].reverse(); // most recent first
   // cancelCount per slot over the 4 completed weeks
@@ -381,15 +523,38 @@ function Patterns({ hm, codes }: { hm: { weeks: string[]; slots: SlotRow[] }; co
   const fieldsWithChip = new Set<string>();
   let totalCx = 0;
   for (const s of hm.slots) for (const w of wks) if (s.weeks[w]?.cancelled) { totalCx++; fieldsWithChip.add(s.field); }
+  // THE COLLAPSE, STATED: 49 cancellations are 15 slots, and that difference is the argument.
+  const rankedCount = hm.slots.filter((s) => cxCount(s) > 0).length;
   const stepsPresent = [4, 3, 2, 1].filter((n) => hm.slots.some((s) => cxCount(s) === n && wks.some((w) => s.weeks[w]?.cancelled)));
   const first = wkKeyToDate(wks[0]); const last = wkKeyToDate(wks[wks.length - 1]);
 
   return (
     <>
-      <p className="m-0 mb-3.5 text-[12.5px]" style={{ color: C.muted }}>
-        Every cancelled match, week by week, over the last {wks.length} fully completed weeks — {first ? fmtWk(first) : ""} to {last ? fmtWk(addDays(last, 6)) : ""}, {totalCx} {totalCx === 1 ? "cancellation" : "cancellations"}. Darker means the same slot cancelled in more of those weeks; the count is printed on every chip too. A blank day had none. Each chip reads field, time, and spots already booked.
-      </p>
-      {order.map((wk, bi) => {
+      {/* THE LEDE DESCRIBES WHAT IS ACTUALLY ON SCREEN. The desktop sentence talks about chips,
+          blank days and a week-by-week grid; none of those exist in the ranking, so repeating it
+          on a phone would describe a layout that is not there. Same window, same figures — the
+          collapse from cancellations to slots is the thing the phone version has to say, because
+          it is the difference between the two counts. */}
+      {isPhone ? (
+        <p className="m-0 mb-3 text-[12.5px]" style={{ color: C.muted }} data-testid="patterns-lede">
+          The last {wks.length} fully completed weeks — {first ? fmtWk(first) : ""} to {last ? fmtWk(addDays(last, 6)) : ""}, {totalCx} {totalCx === 1 ? "cancellation" : "cancellations"} across {rankedCount} {rankedCount === 1 ? "slot" : "slots"}. Worst first: how many of the {wks.length} weeks the slot died, then how many people were on it. A slot that died once is not a pattern, so those sit behind the button at the end.
+        </p>
+      ) : (
+        <p className="m-0 mb-3.5 text-[12.5px]" style={{ color: C.muted }} data-testid="patterns-lede">
+          Every cancelled match, week by week, over the last {wks.length} fully completed weeks — {first ? fmtWk(first) : ""} to {last ? fmtWk(addDays(last, 6)) : ""}, {totalCx} {totalCx === 1 ? "cancellation" : "cancellations"}. Darker means the same slot cancelled in more of those weeks; the count is printed on every chip too. A blank day had none. Each chip reads field, time, and spots already booked.
+        </p>
+      )}
+      {/* ── ON A PHONE, A RANKING ──────────────────────────────────────────────────────────────
+          The seven-column grid gives each day 39.7px (page px-5 → 350, card padding → 314,
+          six 6px gaps → 278, ÷ 7), and the chip inside carries overflowWrap:anywhere — which is
+          why it rendered ONE CHARACTER PER LINE. The grid answers "when does this city struggle";
+          the ranking answers "which slot is dying", which is the question a phone is for.
+
+          THE COLLAPSE IS THE ARGUMENT: every cancellation in the grid is a cell, but the same slot
+          dying four weeks running is ONE problem, and here it is one row. */}
+      {isPhone ? (
+        <PatternsRanking hm={hm} wks={wks} cxCount={cxCount} city={city} />
+      ) : order.map((wk, bi) => {
         const wd = wkKeyToDate(wk);
         return (
           <div key={wk} className="mb-3 last:mb-0">
@@ -419,18 +584,23 @@ function Patterns({ hm, codes }: { hm: { weeks: string[]; slots: SlotRow[] }; co
           </div>
         );
       })}
-      {/* step legend — only steps that occur, most-chronic first. All four steps
-          are defined in RAMP even though today only three render. */}
-      <div className="mt-3 flex flex-wrap gap-[5px_14px] text-[11px]" style={{ color: C.muted }}>
-        {stepsPresent.map((n) => (
+      {/* STEP LEGEND — only steps ACTUALLY RENDERED, most-chronic first. On a phone the 1-of-4s sit
+          behind a button, so while they are collapsed there is no 1-of-4 swatch on screen and the
+          legend must not define one: a legend for an invisible colour is the same defect as an
+          unexplained mark. All four steps stay defined in RAMP regardless. */}
+      <div className="mt-3 flex flex-wrap gap-[5px_14px] text-[11px]" data-testid="patterns-legend" style={{ color: C.muted }}>
+        {(isPhone ? stepsPresent.filter((n) => n > 1) : stepsPresent).map((n) => (
           <span key={n} className="inline-flex items-center gap-1.5 whitespace-nowrap">
             <i className="inline-block h-[11px] w-[11px] flex-none rounded-[3px]" style={{ background: RAMP[n].bg, border: RAMP[n].border ? `1px solid ${RAMP[n].border}` : undefined }} />
             {n} of {wks.length} {wks.length === 1 ? "week" : "weeks"}
           </span>
         ))}
       </div>
-      {/* field-code key — only fields that have a chip, ordered alphabetically by code */}
-      {fieldsWithChip.size > 0 && (
+      {/* FIELD-CODE KEY — DESKTOP ONLY. The grid needs it because its chips carry only "OC"; every
+          row of the phone ranking carries the whole field name, so a key there would define codes
+          that appear nowhere on screen (one entry reads "NEMP NEMP"). fieldCodeMap still resolves
+          the names either way — it is the KEY that goes, not the mapping. */}
+      {!isPhone && fieldsWithChip.size > 0 && (
         <p className="mt-1.5 text-[11px]" style={{ color: C.muted }}>
           {[...fieldsWithChip].sort((a, b) => (codes[a] ?? a).localeCompare(codes[b] ?? b)).map((f, i) => <span key={f}>{i > 0 ? " · " : ""}<b style={{ color: C.forestDeep }}>{codes[f] ?? f}</b> {f}</span>)}
         </p>
@@ -508,17 +678,56 @@ function PricesCard({ city }: { city: string }) {
         <p className="m-0 text-[12.5px]" style={{ color: C.muted }}>Loading price history…</p>
       ) : (
         <>
-          <p className="m-0 mb-2 text-[13px] leading-[1.6]" style={{ color: C.ink }}>
-            {inWin.length === 0
-              ? "DPP price did not change in this 8-week window."
-              : <>DPP price moved {inWin.length} {inWin.length === 1 ? "time" : "times"} inside this window: {groups.map((g, gi) => (
-                  <span key={g.code}>{gi > 0 ? "; " : ""}<b>{g.code}</b>{" "}
-                    {g.sorted.map((c, i) => <span key={i}>{i === 0 ? <>${c.prevPriceDollars} → ${c.newPriceDollars}</> : <>, then → ${c.newPriceDollars}</>} around {fmtWk(c.changeWeekStart)}</span>)}
-                    {g.netZero && <span style={{ color: C.muted }}> (net zero across the window — ended where it started)</span>}
-                  </span>
-                ))}.</>}
-            {outWin > 0 && <> {outWin === 1 ? "One earlier change falls" : `A further ${outWin} earlier changes fall`} outside these eight weeks.</>}
-            {" "}A change is recorded only when the new price holds for two or more matches, so one-off discounts never appear here.
+          {/* ── A TABLE, AT EVERY WIDTH ─────────────────────────────────────────────────────────
+              This was a paragraph running "$12 → $15 around Aug 10, then → $13 around Aug 24"
+              inline, per field, semicolon-separated. That is not easier to read at 1440px, just
+              wider — so the table is not a phone variant, it is the section.
+
+              THE ARROW IS THE COLUMN ORDER. From and To are adjacent, so a glyph between them
+              would restate the layout; the colour carries the direction.
+
+              NET ZERO IS A PROPERTY OF THE FIELD, NOT OF A ROW. detectDppPriceShifts marks a field
+              that ended where it started after two or more moves; tagging a ROW would mean writing
+              a row whose From equals its To, and a price that did not change is not a price
+              change. */}
+          {inWin.length === 0 ? (
+            <p className="m-0 mb-2 text-[13px] leading-[1.6]" style={{ color: C.ink }}>DPP price did not change in this 8-week window.</p>
+          ) : (
+            <div className="mb-2 overflow-hidden rounded-[10px] border" style={{ borderColor: C.line }} data-testid="price-table">
+              <div className="grid items-center gap-2 px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.06em]"
+                style={{ gridTemplateColumns: "1fr auto 52px 52px", background: C.colBg, color: C.muted, borderBottom: `1px solid ${C.line}` }}>
+                <span>Field</span><span>Week</span><span className="text-right">From</span><span className="text-right">To</span>
+              </div>
+              {groups.map((g) => g.sorted.map((c, i) => {
+                const up = c.newPriceDollars > c.prevPriceDollars;
+                return (
+                  <div key={`${g.code}-${i}`} data-testid="price-row" data-field={g.code}
+                    data-from={c.prevPriceDollars} data-to={c.newPriceDollars}
+                    className="grid items-center gap-2 border-b px-2.5 py-2 text-[12.5px] last:border-b-0"
+                    style={{ gridTemplateColumns: "1fr auto 52px 52px", borderColor: C.hair }}>
+                    {/* A RUN OF CHANGES ON ONE FIELD IS CONSECUTIVE ROWS, and only the first
+                        prints the name — repeating it would read as four different fields. */}
+                    <span className="min-w-0" style={{ overflowWrap: "break-word", lineHeight: 1.3 }}>
+                      {i === 0 ? <b style={{ color: C.forestDeep }}>{g.code}</b> : <span aria-hidden style={{ color: C.line }}>&mdash;</span>}
+                      {i === 0 && g.netZero && (
+                        <em data-testid="price-netzero" className="ml-1.5 rounded-[4px] border px-1 text-[9.5px] font-bold not-italic"
+                          style={{ background: C.chipBg, borderColor: C.chipLine, color: C.muted }}>net zero</em>
+                      )}
+                    </span>
+                    <span className="whitespace-nowrap text-[11.5px]" style={{ color: C.muted }}>{fmtWk(c.changeWeekStart)}</span>
+                    <span className="text-right tabular-nums" style={{ color: C.muted }}>${c.prevPriceDollars}</span>
+                    <span className="text-right font-bold tabular-nums" style={{ color: up ? C.ok : C.red }}>${c.newPriceDollars}</span>
+                  </div>
+                );
+              }))}
+            </div>
+          )}
+          {/* EVERYTHING THE PROSE STATED SURVIVES — the out-of-window count and the
+              two-or-more-matches rule are facts about the table, so they sit under it. */}
+          <p className="m-0 mb-2 text-[12px] leading-[1.55]" style={{ color: C.muted }} data-testid="price-caveats">
+            {inWin.length > 0 && <>DPP price moved {inWin.length} {inWin.length === 1 ? "time" : "times"} inside this window{groups.some((g) => g.netZero) ? "; a field tagged net zero ended where it started" : ""}.{" "}</>}
+            {outWin > 0 && <>{outWin === 1 ? "One earlier change falls" : `A further ${outWin} earlier changes fall`} outside these eight weeks.{" "}</>}
+            A change is recorded only when the new price holds for two or more matches, so one-off discounts never appear here.
           </p>
           <p className="m-0 text-[13px] leading-[1.6]" style={{ color: C.ink }}>
             {mem && mem.price != null

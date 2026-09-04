@@ -20,6 +20,7 @@
 
 import { CHANNELS, CHANNEL_KEYS, NEW_FLAG_LABEL, coverageCaption, coverageStateOf, coverageSummary, type ChannelKey, type PromoMatch, type PromoWeek } from "@/lib/matchPromotion";
 import PageComments from "@/components/PageComments";
+import CancelRanking, { type RankTone } from "@/components/CancelRanking";
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -263,13 +264,19 @@ function Panel(p: MobileProps) {
   );
 }
 
-/* ── CANCEL PATTERNS AS A RANKING ────────────────────────────────────────────────────────────── */
+/* ── CANCEL PATTERNS AS A RANKING ──────────────────────────────────────────────────────────────
+ * THE LIST ITSELF NOW LIVES IN components/CancelRanking. Slate Review needed the same ranking on a
+ * phone, and a second copy is how two screens start disagreeing about the same cancellations. What
+ * stays here is this screen's own ramp and its heading — the rendering is shared.
+ *
+ * TIER IS DELIBERATELY NON-MONOTONIC IN LIGHTNESS (3-of-4 darker than 4-of-4) and is unchanged.
+ * It is safe only because the badge prints the count, which CancelRanking guarantees. */
 
-const TIER: Record<number, string> = {
-  4: "bg-[#c0392b] text-white",
-  3: "bg-[#7d3220] text-white",
-  2: "bg-[#e6a532] text-[#3d2a05]",
-  1: "bg-[#eef0ee] text-deep-green/65 border border-cream-line",
+const TIER: Record<number, RankTone> = {
+  4: { bg: "#c0392b", fg: "#ffffff" },
+  3: { bg: "#7d3220", fg: "#ffffff" },
+  2: { bg: "#e6a532", fg: "#3d2a05" },
+  1: { bg: "#eef0ee", fg: "rgba(13,59,46,.65)", border: "#e7ece7" },
 };
 
 function Ranking({ ranking, ready, total }: { ranking: MobileProps["ranking"]; ready: boolean; total: number }) {
@@ -282,21 +289,13 @@ function Ranking({ ranking, ready, total }: { ranking: MobileProps["ranking"]; r
           {total} slots · last 4 completed weeks
         </div>
       </div>
-      {ranking.length === 0 && <p className="px-3 pb-4 text-[12.5px] text-deep-green/40">No slot died more than once.</p>}
-      {ranking.map((s) => (
-        <div key={s.slot} data-testid="m-cancel-row" data-n={s.n}
-          className="mx-3 mb-2 flex items-center gap-2.5 rounded-[11px] border border-cream-line bg-white px-3 py-[11px]">
-          {/* THE BADGE PRINTS THE NUMBER. A shade alone is unreadable in sun, in print, and to
-              anyone who cannot separate 3/4 from 2/4 by colour. */}
-          <span className={`flex h-[38px] w-[38px] flex-none items-center justify-center rounded-[9px] text-[11.5px] font-extrabold tabular-nums ${TIER[s.n]}`}>
-            {s.n}/4
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[13.5px] font-extrabold">{s.canonical} · {DOW[Number(s.slot.split("|")[1])]} {s.time}</div>
-            <div className="mt-px text-[11.5px] font-bold text-deep-green/45">{s.booked} spots booked · {s.city}</div>
-          </div>
-        </div>
-      ))}
+      <div className="px-3 pb-1">
+        <CancelRanking outOf={4} ramp={TIER} emptyText="No slot died more than once."
+          slots={ranking.map((s) => ({
+            key: s.slot, name: s.canonical, when: `${DOW[Number(s.slot.split("|")[1])]} ${s.time}`,
+            booked: s.booked, city: s.city, n: s.n,
+          }))} />
+      </div>
     </div>
   );
 }

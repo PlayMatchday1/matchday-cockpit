@@ -23,6 +23,7 @@ import { useFinanceData } from "@/lib/useFinanceData";
 import { fetchWeekMatchPnL, type MatchPnLRow } from "@/lib/matchPnL";
 import { fieldCode } from "@/lib/slateFieldCodes";
 import { canonicalVenueName } from "@/lib/venueResolver";
+import { usePhone } from "@/lib/usePhone";
 
 const C = {
   forest: "#0d3b2e", forestDeep: "#072a20", accent: "#35c77f", mint: "#e0f2e7",
@@ -72,6 +73,7 @@ function sharesTo100(parts: number[], total: number): number[] {
 }
 
 export default function SlateFieldPnL({ city }: { city: string }) {
+  const isPhone = usePhone();
   const { data, loading: dataLoading } = useFinanceData();
   const [win, setWin] = useState<1 | 2 | 4>(4);
   const [active, setActive] = useState<MatchPnLRow[] | null>(null);
@@ -198,6 +200,29 @@ export default function SlateFieldPnL({ city }: { city: string }) {
       ) : agg.flat.length + agg.share.length + agg.unmapped.length === 0 ? (
         <div className="py-8 text-center text-[13px]" style={{ color: C.muted }}>No ran matches in this window for {city}.</div>
       ) : (
+        isPhone ? (
+        /* ── ONE CARD PER FIELD (phone) ────────────────────────────────────────────────────────
+           A five-column table at 390px either scrolls sideways or shears. Turned into cards, the
+           field name has the whole width and the three figures are labelled rather than positional
+           — a column header three screens up labels nothing.
+
+           THE GROUP HEADERS STAY, with their notes. They are the reason the ranking is only inside
+           the flat-rate group, and dropping them would leave a ranked list beside an unranked one
+           with nothing saying why. */
+        <div className="mt-4 flex flex-col gap-2" data-testid="fp-cards">
+          {agg.flat.length > 0 && <PhoneGroup label="Flat per-match rate" note="ranked by net per match" />}
+          {agg.flat.map((g, i) => <PhoneCard key={g.key} g={g} rank={i + 1} />)}
+          {agg.share.length > 0 && <PhoneGroup label="Profit share" note="billing is a share of revenue, not a fixed per-match number, so these cannot be ranked against flat-rate fields" />}
+          {agg.share.map((g) => <PhoneCard key={g.key} g={g} />)}
+          {agg.unmapped.length > 0 && <PhoneGroup label="Unmapped" note="no usable venue cost — field 1552 (no fin_venue_fields link) plus links pointing at deactivated venues" />}
+          {agg.unmapped.length > 0 && (
+            <div className="rounded-[10px] border px-3 py-2.5 text-[12.5px] font-semibold" style={{ borderColor: C.line, color: C.muted }}>
+              {unmappedCount} {unmappedCount === 1 ? "field" : "fields"} with no venue mapping
+              {agg.unmapped.some((g) => g.unmappedNames.length) ? ` (${agg.unmapped.flatMap((g) => g.unmappedNames).join(", ")})` : ""}
+            </div>
+          )}
+        </div>
+        ) : (
         <div className="mt-4 overflow-x-auto">
           <table className="w-full border-collapse tabular-nums">
             <thead>
@@ -222,7 +247,54 @@ export default function SlateFieldPnL({ city }: { city: string }) {
             </tbody>
           </table>
         </div>
+        )
       )}
+    </div>
+  );
+}
+
+function PhoneGroup({ label, note }: { label: string; note: string }) {
+  return (
+    <div className="mt-1.5 rounded-[8px] px-2.5 py-[7px] text-[11px] font-bold uppercase tracking-[0.7px] first:mt-0"
+      style={{ background: C.hair, color: C.nsInk }}>
+      {label}
+      <span className="mt-0.5 block text-[10.5px] font-semibold normal-case tracking-normal" style={{ color: C.muted }}>{note}</span>
+    </div>
+  );
+}
+
+function PhoneCard({ g, rank }: { g: FieldAgg; rank?: number }) {
+  /* A PROFIT-SHARE FIELD SAYS "SHARE", NOT A NUMBER. It has no per-match cost, and printing $0
+     there asserts that the field was free — which is the opposite of what a share deal means. */
+  const cost = g.bucket === "share" ? "Share" : g.costPM == null ? "—" : money(g.costPM);
+  const net = g.bucket === "share" ? "Not ranked" : g.netPM == null ? "—" : money(g.netPM);
+  return (
+    <div data-testid="fp-card" data-bucket={g.bucket} className="rounded-[11px] border px-3 py-2.5"
+      style={{ borderColor: C.line, background: "#fff" }}>
+      <div className="flex items-start gap-2">
+        {rank != null && (
+          <span className="mt-px inline-flex h-5 w-5 flex-none items-center justify-center rounded-full text-[11px] font-extrabold"
+            style={{ background: C.chipBg, border: `1px solid ${C.chipLine}`, color: C.nsInk }}>{rank}</span>
+        )}
+        {/* THE FIELD NAME WRAPS. It is the one thing on the card that identifies it. */}
+        <span className="min-w-0 flex-1 text-[13px] font-bold" style={{ overflowWrap: "break-word", lineHeight: 1.3 }}>{g.fullName}</span>
+        <span className="flex-none text-[11.5px] font-semibold" data-testid="fp-matches" style={{ color: C.nsInk }}>
+          {g.matches} {g.matches === 1 ? "match" : "matches"}
+        </span>
+      </div>
+      <div className="mt-2 grid grid-cols-3 gap-2 tabular-nums">
+        <Fig label="Revenue / match" v={money(g.revPM)} />
+        <Fig label="Field cost / match" v={cost} />
+        <Fig label="Net / match" v={net} />
+      </div>
+    </div>
+  );
+}
+function Fig({ label, v }: { label: string; v: React.ReactNode }) {
+  return (
+    <div>
+      <div className="text-[9.5px] font-bold uppercase tracking-[0.05em]" style={{ color: C.muted }}>{label}</div>
+      <div className="mt-px text-[13px] font-bold" style={{ color: C.ink }}>{v}</div>
     </div>
   );
 }

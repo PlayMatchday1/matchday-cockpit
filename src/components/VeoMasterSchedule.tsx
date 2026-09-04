@@ -21,12 +21,13 @@
 // city-day is a loud coral cell (the to-do). The dark inversion lives only on the
 // Schedule cards, where a Veo match is the exception among many.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { nameForVeo } from "@/lib/veoNameSync";
 import { useAuth, canEditMatches } from "@/lib/useAuth";
 import { isConfined } from "@/lib/cityConfinement";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { supabase } from "@/lib/supabase";
+import { usePhone } from "@/lib/usePhone";
 import { downloadCsv, plural } from "@/components/growth/format";
 import RefreshIcon from "@/components/RefreshIcon";
 import { buildCopyBody, copyConfirmLine, type SourceMatch } from "@/lib/copyMatch";
@@ -205,21 +206,9 @@ export default function VeoMasterSchedule() {
    * 640px because nothing renders the controls that set them. */
   const [sheet, setSheet] = useState<null | "city" | "field">(null);
   const [pickedDay, setPickedDay] = useState<string | null>(null);
-  /* IS THIS A PHONE. CSS alone would have been simpler, but it leaves the whole phone layout in
-   * the DOM at every width — on this board that is an agenda of 428 rows built, laid out and
-   * hidden on every desktop render. The phone work must not reach the desktop, and "invisible" is
-   * not the same as "not there".
-   *
-   * useLayoutEffect, not useEffect: it runs BEFORE paint, so a phone never shows a frame of the
-   * desktop grid first. Starts false so the server render and the first client render agree. */
-  const [isPhone, setIsPhone] = useState(false);
-  useLayoutEffect(() => {
-    const mq = window.matchMedia("(max-width: 639.98px)");
-    const sync = () => setIsPhone(mq.matches);
-    sync();
-    mq.addEventListener("change", sync);
-    return () => mq.removeEventListener("change", sync);
-  }, []);
+  // IS THIS A PHONE — lib/usePhone, shared with Slate Review so the two views cannot disagree
+  // about where a phone ends. Same breakpoint, same pre-paint timing, one implementation.
+  const isPhone = usePhone();
   const [monthBusy, setMonthBusy] = useState(false);
   const [monthErr, setMonthErr] = useState<string | null>(null);
   const [fieldSel, setFieldSel] = useState<Set<string>>(new Set());
