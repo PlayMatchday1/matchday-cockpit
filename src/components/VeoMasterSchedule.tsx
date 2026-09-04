@@ -198,10 +198,6 @@ export default function VeoMasterSchedule() {
   /* CANCELLED IS OFF BY DEFAULT and the label is "Show cancelled in grid" — the exact wording
    * SlateWeekSchedule.tsx:287 already uses. One control, one name, across two pages. */
   const [showCx, setShowCx] = useState(false);
-  /* WHICH DAYS HAVE BEEN EXPANDED past the six-match cap, by ISO date. Six is the cap because
-   * Friday the 11th holds nine: uncapped, one busy night makes its whole week row tall and the
-   * month stops being a grid. Expanding is per-day and deliberate. */
-  const [expandedDays, setExpandedDays] = useState<ReadonlySet<string>>(new Set());
   /* PHONE ONLY. Which bottom sheet is open, and which day the map has inked. Both are inert above
    * 640px because nothing renders the controls that set them. */
   const [sheet, setSheet] = useState<null | "city" | "field">(null);
@@ -213,15 +209,19 @@ export default function VeoMasterSchedule() {
   const [monthErr, setMonthErr] = useState<string | null>(null);
   const [fieldSel, setFieldSel] = useState<Set<string>>(new Set());
   const [droppedFields, setDroppedFields] = useState<string[]>([]);
+  /* THE FIELD ROW'S OPEN STATE, persisted alongside the rest of the prefs blob so somebody who
+   * works with the chips open is not folded up on every visit. Default closed. */
+  const [fieldsOpen, setFieldsOpen] = useState(false);
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(VMS_PREFS);
       if (!raw) return;
-      const p = JSON.parse(raw) as { view?: View; from?: string; to?: string; fields?: string[]; city?: string[] };
+      const p = JSON.parse(raw) as { view?: View; from?: string; to?: string; fields?: string[]; city?: string[]; fieldsOpen?: boolean };
       if (p.view === "month" || p.view === "veo" || p.view === "schedule") setView(p.view);
       if (p.from && p.to) setRange({ from: p.from, to: p.to });
       if (Array.isArray(p.fields)) setFieldSel(new Set(p.fields));
       if (Array.isArray(p.city)) setCityFilter(new Set(p.city));
+      if (typeof p.fieldsOpen === "boolean") setFieldsOpen(p.fieldsOpen);
     } catch { /* private mode, or a prefs blob from an older shape — defaults are fine */ }
   }, []);
   const [busy, setBusy] = useState(false);
@@ -350,10 +350,10 @@ export default function VeoMasterSchedule() {
   useEffect(() => {
     try {
       window.localStorage.setItem(VMS_PREFS, JSON.stringify({
-        view, from: range?.from, to: range?.to, fields: [...fieldSel], city: [...cityFilter],
+        view, from: range?.from, to: range?.to, fields: [...fieldSel], city: [...cityFilter], fieldsOpen,
       }));
     } catch { /* private mode */ }
-  }, [view, range, fieldSel, cityFilter]);
+  }, [view, range, fieldSel, cityFilter, fieldsOpen]);
 
   /* ── THE FILTERED SET, AND THE CHIPS BUILT FROM IT ──────────────────────────────────────────
    * The field list comes from the matches actually in the range, so it can never offer a filter
@@ -909,6 +909,7 @@ export default function VeoMasterSchedule() {
           </div>
           )}
 
+          {!isPhone && (
           <div className="vms-card vms-mbar" data-testid="month-bar">
             <div className="vms-mbarrow">
               <span className="vms-lbl">From</span>
@@ -933,21 +934,64 @@ export default function VeoMasterSchedule() {
                 {" · "}{fieldCountLabel(fieldSel, monthFields)}
               </span>
             </div>
-            {/* FIELD IS MULTI-SELECT. Same chip language as the city row above it: click to add,
-                click to remove, and All fields clears. */}
-            <div className="vms-mbarrow vms-mchips">
+            {/* ── FIELD IS MULTI-SELECT, AND THE ROW FOLDS ────────────────────────────────────
+                24 chips over three rows is ~150px of filter sitting above the calendar, so the
+                row is collapsed by default.
+
+                THE RULE THE PHONE BAR ALREADY FOLLOWS: the control states what IS filtered, never
+                what is not. So collapsed is NOT a bare "Field ▾" with the selection hidden — the
+                chosen fields stay on screen as removable chips and only the UNCHOSEN ones fold
+                away. With nothing selected the line reads "All fields" plus a way in.
+
+                Expanded is exactly the row as it was, so nothing is lost and no new layout has to
+                be learned. */}
+            <div className="vms-mbarrow vms-mchips" data-testid="month-fieldrow"
+              data-open={fieldsOpen ? "1" : "0"}>
               <span className="vms-lbl">Field</span>
-              <button type="button" data-testid="month-allfields"
-                className={"vms-chip" + (fieldSel.size === 0 ? " vms-chip-on" : "")}
-                onClick={() => setFieldSel(new Set())}>All fields</button>
-              {monthFields.map((f) => (
-                <button type="button" key={f} data-testid="month-field" data-field={f}
-                  className={"vms-chip" + (fieldSel.has(f) ? " vms-chip-on" : "")}
-                  onClick={() => setFieldSel((prev) => {
-                    const n = new Set(prev); if (n.has(f)) n.delete(f); else n.add(f); return n;
-                  })}>{f}</button>
-              ))}
-              {/* A DROPPED FILTER IS SAID, not silently kept or silently removed. */}
+              {fieldsOpen ? (
+                <>
+                  <button type="button" data-testid="month-allfields"
+                    className={"vms-chip" + (fieldSel.size === 0 ? " vms-chip-on" : "")}
+                    onClick={() => setFieldSel(new Set())}>All fields</button>
+                  {monthFields.map((f) => (
+                    <button type="button" key={f} data-testid="month-field" data-field={f}
+                      className={"vms-chip" + (fieldSel.has(f) ? " vms-chip-on" : "")}
+                      onClick={() => setFieldSel((prev) => {
+                        const n = new Set(prev); if (n.has(f)) n.delete(f); else n.add(f); return n;
+                      })}>{f}</button>
+                  ))}
+                  <button type="button" data-testid="month-fold" className="vms-fdisc"
+                    onClick={() => setFieldsOpen(false)}>Collapse <span aria-hidden>▴</span></button>
+                </>
+              ) : (
+                <>
+                  {fieldSel.size === 0 && (
+                    <button type="button" data-testid="month-allfields" className="vms-chip vms-chip-on"
+                      onClick={() => setFieldSel(new Set())}>All fields</button>
+                  )}
+                  {/* THE SELECTION STAYS ON SCREEN AND STAYS REMOVABLE while folded. */}
+                  {monthFields.filter((f) => fieldSel.has(f)).map((f) => (
+                    <button type="button" key={f} data-testid="month-field" data-field={f}
+                      className="vms-chip vms-chip-on"
+                      onClick={() => setFieldSel((prev) => { const n = new Set(prev); n.delete(f); return n; })}>
+                      {f} <span aria-hidden className="vms-fx">×</span>
+                    </button>
+                  ))}
+                  <button type="button" data-testid="month-fold" className="vms-fdisc"
+                    onClick={() => setFieldsOpen(true)}>
+                    {fieldSel.size === 0
+                      ? `Choose from ${monthFields.length} field${monthFields.length === 1 ? "" : "s"}`
+                      : `${monthFields.length - fieldSel.size} more field${monthFields.length - fieldSel.size === 1 ? "" : "s"}`}
+                    {" "}<span aria-hidden>▼</span>
+                  </button>
+                  {fieldSel.size > 0 && (
+                    <button type="button" data-testid="month-clearfields" className="vms-chip"
+                      onClick={() => setFieldSel(new Set())}>Clear</button>
+                  )}
+                </>
+              )}
+              {/* A DROPPED FILTER IS SAID, not silently kept or silently removed — AND IT IS SAID
+                  WHILE THE ROW IS FOLDED, which is the default state. */}
               {droppedFields.length > 0 && (
                 <span className="vms-mdrop" data-testid="month-dropped">
                   {droppedFields.join(", ")} {droppedFields.length === 1 ? "has" : "have"} no matches in this range — removed from the filter
@@ -955,16 +999,21 @@ export default function VeoMasterSchedule() {
               )}
             </div>
           </div>
+          )}
           {monthErr ? (
             <div className="vms-card vms-merr" data-testid="month-error">
               <b>The range could not be loaded — this is not an empty month.</b> {monthErr}
             </div>
           ) : (
             <>
-              <MonthView weeks={monthWeeks} count={monthVisible.length} onOpen={openCard}
-                selectedId={drawerId} singleField={fieldSel.size === 1}
-                expandedDays={expandedDays}
-                onExpand={(iso) => setExpandedDays((prev) => new Set(prev).add(iso))} />
+              {/* THE DESKTOP GRID IS NOT RENDERED ON A PHONE. It was only CSS-hidden, which was
+                  survivable while MONTH_CAP kept it to six rows a cell — with the cap gone it
+                  builds all 424 rows and hides them, which is the desktop's work reaching the
+                  phone. Same rule as the phone layout not reaching the desktop. */}
+              {!isPhone && (
+                <MonthView weeks={monthWeeks} count={monthVisible.length} onOpen={openCard}
+                  selectedId={drawerId} singleField={fieldSel.size === 1} />
+              )}
               {/* THE PHONE'S TWO HALVES. Not rendered at all above 640px; the grid above is
                   hidden by CSS below it. */}
               {isPhone && <MonthMap weeks={monthWeeks} picked={pickedDay}
@@ -1363,7 +1412,15 @@ const CSS = `
  * be raised. */
 .vms-mcell{min-height:126px;display:flex;flex-direction:column;min-width:0;background:#fff;border-right:1px solid #EFF3EF;border-bottom:1px solid #EFF3EF}
 .vms-mcell:nth-child(7n){border-right:0}
-.vms-mout{background:#FAFCFA}
+/* THE OUT-OF-RANGE PADDING DAY DOES NOT STRETCH. It holds nothing by definition, so under a
+   14-row week it became 14 rows of dimmed nothing - the largest block of whitespace on the page
+   and the only one carrying no information at all. align-self:start stops it inflating; the tint
+   still marks it as outside the range, and IN-RANGE cells keep stretching so the grid stays a
+   grid. */
+.vms-fdisc{border:1px dashed #cfdad3;background:#fff;border-radius:999px;padding:4px 11px;font:inherit;font-size:12px;font-weight:700;color:#42513f;cursor:pointer;white-space:nowrap}
+.vms-fdisc:hover{background:#f4f7f3;border-color:#b7c8bd}
+.vms-fx{opacity:.6;font-weight:800}
+.vms-mout{background:#FAFCFA;align-self:start;min-height:86px}
 .vms-mout .vms-mnum{color:#C3CFC7}
 .vms-mtoday{box-shadow:inset 0 0 0 2px #35c77f}
 .vms-mhead{display:flex;align-items:center;gap:6px;padding:5px 9px 2px}
@@ -1408,8 +1465,6 @@ const CSS = `
 .vms-mcx{background:#fdeae4;border-color:#f0bda9;box-shadow:inset 2px 0 0 #a8391a}
 .vms-mcx b,.vms-mcx span{color:#a8391a;text-decoration:line-through;text-decoration-thickness:1px}
 .vms-mcx .vms-mcnt,.vms-mcx .vms-mprice{color:#a8391a;opacity:.75}
-.vms-mmore{border:0;background:none;padding:2px 4px;font:inherit;font-size:10.5px;font-weight:700;color:#046B45;cursor:pointer;text-align:left}
-.vms-mmore:hover{text-decoration:underline}
 .vms-mcount u{text-decoration:none;color:#a8391a;font-weight:700}
 /* The cancelled toggle — same shape and same accent as Slate Review's. */
 .vms-mtoggle{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:#3d5245;cursor:pointer;user-select:none}
@@ -1757,10 +1812,22 @@ span.vms-cam:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
  * share the page's drawer, so clicking a match here opens the SAME editor the week view opens —
  * MatchDrawer is mounted once at page level and both views call the same openCard.
  *
- * DENSITY. Cells are a FIXED height and never stretch their row: a Saturday with nine matches must
- * not make every other Saturday nine rows tall. A cell with more entries than fit scrolls inside
- * itself and shows the day's count in its corner, so a full day is visibly full rather than
- * silently truncated.
+ * DENSITY — AND THE CAP THAT USED TO BE HERE.
+ *
+ * This said: "Cells are a FIXED height and never stretch their row: a Saturday with nine matches
+ * must not make every other Saturday nine rows tall." That was right about the MECHANISM — a week
+ * row is as tall as its busiest day, because that is how CSS grid stretches — and MONTH_CAP = 6
+ * plus a "+N more" button was the answer.
+ *
+ * THE CAP IS GONE, ON REQUEST, and this comment is kept rather than deleted because the reason it
+ * existed has not stopped being true. What changed is the measurement: on the real September
+ * board the cap was hiding 97 of 175 rows in the first two weeks — most of the month was behind a
+ * click. It is survivable because September's days are UNIFORM, not spiky: 9 to 21 matches with a
+ * median of 13, so the tallest day in a week is rarely more than 1.6x the median, and the stretch
+ * costs about 27% whitespace.
+ *
+ * A MONTH WITH ONE 40-MATCH SATURDAY AND SIX QUIET DAYS WOULD BE A DIFFERENT ANSWER. That is the
+ * condition under which this is worth revisiting — not a general dislike of tall rows.
  */
 /* ── THE MONTH CELL ───────────────────────────────────────────────────────────────────────────
  * One line per match: time, field, count, price. Four things, in that order, every row the same
@@ -1773,12 +1840,9 @@ span.vms-cam:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
  * camera by anyone who had not been told it was one, and the width it took back belongs to the
  * count.
  */
-const MONTH_CAP = 6;
-
-function MonthView({ weeks, count, onOpen, selectedId, singleField, expandedDays, onExpand }: {
+function MonthView({ weeks, count, onOpen, selectedId, singleField }: {
   weeks: GridDay[][]; count: number; onOpen: (id: number) => void;
   selectedId: number | null; singleField: boolean;
-  expandedDays: ReadonlySet<string>; onExpand: (iso: string) => void;
 }) {
   return (
     <div className="vms-card vms-month" data-testid="month-grid">
@@ -1791,7 +1855,7 @@ function MonthView({ weeks, count, onOpen, selectedId, singleField, expandedDays
         <div className="vms-mweek" key={wi}>
           {week.map((d) => (
             <MonthCell key={d.iso} d={d} onOpen={onOpen} selectedId={selectedId}
-              singleField={singleField} expanded={expandedDays.has(d.iso)} onExpand={onExpand} />
+              singleField={singleField} />
           ))}
         </div>
       ))}
@@ -1854,8 +1918,8 @@ function MonthMap({ weeks, picked, onPick }: {
  * pointing the other way; the map above still shows every day, so the month stays complete.
  *
  * NO +N MORE. A day here is a section, not a fixed-height cell, so it has no height to overflow —
- * MONTH_CAP exists to stop one busy night making its whole week row tall, and there are no week
- * rows here.
+ * The desktop grid's cap is gone too (see the density note above), so the two views agree: every
+ * match a day holds is on screen in both.
  */
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -1983,12 +2047,13 @@ function PickerSheet({ kind, onClose, cities, city, onPickCity, fields, counts, 
   );
 }
 
-function MonthCell({ d, onOpen, selectedId, singleField, expanded, onExpand }: {
+function MonthCell({ d, onOpen, selectedId, singleField }: {
   d: GridDay; onOpen: (id: number) => void; selectedId: number | null;
-  singleField: boolean; expanded: boolean; onExpand: (iso: string) => void;
+  singleField: boolean;
 }) {
-  const over = d.matches.length - MONTH_CAP;
-  const shown = expanded ? d.matches : d.matches.slice(0, MONTH_CAP);
+  // EVERY MATCH THE DAY HOLDS. No slice, so the cell's badge and its row count are the same
+  // number by construction rather than by agreement.
+  const shown = d.matches;
   const cx = d.matches.filter((m) => m.cancelled).length;
   return (
     <div
@@ -2037,10 +2102,6 @@ function MonthCell({ d, onOpen, selectedId, singleField, expanded, onExpand }: {
             </button>
           );
         })}
-        {over > 0 && !expanded && (
-          <button type="button" className="vms-mmore" data-testid="month-more"
-            onClick={() => onExpand(d.iso)}>+{over} more</button>
-        )}
       </div>
     </div>
   );
