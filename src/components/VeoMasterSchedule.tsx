@@ -28,6 +28,11 @@ import { isConfined } from "@/lib/cityConfinement";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { supabase } from "@/lib/supabase";
 import { usePhone } from "@/lib/usePhone";
+// THE SERVER'S OWN RESOLVERS, called on the client. venueResolver is pure — no supabase, no
+// fetch, no async — so the two cannot disagree about what a venue is called.
+import { canonicalVenueName } from "@/lib/venueResolver";
+import { CITY_SCOPES } from "@/lib/cityScope";
+import { CITY_CODE_TO_DISPLAY } from "@/lib/scheduleReconcile";
 import { downloadCsv, plural } from "@/components/growth/format";
 import RefreshIcon from "@/components/RefreshIcon";
 import { buildCopyBody, copyConfirmLine, type SourceMatch } from "@/lib/copyMatch";
@@ -675,6 +680,32 @@ export default function VeoMasterSchedule() {
   const patchCard = useCallback((id: number, patch: DrawerPatch) => {
     const hhmm = patch.startDate ? patch.startDate.slice(11, 16) : "";
     const newDate = patch.startDate ? patch.startDate.slice(0, 10) : "";
+    /* ── THE PATCH SPEAKS THE API'S VOCABULARY; THE GRID SPEAKS ITS OWN ──────────────────────
+     * The saved record carries the RAW field title and the API's city name. The grid holds the
+     * CANONICAL venue (veoSchedule runs canonicalVenueName on the way in) and a DISPLAY city
+     * (CITY_CODE_TO_DISPLAY). Writing the API's strings straight in made the match unmatchable by
+     * the very filters built from those columns: with the STAR chip selected, `venue` became
+     * "STAR Soccer Complex" and fields.has("STAR") was false, so the match vanished from the grid
+     * and the header count dropped by one until a refresh re-read the canonical name.
+     *
+     * BOTH GO THROUGH THE SHARED RESOLVERS, so client and server cannot disagree about what a
+     * place is called. canonicalVenueName is pure — no supabase, no fetch, no async — which is
+     * what makes calling the server's own function here legitimate rather than a hand-rolled
+     * shortening rule.
+     *
+     * THE CITY NEEDED IT TOO, and it is not hypothetical: measured against the live detail route,
+     * DFW returns "Dallas / Fort Worth" where the grid holds "Dallas", and OKC returns
+     * "Oklahoma City" where the grid holds "OKC". Two of the seven disagree. CITY_SCOPES maps the
+     * API's name to the identifier and CITY_CODE_TO_DISPLAY maps that to the grid's — the same two
+     * tables the rest of the app uses. */
+    const gridVenue = (raw: string | null) => (raw ? canonicalVenueName(raw) : null);
+    const gridCity = (apiName: string | null) => {
+      if (!apiName) return null;
+      const scope = CITY_SCOPES.find((c) => c.name === apiName);
+      return scope ? (CITY_CODE_TO_DISPLAY[scope.identifier] ?? apiName) : apiName;
+    };
+    const venue = gridVenue(patch.venue);
+    const city = gridCity(patch.city);
 
     setWeek((w) => {
       if (!w) return w;
@@ -685,13 +716,15 @@ export default function VeoMasterSchedule() {
           const time = hhmm || m.time;
           const [H, M] = time.split(":").map(Number);
           const h12 = `${(H % 12) || 12}:${String(M).padStart(2, "0")} ${H >= 12 ? "PM" : "AM"}`;
-          return { ...m, name: patch.name || m.name, time: h12, minutes: H * 60 + M, venue: patch.venue || m.venue, city: patch.city || m.city };
+          return { ...m, name: patch.name || m.name, time: h12, minutes: H * 60 + M, venue: venue || m.venue, city: city || m.city };
         }),
       };
     });
 
     const moved = !!newDate && monthData?.matches.some((m) => m.apiId === id && m.date !== newDate);
-    const cancelChanged = monthData?.matches.some((m) => m.apiId === id && !!m.cancelled !== patch.cancelled);
+    // BOTH SIDES COERCED. patch.cancelled is a real boolean today, but one changed caller away
+    // from `false !== undefined` being permanently true — which would fire loadRange on every save.
+    const cancelChanged = monthData?.matches.some((m) => m.apiId === id && !!m.cancelled !== !!patch.cancelled);
     if ((moved || cancelChanged) && range) { void loadRange(range); return; }
 
     setMonthData((d) => {
@@ -704,13 +737,15 @@ export default function VeoMasterSchedule() {
           return {
             ...m,
             name: patch.name || m.name,
-            venue: patch.venue || m.venue,
-            city: patch.city || m.city,
+            venue: venue || m.venue,
+            city: city || m.city,
             ...(hhmm ? { time: `${(H % 12) || 12}:${String(M).padStart(2, "0")} ${H >= 12 ? "PM" : "AM"}`, minutes: H * 60 + M } : {}),
-            price: patch.price,
-            capacity: patch.capacity,
-            minPlayers: patch.minPlayers,
-            cancelled: patch.cancelled,
+            /* ?? m.x, NOT x. These were assigned unconditionally, so a null from the route wiped a
+               value the cell was rendering. An absent field means UNCHANGED, not "now empty". */
+            price: patch.price ?? m.price,
+            capacity: patch.capacity ?? m.capacity,
+            minPlayers: patch.minPlayers ?? m.minPlayers,
+            cancelled: patch.cancelled ?? m.cancelled,
           };
         }),
       };
