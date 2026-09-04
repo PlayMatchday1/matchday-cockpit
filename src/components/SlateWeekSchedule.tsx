@@ -264,7 +264,6 @@ export default function SlateWeekSchedule({
           <div>
             <p className="ms-eyebrow">Week schedule</p>
             <h2 className="ms-city">{city}</h2>
-            <p className="ms-sub">Completed days show what actually ran on MatchDay. Upcoming days show the plan.</p>
             <div className="ms-navrow">
               <button type="button" className="ms-nav" aria-label="Previous week" onClick={() => shift(-7)}>&#8249;</button>
               <span className="ms-week">{rangeLabel}</span>
@@ -351,50 +350,6 @@ export default function SlateWeekSchedule({
         </div>
       </div>
 
-      {/* Changes from last week */}
-      <div className="ms-card">
-        <h2 className="ms-chg-title">Changes from last week</h2>
-        <p className="ms-chg-sub">Everything on the schedule that did not play as planned. Kept out of the grid above so the grid only ever answers one question: what ran, and what is coming.</p>
-
-        <div className="ms-grp">
-          <div className="ms-grp-head">
-            <span className="ms-grp-name">Dropped</span>
-            <span className="ms-grp-n">{wk.dropped.length}</span>
-          </div>
-          <p className="ms-grp-note">Ran last week, never made it onto this week&rsquo;s schedule.</p>
-          {wk.dropped.length ? (
-            <div className="ms-rows">
-              {wk.dropped.map((r, i) => (
-                <div key={i} className="ms-row is-drop">
-                  <span className="ms-row-day">{r.dow} {r.num}</span>
-                  <span className="ms-row-time">{r.time}</span>
-                  <span className="ms-row-field">{r.field}</span>
-                  <span className="ms-row-tag">Dropped</span>
-                </div>
-              ))}
-            </div>
-          ) : <p className="ms-grp-empty">Nothing dropped — every slot that ran last week is on this week&rsquo;s schedule.</p>}
-        </div>
-
-        <div className="ms-grp" style={{ marginBottom: 0 }}>
-          <div className="ms-grp-head">
-            <span className="ms-grp-name">Cancelled this week</span>
-            <span className="ms-grp-n is-cx">{wk.cancelled.length}</span>
-          </div>
-          <p className="ms-grp-note">Made it onto this week&rsquo;s schedule, then cancelled.</p>
-          {wk.cancelled.length ? (
-            <div className="ms-rows is-split" style={{ gridTemplateRows: `repeat(${Math.ceil(wk.cancelled.length / 2)}, auto)` }}>
-              {wk.cancelled.map((r, i) => (
-                <div key={i} className="ms-row">
-                  <span className="ms-row-day">{r.dow} {r.num}</span>
-                  <span className="ms-row-time">{r.time}</span>
-                  <span className="ms-row-field">{r.field}</span>
-                </div>
-              ))}
-            </div>
-          ) : <p className="ms-grp-empty">No match on this week&rsquo;s schedule was cancelled.</p>}
-        </div>
-      </div>
     </>
   );
 }
@@ -470,7 +425,6 @@ const CSS = `
 .ms-head{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;margin-bottom:4px;flex-wrap:wrap}
 .ms-eyebrow{font-size:11.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#626f68;margin:0 0 6px}
 .ms-city{font-size:22px;font-weight:800;letter-spacing:-.015em;color:#0d3b2e;margin:0;line-height:1.1}
-.ms-sub{font-size:13px;color:#626f68;margin:8px 0 0;line-height:1.5;max-width:62ch}
 .ms-navrow{display:flex;align-items:center;gap:8px;margin:16px 0 6px}
 .ms-nav{width:30px;height:30px;border-radius:999px;border:1px solid #e2eae5;background:#fff;color:#566661;font-size:14px;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
 .ms-week{border:1px solid #e2eae5;background:#eef3f0;color:#12241d;border-radius:999px;padding:6px 15px;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
@@ -541,18 +495,6 @@ const CSS = `
 .ms-swatch.sw-flag{background:#fff;border-color:#e3c369}
 .ms-swatch.sw-cx{background:#fbe9e3;border-color:#f0cec2}
 .ms-swatch.sw-today{background:#fff;border-color:#35c77f;box-shadow:inset 3px 0 0 #35c77f}
-.ms-chg-title{font-size:15px;font-weight:800;color:#0d3b2e;margin:0;letter-spacing:-.01em}
-.ms-chg-sub{font-size:12.5px;color:#626f68;margin:6px 0 18px;line-height:1.5;max-width:78ch}
-.ms-grp{margin-bottom:26px}
-.ms-grp-head{display:flex;align-items:center;gap:9px;margin-bottom:3px}
-.ms-grp-name{font-size:11.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#566661}
-.ms-grp-n{font-size:11px;font-weight:800;color:#12241d;background:#eef3f0;border:1px solid #e2eae5;border-radius:999px;padding:1px 8px;font-variant-numeric:tabular-nums}
-.ms-grp-n.is-cx{color:#8f2d15;background:#fbe9e3;border-color:#f0cec2}
-.ms-grp-note{font-size:12px;color:#626f68;margin:2px 0 10px;line-height:1.45}
-.ms-grp-empty{font-size:12.5px;color:#626f68;margin:2px 0 0;line-height:1.45}
-.ms-rows{border-top:1px solid #eff3f1}
-.ms-rows.is-split{display:grid;grid-auto-flow:column;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:34px}
-@media (max-width:1100px){.ms-rows.is-split{display:block}}
 .ms-row{display:flex;align-items:baseline;gap:12px;padding:9px 2px;border-bottom:1px solid #eff3f1}
 .ms-row-day{font-size:10.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#626f68;flex:0 0 62px;font-variant-numeric:tabular-nums}
 .ms-row-time{font-size:12.5px;font-weight:700;color:#12241d;flex:0 0 74px;font-variant-numeric:tabular-nums}

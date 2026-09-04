@@ -29,7 +29,7 @@ import { detectDppPriceShifts, type DppPriceChange, type DppRegistration } from 
 import NoteList from "@/components/NoteList";
 import { fmtWk, wkKeyToDate, type SlateNote } from "@/lib/notes";
 import {
-  parseCapture, captureReadout, timeMinutes, CAPTURE_GRAMMAR, type Day,
+  parseCapture, captureReadout, timeMinutes, type Day,
 } from "@/lib/slateCapture";
 
 const C = {
@@ -186,7 +186,7 @@ export default function SlateReviewView() {
 
       {/* quick capture (in-memory, in-meeting) — separate tool, kept */}
       <Card>
-        <SHead title={`MASTER SCHEDULE · ${city}`} />
+        <SHead title={`Actions in ${city}`} />
         <CaptureBar city={city} fields={fields} weekStart={weekStart} />
       </Card>
 
@@ -392,9 +392,6 @@ function CaptureBar({ city, fields, weekStart }: { city: string; fields: string[
 
   return (
     <div>
-      <p className="m-0 mb-2.5 text-[12.5px]" style={{ color: C.muted }}>
-        Talk through the week live: what you type becomes a dashed proposal on the day below, or is kept as a note. Everything here is saved and shared — it stays until someone deletes it.
-      </p>
       <div className="flex items-stretch gap-2">
         <input value={val} onChange={(e) => setVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void commit(); } if (e.key === "Escape") setVal(""); }}
           autoComplete="off" spellCheck={false} aria-label="Add a slot or a note" data-testid="slate-note-input"
@@ -404,7 +401,7 @@ function CaptureBar({ city, fields, weekStart }: { city: string; fields: string[
           className="h-[34px] flex-none rounded-[10px] px-4 text-[12px] font-bold text-white disabled:opacity-60" style={{ background: C.forest }}>{busy ? "Saving…" : "Add"}</button>
       </div>
       {err && <div data-testid="slate-note-error" className="mt-1.5 rounded-[8px] border px-2.5 py-1.5 text-[11.5px] font-semibold" style={{ background: "#fdeeea", borderColor: "#f2c4b8", color: C.red, overflowWrap: "anywhere" }}>{err}</div>}
-      <div className="min-h-[32px] px-0.5 py-1.5 text-[11.5px] leading-[1.35]" style={{ color: C.muted }}>{readout || <span style={{ color: C.muted }}>{CAPTURE_GRAMMAR}</span>}</div>
+      <div className="min-h-[32px] px-0.5 py-1.5 text-[11.5px] leading-[1.35]" style={{ color: C.muted }}>{readout}</div>
 
       {/* PROPOSALS. On a phone the seven-column strip gives each day 38px, and the chip inside it
           carries `overflowWrap:anywhere` — which is why it rendered ONE CHARACTER PER LINE instead
@@ -613,7 +610,6 @@ function Patterns({ hm, codes, city }: { hm: { weeks: string[]; slots: SlotRow[]
 function PricesCard({ city }: { city: string }) {
   const { data } = useFinanceData();
   const [dpp, setDpp] = useState<DppPriceChange[] | null>(null);
-  const [mem, setMem] = useState<{ price: number | null; active: number | null; since: string | null } | null>(null);
 
   useEffect(() => {
     const fin = data;
@@ -645,12 +641,6 @@ function PricesCard({ city }: { city: string }) {
         const shifts = detectDppPriceShifts(dppRegs, { now: new Date() });
         if (!cancelled) setDpp(shifts);
       } catch { if (!cancelled) setDpp([]); }
-      // membership: latest MAX price snapshot for the city + active count
-      try {
-        const r = await supabase.from("membership_price_snapshots").select("max_price_dollars, active_count_at_price, captured_at, city").eq("city", city).order("captured_at", { ascending: false }).limit(1);
-        const row = (r.data ?? [])[0] as { max_price_dollars: number; active_count_at_price: number; captured_at: string } | undefined;
-        if (!cancelled) setMem(row ? { price: row.max_price_dollars, active: row.active_count_at_price, since: row.captured_at } : { price: null, active: null, since: null });
-      } catch { if (!cancelled) setMem({ price: null, active: null, since: null }); }
     })();
     return () => { cancelled = true; };
   }, [city, data]);
@@ -722,18 +712,10 @@ function PricesCard({ city }: { city: string }) {
               }))}
             </div>
           )}
-          {/* EVERYTHING THE PROSE STATED SURVIVES — the out-of-window count and the
-              two-or-more-matches rule are facts about the table, so they sit under it. */}
-          <p className="m-0 mb-2 text-[12px] leading-[1.55]" style={{ color: C.muted }} data-testid="price-caveats">
-            {inWin.length > 0 && <>DPP price moved {inWin.length} {inWin.length === 1 ? "time" : "times"} inside this window{groups.some((g) => g.netZero) ? "; a field tagged net zero ended where it started" : ""}.{" "}</>}
-            {outWin > 0 && <>{outWin === 1 ? "One earlier change falls" : `A further ${outWin} earlier changes fall`} outside these eight weeks.{" "}</>}
-            A change is recorded only when the new price holds for two or more matches, so one-off discounts never appear here.
-          </p>
-          <p className="m-0 text-[13px] leading-[1.6]" style={{ color: C.ink }}>
-            {mem && mem.price != null
-              ? <>Membership MAX price is <b>${mem.price}</b>{mem.active != null ? <> and <b>{mem.active}</b> {mem.active === 1 ? "member is" : "members are"} active on it</> : ""}.</>
-              : "No membership price on record for this city."}
-          </p>
+          {/* DELIBERATELY NOT STATED HERE ANY MORE, so nobody re-adds them by reflex: the
+              out-of-window change count, the two-or-more-matches rule, and the membership MAX
+              price. The table is the section. detectDppPriceShifts still applies the
+              two-or-more-matches rule — it is the explanation that went, not the rule. */}
         </>
       )}
     </Card>
