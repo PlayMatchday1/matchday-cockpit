@@ -15,9 +15,13 @@
 // edges, no collision. The dock is mounted by match-ops/layout.tsx and hidden on Player Chats
 // itself (the full inbox is already there).
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { MessageSquare, X, ChevronRight, Reply, AlertTriangle, Users, Unlink, RotateCw } from "lucide-react";
+import { MessageSquare, X, ChevronRight, AlertTriangle, Users, Unlink, RotateCw, IdCard, Maximize2 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
+import { accountFromProfile, billingLine, dockSnippets, type DockAccount } from "@/lib/dockAccount";
+import { money } from "@/lib/playerLookupModel";
 import PlayerAvatar from "@/components/PlayerAvatar";
 import CityChip from "@/components/CityChip";
 import ChannelChip, { channelDisplay } from "@/components/ChannelChip";
@@ -35,6 +39,7 @@ import {
 } from "@/lib/crmConversation";
 
 const PLAYER_CHATS_PATH = "/match-ops/player-chats";
+const PLAYER_LOOKUP_PATH = "/match-ops/player-lookup";
 const SWITCHER_MAX = 4;
 
 function nameOf(t: ThreadListRow): string {
@@ -102,6 +107,47 @@ export default function CrmDock() {
     [threads, dockedThreadId],
   );
 
+  /* THE FOUR NUMBERS THE DOCK WAS SENDING PEOPLE AWAY TO READ.
+   *
+   * Fetched from /api/lookup/{env}?id= — the SAME route Player Lookup uses, so played, upcoming,
+   * credits and strikes in the dock cannot drift from the page this panel now links to. It is a
+   * read-only route behind the Match Ops gate; nothing here writes.
+   *
+   * Deliberately cheap about WHEN: only while the panel is OPEN, only for a linked thread, once per
+   * player. The dock is mounted on every Match Ops screen, so a fetch on mount would put a MatchDay
+   * API round trip behind every navigation in the app whether or not anybody looked at it. */
+  const [account, setAccount] = useState<DockAccount | null>(null);
+  /* THE "ALREADY FETCHED" MARKER IS A REF, AND THAT IS NOT A STYLE CHOICE. As state in the
+   * dependency array it made the effect cancel its own request: the run set the marker, the marker
+   * changed, the effect re-ran, React fired the FIRST run's cleanup, and the cleanup flipped the
+   * `live` flag the in-flight response was waiting on. The fetch returned 200 every time and the
+   * strip never appeared — a bug with no error, no warning and no failed request to find. */
+  const accountFor = useRef<number | null>(null);
+  const linkedPlayerId = detail?.thread.player_id ?? null;
+  const wantAccount = dockOpen ? linkedPlayerId : null;
+  useEffect(() => {
+    if (wantAccount == null || wantAccount === accountFor.current) return;
+    let live = true;
+    accountFor.current = wantAccount;
+    setAccount(null);
+    void (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const token = data.session?.access_token;
+        const res = await fetch(`/api/lookup/${FULL_EDITOR_ENV}?id=${wantAccount}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const j: unknown = await res.json();
+        if (live) setAccount(accountFromProfile(j));
+      } catch {
+        /* the strip is an accelerator, not the record — it simply does not appear */
+      }
+    })();
+    return () => { live = false; };
+  }, [wantAccount]);
+
   // Switch the dock to an unread thread and clear its unread (optimistic, like the inbox row).
   const switchTo = (id: string) => {
     setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, is_unread: false } : t)));
@@ -137,6 +183,16 @@ export default function CrmDock() {
   const openInChats = () => {
     selectThread(t.id);
     router.push(`${PLAYER_CHATS_PATH}?threadId=${t.id}`);
+  };
+
+  /* THE ONE JOURNEY THE PIN EXISTS FOR, WHICH THE PIN DID NOT HAVE. The dock had exactly one
+   * navigation and it went to Player Chats. To look the player up you read the phone number off
+   * this header and typed it into the search box on the page you were already standing on. The
+   * dock has held t.player_id all along. Absent entirely when the thread is unlinked — there is no
+   * player to open, and a control that cannot work should not be on screen. */
+  const openInLookup = () => {
+    if (t.player_id == null) return;
+    router.push(`${PLAYER_LOOKUP_PATH}?id=${t.player_id}`);
   };
 
   // ---- collapsed: a right-edge RAIL on desktop, a bubble on phones ----
@@ -181,8 +237,30 @@ export default function CrmDock() {
   // unlinked, so "Send to {name}" / "Send to {phone}" fall out of the same expression.
   const sendLabel = mismatch
     ? `Send to ${name}, not ${dockSubject?.label ?? "them"}`
-    : `Send to ${name}`;
-  const snippets = canSendMessages && dockSubject?.snippets ? dockSubject.snippets : [];
+    : "Send";
+  /* KEYED OFF THE CONVERSATION, NOT THE SCREEN. dockSubject.snippets are Player Lookup's lines,
+   * offered on whatever panel happens to be open — which is how a player asking for a refund was
+   * offered "Which city are you playing in?". See src/lib/dockAccount.ts for why the rules live in
+   * a pure function. A snippet still only inserts. */
+  const snippets = dockSnippets(account, { canSend: canSendMessages });
+  const billing = billingLine(account);
+
+  /* WHAT GOES IN THE NAME SLOT WHEN THERE IS NO NAME.
+   *
+   * nameOf() falls back to the phone number, and that fallback is right where it is used as an
+   * IDENTIFIER — the send label, the banners, the aria-labels — because there the number IS how you
+   * say who you are about to message. It is wrong in a heading, where it collapsed two different
+   * states into the same digits: "no player account is linked to this number", and "this player's
+   * account exists and its name field is empty". Measured on a real thread: player 68285 has an
+   * account and rendered as +15716662882, indistinguishable at a glance from an unlinked thread.
+   *
+   * So the heading names a person or says plainly that it cannot, and the number lives on the
+   * second line in both cases. nameOf() itself is untouched. */
+  const threadName = [t.player?.first_name?.trim(), t.player?.last_name?.trim()].filter(Boolean).join(" ");
+  const accountName = account && !/^User \d+$/.test(account.name) ? account.name : null;
+  const headerName = unlinked
+    ? "Unknown number"
+    : threadName || accountName || `Player ${t.player_id}`;
 
   // Resend a delivery-failed bubble — a FRESH send (no Idempotency-Key, so never an auto-retry),
   // one click, one attempt, disabled while in flight (item 4). Confirm-then-append: the new bubble
@@ -232,21 +310,30 @@ export default function CrmDock() {
         className="flex shrink-0 items-center gap-2 border-b border-cream-line bg-cream-soft px-2 py-2"
       >
         <PlayerAvatar name={unlinked ? null : name} seed={t.phone_number} channel={t.channel} size="sm" isMember={t.player?.is_member === true} />
+        {/* THE NAME SLOT HOLDS A NAME, OR SAYS IT HAS NONE. nameOf() falls back to the phone
+            number, so "we do not know who this is" and "we know exactly who this is and their name
+            field is empty" rendered nearly identically — the same digits, in the same place, one
+            with a small chip. The number now always sits on the second line where it belongs, and
+            the unlinked case says so in words. */}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             {unlinked ? (
-              // No player name to show — do NOT dress the phone number up as an identity.
-              <>
-                <span className="truncate font-mono text-sm font-bold tracking-tight text-deep-green">{t.phone_number}</span>
-                <span
-                  data-testid="dock-unlinked-chip"
-                  className="shrink-0 rounded-full bg-muted-soft px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-muted"
-                >
-                  Unlinked
-                </span>
-              </>
+              <span className="truncate text-sm font-extrabold tracking-tight text-muted" data-testid="dock-name">{headerName}</span>
             ) : (
-              <span className="truncate text-sm font-extrabold tracking-tight text-deep-green">{name}</span>
+              <span className="truncate text-sm font-extrabold tracking-tight text-deep-green" data-testid="dock-name">{headerName}</span>
+            )}
+            {unlinked && (
+              <span
+                data-testid="dock-unlinked-chip"
+                className="shrink-0 rounded-full bg-coral/15 px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-coral"
+              >
+                Unlinked
+              </span>
+            )}
+            {account?.level != null && (
+              <span className="shrink-0 rounded-full bg-white px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-deep-green/55">
+                Level {account.level}
+              </span>
             )}
           </div>
           <div className="mt-0.5 flex items-center gap-1 text-[10px] text-deep-green/55">
@@ -257,8 +344,10 @@ export default function CrmDock() {
               </>
             )}
             <span className="inline-flex items-center gap-0.5">
-              <ChannelChip channel={t.channel} /> via {channelDisplay(t.channel)}
+              <ChannelChip channel={t.channel} />
             </span>
+            <span aria-hidden>·</span>
+            <span className="truncate font-mono" data-testid="dock-phone">{t.phone_number}</span>
           </div>
         </div>
         <button
@@ -342,8 +431,65 @@ export default function CrmDock() {
         </div>
       )}
 
-      {/* message history — a delivery-failed OUTBOUND bubble gets a Resend (item 4) */}
-      <div data-testid="dock-messages" className="flex-1 overflow-y-auto bg-cream-soft/40 px-2 py-2" style={{ maxHeight: "min(46vh, 420px)" }}>
+      {/* WHAT THE OPERATOR WOULD OTHERWISE NAVIGATE AWAY TO READ. Not new data — the same four
+          numbers Player Lookup prints for this player, from the same route, one page away until
+          now. Absent for an unlinked thread, and absent until the fetch lands rather than showing
+          four zeros, which would read as a player with nothing on their record. */}
+      {account && (
+        <div data-testid="dock-facts" className="shrink-0 border-b border-cream-line bg-white px-2.5 py-2">
+          <div className="grid grid-cols-4 gap-1 text-center">
+            {([
+              ["played", String(account.played)],
+              ["upcoming", String(account.upcoming)],
+              ["credits", money(account.credits)],
+              ["strikes", `${account.strikes}/${account.strikeLimit}`],
+            ] as const).map(([k, v]) => (
+              <div key={k} data-testid={`dock-fact-${k}`}>
+                <div className="text-sm font-extrabold leading-tight tracking-tight text-deep-green tabular-nums">{v}</div>
+                <div className="text-[9px] uppercase tracking-wide text-deep-green/45">{k}</div>
+              </div>
+            ))}
+          </div>
+          {/* The fact the pinned conversation is usually about. */}
+          {billing && (
+            <div
+              data-testid="dock-billing"
+              className={`mt-1.5 rounded-md px-2 py-1 text-[10.5px] ${account.membership?.canceledAt ? "bg-coral/10 text-coral" : "bg-cream-soft text-deep-green/70"}`}
+            >
+              {billing}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Where the panel hands off. Both routes sit together in one row: a full-pane link directly
+          under a reply box reads as "the reply box is not the real place to reply". */}
+      <div data-testid="dock-actions" className="flex shrink-0 items-center gap-1.5 border-b border-cream-line bg-white px-2.5 py-1.5">
+        {!unlinked && (
+          <button
+            type="button"
+            data-testid="dock-open-lookup"
+            onClick={openInLookup}
+            className="inline-flex items-center gap-1 rounded-full border border-cream-line bg-cream-soft px-2 py-0.5 text-[10px] font-bold text-deep-green hover:bg-cream-line"
+          >
+            <IdCard aria-hidden className="h-3 w-3" /> Open in Player Lookup
+          </button>
+        )}
+        <button
+          type="button"
+          data-testid="dock-reply"
+          onClick={openInChats}
+          className="inline-flex items-center gap-1 rounded-full border border-cream-line bg-white px-2 py-0.5 text-[10px] font-bold text-deep-green/70 hover:bg-cream-soft"
+        >
+          <Maximize2 aria-hidden className="h-3 w-3" /> Full pane
+        </button>
+        <span className="ml-auto text-[10px] text-deep-green/45">{realtimeOk === false ? "Reconnecting…" : ""}</span>
+      </div>
+
+      {/* message history — a delivery-failed OUTBOUND bubble gets a Resend (item 4).
+          NO maxHeight. `flex-1` says fill the panel and `maxHeight: min(46vh, 420px)` said stop at
+          420px; the cap won, so on a tall window everything below the composer was empty. */}
+      <div data-testid="dock-messages" className="flex-1 overflow-y-auto bg-cream-soft/40 px-2 py-2">
         {detail.messages.length === 0 ? (
           <div className="px-2 py-6 text-center text-[11px] text-deep-green/40">No messages yet.</div>
         ) : (
@@ -411,18 +557,6 @@ export default function CrmDock() {
         </div>
       )}
 
-      {/* hand-off to the full pane */}
-      <div className="flex shrink-0 items-center justify-between gap-2 border-t border-cream-line bg-white px-2.5 py-1.5">
-        <span className="text-[10px] text-deep-green/45">{realtimeOk === false ? "Reconnecting…" : ""}</span>
-        <button
-          type="button"
-          data-testid="dock-reply"
-          onClick={openInChats}
-          className="inline-flex items-center gap-1 text-[10px] font-bold text-deep-green hover:underline"
-        >
-          <Reply aria-hidden className="h-3 w-3" /> Reply in Player Chats
-        </button>
-      </div>
     </aside>
   );
 }

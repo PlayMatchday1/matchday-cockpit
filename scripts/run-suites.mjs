@@ -161,6 +161,12 @@ const NODE_SUITES = [
   "scripts/seam-stripped-test.ts",
   "scripts/matchops-auth-test.ts",
   "scripts/crm-push-test.ts",
+  // THE DOCKED CHAT'S CANNED LINES. A snippet lands in the operator's draft one keystroke from a
+  // player, so a line that states a membership fact must not exist for a player who has no
+  // membership, and a cancellation line must not exist for a membership nobody cancelled. Both
+  // failures look correct on screen — the sentence is only wrong against data a screenshot does
+  // not contain. Also pins the mismatch send label and Banner B byte for byte.
+  "scripts/dock-account-test.ts",
   "scripts/verify-checkin-model.ts",
   /* GAMEDAY OPS' STAT STRIP AND METER. Here because the fill percentage is the number an operator
    * judges a day by and the wrong definition of it is plausible (an average of per-match

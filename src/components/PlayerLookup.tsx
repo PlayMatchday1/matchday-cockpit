@@ -113,6 +113,42 @@ const fmtDate = (iso: string | null) => {
   if (!Number.isFinite(t)) return "—";
   return new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 };
+/* THE ONE VALUE ON THIS PAGE THAT IS A TRUE INSTANT, AND MUST NOT BE PRINTED IN UTC.
+ *
+ * fmtDate above is right for MatchDay's wall-clock-labelled-Z fields. `canceledAt` is not one of
+ * them: it is the moment a person pressed cancel, written by the ORM (userSubscriptions rows carry
+ * it to the millisecond, and on one row it is byte-identical to `updatedAt`). It is TRUE UTC, the
+ * same model as promo startDateUtc — so it displays in America/Chicago, DST-aware.
+ *
+ * MEASURED, because the difference is not cosmetic: of 1,000 mdapi_subscriptions rows carrying a
+ * cancellation date, 351 (35.1%) print a DIFFERENT DAY in UTC than in Central. One of them reads
+ * "Sep 1" in UTC and "Aug 31" in Central — opposite sides of the billing month, on a card whose
+ * whole job is to settle a billing argument. */
+const fmtDateCT = (iso: string | null) => {
+  if (!iso) return "—";
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "—";
+  return new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "America/Chicago" });
+};
+const fmtDayCT = (iso: string | null) => {
+  if (!iso) return "—";
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "—";
+  return new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/Chicago" });
+};
+/* THE PERIOD END IS NOT A MOMENT SOMEBODY ACTED, IT IS A BILLING BOUNDARY, and it must print the
+ * same day everywhere on this card. currentPeriodEnd comes back as …T04:59:59Z — the last second of
+ * the month in Central — so Central renders it as the 30th and UTC as the 1st. The first attempt
+ * used Central for the badge and UTC for the ENDS field and the card said "CANCELLED, RUNS TO
+ * SEP 30" directly above "ENDS Oct 1, 2026". The badge and the fields contradicting each other is
+ * the exact defect this whole change exists to remove. One formatter, the boundary the API and
+ * Stripe both name. */
+const fmtDayUTC = (iso: string | null) => {
+  if (!iso) return "—";
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "—";
+  return new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+};
 const fmtWhen = (iso: string | null) => {
   if (!iso) return "—";
   const t = Date.parse(iso);
@@ -216,6 +252,24 @@ export default function PlayerLookup() {
   }, [recent]);
 
   const reloadProfile = useCallback(() => { if (profile) openProfile(profile.player.id); }, [profile, openProfile]);
+
+  /* ?id=<n> OPENS THAT PLAYER DIRECTLY. Until now the only way into a profile was a click on this
+   * page, which is why the docked chat had no way to hand a player over: an operator read the phone
+   * number off the dock header and typed it into the search box on the page they were already on.
+   *
+   * Read off window.location rather than useSearchParams — this component is not wrapped in a
+   * Suspense boundary and useSearchParams would opt the whole route into client-side rendering.
+   * Runs once on mount: a second ?id= arriving later is a fresh navigation, which remounts. */
+  const bootRef = useRef(false);
+  useEffect(() => {
+    if (bootRef.current) return;
+    bootRef.current = true;
+    const raw = new URLSearchParams(window.location.search).get("id");
+    const id = raw ? Number(raw) : NaN;
+    if (Number.isInteger(id) && id > 0) void openProfile(id);
+    // openProfile is recreated whenever `recent` changes; the guard above keeps this to one run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Phase 19 Step 3a/3b — tell the docked player-chat which player THIS screen is about (Banner B)
   // and the canned lines worth saying while looking a player up (snippets). Inert when nothing docked.
@@ -801,20 +855,42 @@ function MembershipPanel({ m }: { m: Membership }) {
     </div>
   );
   const st = (m.status || "").toLowerCase();
-  const label = st.includes("cancel") ? (["none", "CANCELLED"] as const)
+  /* THE BADGE READ `m.status` ALONE, AND `m.status` DOES NOT CHANGE WHEN SOMEBODY CANCELS.
+   *
+   * A subscription cancelled at period end stays status ACTIVE until the period runs out. Measured
+   * on the live mirror: 81 of the 330 ACTIVE subscriptions — one in four — carry a cancellation
+   * date right now, and every one of them showed a plain ACTIVE badge on this card.
+   *
+   * That is not a cosmetic defect. The conversation this page gets opened during is a player saying
+   * they cancelled and were charged anyway; an operator reading ACTIVE concludes the player is
+   * confused. The player is right. So the CANCELLATION, not the status word, decides the badge. */
+  const endsAt = m.canceledAt ? m.renews : null;
+  const stillRunning = Boolean(endsAt) && Date.parse(endsAt as string) > Date.now();
+  const label = m.canceledAt || st.includes("cancel")
+    ? (["none", stillRunning ? `CANCELLED, RUNS TO ${fmtDayUTC(endsAt).toUpperCase()}` : "CANCELLED"] as const)
     : st.includes("past") || st.includes("due") || st.includes("unpaid") ? (["susp", "PAST DUE"] as const)
     : (["ok", "ACTIVE"] as const);
   return (
     <div className="panel">
-      <div className="ptitle"><h3>MEMBERSHIP</h3><span className="note"><span className={`tag ${label[0]}`}>{label[1]}</span></span></div>
+      <div className="ptitle"><h3>MEMBERSHIP</h3><span className="note"><span className={`tag ${label[0]}`} data-testid="mem-badge">{label[1]}</span></span></div>
       <div className="memgrid">
         {m.number && <Fact k="SUBSCRIPTION" v={m.number} />}
-        <Fact k="STATUS" v={m.status || "—"} />
+        {/* Whose word "ACTIVE" is. Alone under a CANCELLED badge it reads as a contradiction; the
+            two words after it say the badge is ours and the status is the API's. */}
+        <Fact k="STATUS" v={`${m.status || "—"}${m.canceledAt && !st.includes("cancel") ? " at MatchDay" : ""}`} />
         {m.since && <Fact k="SINCE" v={fmtDate(m.since)} />}
+        {/* THE FIELD THE WHOLE CARD WAS MISSING. It was fetched, returned, and read here only to
+            choose between the words ENDS and RENEWS — then thrown away. */}
+        {m.canceledAt && <Fact k="CANCELLED" v={fmtDateCT(m.canceledAt)} />}
         {m.renews && <Fact k={m.canceledAt ? "ENDS" : "RENEWS"} v={fmtDate(m.renews)} />}
         {m.price != null && <Fact k="PRICE" v={money(m.price)} />}
         {m.city && <Fact k="CITY" v={m.city} />}
       </div>
+      {m.canceledAt && stillRunning && (
+        <p className="memsum" data-testid="mem-summary">
+          Cancelled {fmtDayCT(m.canceledAt)}, already paid to {fmtDayUTC(m.renews)}. <b>Nothing further will be charged.</b>
+        </p>
+      )}
       <p className="pfoot">From MatchDay subscriptions. Stripe payment detail is not shown here — check Stripe for charge status.</p>
     </div>
   );
@@ -1250,6 +1326,10 @@ const CSS = `
 .pl .f .v{display:block;font-size:14px;overflow-wrap:anywhere}
 .pl .f .v.big{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
 .pl .memgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px;padding:14px 16px}
+/* The one-line answer to the question the card gets opened for, in the words an operator would
+   use on the phone. Sits between the facts and the footnote so it reads as the conclusion. */
+.pl .memsum{margin:0;padding:0 16px 13px;font-size:13px;color:var(--ink2);line-height:1.45}
+.pl .memsum b{color:var(--ink1)}
 .pl .nomem{padding:20px 16px;color:var(--ink3);font-size:13.5px}
 .pl .nomem b{display:block;color:var(--ink2);margin-bottom:3px;font-size:14px}
 .pl .rows{display:block}

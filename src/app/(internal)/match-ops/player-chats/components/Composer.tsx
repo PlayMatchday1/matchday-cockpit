@@ -216,9 +216,15 @@ export default function Composer({
     const ta = taRef.current;
     if (!ta) return;
     ta.style.height = "auto";
-    const next = Math.min(240, Math.max(80, ta.scrollHeight));
+    /* THE FLOOR, NOT THE PLACEHOLDER, IS WHY THE DOCK'S EMPTY BOX WAS TWO LINES TALL. An empty
+     * textarea's scrollHeight is one line; Math.max(80, …) then doubled it. 80px is right in the
+     * full pane, which has the room and is where an operator writes at length. In a 360px dock it
+     * is two blank lines standing where messages should be. Measured empty: 80px before, 44 after;
+     * the box still grows to 240 as you type, in both. */
+    const floor = compact ? 44 : 80;
+    const next = Math.min(240, Math.max(floor, ta.scrollHeight));
     ta.style.height = `${next}px`;
-  }, [body]);
+  }, [body, compact]);
 
   // Object URL for image/video previews. Audio + document don't need
   // one (they render a file-icon card), but creating it unconditionally
@@ -310,7 +316,13 @@ export default function Composer({
       ? "You don't have permission to send messages (read-only)."
       : windowExpired
         ? "WhatsApp session expired — player must message first."
-        : "Type a reply. Enter to send, Shift+Enter for newline.";
+        // THE DOCK IS 360px WIDE. The full sentence wraps to four lines there and the empty box
+        // stands 112px tall — taller than two messages, in a panel whose whole point is the
+        // messages. The keyboard shortcuts are the same in both; only the full pane has room to
+        // print them.
+        : compact
+          ? "Type a reply…"
+          : "Type a reply. Enter to send, Shift+Enter for newline.";
 
   const submitText = useCallback(async () => {
     if (sending) return;
@@ -658,6 +670,9 @@ export default function Composer({
               ref={taRef}
               data-testid="crm-composer"
               value={body}
+              // A textarea's default is rows=2, so "auto" height measures TWO empty lines — which
+              // is why the floor above only got the dock from 80px to 64px and not to one line.
+              rows={compact ? 1 : 2}
               disabled={disabled}
               onChange={(e) => setBody(e.target.value)}
               onKeyDown={onKeyDown}

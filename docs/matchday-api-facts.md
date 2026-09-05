@@ -2118,6 +2118,38 @@ enough against the mirror — it over-counts by every soft-deleted row (15 of 81
 Capacity is `mdapi_matches.max_player_count`. Proven over 1,000 matches / 33,399 roster rows:
 summed derived spots 21,731 = summed `player_count` 21,731, exact on every match.
 
+## `canceledAt` is the moment they pressed cancel, and `status` does NOT change (2026-09-04)
+
+**A cancelled-at-period-end subscription keeps `status: "ACTIVE"` until the period runs out.**
+Read live from `GET /admin/players/{id}` → `userSubscriptions[]`, four accounts:
+
+```
+72409 Mark Trejo   status ACTIVE  canceledAt 2026-08-09T01:06:52.168Z  currentPeriodEnd 2026-10-01T04:59:59.000Z  cancelReason "Moving"
+3414  Jackson Day  status ACTIVE  canceledAt 2026-08-14T14:20:20.222Z  currentPeriodEnd 2026-10-01T04:59:59.000Z
+86825 (reddy)      status ACTIVE  canceledAt 2026-08-27T02:53:53.613Z  currentPeriodEnd 2026-10-01T04:59:59.000Z
+589   A. Mwamba    status ACTIVE  canceledAt 2026-09-03T01:15:51.721Z  currentPeriodEnd 2026-10-01T04:59:59.000Z
+```
+
+- **`canceledAt` is NOT a copy of the period end.** They are different values with different
+  meanings: a button press to the millisecond (on 589 it is byte-identical to `updatedAt`) versus a
+  billing boundary. Anything reading one as the other is wrong by up to a month.
+- **`canceledAt` is TRUE UTC**, the promo-date model — NOT MatchDay's usual wall-clock-labelled-Z.
+  It is written by the ORM. **Display it in `America/Chicago`.** Measured over `mdapi_subscriptions`:
+  of 1,000 rows carrying a cancellation date, **351 (35.1%) print a different DAY in UTC than in
+  Central**, and one reads `Sep 1` in UTC and `Aug 31` in Central — opposite sides of a billing month.
+- **`currentPeriodEnd` is a BOUNDARY**, `…T04:59:59Z` = the last second of the month in Central.
+  Print it in UTC so it names the date the API and Stripe both use (`Oct 1`); rendering it in
+  Central gives `Sep 30` and puts the badge and the fields on a card one day apart.
+- **`currentPeriodStart` / `currentPeriodEnd` / `stripeSubscriptionId` / `amount` (cents) /
+  `defaultPaymentMethod` / `cancelReason` are all present** on this endpoint. They are NOT on
+  `/admin/subscriptions` (the list feeding `mdapi_subscriptions`), whose payload is a different
+  shape — see the tier note below. Do not expect a period end in the mirror.
+
+**Blast radius, counted on `mdapi_subscriptions` (2,712 rows):** `status = ACTIVE` is 330, and
+**81 of those 330 (25%) carry a `canceled_at`.** One in four "active" memberships is one nobody
+will be charged for again. Player Lookup computed its badge from `status` alone and showed all 81
+as plain `ACTIVE` — `src/components/PlayerLookup.tsx` now derives it from the cancellation.
+
 ## Membership: there is NO tier, and the two member counts disagree by 27 (2026-08-21)
 
 **No plan, tier, product or SKU field exists on the membership record.** The raw payload is
