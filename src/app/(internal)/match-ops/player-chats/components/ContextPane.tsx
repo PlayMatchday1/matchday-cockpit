@@ -36,6 +36,10 @@ import {
   membershipSummary, paymentsSummary, readSectionState, sectionStorageKey, strikesSummary,
   REASON_LABEL, type SectionId, type Summary, type Tone,
 } from "@/lib/paneSections";
+import {
+  MATCH_STATE_LABEL, MATCH_STATE_TONE, chargeLabel,
+  type ChargeOnRow, type MatchState, type MatchTone,
+} from "@/lib/matchHistory";
 
 const ENV = FULL_EDITOR_ENV;
 
@@ -44,9 +48,13 @@ type RecentMatch = {
   city_identifier: string | null; status: "Played" | "Upcoming" | "No-show" | "Canceled";
 };
 type ProfileMatch = {
-  matchId: number | null; name: string; startDate: string | null; startDateUtc: string | null;
+  umId: number | null; matchId: number | null; name: string;
+  /** WALL CLOCK — display only, printed in UTC. */
+  startDate: string | null;
+  /** TRUE INSTANT — orders the list. Never formatted as a date. */
+  startDateUtc: string | null;
   price: number; charged: number | null; userStatus: string | null;
-  state: "upcoming" | "played" | "cancelled";
+  state: MatchState; mirrorOnly: boolean; charge?: ChargeOnRow | null;
 };
 type PaymentRow = {
   id: string; description: string; created: string; card: string | null;
@@ -65,15 +73,9 @@ type Profile = {
   strikes: { activeCount: number; limit: number; isSuspended: boolean; suspendedTo: string | null };
   accountHistory: { action: "suspend" | "expel"; reason: string | null; when: string | null; until: string | null; by: string | null }[];
 };
-type HistoryMatch = ProfileMatch & { mirrorOnly: boolean };
 type ContextResponse = {
   player: { first_name: string | null; last_name: string | null; preferable_city_normalized: string | null;
     preferable_city_name: string | null; is_member: boolean | null; created_at: string | null; } | null;
-  /* THE MATCH LIST, MERGED SERVER-SIDE. Measured on five players: the MatchDay API omits every
-   * booking whose MATCH was cancelled, so the API's history for the player who asked "where's my
-   * match credit" holds neither of his two cancelled Parmer bookings. Those are the rows that
-   * answer him. The route merges the mirror's back in and marks them. */
-  match_history: HistoryMatch[];
   recent_matches: RecentMatch[];
   profile: Profile | null;
   payments: { ok: true; result: { rows: PaymentRow[]; customerMatched: boolean } } | { ok: false; error: string } | null;
@@ -81,7 +83,10 @@ type ContextResponse = {
 type SearchRow = { id: number; name: string; email: string | null; phone: string | null; city: string | null };
 
 const INK = "#12241d", MUTED = "#6d7b74", FAINT = "#93a49b", LINE = "#e6ebe8";
-const TONE_COLOR: Record<Tone, string> = { plain: MUTED, amber: "#8a6300", red: "#a83b1c" };
+const TONE_COLOR: Record<Tone, string> = { plain: MUTED, amber: "#8a6300", red: "#a83b1c", info: "#4a539a" };
+/* NEITHER CANCELLATION IS RED. "He cancelled" is amber — it may carry a strike. "We cancelled" is
+ * informational: he did nothing wrong, and it is the row an operator points at about money. */
+const PANE_TONE: Record<MatchTone, Tone> = { plain: "plain", amber: "amber", info: "info" };
 
 async function authFetch(path: string, init?: RequestInit): Promise<Response> {
   const { data } = await supabase.auth.getSession();
@@ -150,8 +155,11 @@ export default function ContextPane({ threadId, phone }: { threadId: string; pho
   const prof = data?.profile ?? null;
   const linked = Boolean(mirror ?? prof);
   const payRows = data?.payments?.ok ? data.payments.result.rows : null;
-  // One list for the section AND its summary, so the header can never disagree with the rows.
-  const history = data?.match_history ?? [];
+  /* ONE LIST FOR THE SECTION AND ITS SUMMARY, and it is `profile.matches` — the same field Player
+   * Lookup reads. The merge and the charge join moved into playerProfile.ts so both surfaces get
+   * them; when they lived here, the pane could show a match the full page could not, and the
+   * pane's own footer button sent the operator to that page. */
+  const history = prof?.matches ?? [];
   const payError = data?.payments && !data.payments.ok ? data.payments.error : null;
 
   const cityCode = mirror?.preferable_city_normalized || null;
@@ -251,9 +259,15 @@ export default function ContextPane({ threadId, phone }: { threadId: string; pho
                 {history.length === 0 && <Empty>No matches on record.</Empty>}
                 {history.slice(0, 8).map((m) => (
                   <Line key={`${m.matchId}-${m.startDateUtc}`}
-                    left={m.name} sub={dayOf(m.startDate ?? m.startDateUtc)}
-                    right={m.state === "cancelled" ? "Cancelled" : m.state === "upcoming" ? "Upcoming" : m.userStatus === "NO_SHOW" ? "No-show" : "Played"}
-                    tone={m.state === "cancelled" || m.userStatus === "NO_SHOW" ? "amber" : "plain"} />
+                    left={m.name}
+                    /* THE WALL CLOCK, and the money. A row with no charge says "no charge found";
+                       it never says $0.00, because zero is a claim about money this does not know.
+                       Nothing here says a credit was ISSUED for the match — there is no per-match
+                       credit record anywhere, only one balance on the player. */
+                    sub={[dayOf(m.startDate ?? m.startDateUtc), chargeLabel(m), m.mirrorOnly ? "from our mirror" : null]
+                      .filter(Boolean).join(" · ")}
+                    right={m.userStatus === "NO_SHOW" && m.state === "played" ? "No-show" : MATCH_STATE_LABEL[m.state]}
+                    tone={m.userStatus === "NO_SHOW" && m.state === "played" ? "amber" : PANE_TONE[MATCH_STATE_TONE[m.state]]} />
                 ))}
               </Section>
 

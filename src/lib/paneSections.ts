@@ -10,7 +10,10 @@
  * wrong has no red anywhere on the pane.
  */
 
-export type Tone = "plain" | "amber" | "red";
+/* "info" is the fourth tone, and it exists because a match WE cancelled is not a warning. Amber
+ * says "worth a look", red says "wrong", and neither is true of a match the club called off while
+ * the player asks where his money went. */
+export type Tone = "plain" | "amber" | "red" | "info";
 export type Summary = { text: string; tone: Tone };
 
 export const SECTION_IDS = ["credits", "matches", "membership", "payments", "strikes", "account"] as const;
@@ -24,6 +27,8 @@ export const SECTION_LABEL: Record<SectionId, string> = {
   strikes: "Strikes",
   account: "Account history",
 };
+
+import { isCancelled, type MatchState } from "@/lib/matchHistory";
 
 const usd = (cents: number | null | undefined): string =>
   "$" + ((typeof cents === "number" && Number.isFinite(cents) ? cents : 0) / 100).toFixed(2);
@@ -58,12 +63,14 @@ export function readSectionState(raw: string | null): Record<SectionId, boolean>
 export const creditsSummary = (cents: number | null): Summary =>
   ({ text: usd(cents), tone: "plain" });
 
-export type MatchLike = { state: "upcoming" | "played" | "cancelled" };
+export type MatchLike = { state: MatchState };
 
+/* THE TWO CANCELLATIONS ARE COUNTED TOGETHER IN THE HEADER and told apart on the rows. The summary
+ * answers "how much history is there"; the row answers "what happened, and whose decision was it". */
 export function matchesSummary(matches: readonly MatchLike[]): Summary {
   const played = matches.filter((m) => m.state === "played").length;
   const upcoming = matches.filter((m) => m.state === "upcoming").length;
-  const cancelled = matches.filter((m) => m.state === "cancelled").length;
+  const cancelled = matches.filter((m) => isCancelled(m.state)).length;
   const parts: string[] = [];
   if (played) parts.push(`${played} played`);
   if (upcoming) parts.push(`${upcoming} upcoming`);

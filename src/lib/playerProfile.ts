@@ -14,6 +14,9 @@ import "server-only";
  */
 
 import type { MatchdayEnv } from "@/lib/matchdayStageApi";
+import {
+  attachCharges, mergeHistory, type ChargeLike, type HistoryRow, type MatchState, type MirrorRow,
+} from "@/lib/matchHistory";
 
 const str = (v: unknown) => (typeof v === "string" ? v : v == null ? null : String(v));
 const num = (v: unknown) => (typeof v === "number" ? v : v == null || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null);
@@ -42,21 +45,39 @@ export async function buildProfile(args: {
   listRow: Record<string, unknown> | null;
   /** Resolve the display name of the admin who issued a ban. One extra API call, caller-owned. */
   resolveActor: (userId: number) => Promise<string | null>;
+  /* THE MIRROR'S ROWS, PASSED IN RATHER THAN FETCHED HERE — and that is the reason, not a
+   * preference. The merge lived in the context route, so the chat pane listed matches the full page
+   * could not, and the pane's own footer button sent the operator to that page. It belongs beside
+   * the mapping. But the merge needs Supabase, and this module is a pure mapping over two MatchDay
+   * payloads; taking a client would drag a database dependency into it and make it untestable
+   * without one. So the CALLER runs the query it already knows how to run and hands the rows over.
+   * Same for the charges. */
+  mirrorRows?: readonly MirrorRow[];
+  /** Stripe charges, when the caller has them. `undefined` means "not looked for", which a row
+   *  renders differently from "looked and found none". */
+  charges?: readonly ChargeLike[] | null;
 }) {
-  const { raw, listRow, resolveActor } = args;
+  const { raw, listRow, resolveActor, mirrorRows, charges } = args;
   const d: Record<string, unknown> =
     ((raw && typeof raw === "object" && "data" in raw ? (raw as { data: unknown }).data : raw) as Record<string, unknown>) ?? {};
   const now = Date.now();
 
   const matchesRaw = Array.isArray(d.matches) ? (d.matches as Record<string, unknown>[]) : [];
-  const matches = matchesRaw.map((um) => {
+  const apiMatches: HistoryRow[] = matchesRaw.map((um) => {
     const m = (um.match as Record<string, unknown>) ?? {};
     // DELIBERATELY NOT rosterRowCounts(). This is one PLAYER'S history, not a roster count:
     // the question here is "did this participation get cancelled", and an unsettled checkout
     // (paidStatus "WAITING") is a real thing that happened to this player and should stay
     // visible in their history. rosterRowCounts answers "does this row occupy a spot", which is
     // a different question — see docs/matchday-api-facts.md, the roster population.
-    const cancelled = um.isCancelled === true || m.isCancelled === true;
+    /* TWO DIFFERENT EVENTS, NO LONGER WEARING ONE WORD. um.isCancelled is THE PLAYER PULLING OUT;
+     * m.isCancelled is US CALLING THE MATCH OFF. Opposite implications for money, and only the
+     * first can carry a strike. The second half of the old OR was unreachable — the API omits every
+     * booking whose match was cancelled — so merging the mirror's rows in is what makes it arrive.
+     * See MatchState in matchHistory.ts. */
+    const playerCancelled = um.isCancelled === true;
+    const clubCancelled = m.isCancelled === true;
+    const cancelled = playerCancelled || clubCancelled;
     const startUtc = str(m.startDateUtc) ?? str(m.startDate);
     const upcoming = !cancelled && !!startUtc && Date.parse(startUtc) > now;
     return {
@@ -66,10 +87,18 @@ export async function buildProfile(args: {
       price: num(um.amount) ?? num(m.registrationPrice) ?? 0,   // base spot price
       charged: num(um.totalAmount),                              // what Stripe actually took (base + card fee − credit); may differ from price
       userStatus: str(um.userStatus),                            // attendance/reason enum (NO_SHOW etc.)
-      state: cancelled ? "cancelled" : upcoming ? "upcoming" : "played",
+      state: (playerCancelled ? "player_cancelled" : clubCancelled ? "club_cancelled" : upcoming ? "upcoming" : "played") as MatchState,
       removable: upcoming, // only a future booking can be pulled
-    };
-  }).sort((a, b) => (Date.parse(b.startDateUtc ?? "") || 0) - (Date.parse(a.startDateUtc ?? "") || 0));
+      mirrorOnly: false,
+    } satisfies HistoryRow;
+  });
+
+  /* THE MERGE, AND THE CHARGES, both applied here so BOTH surfaces get them. The API omits every
+   * booking whose match was cancelled, so without this the full page cannot show the row an
+   * operator is being asked about while the chat pane can — and the pane's own footer button sends
+   * them to that page. mergeHistory orders newest-first by the INSTANT; attachCharges joins each id
+   * to its own column and joins nothing when the key is unknown. */
+  const matches = attachCharges(mergeHistory(apiMatches, mirrorRows ?? []), charges ?? null);
 
   // Strikes — MEMBERS-ONLY penalty. The server pre-computes activeStrikes; we join
   // each strikeLog to its user-match to recover the REASON (userStatus) and, for a

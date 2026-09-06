@@ -167,6 +167,12 @@ const NODE_SUITES = [
   // player has no red anywhere), keeps the pane from linking a thread, and pins that the pane and
   // Player Lookup share ONE profile mapping so they cannot quote different balances.
   "scripts/context-pane-test.ts",
+  // ONE PLAYER'S MATCH HISTORY. Two things a screenshot cannot catch: "cancelled" meaning both
+  // "he pulled out" and "we called it off" (opposite implications for money, only one carries a
+  // strike), and a Stripe charge joining on a key that is not what its field is named — a
+  // userMatchId stored under `matchId` puts a real amount on the wrong match and nothing looks
+  // wrong. Also pins that merging cancelled rows in never moves the played count.
+  "scripts/match-history-test.ts",
   // THE DOCKED CHAT'S CANNED LINES. A snippet lands in the operator's draft one keystroke from a
   // player, so a line that states a membership fact must not exist for a player who has no
   // membership, and a cancellation line must not exist for a membership nobody cancelled. Both

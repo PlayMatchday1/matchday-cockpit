@@ -19,7 +19,16 @@ export class StripeUnreachableError extends Error { constructor(m: string) { sup
 export type PayStatus = "succeeded" | "pending" | "refunded" | "failed" | "disputed";
 export type PaymentRow = {
   id: string; description: string; created: string; card: string | null;
-  status: PayStatus; amount: number; matchId: string | null; isMembership: boolean;
+  status: PayStatus; amount: number; isMembership: boolean;
+  /* TWO KEYS, KEPT APART. `matchId` was one field holding either id:
+   *     const matchId = meta.matchId?.trim() || meta.userMatchId?.trim() || null;
+   * so a charge carrying only userMatchId stored a USER-MATCH id in a field named matchId. Joined
+   * against a match api_id that puts a real amount on the wrong match and nothing looks broken —
+   * the number is real, the row is real, only the pairing is wrong. They share a namespace of small
+   * integers, so a collision is not exotic. Each id now keeps its own name and joins to its own
+   * column; see attachCharges in src/lib/matchHistory.ts. */
+  matchId: string | null;
+  userMatchId: string | null;
 };
 export type PaymentsResult = {
   rows: PaymentRow[];
@@ -51,16 +60,24 @@ function cardOf(c: Stripe.Charge): string | null {
 
 function toRow(c: Stripe.Charge): PaymentRow {
   const meta = (c.metadata ?? {}) as Record<string, string>;
-  const matchId = (typeof meta.matchId === "string" && meta.matchId.trim()) || (typeof meta.userMatchId === "string" && meta.userMatchId.trim()) || null;
+  const matchId = (typeof meta.matchId === "string" && meta.matchId.trim()) || null;
+  const userMatchId = (typeof meta.userMatchId === "string" && meta.userMatchId.trim()) || null;
+  // The description still falls back to whichever id exists — it is a label for a human, not a key.
+  const anyId = matchId ?? userMatchId;
   return {
     id: c.id,
-    description: (c.description && c.description.trim()) || (matchId ? `Match ${matchId}` : "Membership"),
+    description: (c.description && c.description.trim()) || (anyId ? `Match ${anyId}` : "Membership"),
     created: new Date(c.created * 1000).toISOString(),
     card: cardOf(c),
     status: statusOf(c),
     amount: c.amount,
     matchId,
-    isMembership: !matchId,
+    userMatchId,
+    /* NEITHER id present, not "no matchId". Splitting the two keys apart nearly broke this: it
+     * read `!matchId`, which was correct only while matchId absorbed userMatchId. A charge carrying
+     * only a userMatchId would have started reporting itself as a MEMBERSHIP charge — on the pane
+     * that is a match spot filed under a subscription, on a player who has no subscription. */
+    isMembership: !matchId && !userMatchId,
   };
 }
 

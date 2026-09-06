@@ -32,9 +32,12 @@ is("credits, match history, membership, payments, strikes, account history",
 console.log("\n— every summary comes from its own section's data —");
 is("credits print the balance", creditsSummary(1624).text, "$16.24");
 is("…and a missing balance is not a zero dollars", creditsSummary(null).text, "$0.00");
-is("match history counts the three states it renders",
-  matchesSummary([{ state: "played" }, { state: "played" }, { state: "upcoming" }, { state: "cancelled" }]).text,
+// The header counts the two cancellations TOGETHER; the rows tell them apart.
+is("match history counts the states it renders",
+  matchesSummary([{ state: "played" }, { state: "played" }, { state: "upcoming" }, { state: "club_cancelled" }]).text,
   "2 played · 1 upcoming · 1 cancelled");
+is("…and a player cancellation counts as cancelled too",
+  matchesSummary([{ state: "player_cancelled" }, { state: "club_cancelled" }]).text, "2 cancelled");
 is("…and says so plainly when there are none", matchesSummary([]).text, "None on record");
 is("…and omits a count that is zero rather than printing it",
   matchesSummary([{ state: "played" }, { state: "played" }]).text, "2 played");
@@ -188,13 +191,20 @@ const CTX = noComments(readFileSync("src/app/api/crm/threads/[id]/context/route.
 /timeZone: "UTC"/.test(PANE_C)
   ? ok("…formatted in UTC, so the characters come back out as they went in")
   : bad("a wall-clock value is being formatted in a local zone");
-// The merge that puts a club-cancelled match back on the pane.
-/match_history/.test(CTX) && /apiIds\.has\(m\.match_api_id\)/.test(CTX)
-  ? ok("the route merges the mirror's cancelled bookings into the API's match list")
-  : bad("the cancelled-match bookings the API omits are not merged back in");
-/findIndex\(\(x\) => x\.match_api_id === m\.match_api_id\)/.test(CTX)
-  ? ok("…de-duplicated on match id, since the mirror holds one row per registration")
-  : bad("the merge can list the same match twice");
+/* THE MERGE MOVED OUT OF THIS ROUTE AND INTO THE SHARED MAPPING, which is the whole point: while
+ * it lived here the chat pane could list a match Player Lookup could not, and the pane's own footer
+ * button sent the operator to that page. Both routes now hand mirror rows to buildProfile. */
+const PROFILE = noComments(readFileSync("src/lib/playerProfile.ts", "utf8"));
+const LOOKUP = noComments(readFileSync("src/app/api/lookup/[env]/route.ts", "utf8"));
+/mergeHistory\(apiMatches, mirrorRows \?\? \[\]\)/.test(PROFILE)
+  ? ok("the merge lives in the shared mapping, so both surfaces get it")
+  : bad("the merge is not in playerProfile");
+/mirrorRows/.test(CTX) && /mirrorRows/.test(LOOKUP)
+  ? ok("…and BOTH routes supply the mirror rows it merges")
+  : bad("one of the two routes still gets no cancelled-match rows");
+!/apiIds\.has/.test(CTX)
+  ? ok("…and the route's private copy of the merge is gone")
+  : bad("the context route still merges on its own");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

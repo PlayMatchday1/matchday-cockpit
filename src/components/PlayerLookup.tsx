@@ -21,6 +21,7 @@ import PlayerFinder from "./PlayerFinder";
 import MatchManagersPanel from "./MatchManagersPanel";
 import MatchManagerRosterCard from "./MatchManagerRosterCard";
 import { validateAdjustment, fmtUsd, MAX_ADJUSTMENT_CENTS, REASON_REQUIRED } from "@/lib/creditsModel";
+import { MATCH_STATE_LABEL, attachCharges, chargeLabel, isCancelled, type ChargeOnRow, type MatchState } from "@/lib/matchHistory";
 import { useDockSubject } from "@/lib/useDockSubject";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { envBadge } from "@/lib/matchEnvBadge";
@@ -48,13 +49,17 @@ async function authFetch(path: string, init?: RequestInit): Promise<Response> {
 
 // ---- types (mirror the lookup route) ----
 type SearchRow = { id: number; name: string; email: string | null; phone: string | null; city: string | null; status: "expelled" | "suspended" | "ok"; hasMembership: boolean };
-type MatchRow = { umId: number; matchId: number; name: string; startDate: string | null; startDateUtc: string | null; team: number | null; num: number | null; price: number; charged: number | null; userStatus: string | null; state: "upcoming" | "played" | "cancelled"; removable: boolean };
+type MatchRow = { umId: number | null; matchId: number | null; name: string; startDate: string | null; startDateUtc: string | null; team: number | null; num: number | null; price: number; charged: number | null; userStatus: string | null; state: MatchState; removable: boolean; mirrorOnly: boolean; charge?: ChargeOnRow | null };
 type MatchBucket = "all" | "upcoming" | "played" | "noshow" | "cancelled";
 // Single source of truth for the header facts AND the filter chips, so they can never
 // disagree. state partitions into upcoming/played/cancelled; no-show is carved out of
 // played (a no-show is not "played"), keeping the four buckets summing to the total.
+/* BOTH CANCELLATIONS SHARE ONE BUCKET, and the ROW says which. The filter chips and their counts
+ * are unchanged by the split — a fifth chip would move numbers the last brief says must not move —
+ * while the row itself now distinguishes "he cancelled" from "we cancelled", which is the
+ * distinction an operator needs during a billing question. */
 function bucketOf(m: MatchRow): Exclude<MatchBucket, "all"> {
-  if (m.state === "cancelled") return "cancelled";
+  if (isCancelled(m.state)) return "cancelled";
   if (m.state === "upcoming") return "upcoming";
   return m.userStatus === "NO_SHOW" ? "noshow" : "played";
 }
@@ -468,7 +473,18 @@ function ProfileView({ p, fields, canEdit, canManage, canCredit, onOpenMatch, on
 }) {
   const pl = p.player;
   const tags = statusTags({ status: pl.status, hasMembership: !!p.membership && p.membership.status !== "canceled" });
-  const counts = useMemo(() => matchCounts(p.matches), [p.matches]);
+  /* THE CHARGES ARE FETCHED HERE, NOT INSIDE PaymentsPanel, so the money can go on the MATCH rows
+   * as well as in the payments list. It is still ONE live Stripe read per profile view, still on
+   * its own request so an outage costs the charges and not the page — only the owner moved.
+   *
+   * `undefined` while it is in flight or unavailable means "not looked for", which a row renders as
+   * nothing. `null` would mean "looked and found none", which renders as "no charge found". */
+  const payments = usePayments(p.player.id, p.player.email);
+  const matches = useMemo(
+    () => attachCharges(p.matches, payments.phase === "ok" ? (payments.data?.rows ?? []) : null),
+    [p.matches, payments],
+  );
+  const counts = useMemo(() => matchCounts(matches), [matches]);
   // The live balance, in CENTS, once an adjustment has landed — so the headline figure and the
   // panel below it can never disagree about what this player has.
   const [liveCredits, setLiveCredits] = useState<number | null>(null);
@@ -514,10 +530,10 @@ function ProfileView({ p, fields, canEdit, canManage, canCredit, onOpenMatch, on
 
       <StrikePanel s={p.strikes} isMember={!!p.membership} />
 
-      <MatchHistoryPanel matches={p.matches} counts={counts} canEdit={canEdit}
+      <MatchHistoryPanel matches={matches} counts={counts} canEdit={canEdit}
         onOpenMatch={onOpenMatch} onAdd={onAdd} onRemove={onRemove} />
 
-      <PaymentsPanel playerId={pl.id} email={pl.email} matches={p.matches} />
+      <PaymentsPanel state={payments} email={pl.email} matches={matches} />
 
       <AccountHistoryPanel p={p} canManage={canManage} onSuspend={onSuspend} onExpel={onExpel} onLift={onLift} />
     </>
@@ -635,13 +651,15 @@ function CreditPanel({ playerId, playerName, balanceCents, canCredit, onBalance 
 
 // ---------- payments (LIVE Stripe, never cached) ----------
 type PayStatus = "succeeded" | "pending" | "refunded" | "failed" | "disputed";
-type PaymentRow = { id: string; description: string; created: string; card: string | null; status: PayStatus; amount: number; matchId: string | null; isMembership: boolean };
+type PaymentRow = { id: string; description: string; created: string; card: string | null; status: PayStatus; amount: number; matchId: string | null; userMatchId: string | null; isMembership: boolean };
 type PaymentsResp = { ok: boolean; rows?: PaymentRow[]; foundVia?: ("email" | "userId")[]; customerMatched?: boolean; email?: string | null; error?: string; kind?: string };
 
-function PaymentsPanel({ playerId, email, matches }: { playerId: number; email: string | null; matches: MatchRow[] }) {
-  const [state, setState] = useState<{ phase: "loading" | "ok" | "error"; data?: PaymentsResp }>({ phase: "loading" });
-  const matchName = useMemo(() => new Map(matches.map((m) => [String(m.matchId), m.name])), [matches]);
+type PaymentsState = { phase: "loading" | "ok" | "error"; data?: PaymentsResp };
 
+/** The one live Stripe read per profile view. Lifted out of PaymentsPanel so the match rows can
+ *  carry their charge too — same request, same failure isolation, different owner. */
+function usePayments(playerId: number, email: string | null): PaymentsState {
+  const [state, setState] = useState<PaymentsState>({ phase: "loading" });
   useEffect(() => {
     let live = true;
     setState({ phase: "loading" });
@@ -658,6 +676,14 @@ function PaymentsPanel({ playerId, email, matches }: { playerId: number; email: 
     })();
     return () => { live = false; };
   }, [playerId, email]);
+  return state;
+}
+
+function PaymentsPanel({ state, email, matches }: { state: PaymentsState; email: string | null; matches: MatchRow[] }) {
+  /* KEYED APART. A charge carrying only a userMatchId used to be stored under `matchId` and joined
+   * against match ids — a real amount on the wrong match, with nothing on screen looking wrong. */
+  const byMatch = useMemo(() => new Map(matches.filter((m) => m.matchId != null).map((m) => [String(m.matchId), m.name])), [matches]);
+  const byUserMatch = useMemo(() => new Map(matches.filter((m) => m.umId != null).map((m) => [String(m.umId), m.name])), [matches]);
 
   const head = (note: React.ReactNode) => (
     <div className="ptitle"><h3>PAYMENTS · STRIPE</h3><span className="note">{note}</span></div>
@@ -714,7 +740,11 @@ function PaymentsPanel({ playerId, email, matches }: { playerId: number; email: 
       )}
       <div className="rows">
         {rows.map((r) => {
-          const tag = r.isMembership ? "Membership" : (matchName.get(String(r.matchId)) ?? `Match ${r.matchId}`);
+          const tag = r.isMembership ? "Membership"
+            : (r.matchId != null ? byMatch.get(r.matchId) : undefined)
+            ?? (r.userMatchId != null ? byUserMatch.get(r.userMatchId) : undefined)
+            // NAMED BY THE KEY IT CARRIED, so an unjoined charge does not pretend to be a match id.
+            ?? (r.matchId != null ? `Match ${r.matchId}` : r.userMatchId != null ? `Booking ${r.userMatchId}` : "Unmatched charge");
           return (
             <div className="row prow" key={r.id} data-charge={r.id}>
               <span className="ptitle2"><span className="l1">{r.description}</span>
@@ -725,7 +755,7 @@ function PaymentsPanel({ playerId, email, matches }: { playerId: number; email: 
           );
         })}
       </div>
-      <p className="pfoot">Ten most recent, <b>live from Stripe, read-only, not cached</b>. <b>Pending</b> means Stripe has the charge but hasn&apos;t settled it — the player has paid as far as they know. Joined to matches on <code>metadata.matchId</code>; no matchId = a membership charge.</p>
+      <p className="pfoot">Ten most recent, <b>live from Stripe, read-only, not cached</b>. <b>Pending</b> means Stripe has the charge but hasn&apos;t settled it — the player has paid as far as they know. Joined to matches on <code>metadata.matchId</code>, and to bookings on <code>metadata.userMatchId</code> — the two are different ids in different namespaces and are never interchanged. Neither present = a membership charge.</p>
       <p className="pfoot" data-testid="pay-amount-note" style={{ borderTop: 0 }}>Amounts are what Stripe <b>charged the card</b> — the base spot price <b>plus the card processing fee, minus any credit</b>. The Match History shows the <b>base spot price</b>, so it reads a few cents lower for the same match. Both are correct; they answer different questions (what the match costs vs. what the player was charged).</p>
     </div>
   );
@@ -799,13 +829,29 @@ function MatchHistoryPanel({ matches, counts, canEdit, onOpenMatch, onAdd, onRem
 
   const row = (m: MatchRow) => (
     <div className="row mrow" key={m.umId} data-match={m.matchId} data-bucket={bucketOf(m)}>
+      {/* A MIRROR-ONLY ROW HAS NO API BOOKING TO OPEN. matchId is still a real match id, so the
+          match opens; it is the removable/roster actions that do not apply, and `removable` is
+          already false on those rows. */}
       <span className="mtitle" role="button" tabIndex={0}
-        onClick={() => onOpenMatch(m.matchId)}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenMatch(m.matchId); } }}>
+        onClick={() => m.matchId != null && onOpenMatch(m.matchId)}
+        onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && m.matchId != null) { e.preventDefault(); onOpenMatch(m.matchId); } }}>
         <span className="l1">{m.name}</span>
-        <span className="l2">{fmtWhen(m.startDate)}{m.team != null ? ` · T${m.team}` : ""}{m.num != null ? ` · #${m.num}` : ""} · {money(m.price)}</span>
+        {/* fmtWhen(m.startDate) — the WALL CLOCK, printed in UTC. startDateUtc orders; it never
+            displays. Formatting the instant is what turned a Saturday match into Sunday. */}
+        <span className="l2">
+          {fmtWhen(m.startDate)}{m.team != null ? ` · T${m.team}` : ""}{m.num != null ? ` · #${m.num}` : ""}
+          {/* THE MONEY ON THE ROW. A row with no charge says so; it never says $0.00, because zero
+              is a claim about money and this does not know it. */}
+          {" · "}<span data-testid="mrow-charge">{chargeLabel(m) ?? money(m.price)}</span>
+          {m.mirrorOnly && <span className="mirroronly" title="Our mirror has this booking; the MatchDay API does not send it"> · from our mirror</span>}
+        </span>
       </span>
-      <span className={`st ${m.state}`}>{bucketOf(m) === "noshow" ? "NO SHOW" : m.state.toUpperCase()}</span>
+      {/* FOUR LABELS FOR FOUR EVENTS. NEITHER CANCELLATION IS RED: a player who pulled out is amber
+          because it may carry a strike, and a match we called off is informational — he did nothing
+          wrong, and red while he asks about money is the wrong note entirely. */}
+      <span className={`st ${m.state}`} data-state={m.state}>
+        {bucketOf(m) === "noshow" ? "NO SHOW" : MATCH_STATE_LABEL[m.state].toUpperCase()}
+      </span>
       <span className="mid c-team">{m.team != null ? `T${m.team}` : ""}{m.num != null ? ` · #${m.num}` : ""}</span>
       <span className="num">
         {m.removable
@@ -1354,6 +1400,11 @@ const CSS = `
 .pl .st.upcoming{background:var(--blubg);color:var(--blu);border-color:var(--bluln)}
 .pl .st.played{background:#f0f4f2;color:var(--ink2);border-color:var(--line)}
 .pl .st.cancelled{background:var(--ambbg);color:var(--amb);border-color:var(--ambln)}
+/* HE CANCELLED: amber, because it may carry a strike. WE CANCELLED: informational blue-grey — he
+   did nothing wrong, and it is the row an operator points at during a billing question. */
+.pl .st.player_cancelled{background:var(--ambbg);color:var(--amb);border-color:var(--ambln)}
+.pl .st.club_cancelled{background:#eef1f8;color:#4a539a;border-color:#dde1f4}
+.pl .mirroronly{color:var(--ink3)}
 .pl .st.late{background:var(--ambbg);color:var(--amb);border-color:var(--ambln)}
 .pl .st.latecancel{background:var(--ambbg);color:var(--amb);border-color:var(--ambln)}
 .pl .st.noshow{background:var(--redbg);color:var(--red);border-color:var(--redln)}

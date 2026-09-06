@@ -33,6 +33,7 @@ import {
 } from "@/lib/playerLookupModel";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { buildProfile } from "@/lib/playerProfile";
+import { loadMirrorHistory } from "@/lib/mirrorHistory";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -121,9 +122,21 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
        * player data from player look up so you dont have to go to player look up" — and two copies
        * of this mapping would drift silently: a pane and a page quoting different credit balances
        * during a billing argument, with no error anywhere. */
+      /* THE MIRROR'S ROWS, so this page shows the same history the chat pane does. The API omits
+       * every booking whose match was cancelled (five players measured, five omitted — see
+       * docs/matchday-api-facts.md), which meant the pane could list a match this page could not,
+       * while the pane's own footer button sent the operator here to look at it.
+       *
+       * CHARGES ARE NOT FETCHED HERE. This page reads Stripe from its own endpoint, in the browser,
+       * after the profile has rendered — deliberately, so a Stripe outage cannot blank the page. So
+       * the rows arrive with `charge: undefined` ("not looked for") and PaymentsPanel applies the
+       * same attachCharges join client-side when the charges land. */
+      const mirrorRows = await loadMirrorHistory(makeServerClient(), Number(id));
+
       const profile = await buildProfile({
         raw,
         listRow,
+        mirrorRows,
         resolveActor: async (userId) => {
           const b = await apiGet<Record<string, unknown>>(env, `/admin/players/${userId}`).catch(() => null);
           const bd = b && typeof b === "object" && "data" in b ? (b.data as Record<string, unknown>) : b;
