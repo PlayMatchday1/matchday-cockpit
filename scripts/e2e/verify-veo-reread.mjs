@@ -155,7 +155,10 @@ async function main() {
     await p.waitForSelector('[data-testid="veo-recent-twin-warn"]', { timeout: 30000 });
     ok("…and again when Assign opens");
     await p.waitForSelector('[data-testid^="veo-cand-"][data-gap]', { timeout: 60000 });
-    await p.click('[data-testid^="veo-cand-"][data-gap] button');
+    /* SELECTOR EDIT, itemised: a candidate row gained a Chat control, so `… button` is ambiguous
+     * and used to hit Assign by position. Assign has its own id. */
+    const firstCand = await p.$eval('[data-testid^="veo-cand-"][data-gap]', (e) => e.dataset.testid.replace("veo-cand-", ""));
+    await p.click(`[data-testid="veo-assign-${firstCand}"]`);
     await p.waitForSelector('[data-testid="veo-confirm"]', { timeout: 30000 });
     const onConfirm = await p.$eval('[data-testid="veo-confirm-twin"]', (e) => e.textContent.trim()).catch(() => null);
     console.log(`     confirm warning: ${JSON.stringify(onConfirm)}`);

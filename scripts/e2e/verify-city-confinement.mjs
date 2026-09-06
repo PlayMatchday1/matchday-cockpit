@@ -47,6 +47,11 @@
 // ASSERTED ON THE PAYLOAD, NOT THE RENDER. CSS hiding a row is not scoping.
 //
 //   node scripts/e2e/verify-city-confinement.mjs
+/* gday-row, NOT snap-row. SnapRow was the old eight-column row and was deleted in the five-column
+ * rebuild — GamedayBoard's own comment records it. This suite has therefore been unable to pass since
+ * then: it waited 30s for an element nobody renders and died as a Playwright timeout, which reads
+ * as contention rather than as a dated selector. /city/gameday renders the SAME GamedayBoard, so the
+ * id is the same on both pages — checked, not assumed. */
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
 import { netRetry, installHarnessGuard, fatal, closeContext, sessionFor } from "./_session.mjs";
@@ -364,7 +369,7 @@ async function main() {
     // the same city on the same day — id for id, rail for rail. This is the assertion that would
     // fail if the city page went back to being its own table.
     const boardRows = (page) => page.evaluate(() =>
-      [...document.querySelectorAll('[data-testid="snap-row"]')].map((e) => ({
+      [...document.querySelectorAll('[data-testid="gday-row"]')].map((e) => ({
         id: Number(e.getAttribute("data-id")),
         group: e.getAttribute("data-group"),
         // the colour rail is a class on the row — the thing the brief calls "the real colour rails"
@@ -372,14 +377,14 @@ async function main() {
       })).sort((a, b) => a.id - b.id));
 
     await cm.goto(`${BASE}/city/gameday`, { waitUntil: "domcontentloaded" });
-    await cm.waitForSelector('[data-testid="snap-row"]', { timeout: 30000 });
+    await cm.waitForSelector('[data-testid="gday-row"]', { timeout: 30000 });
     await cm.waitForTimeout(500);
     const cityRows = await boardRows(cm);
 
     // The admin board defaults to today, so drive it to the same day the city board is showing.
     const day = await cm.evaluate(() => document.querySelector('[data-testid="daylab"]')?.textContent?.trim() ?? null);
     await ad.goto(`${BASE}/match-ops/gameday`, { waitUntil: "domcontentloaded" });
-    await ad.waitForSelector('[data-testid="snap-row"]', { timeout: 30000 });
+    await ad.waitForSelector('[data-testid="gday-row"]', { timeout: 30000 });
     await ad.waitForTimeout(500);
     const adminDay = await ad.evaluate(() => document.querySelector('[data-testid="daylab"]')?.textContent?.trim() ?? null);
     if (day && adminDay && day === adminDay) {
@@ -396,10 +401,10 @@ async function main() {
     // CLICKING A MATCH GOES TO MANAGER PAY. Not "the panel is hidden" — the panel is never mounted,
     // and the click navigates. Asserted as a navigation plus the panel's absence AFTER it.
     await cm.goto(`${BASE}/city/gameday`, { waitUntil: "domcontentloaded" });
-    await cm.waitForSelector('[data-testid="snap-row"]', { timeout: 30000 });
+    await cm.waitForSelector('[data-testid="gday-row"]', { timeout: 30000 });
     await cm.waitForTimeout(400);
-    const id = await cm.$eval('[data-testid="snap-row"]', (e) => Number(e.getAttribute("data-id")));
-    await cm.click('[data-testid="snap-row"]');
+    const id = await cm.$eval('[data-testid="gday-row"]', (e) => Number(e.getAttribute("data-id")));
+    await cm.click('[data-testid="gday-row"]');
     try {
       await cm.waitForFunction(() => location.pathname === "/city/manager-pay", null, { timeout: 12000 });
       ok(`clicking a match navigates to Manager Pay (#match-${id}), it does not open a panel`);

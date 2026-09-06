@@ -116,7 +116,7 @@ const PAGE = noComments(readFileSync("src/components/VeoDayOps.tsx", "utf8"));
 /}, \[limit, unpostedOnly, city, nonce\]\);/.test(PAGE)
   ? ok("the section refetches on the filter and the city, and NOT on the day")
   : bad("the recent section's fetch depends on the selected day");
-/<RecentlyUploaded city=\{city\} \/>/.test(PAGE)
+/<RecentlyUploaded city=\{city\}/.test(PAGE)
   ? ok("…and it is on the same page, below the day list")
   : bad("the section is not rendered");
 /wait = isResolved\(r\.state\) \? null : waitDays/.test(PAGE)

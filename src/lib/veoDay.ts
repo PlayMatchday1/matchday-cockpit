@@ -38,6 +38,19 @@ export const FILM_STATE_LABEL: Record<FilmState, string> = {
   no_film: "No film yet",
 };
 
+/* ── A ROW IS ON THE DEFAULT LIST BECAUSE A FILM LANDED, NOT BECAUSE A FIELD HAS A CODE ────────
+ * Ryan: "in the top list only show the matches for that day where the video is posted already to
+ * the chat". Adding five codes took Sep 5 from five rows to eight, seven of them reading No film
+ * yet — and LBJ at 9:30 AM has 78 matches in 2026 and one recording ever, so that is not a missing
+ * film, it is a field we can now match to. Seven false gaps a day is how a number stops being read.
+ *
+ * NEEDS-A-LOOK IS ON THE DEFAULT LIST TOO, which is a small departure from "posted only" and the
+ * reason is that a film DID arrive for it — it is the most action-worthy row on the page, and
+ * parking it would hide the one thing an operator has to do. What gets parked is the matches where
+ * nothing arrived at all. */
+export const hasFilm = (s: FilmState): boolean =>
+  s === "posted" || s === "flagged" || s === "assigned" || s === "needs_look";
+
 /** Rendering order for the tally strip, left to right. */
 export const FILM_STATES: readonly FilmState[] = ["posted", "flagged", "assigned", "held", "needs_look", "no_film"];
 

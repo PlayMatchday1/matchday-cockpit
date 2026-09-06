@@ -18,7 +18,7 @@ import "server-only"; // no-op under --conditions=react-server
 import { readFileSync } from "node:fs";
 import { videoFromThumb } from "../src/app/api/veo/thumb/route";
 import {
-  FILM_STATES, attachedTo, buildDayRows, filmState, gapLabel, scoreTrace, tally, tallyAddsUp, traceSum,
+  FILM_STATES, attachedTo, buildDayRows, filmState, gapLabel, hasFilm, scoreTrace, tally, tallyAddsUp, traceSum,
   type VeoDayMatch, type VeoDayRecording, type VeoScoreParts,
 } from "../src/lib/veoDay";
 import { classifyVeo, scoreVeo, CODE_SCORE, DATE_SCORE, TIME_SCORE, FIELD_SCORE, type CodeTier, type DateForm, type TimeForm, type VeoCandidateRow } from "../src/lib/veo";
@@ -421,13 +421,40 @@ console.log("\n— re-reading a title is not re-deciding a recording —");
  * front of players. Every write on this page still goes through useAssign, which is a person
  * clicking a confirm. */
 {
-  /* Every `method:` in the file, and every one inside useAssign. If the two sets are equal, no
-   * write exists anywhere else in the component — a render cannot move a stored row. */
+  /* THE INVARIANT IS "NO WRITE ON RENDER", and the first version of this asserted a proxy for it:
+   * that every method: sat inside useAssign. The X and its Undo write too — from click handlers —
+   * so the proxy went red on behaviour that is fine. What must never happen is a write from an
+   * EFFECT, because that is what a render triggers. So the effects are checked directly. */
+  /* BRACE-MATCHED, not regex-bounded. The first version bounded each effect with `\n  }, [` and
+   * swallowed everything up to the NEXT effect when a body closed at a deeper indent, so it read a
+   * click handler's write as if it were inside an effect. */
+  const effectBodies: string[] = [];
+  for (let i = PAGE_C.indexOf("useEffect("); i !== -1; i = PAGE_C.indexOf("useEffect(", i + 1)) {
+    let depth = 0, j = PAGE_C.indexOf("{", i);
+    if (j === -1) break;
+    for (let k = j; k < PAGE_C.length; k++) {
+      if (PAGE_C[k] === "{") depth++;
+      else if (PAGE_C[k] === "}") { depth--; if (depth === 0) { effectBodies.push(PAGE_C.slice(j, k + 1)); break; } }
+    }
+  }
+  const writingEffects = effectBodies.filter((e) => /method:\s*"(POST|PATCH|PUT|DELETE)"/.test(e));
+  is(`none of the ${effectBodies.length} effects in the component issues a write`, writingEffects.length, 0);
   const all = [...PAGE_C.matchAll(/method:\s*"(\w+)"/g)].map((m) => m[1]).sort();
+  is("…and every write in the file is one of the four a person can click",
+    all, ["DELETE", "DELETE", "PATCH", "POST"]);
   const inAssign = /function useAssign[\s\S]*?\n\}/.exec(PAGE_C)?.[0] ?? "";
-  const assignMethods = [...inAssign.matchAll(/method:\s*"(\w+)"/g)].map((m) => m[1]).sort();
-  is("every non-GET request in the component is inside useAssign", all, assignMethods);
-  is("…and they are exactly the assign and the dismiss", assignMethods, ["DELETE", "POST"]);
+  is("…two of them being the assign and the dismiss inside useAssign",
+    [...inAssign.matchAll(/method:\s*"(\w+)"/g)].map((m) => m[1]).sort(), ["DELETE", "POST"]);
+  /* AND THE UNDO CANNOT UN-POST ANYTHING. Its route is guarded on status = 'dismissed'. */
+  {
+    const ID_ROUTE = noComments(readFileSync("src/app/api/veo/[id]/route.ts", "utf8"));
+    /\.eq\("status", "dismissed"\)/.test(ID_ROUTE)
+      ? ok("the undo route can only reach a DISMISSED row — a posted film is unreachable by it")
+      : bad("the undo route is not guarded on the dismissed status");
+    /body\?\.status !== "queued"/.test(ID_ROUTE)
+      ? ok("…and it performs exactly one transition, refusing anything else")
+      : bad("the undo route interprets an arbitrary status");
+  }
   /rereadTitle[\s\S]{0,600}return \{/.test(PAGE_C) && !/rereadTitle[\s\S]{0,600}fetch\(/.test(PAGE_C)
     ? ok("rereadTitle itself makes no request at all — it is pure over the subject and the slug")
     : bad("the re-read reaches the network");
@@ -449,6 +476,68 @@ is("gapLabel already refuses to invent one", gapLabel(1200, null), null);
 !/disabled=\{[^}]*twins/.test(PAGE_C)
   ? ok("…and it warns without blocking")
   : bad("the duplicate warning blocks the assign");
+
+console.log("\n— the day list shows films that landed, not fields that have codes —");
+/* Adding five codes took Sep 5 from five rows to eight, seven of them "No film yet". LBJ at
+ * 9:30 AM has 78 matches in 2026 and one recording ever: that is not a missing film, it is a field
+ * we can now match to. Seven false gaps a day is how a number stops being read. */
+is("a row is on the default list when a film landed for it",
+  (["posted", "flagged", "assigned", "needs_look"] as const).map(hasFilm), [true, true, true, true]);
+/* NEEDS-A-LOOK IS INCLUDED, which is a small departure from "posted only": a film DID arrive for
+ * it, and it is the most action-worthy row on the page. What gets parked is where nothing came. */
+is("…and parked when nothing arrived at all", (["held", "no_film"] as const).map(hasFilm), [false, false]);
+/hasFilm\(r\.state\) \? cityRows/.test(PAGE_C) || /cityRows\.filter\(\(r\) => hasFilm\(r\.state\)\)/.test(PAGE_C)
+  ? ok("the page defaults to the rows with a film")
+  : bad("the day list still shows every coded match by default");
+/data-testid="veo-parked-toggle"/.test(PAGE_C) && /showParked \? "Hide" : "Show"/.test(PAGE_C)
+  ? ok("…and parks the rest behind one line, default closed")
+  : bad("the no-film rows are gone rather than parked");
+/<b>\{withFilm\.length\}<\/b>\s*<span>films that landed<\/span>/.test(PAGE_C)
+  ? ok("the total counts FILMS and says so, instead of 'on camera that day'")
+  : bad("the total still overstates what it counts");
+/* ASSIGN STILL OFFERS EVERY CAMERA MATCH, parked ones included: a film can belong to a match whose
+ * own film never came, which is exactly the case a parked row represents. */
+/for \(const m of matches\) \{\s*candidates\[m\.apiId\]/.test(noComments(readFileSync("src/app/api/veo/day/route.ts", "utf8")))
+  ? ok("…and the candidate list is still built from every camera match on the day")
+  : bad("parking a row removed it from the assign candidates");
+
+console.log("\n— the X takes a row off the list without destroying anything —");
+/data-testid="veo-recent-dismiss-x"/.test(PAGE_C) && /aria-label="Take this film off the list"/.test(PAGE_C)
+  ? ok("a queued arrival row carries an X, labelled for a screen reader")
+  : bad("the X is missing or unlabelled");
+/\{r\.state === "queued" && \(/.test(PAGE_C)
+  ? ok("…and only a queued row does — a posted one has nothing to dismiss")
+  : bad("the X is offered on a posted row");
+/data-testid="veo-recent-dismissed"[\s\S]{0,400}data-testid="veo-recent-undo"/.test(PAGE_C)
+  ? ok("dismissing replaces the row in place with a strip that offers Undo")
+  : bad("no undo strip");
+/The film and its history are kept/.test(PAGE_C)
+  ? ok("…and the strip says what was kept, so nothing disappears without a trace")
+  : bad("the strip does not say the film is kept");
+!/confirm[\s\S]{0,80}dismiss|window\.confirm/.test(PAGE_C)
+  ? ok("…with no dialog, because it is undoable in one click")
+  : bad("a confirm dialog was added for an undoable action");
+
+console.log("\n— the chat, from the row and from each candidate —");
+/data-testid="veo-rowchat"/.test(PAGE_C) && /hasFilm\(r\.state\) && \(/.test(PAGE_C)
+  ? ok("a day row with a film opens its thread without expanding")
+  : bad("the day row has no chat control");
+/data-testid="veo-recent-chat"/.test(PAGE_C) && /\{r\.match && \(/.test(PAGE_C)
+  ? ok("an arrival row that went somewhere opens that thread")
+  : bad("the arrival row has no chat control");
+/\{r\.match && \(/.test(PAGE_C)
+  ? ok("…and a queued row with no match offers none — there is no thread yet")
+  : bad("a match-less row offers a chat control");
+/data-testid=\{`veo-cand-chat-\$\{c\.apiId\}`\}/.test(PAGE_C)
+  ? ok("each candidate opens its own thread, so you can read a chat before posting into it")
+  : bad("no chat control on a candidate");
+/e\.stopPropagation\(\); onOpenChat\(c\.apiId\)/.test(PAGE_C)
+  ? ok("…and opening it neither selects the candidate nor starts an assign")
+  : bad("the candidate chat control can trigger a selection");
+/* ONE PANEL, one tab, one id — the control on the row and the one inside it must not diverge. */
+(PAGE_C.match(/setPanelTab\("chat"\); setPanelMatch\(apiId\)/g) ?? []).length >= 2
+  ? ok("every chat control opens the same panel on the same tab")
+  : bad("the chat controls do not share one opener");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

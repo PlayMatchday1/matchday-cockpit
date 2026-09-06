@@ -49,7 +49,10 @@ async function main() {
   await p.waitForFunction(() => !document.body.innerText.includes("Loading…"), { timeout: 120000 });
 
   // Expand EVERY row on the day — a page of open rows must stream nothing.
-  const rows = nonEmpty(await p.$$('[data-testid="veo-row"] > button'), "expandable rows on the day");
+  /* SELECTOR EDIT, itemised: `[data-testid="veo-row"] > button` used to be unambiguous and is not
+   * any more — the row gained a Chat control as a second direct child. The expander's id carries the
+   * match's api id, so the digits disambiguate it from the chat control beside it. */
+  const rows = nonEmpty(await p.$$('[data-testid="veo-row"] .rowtop'), "expandable rows on the day");
   // The positive control for every zero below: a day with no rows would satisfy all of them.
   yes(`the day has ${rows.length} rows to expand`, rows.length > 0);
   for (const r of rows) { await r.click(); await p.waitForTimeout(250); }
@@ -59,7 +62,7 @@ async function main() {
   yes("…though the still frames are", cdn.some((u) => u === "thumbnail.jpg"), JSON.stringify(cdn));
   // Collapse them again, then open just the one with the film.
   for (const r of rows) { await r.click(); await p.waitForTimeout(120); }
-  await p.click(`[data-api-id="${auto.matched_api_id}"] > button`);
+  await p.click(`[data-testid="veo-row-${auto.matched_api_id}"]`);
   await p.waitForSelector('[data-testid="veo-play"]', { timeout: 60000 });
 
   // ---- the control itself ----

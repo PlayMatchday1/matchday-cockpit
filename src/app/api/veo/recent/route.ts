@@ -80,7 +80,10 @@ export async function GET(req: Request) {
       .select("id, recording_id, match_path_slug, email_subject, video_url, received_at, status, queue_reason, matched_api_id, candidate_api_ids, match_score, flagged, posted_by_user_id, parsed_code, parsed_match_date, parsed_time_minutes")
       .order("received_at", { ascending: false })
       .limit(want);
-    if (filter === "unposted") q = q.neq("status", "posted");
+    /* "NOT POSTED" MEANS STILL WAITING, WHICH IS `queued` — not `everything that is not posted`.
+     * With `neq("status","posted")` a dismissed recording stayed on the list an operator uses to
+     * find work, so taking a row off the list left it exactly where it was. */
+    if (filter === "unposted") q = q.eq("status", "queued");
     const { data, error } = await q;
     if (error) throw new Error(`veo recent: ${error.message}`);
     const raw = data ?? [];

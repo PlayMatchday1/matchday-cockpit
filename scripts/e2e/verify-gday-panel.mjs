@@ -4,6 +4,16 @@
 // no overlap, no overflow); <1600 opening the panel COLLAPSES the dock to its rail WITHOUT losing the
 // thread or the draft, does not auto-reopen on close, and says so once.
 //   node scripts/e2e/verify-gday-panel.mjs
+/* gday-row, NOT snap-row. SnapRow was the old eight-column row and was deleted in the five-column
+ * rebuild — GamedayBoard's own comment records it. This suite has therefore been unable to pass since
+ * then: it waited 30s for an element nobody renders and died as a Playwright timeout, which reads
+ * as contention rather than as a dated selector. /city/gameday renders the SAME GamedayBoard, so the
+ * id is the same on both pages — checked, not assumed.
+ *
+ * SAME FOR THE READY WAIT: `snap-group-todo` was the old grouping container. The board renders
+ * `gday-section-<band>` now, and the bands are not the old buckets, so there is no renamed
+ * equivalent to point at. The suite waits for THE ROW IT IS ABOUT TO CLICK, which is a stronger
+ * ready signal than any container: it cannot pass on a board that rendered without match 501. */
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
 import { netRetry, installHarnessGuard, fatal, sessionFor } from "./_session.mjs";
@@ -95,7 +105,7 @@ async function openGamedayWithDock(page, draft) {
     if (draft != null) sessionStorage.setItem("crm:draft", JSON.stringify({ threadId: "t-1", text: draft }));
   }, { draft: draft ?? null });
   await page.goto(GAMEDAY, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector('[data-testid="snap-group-todo"]', { timeout: 20000 });
+  await page.waitForSelector('[data-testid="gday-row"][data-id="501"]', { timeout: 20000 });
   await page.waitForSelector('[data-testid="dock-root"]', { timeout: 15000 });
   await page.waitForFunction(() => document.querySelector('[data-testid="dock-root"]')?.getAttribute("data-guard") === "ready", null, { timeout: 15000 });
 }
@@ -124,7 +134,7 @@ async function main() {
     }, { docked: "t-1", expanded: true, draft: "my unsent draft" });
 
     // open the panel by clicking the tile
-    await page.click('[data-testid="snap-row"][data-id="501"]');
+    await page.click('[data-testid="gday-row"][data-id="501"]');
     await page.waitForSelector('[data-testid="gday-panel"]', { timeout: 8000 });
     await page.waitForTimeout(250);
     // GATE — the dock collapsed to its rail; panel body no longer present; a one-time line said so
@@ -163,7 +173,7 @@ async function main() {
     await routes(ctx);
     const page = await ctx.newPage();
     await openGamedayWithDock(page, "keep me");
-    await page.click('[data-testid="snap-row"][data-id="501"]');
+    await page.click('[data-testid="gday-row"][data-id="501"]');
     await page.waitForSelector('[data-testid="gday-panel"]', { timeout: 8000 });
     await page.waitForTimeout(300);
     // dock stays expanded (NOT collapsed) at >=1600
@@ -200,14 +210,14 @@ async function main() {
     await routes(ctx);
     const page = await ctx.newPage();
     await page.goto(GAMEDAY, { waitUntil: "domcontentloaded" });
-    await page.waitForSelector('[data-testid="snap-group-todo"]', { timeout: 20000 });
-    await page.click('[data-testid="snap-row"][data-id="501"]');
+    await page.waitForSelector('[data-testid="gday-row"][data-id="501"]', { timeout: 20000 });
+    await page.click('[data-testid="gday-row"][data-id="501"]');
     await page.waitForSelector('[data-testid="gday-panel"]', { timeout: 10000 });
     await page.waitForSelector('[data-testid="mp-panel"]', { timeout: 10000 });
     eq("veo: the camera section is GONE from the panel, and did not reappear in the snapshot row", {
       inPanel: await page.$$eval('[data-testid="gday-panel"] [data-testid="mp-veo"]', (e) => e.length),
       section: await page.$$eval('[data-testid="gday-panel"] [data-section="CAMERA"]', (e) => e.length),
-      inRow: await page.$$eval('[data-testid="snap-row"] input[type=checkbox]', (e) => e.length),
+      inRow: await page.$$eval('[data-testid="gday-row"] input[type=checkbox]', (e) => e.length),
     }, { inPanel: 0, section: 0, inRow: 0 });
     await ctx.close(); }
 
