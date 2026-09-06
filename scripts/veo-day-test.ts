@@ -226,9 +226,16 @@ const PAGE_C = noComments(PAGE), ROUTE_C = noComments(ROUTE);
   ? ok("a score prints only below 100, and a null score prints nothing")
   : bad("the score condition changed — a null may now render as 0");
 // The trace comes off the row.
-/scoreTrace\(rec\?\.scoreParts \?\? null\)/.test(PAGE_C) && !/parseVeoSubject/.test(PAGE_C)
-  ? ok("the trace is read from score_parts, with no re-parsing in the component")
-  : bad("the page re-parses a subject to build its trace");
+/* THE TRACE STILL COMES OFF THE ROW. The page now DOES call parseVeoSubject — for a different
+ * thing entirely: re-reading a queued row's title so Assign has a day to offer. The two must not
+ * blur. The trace explains a decision that was already made and must come from score_parts; the
+ * re-read explains nothing and decides nothing, it only supplies a date for a person to act on. */
+/scoreTrace\(rec\?\.scoreParts \?\? null\)/.test(PAGE_C)
+  ? ok("the trace is read from score_parts")
+  : bad("the trace is no longer read from the row");
+(PAGE_C.match(/parseVeoSubject\(/g) ?? []).length === 1 && /export function rereadTitle[\s\S]{0,400}parseVeoSubject\(subject\)/.test(PAGE_C)
+  ? ok("…and the ONLY parse on the page is rereadTitle, which feeds Assign and not the trace")
+  : bad("a second parse has appeared in the component");
 // The day defaults to yesterday.
 /* The default survived a change: ?date= now overrides it, so the assertion is on the FALLBACK
  * rather than on the whole initialiser it used to be the whole of. */
@@ -394,7 +401,57 @@ const GDAY = noComments(readFileSync("src/components/GamedayBoard.tsx", "utf8"))
   ? ok("…on the CHAT tab, because on a posted row the chat is the question")
   : bad("the panel does not open on Chat");
 
+console.log("\n— re-reading a title is not re-deciding a recording —");
+/* Ryan: "nothing to assign when i click it". Every queued row. The panel said "The title gave no
+ * date, so there is no day to offer matches from" and offered only Not our film, because the row
+ * rendered the parse STORED when the film arrived — and those rows arrived before the parser
+ * learned their shapes. Nothing was broken in the parser; the page never asked it again. */
+/const reread = useMemo\(\(\) => rereadTitle\(r\.subject, r\.slug\), \[r\.subject, r\.slug\]\)/.test(PAGE_C)
+  ? ok("a queued row re-reads its own title when it renders")
+  : bad("the row still shows only the stored parse");
+/const target = picked \?\? readDay;/.test(PAGE_C)
+  ? ok("…and Assign opens on that day")
+  : bad("Assign does not use the re-read day");
+/data-testid="veo-recent-picker"/.test(PAGE_C) && /nearby\.map/.test(PAGE_C)
+  ? ok("…and when nothing reads, it asks for the day instead of dead-ending")
+  : bad("a row with no readable date still opens onto nothing");
+
+/* IT WRITES NOTHING. The whole safety of this change is that a render cannot move a stored row:
+ * those films were posted into their chats by hand and reprocessing them puts a second copy in
+ * front of players. Every write on this page still goes through useAssign, which is a person
+ * clicking a confirm. */
+{
+  /* Every `method:` in the file, and every one inside useAssign. If the two sets are equal, no
+   * write exists anywhere else in the component — a render cannot move a stored row. */
+  const all = [...PAGE_C.matchAll(/method:\s*"(\w+)"/g)].map((m) => m[1]).sort();
+  const inAssign = /function useAssign[\s\S]*?\n\}/.exec(PAGE_C)?.[0] ?? "";
+  const assignMethods = [...inAssign.matchAll(/method:\s*"(\w+)"/g)].map((m) => m[1]).sort();
+  is("every non-GET request in the component is inside useAssign", all, assignMethods);
+  is("…and they are exactly the assign and the dismiss", assignMethods, ["DELETE", "POST"]);
+  /rereadTitle[\s\S]{0,600}return \{/.test(PAGE_C) && !/rereadTitle[\s\S]{0,600}fetch\(/.test(PAGE_C)
+    ? ok("rereadTitle itself makes no request at all — it is pure over the subject and the slug")
+    : bad("the re-read reaches the network");
+}
+
+/* A GAP NEEDS A TIME. "0 min" for a title with no time is the page pretending to know something. */
+/gap \?\? <em className="nogap">no time in the title<\/em>/.test(PAGE_C)
+  ? ok("a candidate shows no gap rather than a zero when the title has no time")
+  : bad("a missing time is rendered as a gap");
+is("gapLabel already refuses to invent one", gapLabel(1200, null), null);
+
+/* THE TWINS. Two rows with the identical title 17 minutes apart on the live page. */
+/data-testid="veo-recent-twin-warn"/.test(PAGE_C) && /data-testid="veo-confirm-twin"/.test(PAGE_C)
+  ? ok("an identical title warns on the row AND on the confirm")
+  : bad("the duplicate warning is missing from one of the two places");
+/x\.subject === r\.subject/.test(PAGE_C)
+  ? ok("…matched on the title, which is what makes them suspect")
+  : bad("the twin check is not on the title");
+!/disabled=\{[^}]*twins/.test(PAGE_C)
+  ? ok("…and it warns without blocking")
+  : bad("the duplicate warning blocks the assign");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
+
 
 

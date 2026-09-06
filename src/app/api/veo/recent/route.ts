@@ -47,6 +47,9 @@ export type RecentRow = {
   parsedCode: string | null;
   parsedMatchDate: string | null;
   parsedTimeMinutes: number | null;
+  /* THE SLUG, so the page can re-read the title. A title carries a month and a day but never a
+   * year; the year comes from the processing date in the slug, exactly as it does at ingest. */
+  slug: string;
   /** Where it could be placed — via its match, else via its code. Null when neither resolves. */
   city: string | null;
   /** The match it went into, when it went into one. */
@@ -74,7 +77,7 @@ export async function GET(req: Request) {
     const want = auth.confinedCity || cityWanted ? Math.min(MAX_LIMIT * 4, 800) : limit * 3;
     let q = auth.supabase
       .from("veo_recordings")
-      .select("id, recording_id, email_subject, video_url, received_at, status, queue_reason, matched_api_id, candidate_api_ids, match_score, flagged, posted_by_user_id, parsed_code, parsed_match_date, parsed_time_minutes")
+      .select("id, recording_id, match_path_slug, email_subject, video_url, received_at, status, queue_reason, matched_api_id, candidate_api_ids, match_score, flagged, posted_by_user_id, parsed_code, parsed_match_date, parsed_time_minutes")
       .order("received_at", { ascending: false })
       .limit(want);
     if (filter === "unposted") q = q.neq("status", "posted");
@@ -145,6 +148,7 @@ export async function GET(req: Request) {
         parsedCode: (r.parsed_code as string | null) ?? null,
         parsedMatchDate: (r.parsed_match_date as string | null) ?? null,
         parsedTimeMinutes: typeof r.parsed_time_minutes === "number" ? r.parsed_time_minutes : null,
+        slug: (r.match_path_slug as string) ?? "",
         city: cityCode ? (CITY_CODE_TO_DISPLAY[cityCode] ?? cityCode) : null,
         match,
       });

@@ -25,12 +25,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import MatchSidePanel, { MATCH_SIDE_PANEL_CSS, type PanelTab } from "@/components/MatchSidePanel";
+import { parseVeoSubject, processingDateFromSlug, resolveMatchDates } from "@/lib/veo";
 import {
   FILM_STATES, FILM_STATE_LABEL, emptyTally, gapLabel, scoreTrace, tallyAddsUp,
   type AssignCandidate, type FilmState, type VeoDayRecording, type VeoDayRow, type VeoDayTally,
 } from "@/lib/veoDay";
 import {
-  ARRIVAL_ZONE, RECENT_STATE_LABEL, RECENT_STATE_TONE, WAIT_ALARM_DAYS, daySourceOf, isResolved, lagDays,
+  ARRIVAL_ZONE, dayIn, RECENT_STATE_LABEL, RECENT_STATE_TONE, WAIT_ALARM_DAYS, daySourceOf, isResolved, lagDays,
   lagLabel, lagWorthSaying, waitDays, waitLabel, type RecentState,
 } from "@/lib/veoRecent";
 
@@ -313,9 +314,44 @@ type RecentRow = {
   id: string; recordingId: string; subject: string | null; videoUrl: string | null;
   receivedAt: string | null; state: RecentState; queueReason: string | null; score: number | null;
   candidateApiIds: number[]; parsedCode: string | null; parsedMatchDate: string | null;
-  parsedTimeMinutes: number | null; city: string | null;
+  parsedTimeMinutes: number | null; slug: string; city: string | null;
   match: { apiId: number; name: string; venue: string | null; city: string | null; day: string | null } | null;
 };
+
+/* ── RE-READING THE TITLE, WHICH IS NOT THE SAME AS RE-DECIDING THE RECORDING ──────────────────
+ * Ryan: "nothing to assign when i click it". Every queued row, not one. Assign opened onto "The
+ * title gave no date, so there is no day to offer matches from" and offered only Not our film — the
+ * one control that exists for rescuing a film could not rescue anything.
+ *
+ * Nothing was broken in the parser. The row rendered the parse STORED WHEN THE FILM ARRIVED, and
+ * these rows arrived before the parser learned their shapes. "PRUMC |SEP 3 | 7 :00pm" is stored as
+ * unparseable_subject with a null date; today's parser reads it fine. The page was showing
+ * yesterday's verdict as though it were today's answer.
+ *
+ * So the title is read again, IN MEMORY, when the row renders — for what it shows and what Assign
+ * offers. IT WRITES NOTHING: no update to the row, no status, no queue_reason, no post. The stored
+ * decision stays frozen, because those films were posted into their chats by hand and reprocessing
+ * them would put a second copy in front of players. The only thing that ever posts is a person
+ * picking one film and one match and confirming.
+ *
+ * The year comes from the slug's processing date, exactly as it does at ingest — a title carries a
+ * month and a day and never a year. */
+export type Reread = { code: string; date: string | null; timeMinutes: number | null; timeLabel: string | null };
+
+export function rereadTitle(subject: string | null, slug: string): Reread | null {
+  const p = parseVeoSubject(subject);
+  if (!p.ok) return null;
+  const dates = resolveMatchDates(p.value, processingDateFromSlug(slug));
+  const t = p.value.timeOptions[0] ?? null;
+  return {
+    code: p.value.code,
+    date: dates[0] ?? null,
+    // A bare 12-hour time carries TWO options and the schedule picks between them. For display and
+    // for the gap the first (PM) is used, and `ampmKnown` is why it is not presented as certain.
+    timeMinutes: p.value.ampmKnown && t ? t.minutes : t ? t.minutes : null,
+    timeLabel: t ? t.label : null,
+  };
+}
 
 const arrivedLabel = (iso: string | null): string => {
   if (!iso || !Number.isFinite(Date.parse(iso))) return "—";
@@ -383,7 +419,12 @@ function RecentlyUploaded({ city }: { city: string }) {
         </p>
       )}
 
+      {/* TWINS: two rows carrying the identical title, 17 minutes apart on the live page. If it is
+          one film, assigning both puts two links in one chat — so each warns about the other, here
+          and again on the confirm. WARN, DO NOT BLOCK: overriding it is legitimate, and so is the
+          case where they really are two different films. */}
       {shown.map((r) => <RecentRowView key={r.id} r={r} open={openId === r.id}
+        twins={shown.filter((x) => x.id !== r.id && x.subject === r.subject).length}
         onToggle={() => setOpenId(openId === r.id ? null : r.id)}
         onDone={() => { setOpenId(null); setNonce((n) => n + 1); }} />)}
 
@@ -404,12 +445,15 @@ function RecentlyUploaded({ city }: { city: string }) {
   );
 }
 
-function RecentRowView({ r, open, onToggle, onDone }: {
-  r: RecentRow; open: boolean; onToggle: () => void; onDone: () => void;
+function RecentRowView({ r, open, onToggle, onDone, twins }: {
+  r: RecentRow; open: boolean; onToggle: () => void; onDone: () => void; twins: number;
 }) {
   const matchDay = r.match?.day ?? null;
-  const source = daySourceOf(matchDay, r.parsedMatchDate);
-  const day = matchDay ?? r.parsedMatchDate;
+  // Read again, in memory. See rereadTitle: display and Assign only, never a write.
+  const reread = useMemo(() => rereadTitle(r.subject, r.slug), [r.subject, r.slug]);
+  const rereadRescues = !r.parsedMatchDate && !matchDay && Boolean(reread?.date);
+  const source = daySourceOf(matchDay, r.parsedMatchDate ?? reread?.date ?? null);
+  const day = matchDay ?? r.parsedMatchDate ?? reread?.date ?? null;
   const lag = lagDays(r.receivedAt, day);
   const wait = isResolved(r.state) ? null : waitDays(r.receivedAt);
 
@@ -432,7 +476,19 @@ function RecentRowView({ r, open, onToggle, onDone }: {
           <small>
             {r.match
               ? <>went into {r.match.name}{r.match.venue ? ` · ${r.match.venue}` : ""}{day ? ` · ${day}` : ""}</>
-              : <>went nowhere{r.queueReason ? ` · ${r.queueReason}` : ""}{day ? ` · for ${day}` : ""}</>}
+              /* WHAT IT READS NOW, AND WHAT IT WAS QUEUED AS — both, never one. The operator needs
+                 to see it is readable today; the struck-through reason is how anyone later knows
+                 what the parser used to do. The stored reason is NOT overwritten to make the row
+                 tidy — nothing on this page writes. */
+              : rereadRescues && reread
+                ? <span data-testid="veo-recent-reread">
+                    reads now as <b>{reread.code}</b> · {longDate(reread.date as string)}{reread.timeLabel ? ` · ${reread.timeLabel}` : ""}
+                    {r.queueReason && <> · queued on arrival as <s data-testid="veo-recent-was">{r.queueReason}</s>, before the parser learned this shape</>}
+                  </span>
+                : <>went nowhere{r.queueReason ? ` · ${r.queueReason}` : ""}{day ? ` · for ${day}` : ""}</>}
+            {twins > 0 && (
+              <em className="twin" data-testid="veo-recent-twin"> · {twins} other on this page has the same title</em>
+            )}
           </small>
         </span>
         {/* HOW LONG IT HAS WAITED FOR A PERSON — our clock, and only on a row nobody has acted on. */}
@@ -456,7 +512,7 @@ function RecentRowView({ r, open, onToggle, onDone }: {
         </span>
       </div>
       {open && r.state === "queued" && (
-        <RecentAssign r={r} onDone={onDone} />
+        <RecentAssign r={r} onDone={onDone} day={day} twins={twins} />
       )}
     </div>
   );
@@ -464,21 +520,40 @@ function RecentRowView({ r, open, onToggle, onDone }: {
 
 /* ASSIGN FROM HERE TOO, using the day the recording belongs to rather than the day on screen —
  * a film found in this list is usually not from the day being viewed, which is why it is here. */
-function RecentAssign({ r, onDone }: { r: RecentRow; onDone: () => void }) {
-  const [day, setDay] = useState<Payload | null>(null);
+function RecentAssign({ r, onDone, day: readDay, twins }: {
+  r: RecentRow; onDone: () => void; day: string | null; twins: number;
+}) {
+  const [dayData, setDayData] = useState<Payload | null>(null);
   const [confirming, setConfirming] = useState<AssignCandidate | null>(null);
   const { busy, err, assign, dismiss } = useAssign(r.id, onDone);
-  const target = r.match?.day ?? r.parsedMatchDate ?? null;
+  /* THE DAY COMES FROM THE RE-READ WHEN THE STORED PARSE HAS NONE. When even that reads nothing,
+   * the operator picks the day — which is a perfectly good input the page simply never asked for.
+   * Assign is no longer a control that opens onto nothing. */
+  const [picked, setPicked] = useState<string | null>(null);
+  const target = picked ?? readDay;
+  const reread = useMemo(() => rereadTitle(r.subject, r.slug), [r.subject, r.slug]);
+  // The title's own time, re-read. Null when the title has none — the gap is then not invented.
+  const titleMinutes = reread?.timeMinutes ?? r.parsedTimeMinutes ?? null;
+
+  /* Days to offer when nothing reads: the day the film arrived and the three before it. Veo
+   * processes overnight and the survey measured 18 same-day, 46 next-day and four at two to five,
+   * so the match is almost always within that window of the arrival. */
+  const nearby = useMemo(() => {
+    const base = r.receivedAt ? dayIn(r.receivedAt) : null;
+    if (!base) return [];
+    return [0, -1, -2, -3].map((d) => shiftDate(base, d));
+  }, [r.receivedAt]);
 
   useEffect(() => {
     if (!target) return;
     let live = true;
+    setDayData(null);
     void (async () => {
       try {
         const res = await authFetch(`/api/veo/day?date=${target}`);
         const j = await res.json();
-        if (live && res.ok) setDay(j as Payload);
-      } catch { /* the panel simply offers nothing */ }
+        if (live && res.ok) setDayData(j as Payload);
+      } catch { /* the panel says it could not load the day */ }
     })();
     return () => { live = false; };
   }, [target]);
@@ -487,22 +562,52 @@ function RecentAssign({ r, onDone }: { r: RecentRow; onDone: () => void }) {
     id: r.id, recordingId: r.recordingId, subject: r.subject, videoUrl: r.videoUrl,
     receivedAt: r.receivedAt, status: "queued", queueReason: r.queueReason,
     matchedApiId: null, candidateApiIds: r.candidateApiIds, score: r.score, scoreParts: null,
-    flagged: false, parsedCode: r.parsedCode, parsedMatchDate: r.parsedMatchDate,
-    parsedTimeLabel: null, parsedTimeMinutes: r.parsedTimeMinutes, postedByUserId: null,
+    flagged: false, parsedCode: reread?.code ?? r.parsedCode, parsedMatchDate: r.parsedMatchDate,
+    // THE RE-READ TIME, so the gap on each candidate is measured against what the title says today.
+    parsedTimeLabel: reread?.timeLabel ?? null, parsedTimeMinutes: titleMinutes, postedByUserId: null,
   };
 
   return (
     <div className="assign" data-testid="veo-recent-panel">
-      {!target && <p className="pnote">The title gave no date, so there is no day to offer matches from.</p>}
-      {target && !day && <p className="pnote">Loading {target}…</p>}
-      {day && <CandidateList rec={rec} data={day} busy={busy} onPick={setConfirming} />}
+      {twins > 0 && (
+        <p className="warn" data-testid="veo-recent-twin-warn">
+          {twins} other recording{twins === 1 ? "" : "s"} on this page carries the same title. If it is the same film,
+          assigning both puts two links in one chat.
+        </p>
+      )}
+      {/* NO DATE ANYWHERE: ask for one rather than dead-ending. */}
+      {!target && (
+        <div data-testid="veo-recent-picker">
+          <h4>Which day was this?</h4>
+          <p className="pnote">The title gives no date the parser can read. It arrived {r.receivedAt ? arrivedLabel(r.receivedAt) : "—"}.</p>
+          <div className="pickdays">
+            {nearby.map((d) => (
+              <button type="button" key={d} className="btn" data-testid={`veo-recent-day-${d}`} onClick={() => setPicked(d)}>
+                {longDate(d)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {target && !dayData && <p className="pnote">Loading {longDate(target)}…</p>}
+      {target && dayData && (
+        <>
+          {picked && (
+            <p className="pnote">
+              Showing {longDate(target)} because you picked it.{" "}
+              <button type="button" className="more" data-testid="veo-recent-repick" onClick={() => { setPicked(null); setDayData(null); }}>Choose another day</button>
+            </p>
+          )}
+          <CandidateList rec={rec} data={dayData} busy={busy} onPick={setConfirming} />
+        </>
+      )}
       <div className="assignfoot">
         <span className="pnote">Assigning posts the film into that match&apos;s chat. One attempt, never retried.</span>
         <button type="button" className="btn" data-testid="veo-recent-dismiss" disabled={busy} onClick={() => void dismiss()}>Not our film</button>
       </div>
       {err && <p className="warn">{err}</p>}
       {confirming && (
-        <Confirm rec={rec} target={confirming} busy={busy}
+        <Confirm rec={rec} target={confirming} busy={busy} twins={twins}
           onCancel={() => setConfirming(null)} onGo={() => void assign(confirming.apiId)} />
       )}
     </div>
@@ -553,11 +658,16 @@ function useAssign(recordingId: string, onDone: () => void) {
 }
 
 /** The confirm, which names BOTH sides. This puts a video link in a chat real players read. */
-function Confirm({ rec, target, busy, onCancel, onGo }: {
-  rec: VeoDayRecording; target: AssignCandidate; busy: boolean; onCancel: () => void; onGo: () => void;
+function Confirm({ rec, target, busy, onCancel, onGo, twins = 0 }: {
+  rec: VeoDayRecording; target: AssignCandidate; busy: boolean; onCancel: () => void; onGo: () => void; twins?: number;
 }) {
   return (
     <div className="confirm" data-testid="veo-confirm">
+      {twins > 0 && (
+        <p className="warn" data-testid="veo-confirm-twin">
+          {twins} other recording{twins === 1 ? "" : "s"} carries this same title. If it is the same film, this is a second link in that chat.
+        </p>
+      )}
       <p>
         Post <b>{rec.subject ?? rec.recordingId}</b> into{" "}
         <b>{target.name}, {target.time}{target.players != null ? `, ${target.players} players` : ""}</b>?
@@ -605,7 +715,9 @@ function CandidateList({ rec, data, busy, onPick }: {
             {!c.coded && <em data-testid="veo-cand-uncoded"> · no code names this field</em>}
           </small>
         </span>
-        <span className="cg">{gap ?? "—"}</span>
+        {/* NO TIME IN THE TITLE MEANS NO GAP. Not "0 min", not a guess — inventing a distance is
+            the page pretending to know something it does not. */}
+        <span className="cg">{gap ?? <em className="nogap">no time in the title</em>}</span>
         <span className="cf">{c.players ?? "—"}{c.capacity ? `/${c.capacity}` : ""}</span>
         <button type="button" className={`btn${gap === "exact" ? " pri" : ""}`} data-testid={`veo-assign-${c.apiId}`}
           disabled={busy} onClick={() => onPick(c)}>Assign</button>
@@ -1050,6 +1162,10 @@ const CSS = MATCH_SIDE_PANEL_CSS + `
 .veo .cand .cg{font-size:11.5px;color:var(--ink3);font-weight:700}
 .veo .cand.exact .cg{color:var(--ok)}
 .veo .cand .cf{font-size:11.5px;color:var(--ink2);font-variant-numeric:tabular-nums;text-align:right}
+.veo .cand .cg .nogap{font-style:normal;color:var(--ink3);font-weight:600}
+.veo .pickdays{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 4px}
+.veo .rrow .warn{margin-bottom:8px}
+.veo .twin{font-style:normal;color:var(--flag);font-weight:700}
 .veo .more{border:0;background:none;color:var(--ink2);font-size:11.5px;font-weight:700;cursor:pointer;padding:3px 0;text-decoration:underline}
 .veo .assignfoot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;flex-wrap:wrap}
 .veo .assignfoot .pnote{margin:0}
@@ -1074,7 +1190,8 @@ const CSS = MATCH_SIDE_PANEL_CSS + `
 .veo .rwhen em{font-style:normal;font-size:10.5px;font-weight:800;color:var(--flag)}
 .veo .rwhat{display:flex;flex-direction:column;min-width:0}
 .veo .rwhat b{font-size:12.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.veo .rwhat small{color:var(--ink3);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.veo .rwhat small{color:var(--ink3);font-size:11px;overflow:hidden;text-overflow:ellipsis}
+.veo .rwhat small s{opacity:.75}
 .veo .rwait{text-align:right}
 .veo .rwait em{font-style:normal;font-size:10.5px;font-weight:700;color:var(--ink3)}
 /* OUR clock, once it has been days. A film nobody has acted on is a match whose players never got it. */
