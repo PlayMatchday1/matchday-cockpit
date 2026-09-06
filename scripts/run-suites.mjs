@@ -213,6 +213,11 @@ const NODE_SUITES = [
   // the day. Both look like numbers on screen. Asserted over all 7,776 five-match combinations,
   // plus the score trace summing to the score on the row over all 180 score shapes.
   "scripts/veo-day-test.ts",
+  // "RECENTLY UPLOADED" — the Veo page's second axis, and two clocks that are easy to get subtly
+  // wrong. received_at is a true instant, a match's start_date is a wall clock, and subtracting one
+  // from the other silently turns "5 days late" into "4" for every film that arrives overnight —
+  // which is most of them. Also pins that a hand-assignment is not counted as a post here either.
+  "scripts/veo-recent-test.ts",
   // The mirror write-through: only on LANDED, only the read-back value, production only.
   "scripts/mirror-writethrough-test.ts",
   // The Gusto payroll CSV — proves the email alias moved no amount or memo.

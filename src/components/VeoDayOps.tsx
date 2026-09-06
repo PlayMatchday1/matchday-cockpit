@@ -28,6 +28,10 @@ import {
   FILM_STATES, FILM_STATE_LABEL, emptyTally, gapLabel, scoreTrace, tallyAddsUp,
   type AssignCandidate, type FilmState, type VeoDayRecording, type VeoDayRow, type VeoDayTally,
 } from "@/lib/veoDay";
+import {
+  ARRIVAL_ZONE, RECENT_STATE_LABEL, RECENT_STATE_TONE, WAIT_ALARM_DAYS, daySourceOf, isResolved, lagDays,
+  lagLabel, lagWorthSaying, waitDays, waitLabel, type RecentState,
+} from "@/lib/veoRecent";
 
 type Payload = {
   date: string;
@@ -265,10 +269,226 @@ export default function VeoDayOps() {
         </p>
       )}
 
+      {/* THE SECOND AXIS. Everything above is indexed by the day a match was PLAYED; this is the
+          same recordings ordered by when the FILM ARRIVED. It is day-independent on purpose — it
+          does not refetch when the day nav moves, because a film that landed today for last Tuesday
+          is exactly what you cannot find by walking the days. */}
+      <RecentlyUploaded city={city} />
+
       <p className="foot">
         A row is here because some <code>veo_codes</code> row names its field. A score appears only when it is below 100 —
         eight rows reading 100 say nothing eight times. A row with no score at all was decided before scoring existed.
       </p>
+    </div>
+  );
+}
+
+/* ── RECENTLY UPLOADED: THE PAGE'S SECOND AXIS ─────────────────────────────────────────────────
+ * Everything above is indexed by the day a match was PLAYED. Films arrive on Veo's schedule, and
+ * measured over every recording with a match day: 18 arrived same-day, 46 next-day, and four
+ * arrived two, three or five days later. The five-day one is real — SCISS | 1 sep | 8pm, played
+ * Sep 1, arrived Sep 6 — and on a page organised by Sep 1 it is invisible unless you already knew
+ * to go back and look, which is the thing you would be using this page to find out.
+ *
+ * DAY-INDEPENDENT ON PURPOSE. It does not refetch when the day nav moves; it refetches when the
+ * city filter does, because that changes which rows an operator is looking at.
+ */
+type RecentRow = {
+  id: string; recordingId: string; subject: string | null; videoUrl: string | null;
+  receivedAt: string | null; state: RecentState; queueReason: string | null; score: number | null;
+  candidateApiIds: number[]; parsedCode: string | null; parsedMatchDate: string | null;
+  parsedTimeMinutes: number | null; city: string | null;
+  match: { apiId: number; name: string; venue: string | null; city: string | null; day: string | null } | null;
+};
+
+const arrivedLabel = (iso: string | null): string => {
+  if (!iso || !Number.isFinite(Date.parse(iso))) return "—";
+  // The arrival is a TRUE INSTANT, so it is rendered in a named zone rather than in UTC — the
+  // opposite of the match dates above, which are wall clocks. See src/lib/veoRecent.ts.
+  return new Date(Date.parse(iso)).toLocaleString("en-US", {
+    month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: ARRIVAL_ZONE,
+  });
+};
+
+function RecentlyUploaded({ city }: { city: string }) {
+  const [rows, setRows] = useState<RecentRow[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [unpostedOnly, setUnpostedOnly] = useState(false);
+  const [limit, setLimit] = useState(30);
+  const [more, setMore] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0);
+
+  useEffect(() => {
+    let live = true;
+    setLoading(true); setErr(null);
+    void (async () => {
+      try {
+        const q = new URLSearchParams({ limit: String(limit) });
+        if (unpostedOnly) q.set("filter", "unposted");
+        if (city !== "all") q.set("city", city);
+        const res = await authFetch(`/api/veo/recent?${q.toString()}`);
+        const j = await res.json();
+        if (!live) return;
+        if (!res.ok) { setErr(j?.error || `Load failed (${res.status})`); setRows([]); return; }
+        setRows(j.rows as RecentRow[]);
+        setMore(j.more === true);
+      } catch (e) {
+        if (live) { setErr(e instanceof Error ? e.message : String(e)); setRows([]); }
+      } finally { if (live) setLoading(false); }
+    })();
+    return () => { live = false; };
+  }, [limit, unpostedOnly, city, nonce]);
+
+  const shown = rows ?? [];
+
+  return (
+    <section className="recent" data-testid="veo-recent">
+      <div className="rhead">
+        <div>
+          <h3>Recently uploaded</h3>
+          <p>Every film that has arrived, newest arrival first, whatever day it was played on.</p>
+        </div>
+        {/* ONE FILTER, NOT A STATUS DROPDOWN WITH FIVE ENTRIES NOBODY WILL USE. */}
+        <div className="rfilter">
+          <button type="button" data-testid="veo-recent-all" className={!unpostedOnly ? "on" : ""}
+            onClick={() => { setUnpostedOnly(false); setOpenId(null); }}>All</button>
+          <button type="button" data-testid="veo-recent-unposted" className={unpostedOnly ? "on" : ""}
+            onClick={() => { setUnpostedOnly(true); setOpenId(null); }}>Not posted</button>
+        </div>
+      </div>
+
+      {loading && !rows && <p className="empty">Loading arrivals…</p>}
+      {err && <p className="warn" data-testid="veo-recent-error">{err}</p>}
+      {rows && shown.length === 0 && !err && (
+        <p className="empty" data-testid="veo-recent-empty">
+          {unpostedOnly ? "Every film that has arrived has gone somewhere." : "No films have arrived."}
+        </p>
+      )}
+
+      {shown.map((r) => <RecentRowView key={r.id} r={r} open={openId === r.id}
+        onToggle={() => setOpenId(openId === r.id ? null : r.id)}
+        onDone={() => { setOpenId(null); setNonce((n) => n + 1); }} />)}
+
+      {/* DERIVED FROM THE ROWS ON SCREEN, so it follows the filter rather than describing the table. */}
+      {rows && shown.length > 0 && (
+        <div className="rfoot">
+          <span data-testid="veo-recent-count">
+            {shown.length} {unpostedOnly ? "not posted" : "arrival"}{shown.length === 1 ? "" : unpostedOnly ? "" : "s"} shown
+          </span>
+          {more && (
+            <button type="button" className="more" data-testid="veo-recent-more" onClick={() => setLimit(limit + 30)}>
+              Load 30 more
+            </button>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function RecentRowView({ r, open, onToggle, onDone }: {
+  r: RecentRow; open: boolean; onToggle: () => void; onDone: () => void;
+}) {
+  const matchDay = r.match?.day ?? null;
+  const source = daySourceOf(matchDay, r.parsedMatchDate);
+  const day = matchDay ?? r.parsedMatchDate;
+  const lag = lagDays(r.receivedAt, day);
+  const wait = isResolved(r.state) ? null : waitDays(r.receivedAt);
+
+  return (
+    <div className={`rrow ${RECENT_STATE_TONE[r.state]}${open ? " open" : ""}`}
+      data-testid="veo-recent-row" data-state={r.state} data-recording-id={r.id}>
+      <div className="rtop">
+        <span className="rwhen">
+          <b>{arrivedLabel(r.receivedAt)}</b>
+          {/* HOW LATE THE FILM WAS — Veo's clock. Same-day and next-day are the normal case and
+              earn no room; two or more days is the case this section exists for. */}
+          {lagWorthSaying(lag) && (
+            <em data-testid="veo-recent-lag" data-days={lag ?? ""} data-source={source}>
+              {lagLabel(lag)}{source === "title" ? " (from the title)" : ""}
+            </em>
+          )}
+        </span>
+        <span className="rwhat">
+          <b>{r.subject ?? r.recordingId}</b>
+          <small>
+            {r.match
+              ? <>went into {r.match.name}{r.match.venue ? ` · ${r.match.venue}` : ""}{day ? ` · ${day}` : ""}</>
+              : <>went nowhere{r.queueReason ? ` · ${r.queueReason}` : ""}{day ? ` · for ${day}` : ""}</>}
+          </small>
+        </span>
+        {/* HOW LONG IT HAS WAITED FOR A PERSON — our clock, and only on a row nobody has acted on. */}
+        <span className="rwait">
+          {wait != null && (
+            <em data-testid="veo-recent-wait" data-days={wait}
+              className={wait >= WAIT_ALARM_DAYS ? "alarm" : ""}>{waitLabel(wait)}</em>
+          )}
+        </span>
+        <span className={`pill ${RECENT_STATE_TONE[r.state]}`} data-testid="veo-recent-state">
+          {RECENT_STATE_LABEL[r.state]}
+        </span>
+        <span className="ractions">
+          {/* BACK TO ITS OWN DAY. That is the whole point of finding it here. */}
+          {day && <a className="btn" data-testid="veo-recent-day" href={`/match-ops/veo?date=${day}`}>Its day</a>}
+          {r.state === "queued" && (
+            <button type="button" className="btn" data-testid="veo-recent-assign" onClick={onToggle}>
+              {open ? "Close" : "Assign"}
+            </button>
+          )}
+        </span>
+      </div>
+      {open && r.state === "queued" && (
+        <RecentAssign r={r} onDone={onDone} />
+      )}
+    </div>
+  );
+}
+
+/* ASSIGN FROM HERE TOO, using the day the recording belongs to rather than the day on screen —
+ * a film found in this list is usually not from the day being viewed, which is why it is here. */
+function RecentAssign({ r, onDone }: { r: RecentRow; onDone: () => void }) {
+  const [day, setDay] = useState<Payload | null>(null);
+  const [confirming, setConfirming] = useState<AssignCandidate | null>(null);
+  const { busy, err, assign, dismiss } = useAssign(r.id, onDone);
+  const target = r.match?.day ?? r.parsedMatchDate ?? null;
+
+  useEffect(() => {
+    if (!target) return;
+    let live = true;
+    void (async () => {
+      try {
+        const res = await authFetch(`/api/veo/day?date=${target}`);
+        const j = await res.json();
+        if (live && res.ok) setDay(j as Payload);
+      } catch { /* the panel simply offers nothing */ }
+    })();
+    return () => { live = false; };
+  }, [target]);
+
+  const rec: VeoDayRecording = {
+    id: r.id, recordingId: r.recordingId, subject: r.subject, videoUrl: r.videoUrl,
+    receivedAt: r.receivedAt, status: "queued", queueReason: r.queueReason,
+    matchedApiId: null, candidateApiIds: r.candidateApiIds, score: r.score, scoreParts: null,
+    flagged: false, parsedCode: r.parsedCode, parsedMatchDate: r.parsedMatchDate,
+    parsedTimeLabel: null, parsedTimeMinutes: r.parsedTimeMinutes, postedByUserId: null,
+  };
+
+  return (
+    <div className="assign" data-testid="veo-recent-panel">
+      {!target && <p className="pnote">The title gave no date, so there is no day to offer matches from.</p>}
+      {target && !day && <p className="pnote">Loading {target}…</p>}
+      {day && <CandidateList rec={rec} data={day} busy={busy} onPick={setConfirming} />}
+      <div className="assignfoot">
+        <span className="pnote">Assigning posts the film into that match&apos;s chat. One attempt, never retried.</span>
+        <button type="button" className="btn" data-testid="veo-recent-dismiss" disabled={busy} onClick={() => void dismiss()}>Not our film</button>
+      </div>
+      {err && <p className="warn">{err}</p>}
+      {confirming && (
+        <Confirm rec={rec} target={confirming} busy={busy}
+          onCancel={() => setConfirming(null)} onGo={() => void assign(confirming.apiId)} />
+      )}
     </div>
   );
 }
@@ -752,12 +972,39 @@ const CSS = `
 .veo .upsub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .veo .upwhy{color:var(--look);font-weight:700;font-size:11.5px;text-align:right}
 .veo .upnote{color:var(--ink3);font-size:11.5px;text-align:right}
+/* RECENTLY UPLOADED — the second axis, under the day list. */
+.veo .recent{margin-top:26px;border-top:1px solid var(--line);padding-top:16px}
+.veo .rhead{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:10px;flex-wrap:wrap}
+.veo .rhead h3{margin:0;font-size:15px;font-weight:800;letter-spacing:-.01em}
+.veo .rhead p{margin:2px 0 0;font-size:11.5px;color:var(--ink3)}
+.veo .rfilter{display:flex;gap:6px}
+.veo .rfilter button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:4px 11px;font-size:11.5px;font-weight:700;color:var(--ink2);cursor:pointer}
+.veo .rfilter button.on{background:var(--ink1);border-color:var(--ink1);color:#fff}
+.veo .rrow{border:1px solid var(--line);border-radius:10px;background:#fff;margin-bottom:6px;overflow:hidden}
+.veo .rtop{display:grid;grid-template-columns:150px minmax(0,1fr) 118px 128px 132px;gap:10px;align-items:center;padding:9px 12px}
+.veo .rwhen{display:flex;flex-direction:column;min-width:0}
+.veo .rwhen b{font-size:12.5px;font-weight:800;font-variant-numeric:tabular-nums}
+.veo .rwhen em{font-style:normal;font-size:10.5px;font-weight:800;color:var(--flag)}
+.veo .rwhat{display:flex;flex-direction:column;min-width:0}
+.veo .rwhat b{font-size:12.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.veo .rwhat small{color:var(--ink3);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.veo .rwait{text-align:right}
+.veo .rwait em{font-style:normal;font-size:10.5px;font-weight:700;color:var(--ink3)}
+/* OUR clock, once it has been days. A film nobody has acted on is a match whose players never got it. */
+.veo .rwait em.alarm{color:var(--look)}
+.veo .ractions{display:flex;gap:6px;justify-content:flex-end}
+.veo .ractions .btn{padding:4px 9px;font-size:11px}
+.veo .rrow .assign{padding:0 12px 12px}
+.veo .rfoot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;font-size:11.5px;color:var(--ink3)}
 .veo .empty{padding:26px 0;text-align:center;color:var(--ink3);font-size:13px}
 .veo .warn{border:1px solid #f0c9bd;background:#fdeee9;color:var(--look);border-radius:9px;padding:9px 12px;font-size:12.5px;font-weight:600}
 .veo .foot{margin:16px 0 0;font-size:11.5px;color:var(--ink3);line-height:1.5}
 .veo code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;background:var(--bg);padding:1px 4px;border-radius:4px}
 
 @media (max-width:900px){
+  .veo .rtop{grid-template-columns:minmax(0,1fr) 120px;row-gap:6px}
+  .veo .rwait{grid-column:1;text-align:left}
+  .veo .ractions{grid-column:2}
   .veo .tally{grid-template-columns:repeat(3,minmax(0,1fr))}
   .veo .viewer{grid-template-columns:1fr}
   .veo .rowtop{grid-template-columns:64px minmax(0,1fr) 40px 22px;row-gap:5px}

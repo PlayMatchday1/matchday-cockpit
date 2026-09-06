@@ -230,6 +230,9 @@ const CONFINED_ROUTE_EXACT: readonly string[] = [
   "/api/veo/day",
   // The still frame for one recording on that page. Exact, same reason.
   "/api/veo/thumb",
+  // "Recently uploaded" on the same page. Exact, same reason — and it scopes every row through the
+  // recording's match or its code before returning it.
+  "/api/veo/recent",
   /* THE DOOR TO THE CHATS PAGE, and it was shut while every room behind it was open.
    *
    * /api/match-chats/ is on the prefix list, so a confined account's chat LIST rendered perfectly —

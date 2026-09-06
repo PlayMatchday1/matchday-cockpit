@@ -343,6 +343,10 @@ for (const r of ["list", "detail/[id]", "fields", "matches", "check"]) {
     /* ADDED 2026-09-01. The Month view's data: a date RANGE instead of a Monday-anchored week.
      * Same gate and same session-resolved city scope as /api/veo — it is the same read. */
     "veo/range/route.ts": "crm",
+    /* ADDED 2026-09-06. "Recently uploaded" — the same recordings ordered by ARRIVAL rather than by
+     * match day. Same gate; the city scope is resolved through the recording's match or its code,
+     * because veo_recordings carries no city of its own. */
+    "veo/recent/route.ts": "crm",
     "veo/resync/route.ts": "capability",            // GET (read one match's intent) + POST (toggle it)
     "veo/route.ts": "crm",
     /* ADDED 2026-09-05. Reads one recording's og:image so the viewer can show a real still frame
