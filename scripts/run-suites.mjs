@@ -195,6 +195,12 @@ const NODE_SUITES = [
   // as a message players read, and the looser thresholds mean a mis-read title now posts rather
   // than queueing. src/lib/veo.test.ts ran under no command until this line existed.
   "scripts/veo-matcher-test.ts",
+  // THE DAY VIEW'S ARITHMETIC. Its tally strip is also its filter, so the five film states must
+  // partition the day exactly — a match in the total and in no state is a row nobody can click,
+  // and a flagged post counted under both "posted" and "flagged" makes the strip add to more than
+  // the day. Both look like numbers on screen. Asserted over all 7,776 five-match combinations,
+  // plus the score trace summing to the score on the row over all 180 score shapes.
+  "scripts/veo-day-test.ts",
   // The mirror write-through: only on LANDED, only the read-back value, production only.
   "scripts/mirror-writethrough-test.ts",
   // The Gusto payroll CSV — proves the email alias moved no amount or memo.

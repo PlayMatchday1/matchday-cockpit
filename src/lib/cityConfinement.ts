@@ -76,7 +76,12 @@ export const CONFINED_CAPABILITIES: ReadonlySet<string> = new Set(["matchops", "
 
 /** The rail's six, by their MATCH_OPS_SECTIONS keys. The rail is a courtesy; the server decides. */
 export const CONFINED_RAIL_KEYS: readonly string[] = [
-  "gameday", "player-lookup", "promos", "reviews", "match-chats", "player-chats",
+  "gameday", "player-lookup",
+  /* VEO. Warsaw has camera matches, so a confined operator needs the page that says whether their
+   * films landed. The boundary is NOT this list — /api/veo/day filters mdapi_matches on
+   * city_identifier from the SESSION, in SQL. This only decides what appears in the rail. */
+  "veo",
+  "promos", "reviews", "match-chats", "player-chats",
   /* SEVENTH, AND THE FIRST WRITE SURFACE A CONFINED ACCOUNT HAS. Everything above it is read-only;
    * Master Schedule carries Copy match and the inline editor so a new market can build its own
    * schedule. The write boundary is NOT this list — it is assertMatchInScope on the editor's save
@@ -218,6 +223,13 @@ export const CONFINED_ROUTE_PREFIXES: readonly string[] = [
  * refused — a confined account reads its week and changes no fleet configuration. */
 const CONFINED_ROUTE_EXACT: readonly string[] = [
   "/api/veo",
+  /* THE DAY VIEW, EXACT, for the reason directly above. "/api/veo/" as a prefix would open
+   * /api/veo/codes and /api/veo/inbound with it. fetchVeoRange's rule applies here too: the route
+   * is safe to open only because it filters mdapi_matches on city_identifier taken from the
+   * SESSION, in SQL, and never from a query parameter. */
+  "/api/veo/day",
+  // The still frame for one recording on that page. Exact, same reason.
+  "/api/veo/thumb",
   /* THE DOOR TO THE CHATS PAGE, and it was shut while every room behind it was open.
    *
    * /api/match-chats/ is on the prefix list, so a confined account's chat LIST rendered perfectly —

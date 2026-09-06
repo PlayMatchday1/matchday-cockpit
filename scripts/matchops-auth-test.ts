@@ -331,6 +331,10 @@ for (const r of ["list", "detail/[id]", "fields", "matches", "check"]) {
     "veo/cameras/route.ts": "crm",
     "veo/codes/[id]/route.ts": "capability",  // ITEMISED: was "admin" — now Match Ops
     "veo/codes/route.ts": "capability",       // ITEMISED: was "admin" — now Match Ops
+    /* ADDED 2026-09-05. The Daily Ops day view: one day of camera matches and their films. Same
+     * gate and the same session-resolved city scope as /api/veo — a confined account reads its own
+     * city's day, filtered in SQL, and the route takes no city parameter to override it. */
+    "veo/day/route.ts": "crm",
     "veo/inbound/route.ts": "shared-secret", // machine-to-machine from the Gmail forwarder, no session
     "veo/intent/route.ts": "crm",
     /* ADDED 2026-09-01. Re-pulls one week of matches from MatchDay into the mirror for Master
@@ -341,6 +345,11 @@ for (const r of ["list", "detail/[id]", "fields", "matches", "check"]) {
     "veo/range/route.ts": "crm",
     "veo/resync/route.ts": "capability",            // GET (read one match's intent) + POST (toggle it)
     "veo/route.ts": "crm",
+    /* ADDED 2026-09-05. Reads one recording's og:image so the viewer can show a real still frame
+     * instead of a black rectangle. Same gate; the Veo URL comes from the ROW, never the request,
+     * and its host is checked besides. Listed LAST because this map is compared key-order against
+     * an alphabetical scan of the directory, and "thumb" sorts after "route.ts". */
+    "veo/thumb/route.ts": "crm",
   });
   // and the one unauthenticated route really does compare its secret rather than merely mention it
   { const inbound = readFileSync("src/app/api/veo/inbound/route.ts", "utf8");

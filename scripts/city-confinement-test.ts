@@ -144,9 +144,12 @@ console.log("\n── the sentence on the User access screen ──");
    * Asserting the contents was not enough and could not have caught it. scripts/warsaw-city-test.ts
    * now asserts every key in this list resolves to a real MATCH_OPS_SECTIONS key, which is the
    * check that had been stated in a comment and never written. */
-  t("the confined rail is exactly these seven, in order", () =>
+  // Eight since 2026-09-05: Veo joined it. Warsaw has camera matches, so a confined operator needs
+  // the page that says whether their films landed; /api/veo/day scopes the rows in SQL from the
+  // session's city, which is the boundary — this list only decides what appears in the rail.
+  t("the confined rail is exactly these eight, in order", () =>
     assert.deepEqual([...CONFINED_RAIL_KEYS],
-      ["gameday", "player-lookup", "promos", "reviews", "match-chats", "player-chats", "master"]));
+      ["gameday", "player-lookup", "veo", "promos", "reviews", "match-chats", "player-chats", "master"]));
 
   const waw = confinementSummary({ cityName: "Warsaw", isCityManager: false, pageCount: CONFINED_RAIL_KEYS.length });
   t("a city manager is told about city manager pages", () => assert.match(cm, /city manager pages only$/));

@@ -178,11 +178,23 @@ export async function POST(req: Request) {
     const loadCandidates = await buildLoader(supabase, subject, ref.slug, codes);
     const decision = classifyVeo({ subject, slug: ref.slug, loadCandidates, codes, codesAuthoritative });
 
+    /* WHAT THE MATCHER DECIDED, AND HOW SURE IT WAS — written on EVERY branch below.
+     *
+     * score_parts is the whole VeoScore object, not four columns, because the review page renders
+     * it as a trace and must never re-parse a subject to explain a decision that was already made.
+     * A trace derived a second time can disagree with its own total; one read off the row cannot.
+     *
+     * `flagged` is not a status. A flagged row POSTED — the flag says a component of the read was
+     * inferred rather than certain (a code matched inside a field label, a misspelled month). A
+     * queued row is never flagged; it did not post at all. */
     const parsedFields = {
       parsed_code: decision.code,
       parsed_match_date: decision.matchDate,
       parsed_time_minutes: decision.timeMinutes,
       parsed_time_label: decision.timeLabel,
+      match_score: decision.score?.total ?? null,
+      score_parts: decision.score ?? null,
+      flagged: decision.action === "post" && decision.flagged,
     };
     const now = new Date().toISOString();
 
@@ -228,6 +240,10 @@ export async function POST(req: Request) {
             ...parsedFields,
             status: "queued",
             queue_reason: "post_failed",
+            // It did not post, so it is not a flagged post. `flagged` means "this went out on an
+            // inference"; carrying the decision's flag onto a row that sent nothing would put it
+            // in the Posted, flagged column of a page it never reached.
+            flagged: false,
             candidate_api_ids: [decision.apiId],
             updated_at: now,
           })
