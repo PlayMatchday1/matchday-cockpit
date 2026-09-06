@@ -24,6 +24,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import MatchSidePanel, { MATCH_SIDE_PANEL_CSS, type PanelTab } from "@/components/MatchSidePanel";
 import {
   FILM_STATES, FILM_STATE_LABEL, emptyTally, gapLabel, scoreTrace, tallyAddsUp,
   type AssignCandidate, type FilmState, type VeoDayRecording, type VeoDayRow, type VeoDayTally,
@@ -120,6 +121,12 @@ export default function VeoDayOps() {
   const [city, setCity] = useState<string>("all");
   const [openId, setOpenId] = useState<number | null>(null);
   const [assignId, setAssignId] = useState<string | null>(null);
+  /* THE MATCH CHAT, in the panel Gameday Ops already built. Ryan: "there should be a button match
+   * chat to that match so you can see the thread where its posted in side editor like gameday ops
+   * does and check in on the chat where the link got posted." It opens on CHAT, because on a posted
+   * row the chat is the question, not the match's details. */
+  const [panelMatch, setPanelMatch] = useState<number | null>(null);
+  const [panelTab, setPanelTab] = useState<PanelTab>("chat");
 
   const load = useCallback(async (d: string) => {
     setLoading(true); setErr(null);
@@ -235,7 +242,8 @@ export default function VeoDayOps() {
         {rows.map((r) => (
           <Row key={r.apiId} r={r} data={data!} open={openId === r.apiId}
             onToggle={() => setOpenId(openId === r.apiId ? null : r.apiId)}
-            onDone={() => { setOpenId(null); void load(date); }} />
+            onDone={() => { setOpenId(null); void load(date); }}
+            onOpenChat={(apiId) => { setPanelTab("chat"); setPanelMatch(apiId); }} />
         ))}
       </div>
 
@@ -274,6 +282,14 @@ export default function VeoDayOps() {
           does not refetch when the day nav moves, because a film that landed today for last Tuesday
           is exactly what you cannot find by walking the days. */}
       <RecentlyUploaded city={city} />
+
+      {/* The same panel, the same two tabs, the same ChatPane. The Veo page has no CRM dock to
+          collapse and no sibling list to step through, so it passes neither — the component assumes
+          neither either. */}
+      {panelMatch != null && (
+        <MatchSidePanel matchId={panelMatch} width={600} tab={panelTab}
+          onTab={setPanelTab} onClose={() => setPanelMatch(null)} />
+      )}
 
       <p className="foot">
         A row is here because some <code>veo_codes</code> row names its field. A score appears only when it is below 100 —
@@ -672,8 +688,8 @@ function Orphan({ u, data, open, onToggle, onDone }: {
 }
 
 
-function Row({ r, data, open, onToggle, onDone }: {
-  r: VeoDayRow; data: Payload; open: boolean; onToggle: () => void; onDone: () => void;
+function Row({ r, data, open, onToggle, onDone, onOpenChat }: {
+  r: VeoDayRow; data: Payload; open: boolean; onToggle: () => void; onDone: () => void; onOpenChat: (apiId: number) => void;
 }) {
   const rec = r.primary;
   const score = rec?.score ?? null;
@@ -693,29 +709,35 @@ function Row({ r, data, open, onToggle, onDone }: {
         <span className="sc" data-testid="veo-row-score">{score != null && score < 100 ? score : ""}</span>
         <span className="chev" aria-hidden>{open ? "▾" : "›"}</span>
       </button>
-      {open && <Viewer r={r} data={data} onDone={onDone} />}
+      {open && <Viewer r={r} data={data} onDone={onDone} onOpenChat={onOpenChat} />}
     </div>
   );
 }
 
-function Viewer({ r, data, onDone }: { r: VeoDayRow; data: Payload; onDone: () => void }) {
+function Viewer({ r, data, onDone, onOpenChat }: { r: VeoDayRow; data: Payload; onDone: () => void; onOpenChat: (apiId: number) => void }) {
   const rec = r.primary;
-  /* The still frame is fetched when the row opens, never with the day — a day of rows would be a
-   * scrape of app.veo.co per row for pictures nobody had asked to see yet. */
-  const [thumb, setThumb] = useState<string | null | undefined>(undefined);
+  /* The still frame AND the film URL are fetched when the row opens, never with the day — a day of
+   * rows would be a scrape of app.veo.co per row for pictures nobody had asked to see yet. ONE
+   * request returns both; the film itself is not touched until somebody presses play. */
+  const [media, setMedia] = useState<{ thumb: string | null; video: string | null } | undefined>(undefined);
+  const [playing, setPlaying] = useState(false);
+  const [videoFailed, setVideoFailed] = useState(false);
   const recId = rec?.id ?? null;
   useEffect(() => {
     if (!recId) return;
     let live = true;
+    setPlaying(false); setVideoFailed(false);
     void (async () => {
       try {
         const res = await authFetch(`/api/veo/thumb?id=${recId}`);
         const j = await res.json();
-        if (live) setThumb(res.ok ? (j.thumbnail as string | null) : null);
-      } catch { if (live) setThumb(null); }
+        if (live) setMedia(res.ok ? { thumb: (j.thumbnail as string | null) ?? null, video: (j.video as string | null) ?? null } : { thumb: null, video: null });
+      } catch { if (live) setMedia({ thumb: null, video: null }); }
     })();
     return () => { live = false; };
   }, [recId]);
+  const thumb = media?.thumb;
+  const video = media?.video ?? null;
   const trace = scoreTrace(rec?.scoreParts ?? null);
   const posted = r.state === "posted" || r.state === "flagged" || r.state === "assigned";
   const [picking, setPicking] = useState(false);
@@ -732,16 +754,52 @@ function Viewer({ r, data, onDone }: { r: VeoDayRow; data: Payload; onDone: () =
             {/* NO IFRAME IS ATTEMPTED. Measured: app.veo.co sends x-frame-options: DENY and a
                 frame-ancestors list this origin is not on. A thumbnail and a link is the whole of
                 what is possible, so that is what ships. */}
-            <div className="thumb">
-              {thumb ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={thumb} alt="" data-testid="veo-thumb" />
+            {/* THE PLAY GLYPH IS A BUTTON NOW, AND IT PLAYS THE FILM. It was a <span> with
+                pointer-events:none, which is the literal answer to "what does this do" — nothing.
+                No iframe is involved: the mp4 sits in the same CDN folder as the still frame and is
+                public, so a plain <video> works where an embed never could.
+
+                NOTHING IS FETCHED UNTIL THE CLICK. The <video> is not created until then and
+                carries preload="none", so a day of expanded rows streams nothing.
+
+                THE STAGE KEEPS ITS BOX. The video replaces the poster inside the same 16:9
+                container rather than appearing below it, so nothing on the page moves. */}
+            <div className="thumb" data-testid="veo-stage">
+              {playing && video && !videoFailed ? (
+                // eslint-disable-next-line jsx-a11y/media-has-caption
+                <video
+                  data-testid="veo-video"
+                  src={video}
+                  controls
+                  autoPlay
+                  playsInline
+                  preload="none"
+                  poster={thumb ?? undefined}
+                  onError={() => { setVideoFailed(true); setPlaying(false); }}
+                />
               ) : (
-                <span className="tnote" data-testid="veo-thumb-none">
-                  {thumb === undefined ? "Loading the still frame…" : "No still frame published for this film."}
-                </span>
+                <>
+                  {thumb ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={thumb} alt="" data-testid="veo-thumb" />
+                  ) : (
+                    <span className="tnote" data-testid="veo-thumb-none">
+                      {thumb === undefined ? "Loading the still frame…" : "No still frame published for this film."}
+                    </span>
+                  )}
+                  {video && (
+                    <button
+                      type="button"
+                      className="play"
+                      data-testid="veo-play"
+                      aria-label="Play the film"
+                      onClick={() => { setVideoFailed(false); setPlaying(true); }}
+                    >
+                      ▶
+                    </button>
+                  )}
+                </>
               )}
-              <span className="play" aria-hidden>▶</span>
             </div>
             {/* THE RECORDING'S OWN SUBJECT, not the row's time. More than one recording can attach
                 to a match (the Pearland pair shortlists both), so a panel headed with the MATCH's
@@ -750,8 +808,15 @@ function Viewer({ r, data, onDone }: { r: VeoDayRow; data: Payload; onDone: () =
               <b data-testid="veo-rec-subject">{rec.subject ?? `${r.code} · ${r.time}`}</b>
               <span className="rid">{rec.recordingId}</span>
             </div>
-            <a className="btn pri" data-testid="veo-open-in-veo" href={rec.videoUrl} target="_blank" rel="noreferrer">Open in Veo</a>
-            <p className="pnote">Veo refuses to be embedded (<code>x-frame-options: DENY</code>), so the film plays on their site.</p>
+            {/* DEMOTED TO A TEXT LINK. Veo's own page has the tactical tools and the highlights;
+                this page is for checking in on a match in ten seconds. */}
+            <p className="pnote">
+              {videoFailed
+                ? <>That film would not play — Veo may still be processing it. <a href={rec.videoUrl} target="_blank" rel="noreferrer" data-testid="veo-open-in-veo">Open in Veo</a>.</>
+                : video
+                  ? <>Streams from Veo&apos;s CDN, about 1.8 GB a match, and only the part you watch is fetched. <a href={rec.videoUrl} target="_blank" rel="noreferrer" data-testid="veo-open-in-veo">Open in Veo</a> for the tactical tools.</>
+                  : <>No playable file for this recording yet. <a href={rec.videoUrl} target="_blank" rel="noreferrer" data-testid="veo-open-in-veo">Open in Veo</a>.</>}
+            </p>
           </>
         ) : (
           <div className="nofilm" data-testid="veo-no-film">
@@ -777,10 +842,25 @@ function Viewer({ r, data, onDone }: { r: VeoDayRow; data: Payload; onDone: () =
             Pearland recordings stopped being orphans and became rows — so the assign panel had to
             be reachable from HERE, which is now the common case, not only from the orphan strip. */}
         <div className="acts" data-testid="veo-actions">
+          {/* THE CHAT THE LINK LANDED IN, one click away. The thread id IS the match api id —
+              proven, and no second lookup. It opens on the Chat tab because on a posted row the
+              chat is the question, not the match's details. */}
+          <button type="button" className="btn" data-testid="veo-match-chat"
+            onClick={() => onOpenChat(r.apiId)}>
+            Match chat · {r.apiId}
+          </button>
           {posted ? (
             <>
-              <button className="btn pri" disabled>Right match, clear the flag</button>
-              <button className="btn" disabled>Wrong match, move it</button>
+              {/* THERE IS NO FLAG ON A CLEAN POST, SO THERE IS NOTHING TO CLEAR. The buttons used
+                  to branch on "has it posted", which swept a score of 100 in with a flagged one and
+                  offered "Right match, clear the flag" directly above a trace reading "Nothing was
+                  guessed, so it posted without a flag". Only a FLAGGED post is on a list to come
+                  off. */}
+              {r.state === "flagged" && (
+                <button type="button" className="btn pri" data-testid="veo-clear-flag" disabled>Right match, clear the flag</button>
+              )}
+              <button type="button" className="btn" data-testid="veo-move" disabled>Wrong match, move it</button>
+              <button type="button" className="btn" data-testid="veo-not-ours" disabled>Not our film</button>
             </>
           ) : rec ? (
             <>
@@ -803,9 +883,10 @@ function Viewer({ r, data, onDone }: { r: VeoDayRow; data: Payload; onDone: () =
           )}
         </div>
         {posted && (
-          <p className="pnote">
-            These two are not wired yet — drawn disabled rather than shipped live, because both of them write into a
-            chat players read.
+          <p className="pnote" data-testid="veo-posted-note">
+            {r.state === "flagged"
+              ? "It posted on an inferred read, so it is still on the flagged list until somebody says it is right."
+              : "Nothing was inferred, so this row is already off the review list — there is no flag to clear."}
           </p>
         )}
         {rec && !posted && (
@@ -856,7 +937,8 @@ function Viewer({ r, data, onDone }: { r: VeoDayRow; data: Payload; onDone: () =
   );
 }
 
-const CSS = `
+/* The panel's own rules, because this page is not `.gdo` and does not inherit Gameday's. */
+const CSS = MATCH_SIDE_PANEL_CSS + `
 .veo{--ink1:#0f1c17;--ink2:#3d5049;--ink3:#7c8f88;--line:#e3e9e6;--bg:#fbfcfc;
   --ok:#128a5c;--flag:#b8791f;--hand:#2f7d8f;--hold:#5b6b9e;--look:#c0563a;--none:#8a9691;
   padding:18px 20px 60px;max-width:1180px;margin:0 auto;color:var(--ink1);
@@ -917,8 +999,13 @@ const CSS = `
   background:linear-gradient(160deg,#16211d,#0c130f);display:flex;align-items:center;justify-content:center}
 .veo .thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .veo .tnote{color:rgba(255,255,255,.6);font-size:12px;padding:0 14px;text-align:center}
-.veo .play{position:relative;width:54px;height:54px;border-radius:999px;background:rgba(12,19,15,.55);color:#fff;
-  display:flex;align-items:center;justify-content:center;font-size:19px;backdrop-filter:blur(2px)}
+/* A REAL CONTROL: 64px, focusable, and big enough to hit. */
+.veo .play{position:relative;width:64px;height:64px;border:0;border-radius:999px;background:rgba(12,19,15,.62);color:#fff;
+  display:flex;align-items:center;justify-content:center;font-size:22px;backdrop-filter:blur(2px);cursor:pointer;padding:0}
+.veo .play:hover{background:rgba(12,19,15,.78)}
+.veo .play:focus-visible{outline:3px solid #fff;outline-offset:2px}
+/* The film takes the SAME box the poster had, so replacing one with the other moves nothing. */
+.veo .thumb video{position:absolute;inset:0;width:100%;height:100%;background:#000}
 .veo .pmeta{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 .veo .pmeta b{font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .veo .rid{font-size:11px;color:var(--ink3);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}

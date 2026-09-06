@@ -18,14 +18,13 @@ import { supabase } from "@/lib/supabase";
 import { envBadge } from "@/lib/matchEnvBadge";
 import { DRAWER_ENV } from "@/lib/matchEnv";
 import { centsToDollars } from "@/lib/matchMoney";
-import MatchPanel from "@/components/MatchPanel";
+import MatchSidePanel from "@/components/MatchSidePanel";
 import { useCrmConversationOptional } from "@/lib/crmConversation";
 import LogHealthBanner from "@/components/LogHealthBanner";
 import MatchOpsSectionSheet from "@/app/(internal)/match-ops/MatchOpsSectionSheet";
 import MatchOpsMobileBar from "@/app/(internal)/match-ops/MatchOpsMobileBar";
 import type { RailItem } from "@/app/(internal)/match-ops/sections";
 import RefreshIcon from "@/components/RefreshIcon";
-import ChatPane from "@/app/(internal)/match-ops/match-chats/ChatPane";
 import { useAuth, canEditMatches } from "@/lib/useAuth";
 import {
   type ApiMatch, type BoardFilter, type MatchGroup, GROUPS, byKickoff, matchGroup, minsUntil, fmtDur, localClock, deadlineClock, tzAbbr,
@@ -826,43 +825,24 @@ export default function GamedayBoard({
           control that looks live. The routes behind it refuse this tier as well; this is the UI
           half of the same statement. */}
       {drawerId != null && !onOpenMatch && (
-        <aside className={"gpanel" + (coexist ? " coexist" : "")} data-testid="gday-panel" style={{ ["--panel-w" as string]: `${panelW}px`, right: coexist ? DOCK_W : 0 }}>
-          <div className="gpanel-bar">
-            <button className="gpanel-x" data-testid="gday-panel-close" aria-label="Close panel" onClick={closeDrawer}>✕ Close</button>
-            <span className="gpanel-step">
-              <button data-testid="gday-prev" aria-label="Previous match" disabled={stepIdx <= 0} onClick={() => step(-1)}>‹</button>
-              <button data-testid="gday-next" aria-label="Next match" disabled={stepIdx < 0 || stepIdx >= drawerSiblings.length - 1} onClick={() => step(1)}>›</button>
-            </span>
-          </div>
-          {dockNotice && (
+        <MatchSidePanel
+          matchId={drawerId}
+          className={coexist ? "coexist" : ""}
+          width={panelW}
+          right={coexist ? DOCK_W : 0}
+          tab={panelTab}
+          onTab={setPanelTab}
+          onClose={closeDrawer}
+          onDirtyChange={setDrawerDirty}
+          steps={{ onPrev: () => step(-1), onNext: () => step(1),
+            canPrev: stepIdx > 0, canNext: stepIdx >= 0 && stepIdx < drawerSiblings.length - 1 }}
+          notice={dockNotice ? (
             <div className="gpanel-notice" data-testid="gday-dock-notice">
               Chat dock collapsed to make room — reopen it any time from the tab on the right; the thread and your draft are kept.
               <button onClick={() => setDockNotice(false)} aria-label="Dismiss">Got it</button>
             </div>
-          )}
-          {/* THE TAB STRIP. Two tabs, one panel. */}
-          <div className="gpanel-tabs" role="tablist" data-testid="gday-panel-tabs">
-            <button type="button" role="tab" data-testid="gday-tab-details"
-              aria-selected={panelTab === "details"} className={panelTab === "details" ? "on" : ""}
-              onClick={() => setPanelTab("details")}>Details</button>
-            <button type="button" role="tab" data-testid="gday-tab-chat"
-              aria-selected={panelTab === "chat"} className={panelTab === "chat" ? "on" : ""}
-              onClick={() => setPanelTab("chat")}>Chat</button>
-          </div>
-          {/* DETAILS IS HIDDEN, NOT UNMOUNTED. Unmounting it would throw away unsaved edits on
-              every tab switch — the operator changes the minimum, flips to Chat to ask the manager
-              about it, comes back and the change is gone. */}
-          <div className={"gpanel-body" + (panelTab === "details" ? "" : " gpanel-hide")}
-            data-testid="gday-panel-details" aria-hidden={panelTab !== "details"}>
-            <MatchPanel key={drawerId} matchId={String(drawerId)} onDirtyChange={setDrawerDirty} />
-          </div>
-          {/* CHAT RESOLVES THE THREAD THE WAY IT WAS PROVEN TO RESOLVE: chatId is the match api_id.
-              No second lookup, and the same ChatPane the standalone console uses. */}
-          <div className={"gpanel-body gpanel-chat" + (panelTab === "chat" ? "" : " gpanel-hide")}
-            data-testid="gday-panel-chat" aria-hidden={panelTab !== "chat"} data-chat-id={String(drawerId)}>
-            <ChatPane chatId={String(drawerId)} showOnMobile={false} embedded onBack={() => setPanelTab("details")} />
-          </div>
-        </aside>
+          ) : null}
+        />
       )}
       {toast && <div className={"toast" + (toast.bad ? " bad" : "")} data-testid="toast">{toast.t}</div>}
       <MatchOpsSectionSheet open={pickerOpen} onClose={() => setPickerOpen(false)} />

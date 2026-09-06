@@ -16,6 +16,7 @@ import "server-only"; // no-op under --conditions=react-server
  *   NODE_OPTIONS=--conditions=react-server npx tsx scripts/veo-day-test.ts
  */
 import { readFileSync } from "node:fs";
+import { videoFromThumb } from "../src/app/api/veo/thumb/route";
 import {
   FILM_STATES, attachedTo, buildDayRows, filmState, gapLabel, scoreTrace, tally, tallyAddsUp, traceSum,
   type VeoDayMatch, type VeoDayRecording, type VeoScoreParts,
@@ -304,6 +305,96 @@ console.log("\n— a replayed email must not re-decide a row somebody has alread
   ? ok("…and the guard sits BEFORE the re-drive, not after it")
   : bad("the re-drive is reachable without passing the guard");
 
+console.log("\n— the play control, and where the playable file comes from —");
+/* THE IFRAME CONCLUSION IS UNCHANGED: app.veo.co sends x-frame-options: DENY and a frame-ancestors
+ * list this origin is not on, so no embed will ever work. But the mp4 sits in the SAME CDN folder
+ * as the still frame and is public — measured today: HEAD 200, content-type video/mp4,
+ * accept-ranges: bytes, ~1.65-2.0 GB, and index.m3u8 in the same folder answers 403. */
+const REAL = "https://c.veocdn.com/3a862560-5a17-4021-a8b3-733173b2d43f/standard/machine/10e3cc24/thumbnail.jpg";
+is("a real still frame yields the film beside it", videoFromThumb(REAL),
+  "https://c.veocdn.com/3a862560-5a17-4021-a8b3-733173b2d43f/standard/machine/10e3cc24/video.mp4");
+/* THE HOST IS CHECKED ON THE PARSED HOST, never as a substring — this string CONTAINS
+ * "c.veocdn.com" and must not pass. */
+is("a look-alike host is refused", videoFromThumb("https://c.veocdn.com.evil.example/x/thumbnail.jpg"), null);
+is("…and so is a subdomain that merely ends in it", videoFromThumb("https://evil.c.veocdn.com/x/thumbnail.jpg"), null);
+is("a path that is not a thumbnail is refused", videoFromThumb("https://c.veocdn.com/x/standard/machine/y/preview.png"), null);
+is("…including one that only contains the word", videoFromThumb("https://c.veocdn.com/x/thumbnail.jpg.exe"), null);
+is("junk is refused rather than guessed at", videoFromThumb("not a url"), null);
+is("http is refused — the origin is carried through, and it must be the https one",
+  videoFromThumb("http://c.veocdn.com/x/standard/machine/y/thumbnail.jpg"), "http://c.veocdn.com/x/standard/machine/y/video.mp4");
+
+const THUMB = noComments(readFileSync("src/app/api/veo/thumb/route.ts", "utf8"));
+/u\.host !== "c\.veocdn\.com"/.test(THUMB)
+  ? ok("the guard compares the PARSED host")
+  : bad("the host guard is not on the parsed host");
+/return Response\.json\(\{ thumbnail: url, video \}\)/.test(THUMB)
+  ? ok("one scrape returns both URLs — no second round trip for the film")
+  : bad("the film needs its own request");
+
+/* NOTHING IS FETCHED UNTIL THE CLICK. A day of expanded rows must not start streaming films
+ * nobody asked to watch. */
+/playing && video && !videoFailed \?/.test(PAGE_C)
+  ? ok("the <video> is not created until play is pressed")
+  : bad("the video element is mounted before anyone asks for it");
+/preload="none"/.test(PAGE_C) ? ok("…and carries preload=\"none\"") : bad("the video preloads");
+/<button[\s\S]{0,200}data-testid="veo-play"/.test(PAGE_C)
+  ? ok("the play control is a BUTTON, not a decorative span")
+  : bad("the play glyph is still not a control");
+/onError=\{\(\) => \{ setVideoFailed\(true\); setPlaying\(false\); \}\}/.test(PAGE_C)
+  ? ok("a film that will not play falls back to the still frame in place")
+  : bad("a failed film leaves a black rectangle");
+!/<iframe/i.test(PAGE_C) ? ok("still no iframe anywhere") : bad("an iframe came back");
+
+console.log("\n— the two verdict buttons stop offering a flag that is not there —");
+/\{r\.state === "flagged" && \(\s*<button[\s\S]{0,160}veo-clear-flag/.test(PAGE_C)
+  ? ok("only a FLAGGED post is offered 'clear the flag'")
+  : bad("a clean post is still offered a flag to clear");
+/data-testid="veo-move"/.test(PAGE_C) && /data-testid="veo-not-ours"/.test(PAGE_C)
+  ? ok("…and every posted row is offered move and not-ours")
+  : bad("the other two actions are missing");
+!/not wired yet|drawn disabled rather than shipped live/.test(PAGE)
+  ? ok("the 'not wired yet' caption is gone from the page entirely")
+  : bad("a note written to Ryan in a mock is still production copy");
+
+console.log("\n— the match chat, in the panel Gameday Ops already built —");
+/* LIFTED, NOT COPIED, and it keeps Gameday's class names on purpose: the panel's styles live in
+ * GamedayBoard's own CSS string scoped `.gdo .gpanel…`, so renaming them would have meant editing
+ * that stylesheet and re-proving a heavily-used page looks the same. The DOM and the classes are
+ * byte-identical to what GamedayBoard rendered before. */
+const PANEL = noComments(readFileSync("src/components/MatchSidePanel.tsx", "utf8"));
+const GDAY = noComments(readFileSync("src/components/GamedayBoard.tsx", "utf8"));
+/<MatchSidePanel/.test(GDAY)
+  ? ok("Gameday Ops renders the lifted panel rather than its own copy")
+  : bad("Gameday Ops still has its own panel chrome");
+!/<ChatPane/.test(GDAY) && !/<MatchPanel/.test(GDAY)
+  ? ok("…and no longer mounts ChatPane or MatchPanel directly")
+  : bad("Gameday Ops still mounts the panel's children itself");
+/onDirtyChange=\{setDrawerDirty\}/.test(GDAY)
+  ? ok("…and its unsaved-edit guard is passed THROUGH, not dropped")
+  : bad("the lift silently disabled Gameday's dirty guard");
+/steps=\{\{ onPrev/.test(GDAY)
+  ? ok("…and its prev/next stepping with it")
+  : bad("Gameday lost its panel stepping");
+/data-testid="gday-panel-chat"/.test(PANEL) && /chatId=\{String\(matchId\)\}/.test(PANEL)
+  ? ok("the chat resolves off the match api id, with no second lookup")
+  : bad("the chat does not key on the match id");
+/gpanel-hide/.test(PANEL) && /aria-hidden=\{tab !== "details"\}/.test(PANEL)
+  ? ok("Details is hidden, not unmounted, so an edit survives a flip")
+  : bad("flipping tabs unmounts the details panel");
+/steps && \(/.test(PANEL)
+  ? ok("a host with no sibling list gets no stepping control at all")
+  : bad("the panel assumes a sibling list");
+!/crm|dock/i.test(PANEL)
+  ? ok("…and the component assumes no CRM dock — the Veo page has none")
+  : bad("the lifted panel reaches for the dock");
+/data-testid="veo-match-chat"/.test(PAGE_C) && /onOpenChat\(r\.apiId\)/.test(PAGE_C)
+  ? ok("the Veo row opens it on the row's own match id")
+  : bad("no Match chat control on the Veo row");
+/setPanelTab\("chat"\); setPanelMatch\(apiId\)/.test(PAGE_C)
+  ? ok("…on the CHAT tab, because on a posted row the chat is the question")
+  : bad("the panel does not open on Chat");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
+
 
