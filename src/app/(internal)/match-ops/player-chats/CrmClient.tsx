@@ -959,7 +959,7 @@ export default function CrmClient() {
             )}
           </section>
 
-          {/* ---- PLAYER CONTEXT (292px, hidden < 1260px + toggle) ---- */}
+          {/* ---- PLAYER CONTEXT (392px, hidden < 1260px + toggle) ---- */}
           {selectedThread && !contextHidden && <ContextPane threadId={selectedThread.id} phone={selectedThread.phone_number} />}
         </div>
       </div>

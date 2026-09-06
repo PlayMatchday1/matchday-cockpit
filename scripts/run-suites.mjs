@@ -161,6 +161,12 @@ const NODE_SUITES = [
   "scripts/seam-stripped-test.ts",
   "scripts/matchops-auth-test.ts",
   "scripts/crm-push-test.ts",
+  // THE PLAYER CHATS CONTEXT PANE. Every section header states its section's answer while shut, so
+  // the summaries must be DERIVED from the rows under them — a header written separately goes stale
+  // silently on a pane whose job is answering a billing question. Also rations the colour (a clean
+  // player has no red anywhere), keeps the pane from linking a thread, and pins that the pane and
+  // Player Lookup share ONE profile mapping so they cannot quote different balances.
+  "scripts/context-pane-test.ts",
   // THE DOCKED CHAT'S CANNED LINES. A snippet lands in the operator's draft one keystroke from a
   // player, so a line that states a membership fact must not exist for a player who has no
   // membership, and a cancellation line must not exist for a membership nobody cancelled. Both

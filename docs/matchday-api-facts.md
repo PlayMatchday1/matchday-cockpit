@@ -2118,6 +2118,31 @@ enough against the mirror — it over-counts by every soft-deleted row (15 of 81
 Capacity is `mdapi_matches.max_player_count`. Proven over 1,000 matches / 33,399 roster rows:
 summed derived spots 21,731 = summed `player_count` 21,731, exact on every match.
 
+## `/admin/players/{id}.matches[]` OMITS every booking whose MATCH was cancelled (2026-09-06)
+
+**Measured on five players holding a booking on a cancelled match: five omitted, zero present.**
+
+```
+player 85796  mirror: 2 bookings on cancelled match 18321 (Parmer Sep 5)  API matches[]: 2 rows, neither of them
+player 28     mirror: 1   API omits 1  (API total 491)
+player 155    mirror: 1   API omits 1  (API total 334)
+player 449    mirror: 1   API omits 1  (API total  23)
+player 813    mirror: 1   API omits 1  (API total 283)
+```
+
+The API's own `state: "cancelled"` therefore only ever means **the PLAYER cancelled their booking**
+(`userMatch.isCancelled`). A match the club called off leaves no row at all. **Player Lookup's match
+history has never shown one**, and neither would anything else built on this endpoint.
+
+`mdapi_match_players` DOES keep them (`is_cancelled=false` on the row, `is_cancelled=true` on the
+match), so the mirror is the only source for "the club cancelled this". The Player Chats context
+pane merges the two lists for exactly this reason — the player who wrote *"Where's my match credit"*
+had two bookings on a cancelled Parmer match and the API list for him contains neither.
+
+**Beware the duplicate rows.** The mirror carries one row per registration, and a player who booked
+two spots has two rows for the same `match_api_id` (85796 has two on 17353 and two on 18321).
+De-duplicate on `match_api_id` before counting matches.
+
 ## `canceledAt` is the moment they pressed cancel, and `status` does NOT change (2026-09-04)
 
 **A cancelled-at-period-end subscription keeps `status: "ACTIVE"` until the period runs out.**

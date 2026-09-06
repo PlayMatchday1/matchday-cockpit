@@ -1,5 +1,22 @@
-// GET /api/crm/threads/[id]/context — player + match data for the
-// ContextPane right column / mobile sheet.
+// GET /api/crm/threads/[id]/context — EVERYTHING the ContextPane shows about a player.
+//
+// WHAT THIS ROUTE USED TO BE, AND WHY IT CHANGED. It read the mirror only: name, city, played and
+// no-show counts, recent matches. ContextPane's own header explained the gaps — no membership
+// renewal date because "no renewal column exists", no action buttons because there was "no
+// player-profile route". BOTH OF THOSE WERE TRUE WHEN WRITTEN AND ARE NOT TRUE NOW:
+// /match-ops/player-lookup exists, and /admin/players/{id} carries the subscription's status,
+// renewal, price and cancellation.
+//
+// The pane was not thin because the data was missing. It was asking a smaller route.
+//
+// The case that forced it: a player wrote "Where's my match credit" and the reply was "Click
+// profile on the app and it will show your credits" — a redirect, not an answer, sent because the
+// pane showed matches played and no-shows and not the balance. His balance was $16.24, one field
+// away on a page the operator would have had to leave the conversation to open.
+//
+// ONE REQUEST PER THREAD SWITCH, which is why the MatchDay profile and the Stripe charges are
+// assembled HERE rather than left to the client to fetch separately. Both are wrapped so that a
+// failure of either degrades one section instead of blanking the pane.
 //
 // Split out from /api/crm/threads/[id] so the chat pane can render
 // the moment messages arrive. This endpoint holds the heavier
@@ -28,9 +45,18 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { toNationalDigits } from "@/lib/phone";
 import { isPastMatch, matchStartMs } from "@/lib/matchTime";
+import { apiGet } from "@/lib/matchdayStageApi";
+import { buildProfile, type PlayerProfile } from "@/lib/playerProfile";
+import { fetchPlayerPayments, type PaymentsResult } from "@/lib/stripePayments";
+import { cityNameFor } from "@/lib/cityScope";
+import { CONFINED_CITY_ERROR } from "@/lib/cityConfinement";
+import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 
 export const runtime = "nodejs";
-export const maxDuration = 10;
+// WIDER NOW, AND SLOWER BY DESIGN. It makes two MatchDay reads and one Stripe read on top of the
+// mirror queries, because the alternative is the pane firing a second round trip on every thread
+// switch and an operator watching it land.
+export const maxDuration = 30;
 
 type RouteCtx = { params: Promise<{ id: string }> };
 
@@ -142,17 +168,127 @@ export async function GET(req: Request, ctx: RouteCtx) {
     );
   }
 
+  /* ── THE LOOKUP HALF ───────────────────────────────────────────────────────────────────────
+   * The same mapping /api/lookup uses, from src/lib/playerProfile.ts, so the pane and the page
+   * cannot quote different numbers for the same player.
+   *
+   * THE CITY BOUNDARY IS REPEATED HERE, NOT INHERITED. /api/lookup refuses ?id= for a player
+   * outside a confined account's city; this route is gated by authenticateCrm, which is a
+   * different gate. Serving the profile without the same check would make the chat pane a way
+   * around the refusal on the page. */
+  let profile: PlayerProfile | null = null;
+  let payments: { ok: true; result: PaymentsResult } | { ok: false; error: string } | null = null;
+  if (thread.player_id != null) {
+    const [rawRes, listRes] = await Promise.allSettled([
+      apiGet<Record<string, unknown>>(ENV, `/admin/players/${thread.player_id}`),
+      apiGet<{ data?: Record<string, unknown>[] }>(ENV, `/admin/players`, { id: thread.player_id, limit: 1, page: 1 })
+        .then((r) => (Array.isArray(r) ? r[0] : (r.data ?? [])[0]) ?? null),
+    ]);
+    const raw = rawRes.status === "fulfilled" ? rawRes.value : null;
+    const listRow = listRes.status === "fulfilled" ? listRes.value : null;
+
+    if (auth.confinedCity) {
+      const want = cityNameFor(auth.confinedCity);
+      const pc = ((listRow ?? {}) as Record<string, unknown>).preferableCity as Record<string, unknown> | undefined;
+      const has = pc && typeof pc.name === "string" ? pc.name : null;
+      if (has !== want) return Response.json({ error: CONFINED_CITY_ERROR }, { status: 403 });
+    }
+
+    if (raw) {
+      try {
+        profile = await buildProfile({
+          raw, listRow,
+          resolveActor: async (userId) => {
+            const b = await apiGet<Record<string, unknown>>(ENV, `/admin/players/${userId}`).catch(() => null);
+            const bd = b && typeof b === "object" && "data" in b ? (b.data as Record<string, unknown>) : b;
+            const r = bd as Record<string, unknown> | null;
+            return r ? [r.firstName, r.lastName].filter((x) => typeof x === "string").join(" ").trim() || null : null;
+          },
+        });
+      } catch (e) {
+        console.error("[crm:threads.context] profile build failed", e);
+      }
+    }
+
+    /* STRIPE IS LIVE MONEY AND IT FAILS ON ITS OWN. The Player Lookup page keeps payments on a
+     * separate endpoint for exactly this reason — "so it can fail on its own without blanking the
+     * rest of the page". Folding it in here keeps the one-request rule; the try/catch keeps the
+     * property. A pane with no Payments section still answers every other question. */
+    const email = (profile?.player.email ?? player?.email ?? null) as string | null;
+    try {
+      payments = { ok: true, result: await fetchPlayerPayments(email, String(thread.player_id)) };
+    } catch (e) {
+      console.error("[crm:threads.context] payments read failed", e instanceof Error ? e.message.slice(0, 120) : e);
+      payments = { ok: false, error: "Stripe could not be read right now." };
+    }
+  }
+
+  /* ── THE MATCH HISTORY THE API DOES NOT HAVE ───────────────────────────────────────────────
+   * MEASURED, on five players: /admin/players/{id}.matches[] OMITS EVERY BOOKING WHOSE MATCH WAS
+   * CANCELLED. Five bookings on cancelled matches, five absent from the API's list, none present.
+   * So Player Lookup's match history has never shown one — its "cancelled" state only ever fires
+   * for a booking the PLAYER cancelled, never for a match the club called off.
+   *
+   * That is exactly the history this pane exists to show. The player who wrote "Where's my match
+   * credit" had two bookings on a cancelled Parmer match, and the API list for him is two matches
+   * with neither of them in it.
+   *
+   * So the two lists are MERGED: the API's rows are authoritative where they exist (they carry the
+   * price, the charge and the attendance status), and any match the mirror knows about that the API
+   * left out is appended. One list, so the section and its summary cannot disagree, and the played
+   * count still equals the one Player Lookup prints. */
+  const apiIds = new Set((profile?.matches ?? []).map((m) => m.matchId).filter((x): x is number => x != null));
+  // recent_matches carries a derived `status`; upcoming_matches carries `is_cancelled` and is, by
+  // construction, upcoming. Normalised here rather than assuming one shape covers both.
+  const mirrorRows: { match_api_id: number; venue: string | null; start_date: string | null; start_date_utc: string | null; state: "cancelled" | "upcoming" | "played" }[] = [
+    ...recent_matches.map((m) => ({
+      match_api_id: m.match_api_id, venue: m.venue, start_date: m.start_date, start_date_utc: m.start_date_utc,
+      state: (m.status === "Canceled" ? "cancelled" : m.status === "Upcoming" ? "upcoming" : "played") as "cancelled" | "upcoming" | "played",
+    })),
+    ...upcoming_matches.map((m) => ({
+      match_api_id: m.match_api_id, venue: m.venue, start_date: m.start_date, start_date_utc: m.start_date_utc,
+      state: (m.is_cancelled ? "cancelled" : "upcoming") as "cancelled" | "upcoming" | "played",
+    })),
+  ];
+  const mirrorOnly = mirrorRows
+    .filter((m) => !apiIds.has(m.match_api_id))
+    .filter((m, i, a) => a.findIndex((x) => x.match_api_id === m.match_api_id) === i)
+    .map((m) => ({
+      matchId: m.match_api_id,
+      name: m.venue ?? `Match ${m.match_api_id}`,
+      startDate: m.start_date,
+      startDateUtc: m.start_date_utc,
+      price: 0,
+      charged: null,
+      userStatus: null,
+      state: m.state,
+      // Says where the row came from, because the two sources disagree and the operator should
+      // not have to wonder why a match is here that the full page does not list.
+      mirrorOnly: true as const,
+    }));
+  const match_history = [...(profile?.matches ?? []).map((m) => ({ ...m, mirrorOnly: false as const })), ...mirrorOnly]
+    .sort((a, b) => (Date.parse(b.startDateUtc ?? b.startDate ?? "") || 0) - (Date.parse(a.startDateUtc ?? a.startDate ?? "") || 0));
+
   return Response.json(
     {
       player,
       membership,
+      match_history,
       recent_matches,
       upcoming_matches,
       historical_account_count,
+      // The lookup half. Null when the thread has no player, or when the API read failed —
+      // the pane shows the sections it can and says which one is missing.
+      profile,
+      payments,
     },
-    { status: 200 },
+    { status: 200, headers: { "cache-control": "no-store" } },
   );
 }
+
+// The environment the Player Lookup page reads, so the pane and the page cannot disagree about
+// WHICH MatchDay they are quoting.
+const ENV = FULL_EDITOR_ENV;
 
 // ============================================================
 // Membership lookup (fin_members)
