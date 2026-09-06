@@ -12,6 +12,8 @@ import {
   resolveMatchDate,
   resolveMatchDates,
   chooseOne,
+  damerau,
+  MIN_FUZZY_CODE_LEN,
   resolveVeoCodeScored,
   scoreVeo,
   bandFor,
@@ -772,7 +774,7 @@ test("VEO_FIELD_CODES: the fallback constant agrees with the live veo_codes tabl
   // ATH Pearland") against 16 on 32, so naming only 32 left every Pearland match off the page and
   // every Pearland recording in the queue. Same physical pitch, same pattern as SC's 102/199.
   assert.deepEqual(VEO_FIELD_CODES.ATHP.fieldIds, [22, 32]);
-  assert.equal(Object.keys(VEO_FIELD_CODES).length, 12);
+  assert.equal(Object.keys(VEO_FIELD_CODES).length, 17);
   for (const key of Object.keys(VEO_FIELD_CODES)) {
     assert.match(key, /^[A-Z]+$/, `${key} must be a bare code — the table has no spaces in it`);
   }
@@ -893,4 +895,116 @@ test("classifyVeo: the right match wins even when a wrong-field match is nearer 
   });
   assert.equal(d.action, "post");
   if (d.action === "post") assert.equal(d.apiId, 9150); // 55 min away, but the only agreeing one
+});
+
+// =====================================================================
+// THE SHORT-TOKEN FLOOR, THE LABEL READ BOTH WAYS, AND THREE TITLE SHAPES
+// =====================================================================
+
+test("resolveVeoCodeScored: below four characters, an exact match or nothing", () => {
+  /* MEASURED, not chosen. Enumerating every possible token against the codes table, the share that
+   * resolves NON-EXACTLY is 37% at two characters and 4.4% at three, against ~1% at four. With
+   * "AR" in the table, AA AB AD AE AG AH AI AJ AK … every one is one edit from Ann Richards and
+   * nothing else is close enough to make it ambiguous — the uniqueness rule cannot save a namespace
+   * that small, and the failure it lets through is not a queue, it is a film in another city's chat. */
+  assert.equal(MIN_FUZZY_CODE_LEN, 4);
+
+  // The real codes still resolve, because exact and punctuation-stripped matching is untouched.
+  for (const [token, want] of [["AR", "AR"], ["SC", "SC"], ["OC", "OC"], ["WL", "WL"], ["LBJ", "LBJ"]] as const) {
+    assert.equal(resolveVeoCodeScored(token).key, want, token);
+  }
+  assert.equal(resolveVeoCodeScored("a.r").key, "AR");   // squashed is still an exact comparison
+
+  // …and nothing one edit away from them does.
+  for (const near of ["AA", "AB", "AK", "AL", "SD", "OD", "WM", "LBI", "LBK", "SCJ"]) {
+    assert.equal(resolveVeoCodeScored(near).key, null, `${near} must not resolve`);
+  }
+  // The exact case that motivated it: AR resolves, AL does not, and before the floor AL would have.
+  assert.equal(resolveVeoCodeScored("AL").tier, "none");
+});
+
+test("resolveVeoCodeScored: a real code with a one-character typo still resolves", () => {
+  // The floor must not make the resolver stupid about long tokens. PRMUC is a transposition.
+  assert.equal(resolveVeoCodeScored("PRMUC").key, "PRUMC");
+  assert.equal(resolveVeoCodeScored("ATHK").key, "ATHK");
+  assert.equal(resolveVeoCodeScored("ATH K").key, "ATHK");
+  assert.equal(resolveVeoCodeScored("KESWCIK").key, "KESWICK"); // transposition in a 7-letter code
+});
+
+test("resolveVeoCodeScored: SICSS reaches Scissortail without a row of its own", () => {
+  /* It looked like the distance or the threshold. IT WAS NEITHER: the resolver already uses
+   * Damerau at distance 1, and damerau("SICSS","SCISS") is 1 — but "SCISS" is not a KEY. The key
+   * is "SCI"; "SCISS" reaches Scissortail by appearing inside the LABEL, and containment has no
+   * notion of distance, so a one-character slip inside a label word had nowhere to be caught. */
+  assert.equal(resolveVeoCodeScored("SCISS").key, "SCI");   // containment, as before
+  assert.equal(resolveVeoCodeScored("SICSS").key, "SCI");   // one edit from the label's prefix
+  assert.equal(damerau("SICSS", "SCISS"), 1);
+  assert.equal(damerau("SICSS", "SCI"), 3);                 // which is why the key tier could not
+  // Two edits is still nothing — the tier is distance 1, like every other fuzzy tier here.
+  assert.equal(resolveVeoCodeScored("SIXSS").key, null);
+});
+
+test("normalizeVeoSubject: the three shapes, on real titles from the survey", () => {
+  const parses = (s: string) => parseVeoSubject(s).ok;
+  // 17 recordings: a space before the colon.
+  assert.ok(parses("KESWICK |SEP 4 | 8 :00pm is ready to watch!"));
+  // 8 recordings: an ordinal day.
+  assert.ok(parses("SC-Sep 4th-9pm is ready to watch!"));
+  assert.ok(parses("LBJ Aug 25th 8pm  is ready to watch!"));
+  // 15 recordings: a Spanish month.
+  assert.ok(parses("SCISS | 30 ago | 8pm is ready to watch!"));
+  // And the code token is no longer wearing the date's punctuation.
+  const p = parseVeoSubject("SATXMD/9-2-26/10pm is ready to watch!");
+  assert.ok(p.ok);
+  if (p.ok) assert.equal(p.value.code, "SATXMD");   // not "SATXMD/"
+});
+
+test("normalizeVeoSubject: Spanish and Portuguese are a LOCALE, not one string", () => {
+  /* All 16 come from ONE Veo account — "OKC", every one of them Scissortail Park. An account that
+   * writes "ago" in August writes "ene" in January, so the whole month set goes in rather than the
+   * token that happened to show up. */
+  const month = (s: string) => {
+    const p = parseVeoSubject(`SCISS | 8 ${s} | 8pm`);
+    return p.ok ? p.value.month : null;
+  };
+  const es = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+  es.forEach((m, i) => assert.equal(month(m), i + 1, `Spanish ${m}`));
+  const pt = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+  pt.forEach((m, i) => assert.equal(month(m), i + 1, `Portuguese ${m}`));
+  // The abbreviations these accounts actually send.
+  for (const [abbr, n] of [["ene", 1], ["abr", 4], ["ago", 8], ["set", 9], ["dic", 12], ["dez", 12]] as const) {
+    assert.equal(month(abbr), n, abbr);
+  }
+  // "Partido" is the Spanish for "Match" and was being read as the code.
+  const p = parseVeoSubject("Partido jul 28, 2026 | 8pm is ready to watch!");
+  assert.ok(p.ok);
+  if (p.ok) { assert.equal(p.value.month, 7); assert.equal(p.value.day, 28); }
+});
+
+test("normalizeVeoSubject: it rewrites nothing that already worked", () => {
+  // The normalisation runs on every title, so the shapes that parse today must be untouched by it.
+  for (const s of [
+    "SC | Jul 24 | 8:00PM", "SC | 2026-07-24 | 8:00PM", "SCISS | 24 jul | 8pm",
+    "SC | 7/24 | 8:00PM", "PRUMC | July 31| 7:00pm", "SC | Jul 24 | 20:00",
+  ]) {
+    const a = parseVeoSubject(s);
+    assert.ok(a.ok, s);
+  }
+  // A "th" that is part of a word is not an ordinal suffix.
+  const p = parseVeoSubject("NORTH | Jul 24 | 8:00PM");
+  assert.ok(p.ok);
+  if (p.ok) assert.equal(p.value.code, "NORTH");
+});
+
+test("VEO_FIELD_CODES: the five codes added on 2026-09-06 are in the constant too", () => {
+  // The fallback only IDENTIFIES a code — codes_unavailable still refuses to post from it — but a
+  // constant that has drifted from the table makes a review page name the wrong venue.
+  assert.deepEqual(VEO_FIELD_CODES.AR.fieldIds, [1651]);
+  assert.deepEqual(VEO_FIELD_CODES.LBJ.fieldIds, [1486]);
+  assert.deepEqual(VEO_FIELD_CODES.TOMBALL.fieldIds, [1288]);
+  assert.deepEqual(VEO_FIELD_CODES.PARMER.fieldIds, [1585]);
+  assert.deepEqual(VEO_FIELD_CODES.KESWICK.fieldIds, [1717]);
+  // SATXMD is deliberately absent: it is an alias for Soccer Central, not a venue, and Ryan
+  // decided those recordings stay queued.
+  assert.equal(VEO_FIELD_CODES.SATXMD, undefined);
 });

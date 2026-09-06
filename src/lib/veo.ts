@@ -91,6 +91,19 @@ export const VEO_FIELD_CODES: Record<string, VeoFieldCode> = {
   ATHK: { finVenueId: 7, fieldIds: [892], fieldLabel: "ATH Katy", city: "Houston", confirmed: true },
   PRUMC: { finVenueId: 16, fieldIds: [958], fieldLabel: "PRUMC", city: "Atlanta", confirmed: true },
   WL: { finVenueId: 49, fieldIds: [1], fieldLabel: "Westlake HS", city: "Austin", confirmed: true },
+  /* Added to the live table 2026-09-06 and mirrored here the same day. PARMER and KESWICK were
+   * added by Ryan; AR, LBJ and TOMBALL follow the survey of what was failing to resolve. 2026 match
+   * volume, so the traffic to expect is on the record: LBJ 78, Parmer 30, Hattrick 17, Ann Richards
+   * 16, Keswick 12.
+   *
+   * SATXMD IS DELIBERATELY ABSENT. Its six recordings are Soccer Central: every date and time in
+   * them lands on an SC match on field 199 or 102, which SC already covers. It is an alias, not a
+   * venue, and Ryan decided those stay queued. */
+  PARMER: { finVenueId: 63, fieldIds: [1585], fieldLabel: "PARMER Stadium", city: "Austin", confirmed: true },
+  KESWICK: { finVenueId: 66, fieldIds: [1717], fieldLabel: "Keswick Park (Chamblee)", city: "Atlanta", confirmed: true },
+  AR: { finVenueId: 65, fieldIds: [1651], fieldLabel: "Ann Richards School", city: "Austin", confirmed: true },
+  LBJ: { finVenueId: 55, fieldIds: [1486], fieldLabel: "LBJ Early College High School", city: "Austin", confirmed: true },
+  TOMBALL: { finVenueId: 52, fieldIds: [1288], fieldLabel: "The Hattrick T. (Tomball)", city: "Houston", confirmed: true },
   OC: { finVenueId: 5, fieldIds: [27], fieldLabel: "Onion Creek", city: "Austin", confirmed: true },
   HC: { finVenueId: 56, fieldIds: [1453], fieldLabel: "Hill Country MS", city: "Austin", confirmed: true },
   NEMP: { finVenueId: 0, fieldIds: [17, 10], fieldLabel: "NEMP", city: "Austin", confirmed: true },
@@ -122,6 +135,10 @@ export function resolveVeoCode(
  * EVERY FUZZY TIER MUST BE UNIQUE OR IT DOES NOT COUNT. Two codes at distance 1 is not a near
  * miss, it is a coin flip, and a coin flip puts a stranger's film in a stranger's chat. */
 export type CodeTier = "exact" | "squashed" | "prefix" | "typo" | "label" | "none";
+
+/** Tokens shorter than this resolve ONLY by an exact or punctuation-stripped match. See the block
+ *  in resolveVeoCodeScored for the measured distribution this comes from. */
+export const MIN_FUZZY_CODE_LEN = 4;
 export const CODE_SCORE: Record<CodeTier, number> = {
   exact: 40, squashed: 36, prefix: 30, typo: 24, label: 18, none: 0,
 };
@@ -166,6 +183,29 @@ export function resolveVeoCodeScored(
   const squashed = keys.filter((k) => squash(k) === sq);
   if (squashed.length === 1) return hit(squashed[0], "squashed");
 
+  /* ── BELOW FOUR CHARACTERS, EXACT ONLY ─────────────────────────────────────────────────────
+   * A short token compared fuzzily against venue names matches nearly anything, and this failure
+   * does not queue — it posts a film into another city's chat.
+   *
+   * THE THRESHOLD IS MEASURED, NOT CHOSEN. Enumerating every possible token against the live codes
+   * table, and again with AR, LBJ and TOMBALL added, the share that resolves NON-EXACTLY is:
+   *
+   *     2 characters   211 of 676   (31%)   →  248 of 676   (37%) once AR exists
+   *     3 characters   609 of 17,576 (3.5%) →  774 of 17,576 (4.4%)
+   *     4 characters   ~1%                  →  ~1.1%
+   *
+   * Adding "AR" is what makes this urgent rather than tidy: with a two-letter code in the table,
+   * AA AB AD AE AG AH AI AJ AK AM AO … every one of them lands on Ann Richards at distance 1 and
+   * nothing else is close enough to make it ambiguous. The uniqueness rule cannot save a namespace
+   * that small.
+   *
+   * FOUR, NOT THREE, because 4.4% of three-letter tokens still resolve and NOT ONE recording in
+   * the 218 we hold depends on fuzzy resolution below four characters — every short token that
+   * resolves today (SC, OC, HC, WL, LF, CC, SCI, LBJ, AR) is an exact or squashed match, both of
+   * which stay. The cost of the rule is zero against real mail; the benefit is a whole class of
+   * wrong-venue posts that cannot happen. */
+  if (sq.length < MIN_FUZZY_CODE_LEN) return miss;
+
   // A UNIQUE PREFIX EITHER WAY — "ATH" names ATHK and ATHP, so it is not unique and queues.
   const prefix = keys.filter((k) => squash(k).startsWith(sq) || sq.startsWith(squash(k)));
   if (prefix.length === 1) return hit(prefix[0], "prefix");
@@ -178,6 +218,28 @@ export function resolveVeoCodeScored(
   const lower = key.toLowerCase();
   const label = keys.filter((k) => (codes[k].fieldLabel ?? "").toLowerCase().includes(lower));
   if (label.length === 1) return hit(label[0], "label");
+
+  /* ── THE LABEL, READ THE OTHER TWO WAYS ────────────────────────────────────────────────────
+   * "SICSS" is a transposition of "SCISS" — one edit under Damerau — and it resolved to nothing,
+   * which looked like the distance being wrong or the threshold being tight. IT WAS NEITHER. The
+   * resolver already uses Damerau at distance 1 (PRMUC → PRUMC proves it), but the typo tier
+   * compares against the KEYS, and the key is "SCI"; "SCISS" is not a key at all, it reaches
+   * Scissortail by appearing INSIDE the label, and containment has no notion of distance. So a
+   * one-character slip inside a label word had nowhere to be caught.
+   *
+   * Two additions, both gated by the same four-character floor:
+   *   · the token within one edit of an equal-length PREFIX of a label word ("SICSS" vs the first
+   *     five letters of "Scissortail"), and
+   *   · a distinctive label word appearing inside the TOKEN, which is the reverse of the tier
+   *     above and is what a title like "STL MD Lou Fusz" needs.
+   * Both require a unique winner, like every other fuzzy tier here. */
+  const words = (k: string) => (codes[k].fieldLabel ?? "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= MIN_FUZZY_CODE_LEN);
+
+  const nearPrefix = keys.filter((k) => words(k).some((w) => w.length >= lower.length && damerau(lower, w.slice(0, lower.length)) === 1));
+  if (nearPrefix.length === 1) return hit(nearPrefix[0], "label");
+
+  const inToken = keys.filter((k) => words(k).some((w) => lower.includes(w)));
+  if (inToken.length === 1) return hit(inToken[0], "label");
 
   return miss;
 }
@@ -542,10 +604,53 @@ function readDate(title: string): { month: number; day: number; index: number; y
   return null;
 }
 
+/* ── THREE SHAPES, NORMALISED BEFORE PARSING RATHER THAN TAUGHT TO THE PARSER ──────────────────
+ * Measured over all 218 recordings, three shapes account for every formatting failure that has a
+ * fix: 17 with a space before the colon, 15 in Spanish, 8 with an ordinal day. Each is a way of
+ * WRITING a date or a time that the parser already understands once written differently, so they
+ * are rewritten on the way in. Teaching the parser a fourth spelling of every field would multiply
+ * the regexes; this adds one function nobody has to reason about twice.
+ *
+ * THE SPANISH IS A LOCALE, NOT A STRING. All 16 come from ONE Veo account — "OKC", every one of
+ * them Scissortail Park — and an account that writes "ago" in August will write "ene" in January
+ * and "Partido" for "Match" all year. So the full month set for Spanish AND Portuguese goes in,
+ * not the one token that has shown up. The two languages share most month names; where they differ
+ * (agosto/agosto, setembro/septiembre) both spellings are listed.
+ *
+ * It runs on a COPY for parsing only. Nothing rewrites what was stored, and the operator still
+ * sees the subject Veo actually sent. */
+const ES_PT_MONTHS: [RegExp, string][] = [
+  [/\benero\b|\bene\b|\bjaneiro\b/gi, "jan"],
+  [/\bfebrero\b|\bfeb\b|\bfevereiro\b|\bfev\b/gi, "feb"],
+  [/\bmarzo\b|\bmar\b|\bmar[çc]o\b/gi, "mar"],
+  [/\babril\b|\babr\b/gi, "apr"],
+  [/\bmayo\b|\bmaio\b/gi, "may"],
+  [/\bjunio\b|\bjunho\b|\bjun\b/gi, "jun"],
+  [/\bjulio\b|\bjulho\b|\bjul\b/gi, "jul"],
+  [/\bagosto\b|\bago\b/gi, "aug"],
+  [/\bseptiembre\b|\bsetembro\b|\bsept?\b|\bset\b/gi, "sep"],
+  [/\boctubre\b|\boutubro\b|\boct\b|\bout\b/gi, "oct"],
+  [/\bnoviembre\b|\bnovembro\b|\bnov\b/gi, "nov"],
+  [/\bdiciembre\b|\bdezembro\b|\bdic\b|\bdez\b/gi, "dec"],
+];
+
+export function normalizeVeoSubject(title: string): string {
+  let t = title;
+  // The Spanish/Portuguese word for "match", which is otherwise read as the code.
+  t = t.replace(/\bpartidos?\b/gi, "Match");
+  for (const [rx, en] of ES_PT_MONTHS) t = t.replace(rx, en);
+  // "Sep 4th" → "Sep 4". The ordinal suffix is never part of a time or a code.
+  t = t.replace(/(\d+)(st|nd|rd|th)\b/gi, "$1");
+  // "8 :00pm" and "8 : 00 pm" → "8:00pm". The space is the whole failure.
+  t = t.replace(/(\d)\s*:\s*(\d)/g, "$1:$2");
+  t = t.replace(/(\d)\s+(am|pm)\b/gi, "$1$2");
+  return t;
+}
+
 export function parseVeoSubject(subject: string | null | undefined): ParseResult {
   if (!subject) return fail();
   // Strip the trailing "... is ready to watch!" (and anything after).
-  const title = subject.replace(/\s+is ready to watch.*$/i, "").trim();
+  const title = normalizeVeoSubject(subject.replace(/\s+is ready to watch.*$/i, "").trim());
 
   // --- DATE (required) — four shapes, least ambiguous first ---
   const d = readDate(title);
@@ -584,9 +689,13 @@ export function parseVeoSubject(subject: string | null | undefined): ParseResult
   }
 
   // --- CODE = leftover leading text (before the date/time), normalized ---
+  /* THE LEFTOVER, WITH ITS PUNCTUATION STRIPPED FROM BOTH ENDS. "SATXMD/9-2-26/10pm" left the
+   * token as "SATXMD/", which matches no code and no label — a slash-wrapped date is not a date
+   * failure, it is a trailing character on the code. */
   const code = title
     .slice(0, Math.min(dateIdx, timeIdx))
-    .replace(/[\s|,\-–—:]+$/g, "")
+    .replace(/^[\s|,\-–—:/\\]+/g, "")
+    .replace(/[\s|,\-–—:/\\]+$/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .toUpperCase();

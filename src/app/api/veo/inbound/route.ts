@@ -296,12 +296,23 @@ export async function POST(req: Request) {
     return Response.json({ error: "DB error" }, { status: 500 });
   }
 
-  // Already claimed by a prior email. If it's fully handled ('posted' /
-  // 'dismissed'), no-op. Otherwise re-drive — the idempotent two-message post
-  // completes a mid-pair partial without duplicating the copy line.
+  /* Already claimed by a prior email. If it's fully handled ('posted' / 'dismissed'), no-op.
+   *
+   * A QUEUED ROW IS NOT RE-DRIVEN UNLESS ITS QUEUE REASON IS post_failed, AND THAT NARROWING IS
+   * THE POINT. The self-heal was written for one case — a post that threw between the copy line
+   * and the URL — and re-driving any OTHER queued row means re-deciding a recording somebody has
+   * already dealt with. There are 170 queued rows, and the films for most of them were posted into
+   * their chats BY HAND. A parser or resolver change that turns one of those decisions from
+   * "queue" into "post" would put a second copy of a link into a chat real players read, months
+   * after the fact, triggered by nothing more than the same email arriving twice.
+   *
+   * The Gmail forwarder labels a handled thread and excludes it from its own search, so this path
+   * is not expected to fire at all. "Not expected to fire" is not the same as "cannot", and the
+   * cost if it does is measured in player-visible messages. Every parser improvement from here
+   * applies to NEW recordings; the queue stays as it is. */
   const existing = await supabase
     .from("veo_recordings")
-    .select("id, status")
+    .select("id, status, queue_reason")
     .eq("recording_id", ref.recordingId)
     .maybeSingle();
   if (existing.error || !existing.data) {
@@ -314,8 +325,17 @@ export async function POST(req: Request) {
       { status: 200 },
     );
   }
+  if (existing.data.queue_reason !== "post_failed") {
+    console.log(
+      `[veo:inbound] recording=${ref.recordingId} already queued (${existing.data.queue_reason}) — NOT re-driven`,
+    );
+    return Response.json(
+      { ok: true, deduped: true, status: existing.data.status, queue_reason: existing.data.queue_reason },
+      { status: 200 },
+    );
+  }
   console.log(
-    `[veo:inbound] recording=${ref.recordingId} re-driving (status=${existing.data.status})`,
+    `[veo:inbound] recording=${ref.recordingId} re-driving a post_failed row`,
   );
   return runDecision(existing.data.id as string);
 }

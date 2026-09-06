@@ -291,5 +291,19 @@ const INBOUND = noComments(readFileSync("src/app/api/veo/inbound/route.ts", "utf
   ? ok("a post that FAILED is not left flagged — it sent nothing")
   : bad("post_failed can carry flagged: true");
 
+console.log("\n— a replayed email must not re-decide a row somebody has already dealt with —");
+/* 170 queued rows exist and the films for most of them were posted into their chats BY HAND. The
+ * dedup path used to re-drive ANY not-yet-posted row, so a parser change that turns one of those
+ * decisions from "queue" into "post" would put a second copy of a link into a player-visible chat,
+ * months later, triggered by the same email arriving twice. The self-heal exists for exactly one
+ * case — a post that threw between the copy line and the URL — and is now narrowed to it. */
+/queue_reason !== "post_failed"[\s\S]{0,400}NOT re-driven/.test(INBOUND)
+  ? ok("a replayed email re-drives ONLY a post_failed row")
+  : bad("the dedup path can re-decide any queued recording");
+/return runDecision\(existing\.data\.id as string\);/.test(INBOUND) && INBOUND.indexOf('queue_reason !== "post_failed"') < INBOUND.lastIndexOf("return runDecision(existing.data.id as string);")
+  ? ok("…and the guard sits BEFORE the re-drive, not after it")
+  : bad("the re-drive is reachable without passing the guard");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
+
