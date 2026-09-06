@@ -11,6 +11,7 @@ import {
   processingDateFromSlug,
   resolveMatchDate,
   resolveMatchDates,
+  chooseOne,
   resolveVeoCodeScored,
   scoreVeo,
   bandFor,
@@ -767,8 +768,129 @@ test("VEO_FIELD_CODES: the fallback constant agrees with the live veo_codes tabl
   // (Premier) and 1123 (World Cup) as excluded ON PURPOSE. Unresolved on purpose —
   // whether Premier games should be filmed is not a question this file answers.
   assert.deepEqual(VEO_FIELD_CODES.SC.fieldIds, [102, 199]);
+  // ATHP covers BOTH Pearland field ids. 319 of 335 Pearland matches in 2026 are on 22 ("Tourney
+  // ATH Pearland") against 16 on 32, so naming only 32 left every Pearland match off the page and
+  // every Pearland recording in the queue. Same physical pitch, same pattern as SC's 102/199.
+  assert.deepEqual(VEO_FIELD_CODES.ATHP.fieldIds, [22, 32]);
   assert.equal(Object.keys(VEO_FIELD_CODES).length, 12);
   for (const key of Object.keys(VEO_FIELD_CODES)) {
     assert.match(key, /^[A-Z]+$/, `${key} must be a bare code — the table has no spaces in it`);
   }
+});
+
+// =====================================================================
+// NARROWING A WINDOW THAT HOLDS MORE THAN ONE MATCH — the ATH Pearland
+// Friday pair, which is the case the whole rule exists for.
+// =====================================================================
+
+// Real: ATH Pearland runs 8:15 PM and 9:15 PM every Friday, BOTH ON THE SAME PITCH (mdapi field
+// 22, "Tourney ATH Pearland" — 319 of the 335 Pearland matches this year). Field agreement cannot
+// separate them, so the time has to.
+const ATHP_CODES = {
+  ATHP: { finVenueId: 8, fieldIds: [32, 22], fieldLabel: "ATH Pearland", city: "Houston", confirmed: true },
+};
+const pearland815: VeoCandidateRow = { api_id: 8150, field_id: 22, start_date: "2026-09-04T20:15:00+00:00", is_cancelled: false };
+const pearland915: VeoCandidateRow = { api_id: 9150, field_id: 22, start_date: "2026-09-04T21:15:00+00:00", is_cancelled: false };
+
+test("classifyVeo: the Pearland Friday pair — each recording lands on its own match", () => {
+  const both = [pearland815, pearland915];
+  const a = classifyVeo({
+    subject: "ATHP| Sep 4 |8:15PM is ready to watch!",
+    slug: "20260905-athp-sep-4-815pm-va1", codes: ATHP_CODES, loadCandidates: () => both,
+  });
+  assert.equal(a.action, "post");
+  if (a.action === "post") {
+    assert.equal(a.apiId, 8150);          // 0 minutes away, against 60 for the other
+    assert.equal(a.flagged, false);       // a tie broken on time is still a clean read
+    assert.equal(a.score.total, 100);
+  }
+  const b = classifyVeo({
+    subject: "ATHP| Sep 4 |9:15PM is ready to watch!",
+    slug: "20260905-athp-sep-4-915pm-vb1", codes: ATHP_CODES, loadCandidates: () => both,
+  });
+  assert.equal(b.action, "post");
+  if (b.action === "post") assert.equal(b.apiId, 9150);
+});
+
+test("classifyVeo: a genuine coin flip still queues — 30 minutes either side", () => {
+  // The brief's own case: move one of the pair so the title sits BETWEEN two candidates. 8:45 is
+  // 30 minutes from 8:15 and 30 from 9:15, and nothing about that is decidable.
+  const d = classifyVeo({
+    subject: "ATHP| Sep 4 |8:45PM is ready to watch!",
+    slug: "20260905-athp-sep-4-845pm-vc1", codes: ATHP_CODES, loadCandidates: () => [pearland815, pearland915],
+  });
+  assert.equal(d.action, "queue");
+  if (d.action === "queue") {
+    assert.equal(d.reason, "multiple_matches");
+    assert.deepEqual(d.candidateApiIds.sort(), [8150, 9150].sort());
+  }
+});
+
+test("classifyVeo: two matches at the SAME time can never be separated", () => {
+  // Two real Westlake recordings look like this: both candidates 0 minutes away.
+  const twinA: VeoCandidateRow = { api_id: 1, field_id: 22, start_date: "2026-09-04T20:15:00+00:00", is_cancelled: false };
+  const twinB: VeoCandidateRow = { api_id: 2, field_id: 22, start_date: "2026-09-04T20:15:00+00:00", is_cancelled: false };
+  const d = classifyVeo({
+    subject: "ATHP| Sep 4 |8:15PM is ready to watch!",
+    slug: "20260905-athp-sep-4-815pm-vd1", codes: ATHP_CODES, loadCandidates: () => [twinA, twinB],
+  });
+  assert.equal(d.action, "queue");
+  if (d.action === "queue") assert.equal(d.reason, "multiple_matches");
+});
+
+test("chooseOne: the margin is the rule, and 45 is where it sits", () => {
+  const at = (mins: number, apiId: number): VeoCandidateRow =>
+    ({ api_id: apiId, field_id: 22, start_date: `2026-09-04T${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}:00+00:00`, is_cancelled: false });
+  const T = 20 * 60 + 15; // 8:15 PM
+  // 60 apart → decided. This is Pearland.
+  assert.equal(chooseOne([at(T, 1), at(T + 60, 2)], T).kind, "one");
+  // 44 apart → still a coin flip. 45 → decided. The boundary, asserted from both sides.
+  assert.equal(chooseOne([at(T, 1), at(T + 44, 2)], T).kind, "ambiguous");
+  assert.equal(chooseOne([at(T, 1), at(T + 45, 2)], T).kind, "one");
+  // 30 apart → refused, which is the verdict veo.test.ts has pinned since before this rule existed.
+  assert.equal(chooseOne([at(T, 1), at(T + 30, 2)], T).kind, "ambiguous");
+  // Equidistant either side → refused.
+  assert.equal(chooseOne([at(T - 30, 1), at(T + 30, 2)], T).kind, "ambiguous");
+  // THREE candidates: the nearest must clear the SECOND nearest, not the furthest.
+  assert.equal(chooseOne([at(T, 1), at(T + 30, 2), at(T + 90, 3)], T).kind, "ambiguous");
+  const three = chooseOne([at(T, 1), at(T + 60, 2), at(T + 90, 3)], T);
+  assert.equal(three.kind, "one");
+  if (three.kind === "one") { assert.equal(three.row.api_id, 1); assert.equal(three.by, "time"); }
+  // Field agreement decides before time is consulted at all.
+  const one = chooseOne([at(T + 80, 7)], T);
+  assert.equal(one.kind, "one");
+  if (one.kind === "one") assert.equal(one.by, "field");
+  // Nothing agreeing is never a post, whatever the times say.
+  assert.equal(chooseOne([], T).kind, "ambiguous");
+});
+
+test("classifyVeo: the new narrowing does NOT turn a field mismatch into a post", () => {
+  // One candidate in the window, on a field ATHP does not name. Step 1 must not reach it.
+  const wrongField: VeoCandidateRow = { api_id: 555, field_id: 999, start_date: "2026-09-04T20:15:00+00:00", is_cancelled: false };
+  const d = classifyVeo({
+    subject: "ATHP| Sep 4 |8:15PM is ready to watch!",
+    slug: "20260905-athp-sep-4-815pm-ve1", codes: ATHP_CODES, loadCandidates: () => [wrongField],
+  });
+  assert.equal(d.action, "queue");
+  if (d.action === "queue") assert.equal(d.reason, "field_mismatch");
+
+  // And with a SECOND wrong-field candidate beside it, it is still never a post.
+  const alsoWrong: VeoCandidateRow = { api_id: 556, field_id: 999, start_date: "2026-09-04T21:15:00+00:00", is_cancelled: false };
+  const d2 = classifyVeo({
+    subject: "ATHP| Sep 4 |8:15PM is ready to watch!",
+    slug: "20260905-athp-sep-4-815pm-vf1", codes: ATHP_CODES, loadCandidates: () => [wrongField, alsoWrong],
+  });
+  assert.equal(d2.action, "queue");
+});
+
+test("classifyVeo: the right match wins even when a wrong-field match is nearer in time", () => {
+  // Field agreement is applied BEFORE time, so a closer candidate on a field the code does not
+  // name cannot pull the recording off the one it does.
+  const nearerWrongField: VeoCandidateRow = { api_id: 777, field_id: 999, start_date: "2026-09-04T20:15:00+00:00", is_cancelled: false };
+  const d = classifyVeo({
+    subject: "ATHP| Sep 4 |8:20PM is ready to watch!",
+    slug: "20260905-athp-sep-4-820pm-vg1", codes: ATHP_CODES, loadCandidates: () => [nearerWrongField, pearland915],
+  });
+  assert.equal(d.action, "post");
+  if (d.action === "post") assert.equal(d.apiId, 9150); // 55 min away, but the only agreeing one
 });

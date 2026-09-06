@@ -9,29 +9,37 @@
  *
  * THE FIVE ARE ORDERED, AND THE ORDER IS THE DEFINITION:
  *
- *   posted        a recording posted to this match, on a read with nothing inferred
- *   flagged       a recording posted, and something about the title was a guess
+ *   posted        a recording posted ITSELF to this match, on a read with nothing inferred
+ *   flagged       a recording posted itself, and something about the title was a guess
+ *   assigned      a PERSON put it there — posted_by_user_id is set
  *   held          the match's code is queue-only (confirmed: false) — deliberately not posted,
  *                 which is why it outranks "needs a look": there is nothing wrong here
  *   needs_look    a recording arrived, names this match, and did not post
  *   no_film       nothing has arrived
  *
- * `flagged` is NOT a fifth status in the database. It is a boolean on a posted row, so a flagged
- * post must be counted under flagged and NOT ALSO under posted, or the strip stops adding up.
+ * `flagged` is NOT a status in the database. It is a boolean on a posted row, so a flagged post
+ * must be counted under flagged and NOT ALSO under posted, or the strip stops adding up.
+ *
+ * NEITHER IS "assigned", AND IT IS THE MORE IMPORTANT SPLIT. The assign route stamps
+ * posted_by_user_id, and mixing those rows into status = 'posted' is exactly what made "posted
+ * went 16 to 15" unreadable: seven of the sixteen were hand-assignments, so the automatic baseline
+ * was 9 and looked like 16. Anyone measuring the matcher off this page has to be able to see the
+ * number the matcher actually produced.
  */
 
-export type FilmState = "posted" | "flagged" | "held" | "needs_look" | "no_film";
+export type FilmState = "posted" | "flagged" | "assigned" | "held" | "needs_look" | "no_film";
 
 export const FILM_STATE_LABEL: Record<FilmState, string> = {
   posted: "Posted",
   flagged: "Posted, flagged",
+  assigned: "Assigned by hand",
   held: "Held",
   needs_look: "Needs a look",
   no_film: "No film yet",
 };
 
 /** Rendering order for the tally strip, left to right. */
-export const FILM_STATES: readonly FilmState[] = ["posted", "flagged", "held", "needs_look", "no_film"];
+export const FILM_STATES: readonly FilmState[] = ["posted", "flagged", "assigned", "held", "needs_look", "no_film"];
 
 export type VeoDayRecording = {
   id: string;
@@ -50,6 +58,10 @@ export type VeoDayRecording = {
   parsedCode: string | null;
   parsedMatchDate: string | null;
   parsedTimeLabel: string | null;
+  /** Minutes past local midnight, for printing the gap to each assign candidate. */
+  parsedTimeMinutes: number | null;
+  /** Set when a PERSON assigned it. Null on an automatic post — the distinction the tally needs. */
+  postedByUserId: string | null;
 };
 
 /** The shape veo.ts writes into score_parts. Read, never recomputed. */
@@ -108,7 +120,10 @@ export function attachedTo(apiId: number, recs: readonly VeoDayRecording[]): Veo
 export function filmState(match: Pick<VeoDayMatch, "apiId" | "codeConfirmed">, recs: readonly VeoDayRecording[]): FilmState {
   const mine = attachedTo(match.apiId, recs);
   const posted = mine.find((r) => r.status === "posted" && r.matchedApiId === match.apiId);
-  if (posted) return posted.flagged ? "flagged" : "posted";
+  if (posted) {
+    if (posted.postedByUserId) return "assigned";
+    return posted.flagged ? "flagged" : "posted";
+  }
   // Deliberate, and it outranks needs_look: a queue-only code is working as configured.
   if (!match.codeConfirmed) return "held";
   if (mine.some((r) => r.status !== "dismissed")) return "needs_look";
@@ -119,15 +134,30 @@ export function buildDayRows(matches: readonly VeoDayMatch[], recs: readonly Veo
   return matches.map((m) => {
     const mine = attachedTo(m.apiId, recs);
     const state = filmState(m, recs);
-    const primary = mine.find((r) => r.status === "posted" && r.matchedApiId === m.apiId) ?? mine[0] ?? null;
-    return { ...m, state, recordings: mine, primary };
+    /* WHICH RECORDING THIS ROW IS ABOUT, when more than one attaches to it. A posted one is the
+     * answer outright. Otherwise take the recording whose OWN parsed time is nearest this match.
+     *
+     * The Pearland Friday pair is why. Both recordings carry candidate_api_ids [9:15, 8:15], so
+     * both attach to both rows, and taking mine[0] put the 9:15 recording under the 8:15 match —
+     * the panel then marked the 9:15 candidate "exact" on a row headed 8:15 PM, which is the exact
+     * confusion an operator assigning by hand must not be handed. */
+    const posted = mine.find((r) => r.status === "posted" && r.matchedApiId === m.apiId);
+    const nearest = [...mine].sort((a, b) => {
+      const da = a.parsedTimeMinutes == null ? Number.POSITIVE_INFINITY : Math.abs(a.parsedTimeMinutes - m.minutes);
+      const db = b.parsedTimeMinutes == null ? Number.POSITIVE_INFINITY : Math.abs(b.parsedTimeMinutes - m.minutes);
+      return da - db;
+    })[0];
+    return { ...m, state, recordings: mine, primary: posted ?? nearest ?? null };
   });
 }
 
 export type VeoDayTally = Record<FilmState, number> & { total: number };
 
+export const emptyTally = (total: number): VeoDayTally =>
+  ({ posted: 0, flagged: 0, assigned: 0, held: 0, needs_look: 0, no_film: 0, total });
+
 export function tally(rows: readonly VeoDayRow[]): VeoDayTally {
-  const t: VeoDayTally = { posted: 0, flagged: 0, held: 0, needs_look: 0, no_film: 0, total: rows.length };
+  const t = emptyTally(rows.length);
   for (const r of rows) t[r.state] += 1;
   return t;
 }
@@ -135,6 +165,37 @@ export function tally(rows: readonly VeoDayRow[]): VeoDayTally {
 /** THE IDENTITY THE STRIP DEPENDS ON. Exported so the page and the suite ask the same question. */
 export function tallyAddsUp(t: VeoDayTally): boolean {
   return FILM_STATES.reduce((a, k) => a + t[k], 0) === t.total;
+}
+
+/* ── AN ASSIGN CANDIDATE ───────────────────────────────────────────────────────────────────────
+ * What an operator needs to pick a match without leaving the page: when it starts, what it is,
+ * where, how full, and HOW FAR IT IS FROM THE TIME IN THE TITLE — written out, not left as
+ * arithmetic. "exact" against "60 min later" is the entire Pearland decision.
+ *
+ * `coded` is false when no veo_codes row names the match's field. Such a candidate is still
+ * offered and still assignable: a person assigning by hand IS the deliberate override, and refusing
+ * it would defeat the point of an escape hatch. It is labelled so the override is informed. */
+export type AssignCandidate = {
+  apiId: number;
+  name: string;
+  venue: string;
+  city: string;
+  time: string;
+  minutes: number;
+  players: number | null;
+  capacity: number | null;
+  fieldId: number | null;
+  coded: boolean;
+};
+
+/** The gap, in the words a person uses. Null when there is no parsed time to compare against. */
+export function gapLabel(candidateMinutes: number, titleMinutes: number | null): string | null {
+  if (titleMinutes == null) return null;
+  const d = candidateMinutes - titleMinutes;
+  if (d === 0) return "exact";
+  const n = Math.abs(d);
+  const unit = n === 1 ? "min" : "min";
+  return `${n} ${unit} ${d > 0 ? "later" : "earlier"}`;
 }
 
 /* ── THE SCORE TRACE ───────────────────────────────────────────────────────────────────────────

@@ -19,7 +19,7 @@ import { CITY_CODE_TO_DISPLAY } from "@/lib/scheduleReconcile";
 import { canonicalVenueName } from "@/lib/venueResolver";
 import { hasCameraEmoji, stripCameraEmoji } from "@/lib/veo";
 import { fetchVeoCodeRows } from "@/lib/veoCodes";
-import { buildDayRows, tally, type VeoDayMatch, type VeoDayRecording } from "@/lib/veoDay";
+import { buildDayRows, tally, type AssignCandidate, type VeoDayMatch, type VeoDayRecording } from "@/lib/veoDay";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -105,12 +105,12 @@ export async function GET(req: Request) {
     const ids = matches.map((m) => m.apiId);
     const byDate = auth.supabase
       .from("veo_recordings")
-      .select("id, recording_id, email_subject, video_url, received_at, status, queue_reason, matched_api_id, candidate_api_ids, match_score, score_parts, flagged, parsed_code, parsed_match_date, parsed_time_label")
+      .select("id, recording_id, email_subject, video_url, received_at, status, queue_reason, matched_api_id, candidate_api_ids, match_score, score_parts, flagged, parsed_code, parsed_match_date, parsed_time_label, parsed_time_minutes, posted_by_user_id")
       .eq("parsed_match_date", date);
     const byMatch = ids.length
       ? auth.supabase
           .from("veo_recordings")
-          .select("id, recording_id, email_subject, video_url, received_at, status, queue_reason, matched_api_id, candidate_api_ids, match_score, score_parts, flagged, parsed_code, parsed_match_date, parsed_time_label")
+          .select("id, recording_id, email_subject, video_url, received_at, status, queue_reason, matched_api_id, candidate_api_ids, match_score, score_parts, flagged, parsed_code, parsed_match_date, parsed_time_label, parsed_time_minutes, posted_by_user_id")
           .in("matched_api_id", ids)
       : null;
     const [dRes, mRes] = await Promise.all([byDate, byMatch ?? Promise.resolve({ data: [], error: null })]);
@@ -141,31 +141,63 @@ export async function GET(req: Request) {
         parsedCode: (r.parsed_code as string | null) ?? null,
         parsedMatchDate: (r.parsed_match_date as string | null) ?? null,
         parsedTimeLabel: (r.parsed_time_label as string | null) ?? null,
+        parsedTimeMinutes: typeof r.parsed_time_minutes === "number" ? r.parsed_time_minutes : null,
+        postedByUserId: (r.posted_by_user_id as string | null) ?? null,
       });
     }
 
     const dayRows = buildDayRows(matches, recordings);
+
+    // Every camera match on the day is assignable. Keyed by api_id so the page can look one up
+    // from a stored candidate_api_id without scanning.
+    const candidates: Record<number, AssignCandidate> = {};
+    for (const m of matches) {
+      candidates[m.apiId] = {
+        apiId: m.apiId, name: m.name, venue: m.venue, city: m.city,
+        time: m.time, minutes: m.minutes, players: m.players, capacity: m.capacity,
+        fieldId: m.fieldId, coded: true,
+      };
+    }
     const placed = new Set(dayRows.flatMap((r) => r.recordings.map((x) => x.id)));
     // A recording that names this date and no match on it. It still belongs to the day — it is
     // exactly the review item the old queue held — but it cannot be a row against a match, and
     // inventing one would break the tally.
     const unplaced = recordings.filter((r) => !placed.has(r.id) && r.status !== "dismissed");
 
+    /* THE MATCHES AN ORPHAN CAN BE ASSIGNED TO. Every camera match on the day, PLUS every match
+     * already referenced by an unplaced recording's shortlist — candidate_api_ids can name a match
+     * with no row here, which is precisely the recording that most needs assigning by hand. */
+
     /* AND WHY IT COULD NOT BE PLACED. An unplaced recording that POSTED went somewhere real — a
      * match this page does not list because no veo_codes row names its field. Naming that match
      * and its field turns "could not place" into the configuration gap it actually is. */
-    const strayIds = [...new Set(unplaced.map((r) => r.matchedApiId).filter((x): x is number => x != null))];
+    const strayIds = [...new Set(unplaced.flatMap((r) => [r.matchedApiId, ...r.candidateApiIds]).filter((x): x is number => x != null))];
     const strays: Record<number, { apiId: number; name: string; fieldId: number | null; date: string | null }> = {};
     if (strayIds.length) {
       const { data: sm } = await auth.supabase
-        .from("mdapi_matches").select("api_id, name, field_id, start_date").in("api_id", strayIds);
+        .from("mdapi_matches")
+        .select("api_id, name, field_id, field_title, city_identifier, start_date, player_count, max_player_count")
+        .in("api_id", strayIds);
       for (const m of sm ?? []) {
-        strays[m.api_id as number] = {
-          apiId: m.api_id as number,
-          name: stripCameraEmoji(m.name),
-          fieldId: (m.field_id as number | null) ?? null,
+        const apiId = m.api_id as number;
+        const fieldId = (m.field_id as number | null) ?? null;
+        strays[apiId] = {
+          apiId, name: stripCameraEmoji(m.name), fieldId,
           date: m.start_date ? String(m.start_date).slice(0, 10) : null,
         };
+        if (!candidates[apiId]) {
+          const t = fmtTime(String(m.start_date));
+          const cc = (m.city_identifier as string) ?? "";
+          candidates[apiId] = {
+            apiId, name: stripCameraEmoji(m.name),
+            venue: canonicalVenueName(m.field_title ?? "") || (m.field_title as string) || "Unknown",
+            city: CITY_CODE_TO_DISPLAY[cc] ?? cc ?? "—",
+            time: t.label, minutes: t.minutes,
+            players: (m.player_count as number | null) ?? null,
+            capacity: (m.max_player_count as number | null) ?? null,
+            fieldId, coded: fieldId != null && codeByField.has(fieldId),
+          };
+        }
       }
     }
 
@@ -175,6 +207,7 @@ export async function GET(req: Request) {
       tally: tally(dayRows),
       unplaced,
       strays,
+      candidates,
       // Every field the code table names, so the page can say whether a stray's field is one.
       codedFields: [...codeByField.keys()],
       cities: [...new Set(dayRows.map((r) => r.city))].sort(),

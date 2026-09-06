@@ -17,7 +17,7 @@ import "server-only"; // no-op under --conditions=react-server
  */
 import { readFileSync } from "node:fs";
 import {
-  FILM_STATES, attachedTo, buildDayRows, filmState, scoreTrace, tally, tallyAddsUp, traceSum,
+  FILM_STATES, attachedTo, buildDayRows, filmState, gapLabel, scoreTrace, tally, tallyAddsUp, traceSum,
   type VeoDayMatch, type VeoDayRecording, type VeoScoreParts,
 } from "../src/lib/veoDay";
 import { classifyVeo, scoreVeo, CODE_SCORE, DATE_SCORE, TIME_SCORE, FIELD_SCORE, type CodeTier, type DateForm, type TimeForm, type VeoCandidateRow } from "../src/lib/veo";
@@ -38,7 +38,8 @@ const rec = (over: Partial<VeoDayRecording> = {}): VeoDayRecording => ({
   id: `r${Math.random()}`, recordingId: "vabc", subject: "OC | Sep 3 | 8pm", videoUrl: "https://app.veo.co/matches/x/",
   receivedAt: "2026-09-04T05:00:00Z", status: "queued", queueReason: null, matchedApiId: null,
   candidateApiIds: [], score: null, scoreParts: null, flagged: false,
-  parsedCode: "OC", parsedMatchDate: "2026-09-03", parsedTimeLabel: "8:00 PM", ...over,
+  parsedCode: "OC", parsedMatchDate: "2026-09-03", parsedTimeLabel: "8:00 PM",
+  parsedTimeMinutes: 1200, postedByUserId: null, ...over,
 });
 
 console.log("— the five states, one per match, mutually exclusive —");
@@ -46,6 +47,13 @@ is("a posted recording on a clean read → posted",
   filmState(match(1), [rec({ status: "posted", matchedApiId: 1 })]), "posted");
 is("a posted recording that was flagged → flagged, NOT posted",
   filmState(match(1), [rec({ status: "posted", matchedApiId: 1, flagged: true })]), "flagged");
+/* THE SPLIT THAT MADE "posted went 16 to 15" UNREADABLE. A hand-assignment carries
+ * posted_by_user_id, and counting it as a post makes the matcher look better than it is —
+ * 7 of those 16 were people, so the automatic number was 9. */
+is("a HAND-assigned recording → assigned, never posted",
+  filmState(match(1), [rec({ status: "posted", matchedApiId: 1, postedByUserId: "u1" })]), "assigned");
+is("…and a hand-assignment of a flagged row is still assigned, not flagged",
+  filmState(match(1), [rec({ status: "posted", matchedApiId: 1, flagged: true, postedByUserId: "u1" })]), "assigned");
 is("a queue-only code → held, even with a recording sitting against it",
   filmState(match(1, { codeConfirmed: false }), [rec({ candidateApiIds: [1], queueReason: "unconfirmed_code" })]), "held");
 is("a queue-only code with nothing at all → still held (it is deliberate, not a gap)",
@@ -75,6 +83,7 @@ const situations: [string, (id: number) => { m: VeoDayMatch; r: VeoDayRecording[
   ["flagged", (id) => ({ m: match(id), r: [rec({ status: "posted", matchedApiId: id, flagged: true })] })],
   ["held", (id) => ({ m: match(id, { codeConfirmed: false }), r: [] })],
   ["held+rec", (id) => ({ m: match(id, { codeConfirmed: false }), r: [rec({ candidateApiIds: [id] })] })],
+  ["assigned", (id) => ({ m: match(id), r: [rec({ status: "posted", matchedApiId: id, postedByUserId: "u1" })] })],
   ["needs_look", (id) => ({ m: match(id), r: [rec({ candidateApiIds: [id] })] })],
   ["no_film", (id) => ({ m: match(id), r: [] })],
 ];
@@ -93,8 +102,9 @@ for (let n = 0; n < N ** 5; n++) {
   // Every row has exactly one state, and it is one of the five.
   if (rows.some((r) => !FILM_STATES.includes(r.state))) doubleCounted++;
 }
-is(`all ${combos} five-match combinations: the five states add to the total`, broke, 0);
-is("…and every row carries exactly one of the five", doubleCounted, 0);
+is(`all ${combos} five-match combinations: the ${FILM_STATES.length} states add to the total`, broke, 0);
+is(`…and every row carries exactly one of the ${FILM_STATES.length}`, doubleCounted, 0);
+is("there are six states, and the strip renders all of them", FILM_STATES.length, 6);
 // POSITIVE CONTROL: the identity is falsifiable. A tally that counts a flagged post under BOTH
 // posted and flagged fails it — which is the mistake the assertion exists to catch.
 {
@@ -103,6 +113,32 @@ is("…and every row carries exactly one of the five", doubleCounted, 0);
   const wrong = { ...t, posted: t.posted + t.flagged };
   yes("control — double-counting a flagged post BREAKS the identity", tallyAddsUp(t) && !tallyAddsUp(wrong));
 }
+
+console.log("\n— which recording a row is about, when more than one attaches —");
+/* The Pearland pair: both recordings shortlist both matches, so both attach to both rows. Taking
+ * the first put the 9:15 recording under the 8:15 match, and the panel then marked the 9:15
+ * candidate "exact" on a row headed 8:15 PM. */
+{
+  const m815 = match(18284, { minutes: 20 * 60 + 15, code: "ATHP" });
+  const m915 = match(18344, { minutes: 21 * 60 + 15, code: "ATHP" });
+  const r815 = rec({ id: "r815", subject: "ATHP| Sep 4 |8:15PM", candidateApiIds: [18344, 18284], parsedTimeMinutes: 20 * 60 + 15, queueReason: "multiple_matches" });
+  const r915 = rec({ id: "r915", subject: "ATHP| Sep 4 |9:15PM", candidateApiIds: [18344, 18284], parsedTimeMinutes: 21 * 60 + 15, queueReason: "multiple_matches" });
+  const rows = buildDayRows([m815, m915], [r915, r815]); // deliberately in the WRONG order
+  is("the 8:15 row shows the 8:15 recording", rows[0].primary?.id, "r815");
+  is("…and the 9:15 row shows the 9:15 one", rows[1].primary?.id, "r915");
+  is("…and both rows still list both recordings", rows.map((r) => r.recordings.length), [2, 2]);
+  // A POSTED recording always wins, whatever the times say.
+  const posted = rec({ id: "rp", status: "posted", matchedApiId: 18284, parsedTimeMinutes: 21 * 60 + 15 });
+  is("a posted recording is the row's primary regardless of time", buildDayRows([m815], [r815, posted])[0].primary?.id, "rp");
+}
+
+console.log("\n— the gap, written out so nobody has to subtract —");
+/* "exact" against "60 min later" is the entire Pearland decision and it should take under a
+ * second. Two clock times side by side would make an operator subtract them forty times a week. */
+is("the exact hit says so", gapLabel(1215, 1215), "exact");
+is("an hour later reads as an hour later", gapLabel(1275, 1215), "60 min later");
+is("…and earlier reads as earlier, never as a negative number", gapLabel(1200, 1215), "15 min earlier");
+is("no parsed time, no gap — never a wrong one", gapLabel(1215, null), null);
 
 console.log("\n— the trace is read, and it adds to the number on the row —");
 /* Generated from the matcher's OWN tables, so the trace cannot drift from the scoring it explains.
@@ -210,6 +246,39 @@ const PAGE_C = noComments(PAGE), ROUTE_C = noComments(ROUTE);
 /codeByField\.get\(fieldId\)/.test(ROUTE_C) && /hasCameraEmoji\(r\.name\)/.test(ROUTE_C)
   ? ok("rows are selected by the code table; the emoji only counts the gap")
   : bad("the row selector is not the code table");
+
+/* PART 3: the orphan strip has an exit. POST /api/veo/[id] has existed and worked all along —
+ * this page simply never called it, so a queued recording had nowhere to go. */
+/method: "POST"[\s\S]{0,160}JSON\.stringify\(\{ apiId \}\)/.test(PAGE_C) && /`\/api\/veo\/\$\{recordingId\}`/.test(PAGE_C)
+  ? ok("the page calls POST /api/veo/[id] with the chosen match")
+  : bad("the page does not call the assign route");
+/method: "DELETE"/.test(PAGE_C) ? ok("…and DELETE for a dismiss") : bad("no dismiss control");
+// ONE ATTEMPT. There is no Idempotency-Key anywhere in this pipeline.
+/if \(busy\) return false;/.test(PAGE_C) && !/Idempotency-Key/.test(PAGE_C) && !/\bretry\b/i.test(PAGE_C)
+  ? ok("one attempt, never retried — the in-flight guard refuses a second click")
+  : bad("the assign may retry");
+// The confirm names BOTH sides before anything is written.
+/data-testid="veo-confirm"/.test(PAGE_C) && /Post <b>\{rec\.subject/.test(PAGE_C) && /target\.name\}, \{target\.time\}/.test(PAGE_C)
+  ? ok("the confirm names the recording AND the match before it writes")
+  : bad("the confirm does not name both sides");
+// The two groups are never merged: the shortlist is what the matcher already had.
+/shortIds\.has\(c\.apiId\)/.test(PAGE_C) && /veo-shortlist/.test(PAGE_C) && /veo-rest/.test(PAGE_C)
+  ? ok("the matcher's shortlist is a separate group, not sorted in with the day")
+  : bad("the shortlist is merged into the full list");
+/* AND IT IS REACHABLE FROM A ROW, not only from the orphan strip. Adding field 22 to ATHP turned
+ * the Pearland recordings from orphans into rows attached to real matches — so the strip they used
+ * to live in is empty and the row viewer is where an operator now stands. A panel only the orphan
+ * strip can open would have been a control nobody could reach for the exact case it was built for. */
+/data-testid="veo-send-to-chat"/.test(PAGE_C) && /data-testid="veo-different-match"/.test(PAGE_C)
+  ? ok("a queued ROW offers Send to the chat and Different match, both live")
+  : bad("the row viewer's assign controls are missing");
+/disabled=\{busy \|\| !thisMatch\}/.test(PAGE_C)
+  ? ok("…and Send to the chat is disabled only when there is no match to send to")
+  : bad("Send to the chat is not gated on having a target");
+// An uncoded candidate is offered and marked, not blocked.
+/!c\.coded && <em data-testid="veo-cand-uncoded"/.test(PAGE_C) && !/disabled=\{!c\.coded/.test(PAGE_C)
+  ? ok("a candidate on an uncoded field is marked and still assignable")
+  : bad("an uncoded candidate is blocked rather than marked");
 
 const INBOUND = noComments(readFileSync("src/app/api/veo/inbound/route.ts", "utf8"));
 /match_score: decision\.score\?\.total \?\? null/.test(INBOUND) && /score_parts: decision\.score \?\? null/.test(INBOUND)

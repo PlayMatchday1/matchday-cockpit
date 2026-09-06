@@ -74,13 +74,20 @@ export function normalizeVeoCode(code: string | null | undefined): string {
  * about whether Premier games should be filmed, not a sync gap. Adopting the table's list silently
  * would erase the only surviving record that the exclusion was intentional. UNRESOLVED, flagged.
  *
+ * ATHP COVERS 22 AND 32, and 22 is where the matches actually are: 319 of the 335 Pearland
+ * matches in 2026 are on mdapi field 22, "Tourney ATH Pearland", against 16 on field 32. It is the
+ * same physical pitch under a second field id — the identical pattern to SC's 102/199 below — and
+ * with only 32 named, no Pearland match had a row on the Veo page and every Pearland recording
+ * queued. (Field 21, "Tournaments at ATH Pearland", carries zero matches in 2026 and is NOT added.)
+ * Applied to the live veo_codes row on 2026-09-06 as well as here.
+ *
  * Field notes kept from before: SC covers mdapi fields 102 AND 199 — regular "SC Field 3/4/4A"
  * matches land on both (199 is a legacy "Tourney" field_title carrying regular games). 1123 (World
  * Cup) / 1354 (Premier) are excluded on purpose. Austin Westlake / Onion Creek / Hill Country share
  * one camera (VC3-79705), so the title CODE is the only field signal and each keeps its own code. */
 export const VEO_FIELD_CODES: Record<string, VeoFieldCode> = {
   SC: { finVenueId: 11, fieldIds: [102, 199], fieldLabel: "Soccer Central (SC Field 3/4/4A)", city: "San Antonio", confirmed: true },
-  ATHP: { finVenueId: 8, fieldIds: [32], fieldLabel: "ATH Pearland", city: "Houston", confirmed: true },
+  ATHP: { finVenueId: 8, fieldIds: [22, 32], fieldLabel: "ATH Pearland", city: "Houston", confirmed: true },
   ATHK: { finVenueId: 7, fieldIds: [892], fieldLabel: "ATH Katy", city: "Houston", confirmed: true },
   PRUMC: { finVenueId: 16, fieldIds: [958], fieldLabel: "PRUMC", city: "Atlanta", confirmed: true },
   WL: { finVenueId: 49, fieldIds: [1], fieldLabel: "Westlake HS", city: "Austin", confirmed: true },
@@ -236,10 +243,19 @@ export function validateVeoCodeInput(
   };
 }
 
-// ± window (minutes) around the title start time when hunting for the
-// scheduled match. Titles carry the intended slot; a ±90-min window
-// absorbs early/late starts and rounding while staying tight enough that
-// two same-venue matches on the same evening stay distinguishable.
+/* ± window (minutes) around the title start time when hunting for the scheduled match. Titles
+ * carry the intended slot; a ±90-min window absorbs early/late starts and rounding.
+ *
+ * THE SECOND HALF OF THIS COMMENT USED TO READ "while staying tight enough that two same-venue
+ * matches on the same evening stay distinguishable", AND THE DATA REFUTES IT. ATH Pearland runs
+ * 8:15 PM and 9:15 PM every Friday. At ±90 each recording's window holds both, and the window is
+ * not what separates them — 46 of the 49 real multi-candidate recordings have their runner-up
+ * exactly 60 minutes away, which is inside the net by design.
+ *
+ * THE NET STAYS 90 AND THE NARROWING HAPPENS AFTER IT (chooseOne, below). Shrinking the window to
+ * separate the pair would trade this failure for the opposite one: a match that kicked off twenty
+ * minutes late would stop being found at all, and a missed film is the silent failure — the player
+ * never gets it and never says anything. */
 export const VEO_MATCH_WINDOW_MIN = 90;
 
 // The copy line posted into the match thread immediately BEFORE the bare
@@ -666,6 +682,67 @@ export type VeoCandidateRow = {
 // venue's field_ids and excluded soft-deleted rows), keep the ones on the
 // title's local date within ±window of the title start time. Cancelled
 // matches are excluded — we never post a video into a called-off match.
+/* ── NARROWING A WINDOW THAT HOLDS MORE THAN ONE MATCH ─────────────────────────────────────────
+ * The window is a net, not an answer. Two or more matches inside it used to return
+ * multiple_matches immediately, without consulting either discriminator the matcher already holds:
+ * which field the code names, and how far each candidate is from the time in the title.
+ *
+ * ATH Pearland is the case. It runs 8:15 PM and 9:15 PM every Friday, both on the same pitch, so
+ * FIELD AGREEMENT CANNOT SEPARATE THEM — the time is load-bearing. The 8:15 recording sits 0
+ * minutes from one candidate and 60 from the other. That is not a close call, and nothing looked.
+ *
+ * THE MARGIN IS 45 MINUTES, AND IT COMES FROM THE DATA, NOT FROM TASTE. Swept over every real row
+ * in veo_recordings, 49 recordings had two or more in-window candidates. Every one of them was 0
+ * minutes from its nearest. The runner-up distribution — the whole of it:
+ *
+ *     margin  0 min ×  2      two matches at the same clock time — a genuine coin flip
+ *     margin 30 min ×  1
+ *     margin 60 min × 46      the Pearland and Soccer Central hourly slots
+ *
+ * Nothing sits between 1 and 29, or between 31 and 59, so 30 and 45 are both in clean gaps and the
+ * data alone does not choose. 45 IS THE CONSERVATIVE ONE and it is chosen for a reason that is not
+ * taste either: veo.test.ts has pinned "two matches inside the window → queued" since before any of
+ * this, on a fixture whose runner-up is exactly 30 minutes out. That is a judgement about a
+ * half-hour gap already recorded in the suite, and a threshold of 30 would have quietly reversed
+ * it. 45 refuses the three undecidable rows and takes the 46 hourly ones, which is the whole of
+ * what this change exists to do.
+ *
+ * The cost is stated: ONE real recording (Sc-August 3-9:00pm, an exact hit with a candidate 30
+ * minutes out) keeps queueing. It is a review item rather than a wrong post, which is the correct
+ * direction to be wrong in.
+ *
+ * THIS IS A NARROWING, NOT A LOOSENING. Both steps make the chosen match MORE specific, and the
+ * candidate set they choose from is unchanged. Nothing here can post to a field the code does not
+ * name: step 1 filters to agreeing candidates and step 2 only ever reorders that filtered set. */
+export const VEO_TIME_MARGIN_MIN = 45;
+
+export type NarrowResult =
+  | { kind: "one"; row: VeoCandidateRow; by: "field" | "time" }
+  | { kind: "ambiguous" };
+
+export function chooseOne(
+  agreeing: readonly VeoCandidateRow[],
+  timeMinutes: number,
+  marginMin: number = VEO_TIME_MARGIN_MIN,
+): NarrowResult {
+  // 1. FIELD AGREEMENT. Exactly one candidate on a field the code names is the answer. This is the
+  //    existing cross-check, applied one branch earlier than it used to be.
+  if (agreeing.length === 0) return { kind: "ambiguous" };
+  if (agreeing.length === 1) return { kind: "one", row: agreeing[0], by: "field" };
+
+  // 2. NEAREST START, and only when the runner-up is meaningfully further away.
+  const withD = agreeing
+    .map((r) => ({ r, d: Math.abs((matchLocalStart(r.start_date)?.minutes ?? Number.NaN) - timeMinutes) }))
+    .filter((x) => Number.isFinite(x.d))
+    .sort((a, b) => a.d - b.d);
+  if (withD.length === 0) return { kind: "ambiguous" };
+  if (withD.length === 1) return { kind: "one", row: withD[0].r, by: "field" };
+  if (withD[1].d - withD[0].d >= marginMin) return { kind: "one", row: withD[0].r, by: "time" };
+
+  // 3. A COIN FLIP STAYS A COIN FLIP.
+  return { kind: "ambiguous" };
+}
+
 export function selectVeoMatches(
   target: { matchDate: string; timeMinutes: number },
   rows: VeoCandidateRow[],
@@ -911,13 +988,17 @@ export function classifyVeo(args: {
     }
 
     const { inWindow, agreeing, t } = chosen;
-    if (inWindow.length === 1) {
-      if (agreeing.length === 1) {
-        return { kind: "post", matchDate: date, time: t, apiId: agreeing[0].api_id };
-      }
-      // Field-agreement cross-check: single match on a DIFFERENT field of the
-      // same venue than the code names → never post, queue for review.
+
+    /* FIELD MISMATCH IS DECIDED FIRST, AND SEPARATELY. One candidate in the window, on a field the
+     * code does not name, is not an ambiguity to be narrowed — it is a specific finding, and the
+     * narrowing below must never be able to turn it into a post. */
+    if (inWindow.length === 1 && agreeing.length === 0) {
       return { kind: "queue", reason: "field_mismatch", matchDate: date, time: t, candidateApiIds: [inWindow[0].api_id] };
+    }
+
+    const picked = chooseOne(agreeing, t.minutes);
+    if (picked.kind === "one") {
+      return { kind: "post", matchDate: date, time: t, apiId: picked.row.api_id };
     }
     return { kind: "queue", reason: "multiple_matches", matchDate: date, time: t, candidateApiIds: inWindow.map((h) => h.api_id) };
   };

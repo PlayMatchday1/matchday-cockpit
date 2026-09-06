@@ -17,7 +17,7 @@ const yes = (n, c, d = "") => (c ? ok(n) : bad(n, d));
 
 const readTally = (p) => p.evaluate(() => {
   const n = (k) => { const el = document.querySelector(`[data-testid="veo-tal-${k}"]`); return el ? Number(el.dataset.count) : null; };
-  return { posted: n("posted"), flagged: n("flagged"), held: n("held"), needs_look: n("needs_look"), no_film: n("no_film"), total: n("total") };
+  return { posted: n("posted"), flagged: n("flagged"), assigned: n("assigned"), held: n("held"), needs_look: n("needs_look"), no_film: n("no_film"), total: n("total") };
 });
 const readRows = (p) => p.$$eval('[data-testid="veo-row"]', (els) => els.map((e) => ({
   apiId: Number(e.dataset.apiId),
@@ -83,7 +83,7 @@ async function main() {
   const t = await readTally(p);
   const rows = await readRows(p);
   console.log(`     tally ${JSON.stringify(t)} · ${rows.length} rows rendered`);
-  is("the five states add exactly to the total", t.posted + t.flagged + t.held + t.needs_look + t.no_film, t.total);
+  is("the six states add exactly to the total", t.posted + t.flagged + t.assigned + t.held + t.needs_look + t.no_film, t.total);
   is("…and the total is the number of rows on screen", t.total, rows.length);
 
   // A flagged post is counted ONCE. Assert on the DOM: no row is both.
@@ -114,7 +114,7 @@ async function main() {
   yes("every printed score is below 100", scored.every((r) => Number(r.score) < 100), JSON.stringify(scored));
 
   // ---- the tally is the filter, and it moves the list with it ----
-  const clickable = ["posted", "flagged", "held", "needs_look", "no_film"].find((k) => t[k] > 0);
+  const clickable = ["posted", "flagged", "assigned", "held", "needs_look", "no_film"].find((k) => t[k] > 0);
   if (clickable) {
     await p.click(`[data-testid="veo-tal-${clickable}"]`);
     await p.waitForTimeout(300);
@@ -135,7 +135,7 @@ async function main() {
     const ct = await readTally(p);
     const cr = await readRows(p);
     is(`city "${opts[0]}": the tally total equals the rows shown`, ct.total, cr.length);
-    is("…and the five still add to it", ct.posted + ct.flagged + ct.held + ct.needs_look + ct.no_film, ct.total);
+    is("…and the six still add to it", ct.posted + ct.flagged + ct.assigned + ct.held + ct.needs_look + ct.no_film, ct.total);
     yes("…and it is a narrowing, not the whole day", ct.total <= t.total, `${ct.total} vs ${t.total}`);
     await p.selectOption('[data-testid="veo-city"]', "all");
     await p.waitForTimeout(300);
@@ -196,7 +196,10 @@ async function main() {
     videoUrl: "https://app.veo.co/matches/fixture/", receivedAt: "2026-09-04T05:00:00Z",
     status: "queued", queueReason: null, matchedApiId: null, candidateApiIds: [],
     score: null, scoreParts: null, flagged: false, parsedCode: "FIX",
-    parsedMatchDate: "2026-09-03", parsedTimeLabel: "8:00 PM", ...over,
+    parsedMatchDate: "2026-09-03", parsedTimeLabel: "8:00 PM",
+    // The gap on every candidate line is measured from THIS, so a fixture without it prints no
+    // gaps at all — which is how the first run of the assertion below came back with four "".
+    parsedTimeMinutes: 1200, postedByUserId: null, ...over,
   });
   const M = (apiId, over) => ({
     apiId, name: `Fixture ${apiId}`, city: "Austin", cityCode: "ATX", venue: "Onion Creek",
@@ -210,8 +213,9 @@ async function main() {
    * a person decided the page should show. */
   const rPosted = R({ n: 1, status: "posted", matchedApiId: 101, score: 100, scoreParts: parts(40, "exact", 30, "month", 20, "ampm", 10) });
   const rFlagged = R({ n: 2, status: "posted", matchedApiId: 102, flagged: true, score: 78, scoreParts: parts(18, "label", 30, "month", 20, "ampm", 10) });
+  const rAssigned = R({ n: 3, status: "posted", matchedApiId: 106, postedByUserId: "u-real-person", score: 100, scoreParts: parts(40, "exact", 30, "month", 20, "ampm", 10) });
   const rLook = R({ n: 4, candidateApiIds: [104], queueReason: "multiple_matches", score: 90, scoreParts: parts(40, "exact", 30, "month", 20, "ampm", 0) });
-  const rUnplaced = R({ n: 6, queueReason: "unknown_code", score: 50, scoreParts: parts(0, "none", 30, "month", 20, "ampm", 0) });
+  const rUnplaced = R({ n: 6, queueReason: "unknown_code", candidateApiIds: [104], score: 50, scoreParts: parts(0, "none", 30, "month", 20, "ampm", 0) });
   const FIX = {
     date: "2026-09-03",
     rows: [
@@ -220,11 +224,19 @@ async function main() {
       { ...M(103, { codeConfirmed: false, code: "LFI" }), state: "held", recordings: [], primary: null },
       { ...M(104), state: "needs_look", recordings: [rLook], primary: rLook },
       { ...M(105), state: "no_film", recordings: [], primary: null },
+      { ...M(106), state: "assigned", recordings: [rAssigned], primary: rAssigned },
     ],
-    tally: { posted: 1, flagged: 1, held: 1, needs_look: 1, no_film: 1, total: 5 },
+    tally: { posted: 1, flagged: 1, assigned: 1, held: 1, needs_look: 1, no_film: 1, total: 6 },
     unplaced: [rUnplaced],
     strays: {},
     codedFields: [27],
+    candidates: {
+      101: { apiId: 101, name: "Fixture 101", venue: "Onion Creek", city: "Austin", time: "8:00 PM", minutes: 1200, players: 14, capacity: 20, fieldId: 27, coded: true },
+      104: { apiId: 104, name: "Fixture 104", venue: "Onion Creek", city: "Austin", time: "8:00 PM", minutes: 1200, players: 14, capacity: 20, fieldId: 27, coded: true },
+      105: { apiId: 105, name: "Fixture 105", venue: "Onion Creek", city: "Austin", time: "9:00 PM", minutes: 1260, players: 9, capacity: 20, fieldId: 27, coded: true },
+      // A candidate on a field NO code names: offered, marked, and still assignable.
+      999: { apiId: 999, name: "Uncoded Pitch", venue: "Elsewhere", city: "Houston", time: "8:45 PM", minutes: 1245, players: 12, capacity: 22, fieldId: 4242, coded: false },
+    },
     cities: ["Austin"],
     emojiWithoutCode: 0,
     confinedCity: null,
@@ -239,13 +251,17 @@ async function main() {
   const ft = await readTally(p);
   const frows = await readRows(p);
   console.log(`     fixture tally ${JSON.stringify(ft)}`);
-  yes("the constructed day has at least one of each of the five states",
-    ["posted", "flagged", "held", "needs_look", "no_film"].every((k) => ft[k] >= 1), JSON.stringify(ft));
-  is("…and the five add exactly to the total", ft.posted + ft.flagged + ft.held + ft.needs_look + ft.no_film, ft.total);
+  yes("the constructed day has at least one of each of the six states",
+    ["posted", "flagged", "assigned", "held", "needs_look", "no_film"].every((k) => ft[k] >= 1), JSON.stringify(ft));
+  is("…and the six add exactly to the total", ft.posted + ft.flagged + ft.assigned + ft.held + ft.needs_look + ft.no_film, ft.total);
   is("…and the total is the rows on screen", ft.total, frows.length);
   // THE DOUBLE-COUNT. A flagged post must appear under flagged and NOT ALSO under posted.
   is("a flagged post is counted once, under Posted flagged", ft.flagged, 1);
-  is("…and the Posted count holds only the unflagged one", ft.posted, 1);
+  is("…and the Posted count holds only the unflagged, AUTOMATIC one", ft.posted, 1);
+  // THE SPLIT THAT MADE "posted went 16 to 15" UNREADABLE — a hand-assignment is not a post.
+  is("a hand-assigned recording is counted under Assigned by hand, not Posted", ft.assigned, 1);
+  const handPill = await p.$eval('[data-state="assigned"] [data-testid="veo-row-state"]', (e) => e.textContent.trim());
+  is("…and its row says a person put it there", handPill, "Assigned by hand");
   const flaggedRows = frows.filter((r) => r.state === "flagged");
   is("…and exactly one ROW carries that state", flaggedRows.length, 1);
   const pill = await p.$eval('[data-state="flagged"] [data-testid="veo-row-state"]', (e) => e.textContent.trim());
@@ -270,19 +286,24 @@ async function main() {
   is("…and its components add to the score", tr.lines.reduce((a, l) => a + l.points, 0), tr.total);
   is("…and the score is the one on the row", tr.total, 78);
 
-  /* AN UNPLACED RECORDING SAYS WHY. Measured on the real 2026-07-31: two Pearland recordings were
-   * hand-assigned to matches on field 22, ATHP's field_ids is [32], and the page listed neither
-   * match. "Could not place" is the symptom; the code table is the cause, and the page now says so. */
+  /* CAUSE 1, ON THE REAL DAY. ATHP named mdapi field 32; 319 of the 335 Pearland matches in 2026
+   * are on field 22 ("Tourney ATH Pearland"). With only 32 named, no Pearland match had a row and
+   * both Pearland recordings for 2026-07-31 sat in the orphan strip saying "no veo_codes row names
+   * that field". With 22 added they are rows. */
   await p.unroute("**/api/veo/day**");
   await p.goto(`${BASE}/match-ops/veo?date=2026-07-31`, { waitUntil: "domcontentloaded" });
   await p.waitForSelector('[data-testid="veo-row"]', { timeout: 120000 });
   await p.waitForFunction(() => !document.body.innerText.includes("Loading…"), { timeout: 120000 });
-  const stray = await p.$$eval('[data-testid="veo-stray"]', (els) => els.map((e) => e.textContent.trim()));
-  console.log(`     stray notes: ${JSON.stringify(stray)}`);
-  yes("an unplaced POSTED recording names its match and the uncoded field",
-    stray.length > 0 && stray.every((s) => /posted to match \d+/.test(s)), JSON.stringify(stray));
-  yes("…and where the field is in no code, it says that is why",
-    stray.some((s) => /no veo_codes row names that field/.test(s)), JSON.stringify(stray));
+  const jul31 = await p.evaluate(() => ({
+    strays: [...document.querySelectorAll('[data-testid="veo-stray"]')].map((e) => e.textContent.trim()),
+    codes: [...document.querySelectorAll('[data-testid="veo-row"] .code')].map((e) => e.textContent.trim()),
+  }));
+  console.log(`     2026-07-31 row codes: ${JSON.stringify(jul31.codes)}`);
+  console.log(`     remaining stray notes: ${JSON.stringify(jul31.strays)}`);
+  yes("the Pearland matches now have rows of their own", jul31.codes.filter((c) => c === "ATHP").length >= 2, JSON.stringify(jul31.codes));
+  is("…and no recording is left saying its field is in no code", jul31.strays.filter((s) => /no veo_codes row names that field/.test(s)), []);
+  // CONTROL: the page still renders the note when it applies — proven on the fixture below, where
+  // a candidate on field 4242 is marked uncoded. Without that, this emptiness proves nothing.
   await p.route("**/api/veo/day**", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(FIX) }));
   await p.goto(`${BASE}/match-ops/veo?date=2026-09-03`, { waitUntil: "domcontentloaded" });
@@ -303,6 +324,64 @@ async function main() {
   is("an unresolved review reads Find the film", find.text, "Find the film");
   yes("…and is not styled like a disabled control", find.opacity !== disabledColor.opacity || find.color !== disabledColor.color,
     `${JSON.stringify(find)} vs ${JSON.stringify(disabledColor)}`);
+
+  /* ---- ASSIGNING BY HAND, on the fixture so nothing is written ----
+   * The write itself is exercised once against production, on the real Pearland pair, and reported
+   * separately. What a browser can prove here is the SHAPE: the two groups stay separate, the gap
+   * is printed rather than left as arithmetic, an uncoded candidate is offered and marked, and
+   * nothing is sent without a confirm that names both sides. */
+  await p.goto(`${BASE}/match-ops/veo?date=2026-09-03`, { waitUntil: "domcontentloaded" });
+  await p.waitForSelector('[data-testid="veo-row"]', { timeout: 60000 });
+  await p.click('[data-state="needs_look"] button');
+  await p.waitForSelector('[data-testid="veo-actions"]', { timeout: 30000 });
+  const acts = await p.$$eval('[data-testid="veo-actions"] button', (els) => els.map((e) => ({ t: e.textContent.trim(), disabled: e.disabled })));
+  console.log(`     queued row actions: ${JSON.stringify(acts)}`);
+  yes("a queued row offers Send to the chat, and it is LIVE", acts.some((a) => a.t === "Send to the chat" && !a.disabled), JSON.stringify(acts));
+  yes("…and Different match beside it", acts.some((a) => a.t === "Different match" && !a.disabled), JSON.stringify(acts));
+  yes("…and Not our film", acts.some((a) => a.t === "Not our film" && !a.disabled), JSON.stringify(acts));
+
+  await p.click('[data-testid="veo-different-match"]');
+  await p.waitForSelector('[data-testid="veo-assign-panel"]', { timeout: 30000 });
+  const panel = await p.evaluate(() => {
+    // [data-gap] and not just the testid prefix — "veo-cand-uncoded" is an <em> INSIDE a
+    // candidate row and matched the prefix too, so the map ran over an element with no button.
+    const grab = (sel) => [...document.querySelectorAll(`${sel} [data-testid^="veo-cand-"][data-gap]`)].map((e) => ({
+      apiId: Number(e.dataset.testid.replace("veo-cand-", "")),
+      gap: e.dataset.gap,
+      uncoded: Boolean(e.querySelector('[data-testid="veo-cand-uncoded"]')),
+      assignDisabled: e.querySelector("button").disabled,
+    }));
+    return { shortlist: grab('[data-testid="veo-shortlist"]'), rest: grab('[data-testid="veo-rest"]'),
+      head: document.querySelector('[data-testid="veo-shortlist-head"]')?.textContent?.trim() ?? null };
+  });
+  console.log(`     assign panel: ${JSON.stringify(panel)}`);
+  is("the matcher's shortlist appears FIRST and holds exactly its stored candidates", panel.shortlist.map((c) => c.apiId), [104]);
+  yes("…under a heading saying it is what the matcher weighed", /could not choose/.test(panel.head ?? ""), panel.head);
+  yes("…and the rest of the day is a separate group below it",
+    panel.rest.length > 0 && !panel.rest.some((c) => c.apiId === 104), JSON.stringify(panel.rest));
+  // THE GAP IS PRINTED, NOT LEFT AS ARITHMETIC.
+  const gaps = [...panel.shortlist, ...panel.rest].map((c) => c.gap);
+  console.log(`     gaps: ${JSON.stringify(gaps)}`);
+  yes("every candidate prints its gap in words", gaps.every((g) => g === "exact" || /^\d+ min (earlier|later)$/.test(g)), JSON.stringify(gaps));
+  yes("…and the exact one says exact", gaps.includes("exact"), JSON.stringify(gaps));
+  // AN UNCODED CANDIDATE IS MARKED AND STILL ASSIGNABLE.
+  const unc = [...panel.shortlist, ...panel.rest].find((c) => c.apiId === 999);
+  yes("a candidate on a field no code names is offered and marked", Boolean(unc?.uncoded), JSON.stringify(unc));
+  yes("…and is still assignable — the override is informed, not blocked", unc && !unc.assignDisabled, JSON.stringify(unc));
+
+  // NOTHING IS SENT WITHOUT A CONFIRM NAMING BOTH SIDES.
+  let posts = 0;
+  await p.route("**/api/veo/**", (route) => {
+    if (route.request().method() === "POST") { posts += 1; return route.fulfill({ status: 200, contentType: "application/json", body: "{}" }); }
+    return route.fallback();
+  });
+  await p.click('[data-testid="veo-cand-104"] button');
+  await p.waitForSelector('[data-testid="veo-confirm"]', { timeout: 30000 });
+  const confirmText = await p.$eval('[data-testid="veo-confirm"]', (e) => e.textContent.replace(/\s+/g, " ").trim());
+  console.log(`     confirm: ${JSON.stringify(confirmText.slice(0, 130))}`);
+  is("clicking Assign posts NOTHING until the confirm is answered", posts, 0);
+  yes("the confirm names the recording", /FIX \| Sep 3 \| 8pm/.test(confirmText), confirmText);
+  yes("…and the match, its time and its fill", /Fixture 104, 8:00 PM, 14 players/.test(confirmText), confirmText);
 
   await b.close();
   console.log(`\n${pass} passed, ${fail} failed`);

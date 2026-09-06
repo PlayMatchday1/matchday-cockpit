@@ -25,8 +25,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import {
-  FILM_STATES, FILM_STATE_LABEL, scoreTrace, tallyAddsUp,
-  type FilmState, type VeoDayRecording, type VeoDayRow, type VeoDayTally,
+  FILM_STATES, FILM_STATE_LABEL, emptyTally, gapLabel, scoreTrace, tallyAddsUp,
+  type AssignCandidate, type FilmState, type VeoDayRecording, type VeoDayRow, type VeoDayTally,
 } from "@/lib/veoDay";
 
 type Payload = {
@@ -35,6 +35,7 @@ type Payload = {
   tally: VeoDayTally;
   unplaced: VeoDayRecording[];
   strays: Record<number, { apiId: number; name: string; fieldId: number | null; date: string | null }>;
+  candidates: Record<number, AssignCandidate>;
   codedFields: number[];
   cities: string[];
   emojiWithoutCode: number;
@@ -87,11 +88,12 @@ const longDate = (iso: string) => {
 };
 
 const STATE_TONE: Record<FilmState, string> = {
-  posted: "ok", flagged: "flag", held: "hold", needs_look: "look", no_film: "none",
+  posted: "ok", flagged: "flag", assigned: "hand", held: "hold", needs_look: "look", no_film: "none",
 };
 const TALLY_LABEL: Record<FilmState, string> = {
-  posted: "film posted",
+  posted: "posted itself",
   flagged: "posted, flagged",
+  assigned: "assigned by hand",
   held: "held on purpose",
   needs_look: "needs a look",
   no_film: "no film yet",
@@ -113,6 +115,7 @@ export default function VeoDayOps() {
   const [filter, setFilter] = useState<FilmState | null>(null);
   const [city, setCity] = useState<string>("all");
   const [openId, setOpenId] = useState<number | null>(null);
+  const [assignId, setAssignId] = useState<string | null>(null);
 
   const load = useCallback(async (d: string) => {
     setLoading(true); setErr(null);
@@ -126,7 +129,7 @@ export default function VeoDayOps() {
     } finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { void load(date); setOpenId(null); }, [date, load]);
+  useEffect(() => { void load(date); setOpenId(null); setAssignId(null); }, [date, load]);
 
   // Keep the address bar on the day being shown, without a navigation — the dock and every other
   // Match Ops surface survive because this route never remounts, and a router.push would remount.
@@ -145,7 +148,7 @@ export default function VeoDayOps() {
     [data, city],
   );
   const shownTally = useMemo<VeoDayTally>(() => {
-    const t: VeoDayTally = { posted: 0, flagged: 0, held: 0, needs_look: 0, no_film: 0, total: cityRows.length };
+    const t = emptyTally(cityRows.length);
     for (const r of cityRows) t[r.state] += 1;
     return t;
   }, [cityRows]);
@@ -226,37 +229,31 @@ export default function VeoDayOps() {
 
       <div className="rows">
         {rows.map((r) => (
-          <Row key={r.apiId} r={r} open={openId === r.apiId} onToggle={() => setOpenId(openId === r.apiId ? null : r.apiId)} />
+          <Row key={r.apiId} r={r} data={data!} open={openId === r.apiId}
+            onToggle={() => setOpenId(openId === r.apiId ? null : r.apiId)}
+            onDone={() => { setOpenId(null); void load(date); }} />
         ))}
       </div>
 
       {/* Recordings that name this day and no match on it. They belong to the day — this is the
           review queue's content — but they cannot be a row against a match, and inventing one
           would break the tally above. */}
+      {/* THE ORPHAN STRIP, WHICH NOW HAS SOMEWHERE TO GO. It offered Open in Veo and nothing else —
+          a link that opens the film in another tab and leaves the recording exactly as unassigned
+          as it was. No matcher is ever good enough to have no queue, so the queue needs an exit. */}
       {data && data.unplaced.length > 0 && (
         <div className="unplaced" data-testid="veo-unplaced">
           <h3>{data.unplaced.length} recording{data.unplaced.length === 1 ? "" : "s"} for this day with no row above</h3>
-          {data.unplaced.map((u) => {
-            const stray = u.matchedApiId != null ? data.strays[u.matchedApiId] : undefined;
-            const uncoded = stray?.fieldId != null && !data.codedFields.includes(stray.fieldId);
-            return (
-              <div className="up" key={u.id}>
-                <span className="upsub">{u.subject ?? u.recordingId}</span>
-                {/* THE USEFUL VERSION OF "could not place". A posted recording went somewhere real;
-                    if its match is missing from the page, the reason is the code table. */}
-                {stray ? (
-                  <span className={uncoded ? "upwhy" : "upnote"} data-testid="veo-stray">
-                    {uncoded
-                      ? `posted to match ${stray.apiId} on field ${stray.fieldId} — no veo_codes row names that field, so it cannot be a row here`
-                      : `posted to match ${stray.apiId}${stray.date && stray.date !== data.date ? ` on ${stray.date}` : ""}`}
-                  </span>
-                ) : (
-                  <span className="upwhy">{u.queueReason ?? u.status}</span>
-                )}
-                {u.videoUrl && <a className="btn" href={u.videoUrl} target="_blank" rel="noreferrer">Open in Veo</a>}
-              </div>
-            );
-          })}
+          {data.unplaced.map((u) => (
+            <Orphan
+              key={u.id}
+              u={u}
+              data={data}
+              open={assignId === u.id}
+              onToggle={() => setAssignId(assignId === u.id ? null : u.id)}
+              onDone={() => { setAssignId(null); void load(date); }}
+            />
+          ))}
         </div>
       )}
 
@@ -276,7 +273,188 @@ export default function VeoDayOps() {
   );
 }
 
-function Row({ r, open, onToggle }: { r: VeoDayRow; open: boolean; onToggle: () => void }) {
+/* ── ASSIGNING AN ORPHAN BY HAND ───────────────────────────────────────────────────────────────
+ * POST /api/veo/[id] { apiId } has existed and worked all along — the old automation dashboard has
+ * been calling it. This page simply did not. So this is wiring, not building.
+ *
+ * TWO GROUPS, NEVER MERGED INTO ONE SORTED LIST. The top group is the row's stored
+ * candidate_api_ids: for a multiple_matches recording those are exactly the matches the matcher
+ * weighed and could not separate, so the common case is two lines and one click. Sorting them in
+ * with the rest of the day would destroy the only thing that makes them the top two.
+ */
+/* The two writes, in one place. Both are one attempt with no retry — there is no Idempotency-Key
+ * anywhere in this pipeline and a duplicate film is visible to every player in the chat. */
+function useAssign(recordingId: string, onDone: () => void) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const call = async (init: RequestInit, what: string) => {
+    if (busy) return false;
+    setBusy(true); setErr(null);
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token;
+      const res = await fetch(`/api/veo/${recordingId}`, {
+        ...init,
+        headers: { ...(init.headers ?? {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setErr(`${j?.error || `${what} failed (${res.status})`} — the recording is still queued.`);
+        return false;
+      }
+      onDone();
+      return true;
+    } catch (e) {
+      setErr(`${e instanceof Error ? e.message : String(e)} — the recording is still queued.`);
+      return false;
+    } finally { setBusy(false); }
+  };
+  return {
+    busy, err, setErr,
+    assign: (apiId: number) => call({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apiId }) }, "Assign"),
+    dismiss: () => call({ method: "DELETE" }, "Dismiss"),
+  };
+}
+
+/** The confirm, which names BOTH sides. This puts a video link in a chat real players read. */
+function Confirm({ rec, target, busy, onCancel, onGo }: {
+  rec: VeoDayRecording; target: AssignCandidate; busy: boolean; onCancel: () => void; onGo: () => void;
+}) {
+  return (
+    <div className="confirm" data-testid="veo-confirm">
+      <p>
+        Post <b>{rec.subject ?? rec.recordingId}</b> into{" "}
+        <b>{target.name}, {target.time}{target.players != null ? `, ${target.players} players` : ""}</b>?
+      </p>
+      <p className="pnote">The film appears in that match&apos;s chat straight away. It can be removed, but not unseen.</p>
+      <div className="acts">
+        <button type="button" className="btn" disabled={busy} onClick={onCancel}>Cancel</button>
+        <button type="button" className="btn pri" data-testid="veo-confirm-post" disabled={busy} onClick={onGo}>
+          {busy ? "Posting…" : "Post it"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* THE CANDIDATE LIST, IN TWO GROUPS THAT ARE NEVER MERGED. The top group is the row's stored
+ * candidate_api_ids: for a multiple_matches recording those are exactly the matches the matcher
+ * weighed and could not separate, so the common case is two lines and one click. Sorting them in
+ * with the rest of the day would destroy the only thing that makes them the top two. */
+function CandidateList({ rec, data, busy, onPick }: {
+  rec: VeoDayRecording; data: Payload; busy: boolean; onPick: (c: AssignCandidate) => void;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const shortlist = rec.candidateApiIds.map((id) => data.candidates[id]).filter(Boolean);
+  const shortIds = new Set(shortlist.map((c) => c.apiId));
+  const rest = Object.values(data.candidates)
+    .filter((c) => !shortIds.has(c.apiId))
+    .sort((a, b) => {
+      if (rec.parsedTimeMinutes == null) return a.minutes - b.minutes;
+      return Math.abs(a.minutes - rec.parsedTimeMinutes) - Math.abs(b.minutes - rec.parsedTimeMinutes);
+    });
+  const REST_SHOWN = 4;
+  const restShown = showAll ? rest : rest.slice(0, REST_SHOWN);
+
+  const line = (c: AssignCandidate) => {
+    const gap = gapLabel(c.minutes, rec.parsedTimeMinutes);
+    return (
+      <div className={`cand${gap === "exact" ? " exact" : ""}`} key={c.apiId} data-testid={`veo-cand-${c.apiId}`} data-gap={gap ?? ""}>
+        <span className="ct">{c.time}</span>
+        <span className="cn">
+          <b>{c.name}</b>
+          <small>
+            {c.venue} · {c.city}
+            {/* INFORMATION, NOT A BLOCK. A person assigning by hand is the deliberate override. */}
+            {!c.coded && <em data-testid="veo-cand-uncoded"> · no code names this field</em>}
+          </small>
+        </span>
+        <span className="cg">{gap ?? "—"}</span>
+        <span className="cf">{c.players ?? "—"}{c.capacity ? `/${c.capacity}` : ""}</span>
+        <button type="button" className={`btn${gap === "exact" ? " pri" : ""}`} data-testid={`veo-assign-${c.apiId}`}
+          disabled={busy} onClick={() => onPick(c)}>Assign</button>
+      </div>
+    );
+  };
+
+  return (
+    <>
+      {shortlist.length > 0 && (
+        <>
+          <h4 data-testid="veo-shortlist-head">
+            {shortlist.length === 2 ? "Both of these, and it could not choose" : `The ${shortlist.length} it weighed and could not choose between`}
+          </h4>
+          <div data-testid="veo-shortlist">{shortlist.map(line)}</div>
+        </>
+      )}
+      <h4>{shortlist.length > 0 ? "Everything else on camera that day" : "On camera that day"}</h4>
+      <div data-testid="veo-rest">{restShown.map(line)}</div>
+      {rest.length > REST_SHOWN && !showAll && (
+        <button type="button" className="more" onClick={() => setShowAll(true)}>Show the other {rest.length - REST_SHOWN}</button>
+      )}
+      {rest.length === 0 && shortlist.length === 0 && <p className="pnote">No camera matches on this day to assign it to.</p>}
+    </>
+  );
+}
+
+function Orphan({ u, data, open, onToggle, onDone }: {
+  u: VeoDayRecording;
+  data: Payload;
+  open: boolean;
+  onToggle: () => void;
+  onDone: () => void;
+}) {
+  const [confirming, setConfirming] = useState<AssignCandidate | null>(null);
+  const { busy, err, assign, dismiss } = useAssign(u.id, onDone);
+
+  const stray = u.matchedApiId != null ? data.strays[u.matchedApiId] : undefined;
+  const uncoded = stray?.fieldId != null && !data.codedFields.includes(stray.fieldId);
+
+  return (
+    <div className="up-wrap" data-testid="veo-orphan" data-recording-id={u.id}>
+      <div className="up">
+        <span className="upsub">{u.subject ?? u.recordingId}</span>
+        {stray ? (
+          <span className={uncoded ? "upwhy" : "upnote"} data-testid="veo-stray">
+            {uncoded
+              ? `posted to match ${stray.apiId} on field ${stray.fieldId} — no veo_codes row names that field, so it cannot be a row here`
+              : `posted to match ${stray.apiId}${stray.date && stray.date !== data.date ? ` on ${stray.date}` : ""}`}
+          </span>
+        ) : (
+          <span className="upwhy">{u.queueReason ?? u.status}</span>
+        )}
+        {u.status !== "posted" && (
+          <button type="button" className="btn" data-testid="veo-open-assign" onClick={onToggle}>
+            {open ? "Close" : "Assign"}
+          </button>
+        )}
+        {u.videoUrl && <a className="btn" href={u.videoUrl} target="_blank" rel="noreferrer">Open in Veo</a>}
+      </div>
+
+      {open && (
+        <div className="assign" data-testid="veo-assign-panel">
+          <CandidateList rec={u} data={data} busy={busy} onPick={setConfirming} />
+          <div className="assignfoot">
+            <span className="pnote">Assigning posts the film into that match&apos;s chat. One attempt, never retried.</span>
+            <button type="button" className="btn" data-testid="veo-dismiss" disabled={busy} onClick={() => void dismiss()}>Not our film</button>
+          </div>
+          {err && <p className="warn" data-testid="veo-assign-error">{err}</p>}
+        </div>
+      )}
+
+      {confirming && (
+        <Confirm rec={u} target={confirming} busy={busy}
+          onCancel={() => setConfirming(null)}
+          onGo={() => void assign(confirming.apiId)} />
+      )}
+    </div>
+  );
+}
+
+
+function Row({ r, data, open, onToggle, onDone }: {
+  r: VeoDayRow; data: Payload; open: boolean; onToggle: () => void; onDone: () => void;
+}) {
   const rec = r.primary;
   const score = rec?.score ?? null;
   return (
@@ -295,12 +473,12 @@ function Row({ r, open, onToggle }: { r: VeoDayRow; open: boolean; onToggle: () 
         <span className="sc" data-testid="veo-row-score">{score != null && score < 100 ? score : ""}</span>
         <span className="chev" aria-hidden>{open ? "▾" : "›"}</span>
       </button>
-      {open && <Viewer r={r} />}
+      {open && <Viewer r={r} data={data} onDone={onDone} />}
     </div>
   );
 }
 
-function Viewer({ r }: { r: VeoDayRow }) {
+function Viewer({ r, data, onDone }: { r: VeoDayRow; data: Payload; onDone: () => void }) {
   const rec = r.primary;
   /* The still frame is fetched when the row opens, never with the day — a day of rows would be a
    * scrape of app.veo.co per row for pictures nobody had asked to see yet. */
@@ -319,7 +497,13 @@ function Viewer({ r }: { r: VeoDayRow }) {
     return () => { live = false; };
   }, [recId]);
   const trace = scoreTrace(rec?.scoreParts ?? null);
-  const posted = r.state === "posted" || r.state === "flagged";
+  const posted = r.state === "posted" || r.state === "flagged" || r.state === "assigned";
+  const [picking, setPicking] = useState(false);
+  const [confirming, setConfirming] = useState<AssignCandidate | null>(null);
+  // Hooks are unconditional; the id is a placeholder when there is nothing to assign, and every
+  // control that could call it is absent in that case.
+  const { busy, err, assign, dismiss } = useAssign(rec?.id ?? "", onDone);
+  const thisMatch = data.candidates[r.apiId] ?? null;
   return (
     <div className="viewer" data-testid="veo-viewer">
       <div className="player" data-testid="veo-player">
@@ -339,8 +523,11 @@ function Viewer({ r }: { r: VeoDayRow }) {
               )}
               <span className="play" aria-hidden>▶</span>
             </div>
+            {/* THE RECORDING'S OWN SUBJECT, not the row's time. More than one recording can attach
+                to a match (the Pearland pair shortlists both), so a panel headed with the MATCH's
+                time cannot tell you which film you are about to post. */}
             <div className="pmeta">
-              <b>{r.code} · {r.time}</b>
+              <b data-testid="veo-rec-subject">{rec.subject ?? `${r.code} · ${r.time}`}</b>
               <span className="rid">{rec.recordingId}</span>
             </div>
             <a className="btn pri" data-testid="veo-open-in-veo" href={rec.videoUrl} target="_blank" rel="noreferrer">Open in Veo</a>
@@ -365,7 +552,10 @@ function Viewer({ r }: { r: VeoDayRow }) {
         </dl>
 
         {/* THE BUTTONS FOLLOW THE STATE. A recording that already posted is never offered a send —
-            a send button under a trace saying it has already sent is a control that lies. */}
+            a send button under a trace saying it has already sent is a control that lies.
+            THE OTHER HALF USED TO BE DEAD, and once ATHP covered both Pearland field ids the
+            Pearland recordings stopped being orphans and became rows — so the assign panel had to
+            be reachable from HERE, which is now the common case, not only from the orphan strip. */}
         <div className="acts" data-testid="veo-actions">
           {posted ? (
             <>
@@ -374,17 +564,44 @@ function Viewer({ r }: { r: VeoDayRow }) {
             </>
           ) : rec ? (
             <>
-              <button className="btn pri" disabled>Send to the chat</button>
-              <button className="btn" disabled>Different match</button>
+              <button
+                type="button"
+                className="btn pri"
+                data-testid="veo-send-to-chat"
+                disabled={busy || !thisMatch}
+                onClick={() => thisMatch && setConfirming(thisMatch)}
+              >
+                Send to the chat
+              </button>
+              <button type="button" className="btn" data-testid="veo-different-match" disabled={busy} onClick={() => setPicking(!picking)}>
+                {picking ? "Close" : "Different match"}
+              </button>
+              <button type="button" className="btn" data-testid="veo-row-dismiss" disabled={busy} onClick={() => void dismiss()}>Not our film</button>
             </>
           ) : (
             <span className="find" data-testid="veo-find-film">Find the film</span>
           )}
         </div>
-        <p className="pnote">
-          These are not wired yet — they are drawn disabled rather than shipped live, because every one of them writes
-          a message into a chat players read.
-        </p>
+        {posted && (
+          <p className="pnote">
+            These two are not wired yet — drawn disabled rather than shipped live, because both of them write into a
+            chat players read.
+          </p>
+        )}
+        {rec && !posted && (
+          <p className="pnote">Assigning posts the film into that match&apos;s chat. One attempt, never retried.</p>
+        )}
+        {err && <p className="warn" data-testid="veo-assign-error">{err}</p>}
+        {rec && !posted && picking && (
+          <div className="assign" data-testid="veo-assign-panel">
+            <CandidateList rec={rec} data={data} busy={busy} onPick={setConfirming} />
+          </div>
+        )}
+        {rec && confirming && (
+          <Confirm rec={rec} target={confirming} busy={busy}
+            onCancel={() => setConfirming(null)}
+            onGo={() => void assign(confirming.apiId)} />
+        )}
 
         {trace && rec?.score != null && (
           <div className="trace" data-testid="veo-trace" data-total={rec.score}>
@@ -421,7 +638,7 @@ function Viewer({ r }: { r: VeoDayRow }) {
 
 const CSS = `
 .veo{--ink1:#0f1c17;--ink2:#3d5049;--ink3:#7c8f88;--line:#e3e9e6;--bg:#fbfcfc;
-  --ok:#128a5c;--flag:#b8791f;--hold:#5b6b9e;--look:#c0563a;--none:#8a9691;
+  --ok:#128a5c;--flag:#b8791f;--hand:#2f7d8f;--hold:#5b6b9e;--look:#c0563a;--none:#8a9691;
   padding:18px 20px 60px;max-width:1180px;margin:0 auto;color:var(--ink1);
   font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 .veo .head{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;justify-content:space-between;margin-bottom:14px}
@@ -438,7 +655,7 @@ const CSS = `
 .veo .sel{border:1px solid var(--line);background:#fff;border-radius:8px;height:32px;padding:0 8px;font-size:12.5px;color:var(--ink2)}
 .veo .conf{font-size:11px;font-weight:700;color:var(--hold);background:#eef1f8;border-radius:999px;padding:4px 9px}
 
-.veo .tally{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin:0 0 14px}
+.veo .tally{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;margin:0 0 14px}
 .veo .tal{border:1px solid var(--line);background:#fff;border-radius:11px;padding:11px 12px;text-align:left;cursor:pointer;
   display:flex;flex-direction:column;gap:1px}
 .veo .tal b{font-size:22px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
@@ -449,6 +666,7 @@ const CSS = `
 .veo .tal.hold b{color:var(--hold)} .veo .tal.hold.on{color:var(--hold)}
 .veo .tal.look b{color:var(--look)} .veo .tal.look.on{color:var(--look)}
 .veo .tal.none b{color:var(--none)} .veo .tal.none.on{color:var(--none)}
+.veo .tal.hand b{color:var(--hand)} .veo .tal.hand.on{color:var(--hand)}
 .veo .tal.total{background:var(--bg);cursor:default}
 
 .veo .rows{display:flex;flex-direction:column;gap:7px}
@@ -468,6 +686,7 @@ const CSS = `
 .veo .pill.hold{background:#eef1f8;color:var(--hold)}
 .veo .pill.look{background:#fdeee9;color:var(--look)}
 .veo .pill.none{background:#f2f4f3;color:var(--none)}
+.veo .pill.hand{background:#e6f2f5;color:var(--hand)}
 .veo .pl{font-size:12.5px;color:var(--ink2);font-variant-numeric:tabular-nums;text-align:right}
 .veo .sc{font-size:12.5px;font-weight:800;color:var(--flag);font-variant-numeric:tabular-nums;text-align:right}
 .veo .chev{color:var(--ink3);text-align:center}
@@ -481,7 +700,7 @@ const CSS = `
 .veo .play{position:relative;width:54px;height:54px;border-radius:999px;background:rgba(12,19,15,.55);color:#fff;
   display:flex;align-items:center;justify-content:center;font-size:19px;backdrop-filter:blur(2px)}
 .veo .pmeta{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
-.veo .pmeta b{font-size:13px}
+.veo .pmeta b{font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .veo .rid{font-size:11px;color:var(--ink3);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .veo .nofilm{aspect-ratio:16/9;border:1px dashed var(--line);border-radius:10px;display:flex;flex-direction:column;
   align-items:center;justify-content:center;gap:3px;color:var(--ink3);background:var(--bg)}
@@ -507,7 +726,29 @@ const CSS = `
 
 .veo .unplaced{margin-top:18px;border:1px solid var(--line);border-radius:11px;background:#fff;padding:12px 13px}
 .veo .unplaced h3{margin:0 0 8px;font-size:12.5px;font-weight:800}
-.veo .up{display:flex;align-items:center;gap:9px;padding:6px 0;border-top:1px solid var(--line);font-size:12.5px}
+.veo .up-wrap{border-top:1px solid var(--line)}
+.veo .up{display:flex;align-items:center;gap:9px;padding:6px 0;font-size:12.5px}
+.veo .assign{padding:4px 0 12px}
+.veo .assign h4{margin:10px 0 5px;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3)}
+/* FIVE COLUMNS, ONE x EACH DOWN THE LIST: when, what, how far off, how full, and the button. */
+.veo .cand{display:grid;grid-template-columns:78px minmax(0,1fr) 96px 58px 74px;gap:10px;align-items:center;
+  padding:6px 9px;border:1px solid var(--line);border-radius:9px;margin-bottom:5px;background:#fff}
+/* ONLY THE EXACT ROW GETS COLOUR. It is the whole decision for the Pearland pair. */
+.veo .cand.exact{border-color:#b7e0cd;background:#f4fbf7}
+.veo .cand .ct{font-weight:800;font-variant-numeric:tabular-nums;font-size:12.5px}
+.veo .cand .cn{display:flex;flex-direction:column;min-width:0}
+.veo .cand .cn b{font-size:12.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.veo .cand .cn small{color:var(--ink3);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.veo .cand .cn em{font-style:normal;color:var(--flag);font-weight:700}
+.veo .cand .cg{font-size:11.5px;color:var(--ink3);font-weight:700}
+.veo .cand.exact .cg{color:var(--ok)}
+.veo .cand .cf{font-size:11.5px;color:var(--ink2);font-variant-numeric:tabular-nums;text-align:right}
+.veo .more{border:0;background:none;color:var(--ink2);font-size:11.5px;font-weight:700;cursor:pointer;padding:3px 0;text-decoration:underline}
+.veo .assignfoot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;flex-wrap:wrap}
+.veo .assignfoot .pnote{margin:0}
+.veo .confirm{border:1px solid #c9d4cf;border-radius:10px;background:var(--bg);padding:11px 13px;margin:4px 0 10px}
+.veo .confirm p{margin:0 0 6px;font-size:13px}
+.veo .confirm .acts{margin-top:9px}
 .veo .upsub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .veo .upwhy{color:var(--look);font-weight:700;font-size:11.5px;text-align:right}
 .veo .upnote{color:var(--ink3);font-size:11.5px;text-align:right}
