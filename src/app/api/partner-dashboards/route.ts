@@ -175,6 +175,8 @@ export async function POST(req: Request) {
     // the partner was shown.
     const dash = buildRentalDashboard(rows, rentalParams, {
       partnerName: partner.partnerName, venue: "", spotPriceCents: partner.spotPriceCents,
+      // THE PARTNER'S OWN KIND, so what is recorded as paid is what the page showed them.
+      payoutModel: partner.payoutModel,
     });
     const ym = weekStartDate.slice(0, 7);
     const month = dash.months.find((m) => m.ym === ym);

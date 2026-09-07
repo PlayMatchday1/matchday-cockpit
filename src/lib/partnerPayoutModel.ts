@@ -31,7 +31,55 @@
 // renders an error instead of a number: a payout page that quietly disagrees with itself is worse
 // than one that admits it.
 
-export type PayoutModel = "REVENUE_SHARE" | "PER_MATCH_MINUS_MANAGER" | "RENTAL_PLUS_PROFIT_SHARE";
+export type PayoutModel =
+  | "REVENUE_SHARE"
+  | "PER_MATCH_MINUS_MANAGER"
+  | "RENTAL_PLUS_PROFIT_SHARE"
+  | "RENTAL_FLOOR_PROFIT_SHARE";
+
+/* ── THE FOURTH MODEL, BESIDE THE THIRD AND NOT INSTEAD OF IT ─────────────────────────────────
+ * RENTAL_FLOOR_PROFIT_SHARE. The rental is a FLOOR UNDER THE SPLIT, not a deduction from the pool.
+ * The name is the difference.
+ *
+ *   pool         = gross − matchManager            the rental is NOT deducted
+ *   split        = max(0, pool) × sharePct/100
+ *   amountToPay  = max(0, split − fieldRental)     the rental is already paid
+ *   partnerTotal = fieldRental + amountToPay       i.e. max(fieldRental, split)
+ *
+ * WHY THE OLD ONE OVERPAYS, as algebra rather than as an opinion. With F rental, M manager,
+ * s share:
+ *
+ *   old(R) = F + s·max(0, R − F − M)
+ *   new(R) = max(F, s·(R − M))
+ *
+ * Above the floor, old − new = F − s·F = (1 − s)·F = 0.6 × $160 = $96 — CONSTANT, whatever the
+ * revenue, the spots or the turnout. The old model removed the rental from the pool and then
+ * handed it back whole, so the partner collected 60% of a rental the split never charged for.
+ *
+ * BOTH MODELS STAY LIVE. RENTAL_PLUS_PROFIT_SHARE is byte-identical below and is the way back: one
+ * UPDATE to partner_dashboards.payout_model switches a partner between them, with no deploy. That
+ * is why this is a fourth kind and not a flag — a flag would make one model with two behaviours,
+ * turn the old model's tests into branch tests, and put a second source of truth beside the column
+ * the header of this file says owns the formula.
+ *
+ * THE FLOOR MAKES MATCHDAY ABSORB MORE OFTEN, which is why matchdayRetained stays written as a
+ * subtraction rather than (1 − s)·pool: under $440 of revenue the partner still takes the whole
+ * rental and MatchDay eats the difference, and only the subtraction keeps the reconciliation exact.
+ */
+
+/** True for both rental kinds. THE ONE PLACE that knows which models are "the rental dashboard" —
+ *  every branch routes through this rather than testing a literal, so adding the fourth kind could
+ *  not leave a site behind that silently falls through to a flat model. */
+export const isRentalModel = (kind: PayoutModel | null | undefined): boolean =>
+  kind === "RENTAL_PLUS_PROFIT_SHARE" || kind === "RENTAL_FLOOR_PROFIT_SHARE";
+
+/** The revenue at which a top-up first appears: s·(R − M) ≥ F. Derived from the partner's own
+ *  parameters, never the literal $440 — the next venue has different numbers. Null when the share
+ *  is zero, where no revenue ever clears the floor. */
+export function topUpThresholdCents(p: RentalProfitShareParams): number | null {
+  if (!(p.partnerSharePct > 0)) return null;
+  return Math.ceil((p.fieldRentalCents * 100) / p.partnerSharePct) + p.matchManagerCents;
+}
 
 // Every parameter lives here, on the partner row. Nothing in this file or the UI may hardcode a
 // venue name, a rental figure or a share percentage — the next venue has different numbers, and a
@@ -115,6 +163,59 @@ export function payoutForMatch(m: MatchInput, p: RentalProfitShareParams): Match
     reconciles: partnerTotalCents + matchdayRetainedCents + matchManagerCents === m.grossCents,
     played: true, cancelled: false,
   };
+}
+
+/* THE FOURTH MODEL'S PER-MATCH FIGURE. Same shape, same reconciliation, same single rounding
+ * point — and payoutForMatch above is untouched.
+ *
+ * `partnerProfitShareCents` carries the AMOUNT TO PAY (the top-up), not the whole split, because
+ * every consumer of this shape adds it to fieldRentalCents to get the total. Naming it the split
+ * would double-count the rental on every screen that already knows how to add these two up. The
+ * split itself is derivable as fieldRental + amountToPay and is printed by the view from
+ * poolCents × share, which is what the partner should audit.
+ *
+ * THE FLOOR IS max(0, …) ON THE TOP-UP, so a weak match pays exactly the rental and reports $0 to
+ * be paid — never a negative, which would claw back a rental the partner is owed whatever the
+ * turnout. */
+export function payoutForMatchFloor(m: MatchInput, p: RentalProfitShareParams): MatchPayout {
+  if (m.cancelled || !m.played) {
+    return {
+      matchApiId: m.matchApiId, startYmd: m.startYmd, grossCents: 0, spotsSold: 0,
+      fieldRentalCents: 0, matchManagerCents: 0, poolCents: 0,
+      partnerProfitShareCents: 0, matchdayProfitShareCents: 0,
+      partnerTotalCents: 0, matchdayRetainedCents: 0, reconciles: true,
+      played: m.played, cancelled: m.cancelled,
+    };
+  }
+  const fieldRentalCents = p.fieldRentalCents;
+  const matchManagerCents = p.matchManagerCents;
+  // THE RENTAL IS NOT DEDUCTED. This one line is the whole correction.
+  const poolCents = m.grossCents - matchManagerCents;
+  // The single rounding point, unchanged in kind: one Math.round after the pool is final.
+  const splitCents = poolCents > 0 ? Math.round((poolCents * p.partnerSharePct) / 100) : 0;
+  const amountToPayCents = Math.max(0, splitCents - fieldRentalCents);
+  const partnerTotalCents = fieldRentalCents + amountToPayCents;   // === max(fieldRental, split)
+  // A SUBTRACTION, NOT (1 − s)·pool. Under the floor MatchDay absorbs the difference between the
+  // split and the rental, and only this form keeps the books balancing when it does.
+  const matchdayRetainedCents = m.grossCents - matchManagerCents - partnerTotalCents;
+  return {
+    matchApiId: m.matchApiId, startYmd: m.startYmd, grossCents: m.grossCents, spotsSold: m.spotsSold,
+    fieldRentalCents, matchManagerCents, poolCents,
+    partnerProfitShareCents: amountToPayCents,
+    matchdayProfitShareCents: poolCents - partnerTotalCents,
+    partnerTotalCents, matchdayRetainedCents,
+    reconciles: partnerTotalCents + matchdayRetainedCents + matchManagerCents === m.grossCents,
+    played: true, cancelled: false,
+  };
+}
+
+/** Dispatch on the partner's own kind. The only place that chooses between the two formulas. */
+export function payoutForMatchOf(
+  kind: PayoutModel,
+  m: MatchInput,
+  p: RentalProfitShareParams,
+): MatchPayout {
+  return kind === "RENTAL_FLOOR_PROFIT_SHARE" ? payoutForMatchFloor(m, p) : payoutForMatch(m, p);
 }
 
 export type PayoutTotals = {

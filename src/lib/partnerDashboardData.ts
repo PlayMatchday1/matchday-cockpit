@@ -65,6 +65,7 @@ export async function buildPartnerDashboardData(
       kind: "rental",
       rental: buildRentalDashboard(rows, rentalParams, {
         partnerName: partner.partnerName, venue: venueName, spotPriceCents: partner.spotPriceCents, ledger,
+        payoutModel: partner.payoutModel,
       }),
     };
   }

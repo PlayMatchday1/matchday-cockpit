@@ -37,9 +37,9 @@ import type { PartnerRegRow } from "./partnerStats";
 import { isFakePlayerEmail } from "./mdapiFakePlayer";
 import { rosterRowCounts } from "./gamedayModel";
 import {
-  payoutForMatch, totalsOf, breakevenSpots, newVsReturning,
+  payoutForMatchOf, totalsOf, breakevenSpots, newVsReturning, topUpThresholdCents,
   monthCloseYmd, monthPayYmd, periodStatusOf,
-  type RentalProfitShareParams, type MatchPayout, type PayoutTotals, type VenueAppearance,
+  type RentalProfitShareParams, type MatchPayout, type PayoutTotals, type VenueAppearance, type PayoutModel,
   type PeriodStatus, type PeriodLedger,
 } from "./partnerPayoutModel";
 
@@ -81,6 +81,13 @@ export type RentalDashboardProps = {
   grand: PayoutTotals;
   // A dashboard that cannot prove its own arithmetic says so instead of showing numbers.
   reconciles: boolean;
+  /* WHICH FORMULA PRODUCED THESE NUMBERS. Carried to the view because a switch you cannot see is
+   * worse than no switch: with two rental kinds live, looking at a figure has to tell you which of
+   * them it came from, or "switch back" leaves nobody able to say which one they are reading. */
+  payoutModel: PayoutModel;
+  /* Revenue at which a top-up first appears, on the floor kind. Null on the shipped kind, where the
+   * meaningful threshold is rental + manager and the view already derives that one. */
+  topUpThresholdCents: number | null;
 };
 
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -131,6 +138,9 @@ export function buildRentalDashboard(
   params: RentalProfitShareParams,
   opts: {
     partnerName: string; venue: string; spotPriceCents: number | null; nowMs?: number;
+    /* WHICH OF THE TWO RENTAL FORMULAS. Omitted = the shipped one, so every existing caller keeps
+     * its exact behaviour and the new kind is reached only by a partner row that names it. */
+    payoutModel?: PayoutModel;
     // Keyed by YYYY-MM. Absent for a period with no ledger row yet, which is the normal state
     // before anyone has marked anything.
     ledger?: Map<string, PeriodLedger>;
@@ -138,6 +148,7 @@ export function buildRentalDashboard(
 ): RentalDashboardProps {
   // The clock enters HERE and nowhere else, and it is injectable so the suites can pin it.
   const nowMs = opts.nowMs ?? Date.now();
+  const kind: PayoutModel = opts.payoutModel ?? "RENTAL_PLUS_PROFIT_SHARE";
   // ONE RENTAL = ONE MATCH, so everything groups by match_api_id — never by night, never by date.
   // Three matches at the same field on the same evening are three rentals and three manager costs.
   type Acc = { startYmd: string; cancelled: boolean; grossCents: number; spotsSold: number; endUtc: string | null };
@@ -165,7 +176,11 @@ export function buildRentalDashboard(
   }
 
   const payouts: MatchPayout[] = [...byMatch.entries()]
-    .map(([key, a]) => payoutForMatch(
+    /* THE PARTNER'S OWN KIND CHOOSES THE FORMULA, and it arrives on the row rather than being
+     * decided here. Defaulting to the shipped model means a partner whose kind cannot be read is
+     * paid the way they were paid yesterday, never on the new one by accident. */
+    .map(([key, a]) => payoutForMatchOf(
+      kind,
       {
         matchApiId: Number(key.replace(/^id:/, "")) || 0, startYmd: a.startYmd, cancelled: a.cancelled,
         grossCents: a.grossCents, spotsSold: a.spotsSold,
@@ -233,5 +248,7 @@ export function buildRentalDashboard(
     months,
     grand,
     reconciles: grand.reconciles && months.every((m) => m.totals.reconciles) && payouts.every((p) => p.reconciles),
+    payoutModel: kind,
+    topUpThresholdCents: kind === "RENTAL_FLOOR_PROFIT_SHARE" ? topUpThresholdCents(params) : null,
   };
 }

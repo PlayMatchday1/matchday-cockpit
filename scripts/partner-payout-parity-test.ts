@@ -132,12 +132,29 @@ console.log("\nREVENUE_SHARE (unchanged)");
   is("50% of $300 is $150", sharedAug(cfg, rows), 150);
 }
 
+// ── 4b. RENTAL_FLOOR_PROFIT_SHARE — the fourth model, and the city cost must follow it ─────────
+// The city figure and the partner page have to agree about which formula a partner is on, or the
+// cost of a venue and the cheque written to it stop being the same number.
+console.log("\nRENTAL_FLOOR_PROFIT_SHARE");
+{
+  const base = { fieldRentalCents: 16000, matchManagerCents: 4000, partnerSharePct: 40, spotPriceCents: 1500 };
+  const rows = spots(1, "2026-08-05", 44, 15, PAST);   // $660 of revenue, Ryan's worked example
+  const oldCfg = baseCfg({ payoutModel: "RENTAL_PLUS_PROFIT_SHARE", ...base });
+  const newCfg = baseCfg({ payoutModel: "RENTAL_FLOOR_PROFIT_SHARE", ...base });
+  is("the shipped kind still pays $344 on $660", sharedAug(oldCfg, rows), 344);
+  is("…and the floor kind pays $248, Ryan's worked example", sharedAug(newCfg, rows), 248);
+  is("…a difference of exactly $96", sharedAug(oldCfg, rows) - sharedAug(newCfg, rows), 96);
+  /* THE FLOOR, through the same city path: a weak match pays the bare rental and no more. */
+  const weak = spots(2, "2026-08-06", 16, 15, PAST);   // $240
+  is("a match under the floor costs the city exactly the rental", sharedAug(newCfg, weak), 160);
+}
+
 // ── 5. EVERY MODEL THE TYPE SYSTEM KNOWS IS COVERED ────────────────────────────────────────────
 // THE POINT OF THE WHOLE SUITE. A new PayoutModel added without a case here fails immediately,
 // rather than silently taking the flat_percentage branch and misstating a city for a month.
 console.log("\ncoverage of PayoutModel");
-const COVERED: PayoutModel[] = ["REVENUE_SHARE", "PER_MATCH_MINUS_MANAGER", "RENTAL_PLUS_PROFIT_SHARE"];
-const ALL: PayoutModel[] = ["REVENUE_SHARE", "PER_MATCH_MINUS_MANAGER", "RENTAL_PLUS_PROFIT_SHARE"];
+const COVERED: PayoutModel[] = ["REVENUE_SHARE", "PER_MATCH_MINUS_MANAGER", "RENTAL_PLUS_PROFIT_SHARE", "RENTAL_FLOOR_PROFIT_SHARE"];
+const ALL: PayoutModel[] = ["REVENUE_SHARE", "PER_MATCH_MINUS_MANAGER", "RENTAL_PLUS_PROFIT_SHARE", "RENTAL_FLOOR_PROFIT_SHARE"];
 is("every PayoutModel has a parity case above", COVERED.slice().sort(), ALL.slice().sort());
 ok("  (if you added a PayoutModel and this failed: add a case, do not widen the list)");
 

@@ -75,6 +75,12 @@ const NODE_SUITES = [
   "scripts/membership-chart-test.ts",
   "scripts/recurring-window-test.ts",
   "scripts/partner-payout-parity-test.ts",
+  // THE FOURTH PAYOUT MODEL, and the third kept intact beside it as the way back. Pins Ryan's
+  // worked example (660 -> 248), the floor (a weak match pays the bare rental, never a clawback),
+  // both sweep invariants (the new model never pays more than the old; the gap is exactly $96
+  // wherever the split clears the floor), exact reconciliation including where MatchDay goes
+  // negative, and that no site branches on the bare model literal.
+  "scripts/partner-floor-payout-test.ts",
   "scripts/meta-ad-spend-test.ts",
   // THE LEDGER FLOOR IS NOT A TUNABLE. Its own suite because the reason it exists is not the
   // obvious one: fin_expenses has NO rows of any kind before 2026-04-30, so ad spend in Dec-Mar

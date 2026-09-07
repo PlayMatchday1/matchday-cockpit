@@ -67,6 +67,10 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
   // THE HEADLINE MONTH is the newest one — months are already sorted newest first.
   const current: RentalMonth | undefined = p.months[0];
   const totalHead = `${p.partnerName} total`;
+  /* WHICH OF THE TWO RENTAL FORMULAS PRODUCED THESE NUMBERS. Read from the dashboard rather than
+   * from a venue name, so the page follows the partner row and a switch back changes the page with
+   * it — the table, the two sentences and the label below, together. */
+  const floorKind = p.payoutModel === "RENTAL_FLOOR_PROFIT_SHARE";
 
   return (
     <div className="prv" data-testid="partner-rental">
@@ -130,7 +134,9 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
             <span className="prv-tok">You get</span>
             {/* BOTH HALVES OF THE DEAL, and the largest type in the block. */}
             <span className="prv-green" data-testid="prv-green">
-              {fmtCents(p.params.fieldRentalCents)} rental + {p.params.partnerSharePct}% of the pool
+              {floorKind
+                ? `${fmtCents(p.params.fieldRentalCents)} rental, or ${p.params.partnerSharePct}% of the pool if that is more`
+                : `${fmtCents(p.params.fieldRentalCents)} rental + ${p.params.partnerSharePct}% of the pool`}
             </span>
           </div>
           <div className="prv-gtee" data-testid="prv-guarantee">
@@ -138,8 +144,24 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
             {/* BREAKEVEN IN DOLLARS, not spots. The old "14 spots at $15.00" assumed full price;
                 realised August revenue was $12.70 a spot, so the true figure was 16. Stating the
                 cost is exact and independent of what a spot actually sold for. */}
-            <span data-testid="prv-breakeven" data-cents={p.params.fieldRentalCents + p.params.matchManagerCents}>
-              <b>Below {fmtCents(p.params.fieldRentalCents + p.params.matchManagerCents)} of revenue</b> there is no profit share and MatchDay absorbs the loss.
+            {/* THE SENTENCE FOLLOWS THE MODEL, so switching back restores the old wording with the
+                old number. Both thresholds are DERIVED from the partner's own parameters — on the
+                floor kind the top-up starts at s·(R − M) ≥ F, which is $440 on Parmer's numbers and
+                would be something else on the next venue's. */}
+            {floorKind ? (
+              <span data-testid="prv-breakeven" data-cents={p.topUpThresholdCents ?? 0}>
+                <b>Below {fmtCents(p.topUpThresholdCents ?? 0)} of revenue</b> there is no top-up, the {fmtCents(p.params.fieldRentalCents)} rental is the whole payment.
+              </span>
+            ) : (
+              <span data-testid="prv-breakeven" data-cents={p.params.fieldRentalCents + p.params.matchManagerCents}>
+                <b>Below {fmtCents(p.params.fieldRentalCents + p.params.matchManagerCents)} of revenue</b> there is no profit share and MatchDay absorbs the loss.
+              </span>
+            )}
+            {/* WHICH FORMULA THIS PAGE IS ON. Quiet, but present: with two rental models live, a
+                figure that does not say which one produced it cannot be checked, and "switch back"
+                would leave nobody able to tell the two apart. */}
+            <span className="prv-modelkind" data-testid="prv-model" data-model={p.payoutModel}>
+              {floorKind ? "Rental floor + profit share" : "Rental + profit share"}
             </span>
           </div>
         </section>
@@ -247,8 +269,15 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
                 <thead>
                   <tr>
                     <th>Match</th><th className="n">Spots</th><th className="n">Revenue</th>
-                    <th className="n">Field rental</th><th className="n">Match manager</th><th className="n">Profit pool</th>
-                    <th className="n">Your {p.params.partnerSharePct}%</th><th className="n">MatchDay share</th>
+                    {/* THE RENTAL COLUMN IS A DEDUCTION ONLY ON THE SHIPPED KIND. On the floor kind
+                        it is not subtracted from the pool, so printing it in the run of deductions
+                        would misstate the arithmetic the row is meant to be audited by. It moves to
+                        the total's own annotation instead, where 160 + 88 = 248 still reads. */}
+                    {!floorKind && <th className="n">Field rental</th>}
+                    <th className="n">Match manager</th><th className="n">Profit pool</th>
+                    <th className="n">{floorKind ? `${p.params.partnerSharePct}% split` : `Your ${p.params.partnerSharePct}%`}</th>
+                    {floorKind && <th className="n">To be paid</th>}
+                    <th className="n">MatchDay share</th>
                     <th className="n tot" data-testid="prv-total-head">{totalHead}</th>
                   </tr>
                 </thead>
@@ -258,10 +287,24 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
                       <td className="prv-first">{dayLabel(r.startYmd)}</td>
                       <td className="n" data-testid="prv-row-spots">{r.spotsSold}</td>
                       <td className="n dim" data-testid="prv-row-gross" data-cents={r.grossCents}>{fmtCents(r.grossCents)}</td>
-                      <td className="n dim">{fmtCents(r.fieldRentalCents)}</td>
+                      {!floorKind && <td className="n dim">{fmtCents(r.fieldRentalCents)}</td>}
                       <td className="n dim">{fmtCents(r.matchManagerCents)}</td>
                       <td className={"n dim" + (r.poolCents < 0 ? " neg" : "")} data-testid="prv-row-pool" data-cents={r.poolCents}>{fmtCents(r.poolCents)}</td>
-                      <td className="n" data-testid="prv-row-share" data-cents={r.partnerProfitShareCents}>{fmtCents(r.partnerProfitShareCents)}</td>
+                      {/* THE SPLIT, then what is actually owed on top of the rental. On the floor
+                          kind partnerProfitShareCents IS the top-up, so the split is the two added:
+                          160 + 88 = 248 is auditable across these two cells and the total. */}
+                      <td className="n" data-testid="prv-row-share" data-cents={floorKind ? r.fieldRentalCents + r.partnerProfitShareCents : r.partnerProfitShareCents}>
+                        {fmtCents(floorKind ? r.fieldRentalCents + r.partnerProfitShareCents : r.partnerProfitShareCents)}
+                      </td>
+                      {/* A $0 TOP-UP BESIDE A $160 TOTAL IS THE FLOOR DOING ITS JOB, not a bug, so
+                          it is marked rather than left to read as a missing number. */}
+                      {floorKind && (
+                        <td className="n" data-testid="prv-row-topup" data-cents={r.partnerProfitShareCents}
+                          data-floored={r.played && !r.cancelled && r.partnerProfitShareCents === 0 ? "true" : "false"}>
+                          {fmtCents(r.partnerProfitShareCents)}
+                          {r.played && !r.cancelled && r.partnerProfitShareCents === 0 && <span className="prv-floor" data-testid="prv-floor"> floor</span>}
+                        </td>
+                      )}
                       <td className={"n dim" + (r.matchdayProfitShareCents < 0 ? " neg" : "")} data-testid="prv-row-mdshare" data-cents={r.matchdayProfitShareCents}>{fmtCents(r.matchdayProfitShareCents)}</td>
                       {/* A row that fails the identity NEVER shows a total — it shows why. */}
                       <td className="n tot" data-testid="prv-row-total" data-cents={r.partnerTotalCents}>
@@ -275,10 +318,13 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
                     <td className="prv-first">{m.totals.matches} match{m.totals.matches === 1 ? "" : "es"} played</td>
                     <td className="n" data-testid="prv-total-spots">{m.spotsSold}</td>
                     <td className="n" data-testid="prv-total-gross" data-cents={m.totals.grossCents}>{fmtCents(m.totals.grossCents)}</td>
-                    <td className="n">{fmtCents(m.totals.fieldRentalCents)}</td>
+                    {!floorKind && <td className="n">{fmtCents(m.totals.fieldRentalCents)}</td>}
                     <td className="n">{fmtCents(m.totals.matchManagerCents)}</td>
                     <td className={"n" + (m.totals.poolCents < 0 ? " neg" : "")}>{fmtCents(m.totals.poolCents)}</td>
-                    <td className="n" data-testid="prv-total-share" data-cents={m.totals.partnerProfitShareCents}>{fmtCents(m.totals.partnerProfitShareCents)}</td>
+                    <td className="n" data-testid="prv-total-share" data-cents={floorKind ? m.totals.fieldRentalCents + m.totals.partnerProfitShareCents : m.totals.partnerProfitShareCents}>
+                      {fmtCents(floorKind ? m.totals.fieldRentalCents + m.totals.partnerProfitShareCents : m.totals.partnerProfitShareCents)}
+                    </td>
+                    {floorKind && <td className="n" data-testid="prv-total-topup" data-cents={m.totals.partnerProfitShareCents}>{fmtCents(m.totals.partnerProfitShareCents)}</td>}
                     <td className={"n" + (m.totals.matchdayProfitShareCents < 0 ? " neg" : "")}>{fmtCents(m.totals.matchdayProfitShareCents)}</td>
                     {/* ONE OF THE FOUR FIGURES THAT MUST AGREE, and the largest number in the footer. */}
                     <td className="n tot" data-testid="prv-total-partner" data-cents={m.totals.partnerTotalCents}>{fmtCents(m.totals.partnerTotalCents)}</td>
@@ -445,6 +491,10 @@ const CSS = `
 .prv-cost{color:var(--ink2)}
 .prv-green{background:var(--grn2);color:#fff;padding:6px 14px;border-radius:8px;font-weight:800;white-space:nowrap;font-size:15.5px}
 .prv-gtee{margin-top:12px;font-size:13.5px;color:var(--ink2)}
+/* THE MODEL KIND, and the floor marker. Both quiet: one names the formula, the other says a $0
+   top-up beside a full rental is the floor working rather than a number that failed to load. */
+.prv-modelkind{display:inline-block;margin-top:8px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3)}
+.prv-floor{font-size:10px;letter-spacing:.03em;text-transform:uppercase;color:var(--ink3);margin-left:5px}
 .prv-gtee span{display:inline;margin-right:22px}
 .prv-gtee b{color:var(--ink);font-weight:700}
 

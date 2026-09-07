@@ -4,7 +4,7 @@
 // partner page.
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import type { PayoutModel, RentalProfitShareParams } from "./partnerPayoutModel";
+import { isRentalModel, type PayoutModel, type RentalProfitShareParams } from "./partnerPayoutModel";
 import {
   fetchLegacyMatchRegistrations,
   loadMembershipWindowsByUserId,
@@ -309,6 +309,10 @@ function rowToPartnerConfig(row: Record<string, unknown>): PartnerConfig {
 // never "silently on a different payout formula".
 function normalisePayoutModel(raw: unknown, revenueModel: PartnerRevenueModel): PayoutModel {
   if (raw === "RENTAL_PLUS_PROFIT_SHARE") return "RENTAL_PLUS_PROFIT_SHARE";
+  /* THE FOURTH KIND. Parsed by name like the others — a partner is on it only by saying so, and an
+   * unrecognised value still falls back to the legacy revenue_model rather than to a formula
+   * nobody chose. This is the switch: one UPDATE moves Parmer between the two rental kinds. */
+  if (raw === "RENTAL_FLOOR_PROFIT_SHARE") return "RENTAL_FLOOR_PROFIT_SHARE";
   if (raw === "PER_MATCH_MINUS_MANAGER") return "PER_MATCH_MINUS_MANAGER";
   if (raw === "REVENUE_SHARE") return "REVENUE_SHARE";
   return revenueModel === "per_match_minus_manager" ? "PER_MATCH_MINUS_MANAGER" : "REVENUE_SHARE";
@@ -340,7 +344,10 @@ export function matchListFromRegs(rows: PartnerRegRow[], now: Date): PartnerMatc
 }
 
 export function rentalParamsOf(p: PartnerConfig): RentalProfitShareParams | null {
-  if (p.payoutModel !== "RENTAL_PLUS_PROFIT_SHARE") return null;
+  /* THROUGH THE PREDICATE, NOT THE LITERAL. This is the single gate that decides whether a partner
+   * gets the rental dashboard at all — every other site asks `if (rentalParams)` rather than
+   * testing a model name, so a new rental kind cannot leave one of them behind on a flat model. */
+  if (!isRentalModel(p.payoutModel)) return null;
   if (p.fieldRentalCents == null || p.matchManagerCents == null || p.partnerSharePct == null) return null;
   return { fieldRentalCents: p.fieldRentalCents, matchManagerCents: p.matchManagerCents, partnerSharePct: p.partnerSharePct };
 }
@@ -1619,6 +1626,8 @@ export function buildPartnerPayoutsByVenueMonth(
       const rental = buildRentalDashboard(venueRegs, rentalParams, {
         partnerName: dash.partnerName, venue: venue.venue_name,
         spotPriceCents: dash.spotPriceCents, nowMs: now.getTime(),
+        // The city cost figure must follow the same formula the partner is actually paid on.
+        payoutModel: dash.payoutModel,
       });
       /* payoutForMatch already zeroes a match that is CANCELLED or NOT YET PLAYED, deciding
        * `played` from the match's true end instant — so the "a scheduled match cannot generate a
