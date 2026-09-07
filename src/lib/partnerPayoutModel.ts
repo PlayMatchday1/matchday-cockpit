@@ -13,8 +13,13 @@
 //
 // ── THE NEW MODEL ───────────────────────────────────────────────────────────────────────────────
 // RENTAL_PLUS_PROFIT_SHARE. ONE RENTAL = ONE MATCH: three matches in a night is three field rentals
-// and three manager costs. Cancelled matches are excluded entirely — a cancelled match costs
-// nothing and owes nothing.
+// and three manager costs. Under this kind a cancelled match is excluded entirely.
+//
+// A CANCELLED MATCH CAN STILL OWE THE RENTAL — the claim that used to sit on this line, that "a
+// cancelled match costs nothing and owes nothing", was never true of the signed terms. A booking
+// cancelled on short notice may be charged the rental fee; a weather cancellation the venue calls
+// never is. RENTAL_FLOOR_PROFIT_SHARE implements that: see rentalOwedOnCancellation. The rule is
+// not applied on this kind, whose behaviour is unchanged.
 //
 //   pool               = gross − fieldRental − matchManager
 //   partnerProfitShare = max(0, pool) × partnerSharePct/100
@@ -88,6 +93,18 @@ export type RentalProfitShareParams = {
   fieldRentalCents: number;
   matchManagerCents: number;
   partnerSharePct: number;
+  /* ── A CANCELLED DATE CAN STILL OWE THE RENTAL ────────────────────────────────────────────────
+   * The signed terms: a reservation cancelled with less than twelve hours' notice "MAY be
+   * considered a completed reservation … and/or MAY be subject to the applicable rental fee".
+   * MAY, not shall — so whether MatchDay charges itself is a decision, and it lives on the partner
+   * row beside the other parameters rather than as a constant in here. Both default to the
+   * behaviour that shipped: no fee, nothing owed.
+   *
+   * A weather cancellation initiated by the venue never incurs the fee, and nothing we hold can
+   * tell us who cancelled or why — see MatchInput.rentalChargeOverride. */
+  cancellationFeeEnabled?: boolean;
+  /** Hours of notice below which the rental is owed. Only consulted when the notice is KNOWN. */
+  cancellationNoticeHours?: number;
 };
 
 export type MatchInput = {
@@ -104,6 +121,23 @@ export type MatchInput = {
   played: boolean;
   grossCents: number;      // every spot at what was ACTUALLY paid — see grossCentsFromRows
   spotsSold: number;       // seats held, staff excluded
+  /* ── HOW MUCH NOTICE A CANCELLATION GAVE, OR null FOR "WE DO NOT KNOW" ────────────────────────
+   * MEASURED, NOT ASSUMED: today it is always null, because nothing we hold records when a match
+   * was cancelled. mdapi_matches carries is_cancelled, auto_canceled, auto_canceled_minutes,
+   * updated_at and deleted_at — and no cancellation timestamp. `updated_at` is the source row's
+   * last-modified time and moves for any reason: on the Sep 5 Parmer match it reads 22:50, which
+   * is 2h50m AFTER the 20:00 kickoff, because the roster was still being edited then. Deriving
+   * notice from it would produce a negative number and call it twelve hours.
+   *
+   * The field exists because the rule is the contract's, not the data's: the day a cancellation
+   * timestamp arrives, the threshold below starts deciding on its own. Until then the operator
+   * decides, per match, and the override is what records it. */
+  cancelledNoticeHours?: number | null;
+  /* THE OPERATOR'S DECISION ON THIS CANCELLATION, stored and auditable, never inferred.
+   *   true  — short notice, the rental is owed
+   *   false — waived: a venue-initiated weather cancellation, which never incurs the fee
+   *   null  — nobody has said, so nothing is owed. Never bill a partner on a guess. */
+  rentalChargeOverride?: boolean | null;
 };
 
 export type MatchPayout = {
@@ -177,7 +211,42 @@ export function payoutForMatch(m: MatchInput, p: RentalProfitShareParams): Match
  * THE FLOOR IS max(0, …) ON THE TOP-UP, so a weak match pays exactly the rental and reports $0 to
  * be paid — never a negative, which would claw back a rental the partner is owed whatever the
  * turnout. */
+/* IS THE RENTAL OWED ON A CANCELLED DATE? Contract first, data second, and a guess never.
+ *   - the partner must be on the fee at all (a setting, because the contract says MAY);
+ *   - an operator waiver wins outright — that is the weather case, which nothing we hold can
+ *     derive because we record neither who cancelled nor why;
+ *   - an operator charge wins next — that is today's only path, because the notice is unknown;
+ *   - a KNOWN notice under the threshold charges automatically, which is what the setting is for
+ *     the day a cancellation timestamp exists;
+ *   - otherwise nothing is owed. The default is not to bill. */
+export function rentalOwedOnCancellation(m: MatchInput, p: RentalProfitShareParams): boolean {
+  if (!p.cancellationFeeEnabled) return false;
+  if (m.rentalChargeOverride === false) return false;
+  if (m.rentalChargeOverride === true) return true;
+  const notice = m.cancelledNoticeHours;
+  if (notice == null) return false;
+  return notice < (p.cancellationNoticeHours ?? 12);
+}
+
 export function payoutForMatchFloor(m: MatchInput, p: RentalProfitShareParams): MatchPayout {
+  /* A CANCELLED MATCH THAT OWES THE RENTAL. No revenue, no pool, no split, no manager — a manager
+   * is paid nothing on a cancelled date (managerPayCompute.ts:488, `m.is_cancelled ? 0 : …`), so
+   * charging one here would invent a cost nobody bears. The partner gets the rental and that is
+   * the whole row.
+   *
+   * RECONCILIATION HOLDS WITHOUT A SPECIAL CASE: gross 0, partnerTotal 16000, manager 0, so
+   * matchdayRetained is −16000 and 16000 + (−16000) + 0 === 0. This is exactly what the
+   * subtraction form was written for, and MatchDay absorbing the rental is the true statement. */
+  if (m.cancelled && rentalOwedOnCancellation(m, p)) {
+    return {
+      matchApiId: m.matchApiId, startYmd: m.startYmd, grossCents: 0, spotsSold: 0,
+      fieldRentalCents: p.fieldRentalCents, matchManagerCents: 0, poolCents: 0,
+      partnerProfitShareCents: 0, matchdayProfitShareCents: -p.fieldRentalCents,
+      partnerTotalCents: p.fieldRentalCents, matchdayRetainedCents: -p.fieldRentalCents,
+      reconciles: p.fieldRentalCents + -p.fieldRentalCents + 0 === 0,
+      played: m.played, cancelled: true,
+    };
+  }
   if (m.cancelled || !m.played) {
     return {
       matchApiId: m.matchApiId, startYmd: m.startYmd, grossCents: 0, spotsSold: 0,
@@ -245,7 +314,12 @@ export function totalsOf(rows: MatchPayout[]): PayoutTotals {
     // Cancelled matches are already zeroed by payoutForMatch, but they must not inflate the COUNT
     // either — "3 matches" on a payout page means three that were played.
     if (r.fieldRentalCents === 0 && r.grossCents === 0 && r.spotsSold === 0) continue;
-    t.matches++;
+    /* A CHARGED CANCELLATION CONTRIBUTES MONEY BUT IS NOT A MATCH PLAYED. The footer says
+     * "N matches played", and a date nobody played on must not be counted there — but its rental
+     * is real and every money column below still takes it. Under RENTAL_PLUS_PROFIT_SHARE a
+     * cancelled row is fully zeroed and never reaches this line, so nothing about that model
+     * changes. */
+    if (!r.cancelled) t.matches++;
     t.grossCents += r.grossCents;
     t.spotsSold += r.spotsSold;
     t.fieldRentalCents += r.fieldRentalCents;

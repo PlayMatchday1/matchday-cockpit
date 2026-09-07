@@ -146,6 +146,24 @@ export default function PartnerDashboardsIndex() {
     await load(); setBusy(false);
   };
 
+  /* THE CANCELLATION DECISION — one POST, never retried, logged with the operator's name. It
+   * decides whether a real venue is paid a $160 rental on a date nobody played, so it goes to the
+   * server and comes back through a reload rather than being held in this component. */
+  const doCancellation = async (partnerId: string, matchApiId: number, rentalCharged: boolean | null, reason: string) => {
+    setBusy(true);
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) { alert("Session expired — sign in again."); setBusy(false); return; }
+    const res = await fetch("/api/partner-dashboards/cancellation-override", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ partnerId, matchApiId, rentalCharged, reason }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) { alert(`Failed: ${json?.error ?? `HTTP ${res.status}`}`); setBusy(false); return; }
+    await load(); setBusy(false);
+  };
+
   const preview = (
     <div data-partner-preview data-testid="viewas-root" style={{ position: "fixed", inset: 0, overflowY: "auto", background: C.canvas, zIndex: 9999 }}>
       <div data-testid="preview-bar" style={{ background: C.mint, borderBottom: "1px solid #bfe0cd", padding: "10px 16px", display: "flex", alignItems: "center", gap: 11, fontSize: 12.5, fontWeight: 700, color: C.forestDeep }}>
@@ -154,7 +172,7 @@ export default function PartnerDashboardsIndex() {
         <button type="button" onClick={() => setViewAs(false)} style={btnDark}>Back to admin view</button>
       </div>
       <div style={{ maxWidth: 1220, margin: "0 auto", padding: "18px 22px 40px" }}>
-        <PreviewDashboard data={previewData} err={previewErr} admin={selected ? { partnerId: selected.id, busy, onMark: doMarkPaid } : undefined} />
+        <PreviewDashboard data={previewData} err={previewErr} admin={selected ? { partnerId: selected.id, busy, onMark: doMarkPaid, onCancellation: doCancellation } : undefined} />
       </div>
     </div>
   );
@@ -233,7 +251,7 @@ export default function PartnerDashboardsIndex() {
 
       {/* the identical partner-facing component */}
       <div data-testid="dashboard-below-seam">
-        <PreviewDashboard data={previewData} err={previewErr} admin={selected ? { partnerId: selected.id, busy, onMark: doMarkPaid } : undefined} />
+        <PreviewDashboard data={previewData} err={previewErr} admin={selected ? { partnerId: selected.id, busy, onMark: doMarkPaid, onCancellation: doCancellation } : undefined} />
       </div>
 
       {viewAs && mounted && createPortal(preview, document.body)}

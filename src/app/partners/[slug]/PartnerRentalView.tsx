@@ -17,11 +17,13 @@
 //   THE TOTAL COLUMN TAKES THE PARTNER'S NAME and wins the row: it is the only column they act on.
 //   Driven off the partner record, never hardcoded — the next venue has a different name.
 //
-//   "MATCHDAY RETAINED" IS GONE. retained = pool − partner share, and partner share is 40% of
-//   pool, so retained was always the same 60% already printed as "MatchDay share". Two columns
-//   algebraically incapable of disagreeing is one column and a distraction. The reconciliation
-//   line still prints the retained FIGURE, because that identity is what makes the split credible
-//   and it is the one place the number is load-bearing.
+//   MATCHDAY'S SHARE IS NOT ON THIS PAGE AT ALL. It began as two columns that were algebraically
+//   incapable of disagreeing ("MatchDay retained" and "MatchDay share"), became one, and is now
+//   none: this page is what a venue is owed, and what MatchDay keeps is not a figure a venue
+//   partner is shown. The internal partner pages still carry it.
+//   THE ARITHMETIC DID NOT MOVE. matchdayRetained is computed on every row, summed into every
+//   month, and asserted against gross in both places; a period that fails prints an error instead
+//   of a figure. What changed is what is rendered, not what is checked.
 //
 //   MOBILE IS A FIRST-CLASS LAYOUT, not a scrolled table. This page is a link a venue owner opens
 //   on a phone. Both layouts render from the SAME month objects, so the figures cannot disagree.
@@ -29,7 +31,7 @@
 // NO EXPLANATORY PROSE. Where a row or a chip states a thing, the sentence repeating it is cut.
 
 import { useState } from "react";
-import type { RentalDashboardProps, RentalMonth } from "@/lib/partnerRentalDashboard";
+import type { RentalCancellation, RentalDashboardProps, RentalMonth } from "@/lib/partnerRentalDashboard";
 import { fmtCents, PERIOD_STATUS_LABEL } from "@/lib/partnerPayoutModel";
 
 const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -61,6 +63,10 @@ export type RentalAdmin = {
   partnerId: string;
   busy?: boolean;
   onMark: (partnerId: string, periodKey: string, action: "paid" | "unpaid") => void;
+  /* THE CANCELLATION DECISION. null clears it. The reason is mandatory on a decision and the
+   * server enforces that too — this is the UI half of a rule that lives in the database's own
+   * CHECK constraint. */
+  onCancellation?: (partnerId: string, matchApiId: number, rentalCharged: boolean | null, reason: string) => void;
 };
 
 export default function PartnerRentalView(p: RentalDashboardProps & { admin?: RentalAdmin }) {
@@ -173,6 +179,10 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
             state, Mark paid / Undo per row, an "N settled · N awaiting" count, and everything
             already settled collapsed behind a Show toggle. Rendered ONLY when `admin` is passed. */}
         {p.admin && <PaymentsCard months={p.months} admin={p.admin} />}
+        {p.admin && p.admin.onCancellation && p.cancellations.length > 0 && (
+          <CancellationsCard cancellations={p.cancellations} admin={p.admin} noticeHours={p.params.cancellationNoticeHours ?? 12}
+            feeEnabled={p.params.cancellationFeeEnabled === true} />
+        )}
 
         {/* ── EVERY MONTH ────────────────────────────────────────────────────────────────── */}
         {p.months.length > 0 && (
@@ -276,15 +286,20 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
                     {!floorKind && <th className="n">Field rental</th>}
                     <th className="n">Match manager</th><th className="n">Profit pool</th>
                     <th className="n">{floorKind ? `${p.params.partnerSharePct}% split` : `Your ${p.params.partnerSharePct}%`}</th>
-                    {floorKind && <th className="n">To be paid</th>}
-                    <th className="n">MatchDay share</th>
+                    {floorKind && <th className="n">Add to be paid</th>}
                     <th className="n tot" data-testid="prv-total-head">{totalHead}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {m.rows.map((r) => (
                     <tr key={r.matchApiId} data-testid="prv-row" data-match={r.matchApiId} data-reconciles={r.reconciles ? "true" : "false"}>
-                      <td className="prv-first">{dayLabel(r.startYmd)}</td>
+                      {/* A CANCELLED DATE THAT OWES THE RENTAL SAYS SO ON ITS OWN ROW. It reaches this
+                          table only when there is money on it, and every money cell beside it is $0
+                          except the rental — so without the word the row reads as a bug. */}
+                      <td className="prv-first">
+                        {dayLabel(r.startYmd)}
+                        {r.cancelled && <span className="prv-cx" data-testid="prv-row-cancelled"> Cancelled</span>}
+                      </td>
                       <td className="n" data-testid="prv-row-spots">{r.spotsSold}</td>
                       <td className="n dim" data-testid="prv-row-gross" data-cents={r.grossCents}>{fmtCents(r.grossCents)}</td>
                       {!floorKind && <td className="n dim">{fmtCents(r.fieldRentalCents)}</td>}
@@ -305,7 +320,6 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
                           {r.played && !r.cancelled && r.partnerProfitShareCents === 0 && <span className="prv-floor" data-testid="prv-floor"> floor</span>}
                         </td>
                       )}
-                      <td className={"n dim" + (r.matchdayProfitShareCents < 0 ? " neg" : "")} data-testid="prv-row-mdshare" data-cents={r.matchdayProfitShareCents}>{fmtCents(r.matchdayProfitShareCents)}</td>
                       {/* A row that fails the identity NEVER shows a total — it shows why. */}
                       <td className="n tot" data-testid="prv-row-total" data-cents={r.partnerTotalCents}>
                         {r.reconciles ? fmtCents(r.partnerTotalCents) : <span className="prv-cellerr" data-testid="prv-row-error">does not reconcile</span>}
@@ -325,7 +339,6 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
                       {fmtCents(floorKind ? m.totals.fieldRentalCents + m.totals.partnerProfitShareCents : m.totals.partnerProfitShareCents)}
                     </td>
                     {floorKind && <td className="n" data-testid="prv-total-topup" data-cents={m.totals.partnerProfitShareCents}>{fmtCents(m.totals.partnerProfitShareCents)}</td>}
-                    <td className={"n" + (m.totals.matchdayProfitShareCents < 0 ? " neg" : "")}>{fmtCents(m.totals.matchdayProfitShareCents)}</td>
                     {/* ONE OF THE FOUR FIGURES THAT MUST AGREE, and the largest number in the footer. */}
                     <td className="n tot" data-testid="prv-total-partner" data-cents={m.totals.partnerTotalCents}>{fmtCents(m.totals.partnerTotalCents)}</td>
                   </tr>
@@ -351,16 +364,86 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
               </div>
             )}
 
-            {/* THE RECONCILIATION. The one place the retained FIGURE is load-bearing: without it the
-                split is a number the partner has to take on trust. The retained COLUMN is gone. */}
+            {/* THE RECONCILIATION, STATED IN THE PARTNER'S TERMS. What they are owed, what the
+                managers were paid, and what came through the door — three of the four figures in
+                the identity. MatchDay's own slice is not the partner's business and is not printed
+                here; it is on the internal partner pages, where it belongs.
+                THE CHECK ITSELF IS UNCHANGED. matchdayRetained is still computed, still summed and
+                still asserted per match and per month — data-holds below is that assertion, and a
+                month that fails it prints the error instead of a number, exactly as before.
+                Removing a figure from the page does not remove it from the arithmetic. */}
             <p className="prv-recon" data-testid="prv-reconciliation" data-holds={m.totals.reconciles ? "true" : "false"}>
-              {fmtCents(m.totals.partnerTotalCents)} to you + {fmtCents(m.totals.matchdayRetainedCents)} kept by MatchDay
-              + {fmtCents(m.totals.matchManagerCents)} to match managers = <b>{fmtCents(m.totals.grossCents)}</b> collected.
+              You are owed <b>{fmtCents(m.totals.partnerTotalCents)}</b>, out of {fmtCents(m.totals.grossCents)} collected
+              from players and {fmtCents(m.totals.matchManagerCents)} paid to match managers.
             </p>
           </section>
         ))}
       </div>
     </div>
+  );
+}
+
+/* ── THE CANCELLATION QUEUE. OPERATOR ONLY — never on the partner's page. ─────────────────────────
+ * A cancelled date owes the rental only when somebody says it does, and this is where they say it.
+ *
+ * WHY IT IS A BUTTON AND NOT A COMPUTATION. Nothing we store records when a match was cancelled:
+ * mdapi_matches has is_cancelled, auto_canceled, auto_canceled_minutes, created_at, updated_at and
+ * deleted_at, and no cancellation timestamp. On Sep 5 (api_id 18321, kickoff 20:00) updated_at is
+ * 22:50 — after the match — because the roster was still being edited. Notice derived from it
+ * would be negative. Nothing records who cancelled either, so the weather case cannot be inferred.
+ * The partner row's threshold is still live and decides on its own the moment a notice exists.
+ *
+ * Each click is one POST, never retried, and lands in change_log with the operator's name. */
+function CancellationsCard(
+  { cancellations, admin, noticeHours, feeEnabled }:
+  { cancellations: RentalCancellation[]; admin: RentalAdmin; noticeHours: number; feeEnabled: boolean },
+) {
+  const [reasons, setReasons] = useState<Record<number, string>>({});
+  const act = (c: RentalCancellation, charged: boolean | null) => {
+    const reason = (reasons[c.matchApiId] ?? "").trim();
+    if (charged !== null && reason.length < 3) return;   // the server refuses it too
+    admin.onCancellation?.(admin.partnerId, c.matchApiId, charged, reason);
+  };
+  return (
+    <section className="prv-pays" data-testid="prv-cancellations">
+      <div className="prv-pays-hd">
+        <span className="prv-h">Cancelled dates</span>
+        <span className="prv-pays-count">
+          {feeEnabled
+            ? `the rental is owed under ${noticeHours}h notice · ${cancellations.filter((c) => c.decision === "charged").length} charged`
+            : "the cancellation fee is off for this partner — nothing here can be charged"}
+        </span>
+      </div>
+      {cancellations.map((c) => (
+        <div className="prv-pay-row" key={c.matchApiId} data-testid="prv-cx-row" data-match={c.matchApiId} data-decision={c.decision}>
+          <div>
+            <div className="prv-pay-pd">{dayLabel(c.startYmd)}</div>
+            <div className="prv-pay-nt">
+              {c.decision === "charged" ? `charged ${fmtCents(c.rentalCents)}`
+                : c.decision === "waived" ? "waived — no fee"
+                : "no decision — nothing owed"}
+            </div>
+          </div>
+          <div className="prv-pay-r">
+            {c.decision === "none" ? (
+              <>
+                <input className="prv-cxreason" data-testid="prv-cx-reason" placeholder="Reason (required)"
+                  value={reasons[c.matchApiId] ?? ""} disabled={admin.busy || !feeEnabled}
+                  onChange={(e) => setReasons((r) => ({ ...r, [c.matchApiId]: e.target.value }))} />
+                <button type="button" className="prv-btn go" data-testid="prv-cx-charge" disabled={admin.busy || !feeEnabled}
+                  onClick={() => act(c, true)}>Charge {fmtCents(c.rentalCents)}</button>
+                <button type="button" className="prv-btn" data-testid="prv-cx-waive" disabled={admin.busy || !feeEnabled}
+                  onClick={() => act(c, false)}>Waive</button>
+              </>
+            ) : (
+              /* UNDO IS A REVERSAL, not an erasure: the row goes, the change_log entry stays. */
+              <button type="button" className="prv-btn" data-testid="prv-cx-clear" disabled={admin.busy}
+                onClick={() => act(c, null)}>Undo</button>
+            )}
+          </div>
+        </div>
+      ))}
+    </section>
   );
 }
 
@@ -526,6 +609,10 @@ const CSS = `
 
 .prv-sched td{background:#f7f9f8;color:var(--ink3)}
 .prv-sched td.prv-first{font-weight:600;color:var(--ink2)}
+/* CANCELLED reads as a status, not as part of the date: smaller, upper, and amber rather than red,
+   because the row is correct — it is a real charge on a date nobody played. */
+.prv-cxreason{font-size:12px;padding:6px 9px;border:1px solid var(--line);border-radius:8px;min-width:190px}
+.prv-cx{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#b45309;margin-left:6px}
 .prv-notcounted{background:#f4f6f5 !important;color:var(--ink3) !important;font-size:14px !important;border-color:var(--line) !important}
 .prv-schednote{padding:11px 26px 18px;font-size:12.5px;color:var(--ink2)}
 .prv-schednote b{color:var(--ink)}

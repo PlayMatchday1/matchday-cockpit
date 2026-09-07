@@ -73,6 +73,7 @@ export async function GET(req: Request) {
       perMatchFeeCents: p.per_match_fee_cents == null ? null : Number(p.per_match_fee_cents),
       payoutSharePct: (p.revenue_share_pct as number) ?? 50,
       fieldRentalCents: null, matchManagerCents: null, partnerSharePct: null, spotPriceCents: null,
+      cancellationFeeEnabled: false, cancellationNoticeHours: 12,
     };
     // The two reads for ONE partner do not depend on each other either.
     const [{ rows, extra }, records] = await Promise.all([

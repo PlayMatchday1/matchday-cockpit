@@ -214,6 +214,9 @@ export type PartnerConfig = {
   matchManagerCents: number | null;
   partnerSharePct: number | null;
   spotPriceCents: number | null;
+  // 0162 — whether a short-notice cancellation owes the field rental, and the notice threshold.
+  cancellationFeeEnabled: boolean;
+  cancellationNoticeHours: number;
 };
 
 // Fetch the partner_dashboards row by slug. Returns null on miss or
@@ -244,6 +247,10 @@ export type PartnerConfig = {
  * not exist yet fails the whole select — which for this table means every partner dashboard 500s.
  * Pre-migration the read falls through to PAYOUT and the dated model reads as absent, which is the
  * correct behaviour until 0150 lands. */
+// 0162 added the two cancellation-fee decisions. Newest tier first — code deploys before
+// migrations apply, and a named column that does not exist yet fails the whole select.
+const PARTNER_COLS_CANCEL =
+  "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence, revenue_model, manager_pay_base, manager_pay_high, manager_pay_threshold, payout_model, payout_share_pct, field_rental_cents, match_manager_cents, partner_share_pct, spot_price_cents, revenue_model_next, revenue_model_from, per_match_fee_cents, cancellation_fee_enabled, cancellation_notice_hours";
 const PARTNER_COLS_DATED =
   "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence, revenue_model, manager_pay_base, manager_pay_high, manager_pay_threshold, payout_model, payout_share_pct, field_rental_cents, match_manager_cents, partner_share_pct, spot_price_cents, revenue_model_next, revenue_model_from, per_match_fee_cents";
 const PARTNER_COLS_PAYOUT =
@@ -301,6 +308,11 @@ function rowToPartnerConfig(row: Record<string, unknown>): PartnerConfig {
     matchManagerCents: numOrNull(row.match_manager_cents),
     partnerSharePct: numOrNull(row.partner_share_pct),
     spotPriceCents: numOrNull(row.spot_price_cents),
+    /* THE CONTRACT SAYS "MAY", SO THESE ARE DECISIONS ON THE ROW. Absent (an older column tier, or
+     * a partner nobody has set them on) means the fee is off, which is the behaviour that shipped:
+     * a cancelled date owes nothing until somebody says otherwise. */
+    cancellationFeeEnabled: row.cancellation_fee_enabled === true,
+    cancellationNoticeHours: numOrNull(row.cancellation_notice_hours) ?? 12,
   };
 }
 
@@ -349,7 +361,32 @@ export function rentalParamsOf(p: PartnerConfig): RentalProfitShareParams | null
    * testing a model name, so a new rental kind cannot leave one of them behind on a flat model. */
   if (!isRentalModel(p.payoutModel)) return null;
   if (p.fieldRentalCents == null || p.matchManagerCents == null || p.partnerSharePct == null) return null;
-  return { fieldRentalCents: p.fieldRentalCents, matchManagerCents: p.matchManagerCents, partnerSharePct: p.partnerSharePct };
+  return {
+    fieldRentalCents: p.fieldRentalCents, matchManagerCents: p.matchManagerCents, partnerSharePct: p.partnerSharePct,
+    cancellationFeeEnabled: p.cancellationFeeEnabled, cancellationNoticeHours: p.cancellationNoticeHours,
+  };
+}
+
+/* THE OPERATOR'S CANCELLATION DECISIONS FOR ONE PARTNER, keyed by match_api_id.
+ * ONE READER, TWO CALLERS: the page that renders the figure and the route that snapshots it as
+ * paid. If only the page knew about a charged cancellation, the partner would be shown $822 and
+ * recorded as paid $662, which is the worst kind of disagreement this system can produce.
+ * A missing table reads as no overrides — code deploys before 0162 applies, and charging nothing
+ * is the safe direction. */
+export async function fetchRentalOverrides(
+  supabase: SupabaseClient,
+  partnerDashboardId: string,
+): Promise<Map<number, boolean>> {
+  const out = new Map<number, boolean>();
+  const { data, error } = await supabase
+    .from("partner_match_rental_overrides")
+    .select("match_api_id, rental_charged")
+    .eq("partner_dashboard_id", partnerDashboardId);
+  if (error || !data) return out;
+  for (const r of data as { match_api_id: number; rental_charged: boolean }[]) {
+    out.set(Number(r.match_api_id), r.rental_charged === true);
+  }
+  return out;
 }
 
 export async function fetchAllEnabledPartnerDashboards(
@@ -361,7 +398,7 @@ export async function fetchAllEnabledPartnerDashboards(
   let error: any = null;
   // Same newest-first cascade as fetchPartnerBySlug: 0123 cols, then 0057, then pre-0057. Code
   // deploys before migrations apply, and a named column that does not exist yet fails the select.
-  for (const cols of [PARTNER_COLS_DATED, PARTNER_COLS_PAYOUT, PARTNER_COLS_FULL, PARTNER_COLS_NO_MODEL]) {
+  for (const cols of [PARTNER_COLS_CANCEL, PARTNER_COLS_DATED, PARTNER_COLS_PAYOUT, PARTNER_COLS_FULL, PARTNER_COLS_NO_MODEL]) {
     const res = await supabase.from("partner_dashboards").select(cols).eq("enabled", true);
     data = res.data; error = res.error;
     if (!error) break;
@@ -386,6 +423,7 @@ export async function fetchPartnerBySlug(
   //   no-cadence  — incl. 0003 payment_* cols, no cadence
   //   legacy      — pre-0003 (id, venue_id, partner_name, enabled)
   const tiers = [
+    PARTNER_COLS_CANCEL,   // incl. 0162 cancellation-fee cols
     PARTNER_COLS_DATED,    // incl. 0150 dated-model cols
     PARTNER_COLS_PAYOUT,   // incl. 0123 payout-model cols
     PARTNER_COLS_FULL,

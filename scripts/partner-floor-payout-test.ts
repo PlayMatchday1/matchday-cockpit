@@ -214,5 +214,148 @@ console.log("\nno branch tests the literal — every site routes through the pre
   }
 }
 
+console.log("\nA cancelled date can still owe the rental");
+{
+  /* THE FEE IS OFF UNTIL A PARTNER ROW TURNS IT ON. This is the behaviour that shipped, and the
+   * contract's "MAY" is why it is a setting rather than a constant. */
+  const off = payoutForMatchFloor(match(0, { cancelled: true, played: false, spotsSold: 0, rentalChargeOverride: true }), P);
+  is("fee disabled — a cancelled date owes nothing even with an operator charge", off.partnerTotalCents, 0);
+
+  /* PARMER, WITH THE FEE ON. 12 hours, from the row and not from a literal. */
+  const C: RentalProfitShareParams = { ...P, cancellationFeeEnabled: true, cancellationNoticeHours: 12 };
+  const cx = (over: Partial<MatchInput> = {}) =>
+    match(0, { matchApiId: 18321, startYmd: "2026-09-05", cancelled: true, played: false, spotsSold: 0, ...over });
+
+  /* SEP 5. Notice is unknown — nothing we store records when a match was cancelled — so the
+   * operator's decision is the only thing that charges it. */
+  const sep5 = payoutForMatchFloor(cx({ cancelledNoticeHours: null, rentalChargeOverride: true }), C);
+  is("Sep 5, charged by the operator — $160 owed", sep5.partnerTotalCents, 16000);
+  is("…no revenue", sep5.grossCents, 0);
+  is("…no manager pay on a cancelled date", sep5.matchManagerCents, 0);
+  is("…no pool, no split", [sep5.poolCents, sep5.partnerProfitShareCents], [0, 0]);
+  is("…MatchDay absorbs it: retained is negative", sep5.matchdayRetainedCents, -16000);
+  yes("…and the row still reconciles exactly", sep5.reconciles);
+  /* THE IDENTITY, SPELLED OUT ON A CANCELLED MATCH — the case the subtraction form exists for. */
+  is("partnerTotal + matchdayRetained + matchManager = gross, on a cancelled match",
+    sep5.partnerTotalCents + sep5.matchdayRetainedCents + sep5.matchManagerCents, sep5.grossCents);
+  yes("…and it is marked cancelled, not merely zeroed", sep5.cancelled === true && sep5.played === false);
+
+  /* NOBODY HAS SAID — nothing is owed. Never bill a partner on a guess. */
+  is("no decision recorded — nothing owed", payoutForMatchFloor(cx(), C).partnerTotalCents, 0);
+  /* THE WEATHER WAIVER. PopStroke-initiated weather cancellations incur no fee, ever, and no data
+   * we hold can derive that — it is the operator's stored decision, and it wins outright. */
+  is("weather waiver — nothing owed even at zero notice",
+    payoutForMatchFloor(cx({ cancelledNoticeHours: 0, rentalChargeOverride: false }), C).partnerTotalCents, 0);
+
+  /* THE THRESHOLD IS LIVE the moment a notice is known, and it comes off the partner row. */
+  is("2h notice, under the threshold — $160 owed",
+    payoutForMatchFloor(cx({ cancelledNoticeHours: 2 }), C).partnerTotalCents, 16000);
+  is("36h notice, over the threshold — nothing owed (the control)",
+    payoutForMatchFloor(cx({ cancelledNoticeHours: 36 }), C).partnerTotalCents, 0);
+  is("exactly at the threshold is NOT short notice",
+    payoutForMatchFloor(cx({ cancelledNoticeHours: 12 }), C).partnerTotalCents, 0);
+  /* AND THE THRESHOLD IS A SETTING, not the number 12 hiding in the code: move it and the same
+   * match changes side. */
+  const C24: RentalProfitShareParams = { ...C, cancellationNoticeHours: 24 };
+  is("the same 18h notice flips when the ROW's threshold moves to 24",
+    [payoutForMatchFloor(cx({ cancelledNoticeHours: 18 }), C).partnerTotalCents,
+     payoutForMatchFloor(cx({ cancelledNoticeHours: 18 }), C24).partnerTotalCents], [0, 16000]);
+
+  /* A CHARGED CANCELLATION IS MONEY BUT NOT A MATCH PLAYED. */
+  const played = payoutForMatchFloor(match(66000), C);
+  const t = totalsOf([played, sep5]);
+  is("totals: one match played, not two", t.matches, 1);
+  is("…and the rental still lands in the total", t.partnerTotalCents, 24800 + 16000);
+  is("…the month reconciles too", t.partnerTotalCents + t.matchdayRetainedCents + t.matchManagerCents, t.grossCents);
+  yes("…and the month is flagged as reconciling", t.reconciles);
+
+  /* THE SHIPPED MODEL DOES NOT MOVE. Same inputs, same settings, still nothing owed — the way back
+   * has to stay the way back. */
+  for (const over of [{ rentalChargeOverride: true }, { cancelledNoticeHours: 1 }] as Partial<MatchInput>[]) {
+    const legacy = payoutForMatch(cx(over), C);
+    is(`RENTAL_PLUS_PROFIT_SHARE ignores the cancellation fee (${JSON.stringify(over)})`,
+      [legacy.partnerTotalCents, legacy.matchdayRetainedCents, legacy.grossCents], [0, 0, 0]);
+  }
+}
+
+console.log("\nThe reconciliation assertion still fires — proven by breaking it");
+{
+  /* A POSITIVE CONTROL FOR AN ASSERTION WHOSE PASSING VALUE IS "true". `reconciles` is only worth
+   * anything if it can be false, so here is a row built to fail it: the same cancelled match with
+   * the rental owed to the partner AND retained by MatchDay, which is $320 out of a $0 match. */
+  const C: RentalProfitShareParams = { ...P, cancellationFeeEnabled: true };
+  const good = payoutForMatchFloor(match(0, { cancelled: true, played: false, spotsSold: 0, rentalChargeOverride: true }), C);
+  yes("the honest row reconciles", good.reconciles);
+  const broken = { ...good, matchdayRetainedCents: 16000, matchdayProfitShareCents: 16000 };
+  broken.reconciles = broken.partnerTotalCents + broken.matchdayRetainedCents + broken.matchManagerCents === broken.grossCents;
+  yes("the deliberately broken row does NOT reconcile", !broken.reconciles,
+    `partnerTotal ${$(broken.partnerTotalCents)} + retained ${$(broken.matchdayRetainedCents)} != gross ${$(broken.grossCents)}`);
+  /* AND THE FAILURE PROPAGATES to the month, which is what the page renders the error from. */
+  const t = totalsOf([broken]);
+  yes("…and the month it is in does not reconcile either", !t.reconciles);
+  /* THE VIEW MUST RENDER THE ERROR RATHER THAN A NUMBER when that happens. */
+  const view = readFileSync("src/app/partners/[slug]/PartnerRentalView.tsx", "utf8");
+  yes("a non-reconciling row prints 'does not reconcile' instead of a total",
+    /r\.reconciles \? fmtCents\(r\.partnerTotalCents\) : <span className="prv-cellerr"/.test(view));
+  yes("a non-reconciling page refuses outright", /!p\.reconciles &&[\s\S]{0,120}prv-reconcile-error/.test(view));
+  yes("the month still carries its verdict to the page", /data-holds=\{m\.totals\.reconciles/.test(view));
+}
+
+console.log("\nThe partner-facing page shows what the partner is owed, not MatchDay's slice");
+{
+  const view = readFileSync("src/app/partners/[slug]/PartnerRentalView.tsx", "utf8");
+  const body = view.slice(view.indexOf("export default"));
+  const stats0 = readFileSync("src/lib/partnerStats.ts", "utf8");
+  /* THE COLUMN IS GONE — header, row cell and footer cell. */
+  is("no MatchDay share column header", body.match(/MatchDay share/g), null);
+  is("no per-row MatchDay cell", body.match(/prv-row-mdshare/g), null);
+  is("no 'kept by MatchDay' anywhere", view.match(/kept by MatchDay/g), null);
+  /* THE FIGURE IS STILL COMPUTED AND STILL CHECKED — removing it from the page must not remove it
+   * from the arithmetic, which is the whole risk of this change. */
+  const model = readFileSync("src/lib/partnerPayoutModel.ts", "utf8");
+  /* BOTH rental formulas must still write it as a subtraction — that is what keeps it exact when
+   * MatchDay absorbs a shortfall, and a cancelled match is the largest shortfall there is. */
+  is("matchdayRetained is still a subtraction in both rental formulas",
+    (model.match(/const matchdayRetainedCents = m\.grossCents - /g) ?? []).length, 2);
+  yes("…still asserted per match", /reconciles:/.test(model));
+  yes("…still summed and asserted per period", /reconciles[\s\S]{0,200}partnerTotalCents \+[\s\S]{0,80}grossCents/.test(model));
+  /* THE NEW WORDING SAYS WHAT IS OWED AND WHAT WAS COLLECTED. */
+  yes("the reconciliation line states what the partner is owed", /You are owed <b>\{fmtCents\(m\.totals\.partnerTotalCents\)\}<\/b>/.test(body));
+  yes("…and what was collected", /collected\s*\n?\s*from players/.test(body));
+  /* 1b — THE HEADER RENAME, in the page's own casing (CSS uppercases it). */
+  yes("the top-up column reads 'Add to be paid'", /<th className="n">Add to be paid<\/th>/.test(body));
+  is("…and not the old label", body.match(/<th className="n">To be paid<\/th>/g), null);
+  /* A CHARGED CANCELLATION IS VISIBLY CANCELLED. */
+  yes("a cancelled row is labelled on the page", /prv-row-cancelled/.test(body) && /r\.cancelled &&/.test(body));
+  /* AND THE BUILDER KEEPS IT rather than dropping every cancelled match. */
+  const build = readFileSync("src/lib/partnerRentalDashboard.ts", "utf8");
+  yes("the builder keeps a cancelled match that owes money", /if \(p\.cancelled && p\.partnerTotalCents === 0\) continue;/.test(build));
+  yes("…and reads the operator's decision from stored overrides", /rentalOverrides\?\.get\(/.test(build));
+  yes("…and never guesses the notice", /cancelledNoticeHours: null/.test(build));
+  yes("the overrides come from the database, not component state",
+    /from\("partner_match_rental_overrides"\)/.test(stats0));
+  /* ONE READER, BOTH CALLERS. If only the page knew about a charged cancellation, the partner
+   * would be SHOWN $822 and RECORDED as paid $662 — the worst disagreement this system can make. */
+  for (const f of ["src/lib/partnerDashboardData.ts", "src/app/api/partner-dashboards/route.ts"]) {
+    yes(`${f.split("/").pop()} reads the overrides before computing a figure`,
+      /fetchRentalOverrides\(/.test(readFileSync(f, "utf8")));
+  }
+  /* AND THE WRITE IS A LOGGED SERVER ROUTE, not local state. */
+  const route = readFileSync("src/app/api/partner-dashboards/cancellation-override/route.ts", "utf8");
+  yes("the decision is written server-side through recordWrite", /recordWrite\(/.test(route));
+  yes("…admin-gated", /authenticateCapability\(req, "matchops"\)/.test(route));
+  yes("…with a mandatory reason", /A reason is required/.test(route));
+  yes("…and every write is keyed, never unqualified (pg_safeupdate)",
+    (route.match(/\.eq\("partner_dashboard_id", partnerId\)/g) ?? []).length >= 2);
+  const mig = readFileSync("supabase/migrations/0162_cancellation_rental_fee.sql", "utf8");
+  yes("0162 puts both settings on the partner row", /cancellation_fee_enabled/.test(mig) && /cancellation_notice_hours/.test(mig));
+  yes("…and the override table carries a reason and an actor",
+    /partner_match_rental_overrides/.test(mig) && /reason/.test(mig) && /created_by/.test(mig));
+  /* THE SETTINGS ARE ON THE PARTNER ROW. */
+  yes("the fee switch is read off the partner row", /cancellation_fee_enabled/.test(stats0));
+  yes("the threshold is read off the partner row", /cancellation_notice_hours/.test(stats0));
+  yes("…and both reach the formula", /cancellationFeeEnabled: p\.cancellationFeeEnabled/.test(stats0));
+}
+
 console.log(`\npartner-floor-payout: ${pass} passed, ${fails.length} failed`);
 if (fails.length) { for (const f of fails) console.log(`  FAILED: ${f}`); process.exit(1); }

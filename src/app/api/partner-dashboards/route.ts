@@ -23,6 +23,7 @@ import {
   computeWeeklyPayments,
   fetchPartnerRows,
   fetchPartnerWeeklyPayments,
+  fetchRentalOverrides,
   rentalParamsOf,
   type PartnerConfig,
 } from "@/lib/partnerStats";
@@ -72,6 +73,7 @@ async function fetchAllPartners(supabase: import("@supabase/supabase-js").Supaba
     payoutModel: ((r.revenue_model as string) === "per_match_minus_manager" ? "PER_MATCH_MINUS_MANAGER" : "REVENUE_SHARE") as PartnerConfig["payoutModel"],
     payoutSharePct: (r.revenue_share_pct as number) ?? 50,
     fieldRentalCents: null, matchManagerCents: null, partnerSharePct: null, spotPriceCents: null,
+      cancellationFeeEnabled: false, cancellationNoticeHours: 12,
   }));
 }
 
@@ -177,6 +179,9 @@ export async function POST(req: Request) {
       partnerName: partner.partnerName, venue: "", spotPriceCents: partner.spotPriceCents,
       // THE PARTNER'S OWN KIND, so what is recorded as paid is what the page showed them.
       payoutModel: partner.payoutModel,
+      // AND THEIR CANCELLATION DECISIONS, for the same reason: a charged cancelled date is part of
+      // the figure on the page, so it must be part of the figure that gets marked paid.
+      rentalOverrides: await fetchRentalOverrides(supabase, partner.id),
     });
     const ym = weekStartDate.slice(0, 7);
     const month = dash.months.find((m) => m.ym === ym);

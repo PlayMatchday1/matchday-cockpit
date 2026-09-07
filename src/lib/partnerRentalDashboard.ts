@@ -88,6 +88,19 @@ export type RentalDashboardProps = {
   /* Revenue at which a top-up first appears, on the floor kind. Null on the shipped kind, where the
    * meaningful threshold is rental + manager and the view already derives that one. */
   topUpThresholdCents: number | null;
+  /* EVERY CANCELLED DATE, decided or not — the operator's queue, never rendered to the partner.
+   * The public table only ever shows a cancellation that owes money, so without this list a
+   * cancelled date nobody has ruled on is invisible and can never be charged. */
+  cancellations: RentalCancellation[];
+};
+
+export type RentalCancellation = {
+  matchApiId: number;
+  startYmd: string;
+  /* charged — short notice, the rental is owed. waived — venue-initiated weather, never charged.
+   * none — nobody has ruled, so nothing is owed. */
+  decision: "charged" | "waived" | "none";
+  rentalCents: number;
 };
 
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -144,6 +157,11 @@ export function buildRentalDashboard(
     // Keyed by YYYY-MM. Absent for a period with no ledger row yet, which is the normal state
     // before anyone has marked anything.
     ledger?: Map<string, PeriodLedger>;
+    /* THE OPERATOR'S CANCELLATION DECISIONS, keyed by match_api_id — true charges the rental on a
+     * cancelled date, false is the venue-initiated weather waiver. Read from
+     * partner_match_rental_overrides, never from component state: what a venue is paid must
+     * survive a page reload and leave a row behind. An absent match is not charged. */
+    rentalOverrides?: Map<number, boolean>;
   },
 ): RentalDashboardProps {
   // The clock enters HERE and nowhere else, and it is injectable so the suites can pin it.
@@ -190,6 +208,12 @@ export function buildRentalDashboard(
         // as NOT played: on a payout page, refusing to bill for something unproven is the safe
         // direction, and it shows up as "scheduled" rather than silently earning money.
         played: a.endUtc != null && Date.parse(a.endUtc) < nowMs,
+        /* NOTICE IS NOT DERIVABLE and is not guessed at. Nothing we store records when a match was
+         * cancelled — updated_at is the row's last modification and on the Sep 5 Parmer match it
+         * falls 2h50m AFTER kickoff, because the roster was edited then. Passing null says so, and
+         * the model then requires the operator's explicit decision below. */
+        cancelledNoticeHours: null,
+        rentalChargeOverride: opts.rentalOverrides?.get(Number(key.replace(/^id:/, "")) || 0) ?? null,
       },
       params,
     ))
@@ -201,7 +225,11 @@ export function buildRentalDashboard(
     // A SCHEDULED one is KEPT, because the partner should see that Aug 19 exists and is not being
     // counted; hiding it would be a different lie from billing for it. It is already zeroed, so
     // totalsOf skips it and no sum can pick it up.
-    if (p.cancelled) continue;
+    // A CANCELLED DATE THAT OWES THE RENTAL IS KEPT, because there is money on it. It is the one
+    // cancelled row worth showing: $0 revenue, the rental owed, and MatchDay's side negative.
+    // Under RENTAL_PLUS_PROFIT_SHARE every cancelled row is all-zero, so this test is false and
+    // that model still drops all of them — nothing about it moves.
+    if (p.cancelled && p.partnerTotalCents === 0) continue;
     const ym = p.startYmd.slice(0, 7);
     byYm.set(ym, [...(byYm.get(ym) ?? []), p]);
   }
@@ -250,5 +278,17 @@ export function buildRentalDashboard(
     reconciles: grand.reconciles && months.every((m) => m.totals.reconciles) && payouts.every((p) => p.reconciles),
     payoutModel: kind,
     topUpThresholdCents: kind === "RENTAL_FLOOR_PROFIT_SHARE" ? topUpThresholdCents(params) : null,
+    /* NEWEST FIRST — a cancellation is acted on soon after it happens, or not at all. */
+    cancellations: payouts
+      .filter((x) => x.cancelled)
+      .map((x) => {
+        const o = opts.rentalOverrides?.get(x.matchApiId);
+        return {
+          matchApiId: x.matchApiId, startYmd: x.startYmd,
+          decision: o === true ? ("charged" as const) : o === false ? ("waived" as const) : ("none" as const),
+          rentalCents: params.fieldRentalCents,
+        };
+      })
+      .sort((a, b) => b.startYmd.localeCompare(a.startYmd)),
   };
 }

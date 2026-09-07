@@ -8,7 +8,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PartnerRevenueModelNext } from "./partnerStats";
-import { computePartnerStats, computeWeeklyPayments, fetchPartnerBySlug, fetchPartnerRows, fetchPartnerWeeklyPayments, rentalParamsOf } from "./partnerStats";
+import { computePartnerStats, computeWeeklyPayments, fetchPartnerBySlug, fetchPartnerRows, fetchPartnerWeeklyPayments, fetchRentalOverrides, rentalParamsOf } from "./partnerStats";
 import { buildRentalDashboard, type RentalDashboardProps } from "./partnerRentalDashboard";
 import type { PeriodLedger } from "./partnerPayoutModel";
 import { derivePartnerGrains } from "./partnerGrain";
@@ -61,11 +61,16 @@ export async function buildPartnerDashboardData(
         { status: (r.status as "pending" | "paid" | "disputed") ?? "pending", paidAt: (r.paid_at as string | null) ?? null },
       ]),
     );
+    /* THE CANCELLATION DECISIONS, READ FROM THE DATABASE ON EVERY RENDER. Whether a cancelled date
+     * owes the rental is money, so it is a stored row with a reason and an actor on it, not
+     * component state that a reload forgets. A missing table (the code deploys before 0162
+     * applies) reads as no overrides, which charges nothing — the safe direction. */
+    const rentalOverrides = await fetchRentalOverrides(supabase, partner.id);
     return {
       kind: "rental",
       rental: buildRentalDashboard(rows, rentalParams, {
         partnerName: partner.partnerName, venue: venueName, spotPriceCents: partner.spotPriceCents, ledger,
-        payoutModel: partner.payoutModel,
+        payoutModel: partner.payoutModel, rentalOverrides,
       }),
     };
   }
