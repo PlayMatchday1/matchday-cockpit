@@ -36,6 +36,15 @@ const C = {
   ink: "#12241d", muted: "#6d7b74", ok: "#12704a", chipBg: "#eef3f0", chipLine: "#e2eae5",
   line: "#e6ebe8", surface: "#ffffff", railB: "#f6f9f7", canvas: "#eef2ef",
 };
+/* THE FOUR PAYOUT MODELS, named for a person rather than for the enum. Keyed off the union so a
+ * fifth model cannot be added without this map noticing. */
+const MODEL_LABEL: Record<string, string> = {
+  RENTAL_FLOOR_PROFIT_SHARE: "Rental floor + profit share",
+  RENTAL_PLUS_PROFIT_SHARE: "Rental + profit share",
+  PER_MATCH_MINUS_MANAGER: "Per match − manager",
+  REVENUE_SHARE: "Revenue share",
+};
+
 const PARTNER_BASE = "matchday-clubhouse.vercel.app/partners/";
 
 export default function PartnerDashboardsIndex() {
@@ -246,6 +255,21 @@ export default function PartnerDashboardsIndex() {
       {/* seam */}
       <div className="mb-3 flex items-center gap-3" data-testid="seam">
         <div className="text-[10.5px] font-[800] tracking-[1.1px]" style={{ color: C.muted }}>BELOW THIS LINE IS EXACTLY WHAT {selected.partnerName.toUpperCase()} SEES AT THEIR LINK</div>
+        {/* WHICH FORMULA PRODUCED THE FIGURES BELOW. It used to sit on the partner's own page,
+            which is the one place it is no use: PopStroke is paid by a contract, not by a model
+            name. It is worth having HERE, above the seam, because two rental formulas are live and
+            switching between them is one UPDATE with no deploy — after a switch, a figure that
+            does not say which formula made it cannot be checked against anything.
+            Read from the PREVIEW payload, not from the admin partner row: the admin list carries
+            deliberate pre-0123 defaults for payoutModel, so it would confidently name the wrong
+            one. This is the model the numbers underneath were actually computed with. */}
+        {previewData?.kind === "rental" && (
+          <span data-testid="admin-model" data-model={previewData.rental.payoutModel}
+            className="rounded-[5px] px-2 py-[3px] text-[9.5px] font-[900] tracking-[1.1px] whitespace-nowrap"
+            style={{ background: "rgba(0,0,0,.07)", color: C.muted }}>
+            {MODEL_LABEL[previewData.rental.payoutModel] ?? previewData.rental.payoutModel}
+          </span>
+        )}
         <div className="h-px flex-1" style={{ background: C.line }} />
       </div>
 

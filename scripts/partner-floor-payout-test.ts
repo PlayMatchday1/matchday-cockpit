@@ -158,10 +158,20 @@ console.log("\nthe break-even sentence is derived, not the literal 440");
   /* COMMENTS MAY SAY 440 — explaining where a derived number lands is the opposite of hardcoding
    * it. What must not exist is a 440 in code that renders. */
   const rendered = view.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
-  yes("the view prints the derived threshold", /p\.topUpThresholdCents/.test(view));
-  yes("…and no rendered code contains the literal 440", !/440/.test(rendered));
-  yes("…and the sentence follows the model kind, so switching back restores the old wording",
-    /floorKind \? \(/.test(view) && /there is no profit share and MatchDay absorbs the loss/.test(view));
+  /* THE THRESHOLD IS NO LONGER PRINTED. "40% of profit pool with a floor of $160.00" says what the
+   * "below $440 of revenue" sentence said, without a fourth derived figure that has to be kept in
+   * step with three parameters to stay true. The function stays — it is asserted above — and the
+   * literal must still never appear in rendered code. */
+  yes("no rendered code contains the literal 440", !/440/.test(rendered));
+  yes("the floor kind renders nothing under the green box",
+    /\{!floorKind && \([\s\S]{0,400}prv-gtee/.test(view));
+  is("…so the top-up threshold sentence is gone", view.match(/there is no top-up/g), null);
+  is("…and so is the rental guarantee sentence", view.match(/is yours on every match played, whatever/g), null);
+  /* THE WAY BACK KEEPS ITS OWN WORDING, untouched: switching the row back to
+   * RENTAL_PLUS_PROFIT_SHARE must restore the page it had, sentences included. */
+  yes("the shipped kind keeps its guarantee and its breakeven line",
+    /rental is yours on every match played/.test(view)
+    && /there is no profit share and MatchDay absorbs the loss/.test(view));
 }
 
 console.log("\nno branch tests the literal — every site routes through the predicate");
@@ -322,9 +332,37 @@ console.log("\nThe partner-facing page shows what the partner is owed, not Match
   /* THE NEW WORDING SAYS WHAT IS OWED AND WHAT WAS COLLECTED. */
   yes("the reconciliation line states what the partner is owed", /You are owed <b>\{fmtCents\(m\.totals\.partnerTotalCents\)\}<\/b>/.test(body));
   yes("…and what was collected", /collected\s*\n?\s*from players/.test(body));
-  /* 1b — THE HEADER RENAME, in the page's own casing (CSS uppercases it). */
-  yes("the top-up column reads 'Add to be paid'", /<th className="n">Add to be paid<\/th>/.test(body));
-  is("…and not the old label", body.match(/<th className="n">To be paid<\/th>/g), null);
+  /* THE HEADER, in the page's own casing (CSS uppercases it). */
+  yes("the top-up column reads 'Additional paid'", /<th className="n">Additional paid<\/th>/.test(body));
+  is("…and neither of the labels it replaced", body.match(/<th className="n">(Add to be paid|To be paid)<\/th>/g), null);
+
+  /* ── THE GREEN BOX, AND THE LINE IT DEPENDS ON ────────────────────────────────────────────── */
+  yes("the green box is max(floor, share of pool), in seven words",
+    /\$\{p\.params\.partnerSharePct\}% of profit pool with a floor of \$\{fmtCents\(p\.params\.fieldRentalCents\)\}/.test(view));
+  /* NOTHING IS WRITTEN INTO THE SENTENCE. Every figure in that block comes off the partner row. */
+  const green = view.slice(view.indexOf('data-testid="prv-formula"'), view.indexOf('data-testid="prv-table"'));
+  const greenRendered = green.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  is("no hardcoded 160, 40 or 440 in the block that renders it",
+    greenRendered.match(/\b(160|440)\b/g) ?? greenRendered.match(/\b40\b(?!\})/g), null);
+  /* THE STRIP MUST MATCH THE TABLE. payoutForMatchFloor computes pool = gross − matchManager, with
+   * the rental NOT deducted — the strip printed it as a deduction and was wrong by the rental on
+   * every row. Checked against the MODEL, not against arithmetic repeated here. */
+  yes("the formula strip drops the rental on the floor kind",
+    /\{!floorKind && <><span className="prv-op">−<\/span><span className="prv-tok prv-cost">\{fmtCents\(p\.params\.fieldRentalCents\)\} field rental/.test(view));
+  const strip = payoutForMatchFloor(match(66000), P);
+  is("…and that is the pool the model actually computes", strip.poolCents, 66000 - P.matchManagerCents);
+  /* AND THE TWO FORMULAS DIFFER BY EXACTLY THE RENTAL, which is why one strip cannot serve both. */
+  is("…and the shipped kind's pool is that same pool minus the rental",
+    strip.poolCents - payoutForMatch(match(66000), P).poolCents, P.fieldRentalCents);
+  /* THE MODEL NAME MOVED — off the partner page, onto the internal one. */
+  is("the model name is off the partner-facing page", view.match(/Rental floor \+ profit share/g), null);
+  const idx = readFileSync("src/app/(internal)/match-ops/partner-dashboards/PartnerDashboardsIndex.tsx", "utf8");
+  yes("…and onto the internal Partner Dashboards page", /data-testid="admin-model"/.test(idx));
+  yes("…named for a person, for every model", /RENTAL_FLOOR_PROFIT_SHARE: "Rental floor \+ profit share"/.test(idx));
+  /* AND IT NAMES THE MODEL THE FIGURES CAME FROM. The admin partner row carries deliberate
+   * pre-0123 defaults for payoutModel and would confidently name the wrong one. */
+  yes("…read from the preview payload, not the admin partner row",
+    /previewData\.rental\.payoutModel/.test(idx));
   /* A CHARGED CANCELLATION IS VISIBLY CANCELLED. */
   yes("a cancelled row is labelled on the page", /prv-row-cancelled/.test(body) && /r\.cancelled &&/.test(body));
   /* AND THE BUILDER KEEPS IT rather than dropping every cancelled match. */
