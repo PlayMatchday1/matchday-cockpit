@@ -130,7 +130,21 @@ console.log("\nthe send route");
   /* THE SEND NEVER RETRIES. The one retry in this file is the AUDIT insert falling back when
    * migration 0160 has not been applied — a text that already reached a phone must still be
    * logged. These two assertions together say the retry is on the log and not on Telnyx. */
+  /* THE AUDIT SHAPE. Migration 0160 is applied, so the fallback is dormant — but it stays, because
+   * a rollback that took the columns away must not lose the row for a text that already reached a
+   * phone. These pin that it is the ONLY insert that writes the old shape, and that it can only be
+   * reached by a column error. */
+  const inserts = [...src.matchAll(/\.from\("match_notify_log"\)\.insert\(([^)]*)\)/g)].map((m) => m[1].trim());
+  is("there are exactly two audit inserts in the file", inserts.length, 2);
+  yes("the first writes the audience and what was asked for", /\.\.\.subsetCols/.test(inserts[0]), inserts[0]);
+  yes("the second — the fallback — is the only one that does not", inserts[1] === "auditRow", inserts[1]);
+  yes("…and it runs only when the column itself is missing",
+    /if \(logInsert\.error && \/audience\|requested_user_ids\|column\/i\.test\(logInsert\.error\.message\)\)/.test(src));
   yes("the audit insert can fall back when 0160 is not yet applied", /migration 0160 is not applied/.test(src));
+  /* BOTH PATHS NAME THEIR AUDIENCE. A whole-match send is not "the absence of a subset" in the
+   * log — it says 'match' and carries a null list, so a reader never has to infer. */
+  yes("a whole-match send records audience 'match' with a null list explicitly",
+    /\{ audience: "match", requested_user_ids: null \}/.test(src));
   is("…and there is exactly one Telnyx send call in the file", (src.match(/telnyx\.messages\.send/g) ?? []).length, 1);
   yes("…inside a single allSettled over the recipients, with no loop around it",
     /Promise\.allSettled\(\s*recipients\.map/.test(src) && !/while\s*\(/.test(src));

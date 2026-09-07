@@ -1015,6 +1015,32 @@ matter (getting them wrong targets the wrong record):
   search       GET    /admin/players?email|id&limit&page&sort
 In the roster row: `id` = userMatchId (move, remove), `userId` = playerId (add, fake).
 
+**`user.isMember` IS WRONG ON THE MATCH-ROSTER PROJECTION, AND RIGHT ON THE PLAYER
+LIST.** The same API, the same person, three projections, three answers — measured
+2026-09-07 on production users 5538, 83112, 24654 and 35445, all four holding an
+ACTIVE subscription:
+
+    GET /admin/players?id=5538          -> isMember: true          CORRECT
+    GET /admin/players/5538             -> isMember ABSENT         (the key is not returned)
+    GET /admin/matches/18281/players    -> user.isMember: false    WRONG
+
+Across matches 18281, 18365, 18477, 18529 and 18343: the embedded projection agreed
+with an ACTIVE subscription on **79 of 118** real rows (67%). Every one of the 39
+disagreements was `false` for somebody who **is** a member. `mdapi_users.is_member`,
+which is synced from the LIST endpoint, agrees on 31,637 of 31,788 users (99.5%), and
+all 18 of its "member reads false" cases are our own mirror being older than the
+membership, not the API.
+
+TWO EXPLANATIONS RULED OUT. It is not a snapshot taken at registration: all 39
+registered AFTER their membership activated (user 5538 registered 2026-09-04 on a
+membership active since 2025-09-01). It is not "member in THIS city": 38 of the 39
+hold their membership in the match's own city.
+
+**So never read membership off a roster row.** `mdapi_subscriptions.status = 'ACTIVE'`
+is the source, and any ACTIVE row counts — a renewal leaves a CANCELED row beside the
+ACTIVE one. `mdapi_match_players.user_is_member` is a third copy and is `false` on all
+**251,060** rows without exception, so it answers nothing at all.
+
 **A TEAM+SPOT IS UNIQUE, AND THE API ENFORCES IT.** Measured on staging match 2563
 (2026-09-06) while building a reduce-2 fixture — adding a player onto a number
 another row already holds:
