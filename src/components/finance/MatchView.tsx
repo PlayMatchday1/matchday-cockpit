@@ -65,8 +65,11 @@ const monthLabel = (iso: string) => {
 /* THE LENS. Each is a way of counting the same match — a revenue measure and a head count.
  * FREE has no revenue by definition, which is the point of counting it separately. */
 const LENS: Record<LensKey, { label: string; rev: (m: MatchRow) => number; heads: (m: MatchRow) => number; noun: string }> = {
-  all: { label: "All revenue", rev: (m) => m.dppRevenue + m.memberRevenue, heads: (m) => m.totalSpots, noun: "Spots" },
-  member: { label: "Members", rev: (m) => m.memberRevenue, heads: (m) => m.memberSpots, noun: "Members" },
+  /* memberRevenue is null when the city has no prior-month rate. A lens has to return a number to
+   * sort and size by, so it reads 0 here — but the ROW renders "—" for the member column, so the
+   * reader is never shown a 0 that means "unknown". */
+  all: { label: "All revenue", rev: (m) => m.dppRevenue + (m.memberRevenue ?? 0), heads: (m) => m.totalSpots, noun: "Spots" },
+  member: { label: "Members", rev: (m) => m.memberRevenue ?? 0, heads: (m) => m.memberSpots, noun: "Members" },
   dpp: { label: "DPP", rev: (m) => m.dppRevenue, heads: (m) => m.dppSpots, noun: "DPP" },
   free: { label: "Free", rev: () => 0, heads: (m) => m.freeSpots, noun: "Free" },
 };

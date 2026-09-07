@@ -328,3 +328,21 @@ export function coversBenchmarkMonth(
   const b = benchmarkMonthFetchBounds(now);
   return bounds.fromDate <= b.fromDate && bounds.toDate >= b.toDate;
 }
+
+/* Every month key whose first and last day both fall inside [fromDate, toDate]. */
+export function fullyCoveredMonths(fromDate: string, toDate: string): string[] {
+  const NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const out: string[] = [];
+  const from = new Date(`${fromDate}T00:00:00Z`), to = new Date(`${toDate}T00:00:00Z`);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return out;
+  const cur = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1));
+  while (cur.getTime() <= to.getTime()) {
+    const first = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth(), 1));
+    const last = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth() + 1, 0));
+    if (first.getTime() >= from.getTime() && last.getTime() <= to.getTime()) {
+      out.push(`${NAMES[cur.getUTCMonth()]} ${cur.getUTCFullYear()}`);
+    }
+    cur.setUTCMonth(cur.getUTCMonth() + 1);
+  }
+  return out;
+}

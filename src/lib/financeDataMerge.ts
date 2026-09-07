@@ -87,6 +87,12 @@ export function mergeFinanceDataByMonth(
         secondary.mdapiMemberSpots.byCityMonth,
         secondaryMonths,
       ),
+      /* THE UNION, because a merged view is covered wherever EITHER side was. Coverage is about
+       * what the fetch reached, not about which side won a key. */
+      coveredMonths: new Set([
+        ...primary.mdapiMemberSpots.coveredMonths,
+        ...secondary.mdapiMemberSpots.coveredMonths,
+      ]),
     },
   };
 }

@@ -162,6 +162,12 @@ const NODE_SUITES = [
   // beside a tax-inclusive membership share and called the sum revenue. This pins which call
   // site reads which helper, and the tax rates as GET /cities SERVES them — I measured OKC at
   // 8.65 and it is 8.625, and Warsaw is a real 0 that must never be divided.
+  // THE MEMBER-SPOT RATE. Its basis is the PRIOR COMPLETE MONTH, because taking both halves from
+  // the month in progress made a match's member revenue depend on the day you looked at it —
+  // measured at -93% from day 2 to month end on San Antonio, three months running. Pins the basis
+  // month, that a missing rate is withheld rather than reported as zero, and that venue and match
+  // stay reconciled because both are spots x one rate.
+  "scripts/member-rate-test.ts",
   "scripts/revenue-basis-test.ts",
   "scripts/promo-model-test.ts",
   "scripts/cost-basis-confinement-test.ts",

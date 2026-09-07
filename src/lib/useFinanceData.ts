@@ -25,6 +25,7 @@ import {
 import { useFinanceQuarter } from "./financeQuarter";
 import {
   benchmarkMonthFetchBounds,
+  fullyCoveredMonths,
   coversBenchmarkMonth,
   getCurrentQuarter,
   getQuarterByKey,
@@ -42,7 +43,16 @@ function quarterFetchBounds(quarter: QuarterInfo): {
   fromDate: string;
   toDate: string;
 } {
-  const fromMs = quarter.start.getTime() - QUARTER_FETCH_BUFFER_DAYS * 86400_000;
+  /* THE WHOLE MONTH BEFORE THE QUARTER, NOT FOURTEEN DAYS OF IT. The member-revenue rate is the
+   * PRIOR COMPLETE MONTH's revenue per member spot, so the quarter's FIRST month needs the month
+   * before the quarter in full. A 14-day buffer gave it half a month of spots against a full
+   * month of revenue — a denominator that is short is a rate that is too high, and it would have
+   * looked like a number rather than an artefact. */
+  const priorMonthStart = new Date(quarter.start.getFullYear(), quarter.start.getMonth() - 1, 1);
+  const fromMs = Math.min(
+    quarter.start.getTime() - QUARTER_FETCH_BUFFER_DAYS * 86400_000,
+    priorMonthStart.getTime(),
+  );
   const toMs = quarter.end.getTime() + QUARTER_FETCH_BUFFER_DAYS * 86400_000;
   return {
     fromDate: new Date(fromMs).toISOString().slice(0, 10),
@@ -922,8 +932,12 @@ async function load(quarter: QuarterInfo): Promise<void> {
   // PR-E: bucket key is fin_venues.id, resolved via field_id →
   // fin_venue_fields. Replaces the name-canonicalization path (which
   // dropped rows whose field_title didn't match any fin_venues row).
+  /* WHICH MONTHS THE FETCH COVERED END TO END. Only a month whose first AND last day fall inside
+   * the fetched range can be a rate basis; a partially fetched month is a short denominator, and
+   * memberSpotRateFor withholds a rate rather than publishing one built on it. */
+  const coveredMonths = fullyCoveredMonths(smBounds.fromDate, smBounds.toDate);
   const mdapiMemberSpots = mdapiRegRows
-    ? buildMdapiMemberSpotIndex(mdapiRegRows, venues, venueFields)
+    ? buildMdapiMemberSpotIndex(mdapiRegRows, venues, venueFields, coveredMonths)
     : emptyMdapiMemberSpotIndex();
 
   const config: Record<string, string> = {};

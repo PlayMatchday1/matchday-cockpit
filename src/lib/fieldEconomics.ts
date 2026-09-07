@@ -59,6 +59,22 @@ export const canonCity = (c: string | null | undefined): string =>
 // THE THREE REAL STRUCTURES. hourly_rate is null on every row in fin_venues and no venue is
 // recorded as an installation or a free-use arrangement, so those are not options here — a filter
 // offering them would be offering empty sets.
+/* One venue-month's member slice, or null when the city has no prior-month rate. Summed across a
+ * group's legs; if any leg has no rate they all have none, because the rate is per CITY. */
+function memberSlice(
+  data: Parameters<typeof venueAllocatedMemberRevenueFor>[0],
+  ids: number[],
+  month: Parameters<typeof venueAllocatedMemberRevenueFor>[2],
+): number | null {
+  let sum = 0;
+  for (const id of ids) {
+    const v = venueAllocatedMemberRevenueFor(data, id, month);
+    if (v == null) return null;
+    sum += v;
+  }
+  return sum;
+}
+
 export type CostBasis = "per_match" | "profit_share" | "monthly_flat";
 
 /**
@@ -299,7 +315,9 @@ export type FieldMonth = {
    *
    * Cost divided into DPP alone read Dallas at 184.0% and Atlanta at 188.1% — a field cost against
    * only part of the revenue that field carried. */
-  membership: number;
+  /* null = no prior-month rate for this city, so the member component is unknown rather than
+   * zero. `revenue` above then carries the non-member part alone and the view says so. */
+  membership: number | null;
   // The EVENT slice of `revenue` — tournament and combine play, which carries no venue cost by
   // policy. Held out of the ratio denominator so cost and revenue count the same matches.
   eventRevenue: number;
@@ -406,10 +424,14 @@ export function buildFieldMonths(
         // One venue-month's allocated share. A group's legs each carry their own share, so summing
         // the group's legs is the group's membership — no double count, because the allocator is
         // keyed on venue id and each leg is a distinct venue.
+        /* THE MEMBER SLICE IS NULL WHEN THERE IS NO PRIOR-MONTH RATE, and null is not zero. A city
+         * with no membership activity last month has no defensible rate, so the member component
+         * is withheld and the reader is told, rather than shown a confident 0. Every leg of a
+         * group shares one city, so the legs agree: either all have a rate or none do. */
         revenue: venuePartnerRevenueFor(data, matchRegistrations, idSet, month)
-          + ids.reduce((a, id) => a + venueAllocatedMemberRevenueFor(data, id, month), 0),
+          + (memberSlice(data, ids, month) ?? 0),
         privateRental: privateRentalFor(data, idSet, month),
-        membership: ids.reduce((a, id) => a + venueAllocatedMemberRevenueFor(data, id, month), 0),
+        membership: memberSlice(data, ids, month),
         eventRevenue: ids.reduce((a, id) => a + (eventRev.get(`${id}|${month}`) ?? 0), 0),
         matches,
         costPerMatch: cost == null ? null : matches > 0 ? cost / matches : null,
@@ -457,7 +479,9 @@ export type MatchRow = {
    * revenue times this match's share of the city-month's MEMBER SPOTS, which is the convention
    * matchAllocatedMemberRevenueFor already implements (financeStats.ts:1865) and cityPnl uses one
    * grain up. Derived, never looked up: there is no membership row carrying a venue. */
-  memberRevenue: number;
+  /* null = the city has no prior-month member-spot rate, so this match's member component is
+   * UNKNOWN rather than zero. The view shows nothing and says why. */
+  memberRevenue: number | null;
   /* THE MATCH'S TRUE UTC INSTANT (ms), from mdapi_matches.start_date_utc via matchStartMs.
    * `start` above is WALL CLOCK wearing a fake +00:00 — comparing it against Date.now() runs
    * 4-5h early and reports tonight's not-yet-played matches as finished. That exact bug has

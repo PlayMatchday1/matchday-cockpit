@@ -106,9 +106,22 @@ console.log("\nthe allocator, and the wiring");
   /* THE VENUE ALLOCATOR IS PRE-TAX because every caller joins it to roster-derived revenue. The
    * share is a ratio of member spots, so pre-taxing the city total pre-taxes each slice and the
    * slices still sum to the city figure. */
-  const alloc = fs.slice(fs.indexOf("export function venueAllocatedMemberRevenueFor"), fs.indexOf("export function matchAllocated") >= 0 ? fs.indexOf("export function matchAllocated") : fs.length);
-  if (/cityMembershipRevenuePreTaxFor/.test(alloc)) ok("the venue allocator pre-taxes the city total");
-  else bad("the venue allocator pre-taxes the city total", "FIELD-LEVEL MEMBERSHIP WOULD CARRY TAX");
+  /* ITEMISED: the pre-tax call moved one level up, into memberSpotRateFor, when the rate became
+   * the PRIOR month's. The invariant is unchanged and is asserted where it now lives — plus that
+   * both allocators go through that one helper, which is what keeps venue and match reconciling. */
+  const rate = fs.slice(fs.indexOf("export function memberSpotRateFor"), fs.indexOf("export function venueAllocatedMemberRevenueFor"));
+  if (/cityMembershipRevenuePreTaxFor/.test(rate)) ok("the member-spot rate pre-taxes the city total");
+  else bad("the member-spot rate pre-taxes the city total", "FIELD-LEVEL MEMBERSHIP WOULD CARRY TAX");
+  const alloc = fs.slice(fs.indexOf("export function venueAllocatedMemberRevenueFor"), fs.length);
+  if ((alloc.match(/memberSpotRateFor\(/g) ?? []).length === 2) ok("…and both allocators take their rate from it, so venue and match cannot drift");
+  else bad("both allocators take their rate from memberSpotRateFor", `got ${(alloc.match(/memberSpotRateFor\(/g) ?? []).length}`);
+  /* AND THE RATE IS THE PRIOR MONTH'S, not the match's own. This is the bug: both halves used to
+   * come from the month in progress, so the figure moved as the month filled — measured on San
+   * Antonio at -93% from day 2 to month end, three months running. */
+  if (/priorMonthKey\(month\)/.test(rate)) ok("…and the basis month is the one BEFORE the match's month");
+  else bad("the basis month is the prior month", "THE IN-MONTH RATE IS BACK");
+  if (!/byCityMonth\.get\(`\$\{args\.city\}\|\$\{month\}`\)/.test(fs)) ok("…and neither allocator still divides by its own month's city total");
+  else bad("an allocator still divides by its own month's city total");
 
   /* COST'S OWN MEMBERSHIP CALL. buildFieldMonths adds each venue-month's allocated share into
    * `revenue`, and that allocator must be the PRE-TAX one — Cost divides into roster-derived
@@ -118,8 +131,13 @@ console.log("\nthe allocator, and the wiring");
   const fe = strip(readFileSync("src/lib/fieldEconomics.ts", "utf8"));
   if (/venueAllocatedMemberRevenueFor\(data, id, month\)/.test(fe)) ok("Cost adds allocated membership at the field grain");
   else bad("Cost adds allocated membership at the field grain", "THE RATIO DIVIDES INTO DPP ALONE AGAIN");
-  if (/membership: ids\.reduce/.test(fe)) ok("…and carries it as its own slice of revenue");
+  /* ITEMISED: `ids.reduce` became `memberSlice`, which sums the same legs and returns NULL when the
+   * city has no prior-month rate — null being the difference between "nothing to allocate" and
+   * "no basis to allocate on". */
+  if (/membership: memberSlice\(data, ids, month\)/.test(fe)) ok("…and carries it as its own slice of revenue");
   else bad("…and carries it as its own slice of revenue");
+  if (/if \(v == null\) return null;/.test(fe)) ok("…and withholds the slice rather than calling it zero when there is no rate");
+  else bad("a missing rate is being reported as zero");
   if (!/cityMembershipRevenueFor\b/.test(fe)) ok("…and Cost never reads the tax-inclusive helper");
   else bad("…and Cost never reads the tax-inclusive helper", "ONE RATIO, TWO BASES");
 

@@ -1835,28 +1835,136 @@ export function cityTotalMemberSpotsFor(
   );
 }
 
+/* ── THE MEMBER-SPOT RATE ─────────────────────────────────────────────────────────────────────
+ * WHAT THE MODEL NOW ASSERTS: a membership buys a month of football, not a match. Its fee is
+ * spread across the spots that membership actually filled, so a member who plays eight times
+ * spreads their fee more thinly than one who plays twice — and a BUSY month legitimately shows
+ * LESS member revenue per match. That is the claim, and it is worth disagreeing with out loud
+ * rather than quietly.
+ *
+ * THE RATE COMES FROM THE PRIOR COMPLETE MONTH, and this is the whole of the fix.
+ *
+ * Taking both halves from the match's own month made the number meaningless while that month was
+ * still running, because the two halves arrive on completely different schedules. Measured on San
+ * Antonio, three months running: 78%, 93% and 87% of membership revenue lands in the first THREE
+ * DAYS (day 1 alone carries 70-78%), while member spots accumulate evenly all month. Evaluated the
+ * way the page would have computed it on each day, the rate fell from $77.90 to $5.79 across June,
+ * $100.84 to $7.43 across July and $116.09 to $8.11 across August — a 93% collapse, a factor of
+ * 13.5 to 14.3, every month. A match's allocated member revenue depended on WHEN YOU LOOKED AT IT.
+ *
+ * A completed prior month has both halves settled, so the rate is a number rather than a moment. */
+export type MemberSpotRate = {
+  rate: number;          // dollars of pre-tax membership revenue per member spot
+  basisMonth: Q2Month;   // the month the rate came from — always the one before `month`
+  spots: number;
+  revenue: number;
+};
+
+/** The month before `month`, as a month key. Year-safe: Jan 2027 → Dec 2026. */
+export function priorMonthKey(month: Q2Month): Q2Month | null {
+  const m = /^([A-Za-z]{3}) (\d{4})$/.exec(month.trim());
+  if (!m) return null;
+  const idx = MONTH_NAMES_FROM_ISO.indexOf(m[1]);
+  if (idx < 0) return null;
+  const year = parseInt(m[2], 10);
+  return idx === 0 ? `Dec ${year - 1}` : `${MONTH_NAMES_FROM_ISO[idx - 1]} ${year}`;
+}
+
+/**
+ * NULL IS AN ANSWER HERE, and the only honest one in two cases:
+ *   - the prior month is not in the member-spot index's coverage, so its spot count would be a
+ *     partial fetch masquerading as a real denominator;
+ *   - the prior month is covered and the city genuinely had no member spots in it.
+ * Neither may fall back to the current month. That is the bug this function exists to remove, and
+ * a fallback would put it back where nobody can see it.
+ */
+export function memberSpotRateFor(
+  data: FinanceData,
+  city: string,
+  month: Q2Month,
+): MemberSpotRate | null {
+  const basisMonth = priorMonthKey(month);
+  if (!basisMonth) return null;
+  const covered = data.mdapiMemberSpots.coveredMonths;
+  // An index with no coverage record at all is a fixture or an empty load; treat every month it
+  // holds a bucket for as covered, so callers behave as they did rather than going blank.
+  if (covered && covered.size > 0 && !covered.has(basisMonth)) return null;
+  const spots = data.mdapiMemberSpots.byCityMonth.get(`${city}|${basisMonth}`)?.member ?? 0;
+  if (spots <= 0) return null;
+  const revenue = cityMembershipRevenuePreTaxFor(data, city, basisMonth);
+  if (!(revenue > 0)) return null;
+  return { rate: revenue / spots, basisMonth, spots, revenue };
+}
+
+/* ── ALLOCATED vs BILLED, AT CITY-MONTH GRAIN ────────────────────────────────────────────────
+ * A rate times a count does not divide a pot, so allocated member revenue no longer sums to the
+ * membership billed in the same month — and that is the honest consequence of pricing this
+ * month's spots at last month's rate. The gap is published rather than left to be discovered.
+ *
+ * COMPUTED IN THE MODEL, not the view, for the same reason cityPnl allocates here: the view then
+ * cannot reach for a tax-inclusive figure and put two bases inside one subtraction. Both sides of
+ * this comparison are PRE-TAX.
+ *
+ * `allocated` is the city's member spots this month priced at the rate — identical by construction
+ * to summing every match's allocation in that city, because that is the same multiplication. */
+export type MemberReconRow = {
+  city: string;
+  allocated: number | null;
+  billed: number;
+  gap: number | null;
+  gapPct: number | null;
+  basisMonth: Q2Month | null;
+  spots: number;
+  /** Why there is no rate, when there is none. Null when a rate exists. */
+  reason: string | null;
+};
+
+export function memberAllocationReconFor(
+  data: FinanceData,
+  city: string,
+  month: Q2Month,
+): MemberReconRow {
+  const billed = cityMembershipRevenuePreTaxFor(data, city, month);
+  const spots = data.mdapiMemberSpots.byCityMonth.get(`${city}|${month}`)?.member ?? 0;
+  const rate = memberSpotRateFor(data, city, month);
+  if (!rate) {
+    const basis = priorMonthKey(month);
+    const covered = data.mdapiMemberSpots.coveredMonths;
+    const reason = !basis
+      ? "no prior month for this month key"
+      : covered.size > 0 && !covered.has(basis)
+        ? `${basis} is outside the loaded window, so it cannot price this month`
+        : `no member spots in ${basis}, so there is no rate to price this month with`;
+    return { city, allocated: null, billed, gap: null, gapPct: null, basisMonth: basis, spots, reason };
+  }
+  const allocated = spots * rate.rate;
+  const gap = allocated - billed;
+  return {
+    city, allocated, billed, gap,
+    gapPct: billed > 0 ? (gap / billed) * 100 : null,
+    basisMonth: rate.basisMonth, spots, reason: null,
+  };
+}
+
 export function venueAllocatedMemberRevenueFor(
   data: FinanceData,
   venueId: number,
   month: Q2Month,
-): number {
+): number | null {
   // PR-E: id-keyed venue lookup. City is resolved from the venue
   // row for the cityMembershipRevenueFor denominator. byCityMonth
   // keeps the `${city}|${month}` key — city is the correct grain
   // for the denominator (total city membership revenue).
   const venueRow = data.venues.find((v) => v.id === venueId);
-  if (!venueRow) return 0;
+  if (!venueRow) return null;
   const venueSpots =
     data.mdapiMemberSpots.byVenueMonth.get(`${venueId}|${month}`)?.member ?? 0;
-  const cityTotal =
-    data.mdapiMemberSpots.byCityMonth.get(`${venueRow.city}|${month}`)?.member ??
-    0;
-  if (cityTotal <= 0) return 0;
-  /* PRE-TAX, because every caller of this allocator joins it to roster-derived revenue. The
-   * venue share is a ratio of member spots, so pre-taxing the city total pre-taxes each venue's
-   * slice by construction and the slices still sum to the city figure. */
-  const cityMembership = cityMembershipRevenuePreTaxFor(data, venueRow.city, month);
-  return (venueSpots / cityTotal) * cityMembership;
+  /* THE RATE IS THE PRIOR MONTH'S; THE SPOTS ARE THIS MONTH'S. It was both from this month, which
+   * made the figure move under the reader all month — see memberSpotRateFor for the measurement.
+   * PRE-TAX, because every caller joins this to roster-derived revenue. */
+  const rate = memberSpotRateFor(data, venueRow.city, month);
+  if (!rate) return null;
+  return venueSpots * rate.rate;
 }
 
 // Per-match member-revenue allocation for the Match P&L subtab.
@@ -1868,9 +1976,11 @@ export function venueAllocatedMemberRevenueFor(
 // across that month's matches in proportion to MEMBER fills at
 // each match.
 //
-//   match_member_rev =
-//     (member_spots_at_match / month_member_spots_at_venue)
-//     × venueAllocatedMemberRevenueFor(...)
+//   match_member_rev = member_spots_at_match × priorMonthRate(city)
+//
+// where priorMonthRate is the PRIOR COMPLETE MONTH's membership revenue per member spot. The old
+// form divided by this month's city total and multiplied by this month's membership revenue; both
+// halves moved all month and the figure moved with them.
 //
 // Sum across a venue's matches in a month equals the venue's monthly
 // member rev. Sum across venues equals city-month membership rev.
@@ -1904,13 +2014,13 @@ export function matchAllocatedMemberRevenueFor(
     matchStartIso: string; // raw ISO timestamp; used for month bucketing
     memberSpots: number; // count of MEMBER-payment registrations at this match
   },
-): number {
+): number | null {
   if (args.memberSpots <= 0) return 0;
 
   const month = isoToMonthKey(args.matchStartIso);
   // Match outside Q2 (e.g. user navigated to a March or July week):
   // Q2-keyed helpers would silently return 0 anyway, so short-circuit.
-  if (!month) return 0;
+  if (!month) return null;
 
   // Algebra:
   //   match_rev = (memberSpots / venueSpots)
@@ -1920,12 +2030,12 @@ export function matchAllocatedMemberRevenueFor(
   //             × cityMembership
   // The venue-level count cancels — we only need the city-month
   // total as the denominator.
-  const cityTotal =
-    data.mdapiMemberSpots.byCityMonth.get(`${args.city}|${month}`)?.member ?? 0;
-  if (cityTotal <= 0) return 0;
-
-  const cityMembership = cityMembershipRevenuePreTaxFor(data, args.city, month);
-  return (args.memberSpots / cityTotal) * cityMembership;
+  /* THE SAME RATE THE VENUE ALLOCATOR USES, so venue-month and match-level figures reconcile by
+   * construction: both are (this month's member spots) x (the prior month's rate), and a venue's
+   * matches sum to the venue exactly as they did. */
+  const rate = memberSpotRateFor(data, args.city, month);
+  if (!rate) return null;
+  return args.memberSpots * rate.rate;
 }
 
 // =====================================================================
@@ -1959,12 +2069,18 @@ export type MdapiMemberSpotIndex = {
   // key: `${city}|${Q2Month}` — unchanged. City-level denominator
   // for the member-revenue allocation algebra.
   byCityMonth: Map<string, MdapiMemberSpotCounts>;
+  /* WHICH MONTHS THE FETCH ACTUALLY COVERED, IN FULL. Without this, "the prior month has no member
+   * spots" and "the prior month was never fetched" are the same zero, and the second one would
+   * produce a confidently wrong rate off a partial denominator. The quarter fetch reaches only 14
+   * days before the quarter, so the month before the quarter's first month is exactly the case
+   * that needs telling apart. */
+  coveredMonths: Set<Q2Month>;
 };
 
 const ZERO_SPOT_COUNTS: MdapiMemberSpotCounts = { member: 0, dpp: 0, other: 0 };
 
 export function emptyMdapiMemberSpotIndex(): MdapiMemberSpotIndex {
-  return { byVenueMonth: new Map(), byCityMonth: new Map() };
+  return { byVenueMonth: new Map(), byCityMonth: new Map(), coveredMonths: new Set() };
 }
 
 export function buildMdapiMemberSpotIndex(
@@ -1983,6 +2099,9 @@ export function buildMdapiMemberSpotIndex(
   // truth — adding a new mdapi field is one INSERT into that table,
   // no normalizer rule changes.
   venueFields: Map<number, number>,
+  /* The months the caller's fetch covered END TO END. Omitted by fixtures, which then behave as
+   * they did — memberSpotRateFor only enforces coverage when the set is populated. */
+  coveredMonths?: Iterable<Q2Month>,
 ): MdapiMemberSpotIndex {
   const byVenueMonth = new Map<string, MdapiMemberSpotCounts>();
   const byCityMonth = new Map<string, MdapiMemberSpotCounts>();
@@ -2042,7 +2161,7 @@ export function buildMdapiMemberSpotIndex(
     bucket(byCityMonth, `${v.city}|${month}`)[category] += 1;
   }
 
-  return { byVenueMonth, byCityMonth };
+  return { byVenueMonth, byCityMonth, coveredMonths: new Set(coveredMonths ?? []) };
 }
 
 // Field → venue resolution moved to venueNormalization.buildFieldToVenueIdMap.
@@ -2087,7 +2206,9 @@ export type VenueInsightRow = {
   // Field Ranking "Revenue" column. Replaces the legacy fin_revenue
   // DPP.net sum.
   revenue: number;
-  memberRev: number;
+  /* null = no prior-month member-spot rate for this city; the member component is unknown, not
+   * zero, and `net` above then carries the non-member net alone. */
+  memberRev: number | null;
   cost: number;
   net: number;
   spots: VenueMemberSpotBreakdown;
@@ -2116,12 +2237,14 @@ export function buildVenueInsightRows(
       new Set([v.id]),
       month,
     );
+    /* null = no prior-month rate for this city. It is not zero, and the two must not be conflated
+     * in the emptiness test below: a venue with real spots and no rate still belongs on the list. */
     const memberRev = venueAllocatedMemberRevenueFor(data, v.id, month);
     const cost = venueCostFor(data, v.id, month);
     const spots = venueMemberSpotsFor(data, v.id, month);
     if (
       revenue === 0 &&
-      memberRev === 0 &&
+      (memberRev ?? 0) === 0 &&
       cost === 0 &&
       spots.total === 0
     ) {
@@ -2133,7 +2256,9 @@ export function buildVenueInsightRows(
       revenue,
       memberRev,
       cost,
-      net: revenue + memberRev - cost,
+      /* WITHOUT A RATE THE NET IS THE NON-MEMBER NET, and the row carries memberRev: null so the
+       * view can say so rather than implying the member side was zero. */
+      net: revenue + (memberRev ?? 0) - cost,
       spots,
       launchDate: v.launch_date,
       launchAgeDays: ageInDaysFrom(v.launch_date, now),
