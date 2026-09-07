@@ -147,6 +147,12 @@ const NODE_SUITES = [
   // signup order, and the shape comes from teamCountWrites. Also pins the shape-first ordering,
   // the before-map, and that a partial failure names who is stranded.
   "scripts/convert-four-test.ts",
+  // REDUCE TO 2 TEAMS. The mirror of convert-4 with its write order REVERSED, and that reversal is
+  // the point: shrinking removes teams people are standing on, so the players come off first and
+  // `teamNumbers: 2` goes last. Pins that order against being tidied into a mirror, the refusal
+  // when more real players than spots, the before-map ahead of every write, and that the shape is
+  // teamCountWrites' TOTAL rather than a per-side number.
+  "scripts/reduce-two-test.ts",
   // TWO REVENUE BASES, AND NO FIGURE MAY MIX THEM. Slate Review showed a pre-tax $12.00 DPP
   // beside a tax-inclusive membership share and called the sum revenue. This pins which call
   // site reads which helper, and the tax rates as GET /cities SERVES them — I measured OKC at

@@ -386,6 +386,62 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     } finally { setCvBusy(false); }
   };
 
+  /* REDUCE TO 2 TEAMS. The same two-call shape as convert-4 — GET the plan, then POST — because the
+   * numbers on the confirmation must be computed at click time, and because this operation's
+   * refusal (a match with more real players than 22 spots) can only be answered by the roster.
+   *
+   * IT IS NOT THE SAME OPERATION MIRRORED. The write order is reversed and the state is kept
+   * separately, so a future edit to one cannot quietly change the other. */
+  type ReducePlanView = {
+    consequence: string | null; refusal: string | null; capacityRefusal: string | null; capacityWhy: string[];
+    shapeError: string | null; steps: { label: string; detail: string }[]; fillLine: string;
+    perTeam: number; total: number; realCount: number; fakeCount: number;
+    moveCount: number; removeCount: number; writeCount: number; shortfall: number;
+  };
+  const [rd, setRd] = useState<ReducePlanView | null>(null);
+  const [rdBusy, setRdBusy] = useState(false);
+  const [rdResults, setRdResults] = useState<{ kind: string; label: string; verdict: string; detail?: string }[] | null>(null);
+  const [rdMsg, setRdMsg] = useState<{ text: string; bad: boolean } | null>(null);
+
+  const openReduce = async () => {
+    if (rdBusy) return;
+    const h = await authHeaders(); if (!h) { setRdMsg({ text: "No active session — sign in again.", bad: true }); return; }
+    setRdBusy(true); setRdMsg(null); setRdResults(null);
+    try {
+      const r = await fetch(`/api/matchday/${env}/matches/${matchId}/reduce-2`, { headers: h, cache: "no-store" });
+      const j = await r.json();
+      if (!r.ok) { setRdMsg({ text: j.error ?? `HTTP ${r.status}`, bad: true }); return; }
+      setRd(j);
+    } catch (e) { setRdMsg({ text: `UNKNOWN — ${e instanceof Error ? e.message : String(e)}.`, bad: true }); }
+    finally { setRdBusy(false); }
+  };
+
+  const runReduce = async () => {
+    /* NO RETRY. busy is set before the request and the confirmation closes on completion; a second
+     * press would move players someone may have moved in between. */
+    if (!rd || rdBusy) return;
+    const h = await authHeaders(); if (!h) { setRdMsg({ text: "No active session — sign in again.", bad: true }); return; }
+    setRdBusy(true); setRdMsg(null);
+    try {
+      const r = await fetch(`/api/matchday/${env}/matches/${matchId}/reduce-2`, {
+        method: "POST", headers: { ...h, "Content-Type": "application/json" }, body: JSON.stringify({}),
+      });
+      const j = await r.json();
+      setRd(null);
+      setRdResults(j.results ?? null);
+      const mirrorWarn = j.ok && j.mirrored === false
+        && j.mirrorReason !== "not production" && j.mirrorReason !== "no mirrored fields";
+      setRdMsg({
+        text: (j.message ?? j.error ?? `HTTP ${r.status}`)
+          + (mirrorWarn ? ` — BUT THE CLUBHOUSE COPY STILL SHOWS THE OLD SPOT COUNT (${j.mirrorReason ?? "unknown"}). Run the matches sync on /data.` : ""),
+        bad: !j.ok || mirrorWarn,
+      });
+      await load(); await loadRoster();
+    } catch (e) {
+      setRdMsg({ text: `UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Reload before acting.`, bad: true });
+    } finally { setRdBusy(false); }
+  };
+
   const cancel = useCancelMatch({
     env, matchId, source: "Match panel · cancel", authHeaders,
     onCancelled: async (landed) => {
@@ -1036,6 +1092,75 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                   <ul className="mp-wres" data-testid="mp-convert-results">
                     {cvResults.map((r, i) => (
                       <li key={i} data-testid="mp-convert-result" data-verdict={r.verdict}>
+                        <span className="v">{r.verdict}</span>
+                        <span>{r.label}{r.detail ? ` — ${r.detail}` : ""}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+            {/* REDUCE TO 2 TEAMS. Offered only when there are more than 2 teams — on a 2-team match
+                there is nothing to reduce, and the control is absent rather than disabled. Disabled
+                while any other operation on this panel is in flight, as Convert is. */}
+            {rosterTeamCount > 2 && (
+              <div className="mp-cv" data-testid="mp-reduce">
+                {!rd ? (
+                  <>
+                    <button type="button" className="mp-btn" data-testid="mp-reduce-open" disabled={rdBusy || cvBusy || !mayWrite}
+                      onClick={() => void openReduce()}>{rdBusy ? "Reading…" : "Reduce to 2 teams"}</button>
+                    <span className="mp-cvsub">Takes the fakes out and puts everyone on teams 1 and 2. This is not auto-bump.</span>
+                  </>
+                ) : rd.refusal || rd.shapeError ? (
+                  <div className="mp-note warn" data-testid="mp-reduce-refusal">
+                    {rd.refusal ?? rd.shapeError}
+                    <button type="button" className="mp-btn" style={{ marginLeft: 10 }} onClick={() => setRd(null)}>Close</button>
+                  </div>
+                ) : rd.capacityRefusal ? (
+                  /* THE ARITHMETIC, ON SCREEN. Both numbers and the shortfall, and an answer to the
+                     first thing anyone thinks of — that taking the fakes out would make room. */
+                  <div className="mp-note warn" data-testid="mp-reduce-nofit">
+                    {/* THE SENTENCE ALREADY NAMES BOTH NUMBERS. A bold lead saying "36 real
+                        players, 22 spots" above "36 real players will not fit into 22 spots" said
+                        it twice — measured on production match 18365. */}
+                    <b>Not reduced.</b> {rd.capacityRefusal}
+                    <ul style={{ margin: "6px 0 0 16px", padding: 0 }}>
+                      {rd.capacityWhy.map((w, i) => <li key={i} data-testid="mp-reduce-why">{w}</li>)}
+                    </ul>
+                    <button type="button" className="mp-btn" style={{ marginTop: 8 }} onClick={() => setRd(null)}>Close</button>
+                  </div>
+                ) : (
+                  <div className="mp-cvconfirm" data-testid="mp-reduce-confirm">
+                    {/* THE CONSEQUENCE, from the plan's own numbers. */}
+                    <b data-testid="mp-reduce-consequence">{rd.consequence}</b>
+                    <ol className="mp-wres" data-testid="mp-reduce-steps" style={{ counterReset: "none" }}>
+                      {rd.steps.map((st, i) => (
+                        <li key={i} data-testid="mp-reduce-step">
+                          <span className="v">{i + 1}</span>
+                          <span>{st.label} — <em>{st.detail}</em></span>
+                        </li>
+                      ))}
+                    </ol>
+                    {/* WHAT PLAYERS WILL SEE, before the press rather than after it. */}
+                    <div className="mp-cvnote" data-testid="mp-reduce-fill">{rd.fillLine}</div>
+                    <div className="mp-cvnote">
+                      {rd.writeCount} write{rd.writeCount === 1 ? "" : "s"}, sent one at a time, each reporting its own
+                      result. Nothing retries. Every live player&rsquo;s team and spot goes into the change log before the
+                      first move — the shape can be put back, the arrangement cannot.
+                    </div>
+                    <div className="mp-cv-acts">
+                      <button type="button" className="mp-btn mp-nowrap" data-testid="mp-reduce-cancel" onClick={() => setRd(null)}>Keep {rosterTeamCount} teams</button>
+                      <button type="button" className="mp-btn mp-pri mp-nowrap" data-testid="mp-reduce-go" disabled={rdBusy}
+                        onClick={() => void runReduce()}>{rdBusy ? "Reducing…" : "Reduce it"}</button>
+                    </div>
+                  </div>
+                )}
+                {rdMsg && <div className={"mp-note " + (rdMsg.bad ? "warn" : "info")} data-testid="mp-reduce-msg">{rdMsg.text}</div>}
+                {/* ONE ROW PER WRITE. A single outcome for fourteen writes would be a lie. */}
+                {rdResults && (
+                  <ul className="mp-wres" data-testid="mp-reduce-results">
+                    {rdResults.map((r, i) => (
+                      <li key={i} data-testid="mp-reduce-result" data-verdict={r.verdict} data-kind={r.kind}>
                         <span className="v">{r.verdict}</span>
                         <span>{r.label}{r.detail ? ` — ${r.detail}` : ""}</span>
                       </li>

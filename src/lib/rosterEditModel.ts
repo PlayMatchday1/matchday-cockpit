@@ -259,19 +259,35 @@ export function teamShapeError(total: number, teamCount: number): string | null 
   return null;
 }
 
-export function teamCountConsequence(origin: RosterOrigin, p: Pending, target: number): string | null {
-  const now = teamCountOf(origin);
+/* THE REDUCE-2 BRANCH. `Reduce to 2 teams` moves every real player itself before it touches the
+ * shape, so unlike the staged team-count change below it CAN say where everyone goes — and its
+ * numbers must come from that plan, not from a second count taken here. Passing these facts is the
+ * only way to get that sentence; without them the function behaves exactly as it always has, which
+ * is what the staged control needs, because on that path the server really does decide.
+ *
+ * `fromTeamCount` rides along because the caller with a plan has the match, not a RosterOrigin. */
+export type ReduceFacts = { fromTeamCount: number; fakes: number; movers: number; perTeam: number };
+
+export function teamCountConsequence(origin: RosterOrigin, p: Pending, target: number, reduce?: ReduceFacts): string | null {
+  const now = reduce ? reduce.fromTeamCount : teamCountOf(origin);
   if (target === now) return null;
   if (target > now) {
     const added = Array.from({ length: target - now }, (_, i) => now + i + 1);
     return `Teams ${added.join(" and ")} are added, empty. Nobody moves.`;
   }
-  const n = normalizePending({ ...p, teamCount: null }, origin);
-  const affected = origin.rows.filter((r) => !n.removes.includes(r.umId) && effectiveRow(r, n, origin).team > target);
   const gone = Array.from({ length: now - target }, (_, i) => target + i + 1);
   const kept = Array.from({ length: target }, (_, i) => i + 1);
+  const teamsGo = `Team${gone.length === 1 ? "" : "s"} ${gone.join(" and ")} ${gone.length === 1 ? "is" : "are"} removed`;
+  if (reduce) {
+    return `${teamsGo}. ${reduce.fakes} fake${reduce.fakes === 1 ? "" : "s"} come${reduce.fakes === 1 ? "s" : ""} out, ` +
+      `${reduce.movers} real player${reduce.movers === 1 ? "" : "s"} move${reduce.movers === 1 ? "s" : ""} into ` +
+      `team${kept.length === 1 ? "" : "s"} ${kept.join(" and ")}, and the match becomes ${target} teams of ${reduce.perTeam}. ` +
+      `Nobody is dropped. This is not auto-bump.`;
+  }
+  const n = normalizePending({ ...p, teamCount: null }, origin);
+  const affected = origin.rows.filter((r) => !n.removes.includes(r.umId) && effectiveRow(r, n, origin).team > target);
   const dropped = Object.keys(n.moves).map(Number).filter((um) => n.moves[um].team > target).length;
-  return `Team${gone.length === 1 ? "" : "s"} ${gone.join(" and ")} ${gone.length === 1 ? "is" : "are"} removed; ` +
+  return `${teamsGo}; ` +
     `${affected.length} player${affected.length === 1 ? "" : "s"} move to team${kept.length === 1 ? "" : "s"} ${kept.join(" and ")} — ` +
     `the SERVER decides where, and Clubhouse cannot say in advance.` +
     (dropped > 0 ? ` ${dropped} pending move${dropped === 1 ? "" : "s"} to a removed team will be dropped.` : "");

@@ -1015,6 +1015,22 @@ matter (getting them wrong targets the wrong record):
   search       GET    /admin/players?email|id&limit&page&sort
 In the roster row: `id` = userMatchId (move, remove), `userId` = playerId (add, fake).
 
+**A TEAM+SPOT IS UNIQUE, AND THE API ENFORCES IT.** Measured on staging match 2563
+(2026-09-06) while building a reduce-2 fixture — adding a player onto a number
+another row already holds:
+
+    POST /admin/matches/2563/players/260   {team: 1, playerNumber: 5}
+    → HTTP 403 {"message":"Player number already taken",
+                "errorCode":"PLAYER_NUMBER_ALREADY_TAKEN","statusCode":403}
+
+So a move onto an occupied spot is REJECTED, not silently doubled up. This matters
+to anything that plans several moves before sending them: a plan that plausibly
+"frees" a spot later in its own sequence still cannot use that spot earlier. It is
+why `reduceTwoTeams.ts` will not send a player onto a spot a fake is standing on
+even though the fake is removed seconds later — it refuses instead, and says which
+fakes are in the way. Duplicate `playerNumber`s DO exist in raw payloads; per
+`rosterEditModel.ts` those come from hidden WAITING retries, not from this endpoint.
+
 **The roster row carries the player's PHONE.** `p.user.phoneNumber`, a string in
 E.164 (`+15125550123`, length 12). Measured on production over 49 played matches:
 present on **239 of 239 REAL players (100%)** among the rows the panel renders. The
