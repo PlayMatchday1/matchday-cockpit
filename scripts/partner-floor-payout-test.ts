@@ -352,6 +352,17 @@ console.log("\nThe partner-facing page shows what the partner is owed, not Match
   yes("…and the override table carries a reason and an actor",
     /partner_match_rental_overrides/.test(mig) && /reason/.test(mig) && /created_by/.test(mig));
   /* THE SETTINGS ARE ON THE PARTNER ROW. */
+  /* AND IT DOES NOT LEAVE THE SERVER ON THE PUBLIC ROUTE. The table not printing a figure is not
+   * the same as the page not carrying it: this URL is public and the retained cents were readable
+   * in the serialised props. The strip is on the public route only, so the admin preview and the
+   * partner page still render identical numbers. */
+  const pub = readFileSync("src/app/partners/[slug]/page.tsx", "utf8");
+  yes("the public route strips MatchDay's slice out of the props", /stripMatchdayShare\(data\.rental\)/.test(pub));
+  yes("…across rows, scheduled rows, month totals and the grand total",
+    /rows: m\.rows\.map\(blank\)/.test(pub) && /scheduled: m\.scheduled\.map\(blank\)/.test(pub)
+    && /totals: blank\(m\.totals\)/.test(pub) && /grand: blank\(r\.grand\)/.test(pub));
+  yes("…and the view never reads the figure it strips",
+    !/matchdayProfitShareCents|matchdayRetainedCents/.test(body));
   yes("the fee switch is read off the partner row", /cancellation_fee_enabled/.test(stats0));
   yes("the threshold is read off the partner row", /cancellation_notice_hours/.test(stats0));
   yes("…and both reach the formula", /cancellationFeeEnabled: p\.cancellationFeeEnabled/.test(stats0));

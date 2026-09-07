@@ -4,6 +4,7 @@ import { buildPartnerDashboardData } from "@/lib/partnerDashboardData";
 import PartnerDashboardV14 from "./PartnerDashboardV14";
 import PartnerMonthlyView from "./PartnerMonthlyView";
 import PartnerRentalView from "./PartnerRentalView";
+import type { RentalDashboardProps } from "@/lib/partnerRentalDashboard";
 
 // Server component. Slug → venue_id resolution and stats fetch run
 // server-side against a service-role Supabase client. venue_id is
@@ -38,6 +39,32 @@ export const revalidate = 60;
 // buildPartnerDashboardData so the admin "view as partner" preview renders the
 // identical component from the identical data path — page and preview can't drift.
 
+/* MATCHDAY'S SLICE DOES NOT LEAVE THE SERVER ON THIS ROUTE.
+ * Taking the column off the table is not the same as taking the figure off the page: this URL is
+ * PUBLIC and UNAUTHENTICATED, and the row-level retained figures were still readable in the
+ * serialised props — $853.00 for September, findable with view-source.
+ *
+ * THIS DOES NOT WEAKEN THE RECONCILIATION. matchdayRetained is computed and asserted in
+ * partnerPayoutModel, on the server, per match AND per period; what travels to the browser is the
+ * VERDICT (`reconciles`), and the view reads only that. Zeroing the figures here removes something
+ * nothing on this page renders. The admin preview renders the same component from the same
+ * builder without this strip, so the two still show identical numbers — the only difference is a
+ * value neither of them displays. */
+function stripMatchdayShare(r: RentalDashboardProps): RentalDashboardProps {
+  const blank = <T extends { matchdayProfitShareCents: number; matchdayRetainedCents: number }>(x: T): T =>
+    ({ ...x, matchdayProfitShareCents: 0, matchdayRetainedCents: 0 });
+  return {
+    ...r,
+    grand: blank(r.grand),
+    months: r.months.map((m) => ({
+      ...m,
+      totals: blank(m.totals),
+      rows: m.rows.map(blank),
+      scheduled: m.scheduled.map(blank),
+    })),
+  };
+}
+
 export default async function PartnerPage({
   params,
 }: {
@@ -47,7 +74,7 @@ export default async function PartnerPage({
   const data = await buildPartnerDashboardData(makeServerClient(), slug);
   if (!data) notFound(); // 404 — generic, no leak about why
 
-  if (data.kind === "rental") return <PartnerRentalView {...data.rental} />;
+  if (data.kind === "rental") return <PartnerRentalView {...stripMatchdayShare(data.rental)} />;
   return data.kind === "monthly"
     ? <PartnerMonthlyView {...data.monthly} />
     : <PartnerDashboardV14 {...data.weekly} />;
