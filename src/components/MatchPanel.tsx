@@ -1999,7 +1999,10 @@ const CSS = `
 .mp-tag{display:inline-flex;border-radius:6px;padding:2px 7px;font-size:10.5px;font-weight:800;border:1px solid var(--line2);background:#eef4f1;color:var(--ink2)}
 /* NO TRAILING PAD. The content scrolls right up under the bar; an 8px gap under the last section
    read as dead space because the bar is pinned directly below it. */
-.mp-body{overflow:auto;min-height:0;padding:0}
+/* THE GUARD, NOT THE FIX. overflow:auto is both axes, so any future element wider than this box
+   pans the whole panel sideways — silently, because the document never grows. The width bugs above
+   are fixed at the source; this makes the next one a clipped edge rather than a panning panel. */
+.mp-body{overflow-y:auto;overflow-x:hidden;min-height:0;padding:0}
 .mp-seg{display:inline-flex;border:1px solid #D8E2DC;border-radius:10px;overflow:hidden}
 .mp-seg button{min-width:44px;min-height:40px;border:0;background:#fff;color:#41514A;font:inherit;font-weight:800;font-size:13px;cursor:pointer;border-left:1px solid #D8E2DC}
 .mp-seg button:first-child{border-left:0}
@@ -2334,6 +2337,19 @@ const CSS = `
      was nothing to say. The two rules are opposites and both are correct. */
   .mp-mnone{display:none}
   .mp-pacts{grid-area:acts;justify-self:end}
+  /* THE MOVE PICKER IS A ROW OF ITS OWN, NOT A COLUMN. It is a child of .mp-player, so under the
+     mobile grid it is a GRID ITEM — and it had no area, so it was auto-placed into a column track.
+     Measured at 390px with the picker open: the name and phone tracks collapsed to 0px and the
+     picker sat in a 123px column. At 360px and below the row then could not compress far enough
+     and .mp-pacts was pushed past the panel's right edge, which is the sideways pan: .mp-body is
+     overflow:auto, so it panned while document.scrollWidth stayed exactly 390 and said nothing.
+     Its flex:1 0 100% is inert in a grid and is why it looked full-width on desktop but was not
+     here. Spanning every column puts it back on its own line. */
+  .mp-movepick{grid-column:1 / -1;flex:none;margin-top:6px}
+  /* NOT SCOPED TO :first-child. The hole IS the first child today, but that is a fact about the
+     markup order rather than about the layout: move anything ahead of it and the spacer silently
+     loses its placement and auto-places into a track, which is the bug directly above. */
+  .mp-player .mp-ckhole{grid-area:ck}
   /* A THUMB, NOT A CURSOR. Bigger than the desktop 30, and the row can afford it now that it is
      half the height. */
   .mp input.mp-ck{width:26px;height:26px;min-height:26px}
