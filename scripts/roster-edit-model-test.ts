@@ -22,7 +22,10 @@ const eq = (n: string, got: unknown, want: unknown) =>
 const is = (n: string, got: unknown, want: unknown) => (got === want ? ok(n) : bad(n, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`));
 
 const row = (umId: number, team: number, playerNumber: number | null, name: string, phone: string | null = "+15125550000", fake = false): EditRow =>
-  ({ umId, team, playerNumber, name, phone, fake });
+  /* ITEMISED: EditRow gained playerId, member and email. The factory defaults playerId to the umId,
+   * so every fixture below keeps one row per person and the existing assertions are unchanged —
+   * a shared playerId is what makes a guest, and no fixture here was ever testing that. */
+  ({ umId, team, playerNumber, name, phone, fake, playerId: umId, member: false, email: null });
 
 // A 2-team match whose API order is deliberately shuffled — the real shape measured on production,
 // where 55 of 95 teams came back out of order.

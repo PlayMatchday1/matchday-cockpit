@@ -94,7 +94,23 @@ export async function GET(req: Request, ctx: RouteCtx) {
 
 // ---------------- POST: send ----------------
 
-type SendBody = { template_used?: unknown; message_body?: unknown };
+type SendBody = { template_used?: unknown; message_body?: unknown; user_ids?: unknown };
+
+/* THE ONE NEW THING THIS ROUTE DOES. Everything else — the template check, the token check,
+ * MAX_BODY_LEN, the Telnyx guard, assertMatchInScope, one attempt with no retry — is unchanged.
+ *
+ * A LIST NARROWS AND CAN NEVER WIDEN. The recipients are resolved server-side exactly as before
+ * and the ids only filter what came back, so an id that is not on this match matches no row and
+ * is discarded rather than looked up. A wrong list texts fewer people; it cannot text a stranger.
+ *
+ * `null` means the whole match, which is what Match Chats sends and what it has always meant. */
+function parseUserIds(raw: unknown): { ids: number[] | null; error: string | null } {
+  if (raw === undefined || raw === null) return { ids: null, error: null };
+  if (!Array.isArray(raw)) return { ids: null, error: "user_ids must be an array of player ids" };
+  const ids = raw.map(Number).filter((n) => Number.isFinite(n) && n > 0);
+  if (ids.length === 0) return { ids: null, error: "user_ids was supplied but held no usable id" };
+  return { ids: [...new Set(ids)], error: null };
+}
 
 export async function POST(req: Request, ctx: RouteCtx) {
   const startedAt = Date.now();
@@ -144,6 +160,11 @@ export async function POST(req: Request, ctx: RouteCtx) {
       { status: 400 },
     );
   }
+  const { ids: narrowIds, error: idsError } = parseUserIds(parsed.user_ids);
+  /* AN UNUSABLE LIST IS A REFUSAL, NOT A FALLBACK. Treating a malformed `user_ids` as "no list"
+   * would turn a four-person send into a whole-match send on a typo. */
+  if (idsError) return Response.json({ error: idsError }, { status: 400 });
+
   const leftover = unfilledTokens(messageBody);
   if (leftover.length > 0) {
     return Response.json(
@@ -163,7 +184,7 @@ export async function POST(req: Request, ctx: RouteCtx) {
 
   let resolution;
   try {
-    resolution = await resolveMatchNotifyRecipients(supabase, matchApiId);
+    resolution = await resolveMatchNotifyRecipients(supabase, matchApiId, narrowIds);
   } catch (e) {
     console.error("[match-notify:send] resolve failed", e);
     return Response.json({ error: "Could not load recipients" }, { status: 500 });
@@ -171,13 +192,20 @@ export async function POST(req: Request, ctx: RouteCtx) {
   const recipients = resolution.recipients;
   if (recipients.length === 0) {
     return Response.json(
-      { error: "No players with a valid phone to notify" },
+      {
+        error: narrowIds
+          ? "None of the players you picked can be texted — they are cancelled, fake, or have no phone on file."
+          : "No players with a valid phone to notify",
+        ignored_user_ids: resolution.ignoredUserIds,
+      },
       { status: 422 },
     );
   }
 
   console.log(
-    `[match-notify:send] start match=${matchApiId} user=${appUserId ?? "?"} template=${templateUsed} recipients=${recipients.length}`,
+    `[match-notify:send] start match=${matchApiId} user=${appUserId ?? "?"} template=${templateUsed} ` +
+    `audience=${narrowIds ? "subset" : "match"} recipients=${recipients.length}` +
+    (narrowIds ? ` asked=${narrowIds.length} ignored=${resolution.ignoredUserIds.length}` : ""),
   );
 
   const telnyx = new Telnyx({ apiKey });
@@ -219,20 +247,30 @@ export async function POST(req: Request, ctx: RouteCtx) {
 
   // Audit row. message_body is stored with the {first_name} token (the
   // canonical message); per-recipient text differs only by first name.
-  const logInsert = await supabase
-    .from("match_notify_log")
-    .insert({
-      match_api_id: matchApiId,
-      sent_by_user_id: appUserId,
-      template_used: templateUsed,
-      message_body: messageBody,
-      recipient_count: recipients.length,
-      success_count: successCount,
-      failure_count: failureCount,
-      recipients: results,
-    })
-    .select("id")
-    .single();
+  const auditRow = {
+    match_api_id: matchApiId,
+    sent_by_user_id: appUserId,
+    template_used: templateUsed,
+    message_body: messageBody,
+    recipient_count: recipients.length,
+    success_count: successCount,
+    failure_count: failureCount,
+    recipients: results,
+  };
+  /* WHO WAS TOLD, AND WHETHER THIS WAS EVERYONE. `recipients` records who was actually texted;
+   * `audience` and `requested_user_ids` record what was asked for, and the gap between them is the
+   * answer to "why did only three of the four I picked get it". Migration 0160. */
+  const subsetCols = narrowIds
+    ? { audience: "subset", requested_user_ids: narrowIds }
+    : { audience: "match", requested_user_ids: null };
+  let logInsert = await supabase.from("match_notify_log").insert({ ...auditRow, ...subsetCols }).select("id").single();
+  /* MIGRATIONS LAND BEFORE THE CODE THAT DEPENDS ON THEM — but a deploy that beats 0160 into the
+   * database must not lose the audit row for a text that has already reached real phones. One
+   * retry without the new columns, loudly, and never a retry of the SEND. */
+  if (logInsert.error && /audience|requested_user_ids|column/i.test(logInsert.error.message)) {
+    console.error("[match-notify:send] AUDIT FELL BACK — migration 0160 is not applied, so this send is logged WITHOUT its audience", logInsert.error.message);
+    logInsert = await supabase.from("match_notify_log").insert(auditRow).select("id").single();
+  }
   if (logInsert.error) {
     // The SMS already went out; surface the audit failure but don't
     // pretend the send failed. Operator still gets the per-recipient
@@ -248,7 +286,9 @@ export async function POST(req: Request, ctx: RouteCtx) {
   return Response.json(
     {
       log_id: logInsert.data?.id ?? null,
+      audience: narrowIds ? "subset" : "match",
       recipient_count: recipients.length,
+      ignored_user_ids: resolution.ignoredUserIds,
       success_count: successCount,
       failure_count: failureCount,
       failures: results

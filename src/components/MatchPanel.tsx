@@ -40,8 +40,10 @@ import {
 import {
   emptyPending, normalizePending, pendingCount, sortedTeam, spotsOfTeam, planMove,
   savePlan, clearApplied, teamCountWrites, teamShapeError,
-  type Pending, type RosterOrigin, type EditRow, type PlannedWrite,
+  playerKinds, teamMemberCount, textsForSelection,
+  type Pending, type RosterOrigin, type EditRow, type PlannedWrite, type PlayerKind,
 } from "@/lib/rosterEditModel";
+import { TEMPLATE_LABELS, buildTemplateBody, smsSegments, unfilledTokens } from "@/lib/matchNotify";
 
 // Only these two `type` values are exposed. The known enum also has BRACKET and GROUP and the full
 // set is UNKNOWN (no spec in repo). A match whose current type is NOT one of these renders as
@@ -78,8 +80,8 @@ const LABELS: Record<string, string> = {
 type Manager = { id: number; name: string };
 type FieldRow = { id: number; title: string; city: string | null };
 type TeamRow = { id: number; teamNumber: number; name: string; locked: boolean };
-type PlayerRow = { umId: number; playerId: number; team: number; playerNumber: number | null; name: string; phone: string | null; fake: boolean; promoCode?: string | null };
-type RosterState = { name: string; teams: TeamRow[]; players: PlayerRow[]; shape: { teamN: number; perTeam: number }; maxPlayerCount: number | null; occupancy: number | null; hidden?: { total: number; cancelled: number; unpaid: number; refunded: number }; promo?: { spots: number; codes: string[] } };
+type PlayerRow = { umId: number; playerId: number; team: number; playerNumber: number | null; name: string; phone: string | null; fake: boolean; promoCode?: string | null; email?: string | null; member?: boolean };
+type RosterState = { name: string; teams: TeamRow[]; players: PlayerRow[]; shape: { teamN: number; perTeam: number }; maxPlayerCount: number | null; occupancy: number | null; hidden?: { total: number; cancelled: number; unpaid: number; refunded: number }; promo?: { spots: number; codes: string[] }; membershipError?: string | null };
 type MatchData = Record<string, unknown> & {
   type?: string; startDate?: string; endDate?: string; teams?: unknown[];
   occupancy?: number | null; realOccupancy?: number | null; cityName?: string | null; fieldTitle?: string | null;
@@ -150,6 +152,16 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   const [immediateOps, setImmediateOps] = useState<string[]>([]); // adds that fired this session — drives Revert's warning
   const [pending, setPending] = useState<Pending>(emptyPending());
   const [movePick, setMovePick] = useState<{ umId: number; team: number | null } | null>(null);
+  /* WHO IS PICKED FOR A TEXT. umIds, because a row is what an operator clicks — the phone dedupe
+   * and the user-id narrowing both happen downstream, and the count on screen is phones. */
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [composer, setComposer] = useState(false);
+  const [tplId, setTplId] = useState<"field_change" | "time_change" | "weather_policy" | "free_form">("free_form");
+  const [smsBody, setSmsBody] = useState("");
+  const [smsConfirm, setSmsConfirm] = useState(false);
+  const [smsBusy, setSmsBusy] = useState(false);
+  const [smsMsg, setSmsMsg] = useState<{ text: string; bad: boolean } | null>(null);
+  const [copied, setCopied] = useState<number | null>(null);
   // PER WRITE, not per Save. A batch that stops half-way has to say which of its writes landed.
   const [writeResults, setWriteResults] = useState<{ label: string; verdict: "LANDED" | "FAILED" | "NOT APPLIED" | "UNKNOWN"; detail?: string }[]>([]);
   const [q, setQ] = useState("");
@@ -293,6 +305,64 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   );
   const pendingN = useMemo(() => pendingCount(pending, origin), [pending, origin]);
   const norm = useMemo(() => normalizePending(pending, origin), [pending, origin]);
+
+  /* MEMBER · DAILY · GUEST, derived from the roster in front of us. Recomputed whenever it
+   * changes, never stored on a person. */
+  const kinds = useMemo(() => playerKinds(origin.rows), [origin.rows]);
+  /* THE TEMPLATE'S MATCH FACTS. startDate is WALL CLOCK carrying a Z it does not mean, so it is
+   * split with parseWall and printed as text — never re-parsed with a Date, which would shift a
+   * 7pm match into the next day and put the wrong date in a text to real players. */
+  const mergeValues = useMemo(() => {
+    const w = orig?.startDate ? parseWall(String(orig.startDate)) : { date: "", time: "" };
+    const [y, mo, d] = (w.date || "").split("-").map(Number);
+    const dateLabel = y ? new Date(Date.UTC(y, (mo ?? 1) - 1, d ?? 1)).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }) : "";
+    const [hh, mm] = (w.time || "").split(":").map(Number);
+    const timeLabel = Number.isFinite(hh) ? `${((hh + 11) % 12) + 1}:${String(mm ?? 0).padStart(2, "0")} ${hh < 12 ? "AM" : "PM"}` : "";
+    return { date: dateLabel, time: timeLabel, field: String(orig?.fieldTitle ?? roster?.name ?? "the field") };
+  }, [orig?.startDate, orig?.fieldTitle, roster?.name]);
+  /* HOW MANY TEXTS, NOT HOW MANY ROWS. One person holding two spots is one text, and the number on
+   * the button is this one — always. */
+  const tally = useMemo(() => textsForSelection(origin.rows, picked), [origin.rows, picked]);
+  const pickedRows = useMemo(() => origin.rows.filter((r) => picked.has(r.umId)), [origin.rows, picked]);
+  const togglePick = (umId: number) => setPicked((p) => {
+    const next = new Set(p);
+    if (next.has(umId)) next.delete(umId); else next.add(umId);
+    return next;
+  });
+  const clearPicks = () => { setPicked(new Set()); setComposer(false); setSmsConfirm(false); };
+
+  const copyEmail = async (p: PlayerRow) => {
+    if (!p.email) return;
+    try { await navigator.clipboard.writeText(p.email); setCopied(p.umId); setTimeout(() => setCopied((c) => (c === p.umId ? null : c)), 1400); }
+    catch { setSmsMsg({ text: `Could not reach the clipboard. The address is ${p.email}`, bad: true }); }
+  };
+
+  /* THE SEND. One attempt. `picked` is turned into player ids server-side by the notify route,
+   * which narrows its own recipient list — the client never sends a phone number, and a list that
+   * names somebody who is not on this match can only make the send smaller. */
+  const sendText = async () => {
+    if (smsBusy || !smsBody.trim() || tally.texts === 0) return;
+    const h = await authHeaders(); if (!h) { setSmsMsg({ text: "No active session — sign in again.", bad: true }); return; }
+    setSmsBusy(true); setSmsMsg(null);
+    try {
+      const userIds = [...new Set(pickedRows.filter((r) => !r.fake).map((r) => r.playerId))];
+      const res = await fetch(`/api/match-chats/${matchId}/notify`, {
+        method: "POST", headers: { ...h, "Content-Type": "application/json" },
+        body: JSON.stringify({ template_used: tplId, message_body: smsBody, user_ids: userIds }),
+      });
+      const j = await res.json();
+      if (!res.ok) { setSmsMsg({ text: j.error ?? `HTTP ${res.status}`, bad: true }); return; }
+      setSmsMsg({
+        text: `Sent to ${j.success_count} of ${j.recipient_count} phone${j.recipient_count === 1 ? "" : "s"}`
+          + (j.failure_count ? `, ${j.failure_count} failed.` : ".")
+          + (j.ignored_user_ids?.length ? ` ${j.ignored_user_ids.length} id(s) were not on this match and were ignored.` : ""),
+        bad: j.failure_count > 0,
+      });
+      setComposer(false); setSmsConfirm(false); setSmsBody(""); setPicked(new Set());
+    } catch (e) {
+      setSmsMsg({ text: `UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Check the log before sending again.`, bad: true });
+    } finally { setSmsBusy(false); }
+  };
 
   const stageMove = (mover: EditRow, toTeam: number, toSpot: number) => {
     setPending((p) => planMove(p, origin, mover, toTeam, toSpot));
@@ -1234,6 +1304,11 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                     <section className="mp-team" data-testid="mp-team" data-teamnumber={t.teamNumber} key={t.id}>
                       <div className="mp-teamtop">
                         <span className="mp-teamname" data-testid={`mp-tname-committed-${t.teamNumber}`}>{t.name}</span>
+                        {/* THE MEMBER COUNT, counted from THIS team's own rows. */}
+                        <span className="mp-teammem" data-testid={`mp-teammembers-${t.teamNumber}`}
+                          data-count={teamMemberCount(origin.rows, t.teamNumber)}>
+                          {teamMemberCount(origin.rows, t.teamNumber)} member{teamMemberCount(origin.rows, t.teamNumber) === 1 ? "" : "s"}
+                        </span>
                         <span className="mp-teamcap">{live.length}{roster.shape?.perTeam ? `/${roster.shape.perTeam}` : ""}</span>
                       </div>
                       <div className="mp-renamerow">
@@ -1249,16 +1324,49 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                             data-testid="mp-player" data-um={p.umId} data-fake={p.fake ? "1" : "0"}
                             data-spot={spot == null ? "" : spot} data-pending={removed ? "remove" : moved ? "move" : ""}
                             data-collision={collision ? "true" : "false"} key={p.umId}>
+                            {/* COLUMN 1 — the pick. A fake has no phone and no person behind it, so
+                                it cannot be texted and is not offered. */}
+                            {p.fake
+                              ? <span className="mp-ckhole" aria-hidden="true" />
+                              : <input type="checkbox" className="mp-ck" data-testid={`mp-pick-${p.umId}`}
+                                  checked={picked.has(p.umId)} onChange={() => togglePick(p.umId)}
+                                  aria-label={`Select ${p.name} for a text`} />}
                             <span className="mp-pnum" data-testid="mp-spot">{spot ?? "—"}</span>
                             {/* NAME then PHONE. Two lines: a phone number on the same line as a name
                                 is what crushed both. Display only — see the roster route: it never
                                 reaches change_log, where the rule is last-4 via phoneLast4(). */}
                             <span className="mp-pident">
-                              <span className="mp-pname" data-testid="mp-pname">{p.name}{p.fake && <span className="mp-fake-tag" data-testid="mp-fake-tag">FAKE</span>}{(p as PlayerRow).promoCode && <span className="mp-promo-tag" data-testid="mp-promo-tag">{(p as PlayerRow).promoCode}</span>}</span>
+                              <span className="mp-pname" data-testid="mp-pname">{p.name}{p.fake && <span className="mp-fake-tag" data-testid="mp-fake-tag">FAKE</span>}{(p as PlayerRow).promoCode && <span className="mp-promo-tag" data-testid="mp-promo-tag">{(p as PlayerRow).promoCode}</span>}{kinds.get(p.umId) === "guest" && (
+                                /* A DOT ON THE NAME'S OWN LINE, not a sub-line. An explanation
+                                   underneath made one row in eighteen taller and the grid ragged. */
+                                <span className="mp-sharedot" data-testid={`mp-shared-${p.umId}`}
+                                  title={`Additional spot — same booking as ${p.name}, one phone and one email`} aria-hidden="true" />
+                              )}</span>
                               <span className="mp-pphone" data-testid="mp-pphone">{p.phone ?? (p.fake ? "fake — no phone" : "no phone on file")}</span>
+                            </span>
+                            {/* COLUMN 4 — THE KIND, in a fixed column so the chips line up into a
+                                stripe you can read down without reading a word. Three weights for
+                                three kinds: member is the only filled one because it is what you
+                                are scanning for, daily is the ordinary case and carries no box at
+                                all, guest is the odd one and is outlined. */}
+                            <span className="mp-pkind" data-testid={`mp-kind-${p.umId}`} data-kind={kinds.get(p.umId) ?? "fake"}>
+                              {p.fake ? <span className="mp-kfake">—</span>
+                                : roster.membershipError ? <span className="mp-kunknown" data-testid="mp-kind-unknown">unknown</span>
+                                : kinds.get(p.umId) === "member" ? <span className="mp-kmember">Member</span>
+                                : kinds.get(p.umId) === "guest" ? <span className="mp-kguest">Guest</span>
+                                : <span className="mp-kdaily">Daily</span>}
                             </span>
                             <span className="mp-pacts">
                               {collision && <span className="mp-clashtag" data-testid="mp-collision">SAME SPOT</span>}
+                              {/* COPY EMAIL — an icon, because the words written out eighteen times
+                                  were most of the noise. The address is in the title, the aria-label
+                                  says what it does. A FAKE ROW OFFERS NONE: its @matchday.com
+                                  address is not a person. */}
+                              {!p.fake && (p as PlayerRow).email
+                                ? <button type="button" className="mp-icon" data-testid={`mp-copy-${p.umId}`}
+                                    title={(p as PlayerRow).email ?? ""} aria-label={`Copy email for ${p.name}`}
+                                    onClick={() => void copyEmail(p as PlayerRow)}>{copied === p.umId ? "\u2713" : "\u2709"}</button>
+                                : <span className="mp-ckhole" aria-hidden="true" />}
                               {removed ? <span className="mp-pendtag rm" data-testid="mp-pending-remove">REMOVING</span>
                                : moved && <span className="mp-pendtag" data-testid="mp-pending-move">MOVING</span>}
                               {/* ONE move control at ANY team count. Four teams used to mean three
@@ -1267,8 +1375,9 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                               <button type="button" data-testid={`mp-move-${p.umId}`} className="mp-mini" disabled={removed}
                                 aria-expanded={movePick?.umId === p.umId} title={`Move ${p.name}`}
                                 onClick={() => setMovePick((m) => (m?.umId === p.umId ? null : { umId: p.umId, team: null }))}>Move</button>
-                              <button type="button" data-testid={`mp-remove-${p.umId}`} className={"mp-mini" + (removed ? "" : " danger")}
-                                title={removed ? `Keep ${p.name}` : `Remove ${p.name}`} onClick={() => toggleRemove(p)}>{removed ? "Undo" : "\u2715"}</button>
+                              <button type="button" data-testid={`mp-remove-${p.umId}`} className={removed ? "mp-mini" : "mp-icon danger"}
+                                title={removed ? `Keep ${p.name}` : `Remove ${p.name}`} aria-label={removed ? `Keep ${p.name} on the roster` : `Remove ${p.name} from the match`}
+                                onClick={() => toggleRemove(p)}>{removed ? "Undo" : "\u2715"}</button>
                             </span>
                             {movePick?.umId === p.umId && (
                               // TWO STEPS, the same shape as the check-in screen: which team, then
@@ -1309,6 +1418,97 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                   );
                 })}
               </div>
+
+              {/* THE LEGEND, once under the board — the two glyphs on every row are named here
+                  rather than eighteen times in the rows themselves. */}
+              <p className="mp-legend" data-testid="mp-roster-legend">
+                <b>\u2709</b> copy email &middot; <b>\u2715</b> remove from the match &middot;
+                <span className="mp-sharedot inline" /> the same person&rsquo;s second spot
+                {roster.membershipError && <> &middot; <b className="mp-memerr" data-testid="mp-member-error">membership could not be read ({roster.membershipError}) — no row can be trusted to say Daily</b></>}
+              </p>
+
+              {/* ── THE SELECTION BAR ───────────────────────────────────────────────────────────
+                  THE NUMBER IS PHONES, NEVER ROWS. Two spots on one booking is one text, and the
+                  bar says so in the same breath so the difference is never a surprise at the
+                  confirm. */}
+              {picked.size > 0 && (
+                <div className="mp-selbar" data-testid="mp-selbar">
+                  <span className="mp-selcount" data-testid="mp-selcount" data-texts={tally.texts} data-rows={tally.rows}>
+                    <b>{tally.texts} text{tally.texts === 1 ? "" : "s"}</b>
+                    <em>{tally.rows} row{tally.rows === 1 ? "" : "s"} selected</em>
+                  </span>
+                  {tally.rows !== tally.texts + tally.noPhone && (
+                    <span className="mp-selwhy" data-testid="mp-selwhy">
+                      {tally.rows - tally.texts - tally.noPhone === 1
+                        ? "One of them shares a phone with somebody else you picked"
+                        : `${tally.rows - tally.texts - tally.noPhone} of them share a phone with somebody else you picked`} — one person, one text.
+                    </span>
+                  )}
+                  {tally.noPhone > 0 && (
+                    <span className="mp-selwhy" data-testid="mp-selnophone">
+                      {tally.noPhone === 1 ? "One of them has" : `${tally.noPhone} of them have`} no phone on file and cannot be texted.
+                    </span>
+                  )}
+                  <span className="mp-selacts">
+                    <button type="button" className="mp-mini" data-testid="mp-sel-clear" onClick={clearPicks}>Clear</button>
+                    <button type="button" className="mp-mini mp-pri" data-testid="mp-sel-text" disabled={tally.texts === 0}
+                      onClick={() => { setComposer(true); setSmsConfirm(false); }}>Send a text</button>
+                  </span>
+                </div>
+              )}
+
+              {/* ── THE COMPOSER ───────────────────────────────────────────────────────────────
+                  Deliberately NOT a whole-match send: Match Chats already does that, and this is
+                  the other thing. There is no "everyone" button here. */}
+              {composer && picked.size > 0 && (
+                <div className="mp-sms" data-testid="mp-sms">
+                  <div className="mp-smstpl" data-testid="mp-sms-templates">
+                    {(["free_form", "field_change", "time_change", "weather_policy"] as const).map((id) => (
+                      <button type="button" key={id} className={"mp-mini" + (tplId === id ? " on" : "")}
+                        data-testid={`mp-tpl-${id}`} aria-pressed={tplId === id}
+                        onClick={() => { setTplId(id); setSmsConfirm(false); setSmsBody(buildTemplateBody(id, mergeValues)); }}>
+                        {TEMPLATE_LABELS[id]}
+                      </button>
+                    ))}
+                  </div>
+                  <textarea className="mp-smsbody" data-testid="mp-sms-body" rows={4} value={smsBody}
+                    aria-label="Message to send" placeholder="Type the message. It goes to the phones you picked."
+                    onChange={(e) => { setSmsBody(e.target.value); setSmsConfirm(false); }} />
+                  <div className="mp-smsmeta" data-testid="mp-sms-meta">
+                    <span data-testid="mp-sms-count">{smsBody.length}/1600 characters &middot; {smsSegments(smsBody).segments} segment{smsSegments(smsBody).segments === 1 ? "" : "s"} &middot; {smsSegments(smsBody).encoding}</span>
+                    {unfilledTokens(smsBody).length > 0 && (
+                      <b className="mp-smswarn" data-testid="mp-sms-tokens">Fill in {unfilledTokens(smsBody).join(", ")} before sending</b>
+                    )}
+                  </div>
+                  {!smsConfirm ? (
+                    <div className="mp-cv-acts">
+                      <button type="button" className="mp-mini" data-testid="mp-sms-cancel" onClick={() => { setComposer(false); setSmsConfirm(false); }}>Cancel</button>
+                      <button type="button" className="mp-mini mp-pri" data-testid="mp-sms-review"
+                        disabled={!smsBody.trim() || unfilledTokens(smsBody).length > 0 || tally.texts === 0}
+                        onClick={() => setSmsConfirm(true)}>Review {tally.texts} text{tally.texts === 1 ? "" : "s"}</button>
+                    </div>
+                  ) : (
+                    /* THE CONFIRM SHOWS THE EXACT WORDS AND THE EXACT COUNT, and says plainly that
+                       it cannot be recalled. There is no send path from this panel that skips it. */
+                    <div className="mp-smsconfirm" data-testid="mp-sms-confirm">
+                      <b>Send this to {tally.texts} phone{tally.texts === 1 ? "" : "s"}?</b>
+                      <blockquote className="mp-smsquote" data-testid="mp-sms-exact">{smsBody}</blockquote>
+                      <p className="mp-smswho" data-testid="mp-sms-who">
+                        {pickedRows.filter((r) => !r.fake && r.phone).map((r) => r.name).join(", ")}
+                      </p>
+                      <p className="mp-smswarn" data-testid="mp-sms-nowayback">
+                        These are real phones. A text cannot be recalled, and nothing here retries — one attempt per number.
+                      </p>
+                      <div className="mp-cv-acts">
+                        <button type="button" className="mp-mini" data-testid="mp-sms-back" onClick={() => setSmsConfirm(false)}>Back</button>
+                        <button type="button" className="mp-mini mp-pri" data-testid="mp-sms-send" disabled={smsBusy}
+                          onClick={() => void sendText()}>{smsBusy ? "Sending\u2026" : `Send ${tally.texts} text${tally.texts === 1 ? "" : "s"}`}</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {smsMsg && <div className={"mp-note " + (smsMsg.bad ? "warn" : "info")} data-testid="mp-sms-msg">{smsMsg.text}</div>}
             </>}
             </div>
           </Section>
@@ -1608,6 +1808,66 @@ const CSS = `
 /* the promo chip carries the CODE NAME and sits at the same weight as the spot number */
 .mp-promo-tag{font-size:9px;font-weight:800;letter-spacing:.03em;background:#e7eefb;color:#1c3f7a;border:1px solid #c3d5f0;border-radius:4px;padding:1px 5px;margin-left:6px;vertical-align:middle;white-space:nowrap}
 .mp-pacts{display:inline-flex;gap:4px;flex:0 0 auto;align-items:center}
+
+/* ── THE ROSTER ROW: FIVE FIXED COLUMNS ────────────────────────────────────────────────────────
+   pick · spot · name+phone · kind · actions. FIXED is the point: the kind chips line up into a
+   stripe you can read down the team without reading a single word, and that column is the whole
+   feature. The row was flex-wrap, which put the chip wherever it happened to land. */
+.mp-player{display:grid;grid-template-columns:20px 20px minmax(0,1fr) 62px auto;align-items:center;gap:7px;flex-wrap:nowrap}
+.mp-ck{width:18px;height:18px;margin:0;accent-color:#2f6fd0;cursor:pointer;flex:0 0 auto}
+.mp-ckhole{display:block;width:18px;height:18px}
+/* SELECTION IS BLUE, MEMBERSHIP IS GREEN. Tinting a selected row in the brand green made a
+   selected daily player read as a member. */
+.mp-player:has(.mp-ck:checked){background:#eef4fd;border-color:#a8c4ea;box-shadow:inset 3px 0 0 #2f6fd0}
+.mp-pkind{font-size:11px;line-height:1.2;justify-self:start;white-space:nowrap}
+/* THREE WEIGHTS FOR THREE KINDS. Member is the only filled chip because it is what you are
+   scanning for. Daily is eleven rows in eighteen — the ordinary case — so it is plain muted text
+   with no box at all; boxing it drew eleven boxes of noise. Guest is the odd one, outlined. */
+.mp-kmember{display:inline-block;background:#1f7a4d;color:#fff;border-radius:999px;padding:2px 8px;font-weight:800;letter-spacing:.02em}
+.mp-kdaily{color:var(--ink3);font-weight:600}
+.mp-kguest{display:inline-block;border:1px solid #d9a441;color:#8a5d10;background:transparent;border-radius:999px;padding:1px 7px;font-weight:700}
+.mp-kunknown{color:#8a5d10;font-weight:700}
+.mp-kfake{color:var(--ink3)}
+/* THE SHARED-BOOKING MARK, on the name's own line so no row is taller than its neighbours. */
+.mp-sharedot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#2f6fd0;margin-left:6px;vertical-align:middle;flex:0 0 auto}
+.mp-sharedot.inline{margin:0 3px}
+/* ICON BUTTONS. "Copy email" written out eighteen times was most of the noise; the address lives
+   in the title and the aria-label says what the glyph does. Still thumb-sized. */
+.mp-icon{border:1px solid var(--line2);background:#fff;border-radius:7px;width:32px;min-height:32px;font-size:13px;line-height:1;color:var(--ink2);cursor:pointer;flex:0 0 auto;padding:0}
+.mp-icon.danger{color:var(--red);border-color:#e6b7b0}
+.mp-icon:hover{background:#f4f7f5}
+.mp-teammem{font-size:10px;font-weight:800;color:#1f7a4d;letter-spacing:.02em;margin-left:auto;padding-right:6px}
+.mp-legend{margin:8px 0 0;font-size:11px;color:var(--ink3);display:flex;align-items:center;gap:3px;flex-wrap:wrap}
+.mp-memerr{color:#8a5d10}
+/* ── THE SELECTION BAR AND THE COMPOSER ───────────────────────────────────────────────────── */
+.mp-selbar{margin-top:10px;border:1px solid #a8c4ea;background:#eef4fd;border-radius:9px;padding:9px 11px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.mp-selcount{display:flex;flex-direction:column;line-height:1.25}
+.mp-selcount b{font-size:14px}
+.mp-selcount em{font-style:normal;font-size:11px;color:var(--ink3)}
+.mp-selwhy{font-size:11px;color:var(--ink2);flex:1;min-width:150px}
+.mp-selacts{display:inline-flex;gap:6px;margin-left:auto}
+.mp-mini.mp-pri{background:#1f7a4d;border-color:#1f7a4d;color:#fff}
+.mp-mini.mp-pri:disabled{opacity:.45}
+.mp-mini.on{background:#e8f1ea;border-color:#8fbf9f}
+.mp-sms{margin-top:8px;border:1px solid var(--line2);border-radius:9px;padding:10px;background:#fff}
+.mp-smstpl{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.mp-smsbody{width:100%;box-sizing:border-box;font:inherit;font-size:13px;border:1px solid var(--line2);border-radius:8px;padding:8px;resize:vertical}
+.mp-smsmeta{display:flex;gap:10px;font-size:11px;color:var(--ink3);margin:6px 0 8px;flex-wrap:wrap}
+.mp-smswarn{color:var(--red);font-weight:700}
+.mp-smsconfirm{border-top:1px solid var(--line);padding-top:9px}
+.mp-smsquote{margin:7px 0;padding:8px 10px;border-left:3px solid #2f6fd0;background:#f6f9fe;font-size:13px;white-space:pre-wrap}
+.mp-smswho{margin:0 0 6px;font-size:11px;color:var(--ink3)}
+/* ── ON A PHONE the row goes to two lines. Five fixed columns took 266px of a 310px row and left
+      the name 44px, so every name truncated to two letters. The KIND CHIP IS NOT DROPPED: which of
+      these people is a member is what the panel is for. */
+@media (max-width:560px){
+  .mp-player{grid-template-columns:20px 20px minmax(0,1fr);grid-template-areas:"ck spot name" ". kind acts";row-gap:5px}
+  .mp-player .mp-ck,.mp-player .mp-ckhole:first-child{grid-area:ck}
+  .mp-pnum{grid-area:spot}
+  .mp-pident{grid-area:name}
+  .mp-pkind{grid-area:kind}
+  .mp-pacts{grid-area:acts;justify-self:end}
+}
 .mp-pendtag{font-size:9px;font-weight:800;letter-spacing:.06em;background:#e7f3ea;color:#14512f;border:1px solid #a9d3ba;border-radius:4px;padding:2px 5px}
 .mp-pendtag.rm{background:#fbeeec;color:#8a2018;border-color:#e6b7b0}
 .mp-clashtag{font-size:9px;font-weight:800;letter-spacing:.06em;background:#fbf0d8;color:#6b4a09;border:1px solid #dcbc71;border-radius:4px;padding:2px 5px}

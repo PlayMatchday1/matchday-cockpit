@@ -153,6 +153,11 @@ const NODE_SUITES = [
   // when more real players than spots, the before-map ahead of every write, and that the shape is
   // teamCountWrites' TOTAL rather than a per-side number.
   "scripts/reduce-two-test.ts",
+  // THE ROSTER PANEL'S TEXT. It sends real SMS to real phones, and the number on the button is
+  // PHONES, not rows — one person with two spots is one text. Also pins that a subset list can only
+  // ever NARROW a server-resolved recipient set, that every existing recipient filter survives it,
+  // and that the log records whether a send was everyone or a selection.
+  "scripts/roster-panel-test.ts",
   // TWO REVENUE BASES, AND NO FIGURE MAY MIX THEM. Slate Review showed a pre-tax $12.00 DPP
   // beside a tax-inclusive membership share and called the sum revenue. This pins which call
   // site reads which helper, and the tax rates as GET /cities SERVES them — I measured OKC at

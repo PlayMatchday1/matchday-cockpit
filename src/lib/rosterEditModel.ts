@@ -24,6 +24,8 @@
 //
 // Writes never retry — there is no Idempotency-Key, and a duplicate move is visible to a player.
 
+import { normalizePhone } from "./phone";
+
 export type EditRow = {
   umId: number;
   team: number;
@@ -31,6 +33,70 @@ export type EditRow = {
   name: string;
   phone: string | null;
   fake: boolean;
+  /* THE PERSON BEHIND THE ROW. Two rows can carry the same playerId — that is what an additional
+   * spot looks like, and it is the whole of the guest rule below. It is also the id the notify
+   * route narrows on, so a selected row can name a recipient without the client sending a phone. */
+  playerId: number;
+  /* Off mdapi_subscriptions, resolved for the whole roster in ONE query by the roster route.
+   * NOT off the API payload's `user.isMember`: measured across 5 production matches, that field
+   * disagreed with the subscriptions mirror on 39 of 120 real rows, always by calling somebody
+   * with an ACTIVE subscription a non-member. */
+  member: boolean;
+  email: string | null;
+};
+
+/* ── THE THREE KINDS ──────────────────────────────────────────────────────────────────────────
+ * MEMBER  an active subscription.
+ * DAILY   no subscription. They paid for this match. The ordinary case.
+ * GUEST   the SECOND (or third) row for the same person on this match — an additional spot they
+ *         booked. It shares their phone and their email, which is why the notify recipient
+ *         resolver has always deduped by E.164 and describes additional spots as "the same booker".
+ *
+ * DERIVED, NEVER STORED. Guest is a property of THIS roster, not of a person: the same player is a
+ * guest on the match where they booked twice and an ordinary daily player on every other one.
+ * A FAKE ROW HAS NO KIND — it is padding, not a person who is or is not a member. */
+export type PlayerKind = "member" | "daily" | "guest";
+
+const forKinds = (a: EditRow, b: EditRow) =>
+  a.team - b.team
+  || (a.playerNumber ?? Number.MAX_SAFE_INTEGER) - (b.playerNumber ?? Number.MAX_SAFE_INTEGER)
+  || a.umId - b.umId;
+
+export function playerKinds(rows: EditRow[]): Map<number, PlayerKind> {
+  const seen = new Set<number>();
+  const out = new Map<number, PlayerKind>();
+  /* READ IN THE ORDER THE PANEL DRAWS THEM, so the row that reads Guest is the second one down the
+   * screen and not whichever the API happened to return first. */
+  for (const r of [...rows].sort(forKinds)) {
+    if (r.fake) continue;
+    if (seen.has(r.playerId)) { out.set(r.umId, "guest"); continue; }
+    seen.add(r.playerId);
+    out.set(r.umId, r.member ? "member" : "daily");
+  }
+  return out;
+}
+
+/** How many of one team's own rows are members. Counted from the rows, never passed in. */
+export const teamMemberCount = (rows: EditRow[], teamNumber: number): number => {
+  const kinds = playerKinds(rows);
+  return rows.filter((r) => r.team === teamNumber && kinds.get(r.umId) === "member").length;
+};
+
+/* HOW MANY TEXTS A SELECTION IS. One person with two spots is one text, and the panel must never
+ * label a button with the row count — the number that matters is the number of phones. */
+export const textsForSelection = (rows: EditRow[], selected: Set<number>): { texts: number; rows: number; noPhone: number } => {
+  const picked = rows.filter((r) => selected.has(r.umId) && !r.fake);
+  const phones = new Set<string>();
+  let noPhone = 0;
+  for (const r of picked) {
+    /* THE SAME NORMALIZER THE SEND USES. Stripping punctuation by hand counted "+15125551000" and
+     * "(512) 555-1000" as two people and would have promised two texts where the route sends one —
+     * the panel's number has to be the route's number, not a second opinion about it. */
+    const e164 = normalizePhone(r.phone);
+    if (!e164) { noPhone++; continue; }
+    phones.add(e164);
+  }
+  return { texts: phones.size, rows: picked.length, noPhone };
 };
 export type EditTeam = { id: number; teamNumber: number; name: string };
 export type RosterOrigin = { rows: EditRow[]; teams: EditTeam[] };

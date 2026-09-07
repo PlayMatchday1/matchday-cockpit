@@ -22,7 +22,7 @@ const isEnv = (x: string): x is MatchdayEnv => x === "staging" || x === "product
 const num = (v: unknown) => (v === null || v === undefined || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null);
 
 type RosterShape = { isCancelled?: boolean; canceledAt?: string | null; refunded?: boolean; paidStatus?: string | null };
-type Row = { id: number; userId: number; team: number; playerNumber: number; promocodeId?: number | null; isCancelled?: boolean; refunded?: boolean; user?: { firstName?: string; lastName?: string; isFakePlayer?: boolean; phoneNumber?: string | null } };
+type Row = { id: number; userId: number; team: number; playerNumber: number; promocodeId?: number | null; isCancelled?: boolean; refunded?: boolean; user?: { firstName?: string; lastName?: string; isFakePlayer?: boolean; phoneNumber?: string | null; email?: string | null; isMember?: boolean } };
 
 export async function GET(req: Request, ctx: { params: Promise<{ env: string; matchId: string }> }) {
   const auth = await authenticateMatchOpsRead(req);
@@ -74,6 +74,11 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; ma
         // phone, and mutates the payload to prove that assertion can fail.
         phone: typeof p.user?.phoneNumber === "string" && p.user.phoneNumber.trim() !== "" ? p.user.phoneNumber : null,
         fake: !!p.user?.isFakePlayer,
+        /* THE EMAIL WAS ALREADY IN THE PAYLOAD and was being dropped — `user.email`, beside the
+         * phone this row has always carried. Same read, one field wider: no new source, no extra
+         * request. Copy-email offers nothing on a fake row, whose address is @matchday.com and is
+         * not a person. */
+        email: typeof p.user?.email === "string" && p.user.email.trim() !== "" ? p.user.email : null,
         // WHO CAME IN ON A PROMO. Same join the uses panel uses (promocode_id on the user-match
         // row) — no new data path. The CODE NAME is resolved below, because "promo" tells you
         // nothing and "TOMBALL" tells you half a team arrived on one code.
@@ -94,7 +99,36 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; ma
         if (typeof d.code === "string") promoCodes[pid] = d.code;
       } catch { /* an unresolvable code still shows as a chip, by id */ }
     }));
-    const withCode = players.map((p) => ({ ...p, promoCode: p.promocodeId != null ? (promoCodes[p.promocodeId] ?? `#${p.promocodeId}`) : null }));
+    /* ── WHO IS A MEMBER — ONE QUERY FOR THE WHOLE ROSTER ────────────────────────────────────
+     * mdapi_subscriptions, every user on this roster in a single `.in()`. Never one call per
+     * player: an 18-player match is one query, and a 44-player match is still one.
+     *
+     * NOT `user.isMember` FROM THE PAYLOAD, which is right there on the same row and would have
+     * cost nothing. Measured across production matches 18281, 18365, 18477, 18529 and 18343:
+     * it disagreed with the subscriptions mirror on 39 of 120 real rows — every single
+     * disagreement was isMember=false for somebody holding an ACTIVE subscription (user 5538,
+     * ACTIVE since 2025-09-01, reads false). A membership badge that is wrong a third of the time
+     * is worse than no badge.
+     *
+     * ANY ACTIVE ROW COUNTS. A player can hold several subscription rows — one CANCELED and one
+     * ACTIVE is the ordinary shape after a renewal (user 5538 again) — so this asks whether an
+     * ACTIVE one exists, not what the latest row says. */
+    const userIds = [...new Set(players.map((p) => p.playerId).filter((x) => Number.isFinite(x)))];
+    const memberIds = new Set<number>();
+    let membershipRead: string | null = null;
+    if (userIds.length > 0) {
+      const { data: subs, error: subErr } = await auth.supabase
+        .from("mdapi_subscriptions").select("user_id").eq("status", "ACTIVE").in("user_id", userIds);
+      /* THE ERROR TRAVELS WITH THE COUNT. A failed query returns no rows, which renders as "nobody
+       * is a member" — the same picture as a roster of daily players. The panel says so instead. */
+      if (subErr) membershipRead = subErr.message;
+      else for (const r of subs ?? []) memberIds.add(Number(r.user_id));
+    }
+    const withCode = players.map((p) => ({
+      ...p,
+      promoCode: p.promocodeId != null ? (promoCodes[p.promocodeId] ?? `#${p.promocodeId}`) : null,
+      member: memberIds.has(p.playerId),
+    }));
 
     return Response.json({
       matchId: Number(matchId), name: (match.name as string) ?? "", teams, players: withCode,
@@ -102,6 +136,9 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; ma
       // revenue that never arrived, and that should be visible without opening Promo Codes.
       promo: { spots: withCode.filter((p) => p.promocodeId != null).length, codes: Object.values(promoCodes) },
       shape: { teamN, perTeam }, maxPlayerCount: num(match.maxPlayerCount),
+      // null when the membership query answered; a message when it did not, so the badges can say
+      // "unknown" rather than quietly reading "daily" for everyone.
+      membershipError: membershipRead,
       // authoritative occupancy (real + fake) — the count the rest of the app uses; the
       // roster headline reads THIS, not players.length (which double-counts duplicate rows).
       occupancy: num((match._count as Record<string, unknown> | undefined)?.players),

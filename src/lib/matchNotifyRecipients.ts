@@ -33,6 +33,11 @@ export type RecipientResolution = {
   recipients: NotifyRecipient[]; // deduped, valid phone, sendable
   noPhoneCount: number; // PLAYER rows excluded for missing/invalid phone
   totalRegistered: number; // non-fake PLAYER rows passing the filter (pre-dedupe)
+  /* SUBSET SENDS. null means the whole match, as it always was. A list means the operator picked
+   * rows on the roster panel; `ignoredUserIds` are ids that are not on this match and were
+   * DISCARDED, never looked up. */
+  narrowedTo: number[] | null;
+  ignoredUserIds: number[];
 };
 
 type PlayerRow = {
@@ -46,9 +51,25 @@ type PlayerRow = {
 
 const PAGE = 1000;
 
+/**
+ * @param userIds  null (or omitted) = the whole match, exactly as before. A list NARROWS: the
+ *   recipients are the ones already resolved whose user_id is in it.
+ *
+ * THE LIST CAN ONLY EVER MAKE THE SEND SMALLER. Every filter below runs first and unchanged —
+ * user_type PLAYER, not deleted / cancelled / waitlisted / absent, not fake, valid phone. The
+ * narrowing is an additional filter on top; an id that is not on this match matches no row, so a
+ * wrong list texts fewer people and can never text somebody who is not in the match.
+ *
+ * IT NARROWS BEFORE THE DEDUPE, NOT AFTER. Two people can share a phone — a parent booking for a
+ * child is the ordinary case, and additional spots are the same phone by definition. The dedupe
+ * keeps the first user_id for a phone, so narrowing afterwards would find nothing for the second
+ * one and silently text nobody. Filtering the rows first and deduping what remains gives the
+ * count the panel shows: two selected rows on one phone is one text.
+ */
 export async function resolveMatchNotifyRecipients(
   supabase: SupabaseClient,
   matchApiId: number,
+  userIds: number[] | null = null,
 ): Promise<RecipientResolution> {
   const rows: PlayerRow[] = [];
   for (let from = 0; ; from += PAGE) {
@@ -74,6 +95,10 @@ export async function resolveMatchNotifyRecipients(
     if (batch.length < PAGE) break;
   }
 
+  const wanted = userIds == null ? null : new Set(userIds.map(Number).filter(Number.isFinite));
+  const onMatch = new Set(rows.map((r) => Number(r.user_id)));
+  const ignoredUserIds = wanted == null ? [] : [...wanted].filter((id) => !onMatch.has(id));
+
   let totalRegistered = 0;
   let noPhoneCount = 0;
   // Dedupe by E.164. First row for a phone wins (rows are user_id-ordered,
@@ -83,6 +108,8 @@ export async function resolveMatchNotifyRecipients(
   for (const r of rows) {
     if (isFakePlayerRow(r)) continue;
     totalRegistered++;
+    // THE NARROWING, after every filter above and before the dedupe below.
+    if (wanted != null && !wanted.has(Number(r.user_id))) continue;
     const e164 = normalizePhone(r.user_phone_number);
     if (!e164) {
       noPhoneCount++;
@@ -102,5 +129,7 @@ export async function resolveMatchNotifyRecipients(
     recipients: [...byPhone.values()],
     noPhoneCount,
     totalRegistered,
+    narrowedTo: wanted == null ? null : [...wanted],
+    ignoredUserIds,
   };
 }
