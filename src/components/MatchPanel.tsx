@@ -1480,7 +1480,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                               {((p as PlayerRow).credit ?? 0) > 0 && (
                                 <em className="mp-mcredit" data-testid={`mp-credit-${p.umId}`}
                                   title="How much of this spot came off the player's credit balance">
-                                  {usd((p as PlayerRow).credit ?? 0)} credit
+                                  {usd((p as PlayerRow).credit ?? 0)}<span className="mp-crword"> credit</span>
                                 </em>
                               )}
                             </span>
@@ -2291,20 +2291,74 @@ const CSS = `
       the name 44px, so every name truncated to two letters. The KIND CHIP IS NOT DROPPED: which of
       these people is a member is what the panel is for. */
 @media (max-width:560px){
-  /* THE MONEY TAKES ITS OWN FULL-WIDTH LINE, above the chip and the actions. Squeezed into the
-     shared line it wrapped onto a fourth row; given the width it reads in one, with the credit
-     BESIDE the amount rather than under it. */
-  .mp-player{grid-template-columns:20px 20px minmax(0,1fr);grid-template-areas:"ck spot name" ". money money" ". kind acts";row-gap:5px}
-  .mp-player .mp-ck,.mp-player .mp-ckhole:first-child{grid-area:ck}
-  .mp-pnum{grid-area:spot}
-  .mp-pident{grid-area:name}
-  .mp-pmoney{grid-area:money;flex-direction:row;align-items:baseline;justify-self:start;gap:7px}
-  .mp-pkind{grid-area:kind}
+  /* ── TWO LINES A ROW, NOT FOUR ──────────────────────────────────────────────────────────────
+     Giving the money its own full-width line put the amount on line two and the badge and the
+     controls on line three; a fake with no phone and no money then rendered FOUR lines, two of
+     which said nothing. Measured on match 18490 at 390px: every row 102px, six on a screen.
+
+       line 1  who they are:      checkbox, spot, name, and the badge inline beside it
+       line 2  everything else:   the phone, the amount, the credit, then the controls
+
+     The checkbox and the spot span both lines, so the two lines read as one row. */
+  .mp-player{
+    grid-template-columns:26px 22px minmax(0,1fr) auto auto auto;
+    grid-template-areas:"ck spot name kind kind kind" "ck spot ph amt cr acts";
+    row-gap:2px;column-gap:5px;align-items:center}
+  .mp-player .mp-ck,.mp-player .mp-ckhole:first-child{grid-area:ck;align-self:center}
+  .mp-pnum{grid-area:spot;align-self:center}
+  /* display:contents, because the phone has to sit on line two BESIDE the money and the two live
+     under different parents. The elements stay in the DOM with their test ids; only their boxes
+     stop existing, so their children become grid items in their own right. */
+  .mp-pident{display:contents}
+  .mp-pname{grid-area:name;justify-self:start;max-width:100%}
+  .mp-pphone{grid-area:ph;min-width:0;font-size:10.5px;letter-spacing:-.1px}
+  .mp-pkind{grid-area:kind;justify-self:start}
+  .mp-pmoney{display:contents}
+  .mp-pmoney>b{grid-area:amt;justify-self:end;font-size:11px}
+  /* "$8.00 credit" is 52px of a line that has to hold a phone number. The word goes; the value and
+     what it is stay. Desktop keeps the word, which is why it is a span and not a CSS swap. */
+  .mp-mcredit{grid-area:cr;justify-self:end;font-size:10px;white-space:nowrap}
+  .mp-mcredit .mp-crword{display:none}
+  .mp-mcredit::after{content:" cr"}
+
+  /* THE CHROME AROUND THE ROW WAS 88px OF THE 390. The phone is the one thing on line two that
+     must not ellipsise, so the section, the card and the row each give some back. */
+  .mp-secbd{padding-left:8px;padding-right:8px}
+  .mp-team{padding:7px}
+  .mp-player{padding:6px 6px}
+  .mp-pacts{gap:3px}
+  .mp-player .mp-icon{width:28px}
+  /* AN EMPTY SLOT RENDERS NOTHING AND COSTS NO LINE. The desktop rule — a dash rather than a blank,
+     so the cell does not read as missing data — is right in a fixed money column you can see is a
+     money column. Here it was two stacked dashes on a fake, a line each, saying only that there
+     was nothing to say. The two rules are opposites and both are correct. */
+  .mp-mnone{display:none}
   .mp-pacts{grid-area:acts;justify-self:end}
-  /* A THUMB, NOT A CURSOR. The row is taller here, so the box can be too without making the grid
-     ragged — the spacer grows with it. */
+  /* A THUMB, NOT A CURSOR. Bigger than the desktop 30, and the row can afford it now that it is
+     half the height. */
   .mp input.mp-ck{width:26px;height:26px;min-height:26px}
   .mp-ckhole{width:26px;height:26px}
+  .mp-player .mp-icon{min-height:34px}
+  .mp-player .mp-mini{min-height:34px}
+
+  /* THE ADD CONTROLS STACK. Four across 390px squeezed the search box to 24px — one letter, which
+     is what Ryan's screenshot shows. Search takes the width; the three fake controls share the
+     line under it. */
+  .mp-addtop{display:grid;grid-template-columns:1fr;gap:6px}
+  .mp-addtop .mp-bulk{display:grid;grid-template-columns:1fr auto;gap:6px}
+  .mp-addtop>.mp-mini,.mp-addtop .mp-bulk .mp-mini{min-height:38px}
+
+  /* THE TEAM NAME IS THE HEADER. A full-width text box under a header that already says the name
+     spent a whole row restating it. The static name hides and the input takes its place on the
+     header line, so ONE row does both jobs — renaming is untouched, it simply happens in place. */
+  .mp-team{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center;column-gap:8px}
+  .mp-teamtop{display:contents}
+  .mp-teamname{display:none}
+  .mp-renamerow{grid-row:1;grid-column:1;margin:0}
+  .mp-teammem,.mp-teamcap,.mp-teammoney{grid-row:1}
+  .mp-teammem{grid-column:2}.mp-teamcap{grid-column:3}.mp-teammoney{grid-column:4}
+  .mp-addto,.mp-players,.mp-team>.mp-empty{grid-column:1 / -1}
+  .mp-tnameinput{font-size:14px;font-weight:800;min-height:38px}
 }
 .mp-pendtag{font-size:9px;font-weight:800;letter-spacing:.06em;background:#e7f3ea;color:#14512f;border:1px solid #a9d3ba;border-radius:4px;padding:2px 5px}
 .mp-pendtag.rm{background:#fbeeec;color:#8a2018;border-color:#e6b7b0}

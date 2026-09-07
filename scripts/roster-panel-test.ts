@@ -311,8 +311,18 @@ console.log("\nthe panel");
    * own line higher up the panel (mp-hidden-count), so nothing about them was lost with it. */
   yes("the hidden rows are still declared, on their own line", /data-testid="mp-roster-hidden"/.test(v) && /They hold no spot/.test(v));
   yes("the money column is right-aligned and tabular", /\.mp-pmoney\{display:flex;flex-direction:column;align-items:flex-end/.test(v));
-  yes("…and on a phone it takes its own line with the credit beside the amount",
-    /grid-template-areas:"ck spot name" "\. money money" "\. kind acts"/.test(v) && /\.mp-pmoney\{grid-area:money;flex-direction:row/.test(v));
+  /* ITEMISED: the phone layout went from THREE rows to TWO. The money's own full-width line put
+   * the badge and the controls on a third, and a fake with no phone and no money rendered four —
+   * two of them saying nothing. The areas below are the assertion; the old ones described a
+   * layout that no longer exists. */
+  yes("…and on a phone the row is two lines: who they are, then everything about them",
+    /grid-template-areas:"ck spot name kind kind kind" "ck spot ph amt cr acts"/.test(v));
+  yes("…with the phone, the amount and the credit sharing line two",
+    /\.mp-pphone\{grid-area:ph/.test(v) && /\.mp-pmoney>b\{grid-area:amt/.test(v) && /\.mp-mcredit\{grid-area:cr/.test(v));
+  /* ON MOBILE AN EMPTY SLOT RENDERS NOTHING. The desktop dash stays exactly as the roster prompt
+   * asked for it; in a full-width money line it was two stacked dashes, a line each. */
+  yes("…and the dash that a fake shows on desktop costs no line on a phone",
+    /\.mp-mnone\{display:none\}/.test(v) && /\.mp-mnone\{color:var\(--ink3\);font-weight:600\}/.test(v));
   /* ── THE ROW MUST FIT ITS CARD, AND THE NAME MUST SURVIVE ────────────────────────────────
    * Measured in the Gameday Ops drawer at 760px: the fixed tracks plus the actions came to 341px
    * of content in a 322px row, so the only flexible track resolved to ZERO and the name rendered
