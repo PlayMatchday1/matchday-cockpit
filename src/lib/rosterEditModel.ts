@@ -137,6 +137,28 @@ export const sumMoney = (rows: EditRow[]): MoneySum => rows.reduce(
 export const teamMoney = (rows: EditRow[], teamNumber: number): MoneySum =>
   sumMoney(rows.filter((r) => r.team === teamNumber));
 
+/* WHAT THE ROSTER IS MADE OF, counted in SPOTS rather than people. A player holding two spots is
+ * counted twice, because the line describes the field and not the address book — which is the
+ * opposite of the text count beside it, where two spots on one phone is one message. The two
+ * numbers disagree on purpose and each says which it means.
+ *
+ * Fakes are not counted: they hold a spot but they are not a member, a daily or a guest, and the
+ * three figures are meant to add up to the real spots on the roster. */
+export type RosterCounts = { members: number; daily: number; guests: number; real: number; fake: number };
+
+export function rosterCounts(rows: EditRow[]): RosterCounts {
+  const kinds = playerKinds(rows);
+  let members = 0, daily = 0, guests = 0, fake = 0;
+  for (const r of rows) {
+    if (r.fake) { fake++; continue; }
+    const k = kinds.get(r.umId);
+    if (k === "member") members++;
+    else if (k === "guest") guests++;
+    else daily++;
+  }
+  return { members, daily, guests, real: members + daily + guests, fake };
+}
+
 /** How many of one team's own rows are members. Counted from the rows, never passed in. */
 export const teamMemberCount = (rows: EditRow[], teamNumber: number): number => {
   const kinds = playerKinds(rows);

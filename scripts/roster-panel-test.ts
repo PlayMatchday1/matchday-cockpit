@@ -11,7 +11,7 @@
 
 import { readFileSync } from "node:fs";
 import {
-  playerKinds, teamMemberCount, textsForSelection, moneyKinds, sumMoney, teamMoney, usd,
+  playerKinds, teamMemberCount, textsForSelection, moneyKinds, sumMoney, teamMoney, rosterCounts, usd,
   type EditRow,
 } from "../src/lib/rosterEditModel";
 
@@ -137,6 +137,33 @@ console.log("\nthe money belongs to the row, and every row's own amount is safe 
   /* Every value reaching this came from Math.round(cents)/100, so it is already exact to the cent
    * — a half-cent input like 285.775 is not a case that can occur and is not asserted here. */
   is("money formats to the cent", [usd(0), usd(12), usd(0.66), usd(285.78)], ["$0.00", "$12.00", "$0.66", "$285.78"]);
+}
+
+console.log("\nwhat the roster is made of, counted in spots");
+{
+  SEQ = 0;
+  const roster = [
+    r(1, 1, 1, 101, { member: true }), r(2, 1, 2, 102), r(3, 1, 3, 103, { member: true }),
+    r(4, 2, 1, 104), r(5, 2, 2, 105), r(6, 2, 3, 105),           // 105 holds two spots
+    r(7, 2, 4, 106, { fake: true, phone: null }),
+  ];
+  const c = rosterCounts(roster);
+  // 101 and 103 are members; 102, 104 and the FIRST 105 are daily; the second 105 is the guest.
+  is("members, daily and guests", [c.members, c.daily, c.guests], [2, 3, 1]);
+  is("…and they add to the real spots", c.members + c.daily + c.guests, c.real);
+  is("a fake holds a spot but is none of the three", [c.fake, c.real], [1, 6]);
+  is("…so the three counts and the fakes account for every row", c.real + c.fake, roster.length);
+
+  /* SPOTS, NOT PEOPLE. The same roster produces 5 spots and 4 phones, and the two lines that show
+   * those numbers sit inches apart — so each must say which it is counting. */
+  is("the person with two spots is counted twice", c.real, 6);
+  is("…while the text count for the same rows is people — five phones, not six spots",
+    textsForSelection(roster, new Set([1, 2, 3, 4, 5, 6, 7])).texts, 5);
+
+  SEQ = 0;
+  is("an all-fake roster counts nothing real",
+    rosterCounts([r(10, 1, 1, 200, { fake: true }), r(11, 1, 2, 201, { fake: true })]).real, 0);
+  is("an empty roster is all zeroes", rosterCounts([]), { members: 0, daily: 0, guests: 0, real: 0, fake: 0 });
 }
 
 console.log("\nthe route carries the money it was already receiving");
@@ -274,7 +301,9 @@ console.log("\nthe panel");
   yes("the credit is a second line, shown only when there is credit", /\(\(p as PlayerRow\)\.credit \?\? 0\) > 0/.test(v));
   yes("the team header carries its own total", /teamMoney\(origin\.rows, t\.teamNumber\)/.test(v));
   yes("the match line names all three sums", /mp-money-booked/.test(v) && /mp-money-charged/.test(v) && /mp-money-credit/.test(v));
-  yes("…and says out loud what it leaves out", /will not reconcile to the cent/.test(v) && /hidden row/.test(v));
+  /* The explainer that used to say this was deleted on request. The hidden rows still have their
+   * own line higher up the panel (mp-hidden-count), so nothing about them was lost with it. */
+  yes("the hidden rows are still declared, on their own line", /data-testid="mp-roster-hidden"/.test(v) && /They hold no spot/.test(v));
   yes("the money column is right-aligned and tabular", /\.mp-pmoney\{display:flex;flex-direction:column;align-items:flex-end/.test(v));
   yes("…and on a phone it takes its own line with the credit beside the amount",
     /grid-template-areas:"ck spot name" "\. money money" "\. kind acts"/.test(v) && /\.mp-pmoney\{grid-area:money;flex-direction:row/.test(v));
@@ -288,7 +317,7 @@ console.log("\nthe panel");
   yes("Move is an icon carrying its own label", /data-testid=\{`mp-move-\$\{p\.umId\}`\} className="mp-icon"/.test(v)
     && /aria-label=\{`Move \$\{p\.name\} to another team or spot`\}/.test(v));
   yes("…and a tooltip that says the same thing", /title=\{`Move \$\{p\.name\} to another team or spot`\}/.test(v));
-  yes("…and the legend names its glyph", /copy email &middot; <b>\\u21c6<\/b> move/.test(v));
+
   /* THE TEAM GRID STAYS TWO-UP because players move between teams and both have to be on screen —
    * and it stacks on ITS OWN width, not the window's. A viewport media query is how the roster
    * ended up two-up inside a 346px card in the first place. */
@@ -296,6 +325,34 @@ console.log("\nthe panel");
   yes("…and stack on a CONTAINER query, not a viewport one",
     /container-type:inline-size;container-name:mproster/.test(v)
     && /@container mproster \(max-width:980px\)\{ \.mp-teamgrid\{grid-template-columns:1fr\} \}/.test(v));
+
+  /* ── THE TWO EXPLAINERS ARE GONE ────────────────────────────────────────────────────────── */
+  yes("the money line no longer explains itself", !/Booked is the spot price before the fee/.test(v));
+  yes("…and the icon key is gone", !/copy email &middot;.*remove from the match/.test(v));
+  /* THE MEMBERSHIP-READ FAILURE WAS LIVING INSIDE THE ICON KEY and is not an explainer: without it
+   * every row quietly reads Daily when the query failed. It keeps its own line. */
+  yes("the membership-read failure survived on its own line", /roster\.membershipError && \(/.test(v)
+    && /membership could not be read/.test(v));
+
+  /* THE COUNTS LINE. */
+  yes("it names all four counts", /mp-count-promo/.test(v) && /mp-count-members/.test(v)
+    && /mp-count-daily/.test(v) && /mp-count-guests/.test(v));
+  yes("…the promo figure is the same one the promo line reads", /data-promo=\{roster\.promo\?\.spots \?\? 0\}/.test(v)
+    && /<b data-testid="mp-count-promo">\{roster\.promo\?\.spots \?\? 0\}/.test(v));
+  yes("…it says 'daily', matching the badge on the rows", /<\/b> daily/.test(v) && !/\bDPP\b/.test(v));
+  yes("…and it is counted from the visible rows, which already exclude the hidden ones",
+    /rosterCounts\(origin\.rows\)/.test(v));
+
+  /* NO LITERAL ESCAPES IN JSX TEXT. `<b>\u2709</b>` between tags is text, not a string literal, so
+   * it rendered the six characters instead of the glyph. Every escape in this file must sit inside
+   * quotes or backticks, where it is actually parsed. */
+  const bare = v.split("\n").map((line, i) => [i + 1, line] as const).filter(([, line]) => {
+    const stripped = line.replace(/"(?:[^"\\]|\\.)*"/g, "").replace(/'(?:[^'\\]|\\.)*'/g, "").replace(/`(?:[^`\\]|\\.)*`/g, "");
+    return /\\u[0-9a-fA-F]{4}/.test(stripped);
+  });
+  is("no \\uXXXX escape sits outside a string literal", bare.map(([n]) => n), []);
+  yes(`control: ${(v.match(/\\u[0-9a-fA-F]{4}/g) ?? []).length} escapes exist in the file to be checked`,
+    (v.match(/\\u[0-9a-fA-F]{4}/g) ?? []).length > 0);
 
   /* THIS PANEL MUST NOT BECOME A WAY TO MOVE MONEY. */
   /* Narrowly on ACTIONS. "refunded" appears as a read-only count of hidden rows and always did. */

@@ -40,7 +40,7 @@ import {
 import {
   emptyPending, normalizePending, pendingCount, sortedTeam, spotsOfTeam, planMove,
   savePlan, clearApplied, teamCountWrites, teamShapeError,
-  playerKinds, teamMemberCount, textsForSelection, moneyKinds, teamMoney, sumMoney, usd, usdPlain,
+  playerKinds, teamMemberCount, textsForSelection, moneyKinds, teamMoney, sumMoney, rosterCounts, usd, usdPlain,
   type Pending, type RosterOrigin, type EditRow, type PlannedWrite, type PlayerKind,
 } from "@/lib/rosterEditModel";
 import { TEMPLATE_LABELS, buildTemplateBody, smsSegments, unfilledTokens } from "@/lib/matchNotify";
@@ -314,6 +314,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
    * several spots. */
   const money = useMemo(() => moneyKinds(origin.rows), [origin.rows]);
   const matchMoney = useMemo(() => sumMoney(origin.rows), [origin.rows]);
+  const counts = useMemo(() => rosterCounts(origin.rows), [origin.rows]);
 
   /* THE TEMPLATE'S MATCH FACTS. startDate is WALL CLOCK carrying a Z it does not mean, so it is
    * split with parseWall and printed as text — never re-parsed with a Date, which would shift a
@@ -1469,19 +1470,28 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 <b data-testid="mp-money-booked">{usd(matchMoney.booked)} booked</b>
                 <span> &middot; <b data-testid="mp-money-charged">{usd(matchMoney.charged)}</b> on cards, card fee included</span>
                 <span> &middot; <b data-testid="mp-money-credit">{usd(matchMoney.credit)}</b> on credit</span>
-                <em>
-                  {" "}Booked is the spot price before the fee, so the first two will not reconcile to the cent.
-                  {roster.hidden?.total ? ` The ${roster.hidden.total} hidden row${roster.hidden.total === 1 ? "" : "s"} above are not counted.` : ""}
-                </em>
               </p>
 
-              {/* THE LEGEND, once under the board — the two glyphs on every row are named here
-                  rather than eighteen times in the rows themselves. */}
-              <p className="mp-legend" data-testid="mp-roster-legend">
-                <b>\u2709</b> copy email &middot; <b>\u21c6</b> move &middot; <b>\u2715</b> remove from the match &middot;
-                <span className="mp-sharedot inline" /> the same person&rsquo;s second spot
-                {roster.membershipError && <> &middot; <b className="mp-memerr" data-testid="mp-member-error">membership could not be read ({roster.membershipError}) — no row can be trusted to say Daily</b></>}
+              {/* WHAT THE ROSTER IS MADE OF, in the same subdued voice as the money above it.
+                  SPOTS, NOT PEOPLE: somebody holding two spots is counted twice, which is why this
+                  disagrees with the text count in the selection bar — that one counts phones. */}
+              <p className="mp-matchcounts" data-testid="mp-rostercounts"
+                data-promo={roster.promo?.spots ?? 0} data-members={counts.members}
+                data-daily={counts.daily} data-guests={counts.guests} data-real={counts.real}>
+                <b data-testid="mp-count-promo">{roster.promo?.spots ?? 0}</b> on promo
+                {" \u00b7 "}<b data-testid="mp-count-members">{counts.members}</b> member{counts.members === 1 ? "" : "s"}
+                {" \u00b7 "}<b data-testid="mp-count-daily">{counts.daily}</b> daily
+                {" \u00b7 "}<b data-testid="mp-count-guests">{counts.guests}</b> guest{counts.guests === 1 ? "" : "s"}
               </p>
+
+              {/* THE ICON KEY IS GONE. The membership-read failure was living inside it and is NOT
+                  an explainer — without it every row quietly reads Daily when the query failed —
+                  so it keeps its own line and appears only when there is something to say. */}
+              {roster.membershipError && (
+                <p className="mp-legend" data-testid="mp-roster-legend">
+                  <b className="mp-memerr" data-testid="mp-member-error">membership could not be read ({roster.membershipError}) — no row can be trusted to say Daily</b>
+                </p>
+              )}
 
               {/* ── THE SELECTION BAR ───────────────────────────────────────────────────────────
                   THE NUMBER IS PHONES, NEVER ROWS. Two spots on one booking is one text, and the
@@ -1924,7 +1934,7 @@ const CSS = `
 .mp-mnone{color:var(--ink3);font-weight:600}
 .mp-teammoney{font-size:10px;font-weight:800;color:var(--ink2);font-variant-numeric:tabular-nums;padding-left:6px}
 .mp-matchmoney{margin:10px 0 0;font-size:12px;color:var(--ink2);font-variant-numeric:tabular-nums}
-.mp-matchmoney em{display:block;font-style:normal;font-size:11px;color:var(--ink3);margin-top:2px}
+.mp-matchcounts{margin:2px 0 0;font-size:12px;color:var(--ink2);font-variant-numeric:tabular-nums}
 .mp-teammem{font-size:10px;font-weight:800;color:#1f7a4d;letter-spacing:.02em;margin-left:auto;padding-right:6px}
 .mp-legend{margin:8px 0 0;font-size:11px;color:var(--ink3);display:flex;align-items:center;gap:3px;flex-wrap:wrap}
 .mp-memerr{color:#8a5d10}
