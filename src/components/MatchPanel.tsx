@@ -177,7 +177,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   const load = useCallback(async () => {
     setLoadErr(null);
     const headers = await authHeaders();
-    if (!headers) { setLoadErr("No active session — sign in again."); return; }
+    if (!headers) { setLoadErr("No active session: sign in again."); return; }
     try {
       const res = await fetch(`/api/matchday/${env}/matches/${matchId}`, { headers, cache: "no-store" });
       const j = await res.json();
@@ -206,7 +206,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   const rosterPath = `/api/matchday/${env}/roster/${matchId}`;
   const loadRoster = useCallback(async (): Promise<RosterState | null> => {
     const headers = await authHeaders();
-    if (!headers) { setRosterErr("No active session — sign in again."); return null; }
+    if (!headers) { setRosterErr("No active session: sign in again."); return null; }
     try {
       const res = await fetch(rosterPath, { headers, cache: "no-store" });
       const j = await res.json();
@@ -237,7 +237,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   // One immediate write. Fires NOW; there is no staging and no batch. Returns {ok, j} or null (network).
   const rosterPost = async (op: Record<string, unknown>, label: string): Promise<{ ok: boolean; j: Record<string, unknown> } | null> => {
     const headers = await authHeaders();
-    if (!headers) { setOpToast({ text: "No active session — sign in again.", bad: true }); return null; }
+    if (!headers) { setOpToast({ text: "No active session: sign in again.", bad: true }); return null; }
     setOpBusy(label); setOpToast(null);
     try {
       const res = await fetch(rosterPath, { method: "POST", headers, body: JSON.stringify({ ...op, source: "Match panel · teams", matchName: roster?.name }) });
@@ -245,7 +245,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
       setOpBusy(null);
       if (!res.ok) { setOpToast({ text: `${label} failed: ${j.error || res.status}. Nothing else changed.`, bad: true }); return { ok: false, j }; }
       return { ok: true, j };
-    } catch (e) { setOpBusy(null); setOpToast({ text: `${label} — ${e instanceof Error ? e.message : String(e)}. UNKNOWN; reload before acting.`, bad: true }); return null; }
+    } catch (e) { setOpBusy(null); setOpToast({ text: `${label}: ${e instanceof Error ? e.message : String(e)}. UNKNOWN; reload before acting.`, bad: true }); return null; }
   };
 
   // Classify an immediate op by the route's read-back OUTCOME ("landed"/"notapplied"), never by HTTP
@@ -256,7 +256,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     if (!r.ok) return false; // rejected — rosterPost toasted; do NOT reload (nothing changed; keeps the typed input)
     await loadRoster();      // accepted — re-read to reflect the server and reseed
     if (r.j.outcome === "landed") { noteImmediate(note); setOpToast({ text: landedMsg }); return true; }
-    setOpToast({ text: `NOT APPLIED — the server accepted it (2xx) but a re-read shows it did not take. Nothing changed; reload and check.`, bad: true });
+    setOpToast({ text: `NOT APPLIED: the server accepted it (2xx) but a re-read shows it did not take. Nothing changed; reload and check.`, bad: true });
     return false;
   };
 
@@ -278,7 +278,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
       ? { kind: "add-fake", team: teamNumber, playerNumber: n }
       : { kind: "add", playerId: pendingAdd.id, team: teamNumber, playerNumber: n };
     const r = await rosterPost(op, isFake ? "Add fake player" : `Add ${nm}`);
-    if (await afterOp(r, `${nm} added to team ${teamNumber} — saved (re-read confirmed).`, `added ${nm} to team ${teamNumber}`)) { setPendingAdd(null); setQ(""); setResults([]); }
+    if (await afterOp(r, `${nm} added to team ${teamNumber}: saved (re-read confirmed).`, `added ${nm} to team ${teamNumber}`)) { setPendingAdd(null); setQ(""); setResults([]); }
   };
   /* BULK FAKES — kind:"bulk-fake" → POST /batch/fake-players {totalFakes}.
    *
@@ -294,7 +294,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     const n = Number(bulkFakes);
     if (!Number.isFinite(n) || n <= 0) return;
     const r = await rosterPost({ kind: "bulk-fake", totalFakes: n }, `Add ${n} fake players`);
-    if (await afterOp(r, `${n} fake player${n === 1 ? "" : "s"} added — saved (re-read confirmed).`, `added ${n} fake players`)) setBulkFakes("");
+    if (await afterOp(r, `${n} fake player${n === 1 ? "" : "s"} added: saved (re-read confirmed).`, `added ${n} fake players`)) setBulkFakes("");
   };
   // ── the STAGED roster edits. None of these touch the network. ─────────────────────────────────
   // `origin` is what the server last told us; `pending` is the intent laid over it. Every read of
@@ -442,7 +442,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
    * names somebody who is not on this match can only make the send smaller. */
   const sendText = async () => {
     if (smsBusy || !smsBody.trim() || tally.texts === 0) return;
-    const h = await authHeaders(); if (!h) { setSmsMsg({ text: "No active session — sign in again.", bad: true }); return; }
+    const h = await authHeaders(); if (!h) { setSmsMsg({ text: "No active session: sign in again.", bad: true }); return; }
     setSmsBusy(true); setSmsMsg(null);
     try {
       const userIds = [...new Set(pickedRows.filter((r) => !r.fake).map((r) => r.playerId))];
@@ -460,7 +460,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
       });
       setComposer(false); setSmsConfirm(false); setSmsBody(""); setPicked(new Set());
     } catch (e) {
-      setSmsMsg({ text: `UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Check the log before sending again.`, bad: true });
+      setSmsMsg({ text: `UNKNOWN: ${e instanceof Error ? e.message : String(e)}. Check the log before sending again.`, bad: true });
     } finally { setSmsBusy(false); }
   };
 
@@ -516,14 +516,14 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
 
   const openConvert = async () => {
     if (cvBusy) return;
-    const h = await authHeaders(); if (!h) { setCvMsg({ text: "No active session — sign in again.", bad: true }); return; }
+    const h = await authHeaders(); if (!h) { setCvMsg({ text: "No active session: sign in again.", bad: true }); return; }
     setCvBusy(true); setCvMsg(null); setCvResults(null);
     try {
       const r = await fetch(`/api/matchday/${env}/matches/${matchId}/convert-4`, { headers: h, cache: "no-store" });
       const j = await r.json();
       if (!r.ok) { setCvMsg({ text: j.error ?? `HTTP ${r.status}`, bad: true }); return; }
       setCv(j);
-    } catch (e) { setCvMsg({ text: `UNKNOWN — ${e instanceof Error ? e.message : String(e)}.`, bad: true }); }
+    } catch (e) { setCvMsg({ text: `UNKNOWN: ${e instanceof Error ? e.message : String(e)}.`, bad: true }); }
     finally { setCvBusy(false); }
   };
 
@@ -531,7 +531,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     /* NO RETRY. busy is set before the request and the confirmation closes on completion; a second
      * press would re-deal players someone may have moved in between. */
     if (!cv || cvBusy) return;
-    const h = await authHeaders(); if (!h) { setCvMsg({ text: "No active session — sign in again.", bad: true }); return; }
+    const h = await authHeaders(); if (!h) { setCvMsg({ text: "No active session: sign in again.", bad: true }); return; }
     setCvBusy(true); setCvMsg(null);
     try {
       const r = await fetch(`/api/matchday/${env}/matches/${matchId}/convert-4`, {
@@ -547,12 +547,12 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
         && j.mirrorReason !== "not production" && j.mirrorReason !== "no mirrored fields";
       setCvMsg({
         text: (j.message ?? j.error ?? `HTTP ${r.status}`)
-          + (cvMirrorWarn ? ` — BUT THE CLUBHOUSE COPY STILL SHOWS THE OLD SPOT COUNT (${j.mirrorReason ?? "unknown"}). Run the matches sync on /data.` : ""),
+          + (cvMirrorWarn ? ` \u00b7 BUT THE CLUBHOUSE COPY STILL SHOWS THE OLD SPOT COUNT (${j.mirrorReason ?? "unknown"}). Run the matches sync on /data.` : ""),
         bad: !j.ok || cvMirrorWarn,
       });
       await load(); await loadRoster();
     } catch (e) {
-      setCvMsg({ text: `UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Reload before acting.`, bad: true });
+      setCvMsg({ text: `UNKNOWN: ${e instanceof Error ? e.message : String(e)}. Reload before acting.`, bad: true });
     } finally { setCvBusy(false); }
   };
 
@@ -575,14 +575,14 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
 
   const openReduce = async () => {
     if (rdBusy) return;
-    const h = await authHeaders(); if (!h) { setRdMsg({ text: "No active session — sign in again.", bad: true }); return; }
+    const h = await authHeaders(); if (!h) { setRdMsg({ text: "No active session: sign in again.", bad: true }); return; }
     setRdBusy(true); setRdMsg(null); setRdResults(null);
     try {
       const r = await fetch(`/api/matchday/${env}/matches/${matchId}/reduce-2`, { headers: h, cache: "no-store" });
       const j = await r.json();
       if (!r.ok) { setRdMsg({ text: j.error ?? `HTTP ${r.status}`, bad: true }); return; }
       setRd(j);
-    } catch (e) { setRdMsg({ text: `UNKNOWN — ${e instanceof Error ? e.message : String(e)}.`, bad: true }); }
+    } catch (e) { setRdMsg({ text: `UNKNOWN: ${e instanceof Error ? e.message : String(e)}.`, bad: true }); }
     finally { setRdBusy(false); }
   };
 
@@ -590,7 +590,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     /* NO RETRY. busy is set before the request and the confirmation closes on completion; a second
      * press would move players someone may have moved in between. */
     if (!rd || rdBusy) return;
-    const h = await authHeaders(); if (!h) { setRdMsg({ text: "No active session — sign in again.", bad: true }); return; }
+    const h = await authHeaders(); if (!h) { setRdMsg({ text: "No active session: sign in again.", bad: true }); return; }
     setRdBusy(true); setRdMsg(null);
     try {
       const r = await fetch(`/api/matchday/${env}/matches/${matchId}/reduce-2`, {
@@ -603,12 +603,12 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
         && j.mirrorReason !== "not production" && j.mirrorReason !== "no mirrored fields";
       setRdMsg({
         text: (j.message ?? j.error ?? `HTTP ${r.status}`)
-          + (mirrorWarn ? ` — BUT THE CLUBHOUSE COPY STILL SHOWS THE OLD SPOT COUNT (${j.mirrorReason ?? "unknown"}). Run the matches sync on /data.` : ""),
+          + (mirrorWarn ? ` \u00b7 BUT THE CLUBHOUSE COPY STILL SHOWS THE OLD SPOT COUNT (${j.mirrorReason ?? "unknown"}). Run the matches sync on /data.` : ""),
         bad: !j.ok || mirrorWarn,
       });
       await load(); await loadRoster();
     } catch (e) {
-      setRdMsg({ text: `UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Reload before acting.`, bad: true });
+      setRdMsg({ text: `UNKNOWN: ${e instanceof Error ? e.message : String(e)}. Reload before acting.`, bad: true });
     } finally { setRdBusy(false); }
   };
 
@@ -678,7 +678,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
       const a = (e.target as HTMLElement | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
       if (!a || a.target === "_blank" || a.hasAttribute("download")) return;
       if (a.getAttribute("href")?.startsWith("#")) return;
-      if (!window.confirm(`You have ${unsaved} unsaved change${unsaved === 1 ? "" : "s"} on this match. Leaving discards ${unsaved === 1 ? "it" : "them"} — nothing has been sent.\n\nLeave anyway?`)) {
+      if (!window.confirm(`You have ${unsaved} unsaved change${unsaved === 1 ? "" : "s"} on this match. Leaving discards ${unsaved === 1 ? "it" : "them"}: nothing has been sent.\n\nLeave anyway?`)) {
         e.preventDefault(); e.stopPropagation();
       }
     };
@@ -755,7 +755,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
       : w.kind === "remove" ? { kind: "remove", userMatchId: w.umId }
       : { kind: "teams", teamId: w.teamId, fields: w.fields };
     const r = await rosterPost({ ...op, saveId }, w.label);
-    if (!r) return { verdict: "UNKNOWN", detail: "no answer from the server — reload before acting" };
+    if (!r) return { verdict: "UNKNOWN", detail: "no answer from the server: reload before acting" };
     if (!r.ok) return { verdict: "FAILED", detail: String(r.j.error ?? "rejected") };
 
     const fresh = await loadRoster(); // THE RE-READ
@@ -814,7 +814,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
           // and that is exactly the field that may be changing in this same save.
           coManaged: normalizeManagerId(cur.secondManagerId) != null,
           offCity: !!opt?.offCity,
-        }).map((l) => (k === "secondManagerId" ? `Second manager — ${l}` : l)));
+        }).map((l) => (k === "secondManagerId" ? `Second manager: ${l}` : l)));
       }
       setMgrConfirm({ lines, keys: mgrChanged });
       return;
@@ -849,7 +849,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
       if (stopped) {
         const landed = results.filter((r) => r.verdict === "LANDED").length;
         setToast(
-          `Stopped after ${results.length} of ${plan.length} write(s). ${landed} LANDED and ${landed === 1 ? "is" : "are"} not undone — ` +
+          `Stopped after ${results.length} of ${plan.length} write(s). ${landed} LANDED and ${landed === 1 ? "is" : "are"} not undone: ` +
           `a revert is another write that can also fail. The rest are still pending below; nothing was retried.`);
         setSaving(false);
         return;   // the staged MATCH FIELDS are not sent either — stop means stop
@@ -867,7 +867,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     }
     // Money fields staged as cents already; nothing to convert here.
     const headers = await authHeaders();
-    if (!headers) { setToast("No active session — sign in again."); setSaving(false); return; }
+    if (!headers) { setToast("No active session: sign in again."); setSaving(false); return; }
     try {
       const res = await fetch(`/api/matchday/${env}/matches/${matchId}`, {
         method: "PUT", headers, body: JSON.stringify({ changes, source: "Match panel" }),
@@ -894,14 +894,14 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
       const mirrorWarn = j.mirrored === false
         && j.mirrorReason !== "not production" && j.mirrorReason !== "no mirrored fields";
       setToast(
-        `Outcome ${j.outcome ?? "?"} — ${landed}/${sentKeys.length} field(s) LANDED (re-read confirmed).` +
+        `Outcome ${j.outcome ?? "?"}: ${landed}/${sentKeys.length} field(s) LANDED (re-read confirmed).` +
         (notApplied.length ? ` NOT APPLIED: ${notApplied.map((k) => LABELS[k] ?? k).join(", ")}.` : "") +
         (mirrorWarn
-          ? ` — BUT THE CLUBHOUSE COPY WAS NOT UPDATED (${j.mirrorReason ?? "unknown"}). Other screens will show the old value until the nightly sync. Run the matches sync on /data.`
+          ? ` \u00b7 BUT THE CLUBHOUSE COPY WAS NOT UPDATED (${j.mirrorReason ?? "unknown"}). Other screens will show the old value until the nightly sync. Run the matches sync on /data.`
           : ""),
       );
     } catch (e) {
-      setToast(`UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Reload before acting.`);
+      setToast(`UNKNOWN: ${e instanceof Error ? e.message : String(e)}. Reload before acting.`);
     } finally {
       setSaving(false);
     }
@@ -918,7 +918,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     if (immediateOps.length > 0 && typeof window !== "undefined") {
       const okd = window.confirm(
         `Revert discards your ${changed.length + pendingN} unsaved change${changed.length + pendingN === 1 ? "" : "s"} and sends nothing.\n\n` +
-        `It does NOT undo the ${immediateOps.length} add${immediateOps.length === 1 ? "" : "s"} that already fired this session — those went to the server on click and cannot be taken back here:\n` +
+        `It does NOT undo the ${immediateOps.length} add${immediateOps.length === 1 ? "" : "s"} that already fired this session: those went to the server on click and cannot be taken back here:\n` +
         `• ${immediateOps.slice(-6).join("\n• ")}\n\nContinue?`);
       if (!okd) return;
     }
@@ -1013,7 +1013,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                     {Object.entries(EXPOSED_TYPES).map(([v, label]) => <option key={v} value={v}>{label}</option>)}
                   </select>
                 ) : (
-                  <span className="mp-ro" data-testid="mp-type-readonly">{String(orig.type)} — read-only (not Regular or Special event)</span>
+                  <span className="mp-ro" data-testid="mp-type-readonly">{String(orig.type)}: read-only (not Regular or Special event)</span>
                 )}</label>
             </div>
             <div className="mp-grid">
@@ -1023,16 +1023,16 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                   STRING so a null managerId selects the explicit "no manager" option — it used to
                   be Number(cur.managerId ?? 0), which matches no option, so the browser displayed
                   whichever manager happened to be first and a blind Save would have attached them. */}
-              <label className="mp-f"><span className="mp-lb">MANAGER <em>send the id, choose the name · {mgrOffered.city} in {orig.cityName ?? "this city"}</em></span>
+              <label className="mp-f"><span className="mp-lb">MANAGER</span>
                 <select data-testid="mp-mgr" value={cur.managerId == null ? "none" : String(cur.managerId)} className={isDirty("managerId") ? "mp-chg" : ""}
                   onChange={(e) => setField("managerId", normalizeManagerId(e.target.value))}>
-                  <option value="none">{CAN_UNASSIGN_MANAGER_FROM_MATCH ? "— no manager —" : "— no manager (unavailable) —"}</option>
+                  <option value="none">{CAN_UNASSIGN_MANAGER_FROM_MATCH ? "\u00b7 no manager \u00b7" : "\u00b7 no manager (unavailable) \u00b7"}</option>
                   {mgrOpts.map((m) => <option key={m.id} value={m.id}>{m.offCity ? `${m.name} · other city` : m.name}</option>)}
                 </select></label>
               <label className="mp-f"><span className="mp-lb">SECOND MANAGER <em>optional</em></span>
                 <select data-testid="mp-mgr2" value={cur.secondManagerId == null ? "none" : String(cur.secondManagerId)} className={isDirty("secondManagerId") ? "mp-chg" : ""}
                   onChange={(e) => setField("secondManagerId", normalizeManagerId(e.target.value))}>
-                  <option value="none">— none —</option>
+                  <option value="none">· none ·</option>
                   {mgrOpts2.map((m) => <option key={m.id} value={m.id}>{m.offCity ? `${m.name} · other city` : m.name}</option>)}
                 </select></label>
             </div>
@@ -1090,7 +1090,20 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
           </Section>
 
           {/* SPOTS */}
-          <Section title="SPOTS" dirty={secDirty(["maxPlayerCount", "maxTeamSize2Team", "maxTeamSize4Team"])}>
+          {/* ── SPOTS · SHOWN · AUTOMATION ────────────────────────────────────────────────────
+              THREE HEADERS BECAME ONE. They were never three decisions: how many teams, how many a
+              side, how full it looks while it fills, and what happens if it does not. Every control
+              below is the one that was there, in the order it was there, with the same test id —
+              this is three headers becoming one, not a redesign. The groups are separated by a
+              hairline rather than by another header.
+
+              THE DIRTY MARK IS THE UNION of the three key lists that were passed to secDirty
+              separately, so a change to any one of them still marks this header. */}
+          <Section title="SPOTS · SHOWN · AUTOMATION" dirty={secDirty([
+            "maxPlayerCount", "maxTeamSize2Team", "maxTeamSize4Team",
+            ...MARKS.map((h) => `fakeSpotLeft${h}h`),
+            "autoCanceled", "autoCanceledMinutes", "minPlayerCount", "isAutoBump",
+          ])}>
             {/* NOBODY DECIDES "36". They decide how many teams and how many a side; the capacity
                 falls out. So the two controls are TEAMS and SPOTS PER TEAM, and the total is derived
                 and read-only.
@@ -1108,7 +1121,10 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
               {/* ONE team-count control for the whole panel. This picker and the one in TEAMS below
                   set the SAME pending value — two controls that disagreed about the shape of the
                   match is exactly the drift worth avoiding. Neither fires anything. */}
-              <div className="mp-f"><span className="mp-lb">TEAMS <em>{norm.teamCount != null ? "pending" : "staged"}</em></span>
+              <div className="mp-f">{/* ONE WORD DOING TWO JOBS: it read "pending" when a team-count change was staged and
+                  "staged" when nothing was, so on every untouched match it was a label saying
+                  nothing. Only the signal survives. */}
+              <span className="mp-lb">TEAMS {norm.teamCount != null && <em>pending</em>}</span>
                 <div className="mp-seg" role="group" aria-label="Team count" data-testid="mp-teams-seg">
                   {[2, 3, 4].map((n) => (
                     <button key={n} type="button" data-testid={`mp-teams-${n}`} data-on={teamCount === n ? "true" : "false"}
@@ -1130,22 +1146,23 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                   // The TRUE stored total, never a rounded one. Unobserved in 8 weeks of production
                   // data, but a real match that got here must not be silently reshaped.
                   <span className="mp-ro" data-testid="mp-spt-na">{teamCount > 0
-                    ? `${capacity} total doesn't divide evenly into ${teamCount} teams — this match's stored capacity is ${capacity} and is shown as-is.`
-                    : `Team count unknown — stored capacity is ${capacity}.`}</span>
+                    ? `${capacity} total doesn't divide evenly into ${teamCount} teams: this match's stored capacity is ${capacity} and is shown as-is.`
+                    : `Team count unknown: stored capacity is ${capacity}.`}</span>
                 )}
               </div>
-              <div className="mp-f"><span className="mp-lb">CAPACITY <em>derived</em></span>
+              <div className="mp-f"><span className="mp-lb">CAPACITY</span>
                 <span className="mp-ro" data-testid="mp-capacity" data-value={capacity}>
                   {teamCount > 0 && capacity % teamCount === 0
-                    ? `${capacity} total — ${teamCount} teams × ${capacity / teamCount}`
+                    ? `${capacity} total \u00b7 ${teamCount} teams × ${capacity / teamCount}`
                     : `${capacity} total`}
                 </span>
               </div>
             </div>
             {shapeErr && <div className="mp-err" data-testid="mp-shape-err">{shapeErr}</div>}
-          </Section>
 
-          <Section title="SPOTS SHOWN" dirty={secDirty(MARKS.map((h) => `fakeSpotLeft${h}h`))}>
+            {/* THE LADDER KEEPS ITS OWN NAME. The other two groups do not need one — their field
+                labels already say what they are. */}
+            <hr className="mp-secrule" />
             <span className="mp-lb" style={{ marginBottom: 8 }}>MOST SPOTS SHOWN AS LEFT</span>
             <div className="mp-rel" data-testid="mp-ladder">
               {MARKS.map((h) => {
@@ -1163,15 +1180,8 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 );
               })}
             </div>
-            <span className="mp-note" data-testid="mp-laddernote">
-              Each figure is the most spots shown as LEFT from that point, so showing FEWER spots
-              left means MORE fake spots. A later figure may be higher than an earlier one — that is
-              how fake spots come off a match near kickoff, and it is intentional.
-            </span>
-          </Section>
 
-          {/* AUTOMATION */}
-          <Section title="AUTOMATION" dirty={secDirty(["autoCanceled", "autoCanceledMinutes", "minPlayerCount", "isAutoBump", "maxTeamSize2Team", "maxTeamSize4Team"])}>
+            <hr className="mp-secrule" />
             <Toggle id="mp-ac" on={!!cur.autoCanceled} dirty={isDirty("autoCanceled")} onToggle={(v) => setField("autoCanceled", v)}
               title="Auto-cancel" sub="Cancel automatically if the match has not filled" />
             <div className="mp-grid" style={{ marginTop: 11 }}>
@@ -1190,9 +1200,10 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 <span className="mp-lb">MIN PLAYERS <em>below this, it cancels</em></span>
                 <input data-testid="mp-min" inputMode="numeric" value={cur.minPlayerCount == null ? "" : String(cur.minPlayerCount)} disabled={!cur.autoCanceled}
                   className={isDirty("minPlayerCount") ? "mp-chg" : ""} onChange={(e) => setField("minPlayerCount", e.target.value.trim() === "" ? "" : Number(e.target.value))} />
-                <span className="mp-linknote" data-testid="mp-min-note">
-                  Also set by the Gameday Ops banner stepper.{` ${realPlayers} real player${realPlayers === 1 ? "" : "s"} in right now.`}
-                </span>
+                {/* THE NOTE THAT STOOD HERE CLAIMED A CONTRACT WITH THE GAMEDAY OPS BANNER STEPPER.
+                    There is no contract in this direction: what protects this field is the BANNER
+                    discarding its own pending value when this editor opens, which is unchanged and
+                    lives there. Telling the operator about it on every render bought nothing. */}
               </label>
             </div>
 
@@ -1234,7 +1245,6 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                   <>
                     <button type="button" className="mp-btn" data-testid="mp-convert-open" disabled={cvBusy || !mayWrite}
                       onClick={() => void openConvert()}>{cvBusy ? "Reading…" : "Convert to 4 teams"}</button>
-                    <span className="mp-cvsub">Opens capacity for more players. This is not auto-bump.</span>
                   </>
                 ) : cv.refusal || cv.shapeError ? (
                   <div className="mp-note warn" data-testid="mp-convert-refusal">
@@ -1263,7 +1273,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                     {cvResults.map((r, i) => (
                       <li key={i} data-testid="mp-convert-result" data-verdict={r.verdict}>
                         <span className="v">{r.verdict}</span>
-                        <span>{r.label}{r.detail ? ` — ${r.detail}` : ""}</span>
+                        <span>{r.label}{r.detail ? `: ${r.detail}` : ""}</span>
                       </li>
                     ))}
                   </ul>
@@ -1307,7 +1317,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                       {rd.steps.map((st, i) => (
                         <li key={i} data-testid="mp-reduce-step">
                           <span className="v">{i + 1}</span>
-                          <span>{st.label} — <em>{st.detail}</em></span>
+                          <span>{st.label}: <em>{st.detail}</em></span>
                         </li>
                       ))}
                     </ol>
@@ -1316,7 +1326,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                     <div className="mp-cvnote">
                       {rd.writeCount} write{rd.writeCount === 1 ? "" : "s"}, sent one at a time, each reporting its own
                       result. Nothing retries. Every live player&rsquo;s team and spot goes into the change log before the
-                      first move — the shape can be put back, the arrangement cannot.
+                      first move: the shape can be put back, the arrangement cannot.
                     </div>
                     <div className="mp-cv-acts">
                       <button type="button" className="mp-btn mp-nowrap" data-testid="mp-reduce-cancel" onClick={() => setRd(null)}>Keep {rosterTeamCount} teams</button>
@@ -1332,7 +1342,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                     {rdResults.map((r, i) => (
                       <li key={i} data-testid="mp-reduce-result" data-verdict={r.verdict} data-kind={r.kind}>
                         <span className="v">{r.verdict}</span>
-                        <span>{r.label}{r.detail ? ` — ${r.detail}` : ""}</span>
+                        <span>{r.label}{r.detail ? `: ${r.detail}` : ""}</span>
                       </li>
                     ))}
                   </ul>
@@ -1356,7 +1366,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
               {/* ADD — the one control here that still fires on click. It says so on itself. */}
               <div className="mp-addrow">
                 <div className="mp-addtop">
-                  <input data-testid="mp-add-search" className="mp-addsearch" value={q} placeholder="Add a player — search name or email" onChange={(e) => setQ(e.target.value)} />
+                  <input data-testid="mp-add-search" className="mp-addsearch" value={q} placeholder="Add a player: search name or email" onChange={(e) => setQ(e.target.value)} />
                   <button type="button" className="mp-mini" data-testid="mp-add-fake" disabled={!!opBusy} onClick={() => { setPendingAdd({ id: null, name: "Fake player", fake: true }); setQ(""); setResults([]); }}>+ Fake</button>
                   <span className="mp-bulk">
                     <input data-testid="mp-bulk-fakes" className="mp-bulkin" inputMode="numeric" placeholder="N" value={bulkFakes} onChange={(e) => setBulkFakes(e.target.value.replace(/[^0-9]/g, ""))} aria-label="Number of fake players to add in bulk" />
@@ -1368,26 +1378,19 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                     <button key={r.id} type="button" data-testid="mp-add-result" onClick={() => { setPendingAdd({ id: r.id, name: r.name }); setQ(""); setResults([]); }}>{r.name}</button>
                   ))}</div>
                 )}
-                {pendingAdd && <span className="mp-addpending" data-testid="mp-add-pending">Adding <b>{pendingAdd.fake ? "a FAKE player" : pendingAdd.name}</b> — pick a team →<button type="button" className="mp-x" onClick={() => setPendingAdd(null)}>cancel</button></span>}
+                {pendingAdd && <span className="mp-addpending" data-testid="mp-add-pending">Adding <b>{pendingAdd.fake ? "a FAKE player" : pendingAdd.name}</b> · pick a team →<button type="button" className="mp-x" onClick={() => setPendingAdd(null)}>cancel</button></span>}
               </div>
 
               {!!roster.promo?.spots && (
                 // Once per match. A 100%-off code filling a roster is revenue that never arrived.
                 <p className="mp-hint" data-testid="mp-promo-count" data-spots={roster.promo.spots}>
-                  <b>{roster.promo.spots} on a promo</b>{roster.promo.codes.length ? ` — ${roster.promo.codes.join(", ")}` : ""}
+                  <b>{roster.promo.spots} on a promo</b>{roster.promo.codes.length ? ` \u00b7 ${roster.promo.codes.join(", ")}` : ""}
                 </p>
               )}
-              {!!roster.hidden?.total && (
-                // NOT silent. A 20-deep repeat from one player is a payment failure; the noise is
-                // gone from the teams but the fact that it happened is stated.
-                <p className="mp-hint" data-testid="mp-roster-hidden" data-count={roster.hidden.total}>
-                  <b>{roster.hidden.total} hidden</b>{" — "}
-                  {[roster.hidden.unpaid ? `${roster.hidden.unpaid} unpaid` : "",
-                    roster.hidden.cancelled ? `${roster.hidden.cancelled} cancelled` : "",
-                    roster.hidden.refunded ? `${roster.hidden.refunded} refunded` : ""].filter(Boolean).join(" · ")}
-                  {". They hold no spot."}
-                </p>
-              )}
+              {/* THE HIDDEN COUNT MOVED to the foot of the roster, under the money and the counts.
+                  It sat here, between Convert to 4 teams and Add a player, two controls it has
+                  nothing to do with, as the first sentence of a section whose first job is to show
+                  you the players. It is a fact about the roster you have just read. */}
 
               {/* THE TEAMS. 2 x 2 at four teams, never four abreast: a column narrow enough to fit
                   four across cannot hold a name and a phone number at any panel width worth having.
@@ -1445,9 +1448,9 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                                 /* A DOT ON THE NAME'S OWN LINE, not a sub-line. An explanation
                                    underneath made one row in eighteen taller and the grid ragged. */
                                 <span className="mp-sharedot" data-testid={`mp-shared-${p.umId}`}
-                                  title={`Additional spot — same booking as ${p.name}, one phone and one email`} aria-hidden="true" />
+                                  title={`Additional spot \u00b7 same booking as ${p.name}, one phone and one email`} aria-hidden="true" />
                               )}</span>
-                              <span className="mp-pphone" data-testid="mp-pphone">{p.phone ?? (p.fake ? "fake — no phone" : "no phone on file")}</span>
+                              <span className="mp-pphone" data-testid="mp-pphone">{p.phone ?? (p.fake ? "fake \u00b7 no phone" : "no phone on file")}</span>
                             </span>
                             {/* COLUMN 4 — THE KIND, in a fixed column so the chips line up into a
                                 stripe you can read down without reading a word. Three weights for
@@ -1472,7 +1475,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                               {money.get(p.umId) === "fake"
                                 ? <b className="mp-mnone">&mdash;</b>
                                 : money.get(p.umId) === "on-booking"
-                                  ? <b className="mp-monbook" title={`Paid for on another spot in ${p.name}'s booking — this row was not charged separately`}>on the booking</b>
+                                  ? <b className="mp-monbook" title={`Paid for on another spot in ${p.name}'s booking \u00b7 this row was not charged separately`}>incl.</b>
                                   : <b>{usd((p as PlayerRow).paid ?? 0)}</b>}
                               {((p as PlayerRow).credit ?? 0) > 0 && (
                                 <em className="mp-mcredit" data-testid={`mp-credit-${p.umId}`}
@@ -1577,6 +1580,22 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 {" \u00b7 "}<b data-testid="mp-count-guests">{counts.guests}</b> guest{counts.guests === 1 ? "" : "s"}
               </p>
 
+              {/* NOT SILENT. A 20-deep repeat from one player is a payment failure; the noise is
+                  gone from the teams but the fact that it happened is stated — here, with the other
+                  counts of the same roster, and quieter than them. */}
+              {!!roster.hidden?.total && (
+                <p className="mp-hiddenline" data-testid="mp-roster-hidden" data-count={roster.hidden.total}>
+                  {roster.hidden.total} hidden
+                  {(() => {
+                    const parts = [roster.hidden.unpaid ? `${roster.hidden.unpaid} unpaid` : "",
+                      roster.hidden.cancelled ? `${roster.hidden.cancelled} cancelled` : "",
+                      roster.hidden.refunded ? `${roster.hidden.refunded} refunded` : ""].filter(Boolean);
+                    return parts.length === 0 ? "" : `, ${parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`}`;
+                  })()}
+                  {". They hold no spot."}
+                </p>
+              )}
+
               {/* THE WAY IN. Rearrange is a mode, not a panel section — it needs the window. */}
               <p className="mp-rearrange-open">
                 <button type="button" className="mp-mini" data-testid="mp-rearrange-open"
@@ -1589,7 +1608,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                   so it keeps its own line and appears only when there is something to say. */}
               {roster.membershipError && (
                 <p className="mp-legend" data-testid="mp-roster-legend">
-                  <b className="mp-memerr" data-testid="mp-member-error">membership could not be read ({roster.membershipError}) — no row can be trusted to say Daily</b>
+                  <b className="mp-memerr" data-testid="mp-member-error">membership could not be read ({roster.membershipError}): no row can be trusted to say Daily</b>
                 </p>
               )}
 
@@ -1607,7 +1626,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                     <span className="mp-selwhy" data-testid="mp-selwhy">
                       {tally.rows - tally.texts - tally.noPhone === 1
                         ? "One of them shares a phone with somebody else you picked"
-                        : `${tally.rows - tally.texts - tally.noPhone} of them share a phone with somebody else you picked`} — one person, one text.
+                        : `${tally.rows - tally.texts - tally.noPhone} of them share a phone with somebody else you picked`} · one person, one text.
                     </span>
                   )}
                   {tally.noPhone > 0 && (
@@ -1663,7 +1682,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                         {pickedRows.filter((r) => !r.fake && r.phone).map((r) => r.name).join(", ")}
                       </p>
                       <p className="mp-smswarn" data-testid="mp-sms-nowayback">
-                        These are real phones. A text cannot be recalled, and nothing here retries — one attempt per number.
+                        These are real phones. A text cannot be recalled, and nothing here retries · one attempt per number.
                       </p>
                       <div className="mp-cv-acts">
                         <button type="button" className="mp-mini" data-testid="mp-sms-back" onClick={() => setSmsConfirm(false)}>Back</button>
@@ -1834,7 +1853,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
             {!cancel.preview ? (
               <button type="button" className="mp-cancelbtn" data-testid="mp-cancel-open" disabled={cancel.busy} onClick={() => void cancel.open()}>{cancel.busy ? "Reading…" : "Cancel this match…"}</button>
             ) : cancel.preview.alreadyCancelled ? (
-              <div className="mp-note warn" data-testid="mp-cancel-already">This match is already cancelled — nothing to do.</div>
+              <div className="mp-note warn" data-testid="mp-cancel-already">This match is already cancelled: nothing to do.</div>
             ) : (
               <div className="mp-cancelconfirm" data-testid="mp-cancel-confirm">
                 {/* THE PINNED SENTENCE, from the shared helper, so both panels say it in the same
@@ -1844,7 +1863,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                     symmetry. */}
                 <p className="mp-cancel-line" data-testid="mp-cancel-stakes"><b>{cancelStakes(cancel.preview.count)}</b></p>
                 <p className="mp-cancel-line" data-testid="mp-cancel-line">
-                  <b>{cancel.preview.count} player{cancel.preview.count === 1 ? "" : "s"} will be credited ${centsToDollars(cancel.preview.totalCents)}</b> and texted that “{cancel.preview.name}” is off. Each gets a <b>CREDIT</b> of the match value to their MatchDay account — nothing leaves Stripe and no money returns to a card. This fires once and cannot be undone.
+                  <b>{cancel.preview.count} player{cancel.preview.count === 1 ? "" : "s"} will be credited ${centsToDollars(cancel.preview.totalCents)}</b> and texted that “{cancel.preview.name}” is off. Each gets a <b>CREDIT</b> of the match value to their MatchDay account: nothing leaves Stripe and no money returns to a card. This fires once and cannot be undone.
                 </p>
                 {/* YES / NO. The type box is gone — grey placeholder text that reads disabled. */}
                 <div className="mp-cancel-acts">
@@ -1869,7 +1888,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
               {writeResults.map((r, i) => (
                 <li key={i} data-testid="mp-write-result" data-verdict={r.verdict}>
                   <span className="v">{r.verdict}</span>
-                  <span>{r.label}{r.detail ? ` — ${r.detail}` : ""}</span>
+                  <span>{r.label}{r.detail ? `: ${r.detail}` : ""}</span>
                 </li>
               ))}
             </ul>
@@ -1906,7 +1925,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
               <b>This changes who gets paid for this match.</b>
               <ul>{mgrConfirm.lines.map((l, i) => <li key={i}>{l}</li>)}</ul>
               <div className="mp-mgrconfirm-b">
-                <button type="button" className="mp-btn" data-testid="mp-mgr-cancel" onClick={() => setMgrConfirm(null)}>Cancel — send nothing</button>
+                <button type="button" className="mp-btn" data-testid="mp-mgr-cancel" onClick={() => setMgrConfirm(null)}>Cancel · send nothing</button>
                 <button type="button" className="mp-btn mp-pri" data-testid="mp-mgr-go" disabled={saving} onClick={() => { void doSave(true); }}>
                   {saving ? "Sending…" : "Confirm and send"}</button>
               </div>
@@ -1921,7 +1940,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
             {/* REVERT SENDS NOTHING. It discards intentions; it cannot take back a write, because
                 taking one back would BE another write. The label says so. */}
             <button type="button" className="mp-btn" data-testid="mp-revert" disabled={unsaved === 0} onClick={doRevert}
-              title="Discards every unsaved change on this panel. Sends no request — it cannot undo anything already saved.">Revert</button>
+              title="Discards every unsaved change on this panel. Sends no request: it cannot undo anything already saved.">Revert</button>
             <button type="button" className="mp-btn mp-pri" data-testid="mp-save" disabled={!mayWrite || unsaved === 0 || saving || !!whenErr || !!shapeErr} title={whenErr ?? shapeErr ?? (mayWrite ? undefined : (access.ok ? undefined : access.reason))} onClick={() => { if (mayWrite && !whenErr && !shapeErr) void doSave(); }}>
               {saving ? "Saving…" : unsaved ? `Save · ${unsaved} change${unsaved === 1 ? "" : "s"}` : "Save"}</button>
           </div>
@@ -2183,7 +2202,13 @@ const CSS = `
 .mp-mnone{color:var(--ink3);font-weight:600}
 .mp-teammoney{font-size:10px;font-weight:800;color:var(--ink2);font-variant-numeric:tabular-nums;padding-left:6px}
 .mp-matchmoney{margin:10px 0 0;font-size:12px;color:var(--ink2);font-variant-numeric:tabular-nums}
+/* THE HAIRLINE THAT REPLACED TWO HEADERS. A rule, not a title: the groups are still separated,
+   they simply no longer each claim to be a section. */
+.mp-secrule{border:0;border-top:1px solid var(--line);margin:14px 0 12px}
 .mp-matchcounts{margin:2px 0 0;font-size:12px;color:var(--ink2);font-variant-numeric:tabular-nums}
+/* QUIETER THAN THE TWO LINES ABOVE IT. Hidden rows are a fact about the roster you have just read,
+   not a warning to read before it. */
+.mp-hiddenline{margin:2px 0 0;font-size:11px;color:var(--ink3);font-variant-numeric:tabular-nums}
 .mp-rearrange-open{margin:10px 0 0;display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:11px;color:var(--ink3)}
 
 /* ── REARRANGE: A FULL-WINDOW MODE ────────────────────────────────────────────────────────────

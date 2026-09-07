@@ -297,8 +297,13 @@ console.log("\nthe panel");
 
   /* THE MONEY COLUMN. */
   yes("every row has a money cell", /data-testid=\{`mp-money-\$\{p\.umId\}`\}/.test(v));
-  yes("…and it is never blank: a fake says a dash, a shared spot says so, everyone else gets a figure",
-    /mp-mnone/.test(v) && /on the booking/.test(v) && /usd\(\(p as PlayerRow\)\.paid/.test(v));
+  /* ITEMISED: "on the booking" became "incl." — one muted word on one line, because a dash and a
+   * word stacked were two lines saying one thing. The TITLE is unchanged, so the full sentence is
+   * still one hover away, and that is asserted separately below. */
+  yes("…and it is never blank: a fake says a dash, a shared spot says incl., everyone else gets a figure",
+    /mp-mnone/.test(v) && />incl\.<\/b>/.test(v) && /usd\(\(p as PlayerRow\)\.paid/.test(v));
+  yes("…and the shared spot's tooltip still names the booker",
+    /title=\{`Paid for on another spot in \$\{p\.name\}'s booking/.test(v));
   yes("the credit is a second line, shown only when there is credit", /\(\(p as PlayerRow\)\.credit \?\? 0\) > 0/.test(v));
   yes("the team header carries its own total", /teamMoney\(origin\.rows, t\.teamNumber\)/.test(v));
   yes("the match line names all three sums", /mp-money-booked/.test(v) && /mp-money-charged/.test(v) && /mp-money-credit/.test(v));
@@ -352,6 +357,13 @@ console.log("\nthe panel");
     return /\\u[0-9a-fA-F]{4}/.test(stripped);
   });
   is("no \\uXXXX escape sits outside a string literal", bare.map(([n]) => n), []);
+  /* AND NOT INSIDE A JSX ATTRIBUTE EITHER. `title="a \u00b7 b"` LOOKS like a string literal and is
+   * not one: JSX attribute strings are HTML-ish and do not process backslash escapes, so that
+   * renders the six characters exactly as the icon key did. Caught while merging three section
+   * headers into one. Use the character itself, or a braced expression. */
+  const inAttr = v.split("\n").map((line, i) => [i + 1, line] as const)
+    .filter(([, line]) => /\b\w+="[^"]*\\u[0-9a-fA-F]{4}/.test(line));
+  is("no \\uXXXX escape sits inside a JSX attribute string", inAttr.map(([n]) => n), []);
   yes(`control: ${(v.match(/\\u[0-9a-fA-F]{4}/g) ?? []).length} escapes exist in the file to be checked`,
     (v.match(/\\u[0-9a-fA-F]{4}/g) ?? []).length > 0);
 

@@ -381,7 +381,7 @@ async function main() {
     readonly: await page.$eval('[data-testid="mp-capacity"]', (e) => e.tagName.toLowerCase()),
     noInput: await page.$$eval('[data-testid="mp-maxplayers"]', (e) => e.length),
     text: (await page.$eval('[data-testid="mp-capacity"]', (e) => e.textContent)).replace(/\s+/g, " ").trim(),
-  }, { readonly: "span", noInput: 0, text: "18 total — 3 teams × 6" });
+  }, { readonly: "span", noInput: 0, text: "18 total · 3 teams × 6" });
   // the picker offers exactly what production proved storable: 2, 3 and 4 (28 of 711 matches run 3)
   eq("spots: the TEAMS picker offers exactly 2 / 3 / 4", await page.$$eval('[data-testid="mp-teams-seg"] button', (b) => b.map((x) => x.textContent.trim())), ["2", "3", "4"]);
   eq("spots: the picker marks the match's CURRENT team count", await page.$eval('[data-testid="mp-teams-3"]', (e) => e.getAttribute("data-on")), "true");
@@ -392,7 +392,7 @@ async function main() {
   puts = [];
   await page.click('[data-testid="mp-spt-plus"]');       // 6 -> 7 per team, 3 teams => 21 total
   eq("spots: the stepper recomputes capacity as a TOTAL (3 × 7 = 21)",
-    (await page.$eval('[data-testid="mp-capacity"]', (e) => e.textContent)).replace(/\s+/g, " ").trim(), "21 total — 3 teams × 7");
+    (await page.$eval('[data-testid="mp-capacity"]', (e) => e.textContent)).replace(/\s+/g, " ").trim(), "21 total · 3 teams × 7");
   await page.click('[data-testid="mp-save"]');
   await page.waitForTimeout(400);
   eq("spots: a 3-team save sends ONLY maxPlayerCount — no rung field, and nothing that did not change",
@@ -402,8 +402,8 @@ async function main() {
   // configuration the auto-bump ladder moves between, and clobbering it would corrupt that ladder.
   await page.goto(`${BASE}/match-ops/match-panel/12222`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="mp-capacity"]', { timeout: 15000 });
-  eq("spots: a 2-team match derives 18 total — 2 teams × 9",
-    (await page.$eval('[data-testid="mp-capacity"]', (e) => e.textContent)).replace(/\s+/g, " ").trim(), "18 total — 2 teams × 9");
+  eq("spots: a 2-team match derives 18 total · 2 teams × 9",
+    (await page.$eval('[data-testid="mp-capacity"]', (e) => e.textContent)).replace(/\s+/g, " ").trim(), "18 total · 2 teams × 9");
   puts = [];
   // Step UP: the fixture already stores maxTeamSize2Team 16, so stepping DOWN to 16 total would
   // correctly omit the rung as unchanged and prove nothing. 9 -> 10 changes both fields.
@@ -833,14 +833,24 @@ async function main() {
   { const kept = await page.evaluate(() => {
       const txt = document.querySelector('[data-testid="mp-panel"]').textContent || "";
       return {
-        total: /\btotal\b/i.test(txt), staged: /staged|pending/i.test(txt), derived: /derived/i.test(txt),
+        total: /\btotal\b/i.test(txt),
         beforeKickoff: /before kickoff/i.test(txt), belowCancels: /below this, it cancels/i.test(txt),
-        optional: /optional/i.test(txt), sendId: /send the id/i.test(txt),
-        capacity: /\d+ total — \d+ teams × \d+/.test(txt.replace(/\s+/g, " ")),
+        optional: /optional/i.test(txt),
+        /* ITEMISED, and the expectations INVERTED for three of them.
+         *   `staged`  was one word doing two jobs: the label read "pending" when a team-count
+         *             change was staged and "staged" when nothing was, so on every untouched match
+         *             it said nothing. Only the signal survives, and this page is untouched.
+         *   `derived` on CAPACITY was always there and never told anyone anything.
+         *   `send the id` on MANAGER likewise.
+         * They were asked for by name. The assertion follows the screen rather than the screen
+         * being kept in shape by the assertion. */
+        staged: /\bstaged\b/i.test(txt), derived: /\bderived\b/i.test(txt), sendId: /send the id/i.test(txt),
+        /* The em-dash in the capacity readout went with the rest of them; the numbers did not. */
+        capacity: /\d+ total · \d+ teams × \d+/.test(txt.replace(/\s+/g, " ")),
       }; });
-    eq("prose: the microlabels and computed values are all still there", kept,
-      { total: true, staged: true, derived: true, beforeKickoff: true, belowCancels: true,
-        optional: true, sendId: true, capacity: true }); }
+    eq("prose: the microlabels and computed values that survive are still there, and the three that were cut are gone", kept,
+      { total: true, beforeKickoff: true, belowCancels: true, optional: true,
+        staged: false, derived: false, sendId: false, capacity: true }); }
 
   // 5 — WHO CAME IN ON A PROMO: the CODE NAME on the row, and the count once per match.
   { const promo = await page.evaluate(() => {
