@@ -12,6 +12,7 @@ import { authenticateMatchOpsRead, assertMatchInScope } from "@/lib/matchOpsAuth
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { rosterRowCounts } from "@/lib/gamedayModel";
+
 import type { Change } from "@/lib/changeLogModel";
 
 export const runtime = "nodejs";
@@ -20,9 +21,16 @@ export const maxDuration = 30;
 
 const isEnv = (x: string): x is MatchdayEnv => x === "staging" || x === "production";
 const num = (v: unknown) => (v === null || v === undefined || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null);
+/** Cents on the wire → dollars, to the cent. The ONE conversion for this panel's money. */
+const dollars = (v: unknown) => Math.round(num(v) ?? 0) / 100;
 
 type RosterShape = { isCancelled?: boolean; canceledAt?: string | null; refunded?: boolean; paidStatus?: string | null };
-type Row = { id: number; userId: number; team: number; playerNumber: number; promocodeId?: number | null; isCancelled?: boolean; refunded?: boolean; user?: { firstName?: string; lastName?: string; isFakePlayer?: boolean; phoneNumber?: string | null; email?: string | null; isMember?: boolean } };
+type Row = { id: number; userId: number; team: number; playerNumber: number; promocodeId?: number | null; isCancelled?: boolean; refunded?: boolean;
+  // THE MONEY WAS ALREADY ARRIVING AND BEING DROPPED, exactly as user.email was. Same endpoint,
+  // same row, three more fields — no new request, no join. mdapiMatchesSync's ApiPlayer has
+  // declared them all along.
+  amount?: unknown; totalAmount?: unknown; creditAmount?: unknown; paymentIntentId?: string | null; paidStatus?: string | null;
+  user?: { firstName?: string; lastName?: string; isFakePlayer?: boolean; phoneNumber?: string | null; email?: string | null; isMember?: boolean } };
 
 export async function GET(req: Request, ctx: { params: Promise<{ env: string; matchId: string }> }) {
   const auth = await authenticateMatchOpsRead(req);
@@ -79,6 +87,22 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; ma
          * request. Copy-email offers nothing on a fake row, whose address is @matchday.com and is
          * not a person. */
         email: typeof p.user?.email === "string" && p.user.email.trim() !== "" ? p.user.email : null,
+        /* CENTS, CONVERTED ONCE, HERE. mdapiMatchesRead divides by 100 at read time and says so;
+         * this is the same conversion at the one place this panel's numbers are shaped, so no
+         * component ever has to remember which unit it is holding.
+         *
+         * ALL THREE ARE CARRIED AND NONE IS DERIVED. `amount` is the spot price, `totalAmount` is
+         * what Stripe took including the card fee, `creditAmount` is how much came off the balance.
+         * The codebase describes the relationship in two places that disagree about the fee, and
+         * production settles it against both: match 19104 row 310694 is amount 800, credit 66,
+         * total 795 — 800 − 66 is not 795. So they are shown, not reconciled. */
+        /* NUMBERS, NOT STRINGS. centsToDollars returns a formatted string — the panel adds these
+         * up, and "12.00" + "8.00" is "12.008.00". Converted as arithmetic and rounded to the cent
+         * so a column of them sums exactly. */
+        paid: dollars(p.amount),
+        charged: dollars(p.totalAmount),
+        credit: dollars(p.creditAmount),
+        paidStatus: typeof p.paidStatus === "string" ? p.paidStatus : null,
         // WHO CAME IN ON A PROMO. Same join the uses panel uses (promocode_id on the user-match
         // row) — no new data path. The CODE NAME is resolved below, because "promo" tells you
         // nothing and "TOMBALL" tells you half a team arrived on one code.

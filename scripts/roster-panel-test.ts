@@ -10,7 +10,10 @@
  */
 
 import { readFileSync } from "node:fs";
-import { playerKinds, teamMemberCount, textsForSelection, type EditRow } from "../src/lib/rosterEditModel";
+import {
+  playerKinds, teamMemberCount, textsForSelection, moneyKinds, sumMoney, teamMoney, usd,
+  type EditRow,
+} from "../src/lib/rosterEditModel";
 
 let pass = 0; const fails: string[] = [];
 const ok = (m: string) => { pass++; console.log(`  ✓ ${m}`); };
@@ -21,7 +24,8 @@ const yes = (m: string, c: boolean, d = "") => (c ? ok(m) : bad(m, d));
 
 const r = (umId: number, team: number, spot: number | null, playerId: number, o: Partial<EditRow> = {}): EditRow =>
   ({ umId, team, playerNumber: spot, name: `P${playerId}`, phone: `+1512555${String(1000 + playerId)}`,
-     fake: false, playerId, member: false, email: `p${playerId}@example.com`, ...o });
+     fake: false, playerId, member: false, email: `p${playerId}@example.com`,
+     paid: 0, charged: 0, credit: 0, paidStatus: null, ...o });
 
 console.log("\nmember, daily, guest — and guest is derived from THIS roster");
 {
@@ -80,6 +84,84 @@ console.log("\nthe number is phones, never rows");
   /* FORMATTING MUST NOT SPLIT ONE PERSON IN TWO. The same number written two ways is one phone. */
   const formatted = [r(20, 1, 1, 300, { phone: "+15125551000" }), r(21, 1, 2, 301, { phone: "(512) 555-1000" })];
   is("the same number written two ways is still one text", textsForSelection(formatted, new Set([20, 21])).texts, 1);
+}
+
+console.log("\nthe money belongs to the row, and every row's own amount is safe to add up");
+{
+  /* MATCH 18281, user 89343 — two spots, ONE charge. The API puts the whole 24.00 on the first row
+   * and 0 on the second, so the second says "on the booking" rather than $0.00. */
+  SEQ = 0;
+  const oneCharge = [r(1, 1, 1, 500, { paid: 24, charged: 25.98 }), r(2, 1, 2, 500, { paidStatus: "PAID" })];
+  const k1 = moneyKinds(oneCharge);
+  is("the booking row carries the money", k1.get(1), "paid");
+  is("…and the spot it paid for says so instead of reading $0.00", k1.get(2), "on-booking");
+  is("the pair adds up to the one charge, not twice it", sumMoney(oneCharge).booked, 24);
+
+  /* MATCH 18343, user 74713 — FOUR rows and THREE payment intents: 24.00 + 0 + 12.00 + 12.00. They
+   * came back and booked again. This is the case that kills "a repeated user is already paid for":
+   * dropping every repeat reports 24.00 when 48.00 was taken. */
+  SEQ = 0;
+  const cameBack = [
+    r(10, 2, 6, 600, { paid: 24, charged: 25.98 }),
+    r(11, 2, 3, 600, { paidStatus: "PAID" }),
+    r(12, 2, 5, 600, { paid: 12, charged: 12.99 }),
+    r(13, 2, 8, 600, { paid: 12, charged: 12.99 }),
+  ];
+  const k2 = moneyKinds(cameBack);
+  is("only the zero row is on the booking", [k2.get(10), k2.get(11), k2.get(12), k2.get(13)],
+    ["paid", "on-booking", "paid", "paid"]);
+  is("ALL FOUR ROWS ADD UP — 48.00, which is what was charged", sumMoney(cameBack).booked, 48);
+  /* THE CONTROL: what dropping every repeat would have reported. */
+  const firstOnly = cameBack.filter((x, i) => i === 0);
+  is("control: keeping only the first row would have reported 24.00", sumMoney(firstOnly).booked, 24);
+
+  /* A COMPED ROW IS NOT A SHARED ONE. Both are zero; only one of them rode in on somebody's card. */
+  SEQ = 0;
+  const comped = [r(20, 1, 1, 700, { paidStatus: "FREE" }), r(21, 1, 2, 701, { paid: 12 })];
+  is("a member playing free reads free, not 'on the booking'", moneyKinds(comped).get(20), "free");
+  is("a fake row is neither", moneyKinds([r(30, 1, 1, 800, { fake: true })]).get(30), "fake");
+
+  /* NOTHING IS DERIVED. Production row 310694 on match 19104 is paid 8.00, credit 0.66, charged
+   * 7.95 — 8.00 minus 0.66 is not 7.95, because the card fee is inside `charged` and not inside
+   * `paid`. Each figure is a sum of its own column and the panel says they will not reconcile. */
+  const odd = [r(40, 1, 1, 900, { paid: 8, credit: 0.66, charged: 7.95 })];
+  const sum = sumMoney(odd);
+  is("all three are carried as they came", [sum.booked, sum.credit, sum.charged], [8, 0.66, 7.95]);
+  is("…and booked minus credit is NOT charged, which is why neither is computed from the other",
+    Math.abs((sum.booked - sum.credit) - sum.charged) > 0.001, true);
+
+  SEQ = 0;
+  const twoTeams = [r(50, 1, 1, 1000, { paid: 12 }), r(51, 1, 2, 1001, { paid: 12 }), r(52, 2, 1, 1002, { paid: 15 })];
+  is("a team total is its own rows", [teamMoney(twoTeams, 1).booked, teamMoney(twoTeams, 2).booked], [24, 15]);
+  is("…and the teams add to the match", teamMoney(twoTeams, 1).booked + teamMoney(twoTeams, 2).booked, sumMoney(twoTeams).booked);
+  /* Every value reaching this came from Math.round(cents)/100, so it is already exact to the cent
+   * — a half-cent input like 285.775 is not a case that can occur and is not asserted here. */
+  is("money formats to the cent", [usd(0), usd(12), usd(0.66), usd(285.78)], ["$0.00", "$12.00", "$0.66", "$285.78"]);
+}
+
+console.log("\nthe route carries the money it was already receiving");
+{
+  const src = readFileSync("src/app/api/matchday/[env]/roster/[matchId]/route.ts", "utf8");
+  for (const f of ["amount", "totalAmount", "creditAmount", "paidStatus"]) {
+    yes(`the Row type now lists ${f}`, new RegExp(`${f}\\??:`).test(src), f);
+  }
+  yes("cents become dollars in exactly one helper", /const dollars = \(v: unknown\) => Math\.round/.test(src));
+  is("…used for all three figures and nothing else", (src.match(/dollars\(p\./g) ?? []).length, 3);
+  /* centsToDollars RETURNS A STRING. Using it here would have made the panel add "12.00" + "8.00"
+   * into "12.008.00" — the totals would have looked like a formatting bug rather than a money one. */
+  yes("the string formatter is NOT called here — only named in the comment saying why",
+    !/centsToDollars\(/.test(src));
+  yes("no figure is computed from the others", !/paid\s*-\s*credit|booked\s*-\s*credit|amount\s*-\s*creditAmount/.test(src));
+  /* NO NEW REQUEST. The money arrives on the roster call this route already makes; the endpoints
+   * it talks to are the same four as before (the last two are the POST handler's read-backs). */
+  const endpoints = [...new Set([...src.matchAll(/apiGet<[^(]*\(\s*env,\s*`([^`]+)`/g)].map((m) => m[1]))];
+  is("the endpoints this route calls are unchanged", endpoints.sort(), [
+    "/admin/matches/${M}", "/admin/matches/${M}/players",
+    "/admin/matches/${matchId}", "/admin/matches/${matchId}/players",
+    "/admin/players",                                  // the search-to-add dropdown, unrelated
+    "/admin/promocodes/${pid}",
+  ].sort());
+  yes(`control: ${endpoints.length} endpoints were actually read out of the source`, endpoints.length === 6);
 }
 
 console.log("\nthe recipient resolver: the list narrows and cannot widen");
@@ -184,6 +266,22 @@ console.log("\nthe panel");
   yes("no select-all on this panel", !/mp-sel-all|Select all|selectAll/.test(v));
   yes("no text-everyone shortcut", !/Text everyone|notify everyone/i.test(v));
   yes("no saved recipient groups", !/recipientGroup|savedGroup/i.test(v));
+
+  /* THE MONEY COLUMN. */
+  yes("every row has a money cell", /data-testid=\{`mp-money-\$\{p\.umId\}`\}/.test(v));
+  yes("…and it is never blank: a fake says a dash, a shared spot says so, everyone else gets a figure",
+    /mp-mnone/.test(v) && /on the booking/.test(v) && /usd\(\(p as PlayerRow\)\.paid/.test(v));
+  yes("the credit is a second line, shown only when there is credit", /\(\(p as PlayerRow\)\.credit \?\? 0\) > 0/.test(v));
+  yes("the team header carries its own total", /teamMoney\(origin\.rows, t\.teamNumber\)/.test(v));
+  yes("the match line names all three sums", /mp-money-booked/.test(v) && /mp-money-charged/.test(v) && /mp-money-credit/.test(v));
+  yes("…and says out loud what it leaves out", /will not reconcile to the cent/.test(v) && /hidden row/.test(v));
+  yes("the money column is right-aligned and tabular", /\.mp-pmoney\{display:flex;flex-direction:column;align-items:flex-end/.test(v));
+  yes("…and on a phone it takes its own line with the credit beside the amount",
+    /grid-template-areas:"ck spot name" "\. money money" "\. kind acts"/.test(v) && /\.mp-pmoney\{grid-area:money;flex-direction:row/.test(v));
+  /* THIS PANEL MUST NOT BECOME A WAY TO MOVE MONEY. */
+  /* Narrowly on ACTIONS. "refunded" appears as a read-only count of hidden rows and always did. */
+  yes("nothing here charges, refunds or credits",
+    !/createRefund|refundPlayer|adjustCredit|createPaymentIntent|method: "POST"[^\n]*(refund|credit)/i.test(v));
 }
 
 console.log(`\nroster-panel: ${pass} passed, ${fails.length} failed`);

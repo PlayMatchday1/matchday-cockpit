@@ -40,7 +40,7 @@ import {
 import {
   emptyPending, normalizePending, pendingCount, sortedTeam, spotsOfTeam, planMove,
   savePlan, clearApplied, teamCountWrites, teamShapeError,
-  playerKinds, teamMemberCount, textsForSelection,
+  playerKinds, teamMemberCount, textsForSelection, moneyKinds, teamMoney, sumMoney, usd, usdPlain,
   type Pending, type RosterOrigin, type EditRow, type PlannedWrite, type PlayerKind,
 } from "@/lib/rosterEditModel";
 import { TEMPLATE_LABELS, buildTemplateBody, smsSegments, unfilledTokens } from "@/lib/matchNotify";
@@ -80,7 +80,7 @@ const LABELS: Record<string, string> = {
 type Manager = { id: number; name: string };
 type FieldRow = { id: number; title: string; city: string | null };
 type TeamRow = { id: number; teamNumber: number; name: string; locked: boolean };
-type PlayerRow = { umId: number; playerId: number; team: number; playerNumber: number | null; name: string; phone: string | null; fake: boolean; promoCode?: string | null; email?: string | null; member?: boolean };
+type PlayerRow = { umId: number; playerId: number; team: number; playerNumber: number | null; name: string; phone: string | null; fake: boolean; promoCode?: string | null; email?: string | null; member?: boolean; paid?: number; charged?: number; credit?: number; paidStatus?: string | null };
 type RosterState = { name: string; teams: TeamRow[]; players: PlayerRow[]; shape: { teamN: number; perTeam: number }; maxPlayerCount: number | null; occupancy: number | null; hidden?: { total: number; cancelled: number; unpaid: number; refunded: number }; promo?: { spots: number; codes: string[] }; membershipError?: string | null };
 type MatchData = Record<string, unknown> & {
   type?: string; startDate?: string; endDate?: string; teams?: unknown[];
@@ -309,6 +309,12 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   /* MEMBER · DAILY · GUEST, derived from the roster in front of us. Recomputed whenever it
    * changes, never stored on a person. */
   const kinds = useMemo(() => playerKinds(origin.rows), [origin.rows]);
+  /* THE MONEY. Each figure is a sum of one real column and nothing is derived from another — see
+   * moneyKinds() for why every row's own amount is safe to add up even when one person holds
+   * several spots. */
+  const money = useMemo(() => moneyKinds(origin.rows), [origin.rows]);
+  const matchMoney = useMemo(() => sumMoney(origin.rows), [origin.rows]);
+
   /* THE TEMPLATE'S MATCH FACTS. startDate is WALL CLOCK carrying a Z it does not mean, so it is
    * split with parseWall and printed as text — never re-parsed with a Date, which would shift a
    * 7pm match into the next day and put the wrong date in a text to real players. */
@@ -1310,6 +1316,11 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                           {teamMemberCount(origin.rows, t.teamNumber)} member{teamMemberCount(origin.rows, t.teamNumber) === 1 ? "" : "s"}
                         </span>
                         <span className="mp-teamcap">{live.length}{roster.shape?.perTeam ? `/${roster.shape.perTeam}` : ""}</span>
+                        {/* THE TEAM'S OWN ROWS, ADDED UP. */}
+                        <span className="mp-teammoney" data-testid={`mp-teammoney-${t.teamNumber}`}
+                          data-booked={usdPlain(teamMoney(origin.rows, t.teamNumber).booked)}>
+                          {usd(teamMoney(origin.rows, t.teamNumber).booked)}
+                        </span>
                       </div>
                       <div className="mp-renamerow">
                         <input data-testid={`mp-tname-${t.teamNumber}`} className={"mp-tnameinput" + (renamePending ? " mp-chg" : "")} value={draft}
@@ -1356,6 +1367,26 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                                 : kinds.get(p.umId) === "guest" ? <span className="mp-kguest">Guest</span>
                                 : <span className="mp-kdaily">Daily</span>}
                             </span>
+                            {/* COLUMN 5 — THE MONEY, right-aligned, tabular. The credit sits on a
+                                second line INSIDE the height the name and phone already set, so a
+                                row where credit was used is exactly as tall as one where it was
+                                not. Nothing here is ever blank: a blank cell reads as missing data,
+                                so a fake row says "—" and a comped one says $0.00. */}
+                            <span className="mp-pmoney" data-testid={`mp-money-${p.umId}`}
+                              data-paid={(p as PlayerRow).paid ?? 0} data-credit={(p as PlayerRow).credit ?? 0}
+                              data-kind={money.get(p.umId) ?? "paid"}>
+                              {money.get(p.umId) === "fake"
+                                ? <b className="mp-mnone">&mdash;</b>
+                                : money.get(p.umId) === "on-booking"
+                                  ? <b className="mp-monbook" title={`Paid for on another spot in ${p.name}'s booking — this row was not charged separately`}>on the booking</b>
+                                  : <b>{usd((p as PlayerRow).paid ?? 0)}</b>}
+                              {((p as PlayerRow).credit ?? 0) > 0 && (
+                                <em className="mp-mcredit" data-testid={`mp-credit-${p.umId}`}
+                                  title="How much of this spot came off the player's credit balance">
+                                  {usd((p as PlayerRow).credit ?? 0)} credit
+                                </em>
+                              )}
+                            </span>
                             <span className="mp-pacts">
                               {collision && <span className="mp-clashtag" data-testid="mp-collision">SAME SPOT</span>}
                               {/* COPY EMAIL — an icon, because the words written out eighteen times
@@ -1366,7 +1397,10 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                                 ? <button type="button" className="mp-icon" data-testid={`mp-copy-${p.umId}`}
                                     title={(p as PlayerRow).email ?? ""} aria-label={`Copy email for ${p.name}`}
                                     onClick={() => void copyEmail(p as PlayerRow)}>{copied === p.umId ? "\u2713" : "\u2709"}</button>
-                                : <span className="mp-ckhole" aria-hidden="true" />}
+                                /* THE SPACER MUST BE THE SIZE OF THE BUTTON IT REPLACES. An 18px
+                                   hole where a 32px icon would be made every fake row 6px shorter
+                                   than every real one — measured on match 18477, spread 48 vs 54. */
+                                : <span className="mp-iconhole" aria-hidden="true" />}
                               {removed ? <span className="mp-pendtag rm" data-testid="mp-pending-remove">REMOVING</span>
                                : moved && <span className="mp-pendtag" data-testid="mp-pending-move">MOVING</span>}
                               {/* ONE move control at ANY team count. Four teams used to mean three
@@ -1418,6 +1452,23 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                   );
                 })}
               </div>
+
+              {/* ── THE MATCH LINE ──────────────────────────────────────────────────────────────
+                  THREE SUMS, EACH OF ONE REAL COLUMN, and it says out loud what it leaves out.
+                  "booked" is the spot price before the card fee; "on cards" is what Stripe actually
+                  took, fee included. They do not reconcile to the cent and this line does not
+                  pretend otherwise — a figure an operator cannot find on a statement is worse than
+                  no figure. */}
+              <p className="mp-matchmoney" data-testid="mp-matchmoney"
+                data-booked={usdPlain(matchMoney.booked)} data-charged={usdPlain(matchMoney.charged)} data-credit={usdPlain(matchMoney.credit)}>
+                <b data-testid="mp-money-booked">{usd(matchMoney.booked)} booked</b>
+                <span> &middot; <b data-testid="mp-money-charged">{usd(matchMoney.charged)}</b> on cards, card fee included</span>
+                <span> &middot; <b data-testid="mp-money-credit">{usd(matchMoney.credit)}</b> on credit</span>
+                <em>
+                  {" "}Booked is the spot price before the fee, so the first two will not reconcile to the cent.
+                  {roster.hidden?.total ? ` The ${roster.hidden.total} hidden row${roster.hidden.total === 1 ? "" : "s"} above are not counted.` : ""}
+                </em>
+              </p>
 
               {/* THE LEGEND, once under the board — the two glyphs on every row are named here
                   rather than eighteen times in the rows themselves. */}
@@ -1813,9 +1864,18 @@ const CSS = `
    pick · spot · name+phone · kind · actions. FIXED is the point: the kind chips line up into a
    stripe you can read down the team without reading a single word, and that column is the whole
    feature. The row was flex-wrap, which put the chip wherever it happened to land. */
-.mp-player{display:grid;grid-template-columns:20px 20px minmax(0,1fr) 62px auto;align-items:center;gap:7px;flex-wrap:nowrap}
-.mp-ck{width:18px;height:18px;margin:0;accent-color:#2f6fd0;cursor:pointer;flex:0 0 auto}
-.mp-ckhole{display:block;width:18px;height:18px}
+.mp-player{display:grid;grid-template-columns:20px 20px minmax(0,1fr) 62px 74px auto;align-items:center;gap:7px;flex-wrap:nowrap}
+/* THE CHECKBOX MUST BEAT THE .mp input RULE, WHICH SETS min-height:40px. NO BACKTICKS IN HERE: this
+   stylesheet is a template literal and one backtick in a comment ends the string. This file already
+   documents that same input rule
+   rule blowing a checkbox to 541x40 in the SPOTS section; here it did something quieter and worse —
+   the box measured 20 wide and 40 TALL, so the checkbox, not the content, was setting the height of
+   every real row, and a fake row (which has a spacer instead) came out 6px shorter. Measured on
+   match 18477: real rows 54px, fake rows 48px. The spacer matches the control exactly. */
+/* .mp input is (class + type); a bare .mp-ck is one class and LOSES to it. Qualified so it wins. */
+.mp input.mp-ck{width:20px;height:20px;min-height:20px;padding:0;margin:0;accent-color:#2f6fd0;cursor:pointer;flex:0 0 auto}
+.mp-ckhole{display:block;width:20px;height:20px}
+.mp-iconhole{display:block;width:32px;height:32px;flex:0 0 auto}
 /* SELECTION IS BLUE, MEMBERSHIP IS GREEN. Tinting a selected row in the brand green made a
    selected daily player read as a member. */
 .mp-player:has(.mp-ck:checked){background:#eef4fd;border-color:#a8c4ea;box-shadow:inset 3px 0 0 #2f6fd0}
@@ -1836,6 +1896,17 @@ const CSS = `
 .mp-icon{border:1px solid var(--line2);background:#fff;border-radius:7px;width:32px;min-height:32px;font-size:13px;line-height:1;color:var(--ink2);cursor:pointer;flex:0 0 auto;padding:0}
 .mp-icon.danger{color:var(--red);border-color:#e6b7b0}
 .mp-icon:hover{background:#f4f7f5}
+/* ── THE MONEY COLUMN. Right-aligned and tabular so a column of figures reads down as a column.
+      The credit is a second line, which costs NOTHING in height: the name cell beside it is already
+      two lines (name + phone), so the row's height is set there and a credit line fits inside it. */
+.mp-pmoney{display:flex;flex-direction:column;align-items:flex-end;justify-self:end;line-height:1.25;font-variant-numeric:tabular-nums;white-space:nowrap}
+.mp-pmoney b{font-size:12px;font-weight:700}
+.mp-mcredit{font-style:normal;font-size:10px;color:#2f6fd0}
+.mp-monbook{font-size:10px;font-weight:600;color:var(--ink3)}
+.mp-mnone{color:var(--ink3);font-weight:600}
+.mp-teammoney{font-size:10px;font-weight:800;color:var(--ink2);font-variant-numeric:tabular-nums;padding-left:6px}
+.mp-matchmoney{margin:10px 0 0;font-size:12px;color:var(--ink2);font-variant-numeric:tabular-nums}
+.mp-matchmoney em{display:block;font-style:normal;font-size:11px;color:var(--ink3);margin-top:2px}
 .mp-teammem{font-size:10px;font-weight:800;color:#1f7a4d;letter-spacing:.02em;margin-left:auto;padding-right:6px}
 .mp-legend{margin:8px 0 0;font-size:11px;color:var(--ink3);display:flex;align-items:center;gap:3px;flex-wrap:wrap}
 .mp-memerr{color:#8a5d10}
@@ -1861,12 +1932,20 @@ const CSS = `
       the name 44px, so every name truncated to two letters. The KIND CHIP IS NOT DROPPED: which of
       these people is a member is what the panel is for. */
 @media (max-width:560px){
-  .mp-player{grid-template-columns:20px 20px minmax(0,1fr);grid-template-areas:"ck spot name" ". kind acts";row-gap:5px}
+  /* THE MONEY TAKES ITS OWN FULL-WIDTH LINE, above the chip and the actions. Squeezed into the
+     shared line it wrapped onto a fourth row; given the width it reads in one, with the credit
+     BESIDE the amount rather than under it. */
+  .mp-player{grid-template-columns:20px 20px minmax(0,1fr);grid-template-areas:"ck spot name" ". money money" ". kind acts";row-gap:5px}
   .mp-player .mp-ck,.mp-player .mp-ckhole:first-child{grid-area:ck}
   .mp-pnum{grid-area:spot}
   .mp-pident{grid-area:name}
+  .mp-pmoney{grid-area:money;flex-direction:row;align-items:baseline;justify-self:start;gap:7px}
   .mp-pkind{grid-area:kind}
   .mp-pacts{grid-area:acts;justify-self:end}
+  /* A THUMB, NOT A CURSOR. The row is taller here, so the box can be too without making the grid
+     ragged — the spacer grows with it. */
+  .mp input.mp-ck{width:26px;height:26px;min-height:26px}
+  .mp-ckhole{width:26px;height:26px}
 }
 .mp-pendtag{font-size:9px;font-weight:800;letter-spacing:.06em;background:#e7f3ea;color:#14512f;border:1px solid #a9d3ba;border-radius:4px;padding:2px 5px}
 .mp-pendtag.rm{background:#fbeeec;color:#8a2018;border-color:#e6b7b0}

@@ -25,7 +25,8 @@ const row = (umId: number, team: number, playerNumber: number | null, name: stri
   /* ITEMISED: EditRow gained playerId, member and email. The factory defaults playerId to the umId,
    * so every fixture below keeps one row per person and the existing assertions are unchanged —
    * a shared playerId is what makes a guest, and no fixture here was ever testing that. */
-  ({ umId, team, playerNumber, name, phone, fake, playerId: umId, member: false, email: null });
+  ({ umId, team, playerNumber, name, phone, fake, playerId: umId, member: false, email: null,
+     paid: 0, charged: 0, credit: 0, paidStatus: null });
 
 // A 2-team match whose API order is deliberately shuffled — the real shape measured on production,
 // where 55 of 95 teams came back out of order.

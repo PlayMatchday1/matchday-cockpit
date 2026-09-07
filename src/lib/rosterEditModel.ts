@@ -43,6 +43,18 @@ export type EditRow = {
    * with an ACTIVE subscription a non-member. */
   member: boolean;
   email: string | null;
+  /* MONEY, IN DOLLARS — converted once, in the roster route, from the cents the API returns.
+   *   paid    `amount`       the spot price on this row, before the card fee
+   *   charged `totalAmount`  what Stripe took, INCLUDING the card fee
+   *   credit  `creditAmount` how much of it came off the player's credit balance
+   * THE THREE DO NOT RECONCILE TO THE CENT and nothing here derives one from another — the
+   * codebase describes the relationship in two places that disagree about the fee, and a real row
+   * settles it against both: match 19104 has paid 8.00, credit 0.66, charged 7.95. */
+  paid: number;
+  charged: number;
+  credit: number;
+  /** The API's own word: PAID, FREE, WAITING. It is what separates a comped row from a shared one. */
+  paidStatus: string | null;
 };
 
 /* ── THE THREE KINDS ──────────────────────────────────────────────────────────────────────────
@@ -75,6 +87,55 @@ export function playerKinds(rows: EditRow[]): Map<number, PlayerKind> {
   }
   return out;
 }
+
+/* ── WHAT A ROW'S MONEY CELL SAYS ─────────────────────────────────────────────────────────────
+ * `on-booking` is the row that was paid for on ANOTHER row of the same person's booking. It is not
+ * the same thing as a comped row, and both are zero, so zero alone cannot tell them apart:
+ * the API marks a shared spot PAID with no payment intent, and a comped one FREE.
+ *
+ * THE MONEY BELONGS TO THE ROW, AND THE ROW'S OWN AMOUNT IS ALWAYS SAFE TO ADD UP. Measured on
+ * production: user 89343 on match 18281 booked two spots on ONE charge and the API put 24.00 on the
+ * first row and 0 on the second — but user 74713 on match 18343 has FOUR rows and THREE payment
+ * intents, 24.00 + 0 + 12.00 + 12.00, because they came back and booked again. Treating every
+ * repeat as "already paid for on the booking" and dropping it from the total would report that
+ * match 24.00 when 48.00 was taken. The API never puts the same money on two rows, so summing every
+ * row's own amount is both safe and the only correct rule. */
+export type MoneyKind = "paid" | "free" | "on-booking" | "fake";
+
+export function moneyKinds(rows: EditRow[]): Map<number, MoneyKind> {
+  const paying = new Set<number>();
+  for (const r of rows) if (!r.fake && r.paid > 0) paying.add(r.playerId);
+  const out = new Map<number, MoneyKind>();
+  for (const r of [...rows].sort(forKinds)) {
+    if (r.fake) { out.set(r.umId, "fake"); continue; }
+    if (r.paid > 0) { out.set(r.umId, "paid"); continue; }
+    /* Zero, and somebody with this player's id DID pay on this match — so this spot rode in on
+     * that booking rather than being given away. */
+    if (paying.has(r.playerId)) { out.set(r.umId, "on-booking"); continue; }
+    out.set(r.umId, "free");
+  }
+  return out;
+}
+
+/* THE ONE MONEY FORMATTER FOR THIS PANEL, and it lives here rather than in the component on
+ * purpose: money-input-test forbids `toFixed(2)}` inside MatchPanel, because binding a formatted
+ * string into a field's value is the reformat-on-every-keystroke bug that made "9.00" impossible to
+ * edit. These are read-only figures, but the guard is a source check and it is right to be blunt —
+ * so the formatting happens out here and the panel keeps no way to reformat anything. */
+export const usd = (n: number): string => `$${(Math.round(n * 100) / 100).toFixed(2)}`;
+export const usdPlain = (n: number): string => (Math.round(n * 100) / 100).toFixed(2);
+
+export type MoneySum = { booked: number; charged: number; credit: number; rows: number };
+
+/** Adds up the rows given. Every figure is a sum of one real column; none is derived from another. */
+export const sumMoney = (rows: EditRow[]): MoneySum => rows.reduce(
+  (a, r) => ({ booked: a.booked + r.paid, charged: a.charged + r.charged, credit: a.credit + r.credit, rows: a.rows + 1 }),
+  { booked: 0, charged: 0, credit: 0, rows: 0 },
+);
+
+/** One team's own rows, added up. */
+export const teamMoney = (rows: EditRow[], teamNumber: number): MoneySum =>
+  sumMoney(rows.filter((r) => r.team === teamNumber));
 
 /** How many of one team's own rows are members. Counted from the rows, never passed in. */
 export const teamMemberCount = (rows: EditRow[], teamNumber: number): number => {
