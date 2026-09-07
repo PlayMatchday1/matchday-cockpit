@@ -137,6 +137,60 @@ export const sumMoney = (rows: EditRow[]): MoneySum => rows.reduce(
 export const teamMoney = (rows: EditRow[], teamNumber: number): MoneySum =>
   sumMoney(rows.filter((r) => r.team === teamNumber));
 
+/* ── THE REARRANGE BOARD'S VIEW OF THE ROSTER ─────────────────────────────────────────────────
+ * One entry per SLOT — every spot on every team, occupied or not — read through the pending plan,
+ * so the board draws where everyone WILL be rather than where the server last said they were.
+ *
+ * A SLOT IS THE UNIT, NOT A PLAYER. An empty slot is a drop target and has to exist in the model to
+ * be one, and a player holding three spots (Patrick Ndayirata on match 18969) occupies three slots
+ * and is drawn three times. */
+export type BoardSlot = { team: number; spot: number; row: EditRow | null; moved: boolean; removed: boolean };
+
+export function boardSlots(origin: RosterOrigin, p: Pending, perTeam: number): BoardSlot[] {
+  const out: BoardSlot[] = [];
+  for (const t of origin.teams) {
+    const here = sortedTeam(origin, p, t.teamNumber);
+    for (let spot = 1; spot <= Math.max(perTeam, 0); spot++) {
+      const s = here.find((x) => x.spot === spot && !x.removed);
+      out.push({ team: t.teamNumber, spot, row: s?.row ?? null, moved: s?.moved ?? false, removed: s?.removed ?? false });
+    }
+  }
+  return out;
+}
+
+/** How full each team is once the pending plan is applied — the header's own count. */
+export const boardTeamFill = (origin: RosterOrigin, p: Pending): Map<number, number> => {
+  const m = new Map<number, number>();
+  for (const t of origin.teams) m.set(t.teamNumber, sortedTeam(origin, p, t.teamNumber).filter((s) => !s.removed).length);
+  return m;
+};
+
+/* WHAT A DROP WOULD DO, as a sentence, computed without performing it — so the hint can be read
+ * and tested without a gesture. An occupied spot is a SWAP and the person you displace goes to the
+ * place you came from, which the hint names because it is often another team entirely. */
+export function dropHint(origin: RosterOrigin, p: Pending, mover: EditRow, toTeam: number, toSpot: number): string {
+  const teamName = (n: number) => origin.teams.find((t) => t.teamNumber === n)?.name ?? `Team ${n}`;
+  const occupant = sortedTeam(origin, p, toTeam).find((s) => s.spot === toSpot && !s.removed && s.row.umId !== mover.umId)?.row;
+  if (!occupant) return `to ${teamName(toTeam)} ${toSpot}`;
+  const from = effectiveRow(mover, p, origin);
+  return `swap with ${occupant.name} → ${teamName(from.team)} ${from.playerNumber ?? toSpot}`;
+}
+
+/* WHAT THE GESTURE WAS, in the operator's words. ONE swap is ONE gesture and TWO writes, and the
+ * two lists are shown separately because collapsing them made a pair of swaps read as a four-step
+ * rotation nobody performed. */
+export type Gesture = { text: string; writes: number };
+
+export function gestureFor(origin: RosterOrigin, p: Pending, mover: EditRow, toTeam: number, toSpot: number): Gesture {
+  const teamName = (n: number) => origin.teams.find((t) => t.teamNumber === n)?.name ?? `Team ${n}`;
+  const occupant = sortedTeam(origin, p, toTeam).find((s) => s.spot === toSpot && !s.removed && s.row.umId !== mover.umId)?.row;
+  return occupant
+    ? { text: `Swap ${mover.name} and ${occupant.name}`, writes: 2 }
+    /* THE DESTINATION RECORDED AT THE TIME, not where the player ends up later: move somebody
+     * twice and the first line must still say where the first drop put them. */
+    : { text: `Move ${mover.name} to ${teamName(toTeam)} ${toSpot}`, writes: 1 };
+}
+
 /* WHAT THE ROSTER IS MADE OF, counted in SPOTS rather than people. A player holding two spots is
  * counted twice, because the line describes the field and not the address book — which is the
  * opposite of the text count beside it, where two spots on one phone is one message. The two

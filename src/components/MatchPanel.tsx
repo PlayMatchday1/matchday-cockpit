@@ -22,7 +22,7 @@
 // one shared engine, so they can never disagree about what is sent (that is the whole point of the
 // model; never re-implement it).
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCancelMatch, cancelStakes } from "@/lib/useCancelMatch";
 import MoneyInput from "@/components/MoneyInput";
 import { useAuth } from "@/lib/useAuth";
@@ -38,9 +38,10 @@ import {
   CAN_UNASSIGN_MANAGER_FROM_MATCH, UNASSIGN_PROOF,
 } from "@/lib/managerAssign";
 import {
-  emptyPending, normalizePending, pendingCount, sortedTeam, spotsOfTeam, planMove,
+  emptyPending, normalizePending, pendingCount, sortedTeam, spotsOfTeam, planMove, effectiveRow,
   savePlan, clearApplied, teamCountWrites, teamShapeError,
-  playerKinds, teamMemberCount, textsForSelection, moneyKinds, teamMoney, sumMoney, rosterCounts, usd, usdPlain,
+  playerKinds, teamMemberCount, textsForSelection, moneyKinds, teamMoney, sumMoney, rosterCounts,
+  boardSlots, boardTeamFill, dropHint, gestureFor, usd, usdPlain,
   type Pending, type RosterOrigin, type EditRow, type PlannedWrite, type PlayerKind,
 } from "@/lib/rosterEditModel";
 import { TEMPLATE_LABELS, buildTemplateBody, smsSegments, unfilledTokens } from "@/lib/matchNotify";
@@ -315,6 +316,98 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   const money = useMemo(() => moneyKinds(origin.rows), [origin.rows]);
   const matchMoney = useMemo(() => sumMoney(origin.rows), [origin.rows]);
   const counts = useMemo(() => rosterCounts(origin.rows), [origin.rows]);
+
+  /* ── REARRANGE ────────────────────────────────────────────────────────────────────────────────
+   * A separate full-window mode, not a second life for the roster row. That row already carries a
+   * checkbox, a spot, a name, a phone, a badge, money and three controls; it cannot also be a drag
+   * card, and four teams of nine need four columns of ~350px, which the drawer does not have.
+   *
+   * IT SHARES THIS COMPONENT'S PLAN. `pending` is the same object the Move button stages into, so
+   * opening the board, dropping, closing it and saving from the panel is one plan throughout — and
+   * so is the reverse. Nothing here writes; Save does, in savePlan's order, as it always did. */
+  const [rearrange, setRearrange] = useState(false);
+  /* WHAT YOU DID, beside what Save sends. A swap is one gesture and two writes; showing only the
+   * writes made a pair of swaps read as a rotation nobody performed. Each entry carries the WHOLE
+   * pending state from before it, because Step back must put both halves of a swap back at once. */
+  const [gestures, setGestures] = useState<{ text: string; writes: number; before: Pending }[]>([]);
+  const [boardPick, setBoardPick] = useState<{ umId: number; team: number | null } | null>(null);
+  const [dragUm, setDragUm] = useState<number | null>(null);
+  const [over, setOver] = useState<{ team: number; spot: number } | null>(null);
+  const dragRef = useRef<{ umId: number; dx: number; dy: number } | null>(null);
+  const ghostRef = useRef<HTMLDivElement | null>(null);
+
+  const perTeam = roster?.shape?.perTeam || 0;
+  const slots = useMemo(() => boardSlots(origin, pending, perTeam), [origin, pending, perTeam]);
+  const fill = useMemo(() => boardTeamFill(origin, pending), [origin, pending]);
+  const uneven = useMemo(() => new Set(fill.values()).size > 1, [fill]);
+  const rowByUm = useMemo(() => new Map(origin.rows.map((r) => [r.umId, r])), [origin.rows]);
+  /* WHO IS HOLDING MORE THAN ONE SPOT ON THIS MATCH — the blue tick. Same derivation as the
+   * panel's guest badge, from the repeated player id, never stored on a person. */
+  const multi = useMemo(() => {
+    const seen = new Map<number, number>();
+    for (const r of origin.rows) seen.set(r.playerId, (seen.get(r.playerId) ?? 0) + 1);
+    return new Set([...seen].filter(([, n]) => n > 1).map(([id]) => id));
+  }, [origin.rows]);
+
+  /* ONE PLACE WHERE A DROP HAPPENS, so the gesture list and the plan can never disagree about what
+   * was done. planMove is the panel's own — an occupied spot swaps, an empty one does not. */
+  const dropOn = (mover: EditRow, toTeam: number, toSpot: number) => {
+    const eff = effectiveRow(mover, pending, origin);
+    if (eff.team === toTeam && eff.playerNumber === toSpot) return;
+    const g = gestureFor(origin, pending, mover, toTeam, toSpot);
+    const before = pending;
+    const next = planMove(pending, origin, mover, toTeam, toSpot);
+    setPending(next);
+    /* A SEQUENCE THAT PUTS EVERYONE HOME LEAVES NOTHING PENDING. Swap two players and swap them
+     * back and the honest count is zero, not two — so the gesture list empties with the plan. */
+    setGestures((prev) => (pendingCount(next, origin) === 0 ? [] : [...prev, { ...g, before }]));
+    setBoardPick(null);
+  };
+  /* STEP BACK, NOT UNDO-ANY. Swaps chain, so undoing a middle one would put somebody where a later
+   * swap has already moved someone else. Only the most recent gesture comes off, both halves at
+   * once, by restoring the plan exactly as it was before it. */
+  const stepBack = () => {
+    setGestures((prev) => {
+      const last = prev[prev.length - 1];
+      if (!last) return prev;
+      setPending(last.before);
+      return pendingCount(last.before, origin) === 0 ? [] : prev.slice(0, -1);
+    });
+  };
+
+  const onGrab = (e: React.PointerEvent<HTMLDivElement>, umId: number) => {
+    /* A PRESS ON A CONTROL IS NOT A DRAG. Move sits inside the card, so without this the card is
+     * picked up and the button never fires. */
+    if ((e.target as HTMLElement).closest("button")) return;
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    const el = e.currentTarget as HTMLElement;
+    const r = el.getBoundingClientRect();
+    dragRef.current = { umId, dx: e.clientX - r.left, dy: e.clientY - r.top };
+    setDragUm(umId);
+    if (ghostRef.current) {
+      ghostRef.current.style.width = `${r.width}px`;
+      ghostRef.current.style.transform = `translate(${r.left}px, ${r.top}px)`;
+    }
+    el.setPointerCapture?.(e.pointerId);
+    e.preventDefault();
+  };
+  const onDragMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current; if (!d) return;
+    if (ghostRef.current) ghostRef.current.style.transform = `translate(${e.clientX - d.dx}px, ${e.clientY - d.dy}px)`;
+    /* elementFromPoint, with the ghost pointer-events:none so it never finds itself. */
+    const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+    const slot = el?.closest<HTMLElement>("[data-slot-team]");
+    const next = slot ? { team: Number(slot.dataset.slotTeam), spot: Number(slot.dataset.slotSpot) } : null;
+    setOver((cur) => (cur?.team === next?.team && cur?.spot === next?.spot ? cur : next));
+  };
+  const onDrop = () => {
+    const d = dragRef.current; dragRef.current = null;
+    const target = over;
+    setDragUm(null); setOver(null);
+    if (!d || !target) return;
+    const mover = rowByUm.get(d.umId);
+    if (mover) dropOn(mover, target.team, target.spot);
+  };
 
   /* THE TEMPLATE'S MATCH FACTS. startDate is WALL CLOCK carrying a Z it does not mean, so it is
    * split with parseWall and printed as text — never re-parsed with a Date, which would shift a
@@ -1484,6 +1577,13 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 {" \u00b7 "}<b data-testid="mp-count-guests">{counts.guests}</b> guest{counts.guests === 1 ? "" : "s"}
               </p>
 
+              {/* THE WAY IN. Rearrange is a mode, not a panel section — it needs the window. */}
+              <p className="mp-rearrange-open">
+                <button type="button" className="mp-mini" data-testid="mp-rearrange-open"
+                  onClick={() => setRearrange(true)}>{"Rearrange teams\u2026"}</button>
+                <span>Drag players between teams on a full-width board. Stages the same plan; Save still sends it.</span>
+              </p>
+
               {/* THE ICON KEY IS GONE. The membership-read failure was living inside it and is NOT
                   an explainer — without it every row quietly reads Daily when the query failed —
                   so it keeps its own line and appears only when there is something to say. */}
@@ -1575,6 +1675,155 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 </div>
               )}
               {smsMsg && <div className={"mp-note " + (smsMsg.bad ? "warn" : "info")} data-testid="mp-sms-msg">{smsMsg.text}</div>}
+
+              {/* ── THE REARRANGE BOARD ──────────────────────────────────────────────────────────
+                  A full-WINDOW overlay, because the page's own content column is 1276px at a 1600px
+                  window and four columns of that are 310px each. Over the window they are 381px,
+                  which is what a grip, a spot, a 30-character name, a phone and a Move button need.
+                  Under 1280px it is not drawn at all — dragging across four columns on a narrow
+                  screen is not worth having, and the Move picker below does the same job. */}
+              {rearrange && (
+                <div className="mp-rear" data-testid="mp-rearrange" role="dialog" aria-label="Rearrange teams">
+                  <div className="mp-rear-bar">
+                    <b>{"Rearrange \u2014 "}{roster.name}</b>
+                    <span className="mp-rear-sub" data-testid="mp-rear-sub">
+                      {pendingN === 0 ? "No changes" : `${gestures.length || pendingN} change${(gestures.length || pendingN) === 1 ? "" : "s"} pending`}
+                      {" \u00b7 "}{savePlan(pending, origin).length} write{savePlan(pending, origin).length === 1 ? "" : "s"}
+                      {" \u00b7 "}{[...fill.values()].join(" and ")}{uneven ? ", uneven" : ", even"}
+                    </span>
+                    <button type="button" className="mp-mini" data-testid="mp-rear-close"
+                      onClick={() => { setRearrange(false); setBoardPick(null); }}>Back to the panel</button>
+                  </div>
+
+                  {/* THE BOARD. Below the breakpoint this whole grid is display:none and only the
+                      Move picker remains, which is the phone and keyboard path anyway. */}
+                  <div className="mp-rear-board" data-testid="mp-rear-board" data-teams={roster.teams.length}>
+                    {roster.teams.map((t) => (
+                      <section className="mp-rear-col" key={t.id} data-testid={`mp-rear-col-${t.teamNumber}`}>
+                        <header>
+                          <b>{t.name}</b>
+                          <span className={"mp-rear-fill" + (uneven ? " uneven" : "")} data-testid={`mp-rear-fill-${t.teamNumber}`}
+                            data-count={fill.get(t.teamNumber) ?? 0}>
+                            {fill.get(t.teamNumber) ?? 0} player{(fill.get(t.teamNumber) ?? 0) === 1 ? "" : "s"}{uneven ? " \u00b7 uneven" : ""}
+                          </span>
+                        </header>
+                        <div className="mp-rear-slots">
+                          {slots.filter((sl) => sl.team === t.teamNumber).map((sl) => {
+                            const isOver = over?.team === sl.team && over?.spot === sl.spot;
+                            const mover = dragUm != null ? rowByUm.get(dragUm) : undefined;
+                            return (
+                              <div key={sl.spot} className={"mp-slot" + (sl.row ? "" : " empty") + (isOver ? " tgt" : "")}
+                                data-testid={`mp-slot-${sl.team}-${sl.spot}`} data-slot-team={sl.team} data-slot-spot={sl.spot}
+                                data-occupied={sl.row ? "1" : "0"}>
+                                {sl.row ? (
+                                  <div className={"mp-card" + (sl.moved ? " moved" : "") + (dragUm === sl.row.umId ? " lifted" : "")}
+                                    data-testid={`mp-card-${sl.row.umId}`} data-um={sl.row.umId}
+                                    onPointerDown={(e) => onGrab(e, sl.row!.umId)}
+                                    onPointerMove={onDragMove} onPointerUp={onDrop} onPointerCancel={onDrop}>
+                                    <span className="mp-grip" aria-hidden="true">&#8942;&#8942;</span>
+                                    <span className="mp-slotnum">{sl.spot}</span>
+                                    <span className="mp-cardwho">
+                                      <b>
+                                        {multi.has(sl.row.playerId) && (
+                                          <span className="mp-sharedot" data-testid={`mp-rear-multi-${sl.row.umId}`}
+                                            title={`${sl.row.name} holds more than one spot on this match`} />
+                                        )}
+                                        {sl.row.name}
+                                        {sl.row.fake && <span className="mp-fake-tag" data-testid={`mp-rear-fake-${sl.row.umId}`}>FAKE</span>}
+                                      </b>
+                                      <span>{sl.row.phone ?? (sl.row.fake ? "fake \u2014 no phone" : "no phone on file")}</span>
+                                    </span>
+                                    {/* THE KEYBOARD AND PHONE PATH, kept. It stages exactly what a
+                                        drop stages, through the same dropOn. */}
+                                    <button type="button" className="mp-icon" data-testid={`mp-rear-move-${sl.row.umId}`}
+                                      aria-label={`Move ${sl.row.name} to another team or spot`} title={`Move ${sl.row.name}`}
+                                      onClick={() => setBoardPick((m) => (m?.umId === sl.row!.umId ? null : { umId: sl.row!.umId, team: null }))}>&#8646;</button>
+                                  </div>
+                                ) : (
+                                  <span className="mp-slotempty">{sl.spot} &middot; empty</span>
+                                )}
+                                {/* THE HINT SAYS WHAT THE DROP WILL DO WHILE YOU ARE STILL HOLDING IT,
+                                    naming the person you would displace and where they would land. */}
+                                {isOver && mover && (
+                                  <span className="mp-slothint" data-testid="mp-slot-hint">{dropHint(origin, pending, mover, sl.team, sl.spot)}</span>
+                                )}
+                                {boardPick && sl.row && boardPick.umId === sl.row.umId && (
+                                  <div className="mp-rear-pick" data-testid="mp-rear-pick" data-step={boardPick.team == null ? "team" : "spot"}>{/* eslint-disable-line */}
+                                    {boardPick.team == null ? (
+                                      <>
+                                        <span>Which team?</span>
+                                        {roster.teams.filter((o) => o.teamNumber !== effectiveRow(sl.row!, pending, origin).team).map((o) => {
+                                          const full = (fill.get(o.teamNumber) ?? 0) >= perTeam;
+                                          return (
+                                            <button key={o.id} type="button" className="mp-mini" disabled={full}
+                                              data-testid={`mp-rear-pick-team-${o.teamNumber}`}
+                                              title={full ? `${o.name} is full` : `Move to ${o.name}`}
+                                              onClick={() => setBoardPick({ umId: sl.row!.umId, team: o.teamNumber })}>
+                                              {o.teamNumber} &middot; {o.name} <em>{fill.get(o.teamNumber) ?? 0}/{perTeam}</em>
+                                            </button>
+                                          );
+                                        })}
+                                      </>
+                                    ) : (
+                                      <>
+                                        <span>Which spot on {roster.teams.find((x) => x.teamNumber === boardPick.team)?.name}?</span>
+                                        {spotsOfTeam(origin, pending, boardPick.team, perTeam).map((sp) => (
+                                          <button key={sp.n} type="button" className={"mp-spotbtn" + (sp.who ? " taken" : "")}
+                                            data-testid={`mp-rear-pick-spot-${sp.n}`}
+                                            title={sp.who ? `Swap with ${sp.who.name}` : `Spot ${sp.n} is open`}
+                                            onClick={() => dropOn(sl.row!, boardPick.team!, sp.n)}>{sp.n}</button>
+                                        ))}
+                                        <button type="button" className="mp-x" data-testid="mp-rear-pick-back"
+                                          onClick={() => setBoardPick({ umId: sl.row!.umId, team: null })}>back</button>
+                                      </>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </section>
+                    ))}
+                  </div>
+
+                  {/* TWO LISTS. What you did, and what Save sends — a swap is one of the first and
+                      two of the second, and showing only the writes is what made a pair of swaps
+                      read as a rotation nobody performed. */}
+                  <div className="mp-rear-plan" data-testid="mp-rear-plan">
+                    <div>
+                      <h5>What you did</h5>
+                      {gestures.length === 0
+                        ? <p className="mp-empty" data-testid="mp-rear-nogestures">Nothing yet. Drag a player, or press the move control on a card.</p>
+                        : <ol data-testid="mp-rear-gestures">
+                            {gestures.map((g, i) => (
+                              <li key={i} data-testid="mp-rear-gesture">
+                                <span>{g.text}</span> <u>{g.writes} write{g.writes === 1 ? "" : "s"}</u>
+                                {i === gestures.length - 1 && (
+                                  <button type="button" className="mp-mini" data-testid="mp-rear-stepback" onClick={stepBack}>Step back</button>
+                                )}
+                              </li>
+                            ))}
+                          </ol>}
+                    </div>
+                    <div>
+                      <h5>What Save sends</h5>
+                      {pendingN === 0
+                        ? <p className="mp-empty" data-testid="mp-rear-nowrites">Nothing. Nothing has left this browser.</p>
+                        : <ol data-testid="mp-rear-writes">
+                            {savePlan(pending, origin).map((w, i) => <li key={i} data-testid="mp-rear-write">{w.label}</li>)}
+                          </ol>}
+                      <p className="mp-empty">One write per player, in this order, each with its own verdict. Save and Revert are in the panel behind this board and act on the same plan.</p>
+                    </div>
+                  </div>
+
+                  {/* The dragged card follows the pointer. pointer-events:none so elementFromPoint
+                      never finds the ghost instead of the slot under it. */}
+                  <div className={"mp-ghost" + (dragUm == null ? " off" : "")} ref={ghostRef} data-testid="mp-rear-ghost" aria-hidden="true">
+                    {dragUm != null && rowByUm.get(dragUm)?.name}
+                  </div>
+                </div>
+              )}
             </>}
             </div>
           </Section>
@@ -1935,6 +2184,63 @@ const CSS = `
 .mp-teammoney{font-size:10px;font-weight:800;color:var(--ink2);font-variant-numeric:tabular-nums;padding-left:6px}
 .mp-matchmoney{margin:10px 0 0;font-size:12px;color:var(--ink2);font-variant-numeric:tabular-nums}
 .mp-matchcounts{margin:2px 0 0;font-size:12px;color:var(--ink2);font-variant-numeric:tabular-nums}
+.mp-rearrange-open{margin:10px 0 0;display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:11px;color:var(--ink3)}
+
+/* ── REARRANGE: A FULL-WINDOW MODE ────────────────────────────────────────────────────────────
+   Fixed to the VIEWPORT, not to the panel. Measured on /match-ops/gameday at a 1600px window: the
+   page content column is 1276px, which is 310px per team; the window is 1600, which is 381px. A
+   grip, a spot, a 30-character name, a phone and one control need the second number. z-index sits
+   above the Gameday drawer (60) because it is opened from inside it. */
+.mp-rear{position:fixed;inset:0;z-index:70;background:#f4f7f5;display:flex;flex-direction:column;padding:14px 20px 16px;gap:10px;overflow:hidden}
+.mp-rear-bar{display:flex;align-items:center;gap:12px;flex:0 0 auto}
+.mp-rear-bar b{font-size:15px}
+.mp-rear-sub{font-size:12px;color:var(--ink3);font-variant-numeric:tabular-nums}
+.mp-rear-bar>button{margin-left:auto}
+.mp-rear-board{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:repeat(var(--cols,4),minmax(0,1fr));gap:12px;align-content:start}
+.mp-rear-board[data-teams="2"]{--cols:2}.mp-rear-board[data-teams="3"]{--cols:3}.mp-rear-board[data-teams="4"]{--cols:4}
+.mp-rear-col{border:1px solid var(--line);border-radius:10px;background:#fff;padding:9px;min-width:0;display:flex;flex-direction:column;min-height:0}
+.mp-rear-col header{display:flex;align-items:baseline;gap:8px;margin-bottom:7px}
+.mp-rear-col header b{font-size:14px;font-weight:800}
+.mp-rear-fill{font-size:10px;font-weight:800;color:var(--ink3);margin-left:auto}
+.mp-rear-fill.uneven{color:#8a5d10}
+.mp-rear-slots{display:flex;flex-direction:column;gap:5px;min-height:0;overflow:auto}
+.mp-slot{position:relative;border-radius:9px;min-height:46px;display:flex;align-items:center}
+.mp-slot.empty{border:1px dashed var(--line2);padding:0 11px;color:var(--ink3);font-size:11px}
+.mp-slot.tgt{outline:2px solid #1f7a4d;outline-offset:1px;background:#eaf5ee}
+.mp-slothint{position:absolute;right:9px;top:50%;transform:translateY(-50%);font-size:11px;font-weight:700;color:#1f7a4d;background:#fff;border-radius:6px;padding:2px 6px;pointer-events:none;max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* THE CARD IS STRIPPED: grip, spot, name, phone, the multi-spot tick and a fake marker. No money,
+   no badge, no checkbox, no copy email, no remove — those stay on the panel's row. */
+.mp-card{display:grid;grid-template-columns:20px 16px minmax(0,1fr) auto;gap:8px;align-items:center;width:100%;
+  border:1px solid var(--line);border-radius:9px;background:#fbfdfc;padding:6px 8px;min-height:46px;
+  /* WITHOUT THIS A TOUCH DRAG SCROLLS THE PAGE INSTEAD OF MOVING THE CARD. dragstart does not fire
+     on touch at all, which is why this is pointer events; touch-action is the other half of it. */
+  touch-action:none;cursor:grab;user-select:none}
+.mp-card.moved{border-color:#8fbf9f;background:#f2fbf5}
+.mp-card.lifted{opacity:.35}
+.mp-grip{color:#b7c6bf;font-size:11px;letter-spacing:-1px;line-height:1;text-align:center}
+.mp-slotnum{font-size:10px;font-weight:800;color:#3a5348;font-variant-numeric:tabular-nums;text-align:center}
+.mp-cardwho{min-width:0;display:flex;flex-direction:column;line-height:1.25}
+.mp-cardwho b{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp-cardwho>span{font-size:11px;color:var(--ink3);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp-rear-pick{position:absolute;left:8px;right:8px;top:100%;z-index:3;margin-top:3px;background:#fff;border:1px solid var(--line2);border-radius:9px;padding:7px;display:flex;flex-wrap:wrap;gap:5px;align-items:center;box-shadow:0 8px 18px rgba(4,26,18,.12)}
+.mp-rear-pick>span{font-size:11px;color:var(--ink3);width:100%}
+.mp-rear-pick em{font-style:normal;color:var(--ink3);font-weight:600}
+.mp-rear-plan{flex:0 0 auto;display:grid;grid-template-columns:1fr 1fr;gap:16px;border-top:1px solid var(--line);padding-top:9px;max-height:210px;overflow:auto}
+.mp-rear-plan h5{margin:0 0 5px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3)}
+.mp-rear-plan ol{margin:0;padding-left:18px;font-size:12px;line-height:1.6}
+.mp-rear-plan u{text-decoration:none;color:var(--ink3);font-size:11px;margin-left:6px}
+.mp-rear-plan .mp-mini{margin-left:8px;min-height:26px;font-size:11px;padding:0 7px}
+.mp-rear-plan .mp-empty{margin:0;font-size:11px;color:var(--ink3)}
+.mp-ghost{position:fixed;left:0;top:0;z-index:80;pointer-events:none;background:#fff;border:1px solid #8fbf9f;border-radius:9px;
+  padding:9px 11px;font-size:13px;font-weight:600;box-shadow:0 10px 24px rgba(4,26,18,.22);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp-ghost.off{display:none}
+/* BELOW FOUR READABLE COLUMNS THE BOARD IS NOT DRAWN AT ALL. Dragging across four columns on a
+   narrow screen is not worth having, and the move control on each card does the same job. */
+@media (max-width:1279px){
+  .mp-rear-board{display:none}
+  .mp-rear::after{content:"This screen is too narrow for the board. Use the move control on a player in the panel behind this.";
+    font-size:12px;color:var(--ink3);display:block;padding:10px 0}
+}
 .mp-teammem{font-size:10px;font-weight:800;color:#1f7a4d;letter-spacing:.02em;margin-left:auto;padding-right:6px}
 .mp-legend{margin:8px 0 0;font-size:11px;color:var(--ink3);display:flex;align-items:center;gap:3px;flex-wrap:wrap}
 .mp-memerr{color:#8a5d10}

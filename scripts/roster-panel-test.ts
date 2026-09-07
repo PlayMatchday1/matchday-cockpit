@@ -12,7 +12,8 @@
 import { readFileSync } from "node:fs";
 import {
   playerKinds, teamMemberCount, textsForSelection, moneyKinds, sumMoney, teamMoney, rosterCounts, usd,
-  type EditRow,
+  boardSlots, boardTeamFill, dropHint, gestureFor, planMove, pendingCount, emptyPending, savePlan,
+  type EditRow, type RosterOrigin,
 } from "../src/lib/rosterEditModel";
 
 let pass = 0; const fails: string[] = [];
@@ -358,6 +359,84 @@ console.log("\nthe panel");
   /* Narrowly on ACTIONS. "refunded" appears as a read-only count of hidden rows and always did. */
   yes("nothing here charges, refunds or credits",
     !/createRefund|refundPlayer|adjustCredit|createPaymentIntent|method: "POST"[^\n]*(refund|credit)/i.test(v));
+}
+
+console.log("\nrearrange: the board reads the plan, and a drop stages the same thing Move stages");
+{
+  SEQ = 0;
+  const rows = [
+    r(1, 1, 1, 301), r(2, 1, 2, 302), r(3, 2, 1, 303), r(4, 2, 2, 304),
+  ];
+  const origin: RosterOrigin = { rows, teams: [
+    { id: 91, teamNumber: 1, name: "White" }, { id: 92, teamNumber: 2, name: "Green" }] };
+  const P0 = emptyPending();
+
+  /* EVERY SPOT IS A SLOT, occupied or not — an empty one has to exist in the model to be a drop
+   * target. Two teams of three is six slots for four players. */
+  const sl = boardSlots(origin, P0, 3);
+  is("one slot per spot per team", sl.length, 6);
+  is("…and the empty ones are there too", sl.filter((x) => x.row === null).map((x) => `${x.team}:${x.spot}`), ["1:3", "2:3"]);
+  is("the fill is per team", [...boardTeamFill(origin, P0).values()], [2, 2]);
+
+  /* A DROP ON AN OCCUPIED SPOT SWAPS, and the hint names the person AND where they go — the swap
+   * sends them to the place you came from, which is usually another team. */
+  is("an empty spot names the spot", dropHint(origin, P0, rows[0], 2, 3), "to Green 3");
+  is("an occupied spot names the person and their destination",
+    dropHint(origin, P0, rows[0], 2, 1), "swap with P303 → White 1");
+  is("a swap is one gesture and two writes", gestureFor(origin, P0, rows[0], 2, 1), { text: "Swap P301 and P303", writes: 2 });
+  is("a move is one of each", gestureFor(origin, P0, rows[0], 2, 3), { text: "Move P301 to Green 3", writes: 1 });
+
+  /* THE BOARD AND THE PANEL SHARE ONE PLAN. A drop is planMove — the Move button's own function —
+   * so the two paths cannot drift. */
+  const afterSwap = planMove(P0, origin, rows[0], 2, 1);
+  is("the swap stages two writes", savePlan(afterSwap, origin).length, 2);
+  is("…and the board redraws from the plan, not from the server's copy",
+    boardSlots(origin, afterSwap, 3).filter((x) => x.row).map((x) => `${x.team}:${x.spot}:${x.row!.name}`),
+    ["1:1:P303", "1:2:P302", "2:1:P301", "2:2:P304"]);
+
+  /* SWAP AND SWAP BACK IS ZERO, not two. normalizePending drops a move that returns a row to where
+   * it started, so the honest pending count after undoing a swap by hand is nothing. */
+  const back = planMove(afterSwap, origin, rows[0], 1, 1);
+  is("swapping two players and swapping them back leaves nothing pending", pendingCount(back, origin), 0);
+  is("…and no writes", savePlan(back, origin).length, 0);
+
+  /* A DROP ON YOUR OWN SPOT IS NOT A GESTURE. */
+  is("dropping a player where they already are stages nothing", pendingCount(planMove(P0, origin, rows[0], 1, 1), origin), 0);
+}
+
+console.log("\nrearrange: the mode, in the panel");
+{
+  const v = readFileSync("src/components/MatchPanel.tsx", "utf8");
+  yes("it is a full-window overlay, not a section of the drawer",
+    /\.mp-rear\{position:fixed;inset:0;z-index:70/.test(v));
+  yes("…above the Gameday drawer, which is z-index 60", /z-index:70/.test(v));
+  /* POINTER EVENTS, NOT HTML5 DRAG. dragstart does not fire on touch at all, and touch-action:none
+   * is the other half of it — without it a touch drag scrolls the page instead. */
+  yes("the card is dragged with pointer events", /onPointerDown=\{\(e\) => onGrab/.test(v) && !/onDragStart/.test(v));
+  yes("…and the card sets touch-action:none so a phone drags instead of scrolling", /touch-action:none/.test(v));
+  yes("a press on a control is not a drag", /\(e\.target as HTMLElement\)\.closest\("button"\)\) return;/.test(v));
+  yes("the ghost cannot be found by elementFromPoint", /\.mp-ghost\{position:fixed[^}]*pointer-events:none/.test(v));
+
+  yes("a drop goes through planMove, the same function the Move button uses", /planMove\(pending, origin, mover, toTeam, toSpot\)/.test(v));
+  yes("nothing writes on a drop — only the pending plan changes", /const dropOn = \(mover: EditRow/.test(v)
+    && !/dropOn[\s\S]{0,400}fetch\(/.test(v));
+  yes("step back restores the plan from before the gesture, both halves of a swap at once",
+    /setPending\(last\.before\)/.test(v));
+  yes("…and only the last gesture offers it", /i === gestures\.length - 1 && \(/.test(v));
+  yes("a plan that empties clears the gesture list too", /pendingCount\(next, origin\) === 0 \? \[\]/.test(v));
+
+  yes("two lists, not one", /What you did/.test(v) && /What Save sends/.test(v));
+  yes("…and the writes list is savePlan's, in savePlan's order", /savePlan\(pending, origin\)\.map/.test(v));
+  yes("uneven teams are called out, not blocked", /uneven \? " \\u00b7 uneven" : ""/.test(v) && !/disabled=\{uneven/.test(v));
+  yes("the card is stripped to grip, spot, name, phone, the multi-spot tick and a fake marker",
+    /mp-grip/.test(v) && /mp-slotnum/.test(v) && /mp-rear-multi-/.test(v) && /mp-rear-fake-/.test(v));
+  yes("…and carries none of the panel's row controls",
+    !/mp-rear[\s\S]{0,3000}mp-copy-\$/.test(v.slice(v.indexOf("mp-rear-board"))));
+  yes("the move control stays on the card as the keyboard and phone path", /mp-rear-move-/.test(v));
+  yes("…and opens the team picker, with full teams disabled", /mp-rear-pick-team-/.test(v) && /disabled=\{full\}/.test(v));
+  yes("…which stages through the same dropOn", /onClick=\{\(\) => dropOn\(sl\.row!, boardPick\.team!, sp\.n\)\}/.test(v));
+  yes("below four readable columns the board is not drawn at all",
+    /@media \(max-width:1279px\)\{[\s\S]{0,120}\.mp-rear-board\{display:none\}/.test(v));
 }
 
 console.log("\nthe Gameday drawer gives the open match most of the window");
