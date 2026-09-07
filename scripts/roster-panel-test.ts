@@ -278,10 +278,45 @@ console.log("\nthe panel");
   yes("the money column is right-aligned and tabular", /\.mp-pmoney\{display:flex;flex-direction:column;align-items:flex-end/.test(v));
   yes("…and on a phone it takes its own line with the credit beside the amount",
     /grid-template-areas:"ck spot name" "\. money money" "\. kind acts"/.test(v) && /\.mp-pmoney\{grid-area:money;flex-direction:row/.test(v));
+  /* ── THE ROW MUST FIT ITS CARD, AND THE NAME MUST SURVIVE ────────────────────────────────
+   * Measured in the Gameday Ops drawer at 760px: the fixed tracks plus the actions came to 341px
+   * of content in a 322px row, so the only flexible track resolved to ZERO and the name rendered
+   * at 0 x 0 on all 32 rows of match 18969 — present in the DOM, correct text, invisible. */
+  yes("the name is the only flexible track", /grid-template-columns:20px 20px minmax\(60px,1fr\) 62px 74px auto/.test(v));
+  yes("…with a floor, so it can never resolve to zero again", /minmax\(60px,1fr\)/.test(v));
+  yes("…and it truncates rather than pushing the row wider", /\.mp-pname\{[^}]*text-overflow:ellipsis/.test(v));
+  yes("Move is an icon carrying its own label", /data-testid=\{`mp-move-\$\{p\.umId\}`\} className="mp-icon"/.test(v)
+    && /aria-label=\{`Move \$\{p\.name\} to another team or spot`\}/.test(v));
+  yes("…and a tooltip that says the same thing", /title=\{`Move \$\{p\.name\} to another team or spot`\}/.test(v));
+  yes("…and the legend names its glyph", /copy email &middot; <b>\\u21c6<\/b> move/.test(v));
+  /* THE TEAM GRID STAYS TWO-UP because players move between teams and both have to be on screen —
+   * and it stacks on ITS OWN width, not the window's. A viewport media query is how the roster
+   * ended up two-up inside a 346px card in the first place. */
+  yes("the teams are two columns", /\.mp-teamgrid\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/.test(v));
+  yes("…and stack on a CONTAINER query, not a viewport one",
+    /container-type:inline-size;container-name:mproster/.test(v)
+    && /@container mproster \(max-width:980px\)\{ \.mp-teamgrid\{grid-template-columns:1fr\} \}/.test(v));
+
   /* THIS PANEL MUST NOT BECOME A WAY TO MOVE MONEY. */
   /* Narrowly on ACTIONS. "refunded" appears as a read-only count of hidden rows and always did. */
   yes("nothing here charges, refunds or credits",
     !/createRefund|refundPlayer|adjustCredit|createPaymentIntent|method: "POST"[^\n]*(refund|credit)/i.test(v));
+}
+
+console.log("\nthe Gameday drawer gives the open match most of the window");
+{
+  const g = readFileSync("src/components/GamedayBoard.tsx", "utf8");
+  yes("the wide panel is 1400, not 760", /const PANEL_W_WIDE = 1400;/.test(g));
+  yes("…held to 92vw of the space it actually has, so the board stays visible behind it",
+    /width:min\(var\(--panel-w,600px\),calc\(92vw - var\(--panel-right,0px\)\)\)/.test(g));
+  yes("…and the panel inside it no longer re-caps the width",
+    /\.gdo \.gpanel-body>\.mp>\.mp-panel\{height:100%;max-width:none\}/.test(g));
+  /* THE DOCK STILL FITS BESIDE IT. panelW only goes wide when they are NOT coexisting, which is
+   * what keeps "panel sits left of the dock, both fit" true at >=1600. */
+  yes("the wide width applies only when the chat dock is not beside it",
+    /const panelW = wide && !coexist \? PANEL_W_WIDE : PANEL_W;/.test(g));
+  const sp = readFileSync("src/components/MatchSidePanel.tsx", "utf8");
+  yes("the dock offset travels to the stylesheet", /\["--panel-right" as string\]: `\$\{right\}px`/.test(sp));
 }
 
 console.log(`\nroster-panel: ${pass} passed, ${fails.length} failed`);

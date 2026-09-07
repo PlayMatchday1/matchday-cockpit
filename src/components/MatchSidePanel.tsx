@@ -44,7 +44,9 @@ export default function MatchSidePanel({
 }) {
   return (
     <aside className={`gpanel ${className}`} data-testid="gday-panel"
-      style={{ ["--panel-w" as string]: `${width}px`, right }}>
+      /* --panel-right travels with `right` so the stylesheet can hold the panel to 92vw of the
+         space it actually has, rather than of the whole window, when a dock sits beside it. */
+      style={{ ["--panel-w" as string]: `${width}px`, ["--panel-right" as string]: `${right}px`, right }}>
       <div className="gpanel-bar">
         <button className="gpanel-x" data-testid="gday-panel-close" aria-label="Close panel" onClick={onClose}>✕ Close</button>
         {steps && (

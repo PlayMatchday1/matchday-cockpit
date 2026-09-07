@@ -66,7 +66,13 @@ const PANEL_W = 600; // the in-place match panel (replaces the old side drawer +
  * panel. A drawer that makes the thing behind it unreadable is not a wider drawer, it is a modal
  * that forgot to say so. 760 keeps the teams grid's name-plus-phone rows (the reason it widened in
  * the first place) and gives the board back 60px at every width above 1600. */
-const PANEL_W_WIDE = 760;
+/* THE OPEN MATCH TAKES MOST OF THE WINDOW. At 760 the Details panel gave each team card 346px and
+ * each roster row 322px of usable width for 341px of content — so Move and remove were clipped, the
+ * card scrolled sideways, and the player NAME (the only flexible column) collapsed to zero on all
+ * 32 rows of match 18969. This is the cap; the stylesheet also holds it to 92vw so the board stays
+ * visible behind it, and it applies only when the chat dock is NOT beside the panel — when they
+ * coexist the panel keeps PANEL_W so the two still fit. */
+const PANEL_W_WIDE = 1400;
 const DOCK_W = 360;  // the CRM chat dock's expanded width — they sit side-by-side at ≥1600
 
 // ONE BOARD, TWO CALLERS. Match Ops renders it bare; the city-manager tier passes three props.
@@ -861,7 +867,7 @@ const CSS = `
 .gdo .gmain.drawering{margin-right:var(--drawer-w,480px)}
 /* the in-place match panel (replaces the old drawer). Fixed right edge; the right offset is set
    inline to the dock width when they coexist (>=1600) so the two never overlap. */
-.gdo .gpanel{position:fixed;top:0;bottom:0;height:100dvh;width:min(var(--panel-w,600px),96vw);max-width:100vw;background:#eef2f0;border-left:1px solid #d4e0da;box-shadow:-8px 0 26px rgba(4,26,18,.12);z-index:60;display:flex;flex-direction:column}
+.gdo .gpanel{position:fixed;top:0;bottom:0;height:100dvh;width:min(var(--panel-w,600px),calc(92vw - var(--panel-right,0px)));max-width:100vw;background:#eef2f0;border-left:1px solid #d4e0da;box-shadow:-8px 0 26px rgba(4,26,18,.12);z-index:60;display:flex;flex-direction:column}
 /* SAFE AREA. The panel is position:fixed top:0, so without this the header renders beneath the iOS
    status bar and the Dynamic Island — "× Close" was drawn straight through the clock and could not
    be tapped without rotating the device. The bar is STICKY and starts BELOW the inset; the body
@@ -890,7 +896,10 @@ const CSS = `
 /* Only in the drawer. The standalone /match-ops/match-panel/[id] page is a document that scrolls
    with the window, and giving it a viewport height there would trap it in a box. */
 .gdo .gpanel-body>.mp{min-height:0;flex:1 1 auto;display:flex}
-.gdo .gpanel-body>.mp>.mp-panel{height:100%}
+/* AND THE PANEL INSIDE IT MUST NOT RE-CAP THE WIDTH. .mp-panel carries max-width:860px at >=1100
+   for the standalone /match-panel page; inside this drawer the drawer IS the width, and leaving the
+   cap on threw away most of what widening the drawer just bought. */
+.gdo .gpanel-body>.mp>.mp-panel{height:100%;max-width:none}
 /* THE FIELDSET IS THE FLEX CHILD, not .mp-body. .mp-body lives inside <fieldset class="mp-fs">,
    which wraps the whole form so a read-only viewer gets a genuinely disabled control set rather
    than one that only looks disabled. Without this the fieldset takes its content height, .mp-body

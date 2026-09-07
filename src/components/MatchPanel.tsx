@@ -1245,7 +1245,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 )}
               </div>
             )}
-            <div data-testid="mp-teams">
+            <div className="mp-teams" data-testid="mp-teams">
             {rosterErr ? <div className="mp-err" data-testid="mp-teams-error">Couldn’t load teams: {rosterErr}</div>
              : !roster ? <div className="mp-loading" data-testid="mp-teams-loading">Loading teams…</div>
              : <>
@@ -1406,9 +1406,14 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                               {/* ONE move control at ANY team count. Four teams used to mean three
                                   destination buttons plus a x on every row, which is what crushed
                                   the names to "L", "T", "G". */}
-                              <button type="button" data-testid={`mp-move-${p.umId}`} className="mp-mini" disabled={removed}
-                                aria-expanded={movePick?.umId === p.umId} title={`Move ${p.name}`}
-                                onClick={() => setMovePick((m) => (m?.umId === p.umId ? null : { umId: p.umId, team: null }))}>Move</button>
+                              {/* AN ICON, NOT THE WORD. "Move" written out on every row cost about a
+                                  button's width per row, which is the difference between a name
+                                  column and no name column in a narrow drawer. The label and the
+                                  tooltip carry the meaning. */}
+                              <button type="button" data-testid={`mp-move-${p.umId}`} className="mp-icon" disabled={removed}
+                                aria-expanded={movePick?.umId === p.umId} aria-label={`Move ${p.name} to another team or spot`}
+                                title={`Move ${p.name} to another team or spot`}
+                                onClick={() => setMovePick((m) => (m?.umId === p.umId ? null : { umId: p.umId, team: null }))}>&#8646;</button>
                               <button type="button" data-testid={`mp-remove-${p.umId}`} className={removed ? "mp-mini" : "mp-icon danger"}
                                 title={removed ? `Keep ${p.name}` : `Remove ${p.name}`} aria-label={removed ? `Keep ${p.name} on the roster` : `Remove ${p.name} from the match`}
                                 onClick={() => toggleRemove(p)}>{removed ? "Undo" : "\u2715"}</button>
@@ -1473,7 +1478,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
               {/* THE LEGEND, once under the board — the two glyphs on every row are named here
                   rather than eighteen times in the rows themselves. */}
               <p className="mp-legend" data-testid="mp-roster-legend">
-                <b>\u2709</b> copy email &middot; <b>\u2715</b> remove from the match &middot;
+                <b>\u2709</b> copy email &middot; <b>\u21c6</b> move &middot; <b>\u2715</b> remove from the match &middot;
                 <span className="mp-sharedot inline" /> the same person&rsquo;s second spot
                 {roster.membershipError && <> &middot; <b className="mp-memerr" data-testid="mp-member-error">membership could not be read ({roster.membershipError}) — no row can be trusted to say Daily</b></>}
               </p>
@@ -1829,7 +1834,15 @@ const CSS = `
 /* ITEM 4 — 2 x 2 at four teams, never four abreast, and columns that can actually SHRINK.
    minmax(0,1fr) is the whole fix for the overflow: a bare 1fr is minmax(AUTO,1fr), so the grid
    could not go below its content's min-content width and simply ran off the side of the panel. */
+/* TWO COLUMNS, BECAUSE PLAYERS ARE DRAGGED BETWEEN TEAMS AND BOTH HAVE TO BE ON SCREEN AT ONCE.
+   The stacking rule below is a CONTAINER query, not a viewport one: this panel lives inside a
+   drawer whose width has nothing to do with the window's, and a viewport media query is exactly how
+   the roster ended up two-up inside a 346px card. It stacks when ITS OWN box cannot hold two rows,
+   wherever it is rendered. A row needs about 450px before the name starts truncating hard, so two
+   of them plus the gap and the card padding is the threshold. */
+.mp-teams{container-type:inline-size;container-name:mproster}
 .mp-teamgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:11px 0 4px}
+@container mproster (max-width:980px){ .mp-teamgrid{grid-template-columns:1fr} }
 .mp-team{border:1px solid var(--line);border-radius:10px;background:#fff;padding:10px;min-width:0}
 .mp-teamtop{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
 .mp-teamname{font-size:14px;font-weight:800;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1864,7 +1877,12 @@ const CSS = `
    pick · spot · name+phone · kind · actions. FIXED is the point: the kind chips line up into a
    stripe you can read down the team without reading a single word, and that column is the whole
    feature. The row was flex-wrap, which put the chip wherever it happened to land. */
-.mp-player{display:grid;grid-template-columns:20px 20px minmax(0,1fr) 62px 74px auto;align-items:center;gap:7px;flex-wrap:nowrap}
+/* THE ONLY FLEXIBLE TRACK IS THE NAME, and everything else keeps its intrinsic width. Measured in
+   the Gameday drawer at 760px: the fixed tracks plus the actions came to 341px of content in a
+   322px row, so the 1fr resolved to ZERO and the name — which was in the DOM the whole time, with
+   the right text — rendered at 0 x 0. Nothing else may be squeezed to nothing again, so the name is
+   the one that gives, and it gives by truncating. */
+.mp-player{display:grid;grid-template-columns:20px 20px minmax(60px,1fr) 62px 74px auto;align-items:center;gap:7px;flex-wrap:nowrap}
 /* THE CHECKBOX MUST BEAT THE .mp input RULE, WHICH SETS min-height:40px. NO BACKTICKS IN HERE: this
    stylesheet is a template literal and one backtick in a comment ends the string. This file already
    documents that same input rule
