@@ -13,7 +13,7 @@
  */
 import { readFileSync } from "node:fs";
 import {
-  payoutForMatch, payoutForMatchFloor, payoutForMatchOf, totalsOf, isRentalModel,
+  payoutForMatch, payoutForMatchFloor, payoutForMatchOf, totalsOf, isRentalModel, amountOwedOf,
   topUpThresholdCents, type MatchInput, type RentalProfitShareParams, type PayoutModel,
 } from "../src/lib/partnerPayoutModel";
 
@@ -333,7 +333,8 @@ console.log("\nThe partner-facing page shows what the partner is owed, not Match
   yes("the reconciliation line states what the partner is owed", /You are owed <b>\{fmtCents\(m\.totals\.partnerTotalCents\)\}<\/b>/.test(body));
   yes("…and what was collected", /collected\s*\n?\s*from players/.test(body));
   /* THE HEADER, in the page's own casing (CSS uppercases it). */
-  yes("the top-up column reads 'Additional paid'", /<th className="n">Additional paid<\/th>/.test(body));
+  /* IT CARRIES THE TINT NOW — see the amount-owed block below. */
+  yes("the top-up column reads 'Additional paid'", /<th className="n tot">Additional paid<\/th>/.test(body));
   is("…and neither of the labels it replaced", body.match(/<th className="n">(Add to be paid|To be paid)<\/th>/g), null);
 
   /* ── THE GREEN BOX, AND THE LINE IT DEPENDS ON ────────────────────────────────────────────── */
@@ -463,8 +464,9 @@ console.log("\nA paid period shows what was PAID, not what the formula makes");
 
   /* THE TWO DISPLAY CHANGES. */
   is("EVERY MONTH has no revenue column", body.match(/<th className="n">Revenue<\/th>\s*\n\s*<th className="n tot">/g), null);
-  yes("…and the partner total follows PLAYERS",
-    /<th className="n">Players<\/th>\s*\n\s*<th className="n tot">\{totalHead\}<\/th>/.test(body));
+  /* AMOUNT OWED NOW SITS BETWEEN THEM, and takes the tint the total used to carry. */
+  yes("…and Amount owed follows PLAYERS, with the total after it",
+    /<th className="n">Players<\/th>[\s\S]{0,300}<th className="n tot">Amount owed<\/th>\s*\n\s*<th className="n">\{totalHead\}<\/th>/.test(body));
   /* A RULE, NOT A SPECIAL CASE. `open` is derived from the period's own close date, so in October
    * it is September that collapses and nothing here changes. */
   yes("only the OPEN period renders a match-by-match table", /p\.months\.filter\(\(m\) => m\.open\)\.map/.test(body));
@@ -473,6 +475,81 @@ console.log("\nA paid period shows what was PAID, not what the formula makes");
   const detail = body.slice(body.indexOf("MONTH DETAIL"), body.indexOf("MONTH DETAIL") + 900);
   is("…and no month is named in the condition", detail.match(/2026-0\d|"August"|=== "20/g), null);
   yes("…the rule is the period's own open flag", /filter\(\(m\) => m\.open\)/.test(detail));
+}
+
+console.log("\nAMOUNT OWED is a display split of the total, derived and never stored");
+{
+  /* THE IDENTITY THE SPLIT RESTS ON: partnerTotal - amountOwed === the rentals already paid.
+   * Checked on real shapes, not on a repeated formula. */
+  const C: RentalProfitShareParams = { ...P, cancellationFeeEnabled: true };
+  const played = [66000, 30000, 46500, 0].map((g) => payoutForMatchFloor(match(g), C));
+  const t1 = totalsOf(played);
+  is("four played matches: total - owed = 4 rentals",
+    t1.partnerTotalCents - amountOwedOf(t1), 4 * P.fieldRentalCents);
+  is("…and owed is exactly the sum of the additional-paid column",
+    amountOwedOf(t1), played.reduce((a, r) => a + r.partnerProfitShareCents, 0));
+
+  /* A CHARGED CANCELLATION ADDS A RENTAL AND NOTHING OWED. Its whole payment IS the rental, so it
+   * moves the total by $160 and the owed figure by zero — which is the "the rental was prepaid"
+   * reading. If a cancelled date's rental turns out NOT to be prepaid, amountOwedOf is the one
+   * function to change and September moves from $182.00 to $342.00. */
+  const cancelled = payoutForMatchFloor(
+    match(0, { cancelled: true, played: false, spotsSold: 0, rentalChargeOverride: true }), C);
+  const t2 = totalsOf([...played, cancelled]);
+  is("a charged cancellation moves the TOTAL by one rental",
+    t2.partnerTotalCents - t1.partnerTotalCents, P.fieldRentalCents);
+  is("…and moves AMOUNT OWED by nothing", amountOwedOf(t2) - amountOwedOf(t1), 0);
+  is("…so total - owed is now 5 rentals", t2.partnerTotalCents - amountOwedOf(t2), 5 * P.fieldRentalCents);
+
+  /* THE SHIPPED KIND SPLITS THE SAME WAY, because partnerProfitShareCents means "the part that is
+   * not the rental" in both formulas. */
+  const legacy = totalsOf([66000, 30000].map((g) => payoutForMatch(match(g), P)));
+  is("the shipped kind splits identically", legacy.partnerTotalCents - amountOwedOf(legacy), 2 * P.fieldRentalCents);
+
+  /* DERIVED, NOT STORED. amountOwedOf reads one field off the totals and computes nothing; no
+   * amountOwed lives on PayoutTotals, on RentalMonth, or in any payload. */
+  const model = readFileSync("src/lib/partnerPayoutModel.ts", "utf8");
+  const modelCode = model.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  yes("amountOwedOf is a one-line read of partnerProfitShareCents",
+    /export const amountOwedOf = \(t: PayoutTotals\): number => t\.partnerProfitShareCents;/.test(modelCode));
+  is("no amountOwed field is stored on the totals", modelCode.match(/amountOwedCents/g), null);
+  is("…nor on the month", readFileSync("src/lib/partnerRentalDashboard.ts", "utf8").match(/amountOwed/g), null);
+  /* AND IT IS NOT A TERM IN THE RECONCILIATION. */
+  yes("the reconciliation still tests partnerTotal, untouched by the split",
+    /reconciles: partnerTotalCents \+ matchdayRetainedCents \+ matchManagerCents === m\.grossCents/.test(model));
+  const totalsFn = /export function totalsOf[\s\S]*?\n\}/.exec(model)?.[0] ?? "";
+  yes("…and totalsOf has not heard of amount owed", totalsFn.length > 0 && !totalsFn.includes("amountOwed"));
+
+  /* MARK PAID MUST SNAPSHOT THE PARTNER'S OWN FORMULA. The list reader carries deliberate
+   * pre-0123 defaults (payoutModel forced to REVENUE_SHARE, every rental column null) for the
+   * admin list; using it on the WRITE made rentalParamsOf return null and stored a legacy
+   * revenue-share figure — $1,935.00 against a page reading $1,700.00 on Parmer's August. */
+  const route = readFileSync("src/app/api/partner-dashboards/route.ts", "utf8");
+  yes("the paid snapshot reads the REAL payout columns, not the list's defaults",
+    /const real = \(await fetchAllEnabledPartnerDashboards\(supabase\)\)\.find/.test(route)
+    && /const partner = real \?\? listRow;/.test(route));
+  yes("…and still falls back for a disabled partner", /real \?\? listRow/.test(route));
+  yes("…and the list reader still carries its defaults for the LIST",
+    /fieldRentalCents: null, matchManagerCents: null, partnerSharePct: null, spotPriceCents: null/.test(route));
+
+  /* THE PAGE: the tint is on AMOUNT OWED and off the total, in both tables, and the hero is owed. */
+  const view = readFileSync("src/app/partners/[slug]/PartnerRentalView.tsx", "utf8");
+  const body = view.slice(view.indexOf("export default"));
+  yes("the hero is the owed figure", /data-testid="prv-headline" data-cents=\{amountOwedOf\(current\.totals\)\}/.test(body));
+  yes("…and the total is still on screen beneath it", /data-testid="prv-headline-total"/.test(body));
+  yes("the period row shows owed before the total",
+    body.indexOf('data-testid="prv-period-owed"') < body.indexOf('data-testid="prv-period-total"'));
+  /* THE TINT. `tot` is the highlighted class; it must be on owed and OFF the total, everywhere. */
+  for (const [tid, want] of [["prv-period-owed", true], ["prv-period-total", false],
+                             ["prv-row-topup", true], ["prv-row-total", false],
+                             ["prv-total-topup", true], ["prv-total-partner", false]] as [string, boolean][]) {
+    const m = new RegExp(`className="n( tot)?"[^>]{0,40}data-testid="${tid}"`).exec(body)
+      ?? new RegExp(`className="n( tot)?" data-testid="${tid}"`).exec(body);
+    yes(`${tid} is ${want ? "tinted" : "plain"}`, m != null && (m[1] === " tot") === want, m?.[0] ?? "not found");
+  }
+  /* A SETTLED MONTH OWES NOTHING and says so rather than restating a historical top-up. */
+  yes("a paid period shows no amount owed",
+    /m\.status === "paid" \? "\\u2014" : fmtCents\(amountOwedOf\(m\.totals\)\)/.test(body));
 }
 
 console.log(`\npartner-floor-payout: ${pass} passed, ${fails.length} failed`);

@@ -19,6 +19,7 @@ import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import type { Change } from "@/lib/changeLogModel";
 import { buildRentalDashboard } from "@/lib/partnerRentalDashboard";
 import {
+  fetchAllEnabledPartnerDashboards,
   computePartnerStats,
   computeWeeklyPayments,
   fetchPartnerRows,
@@ -171,8 +172,23 @@ export async function POST(req: Request) {
     paidAmount = Math.round(n * 100) / 100;
   }
 
-  const partner = (await fetchAllPartners(supabase)).find((p) => p.id === partnerId);
-  if (!partner) return Response.json({ error: "Partner not found" }, { status: 404 });
+  /* THE REAL PARTNER RECORD, NOT THE LIST'S. fetchAllPartners above carries DELIBERATE pre-0123
+   * defaults — payoutModel forced to REVENUE_SHARE and every rental column null — because it feeds
+   * the admin list and the actionable counter, which run the legacy path. That is right for a list
+   * and WRONG HERE: rentalParamsOf(partner) then returns null for a rental partner, the branch
+   * below falls through to computeWeeklyPayments, and the figure snapshotted into
+   * calculated_amount is the LEGACY revenue-share number rather than the one the partner was
+   * shown. Measured on Parmer's August: it stored $1,935.00 against a page reading $1,700.00, so
+   * the "formula vs paid" comparison 0163 exists for was comparing against a formula this partner
+   * is not on.
+   * fetchAllEnabledPartnerDashboards reads the real payout columns, which is what a WRITE about
+   * money has to do. */
+  const real = (await fetchAllEnabledPartnerDashboards(supabase)).find((p) => p.id === partnerId);
+  const listRow = (await fetchAllPartners(supabase)).find((p) => p.id === partnerId);
+  if (!listRow) return Response.json({ error: "Partner not found" }, { status: 404 });
+  // The real record when the partner is enabled; the list row otherwise, so a disabled partner's
+  // period can still be marked and simply computes on the legacy path as it did before.
+  const partner = real ?? listRow;
 
   // ── THE LEDGER ROW, WHICHEVER PAYOUT MODEL THE PARTNER IS ON ────────────────────────────────
   // Both branches end at the same table (partner_weekly_payments) and the same key

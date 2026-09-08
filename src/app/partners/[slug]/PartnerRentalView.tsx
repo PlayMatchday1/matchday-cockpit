@@ -32,7 +32,7 @@
 
 import { useState } from "react";
 import type { RentalCancellation, RentalDashboardProps, RentalMonth } from "@/lib/partnerRentalDashboard";
-import { fmtCents, PERIOD_STATUS_LABEL } from "@/lib/partnerPayoutModel";
+import { amountOwedOf, fmtCents, PERIOD_STATUS_LABEL } from "@/lib/partnerPayoutModel";
 
 /* WHAT A PERIOD'S TOTAL SHOWS. A settled month shows WHAT WAS PAID; an open one shows what the
  * formula currently makes. A paid period is a stored fact — recomputing it would let a formula
@@ -111,14 +111,21 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
         {current && (
           <section className="prv-pay" data-testid="prv-pay">
             <div className="prv-pay-l">
-              {/* ONE OF THE FOUR FIGURES THAT MUST AGREE. */}
-              <div className="prv-amt" data-testid="prv-headline" data-cents={current.totals.partnerTotalCents}>
-                {fmtCents(current.totals.partnerTotalCents)}
+              {/* THE HEADLINE IS WHAT IS STILL OWED, not the total. The field rental is paid per
+                  reservation, up front, so a total that includes it overstates what anyone still
+                  owes — September's $822.00 is $640.00 of rentals already paid and $182.00 to come.
+                  The total stays on screen underneath, because it is still the figure the match
+                  table adds up to; it is simply not the one to act on. */}
+              <div className="prv-amt" data-testid="prv-headline" data-cents={amountOwedOf(current.totals)}>
+                {fmtCents(amountOwedOf(current.totals))}
               </div>
               <div className="prv-for">
-                for <b>{current.label}</b> · {current.totals.matches} match{current.totals.matches === 1 ? "" : "es"} played
+                still owed for <b>{current.label}</b> · {current.totals.matches} match{current.totals.matches === 1 ? "" : "es"} played
                 {/* SO FAR, NEVER OWED, while the month is open. */}
                 {current.open && <span className="prv-sofar" data-testid="prv-sofar">so far</span>}
+              </div>
+              <div className="prv-subamt" data-testid="prv-headline-total" data-cents={current.totals.partnerTotalCents}>
+                {fmtCents(current.totals.partnerTotalCents)} total · {fmtCents(current.totals.fieldRentalCents)} of field rental already paid
               </div>
             </div>
             <div className="prv-when" data-testid="prv-when">
@@ -217,7 +224,10 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
                         because it is what makes the total checkable. */}
                     <th>Period</th><th className="n">Matches</th><th className="n">Spots</th>
                     <th className="n">Players</th>
-                    <th className="n tot">{totalHead}</th>
+                    {/* THE TINT MOVES HERE. Amount owed is the number to act on; the total includes
+                        rentals already paid and is context, not a bill. */}
+                    <th className="n tot">Amount owed</th>
+                    <th className="n">{totalHead}</th>
                     <th className="l">Status</th><th className="n">When</th>
                   </tr>
                 </thead>
@@ -231,7 +241,15 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
                       {/* WHAT WAS PAID ON A SETTLED MONTH, WHAT IS COMPUTED ON AN OPEN ONE.
                           A paid period is a stored fact and shows the amount that actually moved;
                           recomputing it would let a formula change rewrite history. */}
-                      <td className="n tot" data-testid="prv-period-total" data-cents={shownTotal(m)}
+                      {/* A SETTLED MONTH OWES NOTHING, and says so rather than restating a
+                          historical top-up as though it were outstanding. The total beside it still
+                          shows what was actually paid. */}
+                      <td className="n tot" data-testid="prv-period-owed"
+                        data-cents={m.status === "paid" ? 0 : amountOwedOf(m.totals)}
+                        data-settled={m.status === "paid" ? "true" : "false"}>
+                        {m.status === "paid" ? "\u2014" : fmtCents(amountOwedOf(m.totals))}
+                      </td>
+                      <td className="n" data-testid="prv-period-total" data-cents={shownTotal(m)}
                         data-source={m.paidAmountCents != null ? "paid" : "computed"}>
                         {fmtCents(shownTotal(m))}
                       </td>
@@ -312,8 +330,8 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
                     {!floorKind && <th className="n">Field rental</th>}
                     <th className="n">Match manager</th><th className="n">Profit pool</th>
                     <th className="n">{floorKind ? `${p.params.partnerSharePct}% split` : `Your ${p.params.partnerSharePct}%`}</th>
-                    {floorKind && <th className="n">Additional paid</th>}
-                    <th className="n tot" data-testid="prv-total-head">{totalHead}</th>
+                    {floorKind && <th className="n tot">Additional paid</th>}
+                    <th className="n" data-testid="prv-total-head">{totalHead}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -340,14 +358,14 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
                       {/* A $0 TOP-UP BESIDE A $160 TOTAL IS THE FLOOR DOING ITS JOB, not a bug, so
                           it is marked rather than left to read as a missing number. */}
                       {floorKind && (
-                        <td className="n" data-testid="prv-row-topup" data-cents={r.partnerProfitShareCents}
+                        <td className="n tot" data-testid="prv-row-topup" data-cents={r.partnerProfitShareCents}
                           data-floored={r.played && !r.cancelled && r.partnerProfitShareCents === 0 ? "true" : "false"}>
                           {fmtCents(r.partnerProfitShareCents)}
                           {r.played && !r.cancelled && r.partnerProfitShareCents === 0 && <span className="prv-floor" data-testid="prv-floor"> floor</span>}
                         </td>
                       )}
                       {/* A row that fails the identity NEVER shows a total — it shows why. */}
-                      <td className="n tot" data-testid="prv-row-total" data-cents={r.partnerTotalCents}>
+                      <td className="n" data-testid="prv-row-total" data-cents={r.partnerTotalCents}>
                         {r.reconciles ? fmtCents(r.partnerTotalCents) : <span className="prv-cellerr" data-testid="prv-row-error">does not reconcile</span>}
                       </td>
                     </tr>
@@ -364,9 +382,10 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
                     <td className="n" data-testid="prv-total-share" data-cents={floorKind ? m.totals.fieldRentalCents + m.totals.partnerProfitShareCents : m.totals.partnerProfitShareCents}>
                       {fmtCents(floorKind ? m.totals.fieldRentalCents + m.totals.partnerProfitShareCents : m.totals.partnerProfitShareCents)}
                     </td>
-                    {floorKind && <td className="n" data-testid="prv-total-topup" data-cents={m.totals.partnerProfitShareCents}>{fmtCents(m.totals.partnerProfitShareCents)}</td>}
-                    {/* ONE OF THE FOUR FIGURES THAT MUST AGREE, and the largest number in the footer. */}
-                    <td className="n tot" data-testid="prv-total-partner" data-cents={m.totals.partnerTotalCents}>{fmtCents(m.totals.partnerTotalCents)}</td>
+                    {floorKind && <td className="n tot" data-testid="prv-total-topup" data-cents={m.totals.partnerProfitShareCents}>{fmtCents(m.totals.partnerProfitShareCents)}</td>}
+                    {/* ONE OF THE FOUR FIGURES THAT MUST AGREE. It keeps its value and loses the
+                        tint: the rentals inside it have already been paid, so it is not what is owed. */}
+                    <td className="n" data-testid="prv-total-partner" data-cents={m.totals.partnerTotalCents}>{fmtCents(m.totals.partnerTotalCents)}</td>
                   </tr>
                 </tfoot>
               </table>
@@ -612,6 +631,9 @@ const CSS = `
 
 .prv-pay{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;
   padding:22px 26px 23px;background:var(--grnbg);border-bottom:1px solid var(--grnln)}
+/* THE TOTAL, UNDER THE HEADLINE. Present because the match table still adds up to it, secondary
+   because the rentals inside it have already been paid. */
+.prv-subamt{margin-top:6px;font-size:12.5px;color:var(--ink2);font-variant-numeric:tabular-nums}
 .prv-amt{font-size:44px;font-weight:800;color:var(--grn2);letter-spacing:-.025em;line-height:1;font-variant-numeric:tabular-nums}
 .prv-for{font-size:14px;color:var(--ink2);margin-top:7px}
 .prv-for b{color:var(--ink);font-weight:700}

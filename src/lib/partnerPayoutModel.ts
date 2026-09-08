@@ -304,6 +304,33 @@ export type PayoutTotals = {
 // Aggregate by SUMMING THE PER-MATCH RESULTS, never by re-running the formula on summed gross.
 // Those differ the moment any single match is below cost: the max(0, pool) floor is per match, so
 // a month with one underwater match and one profitable one is not the same as one combined pool.
+/**
+ * AMOUNT OWED — what is still to be paid, once the rentals already paid are taken out.
+ *
+ * A DISPLAY SPLIT OF partnerTotal, DERIVED AND NEVER STORED. partnerTotal = fieldRental + the
+ * top-up on every rental row, so the top-up IS the amount owed and this function only names it.
+ * It adds no term to the reconciliation, which stays a statement about partnerTotal:
+ *     partnerTotal + matchdayRetained + matchManager === gross
+ * and is unaffected by how partnerTotal is presented.
+ *
+ * WHY IT IS THE NUMBER TO HIGHLIGHT. The rental is paid per reservation, up front, so a total that
+ * includes it overstates what anyone still owes. Measured: September's total is $822.00 of which
+ * $640.00 is four rentals already paid, leaving $182.00; August's is $1,700.00 of which $1,440.00
+ * is nine rentals, leaving $260.00. `partnerTotal - amountOwed` is exactly rentals x $160 in both.
+ *
+ * IT WORKS ON BOTH RENTAL KINDS because partnerProfitShareCents means the same thing in each: the
+ * part of the payment that is NOT the rental. On the shipped kind it is the profit share; on the
+ * floor kind it is the top-up above the floor. Same split either way.
+ *
+ * A CHARGED CANCELLATION CONTRIBUTES ZERO to it — its top-up is 0 and its whole payment is the
+ * rental. That treats a cancelled reservation's rental as ALREADY PAID, which is what "paid per
+ * reservation up front" implies and what fin_venues.charge_on_cancel=true is consistent with (the
+ * venue keeps it rather than billing for it). Nothing in the data proves a prepayment happened —
+ * see the report — and if it turns out a cancelled date's rental was NOT prepaid, this is the one
+ * line to change: September would read $342.00 instead of $182.00.
+ */
+export const amountOwedOf = (t: PayoutTotals): number => t.partnerProfitShareCents;
+
 export function totalsOf(rows: MatchPayout[]): PayoutTotals {
   const t: PayoutTotals = {
     matches: 0, grossCents: 0, spotsSold: 0, fieldRentalCents: 0, matchManagerCents: 0, poolCents: 0,
