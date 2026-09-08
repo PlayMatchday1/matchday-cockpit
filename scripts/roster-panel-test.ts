@@ -493,12 +493,31 @@ console.log("\nthe Gameday drawer gives the open match most of the window");
   /* ── AND THE FOUR RULES THAT WERE MISSING, EACH NAMED. Without the height chain .mp-fs takes its
    * content height, .mp-body never gets a bounded one, and the touch falls through to the page
    * behind the panel — which is exactly what Ryan hit. */
-  for (const rule of [
-    ".gpanel-body>.mp{min-height:0;flex:1 1 auto;display:flex}",
-    ".gpanel-body>.mp>.mp-panel{height:100%;max-width:none}",
-    ".gpanel-body>.mp>.mp-panel>.mp-fs{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}",
-    ".gpanel-body>.mp>.mp-panel>.mp-fs>.mp-body{flex:1 1 auto;min-height:0}",
-  ]) yes(`the height chain carries ${rule.split(">").pop()}`, css.includes(rule));
+  const cssCode = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  /* CHECKED BY SELECTOR AND DECLARATIONS, not by exact rule text. Pinning the whole string made
+   * this fail the moment .mp-body gained overscroll-behavior — a rule GAINING a declaration is not
+   * the chain breaking, and an assertion that cannot tell those apart cries wolf. */
+  const declOf = (sel) => {
+    const m = new RegExp(`\\n${sel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\{([^}]*)\\}`).exec(cssCode);
+    return m ? m[1].split(";").map((x) => x.trim()).filter(Boolean) : null;
+  };
+  for (const [sel, need] of [
+    [".gpanel-body>.mp", ["min-height:0", "flex:1 1 auto", "display:flex"]],
+    [".gpanel-body>.mp>.mp-panel", ["height:100%", "max-width:none"]],
+    [".gpanel-body>.mp>.mp-panel>.mp-fs", ["flex:1 1 auto", "min-height:0", "display:flex", "flex-direction:column"]],
+    [".gpanel-body>.mp>.mp-panel>.mp-fs>.mp-body", ["flex:1 1 auto", "min-height:0"]],
+  ]) {
+    const got = declOf(sel);
+    yes(`the height chain carries ${sel.split(">").pop()}`,
+      got !== null && need.every((d) => got.includes(d)), got === null ? "rule missing" : JSON.stringify(got));
+  }
+  /* AND THE SCROLL STOPS AT THE PANEL. overscroll-behavior was auto, so once .mp-body reached its
+   * end the browser handed the scroll to the page behind — measured at 500px of window movement on
+   * the eighth wheel notch. Most visible in Master Schedule's Month view, whose calendar has 2365px
+   * to give, which is where it was reported. */
+  for (const sel of [".gpanel", ".gpanel-body", ".gpanel-body>.mp>.mp-panel>.mp-fs>.mp-body"])
+    yes(`${sel} refuses to hand its scroll to the page`,
+      (declOf(sel) ?? []).includes("overscroll-behavior:contain"), JSON.stringify(declOf(sel)));
   yes("the bar clears the notch", /\.gpanel-bar\{[\s\S]{0,300}padding-top:calc\(9px \+ var\(--sat\)\)/.test(css));
   yes("…and is sticky, so the body scrolls under it", /\.gpanel-bar\{[\s\S]{0,300}position:sticky/.test(css));
   yes("full width under 759px", /@media \(max-width: 759px\) \{\s*\.gpanel\{width:100vw;right:0 !important\}/.test(css));
@@ -509,8 +528,7 @@ console.log("\nthe Gameday drawer gives the open match most of the window");
    * .gpanel-body, so none of them can reach /match-ops/match-panel/[id]. */
   /* COMMENTS STRIPPED FIRST — this block explains the height chain and naturally names .mp-body
    * while doing so; what must be scoped is the RULES. */
-  const cssCode = css.replace(/\/\*[\s\S]*?\*\//g, "");
-  const chain = cssCode.split("\n").filter((l) => /\.mp-panel|\.mp-fs|\.mp-body|\.mp-foot/.test(l));
+    const chain = cssCode.split("\n").filter((l) => /\.mp-panel|\.mp-fs|\.mp-body|\.mp-foot/.test(l));
   yes(`all ${chain.length} rules touching MatchPanel are scoped under .gpanel-body`,
     chain.length > 0 && chain.every((l) => l.includes(".gpanel-body>")), JSON.stringify(chain.filter((l) => !l.includes(".gpanel-body>"))));
   /* THE DOCK STILL FITS BESIDE IT. panelW only goes wide when they are NOT coexisting, which is

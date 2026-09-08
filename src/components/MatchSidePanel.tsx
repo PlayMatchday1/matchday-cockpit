@@ -109,7 +109,7 @@ export const MATCH_SIDE_PANEL_CSS = `
 /* Fixed right edge; the right offset is set inline to the dock width when they coexist (>=1600) so
    the two never overlap. --panel-right is subtracted so 92vw is of the space the panel actually
    has, not of the whole window. */
-.gpanel{position:fixed;top:0;bottom:0;height:100dvh;width:min(var(--panel-w,600px),calc(92vw - var(--panel-right,0px)));max-width:100vw;background:#eef2f0;border-left:1px solid #d4e0da;box-shadow:-8px 0 26px rgba(4,26,18,.12);z-index:60;display:flex;flex-direction:column}
+.gpanel{position:fixed;top:0;bottom:0;height:100dvh;width:min(var(--panel-w,600px),calc(92vw - var(--panel-right,0px)));max-width:100vw;background:#eef2f0;border-left:1px solid #d4e0da;box-shadow:-8px 0 26px rgba(4,26,18,.12);z-index:60;display:flex;flex-direction:column;overscroll-behavior:contain}
 /* SAFE AREA. The panel is position:fixed top:0, so without this the header renders beneath the iOS
    status bar and the Dynamic Island — "× Close" was drawn straight through the clock and could not
    be tapped without rotating the device. The bar is STICKY and starts BELOW the inset; the body
@@ -132,7 +132,7 @@ export const MATCH_SIDE_PANEL_CSS = `
    .mp-foot scrolled away with it — measured at top:2782px in a 950px viewport on desktop and
    top:4112px in 780px on a phone.
    The bottom padding moves to .mp-foot, which is now the element actually touching the bottom. */
-.gpanel-body{flex:1;min-height:0;overflow:hidden;padding:12px;display:flex;flex-direction:column}
+.gpanel-body{flex:1;min-height:0;overflow:hidden;padding:12px;display:flex;flex-direction:column;overscroll-behavior:contain}
 /* ── THE HEIGHT CHAIN. FOUR RULES, AND ALL FOUR ARE LOAD-BEARING. ───────────────────────────────
    Only in the panel. The standalone /match-ops/match-panel/[id] page is a document that scrolls
    with the window, and giving it a viewport height there would trap it in a box — which is why
@@ -150,7 +150,22 @@ export const MATCH_SIDE_PANEL_CSS = `
    .mp-body had no bounded height, so it had nothing to scroll and the touch fell through to the
    grid behind the panel. */
 .gpanel-body>.mp>.mp-panel>.mp-fs{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
-.gpanel-body>.mp>.mp-panel>.mp-fs>.mp-body{flex:1 1 auto;min-height:0}
+/* ── AND THE SCROLL STOPS AT THE PANEL'S EDGE ─────────────────────────────────────────────────
+ * overscroll-behavior was auto, so the moment .mp-body reached its end the browser CHAINED the
+ * scroll to the page behind — measured: seven wheel notches took .mp-body to its 2579px end and
+ * the eighth moved the WINDOW by 500 with the panel unmoved. On a trackpad one flick carries
+ * straight through, and what an operator sees is a form that stops responding while the page
+ * behind it lurches.
+ *
+ * IT LOOKS LIKE A BROKEN PANEL IN MONTH VIEW SPECIFICALLY, which is why it was reported there and
+ * not in Week: Month's grid is a tall calendar that visibly jumps, and its page has 2365px to give.
+ * The panel itself is identical in both — the chain walk matches link for link. Nothing was ever
+ * wrong with the layout; the scroll was simply allowed to leave.
+ *
+ * NO BACKTICKS IN HERE: this stylesheet is a template literal and one inside a comment ends the
+ * string — which is exactly what happened writing this block. contain keeps normal scrolling inside and refuses only the propagation. On .gpanel too, so a
+ * scroller the panel gains later (the chat pane already has one) inherits the same rule. */
+.gpanel-body>.mp>.mp-panel>.mp-fs>.mp-body{flex:1 1 auto;min-height:0;overscroll-behavior:contain}
 
 /* ── THE TWO TABS ──────────────────────────────────────────────────────────────────────────── */
 .gpanel-tabs{display:flex;gap:2px;padding:0 12px;border-bottom:1px solid #DCE5E0;flex:0 0 auto;background:#fff}
