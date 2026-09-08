@@ -464,7 +464,16 @@ console.log("\nrearrange: the mode, in the panel");
 console.log("\nthe Gameday drawer gives the open match most of the window");
 {
   const g = readFileSync("src/components/GamedayBoard.tsx", "utf8");
-  yes("the wide panel is 1400, not 760", /const PANEL_W_WIDE = 1400;/.test(g));
+  /* 900, NOT 1400 AND NOT 760. The 1400 was set against a roster failure that no longer
+   * reproduces: re-measured on the same match 18969, 32 rows across four teams, at every panel
+   * width from 600 to 1400 — zero rows overflow, zero names collapse, and the name is 348px at 760.
+   * What 1400 did cost was the board behind it: 280px of a 1680 window, which is the failure the
+   * 760 cap was written to prevent. At 900 the teams grid stays one-up, the name is 488px (wider
+   * than the 313px it got at 1400) and the board keeps 780px. */
+  yes("the wide panel is 900 — one-up teams, and the board stays readable behind it",
+    /const PANEL_W_WIDE = 900;/.test(g));
+  /* AND IT IS STILL WIDER THAN THE DEFAULT, so the wide case is doing something. */
+  yes("…and still wider than PANEL_W", /const PANEL_W = 600;/.test(g));
   /* THE RULES MOVED, THE PROPERTIES DID NOT. GamedayBoard kept its own `.gdo .gpanel…` copy and
    * MatchSidePanel exported an INCOMPLETE second one; Master Schedule got the incomplete half and
    * shipped a panel that would not scroll. There is one copy now and this reads it where it lives. */

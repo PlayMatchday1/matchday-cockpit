@@ -66,13 +66,33 @@ const PANEL_W = 600; // the in-place match panel (replaces the old side drawer +
  * panel. A drawer that makes the thing behind it unreadable is not a wider drawer, it is a modal
  * that forgot to say so. 760 keeps the teams grid's name-plus-phone rows (the reason it widened in
  * the first place) and gives the board back 60px at every width above 1600. */
-/* THE OPEN MATCH TAKES MOST OF THE WINDOW. At 760 the Details panel gave each team card 346px and
- * each roster row 322px of usable width for 341px of content — so Move and remove were clipped, the
- * card scrolled sideways, and the player NAME (the only flexible column) collapsed to zero on all
- * 32 rows of match 18969. This is the cap; the stylesheet also holds it to 92vw so the board stays
- * visible behind it, and it applies only when the chat dock is NOT beside the panel — when they
- * coexist the panel keeps PANEL_W so the two still fit. */
-const PANEL_W_WIDE = 1400;
+/* THE WIDE CAP, AND IT IS 900 BECAUSE THE REASON FOR 1400 EXPIRED.
+ *
+ * 1400 was set when the roster genuinely broke narrow: at 760 each team card was 346px and each
+ * roster row had 322px of usable width for 341px of content, so Move and remove were clipped, the
+ * card scrolled sideways, and the player NAME — the only flexible column — collapsed to zero on
+ * all 32 rows of match 18969. That was real.
+ *
+ * IT IS NOT REAL ANY MORE. The row was rebuilt as fixed tracks with the name as the one that gives
+ * (see .mp-player), and .mp-teams got its own CONTAINER query. Re-measured on that same match
+ * 18969, 32 rows across four teams, at every panel width from 600 to 1400: ZERO rows overflow,
+ * ZERO names collapse, and the name is 348px at 760 and 188px even at 600. The failure the 1400
+ * was protecting against cannot be reproduced.
+ *
+ * WHAT 1400 COST INSTEAD. The panel opens on the FORM, not the roster, and .mp-grid is 1fr 1fr —
+ * so a match-name input rendered 665px wide. And in a 1680 window it left the board 280px, which
+ * is the exact failure the 820 comment three lines up was written to prevent: "a drawer that makes
+ * the thing behind it unreadable is not a wider drawer, it is a modal that forgot to say so."
+ *
+ * AT 900, MEASURED ON 18969: the teams grid stays ONE card per row, the card is 841px, each roster
+ * row 819px, the player name 488px — wider than the 313px it got at 1400, because one-up hands
+ * each card the whole panel. The form field is 415px instead of 665px, and the board keeps 780px
+ * of a 1680 window instead of 280px. The trade is two teams side by side for one, and the roster
+ * is better off for it.
+ *
+ * The stylesheet also holds this to 92vw so the board stays visible, and it applies only when the
+ * chat dock is NOT beside the panel — when they coexist the panel keeps PANEL_W so the two fit. */
+const PANEL_W_WIDE = 900;
 const DOCK_W = 360;  // the CRM chat dock's expanded width — they sit side-by-side at ≥1600
 
 // ONE BOARD, TWO CALLERS. Match Ops renders it bare; the city-manager tier passes three props.
