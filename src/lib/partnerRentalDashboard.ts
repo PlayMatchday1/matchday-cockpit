@@ -68,6 +68,10 @@ export type RentalMonth = {
   // chip shows beside "Paid"; `periodKey` is the row's key (the FIRST DAY of the month, which is
   // what monthly cadence stores in week_start_date) and is what a Mark paid write addresses.
   paidAt: string | null;
+  /* WHAT WAS PAID, when it differs from what the formula produced. Null on an open period and on a
+   * settled one that paid the computed figure exactly. The view shows this in place of the
+   * computed total on a paid month; the arithmetic never sees it. */
+  paidAmountCents: number | null;
   periodKey: string;
 };
 
@@ -262,6 +266,7 @@ export function buildRentalDashboard(
         open: todayYmd <= monthCloseYmd(ym),
         status: periodStatusOf(ym, todayYmd, totals.partnerTotalCents, opts.ledger?.get(ym) ?? null),
         paidAt: opts.ledger?.get(ym)?.paidAt ?? null,
+        paidAmountCents: opts.ledger?.get(ym)?.paidAmountCents ?? null,
         periodKey: `${ym}-01`,
       };
     });

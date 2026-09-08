@@ -140,7 +140,7 @@ export default function PartnerDashboardsIndex() {
   // Mark ONE period paid / undo. The API snapshots the amount server-side; we just
   // send which period and which direction, then reload so the seam view + switcher
   // owed total update from the same recompute.
-  const doMarkPaid = async (partnerId: string, weekStartDate: string, action: "paid" | "unpaid") => {
+  const doMarkPaid = async (partnerId: string, weekStartDate: string, action: "paid" | "unpaid", paidAmount?: number | null) => {
     setBusy(true);
     const { data: sess } = await supabase.auth.getSession();
     const token = sess.session?.access_token;
@@ -148,7 +148,9 @@ export default function PartnerDashboardsIndex() {
     const res = await fetch("/api/partner-dashboards", {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ partnerId, weekStartDate, action }),
+      /* WHAT ACTUALLY MOVED, when the operator overtyped it. Undefined on an ordinary month, and
+       * the server stores null then — so the column keeps meaning "this one was different". */
+      body: JSON.stringify({ partnerId, weekStartDate, action, paidAmount: paidAmount ?? undefined }),
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) { alert(`Failed: ${json?.error ?? `HTTP ${res.status}`}`); setBusy(false); return; }

@@ -416,7 +416,22 @@ export const fmtCents = (cents: number): string =>
 export type PeriodStatus = "in_progress" | "due" | "paid" | "nothing_owed";
 
 /** The ledger row for a period, from partner_weekly_payments. Null when none exists yet. */
-export type PeriodLedger = { status: "pending" | "paid" | "disputed"; paidAt: string | null } | null;
+/* THE LEDGER ROW FOR A PERIOD.
+ *
+ * `paidAmountCents` IS WHAT ACTUALLY MOVED, and it is null on every period paid exactly what the
+ * formula said. It exists because August 2026 for Parmer was paid $2,520.00 while the two live
+ * formulas produce $2,360.00 and $1,700.00 — both confirmed against the live rows. A payment can
+ * differ from the model, and a settled period should show the fact rather than a recomputation
+ * that a later formula change would silently rewrite.
+ *
+ * IT NEVER ENTERS THE RECONCILIATION. partnerTotal + matchdayRetained + matchManager === gross is
+ * a statement about the COMPUTED figures and stays one; the paid amount is displayed beside that
+ * check, never inside it. */
+export type PeriodLedger = {
+  status: "pending" | "paid" | "disputed";
+  paidAt: string | null;
+  paidAmountCents?: number | null;
+} | null;
 
 const DAYS_IN = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate(); // m is 1-based
 

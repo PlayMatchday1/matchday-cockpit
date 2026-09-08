@@ -34,6 +34,13 @@ import { useState } from "react";
 import type { RentalCancellation, RentalDashboardProps, RentalMonth } from "@/lib/partnerRentalDashboard";
 import { fmtCents, PERIOD_STATUS_LABEL } from "@/lib/partnerPayoutModel";
 
+/* WHAT A PERIOD'S TOTAL SHOWS. A settled month shows WHAT WAS PAID; an open one shows what the
+ * formula currently makes. A paid period is a stored fact — recomputing it would let a formula
+ * change, or a late data correction, rewrite a month whose money already moved.
+ * paidAmountCents is null whenever the payment matched the computation, so the fallback is the
+ * normal case and nothing changes for a month that was paid what it was owed. */
+const shownTotal = (m: RentalMonth): number => m.paidAmountCents ?? m.totals.partnerTotalCents;
+
 const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -62,7 +69,7 @@ const closesLabel = (ymd: string) => { const { m, d } = ymdParts(ymd); return `$
 export type RentalAdmin = {
   partnerId: string;
   busy?: boolean;
-  onMark: (partnerId: string, periodKey: string, action: "paid" | "unpaid") => void;
+  onMark: (partnerId: string, periodKey: string, action: "paid" | "unpaid", paidAmount?: number | null) => void;
   /* THE CANCELLATION DECISION. null clears it. The reason is mandatory on a decision and the
    * server enforces that too — this is the UI half of a rule that lives in the database's own
    * CHECK constraint. */
@@ -204,8 +211,12 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
               <table className="prv-tbl" data-testid="prv-periods">
                 <thead>
                   <tr>
+                    {/* NO REVENUE COLUMN. What a venue reads this table for is what they are owed,
+                        and gross sat between them and it. The reconciliation sentence under the
+                        match table still names revenue — that is where the number is load-bearing,
+                        because it is what makes the total checkable. */}
                     <th>Period</th><th className="n">Matches</th><th className="n">Spots</th>
-                    <th className="n">Players</th><th className="n">Revenue</th>
+                    <th className="n">Players</th>
                     <th className="n tot">{totalHead}</th>
                     <th className="l">Status</th><th className="n">When</th>
                   </tr>
@@ -217,10 +228,12 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
                       <td className="n">{m.totals.matches}</td>
                       <td className="n">{m.spotsSold}</td>
                       <td className="n">{m.distinctPlayers}</td>
-                      <td className="n dim">{fmtCents(m.totals.grossCents)}</td>
-                      {/* ONE OF THE FOUR FIGURES THAT MUST AGREE. */}
-                      <td className="n tot" data-testid="prv-period-total" data-cents={m.totals.partnerTotalCents}>
-                        {fmtCents(m.totals.partnerTotalCents)}
+                      {/* WHAT WAS PAID ON A SETTLED MONTH, WHAT IS COMPUTED ON AN OPEN ONE.
+                          A paid period is a stored fact and shows the amount that actually moved;
+                          recomputing it would let a formula change rewrite history. */}
+                      <td className="n tot" data-testid="prv-period-total" data-cents={shownTotal(m)}
+                        data-source={m.paidAmountCents != null ? "paid" : "computed"}>
+                        {fmtCents(shownTotal(m))}
                       </td>
                       <td className="l"><StatusChip m={m} /></td>
                       <td className="n dim" data-testid="prv-period-when">
@@ -263,8 +276,14 @@ export default function PartnerRentalView(p: RentalDashboardProps & { admin?: Re
           </>
         )}
 
-        {/* ── MONTH DETAIL ──────────────────────────────────────────────────────────────── */}
-        {p.months.map((m) => (
+        {/* ── MONTH DETAIL, FOR THE OPEN PERIOD ONLY ─────────────────────────────────────────
+            A CLOSED PERIOD COLLAPSES TO ITS ROW IN "Every month". The page's subject is the month
+            in progress; a second full table for a month that has been settled is a page that grows
+            by one table every month and never shrinks.
+            THIS IS A RULE, NOT A SPECIAL CASE FOR AUGUST. `open` is derived from the period's own
+            close date against today, so in October it is September that collapses, with nothing to
+            change here. The detail is still in the system and still on the internal view. */}
+        {p.months.filter((m) => m.open).map((m) => (
           <section className="prv-month" data-testid="prv-month" data-ym={m.ym} key={m.ym}>
             <div className="prv-blk">
               <div className="prv-h">{m.label} · match by match</div>
@@ -456,6 +475,9 @@ function CancellationsCard(
 
 function PaymentsCard({ months, admin }: { months: RentalMonth[]; admin: RentalAdmin }) {
   const [showEarlier, setShowEarlier] = useState(false);
+  /* THE TYPED AMOUNT, one at a time. Null means "untouched", so the box shows the computed figure
+   * and marking without editing records no difference at all. */
+  const [amt, setAmt] = useState<string | null>(null);
   // A period is ACTIONABLE when it has closed and is not already paid — an open month has no final
   // figure, so it gets no button rather than a disabled one that invites a click.
   const settled = months.filter((m) => m.status === "paid");
@@ -483,10 +505,27 @@ function PaymentsCard({ months, admin }: { months: RentalMonth[]; admin: RentalA
           <div className="prv-pay-r">
             <span className="prv-pay-amt">{fmtCents(m.totals.partnerTotalCents)}</span>
             <StatusChip m={m} />
-            {/* Only a CLOSED, UNPAID period can be marked. The server enforces this too. */}
+            {/* Only a CLOSED, UNPAID period can be marked. The server enforces this too.
+                THE AMOUNT IS TYPED, DEFAULTED TO THE COMPUTED FIGURE. August 2026 was paid $2,520
+                against a formula that makes $2,360 and a page that shows $1,700 — so a payment CAN
+                differ from the model, and this is where that gets recorded rather than argued
+                about later. Both figures are stored; the operator only overtypes the one that
+                actually moved. */}
             {m.status === "due" && (
-              <button type="button" className="prv-btn go" data-testid="prv-mark-paid" disabled={admin.busy}
-                onClick={() => admin.onMark(admin.partnerId, m.periodKey, "paid")}>Mark paid</button>
+              <>
+                <input className="prv-payin" data-testid="prv-paid-amount" inputMode="decimal"
+                  aria-label={`Amount paid for ${m.label}`} disabled={admin.busy}
+                  value={amt ?? (m.totals.partnerTotalCents / 100).toFixed(2)}
+                  onChange={(e) => setAmt(e.target.value)} />
+                <button type="button" className="prv-btn go" data-testid="prv-mark-paid" disabled={admin.busy}
+                  onClick={() => {
+                    /* NULL WHEN IT MATCHES, so an ordinary month stores nothing extra and the
+                       column keeps meaning "this one was different". */
+                    const typed = Number(amt ?? (m.totals.partnerTotalCents / 100).toFixed(2));
+                    const same = Math.round(typed * 100) === m.totals.partnerTotalCents;
+                    admin.onMark(admin.partnerId, m.periodKey, "paid", same ? null : typed);
+                  }}>Mark paid</button>
+              </>
             )}
           </div>
         </div>
@@ -506,7 +545,18 @@ function PaymentsCard({ months, admin }: { months: RentalMonth[]; admin: RentalA
                 <div className="prv-pay-nt">{m.paidAt ? `paid ${m.paidAt.slice(0, 10)}` : "paid"}</div>
               </div>
               <div className="prv-pay-r">
-                <span className="prv-pay-amt">{fmtCents(m.totals.partnerTotalCents)}</span>
+                {/* BOTH FIGURES AND THE GAP, NAMED. This card renders only when `admin` is passed,
+                    so it is the internal view: the reconciliation Ryan needs and the partner does
+                    not. The partner's own table shows the paid amount alone. */}
+                <span className="prv-pay-amt">{fmtCents(shownTotal(m))}</span>
+                {m.paidAmountCents != null && (
+                  <span className="prv-paygap" data-testid="prv-paid-gap"
+                    data-computed={m.totals.partnerTotalCents} data-paid={m.paidAmountCents}
+                    title={`The formula produced ${fmtCents(m.totals.partnerTotalCents)}; ${fmtCents(m.paidAmountCents)} was paid.`}>
+                    formula {fmtCents(m.totals.partnerTotalCents)} · {m.paidAmountCents > m.totals.partnerTotalCents ? "+" : ""}
+                    {fmtCents(m.paidAmountCents - m.totals.partnerTotalCents)}
+                  </span>
+                )}
                 <StatusChip m={m} />
                 {/* UNDO IS A REVERSAL, not an erasure — the server sets the row back to pending and
                     logs it; the change_log keeps the fact that it was once marked. */}
@@ -640,6 +690,10 @@ const CSS = `
 .prv-pay-nt{font-size:12px;color:var(--ink2);margin-top:2px}
 .prv-pay-r{display:flex;align-items:center;gap:10px;flex:none}
 .prv-pay-amt{font-size:16px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--grn2)}
+.prv-payin{width:96px;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums;min-height:34px}
+/* THE GAP BETWEEN THE FORMULA AND THE PAYMENT. Internal only, and quiet: it is a fact to check,
+   not an alarm — a month can legitimately be paid something the model does not produce. */
+.prv-paygap{font-size:11px;font-weight:700;color:var(--ink2);background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:2px 8px;white-space:nowrap}
 .prv-btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 13px;font:inherit;font-size:12.5px;font-weight:700;color:var(--ink);cursor:pointer;min-height:34px}
 .prv-btn:disabled{opacity:.45;cursor:not-allowed}
 /* the ONE filled-dark button — Mark paid is the single thing to do here */

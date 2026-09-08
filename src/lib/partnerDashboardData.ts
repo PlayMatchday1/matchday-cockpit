@@ -58,7 +58,13 @@ export async function buildPartnerDashboardData(
     const ledger = new Map<string, PeriodLedger>(
       paymentRows.map((r) => [
         String(r.week_start_date).slice(0, 7),
-        { status: (r.status as "pending" | "paid" | "disputed") ?? "pending", paidAt: (r.paid_at as string | null) ?? null },
+        {
+          status: (r.status as "pending" | "paid" | "disputed") ?? "pending",
+          paidAt: (r.paid_at as string | null) ?? null,
+          /* CENTS, from a numeric(10,2) of dollars. Rounded once, here, at the boundary — the rest
+           * of this model is integer cents and a float dollar has no business past this line. */
+          paidAmountCents: r.paid_amount == null ? null : Math.round(Number(r.paid_amount) * 100),
+        },
       ]),
     );
     /* THE CANCELLATION DECISIONS, READ FROM THE DATABASE ON EVERY RENDER. Whether a cancelled date

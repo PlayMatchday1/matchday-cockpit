@@ -406,5 +406,74 @@ console.log("\nThe partner-facing page shows what the partner is owed, not Match
   yes("…and both reach the formula", /cancellationFeeEnabled: p\.cancellationFeeEnabled/.test(stats0));
 }
 
+console.log("\nA paid period shows what was PAID, not what the formula makes");
+{
+  const view = readFileSync("src/app/partners/[slug]/PartnerRentalView.tsx", "utf8");
+  const body = view.slice(view.indexOf("export default"));
+  /* WHY THIS EXISTS. August 2026 for Parmer was paid $2,520.00 while the two live formulas produce
+   * $2,360.00 and $1,700.00 — both re-derived from the live August rows, not taken on trust. A
+   * settled period is a stored fact; recomputing it would let a formula change rewrite a month
+   * whose money already moved. */
+  yes("the period total falls back to the computed figure only when nothing was stored",
+    /const shownTotal = \(m: RentalMonth\): number => m\.paidAmountCents \?\? m\.totals\.partnerTotalCents;/.test(view));
+  yes("…and the table says which of the two it is showing",
+    /data-source=\{m\.paidAmountCents != null \? "paid" : "computed"\}/.test(body));
+
+  /* THE PAID AMOUNT NEVER ENTERS THE ARITHMETIC. The reconciliation is a statement about the
+   * COMPUTED figures and stays one. */
+  const model = readFileSync("src/lib/partnerPayoutModel.ts", "utf8");
+  const modelCode = model.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  /* IT IS A FIELD ON THE LEDGER TYPE AND NOTHING ELSE. Every other mention in the model would be
+   * a computation, and there are none: no assignment, no arithmetic, no comparison. */
+  is("paidAmountCents is declared on the ledger and never computed with",
+    modelCode.match(/paidAmountCents/g)?.length ?? 0, 1);
+  is("…and never appears in an expression", modelCode.match(/paidAmountCents\s*[+\-*/=<>]/g), null);
+  yes("…the reconciliation still sums the computed figures",
+    /reconciles: partnerTotalCents \+ matchdayRetainedCents \+ matchManagerCents === m\.grossCents/.test(model));
+  const build = readFileSync("src/lib/partnerRentalDashboard.ts", "utf8");
+  yes("…and the month reads it straight off the ledger",
+    /paidAmountCents: opts\.ledger\?\.get\(ym\)\?\.paidAmountCents \?\? null,/.test(build));
+  /* NOT INSIDE THE TOTALS. totalsOf is the function that produces every figure the reconciliation
+   * tests, and the paid amount must never reach it. */
+  const totalsFn = /export function totalsOf[\s\S]*?\n\}/.exec(model)?.[0] ?? "";
+  yes("…and totalsOf has never heard of it", totalsFn.length > 0 && !totalsFn.includes("paidAmount"));
+
+  /* BOTH FIGURES ARE STORED. Overloading calculated_amount would destroy the only thing that makes
+   * a disagreement visible. */
+  const route = readFileSync("src/app/api/partner-dashboards/route.ts", "utf8");
+  yes("calculated_amount still holds the server-side recompute", /calculated_amount: owedAmount/.test(route));
+  yes("…and paid_amount holds what moved, only when it differed",
+    /const paidCols = paidAmount == null \? \{\} : \{ paid_amount: paidAmount \}/.test(route));
+  yes("…the amount is validated, not coerced", /paidAmount must be a number between 0 and 1,000,000/.test(route));
+  yes("…and the difference is named in change_log", /Amount actually paid/.test(route));
+  /* PRE-MIGRATION: the write still works without the column, and the read still works without it. */
+  yes("a pre-0163 write falls back rather than failing",
+    /res\.error\?\.code === "42703" && paidAmount != null\) res = await write\(\{\}\)/.test(route));
+  const stats = readFileSync("src/lib/partnerStats.ts", "utf8");
+  yes("…and the read has a column tier for it", /withPaid\.error\?\.code === "42703"/.test(stats));
+
+  /* THE PARTNER SEES THE PAID FIGURE; THE INTERNAL VIEW SEES BOTH AND THE GAP. PaymentsCard renders
+   * only when `admin` is passed, which is what makes it the internal half. */
+  yes("the gap is rendered only inside the admin-gated card",
+    body.indexOf('data-testid="prv-paid-gap"') > body.indexOf("function PaymentsCard"));
+  yes("…and names the formula figure beside the paid one", /formula \{fmtCents\(m\.totals\.partnerTotalCents\)\}/.test(body));
+  yes("Mark paid takes an amount, defaulted to the computed figure",
+    /data-testid="prv-paid-amount"/.test(body) && /\(m\.totals\.partnerTotalCents \/ 100\)\.toFixed\(2\)/.test(body));
+  yes("…and stores nothing extra when it matches", /same \? null : typed/.test(body));
+
+  /* THE TWO DISPLAY CHANGES. */
+  is("EVERY MONTH has no revenue column", body.match(/<th className="n">Revenue<\/th>\s*\n\s*<th className="n tot">/g), null);
+  yes("…and the partner total follows PLAYERS",
+    /<th className="n">Players<\/th>\s*\n\s*<th className="n tot">\{totalHead\}<\/th>/.test(body));
+  /* A RULE, NOT A SPECIAL CASE. `open` is derived from the period's own close date, so in October
+   * it is September that collapses and nothing here changes. */
+  yes("only the OPEN period renders a match-by-match table", /p\.months\.filter\(\(m\) => m\.open\)\.map/.test(body));
+  /* A RULE, NOT A DATE. The filter tests `open`, which every period derives from its own close
+   * date — so no month is named anywhere in the condition and October needs no change. */
+  const detail = body.slice(body.indexOf("MONTH DETAIL"), body.indexOf("MONTH DETAIL") + 900);
+  is("…and no month is named in the condition", detail.match(/2026-0\d|"August"|=== "20/g), null);
+  yes("…the rule is the period's own open flag", /filter\(\(m\) => m\.open\)/.test(detail));
+}
+
 console.log(`\npartner-floor-payout: ${pass} passed, ${fails.length} failed`);
 if (fails.length) { for (const f of fails) console.log(`  FAILED: ${f}`); process.exit(1); }

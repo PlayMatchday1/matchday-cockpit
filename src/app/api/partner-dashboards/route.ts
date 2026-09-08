@@ -144,7 +144,7 @@ export async function POST(req: Request) {
   const supabase = auth.supabase;
 
   const body = (await req.json().catch(() => null)) as
-    | { partnerId?: unknown; weekStartDate?: unknown; action?: unknown; paidAt?: unknown }
+    | { partnerId?: unknown; weekStartDate?: unknown; action?: unknown; paidAt?: unknown; paidAmount?: unknown }
     | null;
   const partnerId = typeof body?.partnerId === "string" ? body.partnerId : "";
   const weekStartDate = typeof body?.weekStartDate === "string" ? body.weekStartDate.slice(0, 10) : "";
@@ -155,6 +155,21 @@ export async function POST(req: Request) {
   const paidAt = typeof body?.paidAt === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.paidAt)
     ? body.paidAt
     : new Date().toISOString().slice(0, 10);
+
+  /* WHAT WAS ACTUALLY PAID, when it differs from the formula. Optional: absent means "paid what it
+   * was owed" and stores null, which is every ordinary month. It is NOT trusted as the owed figure
+   * — owedAmount below is still a server-side recompute, and both are stored so a disagreement is
+   * a fact on the row rather than something nobody can reconstruct later.
+   * REFUSED rather than coerced: a non-number, a negative or an absurd figure is a slip, and
+   * silently storing it would put a wrong number on a settled month. */
+  let paidAmount: number | null = null;
+  if (body?.paidAmount != null && body.paidAmount !== "") {
+    const n = Number(body.paidAmount);
+    if (!Number.isFinite(n) || n < 0 || n > 1_000_000) {
+      return Response.json({ error: "paidAmount must be a number between 0 and 1,000,000" }, { status: 400 });
+    }
+    paidAmount = Math.round(n * 100) / 100;
+  }
 
   const partner = (await fetchAllPartners(supabase)).find((p) => p.id === partnerId);
   if (!partner) return Response.json({ error: "Partner not found" }, { status: 404 });
@@ -250,7 +265,12 @@ export async function POST(req: Request) {
   const changes: Change[] = [
     { key: "status", field: `${partner.partnerName} · ${periodLabel}`, before: before.status, after: after.status },
     { key: "paidAt", field: "Paid on", before: before.paidAt ?? "—", after: after.paidAt ?? "—" },
-    { key: "amount", field: "Amount", before: "—", after: `$${owedAmount.toFixed(2)}` },
+    { key: "amount", field: "Amount the formula produced", before: "—", after: `$${owedAmount.toFixed(2)}` },
+    /* THE DIFFERENCE, NAMED, on the row that records the payment. A month paid something other than
+     * the model is the month you most want a trace of. */
+    ...(paidAmount != null && action === "paid"
+      ? [{ key: "paidAmount", field: "Amount actually paid", before: `$${owedAmount.toFixed(2)}`, after: `$${paidAmount.toFixed(2)}` }]
+      : []),
   ];
 
   const { error: writeErr, outcome } = await recordWrite(
@@ -259,7 +279,7 @@ export async function POST(req: Request) {
       actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
       matchId: null, matchName: null,
       method: "POST", path: `/partner-dashboards/${partner.id}/payments/${weekStartDate}`,
-      body: { action, weekStartDate, amount: owedAmount },
+      body: { action, weekStartDate, amount: owedAmount, paidAmount },
       keys: ["status", "paidAt"],
       label: (k) => (k === "status" ? "Payment status" : k === "paidAt" ? "Paid on" : k),
       // THE VERDICT COMES FROM A RE-READ, never from the absence of an error.
@@ -270,22 +290,29 @@ export async function POST(req: Request) {
       readResource: readLedger,
       write: async () => {
         if (action === "paid") {
-          if (existing) {
-            const { error } = await supabase.from("partner_weekly_payments")
-              .update({ status: "paid", paid_at: paidAt, calculated_amount: owedAmount })
-              .eq("id", existing.id);
-            if (error) throw new Error(error.message);
-          } else {
-            const { error } = await supabase.from("partner_weekly_payments").insert({
+          /* BOTH FIGURES, ALWAYS. calculated_amount keeps the server-side recompute so a later
+           * data change cannot rewrite what the formula said at the time; paid_amount records what
+           * actually moved when it differed, and null when it did not. Overloading one column with
+           * both meanings would destroy the only thing that makes a disagreement visible.
+           * PRE-0163 FALLBACK: if the column does not exist yet the write is retried without it,
+           * so marking a period paid still works and only the difference is not recorded. */
+          const paidCols = paidAmount == null ? {} : { paid_amount: paidAmount };
+          const write = async (cols: Record<string, unknown>) => (existing
+            ? supabase.from("partner_weekly_payments")
+              .update({ status: "paid", paid_at: paidAt, calculated_amount: owedAmount, ...cols })
+              .eq("id", existing.id)
+            : supabase.from("partner_weekly_payments").insert({
               partner_dashboard_id: partner.id,
               week_start_date: weekStartDate,
               calculated_amount: owedAmount,
               status: "paid",
               paid_at: paidAt,
               is_pre_system_settlement: false,
-            });
-            if (error) throw new Error(error.message);
-          }
+              ...cols,
+            }));
+          let res = await write(paidCols);
+          if (res.error?.code === "42703" && paidAmount != null) res = await write({});
+          if (res.error) throw new Error(res.error.message);
         } else if (existing) {
           const { error } = await supabase.from("partner_weekly_payments")
             .update({ status: "pending", paid_at: null })

@@ -465,7 +465,10 @@ export type PartnerWeeklyPaymentRecord = {
   id: string;
   partner_dashboard_id: string;
   week_start_date: string; // YYYY-MM-DD (Sunday for normal rows, through-date for pre-system)
+  /** What the FORMULA produced when this was marked, snapshotted server-side. Never overwritten. */
   calculated_amount: number;
+  /** What was actually PAID, when it differed. Null means it matched calculated_amount. (0163) */
+  paid_amount: number | null;
   status: "pending" | "paid" | "disputed";
   paid_at: string | null;
   paid_notes: string | null;
@@ -487,13 +490,24 @@ export async function fetchPartnerWeeklyPayments(
   let data: any[] | null = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let error: any = null;
-  const primary = await supabase
+  /* NEWEST COLUMN TIER FIRST — 0163's paid_amount, then without it. Code deploys before a
+   * migration applies, and a named column that does not exist yet fails the whole select. */
+  const withPaid = await supabase
     .from("partner_weekly_payments")
     .select(
-      "id, partner_dashboard_id, week_start_date, calculated_amount, status, paid_at, paid_notes, dispute_note, disputed_at, is_pre_system_settlement",
+      "id, partner_dashboard_id, week_start_date, calculated_amount, paid_amount, status, paid_at, paid_notes, dispute_note, disputed_at, is_pre_system_settlement",
     )
     .eq("partner_dashboard_id", partnerDashboardId)
     .order("week_start_date", { ascending: true });
+  const primary = withPaid.error?.code === "42703"
+    ? await supabase
+      .from("partner_weekly_payments")
+      .select(
+        "id, partner_dashboard_id, week_start_date, calculated_amount, status, paid_at, paid_notes, dispute_note, disputed_at, is_pre_system_settlement",
+      )
+      .eq("partner_dashboard_id", partnerDashboardId)
+      .order("week_start_date", { ascending: true })
+    : withPaid;
   data = primary.data;
   error = primary.error;
   if (error && error.code === "42703") {
@@ -518,6 +532,9 @@ export async function fetchPartnerWeeklyPayments(
     id: r.id,
     partner_dashboard_id: r.partner_dashboard_id,
     week_start_date: String(r.week_start_date).slice(0, 10),
+    // Undefined pre-0163 and null on a period paid exactly what it was owed; both mean "no
+    // difference to record", and every reader falls back to calculated_amount.
+    paid_amount: r.paid_amount == null ? null : Number(r.paid_amount),
     calculated_amount: Number(r.calculated_amount ?? 0),
     status: r.status as "pending" | "paid" | "disputed",
     paid_at: r.paid_at ?? null,
