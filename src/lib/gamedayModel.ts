@@ -27,6 +27,10 @@ export type ApiMatch = {
   autoCanceledMinutes?: number; // MINUTES before kickoff (spec says hours; spec is wrong)
   minPlayerCount?: number;
   maxPlayerCount?: number | null; // capacity cap; null/0 = special event (no cap)
+  /* MAX SPOTS at each shape — the app's own name for them (MatchEditor "Max spots, 2 teams" /
+   * "Max spots, 4 teams"). TOTALS, not per side. Unlike maxPlayerCount these do not move when a
+   * match is converted or bumped, which is why realFillPct measures against them. */
+  maxTeamSize2Team?: number | null; maxTeamSize4Team?: number | null;
   registrationPrice?: number; // cents
   fakeSpotLeft36h?: number; fakeSpotLeft24h?: number; fakeSpotLeft12h?: number;
   fakeSpotLeft6h?: number; fakeSpotLeft3h?: number;
@@ -373,7 +377,7 @@ export function inCities(m: ApiMatch, cities: Set<string>): boolean {
 export const atRisk = (m: ApiMatch, now: number): boolean => stillToCome(m, now) && short(m);
 
 /**
- * REAL SPOTS FILLED, for the whole day: sum(real) / sum(capacity).
+ * REAL SPOTS FILLED, for the whole day: sum(real) / sum(maxSpots).
  *
  * NOT AN AVERAGE OF PER-MATCH PERCENTAGES. A 4-of-4 match and a 2-of-40 match average to 52%
  * and are together 6 of 44, which is 14%. Averaging percentages weights a tiny match the same as
@@ -386,27 +390,51 @@ export const atRisk = (m: ApiMatch, now: number): boolean => stillToCome(m, now)
  * Matches with no capacity contribute to neither side. Returns null when nothing has capacity,
  * because 0/0 rendered as "0%" is a claim about a day that had no spots to fill.
  */
-/* A MATCH THAT HAS GROWN TO FOUR TEAMS. The denominator is maxPlayerCount, and it MOVES on the
- * manual convert path: convert-4 writes maxPlayerCount = perTeam x 4, so 22 across two teams
- * becomes 44 and the percentage FALLS when a match gets more popular. (MatchDay's own auto-bump
- * does not move it — proven on staging: writing teamNumbers 4 alone left maxPlayerCount at 22, and
- * production 18360 sits at four teams with maxPlayerCount 32 against a 4-team total of 40.)
+/**
+ * MAX SPOTS at the shape the match is actually at — the denominator realFillPct measures against.
  *
- * Keeping current capacity is right for "how full is tonight". Being SILENT about the churn is not,
- * so the subtitle names it when it has happened. */
-export const isBumped = (m: ApiMatch): boolean => teamCount(m) >= 4;
+ * WHY NOT capacity(). maxPlayerCount is capacity NOW, the bookable cap, and it MOVES: the manual
+ * convert-4 path writes maxPlayerCount = perTeam x 4, so 22 across two teams becomes 44 and the
+ * percentage FALLS when a match gets more popular, while MatchDay's own auto-bump does not move it
+ * at all — proven on staging (teamNumbers 4 alone left maxPlayerCount at 22) and on production
+ * 18360, four teams at maxPlayerCount 32 against a 4-team total of 40. A denominator that moves
+ * for two different reasons in two different directions cannot answer "how much of today did real
+ * people actually buy".
+ *
+ * A SEPARATE FUNCTION, DELIBERATELY. capacity() has fifteen call sites — the meter, the rails, the
+ * open-spot badges, the amber and red rules — and every one of them is asking "how full is what I
+ * can currently sell", which is a different and also honest question. Not one of them changes.
+ *
+ * NULL WHEN capacity() IS NULL, so the set of matches that contribute to the ratio is exactly the
+ * set that contributed before. A no-cap special event still belongs to neither side.
+ */
+export const maxSpots = (m: ApiMatch): number | null => {
+  const cap = capacity(m);
+  if (cap == null) return null;
+  /* AN EMPTY teams ARRAY IS NOT TWO TEAMS. teamCount returns 0 for a payload with no teams key and
+   * for one with an empty list, and those mean "we do not know the shape" — not "it is a 2-team
+   * match". Guessing 2 there would hand the match a 2-team max spots it may never have been at, so
+   * an unknown shape reads its own capacity and nothing else. */
+  const shape = teamCount(m) === 0 ? null : teamCount(m) >= 4 ? m.maxTeamSize4Team : m.maxTeamSize2Team;
+  /* FALLBACK. A match that is not auto-bump has no 4-team max spots at all — MatchEditor disables
+   * that input when isAutoBump is false — so null and 0 both mean "not configured", and the match
+   * keeps its own capacity rather than dropping out of the denominator entirely. */
+  if (shape == null || shape <= 0) return cap;
+  /* NEVER BELOW capacity. If a match is somehow booked past its shape max, the smaller number would
+   * print a fill above 100%, which is a number nobody can act on. Take the larger. */
+  return Math.max(shape, cap);
+};
 
-export function realFillPct(ms: readonly ApiMatch[]): { pct: number | null; real: number; cap: number; fake: number; bumped: number } {
-  let real = 0, cap = 0, fake = 0, bumped = 0;
+export function realFillPct(ms: readonly ApiMatch[]): { pct: number | null; real: number; cap: number; fake: number } {
+  let real = 0, cap = 0, fake = 0;
   for (const m of ms) {
-    const c = capacity(m);
+    const c = maxSpots(m);
     if (c == null || c <= 0) continue;
     real += realCount(m);
     fake += fakeCount(m);
     cap += c;
-    if (isBumped(m)) bumped++;
   }
-  return { pct: cap > 0 ? (real / cap) * 100 : null, real, cap, fake, bumped };
+  return { pct: cap > 0 ? (real / cap) * 100 : null, real, cap, fake };
 }
 
 /* THE SECTIONS, IN RENDER ORDER.

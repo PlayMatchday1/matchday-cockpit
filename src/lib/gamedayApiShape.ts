@@ -37,6 +37,13 @@ export function trimMatch(m: Raw) {
     // actually auto-cancel. A deadline that will never fire is a fiction the row was telling.
     autoCanceled: m.autoCanceled === true,
     minPlayerCount: num(m.minPlayerCount) ?? 0, maxPlayerCount: num(m.maxPlayerCount),
+    /* MAX SPOTS AT EACH SHAPE, and like the rating these cost nothing: both are ALREADY on the
+     * /admin/matches LIST rows this route pages through — measured on production for 2026-09-07,
+     * all 19 rows carried maxTeamSize2Team and maxTeamSize4Team. They were simply not passed on.
+     * No second read, no extra latency.
+     * THEY ARE TOTALS, NOT PER SIDE — proven on 17522, see checkinModel.ts:51. maxPlayerCount is
+     * capacity NOW (the bookable cap) and it moves; these do not. See maxSpots() in gamedayModel. */
+    maxTeamSize2Team: num(m.maxTeamSize2Team), maxTeamSize4Team: num(m.maxTeamSize4Team),
     registrationPrice: num(m.registrationPrice), additionalSpotPrice: num(m.additionalSpotPrice),
     fakeSpotLeft36h: num(m.fakeSpotLeft36h) ?? 0, fakeSpotLeft24h: num(m.fakeSpotLeft24h) ?? 0,
     fakeSpotLeft12h: num(m.fakeSpotLeft12h) ?? 0, fakeSpotLeft6h: num(m.fakeSpotLeft6h) ?? 0,

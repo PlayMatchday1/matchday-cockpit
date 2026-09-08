@@ -11,7 +11,7 @@
  */
 import { readFileSync } from "node:fs";
 import {
-  realFillPct, atRisk, meter, dayBucket, DAY_BUCKETS, FILTERING_TILES,
+  realFillPct, maxSpots, atRisk, meter, dayBucket, DAY_BUCKETS, FILTERING_TILES,
   realCount, fakeCount, capacity, short, shortBy, vsMinDelta, passesStrip, inCities, minsToDeadline,
   bannerUrgent, defaultBanners, riskSubtitle, BANNER_LEAD_MINUTES, DEFAULT_BANNER_CAP, showsDeadline, type ApiMatch,
 } from "../src/lib/gamedayModel";
@@ -21,6 +21,7 @@ const ok = (m: string) => { pass++; console.log(`  ✓ ${m}`); };
 const bad = (m: string, d = "") => { fails.push(`${m}${d ? ` — ${d}` : ""}`); console.log(`  ✗ ${m}${d ? ` — ${d}` : ""}`); };
 const is = (m: string, got: unknown, want: unknown) =>
   JSON.stringify(got) === JSON.stringify(want) ? ok(m) : bad(m, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+const yes = (m: string, c: boolean, d = "") => (c ? ok(m) : bad(m, d));
 const near = (m: string, got: number, want: number, tol = 0.01) =>
   Math.abs(got - want) <= tol ? ok(`${m} (${got.toFixed(2)})`) : bad(m, `got ${got} want ~${want}`);
 
@@ -346,6 +347,86 @@ console.log("\nTHE STEPPER IS KEYED ON A PERMISSION, NOT ON A PROP");
   const inner = board.slice(cssStart, cssEnd);
   is("  no backtick inside the CSS template literal", inner.includes("`"), false);
   is("  control: the slice really is the stylesheet", inner.includes(".gdo .grow{") && inner.length > 2000, true);
+}
+
+console.log("\nMAX SPOTS is the denominator, and it does not move");
+{
+  /* THE CONTROL IS THE SUITE ABOVE. `mk` sets only `cap`, so every one of the 116 assertions that
+   * came before this block ran through maxSpots' FALLBACK path and still reads the same number.
+   * That is the proof the fallback is real, and it is why none of them was edited. */
+  const shaped = (o: { id: number; players: number; cap: number; teams: number; t2?: number | null; t4?: number | null }): ApiMatch =>
+    ({ ...mk({ id: o.id, players: o.players, fakePlayers: 0, cap: o.cap, min: 2, offsetMin: 60 }),
+       teams: Array.from({ length: o.teams }, (_, i) => ({ teamNumber: i + 1 })),
+       maxTeamSize2Team: o.t2 ?? null, maxTeamSize4Team: o.t4 ?? null } as unknown as ApiMatch);
+
+  /* FOUR TEAMS READ THE 4-TEAM FIGURE. Production 18360: four teams, maxPlayerCount 32, 4-team
+   * total 40. The old denominator said 32 and flattered the day by 25%. */
+  is("four teams take maxTeamSize4Team over a shrunken capacity",
+    maxSpots(shaped({ id: 1, players: 0, cap: 32, teams: 4, t2: 18, t4: 40 })), 40);
+  is("...and two teams take the 2-team figure",
+    maxSpots(shaped({ id: 2, players: 0, cap: 18, teams: 2, t2: 22, t4: 40 })), 22);
+  is("three teams are not four, so they take the 2-team figure",
+    maxSpots(shaped({ id: 3, players: 0, cap: 18, teams: 3, t2: 22, t4: 40 })), 22);
+  is("five teams are four or more",
+    maxSpots(shaped({ id: 4, players: 0, cap: 18, teams: 5, t2: 22, t4: 44 })), 44);
+
+  /* THE FALLBACK, STATED DIRECTLY. A non-auto-bump match has no 4-team max spots at all —
+   * MatchEditor disables that input when isAutoBump is false — and 0 means the same as null. */
+  is("a four-team match with a NULL 4-team max reads its own capacity",
+    maxSpots(shaped({ id: 5, players: 0, cap: 26, teams: 4, t2: 18, t4: null })), 26);
+  is("...and a ZERO 4-team max is the same as null, not a denominator of zero",
+    maxSpots(shaped({ id: 6, players: 0, cap: 26, teams: 4, t2: 18, t4: 0 })), 26);
+  is("a two-team match with a zero 2-team max reads its own capacity",
+    maxSpots(shaped({ id: 7, players: 0, cap: 40, teams: 2, t2: 0, t4: 40 })), 40);
+  yes("...and it does NOT drop out of the denominator",
+    realFillPct([shaped({ id: 7, players: 10, cap: 26, teams: 4, t2: 18, t4: null })]).cap === 26);
+
+  /* AN EMPTY teams ARRAY IS NOT TWO TEAMS. It means the shape is unknown, and guessing 2 would
+   * hand the match a max spots it may never have been at. */
+  is("no teams at all reads capacity, never the 2-team figure",
+    maxSpots(shaped({ id: 8, players: 0, cap: 18, teams: 0, t2: 22, t4: 40 })), 18);
+
+  /* NEVER BELOW CAPACITY, and the fill can never print above 100%. */
+  const over = shaped({ id: 9, players: 40, cap: 40, teams: 4, t2: 18, t4: 32 });
+  is("a match booked past its shape max takes the LARGER of the two", maxSpots(over), 40);
+  is("...so the fill is exactly 100 and not 125", realFillPct([over]).pct, 100);
+  yes("...which is what the guard is for: the shape figure alone would have printed 125%",
+    (40 / 32) * 100 > 100);
+  /* AND ACROSS A MIXED DAY. */
+  const day = [over, shaped({ id: 10, players: 5, cap: 18, teams: 2, t2: 22, t4: 40 }),
+               shaped({ id: 11, players: 9, cap: 26, teams: 4, t2: 18, t4: null })];
+  const f = realFillPct(day);
+  is("a mixed day sums max spots, not capacities", f.cap, 40 + 22 + 26);
+  yes("...and never exceeds 100%", (f.pct ?? 0) <= 100, String(f.pct));
+
+  /* NO-CAP MATCHES STILL BELONG TO NEITHER SIDE, whatever their shape figures say. */
+  is("a no-cap special event contributes to neither side even with a 4-team max",
+    maxSpots(shaped({ id: 12, players: 8, cap: 0, teams: 4, t2: 18, t4: 40 })), null);
+  is("...so it does not enter the denominator",
+    realFillPct([shaped({ id: 12, players: 8, cap: 0, teams: 4, t2: 18, t4: 40 })]).pct, null);
+
+  /* THE CAVEAT IS GONE, and so is the field that fed it. */
+  yes("realFillPct no longer returns a bumped count", !("bumped" in realFillPct([])));
+  const board = readFileSync("src/components/GamedayBoard.tsx", "utf8");
+  /* COMMENTS STRIPPED. The comment that explains why the caveat went naturally quotes it; what
+   * must not exist is a "matches bumped" in code that RENDERS. Same rule as the 440 guard on the
+   * partner page: explaining a deleted string is the opposite of shipping it. */
+  const rendered = board.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  is("no 'matches bumped' in code that renders", rendered.match(/match(es)? bumped/g), null);
+  is("...and no reference to a bumped field", rendered.match(/fill\.bumped/g), null);
+  yes("the subtitle is N of M and K fake, nothing else",
+    /\$\{s\.fill\.real\} of \$\{s\.fill\.cap\} · \$\{s\.fill\.fake\} fake`,/.test(board));
+  const model = readFileSync("src/lib/gamedayModel.ts", "utf8");
+  is("isBumped is gone from the model", model.match(/isBumped/g), null);
+  /* capacity() AND ITS CALL SITES ARE UNTOUCHED — realFillPct is the ONE that moved. */
+  yes("capacity() still returns maxPlayerCount, unchanged",
+    /export const capacity = \(m: ApiMatch\): number \| null => \{\s*const c = m\.maxPlayerCount;/.test(model));
+  is("realFillPct is the only caller that swapped to maxSpots",
+    (model.match(/maxSpots\(m\)/g) ?? []).length, 1);
+  /* AND THE FIELDS ACTUALLY ARRIVE. */
+  const shape = readFileSync("src/lib/gamedayApiShape.ts", "utf8");
+  yes("trimMatch carries both max-spots fields to both gameday routes",
+    /maxTeamSize2Team: num\(m\.maxTeamSize2Team\)/.test(shape) && /maxTeamSize4Team: num\(m\.maxTeamSize4Team\)/.test(shape));
 }
 
 console.log(`\ngameday-strip: ${pass} passed, ${fails.length} failed`);

@@ -1712,7 +1712,7 @@ const CSS = `
  */
 type StripStats = {
   soon: ApiMatch[]; live: ApiMatch[]; risk: ApiMatch[];
-  fill: { pct: number | null; real: number; cap: number; fake: number; bumped: number };
+  fill: { pct: number | null; real: number; cap: number; fake: number };
   cityCount: number; nextKick: ApiMatch | null; allCount: number;
 };
 function StatStrip({ s, active, onPick, clockOf }: {
@@ -1729,13 +1729,13 @@ function StatStrip({ s, active, onPick, clockOf }: {
     { k: "live", lab: "In play", val: String(s.live.length), sub: "kicked off", can: true },
     /* THE FILL IS A RATIO OF SUMS, computed in the model — see realFillPct. "—" and not "0%" when
      * nothing has capacity, because 0% is a claim about a day that had no spots to fill. */
+    /* THE BUMP CAVEAT IS GONE, AND IT WENT WITH THE BUG IT DESCRIBED. It said "N matches bumped"
+     * because the denominator MOVED when a match grew to four teams — maxPlayerCount is capacity
+     * now, so the percentage could fall while the night improved and the sentence existed to warn
+     * about that. realFillPct measures against maxSpots, which does not move, so there is nothing
+     * left to warn about. The fake count stays: that is real information about the numerator. */
     { k: "fill", lab: "Real spots filled", val: pct == null ? "—" : `${Math.round(pct)}%`,
-      /* THE BUMP COUNT, ONLY WHEN THERE IS ONE. A match that grew to four teams grew its own
-       * denominator with it on the manual convert path, so the percentage can fall while the night
-       * improves. Saying nothing when none have bumped keeps the line short on an ordinary night. */
-      sub: pct == null ? "no capacity today"
-        : `${s.fill.real} of ${s.fill.cap} · ${s.fill.fake} fake`
-          + (s.fill.bumped > 0 ? ` · ${s.fill.bumped} match${s.fill.bumped === 1 ? "" : "es"} bumped` : ""),
+      sub: pct == null ? "no capacity today" : `${s.fill.real} of ${s.fill.cap} · ${s.fill.fake} fake`,
       can: false },
   ];
   return (
