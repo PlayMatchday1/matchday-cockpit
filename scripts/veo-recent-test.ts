@@ -12,7 +12,7 @@ import "server-only"; // no-op under --conditions=react-server
 import { readFileSync } from "node:fs";
 import {
   ARRIVAL_ZONE, RECENT_STATE_LABEL, WAIT_ALARM_DAYS, dayIn, daySourceOf, isResolved, lagDays,
-  lagLabel, lagWorthSaying, recentState, waitDays, waitLabel,
+  lagLabel, lagWorthSaying, recentState, tabOf, waitDays, waitLabel, type RecentState,
 } from "../src/lib/veoRecent";
 
 let pass = 0, fail = 0;
@@ -113,8 +113,8 @@ const PAGE = noComments(readFileSync("src/components/VeoDayOps.tsx", "utf8"));
 
 /* DAY-INDEPENDENT. The section must not be re-fetched by the day nav, or the film that arrived late
  * for last Tuesday goes back to being findable only from last Tuesday. */
-/}, \[limit, unpostedOnly, city, nonce\]\);/.test(PAGE)
-  ? ok("the section refetches on the filter and the city, and NOT on the day")
+/}, \[limit, tab, city, nonce\]\);/.test(PAGE)
+  ? ok("the section refetches on the tab and the city, and NOT on the day")
   : bad("the recent section's fetch depends on the selected day");
 /<RecentlyUploaded city=\{city\}/.test(PAGE)
   ? ok("…and it is on the same page, below the day list")
@@ -138,6 +138,96 @@ const PAGE = noComments(readFileSync("src/components/VeoDayOps.tsx", "utf8"));
 !/\bETA\b|expected by|expected arrival/i.test(PAGE)
   ? ok("no ETA and no predicted arrival anywhere on the page")
   : bad("the page predicts when a film will arrive");
+
+console.log("\n— two tabs, and the counts are the point —");
+{
+  /* THE GROUPING, AND IT IS TOTAL AND EXCLUSIVE. Every state lands in exactly one tab; nothing is
+   * unclassified and nothing is in both. A sixth state added later fails to compile before it can
+   * quietly go missing from the page. */
+  const STATES: RecentState[] = ["posted", "flagged", "assigned", "queued", "dismissed"];
+  is("Needs you holds queued and flagged, and only those",
+    STATES.filter((x) => tabOf(x) === "needs"), ["flagged", "queued"].sort() as RecentState[]);
+  is("Done holds the other three, and all three",
+    STATES.filter((x) => tabOf(x) === "done"), ["posted", "assigned", "dismissed"]);
+  is("every state is in exactly one tab", STATES.length,
+    STATES.filter((x) => tabOf(x) === "needs").length + STATES.filter((x) => tabOf(x) === "done").length);
+  /* FLAGGED IS IN NEEDS YOU ONLY BECAUSE THERE IS NOW A BUTTON. A tab of flagged rows with no way
+   * to clear the flag is a list that can only grow — so this pair of assertions belongs together. */
+  is("flagged is work, not done", tabOf("flagged"), "needs");
+  yes("…and the row carries a Confirm", /data-testid="veo-recent-confirm"/.test(PAGE));
+  yes("…and the day view's Confirm is no longer disabled",
+    /data-testid="veo-clear-flag" disabled=\{busy\}/.test(PAGE));
+
+  /* THE COUNTS ARE COMPUTED AFTER THE SAME SCOPING THE ROWS GO THROUGH. A second COUNT query would
+   * have to re-implement the match-and-code city resolution, and the first time the two drifted a
+   * confined operator would see a number that does not match their own list. */
+  yes("the counts come off the scoped array, not a second query",
+    /const scoped: RecentRow\[\] = \[\]/.test(ROUTE)
+    && /for \(const r of scoped\) counts\[tabOf\(r\.state\)\]\+\+/.test(ROUTE));
+  yes("…and the session scope still runs BEFORE any of it",
+    ROUTE.indexOf("auth.confinedCity && cityCode !== auth.confinedCity") < ROUTE.indexOf("for (const r of scoped)"));
+  yes("…and the tab is applied after the counts, so it cannot change them",
+    ROUTE.indexOf("for (const r of scoped) counts") < ROUTE.indexOf("scoped.filter((r) => tabOf(r.state) === tab)"));
+  yes("the page never counts the tabs itself from its own page of rows",
+    /setCounts\(\(j\.counts/.test(PAGE) && !/counts\[tabOf/.test(PAGE));
+  yes("a truncated scan says so rather than printing a window as a total", /truncated: raw\.length >= SCAN_CAP/.test(ROUTE));
+
+  /* NEEDS YOU IS THE DEFAULT, in the route and on the page. */
+  yes("the route defaults to Needs you", /=== "done" \? "done" : "needs"/.test(ROUTE));
+  yes("…and so does the page, with a URL parameter so a Done link survives a refresh",
+    /get\("veo"\) === "done" \? "done" : "needs"/.test(PAGE) && /searchParams\.set\("veo", "done"\)/.test(PAGE));
+
+  /* THE ZERO STATE SAYS NOTHING. The count on the tab is the whole message. */
+  yes("the empty list renders no sentence",
+    /data-testid="veo-recent-empty" \/>/.test(PAGE));
+  yes("…and the count badge is not styled as an alarm",
+    /\.tcount\{[^}]*color:var\(--ink3\)/.test(PAGE) && !/\.tcount\{[^}]*var\(--look\)/.test(PAGE));
+
+  /* VIEW DAY. */
+  yes("the day link reads View day", /data-testid="veo-recent-day"[^>]*>View day</.test(PAGE));
+  is("…and Its day is gone", PAGE.match(/>Its day</g), null);
+  yes("…and it still lands on the day view", /href=\{`\/match-ops\/veo\?date=\$\{day\}`\}/.test(PAGE));
+
+  /* A DONE ROW IS QUIETER, AND ITS LATENESS IS GREY — scoped, so a Needs you row is untouched. */
+  yes("a Done row is marked as one", /tabOf\(r\.state\) === "done" \? " done" : ""/.test(PAGE));
+  yes("…its title is lighter", /\.rrow\.done \.rwhat b\{font-weight:600;color:var\(--ink2\)\}/.test(PAGE));
+  yes("…and its lateness is grey", /\.rrow\.done \.rwhen em\{color:var\(--ink3\)\}/.test(PAGE));
+  yes("CONTROL: the unscoped lateness rule is still amber for a Needs you row",
+    /\.veo \.rwhen em\{[^}]*color:var\(--flag\)\}/.test(PAGE));
+  yes("no action button wraps", /\.ractions \.btn\{[^}]*white-space:nowrap/.test(PAGE));
+  yes("…and the actions track sizes to its content", /grid-template-columns:150px minmax\(0,1fr\) 118px 128px auto/.test(PAGE));
+}
+
+console.log("\n— Confirm clears one flag and CANNOT post —");
+{
+  /* COMMENTS STRIPPED. The route's own header explains that it cannot post and names the poster
+   * while doing so; what must not exist is a reachable call in CODE. Explaining an absence is the
+   * opposite of shipping it. */
+  const FLAG = noComments(readFileSync("src/app/api/veo/[id]/flag/route.ts", "utf8"));
+  /* STRUCTURAL, NOT CAREFUL. The proof is what the file cannot reach, not what it happens to do. */
+  is("the route cannot post: it does not import the poster", FLAG.match(/postVeoLinkToMatch/g), null);
+  is("…nor anything that reaches a chat", FLAG.match(/veoPost|firestore|chat/gi), null);
+  /* ONE UPDATE, TWO COLUMNS. Every other column on the row is named here and must NOT appear in it. */
+  const upd = /\.update\(\{([\s\S]*?)\}\)/.exec(FLAG)?.[1] ?? "";
+  yes("the only write sets flagged and updated_at", /flagged: false/.test(upd) && /updated_at/.test(upd));
+  is("…and touches nothing else",
+    upd.match(/video_url|matched_api_id|status:|posted_by_user_id|posted_at|parsed_match_date|queue_reason|candidate_api_ids/g), null);
+  /* THE BODY IS EXACTLY THE FLAG CLEAR — not "contains" it, so a second field cannot ride along. */
+  yes("a body that is not exactly { flagged: false } is refused",
+    /body\?\.flagged !== false \|\| keys\.length !== 1 \|\| keys\[0\] !== "flagged"/.test(FLAG));
+  /* AND ONLY A FLAGGED, POSTED ROW IS REACHABLE. */
+  yes("only a posted, still-flagged row can be confirmed",
+    /\.eq\("status", "posted"\)/.test(FLAG) && /\.eq\("flagged", true\)/.test(FLAG));
+  yes("the operator is credited through change_log", /recordWrite\(/.test(FLAG) && /actorEmail/.test(FLAG));
+  /* posted_by_user_id IS DELIBERATELY NOT SET: recentState reads it as "a person placed this film",
+   * so setting it would move the row to Assigned by hand — a false statement about who posted. */
+  yes("…and NOT by writing posted_by_user_id, which would misstate who posted it",
+    !/posted_by_user_id:/.test(FLAG));
+  is("confirming makes it Posted, not Assigned",
+    recentState({ status: "posted", flagged: false, postedByUserId: null }), "posted");
+  is("CONTROL: before the confirm it is flagged",
+    recentState({ status: "posted", flagged: true, postedByUserId: null }), "flagged");
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

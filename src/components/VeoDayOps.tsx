@@ -25,14 +25,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import MatchSidePanel, { MATCH_SIDE_PANEL_CSS, type PanelTab } from "@/components/MatchSidePanel";
+import { CITY_CODE_TO_DISPLAY } from "@/lib/scheduleReconcile";
 import { parseVeoSubject, processingDateFromSlug, resolveMatchDates } from "@/lib/veo";
 import {
-  FILM_STATES, FILM_STATE_LABEL, emptyTally, gapLabel, hasFilm, scoreTrace, tallyAddsUp,
-  type AssignCandidate, type FilmState, type VeoDayRecording, type VeoDayRow, type VeoDayTally,
+  FILM_STATE_LABEL, TALLY_TILES, emptyTally, gapLabel, hasFilm, scoreTrace, tallyAddsUp, tileCount,
+  type AssignCandidate, type EmojiOnlyMatch, type FilmState, type TallyTile, type VeoDayRecording,
+  type VeoDayRow, type VeoDayTally,
 } from "@/lib/veoDay";
 import {
-  ARRIVAL_ZONE, dayIn, RECENT_STATE_LABEL, RECENT_STATE_TONE, WAIT_ALARM_DAYS, daySourceOf, isResolved, lagDays,
-  lagLabel, lagWorthSaying, waitDays, waitLabel, type RecentState,
+  ARRIVAL_ZONE, dayIn, RECENT_STATE_LABEL, RECENT_STATE_TONE, RECENT_TAB_LABEL, WAIT_ALARM_DAYS, daySourceOf, isResolved, lagDays,
+  lagLabel, lagWorthSaying, tabOf, waitDays, waitLabel, type RecentState, type RecentTab,
 } from "@/lib/veoRecent";
 
 type Payload = {
@@ -44,7 +46,7 @@ type Payload = {
   candidates: Record<number, AssignCandidate>;
   codedFields: number[];
   cities: string[];
-  emojiWithoutCode: number;
+  emojiMatches: EmojiOnlyMatch[];
   confinedCity: string | null;
 };
 
@@ -119,7 +121,11 @@ export default function VeoDayOps() {
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [filter, setFilter] = useState<FilmState | null>(null);
+  /* THE FILTER IS A TILE, NOT A STATE. A tile can cover more than one state (auto posted is posted
+   * + flagged), so the rows it shows are the union of its states. Rows in the four states no tile
+   * covers still render with their own pills; they simply cannot be filtered to, which is the
+   * stated cost of two tiles instead of seven. */
+  const [filter, setFilter] = useState<TallyTile["key"] | null>(null);
   const [city, setCity] = useState<string>("all");
   const [openId, setOpenId] = useState<number | null>(null);
   const [assignId, setAssignId] = useState<string | null>(null);
@@ -171,11 +177,21 @@ export default function VeoDayOps() {
   const withFilm = useMemo(() => cityRows.filter((r) => hasFilm(r.state)), [cityRows]);
   const parked = useMemo(() => cityRows.filter((r) => !hasFilm(r.state)), [cityRows]);
   const [showParked, setShowParked] = useState(false);
+  const activeTile = TALLY_TILES.find((t) => t.key === filter) ?? null;
   const base = filter !== null || showParked ? cityRows : withFilm;
   const rows = useMemo(
-    () => base.filter((r) => filter === null || r.state === filter),
-    [base, filter],
+    () => base.filter((r) => activeTile === null || activeTile.states.includes(r.state)),
+    [base, activeTile],
   );
+  /* ONE BUTTON, ONE NUMBER. The parked rows (coded fields nothing arrived for) and the emoji-only
+   * matches (fields no code names at all) are two kinds of "no film" and were two different
+   * controls, one of which was a paragraph you could not click. They open together now.
+   * THE EMOJI ROWS ARE OUTSIDE THE TALLY — see the caption. Adding them here must not move it. */
+  const emoji = useMemo(
+    () => (data?.emojiMatches ?? []).filter((m) => city === "all" || (CITY_CODE_TO_DISPLAY[m.city ?? ""] ?? m.city) === city),
+    [data, city],
+  );
+  const noFilmCount = parked.length + emoji.length;
 
   const isToday = date === todayIso();
 
@@ -188,8 +204,10 @@ export default function VeoDayOps() {
 
       <div className="head">
         <div>
+          {/* THE PAGE IS ONE DAY AT A TIME, holding only the matches a camera was on. That was a
+              subtitle; it says the same thing on every load, so it is a comment now. The date nav
+              beside it and the rows below already show both halves. */}
           <h1 className="h1">Veo</h1>
-          <p className="hsub">One day at a time, holding only the matches a camera was on.</p>
         </div>
         <div className="nav">
           <button className="nb" data-testid="veo-prev" onClick={() => setDate(shiftDate(date, -1))} aria-label="Previous day">‹</button>
@@ -210,42 +228,41 @@ export default function VeoDayOps() {
         </div>
       </div>
 
-      {/* THE TALLY IS THE FILTER. Clicking a count narrows the list to it; clicking it again clears. */}
+      {/* TWO TILES, AND THE TALLY IS STILL THE FILTER. Clicking one narrows the list to its states;
+          clicking it again clears. Of the seven that were here, four read zero on the day this was
+          cut and a fifth was the total of the other six. What each dropped tile became is written
+          over TALLY_TILES in veoDay.ts. */}
       <div className="tally" data-testid="veo-tally">
-        {FILM_STATES.map((s) => (
+        {TALLY_TILES.map((t) => (
           <button
-            key={s}
+            key={t.key}
             type="button"
-            data-testid={`veo-tal-${s}`}
-            data-count={shownTally[s]}
-            className={`tal ${STATE_TONE[s]}${filter === s ? " on" : ""}`}
-            onClick={() => { setFilter(filter === s ? null : s); setOpenId(null); }}
+            data-testid={`veo-tal-${t.key}`}
+            data-count={tileCount(shownTally, t)}
+            className={`tal ${t.key === "auto" ? "ok" : "hand"}${filter === t.key ? " on" : ""}`}
+            onClick={() => { setFilter(filter === t.key ? null : t.key); setOpenId(null); }}
           >
-            <b>{shownTally[s]}</b>
-            <span>{TALLY_LABEL[s]}</span>
+            <b>{tileCount(shownTally, t)}</b>
+            <span>{t.label}</span>
           </button>
         ))}
-        {/* THE NUMBER SAYS WHAT IT COUNTS. It used to read "on camera that day" over every coded
-            match, which overstated it: a coded field is not a camera that ran. */}
-        <div className="tal total" data-testid="veo-tal-total" data-count={withFilm.length}>
-          <b>{withFilm.length}</b>
-          <span>films that landed</span>
-        </div>
       </div>
 
-      {/* The identity the strip depends on, stated on screen rather than assumed. It is asserted in
-          scripts/veo-day-test.ts; this is the operator-visible half. */}
+      {/* THE CHECK SURVIVES THE STRIP. It used to have a visual proof — all five states plus the
+          total, adding up by eye — and that is genuinely lost. It is now an internal assertion with
+          a VISIBLE FAILURE, which is why this must not be tidied away with the tiles: tallyAddsUp
+          still sums all six FILM_STATES, so a miscount still surfaces here. */}
       {data && !tallyAddsUp(shownTally) && (
         <p className="warn" data-testid="veo-tally-broken">
-          The five states do not add to the total — this page is miscounting and should not be trusted.
+          The film states do not add to the total — this page is miscounting and should not be trusted.
         </p>
       )}
 
-      {/* PARKED, NOT DELETED. One line, default closed. */}
-      {!loading && !err && parked.length > 0 && filter === null && (
+      {/* PARKED, NOT DELETED. One line, default closed — and it now opens BOTH kinds of "no film". */}
+      {!loading && !err && noFilmCount > 0 && filter === null && (
         <p className="parked" data-testid="veo-parked">
           <button type="button" data-testid="veo-parked-toggle" onClick={() => setShowParked(!showParked)}>
-            {showParked ? "Hide" : "Show"} {parked.length} other match{parked.length === 1 ? "" : "es"} on camera fields {showParked ? "" : "that had no film"}
+            {showParked ? "Hide" : "Show"} {noFilmCount} match{noFilmCount === 1 ? "" : "es"} with no film
           </button>
         </p>
       )}
@@ -293,12 +310,25 @@ export default function VeoDayOps() {
         </div>
       )}
 
-      {data && data.emojiWithoutCode > 0 && (
-        <p className="foot" data-testid="veo-emoji-gap">
-          {data.emojiWithoutCode} match{data.emojiWithoutCode === 1 ? "" : "es"} on this day carr{data.emojiWithoutCode === 1 ? "ies" : "y"} the
-          camera emoji in the name but sit{data.emojiWithoutCode === 1 ? "s" : ""} on a field no <code>veo_codes</code> row names, so no recording can
-          arrive for {data.emojiWithoutCode === 1 ? "it" : "them"}. They are not listed above — the code table decides this page, not the emoji.
-        </p>
+      {/* THE GAP BETWEEN THE EMOJI AND THE CODE TABLE, SHOWN RATHER THAN ASSERTED. This was a
+          paragraph at the foot of the page describing rows it did not show, so there was nothing to
+          click and no way to check whether the claim was true — and the payload only carried a
+          count, so nothing downstream COULD have shown them.
+          THE SELECTOR HAS NOT CHANGED. /api/veo/day is emphatic that the code table decides this
+          page and hasCameraEmoji is deliberately not the selector. This is a second, clearly
+          labelled group outside the tally, not the emoji becoming the rule.
+          NO STATE PILL, because these have no film state to be in, and one action: open the match. */}
+      {showParked && emoji.length > 0 && (
+        <div className="emojigrp" data-testid="veo-emoji-group">
+          <h4>{emoji.length} match{emoji.length === 1 ? "" : "es"} named with 🎥 that no camera can film</h4>
+          {emoji.map((m) => (
+            <div className="erow" data-testid="veo-emoji-row" data-api-id={m.apiId} key={m.apiId}>
+              <span className="etime">{m.time.label}</span>
+              <span className="ename"><b>{m.name}</b><small>{m.venue ?? "no field"}{m.city ? ` · ${CITY_CODE_TO_DISPLAY[m.city] ?? m.city}` : ""}</small></span>
+              <a className="btn" data-testid="veo-emoji-open" href={`/match-ops/matches/${m.apiId}`}>Open match</a>
+            </div>
+          ))}
+        </div>
       )}
 
       {/* THE SECOND AXIS. Everything above is indexed by the day a match was PLAYED; this is the
@@ -315,10 +345,6 @@ export default function VeoDayOps() {
           onTab={setPanelTab} onClose={() => setPanelMatch(null)} />
       )}
 
-      <p className="foot">
-        A row is here because some <code>veo_codes</code> row names its field. A score appears only when it is below 100 —
-        eight rows reading 100 say nothing eight times. A row with no score at all was decided before scoring existed.
-      </p>
     </div>
   );
 }
@@ -389,7 +415,20 @@ function RecentlyUploaded({ city, onOpenChat }: { city: string; onOpenChat: (api
   const [rows, setRows] = useState<RecentRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [unpostedOnly, setUnpostedOnly] = useState(false);
+  /* NEEDS YOU IS THE DEFAULT. The tab is a URL parameter, so a link to Done survives a refresh and
+   * can be sent to somebody; an unrecognised value falls back to Needs you rather than erroring. */
+  const [tab, setTabState] = useState<RecentTab>(() => {
+    if (typeof window === "undefined") return "needs";
+    return new URLSearchParams(window.location.search).get("veo") === "done" ? "done" : "needs";
+  });
+  const setTab = (t: RecentTab) => {
+    setTabState(t);
+    if (typeof window === "undefined") return;
+    const u = new URL(window.location.href);
+    if (t === "done") u.searchParams.set("veo", "done"); else u.searchParams.delete("veo");
+    window.history.replaceState(null, "", u.toString());
+  };
+  const [counts, setCounts] = useState<Record<RecentTab, number> | null>(null);
   const [limit, setLimit] = useState(30);
   const [more, setMore] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -400,21 +439,24 @@ function RecentlyUploaded({ city, onOpenChat }: { city: string; onOpenChat: (api
     setLoading(true); setErr(null);
     void (async () => {
       try {
-        const q = new URLSearchParams({ limit: String(limit) });
-        if (unpostedOnly) q.set("filter", "unposted");
+        const q = new URLSearchParams({ limit: String(limit), tab });
         if (city !== "all") q.set("city", city);
         const res = await authFetch(`/api/veo/recent?${q.toString()}`);
         const j = await res.json();
         if (!live) return;
         if (!res.ok) { setErr(j?.error || `Load failed (${res.status})`); setRows([]); return; }
         setRows(j.rows as RecentRow[]);
+        /* THE COUNTS COME FROM THE ROUTE, off the same scoped array the rows come from — never
+           counted here from `rows`, which is one tab and one page of it. A confined operator's
+           number has to match a list this component cannot see all of. */
+        setCounts((j.counts as Record<RecentTab, number>) ?? null);
         setMore(j.more === true);
       } catch (e) {
         if (live) { setErr(e instanceof Error ? e.message : String(e)); setRows([]); }
       } finally { if (live) setLoading(false); }
     })();
     return () => { live = false; };
-  }, [limit, unpostedOnly, city, nonce]);
+  }, [limit, tab, city, nonce]);
 
   const shown = rows ?? [];
 
@@ -422,25 +464,37 @@ function RecentlyUploaded({ city, onOpenChat }: { city: string; onOpenChat: (api
     <section className="recent" data-testid="veo-recent">
       <div className="rhead">
         <div>
+          {/* EVERY FILM THAT HAS ARRIVED, newest arrival first, whatever day it was played on.
+              That was the subtitle. It never changed, so it lives here instead. */}
           <h3>Recently uploaded</h3>
-          <p>Every film that has arrived, newest arrival first, whatever day it was played on.</p>
         </div>
-        {/* ONE FILTER, NOT A STATUS DROPDOWN WITH FIVE ENTRIES NOBODY WILL USE. */}
-        <div className="rfilter">
-          <button type="button" data-testid="veo-recent-all" className={!unpostedOnly ? "on" : ""}
-            onClick={() => { setUnpostedOnly(false); setOpenId(null); }}>All</button>
-          <button type="button" data-testid="veo-recent-unposted" className={unpostedOnly ? "on" : ""}
-            onClick={() => { setUnpostedOnly(true); setOpenId(null); }}>Not posted</button>
+        {/* TWO TABS, NOT A FILTER OVER ONE LIST. Measured on the nine live rows for Sep 6, in the
+            page's own order: the first row wanting a person was 8th of 9, five finished rows sat
+            above it, and two more that also wanted a person (Posted, flagged) were buried at
+            positions 5 and 6 between the finished ones. The work was interleaved, not merely low.
+            BOTH TABS CARRY A COUNT, and that is what makes the split worth building: an operator
+            can tell from the top of the page that there is nothing to do without opening anything.
+            A tab with no number is a tab you still have to click. */}
+        <div className="rfilter" role="tablist">
+          {(["needs", "done"] as RecentTab[]).map((t) => (
+            <button key={t} type="button" role="tab" aria-selected={tab === t}
+              data-testid={`veo-recent-tab-${t}`} data-count={counts?.[t] ?? ""}
+              className={tab === t ? "on" : ""}
+              onClick={() => { setTab(t); setLimit(30); setOpenId(null); }}>
+              {RECENT_TAB_LABEL[t]}
+              {/* CALM, NOT AN ALARM. A zero here is the good news, and it is the whole message the
+                  empty list needs — which is why the empty state says nothing at all. */}
+              {counts && <em className="tcount">{counts[t]}</em>}
+            </button>
+          ))}
         </div>
       </div>
 
       {loading && !rows && <p className="empty">Loading arrivals…</p>}
       {err && <p className="warn" data-testid="veo-recent-error">{err}</p>}
-      {rows && shown.length === 0 && !err && (
-        <p className="empty" data-testid="veo-recent-empty">
-          {unpostedOnly ? "Every film that has arrived has gone somewhere." : "No films have arrived."}
-        </p>
-      )}
+      {/* THE EMPTY STATE SAYS NOTHING. The 0 on the tab is the message; a sentence under it would
+          repeat the number in words on every load. The node stays for the layout and the testid. */}
+      {rows && shown.length === 0 && !err && <div className="empty" data-testid="veo-recent-empty" />}
 
       {/* TWINS: two rows carrying the identical title, 17 minutes apart on the live page. If it is
           one film, assigning both puts two links in one chat — so each warns about the other, here
@@ -456,7 +510,7 @@ function RecentlyUploaded({ city, onOpenChat }: { city: string; onOpenChat: (api
       {rows && shown.length > 0 && (
         <div className="rfoot">
           <span data-testid="veo-recent-count">
-            {shown.length} {unpostedOnly ? "not posted" : "arrival"}{shown.length === 1 ? "" : unpostedOnly ? "" : "s"} shown
+            {shown.length} of {counts?.[tab] ?? shown.length} shown
           </span>
           {more && (
             <button type="button" className="more" data-testid="veo-recent-more" onClick={() => setLimit(limit + 30)}>
@@ -493,8 +547,22 @@ function RecentRowView({ r, open, onToggle, onDone, twins, onOpenChat }: {
    * strip with no state pill. */
   useEffect(() => { setDismissed(false); }, [r.state]);
   const [dismissErr, setDismissErr] = useState<string | null>(null);
-  const call = async (init: RequestInit) => {
-    const res = await authFetch(`/api/veo/${r.id}`, init);
+  /* CONFIRM. One boolean, one route, and the list refetches so the row moves to Done as Posted —
+   * it does not vanish locally, because a row that leaves the screen without the server agreeing
+   * is a lie the next refresh corrects. */
+  const [confirming, setConfirming] = useState(false);
+  const confirmFlag = async () => {
+    if (confirming) return;
+    setConfirming(true); setDismissErr(null);
+    try {
+      await call({ method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flagged: false }) }, "/flag");
+      onDone();
+    } catch (e) { setDismissErr(e instanceof Error ? e.message : String(e)); }
+    finally { setConfirming(false); }
+  };
+  const call = async (init: RequestInit, suffix = "") => {
+    const res = await authFetch(`/api/veo/${r.id}${suffix}`, init);
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
   };
   const dismissRow = async () => {
@@ -520,9 +588,10 @@ function RecentRowView({ r, open, onToggle, onDone, twins, onOpenChat }: {
   if (dismissed) {
     return (
       <div className="rrow gone" data-testid="veo-recent-dismissed" data-recording-id={r.id}>
-        <span className="upsub">
-          <b>{r.subject ?? r.recordingId}</b> is off the list. The film and its history are kept — it is still here under <b>All</b>, marked Dismissed.
-        </span>
+        {/* THE FILM AND ITS HISTORY ARE KEPT — a dismiss is a status change, not a deletion, and
+            the row is still there under Done marked Dismissed. That was a sentence on every strip;
+            what is left names the film, which is the part that changes. */}
+        <span className="upsub"><b>{r.subject ?? r.recordingId}</b> is off the list.</span>
         {dismissErr && <span className="upwhy">{dismissErr}</span>}
         <button type="button" className="btn" data-testid="veo-recent-undo" disabled={dismissing} onClick={() => void undo()}>Undo</button>
       </div>
@@ -530,8 +599,10 @@ function RecentRowView({ r, open, onToggle, onDone, twins, onOpenChat }: {
   }
 
   return (
-    <div className={`rrow ${RECENT_STATE_TONE[r.state]}${open ? " open" : ""}`}
-      data-testid="veo-recent-row" data-state={r.state} data-recording-id={r.id}>
+    /* A DONE ROW IS THE SAME ROW WITH LESS INK — same controls, same testids, lighter title and a
+       plainer ground. `data-tab` is what the CSS scopes on, so a Needs you row is untouched. */
+    <div className={`rrow ${RECENT_STATE_TONE[r.state]}${open ? " open" : ""}${tabOf(r.state) === "done" ? " done" : ""}`}
+      data-testid="veo-recent-row" data-state={r.state} data-tab={tabOf(r.state)} data-recording-id={r.id}>
       <div className="rtop">
         <span className="rwhen">
           <b>{arrivedLabel(r.receivedAt)}</b>
@@ -575,13 +646,23 @@ function RecentRowView({ r, open, onToggle, onDone, twins, onOpenChat }: {
         </span>
         <span className="ractions">
           {/* BACK TO ITS OWN DAY. That is the whole point of finding it here. */}
-          {day && <a className="btn" data-testid="veo-recent-day" href={`/match-ops/veo?date=${day}`}>Its day</a>}
+          {/* "Its day" read as a possessive and gave no clue it was a link. The noun stays so it
+              cannot be mistaken for a video play control on a page full of films. */}
+          {day && <a className="btn" data-testid="veo-recent-day" href={`/match-ops/veo?date=${day}`}>View day</a>}
           {/* THE THREAD IT LANDED IN. The row already names the match; this is looking at where.
               A queued row with no match gets none — there is no thread to open yet. */}
           {r.match && (
             <button type="button" className="btn" data-testid="veo-recent-chat"
               aria-label={`Open the chat for ${r.match.name}`}
               onClick={() => onOpenChat(r.match!.apiId)}>Chat</button>
+          )}
+          {/* THE FLAG CLEAR. A flagged film posted on an inferred read, and until now there was no
+              way to say it was right — the control existed and was `disabled`, with no route behind
+              it. It clears one boolean; it posts nothing. See /api/veo/[id]/flag. */}
+          {r.state === "flagged" && (
+            <button type="button" className="btn go" data-testid="veo-recent-confirm" disabled={confirming}
+              aria-label={`Confirm ${r.subject ?? r.recordingId} went to the right match`}
+              onClick={() => void confirmFlag()}>{confirming ? "…" : "Confirm"}</button>
           )}
           {r.state === "queued" && (
             <>
@@ -697,7 +778,6 @@ function RecentAssign({ r, onDone, day: readDay, twins, onOpenChat }: {
         </>
       )}
       <div className="assignfoot">
-        <span className="pnote">Assigning posts the film into that match&apos;s chat. One attempt, never retried.</span>
         <button type="button" className="btn" data-testid="veo-recent-dismiss" disabled={busy} onClick={() => void dismiss()}>Not our film</button>
       </div>
       {err && <p className="warn">{err}</p>}
@@ -723,13 +803,13 @@ function RecentAssign({ r, onDone, day: readDay, twins, onOpenChat }: {
 function useAssign(recordingId: string, onDone: () => void) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const call = async (init: RequestInit, what: string) => {
+  const call = async (init: RequestInit, what: string, suffix = "") => {
     if (busy) return false;
     setBusy(true); setErr(null);
     try {
       const { data: sess } = await supabase.auth.getSession();
       const token = sess.session?.access_token;
-      const res = await fetch(`/api/veo/${recordingId}`, {
+      const res = await fetch(`/api/veo/${recordingId}${suffix}`, {
         ...init,
         headers: { ...(init.headers ?? {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
@@ -749,6 +829,11 @@ function useAssign(recordingId: string, onDone: () => void) {
     busy, err, setErr,
     assign: (apiId: number) => call({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apiId }) }, "Assign"),
     dismiss: () => call({ method: "DELETE" }, "Dismiss"),
+    /* CONFIRM AN INFERRED PLACEMENT. One boolean on a route that cannot post — see
+     * /api/veo/[id]/flag. It goes through the same one-attempt `call` as assign and dismiss, so it
+     * cannot retry either. */
+    clearFlag: () => call({ method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ flagged: false }) }, "Confirm", "/flag"),
   };
 }
 
@@ -767,7 +852,6 @@ function Confirm({ rec, target, busy, onCancel, onGo, twins = 0 }: {
         Post <b>{rec.subject ?? rec.recordingId}</b> into{" "}
         <b>{target.name}, {target.time}{target.players != null ? `, ${target.players} players` : ""}</b>?
       </p>
-      <p className="pnote">The film appears in that match&apos;s chat straight away. It can be removed, but not unseen.</p>
       <div className="acts">
         <button type="button" className="btn" disabled={busy} onClick={onCancel}>Cancel</button>
         <button type="button" className="btn pri" data-testid="veo-confirm-post" disabled={busy} onClick={onGo}>
@@ -889,7 +973,6 @@ function Orphan({ u, data, open, onToggle, onDone, onOpenChat }: {
         <div className="assign" data-testid="veo-assign-panel">
           <CandidateList rec={u} data={data} busy={busy} onPick={setConfirming} onOpenChat={onOpenChat} />
           <div className="assignfoot">
-            <span className="pnote">Assigning posts the film into that match&apos;s chat. One attempt, never retried.</span>
             <button type="button" className="btn" data-testid="veo-dismiss" disabled={busy} onClick={() => void dismiss()}>Not our film</button>
           </div>
           {err && <p className="warn" data-testid="veo-assign-error">{err}</p>}
@@ -1038,14 +1121,19 @@ function FilmPlayer({ rec, fallbackTitle }: { rec: VeoDayRecording | null; fallb
             <b data-testid="veo-rec-subject">{rec.subject ?? fallbackTitle}</b>
             <span className="rid">{rec.recordingId}</span>
           </div>
-          {/* DEMOTED TO A TEXT LINK. Veo's own page has the tactical tools and the highlights;
-              this page is for checking in on a match in ten seconds. */}
-          <p className="pnote">
-            {videoFailed
-              ? <>That film would not play — Veo may still be processing it. <a href={rec.videoUrl} target="_blank" rel="noreferrer" data-testid="veo-open-in-veo">Open in Veo</a>.</>
-              : video
-                ? <>Streams from Veo&apos;s CDN, about 1.8 GB a match, and only the part you watch is fetched. <a href={rec.videoUrl} target="_blank" rel="noreferrer" data-testid="veo-open-in-veo">Open in Veo</a> for the tactical tools.</>
-                : <>No playable file for this recording yet. <a href={rec.videoUrl} target="_blank" rel="noreferrer" data-testid="veo-open-in-veo">Open in Veo</a>.</>}
+          {/* THE LINK IS A CONTROL AND SURVIVES; THE SENTENCE AROUND IT DOES NOT. It used to read
+              that the film streams from Veo's CDN, about 1.8 GB a match, with only the part you
+              watch fetched — true on every recording, every day, so it is a comment now. Veo's own
+              page has the tactical tools and the highlights; this page is for checking in on a
+              match in ten seconds.
+              THE TWO FAILURE STATES STILL SAY SOMETHING, because a player that shows nothing and
+              says nothing is worse than a sentence. They keep a SHORT status beside the link — a
+              condition that is true of this recording right now, which is data, not standing prose.
+              All three branches keep veo-open-in-veo. */}
+          <p className="pnote pplay">
+            {videoFailed && <em data-testid="veo-play-state">Would not play — Veo may still be processing it</em>}
+            {!videoFailed && !video && <em data-testid="veo-play-state">No playable file yet</em>}
+            <a className="btn" href={rec.videoUrl} target="_blank" rel="noreferrer" data-testid="veo-open-in-veo">Open in Veo</a>
           </p>
         </>
       ) : (
@@ -1066,7 +1154,7 @@ function Viewer({ r, data, onDone, onOpenChat }: { r: VeoDayRow; data: Payload; 
   const [confirming, setConfirming] = useState<AssignCandidate | null>(null);
   // Hooks are unconditional; the id is a placeholder when there is nothing to assign, and every
   // control that could call it is absent in that case.
-  const { busy, err, assign, dismiss } = useAssign(rec?.id ?? "", onDone);
+  const { busy, err, assign, dismiss, clearFlag } = useAssign(rec?.id ?? "", onDone);
   const thisMatch = data.candidates[r.apiId] ?? null;
   return (
     <div className="viewer" data-testid="veo-viewer">
@@ -1102,8 +1190,12 @@ function Viewer({ r, data, onDone, onOpenChat }: { r: VeoDayRow; data: Payload; 
                   offered "Right match, clear the flag" directly above a trace reading "Nothing was
                   guessed, so it posted without a flag". Only a FLAGGED post is on a list to come
                   off. */}
+              {/* NO LONGER DISABLED. The page said a flagged film stays on the list "until somebody
+                  says it is right" and gave nobody a way to say it; this is that way. It clears one
+                  boolean and posts nothing. */}
               {r.state === "flagged" && (
-                <button type="button" className="btn pri" data-testid="veo-clear-flag" disabled>Right match, clear the flag</button>
+                <button type="button" className="btn pri" data-testid="veo-clear-flag" disabled={busy}
+                  onClick={() => void clearFlag()}>Right match, clear the flag</button>
               )}
               <button type="button" className="btn" data-testid="veo-move" disabled>Wrong match, move it</button>
               <button type="button" className="btn" data-testid="veo-not-ours" disabled>Not our film</button>
@@ -1128,16 +1220,9 @@ function Viewer({ r, data, onDone, onOpenChat }: { r: VeoDayRow; data: Payload; 
             <span className="find" data-testid="veo-find-film">Find the film</span>
           )}
         </div>
-        {posted && (
-          <p className="pnote" data-testid="veo-posted-note">
-            {r.state === "flagged"
-              ? "It posted on an inferred read, so it is still on the flagged list until somebody says it is right."
-              : "Nothing was inferred, so this row is already off the review list — there is no flag to clear."}
-          </p>
-        )}
-        {rec && !posted && (
-          <p className="pnote">Assigning posts the film into that match&apos;s chat. One attempt, never retried.</p>
-        )}
+        {/* THE POSTED NOTE IS GONE, BOTH BRANCHES. The pill already reads Posted or Posted,
+            flagged, and a flagged row now carries a Confirm button in Recently uploaded, which
+            says what to do about it better than a sentence could. */}
         {err && <p className="warn" data-testid="veo-assign-error">{err}</p>}
         {rec && !posted && picking && (
           <div className="assign" data-testid="veo-assign-panel">
@@ -1163,20 +1248,18 @@ function Viewer({ r, data, onDone, onOpenChat }: { r: VeoDayRow; data: Payload; 
             <div className="tl sum" data-testid="veo-trace-sum">
               <span>Total</span><em /><b>{rec.score}</b>
             </div>
-            <p className="pnote">
-              {rec.score >= 100
-                ? "Nothing was guessed, so it posted without a flag."
-                : rec.score >= 45
-                  ? "Below a perfect read, so it posted and stayed flagged here. Under 45 it would have waited for you."
-                  : "Below 45, so nothing was sent."}
-            </p>
+            {/* THE THRESHOLDS, WHICH ARE REAL AND WORTH KEEPING IN THE FILE: 100 means nothing
+                was guessed and it posted unflagged; 45 to 99 means it posted and stayed flagged for
+                a person to confirm; under 45 nothing was sent at all. Three sentences that said
+                that on screen are gone — the table above prints the number and its parts, and the
+                pill says which side of the line it landed on. */
+            }
           </div>
         )}
-        {rec && rec.score == null && (
-          <p className="pnote" data-testid="veo-no-score">
-            This recording was decided before the matcher scored anything, so there is no trace to show.
-          </p>
-        )}
+        {/* A NULL SCORE MEANS THE ROW WAS DECIDED BEFORE SCORING EXISTED, so there is no trace to
+            show. Rendering nothing is the right answer: an absent table is already the whole
+            message, and a sentence explaining an absence is read once and skipped forever. */
+        }
         {rec?.queueReason && <p className="pnote">Queued as <code>{rec.queueReason}</code>.</p>}
       </div>
     </div>
@@ -1221,6 +1304,19 @@ const CSS = MATCH_SIDE_PANEL_CSS + `
    screen anyway and the page scrolls behind it, which is what Gameday does too. */
 @media (min-width:1260px){ .veo.paneled{padding-right:620px;max-width:none;margin:0} }
 .veo .parked{margin:0 0 10px}
+/* ── THE EMOJI GROUP. Outside the tally, and labelled as such by its own heading. ───────────── */
+.veo .emojigrp{border:1px dashed var(--line2);border-radius:10px;padding:9px 11px 10px;margin:0 0 12px;background:var(--bg)}
+.veo .emojigrp h4{margin:0 0 7px;font-size:12px;font-weight:800;color:var(--ink2)}
+.veo .erow{display:grid;grid-template-columns:72px minmax(0,1fr) auto;gap:10px;align-items:center;padding:5px 0;border-top:1px solid var(--line)}
+.veo .erow:first-of-type{border-top:0}
+.veo .etime{font-size:11.5px;font-weight:800;color:var(--ink2);font-variant-numeric:tabular-nums}
+.veo .ename{display:flex;flex-direction:column;min-width:0}
+.veo .ename b{font-size:12.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.veo .ename small{font-size:11px;color:var(--ink3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* THE PLAYER LINK IS A CONTROL and sits on its own line; the two failure states keep a short
+   status beside it, because a player that shows nothing and says nothing is worse than a sentence. */
+.veo .pplay{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.veo .pplay em{font-style:normal;font-size:11.5px;color:var(--ink3)}
 .veo .parked button{border:1px dashed var(--line);background:#fff;border-radius:999px;padding:5px 12px;
   font-size:11.5px;font-weight:700;color:var(--ink3);cursor:pointer}
 .veo .parked button:hover{color:var(--ink2);border-color:#c9d4cf}
@@ -1335,8 +1431,15 @@ const CSS = MATCH_SIDE_PANEL_CSS + `
 .veo .rfilter{display:flex;gap:6px}
 .veo .rfilter button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:4px 11px;font-size:11.5px;font-weight:700;color:var(--ink2);cursor:pointer}
 .veo .rfilter button.on{background:var(--ink1);border-color:var(--ink1);color:#fff}
+/* THE COUNT ON THE TAB IS THE MESSAGE, and it is CALM. A zero here is the good news — nothing to
+   do — so it gets no alarm colour and no red. It is the reason the empty list says nothing at all. */
+.veo .rfilter .tcount{font-style:normal;margin-left:6px;font-size:10.5px;font-weight:800;color:var(--ink3);background:var(--bg);border-radius:999px;padding:1px 6px}
+.veo .rfilter button.on .tcount{color:#fff;background:rgba(255,255,255,.18)}
 .veo .rrow{border:1px solid var(--line);border-radius:10px;background:#fff;margin-bottom:6px;overflow:hidden}
-.veo .rtop{display:grid;grid-template-columns:150px minmax(0,1fr) 118px 128px 132px;gap:10px;align-items:center;padding:9px 12px}
+/* THE ACTIONS TRACK SIZES TO ITS CONTENT. It was a fixed 132px, and two labels shrank and wrapped
+   over two lines inside it, which made a flagged row 8px taller than every other row. The flexible
+   track is the title and it is the one that gives, by truncating, as it already does. */
+.veo .rtop{display:grid;grid-template-columns:150px minmax(0,1fr) 118px 128px auto;gap:10px;align-items:center;padding:9px 12px}
 .veo .rwhen{display:flex;flex-direction:column;min-width:0}
 .veo .rwhen b{font-size:12.5px;font-weight:800;font-variant-numeric:tabular-nums}
 .veo .rwhen em{font-style:normal;font-size:10.5px;font-weight:800;color:var(--flag)}
@@ -1349,7 +1452,16 @@ const CSS = MATCH_SIDE_PANEL_CSS + `
 /* OUR clock, once it has been days. A film nobody has acted on is a match whose players never got it. */
 .veo .rwait em.alarm{color:var(--look)}
 .veo .ractions{display:flex;gap:6px;justify-content:flex-end}
-.veo .ractions .btn{padding:4px 9px;font-size:11px}
+.veo .ractions .btn{padding:4px 9px;font-size:11px;white-space:nowrap}
+.veo .ractions .btn.go{border-color:#8fbf9f;background:#eef8f1;color:#14512f;font-weight:800}
+/* ── A DONE ROW IS QUIETER ─────────────────────────────────────────────────────────────────────
+   Same row, same controls, less ink. Scoped to .done, so a Needs you row is untouched. */
+.veo .rrow.done{background:var(--bg)}
+.veo .rrow.done .rwhat b{font-weight:600;color:var(--ink2)}
+/* AND THE LATENESS STOPS SHOUTING. "3 days late" in amber is right on a film nobody has placed and
+   wrong on one that posted four days ago: an alarm about something nobody can act on. It stays on
+   the row — it is still true — it just stops being an alarm. */
+.veo .rrow.done .rwhen em{color:var(--ink3)}
 .veo .rrow .assign{padding:0 12px 12px}
 .veo .rrow .x{color:var(--look);font-weight:800;padding:4px 9px}
 .veo .rrow.gone{display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--bg);font-size:12.5px}

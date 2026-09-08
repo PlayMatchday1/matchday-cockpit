@@ -106,6 +106,22 @@ export const RECENT_STATE_TONE: Record<RecentState, RecentTone> = {
 /** A row nobody needs to act on. The waiting clock is meaningless on these, and Assign is absent. */
 export const isResolved = (s: RecentState): boolean => s !== "queued";
 
+/* ── THE TWO TABS ──────────────────────────────────────────────────────────────────────────────
+ * A GROUPING OVER THE FIVE STATES, NOT A SIXTH STATE. recentState still decides what a row IS;
+ * this only decides which list it appears in, and every row is in exactly one.
+ *
+ * WHY IT IS WORTH SPLITTING. Measured on the nine live rows for Sep 6, in the order the page shows
+ * them: the first row wanting a person was 8th of 9, five finished rows sat above it, and two more
+ * rows that also wanted a person (Posted, flagged) were buried at positions 5 and 6 BETWEEN the
+ * finished ones. The work was not merely at the bottom, it was interleaved.
+ *
+ * FLAGGED IS "NEEDS YOU" because the film posted on an inferred read and nobody has said it is
+ * right. That is only defensible now that there IS a way to say so — see the flag-clear route. A
+ * tab of flagged rows with no button would be a list that could only grow. */
+export type RecentTab = "needs" | "done";
+export const RECENT_TAB_LABEL: Record<RecentTab, string> = { needs: "Needs you", done: "Done" };
+export const tabOf = (s: RecentState): RecentTab => (s === "queued" || s === "flagged" ? "needs" : "done");
+
 export type RecentRowInput = {
   status: "posted" | "queued" | "dismissed";
   flagged: boolean;

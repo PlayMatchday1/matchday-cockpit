@@ -52,7 +52,49 @@ export const hasFilm = (s: FilmState): boolean =>
   s === "posted" || s === "flagged" || s === "assigned" || s === "needs_look";
 
 /** Rendering order for the tally strip, left to right. */
+/* ALL SIX, AND THIS LIST IS THE ARITHMETIC — tallyAddsUp sums it against the total. It is NOT the
+ * render order of the tally strip, and it used to be both. Cutting the strip while this drove it
+ * would have cut the sum too, and the check would have gone vacuous: a broken day would then add
+ * up trivially and pass. The two are separated for that reason and must stay separated. */
 export const FILM_STATES: readonly FilmState[] = ["posted", "flagged", "assigned", "held", "needs_look", "no_film"];
+
+/* ── WHAT THE STRIP SHOWS: TWO NUMBERS ─────────────────────────────────────────────────────────
+ * On the day this was cut, FOUR of the seven tiles read zero and a fifth was the total of the
+ * other six. A strip mostly of zeroes is a strip nobody reads, including on the day one of them
+ * stops being a zero.
+ *
+ *   auto posted to chat = posted + flagged. Both are THE MATCHER placing a film; the flag is a
+ *                         caveat on that placement, not a different outcome. Folding them loses
+ *                         nothing now that every flagged row has its own home in Recently
+ *                         uploaded's "Needs you" tab with a Confirm button.
+ *   assigned to chat    = assigned. A person did it.
+ *
+ * That is the split this file's header says the page exists to measure: anyone measuring the
+ * matcher off this page has to be able to see the number the matcher actually produced.
+ *
+ * NOTHING WAS DROPPED WITHOUT A HOME. `no film yet` is the "Show N matches with no film" button,
+ * which counts exactly those. `needs a look` is the Needs you tab. `held on purpose` keeps its Held
+ * pill on the row. `films that landed` was the sum of numbers now shown beside each other. */
+export type TallyTile = { key: "auto" | "assigned"; label: string; states: readonly FilmState[] };
+export const TALLY_TILES: readonly TallyTile[] = [
+  { key: "auto", label: "auto posted to chat", states: ["posted", "flagged"] },
+  { key: "assigned", label: "assigned to chat", states: ["assigned"] },
+];
+export const tileCount = (t: VeoDayTally, tile: TallyTile): number =>
+  tile.states.reduce((a, k) => a + t[k], 0);
+
+/* A MATCH NAMED WITH THE CAMERA EMOJI WHOSE FIELD NO veo_codes ROW NAMES. It is not a film state
+ * and it is not in the tally — no recording can arrive for it, so it has nothing to be in a state
+ * about. The code table decides this page; the emoji does not, and this group is exactly the gap
+ * between the two, shown rather than asserted at the foot of the page. */
+export type EmojiOnlyMatch = {
+  apiId: number;
+  name: string;
+  venue: string | null;
+  city: string | null;
+  /** The same { label, minutes } shape fmtTime gives every other row on this page. */
+  time: { label: string; minutes: number };
+};
 
 export type VeoDayRecording = {
   id: string;

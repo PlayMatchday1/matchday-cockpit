@@ -25,7 +25,7 @@ import { CITY_CODE_TO_DISPLAY } from "@/lib/scheduleReconcile";
 import { fetchVeoCodeRows } from "@/lib/veoCodes";
 import { resolveVeoCodeScored } from "@/lib/veo";
 import { veoCodeRowsToMap } from "@/lib/veoCodes";
-import { recentState, type RecentState } from "@/lib/veoRecent";
+import { recentState, tabOf, type RecentState, type RecentTab } from "@/lib/veoRecent";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,6 +33,10 @@ export const maxDuration = 30;
 
 const MAX_LIMIT = 200;
 const DEFAULT_LIMIT = 30;
+/* HOW FAR BACK THE COUNTS ARE HONEST. Every row is scanned so the tab counts are exact; this is the
+ * ceiling on that, and the payload reports `truncated` when it is hit rather than printing a total
+ * that is quietly a window. */
+const SCAN_CAP = 4000;
 
 export type RecentRow = {
   id: string;
@@ -62,7 +66,10 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const limit = Math.min(MAX_LIMIT, Math.max(1, Number(url.searchParams.get("limit")) || DEFAULT_LIMIT));
-  const filter = url.searchParams.get("filter") === "unposted" ? "unposted" : "all";
+  /* THE TAB IS A PRESENTATION FILTER over the five states, applied strictly AFTER the session
+   * scope below — the same rule `city` already follows, and a new parameter is exactly where that
+   * gets forgotten. It can only ever narrow what confinement already allowed. */
+  const tab: RecentTab = url.searchParams.get("tab") === "done" ? "done" : "needs";
   /* A PRESENTATION FILTER, AND NOT THE BOUNDARY. The page's city control narrows what an operator
    * is looking at; confinement decides what they are ALLOWED to look at. They are different things
    * that would collapse into one if the scope were ever taken from this parameter, so it is applied
@@ -70,20 +77,27 @@ export async function GET(req: Request) {
   const cityWanted = url.searchParams.get("city");
 
   try {
-    /* OVER-FETCH, THEN SCOPE, THEN SLICE. The city a recording belongs to is not a column on
-     * veo_recordings — it is behind its match or its code — so it cannot be filtered in the first
-     * query. Taking `limit` rows and then dropping the out-of-city ones would hand a confined
-     * operator a short list and call it the most recent 30. */
-    const want = auth.confinedCity || cityWanted ? Math.min(MAX_LIMIT * 4, 800) : limit * 3;
+    /* SCAN, THEN SCOPE, THEN COUNT, THEN SLICE — in that order, and it matters.
+     *
+     * The city a recording belongs to is not a column on veo_recordings; it is behind its match or
+     * its code. So it cannot be filtered in SQL, and taking `limit` rows first and dropping the
+     * out-of-city ones afterwards would hand a confined operator a short list and call it the most
+     * recent 30.
+     *
+     * THE TAB COUNTS COME OUT OF THE SAME SCOPED ARRAY THE ROWS DO. That is the whole point of
+     * counting here rather than with a second COUNT query: a separate query would have to
+     * re-implement the match-and-code city resolution below, and the first time the two drifted a
+     * confined operator would be shown a number that does not match their own list. Same array,
+     * same loop, so they cannot disagree.
+     *
+     * ONE SCAN, NOT AN OVER-FETCH HEURISTIC. The columns are small and the table is small (219
+     * rows on 2026-09-07); SCAN_CAP is the stated ceiling, and `truncated` below says plainly when
+     * the counts are over a window rather than the whole table rather than quietly rounding down. */
     let q = auth.supabase
       .from("veo_recordings")
       .select("id, recording_id, match_path_slug, email_subject, video_url, received_at, status, queue_reason, matched_api_id, candidate_api_ids, match_score, flagged, posted_by_user_id, parsed_code, parsed_match_date, parsed_time_minutes")
       .order("received_at", { ascending: false })
-      .limit(want);
-    /* "NOT POSTED" MEANS STILL WAITING, WHICH IS `queued` — not `everything that is not posted`.
-     * With `neq("status","posted")` a dismissed recording stayed on the list an operator uses to
-     * find work, so taking a row off the list left it exactly where it was. */
-    if (filter === "unposted") q = q.eq("status", "queued");
+      .limit(SCAN_CAP);
     const { data, error } = await q;
     if (error) throw new Error(`veo recent: ${error.message}`);
     const raw = data ?? [];
@@ -122,7 +136,8 @@ export async function GET(req: Request) {
       return field ? displayToCode.get(field.city) ?? null : null;
     };
 
-    const rows: RecentRow[] = [];
+    /* EVERY ROW THIS OPERATOR MAY SEE, in arrival order, before any tab is applied. */
+    const scoped: RecentRow[] = [];
     for (const r of raw) {
       const match = r.matched_api_id != null ? matchById.get(r.matched_api_id as number) ?? null : null;
       const viaMatch = match?.city ?? null;
@@ -134,7 +149,7 @@ export async function GET(req: Request) {
        * visible under "All cities" and is hidden by a specific one — it cannot be claimed for a
        * city nothing links it to. */
       if (cityWanted && (cityCode == null || (CITY_CODE_TO_DISPLAY[cityCode] ?? cityCode) !== cityWanted)) continue;
-      rows.push({
+      scoped.push({
         id: r.id as string,
         recordingId: r.recording_id as string,
         subject: (r.email_subject as string | null) ?? null,
@@ -155,17 +170,28 @@ export async function GET(req: Request) {
         city: cityCode ? (CITY_CODE_TO_DISPLAY[cityCode] ?? cityCode) : null,
         match,
       });
-      if (rows.length >= limit) break;
     }
+
+    // THE COUNTS, off the scoped array — see the note above the scan.
+    const counts = { needs: 0, done: 0 };
+    for (const r of scoped) counts[tabOf(r.state)]++;
+
+    // THEN the tab, and only then the page.
+    const inTab = scoped.filter((r) => tabOf(r.state) === tab);
+    const rows = inTab.slice(0, limit);
 
     return Response.json({
       rows,
       limit,
-      filter,
-      /* `more` is honest about what it knows: there were further rows to consider, not that there
-       * are further rows the operator may see. A confined account's tail is unknowable without
-       * scoping the whole table. */
-      more: raw.length >= want || rows.length >= limit,
+      tab,
+      counts,
+      /* `more` now knows the answer exactly, because the whole scoped list is in hand: there are
+       * further rows IN THIS TAB that this page did not return. It is no longer a guess about the
+       * tail of an over-fetch. */
+      more: inTab.length > rows.length,
+      /* TRUE ONLY IF THE SCAN CEILING WAS HIT, in which case the counts are over a window. Said
+       * out loud rather than left for someone to discover in a number that is slightly wrong. */
+      truncated: raw.length >= SCAN_CAP,
       confinedCity: auth.confinedCity ?? null,
     }, { headers: { "cache-control": "no-store" } });
   } catch (e) {

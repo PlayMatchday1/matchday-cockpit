@@ -18,7 +18,7 @@ import "server-only"; // no-op under --conditions=react-server
 import { readFileSync } from "node:fs";
 import { videoFromThumb } from "../src/app/api/veo/thumb/route";
 import {
-  FILM_STATES, attachedTo, buildDayRows, filmState, gapLabel, hasFilm, scoreTrace, tally, tallyAddsUp, traceSum,
+  FILM_STATES, TALLY_TILES, attachedTo, buildDayRows, emptyTally, filmState, gapLabel, hasFilm, scoreTrace, tally, tallyAddsUp, traceSum,
   type VeoDayMatch, type VeoDayRecording, type VeoScoreParts,
 } from "../src/lib/veoDay";
 import { classifyVeo, scoreVeo, CODE_SCORE, DATE_SCORE, TIME_SCORE, FIELD_SCORE, type CodeTier, type DateForm, type TimeForm, type VeoCandidateRow } from "../src/lib/veo";
@@ -257,7 +257,7 @@ const PAGE_C = noComments(PAGE), ROUTE_C = noComments(ROUTE);
 
 /* PART 3: the orphan strip has an exit. POST /api/veo/[id] has existed and worked all along —
  * this page simply never called it, so a queued recording had nowhere to go. */
-/method: "POST"[\s\S]{0,160}JSON\.stringify\(\{ apiId \}\)/.test(PAGE_C) && /`\/api\/veo\/\$\{recordingId\}`/.test(PAGE_C)
+/method: "POST"[\s\S]{0,160}JSON\.stringify\(\{ apiId \}\)/.test(PAGE_C) && /`\/api\/veo\/\$\{recordingId\}\$\{suffix\}`/.test(PAGE_C)
   ? ok("the page calls POST /api/veo/[id] with the chosen match")
   : bad("the page does not call the assign route");
 /method: "DELETE"/.test(PAGE_C) ? ok("…and DELETE for a dismiss") : bad("no dismiss control");
@@ -440,11 +440,14 @@ console.log("\n— re-reading a title is not re-deciding a recording —");
   const writingEffects = effectBodies.filter((e) => /method:\s*"(POST|PATCH|PUT|DELETE)"/.test(e));
   is(`none of the ${effectBodies.length} effects in the component issues a write`, writingEffects.length, 0);
   const all = [...PAGE_C.matchAll(/method:\s*"(\w+)"/g)].map((m) => m[1]).sort();
-  is("…and every write in the file is one of the four a person can click",
-    all, ["DELETE", "DELETE", "PATCH", "POST"]);
+  /* SIX NOW, NOT FOUR, AND THE TWO NEW ONES ARE THE SAME WRITE from two surfaces: the flag clear,
+   * clicked from a Recently uploaded row and from the day view's own Confirm. The rule this
+   * assertion enforces has not changed — every write in this file is one a person clicked. */
+  is("…and every write in the file is one a person can click",
+    all, ["DELETE", "DELETE", "PATCH", "PATCH", "PATCH", "POST"]);
   const inAssign = /function useAssign[\s\S]*?\n\}/.exec(PAGE_C)?.[0] ?? "";
-  is("…two of them being the assign and the dismiss inside useAssign",
-    [...inAssign.matchAll(/method:\s*"(\w+)"/g)].map((m) => m[1]).sort(), ["DELETE", "POST"]);
+  is("…three of them being the assign, the dismiss and the flag clear inside useAssign",
+    [...inAssign.matchAll(/method:\s*"(\w+)"/g)].map((m) => m[1]).sort(), ["DELETE", "PATCH", "POST"]);
   /* AND THE UNDO CANNOT UN-POST ANYTHING. Its route is guarded on status = 'dismissed'. */
   {
     const ID_ROUTE = noComments(readFileSync("src/app/api/veo/[id]/route.ts", "utf8"));
@@ -492,9 +495,30 @@ is("…and parked when nothing arrived at all", (["held", "no_film"] as const).m
 /data-testid="veo-parked-toggle"/.test(PAGE_C) && /showParked \? "Hide" : "Show"/.test(PAGE_C)
   ? ok("…and parks the rest behind one line, default closed")
   : bad("the no-film rows are gone rather than parked");
-/<b>\{withFilm\.length\}<\/b>\s*<span>films that landed<\/span>/.test(PAGE_C)
-  ? ok("the total counts FILMS and says so, instead of 'on camera that day'")
-  : bad("the total still overstates what it counts");
+/* THE TOTAL TILE IS GONE — it was the sum of the two tiles that remain, and a total beside two
+ * numbers that make it is a third number saying nothing. What replaced it is asserted here: two
+ * tiles, driven by TALLY_TILES rather than by FILM_STATES, so cutting the strip could not cut the
+ * arithmetic. */
+/TALLY_TILES\.map\(\(t\) =>/.test(PAGE_C) && !/veo-tal-total/.test(PAGE_C)
+  ? ok("the strip is TALLY_TILES and the total tile is gone")
+  : bad("the strip still renders per-state tiles or a total");
+is("…and the strip is exactly two tiles", TALLY_TILES.length, 2);
+is("…auto posted is the matcher's own two states", [...TALLY_TILES[0].states], ["posted", "flagged"]);
+is("…assigned is the one a person did", [...TALLY_TILES[1].states], ["assigned"]);
+/* AND THE SUM IS UNTOUCHED. This is the vacuity check: if FILM_STATES had been cut with the strip,
+ * tallyAddsUp would sum two of six and pass on a day that does not add up. */
+is("FILM_STATES still has all six, so tallyAddsUp is not vacuous", FILM_STATES.length, 6);
+{
+  const t = emptyTally(10);
+  t.posted = 3; t.flagged = 1; t.assigned = 2; t.held = 1; t.needs_look = 2; t.no_film = 1;
+  yes("…an honest day adds up", tallyAddsUp(t));
+  /* BREAK IT DELIBERATELY, on a state NO TILE SHOWS — the exact case a two-tile strip could hide. */
+  const broken = { ...t, held: 99 };
+  yes("…and a day broken in a state the strip does not show STILL fails", !tallyAddsUp(broken));
+  /tallyAddsUp\(shownTally\)[\s\S]{0,160}veo-tally-broken/.test(PAGE_C)
+    ? ok("…and the page still renders veo-tally-broken when it does")
+    : bad("the visible failure was tidied away with the tiles");
+}
 /* ASSIGN STILL OFFERS EVERY CAMERA MATCH, parked ones included: a film can belong to a match whose
  * own film never came, which is exactly the case a parked row represents. */
 /for \(const m of matches\) \{\s*candidates\[m\.apiId\]/.test(noComments(readFileSync("src/app/api/veo/day/route.ts", "utf8")))
@@ -511,9 +535,13 @@ console.log("\n— the X takes a row off the list without destroying anything �
 /data-testid="veo-recent-dismissed"[\s\S]{0,400}data-testid="veo-recent-undo"/.test(PAGE_C)
   ? ok("dismissing replaces the row in place with a strip that offers Undo")
   : bad("no undo strip");
-/The film and its history are kept/.test(PAGE_C)
-  ? ok("…and the strip says what was kept, so nothing disappears without a trace")
-  : bad("the strip does not say the film is kept");
+/* THE SENTENCE WENT, THE GUARANTEE DID NOT. "The film and its history are kept" said the same
+ * thing on every strip, so it is a comment now; what makes it TRUE is that dismiss is a status
+ * change and the row is still there under Done marked Dismissed — which is what the undo above
+ * proves, and what this asserts is still the mechanism. */
+/method: "DELETE"/.test(PAGE_C) && !/The film and its history are kept/.test(PAGE_C)
+  ? ok("…the strip drops its standing sentence and keeps the undo that makes it true")
+  : bad("the standing sentence is still on the strip");
 !/confirm[\s\S]{0,80}dismiss|window\.confirm/.test(PAGE_C)
   ? ok("…with no dialog, because it is undoable in one click")
   : bad("a confirm dialog was added for an undoable action");

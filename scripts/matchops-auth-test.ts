@@ -327,6 +327,7 @@ for (const r of ["list", "detail/[id]", "fields", "matches", "check"]) {
   // sorted: the walk order is directory order, which is not a fact worth asserting
   const map = Object.fromEntries(veoRoutes.map((f) => [f.replace("src/app/api/", ""), gateOf(f)] as const).sort((a, b) => a[0].localeCompare(b[0])));
   is("every /api/veo route is pinned to a named gate (a NONE here is an unauthenticated route)", map, {
+    "veo/[id]/flag/route.ts": "crm",         // confirm an inferred placement — one boolean, cannot post
     "veo/[id]/route.ts": "crm",              // resolve a queued review item
     "veo/cameras/route.ts": "crm",
     "veo/codes/[id]/route.ts": "capability",  // ITEMISED: was "admin" — now Match Ops

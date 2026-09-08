@@ -19,7 +19,7 @@ import { CITY_CODE_TO_DISPLAY } from "@/lib/scheduleReconcile";
 import { canonicalVenueName } from "@/lib/venueResolver";
 import { hasCameraEmoji, stripCameraEmoji } from "@/lib/veo";
 import { fetchVeoCodeRows } from "@/lib/veoCodes";
-import { buildDayRows, tally, type AssignCandidate, type VeoDayMatch, type VeoDayRecording } from "@/lib/veoDay";
+import { buildDayRows, tally, type AssignCandidate, type EmojiOnlyMatch, type VeoDayMatch, type VeoDayRecording } from "@/lib/veoDay";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -70,12 +70,24 @@ export async function GET(req: Request) {
     if (error) throw new Error(`veo day: ${error.message}`);
 
     const matches: VeoDayMatch[] = [];
-    let emojiWithoutCode = 0;
+    /* THE ROWS, NOT A COUNT. This used to be a number, so these matches were counted and thrown
+     * away and nothing downstream could show them — the page claimed at its foot that N such
+     * matches existed, with no way to see them and no way to check the claim was true. The count
+     * is now `.length`, so the number on screen and the rows on screen cannot disagree.
+     * SAME SCOPED QUERY, so confinement is inherited rather than re-derived: these come out of the
+     * same `rows` the coded matches do, which the session already filtered in SQL. */
+    const emojiMatches: EmojiOnlyMatch[] = [];
     for (const r of rows ?? []) {
       const fieldId = r.field_id as number | null;
       const named = fieldId != null ? codeByField.get(fieldId) : undefined;
       if (!named) {
-        if (hasCameraEmoji(r.name)) emojiWithoutCode += 1;
+        if (hasCameraEmoji(r.name)) emojiMatches.push({
+          apiId: r.api_id as number,
+          name: (r.name as string | null) ?? `Match ${r.api_id}`,
+          venue: (r.field_title as string | null) ?? null,
+          city: (r.city_identifier as string | null) ?? null,
+          time: fmtTime(String(r.start_date)),
+        });
         continue;
       }
       const t = fmtTime(String(r.start_date));
@@ -211,7 +223,7 @@ export async function GET(req: Request) {
       // Every field the code table names, so the page can say whether a stray's field is one.
       codedFields: [...codeByField.keys()],
       cities: [...new Set(dayRows.map((r) => r.city))].sort(),
-      emojiWithoutCode,
+      emojiMatches,
       confinedCity: auth.confinedCity ?? null,
     });
   } catch (e) {
