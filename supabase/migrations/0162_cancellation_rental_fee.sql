@@ -35,9 +35,11 @@ alter table public.partner_dashboards
 -- THE OPERATOR'S DECISION ON ONE CANCELLED MATCH. One row per (partner, match); rental_charged is
 -- the whole decision and a reason is mandatory, because "weather" and "they cancelled the morning
 -- of" are the two cases and neither is recoverable from the data afterwards.
+-- partner_dashboards.id is a UUID (verified against the live row, not assumed from the migration
+-- that created it) — so is partner_weekly_payments.partner_dashboard_id, which this mirrors.
 create table if not exists public.partner_match_rental_overrides (
-  id                    bigserial primary key,
-  partner_dashboard_id  bigint not null references public.partner_dashboards(id) on delete cascade,
+  id                    uuid primary key default gen_random_uuid(),
+  partner_dashboard_id  uuid not null references public.partner_dashboards(id) on delete cascade,
   match_api_id          bigint not null,
   rental_charged        boolean not null,
   reason                text not null check (length(btrim(reason)) between 3 and 500),
