@@ -18,13 +18,14 @@
  */
 
 import { useState, type ReactNode } from "react";
-import MatchPanel from "@/components/MatchPanel";
+import MatchPanel, { type PanelSavedPatch } from "@/components/MatchPanel";
 import ChatPane from "@/app/(internal)/match-ops/match-chats/ChatPane";
 
 export type PanelTab = "details" | "chat";
 
 export default function MatchSidePanel({
   matchId, tab, onTab, onClose, width, right = 0, className = "", notice, steps, onDirtyChange,
+  onSaved, onCancelLanded,
 }: {
   /** The match api id. It is ALSO the chat id — proven, and no second lookup. */
   matchId: number;
@@ -41,6 +42,10 @@ export default function MatchSidePanel({
   /** Gameday's unsaved-edit guard hangs off this. It is passed THROUGH, not dropped: leaving it out
    *  would have silently disabled the "you have unsaved changes" guard on that board. */
   onDirtyChange?: (dirty: boolean) => void;
+  /* PASSED THROUGH, LIKE onDirtyChange. A host with a grid keeps one card in sync without a
+   * reload; a host without one passes neither and the panel behaves exactly as it did. */
+  onSaved?: (patch: PanelSavedPatch) => void;
+  onCancelLanded?: () => void;
 }) {
   return (
     <aside className={`gpanel ${className}`} data-testid="gday-panel"
@@ -71,7 +76,8 @@ export default function MatchSidePanel({
           comes back and the change is gone. */}
       <div className={"gpanel-body" + (tab === "details" ? "" : " gpanel-hide")}
         data-testid="gday-panel-details" aria-hidden={tab !== "details"}>
-        <MatchPanel key={matchId} matchId={String(matchId)} onDirtyChange={onDirtyChange} />
+        <MatchPanel key={matchId} matchId={String(matchId)} onDirtyChange={onDirtyChange}
+          onSaved={onSaved} onCancelLanded={onCancelLanded} />
       </div>
       {/* CHAT RESOLVES THE THREAD THE WAY IT WAS PROVEN TO RESOLVE: chatId is the match api_id. */}
       <div className={"gpanel-body gpanel-chat" + (tab === "chat" ? "" : " gpanel-hide")}

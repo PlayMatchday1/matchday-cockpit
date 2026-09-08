@@ -42,8 +42,21 @@ import {
   fieldCounts, busiestDay, isoDow,
   type GridDay, type GridMatch,
 } from "@/lib/monthGrid";
-import MatchDrawer, { DRAWER_W, type DrawerMatch } from "@/components/MatchDrawer";
-import type { DrawerPatch } from "./MatchDrawer";
+/* THE SAME PANEL GAMEDAY OPS AND VEO OPEN. Not a copy and not a variant — the same import, so the
+ * two editors that had drifted are one component again.
+ *
+ * WHAT WAS HERE: MatchDrawer, a wrapper around MatchEditor, with `width: 480` INLINE and no media
+ * query in the file. Measured on the real page: at a 390px viewport the panel rendered 480px wide
+ * with its left edge at -90px, and at 360px at -120px, with document.scrollWidth equal to the
+ * viewport — so the left 90 to 120px of the form was off-screen and unreachable by scrolling.
+ * That is Ryan's "too the right and you can't click". MatchSidePanel is min(600px, 96vw), which is
+ * 374px at 390 and fits.
+ *
+ * IT COVERS RATHER THAN PUSHES. MatchDrawer reserved DRAWER_W of right margin on the grid; .gpanel
+ * sits over it, which is what Gameday Ops does. That is a deliberate, visible change to this page
+ * and it is the thing Ryan asked for. */
+import MatchSidePanel, { MATCH_SIDE_PANEL_CSS, type PanelTab } from "@/components/MatchSidePanel";
+import type { PanelSavedPatch } from "@/components/MatchPanel";
 
 type VeoDay = { dow: string; date: number; iso: string; today: boolean };
 type VeoCity = { city: string; cameras: number };
@@ -264,6 +277,9 @@ export default function VeoMasterSchedule() {
   const [cityFilter, setCityFilter] = useState<Set<string>>(new Set());
   const [drawerId, setDrawerId] = useState<number | null>(null);
   const [drawerDirty, setDrawerDirty] = useState(false);
+  /* THE PANEL'S OWN TAB. Details on open, exactly as Gameday Ops does; it is the panel's state and
+   * not the page's, so switching matches keeps whichever tab the operator was on. */
+  const [panelTab, setPanelTab] = useState<PanelTab>("details");
   const [toastMsg, setToastMsg] = useState<{ text: string; warn: boolean } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showToast = useCallback((text: string, warn = false) => {
@@ -604,6 +620,7 @@ export default function VeoMasterSchedule() {
   const drawerCity = useMemo(() => (drawerId != null && week ? week.matches.find((m) => m.apiId === drawerId)?.city ?? null : null), [drawerId, week]);
   const drawerVeo = useMemo(() => (drawerId != null && week ? !!week.matches.find((m) => m.apiId === drawerId)?.veo : false), [drawerId, week]);
   const drawerSiblings = useMemo(() => (drawerId != null && week ? siblingsOf(week, drawerId) : []), [drawerId, week]);
+  const siblingIndex = useMemo(() => (drawerId == null ? -1 : drawerSiblings.indexOf(drawerId)), [drawerSiblings, drawerId]);
   /* ── COPY MATCH ─────────────────────────────────────────────────────────────────────────────
    * It used to navigate to /matches/new?from=N — a form to fill in, which is not a copy. Now it
    * reads the source, asks once, creates an identical match, and opens the editor on the NEW one.
@@ -735,7 +752,7 @@ export default function VeoMasterSchedule() {
    * The re-read is loadRange(range) WITHOUT repull. The data is already correct in Clubhouse the
    * moment the save returns; only the local copy is stale, and a repull would fire a resync per
    * week across the whole range for a change you just made yourself. */
-  const patchCard = useCallback((id: number, patch: DrawerPatch) => {
+  const patchCard = useCallback((id: number, patch: PanelSavedPatch) => {
     const hhmm = patch.startDate ? patch.startDate.slice(11, 16) : "";
     const newDate = patch.startDate ? patch.startDate.slice(0, 10) : "";
     /* ── THE PATCH SPEAKS THE API'S VOCABULARY; THE GRID SPEAKS ITS OWN ──────────────────────
@@ -849,8 +866,12 @@ export default function VeoMasterSchedule() {
   const drawerOpen = drawerId != null;
 
   return (
-    <div className="vms" style={drawerOpen ? { maxWidth: "none", marginLeft: 0, marginRight: DRAWER_W } : undefined}>
+    /* NO RESERVED MARGIN. The panel covers the grid now rather than pushing it aside — see the
+       import note. The page therefore keeps its normal width whether or not a match is open. */
+    <div className="vms">
       <style>{CSS}</style>
+      {/* This page is not `.gdo`, so it supplies the panel's own rules. */}
+      <style>{MATCH_SIDE_PANEL_CSS}</style>
 
       <div className="vms-card">
         <div className="vms-head">
@@ -1294,23 +1315,41 @@ export default function VeoMasterSchedule() {
       )}
 
       {drawerOpen && drawerId != null && (
-        <MatchDrawer
+        <MatchSidePanel
           key={drawerId}
-          apiId={drawerId}
-          cardVeo={drawerVeo}
-          siblings={drawerSiblings}
+          matchId={drawerId}
+          width={600}
+          tab={panelTab}
+          onTab={setPanelTab}
           onClose={closeDrawer}
           onDirtyChange={setDrawerDirty}
-          onSaved={(id, patch) => patchCard(id, patch)}
-          onToggleVeo={(id, en) => void toggleIntent(id, en)}
-          onStep={(id) => setDrawerId(id)}
-          onToast={showToast}
-          /* ONLY ON LANDED. useCancelMatch fires its callback for NOT APPLIED too and hands over
-             the verdict; this passes nothing up unless the re-read confirmed the cancel, so a
-             failed or unknown outcome leaves the grid exactly as it was with the message still on
-             it. The write-through has already put is_cancelled into the mirror by the time this
-             runs, so the re-read genuinely drops the card. */
-          onCancelLanded={() => { showToast("Match cancelled — schedule refreshed."); void load(weekRef, true); }}
+          /* ONE CARD, NOT A RELOAD. MatchPanel hands back the RE-READ match in the same shape
+             MatchEditor produced, so patchCard takes it unchanged and the property this file
+             protects — never refetch the whole week on a save — survives the swap intact. */
+          onSaved={(patch) => patchCard(drawerId, patch)}
+          /* ONLY ON LANDED. useCancelMatch fires for NOT APPLIED too and hands over the verdict;
+             MatchPanel now gates on it, so a failed or unknown outcome leaves the grid exactly as
+             it was with the message still on the panel. */
+          onCancelLanded={() => { showToast("Match cancelled - schedule refreshed."); void load(weekRef, true); }}
+          /* STEPPING THROUGH THE DAY, mapped from the drawer's up/down to the panel's prev/next.
+             The dirty guard is openCard's and is unchanged: it refuses to move off a dirty match. */
+          steps={{
+            canPrev: siblingIndex > 0,
+            canNext: siblingIndex >= 0 && siblingIndex < drawerSiblings.length - 1,
+            onPrev: () => { const n = drawerSiblings[siblingIndex - 1]; if (n != null) openCard(n); },
+            onNext: () => { const n = drawerSiblings[siblingIndex + 1]; if (n != null) openCard(n); },
+          }}
+          /* THE VEO INTENT TOGGLE — the one control that is genuinely this page's. It rides in the
+             panel's notice slot, owned here, so MatchPanel never learns Veo exists. */
+          notice={
+            <div className="vms-veorow" data-testid="drawer-veo-row">
+              <label>
+                <input type="checkbox" data-testid="drawer-veo" checked={drawerVeo}
+                  onChange={(e) => void toggleIntent(drawerId, e.target.checked)} />
+                <span>Veo camera on this match</span>
+              </label>
+            </div>
+          }
         />
       )}
 
@@ -1584,6 +1623,12 @@ function WlSection({ title, hint, rows, dayLabel }: {
 }
 
 const CSS = `
+/* THE VEO ROW, in the panel's notice slot. It sits between the dark bar and the tab strip, so it
+   takes the tab strip's white ground and its own bottom rule rather than inventing a card. */
+.vms-veorow{display:flex;align-items:center;padding:9px 12px;background:#fff;border-bottom:1px solid #DCE5E0;flex:0 0 auto}
+.vms-veorow label{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;color:#1B3227;cursor:pointer}
+.vms-veorow input{width:16px;height:16px;min-height:16px;accent-color:#046B45;cursor:pointer;margin:0}
+
 .vms{
   --forest:#003326;--ink:#0d1f18;--muted:#5C6B62;--paper:#fff;
   --line:#dfe4da;--slot:#EFF4EF;--mint:#2CDB87;--mintSoft:#dcf7e9;

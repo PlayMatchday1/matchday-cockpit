@@ -235,10 +235,23 @@ console.log("\nTHE MONTH VIEW SHARES THE WEEK VIEW'S EDITOR, AND ITS ROWS GROW T
   /* ONE DRAWER, MOUNTED ONCE AT PAGE LEVEL. Both views call the same openCard, so "the same editor
    * component" is structural rather than a promise. */
   is("  Month calls the same openCard the week view calls", /<MonthView[\s\S]{0,200}onOpen=\{openCard\}/.test(code), true);
-  is("  …and there is exactly one MatchDrawer on the page", (code.match(/<MatchDrawer/g) ?? []).length, 1);
-  is("  …mounted outside the view branch", code.indexOf("<MatchDrawer") > code.indexOf("view === \"month\""), true);
-  // In-place update on save already exists and is shared.
-  is("  saving patches the card in place", /onSaved=\{\(id, patch\) => patchCard\(id, patch\)\}/.test(code), true);
+  /* THE PROPERTY IS UNCHANGED, THE COMPONENT IS NOT. MatchDrawer is gone: Master Schedule opens
+   * MatchSidePanel, the same panel Gameday Ops and Veo open, so the two editors that had drifted
+   * are one component again. What this still asserts is what it always asserted — ONE editor on
+   * the page, mounted outside the view branch so month and week share it. */
+  is("  …and there is exactly one match panel on the page", (code.match(/<MatchSidePanel/g) ?? []).length, 1);
+  is("  …mounted outside the view branch", code.indexOf("<MatchSidePanel") > code.indexOf("view === \"month\""), true);
+  is("  …and it is the SAME panel Gameday Ops opens, not a copy",
+    (code.match(/from "@\/components\/MatchSidePanel"/g) ?? []).length, 1);
+  is("  …with MatchDrawer gone from the tree", code.match(/<MatchDrawer/g), null);
+  /* IN-PLACE UPDATE ON SAVE SURVIVED THE SWAP, and that mattered: MatchSidePanel had no onSaved,
+   * and the alternative was reloading the week on every save — a round trip this file's own
+   * patchCard comment calls a regression. MatchPanel now hands back the RE-READ match in the same
+   * shape MatchEditor produced, so patchCard takes it unchanged. */
+  is("  saving patches the card in place", /onSaved=\{\(patch\) => patchCard\(drawerId, patch\)\}/.test(code), true);
+  is("  …from the re-read, not from what was sent",
+    /const after = j\.match as MatchData \| undefined;[\s\S]{0,400}onSaved\(\{/.test(
+      readFileSync("src/components/MatchPanel.tsx", "utf8")), true);
 
   /* CHANGED DELIBERATELY, 2026-09-01. These two assertions used to pin the OPPOSITE: a fixed
    * 126px cell whose list scrolled inside itself. That hid most of a busy day — September 2026 has

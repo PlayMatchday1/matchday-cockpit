@@ -55,11 +55,23 @@ const MARKS = [36, 24, 12, 6, 3] as const;
 // the surrounding whitespace only, not a fuzzy match.
 const SIZES = [4, 5, 6, 7, 8, 9, 10, 11, 12] as const;
 
-// The API keys this panel stages. (category is EDITABLE but out of scope this step, so it is never
-// surfaced and never enters the diff.) startDate/endDate are derived from the WHEN date+time and go
-// as a duration-preserving PAIR.
+/* THE SAME SEVEN THE FULL EDITOR OFFERS, in the same order and with the same labels. FEMINE is the
+ * API's spelling, not a typo here — the stored value must match what the platform stores. */
+const CATEGORIES: [string, string][] = [
+  ["OPEN", "Open"], ["PREMIER", "Premier"], ["LEGENDS", "Legends"], ["ACADEMY", "Academy"],
+  ["CO_ED", "Co-ed"], ["FEMINE", "Women\u2019s"], ["TOURNAMENT", "Tournament"],
+];
+
+/* The API keys this panel stages. startDate/endDate are derived from the WHEN date+time and go as
+ * a duration-preserving PAIR.
+ *
+ * CATEGORY IS HERE NOW, and the comment that used to say it was "out of scope this step" is why:
+ * Master Schedule's drawer wrapped MatchEditor, which stages category, and this panel replaced
+ * that drawer. Every other field MatchEditor can change this panel already had; category was the
+ * ONE gap, and shipping the swap without it would have quietly removed the only way to set a
+ * match's category from the scheduling page. Adding it here is the smaller change. */
 const STAGED_KEYS = [
-  "name", "type", "managerId", "secondManagerId", "fieldId",
+  "name", "type", "category", "managerId", "secondManagerId", "fieldId",
   "registrationPrice", "additionalSpotPrice", "guestCount", "isFreeMember",
   "maxPlayerCount",
   "fakeSpotLeft36h", "fakeSpotLeft24h", "fakeSpotLeft12h", "fakeSpotLeft6h", "fakeSpotLeft3h",
@@ -69,7 +81,7 @@ const STAGED_KEYS = [
 ] as const;
 
 const LABELS: Record<string, string> = {
-  name: "Match name", type: "Type", managerId: "Manager", secondManagerId: "Second manager", fieldId: "Field",
+  name: "Match name", type: "Type", category: "Category", managerId: "Manager", secondManagerId: "Second manager", fieldId: "Field",
   registrationPrice: "Price", additionalSpotPrice: "Spot price", guestCount: "Guest count", isFreeMember: "Free to member",
   maxPlayerCount: "Max players", fakeSpotLeft36h: "Shown-left 36 H", fakeSpotLeft24h: "Shown-left 24 H",
   fakeSpotLeft12h: "Shown-left 12 H", fakeSpotLeft6h: "Shown-left 6 H", fakeSpotLeft3h: "Shown-left 3 H",
@@ -102,7 +114,23 @@ async function authHeaders(): Promise<Record<string, string> | null> {
   return t ? { Authorization: `Bearer ${t}`, "Content-Type": "application/json" } : null;
 }
 
-export default function MatchPanel({ matchId, env = "production", onDirtyChange }: { matchId: string; env?: "production" | "staging"; onDirtyChange?: (dirty: boolean) => void }) {
+/* WHAT A HOST GRID NEEDS AFTER A SAVE, and it is the same shape MatchEditor already produced
+ * (SavedPatch) so Master Schedule's patchCard takes it unchanged. It is built from the RE-READ
+ * match, never from what was sent: a field that did not apply must not be painted onto the card as
+ * though it had. */
+export type PanelSavedPatch = {
+  name: string; startDate: string; endDate: string | null; venue: string | null; city: string | null;
+  price: number | null; capacity: number | null; minPlayers: number | null; cancelled: boolean;
+};
+
+export default function MatchPanel({ matchId, env = "production", onDirtyChange, onSaved, onCancelLanded }: {
+  matchId: string; env?: "production" | "staging";
+  onDirtyChange?: (dirty: boolean) => void;
+  /** Fired after a save, with the re-read match, so a host grid can update one card without a reload. */
+  onSaved?: (patch: PanelSavedPatch) => void;
+  /** Fired ONLY when a cancel is confirmed LANDED by the re-read. Never on NOT APPLIED or UNKNOWN. */
+  onCancelLanded?: () => void;
+}) {
   // THE SAME RULE THE ROUTE ENFORCES. Not a guess and not a second copy — matchEditAccess() is
   // pinned to adminGate + deriveMatchOpsFlags by an equivalence assertion in matchops-auth-test.
   const { appUser } = useAuth();
@@ -617,6 +645,9 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     onCancelled: async (landed) => {
       if (landed) noteImmediate("cancelled the match");
       await load(); await loadRoster();
+      // ONLY ON LANDED. useCancelMatch fires this for NOT APPLIED too and hands over the verdict;
+      // a host that refreshes its grid must not be told a cancel happened when it did not.
+      if (landed) onCancelLanded?.();
     },
   });
 
@@ -878,6 +909,22 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
       const sentKeys = Object.keys(changes);
       await load();
       const after = j.match as MatchData | undefined;
+      /* THE HOST GRID, FROM THE RE-READ. Not from `changes` — a field that came back NOT APPLIED
+       * would otherwise be painted onto the card as though it had landed. */
+      if (after && onSaved) {
+        const num = (v: unknown) => (v == null || v === "" ? null : Number(v));
+        onSaved({
+          name: String(after.name ?? ""),
+          startDate: String(after.startDate ?? ""),
+          endDate: after.endDate == null ? null : String(after.endDate),
+          venue: after.fieldTitle == null ? null : String(after.fieldTitle),
+          city: after.cityName == null ? null : String(after.cityName),
+          price: num(after.registrationPrice),
+          capacity: num(after.maxPlayerCount),
+          minPlayers: num(after.minPlayerCount),
+          cancelled: after.isCancelled === true,
+        });
+      }
       let landed = 0, notApplied: string[] = [];
       if (after) for (const k of sentKeys) {
         if (JSON.stringify(after[k] ?? null) === JSON.stringify((changes as Record<string, unknown>)[k] ?? null)) landed++;
@@ -999,10 +1046,20 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
         <fieldset className="mp-fs" disabled={!mayWrite} data-testid="mp-fieldset">
         <div className="mp-body">
           {/* MATCH */}
-          <Section title="MATCH" dirty={secDirty(["name", "type", "managerId", "secondManagerId", "fieldId"])}>
+          <Section title="MATCH" dirty={secDirty(["name", "type", "category", "managerId", "secondManagerId", "fieldId"])}>
             <label className="mp-f"><span className="mp-lb">MATCH NAME</span>
               <input data-testid="mp-name" value={String(cur.name ?? "")} className={isDirty("name") ? "mp-chg" : ""} onChange={(e) => setField("name", e.target.value)} /></label>
+            {/* CATEGORY. Staged like every other field here — it enters the diff, shows the dirty
+                mark and goes in the same PUT. An unknown stored value is kept as an option rather
+                than silently reset to OPEN by the select. */}
             <div className="mp-grid">
+              <label className="mp-f"><span className="mp-lb">CATEGORY</span>
+                <select data-testid="mp-category" value={String(cur.category ?? "")} className={isDirty("category") ? "mp-chg" : ""} onChange={(e) => setField("category", e.target.value)}>
+                  {!CATEGORIES.some(([v]) => v === String(cur.category ?? "")) && (
+                    <option value={String(cur.category ?? "")}>{String(cur.category ?? "\u2014")}</option>
+                  )}
+                  {CATEGORIES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select></label>
               <label className="mp-f"><span className="mp-lb">FIELD</span>
                 <select data-testid="mp-field" value={Number(cur.fieldId ?? 0)} className={isDirty("fieldId") ? "mp-chg" : ""} onChange={(e) => setField("fieldId", Number(e.target.value))}>
                   {fields.map((f) => <option key={f.id} value={f.id}>{f.title}</option>)}
