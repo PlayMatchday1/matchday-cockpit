@@ -89,15 +89,22 @@ export default function PartnerMonthlyView({ partnerName, sub, terms, since, mon
               return (
                 <tr key={m.key} className={`${m.isOpening ? "opening" : ""} ${m.isOpen ? "running" : ""}`} data-k={m.key} data-diverged={m.diverged ? "1" : undefined}>
                   <td>{m.label}{m.isOpening && <span className="tag">opening period</span>}{m.isOpen && <span className="sub">Partial — through today, not a full month</span>}</td>
-                  {/* THE NUMBER THAT PRODUCED THE PAYMENT, and the one that did not, side by side.
-                      Under a per-match fee the billable count is what the money is; the cancelled
-                      count sits beside it rather than inside it or hidden — "6 played, 9 cancelled"
-                      is a conversation worth having with a partner. Other models are untouched. */}
+                  {/* THE NUMBER THAT PRODUCED THE PAYMENT, and only that one.
+                      THE CANCELLED COUNT USED TO SIT BESIDE IT — "9 cancelled, not billed" under the
+                      billable figure — and the argument for it was real and is worth keeping here:
+                      under a per-match fee the billable count is what the money is, and "6 played,
+                      9 cancelled" is a conversation worth having with a partner rather than a number
+                      hidden inside another one. Ryan overruled it for the partner-facing table, and
+                      that is his call: a venue reading their own page is reading what they are paid.
+                      REMOVED DELIBERATELY, NOT LOST. matchesCancelled is still derived and still on
+                      the payload — it is still exactly what the payment excludes — so putting the
+                      line back is one span, and this comment is why you would.
+                      IT GOES FOR EVERY MONTHLY PARTNER, not just Crossbar. This component is shared
+                      by the internal index and the public route and by Hattrick too; a per-partner
+                      exception on a shared table would be worse than either keeping or removing it
+                      everywhere. */}
                   <td>
                     {m.matchesBillable != null ? num(m.matchesBillable) : num(m.matches)}
-                    {m.matchesCancelled != null && m.matchesCancelled > 0 && (
-                      <span className="sub canc">{num(m.matchesCancelled)} cancelled, not billed</span>
-                    )}
                   </td>
                   <td>{num(m.spots)}</td>
                   <td>{num(m.daily)}</td>
@@ -162,7 +169,6 @@ const CSS = `
 .pm14 .tv{font-size:31px;font-weight:900;letter-spacing:-1.3px;color:var(--forest);margin-top:7px;line-height:1}
 .pm14 .tn{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.45}
 .pm14 .card{background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:0 9px 26px rgba(0,51,38,.06);overflow:hidden}
-.pm14 .canc{color:var(--muted)}
 .pm14 .csub{padding:14px 20px;border-bottom:1px solid var(--line);font-size:11.5px;color:var(--muted)}
 .pm14 table{width:100%;border-collapse:separate;border-spacing:0}
 .pm14 thead th{background:var(--slot);text-align:right;font-size:9px;font-weight:900;letter-spacing:.85px;text-transform:uppercase;color:var(--muted);padding:11px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
