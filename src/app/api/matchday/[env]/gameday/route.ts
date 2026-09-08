@@ -13,7 +13,7 @@ import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { cityNameFor } from "@/lib/cityScope";
 import { apiGet, StageHostGuardError, StageConfigError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 // The row shape is SHARED with /api/city/gameday — same board, same rows. See gamedayApiShape.
-import { trimMatch, type Raw } from "@/lib/gamedayApiShape";
+import { fetchVenueMaxPlayers, trimMatch, withVenueMaxPlayers, type Raw } from "@/lib/gamedayApiShape";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -65,7 +65,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
       const want = cityNameFor(auth.confinedCity);
       matches = matches.filter((m) => (m.field?.city?.name ?? null) === want);
     }
-    return Response.json({ date, env, matches });
+    /* THE FIELD'S OWN CAPACITY, ATTACHED LAST. After the confinement filter above, deliberately:
+     * this read decorates the matches that survived the scope and can never add one back. */
+    const decorated = withVenueMaxPlayers(matches, await fetchVenueMaxPlayers(auth.supabase));
+    return Response.json({ date, env, matches: decorated });
   } catch (e) {
     if (e instanceof StageHostGuardError) return Response.json({ error: e.message }, { status: 500 });
     if (e instanceof StageConfigError) return Response.json({ error: e.message }, { status: 500 });

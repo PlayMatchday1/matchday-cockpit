@@ -11,7 +11,7 @@
  */
 import { readFileSync } from "node:fs";
 import {
-  realFillPct, maxSpots, atRisk, meter, dayBucket, DAY_BUCKETS, FILTERING_TILES,
+  realFillPct, maxSpots, fieldSpots, atRisk, meter, dayBucket, DAY_BUCKETS, FILTERING_TILES,
   realCount, fakeCount, capacity, short, shortBy, vsMinDelta, passesStrip, inCities, minsToDeadline,
   bannerUrgent, defaultBanners, riskSubtitle, BANNER_LEAD_MINUTES, DEFAULT_BANNER_CAP, showsDeadline, type ApiMatch,
 } from "../src/lib/gamedayModel";
@@ -414,19 +414,97 @@ console.log("\nMAX SPOTS is the denominator, and it does not move");
   const rendered = board.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
   is("no 'matches bumped' in code that renders", rendered.match(/match(es)? bumped/g), null);
   is("...and no reference to a bumped field", rendered.match(/fill\.bumped/g), null);
-  yes("the subtitle is N of M and K fake, nothing else",
-    /\$\{s\.fill\.real\} of \$\{s\.fill\.cap\} · \$\{s\.fill\.fake\} fake`,/.test(board));
+  /* THE SUBTITLE NOW NAMES ITS DENOMINATOR — see the field-spots block below. Still no bump
+   * clause, still the fake count, and nothing else. */
+  yes("the subtitle is N of M field spots and K fake, nothing else",
+    /\$\{s\.fill\.real\} of \$\{s\.fill\.cap\} field spots · \$\{s\.fill\.fake\} fake`,/.test(board));
   const model = readFileSync("src/lib/gamedayModel.ts", "utf8");
   is("isBumped is gone from the model", model.match(/isBumped/g), null);
   /* capacity() AND ITS CALL SITES ARE UNTOUCHED — realFillPct is the ONE that moved. */
   yes("capacity() still returns maxPlayerCount, unchanged",
     /export const capacity = \(m: ApiMatch\): number \| null => \{\s*const c = m\.maxPlayerCount;/.test(model));
-  is("realFillPct is the only caller that swapped to maxSpots",
-    (model.match(/maxSpots\(m\)/g) ?? []).length, 1);
+  /* maxSpots IS NOW THE MIDDLE LINK, called by fieldSpots rather than by realFillPct. Still ONE
+   * caller — the point of the assertion is that nothing else in the model swapped denominators,
+   * and it holds one link deeper. */
+  is("maxSpots has exactly one caller, and it is fieldSpots",
+    (model.match(/maxSpots\(m\)/g) ?? []).length, 2);
+  yes("...which is fieldSpots, not realFillPct",
+    /export const fieldSpots[\s\S]{0,900}return maxSpots\(m\);/.test(model)
+    && !/realFillPct[\s\S]{0,300}maxSpots\(m\)/.test(model));
   /* AND THE FIELDS ACTUALLY ARRIVE. */
   const shape = readFileSync("src/lib/gamedayApiShape.ts", "utf8");
   yes("trimMatch carries both max-spots fields to both gameday routes",
     /maxTeamSize2Team: num\(m\.maxTeamSize2Team\)/.test(shape) && /maxTeamSize4Team: num\(m\.maxTeamSize4Team\)/.test(shape));
+}
+
+console.log("\nTHE FIELD IS THE DENOMINATOR, and the chain falls through in order");
+{
+  /* THREE FIXTURES, ONE PER LINK, each asserting the value came from the level expected and NOT
+   * from a coincidence — every fixture's three candidate numbers are deliberately distinct, so a
+   * link firing at the wrong level produces a visibly wrong number rather than the right one. */
+  const at = (o: { venue: number | null; t4: number | null; cap: number; teams?: number }): ApiMatch =>
+    ({ ...mk({ id: 1, players: 0, fakePlayers: 0, cap: o.cap, min: 2, offsetMin: 60 }),
+       teams: Array.from({ length: o.teams ?? 4 }, (_, i) => ({ teamNumber: i + 1 })),
+       maxTeamSize2Team: 11, maxTeamSize4Team: o.t4, venueMaxPlayers: o.venue } as unknown as ApiMatch);
+
+  // LINK 1 — the field's own number wins, and it is none of the other two.
+  is("link 1: fin_venues.max_players wins", fieldSpots(at({ venue: 44, t4: 32, cap: 26 })), 44);
+  is("...and it is NOT the shape figure", fieldSpots(at({ venue: 44, t4: 32, cap: 26 })) === 32, false);
+  is("...nor capacity", fieldSpots(at({ venue: 44, t4: 32, cap: 26 })) === 26, false);
+  // LINK 2 — no venue number, so the shape figure, which is what maxSpots already returns.
+  is("link 2: no venue number falls through to the shape", fieldSpots(at({ venue: null, t4: 32, cap: 26 })), 32);
+  is("...and that is exactly maxSpots", fieldSpots(at({ venue: null, t4: 32, cap: 26 })), maxSpots(at({ venue: null, t4: 32, cap: 26 })));
+  // LINK 3 — neither, so capacity now.
+  is("link 3: neither falls through to maxPlayerCount", fieldSpots(at({ venue: null, t4: null, cap: 26 })), 26);
+  is("...a zero venue number is not a number", fieldSpots(at({ venue: 0, t4: null, cap: 26 })), 26);
+
+  /* NEVER BELOW CAPACITY. Bicentennial Park is this case on production TODAY: max_players 18
+   * against an observed maxPlayerCount of 20. Without the guard the fill would read 111%. */
+  const under = { ...at({ venue: 18, t4: null, cap: 20 }), _count: { players: 20, fakePlayers: 0 } } as unknown as ApiMatch;
+  is("a stored max BELOW the booking cap takes the larger", fieldSpots(under), 20);
+  is("...so a full match reads exactly 100, not 111", realFillPct([under]).pct, 100);
+  yes("...which is what the guard is for", (20 / 18) * 100 > 100);
+
+  /* NO-CAP MATCHES STILL BELONG TO NEITHER SIDE, whatever the venue says. */
+  is("a no-cap special event contributes to neither side",
+    fieldSpots({ ...at({ venue: 44, t4: 32, cap: 0 }) } as ApiMatch), null);
+
+  /* AND THE 116 ORIGINAL CASES ABOVE SET NO venueMaxPlayers, so every one of them runs the
+   * fall-through — the same control that proved maxSpots' fallback, now one link deeper. */
+  is("realFillPct measures against fieldSpots, not maxSpots or capacity",
+    (readFileSync("src/lib/gamedayModel.ts", "utf8").match(/const c = fieldSpots\(m\);/g) ?? []).length, 1);
+
+  /* THE JOIN: ONE QUERY PER REQUEST, AND AFTER THE SCOPE. */
+  const shape = readFileSync("src/lib/gamedayApiShape.ts", "utf8");
+  yes("the field id is carried so the join has a key", /fieldId: num\(m\.fieldId\)/.test(shape));
+  yes("the venue map is built from fin_venue_fields, the source of truth for field-to-venue",
+    /from\("fin_venue_fields"\)/.test(shape) && /from\("fin_venues"\)/.test(shape));
+  yes("...in two selects, not one per match", /Promise\.all\(\[/.test(shape));
+  yes("...and a failed read falls through rather than 500ing", /catch \{ \/\* see above/.test(shape));
+  for (const f of ["src/app/api/matchday/[env]/gameday/route.ts", "src/app/api/city/gameday/route.ts"]) {
+    const src = readFileSync(f, "utf8");
+    const name = f.split("/").slice(-2)[0];
+    yes(`${name}: exactly one venue read per request`, (src.match(/fetchVenueMaxPlayers\(/g) ?? []).length === 1);
+    /* CONFINEMENT: the join must be attached AFTER the scope, so it can decorate what survived and
+     * never add a match back. Asserted on source position, in both routes. */
+    const scopeAt = Math.max(src.indexOf("auth.confinedCity"), src.indexOf("apiCityNameOf(m) === cityName"));
+    yes(`${name}: the venue join runs AFTER the city scope`, scopeAt > 0 && src.indexOf("fetchVenueMaxPlayers(") > scopeAt);
+  }
+
+  /* THE TILE NAMES ITS DENOMINATOR, because it no longer agrees with the rails and should not. */
+  const board = readFileSync("src/components/GamedayBoard.tsx", "utf8");
+  yes("the subtitle names what it counts", /of \$\{s\.fill\.cap\} field spots/.test(board));
+
+  /* fin_venues.max_spots IS NO LONGER WRITTEN. The column stays; the input goes. */
+  const dlg = readFileSync("src/components/AddVenueDialog.tsx", "utf8");
+  const dlgCode = dlg.replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+  is("Add Venue no longer offers a Max spots field", dlgCode.match(/max_spots/g), null);
+  is("...and the INSERT no longer sends it",
+    readFileSync("src/components/FieldCostsView.tsx", "utf8").match(/max_spots: draft\.max_spots/g), null);
+  /* AND capacity() IS STILL UNTOUCHED, three briefs running. */
+  const model = readFileSync("src/lib/gamedayModel.ts", "utf8");
+  yes("capacity() still returns maxPlayerCount and nothing else",
+    /export const capacity = \(m: ApiMatch\): number \| null => \{\s*const c = m\.maxPlayerCount;/.test(model));
 }
 
 console.log(`\ngameday-strip: ${pass} passed, ${fails.length} failed`);

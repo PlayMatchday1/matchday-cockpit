@@ -44,6 +44,10 @@ export function trimMatch(m: Raw) {
      * THEY ARE TOTALS, NOT PER SIDE — proven on 17522, see checkinModel.ts:51. maxPlayerCount is
      * capacity NOW (the bookable cap) and it moves; these do not. See maxSpots() in gamedayModel. */
     maxTeamSize2Team: num(m.maxTeamSize2Team), maxTeamSize4Team: num(m.maxTeamSize4Team),
+    /* THE FIELD ID, so the route can join to the venue's own max_players. It is on the same list
+     * rows as everything else here and was simply not passed through — the payload kept
+     * field.title and field.city and dropped the id that identifies the pitch. */
+    fieldId: num(m.fieldId),
     registrationPrice: num(m.registrationPrice), additionalSpotPrice: num(m.additionalSpotPrice),
     fakeSpotLeft36h: num(m.fakeSpotLeft36h) ?? 0, fakeSpotLeft24h: num(m.fakeSpotLeft24h) ?? 0,
     fakeSpotLeft12h: num(m.fakeSpotLeft12h) ?? 0, fakeSpotLeft6h: num(m.fakeSpotLeft6h) ?? 0,
@@ -67,6 +71,51 @@ export function trimMatch(m: Raw) {
 }
 
 export type TrimmedMatch = ReturnType<typeof trimMatch>;
+
+/* ── THE FIELD'S OWN CAPACITY, JOINED ONCE PER REQUEST ─────────────────────────────────────────
+ * match.field_id -> fin_venue_fields.mdapi_field_id -> fin_venues.max_players. That is the path
+ * /api/schedule-master/discrepancies already walks and calls the source of truth for field-to-venue
+ * mapping (seeded in 0041); this follows it rather than inventing a second mapping.
+ *
+ * ONE QUERY PER REQUEST, NOT PER MATCH. Two small selects build a Map once, and every match is an
+ * index lookup. A per-match read would be up to 132 round trips on a week view.
+ *
+ * IT IS ATTACHED AFTER THE CITY SCOPE, NEVER BEFORE. The scope decides which matches exist; this
+ * only decorates the ones that survived it, so a Supabase read entering a route that had none
+ * cannot widen what an operator sees. Both callers apply it last, and that is asserted.
+ *
+ * A FAILED READ IS NOT A FAILED REQUEST. If either select errors the map is empty, every match
+ * falls through to maxSpots() and then maxPlayerCount, and the board renders with a slightly
+ * coarser denominator instead of a 500. */
+export async function fetchVenueMaxPlayers(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: { from: (t: string) => any },
+): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  try {
+    const [links, venues] = await Promise.all([
+      supabase.from("fin_venue_fields").select("fin_venue_id, mdapi_field_id"),
+      supabase.from("fin_venues").select("id, max_players"),
+    ]);
+    if (links.error || venues.error || !links.data || !venues.data) return out;
+    const maxByVenue = new Map<number, number>();
+    for (const v of venues.data as { id: number; max_players: number | null }[]) {
+      if (v.max_players != null && Number(v.max_players) > 0) maxByVenue.set(v.id, Number(v.max_players));
+    }
+    for (const l of links.data as { fin_venue_id: number; mdapi_field_id: number | null }[]) {
+      const n = maxByVenue.get(l.fin_venue_id);
+      if (n != null && l.mdapi_field_id != null) out.set(Number(l.mdapi_field_id), n);
+    }
+  } catch { /* see above: a coarser denominator beats a 500 */ }
+  return out;
+}
+
+/** Decorate trimmed matches with their field's max_players. Pure; call it AFTER the city scope. */
+export function withVenueMaxPlayers<T extends { fieldId: number | null }>(
+  matches: T[], byField: Map<number, number>,
+): (T & { venueMaxPlayers: number | null })[] {
+  return matches.map((m) => ({ ...m, venueMaxPlayers: m.fieldId != null ? byField.get(m.fieldId) ?? null : null }));
+}
 
 // THE CITY OF A ROW, as the live API reports it. Probed on production 2026-08-15/16: field.city.name
 // carries exactly the names CITY_SCOPES pins — "Austin", "San Antonio", "Dallas / Fort Worth",

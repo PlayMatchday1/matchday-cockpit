@@ -31,6 +31,11 @@ export type ApiMatch = {
    * "Max spots, 4 teams"). TOTALS, not per side. Unlike maxPlayerCount these do not move when a
    * match is converted or bumped, which is why realFillPct measures against them. */
   maxTeamSize2Team?: number | null; maxTeamSize4Team?: number | null;
+  /* THE FIELD ITSELF, joined on by the route: match.field_id -> fin_venue_fields.mdapi_field_id ->
+   * fin_venues.max_players. Null when the field is not mapped or the venue has no number, and the
+   * chain in fieldSpots() falls through rather than dropping the match. */
+  fieldId?: number | null;
+  venueMaxPlayers?: number | null;
   registrationPrice?: number; // cents
   fakeSpotLeft36h?: number; fakeSpotLeft24h?: number; fakeSpotLeft12h?: number;
   fakeSpotLeft6h?: number; fakeSpotLeft3h?: number;
@@ -377,7 +382,7 @@ export function inCities(m: ApiMatch, cities: Set<string>): boolean {
 export const atRisk = (m: ApiMatch, now: number): boolean => stillToCome(m, now) && short(m);
 
 /**
- * REAL SPOTS FILLED, for the whole day: sum(real) / sum(maxSpots).
+ * REAL SPOTS FILLED, for the whole day: sum(real) / sum(fieldSpots).
  *
  * NOT AN AVERAGE OF PER-MATCH PERCENTAGES. A 4-of-4 match and a 2-of-40 match average to 52%
  * and are together 6 of 44, which is 14%. Averaging percentages weights a tiny match the same as
@@ -425,10 +430,44 @@ export const maxSpots = (m: ApiMatch): number | null => {
   return Math.max(shape, cap);
 };
 
+/**
+ * FIELD SPOTS — how many a match could hold on the pitch we are paying for. The denominator the
+ * "Real spots filled" tile measures against, and the last of three links:
+ *
+ *   fin_venues.max_players   THE FIELD, when we know it. Edited on Field Ops and visible there,
+ *                            which is the whole reason it is first: a number nobody can correct
+ *                            must not set a percentage the COO reads.
+ *   else maxSpots(m)         the shape the match is at — maxTeamSize4Team / 2Team.
+ *   else maxPlayerCount      capacity now.
+ *
+ * NOT fin_venues.max_spots, which is dead: written once by the Add Venue dialog, updated nowhere,
+ * read nowhere (FinVenue.max_spots is hydrated in useFinanceData and has no consumer — the Soccer
+ * Central two-pitch rule reads a SCHEDULE row's max_spots, derived from max_player_count, which is
+ * a different value on a different row). The input that wrote it has been removed.
+ *
+ * COVERAGE, MEASURED: 96% of the 132 matches in Sep 1-7 land on a venue with max_players, and 88%
+ * over 90 days. The gap is concentrated — San Juan Diego alone is 107 of the 122 uncovered matches
+ * in that window — and every uncovered match falls through to the two links below rather than
+ * leaving the denominator, so a gap costs precision on that match and never a missing match.
+ *
+ * NEVER BELOW capacity, the same guard as maxSpots: a venue whose stored max is under a real
+ * booking cap would print a fill above 100%. Bicentennial Park is that case today, max_players 18
+ * against an observed 20.
+ *
+ * NULL WHEN capacity() IS NULL, so the set of matches that contribute is unchanged.
+ */
+export const fieldSpots = (m: ApiMatch): number | null => {
+  const cap = capacity(m);
+  if (cap == null) return null;
+  const venue = m.venueMaxPlayers;
+  if (venue != null && venue > 0) return Math.max(venue, cap);
+  return maxSpots(m);
+};
+
 export function realFillPct(ms: readonly ApiMatch[]): { pct: number | null; real: number; cap: number; fake: number } {
   let real = 0, cap = 0, fake = 0;
   for (const m of ms) {
-    const c = maxSpots(m);
+    const c = fieldSpots(m);
     if (c == null || c <= 0) continue;
     real += realCount(m);
     fake += fakeCount(m);

@@ -11,7 +11,6 @@ export type AddVenueDraft = {
   per_match_rate: number | null;
   hourly_rate: number | null;
   cost_per_match: number | null;
-  max_spots: number | null;
   dpp_price: number | null;
   member_price: number | null;
   launch_date: string | null;
@@ -38,7 +37,6 @@ function emptyDraft(): AddVenueDraft {
     per_match_rate: null,
     hourly_rate: null,
     cost_per_match: null,
-    max_spots: null,
     dpp_price: null,
     member_price: null,
     launch_date: null,
@@ -219,18 +217,18 @@ export default function AddVenueDialog({
             </Field>
           )}
 
-          <Field label="Max spots">
-            <input
-              type="number"
-              step="1"
-              min="0"
-              value={draft.max_spots ?? ""}
-              onChange={(e) =>
-                setDraft({ ...draft, max_spots: parseNum(e.target.value) })
-              }
-              className="w-full rounded-md border border-cream-line bg-white px-3 py-2 text-right font-mono text-sm tabular-nums text-deep-green focus:border-deep-green focus:outline-none"
-            />
-          </Field>
+          {/* NO "MAX SPOTS" FIELD. It wrote fin_venues.max_spots, which nothing could then see,
+              edit or read: this dialog's INSERT was the only writer, no UPDATE anywhere touched it,
+              the Fields page does not select it, and FinVenue.max_spots is hydrated in
+              useFinanceData with no consumer. (The Soccer Central two-pitch rule reads a SCHEDULE
+              row's max_spots, derived from max_player_count — a different value on a different
+              row.) A dialog field that writes a value nobody can correct is worse than no field.
+              CAPACITY IS SET ON FIELD OPS, on fin_venues.max_players, which is visible where it is
+              edited and is what the Real spots filled tile measures against. A new venue simply has
+              none until somebody sets it there, and the denominator falls through to the match's
+              own numbers meanwhile — which is the correct behaviour, not a gap.
+              THE COLUMN IS UNTOUCHED. No migration, no drop, no backfill: the 26 stored values stay
+              exactly where they are. It just stops being written. */}
 
           <Field label="DPP price ($)">
             <input

@@ -29,7 +29,7 @@
 import { authenticateCityManager } from "@/lib/cityManagerAuth";
 import { cityNameFor } from "@/lib/cityScope";
 import { apiGet, StageHostGuardError, StageConfigError } from "@/lib/matchdayStageApi";
-import { trimMatch, apiCityNameOf, type Raw } from "@/lib/gamedayApiShape";
+import { fetchVenueMaxPlayers, trimMatch, withVenueMaxPlayers, apiCityNameOf, type Raw } from "@/lib/gamedayApiShape";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -83,7 +83,9 @@ export async function GET(req: Request) {
     }
 
     // SCOPE, then derive. Nothing below this line sees another city's rows.
-    const matches = out.map(trimMatch).filter((m) => apiCityNameOf(m) === cityName);
+    const scoped = out.map(trimMatch).filter((m) => apiCityNameOf(m) === cityName);
+    /* AND ONLY THEN the venue join — one query, applied to what the scope already allowed. */
+    const matches = withVenueMaxPlayers(scoped, await fetchVenueMaxPlayers(auth.supabase));
 
     return Response.json({
       date,

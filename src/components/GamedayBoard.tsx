@@ -1735,7 +1735,12 @@ function StatStrip({ s, active, onPick, clockOf }: {
      * about that. realFillPct measures against maxSpots, which does not move, so there is nothing
      * left to warn about. The fake count stays: that is real information about the numerator. */
     { k: "fill", lab: "Real spots filled", val: pct == null ? "—" : `${Math.round(pct)}%`,
-      sub: pct == null ? "no capacity today" : `${s.fill.real} of ${s.fill.cap} · ${s.fill.fake} fake`,
+      /* THE DENOMINATOR IS NAMED, because it no longer agrees with the rails and should not.
+         A row says "29 real · 1 fake · 30/32" — how full is what I can sell tonight. The tile says
+         "262 of 336 field spots" — how much of the pitch we are paying for did we monetise. Both
+         are honest and only one of them was labelled; two words stop them reading as a
+         contradiction. The rails are unchanged. */
+      sub: pct == null ? "no capacity today" : `${s.fill.real} of ${s.fill.cap} field spots · ${s.fill.fake} fake`,
       can: false },
   ];
   return (

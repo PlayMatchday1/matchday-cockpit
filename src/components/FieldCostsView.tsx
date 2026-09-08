@@ -607,7 +607,6 @@ export default function FieldCostsView() {
       per_match_rate: draft.per_match_rate,
       hourly_rate: draft.hourly_rate,
       cost_per_match: draft.cost_per_match,
-      max_spots: draft.max_spots,
       dpp_price: draft.dpp_price,
       member_price: draft.member_price,
       launch_date: draft.launch_date,
