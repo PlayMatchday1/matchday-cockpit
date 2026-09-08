@@ -1521,28 +1521,69 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                               <div className="mp-movepick" data-testid="mp-movepick" data-step={movePick.team == null ? "team" : "spot"}>
                                 {movePick.team == null ? (
                                   <>
-                                    <span className="mp-picklb">Move to which team?</span>
+                                    {/* ONE HEADER LINE: what is happening, and the way out, side by
+                                        side. It used to be a block label with the exit stranded
+                                        under the buttons, which made the picker three stacked
+                                        things. THE PLAYER IS NAMED because any row can open a
+                                        picker and the box no longer sits in a narrow column that
+                                        made it obvious which row it belonged to. */}
+                                    <span className="mp-pickhd">
+                                      <span className="mp-picklb">Move <b>{p.name}</b> to</span>
+                                      <button type="button" className="mp-x" data-testid="mp-movepick-cancel"
+                                        onClick={() => setMovePick(null)}>cancel</button>
+                                    </span>
                                     <span className="mp-pickrow">
                                       {roster.teams.filter((o) => o.teamNumber <= rosterTeamCount).map((o) => (
-                                        <button key={o.id} type="button" data-testid={`mp-movepick-team-${o.teamNumber}`} className="mp-mini"
-                                          onClick={() => setMovePick({ umId: p.umId, team: o.teamNumber })}>{o.teamNumber} · {o.name}</button>
+                                        /* THE SAME BUTTON AS STEP 2 - a number over a name. Four of
+                                           these sit on one line where four full-width .mp-mini
+                                           pills stacked into four. It is the same question asked
+                                           twice and it should not look like two widgets.
+                                           THE CURRENT TEAM IS MARKED, NOT DISABLED. Moving within a
+                                           team is a real move - it is how two players on one team
+                                           swap spots - so it stays clickable. Only the mover's own
+                                           SPOT, at step 2, is a click that does nothing. */
+                                        <button key={o.id} type="button" data-testid={`mp-movepick-team-${o.teamNumber}`}
+                                          className={"mp-spotbtn" + (o.teamNumber === t.teamNumber ? " now" : "")}
+                                          data-now={o.teamNumber === t.teamNumber ? "true" : "false"}
+                                          title={o.teamNumber === t.teamNumber ? `${o.name} - where ${p.name} is now` : `Move ${p.name} to ${o.name}`}
+                                          onClick={() => setMovePick({ umId: p.umId, team: o.teamNumber })}>
+                                          <b>{o.teamNumber}</b><i>{o.name}</i>
+                                        </button>
                                       ))}
                                     </span>
                                   </>
                                 ) : (
                                   <>
-                                    <span className="mp-picklb">Which spot on team {movePick.team}? <em>an occupied spot swaps the two</em></span>
-                                    <span className="mp-pickrow">
-                                      {spotsOfTeam(origin, pending, movePick.team, roster.shape?.perTeam || 0).map((sp) => (
-                                        <button key={sp.n} type="button" data-testid={`mp-movepick-spot-${sp.n}`} className={"mp-spotbtn" + (sp.who ? " taken" : "")}
-                                          data-occupied={sp.who ? "true" : "false"}
-                                          title={sp.who ? `Swap with ${sp.who.name}` : `Open spot ${sp.n}`}
-                                          onClick={() => stageMove(p as EditRow, movePick.team!, sp.n)}>
-                                          <b>{sp.n}</b>{sp.who && <i>{sp.who.name}</i>}
-                                        </button>
-                                      ))}
+                                    {/* THE TEAM BY NAME, because step 1 offered it by name. "Which
+                                        spot on team 2?" made the operator translate between a name
+                                        and a number in the middle of a two-step gesture. */}
+                                    <span className="mp-pickhd">
+                                      <span className="mp-picklb">
+                                        Spot on <b>{roster.teams.find((o) => o.teamNumber === movePick.team)?.name ?? `team ${movePick.team}`}</b>
+                                        {" "}<em>· taken swaps</em>
+                                      </span>
+                                      <button type="button" className="mp-x" data-testid="mp-movepick-back" onClick={() => setMovePick({ umId: p.umId, team: null })}>back</button>
                                     </span>
-                                    <button type="button" className="mp-x" data-testid="mp-movepick-back" onClick={() => setMovePick({ umId: p.umId, team: null })}>back</button>
+                                    <span className="mp-pickrow">
+                                      {spotsOfTeam(origin, pending, movePick.team, roster.shape?.perTeam || 0).map((sp) => {
+                                        /* THE ONE DEAD CLICK. spotsOfTeam returns the mover on their
+                                           own spot, and planMove looks for an occupant with
+                                           `s.row.umId !== mover.umId` - so the occupant is
+                                           undefined, the move is a no-op, and the picker closes as
+                                           though something happened. Disabled in the VIEW; the
+                                           model still returns it, so nothing downstream shifts. */
+                                        const self = sp.who?.umId === p.umId;
+                                        return (
+                                        <button key={sp.n} type="button" data-testid={`mp-movepick-spot-${sp.n}`}
+                                          className={"mp-spotbtn" + (self ? " self" : sp.who ? " taken" : "")}
+                                          data-occupied={sp.who ? "true" : "false"} data-self={self ? "true" : "false"}
+                                          disabled={self}
+                                          title={self ? `${p.name} is already on spot ${sp.n}` : sp.who ? `Swap with ${sp.who.name}` : `Open spot ${sp.n}`}
+                                          onClick={() => stageMove(p as EditRow, movePick.team!, sp.n)}>
+                                          <b>{sp.n}</b>{self ? <i>here</i> : sp.who && <i>{sp.who.name}</i>}
+                                        </button>
+                                      ); })}
+                                    </span>
                                   </>
                                 )}
                               </div>
@@ -2138,8 +2179,14 @@ const CSS = `
 .mp-players{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
 .mp-empty{font-size:12px;color:var(--ink3);padding:4px 2px}
 
-/* ITEM 3 — TWO LINES per row: name, then the phone beneath it. flex-wrap lets the move picker
-   occupy a full row of its own beneath the controls rather than squeezing in beside them. */
+/* ITEM 3 — TWO LINES per row: name, then the phone beneath it.
+   THE MECHANISM CHANGED AND THIS COMMENT DID NOT, for a while. It used to say flex-wrap gave the
+   move picker a full row of its own. It does not: .mp-player is redeclared as a six-track GRID
+   below, so .mp-movepick is a grid ITEM, its flex:1 0 100% is inert, and with no grid-column it
+   auto-placed into an implicit row at column 1 — the 20px checkbox track. Measured at 1440px on a
+   three-team roster: the picker rendered 20px wide, the team buttons stacked three deep and the
+   row went from 46px to 259px with the picker open, 669px at step 2 with nine spots. The reason
+   below is still the right one; grid-column:1 / -1 on .mp-movepick is now how it is achieved. */
 .mp-player{display:flex;align-items:center;gap:7px;flex-wrap:wrap;border:1px solid var(--line);border-radius:8px;padding:6px 7px;background:#fbfdfc;min-height:44px}
 .mp-player.pend-move{border-color:#8fbf9f;background:#f2fbf5}
 .mp-player.pend-remove{border-color:#e6b7b0;background:#fdf4f3}
@@ -2345,7 +2392,6 @@ const CSS = `
      overflow:auto, so it panned while document.scrollWidth stayed exactly 390 and said nothing.
      Its flex:1 0 100% is inert in a grid and is why it looked full-width on desktop but was not
      here. Spanning every column puts it back on its own line. */
-  .mp-movepick{grid-column:1 / -1;flex:none;margin-top:6px}
   /* NOT SCOPED TO :first-child. The hole IS the first child today, but that is a fact about the
      markup order rather than about the layout: move anything ahead of it and the spacer silently
      loses its placement and auto-places into a track, which is the bug directly above. */
@@ -2381,9 +2427,48 @@ const CSS = `
 .mp-clashtag{font-size:9px;font-weight:800;letter-spacing:.06em;background:#fbf0d8;color:#6b4a09;border:1px solid #dcbc71;border-radius:4px;padding:2px 5px}
 
 /* the two-step move picker — same shape as the check-in screen */
-.mp-movepick{flex:1 0 100%;margin-top:6px;padding:8px;border:1px solid var(--line2);border-radius:8px;background:#f7faf8}
-.mp-picklb{display:block;font-size:11px;font-weight:800;letter-spacing:.05em;color:var(--ink2);margin-bottom:6px}
+/* ── THE MOVE PICKER ───────────────────────────────────────────────────────────────────────────
+   grid-column:1 / -1 IS THE WHOLE LAYOUT BUG. .mp-player is a grid, so this box is a grid item;
+   flex:1 0 100% means nothing to a grid parent and, with no column named, it auto-placed into
+   column 1 — the 20px checkbox track. The rule existed, but only inside @media (max-width:560px),
+   where it landed with the mobile pan fix. That is exactly why the phone was right and the desktop
+   was not. It belongs in the base and the media query now needs no copy of it at all.
+   A LEFT BORDER AND A TINT rather than a neutral card: it is part of the row above it, not a panel
+   that happens to be near it. Any row can open one, so it has to look attached to its own. */
+.mp-movepick{grid-column:1 / -1;flex:none;margin:7px 0 1px;padding:8px 9px 9px 11px;
+  border:1px solid #bcd0c6;border-left:3px solid #1f7a4d;border-radius:8px;background:#f2f8f4}
+/* ONE HEADER LINE — the prompt and the way out, not a block label with the exit stranded under
+   the buttons. The prompt gives and ellipsises; the exit never does. */
+.mp-pickhd{display:flex;align-items:baseline;gap:8px;margin-bottom:7px}
+.mp-picklb{flex:1;min-width:0;font-size:11px;font-weight:800;letter-spacing:.04em;color:var(--ink2);text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp-picklb b{color:var(--ink)}
 .mp-picklb em{font-style:normal;font-weight:600;letter-spacing:0;color:var(--ink3);text-transform:none}
+.mp-pickhd .mp-x{flex:0 0 auto;font-size:11.5px}
+/* ── THE SAME BUTTON AT BOTH STEPS, and SCOPED so it cannot reach the Rearrange overlay ────────
+   .mp-spotbtn is shared with .mp-rear-pick, where a spot button is a bare number and nothing else.
+   Every rule below is qualified by .mp-movepick for that reason; the unscoped .mp-spotbtn base a
+   few lines down is untouched and is what Rearrange still gets. */
+.mp-movepick .mp-spotbtn{position:relative;gap:0;padding:2px 7px;flex:0 0 auto}
+.mp-movepick .mp-spotbtn b{font-size:12.5px;line-height:1.25}
+.mp-movepick .mp-spotbtn i{line-height:1.2}
+.mp-movepick .mp-spotbtn:hover:not(:disabled){background:#eef4f1;border-color:#8fbf9f}
+/* THE BUTTON ALREADY MEANT "swap with this person" and only the title said so.
+   THE LITERAL CHARACTER, NOT A CSS ESCAPE. This stylesheet is a JS template literal, so a CSS
+   codepoint escape is read by JavaScript first and comes out an octal-escape error — and it does
+   so even inside a CSS comment, because a CSS comment is just text to the template literal. Same
+   family as the no-backticks rule a few blocks up. */
+.mp-movepick .mp-spotbtn.taken{background:#fff;border-color:#bcd0c6}
+.mp-movepick .mp-spotbtn.taken i::before{content:"⇄ ";color:#1f7a4d;font-weight:800}
+/* WHERE THEY ARE NOW, at step 1: MARKED AND STILL LIVE. Moving within a team is a real move — it
+   is how two players on the same team swap spots — so disabling it would remove a working gesture. */
+.mp-movepick .mp-spotbtn.now{background:#eef4f1;border-color:#8fbf9f;box-shadow:inset 0 -2px 0 #1f7a4d}
+.mp-movepick .mp-spotbtn.now::after{content:"now";position:absolute;top:-6px;right:-4px;font-size:8px;font-weight:800;letter-spacing:.04em;color:#14512f;background:#d8ecdf;border:1px solid #a9d3ba;border-radius:999px;padding:0 4px;line-height:1.5}
+/* THE MOVER'S OWN SPOT, at step 2: the one click that does nothing, so it is the one thing
+   disabled. planMove excludes the mover when it looks for an occupant, so this returned the same
+   plan and closed the picker as though something had happened. */
+.mp-movepick .mp-spotbtn.self{background:#eef4f1;border-color:#cddcd4;cursor:default;opacity:.65}
+.mp-movepick .mp-spotbtn.self i{color:var(--ink3)}
+.mp-movepick .mp-spotbtn.self i::before{content:none}
 .mp-pickrow{display:flex;flex-wrap:wrap;gap:5px}
 .mp-spotbtn{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;border:1px solid var(--line2);background:#fff;border-radius:7px;min-height:38px;min-width:38px;padding:3px 7px;font:inherit;cursor:pointer;max-width:96px}
 .mp-spotbtn b{font-size:12px;font-weight:800;color:var(--ink)}
