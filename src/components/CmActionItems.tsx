@@ -129,7 +129,7 @@ export default function CmActionItems({ month, setMonth, city, setCity, currentM
       {error && (
         <div data-testid="cm-error" className="border-b px-4 py-3 text-[12.5px]"
           style={{ borderColor: C.line, background: CM_CORAL_TINT, color: CM_CORAL }}>
-          <b>The action items could not be loaded — this is not an empty month.</b> {error}
+          <b>The action items could not be loaded, this is not an empty month.</b> {error}
         </div>
       )}
 

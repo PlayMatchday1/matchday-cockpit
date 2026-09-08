@@ -233,6 +233,23 @@ const CONFINED_ROUTE_EXACT: readonly string[] = [
   // "Recently uploaded" on the same page. Exact, same reason — and it scopes every row through the
   // recording's match or its code before returning it.
   "/api/veo/recent",
+  /* MASTER SCHEDULE'S MONTH VIEW, and the THIRD time this same omission has shipped — after
+   * /api/firebase-token and /api/match-managers below, both narrated there. The page rendered, the
+   * filter bar rendered, and the grid then read "The range could not be loaded, this is not an
+   * empty month. This account is confined to one city." — which sent everyone looking for a city
+   * problem. There was none: this guard compares a PATHNAME against this list and never looks at a
+   * city at all. Week view worked because /api/veo is listed; Month calls a different route.
+   *
+   * SAFE FOR THE SAME REASON THE DAY VIEW IS, verified rather than assumed: range/route.ts passes
+   * `auth.confinedCity ?? null` and reads no ?city= at all, and fetchVeoRange filters in SQL
+   * (`if (scopeCity) q = q.eq("city_identifier", scopeCity)`) BEFORE the read. Measured on the live
+   * mirror: scoped to WAW, September returns 5 matches, every one Warsaw, against 454 across 8
+   * cities unconfined.
+   *
+   * EXACT, NOT A PREFIX. "/api/veo/" would open codes, cameras, intent and inbound with it; the
+   * assertion in city-confinement-test that keeps all four refused is what caught that the first
+   * time and it still passes unchanged. */
+  "/api/veo/range",
   /* THE DOOR TO THE CHATS PAGE, and it was shut while every room behind it was open.
    *
    * /api/match-chats/ is on the prefix list, so a confined account's chat LIST rendered perfectly —

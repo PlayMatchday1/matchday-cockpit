@@ -354,13 +354,26 @@ export default function VeoMasterSchedule() {
       const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
       /* REFRESH RE-PULLS THE WHOLE VISIBLE RANGE, not just a week — one resync per week in it, so
        * the button means the same thing in Month as it does in Schedule. */
+      /* A FAILED RE-PULL IS REPORTED, NOT SWALLOWED. This was `.catch(() => {})` with no res.ok
+       * check, so Refresh appeared to work, did nothing, and then re-read a mirror it had not
+       * refreshed — the "Updated 1:04 PM" lie the resync route exists to remove, reintroduced on
+       * the Month path. Week already reports it through resyncFail; Month now does the same.
+       * IT FAILS FOR EVERY CONFINED ACCOUNT BY DESIGN: /api/veo/resync is on no allowlist and
+       * stays off one, because it builds a SERVICE-ROLE client and syncs the whole fleet for the
+       * week with no city scope — an unscoped shared-table write is not something a bounded
+       * account should trigger. So a confined operator now sees "showing data from ..." instead of
+       * a refresh that silently did nothing. */
       if (repull) {
+        let failed: string | null = null;
         for (let cur = r.from; cur <= r.to; ) {
-          await fetch(`/api/veo/resync?week=${encodeURIComponent(cur)}`, { method: "POST", headers, cache: "no-store" })
-            .catch(() => {});
+          try {
+            const rs = await fetch(`/api/veo/resync?week=${encodeURIComponent(cur)}`, { method: "POST", headers, cache: "no-store" });
+            if (!rs.ok) failed ??= (await rs.json().catch(() => ({})))?.error ?? `HTTP ${rs.status}`;
+          } catch (e) { failed ??= e instanceof Error ? e.message : String(e); }
           const d = new Date(`${cur}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + 7);
           cur = d.toISOString().slice(0, 10);
         }
+        setResyncFail(failed);
       }
       const res = await fetch(`/api/veo/range?from=${r.from}&to=${r.to}`, { headers, cache: "no-store" });
       const j = await res.json();
@@ -700,11 +713,24 @@ export default function VeoMasterSchedule() {
           });
           const j = await res.json();
           if (res.ok && j.outcome === "LANDED" && j.id) {
-            out.push({ iso, hhmm, outcome: "LANDED", id: Number(j.id) });
-            // THE VEO FLAG IS CLUBHOUSE-SIDE — a second write, best-effort, exactly as before.
+            /* THE VEO FLAG IS CLUBHOUSE-SIDE — a second write, and its failure is now REPORTED.
+             * It was best-effort with .catch(() => {}), so a confined operator copying a camera
+             * match got the match, silently lost the flag, and read LANDED. /api/veo/intent is
+             * deliberately refused for a confined account — a bounded operator reads their week and
+             * does not change fleet configuration — so for them this write ALWAYS fails, and the
+             * copy has to say so rather than imply the camera came with it.
+             * THE MATCH STILL LANDED. The outcome stays LANDED because it did; the note names the
+             * one thing that did not, so the operator can ask someone unconfined to set it. */
             if (drawerVeo) {
-              await fetch("/api/veo/intent", { method: "POST", headers,
-                body: JSON.stringify({ matchApiId: j.id, enabled: true }) }).catch(() => {});
+              let veoNote: string | null = null;
+              try {
+                const vr = await fetch("/api/veo/intent", { method: "POST", headers,
+                  body: JSON.stringify({ matchApiId: j.id, enabled: true }) });
+                if (!vr.ok) veoNote = "the match was created, but the Veo camera flag did not carry — set it on the new match";
+              } catch { veoNote = "the match was created, but the Veo camera flag did not carry — set it on the new match"; }
+              out.push({ iso, hhmm, outcome: "LANDED", id: Number(j.id), ...(veoNote ? { error: veoNote } : {}) });
+            } else {
+              out.push({ iso, hhmm, outcome: "LANDED", id: Number(j.id) });
             }
           } else if (j.outcome === "UNKNOWN") {
             out.push({ iso, hhmm, outcome: "UNKNOWN", error: j.error ?? "the route could not read back what it wrote" });
@@ -1183,7 +1209,7 @@ export default function VeoMasterSchedule() {
           )}
           {monthErr ? (
             <div className="vms-card vms-merr" data-testid="month-error">
-              <b>The range could not be loaded — this is not an empty month.</b> {monthErr}
+              <b>The range could not be loaded, this is not an empty month.</b> {monthErr}
             </div>
           ) : (
             <>
