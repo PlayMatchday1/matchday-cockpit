@@ -527,7 +527,12 @@ async function main() {
   const sumReal = FIX.reduce((a, m) => a + REAL(m), 0), sumCap = FIX.reduce((a, m) => a + m.maxPlayerCount, 0);
   const sumFake = FIX.reduce((a, m) => a + FAKE(m), 0);
   is(`  Real spots filled = ${sumReal}/${sumCap} by hand`, d.tiles.fill.v, `${Math.round((sumReal / sumCap) * 100)}%`);
-  is("  ...and its sub-label carries the raw numbers", d.tiles.fill.s, `${sumReal} of ${sumCap} \u00b7 ${sumFake} fake`);
+  /* THE SUB-LABEL NAMES ITS DENOMINATOR NOW. The tile measures against the FIELD (fin_venues
+   * max_players, else the shape max, else capacity), which no longer agrees with a row's rail and
+   * should not: the rail answers "how full is what I can sell tonight", the tile answers "how much
+   * of the pitch we pay for did we monetise". These fixtures carry no venue join, so the numbers
+   * are unchanged and only the two words are new. */
+  is("  ...and its sub-label names what it counts", d.tiles.fill.s, `${sumReal} of ${sumCap} field spots \u00b7 ${sumFake} fake`);
   /* CONTROL: the average-of-percentages answer must be a DIFFERENT number, or this proves nothing. */
   const avg = Math.round(FIX.reduce((a, m) => a + (REAL(m) / m.maxPlayerCount) * 100, 0) / FIX.length);
   yes(`  CONTROL: the average-of-percentages answer (${avg}%) is not what is shown (${d.tiles.fill.v})`,

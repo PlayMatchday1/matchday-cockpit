@@ -465,10 +465,45 @@ console.log("\nthe Gameday drawer gives the open match most of the window");
 {
   const g = readFileSync("src/components/GamedayBoard.tsx", "utf8");
   yes("the wide panel is 1400, not 760", /const PANEL_W_WIDE = 1400;/.test(g));
+  /* THE RULES MOVED, THE PROPERTIES DID NOT. GamedayBoard kept its own `.gdo .gpanel…` copy and
+   * MatchSidePanel exported an INCOMPLETE second one; Master Schedule got the incomplete half and
+   * shipped a panel that would not scroll. There is one copy now and this reads it where it lives. */
+  const css = readFileSync("src/components/MatchSidePanel.tsx", "utf8");
   yes("…held to 92vw of the space it actually has, so the board stays visible behind it",
-    /width:min\(var\(--panel-w,600px\),calc\(92vw - var\(--panel-right,0px\)\)\)/.test(g));
+    /width:min\(var\(--panel-w,600px\),calc\(92vw - var\(--panel-right,0px\)\)\)/.test(css));
   yes("…and the panel inside it no longer re-caps the width",
-    /\.gdo \.gpanel-body>\.mp>\.mp-panel\{height:100%;max-width:none\}/.test(g));
+    /\.gpanel-body>\.mp>\.mp-panel\{height:100%;max-width:none\}/.test(css));
+  /* ── THE GUARD AGAINST A SECOND COPY EVER COMING BACK ─────────────────────────────────────── */
+  is("GamedayBoard holds NO .gpanel rules of its own", g.match(/\.gdo \.gpanel/g), null);
+  yes("…it consumes the export instead",
+    /import MatchSidePanel, \{ MATCH_SIDE_PANEL_CSS \}/.test(g) && /<style>\{MATCH_SIDE_PANEL_CSS\}<\/style>/.test(g));
+  yes("…and injects it BEFORE its own sheet, so a .gdo rule could still win if one were needed",
+    g.indexOf("{MATCH_SIDE_PANEL_CSS}") < g.indexOf("<style>{CSS}</style>"));
+  const ms = readFileSync("src/components/VeoMasterSchedule.tsx", "utf8");
+  yes("Master Schedule consumes the same export", /<style>\{MATCH_SIDE_PANEL_CSS\}<\/style>/.test(ms));
+  /* ── AND THE FOUR RULES THAT WERE MISSING, EACH NAMED. Without the height chain .mp-fs takes its
+   * content height, .mp-body never gets a bounded one, and the touch falls through to the page
+   * behind the panel — which is exactly what Ryan hit. */
+  for (const rule of [
+    ".gpanel-body>.mp{min-height:0;flex:1 1 auto;display:flex}",
+    ".gpanel-body>.mp>.mp-panel{height:100%;max-width:none}",
+    ".gpanel-body>.mp>.mp-panel>.mp-fs{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}",
+    ".gpanel-body>.mp>.mp-panel>.mp-fs>.mp-body{flex:1 1 auto;min-height:0}",
+  ]) yes(`the height chain carries ${rule.split(">").pop()}`, css.includes(rule));
+  yes("the bar clears the notch", /\.gpanel-bar\{[\s\S]{0,300}padding-top:calc\(9px \+ var\(--sat\)\)/.test(css));
+  yes("…and is sticky, so the body scrolls under it", /\.gpanel-bar\{[\s\S]{0,300}position:sticky/.test(css));
+  yes("full width under 759px", /@media \(max-width: 759px\) \{\s*\.gpanel\{width:100vw;right:0 !important\}/.test(css));
+  yes("bottom sheet under 640px", /@media \(max-width: 639\.98px\)[\s\S]{0,200}\.gpanel\{position:fixed;inset:0/.test(css));
+  yes("…with Save reachable, pinned above the home indicator",
+    /\.mp-fs>\.mp-foot\{position:sticky;bottom:0[\s\S]{0,140}padding-bottom:max\(env\(safe-area-inset-bottom\),10px\)/.test(css));
+  /* THE STANDALONE PAGE MUST STILL SCROLL AS A DOCUMENT. Every height-chain rule is scoped under
+   * .gpanel-body, so none of them can reach /match-ops/match-panel/[id]. */
+  /* COMMENTS STRIPPED FIRST — this block explains the height chain and naturally names .mp-body
+   * while doing so; what must be scoped is the RULES. */
+  const cssCode = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const chain = cssCode.split("\n").filter((l) => /\.mp-panel|\.mp-fs|\.mp-body|\.mp-foot/.test(l));
+  yes(`all ${chain.length} rules touching MatchPanel are scoped under .gpanel-body`,
+    chain.length > 0 && chain.every((l) => l.includes(".gpanel-body>")), JSON.stringify(chain.filter((l) => !l.includes(".gpanel-body>"))));
   /* THE DOCK STILL FITS BESIDE IT. panelW only goes wide when they are NOT coexisting, which is
    * what keeps "panel sits left of the dock, both fit" true at >=1600. */
   yes("the wide width applies only when the chat dock is not beside it",

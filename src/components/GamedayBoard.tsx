@@ -18,7 +18,7 @@ import { supabase } from "@/lib/supabase";
 import { envBadge } from "@/lib/matchEnvBadge";
 import { DRAWER_ENV } from "@/lib/matchEnv";
 import { centsToDollars } from "@/lib/matchMoney";
-import MatchSidePanel from "@/components/MatchSidePanel";
+import MatchSidePanel, { MATCH_SIDE_PANEL_CSS } from "@/components/MatchSidePanel";
 import { useCrmConversationOptional } from "@/lib/crmConversation";
 import LogHealthBanner from "@/components/LogHealthBanner";
 import MatchOpsSectionSheet from "@/app/(internal)/match-ops/MatchOpsSectionSheet";
@@ -622,6 +622,10 @@ export default function GamedayBoard({
 
   return (
     <div className="gdo" data-testid="gameday" data-env={ENV} style={{ ["--drawer-w" as string]: `${panelW + (coexist ? DOCK_W : 0)}px` }}>
+      {/* ONE COPY OF THE PANEL'S RULES, and this page consumes it like every other host. It is
+          injected BEFORE this page's own stylesheet so a .gdo-prefixed rule could still win if one
+          ever needed to — none does today, which is why the prefix came off. */}
+      <style>{MATCH_SIDE_PANEL_CSS}</style>
       <style>{CSS}</style>
       <div className={"gmain" + (drawerId != null ? " drawering" : "")}>
         {/* ── PHONE header (≤759px). Desktop shows the .head card below; this is
@@ -865,48 +869,8 @@ const CSS = `
 .gdo{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;color:#0B1F17;background:#EDF2EF;min-height:100vh}
 .gdo .gmain{padding:20px 24px 70px;transition:margin-right .17s ease-out}
 .gdo .gmain.drawering{margin-right:var(--drawer-w,480px)}
-/* the in-place match panel (replaces the old drawer). Fixed right edge; the right offset is set
-   inline to the dock width when they coexist (>=1600) so the two never overlap. */
-.gdo .gpanel{position:fixed;top:0;bottom:0;height:100dvh;width:min(var(--panel-w,600px),calc(92vw - var(--panel-right,0px)));max-width:100vw;background:#eef2f0;border-left:1px solid #d4e0da;box-shadow:-8px 0 26px rgba(4,26,18,.12);z-index:60;display:flex;flex-direction:column}
-/* SAFE AREA. The panel is position:fixed top:0, so without this the header renders beneath the iOS
-   status bar and the Dynamic Island — "× Close" was drawn straight through the clock and could not
-   be tapped without rotating the device. The bar is STICKY and starts BELOW the inset; the body
-   scrolls under it. env() is 0 on desktop, so this changes nothing there. */
-.gdo .gpanel-bar{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#04291d;color:#fff;flex:0 0 auto;
-  position:sticky;top:0;z-index:2;padding-top:calc(9px + var(--sat));
-  padding-left:calc(12px + var(--sal, 0px));padding-right:calc(12px + var(--sar, 0px))}
-/* >=44px: this is the only way out of the panel on a phone. */
-.gdo .gpanel-x{border:1px solid #2a5644;background:transparent;color:#cfe7dc;border-radius:8px;padding:7px 13px;
-  min-height:44px;min-width:44px;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
-.gdo .gpanel-x:hover{background:#14432f;color:#fff}
-.gdo .gpanel-step{margin-left:auto;display:inline-flex;gap:5px}
-.gdo .gpanel-step button{border:1px solid #2a5644;background:transparent;color:#cfe7dc;border-radius:8px;min-width:36px;min-height:34px;font:inherit;font-size:17px;cursor:pointer}
-.gdo .gpanel-step button:disabled{opacity:.4;cursor:not-allowed}
-.gdo .gpanel-notice{display:flex;align-items:center;gap:10px;background:#fdf2e0;border-bottom:1px solid #e8c383;color:#6b4400;font-size:12px;line-height:1.4;padding:9px 12px;flex:0 0 auto}
-.gdo .gpanel-notice button{margin-left:auto;border:1px solid #e8c383;background:#fff;border-radius:6px;padding:4px 10px;font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap}
-/* THE DRAWER NO LONGER SCROLLS — THE PANEL INSIDE IT DOES, and that is the whole of the save-bar
-   fix. This was overflow-y:auto, so MatchPanel sat inside it as ordinary content: .mp-panel's own
-   display:flex + overflow:hidden never received a bounded height, it grew to its content, and
-   .mp-foot scrolled away with it — measured at top:2782px in a 950px viewport on desktop and
-   top:4112px in 780px on a phone. Master Schedule never had the problem because MatchDrawer mounts
-   MatchEditor as a direct flex child and the EDITOR owns its scroll. This makes the Gameday drawer
-   do the same thing.
-   The bottom padding moves to .mp-foot, which is now the element actually touching the bottom. */
-.gdo .gpanel-body{flex:1;min-height:0;overflow:hidden;padding:12px;display:flex;flex-direction:column}
-/* Only in the drawer. The standalone /match-ops/match-panel/[id] page is a document that scrolls
-   with the window, and giving it a viewport height there would trap it in a box. */
-.gdo .gpanel-body>.mp{min-height:0;flex:1 1 auto;display:flex}
-/* AND THE PANEL INSIDE IT MUST NOT RE-CAP THE WIDTH. .mp-panel carries max-width:860px at >=1100
-   for the standalone /match-panel page; inside this drawer the drawer IS the width, and leaving the
-   cap on threw away most of what widening the drawer just bought. */
-.gdo .gpanel-body>.mp>.mp-panel{height:100%;max-width:none}
-/* THE FIELDSET IS THE FLEX CHILD, not .mp-body. .mp-body lives inside <fieldset class="mp-fs">,
-   which wraps the whole form so a read-only viewer gets a genuinely disabled control set rather
-   than one that only looks disabled. Without this the fieldset takes its content height, .mp-body
-   never shrinks (measured 2626px inside an 864px panel) and the foot is pushed off the bottom —
-   which is what the first attempt at this fix missed. */
-.gdo .gpanel-body>.mp>.mp-panel>.mp-fs{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
-.gdo .gpanel-body>.mp>.mp-panel>.mp-fs>.mp-body{flex:1 1 auto;min-height:0}
+/* THE PANEL'S RULES LIVE IN MatchSidePanel's OWN EXPORT, injected below — see the note there.
+   They were duplicated here, the copy drifted, and Master Schedule shipped the incomplete half. */
 .gdo .panel{background:#fff;border:1px solid #DCE5E0;border-radius:14px}
 .gdo .head{padding:18px 20px 16px;margin-bottom:14px;position:relative}
 .gdo .r1{display:flex;align-items:baseline;gap:12px}.gdo h1{margin:0;font-size:23px;letter-spacing:-.2px}
@@ -1145,7 +1109,6 @@ const CSS = `
   .gdo{width:100vw;margin-left:calc(50% - 50vw);margin-right:calc(50% - 50vw)}
   .gdo .gmain{padding:0 0 90px;margin-right:0 !important}
   .gdo .gmain.drawering{margin-right:0}
-  .gdo .gpanel{width:100vw;right:0 !important}
 
   /* three 44px bands under the strip */
   .gdo .mhead{display:block;position:sticky;top:3px;z-index:30;background:#F6F9F7;border-bottom:1px solid #D3DED8}
@@ -1604,17 +1567,6 @@ const CSS = `
 
 }
 
-/* THE EDITOR IS A BOTTOM SHEET ON A PHONE, not a 600px side drawer on a 390px screen. Full height,
-   every field kept including the highlighted minimum, and the footer pinned so Save and Cancel are
-   reachable without scrolling past the form. */
-@media (max-width: 639.98px) {
-  .gdo .gpanel{position:fixed;inset:0;left:0;right:0;width:100vw;max-width:100vw;
-    border-radius:14px 14px 0 0;display:flex;flex-direction:column;z-index:60}
-  .gdo .gpanel-body{flex:1 1 auto;min-height:0;overflow:hidden}
-  .gdo .gpanel-bar{flex:0 0 auto}
-  .gdo .gpanel-body>.mp>.mp-panel>.mp-fs>.mp-foot{position:sticky;bottom:0;background:#fff;
-    border-top:1px solid #DCE5E0;padding-bottom:max(env(safe-area-inset-bottom),10px)}
-}
 
 
 /* THE MOBILE CHIP ROW is the one a phone actually shows - the desktop .row2 is hidden there. Same
@@ -1626,15 +1578,6 @@ const CSS = `
 .gdo .mchips>*{flex:0 0 auto}
 
 
-/* ── THE PANEL'S TWO TABS ──────────────────────────────────────────────────────────────────── */
-.gdo .gpanel-tabs{display:flex;gap:2px;padding:0 12px;border-bottom:1px solid #DCE5E0;flex:0 0 auto;background:#fff}
-.gdo .gpanel-tabs button{border:0;background:none;font:inherit;font-size:12.5px;font-weight:700;
-  color:#66786E;padding:9px 14px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
-.gdo .gpanel-tabs button:hover{color:#1B3227}
-.gdo .gpanel-tabs button.on{color:#046B45;border-bottom-color:#046B45}
-/* HIDDEN, NOT UNMOUNTED - display:none keeps the React tree alive so unsaved edits survive. */
-.gdo .gpanel-hide{display:none !important}
-.gdo .gpanel-chat{padding:0;display:flex;flex-direction:column;min-height:0}
 
 /* THE ACTION AREA IS A 2x2 GRID. Four controls in one row measured 608px and crushed the banner
    text; as a 2x2 it is 324px and the banner holds its height down to 1280. */
@@ -1663,7 +1606,6 @@ const CSS = `
   border-radius:7px;padding:4px 9px;text-align:center}
 @media (max-width: 639.98px) {
   .gdo .gacts{grid-template-columns:1fr}
-  .gdo .gpanel-tabs button{padding:12px 16px;font-size:14px}
 }
 
 
