@@ -41,7 +41,10 @@ export type PageFilters = { month: string; city: string; venue: string; mgr: str
 // normalizeCity would compare null to "Dallas" and stay broken, and comparing null to null would
 // make every city match every other. Falling back to the input keeps already-canonical values
 // intact and keeps genuinely different cities distinct.
-export const canonCity = (c: string | null | undefined): string => normalizeCity(c) ?? (c ?? "");
+/* THE FALLBACK IS TRIMMED. normalizeCity already trims before its lookup, so a whitespace-only
+ * name reaches the `??` and would otherwise survive as "   " — truthy, ungroupable, and enough to
+ * pass a `if (!city) continue;` guard on the readers that now depend on this. */
+export const canonCity = (c: string | null | undefined): string => normalizeCity(c) ?? (c ?? "").trim();
 
 export function monthKeyOf(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;

@@ -22,6 +22,7 @@
 // JSON-array input.
 
 import { useEffect, useState } from "react";
+import { canonCity } from "./reviewsDerive";
 import { supabase } from "./supabase";
 import { selectAll } from "./supabasePagination";
 import { parseTags } from "./reviewTags";
@@ -157,15 +158,20 @@ async function load(silent = false): Promise<void> {
     // CSV-backed path:
     //   - unparseable start_date (parseLocal returns null)
     //   - missing star_rating
-    //   - city not in the cockpit's known list (normalizeCity → null)
-    // The city filter silently drops "New York City" reviews (26 in
-    // mdapi_reviews as of May 2026) — cockpit has no NYC infra.
-    // When MatchDay launches new cities, add them to cityMap.ts or
-    // their reviews disappear from dashboards.
+    //   - no city name at all
+    //
+    // THE CITY IS CANONICALISED RATHER THAN REQUIRED TO BE KNOWN, and this
+    // comment used to say the opposite: that an unmapped city's reviews
+    // "disappear from dashboards" and the answer was to edit cityMap.ts. That
+    // is exactly what happened to Warsaw — 51 reviews, dropped here, with the
+    // route returning them correctly. Nobody edits a map they have not been
+    // told to edit, so the drop is gone instead of documented.
+    // canonCity keeps an unmapped name as itself; only a genuinely empty city
+    // is dropped now, because a row with no city cannot be grouped at all.
     const startDate = parseLocal(r.start_date);
     if (!startDate) continue;
     if (r.star_rating === null) continue;
-    const city = normalizeCity(r.city_name);
+    const city = canonCity(r.city_name);
     if (!city) continue;
 
     all.push({

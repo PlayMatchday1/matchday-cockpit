@@ -17,6 +17,7 @@
 // safe). The fake user-id set is loaded once, module-cached.
 
 import { useEffect, useMemo, useState } from "react";
+import { canonCity } from "./reviewsDerive";
 import { supabase } from "./supabase";
 import { isFakePlayerEmail } from "./mdapiFakePlayer";
 import { useReviewData, type ReviewRow } from "./useReviewData";
@@ -110,13 +111,28 @@ export function useScopedReviews(city?: string | null): { rows: ReviewRow[]; sco
         const j = await res.json().catch(() => ({}));
         if (!live) return;
         if (!res.ok) { setState({ rows: [], scope: null, loading: false, error: j?.error ?? `HTTP ${res.status}` }); return; }
-        // Same row filters as the old client path: unparseable date, missing star, unknown city.
+        /* Same row filters as the old client path: unparseable date, missing star.
+         *
+         * THE CITY IS CANONICALISED, NOT REQUIRED TO BE KNOWN. This line used to be
+         * `normalizeCity(r.city_name)` followed by `continue`, and normalizeCity is a bare lookup
+         * in CSV_TO_COCKPIT_CITY that returns null for anything not in it. CSV_TO_COCKPIT_CITY has
+         * no Warsaw entry, so all 51 Warsaw reviews were dropped HERE — after a route that returned
+         * them correctly, with a 200 and the right scope. Every tile read 0, the month select was
+         * empty, and "Showing Sep 2026" came from the monthKeyOf(NOW) fallback rather than from
+         * data. The same drop was silently costing the admin its Warsaw rows too.
+         *
+         * canonCity is the codebase's existing canonical form (reviewsDerive.ts) and its `?? c`
+         * fallback was written for exactly this: an already-canonical or simply unmapped name keeps
+         * its own spelling instead of becoming null. It is not a second mapping — it is the one the
+         * grouping on the other side of this page already uses, so the two can no longer disagree.
+         *
+         * A ROW WITH NO CITY AT ALL IS STILL DROPPED, because it cannot be grouped or filtered. */
         const out: ReviewRow[] = [];
         for (const r of (j.rows ?? []) as ApiReviewRow[]) {
           const startDate = parseLocal(r.start_date);
           if (!startDate) continue;
           if (r.star_rating === null) continue;
-          const cityName = normalizeCity(r.city_name);
+          const cityName = canonCity(r.city_name);
           if (!cityName) continue;
           out.push({
             apiId: r.api_id, city: cityName, fieldTitle: r.field_title ?? "",

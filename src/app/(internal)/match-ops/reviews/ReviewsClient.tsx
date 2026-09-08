@@ -608,14 +608,26 @@ function TrailingWeeks({ wk }: { wk: ReturnType<typeof deriveWeeks> }) {
     else if (e.key === "Escape") { e.preventDefault(); setPin(null); }
   };
 
+  /* NOTHING TO SHOW IS NOT A ZERO. With no reviews in the window the strip used to render
+   * "0.00 avg rating", eight empty bars, a "RATING 4.45-5.00 scale" band and a sentence claiming
+   * rating "has moved between 4.50 and 5.00" — narrating a DEFAULT AXIS RANGE as though it were
+   * data, on a set where nothing moved because nothing happened. The scale numbers are the chart's
+   * own padding; they are not observations, and a reader has no way to tell.
+   * So: say there is nothing, draw nothing, claim nothing. */
+  const empty = wk.totalVolume === 0;
   const w = weeks[active];
-  const ratingTxt = w.count ? w.avg.toFixed(2) : "—";
+  const ratingTxt = w.count ? w.avg.toFixed(2) : "\u2014";
   const readout = `WEEK OF ${weekRangeLabel(w.start).toUpperCase()}  ·  ${ratingTxt} AVG  ·  ${nf(w.count)} ${w.count === 1 ? "REVIEW" : "REVIEWS"}`;
 
   return (
     <div data-rv="trailing" className="mb-4 rounded-[12px] border p-3.5" style={{ background: C.surface, borderColor: C.line }}>
       {/* header block */}
       <div className="text-[10.5px] font-bold tracking-[0.08em]" style={{ color: C.muted }}>TRAILING 8 WEEKS</div>
+      {empty ? (
+        <div className="mt-1 text-[12px]" data-rv="empty" style={{ color: C.muted }}>
+          No reviews in these 8 weeks.
+        </div>
+      ) : (<>
       <div className="mt-0.5 text-[21px] font-[800] tracking-[-0.5px]">
         <span data-rv="wavg">{wk.weightedAvg.toFixed(2)}</span><small className="ml-1.5 text-[12px] font-semibold" style={{ color: C.muted }}>avg rating</small>
       </div>
@@ -628,7 +640,7 @@ function TrailingWeeks({ wk }: { wk: ReturnType<typeof deriveWeeks> }) {
       <div data-rv="readout" aria-live="polite" className="mt-2.5 flex flex-col justify-center rounded-[8px] px-2.5" style={{ height: 46, background: C.railB, border: `1px solid ${C.hair}` }}>
         <div className="overflow-hidden text-ellipsis whitespace-nowrap text-[12px] font-bold tracking-[0.03em]" style={{ color: C.forestDeep }}>{readout}</div>
         {/* always present so the row keeps its height whether or not it applies */}
-        <div className="text-[10.5px] font-bold tracking-[0.03em]" style={{ color: C.warnInk, visibility: w.partial ? "visible" : "hidden" }}>· PARTIAL WEEK — VOLUME NOT COMPARABLE</div>
+        <div className="text-[10.5px] font-bold tracking-[0.03em]" style={{ color: C.warnInk, visibility: w.partial ? "visible" : "hidden" }}>· PARTIAL WEEK · VOLUME NOT COMPARABLE</div>
       </div>
 
       {/* charts — one focusable group; hover/click/keyboard all drive `active` */}
@@ -655,7 +667,7 @@ function TrailingWeeks({ wk }: { wk: ReturnType<typeof deriveWeeks> }) {
           collapses properly and clips the table inside it. */}
       <div className="sr-only">
       <table>
-        <caption>Trailing eight weeks — average rating and review volume by week</caption>
+        <caption>Trailing eight weeks of average rating and review volume by week</caption>
         <thead><tr><th>Week of</th><th>Average rating</th><th>Reviews</th></tr></thead>
         <tbody>
           {weeks.map((wa, i) => (
@@ -669,12 +681,15 @@ function TrailingWeeks({ wk }: { wk: ReturnType<typeof deriveWeeks> }) {
       </table>
       </div>
 
-      {/* caption */}
+      {/* caption. NO EM-DASH: it read "across these 8 weeks - a spread of ...", and an em-dash is
+          not wanted in rendered copy. Two sentences instead of one joined by punctuation. */}
       <div className="mt-3 border-t border-dashed pt-2 text-[11px]" style={{ borderColor: C.hair, color: C.muted }}>
-        Rating has moved between {wk.ratingLoActual.toFixed(2)} and {wk.ratingHiActual.toFixed(2)} across these 8 weeks — a spread of {wk.ratingSpread.toFixed(2)} on a 5-point scale.
+        Rating has moved between {wk.ratingLoActual.toFixed(2)} and {wk.ratingHiActual.toFixed(2)} across these 8 weeks.
+        That is a spread of {wk.ratingSpread.toFixed(2)} on a 5-point scale.
         Volume moved from {nf(wk.volLo)} to {nf(wk.volHi)}. The last point is a partial week (hollow / pale) and is not comparable on volume.
         This strip is a trailing window and does not follow the month filter.
       </div>
+      </>)}
     </div>
   );
 }
