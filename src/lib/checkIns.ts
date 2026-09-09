@@ -15,7 +15,7 @@ export type Manager = {
   amount: number; // monthly $
 };
 
-// 6 city managers. Mirror this when the form/Sheet manager universe
+// 7 city managers. Mirror this when the form/Sheet manager universe
 // changes — the Sheet is read live for check-in submissions, but this
 // list drives the calendar rows, payment cards, and the one-card-per-
 // manager grid. Array order = calendar row order (top to bottom) and
@@ -31,8 +31,20 @@ export type Manager = {
  * types.CITIES, "Dallas-Fort Worth" in the goals export), which is exactly why anything that has to
  * JOIN uses the identifier.
  *
- * ATLANTA HAS NO MANAGER. It has goals in the September export and has never filed a check-in, so
- * it is absent here rather than invented — the mock guessed a name for it. */
+ * ATLANTA IS BEN FAYE, added 2026-09-09 on Ryan's word. It was absent before, deliberately: it had
+ * goals in the September export but no manager, and the mock guessed a name for it rather than
+ * leaving the gap visible.
+ *
+ * HE WILL READ AS "NOT SUBMITTED" UNTIL ATLANTA FILES, and that is the honest state rather than a
+ * bug. The check-in Sheet carries no Atlanta row at all — measured on the published CSV, 2026-09-09:
+ * twelve submissions spelling five cities, San Antonio, Austin, DFW, Houston and Oklahoma City. The
+ * `city` string here is what cityMatch will compare against the day one arrives, and plain
+ * "Atlanta" is enough: it hits the exact-equality branch, and the includes() fallback catches
+ * "Atlanta, GA". No special case is needed, unlike OKC, whose Sheet spelling is "Oklahoma City" and
+ * which needs its own rule in cityMatch.
+ *
+ * payDay 25 NEEDS NO CODE CHANGE. getNextPayDate clamps with Math.min against daysInMonth on both
+ * branches, so a 25th is safe in February and any other short month. */
 export const MANAGERS: Manager[] = [
   { name: "Yara Usheta", city: "Houston", cityId: "HOU", payDay: 1, amount: 500 },
   { name: "Garrett Suits", city: "Austin", cityId: "ATX", payDay: 1, amount: 500 },
@@ -40,6 +52,7 @@ export const MANAGERS: Manager[] = [
   { name: "Wilfried Nyamsi", city: "St Louis", cityId: "STL", payDay: 1, amount: 500 },
   { name: "Chris Padilla", city: "DFW", cityId: "DFW", payDay: 15, amount: 800 },
   { name: "Abraham Garcia", city: "San Antonio", cityId: "SATX", payDay: 15, amount: 500 },
+  { name: "Ben Faye", city: "Atlanta", cityId: "ATL", payDay: 25, amount: 500 },
 ];
 
 export const CHECK_INS_SHEET_URL =
