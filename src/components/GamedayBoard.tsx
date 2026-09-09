@@ -1983,7 +1983,9 @@ function AlertBanner({ m, now, pending, pendingSpots, onStep, onStepSpots,
 
         <span className="gstep" data-testid="gday-stepper" title={stepperReason ?? "Below this many real players the match auto-cancels"}>
           {/* E. THE CONSEQUENCE, NOT THE FIELD NAME. "Adjust min" is ambiguous — minimum what. The
-              editor already says "MIN PLAYERS — below this, it cancels"; this is that, at a glance. */}
+              editor's field is called MIN PLAYERS; this says what falling below it does, at a
+              glance. (It used to quote a hint reading "below this, it cancels" that sat beside that
+              label — the hint is gone from the editor, so the quote went with it.) */}
           Cancels below
           <button type="button" className="gsb" data-testid="gday-step-down" aria-label="Lower the minimum"
             disabled={!canEdit || shownMin <= 2}

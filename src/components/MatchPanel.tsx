@@ -1130,14 +1130,28 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
               {/* MoneyInput, shared with the Master Schedule editor: select-all on focus, verbatim
                   while typing, two decimals on blur. The cents conversion is unchanged — onCents
                   hands back exactly what the old onChange computed. */}
-              <label className="mp-f"><span className="mp-lb">PRICE <em>$</em></span>
-                <MoneyInput data-testid="mp-price" cents={cur.registrationPrice as number | string | null}
-                  className={isDirty("registrationPrice") ? "mp-chg" : ""}
-                  onCents={(v) => setField("registrationPrice", v)} /></label>
-              <label className="mp-f"><span className="mp-lb">SPOT PRICE <em>$</em></span>
-                <MoneyInput data-testid="mp-spot" placeholder="—" cents={cur.additionalSpotPrice as number | string | null}
-                  className={isDirty("additionalSpotPrice") ? "mp-chg" : ""}
-                  onCents={(v) => setField("additionalSpotPrice", v)} /></label>
+              {/* THE $ BELONGS TO THE NUMBER, NOT TO THE LABEL. It was an <em> hint, and .mp-lb em
+                  carries margin-left:auto so a hint sits at the far RIGHT of its label — which is
+                  right for "optional", "before kickoff" and "total", which are notes ABOUT a field,
+                  and wrong for a currency mark, which belongs to the value. Measured: the $ sat
+                  215px from the first digit. Inside the input it sits 3px from it, and all three
+                  MONEY labels become the same plain shape.
+                  WRAPPED AT THE CALL SITE, not in MoneyInput, which Master Schedule's editor shares:
+                  select-all-on-focus, verbatim-while-typing and two-decimals-on-blur are untouched
+                  and so is the cents conversion. */}
+              <label className="mp-f"><span className="mp-lb">PRICE</span>
+                <span className="mp-cur"><i aria-hidden="true">$</i>
+                  <MoneyInput data-testid="mp-price" cents={cur.registrationPrice as number | string | null}
+                    className={isDirty("registrationPrice") ? "mp-chg" : ""}
+                    onCents={(v) => setField("registrationPrice", v)} /></span></label>
+              {/* SPOT PRICE is the price of adding a guest spot after purchase, when that is
+                  discounted or different from the first registration price. The placeholder was an
+                  em-dash, which reads like a VALUE rather than an absence. */}
+              <label className="mp-f"><span className="mp-lb">SPOT PRICE</span>
+                <span className="mp-cur"><i aria-hidden="true">$</i>
+                  <MoneyInput data-testid="mp-spot" placeholder="same as price" cents={cur.additionalSpotPrice as number | string | null}
+                    className={isDirty("additionalSpotPrice") ? "mp-chg" : ""}
+                    onCents={(v) => setField("additionalSpotPrice", v)} /></span></label>
               <label className="mp-f"><span className="mp-lb">GUEST COUNT</span>
                 <input data-testid="mp-guests" inputMode="numeric" value={cur.guestCount == null ? "" : String(cur.guestCount)} className={isDirty("guestCount") ? "mp-chg" : ""}
                   onChange={(e) => setField("guestCount", e.target.value.trim() === "" ? "" : Number(e.target.value))} /></label>
@@ -1246,21 +1260,38 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
                 <input data-testid="mp-acmin" inputMode="numeric" value={cur.autoCanceledMinutes == null ? "" : String(cur.autoCanceledMinutes)} disabled={!cur.autoCanceled}
                   className={isDirty("autoCanceledMinutes") ? "mp-chg" : ""} onChange={(e) => setField("autoCanceledMinutes", e.target.value.trim() === "" ? "" : Number(e.target.value))} /></label>
               {/* ── THE FIELD THE GAMEDAY BANNER STEPPER ALSO WRITES ────────────────────────────
-                  Highlighted and said out loud, with the live real-player count beside it, because
-                  two surfaces writing one field is exactly where a stale draft gets saved. The
-                  banner discards its pending value when this editor opens; this label is the other
-                  half of that contract — it tells the operator which number they are looking at.
-                  BELOW THIS, IT CANCELS — and the comparison is against REAL players. Proven on
-                  staging 2026-09-01: a match with 0 real and 11 fake against a minimum of 9 was
-                  watched through its deadline. */}
-              <label className="mp-f mp-linked" data-testid="mp-min-field">
-                <span className="mp-lb">MIN PLAYERS <em>below this, it cancels</em></span>
-                <input data-testid="mp-min" inputMode="numeric" value={cur.minPlayerCount == null ? "" : String(cur.minPlayerCount)} disabled={!cur.autoCanceled}
-                  className={isDirty("minPlayerCount") ? "mp-chg" : ""} onChange={(e) => setField("minPlayerCount", e.target.value.trim() === "" ? "" : Number(e.target.value))} />
-                {/* THE NOTE THAT STOOD HERE CLAIMED A CONTRACT WITH THE GAMEDAY OPS BANNER STEPPER.
-                    There is no contract in this direction: what protects this field is the BANNER
-                    discarding its own pending value when this editor opens, which is unchanged and
-                    lives there. Telling the operator about it on every render bought nothing. */}
+                  Two surfaces writing one field is exactly where a stale draft gets saved, and this
+                  field used to be marked with a green tint (.mp-linked) to say so. THE CONTROL IS
+                  THE MARKER NOW: Gameday's banner offers a stepper and so does this, so "same
+                  field, two places" is said by the shape of the thing rather than by a box whose
+                  meaning lived only in this comment. The contract itself is unchanged and still
+                  lives in GamedayBoard — the banner discards its pending value when this editor
+                  opens.
+                  THE COMPARISON IS AGAINST REAL PLAYERS. Proven on staging 2026-09-01: a match with
+                  0 real and 11 fake against a minimum of 9 was watched through its deadline. The
+                  "below this, it cancels" hint that said so is gone from the label; the fact is
+                  not, and this is where it lives. */}
+              <label className="mp-f" data-testid="mp-min-field">
+                <span className="mp-lb">MIN PLAYERS</span>
+                {/* THE SAME BOUNDS AS THE BANNER'S STEPPER, deliberately: floor 2, ceiling capacity,
+                    and the button is DISABLED at the bound rather than clamping silently — a − that
+                    does nothing and says nothing is a control that looks live. Both write
+                    minPlayerCount through setField; nothing else about the field moves.
+                    THE DIRTY MARK GOES ON THE WHOLE FRAME, not just the middle: a changed number
+                    inside an unchanged border is easy to miss. */}
+                <span className={"mp-step full" + (isDirty("minPlayerCount") ? " mp-chg" : "")}>
+                  <button type="button" data-testid="mp-min-down" aria-label="Lower the minimum"
+                    disabled={!cur.autoCanceled || Number(cur.minPlayerCount ?? 0) <= 2}
+                    onClick={() => setField("minPlayerCount", Math.max(2, Number(cur.minPlayerCount ?? 0) - 1))}>&minus;</button>
+                  <input data-testid="mp-min" className="mp-step-in" inputMode="numeric"
+                    value={cur.minPlayerCount == null ? "" : String(cur.minPlayerCount)} disabled={!cur.autoCanceled}
+                    onChange={(e) => setField("minPlayerCount", e.target.value.trim() === "" ? "" : Number(e.target.value))} />
+                  <button type="button" data-testid="mp-min-up" aria-label="Raise the minimum"
+                    disabled={!cur.autoCanceled || (capacity > 0 && Number(cur.minPlayerCount ?? 0) >= capacity)}
+                    onClick={() => setField("minPlayerCount", capacity > 0
+                      ? Math.min(capacity, Number(cur.minPlayerCount ?? 0) + 1)
+                      : Number(cur.minPlayerCount ?? 0) + 1)}>+</button>
+                </span>
               </label>
             </div>
 
@@ -2124,14 +2155,34 @@ const CSS = `
    around blocks of prose that no longer sit between the fields, so leaving it would just be the
    gaps the paragraphs used to fill. */
 .mp-f + .mp-f,.mp-grid + .mp-grid,.mp-grid + .mp-help{margin-top:9px}
+/* ROW SPACING INSIDE A GRID IS THE GRID'S OWN gap. The rule above was written for fields stacked
+   VERTICALLY and says so, but a grid puts its fields side by side as SIBLINGS, so it matched there
+   too — and a margin-top on a grid item offsets it INSIDE its own cell, dropping it below the field
+   beside it. Measured 9px on every two-up row (CATEGORY/FIELD, MANAGER/SECOND MANAGER, MAX 2/MAX 4,
+   PRICE/SPOT PRICE/GUEST COUNT) and 17px on AUTO-CANCEL MINUTES/MIN PLAYERS, which added the tint's
+   8px padding on top. It also stretched the rhythm: a second grid ROW got the 12px gap PLUS the 9px,
+   so rows sat 21px apart against 12px columns.
+   .mp-f + .mp-f OUTSIDE A GRID IS UNTOUCHED and keeps its 9px, which is real work between stacked
+   fields. Under 560px the grids collapse to one column and this reset still matches, so the
+   separation there is the grid's own 12px rather than 9 — slightly roomier, and correct. */
+.mp-grid > .mp-f + .mp-f,
+.mp-grid3 > .mp-f + .mp-f{margin-top:0}
 .mp-lb{display:flex;align-items:baseline;gap:6px;font-size:9.5px;font-weight:800;letter-spacing:.11em;color:var(--ink3);margin-bottom:5px}
 /* THE MINIMUM IS WRITTEN FROM TWO SURFACES — this editor and the Gameday Ops banner stepper — so
    it is marked as such rather than sitting anonymously among the automation fields. The banner
    discards its pending value when this panel opens; the note is the half the operator can see. */
-.mp-linked{position:relative;border-radius:9px;padding:8px;margin:-8px;background:#F2F7F4;
-  box-shadow:inset 0 0 0 1px #CFE3D8}
-.mp-linknote{display:block;margin-top:5px;font-size:10.5px;line-height:1.45;color:#4B5F55}
 
+/* THE CURRENCY MARK, INSIDE THE INPUT. pointer-events:none matters: the mark must not swallow a
+   click meant for the field, so clicking the $ still focuses it. */
+.mp-cur{position:relative;display:block}
+/* .mp .mp-cur, NOT .mp-cur — the .mp input rule below sets padding:9px 11px at the SAME
+   specificity and appears LATER in this sheet, so a bare .mp-cur input loses the tie on source
+   order and the mark lands on top of the first digit. Measured before the fix: it overlapped by
+   8px. (NO BACKTICKS IN HERE: this stylesheet is a template literal and one in a comment ends the
+   string — which is exactly what writing this comment did the first time.) */
+.mp .mp-cur input{padding-left:22px}
+.mp-cur i{position:absolute;left:11px;top:0;bottom:0;display:flex;align-items:center;
+  font-style:normal;font-size:13.5px;color:var(--ink3);pointer-events:none}
 .mp-lb em{margin-left:auto;font-style:normal;font-size:9.5px;font-weight:700;color:var(--ink3);text-transform:none}
 .mp input,.mp select,.mp textarea{width:100%;min-width:0;border:1px solid var(--line2);border-radius:9px;padding:9px 11px;font:inherit;font-size:13.5px;background:#fbfdfc;color:var(--ink);min-height:40px}
 .mp textarea{min-height:80px;resize:vertical}
@@ -2147,6 +2198,20 @@ const CSS = `
 .mp-step button{border:0;background:none;font:inherit;font-size:16px;font-weight:800;color:var(--ink2);min-width:40px;min-height:40px;cursor:pointer}
 .mp-step button:disabled{color:#b5c4bc;cursor:not-allowed}
 .mp-step-val{min-width:52px;text-align:center;font-weight:800;border-left:1px solid var(--line2);border-right:1px solid var(--line2);padding:9px 0}
+/* ── .full: THE STEPPER AS A FULL-WIDTH FIELD, for MIN PLAYERS. A MODIFIER — the base .mp-step
+   above is what SPOTS PER TEAM uses and does not move.
+   THE ONE COST, STATED: pinning the control to 40px so it matches AUTO-CANCEL MINUTES beside it
+   puts .mp-step's own 1px border inside that budget, so the BUTTONS come out 40 wide by 38 tall.
+   You can have a 40px control or 40px buttons, not both, unless the field beside it grows to 42.
+   Ryan asked for "exact same size as auto cancel minutes", so the control wins and the buttons take
+   the 2px, on one axis only.
+   THE MIDDLE IS A REAL <input>, not .mp-step-val, so typing a number still works. */
+.mp-step.full{display:flex;width:100%;min-height:40px;height:40px}
+.mp-step.full button{flex:0 0 40px;align-self:stretch;min-height:0}
+.mp-step.full input.mp-step-in{flex:1 1 auto;width:auto;border:0;
+  border-left:1px solid var(--line2);border-right:1px solid var(--line2);
+  border-radius:0;text-align:center;font-weight:800;background:transparent;
+  min-height:0;align-self:stretch;padding:9px 4px}
 .mp-rel{display:grid;grid-template-columns:repeat(5,1fr);gap:9px;border:1px solid var(--line);border-radius:11px;padding:11px;background:#fbfdfc}
 .mp-relcol{display:block;min-width:0;text-align:center}
 .mp-relmk{display:block;font-size:10.5px;font-weight:800;letter-spacing:.09em;color:var(--ink2);margin-bottom:6px}
