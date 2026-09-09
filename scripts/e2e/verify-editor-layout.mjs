@@ -20,6 +20,10 @@ const is = (n, g, w) => (JSON.stringify(g) === JSON.stringify(w) ? ok(n) : bad(n
 /* Puts the 9px margin back on grid items — the exact defect, so the control proves the alignment
    assertions are sensitive to it and not to something incidental. */
 const BREAK = `.mp-grid > .mp-f + .mp-f, .mp-grid3 > .mp-f + .mp-f{margin-top:9px !important}`;
+/* Removes the one-rhythm rule, restoring the six-value spacing it replaced — so the uniformity
+   assertions have a control that reproduces the real defect, zeros included. */
+const BREAK_RHYTHM = `.mp-secbd > * + *{margin-top:0 !important}
+.mp-f + .mp-f,.mp-grid + .mp-grid{margin-top:9px !important}`;
 
 const CASES = [
   { host: "Gameday Ops", url: "/match-ops/gameday", opener: '[data-testid="gday-row"]', pre: null, widths: ["desktop", "phone"] },
@@ -47,6 +51,7 @@ async function main() {
     await page.waitForSelector('[data-testid="gday-panel"] .mp-fs', { timeout: 45000 });
     await page.waitForTimeout(2500);
     if (breaking) await page.addStyleTag({ content: BREAK });
+    if (process.env.BREAK_RHYTHM) await page.addStyleTag({ content: BREAK_RHYTHM });
     await page.waitForTimeout(400);
     const tag = `${c.host} @ ${label}`;
     console.log(`\n— ${tag} —`);
@@ -73,6 +78,30 @@ async function main() {
           gap: getComputedStyle(g).rowGap,
         };
       });
+      /* ── THE SECTION RHYTHM. Every top-level child of a section body, and the gap above it.
+       * The old rule set named three adjacencies out of a dozen, so the rest fell to ZERO: measured
+       * six distinct gaps for one conceptual space — 0, 8, 9, 11, 12, 14 — with MATCH NAME flush
+       * against the CATEGORY grid. Sections are opened first so every gap is measurable. */
+      document.querySelectorAll(P + '.mp-sechd[aria-expanded="false"]').forEach((e) => e.click());
+      const gaps = [];
+      document.querySelectorAll(P + ".mp-sec").forEach((sec) => {
+        const bd = sec.querySelector(".mp-secbd"); if (!bd) return;
+        const kids = [...bd.children].filter((e) => getComputedStyle(e).display !== "none");
+        for (let i = 1; i < kids.length; i++) {
+          const prev = kids[i - 1], cur = kids[i];
+          gaps.push({
+            gap: Math.round(cur.getBoundingClientRect().top - prev.getBoundingClientRect().bottom),
+            divider: prev.classList.contains("mp-secrule") || cur.classList.contains("mp-secrule"),
+            from: (prev.querySelector(".mp-lb")?.textContent?.trim() || prev.className.split(" ")[0] || prev.tagName).slice(0, 20),
+            to: (cur.querySelector(".mp-lb")?.textContent?.trim() || cur.className.split(" ")[0] || cur.tagName).slice(0, 20),
+          });
+        }
+      });
+      const inlineMargins = [...document.querySelectorAll(P + "[style]")]
+        .filter((e) => /margin-top/.test(e.getAttribute("style") || ""))
+        .filter((e) => e.parentElement?.classList.contains("mp-secbd"))
+        .map((e) => e.getAttribute("style"));
+
       const box = (s) => { const e = q(s); if (!e) return null; const r = e.getBoundingClientRect();
         return { w: Math.round(r.width), h: Math.round(r.height), top: Math.round(r.top), left: Math.round(r.left) }; };
       const acmin = box('[data-testid="mp-acmin"]');
@@ -83,7 +112,7 @@ async function main() {
       const cur = q(".mp-cur i"), inp = q('[data-testid="mp-price"]');
       const gap = cur && inp ? Math.round(inp.getBoundingClientRect().left + parseFloat(getComputedStyle(inp).paddingLeft) - cur.getBoundingClientRect().right) : null;
       return {
-        rows,
+        rows, gaps, inlineMargins,
         acmin, step, btn,
         stepIn: box('[data-testid="mp-min"]'),
         minLabel: q('[data-testid="mp-min-field"] .mp-lb')?.textContent ?? null,
@@ -116,7 +145,7 @@ async function main() {
           return got;
         })(),
         inlineOverride: (() => { const e = document.querySelector(P + '[data-testid="mp-intro"]')?.closest(".mp-f");
-          return e ? e.getAttribute("style") : null; })(),
+          return e ? e.getAttribute("style") : null; })(),   // null once the inline margin is gone
       };
     });
 
@@ -134,8 +163,21 @@ async function main() {
       allLabelRows.every((r) => new Set(r.filter((x) => x != null)).size === 1), JSON.stringify(allLabelRows));
     is(`${tag}: row spacing is the grid's own 12px gap`, [...new Set(m.rows.map((r) => r.gap))], ["12px"]);
     /* THE CONTROL THAT MUST NOT MOVE: stacked fields outside a grid keep their 9px. */
-    is(`${tag}: CONTROL — an injected stacked .mp-f pair outside a grid is still 9px`, m.stackedGap, "9px");
-    is(`${tag}: …and MANAGER INTRO's inline 12px is untouched (it always overrode the rule)`, m.inlineOverride?.replace(/\s|;/g, ""), "margin-top:12px");
+    /* ── THE SECTION RHYTHM: one number between blocks, and no zeros. ── */
+    const plain = m.gaps.filter((g) => !g.divider);
+    console.log(`     ${m.gaps.length} top-level gaps · ${plain.length} plain · values ${JSON.stringify([...new Set(m.gaps.map((g) => g.gap))].sort((a, b) => a - b))}`);
+    yes(`${tag}: no top-level gap is 0`, m.gaps.every((g) => g.gap !== 0),
+      JSON.stringify(m.gaps.filter((g) => g.gap === 0).map((g) => `${g.from} -> ${g.to}`)));
+    is(`${tag}: every non-divider gap is the same 12px`, [...new Set(plain.map((g) => g.gap))], [12]);
+    yes(`${tag}: the divider still reads as a divider (more room than a plain gap)`,
+      m.gaps.filter((g) => g.divider).every((g) => g.gap > 12), JSON.stringify(m.gaps.filter((g) => g.divider).map((g) => g.gap)));
+    is(`${tag}: no inline margin-top survives on a section child`, m.inlineMargins, []);
+        /* THE 9px IS GONE, AND THAT IS THIS BUILD'S POINT. The previous version of this assertion
+     * expected 9px between stacked fields outside a grid, on the belief that the rule did real work
+     * there. It did not: .mp-f + .mp-f named three adjacencies out of a dozen and left the rest at
+     * ZERO. A stacked pair now takes the same 12px as every other block, from .mp-secbd > * + *. */
+    is(`${tag}: an injected stacked .mp-f pair outside a grid takes the same 12px`, m.stackedGap, "12px");
+    is(`${tag}: …and MANAGER INTRO no longer carries an inline margin`, m.inlineOverride, null);
 
     if (m.step && m.acmin) {
       console.log(`     MIN PLAYERS ${m.step.w}x${m.step.h}@top${m.step.top} · AUTO-CANCEL MINUTES ${m.acmin.w}x${m.acmin.h}@top${m.acmin.top} · button ${m.btn?.w}x${m.btn?.h} · typing area ${m.stepIn?.w}`);

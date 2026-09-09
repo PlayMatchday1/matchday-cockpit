@@ -1255,7 +1255,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
             <hr className="mp-secrule" />
             <Toggle id="mp-ac" on={!!cur.autoCanceled} dirty={isDirty("autoCanceled")} onToggle={(v) => setField("autoCanceled", v)}
               title="Auto-cancel" sub="Cancel automatically if the match has not filled" />
-            <div className="mp-grid" style={{ marginTop: 11 }}>
+            <div className="mp-grid">
               <label className="mp-f"><span className="mp-lb">AUTO-CANCEL MINUTES <em>before kickoff</em></span>
                 <input data-testid="mp-acmin" inputMode="numeric" value={cur.autoCanceledMinutes == null ? "" : String(cur.autoCanceledMinutes)} disabled={!cur.autoCanceled}
                   className={isDirty("autoCanceledMinutes") ? "mp-chg" : ""} onChange={(e) => setField("autoCanceledMinutes", e.target.value.trim() === "" ? "" : Number(e.target.value))} /></label>
@@ -1297,7 +1297,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
 
             <Toggle id="mp-bump" on={!!cur.isAutoBump} dirty={isDirty("isAutoBump")} onToggle={(v) => setField("isAutoBump", v)}
               title="Auto bump to tournament" sub="Grow the match to a tournament if it fills" />
-            <div className="mp-grid" style={{ marginTop: 11 }}>
+            <div className="mp-grid">
               <label className="mp-f"><span className="mp-lb">MAX SPOTS, 2 TEAMS <em>total</em></span>
                 <select data-testid="mp-max2" value={Number(cur.maxTeamSize2Team) || 0} className={isDirty("maxTeamSize2Team") ? "mp-chg" : ""} onChange={(e) => setField("maxTeamSize2Team", Number(e.target.value))}>
                   {SIZES.map((v) => <option key={v} value={v * 2}>{v} × {v}</option>)}
@@ -1315,7 +1315,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
           <Section title="DESCRIPTION" dirty={secDirty(["description", "managerIntro"])}>
             <label className="mp-f"><span className="mp-lb">DESCRIPTION</span>
               <textarea data-testid="mp-desc" value={String(cur.description ?? "")} className={isDirty("description") ? "mp-chg" : ""} onChange={(e) => setField("description", e.target.value)} /></label>
-            <label className="mp-f" style={{ marginTop: 12 }}><span className="mp-lb">MANAGER INTRO</span>
+            <label className="mp-f"><span className="mp-lb">MANAGER INTRO</span>
               <textarea data-testid="mp-intro" value={String(cur.managerIntro ?? "")} className={isDirty("managerIntro") ? "mp-chg" : ""} onChange={(e) => setField("managerIntro", e.target.value)} /></label>
           </Section>
 
@@ -2106,7 +2106,9 @@ function Section({ title, dirty, children }: { title: string; dirty?: boolean; c
 
 function Toggle({ id, on, dirty, onToggle, title, sub }: { id: string; on: boolean; dirty?: boolean; onToggle: (v: boolean) => void; title: string; sub: string }) {
   return (
-    <label className={"mp-tog" + (on ? " on" : "")} style={{ marginTop: 14 }}>
+    // NO INLINE marginTop. It was 14 here, 11 on two grids and 12 on MANAGER INTRO — three more
+    // values for one gap. .mp-secbd > * + * now sets all of them.
+    <label className={"mp-tog" + (on ? " on" : "")}>
       <input type="checkbox" data-testid={id} checked={on} onChange={(e) => onToggle(e.target.checked)} />
       <span className="mp-knob" />
       <span className="mp-tt"><b>{title}{dirty ? " •" : ""}</b><em>{sub}</em></span>
@@ -2151,22 +2153,27 @@ const CSS = `
 .mp-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .mp-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
 .mp-f{display:block;min-width:0;margin-bottom:0}
-/* DENSER, now the paragraphs are gone: label, control, microlabel. The old spacing was tuned
-   around blocks of prose that no longer sit between the fields, so leaving it would just be the
-   gaps the paragraphs used to fill. */
-.mp-f + .mp-f,.mp-grid + .mp-grid,.mp-grid + .mp-help{margin-top:9px}
-/* ROW SPACING INSIDE A GRID IS THE GRID'S OWN gap. The rule above was written for fields stacked
-   VERTICALLY and says so, but a grid puts its fields side by side as SIBLINGS, so it matched there
-   too — and a margin-top on a grid item offsets it INSIDE its own cell, dropping it below the field
-   beside it. Measured 9px on every two-up row (CATEGORY/FIELD, MANAGER/SECOND MANAGER, MAX 2/MAX 4,
-   PRICE/SPOT PRICE/GUEST COUNT) and 17px on AUTO-CANCEL MINUTES/MIN PLAYERS, which added the tint's
-   8px padding on top. It also stretched the rhythm: a second grid ROW got the 12px gap PLUS the 9px,
-   so rows sat 21px apart against 12px columns.
-   .mp-f + .mp-f OUTSIDE A GRID IS UNTOUCHED and keeps its 9px, which is real work between stacked
-   fields. Under 560px the grids collapse to one column and this reset still matches, so the
-   separation there is the grid's own 12px rather than 9 — slightly roomier, and correct. */
-.mp-grid > .mp-f + .mp-f,
-.mp-grid3 > .mp-f + .mp-f{margin-top:0}
+/* ── ONE RHYTHM BETWEEN BLOCKS, AND IT IS THE GRID'S OWN ROW GAP ───────────────────────────────
+   WHAT WAS HERE: .mp-f + .mp-f, .mp-grid + .mp-grid, .mp-grid + .mp-help {margin-top:9px} - three
+   named adjacencies out of the dozen that actually occur, so every other pair fell through to ZERO,
+   and .mp-grid3 was not named at all. Inline styles then handed out other values elsewhere.
+   Measured on the live panel before this rule: SIX distinct gaps for one conceptual space —
+   0, 8, 9, 11, 12 and 14 — with MATCH NAME flush against the CATEGORY grid and DATE flush against
+   DURATION at 0px.
+   Patching the two zeros would have left five values and the next uncovered pair still at zero, so
+   the rule set is replaced rather than extended: every top-level child of a section body gets the
+   same gap. 12px, because that is the grids' own row-gap — the space BETWEEN blocks now matches the
+   space between rows INSIDE one.
+   THE 16859f78 RESET WENT WITH IT. .mp-grid > .mp-f + .mp-f {margin-top:0} existed only to cancel
+   the 9px above; with the source gone the cancellation is unnecessary and the grid's own gap
+   does the work. This rule cannot reach a grid's children - it is scoped to .mp-secbd > * only.
+   (NO BACKTICKS IN HERE: this stylesheet is a template literal and one in a comment ends the
+   string. Third time in this file; the two rules above this one say the same thing.)
+   .mp-help KEEPS ITS 3px: its rule sits later in this sheet at equal specificity, so it wins the
+   tie. That 3px is a caption hugging its field, not a block gap. */
+.mp-secbd > * + *{margin-top:12px}
+/* The section rule is a deliberate divider and earns more room than a plain gap. */
+.mp-secbd > hr.mp-secrule{margin:16px 0 14px}
 .mp-lb{display:flex;align-items:baseline;gap:6px;font-size:9.5px;font-weight:800;letter-spacing:.11em;color:var(--ink3);margin-bottom:5px}
 /* THE MINIMUM IS WRITTEN FROM TWO SURFACES — this editor and the Gameday Ops banner stepper — so
    it is marked as such rather than sitting anonymously among the automation fields. The banner
