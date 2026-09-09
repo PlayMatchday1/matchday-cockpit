@@ -1,5 +1,16 @@
 "use client";
 
+/* ORPHANED, DELIBERATELY, AND KEPT.
+ *
+ * Its only consumer was the Insights lens on Cash Flow, which was removed on Ryan's ask to drop
+ * the Insights and Trend tabs. Nothing imports this file today.
+ *
+ * IT IS NOT CHROME. Revenue per match, by city, split gross against DPP, is a real analytic —
+ * "remove the tabs" is not the same request as "lose revenue per match forever". It is left here,
+ * compiling and typechecked, so putting it somewhere is an import rather than an archaeology
+ * exercise. If it has no home after all, deleting it is one command and takes
+ * computeRevenuePerMatchByCity / computeRevenuePerMatchTotal in financeStats with it. */
+
 import { useMemo, useState } from "react";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { useMatchRangeData } from "@/lib/useMatchData";
