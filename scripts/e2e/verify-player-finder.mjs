@@ -604,7 +604,8 @@ console.log("\n── the chip bar ──");
   eq("  …none shows a value", rest.filter((c) => c.value !== null).map((c) => c.id), []);
   eq("  …and none offers an × to clear", rest.filter((c) => c.x).map((c) => c.id), []);
   eq("  …and the bar says so",
-    (await page.textContent('[data-testid="finder-filtercount"]')).startsWith("No filters"), true);
+    // "No filters — " was cut on 2026-09-10, leaving the count it prefixed.
+    /^All [\d,]+ players$/.test((await page.textContent('[data-testid="finder-filtercount"]')).trim()), true);
 
   // Two filters on, four still at their defaults.
   await apply("finder-hist-once");

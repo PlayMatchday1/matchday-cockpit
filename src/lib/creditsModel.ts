@@ -67,8 +67,9 @@ export type Validation = {
 // Exported so the panel can tell this apart from the other errors by identity rather than by
 // matching its prose. It is the only error that fires on an UNTOUCHED form — the amount error is
 // already guarded on a non-empty input above — so it is the only one the panel has to hold back.
-export const REASON_REQUIRED =
-  "A reason is required — it is written to the change log with the amount.";
+// SHORTENED 2026-09-10, value and behaviour unchanged: still required, still compared by identity
+// rather than by prose. It used to add "— it is written to the change log with the amount."
+export const REASON_REQUIRED = "A reason is required";
 
 export function validateAdjustment(input: { raw: string; reason: string; beforeCents: number; playerName: string; canEdit: boolean }): Validation {
   const errors: string[] = [];

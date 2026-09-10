@@ -51,7 +51,11 @@ export function detectKind(raw: string): Detected {
 }
 
 export const SEARCH_HINT: Record<SearchKind, string> = {
-  empty: "Type anything — it works out whether you gave it a phone number, an email, an ID or a name.",
+  /* NOTHING WHEN THE BOX IS EMPTY. This read "Type anything — it works out whether you gave it a
+   * phone number, an email, an ID or a name." and was cut on 2026-09-10: the other four hints do
+   * that job by telling you what it DID read, at the moment you can check it. The key stays so the
+   * Record still covers every SearchKind and the render site needs no null branch. */
+  empty: "",
   email: "Reading that as an email address.",
   phone: "Reading that as a phone number — digits only, so formatting does not matter.",
   id: "Reading that as a player ID. Add a country code or dashes if you meant a phone number.",

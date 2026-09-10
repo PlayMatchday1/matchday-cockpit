@@ -50,7 +50,6 @@ async function main() {
     const rows = await p.locator('[data-testid="mm-row"]').count();
     const chips = await p.locator('[data-testid="mm-city-chip"]').count();
     const body = await p.textContent('[data-testid="mm-panel"]');
-    const banner = await p.textContent('[data-testid="mm-naming-banner"]');
     const addDis = await p.locator('[data-testid="mm-add"]').isDisabled();
     const rmDis = await p.locator('[data-testid="mm-remove"]').first().isDisabled();
     const leaks = (body.match(/privaterelay/gi) || []).length;
@@ -65,15 +64,17 @@ async function main() {
      * So the check is back to the plain one. If a future change legitimately prints the endpoint on
      * this panel, this goes red and whoever sees it re-reads this comment and decides — which is
      * the right amount of friction for the rule this is guarding. */
-    const cmOutsideBanner = (body.replace(banner, "").match(RE_CM) || []).length;
-    const foot = await p.textContent('[data-testid="mm-foot"]');
+    // NOTHING TO SUBTRACT ANY MORE: the naming banner was the one sanctioned place the API's
+    // word appeared, and it was cut on 2026-09-10 with the rest of the page's explanatory copy.
+    const cmOutsideBanner = (body.match(RE_CM) || []).length;
 
     console.log(`  [${tag}] header="${counts.trim()}" rows=${rows} chips=${chips}`);
     is(`${tag}: the header carries BOTH counts`, /\d+\s*people\s*·\s*\d+\s*city assignments/.test(counts.replace(/\s+/g, " ")), true);
     is(`${tag}: one row per PERSON, not per assignment`, rows < chips, true);
     is(`${tag}: the header's people count IS the row count`, Number(counts.match(/(\d+)\s*people/)[1]), rows);
     is(`${tag}: the header's assignment count IS the chip count`, Number(counts.match(/(\d+)\s*city assignments/)[1]), chips);
-    is(`${tag}: the footer reconciles the two`, /people/.test(foot) && /assignment/.test(foot), true);
+    // THE RECONCILIATION FOOTER WAS CUT TOO. The two counts it explained are still asserted
+    // directly, four lines above: rows < chips, and each count equals what it names.
 
     // POSITIVE CONTROL for the two zeros below — the same patterns, on text that has the thing.
     is(`${tag}: control — the city-manager pattern fires when the phrase is present`,

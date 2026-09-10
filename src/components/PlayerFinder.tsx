@@ -591,7 +591,10 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
               next sync.
             </>
           ) : (
-            <>Mirrored data · set rebuilt {fmtWhen(data?.freshness?.refreshedAt ?? data?.syncedAt ?? null)}. A signup newer than that is not here yet.</>
+            /* NOTHING WHEN THE SET IS FRESH. This said "Mirrored data · set rebuilt X. A signup
+               newer than that is not here yet." — cut on 2026-09-10. The STALE branch above is
+               untouched, because that one is a warning and not a caption. */
+            null
           )}
           {/* WHAT REFRESH ACTUALLY DID, said plainly. The failure case is the one that matters: a
               source sync that errored leaves the page NOT current, and the old button reported
@@ -674,7 +677,7 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
               </>
             ) : (
               <span className="pf-fcount" data-testid="finder-filtercount">
-                No filters — all {N(total)} players
+                All {N(total)} players
               </span>
             )}
           </div>

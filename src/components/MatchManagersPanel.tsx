@@ -114,14 +114,11 @@ export default function MatchManagersPanel() {
 
       {open && (
         <div className="mmbody">
-          {/* THE ONE PLACE THE API'S NAME APPEARS, and it is here to stop the confusion rather
-              than to propagate it. */}
-          <div className="mmwarn" data-testid="mm-naming-banner">
-            <b>The MatchDay API calls these “city managers”.</b> They are not the city managers in
-            Clubhouse permissions — those are logins with city confinement. These are the people who
-            run matches and are paid through Manager Pay.
-          </div>
-
+          {/* THE NAMING BANNER STOOD HERE and was cut on 2026-09-10. Keeping the fact, since it is
+              a real trap and not decoration: the MatchDay API calls these people "city managers",
+              and they are NOT the city managers in Clubhouse permissions. Those are logins with
+              city confinement. These are the people who run matches and are paid through Manager
+              Pay. Two different things sharing one name. */}
           {err && <p className="mmerr" data-testid="mm-error">{err}</p>}
           {loading && <p className="mmmut">Loading the roster…</p>}
 
@@ -229,13 +226,11 @@ export default function MatchManagersPanel() {
                 ))}
               </div>
 
-              {/* THE RECONCILIATION, SAID OUT LOUD. Without this the two numbers read as a bug. */}
-              <p className="mmfoot" data-testid="mm-foot">
-                <b>{data.counts.people}</b> people hold <b>{data.counts.assignments}</b> city
-                assignments, so the city chips add up to more than the row count — someone working
-                three cities is one person and three chips. Retool lists the {data.counts.assignments} assignments;
-                this lists the people.
-              </p>
+              {/* THE RECONCILIATION FOOTER STOOD HERE, cut on 2026-09-10. The fact it explained is
+                  still true and still worth knowing: the city chips add up to MORE than the row
+                  count, because someone working three cities is one person and three chips. The
+                  header counts both (people and assignments), Retool lists the assignments, this
+                  lists the people. */}
             </>
           )}
         </div>
@@ -252,8 +247,6 @@ export default function MatchManagersPanel() {
         .mmttl { font-size: 10.5px; font-weight: 900; letter-spacing: .1em; color: rgba(16,35,26,.6) }
         .mmcnt { margin-left: auto; font-size: 12px; color: rgba(16,35,26,.55) }
         .mmbody { padding: 12px 14px 14px }
-        .mmwarn { border: 1px solid #F0D8A8; background: #FFF8EC; color: #7A5008; border-radius: 9px; padding: 9px 12px; font-size: 12px; line-height: 1.5; margin-bottom: 11px }
-        .mmwarn b { color: #5E3D05 }
         .mmbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 9px }
         .mmfilter { flex: 1; min-width: 200px; border: 1px solid #E4EAE5; border-radius: 9px; padding: 8px 11px; font: inherit; font-size: 15px }
         @media (min-width: 640px) { .mmfilter { font-size: 13px } }
@@ -288,7 +281,6 @@ export default function MatchManagersPanel() {
         .mmres.v-LANDED { border-color: #B7E0C9; background: #F1FAF4; color: #17593A }
         .mmres.v-FAILED { border-color: #F3C4B8; background: #FEF4F1; color: #8C2A14 }
         .mmres.v-UNKNOWN, .mmres.v-NOTAPPLIED { border-color: #F0D8A8; background: #FFF8EC; color: #7A5008 }
-        .mmfoot { margin-top: 10px; font-size: 11.5px; color: rgba(16,35,26,.5); line-height: 1.55 }
         .mmerr { color: #E8492A; font-size: 12.5px }
         .mmsm { display: none }
         @media (max-width: 900px) {

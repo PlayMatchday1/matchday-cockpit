@@ -290,7 +290,6 @@ export default function PlayerLookup() {
         <div className="headtop">
           <div>
             <h1 className="h1">Player Lookup</h1>
-            <p className="hsub">One player — account, membership and matches. Add them to a match or take them out.</p>
           </div>
           <span className={`livetag ${badge.tone}`}><span className="livedot" />{ENV === "production" ? "PRODUCTION" : "STAGING"} · {canEdit || canManage ? "LIVE EDITS" : "READ ONLY"}</span>
         </div>
@@ -325,7 +324,9 @@ export default function PlayerLookup() {
             )}
           </span>
         </div>
-        <p className="hint" id="pl-hint">{SEARCH_HINT[kind]}</p>
+        {/* NO ELEMENT WHEN THERE IS NOTHING TO SAY. SEARCH_HINT.empty is now "" — an always-
+            rendered <p> would leave its padding behind as a gap under the search box. */}
+        {SEARCH_HINT[kind] ? <p className="hint" id="pl-hint">{SEARCH_HINT[kind]}</p> : null}
       </div>
 
       {/* ---------- SEARCH VIEW ---------- */}
@@ -437,9 +438,6 @@ export default function PlayerLookup() {
             onExpel={() => setModal({ type: "expel" })}
             onLift={() => setModal({ type: "lift" })}
           />
-          <p className="foot" data-testid="builtnote">
-            Account, membership, strikes, matches and live Stripe payments are all shown above. Account history reflects the current ban only, not a full audit trail.
-          </p>
         </div>
       )}
 
@@ -614,12 +612,12 @@ function CreditPanel({ playerId, playerName, balanceCents, canCredit, onBalance 
       ) : null}
       <div className="credrow">
         <label className="credf">
-          <span>ADJUSTMENT <em>+ adds, − subtracts</em></span>
+          <span>ADJUSTMENT</span>
           <input data-testid="credit-amount" value={amt} inputMode="decimal" placeholder="+25 or -10"
             disabled={!canCredit || busy} onChange={(e) => setAmt(e.target.value)} aria-label="Credit adjustment" />
         </label>
         <label className="credf grow">
-          <span>REASON <em>required — written to the change log</em></span>
+          <span>REASON</span>
           <input data-testid="credit-reason" value={reason} placeholder="Why this is being adjusted"
             disabled={!canCredit || busy} onChange={(e) => setReason(e.target.value)}
             onBlur={() => setReasonTouched(true)} aria-label="Reason for the adjustment" />
@@ -642,7 +640,7 @@ function CreditPanel({ playerId, playerName, balanceCents, canCredit, onBalance 
           {busy ? "Applying…" : "Apply adjustment"}
         </button>
         </span>
-        <span className="credcap">One adjustment at a time, up to {fmtUsd(MAX_ADJUSTMENT_CENTS)}. Sent once — never retried.</span>
+        <span className="credcap">max {fmtUsd(MAX_ADJUSTMENT_CENTS)}</span>
       </div>
       {res && <p className="credres" data-testid="credit-result" data-verdict={res.verdict}><b>{res.verdict}</b> — {res.text}</p>}
     </section>
@@ -718,7 +716,7 @@ function PaymentsPanel({ state, email, matches }: { state: PaymentsState; email:
             ? <div className="nomem"><b>No charges on record</b>A Stripe customer matched this email, but has no charges.</div>
             : <div className="warn" data-testid="pay-nomatch" style={{ margin: 16 }}><b>No Stripe customer found for this email ({email}).</b>
                 This does NOT mean they never paid — their Stripe email may differ from MatchDay&apos;s (a known mismatch). Also tried metadata.userId and found nothing. Check Stripe directly by name or card.</div>}
-        <p className="pfoot">Live from Stripe, read-only, not cached.</p>
+        <p className="pfoot">Live from Stripe.</p>
       </div>
     );
   }
@@ -755,12 +753,22 @@ function PaymentsPanel({ state, email, matches }: { state: PaymentsState; email:
           );
         })}
       </div>
-      <p className="pfoot">Ten most recent, <b>live from Stripe, read-only, not cached</b>. <b>Pending</b> means Stripe has the charge but hasn&apos;t settled it — the player has paid as far as they know. Joined to matches on <code>metadata.matchId</code>, and to bookings on <code>metadata.userMatchId</code> — the two are different ids in different namespaces and are never interchanged. Neither present = a membership charge.</p>
+      <p className="pfoot">Ten most recent, <b>live from Stripe</b>. <b>Pending</b> means Stripe has the charge but hasn&apos;t settled it — the player has paid as far as they know. Joined to matches on <code>metadata.matchId</code>, and to bookings on <code>metadata.userMatchId</code> — the two are different ids in different namespaces and are never interchanged. Neither present = a membership charge.</p>
       <p className="pfoot" data-testid="pay-amount-note" style={{ borderTop: 0 }}>Amounts are what Stripe <b>charged the card</b> — the base spot price <b>plus the card processing fee, minus any credit</b>. The Match History shows the <b>base spot price</b>, so it reads a few cents lower for the same match. Both are correct; they answer different questions (what the match costs vs. what the player was charged).</p>
     </div>
   );
 }
 
+/* TWO FACTS THAT USED TO BE A FOOTER ON THIS PANEL. Ryan took them off the page on 2026-09-10;
+ * they are behaviour an operator can get wrong, so they live on the code they describe instead of
+ * being lost with the sentence.
+ *
+ * 1. SUSPENDING DOES NOT CANCEL EXISTING BOOKINGS. It blocks NEW bookings until the date and
+ *    nothing more, so a suspended player still holds every spot they had already taken. Those have
+ *    to be removed separately, from Match History above.
+ * 2. THIS LIST IS THE CURRENT BAN ONLY, NOT AN AUDIT TRAIL. The API exposes the ban in force now;
+ *    a player suspended, lifted and suspended again reads here as one row, not three. An empty
+ *    list means "no ban in force", never "nothing ever happened". */
 function AccountHistoryPanel({ p, canManage, onSuspend, onExpel, onLift }: {
   p: Profile; canManage: boolean; onSuspend: () => void; onExpel: () => void; onLift: () => void;
 }) {
@@ -791,7 +799,6 @@ function AccountHistoryPanel({ p, canManage, onSuspend, onExpel, onLift }: {
             </div>
           ))}
       </div>
-      <p className="pfoot">The API exposes the CURRENT ban only, not a full audit trail. Suspending blocks new bookings until the date but does NOT cancel existing bookings — remove those separately. Every action you take here is recorded in the Change Log with your name on it.</p>
     </div>
   );
 }
@@ -888,7 +895,6 @@ function MatchHistoryPanel({ matches, counts, canEdit, onOpenMatch, onAdd, onRem
       {filter !== "upcoming" && moreLeft > 0
         ? <button className="showmore" data-testid="show-more" onClick={() => setPastShown((n) => n + PAGE_STEP)}>Show {Math.min(PAGE_STEP, moreLeft)} more ({moreLeft} left)</button>
         : filter !== "upcoming" && pastAll.length > 10 ? <p className="pfoot" data-testid="all-shown">All {pastAll.length} shown.</p> : null}
-      <p className="pfoot">Upcoming pinned on top (soonest first); past newest first. Click a match to open its roster. Removing writes to production and appears in the Change Log with your name on it.</p>
     </div>
   );
 }
@@ -897,7 +903,7 @@ function MembershipPanel({ m }: { m: Membership }) {
   if (!m) return (
     <div className="panel">
       <div className="ptitle"><h3>MEMBERSHIP</h3></div>
-      <div className="nomem"><b>Not a member</b>Pays per match. Nothing to renew, nothing to cancel.</div>
+      <div className="nomem"><b>Not a member</b></div>
     </div>
   );
   const st = (m.status || "").toLowerCase();
@@ -950,7 +956,7 @@ function StrikePanel({ s, isMember }: { s: Strikes; isMember: boolean }) {
     return (
       <div className="panel" data-testid="strikes-members-only">
         <div className="ptitle"><h3>STRIKES</h3></div>
-        <div className="nomem"><b>Members only</b>This player pays per match, so a missed spot already costs them the fee. Strikes exist because a member&apos;s does not.</div>
+        <div className="nomem"><b>Members only</b></div>
       </div>
     );
   }
@@ -1302,7 +1308,6 @@ const CSS = `
 .pl .head{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:14px}
 .pl .headtop{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap}
 .pl .h1{font-size:23px;font-weight:700;letter-spacing:-.02em;margin:0}
-.pl .hsub{color:var(--ink2);margin:2px 0 0}
 .pl .livetag{margin-left:auto;display:inline-flex;align-items:center;gap:7px;background:#5b6b63;color:#fff;font-size:11px;font-weight:700;letter-spacing:.06em;padding:6px 11px;border-radius:999px;white-space:nowrap}
 .pl .livetag.prod{background:#12301f}
 .pl .livetag.stage{background:#8a5600}
@@ -1447,8 +1452,6 @@ const CSS = `
 .pl .rowbtn{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:5px 10px;font:inherit;font-size:11.5px;font-weight:700;color:var(--red);cursor:pointer;min-height:32px;white-space:nowrap}
 .pl .rowbtn:hover:not(:disabled){background:var(--redbg)}
 .pl .rowbtn:disabled{opacity:.4;cursor:not-allowed;color:var(--ink3)}
-.pl .foot{margin-top:2px;color:var(--ink3);font-size:12px;padding:6px 4px;line-height:1.5}
-.pl .foot b{color:var(--ink2)}
 .pl .scrim{position:fixed;inset:0;background:rgba(9,24,17,.42);display:flex;align-items:flex-start;justify-content:center;padding:32px 14px;z-index:60;overflow:auto}
 .pl .modal{background:var(--card);border-radius:16px;width:100%;max-width:620px;box-shadow:0 24px 60px rgba(6,20,13,.34);overflow:hidden}
 .pl .mhead{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
@@ -1525,8 +1528,16 @@ const CSS = `
 .pl .credf{display:flex;flex-direction:column;gap:4px;min-width:140px}
 .pl .credf.grow{flex:1;min-width:200px}
 .pl .credf span{font-size:10px;font-weight:800;letter-spacing:.09em;color:var(--ink3)}
-.pl .credf em{font-style:normal;font-weight:600;letter-spacing:0;color:var(--ink3);opacity:.85;margin-left:5px}
-.pl .credf input{border:1px solid var(--line2);border-radius:9px;padding:9px 11px;font:inherit;font-size:13.5px;background:#fff;min-height:40px;width:100%}
+/* --line, NOT --line2. The .pl palette above defines --line and has never defined --line2; this
+   line arrived from MatchPanel, which does. An undefined custom property makes the whole border
+   shorthand invalid at computed-value time (NO BACKTICKS IN THIS COMMENT: it lives inside the CSS
+   template literal below, and one here is a parse error), so it fell back to border-style:none and
+   these two inputs rendered with NO BORDER AT ALL — measured live as border-width 0px. They are
+   the only place in Clubhouse that moves money and they looked like static text. Ryan: "Need to
+   outline the boxes for credits so its clear you make edits there you cant tell where you type". */
+.pl .credf input{border:1px solid var(--line);border-radius:9px;padding:9px 11px;font:inherit;font-size:13.5px;background:#fff;min-height:40px;width:100%}
+.pl .credf input:focus{outline:2px solid var(--focus);outline-offset:-1px;background:#fff}
+.pl .credf input:disabled{background:var(--bg);color:var(--ink3);border-color:var(--line)}
 .pl .credf input:disabled{background:#f4f7f5;color:var(--ink3);cursor:not-allowed}
 .pl .credf input:focus{outline:2px solid var(--focus);outline-offset:-1px}
 .pl .credconseq{margin:10px 14px 0;font-size:13px;line-height:1.5;color:var(--ink);background:#eef7f1;border:1px solid #a9d3ba;border-radius:9px;padding:9px 11px;font-weight:600}

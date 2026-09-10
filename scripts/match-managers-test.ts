@@ -111,8 +111,8 @@ is("exactly three people work more than one city", people.filter((p) => p.cities
 is("the busiest works eight", Math.max(...people.map((p) => p.cities.length)), 8);
 is("never ran a match", neverRan(people), 87 - runs.size);
 
-// ── 2. THE NAME. NOTHING RENDERED SAYS "CITY MANAGER" EXCEPT THE BANNER ───────────────────────
-console.log("\nthe name: MATCH MANAGERS everywhere, and the API's word only in the banner");
+// ── 2. THE NAME. NOTHING RENDERED SAYS "CITY MANAGER" AT ALL ──────────────────────────────────
+console.log("\nthe name: MATCH MANAGERS everywhere, and the API's word nowhere on screen");
 {
   const SRC = "src/components/MatchManagersPanel.tsx";
   const src = readFileSync(SRC, "utf8");
@@ -125,19 +125,23 @@ console.log("\nthe name: MATCH MANAGERS everywhere, and the API's word only in t
   if (NEEDLE.test("they are not the city managers in Clubhouse permissions")) ok("control: the pattern finds the phrase when it is there");
   else bad("control: the pattern finds the phrase when it is there", "THE REGEX MATCHES NOTHING — every result below is meaningless");
 
-  // The banner is the one sanctioned occurrence. Cut it out, then nothing may be left.
-  const banner = noComments.match(/data-testid="mm-naming-banner"[\s\S]*?<\/div>/);
-  if (banner) ok("the naming banner is on the page");
-  else bad("the naming banner is on the page", "no mm-naming-banner in the component");
-  if (banner && NEEDLE.test(banner[0])) ok("…and it is the banner that explains the API's naming");
-  else bad("…and it is the banner that explains the API's naming", "the banner does not mention the API's word at all");
+  /* THE BANNER WAS THE ONE SANCTIONED OCCURRENCE, AND IT IS GONE (2026-09-10). Ryan cut it with
+   * the rest of the page's explanatory copy, so the rule got simpler rather than weaker: the API's
+   * word may now appear NOWHERE in the rendered markup. The fact it carried — that these are not
+   * the city managers in Clubhouse permissions — is kept as a comment on the code, which is why
+   * this check runs against `noComments` and would otherwise find it there. */
+  if (!/mm-naming-banner/.test(noComments)) ok("the naming banner is gone from the component");
+  else bad("the naming banner is gone from the component", "mm-naming-banner is still rendered");
+  if (NEEDLE.test(src) && !NEEDLE.test(noComments)) ok("…and the fact it carried survives as a comment, not as copy");
+  else bad("…and the fact it carried survives as a comment, not as copy", NEEDLE.test(noComments) ? "the phrase is still in rendered markup" : "the phrase is not in the file at all — the fact was lost, not moved");
 
   /* NO ENDPOINT STRIP HERE EITHER. It existed while the panel printed "POST /city-managers" in the
    * disabled-controls reason; the controls are live and that sentence is gone, so the strip would
    * now remove nothing and a zero from a vacuous strip proves nothing. The browser suite's positive
    * control is what caught that — see verify-match-managers.mjs. */
-  const rest = banner ? noComments.replace(banner[0], " ") : noComments;
-  const hits = rest.split("\n").map((l, i) => [i + 1, l] as const).filter(([, l]) => NEEDLE.test(l));
+  /* NOTHING TO SUBTRACT NOW EITHER — the banner that used to be cut out of this before checking is
+   * gone, so the whole rendered markup is the subject. */
+  const hits = noComments.split("\n").map((l, i) => [i + 1, l] as const).filter(([, l]) => NEEDLE.test(l));
   if (hits.length === 0) ok("no other rendered text in the panel CALLS these people 'city managers'");
   else bad("no other rendered text in the panel calls them that", hits.map(([n, l]) => `L${n}: ${l.trim()}`).join(" | "));
 

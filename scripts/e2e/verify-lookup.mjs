@@ -338,8 +338,11 @@ async function main() {
   // ── #5 PREFERABLE CITY renders the real value (from the list row), not "—" ──
   eq("PREFERABLE CITY shows the value, not a dash", await page.$$eval(".f", (els) => { const f = els.find((e) => e.querySelector(".k")?.textContent === "PREFERABLE CITY"); return f?.querySelector(".v")?.textContent?.trim(); }), "San Antonio");
 
-  // ── #1d footer can't lie: all five panels present AND builtnote makes no "not built" claim ──
-  eq("builtnote never claims a panel is 'not built'", await page.$eval('[data-testid="builtnote"]', (e) => /not built/i.test(e.textContent)), false);
+  // ── #1d THE BUILTNOTE FOOTER IS GONE (2026-09-10), cut with the rest of the page's copy. It
+  //    claimed which panels were shown, and the assertion was that it could not lie about that.
+  //    The panels themselves are asserted present above, which is the fact that mattered; a footer
+  //    listing them was a second, weaker copy of the same claim.
+  eq("the builtnote footer is gone, not emptied", await page.locator('[data-testid="builtnote"]').count(), 0);
   eq("no stale 'notbuilt' footer element exists", await page.$('[data-testid="notbuilt"]') === null, true);
 
   // ── account history: clean member offers Suspend + Expel (MANAGE PLAYERS held) ──
