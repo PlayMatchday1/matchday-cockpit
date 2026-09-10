@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   FORMATS, PITCH_OPTIONS, formatShort, recommendationReadout, missingRequired,
-  updateBody, deleteBlock, deleteConfirmed, validPhone, orphanLinks, unmappedSummary,
+  updateBody, deleteBlock, validPhone, orphanLinks, unmappedSummary,
   PHOTOS_READ_ONLY_NOTE, type Link,
 } from "@/lib/fieldsModel";
 
@@ -56,7 +56,27 @@ export default function FieldsView() {
 
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"new" | "edit">("new");
-  const [cur, setCur] = useState<Field | null>(null);
+  /* THE OPEN FIELD IS AN ID, AND THE ROW IS DERIVED FROM IT — corrected 2026-09-10.
+   *
+   * `cur` used to be useState<Field> holding a COPY taken when the row was clicked, and load()
+   * only ever called setData(). So a cover upload finished, load() refetched, data.fields got the
+   * new URL, and the panel went on rendering the object captured when the drawer opened: "LANDED —
+   * cover uploaded and attached (read-back confirmed)" printed directly under "No cover on this
+   * field". The upload worked; the read-back confirmed it; the component was looking at a snapshot.
+   * Reproduced before the fix with the upload intercepted and the payload mutated: the response
+   * carried a new cover and a second image, and the panel kept the old src and one thumbnail.
+   *
+   * DERIVING IT FIXES EVERY CALLER AT ONCE rather than patching the two upload handlers, and no
+   * future one has to remember to re-sync. CREATE IS UNAFFECTED: curId stays null there and `mode`
+   * is separate state, which is what keeps a new field's blank draft from being overwritten. */
+  const [curId, setCurId] = useState<number | null>(null);
+  /* See the note on curId. Null in create, and null if the open field vanishes from a refetch —
+   * which closes the drawer's edit-only sections rather than rendering a stale one. */
+  const cur = useMemo<Field | null>(
+    () => (curId == null ? null : (data?.fields ?? []).find((f) => f.id === curId) ?? null),
+    [data, curId],
+  );
+
   const [orig, setOrig] = useState<Draft>(blank());
   const [draft, setDraft] = useState<Draft>(blank());
   const [pitches, setPitches] = useState(1);
@@ -64,7 +84,8 @@ export default function FieldsView() {
   const [phoneIn, setPhoneIn] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ lines: string[]; bad: boolean } | null>(null);
-  const [delText, setDelText] = useState("");
+  /* WHICH REPLACED delText. The confirmation is a yes/no now, not a typing exercise. */
+  const [confirming, setConfirming] = useState(false);
   /* PHOTO WRITES ARE THEIR OWN BUSY AND THEIR OWN MESSAGE, separate from Save's. They do not
    * stage and they do not ride the field PUT — an upload is a different endpoint with a different
    * verdict, and mixing it into the save bar would make one message stand for two writes. */
@@ -95,12 +116,18 @@ export default function FieldsView() {
     return t ? { Authorization: `Bearer ${t}`, "Content-Type": "application/json" } : null;
   }, []);
 
-  const load = useCallback(async () => {
-    const h = await headers(); if (!h) return;
+  /* IT RETURNS THE PAYLOAD, and that is not decoration. The post-save re-seed below used to do
+   *   await load(); const f = (data?.fields ?? []).find(...)
+   * where `data` is the value captured when that handler was created — i.e. from BEFORE the load
+   * it had just awaited. It re-seeded `orig` from the pre-save copy, so the dirty diff was measured
+   * against stale values. Returning the fetched payload gives the caller the rows it actually just
+   * read; `cur` itself no longer needs re-syncing at all, because it is derived. */
+  const load = useCallback(async (): Promise<Payload | null> => {
+    const h = await headers(); if (!h) return null;
     const r = await fetch("/api/fields", { headers: h });
     const j = await r.json();
-    if (!r.ok) { setErr(j.error ?? "load failed"); return; }
-    setErr(null); setData(j as Payload);
+    if (!r.ok) { setErr(j.error ?? "load failed"); return null; }
+    setErr(null); setData(j as Payload); return j as Payload;
   }, [headers]);
   useEffect(() => { void load(); }, [load]);
 
@@ -144,17 +171,17 @@ export default function FieldsView() {
   }, [headers]);
 
   const openNew = () => {
-    setMode("new"); setCur(null); setOrig(blank()); setDraft(blank());
-    setPitches(1); setPhones([]); setPhoneIn(""); setResult(null); setDelText("");
+    setMode("new"); setCurId(null); setOrig(blank()); setDraft(blank());
+    setPitches(1); setPhones([]); setPhoneIn(""); setResult(null); setConfirming(false);
     setOpen(true);
   };
   const openEdit = (f: Field) => {
-    setMode("edit"); setCur(f); setOrig(draftOf(f)); setDraft(draftOf(f));
-    setPitches(1); setPhoneIn(""); setResult(null); setDelText("");
+    setMode("edit"); setCurId(f.id ?? null); setOrig(draftOf(f)); setDraft(draftOf(f));
+    setPitches(1); setPhoneIn(""); setResult(null); setConfirming(false);
     setPhones([]); void loadPhones(f.id);
     setOpen(true);
   };
-  const close = () => { setOpen(false); setCur(null); setResult(null); };
+  const close = () => { setOpen(false); setCurId(null); setResult(null); };
 
   const set = (k: string, v: unknown) => setDraft((d) => ({ ...d, [k]: v }));
 
@@ -193,7 +220,7 @@ export default function FieldsView() {
         lines.push(`Field created — ID ${fieldId}.`);
         // THE DRAWER IS NOW IN EDIT MODE ON A REAL ID, whatever happens next.
         const row: Field = { ...(j.row as Field), matchCount: 0, images: (j.row?.images ?? []) };
-        setMode("edit"); setCur(row); setOrig(draftOf(row)); setDraft(draftOf(row));
+        setMode("edit"); setCurId(row.id ?? null); setOrig(draftOf(row)); setDraft(draftOf(row));
       } else if (diffN > 0) {
         const r = await fetch(`/api/fields?id=${cur!.id}`, {
           method: "PUT", headers: h, body: JSON.stringify({ orig, draft }),
@@ -215,8 +242,9 @@ export default function FieldsView() {
         lines.push(PHOTOS_READ_ONLY_NOTE);
       }
       setResult({ lines, bad });
-      await load();
-      if (mode === "edit" && !bad) { const f = (data?.fields ?? []).find((x) => x.id === cur?.id); if (f) setOrig(draftOf(f)); }
+      const fresh = await load();
+      // FROM WHAT load JUST READ, not from the closure's older `data`. See the note on load().
+      if (mode === "edit" && !bad) { const f = (fresh?.fields ?? []).find((x) => x.id === curId); if (f) setOrig(draftOf(f)); }
     } finally { setBusy(false); }
   };
 
@@ -259,7 +287,7 @@ export default function FieldsView() {
     setBusy(true);
     const h = await headers();
     if (h) {
-      const r = await fetch(`/api/fields?id=${cur.id}&confirm=${encodeURIComponent(delText)}`, { method: "DELETE", headers: h });
+      const r = await fetch(`/api/fields?id=${cur.id}&confirm=${encodeURIComponent(cur.title ?? "")}`, { method: "DELETE", headers: h });
       const j = await r.json();
       setResult({ lines: [j.verdict === "LANDED" ? "Field deleted." : (j.error ?? `Delete ${j.verdict}.`)], bad: j.verdict !== "LANDED" });
       if (j.verdict === "LANDED") { await load(); close(); }
@@ -501,13 +529,18 @@ export default function FieldsView() {
                     ? <img src={cur.cover} alt="" loading="lazy" />
                     : <span className="fv-hint">No cover on this field.</span>}
                 </div>
+                {/* REPLACE-ONLY, AND THERE IS NO WAY BACK — API behaviour, not a scope cut, and it
+                    was a paragraph on screen until 2026-09-10. Kept here because somebody will
+                    otherwise rediscover it as a bug:
+                      · A COVER CAN ONLY BE REPLACED, never removed. Every query in the Retool
+                        export was searched; the only image delete is deleteImageFromField, which
+                        acts on GALLERY rows. There is no delete-cover, so uploading one to a field
+                        that has none cannot be undone from anywhere.
+                      · A GALLERY PHOTO CANNOT BE PROMOTED TO COVER. PUT /admin/fields/{id} has no
+                        cover key; the two sets are written by different uploads and, measured over
+                        all 44 production fields, do not overlap. */}
                 <PhotoUpload fieldId={cur.id} kind="cover" label={cur.cover ? "Replace cover" : "Add cover"}
                   headers={headers} onDone={() => void load()} />
-                {/* REPLACE-ONLY, and that is the API, not a scope cut. Every query in the Retool
-                    export was searched: the only image delete is deleteImageFromField, which acts
-                    on gallery rows. There is no delete-cover. */}
-                <p className="fv-hint">A cover is replaced by uploading a new one. There is no
-                  remove-cover in the API, and a gallery photo cannot be promoted to cover.</p>
               </Sect>
 
               <Sect title="Photos">
@@ -535,22 +568,38 @@ export default function FieldsView() {
 
           {mode === "edit" && (
             <Sect title="Danger zone">
+              {/* THE REFUSAL IS A FACT ABOUT THIS FIELD and stays. delBlock.reason carries the
+                  count — "Cannot delete — 412 matches" — and that is the only thing standing
+                  between a click and a soft-deleted row that live matches still point at, because
+                  the API does not check. The paragraph explaining it came off on 2026-09-10. */}
               <div className="fv-locked" data-testid="fv-delete-block">
                 <span>⚠</span>
-                <div>
-                  <b>{delBlock.ok ? "This field has never hosted a match" : delBlock.reason}</b>
-                  Deleting is a SOFT delete upstream and the API does not check for matches — it would leave them pointing at a field nothing renders. Clubhouse refuses that.
-                  {!data?.deleteEnabled && <> Deletion is switched off for production in this pass.</>}
-                </div>
+                <div><b>{delBlock.ok ? "This field has never hosted a match" : delBlock.reason}</b></div>
               </div>
               {delBlock.ok && (
-                <div className="fv-addrow" style={{ marginTop: 10 }}>
-                  <input data-testid="fv-del-confirm" value={delText} onChange={(e) => setDelText(e.target.value)}
-                    placeholder={`Type “${cur?.title}” to confirm`} />
-                  <button className="fv-danger" data-testid="fv-delete"
-                    disabled={!data?.deleteEnabled || busy || !deleteConfirmed(delText, cur?.title ?? "")}
-                    onClick={() => void del()}>Delete field</button>
-                </div>
+                /* ONE QUESTION AND TWO BUTTONS, the shape approved for reduce-to-2-teams in
+                   1301b20. The typed-name box is gone: Ryan overruled it — "just give me confirm
+                   keep very simple no explantory text".
+                   THE ROUTE STILL REQUIRES THE NAME. /api/fields DELETE compares ?confirm= to the
+                   field's exact title and 400s otherwise, deliberately, because a client-side
+                   confirmation is a courtesy. The client supplies it from the open row now instead
+                   of making somebody type it. */
+                confirming ? (
+                  <div className="fv-confirm" data-testid="fv-del-ask">
+                    <b>Delete {cur?.title}?</b>
+                    <div className="fv-cacts">
+                      <button className="fv-chip" data-testid="fv-del-cancel" onClick={() => setConfirming(false)}>Cancel</button>
+                      <button className="fv-danger" data-testid="fv-delete"
+                        disabled={!data?.deleteEnabled || busy}
+                        onClick={() => void del()}>Delete</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 10 }}>
+                    <button className="fv-danger" data-testid="fv-del-open"
+                      disabled={!data?.deleteEnabled || busy} onClick={() => setConfirming(true)}>Delete field</button>
+                  </div>
+                )
               )}
             </Sect>
           )}
@@ -717,6 +766,10 @@ const CSS = `
 .fv-bar{display:flex;gap:9px;align-items:center;flex-wrap:wrap;padding:12px 18px;border-bottom:1px solid #EFF3EF}
 .fv-q{flex:1;min-width:220px;border:1px solid #E4EAE5;border-radius:999px;padding:7px 14px;font:inherit;font-size:13px}
 .fv-lbl{font-size:10.5px;font-weight:700;letter-spacing:.09em;color:#93A49A;text-transform:uppercase}
+/* THE DELETE CONFIRM — one question, two buttons, no prose. */
+.fv-confirm{margin-top:10px;border:1px solid #E6C4BC;background:#FDF4F2;border-radius:10px;padding:12px 14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.fv-confirm b{font-size:13.5px;color:#7A2B1C}
+.fv-cacts{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
 .fv-chip{border:1px solid #E4EAE5;background:#fff;border-radius:999px;padding:6px 13px;font:inherit;font-size:13px;font-weight:600;color:#3C4F44;cursor:pointer}
 .fv-chip .n{color:#6E8076;font-weight:700;font-size:12px;margin-left:6px}
 .fv-chip.on{background:#0F3323;border-color:#0F3323;color:#fff}

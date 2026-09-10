@@ -172,11 +172,15 @@ export function deleteBlock(matchCount: number): { ok: boolean; reason: string }
   return { ok: true, reason: "Delete field" };
 }
 
-/** TYPE THE NAME. A destructive, irreversible-from-here action does not happen on one click, and
- *  the thing typed is the thing being destroyed rather than the word DELETE — so the confirmation
- *  cannot be satisfied without looking at which field is open. */
-export const deleteConfirmed = (typed: string, name: string) =>
-  typed.trim().length > 0 && typed.trim() === String(name ?? "").trim();
+/* deleteConfirmed() STOOD HERE and is gone (2026-09-10). It required the operator to TYPE the
+ * field's exact name, on the argument that a destructive action should not happen on one click and
+ * that typing the thing being destroyed proves you looked at which field is open. Ryan overruled
+ * it — "Dont make me type bob jone park field to delete just give me confirm keep very simple" —
+ * and the argument goes with the function rather than being left here to contradict the code.
+ *
+ * WHAT DID NOT CHANGE: deleteBlock above still refuses a field that has ever hosted a match, which
+ * is the guard that matters, and /api/fields DELETE still compares ?confirm= to the exact title
+ * server-side. The client supplies that from the open row now instead of from a text box. */
 
 /* ── VENUE MAPPING ─────────────────────────────────────────────────────────────────────────────
  * fin_venue_fields is OURS: fin_venue_id, mdapi_field_id, field_title_at_link, created_at,

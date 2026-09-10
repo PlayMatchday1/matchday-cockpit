@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import {
   FORMATS, formatTotal, formatShort, formatLabel, recommendationReadout,
   createBody, updateBody, CREATE_KEYS, UPDATE_KEYS, SERVER_REQUIRED, missingRequired,
-  coerceZip, deleteBlock, deleteConfirmed, validPhone, isMapped, unmappedSummary, orphanLinks,
+  coerceZip, deleteBlock, validPhone, isMapped, unmappedSummary, orphanLinks,
   phoneAuditNote, IMAGE_HOST,
 } from "../src/lib/fieldsModel";
 
@@ -141,11 +141,10 @@ console.log("\ndelete — Clubhouse refuses what the API allows");
   is("a field with no matches may be deleted", deleteBlock(0).ok, true);
 
   // TYPE THE NAME. Not the word DELETE — the thing being destroyed.
-  is("the exact name confirms", deleteConfirmed("Onion Creek", "Onion Creek"), true);
-  is("a near miss does not", deleteConfirmed("Onion creek", "Onion Creek"), false);
-  is("an empty box does not", deleteConfirmed("", "Onion Creek"), false);
-  is("…and neither does the word DELETE", deleteConfirmed("DELETE", "Onion Creek"), false);
-  is("surrounding whitespace is forgiven", deleteConfirmed("  Onion Creek  ", "Onion Creek"), true);
+  /* THE TYPED-NAME ASSERTIONS STOOD HERE, five of them, and went with deleteConfirmed on
+   * 2026-09-10 — Ryan replaced the type-the-name box with a one-question confirm. They are not
+   * restored against a function that no longer exists; what they were really protecting is the
+   * refusal above, which is untouched and still asserted. */
 }
 
 console.log("\nvenue mapping, both directions");
