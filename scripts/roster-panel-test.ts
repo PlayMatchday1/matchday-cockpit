@@ -539,5 +539,60 @@ console.log("\nthe Gameday drawer gives the open match most of the window");
   yes("the dock offset travels to the stylesheet", /\["--panel-right" as string\]: `\$\{right\}px`/.test(sp));
 }
 
+console.log("\nthe add row: no + Fake, and the bulk control says what it does");
+{
+  const v = readFileSync("src/components/MatchPanel.tsx", "utf8");
+  const css = v.slice(v.indexOf("const CSS = "));
+  /* COMMENTS STRIPPED FOR THE ABSENCE CHECK BELOW. The comment recording that the fake branch was
+   * removed naturally quotes the strings it removed, and an assertion that matched its own
+   * explanation would go red for the right change. What must be gone is the CODE. */
+  const code = v.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  /* THE + FAKE BUTTON IS GONE (2026-09-10). It staged a fake and then made you pick a team, so the
+   * control meant to add one fake quickly cost two clicks and a decision. */
+  is("nothing can stage a fake add any more",
+    ["mp-add-fake\"", "pendingAdd.fake", "fake?: boolean", "+ Fake<", "isFake"].filter((t) => code.includes(t)), []);
+  yes("control: the strings really were in the file before (the comment still names them)",
+    /fake\?: boolean/.test(v) && !/fake\?: boolean/.test(code), "otherwise this absence check proves nothing");
+  yes("control: the real-player add flow is still there", /setPendingAdd\(\{ id: r\.id, name: r\.name \}\)/.test(v) && /kind: "add", playerId: pendingAdd\.id/.test(v));
+  yes("…and its per-team buttons still name the player", /\+ Add \{pendingAdd\.name\} here/.test(v));
+
+  /* BOTH FIELDS IN THE ROW CARRY A LABEL. This row was the only one in the panel without them. */
+  yes("the search box has a label instead of a placeholder doing a label's job",
+    /<span className="mp-lb">ADD A PLAYER<\/span>/.test(v) && !/placeholder="Add a player/.test(v));
+  yes("the fakes control has a label", /<span className="mp-lb">ADD FAKE PLAYERS<\/span>/.test(v));
+  yes("…and they share a baseline", /\.mp-addtop\{[^}]*align-items:flex-end/.test(css));
+
+  /* THE FIELD DEFAULTS TO 1 and the button reads it back, so the number is never a mystery. */
+  yes("the field defaults to 1", /useState\("1"\)/.test(v));
+  yes("the placeholder N is gone", !/placeholder="N"/.test(v));
+  yes("the button reads the field back, singular and plural",
+    /Add \{bulkN\} fake\{bulkN === 1 \? "" : "s"\}/.test(v));
+  yes("…from ONE reading of the field, so the label cannot promise what the request will not send",
+    /const bulkN = Number\(bulkFakes\) \|\| 0;/.test(v));
+  yes("it is still disabled at empty or zero", /disabled=\{!!opBusy \|\| !\(bulkN > 0\)\}/.test(v));
+
+  /* THE STEPPER IS THE MIN PLAYERS ONE, not a second implementation. */
+  yes("it reuses .mp-step rather than forking a stepper", /className="mp-step tight"/.test(v));
+  yes("…and .tight is a modifier on the same base rules", /\.mp-step\.tight\{/.test(css) && /\.mp-step\.tight button\{flex:0 0 40px/.test(css));
+  yes("…40px arrows, from the shared .mp-step button rule", /\.mp-step button\{[^}]*min-width:40px;min-height:40px/.test(css));
+  yes("…and a 46px number", /\.mp-step\.tight input\.mp-step-in\{flex:0 0 46px;width:46px/.test(css));
+  yes("minus is disabled at 1 and never goes below it",
+    /disabled=\{!!opBusy \|\| bulkN <= 1\}/.test(v) && /setBulkFakes\(String\(Math\.max\(1, bulkN - 1\)\)\)/.test(v));
+  yes("plus has no ceiling — only the endpoint knows one", /onClick=\{\(\) => setBulkFakes\(String\(bulkN \+ 1\)\)\}/.test(v));
+
+  /* THE WRITE IS UNTOUCHED. */
+  yes("the request is still one bulk-fake carrying totalFakes",
+    /rosterPost\(\{ kind: "bulk-fake", totalFakes: n \}/.test(v));
+  yes("…and the measured API note survives", /a lower "total" ADDED two/.test(v));
+
+  /* THE ROW SURVIVES A NARROW PANEL. */
+  yes("the search box may shrink to 180px and then the row wraps",
+    /\.mp-addf\{flex:1 1 180px/.test(css) && /\.mp-addtop\{[^}]*flex-wrap:wrap/.test(css));
+  yes("the results dropdown is anchored to the row, not to a hard offset",
+    /\.mp-addres\{position:absolute;left:0;right:0;top:calc\(100% \+ 4px\)/.test(css));
+  yes("…and the dead .mp-bulkin rule went with the box it styled", !/\.mp-bulkin\{/.test(css));
+}
+
 console.log(`\nroster-panel: ${pass} passed, ${fails.length} failed`);
 if (fails.length) { for (const f of fails) console.log(`  FAILED: ${f}`); process.exit(1); }

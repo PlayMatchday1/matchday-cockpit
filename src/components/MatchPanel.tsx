@@ -195,8 +195,17 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
   const [writeResults, setWriteResults] = useState<{ label: string; verdict: "LANDED" | "FAILED" | "NOT APPLIED" | "UNKNOWN"; detail?: string }[]>([]);
   const [q, setQ] = useState("");
   const [results, setResults] = useState<{ id: number; name: string }[]>([]);
-  const [pendingAdd, setPendingAdd] = useState<{ id: number | null; name: string; fake?: boolean } | null>(null);
-  const [bulkFakes, setBulkFakes] = useState("");
+  /* pendingAdd IS THE REAL-PLAYER FLOW ONLY. It used to carry `fake?: boolean`, set by a "+ Fake"
+   * button that staged a fake and then made you pick a team. Ryan cut it on 2026-09-10: "the whole
+   * point of the other button was to add 1 very quickly but doesnt work because you have to select
+   * team so mine as well just get rid of that". The bulk control posts immediately and needs no
+   * team, so it is the only way to add a fake from this panel now.
+   *
+   * ONE CAPABILITY WENT WITH IT, DELIBERATELY: you can no longer choose which team a fake lands on.
+   * The API places them. That is the accepted trade — the chooser is exactly why the quick control
+   * went unused — and it is not a bug to be rediscovered. */
+  const [pendingAdd, setPendingAdd] = useState<{ id: number; name: string } | null>(null);
+  const [bulkFakes, setBulkFakes] = useState("1");
   // ── CANCEL (Part C) — the rarest, heaviest, irreversible action. Reaches everyone at once and
   // cannot be undone, so the friction is deliberately the opposite of the chat composer: live numbers
   // read at confirm time + the match NAME typed, not a yes/no.
@@ -298,14 +307,12 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
 
   const addPlayer = async (teamNumber: number) => {
     if (!roster || !pendingAdd || opBusy) return;
-    const isFake = pendingAdd.fake === true;
-    const nm = isFake ? "fake player" : pendingAdd.name;
+    const nm = pendingAdd.name;
     const n = firstOpenSlot(teamNumber);
-    // fakes are their own endpoint (add-fake), never the real-player add — they carry no playerId.
-    const op = isFake
-      ? { kind: "add-fake", team: teamNumber, playerNumber: n }
-      : { kind: "add", playerId: pendingAdd.id, team: teamNumber, playerNumber: n };
-    const r = await rosterPost(op, isFake ? "Add fake player" : `Add ${nm}`);
+    /* REAL PLAYERS ONLY. The add-fake branch was here and is gone with the "+ Fake" button; the
+     * roster route still accepts kind:"add-fake" and keeps its change-log mapping, because that is
+     * server behaviour and nothing in this panel is its only reason to exist. */
+    const r = await rosterPost({ kind: "add", playerId: pendingAdd.id, team: teamNumber, playerNumber: n }, `Add ${nm}`);
     if (await afterOp(r, `${nm} added to team ${teamNumber}: saved (re-read confirmed).`, `added ${nm} to team ${teamNumber}`)) { setPendingAdd(null); setQ(""); setResults([]); }
   };
   /* BULK FAKES — kind:"bulk-fake" → POST /batch/fake-players {totalFakes}.
@@ -317,6 +324,9 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
    *     8 fakes + totalFakes:0  -> 403 INVALID_TOTAL_FAKES
    * The button says "Add fakes" and the toast says "added" because that is what it does. There is
    * NO endpoint that lowers a fake count; reducing is one DELETE per user-match row. */
+  /* THE FIELD, AS A NUMBER, read by the stepper, the button label and the write. One reading, so
+   * the button cannot promise a count the request does not send. */
+  const bulkN = Number(bulkFakes) || 0;
   const addFakesBulk = async () => {
     if (!roster || opBusy) return;
     const n = Number(bulkFakes);
@@ -1447,20 +1457,48 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
 
               {/* ADD — the one control here that still fires on click. It says so on itself. */}
               <div className="mp-addrow">
+                {/* TWO LABELLED FIELDS ON ONE BASELINE. This row was the only one in the panel with
+                    no labels: a bare search placeholder doing a label's job, and a bare "N" box that
+                    read as a mystery. Both now carry .mp-lb like every other field. */}
                 <div className="mp-addtop">
-                  <input data-testid="mp-add-search" className="mp-addsearch" value={q} placeholder="Add a player: search name or email" onChange={(e) => setQ(e.target.value)} />
-                  <button type="button" className="mp-mini" data-testid="mp-add-fake" disabled={!!opBusy} onClick={() => { setPendingAdd({ id: null, name: "Fake player", fake: true }); setQ(""); setResults([]); }}>+ Fake</button>
-                  <span className="mp-bulk">
-                    <input data-testid="mp-bulk-fakes" className="mp-bulkin" inputMode="numeric" placeholder="N" value={bulkFakes} onChange={(e) => setBulkFakes(e.target.value.replace(/[^0-9]/g, ""))} aria-label="Number of fake players to add in bulk" />
-                    <button type="button" className="mp-mini" data-testid="mp-add-fakes-bulk" disabled={!!opBusy || !(Number(bulkFakes) > 0)} onClick={() => void addFakesBulk()}>Add fakes</button>
-                  </span>
+                  <label className="mp-f mp-addf">
+                    <span className="mp-lb">ADD A PLAYER</span>
+                    <input data-testid="mp-add-search" className="mp-addsearch" value={q} onChange={(e) => setQ(e.target.value)} />
+                  </label>
+                  {/* THE ONLY WAY TO ADD A FAKE FROM THIS PANEL, and the only action here that lands
+                      WITHOUT Save — no staging, no Revert. See addFakesBulk for the measured API
+                      behaviour: totalFakes ADDS, whatever its name says. */}
+                  <div className="mp-f mp-bulkf">
+                    <span className="mp-lb">ADD FAKE PLAYERS</span>
+                    <span className="mp-bulk">
+                      <span className="mp-step tight">
+                        <button type="button" data-testid="mp-fakes-down" aria-label="One fewer fake"
+                          disabled={!!opBusy || bulkN <= 1}
+                          onClick={() => setBulkFakes(String(Math.max(1, bulkN - 1)))}>&minus;</button>
+                        <input data-testid="mp-bulk-fakes" className="mp-step-in" inputMode="numeric"
+                          aria-label="Number of fake players to add"
+                          value={bulkFakes} onChange={(e) => setBulkFakes(e.target.value.replace(/[^0-9]/g, ""))} />
+                        {/* NO UPPER BOUND. The endpoint refuses when the match is full, with
+                            403 NO_SPOTS_LEFT, and it is the only thing that knows the ceiling. */}
+                        <button type="button" data-testid="mp-fakes-up" aria-label="One more fake"
+                          disabled={!!opBusy}
+                          onClick={() => setBulkFakes(String(bulkN + 1))}>+</button>
+                      </span>
+                      {/* THE BUTTON READS THE FIELD BACK, which is what makes the number mean
+                          something, and fixes the singular at the same time. */}
+                      <button type="button" className="mp-mini mp-bulkgo" data-testid="mp-add-fakes-bulk"
+                        disabled={!!opBusy || !(bulkN > 0)} onClick={() => void addFakesBulk()}>Add {bulkN} fake{bulkN === 1 ? "" : "s"}</button>
+                    </span>
+                  </div>
+                  {/* ANCHORED TO THE ROW, NOT TO A MEASURED OFFSET. This used to sit at a hard
+                      top:52px, which the labels above would have pushed it straight through. */}
+                  {results.length > 0 && (
+                    <div className="mp-addres">{results.map((r) => (
+                      <button key={r.id} type="button" data-testid="mp-add-result" onClick={() => { setPendingAdd({ id: r.id, name: r.name }); setQ(""); setResults([]); }}>{r.name}</button>
+                    ))}</div>
+                  )}
                 </div>
-                {results.length > 0 && (
-                  <div className="mp-addres">{results.map((r) => (
-                    <button key={r.id} type="button" data-testid="mp-add-result" onClick={() => { setPendingAdd({ id: r.id, name: r.name }); setQ(""); setResults([]); }}>{r.name}</button>
-                  ))}</div>
-                )}
-                {pendingAdd && <span className="mp-addpending" data-testid="mp-add-pending">Adding <b>{pendingAdd.fake ? "a FAKE player" : pendingAdd.name}</b> · pick a team →<button type="button" className="mp-x" onClick={() => setPendingAdd(null)}>cancel</button></span>}
+                {pendingAdd && <span className="mp-addpending" data-testid="mp-add-pending">Adding <b>{pendingAdd.name}</b> · pick a team →<button type="button" className="mp-x" onClick={() => setPendingAdd(null)}>cancel</button></span>}
               </div>
 
               {!!roster.promo?.spots && (
@@ -1506,7 +1544,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
                           aria-label={`Rename team ${t.teamNumber}`} onChange={(e) => stageRename(t.id, e.target.value)} />
                         {renamePending && <span className="mp-pendtag" data-testid={`mp-rename-pending-${t.teamNumber}`}>PENDING</span>}
                       </div>
-                      {pendingAdd && <button type="button" data-testid={`mp-add-to-${t.teamNumber}`} className="mp-addto" disabled={!!opBusy} onClick={() => void addPlayer(t.teamNumber)}>+ Add {pendingAdd.fake ? "fake player" : pendingAdd.name} here</button>}
+                      {pendingAdd && <button type="button" data-testid={`mp-add-to-${t.teamNumber}`} className="mp-addto" disabled={!!opBusy} onClick={() => void addPlayer(t.teamNumber)}>+ Add {pendingAdd.name} here</button>}
                       <ul className="mp-players">
                         {rows.length === 0 && <li className="mp-empty">no players</li>}
                         {rows.map(({ row: p, spot, moved, removed, collision }) => (
@@ -2213,6 +2251,24 @@ const CSS = `
   border-left:1px solid var(--line2);border-right:1px solid var(--line2);
   border-radius:0;text-align:center;font-weight:800;background:transparent;
   min-height:0;align-self:stretch;padding:9px 4px}
+/* THE SAME STEPPER, SIZED TO ITS CONTENT. Identical to .full except the group does not stretch and
+   the number is a fixed 46px: this one sits beside a button in a row that also holds the search
+   box, so a 100% width would push that box out. Do not fork a third stepper. */
+/* 40px IS THE INNER BUTTON, NOT THE GROUP. .full sets height:40px on the group and min-height:0 on
+   the buttons, which leaves the arrows 38px once the group's 1px borders are taken off — measured.
+   Here the group is left to size itself so the arrows are a true 40px touch target and the group
+   comes out 42px, which flex-end alignment absorbs against the 40px search box beside it. */
+.mp-step.tight{display:inline-flex;min-height:40px}
+.mp-step.tight button{flex:0 0 40px;align-self:stretch;min-height:40px}
+.mp-step.tight input.mp-step-in{flex:0 0 46px;width:46px;min-height:40px;border:0;
+  border-left:1px solid var(--line2);border-right:1px solid var(--line2);
+  border-radius:0;text-align:center;font-weight:800;background:transparent;
+  align-self:stretch;padding:9px 4px}
+/* THE WHOLE ROW IS 42px. The stepper group is 40px of button plus its own 1px borders, so matching
+   it is what puts the two .mp-lb labels on one baseline — measured at 1912 vs 1910 before this.
+   TWO CLASSES, NOT ONE: .mp-mini sets min-height:34px and is declared LATER in this sheet, so a
+   bare .mp-bulkgo lost the tie on source order. */
+.mp-mini.mp-bulkgo{min-height:42px}
 .mp-rel{display:grid;grid-template-columns:repeat(5,1fr);gap:9px;border:1px solid var(--line);border-radius:11px;padding:11px;background:#fbfdfc}
 .mp-relcol{display:block;min-width:0;text-align:center}
 .mp-relmk{display:block;font-size:10.5px;font-weight:800;letter-spacing:.09em;color:var(--ink2);margin-bottom:6px}
@@ -2266,11 +2322,19 @@ const CSS = `
 .mp-optoast{margin:11px 13px 0;font-size:12px;padding:8px 11px;border-radius:8px;background:#e6f3ea;border:1px solid #a9d3ba;color:#14512f}
 .mp-optoast.bad{background:#fbe7e4;border-color:#e6b0a8;color:#8a2018}
 .mp-addrow{position:relative;padding:10px 0 2px}
-.mp-addtop{display:flex;gap:7px;align-items:center}
-.mp-addsearch{flex:1;min-width:0;border:1px solid var(--line2);border-radius:9px;padding:9px 11px;font:inherit;font-size:13.5px;background:#fff;min-height:40px}
-.mp-bulk{display:inline-flex;gap:5px;align-items:center;flex:0 0 auto}
-.mp-bulkin{width:48px;text-align:center;border:1px solid var(--line2);border-radius:8px;padding:7px 4px;font:inherit;font-size:13px;background:#fff;min-height:36px}
-.mp-addres{position:absolute;left:0;right:0;top:52px;z-index:20;background:#fff;border:1px solid var(--line2);border-radius:9px;box-shadow:0 8px 22px rgba(10,40,26,.16);overflow:hidden}
+/* THE ROW WRAPS RATHER THAN CRUSHING THE SEARCH BOX. The fakes group is a fixed ~244px; the search
+   box may shrink to 180px and then the group drops to a second line instead of squeezing it to
+   nothing. align-items:flex-end keeps both .mp-lb labels on one baseline. */
+.mp-addtop{position:relative;display:flex;flex-wrap:wrap;gap:7px 7px;align-items:flex-end}
+/* .mp input.mp-addsearch, NOT .mp-addsearch. The blanket .mp input rule sets min-height:40px at
+   specificity 0,1,1 and this file already documents that trap beside the checkbox. A bare class
+   loses to it and the box stayed 40px while the stepper beside it was 42 — measured. */
+.mp input.mp-addsearch{display:block;width:100%;min-width:0;border:1px solid var(--line2);border-radius:9px;padding:9px 11px;font:inherit;font-size:13.5px;background:#fff;min-height:42px}
+.mp-bulk{display:inline-flex;gap:6px;align-items:center;flex:0 0 auto}
+.mp-addf{flex:1 1 180px;min-width:0}
+.mp-bulkf{flex:0 0 auto}
+/* .mp-bulkin WAS HERE. The bare N box it styled is now the stepper's .mp-step-in. */
+.mp-addres{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:20;background:#fff;border:1px solid var(--line2);border-radius:9px;box-shadow:0 8px 22px rgba(10,40,26,.16);overflow:hidden}
 .mp-addres button{display:block;width:100%;text-align:left;border:0;background:#fff;padding:9px 12px;font:inherit;font-size:13px;border-bottom:1px solid var(--line);cursor:pointer}
 .mp-addres button:last-child{border-bottom:0}.mp-addres button:hover{background:#eef4f1}
 .mp-addpending{display:inline-flex;align-items:center;gap:7px;margin-top:8px;font-size:12px;color:var(--ink2)}
@@ -2531,7 +2595,7 @@ const CSS = `
      line under it. */
   .mp-addtop{display:grid;grid-template-columns:1fr;gap:6px}
   .mp-addtop .mp-bulk{display:grid;grid-template-columns:1fr auto;gap:6px}
-  .mp-addtop>.mp-mini,.mp-addtop .mp-bulk .mp-mini{min-height:38px}
+  .mp-addtop .mp-bulk .mp-mini{min-height:42px}   /* was 38px, and 0,3,0 beats .mp-mini.mp-bulkgo */
 
   /* THE TEAM NAME IS THE HEADER. A full-width text box under a header that already says the name
      spent a whole row restating it. The static name hides and the input takes its place on the

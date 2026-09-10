@@ -590,15 +590,14 @@ async function main() {
   await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="mp-player"]')].some((e) => e.textContent.includes("New Player")), null, { timeout: 6000 });
   eq("gate7a: add fires exactly one roster request, zero to the match endpoint", { add: rosterPosts.filter((o) => o.kind === "add").length, puts: puts.length }, { add: 1, puts: 0 });
 
-  delete rosterStates["17494"]; rosterPosts = []; puts = [];
-  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
-  await page.click('[data-testid="mp-add-fake"]');
-  await page.waitForSelector('[data-testid="mp-add-to-1"]', { timeout: 4000 });
-  await page.click('[data-testid="mp-add-to-1"]');
-  await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="mp-player"]')].some((e) => e.getAttribute("data-fake") === "1" && !!e.querySelector('[data-testid="mp-fake-tag"]') && /Fake player/.test(e.textContent || "")), null, { timeout: 6000 });
-  eq("gate7f: add-fake fires exactly one add-fake request (no real add, none to the match endpoint) and the new player is marked FAKE",
-    { fake: rosterPosts.filter((o) => o.kind === "add-fake").length, realAdd: rosterPosts.filter((o) => o.kind === "add").length, puts: puts.length }, { fake: 1, realAdd: 0, puts: 0 });
+  // GATE 7f WAS THE STAGED-FAKE ADD, and it went with the "+ Fake" button on 2026-09-10. That
+  // button staged a fake and then made you pick a team, which is why it went unused; adding a fake
+  // is now the bulk control below, which posts immediately and lets the API place them. The
+  // assertion is not restored against a button that no longer exists — gate7g is the fake path now,
+  // and gate7h pins that nothing can stage a fake any more.
+  eq("gate7f: nothing in the panel can stage a fake add",
+    { addFakeButton: await page.$$eval('[data-testid="mp-add-fake"]', (n) => n.length),
+      stagedFakePosts: rosterPosts.filter((o) => o.kind === "add-fake").length }, { addFakeButton: 0, stagedFakePosts: 0 });
 
   delete rosterStates["17494"]; rosterPosts = []; puts = [];
   await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
