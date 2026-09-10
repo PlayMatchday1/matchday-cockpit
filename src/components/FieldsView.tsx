@@ -62,7 +62,6 @@ export default function FieldsView() {
   const [pitches, setPitches] = useState(1);
   const [phones, setPhones] = useState<Phone[]>([]);
   const [phoneIn, setPhoneIn] = useState("");
-  const [staged, setStaged] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ lines: string[]; bad: boolean } | null>(null);
   const [delText, setDelText] = useState("");
@@ -146,12 +145,12 @@ export default function FieldsView() {
 
   const openNew = () => {
     setMode("new"); setCur(null); setOrig(blank()); setDraft(blank());
-    setPitches(1); setPhones([]); setStaged([]); setPhoneIn(""); setResult(null); setDelText("");
+    setPitches(1); setPhones([]); setPhoneIn(""); setResult(null); setDelText("");
     setOpen(true);
   };
   const openEdit = (f: Field) => {
     setMode("edit"); setCur(f); setOrig(draftOf(f)); setDraft(draftOf(f));
-    setPitches(1); setStaged([]); setPhoneIn(""); setResult(null); setDelText("");
+    setPitches(1); setPhoneIn(""); setResult(null); setDelText("");
     setPhones([]); void loadPhones(f.id);
     setOpen(true);
   };
@@ -162,16 +161,17 @@ export default function FieldsView() {
   const missing = useMemo(() => missingRequired(draft), [draft]);
   const diff = useMemo(() => (mode === "edit" ? updateBody(orig, draft) : {}), [mode, orig, draft]);
   const diffN = Object.keys(diff).length;
-  const canSave = mode === "new" ? missing.length === 0 : diffN > 0 || staged.length > 0;
+  const canSave = mode === "new" ? missing.length === 0 : diffN > 0;
 
   /* ── SAVE ──────────────────────────────────────────────────────────────────────────────────
-   * CREATE IS TWO STEPS AND THE SECOND CAN FAIL ON ITS OWN. Phone numbers attach to a field id,
-   * which does not exist until step 1 returns, so they stage client-side and flush after.
+   * CREATE IS ONE STEP NOW. It used to be two: the field, then a flush of phone numbers that had
+   * been staged client-side because they attach to a field id that does not exist until the create
+   * returns. Cancellation texts became edit-only on 2026-09-10, so nothing can stage a number and
+   * the second step had nothing to do.
    *
-   * WHEN STEP 2 FAILS THE FIELD STILL EXISTS. We do not roll back, do not retry, and never
-   * re-POST the field — a second POST is a second field. The drawer flips to EDIT on the new id
-   * and says, per item, what landed and what did not. Failed numbers stay staged so pressing Save
-   * again retries only those. */
+   * WHEN A SAVE FAILS THE FIELD STILL EXISTS. We do not roll back, do not retry, and never re-POST
+   * the field — a second POST is a second field. The drawer flips to EDIT on the new id and says,
+   * per item, what landed and what did not. */
   const save = async () => {
     if (busy || !canSave) return;
     setBusy(true); setResult(null);
@@ -204,20 +204,11 @@ export default function FieldsView() {
         else { lines.push(`Changes ${j.verdict}${j.error ? `: ${j.error}` : ""}.`); bad = true; }
       }
 
-      // FLUSH THE STAGED NUMBERS, one at a time, reporting each. No retries inside a save.
-      if (fieldId != null && staged.length) {
-        const stillStaged: string[] = [];
-        for (const num of staged) {
-          const r = await fetch(`/api/fields/phones?fieldId=${fieldId}`, {
-            method: "POST", headers: h, body: JSON.stringify({ phoneNumber: num }),
-          });
-          const j = await r.json();
-          if (j.verdict === "LANDED") lines.push(`Phone ${num} added.`);
-          else { lines.push(`Phone ${num} NOT added — ${j.verdict ?? "FAILED"}.`); bad = true; stillStaged.push(num); }
-        }
-        setStaged(stillStaged);
-        await loadPhones(fieldId);
-      }
+      /* THE STAGED-NUMBER FLUSH STOOD HERE and is gone with the create-mode section (2026-09-10).
+       * It walked an array that only the create panel could fill, POSTing each number once the new
+       * field had an id. Cancellation texts are edit-only now, addPhone's single caller lives in
+       * that section, and in edit `cur` is always set — so nothing could ever reach the array and a
+       * loop over it would always be a loop over nothing. */
 
       if (mode === "new" || bad) {
         // Photos are read-only; say it here too so a create does not look like it dropped them.
@@ -232,7 +223,10 @@ export default function FieldsView() {
   const addPhone = async () => {
     const v = phoneIn.trim();
     if (!validPhone(v)) return;
-    if (mode === "new" || !cur) { setStaged((s) => [...s, v]); setPhoneIn(""); return; }
+    /* EDIT ONLY, AND THE GUARD IS REAL RATHER THAN A FALLBACK. This used to stage the number when
+     * there was no field id yet; the section it lives in no longer renders in create, so the only
+     * way here is with a field selected. Returning on a missing one beats reaching for cur.id. */
+    if (!cur) return;
     setBusy(true);
     const h = await headers();
     if (h) {
@@ -369,14 +363,15 @@ export default function FieldsView() {
                   {(data?.cities ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </F>
-              <F label="Abbreviation" req hint="Shown on Gameday Ops and Slate Review. Keep it short.">
+              <F label="Abbreviation" req>
                 <input data-testid="fv-abbr" maxLength={12} value={String(draft.abbr ?? "")} onChange={(e) => set("abbr", e.target.value)} placeholder="PARMER" />
               </F>
               {/* ORDER POSITION IS UPDATE-ONLY. The create DTO refuses it by name — "property
                   orderPosition should not exist" — and the server assigns it as the new id. */}
-              <F label="Order position" hint={mode === "new"
-                ? "Set after the field exists — the API refuses it on create and assigns one."
-                : "Where it sits in the player app's field list."}>
+              {/* THE HINT IS EDIT-ONLY NOW. The create branch explained why the control is
+                  disabled — the DTO refuses orderPosition by name — and that reason is above, on
+                  the code, where it belongs. The edit branch says what the number DOES and stays. */}
+              <F label="Order position" hint={mode === "new" ? undefined : "Where it sits in the player app's field list."}>
                 <input data-testid="fv-order" type="number" disabled={mode === "new"}
                   value={String(draft.orderPosition ?? "")} onChange={(e) => set("orderPosition", e.target.value)} />
               </F>
@@ -391,7 +386,7 @@ export default function FieldsView() {
               {/* ZIPCODE IS A NUMBER IN THE API. We send digits and show what is stored — Warsaw's
                   01-452 is already 1452 upstream and we do not re-pad it back into something the
                   API never held. */}
-              <F label="Zipcode" hint="Stored as a number by the API."><input data-testid="fv-zip" value={String(draft.zipcode ?? "")} onChange={(e) => set("zipcode", e.target.value)} placeholder="78753" /></F>
+              <F label="Zipcode"><input data-testid="fv-zip" value={String(draft.zipcode ?? "")} onChange={(e) => set("zipcode", e.target.value)} placeholder="78753" /></F>
               <F label="Latitude"><input data-testid="fv-lat" value={String(draft.lat ?? "")} onChange={(e) => set("lat", e.target.value)} placeholder="30.406969" /></F>
               <F label="Longitude"><input data-testid="fv-lng" value={String(draft.lng ?? "")} onChange={(e) => set("lng", e.target.value)} placeholder="-97.651949" /></F>
             </div>
@@ -414,7 +409,7 @@ export default function FieldsView() {
               </F>
               {/* DISPLAY-ONLY. It shades the readout and reaches nothing else — resolveSoccerCentral
                   is untouched by this page. */}
-              <F label="Pitches at this field" hint="Display only — shades the line below. It does not change any cost rule.">
+              <F label="Pitches at this field">
                 <select data-testid="fv-pitches" value={String(pitches)} onChange={(e) => setPitches(Number(e.target.value))}>
                   {PITCH_OPTIONS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                 </select>
@@ -425,11 +420,12 @@ export default function FieldsView() {
             <div className="fv-derived" data-testid="fv-recommendation">{recommendationReadout(fmtTotal, pitches)}</div>
           </Sect>
 
+          {/* EDIT ONLY. In create both controls are disabled and there is nothing true to show —
+              a field that does not exist cannot be mapped to a venue. In EDIT it still says
+              something real: whether this field has a fin_venue_fields row, which is the per-field
+              counterpart of the "N fields have no venue mapping" banner on the list. */}
+          {mode === "edit" && (
           <Sect title="Venue mapping" tag="Clubhouse only">
-            <div className="fv-note blue" style={{ marginBottom: 12 }}>
-              <span>ℹ</span>
-              <div>Not part of the MatchDay field record. Without a <code>fin_venue_fields</code> row a field runs matches that no cost or revenue path can see.</div>
-            </div>
             <div className="fv-g2">
               <F label="Venue">
                 {/* THE EMPTY STATE IS NEVER BLANK. "Unmapped" is a state with a consequence; an
@@ -443,21 +439,33 @@ export default function FieldsView() {
                 <input data-testid="fv-rate" value="" placeholder="—" disabled />
               </F>
             </div>
-            <div className="fv-locked" data-testid="fv-venue-readonly">
-              <span>🔒</span>
-              <div><b>Read-only in this pass</b>Mapping a field to a venue writes <code>fin_venue_fields</code>, which is a finance decision with its own audit. It is shown here so the gap is visible from the field, and edited on Field Cost.</div>
-            </div>
+            {/* THE READ-ONLY EXPLANATION STOOD HERE, with data-testid="fv-venue-readonly". Its
+                whole content was the prose this pass removes, so the element went with it rather
+                than staying as an empty div holding a testid nothing asserts (grep: no suite names
+                it). The controls are still disabled and the Venue hint beside the rate still says
+                where the mapping is edited. */}
           </Sect>
+          )}
 
-          <Sect title="Description">
+          {/* "NOTES", NOT "DESCRIPTION". The section held Description AND Parking note, so naming
+              it after one of its two fields was wrong on its own — and it stacked the same word
+              twice, heading above label, which is what read as broken. Renaming fixes both; dropping
+              the inner label instead would leave the textarea unlabelled and make Parking note look
+              like a sub-part of Description. */}
+          <Sect title="Notes">
             <F label="Description"><textarea data-testid="fv-desc" value={String(draft.description ?? "")} onChange={(e) => set("description", e.target.value)} /></F>
             <div style={{ marginTop: 12 }}>
               <F label="Parking note"><input data-testid="fv-parking" value={String(draft.parkingNote ?? "")} onChange={(e) => set("parkingNote", e.target.value)} /></F>
             </div>
           </Sect>
 
-          {/* LIVE ON CREATE. Numbers attach to a field id, so before there is one they stage here
-              and flush after the field is created — no locked panel. */}
+          {/* EDIT ONLY (2026-09-10). Ryan: "can do it for editing messages not adding." Numbers
+              attach to a field id, and this used to STAGE them in create and flush after the field
+              landed. With the section gone from create nothing can stage one — addPhone's only
+              caller lives in here, and in edit `cur` is always set — so the staging array, its
+              dashed pending rows, the post-create flush and their share of the pending count all
+              went with it. See addPhone and the save handler. */}
+          {mode === "edit" && (
           <Sect title="Cancellation texts">
             <div className="fv-phones" data-testid="fv-phones">
               {phones.map((p) => (
@@ -467,14 +475,7 @@ export default function FieldsView() {
                   <button className="fv-rm" disabled={busy} onClick={() => void removePhone(p)}>Remove</button>
                 </div>
               ))}
-              {staged.map((s, i) => (
-                <div className="fv-ph staged" key={`s${i}`} data-testid="fv-phone-staged">
-                  <span className="fv-num">{s}</span>
-                  <span className="fv-en pend">sends on save</span>
-                  <button className="fv-rm" onClick={() => setStaged((x) => x.filter((_, j) => j !== i))}>Remove</button>
-                </div>
-              ))}
-              {phones.length === 0 && staged.length === 0 && (
+              {phones.length === 0 && (
                 <div className="fv-ph empty"><span className="fv-num2">No numbers — nobody is texted when a match here is cancelled.</span></div>
               )}
             </div>
@@ -482,8 +483,8 @@ export default function FieldsView() {
               <input data-testid="fv-phone-in" value={phoneIn} onChange={(e) => setPhoneIn(e.target.value)} placeholder="+1 512 555 0147" />
               <button className="fv-add" data-testid="fv-phone-add" disabled={!validPhone(phoneIn)} onClick={() => void addPhone()}>Add number</button>
             </div>
-            <p className="fv-hint">These numbers get a text when a match at this field is cancelled. What triggers the send is MatchDay-side and not visible from Clubhouse.</p>
           </Sect>
+          )}
 
           {/* TWO CONTROLS, NOT ONE GRID. Cover and gallery are separate in the API — the only
               difference between the two uploads is entityContent — and a single grid with a
@@ -563,8 +564,8 @@ export default function FieldsView() {
           <span className="fv-dirty" data-testid="fv-dirty">
             {mode === "new"
               ? (missing.length === 0 ? "Ready to create" : <><b>{missing.length}</b> required field{missing.length === 1 ? "" : "s"} left</>)
-              : (diffN === 0 && staged.length === 0 ? "Nothing changed yet"
-                : <><b>{diffN + staged.length}</b> change{diffN + staged.length === 1 ? "" : "s"} pending</>)}
+              : (diffN === 0 ? "Nothing changed yet"
+                : <><b>{diffN}</b> change{diffN === 1 ? "" : "s"} pending</>)}
           </span>
         </div>
 
@@ -576,6 +577,36 @@ export default function FieldsView() {
       </aside>
 
       <style jsx>{CSS}</style>
+      {/* ── THE DRAWER'S FORM CONTROLS, GLOBAL ON PURPOSE ────────────────────────────────────────
+          MEASURED 2026-09-10, and it is not the contrast problem it looks like: the border was
+          never drawing. Both a text input and a textarea in this drawer computed
+          border-width: 0px, border-style: solid, and a transparent background — which is Tailwind
+          preflight's reset winning, because the `.fv-dr :global(input)` rule in CSS above never
+          reached them. This component renders <style jsx>{CSS}</style> from a VARIABLE, so
+          styled-jsx cannot scope it statically; every element here carries the literal class
+          "jsx-undefined" and a scan of all five readable stylesheets matched no border rule at all.
+          Same class of bug as PlayerLookup's undefined --line2: a declaration that reads correctly
+          and applies to nothing.
+          SO THESE GO IN A GLOBAL BLOCK, scoped under .fv-dr so they cannot escape the drawer.
+          The pair is MatchPanel's, shipped in 3c30656b: #cbd8d1 on a #fbfdfc fill. That measures
+          1.47:1 against the drawer's white and STILL FAILS WCAG's 3:1 floor for a control boundary
+          — it is consistency with a panel that works, not an accessibility fix, and the fill does
+          as much of the work as the line. Reaching 3:1 needs a #7f8f86 border, darker than this
+          panel's own field labels, which is a system-wide decision and not a Fields change. */}
+      <style jsx global>{`
+        .fv-dr input, .fv-dr select, .fv-dr textarea {
+          border: 1px solid #cbd8d1; border-radius: 8px; padding: 9px 11px;
+          font: inherit; font-size: 14px; background: #fbfdfc; color: #10231A; width: 100%;
+        }
+        .fv-dr textarea { min-height: 76px; resize: vertical; }
+        /* AND A FOCUS STATE, of which there was none at all. */
+        .fv-dr input:focus, .fv-dr select:focus, .fv-dr textarea:focus {
+          outline: 2px solid #146c43; outline-offset: 1px; border-color: #146c43; background: #fff;
+        }
+        .fv-dr input:disabled, .fv-dr select:disabled {
+          background: #F4F7F5; color: #6E8076; cursor: not-allowed;
+        }
+      `}</style>
     </div>
   );
 }
@@ -722,7 +753,11 @@ const CSS = `
 .fv-drbody{flex:1;overflow:auto;padding:0 0 24px}
 .fv-g2{display:grid;grid-template-columns:1fr 1fr;gap:12px 16px}
 .fv-g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px 16px}
-.fv-dr :global(input),.fv-dr :global(select),.fv-dr :global(textarea){border:1px solid #E4EAE5;border-radius:8px;padding:9px 11px;font:inherit;font-size:14px;background:#fff;color:#10231A;width:100%}
+/* THE DRAWER'S INPUT RULE LIVED HERE AND REACHED NOTHING. Measured: every control in this drawer
+   computed border-width 0px. This <style jsx> block is fed a VARIABLE, so styled-jsx cannot scope
+   it and its :global() selectors never matched — Tailwind preflight's reset won by default. The
+   rules moved to a <style jsx global> block at the foot of the component, scoped under .fv-dr.
+   Anything else in this file that depends on :global() from here is in the same position. */
 .fv-dr :global(textarea){resize:vertical;min-height:74px}
 .fv-dr :global(input:disabled),.fv-dr :global(select:disabled){background:#F7F9F7;color:#A9B8AF;cursor:not-allowed}
 .fv-derived{background:#F7FAF8;border:1px solid #E4EAE5;border-radius:8px;padding:9px 12px;font-size:13px;color:#3C4F44;font-weight:600;margin-top:12px}
@@ -730,14 +765,12 @@ const CSS = `
 .fv-locked b{color:#3C4F44;display:block;font-size:13.5px;margin-bottom:2px}
 .fv-phones{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
 .fv-ph{display:flex;align-items:center;gap:10px;border:1px solid #E4EAE5;border-radius:8px;padding:9px 12px}
-.fv-ph.staged{border-style:dashed;background:#FFF6E3}
 .fv-ph.empty{border-style:dashed}
 .fv-num{font-variant-numeric:tabular-nums;font-weight:700;font-size:14px}
 .fv-num2{font-size:12.5px;color:#9FB0A5}
 .fv-en{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
 .fv-en.on{color:#0B7A3E}
 .fv-en.off{color:#B8730B}
-.fv-en.pend{color:#7A4E06}
 .fv-rm{margin-left:auto;border:1px solid #E4EAE5;background:#fff;color:#E8492A;border-radius:7px;padding:4px 10px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer}
 .fv-addrow{display:flex;gap:9px}
 .fv-addrow :global(input){flex:1}
