@@ -13,10 +13,10 @@
 
 import { readFileSync } from "node:fs";
 import {
-  buildReducePlan, reduceRefusal, capacityRefusal, capacityRefusalWhy, reduceSteps, reduceFillLine,
+  buildReducePlan, reduceRefusal, capacityRefusal, capacityRefusalWhy,
   livePlayers, isFakeRow, REDUCE_PER_TEAM, type ReducePlayer,
 } from "../src/lib/reduceTwoTeams";
-import { teamCountConsequence, teamCountWrites, emptyPending } from "../src/lib/rosterEditModel";
+import { teamCountWrites } from "../src/lib/rosterEditModel";
 
 let pass = 0; const fails: string[] = [];
 const ok = (m: string) => { pass++; console.log(`  ✓ ${m}`); };
@@ -94,15 +94,12 @@ console.log("\nthe mock's WestLake roster: 5 movers, 8 fakes, 2 x 11");
   yes("control: fakes really are holding spots on teams 1 and 2",
     roster.some((x) => isFakeRow(x) && (x.team ?? 0) <= 2), "the check above would be vacuous otherwise");
 
-  is("the consequence line is the plan's own numbers",
-    teamCountConsequence({ rows: [], teams: [] }, emptyPending(), 2,
-      { fromTeamCount: 4, fakes: plan.removes.length, movers: plan.moves.length, perTeam: plan.perTeam }),
-    "Teams 3 and 4 are removed. 8 fakes come out, 5 real players move into teams 1 and 2, " +
-    "and the match becomes 2 teams of 11. Nobody is dropped. This is not auto-bump.");
-
-  const fill = reduceFillLine(plan);
-  yes("what players will see states both figures", /reads 22 of 36 now and 14 of 22 after/.test(fill), fill);
-  yes("…and warns it looks emptier", /emptier by 8/.test(fill), fill);
+  /* THE CONSEQUENCE SENTENCE AND THE FILL LINE WERE ASSERTED HERE. Both were cut from the screen
+   * on 2026-09-09 along with the helpers that built them, so these assertions went with the copy
+   * rather than being kept alive against functions nothing calls. The FIGURES they quoted are still
+   * pinned, on the plan itself: realCount/fakeCount above, and shownBefore/shownAfter below. */
+  is("the numbers those sentences quoted are still on the plan",
+    [plan.shownBefore, plan.capBefore, plan.shownAfter, plan.total], [22, 36, 14, 22]);
 }
 
 console.log("\nthe refusal: 33 real players do not fit into 22 spots");
@@ -117,14 +114,16 @@ console.log("\nthe refusal: 33 real players do not fit into 22 spots");
   yes("…naming both numbers", /33 real players/.test(why) && /22 spots/.test(why), why);
   yes("…and the shortfall", /11 of them with nowhere to stand/.test(why), why);
   is("A REFUSED PLAN CARRIES NO WRITES AT ALL", [plan.moves.length, plan.removes.length], [0, 0]);
-  /* AND IT SAYS NOTHING ELSE. Staging returned "0 fakes come out, 0 real players move" and a fill
-   * line reading "24 of 22 after" beside this refusal — arithmetic that is right about a plan with
-   * no writes in it and wrong as a sentence. The route suppresses all three; this pins that the
-   * numbers behind them really are the empty ones, so suppressing is the only correct handling. */
+  /* AND IT SAYS NOTHING ELSE — NOW BY CONSTRUCTION RATHER THAN BY SUPPRESSION. Staging once
+   * returned "0 fakes come out, 0 real players move" and a fill line reading "24 of 22 after"
+   * beside this refusal: arithmetic that is right about a plan with no writes in it and wrong as a
+   * sentence. The route used to suppress all three on a refusal, and this block asserted that
+   * suppression. It no longer ships them at all, on a refused plan or a good one, so the assertion
+   * is now that the fields are absent outright — a stronger version of the same guarantee. */
   const route2 = readFileSync("src/app/api/matchday/[env]/matches/[id]/reduce-2/route.ts", "utf8");
-  yes("a refused plan carries no consequence line", /consequence: noFit \? null :/.test(route2));
-  yes("…no steps", /steps: noFit \? \[\] :/.test(route2));
-  yes("…and no what-players-will-see line", /fillLine: noFit \? null :/.test(route2));
+  is("the GET payload carries no confirmation copy at all",
+    ["consequence:", "steps:", "fillLine:", "reduceSteps", "reduceFillLine", "teamCountConsequence"].filter((k) => route2.includes(k)), []);
+  yes("control: it does still ship the plan's own numbers", /realCount: plan\.realCount/.test(route2) && /shortfall: plan\.shortfall/.test(route2));
 
   const bullets = capacityRefusalWhy(plan);
   is("…and only two bullets, since this match HAS a fake to argue about", bullets.length, 2);
@@ -261,19 +260,12 @@ console.log("\nthe write order, which is the reverse of convert-4's");
 {
   SEQ = 0;
   const plan = buildReducePlan(M(4, 36), [p(3, 1), p(4, 1), fake(1, 5)]);
-  const steps = reduceSteps(plan);
-  is("three steps", steps.length, 3);
-  yes("1 — THE FAKES, FIRST", /^Remove 1 fake/.test(steps[0].label), steps[0].label);
-  yes("…and nobody is notified", /nobody is notified/i.test(steps[0].detail), steps[0].detail);
-  yes("…and it says why it is first: the spots are needed by the moves below",
-    /free for the moves below/.test(steps[0].detail), steps[0].detail);
-  yes("2 — the moves, after the fakes are out", /^Move 2 real players onto teams 1 and 2/.test(steps[1].label), steps[1].label);
-  yes("3 — the shape, last", /^Set 2 teams of 11/.test(steps[2].label), steps[2].label);
-  yes("…written as teamNumbers plus BOTH totals",
-    /teamNumbers: 2/.test(steps[2].detail) && /maxPlayerCount: 22/.test(steps[2].detail) && /maxTeamSize2Team: 22/.test(steps[2].detail),
-    steps[2].detail);
+  is("the plan still has all three phases in it", [plan.removes.length, plan.moves.length, plan.shape.maxPlayerCount], [1, 2, 22]);
 
-  /* THE ROUTE ITSELF. The order is prose in a plan object; these are the writes. */
+  /* THE ROUTE ITSELF, AND NOW IT IS THE ONLY PLACE THE ORDER IS ASSERTED. reduceSteps() used to
+   * state the order in prose and was checked here; the confirmation that rendered it is gone, so
+   * the prose went too. These assertions are the ones that mattered anyway — a sentence claiming
+   * the fakes come out first never made them come out first, and these read the writes. */
   const route = readFileSync("src/app/api/matchday/[env]/matches/[id]/reduce-2/route.ts", "utf8");
   const iMove = route.indexOf('apiWrite(env, "POST", "/admin/user-matches"');
   const iRemove = route.indexOf('apiWrite(env, "DELETE", `/admin/matches/user-matches/');
@@ -323,8 +315,21 @@ console.log("\nthe control, in the panel");
   yes("…and Convert to 4 teams still guards on exactly 2", /rosterTeamCount === 2 && \(/.test(view));
   yes("it disables while another operation is busy", /disabled=\{rdBusy \|\| cvBusy \|\| !mayWrite\}/.test(view));
   yes("it says it is not auto-bump", /Takes the fakes out[^<]*not auto-bump/.test(view));
-  yes("the confirmation shows the consequence, the steps and what players will see",
-    /mp-reduce-consequence/.test(view) && /mp-reduce-steps/.test(view) && /mp-reduce-fill/.test(view));
+  /* THE CONFIRMATION IS ONE QUESTION AND TWO BUTTONS (2026-09-09). "dont need all this text when I
+   * execute just say a confirmation are you sure — REMOVE ALL OF IT". */
+  const confirm = view.slice(view.indexOf('data-testid="mp-reduce-confirm"'), view.indexOf('data-testid="mp-reduce-cancel"'));
+  yes("control: the confirmation block was found", confirm.length > 0 && confirm.length < 1400, `${confirm.length} chars`);
+  yes("it asks one question, naming the shape", /data-testid="mp-reduce-ask">Reduce to 2 teams of \{rd\.perTeam\}\?/.test(confirm), confirm.slice(-200));
+  is("…and the copy that stood there is gone: no steps, no fill line, no consequence, no writes paragraph",
+    ["mp-reduce-steps", "mp-reduce-step", "mp-reduce-fill", "mp-reduce-consequence", "rd.steps", "rd.fillLine", "rd.consequence", "rd.writeCount"]
+      .filter((t) => view.includes(t)), []);
+  yes("…and no details toggle was added instead", !/show details|More detail|mp-reduce-more/i.test(confirm), confirm.slice(0, 200));
+  yes("both buttons keep their testids and labels",
+    /data-testid="mp-reduce-cancel"[\s\S]*?>Keep \{rosterTeamCount\} teams/.test(view) && /data-testid="mp-reduce-go"/.test(view) && /"Reduce it"/.test(view));
+  /* WHAT SURVIVES. The refusals still explain themselves, and the outcome is still one row per
+   * write — the confirmation got shorter, not the reporting. */
+  yes("the refusal screens are untouched", /mp-reduce-refusal/.test(view) && /mp-reduce-nofit/.test(view) && /mp-reduce-why/.test(view));
+  yes("the closed control still says what it does", /Takes the fakes out[^<]*not auto-bump/.test(view));
   yes("one row per write in the results", /mp-reduce-result"/.test(view));
   yes("the refusal renders its own arithmetic", /mp-reduce-nofit/.test(view));
 }

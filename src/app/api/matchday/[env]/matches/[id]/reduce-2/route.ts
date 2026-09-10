@@ -51,10 +51,9 @@ import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { refreshMatchMirror } from "@/lib/mirrorWriteThrough";
 import { assertMatchInScope } from "@/lib/matchOpsAuth";
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
-import { teamCountConsequence } from "@/lib/rosterEditModel";
 import {
-  buildReducePlan, reduceRefusal, capacityRefusal, capacityRefusalWhy, reduceSteps, reduceFillLine,
-  REDUCE_PER_TEAM, REDUCE_TARGET_TEAMS, type ReducePlayer,
+  buildReducePlan, reduceRefusal, capacityRefusal, capacityRefusalWhy,
+  REDUCE_PER_TEAM, type ReducePlayer,
 } from "@/lib/reduceTwoTeams";
 
 export const runtime = "nodejs";
@@ -114,13 +113,11 @@ const planPayload = (id: string, m: ApiMatch, teamCount: number,
   matchId: Number(id), matchName: m.name ?? null, teamCount, refusal,
   capacityRefusal: noFit, capacityWhy: capacityRefusalWhy(plan),
   shapeError: plan.shapeError,
-  /* THE CONSEQUENCE LINE COMES FROM teamCountConsequence, extended — not from a second sentence
-   * written here. The origin is empty because the reduce branch reads none of it; every number in
-   * the sentence is the plan's own. */
-  consequence: noFit ? null : teamCountConsequence({ rows: [], teams: [] }, { teamCount: null, moves: {}, removes: [], names: {} },
-    REDUCE_TARGET_TEAMS, { fromTeamCount: teamCount, fakes: plan.removes.length, movers: plan.moves.length, perTeam: plan.perTeam }),
-  steps: noFit ? [] : reduceSteps(plan),
-  fillLine: noFit ? null : reduceFillLine(plan),
+  /* NO consequence / steps / fillLine. All three existed to fill the confirmation panel, which on
+   * 2026-09-09 became one question and two buttons; shipping copy nothing renders is how a payload
+   * grows a field that outlives its reader. The PLAN itself is still described below in full — that
+   * is the point of a GET that writes nothing — and what actually happened is reported per write by
+   * the POST. */
   perTeam: plan.perTeam, total: plan.total,
   realCount: plan.realCount, fakeCount: plan.fakeCount, stayerCount: plan.stayerCount,
   shortfall: plan.shortfall,

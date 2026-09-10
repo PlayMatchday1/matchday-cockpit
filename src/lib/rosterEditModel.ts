@@ -469,10 +469,8 @@ export function teamShapeError(total: number, teamCount: number): string | null 
  * is what the staged control needs, because on that path the server really does decide.
  *
  * `fromTeamCount` rides along because the caller with a plan has the match, not a RosterOrigin. */
-export type ReduceFacts = { fromTeamCount: number; fakes: number; movers: number; perTeam: number };
-
-export function teamCountConsequence(origin: RosterOrigin, p: Pending, target: number, reduce?: ReduceFacts): string | null {
-  const now = reduce ? reduce.fromTeamCount : teamCountOf(origin);
+export function teamCountConsequence(origin: RosterOrigin, p: Pending, target: number): string | null {
+  const now = teamCountOf(origin);
   if (target === now) return null;
   if (target > now) {
     const added = Array.from({ length: target - now }, (_, i) => now + i + 1);
@@ -481,12 +479,11 @@ export function teamCountConsequence(origin: RosterOrigin, p: Pending, target: n
   const gone = Array.from({ length: now - target }, (_, i) => target + i + 1);
   const kept = Array.from({ length: target }, (_, i) => i + 1);
   const teamsGo = `Team${gone.length === 1 ? "" : "s"} ${gone.join(" and ")} ${gone.length === 1 ? "is" : "are"} removed`;
-  if (reduce) {
-    return `${teamsGo}. ${reduce.fakes} fake${reduce.fakes === 1 ? "" : "s"} come${reduce.fakes === 1 ? "s" : ""} out, ` +
-      `${reduce.movers} real player${reduce.movers === 1 ? "" : "s"} move${reduce.movers === 1 ? "s" : ""} into ` +
-      `team${kept.length === 1 ? "" : "s"} ${kept.join(" and ")}, and the match becomes ${target} teams of ${reduce.perTeam}. ` +
-      `Nobody is dropped. This is not auto-bump.`;
-  }
+  /* THE REDUCE BRANCH WAS HERE (removed 2026-09-09). It wrote "Teams 3 and 4 are removed. 9 fakes
+   * come out, 9 real players move into teams 1 and 2…" for reduce-2's confirmation panel, which is
+   * now one question and two buttons. Nothing passes ReduceFacts any more, so the parameter went
+   * with it rather than sitting unread. The branch below is the original one, for the roster
+   * editor's own pending edits, and it is untouched. */
   const n = normalizePending({ ...p, teamCount: null }, origin);
   const affected = origin.rows.filter((r) => !n.removes.includes(r.umId) && effectiveRow(r, n, origin).team > target);
   const dropped = Object.keys(n.moves).map(Number).filter((um) => n.moves[um].team > target).length;

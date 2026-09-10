@@ -257,26 +257,13 @@ export const capacityRefusalWhy = (plan: ReducePlan): string[] =>
     "If this match really should be smaller, cancel the spots deliberately first, one at a time, so each player is told.",
   ];
 
-/** The three steps, in the order they are written, for the confirmation. Numbers from the plan. */
-export const reduceSteps = (plan: ReducePlan): { label: string; detail: string }[] => [
-  {
-    label: `Remove ${plan.removes.length} fake${plan.removes.length === 1 ? "" : "s"}`,
-    detail: "Nobody is notified — this is padding, not a person. It happens first, so the spots they are standing on are free for the moves below.",
-  },
-  {
-    label: `Move ${plan.moves.length} real player${plan.moves.length === 1 ? "" : "s"} onto teams 1 and 2`,
-    detail: plan.moves.length === 0 ? "Nobody needs to move."
-      : plan.moves.map((m) => `${m.name} → team ${m.toTeam} spot ${m.playerNumber}`).join(" · "),
-  },
-  {
-    label: `Set ${plan.targetTeams} teams of ${plan.perTeam}`,
-    detail: `teamNumbers: ${plan.targetTeams}, ` + Object.entries(plan.shape).map(([k, v]) => `${k}: ${v}`).join(", "),
-  },
-];
-
-/** What players will see, from the plan's own numbers rather than a second count. */
-export const reduceFillLine = (plan: ReducePlan): string =>
-  `The match reads ${plan.shownBefore} of ${plan.capBefore} now and ${plan.shownAfter} of ${plan.total} after.` +
-  (plan.fakeCount > 0
-    ? ` Removing the fakes makes it look emptier by ${plan.fakeCount}; that is the point of it, but it is what the app will show.`
-    : "");
+/* reduceSteps() AND reduceFillLine() WERE HERE, AND THEY ARE GONE (2026-09-09).
+ *
+ * They built the confirmation panel's numbered steps and its "the match reads 28 of 32 now and 19
+ * of 22 after" line. Ryan cut the whole panel down to one question — "dont need all this text when
+ * I execute just say a confirmation are you sure" — so both had exactly one caller left, the GET
+ * payload, feeding markup that no longer exists.
+ *
+ * THE ORDER THEY DESCRIBED IS STILL ASSERTED, on the route's writes rather than on a sentence about
+ * them: see "REMOVES COME BEFORE MOVES" in scripts/reduce-two-test.ts. Deleting prose about the
+ * order would have been a real loss if the prose had been the only record of it; it was not. */

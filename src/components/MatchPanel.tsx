@@ -590,11 +590,12 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
    *
    * IT IS NOT THE SAME OPERATION MIRRORED. The write order is reversed and the state is kept
    * separately, so a future edit to one cannot quietly change the other. */
+  /* ONLY WHAT THE CONFIRMATION READS. The route's GET still describes the whole plan — counts,
+   * totals, the moves — but after the 2026-09-09 cut this screen renders a refusal, a shape and two
+   * buttons, so anything else typed here would be a field nobody looks at. */
   type ReducePlanView = {
-    consequence: string | null; refusal: string | null; capacityRefusal: string | null; capacityWhy: string[];
-    shapeError: string | null; steps: { label: string; detail: string }[]; fillLine: string;
-    perTeam: number; total: number; realCount: number; fakeCount: number;
-    moveCount: number; removeCount: number; writeCount: number; shortfall: number;
+    refusal: string | null; capacityRefusal: string | null; capacityWhy: string[];
+    shapeError: string | null; perTeam: number;
   };
   const [rd, setRd] = useState<ReducePlanView | null>(null);
   const [rdBusy, setRdBusy] = useState(false);
@@ -1399,23 +1400,16 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
                   </div>
                 ) : (
                   <div className="mp-cvconfirm" data-testid="mp-reduce-confirm">
-                    {/* THE CONSEQUENCE, from the plan's own numbers. */}
-                    <b data-testid="mp-reduce-consequence">{rd.consequence}</b>
-                    <ol className="mp-wres" data-testid="mp-reduce-steps" style={{ counterReset: "none" }}>
-                      {rd.steps.map((st, i) => (
-                        <li key={i} data-testid="mp-reduce-step">
-                          <span className="v">{i + 1}</span>
-                          <span>{st.label}: <em>{st.detail}</em></span>
-                        </li>
-                      ))}
-                    </ol>
-                    {/* WHAT PLAYERS WILL SEE, before the press rather than after it. */}
-                    <div className="mp-cvnote" data-testid="mp-reduce-fill">{rd.fillLine}</div>
-                    <div className="mp-cvnote">
-                      {rd.writeCount} write{rd.writeCount === 1 ? "" : "s"}, sent one at a time, each reporting its own
-                      result. Nothing retries. Every live player&rsquo;s team and spot goes into the change log before the
-                      first fake comes off: the shape can be put back, the arrangement cannot.
-                    </div>
+                    {/* ONE QUESTION, AND NOTHING ELSE. The consequence sentence, the numbered steps
+                        naming every player's destination, the fill line and the writes paragraph
+                        were all cut on 2026-09-09: "dont need all this text when I execute just say
+                        a confirmation are you sure". The target shape is named because "Are you
+                        sure?" on its own is a question about nothing.
+
+                        NO DETAILS TOGGLE. That is the same text with a click in front of it, which
+                        is not what was asked for. What the operation did is still reported in full
+                        afterwards, one row per write, in mp-reduce-results below. */}
+                    <b data-testid="mp-reduce-ask">Reduce to 2 teams of {rd.perTeam}?</b>
                     <div className="mp-cv-acts">
                       <button type="button" className="mp-btn mp-nowrap" data-testid="mp-reduce-cancel" onClick={() => setRd(null)}>Keep {rosterTeamCount} teams</button>
                       <button type="button" className="mp-btn mp-pri mp-nowrap" data-testid="mp-reduce-go" disabled={rdBusy}
