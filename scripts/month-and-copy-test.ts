@@ -157,9 +157,18 @@ console.log("\nEXPORT WORKLIST IS GONE FROM THE TOOLBAR");
   is("  the button is absent", /Export worklist/.test(VIEW), false);
   // CONTROL: the scan can see a button that IS still there.
   is("  control: the scan still finds Copy match", /Copy match/.test(VIEW), true);
-  /* THE HANDLER IS NOT DEAD, so it stays. The Veo coverage panel's own "Export CSV" link uses it.
-   * Deleting it would remove a working control in another view. */
-  is("  exportWorklist survives because the Veo panel still calls it", /onExport=\{exportWorklist\}/.test(VIEW), true);
+  /* THE HANDLER IS NOW DEAD TOO, AND IT WENT (2026-09-10). This used to assert the opposite —
+   * "exportWorklist survives because the Veo panel still calls it" — which was right while the Veo
+   * coverage view existed and rendered its "Export CSV" link. Ryan removed that view, so the
+   * handler lost its last caller and the reason this assertion gave for keeping it expired with it.
+   * Asserted as absence, with the same control above proving the scan can still see what is there. */
+  /* COMMENTS STRIPPED: the component's comment recording the removal naturally names what it
+   * removed, and an assertion matching its own explanation would go red for the right change. */
+  const CODE = VIEW.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^\s*\/\/.*$/gm, " ");
+  is("  …and so is the handler, now that no view calls it", /exportWorklist/.test(CODE), false);
+  is("  …and the worklist diff it read went with it", /needEmoji|needClubhouse/.test(CODE), false);
+  is("  control: the strings really were there (the comment still names them)",
+    [/exportWorklist/.test(VIEW), /needEmoji/.test(VIEW)], [true, true]);
 }
 
 console.log("\nTHE MONTH GRID: whole weeks, Monday first, padding empty");

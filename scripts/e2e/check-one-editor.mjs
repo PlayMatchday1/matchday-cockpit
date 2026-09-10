@@ -103,6 +103,9 @@ console.log("\n── the page ──");
 console.log("\n── the drawer ──");
 {
   await page.goto(`${BASE}/match-ops/master-schedule`, { waitUntil: "domcontentloaded" });
+  // Month is the landing view since 2026-09-10; this check drives the week grid.
+  await page.waitForSelector('[data-testid="view-schedule"]', { timeout: 90000 });
+  await page.click('[data-testid="view-schedule"]');
   await page.waitForSelector('[data-testid="card"]', { timeout: 90000 });
   await page.locator('[data-testid="card"]').first().click();
   await page.waitForSelector('[data-testid="drawer"]', { timeout: 30000 });

@@ -84,6 +84,9 @@ async function boot(browser, storageState, { failNameWrite = false, mirrorLags =
 
   const page = await ctx.newPage();
   await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+  // Month is the landing view since 2026-09-10; the badges live on the week grid.
+  await page.waitForSelector('[data-testid="view-schedule"]', { timeout: 60000 });
+  await page.click('[data-testid="view-schedule"]');
   await page.waitForSelector('[data-testid="veo-badge"]', { timeout: 60000 });
   return { ctx, page, seen, state };
 }

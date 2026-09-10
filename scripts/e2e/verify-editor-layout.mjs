@@ -27,7 +27,8 @@ const BREAK_RHYTHM = `.mp-secbd > * + *{margin-top:0 !important}
 
 const CASES = [
   { host: "Gameday Ops", url: "/match-ops/gameday", opener: '[data-testid="gday-row"]', pre: null, widths: ["desktop", "phone"] },
-  { host: "Master Schedule · Week", url: "/match-ops/master-schedule", opener: '[data-testid="card"]', pre: null, widths: ["desktop", "phone"] },
+  // pre: the VEO Schedule tab — Month is the landing view since 2026-09-10.
+  { host: "Master Schedule · Week", url: "/match-ops/master-schedule", opener: '[data-testid="card"]', pre: '[data-testid="view-schedule"]', widths: ["desktop", "phone"] },
   { host: "Master Schedule · Month", url: "/match-ops/master-schedule", opener: '[data-testid="month-match"]', pre: '[data-testid="view-month"]', widths: ["desktop"] },
 ];
 const WIDTHS = { desktop: ["desktop 1440", 1440, 1000], phone: ["phone 390", 390, 844] };
@@ -44,7 +45,11 @@ async function main() {
     const ctx = await browser.newContext({ viewport: { width: w, height: h }, storageState, isMobile: w < 500, hasTouch: w < 500 });
     const page = await ctx.newPage();
     await page.goto(`${BASE}${c.url}`, { waitUntil: "domcontentloaded" });
-    await page.waitForSelector(c.pre ? '[data-testid="card"]' : c.opener, { timeout: 60000 });
+    /* WAIT FOR THE CONTROL, NOT FOR A VIEW. This waited for a week card whenever `pre` was set, on
+       the assumption that the page lands on the week grid and `pre` switches away from it. Month
+       became the landing view on 2026-09-10 and no card appears, so every case with a `pre`
+       deadlocked here. Waiting for `pre` itself is true whichever view lands. */
+    await page.waitForSelector(c.pre ?? c.opener, { timeout: 60000 });
     await page.waitForTimeout(2500);
     if (c.pre) { await page.click(c.pre); await page.waitForSelector(c.opener, { timeout: 45000 }); await page.waitForTimeout(4000); }
     await page.click(c.opener);

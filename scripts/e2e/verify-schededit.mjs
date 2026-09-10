@@ -108,7 +108,15 @@ async function main() {
 
   const page = await context.newPage();
   const T = (t) => page.locator(`[data-testid="${t}"]`);
-  const gotoSchedule = async () => { await page.goto(`${BASE}/match-ops/master-schedule`, { waitUntil: "domcontentloaded" }); await T("card").first().waitFor({ timeout: 30000 }); await page.waitForTimeout(120); };
+  /* MONTH IS THE LANDING VIEW NOW (2026-09-10), so getting to the week grid is an explicit click.
+     This used to just wait for a card and would now time out on every call in this suite. */
+  const gotoSchedule = async () => {
+    await page.goto(`${BASE}/match-ops/master-schedule`, { waitUntil: "domcontentloaded" });
+    await T("view-schedule").waitFor({ timeout: 30000 });
+    await T("view-schedule").click();
+    await T("card").first().waitFor({ timeout: 30000 });
+    await page.waitForTimeout(120);
+  };
   const openCard = async (id) => {
     lastPut = null;
     // Neutralise any pending edits so a switch isn't (correctly) blocked — the
@@ -228,42 +236,20 @@ async function main() {
   await page.waitForTimeout(150);
   is("Escape closes once clean", await T("drawer").count(), 0);
 
-  console.log(`\n== header: stats visibility, filter, Today ==`);
+  console.log(`\n== header: the city filter, and Today ==`);
   await gotoSchedule();
-  // stat row not visible on Schedule view (by visibility, not text)
-  is("stats NOT visible on Schedule view", await T("stats").count(), 0);
-  await page.getByRole("tab", { name: "Veo coverage" }).click();
-  await page.waitForTimeout(150);
-  is("stats visible on Veo view", await T("stats").isVisible(), true);
-
-  // stats + coverage follow the city filter (computed expectation, not hardcoded)
-  const statVals = async () => (await page.locator(".vms-stat-v").allTextContents()).map((s) => Number(s));
-  const allStats = await statVals();
-  const expAllVeo = MATCHES.filter((m) => m.veo).length;
-  is("all-cities: 'Matches with Veo' tile = computed", allStats[0], expAllVeo);
-  // An "Open" cell = a camera-free night: any (city, day) with no Veo-covered
-  // venue, across all 7 days. Independently: cities*7 - distinct veo city-days.
-  const openCellsAll = await page.locator(".vms-gap").count();
-  const veoCityDay = new Set(MATCHES.filter((m) => m.veo).map((m) => `${m.city}|${m.dayIdx}`));
-  const expOpenAll = 2 * 7 - veoCityDay.size;
-  is("all-cities: coverage 'Open' cells = independent expectation", openCellsAll, expOpenAll);
-  is("  and Open tile matches Open cells (labels count to tiles)", allStats[2], openCellsAll);
-
-  // filter to Austin only
-  await T("city-chip-Austin").click();
-  await page.waitForTimeout(150);
-  const austinStats = await statVals();
-  const expAustinVeo = MATCHES.filter((m) => m.city === "Austin" && m.veo).length;
-  is("filter Austin: 'Matches with Veo' tile follows filter", austinStats[0], expAustinVeo);
-  is("  filtered value differs from all-cities", austinStats[0] !== allStats[0], true);
-  const openCellsAustin = await page.locator(".vms-gap").count();
-  const veoAustinDays = new Set(MATCHES.filter((m) => m.veo && m.city === "Austin").map((m) => m.dayIdx));
-  const expOpenAustin = 1 * 7 - veoAustinDays.size;
-  is("filter Austin: coverage Open cells follow filter (independent)", openCellsAustin, expOpenAustin);
-  is("  and filtered Open tile matches filtered Open cells", austinStats[2], openCellsAustin);
+  /* THE STATS STRIP AND THE COVERAGE GRID WERE ASSERTED HERE, and both went with the Veo coverage
+     view on 2026-09-10 ("veo coverage can be removed"). What this block proved about them — that
+     the tiles and the Open cells followed the city filter and agreed with each other — has no
+     subject any more; the tab, the tiles and the .vms-gap cells are all gone. The filter itself is
+     still exercised below, on the drawer, and the surviving assertion is that no stats strip
+     renders on any view. */
+  is("no stats strip renders at all now", await T("stats").count(), 0);
+  is("…and the Veo coverage tab is gone with it", await page.getByRole("tab", { name: "Veo coverage" }).count(), 0);
+  is("the first tab is VEO Schedule", await page.getByRole("tab", { name: "VEO Schedule" }).count(), 1);
 
   // filtering out the open drawer's city closes the drawer
-  await page.getByRole("tab", { name: "Schedule" }).click();
+  await T("view-schedule").click();
   await page.waitForTimeout(100);
   await T("city-chip-all").click();
   await page.waitForTimeout(100);

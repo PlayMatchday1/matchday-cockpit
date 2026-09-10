@@ -36,8 +36,10 @@ const is = (n, got, want) => (JSON.stringify(got) === JSON.stringify(want) ? ok(
  * opener with its own testid. They are enumerated here, with the widths each one actually renders
  * at, so "the case nobody checked" has to be a case nobody LISTED. */
 const CASES = [
+  /* pre: the VEO Schedule tab. Month became the landing view on 2026-09-10, so the week grid is
+     no longer what a bare navigation gives you and `pre: null` would wait for a card forever. */
   { host: "Master Schedule", view: "Week", url: "/match-ops/master-schedule",
-    opener: '[data-testid="card"]', pre: null, widths: ["desktop", "phone"] },
+    opener: '[data-testid="card"]', pre: '[data-testid="view-schedule"]', widths: ["desktop", "phone"] },
   { host: "Master Schedule", view: "Month desktop", url: "/match-ops/master-schedule",
     opener: '[data-testid="month-match"]', pre: '[data-testid="view-month"]', widths: ["desktop"] },
   /* MonthAgenda is the phone layout of the same view and renders a different button. */
@@ -70,7 +72,12 @@ async function main() {
       await page.goto(`${BASE}${url}`, { waitUntil: "domcontentloaded" });
       /* WAIT FOR THE PAGE, THEN SWITCH VIEW, THEN WAIT FOR THAT VIEW'S OWN OPENER. A view switch
          refetches, so the opener does not exist until it lands. */
-      await page.waitForSelector(pre ? '[data-testid="card"]' : opener, { timeout: 60000 });
+      /* WAIT FOR THE CONTROL, NOT FOR A VIEW. This used to wait for a week card whenever `pre` was
+         set, on the assumption that the page always lands on the week grid and `pre` switches away
+         from it. Month became the landing view on 2026-09-10 and no card appears at all, so every
+         case with a `pre` deadlocked here — including the two Month cases, which were already
+         relying on that assumption. Waiting for `pre` itself is true whichever view lands. */
+      await page.waitForSelector(pre ?? opener, { timeout: 60000 });
       await page.waitForTimeout(2500);
       if (pre) { await page.click(pre); await page.waitForSelector(opener, { timeout: 45000 }); await page.waitForTimeout(4000); }
       await page.click(opener);

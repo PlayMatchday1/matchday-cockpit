@@ -78,51 +78,33 @@ type VeoWeek = {
   dataAsOf: string | null;
 };
 
-type Unit = { venue: string; times: string[] };
-type View = "schedule" | "veo" | "month";
+type View = "schedule" | "month";
 
 /* ONE KEY FOR THE WHOLE PREFERENCE BLOB. The view, the range, the city and the field selection are
  * read and written together — four keys would let them drift out of step on a partial write. */
 const VMS_PREFS = "vms:prefs";
+/* THE SAVED VIEW IS DROPPED ONCE, AND ONLY THE VIEW (2026-09-10). Month became the default, and a
+ * default nobody sees is not a default: every operator who has opened this page has a saved
+ * preference and for most of them it says "schedule", so flipping the initial state alone would
+ * have changed nothing for the people who actually use it. Ryan asked for what he sees when he
+ * opens the page, not for what a new account sees.
+ *
+ * IT THROWS AWAY A PREFERENCE SOMEBODY SET DELIBERATELY, which is the cost, and it is paid exactly
+ * once: the next write stamps v and from then on the saved view is honoured normally. The range,
+ * the city filter and the field chips are NOT dropped — they are read as before, because none of
+ * them is what this change is about. */
+const VMS_PREFS_V = 2;
 
-// ── derived helpers (pure over VeoWeek) ─────────────────────────────────────
-const camerasOf = (w: VeoWeek, city: string) => w.cities.find((c) => c.city === city)?.cameras ?? 0;
+/* camerasOf() AND unitsFor() STOOD HERE and went with the Veo coverage view (2026-09-10).
+ * unitsFor laid a city-week out as one row per owned camera; camerasOf read the inventory. Their
+ * only consumers were computeStats and VeoView, both gone.
+ *
+ * veoMatchesOf() BELOW STAYS. It has a second caller — the "n with Veo" count in every city header
+ * on the week grid — and deleting it would take a number off the screen Ryan is keeping. */
 const veoMatchesOf = (w: VeoWeek, city: string) => w.matches.filter((m) => m.city === city && m.veo);
 const cityCode = (city: string) => city.replace(/[^A-Za-z]/g, "").slice(0, 4).toUpperCase();
 
-// A city-day needs one camera per DISTINCT VENUE (two matches at one venue are
-// back-to-back on one camera). One row per owned camera ALWAYS — an idle second
-// camera is still a row. More distinct venues on a night than cameras owned adds
-// rows, flagged over capacity.
-function unitsFor(w: VeoWeek, city: string): (Unit | null)[][] {
-  const owned = camerasOf(w, city);
-  const ms = veoMatchesOf(w, city);
-  const byDay: Unit[][] = w.days.map((_, d) => {
-    const dayMs = ms.filter((m) => m.dayIdx === d).sort((a, b) => a.minutes - b.minutes);
-    const venues = [...new Set(dayMs.map((m) => m.venue))];
-    return venues.map((v) => ({ venue: v, times: dayMs.filter((m) => m.venue === v).map((m) => m.time) }));
-  });
-  // At least one row so every fleet city surfaces (its Open/idle days show).
-  const width = Math.max(1, owned, ...byDay.map((x) => x.length));
-  return Array.from({ length: width }, (_, i) => byDay.map((day) => day[i] ?? null));
-}
 
-type Stats = { covered: number; total: number; used: number; capacity: number; gaps: number; over: number };
-function computeStats(w: VeoWeek): Stats {
-  const covered = w.matches.filter((m) => m.veo).length;
-  const owned = w.cities.reduce((a, c) => a + c.cameras, 0);
-  let used = 0, gaps = 0, over = 0;
-  for (const { city } of w.cities) {
-    const rows = unitsFor(w, city);
-    const ownedC = camerasOf(w, city);
-    w.days.forEach((_, d) => {
-      const filled = rows.filter((r) => r[d]).length;
-      if (filled === 0) gaps++; else used += filled;
-      if (filled > ownedC) over++;
-    });
-  }
-  return { covered, total: w.matches.length, used, capacity: owned * 7, gaps, over };
-}
 
 const sortMatches = (a: VeoMatch, b: VeoMatch) =>
   a.dayIdx - b.dayIdx || a.city.localeCompare(b.city) || a.minutes - b.minutes;
@@ -211,7 +193,7 @@ export default function VeoMasterSchedule() {
   const [wroteName, setWroteName] = useState<Map<number, string>>(new Map());
   /* THE VIEW AND THE FILTERS SURVIVE A RELOAD. Read in an effect rather than in the initialiser:
    * this component renders on the server first, and touching localStorage there throws. */
-  const [view, setView] = useState<View>("schedule");
+  const [view, setView] = useState<View>("month");
   const [range, setRange] = useState<{ from: string; to: string } | null>(null);
   const [monthData, setMonthData] = useState<{ matches: GridMatch[]; dataAsOf: string | null } | null>(null);
   /* CANCELLED IS OFF BY DEFAULT and the label is "Show cancelled in grid" — the exact wording
@@ -241,17 +223,27 @@ export default function VeoMasterSchedule() {
   /* THE FIELD ROW'S OPEN STATE, persisted alongside the rest of the prefs blob so somebody who
    * works with the chips open is not folded up on every visit. Default closed. */
   const [fieldsOpen, setFieldsOpen] = useState(false);
+  /* THE WRITE MUST NOT RUN BEFORE THE READ. Both are mount effects, and the writer's first pass
+   * carries the INITIAL view, not the restored one — so it overwrote the saved blob with the
+   * default before the reader's setState had landed. In React's development double-invoke the
+   * second mount then read back what the writer had just clobbered, and the saved view was lost
+   * every time. Measured 2026-09-10: seeding {"v":2,"view":"schedule"} still opened on Month.
+   * This flag makes the order explicit instead of leaving it to effect scheduling. */
+  const [hydrated, setHydrated] = useState(false);
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(VMS_PREFS);
-      if (!raw) return;
-      const p = JSON.parse(raw) as { view?: View; from?: string; to?: string; fields?: string[]; city?: string[]; fieldsOpen?: boolean };
-      if (p.view === "month" || p.view === "veo" || p.view === "schedule") setView(p.view);
+      if (!raw) { setHydrated(true); return; }
+      const p = JSON.parse(raw) as { v?: number; view?: View; from?: string; to?: string; fields?: string[]; city?: string[]; fieldsOpen?: boolean };
+      /* "veo" IS NOT RESTORABLE. That view was deleted; a blob still holding it falls through to
+       * the "month" default rather than restoring a view that no longer exists. */
+      if (p.v === VMS_PREFS_V && (p.view === "month" || p.view === "schedule")) setView(p.view);
       if (p.from && p.to) setRange({ from: p.from, to: p.to });
       if (Array.isArray(p.fields)) setFieldSel(new Set(p.fields));
       if (Array.isArray(p.city)) setCityFilter(new Set(p.city));
       if (typeof p.fieldsOpen === "boolean") setFieldsOpen(p.fieldsOpen);
     } catch { /* private mode, or a prefs blob from an older shape — defaults are fine */ }
+    setHydrated(true);
   }, []);
   const [busy, setBusy] = useState(false);
   // "" = current week; otherwise a date (YYYY-MM-DD) within the selected week.
@@ -393,12 +385,13 @@ export default function VeoMasterSchedule() {
   useEffect(() => { if (view === "month" && range) void loadRange(range); }, [view, range, loadRange]);
 
   useEffect(() => {
+    if (!hydrated) return;   // see the note on `hydrated` — never write over a blob not yet read
     try {
       window.localStorage.setItem(VMS_PREFS, JSON.stringify({
-        view, from: range?.from, to: range?.to, fields: [...fieldSel], city: [...cityFilter], fieldsOpen,
+        v: VMS_PREFS_V, view, from: range?.from, to: range?.to, fields: [...fieldSel], city: [...cityFilter], fieldsOpen,
       }));
     } catch { /* private mode */ }
-  }, [view, range, fieldSel, cityFilter, fieldsOpen]);
+  }, [hydrated, view, range, fieldSel, cityFilter, fieldsOpen]);
 
   /* ── THE FILTERED SET, AND THE CHIPS BUILT FROM IT ──────────────────────────────────────────
    * The field list comes from the matches actually in the range, so it can never offer a filter
@@ -612,19 +605,14 @@ export default function VeoMasterSchedule() {
     await load(weekRef);
     setBusy(false);
   }
-  async function setCameras(city: string, cameras: number) {
-    if (!week || busy || cameras < 0) return;
-    const snapshot = week;
-    setWeek({ ...week, cities: week.cities.map((c) => (c.city === city ? { ...c, cameras } : c)) });
-    setBusy(true);
-    const ok = await post("/api/veo/cameras", { city, cameras });
-    if (ok) await load(weekRef); else setWeek(snapshot);
-    setBusy(false);
-  }
+  /* setCameras() STOOD HERE (removed 2026-09-10). It wrote a city's camera inventory through
+   * POST /api/veo/cameras and the Veo coverage view was its only caller, so THERE IS NOW NO WAY TO
+   * CHANGE A CITY'S CAMERA COUNT FROM CLUBHOUSE. The route and the column are untouched and the
+   * number still renders in every city header on the week grid; only the editor is gone. */
 
-  // The week narrowed to the selected cities — stats AND coverage both read it.
+
+  // The week narrowed to the selected cities. The coverage stats that also read it are gone.
   const fweek = useMemo<VeoWeek | null>(() => (week ? filterWeek(week, cityFilter) : null), [week, cityFilter]);
-  const stats = useMemo<Stats | null>(() => (fweek ? computeStats(fweek) : null), [fweek]);
   // The displayed week contains the real "today" only when the server flagged one
   // of its days — the definitive "are we on the current week?" signal.
   const isCurrentWeek = week ? week.days.some((d) => d.today) : false;
@@ -869,25 +857,11 @@ export default function VeoMasterSchedule() {
     });
   }, [drawerCity, drawerId, drawerDirty, showToast]);
 
-  // Worklist diff — two DISJOINT sections.
-  const { needEmoji, needClubhouse } = useMemo(() => {
-    if (!week) return { needEmoji: [] as VeoMatch[], needClubhouse: [] as VeoMatch[] };
-    return {
-      needEmoji: week.matches.filter((m) => m.veo && !m.hasEmoji).sort(sortMatches),
-      needClubhouse: week.matches.filter((m) => !m.veo && m.hasEmoji).sort(sortMatches),
-    };
-  }, [week]);
+  /* THE EMOJI RECONCILE WORKLIST STOOD HERE (removed 2026-09-10): needEmoji / needClubhouse were
+   * the two disjoint halves of the drift between Clubhouse intent and the camera emoji in the
+   * MatchDay name, and exportWorklist() was their CSV. The Veo coverage view was the only surface
+   * that rendered either. Nothing computes that drift now. */
 
-  function exportWorklist() {
-    if (!week) return;
-    const dayLabel = (i: number) => { const d = week.days[i]; return d ? `${d.dow} ${String(d.date).padStart(2, "0")}` : "—"; };
-    const rows: (string | number)[][] = [["Add the camera emoji"], ["Day", "City", "Venue", "Time", "Match name"]];
-    for (const m of needEmoji) rows.push([dayLabel(m.dayIdx), m.city, m.venue, m.time, m.name]);
-    rows.push([]);
-    rows.push(["Marked in the app but not in Clubhouse"], ["Day", "City", "Venue", "Time", "Match name"]);
-    for (const m of needClubhouse) rows.push([dayLabel(m.dayIdx), m.city, m.venue, m.time, m.name]);
-    downloadCsv(`veo-worklist-${week.weekStart}.csv`, rows);
-  }
 
   const drawerOpen = drawerId != null;
 
@@ -903,7 +877,6 @@ export default function VeoMasterSchedule() {
         <div className="vms-head">
           <div>
             <div className="vms-h-title">Master Schedule</div>
-            <div className="vms-h-sub">Mark the matches a Veo camera will cover, then switch to Veo coverage to see the week as one grid — which nights are covered, which are open, and where a camera is idle or short. Click a match to edit it.</div>
           </div>
           <div className="vms-h-right">
             {/* MONTH GETS A MONTH NAV. Not the week nav with different handlers — the week range
@@ -1013,10 +986,11 @@ export default function VeoMasterSchedule() {
                 </span>
             <span className="vms-control-label">View</span>
             <div className="vms-segmented" role="tablist" aria-label="View">
-              <button type="button" role="tab" aria-selected={view === "schedule"} className={"vms-seg-btn" + (view === "schedule" ? " vms-active" : "")} onClick={() => setView("schedule")}>Schedule</button>
-              <button type="button" role="tab" aria-selected={view === "veo"} data-testid="view-veo"
-                className={"vms-seg-btn" + (view === "veo" ? " vms-active" : "")}
-                onClick={() => setView("veo")}>Veo coverage</button>
+              {/* VEO Schedule, because that is what the page is for. It had no data-testid while
+                  the other two did, so tests selected it by its label — which just changed. */}
+              <button type="button" role="tab" aria-selected={view === "schedule"} data-testid="view-schedule"
+                className={"vms-seg-btn" + (view === "schedule" ? " vms-active" : "")}
+                onClick={() => setView("schedule")}>VEO Schedule</button>
               <button type="button" role="tab" aria-selected={view === "month"} data-testid="view-month"
                 className={"vms-seg-btn" + (view === "month" ? " vms-active" : "")}
                 onClick={() => setView("month")}>Month</button>
@@ -1039,16 +1013,6 @@ export default function VeoMasterSchedule() {
           </div>
         )}
 
-        {/* Stats live BEHIND the Veo coverage view only. On Schedule they are not
-            rendered at all — the schedule is for editing, not the coverage read-out. */}
-        {view === "veo" && stats && (
-          <div className="vms-stats" data-testid="stats">
-            <Stat l="Matches with Veo" v={stats.covered} f={`of ${stats.total} this week`} />
-            <Stat l="Camera nights used" v={stats.used} f={`of ${stats.capacity} available · ${stats.capacity ? Math.round((stats.used / stats.capacity) * 100) : 0}%`} />
-            <Stat l="Open nights" v={stats.gaps} f="city-days with matches, no camera" />
-            <Stat l="Over capacity" v={stats.over} f={stats.over ? "more venues than cameras owned" : "none"} />
-          </div>
-        )}
       </div>
 
       {loading && !week ? (
@@ -1263,10 +1227,8 @@ export default function VeoMasterSchedule() {
             />
           )}
         </>
-      ) : !week || !fweek ? null : view === "schedule" ? (
+      ) : !week || !fweek ? null : (
         <ScheduleView week={fweek} busy={busy} onToggle={toggleIntent} onRetry={retryName} onOpen={openCard} selectedId={drawerId} failed={nameFailed} />
-      ) : (
-        <VeoView week={fweek} stats={stats!} busy={busy} onCameras={setCameras} needEmoji={needEmoji} needClubhouse={needClubhouse} onExport={exportWorklist} />
       )}
 
       {/* ── THE PICK FOOTER ─────────────────────────────────────────────────────────────────────
@@ -1385,9 +1347,6 @@ export default function VeoMasterSchedule() {
   );
 }
 
-function Stat({ l, v, f }: { l: string; v: number; f: string }) {
-  return <div className="vms-stat"><div className="vms-stat-l">{l}</div><div className="vms-stat-v">{v}</div><div className="vms-stat-f">{f}</div></div>;
-}
 
 const CamIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -1479,174 +1438,24 @@ function ScheduleView({ week, busy, onToggle, onRetry, onOpen, selectedId, faile
   );
 }
 
-// ── veo coverage view ───────────────────────────────────────────────────────
-function VeoView({ week, stats, busy, onCameras, needEmoji, needClubhouse, onExport }: {
-  week: VeoWeek; stats: Stats; busy: boolean;
-  onCameras: (city: string, n: number) => void;
-  needEmoji: VeoMatch[]; needClubhouse: VeoMatch[]; onExport: () => void;
-}) {
-  const dayLabel = (i: number) => { const d = week.days[i]; return d ? `${d.dow} ${String(d.date).padStart(2, "0")}` : "—"; };
+/* THE VEO COVERAGE VIEW STOOD HERE, and it is gone (2026-09-10). Ryan: "veo coverage can be
+ * removed". With it went its stats strip, its per-city camera editor and its emoji worklist.
+ *
+ * THREE CAPABILITIES WENT WITH IT, and they are named here rather than discovered later:
+ *   1. THE PER-CITY CAMERA COUNT EDITOR. setCameras() wrote veo_camera_count through
+ *      POST /api/veo/cameras and this view was its only caller. There is now NO WAY to change a
+ *      city's camera inventory from Clubhouse. The route and the column are untouched.
+ *   2. THE EMOJI RECONCILE WORKLIST. needEmoji / needClubhouse were the diff between Clubhouse
+ *      intent and the camera emoji in the MatchDay name, and exportWorklist was its CSV. Nothing
+ *      else computes that drift now.
+ *   3. THE SEED LINE, the only surface that reported seededThisWeek. That number counts intent
+ *      rows whose set_by is "seed:emoji", and the ONLY writer of that value is migration 0100's
+ *      one-time backfill — no application code writes it, so the figure was historical.
+ *
+ * WHAT DID NOT GO: every camera mark on the week grid. The yellow Veo chip, the dark card, the
+ * "n with Veo" count in each city header, the toggle and the unsynced Retry are all in
+ * ScheduleView and untouched. veoMatchesOf() stays for that count. */
 
-  // veo_codes reference / drift vs inventory (computed, never hardcoded).
-  const drift = week.cities.map(({ city, cameras }) => {
-    const codes = week.codesRef.find((c) => c.city === city)?.codes ?? [];
-    const confirmed = codes.filter((c) => c.confirmed).map((c) => c.code);
-    const unconfirmed = codes.filter((c) => !c.confirmed).map((c) => c.code);
-    const notes: string[] = [];
-    if (confirmed.length !== cameras) {
-      notes.push(confirmed.length === 0
-        ? `owns ${cameras} ${plural(cameras, "camera")}, 0 codes`
-        : `${confirmed.length} codes vs ${cameras} ${plural(cameras, "camera")}`);
-    }
-    if (unconfirmed.length) notes.push(`${unconfirmed.length} unconfirmed ${plural(unconfirmed.length, "code")} (${unconfirmed.join(", ")}) not counted`);
-    return { city, cameras, confirmed, notes };
-  });
-
-  const worklistEmpty = needEmoji.length === 0 && needClubhouse.length === 0;
-
-  return (
-    <>
-      <div className="vms-card">
-        <div className="vms-grid-wrap">
-          <table className="vms-grid">
-            <thead>
-              <tr>
-                <th className="vms-corner">Veo</th>
-                {week.days.map((d) => <th key={d.iso}>{d.dow} {String(d.date).padStart(2, "0")}</th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {week.cities.flatMap(({ city }) => {
-                const rows = unitsFor(week, city);
-                const owned = camerasOf(week, city);
-                const code = cityCode(city);
-                return rows.map((row, ri) => {
-                  const label = rows.length > 1 ? `${code}${ri + 1}` : code;
-                  const spare = ri >= owned;
-                  return (
-                    <tr key={`${city}-${ri}`}>
-                      <td className="vms-unit" title={city + (spare ? " — beyond the cameras this city owns" : "")}>
-                        {label}{spare && <div className="vms-unit-x">unowned</div>}
-                      </td>
-                      {row.map((cell, d) => {
-                        if (!cell) {
-                          const anyThisDay = rows.some((r) => r[d]);
-                          return ri === 0 && !anyThisDay
-                            ? <td key={d}><div className="vms-cell vms-gapcell"><span className="vms-gap">Open</span></div></td>
-                            : <td key={d}><div className="vms-cell vms-off"><span className="vms-empty">—</span></div></td>;
-                        }
-                        const over = ri >= owned;
-                        return (
-                          <td key={d}>
-                            <div className={"vms-cell vms-on" + (over ? " vms-over" : "")}>
-                              <div className="vms-cell-v">{cell.venue}</div>
-                              <div className="vms-cell-t">{cell.times.join(" + ")}</div>
-                              {over && <span className="vms-warn">no camera</span>}
-                            </div>
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  );
-                });
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="vms-foot">
-          <b>One row per camera the city owns.</b> A city with two cameras keeps a second row all week even when it is idle. <b>A coral cell</b> is an open night: the city has matches but no camera on any of them — the coral cells are this week&apos;s to-do list. <b>An em-dash</b> means that camera is free that night, not that the night is uncovered.
-        </div>
-        <div className="vms-foot">
-          {stats.over
-            ? <><b>{stats.over} {plural(stats.over, "night")} over capacity.</b> More venues are marked than the city owns cameras, so the extra rows are flagged <em>no camera</em>. Either drop one venue or move a camera in from a nearby city.</>
-            : <><b>No night is over capacity.</b> Every marked venue has a camera that can reach it.</>}
-        </div>
-        <div className="vms-foot">
-          Seeded {week.seededThisWeek} matches from the 🎥 emoji — cities running coverage without the emoji will read as Open until marked.
-        </div>
-      </div>
-
-      <div className="vms-card">
-        <div className="vms-inv-head">
-          <strong>Camera inventory</strong>
-          <span>How many Veo cameras each city owns. The − / + buttons change a real setting.</span>
-        </div>
-        <div className="vms-inv">
-          {week.cities.map(({ city, cameras }) => (
-            <div className="vms-inv-row" key={city}>
-              <span className="vms-inv-city">{city}</span>
-              <div className="vms-inv-ctl">
-                <button type="button" className="vms-inv-btn" disabled={busy || cameras <= 0} aria-label={`Fewer cameras in ${city}`} onClick={() => onCameras(city, cameras - 1)}>−</button>
-                <span className="vms-inv-n">{cameras}</span>
-                <button type="button" className="vms-inv-btn" disabled={busy} aria-label={`More cameras in ${city}`} onClick={() => onCameras(city, cameras + 1)}>+</button>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="vms-foot">
-          <b>veo_codes reference.</b> Confirmed codes per city, with any drift from the inventory above.
-        </div>
-        <div className="vms-drift">
-          {drift.map((d) => (
-            <div className="vms-drift-row" key={d.city}>
-              <span className="vms-drift-city">{d.city}</span>
-              <span className="vms-drift-codes">{d.confirmed.length ? d.confirmed.join(", ") : "no confirmed codes"}</span>
-              {d.notes.length > 0
-                ? <span className="vms-drift-flag">{d.notes.join(" · ")}</span>
-                : <span className="vms-drift-ok">matches inventory</span>}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="vms-card">
-        <div className="vms-wl-head">
-          <strong>Camera icon worklist</strong>
-          <span>{needEmoji.length + needClubhouse.length} to reconcile · <button type="button" className="vms-linkbtn" onClick={onExport}>Export CSV</button></span>
-        </div>
-        {worklistEmpty ? (
-          <div className="vms-state">Clubhouse intent and the app emoji agree — nothing to reconcile this week.</div>
-        ) : (
-          <>
-            <WlSection title="Add the camera emoji" hint="Marked in Clubhouse, but no 🎥 in the app yet." rows={needEmoji} dayLabel={dayLabel} />
-            <WlSection title="Marked in the app but not in Clubhouse" hint="Has the 🎥 emoji, but no camera intent in Clubhouse." rows={needClubhouse} dayLabel={dayLabel} />
-          </>
-        )}
-      </div>
-    </>
-  );
-}
-
-function WlSection({ title, hint, rows, dayLabel }: {
-  title: string; hint: string; rows: VeoMatch[]; dayLabel: (i: number) => string;
-}) {
-  return (
-    <div className="vms-wl-sec">
-      <div className="vms-wl-sec-h"><strong>{title}</strong><span>{rows.length}</span></div>
-      <div className="vms-wl-hint">{hint}</div>
-      {rows.length === 0 ? (
-        <div className="vms-wl-none">None.</div>
-      ) : (
-        <table className="vms-wl">
-          <thead><tr><th>Day</th><th>City</th><th>Venue</th><th>Time</th><th>Match name</th></tr></thead>
-          <tbody>
-            {rows.map((m) => (
-              <tr key={m.apiId}>
-                <td className="vms-nm">{dayLabel(m.dayIdx)}</td>
-                <td>{m.city}</td>
-                <td>{m.venue}</td>
-                <td>{m.time}</td>
-                <td>{m.name}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
-}
 
 const CSS = `
 /* THE VEO ROW, in the panel's notice slot. It sits between the dark bar and the tab strip, so it
@@ -1668,7 +1477,6 @@ const CSS = `
 .vms-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;
   padding:18px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .vms-h-title{font-size:16px;font-weight:900;letter-spacing:-.2px;color:var(--forest)}
-.vms-h-sub{font-size:12px;color:var(--muted);margin-top:5px;max-width:720px;line-height:1.45}
 .vms-h-right{display:flex;align-items:center;gap:11px;flex-wrap:wrap}
 .vms-control-label{font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
 .vms-segmented{display:inline-flex;background:var(--slot);border:1px solid var(--line);border-radius:10px;padding:3px}
@@ -1679,7 +1487,6 @@ const CSS = `
   padding:8px 15px;border-radius:10px;cursor:pointer;font-family:inherit}
 .vms-btn:hover{background:var(--slot)}
 .vms-btn:disabled{opacity:.55;cursor:default}
-.vms-linkbtn{border:0;background:transparent;color:var(--forest);font-weight:800;font-size:11px;cursor:pointer;font-family:inherit;text-decoration:underline;padding:0}
 
 /* week navigation — lives in the card header next to View, drives both views */
 .vms-wknav{display:inline-flex;align-items:center;gap:8px}
@@ -1808,7 +1615,18 @@ const CSS = `
 .vms-mlow{color:#8a6300}
 /* PAST DAYS RECEDE. A day that has run has nothing left to decide. The numbers stay legible —
    this is a step back, not a hide. */
+/* A CAMERA-MARKED MATCH IN THE MONTH GRID. The week grid's on-state chip is --mintSoft on #8fd9b6
+   (.vms-cam.vms-on); this is the same pair, so one match reads the same in both views without a new
+   colour. The glyph is the same CamIcon the week grid's chip carries. */
+.vms-mitem.vms-mveo{background:var(--mintSoft);border-color:#8fd9b6}
+.vms-agi.vms-agveo{background:var(--mintSoft)}
+.vms-agi.vms-agveo svg{width:11px;height:11px;flex:0 0 auto;color:#046B45;align-self:center}
+.vms-agi.vms-agveo>b{color:#046B45}
+.vms-mitem.vms-mveo svg{width:10px;height:10px;flex:0 0 auto;color:#046B45;align-self:center}
+.vms-mitem.vms-mveo b{color:#046B45}
 .vms-mpast .vms-mitem{opacity:.62;background:#F7F8F7;border-color:#EAEEEA}
+/* A PAST CAMERA MATCH KEEPS ITS MARK, dimmed with everything else on the day. */
+.vms-mpast .vms-mitem.vms-mveo{background:#EAF5EE;border-color:#CFE6DA}
 .vms-mpast .vms-mnum{color:#6d7b74}
 .vms-mtd{font-size:9px;letter-spacing:.7px;text-transform:uppercase;font-weight:800;color:#046B45;background:#e0f2e7;border-radius:999px;padding:1px 6px}
 /* CANCELLED — struck through with a red left edge, and no count colour to read. */
@@ -1853,12 +1671,6 @@ const CSS = `
 .vms-todaybtn-hot{border-color:var(--forest);background:var(--forest);color:#fff}
 .vms-todaybtn-hot:hover{background:var(--forest)}
 
-.vms-stats{display:flex;gap:0;border-bottom:1px solid var(--line);flex-wrap:wrap}
-.vms-stat{flex:1;min-width:150px;padding:14px 20px;border-right:1px solid var(--line)}
-.vms-stat:last-child{border-right:0}
-.vms-stat-l{font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
-.vms-stat-v{font-size:21px;font-weight:900;color:var(--forest);margin-top:5px;line-height:1;font-variant-numeric:tabular-nums}
-.vms-stat-f{font-size:11px;color:var(--muted);margin-top:5px;font-weight:650}
 .vms-state{padding:26px 20px;font-size:13px;color:var(--muted);font-weight:650;display:flex;gap:12px;align-items:center}
 
 /* schedule view */
@@ -1922,14 +1734,6 @@ span.vms-cam:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
 .vms-toast-warn{background:var(--coralInk)}
 
 /* veo grid */
-.vms-grid-wrap{overflow-x:auto}
-.vms-grid{width:100%;border-collapse:collapse;min-width:1080px}
-.vms-grid th,.vms-grid td{border:1px solid var(--line);padding:6px;vertical-align:top;text-align:left}
-.vms-grid th{padding:10px 11px;font-size:10px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;
-  color:var(--muted);background:var(--slot);white-space:nowrap}
-.vms-grid th.vms-corner{width:92px}
-.vms-grid td.vms-unit{font-size:12px;font-weight:900;color:var(--forest);background:var(--slot);
-  white-space:nowrap;width:92px;padding:14px 11px}
 /* Three states, loudest last — covered (quiet mint), idle (dash), open (loud coral). Not inverted. */
 .vms-cell{border-radius:8px;padding:9px 10px;min-height:48px}
 .vms-cell.vms-on{background:#F1FBF6;box-shadow:inset 3px 0 0 var(--mint)}
@@ -1939,7 +1743,6 @@ span.vms-cam:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
 .vms-cell-v{font-size:11.5px;font-weight:800;color:var(--forest);line-height:1.35}
 .vms-cell-t{font-size:10.5px;color:var(--muted);font-weight:700;margin-top:3px}
 .vms-gap{font-size:10px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--coralInk)}
-.vms-unit-x{font-size:8.5px;font-weight:850;letter-spacing:.4px;text-transform:uppercase;color:var(--coralInk);margin-top:3px}
 .vms-empty{font-size:11px;color:#69756E;font-weight:700}
 .vms-warn{display:inline-block;margin-top:6px;font-size:9px;font-weight:900;letter-spacing:.4px;
   text-transform:uppercase;background:var(--coral);color:var(--forest);border-radius:5px;padding:2px 7px}
@@ -1969,21 +1772,6 @@ span.vms-cam:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
 .vms-drift-ok{color:#046B45;font-weight:800;font-size:11px}
 
 /* worklist */
-.vms-wl-head{padding:14px 20px;background:var(--slot);border-bottom:1px solid var(--line);display:flex;
-  justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
-.vms-wl-head strong{font-size:12.5px;font-weight:900;color:var(--forest)}
-.vms-wl-head span{font-size:11px;color:var(--muted);font-weight:700}
-.vms-wl-sec{border-bottom:1px solid var(--line)}
-.vms-wl-sec:last-child{border-bottom:0}
-.vms-wl-sec-h{display:flex;justify-content:space-between;align-items:center;padding:12px 20px 2px}
-.vms-wl-sec-h strong{font-size:12px;font-weight:900;color:var(--forest)}
-.vms-wl-sec-h span{font-size:11px;font-weight:850;color:var(--muted);background:#fff;border:1px solid var(--line);border-radius:99px;padding:1px 9px}
-.vms-wl-hint{padding:0 20px 8px;font-size:11px;color:var(--muted);font-weight:650}
-.vms-wl-none{padding:2px 20px 14px;font-size:11.5px;color:var(--muted);font-weight:700}
-.vms-wl{width:100%;border-collapse:collapse}
-.vms-wl th,.vms-wl td{border:0;border-top:1px solid var(--line);font-size:12px;font-variant-numeric:tabular-nums;padding:10px 20px;text-align:left}
-.vms-wl th{background:#fff;font-size:10px;font-weight:900;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)}
-.vms-wl td.vms-nm{font-weight:800}
 .vms-toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:var(--coralInk);color:#fff;
   font-size:12.5px;font-weight:700;padding:9px 16px;border-radius:999px;z-index:80}
 /* ── THE WEEK GRID SCROLLS ON A PHONE ─────────────────────────────────────────────────────────
@@ -2340,9 +2128,12 @@ function MonthAgenda({ weeks, allMatches, showCx, picked, onOpen }: {
               // AMBER ONLY ON TODAY, and fillTone is where that lives — never re-tested here.
               const tone = fillTone(m, d.isToday);
               return (
-                <button type="button" key={m.apiId} className={"vms-agi" + (m.cancelled ? " cx" : "")}
-                  data-testid="mob-match" data-id={m.apiId} data-tone={tone || "none"}
+                /* THE CAMERA MARK, for the same reason the grid above carries one: Month is the
+                   landing view now, and on a phone this agenda IS Month. Same glyph, same tokens. */
+                <button type="button" key={m.apiId} className={"vms-agi" + (m.cancelled ? " cx" : "") + (m.veo ? " vms-agveo" : "")}
+                  data-testid="mob-match" data-id={m.apiId} data-tone={tone || "none"} data-veo={m.veo ? "1" : "0"}
                   data-cancelled={m.cancelled ? "1" : "0"} onClick={() => onOpen(m.apiId)}>
+                  {m.veo && <CamIcon />}
                   <b>{m.time}</b>
                   {/* THE FIELD WRAPS, IT DOES NOT ELLIPSE. "LBJ Early College High School" is 207px
                       of text in a 173px column; an ellipsis there makes the check pass while the
@@ -2483,7 +2274,15 @@ function MonthCell({ d, onOpen, selectedId, singleField, pick }: {
           return (
             <button type="button" key={m.apiId} data-testid="month-match" data-id={m.apiId}
               data-cancelled={m.cancelled ? "1" : "0"} data-tone={tone || "none"}
+              /* THE CAMERA MARK, WHICH THIS GRID DID NOT SHOW AT ALL until Month became the default
+                 view (2026-09-10). GridMatch.veo was already populated and nothing rendered it, so
+                 the page would have opened on the one view where the camera marks are invisible.
+                 A MARK, NOT THE TOGGLE: a month cell is small and the week grid is where marking
+                 happens. Same tokens as the week grid's on-state chip, so a covered match reads the
+                 same in both places. */
+              data-veo={m.veo ? "1" : "0"}
               className={"vms-mitem" + (selectedId === m.apiId ? " vms-msel" : "")
+                + (m.veo ? " vms-mveo" : "")
                 + (m.cancelled ? " vms-mcx" : "")}
               /* IN PICK MODE THE WHOLE CELL IS THE CONTROL, matches included. Otherwise clicking a
                  day that holds matches both picks it and opens the editor over the calendar you
@@ -2492,7 +2291,9 @@ function MonthCell({ d, onOpen, selectedId, singleField, pick }: {
               /* THE TOOLTIP CARRIES THE UNTRUNCATED TEXT. The field ellipses in a narrow cell;
                  this is where the whole of it lives, count and price included. */
               title={[m.time, m.venue, m.name, countLabel(m), priceLabel(m.price),
+                m.veo ? "Veo camera" : null,
                 m.cancelled ? "CANCELLED" : null].filter(Boolean).join(" · ")}>
+              {m.veo && <CamIcon />}
               <b>{m.time}</b>
               {/* The field, unless the filter is already down to a single field — at which point
                   the field is a constant and the NAME is what distinguishes one entry from another. */}
