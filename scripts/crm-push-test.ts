@@ -17,21 +17,50 @@ const bad = (n: string, d = "") => { FAIL++; console.log(`  XX  ${n} — ${d}`);
 const is = (n: string, got: unknown, want: unknown) => (JSON.stringify(got) === JSON.stringify(want) ? ok(n) : bad(n, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`));
 
 // The real admin shape: several admins, and a thread assigned to exactly one of them.
+// city_identifier is the confinement column — absent or null means unconfined.
 const ADMINS = [{ id: "u-ryan" }, { id: "u-deonna" }, { id: "u-third" }];
 const ASSIGNEE = "u-deonna";
+// The fleet as it actually is: unconfined admins plus one bounded to Warsaw.
+const MIXED = [{ id: "u-ryan", city_identifier: null }, { id: "u-deonna", city_identifier: null },
+               { id: "u-waw", city_identifier: "WAW" }];
 
-console.log("1) RECIPIENTS — everyone, always (assignment does NOT narrow it):");
+console.log("1) RECIPIENTS — everyone IN SCOPE (assignment does NOT narrow it; city does):");
 // THE REGRESSION THIS PINS: the old rule returned [assignee] for an assigned thread, so every
 // inbound on a thread Deonna owned told nobody else. Ryan received nothing for exactly this reason.
 is("an inbound on an ASSIGNED thread pushes every admin, not just the assignee",
-  pushRecipientIds(ADMINS), ["u-ryan", "u-deonna", "u-third"]);
+  pushRecipientIds(ADMINS, "ATX"), ["u-ryan", "u-deonna", "u-third"]);
 is("the assignee is not treated specially — the result is identical either way",
-  pushRecipientIds(ADMINS), pushRecipientIds(ADMINS.filter(() => true)));
-is("the assignee is still included (not swapped out)", pushRecipientIds(ADMINS).includes(ASSIGNEE), true);
-is("an unassigned thread is unchanged — it always pushed everyone", pushRecipientIds(ADMINS).length, 3);
-is("no admins → nobody", pushRecipientIds([]), []);
+  pushRecipientIds(ADMINS, "ATX"), pushRecipientIds(ADMINS.filter(() => true), "ATX"));
+is("the assignee is still included (not swapped out)", pushRecipientIds(ADMINS, "ATX").includes(ASSIGNEE), true);
+is("an unassigned thread is unchanged — every unconfined admin", pushRecipientIds(ADMINS, "ATX").length, 3);
+is("no admins → nobody", pushRecipientIds([], "ATX"), []);
+
+console.log("\n1b) THE CITY BOUNDARY — a push is a SEND, so the route allowlist never saw it:");
+/* THE BUG THIS PINS (2026-09-10): crmPushNotify selected every is_admin row with no city filter,
+ * so the Warsaw operator received Austin's player messages and Austin received Warsaw's.
+ * assertConfinedRoute governs what a confined account may PULL; there is no request to inspect on
+ * a server-initiated send, so confinement was bypassed entirely. */
+is("an AUSTIN message does not reach the Warsaw-confined admin",
+  pushRecipientIds(MIXED, "ATX"), ["u-ryan", "u-deonna"]);
+is("a WARSAW message DOES reach them", pushRecipientIds(MIXED, "WAW"), ["u-ryan", "u-deonna", "u-waw"]);
+is("…and still reaches the unconfined admins too", pushRecipientIds(MIXED, "WAW").length, 3);
+/* AN UNATTRIBUTABLE MESSAGE GOES TO UNCONFINED ADMINS ONLY. An unlinked thread, or a player with no
+ * home city — 4,144 of them — cannot be placed in a market. Sending it to every confined operator
+ * "just in case" is the leak with a friendlier name, and 0165 makes the same judgement about the
+ * finder's unset filter. The two must not disagree. */
+is("a message with NO city reaches unconfined admins only", pushRecipientIds(MIXED, null), ["u-ryan", "u-deonna"]);
+is("…and a fleet of ONLY confined admins gets nobody", pushRecipientIds([{ id: "u-waw", city_identifier: "WAW" }], null), []);
+/* AN UNRECOGNISED SCOPE IS NOT UNCONFINED. confinedCity() maps through CITY_SCOPES and returns null
+ * for a value that is not in it — which would silently promote an account scoped by an older SQL
+ * grant to seeing everything. Pinned so that stays a deliberate decision. */
+is("an admin with an unrecognised city_identifier is treated as unconfined",
+  pushRecipientIds([{ id: "u-odd", city_identifier: "ZZZ" }], "ATX"), ["u-odd"]);
+
 // and the source must not have grown an assignee branch back
 { const s = readFileSync("src/lib/crmPushNotify.ts", "utf8");
+  is("the recipient query selects the confinement column", /select\("id, city_identifier"\)/.test(s), true);
+  is("…and the message's city comes from the player's home city",
+    /preferable_city_normalized/.test(s), true);
   is("crmPushNotify no longer branches on assigned_to_user_id for recipients", /assigned_to_user_id\s*\)?\s*(\?\?|\|\||\?)/.test(s), false); }
 
 console.log("\n2) WHAT PUSHES — inbound player messages only:");

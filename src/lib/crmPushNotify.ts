@@ -21,6 +21,11 @@
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+/* THE SAME BOUNDARY THE ROUTES USE, not a second reading of city_identifier. confinedCity() maps a
+ * stored value through CITY_SCOPES and returns null for an unrecognised one, which is what keeps an
+ * account scoped by an older grant from silently becoming unconfined here. */
+import { confinedCity } from "./cityConfinement";
+import { resolveCityScope } from "./cityScope";
 import {
   sendPushNotificationToMany,
   type PushPayload,
@@ -49,10 +54,37 @@ export type CrmInboundPushArgs = {
   supabase: SupabaseClient;
 };
 
-// PURE — who gets pushed. EVERY admin, always; assignment is irrelevant. Kept as a function (rather
-// than inlined) so the rule is assertable offline, which is what was missing when this broke.
-export function pushRecipientIds(admins: Array<{ id: string }>): string[] {
-  return admins.map((a) => a.id).filter(Boolean);
+/* PURE — who gets pushed, and it is NOT every admin any more (corrected 2026-09-10).
+ *
+ * It used to be `select id from app_users where is_admin` with no city filter anywhere, so a
+ * server-initiated push reached every admin in the estate. THE ROUTE ALLOWLIST DOES NOT COVER THIS.
+ * assertConfinedRoute governs what a confined account may PULL; a push is something the server
+ * SENDS, with no request to inspect, so confinement was bypassed entirely. The Warsaw operator was
+ * getting Austin's player messages on their phone and Austin was getting Warsaw's.
+ *
+ * THE RULE. An unconfined admin gets everything, exactly as before. A confined admin gets a message
+ * only when it can be attributed to their city.
+ *
+ * A MESSAGE THAT CANNOT BE ATTRIBUTED GOES TO UNCONFINED ADMINS ONLY. An unlinked thread, or a
+ * player with no home city — 4,144 of them, the abandoned-signup cohort — cannot be placed in a
+ * market: mdapi_users.raw carries no country, locale or region, and most of that cohort has no
+ * phone number either. Sending it to every confined operator "just in case" is the leak with a
+ * friendlier name. This is the same judgement 0165 makes about the finder's unset filter, and the
+ * two must not disagree.
+ *
+ * PURE AND EXPORTED so the rule is assertable offline, which is what was missing when this broke. */
+export function pushRecipientIds(
+  admins: Array<{ id: string; city_identifier?: string | null }>,
+  messageCity: string | null,
+): string[] {
+  return admins
+    .filter((a) => {
+      const scope = confinedCity(a);
+      if (!scope) return true;                 // unconfined — everything, unchanged
+      return messageCity != null && scope === messageCity;
+    })
+    .map((a) => a.id)
+    .filter(Boolean);
 }
 
 // PURE — whether a message pushes at all. Only inbound player messages do.
@@ -90,18 +122,32 @@ async function doNotify({
   // 0. Outbound / auto-reply never push. Belt-and-braces with the call sites.
   if (!shouldPushForMessage({ direction, isAutoReply })) return;
 
-  // 1. Recipients: EVERY admin. The thread's assignee no longer narrows this — an assigned thread
-  //    pushes to everyone exactly like an unassigned one, so a conversation someone else owns can
-  //    still reach the rest of the team.
+  /* 1a. THE MESSAGE'S CITY, from the player. crm_threads carries no city of its own — the columns
+   *     are the phone, the player and the conversation's own state — so the only attribution
+   *     available is the player's home city. A thread with no player, or a player with no home
+   *     city, resolves to null and reaches unconfined admins only. */
+  let messageCity: string | null = null;
+  if (playerId != null) {
+    const who = await supabase
+      .from("mdapi_users").select("preferable_city_normalized").eq("id", playerId).maybeSingle();
+    if (who.error) console.warn("[crm:push] player city lookup failed", who.error);
+    messageCity = resolveCityScope(who.data?.preferable_city_normalized ?? null)?.identifier ?? null;
+  }
+
+  // 1b. Recipients. The thread's assignee still does not narrow this — an assigned thread pushes to
+  //     everyone in scope exactly like an unassigned one. City is the only narrowing.
   const admins = await supabase
     .from("app_users")
-    .select("id")
+    .select("id, city_identifier")
     .eq("is_admin", true);
   if (admins.error) {
     console.error("[crm:push] admin lookup failed", admins.error);
     return;
   }
-  const recipientIds = pushRecipientIds((admins.data ?? []) as Array<{ id: string }>);
+  const recipientIds = pushRecipientIds(
+    (admins.data ?? []) as Array<{ id: string; city_identifier?: string | null }>,
+    messageCity,
+  );
   if (recipientIds.length === 0) return;
 
   // 2. Resolve push subscriptions for those recipients, grouped by

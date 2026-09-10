@@ -112,6 +112,16 @@ const fmtDate = (iso: string | null): string => {
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
 };
 
+/* THE STAMP, IN THE IDIOM THE REST OF CLUBHOUSE USES. Master Schedule reads "Data as of 2:25 PM"
+ * and this matches it exactly — a clock time, not a relative age, and not a sentence. fmtWhen below
+ * stays for the STALE warning, where "3 hours ago" is the thing that carries the alarm. */
+const fmtClock = (iso: string | null): string => {
+  if (!iso) return "unknown";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "unknown";
+  return d.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" });
+};
+
 const fmtWhen = (iso: string | null): string => {
   if (!iso) return "unknown";
   const d = new Date(iso);
@@ -591,10 +601,18 @@ export default function PlayerFinder({ onOpen }: { onOpen?: (id: number) => void
               next sync.
             </>
           ) : (
-            /* NOTHING WHEN THE SET IS FRESH. This said "Mirrored data · set rebuilt X. A signup
-               newer than that is not here yet." — cut on 2026-09-10. The STALE branch above is
-               untouched, because that one is a warning and not a caption. */
-            null
+            /* ONE LINE, NOT A PARAGRAPH. What stood here was "Mirrored data · set rebuilt X. A
+               signup newer than that is not here yet." — cut deliberately, and the paragraph is
+               not coming back. But the FACT it carried is the one that hid a real bug: the Warsaw
+               operator could not tell "not synced yet" from "missing", and player 90527 was the
+               former by 34 minutes.
+
+               usersSyncedAt, NOT sourceSyncedAt. This is a list of PLAYERS, and sourceSyncedAt is
+               the NEWER of the users and matches mirrors — it exists to decide staleness, where
+               either mirror moving matters. As a stamp it would show the matches time, and matches
+               jumps ahead on every write-through, so on a busy afternoon it would claim the player
+               list was fresher than it is. That is precisely the lie this line exists to stop. */
+            <>Data as of {fmtClock(data?.freshness?.usersSyncedAt ?? null)}</>
           )}
           {/* WHAT REFRESH ACTUALLY DID, said plainly. The failure case is the one that matters: a
               source sync that errored leaves the page NOT current, and the old button reported

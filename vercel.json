@@ -9,6 +9,10 @@
       "schedule": "0 9 * * *"
     },
     {
+      "path": "/api/sync/users-recent",
+      "schedule": "5 * * * *"
+    },
+    {
       "path": "/api/sync/meta-ad-spend",
       "schedule": "0 10 * * *"
     },
