@@ -146,7 +146,23 @@ console.log("\nTHE COPY FLOW: confirm, create, then the editor — and nothing o
   /* THE VEO FLAG IS CLUBHOUSE-SIDE — veo_intent, keyed on match_api_id. MatchDay has no camera
    * field, so it cannot ride the create body and is copied by a second write. */
   is("  the Veo flag is copied by a POST to veo/intent", /\/api\/veo\/intent/.test(code) && /matchApiId: j\.id/.test(code), true);
-  is("  …only when the source had it", /if \(drawerVeo\)/.test(code), true);
+  /* THE SOURCE'S FLAG IS CAPTURED, NOT READ AT RUN TIME — and that was a bug, not a style point.
+   * enterCopy calls setDrawerId(null) so the drawer does not cover the calendar; drawerVeo returns
+   * false when drawerId is null; runCopy read drawerVeo. So NO copy ever carried the camera.
+   * Measured 2026-09-10 with writes intercepted: source marked, one create, zero intent writes. */
+  is("  …only when the source had it, captured at copy time", /if \(copyVeo\.veo\)/.test(code), true);
+  is("  …and drawerVeo is no longer read inside the copy run",
+    /if \(drawerVeo\)/.test(code), false);
+  is("  control: drawerVeo still exists and still drives the checkbox",
+    /const drawerVeo = useMemo/.test(code) && /checked=\{drawerVeo\}/.test(code), true);
+  /* AND THE OVERRIDE IS NOT WRITTEN WHEN THE SLOT ALREADY MARKS THE COPY. An override survives its
+   * pattern being turned off, so writing one unconditionally pinned every copy marked forever. */
+  is("  the new match's slot is resolved before the override is written",
+    /\/api\/veo\/slot-intent\?\$\{q\}/.test(code) && /coveredByPattern/.test(code), true);
+  is("  …and the override is skipped when the pattern already covers it",
+    /if \(!coveredByPattern\)/.test(code), true);
+  is("  …with the PICKED weekday, not the source's",
+    /Number\(iso\.slice\(0, 4\)\)[\s\S]{0,90}getDay\(\)/.test(code), true);
   // CONTROL: the old navigate-to-a-form behaviour is gone.
   is("  control: it no longer navigates to /matches/new", /matches\/new\?from=/.test(code), false);
 }

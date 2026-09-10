@@ -216,6 +216,16 @@ export default function VeoMasterSchedule() {
    * A Map of ISO date → "HH:MM", HELD ABOVE THE GRID and never on a cell, which is what lets the
    * ‹ › arrows work mid-pick and carry the picks with them. A multi-month copy is one operation. */
   const [copySrc, setCopySrc] = useState<SourceMatch | null>(null);
+  /* THE SOURCE'S CAMERA STATE, CAPTURED AT COPY TIME — and it has to be captured, which is the bug.
+   * runCopy used to read `drawerVeo`, but enterCopy calls setDrawerId(null) first (the drawer would
+   * cover the calendar you are about to pick on), and drawerVeo returns false when drawerId is
+   * null. So by the time the loop ran the flag was ALWAYS false and NO copy has ever carried the
+   * camera. Measured 2026-09-10 with every write intercepted: source 18549 marked, checkbox true,
+   * one create, ZERO intent writes.
+   *
+   * THE SLOT COMES WITH IT because the new match's slot is the source's city and field at the
+   * PICKED weekday and time — see the resolve in runCopy. */
+  const [copyVeo, setCopyVeo] = useState<{ veo: boolean; slot: { city: string; field: string; weekday: number; hhmm: string } | null }>({ veo: false, slot: null });
   const [picks, setPicks] = useState<Map<string, string>>(new Map());
   const [copyRun, setCopyRun] = useState<{ iso: string; hhmm: string; outcome: string; id?: number; error?: string }[] | null>(null);
   const [pickedDay, setPickedDay] = useState<string | null>(null);
@@ -753,6 +763,13 @@ export default function VeoMasterSchedule() {
       const sj = await sres.json();
       if (!sres.ok) { showToast(`Couldn't read the match to copy: ${sj?.error ?? sres.status}`, true); return; }
       setCopySrc((sj.match ?? sj) as SourceMatch);
+      /* CAPTURE BEFORE THE DRAWER CLOSES. Both reads resolve the same way the panel does — week
+       * first, then the month range — so a source outside the current week is not silently false. */
+      setCopyVeo({
+        veo: drawerVeo,
+        slot: week?.matches.find((m) => m.apiId === drawerId)?.slot
+          ?? monthData?.matches.find((m) => m.apiId === drawerId)?.slot ?? null,
+      });
       setPicks(new Map());
       setCopyRun(null);
       setDrawerId(null);          // the drawer would cover the calendar you are about to pick on
@@ -761,7 +778,7 @@ export default function VeoMasterSchedule() {
     } finally { setCopyBusy(false); }
   }, [drawerId, copyBusy, showToast]);
 
-  const exitCopy = useCallback(() => { setCopySrc(null); setPicks(new Map()); }, []);
+  const exitCopy = useCallback(() => { setCopySrc(null); setPicks(new Map()); setCopyVeo({ veo: false, slot: null }); }, []);
 
   /** The source's own time, which every picked date opens at. */
   const srcHHMM = typeof copySrc?.startDate === "string" ? String(copySrc.startDate).slice(11, 16) : "";
@@ -815,13 +832,36 @@ export default function VeoMasterSchedule() {
              * copy has to say so rather than imply the camera came with it.
              * THE MATCH STILL LANDED. The outcome stays LANDED because it did; the note names the
              * one thing that did not, so the operator can ask someone unconfined to set it. */
-            if (drawerVeo) {
+            if (copyVeo.veo) {
+              /* ── DOES THE NEW MATCH'S SLOT ALREADY MARK IT? ────────────────────────────────
+               * Before the slot pattern existed, an explicit per-match override was the only way
+               * to carry the flag. Now it is the WRONG way when a pattern already covers the new
+               * match: an override SURVIVES its pattern being turned off, so every copy would stay
+               * marked forever after the slot rule stopped — which nobody would predict from
+               * pressing Copy. So resolve the slot first and write the override only when the copy
+               * would otherwise land unmarked.
+               *
+               * THE NEW MATCH'S SLOT is the source's city and field at the PICKED weekday and time
+               * — the copy moves the date and may move the time, and both are part of the key.
+               * The weekday is read off the picked ISO's own characters, never a parsed instant. */
+              let coveredByPattern = false;
+              const sl = copyVeo.slot;
+              if (sl) {
+                try {
+                  const wd = new Date(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))).getDay();
+                  const q = new URLSearchParams({ city: sl.city, field: sl.field, weekday: String(wd), hhmm });
+                  const sr = await fetch(`/api/veo/slot-intent?${q}`, { headers, cache: "no-store" });
+                  if (sr.ok) coveredByPattern = (await sr.json())?.enabled === true;
+                } catch { /* unresolved = write the override, which is the old behaviour and safe */ }
+              }
               let veoNote: string | null = null;
-              try {
-                const vr = await fetch("/api/veo/intent", { method: "POST", headers,
-                  body: JSON.stringify({ matchApiId: j.id, enabled: true }) });
-                if (!vr.ok) veoNote = "the match was created, but the Veo camera flag did not carry — set it on the new match";
-              } catch { veoNote = "the match was created, but the Veo camera flag did not carry — set it on the new match"; }
+              if (!coveredByPattern) {
+                try {
+                  const vr = await fetch("/api/veo/intent", { method: "POST", headers,
+                    body: JSON.stringify({ matchApiId: j.id, enabled: true }) });
+                  if (!vr.ok) veoNote = "the match was created, but the Veo camera flag did not carry — set it on the new match";
+                } catch { veoNote = "the match was created, but the Veo camera flag did not carry — set it on the new match"; }
+              }
               out.push({ iso, hhmm, outcome: "LANDED", id: Number(j.id), ...(veoNote ? { error: veoNote } : {}) });
             } else {
               out.push({ iso, hhmm, outcome: "LANDED", id: Number(j.id) });
@@ -845,7 +885,7 @@ export default function VeoMasterSchedule() {
       setPicks(new Map());
       setCopySrc(null);
     } finally { setCopyBusy(false); }
-  }, [copySrc, picks, copyBusy, drawerVeo, view, range, loadRange, weekRef, showToast]);
+  }, [copySrc, picks, copyBusy, copyVeo, view, range, loadRange, weekRef, showToast]);
 
 
   const openCard = useCallback((id: number) => {
