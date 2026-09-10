@@ -40,6 +40,15 @@ const KNOWN_REFUSED: Record<string, string> = {
     "The camera flag. Fleet configuration: a confined account reads its week and does not change "
     + "what the cameras cover. Left refused; the copy flow now says the flag did not carry rather "
     + "than reporting LANDED and losing it silently.",
+  "/api/veo/slot-intent":
+    "The RECURRING camera rule — every Tuesday at this field and time. Fleet configuration by the "
+    + "same judgement as /api/veo/intent above, and more so: one write here marks matches across "
+    + "every future week, including matches that do not exist yet. A bounded account reads its "
+    + "week and does not decide what the fleet films. The CAMERA section simply does not render.",
+  "/api/veo/reconcile":
+    "The drift count between Clubhouse intent and the camera emoji in the MatchDay name. Reading "
+    + "it is fleet-wide by construction — it walks every future match in every city — and pressing "
+    + "what it offers renames matches players see. Refused for the same reason as the two above.",
   "/api/veo/codes": "The code table itself — fleet configuration, not a city's own data.",
   "/api/veo/cameras": "Camera inventory across every city.",
   "/api/schedule-master": "Writes the recurring slot template for every city, not one.",

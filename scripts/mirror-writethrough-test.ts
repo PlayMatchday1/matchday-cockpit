@@ -220,7 +220,11 @@ console.log("\nthe map covers what Master Schedule renders — the reason this b
   /* MASTER SCHEDULE'S SELECT IS THE SPEC. Whatever it renders out of the mirror must be write-
    * through-able, or an edit to that field is invisible until the daily cron. It selected five
    * columns and the map covered two of them. */
-  const sel = /\.select\("([^"]*api_id[^"]*)"\)/.exec(SCHED)?.[1] ?? "";
+  /* ANCHORED ON THE MIRROR'S OWN SELECT, which begins "api_id, name". The pattern used to be
+     [^"]*api_id[^"]* and matched the FIRST select carrying the substring — which from 2026-09-10
+     is veo_intent's "match_api_id, enabled, set_by", because resolveIntentFor sits above
+     fetchVeoWeek in the file. The control below caught it rather than the check going vacuous. */
+  const sel = /\.select\("(api_id,[^"]*)"\)/.exec(SCHED)?.[1] ?? "";
   const rendered = sel.split(",").map((c) => c.trim())
     .filter((c) => !["api_id", "deleted_at", "synced_at", "city_identifier"].includes(c));
   if (rendered.length >= 4) ok(`control: read ${rendered.length} rendered columns out of veoSchedule: ${rendered.join(", ")}`);

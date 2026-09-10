@@ -348,8 +348,13 @@ for (const r of ["list", "detail/[id]", "fields", "matches", "check"]) {
      * match day. Same gate; the city scope is resolved through the recording's match or its code,
      * because veo_recordings carries no city of its own. */
     "veo/recent/route.ts": "crm",
+  // The drift count between intent and the camera emoji. crm-gated, and deliberately OUTSIDE the
+  // confined allowlist — see KNOWN_REFUSED in confined-routes-test.ts.
+  "veo/reconcile/route.ts": "crm",
     "veo/resync/route.ts": "capability",            // GET (read one match's intent) + POST (toggle it)
     "veo/route.ts": "crm",
+  // The recurring camera rule. Same gate, same deliberate refusal for a confined account.
+  "veo/slot-intent/route.ts": "crm",
     /* ADDED 2026-09-05. Reads one recording's og:image so the viewer can show a real still frame
      * instead of a black rectangle. Same gate; the Veo URL comes from the ROW, never the request,
      * and its host is checked besides. Listed LAST because this map is compared key-order against

@@ -60,9 +60,15 @@ import type { PanelSavedPatch } from "@/components/MatchPanel";
 
 type VeoDay = { dow: string; date: number; iso: string; today: boolean };
 type VeoCity = { city: string; cameras: number };
+/* A CLIENT-SIDE MIRROR OF veoSchedule.VeoMatch, deliberately narrower — it lists what this page
+ * renders rather than everything the endpoint sends. `fromPattern` and `slot` arrived with the
+ * recurring camera rule: the first drives the repeat pip, the second is the slot key the panel
+ * needs and is computed SERVER-SIDE by slotKeyOf so there is one implementation of it. */
 type VeoMatch = {
   apiId: number; city: string; dayIdx: number; time: string; minutes: number;
   venue: string; name: string; rawName: string; veo: boolean; hasEmoji: boolean;
+  fromPattern?: boolean;
+  slot?: { city: string; field: string; weekday: number; hhmm: string } | null;
 };
 type VeoCode = { code: string; confirmed: boolean };
 type VeoCodesRef = { city: string; codes: VeoCode[] };
@@ -499,6 +505,62 @@ export default function VeoMasterSchedule() {
   //
   // THE DIFF IS THE REQUEST BODY: `changes` carries `name` and nothing else. Echoing startDate back
   // would re-shift it — those are LOCAL WALL CLOCK despite the Z suffix.
+  /* ── THE RECONCILE: intent vs the 🎥 in the app, for future matches ─────────────────────────
+   * The capability that came off with the Veo coverage view, back as one number and one button.
+   * The pattern can mark a match nobody clicked — including one created next month — so something
+   * has to put the camera into the name, and Ryan's answer settles that it must: "every match with
+   * the camera should have it in the app too".
+   *
+   * A PERSON PRESSES IT, AND IT IS NOT A SCHEDULE. A match name is player-visible and this
+   * codebase already writes that rule down twice — crm-characterize-test.ts:87 and veoNameSync's
+   * closing note. There is no cron path to this and there must never be one.
+   *
+   * COUNTED ON DEMAND, NOT ON LOAD, AND THAT IS DELIBERATE. The count is only trustworthy if every
+   * candidate's LIVE name is read — the mirror lags a write by an hour and a mirror-based count
+   * re-proposes names it already wrote. That is one GET per candidate, so it runs when somebody
+   * asks for it rather than on every page view. */
+  const [rec, setRec] = useState<null | {
+    add: { apiId: number; city: string; venue: string; date: string; time: string; name: string; nextName: string }[];
+    addCount: number; stripCount: number; alreadyMarkedLive: number; truncated: boolean; unreadable: number;
+  }>(null);
+  const [recBusy, setRecBusy] = useState(false);
+  const [recRes, setRecRes] = useState<{ apiId: number; label: string; verdict: string; detail?: string }[] | null>(null);
+
+  async function countReconcile() {
+    if (recBusy) return;
+    setRecBusy(true); setRecRes(null);
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token;
+      if (!token) { setError("No active session."); return; }
+      const r = await fetch(`/api/veo/reconcile?env=${FULL_EDITOR_ENV}`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+      const j = await r.json();
+      if (!r.ok) { setError(j.error ?? `HTTP ${r.status}`); return; }
+      setRec(j);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setRecBusy(false); }
+  }
+
+  /* ONE WRITE PER MATCH, ONE VERDICT PER MATCH. Through writeName, which is the same PUT the chip
+   * uses — one match-name writer in the estate, one host guard, one EDIT MATCHES gate, one
+   * recordWrite. A single outcome over fifty writes would be a lie. */
+  async function runReconcile() {
+    if (!rec || recBusy) return;
+    setRecBusy(true);
+    const out: { apiId: number; label: string; verdict: string; detail?: string }[] = [];
+    for (const c of rec.add) {
+      // nextName came from the LIVE name at count time; writeName re-runs nameForVeo over it and
+      // still refuses a no-change edit, so a name that gained a camera in between sends nothing.
+      const w = await writeName(c.apiId, c.name, true);
+      out.push({ apiId: c.apiId, label: `${c.date} ${c.time} · ${c.city} · ${c.venue}`,
+        verdict: w == null ? "NOT APPLIED" : w.outcome, detail: w == null ? "already marked — nothing sent" : undefined });
+      setRecRes([...out]);
+    }
+    setRecBusy(false);
+    await load(weekRef, true);
+    setRec(null);
+  }
+
   async function writeName(apiId: number, rawName: string, enabled: boolean): Promise<{ outcome: string; sent: string } | null> {
     const edit = nameForVeo(rawName, enabled);
     if (!edit.change) return null; // NOT A CHANGE — send nothing at all.
@@ -1015,6 +1077,54 @@ export default function VeoMasterSchedule() {
 
       </div>
 
+      {/* THE RECONCILE LINE. One number and one button — see countReconcile for why the number is
+          only fetched when asked for. */}
+      {!confined && (
+        <div className="vms-recon" data-testid="reconcile">
+          {!rec ? (
+            <>
+              <span className="vms-recon-t">Camera names in the app</span>
+              <button type="button" className="vms-btn" data-testid="reconcile-count"
+                disabled={recBusy} onClick={() => void countReconcile()}>
+                {recBusy ? "Checking…" : "Check"}
+              </button>
+            </>
+          ) : rec.addCount === 0 ? (
+            <>
+              <span className="vms-recon-t">Every marked match already carries the camera in the app.
+                {rec.stripCount > 0 && <> {rec.stripCount} carr{rec.stripCount === 1 ? "ies a" : "y a"} 🎥 that Clubhouse says is off — listed, not touched.</>}
+              </span>
+              <button type="button" className="vms-btn" onClick={() => setRec(null)}>Close</button>
+            </>
+          ) : (
+            <>
+              <span className="vms-recon-ic" aria-hidden>!</span>
+              <span className="vms-recon-t" data-testid="reconcile-count-line">
+                <b>{rec.addCount} marked match{rec.addCount === 1 ? " has" : "es have"} no 🎥 in the app</b>
+                <span>Writing them renames each match in MatchDay, which players see.
+                  {rec.stripCount > 0 && <> {rec.stripCount} more carr{rec.stripCount === 1 ? "ies" : "y"} a 🎥 that Clubhouse says is off — those are listed, not touched.</>}
+                  {rec.truncated && <> More candidates remain; run it again after this batch.</>}
+                </span>
+              </span>
+              <button type="button" className="vms-btn vms-recon-go" data-testid="reconcile-write"
+                disabled={recBusy} onClick={() => void runReconcile()}>
+                {recBusy ? "Writing…" : `Write ${rec.addCount} name${rec.addCount === 1 ? "" : "s"}`}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {/* ONE ROW PER WRITE. A single outcome over fifty writes would be a lie. */}
+      {recRes && (
+        <ul className="vms-recres" data-testid="reconcile-results">
+          {recRes.map((r) => (
+            <li key={r.apiId} data-testid="reconcile-result" data-verdict={r.verdict}>
+              <span className="v">{r.verdict}</span><span>{r.label}{r.detail ? ` — ${r.detail}` : ""}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
       {loading && !week ? (
         <div className="vms-card"><div className="vms-state">Loading Veo coverage…</div></div>
       ) : error && !week ? (
@@ -1306,6 +1416,11 @@ export default function VeoMasterSchedule() {
         <MatchSidePanel
           key={drawerId}
           matchId={drawerId}
+          /* THE SLOT FOR THE OPEN MATCH, from whichever view is showing. Computed on the server by
+             slotKeyOf and carried on the row — never derived here, because the weekday is
+             wall-clock date math and doing it twice is how the two would drift apart. */
+          slot={week?.matches.find((m) => m.apiId === drawerId)?.slot
+            ?? monthData?.matches.find((m) => m.apiId === drawerId)?.slot ?? null}
           width={600}
           tab={panelTab}
           onTab={setPanelTab}
@@ -1395,6 +1510,10 @@ function ScheduleView({ week, busy, onToggle, onRetry, onOpen, selectedId, faile
                             write THIS page attempted and did not land — never for history, and
                             never for a write that succeeded but whose result the mirror has not
                             caught up with yet. */}
+                        {/* THE ROW OWNS THE 6px, NOT THE CHIP. Left as a margin on the children it
+                            sits INSIDE the flex line and the card grows taller than its six
+                            neighbours; .camrow carries it and .camrow .vms-cam zeroes its own. */}
+                        <span className="vms-camrow">
                         {(() => {
                           const off = failed.has(m.apiId);
                           return (
@@ -1411,6 +1530,15 @@ function ScheduleView({ week, busy, onToggle, onRetry, onOpen, selectedId, faile
                             </span>
                           );
                         })()}
+                        {/* THE REPEAT PIP. A STATUS LIGHT, NOT A CONTROL — it says this match is
+                            marked by a recurring rule and nothing about what the rule is or how
+                            often it fires. There is no room on a 132px card for the sentence, so
+                            the rule itself lives in the panel, one click away on the card. */}
+                        {m.fromPattern && m.veo && (
+                          <span className={"vms-rep" + (m.veo ? " vms-on" : "")} data-testid="veo-repeat"
+                            data-repeat={m.apiId} aria-hidden title="Repeats — open the match to change the rule">&#8635;</span>
+                        )}
+                        </span>
                         {failed.has(m.apiId) && (
                           <span className="vms-unsyncrow" data-testid="veo-unsynced">
                             <span className="vms-unsynctxt">name not updated</span>
@@ -1702,6 +1830,31 @@ const CSS = `
   position:relative;box-shadow:0 1px 4px rgba(0,0,0,.22)}
 .vms-slot-t{font-size:11px;font-weight:900;color:var(--ink);letter-spacing:-.1px}
 .vms-slot-v{font-size:10px;color:var(--muted);font-weight:700;margin-top:2px;line-height:1.3}
+/* THE MARGIN LIVES ON THE ROW. With 6px on each child it lands inside the flex line and a card
+   carrying a pip grows taller than the six beside it; the row carries the gap and the chip keeps
+   none of its own. .vms-cam still has its margin for every surface that renders it bare. */
+.vms-recon{display:flex;align-items:center;gap:12px;border:1px solid #E3C88A;background:#FEF6E7;
+  border-radius:12px;padding:12px 15px;margin-bottom:12px}
+.vms-recon-t{font-size:12.5px;color:#6A5320}
+.vms-recon-t b{font-size:14px;display:block;color:#5C4200}
+.vms-recon-t span{display:block;font-size:12.5px;color:#6A5320}
+.vms-recon-ic{width:26px;height:26px;border-radius:50%;background:#7A5200;color:#fff;display:flex;
+  align-items:center;justify-content:center;font-weight:800;flex:0 0 26px;font-size:14px}
+.vms-recon .vms-btn{margin-left:auto;white-space:nowrap}
+.vms-recon-go{border-color:#E3C88A;color:#7A5200}
+.vms-recres{list-style:none;margin:0 0 12px;padding:0;border:1px solid var(--line);border-radius:12px;background:#fff;overflow:hidden}
+.vms-recres li{display:flex;gap:10px;align-items:baseline;padding:8px 14px;border-bottom:1px solid var(--line);font-size:12px}
+.vms-recres li:last-child{border-bottom:0}
+.vms-recres .v{font-size:9.5px;font-weight:900;letter-spacing:.5px;color:var(--muted);flex:0 0 76px}
+.vms-recres li[data-verdict="LANDED"] .v{color:#046B45}
+.vms-recres li[data-verdict="FAILED"] .v{color:#a4231e}
+.vms-camrow{margin-top:6px;display:flex;align-items:center;gap:4px;flex-wrap:wrap;min-width:0}
+.vms-camrow .vms-cam{margin-top:0}
+.vms-rep{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);
+  background:#fff;border-radius:7px;padding:3px 6px;font-family:inherit;font-size:9px;font-weight:900;
+  letter-spacing:.4px;color:var(--muted);flex:0 0 auto}
+.vms-slot.vms-veo .vms-rep{border-color:rgba(255,255,255,.30);background:rgba(255,255,255,.07);color:#CBEBDA}
+.vms-rep.vms-on{background:var(--yellow);border-color:var(--yellow);color:var(--forest)}
 .vms-cam{margin-top:6px;display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);
   background:#fff;border-radius:7px;padding:3px 7px;cursor:pointer;font-family:inherit;
   font-size:9px;font-weight:900;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}

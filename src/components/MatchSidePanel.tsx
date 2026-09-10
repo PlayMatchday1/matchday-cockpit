@@ -25,10 +25,15 @@ export type PanelTab = "details" | "chat";
 
 export default function MatchSidePanel({
   matchId, tab, onTab, onClose, width, right = 0, className = "", notice, steps, onDirtyChange,
-  onSaved, onCancelLanded,
+  onSaved, onCancelLanded, slot,
 }: {
   /** The match api id. It is ALSO the chat id — proven, and no second lookup. */
   matchId: number;
+  /** The recurring slot this match sits in, computed server-side by veoSchedule.slotKeyOf and
+   *  carried on the schedule row. PASSED THROUGH, NOT DERIVED: the weekday is wall-clock date math
+   *  and the field is the raw title, and one implementation of that key is the point. Absent on a
+   *  host that has no schedule row for the match, and the CAMERA section is then absent too. */
+  slot?: { city: string; field: string; weekday: number; hhmm: string } | null;
   tab: PanelTab;
   onTab: (t: PanelTab) => void;
   onClose: () => void;
@@ -77,7 +82,7 @@ export default function MatchSidePanel({
       <div className={"gpanel-body" + (tab === "details" ? "" : " gpanel-hide")}
         data-testid="gday-panel-details" aria-hidden={tab !== "details"}>
         <MatchPanel key={matchId} matchId={String(matchId)} onDirtyChange={onDirtyChange}
-          onSaved={onSaved} onCancelLanded={onCancelLanded} />
+          onSaved={onSaved} onCancelLanded={onCancelLanded} slot={slot} />
       </div>
       {/* CHAT RESOLVES THE THREAD THE WAY IT WAS PROVEN TO RESOLVE: chatId is the match api_id. */}
       <div className={"gpanel-body gpanel-chat" + (tab === "chat" ? "" : " gpanel-hide")}

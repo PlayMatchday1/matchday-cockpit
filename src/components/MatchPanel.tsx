@@ -108,6 +108,16 @@ const p2 = (n: number) => String(n).padStart(2, "0");
 function clock12(time: string): string { const [h, m] = time.split(":").map(Number); const hr = h % 12 === 0 ? 12 : h % 12; return `${hr}:${p2(m)} ${h < 12 ? "AM" : "PM"}`; }
 function prettyDate(date: string): string { const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]; const [y, mo, d] = date.split("-").map(Number); return `${MON[mo - 1]} ${d}, ${y}`; }
 
+/* THE SLOT SENTENCE'S TWO PIECES. weekday is JS getDay() — 0 is Sunday — because that is what
+ * slotKeyOf produces and what veo_slot_intent stores; a second convention here would put the
+ * pattern on the wrong day. hhmm is wall clock text and is formatted, never parsed into a Date. */
+const DOW_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
+function hhmmTo12(hhmm: string): string {
+  const h = Number(hhmm.slice(0, 2)), m = hhmm.slice(3, 5);
+  const ap = h >= 12 ? "PM" : "AM";
+  return `${h % 12 || 12}:${m} ${ap}`;
+}
+
 async function authHeaders(): Promise<Record<string, string> | null> {
   const { data } = await supabase.auth.getSession();
   const t = data.session?.access_token;
@@ -123,8 +133,11 @@ export type PanelSavedPatch = {
   price: number | null; capacity: number | null; minPlayers: number | null; cancelled: boolean;
 };
 
-export default function MatchPanel({ matchId, env = "production", onDirtyChange, onSaved, onCancelLanded }: {
+export default function MatchPanel({ matchId, env = "production", onDirtyChange, onSaved, onCancelLanded, slot }: {
   matchId: string; env?: "production" | "staging";
+  /** The recurring slot, from the schedule row. Absent on hosts with no schedule row, and the
+   *  CAMERA section below is then absent rather than guessing the key. */
+  slot?: { city: string; field: string; weekday: number; hhmm: string } | null;
   onDirtyChange?: (dirty: boolean) => void;
   /** Fired after a save, with the re-read match, so a host grid can update one card without a reload. */
   onSaved?: (patch: PanelSavedPatch) => void;
@@ -206,6 +219,15 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
    * went unused — and it is not a bug to be rediscovered. */
   const [pendingAdd, setPendingAdd] = useState<{ id: number; name: string } | null>(null);
   const [bulkFakes, setBulkFakes] = useState("1");
+  /* ── THE RECURRING CAMERA PATTERN ────────────────────────────────────────────────────────────
+   * NOT the per-match camera toggle. That one lives on the Master Schedule card and writes
+   * /api/veo/intent; it was deliberately removed from this panel and stays removed. This is the
+   * SLOT rule underneath it — "every Thursday, 8:00 PM, Westlake HS Field 3" — which the card has
+   * no room to state and which needs stating in full before anybody presses it, because the
+   * reconcile that follows renames matches players can see. */
+  const [pat, setPat] = useState<{ enabled: boolean; recorded: boolean; overrides: number } | null>(null);
+  const [patBusy, setPatBusy] = useState(false);
+  const [patErr, setPatErr] = useState<string | null>(null);
   // ── CANCEL (Part C) — the rarest, heaviest, irreversible action. Reaches everyone at once and
   // cannot be undone, so the friction is deliberately the opposite of the chat composer: live numbers
   // read at confirm time + the match NAME typed, not a yes/no.
@@ -327,6 +349,37 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
   /* THE FIELD, AS A NUMBER, read by the stepper, the button label and the write. One reading, so
    * the button cannot promise a count the request does not send. */
   const bulkN = Number(bulkFakes) || 0;
+  /* THE PATTERN, READ ON OPEN so the control reflects reality instead of assuming a default —
+   * the same reason /api/veo/intent grew a GET when the toggle moved into a panel. */
+  useEffect(() => {
+    if (!slot) { setPat(null); return; }
+    let live = true;
+    void (async () => {
+      const h = await authHeaders(); if (!h) return;
+      try {
+        const q = new URLSearchParams({ city: slot.city, field: slot.field, weekday: String(slot.weekday), hhmm: slot.hhmm });
+        const r = await fetch(`/api/veo/slot-intent?${q}`, { headers: h, cache: "no-store" });
+        const j = await r.json();
+        if (live && r.ok) setPat({ enabled: j.enabled === true, recorded: j.recorded === true, overrides: Number(j.overrides) || 0 });
+      } catch { /* the section simply does not offer a state it could not read */ }
+    })();
+    return () => { live = false; };
+  }, [slot, authHeaders]);
+
+  const setPattern = async (enabled: boolean) => {
+    if (!slot || patBusy) return;
+    const h = await authHeaders(); if (!h) { setPatErr("No active session: sign in again."); return; }
+    setPatBusy(true); setPatErr(null);
+    try {
+      const r = await fetch("/api/veo/slot-intent", { method: "POST", headers: { ...h, "Content-Type": "application/json" },
+        body: JSON.stringify({ ...slot, enabled }) });
+      const j = await r.json();
+      if (!r.ok) { setPatErr(j.error ?? `HTTP ${r.status}`); return; }
+      setPat((p) => ({ enabled, recorded: enabled, overrides: p?.overrides ?? 0 }));
+    } catch (e) { setPatErr(`UNKNOWN: ${e instanceof Error ? e.message : String(e)}.`); }
+    finally { setPatBusy(false); }
+  };
+
   const addFakesBulk = async () => {
     if (!roster || opBusy) return;
     const n = Number(bulkFakes);
@@ -1116,9 +1169,52 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
                 that is what keeps match 17467 readable, and it is asserted below. */}
           </Section>
 
-          {/* CAMERA lived here. Removed — Master Schedule carries the Veo toggle on every
-              match card (VeoMasterSchedule posts the same /api/veo/intent), so nothing is lost and
-              nothing shared went with it. */}
+          {/* CAMERA. The PER-MATCH toggle is still not here and is not coming back: Master Schedule
+              carries it on every card, posting /api/veo/intent, and that is the right home for a
+              one-click mark on a thing you are looking at.
+              WHAT IS HERE IS THE RECURRING RULE, which the card has no room to state. A week card is
+              132px at its narrowest and already holds a time, a venue and the chip; the sentence
+              this control has to say — every Thursday, 8:00 PM, Westlake HS Field 3 — is wider than
+              the card. The card gets a repeat pip that means "this repeats" and nothing else.
+              IT SAYS WHAT WILL HAPPEN BEFORE YOU PRESS IT, deliberately. The pattern marks matches
+              nobody has clicked, including matches that do not exist yet, and the reconcile that
+              follows renames them in MatchDay where players see the name. */}
+          {slot && (
+            <Section title="CAMERA">
+              <div className={"mp-patbox" + (pat?.enabled ? " on" : "")} data-testid="mp-pattern"
+                data-on={pat?.enabled ? "1" : "0"}>
+                {pat?.enabled ? (
+                  <>
+                    <span className="mp-patline" data-testid="mp-pattern-state">
+                      Repeating: <b>every {DOW_LONG[slot.weekday]}, {hhmmTo12(slot.hhmm)}, {slot.field}</b>
+                    </span>
+                    <button type="button" className="mp-mini danger" data-testid="mp-pattern-stop"
+                      disabled={patBusy} onClick={() => void setPattern(false)}>
+                      {patBusy ? "Stopping…" : "Stop repeating"}
+                    </button>
+                    {/* THE OVERRIDES SURVIVE, AND IT SAYS SO. Stopping the rule does not unmark the
+                        matches somebody marked by hand — those are the adjustments. */}
+                    {pat.overrides > 0 && (
+                      <span className="mp-ovr" data-testid="mp-pattern-overrides">
+                        Stopping leaves <b>{pat.overrides} match{pat.overrides === 1 ? "" : "es"}</b> you marked individually still marked.
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <button type="button" className="mp-mini mp-pri" data-testid="mp-pattern-start"
+                      disabled={patBusy} onClick={() => void setPattern(true)}>
+                      {patBusy ? "Saving…" : `Repeat every ${DOW_LONG[slot.weekday]}`}
+                    </button>
+                    <span className="mp-help">
+                      Marks every future {DOW_LONG[slot.weekday]}, {hhmmTo12(slot.hhmm)} at {slot.field}, including matches not created yet.
+                    </span>
+                  </>
+                )}
+                {patErr && <span className="mp-ovr" data-testid="mp-pattern-error">{patErr}</span>}
+              </div>
+            </Section>
+          )}
           <Section title="WHEN" dirty={secDirty(["startDate", "endDate"])}>
             <div className="mp-grid3">
               <label className="mp-f"><span className="mp-lb">DATE</span>
@@ -2513,6 +2609,14 @@ const CSS = `
 .mp-selcount em{font-style:normal;font-size:11px;color:var(--ink3)}
 .mp-selwhy{font-size:11px;color:var(--ink2);flex:1;min-width:150px}
 .mp-selacts{display:inline-flex;gap:6px;margin-left:auto}
+/* THE RECURRING-CAMERA BOX. Tokens only, no new colours: .mp-line2 for the resting border and the
+   same green family the primary button already uses once the rule is on. */
+.mp-patbox{border:1px solid var(--line2);border-radius:10px;padding:11px 12px;background:#FAFDFB}
+.mp-patbox.on{border-color:#8fbf9f;background:#F2F9F5}
+.mp-patline{display:block;font-size:12.5px;color:var(--ink2);margin-bottom:7px}
+.mp-patline b{color:var(--ink)}
+.mp-ovr{display:block;margin-top:8px;font-size:11.5px;color:var(--ink3)}
+.mp-ovr b{color:var(--ink2)}
 .mp-mini.mp-pri{background:#1f7a4d;border-color:#1f7a4d;color:#fff}
 .mp-mini.mp-pri:disabled{opacity:.45}
 .mp-mini.on{background:#e8f1ea;border-color:#8fbf9f}

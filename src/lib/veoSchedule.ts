@@ -23,6 +23,82 @@ function fmtTime(d: Date): string {
 const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 
+/* ── CAMERA INTENT: THE OVERRIDE, THEN THE PATTERN, THEN OFF ──────────────────────────────────
+ * veo_intent is per match and is the OVERRIDE. veo_slot_intent is the recurring rule for a slot
+ * (city, raw field_title, weekday, wall-clock HH:MM). A match with its own veo_intent row uses it,
+ * whatever the pattern says; that is what "we can just make adjustments based on any changes"
+ * means. With no row of its own it inherits the slot. With neither it is off.
+ *
+ * BOTH READERS CALL THIS, AND THAT IS THE POINT. fetchVeoWeek and fetchVeoRange each had their own
+ * veo_intent join, and the header on the range reader already says why a second implementation is
+ * dangerous: "A second query with its own date handling is exactly how the wall-clock trap gets
+ * re-introduced." Two resolutions would be the same mistake one layer up — a match could read
+ * covered in Month and open in the week grid.
+ *
+ * THE SLOT KEY IS WALL CLOCK, AS TEXT, AND THE RAW FIELD TITLE.
+ *   weekday — the date parts read as local, then getDay(). Never `new Date(start_date)`.
+ *   hhmm    — characters 11..16 of start_date, straight off the string.
+ *   field   — field_title exactly, NOT canonicalVenueName: measured 2026-09-10, the canonical name
+ *             folds "Westlake HS Field 3" and "Westlake HS Field 1&2" into one key and they collide
+ *             live on ATX|Westlake|4|20:00. See 0164_veo_slot_intent.sql. */
+export type SlotRow = { city: string; field: string; weekday: number; hhmm: string; enabled: boolean };
+export type Resolved = { enabled: boolean; seeded: boolean; fromPattern: boolean };
+
+/** The slot a mirror row belongs to. Null when the row cannot be placed in one. */
+export function slotKeyOf(cityIdentifier: string | null, fieldRaw: string | null, startDate: string | null):
+  { city: string; field: string; weekday: number; hhmm: string } | null {
+  const city = (cityIdentifier ?? "").trim();
+  const field = (fieldRaw ?? "").trim();
+  const sd = String(startDate ?? "");
+  if (!city || !field || sd.length < 16) return null;
+  const y = Number(sd.slice(0, 4)), mo = Number(sd.slice(5, 7)), da = Number(sd.slice(8, 10));
+  if (!y || !mo || !da) return null;
+  const hhmm = sd.slice(11, 16);
+  if (!/^[0-2]\d:[0-5]\d$/.test(hhmm)) return null;
+  return { city, field, weekday: new Date(y, mo - 1, da).getDay(), hhmm };
+}
+
+const slotIndex = (rows: SlotRow[]): Map<string, boolean> => {
+  const m = new Map<string, boolean>();
+  for (const r of rows) m.set(`${r.city}|${r.field}|${r.weekday}|${r.hhmm}`, !!r.enabled);
+  return m;
+};
+
+/** Reads both tables and resolves every row. One round of queries, whichever reader calls it. */
+export async function resolveIntentFor(
+  sb: SupabaseClient,
+  rows: { api_id: number; city_identifier?: string | null; field_title?: string | null; start_date?: string | null }[],
+): Promise<Map<number, Resolved>> {
+  const out = new Map<number, Resolved>();
+  const ids = rows.map((r) => r.api_id);
+
+  const own = new Map<number, { enabled: boolean; seeded: boolean }>();
+  for (let i = 0; i < ids.length; i += 1000) {
+    const { data } = await sb.from("veo_intent").select("match_api_id, enabled, set_by").in("match_api_id", ids.slice(i, i + 1000));
+    for (const r of data ?? []) own.set(r.match_api_id, { enabled: !!r.enabled, seeded: r.set_by === "seed:emoji" });
+  }
+
+  /* THE WHOLE PATTERN TABLE, IN ONE QUERY. It is one row per recurring slot across the estate —
+   * hundreds at the very most — so filtering it per week would cost more round trips than it saves.
+   * A MISSING TABLE IS NOT AN ERROR HERE: the migration lands before the code that depends on it,
+   * but a deploy that raced it must degrade to "no patterns", not to a 500 on the whole grid. */
+  let slots: SlotRow[] = [];
+  try {
+    const { data, error } = await sb.from("veo_slot_intent").select("city, field, weekday, hhmm, enabled");
+    if (!error) slots = (data ?? []) as SlotRow[];
+  } catch { /* table not present yet — every match falls through to its own row, or off */ }
+  const idx = slotIndex(slots);
+
+  for (const r of rows) {
+    const mine = own.get(r.api_id);
+    if (mine) { out.set(r.api_id, { enabled: mine.enabled, seeded: mine.seeded, fromPattern: false }); continue; }
+    const k = slotKeyOf(r.city_identifier ?? null, r.field_title ?? null, r.start_date ?? null);
+    const pat = k ? idx.get(`${k.city}|${k.field}|${k.weekday}|${k.hhmm}`) : undefined;
+    out.set(r.api_id, { enabled: pat === true, seeded: false, fromPattern: pat !== undefined });
+  }
+  return out;
+}
+
 /** Monday (index 0) of the week containing `now`, as a local Date. */
 export function weekMonday(now: Date): Date {
   const day = now.getDay(); // 0=Sun..6=Sat
@@ -49,7 +125,15 @@ export type VeoMatch = {
   // able to say "no change". Carried here rather than re-fetched per toggle — it is one more
   // string on a row already being selected, and the alternative is a GET per chip.
   rawName: string;
-  veo: boolean; // Clubhouse intent (veo_intent.enabled)
+  veo: boolean; // resolved intent: this match's own veo_intent row, else the slot pattern, else off
+  /** True when the mark came from the SLOT PATTERN rather than from a row on this match. Drives the
+   *  repeat pip on the card — it says "this repeats", nothing about what or how often. */
+  fromPattern: boolean;
+  /** THE SLOT THIS MATCH SITS IN, computed by slotKeyOf on the server. Carried rather than derived
+   *  in the client so there is ONE implementation of the key — the weekday is wall-clock date math
+   *  and the field is the raw title, and both are easy to get subtly wrong a second time. Null when
+   *  the row cannot be placed in a slot at all (no city, no field, or an unparseable start_date). */
+  slot: { city: string; field: string; weekday: number; hhmm: string } | null;
   /** registration_price, in CENTS, straight off the mirror. Formatted by priceLabel, never here. */
   price: number | null;
   hasEmoji: boolean; // 🎥 present in the raw MatchDay name
@@ -119,14 +203,9 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
   if (error) throw new Error(`veo matches: ${error.message}`);
   const live = (rows ?? []).filter((r) => (includeCancelled || !r.is_cancelled) && r.start_date);
 
-  // intent for this week's matches
-  const ids = live.map((r) => r.api_id);
-  const intent = new Map<number, { enabled: boolean; seeded: boolean }>();
-  for (let i = 0; i < ids.length; i += 1000) {
-    const chunk = ids.slice(i, i + 1000);
-    const { data: vi } = await sb.from("veo_intent").select("match_api_id, enabled, set_by").in("match_api_id", chunk);
-    for (const r of vi ?? []) intent.set(r.match_api_id, { enabled: !!r.enabled, seeded: r.set_by === "seed:emoji" });
-  }
+  // Intent for this week's matches — override, then pattern, then off. Shared with the range
+  // reader so the two cannot disagree about the same match.
+  const intent = await resolveIntentFor(sb, live);
 
   const monTime = mon.getTime();
   const matches: VeoMatch[] = [];
@@ -150,6 +229,8 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
       name: stripCameraEmoji(r.name),
       rawName: (r.name as string) ?? "",
       veo: rec?.enabled ?? false,
+      fromPattern: rec?.fromPattern ?? false,
+      slot: slotKeyOf(r.city_identifier ?? null, r.field_title ?? null, r.start_date as string),
       price: (r as { registration_price?: number | null }).registration_price ?? null,
       hasEmoji: hasCameraEmoji(r.name),
     });
@@ -249,12 +330,8 @@ export async function fetchVeoRange(
    * start_date still goes, because it cannot be placed on a day at all. */
   const live = (rows ?? []).filter((r) => r.start_date);
 
-  const ids = live.map((r) => r.api_id);
-  const intent = new Map<number, boolean>();
-  for (let i = 0; i < ids.length; i += 1000) {
-    const { data: vi } = await sb.from("veo_intent").select("match_api_id, enabled").in("match_api_id", ids.slice(i, i + 1000));
-    for (const r of vi ?? []) intent.set(r.match_api_id, !!r.enabled);
-  }
+  // THE SAME RESOLUTION THE WEEK READER USES. Not a second copy — see resolveIntentFor.
+  const intent = await resolveIntentFor(sb, live);
 
   const matches: VeoRangeMatch[] = [];
   for (const r of live) {
@@ -271,7 +348,9 @@ export async function fetchVeoRange(
       fieldRaw: (r.field_title as string) ?? "",
       name: stripCameraEmoji(r.name),
       rawName: (r.name as string) ?? "",
-      veo: intent.get(r.api_id) ?? false,
+      veo: intent.get(r.api_id)?.enabled ?? false,
+      fromPattern: intent.get(r.api_id)?.fromPattern ?? false,
+      slot: slotKeyOf(r.city_identifier ?? null, r.field_title ?? null, r.start_date as string),
       // CENTS, UNTOUCHED. `?? null` and not `?? 0`: absent and free are different facts.
       price: (r as { registration_price?: number | null }).registration_price ?? null,
       hasEmoji: hasCameraEmoji(r.name),

@@ -16,6 +16,10 @@
 export type GridMatch = {
   apiId: number; city: string; date: string; time: string; minutes: number;
   venue: string; name: string; veo: boolean;
+  /** True when `veo` came from the recurring slot rule rather than a row on this match. */
+  fromPattern?: boolean;
+  /** The slot key, computed server-side by veoSchedule.slotKeyOf. One implementation of it. */
+  slot?: { city: string; field: string; weekday: number; hhmm: string } | null;
   /** `mdapi_matches.registration_price`, in CENTS. See priceLabel — null is not zero. */
   price?: number | null;
   /** `mdapi_matches.is_cancelled`. Cancelled matches are CARRIED, not dropped, so the grid's
