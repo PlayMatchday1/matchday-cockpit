@@ -41,7 +41,7 @@ const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
  *   field   — field_title exactly, NOT canonicalVenueName: measured 2026-09-10, the canonical name
  *             folds "Westlake HS Field 3" and "Westlake HS Field 1&2" into one key and they collide
  *             live on ATX|Westlake|4|20:00. See 0164_veo_slot_intent.sql. */
-export type SlotRow = { city: string; field: string; weekday: number; hhmm: string; enabled: boolean };
+export type SlotRow = { city: string; field: string; weekday: number; hhmm: string; enabled: boolean; set_at?: string | null };
 export type Resolved = { enabled: boolean; seeded: boolean; fromPattern: boolean };
 
 /** The slot a mirror row belongs to. Null when the row cannot be placed in one. */
@@ -58,9 +58,25 @@ export function slotKeyOf(cityIdentifier: string | null, fieldRaw: string | null
   return { city, field, weekday: new Date(y, mo - 1, da).getDay(), hhmm };
 }
 
-const slotIndex = (rows: SlotRow[]): Map<string, boolean> => {
-  const m = new Map<string, boolean>();
-  for (const r of rows) m.set(`${r.city}|${r.field}|${r.weekday}|${r.hhmm}`, !!r.enabled);
+/* THE PATTERN CARRIES THE DAY IT WAS SET, and that day is a floor. A slot rule is a statement about
+ * what WILL be filmed; applied backwards it becomes a claim that last month's matches were, which
+ * is false and which nobody asked for. Measured 2026-09-10: setting a Thursday pattern on Onion
+ * Creek lit up 36 past matches in that slot as covered.
+ *
+ * THE BOUNDARY IS THE OPERATING DAY, AS TEXT, on both sides. set_at is a real instant so it is
+ * converted once in America/Chicago; the match side is start_date's own YYYY-MM-DD characters. No
+ * Date is ever constructed from start_date — that is the wall-clock trap this module exists to
+ * avoid. A per-match veo_intent row is unaffected: somebody marking one specific past match is
+ * making a deliberate statement and this floor does not apply to it. */
+const chicagoDay = (iso: string | null | undefined): string => {
+  if (!iso) return "0000-00-00";                     // no stamp = no floor, apply everywhere
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "0000-00-00"
+    : new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(d);
+};
+const slotIndex = (rows: SlotRow[]): Map<string, { enabled: boolean; from: string }> => {
+  const m = new Map<string, { enabled: boolean; from: string }>();
+  for (const r of rows) m.set(`${r.city}|${r.field}|${r.weekday}|${r.hhmm}`, { enabled: !!r.enabled, from: chicagoDay(r.set_at) });
   return m;
 };
 
@@ -84,7 +100,7 @@ export async function resolveIntentFor(
    * but a deploy that raced it must degrade to "no patterns", not to a 500 on the whole grid. */
   let slots: SlotRow[] = [];
   try {
-    const { data, error } = await sb.from("veo_slot_intent").select("city, field, weekday, hhmm, enabled");
+    const { data, error } = await sb.from("veo_slot_intent").select("city, field, weekday, hhmm, enabled, set_at");
     if (!error) slots = (data ?? []) as SlotRow[];
   } catch { /* table not present yet — every match falls through to its own row, or off */ }
   const idx = slotIndex(slots);
@@ -94,7 +110,9 @@ export async function resolveIntentFor(
     if (mine) { out.set(r.api_id, { enabled: mine.enabled, seeded: mine.seeded, fromPattern: false }); continue; }
     const k = slotKeyOf(r.city_identifier ?? null, r.field_title ?? null, r.start_date ?? null);
     const pat = k ? idx.get(`${k.city}|${k.field}|${k.weekday}|${k.hhmm}`) : undefined;
-    out.set(r.api_id, { enabled: pat === true, seeded: false, fromPattern: pat !== undefined });
+    // FORWARD ONLY. A match earlier than the day the rule was set is not covered by it.
+    const applies = pat !== undefined && String(r.start_date ?? "").slice(0, 10) >= pat.from;
+    out.set(r.api_id, { enabled: applies && pat!.enabled, seeded: false, fromPattern: applies });
   }
   return out;
 }
