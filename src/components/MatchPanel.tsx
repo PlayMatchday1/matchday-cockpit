@@ -1414,7 +1414,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
                     <div className="mp-cvnote">
                       {rd.writeCount} write{rd.writeCount === 1 ? "" : "s"}, sent one at a time, each reporting its own
                       result. Nothing retries. Every live player&rsquo;s team and spot goes into the change log before the
-                      first move: the shape can be put back, the arrangement cannot.
+                      first fake comes off: the shape can be put back, the arrangement cannot.
                     </div>
                     <div className="mp-cv-acts">
                       <button type="button" className="mp-btn mp-nowrap" data-testid="mp-reduce-cancel" onClick={() => setRd(null)}>Keep {rosterTeamCount} teams</button>

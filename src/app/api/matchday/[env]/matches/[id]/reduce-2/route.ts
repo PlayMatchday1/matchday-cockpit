@@ -1,5 +1,5 @@
-/* POST /api/matchday/{env}/matches/{id}/reduce-2 — 4 teams becomes 2, the fakes come out, and
- * every real player is moved onto teams 1 and 2 BEFORE the shape is touched.
+/* POST /api/matchday/{env}/matches/{id}/reduce-2 — 4 teams becomes 2. The fakes come out FIRST,
+ * every real player is then moved onto teams 1 and 2, and the shape is written last.
  *
  * GET returns the PLAN and writes nothing, so the confirmation shows figures computed at click time
  * rather than a guess made at render time.
@@ -12,18 +12,30 @@
  * is the one write here that cannot be undone — where those players land is the API's decision, not
  * ours, and nobody has established that it is safe. So the writes go:
  *
- *   1. MOVES, one player at a time, off the doomed teams.  STOPS AT THE FIRST FAILURE.
- *   2. REMOVES, every fake. After the moves so a mover is never handed a spot a fake is about to
- *      vacate; before the shape so the count is right when it lands. ALSO STOPS AT A FAILURE —
- *      a fake left on team 4 when the shape lands is one more row the API gets to decide about.
+ *   1. REMOVES, every fake, one at a time.  STOPS AT THE FIRST FAILURE.
+ *   2. MOVES, one player at a time, off the doomed teams and into the spots step 1 just freed.
+ *      ALSO STOPS AT A FAILURE.
  *   3. THE SHAPE, last, and only if everything above landed.
  *
- * A failure partway through step 1 leaves a four-team match with everyone standing somewhere real.
- * That is a match nobody has to repair.
+ * ── THE REMOVALS USED TO COME SECOND, AND THAT WAS THE BUG (CORRECTED 2026-09-09) ─────────────
+ * With the moves first, the planner could only use spots that were ALREADY free of fakes, so a
+ * crowded match refused with "remove those fakes first, then reduce" — telling the operator to do
+ * by hand the exact thing step 1 does, on a match that fits. Ryan hit it on ATH Katy 18555.
+ *
+ * Removing first does not mitigate the race the old comment worried about, it deletes it: each
+ * removal is read back as gone before the next write, so no move is ever issued onto an occupied
+ * spot and 403 PLAYER_NUMBER_ALREADY_TAKEN cannot arise. It is safe because a removal touches one
+ * row — measured twice on staging with read-back, DELETE .../user-matches/{umId} takes out exactly
+ * the row it names and nothing re-packs (docs/matchday-api-facts.md).
+ *
+ * A failure partway through step 1 leaves a four-team match with fewer fakes and every real player
+ * standing where they started. A failure partway through step 2 leaves a four-team match with
+ * everyone standing somewhere real. Neither is a match anybody has to repair.
  *
  * ── THE BEFORE-MAP IS ITS OWN ROW, WRITTEN BEFORE THE FIRST MOVE ──────────────────────────────
  * convert-4 hangs its map on the shape write because that write happens first. Here the shape is
- * LAST, so the map goes into change_log on its own, ahead of everything, with method `PLAN` — a
+ * LAST and the first write is a REMOVAL, so the map goes into change_log on its own, ahead of
+ * everything — including the fakes, whose positions it is the only record of — with method `PLAN`, a
  * method no MatchDay request uses, so this row can never be read as something that went to the API.
  * The shape is reversible; the arrangement is not.
  *
@@ -117,7 +129,7 @@ const planPayload = (id: string, m: ApiMatch, teamCount: number,
   writeCount: plan.moves.length + plan.removes.length + 1,
   moves: plan.moves.map((mv) => ({
     name: mv.name, fromTeam: mv.fromTeam, toTeam: mv.toTeam, playerNumber: mv.playerNumber,
-    reason: mv.reason, ontoFakeSpot: mv.ontoFakeSpot,
+    reason: mv.reason,
   })),
   });
 };
@@ -169,9 +181,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
   const results: { kind: "plan" | "move" | "remove" | "shape"; label: string; verdict: string; detail?: string }[] = [];
 
   /* ── 0. THE BEFORE-MAP, AHEAD OF EVERY WRITE ──────────────────────────────────────────────
-   * Its own row, because the first real write here is a MOVE and a map recorded after the first
-   * move is not a map back. `PLAN` is not an HTTP method any MatchDay call uses, so this row
-   * cannot be mistaken for a request. */
+   * Its own row, because the first real write here is a REMOVAL and a map recorded after the first
+   * removal is not a map back — it would already be missing every fake it had just deleted.
+   * `PLAN` is not an HTTP method any MatchDay call uses, so this row cannot be mistaken for a
+   * request. */
   let mapped = false;
   try {
     await store.insert({
@@ -181,7 +194,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
       changes: [{
         key: "reduce2:before", field: "Roster before the reduce",
         before: `${teamCount} teams, ${plan.capBefore} spots · positions: ${JSON.stringify(plan.beforeMap)}`,
-        after: `${plan.moves.length} move(s), then ${plan.removes.length} fake removal(s), then ${plan.targetTeams} teams of ${plan.perTeam}`,
+        after: `${plan.removes.length} fake removal(s), then ${plan.moves.length} move(s), then ${plan.targetTeams} teams of ${plan.perTeam}`,
       }],
     });
     mapped = true;
@@ -194,13 +207,76 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
   if (!mapped) {
     return Response.json({
       ok: false, stoppedAt: "before-map", results, message:
-        "The roster snapshot could not be written to the change log, so nothing was moved. " +
+        "The roster snapshot could not be written to the change log, so nothing was removed and nothing was moved. " +
         "That snapshot is the only way back from this operation, and it is not optional.",
     }, { status: 500 });
   }
-  results.push({ kind: "plan", label: `Roster snapshot — ${plan.beforeMap.length} live rows recorded before anything moved`, verdict: "LANDED" });
+  results.push({ kind: "plan", label: `Roster snapshot — ${plan.beforeMap.length} live rows recorded before anything was removed or moved`, verdict: "LANDED" });
 
-  /* ── 1. THE MOVES, ONE AT A TIME, STOPPING AT THE FIRST FAILURE ───────────────────────────
+  /* ── 1. THE FAKES, FIRST, ONE AT A TIME, STOPPING AT THE FIRST FAILURE ────────────────────
+   * DELETE /admin/matches/user-matches/{umId} — the same removal rosterModel builds, so there is
+   * one remover in the estate and not two. Nobody is notified: this is padding, not a person.
+   *
+   * THEY GO BEFORE THE MOVES, AND THAT IS THE FIX (2026-09-09). While they went after, the planner
+   * could only deal movers into spots that were already clean, so a crowded match refused and told
+   * the operator to delete the fakes by hand first — the exact thing this loop does. The read-back
+   * below is what turns "the spot will be free" into a guarantee: a removal is LANDED only once the
+   * row is observed gone, so no move is ever issued against a spot somebody is still standing on.
+   *
+   * A FAILURE HERE IS THE CHEAPEST ONE IN THE OPERATION. Nothing has moved and nothing has been
+   * reshaped, so every real player is standing exactly where they started and the match is the
+   * shape it was. The only difference is fewer fakes, and this operation deletes all of them. */
+  const rowGone = async (userMatchId: number): Promise<boolean> => {
+    const fresh = await apiGet<ApiMatch>(env, `/admin/matches/${id}`);
+    return !(fresh.players ?? []).some((p) => Number(p.id) === userMatchId);
+  };
+  let removesLanded = 0;
+  for (const rm of plan.removes) {
+    const w = await recordWrite(
+      {
+        env, source, actorName: auth.email, actorEmail: auth.email, saveId,
+        matchId: Number(id), matchName: String(m.name ?? ""),
+        method: "DELETE", path: `/admin/matches/user-matches/${rm.userMatchId}`,
+        body: {}, keys: [], label: (k) => k,
+        changes: [{
+          key: `reduce2:remove:${rm.userMatchId}`, field: "Fake player",
+          before: rm.team == null ? "no team" : `team ${rm.team} #${rm.playerNumber ?? "—"}`,
+          after: "removed from the match",
+        }],
+        applied: (_b, a) => (a as { gone: boolean }).gone === true,
+      },
+      {
+        readResource: async () => ({ gone: await rowGone(rm.userMatchId) }),
+        /* NO BODY, DELIBERATELY. apiWrite only declares Content-Type when a body is present, and
+         * the API rejects an empty JSON body on a bodyless write with a 400 — passing `{}` here
+         * would have made every fake removal fail. rosterModel's own `remove` sends undefined. */
+        write: () => apiWrite(env, "DELETE", `/admin/matches/user-matches/${rm.userMatchId}`, undefined, actor),
+        now: () => new Date().toISOString(),
+      },
+      store,
+    );
+    const verdict = w.error ? "FAILED" : w.outcome === "landed" ? "LANDED" : "NOT APPLIED";
+    results.push({
+      kind: "remove", label: `Remove fake — ${rm.team == null ? "no team" : `team ${rm.team} #${rm.playerNumber ?? "—"}`}`,
+      verdict, detail: w.error?.message ?? (w.logged ? undefined : "the change-log write did not record"),
+    });
+    if (verdict !== "LANDED") {
+      return Response.json({
+        ok: false, stoppedAt: "remove", results,
+        movesLanded: 0, removesLanded,
+        message: `STOPPED: a fake would not come off (${plan.removes.length - removesLanded} of ${plan.removes.length} still on the match). ` +
+          `NOBODY HAS MOVED and the shape was not written — this match is still a ${teamCount}-team match and every real player is ` +
+          `standing exactly where they were. ${removesLanded} fake(s) did come out. Nothing retried.`,
+      }, { status: 502 });
+    }
+    removesLanded += 1;
+  }
+
+  /* ── 2. THE MOVES, ONE AT A TIME, STOPPING AT THE FIRST FAILURE ───────────────────────────
+   * Every destination below is a spot that is empty right now: either nobody was standing on it, or
+   * a fake was and step 1 has already been read back as having removed them. That is why there is
+   * no longer a plan that refuses because a fake is in the way.
+   *
    * The read-back checks that PLAYER is on the team we asked for, so LANDED means observed rather
    * than "did not throw". */
   const teamOf = async (userMatchId: number): Promise<number | null> => {
@@ -245,61 +321,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; i
       }
       return Response.json({
         ok: false, stoppedAt: "move", results,
-        movesAttempted: movesLanded + 1, movesLanded, stranded,
-        message: `STOPPED at ${mv.name}. The match is still a ${teamCount}-team match and nothing has been removed. ` +
+        movesAttempted: movesLanded + 1, movesLanded, removesLanded, stranded,
+        message: `STOPPED at ${mv.name}. The match is still a ${teamCount}-team match and the shape has not been touched. ` +
+          `All ${removesLanded} fake(s) came out and ${movesLanded} player(s) moved before this one. ` +
           `Still on their old team: ${stranded.join("; ")}. Nothing retried — move them by hand or run it again once you know why.`,
       }, { status: 502 });
     }
     movesLanded += 1;
-  }
-
-  /* ── 2. THE FAKES, AFTER THE MOVES AND BEFORE THE SHAPE ───────────────────────────────────
-   * DELETE /admin/matches/user-matches/{umId} — the same removal rosterModel builds, so there is
-   * one remover in the estate and not two. Nobody is notified: this is padding, not a person. */
-  const rowGone = async (userMatchId: number): Promise<boolean> => {
-    const fresh = await apiGet<ApiMatch>(env, `/admin/matches/${id}`);
-    return !(fresh.players ?? []).some((p) => Number(p.id) === userMatchId);
-  };
-  let removesLanded = 0;
-  for (const rm of plan.removes) {
-    const w = await recordWrite(
-      {
-        env, source, actorName: auth.email, actorEmail: auth.email, saveId,
-        matchId: Number(id), matchName: String(m.name ?? ""),
-        method: "DELETE", path: `/admin/matches/user-matches/${rm.userMatchId}`,
-        body: {}, keys: [], label: (k) => k,
-        changes: [{
-          key: `reduce2:remove:${rm.userMatchId}`, field: "Fake player",
-          before: rm.team == null ? "no team" : `team ${rm.team} #${rm.playerNumber ?? "—"}`,
-          after: "removed from the match",
-        }],
-        applied: (_b, a) => (a as { gone: boolean }).gone === true,
-      },
-      {
-        readResource: async () => ({ gone: await rowGone(rm.userMatchId) }),
-        /* NO BODY, DELIBERATELY. apiWrite only declares Content-Type when a body is present, and
-         * the API rejects an empty JSON body on a bodyless write with a 400 — passing `{}` here
-         * would have made every fake removal fail. rosterModel's own `remove` sends undefined. */
-        write: () => apiWrite(env, "DELETE", `/admin/matches/user-matches/${rm.userMatchId}`, undefined, actor),
-        now: () => new Date().toISOString(),
-      },
-      store,
-    );
-    const verdict = w.error ? "FAILED" : w.outcome === "landed" ? "LANDED" : "NOT APPLIED";
-    results.push({
-      kind: "remove", label: `Remove fake — ${rm.team == null ? "no team" : `team ${rm.team} #${rm.playerNumber ?? "—"}`}`,
-      verdict, detail: w.error?.message ?? (w.logged ? undefined : "the change-log write did not record"),
-    });
-    if (verdict !== "LANDED") {
-      return Response.json({
-        ok: false, stoppedAt: "remove", results,
-        movesLanded, removesLanded,
-        message: `Every player is on team 1 or 2 and ${movesLanded} move(s) landed, but a fake would not come off ` +
-          `(${plan.removes.length - removesLanded} left). The match is STILL a ${teamCount}-team match — the shape was not written, ` +
-          `because a fake still standing on a removed team is one more row the API would get to decide about. Nothing retried.`,
-      }, { status: 502 });
-    }
-    removesLanded += 1;
   }
 
   /* ── 3. THE SHAPE, LAST ───────────────────────────────────────────────────────────────────

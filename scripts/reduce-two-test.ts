@@ -1,9 +1,14 @@
 /* REDUCE TO 2 TEAMS — the plan, the refusal, the order, and the two totals.
  *
- * THE ORDER IS THE ASSERTION THAT MATTERS. convert-4 writes the shape first because growing adds
- * empty teams; this writes it LAST because shrinking removes teams people are standing on, and
- * `teamNumbers: 2` while they are is the one write nobody can undo. Every "moves before removes
- * before shape" assertion below exists to stop that being tidied into a mirror of convert-4.
+ * THE ORDER IS THE ASSERTION THAT MATTERS, AND IT CHANGED ON 2026-09-09. The shape is still LAST,
+ * because shrinking removes teams people are standing on and `teamNumbers: 2` while they are is the
+ * one write nobody can undo — that is what stops this being tidied into a mirror of convert-4.
+ *
+ * WHAT MOVED IS THE REMOVALS, WHICH NOW COME FIRST. While they came second the planner could only
+ * deal movers into spots that were already free of fakes, so a crowded match refused and told the
+ * operator to go and delete those fakes by hand — the exact thing the operation does. See "THE ATH
+ * KATY REGRESSION" below, which carries the control proving its fixture is one the old ordering
+ * genuinely refused.
  */
 
 import { readFileSync } from "node:fs";
@@ -29,6 +34,18 @@ const p = (team: number | null, num: number | null, o: Partial<ReducePlayer> = {
 };
 const fake = (team: number, num: number) => p(team, num, { isFake: true, name: `Open spot ${SEQ + 1}` });
 const M = (teamCount: number, cap: number) => ({ maxPlayerCount: cap, teamCount });
+
+/* THE RULE THAT REPLACED `ontoFakeSpot`. A mover may land on a spot a fake is standing on — that is
+ * the whole point of removing them first — but ONLY if that fake is on the removal list, because
+ * the route empties it before the move goes out. A destination that is occupied by something not
+ * being removed is the 403 this operation must never issue. */
+const landsOnSomethingStillStanding = (plan: ReturnType<typeof buildReducePlan>, roster: ReducePlayer[]): string[] => {
+  const removed = new Set(plan.removes.map((r) => r.userMatchId));
+  return plan.moves.filter((m) => roster.some((x) =>
+    x.isCancelled !== true && x.userMatchId !== m.userMatchId && !removed.has(x.userMatchId)
+    && x.team === m.toTeam && x.playerNumber === m.playerNumber))
+    .map((m) => `${m.name} -> ${m.toTeam}:${m.playerNumber}`);
+};
 
 console.log("\nthe mock's WestLake roster: 5 movers, 8 fakes, 2 x 11");
 {
@@ -63,9 +80,9 @@ console.log("\nthe mock's WestLake roster: 5 movers, 8 fakes, 2 x 11");
   is("…nor in a spot above 11", plan.moves.every((m) => m.playerNumber <= 11), true);
   yes("control: there were 14 real players to place, not zero", after.length === 14, String(after.length));
 
-  /* THE FAKE-SPOT RULE. The mock dealt movers into spots fakes were standing on; this does not,
-   * while any spot nobody is standing on remains. */
-  is("no mover is handed a spot a fake is still standing on", plan.moves.filter((m) => m.ontoFakeSpot).length, 0);
+  /* THE SPOT RULE. A mover may take a spot a fake is vacating; it may never take one that will
+   * still be occupied when the write goes out. */
+  is("no mover is sent onto a spot something is still standing on", landsOnSomethingStillStanding(plan, roster), []);
 
   /* IT MUST NOT STACK. Filling team 1 and then team 2 put 6 of 8 reals on team 1 on the staging
    * fixture — auto-bump's own output, from a control whose confirmation says it is not auto-bump. */
@@ -132,15 +149,15 @@ console.log("\n22 real players is allowed; 23 is not");
   yes("…and refuses", capacityRefusal(over) !== null);
 }
 
-console.log("\nthe API enforces one row per spot, so a fake in the way is a refusal");
+console.log("\nTHE ATH KATY REGRESSION: a fake in the way is no longer a refusal");
 {
-  /* MEASURED ON STAGING, and it is the reason the fallback was removed:
-   *   POST /admin/matches/{id}/players/{playerId} onto a taken number
-   *   → 403 {"message":"Player number already taken","errorCode":"PLAYER_NUMBER_ALREADY_TAKEN"}
-   * The mock's plan dealt movers into fake-held spots; every one of those writes would have been
-   * rejected. */
+  /* RYAN, ON ATH KATY 18555 (19 real, 9 fake, 28 of 32, four teams):
+   *   "the reduce to 2 teams isn't working its suppose to remove the fakes from first 2 teams and
+   *    then move the real players in teams 3 in 4 into team 1 and 2 bump it to 11v11 so they all
+   *    fit"
+   * It refused with "Remove those fakes first, then reduce", which is what step 1 now does. */
   SEQ = 0;
-  // 4 reals on teams 1-2 and 6 fakes crowding the rest of them, with 8 reals to bring across.
+  // 4 reals on teams 1-2 and 17 fakes crowding the rest of them, with 4 reals to bring across.
   const roster = [
     p(1,1), p(1,2), p(2,1), p(2,2),
     fake(1,3), fake(1,4), fake(1,5), fake(1,6), fake(1,7), fake(1,8), fake(1,9), fake(1,10), fake(1,11),
@@ -148,23 +165,44 @@ console.log("\nthe API enforces one row per spot, so a fake in the way is a refu
     p(3,1), p(3,2), p(3,3), p(4,1),
   ];
   const plan = buildReducePlan(M(4, 44), roster);
-  is("the reals fit — this is not the capacity refusal", plan.shortfall <= 0, true);
-  is("but 3 of the 4 movers have nowhere clean to land", plan.blockedByFakes, 3);
-  is("SO IT WRITES NOTHING", [plan.moves.length, plan.removes.length], [0, 0]);
-  const why = capacityRefusal(plan)!;
-  yes("…and says the fakes are in the way, not the capacity", /held by fakes/.test(why), why);
-  yes("…quoting what the API actually answers", /PLAYER_NUMBER_ALREADY_TAKEN/.test(why), why);
-  yes("…and what to do about it", /Remove those fakes first/.test(why), why);
 
-  /* THE CONTROL: one fewer fake and it proceeds, so the refusal is about the crowding and not
-   * about fakes existing. */
-  SEQ = 0;
-  const roomier = buildReducePlan(M(4, 44), [
-    p(1,1), p(1,2), p(2,1), p(2,2), fake(1,3), fake(2,3),
-    p(3,1), p(3,2), p(3,3), p(4,1),
-  ]);
-  is("with room to spare it plans normally", [roomier.blockedByFakes, roomier.moves.length], [0, 4]);
-  is("…and still lands nobody on a fake's spot", roomier.moves.filter((m) => m.ontoFakeSpot).length, 0);
+  /* THE CONTROL, AND IT IS THE POINT OF THIS BLOCK. An ordering fix that cannot be shown to have
+   * mattered is not verified — so compute the OLD predicate over this same fixture. Moves-first
+   * could only use a spot free of BOTH a stayer and a fake; this roster has exactly one, and four
+   * players who must come across. The assertions below are therefore not passing on an easy
+   * roster: they are passing on the roster that used to refuse. */
+  const stayerSpots = new Set(roster.filter((x) => !isFakeRow(x) && (x.team ?? 0) <= 2).map((x) => `${x.team}:${x.playerNumber}`));
+  const fakeSpots = new Set(roster.filter(isFakeRow).map((f) => `${f.team}:${f.playerNumber}`));
+  let oldCleanFree = 0;
+  for (let t = 1; t <= 2; t++) for (let n = 1; n <= REDUCE_PER_TEAM; n++) {
+    if (!stayerSpots.has(`${t}:${n}`) && !fakeSpots.has(`${t}:${n}`)) oldCleanFree += 1;
+  }
+  is("control: exactly 1 spot is free of both a stayer and a fake", oldCleanFree, 1);
+  is("…against 4 real players who have to come across", plan.moves.length, 4);
+  yes("SO THE OLD MOVES-FIRST ORDERING REFUSED THIS MATCH, blocked by 3",
+    plan.moves.length - oldCleanFree === 3, `${plan.moves.length} movers vs ${oldCleanFree} clean spot`);
+
+  /* AND NOW IT PLANS IT. */
+  is("the reals fit — this was never the capacity refusal", plan.shortfall <= 0, true);
+  is("IT NO LONGER REFUSES", capacityRefusal(plan), null);
+  is("…and it writes: 4 moves, 17 removals", [plan.moves.length, plan.removes.length], [4, 17]);
+  is("…every one of the 8 reals is placed", plan.moves.length + plan.stayerCount, 8);
+
+  /* THE MECHANISM, ASSERTED DIRECTLY. Movers land on spots the fakes are vacating — impossible
+   * under the old ordering, and the only reason this roster fits at all. */
+  const ontoVacated = plan.moves.filter((m) => fakeSpots.has(`${m.toTeam}:${m.playerNumber}`));
+  yes("movers land on spots fakes are standing on, which is the whole fix", ontoVacated.length > 0, String(ontoVacated.length));
+  is("…and every one of those fakes is removed first, so no move hits an occupied spot",
+    landsOnSomethingStillStanding(plan, roster), []);
+  is("…nobody doubles up: every real ends on a distinct team+spot",
+    new Set([...stayerSpots, ...plan.moves.map((m) => `${m.toTeam}:${m.playerNumber}`)]).size, 8);
+
+  /* THE COPY THAT TOLD THE OPERATOR TO DO IT BY HAND IS GONE WITH THE BRANCH. */
+  const src = readFileSync("src/lib/reduceTwoTeams.ts", "utf8");
+  const live = src.slice(src.indexOf("export const capacityRefusal ="));
+  yes("no refusal still says 'Remove those fakes first'", !/Remove those fakes first, then reduce/.test(live), "the branch is unreachable and must not be re-added");
+  yes("…nor blames fakes for holding the free spots", !/held by fakes/.test(live));
+  is("…and capacityRefusalWhy has nothing to say about a match that fits", capacityRefusalWhy(plan), []);
 }
 
 console.log("\nwho else has to move, beyond the doomed teams");
@@ -225,9 +263,11 @@ console.log("\nthe write order, which is the reverse of convert-4's");
   const plan = buildReducePlan(M(4, 36), [p(3, 1), p(4, 1), fake(1, 5)]);
   const steps = reduceSteps(plan);
   is("three steps", steps.length, 3);
-  yes("1 — the moves", /^Move 2 real players onto teams 1 and 2/.test(steps[0].label), steps[0].label);
-  yes("2 — the fakes, after the moves", /^Remove 1 fake/.test(steps[1].label), steps[1].label);
-  yes("…and nobody is notified", /nobody is notified/.test(steps[1].detail), steps[1].detail);
+  yes("1 — THE FAKES, FIRST", /^Remove 1 fake/.test(steps[0].label), steps[0].label);
+  yes("…and nobody is notified", /nobody is notified/i.test(steps[0].detail), steps[0].detail);
+  yes("…and it says why it is first: the spots are needed by the moves below",
+    /free for the moves below/.test(steps[0].detail), steps[0].detail);
+  yes("2 — the moves, after the fakes are out", /^Move 2 real players onto teams 1 and 2/.test(steps[1].label), steps[1].label);
   yes("3 — the shape, last", /^Set 2 teams of 11/.test(steps[2].label), steps[2].label);
   yes("…written as teamNumbers plus BOTH totals",
     /teamNumbers: 2/.test(steps[2].detail) && /maxPlayerCount: 22/.test(steps[2].detail) && /maxTeamSize2Team: 22/.test(steps[2].detail),
@@ -239,9 +279,24 @@ console.log("\nthe write order, which is the reverse of convert-4's");
   const iRemove = route.indexOf('apiWrite(env, "DELETE", `/admin/matches/user-matches/');
   const iShape = route.indexOf('apiWrite(env, "PUT", `/admin/matches/${id}`');
   yes("the route writes a move, a removal and the shape", iMove > 0 && iRemove > 0 && iShape > 0, `${iMove}/${iRemove}/${iShape}`);
-  yes("MOVES COME BEFORE REMOVES", iMove < iRemove);
-  yes("REMOVES COME BEFORE THE SHAPE — teamNumbers: 2 is the write nobody can undo", iRemove < iShape);
-  yes("the before-map is written ahead of all three", route.indexOf("reduce2:before") < iMove);
+  /* REMOVES BEFORE MOVES — the fix. A mover can only be dealt a spot a fake is vacating if the
+   * fake is already off the match, and this is the assertion that keeps it that way. */
+  yes("REMOVES COME BEFORE MOVES", iRemove < iMove, `remove@${iRemove} move@${iMove}`);
+  yes("MOVES COME BEFORE THE SHAPE — teamNumbers: 2 is the write nobody can undo", iMove < iShape);
+  yes("the before-map is written ahead of all three", route.indexOf("reduce2:before") < iRemove);
+  yes("…and it describes the roster as removals-then-moves-then-shape, which is what happens",
+    /fake removal\(s\), then \$\{plan\.moves\.length\} move\(s\)/.test(route));
+  /* THE FAILURE MESSAGES MUST DESCRIBE THE NEW STATES, not the old ones. A stop during the removals
+   * has moved nobody; a stop during the moves has already taken every fake out. */
+  yes("a stop during the removals says nobody has moved", /NOBODY HAS MOVED/.test(route));
+  /* AND IT IS STRUCTURALLY TRUE, NOT JUST ASSERTED IN PROSE. The removals loop returns
+   * `movesLanded: 0` as a LITERAL, because the moves loop — and the variable — come after it. A
+   * future edit that moved the loops back would not typecheck against a literal 0 here. */
+  yes("…and it is a literal 0, because the move loop has not been reached",
+    /stoppedAt: "remove", results,\s*\n\s*movesLanded: 0, removesLanded,/.test(route));
+  yes("a stop during the moves reports how many fakes already came out",
+    /movesAttempted: movesLanded \+ 1, movesLanded, removesLanded, stranded,/.test(route));
+  yes("a stop during the moves says the fakes are already out", /fake\(s\) came out and \$\{movesLanded\}/.test(route));
   yes("…and it is not optional — losing it stops the operation", /stoppedAt: "before-map"/.test(route));
   yes("a failed move stops the run rather than continuing to the shape", /stoppedAt: "move"/.test(route));
   yes("…and names who is still on their old team", /stranded\.join/.test(route));

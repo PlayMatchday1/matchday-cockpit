@@ -8,13 +8,32 @@
  * do is the one write in this operation that cannot be undone, because where those players land is
  * the API's decision and not ours, and nobody has established that it is safe. So:
  *
- *   1. MOVE every real player off the doomed teams into free spots on 1 and 2, one at a time.
- *   2. REMOVE every fake — AFTER the moves, so a mover is never handed a spot a fake is about to
- *      vacate, and BEFORE the shape, so the count is right when it lands.
+ *   1. REMOVE every fake, one at a time.
+ *   2. MOVE every real player off the doomed teams into the spots that are now free.
  *   3. SET 2 teams of 11, last.
  *
- * A failure partway through step 1 leaves a four-team match with everyone standing somewhere real.
- * That is a match nobody has to repair, which is convert-4's own reasoning about its own order.
+ * ── WHY THE REMOVALS COME FIRST — CORRECTED 2026-09-09 ────────────────────────────────────────
+ * This used to be moves-then-removes, on the reasoning that a mover must never be handed a spot a
+ * fake is about to vacate. The cost of that ordering was that the planner could only use spots
+ * which were ALREADY clean, so on a crowded match it ran out and refused — ATH Katy 18555, 19 real
+ * and 9 fake across 4 teams, told the operator "remove those fakes first, then reduce". It was
+ * refusing to do the one thing it exists to do, and every fake standing in its way was already on
+ * its own removal list.
+ *
+ * REMOVING FIRST DOES NOT MITIGATE THAT RACE, IT DELETES IT. The spot is empty before the move is
+ * issued, so 403 PLAYER_NUMBER_ALREADY_TAKEN cannot arise — and the route reads every removal back
+ * as gone before it issues a single move.
+ *
+ * IT IS SAFE BECAUSE A REMOVAL TOUCHES ONE ROW. Measured on staging twice, with read-back:
+ * DELETE /admin/matches/user-matches/{umId} removes EXACTLY the row it names and leaves every other
+ * row standing where it was — see docs/matchday-api-facts.md, "REMOVING A HOST DOES NOT TOUCH THEIR
+ * GUESTS". Nothing re-packs, so the positions this plan is computed from are still true afterwards.
+ *
+ * AND THE FAILURE MODES ARE NO WORSE THAN THE OLD ONES. A failure partway through the removals
+ * leaves a four-team match with fewer fakes and every real player standing exactly where they
+ * started; fakes are padding and this operation deletes all of them anyway. A failure partway
+ * through the moves still leaves a four-team match with everyone standing somewhere real — the
+ * exact property the old ordering was protecting, and it is preserved.
  *
  * ── DO NOT RECONCILE THIS WITH convertFourTeams.ts ────────────────────────────────────────────
  * The comparator below is a deliberate duplicate of that file's `bySignup`. These are two
@@ -46,8 +65,6 @@ export type ReduceMove = {
   fromTeam: number | null; fromNumber: number | null;
   toTeam: number; playerNumber: number;
   reason: MoveReason;
-  /** True when the destination is currently held by a fake that step 2 removes. */
-  ontoFakeSpot: boolean;
   /** The wire body — the same shape rosterModel's `move` builds, for the same endpoint. */
   body: { userMatchId: number; team: number; playerNumber: number };
 };
@@ -67,10 +84,9 @@ export type ReducePlan = {
   realCount: number; fakeCount: number; stayerCount: number;
   /** What the match reads now and after, so the operator sees it emptier BEFORE pressing. */
   shownBefore: number; capBefore: number; shownAfter: number;
-  /** > 0 means it does not fit and nothing may be written. */
+  /** > 0 means it does not fit and nothing may be written. THE ONLY REFUSAL THE ROSTER CAN RAISE:
+   *  see the proof beside the spot map below for why a mover can no longer be blocked by a fake. */
   shortfall: number;
-  /** Movers with no spot free of a fake — see the blockedByFakes rule. > 0 also refuses. */
-  blockedByFakes: number;
   shapeError: string | null;
 };
 
@@ -121,7 +137,7 @@ export function buildReducePlan(
 
   /* THE REFUSAL IS A PLAN WITH NO WRITES IN IT. Not an exception — the panel still needs every
    * number to say why, and a plan that carried moves "for later" could be pressed. */
-  if (base.shortfall > 0) return { ...base, moves: [], removes: [], stayerCount: 0, blockedByFakes: 0 };
+  if (base.shortfall > 0) return { ...base, moves: [], removes: [], stayerCount: 0 };
 
   const claimed = new Set<string>();
   const stayers: ReducePlayer[] = [];
@@ -136,47 +152,41 @@ export function buildReducePlan(
     stayers.push(p);
   }
 
-  /* WHERE A MOVER LANDS — TWO RULES, BOTH OF WHICH THE OBVIOUS VERSION GETS WRONG.
+  /* WHERE A MOVER LANDS — THE EMPTIER TEAM FIRST, ties to team 1.
    *
-   * 1. THE EMPTIER TEAM FIRST, ties to team 1. Filling team 1 and then team 2 is what the mock
-   *    drew, and on a real roster it stacks: a staging match with 4 stayers and 4 movers ended
-   *    6 v 2, because team 1 had seven free spots and the movers walked straight down them. That
-   *    is auto-bump's own failure — convert-4 documents it at length and refuses to reproduce it —
-   *    and a control whose confirmation says "this is not auto-bump" must not produce its output.
+   * Filling team 1 and then team 2 is what the mock drew, and on a real roster it stacks: a staging
+   * match with 4 stayers and 4 movers ended 6 v 2, because team 1 had seven free spots and the
+   * movers walked straight down them. That is auto-bump's own failure — convert-4 documents it at
+   * length and refuses to reproduce it — and a control whose confirmation says "this is not
+   * auto-bump" must not produce its output.
    *
-   * 2. A SPOT NOBODY IS STANDING ON, before one a fake is standing on. The mock dealt movers into
-   *    fake-held spots, which puts two rows on one number for as long as step 2 takes to run.
-   *    Nothing in the estate proves the API rejects that, and nothing proves it accepts it, so the
-   *    plan does not need to find out. Fake-held spots remain as a fallback, because refusing a
-   *    match that genuinely fits would be worse than a brief overlap. */
-  const fakeSpots = new Set(fakes.filter((f) => f.team != null && f.playerNumber != null).map((f) => key(f.team!, f.playerNumber!)));
-  const cleanBy = new Map<number, number[]>(), heldBy = new Map<number, number[]>();
+   * THERE IS NO SECOND RULE ANY MORE, AND THAT IS THE FIX. It used to prefer a spot nobody was
+   * standing on over one a fake was standing on, because the fakes were still there when the moves
+   * went out and the API answers 403 PLAYER_NUMBER_ALREADY_TAKEN on a taken number. The removals
+   * happen first now, and the route reads each one back as gone before the first move, so every
+   * spot below is genuinely empty and there is nothing left to prefer. */
+  const free = new Map<number, number[]>();
   const occupants = new Map<number, number>();
   for (let t = 1; t <= targetTeams; t++) {
-    cleanBy.set(t, []); heldBy.set(t, []);
     occupants.set(t, stayers.filter((x) => x.team === t).length);
-    for (let n = 1; n <= perTeam; n++) {
-      if (claimed.has(key(t, n))) continue;
-      (fakeSpots.has(key(t, n)) ? heldBy : cleanBy).get(t)!.push(n);
-    }
+    free.set(t, Array.from({ length: perTeam }, (_, i) => i + 1).filter((n) => !claimed.has(key(t, n))));
   }
-  /* THE FAKE-HELD SPOTS ARE NOT A FALLBACK — MEASURED. Staging answered
-   *   POST /admin/matches/{id}/players/{playerId} {team, playerNumber} on a taken number with
-   *   HTTP 403 {"errorCode":"PLAYER_NUMBER_ALREADY_TAKEN"}
-   * so the API enforces one row per team+spot. A mover sent onto a spot a fake is still standing on
-   * would be REJECTED, not silently doubled up — which is what the mock's plan would have done on
-   * every crowded match. So when the clean spots run out the operation refuses and says which fakes
-   * are in the way, rather than issuing writes that cannot land. */
-  const cleanFree = Array.from({ length: targetTeams }, (_, i) => cleanBy.get(i + 1)!.length).reduce((a, b) => a + b, 0);
-  if (cleanFree < movers.length) {
-    return { ...base, moves: [], removes: [], stayerCount: stayers.length, blockedByFakes: movers.length - cleanFree };
-  }
+
+  /* THEY ALWAYS FIT, WHICH IS WHY THERE IS NO SECOND REFUSAL — AND IT IS ARITHMETIC, NOT A HOPE.
+   * `claimed` holds exactly one spot per stayer, so the free spots number `total - stayers`. A
+   * mover is a real player who is not a stayer, so the movers number `reals - stayers`. The
+   * shortfall guard above has already established `reals <= total`. Subtract `stayers` from both
+   * sides: movers <= free, on every roster that reaches this line.
+   *
+   * The old `blockedByFakes` refusal counted fake-held spots as unusable and so could fire on a
+   * roster that fits perfectly well. It is gone along with them, and so is the sentence it printed
+   * telling the operator to go and delete those fakes by hand. */
 
   const takeSpot = (): { team: number; playerNumber: number } => {
     const order = Array.from({ length: targetTeams }, (_, i) => i + 1)
       .sort((a, b) => (occupants.get(a)! - occupants.get(b)!) || a - b);
-    for (const t of order) if (cleanBy.get(t)!.length) { occupants.set(t, occupants.get(t)! + 1); return { team: t, playerNumber: cleanBy.get(t)!.shift()! }; }
-    // Unreachable: the cleanFree guard above has already established there are enough.
+    for (const t of order) if (free.get(t)!.length) { occupants.set(t, occupants.get(t)! + 1); return { team: t, playerNumber: free.get(t)!.shift()! }; }
+    // Unreachable: the movers <= free proof above has already established there are enough.
     return { team: 1, playerNumber: perTeam };
   };
 
@@ -187,7 +197,6 @@ export function buildReducePlan(
       fromTeam: p.team, fromNumber: p.playerNumber,
       toTeam: to.team, playerNumber: to.playerNumber,
       reason,
-      ontoFakeSpot: fakeSpots.has(key(to.team, to.playerNumber)),
       body: { userMatchId: p.userMatchId, team: to.team, playerNumber: to.playerNumber },
     };
   });
@@ -199,7 +208,7 @@ export function buildReducePlan(
     .slice().sort((a, b) => a.userMatchId - b.userMatchId)
     .map((f) => ({ userMatchId: f.userMatchId, name: f.name, team: f.team, playerNumber: f.playerNumber }));
 
-  return { ...base, moves, removes, stayerCount: stayers.length, blockedByFakes: 0 };
+  return { ...base, moves, removes, stayerCount: stayers.length };
 }
 
 /* THE LIFECYCLE REFUSALS, mirroring convertRefusal — including its wall-clock rule.
@@ -223,20 +232,22 @@ export function reduceRefusal(
 
 /* THE CAPACITY REFUSAL, with both numbers and the shortfall. It is separate from the lifecycle
  * refusals because it needs the roster, and it is the one an operator will argue with — so it also
- * answers the first thing anyone thinks of. */
+ * answers the first thing anyone thinks of.
+ *
+ * THERE IS ONLY ONE BRANCH NOW. It used to have a second, for a roster whose reals fit but whose
+ * free spots were held by fakes, and it read "Remove those fakes first, then reduce." That told the
+ * operator to go and do by hand the exact thing this operation exists to do, on a match it could
+ * have reduced perfectly well — and Ryan was deleting fakes one at a time in the roster editor to
+ * unblock it. The removals moved to the front instead, and the state that sentence described can no
+ * longer occur; the proof is beside the spot map in buildReducePlan. DO NOT REINTRODUCE IT. */
 export const capacityRefusal = (plan: ReducePlan): string | null =>
   plan.shortfall > 0
     ? `${plan.realCount} real players will not fit into ${plan.total} spots. ` +
       `Reducing this match would leave ${plan.shortfall} of them with nowhere to stand, and a real player is never dropped to make a shape fit.`
-    : plan.blockedByFakes > 0
-      ? `${plan.realCount} real players do fit into ${plan.total} spots, but ${plan.blockedByFakes} of them have nowhere to land: ` +
-        `the free spots on teams 1 and 2 are held by fakes, and the API refuses a move onto a taken spot ` +
-        `(403 PLAYER_NUMBER_ALREADY_TAKEN). Remove those fakes first, then reduce.`
-      : null;
+    : null;
 
 export const capacityRefusalWhy = (plan: ReducePlan): string[] =>
-  plan.blockedByFakes > 0 ? ["The roster editor removes a fake in one click; this control will not move a player onto a spot that is taken."]
-  : plan.shortfall <= 0 ? [] : [
+  plan.shortfall <= 0 ? [] : [
     /* ONLY WHEN THERE ARE FAKES. "Removing all 0 fakes does not help" is what this printed on a
      * real production match with none, which reads as a bug in the arithmetic rather than as an
      * answer to the question nobody asked on that match. */
@@ -249,13 +260,13 @@ export const capacityRefusalWhy = (plan: ReducePlan): string[] =>
 /** The three steps, in the order they are written, for the confirmation. Numbers from the plan. */
 export const reduceSteps = (plan: ReducePlan): { label: string; detail: string }[] => [
   {
+    label: `Remove ${plan.removes.length} fake${plan.removes.length === 1 ? "" : "s"}`,
+    detail: "Nobody is notified — this is padding, not a person. It happens first, so the spots they are standing on are free for the moves below.",
+  },
+  {
     label: `Move ${plan.moves.length} real player${plan.moves.length === 1 ? "" : "s"} onto teams 1 and 2`,
     detail: plan.moves.length === 0 ? "Nobody needs to move."
       : plan.moves.map((m) => `${m.name} → team ${m.toTeam} spot ${m.playerNumber}`).join(" · "),
-  },
-  {
-    label: `Remove ${plan.removes.length} fake${plan.removes.length === 1 ? "" : "s"}`,
-    detail: "They hold no spot and nobody is notified.",
   },
   {
     label: `Set ${plan.targetTeams} teams of ${plan.perTeam}`,
