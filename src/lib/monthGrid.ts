@@ -15,7 +15,15 @@
 
 export type GridMatch = {
   apiId: number; city: string; date: string; time: string; minutes: number;
-  venue: string; name: string; veo: boolean;
+  venue: string;
+  /** EMOJI-STRIPPED, for display. Never feed this to veoNameSync — see rawName. */
+  name: string;
+  /** THE RAW MatchDay NAME, camera and all. The range reader has always sent it
+   *  (veoSchedule.VeoRangeMatch) and the grid simply never named it, so a name write driven from
+   *  Month had nothing to diff against and was skipped. The transform MUST see this one: feeding it
+   *  a stripped or stale name is what produced three `notapplied` duplicates on match 17956. */
+  rawName?: string;
+  veo: boolean;
   /** True when `veo` came from the recurring slot rule rather than a row on this match. */
   fromPattern?: boolean;
   /** The slot key, computed server-side by veoSchedule.slotKeyOf. One implementation of it. */

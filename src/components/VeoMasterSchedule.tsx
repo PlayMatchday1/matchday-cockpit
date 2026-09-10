@@ -617,12 +617,31 @@ export default function VeoMasterSchedule() {
     [wroteName],
   );
 
-  // Optimistic: patch local state, POST, refetch on success / revert on failure.
+  /* Optimistic: patch local state, POST, refetch on success / revert on failure.
+   *
+   * IT WORKS FROM EITHER VIEW NOW. This used to guard on `!week` — which is never null once the
+   * mount fetch lands — and then look the match up in `week` alone. From Month, on any match
+   * outside the current week, that lookup missed and the consequences were all silent:
+   *   · the optimistic patch mapped seven days and changed nothing,
+   *   · the intent POST fired anyway and the flag REALLY changed,
+   *   · `if (match)` swallowed the name write, so no camera reached the app,
+   *   · load(weekRef) refetched a week the match is not in, so nothing on screen moved.
+   * One click, a half-written match, and a checkbox that snapped back and invited another.
+   * Reproduced on 813c19f before this change: match 18354, marked, box read false, one click sent
+   * one POST and zero name writes.
+   *
+   * THE NAME WRITE IS NO LONGER CONDITIONAL ON A WEEK HIT. That guard was the half-write. */
   async function toggleIntent(apiId: number, enabled: boolean) {
-    if (!week || busy) return;
-    const snapshot = week;
-    const match = week.matches.find((m) => m.apiId === apiId);
-    setWeek({ ...week, matches: week.matches.map((m) => (m.apiId === apiId ? { ...m, veo: enabled } : m)) });
+    if (busy) return;
+    const wkMatch = week?.matches.find((m) => m.apiId === apiId) ?? null;
+    const moMatch = monthData?.matches.find((m) => m.apiId === apiId) ?? null;
+    // A match in NEITHER collection cannot be toggled — and cannot be on screen either.
+    if (!wkMatch && !moMatch) return;
+    const wkSnap = week, moSnap = monthData;
+    // PATCH WHICHEVER HOLDS IT, and both when it is in both — a match inside the current week is
+    // in `week` AND in the month range, and leaving one stale is how the grid disagreed with itself.
+    if (wkMatch && week) setWeek({ ...week, matches: week.matches.map((m) => (m.apiId === apiId ? { ...m, veo: enabled } : m)) });
+    if (moMatch && monthData) setMonthData({ ...monthData, matches: monthData.matches.map((m) => (m.apiId === apiId ? { ...m, veo: enabled } : m)) });
     setBusy(true);
     // FLAG FIRST. It is the source of truth; the name is derived from it.
     const ok = await post("/api/veo/intent", { matchApiId: apiId, enabled });
@@ -630,10 +649,19 @@ export default function VeoMasterSchedule() {
       // Then the name. A failure here does NOT roll the flag back.
       // A new attempt supersedes whatever the last one reported.
       setNameFailed((m) => { const n = new Map(m); n.delete(apiId); return n; });
-      if (match) await writeName(apiId, liveName(match), enabled);
-      await load(weekRef); // refetch the DISPLAYED week, not "now" — re-derives the synced state
+      /* THE RAW NAME, WHICHEVER SIDE IT CAME FROM. liveName prefers what THIS session wrote over
+       * the mirror's copy — the fix for match 17956's duplicates — and the month path gets the same
+       * treatment against GridMatch.rawName. NEVER GridMatch.name: that one is emoji-stripped and
+       * feeding it to the transform would re-prefix a camera that is already there. */
+      const raw = wkMatch ? liveName(wkMatch) : (wroteName.get(apiId) ?? moMatch?.rawName ?? "");
+      await writeName(apiId, raw, enabled);
+      /* REFETCH WHAT IS ON SCREEN, the same branch doRefresh already takes. Refetching the week
+       * from Month re-derived a view nobody was looking at and left the month cell stale. */
+      if (view === "month" && range) await loadRange(range);
+      else await load(weekRef);
     } else {
-      setWeek(snapshot);
+      if (wkMatch) setWeek(wkSnap);
+      if (moMatch) setMonthData(moSnap);
     }
     setBusy(false);
   }
@@ -681,7 +709,23 @@ export default function VeoMasterSchedule() {
 
   // ── drawer + filter handlers ──────────────────────────────────────────────
   const drawerCity = useMemo(() => (drawerId != null && week ? week.matches.find((m) => m.apiId === drawerId)?.city ?? null : null), [drawerId, week]);
-  const drawerVeo = useMemo(() => (drawerId != null && week ? !!week.matches.find((m) => m.apiId === drawerId)?.veo : false), [drawerId, week]);
+  /* THE CHECKBOX READS WHICHEVER COLLECTION HOLDS THE MATCH — corrected 2026-09-10.
+   *
+   * It used to read `week` alone. `load("")` fetches the CURRENT week and only that, while Month
+   * shows a whole range, so opening a Sep 3 match on Sep 10 missed every time and `!!undefined`
+   * rendered the box UNCHECKED for a match that was marked. Worse than a wrong pixel: the toggle
+   * then wrote the flag and skipped the name, manufacturing exactly the intent-vs-emoji drift the
+   * carry-forward work exists to remove, silently, with no change_log trail because
+   * /api/veo/intent does not recordWrite.
+   *
+   * Month became the default view in 34cdb4f, so this went from two deliberate clicks away to
+   * where the page opens. The slot fallback three lines below already resolved this way. */
+  const drawerVeo = useMemo(() => {
+    if (drawerId == null) return false;
+    const wk = week?.matches.find((m) => m.apiId === drawerId);
+    if (wk) return !!wk.veo;
+    return !!monthData?.matches.find((m) => m.apiId === drawerId)?.veo;
+  }, [drawerId, week, monthData]);
   const drawerSiblings = useMemo(() => (drawerId != null && week ? siblingsOf(week, drawerId) : []), [drawerId, week]);
   const siblingIndex = useMemo(() => (drawerId == null ? -1 : drawerSiblings.indexOf(drawerId)), [drawerSiblings, drawerId]);
   /* ── COPY MATCH ─────────────────────────────────────────────────────────────────────────────
@@ -1048,11 +1092,15 @@ export default function VeoMasterSchedule() {
                 </span>
             <span className="vms-control-label">View</span>
             <div className="vms-segmented" role="tablist" aria-label="View">
-              {/* VEO Schedule, because that is what the page is for. It had no data-testid while
-                  the other two did, so tests selected it by its label — which just changed. */}
+              {/* WEEK. It was "VEO Schedule" for one day, from when this page's only camera marks
+                  were on the week grid. 34cdb4f put the mark in Month too, so the label named a
+                  distinction that no longer exists and the two tabs are simply the two spans.
+                  data-testid STAYS view-schedule: renaming it twice in a day breaks tests for
+                  nothing, and the View union value stays "schedule" for the same reason — changing
+                  it would reset every saved vms:prefs a second time unless VMS_PREFS_V bumped. */}
               <button type="button" role="tab" aria-selected={view === "schedule"} data-testid="view-schedule"
                 className={"vms-seg-btn" + (view === "schedule" ? " vms-active" : "")}
-                onClick={() => setView("schedule")}>VEO Schedule</button>
+                onClick={() => setView("schedule")}>Week</button>
               <button type="button" role="tab" aria-selected={view === "month"} data-testid="view-month"
                 className={"vms-seg-btn" + (view === "month" ? " vms-active" : "")}
                 onClick={() => setView("month")}>Month</button>
