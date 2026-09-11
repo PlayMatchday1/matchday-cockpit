@@ -8,7 +8,7 @@
 import { KNOWN_CITY_CODES } from "./cityNormalization";
 import { CITY_COLORS } from "./cityColors";
 
-export type BoardType = "field_pipeline" | "tech_roadmap";
+export type BoardType = "field_pipeline" | "tech_roadmap" | "vc_outreach";
 
 // The Tech Roadmap is split into two boards (App + Clubhouse) via the `board`
 // discriminator (migration 0090); Field Pipeline ignores it. Optional so the
@@ -138,6 +138,51 @@ export const FIELD_PIPELINE_STAGES: StageDef[] = [
   { id: "archived", title: "Archived Fields", note: "Previous field partners", grouped: true },
 ];
 
+/* THE VC BOARD'S SEVEN, in the order the source file had them. NO `note` ON ANY OF THEM: the file
+ * carried a description per stage ("Ready for an intro or initial email") and it does not come
+ * across — a board does not need a legend telling you what "First Meeting Held" means. */
+export const VC_OUTREACH_STAGES: StageDef[] = [
+  { id: "not_contacted", title: "Not Contacted" },
+  { id: "outreach_sent", title: "Initial Outreach Sent" },
+  { id: "reply_needed", title: "Reply Received — Action Needed" },
+  { id: "engaged", title: "Responded / Scheduling" },
+  { id: "first_meeting", title: "First Meeting Held" },
+  { id: "second_scheduling", title: "Scheduling Second Meeting" },
+  { id: "second_scheduled", title: "Second Meeting Scheduled" },
+];
+
+/* ── THE WAVE LABELS ARE NUMBERED BACKWARDS IN THE SOURCE ──────────────────────────────────────
+ * "Wave 1 – Low priority" is 55 firms and "Wave 3 – High prioritiy" is 8 — so the low number is
+ * the low priority, which reads backwards to anyone who has ever seen a wave 1 go first. Wave 3
+ * also carries a typo. Display resolves to High / Medium / Low and the raw string stays in
+ * data.wave_raw, so nothing is lost and nothing has to be re-read from a misspelling.
+ *
+ * HOLD AND EXCLUDE ARE NOT WAVES. The column holds five distinct values, not three: 2 firms are
+ * "Hold" and 2 are "Exclude", which are decisions about whether to approach at all rather than
+ * when. They keep their own labels rather than being folded into a priority they do not have. */
+export const VC_WAVE_LABEL: Record<string, string> = {
+  "Wave 3 – High prioritiy": "High",
+  "Wave 2 – Medium priority": "Medium",
+  "Wave 1 – Low priority": "Low",
+  "Hold": "Hold",
+  "Exclude": "Exclude",
+};
+export const vcWaveLabel = (raw: string | null | undefined): string =>
+  VC_WAVE_LABEL[String(raw ?? "").trim()] ?? "";
+
+/** A/B/C/D off the first character, the way the source file's fitClass() did. "" when ungraded —
+ *  6 of the 90 are blank or "Unknown" and they are not a fifth grade. */
+export const vcFitGrade = (raw: string | null | undefined): "A" | "B" | "C" | "D" | "" => {
+  const c = String(raw ?? "").trim().charAt(0).toUpperCase();
+  return c === "A" || c === "B" || c === "C" || c === "D" ? c : "";
+};
+
+/** Warm is a yes/no, and 73 of 90 are "No" — so only a true yes earns a chip. */
+export const vcIsWarm = (raw: unknown): boolean => {
+  const vals = Array.isArray(raw) ? raw : [raw];
+  return vals.some((v) => /^(yes|warm)/i.test(String(v ?? "").trim()));
+};
+
 export const TECH_ROADMAP_STAGES: StageDef[] = [
   { id: "ideas", title: "Ideas" },
   { id: "in_plan", title: "In Plan" },
@@ -192,6 +237,15 @@ export const BOARD_CONFIG: Record<BoardType, BoardConfig> = {
     showChecklists: true,
     showCity: true,
     minColWidthPx: 270,
+  },
+  vc_outreach: {
+    boardType: "vc_outreach",
+    title: "VC Outreach",
+    subtitle: "",
+    stages: VC_OUTREACH_STAGES,
+    showChecklists: false,
+    showCity: false,
+    minColWidthPx: 298,
   },
   tech_roadmap: {
     boardType: "tech_roadmap",

@@ -27,4 +27,9 @@ export const GROWTH_SECTIONS: RailItem[] = [
     desc: "Venues we're still chasing",
     icon: <I><path d="M3 5h18l-7 8v6l-4 2v-8z" /></I>,
   },
+  {
+    key: "vc-outreach", group: "Fundraising", label: "VC Outreach", href: "/growth/vc-outreach",
+    desc: "Firms we're raising from",
+    icon: <I><path d="M4 19V9m5 10V5m5 14v-7m5 7V8" /></I>,
+  },
 ];
