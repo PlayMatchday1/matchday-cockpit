@@ -114,9 +114,46 @@ async function main() {
   if (wawDayRow?.length) {
     const WAW_DAY = String(wawDayRow[0].start_date).slice(0, 10);
     const wd = await get(`/api/veo/day?date=${WAW_DAY}`, waw.access_token);
-    console.log(`     Warsaw's own day ${WAW_DAY}: ${(wd.body.rows ?? []).length} rows, emojiWithoutCode=${wd.body.emojiWithoutCode}`);
+    /* FIELD-PATH EDIT, itemised (2026-09-11): the route returns the matches themselves as
+     * `emojiMatches` — its own comment says the count became rows — so `emojiWithoutCode` read
+     * undefined and this assertion had been failing on a field that no longer exists. Same claim,
+     * read off the rows. */
+    const emojiN = (wd.body.emojiMatches ?? []).length;
+    console.log(`     Warsaw's own day ${WAW_DAY}: ${(wd.body.rows ?? []).length} rows, ${emojiN} emoji-only match(es)`);
     yes("on Warsaw's own match day the page reports the uncoded camera matches rather than looking empty",
-      wd.ok && wd.body.emojiWithoutCode > 0, `emojiWithoutCode=${wd.body.emojiWithoutCode}`);
+      wd.ok && emojiN > 0, `emojiMatches=${emojiN}`);
+
+    /* THE CANDIDATE LIST IS CONFINED TOO. It now carries every match on the day, not only coded
+     * ones — so a Crossbar-style film can be assigned — and it must still come only from this
+     * account's city. Warsaw's own day is the POSITIVE control: its uncoded match IS a candidate. */
+    const wCands = Object.values(wd.body.candidates ?? {});
+    yes("Warsaw's own uncoded match is a candidate on its own day", wCands.some((c) => c.city === "Warsaw" && c.coded === false),
+      JSON.stringify(wCands.map((c) => `${c.apiId} ${c.city} coded=${c.coded}`)));
+    yes("…and every candidate it is offered is Warsaw's", wCands.length > 0 && wCands.every((c) => c.city === "Warsaw"),
+      JSON.stringify([...new Set(wCands.map((c) => c.city))]));
+    /* AND ON THE BUSIEST OTHER-CITY DAY, NOTHING. Before the fix this account was handed another
+     * city's recordings as `unplaced` and their matches as candidates, through a stray lookup with
+     * no city filter. CONTROL: the admin's candidates on the same day span several cities. */
+    const busy = await get(`/api/veo/day?date=${DAY}`, waw.access_token);
+    const bCands = Object.values(busy.body.candidates ?? {});
+    const aCands = [...new Set(Object.values(adminDay.body.candidates ?? {}).map((c) => c.city))];
+    yes(`control — the admin's candidates on ${DAY} span several cities`, aCands.length > 1, JSON.stringify(aCands));
+    yes(`…and the confined account is offered none of them`, busy.ok && bCands.every((c) => c.city === "Warsaw"),
+      JSON.stringify(bCands.map((c) => `${c.apiId} ${c.city}`)));
+    /* THE UNPLACED CHECK NEEDS A DAY WITH RECORDINGS ON IT — the busiest camera day is often in the
+     * future, where zero unplaced proves nothing. Derived: the latest date that non-dismissed
+     * recordings parsed to. CONTROL: those recordings exist (counted with the service key). */
+    const { data: recDay } = await svc.from("veo_recordings").select("parsed_match_date")
+      .neq("status", "dismissed").not("parsed_match_date", "is", null).order("parsed_match_date", { ascending: false }).limit(1);
+    const REC_DAY = recDay?.[0]?.parsed_match_date;
+    const { count: recN } = await svc.from("veo_recordings").select("id", { count: "exact", head: true })
+      .eq("parsed_match_date", REC_DAY).neq("status", "dismissed");
+    yes(`control — ${recN} recording(s) parsed to ${REC_DAY}, none of them Warsaw's`, (recN ?? 0) > 0, `${recN}`);
+    const rd = await get(`/api/veo/day?date=${REC_DAY}`, waw.access_token);
+    yes(`…and the confined account is handed none of them as unplaced`, rd.ok && (rd.body.unplaced ?? []).length === 0,
+      JSON.stringify((rd.body.unplaced ?? []).map((u) => u.subject)));
+    yes(`…nor offered another city's match for them`, rd.ok && Object.values(rd.body.candidates ?? {}).every((c) => c.city === "Warsaw"),
+      JSON.stringify(Object.values(rd.body.candidates ?? {}).map((c) => `${c.apiId} ${c.city}`)));
   } else bad("Warsaw has a match day to check", "no WAW matches at all");
 
   // OPENING THE DOOR MUST NOT HAVE OPENED THE BUILDING. The camera-code admin surface stays shut.

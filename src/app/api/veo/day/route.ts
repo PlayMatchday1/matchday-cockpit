@@ -17,8 +17,8 @@
 import { authenticateCrm } from "@/lib/crmAuth";
 import { CITY_CODE_TO_DISPLAY } from "@/lib/scheduleReconcile";
 import { canonicalVenueName } from "@/lib/venueResolver";
-import { hasCameraEmoji, stripCameraEmoji } from "@/lib/veo";
-import { fetchVeoCodeRows } from "@/lib/veoCodes";
+import { hasCameraEmoji, resolveVeoCodeScored, stripCameraEmoji } from "@/lib/veo";
+import { fetchVeoCodeRows, veoCodeRowsToMap } from "@/lib/veoCodes";
 import { buildDayRows, tally, type AssignCandidate, type EmojiOnlyMatch, type VeoDayMatch, type VeoDayRecording } from "@/lib/veoDay";
 
 export const runtime = "nodejs";
@@ -170,11 +170,55 @@ export async function GET(req: Request) {
         fieldId: m.fieldId, coded: true,
       };
     }
+    /* …AND SO IS EVERY OTHER MATCH ON THE DAY, marked coded:false. Ryan played the untitled
+     * Thursday film in the queue, recognised the pitch — Crossbar Rowlett — and could not assign it:
+     * field 1321 is in no veo_codes row, so match 18509 never entered `matches` and so was never a
+     * candidate. A camera IS there (16 of 16 Crossbar matches in the last 30 days carry the 🎥); the
+     * code table simply does not say so. Measured 2026-09-11: 135 of 470 matches in the last 30 days
+     * sit on 13 uncoded fields.
+     *
+     * ONLY THE CANDIDATE MAP WIDENS. `matches`, `dayRows`, `tally` and `emojiMatches` are exactly as
+     * they were — the page's list of camera matches and its counts do not change.
+     *
+     * THE SAME CITY-SCOPED `rows`, not a second query, so a confined account can only ever be offered
+     * its own city's matches — confinement is inherited, not re-derived. */
+    for (const r of rows ?? []) {
+      const apiId = r.api_id as number;
+      if (candidates[apiId]) continue;
+      const fieldId = (r.field_id as number | null) ?? null;
+      const t = fmtTime(String(r.start_date));
+      const cc = (r.city_identifier as string) ?? "";
+      candidates[apiId] = {
+        apiId, name: stripCameraEmoji(r.name),
+        venue: canonicalVenueName(r.field_title ?? "") || (r.field_title as string) || "Unknown",
+        city: CITY_CODE_TO_DISPLAY[cc] ?? cc ?? "—",
+        time: t.label, minutes: t.minutes,
+        players: (r.player_count as number | null) ?? null,
+        capacity: (r.max_player_count as number | null) ?? null,
+        fieldId, coded: false,
+      };
+    }
     const placed = new Set(dayRows.flatMap((r) => r.recordings.map((x) => x.id)));
+    /* A CONFINED ACCOUNT SEES ONLY THE UNPLACED RECORDINGS IT CAN PLACE IN ITS OWN CITY. The
+     * recordings are fetched by parsed date, and veo_recordings carries no city — so before this, a
+     * WAW-confined account asking for 2026-09-10 was handed Houston's "ATHP| Sep 10 |9:15PM" as an
+     * unplaced recording and Houston's match as a candidate (measured 2026-09-11). The rule is
+     * /api/veo/recent's, applied to the same kind of row: placeable through a match in this city's
+     * own day (the SQL-scoped `rows`), or through the venue its code resolves to; a recording that
+     * resolves to neither is for unconfined accounts only. Unconfined accounts are unchanged. */
+    const cityMatchIds = new Set((rows ?? []).map((r) => r.api_id as number));
+    const codeMap = veoCodeRowsToMap(codeRows);
+    const displayToCode = new Map(Object.entries(CITY_CODE_TO_DISPLAY).map(([code, display]) => [display, code]));
+    const inConfinedCity = (r: VeoDayRecording): boolean => {
+      if (!auth.confinedCity) return true;
+      if ([r.matchedApiId, ...r.candidateApiIds].some((id) => id != null && cityMatchIds.has(id))) return true;
+      const field = resolveVeoCodeScored(r.parsedCode, codeMap).field;
+      return field != null && displayToCode.get(field.city) === auth.confinedCity;
+    };
     // A recording that names this date and no match on it. It still belongs to the day — it is
     // exactly the review item the old queue held — but it cannot be a row against a match, and
     // inventing one would break the tally.
-    const unplaced = recordings.filter((r) => !placed.has(r.id) && r.status !== "dismissed");
+    const unplaced = recordings.filter((r) => !placed.has(r.id) && r.status !== "dismissed" && inConfinedCity(r));
 
     /* THE MATCHES AN ORPHAN CAN BE ASSIGNED TO. Every camera match on the day, PLUS every match
      * already referenced by an unplaced recording's shortlist — candidate_api_ids can name a match
@@ -186,10 +230,14 @@ export async function GET(req: Request) {
     const strayIds = [...new Set(unplaced.flatMap((r) => [r.matchedApiId, ...r.candidateApiIds]).filter((x): x is number => x != null))];
     const strays: Record<number, { apiId: number; name: string; fieldId: number | null; date: string | null }> = {};
     if (strayIds.length) {
-      const { data: sm } = await auth.supabase
+      let sq = auth.supabase
         .from("mdapi_matches")
         .select("api_id, name, field_id, field_title, city_identifier, start_date, player_count, max_player_count")
         .in("api_id", strayIds);
+      // SCOPED LIKE THE DAY'S OWN QUERY. A stray becomes a candidate below, and this lookup had no
+      // city filter — so it was the one way another city's match could reach a confined account.
+      if (auth.confinedCity) sq = sq.eq("city_identifier", auth.confinedCity);
+      const { data: sm } = await sq;
       for (const m of sm ?? []) {
         const apiId = m.api_id as number;
         const fieldId = (m.field_id as number | null) ?? null;

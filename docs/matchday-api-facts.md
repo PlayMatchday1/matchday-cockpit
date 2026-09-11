@@ -5644,6 +5644,13 @@ and no timestamp (fetched 2026-09-11, recording `15c967e8-…`). Under every zon
 was the **Thursday Sep 10** evening in Central — not "Friday, September 11 · 11:00 PM", which is what
 `rereadTitle` reads it as.
 
+**UPDATE, same day — one film identified, and it points at UTC.** Ryan played `15c967e8` in the
+queue and recognised the pitch: **Crossbar Rowlett, match 18509, Thu 2026-09-10 8:00 PM** (wall
+clock). Its stamp `01-11-51` read as UTC is **8:11 PM CDT — 11 minutes after kickoff**; read as
+Copenhagen time (CEST, Veo's home zone) it is 6:11 PM, two hours before. One film, identified by a
+person rather than by a parser — strong evidence for UTC on this camera, not yet proof for every
+camera.
+
 - **The ingest stores `parsed_code: "UNTITLED RECORDING"`** for some of these, with
   `queue_reason: "unknown_code"` — 4 of the 30 store that code (the 3 newest, queued, plus one
   since dismissed); the other 26 store `parsed_code: null`, 23 of them as `unparseable_subject`.
@@ -5655,3 +5662,36 @@ was the **Thursday Sep 10** evening in Central — not "Friday, September 11 · 
   time for these, because `rereadTitle` and that sentence were out of scope.
 - `og:description` reads `Watch Matchday DAL matches on Veo` — the Veo club name may carry the city.
   One page seen; not verified as a rule.
+
+## A CAMERA CAN BE ON A FIELD NO `veo_codes` ROW NAMES (2026-09-11)
+
+`/api/veo/day` decides "on camera" from `veo_codes.field_ids` (`src/app/api/veo/day/route.ts`, the
+`codeByField` map). A field missing from every row is invisible to the camera list — and until
+2026-09-11 it was also missing from the Assign candidates, so a film from it could not be assigned.
+
+- **Crossbar Rowlett, field 1321 (DFW), is in no `veo_codes` row**, and a camera is there: **16 of 16**
+  Crossbar matches 2026-08-12..09-10 carry 🎥 in `mdapi_matches.name`, and the untitled film
+  `15c967e8` was identified by eye as match 18509. One Crossbar field_id exists across all 66
+  Crossbar matches (2026-05-12..10-04). Measured with a service-role `select` on `mdapi_matches` and
+  `fetchVeoCodeRows`, 2026-09-11.
+- **The hole is 29% of matches.** 135 of 470 non-deleted matches 2026-08-12..09-10 sit on 13 fields
+  no code names — largest The Hattrick L. (ATX, field 1024, 33 played; 1 of 44 carries 🎥), Crossbar
+  (10 played), Lowell H. Strike MS (DFW, 1387, 9 played; 2 of 13 🎥), Zipp (SATX, 1618), STAR
+  (SATX, 1057), Hala Piłkarska Bemowo (WAW, 1684; **9 of 9 🎥**).
+- **`veo_codes` at the time: 17 rows, 21 field_ids.** Recordings naming an uncoded venue in their
+  title: `Strike | 9/10 | 8:00`, `striker Wednesday-8` (Strike MS), `Crockett Sep 8 7pm` (Crockett HS,
+  1783), and seven `SATXMD …` titles whose field is **UNKNOWN** (SATX has two uncoded venues).
+- The emoji IS a real signal here, and the code table is still the authority: `hasCameraEmoji`
+  reads what an admin typed; `emojiMatches` on the day payload are those matches (the old
+  `emojiWithoutCode` count was replaced by the rows).
+
+## `/api/veo/day` HANDED A CONFINED ACCOUNT OTHER CITIES' RECORDINGS (fixed 2026-09-11)
+
+The day's matches were scoped in SQL, but the recordings are fetched by `parsed_match_date` with no
+city, and the stray lookup fetched matches by `api_id` with no city filter. Measured as the
+WAW-confined account (`jf@playmatchday.pl`) on the pre-fix route: **2026-09-10** returned Houston's
+`ATHP| Sep 10 |9:15PM` as `unplaced` and Houston match 18484 as a candidate; **2026-09-09** returned 4
+other-city recordings and 4 candidates from Houston, San Antonio and Austin. Fixed by applying
+`/api/veo/recent`'s placement rule to `unplaced` (in-city match or code, else unconfined only) and the
+city filter to the stray lookup. `scripts/e2e/verify-veo-confined.mjs` fails 4 assertions against the
+old route and passes 18 against the new one.

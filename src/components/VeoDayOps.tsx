@@ -1160,18 +1160,28 @@ function CandidateList({ rec, data, busy, onAssign, onOpenChat, twins = 0 }: {
   onOpenChat?: (apiId: number) => void; twins?: number;
 }) {
   const [showAll, setShowAll] = useState(false);
+  const [showOff, setShowOff] = useState(false);
   const [confirming, setConfirming] = useState<AssignCandidate | null>(null);
   /* A CANDIDATE THAT LEFT THE LIST MUST NOT LEAVE ITS CONFIRM BEHIND. The day's candidates change
    * when the operator picks a different day inside RecentAssign. */
   useEffect(() => { setConfirming(null); }, [rec.id, data]);
   const shortlist = rec.candidateApiIds.map((id) => data.candidates[id]).filter(Boolean);
   const shortIds = new Set(shortlist.map((c) => c.apiId));
-  const rest = Object.values(data.candidates)
+  const others = Object.values(data.candidates)
     .filter((c) => !shortIds.has(c.apiId))
     .sort((a, b) => {
       if (rec.parsedTimeMinutes == null) return a.minutes - b.minutes;
       return Math.abs(a.minutes - rec.parsedTimeMinutes) - Math.abs(b.minutes - rec.parsedTimeMinutes);
     });
+  /* CAMERA MATCHES FIRST, AND THE REST OF THE DAY SAYS IT EXISTS. The route now offers every match
+   * on the day, because a film can arrive from a field no veo_codes row names — Crossbar Rowlett on
+   * 2026-09-10, which Ryan could only find by recognising the pitch. The list used to look complete
+   * while leaving those out. So: the camera matches keep the list, the four-shown rule and their own
+   * expander exactly as before; the uncoded ones follow in their own group, collapsed behind a
+   * button that IS the count. Measured: 2026-09-10 gains 5 (12 coded + 5); the last 30 days
+   * average about 4.5 a day — a short group, not a wall, so it needs a label and not a scroller. */
+  const rest = others.filter((c) => c.coded);
+  const offCamera = others.filter((c) => !c.coded);
   const REST_SHOWN = 4;
   const restShown = showAll ? rest : rest.slice(0, REST_SHOWN);
 
@@ -1233,6 +1243,18 @@ function CandidateList({ rec, data, busy, onAssign, onOpenChat, twins = 0 }: {
         <button type="button" className="more" onClick={() => setShowAll(true)}>Show the other {rest.length - REST_SHOWN}</button>
       )}
       {rest.length === 0 && shortlist.length === 0 && <p className="pnote">No camera matches on this day to assign it to.</p>}
+      {offCamera.length > 0 && !showOff && (
+        <button type="button" className="more" data-testid="veo-offcam-toggle" data-count={offCamera.length}
+          onClick={() => setShowOff(true)}>
+          and {offCamera.length} more that day on fields with no camera code
+        </button>
+      )}
+      {offCamera.length > 0 && showOff && (
+        <>
+          <h4 data-testid="veo-offcam-head">On fields with no camera code</h4>
+          <div data-testid="veo-offcam">{offCamera.map(line)}</div>
+        </>
+      )}
     </>
   );
 }
