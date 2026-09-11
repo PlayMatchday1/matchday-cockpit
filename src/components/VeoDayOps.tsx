@@ -183,15 +183,22 @@ export default function VeoDayOps() {
     () => base.filter((r) => activeTile === null || activeTile.states.includes(r.state)),
     [base, activeTile],
   );
-  /* ONE BUTTON, ONE NUMBER. The parked rows (coded fields nothing arrived for) and the emoji-only
-   * matches (fields no code names at all) are two kinds of "no film" and were two different
-   * controls, one of which was a paragraph you could not click. They open together now.
-   * THE EMOJI ROWS ARE OUTSIDE THE TALLY — see the caption. Adding them here must not move it. */
+  /* THE EMOJI-ONLY MATCHES ARE NOT "NO FILM", and they no longer share the parked toggle. They were
+   * counted into "Show 12 matches with no film" — but Crossbar Rowlett 18509 is one of them, and its
+   * film was sitting in Needs you, one click from posted, hidden behind a toggle whose label said
+   * there was no film. A parked row is a coded match nothing arrived for; an emoji-only match is a
+   * match on a field no veo_codes row names, which is a different fact and sometimes has a film.
+   * So the toggle counts the parked rows only, and the emoji group is on the page whenever the day
+   * has one. Measured over 2026-08-12..09-10: 31 emoji-only matches, median 1 a day, worst 3, none
+   * on 7 of 30 days — a short list, and it is work, so it is not hidden.
+   * THE EMOJI ROWS ARE OUTSIDE THE TALLY — see the group's comment below. Showing them must not move it.
+   * The city test here is the page's CITY PICKER (a display name, as data.cities are), not the
+   * boundary: confinement is the route's, whose emojiMatches come out of the SQL-scoped query. */
   const emoji = useMemo(
     () => (data?.emojiMatches ?? []).filter((m) => city === "all" || (CITY_CODE_TO_DISPLAY[m.city ?? ""] ?? m.city) === city),
     [data, city],
   );
-  const noFilmCount = parked.length + emoji.length;
+  const noFilmCount = parked.length;
 
   const isToday = date === todayIso();
 
@@ -256,7 +263,8 @@ export default function VeoDayOps() {
         </p>
       )}
 
-      {/* PARKED, NOT DELETED. One line, default closed — and it now opens BOTH kinds of "no film". */}
+      {/* PARKED, NOT DELETED. One line, default closed — and it opens the coded matches nothing
+          arrived for, and only those. */}
       {!loading && !err && noFilmCount > 0 && filter === null && (
         <p className="parked" data-testid="veo-parked">
           <button type="button" data-testid="veo-parked-toggle" onClick={() => setShowParked(!showParked)}>
@@ -315,15 +323,34 @@ export default function VeoDayOps() {
           THE SELECTOR HAS NOT CHANGED. /api/veo/day is emphatic that the code table decides this
           page and hasCameraEmoji is deliberately not the selector. This is a second, clearly
           labelled group outside the tally, not the emoji becoming the rule.
-          NO STATE PILL, because these have no film state to be in, and one action: open the match. */}
-      {showParked && emoji.length > 0 && (
+
+          WHY IT IS DOWN HERE AND NOT IN THE LIST ABOVE — Ryan asked, "why below". The list above is
+          what the tally counts: every row in it has a film state, and veoDay.ts asserts that the film
+          states partition the day exactly, over every combination — that identity is what stops the
+          strip adding up to more than the day. These matches have no film state. Inline, they would
+          either be counted into a partition they cannot belong to, or sit in the counted list as
+          rows the count visibly excludes. So they stay a separate group, below, outside the tally.
+
+          THE LABEL IS THE CANDIDATE LIST'S, word for word: "on fields with no camera code". It said
+          "named with 🎥 that no camera can film", and a camera filmed Crossbar Rowlett on 2026-09-10 —
+          Ryan watched it. What is true is narrower: no veo_codes row names the field, so nothing is
+          routed to it automatically. One condition, one phrase, everywhere on the page.
+
+          NO STATE PILL, because these have no film state to be in. TWO ACTIONS now, not one: since
+          c4c67cc these matches are assignable, so the look-at-the-chat-first check is reachable here,
+          and a camera match with no code is exactly where somebody pastes a link by hand. */}
+      {!loading && !err && filter === null && emoji.length > 0 && (
         <div className="emojigrp" data-testid="veo-emoji-group">
-          <h4>{emoji.length} match{emoji.length === 1 ? "" : "es"} named with 🎥 that no camera can film</h4>
+          <h4 data-testid="veo-emoji-head">{emoji.length} match{emoji.length === 1 ? "" : "es"} marked 🎥 on fields with no camera code</h4>
           {emoji.map((m) => (
             <div className="erow" data-testid="veo-emoji-row" data-api-id={m.apiId} key={m.apiId}>
               <span className="etime">{m.time.label}</span>
               <span className="ename"><b>{m.name}</b><small>{m.venue ?? "no field"}{m.city ? ` · ${CITY_CODE_TO_DISPLAY[m.city] ?? m.city}` : ""}</small></span>
-              <a className="btn" data-testid="veo-emoji-open" href={`/match-ops/matches/${m.apiId}`}>Open match</a>
+              <span className="eacts">
+                <button type="button" className="btn" data-testid="veo-emoji-chat" aria-label={`Open the chat for ${m.name}`}
+                  onClick={() => { setPanelTab("chat"); setPanelMatch(m.apiId); }}>Chat</button>
+                <a className="btn" data-testid="veo-emoji-open" href={`/match-ops/matches/${m.apiId}`}>Open match</a>
+              </span>
             </div>
           ))}
         </div>
@@ -1664,6 +1691,8 @@ const CSS = MATCH_SIDE_PANEL_CSS + `
 .veo .ename{display:flex;flex-direction:column;min-width:0}
 .veo .ename b{font-size:12.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .veo .ename small{font-size:11px;color:var(--ink3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.veo .eacts{display:flex;gap:6px}
+.veo .eacts .btn{white-space:nowrap}
 /* THE PLAYER LINK IS A CONTROL and sits on its own line; the two failure states keep a short
    status beside it, because a player that shows nothing and says nothing is worse than a sentence. */
 .veo .pplay{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
