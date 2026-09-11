@@ -89,7 +89,12 @@ export default function ApplicationsView() {
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [city, setCity] = useState<string | null>(null);
-  const [newOnly, setNewOnly] = useState(false);
+  /* THE "NOT CONTACTED" TOGGLE BECAME A SHOW CHIP. It filtered status === "New", which is a SUBSET
+   * of Open — so leaving it in the bar beside Open/Closed/Everyone would have been two controls
+   * disagreeing about one axis. It is the same axis, so it joined the same row and the four are
+   * mutually exclusive. The capability is unchanged; where it lives is not. */
+  const [show, setShow] = useState<"open" | "new" | "closed" | "all">("open");
+  const [when, setWhen] = useState<"month" | "d90" | "all">("all");
   const [spam, setSpam] = useState(false);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState<string | null>(null);
@@ -111,6 +116,12 @@ export default function ApplicationsView() {
 
   useEffect(() => { void load(tab, spam); }, [tab, spam, load]);
 
+  /* OPEN AND CLOSED ARE DERIVED FROM STATUSES, never listed twice. A sixth status added to
+   * webSubmissions.STATUSES lands in one of these two by construction rather than falling silently
+   * out of both — which is how a whole cohort disappears from a default view and nobody notices. */
+  const CLOSED_STATUSES = useMemo(() => new Set<string>(["Hired", "Passed"]), []);
+  const isClosed = useCallback((st: string) => CLOSED_STATUSES.has(st), [CLOSED_STATUSES]);
+
   const people = data?.people ?? [];
   const counts = useMemo(() => {
     const m = new Map<string, number>();
@@ -118,12 +129,53 @@ export default function ApplicationsView() {
     return m;
   }, [people]);
 
+  /* WHEN FILTERS ON firstApplied, which the payload already carries — the date they first came in,
+   * not the date of their latest submission. Someone who applied in March and again last week is a
+   * March applicant with two submissions. */
+  const inWindow = useCallback((iso: string | null | undefined) => {
+    if (when === "all") return true;
+    if (!iso) return false;
+    const d = new Date(iso); if (Number.isNaN(d.getTime())) return false;
+    const now = new Date();
+    if (when === "month") return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+    return now.getTime() - d.getTime() <= 90 * 86400000;
+  }, [when]);
+
+  const inShow = useCallback((st: string) => (
+    show === "all" ? true : show === "closed" ? isClosed(st) : show === "new" ? st === "New" : !isClosed(st)
+  ), [show, isClosed]);
+
   const list = useMemo(() => people.filter((p) =>
     (city === null || (city === "__none" ? !p.cityCode : p.cityCode === city))
-    && (!newOnly || p.status === "New")
-    && matchesSearch(p, q)), [people, city, newOnly, q]);
+    && inShow(p.status) && inWindow(p.firstApplied)
+    && matchesSearch(p, q)), [people, city, inShow, inWindow, q]);
 
-  const newCount = people.filter((p) => p.status === "New").length;
+  /* THE CHIP COUNTS FOLLOW THE OTHER ACTIVE FILTERS, the way the CITY chips already do — a chip
+   * promising 47 that yields 3 once you press it is worse than no number. Each row counts against
+   * everything EXCEPT its own axis. */
+  const showCounts = useMemo(() => {
+    const base = people.filter((p) =>
+      (city === null || (city === "__none" ? !p.cityCode : p.cityCode === city))
+      && inWindow(p.firstApplied) && matchesSearch(p, q));
+    return {
+      open: base.filter((p) => !isClosed(p.status)).length,
+      new: base.filter((p) => p.status === "New").length,
+      closed: base.filter((p) => isClosed(p.status)).length,
+      all: base.length,
+    };
+  }, [people, city, inWindow, q, isClosed]);
+
+  const whenCounts = useMemo(() => {
+    const base = people.filter((p) =>
+      (city === null || (city === "__none" ? !p.cityCode : p.cityCode === city))
+      && inShow(p.status) && matchesSearch(p, q));
+    const now = new Date();
+    const month = base.filter((p) => { const d = p.firstApplied ? new Date(p.firstApplied) : null;
+      return !!d && !Number.isNaN(d.getTime()) && d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth(); }).length;
+    const d90 = base.filter((p) => { const d = p.firstApplied ? new Date(p.firstApplied) : null;
+      return !!d && !Number.isNaN(d.getTime()) && now.getTime() - d.getTime() <= 90 * 86400000; }).length;
+    return { month, d90, all: base.length };
+  }, [people, city, inShow, q]);
 
   async function saveContact(p: Person, patch: { status?: Status; owner?: string | null }) {
     setSaving(p.email);
@@ -156,10 +208,6 @@ export default function ApplicationsView() {
   return (
     <div className="apps">
       <h1 className="h1">APPLICATIONS</h1>
-      <p className="sub">
-        Everyone who filled in a form on playmatchday.com. Mirrored from the website — grey fields
-        come from the form and cannot be edited here. Blue fields are yours.
-      </p>
       {data?.confined && (
         <p className="note" data-testid="apps-scope">
           Scoped to {data.cityNames[data.scope ?? ""] ?? data.scope}. Applicants whose city could not
@@ -172,14 +220,15 @@ export default function ApplicationsView() {
           sync log, and it NAMES the element_id so whoever goes to look knows which form to open. */}
       {data && data.unresolvedSubmissions > 0 && (
         <div className="banner" data-testid="apps-unresolved">
-          <b>{data.unresolvedSubmissions} submissions are from forms this system cannot label.</b>{" "}
-          Their fields are shown under the website's raw keys rather than guessed at — a label
-          borrowed from another form would file a company into a surname. Form{" "}
-          {Object.entries(data.unresolvedByElement ?? {}).length ? "IDs" : "ID"}:{" "}
-          {Object.entries(data.unresolvedByElement ?? {})
+          {/* ONE SENTENCE, THE IDS KEPT. This is an alarm, not explainer copy: a live form was
+              edited, it minted a new element id, and submissions are arriving unlabelled and
+              indefinitely — which looks exactly like a quiet week. The ids are the actionable part,
+              because they say which form to open. What went was the paragraph explaining what an
+              element id is. */}
+          <b>{data.unresolvedSubmissions} submissions are from forms this system cannot label</b>
+          {" — "}{Object.entries(data.unresolvedByElement ?? {})
             .sort((a, b) => b[1] - a[1])
             .map(([el, n]) => `${el} (${n})`).join(" · ")}
-          . <b>If this number grows, a live form was edited and minted a new ID.</b>
         </div>
       )}
 
@@ -195,7 +244,7 @@ export default function ApplicationsView() {
       <div className="tiles" data-testid="apps-tiles">
         {(data?.tiles ?? []).map((x) => (
           <div key={x.k} className={`tile ${x.tone ?? ""}`}>
-            <div className="k">{x.k}</div><div className="v">{x.v}</div><div className="h">{x.h}</div>
+            <div className="k">{x.k}</div><div className="v">{x.v}</div>
           </div>
         ))}
       </div>
@@ -203,15 +252,32 @@ export default function ApplicationsView() {
       <div className="bar">
         <input className="search" placeholder="Name, email, phone, company or city" value={q}
           onChange={(e) => setQ(e.target.value)} data-testid="apps-search" />
-        <button className={`chip ${newOnly ? "on" : ""}`} onClick={() => setNewOnly((v) => !v)} data-testid="apps-newonly">
-          Not contacted <span className="n">{newCount}</span>
-        </button>
         {!isTeam && data && data.spamCount > 0 && (
           /* QUARANTINE IS VIEWABLE. A rule that hides without recourse cannot be audited when wrong. */
           <button className={`chip warn ${spam ? "on" : ""}`} onClick={() => setSpam((v) => !v)} data-testid="apps-spam">
             {spam ? "Showing quarantined" : "Quarantined"} <span className="n">{data.spamCount}</span>
           </button>
         )}
+      </div>
+
+      {/* SHOW AND WHEN, in the CITY row's idiom. Setting someone to Passed drops them out of the
+          default view the moment the status saves — which is the "move them away" Ryan asked for,
+          and it needed no new action because STATUSES already had Passed. */}
+      <div className="cityRow" data-testid="apps-show">
+        <span className="lbl">Show</span>
+        {([["open","Open",showCounts.open],["new","Not contacted",showCounts.new],
+           ["closed","Closed",showCounts.closed],["all","Everyone",showCounts.all]] as const).map(([k,label,n]) => (
+          <button key={k} className={`chip ${show === k ? "on" : ""}`} onClick={() => setShow(k)}
+            data-testid={`apps-show-${k}`} aria-pressed={show === k}>{label} <span className="n">{n}</span></button>
+        ))}
+      </div>
+      <div className="cityRow" data-testid="apps-when">
+        <span className="lbl">When</span>
+        {([["month","This month",whenCounts.month],["d90","Last 90 days",whenCounts.d90],
+           ["all","All time",whenCounts.all]] as const).map(([k,label,n]) => (
+          <button key={k} className={`chip ${when === k ? "on" : ""}`} onClick={() => setWhen(k)}
+            data-testid={`apps-when-${k}`} aria-pressed={when === k}>{label} <span className="n">{n}</span></button>
+        ))}
       </div>
 
       <div className="cityRow" data-testid="apps-cities">
@@ -274,22 +340,43 @@ export default function ApplicationsView() {
                   })} aria-expanded={isOpen}>{isOpen ? "−" : "+"}</button>
                 </div>
               </div>
+              {/* ── THE ANSWER YOU HIRE ON, ON THE RECORD ───────────────────────────────────────
+                     Ryan: "the applications don't show the question why you want to join matchday
+                     thats the most important one". Nothing was missing from the data — it was
+                     behind the + expander, and nobody presses that 115 times.
+
+                     FULL WIDTH, NOT IN THE APPLICANT COLUMN. That column measures 276px, where a
+                     380-character answer is nine lines and has to be clipped; across the row it is
+                     860px and three, uncut. No clamp, no "read more" — the whole answer renders,
+                     because a truncated answer is not an answer you can hire on.
+
+                     AVAILABILITY GOES WITH IT. Those two together are the call.
+
+                     NOTHING AT ALL WHEN THERE IS NO ANSWER — not an empty block, not a placeholder.
+                     See the note on D about what that gives up. */}
+              {(isTeam ? p.why : p.vision).asked && (isTeam ? p.why : p.vision).value ? (
+                <div className="ans" data-testid="apps-answer">
+                  <div className="ak">{isTeam ? "Why would you be a good fit for MatchDay?" : "Vision"}</div>
+                  <div className="av">{(isTeam ? p.why : p.vision).value}</div>
+                  {isTeam && p.availability.asked && p.availability.value && (
+                    <div className="av2" data-testid="apps-availability"><span>Availability</span> {p.availability.value}</div>
+                  )}
+                </div>
+              ) : null}
               {isOpen && (
                 <div className="detail" data-testid="apps-detail">
                   {isTeam ? (
                     <>
                       <D k="Phone" f={p.phone} />
-                      <D k="Availability" f={p.availability} />
+                      {/* Availability and the why answer moved ONTO the record — see apps-answer. */}
                       <div><div className="dk">First applied</div><div className="dv">{fmtDate(p.firstApplied)} · {p.submissions} submission{p.submissions > 1 ? "s" : ""}</div></div>
                       <div><div className="dk">City as typed</div><div className="dv">{p.cityRaw || "blank"}</div></div>
-                      {p.why.asked && <div className="why"><div className="dk">Why would you be a good fit for MatchDay?</div><div className="dv">{p.why.value || "blank"}</div></div>}
                     </>
                   ) : (
                     <>
                       <D k="Company" f={p.company} />
                       <div><div className="dk">Location as typed</div><div className="dv">{p.cityRaw || "blank"}</div></div>
                       <div><div className="dk">First enquired</div><div className="dv">{fmtDate(p.firstApplied)} · {p.submissions} submission{p.submissions > 1 ? "s" : ""}</div></div>
-                      {p.vision.asked && <div className="why"><div className="dk">Vision</div><div className="dv">{p.vision.value || "blank"}</div></div>}
                     </>
                   )}
                 </div>
@@ -324,7 +411,21 @@ export default function ApplicationsView() {
         .apps .tile { background: #fff; border: 1px solid #E4EAE5; border-radius: 10px; padding: 13px 15px }
         .apps .tile.hot { border-color: #F2D3C0; background: #FFF6F2 } .apps .tile.good { border-color: #BFE7CF; background: #F2FBF5 }
         .apps .tile .k { font-size: 10px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: #93A49A }
-        .apps .tile .v { font-size: 23px; font-weight: 900; margin: 2px 0 1px } .apps .tile .h { font-size: 11px; color: rgba(16,35,26,.45) }
+        .apps .tile .v { font-size: 23px; font-weight: 900; margin: 2px 0 1px }
+        /* ── THE ANSWER, FULL WIDTH UNDER THE ROW ──────────────────────────────────────────────
+           IN THIS BLOCK, not a scoped one. This file has already been bitten: the note above
+           Locked/CityCell/Phone/D records that a <style jsx> block never reached those sibling
+           components' elements and .pill.lock rendered transparent with no padding. 29b207d then
+           established that in a variable-fed block :global() selectors are DISCARDED outright, so
+           neither escape hatch is available. Everything here is .apps-prefixed and lives here.
+           NO CLAMP AND NO max-height. A clipped answer is not an answer you can hire on, and the
+           whole point of moving it out of the 276px applicant column was that it had to be cut
+           there. word-break keeps a pasted URL from widening the row. */
+        .apps .ans { padding: 2px 14px 12px; border-bottom: 1px solid rgba(16,35,26,.07); background: #FBFDFB }
+        .apps .ans .ak { font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: rgba(16,35,26,.45); margin-bottom: 3px }
+        .apps .ans .av { font-size: 13.5px; line-height: 1.5; color: #10231A; white-space: pre-wrap; overflow-wrap: anywhere }
+        .apps .ans .av2 { margin-top: 6px; font-size: 12.5px; color: rgba(16,35,26,.62) }
+        .apps .ans .av2 span { font-weight: 800; font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: rgba(16,35,26,.45); margin-right: 6px }
         .apps .bar { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; margin-bottom: 9px }
         .apps .search { flex: 1; min-width: 220px; border: 1px solid #E4EAE5; border-radius: 9px; padding: 9px 12px; font: inherit; font-size: 15px }
         @media (min-width: 640px) { .apps .search { font-size: 13px } }
@@ -381,11 +482,24 @@ function CityCell({ p }: { p: Person }) {
   return <span className="pill lock"><span className="pad">🔒</span>{p.cityName}</span>;
 }
 
+/* ── THE PLACEHOLDERS ARE GONE, AND SO IS A DISTINCTION. READ THIS BEFORE "FIXING" IT ──────────
+ * This printed "not asked on this form" and "blank" as italic placeholders. Both went on
+ * 2026-09-10 — Ryan: "i want to make sure theres no explainer shit like we keep having to remove
+ * everywhere" — and they are gone from the EXPANDER too, not just moved out of sight.
+ *
+ * WHAT THAT COSTS, KNOWINGLY. webSubmissions distinguishes ASKED AND LEFT BLANK from NEVER ASKED —
+ * that is what NOT_ASKED at webSubmissions.ts:89 is for, and 63 people were never asked the why
+ * question at all because the form did not carry it. With the placeholders gone the two render
+ * identically: empty. RYAN ACCEPTED THAT. An empty row is not a bug to be repaired by re-adding a
+ * sentence; the data still knows the difference and wasAsked() still returns it.
+ *
+ * The record itself renders NO BLOCK AT ALL for an unanswered question — see apps-answer — which
+ * is a stronger version of the same rule: nothing rather than an empty something. */
 function D({ k, f }: { k: string; f: { value: string; asked: boolean } }) {
   return (
     <div>
       <div className="dk">{k}</div>
-      <div className="dv">{!f.asked ? <i style={{ color: "#A9B5AD" }}>not asked on this form</i> : f.value || <i style={{ color: "#A9B5AD" }}>blank</i>}</div>
+      <div className="dv">{f.asked ? f.value : ""}</div>
     </div>
   );
 }

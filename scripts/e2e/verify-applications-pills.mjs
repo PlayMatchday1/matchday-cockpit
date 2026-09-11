@@ -78,9 +78,12 @@ async function main() {
     is(`${label}: differs from the unscoped control`, s.bg !== control.bg, true);
   }
 
-  // THE GREY/BLUE GRAMMAR THE SUBTITLE PROMISES. Grey = from the form; blue = ours.
-  const sub = await p.textContent(".sub");
-  is("the subtitle still promises the grey/blue treatment", /grey fields come from the form/i.test(sub), true);
+  /* THE GREY/BLUE GRAMMAR, WHICH NO LONGER HAS A SUBTITLE PROMISING IT. This read ".sub" and
+     asserted the sentence "grey fields come from the form..." was still there; that paragraph came
+     off on 2026-09-10 with the rest of the explainer copy, so the assertion is inverted rather than
+     restored — the grammar must hold WITHOUT a legend, which was the argument for removing it.
+     The three colour assertions below are the real subject and are unchanged. */
+  is("the subtitle is gone — the grammar stands without a legend", await p.locator(".sub").count(), 0);
   const grey = await grab(".pill.lock");
   const blue = await p.$eval(".sel", (el) => getComputedStyle(el).borderColor);
   is("…and the grey is a real fill", transparent(grey.bg), false);

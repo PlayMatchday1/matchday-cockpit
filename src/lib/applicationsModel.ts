@@ -151,7 +151,7 @@ export function daysSince(ymd: string, nowMs: number): number {
   return Math.floor((nowMs - Date.parse(`${ymd}T00:00:00Z`)) / 86400000);
 }
 
-export type Tiles = { k: string; v: string; h: string; tone?: "hot" | "good" }[];
+export type Tiles = { k: string; v: string; tone?: "hot" | "good" }[];
 
 /** The five tiles, per the mockup — different sets per stream. */
 export function buildTiles(
@@ -169,19 +169,25 @@ export function buildTiles(
     const bench = Object.keys(CITY_NAMES)
       .filter((c) => people.filter((p) => p.cityCode === c && p.status !== "Passed").length >= 2).length;
     return [
-      { k: "Applicants", v: String(n), h: `${raw.submissions} submissions, deduped by email` },
-      { k: "Not contacted", v: String(untouched), h: "no outreach recorded", tone: "hot" },
-      { k: "Last 30 days", v: String(recent), h: "still warm" },
-      { k: "Cities with a bench", v: `${bench} of 7`, h: "2 or more live candidates", tone: "good" },
-      { k: "No city", v: String(noCity), h: "form didn't ask, or unrecognised" },
+      /* NO CAPTIONS. Every tile carried an `h` explaining itself and they all came off on
+       * 2026-09-10. The label and the number are the tile.
+       * THE ONE THAT LEANS HARDEST ON ITS CAPTION is "Cities with a bench": "2 or more live
+       * candidates" was the definition of bench, and "3 of 7" does not say it. It survives because
+       * the label is a word an operator uses, not because the number explains itself — if it reads
+       * as noise on the page, the tile is what should go, not the sentence coming back. */
+      { k: "Applicants", v: String(n) },
+      { k: "Not contacted", v: String(untouched), tone: "hot" },
+      { k: "Last 30 days", v: String(recent) },
+      { k: "Cities with a bench", v: `${bench} of 7`, tone: "good" },
+      { k: "No city", v: String(noCity) },
     ];
   }
   return [
-    { k: "Partner leads", v: String(n), h: `${raw.submissions} rows in, deduped by email` },
-    { k: "Not contacted", v: String(untouched), h: "no outreach recorded", tone: "hot" },
-    { k: "Last 30 days", v: String(recent), h: "still warm" },
-    { k: "Quarantined", v: String(raw.spamSubmissions), h: `submissions from ${raw.spamSenders} addresses — kept, not deleted` },
-    { k: "No city", v: String(noCity), h: "free-text location, unrecognised" },
+    { k: "Partner leads", v: String(n) },
+    { k: "Not contacted", v: String(untouched), tone: "hot" },
+    { k: "Last 30 days", v: String(recent) },
+    { k: "Quarantined", v: String(raw.spamSubmissions) },
+    { k: "No city", v: String(noCity) },
   ];
 }
 
