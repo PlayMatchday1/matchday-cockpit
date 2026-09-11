@@ -110,12 +110,17 @@ export default function FieldsView() {
   const [vdOrig, setVdOrig] = useState<Record<string, unknown>>({});
   const [venueBusy, setVenueBusy] = useState(false);
   const [venueMsg, setVenueMsg] = useState<{ text: string; bad: boolean } | null>(null);
+  /* ASKED ONLY WHEN THE VENUE IS SHARED. A 1:1 venue saves straight through — a prompt there would
+   * be a prompt about nothing, and the one that matters would start being clicked past. */
+  const [venueAsk, setVenueAsk] = useState(false);
 
-  /* READ-ONLY WHEN THE VENUE IS SHARED, and that is the whole design. A venue collecting several
-   * pitches cannot be edited from one pitch's drawer without silently moving the others. Also
-   * read-only without finance, and while a save is in flight. */
-  const venueLocked = !canFinance || venueBusy || siblings.length > 0
-    || (venueCur == null && venueMode === "existing");
+  /* SHARED NO LONGER MEANS READ-ONLY (2026-09-10). It did for a day, on the reasoning that editing
+   * one pitch's drawer would silently move the others — but the silence was the problem, not the
+   * write. The warning above still names them, and saving a SHARED venue now asks once, listing
+   * the fields, so the operator says yes to that specific set. Locked only without finance, while
+   * a save is in flight, or before a venue has been picked. */
+  const venueLocked = !canFinance || venueBusy
+    || (venueCur == null && venueMode === "existing" && venuePick == null);
   const venueDirty = useMemo(
     () => JSON.stringify(vd) !== JSON.stringify(vdOrig), [vd, vdOrig]);
   /* PHOTO WRITES ARE THEIR OWN BUSY AND THEIR OWN MESSAGE, separate from Save's. They do not
@@ -309,6 +314,7 @@ export default function FieldsView() {
    * partial — venue created, link failed — and this never turns that into a success line. */
   const saveVenue = async () => {
     if (venueBusy || !cur?.id) return;
+    setVenueAsk(false);
     const h = await headers(); if (!h) { setVenueMsg({ text: "No active session.", bad: true }); return; }
     setVenueBusy(true); setVenueMsg(null);
     try {
@@ -326,11 +332,16 @@ export default function FieldsView() {
       const j = await r.json();
       if (!r.ok) { setVenueMsg({ text: j.error ?? `HTTP ${r.status}`, bad: true }); return; }
       // NEVER "SAVED" FOR A HALF-DONE JOB. The route's own note names what did not happen.
-      setVenueMsg(j.partial
-        ? { text: j.note, bad: true }
-        : { text: venueCur ? "Venue saved." : `Venue created and linked to field ${cur.id}.`, bad: false });
+      const said = j.partial
+        ? { text: j.note as string, bad: true }
+        : { text: venueCur ? "Venue saved." : `Venue created and linked to field ${cur.id}.`, bad: false };
       await load();
       await loadVenue(cur.id);
+      /* SET AFTER THE RELOAD, NOT BEFORE. loadVenue clears venueMsg — it has to, or a stale error
+       * from the last field follows you to the next one — so setting it first meant a confirmed
+       * save reported nothing at all. Measured: the shared-venue path showed "(none)" while the
+       * PATCH had landed. */
+      setVenueMsg(said);
     } catch (e) {
       setVenueMsg({ text: `UNKNOWN: ${e instanceof Error ? e.message : String(e)}. Reload before acting.`, bad: true });
     } finally { setVenueBusy(false); }
@@ -592,7 +603,7 @@ export default function FieldsView() {
                     <span>⚠</span>
                     <div>
                       <b>{siblings.length} other field{siblings.length === 1 ? "" : "s"} already use{siblings.length === 1 ? "s" : ""} this venue</b>
-                      Cost, rates, player limits and the field contact are set per VENUE. These values are read-only here — edit them on Field Costs, where the subject is the venue rather than one pitch.
+                      Cost, rates, player limits and the field contact are set per VENUE. Changing them here changes them for:
                       <ul>{siblings.map((sb) => <li key={sb.fieldId}>{sb.title ?? "Field"} · {sb.fieldId}</li>)}</ul>
                     </div>
                   </div>
@@ -659,11 +670,25 @@ export default function FieldsView() {
                 onChange={(e) => setVd({ ...vd, schedule_url: e.target.value })} placeholder="https://" /></F>
             </div>
             {venueDirty && canFinance && !venueLocked && (
-              <div className="fv-addrow" style={{ marginTop: 12 }}>
-                <button className="fv-add" data-testid="fv-venue-save" disabled={venueBusy} onClick={() => void saveVenue()}>
-                  {venueBusy ? "Saving…" : venueCur ? "Save venue" : "Create venue and link it"}
-                </button>
-              </div>
+              venueAsk ? (
+                /* ONE LINE, THE FIELDS NAMED, TWO BUTTONS — the reduce-to-2-teams shape from
+                   1301b20. NAMED, not counted: "3 fields" cannot tell you whether you meant it. */
+                <div className="fv-confirm" data-testid="fv-venue-ask">
+                  <b>Change the rate for {siblings.length + 1} fields?</b>
+                  <span className="fv-asknames">{[cur?.title ?? `Field ${cur?.id}`, ...siblings.map((sb) => sb.title ?? `Field ${sb.fieldId}`)].join(" · ")}</span>
+                  <div className="fv-cacts">
+                    <button className="fv-chip" data-testid="fv-venue-cancel" onClick={() => setVenueAsk(false)}>Cancel</button>
+                    <button className="fv-add" data-testid="fv-venue-go" disabled={venueBusy} onClick={() => void saveVenue()}>Change it</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="fv-addrow" style={{ marginTop: 12 }}>
+                  <button className="fv-add" data-testid="fv-venue-save" disabled={venueBusy}
+                    onClick={() => (siblings.length > 0 ? setVenueAsk(true) : void saveVenue())}>
+                    {venueBusy ? "Saving…" : venueCur ? "Save venue" : "Create venue and link it"}
+                  </button>
+                </div>
+              )
             )}
             {venueMsg && <p className={"fv-hint" + (venueMsg.bad ? " fv-bad" : "")} data-testid="fv-venue-msg">{venueMsg.text}</p>}
           </Sect>
@@ -991,6 +1016,7 @@ const CSS = `
 .fv-share ul{margin:6px 0 0;padding-left:16px}
 .fv-share li{font-variant-numeric:tabular-nums}
 .fv-only{margin:12px 0 0;font-size:12.5px;color:#0B7A3E;font-weight:600}
+.fv-asknames{display:block;font-size:12px;color:#6A5320;margin-top:3px}
 /* THE DELETE CONFIRM — one question, two buttons, no prose. */
 .fv-confirm{margin-top:10px;border:1px solid #E6C4BC;background:#FDF4F2;border-radius:10px;padding:12px 14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .fv-confirm b{font-size:13.5px;color:#7A2B1C}

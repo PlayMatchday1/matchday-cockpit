@@ -189,21 +189,17 @@ export async function PATCH(req: Request) {
   if (!Number.isInteger(id) || id <= 0) return Response.json({ error: "id required" }, { status: 400 });
   if (Object.keys(patch).length === 0) return Response.json({ error: "nothing to change" }, { status: 400 });
 
-  /* A SHARED VENUE IS NOT EDITED FROM A FIELD'S DRAWER. fin_venue_fields is many-to-one, so one
-   * venue can collect several pitches — Round Rock has three, Soccer Central four. Changing a rate
-   * from one field's drawer would move the others silently, which is exactly the failure the
-   * approved mock's option C illustrates. The drawer renders those values read-only; this refuses
-   * the write even if something calls it anyway, because a disabled input is a courtesy. */
-  const { data: links } = await auth.supabase
-    .from("fin_venue_fields").select("mdapi_field_id").eq("fin_venue_id", id);
-  if ((links ?? []).length > 1) {
-    return Response.json({
-      error: `That venue covers ${links!.length} fields (${links!.map((l) => l.mdapi_field_id).join(", ")}). `
-        + "Editing it from one field's drawer would change all of them — edit it on Field Costs.",
-      fields: links!.map((l) => l.mdapi_field_id),
-    }, { status: 409 });
-  }
-
+  /* A SHARED VENUE IS EDITABLE FROM A FIELD'S DRAWER — corrected 2026-09-10, Ryan overruling his
+   * own brief: "Make shared venue values editable from the Fields drawer, not read-only."
+   *
+   * THIS USED TO 409 when fin_venue_fields held more than one row for the venue, on the reasoning
+   * that changing a rate from one pitch would silently move the others. The silence was the
+   * problem, not the write. The drawer now NAMES the other fields before the save and asks once —
+   * "Change the rate for 3 fields?" with them listed — so the operator is told what they are about
+   * to move and says yes to that specific set. A refusal here would make that confirmation a lie.
+   *
+   * WHAT DID NOT CHANGE: the finance capability above, and the confined refusal inside it. Those
+   * are the boundary; this was a workflow opinion. */
   const { data, error } = await auth.supabase
     .from("fin_venues").update(patch).eq("id", id).select("id, venue_name, city").single();
   if (error) return Response.json({ error: error.message }, { status: 500 });

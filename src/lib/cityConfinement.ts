@@ -272,16 +272,16 @@ const CONFINED_ROUTE_EXACT: readonly string[] = [
    * EXACT, NOT A PREFIX. There is nothing beneath this path today, and a prefix is a promise about
    * routes that do not exist yet. */
   "/api/match-managers",
-  /* THE VENUE READ, FOR THE FIELDS DRAWER. A confined city manager opening a field should SEE
-   * whether it has a cost mapping — "this pitch is attributed to nothing" is useful to them and
-   * useless to hide. Ryan's ruling: visible to matchops, editable only with finance.
+  /* "/api/venues" WAS ADDED HERE AND TAKEN BACK OUT, same day. The idea was that a confined city
+   * manager should SEE whether a pitch has a cost mapping. It was never reachable: /api/fields
+   * already refuses those accounts, so the Fields list never renders for them and the drawer never
+   * opens.
    *
-   * ALLOWLISTING THE PATH DOES NOT OPEN THE WRITES. GET is authenticateMatchOpsRead; POST and
-   * PATCH on the same file are authenticateCapability(req, "finance"), and capabilities.can()
-   * returns false for a confined row BEFORE the is_admin term — so a city manager carrying
-   * is_admin is still refused. This entry gets them past the route-name gate only; the capability
-   * gate is the one that decides, and it says no. */
-  "/api/venues",
+   * AND THAT IS THE REASON TO REMOVE IT RATHER THAN LEAVE IT. An allowlist entry with no reachable
+   * subject is not harmless — it grants the read silently on the day /api/fields opens up, with
+   * nobody reviewing it. Four confinement bugs this session came from this list being wrong; none
+   * of them came from it being too short. The writes were always refused by the finance capability
+   * and still are. */
 ];
 
 /**
