@@ -108,6 +108,13 @@ const NODE_SUITES = [
   // are silent: recommendedPlayerCount is a TOTAL (a 9v9 pitch stores 18, and the mockup sent
   // 9), and the create DTO is a whitelist where one extra key 400s the whole create.
   "scripts/fields-model-test.ts",
+  // CITY MANAGER CHECK-IN. A PUBLIC, no-login write endpoint: the honeypot, the IP rate limit and
+  // the validation are the only things between the open internet and an insert, and each of those
+  // is a refusal — an assertion whose passing value is "nothing was written" passes just as
+  // happily when the code does nothing, so every one carries a positive control. Also pins the
+  // month rules: a check-in is ABOUT one month and FILED in another (2 of the 12 real rows
+  // disagree), and the overdue logic depends on keeping them apart.
+  "scripts/check-in-form-test.ts",
   // REVENUE IS PRE-TAX. mdapi_match_players carries two money columns that differ by the city's
   // sales tax rate (5-9%), and reading the wrong one produces a number that looks fine. It did,
   // for as long as the Data Room existed — and total_amount is only populated from 2025-12,

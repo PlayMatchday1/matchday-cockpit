@@ -1,10 +1,14 @@
 // City Manager Check-Ins data layer.
 //
-// Reads live from the published Google Sheet that the standalone
-// city-managers-dashboard HTML uses. No Supabase tables, no Form
-// ingestion — the Sheet stays the source of truth and managers keep
-// using the existing Google Form. CORS is open on the publish URL,
-// so fetch happens client-side from the browser.
+// Reads `city_manager_check_ins` (migration 0167). Submissions come from the public /check-in page
+// via the guarded /api/city-check-ins/submit route — the same shape Equipment Inventory uses.
+//
+// WAS: the published Google Sheet CSV. That pipeline is gone, and with it three helpers that only
+// existed to survive free text — a keyword-matching column finder, a fuzzy city matcher with a
+// special case for OKC, and the publish URL. The city is now stored as a `city_identifier`, so
+// MANAGERS[].cityId matches it with `===` and there is nothing left to guess.
+
+import { cityNameFor } from "./cityScope";
 
 export type Manager = {
   name: string;
@@ -20,10 +24,15 @@ export type Manager = {
 // list drives the calendar rows, payment cards, and the one-card-per-
 // manager grid. Array order = calendar row order (top to bottom) and
 // the tie-break order within a shared pay day on the payment cards.
-/* NAMES AND SPELLINGS TAKEN FROM THE REAL DATA, not from a mockup. The check-in Sheet carries NO
+/* NAMES AND SPELLINGS TAKEN FROM THE REAL DATA, not from a mockup. The check-in Sheet carried NO
  * name column — only a city and an email — so these were resolved by joining the submitting emails
  * to app_users where is_city_manager is true. Two were misspelt here: "Yarra" is Yara Usheta and
  * "Willfried" is Wilfried Nyamsi.
+ *
+ * THAT RECONSTRUCTION IS NO LONGER NECESSARY FOR NEW ROWS. The /check-in form asks for the name
+ * directly and stores it in city_manager_check_ins.manager_name, which is exactly why it asks.
+ * This array still has to be maintained by hand because it carries payDay and amount, which the
+ * form does not collect — moving it to a table is a separate job.
  *
  * `cityId` is the city_identifier (src/lib/cityScope.ts) and it is what the meeting action items
  * are keyed on. The `city` string above it is the loose label the SHEET matcher needs, and the two
@@ -35,13 +44,13 @@ export type Manager = {
  * goals in the September export but no manager, and the mock guessed a name for it rather than
  * leaving the gap visible.
  *
- * HE WILL READ AS "NOT SUBMITTED" UNTIL ATLANTA FILES, and that is the honest state rather than a
- * bug. The check-in Sheet carries no Atlanta row at all — measured on the published CSV, 2026-09-09:
- * twelve submissions spelling five cities, San Antonio, Austin, DFW, Houston and Oklahoma City. The
- * `city` string here is what cityMatch will compare against the day one arrives, and plain
- * "Atlanta" is enough: it hits the exact-equality branch, and the includes() fallback catches
- * "Atlanta, GA". No special case is needed, unlike OKC, whose Sheet spelling is "Oklahoma City" and
- * which needs its own rule in cityMatch.
+ * HE READ AS "NOT SUBMITTED" BECAUSE ATLANTA HAD NEVER FILED — the Sheet carried no Atlanta row at
+ * all. Measured on the published CSV, 2026-09-09 and again on 2026-09-11 at the import: twelve
+ * submissions spelling five cities, San Antonio, Austin, DFW, Houston and Oklahoma City.
+ *
+ * He can file now. /check-in offers every city in cityScope.ts — not the cities in this array — so
+ * a city can submit before anyone remembers to add its manager here, and ATL matches on `cityId`
+ * the moment a row lands. The `city` string below is a display label only; nothing matches on it.
  *
  * payDay 25 NEEDS NO CODE CHANGE. getNextPayDate clamps with Math.min against daysInMonth on both
  * branches, so a 25th is safe in February and any other short month. */
@@ -54,9 +63,6 @@ export const MANAGERS: Manager[] = [
   { name: "Abraham Garcia", city: "San Antonio", cityId: "SATX", payDay: 15, amount: 500 },
   { name: "Ben Faye", city: "Atlanta", cityId: "ATL", payDay: 25, amount: 500 },
 ];
-
-export const CHECK_INS_SHEET_URL =
-  "https://docs.google.com/spreadsheets/d/e/2PACX-1vQmzasZGvZavVJan2QFpMxWuhc7HNzWIxRKcx1VsQS7jUZej13C9ODkhN1bw1NFOSUa2fgHKYfySrIE/pub?output=csv";
 
 const MONTH_SHORT = [
   "Jan",
@@ -107,7 +113,7 @@ export function formatMoney(n: number): string {
 
 export type CheckInEntry = {
   timestamp: Date;
-  city: string; // raw city from Sheet
+  city: string; // display name resolved from city_identifier (cityScope.ts)
   rating: number; // parsed; 0 if missing or invalid
   win: string;
   challenge: string;
@@ -132,187 +138,110 @@ export type CheckInsData = {
   overdueCount: number; // = total − submitted (matches standalone semantics)
 };
 
-// CSV parser ported verbatim from the standalone — handles quoted
-// fields, escaped quotes, CRLF, and embedded commas.
-export function parseCSV(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = "";
-  let inQuotes = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inQuotes) {
-      if (c === '"' && text[i + 1] === '"') {
-        field += '"';
-        i++;
-      } else if (c === '"') {
-        inQuotes = false;
-      } else {
-        field += c;
-      }
-    } else {
-      if (c === '"') inQuotes = true;
-      else if (c === ",") {
-        row.push(field);
-        field = "";
-      } else if (c === "\n") {
-        row.push(field);
-        rows.push(row);
-        row = [];
-        field = "";
-      } else if (c === "\r") {
-        // skip
-      } else {
-        field += c;
-      }
-    }
-  }
-  if (field.length > 0 || row.length > 0) {
-    row.push(field);
-    rows.push(row);
-  }
-  return rows;
-}
+/* ONE STORED CHECK-IN, as `city_manager_check_ins` holds it. snake_case deliberately: this is the
+ * row, not the view model, and CheckInEntry below is the shape the page consumes. */
+export type CheckInRecord = {
+  submitted_at: string;
+  manager_name: string;
+  city_identifier: string;
+  month_ending: string; // YYYY-MM-DD
+  rating: number | null;
+  fields_contacted: string | null;
+  fields_list: string | null;
+  field_progress: string | null;
+  match_manager: string | null;
+  marketing_channels: string | null;
+  marketing_results: string | null;
+  win: string | null;
+  challenge: string | null;
+  focus: string | null;
+};
 
-// Flexible column matcher — finds a column index by keyword match
-// on lowercased headers. First matching keyword wins.
-export function findCol(headers: string[], keywords: string[]): number {
-  const lower = headers.map((h) => (h || "").toLowerCase());
-  for (const kw of keywords) {
-    const idx = lower.findIndex((h) => h.includes(kw.toLowerCase()));
-    if (idx !== -1) return idx;
-  }
-  return -1;
-}
+const SELECT_COLS =
+  "submitted_at, manager_name, city_identifier, month_ending, rating, fields_contacted, " +
+  "fields_list, field_progress, match_manager, marketing_channels, marketing_results, " +
+  "win, challenge, focus";
 
-// Loose city match — handles DFW↔Dallas, North Austin↔Austin,
-// OKC↔Oklahoma. Mirrors the standalone's matcher exactly.
-function cityMatch(sheetCity: string, managerCity: string): boolean {
-  const cl = sheetCity.toLowerCase();
-  const ml = managerCity.toLowerCase();
-  if (cl === ml) return true;
-  if (cl.includes(ml) || ml.includes(cl)) return true;
-  if (ml === "dfw" && (cl.includes("dallas") || cl.includes("fort worth"))) {
-    return true;
-  }
-  if (ml === "north austin" && cl.includes("austin")) return true;
-  if (ml === "okc" && cl.includes("oklahoma")) return true;
-  return false;
-}
-
+/* THE SUPABASE CLIENT IS IMPORTED LAZILY, INSIDE THE FUNCTION. src/lib/supabase.ts is a
+ * "use client" module, and this file also exports daysInMonth, which opexSources.ts imports on
+ * paths that are not client-only. A top-level import would drag the browser client into those
+ * bundles for a date helper. */
 export async function fetchCheckIns(month?: string): Promise<CheckInsData> {
-  const url = CHECK_INS_SHEET_URL + "&_t=" + Date.now();
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const text = await res.text();
-  const rows = parseCSV(text);
-  return buildCheckInsData(rows, new Date(), month);
+  const { supabase } = await import("./supabase");
+  const { data, error } = await supabase
+    .from("city_manager_check_ins")
+    .select(SELECT_COLS)
+    .order("submitted_at", { ascending: false });
+  /* A FAILED READ THROWS RATHER THAN RETURNING ZERO ROWS. CheckInsView renders the error as "the
+   * check-ins could not be loaded — this is not 'nobody submitted'", and that distinction only
+   * survives if the error reaches it. An empty array here would paint every manager Overdue. */
+  if (error) throw new Error(error.message);
+  return buildCheckInsData((data ?? []) as unknown as CheckInRecord[], new Date(), month);
 }
 
-/* WHICH MONTH A CHECK-IN IS ABOUT — the "Month Ending Date" the manager typed, not the timestamp
+/* WHICH MONTH A CHECK-IN IS ABOUT — the month-ending date the manager picked, not the timestamp
  * the form recorded. They are routinely different and the difference is not noise: of the twelve
- * submissions in the sheet, one filed on 17 April reports month-ending 31 March, and one filed on
+ * imported submissions, one filed on 17 April reports month-ending 31 March, and one filed on
  * 20 February reports month-ending 3 March. Bucketing those by the filing date would file March's
  * check-in under April.
  *
- * Falls back to the timestamp when the column is missing or unparseable, because a check-in with no
- * readable month is better placed under when it arrived than dropped off the page entirely. */
-export function checkInMonth(monthEndingRaw: string, timestamp: Date): string {
-  const d = monthEndingRaw ? new Date(monthEndingRaw) : null;
-  const use = d && !Number.isNaN(d.getTime()) ? d : timestamp;
-  return `${use.getFullYear()}-${String(use.getMonth() + 1).padStart(2, "0")}`;
+ * SLICED, NOT PARSED. month_ending is a DATE, not a moment. `new Date("2026-03-31")` is UTC
+ * midnight, which in every US timezone is 30 March locally — reading the month off that lands a
+ * month-end check-in in the previous month roughly half the time. The string already starts with
+ * exactly the YYYY-MM this returns.
+ *
+ * The column is NOT NULL, so the old fall-back-to-timestamp branch has no case left to cover. */
+export function checkInMonth(monthEnding: string): string {
+  return String(monthEnding ?? "").slice(0, 7);
 }
 
-// Pure transformer split out for testability and so the hook can
-// inject a fake `now` if needed.
-export function buildCheckInsData(rows: string[][], now: Date, month?: string): CheckInsData {
-  if (rows.length < 2) {
-    return {
-      statuses: MANAGERS.map((m) => ({
-        manager: m,
-        entry: null,
-        submitted: false,
-      })),
-      submittedCount: 0,
-      overdueCount: MANAGERS.length,
-    };
-  }
-
-  const headers = rows[0];
-  const data = rows.slice(1).filter((r) => r.some((c) => c && c.trim()));
-
-  const idx = {
-    timestamp: findCol(headers, ["timestamp"]),
-    monthEnding: findCol(headers, ["month ending"]),
-    city: findCol(headers, ["city"]),
-    rating: findCol(headers, ["rating", "overall"]),
-    fieldsContacted: findCol(headers, [
-      "new fields contacted",
-      "fields contacted",
-    ]),
-    fieldsList: findCol(headers, ["list of fields"]),
-    fieldProgress: findCol(headers, ["progress update", "field relationships"]),
-    matchMgr: findCol(headers, ["match manager"]),
-    marketingEfforts: findCol(headers, ["grassroots", "marketing efforts"]),
-    marketingResults: findCol(headers, [
-      "results from",
-      "marketing results",
-    ]),
-    win: findCol(headers, ["biggest win"]),
-    challenge: findCol(headers, ["biggest challenge"]),
-    focus: findCol(headers, ["primary focus", "focus for next"]),
-  };
-
-  const get = (row: string[], i: number) =>
-    i >= 0 ? (row[i] || "").trim() : "";
-
-  // Latest submission per raw Sheet city, WITHIN the month being viewed.
-  //
-  // `month` undefined keeps the original behaviour exactly — latest ever, regardless of month —
-  // so every existing caller is unchanged. With a month, a city that filed nothing that month
-  // shows nothing, which is the honest answer: the alternative is July's check-in rendered under a
-  // September heading.
-  type Acc = { ts: Date; row: string[] };
+// Pure transformer split out for testability and so the hook can inject a fake `now` if needed.
+export function buildCheckInsData(
+  rows: CheckInRecord[],
+  now: Date,
+  month?: string,
+): CheckInsData {
+  /* LATEST SUBMISSION PER CITY, WITHIN THE MONTH BEING VIEWED.
+   *
+   * Keyed on city_identifier and compared to MANAGERS[].cityId with `===`. This is the whole point
+   * of the migration off the Sheet: the old path matched a typed city string against a display
+   * label through a fuzzy matcher that needed a DFW rule, an OKC rule and an includes() fallback.
+   *
+   * `month` undefined keeps the original behaviour exactly — latest ever, regardless of month — so
+   * every existing caller is unchanged. With a month, a city that filed nothing that month shows
+   * nothing, which is the honest answer: the alternative is July's check-in rendered under a
+   * September heading. */
+  type Acc = { ts: Date; row: CheckInRecord };
   const latestByCity = new Map<string, Acc>();
-  for (const row of data) {
-    const cityRaw = idx.city >= 0 ? row[idx.city] : "Unknown";
-    const tsRaw = idx.timestamp >= 0 ? row[idx.timestamp] : "";
-    const ts = tsRaw ? new Date(tsRaw) : new Date(0);
+  for (const row of rows) {
+    const ts = new Date(row.submitted_at);
     if (Number.isNaN(ts.getTime())) continue;
-    if (month && checkInMonth(get(row, idx.monthEnding), ts) !== month) continue;
-    const cur = latestByCity.get(cityRaw);
-    if (!cur || ts > cur.ts) {
-      latestByCity.set(cityRaw, { ts, row });
-    }
+    if (month && checkInMonth(row.month_ending) !== month) continue;
+    const cur = latestByCity.get(row.city_identifier);
+    if (!cur || ts > cur.ts) latestByCity.set(row.city_identifier, { ts, row });
   }
 
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
   const statuses: ManagerStatus[] = MANAGERS.map((m) => {
-    let match: Acc | null = null;
-    for (const [cityRaw, acc] of latestByCity) {
-      if (cityMatch(cityRaw, m.city)) {
-        match = acc;
-        break;
-      }
-    }
+    const match = latestByCity.get(m.cityId) ?? null;
     if (!match) return { manager: m, entry: null, submitted: false };
     const r = match.row;
-    const ratingRaw = get(r, idx.rating);
-    const ratingNum = parseFloat(ratingRaw);
+    const text = (v: string | null) => (v ?? "").trim();
+    const rating = Number(r.rating);
     const entry: CheckInEntry = {
       timestamp: match.ts,
-      city: idx.city >= 0 ? r[idx.city] : "",
-      rating: Number.isFinite(ratingNum) ? ratingNum : 0,
-      win: get(r, idx.win),
-      challenge: get(r, idx.challenge),
-      focus: get(r, idx.focus),
-      fieldsContacted: get(r, idx.fieldsContacted),
-      fieldsList: get(r, idx.fieldsList),
-      fieldProgress: get(r, idx.fieldProgress),
-      matchManager: get(r, idx.matchMgr),
-      marketingChannels: get(r, idx.marketingEfforts),
-      marketingResults: get(r, idx.marketingResults),
+      city: cityNameFor(r.city_identifier) ?? r.city_identifier,
+      rating: Number.isFinite(rating) ? rating : 0,
+      win: text(r.win),
+      challenge: text(r.challenge),
+      focus: text(r.focus),
+      fieldsContacted: text(r.fields_contacted),
+      fieldsList: text(r.fields_list),
+      fieldProgress: text(r.field_progress),
+      matchManager: text(r.match_manager),
+      marketingChannels: text(r.marketing_channels),
+      marketingResults: text(r.marketing_results),
     };
     /* WITH A MONTH, THE ROWS ARE ALREADY THAT MONTH'S, so an entry existing IS a submission —
      * comparing its timestamp to THIS month's start would mark every on-time August check-in

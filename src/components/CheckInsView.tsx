@@ -39,8 +39,7 @@ export default function CheckInsView() {
             City Manager Check-Ins
           </h1>
           <p className="mt-2 max-w-3xl text-sm text-deep-green/65">
-            What the monthly meeting agreed, and the managers&rsquo; own submissions underneath it ·
-            check-ins live from the Google Sheet.
+            What the monthly meeting agreed, and the managers&rsquo; own submissions underneath it.
           </p>
         </div>
       </div>
