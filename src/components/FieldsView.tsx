@@ -630,11 +630,10 @@ export default function FieldsView() {
           never drawing. Both a text input and a textarea in this drawer computed
           border-width: 0px, border-style: solid, and a transparent background — which is Tailwind
           preflight's reset winning, because the `.fv-dr :global(input)` rule in CSS above never
-          reached them. This component renders <style jsx>{CSS}</style> from a VARIABLE, so
-          styled-jsx cannot scope it statically; every element here carries the literal class
-          "jsx-undefined" and a scan of all five readable stylesheets matched no border rule at all.
-          Same class of bug as PlayerLookup's undefined --line2: a declaration that reads correctly
-          and applies to nothing.
+          reached them. WHY it never reached them is written out in full above that block — the
+          short version is that a :global() rule in the variable-fed CSS is DISCARDED, not scoped
+          and not emitted broken. Same class of bug as PlayerLookup's undefined --line2: a
+          declaration that reads correctly and applies to nothing.
           SO THESE GO IN A GLOBAL BLOCK, scoped under .fv-dr so they cannot escape the drawer.
           The pair is MatchPanel's, shipped in 3c30656b: #cbd8d1 on a #fbfdfc fill. That measures
           1.47:1 against the drawer's white and STILL FAILS WCAG's 3:1 floor for a control boundary
@@ -654,6 +653,30 @@ export default function FieldsView() {
         .fv-dr input:disabled, .fv-dr select:disabled {
           background: #F4F7F5; color: #6E8076; cursor: not-allowed;
         }
+        /* ── THE FOUR THAT CAME OUT OF THE VARIABLE-FED BLOCK ON 2026-09-10 ─────────────────────
+           All five were :global() rules in CSS above and all five were being discarded. RYAN'S
+           SYMPTOM IS THE COVER: with no object-fit the img rendered at its natural size inside a
+           340x191 overflow:hidden box, so a 1080x1080 photo was stretched to 340x340 and the panel
+           showed its top half. The gallery thumbnail beside it LOOKED right and was equally dead —
+           its box is square, so a square photo happened to fit, which is why it read as a control
+           when it was not one. */
+        .fv-dr textarea { resize: vertical; min-height: 74px; }
+        .fv-addrow input { flex: 1; }
+        .fv-thumb img, .fv-cover img {
+          width: 100%; height: 100%; object-fit: cover; display: block;
+        }
+        /* object-fit ALONE WAS NOT ENOUGH, and the second half took two attempts to see.
+           .fv-cover is display:grid with aspect-ratio:16/9, so the BOX is 340x191 — but the grid
+           ROW is auto-sized and grew to the image's natural height instead. height:100% then
+           resolved against the 340px ROW, not the 191px box, and overflow:hidden merely clipped
+           the excess. Measured: align-self:stretch applied, object-fit:cover applied, and the img
+           still computed height:340px inside a parent computing height:191.25px. Stretching a grid
+           item cannot help when the track itself is what grew.
+           TAKING IT OUT OF FLOW IS THE FIX. Absolute + inset:0 resolves against the padding box,
+           which aspect-ratio has already made definite, so the row cannot grow. The "No cover on
+           this field" placeholder is untouched and still centred by place-items. */
+        .fv-cover { position: relative; }
+        .fv-cover img, .fv-thumb img { position: absolute; inset: 0; }
       `}</style>
     </div>
   );
@@ -802,13 +825,31 @@ const CSS = `
 .fv-drbody{flex:1;overflow:auto;padding:0 0 24px}
 .fv-g2{display:grid;grid-template-columns:1fr 1fr;gap:12px 16px}
 .fv-g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px 16px}
-/* THE DRAWER'S INPUT RULE LIVED HERE AND REACHED NOTHING. Measured: every control in this drawer
-   computed border-width 0px. This <style jsx> block is fed a VARIABLE, so styled-jsx cannot scope
-   it and its :global() selectors never matched — Tailwind preflight's reset won by default. The
-   rules moved to a <style jsx global> block at the foot of the component, scoped under .fv-dr.
-   Anything else in this file that depends on :global() from here is in the same position. */
-.fv-dr :global(textarea){resize:vertical;min-height:74px}
-.fv-dr :global(input:disabled),.fv-dr :global(select:disabled){background:#F7F9F7;color:#A9B8AF;cursor:not-allowed}
+/* ── NO :global() IN THIS BLOCK. EVER. THE RULE, AND WHY — MEASURED 2026-09-10 ────────────────
+   This CSS is a VARIABLE handed to <style jsx>{CSS}</style>, so the babel plugin cannot analyse
+   the template at build time. What it does then is the thing to understand, because the obvious
+   guess is wrong in both directions:
+
+     · PLAIN SELECTORS ARE EMITTED VERBATIM AND UNSCOPED. Read off the live stylesheet, the rule
+       for the page header is literally ".fv-head" — no jsx-hash appended. So it is an ordinary
+       global rule and it works. That is why the page is not unstyled, and why "a variable breaks
+       scoping" never explained anything: nothing here IS scoped.
+
+     · :global() SELECTORS ARE DISCARDED ENTIRELY. Not emitted broken — GONE. Of 119 rules in the
+       document, zero contain the text ":global", and zero set object-fit at all, though two rules
+       in this file asked for it. :global() is a scoping escape hatch; with no scoping applied
+       there is nothing for it to escape, and the transform drops the rule rather than emitting a
+       selector no browser can parse.
+
+   SO A :global() RULE HERE IS SILENTLY DEAD, and it fails in the worst way: it reads correct, it
+   survives review, and it applies to nothing. Five of them sat here for months. What they cost:
+   every text input in the drawer had border-width 0 (fixed in 7341f2d), and the cover image had
+   no object-fit — a 1080x1080 photo stretched to 340x340 inside a 340x191 overflow:hidden box,
+   so the panel showed its top half and nothing else. The gallery thumbnail LOOKED fine and was
+   equally broken; its box is square, so a square photo happened to fit.
+
+   ANYTHING THAT MUST REACH A CHILD ELEMENT GOES IN THE <style jsx global> BLOCK at the foot of
+   this component, scoped under .fv-dr or .fv-card so it cannot leak. */
 .fv-derived{background:#F7FAF8;border:1px solid #E4EAE5;border-radius:8px;padding:9px 12px;font-size:13px;color:#3C4F44;font-weight:600;margin-top:12px}
 .fv-locked{display:flex;gap:10px;align-items:flex-start;background:#F7F9F7;border:1px dashed #D3DDD7;border-radius:9px;padding:13px 15px;color:#6E8076;font-size:13px}
 .fv-locked b{color:#3C4F44;display:block;font-size:13.5px;margin-bottom:2px}
@@ -822,16 +863,13 @@ const CSS = `
 .fv-en.off{color:#B8730B}
 .fv-rm{margin-left:auto;border:1px solid #E4EAE5;background:#fff;color:#E8492A;border-radius:7px;padding:4px 10px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer}
 .fv-addrow{display:flex;gap:9px}
-.fv-addrow :global(input){flex:1}
 .fv-hint{font-size:11.5px;color:#6E8076;margin:8px 0 0}
 .fv-imgs{display:flex;gap:12px;flex-wrap:wrap}
 .fv-thumb{width:132px;height:88px;border-radius:8px;border:1px solid #E4EAE5;position:relative;overflow:hidden;background:#0F3323}
-.fv-thumb :global(img){width:100%;height:100%;object-fit:cover;display:block}
 /* THE COVER IS ONE SLOT, not a grid of one — it is a different thing from the gallery and it
    should not look like a photo that happens to be first. */
 .fv-cover{width:100%;max-width:340px;aspect-ratio:16/9;border:1px solid var(--line);border-radius:10px;
   overflow:hidden;background:var(--slot);display:grid;place-items:center;margin-bottom:10px}
-.fv-cover :global(img){width:100%;height:100%;object-fit:cover;display:block}
 .fv-thumb{position:relative}
 /* Remove sits ON the thumbnail, so it is unambiguous which photo it acts on. */
 .fv-rm{position:absolute;right:5px;top:5px;width:22px;height:22px;border-radius:50%;border:0;
