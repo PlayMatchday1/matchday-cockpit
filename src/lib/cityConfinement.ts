@@ -272,6 +272,16 @@ const CONFINED_ROUTE_EXACT: readonly string[] = [
    * EXACT, NOT A PREFIX. There is nothing beneath this path today, and a prefix is a promise about
    * routes that do not exist yet. */
   "/api/match-managers",
+  /* THE VENUE READ, FOR THE FIELDS DRAWER. A confined city manager opening a field should SEE
+   * whether it has a cost mapping — "this pitch is attributed to nothing" is useful to them and
+   * useless to hide. Ryan's ruling: visible to matchops, editable only with finance.
+   *
+   * ALLOWLISTING THE PATH DOES NOT OPEN THE WRITES. GET is authenticateMatchOpsRead; POST and
+   * PATCH on the same file are authenticateCapability(req, "finance"), and capabilities.can()
+   * returns false for a confined row BEFORE the is_admin term — so a city manager carrying
+   * is_admin is still refused. This entry gets them past the route-name gate only; the capability
+   * gate is the one that decides, and it says no. */
+  "/api/venues",
 ];
 
 /**

@@ -101,6 +101,10 @@ is("authenticateMatchOpsRead is imported by EXACTLY the 19 intended routes", imp
   // can_access_matchops gates read AND write here, which is why the whole route is on this gate
   // with no write flag on top. Deliberately NOT recordWrite'd — change_log is for API writes.
   "slate-notes/route.ts",
+  /* THE VENUE READ. GET is matchops so a city manager can SEE whether a field has a cost mapping;
+     POST and PATCH on the same file are authenticateCapability(req, "finance") and are refused for
+     them. Visible, not editable — the split Ryan approved. */
+  "venues/route.ts",
   /* APPLICATIONS — Clubhouse's OWN tables (web_submissions, web_contacts), not a MatchDay call.
    * On this gate because it carries REAL NAMES, EMAILS AND PHONES for 158 people who filled in a
    * form on playmatchday.com, so it needs the same identity check player data does. A confined

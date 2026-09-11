@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { useAuth, canAccess } from "@/lib/useAuth";
 import {
   FORMATS, PITCH_OPTIONS, formatShort, recommendationReadout, missingRequired,
   updateBody, deleteBlock, validPhone,
@@ -91,6 +92,32 @@ export default function FieldsView() {
   const [result, setResult] = useState<{ lines: string[]; bad: boolean } | null>(null);
   /* WHICH REPLACED delText. The confirmation is a yes/no now, not a typing exercise. */
   const [confirming, setConfirming] = useState(false);
+
+  /* ── THE VENUE HALF OF THE DRAWER ───────────────────────────────────────────────────────────
+   * fin_venues is ONE row behind two sections. canFinance only disables the controls; the refusal
+   * that matters is /api/venues, which checks can_access_finance server-side and refuses a
+   * confined account before the is_admin term. */
+  const { appUser } = useAuth();
+  const canFinance = canAccess(appUser, "finance");
+  type VenueRow = { id: number; venue_name: string; city: string } & Record<string, unknown>;
+  const [venueList, setVenueList] = useState<VenueRow[]>([]);
+  const [venueCounts, setVenueCounts] = useState<Record<number, number>>({});
+  const [venueCur, setVenueCur] = useState<number | null>(null);
+  const [siblings, setSiblings] = useState<{ fieldId: number; title: string | null }[]>([]);
+  const [venueMode, setVenueMode] = useState<"new" | "existing">("new");
+  const [venuePick, setVenuePick] = useState<number | null>(null);
+  const [vd, setVd] = useState<Record<string, unknown>>({});
+  const [vdOrig, setVdOrig] = useState<Record<string, unknown>>({});
+  const [venueBusy, setVenueBusy] = useState(false);
+  const [venueMsg, setVenueMsg] = useState<{ text: string; bad: boolean } | null>(null);
+
+  /* READ-ONLY WHEN THE VENUE IS SHARED, and that is the whole design. A venue collecting several
+   * pitches cannot be edited from one pitch's drawer without silently moving the others. Also
+   * read-only without finance, and while a save is in flight. */
+  const venueLocked = !canFinance || venueBusy || siblings.length > 0
+    || (venueCur == null && venueMode === "existing");
+  const venueDirty = useMemo(
+    () => JSON.stringify(vd) !== JSON.stringify(vdOrig), [vd, vdOrig]);
   /* PHOTO WRITES ARE THEIR OWN BUSY AND THEIR OWN MESSAGE, separate from Save's. They do not
    * stage and they do not ride the field PUT — an upload is a different endpoint with a different
    * verdict, and mixing it into the save bar would make one message stand for two writes. */
@@ -176,13 +203,13 @@ export default function FieldsView() {
 
   const openNew = () => {
     setMode("new"); setCurId(null); setOrig(blank()); setDraft(blank());
-    setPitches(1); setPhones([]); setPhoneIn(""); setResult(null); setConfirming(false);
+    setPitches(1); setPhones([]); setPhoneIn(""); setResult(null); setConfirming(false); void loadVenue(null);
     setOpen(true);
   };
   const openEdit = (f: Field) => {
     setMode("edit"); setCurId(f.id ?? null); setOrig(draftOf(f)); setDraft(draftOf(f));
     setPitches(1); setPhoneIn(""); setResult(null); setConfirming(false);
-    setPhones([]); void loadPhones(f.id);
+    setPhones([]); void loadPhones(f.id); void loadVenue(f.id ?? null);
     setOpen(true);
   };
   const close = () => { setOpen(false); setCurId(null); setResult(null); };
@@ -225,6 +252,7 @@ export default function FieldsView() {
         // THE DRAWER IS NOW IN EDIT MODE ON A REAL ID, whatever happens next.
         const row: Field = { ...(j.row as Field), matchCount: 0, images: (j.row?.images ?? []) };
         setMode("edit"); setCurId(row.id ?? null); setOrig(draftOf(row)); setDraft(draftOf(row));
+        void loadVenue(row.id ?? null);
       } else if (diffN > 0) {
         const r = await fetch(`/api/fields?id=${cur!.id}`, {
           method: "PUT", headers: h, body: JSON.stringify({ orig, draft }),
@@ -250,6 +278,62 @@ export default function FieldsView() {
       // FROM WHAT load JUST READ, not from the closure's older `data`. See the note on load().
       if (mode === "edit" && !bad) { const f = (fresh?.fields ?? []).find((x) => x.id === curId); if (f) setOrig(draftOf(f)); }
     } finally { setBusy(false); }
+  };
+
+  /* LOAD THE VENUE PICTURE FOR THE OPEN FIELD. One GET, matchops-gated, so the section renders
+   * with real values for a city manager who cannot change them. */
+  const loadVenue = useCallback(async (fieldId: number | null) => {
+    const h = await headers(); if (!h) return;
+    setVenueMsg(null); setVenuePick(null); setVenueMode("new");
+    const r = await fetch(`/api/venues${fieldId ? `?fieldId=${fieldId}` : ""}`, { headers: h, cache: "no-store" });
+    const j = await r.json();
+    if (!r.ok) { setVenueList([]); setVenueCur(null); setSiblings([]); return; }
+    setVenueList(j.venues ?? []); setVenueCounts(j.counts ?? {});
+    const curVenueId: number | null = j.current?.venueId ?? null;
+    setVenueCur(curVenueId);
+    setSiblings(j.current?.siblings ?? []);
+    const row = (j.venues ?? []).find((v: { id: number }) => v.id === curVenueId) ?? {};
+    // THE SAME SHAPE EITHER WAY, so the form does not branch on whether a venue exists yet.
+    const seed = {
+      venue_name: row.venue_name ?? "", city: row.city ?? "", billing_type: row.billing_type ?? "per_match",
+      per_match_rate: row.per_match_rate ?? "", cost_per_match: row.cost_per_match ?? "",
+      charge_on_cancel: row.charge_on_cancel === true,
+      min_players: row.min_players ?? "", max_players: row.max_players ?? "",
+      contact_name: row.contact_name ?? "", contact_number: row.contact_number ?? "",
+      schedule_url: row.schedule_url ?? "",
+    };
+    setVd(seed); setVdOrig(seed);
+  }, [headers]);
+
+  /* THREE WRITES CAN FAIL INDEPENDENTLY and this owns two of them. The route reports its own
+   * partial — venue created, link failed — and this never turns that into a success line. */
+  const saveVenue = async () => {
+    if (venueBusy || !cur?.id) return;
+    const h = await headers(); if (!h) { setVenueMsg({ text: "No active session.", bad: true }); return; }
+    setVenueBusy(true); setVenueMsg(null);
+    try {
+      const num = (v: unknown) => (v === "" || v == null ? null : Number(v));
+      const payload = { ...vd,
+        per_match_rate: num(vd.per_match_rate), cost_per_match: num(vd.cost_per_match),
+        min_players: num(vd.min_players), max_players: num(vd.max_players),
+        field_title_at_link: cur.title ?? null };
+      const linkTo = venueCur ?? (venueMode === "existing" ? venuePick : null);
+      const r = linkTo != null && venueCur != null
+        ? await fetch("/api/venues", { method: "PATCH", headers: { ...h, "Content-Type": "application/json" },
+            body: JSON.stringify({ id: venueCur, patch: payload }) })
+        : await fetch("/api/venues", { method: "POST", headers: { ...h, "Content-Type": "application/json" },
+            body: JSON.stringify({ venue: payload, fieldId: cur.id }) });
+      const j = await r.json();
+      if (!r.ok) { setVenueMsg({ text: j.error ?? `HTTP ${r.status}`, bad: true }); return; }
+      // NEVER "SAVED" FOR A HALF-DONE JOB. The route's own note names what did not happen.
+      setVenueMsg(j.partial
+        ? { text: j.note, bad: true }
+        : { text: venueCur ? "Venue saved." : `Venue created and linked to field ${cur.id}.`, bad: false });
+      await load();
+      await loadVenue(cur.id);
+    } catch (e) {
+      setVenueMsg({ text: `UNKNOWN: ${e instanceof Error ? e.message : String(e)}. Reload before acting.`, bad: true });
+    } finally { setVenueBusy(false); }
   };
 
   const addPhone = async () => {
@@ -447,30 +531,141 @@ export default function FieldsView() {
             <div className="fv-derived" data-testid="fv-recommendation">{recommendationReadout(fmtTotal, pitches)}</div>
           </Sect>
 
-          {/* EDIT ONLY. In create both controls are disabled and there is nothing true to show —
-              a field that does not exist cannot be mapped to a venue. In EDIT it still says
-              something real: whether this field has a fin_venue_fields row, which is the per-field
-              counterpart of the "N fields have no venue mapping" banner on the list. */}
+          {/* ── VENUE & COST, AND ON THE DAY ──────────────────────────────────────────────────
+              Ryan: "I dont think you should have to go to finance page to add field, you should be
+              able to put field cost etc whatever you need for mapping here".
+
+              BOTH SECTIONS WRITE ONE fin_venues ROW. Field Ops' dialog and Field Costs' dialog are
+              two editors over the same table with different column subsets — min_players,
+              max_players, contact_name, contact_number and schedule_url are fin_venues columns
+              (0074), not a separate "field ops" store. That is why visiting both was necessary and
+              why this does not need a sync: it is the same row.
+
+              VISIBLE TO MATCHOPS, EDITABLE WITH FINANCE. A city manager seeing that a field has no
+              cost mapping is useful; a city manager setting a rate is a privilege escalation. The
+              control renders and says why it is locked, the way PlayerLookup does for EDIT CREDITS.
+              THE REAL GATE IS THE ROUTE: /api/venues refuses POST and PATCH without
+              can_access_finance, and capabilities.can() refuses a confined account before the
+              is_admin term. A disabled input is a courtesy. */}
+          <Sect title="Venue & cost" tag="Clubhouse only">
+            {!canFinance && (
+              <p className="fv-lock" data-testid="fv-venue-locked">
+                Editing a venue needs <b>Finance</b>. You can see the mapping; changing a rate or a
+                player limit is done on Field Costs.
+              </p>
+            )}
+
+            {mode === "new" ? (
+              <p className="fv-lock" data-testid="fv-venue-new">Save the field first — a venue links to a field id, and there is not one yet.</p>
+            ) : (
+              <>
+                {/* THE TWO MODES, as approved. Create is the Bob Jones case and is 1:1; Use existing
+                    is the second-pitch case and is where the sharing warning lives. */}
+                {!venueCur && (
+                  <div className="fv-vmode" data-testid="fv-venue-mode">
+                    <button type="button" className={"fv-chip" + (venueMode === "new" ? " on" : "")}
+                      disabled={!canFinance} onClick={() => setVenueMode("new")}>Create a new venue</button>
+                    <button type="button" className={"fv-chip" + (venueMode === "existing" ? " on" : "")}
+                      disabled={!canFinance} onClick={() => setVenueMode("existing")}>Use an existing venue</button>
+                  </div>
+                )}
+
+                {/* THE PICKER SITS ABOVE THE WARNING, AND THE WARNING ABOVE THE VALUES IT GOVERNS.
+                    You choose, then you are told, then you see what you cannot change. */}
+                {!venueCur && venueMode === "existing" && (
+                  <F label="Venue">
+                    <select data-testid="fv-venue" disabled={!canFinance} value={venuePick ?? ""}
+                      onChange={(e) => setVenuePick(e.target.value ? Number(e.target.value) : null)}>
+                      <option value="">Select a venue</option>
+                      {venueList.map((v) => (
+                        <option key={v.id} value={v.id}>{v.venue_name} · {v.city}{(venueCounts[v.id] ?? 0) > 0 ? ` — ${venueCounts[v.id]} field${venueCounts[v.id] === 1 ? "" : "s"}` : ""}</option>
+                      ))}
+                    </select>
+                  </F>
+                )}
+
+                {/* SHARED: NAME THE OTHERS, WITH THEIR IDS. fin_venue_fields is many-to-one, so a
+                    rate changed here can move three other pitches. This is the failure the mock's
+                    option C illustrates and the reason the values below go read-only. */}
+                {siblings.length > 0 && (
+                  <div className="fv-share" data-testid="fv-venue-shared" data-n={siblings.length}>
+                    <span>⚠</span>
+                    <div>
+                      <b>{siblings.length} other field{siblings.length === 1 ? "" : "s"} already use{siblings.length === 1 ? "s" : ""} this venue</b>
+                      Cost, rates, player limits and the field contact are set per VENUE. These values are read-only here — edit them on Field Costs, where the subject is the venue rather than one pitch.
+                      <ul>{siblings.map((sb) => <li key={sb.fieldId}>{sb.title ?? "Field"} · {sb.fieldId}</li>)}</ul>
+                    </div>
+                  </div>
+                )}
+                {venueCur && siblings.length === 0 && (
+                  <p className="fv-only" data-testid="fv-venue-only">✓ This venue covers this field only.</p>
+                )}
+                {!venueCur && venueMode === "new" && (
+                  <p className="fv-only" data-testid="fv-venue-only">✓ This venue will cover this field only.</p>
+                )}
+
+                <div className="fv-g2" style={{ marginTop: 12 }}>
+                  <F label="Venue name" req={venueMode === "new" && !venueCur}>
+                    <input data-testid="fv-venue-name" value={String(vd.venue_name ?? "")} disabled={venueLocked}
+                      onChange={(e) => setVd({ ...vd, venue_name: e.target.value })} placeholder="Bob Jones Park" /></F>
+                  <F label="City" req={venueMode === "new" && !venueCur}>
+                    <input data-testid="fv-venue-city" value={String(vd.city ?? "")} disabled={venueLocked}
+                      onChange={(e) => setVd({ ...vd, city: e.target.value })} placeholder="Austin" /></F>
+                </div>
+                <div className="fv-g3" style={{ marginTop: 12 }}>
+                  <F label="Billing type">
+                    <select data-testid="fv-billing" value={String(vd.billing_type ?? "per_match")} disabled={venueLocked}
+                      onChange={(e) => setVd({ ...vd, billing_type: e.target.value })}>
+                      <option value="per_match">per_match</option>
+                      <option value="monthly_flat">monthly_flat</option>
+                      <option value="profit_share">profit_share</option>
+                    </select></F>
+                  <F label="Per-match rate">
+                    <input data-testid="fv-rate" inputMode="decimal" value={String(vd.per_match_rate ?? "")} disabled={venueLocked}
+                      onChange={(e) => setVd({ ...vd, per_match_rate: e.target.value })} placeholder="160" /></F>
+                  <F label="Cost / match">
+                    <input data-testid="fv-cost" inputMode="decimal" value={String(vd.cost_per_match ?? "")} disabled={venueLocked}
+                      onChange={(e) => setVd({ ...vd, cost_per_match: e.target.value })} placeholder="160" /></F>
+                </div>
+                <div style={{ marginTop: 12 }}>
+                  {/* EXPOSED. A per-venue yes/no the person setting the field up knows.
+                      billing_cadence and bills_per_reservation are NOT here — see /api/venues. */}
+                  <F label="Charge on cancel">
+                    <select data-testid="fv-cancel" value={vd.charge_on_cancel ? "yes" : "no"} disabled={venueLocked}
+                      onChange={(e) => setVd({ ...vd, charge_on_cancel: e.target.value === "yes" })}>
+                      <option value="no">No</option><option value="yes">Yes</option>
+                    </select></F>
+                </div>
+              </>
+            )}
+          </Sect>
+
           {mode === "edit" && (
-          <Sect title="Venue mapping" tag="Clubhouse only">
+          <Sect title="On the day">
             <div className="fv-g2">
-              <F label="Venue">
-                {/* THE EMPTY STATE IS NEVER BLANK. "Unmapped" is a state with a consequence; an
-                    empty select looks like a control nobody has got to yet. */}
-                <select data-testid="fv-venue" disabled value={cur && mappedIds.has(cur.id) ? "mapped" : ""}>
-                  <option value="">Unmapped — no cost or revenue</option>
-                  <option value="mapped">Mapped to a venue</option>
-                </select>
-              </F>
-              <F label="Per-match rate" hint="Comes from the venue. Change it on the Field Cost page.">
-                <input data-testid="fv-rate" value="" placeholder="—" disabled />
-              </F>
+              <F label="Min players"><input data-testid="fv-minp" inputMode="numeric" value={String(vd.min_players ?? "")} disabled={venueLocked}
+                onChange={(e) => setVd({ ...vd, min_players: e.target.value })} /></F>
+              <F label="Max players"><input data-testid="fv-maxp" inputMode="numeric" value={String(vd.max_players ?? "")} disabled={venueLocked}
+                onChange={(e) => setVd({ ...vd, max_players: e.target.value })} /></F>
             </div>
-            {/* THE READ-ONLY EXPLANATION STOOD HERE, with data-testid="fv-venue-readonly". Its
-                whole content was the prose this pass removes, so the element went with it rather
-                than staying as an empty div holding a testid nothing asserts (grep: no suite names
-                it). The controls are still disabled and the Venue hint beside the rate still says
-                where the mapping is edited. */}
+            <div className="fv-g2" style={{ marginTop: 12 }}>
+              <F label="Field contact name"><input data-testid="fv-cname" value={String(vd.contact_name ?? "")} disabled={venueLocked}
+                onChange={(e) => setVd({ ...vd, contact_name: e.target.value })} /></F>
+              <F label="Field contact"><input data-testid="fv-cnum" value={String(vd.contact_number ?? "")} disabled={venueLocked}
+                onChange={(e) => setVd({ ...vd, contact_number: e.target.value })} /></F>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <F label="Schedule link"><input data-testid="fv-sched" value={String(vd.schedule_url ?? "")} disabled={venueLocked}
+                onChange={(e) => setVd({ ...vd, schedule_url: e.target.value })} placeholder="https://" /></F>
+            </div>
+            {venueDirty && canFinance && !venueLocked && (
+              <div className="fv-addrow" style={{ marginTop: 12 }}>
+                <button className="fv-add" data-testid="fv-venue-save" disabled={venueBusy} onClick={() => void saveVenue()}>
+                  {venueBusy ? "Saving…" : venueCur ? "Save venue" : "Create venue and link it"}
+                </button>
+              </div>
+            )}
+            {venueMsg && <p className={"fv-hint" + (venueMsg.bad ? " fv-bad" : "")} data-testid="fv-venue-msg">{venueMsg.text}</p>}
           </Sect>
           )}
 
@@ -788,6 +983,14 @@ const CSS = `
 .fv-bar{display:flex;gap:9px;align-items:center;flex-wrap:wrap;padding:12px 18px;border-bottom:1px solid #EFF3EF}
 .fv-q{flex:1;min-width:220px;border:1px solid #E4EAE5;border-radius:999px;padding:7px 14px;font:inherit;font-size:13px}
 .fv-lbl{font-size:10.5px;font-weight:700;letter-spacing:.09em;color:#93A49A;text-transform:uppercase}
+.fv-lock{margin:0 0 10px;font-size:12px;color:#6E8076;background:#F7F9F7;border:1px dashed #D3DDD7;border-radius:9px;padding:9px 12px}
+.fv-lock b{color:#3C4F44}
+.fv-vmode{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.fv-share{display:flex;gap:10px;align-items:flex-start;background:#FFF6E3;border:1px solid #F0DFB8;border-radius:9px;padding:11px 13px;margin:12px 0 0;color:#7A4E06;font-size:12.5px}
+.fv-share b{display:block;color:#5C3A00;font-size:13px;margin-bottom:3px}
+.fv-share ul{margin:6px 0 0;padding-left:16px}
+.fv-share li{font-variant-numeric:tabular-nums}
+.fv-only{margin:12px 0 0;font-size:12.5px;color:#0B7A3E;font-weight:600}
 /* THE DELETE CONFIRM — one question, two buttons, no prose. */
 .fv-confirm{margin-top:10px;border:1px solid #E6C4BC;background:#FDF4F2;border-radius:10px;padding:12px 14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .fv-confirm b{font-size:13.5px;color:#7A2B1C}

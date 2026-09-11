@@ -813,6 +813,21 @@ function FieldModal({ state, roster, saving, error, onChange, onClose, onSave }:
 }) {
   const f = state.form;
   const set = (patch: Partial<FieldFormInput>) => onChange({ ...f, ...patch });
+  /* WHICH mdapi FIELDS THIS VENUE COVERS. Read here rather than threaded through the page,
+   * because it is a property of the row being edited and nothing else on the screen needs it.
+   * A venue with several pitches is the normal case, not an edge one: Round Rock has three. */
+  const [coveredFields, setCoveredFields] = useState<{ fieldId: number; title: string | null }[]>([]);
+  useEffect(() => {
+    const venueId = state.mode === "edit" ? state.id : null;
+    if (venueId == null) { setCoveredFields([]); return; }
+    let live = true;
+    void (async () => {
+      const { data } = await supabase.from("fin_venue_fields")
+        .select("mdapi_field_id, field_title_at_link").eq("fin_venue_id", venueId);
+      if (live) setCoveredFields((data ?? []).map((r) => ({ fieldId: Number(r.mdapi_field_id), title: r.field_title_at_link ?? null })));
+    })();
+    return () => { live = false; };
+  }, [state]);
   const derivedCM = cityManagerFor(f.city, roster);
   const derivedCMPhone = cityManagerPhoneFor(f.city, roster);
   const cmUnassigned = derivedCM === UNASSIGNED_CITY_MANAGER;
@@ -820,11 +835,23 @@ function FieldModal({ state, roster, saving, error, onChange, onClose, onSave }:
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-deep-green/30 px-4 py-12 backdrop-blur-sm">
       <div role="dialog" aria-modal="true" className="w-full max-w-xl overflow-hidden rounded-2xl border border-cream-line bg-white shadow-xl shadow-deep-green/25">
         <div className="flex items-center justify-between border-b border-cream-line/70 px-6 py-4">
-          <h2 className="font-display text-2xl uppercase leading-none tracking-tight text-deep-green">{state.mode === "add" ? "Add field" : `Edit field · ${state.name}`}</h2>
+          {/* "VENUE", NOT "FIELD" — corrected 2026-09-10. This dialog edits a fin_venues ROW, and
+              fin_venue_fields is many-to-one (0041): venue 4 "Round Rock" collects three mdapi
+              fields, Soccer Central four. So "Edit field · Round Rock" named the wrong thing and
+              hid the consequence — the min/max set here is set for every pitch the venue covers.
+              The ids are listed under the title so that is visible before anything is typed. */}
+          <h2 className="font-display text-2xl uppercase leading-none tracking-tight text-deep-green">{state.mode === "add" ? "Add venue" : `Edit venue · ${state.name}`}</h2>
           <button type="button" onClick={onClose} aria-label="Close" className="flex h-8 w-8 items-center justify-center rounded-lg border border-cream-line text-deep-green/45 transition hover:bg-cream-soft"><X aria-hidden size={17} /></button>
         </div>
+        {state.mode === "edit" && coveredFields.length > 0 && (
+          <p data-testid="cfl-covers" className="border-b border-cream-line/70 bg-amber-50 px-6 py-3 text-[12.5px] leading-relaxed text-amber-900">
+            <b className="block">This venue covers {coveredFields.length} field{coveredFields.length === 1 ? "" : "s"}</b>
+            Everything below is set per venue, so it applies to {coveredFields.length === 1 ? "it" : "all of them"}:{" "}
+            {coveredFields.map((c) => `${c.title ?? "Field"} · ${c.fieldId}`).join(", ")}
+          </p>
+        )}
         <div className="grid grid-cols-1 gap-4 px-6 py-5 sm:grid-cols-2">
-          <Labeled label="Field" required><input value={f.venue_name} onChange={(e) => set({ venue_name: e.target.value })} placeholder="ATH Pearland" className={inputCls} /></Labeled>
+          <Labeled label="Venue" required><input value={f.venue_name} onChange={(e) => set({ venue_name: e.target.value })} placeholder="ATH Pearland" className={inputCls} /></Labeled>
           <Labeled label="City" required>
             <select value={f.city} onChange={(e) => set({ city: e.target.value })} className={inputCls}>
               {CITIES.map((c) => <option key={c} value={c}>{c}</option>)}
