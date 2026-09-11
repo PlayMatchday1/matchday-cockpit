@@ -92,6 +92,11 @@ const NODE_SUITES = [
   "scripts/prod-guard-test.ts",
   "scripts/stage-denylist-test.ts",
   "scripts/change-log-test.ts",
+  // "[object Object]" REACHED A PERSON. A PostgrestError is a plain object, so String(e) prints
+  // that literal text and the message naming the column is lost — Deonna read it after filling in
+  // the whole Add venue drawer. Cheap, pure, and it pins the three call sites in the drawer she
+  // used as well as the helper.
+  "scripts/error-text-test.ts",
   "scripts/write-routes-logged-test.ts",
   "scripts/walltime-guard-test.ts",
   // THE DRAWER'S DATE/TIME MODEL. A match-record write: a silent hour shift here moves

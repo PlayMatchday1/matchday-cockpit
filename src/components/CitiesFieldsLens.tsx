@@ -22,6 +22,7 @@ import { useScheduleMarks, type ScheduleMark } from "@/lib/useScheduleMarks";
 import { useScheduleEnds, type ScheduleEnd } from "@/lib/useScheduleEnds";
 import { Pencil, Trash2, Plus, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { errorText } from "@/lib/errorText";
 import { CITIES } from "@/lib/types";
 import { normalizeCityName } from "@/lib/cityNormalization";
 import {
@@ -256,7 +257,10 @@ export default function CitiesFieldsLens() {
       setRows(derived);
       setNowMs(now);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load fields.");
+      /* THE REAL MESSAGE, NOT A BLANKET ONE. This replaced every failure with "Failed to load
+         fields.", so a permission refusal and a dead network read identically. The sentence is
+         still there — as the fallback for a failure that carries no message of its own. */
+      setError(errorText(e, "Failed to load fields."));
     } finally {
       setLoading(false);
     }
@@ -315,7 +319,9 @@ export default function CitiesFieldsLens() {
       setModal(null);
       await load();
     } catch (e) {
-      setModalError(e instanceof Error ? e.message : String(e));
+      /* A SUPABASE REFUSAL IS AN OBJECT. String(e) printed "[object Object]" here, which is what
+         Deonna read after filling in the whole drawer. See errorText. */
+      setModalError(errorText(e));
     } finally { setSaving(false); }
   }, [modal, load]);
   const doDelete = useCallback(async () => {
@@ -328,7 +334,7 @@ export default function CitiesFieldsLens() {
       setConfirmDelete(null);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally { setSaving(false); }
   }, [confirmDelete, load]);
 
