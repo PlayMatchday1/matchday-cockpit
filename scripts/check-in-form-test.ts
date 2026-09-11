@@ -7,7 +7,7 @@
  * here carries a positive control proving it can still accept a good submission.
  *
  * The month rules are the second half. A check-in is ABOUT a month and is FILED in another one, and
- * the two disagree in 2 of the 12 real submissions. The overdue logic depends on keeping them
+ * the two disagree in SIX of the 12 real submissions. The overdue logic depends on keeping them
  * apart, and it is the thing a refactor would quietly break.
  *
  * Every constant here was measured against the published CSV on 2026-09-11: 12 rows, 14 headers,
@@ -20,6 +20,7 @@ import {
   MAX_NAME_LEN, MAX_LONG_LEN, type RateLimitStore,
 } from "../src/lib/cityCheckIns";
 import { buildCheckInsData, checkInMonth, MANAGERS, type CheckInRecord } from "../src/lib/checkIns";
+import { CITY_SCOPES } from "../src/lib/cityScope";
 
 let pass = 0; const fails: string[] = [];
 const ok = (m: string) => { pass++; console.log(`  ✓ ${m}`); };
@@ -206,6 +207,39 @@ console.log("\nthe form and the validator cannot drift");
   ok(`every city the form offers is accepted by the route (${CHECK_IN_CITY_OPTIONS.length})`);
   if (CHECK_IN_CITY_OPTIONS.length >= MANAGERS.length) ok("the city list is at least as wide as the manager roster");
   else bad("the city list is at least as wide as the manager roster", "a city could not file");
+}
+
+console.log("\nthe city allowlist lives in CODE — this replaces the dropped CHECK constraint (0168)");
+{
+  /* 0167 put a CHECK listing eight abbreviations on city_identifier; 0168 drops it, because
+   * cityScope.ts had already settled that question for this column (0120: "a CHECK listing today's
+   * seven abbreviations is a migration every time a city opens"). The guarantee MOVES here rather
+   * than disappearing, so this is the test that has to hold.
+   *
+   * DERIVED FROM CITY_SCOPES, NEVER LISTED. A hardcoded set here would recreate exactly the second
+   * list the migration exists to delete, and would go stale the day a ninth city opens. */
+  let accepted = 0;
+  for (const c of CITY_SCOPES) {
+    const r = validateCityCheckIn({ ...GOOD, city_identifier: c.identifier });
+    if (r.ok && r.value.city_identifier === c.identifier) accepted++;
+    else bad(`CITY_SCOPES carries ${c.identifier} but the route refuses it`, r.ok ? "stored a different value" : r.error);
+  }
+  is("every identifier in CITY_SCOPES is accepted", accepted, CITY_SCOPES.length);
+
+  /* THE REFUSAL, which is the half the database used to own. Each of these is a real shape: a
+   * display name, a lowercase abbreviation, one with trailing whitespace, an empty string, and a
+   * city that does not exist. cityScope.ts's resolveCityScope is EXACT match only — no trimming,
+   * no upper-casing — and the validator must not be looser than the list it reads. */
+  for (const junk of ["NOPE", "Atlanta", "atl", "ATL ", " ATL", "", "ELP", "XX", "DFW;DROP"]) {
+    const r = validateCityCheckIn({ ...GOOD, city_identifier: junk });
+    if (r.ok) bad(`an unknown identifier ${JSON.stringify(junk)} must be refused`, "ACCEPTED");
+  }
+  ok("every unknown identifier is refused, including case and whitespace near-misses");
+
+  // CONTROL: the loop above can actually fail — a known-good value must still pass through it.
+  const control = validateCityCheckIn({ ...GOOD, city_identifier: CITY_SCOPES[0].identifier });
+  if (control.ok) ok(`control: ${CITY_SCOPES[0].identifier} passes the same path that refused the junk`);
+  else bad("control: a known identifier passes", control.error);
 }
 
 console.log(`\ncheck-in-form: ${pass} passed, ${fails.length} failed`);

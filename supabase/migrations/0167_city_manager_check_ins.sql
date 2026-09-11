@@ -34,9 +34,11 @@ CREATE TABLE IF NOT EXISTS city_manager_check_ins (
 
   city_identifier    text        NOT NULL,
 
-  -- The month the check-in is ABOUT, not when it was filed. They are routinely different: of the
-  -- twelve Sheet submissions, one filed 17 Apr reports month-ending 31 Mar, and one filed 20 Feb
-  -- reports month-ending 3 Mar. Bucketing by filing date files March's check-in under April.
+  -- The month the check-in is ABOUT, not when it was filed. THIS IS NOT REDUNDANT WITH
+  -- submitted_at, and it is worth the column: measured at the import on 2026-09-11, SIX OF THE
+  -- TWELVE historical submissions were filed in a different month than they report. One filed
+  -- 9 July reports June; one filed 20 February reports March; one filed 17 April reports 31 March.
+  -- Bucketing by filing date misfiles half the archive.
   month_ending       date        NOT NULL,
 
   -- 1-5. The Sheet header declares the scale itself: "Overall Weekly Rating (1-5) (Linear scale:

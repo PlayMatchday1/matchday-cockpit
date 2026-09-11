@@ -11,7 +11,7 @@
 // store, and nothing was hoisted into a shared module. If a third public form appears, these
 // guards should move to a publicFormGuards.ts and both callers should follow — see the report.
 
-import { CITY_SCOPES } from "./cityScope";
+import { CITY_SCOPES, resolveCityScope } from "./cityScope";
 
 export { checkRateLimit, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, type RateLimitStore } from "./inventory";
 
@@ -97,8 +97,6 @@ export function isHoneypotTripped(input: CityCheckInInput): boolean {
   return typeof input.website === "string" && input.website.trim() !== "";
 }
 
-const isKnownCity = (id: string): boolean =>
-  CITY_SCOPES.some((c) => c.identifier === id);
 
 /* A REAL CALENDAR DATE, NOT JUST A WELL-SHAPED STRING. "2026-02-31" passes a regex and is not a
  * day; Date would roll it to 2 March and store a month the manager did not pick. Round-tripping
@@ -125,9 +123,20 @@ export function validateCityCheckIn(input: CityCheckInInput): CheckInValidation 
     return { ok: false, error: `Name must be ${MAX_NAME_LEN} characters or fewer.` };
   }
 
-  const city = typeof input.city_identifier === "string" ? input.city_identifier.trim() : "";
-  if (!city) return { ok: false, error: "City is required." };
-  if (!isKnownCity(city)) return { ok: false, error: "Unrecognized city." };
+  /* ONE LIST *AND* ONE MATCHER. This used to trim the input and then test membership itself — a
+   * second matcher beside cityScope.ts's, which is the exact duplication that migration 0168's
+   * reasoning is about. resolveCityScope is EXACT match by design ("no trimming, no upper-casing —
+   * a value that needs correcting is a value someone typed"), and it returns the canonical ROW, so
+   * what gets stored is what the list says rather than what the caller sent. The form's select
+   * emits a bare identifier, so nothing legitimate is turned away.
+   *
+   * THIS IS THE GUARANTEE THE DROPPED CHECK CONSTRAINT USED TO HOLD (0168), and it is now the only
+   * one — which is why scripts/check-in-form-test.ts derives its accepted set from CITY_SCOPES. */
+  if (typeof input.city_identifier !== "string" || !input.city_identifier)
+    return { ok: false, error: "City is required." };
+  const scope = resolveCityScope(input.city_identifier);
+  if (!scope) return { ok: false, error: "Unrecognized city." };
+  const city = scope.identifier;
 
   const month = parseMonthEnding(input.month_ending);
   if (!month) return { ok: false, error: "Month ending is required." };

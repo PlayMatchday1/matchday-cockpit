@@ -180,10 +180,10 @@ export async function fetchCheckIns(month?: string): Promise<CheckInsData> {
 }
 
 /* WHICH MONTH A CHECK-IN IS ABOUT — the month-ending date the manager picked, not the timestamp
- * the form recorded. They are routinely different and the difference is not noise: of the twelve
- * imported submissions, one filed on 17 April reports month-ending 31 March, and one filed on
- * 20 February reports month-ending 3 March. Bucketing those by the filing date would file March's
- * check-in under April.
+ * the form recorded. The difference is not an edge case: measured at the import on 2026-09-11,
+ * SIX OF THE TWELVE historical submissions were filed in a different month than they report. One
+ * filed 9 July reports June; one filed 20 February reports March; one filed 17 April reports
+ * 31 March. Bucketing by the filing date would misfile half the archive.
  *
  * SLICED, NOT PARSED. month_ending is a DATE, not a moment. `new Date("2026-03-31")` is UTC
  * midnight, which in every US timezone is 30 March locally — reading the month off that lands a

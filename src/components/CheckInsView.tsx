@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { Link2, Check, X } from "lucide-react";
 import { MANAGERS } from "@/lib/checkIns";
 import { useCheckIns } from "@/lib/useCheckIns";
 import CheckInsStatusGrid from "./CheckInsStatusGrid";
@@ -21,6 +22,29 @@ export default function CheckInsView() {
   const [city, setCity] = useState<string | null>(null);
 
   const { data, loading, error } = useCheckIns(month);
+
+  /* COPY FORM LINK — the same control as InventoryDashboard's, same mint button, same icon swap,
+   * same 1600ms revert, pointing at /check-in.
+   *
+   * ONE DIFFERENCE, AND IT IS A BUG FIX RATHER THAN A REDESIGN. The Inventory version is
+   * `void navigator.clipboard?.writeText(url)` followed by an unconditional setCopied(true), so it
+   * says "Copied!" in two cases where nothing was copied: an insecure origin, where
+   * navigator.clipboard is undefined and the `?.` silently short-circuits, and a rejected write.
+   * The operator then pastes whatever was on the clipboard before into a message to a city
+   * manager. This awaits the write and reports what actually happened. INVENTORY IS LEFT ALONE in
+   * this build, as briefed — see the report. */
+  const [copied, setCopied] = useState<"idle" | "ok" | "fail">("idle");
+  const copyLink = useCallback(async () => {
+    const url = `${window.location.origin}/check-in`;
+    try {
+      if (!navigator.clipboard) throw new Error("no clipboard on this origin");
+      await navigator.clipboard.writeText(url);
+      setCopied("ok");
+    } catch {
+      setCopied("fail");
+    }
+    window.setTimeout(() => setCopied("idle"), 1600);
+  }, []);
 
   /* THE CITY FILTER REACHES THE CHECK-INS TOO — that is the point of one control. Matched on
    * cityId, never on the display name: the repo spells the same city three ways and a name match
@@ -60,6 +84,23 @@ export default function CheckInsView() {
             ? "Loading…"
             : `${submitted} of ${managerCount} submitted for ${monthLabel(month)}`
         }
+        /* AGAINST THE CHECK-IN SECTION, NOT THE PAGE HEADER. This link IS the check-in form; the
+           page above it also carries the meeting's action items, and a link sitting there would
+           read as belonging to both. Nothing accompanies it — the button's own label is the whole
+           of the copy. */
+        action={
+          <button
+            type="button"
+            data-testid="ci-copy-link"
+            onClick={() => void copyLink()}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-mint px-4 py-2 text-[13px] font-extrabold text-deep-green transition hover:bg-mint-hover"
+          >
+            {copied === "ok" ? <Check aria-hidden size={14} />
+              : copied === "fail" ? <X aria-hidden size={14} />
+              : <Link2 aria-hidden size={14} />}
+            {copied === "ok" ? "Copied!" : copied === "fail" ? "Couldn't copy" : "Copy form link"}
+          </button>
+        }
       />
       <div className="mb-10">
         {error && (
@@ -83,14 +124,19 @@ export default function CheckInsView() {
   );
 }
 
-function SectionHeader({ title, subtitle }: { title: string; subtitle: string }) {
+function SectionHeader({ title, subtitle, action }: {
+  title: string; subtitle: string; action?: React.ReactNode;
+}) {
   return (
-    <div className="mb-5 flex items-stretch gap-3">
+    /* flex-wrap + a min-w-0 text column so a phone drops the action onto its own line instead of
+       squeezing the subtitle or pushing the button off the right edge. */
+    <div className="mb-5 flex flex-wrap items-stretch gap-3">
       <span aria-hidden className="w-1 rounded-full bg-mint" />
-      <div className="flex-1 py-0.5">
+      <div className="min-w-0 flex-1 py-0.5">
         <h2 className="text-2xl font-bold tracking-tight text-deep-green">{title}</h2>
         <p className="mt-0.5 text-sm text-deep-green/60">{subtitle}</p>
       </div>
+      {action && <div className="flex items-center">{action}</div>}
     </div>
   );
 }
