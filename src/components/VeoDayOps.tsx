@@ -501,8 +501,9 @@ export function queueReasonLabel(reason: string | null | undefined): string | nu
  * the day, nor that time to rank candidates, nor print either as "read as". It asks for the day, as
  * it already does for any title with no readable date.
  *
- * rereadTitle itself is untouched (it is on the must-not-change list), and so is the collapsed row's
- * sentence — which still prints the misread. Stated in the report, not fixed here. */
+ * rereadTitle itself is untouched — the caller was what was wrong. BOTH callers use this one
+ * predicate: RecentAssign, and RecentRowView's sentence, day and lag, so the row and the panel it
+ * opens cannot disagree about the same film. */
 const CAMERA_STAMP = /^untitled recording \d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\b/i;
 
 export function isCameraStamp(subject: string | null | undefined): boolean {
@@ -671,9 +672,18 @@ function RecentRowView({ r, open, onToggle, onDone, twins, onOpenChat, poster }:
   const matchDay = r.match?.day ?? null;
   // Read again, in memory. See rereadTitle: display and Assign only, never a write.
   const reread = useMemo(() => rereadTitle(r.subject, r.slug), [r.subject, r.slug]);
-  const rereadRescues = !r.parsedMatchDate && !matchDay && Boolean(reread?.date);
-  const source = daySourceOf(matchDay, r.parsedMatchDate ?? reread?.date ?? null);
-  const day = matchDay ?? r.parsedMatchDate ?? reread?.date ?? null;
+  /* THE SAME GUARD AS THE ASSIGN PANEL, so the row and the panel it opens say the same thing about
+   * one film. Before this the row printed "reads now as UNTITLED RECORDING · Friday, September 11 ·
+   * 11:00 PM" while the panel said the title reads nothing and asked for the day. rereadTitle is
+   * unchanged; its caller stops trusting it for a camera stamp (see isCameraStamp).
+   *
+   * THE DAY FEEDS THE LAG TOO, and that was not harmless. Measured 2026-09-11 across all 30
+   * camera-stamp rows: 5 printed a lateness chip (2, 3, 3, 3 and 4 days "(from the title)") measured
+   * against the misread date. After this, none do — a stamp has no day, so there is no lag. */
+  const titleDate = isCameraStamp(r.subject) ? null : reread?.date ?? null;
+  const rereadRescues = !r.parsedMatchDate && !matchDay && Boolean(titleDate);
+  const source = daySourceOf(matchDay, r.parsedMatchDate ?? titleDate);
+  const day = matchDay ?? r.parsedMatchDate ?? titleDate;
   const lag = lagDays(r.receivedAt, day);
   const wait = isResolved(r.state) ? null : waitDays(r.receivedAt);
 

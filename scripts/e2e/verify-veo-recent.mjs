@@ -47,6 +47,11 @@ async function main() {
   const ctx = await b.newContext({ viewport: { width: 1500, height: 1100 },
     storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(vv.data.session) }] }] } });
   const p = await ctx.newPage();
+  /* A SUITE MUST NOT WRITE PRODUCTION. This one opens Assign panels, and a panel is two clicks from
+   * Post it — so every non-GET to our API is aborted and counted, and the count is asserted zero at
+   * the end. The suite only ever needs to read. */
+  let blockedWrites = 0;
+  await p.route("**/api/**", (r) => (r.request().method() !== "GET" ? (blockedWrites++, r.abort()) : r.continue()));
   const recentCalls = [];
   p.on("request", (r) => { if (r.url().includes("/api/veo/recent")) recentCalls.push(r.url().replace(BASE, "")); });
 
@@ -58,11 +63,34 @@ async function main() {
   const rows = await readRows(p);
   console.log(`     ${rows.length} rows rendered`);
 
-  // ---- ordering, against the raw table ----
+  // ---- ordering, and THE TWO TABS, against the raw table ----
+  /* REWRITTEN 2026-09-11. This compared the route's default page against the newest 30 raw rows of
+   * ANY state — true until a6dae28 (09-07) split the list into Needs you / Done and made the default
+   * request the Needs you tab. From then on it compared one tab against the whole table and could
+   * never pass. What replaces it asserts the split itself: each tab is ordered, each holds only its
+   * own states, and together they are exactly the table — nothing in both, nothing in neither. */
   const api = await (await fetch(`${BASE}/api/veo/recent?limit=30`, { headers: H, cache: "no-store" })).json();
-  const { data: raw } = await svc.from("veo_recordings").select("received_at").order("received_at", { ascending: false }).limit(30);
-  is("the route's order is received_at descending, matching the raw rows",
-    api.rows.map((r) => r.receivedAt), raw.map((r) => r.received_at));
+  is("the default request is the Needs you tab", api.tab, "needs");
+  const tabs = {};
+  for (const t of ["needs", "done"]) {
+    tabs[t] = await (await fetch(`${BASE}/api/veo/recent?tab=${t}&limit=200`, { headers: H, cache: "no-store" })).json();
+    const at = tabs[t].rows.map((r) => Date.parse(r.receivedAt));
+    yes(`the ${t} tab is received_at descending`, nonEmpty(at, `${t} rows`).every((v, i) => i === 0 || at[i - 1] >= v));
+  }
+  console.log(`     tab counts: needs ${tabs.needs.counts?.needs} · done ${tabs.needs.counts?.done} · truncated ${tabs.needs.truncated}`);
+  is("Needs you holds only Queued and flagged rows", [...new Set(tabs.needs.rows.map((r) => r.state))].filter((s) => !["queued", "flagged"].includes(s)), []);
+  is("Done holds only posted, assigned and dismissed rows", [...new Set(tabs.done.rows.map((r) => r.state))].filter((s) => !["posted", "assigned", "dismissed"].includes(s)), []);
+  // CONTROL for the two above: each tab is non-empty, so an empty tab cannot pass them.
+  yes("CONTROL: both tabs carry rows", tabs.needs.rows.length > 0 && tabs.done.rows.length > 0, `${tabs.needs.rows.length} / ${tabs.done.rows.length}`);
+  const complete = tabs.needs.rows.length === tabs.needs.counts?.needs && tabs.done.rows.length === tabs.done.counts?.done && !tabs.needs.truncated;
+  if (complete) {
+    const { data: raw } = await svc.from("veo_recordings").select("id");
+    const needIds = new Set(tabs.needs.rows.map((r) => r.id)), doneIds = new Set(tabs.done.rows.map((r) => r.id));
+    is("no recording is in both tabs", [...needIds].filter((id) => doneIds.has(id)).length, 0);
+    is("…and none is in neither — the two tabs are exactly the table",
+      nonEmpty(raw, "raw veo_recordings").filter((r) => !needIds.has(r.id) && !doneIds.has(r.id)).length, 0);
+    is("…and the counts add up to the table", tabs.needs.counts.needs + tabs.needs.counts.done, raw.length);
+  } else console.log("     (a tab exceeds the 200-row page — partition not asserted)");
 
   // ---- every row states its arrival and its state ----
   is("no row is missing its arrival", nonEmpty(rows, "recent rows on screen").filter((r) => !r.when || r.when === "—").length, 0);
@@ -122,34 +150,70 @@ async function main() {
   is("only a Queued row offers Assign", [...new Set(nonEmpty(rows.filter((r) => r.assignable), "assignable rows").map((r) => r.stateLabel))], ["Queued"]);
   is("…and no resolved row does", nonEmpty(rows, "recent rows on screen").filter((r) => r.assignable && r.stateLabel !== "Queued").length, 0);
 
-  // ---- the filter moves the rows AND the footer together ----
-  const footer = () => p.$eval('[data-testid="veo-recent-count"]', (e) => e.textContent.trim());
-  const allCount = rows.length, allFoot = await footer();
-  await p.click('[data-testid="veo-recent-unposted"]');
-  await p.waitForTimeout(1200);
-  const un = await readRows(p);
-  const unFoot = await footer();
-  console.log(`     all: ${allCount} rows / "${allFoot}"   ·   not posted: ${un.length} rows / "${unFoot}"`);
-  is("the Not posted filter leaves only unresolved rows", [...new Set(un.map((r) => r.stateLabel))], ["Queued"]);
-  yes("…and the footer count follows it", unFoot.startsWith(String(un.length)), unFoot);
-  /* BOTH LISTS HIT THE 30-ROW DEFAULT, so comparing what is ON SCREEN cannot tell a narrowing from
-   * a no-op. The narrowing is at the source, so it is measured there. */
-  const allApi = await (await fetch(`${BASE}/api/veo/recent?limit=200`, { headers: H, cache: "no-store" })).json();
-  const unApi = await (await fetch(`${BASE}/api/veo/recent?limit=200&filter=unposted`, { headers: H, cache: "no-store" })).json();
-  console.log(`     unfiltered ${allApi.rows.length} · not posted ${unApi.rows.length}`);
-  yes("the filter is a real narrowing at the source", unApi.rows.length < allApi.rows.length, `${unApi.rows.length} of ${allApi.rows.length}`);
-  is("…and it returns nothing that has been posted", nonEmpty(unApi.rows, "not-posted rows").filter((r) => r.state === "posted" || r.state === "flagged" || r.state === "assigned").length, 0);
-  await p.click('[data-testid="veo-recent-all"]');
-  await p.waitForTimeout(1200);
-  yes("clearing it restores the rows", (await readRows(p)).length === allCount);
-  const afterFilters = recentCalls.length;
+  // ---- A CAMERA STAMP: the row and the panel it opens agree ----
+  /* "Untitled recording <stamp>" re-reads to a date and time that are not the match's (measured 30
+   * of 30, docs/matchday-api-facts.md). The row used to print "reads now as UNTITLED RECORDING ·
+   * Friday, September 11 · 11:00 PM" while its own panel said the title reads nothing and asked for
+   * the day. Both surfaces are read off the SAME row. */
+  const STAMP = /^untitled recording \d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\b/i;
+  const stampRow = tabs.needs.rows.find((r) => STAMP.test(r.subject ?? "") && r.state === "queued");
+  const rowSel = (id) => `[data-testid="veo-recent-row"][data-recording-id="${id}"]`;
+  if (stampRow && await p.locator(rowSel(stampRow.id)).count()) {
+    const sentence = (await p.locator(`${rowSel(stampRow.id)} .rwhat small`).textContent()).trim();
+    console.log(`     stamp row "${stampRow.subject.slice(0, 40)}": "${sentence}"`);
+    is("a camera-stamp row prints no re-read sentence", await p.locator(`${rowSel(stampRow.id)} [data-testid="veo-recent-reread"]`).count(), 0);
+    yes("…it says it went nowhere instead", /^went nowhere/.test(sentence), sentence);
+    is("…and carries no lateness chip", await p.locator(`${rowSel(stampRow.id)} [data-testid="veo-recent-lag"]`).count(), 0);
+    await p.click(`${rowSel(stampRow.id)} [data-testid="veo-recent-assign"]`);
+    // PRESENCE WAIT before the panel's absence checks: the panel itself must be on screen.
+    await p.waitForSelector(`${rowSel(stampRow.id)} [data-testid="veo-recent-panel"]`, { timeout: 30000 });
+    is("…and its panel asks for the day, agreeing with the row", await p.locator(`${rowSel(stampRow.id)} [data-testid="veo-recent-picker"]`).count(), 1);
+    await p.click(`${rowSel(stampRow.id)} [data-testid="veo-recent-assign"]`);
+    await p.waitForTimeout(500);
+  } else console.log("     (no queued camera-stamp row on screen — not asserted)");
+  /* CONTROL: a title that genuinely carries its date and time still reads, on a row that has no
+   * stored date — the rescue this guard must not take away from anybody else. */
+  const rescued = await p.locator('[data-testid="veo-recent-reread"]').count();
+  const rescuable = tabs.needs.rows.filter((r) => !STAMP.test(r.subject ?? "") && !r.parsedMatchDate && !r.match).length;
+  console.log(`     rows showing a re-read sentence: ${rescued} · non-stamp queued rows with no stored date: ${rescuable}`);
+  yes("CONTROL: titles that carry their date still show the re-read sentence", rescued > 0, `${rescued}`);
 
-  // ---- THE DAY NAV MUST NOT REFETCH THIS SECTION ----
-  await p.click('[data-testid="veo-prev"]');
+  // ---- THE TABS move the rows AND the footer together ----
+  /* REWRITTEN 2026-09-11: this clicked veo-recent-unposted / veo-recent-all and requested
+   * filter=unposted. All three went with the Needs you / Done split on 09-07 — the route reads only
+   * `tab` now — and the suite timed out on the first click for four days. */
+  const footer = () => p.$eval('[data-testid="veo-recent-count"]', (e) => e.textContent.trim());
+  const needsCount = rows.length;
+  const badge = (t) => p.$eval(`[data-testid="veo-recent-tab-${t}"]`, (e) => e.dataset.count);
+  is("the Needs you badge is the route's own count", Number(await badge("needs")), tabs.needs.counts.needs);
+  is("…and so is the Done badge", Number(await badge("done")), tabs.needs.counts.done);
+  await p.click('[data-testid="veo-recent-tab-done"]');
+  await p.waitForFunction(() => [...document.querySelectorAll('[data-testid="veo-recent-row"]')].some((e) => e.dataset.tab === "done"), null, { timeout: 30000 });
+  await p.waitForTimeout(800);
+  const done = await readRows(p);
+  const doneFoot = await footer();
+  console.log(`     needs you: ${needsCount} rows   ·   done: ${done.length} rows / "${doneFoot}"`);
+  is("the Done tab shows only resolved rows", [...new Set(nonEmpty(done, "done rows").map((r) => r.stateLabel))].filter((l) => l === "Queued" || l === "Posted, flagged"), []);
+  is("…offers Assign on none of them", done.filter((r) => r.assignable).length, 0);
+  yes("…and the footer count follows it", doneFoot.startsWith(String(done.length)), doneFoot);
+  await p.click('[data-testid="veo-recent-tab-needs"]');
+  await p.waitForFunction(() => [...document.querySelectorAll('[data-testid="veo-recent-row"]')].every((e) => e.dataset.tab === "needs"), null, { timeout: 30000 });
+  await p.waitForTimeout(800);
+  const back = await readRows(p);
+  yes("going back to Needs you restores its rows", back.length === needsCount && back.every((r) => ["Queued", "Posted, flagged"].includes(r.stateLabel)),
+    `${back.length} vs ${needsCount} · ${JSON.stringify([...new Set(back.map((r) => r.stateLabel))])}`);
+  const afterTabs = recentCalls.length;
+
+  // ---- THE WEEK STRIP MUST NOT REFETCH THIS SECTION ----
+  // veo-prev went with the week strip in 31281af; the strip's own controls replace it.
+  const before = await p.$eval('[data-testid="veo-week"] [data-selected="1"]', (e) => e.dataset.testid);
+  await p.click('[data-testid="veo-prev-week"]');
   await p.waitForTimeout(1500);
-  await p.click('[data-testid="veo-prev"]');
+  await p.locator('[data-testid="veo-week"] [data-testid^="veo-day-"]').first().click();
   await p.waitForTimeout(1500);
-  is("moving the day nav twice fires NO further /api/veo/recent calls", recentCalls.length - afterFilters, 0);
+  const after = await p.$eval('[data-testid="veo-week"] [data-selected="1"]', (e) => e.dataset.testid);
+  yes("CONTROL: the strip really moved the day", before !== after, `${before} → ${after}`);
+  is("moving the day twice fires NO further /api/veo/recent calls", recentCalls.length - afterTabs, 0);
   yes("…and the section is still rendered on the new day", (await readRows(p)).length > 0);
 
   // ---- a confined operator sees only their own city's arrivals ----
@@ -182,6 +246,7 @@ async function main() {
     is("an unplaceable recording never reaches a confined account", (w.rows ?? []).filter((r) => !r.city).length, 0);
   }
 
+  is("nothing on this page tried to write", blockedWrites, 0);
   await b.close();
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
