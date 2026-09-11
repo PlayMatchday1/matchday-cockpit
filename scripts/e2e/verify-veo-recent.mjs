@@ -54,6 +54,9 @@ async function main() {
   await p.route("**/api/**", (r) => (r.request().method() !== "GET" ? (blockedWrites++, r.abort()) : r.continue()));
   const recentCalls = [];
   p.on("request", (r) => { if (r.url().includes("/api/veo/recent")) recentCalls.push(r.url().replace(BASE, "")); });
+  // Every request for a film, from the first navigation — "158 rows must not fetch 158 films".
+  const filmCalls = [];
+  p.on("request", (r) => { if (/\/video\.mp4(\?|$)/.test(r.url())) filmCalls.push(r.url()); });
 
   await p.goto(`${BASE}/match-ops/veo`, { waitUntil: "domcontentloaded" });
   await p.waitForSelector('[data-testid="veo-recent"]', { timeout: 240000 });
@@ -215,6 +218,54 @@ async function main() {
   yes("CONTROL: the strip really moved the day", before !== after, `${before} → ${after}`);
   is("moving the day twice fires NO further /api/veo/recent calls", recentCalls.length - afterTabs, 0);
   yes("…and the section is still rendered on the new day", (await readRows(p)).length > 0);
+
+  // ---- PRESS THE POSTER AND THE FILM PLAYS IN THE ROW ----
+  /* Ryan: "theres still no way to [watch] the recently uploaded" / "i will be able to expand the
+   * size right". PRESENCE FIRST: the posters must have resolved to films before any absence below
+   * means anything. */
+  await p.waitForSelector('[data-testid="veo-recent-poster"][data-film="1"]', { timeout: 90000 });
+  const liveIds = await p.$$eval('[data-testid="veo-recent-poster"][data-film="1"]',
+    (e) => e.map((x) => x.closest('[data-testid="veo-recent-row"]').dataset.recordingId));
+  yes("CONTROL: posters with a playable film are on screen", liveIds.length >= 2, `${liveIds.length}`);
+  is("no <video> exists for a row nobody pressed", await p.locator('[data-testid="veo-recent-film"]').count(), 0);
+  is("…and loading the list fetched no film", filmCalls.length, 0);
+  const rowOf = (id) => `[data-testid="veo-recent-row"][data-recording-id="${id}"]`;
+  const [one, two] = liveIds;
+  const btn = await p.$eval(`${rowOf(one)} [data-testid="veo-recent-poster"]`, (e) => ({ tag: e.tagName, label: e.getAttribute("aria-label") ?? "", hidden: e.hasAttribute("aria-hidden"), tri: !!e.querySelector('[data-testid="veo-recent-play"]') }));
+  const oneSubject = tabs.needs.rows.find((r) => r.id === one)?.subject ?? "";
+  yes("the poster is a <button> named for its film, carrying the triangle",
+    btn.tag === "BUTTON" && !btn.hidden && btn.tri && oneSubject.length > 0 && btn.label.includes(oneSubject), JSON.stringify(btn));
+  const ys = () => p.evaluate((sel) => { const r = document.querySelector(sel), top = r.getBoundingClientRect().top;
+    return { title: r.querySelector(".rwhat b").getBoundingClientRect().top - top,
+      assign: r.querySelector('[data-testid="veo-recent-assign"]').getBoundingClientRect().top - top }; }, rowOf(one));
+  const shut = await ys();
+  await p.click(`${rowOf(one)} [data-testid="veo-recent-poster"]`);
+  await p.waitForSelector(`${rowOf(one)} [data-testid="veo-recent-film"]`, { timeout: 20000 });
+  const film = await p.$eval(`${rowOf(one)} [data-testid="veo-recent-film"]`, (v) => { const b = v.closest('[data-testid="veo-recent-poster"]').getBoundingClientRect();
+    return { w: b.width, h: b.height, preload: v.getAttribute("preload"), controls: v.hasAttribute("controls"),
+      list: v.getAttribute("controlslist"), noPip: v.hasAttribute("disablepictureinpicture"),
+      panel: !!v.closest('[data-testid="veo-recent-row"]').querySelector('[data-testid="veo-recent-panel"]') }; });
+  is("pressing it puts ONE film in the row", await p.locator('[data-testid="veo-recent-film"]').count(), 1);
+  yes("…in the same box grown to 360px, still 16:9", Math.abs(film.w - 360) < 0.5 && Math.abs(film.w / film.h - 16 / 9) < 0.01, `${film.w}x${film.h}`);
+  yes("…preloading nothing, with the browser's controls, and nothing suppressing fullscreen",
+    film.preload === "none" && film.controls && film.list == null && !film.noPip, JSON.stringify(film));
+  is("…and the press did not open Assign", film.panel, false);
+  const opened = await ys();
+  is("the title and Assign did not move", [Math.round((opened.title - shut.title) * 10) / 10, Math.round((opened.assign - shut.assign) * 10) / 10], [0, 0]);
+  /* FULLSCREEN, ENTERED — not inferred from the attributes. A user gesture is what the browser
+   * requires, and CDP's userGesture is that gesture. */
+  const cdp = await ctx.newCDPSession(p);
+  const fs = await cdp.send("Runtime.evaluate", { awaitPromise: true, userGesture: true,
+    expression: `document.querySelector('[data-testid="veo-recent-film"]').requestFullscreen().then(() => document.fullscreenElement?.dataset.testid ?? null, (e) => "rejected: " + e.message)` });
+  is("the film goes fullscreen", fs.result.value, "veo-recent-film");
+  await p.evaluate(() => document.exitFullscreen?.().catch(() => {}));
+  await p.waitForTimeout(600);
+  await p.click(`${rowOf(two)} [data-testid="veo-recent-poster"]`);
+  await p.waitForSelector(`${rowOf(two)} [data-testid="veo-recent-film"]`, { timeout: 20000 });
+  is("pressing a second poster closes the first", [await p.locator('[data-testid="veo-recent-film"]').count(), await p.locator(`${rowOf(one)} [data-testid="veo-recent-film"]`).count()], [1, 0]);
+  await p.click(`${rowOf(two)} [data-testid="veo-recent-close"]`);
+  await p.waitForTimeout(400);
+  is("Close film removes the element", await p.locator('[data-testid="veo-recent-film"]').count(), 0);
 
   // ---- a confined operator sees only their own city's arrivals ----
   const WAW = "jf@playmatchday.pl";

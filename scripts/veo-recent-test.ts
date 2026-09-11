@@ -213,9 +213,24 @@ console.log("\n— two tabs, and the counts are the point —");
    * fixed width, not sized by the image. A ragged column is worse than no posters. */
   yes("the poster is 88px and takes its height from aspect-ratio",
     /\.veo \.qpo\{width:88px/.test(PAGE) && /\.veo \.thumb\{[^}]*aspect-ratio:16\/9/.test(PAGE));
-  /* NO PLAY TRIANGLE ON A QUEUE POSTER, and the CONTROL that the stage still has one. */
-  yes("no play glyph on a collapsed row's poster", /\.veo \.qpo \.play\{display:none\}/.test(PAGE));
+  /* INVERTED 2026-09-11, ON PURPOSE. This was "no play glyph on a collapsed row's poster" — the
+   * poster was a picture that silently opened Assign, and Ryan pressed it and concluded the queue
+   * could not play anything. It now plays the film in the row, so the triangle is honest and the
+   * rule that hid it is gone. Inverted rather than deleted, so hiding it again fails here. */
+  yes("the queue poster's triangle is no longer hidden", !/\.veo \.qpo \.play\{display:none\}/.test(PAGE));
+  yes("…the poster that has a film is a <button> carrying the triangle",
+    /<button type="button" className="qpo thumb live" data-testid="veo-recent-poster"/.test(PAGE) && /data-testid="veo-recent-play"/.test(PAGE));
   yes("CONTROL: the film stage still has its play button", /data-testid="veo-play"/.test(PAGE));
+  /* FULLSCREEN IS ONE ATTRIBUTE AWAY FROM BEING LOST by someone tidying up. The row's film keeps
+   * `controls` and carries neither attribute that removes the fullscreen or picture-in-picture
+   * button. Read off the element's own tag, so an attribute elsewhere on the page cannot pass it. */
+  {
+    const tag = PAGE.match(/<video data-testid="veo-recent-film"[^>]*>/)?.[0] ?? "";
+    yes("the row's film is on the page", tag.length > 0);
+    yes("…with the browser's controls", /\scontrols\s/.test(tag), tag);
+    yes("…nothing suppresses fullscreen or picture-in-picture", !/nofullscreen|disablePictureInPicture|controlsList/.test(tag), tag);
+    yes("…and it preloads nothing", /preload="none"/.test(tag), tag);
+  }
 }
 
 console.log("\n— Confirm clears one flag and CANNOT post —");

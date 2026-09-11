@@ -22,7 +22,7 @@
  * play glyph would have been the empty black box the brief forbids.
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import MatchSidePanel, { MATCH_SIDE_PANEL_CSS, type PanelTab } from "@/components/MatchSidePanel";
 import { CITY_CODE_TO_DISPLAY } from "@/lib/scheduleReconcile";
@@ -475,6 +475,13 @@ function WeekStrip({ date, onPick }: { date: string; onPick: (d: string) => void
  * post_failed is written by /api/veo/inbound and has never occurred, so it gets no hand-written
  * phrasing. It falls through to the generic branch, which un-snakes the value rather than either
  * inventing a sentence for it or printing the raw enum. */
+/* What /api/veo/thumbs returns per id — the still frame and the mp4 beside it. */
+type RowMedia = { thumbnail: string | null; video: string | null };
+/* /api/veo/thumbs keeps the first MAX_IDS (40) ids of a request and drops the rest. That route is
+ * server-only, so the number is restated here rather than imported; if it changes there, change it
+ * here, or the rows past the cap lose their posters. */
+const THUMBS_BATCH = 40;
+
 const QUEUE_REASON_LABEL: Record<string, string> = {
   unparseable_subject: "the title could not be read",
   unknown_code: "no field code in the title",
@@ -549,8 +556,16 @@ function RecentlyUploaded({ city, onOpenChat }: { city: string; onOpenChat: (api
    * IT RUNS AFTER THE LIST, NOT WITH IT. The posters are an aid to scanning, not the list itself,
    * so the rows render immediately and the pictures arrive when they arrive. veo_recordings has no
    * thumbnail column — measured — so a first-time poster costs an external page fetch, and making
-   * the list wait on that would trade a real delay for a cosmetic gain. */
-  const [posters, setPosters] = useState<Record<string, string | null>>({});
+   * the list wait on that would trade a real delay for a cosmetic gain.
+   *
+   * THE FILM COMES IN THE SAME RESPONSE, and the page used to throw it away. /api/veo/thumbs has
+   * always returned {thumbnail, video} per id; keeping `video` is what lets the poster play the
+   * film in the row, at no new request. */
+  const [media, setMedia] = useState<Record<string, RowMedia>>({});
+  /* ONE ROW PLAYS AT A TIME, by construction: a single id. Pressing a second poster moves it, and
+   * the first row's <video> unmounts — a paused, hidden element could keep buffering. */
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const asked = useRef(new Set<string>());
 
   useEffect(() => {
     let live = true;
@@ -578,25 +593,35 @@ function RecentlyUploaded({ city, onOpenChat }: { city: string; onOpenChat: (api
 
   const shown = rows ?? [];
 
-  /* Keyed on the ids on screen, so paging with "Load 30 more" fetches only the new ones — the
-   * route's own cache makes the already-seen ids free anyway, but this avoids re-sending them. */
+  /* ONLY THE IDS NOT YET ASKED FOR, IN BATCHES THE ROUTE WILL TAKE. This used to send every id on
+   * screen in one request while its comment claimed it sent only the new ones — and the route keeps
+   * the first MAX_IDS (40) and drops the rest, so after one "Load 30 more" rows 41-60 silently never
+   * got a poster. Each id is asked for once per session; a failed batch is forgotten so the next
+   * render asks again. A result is kept whatever the tab — it is the same film on either. */
   const shownIds = shown.map((r) => r.id).join(",");
   useEffect(() => {
-    if (!shownIds) return;
-    let live = true;
-    void (async () => {
-      try {
-        const res = await authFetch(`/api/veo/thumbs?ids=${encodeURIComponent(shownIds)}`);
-        if (!res.ok) return;
-        const j = await res.json();
-        const next: Record<string, string | null> = {};
-        for (const [id, v] of Object.entries((j.thumbs ?? {}) as Record<string, { thumbnail: string | null }>)) {
-          next[id] = v?.thumbnail ?? null;
+    const need = shown.map((r) => r.id).filter((id) => !asked.current.has(id));
+    for (let i = 0; i < need.length; i += THUMBS_BATCH) {
+      const batch = need.slice(i, i + THUMBS_BATCH);
+      batch.forEach((id) => asked.current.add(id));
+      void (async () => {
+        try {
+          const res = await authFetch(`/api/veo/thumbs?ids=${encodeURIComponent(batch.join(","))}`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const j = await res.json();
+          const next: Record<string, RowMedia> = {};
+          for (const [id, v] of Object.entries((j.thumbs ?? {}) as Record<string, Partial<RowMedia>>)) {
+            next[id] = { thumbnail: v?.thumbnail ?? null, video: v?.video ?? null };
+          }
+          setMedia((p) => ({ ...p, ...next }));
+        } catch {
+          /* no poster is a box, not an error — see RecentRowView. Forget the batch so it is retried. */
+          batch.forEach((id) => asked.current.delete(id));
         }
-        if (live) setPosters((p) => ({ ...p, ...next }));
-      } catch { /* no poster is a box, not an error — see RecentRowView */ }
-    })();
-    return () => { live = false; };
+      })();
+    }
+    // shownIds is the dependency on purpose: `shown` is a new array every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shownIds]);
 
   return (
@@ -619,7 +644,7 @@ function RecentlyUploaded({ city, onOpenChat }: { city: string; onOpenChat: (api
             <button key={t} type="button" role="tab" aria-selected={tab === t}
               data-testid={`veo-recent-tab-${t}`} data-count={counts?.[t] ?? ""}
               className={tab === t ? "on" : ""}
-              onClick={() => { setTab(t); setLimit(30); setOpenId(null); }}>
+              onClick={() => { setTab(t); setLimit(30); setOpenId(null); setPlayingId(null); }}>
               {RECENT_TAB_LABEL[t]}
               {/* CALM, NOT AN ALARM. A zero here is the good news, and it is the whole message the
                   empty list needs — which is why the empty state says nothing at all. */}
@@ -640,7 +665,9 @@ function RecentlyUploaded({ city, onOpenChat }: { city: string; onOpenChat: (api
           and again on the confirm. WARN, DO NOT BLOCK: overriding it is legitimate, and so is the
           case where they really are two different films. */}
       {shown.map((r) => <RecentRowView key={r.id} r={r} open={openId === r.id}
-        onOpenChat={onOpenChat} poster={posters[r.id]}
+        onOpenChat={onOpenChat} media={media[r.id]}
+        playing={playingId === r.id}
+        onPlay={() => setPlayingId(r.id)} onClose={() => setPlayingId((p) => (p === r.id ? null : p))}
         twins={shown.filter((x) => x.id !== r.id && x.subject === r.subject).length}
         onToggle={() => setOpenId(openId === r.id ? null : r.id)}
         onDone={() => { setOpenId(null); setNonce((n) => n + 1); }} />)}
@@ -662,13 +689,18 @@ function RecentlyUploaded({ city, onOpenChat }: { city: string; onOpenChat: (api
   );
 }
 
-function RecentRowView({ r, open, onToggle, onDone, twins, onOpenChat, poster }: {
+function RecentRowView({ r, open, onToggle, onDone, twins, onOpenChat, media, playing, onPlay, onClose }: {
   r: RecentRow; open: boolean; onToggle: () => void; onDone: () => void; twins: number;
   onOpenChat: (apiId: number) => void;
-  /* undefined = not fetched yet · null = fetched, this film has no published still frame. Both
-     render the SAME empty box, so a row never changes height when the picture lands. */
-  poster?: string | null;
+  /* undefined = not fetched yet. A null field = fetched, and this film has no published still
+     frame / no playable mp4. Every case renders the SAME box, so a row never changes height when
+     the picture lands. */
+  media?: RowMedia;
+  playing: boolean; onPlay: () => void; onClose: () => void;
 }) {
+  const poster = media?.thumbnail ?? null;
+  const film = media?.video ?? null;
+  const filmLabel = r.subject ?? r.recordingId;
   const matchDay = r.match?.day ?? null;
   // Read again, in memory. See rereadTitle: display and Assign only, never a write.
   const reread = useMemo(() => rereadTitle(r.subject, r.slug), [r.subject, r.slug]);
@@ -752,22 +784,58 @@ function RecentRowView({ r, open, onToggle, onDone, twins, onOpenChat, poster }:
   return (
     /* A DONE ROW IS THE SAME ROW WITH LESS INK — same controls, same testids, lighter title and a
        plainer ground. `data-tab` is what the CSS scopes on, so a Needs you row is untouched. */
-    <div className={`rrow ${RECENT_STATE_TONE[r.state]}${open ? " open" : ""}${tabOf(r.state) === "done" ? " done" : ""}`}
+    <div className={`rrow ${RECENT_STATE_TONE[r.state]}${open ? " open" : ""}${tabOf(r.state) === "done" ? " done" : ""}${playing && film ? " playing" : ""}`}
       data-testid="veo-recent-row" data-state={r.state} data-tab={tabOf(r.state)} data-recording-id={r.id}>
       <div className="rtop">
-        {/* THE FILM, ON THE COLLAPSED ROW. 88px, 16:9, reusing the stage's own .thumb rules rather
-            than a second set — a grid track auto-sizing to an image is the bug that bit the field
-            cover, so the box is sized and the image is absolutely positioned inside it.
-            NO PLAY TRIANGLE. This is a picture of the film, not a control: pressing it opens the
-            row, exactly like Assign, and the film plays in the panel. A triangle here would promise
-            a play that does not happen. */}
-        <span className="qpo thumb" data-testid="veo-recent-poster" data-has={poster ? "1" : "0"}
-          onClick={onToggle} aria-hidden>
-          {poster
-            // eslint-disable-next-line @next/next/no-img-element
-            ? <img src={poster} alt="" data-testid="veo-recent-poster-img" />
-            : null}
-        </span>
+        {/* THE FILM, ON THE ROW. 88px, 16:9, reusing the stage's own .thumb rules rather than a
+            second set — a grid track auto-sizing to an image is the bug that bit the field cover, so
+            the box is sized and the image is absolutely positioned inside it.
+
+            PRESSING IT PLAYS THE FILM, HERE. Ryan, on the shipped page: "theres still no way to
+            [watch] the recently uploaded". The picture used to be an aria-hidden <span> that
+            silently opened Assign — no triangle, no focus, unreachable by keyboard — so he pressed
+            it and concluded the queue could not play anything. It is a <button> now, it carries the
+            triangle because pressing it really does play, and Assign stays its own button.
+
+            THE BOX GROWS IN PLACE, 88px to 360px, and the <video> takes it — the pattern FilmPlayer
+            uses. The <video> is NOT inside the <button>: interactive content inside a button is
+            invalid and the video's own controls would press the button. So the same box is a
+            <button> while closed and a plain box holding the film while open.
+
+            NO PLAYABLE FILM, NO PROMISE. With no mp4 the box stays — same size, so the list does not
+            go ragged — but it has no triangle, no pointer, and pressing it does nothing. */}
+        {playing && film ? (
+          <span className="qpo thumb" data-testid="veo-recent-poster" data-has={poster ? "1" : "0"} data-film="1" data-playing="1">
+            {/* FULLSCREEN IS THE BROWSER'S, AND NOTHING HERE TAKES IT AWAY. Ryan: "i will be able to
+                expand the size right". `controls` stays, and there is deliberately no
+                controlsList="nofullscreen" and no disablePictureInPicture — 360px is for deciding
+                where a film goes, the player's own fullscreen button is how it gets bigger.
+                preload="none" + created on the press: the press is the play, so autoPlay is the
+                press, not the render. */}
+            {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+            <video data-testid="veo-recent-film" src={film} controls autoPlay playsInline preload="none"
+              poster={poster ?? undefined} aria-label={`Film: ${filmLabel}`} onError={onClose} />
+          </span>
+        ) : film ? (
+          <button type="button" className="qpo thumb live" data-testid="veo-recent-poster"
+            data-has={poster ? "1" : "0"} data-film="1" aria-label={`Play ${filmLabel}`} onClick={onPlay}>
+            {poster
+              // eslint-disable-next-line @next/next/no-img-element
+              ? <img src={poster} alt="" data-testid="veo-recent-poster-img" />
+              : null}
+            <span className="qpl" data-testid="veo-recent-play" aria-hidden>▶</span>
+          </button>
+        ) : (
+          <span className="qpo thumb" data-testid="veo-recent-poster" data-has={poster ? "1" : "0"} data-film="0" aria-hidden>
+            {poster
+              // eslint-disable-next-line @next/next/no-img-element
+              ? <img src={poster} alt="" data-testid="veo-recent-poster-img" />
+              : null}
+          </span>
+        )}
+        {playing && film && (
+          <button type="button" className="btn qclose" data-testid="veo-recent-close" onClick={onClose}>Close film</button>
+        )}
         <span className="rwhen">
           <b>{arrivedLabel(r.receivedAt)}</b>
           {/* HOW LATE THE FILM WAS — Veo's clock. Same-day and next-day are the normal case and
@@ -1536,9 +1604,6 @@ const CSS = MATCH_SIDE_PANEL_CSS + `
 @media (max-width:880px){
   .veo .wd{min-width:0;flex:1 1 44px;padding:6px 4px}
   .veo .nb{flex:1 1 auto}
-  /* The poster stays, the columns stack — a 88px picture is still the fastest way to tell two
-     untitled films apart on a phone. */
-  .veo .rtop{grid-template-columns:88px minmax(0,1fr);row-gap:8px}
 }
 .veo .nb{border:1px solid var(--line);background:#fff;border-radius:8px;min-width:32px;height:32px;padding:0 9px;
   font-size:14px;font-weight:700;color:var(--ink2);cursor:pointer}
@@ -1703,16 +1768,44 @@ const CSS = MATCH_SIDE_PANEL_CSS + `
 /* THE ACTIONS TRACK SIZES TO ITS CONTENT. It was a fixed 132px, and two labels shrank and wrapped
    over two lines inside it, which made a flagged row 8px taller than every other row. The flexible
    track is the title and it is the one that gives, by truncating, as it already does. */
-.veo .rtop{display:grid;grid-template-columns:88px 150px minmax(0,1fr) 118px 128px auto;gap:10px;align-items:center;padding:9px 12px}
+/* TOP-ALIGNED, as the inline-play mock is. Centred items re-centre whenever anything in the row
+   changes height — and opening a film narrows the title column, so its sentence wraps and a centred
+   title jumped 7.7px under the operator's hand (measured). Top-aligned, nothing can. */
+.veo .rtop{display:grid;grid-template-columns:88px 150px minmax(0,1fr) 118px 128px auto;gap:10px;align-items:start;padding:9px 12px}
 /* THE POSTER ON A COLLAPSED ROW. 88px wide and 16:9 by aspect-ratio, so the box exists at its full
    height whether or not the picture ever lands — .qpo composes with .thumb, which already does
    position:relative + the absolutely-positioned img. A row with no still frame is the SAME HEIGHT
    as one with, which is the difference between a list and a ragged column. */
-.veo .qpo{width:88px;border-radius:7px;cursor:pointer;align-self:center}
-/* NO PLAY GLYPH HERE. The stage keeps its .play button; this is a picture, and pressing it opens
-   the row. Stated in CSS as well as in the markup so a later "add a play button" has to delete a
-   comment to do it. */
-.veo .qpo .play{display:none}
+.veo .qpo{width:88px;border-radius:7px;border:0;padding:0;font:inherit;color:inherit}
+/* THE TRIANGLE IS BACK, AND IT IS HONEST NOW: pressing the picture plays the film in the row. It is
+   only on a box that has a film (.live) — a box with no mp4 keeps no pointer and promises nothing. */
+.veo .qpo.live{cursor:pointer}
+.veo .qpo.live:focus-visible{outline:3px solid var(--ok);outline-offset:2px}
+.veo .qpl{position:relative;width:24px;height:24px;border-radius:999px;background:rgba(255,255,255,.93);color:#123;
+  display:flex;align-items:center;justify-content:center;font-size:10px;padding-left:2px}
+.veo .qpo.live:hover .qpl{background:#fff;transform:scale(1.08)}
+.veo .qclose{justify-self:start;align-self:start;font-size:11.5px;padding:4px 9px}
+/* ── PLAYING: THE SAME BOX, 360px, AND NOTHING ELSE IN THE ROW MOVES VERTICALLY ────────────────
+   The row is top-aligned (see .rtop), so a 203px film cannot push the title or Assign down. While
+   playing the grid gets a second row, 1fr, for the film to span into — the 1fr is what makes the
+   spanning film size that row rather than stretch the first — and Close film sits in it, under the
+   arrival time. Columns to the right shift over by the width the film took, as they do in the mock. */
+/* THE SAME 900px BOUNDARY AS THE PHONE LAYOUT BELOW, on purpose: at 881-900px a desktop playing
+   template would have met the phone's two-column placement and produced neither. */
+@media (min-width:901px){
+  .veo .rrow.playing .rtop{grid-template-columns:360px 150px minmax(0,1fr) 118px 128px auto;grid-template-rows:auto 1fr}
+  .veo .rrow.playing .qpo{width:360px;grid-column:1;grid-row:1 / span 2}
+  .veo .rrow.playing .qclose{grid-column:2;grid-row:2}
+}
+/* ON A PHONE the row is the two-column grid in the max-width:900px block further down. The film
+   takes the whole width while playing — at 88px it would still be a thumbnail — and Close film takes
+   the poster's old cell, so the arrival time beside it and everything under it keep the places they
+   had while closed. (An "88px minmax(0,1fr)" rule that stood here from 31281af never applied: the
+   900px block comes later and wins at equal specificity. Removed rather than left to mislead.) */
+@media (max-width:900px){
+  .veo .rrow.playing .qpo{grid-column:1 / -1;width:100%}
+  .veo .rrow.playing .qclose{grid-column:1}
+}
 .veo .rwhen{display:flex;flex-direction:column;min-width:0}
 .veo .rwhen b{font-size:12.5px;font-weight:800;font-variant-numeric:tabular-nums}
 .veo .rwhen em{font-style:normal;font-size:10.5px;font-weight:800;color:var(--flag)}
