@@ -29,10 +29,19 @@ export type Manager = {
  * to app_users where is_city_manager is true. Two were misspelt here: "Yarra" is Yara Usheta and
  * "Willfried" is Wilfried Nyamsi.
  *
- * THAT RECONSTRUCTION IS NO LONGER NECESSARY FOR NEW ROWS. The /check-in form asks for the name
- * directly and stores it in city_manager_check_ins.manager_name, which is exactly why it asks.
+ * THE FORM DOES NOT ASK FOR A NAME, AND MUST NOT BE MADE TO AGAIN. An earlier version of this
+ * comment said the opposite. The card's title is `manager.name` from THIS array, keyed on cityId
+ * by buildCheckInsData below — manager_name was selected, read into CheckInRecord and never put on
+ * CheckInEntry or rendered anywhere. Ryan proved it by filing as "Ryan Mancuso" for Austin and
+ * getting a card titled "Garrett Suits". The CITY is the identity; /api/city-check-ins/submit now
+ * stamps manager_name from this array as an audit field.
+ *
  * This array still has to be maintained by hand because it carries payDay and amount, which the
  * form does not collect — moving it to a table is a separate job.
+ *
+ * A CITY WITH NO ROW HERE FILES BUT DOES NOT APPEAR. buildCheckInsData iterates MANAGERS, so a
+ * Warsaw check-in is stored, valid, and renders on no card at all. Not fixed in this build —
+ * flagged deliberately rather than papered over.
  *
  * `cityId` is the city_identifier (src/lib/cityScope.ts) and it is what the meeting action items
  * are keyed on. The `city` string above it is the loose label the SHEET matcher needs, and the two
@@ -112,6 +121,9 @@ export function formatMoney(n: number): string {
 }
 
 export type CheckInEntry = {
+  /* THE ROW'S OWN ID, so the card can delete it. Everything else here is an answer; this is the
+   * handle. Added with the admin delete control — DELETE /api/city-check-ins/[id]. */
+  id: string;
   timestamp: Date;
   city: string; // display name resolved from city_identifier (cityScope.ts)
   rating: number; // parsed; 0 if missing or invalid
@@ -141,6 +153,7 @@ export type CheckInsData = {
 /* ONE STORED CHECK-IN, as `city_manager_check_ins` holds it. snake_case deliberately: this is the
  * row, not the view model, and CheckInEntry below is the shape the page consumes. */
 export type CheckInRecord = {
+  id: string;
   submitted_at: string;
   manager_name: string;
   city_identifier: string;
@@ -158,7 +171,7 @@ export type CheckInRecord = {
 };
 
 const SELECT_COLS =
-  "submitted_at, manager_name, city_identifier, month_ending, rating, fields_contacted, " +
+  "id, submitted_at, manager_name, city_identifier, month_ending, rating, fields_contacted, " +
   "fields_list, field_progress, match_manager, marketing_channels, marketing_results, " +
   "win, challenge, focus";
 
@@ -230,6 +243,7 @@ export function buildCheckInsData(
     const text = (v: string | null) => (v ?? "").trim();
     const rating = Number(r.rating);
     const entry: CheckInEntry = {
+      id: r.id,
       timestamp: match.ts,
       city: cityNameFor(r.city_identifier) ?? r.city_identifier,
       rating: Number.isFinite(rating) ? rating : 0,

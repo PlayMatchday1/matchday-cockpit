@@ -219,8 +219,25 @@ is("authenticateAdmin guards the User access screen and the Fields mapping admin
     "admin/fields/exclude/route.ts",
     "admin/users/auth-status/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
     "admin/users/match-permissions/route.ts", "admin/users/permissions/route.ts",
-    "admin/users/resend-invite/route.ts"].sort());
-is("  …and every one of those is under admin/", importsAdmin.map(rel).every((f) => f.startsWith("admin/")), true);
+    "admin/users/resend-invite/route.ts",
+    // +1 city-check-ins/[id] — DELETE one city manager check-in. is_admin because the card's
+    // control is gated on is_admin, and the file this was copied from (/api/inventory/[id]) gates
+    // on the matchops CAPABILITY while its own header claims authenticateAdmin. Copying that would
+    // have made the visible gate a courtesy: matchops is held by non-admin operators, any of whom
+    // could have deleted another city's check-in through the API with the button hidden from them.
+    "city-check-ins/[id]/route.ts"].sort());
+/* THE FIRST authenticateAdmin ROUTE OUTSIDE admin/, AND IT IS NAMED RATHER THAN WAIVED. The
+ * original assertion was "every one of those is under admin/". That was true until this route, and
+ * the property is worth keeping teeth on: it is what lets a reader assume an admin-only route is
+ * visible as one in the tree. So the exception is an explicit SET, not a relaxed predicate — a
+ * SECOND route appearing outside admin/ still fails this, which is the whole point of a census.
+ *
+ * Nothing security-critical keys on the prefix: confinement is an ALLOWLIST
+ * (isConfinedRouteAllowed), so a path absent from it is refused whatever it is called. The
+ * adminAuth.ts comment about "/api/admin/*" is an observation, not a rule anything enforces. */
+const ADMIN_OUTSIDE_ADMIN_DIR = ["city-check-ins/[id]/route.ts"];
+is("  …and every one of those is under admin/, bar the one named exception",
+   importsAdmin.map(rel).filter((f) => !f.startsWith("admin/")).sort(), ADMIN_OUTSIDE_ADMIN_DIR.sort());
 
 // Phase 18d — every promo WRITE is gated on MANAGE PROMOS, and the check is in the route (not
 // only on the button). A route that forgot it would 200 for any admin.

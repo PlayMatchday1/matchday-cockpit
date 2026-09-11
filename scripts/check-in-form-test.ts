@@ -16,11 +16,12 @@
 
 import {
   validateCityCheckIn, isHoneypotTripped, parseMonthEnding, defaultMonthEnding,
-  checkRateLimit, CHECK_IN_QUESTIONS, CHECK_IN_CITY_OPTIONS, RATING_OPTIONS,
-  MAX_NAME_LEN, MAX_LONG_LEN, type RateLimitStore,
+  checkRateLimit, CHECK_IN_QUESTIONS, CHECK_IN_SECTIONS, CHECK_IN_CITY_OPTIONS, RATING_OPTIONS,
+  RATING_MIN, RATING_MAX, managerNameForCity, MAX_LONG_LEN, type RateLimitStore,
 } from "../src/lib/cityCheckIns";
 import { buildCheckInsData, checkInMonth, MANAGERS, type CheckInRecord } from "../src/lib/checkIns";
 import { CITY_SCOPES } from "../src/lib/cityScope";
+import { readFileSync } from "node:fs";
 
 let pass = 0; const fails: string[] = [];
 const ok = (m: string) => { pass++; console.log(`  ✓ ${m}`); };
@@ -29,7 +30,6 @@ const is = (m: string, got: unknown, want: unknown) =>
   JSON.stringify(got) === JSON.stringify(want) ? ok(m) : bad(m, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
 
 const GOOD = {
-  manager_name: "Ben Faye",
   city_identifier: "ATL",
   month_ending: "2026-08-31",
   rating: 4,
@@ -67,8 +67,6 @@ console.log("\nvalidation — the refusals");
   refuses("a rating of 6", { rating: 6 });
   refuses("a rating of 4.5", { rating: 4.5 });
   refuses("an absurd rating", { rating: 99999 });
-  refuses("a missing name", { manager_name: "   " });
-  refuses("an over-length name", { manager_name: "x".repeat(MAX_NAME_LEN + 1) });
   refuses("an over-length answer", { win: "x".repeat(MAX_LONG_LEN + 1) });
 
   // The boundary is INCLUSIVE on both sides — an off-by-one here rejects a legitimate answer.
@@ -240,6 +238,119 @@ console.log("\nthe city allowlist lives in CODE — this replaces the dropped CH
   const control = validateCityCheckIn({ ...GOOD, city_identifier: CITY_SCOPES[0].identifier });
   if (control.ok) ok(`control: ${CITY_SCOPES[0].identifier} passes the same path that refused the junk`);
   else bad("control: a known identifier passes", control.error);
+}
+
+
+
+console.log("\nTHE FORM'S ORDER IS THE CARD'S ORDER — scraped from the card, never re-typed");
+{
+  /* ASSERTED AGAINST THE COMPONENT, NOT A COPY OF IT. A second hand-written list here would agree
+   * with itself forever and say nothing about the card. This reads CheckInsStatusCard.tsx and takes
+   * the order its `entry.<key>` references actually appear in. */
+  const card = readFileSync("src/components/CheckInsStatusCard.tsx", "utf8");
+  const body = card.slice(card.indexOf("entry.rating > 0"));
+  const CARD_KEY: Record<string, string> = {
+    win: "win", challenge: "challenge", focus: "focus",
+    fieldsContacted: "fields_contacted", fieldsList: "fields_list",
+    fieldProgress: "field_progress", matchManager: "match_manager",
+    marketingChannels: "marketing_channels", marketingResults: "marketing_results",
+  };
+  const seen: string[] = [];
+  for (const m of body.matchAll(/entry\.([A-Za-z]+)/g)) {
+    const k = CARD_KEY[m[1]];
+    if (k && !seen.includes(k)) seen.push(k);
+  }
+  is("the card references all nine answers", seen.length, 9);
+  const formOrder = CHECK_IN_QUESTIONS.map((q) => q.key);
+  is("the form asks them in the card's order", formOrder, seen);
+
+  /* THE CONTROL. The order this replaced — fields first, the three that matter last — must FAIL
+   * this comparison, or the assertion above is vacuous and would pass on any list of nine keys. */
+  const OLD_ORDER = ["fields_contacted","fields_list","field_progress","match_manager",
+    "marketing_channels","marketing_results","win","challenge","focus"];
+  if (JSON.stringify(OLD_ORDER) !== JSON.stringify(seen)) ok("control: the PREVIOUS order does not match the card, so the test is not vacuous");
+  else bad("control: the previous order must differ from the card's");
+  is("same nine keys either way — this was a reorder, not a rewrite",
+    [...formOrder].sort(), [...OLD_ORDER].sort());
+}
+
+console.log("\nthe name is gone, and the city resolves it instead");
+{
+  /* Ryan filed as "Ryan Mancuso" for Austin and the card said "Garrett Suits". The answer was
+   * never read: the card titles from MANAGERS[].name keyed on cityId. */
+  const r = validateCityCheckIn(GOOD);
+  if (r.ok) ok("a check-in with NO name validates");
+  else bad("a check-in with no name validates", r.error);
+  if (r.ok) is("the validator never sets a name from the request", r.value.manager_name, null);
+  /* AND A HAND-MADE PAYLOAD CANNOT SET ONE EITHER. The row is built field by field, so an extra
+   * key in the body is ignored rather than spread onto the insert. */
+  const spoof = validateCityCheckIn({ ...GOOD, manager_name: "Someone Else" } as never);
+  if (spoof.ok) is("a manager_name in the body is ignored", spoof.value.manager_name, null);
+  else bad("a manager_name in the body is ignored", spoof.error);
+
+  is("Austin resolves to its manager", managerNameForCity("ATX"), "Garrett Suits");
+  is("Atlanta resolves to its manager", managerNameForCity("ATL"), "Ben Faye");
+  /* WARSAW IS THE REAL NULL CASE: cityScope carries WAW, MANAGERS does not, and that city must
+   * still be able to file. Migration 0169 is what makes the column accept it. */
+  is("Warsaw has no manager on file, and says null rather than guessing", managerNameForCity("WAW"), null);
+  const waw = validateCityCheckIn({ ...GOOD, city_identifier: "WAW" });
+  if (waw.ok) ok("a Warsaw check-in still validates");
+  else bad("a Warsaw check-in still validates", waw.error);
+  // CONTROL: every city the form offers resolves to a name OR to a stated null, never to undefined.
+  for (const c of CHECK_IN_CITY_OPTIONS) {
+    const n = managerNameForCity(c.identifier);
+    if (n !== null && typeof n !== "string") bad(`${c.identifier} resolves to something unusable`, String(n));
+  }
+  ok("every offered city resolves to a name or an explicit null");
+}
+
+console.log("\nsections, hints, and the cadence");
+{
+  is("four question sections", CHECK_IN_SECTIONS.length, 4);
+  const secKeys = CHECK_IN_SECTIONS.map((s) => s.key);
+  for (const q of CHECK_IN_QUESTIONS) {
+    if (!secKeys.includes(q.section)) bad(`question ${q.key} is in no section`, q.section);
+  }
+  ok("every question belongs to a declared section");
+  // Every section has at least one question — an empty card would render as a title over nothing.
+  for (const sec of CHECK_IN_SECTIONS.slice(1)) {
+    const n = CHECK_IN_QUESTIONS.filter((q) => q.section === sec.key).length;
+    if (n === 0) bad(`section ${sec.key} has no questions`);
+  }
+  ok("no section renders empty");
+  /* GROUPING MUST NOT REORDER. The page renders section by section, so if a section's questions
+   * were not contiguous in the array the rendered order would silently stop matching the card. */
+  const order = CHECK_IN_QUESTIONS.map((q) => q.section);
+  const compact = order.filter((v, i) => v !== order[i - 1]);
+  is("each section's questions are contiguous, so grouping cannot reorder them",
+    compact.length, new Set(compact).size);
+
+  const hinted = CHECK_IN_QUESTIONS.filter((q) => q.hint).length;
+  if (hinted >= 6) ok(`hints are back on ${hinted} of ${CHECK_IN_QUESTIONS.length} questions`);
+  else bad("hints are back", `only ${hinted}`);
+
+  /* THE CADENCE. The Google Form says "week" in five places while its own questions say "month".
+   * The hints were carried across; the wrong cadence was not. */
+  const prose = [
+    ...CHECK_IN_QUESTIONS.map((q) => `${q.label} ${q.hint ?? ""}`),
+    ...CHECK_IN_SECTIONS.map((s) => `${s.title} ${s.blurb}`),
+  ].join(" ");
+  if (!/week/i.test(prose)) ok("the word \"week\" appears nowhere in the questions or sections");
+  else bad("the word \"week\" appears nowhere", prose.match(/.{0,30}week.{0,30}/i)?.[0] ?? "");
+  // CONTROL: the scan can find a word that IS there.
+  if (/month/i.test(prose)) ok("control: the scan does find \"month\", so it is looking at real text");
+  else bad("control: the scan finds \"month\"");
+}
+
+console.log("\nthe rating scale agrees in all three places");
+{
+  /* The Google Form's header declares it: "Overall Weekly Rating (1-5) (Linear scale: 1 = Poor,
+   * 5 = Excellent)". Nothing here changes it — this asserts the three agree. */
+  is("RATING_MIN/MAX are 1 and 5", [RATING_MIN, RATING_MAX], [1, 5]);
+  is("the form offers exactly those five", RATING_OPTIONS, [1, 2, 3, 4, 5]);
+  const mig = readFileSync("supabase/migrations/0167_city_manager_check_ins.sql", "utf8");
+  if (/rating BETWEEN 1 AND 5/.test(mig)) ok("the DB CHECK is rating BETWEEN 1 AND 5");
+  else bad("the DB CHECK is rating BETWEEN 1 AND 5", "migration text changed");
 }
 
 console.log(`\ncheck-in-form: ${pass} passed, ${fails.length} failed`);

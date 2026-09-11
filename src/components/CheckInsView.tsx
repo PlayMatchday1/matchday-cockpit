@@ -21,7 +21,7 @@ export default function CheckInsView() {
   const [month, setMonth] = useState(currentMonth);
   const [city, setCity] = useState<string | null>(null);
 
-  const { data, loading, error } = useCheckIns(month);
+  const { data, loading, error, refresh } = useCheckIns(month);
 
   /* COPY FORM LINK — the same control as InventoryDashboard's, same mint button, same icon swap,
    * same 1600ms revert, pointing at /check-in.
@@ -117,7 +117,7 @@ export default function CheckInsView() {
             No city manager is assigned to this city, so there is no check-in to show.
           </div>
         ) : (
-          <CheckInsStatusGrid statuses={statuses} />
+          <CheckInsStatusGrid statuses={statuses} onDeleted={() => void refresh()} />
         )}
       </div>
     </>

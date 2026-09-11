@@ -8,8 +8,11 @@
 //      nothing about why it failed).
 //   2. Rate limit — RATE_LIMIT_MAX submits / 10 min per client IP (in-memory sliding window; see
 //      the lib note on per-instance scope).
-//   3. Server-side validation — name, a city from the cityScope allowlist, a real calendar
-//      month-ending date, a 1-5 rating, and length caps. The DB CHECK-constrains all of it too.
+//   3. Server-side validation — a city from the cityScope allowlist, a real calendar month-ending
+//      date, a 1-5 rating, and length caps. The DB CHECK-constrains all of it too.
+//
+// THE FORM NO LONGER ASKS FOR A NAME. manager_name is resolved from MANAGERS by city AFTER
+// validation and stamped on the row as an audit field — it is never taken from the request body.
 //
 // HARD-GUARDED write path: the insert uses the SERVICE_ROLE key (server-side only, never exposed
 // to the browser), which bypasses RLS. Anon has NO policies on the table (migration 0167), so this
@@ -23,6 +26,7 @@
 import { createClient } from "@supabase/supabase-js";
 import {
   validateCityCheckIn,
+  managerNameForCity,
   isHoneypotTripped,
   checkRateLimit,
   type CityCheckInInput,
@@ -83,7 +87,16 @@ export async function POST(req: Request) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  const { error } = await supabase.from("city_manager_check_ins").insert(result.value);
+  /* THE NAME IS STAMPED HERE, FROM THE CITY — the form does not ask and cannot set it. It is an
+   * audit field now, not an answer: the dashboard titles every card from MANAGERS[].name keyed on
+   * cityId, which is why asking was pointless (Ryan filed as "Ryan Mancuso" for Austin and got
+   * "Garrett Suits"). NULL for a city with no manager on file, which Warsaw is today — that city
+   * must still be able to file. Migration 0169 made the column nullable for exactly this. */
+  const row = {
+    ...result.value,
+    manager_name: managerNameForCity(result.value.city_identifier),
+  };
+  const { error } = await supabase.from("city_manager_check_ins").insert(row);
   if (error) {
     console.error("[city-check-ins:submit] insert failed", error);
     return Response.json(
@@ -97,7 +110,7 @@ export async function POST(req: Request) {
    * line with different access rules from the table. Same rule the change_log follows for message
    * bodies. */
   console.log(
-    `[city-check-ins:submit] stored city=${result.value.city_identifier} month=${result.value.month_ending}`,
+    `[city-check-ins:submit] stored city=${row.city_identifier} month=${row.month_ending} manager=${row.manager_name ?? "(none on file)"}`,
   );
   return Response.json({ ok: true }, { status: 200 });
 }

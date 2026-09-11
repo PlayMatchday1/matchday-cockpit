@@ -1,6 +1,10 @@
 "use client";
 
+import { useState } from "react";
+import { Trash2 } from "lucide-react";
 import type { ManagerStatus } from "@/lib/checkIns";
+import { useAuth } from "@/lib/useAuth";
+import { supabase } from "@/lib/supabase";
 
 // THE PAY DAY, carried onto the card. It used to live only in the Payment Calendar and Next
 // Payments panels, both of which have been removed — and it is the one fact those blocks showed
@@ -13,10 +17,23 @@ function ordinal(d: number): string {
 
 export default function CheckInsStatusCard({
   status,
+  onDeleted,
 }: {
   status: ManagerStatus;
+  /* The page refetches after a delete. No local row surgery: buildCheckInsData rebuilds every
+     status from MANAGERS, so removing a city's only row returns that card to No Response on its
+     own — the same reason /api/inventory/[id] needs no "fall back" logic. */
+  onDeleted?: () => void;
 }) {
   const { manager, entry, submitted } = status;
+  /* SAME GATE AS THE ROUTE, not merely the same as InventoryDashboard's. DELETE
+     /api/city-check-ins/[id] uses authenticateAdmin, so this button is hidden from exactly the
+     accounts the server refuses — it is a courtesy, and the refusal behind it is real. */
+  const { appUser } = useAuth();
+  const isAdmin = appUser?.is_admin === true;
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   if (!entry) {
     return (
@@ -61,16 +78,75 @@ export default function CheckInsStatusCard({
             {manager.city} · pays {ordinal(manager.payDay)}
           </div>
         </div>
-        {submitted ? (
-          <span className="inline-flex shrink-0 rounded-full bg-mint-soft px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-deep-green ring-1 ring-inset ring-mint/40">
-            Submitted
-          </span>
-        ) : (
-          <span className="inline-flex shrink-0 rounded-full bg-coral-soft px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-coral ring-1 ring-inset ring-coral/40">
-            Overdue
-          </span>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {submitted ? (
+            <span className="inline-flex rounded-full bg-mint-soft px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-deep-green ring-1 ring-inset ring-mint/40">
+              Submitted
+            </span>
+          ) : (
+            <span className="inline-flex rounded-full bg-coral-soft px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-coral ring-1 ring-inset ring-coral/40">
+              Overdue
+            </span>
+          )}
+          {/* ONE BUTTON, THEN CONFIRM. No typing the city's name back, no explanatory paragraph —
+              Ryan on the field delete: "just give me confirm keep very simple no explantory text." */}
+          {isAdmin && (confirming ? (
+            <span className="inline-flex items-center gap-1">
+              <button
+                type="button"
+                data-testid="ci-del-confirm"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true); setErr(null);
+                  try {
+                    /* THE BEARER TOKEN IS REQUIRED. authenticateAdmin reads the Authorization
+                       header and a bare fetch() is a 401 — same shape InventoryDashboard uses. */
+                    const { data: sess } = await supabase.auth.getSession();
+                    const token = sess.session?.access_token;
+                    if (!token) throw new Error("No active session.");
+                    const r = await fetch(`/api/city-check-ins/${entry.id}`, {
+                      method: "DELETE",
+                      headers: { Authorization: `Bearer ${token}` },
+                    });
+                    if (!r.ok) {
+                      const j = await r.json().catch(() => ({}));
+                      throw new Error(j.error || `HTTP ${r.status}`);
+                    }
+                    onDeleted?.();
+                  } catch (e) {
+                    setErr(e instanceof Error ? e.message : String(e));
+                    setBusy(false); setConfirming(false);
+                  }
+                }}
+                className="rounded-full bg-coral px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white disabled:opacity-50"
+              >
+                {busy ? "Deleting…" : "Confirm"}
+              </button>
+              <button
+                type="button"
+                data-testid="ci-del-cancel"
+                onClick={() => setConfirming(false)}
+                className="rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-deep-green/50 hover:text-deep-green"
+              >
+                Cancel
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              data-testid="ci-del"
+              aria-label="Delete this check-in"
+              onClick={() => setConfirming(true)}
+              className="rounded-lg p-1 text-deep-green/35 transition hover:bg-coral-soft hover:text-coral"
+            >
+              <Trash2 aria-hidden size={14} />
+            </button>
+          ))}
+        </div>
       </div>
+      {err && (
+        <p data-testid="ci-del-error" className="mt-2 text-[12px] font-medium text-coral-hover">{err}</p>
+      )}
 
       {entry.rating > 0 && (
         <div className="mt-4">
