@@ -128,9 +128,11 @@ const PAGE = noComments(readFileSync("src/components/VeoDayOps.tsx", "utf8"));
 /data-testid="veo-recent-count"/.test(PAGE) && /\{shown\.length\}/.test(PAGE)
   ? ok("the footer count is derived from the rows on screen")
   : bad("the footer count is not derived from the rows");
-/href=\{`\/match-ops\/veo\?date=\$\{day\}`\}/.test(PAGE)
-  ? ok("a row links back to its own day")
-  : bad("no link back to the row's day");
+/* THE ROW NO LONGER LINKS AWAY. View day was removed — the week strip reaches any day in one
+ * chip without leaving the queue you are working. Inverted, not deleted. */
+!/href=\{`\/match-ops\/veo\?date=\$\{day\}`\}/.test(PAGE)
+  ? ok("a row no longer links away to its own day")
+  : bad("the View day link is back");
 /r\.state === "queued" && \(/.test(PAGE)
   ? ok("only a queued row offers Assign")
   : bad("a resolved row is offered an action");
@@ -183,10 +185,18 @@ console.log("\n— two tabs, and the counts are the point —");
   yes("…and the count badge is not styled as an alarm",
     /\.tcount\{[^}]*color:var\(--ink3\)/.test(PAGE) && !/\.tcount\{[^}]*var\(--look\)/.test(PAGE));
 
-  /* VIEW DAY. */
-  yes("the day link reads View day", /data-testid="veo-recent-day"[^>]*>View day</.test(PAGE));
-  is("…and Its day is gone", PAGE.match(/>Its day</g), null);
-  yes("…and it still lands on the day view", /href=\{`\/match-ops\/veo\?date=\$\{day\}`\}/.test(PAGE));
+  /* VIEW DAY IS GONE. Ryan: "we can completely remove the view day which is crap" — it full-page
+   * navigated away from the queue you were working, and the week strip now reaches any day in one
+   * chip without leaving the page. The assertion is INVERTED rather than deleted, so re-adding the
+   * link fails here.
+   *
+   * NOT THE SAME TESTID AS THE DAY PICKER. veo-recent-day-<date> are the buttons inside an open
+   * Assign panel that choose which day's candidates to show, and those stay — hence the boundary
+   * on the regex, which would otherwise match them and pass for the wrong reason. */
+  is("the View day link is gone", PAGE.match(/data-testid="veo-recent-day"[^-]/g), null);
+  is("…and so is its href", PAGE.match(/href=\{`\/match-ops\/veo\?date=\$\{day\}`\}/g), null);
+  /* CONTROL: the day PICKER survives, so the assertion above removed one thing and not both. */
+  yes("…while the day picker inside Assign survives", /data-testid=\{`veo-recent-day-\$\{d\}`\}/.test(PAGE));
 
   /* A DONE ROW IS QUIETER, AND ITS LATENESS IS GREY — scoped, so a Needs you row is untouched. */
   yes("a Done row is marked as one", /tabOf\(r\.state\) === "done" \? " done" : ""/.test(PAGE));
@@ -195,7 +205,17 @@ console.log("\n— two tabs, and the counts are the point —");
   yes("CONTROL: the unscoped lateness rule is still amber for a Needs you row",
     /\.veo \.rwhen em\{[^}]*color:var\(--flag\)\}/.test(PAGE));
   yes("no action button wraps", /\.ractions \.btn\{[^}]*white-space:nowrap/.test(PAGE));
-  yes("…and the actions track sizes to its content", /grid-template-columns:150px minmax\(0,1fr\) 118px 128px auto/.test(PAGE));
+  /* THE ROW GREW A POSTER COLUMN. 88px leads the track list now; the rest is unchanged, and the
+   * actions track still sizes to its content — which is what this assertion is actually about. */
+  yes("…and the actions track sizes to its content, after the 88px poster",
+    /grid-template-columns:88px 150px minmax\(0,1fr\) 118px 128px auto/.test(PAGE));
+  /* THE POSTER BOX IS THE SAME HEIGHT WITH OR WITHOUT A PICTURE — it is 16:9 by aspect-ratio on a
+   * fixed width, not sized by the image. A ragged column is worse than no posters. */
+  yes("the poster is 88px and takes its height from aspect-ratio",
+    /\.veo \.qpo\{width:88px/.test(PAGE) && /\.veo \.thumb\{[^}]*aspect-ratio:16\/9/.test(PAGE));
+  /* NO PLAY TRIANGLE ON A QUEUE POSTER, and the CONTROL that the stage still has one. */
+  yes("no play glyph on a collapsed row's poster", /\.veo \.qpo \.play\{display:none\}/.test(PAGE));
+  yes("CONTROL: the film stage still has its play button", /data-testid="veo-play"/.test(PAGE));
 }
 
 console.log("\n— Confirm clears one flag and CANNOT post —");

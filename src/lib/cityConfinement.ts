@@ -230,6 +230,16 @@ const CONFINED_ROUTE_EXACT: readonly string[] = [
   "/api/veo/day",
   // The still frame for one recording on that page. Exact, same reason.
   "/api/veo/thumb",
+  /* THE SAME READ, BATCHED. The queue list now shows a poster on every collapsed row, and one
+   * request per row is thirty requests for one screen. /api/veo/thumbs takes the ids the ALREADY
+   * ALLOWED /api/veo/recent just handed this account and returns the same still-frame URLs
+   * /api/veo/thumb would return one at a time — no new data, no new shape, one round trip.
+   *
+   * STATED, BECAUSE IT IS PRE-EXISTING AND NOT INTRODUCED HERE: neither route scopes by city, so a
+   * bounded account that already holds a recording id from elsewhere could read that film's poster
+   * URL. That is true of /api/veo/thumb today and batching does not widen it. Worth closing on
+   * both together; not closed here. */
+  "/api/veo/thumbs",
   // "Recently uploaded" on the same page. Exact, same reason — and it scopes every row through the
   // recording's match or its code before returning it.
   "/api/veo/recent",

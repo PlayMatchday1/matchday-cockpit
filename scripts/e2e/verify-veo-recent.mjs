@@ -27,7 +27,10 @@ const readRows = (p) => p.evaluate(() => [...document.querySelectorAll('[data-te
   lagSource: e.querySelector('[data-testid="veo-recent-lag"]')?.dataset.source ?? null,
   wait: e.querySelector('[data-testid="veo-recent-wait"]')?.textContent?.trim() ?? null,
   stateLabel: e.querySelector('[data-testid="veo-recent-state"]')?.textContent?.trim() ?? null,
+  // VIEW DAY WAS REMOVED — the week strip reaches any day in one chip without leaving the page.
+  // Kept as a NEGATIVE: this must now always be null, and the assertion below says so.
   dayHref: e.querySelector('[data-testid="veo-recent-day"]')?.getAttribute("href") ?? null,
+  poster: Boolean(e.querySelector('[data-testid="veo-recent-poster"]')),
   assignable: Boolean(e.querySelector('[data-testid="veo-recent-assign"]')),
 })));
 
@@ -111,7 +114,11 @@ async function main() {
 
   // ---- links back to its own day, and Assign only where there is something to do ----
   const withDay = rows.filter((r) => r.dayHref);
-  yes("rows link back to their own day", withDay.length > 0 && withDay.every((r) => /^\/match-ops\/veo\?date=\d{4}-\d{2}-\d{2}$/.test(r.dayHref)), JSON.stringify(withDay.slice(0, 2)));
+  yes("no row carries a View day link any more", withDay.length === 0, JSON.stringify(withDay.slice(0, 2)));
+  /* EVERY ROW CARRIES A POSTER BOX, whether or not the still frame resolved — that is the whole
+   * point of the box, and a control that the rows were actually found. */
+  yes("every row carries a poster box", rows.length > 0 && rows.every((r) => r.poster),
+    `${rows.filter((r) => r.poster).length} of ${rows.length}`);
   is("only a Queued row offers Assign", [...new Set(nonEmpty(rows.filter((r) => r.assignable), "assignable rows").map((r) => r.stateLabel))], ["Queued"]);
   is("…and no resolved row does", nonEmpty(rows, "recent rows on screen").filter((r) => r.assignable && r.stateLabel !== "Queued").length, 0);
 

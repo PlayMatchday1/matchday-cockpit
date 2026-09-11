@@ -409,9 +409,18 @@ console.log("\n— re-reading a title is not re-deciding a recording —");
 /const reread = useMemo\(\(\) => rereadTitle\(r\.subject, r\.slug\), \[r\.subject, r\.slug\]\)/.test(PAGE_C)
   ? ok("a queued row re-reads its own title when it renders")
   : bad("the row still shows only the stored parse");
-/const target = picked \?\? readDay;/.test(PAGE_C)
-  ? ok("…and Assign opens on that day")
+/* EDITED 2026-09-11, BEHAVIOUR CHANGED ON PURPOSE FOR ONE CLASS OF TITLE. Was
+ * /const target = picked \?\? readDay;/. An "Untitled recording <stamp>" title re-reads to a date
+ * that is not the match's — the stamp is not a Central clock, measured 30 of 30, see
+ * docs/matchday-api-facts.md — so that one shape asks for the day instead. Every other title still
+ * opens on its re-read day, and that is what the first assertion still says. */
+/const target = picked \?\? \(stamp \? null : readDay\);/.test(PAGE_C)
+  ? ok("…and Assign opens on that day, unless the title is a camera stamp")
   : bad("Assign does not use the re-read day");
+/const stamp = isCameraStamp\(r\.subject\);/.test(PAGE_C)
+  && /const CAMERA_STAMP = \/\^untitled recording \\d\{4\}-\\d\{2\}-\\d\{2\}_\\d\{2\}-\\d\{2\}-\\d\{2\}\\b\/i;/.test(PAGE_C)
+  ? ok("…and the exception is exactly the untitled camera stamp, nothing broader")
+  : bad("the re-read day is skipped for something other than a camera stamp");
 /data-testid="veo-recent-picker"/.test(PAGE_C) && /nearby\.map/.test(PAGE_C)
   ? ok("…and when nothing reads, it asks for the day instead of dead-ending")
   : bad("a row with no readable date still opens onto nothing");

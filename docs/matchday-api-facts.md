@@ -5625,3 +5625,33 @@ to be established from the damage pattern. Worth closing.
 **Recovering a blanked venue:** `fin_member_spots` keeps `venue` and `city` as TEXT snapshots, and
 `fin_venue_fields.field_title_at_link` keeps the field title at mapping time. Between them venue 17
 was restored to `Hammond Park` / `Atlanta` from records rather than guesses.
+
+## AN UNTITLED VEO RECORDING'S STAMP IS NOT A CENTRAL MATCH TIME (2026-09-11)
+
+A film nobody titled arrives as `Untitled recording 2026-09-11_01-11-51 is ready to watch!`. The
+stamp is the camera's clock, and **it is not a Central wall clock**. Measured on production across
+all 30 `veo_recordings` rows of that shape (`GET /api/veo/recent?tab=needs|done&limit=500`, 236 rows
+total), against each row's `received_at` (a true instant — the email's arrival):
+
+| stamp read as | email arrives after the recording |
+|---|---|
+| UTC | **30 of 30** (shortest gap 133 min) |
+| Central (CDT, UTC−5) | **11 of 30** — the other 19 would have the email *before* the recording |
+
+So the stamp's zone is UTC or east of it (any offset ≥ UTC−2:13 fits). **Which one is UNKNOWN**: the
+recording page at `app.veo.co/matches/<slug>/` carries `og:title`, `og:image` and `og:description`
+and no timestamp (fetched 2026-09-11, recording `15c967e8-…`). Under every zone that fits, that film
+was the **Thursday Sep 10** evening in Central — not "Friday, September 11 · 11:00 PM", which is what
+`rereadTitle` reads it as.
+
+- **The ingest stores `parsed_code: "UNTITLED RECORDING"`** for some of these, with
+  `queue_reason: "unknown_code"` — 4 of the 30 store that code (the 3 newest, queued, plus one
+  since dismissed); the other 26 store `parsed_code: null`, 23 of them as `unparseable_subject`.
+  A stored `parsed_code` is therefore **not** evidence a code read — `unknown_code` is the ingest's
+  own verdict that it resolved to no field.
+- The Assign panel (`RecentAssign`, `isCameraStamp()` in `src/components/VeoDayOps.tsx`) now treats
+  these titles as carrying no date, time or code, and asks for the day.
+- **Still wrong, not fixed:** the collapsed queue row's sentence still prints the re-read date and
+  time for these, because `rereadTitle` and that sentence were out of scope.
+- `og:description` reads `Watch Matchday DAL matches on Veo` — the Veo club name may carry the city.
+  One page seen; not verified as a rule.

@@ -22,7 +22,7 @@
  * play glyph would have been the empty black box the brief forbids.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import MatchSidePanel, { MATCH_SIDE_PANEL_CSS, type PanelTab } from "@/components/MatchSidePanel";
 import { CITY_CODE_TO_DISPLAY } from "@/lib/scheduleReconcile";
@@ -210,13 +210,6 @@ export default function VeoDayOps() {
           <h1 className="h1">Veo</h1>
         </div>
         <div className="nav">
-          <button className="nb" data-testid="veo-prev" onClick={() => setDate(shiftDate(date, -1))} aria-label="Previous day">‹</button>
-          <div className="dt">
-            <b data-testid="veo-date">{longDate(date)}</b>
-            <span>{date === shiftDate(todayIso(), -1) ? "yesterday" : isToday ? "today" : date}</span>
-          </div>
-          <button className="nb" data-testid="veo-next" onClick={() => setDate(shiftDate(date, 1))} aria-label="Next day">›</button>
-          <button className="nb wide" onClick={() => setDate(todayIso())}>Today</button>
           {data && data.cities.length > 1 && (
             <select className="sel" data-testid="veo-city" value={city} onChange={(e) => { setCity(e.target.value); setOpenId(null); }}>
               <option value="all">All cities</option>
@@ -227,6 +220,11 @@ export default function VeoDayOps() {
           <button className="nb" onClick={() => void load(date)}>Refresh</button>
         </div>
       </div>
+
+      {/* SEVEN DAYS YOU CAN SEE, instead of two arrows that moved one day at a time and told you
+          nothing about any other day. The address bar still carries ?date= and nothing navigates —
+          same replaceState as before. */}
+      <WeekStrip date={date} onPick={setDate} />
 
       {/* TWO TILES, AND THE TALLY IS STILL THE FILTER. Clicking one narrows the list to its states;
           clicking it again clears. Of the seven that were here, four read zero on the day this was
@@ -402,6 +400,115 @@ export function rereadTitle(subject: string | null, slug: string): Reread | null
   };
 }
 
+/* ── THE WEEK STRIP ──────────────────────────────────────────────────────────────────────────
+ * Ryan: "Instead of day selector at top it should be more like calendar with easy change the days."
+ * Two arrows meant four clicks to reach last Thursday and no idea what was on any day you passed.
+ *
+ * EACH CHIP IS TWO BLOCKS, NOT INLINE SPANS. As inline spans inside a centred button, "MON" and "8"
+ * concatenate into MON8 — which is what the first mock shipped and the whole of what looked wrong.
+ * `display:block` on each, different size, different weight.
+ *
+ * ── THERE IS NO COUNT, AND THAT IS A MEASUREMENT RATHER THAN A SHORTCUT ──────────────────────
+ * The design called for a per-day count of films still needing a person. I built the route, ran it,
+ * and took it out again. Measured on production 2026-09-11:
+ *
+ *     156 queued recordings · only 33 carry a parsed_match_date at all
+ *     queued-with-a-date in the viewed week (Sep 7-13): ZERO — the most recent is Aug 30
+ *
+ * So the number that was cheap to compute is empty on the week anyone is actually looking at. The
+ * work is overwhelmingly in films whose title carried no date — the 96 unparseable_subject rows and
+ * their kin — and those belong to NO day, which is exactly why the Recently Uploaded queue is
+ * cross-day. A row of empty pills would point at nothing while costing a request per week change.
+ *
+ * The honest count is tally()'s "needs you", and that runs over buildDayRows: seven days of joins
+ * to draw a navigation control. The brief called shipping dates with no counts "a perfectly good
+ * outcome" and the data agrees. If this is revisited, the number to compute is the one the label
+ * claims — not the one that happens to be one query away. */
+function WeekStrip({ date, onPick }: { date: string; onPick: (d: string) => void }) {
+  const today = todayIso();
+  // Monday-first, from the selected day's own week.
+  const monday = useMemo(() => {
+    const [y, m, d] = date.split("-").map(Number);
+    const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=Sun
+    return shiftDate(date, -((dow + 6) % 7));
+  }, [date]);
+  const week = useMemo(() => Array.from({ length: 7 }, (_, i) => shiftDate(monday, i)), [monday]);
+
+  return (
+    <div className="wk" data-testid="veo-week">
+      {week.map((d) => {
+        const dow = new Date(Date.parse(`${d}T00:00:00Z`)).getUTCDay();
+        return (
+          <button
+            key={d}
+            type="button"
+            data-testid={`veo-day-${d}`}
+            data-selected={d === date ? "1" : "0"}
+            data-today={d === today ? "1" : "0"}
+            aria-current={d === date ? "date" : undefined}
+            className={`wd${d === date ? " on" : ""}${d === today ? " today" : ""}`}
+            onClick={() => onPick(d)}
+          >
+            <span className="dw">{["SUN","MON","TUE","WED","THU","FRI","SAT"][dow]}</span>
+            <span className="dn">{Number(d.slice(8, 10))}</span>
+          </button>
+        );
+      })}
+      <span className="wsp" />
+      <button type="button" className="nb" data-testid="veo-prev-week"
+        onClick={() => onPick(shiftDate(date, -7))}>‹ Prev week</button>
+      <button type="button" className="nb" data-testid="veo-today" onClick={() => onPick(today)}>Today</button>
+      <button type="button" className="nb" data-testid="veo-next-week"
+        onClick={() => onPick(shiftDate(date, 7))}>Next week ›</button>
+    </div>
+  );
+}
+
+/* ── queue_reason IS AN ENUM AND IT IS PRINTED TO A PERSON ────────────────────────────────────
+ * "unknown_code" is a database value. It appears on the collapsed row and, before this, in the
+ * parse strip. Every phrasing below is for a value MEASURED in production on 2026-09-11 across all
+ * 236 veo_recordings rows — nothing here is invented for a value nobody has seen:
+ *
+ *     unparseable_subject  96    unknown_code     27    multiple_matches  14
+ *     (null)               80    field_mismatch   19
+ *
+ * post_failed is written by /api/veo/inbound and has never occurred, so it gets no hand-written
+ * phrasing. It falls through to the generic branch, which un-snakes the value rather than either
+ * inventing a sentence for it or printing the raw enum. */
+const QUEUE_REASON_LABEL: Record<string, string> = {
+  unparseable_subject: "the title could not be read",
+  unknown_code: "no field code in the title",
+  field_mismatch: "the field code did not match this day",
+  multiple_matches: "more than one match fitted",
+};
+
+export function queueReasonLabel(reason: string | null | undefined): string | null {
+  if (!reason) return null;
+  return QUEUE_REASON_LABEL[reason] ?? reason.replace(/_/g, " ");
+}
+
+/* ── A CAMERA STAMP IS NOT A MATCH DATE OR TIME ──────────────────────────────────────────────
+ * "Untitled recording 2026-09-11_01-11-51" is the camera naming a film nobody titled, and the stamp
+ * is NOT a Central wall clock. Measured on production 2026-09-11 across all 30 recordings of that
+ * shape, against their email's received_at (a true instant):
+ *
+ *     read as UTC      the email arrives AFTER the stamp in 30 of 30 (shortest gap 133 min)
+ *     read as Central  the email arrives BEFORE the recording in 19 of 30 — impossible
+ *
+ * So the zone is UTC or east of it — UNKNOWN which; the recording page on app.veo.co carries no
+ * timestamp to settle it. rereadTitle reads this row as "Friday, September 11 · 11:00 PM" when the
+ * film was almost certainly the Thursday evening, so the Assign panel must not use that date to pick
+ * the day, nor that time to rank candidates, nor print either as "read as". It asks for the day, as
+ * it already does for any title with no readable date.
+ *
+ * rereadTitle itself is untouched (it is on the must-not-change list), and so is the collapsed row's
+ * sentence — which still prints the misread. Stated in the report, not fixed here. */
+const CAMERA_STAMP = /^untitled recording \d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\b/i;
+
+export function isCameraStamp(subject: string | null | undefined): boolean {
+  return CAMERA_STAMP.test(subject ?? "");
+}
+
 const arrivedLabel = (iso: string | null): string => {
   if (!iso || !Number.isFinite(Date.parse(iso))) return "—";
   // The arrival is a TRUE INSTANT, so it is rendered in a named zone rather than in UTC — the
@@ -433,6 +540,16 @@ function RecentlyUploaded({ city, onOpenChat }: { city: string; onOpenChat: (api
   const [more, setMore] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
+  /* ONE REQUEST FOR THE WHOLE LIST, FROM HERE — not one per row. Ryan: "I need to be able to see
+   * the videos so i can decide where it goes. Anything untitled i have no idea." Thirty rows each
+   * calling /api/veo/thumb is thirty browser requests and thirty serverless invocations for one
+   * screen; /api/veo/thumbs takes the ids and scrapes them in parallel behind one call.
+   *
+   * IT RUNS AFTER THE LIST, NOT WITH IT. The posters are an aid to scanning, not the list itself,
+   * so the rows render immediately and the pictures arrive when they arrive. veo_recordings has no
+   * thumbnail column — measured — so a first-time poster costs an external page fetch, and making
+   * the list wait on that would trade a real delay for a cosmetic gain. */
+  const [posters, setPosters] = useState<Record<string, string | null>>({});
 
   useEffect(() => {
     let live = true;
@@ -459,6 +576,27 @@ function RecentlyUploaded({ city, onOpenChat }: { city: string; onOpenChat: (api
   }, [limit, tab, city, nonce]);
 
   const shown = rows ?? [];
+
+  /* Keyed on the ids on screen, so paging with "Load 30 more" fetches only the new ones — the
+   * route's own cache makes the already-seen ids free anyway, but this avoids re-sending them. */
+  const shownIds = shown.map((r) => r.id).join(",");
+  useEffect(() => {
+    if (!shownIds) return;
+    let live = true;
+    void (async () => {
+      try {
+        const res = await authFetch(`/api/veo/thumbs?ids=${encodeURIComponent(shownIds)}`);
+        if (!res.ok) return;
+        const j = await res.json();
+        const next: Record<string, string | null> = {};
+        for (const [id, v] of Object.entries((j.thumbs ?? {}) as Record<string, { thumbnail: string | null }>)) {
+          next[id] = v?.thumbnail ?? null;
+        }
+        if (live) setPosters((p) => ({ ...p, ...next }));
+      } catch { /* no poster is a box, not an error — see RecentRowView */ }
+    })();
+    return () => { live = false; };
+  }, [shownIds]);
 
   return (
     <section className="recent" data-testid="veo-recent">
@@ -501,7 +639,7 @@ function RecentlyUploaded({ city, onOpenChat }: { city: string; onOpenChat: (api
           and again on the confirm. WARN, DO NOT BLOCK: overriding it is legitimate, and so is the
           case where they really are two different films. */}
       {shown.map((r) => <RecentRowView key={r.id} r={r} open={openId === r.id}
-        onOpenChat={onOpenChat}
+        onOpenChat={onOpenChat} poster={posters[r.id]}
         twins={shown.filter((x) => x.id !== r.id && x.subject === r.subject).length}
         onToggle={() => setOpenId(openId === r.id ? null : r.id)}
         onDone={() => { setOpenId(null); setNonce((n) => n + 1); }} />)}
@@ -523,9 +661,12 @@ function RecentlyUploaded({ city, onOpenChat }: { city: string; onOpenChat: (api
   );
 }
 
-function RecentRowView({ r, open, onToggle, onDone, twins, onOpenChat }: {
+function RecentRowView({ r, open, onToggle, onDone, twins, onOpenChat, poster }: {
   r: RecentRow; open: boolean; onToggle: () => void; onDone: () => void; twins: number;
   onOpenChat: (apiId: number) => void;
+  /* undefined = not fetched yet · null = fetched, this film has no published still frame. Both
+     render the SAME empty box, so a row never changes height when the picture lands. */
+  poster?: string | null;
 }) {
   const matchDay = r.match?.day ?? null;
   // Read again, in memory. See rereadTitle: display and Assign only, never a write.
@@ -604,6 +745,19 @@ function RecentRowView({ r, open, onToggle, onDone, twins, onOpenChat }: {
     <div className={`rrow ${RECENT_STATE_TONE[r.state]}${open ? " open" : ""}${tabOf(r.state) === "done" ? " done" : ""}`}
       data-testid="veo-recent-row" data-state={r.state} data-tab={tabOf(r.state)} data-recording-id={r.id}>
       <div className="rtop">
+        {/* THE FILM, ON THE COLLAPSED ROW. 88px, 16:9, reusing the stage's own .thumb rules rather
+            than a second set — a grid track auto-sizing to an image is the bug that bit the field
+            cover, so the box is sized and the image is absolutely positioned inside it.
+            NO PLAY TRIANGLE. This is a picture of the film, not a control: pressing it opens the
+            row, exactly like Assign, and the film plays in the panel. A triangle here would promise
+            a play that does not happen. */}
+        <span className="qpo thumb" data-testid="veo-recent-poster" data-has={poster ? "1" : "0"}
+          onClick={onToggle} aria-hidden>
+          {poster
+            // eslint-disable-next-line @next/next/no-img-element
+            ? <img src={poster} alt="" data-testid="veo-recent-poster-img" />
+            : null}
+        </span>
         <span className="rwhen">
           <b>{arrivedLabel(r.receivedAt)}</b>
           {/* HOW LATE THE FILM WAS — Veo's clock. Same-day and next-day are the normal case and
@@ -626,9 +780,9 @@ function RecentRowView({ r, open, onToggle, onDone, twins, onOpenChat }: {
               : rereadRescues && reread
                 ? <span data-testid="veo-recent-reread">
                     reads now as <b>{reread.code}</b> · {longDate(reread.date as string)}{reread.timeLabel ? ` · ${reread.timeLabel}` : ""}
-                    {r.queueReason && <> · queued on arrival as <s data-testid="veo-recent-was">{r.queueReason}</s>, before the parser learned this shape</>}
+                    {r.queueReason && <> · queued on arrival as <s data-testid="veo-recent-was">{queueReasonLabel(r.queueReason)}</s>, before the parser learned this shape</>}
                   </span>
-                : <>went nowhere{r.queueReason ? ` · ${r.queueReason}` : ""}{day ? ` · for ${day}` : ""}</>}
+                : <>went nowhere{r.queueReason ? ` · ${queueReasonLabel(r.queueReason)}` : ""}{day ? ` · for ${day}` : ""}</>}
             {twins > 0 && (
               <em className="twin" data-testid="veo-recent-twin"> · {twins} other on this page has the same title</em>
             )}
@@ -645,10 +799,9 @@ function RecentRowView({ r, open, onToggle, onDone, twins, onOpenChat }: {
           {RECENT_STATE_LABEL[r.state]}
         </span>
         <span className="ractions">
-          {/* BACK TO ITS OWN DAY. That is the whole point of finding it here. */}
-          {/* "Its day" read as a possessive and gave no clue it was a link. The noun stays so it
-              cannot be mistaken for a video play control on a page full of films. */}
-          {day && <a className="btn" data-testid="veo-recent-day" href={`/match-ops/veo?date=${day}`}>View day</a>}
+          {/* VIEW DAY IS GONE. Ryan: "we can completely remove the view day which is crap". It
+              full-page navigated away from the queue you were working, to reach a day that is now
+              one chip in the week strip. */}
           {/* THE THREAD IT LANDED IN. The row already names the match; this is looking at where.
               A queued row with no match gets none — there is no thread to open yet. */}
           {r.match && (
@@ -694,16 +847,33 @@ function RecentAssign({ r, onDone, day: readDay, twins, onOpenChat }: {
   r: RecentRow; onDone: () => void; day: string | null; twins: number; onOpenChat: (apiId: number) => void;
 }) {
   const [dayData, setDayData] = useState<Payload | null>(null);
-  const [confirming, setConfirming] = useState<AssignCandidate | null>(null);
+  // `confirming` moved into CandidateList — see its header. Three copies became none.
   const { busy, err, assign, dismiss } = useAssign(r.id, onDone);
   /* THE DAY COMES FROM THE RE-READ WHEN THE STORED PARSE HAS NONE. When even that reads nothing,
    * the operator picks the day — which is a perfectly good input the page simply never asked for.
    * Assign is no longer a control that opens onto nothing. */
   const [picked, setPicked] = useState<string | null>(null);
-  const target = picked ?? readDay;
-  const reread = useMemo(() => rereadTitle(r.subject, r.slug), [r.subject, r.slug]);
+  // A camera stamp reads as a date and time that are not the match's — see isCameraStamp.
+  const stamp = isCameraStamp(r.subject);
+  const target = picked ?? (stamp ? null : readDay);
+  const reread = useMemo(() => (stamp ? null : rereadTitle(r.subject, r.slug)), [stamp, r.subject, r.slug]);
+  // The same number the collapsed row shows in veo-recent-wait, derived the same way.
+  const wait = waitDays(r.receivedAt);
+  /* A CODE ONLY COUNTS IF SOMETHING SAYS IT NAMES A FIELD. Two sources:
+   *   - the ingest's stored code, UNLESS the ingest itself queued it as unknown_code — that is its
+   *     verdict that the code resolved to no field. Measured: the untitled row stores parsed_code
+   *     "UNTITLED RECORDING" with queue_reason unknown_code, and trusting it printed exactly that.
+   *     A field_mismatch code is a real code on the wrong field, and it did read.
+   *   - a re-read code that is one of the target day's own codes (VeoDayRow.code is the veo_codes
+   *     code whose field_ids contain that match's field). */
+  const codeRead = useMemo(() => {
+    if (stamp) return null;
+    if (r.parsedCode && r.queueReason !== "unknown_code") return r.parsedCode;
+    const codes = new Set((dayData?.rows ?? []).map((x) => x.code));
+    return reread?.code && codes.has(reread.code) ? reread.code : null;
+  }, [stamp, r.parsedCode, r.queueReason, dayData, reread]);
   // The title's own time, re-read. Null when the title has none — the gap is then not invented.
-  const titleMinutes = reread?.timeMinutes ?? r.parsedTimeMinutes ?? null;
+  const titleMinutes = stamp ? null : (reread?.timeMinutes ?? r.parsedTimeMinutes ?? null);
 
   /* Days to offer when nothing reads: the day the film arrived and the three before it. Veo
    * processes overnight and the survey measured 18 same-day, 46 next-day and four at two to five,
@@ -732,7 +902,7 @@ function RecentAssign({ r, onDone, day: readDay, twins, onOpenChat }: {
     id: r.id, recordingId: r.recordingId, subject: r.subject, videoUrl: r.videoUrl,
     receivedAt: r.receivedAt, status: "queued", queueReason: r.queueReason,
     matchedApiId: null, candidateApiIds: r.candidateApiIds, score: r.score, scoreParts: null,
-    flagged: false, parsedCode: reread?.code ?? r.parsedCode, parsedMatchDate: r.parsedMatchDate,
+    flagged: false, parsedCode: stamp ? null : (reread?.code ?? r.parsedCode), parsedMatchDate: r.parsedMatchDate,
     // THE RE-READ TIME, so the gap on each candidate is measured against what the title says today.
     parsedTimeLabel: reread?.timeLabel ?? null, parsedTimeMinutes: titleMinutes, postedByUserId: null,
   };
@@ -768,11 +938,44 @@ function RecentAssign({ r, onDone, day: readDay, twins, onOpenChat }: {
               <button type="button" className="more" data-testid="veo-recent-repick" onClick={() => { setPicked(null); setDayData(null); }}>Choose another day</button>
             </p>
           )}
+          {/* ── WHAT THE TITLE ACTUALLY READ, AS FACTS ────────────────────────────────────────
+              Ryan: "Anything untitled i have no idea." Every chip here is data the page already
+              held and never showed together. Three of them are the pieces that READ; the fourth is
+              the one that did NOT, and it is marked differently because naming the missing piece is
+              what turns "I have no idea" into a decision — when the date and time read and the
+              field code did not, the candidate list is the whole day and you pick by time.
+
+              A PIECE THAT READ FINE GETS A PLAIN CHIP AND NO APOLOGY, and a title that genuinely
+              carried a code gets NO missing-code chip — three chips is then the right number.
+              The raw queue_reason enum is never printed here.
+
+              AN UNTITLED CAMERA STAMP READS NOTHING. It prints no "read as" date or time — the
+              stamp is not the match's clock, see isCameraStamp — and gets two marked chips, not
+              one: no field code, and no match date or time. */}
+          <div className="parse" data-testid="veo-parse">
+            {reread?.date && <span className="kv" data-testid="veo-parse-date">read as <b>{longDate(reread.date)}</b></span>}
+            {reread?.timeLabel && <span className="kv" data-testid="veo-parse-time">read as <b>{reread.timeLabel}</b></span>}
+            {/* Printing "read as UNTITLED RECORDING" — which the first build did, measured — is the
+                page claiming to have read something it did not. See codeRead for what counts. */}
+            {codeRead
+              ? <span className="kv" data-testid="veo-parse-code">read as <b>{codeRead}</b></span>
+              : <span className="kv miss" data-testid="veo-parse-nocode">no field code in the title</span>}
+            {stamp
+              ? <span className="kv miss" data-testid="veo-parse-notime">no match date or time in the title</span>
+              : !reread && (
+                <span className="kv miss" data-testid="veo-parse-none">
+                  {queueReasonLabel(r.queueReason) ?? "the title could not be read"}
+                </span>
+              )}
+            {wait != null && <span className="kv" data-testid="veo-parse-wait">{waitLabel(wait)}</span>}
+          </div>
+
           {/* THE FILM, BESIDE THE CHOICE. The same player the day view uses — one player, not two. */}
           <div className="assignwrap" data-testid="veo-recent-assignwrap">
             <FilmPlayer rec={rec} fallbackTitle={r.subject ?? r.recordingId} />
             <div>
-              <CandidateList rec={rec} data={dayData} busy={busy} onPick={setConfirming} onOpenChat={onOpenChat} />
+              <CandidateList rec={rec} data={dayData} busy={busy} twins={twins}
+                onAssign={(apiId) => void assign(apiId)} onOpenChat={onOpenChat} />
             </div>
           </div>
         </>
@@ -781,10 +984,6 @@ function RecentAssign({ r, onDone, day: readDay, twins, onOpenChat }: {
         <button type="button" className="btn" data-testid="veo-recent-dismiss" disabled={busy} onClick={() => void dismiss()}>Not our film</button>
       </div>
       {err && <p className="warn">{err}</p>}
-      {confirming && (
-        <Confirm rec={rec} target={confirming} busy={busy} twins={twins}
-          onCancel={() => setConfirming(null)} onGo={() => void assign(confirming.apiId)} />
-      )}
     </div>
   );
 }
@@ -866,11 +1065,27 @@ function Confirm({ rec, target, busy, onCancel, onGo, twins = 0 }: {
  * candidate_api_ids: for a multiple_matches recording those are exactly the matches the matcher
  * weighed and could not separate, so the common case is two lines and one click. Sorting them in
  * with the rest of the day would destroy the only thing that makes them the top two. */
-function CandidateList({ rec, data, busy, onPick, onOpenChat }: {
-  rec: VeoDayRecording; data: Payload; busy: boolean; onPick: (c: AssignCandidate) => void;
-  onOpenChat?: (apiId: number) => void;
+/* THE CONFIRM LIVES HERE NOW, AND THAT IS THE WHOLE OF THE FIX. Ryan: "when i click the assign
+ * button it doesnt even work" … "nevermind it does you have to click post it which is hard to see".
+ * It was rendered after the panel's own footer — past every other candidate — so pressing Assign on
+ * a candidate in the middle of a long list opened a confirm below the fold. The button read as
+ * broken.
+ *
+ * Lifting `confirming` in here fixes three call sites at once: RecentAssign, Orphan and Viewer each
+ * held an identical copy of the state and an identical `{confirming && <Confirm/>}` after their own
+ * content. They now pass `onAssign` and render nothing.
+ *
+ * ONE CONFIRM AT A TIME, by construction: it is a single piece of state, so pressing Assign on a
+ * second candidate MOVES it rather than opening a second. */
+function CandidateList({ rec, data, busy, onAssign, onOpenChat, twins = 0 }: {
+  rec: VeoDayRecording; data: Payload; busy: boolean; onAssign: (apiId: number) => void;
+  onOpenChat?: (apiId: number) => void; twins?: number;
 }) {
   const [showAll, setShowAll] = useState(false);
+  const [confirming, setConfirming] = useState<AssignCandidate | null>(null);
+  /* A CANDIDATE THAT LEFT THE LIST MUST NOT LEAVE ITS CONFIRM BEHIND. The day's candidates change
+   * when the operator picks a different day inside RecentAssign. */
+  useEffect(() => { setConfirming(null); }, [rec.id, data]);
   const shortlist = rec.candidateApiIds.map((id) => data.candidates[id]).filter(Boolean);
   const shortIds = new Set(shortlist.map((c) => c.apiId));
   const rest = Object.values(data.candidates)
@@ -884,8 +1099,8 @@ function CandidateList({ rec, data, busy, onPick, onOpenChat }: {
 
   const line = (c: AssignCandidate) => {
     const gap = gapLabel(c.minutes, rec.parsedTimeMinutes);
-    return (
-      <div className={`cand${gap === "exact" ? " exact" : ""}`} key={c.apiId} data-testid={`veo-cand-${c.apiId}`} data-gap={gap ?? ""}>
+    const row = (
+      <div className={`cand${gap === "exact" ? " exact" : ""}`} data-testid={`veo-cand-${c.apiId}`} data-gap={gap ?? ""}>
         <span className="ct">{c.time}</span>
         <span className="cn">
           <b>{c.name}</b>
@@ -909,8 +1124,18 @@ function CandidateList({ rec, data, busy, onPick, onOpenChat }: {
             onClick={(e) => { e.stopPropagation(); onOpenChat(c.apiId); }}>Chat</button>
         )}
         <button type="button" className={`btn${gap === "exact" ? " pri" : ""}`} data-testid={`veo-assign-${c.apiId}`}
-          disabled={busy} onClick={() => onPick(c)}>Assign</button>
+          disabled={busy} onClick={() => setConfirming(confirming?.apiId === c.apiId ? null : c)}>Assign</button>
       </div>
+    );
+    /* IMMEDIATELY UNDER THE ROW WHOSE ASSIGN WAS PRESSED — a fragment, so the confirm is a sibling
+     * of the .cand rather than nested inside its grid. */
+    if (confirming?.apiId !== c.apiId) return row;
+    return (
+      <Fragment key={`w-${c.apiId}`}>
+        {row}
+        <Confirm rec={rec} target={confirming} busy={busy} twins={twins}
+          onCancel={() => setConfirming(null)} onGo={() => onAssign(confirming.apiId)} />
+      </Fragment>
     );
   };
 
@@ -942,7 +1167,6 @@ function Orphan({ u, data, open, onToggle, onDone, onOpenChat }: {
   onDone: () => void;
   onOpenChat: (apiId: number) => void;
 }) {
-  const [confirming, setConfirming] = useState<AssignCandidate | null>(null);
   const { busy, err, assign, dismiss } = useAssign(u.id, onDone);
 
   const stray = u.matchedApiId != null ? data.strays[u.matchedApiId] : undefined;
@@ -971,7 +1195,8 @@ function Orphan({ u, data, open, onToggle, onDone, onOpenChat }: {
 
       {open && (
         <div className="assign" data-testid="veo-assign-panel">
-          <CandidateList rec={u} data={data} busy={busy} onPick={setConfirming} onOpenChat={onOpenChat} />
+          <CandidateList rec={u} data={data} busy={busy}
+            onAssign={(apiId) => void assign(apiId)} onOpenChat={onOpenChat} />
           <div className="assignfoot">
             <button type="button" className="btn" data-testid="veo-dismiss" disabled={busy} onClick={() => void dismiss()}>Not our film</button>
           </div>
@@ -979,11 +1204,6 @@ function Orphan({ u, data, open, onToggle, onDone, onOpenChat }: {
         </div>
       )}
 
-      {confirming && (
-        <Confirm rec={u} target={confirming} busy={busy}
-          onCancel={() => setConfirming(null)}
-          onGo={() => void assign(confirming.apiId)} />
-      )}
     </div>
   );
 }
@@ -1151,7 +1371,11 @@ function Viewer({ r, data, onDone, onOpenChat }: { r: VeoDayRow; data: Payload; 
   const trace = scoreTrace(rec?.scoreParts ?? null);
   const posted = r.state === "posted" || r.state === "flagged" || r.state === "assigned";
   const [picking, setPicking] = useState(false);
-  const [confirming, setConfirming] = useState<AssignCandidate | null>(null);
+  /* THE CANDIDATE CONFIRM MOVED INTO CandidateList, which renders it under the row that was
+   * pressed. This one is a DIFFERENT question and stays: "Send to the chat" posts the film into
+   * THIS row's own match, which is not a candidate in that list at all. It renders immediately
+   * after the button that opens it, which is the same principle. */
+  const [sending, setSending] = useState<AssignCandidate | null>(null);
   // Hooks are unconditional; the id is a placeholder when there is nothing to assign, and every
   // control that could call it is absent in that case.
   const { busy, err, assign, dismiss, clearFlag } = useAssign(rec?.id ?? "", onDone);
@@ -1207,7 +1431,7 @@ function Viewer({ r, data, onDone, onOpenChat }: { r: VeoDayRow; data: Payload; 
                 className="btn pri"
                 data-testid="veo-send-to-chat"
                 disabled={busy || !thisMatch}
-                onClick={() => thisMatch && setConfirming(thisMatch)}
+                onClick={() => thisMatch && setSending(thisMatch)}
               >
                 Send to the chat
               </button>
@@ -1220,21 +1444,22 @@ function Viewer({ r, data, onDone, onOpenChat }: { r: VeoDayRow; data: Payload; 
             <span className="find" data-testid="veo-find-film">Find the film</span>
           )}
         </div>
+        {/* DIRECTLY UNDER THE BUTTON THAT OPENED IT, for the same reason the candidate confirm
+            moved: a confirm rendered away from the click reads as a button that did nothing. */}
+        {rec && sending && (
+          <Confirm rec={rec} target={sending} busy={busy}
+            onCancel={() => setSending(null)} onGo={() => void assign(sending.apiId)} />
+        )}
         {/* THE POSTED NOTE IS GONE, BOTH BRANCHES. The pill already reads Posted or Posted,
             flagged, and a flagged row now carries a Confirm button in Recently uploaded, which
             says what to do about it better than a sentence could. */}
         {err && <p className="warn" data-testid="veo-assign-error">{err}</p>}
         {rec && !posted && picking && (
           <div className="assign" data-testid="veo-assign-panel">
-            <CandidateList rec={rec} data={data} busy={busy} onPick={setConfirming} onOpenChat={onOpenChat} />
+            <CandidateList rec={rec} data={data} busy={busy}
+              onAssign={(apiId) => void assign(apiId)} onOpenChat={onOpenChat} />
           </div>
         )}
-        {rec && confirming && (
-          <Confirm rec={rec} target={confirming} busy={busy}
-            onCancel={() => setConfirming(null)}
-            onGo={() => void assign(confirming.apiId)} />
-        )}
-
         {trace && rec?.score != null && (
           <div className="trace" data-testid="veo-trace" data-total={rec.score}>
             <h4>Why it scored {rec.score}</h4>
@@ -1276,6 +1501,35 @@ const CSS = MATCH_SIDE_PANEL_CSS + `
 .veo .h1{margin:0;font-size:23px;font-weight:800;letter-spacing:-.02em}
 .veo .hsub{margin:3px 0 0;color:var(--ink3);font-size:13px}
 .veo .nav{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+/* ── THE WEEK STRIP ─────────────────────────────────────────────────────────────────────────
+   flex-wrap so a phone drops the nav buttons onto their own line instead of scrolling the page. */
+.veo .wk{display:flex;gap:6px;align-items:stretch;margin:12px 0 10px;flex-wrap:wrap}
+.veo .wd{min-width:66px;border:1px solid var(--line);background:#fff;border-radius:10px;
+  padding:7px 9px 6px;cursor:pointer;text-align:center;line-height:1.15;position:relative;font:inherit;color:inherit}
+.veo .wd:hover{background:var(--bg)}
+/* THE THREE PIECES ARE BLOCKS. As inline spans they concatenate into MON812 — that shipped once
+   already and is the whole of what looked wrong. Three lines, three sizes, three weights. */
+.veo .wd .dw{display:block;font-size:9px;font-weight:800;letter-spacing:.1em;color:var(--ink3);text-transform:uppercase}
+.veo .wd .dn{display:block;font-size:17px;font-weight:800;margin-top:3px;font-variant-numeric:tabular-nums}
+/* SELECTED AND TODAY ARE DIFFERENT MARKS, because they are often the same day and often not:
+   selected is a filled chip, today is a ring. A chip that is both wears both. */
+.veo .wd.on{background:var(--ink1);border-color:var(--ink1);color:#fff}
+.veo .wd.on .dw{color:#8fb5a3}
+.veo .wd.today{border-color:var(--ok);box-shadow:inset 0 0 0 1px var(--ok)}
+.veo .wsp{flex:1}
+/* ── THE PARSE STRIP on the open assign panel ──────────────────────────────────────────────── */
+.veo .parse{margin:0 0 12px;display:flex;gap:7px;flex-wrap:wrap;align-items:center;font-size:12.5px;color:var(--ink2)}
+.veo .parse .kv{border:1px solid var(--line);background:var(--bg);border-radius:7px;padding:3px 9px}
+.veo .parse .kv b{font-weight:800}
+/* THE PIECE THAT DID NOT READ, marked. This is the chip that answers "I have no idea". */
+.veo .parse .kv.miss{border-color:#f0cfc3;background:#fdf3ef;color:var(--look)}
+@media (max-width:880px){
+  .veo .wd{min-width:0;flex:1 1 44px;padding:6px 4px}
+  .veo .nb{flex:1 1 auto}
+  /* The poster stays, the columns stack — a 88px picture is still the fastest way to tell two
+     untitled films apart on a phone. */
+  .veo .rtop{grid-template-columns:88px minmax(0,1fr);row-gap:8px}
+}
 .veo .nb{border:1px solid var(--line);background:#fff;border-radius:8px;min-width:32px;height:32px;padding:0 9px;
   font-size:14px;font-weight:700;color:var(--ink2);cursor:pointer}
 .veo .nb:hover{background:var(--bg)}
@@ -1439,7 +1693,16 @@ const CSS = MATCH_SIDE_PANEL_CSS + `
 /* THE ACTIONS TRACK SIZES TO ITS CONTENT. It was a fixed 132px, and two labels shrank and wrapped
    over two lines inside it, which made a flagged row 8px taller than every other row. The flexible
    track is the title and it is the one that gives, by truncating, as it already does. */
-.veo .rtop{display:grid;grid-template-columns:150px minmax(0,1fr) 118px 128px auto;gap:10px;align-items:center;padding:9px 12px}
+.veo .rtop{display:grid;grid-template-columns:88px 150px minmax(0,1fr) 118px 128px auto;gap:10px;align-items:center;padding:9px 12px}
+/* THE POSTER ON A COLLAPSED ROW. 88px wide and 16:9 by aspect-ratio, so the box exists at its full
+   height whether or not the picture ever lands — .qpo composes with .thumb, which already does
+   position:relative + the absolutely-positioned img. A row with no still frame is the SAME HEIGHT
+   as one with, which is the difference between a list and a ragged column. */
+.veo .qpo{width:88px;border-radius:7px;cursor:pointer;align-self:center}
+/* NO PLAY GLYPH HERE. The stage keeps its .play button; this is a picture, and pressing it opens
+   the row. Stated in CSS as well as in the markup so a later "add a play button" has to delete a
+   comment to do it. */
+.veo .qpo .play{display:none}
 .veo .rwhen{display:flex;flex-direction:column;min-width:0}
 .veo .rwhen b{font-size:12.5px;font-weight:800;font-variant-numeric:tabular-nums}
 .veo .rwhen em{font-style:normal;font-size:10.5px;font-weight:800;color:var(--flag)}

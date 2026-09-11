@@ -381,6 +381,11 @@ for (const r of ["list", "detail/[id]", "fields", "matches", "check"]) {
      * and its host is checked besides. Listed LAST because this map is compared key-order against
      * an alphabetical scan of the directory, and "thumb" sorts after "route.ts". */
     "veo/thumb/route.ts": "crm",
+    /* +1 for the queue posters. READ-ONLY, and the same crm gate as veo/thumb, veo/day and
+     * veo/recent beside it — it is veo/thumb batched for a list, and it writes nothing. It is on
+     * the confined
+     * allowlist: same data as veo/thumb, one round trip. */
+    "veo/thumbs/route.ts": "crm",
   });
   // and the one unauthenticated route really does compare its secret rather than merely mention it
   { const inbound = readFileSync("src/app/api/veo/inbound/route.ts", "utf8");
