@@ -5695,3 +5695,41 @@ other-city recordings and 4 candidates from Houston, San Antonio and Austin. Fix
 `/api/veo/recent`'s placement rule to `unplaced` (in-city match or code, else unconfined only) and the
 city filter to the stray lookup. `scripts/e2e/verify-veo-confined.mjs` fails 4 assertions against the
 old route and passes 18 against the new one.
+
+## `fin_venues`: WHAT IT REQUIRES, WHAT ITS RLS ACTUALLY ALLOWS, AND WHY ADD VENUE CANNOT WORK (2026-09-11)
+
+`POST /rest/v1/fin_venues` from the Field Ops drawer (`CitiesFieldsLens` → `buildFieldPayload`) sends
+seven columns: `venue_name, city, contact_name, contact_number, min_players, max_players,
+schedule_url`. **The table requires eight**, from PostgREST's own schema description
+(`GET /rest/v1/` with `Accept: application/openapi+json`):
+
+    required: id, venue_name, city, billing_type, charge_on_cancel, billing_cadence,
+              schedule_indefinite, bills_per_reservation
+
+`id` is `GENERATED ALWAYS` (supplying one fails 428C9, so it cannot be used to bounce a probe off the
+PK), and all of those except **`billing_type`** carry defaults. So every Add-venue save fails:
+
+    {"code":"23502","message":"null value in column \"billing_type\" of relation \"fin_venues\"
+      violates not-null constraint"}
+
+Reproduced 2026-09-11 with `dgarcia@playmatchday.com` (`is_admin: false`, `city_identifier: null`)
+and with `rmancuso@` — **identical for both, so it is not a permission problem** — and no row was
+created (38 rows before and after). What a new venue's `billing_type` should be is a money decision;
+it is not set anywhere in the drawer.
+
+**The RLS on `fin_venues` is more permissive than `0110`'s header claims.** That header says
+*"fin_venues already grants authenticated admins UPDATE"*. Measured with a non-admin authenticated
+session: `SELECT` returns rows, and `UPDATE … eq(id)` **succeeds** (sending the row's own current
+values, so nothing changed logically), as does the deactivate path's `is_active` write. **The policy
+TEXT is still UNKNOWN** — no migration creates it, there is no database URL or SQL-executing RPC in
+this repo, and `pg_policies` is not exposed through PostgREST. To settle it, run in the SQL editor:
+`select cmd, roles, qual, with_check from pg_policies where tablename = 'fin_venues';`
+
+**A DENIED UPDATE IS NOT AN ERROR.** An RLS `USING` clause filters the row out, so PostgREST returns
+0 rows and no error — a refusal that looks like success. Only a `WITH CHECK` failure or a missing
+grant raises 42501. Worth knowing before reading "it saved" off an empty response.
+
+**AND `String(e)` ON A SUPABASE ERROR IS `[object Object]`.** `PostgrestError` is a plain object, so
+`e instanceof Error` is false and the `String(e)` fallback prints that literal text — it reached a
+person on Field Ops. `errorText()` in `src/lib/errorText.ts` is the one helper; `scripts/error-text-test.ts`
+guards it. 39 other sites in 29 files still use the old fallback where a Supabase error can reach them.
