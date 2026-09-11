@@ -191,19 +191,34 @@ export type Link = { mdapi_field_id: number | null; fin_venue_id: number | null 
 export const isMapped = (fieldId: number, links: readonly Link[]) =>
   links.some((l) => Number(l.mdapi_field_id) === Number(fieldId));
 
-/** BOTH NUMBERS, because they answer different questions. "How many fields can no cost or revenue
- *  path see" and "how many of those are costing us money right now" are not the same, and the
- *  mockup showed only the second while labelling it the first. */
-export function unmappedSummary(
-  fields: readonly { id: number }[], links: readonly Link[], activeFieldIds: ReadonlySet<number>,
-): { unmapped: number[]; running: number[] } {
-  const unmapped = fields.filter((f) => !isMapped(f.id, links)).map((f) => f.id);
-  return { unmapped, running: unmapped.filter((id) => activeFieldIds.has(id)) };
-}
+/* unmappedSummary() STOOD HERE and is gone (2026-09-10) with the amber banner it fed. It counted
+ * fields with no fin_venue_fields row, and separately how many of those were running matches this
+ * month. The first number is now the Unmapped chip on the list, computed from mappedIds — the same
+ * set the VENUE column already uses. THE SECOND NUMBER HAS NO HOME: nothing reports which unmapped
+ * fields are costing money right now. If that matters it belongs on Field Cost, not here. */
 
 /** THE ORPHAN IN THE OTHER DIRECTION — a fin_venue_fields row pointing at a field that no longer
  *  appears in /admin/fields. This is the soft-delete consequence made visible: the API hides the
- *  field, our link row keeps pointing at it, and its cost silently attaches to nothing. */
+ *  field, our link row keeps pointing at it, and its cost silently attaches to nothing.
+ *
+ *  ── KEPT DELIBERATELY, WITH NO CALLER (2026-09-10) ───────────────────────────────────────────
+ *  The blue banner on the Fields list was the only surface anywhere in Clubhouse reporting these,
+ *  and it came off. This function is retained rather than deleted because the condition recurs
+ *  every time a field is soft-deleted upstream, and losing the ability to detect it is worse than
+ *  carrying an uncalled pure function that its own tests still exercise. It is not an oversight.
+ *
+ *  WHERE IT SHOULD SURFACE: Field Cost. That page owns fin_venue_fields — it is where a mapping is
+ *  created and edited — so a link pointing at a field that no longer exists is its problem to show
+ *  and its problem to clear. The Fields list could only ever report it.
+ *
+ *  ── AND THE CURRENT FINDING, SO IT IS NOT LOST WITH THE BANNER ───────────────────────────────
+ *  MEASURED 2026-09-10 against production via /api/fields: 46 live fields, 50 fin_venue_fields
+ *  rows, SEVEN of them orphaned —
+ *      field 991 -> venue 5     field 1222 -> venue 22    field 793 -> venue 50
+ *      field 298 -> venue 5     field 16   -> venue 49    field 21  -> venue 8
+ *      field 33  -> venue 1
+ *  Three fields were unmapped in the other direction: 1783, 397, 1684.
+ *  Nothing has been cleaned up; this records what was true on the day the banner was removed. */
 export const orphanLinks = (links: readonly Link[], liveFieldIds: ReadonlySet<number>) =>
   links.filter((l) => l.mdapi_field_id != null && !liveFieldIds.has(Number(l.mdapi_field_id)))
     .map((l) => ({ fieldId: Number(l.mdapi_field_id), venueId: l.fin_venue_id }));

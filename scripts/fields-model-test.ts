@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import {
   FORMATS, formatTotal, formatShort, formatLabel, recommendationReadout,
   createBody, updateBody, CREATE_KEYS, UPDATE_KEYS, SERVER_REQUIRED, missingRequired,
-  coerceZip, deleteBlock, validPhone, isMapped, unmappedSummary, orphanLinks,
+  coerceZip, deleteBlock, validPhone, isMapped, orphanLinks,
   phoneAuditNote, IMAGE_HOST,
 } from "../src/lib/fieldsModel";
 
@@ -153,13 +153,11 @@ console.log("\nvenue mapping, both directions");
   const fields = [{ id: 10 }, { id: 1684 }, { id: 397 }];
   is("a linked field is mapped", isMapped(10, links), true);
   is("an unlinked one is not", isMapped(1684, links), false);
-  const s = unmappedSummary(fields, links, new Set([1684]));
-  /* BOTH NUMBERS. "No venue mapping" and "running matches this month" are different questions;
-   * production is 3 and 1. The mockup showed the second and labelled it the first. */
-  is("the unmapped list is every unlinked field", s.unmapped, [1684, 397]);
-  is("…and the running subset is the ones with matches this month", s.running, [1684]);
-  /* THE ORPHAN THE OTHER WAY — our link points at a field the API no longer lists. That is the
-   * SOFT delete made visible; production has three (991, 1222, 793). */
+  /* THE unmappedSummary ASSERTIONS STOOD HERE and went with the function on 2026-09-10, when the
+   * amber banner they backed came off the list. Not restored against something that no longer
+   * exists; isMapped above is what the Unmapped chip now counts from and it is still asserted.
+   * orphanLinks below is KEPT — see the note on it — so its assertions stay, and they are now the
+   * only thing exercising it. */
   is("a link to a vanished field is an orphan", orphanLinks(links, new Set([10])), [{ fieldId: 991, venueId: 5 }]);
   is("control: a link to a live field is not", orphanLinks(links, new Set([10, 991])), []);
 }

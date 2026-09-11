@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   FORMATS, PITCH_OPTIONS, formatShort, recommendationReadout, missingRequired,
-  updateBody, deleteBlock, validPhone, orphanLinks, unmappedSummary,
+  updateBody, deleteBlock, validPhone,
   PHOTOS_READ_ONLY_NOTE, type Link,
 } from "@/lib/fieldsModel";
 
@@ -53,6 +53,11 @@ export default function FieldsView() {
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [city, setCity] = useState<number | null>(null);
+  /* REPLACES THE AMBER BANNER. The VENUE column already said Mapped/Unmapped per row, but the
+   * column is neither sortable nor filterable — the header is plain divs and the sort is fixed at
+   * city-then-name — so on 46 fields the only way to find the unmapped ones was to read a banner
+   * listing their ids and then hunt for them. This narrows the table to them instead. */
+  const [unmappedOnly, setUnmappedOnly] = useState(false);
 
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"new" | "edit">("new");
@@ -135,19 +140,15 @@ export default function FieldsView() {
     () => (data?.links ?? []).map((l) => ({ mdapi_field_id: l.fieldId, fin_venue_id: l.venueId })),
     [data]);
   const mappedIds = useMemo(() => new Set(linkList.map((l) => Number(l.mdapi_field_id))), [linkList]);
-  const liveIds = useMemo(() => new Set((data?.fields ?? []).map((f) => f.id)), [data]);
-  const activeIds = useMemo(() => new Set(data?.activeFieldIds ?? []), [data]);
+  const unmappedCount = useMemo(
+    () => (data?.fields ?? []).filter((f) => !mappedIds.has(f.id)).length, [data, mappedIds]);
 
-  /* THE BANNER IS TWO NUMBERS because they answer different questions. "No venue mapping" is a
-   * data gap; "and running matches this month" is the part that is costing money right now. The
-   * mockup showed only the second and labelled it the first. Both are counted from the real rows,
-   * never from a constant. */
-  const summary = useMemo(
-    () => unmappedSummary(data?.fields ?? [], linkList, activeIds),
-    [data, linkList, activeIds]);
-  /* THE ORPHAN IN THE OTHER DIRECTION — our link row points at a field the API no longer lists.
-   * That is what a SOFT delete leaves behind, and it is invisible everywhere else. */
-  const orphans = useMemo(() => orphanLinks(linkList, liveIds), [linkList, liveIds]);
+  /* summary (unmappedSummary) AND orphans (orphanLinks) WERE COMPUTED HERE, for the two banners
+   * that came off on 2026-09-10. liveIds and activeIds went with them — they existed only to feed
+   * those two calls. data.activeFieldIds is still sent by the route and nothing reads it now.
+   * orphanLinks itself is KEPT and unused; the note on it in fieldsModel.ts says why and where it
+   * should go. unmappedSummary is deleted — the Unmapped chip above counts the same fields from
+   * mappedIds, which the VENUE column already uses. */
 
   const counts = useMemo(() => {
     const m = new Map<number, number>();
@@ -159,9 +160,12 @@ export default function FieldsView() {
     const needle = q.trim().toLowerCase();
     return (data?.fields ?? [])
       .filter((f) => (city == null || f.cityId === city)
+        && (!unmappedOnly || !mappedIds.has(f.id))
         && (!needle || `${f.title} ${f.abbr} ${f.address} ${f.id}`.toLowerCase().includes(needle)))
       .sort((a, b) => (a.cityName ?? "").localeCompare(b.cityName ?? "") || a.title.localeCompare(b.title));
-  }, [data, q, city]);
+    // unmappedOnly AND mappedIds BOTH BELONG HERE. Without them the clause above is inert: the chip
+    // flipped aria-pressed and the table stayed at 46 rows, because the memo never recomputed.
+  }, [data, q, city, unmappedOnly, mappedIds]);
 
   const loadPhones = useCallback(async (fieldId: number) => {
     const h = await headers(); if (!h) return;
@@ -321,28 +325,23 @@ export default function FieldsView() {
             <button key={c.id} className={"fv-chip" + (city === c.id ? " on" : "")} data-testid={`fv-city-${c.id}`}
               onClick={() => setCity(c.id)}>{c.name} <span className="n">{counts.get(c.id) ?? 0}</span></button>
           ))}
+          {/* THE UNMAPPED FILTER. Offered only when there ARE unmapped fields, and it carries the
+              count — so on a clean estate the control is absent rather than a chip reading 0. */}
+          {unmappedCount > 0 && (
+            <button className={"fv-chip" + (unmappedOnly ? " on" : "")} data-testid="fv-unmapped-filter"
+              aria-pressed={unmappedOnly} title="Fields with no fin_venue_fields row — no cost or revenue path can attribute their matches"
+              onClick={() => setUnmappedOnly((v) => !v)}>Unmapped <span className="n">{unmappedCount}</span></button>
+          )}
           <button className="fv-add" data-testid="fv-new" onClick={openNew}>+ New field</button>
         </div>
 
-        {/* BOTH NUMBERS, from the real rows. */}
-        {data && summary.unmapped.length > 0 && (
-          <div className="fv-note" data-testid="fv-unmapped"
-            data-unmapped={summary.unmapped.length} data-running={summary.running.length}>
-            <span>⚠</span>
-            <div><b>{summary.unmapped.length} field{summary.unmapped.length === 1 ? "" : "s"} ha{summary.unmapped.length === 1 ? "s" : "ve"} no venue mapping</b>
-              {" · "}{summary.running.length} {summary.running.length === 1 ? "is" : "are"} running matches this month.
-              {" "}Without a <code>fin_venue_fields</code> row no cost or revenue path can attribute a field’s matches.
-              {" "}<span className="fv-ids">{summary.unmapped.join(", ")}</span></div>
-          </div>
-        )}
-        {data && orphans.length > 0 && (
-          <div className="fv-note blue" data-testid="fv-orphans" data-n={orphans.length}>
-            <span>ℹ</span>
-            <div>{orphans.length} venue mapping{orphans.length === 1 ? "" : "s"} point{orphans.length === 1 ? "s" : ""} at a field the API no longer lists
-              {" — "}<span className="fv-ids">{orphans.map((o) => o.fieldId).join(", ")}</span>.
-              {" "}Deleting a field is a SOFT delete: the row keeps existing, the list stops showing it, and our link keeps pointing at it.</div>
-          </div>
-        )}
+        {/* TWO BANNERS STOOD HERE and came off on 2026-09-10.
+            The amber one counted fields with no fin_venue_fields row; the VENUE column says
+            Mapped/Unmapped per row and the chip beside the city filter now narrows to them, which
+            is the same signal where you can act on it. WHAT THE BANNER ALSO SAID AND THIS DOES
+            NOT: how many of those are running matches THIS MONTH — unmappedSummary's second
+            number. Nothing surfaces that now; it needs a home on Field Cost if it matters.
+            The blue one is discussed at orphanLinks in fieldsModel.ts. */}
 
         <div className="fv-thead">
           <div>ID</div><div>Field</div><div>Abbr</div><div>City</div><div>Address</div><div>Format</div><div>Venue</div>
@@ -776,9 +775,6 @@ const CSS = `
 .fv-chip.on .n{color:#9FE0BB}
 .fv-add{background:#4FE07E;border:0;border-radius:999px;padding:8px 17px;font:inherit;font-weight:700;color:#08281A;cursor:pointer}
 .fv-add:disabled{background:#DCE5DF;color:#A9B8AF;cursor:not-allowed}
-.fv-note{display:flex;gap:9px;margin:12px 18px 0;padding:9px 13px;border-radius:9px;background:#FFF6E3;border:1px solid #F0DFB8;color:#7A4E06;font-size:12.5px}
-.fv-note.blue{background:#EFF6FF;border-color:#BBD6F6;color:#12406F}
-.fv-ids{font-variant-numeric:tabular-nums;font-weight:700}
 .fv-thead,.fv-row{display:grid;grid-template-columns:64px minmax(190px,1.6fr) 92px 128px minmax(170px,1.3fr) 96px 108px;align-items:center;padding:0 18px}
 .fv-thead{background:#F7FAF8;border-bottom:1px solid #E4EAE5;margin-top:12px}
 .fv-thead div{font-size:10.5px;font-weight:700;letter-spacing:.09em;color:#8C9E93;text-transform:uppercase;padding:10px 8px}
