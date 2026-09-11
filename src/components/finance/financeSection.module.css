@@ -457,3 +457,19 @@
   line-height: 1.5;
   color: color-mix(in srgb, var(--deep-green, #12352b) 55%, transparent);
 }
+
+/* An exclusion the operator has to be able to act on: amber, because something is wrong with the
+   data rather than with the money. Named venues and field ids, so it is a work item and not a
+   mood. Rendered only when unattributedVenues() is non-empty. */
+.unattributed {
+  margin: 0 0 14px;
+  padding: 10px 13px;
+  border: 1px solid #E3C98A;
+  border-left: 3px solid #C8922B;
+  border-radius: 8px;
+  background: #FDF8EC;
+  color: #4A3A18;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.unattributed strong { font-weight: 650; }

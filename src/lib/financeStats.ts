@@ -1,5 +1,5 @@
 import type { FinanceData, FinRevenue, FinVenue } from "./useFinanceData";
-import { preTaxOf } from "./salesTax";
+import { preTaxOf, isUnattributedCity } from "./salesTax";
 import type { MatchRow } from "./useMatchData";
 import type { JoinedMatchPlayerRow, LegacyMatchRegRow } from "./mdapiMatchesRead";
 import {
@@ -1883,6 +1883,13 @@ export function memberSpotRateFor(
   city: string,
   month: Q2Month,
 ): MemberSpotRate | null {
+  /* A VENUE WITH NO CITY IS EXCLUDED HERE, NOT DEFAULTED. Without this, a fin_venues row whose
+   * city column is blank reaches cityMembershipRevenuePreTaxFor -> preTaxOf and throws, taking the
+   * whole Revenue page to the error boundary — one unattributable venue killing every city's
+   * numbers. Returning null is this function's own existing vocabulary for "no rate available";
+   * every caller already handles it, and the exclusion is reported by unattributedVenues() so the
+   * operator gets a work item instead of a blank page. A REAL city with no rate still throws. */
+  if (isUnattributedCity(city)) return null;
   const basisMonth = priorMonthKey(month);
   if (!basisMonth) return null;
   const covered = data.mdapiMemberSpots.coveredMonths;
@@ -2716,4 +2723,40 @@ export function computeRevenuePerMatchTotal(
     dppPerMatch: matches > 0 ? dppTotal / matches : 0,
     mixPct: grossTotal > 0 ? (dppTotal / grossTotal) * 100 : 0,
   };
+}
+
+
+/* ── WHAT COULD NOT BE ATTRIBUTED TO A CITY, SO THE PAGE CAN SAY IT ──────────────────────────
+ * memberSpotRateFor now excludes a venue whose city is blank instead of throwing. An exclusion
+ * nobody can see is worse than the crash it replaced — the operator would read a smaller
+ * membership figure with nothing on screen explaining it — so this names the venues and the mdapi
+ * fields hanging off them, in the same spirit as useFinanceData's unresolved-venue warnings.
+ *
+ * Keyed on the venue rather than the match because that is where the join actually breaks: one
+ * blank fin_venues.city silently drops every field linked to it. */
+export type UnattributedVenue = {
+  venueId: number;
+  venueName: string;
+  fieldIds: number[];
+};
+
+export function unattributedVenues(data: FinanceData): UnattributedVenue[] {
+  const out: UnattributedVenue[] = [];
+  for (const v of data.venues) {
+    if (!isUnattributedCity(v.city)) continue;
+    const links = data.venueFieldLinks.filter((l) => Number(l.fin_venue_id) === Number(v.id));
+    /* THE LINK'S TITLE IS THE FALLBACK NAME, AND IT IS THE USEFUL ONE. The venue that caused this
+     * had venue_name blanked at the same moment its city was, so naming it "venue 17" told the
+     * operator nothing they could search for. fin_venue_fields.field_title_at_link is a snapshot
+     * taken when the field was mapped and survived the blanking — for venue 17 it reads
+     * "Hammond Park", which is the name the operator actually knows the place by. */
+    out.push({
+      venueId: v.id,
+      venueName: String(v.venue_name ?? "").trim()
+        || String(links.find((l) => String(l.field_title_at_link ?? "").trim())?.field_title_at_link ?? "").trim()
+        || "Unnamed venue",
+      fieldIds: links.map((l) => Number(l.mdapi_field_id)).sort((a, b) => a - b),
+    });
+  }
+  return out.sort((a, b) => a.venueId - b.venueId);
 }

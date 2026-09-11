@@ -34,6 +34,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { FinanceData } from "./useFinanceData";
 import { cityMembershipRevenuePreTaxFor } from "./financeStats";
+import { isUnattributedCity } from "./salesTax";
 import { mostRecentCompletedMonth } from "./quarters";
 import {
   fetchLegacyMatchRegistrations,
@@ -527,6 +528,14 @@ export async function fetchWeekMatchPnL(
   const cityBenchRate = new Map<string, number>();
   for (const b of buckets.values()) {
     if (cityBenchRate.has(b.city)) continue;
+    /* A BUCKET THAT RESOLVED TO NO CITY IS VALUED AT ZERO, NOT SENT TO THE TAX TABLE. b.city is
+     * `venue?.city ?? "—"` above, so it carries "—" for a match with no venue and "" for a venue
+     * row whose city column is blank — neither names a place, and preTaxOf throws on both. That
+     * throw is correct for a REAL city we hold no rate for and is untouched; this is the other
+     * case. Rate 0 gives these rows allocatedMemberRev = $0, which is the same treatment a city
+     * with no recorded member spots already gets, and no other city's rate is affected because
+     * the map is per city. */
+    if (isUnattributedCity(b.city)) { cityBenchRate.set(b.city, 0); continue; }
     const memberRev = cityMembershipRevenuePreTaxFor(data, b.city, benchMonth);
     const memberSpots =
       data.mdapiMemberSpots.byCityMonth.get(`${b.city}|${benchMonth}`)

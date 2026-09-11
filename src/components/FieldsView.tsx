@@ -297,7 +297,14 @@ export default function FieldsView() {
     const curVenueId: number | null = j.current?.venueId ?? null;
     setVenueCur(curVenueId);
     setSiblings(j.current?.siblings ?? []);
-    const row = (j.venues ?? []).find((v: { id: number }) => v.id === curVenueId) ?? {};
+    /* SEED FROM THE LINKED VENUE'S OWN ROW, NOT FROM A SEARCH OF THE PICKER LIST. That list is
+     * active-only, so a field linked to an inactive venue found nothing, seeded every box empty,
+     * and — because curVenueId is non-null, making the save a PATCH — wrote those blanks over a
+     * real row. That is how fin_venues 17 lost its name and city and took Revenue down with it.
+     * The route now sends `current.row` whatever the venue's is_active. */
+    const row = (j.current?.row
+      ?? (j.venues ?? []).find((v: { id: number }) => v.id === curVenueId)
+      ?? {}) as Record<string, unknown>;
     // THE SAME SHAPE EITHER WAY, so the form does not branch on whether a venue exists yet.
     const seed = {
       venue_name: row.venue_name ?? "", city: row.city ?? "", billing_type: row.billing_type ?? "per_match",

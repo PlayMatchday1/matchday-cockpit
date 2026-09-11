@@ -36,35 +36,10 @@
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { apiGet } from "@/lib/matchdayStageApi";
+import { pickVenueFields as pick, emptiedRequiredField } from "@/lib/venueWriteFields";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-/* THE COLUMNS THIS ROUTE WILL WRITE, and nothing else. An allowlist rather than a spread of the
- * request body: fin_venues carries columns that change how cost reconciliation aggregates, and a
- * field-setup drawer has no business setting them.
- *
- * DELIBERATELY ABSENT — billing_cadence and bills_per_reservation. Both feed financeCosts,
- * fieldEconomics and opexSources: cadence drives how a monthly_flat venue is amortised across
- * matches, and bills_per_reservation decides whether a multi-match reservation bills once or per
- * match. Neither is something you know while setting up a pitch, and a wrong value is a wrong
- * number in the P&L rather than a wrong label on a screen. They keep their column defaults
- * ('monthly' and false) on create and are edited on Field Costs.
- *
- * charge_on_cancel IS here: it is a per-venue yes/no the person setting the field up does know,
- * and it is in the approved mock. */
-const VENUE_FIELDS = [
-  "venue_name", "city", "billing_type", "per_match_rate", "hourly_rate", "cost_per_match",
-  "charge_on_cancel",
-  // The "on the day" half — same row, different question. 0074 added these.
-  "min_players", "max_players", "contact_name", "contact_number", "schedule_url",
-] as const;
-
-const pick = (src: Record<string, unknown>): Record<string, unknown> => {
-  const out: Record<string, unknown> = {};
-  for (const k of VENUE_FIELDS) if (k in src && src[k] !== undefined) out[k] = src[k];
-  return out;
-};
 
 /* GET IS MATCHOPS, THE WRITES ARE FINANCE — the split Ryan approved, and it is deliberate rather
  * than an oversight. A city manager seeing that a field has NO cost mapping is useful; a city
@@ -84,16 +59,40 @@ export async function GET(req: Request) {
   const { data: links } = await auth.supabase.from("fin_venue_fields").select("fin_venue_id, mdapi_field_id, field_title_at_link");
   const all = links ?? [];
 
-  let current: { venueId: number; siblings: { fieldId: number; title: string | null }[] } | null = null;
+  /* `row` IS WHY THIS SHAPE CHANGED, AND IT IS THE BUG THAT TOOK REVENUE DOWN ─────────────────
+   * The venue list above is deliberately is_active=true: an inactive venue must not be OFFERED as
+   * something to link a new field to. But `current.venueId` is read from fin_venue_fields, which
+   * has no such filter, so a field linked to an INACTIVE venue produced a current.venueId that
+   * matched nothing in `venues`. The drawer seeded its form from that lookup, got `{}`, and
+   * rendered every box empty — then saved, and because venueCur was non-null the save is a PATCH,
+   * which wrote those empty boxes over a populated row.
+   *
+   * MEASURED: that is exactly what happened to fin_venues 17 (Hammond Park, field 430) on
+   * 2026-09-11. venue_name and city were blanked to "", and a blank city reaches preTaxOf, which
+   * refuses by design — /admin/finance/revenue rendered its error boundary for every operator.
+   *
+   * So the linked venue's OWN ROW travels with `current`, whatever its is_active, and the drawer
+   * seeds from that instead of searching a list it may not be in. The picker keeps the
+   * active-only list; those are two different questions and they now have two different answers. */
+  let current: {
+    venueId: number;
+    row: Record<string, unknown> | null;
+    siblings: { fieldId: number; title: string | null }[];
+  } | null = null;
   if (Number.isInteger(fieldId) && fieldId > 0) {
     const mine = all.find((l) => Number(l.mdapi_field_id) === fieldId);
     if (mine) {
+      const { data: ownRow } = await auth.supabase
+        .from("fin_venues")
+        .select("id, venue_name, city, billing_type, per_match_rate, hourly_rate, cost_per_match, charge_on_cancel, min_players, max_players, contact_name, contact_number, schedule_url, is_active")
+        .eq("id", Number(mine.fin_venue_id)).maybeSingle();
       /* THE SIBLINGS ARE THE WHOLE POINT. fin_venue_fields is many-to-one (0041's own header says
        * so), so a venue can collect several pitches — Round Rock has three, Soccer Central four.
        * The drawer names them WITH THEIR IDS before showing values the operator cannot change,
        * because "this moves three other pitches" is not something to discover afterwards. */
       current = {
         venueId: Number(mine.fin_venue_id),
+        row: ownRow ?? null,
         siblings: all.filter((l) => Number(l.fin_venue_id) === Number(mine.fin_venue_id) && Number(l.mdapi_field_id) !== fieldId)
           .map((l) => ({ fieldId: Number(l.mdapi_field_id), title: l.field_title_at_link ?? null })),
       };
@@ -188,6 +187,20 @@ export async function PATCH(req: Request) {
   const patch = pick(body.patch ?? {});
   if (!Number.isInteger(id) || id <= 0) return Response.json({ error: "id required" }, { status: 400 });
   if (Object.keys(patch).length === 0) return Response.json({ error: "nothing to change" }, { status: 400 });
+
+  /* A PATCH MAY NEVER EMPTY THE TWO COLUMNS POST INSISTS ON. Belt to the GET's braces: a blank
+   * venue_name is a venue nobody can find, and a blank CITY is worse than cosmetic — city is the
+   * key every finance read path joins on, and an empty one reaches preTaxOf, whose refusal is
+   * deliberate and unconditional. One drawer save wrote both, and Revenue went to its error
+   * boundary for every operator until the row was repaired. Clearing a box is not a change you
+   * can make here; nothing else about the write is altered. */
+  const emptied = emptiedRequiredField(patch);
+  if (emptied) {
+    return Response.json({
+      error: `${emptied === "city" ? "City" : "Venue name"} cannot be emptied. Both are required on `
+        + "a venue — send a value or leave the field out of the patch. Nothing was written.",
+    }, { status: 400 });
+  }
 
   /* A SHARED VENUE IS EDITABLE FROM A FIELD'S DRAWER — corrected 2026-09-10, Ryan overruling his
    * own brief: "Make shared venue values editable from the Fields drawer, not read-only."

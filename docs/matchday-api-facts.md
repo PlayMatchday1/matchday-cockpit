@@ -5572,3 +5572,56 @@ monthly figures in this estate, check which side of this line each one sits on:
   division by 100 happens.
 - The column is nullable, so the null branch is kept as a defence — a create that omits the field
   would land one. It is not currently load-bearing.
+
+## A BLANK `fin_venues.city` TAKES /admin/finance/revenue DOWN, AND `?? "—"` DOES NOT CATCH IT (2026-09-11)
+
+**Evidence: reproduced on the live deploy (error boundary + `UnknownTaxCityError: No sales-tax rate
+for ""`), then traced with a stack capture on a local dev server reading the same production data.**
+
+The throwing path is NOT `matchPnL.ts:523`, which is the obvious suspect and was clean:
+
+```
+taxRateFor <- preTaxOf <- cityMembershipRevenuePreTaxFor <- memberSpotRateFor
+           <- venueAllocatedMemberRevenueFor <- memberSlice <- buildFieldMonths
+           <- RevenueSection.useMemo[fieldRows]
+```
+
+`matchPnL.ts:464` and `:616` both write `city: venue?.city ?? "—"`. **`??` is nullish, so an empty
+string flows straight through** — the sentinel only ever appears for a venue that is `null`. A
+`fin_venues` row that EXISTS with `city = ''` therefore yields `city: ""`, not `"—"`, and every
+downstream tax call gets an empty string.
+
+`memberSpotRateFor`'s existing `spots <= 0` guard does not save it: member spots are indexed on
+`${city}|${month}`, so a blank-city venue accumulates real spots under the key `"|May 2026"`
+(measured: Mar 22, Apr 33, May 6), which is `> 0`, and the function proceeds to the tax call.
+
+**One unattributable venue takes down the whole page** — Revenue reports eight cities and rendered
+nothing for any of them.
+
+- `preTaxOf`'s refusal is correct and stays. The distinction that matters is **a real city we hold
+  no rate for** (throw — /cities grew a market and `CITY_TAX_RATE` did not) versus **no city at
+  all** (`""` or `"—"` — a broken join, for which no rate could ever exist). `isUnattributedCity()`
+  in `salesTax.ts` draws that line; only the second is excluded, and it is reported on the page.
+- `cityPnl.ts:205` CANNOT receive this: its city comes from `CITY_DISPLAY_ORDER`, a curated list.
+  `SlateMatchPnLSection` and `matchPnL:523` both can — their city is a Match P&L row's.
+
+### How the row got blanked: an `is_active` mismatch between two queries in one route
+
+`GET /api/venues` lists venues with `.eq("is_active", true)` — correct, an inactive venue must not
+be offered as a link target. But `current.venueId` is read from `fin_venue_fields`, **which has no
+such filter**. A field linked to an INACTIVE venue produced a `venueId` matching nothing in the
+list, so the drawer seeded every box from `{}` and rendered them empty — and because `venueCur` is
+non-null the save is a **PATCH**, which wrote those blanks over a populated row.
+
+Measured on `fin_venues` 17 (Hammond Park, field 430): all eleven allowlisted columns were reset —
+five text columns to `''`, four numerics to `null` — while `notes`, `launch_date`, `max_spots`,
+`dpp_price` and `member_price` (not in the allowlist) survived untouched. That column-for-column
+signature is what identified the writer.
+
+**`/api/venues` does not call `recordWrite()`, so `change_log` has zero venue rows and
+`fin_venues` has no `updated_at`.** There is no audit trail for venue edits at all — the cause had
+to be established from the damage pattern. Worth closing.
+
+**Recovering a blanked venue:** `fin_member_spots` keeps `venue` and `city` as TEXT snapshots, and
+`fin_venue_fields.field_title_at_link` keeps the field title at mapping time. Between them venue 17
+was restored to `Hammond Park` / `Atlanta` from records rather than guesses.

@@ -11,6 +11,7 @@ import RevenueBasisNote from "@/components/RevenueBasisNote";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { cityMembershipRevenuePreTaxFor } from "@/lib/financeStats";
+import { isUnattributedCity } from "@/lib/salesTax";
 import { mostRecentCompletedMonth } from "@/lib/quarters";
 import {
   fetchWeekMatchPnL,
@@ -117,6 +118,12 @@ export default function SlateMatchPnLSection({ city }: { city: City }) {
   const benchmarkLabel = useMemo(() => {
     if (!data) return "";
     const { key: month, name } = mostRecentCompletedMonth();
+    /* NO CITY, NO BENCHMARK. `city` here comes from a Match P&L row, whose city is
+     * `venue?.city ?? "—"` — so it is "—" for a match with no venue and "" for a venue row with a
+     * blank city. Both used to reach preTaxOf and throw, taking the section down; a benchmark per
+     * member spot is meaningless without a city anyway. The refusal in salesTax.ts is unchanged
+     * for a real city we hold no rate for. */
+    if (isUnattributedCity(city)) return `${name} benchmark: no city resolved for these matches`;
     const memberRev = cityMembershipRevenuePreTaxFor(data, city, month);
     const memberSpots =
       data.mdapiMemberSpots.byCityMonth.get(`${city}|${month}`)?.member ?? 0;
@@ -128,6 +135,12 @@ export default function SlateMatchPnLSection({ city }: { city: City }) {
   const benchmarkLabelMobile = useMemo(() => {
     if (!data) return "";
     const { key: month, name } = mostRecentCompletedMonth();
+    /* NO CITY, NO BENCHMARK. `city` here comes from a Match P&L row, whose city is
+     * `venue?.city ?? "—"` — so it is "—" for a match with no venue and "" for a venue row with a
+     * blank city. Both used to reach preTaxOf and throw, taking the section down; a benchmark per
+     * member spot is meaningless without a city anyway. The refusal in salesTax.ts is unchanged
+     * for a real city we hold no rate for. */
+    if (isUnattributedCity(city)) return `${name} benchmark: no city resolved for these matches`;
     const memberRev = cityMembershipRevenuePreTaxFor(data, city, month);
     const memberSpots =
       data.mdapiMemberSpots.byCityMonth.get(`${city}|${month}`)?.member ?? 0;

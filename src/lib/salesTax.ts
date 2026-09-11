@@ -58,6 +58,28 @@ export class UnknownTaxCityError extends Error {
   }
 }
 
+/* ── NO CITY AT ALL vs A CITY WE HOLD NO RATE FOR ────────────────────────────────────────────
+ * These are different failures and only one of them is allowed to be swallowed.
+ *
+ * A REAL CITY WITH NO RATE still throws, and must: it means /cities grew a market and
+ * CITY_TAX_RATE did not, and reporting it at 0% would leave tax inside a pre-tax figure. That is
+ * the refusal this file exists for and nothing below softens it.
+ *
+ * NO CITY AT ALL is a broken join, not a missing rate. Two shapes reach the tax helpers:
+ *   ""  — a fin_venues row whose city column is blank. `venue?.city ?? "—"` does NOT catch this,
+ *         because "" is not nullish, so it flows straight through to preTaxOf.
+ *   "—" — matchPnL's sentinel for a bucket that resolved to no venue at all.
+ * Neither names a place, so no rate could ever exist for either, and asking for one is a category
+ * error rather than a gap in the table. Callers exclude these and SAY SO on the page; they do not
+ * quietly value them at zero.
+ *
+ * MEASURED 2026-09-11: fin_venues 17 (Hammond Park, field 430) carried city "" and took
+ * /admin/finance/revenue down with UnknownTaxCityError for every operator. */
+export const isUnattributedCity = (city: string | null | undefined): boolean => {
+  const s = String(city ?? "").trim();
+  return s === "" || s === "\u2014" || s === "-";
+};
+
 /** True when we hold a rate — including Warsaw, whose rate is a real 0 rather than a missing one. */
 export const hasTaxRate = (city: string | null | undefined): boolean =>
   city != null && Object.prototype.hasOwnProperty.call(CITY_TAX_RATE, city);

@@ -30,7 +30,7 @@ import {
   buildFieldCostSlots, buildFieldMonths, buildMatchRows, byCity, byField, canonCity, hasKickedOff,
   COST_BASIS_LABEL, type FieldMonth, type MatchRow,
 } from "@/lib/fieldEconomics";
-import { cityMembershipRevenueFor, memberAllocationReconFor, CITY_DISPLAY_ORDER, type Q2Month, type MemberReconRow } from "@/lib/financeStats";
+import { cityMembershipRevenueFor, memberAllocationReconFor, unattributedVenues, CITY_DISPLAY_ORDER, type Q2Month, type MemberReconRow } from "@/lib/financeStats";
 import { loadMembershipWindowsByUserId, type MembershipWindowsByUserId } from "@/lib/mdapiMatchesRead";
 import { isCityHidden } from "@/lib/types";
 import { downloadCsv, fmtMoney, fmtInt } from "@/components/growth/format";
@@ -83,6 +83,17 @@ export default function RevenueSection() {
     () => CITY_DISPLAY_ORDER.filter((c) => !isCityHidden(c)).map(canonCity),
     [],
   );
+
+  /* ── WHAT THIS PAGE COULD NOT ATTRIBUTE, SAID OUT LOUD ──────────────────────────────────────
+   * A fin_venues row with a blank city used to take this whole page to the error boundary:
+   * memberSpotRateFor handed "" to preTaxOf, which refuses by design. The refusal is right and is
+   * unchanged; the caller is what changed, and an unattributable venue is now excluded from the
+   * membership allocation instead of killing every other city's numbers.
+   *
+   * An exclusion nobody can see is the worse bug of the two, so it is named here with its fields.
+   * This renders only when there is something to report, and goes away the moment the venue gets
+   * a city — it is a work item, not furniture. */
+  const unattributed = useMemo(() => (data ? unattributedVenues(data) : []), [data]);
 
   const fieldRows = useMemo(
     /* NULL = NO REALIZED CUT, STATED RATHER THAN INHERITED. Finance › Cost counts only matches
@@ -561,6 +572,22 @@ export default function RevenueSection() {
 
   return (
     <div className={s.wrap} data-testid="finance-revenue">
+      {unattributed.length > 0 && (
+        <div className={s.unattributed} data-testid="revenue-unattributed">
+          <strong>
+            {unattributed.length === 1
+              ? "1 venue could not be attributed to a city"
+              : `${unattributed.length} venues could not be attributed to a city`}
+          </strong>{" "}
+          and {unattributed.length === 1 ? "is" : "are"} excluded from membership revenue.{" "}
+          {unattributed
+            .map((u) => `${u.venueName} (venue ${u.venueId}${u.fieldIds.length
+              ? `, field${u.fieldIds.length > 1 ? "s" : ""} ${u.fieldIds.join(", ")}`
+              : ", no fields linked"})`)
+            .join(" · ")}
+          . Set the city on Field Costs to bring {unattributed.length === 1 ? "it" : "them"} back in.
+        </div>
+      )}
       <div className={s.tiles}>
         <Tile
           testid="tile-revenue"
