@@ -56,17 +56,26 @@ async function main() {
   await p.goto(`${BASE}/match-ops/veo`, { waitUntil: "domcontentloaded" });
   await p.waitForSelector('[data-testid="veo-tally"]', { timeout: 240000 });
   await p.waitForFunction(() => !document.body.innerText.includes("Loading…"), { timeout: 120000 });
-  const shown = await p.$eval('[data-testid="veo-date"]', (e) => e.textContent.trim());
+  /* SELECTOR EDITS, itemised (2026-09-11). 31281af replaced the ‹ / date label / › header with a
+   * week strip, so `veo-date` and `veo-prev` no longer exist and this suite crashed on its first
+   * read. The selected day is now the chip marked data-selected="1", whose testid carries the ISO
+   * date; it is formatted to the same long form the label printed, so the comparisons below are
+   * the same comparisons. The one-day arrow has no successor — its replacement is Prev week, so
+   * that assertion now moves seven days instead of one. */
+  const selectedIso = () => p.$eval('[data-testid="veo-week"] [data-selected="1"]', (e) => e.dataset.testid.replace("veo-day-", ""));
+  const longForm = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" });
+  const shown = longForm(await selectedIso());
   const expected = (() => { const d = new Date(); d.setDate(d.getDate() - 1);
     return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }); })();
   is("the page opens on yesterday", shown, expected);
-  // The nav moves one day at a time.
-  await p.click('[data-testid="veo-prev"]');
-  await p.waitForFunction((was) => document.querySelector('[data-testid="veo-date"]').textContent.trim() !== was, shown, { timeout: 30000 });
-  const back = await p.$eval('[data-testid="veo-date"]', (e) => e.textContent.trim());
-  const twoBack = (() => { const d = new Date(); d.setDate(d.getDate() - 2);
+  // Prev week moves back seven days.
+  const wasIso = await selectedIso();
+  await p.click('[data-testid="veo-prev-week"]');
+  await p.waitForFunction((was) => document.querySelector('[data-testid="veo-week"] [data-selected="1"]')?.dataset.testid !== `veo-day-${was}`, wasIso, { timeout: 30000 });
+  const back = longForm(await selectedIso());
+  const weekBack = (() => { const d = new Date(); d.setDate(d.getDate() - 8);
     return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }); })();
-  is("‹ moves back exactly one day", back, twoBack);
+  is("‹ Prev week moves back exactly seven days", back, weekBack);
 
   /* ---- a real, busy day, addressed directly ----
    * The first version of this walked back with the ‹ button N times. Each click starts a fetch,
@@ -77,7 +86,7 @@ async function main() {
   await p.waitForSelector('[data-testid="veo-tally"]', { timeout: 120000 });
   await p.waitForFunction(() => !document.body.innerText.includes("Loading…"), { timeout: 180000 });
   await p.waitForTimeout(400);
-  is("?date= opens that day", await p.$eval('[data-testid="veo-date"]', (e) => e.textContent.trim()),
+  is("?date= opens that day", longForm(await selectedIso()),
     new Date(`${DAY}T12:00:00Z`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" }));
 
   const t = await readTally(p);
