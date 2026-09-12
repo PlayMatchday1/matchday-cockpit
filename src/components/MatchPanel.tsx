@@ -24,6 +24,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCancelMatch, cancelStakes } from "@/lib/useCancelMatch";
+import { useCreditEveryone, creditStakes } from "@/lib/useCreditEveryone";
+import { fmtUsd } from "@/lib/creditsModel";
+import { can } from "@/lib/capabilities";
 import MoneyInput from "@/components/MoneyInput";
 import { useAuth } from "@/lib/useAuth";
 import { matchEditAccess } from "@/lib/matchEditAccess";
@@ -714,6 +717,35 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
       if (landed) onCancelLanded?.();
     },
   });
+
+  /* ── CREDIT EVERYONE WHO PAID — A SECOND CALLER, NOT A SECOND IMPLEMENTATION ────────────────
+   * Ryan: "what happened to the credit button we talked about yesterday and made where is it? did
+   * i miss it" — then "we dont have a full match editor anymore this is where everything lives".
+   * He did not miss it. It shipped in 0b25b96 and works; it was on /match-ops/matches/[id], which
+   * is now reached from exactly two places (PlayerLookup and one Open match link on Veo). Gameday
+   * Ops opens THIS panel, so a control that moves money was effectively unreachable.
+   *
+   * NOTHING IN THE HOOK OR THE ROUTE CHANGES. useCreditEveryone was written as a hook precisely so
+   * a second surface could mount it, and this panel already runs the identical GET-preview /
+   * one-POST / verdict-from-the-re-read shape for useCancelMatch directly above. The plan, the
+   * breakdown, the idempotency and the run loop are all server-side and are not forked here.
+   *
+   * THE GATE IS THE EDITOR'S, VERBATIM. EDIT CREDITS is its own right — separate from EDIT MATCHES,
+   * which is what mayWrite above carries — and the route enforces it regardless; this is the
+   * courtesy half. */
+  const creditAll = useCreditEveryone({ env, matchId });
+  const canCredit = can(appUser as never, "editCredits", appUser?.email);
+  const canText = can(appUser as never, "sendMessages", appUser?.email);
+  /* ON A CANCELLED MATCH, ASK ONCE, so the refusal can say WHAT the cancel already credited and to
+   * how many. A live button beside a warning is how somebody pays twice, so the button is not
+   * rendered at all — but "nothing to hand back" is only worth printing with the figures behind
+   * it, and those come from the preview. Same effect the editor runs. */
+  const creditCancelled = orig?.isCancelled === true || cancel.preview?.alreadyCancelled === true;
+  useEffect(() => {
+    if (creditCancelled && canCredit && !creditAll.preview && !creditAll.busy) void creditAll.open();
+    // creditAll's identity is stable per render; open() is guarded by its own busy flag.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [creditCancelled, canCredit]);
 
   /* DATE or START TIME moves the whole match and keeps its length; END TIME changes the length
    * and moves nothing else. Both refuse to write a half-empty input: a cleared <input type=date>
@@ -2104,6 +2136,136 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
             </div>
           </Section>
 
+          {/* ── CREDIT EVERYONE WHO PAID — ITS OWN CARD, ABOVE THE DANGER ZONE ─────────────────
+              NOT INSIDE IT, and not its colour or its verb. Cancelling credits everybody AND texts
+              them AND ends the match; this leaves the record standing and hands the money back.
+              TWO MONEY ACTIONS THAT LOOK ALIKE IS ITS OWN FAILURE MODE, so this is a green card
+              with a green button and the word "credit", never "cancel". */}
+          <div className="mp-credit" data-testid="creditall-card">
+            <div className="mp-credit-hd">CREDIT EVERYONE WHO PAID</div>
+            {/* REFUSED ON A CANCELLED MATCH, NOT WARNED ABOUT. No button at all: the cancel already
+                credited these players and texted them, and a live button beside a warning is how
+                somebody pays twice. The sentence names what the cancel did and to how many. */}
+            {creditCancelled || creditAll.preview?.cancelled ? (
+              <>
+                <p className="mp-credit-line" data-testid="creditall-stakes"><b>Credit everyone who paid</b></p>
+                <div className="mp-note warn" data-testid="creditall-refused">
+                  {creditAll.preview?.refused
+                    ?? (creditAll.preview?.cancelCredited
+                      ? `Cancelled — the cancel already credited all ${creditAll.preview.cancelCredited.count} player${creditAll.preview.cancelCredited.count === 1 ? "" : "s"} ${fmtUsd(creditAll.preview.cancelCredited.totalCents)} and texted them. There is nothing to hand back.`
+                      : "Cancelled — the cancel already credited everyone who paid and texted them. There is nothing to hand back.")}
+                </div>
+              </>
+            ) : !creditAll.preview ? (
+              <>
+                <p className="mp-credit-line" data-testid="creditall-stakes">
+                  <b>Credit everyone who paid — the match happened, the manager did not.</b>
+                </p>
+                {/* DISABLED WITH THE REASON, not hidden. The route refuses without EDIT CREDITS
+                    regardless; a hidden button teaches nobody why. */}
+                <button type="button" className="mp-creditbtn" data-testid="creditall-btn"
+                  disabled={creditAll.busy || !canCredit}
+                  title={canCredit ? undefined : "Crediting players needs EDIT CREDITS."}
+                  onClick={() => void creditAll.open()}>
+                  {creditAll.busy ? "Reading…" : "Credit everyone who paid…"}
+                </button>
+                {!canCredit && <p className="mp-credit-sub" data-testid="creditall-nogate">Crediting players needs EDIT CREDITS.</p>}
+              </>
+            ) : creditAll.preview.refused ? (
+              <div className="mp-note warn" data-testid="creditall-refused">{creditAll.preview.refused}</div>
+            ) : (
+              /* YES / NO AND NOTHING TYPED. The breakdown under the count is the safeguard: a count
+                 alone cannot tell you the members were left out, and that is the number somebody
+                 has to be able to check before pressing. Grouped BY REASON, never one line per
+                 player. */
+              <div data-testid="creditall-confirm">
+                <p className="mp-credit-line" data-testid="creditall-stakes"><b>{creditStakes(creditAll.preview.plan)}</b></p>
+                <div className="mp-credit-bd" data-testid="creditall-breakdown">
+                  <div className="mp-bdr" data-pay="1">
+                    <span className="n">{creditAll.preview.plan.pay.length} get back what they gave up</span>
+                    <span className="why">card charge + any wallet credit they spent</span>
+                    <span className="amt">{fmtUsd(creditAll.preview.plan.totalCents)}</span>
+                  </div>
+                  {/* credit_amount IS CREDIT SPENT, NOT RECEIVED. A row that paid with its wallet is
+                      credited like everyone else, and the confirm says so on its own line. This is
+                      the rule that was INVERTED in the first draft, and it is the most dangerous
+                      thing on this card: skipping these rows denies a refund to exactly the players
+                      who had already spent their balance down. */}
+                  {creditAll.preview.plan.paidWithCreditCount > 0 && (
+                    <div className="mp-bdr" data-pay="1" data-testid="creditall-wallet">
+                      <span className="n">{creditAll.preview.plan.paidWithCreditCount} of those paid with wallet credit</span>
+                      <span className="why">refunded, not skipped</span>
+                      <span className="amt">{fmtUsd(creditAll.preview.plan.paidWithCreditCents)}</span>
+                    </div>
+                  )}
+                  {creditAll.preview.plan.skips.map((sk) => (
+                    <div className="mp-bdr" data-pay="0" data-testid="creditall-skip" data-reason={sk.reason} key={sk.reason}>
+                      <span className="n">{sk.count} player{sk.count === 1 ? "" : "s"}</span>
+                      <span className="why">{sk.reason}</span>
+                      <span className="amt">{fmtUsd(sk.cents)}</span>
+                    </div>
+                  ))}
+                </div>
+                {/* THE TEXT IS A SEPARATE TICK, OFF BY DEFAULT. It reaches real phones, so it is a
+                    thing somebody chose rather than a default. */}
+                <label className="mp-credit-tick" data-testid="creditall-notify-row">
+                  <input type="checkbox" data-testid="creditall-notify"
+                    checked={creditAll.notify}
+                    disabled={!canText || !creditAll.preview.notifyAvailable}
+                    onChange={(e) => creditAll.setNotify(e.target.checked)} />
+                  <span>Text the players
+                    <small>{!canText
+                      ? "Texting needs SEND MESSAGES."
+                      : !creditAll.preview.notifyAvailable
+                        ? "Off until the wording is approved. Cancelling sends its own text; this does not."
+                        : "Cancelling sends its own text; this does not."}</small>
+                  </span>
+                </label>
+                <div className="mp-credit-acts">
+                  {/* DISABLES ON CLICK: busy is set before the fetch and cleared only when it
+                      resolves. Writes never retry. */}
+                  <button type="button" className="mp-creditbtn mp-nowrap" data-testid="creditall-yes"
+                    disabled={creditAll.busy} onClick={() => void creditAll.run()}>
+                    {creditAll.busy ? "Crediting…" : `Yes, credit ${creditAll.preview.plan.pay.length}`}
+                  </button>
+                  <button type="button" className="mp-btn mp-nowrap" data-testid="creditall-no"
+                    onClick={creditAll.abort}>No</button>
+                </div>
+              </div>
+            )}
+            {creditAll.error && <div className="mp-note warn" data-testid="creditall-error" style={{ marginTop: 10 }}>{creditAll.error}</div>}
+            {/* ONE VERDICT PER PLAYER, READ BACK. A run of twenty can end half done — that is the
+                expected shape when retries are forbidden — so a single outcome over the run would
+                be a lie. PLAYER ID ONLY: no name, no phone, no email. */}
+            {creditAll.result && (
+              <div data-testid="creditall-done" style={{ marginTop: 10 }}>
+                <p className="mp-credit-line" data-testid="creditall-summary">
+                  <b>{creditAll.result.landed} credited {fmtUsd(creditAll.result.totalCreditedCents)}</b>
+                  {creditAll.result.aborted > 0 && <> · {creditAll.result.aborted} aborted</>}
+                  {creditAll.result.failed > 0 && <> · {creditAll.result.failed} failed</>}
+                  {creditAll.result.refusedPlayers > 0 && <> · {creditAll.result.refusedPlayers} outside your city</>}
+                </p>
+                <ul className="mp-credit-res" data-testid="creditall-results">
+                  {creditAll.result.results.map((r) => (
+                    <li key={r.userId} data-testid="creditall-result" data-v={r.verdict}>
+                      <span className="v" data-v={r.verdict}>{r.verdict}</span>
+                      <span>{r.detail ? `${r.detail} · ` : ""}player {r.userId}{r.cents > 0 ? ` · ${fmtUsd(r.cents)}` : ""}</span>
+                    </li>
+                  ))}
+                </ul>
+                {/* A SECOND RUN CREDITS ONLY WHAT DID NOT LAND, keyed on our OWN change_log rather
+                    than on the roster — the roster cannot tell a credited player from an uncredited
+                    one. */}
+                {(creditAll.result.aborted + creditAll.result.failed) > 0 && (
+                  <p className="mp-credit-sub" data-testid="creditall-again">
+                    Pressing it again credits only the {creditAll.result.aborted + creditAll.result.failed} that
+                    did not land — read back from our own change_log, not the roster.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* ── CANCEL (Part C) — the danger zone. Separate, immediate, irreversible. ── */}
           <div className="mp-danger" data-testid="mp-danger">
             <div className="mp-danger-hd">DANGER ZONE · CANCEL THE MATCH</div>
@@ -2244,6 +2406,11 @@ function Toggle({ id, on, dirty, onToggle, title, sub }: { id: string; on: boole
   );
 }
 
+/* NO BACKTICK MAY APPEAR ANYWHERE BELOW — this whole block is one template literal, and a
+   backtick in a COMMENT ends the string just as surely as one in a rule. It cost a build in
+   this session: a comment quoting .why and .n in backticks terminated the literal and tsc
+   reported "Property 'why' does not exist" on a CSS line. The same note is on VeoDayOps'
+   and GamedayBoard's sheets for the same reason. */
 const CSS = `
 .mp *{box-sizing:border-box}
 .mp [hidden]{display:none !important}
@@ -2774,6 +2941,56 @@ const CSS = `
 .mp-wres li[data-verdict="UNKNOWN"]{background:#fdf8ee;border-color:#dcbc71}
 .mp-wres .v{font-weight:800;letter-spacing:.04em;flex:0 0 auto;font-size:10px}
 /* ── CANCEL danger zone — the darkest treatment; separate from everything above ── */
+/* ── THE CREDIT CARD — DELIBERATELY NOT THE DANGER ZONE ────────────────────────────────────────
+   Two money actions that look alike is its own failure mode. The danger zone is #fbeeec behind a
+   #a4231e button; this is #f4faf6 behind #0d3b2e. Different surface, different button, different
+   verb — and it sits ABOVE the danger zone in DOM order so the reversible one is read first. */
+.mp-credit{margin:14px 16px 0;border:1px solid #cfe0d6;border-left:4px solid #0d3b2e;border-radius:11px;background:#f4faf6;padding:13px}
+.mp-credit-hd{font-size:10.5px;font-weight:800;letter-spacing:.12em;color:#0d3b2e;margin-bottom:10px}
+.mp-credit-line{margin:0 0 9px;font-size:12.5px;line-height:1.5;color:#12352b}
+.mp-credit-sub{margin:8px 0 0;font-size:11.5px;color:#5c7267}
+.mp-creditbtn{border:1px solid #0d3b2e;background:#0d3b2e;color:#fff;border-radius:9px;padding:0 16px;font:inherit;font-weight:700;cursor:pointer;min-height:44px}
+.mp-creditbtn:hover:not(:disabled){background:#0a2d23}
+.mp-creditbtn:disabled{opacity:.5;cursor:not-allowed}
+/* THE BREAKDOWN, GROUPED BY REASON. A count alone cannot be checked — it cannot tell you the
+   members were left out, and that is the figure somebody has to verify before pressing. */
+.mp-credit-bd{border:1px solid #dde9e2;border-radius:9px;background:#fff;margin:0 0 10px;overflow:hidden;
+  container-type:inline-size}
+.mp-bdr{display:grid;grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"n why amt";
+  gap:2px 10px;align-items:baseline;padding:7px 10px;border-top:1px solid #eef3f0;font-size:11.5px}
+.mp-bdr:first-child{border-top:0}
+.mp-bdr .n{grid-area:n;min-width:0;font-weight:650;overflow-wrap:anywhere}
+.mp-bdr .why{grid-area:why;color:#7c8f86;overflow-wrap:anywhere}
+.mp-bdr .amt{grid-area:amt;font-weight:750;font-variant-numeric:tabular-nums}
+/* ── THE REASON DROPS BELOW WHEN THE ROW CANNOT HOLD THREE ─────────────────────────────────────
+   MEASURED at a 390px panel, where the row is 298px: as one flex line the three came to 415px and
+   the WHY span — the secondary explanation, at flex:0 1 auto — took 213 of it while the N span,
+   the primary label, was squeezed to FOUR PIXELS: "13 get back what they gave up" as a sliver.
+   Stacked, the label keeps the width and the reason reads in full underneath.
+   A CONTAINER QUERY, NOT A MEDIA QUERY: this panel is the viewport on a phone but a 600px column
+   in a wide window, so the binding constraint is the row's own width, not the screen's. */
+@container (max-width: 360px) {
+  .mp-bdr{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n amt" "why why"}
+}
+/* THE ROWS THAT GET PAID ARE TINTED, the skips are not — the eye finds the money before the words. */
+.mp-bdr[data-pay="1"]{background:#f4faf6}
+.mp-credit-tick{display:flex;align-items:flex-start;gap:8px;margin:0 0 10px;font-size:12px;min-height:38px}
+.mp-credit-tick input{width:17px;height:17px;margin-top:2px;flex:none;accent-color:#0d3b2e}
+.mp-credit-tick small{display:block;color:#7c8f86;font-size:11px;margin-top:2px}
+/* YES FIRST, NO SECOND, AND BOTH 44px. wrap so a 390px panel stacks them rather than shrinking
+   the one that moves money. */
+.mp-credit-acts{display:flex;gap:8px;flex-wrap:wrap}
+.mp-credit-acts button{min-height:44px;min-width:72px}
+.mp-credit-res{list-style:none;margin:0;padding:0;border:1px solid #dde9e2;border-radius:9px;background:#fff;overflow:hidden}
+.mp-credit-res li{display:flex;gap:9px;align-items:baseline;padding:7px 10px;border-top:1px solid #eef3f0;font-size:11.5px}
+.mp-credit-res li:first-child{border-top:0}
+/* THREE DISTINCT COLOURS. A half-done run is the expected shape when retries are forbidden, so an
+   ABORTED must not read as a LANDED and a FAILED must not read as either. */
+.mp-credit-res .v{flex:none;width:86px;font-size:9.5px;font-weight:800;letter-spacing:.05em}
+.mp-credit-res .v[data-v="LANDED"]{color:#14603f}
+.mp-credit-res .v[data-v="ABORTED"]{color:#8a6112}
+.mp-credit-res .v[data-v="FAILED"]{color:#a4231e}
+.mp-credit-res .v[data-v="REFUSED"]{color:#a4231e}
 .mp-danger{margin:14px 16px 16px;border:1px solid #d8968f;border-left:4px solid #8a1a12;border-radius:11px;background:#fbeeec;padding:13px}
 .mp-danger-hd{font-size:10.5px;font-weight:800;letter-spacing:.12em;color:#8a1a12;margin-bottom:10px}
 .mp-cancelbtn{border:1px solid #8a1a12;background:#a4231e;color:#fff;border-radius:9px;padding:0 16px;font:inherit;font-weight:700;cursor:pointer;min-height:40px}
