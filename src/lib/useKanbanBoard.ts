@@ -17,7 +17,9 @@ import {
 } from "@/lib/kanban";
 
 export type CardPatch = Partial<
-  Pick<KanbanCard, "title" | "stage" | "owner_user_id" | "sort_order" | "data" | "stage_entered_at">
+  /* venue_id is here so the Field Pipeline can write the stage and the binding in ONE update — the
+   * move to Confirmed and the field it is about are one action, and two updates could half-land. */
+  Pick<KanbanCard, "title" | "stage" | "owner_user_id" | "sort_order" | "data" | "stage_entered_at" | "venue_id">
 >;
 
 export type NewCardInput = {

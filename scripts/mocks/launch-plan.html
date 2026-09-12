@@ -1,0 +1,483 @@
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Field launch plan</title>
+<style>
+  *{box-sizing:border-box}
+  .viz-root{
+    color-scheme:light;
+    --surface:#F4F7F5; --card:#ffffff; --line:#E3EAE6; --line-soft:#EEF3F0;
+    --ink:#12241d; --ink-2:#5c7267; --ink-3:#8b9a93;
+    --deep:#0d3b2e; --mint:#CFEEE0;
+    /* NO CATEGORICAL PALETTE FOR SCOPE, and that is a deliberate cut.
+       Seven scopes cannot be separated by hue: under --pairs all (the right mode
+       for chips in a list, where any two can end up side by side) green↔orange
+       is ΔE 3.2 for a protanope and pink↔orange is ΔE 12.9 for normal vision —
+       both below the floor. The validator says cut the series rather than
+       generate more hues, and the dot was never carrying anything: every scope
+       is spelled out beside it. So scope is a text chip and colour is spent
+       where it means something — state. */
+    /* status — reserved, never reused for identity, always icon + label */
+    --ok:#0ca30c; --warn:#fab219; --crit:#d03b3b;
+  }
+  body{margin:0;background:var(--surface);color:var(--ink);padding:14px;
+       font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:980px;margin:0 auto}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:12px}
+
+  /* ══ HERO — a single headline is a number, not a chart ════════════════════ */
+  .hero{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap}
+  .hid{min-width:0;flex:1 1 210px}
+  .fname{font-size:21px;font-weight:800;letter-spacing:-.022em;line-height:1.15}
+  .fmeta{margin-top:5px;font-size:12.5px;color:var(--ink-2)}
+  .phase{display:inline-flex;align-items:center;gap:6px;margin-top:9px;padding:4px 10px;
+         border-radius:999px;font-size:10.5px;font-weight:800;letter-spacing:.07em}
+  .phase[data-p="pre"]{background:#EAF2FB;color:#1b4f8c}
+  .phase[data-p="launch"]{background:#E3F6EC;color:#0a6b45}
+  .phase[data-p="post"]{background:#FBF2E4;color:#7a5200}
+  .count{flex:0 0 auto;text-align:right;min-width:132px}
+  .cnum{font-size:52px;font-weight:800;letter-spacing:-.045em;line-height:.92;
+        font-variant-numeric:tabular-nums;color:var(--deep)}
+  .clab{margin-top:5px;font-size:10.5px;font-weight:800;letter-spacing:.11em;color:var(--ink-2)}
+  .cdate{margin-top:3px;font-size:11.5px;color:var(--ink-3)}
+
+  /* ══ PROGRESS — a meter, with the overdue count as its own fact ═══════════ */
+  .prog{margin-top:16px;padding-top:14px;border-top:1px solid var(--line-soft)}
+  .pline{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:8px}
+  .pbig{font-size:14px;font-weight:750}
+  .pmut{font-size:12px;color:var(--ink-2)}
+  .pover{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:12px;
+         font-weight:750;color:var(--crit)}
+  .bar{height:10px;border-radius:5px;background:#EDF2EF;overflow:hidden;display:flex;gap:2px}
+  .bar i{display:block;height:100%;border-radius:5px}
+  .bar i.done{background:var(--ok)}
+  .bar i.over{background:var(--crit)}
+
+  /* ══ TIMELINE — magnitude over time, thin marks, recessive axis ═══════════ */
+  .tl{position:relative}
+  .tlhead{display:flex;align-items:baseline;gap:9px;margin-bottom:12px;flex-wrap:wrap}
+  .tlhead b{font-size:12.5px;font-weight:800;letter-spacing:-.01em}
+  .tlhead span{font-size:11.5px;color:var(--ink-2)}
+  .weeks{display:grid;grid-template-columns:repeat(20,1fr);gap:2px;align-items:end;height:74px}
+  .wk{position:relative;height:100%;display:flex;flex-direction:column;justify-content:flex-end}
+  .wk i{display:block;border-radius:4px 4px 0 0;background:#C9DCD2}
+  .wk[data-ph="launch"] i{background:var(--ok);opacity:.85}
+  .wk[data-ph="post"] i{background:#DCC9A8}
+  .wk[data-today="1"] i{outline:2px solid var(--deep);outline-offset:1px}
+  .wkaxis{display:grid;grid-template-columns:repeat(20,1fr);gap:2px;margin-top:5px}
+  .wkaxis span{font-size:8.5px;color:var(--ink-3);text-align:center;font-variant-numeric:tabular-nums}
+  .bands{display:grid;grid-template-columns:4fr 4fr 12fr;gap:2px;margin-top:9px}
+  .band{border-radius:6px;padding:5px 7px;font-size:9.5px;font-weight:800;letter-spacing:.06em;
+        text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .band[data-p="pre"]{background:#EAF2FB;color:#1b4f8c}
+  .band[data-p="launch"]{background:#E3F6EC;color:#0a6b45}
+  .band[data-p="post"]{background:#FBF2E4;color:#7a5200}
+  .band .sm{display:none}
+  @media(max-width:640px){ .band .lg{display:none} .band .sm{display:inline} }
+  .todayline{margin-top:9px;font-size:11px;color:var(--ink-2);display:flex;align-items:center;gap:6px}
+  .todaydot{width:8px;height:8px;border-radius:2px;background:var(--deep);flex:none}
+
+  /* ══ TASKS ════════════════════════════════════════════════════════════════ */
+  .grp{background:var(--card);border:1px solid var(--line);border-radius:16px;margin-bottom:12px;overflow:hidden}
+  .gh{width:100%;display:flex;align-items:center;gap:10px;padding:13px 16px;border:0;background:none;
+      font-family:inherit;cursor:pointer;text-align:left;min-height:52px}
+  .gh .gt{font-size:12px;font-weight:800;letter-spacing:.07em}
+  .gh .gw{font-size:11px;color:var(--ink-3);font-weight:650}
+  .gh .gc{margin-left:auto;font-size:11.5px;color:var(--ink-2);font-weight:700;
+          font-variant-numeric:tabular-nums;flex:none}
+  .gh .car{font-size:11px;color:var(--ink-3);flex:none}
+  .glist{padding:0 10px 10px}
+  .t{display:flex;gap:10px;align-items:flex-start;padding:10px;border-top:1px solid var(--line-soft)}
+  .t:first-child{border-top:0}
+  .tick{flex:none;width:22px;height:22px;border-radius:6px;border:1.5px solid #CFDBD4;background:#fff;
+        margin-top:1px;display:flex;align-items:center;justify-content:center;font-size:12px;
+        color:#fff;font-family:inherit;padding:0}
+  .t[data-done="1"] .tick{background:var(--ok);border-color:var(--ok)}
+  .tb{min-width:0;flex:1}
+  .tt{font-size:13px;font-weight:650;line-height:1.35}
+  .t[data-done="1"] .tt{color:var(--ink-3)}
+  .tm{margin-top:6px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .scope{font-size:10px;color:var(--ink-2);font-weight:750;background:#EEF3F0;
+         border-radius:5px;padding:2px 7px;letter-spacing:.02em}
+  .win{font-size:10.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+  .own{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:999px;
+       padding:2px 8px 2px 3px;background:#fff;font-family:inherit;font-size:10.5px;font-weight:700;
+       color:var(--ink-2);min-height:26px}
+  .own .av{width:19px;height:19px;border-radius:50%;background:var(--mint);color:var(--deep);
+           font-size:8px;font-weight:800;display:flex;align-items:center;justify-content:center;flex:none}
+  .own[data-unassigned="1"]{border-style:dashed;color:var(--ink-3)}
+  .own[data-unassigned="1"] .av{background:#EDF2EF;color:var(--ink-3)}
+  /* STATUS IS ICON + LABEL, never colour alone. */
+  .st{margin-left:auto;flex:none;display:inline-flex;align-items:center;gap:4px;font-size:10px;
+      font-weight:800;letter-spacing:.04em;padding:3px 8px;border-radius:999px}
+  .st[data-s="over"]{background:#FBE9E9;color:#a32020}
+  .st[data-s="now"]{background:#FDF3DF;color:#7a5200}
+  .st[data-s="done"]{background:#E6F4EB;color:#0a6b45}
+  .st[data-s="soon"]{background:#EEF3F0;color:var(--ink-2)}
+  @media(max-width:520px){ .st{margin-left:0} .cnum{font-size:44px} }
+
+  .navrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:11px}
+  .back2{display:inline-flex;align-items:center;gap:6px;min-height:38px;padding:0 12px;
+         border:1px solid var(--line);border-radius:9px;background:#fff;text-decoration:none;
+         color:var(--ink-2);font-size:12px;font-weight:750}
+  .swlab{margin-left:auto;font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;
+         color:var(--ink-3)}
+  #fieldsel{min-height:38px;max-width:100%;border:1px solid var(--line);border-radius:9px;
+            background:#fff;font-family:inherit;font-size:12.5px;font-weight:700;color:var(--ink);
+            padding:0 8px}
+  @media(max-width:520px){ .swlab{display:none} #fieldsel{flex:1;min-width:0} }
+
+  /* ══ ADD / REMOVE ═════════════════════════════════════════════════════════
+     Per PLAN, never the template. A city's own task belongs to that city's
+     launch, and the next field must not inherit it. */
+  .custom{font-size:9px;font-weight:800;letter-spacing:.05em;color:#7a5200;background:#FBF2E4;
+          border-radius:4px;padding:2px 5px}
+  /* N/A IS NOT DELETION. A playbook task that does not apply to this city stays
+     on the page, greyed, out of the denominator and out of the overdue count —
+     so the record of having skipped it deliberately survives, and it can come
+     back. Only a task somebody ADDED can be removed, because only that one was
+     never part of the plan. */
+  .t[data-state="na"]{opacity:.52}
+  .t[data-state="na"] .tt{text-decoration:line-through;text-decoration-thickness:1px}
+  .st[data-s="na"]{background:#EEF3F0;color:var(--ink-3)}
+  .na{flex:none;min-height:28px;padding:0 9px;border:1px solid var(--line);border-radius:7px;
+      background:#fff;font-family:inherit;font-size:10.5px;font-weight:700;color:var(--ink-2)}
+  .rm{flex:none;width:28px;height:28px;border:0;background:none;color:var(--ink-3);font-family:inherit;
+      font-size:15px;line-height:1;border-radius:7px;margin-top:-2px}
+  .rmc{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:8px 10px;background:#FDF3F2;
+       border:1px solid #F0CFC9;border-radius:9px;margin:4px 0}
+  .rmc span{font-size:11.5px;color:#a32020;font-weight:650}
+  .rmc button{min-height:32px;padding:0 11px;border-radius:7px;font-family:inherit;font-size:11.5px;
+              font-weight:750;border:1px solid #CFDBD4;background:#fff;color:var(--ink)}
+  .rmc button.yes{margin-left:auto;background:#a32020;border-color:#a32020;color:#fff}
+  .addbtn{display:flex;align-items:center;gap:6px;width:100%;min-height:42px;margin-top:6px;
+          border:1px dashed #CFDBD4;border-radius:10px;background:none;font-family:inherit;
+          font-size:12px;font-weight:750;color:var(--ink-2);justify-content:center}
+
+  .scrim{position:fixed;inset:0;background:rgba(7,42,32,.34);display:flex;align-items:center;
+         justify-content:center;padding:14px;z-index:30}
+  .dlg{background:#fff;border-radius:14px;width:100%;max-width:470px;max-height:90vh;overflow:auto}
+  .dh{padding:14px 16px 10px}.dh b{display:block;font-size:15px;font-weight:800;letter-spacing:-.015em}
+  .dh span{display:block;margin-top:4px;font-size:11.5px;color:var(--ink-3)}
+  .db{padding:0 16px 14px;display:flex;flex-direction:column;gap:11px}
+  .fld label{display:block;font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;
+             color:var(--ink-2);margin-bottom:5px}
+  .fld input,.fld select{width:100%;min-height:42px;border:1px solid #CFDBD4;border-radius:9px;
+    padding:0 11px;font-family:inherit;font-size:13px;color:var(--ink);background:#fff}
+  .wk2{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .seg2{display:flex;gap:4px;background:#EEF3F0;border-radius:10px;padding:3px}
+  .seg2 button{flex:1;min-height:38px;border:0;border-radius:8px;background:transparent;font-family:inherit;
+               font-size:12px;font-weight:700;color:var(--ink-2)}
+  .seg2 button[aria-pressed="true"]{background:#fff;color:var(--deep);box-shadow:0 1px 2px rgba(7,42,32,.1)}
+  .back{border:1px solid var(--line);border-radius:9px;max-height:210px;overflow:auto}
+  .back button{display:flex;gap:8px;align-items:baseline;width:100%;text-align:left;border:0;
+    border-top:1px solid var(--line-soft);background:none;font-family:inherit;padding:9px 11px;min-height:44px}
+  .back button:first-child{border-top:0}
+  .back .bt{font-size:12.5px;font-weight:650;min-width:0}
+  .back .bw{margin-left:auto;flex:none;font-size:10.5px;color:var(--ink-3)}
+  .back .empty{padding:14px;font-size:11.5px;color:var(--ink-3);text-align:center}
+  .df{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line-soft)}
+  .df button{min-height:44px;padding:0 16px;border-radius:9px;font-family:inherit;font-size:13px;
+             font-weight:750;border:1px solid #CFDBD4;background:#fff;color:var(--deep)}
+  .df button#asave{margin-left:auto;background:var(--deep);color:#fff;border-color:var(--deep)}
+  .df button:disabled{opacity:.4}
+  /* harness furniture — the three moments the page has to answer for */
+  .sw{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+  .sw button{min-height:34px;padding:0 11px;border-radius:8px;border:1px solid #CFDBD4;background:#fff;
+             font-family:inherit;font-size:11.5px;font-weight:700;color:var(--ink-2)}
+  .sw button[aria-pressed="true"]{background:var(--deep);color:#fff;border-color:var(--deep)}
+</style>
+
+<div class="viz-root wrap">
+  <div class="sw" id="sw"></div>
+  <!-- GETTING BACK, AND GETTING SIDEWAYS. A plan you can only reach from a board
+       is a plan you stop opening. -->
+  <div class="navrow">
+    <a class="back2" href="#" data-testid="lp-back"><span aria-hidden>&larr;</span> All launches</a>
+    <label class="swlab" for="fieldsel">Field</label>
+    <select id="fieldsel" data-testid="lp-fieldswitch"></select>
+  </div>
+  <div class="card" id="hero"></div>
+  <div class="card tl" id="tl"></div>
+  <div id="groups"></div>
+  <div id="modal"></div>
+</div>
+
+<script>
+const WHEN = [["pre","Before launch","2026-09-12"],["win","Launch window","2026-10-16"],["post","After launch","2026-12-01"]];
+let when = "pre";
+/* WHICH PHASES ARE OPEN IS STATE, not something recomputed each render. It was
+   derived from the current week, so every edit — an N/A, an add, a tick — slammed
+   the groups shut under whoever was working in them. Seeded from the current
+   phase once, then owned by the operator. */
+let openPhases = null;
+let confirmRm = null;   // the task whose removal is being confirmed
+let adding = null;      // the phase an add dialog is open for
+let TODAY = new Date("2026-09-12T00:00:00");
+const LAUNCH = new Date("2026-10-09T00:00:00");
+const FIELD = {name:"Crossbar Rowlett", city:"Dallas", coord:"Deonna Garcia"};
+/* The other plans in flight, so you can move between them without going back to
+   a board. Ordered the way the index orders them: nearest launch first. */
+const OTHERS = [
+  {name:"Soccer Central Field 5", days:2},
+  {name:"Stony Point",            days:13},
+  {name:"Crossbar Rowlett",       days:27},
+  {name:"Hala Piłkarska 2",  days:69},
+  {name:"NEMP Field 13",          days:-36},
+];
+// Week 5 is the launch week, so week 1 opens 28 days before it — the sheet's
+// own anchoring, made explicit.
+const PLAN_START = new Date(LAUNCH.getTime() - 28*86400000);
+const SCOPES = {
+  ops:    {label:"Ops"},
+  paid:   {label:"Paid Marketing"},
+  crm:    {label:"CRM"},
+  event:  {label:"Launch Event"},
+  online: {label:"Local · Online"},
+  offline:{label:"Local · Offline"},
+  exec:   {label:"Field Launch Execution"},
+};
+const T = [
+  // THE PREREQUISITE. Nothing else in the plan can happen until the field exists
+  // in the app, so it is week 1 and it is the first thing in Build-up.
+  ["Create the field partner in the app","ops",1,2,null,0],
+  ["Set up META Ads","paid",2,2,"Jaimee M.",1],
+  ["Ads Active (include the special event)","paid",3,20,"Jaimee M.",0],
+  ["Create WA group and share with the launch coordinator","crm",3,3,"Dee",1],
+  ["Send campaigns via Klaviyo to registered users","crm",4,8,"Dee",0],
+  ["Add players to the WA group","crm",5,8,"Deonna G.",0],
+  ["Share referral codes and free match codes","crm",5,8,"Dee",0],
+  ["Select the starting 11 / ambassador program","crm",7,8,null,0],
+  ["Talk with the field about any player database","crm",1,2,"Deonna G.",1],
+  ["Determine the launch type (tourney, giveaway, drinks, influencers)","event",1,2,"Deonna G.",1],
+  ["Search and secure influencers for the first games","event",3,8,null,0],
+  ["Research FB groups and other online platforms","online",1,3,"Deonna G.",1],
+  ["Post in online platforms about matches and MM openings","online",4,20,"Deonna G.",0],
+  ["Research key stakeholders in the city","offline",1,3,"Deonna G.",0],
+  ["Print / receive MD flyers for key stakeholders","offline",1,3,"Deonna G.",0],
+  ["Daily visits to bars and soccer stores near the field","offline",4,20,"Deonna G.",0],
+  ["Visit nearby fields to invite players","offline",4,20,"Deonna G.",0],
+  ["Participate in games at the new field","offline",4,20,"Deonna G.",0],
+  ["Invite people to the WA group (outside MD)","offline",4,20,"Deonna G.",0],
+  ["Research special soccer events in the city","offline",4,20,null,0],
+  ["Book a photographer for the first matches","exec",3,4,"Deonna G.",0],
+  ["Coordinate a social media partnership with the field","exec",3,4,null,0],
+  ["Secure action shots of players during the first games","exec",5,8,null,0],
+  ["Create content to promote the launch online","exec",5,8,"Jaimee M.",0],
+].map(([title,scope,w1,w2,owner,done],i)=>({id:"t"+i,title,scope,w1,w2,owner,done:!!done,na:false,custom:false}));
+// THE TEMPLATE IS FROZEN. A plan is a copy; nothing on this page may reach back
+// and change what the next field gets seeded with.
+const TEMPLATE = Object.freeze(T.map(t=>Object.freeze({...t})));
+window.TEMPLATE = TEMPLATE;
+let nextId = 100;
+
+const PHASES = [
+  {k:"pre",   t:"Build-up",      w1:1,  w2:4,  sub:"the four weeks before"},
+  {k:"launch",t:"Launch window", w1:5,  w2:8,  sub:"opening month"},
+  {k:"post",  t:"Sustain",       w1:9,  w2:20, sub:"keeping it filled"},
+];
+const phaseOfWeek = w => w<=4 ? "pre" : w<=8 ? "launch" : "post";
+let weekNow, daysToLaunch, doneN, overN, naN;
+function recompute(){
+  weekNow = Math.floor((TODAY - PLAN_START)/(7*86400000)) + 1;
+  daysToLaunch = Math.round((LAUNCH - TODAY)/86400000);
+  doneN = counted().filter(t=>t.done).length;
+  overN = T.filter(t=>stateOf(t)==="over").length;
+  naN   = T.filter(t=>t.na).length;
+}
+
+// A task is overdue when its window has closed and it is not done. That is the
+// only state that needs chasing, so it is the only one that gets the status hue.
+function stateOf(t){
+  if (t.na) return "na";        // out of the denominator and out of the alarm
+  if (t.done) return "done";
+  if (weekNow > t.w2) return "over";
+  if (weekNow >= t.w1) return "now";
+  return "soon";
+}
+const counted = () => T.filter(t=>!t.na);
+
+function hero(){
+  const p = daysToLaunch > 0 ? "pre" : daysToLaunch === 0 ? "launch"
+          : weekNow <= 8 ? "launch" : "post";
+  const num = daysToLaunch > 0 ? daysToLaunch
+            : weekNow <= 8 ? (weekNow - 4) : Math.abs(daysToLaunch);
+  const lab = daysToLaunch > 0 ? "DAYS TO LAUNCH"
+            : weekNow <= 8 ? "LAUNCH WEEK OF 4" : "DAYS SINCE LAUNCH";
+  const ph = PHASES.find(x=>x.k===p);
+  const fmt = LAUNCH.toLocaleDateString("en-US",{weekday:"short",day:"numeric",month:"short",year:"numeric"});
+  const tot = counted().length;
+  const donePct = (doneN/tot*100), overPct = (overN/tot*100);
+  document.getElementById("hero").innerHTML =
+    '<div class="hero"><div class="hid">'
+    + '<div class="fname" data-testid="lp-field">'+FIELD.name+'</div>'
+    + '<div class="fmeta">'+FIELD.city+' · launch coordinator '+FIELD.coord+'</div>'
+    + '<span class="phase" data-p="'+p+'" data-testid="lp-phase">'+ph.t.toUpperCase()+'</span>'
+    + '</div>'
+    + '<div class="count"><div class="cnum" data-testid="lp-count">'+num+'</div>'
+    +   '<div class="clab" data-testid="lp-countlabel">'+lab+'</div>'
+    +   '<div class="cdate" data-testid="lp-date">'+fmt+'</div></div></div>'
+    + '<div class="prog"><div class="pline">'
+    +   '<span class="pbig" data-testid="lp-done">'+doneN+' of '+tot+' done</span>'
+    +   '<span class="pmut">'+(tot-doneN)+' to go'+(naN?' · '+naN+' N/A':'')+'</span>'
+    +   (overN ? '<span class="pover" data-testid="lp-overdue"><span aria-hidden>!</span>'+overN+' overdue</span>' : '')
+    + '</div>'
+    + '<div class="bar" role="img" aria-label="'+doneN+' of '+T.length+' tasks done, '+overN+' overdue">'
+    +   '<i class="done" style="width:'+donePct.toFixed(1)+'%"></i>'
+    +   (overN ? '<i class="over" style="width:'+overPct.toFixed(1)+'%"></i>' : '')
+    + '</div></div>';
+}
+
+function timeline(){
+  const act = [];
+  for (let w=1; w<=20; w++) act.push(counted().filter(t=>w>=t.w1 && w<=t.w2).length);
+  const max = Math.max(...act);
+  document.getElementById("tl").innerHTML =
+    '<div class="tlhead"><b>The 20 weeks</b><span>how much is running each week · launch is week 5</span></div>'
+    + '<div class="weeks" data-testid="lp-weeks">'
+    + act.map((n,i)=>{ const w=i+1, h=Math.max(6, Math.round(n/max*100));
+        return '<div class="wk" data-w="'+w+'" data-ph="'+phaseOfWeek(w)+'"'
+          + (w===weekNow?' data-today="1"':'') + ' title="Week '+w+' · '+n+' running">'
+          + '<i style="height:'+h+'%"></i></div>'; }).join("")
+    + '</div>'
+    + '<div class="wkaxis">' + act.map((_,i)=>'<span>'+((i+1)%2===1?(i+1):'')+'</span>').join("") + '</div>'
+    /* The narrow bands cannot hold "BUILD-UP · W1–4" at 390 — they truncated to
+       "BUILD-..." and told you nothing. The week range is the part that cannot
+       be recovered from anywhere else on screen, so it is the part that stays;
+       the phase word is already in the strip's colour and in the line below. */
+    + '<div class="bands">' + PHASES.map(p=>'<div class="band" data-p="'+p.k+'" data-testid="lp-band">'
+        + '<span class="lg">'+p.t.toUpperCase()+' · W'+p.w1+'–'+p.w2+'</span>'
+        + '<span class="sm">W'+p.w1+'–'+p.w2+'</span></div>').join("") + '</div>'
+    + '<p class="todayline"><span class="todaydot" aria-hidden></span>'
+    + 'You are in week '+weekNow+' — '+PHASES.find(x=>x.k===phaseOfWeek(weekNow)).sub+'.</p>';
+}
+
+function groups(){
+  /* A TASK BELONGS TO THE PHASE ITS DEADLINE FALLS IN, not the one it starts in.
+     Grouping on the start week put 18 of 23 into Build-up and left Sustain
+     EMPTY — every long-running task starts early — so the three phases stopped
+     dividing anything. On the deadline it is 9 / 7 / 7, and the group answers
+     the question the page is for: what has to be finished before this phase is
+     over. Within a group, anything late or live sorts above what is not. */
+  const RANK = {over:0, now:1, soon:2, done:3, na:4};
+  document.getElementById("groups").innerHTML = PHASES.map(p=>{
+    const ts = T.filter(t=>phaseOfWeek(t.w2)===p.k)
+      .slice().sort((a,z)=> (RANK[stateOf(a)]-RANK[stateOf(z)]) || (a.w1-z.w1));
+    const live = ts.filter(t=>!t.na);
+    const d = live.filter(t=>t.done).length;
+    const o = ts.filter(t=>stateOf(t)==="over").length;
+    const open = openPhases[p.k];
+    return '<section class="grp" data-testid="lp-group" data-phase="'+p.k+'" data-open="'+(open?1:0)+'">'
+    + '<button type="button" class="gh" data-g="'+p.k+'" aria-expanded="'+open+'">'
+    +   '<span class="gt">'+p.t.toUpperCase()+'</span><span class="gw">W'+p.w1+'–'+p.w2+'</span>'
+    +   '<span class="gc" data-testid="lp-groupcount">'+d+'/'+ts.length+(o?' · '+o+' overdue':'')+'</span>'
+    +   '<span class="car">'+(open?'▴':'▾')+'</span></button>'
+    /* EVERY list is rendered and hidden, never conditionally built: a collapsed
+       phase you open should show its tasks without a refetch, and the counts
+       above it are already computed from the same rows. */
+    + '<div class="glist"' + (open ? '' : ' hidden') + '>' + ts.map(t=>{
+        const s = stateOf(t), sc = SCOPES[t.scope];
+        const SL = {over:"OVERDUE", now:"DUE NOW", done:"DONE", soon:"NOT YET", na:"N/A"}[s];
+        const SI = {over:"!", now:"→", done:"✓", soon:"·", na:"—"}[s];
+        return '<div class="t" data-testid="lp-task" data-state="'+s+'" data-done="'+(t.done?1:0)+'">'
+        + '<button type="button" class="tick" aria-label="'+(t.done?"Mark not done":"Mark done")+'">'+(t.done?'✓':'')+'</button>'
+        + '<div class="tb"><div class="tt">'+t.title+'</div><div class="tm">'
+        +   '<span class="scope">'+sc.label+'</span>'
+        +   '<span class="win">W'+t.w1+(t.w2!==t.w1?'–'+t.w2:'')+'</span>'
+        +   '<button type="button" class="own" data-testid="lp-owner" data-unassigned="'+(t.owner?0:1)+'">'
+        +     '<span class="av">'+(t.owner?t.owner.split(" ").map(x=>x[0]).join(""):'+')+'</span>'
+        +     (t.owner ?? 'Assign')+'</button>'
+        +   (t.custom ? '<span class="custom" data-testid="lp-custom">ADDED HERE</span>' : '')
+        /* N/A for a playbook task; remove only for one somebody added. */
+        +   (t.custom
+              ? '<button type="button" class="na" data-testid="lp-remove" data-id="'+t.id+'">Remove</button>'
+              : '<button type="button" class="na" data-testid="lp-na" data-id="'+t.id+'">'
+                + (t.na ? 'Put back' : 'N/A here') + '</button>')
+        +   '<span class="st" data-s="'+s+'" data-testid="lp-state"><span aria-hidden>'+SI+'</span>'+SL+'</span>'
+        + '</div>'
+        + (confirmRm===t.id
+            ? '<div class="rmc" data-testid="lp-rmconfirm"><span>Remove this task from '+FIELD.name+'?</span>'
+              + '<button type="button" data-testid="lp-rm-no">Keep it</button>'
+              + '<button type="button" class="yes" data-testid="lp-rm-yes" data-id="'+t.id+'">Remove</button></div>'
+            : '')
+        + '</div></div>'; }).join("")
+      + '<button type="button" class="addbtn" data-testid="lp-add" data-phase="'+p.k+'">'
+      +   '<span aria-hidden>+</span> Add a task for '+FIELD.city+'</button>'
+      + '</div>'
+    + '</section>';
+  }).join("");
+  document.querySelectorAll('[data-testid="lp-na"]').forEach(b => b.onclick = () => {
+    const t = T.find(x=>x.id===b.dataset.id); t.na = !t.na; if (t.na) t.done = false; render(); });
+  document.querySelectorAll('[data-testid="lp-remove"]').forEach(b => b.onclick = () => {
+    confirmRm = b.dataset.id; render(); });
+  document.querySelectorAll('[data-testid="lp-rm-no"]').forEach(b => b.onclick = () => {
+    confirmRm = null; render(); });
+  document.querySelectorAll('[data-testid="lp-rm-yes"]').forEach(b => b.onclick = () => {
+    const i = T.findIndex(x=>x.id===b.dataset.id); if (i>=0) T.splice(i,1); confirmRm = null; render(); });
+  document.querySelectorAll('[data-testid="lp-add"]').forEach(b => b.onclick = () => {
+    adding = {phase:b.dataset.phase, title:"", scope:"ops", w1:"", w2:""}; render(); });
+  document.querySelectorAll('.gh').forEach(b => b.onclick = () => {
+    openPhases[b.dataset.g] = !openPhases[b.dataset.g]; render(); });
+}
+function addDialog(){
+  if (!adding) return "";
+  const w1 = +adding.w1, w2 = +adding.w2;
+  const okW = w1>=1 && w1<=20 && w2>=w1 && w2<=20;
+  const canSave = adding.title.trim().length>1 && okW;
+  return '<div class="scrim"><div class="dlg" role="dialog" aria-modal="true" data-testid="lp-adddlg">'
+  + '<div class="dh"><b>A task just for '+FIELD.name+'</b>'
+  +   '<span>This is added to this field&rsquo;s plan only. The playbook every other launch is '
+  +   'seeded from does not change.</span></div>'
+  + '<div class="db">'
+  +   '<div class="fld"><label for="at">What needs doing</label>'
+  +     '<input id="at" data-testid="lp-add-title" value="'+adding.title.replace(/"/g,"&quot;")+'" '
+  +     'placeholder="e.g. Get the HOA notice posted at the gate"></div>'
+  +   '<div class="fld"><label for="as">Scope</label><select id="as" data-testid="lp-add-scope">'
+  +     Object.entries(SCOPES).map(([k,v])=>'<option value="'+k+'"'+(adding.scope===k?' selected':'')+'>'+v.label+'</option>').join("")
+  +   '</select></div>'
+  +   '<div class="wk2"><div class="fld"><label for="aw1">From week</label>'
+  +     '<input id="aw1" type="number" min="1" max="20" data-testid="lp-add-w1" value="'+adding.w1+'"></div>'
+  +   '<div class="fld"><label for="aw2">To week</label>'
+  +     '<input id="aw2" type="number" min="1" max="20" data-testid="lp-add-w2" value="'+adding.w2+'"></div></div>'
+  +   (adding.w1 && adding.w2 && !okW
+      ? '<p class="win" data-testid="lp-add-badweek" style="color:#a32020">Weeks run 1 to 20, and the end cannot come before the start.</p>'
+      : okW ? '<p class="win" data-testid="lp-add-lands">Lands in <b>'
+        + PHASES.find(x=>x.k===phaseOfWeek(w2)).t + '</b> — that is where its deadline falls.</p>' : '')
+  + '</div>'
+  + '<div class="df"><button type="button" id="acancel" data-testid="lp-add-cancel">Cancel</button>'
+  +   '<button type="button" id="asave" data-testid="lp-add-save"'+(canSave?'':' disabled')+'>Add to this plan</button></div>'
+  + '</div></div>';
+}
+
+function render(){
+  document.getElementById("sw").innerHTML = WHEN.map(([k,l])=>
+    '<button type="button" data-w="'+k+'" aria-pressed="'+(when===k)+'">'+l+'</button>').join("");
+  document.querySelectorAll('.sw button').forEach(b => b.onclick = () => {
+    when = b.dataset.w; TODAY = new Date(WHEN.find(x=>x[0]===when)[2]+"T00:00:00");
+    openPhases = null; render(); });
+  document.getElementById("fieldsel").innerHTML = OTHERS.map(o =>
+    '<option'+(o.name===FIELD.name?' selected':'')+'>'+o.name+' · '
+    + (o.days>=0 ? o.days+'d to launch' : Math.abs(o.days)+'d since') + '</option>').join("");
+  recompute();
+  if (!openPhases) openPhases = Object.fromEntries(PHASES.map(x=>[x.k, x.k===phaseOfWeek(weekNow)]));
+  hero(); timeline(); groups();
+  document.getElementById("modal").innerHTML = addDialog();
+  if (adding){
+    const m = document.getElementById("modal");
+    const keep = (sel, set) => { const el = m.querySelector(sel); if (!el) return;
+      el.oninput = e => { const c = e.target.selectionStart; set(e.target.value); render();
+        const n = document.querySelector(sel); if (n && n.setSelectionRange){ n.focus(); n.setSelectionRange(c,c); } }; };
+    keep('[data-testid="lp-add-title"]', v => adding.title = v);
+    keep('[data-testid="lp-add-w1"]',    v => adding.w1 = v);
+    keep('[data-testid="lp-add-w2"]',    v => adding.w2 = v);
+    m.querySelector('[data-testid="lp-add-scope"]').onchange = e => { adding.scope = e.target.value; render(); };
+    m.querySelector('#acancel').onclick = () => { adding = null; render(); };
+    const save = m.querySelector('#asave');
+    if (save) save.onclick = () => {
+      if (save.disabled) return;
+      T.push({ id:"c"+(nextId++), title:adding.title.trim(), scope:adding.scope,
+        w1:+adding.w1, w2:+adding.w2, owner:null, done:false, na:false, custom:true });
+      adding = null; render();
+    };
+  }
+}
+render();
+</script>

@@ -12,6 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 import AddVenueDialog, { type AddVenueDraft } from "@/components/AddVenueDialog";
+import { insertFinVenue } from "@/lib/venueCreate";
 import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
 import { logChange } from "@/lib/financeAudit";
 import { venueCategory } from "@/lib/venueResolver";
@@ -613,24 +614,11 @@ export default function FieldCostsView() {
       notes: draft.notes,
       is_active: true,
     };
-    const { data: inserted, error } = await supabase
-      .from("fin_venues")
-      .insert(payload)
-      .select()
-      .single();
-    if (error) {
-      if (
-        error.code === "23505" ||
-        /duplicate key/i.test(error.message ?? "")
-      ) {
-        throw new Error(
-          `A venue named "${draft.venue_name}" already exists in ${draft.city}. ` +
-            `Use a unique name or edit the existing entry.`,
-        );
-      }
-      throw new Error(error.message);
-    }
-    const insertedVenue = inserted as { id: number } & Record<string, unknown>;
+    // THE INSERT AND ITS DUPLICATE MESSAGE MOVED TO src/lib/venueCreate.ts, because the Field
+    // Pipeline board now creates venues too and a second creator is how two paths disagree about
+    // what a venue minimally is. Everything below — the mdapi field link and the aliases — is
+    // Finance's and stays here.
+    const insertedVenue = await insertFinVenue(payload);
 
     // 2. If the operator supplied a canonical mdapi field_id, link
     //    it via fin_venue_fields. Best-effort — a duplicate field_id

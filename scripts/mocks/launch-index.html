@@ -1,0 +1,128 @@
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Launches</title>
+<style>
+  *{box-sizing:border-box}
+  .viz-root{color-scheme:light;
+    --surface:#F4F7F5; --card:#fff; --line:#E3EAE6; --line-soft:#EEF3F0;
+    --ink:#12241d; --ink-2:#5c7267; --ink-3:#8b9a93; --deep:#0d3b2e;
+    --ok:#0ca30c; --crit:#d03b3b;}
+  body{margin:0;background:var(--surface);color:var(--ink);padding:14px;
+       font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto}
+
+  .top{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  .top h1{margin:0;font-size:21px;font-weight:800;letter-spacing:-.022em}
+  .top .sub{font-size:12.5px;color:var(--ink-2)}
+  /* THE ONE NUMBER THAT DECIDES WHERE TO LOOK. Overdue work across every launch,
+     stated once at the top, and absent when there is none. */
+  .alarm{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:12.5px;
+         font-weight:750;color:var(--crit);background:#FBE9E9;border-radius:999px;padding:5px 11px}
+
+  .sect{margin:18px 0 9px;font-size:10.5px;font-weight:800;letter-spacing:.09em;color:var(--ink-2)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr));gap:12px}
+
+  .f{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--line);
+     border-radius:15px;padding:14px;font-family:inherit;color:inherit;cursor:pointer;min-width:0}
+  .f[data-over="1"]{border-color:#EFC9C4}
+  .fh{display:flex;gap:12px;align-items:flex-start}
+  .fn{min-width:0;flex:1}
+  .fn b{display:block;font-size:15.5px;font-weight:780;letter-spacing:-.015em;line-height:1.2;
+        overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fn span{display:block;margin-top:3px;font-size:11.5px;color:var(--ink-2);
+           overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fc{flex:none;text-align:right;min-width:74px}
+  .fc b{display:block;font-size:28px;font-weight:800;letter-spacing:-.035em;line-height:.95;
+        font-variant-numeric:tabular-nums;color:var(--deep)}
+  .fc span{display:block;margin-top:3px;font-size:8.5px;font-weight:800;letter-spacing:.08em;
+           color:var(--ink-3)}
+  .fp{display:inline-flex;margin-top:10px;padding:3px 9px;border-radius:999px;font-size:9.5px;
+      font-weight:800;letter-spacing:.06em}
+  .fp[data-p="pre"]{background:#EAF2FB;color:#1b4f8c}
+  .fp[data-p="launch"]{background:#E3F6EC;color:#0a6b45}
+  .fp[data-p="post"]{background:#FBF2E4;color:#7a5200}
+  .fbar{height:8px;border-radius:4px;background:#EDF2EF;overflow:hidden;display:flex;gap:2px;margin-top:11px}
+  .fbar i{display:block;height:100%;border-radius:4px}
+  .fbar i.d{background:var(--ok)} .fbar i.o{background:var(--crit)}
+  .ff{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+  .ff .n{font-size:11.5px;color:var(--ink-2);font-weight:650}
+  .ff .ov{margin-left:auto;flex:none;display:inline-flex;align-items:center;gap:4px;font-size:10.5px;
+          font-weight:800;color:#a32020;background:#FBE9E9;border-radius:999px;padding:2px 8px}
+  .ff .na{font-size:10.5px;color:var(--ink-3)}
+
+  .empty{background:var(--card);border:1px dashed var(--line);border-radius:15px;padding:22px 16px;
+         text-align:center;font-size:12.5px;color:var(--ink-3)}
+</style>
+
+<div class="viz-root wrap">
+  <div class="top">
+    <h1>Launches</h1>
+    <span class="sub" id="sub"></span>
+    <span id="alarm"></span>
+  </div>
+  <div id="body"></div>
+</div>
+
+<script>
+const TODAY = new Date("2026-09-12T00:00:00");
+// done / total exclude N/A, exactly as the plan page counts them.
+const F = [
+  {name:"Crossbar Rowlett",      city:"Dallas",      coord:"Deonna Garcia", launch:"2026-10-09", done:5,  total:24, over:0, na:0},
+  {name:"Stony Point",           city:"Austin",      coord:"Deonna Garcia", launch:"2026-09-25", done:14, total:23, over:3, na:1},
+  {name:"Hala Piłkarska 2", city:"Warsaw",      coord:"Marek W.",      launch:"2026-11-20", done:2,  total:24, over:0, na:0},
+  {name:"Soccer Central Field 5",city:"San Antonio", coord:"Ana R.",        launch:"2026-09-14", done:21, total:24, over:1, na:0},
+  {name:"Parmer Fields 3",       city:"Austin",      coord:"Luis G.",       launch:"2026-09-02", done:17, total:24, over:0, na:0},
+  {name:"NEMP Field 13",         city:"Austin",      coord:"Sam T.",        launch:"2026-08-07", done:19, total:22, over:2, na:2},
+  // Week 21: the plan is over, so it drops off rather than sitting here forever.
+  {name:"PRUMC",                 city:"Atlanta",     coord:"Troy",          launch:"2026-05-15", done:24, total:24, over:0, na:0},
+];
+const days = f => Math.round((new Date(f.launch+"T00:00:00") - TODAY)/86400000);
+const weekOf = f => Math.floor((TODAY - (new Date(f.launch+"T00:00:00").getTime() - 28*86400000))/(7*86400000)) + 1;
+function counter(f){
+  const d = days(f), w = weekOf(f);
+  if (d > 0)   return {n:d, l:"DAYS TO LAUNCH", p:"pre"};
+  if (w <= 8)  return {n:Math.max(1,w-4), l:"LAUNCH WEEK OF 4", p:"launch"};
+  return {n:Math.abs(d), l:"DAYS SINCE LAUNCH", p:"post"};
+}
+// A plan is finished once week 20 is past: nothing left to chase, so it leaves
+// the page rather than sitting here forever.
+const live = F.filter(f => weekOf(f) <= 20);
+const done = F.length - live.length;
+
+function card(f){
+  const c = counter(f), pct = f.done/f.total*100, opct = f.over/f.total*100;
+  const PH = {pre:"BUILD-UP", launch:"LAUNCH WINDOW", post:"SUSTAIN"}[c.p];
+  return '<button type="button" class="f" data-testid="li-field" data-name="'+f.name+'" '
+  + 'data-phase="'+c.p+'" data-days="'+days(f)+'" data-over="'+(f.over?1:0)+'">'
+  + '<span class="fh"><span class="fn"><b>'+f.name+'</b><span>'+f.city+' · '+f.coord+'</span></span>'
+  +   '<span class="fc"><b data-testid="li-count">'+c.n+'</b><span>'+c.l+'</span></span></span>'
+  + '<span class="fp" data-p="'+c.p+'" data-testid="li-phase">'+PH+'</span>'
+  + '<span class="fbar" role="img" aria-label="'+f.done+' of '+f.total+' done, '+f.over+' overdue">'
+  +   '<i class="d" style="width:'+pct.toFixed(1)+'%"></i>'
+  +   (f.over?'<i class="o" style="width:'+opct.toFixed(1)+'%"></i>':'')
+  + '</span>'
+  + '<span class="ff"><span class="n" data-testid="li-prog">'+f.done+' of '+f.total+' done</span>'
+  +   (f.na?'<span class="na">'+f.na+' N/A</span>':'')
+  +   (f.over?'<span class="ov" data-testid="li-over"><span aria-hidden>!</span>'+f.over+' overdue</span>':'')
+  + '</span></button>';
+}
+
+const upcoming = live.filter(f=>days(f) >= 0).sort((a,z)=>days(a)-days(z));
+const launched = live.filter(f=>days(f) < 0).sort((a,z)=>days(z)-days(a));
+const totalOver = live.reduce((a,f)=>a+f.over,0);
+
+document.getElementById("sub").textContent =
+  live.length + (live.length===1?" field in flight":" fields in flight")
+  + (done ? " · " + done + " finished" : "");
+document.getElementById("alarm").innerHTML = totalOver
+  ? '<span class="alarm" data-testid="li-alarm"><span aria-hidden>!</span>'+totalOver
+    + ' task'+(totalOver===1?'':'s')+' overdue across '
+    + live.filter(f=>f.over).length + ' field'+(live.filter(f=>f.over).length===1?'':'s')+'</span>'
+  : '';
+
+document.getElementById("body").innerHTML = live.length === 0
+  ? '<p class="empty" data-testid="li-empty">No launches in flight. A field gets a plan when its card reaches Confirmed.</p>'
+  : (upcoming.length ? '<p class="sect" data-testid="li-sect">STILL TO LAUNCH · '+upcoming.length+'</p>'
+      + '<div class="grid">'+upcoming.map(card).join("")+'</div>' : '')
+  + (launched.length ? '<p class="sect" data-testid="li-sect">LAUNCHED, STILL RUNNING · '+launched.length+'</p>'
+      + '<div class="grid">'+launched.map(card).join("")+'</div>' : '');
+</script>

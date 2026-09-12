@@ -1,0 +1,217 @@
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bind a field on Confirmed</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#EEF3F0;color:#12241d;padding:14px;
+       font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  /* the state switcher is harness furniture; it sits above the scrim so the
+     measurement script can drive every state */
+  .sw{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;position:relative;z-index:20}
+  .sw button{min-height:34px;padding:0 11px;border-radius:8px;border:1px solid #CFDBD4;background:#fff;
+             font-family:inherit;font-size:11.5px;font-weight:700}
+  .sw button[aria-pressed="true"]{background:#0d3b2e;color:#fff;border-color:#0d3b2e}
+
+  .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr));gap:12px}
+  .col{background:#fff;border:1px solid #E3EAE6;border-radius:12px;padding:11px;min-width:0}
+  .colh{display:flex;align-items:baseline;gap:7px;padding-bottom:9px;flex-wrap:wrap}
+  .colh b{font-size:12.5px;font-weight:800;letter-spacing:-.01em}
+  .colh .n{font-size:11px;font-weight:700;color:#7C8F86}
+  /* THE COLUMN SAYS HOW MANY HAVE NO FIELD RECORD. A backfill nobody can see is a
+     backfill nobody does. */
+  .unl{margin-left:auto;flex:none;padding:2px 7px;border-radius:999px;background:#FFF3E6;
+       color:#8a5a12;font-size:9.5px;font-weight:800;letter-spacing:.03em}
+  .card{border:1px solid #E7EEEA;border-radius:10px;padding:9px 10px;margin-bottom:7px;background:#fff}
+  .card[data-bound="0"]{border-left:3px solid #D9A441;background:#FFFDF8}
+  .ct{font-size:12.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cm{margin-top:4px;font-size:11px;color:#7C8F86;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .pill{padding:2px 7px;border-radius:999px;font-size:9.5px;font-weight:800;letter-spacing:.03em}
+  .pill.ok{background:#E6F4EB;color:#14603f}
+  .pill.soon{background:#FEF6E7;color:#8a5a12}
+  .link{margin-top:7px;min-height:34px;padding:0 10px;border-radius:8px;border:1px solid #D9A441;
+        background:#fff;color:#7A5200;font-family:inherit;font-size:11.5px;font-weight:750}
+
+  /* ══ THE DIALOG ═══════════════════════════════════════════════════════════
+     The move and the binding are ONE action. Cancel does not leave a card in
+     Confirmed with no field — it puts the card back where it came from. */
+  .scrim{position:fixed;inset:0;background:rgba(7,42,32,.34);display:flex;align-items:center;
+         justify-content:center;padding:14px;z-index:10}
+  .dlg{background:#fff;border-radius:14px;width:100%;max-width:460px;max-height:90vh;overflow:auto;
+       box-shadow:0 18px 48px rgba(7,42,32,.22)}
+  .dh{padding:14px 16px 10px}
+  .dh b{display:block;font-size:15px;font-weight:800;letter-spacing:-.015em}
+  .dh span{display:block;margin-top:4px;font-size:11.5px;color:#7C8F86}
+  .db{padding:0 16px 14px;display:flex;flex-direction:column;gap:12px}
+  .fld label{display:block;font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;
+             color:#5c7267;margin-bottom:5px}
+  .fld input, .fld select{width:100%;min-height:42px;border:1px solid #CFDBD4;border-radius:9px;
+    padding:0 11px;font-family:inherit;font-size:13px;color:#12241d;background:#fff}
+  .hint{margin-top:5px;font-size:11px;color:#7C8F86}
+  .ro{margin:0;min-height:42px;display:flex;align-items:center;gap:7px;border:1px solid #EEF3F0;
+      background:#F7FAF8;border-radius:9px;padding:0 11px;font-size:13px;font-weight:650;color:#12241d}
+  .ro i{font-style:normal;font-size:10.5px;font-weight:650;color:#9aa5a0}
+  .hint.warn{color:#8a5a12}
+  .seg{display:flex;gap:4px;background:#EEF3F0;border-radius:10px;padding:3px}
+  .seg button{flex:1;min-height:36px;border:0;border-radius:8px;background:transparent;font-family:inherit;
+              font-size:12px;font-weight:700;color:#5c7267}
+  .seg button[aria-pressed="true"]{background:#fff;color:#0d3b2e;box-shadow:0 1px 2px rgba(7,42,32,.1)}
+  .df{display:flex;gap:8px;padding:12px 16px;border-top:1px solid #EEF3F0}
+  .df button{min-height:44px;padding:0 16px;border-radius:9px;font-family:inherit;font-size:13px;
+             font-weight:750;border:1px solid #CFDBD4;background:#fff;color:#0d3b2e}
+  .df button#save{margin-left:auto;background:#0d3b2e;color:#fff;border-color:#0d3b2e}
+  .df button:disabled{opacity:.4}
+  .prev{border:1px solid #DDE9E2;background:#F4FAF6;border-radius:10px;padding:10px 11px;font-size:11.5px;
+        color:#14603f}
+  .prev b{display:block;font-size:13px;margin-bottom:3px}
+</style>
+
+<div class="sw" id="sw"></div>
+<div class="cols" id="board"></div>
+<div id="modal"></div>
+
+<script>
+/* 12 of the 27 cards already in Confirmed name a venue that EXISTS, and 9 of
+   those already carry a launch date. `boundTo` is the card that has already
+   claimed it, if any. */
+const VENUES = [
+  {id:49, name:"Westlake",               city:"Austin",      launch:"2026-07-01", boundTo:null},
+  {id:16, name:"PRUMC",                  city:"Atlanta",     launch:"2026-01-20", boundTo:null},
+  {id:60, name:"New Braunfels",          city:"San Antonio", launch:null,         boundTo:null},
+  {id:52, name:"The Hattrick",           city:"Austin",      launch:"2026-02-14", boundTo:"Hat / The Hattrick"},
+];
+let CARDS = [
+  {id:"c1", stage:"negotiation", title:"Crossbar Rowlett", city:"Dallas", venue:null, launch:null},
+  {id:"c2", stage:"confirmed", title:"LBJ Early College", city:"Austin", venue:{id:33,name:"LBJ Early College High School"}, launch:"2026-10-09"},
+  // ALREADY IN CONFIRMED AND UNLINKED. A migration cannot invent this link, so
+  // the backfill has to be visible and one click.
+  {id:"c3", stage:"confirmed", title:"Stony Point", city:"Austin", venue:null, launch:null},
+];
+const STAGES = [{id:"negotiation",t:"Ongoing Negotiation"},{id:"confirmed",t:"Confirmed Fields"}];
+const STATES = [["board","Board"],["drop","Dropped on Confirmed"],["ready","Filled in"],["link","Existing field"],["dupe","Already linked"],["backfill","An old card"]];
+let state = "board";
+let dlg = null;
+
+function daysTo(iso){
+  const d = Math.round((new Date(iso+"T00:00:00") - new Date("2026-09-12T00:00:00"))/86400000);
+  return d;
+}
+function countdown(iso){
+  const d = daysTo(iso);
+  if (d > 0)  return {t:(d+" days to launch"), k:(d<=28?"soon":"ok")};
+  if (d === 0) return {t:"Launches today", k:"soon"};
+  return {t:(Math.abs(d)+" days since launch"), k:"ok"};
+}
+
+function board(){
+  document.getElementById("board").innerHTML = STAGES.map(s => {
+    const cs = CARDS.filter(c=>c.stage===s.id);
+    const unl = cs.filter(c=>!c.venue).length;
+    return '<div class="col" data-testid="col-'+s.id+'">'
+      + '<div class="colh"><b>'+s.t+'</b><span class="n">'+cs.length+'</span>'
+      + (s.id==="confirmed" && unl ? '<span class="unl" data-testid="col-unlinked">'+unl+' without a field</span>' : '')
+      + '</div>'
+      + cs.map(c => {
+          const cd = c.launch ? countdown(c.launch) : null;
+          return '<div class="card" data-testid="card" data-id="'+c.id+'" data-bound="'+(c.venue?1:0)+'">'
+            + '<div class="ct">'+c.title+'</div>'
+            + '<div class="cm">'+c.city
+            + (c.venue ? '<span class="pill '+cd.k+'" data-testid="card-countdown">'+cd.t+'</span>'
+                       : '<span style="color:#8a5a12;font-weight:700">no field record yet</span>')
+            + '</div>'
+            + (!c.venue && c.stage==="confirmed"
+                ? '<button type="button" class="link" data-testid="card-link" data-id="'+c.id+'">Create the field…</button>' : '')
+            + '</div>';
+        }).join("")
+      + '</div>';
+  }).join("");
+  document.querySelectorAll('[data-testid="card-link"]').forEach(b =>
+    b.onclick = () => { state = "backfill"; setup(); });
+}
+
+function dialog(){
+  if (!dlg) return "";
+  /* AN EXACT NAME MATCH IS AN OFFER, NOT A REFUSAL. Refusing it left 12 of the
+     27 cards already in Confirmed with no way forward: the only control was
+     Create, and Create was refused. The person still confirms, one card at a
+     time — there is no picker and nothing auto-matches. */
+  const hit = VENUES.find(x => x.name.toLowerCase() === (dlg.newName??"").trim().toLowerCase()) ?? null;
+  const taken = !!(hit && hit.boundTo);
+  const mode = !hit ? "create" : taken ? "taken" : "link";
+  // A matched venue with a date brings it; the field stays editable.
+  if (hit && !taken && dlg.launch === null && hit.launch && !dlg.touchedDate) dlg.launch = hit.launch;
+  const canSave = !!(dlg.newName ?? "").trim() && !!dlg.launch && !taken;
+  const cd = dlg.launch ? countdown(dlg.launch) : null;
+  return '<div class="scrim"><div class="dlg" role="dialog" aria-modal="true" data-testid="bind-dialog">'
+  + '<div class="dh"><b>'+(mode==="create"?"Create the field":"Link the field")+'</b>'
+  +   '<span>'+dlg.cardTitle+' is becoming a real field. '
+  +   (mode==="link" ? 'A field with this name already exists — link to it rather than making a second record.'
+                     : 'This makes its record and sets the launch date.')
+  +   ' The plan and every countdown are built from that date.</span></div>'
+  + '<div class="db">'
+  /* NO PICKER. A field reaching Confirmed has never existed before, so offering
+     a list of fields that do was a choice nobody could ever make correctly. */
+  +   '<div class="fld"><label for="nn">Field name</label>'
+  +     '<input id="nn" data-testid="bind-newname" value="'+(dlg.newName??"")+'" placeholder="e.g. Crossbar Rowlett">'
+  +     (mode==="link"
+        ? '<p class="hint" data-testid="bind-match"><b>'+hit.name+'</b> · '+hit.city
+          + (hit.launch ? ' · already launches '+new Date(hit.launch+"T00:00:00").toLocaleDateString("en-US",{day:"numeric",month:"short",year:"numeric"}) : ' · no launch date yet')
+          + '. Linking uses that record. If this is a different field, change the name.</p>'
+        : mode==="taken"
+        ? '<p class="hint warn" data-testid="bind-dupe"><b>'+hit.name+'</b> is already linked to the card “'+hit.boundTo+'”. One field has one launch plan — unlink that card first, or change the name if this is a different field.</p>'
+        : '<p class="hint">Creates the record. It needs a city and a billing type as well as the name; both are set from here. Costs are filled in from Finance afterwards.</p>')
+  +   '</div>'
+  /* fin_venues needs venue_name, city AND billing_type — all NOT NULL, no
+     defaults. City comes off the card, so it is shown rather than asked. */
+  +   (mode==="create"
+      ? '<div class="fld"><label>City</label>'
+        + '<p class="ro" data-testid="bind-city">'+dlg.city+' <i>from the card</i></p>'
+        + '<p class="hint">Billed <b>per match</b> to start. Until a rate is entered in Finance the '
+        + 'field shows as needing one — a work item, never a cost of zero.</p></div>'
+      : '')
+  +   '<div class="fld"><label for="ld">Launch date</label>'
+  +     '<input id="ld" type="date" data-testid="bind-launch" value="'+(dlg.launch??"")+'">'
+  +     (cd ? '<p class="hint" data-testid="bind-cd">'+cd.t+'</p>'
+           : '<p class="hint">Required. Every task in the plan is dated from this.</p>')
+  +   '</div>'
+  +   (canSave ? '<div class="prev" data-testid="bind-preview"><b>24 tasks will be created</b>'
+        + 'Weeks 1&ndash;4 before launch, the launch window, then 12 weeks after. Nothing is sent to anyone.</div>' : '')
+  + '</div>'
+  + '<div class="df"><button type="button" id="cancel" data-testid="bind-cancel">Cancel</button>'
+  +   '<button type="button" id="save" data-testid="bind-save" data-mode="'+mode+'"'+(canSave?'':' disabled')+'>'
+  +   (mode==="create" ? "Create and start the plan" : "Link and create the plan")+'</button></div>'
+  + '</div></div>';
+}
+
+function render(){
+  document.getElementById("sw").innerHTML = STATES.map(([k,l]) =>
+    '<button type="button" data-s="'+k+'" aria-pressed="'+(state===k)+'">'+l+'</button>').join("");
+  document.querySelectorAll('.sw button').forEach(b => b.onclick = () => { state=b.dataset.s; setup(); });
+  board();
+  document.getElementById("modal").innerHTML = dialog();
+  if (dlg){
+    const m = document.getElementById("modal");
+    const nn = m.querySelector('[data-testid="bind-newname"]');
+    if (nn) nn.oninput = e => { const c=e.target.selectionStart; dlg.newName = e.target.value; render();
+      const n2=document.querySelector('[data-testid="bind-newname"]'); n2.focus(); n2.setSelectionRange(c,c); };
+    m.querySelector('[data-testid="bind-launch"]').onchange = e => {
+      dlg.launch = e.target.value || null; dlg.touchedDate = true; render(); };
+    m.querySelector('#cancel').onclick = () => { state="board"; setup(); };
+  }
+}
+
+function setup(){
+  // THE MOVE IS NOT COMMITTED UNTIL SAVE. On cancel the card is where it started.
+  CARDS = [
+    {id:"c1", stage:"negotiation", title:"Crossbar Rowlett", city:"Dallas", venue:null, launch:null},
+    {id:"c2", stage:"confirmed", title:"LBJ Early College", city:"Austin", venue:{id:33,name:"LBJ Early College High School"}, launch:"2026-10-09"},
+    {id:"c3", stage:"confirmed", title:"Stony Point", city:"Austin", venue:null, launch:null},
+  ];
+  dlg = null;
+  if (state === "drop")     dlg = {cardId:"c1", cardTitle:"Crossbar Rowlett", city:"Dallas", newName:"", launch:null};
+  if (state === "ready")    dlg = {cardId:"c1", cardTitle:"Crossbar Rowlett", city:"Dallas", newName:"Crossbar Rowlett North", launch:"2026-11-06"};
+  if (state === "dupe")     dlg = {cardId:"c1", cardTitle:"Hat / The Hattrick", city:"Austin", newName:"The Hattrick", launch:"2026-11-06"};
+  if (state === "link")     dlg = {cardId:"c3", cardTitle:"Westlake", city:"Austin", newName:"Westlake", launch:null};
+  if (state === "backfill") dlg = {cardId:"c3", cardTitle:"Stony Point", city:"Austin", newName:"", launch:null};
+  render();
+}
+setup();
+</script>

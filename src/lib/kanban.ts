@@ -24,6 +24,16 @@ export type KanbanCard = {
   owner_user_id: string | null;
   sort_order: number;
   data: Record<string, unknown>;
+  /* THE fin_venues ROW THIS CARD IS ABOUT — migration 0172, and null until a person binds it.
+   *
+   * A card titled "Crossbar Rowlett" and the fin_venues row for Crossbar Rowlett were two
+   * unrelated records sharing a string; this is the link. It is NULLABLE because every card
+   * already sitting in Confirmed starts unbound and a migration cannot invent the link, and it is
+   * ALWAYS NULL ON THE VC BOARD, which shares this table and has no fields.
+   *
+   * launch_date IS NOT HERE. It lives on fin_venues, which is the point: Finance and Growth read
+   * one column. Copying it onto the card would make two homes for one fact. */
+  venue_id?: number | null;
   created_at: string;
   updated_at: string;
   // Present only after the stage_entered_at migration is applied. Until then the
