@@ -100,6 +100,10 @@ const NODE_SUITES = [
   // THE GOAL SHEET'S ARITHMETIC. Pure, sub-second, and it pins the exact fault the spreadsheet it
   // replaces has: a total that disagrees with its own rows because each row was rounded first.
   "scripts/field-goals-test.ts",
+  // WHO GETS MONEY AND HOW MUCH, for the whole-match credit run. Pure, and it pins the rule that
+  // decides a refund (card charge + the wallet credit they spent), the exclusions, the caps, and
+  // the second-run skip that stops a player being paid twice.
+  "scripts/credit-all-test.ts",
   "scripts/write-routes-logged-test.ts",
   "scripts/walltime-guard-test.ts",
   // THE DRAWER'S DATE/TIME MODEL. A match-record write: a silent hour shift here moves

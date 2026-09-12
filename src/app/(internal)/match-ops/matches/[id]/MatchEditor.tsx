@@ -27,6 +27,8 @@ import {
 } from "@/lib/managerAssign";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { useCancelMatch, cancelStakes } from "@/lib/useCancelMatch";
+import { useCreditEveryone, creditStakes } from "@/lib/useCreditEveryone";
+import { fmtUsd } from "@/lib/creditsModel";
 import MoneyInput from "@/components/MoneyInput";
 /* THE SHAPE OF A MATCH COMES FROM ONE PLACE. teamCountWrites and teamShapeError are the same two
  * functions Match panel calls — pure functions of (teamCount, perTeam) and (total, teamCount), so
@@ -36,6 +38,7 @@ import { teamCountWrites, teamShapeError } from "@/lib/rosterEditModel";
 import { noteLogResponse } from "@/lib/logHealth";
 import LogHealthBanner from "@/components/LogHealthBanner";
 import { useAuth, canEditMatches } from "@/lib/useAuth";
+import { can } from "@/lib/capabilities";
 import { wallDate, wallTime, buildStartDate, shiftedEndDate, isInvertedPair } from "@/lib/matchWallClock";
 import { tzShift } from "@/lib/matchTimezone";
 
@@ -490,6 +493,21 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
   /* ABOVE THE EARLY RETURNS. A hook after `if (!state) return …` runs on some renders and not
    * others, and React refuses: "Rendered more hooks than during the previous render." This is the
    * same trap the drawer's memos hit when they sat below `if (!orig) return`. */
+  /* CREDIT EVERYONE WHO PAID — the manager-no-show case, and a sibling of the cancel rather than a
+   * variant of it. Cancelling already credits and texts everybody; this is for the match that
+   * happened. The route refuses it on a cancelled match, so they can never both run. */
+  const creditAll = useCreditEveryone({ env: FULL_EDITOR_ENV, matchId: id });
+  // COURTESY GATES ONLY — the route holds both, read fresh from the database, per player.
+  const canCredit = can(appUser as never, "editCredits", appUser?.email);
+  const canText = can(appUser as never, "sendMessages", appUser?.email);
+  /* ON A CANCELLED MATCH, ASK ONCE — the refusal has to say WHAT the cancel already credited and to
+   * how many, and those numbers only exist in the dry run. It is a read; nothing is written. */
+  const cancelledNow = meta?.isCancelled === true;
+  useEffect(() => {
+    if (cancelledNow && canCredit && !creditAll.preview && !creditAll.busy) void creditAll.open();
+    // creditAll's identity is stable per render; open() is guarded by its own busy flag.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cancelledNow, canCredit]);
   const cancel = useCancelMatch({
     env: FULL_EDITOR_ENV, matchId: id, source: "Master Schedule panel · cancel",
     authHeaders: async () => {
@@ -1118,6 +1136,97 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
             </div>
           </Section>
 
+          {/* ── CREDIT EVERYONE WHO PAID ─────────────────────────────────────────────────────
+              Ryan: "in the match editors need a button that credits everyone in the match ...
+              Sometimes the manager doesnt show up". NOT the cancel, and deliberately not its
+              colour or its verb: cancelling credits everybody AND texts them AND ends the match,
+              this leaves the record standing and hands the money back. Two money actions that look
+              alike is its own failure mode.
+
+              REFUSED, NOT WARNED ABOUT, on a cancelled match — the cancel already credited those
+              players, and a live button beside a warning is how somebody pays twice. */}
+          <section className="card credit" data-testid="creditall-card">
+            <div className="cb"><div className="dz">
+              <p data-testid="creditall-stakes">
+                <b>{creditAll.preview
+                  ? creditStakes(creditAll.preview.plan)
+                  : "Credit everyone who paid — the match happened, the manager did not."}</b>
+              </p>
+              {creditAll.preview?.cancelled || cancel.preview?.alreadyCancelled || meta?.isCancelled === true ? (
+                <div className="ladderNote" data-testid="creditall-refused">
+                  {creditAll.preview?.refused ?? "Cancelled — the cancel already credited everyone who paid."}
+                </div>
+              ) : !creditAll.preview ? (
+                <button className="cbtn" data-testid="creditall-btn" disabled={creditAll.busy || !canCredit}
+                  title={canCredit ? undefined : "Crediting players needs EDIT CREDITS."}
+                  onClick={() => void creditAll.open()}>{creditAll.busy ? "Reading…" : "Credit everyone who paid…"}</button>
+              ) : creditAll.preview.refused ? (
+                <div className="ladderNote" data-testid="creditall-refused">{creditAll.preview.refused}</div>
+              ) : (
+                /* YES / NO AND NOTHING TYPED, the way the Cancel card does it. The breakdown under
+                   the count is the safeguard: a count alone cannot tell you the members were left
+                   out, and that is the number somebody has to be able to check before pressing. */
+                <div data-testid="creditall-confirm" className="creditwrap">
+                  <div className="bd" data-testid="creditall-breakdown">
+                    <div className="bdr">
+                      <span className="n">{creditAll.preview.plan.pay.length} get back what they gave up</span>
+                      <span className="why">card charge + any wallet credit they spent</span>
+                      <span className="c">{fmtUsd(creditAll.preview.plan.totalCents)}</span>
+                    </div>
+                    {creditAll.preview.plan.paidWithCreditCount > 0 && (
+                      <div className="bdr" data-testid="creditall-wallet">
+                        <span className="n">{creditAll.preview.plan.paidWithCreditCount} of those paid with wallet credit</span>
+                        <span className="why">refunded, not skipped</span>
+                        <span className="c">{fmtUsd(creditAll.preview.plan.paidWithCreditCents)}</span>
+                      </div>
+                    )}
+                    {creditAll.preview.plan.skips.map((s) => (
+                      <div className="bdr skip" data-testid="creditall-skip" data-reason={s.reason} key={s.reason}>
+                        <span className="n">{s.count} player{s.count === 1 ? "" : "s"}</span>
+                        <span className="why">{s.reason}</span>
+                        <span className="c">{fmtUsd(s.cents)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {/* THE TEXT IS A SEPARATE TICK, OFF BY DEFAULT. It reaches real phones, so it is a
+                      thing somebody chose. DISABLED until Ryan has read the wording — a control that
+                      looks live and does nothing is worse than one that is plainly off. */}
+                  <label className="tick" data-testid="creditall-notify-row">
+                    <input type="checkbox" data-testid="creditall-notify"
+                      checked={creditAll.notify}
+                      disabled={!canText || !creditAll.preview.notifyAvailable}
+                      onChange={(e) => creditAll.setNotify(e.target.checked)} />
+                    <span>Text them
+                      <small>{!canText
+                        ? "Texting needs SEND MESSAGES."
+                        : !creditAll.preview.notifyAvailable
+                          ? "Off until the wording is approved. Cancelling sends its own text; this does not."
+                          : "Cancelling sends its own text; this does not."}</small>
+                    </span>
+                  </label>
+                  <div className="cancelrow">
+                    <button className="secondary nowrap" data-testid="creditall-abort" onClick={creditAll.abort}>No</button>
+                    <button className="cbtn nowrap" data-testid="creditall-do" disabled={creditAll.busy}
+                      onClick={() => void creditAll.run()}>
+                      {creditAll.busy ? "Crediting…" : `Yes, credit ${creditAll.preview.plan.pay.length}`}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+            {creditAll.error && <div className="ladderNote bad" data-testid="creditall-error" style={{ marginTop: 10 }}>{creditAll.error}</div>}
+            {/* THE VERDICT IS PER PLAYER AND COUNTED. A run can end half done — retries are
+                forbidden — and pressing the button again credits only the ones that did not land. */}
+            {creditAll.result && (
+              <div className="ladderNote" data-testid="creditall-result" style={{ marginTop: 10 }}>
+                <b>{creditAll.result.landed} landed · {fmtUsd(creditAll.result.totalCreditedCents)}</b>
+                {creditAll.result.aborted > 0 && <> · {creditAll.result.aborted} aborted, balance moved</>}
+                {creditAll.result.failed > 0 && <> · {creditAll.result.failed} failed</>}
+                {creditAll.result.refusedPlayers > 0 && <> · {creditAll.result.refusedPlayers} outside your city</>}
+              </div>
+            )}
+            </div></section>
+
           {/* Cancel — its own red card. NEVER part of Save: Save sends the field diff, this fires a
               different endpoint with its own confirmation and its own verdict. */}
           <section className="card danger" data-testid="cancel-card">
@@ -1365,6 +1474,34 @@ const CSS = `
 .me .ladderNote.bad{border-color:var(--coralEdge);background:var(--coral);color:var(--coralInk);font-weight:800}
 .me .cancelrow{margin-left:auto;display:flex;align-items:center;gap:10px;flex:none}
 .me .cancelrow .dbtn{margin-left:0}
+/* ── CREDIT EVERYONE WHO PAID. AMBER, NOT THE CANCEL RED, and its own verb. Cancelling and
+   crediting-without-cancelling are two different money actions and must not read as the same one. */
+.me .card.credit{border-color:#F0DCB4;background:#FFFDF8}
+.me .cbtn{margin-left:auto;background:#E9A93C;border:1px solid #C08A2A;color:#2A1C05;font-family:inherit;
+  font-size:12px;font-weight:900;border-radius:9px;padding:9px 15px;cursor:pointer;white-space:nowrap;flex:none}
+.me .cbtn:hover:not(:disabled){background:#DC9C2C}
+.me .cbtn:disabled{opacity:.45;cursor:not-allowed}
+.me .creditwrap{margin-left:auto;min-width:min(420px,100%);display:flex;flex-direction:column;gap:9px}
+.me .creditwrap .cancelrow{margin-left:0}
+.me .creditwrap .cbtn{margin-left:0}
+/* THE BREAKDOWN IS THE SAFEGUARD, four or five grouped lines and never a roster. */
+.me .bd{border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#fff}
+.me .bdr{display:flex;align-items:center;gap:10px;padding:7px 11px;font-size:12px;border-top:1px solid var(--line)}
+.me .bdr:first-child{border-top:0}
+.me .bdr.skip{background:var(--slot);color:var(--muted)}
+.me .bdr .n{flex:1;min-width:0;font-weight:800;color:var(--ink)}
+.me .bdr.skip .n{font-weight:600;color:var(--muted)}
+.me .bdr .why{font-size:11px;color:var(--muted);flex:0 0 auto}
+.me .bdr .c{font-variant-numeric:tabular-nums;font-weight:800;flex:0 0 auto}
+.me .bdr.skip .c{font-weight:500}
+/* THE TICK IS A SENTENCE, NOT A FIELD LABEL. The .me label rule uppercases and letter-spaces every
+   label in this editor, which turned "Text them / Cancelling sends its own text" into clipped
+   capitals. Scoped to label.tick so the field labels keep their own treatment. */
+.me label.tick{display:flex;align-items:flex-start;gap:9px;font-size:12.5px;font-weight:700;
+  letter-spacing:0;text-transform:none;color:var(--ink)}
+.me label.tick input{width:15px;height:15px;margin:2px 0 0;flex:none;accent-color:#12694A}
+.me label.tick small{display:block;font-size:11px;color:var(--muted);margin-top:2px;font-weight:500;
+  letter-spacing:0;text-transform:none;white-space:normal}
 .me .nowrap{white-space:nowrap}
 .me .secondary{background:#fff;border:1px solid var(--line);color:var(--forest);font-family:inherit;
   font-size:12px;font-weight:900;border-radius:9px;padding:9px 15px;cursor:pointer;flex:none}

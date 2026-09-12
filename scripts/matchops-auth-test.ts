@@ -163,7 +163,14 @@ is("no route carries both a Match Ops read gate and an is_admin write gate any m
 // It is registered here so it can never drift onto a shared gate: the whole point of the grant is
 // that nobody acquires the ability to move money as a side effect of Match Ops.
 console.log("\nEDIT CREDITS — its own gate, deliberately outside Match Ops:");
-is("exactly ONE route is on the credits gate", importsCredits.map(rel).sort(), ["matchday/[env]/players/[playerId]/credits/route.ts"]);
+/* TWO NOW, AND THE SECOND IS REGISTERED HERE ON PURPOSE. credit-all runs the same adjustment the
+ * per-player route runs, once per player on one match — the manager-no-show case Ryan asked for. It
+ * holds the SAME gate rather than a gentler one: a whole-roster payout is not a lesser act than a
+ * single one. The list stays EXACT so a third route cannot arrive unnoticed. */
+is("exactly TWO routes are on the credits gate", importsCredits.map(rel).sort(), [
+  "matchday/[env]/matches/[id]/credit-all/route.ts",
+  "matchday/[env]/players/[playerId]/credits/route.ts",
+]);
 {
   const f = importsCredits[0];
   const src = f ? readFileSync(f, "utf8") : "";
