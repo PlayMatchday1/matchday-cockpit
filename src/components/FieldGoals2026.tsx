@@ -53,7 +53,20 @@ const DEC = 11;
 
 export default function FieldGoals2026() {
   const [data, setData] = useState<Payload | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  /* TWO ERROR STATES, BECAUSE THEY MEAN DIFFERENT THINGS. A LOAD failure blanks the page: a table
+   * that could not read its data should not pretend to render. A WRITE failure must not — the table
+   * is fine, one button did not work, and blanking the screen is not how to say so.
+   *
+   * THE BUG THIS FIXES: every write did `if (error) setErr(...)` and then called reload()
+   * unconditionally. reload() bumped the nonce, the effect refetched, succeeded, and ran
+   * setErr(null) — wiping the message microseconds after it was set. So a refused write looked
+   * EXACTLY like a successful one. Ryan pressed "Do not count this field", PostgREST answered
+   * PGRST204 because migration 0171 was not applied, and the page said nothing at all. */
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [writeErr, setWriteErr] = useState<{ key: string; message: string } | null>(null);
+  /* A FAILED WRITE PUTS THE CONTROL BACK. Bumping this re-syncs every input from the stored value,
+   * so a number that was refused does not sit on screen looking saved. */
+  const [revert, setRevert] = useState(0);
   const [unit, setUnit] = useState<"day" | "week">("day");
   const [open, setOpen] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -72,14 +85,23 @@ export default function FieldGoals2026() {
         const res = await authFetch("/api/growth/field-goals");
         const j = await res.json();
         if (!live) return;
-        if (!res.ok) { setErr(j?.error ?? `Load failed (${res.status})`); return; }
-        setData(j as Payload); setErr(null);
-      } catch (e) { if (live) setErr(errorText(e, "Failed to load the goals.")); }
+        if (!res.ok) { setLoadErr(j?.error ?? `Load failed (${res.status})`); return; }
+        // A SUCCESSFUL LOAD CLEARS ONLY THE LOAD ERROR. It must never clear a write error — that is
+        // precisely how the message used to disappear.
+        setData(j as Payload); setLoadErr(null);
+      } catch (e) { if (live) setLoadErr(errorText(e, "Failed to load the goals.")); }
     })();
     return () => { live = false; };
   }, [nonce]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
+  /* ONE SHAPE FOR EVERY WRITE ON THIS PAGE. On failure: keep the message, put the control back, and
+   * DO NOT reload — there is nothing to reload and the refetch is what destroyed the message. */
+  const failed = useCallback((key: string, e: unknown) => {
+    setWriteErr({ key, message: errorText(e, "That did not save.") });
+    setRevert((n) => n + 1);
+  }, []);
+  const saved = useCallback(() => { setWriteErr(null); reload(); }, [reload]);
 
   /* A ROW HAS TO EXIST BEFORE A TARGET OR AN ACTION CAN HANG OFF IT. A computed row is not stored
    * until somebody gives it something to store — which is why 35 venues render against however few
@@ -87,26 +109,26 @@ export default function FieldGoals2026() {
   const ensureRow = useCallback(async (r: Row): Promise<string | null> => {
     if (r.rowId) return r.rowId;
     const ident = r.venueId != null ? { venue_id: r.venueId } : r.fieldId != null ? { field_id: r.fieldId } : null;
-    if (!ident) return null;
+    /* UNREACHABLE TODAY, AND IT SAYS SO RATHER THAN SHRUGGING. A row with no venue and no field is a
+     * slot, and a slot always came FROM field_goal_rows, so it always has a rowId and returns above.
+     * If that ever stops being true, a control that cannot work should say so — it used to return
+     * null and every caller did `if (!rowId) return`, a silent no-op with no message at all. */
+    if (!ident) { failed(r.key, "This row has nothing to attach a goal to."); return null; }
     const { data: made, error } = await supabase.from("field_goal_rows").insert({ ...ident, city: r.city }).select("id").single();
-    if (error) { setErr(errorText(error)); return null; }
+    if (error) { failed(r.key, error); return null; }
     return (made?.id as string) ?? null;
-  }, []);
+  }, [failed]);
 
   const setTarget = useCallback(async (r: Row, month: string, value: number | null) => {
     setBusy(true);
     try {
       const rowId = await ensureRow(r);
       if (!rowId) return;
-      if (value == null) {
-        const { error } = await supabase.from("field_goal_targets").delete().eq("row_id", rowId).eq("month", month);
-        if (error) setErr(errorText(error));
-      } else {
-        const { error } = await supabase.from("field_goal_targets")
-          .upsert({ row_id: rowId, month, goal_daily: value }, { onConflict: "row_id,month" });
-        if (error) setErr(errorText(error));
-      }
-      reload();
+      const { error } = value == null
+        ? await supabase.from("field_goal_targets").delete().eq("row_id", rowId).eq("month", month)
+        : await supabase.from("field_goal_targets").upsert({ row_id: rowId, month, goal_daily: value }, { onConflict: "row_id,month" });
+      if (error) { failed(r.key, error); return; }
+      saved();
     } finally { setBusy(false); }
   }, [ensureRow, reload]);
 
@@ -118,22 +140,22 @@ export default function FieldGoals2026() {
       if (!rowId) return;
       const { error } = await supabase.from("field_goal_actions")
         .insert({ row_id: rowId, text: text.trim(), sort_order: (r.actions.at(-1)?.sortOrder ?? 0) + 1 });
-      if (error) setErr(errorText(error));
-      reload();
+      if (error) { failed(r.key, error); return; }
+      saved();
     } finally { setBusy(false); }
   }, [ensureRow, reload]);
 
-  const toggleAction = useCallback(async (a: Action) => {
+  const toggleAction = useCallback(async (a: Action, rowKey: string) => {
     const { error } = await supabase.from("field_goal_actions").update({ done: !a.done }).eq("id", a.id);
-    if (error) setErr(errorText(error));
-    reload();
-  }, [reload]);
+    if (error) { failed(rowKey, error); return; }
+    saved();
+  }, [failed, saved]);
 
-  const removeAction = useCallback(async (a: Action) => {
+  const removeAction = useCallback(async (a: Action, rowKey: string) => {
     const { error } = await supabase.from("field_goal_actions").delete().eq("id", a.id);
-    if (error) setErr(errorText(error));
-    reload();
-  }, [reload]);
+    if (error) { failed(rowKey, error); return; }
+    saved();
+  }, [failed, saved]);
 
   /* NOT COUNTED — deliberate, stored on the row, and reversible from the same panel that holds the
    * actions. Dormant is computed and needs no control at all. */
@@ -144,30 +166,30 @@ export default function FieldGoals2026() {
       if (!rowId) return;
       const { error } = await supabase.from("field_goal_rows")
         .update({ not_counted: value }).eq("id", rowId);
-      if (error) setErr(errorText(error));
-      reload();
+      if (error) { failed(r.key, error); return; }
+      saved();
     } finally { setBusy(false); }
   }, [ensureRow, reload]);
 
   const addSlot = useCallback(async () => {
     const { error } = await supabase.from("field_goal_rows").insert({ slot_name: "New Field - ", sort_order: Date.now() % 1e6 });
-    if (error) setErr(errorText(error));
-    reload();
-  }, [reload]);
+    if (error) { failed("fg-new", error); return; }
+    saved();
+  }, [failed, saved]);
 
   const renameSlot = useCallback(async (r: Row, name: string) => {
     if (!name.trim() || !r.rowId) return;
     const { error } = await supabase.from("field_goal_rows").update({ slot_name: name.trim() }).eq("id", r.rowId);
-    if (error) setErr(errorText(error));
-    reload();
-  }, [reload]);
+    if (error) { failed(r.key, error); return; }
+    saved();
+  }, [failed, saved]);
 
   const removeSlot = useCallback(async (r: Row) => {
     if (!r.rowId) return;
     const { error } = await supabase.from("field_goal_rows").delete().eq("id", r.rowId);
-    if (error) setErr(errorText(error));
-    reload();
-  }, [reload]);
+    if (error) { failed(r.key, error); return; }
+    saved();
+  }, [failed, saved]);
 
   const cur = data?.currentMonth ?? 8;
   const rows = useMemo(() => [...(data?.rows ?? [])], [data]);
@@ -223,7 +245,9 @@ export default function FieldGoals2026() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, all, cur]);
 
-  if (err) return <p className="p-6 text-[13px] text-red-700" data-testid="fg-error">{err}</p>;
+  /* THE EARLY RETURN IS FOR A LOAD FAILURE AND NOTHING ELSE. A page that cannot read its data must
+   * not pretend to render; a page whose last write was refused must not blank itself. */
+  if (loadErr) return <p className="p-6 text-[13px] text-red-700" data-testid="fg-error">{loadErr}</p>;
   if (!data) return <p className="p-8 text-center text-[13px]" style={{ color: "#8C9E93" }}>Loading…</p>;
 
   const u = unit === "day" ? "matches a day" : "matches a week";
@@ -277,7 +301,7 @@ export default function FieldGoals2026() {
         title="Existing fields" rows={rows} unit={unit} year={data.year} cur={cur} busy={busy}
         open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
         onTarget={setTarget} onAddAction={addAction} onToggleAction={toggleAction} onRemoveAction={removeAction}
-        onNotCounted={setNotCounted}
+        onNotCounted={setNotCounted} writeErr={writeErr} revert={revert}
         sort={sort} setSort={setSort} showDormant={showDormant} setShowDormant={setShowDormant}
         testId="fg-existing"
       />
@@ -285,7 +309,7 @@ export default function FieldGoals2026() {
         title="New fields" rows={slots} unit={unit} year={data.year} cur={cur} busy={busy}
         open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
         onTarget={setTarget} onAddAction={addAction} onToggleAction={toggleAction} onRemoveAction={removeAction}
-        onNotCounted={setNotCounted} sort={sort}
+        onNotCounted={setNotCounted} writeErr={writeErr} revert={revert} sort={sort}
         onAddRow={addSlot} onRename={renameSlot} onRemoveRow={removeSlot}
         testId="fg-new"
       />
@@ -377,7 +401,7 @@ function YearChart({ months, unit }: { months: { label: string; value: number; s
 
 function GoalTable({
   title, rows, unit, year, cur, busy, open, setOpen, draft, setDraft,
-  onTarget, onAddAction, onToggleAction, onRemoveAction, onNotCounted,
+  onTarget, onAddAction, onToggleAction, onRemoveAction, onNotCounted, writeErr, revert,
   sort, setSort, showDormant, setShowDormant,
   onAddRow, onRename, onRemoveRow, testId,
 }: {
@@ -386,9 +410,13 @@ function GoalTable({
   draft: Record<string, string>; setDraft: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   onTarget: (r: Row, month: string, v: number | null) => void;
   onAddAction: (r: Row, text: string) => void;
-  onToggleAction: (a: Action) => void;
-  onRemoveAction: (a: Action) => void;
+  onToggleAction: (a: Action, rowKey: string) => void;
+  onRemoveAction: (a: Action, rowKey: string) => void;
   onNotCounted: (r: Row, value: boolean) => void;
+  /* THE WRITE ERROR RENDERS BESIDE THE CONTROL THAT FAILED, keyed on the row. `revert` re-syncs the
+   * inputs from the stored values so a refused number does not sit there looking saved. */
+  writeErr: { key: string; message: string } | null;
+  revert: number;
   sort: GoalSort; setSort?: (s: GoalSort) => void;
   showDormant?: boolean; setShowDormant?: (v: boolean) => void;
   onAddRow?: () => void; onRename?: (r: Row, name: string) => void; onRemoveRow?: (r: Row) => void;
@@ -462,7 +490,7 @@ function GoalTable({
                       <span className="mr-2 inline-block h-2.5 w-2.5 rounded-full align-middle" data-testid="fg-dot"
                         style={{ background: out ? "#C3CEC8" : noGoal ? "#C3CEC8" : BAND_HUE[bandForDisplay(gap)] }} />
                       {r.kind === "slot" && onRename ? (
-                        <input data-testid="fg-slot-name" defaultValue={r.name} disabled={busy}
+                        <input key={`${r.key}-${revert}`} data-testid="fg-slot-name" defaultValue={r.name} disabled={busy}
                           onBlur={(e) => { if (e.target.value.trim() !== r.name) onRename(r, e.target.value); }}
                           className="w-[210px] rounded-md border border-transparent px-1.5 py-0.5 text-[13px] font-bold hover:border-[#D3DCD8] focus:border-[#2CDB87] focus:outline-none" />
                       ) : (
@@ -493,7 +521,7 @@ function GoalTable({
                       return (
                         <td key={k} className="border-t px-3 py-2 text-right" style={{ borderColor: "#EDF2EF" }}>
                           <GoalInput value={shown == null ? "" : fmtUnit(shown, unit)} suggested={typed == null}
-                            testId={`fg-goal-${MONTH_LABELS[mi]}`} disabled={busy}
+                            revert={revert} testId={`fg-goal-${MONTH_LABELS[mi]}`} disabled={busy}
                             title={typed != null ? "set" : noGoal ? "no December goal to ramp to" : "suggested by the ramp from this month to December"}
                             onCommit={(v) => onTarget(r, k, v == null ? null : unit === "day" ? v : v / 7)} />
                         </td>
@@ -501,7 +529,7 @@ function GoalTable({
                     })}
                     <td className="border-t px-3 py-2 text-right" style={{ borderColor: "#EDF2EF" }}>
                       <GoalInput value={dec == null ? "" : fmtUnit(dec, unit)} suggested={false} placeholder="set"
-                        testId="fg-goal-Dec" disabled={busy} title="set"
+                        revert={revert} testId="fg-goal-Dec" disabled={busy} title="set"
                         onCommit={(v) => onTarget(r, decKey, v == null ? null : unit === "day" ? v : v / 7)} />
                     </td>
                     <td className="border-t px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#EDF2EF" }} data-testid="fg-gap-cell">
@@ -518,6 +546,14 @@ function GoalTable({
                         : <span style={{ color: "#9AA8A1" }}>—</span>}
                     </td>
                   </tr>
+                  {/* IN PLACE, NOT INSTEAD OF THE PAGE. The table is fine; one control was refused. */}
+                  {writeErr?.key === r.key && (
+                    <tr data-testid="fg-write-error" data-key={r.key}>
+                      <td colSpan={8} className="px-3 pb-2 text-[12px]" style={{ color: "#A8341F", background: "#FDF3EF" }}>
+                        {writeErr.message}
+                      </td>
+                    </tr>
+                  )}
                   {open === r.key && (
                     <tr data-testid="fg-actions-row"><td colSpan={8} className="px-3 pb-3" style={{ background: "#FAFCFB" }}>
                       <div className="flex flex-col gap-1.5 pt-1">
@@ -530,10 +566,10 @@ function GoalTable({
                         </button>
                         {r.actions.map((a) => (
                           <div key={a.id} className="flex items-center gap-2 text-[12.5px]" style={{ color: "#3A4D44" }} data-testid="fg-action">
-                            <input type="checkbox" checked={a.done} disabled={busy} onChange={() => onToggleAction(a)}
+                            <input type="checkbox" checked={a.done} disabled={busy} onChange={() => onToggleAction(a, r.key)}
                               className="h-3.5 w-3.5 accent-[#12694A]" aria-label={a.text} />
                             <span className={`min-w-0 flex-1 ${a.done ? "line-through opacity-60" : ""}`}>{a.text}</span>
-                            <button type="button" aria-label="Remove action" disabled={busy} onClick={() => onRemoveAction(a)}
+                            <button type="button" aria-label="Remove action" disabled={busy} onClick={() => onRemoveAction(a, r.key)}
                               className="px-1 text-[14px]" style={{ color: "#9AA8A1" }}>×</button>
                           </div>
                         ))}
@@ -555,6 +591,10 @@ function GoalTable({
           </tbody>
         </table>
       </div>
+      {writeErr?.key === testId && (
+        <p data-testid="fg-write-error" data-key={testId} className="mt-1.5 rounded-md px-2.5 py-1.5 text-[12px]"
+          style={{ color: "#A8341F", background: "#FDF3EF" }}>{writeErr.message}</p>
+      )}
       {/* ONE LINE, FOLDED AWAY AND NOT DELETED: the rows are one press from view and their goals and
           actions survive. They still count in every total and in the year chart — dormancy is about
           the table's length, not the arithmetic. */}
@@ -572,12 +612,14 @@ function GoalTable({
 
 /* A SUGGESTED GOAL IS NOT A SET ONE, and it says so by being grey and italic. Typing over it stores
  * a number and it stops being a suggestion; clearing it hands the cell back to the ramp. */
-function GoalInput({ value, suggested, onCommit, testId, disabled, title, placeholder }: {
+function GoalInput({ value, suggested, onCommit, testId, disabled, title, placeholder, revert }: {
   value: string; suggested: boolean; onCommit: (v: number | null) => void;
-  testId: string; disabled: boolean; title: string; placeholder?: string;
+  testId: string; disabled: boolean; title: string; placeholder?: string; revert: number;
 }) {
   const [local, setLocal] = useState(value);
-  useEffect(() => { setLocal(value); }, [value]);
+  // `revert` is in the deps on purpose: a refused write bumps it, and the cell goes back to the
+  // stored value rather than sitting there showing a number the database never took.
+  useEffect(() => { setLocal(value); }, [value, revert]);
   return (
     <input
       data-testid={testId} data-suggested={suggested ? "1" : "0"} title={title} disabled={disabled}
