@@ -26,6 +26,7 @@ import { nameForVeo } from "@/lib/veoNameSync";
 import { useAuth, canEditMatches } from "@/lib/useAuth";
 import { isConfined } from "@/lib/cityConfinement";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
+import { writeVeoMatchName } from "@/lib/veoNameWrite";
 import { supabase } from "@/lib/supabase";
 import { usePhone } from "@/lib/usePhone";
 // THE SERVER'S OWN RESOLVERS, called on the client. venueResolver is pure — no supabase, no
@@ -515,107 +516,39 @@ export default function VeoMasterSchedule() {
   //
   // THE DIFF IS THE REQUEST BODY: `changes` carries `name` and nothing else. Echoing startDate back
   // would re-shift it — those are LOCAL WALL CLOCK despite the Z suffix.
-  /* ── THE RECONCILE: intent vs the 🎥 in the app, for future matches ─────────────────────────
-   * The capability that came off with the Veo coverage view, back as one number and one button.
-   * The pattern can mark a match nobody clicked — including one created next month — so something
-   * has to put the camera into the name, and Ryan's answer settles that it must: "every match with
-   * the camera should have it in the app too".
+  /* THE CAMERA-NAME RECONCILE MOVED TO THE VEO PAGE — VeoDayOps, at the foot, beside Recently
+ * uploaded. Ryan: "I dont need this camera banner at the top remove it", then "ok then move it to
+ * the veo page". It was a permanent amber banner here whose entire content was a button, and it is
+ * about FUTURE matches, which is not what this week-indexed page is for.
+ *
+ * writeName BELOW IS UNCHANGED and still has its three callers. The moved control calls the same
+ * writer through src/lib/veoNameWrite.ts. */
+  /* THE PUT ITSELF MOVED TO src/lib/veoNameWrite.ts, and nothing about this function's contract
+   * changed: same arguments, same {outcome, sent} | null return, same three callers. It moved
+   * because the camera-name reconcile now lives on the Veo page and has to call the SAME writer —
+   * one host guard, one EDIT MATCHES gate, one recordWrite — and a closure over this component's
+   * state cannot be called from another component.
    *
-   * A PERSON PRESSES IT, AND IT IS NOT A SCHEDULE. A match name is player-visible and this
-   * codebase already writes that rule down twice — crm-characterize-test.ts:87 and veoNameSync's
-   * closing note. There is no cron path to this and there must never be one.
-   *
-   * COUNTED ON DEMAND, NOT ON LOAD, AND THAT IS DELIBERATE. The count is only trustworthy if every
-   * candidate's LIVE name is read — the mirror lags a write by an hour and a mirror-based count
-   * re-proposes names it already wrote. That is one GET per candidate, so it runs when somebody
-   * asks for it rather than on every page view. */
-  const [rec, setRec] = useState<null | {
-    add: { apiId: number; city: string; venue: string; date: string; time: string; name: string; nextName: string }[];
-    addCount: number; stripCount: number; alreadyMarkedLive: number; truncated: boolean; unreadable: number;
-  }>(null);
-  const [recBusy, setRecBusy] = useState(false);
-  const [recRes, setRecRes] = useState<{ apiId: number; label: string; verdict: string; detail?: string }[] | null>(null);
-
-  async function countReconcile() {
-    if (recBusy) return;
-    setRecBusy(true); setRecRes(null);
-    try {
-      const { data: sess } = await supabase.auth.getSession();
-      const token = sess.session?.access_token;
-      if (!token) { setError("No active session."); return; }
-      const r = await fetch(`/api/veo/reconcile?env=${FULL_EDITOR_ENV}`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
-      const j = await r.json();
-      if (!r.ok) { setError(j.error ?? `HTTP ${r.status}`); return; }
-      setRec(j);
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-    finally { setRecBusy(false); }
-  }
-
-  /* ONE WRITE PER MATCH, ONE VERDICT PER MATCH. Through writeName, which is the same PUT the chip
-   * uses — one match-name writer in the estate, one host guard, one EDIT MATCHES gate, one
-   * recordWrite. A single outcome over fifty writes would be a lie. */
-  async function runReconcile() {
-    if (!rec || recBusy) return;
-    setRecBusy(true);
-    const out: { apiId: number; label: string; verdict: string; detail?: string }[] = [];
-    for (const c of rec.add) {
-      // nextName came from the LIVE name at count time; writeName re-runs nameForVeo over it and
-      // still refuses a no-change edit, so a name that gained a camera in between sends nothing.
-      const w = await writeName(c.apiId, c.name, true);
-      out.push({ apiId: c.apiId, label: `${c.date} ${c.time} · ${c.city} · ${c.venue}`,
-        verdict: w == null ? "NOT APPLIED" : w.outcome, detail: w == null ? "already marked — nothing sent" : undefined });
-      setRecRes([...out]);
-    }
-    setRecBusy(false);
-    await load(weekRef, true);
-    setRec(null);
-  }
-
+   * WHAT STAYED HERE IS THIS PAGE'S OWN MEMORY, which is not shareable and should not be: what we
+   * last wrote (the mirror lags an hour, so the next toggle must not be computed from a name we
+   * know is out of date) and which chip to mark as failed. */
   async function writeName(apiId: number, rawName: string, enabled: boolean): Promise<{ outcome: string; sent: string } | null> {
-    const edit = nameForVeo(rawName, enabled);
-    if (!edit.change) return null; // NOT A CHANGE — send nothing at all.
-    // Without EDIT MATCHES the request would 403. The flag still lands (the toggle is Clubhouse's
-    // own record); the name simply is not written, and the chip says so rather than retrying.
-    if (!mayWriteName) {
-      setError("The camera flag is set. Writing the 🎥 into the match name needs EDIT MATCHES.");
-      markFailed(apiId, enabled);
-      return { outcome: "FAILED", sent: edit.next };
-    }
     const { data: sess } = await supabase.auth.getSession();
-    const token = sess.session?.access_token;
-    if (!token) { setError("No active session."); return { outcome: "FAILED", sent: edit.next }; }
-    try {
-      const res = await fetch(`/api/matchday/${FULL_EDITOR_ENV}/matches/${apiId}`, {
-        method: "PUT",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        // The existing match write path: admin + EDIT MATCHES, host-guarded on the parsed host,
-        // recordWrite() into change_log with the old and new name, verdict from a re-read.
-        body: JSON.stringify({ changes: { name: edit.next }, source: "Veo camera toggle", saveId: crypto.randomUUID() }),
-      });
-      const j = (await res.json().catch(() => ({}))) as { outcome?: string; error?: string };
-      if (!res.ok) {
-        setError(`Camera mark not written to the match name: ${j.error ?? `HTTP ${res.status}`}`);
-        markFailed(apiId, enabled);
-        return { outcome: "FAILED", sent: edit.next };
-      }
-      // A 2xx IS NOT PROOF. The route classifies from a read-back; anything but `landed` is a
-      // failure to surface, not a success to assume.
-      const outcome = (j.outcome ?? "unknown").toUpperCase();
-      if (outcome === "LANDED") {
-        // Remember what landed. The mirror will not agree for a while, and the next toggle must
-        // not be computed from a name we know is out of date.
-        setWroteName((m) => new Map(m).set(apiId, edit.next));
-        setNameFailed((m) => { const n = new Map(m); n.delete(apiId); return n; });
-      } else {
-        setError(`Camera mark reported ${outcome} — the match name may not have changed.`);
-        markFailed(apiId, enabled);
-      }
-      return { outcome, sent: edit.next };
-    } catch {
-      setError("Network error writing the match name — the camera flag is set, the name is not.");
+    const w = await writeVeoMatchName({
+      env: FULL_EDITOR_ENV, apiId, rawName, enabled,
+      mayWrite: mayWriteName, token: sess.session?.access_token ?? null,
+      source: "Veo camera toggle",
+    });
+    if (w == null) return null; // NOT A CHANGE — nothing was sent.
+    if (w.outcome === "LANDED") {
+      setWroteName((m) => new Map(m).set(apiId, w.sent));
+      setNameFailed((m) => { const n = new Map(m); n.delete(apiId); return n; });
+    } else {
+      // The camera flag still lands — the toggle is Clubhouse's own record. The NAME did not.
+      setError(`Camera mark not written to the match name: ${w.reason ?? w.outcome}`);
       markFailed(apiId, enabled);
-      return { outcome: "FAILED", sent: edit.next };
     }
+    return { outcome: w.outcome, sent: w.sent };
   }
 
   const markFailed = (apiId: number, enabled: boolean) =>
@@ -1165,53 +1098,10 @@ export default function VeoMasterSchedule() {
 
       </div>
 
-      {/* THE RECONCILE LINE. One number and one button — see countReconcile for why the number is
-          only fetched when asked for. */}
-      {!confined && (
-        <div className="vms-recon" data-testid="reconcile">
-          {!rec ? (
-            <>
-              <span className="vms-recon-t">Camera names in the app</span>
-              <button type="button" className="vms-btn" data-testid="reconcile-count"
-                disabled={recBusy} onClick={() => void countReconcile()}>
-                {recBusy ? "Checking…" : "Check"}
-              </button>
-            </>
-          ) : rec.addCount === 0 ? (
-            <>
-              <span className="vms-recon-t">Every marked match already carries the camera in the app.
-                {rec.stripCount > 0 && <> {rec.stripCount} carr{rec.stripCount === 1 ? "ies a" : "y a"} 🎥 that Clubhouse says is off — listed, not touched.</>}
-              </span>
-              <button type="button" className="vms-btn" onClick={() => setRec(null)}>Close</button>
-            </>
-          ) : (
-            <>
-              <span className="vms-recon-ic" aria-hidden>!</span>
-              <span className="vms-recon-t" data-testid="reconcile-count-line">
-                <b>{rec.addCount} marked match{rec.addCount === 1 ? " has" : "es have"} no 🎥 in the app</b>
-                <span>Writing them renames each match in MatchDay, which players see.
-                  {rec.stripCount > 0 && <> {rec.stripCount} more carr{rec.stripCount === 1 ? "ies" : "y"} a 🎥 that Clubhouse says is off — those are listed, not touched.</>}
-                  {rec.truncated && <> More candidates remain; run it again after this batch.</>}
-                </span>
-              </span>
-              <button type="button" className="vms-btn vms-recon-go" data-testid="reconcile-write"
-                disabled={recBusy} onClick={() => void runReconcile()}>
-                {recBusy ? "Writing…" : `Write ${rec.addCount} name${rec.addCount === 1 ? "" : "s"}`}
-              </button>
-            </>
-          )}
-        </div>
-      )}
-      {/* ONE ROW PER WRITE. A single outcome over fifty writes would be a lie. */}
-      {recRes && (
-        <ul className="vms-recres" data-testid="reconcile-results">
-          {recRes.map((r) => (
-            <li key={r.apiId} data-testid="reconcile-result" data-verdict={r.verdict}>
-              <span className="v">{r.verdict}</span><span>{r.label}{r.detail ? ` — ${r.detail}` : ""}</span>
-            </li>
-          ))}
-        </ul>
-      )}
+      {/* THE RECONCILE ROW WAS HERE AND IS GONE, to the Veo page. It was a permanent amber
+          banner whose whole content was a button — amber before anything had been measured — and
+          what it reconciles is FUTURE matches, which this week-indexed page is not about.
+          VeoDayOps now carries it at the foot, day-independent, beside Recently uploaded. */}
 
       {loading && !week ? (
         <div className="vms-card"><div className="vms-state">Loading Veo coverage…</div></div>
@@ -1921,21 +1811,6 @@ const CSS = `
 /* THE MARGIN LIVES ON THE ROW. With 6px on each child it lands inside the flex line and a card
    carrying a pip grows taller than the six beside it; the row carries the gap and the chip keeps
    none of its own. .vms-cam still has its margin for every surface that renders it bare. */
-.vms-recon{display:flex;align-items:center;gap:12px;border:1px solid #E3C88A;background:#FEF6E7;
-  border-radius:12px;padding:12px 15px;margin-bottom:12px}
-.vms-recon-t{font-size:12.5px;color:#6A5320}
-.vms-recon-t b{font-size:14px;display:block;color:#5C4200}
-.vms-recon-t span{display:block;font-size:12.5px;color:#6A5320}
-.vms-recon-ic{width:26px;height:26px;border-radius:50%;background:#7A5200;color:#fff;display:flex;
-  align-items:center;justify-content:center;font-weight:800;flex:0 0 26px;font-size:14px}
-.vms-recon .vms-btn{margin-left:auto;white-space:nowrap}
-.vms-recon-go{border-color:#E3C88A;color:#7A5200}
-.vms-recres{list-style:none;margin:0 0 12px;padding:0;border:1px solid var(--line);border-radius:12px;background:#fff;overflow:hidden}
-.vms-recres li{display:flex;gap:10px;align-items:baseline;padding:8px 14px;border-bottom:1px solid var(--line);font-size:12px}
-.vms-recres li:last-child{border-bottom:0}
-.vms-recres .v{font-size:9.5px;font-weight:900;letter-spacing:.5px;color:var(--muted);flex:0 0 76px}
-.vms-recres li[data-verdict="LANDED"] .v{color:#046B45}
-.vms-recres li[data-verdict="FAILED"] .v{color:#a4231e}
 .vms-camrow{margin-top:6px;display:flex;align-items:center;gap:4px;flex-wrap:wrap;min-width:0}
 .vms-camrow .vms-cam{margin-top:0}
 .vms-rep{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);

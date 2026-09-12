@@ -26,6 +26,9 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { supabase } from "@/lib/supabase";
 import MatchSidePanel, { MATCH_SIDE_PANEL_CSS, type PanelTab } from "@/components/MatchSidePanel";
 import { CITY_CODE_TO_DISPLAY } from "@/lib/scheduleReconcile";
+import { useAuth, canEditMatches } from "@/lib/useAuth";
+import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
+import { writeVeoMatchName } from "@/lib/veoNameWrite";
 import { parseVeoSubject, processingDateFromSlug, resolveMatchDates } from "@/lib/veo";
 import {
   FILM_STATE_LABEL, TALLY_TILES, emptyTally, gapLabel, hasFilm, scoreTrace, tallyAddsUp, tileCount,
@@ -362,6 +365,20 @@ export default function VeoDayOps() {
           is exactly what you cannot find by walking the days. */}
       <RecentlyUploaded city={city} onOpenChat={(apiId) => { setPanelTab("chat"); setPanelMatch(apiId); }} />
 
+      {/* ── THE CAMERA NAMES, AND IT IS THE THIRD DAY-INDEPENDENT THING HERE ────────────────────
+          Moved off Master Schedule, where it was a permanent amber banner at the top whose whole
+          content was a button. Ryan: "I dont need this camera banner at the top remove it", then,
+          once told what it does: "ok then move it to the veo page".
+
+          IT SITS HERE FOR THE SAME REASON Recently uploaded does. Everything above is indexed by
+          the day a match was PLAYED; this is about FUTURE matches, so it does not move with the day
+          nav and must not refetch when it does.
+
+          AND IT IS OUTSIDE THE TALLY, for the same reason the 🎥-with-no-code group is: these
+          matches have no film state at all, and veoDay.ts asserts the five film states partition
+          the day exactly. It is not in the strip, the tally or any filter. */}
+      <VeoReconcile />
+
       {/* The same panel, the same two tabs, the same ChatPane. The Veo page has no CRM dock to
           collapse and no sibling list to step through, so it passes neither — the component assumes
           neither either. */}
@@ -552,6 +569,215 @@ const arrivedLabel = (iso: string | null): string => {
     month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: ARRIVAL_ZONE,
   });
 };
+
+/* ── CAMERA NAMES IN THE MATCHDAY APP ──────────────────────────────────────────────────────────
+ * The drift between Clubhouse's camera intent and the 🎥 in the player-visible match name, for
+ * FUTURE matches. /api/veo/reconcile computes it and WRITES NOTHING; this component PUTs the
+ * accepted ones one at a time through the estate's single match-name writer.
+ *
+ * ── NOTHING IS FETCHED ON MOUNT, AND THAT IS THE POINT ────────────────────────────────────────
+ * The count is only trustworthy if every candidate's LIVE name is read — the mirror lags a write by
+ * about an hour (6 of 6 landed writes still absent an hour later, measured) so a mirror-based count
+ * re-proposes names it already wrote. That is one GET per candidate, so it runs when somebody asks
+ * rather than on every page view. It is also why the page does not re-verify after writing: the
+ * mirror will disagree for a while and a surface that trusted it once flagged every successful
+ * write as unsynced and invited a Retry that re-sent the identical name. Three of those duplicates
+ * are in change_log as `notapplied`.
+ *
+ * ── THE RESTING STATE IS NOT AN ALERT ─────────────────────────────────────────────────────────
+ * On Master Schedule this was permanently amber with a bang, before anything had been measured.
+ * Amber is earned here: it arrives only when a count comes back non-zero.
+ *
+ * ── THE CANDIDATES ARE READ BEFORE ANYTHING IS WRITTEN ────────────────────────────────────────
+ * The route has always returned the list and the exact name each match would get; the old UI threw
+ * both away and rendered a count over a button. A player-visible rename you cannot read first is a
+ * confirm with nothing in it. Every row shows the match and the name it would become, and that name
+ * WRAPS rather than truncating — it is the thing being read.
+ *
+ * ── THE REVERSE DRIFT IS LISTED AND HAS NO CONTROL ────────────────────────────────────────────
+ * A match carrying 🎥 that Clubhouse says is off is either a stale flag or a camera somebody typed
+ * into a name by hand; migration 0100 records whole cities running nightly coverage with zero emoji,
+ * so "Clubhouse says off" is weak evidence. Removing a glyph a player has already seen is a
+ * different decision and this control does not make it. There is no write path for these anywhere.
+ *
+ * ── IT IS NEVER A CRON ────────────────────────────────────────────────────────────────────────
+ * A person presses Check, a person presses the write. The rule is written down twice already
+ * (crm-characterize-test.ts:87, veoNameSync's closing note) and the route header cites it.
+ */
+type ReconCandidate = { apiId: number; city: string; venue: string; date: string; time: string; name: string; nextName: string };
+type ReconStrip = Omit<ReconCandidate, "nextName">;
+type ReconPayload = {
+  add: ReconCandidate[]; addCount: number;
+  strip: ReconStrip[]; stripCount: number;
+  alreadyMarkedLive: number; truncated: boolean; unreadable: number; checkedLive: number;
+};
+type ReconVerdict = { apiId: number; label: string; verdict: string; detail?: string };
+
+function VeoReconcile() {
+  const { appUser } = useAuth();
+  const mayWrite = canEditMatches(appUser);
+  const [data, setData] = useState<ReconPayload | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [results, setResults] = useState<ReconVerdict[] | null>(null);
+
+  const check = async () => {
+    if (busy) return;
+    setBusy(true); setErr(null); setResults(null);
+    try {
+      const res = await authFetch(`/api/veo/reconcile?env=${FULL_EDITOR_ENV}`);
+      const j = await res.json();
+      if (!res.ok) { setErr(j?.error ?? `HTTP ${res.status}`); return; }
+      setData(j as ReconPayload);
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+
+  /* ONE WRITE PER MATCH, ONE VERDICT PER MATCH. A single outcome over fifty writes would be a lie.
+   * Each goes through writeVeoMatchName — one host guard, one EDIT MATCHES gate, one recordWrite —
+   * which re-runs nameForVeo over the name and still refuses a no-change edit, so a match that
+   * gained a 🎥 between the count and the write sends nothing and reports NOT APPLIED. */
+  const write = async () => {
+    if (!data || busy) return;
+    setBusy(true); setErr(null);
+    const out: ReconVerdict[] = [];
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token ?? null;
+    for (const c of data.add) {
+      const w = await writeVeoMatchName({
+        env: FULL_EDITOR_ENV, apiId: c.apiId, rawName: c.name, enabled: true,
+        mayWrite, token, source: "Veo camera-name reconcile",
+      });
+      out.push({
+        apiId: c.apiId,
+        label: `${c.date} ${c.time} · ${c.city} · ${c.venue}`,
+        verdict: w == null ? "NOT APPLIED" : w.outcome,
+        detail: w == null ? "already marked — nothing sent" : (w.reason ?? undefined),
+      });
+      setResults([...out]);
+    }
+    setBusy(false);
+    setData(null);
+  };
+
+  const landed = results?.filter((r) => r.verdict === "LANDED").length ?? 0;
+  const skipped = results?.filter((r) => r.verdict === "NOT APPLIED").length ?? 0;
+  const failed = results?.filter((r) => r.verdict !== "LANDED" && r.verdict !== "NOT APPLIED").length ?? 0;
+
+  const stripGroup = (list: ReconStrip[]) => (
+    <div className="rcgrp">
+      <h5 className="rcgh" data-testid="rec-strip-head">Showing 🎥 with the camera off · {list.length}</h5>
+      {list.map((m) => (
+        <div className="rcrow" data-testid="rec-row" data-id={m.apiId} key={m.apiId}>
+          <span className="rcwhen">{m.date} · {m.time}</span>
+          <span className="rcwhat"><b>{m.name}</b></span>
+        </div>
+      ))}
+      <p className="rcnote">Listed only. Removing a 🎥 players have already seen is a separate decision.</p>
+    </div>
+  );
+
+  /* THE RESULTS VIEW. The per-row chips keep LANDED / NOT APPLIED / FAILED — the estate's shared
+   * vocabulary, the same words change_log and every report use. Plain English in the summary line,
+   * machine verdicts on the rows; the chips are not translated. */
+  if (results) {
+    return (
+      <section className="rc" data-state="done" data-testid="veo-reconcile">
+        <div className="rchead">
+          <span className="rcttl">
+            {landed} renamed · {skipped} already had 🎥{failed > 0 ? ` · ${failed} failed` : ""}
+          </span>
+          <button type="button" className="rcbtn" data-testid="rec-close" onClick={() => setResults(null)}>Close</button>
+        </div>
+        <ul className="rcres" data-testid="rec-results">
+          {results.map((r) => (
+            <li key={r.apiId} data-testid="rec-result" data-verdict={r.verdict}>
+              <span className="rcv" data-verdict={r.verdict}>{r.verdict}</span>
+              <span>{r.label}{r.detail ? ` — ${r.detail}` : ""}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+    );
+  }
+
+  // CHECKED, AND NOTHING DRIFTED. Still reports the reverse direction, which is the only thing
+  // there is to look at.
+  if (data && data.addCount === 0) {
+    return (
+      <section className="rc" data-state="clean" data-testid="veo-reconcile">
+        <div className="rchead">
+          <span className="rcttl" data-testid="rec-head">Every upcoming camera match already shows 🎥</span>
+          <button type="button" className="rcbtn" data-testid="rec-close" onClick={() => setData(null)}>Close</button>
+          {data.stripCount > 0 && (
+            <span className="rcsub">
+              {data.stripCount} match{data.stripCount === 1 ? "" : "es"} show{data.stripCount === 1 ? "s" : ""} 🎥 with
+              {" "}{data.stripCount === 1 ? "its" : "their"} camera switched off in Clubhouse — listed below, not changed.
+            </span>
+          )}
+        </div>
+        {data.stripCount > 0 && stripGroup(data.strip)}
+      </section>
+    );
+  }
+
+  // CHECKED, AND THERE IS DRIFT. The only state that earns amber.
+  if (data) {
+    return (
+      <section className="rc" data-state="drift" data-testid="veo-reconcile">
+        <div className="rchead">
+          <span className="rcbang" aria-hidden>!</span>
+          <span className="rcttl" data-testid="rec-head">
+            {data.addCount} upcoming camera match{data.addCount === 1 ? "" : "es"} {data.addCount === 1 ? "is" : "are"} missing 🎥
+          </span>
+          {/* THE WRITE BUTTON CARRIES A WRITE VERB AND THE COUNT. If you cannot tell whether a
+              button writes, the button is wrong. */}
+          <button type="button" className="rcbtn rcgo" data-testid="rec-write" disabled={busy} onClick={() => void write()}>
+            {busy ? "Adding…" : `Add 🎥 to ${data.addCount} name${data.addCount === 1 ? "" : "s"}`}
+          </button>
+          <span className="rcsub">
+            This renames the match in MatchDay. <b>Players see the new name.</b>
+            {data.truncated && <> More candidates remain; run it again after this batch.</>}
+            {!mayWrite && <> EDIT MATCHES is required — the write is refused without it.</>}
+          </span>
+        </div>
+        <div className="rcgrp">
+          <h5 className="rcgh" data-testid="rec-add-head">Would get 🎥 · {data.addCount}</h5>
+          {data.add.map((m) => (
+            <div className="rcrow" data-testid="rec-row" data-id={m.apiId} key={m.apiId}>
+              <span className="rcwhen">{m.date} · {m.time}</span>
+              <span className="rcwhat">
+                <b>{m.name}</b>
+                {/* THE EXACT NAME IT WOULD GET, and it WRAPS. Truncating the thing being confirmed
+                    is how you get a confirm with nothing in it. */}
+                <span className="rcbecomes" data-testid="rec-becomes"><i>becomes</i> {m.nextName}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+        {data.stripCount > 0 && stripGroup(data.strip)}
+      </section>
+    );
+  }
+
+  /* IDLE. A plain header, a read button and one line saying what pressing it does — including that
+   * it changes nothing, because "Check" alone reads as both verify and tick. */
+  return (
+    <section className="rc" data-state="idle" data-testid="veo-reconcile">
+      <div className="rchead">
+        <span className="rcttl">Camera names in the MatchDay app</span>
+        <button type="button" className="rcbtn" data-testid="rec-check" disabled={busy} onClick={() => void check()}>
+          {busy ? "Checking…" : "Check for missing 🎥"}
+        </button>
+        <span className="rcsub">
+          Players only know a match is filmed if its name starts with 🎥. This looks for upcoming
+          camera matches that are missing it. <b>It changes nothing.</b>
+        </span>
+        {err && <span className="rcerr" data-testid="rec-error">{err}</span>}
+      </div>
+    </section>
+  );
+}
 
 function RecentlyUploaded({ city, onOpenChat }: { city: string; onOpenChat: (apiId: number) => void }) {
   const [rows, setRows] = useState<RecentRow[] | null>(null);
@@ -1889,7 +2115,71 @@ const CSS = MATCH_SIDE_PANEL_CSS + `
 .veo .foot{margin:16px 0 0;font-size:11.5px;color:var(--ink3);line-height:1.5}
 .veo code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;background:var(--bg);padding:1px 4px;border-radius:4px}
 
+/* ── CAMERA NAMES IN THE MATCHDAY APP ──────────────────────────────────────────────────────────
+   AMBER IS EARNED, NOT RESTING. Only [data-state="drift"] is tinted; idle and clean are the same
+   plain card every other section on this page is. The old banner was permanently amber with a bang
+   before anything had been measured, which is what made it read as a defect to be dismissed. */
+.veo .rc{border:1px solid var(--line);border-radius:14px;background:#fff;overflow:hidden;margin-top:14px}
+.veo .rc[data-state="drift"]{border-color:#E3C88A}
+.veo .rchead{display:flex;align-items:center;gap:10px;padding:12px 14px;flex-wrap:wrap}
+.veo .rc[data-state="drift"] .rchead{background:#FEF6E7}
+.veo .rcttl{font-size:13px;font-weight:800;letter-spacing:-.01em;min-width:0}
+.veo .rc[data-state="drift"] .rcttl{color:#5C4200}
+/* flex-basis:100% puts the line on its own row under the title and the button, at every width —
+   so the button never has to compete with a sentence for the same track. */
+.veo .rcsub{flex-basis:100%;font-size:11.5px;color:var(--ink3);margin-top:-2px}
+.veo .rc[data-state="drift"] .rcsub{color:#6A5320}
+.veo .rcerr{flex-basis:100%;font-size:11.5px;color:#b0311d;font-weight:700}
+.veo .rcbang{width:22px;height:22px;border-radius:50%;background:#7A5200;color:#fff;flex:none;
+  display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800}
+.veo .rcbtn{margin-left:auto;flex:none;min-height:38px;min-width:44px;padding:0 14px;border-radius:9px;
+  border:1px solid var(--line);background:#fff;font:inherit;font-size:12.5px;font-weight:700;
+  color:#0d3b2e;cursor:pointer;white-space:nowrap}
+/* THE GO BUTTON NEEDS ITS OWN HOVER, and this is a specificity trap worth naming.
+   .rcbtn:hover:not(:disabled) is (0,4,0); .rcgo is (0,2,0). So hovering the write button handed it
+   the pale --bg while .rcgo's color:#fff still applied — MEASURED white-on-#fbfcfc, an invisible
+   label on the one control that renders a player-visible name. Its own hover, at equal specificity
+   and later in the sheet, is what keeps it amber. */
+.veo .rcbtn:hover:not(:disabled){background:var(--bg)}
+.veo .rcgo{border-color:#7A5200;background:#7A5200;color:#fff}
+.veo .rcgo:hover:not(:disabled){background:#8d6000}
+.veo .rcbtn:disabled{opacity:.45;cursor:not-allowed}
+
+.veo .rcgrp{border-top:1px solid var(--line);padding:10px 14px}
+.veo .rcgh{font-size:10.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--ink2);margin:0 0 8px}
+.veo .rcrow{display:flex;gap:10px;align-items:baseline;padding:7px 0;border-top:1px solid var(--bg)}
+.veo .rcrow:first-of-type{border-top:0}
+.veo .rcwhen{flex:none;width:118px;font-size:11.5px;font-weight:700;color:var(--ink2);
+  font-variant-numeric:tabular-nums}
+.veo .rcwhat{min-width:0;flex:1}
+/* THE CURRENT NAME MAY ELLIPSIS — it is context. THE PROPOSED NAME MAY NOT: it is the thing being
+   confirmed, so it wraps. */
+.veo .rcwhat b{display:block;font-size:12.5px;font-weight:680;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.veo .rcbecomes{display:block;margin-top:3px;font-size:11.5px;color:#14603f;overflow-wrap:anywhere}
+.veo .rcbecomes i{font-style:normal;color:var(--ink3)}
+.veo .rcnote{font-size:11.5px;color:var(--ink3);margin:4px 0 0}
+
+.veo .rcres{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
+.veo .rcres li{display:flex;gap:10px;align-items:baseline;padding:8px 14px;
+  border-top:1px solid var(--bg);font-size:12px}
+.veo .rcres li:first-child{border-top:0}
+/* A FAILURE MUST NOT LOOK LIKE A SUCCESS. Three distinct colours, and the words are not
+   translated: LANDED / NOT APPLIED / FAILED is the vocabulary change_log and every report use. */
+.veo .rcv{flex:none;width:92px;font-size:10px;font-weight:800;letter-spacing:.06em}
+.veo .rcv[data-verdict="LANDED"]{color:#14603f}
+.veo .rcv[data-verdict="FAILED"]{color:#A83120}
+.veo .rcv[data-verdict="NOT APPLIED"]{color:#8a6112}
+/* Anything the route reports that is not one of the three still reads as not-success. */
+.veo .rcv:not([data-verdict="LANDED"]):not([data-verdict="NOT APPLIED"]){color:#A83120}
+
 @media (max-width:900px){
+  /* THE DATE COLUMN GIVES WAY FIRST. At 390 a 118px fixed column plus a wrapping proposed name is
+     what pushes a row past the edge; stacked, both read in full. */
+  .veo .rcrow{flex-wrap:wrap;gap:2px 10px}
+  .veo .rcwhen{width:auto;flex-basis:100%}
+  .veo .rcv{width:76px}
   .veo .rtop{grid-template-columns:minmax(0,1fr) 120px;row-gap:6px}
   .veo .rwait{grid-column:1;text-align:left}
   .veo .ractions{grid-column:2}
