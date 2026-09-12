@@ -86,6 +86,18 @@ async function boot(browser, storageState, width, opts = {}) {
     return route.fulfill({ status: 201, contentType: "application/json",
       body: JSON.stringify({ id: 999001, venue_name: "fixture", city: "Austin" }) });
   });
+  /* SAVING NOW SEEDS THE LAUNCH PLAN (24 rows, migration 0173). This suite clicks Save, so without
+   * this route it would write a real plan for the fixture venue the moment 0173 is applied — a
+   * suite must not write production. The seed is recorded and answered, and the plan is asserted
+   * from `writes` rather than from the table. */
+  await ctx.route("**/rest/v1/field_launch_tasks*", async (route) => {
+    const m = route.request().method();
+    if (m === "GET" || m === "HEAD") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+    }
+    writes.push({ table: "field_launch_tasks", method: m, body: route.request().postData() });
+    return route.fulfill({ status: 201, contentType: "application/json", body: "[]" });
+  });
   await ctx.route("**/rest/v1/kanban_cards*", async (route) => {
     const m = route.request().method();
     if (m !== "GET" && m !== "HEAD") {
@@ -234,6 +246,19 @@ async function main() {
       is("  ...carrying the stage AND the binding together", Object.keys(patch).sort(), ["stage", "venue_id"]);
       is("  ...moving it to confirmed", patch.stage, "confirmed");
       is("  ...and never a launch_date on the card", "launch_date" in patch, false);
+    }
+    /* ── THE PREVIEW'S PROMISE IS NOW KEPT ────────────────────────────────────────────────────
+     * "24 tasks will be created" was true of nothing when this dialog shipped: piece 1 bound the
+     * card and the venue and created no plan. Piece 2 seeds it here, so the preview and the write
+     * are asserted in the same breath — a preview that names a number the app does not deliver is
+     * the quiet lie this codebase is careful about. */
+    const seedWrite = writes.find((w) => w.table === "field_launch_tasks");
+    yes("  saving also seeds the launch plan the preview promised", seedWrite != null);
+    if (seedWrite) {
+      const rows = JSON.parse(seedWrite.body);
+      is("  ...24 tasks, the number the preview named", rows.length, 24);
+      is("  ...every one carrying a playbook key", rows.filter((r) => !r.template_key).length, 0);
+      is("  ...and none carrying a date of its own", rows.filter((r) => "launch_date" in r).length, 0);
     }
     await closeContext(ctx);
   }

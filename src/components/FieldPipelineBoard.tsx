@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { insertFinVenue, NEW_FIELD_BILLING_TYPE } from "@/lib/venueCreate";
+import { seedLaunchPlan } from "@/lib/launchTasks";
 import { useKanbanBoard } from "@/lib/useKanbanBoard";
 import KanbanCardModal, { type ModalState } from "./KanbanCardModal";
 import {
@@ -412,6 +413,20 @@ export default function FieldPipelineBoard() {
       }
       const ok = await api.updateCard(bind.cardId, { stage: "confirmed", venue_id: venueId });
       if (!ok) throw new Error("The field was saved but the card did not move. Reload and try again.");
+      /* ── THE 24 TASKS THE PREVIEW PROMISED ────────────────────────────────────────────────
+       * This is what makes the dialog's "24 tasks will be created" true. It is deliberately NOT
+       * allowed to fail the bind: the card and the venue are already written and correct, and
+       * seeding is idempotent, so a failure here (migration 0173 not applied yet, a dropped
+       * connection) is repaired the first time somebody opens the plan. Failing the bind instead
+       * would roll a person back to "Confirmed with no field", which is the state this whole
+       * feature exists to remove.
+       *
+       * THE COORDINATOR IS THE CARD'S OWNER — the only owner anything can honestly seed. The
+       * sheet's Department column names roles, never people. */
+      const owner = cards.find((c) => c.id === bind.cardId)?.owner_user_id ?? null;
+      const seeded = await seedLaunchPlan(venueId, owner);
+      if (seeded.missingTable) setToast("Field linked. The launch plan starts once migration 0173 is applied.");
+      else if (seeded.error) setToast("Field linked, but the launch plan did not seed. Open it to retry.");
       await loadVenues();
       setBind(null);
     } catch (e) {
@@ -419,7 +434,7 @@ export default function FieldPipelineBoard() {
     } finally {
       setBinding(false);
     }
-  }, [bind, bindCanSave, binding, bindMatch, api, loadVenues]);
+  }, [bind, bindCanSave, binding, bindMatch, api, loadVenues, cards]);
 
   /** Confirmed cards with no fin_venues row yet — the backfill, counted for the column header. */
   const unlinkedCount = useMemo(
