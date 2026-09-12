@@ -30,7 +30,7 @@ import {
   buildFieldCostSlots, buildFieldMonths, buildMatchRows, byCity, byField, canonCity, hasKickedOff,
   COST_BASIS_LABEL, type FieldMonth, type MatchRow,
 } from "@/lib/fieldEconomics";
-import { cityMembershipRevenueFor, memberAllocationReconFor, unattributedVenues, CITY_DISPLAY_ORDER, type Q2Month, type MemberReconRow } from "@/lib/financeStats";
+import { cityMembershipRevenueFor, unattributedVenues, CITY_DISPLAY_ORDER, type Q2Month } from "@/lib/financeStats";
 import { loadMembershipWindowsByUserId, type MembershipWindowsByUserId } from "@/lib/mdapiMatchesRead";
 import { isCityHidden } from "@/lib/types";
 import { downloadCsv, fmtMoney, fmtInt } from "@/components/growth/format";
@@ -832,9 +832,6 @@ export default function RevenueSection() {
             month={period.months[period.months.length - 1] ?? ""}
             gapRows={gapRows} launchOf={launchOf}
             membershipOf={(c) => (data ? cityMembershipRevenueFor(data, c, period.months[period.months.length - 1] ?? "") : 0)}
-            reconOf={(c, m) => (data
-              ? memberAllocationReconFor(data, c, m)
-              : { city: c, allocated: null, billed: 0, gap: null, gapPct: null, basisMonth: null, spots: 0, reason: "no data" })}
             membershipScoped={membershipScoped} />
         )}
       </div>
@@ -1031,7 +1028,7 @@ function NotMatchedInfo({ rows }: { rows: { key: string; month: string; gap: num
 // NUMERATOR as the average. ATH Pearland — 0 matches, $6,972 of revenue — read "$6,972 avg
 // revenue / match", which is worse than Infinity because it looks like an answer. "No rows" never
 // catches it: there IS a row, and it has money on it.
-function GroupTable({ rows, matchRows, grain, month, membershipOf, membershipScoped, reconOf, gapRows, launchOf }: {
+function GroupTable({ rows, matchRows, grain, month, membershipOf, membershipScoped, gapRows, launchOf }: {
   rows: FieldMonth[]; grain: "city" | "field"; month: Q2Month;
   /* THE MATCH ROWS ARE HERE FOR ONE REASON: membership at FIELD grain.
    *
@@ -1052,10 +1049,6 @@ function GroupTable({ rows, matchRows, grain, month, membershipOf, membershipSco
    * here would silently attach one city's members to another's pitch. */
   matchRows: MatchRow[];
   membershipOf: (city: string) => number; membershipScoped: boolean;
-  /* THE RECONCILIATION IS COMPUTED IN THE MODEL and handed here finished. This component reads
-   * the TAX-INCLUSIVE membership helper everywhere else, because that is the money billed; the
-   * gap has to be pre-tax on both sides, and doing it here would put two bases in one file. */
-  reconOf: (city: string, month: Q2Month) => MemberReconRow;
   gapRows: { key: string; month: string; gap: number; pct: number }[];
   // LAUNCHED is field-only and is NEW data, not a relabelled column: fin_venues.launch_date was
   // not reaching this table. A field group can span several venue rows (split-rate legs), so the
@@ -1131,134 +1124,75 @@ function GroupTable({ rows, matchRows, grain, month, membershipOf, membershipSco
     membership == null || total <= 0 ? null : `${((membership / total) * 100).toFixed(1)}%`;
   const money = (v: number | null) => (v == null ? "—" : fmtMoney(v));
 
-  /* City-month reconciliation, from the SAME match rows the table above is built from — so what
-   * the reader sees allocated is what is being compared, not a second derivation of it. */
-  const recon = (() => {
-    const byCity = new Map<string, { allocated: number | null; billed: number }>();
-    for (const m of matchRows) {
-      if (m.month !== month) continue;
-      const e = byCity.get(m.city) ?? { allocated: null, billed: 0 };
-      if (m.memberRevenue != null) e.allocated = (e.allocated ?? 0) + m.memberRevenue;
-      byCity.set(m.city, e);
-    }
-    return [...byCity.keys()].map((city) => reconOf(city, month))
-      .filter((r) => r.billed > 0 || (r.allocated ?? 0) > 0)
-      .sort((a, z) => z.billed - a.billed);
-  })();
-
+  /* ONE TABLE, NO FRAGMENT. This returned a fragment because an allocated-vs-billed table used to
+   * sit under the main one; that table is gone and so is the second child. */
   return (
-    <>
-      <div className={s.tblWrap}>
-        <table className={s.tbl} data-testid="revenue-group-table">
-          <thead>
-            {/* ONE THEAD, TWO GRAINS — the columns the two views share are written ONCE and in
-                one order, so they cannot drift apart. Only the genuinely view-specific ones are
-                conditional: VENUES and AVG REVENUE / VENUE are city-only, CITY and LAUNCHED are
-                field-only. AVG REVENUE / MATCH sits ahead of AVG REVENUE / VENUE so the shared
-                run reads identically in both. */}
-            <tr>
-              <th data-testid="gt-th-rank">#</th>
-              <th className="l">{grain === "city" ? "City" : "Field"}</th>
-              {grain === "field" && <th className="l">City</th>}
-              {grain === "field" && <th className="l">Launched</th>}
-              {grain === "city" && <th>Venues</th>}
-              <th>Matches</th>
-              {/* "(in month)" USED TO RIDE ON FOUR OF THESE. It is one fact, and four copies of it
-                  read as clutter rather than as emphasis — so it is stated ONCE above the table,
-                  beside the row count. It was checked column by column first: Matches, Venues and
-                  every revenue column here ARE month-scoped (the table filters `rows` to `month`
-                  before it counts anything), and LAUNCHED is NOT — it is fin_venues.launch_date, a
-                  fixed date. That is why the note above says "except Launched" on Field view. A
-                  blanket statement that is untrue of one column is worse than four repetitions. */}
-              <th>Total revenue
-                {gapRows.length > 0 && <NotMatchedInfo rows={gapRows} />}</th>
-              <th>Avg revenue / match</th>
-              {grain === "city" && <th>Avg revenue / venue</th>}
-              <th>DPP revenue</th>
-              <th>Membership revenue</th>
-              <th>Member mix</th>
+    <div className={s.tblWrap}>
+      <table className={s.tbl} data-testid="revenue-group-table">
+        <thead>
+          {/* ONE THEAD, TWO GRAINS — the columns the two views share are written ONCE and in
+              one order, so they cannot drift apart. Only the genuinely view-specific ones are
+              conditional: VENUES and AVG REVENUE / VENUE are city-only, CITY and LAUNCHED are
+              field-only. AVG REVENUE / MATCH sits ahead of AVG REVENUE / VENUE so the shared
+              run reads identically in both. */}
+          <tr>
+            <th data-testid="gt-th-rank">#</th>
+            <th className="l">{grain === "city" ? "City" : "Field"}</th>
+            {grain === "field" && <th className="l">City</th>}
+            {grain === "field" && <th className="l">Launched</th>}
+            {grain === "city" && <th>Venues</th>}
+            <th>Matches</th>
+            {/* "(in month)" USED TO RIDE ON FOUR OF THESE. It is one fact, and four copies of it
+                read as clutter rather than as emphasis — so it is stated ONCE above the table,
+                beside the row count. It was checked column by column first: Matches, Venues and
+                every revenue column here ARE month-scoped (the table filters `rows` to `month`
+                before it counts anything), and LAUNCHED is NOT — it is fin_venues.launch_date, a
+                fixed date. That is why the note above says "except Launched" on Field view. A
+                blanket statement that is untrue of one column is worse than four repetitions. */}
+            <th>Total revenue
+              {gapRows.length > 0 && <NotMatchedInfo rows={gapRows} />}</th>
+            <th>Avg revenue / match</th>
+            {grain === "city" && <th>Avg revenue / venue</th>}
+            <th>DPP revenue</th>
+            <th>Membership revenue</th>
+            <th>Member mix</th>
+          </tr>
+        </thead>
+        <tbody>
+          {list.map((r, i) => (
+            <tr key={r.label} data-testid="revenue-group-row" data-label={r.label}>
+              <td><span className={s.rank}>{i + 1}</span></td>
+              <td className="l">{r.label}</td>
+              {grain === "field" && <td className="l">{r.city}</td>}
+              {grain === "field" && <td className="l" data-testid="gt-launched">{launchOf(r.label) ?? "—"}</td>}
+              {grain === "city" && <td data-testid="gt-venues">{fmtInt(r.venueCount)}</td>}
+              <td data-testid="gt-matches">{fmtInt(r.matches)}</td>
+              <td data-testid="gt-total">{fmtMoney(r.total)}</td>
+              {/* guarded: revenue with zero matches must not print Infinity */}
+              <td data-testid="gt-avgmatch">{r.matches > 0 ? fmtMoney(r.total / r.matches) : "—"}</td>
+              {grain === "city" && <td data-testid="gt-avgvenue">{r.venueCount > 0 ? fmtMoney(r.total / r.venueCount) : "—"}</td>}
+              <td data-testid="gt-dpp">{fmtMoney(r.dpp)}</td>
+              <td data-testid="gt-member">{money(r.membership)}</td>
+              <td data-testid="gt-mix">{mixOf(r.membership, r.total) ?? "—"}</td>
             </tr>
-          </thead>
-          <tbody>
-            {list.map((r, i) => (
-              <tr key={r.label} data-testid="revenue-group-row" data-label={r.label}>
-                <td><span className={s.rank}>{i + 1}</span></td>
-                <td className="l">{r.label}</td>
-                {grain === "field" && <td className="l">{r.city}</td>}
-                {grain === "field" && <td className="l" data-testid="gt-launched">{launchOf(r.label) ?? "—"}</td>}
-                {grain === "city" && <td data-testid="gt-venues">{fmtInt(r.venueCount)}</td>}
-                <td data-testid="gt-matches">{fmtInt(r.matches)}</td>
-                <td data-testid="gt-total">{fmtMoney(r.total)}</td>
-                {/* guarded: revenue with zero matches must not print Infinity */}
-                <td data-testid="gt-avgmatch">{r.matches > 0 ? fmtMoney(r.total / r.matches) : "—"}</td>
-                {grain === "city" && <td data-testid="gt-avgvenue">{r.venueCount > 0 ? fmtMoney(r.total / r.venueCount) : "—"}</td>}
-                <td data-testid="gt-dpp">{fmtMoney(r.dpp)}</td>
-                <td data-testid="gt-member">{money(r.membership)}</td>
-                <td data-testid="gt-mix">{mixOf(r.membership, r.total) ?? "—"}</td>
-              </tr>
-            ))}
-            <tr className={s.tot}>
-              <td />
-              <td className="l">Total</td>
-              {grain === "field" && <td className="l">—</td>}
-              {grain === "field" && <td className="l">—</td>}
-              {grain === "city" && <td>{fmtInt(T.venues)}</td>}
-              <td>{fmtInt(T.matches)}</td>
-              <td data-testid="gt-tot-total">{fmtMoney(T.total)}</td>
-              <td data-testid="gt-tot-avgmatch">{T.matches > 0 ? fmtMoney(T.total / T.matches) : "—"}</td>
-              {grain === "city" && <td>{fmtMoney(T.total / Math.max(1, T.venues))}</td>}
-              <td data-testid="gt-tot-dpp">{fmtMoney(T.dpp)}</td>
-              <td data-testid="gt-tot-member">{money(T.membership)}</td>
-              <td data-testid="gt-tot-mix">{mixOf(T.membership, T.total) ?? "—"}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      {/* ── ALLOCATED vs BILLED ────────────────────────────────────────────────────────────────
-          THE GAP IS REAL AND IS THE PRICE OF THE FIX. The member rate is the PRIOR complete
-          month's revenue per member spot, applied to THIS month's spots — so allocated member
-          revenue no longer sums to the membership actually billed this month, and it should not:
-          it is a rate times a count, not a division of a pot. A number that quietly stops adding
-          up is worse than one that is openly approximate, so both figures and their difference
-          are printed at city-month grain rather than left for someone to discover. */}
-      {recon.length > 0 && (
-        <div className={s.tblWrap} data-testid="member-recon">
-          <table className={s.tbl}>
-            <thead>
-              <tr>
-                <th className="l">City &middot; {month}</th>
-                <th>Allocated to matches</th>
-                <th>Membership billed</th>
-                <th>Gap</th>
-                <th>Gap %</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recon.map((r) => (
-                <tr key={r.city} data-testid="member-recon-row" data-city={r.city}
-                  data-allocated={r.allocated == null ? "" : r.allocated.toFixed(2)}
-                  data-billed={r.billed.toFixed(2)} data-gap={r.gap == null ? "" : r.gap.toFixed(2)}>
-                  <td className="l">{r.city}</td>
-                  <td>{r.allocated == null ? "—" : fmtMoney(r.allocated)}</td>
-                  <td>{fmtMoney(r.billed)}</td>
-                  <td>{r.gap == null ? "—" : fmtMoney(r.gap)}</td>
-                  {/* The reason a city has no rate rides on the dash, so the empty state explains
-                      itself where it appears rather than only in the note below. */}
-                  <td title={r.reason ?? undefined}>{r.gapPct == null ? "—" : `${r.gapPct.toFixed(1)}%`}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className={s.note} data-testid="member-recon-note">
-            Allocated is this month&rsquo;s member spots priced at last month&rsquo;s rate. Billed is what
-            Stripe took this month, pre-tax. They are different questions and the difference is the gap.
-            A city with no rate shows &mdash;: it had no member spots in the prior month, so there is
-            nothing to price this month&rsquo;s spots with.
-          </p>
-        </div>
-      )}
-    </>
+          ))}
+          <tr className={s.tot}>
+            <td />
+            <td className="l">Total</td>
+            {grain === "field" && <td className="l">—</td>}
+            {grain === "field" && <td className="l">—</td>}
+            {grain === "city" && <td>{fmtInt(T.venues)}</td>}
+            <td>{fmtInt(T.matches)}</td>
+            <td data-testid="gt-tot-total">{fmtMoney(T.total)}</td>
+            <td data-testid="gt-tot-avgmatch">{T.matches > 0 ? fmtMoney(T.total / T.matches) : "—"}</td>
+            {grain === "city" && <td>{fmtMoney(T.total / Math.max(1, T.venues))}</td>}
+            <td data-testid="gt-tot-dpp">{fmtMoney(T.dpp)}</td>
+            <td data-testid="gt-tot-member">{money(T.membership)}</td>
+            <td data-testid="gt-tot-mix">{mixOf(T.membership, T.total) ?? "—"}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   );
 }
 

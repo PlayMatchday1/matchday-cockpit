@@ -1877,6 +1877,33 @@ export function priorMonthKey(month: Q2Month): Q2Month | null {
  *   - the prior month is covered and the city genuinely had no member spots in it.
  * Neither may fall back to the current month. That is the bug this function exists to remove, and
  * a fallback would put it back where nobody can see it.
+ *
+ * ── A RATE TIMES A COUNT DOES NOT DIVIDE A POT ─────────────────────────────────────────────────
+ * MOVED HERE FROM memberAllocationReconFor, which is gone. The fact did not go with it.
+ *
+ * Allocated member revenue does not sum to the membership billed in the same month, and it should
+ * not: this is a rate times a count, not a division of a pot. That is the honest consequence of
+ * pricing THIS month's spots at LAST month's rate, which is what the rest of this comment is
+ * about — the in-month basis made a match's member revenue depend on the day you looked at it
+ * (San Antonio, measured: -93% from day 2 to month end, three months running).
+ *
+ * SO DO NOT "FIX" THE DIFFERENCE BY MAKING IT DIVIDE THE POT AGAIN. It will look like a fix: the
+ * two figures will agree on every city and the discrepancy will be gone. It is the bug, restored.
+ * The numbers are answers to two different questions —
+ *
+ *     ALLOCATED = this month's member spots priced at last month's rate   (this function)
+ *     BILLED    = the membership Stripe actually took this month          (cityMembershipRevenueFor)
+ *
+ * The difference used to be printed as an allocated-vs-billed table on the Revenue page. That
+ * table is gone (it showed city-grain rows underneath a field-grain table, and it put a pre-tax
+ * figure beside the main table's tax-inclusive one under the same word, so Austin read $6,546 and
+ * $6,047 on one screen with nothing saying the 8.25% was sales tax). The INVARIANT is still
+ * guarded, without a UI element to carry it: verify-revenue-membership.mjs asserts that the two
+ * figures genuinely still differ, and goes red if they ever agree on every city again.
+ *
+ * BOTH SIDES OF ANY SUCH COMPARISON ARE PRE-TAX. This function's revenue half comes from
+ * cityMembershipRevenuePreTaxFor for that reason; a gap that is really a sales-tax rate is not a
+ * gap. The main table's membership column is deliberately tax-inclusive and must stay that way.
  */
 export function memberSpotRateFor(
   data: FinanceData,
@@ -1903,55 +1930,12 @@ export function memberSpotRateFor(
   return { rate: revenue / spots, basisMonth, spots, revenue };
 }
 
-/* ── ALLOCATED vs BILLED, AT CITY-MONTH GRAIN ────────────────────────────────────────────────
- * A rate times a count does not divide a pot, so allocated member revenue no longer sums to the
- * membership billed in the same month — and that is the honest consequence of pricing this
- * month's spots at last month's rate. The gap is published rather than left to be discovered.
- *
- * COMPUTED IN THE MODEL, not the view, for the same reason cityPnl allocates here: the view then
- * cannot reach for a tax-inclusive figure and put two bases inside one subtraction. Both sides of
- * this comparison are PRE-TAX.
- *
- * `allocated` is the city's member spots this month priced at the rate — identical by construction
- * to summing every match's allocation in that city, because that is the same multiplication. */
-export type MemberReconRow = {
-  city: string;
-  allocated: number | null;
-  billed: number;
-  gap: number | null;
-  gapPct: number | null;
-  basisMonth: Q2Month | null;
-  spots: number;
-  /** Why there is no rate, when there is none. Null when a rate exists. */
-  reason: string | null;
-};
-
-export function memberAllocationReconFor(
-  data: FinanceData,
-  city: string,
-  month: Q2Month,
-): MemberReconRow {
-  const billed = cityMembershipRevenuePreTaxFor(data, city, month);
-  const spots = data.mdapiMemberSpots.byCityMonth.get(`${city}|${month}`)?.member ?? 0;
-  const rate = memberSpotRateFor(data, city, month);
-  if (!rate) {
-    const basis = priorMonthKey(month);
-    const covered = data.mdapiMemberSpots.coveredMonths;
-    const reason = !basis
-      ? "no prior month for this month key"
-      : covered.size > 0 && !covered.has(basis)
-        ? `${basis} is outside the loaded window, so it cannot price this month`
-        : `no member spots in ${basis}, so there is no rate to price this month with`;
-    return { city, allocated: null, billed, gap: null, gapPct: null, basisMonth: basis, spots, reason };
-  }
-  const allocated = spots * rate.rate;
-  const gap = allocated - billed;
-  return {
-    city, allocated, billed, gap,
-    gapPct: billed > 0 ? (gap / billed) * 100 : null,
-    basisMonth: rate.basisMonth, spots, reason: null,
-  };
-}
+/* memberAllocationReconFor() AND MemberReconRow WERE HERE AND ARE GONE, with the
+ * allocated-vs-billed table on the Revenue page that was their only caller. The fact they
+ * existed to publish is now stated on memberSpotRateFor above, which is the code that is
+ * still here, and the invariant is asserted by verify-revenue-membership.mjs rather than by
+ * a table. A dead export is the next person's trap: it looked like the way to reconcile the
+ * two figures and nothing rendered it. */
 
 export function venueAllocatedMemberRevenueFor(
   data: FinanceData,

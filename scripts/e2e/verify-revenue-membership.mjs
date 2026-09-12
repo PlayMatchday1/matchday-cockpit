@@ -4,10 +4,16 @@
 // row; they now carry the allocation that already existed. (2) Four headers carried "(in month)";
 // that fact is stated once above the table instead.
 //
-// NOTHING HERE IS PINNED TO A LIVE FIGURE. The reconciliation reads BOTH numbers off the running
-// app — the Revenue Field view's total row and the Cities page's own revenue split — and compares
-// them to each other. A pinned $7,749 would go stale the next time anyone books a match, and would
-// then be "fixed" by copying whatever the page said, which records the bug instead of catching it.
+// NOTHING HERE IS PINNED TO A LIVE FIGURE. The allocated-vs-billed check reads BOTH numbers off
+// the running app — the Revenue Field view's total row and the Cities page's own revenue split —
+// and compares them to each other. A pinned $7,749 would go stale the next time anyone books a
+// match, and would then be "fixed" by copying whatever the page said, which records the bug
+// instead of catching it.
+//
+// IT NO LONGER READS A TABLE TO LEARN A MODEL PROPERTY. The Revenue page used to print an
+// allocated-vs-billed table and three assertions here read its rows; the table is gone and so are
+// they. The invariant they surrounded — that allocated and billed must still DIFFER — is asserted
+// from the two pages that survive, which is where it always belonged.
 
 import { chromium } from "playwright";
 import { installHarnessGuard, fatal, closeContext, closeBrowser, storageStateFor } from "./_session.mjs";
@@ -46,13 +52,35 @@ async function main() {
   await page.waitForFunction(() => !!document.querySelector('[data-testid="revenue-group-table"]'), null, { timeout: 240000 });
   for (const b of await page.$$("button")) { if ((await b.innerText()).trim() === "Field") { await b.click(); break; } }
   await page.waitForFunction(() => document.querySelectorAll('[data-testid="revenue-group-row"]').length > 0, null, { timeout: 120000 });
-  /* A PRESENCE WAIT BEFORE ANY OF THE MEMBERSHIP ASSERTIONS. The rows appear as soon as the
-   * revenue rows load; the member allocation needs the mdapi member-spot pull, which lands a
-   * second or two later. Until it does every rate is unknown and every membership cell reads "—",
-   * which is honest but is not the state this suite is about. Waiting for a real allocated figure
-   * is the readiness signal; a flat sleep is not. */
-  await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="member-recon-row"]')]
-    .some((r) => r.dataset.allocated !== ""), null, { timeout: 120000 });
+  /* ── A PRESENCE WAIT BEFORE ANY OF THE MEMBERSHIP ASSERTIONS ────────────────────────────────
+   * The rows appear as soon as the revenue rows load; the member allocation needs the mdapi
+   * member-spot pull, which lands a second or two later. Until it does every rate is unknown and
+   * every membership cell reads "—", which is honest but is not the state this suite is about.
+   * Waiting for a real allocated figure is the readiness signal; a flat sleep is not.
+   *
+   * READ OFF THE MAIN TABLE NOW, NOT THE RECON ROWS. This used to gate on
+   * member-recon-row[data-allocated] — the allocated-vs-billed table, which has been removed. The
+   * failure that would have caused is worth naming: the selector would match nothing, the
+   * condition would never go true, and the suite would sit here for the full 120 seconds and time
+   * out with exit 2. Not a failed assertion — a suite that never got to decide.
+   *
+   * IT IS THE SAME UNDERLYING CONDITION. gt-member is the allocation, printed per row; the pull
+   * having landed is exactly "at least one of these is not a dash". The surface changed, the
+   * signal did not.
+   *
+   * AND IT IS INSTRUMENTED, because a gate that is already satisfied on its first evaluation is
+   * not gating anything and would look identical to one that is. Both numbers are printed. */
+  const gateFirst = await page.evaluate(() => [...document.querySelectorAll('[data-testid="gt-member"]')]
+    .some((c) => c.textContent.trim() !== "—"));
+  const gateT0 = Date.now();
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="gt-member"]')]
+    .some((c) => c.textContent.trim() !== "—"), null, { timeout: 120000 });
+  const gateMs = Date.now() - gateT0;
+  console.log(`\n── readiness gate: satisfied on first evaluation = ${gateFirst}, waited ${gateMs}ms`);
+  if (gateFirst) {
+    console.log("     NOTE: the member-spot pull had already landed before the gate was reached, so"
+      + " this run did not exercise the wait. It is still the correct condition; see the comment.");
+  }
 
   const readRows = () => page.evaluate(() => [...document.querySelectorAll('[data-testid="revenue-group-row"]')].map((tr) => ({
     label: tr.getAttribute("data-label"),
@@ -179,19 +207,11 @@ async function main() {
   }
   atLeast("control: city chips found", chips.length, 1);
   const fieldTotals = {};
-  const reconByCity = {};
   for (const n of chips) {
     await (await page.$(`[data-testid="city-chip"][data-city="${n}"]`)).click();
     await page.waitForFunction(() => document.querySelectorAll('[data-testid="revenue-group-row"]').length > 0, null, { timeout: 60000 });
     await page.waitForTimeout(400);
     fieldTotals[n] = money(await page.evaluate(() => document.querySelector('[data-testid="gt-tot-member"]')?.textContent.trim()));
-    /* READ THE RECONCILIATION ROW HERE, while the page is filtered to THIS city — reading it after
-     * the loop would only ever find the last city clicked. */
-    reconByCity[n] = await page.evaluate((city) => {
-      const r = document.querySelector(`[data-testid="member-recon-row"][data-city="${city}"]`);
-      return r ? { allocated: r.dataset.allocated === "" ? null : Number(r.dataset.allocated),
-        billed: Number(r.dataset.billed), gap: r.dataset.gap === "" ? null : Number(r.dataset.gap) } : null;
-    }, n);
   }
 
   const cities = await ctx.newPage();
@@ -218,41 +238,31 @@ async function main() {
   const withMembers = chips.filter((n) => (cityTotals[n] ?? 0) > 0);
   atLeast("control: cities with member revenue on the Cities page", withMembers.length, 1);
 
-  /* ITEMISED, AND THE EXPECTATION INVERTED. This used to assert that field-grain membership EQUALS
-   * the Cities page figure, and it did, because both were slices of the same month's pot: the
-   * allocator divided this month's membership revenue by this month's member spots.
+  /* ── ALLOCATED AND BILLED MUST STILL BE DIFFERENT FIGURES ───────────────────────────────────
+   * THIS IS THE REASON THE SUITE IS WORTH HAVING, and it never needed the table it used to sit
+   * under. Three assertions here read the removed allocated-vs-billed rows — that the page
+   * published a row per city, that it published one for every city with membership revenue, and
+   * that each printed gap was allocated minus billed. All three tested the UI's arithmetic about
+   * a model property. They are gone with the table. This one tests the MODEL PROPERTY, off two
+   * surfaces that both survive:
    *
-   * That is the bug that was fixed. The rate is now the PRIOR COMPLETE MONTH's revenue per member
-   * spot — because taking both halves from the month in progress made a match's member revenue
-   * depend on the day you looked at it (San Antonio, measured: -93% from day 2 to month end, three
-   * months running). A rate times a count does not divide a pot, so the two figures are now
-   * answers to two different questions and they no longer match:
+   *     FIELD GRAIN  gt-tot-member on Revenue = this month's member spots priced at last
+   *                  month's rate                                              (ALLOCATED)
+   *     CITIES PAGE  "+ Member rev" = the membership Stripe actually took      (BILLED)
    *
-   *   FIELD GRAIN  = this month's member spots priced at last month's rate  (ALLOCATED)
-   *   CITIES PAGE  = the membership actually billed this month             (BILLED)
+   * THE INVARIANT: those two answer different questions, so they must not agree. A rate times a
+   * count does not divide a pot. IF THEY EVER MATCH AGAIN ON EVERY CITY, the prior-month rate has
+   * quietly become the in-month one — which is the bug that made a match's member revenue depend
+   * on the day you looked at it (San Antonio, measured: -93% from day 2 to month end, three months
+   * running). Equality here is the regression, not the goal.
    *
-   * So the assertion is now that the difference is PUBLISHED rather than absent — the Revenue page
-   * prints allocated, billed and the gap at city-month grain, and the gap it prints must be the
-   * subtraction of the two figures this suite just read off two different pages. A number that
-   * quietly stops adding up is the thing being guarded against; equality is not. */
-  const recon = Object.fromEntries(Object.entries(reconByCity).filter(([, v]) => v));
-  atLeast("the page publishes an allocated-vs-billed row per city", Object.keys(recon).length, 1);
-  const notPublished = withMembers.filter((n) => !recon[n]);
-  eq("…for every city that has membership revenue", notPublished, []);
-  /* THE GAP IT PRINTS IS THE SUBTRACTION IT CLAIMS. Both sides pre-tax, so this compares the
-   * published gap against the published allocated and billed on the same row. */
-  const badGap = Object.entries(recon)
-    .filter(([, r]) => r.allocated != null && Math.abs((r.allocated - r.billed) - (r.gap ?? 0)) > 0.02)
-    .map(([c, r]) => ({ city: c, ...r }));
-  eq("…and each printed gap is allocated minus billed", badGap, []);
-  /* AND THE TWO PAGES REALLY DO DIFFER NOW, which is what makes publishing the gap necessary. If
-   * they ever match again on every city, the prior-month rate has quietly become the in-month one. */
+   * NEITHER FIGURE IS PINNED. Both are read off the running app and compared to each other; a
+   * pinned $7,749 would go stale the next time anyone books a match and would then be "fixed" by
+   * copying whatever the page said, recording the bug instead of catching it. */
   const differ = withMembers.filter((n) => Math.abs((fieldTotals[n] ?? -1) - cityTotals[n]) > 1);
-  atLeast("control: allocated and billed are genuinely different figures", differ.length, 1);
+  atLeast("allocated and billed are still different figures, city by city", differ.length, 1);
   for (const n of withMembers) {
-    const r = recon[n];
-    console.log(`     ${n}: field/allocated $${fieldTotals[n]} vs cities/billed $${cityTotals[n]}`
-      + (r ? ` — page prints gap $${r.gap == null ? "—" : r.gap.toFixed(2)}` : " — NOT PUBLISHED"));
+    console.log(`     ${n}: field/allocated $${fieldTotals[n]} vs cities/billed $${cityTotals[n]}`);
   }
   await closeContext(cities);
 

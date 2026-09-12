@@ -12,7 +12,7 @@
  */
 import { readFileSync } from "node:fs";
 import {
-  priorMonthKey, memberSpotRateFor, memberAllocationReconFor,
+  priorMonthKey, memberSpotRateFor,
   matchAllocatedMemberRevenueFor, venueAllocatedMemberRevenueFor,
   type FinanceData, type Q2Month,
 } from "../src/lib/financeStats";
@@ -110,34 +110,59 @@ console.log("\nno prior month means no rate, and never a fallback");
   is("…and the allocator withholds rather than returning 0", matchAllocatedMemberRevenueFor(noPrior, {
     city: "San Antonio", venueName: "Soccer Central", matchStartIso: "2026-09-06T20:00:00.000Z", memberSpots: 10 }), null);
   is("…and so does the venue allocator", venueAllocatedMemberRevenueFor(noPrior, 10, "Sep 2026"), null);
-  const recon = memberAllocationReconFor(noPrior, "San Antonio", "Sep 2026");
-  is("the reconciliation says allocated is unknown, not zero", recon.allocated, null);
-  yes("…and says why, naming the month", /Aug 2026/.test(recon.reason ?? ""), recon.reason ?? "");
-  yes("…while still reporting what was billed", recon.billed > 0);
-
+  /* THREE memberAllocationReconFor CASES WERE HERE AND ARE GONE with that function: that it
+   * reported allocated as unknown rather than zero, that its reason named the month, and that it
+   * still reported what was billed. They tested the reconciliation's vocabulary, and the
+   * reconciliation was removed with the allocated-vs-billed table that was its only caller.
+   *
+   * WHAT THEY WERE REACHING THROUGH IS STILL ASSERTED, directly and above: memberSpotRateFor
+   * returns null, and both allocators withhold rather than returning 0. That is the behaviour that
+   * matters — a 0 would be a claim that the city earned nothing per member spot. */
   const newCity = mk({ mdapiMemberSpots: { ...mk().mdapiMemberSpots,
     byCityMonth: new Map([["San Antonio|Sep 2026", { member: 123, dpp: 0, other: 0 }]]) } } as Partial<FinanceData>);
   is("a city with no member spots last month has no rate either",
     memberSpotRateFor(newCity, "San Antonio", "Sep 2026"), null);
-  yes("…and says so in words rather than printing a zero",
-    /no member spots in Aug 2026/.test(memberAllocationReconFor(newCity, "San Antonio", "Sep 2026").reason ?? ""));
+  is("…and its allocator withholds too, rather than printing a zero",
+    matchAllocatedMemberRevenueFor(newCity, {
+      city: "San Antonio", venueName: "Soccer Central", matchStartIso: "2026-09-06T20:00:00.000Z", memberSpots: 10 }), null);
 }
 
-console.log("\nthe gap is published, not hidden");
+/* ── "THE GAP IS PUBLISHED, NOT HIDDEN" WAS HERE, AND THE GAP IS NO LONGER PUBLISHED ───────────
+ * Six assertions went with the allocated-vs-billed table: that allocated was this month's spots at
+ * last month's rate, that billed was pre-tax, that the gap was the signed difference, that it was
+ * big enough mid-month to be worth printing, that the model took billed pre-tax, and that the view
+ * rendered the model's row rather than recomputing it.
+ *
+ * THE FIRST IS STILL ASSERTED, one section up and better: the same multiplication is checked
+ * through matchAllocatedMemberRevenueFor, which is what actually prices a match. The rest were
+ * about a table.
+ *
+ * WHAT REPLACES THE LAST ONE. That assertion existed to stop the view reaching for the PRE-TAX
+ * helper and putting two bases in one file. The view no longer references it at all — but the
+ * opposite mistake is now the live risk, because the removed table is what made the difference
+ * visible: Austin printed $6,546 under MEMBERSHIP REVENUE and $6,047 under MEMBERSHIP BILLED on
+ * one screen, and the 8.25% between them was sales tax with nothing saying so. The tempting "fix"
+ * is to make the main table pre-tax so the two agree. It is wrong: that column is money billed and
+ * is deliberately tax-inclusive. So the assertion is inverted and kept. */
+console.log("\nthe main table's membership column stays tax-inclusive");
 {
-  const data = mk();
-  const r = memberAllocationReconFor(data, "San Antonio", "Sep 2026");
-  near("allocated is this month's spots at last month's rate", r.allocated, 123 * (4590.11 / 1.0825 / 569));
-  near("billed is this month's membership, pre-tax", r.billed, 4675.56 / 1.0825);
-  near("…and the gap is the difference, signed", r.gap, (r.allocated ?? 0) - r.billed);
-  yes("…which is large enough mid-month to be worth printing", Math.abs(r.gapPct ?? 0) > 50);
-  /* BOTH SIDES PRE-TAX. A gap that is really a sales-tax rate is not a gap. */
-  const src = readFileSync("src/lib/financeStats.ts", "utf8");
-  const fn = src.slice(src.indexOf("export function memberAllocationReconFor"), src.indexOf("export function venueAllocatedMemberRevenueFor"));
-  yes("the reconciliation takes billed pre-tax", /cityMembershipRevenuePreTaxFor/.test(fn));
   const view = readFileSync("src/components/finance/RevenueSection.tsx", "utf8");
-  yes("…and the view renders it rather than recomputing it", /reconOf\(city, month\)/.test(view) && !/cityMembershipRevenuePreTaxFor/.test(view));
-  yes("…on the page, with the gap and its reason", /data-testid="member-recon"/.test(view) && /r\.reason/.test(view));
+  yes("the view prices its membership column with the TAX-INCLUSIVE helper",
+    /cityMembershipRevenueFor\(/.test(view));
+  yes("…and never reaches for the pre-tax one",
+    !/cityMembershipRevenuePreTaxFor/.test(view));
+  /* AND THE PRE-TAX HELPER IS STILL ALIVE where it belongs — inside the rate, whose two halves
+   * must both be pre-tax. A grep that passed because the function had been deleted everywhere
+   * would prove nothing. */
+  const model = readFileSync("src/lib/financeStats.ts", "utf8");
+  const rate = model.slice(model.indexOf("export function memberSpotRateFor"),
+    model.indexOf("export function venueAllocatedMemberRevenueFor"));
+  yes("control: the rate itself still takes revenue pre-tax",
+    /cityMembershipRevenuePreTaxFor/.test(rate));
+  /* NO DEAD EXPORT LEFT BEHIND. The table is gone; so is the model function that fed it. */
+  yes("memberAllocationReconFor is gone from the model", !/export function memberAllocationReconFor/.test(model));
+  yes("…and MemberReconRow with it", !/export type MemberReconRow/.test(model));
+  yes("…and nothing in the view renders a member-recon node", !/member-recon/.test(view));
 }
 
 console.log(`\nmember-rate: ${pass} passed, ${fails.length} failed`);
