@@ -525,7 +525,31 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
             : { ...s, conversations: { ...s.conversations, [storedId]: j } },
         );
         setDockedThreadId(storedId);
-        setDockOpen(storedOpen !== "0");
+        /* ── A DOCK RESTORES COLLAPSED ON A PHONE, WHATEVER WAS STORED ────────────────────────
+         * MEASURED, 2026-09-12, iPhone-width viewport on /match-ops/gameday with a real thread in
+         * sessionStorage: the expanded panel is `fixed right-0 bottom-0 w-[360px]` at z-index 40,
+         * so it rendered 360px wide and 844px tall — 92% of a 390px screen, top to bottom, over
+         * the board. Thirty pixels of Gameday Ops were visible. The collapsed bubble was not on
+         * the page at all, because the dock had come back OPEN.
+         *
+         * WHY IT CAME BACK OPEN. sessionStorage survives a reload within the tab, and in an
+         * installed PWA the webview session survives being backgrounded — so "open" persisted from
+         * whenever the operator last read a message and was restored on every later launch. The
+         * board does collapse the dock, but only when the MATCH PANEL opens (GamedayBoard's
+         * drawerId effect); being on a phone was not itself a reason.
+         *
+         * THE THREAD AND THE DRAFT ARE NOT TOUCHED — this is the same collapse-only move the board
+         * makes, so nothing is lost and the bubble reopens it in one tap. On a phone a 360px panel
+         * is not a dock beside your work, it IS your work, and it is not what the operator asked
+         * for by launching the app.
+         *
+         * 640px IS THE SAME BREAKPOINT the dock's own markup already uses to choose the bubble over
+         * the rail (`sm:hidden` / `sm:flex`), so this agrees with what it renders rather than
+         * introducing a second idea of "phone". */
+        const phone = typeof window !== "undefined"
+          && typeof window.matchMedia === "function"
+          && window.matchMedia("(max-width: 639.98px)").matches;
+        setDockOpen(!phone && storedOpen !== "0");
         // Rehydrate the draft ONLY for the thread actually being restored — never resurrect drafts
         // for threads no longer in play (item 1).
         try {

@@ -31,7 +31,7 @@ import {
   realCount, fakeCount, capacity, openSpots, teamCount, short, shortBy, fill, flags, attention,
   acLevel, minsToDeadline, nextRelease, nextMark, inCities, passesFilter, stillToCome, riskTier, snapRail, vsMin, vsMinDelta, STD_LEAD, MARKS, autoCancels,
   atRisk, realFillPct, dayBucket, DAY_BUCKETS, passesStrip, meter, showsDeadline, type DayBucket, type StripKey,
-  bannerUrgent, defaultBanners, riskSubtitle, BANNER_LEAD_MINUTES, DEFAULT_BANNER_CAP,
+  bannerUrgent, riskSubtitle,
 } from "@/lib/gamedayModel";
 import { reviewCell } from "@/lib/gamedayReviews";
 import {
@@ -146,8 +146,16 @@ export default function GamedayBoard({
   /* WHICH SECTIONS ARE OPEN. Finished starts CLOSED — it is the largest section by the end of a
    * day and it is the one nobody is acting on. */
   const [openSec, setOpenSec] = useState<Record<DayBucket, boolean>>({ soon: true, live: true, done: false, cx: false });
-  /* PENDING MINIMUM ADJUSTMENTS, per match id, from the banner stepper. A value here means the
-   * operator has stepped but not saved. It is DISCARDED when the editor opens — see openDrawer. */
+  /* ── WHICH ROWS HAVE THEIR CONTROLS OPEN ──────────────────────────────────────────────────────
+   * SEVERAL AT ONCE, DELIBERATELY. A single nullable id would have made this an accordion, and the
+   * job it is for is comparing: an operator seeding spots across the four Austin matches wants all
+   * four sets of numbers on the screen, not one at a time with the others folded behind the one
+   * they are reading. Nothing about the state is expensive — the block is markup, not a fetch. */
+  const [adjusting, setAdjusting] = useState<Record<number, boolean>>({});
+  const toggleAdjust = useCallback((id: number) => setAdjusting((p) => ({ ...p, [id]: !p[id] })), []);
+  /* PENDING MINIMUM ADJUSTMENTS, per match id, from either stepper — the banner's or a row's. A
+   * value here means the operator has stepped but not saved. It is DISCARDED for THAT MATCH when
+   * the editor opens on it — see openDrawer. */
   const [pendingMin, setPendingMin] = useState<Record<number, number>>({});
   /* THE OTHER TWO PENDING VALUES. Fakes and the 3h rung follow the same local-then-save shape as
    * the minimum: step freely, nothing leaves the browser until Save. */
@@ -238,7 +246,31 @@ export default function GamedayBoard({
   }, []); // the mhead is 3 fixed bands — height is constant; only mount + viewport resize matter
 
   const guardLeave = () => { if (drawerDirty) { say("Save or revert first.", true); return false; } return true; };
-  const goDay = (d: string) => { if (!guardLeave()) return; if (drawerId != null) setDrawerId(null); setDate(d); };
+  /* ── WHAT A DAY CHANGE DID TO A PENDING STEPPER EDIT: NOTHING, SILENTLY ───────────────────────
+   * guardLeave() only ever asked the EDITOR whether it was dirty. The pending maps are keyed by
+   * match id and were never cleared here, so a stepped-but-unsaved value survived the day change
+   * intact and invisibly: the new day's rows do not include that match, so nothing on screen
+   * showed the draft, and it reappeared — along with its save verdict — the moment the operator
+   * navigated back. On a board where only a banner could hold a draft that was nearly unreachable.
+   * With a draft available on every row it is a trap: an edit you cannot see is an edit you cannot
+   * revert, and the Save button for it is on a page you are not looking at.
+   *
+   * IT IS NOW A VISIBLE DISCARD, NOT A BLOCK. Blocking the day change would have been consistent
+   * with the editor's "Save or revert first", and it would have been the wrong call: the row
+   * holding the draft may be filtered out of the current view, in which case there is no control
+   * on screen to revert with and the operator is stranded on a date. Discarding and SAYING SO
+   * leaves them free to move and tells them what it cost. */
+  const goDay = (d: string) => {
+    if (!guardLeave()) return;
+    const drafts = new Set([...Object.keys(pendingMin), ...Object.keys(pendingSpots)]).size;
+    if (drafts > 0) {
+      setPendingMin({}); setPendingSpots({}); setSaveState({});
+      say(`${drafts} unsaved adjustment${drafts === 1 ? "" : "s"} discarded — changing day.`, true);
+    }
+    setAdjusting({});
+    if (drawerId != null) setDrawerId(null);
+    setDate(d);
+  };
 
   // scope = the city selection; the STATS (filter counts, band counts) derive from it,
   // not just the grid.
@@ -278,27 +310,35 @@ export default function GamedayBoard({
     () => DAY_BUCKETS.map((B) => ({ B, rows: shown.filter((m) => dayBucket(m, now) === B.k) })),
     [shown, now],
   );
-  const isToday = date === today;
-  /* ── WHICH BANNERS RENDER, AND WHEN ───────────────────────────────────────────────────────────
-   * DEFAULT VIEW: only matches that are urgent TODAY - short, armed, and inside
-   * BANNER_LEAD_MINUTES of their deadline. Capped, soonest deadline first, with a line offering
-   * the rest. On any other date the default view shows no banners at all: nine interrupts about
-   * tomorrow pushed the match table off the screen and taught the operator to scroll past them.
-   *
+  /* `isToday` WAS HERE AND IS GONE with the default view's banners — it existed to tell
+   * defaultBanners() whether to interrupt at all. The two remaining readers of that question,
+   * riskSubtitle() and riskCities, each pass `date === today` themselves. */
+  /* ── WHICH BANNERS RENDER, AND WHEN: NEEDS ATTENTION, AND NOWHERE ELSE ────────────────────────
    * NEEDS ATTENTION: every short match, as a banner INSTEAD of a row. That filter is what the
-   * banner format is for - the operator asked for the list, so the list is the interrupt.
+   * banner format is for - the operator asked for the list, so the list is the interrupt, and the
+   * table is not drawn at all beneath it.
    *
-   * EVERY OTHER FILTER: rows, never banners. */
+   * EVERY OTHER VIEW, INCLUDING THE DEFAULT ONE: rows, never banners. The slot renders nothing.
+   *
+   * THE DEFAULT VIEW USED TO DRAW UP TO THREE OF THEM and that was the defect. The same match was
+   * on the screen twice — a red card at the top and a row in the table below — in two visual
+   * languages, each carrying its own copy of the controls. On a 390px phone the cards were most of
+   * the first screen, so the match the operator had come to find was under them, and the one they
+   * were being shown was also under them, further down, looking like a different match.
+   *
+   * ONE MATCH, ONE PLACE ON THE PAGE. The urgent ones are not lost by this: the Needs attention
+   * tile counts them, its subtitle names the soonest deadline, the city chip goes red, and every
+   * row that qualifies carries its own "cancels in" chip. Four signals, none of them a duplicate
+   * row. And the steppers the cards existed to carry now reach EVERY match through Adjust, so the
+   * card is no longer the only way to touch them. */
   /* `visible` fed the old grouping and now only supplies the panel's prev/next siblings. It
    * follows the strip, which is the only selection the page still has. */
   const visible = shown;
   const risky = useMemo(() => scope.filter((m) => atRisk(m, now)).sort(byKickoff), [scope, now]);
   const bannerMode = strip === "risk";
-  const defaults = useMemo(() => defaultBanners(scope, now, isToday), [scope, now, isToday]);
   const banners = bannerMode
     ? risky.slice().sort((a, b) => minsToDeadline(a, now) - minsToDeadline(b, now))
-    : defaults.show;
-  const moreCount = bannerMode ? 0 : defaults.more;
+    : [];
   /* CITIES HOLDING AN AT-RISK MATCH, for the chip's risk style. Derived from `matches`, not
    * `scope`: selecting Austin must not stop Houston's chip from showing that Houston has a
    * problem — that is the one moment the operator most needs to see it. */
@@ -410,18 +450,27 @@ export default function GamedayBoard({
   const money = (c: number | null | undefined) => (c == null ? "—" : "$" + centsToDollars(c));
 
   // A read-only caller never opens the panel — it is not hidden, it is not built.
+  /* ── DISCARD THE ONE MATCH'S DRAFT, NOT EVERY MATCH'S ─────────────────────────────────────────
+   * THE BUG THIS REPLACES. These three setters were called with `{}` — they wiped the pending
+   * minimum, the pending spots and the save verdict for EVERY match on the board. With one banner
+   * on screen that was invisible: the only draft there could be was the one being discarded. Now
+   * that every row can hold a draft it is a data-loss bug with a plausible shape — step four
+   * Austin matches, tap the fifth to read its roster, and the four edits are gone with no message.
+   *
+   * THE RULE ITSELF IS UNCHANGED AND IS THE POINT. The stepper and the editor write the same
+   * field, and two live drafts of one field is how a value nobody chose gets saved: the operator
+   * steps to 7, opens the editor to check something, sees 7 pre-filled, assumes it is stored, and
+   * saves it. So the match being opened has its draft discarded — every other match keeps its own,
+   * because the editor is not open on those and cannot pre-fill from them. */
+  const dropDraft = useCallback((id: number) => {
+    setPendingMin((p) => { const n = { ...p }; delete n[id]; return n; });
+    setPendingSpots((p) => { const n = { ...p }; delete n[id]; return n; });
+    setSaveState((p) => { const n = { ...p }; delete n[id]; return n; });
+  }, []);
   const openDrawer = (id: number) => {
     if (onOpenMatch) { onOpenMatch(id); return; }
     if (drawerId != null && drawerId !== id && !guardLeave()) return;
-    /* ── THE EDITOR IS THE SINGLE SOURCE OF TRUTH ONCE OPEN ────────────────────────────────────
-     * Any pending stepper value is DISCARDED here, not merged and not used to pre-fill. The
-     * stepper and the editor write the same field, and two live drafts of one field is how a
-     * value nobody chose gets saved: the operator steps to 7, opens the editor to check something,
-     * sees 7 pre-filled, assumes it is stored, and saves it. Discarding is the only rule that
-     * cannot produce that. It is also why the stepper resets to the SAVED value on close. */
-    setPendingMin({});
-    setPendingSpots({});
-    setSaveState({});
+    dropDraft(id);
     setPanelTab("details");
     setDrawerId(id);
   };
@@ -431,15 +480,12 @@ export default function GamedayBoard({
   const openChat = (id: number) => {
     if (onOpenMatch) { router.push(`/match-ops/match-chats?chatId=${encodeURIComponent(String(id))}`); return; }
     if (drawerId != null && drawerId !== id && !guardLeave()) return;
-    if (drawerId !== id) { setPendingMin({}); setPendingSpots({}); setSaveState({}); }
+    if (drawerId !== id) dropDraft(id);
     setPanelTab("chat");
     setDrawerId(id);
   };
-  const ladderOf = (m: ApiMatch): Ladder => ({
-    fakeSpotLeft36h: Number(m.fakeSpotLeft36h ?? 0), fakeSpotLeft24h: Number(m.fakeSpotLeft24h ?? 0),
-    fakeSpotLeft12h: Number(m.fakeSpotLeft12h ?? 0), fakeSpotLeft6h: Number(m.fakeSpotLeft6h ?? 0),
-    fakeSpotLeft3h: Number(m.fakeSpotLeft3h ?? 0),
-  });
+  /* ONE COPY OF THE FIVE-FIELD READ, at module scope — see ladderFor. */
+  const ladderOf = ladderFor;
 
   /* ── ONE WRITE HELPER FOR BOTH RUNG CONTROLS ──────────────────────────────────────────────────
    * Same contract as saveMin and for the same reasons: the diff IS the body, one attempt, never a
@@ -774,10 +820,17 @@ export default function GamedayBoard({
               <StatStrip s={strips} active={strip} clockOf={localClock}
                 onPick={(k) => setStrip((prev) => (prev === k ? null : k))} />
 
-              {/* The slot renders nothing at all when there is nothing urgent - an empty box that
-                  is always there stops being looked at. */}
+              {/* The slot renders nothing at all outside Needs attention, and nothing there either
+                  when the filter is empty - an empty box that is always there stops being looked
+                  at. data-mode is kept: it is how a test tells the one remaining mode apart from
+                  the absence of the slot.
+
+                  THE "+N MORE NEED ATTENTION" BUTTON WAS HERE AND IS GONE. It was the remainder of
+                  a cap that no longer exists — this slot only renders inside Needs attention now,
+                  where nothing is held back — and it was a third control saying what the Needs
+                  attention tile says in the same numeral, one tile above it. */}
               {banners.length > 0 && (
-                <div data-testid="gday-alertslot" data-mode={bannerMode ? "filter" : "default"}>
+                <div data-testid="gday-alertslot" data-mode="filter">
                   {banners.map((m) => (
                     <AlertBanner key={m.id} m={m} now={now}
                       pending={pendingMin[m.id] ?? null}
@@ -788,14 +841,6 @@ export default function GamedayBoard({
                       saveState={saveState[m.id]}
                       canEdit={canEditMin} stepperReason={stepperReason} />
                   ))}
-                  {/* THE REST, ONE CLICK AWAY. The cap keeps the table on the first screen; this
-                      line keeps the others from being hidden by it. */}
-                  {moreCount > 0 && (
-                    <button type="button" className="gmore" data-testid="gday-more-risk"
-                      onClick={() => setStrip("risk")}>
-                      +{moreCount} more need attention
-                    </button>
-                  )}
                 </div>
               )}
 
@@ -804,7 +849,10 @@ export default function GamedayBoard({
               {!bannerMode && (
               <div className="gcard" data-testid="snapshot">
                 <div className="gcolhead">
-                  <div>Kickoff</div><div>Match · field</div><div>Spots vs minimum</div><div>Manager</div><div>Reviews</div>
+                  {/* SIX TRACKS, SIX CELLS. The sixth carries no word: it sits over the Adjust
+                      button, whose own label is the heading. A header cell is still needed or the
+                      five that do have words would be measuring different columns to the rows. */}
+                  <div>Kickoff</div><div>Match · field</div><div>Spots vs minimum</div><div>Manager</div><div>Reviews</div><div />
                 </div>
                 {shown.length === 0 ? (
                   /* AN EXPLICIT EMPTY STATE, not a blank card — a filter combination that matches
@@ -829,7 +877,17 @@ export default function GamedayBoard({
                       <div className="glist">
                         {rows.map((m) => (
                           <GRow key={m.id} m={m} now={now} selected={drawerId === m.id}
-                            onOpen={openDrawer} money={money} atRiskRow={atRisk(m, now)} />
+                            onOpen={openDrawer} money={money} atRiskRow={atRisk(m, now)}
+                            expanded={adjusting[m.id] === true} onAdjust={toggleAdjust}
+                            hasPending={pendingMin[m.id] != null || pendingSpots[m.id] != null}
+                            ctl={{
+                              pending: pendingMin[m.id] ?? null,
+                              pendingSpots: pendingSpots[m.id] ?? null,
+                              onStep: stepMin, onStepSpots: stepSpots,
+                              onSave: saveMin, onSaveSpots: saveSpots, onChat: openChat,
+                              saveState: saveState[m.id],
+                              canEdit: canEditMin, stepperReason,
+                            }} />
                         ))}
                       </div>
                     )}
@@ -1232,7 +1290,15 @@ const CSS = `
   display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px}
 .gdo .gtxt{min-width:0;flex:1 1 auto}
 .gdo .gt1{font-weight:700;font-size:14.5px;color:#A83120;letter-spacing:-.15px}
-.gdo .gmeta{font-size:11.5px;color:#66786E;margin-top:3px}
+/* ── THE COUNTDOWN RIDES THE META LINE ────────────────────────────────────────────────────────
+   It was a column of its own: a 22px numeral over a 9.5px caption. On a phone that restacked into
+   a third full-width band, so one fact took 38px of a 390px screen on a card that has to fit
+   beside another one. The meta line was already there and had room at its right end.
+   THE META TEXT TRUNCATES AND THE CHIP DOES NOT. min-width:0 on the text plus flex:none on the
+   chip: when the field and manager names are long it is the names that give, because the number of
+   minutes left is the one thing on that line that cannot be guessed from the rest of the card. */
+.gdo .gmetarow{display:flex;align-items:baseline;gap:8px;margin-top:3px}
+.gdo .gmeta{font-size:11.5px;color:#66786E;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* THREE DISCRETE STATS, not a sentence. The hairlines are what make them read as three. */
 .gdo .gfacts{display:flex;align-items:center;gap:13px;margin-top:8px;flex-wrap:wrap}
 .gdo .gf{display:flex;align-items:baseline;gap:4px;font-size:11.5px;color:#66786E;white-space:nowrap}
@@ -1241,17 +1307,30 @@ const CSS = `
 .gdo .gf.moved b{color:#046B45}
 .gdo .gf em{font-style:normal;font-size:10.5px;color:#66786E;text-decoration:line-through}
 .gdo .gfacts>i{width:1px;height:15px;background:#efd2cf;display:block;flex:0 0 1px}
-.gdo .gclock{text-align:right;flex:0 0 auto;cursor:default}
-.gdo .gclock .n{font-size:22px;font-weight:700;letter-spacing:-.6px;color:#A83120;font-variant-numeric:tabular-nums}
-.gdo .gclock .l{font-size:9.5px;letter-spacing:.8px;text-transform:uppercase;color:#66786E;font-weight:600}
+.gdo .gclock{margin-left:auto;flex:none;padding:2px 8px;border-radius:999px;background:#F7DDD6;
+  color:#A83120;font-size:10.5px;font-weight:800;letter-spacing:.02em;cursor:default;
+  font-variant-numeric:tabular-nums;white-space:nowrap}
 .gdo .gacts{display:flex;align-items:center;gap:8px;flex:0 0 auto;flex-wrap:wrap;cursor:default}
 .gdo .gbtn{border:1px solid #DCE5E0;background:#fff;border-radius:8px;padding:6px 11px;font-size:12.5px;
   font-weight:600;color:#20372C;text-decoration:none;white-space:nowrap}
 .gdo .gbtn:hover{background:#F2F7F4}
+/* ── ONE BAND PER STEPPER: LABEL LEFT, CONTROLS RIGHT ─────────────────────────────────────────
+   The spacer is what makes the two bands agree. Without it each band packed its content from the
+   left, so "Cancels below" and "Spots left now · 5 fake" are different lengths and the − of one
+   band sat under the value of the other: two rows of controls that do not line up read as four
+   unrelated buttons. With .sp the + buttons are in a column. */
 .gdo .gstep{display:flex;align-items:center;gap:2px;border:1px solid #DCE5E0;background:#fff;
   border-radius:8px;padding:3px 4px 3px 11px;font-size:12.5px;color:#20372C;white-space:nowrap}
+.gdo .gstep .sp{margin-left:auto}
 .gdo .gstep b{min-width:20px;text-align:center;font-size:13.5px;font-weight:700;color:#1B3227;
   font-variant-numeric:tabular-nums}
+/* THE SAVED VALUE, IN RED, BESIDE THE CONTROL THAT MOVED IT — the mark that says this band is
+   showing a draft. It is not struck through: a strikethrough on a two-digit number at 9.5px is a
+   smear, and the word "was" already carries the tense. */
+/* 6px OF ITS OWN, because .gstep's gap is 2px — enough between a button and a numeral, not enough
+   between two runs of words: it rendered as "Cancels belowwas 9". */
+.gdo .gwas{font-style:normal;font-size:9.5px;font-weight:800;color:#A83120;letter-spacing:.03em;
+  white-space:nowrap;margin-left:6px}
 .gdo .gsb{border:0;background:#f1f4f2;border-radius:6px;width:22px;height:22px;line-height:1;font-size:14px;
   font-weight:700;color:#20372C;display:flex;align-items:center;justify-content:center;padding:0;cursor:pointer}
 .gdo .gsb:hover:not(:disabled){background:#e2e8e4}
@@ -1309,7 +1388,23 @@ const CSS = `
    column had; the difference is that this one carries information.
    136px measured against the longest string it holds; it comes out of the flexible match column,
    which keeps ~372px at 1500. */
-.gdo .gcolhead,.gdo .grow{display:grid;grid-template-columns:96px minmax(0,1fr) 310px 164px 136px;gap:14px;align-items:center}
+/* ── SIX TRACKS, AND THE SIXTH IS ADJUST — PAID FOR BY THE REVIEWS COLUMN ──────────────────────
+   IT COST 76px AND THE MATCH COLUMN DID NOT HAVE IT. First attempt: a 62px track holding
+   "Adjust ▾", width taken from minmax(0,1fr) because that is the track with slack. Measured at
+   1366, where the board is narrowest before the tablet rules take over: the match column went to
+   156px for a "Soccer Central Complex · San Antonio" subtitle that needs 207, and the price
+   sheared 17px past its track. At 1280 it was 188 against the same 207.
+
+   SO THE REVIEWS COLUMN PAYS, and the label loses its caret. Reviews was 136px for content that
+   measures under 80 — "4.72★" over "12 ratings", and its longest label is "give it a minute" at
+   ~76px, which is what holds it at 92 rather than lower. Adjust drops to 44px, the touch floor,
+   with the word at 10px (~34px of text) and the caret only on the phone card where there is room
+   for it. Re-measured: the match column is 218px at 1366 and 236 at 1280, both clear of 207.
+
+   THE ROW'S HEIGHT IS UNTOUCHED, and that was the other option: put Adjust on a second grid row
+   spanning the full width. It reads better and it takes 66px rows to ~94 for a control used
+   occasionally, which is the whole board's density spent on one operator's occasional need. */
+.gdo .gcolhead,.gdo .grow{display:grid;grid-template-columns:96px minmax(0,1fr) 310px 164px 92px 44px;gap:14px;align-items:center}
 .gdo .gcolhead{padding:9px 23px;font-size:10px;letter-spacing:.9px;text-transform:uppercase;
   color:#8C9E93;font-weight:700;background:#F7FAF8;border-bottom:1px solid #DCE5E0}
 .gdo .glist{padding:8px;display:flex;flex-direction:column;gap:6px}
@@ -1415,10 +1510,30 @@ const CSS = `
 .gdo .grv.none .v{color:#9AA8A0;font-weight:600;font-size:13px;font-style:italic}
 /* THE KEBAB'S STYLING WAS HERE AND IS GONE, with its element and its column. Dead rules for a
    deleted control are how a removed affordance comes back by accident. */
-.gdo .gmore{display:block;width:100%;border:1px dashed #E9B6AC;background:#FDF3F2;color:#A83120;
-  border-radius:10px;padding:9px 14px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;
-  margin-bottom:12px;text-align:left}
-.gdo .gmore:hover{background:#fce5e3}
+/* .gmore's RULES WERE HERE AND ARE GONE with the "+N more need attention" button. Dead rules for
+   a deleted control are how a removed affordance comes back by accident. */
+
+/* ── ADJUST, AND THE BLOCK IT OPENS ───────────────────────────────────────────────────────────
+   A 44px control in its own rect. On desktop it takes a sixth column of the row grid; on a phone
+   card it is the card's footer band. Either way it is never inside the region that opens the
+   editor — it stops the row's click itself, and it is the only element on the row that does. */
+.gdo .gadj{grid-column:6;min-height:44px;display:flex;align-items:center;justify-content:center;
+  gap:5px;border:0;background:none;font:inherit;font-size:10px;font-weight:750;color:#0d3b2e;
+  cursor:pointer;border-radius:8px;padding:0 2px;white-space:nowrap;letter-spacing:-.01em}
+/* THE CARET IS PHONE-ONLY. In a 44px desktop track the word is the whole budget. */
+.gdo .gadj .gcar{display:none}
+.gdo .gadj:hover{background:#EAF2EC}
+.gdo .grow.risk .gadj:hover{background:#FBE3E0}
+/* UNSAVED IS AMBER, NOT RED. It is not a failure — it is work in progress, and the operator is the
+   one who left it there. Red is what a refused write gets. */
+.gdo .gpend{flex:none;padding:2px 6px;border-radius:999px;background:#FFF3E6;color:#8a5a12;
+  font-size:9px;font-weight:800;letter-spacing:.04em}
+.gdo .gexp{grid-column:1 / -1;border-top:1px dashed #DCE5E0;margin-top:8px;padding-top:10px;
+  cursor:default}
+/* CAPPED AND LEFT-ALIGNED. The block is sized for a banner's action column; stretched across a
+   1158px row it made Save a 1128px slab of green for a two-digit change. 720px keeps the 2x2
+   shape and keeps the controls at a hand's width of each other. */
+.gdo .gexp .gacts{max-width:720px}
 .gdo .gfoot{margin:10px 2px 0;font-size:11.5px;color:#66786E;line-height:1.5}
 
 
@@ -1440,20 +1555,34 @@ const CSS = `
   .gdo .gtile .k{font-size:9.5px;letter-spacing:.5px}
   .gdo .gtile .s{font-size:10px}
 
-  /* THE BANNER RESTACKS. Countdown under the facts, actions full-width and stacked. */
-  .gdo .galert{flex-direction:column;align-items:stretch;gap:12px;padding:13px 14px}
+  /* THE BANNER RESTACKS. The countdown is a chip on the meta line at every width now, so there is
+     no third band to restack; the actions go full-width and stacked. */
+  /* A SIDE GUTTER FOR THE SLOT. .gmain has zero horizontal padding on a phone (the board is
+     deliberately edge to edge) and the card was inheriting that, so a 12px radius sat against the
+     screen edge with nothing outside it. 12px matches .glist, so a card and a row line up. */
+  .gdo [data-testid="gday-alertslot"]{padding:0 12px}
   .gdo .gbang{display:none}
-  .gdo .gfacts{gap:9px 12px}
-  .gdo .gclock{text-align:left;display:flex;align-items:baseline;gap:8px}
-  .gdo .gclock .n{font-size:19px}
-  .gdo .gacts{flex-direction:column;align-items:stretch;gap:8px}
+  .gdo .gfacts{gap:7px 11px;margin-top:7px}
   .gdo .gacts>*{width:100%}
-  .gdo .gbtn,.gdo .gpri{text-align:center;padding:11px 12px;font-size:13.5px}
-  .gdo .gstep{justify-content:space-between;padding:5px 6px 5px 13px;font-size:13.5px}
-  /* 44x44 MINIMUM. These were 22px squares - a target you miss twice before you hit it, on a
-     control that changes what a match costs a player. */
+  .gdo .gbtn,.gdo .gpri{text-align:center;padding:0 12px;min-height:38px;font-size:12.5px;
+    display:flex;align-items:center;justify-content:center}
+  /* .galert's AND .gacts's OWN PADDING AND GAPS ARE SET IN THE LATE BLOCK at the foot of this
+     sheet, NOT here. The container query and the grid declaration for .gacts both sit below this
+     block, and at equal specificity the later rule wins whatever media query it is wrapped in —
+     the 9px gap written here was silently losing to a 12px one 200 lines down, and the card
+     measured 258px instead of the 246 the numbers here add up to. */
+  /* ── ONE 44px BAND PER STEPPER, AND THE BUTTONS ARE STILL 44px ────────────────────────────────
+     IT USED TO BE A 56px SLAB. 44px buttons inside 5px of vertical padding plus a border is 56,
+     and three of those stacked — chat, minimum, spots — is 168px before the card has said
+     anything. Zero vertical padding puts the band AT the button height: the target is unchanged
+     at 44x44 and the band is 46px including its border.
+     44x44 IS NOT NEGOTIABLE. These were 22px squares once - a target you miss twice before you
+     hit it, on a control that changes what a match costs a player. The band got smaller by losing
+     padding, never by shrinking the target. */
+  .gdo .gstep{padding:0 4px 0 11px;font-size:12.5px;gap:4px;min-height:44px}
   .gdo .gstep .gsb{width:44px;height:44px;font-size:19px;border-radius:9px}
-  .gdo .gstep b{min-width:34px;font-size:16px}
+  .gdo .gstep b{min-width:30px;font-size:16px}
+  .gdo .gtrail{font-size:10.5px}
 
   /* SECTION HEADERS STAY PUT while the list scrolls under them. */
   .gdo .gsec{position:sticky;top:0;z-index:3}
@@ -1492,7 +1621,7 @@ const CSS = `
 
    Below 846 no five-track grid fits and the band stacks — see the card tier further down. */
 @container gtable (max-width: 960px) {
-  .gdo .gcolhead,.gdo .grow{grid-template-columns:76px minmax(0,1fr) 258px 156px 118px;gap:10px}
+  .gdo .gcolhead,.gdo .grow{grid-template-columns:76px minmax(0,1fr) 258px 156px 88px 44px;gap:10px}
   .gdo .gmeter{flex:0 0 76px}
   .gdo .gnum{font-size:11px}
   /* THE CHIP GIVES BACK ~20px HERE, and the price is what gets it. The match column is ~132px at
@@ -1541,7 +1670,7 @@ const CSS = `
   .gdo .glist{padding:4px 12px 16px;gap:12px}
   .gdo .grow{
     grid-template-columns:minmax(0,1fr);
-    grid-template-areas:"k" "m" "s" "rv" "mg";
+    grid-template-areas:"k" "m" "s" "rv" "mg" "adj" "exp";
     gap:0;padding:0;align-items:stretch;position:relative;
     border:1px solid #DCE5E0;border-radius:14px;overflow:hidden;
     background:#fff;box-shadow:0 1px 2px rgba(16,40,28,.05)}
@@ -1585,6 +1714,18 @@ const CSS = `
   .gdo .gmeter{flex:1 1 auto;min-width:0;padding-bottom:28px}
   .gdo .gnum{font-size:12px}
 
+  /* ── ADJUST IS THE CARD'S FOOTER BAND ─────────────────────────────────────────────────────
+     The card has no spare horizontal room beside the title — the name already clamps to two
+     lines there — so the control takes a band of its own under the manager strip. It is the same
+     44px target and the same button; only its placement differs from the desktop row, which is
+     exactly what grid areas are for. It costs every card 45px on a phone, knowingly: the
+     alternative is an operator who can only touch the two numbers on matches the page has
+     decided to shout about. */
+  .gdo .gadj{grid-area:adj;border-top:1px solid #EFF3EF;border-radius:0;min-height:44px;
+    font-size:12px;background:#FCFDFC;gap:6px;letter-spacing:0}
+  .gdo .gadj .gcar{display:inline}
+  .gdo .grow.risk .gadj{border-top-color:#F6E0DD;background:#FEFAF9}
+  .gdo .gexp{grid-area:exp;margin-top:0;padding:11px 13px 13px;border-top:1px dashed #E3EAE6}
 }
 
 
@@ -1644,15 +1785,21 @@ const CSS = `
 @container gbanner (max-width: 860px) {
   .gdo .galert{flex-direction:column;align-items:stretch;gap:12px}
   .gdo .galert .gbang{display:none}
-  .gdo .galert .gclock{text-align:left;display:flex;align-items:baseline;gap:8px}
+  /* THE COUNTDOWN NEEDS NO RULE HERE ANY MORE. It is a chip inside the text block at every width,
+     so it restacks with the text rather than being a third column to fold away. */
   /* minmax(0,…) SO THE COLUMNS CAN SHRINK. auto auto sizes to content and, on a 390px phone,
      pushed the page into a horizontal scroll — the container query fires there too, and a track
      that cannot shrink is a track that overflows. */
   .gdo .galert .gacts{grid-template-columns:minmax(0,1fr) minmax(0,1fr);justify-items:stretch}
 }
 /* AND A PHONE STILL GETS ONE COLUMN. This sits after the container query on purpose: below 640px
-   the viewport is the binding constraint, whatever the container says. */
-@media (max-width: 639.98px) { .gdo .galert .gacts{grid-template-columns:1fr} }
+   the viewport is the binding constraint, whatever the container says.
+   EVERYTHING THAT SETS THE CARD'S HEIGHT ON A PHONE IS IN HERE, for the same reason — the two
+   rules above this line would otherwise win on gap and padding. */
+@media (max-width: 639.98px) {
+  .gdo .galert .gacts{grid-template-columns:1fr;gap:6px;margin-top:0}
+  .gdo .galert{gap:8px;padding:10px 12px}
+}
 /* THE TEXT BLOCK NEVER GETS CRUSHED — but only where there is room for the floor to mean anything.
    280px on a 390px screen is the whole width; the phone layout stacks instead and needs no floor. */
 @container gbanner (min-width: 640px) { .gdo .gtxt{min-width:280px} }
@@ -1773,9 +1920,15 @@ function MinLabel({ pct, n }: { pct: number; n: number }) {
  * THE LABEL SITS DIRECTLY BENEATH IT with no connector stub — proximity does that work, and a stub
  * at this size is three more pixels of ink saying what adjacency already says.
  */
-function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
+function GRow({ m, now, selected, onOpen, money, atRiskRow, expanded, onAdjust, hasPending, ctl }: {
   m: ApiMatch; now: number; selected: boolean; onOpen: (id: number) => void;
   money: (c: number | null | undefined) => string; atRiskRow: boolean;
+  /* ── THE ROW'S OWN COPY OF THE CONTROLS ──────────────────────────────────────────────────────
+   * `expanded` is per row and several may be open at once — see the board's `adjusting`.
+   * `hasPending` is the stepped-but-unsaved mark, and it is rendered on a COLLAPSED row too:
+   * folding the block away used to be indistinguishable from not having touched it. */
+  expanded: boolean; onAdjust: (id: number) => void; hasPending: boolean;
+  ctl: Omit<StepperProps, "m" | "now">;
 }) {
   const b = dayBucket(m, now);
   const cap = capacity(m), real = realCount(m), fk = fakeCount(m);
@@ -1807,9 +1960,10 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
   const [hh, ap] = [clock.replace(/\s*(AM|PM)$/i, ""), (clock.match(/(AM|PM)$/i) ?? [""])[0]];
 
   return (
-    <div className={"grow" + (atRiskRow ? " risk" : "") + (b === "done" ? " done" : "") + (selected ? " sel" : "")}
+    <div className={"grow" + (atRiskRow ? " risk" : "") + (b === "done" ? " done" : "") + (selected ? " sel" : "")
+        + (expanded ? " adj" : "")}
       data-testid="gday-row" data-id={m.id} data-city={m.field?.city?.name ?? ""} data-bucket={b}
-      data-risk={atRiskRow ? "1" : "0"} role="button" tabIndex={0}
+      data-risk={atRiskRow ? "1" : "0"} data-open={expanded ? "1" : "0"} role="button" tabIndex={0}
       onClick={() => onOpen(m.id)}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(m.id); } }}>
 
@@ -1889,7 +2043,37 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
       {/* THE KEBAB WAS HERE AND IS GONE. It read as the affordance for opening the editor and was
           the one element on the row that did NOT open it — the click guard excludes buttons, and
           nothing was ever wired behind it. An affordance that does nothing is worse than no
-          affordance. Its 34px went to the manager column, which was clipping names. */}
+          affordance. Its 34px went to the manager column, which was clipping names.
+
+          ADJUST IS NOT THAT. It is a real control with a real target, it says what it does, and it
+          is the ONLY way to reach the two steppers on a match the page is not alarmed about.
+
+          ── IT IS ITS OWN RECT, AND IT STOPS THE ROW'S CLICK ─────────────────────────────────────
+          The row is the editor's tap target — the whole card, at every width. So Adjust carries
+          stopPropagation, and the expanded block below it does too: reaching for a stepper must
+          never open the panel on top of the edit you came to make. The mock puts the row's own tap
+          target in an inner button and sets Adjust beside it; that shape is not available here,
+          because on desktop the row IS the five-column grid and wrapping it would collapse the
+          layout. Same outcome, reached the other way round — the two targets do not overlap,
+          because the button sits above the row and consumes its own clicks. */}
+      <button type="button" className="gadj" data-testid="gday-adjust" data-id={m.id}
+        aria-expanded={expanded} aria-label={`${expanded ? "Hide" : "Show"} the minimum and spot controls for ${m.name}`}
+        onClick={(e) => { e.stopPropagation(); onAdjust(m.id); }}>
+        {expanded ? "Done" : "Adjust"}<i className="gcar" aria-hidden>{expanded ? "▴" : "▾"}</i>
+        {/* THE UNSAVED MARK RIDES THE BUTTON, so it is visible with the block folded away. Without
+            it a collapsed row with a stepped minimum looked identical to an untouched one, and the
+            pending value is per match and survives scrolling, filtering and collapsing. */}
+        {hasPending && <span className="gpend" data-testid="gday-row-pending">UNSAVED</span>}
+      </button>
+
+      {/* INSIDE THE ROW'S OWN BOUNDS — a child of .grow, not a sibling. An overlay or a block
+          between rows would have covered the row below it and would not have moved with the card. */}
+      {expanded && (
+        <div className="gexp" data-testid="gday-row-controls" data-id={m.id}
+          onClick={(e) => e.stopPropagation()}>
+          <GdayControls m={m} now={now} {...ctl} />
+        </div>
+      )}
     </div>
   );
 }
@@ -1905,32 +2089,60 @@ function GRow({ m, now, selected, onOpen, money, atRiskRow }: {
  * THE FACTS ROW IS THREE DISCRETE STATS separated by hairlines, each a bold number over a muted
  * label. Collapsing it back into "3 real, 9 minimum, 11 of 14 fake" is the thing not to do.
  */
-function AlertBanner({ m, now, pending, pendingSpots, onStep, onStepSpots,
-  onSave, onSaveSpots, onOpen, onChat, saveState, canEdit, stepperReason }: {
+/* ── THE LADDER, READ OFF A MATCH ROW ───────────────────────────────────────────────────────────
+ * ONE COPY. This literal was written out three times — once in the board, once in the banner, and
+ * it was about to be written a fourth time for the row's own controls. Five fields transcribed by
+ * hand at each site is five chances to read fakeSpotLeft6h into the 12h slot, and the symptom
+ * would be a rung that steps the wrong band an hour before kickoff. */
+const ladderFor = (m: ApiMatch): Ladder => ({
+  fakeSpotLeft36h: Number(m.fakeSpotLeft36h ?? 0), fakeSpotLeft24h: Number(m.fakeSpotLeft24h ?? 0),
+  fakeSpotLeft12h: Number(m.fakeSpotLeft12h ?? 0), fakeSpotLeft6h: Number(m.fakeSpotLeft6h ?? 0),
+  fakeSpotLeft3h: Number(m.fakeSpotLeft3h ?? 0),
+});
+
+/* ── WHAT THE TWO CONTROLS ARE SHOWING, DERIVED ONCE ────────────────────────────────────────────
+ * The banner's headline and facts row read the same pending values the steppers do, and the row's
+ * expanded block reads them too. Deriving them in each component is how the headline comes to say
+ * "clears its minimum at 7" while the stepper beside it reads 8. */
+type ControlState = {
+  real: number; fk: number; cap: number;
+  savedMin: number; shownMin: number; moved: boolean; shortNow: number;
+  savedSpots: number; shownSpots: number; spotsMoved: boolean; spotsCeil: number;
+};
+function controlState(m: ApiMatch, now: number, pending: number | null, pendingSpots: number | null): ControlState {
+  const real = realCount(m), fk = fakeCount(m), cap = capacity(m) ?? 0;
+  const savedMin = Number(m.minPlayerCount ?? 0);
+  const shownMin = pending ?? savedMin;
+  /* THE RUNG IN FORCE — the value the one control steps, read from hours-to-kickoff. */
+  const savedSpots = spotsLeftNow(ladderFor(m), minsUntil(m, now) / 60);
+  const shownSpots = pendingSpots ?? savedSpots;
+  return {
+    real, fk, cap,
+    savedMin, shownMin, moved: pending != null && pending !== savedMin,
+    shortNow: Math.max(0, shownMin - real),
+    savedSpots, shownSpots, spotsMoved: pendingSpots != null && pendingSpots !== savedSpots,
+    spotsCeil: Math.max(0, cap - real),
+  };
+}
+
+/* ── THE TWO STEPPERS, AND EVERY CALLER PASSES THE SAME THINGS ──────────────────────────────────
+ * Named so the two call sites cannot drift: the banner and an expanded row hand over an identical
+ * prop set, because they are asking for an identical control. */
+type StepperProps = {
   m: ApiMatch; now: number; pending: number | null; pendingSpots: number | null;
   onStep: (id: number, d: number) => void;
   onStepSpots: (id: number, d: number) => void;
   onSave: (id: number) => void; onSaveSpots: (id: number) => void;
-  onOpen: (id: number) => void; onChat: (id: number) => void;
+  onChat: (id: number) => void;
   saveState?: { s: "saving" | "landed" | "failed" | "unknown"; msg: string };
   canEdit: boolean; stepperReason: string | null;
+};
+
+function AlertBanner({ m, now, pending, pendingSpots, onOpen, ...ctl }: StepperProps & {
+  onOpen: (id: number) => void;
 }) {
-  const real = realCount(m), fk = fakeCount(m), cap = capacity(m) ?? 0;
-  const savedMin = Number(m.minPlayerCount ?? 0);
-  const shownMin = pending ?? savedMin;
-  const moved = pending != null && pending !== savedMin;
-  const shortNow = Math.max(0, shownMin - real);
+  const { real, fk, cap, shownMin, moved, shortNow } = controlState(m, now, pending, pendingSpots);
   const ac = minsToDeadline(m, now);
-  const minsToKick = minsUntil(m, now);
-  /* THE RUNG IN FORCE — the value the one control steps, read from hours-to-kickoff. */
-  const ladder: Ladder = {
-    fakeSpotLeft36h: Number(m.fakeSpotLeft36h ?? 0), fakeSpotLeft24h: Number(m.fakeSpotLeft24h ?? 0),
-    fakeSpotLeft12h: Number(m.fakeSpotLeft12h ?? 0), fakeSpotLeft6h: Number(m.fakeSpotLeft6h ?? 0),
-    fakeSpotLeft3h: Number(m.fakeSpotLeft3h ?? 0),
-  };
-  const savedSpots = spotsLeftNow(ladder, minsToKick / 60);
-  const shownSpots = pendingSpots ?? savedSpots;
-  const spotsMoved = pendingSpots != null && pendingSpots !== savedSpots;
 
   /* THE HEADLINE FOLLOWS THE PENDING VALUE. Stepping the minimum below the real count turns
    * "is 6 players short" into "clears its minimum at 3" — the operator sees the consequence of the
@@ -1950,15 +2162,34 @@ function AlertBanner({ m, now, pending, pendingSpots, onStep, onStepSpots,
       <div className="gbang" aria-hidden>!</div>
       <div className="gtxt">
         <div className="gt1" data-testid="gday-alert-head">{head}</div>
-        <div className="gmeta" data-testid="gday-alert-meta">
-          {localClock(m)} kickoff · {m.field?.title ?? "—"} · {m.field?.city?.name ?? "—"} · {mgr || "no manager"}
+        {/* ── THE COUNTDOWN IS A CHIP ON THE META LINE ─────────────────────────────────────────
+            It had a column of its own: a 22px numeral over a 9.5px caption, which on a phone
+            restacked into a third full-width band. Thirty-eight pixels of a 390px screen for one
+            fact, on a card that has to fit beside another one. As a chip it is on the line that was
+            already there, and the numeral is still the largest thing on it.
+
+            gday-alert-meta STAYS ON THE TEXT, not on the row — its textContent is the meta line,
+            and folding the countdown into it would have changed what that id means. */}
+        <div className="gmetarow">
+          <span className="gmeta" data-testid="gday-alert-meta">
+            {localClock(m)} kickoff · {m.field?.title ?? "—"} · {m.field?.city?.name ?? "—"} · {mgr || "no manager"}
+          </span>
+          {/* PAST THE DEADLINE IT SAYS SO rather than vanishing — the same rule the row's chip
+              follows, and for the same reason: a countdown that disappears at the moment the thing
+              becomes true is the wrong way round. */}
+          <span className="gclock" data-testid="gday-countdown" onClick={stop}>
+            {ac > 0 ? `${fmtDur(ac)} to auto-cancel` : "auto-cancels now"}
+          </span>
         </div>
         <div className="gfacts" data-testid="gday-alert-facts">
           <span className="gf bad" data-testid="gday-fact-real"><b>{real}</b> real</span>
           <i aria-hidden />
+          {/* "was 9" IS NOT HERE ANY MORE — it is in the stepper band below, beside the control
+              that moved the number. It was in both places, which on a stepped card meant reading
+              "9 minimum was 12" here and "12 ... was 9" two lines down. The band wins: that is
+              where the operator's finger already is. */}
           <span className={"gf" + (moved ? " moved" : "")} data-testid="gday-fact-min">
             <b data-testid="gday-fact-minv">{shownMin}</b> minimum
-            {moved && <em data-testid="gday-fact-minwas">was {savedMin}</em>}
           </span>
           <i aria-hidden />
           {/* A. THE SAME UNITS AND ORDER AS THE TABLE ROW — "3 real · 9 fake · 12/18". Two phrasings
@@ -1968,88 +2199,122 @@ function AlertBanner({ m, now, pending, pendingSpots, onStep, onStepSpots,
           <span className="gf" data-testid="gday-fact-filled"><b>{real + fk}</b>/{cap}</span>
         </div>
       </div>
-      <div className="gclock" onClick={stop}>
-        <div className="n" data-testid="gday-countdown">{ac > 0 ? fmtDur(ac) : "now"}</div>
-        <div className="l">until auto-cancel</div>
-      </div>
-      {/* ── THE ACTION AREA IS A 2x2 GRID, NOT A ROW ────────────────────────────────────────────
-       * Four controls in one row measured 608px - half the banner - and crushed the text: the meta
-       * line wrapped at 1500 and the banner grew to 187px at 1280. As a 2x2 it is 324px and the
-       * banner holds at 101px down to 1280. */}
-      <div className="gacts" data-testid="gday-acts" onClick={stop}>
-        <a className="gbtn" data-testid="gday-chat" data-chat-id={String(m.id)}
-          href={`/match-ops/match-chats?chatId=${encodeURIComponent(String(m.id))}`}
-          onClick={(e) => { stop(e); e.preventDefault(); onChat(m.id); }}>Open match chat</a>
+      {/* THE SAME BLOCK AN EXPANDED ROW RENDERS. One component, two callers — see
+          GdayControls. The banner used to own this markup outright, which is why the row
+          had no steppers at all: they were not a control, they were part of a card. */}
+      <GdayControls m={m} now={now} pending={pending} pendingSpots={pendingSpots} {...ctl} />
+    </div>
+  );
+}
 
-        <span className="gstep" data-testid="gday-stepper" title={stepperReason ?? "Below this many real players the match auto-cancels"}>
-          {/* E. THE CONSEQUENCE, NOT THE FIELD NAME. "Adjust min" is ambiguous — minimum what. The
-              editor's field is called MIN PLAYERS; this says what falling below it does, at a
-              glance. (It used to quote a hint reading "below this, it cancels" that sat beside that
-              label — the hint is gone from the editor, so the quote went with it.) */}
-          Cancels below
-          <button type="button" className="gsb" data-testid="gday-step-down" aria-label="Lower the minimum"
-            disabled={!canEdit || shownMin <= 2}
-            onClick={(e) => { stop(e); onStep(m.id, -1); }}>−</button>
-          <b data-testid="gday-step-value">{shownMin}</b>
-          <button type="button" className="gsb" data-testid="gday-step-up" aria-label="Raise the minimum"
-            disabled={!canEdit || shownMin >= cap}
-            onClick={(e) => { stop(e); onStep(m.id, 1); }}>+</button>
+/* ── THE SHARED CONTROL BLOCK ───────────────────────────────────────────────────────────────────
+ * ONE BLOCK, TWO CALLERS: the alert banner and any expanded row. Same markup, same test ids, same
+ * bounds and same disabled rules in both, which is the only thing that stops the two from drifting
+ * into different controls for the same two values.
+ *
+ * WHY IT EXISTS AT ALL. These two steppers were markup INSIDE the banner, so they could only be
+ * reached on a match the page had decided to interrupt about. Ryan: "i want the ability to have
+ * this screen on all the matches because sometimes i want to adjust these 2 things on other games
+ * too." A match nobody is alarmed about is exactly when you want to seed spots on it.
+ *
+ * IT STOPS PROPAGATION ON ITS OWN CONTAINER. Both callers are click-to-open-the-editor surfaces,
+ * and a + that also opens the editor is a + that loses the edit it just made.
+ *
+ * IT HOLDS NO STATE. Pending values and the save verdict live on the board, keyed by match id, so
+ * the banner and the row for the SAME match show the same pending number — step it in one and the
+ * other is already stepped. Local state here would have given one match two drafts.
+ */
+function GdayControls({ m, now, pending, pendingSpots, onStep, onStepSpots,
+  onSave, onSaveSpots, onChat, saveState, canEdit, stepperReason }: StepperProps) {
+  const { real, cap, savedMin, shownMin, moved, shortNow,
+          savedSpots, shownSpots, spotsMoved, spotsCeil } = controlState(m, now, pending, pendingSpots);
+  const stop = (e: React.MouseEvent) => e.stopPropagation();
+
+  return (
+    /* ── THE ACTION AREA IS A 2x2 GRID ON DESKTOP, NOT A ROW ────────────────────────────────────
+     * Four controls in one row measured 608px - half the banner - and crushed the text: the meta
+     * line wrapped at 1500 and the banner grew to 187px at 1280. As a 2x2 it is 324px and the
+     * banner holds at 101px down to 1280. On a phone it is one column of bands. */
+    <div className="gacts" data-testid="gday-acts" data-id={m.id} onClick={stop}>
+      <a className="gbtn" data-testid="gday-chat" data-chat-id={String(m.id)}
+        href={`/match-ops/match-chats?chatId=${encodeURIComponent(String(m.id))}`}
+        onClick={(e) => { stop(e); e.preventDefault(); onChat(m.id); }}>Open match chat</a>
+
+      <span className="gstep" data-testid="gday-stepper" title={stepperReason ?? "Below this many real players the match auto-cancels"}>
+        {/* E. THE CONSEQUENCE, NOT THE FIELD NAME. "Adjust min" is ambiguous — minimum what. The
+            editor's field is called MIN PLAYERS; this says what falling below it does, at a
+            glance. (It used to quote a hint reading "below this, it cancels" that sat beside that
+            label — the hint is gone from the editor, so the quote went with it.) */}
+        <span className="glab">Cancels below</span>
+        {/* THE SAVED VALUE, BESIDE THE CONTROL THAT MOVED IT. On an expanded row there is no facts
+            line to carry it, and without it a stepped row shows a number with nothing to compare
+            it to — 8 could be the stored minimum or a draft. */}
+        {moved && <i className="gwas" data-testid="gday-step-was">was {savedMin}</i>}
+        <span className="sp" />
+        <button type="button" className="gsb" data-testid="gday-step-down" aria-label="Lower the minimum"
+          disabled={!canEdit || shownMin <= 2}
+          onClick={(e) => { stop(e); onStep(m.id, -1); }}>−</button>
+        <b data-testid="gday-step-value">{shownMin}</b>
+        <button type="button" className="gsb" data-testid="gday-step-up" aria-label="Raise the minimum"
+          disabled={!canEdit || shownMin >= cap}
+          onClick={(e) => { stop(e); onStep(m.id, 1); }}>+</button>
+      </span>
+
+      {/* ── ONE FAKE CONTROL, AND IT STEPS THE VALUE THAT PERSISTS ────────────────────────────
+       * SPOTS-SHOWN-AS-LEFT IS STORED; the fake count is derived from it and DRIFTS as real
+       * players join. A stepper on a drifting number reads as a save that came undone — set
+       * 5 fakes, two people sign up, and it says 3 with nothing having gone wrong. So the control
+       * steps the rung and shows the fake count as a read-out beside it.
+       *
+       * ONE CONTROL, NOT TWO. Setting a different value for the 3h band than for now is no longer
+       * possible from here — accepted deliberately; the full ladder stays in the editor. */}
+      <span className="gstep" data-testid="gday-spotstep"
+        title="How many spots the match shows as left, now and through to kickoff. Fewer spots shown means more fake spots.">
+        <span className="glab">Spots left now</span>
+        {spotsMoved && <i className="gwas" data-testid="gday-spots-was">was {savedSpots}</i>}
+        <span className="sp" />
+        {/* READ-ONLY. What the setting does to the match, not a second thing to adjust. */}
+        <i className="gtrail" data-testid="gday-spots-fakes">{fakesFor(cap, shownSpots, real)} fake</i>
+        <button type="button" className="gsb" data-testid="gday-spots-down" aria-label="Show fewer spots left"
+          disabled={!canEdit || shownSpots <= 0}
+          onClick={(e) => { stop(e); onStepSpots(m.id, -1); }}>−</button>
+        <b data-testid="gday-spots-value">{shownSpots}</b>
+        <button type="button" className="gsb" data-testid="gday-spots-up" aria-label="Show more spots left"
+          disabled={!canEdit || shownSpots >= spotsCeil}
+          onClick={(e) => { stop(e); onStepSpots(m.id, 1); }}>+</button>
+      </span>
+
+      {/* ONE SAVE, FOR WHICHEVER VALUE MOVED. Green only when the minimum change actually clears
+          the shortfall - an adjustment is not a rescue. */}
+      {(moved || spotsMoved) && (
+        <button type="button" className={"gpri gsave" + (moved && shortNow === 0 ? " ok" : "")}
+          data-testid={moved ? "gday-save-min" : "gday-save-spots"}
+          data-clears={moved ? (shortNow === 0 ? "1" : "0") : null}
+          disabled={saveState?.s === "saving"}
+          title={moved
+            ? (shortNow === 0
+              ? `Sets the minimum to ${shownMin}, which ${real} real players already meet — this prevents the auto-cancel.`
+              : `Sets the minimum to ${shownMin}. Still ${shortNow} short of ${real} real players, so the auto-cancel will still fire.`)
+            : `Holds ${shownSpots} spot${shownSpots === 1 ? "" : "s"} showing as left through to kickoff.`}
+          onClick={(e) => { stop(e); if (moved) onSave(m.id); else onSaveSpots(m.id); }}>
+          {saveState?.s === "saving" ? "Saving…"
+            : moved ? `Save min ${shownMin}`
+            : `Save ${shownSpots} left`}
+        </button>
+      )}
+      {/* ONE SENTENCE, STATING WHAT PERSISTS. The old pair needed a paragraph explaining which
+          control fed which; one control needs one line. */}
+      {spotsMoved && (
+        <span className="gdirection" data-testid="gday-direction">
+          Holds {shownSpots} spot{shownSpots === 1 ? "" : "s"} showing as left through to kickoff.
+          Fakes come off automatically as real players join.
         </span>
-
-        {/* ── ONE FAKE CONTROL, AND IT STEPS THE VALUE THAT PERSISTS ────────────────────────────
-         * SPOTS-SHOWN-AS-LEFT IS STORED; the fake count is derived from it and DRIFTS as real
-         * players join. A stepper on a drifting number reads as a save that came undone — set
-         * 5 fakes, two people sign up, and it says 3 with nothing having gone wrong. So the control
-         * steps the rung and shows the fake count as a read-out beside it.
-         *
-         * ONE CONTROL, NOT TWO. Setting a different value for the 3h band than for now is no longer
-         * possible from the banner — accepted deliberately; the full ladder stays in the editor. */}
-        <span className="gstep" data-testid="gday-spotstep"
-          title="How many spots the match shows as left, now and through to kickoff. Fewer spots shown means more fake spots.">
-          <span className="glab">Spots left now</span>
-          <button type="button" className="gsb" data-testid="gday-spots-down" aria-label="Show fewer spots left"
-            disabled={!canEdit || shownSpots <= 0}
-            onClick={(e) => { stop(e); onStepSpots(m.id, -1); }}>−</button>
-          <b data-testid="gday-spots-value">{shownSpots}</b>
-          <button type="button" className="gsb" data-testid="gday-spots-up" aria-label="Show more spots left"
-            disabled={!canEdit || shownSpots >= Math.max(0, cap - real)}
-            onClick={(e) => { stop(e); onStepSpots(m.id, 1); }}>+</button>
-          {/* READ-ONLY. What the setting does to the match, not a second thing to adjust. */}
-          <i className="gtrail" data-testid="gday-spots-fakes">· {fakesFor(cap, shownSpots, real)} fake</i>
+      )}
+      {saveState && saveState.s !== "saving" && (
+        <span className={"gverdict " + saveState.s} data-testid="gday-save-verdict" data-state={saveState.s}>
+          {saveState.msg}
         </span>
-
-        {/* ONE SAVE, FOR WHICHEVER VALUE MOVED. Green only when the minimum change actually clears
-            the shortfall - an adjustment is not a rescue. */}
-        {(moved || spotsMoved) && (
-          <button type="button" className={"gpri gsave" + (moved && shortNow === 0 ? " ok" : "")}
-            data-testid={moved ? "gday-save-min" : "gday-save-spots"}
-            data-clears={moved ? (shortNow === 0 ? "1" : "0") : null}
-            disabled={saveState?.s === "saving"}
-            title={moved
-              ? (shortNow === 0
-                ? `Sets the minimum to ${shownMin}, which ${real} real players already meet — this prevents the auto-cancel.`
-                : `Sets the minimum to ${shownMin}. Still ${shortNow} short of ${real} real players, so the auto-cancel will still fire.`)
-              : `Holds ${shownSpots} spot${shownSpots === 1 ? "" : "s"} showing as left through to kickoff.`}
-            onClick={(e) => { stop(e); if (moved) onSave(m.id); else onSaveSpots(m.id); }}>
-            {saveState?.s === "saving" ? "Saving…"
-              : moved ? `Save min ${shownMin}`
-              : `Save ${shownSpots} left`}
-          </button>
-        )}
-        {/* ONE SENTENCE, STATING WHAT PERSISTS. The old pair needed a paragraph explaining which
-            control fed which; one control needs one line. */}
-        {spotsMoved && (
-          <span className="gdirection" data-testid="gday-direction">
-            Holds {shownSpots} spot{shownSpots === 1 ? "" : "s"} showing as left through to kickoff.
-            Fakes come off automatically as real players join.
-          </span>
-        )}
-        {saveState && saveState.s !== "saving" && (
-          <span className={"gverdict " + saveState.s} data-testid="gday-save-verdict" data-state={saveState.s}>
-            {saveState.msg}
-          </span>
-        )}
-      </div>
+      )}
     </div>
   );
 }

@@ -597,13 +597,18 @@ export function bannerUrgent(m: ApiMatch, now: number, isToday: boolean): boolea
   return minsToDeadline(m, now) <= BANNER_LEAD_MINUTES;
 }
 
-/** The default view's banners: the urgent ones, soonest deadline first, capped. */
-export const DEFAULT_BANNER_CAP = 3;
-export function defaultBanners(ms: readonly ApiMatch[], now: number, isToday: boolean): { show: ApiMatch[]; more: number } {
-  const urgent = ms.filter((m) => bannerUrgent(m, now, isToday))
-    .sort((a, b) => minsToDeadline(a, now) - minsToDeadline(b, now));
-  return { show: urgent.slice(0, DEFAULT_BANNER_CAP), more: Math.max(0, urgent.length - DEFAULT_BANNER_CAP) };
-}
+/* defaultBanners() AND DEFAULT_BANNER_CAP WERE HERE AND ARE GONE, with the default view's banners.
+ *
+ * THE DEFAULT VIEW DREW THE SAME MATCH TWICE: a red card at the top of the page and a row for it in
+ * the table below, in two visual languages, with two different sets of controls. Capping the cards
+ * at three did not fix that — it only decided how many of the duplicates to show — and the "+N more
+ * need attention" line under them was a third way to say what the Needs attention tile already
+ * said, in the same numeral.
+ *
+ * BANNERS NOW RENDER IN NEEDS ATTENTION AND NOWHERE ELSE, where the card replaces the row rather
+ * than joining it. So there is no cap to apply and no remainder to offer: the filter shows all of
+ * them. bannerUrgent() stays — riskSubtitle() reads it, and it is what decides whether a city chip
+ * goes red. */
 
 /**
  * THE NEEDS ATTENTION TILE'S SUBTITLE.

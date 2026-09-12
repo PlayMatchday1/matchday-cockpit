@@ -152,7 +152,12 @@ const READ = () => {
         factReal: q('[data-testid="gday-fact-real"]')?.textContent ?? "",
         factMin: q('[data-testid="gday-fact-min"]')?.textContent ?? "",
         factMinV: q('[data-testid="gday-fact-minv"]')?.textContent ?? "",
-        factMinWas: q('[data-testid="gday-fact-minwas"]')?.textContent ?? null,
+        /* SELECTOR PATH MOVED, ASSERTION UNCHANGED. "was 9" left the facts row for the stepper
+         * band beside the control that moved it — it used to be rendered in both places. */
+        factMinWas: q('[data-testid="gday-step-was"]')?.textContent ?? null,
+        countdown: q('[data-testid="gday-countdown"]')?.textContent ?? null,
+        /* THE COUNTDOWN IS A CHIP ON THE META ROW NOW, not a column of the card. */
+        countdownOnMetaRow: !!q('.gmetarow [data-testid="gday-countdown"]'),
         factFake: q('[data-testid="gday-fact-fake"]')?.textContent ?? "",
         factFilled: q('[data-testid="gday-fact-filled"]')?.textContent ?? "",
         band: q('[data-testid="gday-band"]')?.textContent ?? "",
@@ -319,7 +324,21 @@ const GEO = () => {
         /* THE COLUMN TEST IS ON THE BAND'S OWN CHILDREN, in DOM order. Comparing computed
            grid-template-columns instead would compare the rule, not the result. */
         colLefts: kids.map((c) => +c.getBoundingClientRect().left.toFixed(2)),
-        kids: kids.map((c) => R(c)),
+        /* IN VISUAL ORDER, NOT DOM ORDER, because the in-card gap is measured off consecutive
+           entries here and the card lays these out by GRID AREA. DOM order is
+           k m s mg rv adj; the areas put rv ABOVE mg. So the pair (rv, adj) spanned the whole
+           manager strip and the walk read a 40px "gap inside the card" that nothing on screen
+           has. Sorting by top makes the measurement answer the question it is asking. */
+        kids: kids
+          /* ZERO-HEIGHT CHILDREN ARE NOT GROUND. The review cell is empty on every row that is
+             not finished, so its area track collapses and it reports top === bottom at the same y
+             as the strip below it. Kept in the list, it made the top-sort ambiguous and produced a
+             -40/+40 pair of "gaps" spanning the manager strip. An element with no height cannot
+             put space between two others. */
+          .filter((c) => c.getBoundingClientRect().height > 0)
+          .sort((a, b) => { const x = a.getBoundingClientRect(), y = b.getBoundingClientRect();
+            return x.top - y.top || x.bottom - y.bottom; })
+          .map((c) => R(c)),
         gk: gk ? { box: R(gk), bg: cs(gk).backgroundColor, borderBottom: n(cs(gk).borderBottomWidth) } : null,
         mgr: mgrEl ? { box: R(mgrEl), bg: cs(mgrEl).backgroundColor, borderTop: n(cs(mgrEl).borderTopWidth) } : null,
         /* CLIPPED IS THE TEXT'S RIGHT EDGE PAST ITS CELL'S, NOT scrollWidth > clientWidth.
@@ -609,9 +628,38 @@ async function main() {
   yes("  CONTROL: forcing an overlap IS detected by the same comparison", forced,
     "the overlap walk cannot see a collision - every 'no overlap' above is worthless");
 
-  console.log("\n-- the alert banner --");
+  /* ── THE DEFAULT VIEW DRAWS NO CARDS AT ALL ─────────────────────────────────────────────────
+   * It used to draw up to three, and the same match was then on the page twice: a card at the top
+   * and a row in the table below it. Cards belong to Needs attention, where the card REPLACES the
+   * row. So the default view is asserted empty first, with a control proving there is a card to be
+   * had — otherwise a board that failed to load would satisfy the absence check.
+   *
+   * `d` UP TO HERE IS THE DEFAULT VIEW, and the row assertions below need it, so the at-risk row's
+   * pre-save state is captured before the filter is selected. */
+  console.log("\n-- the default view draws no cards --");
+  is("  no alert card in the default view", d.bannerCount, 0);
+  is("  ...and no alert slot either", await page.locator('[data-testid="gday-alertslot"]').count(), 0);
+  is("  ...and no +N more line, which went with the cap", await page.locator('[data-testid="gday-more-risk"]').count(), 0);
+  is("  CONTROL: there IS an at-risk match to have drawn one for", d.tiles.risk.v, "1");
+  is("  CONTROL: ...and it is on the page as a ROW", d.rows.filter((r) => r.id === RISK.id && r.risk).length, 1);
+  const rowBefore = d.rows.find((r) => r.id === RISK.id);
+  yes("  CONTROL: that row was captured for the after-save comparison", !!rowBefore);
+
+  console.log("\n-- the alert banner, in Needs attention --");
+  await page.click('[data-testid="gtile-risk"]');
+  await page.waitForSelector('[data-testid="gday-alert"]', { timeout: 10000 });
+  d = await page.evaluate(READ);
   is("  one banner, for the at-risk match", d.bannerCount, 1);
   is("  ...and it is that match", d.banner.id, RISK.id);
+  is("  ...and the slot is there, in filter mode",
+    await page.locator('[data-testid="gday-alertslot"][data-mode="filter"]').count(), 1);
+  /* THE CARD REPLACES THE ROW — it does not join it. This is the assertion the duplication bug
+   * would have failed, and it could not be written while the cards lived in the default view. */
+  is("  the table is not drawn beneath it", await page.locator('[data-testid="snapshot"]').count(), 0);
+  is("  ...so that match has NO row here", d.rows.filter((r) => r.id === RISK.id).length, 0);
+  yes("  the countdown is a chip on the meta row", d.banner.countdownOnMetaRow);
+  yes("  ...reading the minutes to auto-cancel", /to auto-cancel$/.test(d.banner.countdown ?? ""),
+    `got ${JSON.stringify(d.banner.countdown)}`);
   is("  the headline names the shortfall", d.banner.head, `${RISK.name} is ${RISK.min - RISK.real} players short`);
   yes("  the meta line is its own element carrying kickoff, field, city and manager",
     /kickoff/.test(d.banner.meta) && d.banner.meta.includes(RISK.fd) && d.banner.meta.includes(RISK.city) && d.banner.meta.includes("Chama"));
@@ -628,12 +676,14 @@ async function main() {
   is("  minimum", d.banner.factMin.trim(), `${RISK.min} minimum`);
   is("  fake", d.banner.factFake.trim(), `${RISK.fake} fake`);
   is("  filled", d.banner.factFilled.trim(), `${RISK.real + RISK.fake}/${RISK.cap}`);
-  /* THE BANNER AND THE TABLE MUST NOT DRIFT. Asserted against the row for the same match. */
-  const tableRow = d.rows.find((r) => r.id === RISK.id);
-  yes("  CONTROL: that match has a row to compare against", !!tableRow);
-  if (tableRow) is("  the banner's facts match the table row's numbers",
+  /* THE CARD AND THE TABLE MUST NOT DRIFT. The comparison row now comes from the DEFAULT view's
+   * read, captured above — in this view the card has replaced it, which is the point. */
+  yes("  CONTROL: that match has a row, read from the default view", !!rowBefore);
+  is("  the card's facts match the table row's numbers",
     [d.banner.factReal.trim(), d.banner.factFake.trim(), d.banner.factFilled.trim()],
     [`${RISK.real} real`, `${RISK.fake} fake`, `${RISK.real + RISK.fake}/${RISK.cap}`]);
+  is("  CONTROL: ...and the row agreed on the shortfall the card is naming",
+    rowBefore.delta, RISK.real - RISK.min);
   /* D1. It was a destructive action one mis-tap from a stepper, and it already lives in the match
    * editor. REMOVED, not moved and not duplicated. */
   is("  Cancel now is ABSENT from the banner", d.banner.cancelNow, null);
@@ -673,7 +723,6 @@ async function main() {
   await step("down", RISK.cap - RISK.real);
   d = await page.evaluate(READ);
   is("  poised at the real count", d.banner.stepV, String(RISK.real));
-  const rowBefore = d.rows.find((r) => r.id === RISK.id);
   await page.click('[data-testid="gday-save-min"]');
   await page.waitForTimeout(1800);
   is("  exactly one PUT was sent - NEVER a retry", puts.length, 1);
@@ -684,7 +733,14 @@ async function main() {
   const after = await page.evaluate(READ);
   is("  the banner is gone once the shortfall clears", after.bannerCount, 0);
   is("  the Needs attention tile went to zero with it", after.tiles.risk.v, "0");
-  const rowAfter = after.rows.find((r) => r.id === RISK.id);
+  /* THE ROW'S HALF OF THIS IS READ IN THE DEFAULT VIEW. Needs attention draws no table, so the
+   * filter is cleared to look at the row the card was standing in for. Clicking the active tile
+   * again is how this page clears a selection. */
+  await page.click('[data-testid="gtile-risk"]');
+  await page.waitForSelector('[data-testid="snapshot"]', { timeout: 10000 });
+  const afterRows = await page.evaluate(READ);
+  is("  CONTROL: the table is back", afterRows.rows.length > 0, true);
+  const rowAfter = afterRows.rows.find((r) => r.id === RISK.id);
   is("  the row lost its risk styling", rowAfter?.risk, false);
   is("  the row's min label moved", rowAfter?.minLabel.n, RISK.real);
   yes("  ...and its notch moved with it", Math.abs(rowAfter.notch.pct - rowBefore.notch.pct) > 1);
@@ -729,17 +785,30 @@ async function main() {
   // ══ A. THE BANNERS ═════════════════════════════════════════════════════════════════════════
   {
     const { ctx: c2, page: p2 } = await boot(browser, storageState, 1500, { byDate: true });
-    console.log("\n-- A1/A3: today's default view banners only the urgent one --");
+    /* ── A1/A3 REWRITTEN, BECAUSE THE RULE THEY TESTED IS GONE ────────────────────────────────
+     * They asserted that today's default view banners the URGENT match (201, 23 minutes from its
+     * deadline) and not the 19-hours-out one (202). The cap-of-three and the "+N more" line were
+     * the same rule at a different scale. All of it drew a card ABOVE a table that also held a row
+     * for the same match, which is the duplication this change removes.
+     *
+     * WHAT IS ASSERTED INSTEAD: the default view draws no card for EITHER of them — including 201,
+     * the most urgent match the fixture can produce — and both are on the board as rows. 201 is
+     * the control that matters: a board that banners nothing because nothing qualified would pass
+     * an absence check, so the match that used to qualify is named explicitly. */
+    console.log("\n-- A1/A3: today's default view draws no cards, whatever the deadline --");
     let v = await p2.evaluate(READ);
-    is("  exactly one banner in the default view", v.bannerCount, 1);
-    is("  ...and it is the match 23 minutes from its deadline", v.banner.id, 201);
-    /* THE PAIR THAT MAKES THIS MEAN SOMETHING. 202 is short by SEVEN real players - more short
-     * than 201 - and is not a banner, because its deadline is nineteen hours away. */
-    is("  CONTROL: the 19-hours-out match is NOT a banner",
-      await p2.locator('[data-testid="gday-alert"][data-id="202"]').count(), 0);
-    is("  CONTROL: ...but it IS on the board as a row",
+    is("  no banner in the default view", v.bannerCount, 0);
+    is("  ...no slot", await p2.locator('[data-testid="gday-alertslot"]').count(), 0);
+    is("  ...and no +N more line", await p2.locator('[data-testid="gday-more-risk"]').count(), 0);
+    is("  CONTROL: the match 23 minutes from its deadline is NOT a card",
+      await p2.locator('[data-testid="gday-alert"][data-id="201"]').count(), 0);
+    is("  CONTROL: ...it is on the board as a ROW", await p2.locator('[data-testid="gday-row"][data-id="201"]').count(), 1);
+    is("  CONTROL: ...and the tile still counts it as needing attention", Number(v.tiles.risk.v) >= 1, true);
+    /* THE PAIR THAT MADE THE OLD RULE MEAN SOMETHING, kept as a pair: 202 is short by SEVEN real
+     * players - more short than 201 - with its deadline nineteen hours away. Both are rows now. */
+    is("  CONTROL: the 19-hours-out match is a row too",
       await p2.locator('[data-testid="gday-row"][data-id="202"]').count(), 1);
-    is("  the table starts within the first screen",
+    is("  the table starts at the top of the board, with nothing above it",
       await p2.evaluate(() => document.querySelector('[data-testid="snapshot"]').getBoundingClientRect().top < window.innerHeight), true);
 
     console.log("\n-- A4: today's tile subtitle names the split --");
@@ -754,13 +823,14 @@ async function main() {
     await p2.click('[data-testid="gtile-risk"]'); await p2.waitForTimeout(700);
     v = await p2.evaluate(READ);
     is("  clicking again returns rows", v.rows.length > 0, true);
-    is("  ...and the default banner set", v.bannerCount, 1);
+    is("  ...and no cards, because the default view has none", v.bannerCount, 0);
 
-    console.log("\n-- A2: every other filter shows rows, never extra banners --");
+    console.log("\n-- A2: every other filter shows rows and no cards --");
     for (const k of ["soon", "live"]) {
       await p2.click(`[data-testid="gtile-${k}"]`); await p2.waitForTimeout(600);
       const f = await p2.evaluate(READ);
-      is(`  ${k}: still only the default urgent banner`, f.bannerCount, 1);
+      is(`  ${k}: no cards`, f.bannerCount, 0);
+      is(`  ${k}: CONTROL: ...and the filter did select`, await p2.locator(`[data-testid="gtile-${k}"]`).getAttribute("data-on"), "1");
       await p2.click(`[data-testid="gtile-${k}"]`); await p2.waitForTimeout(500);
     }
 
@@ -794,19 +864,27 @@ async function main() {
     await closeContext(c2);
   }
 
-  // ══ A3: THE CAP OF THREE, AND THE +N LINE ══════════════════════════════════════════════════
+  /* ══ A3: THE CAP OF THREE AND THE +N LINE ═════════════════════════════════════════════════════
+   * THE CAP IS GONE, and with it the remainder. The five-qualifying fixture is kept and pointed at
+   * the rule that replaced it: inside Needs attention ALL FIVE render, soonest deadline first, and
+   * the default view renders none of them. The ordering assertion survives unchanged — it was
+   * never about the cap — and the fixture is the one that makes "all of them" mean something,
+   * since with four or fewer a capped board and an uncapped one look identical. */
   {
     const { ctx: c3, page: p3 } = await boot(browser, storageState, 1500, { byDate: true, todaySet: TODAY_FIVE });
+    console.log("\n-- A3: five qualifying, none in the default view, all five in Needs attention --");
     const v = await p3.evaluate(READ);
-    console.log("\n-- A3: five qualifying, three shown --");
-    is("  exactly three banners", v.bannerCount, 3);
-    is("  ...soonest deadline first", await p3.evaluate(() =>
-      [...document.querySelectorAll('[data-testid="gday-alert"]')].map((a) => Number(a.dataset.id))), [300, 301, 302]);
-    is("  ...with a +2 more line", (await p3.locator('[data-testid="gday-more-risk"]').textContent()).trim(), "+2 more need attention");
-    await p3.click('[data-testid="gday-more-risk"]');
-    await p3.waitForTimeout(800);
+    is("  no banners in the default view", v.bannerCount, 0);
+    is("  ...and no +N more line to offer the rest", await p3.locator('[data-testid="gday-more-risk"]').count(), 0);
+    is("  CONTROL: all five are on the board as rows",
+      v.rows.filter((r) => r.id >= 300 && r.id <= 304).length, 5);
+    is("  CONTROL: ...and the tile counts five", v.tiles.risk.v, "5");
+    await p3.click('[data-testid="gtile-risk"]');
+    await p3.waitForSelector('[data-testid="gday-alert"]', { timeout: 10000 });
     const after = await p3.evaluate(READ);
-    is("  clicking it lands on the Needs attention filter", after.bannerCount, 5);
+    is("  all five render as cards — nothing is held back", after.bannerCount, 5);
+    is("  ...soonest deadline first", await p3.evaluate(() =>
+      [...document.querySelectorAll('[data-testid="gday-alert"]')].map((a) => Number(a.dataset.id))), [300, 301, 302, 303, 304]);
     is("  ...and the tile is selected", await p3.locator('[data-testid="gtile-risk"]').getAttribute("data-on"), "1");
     is("  ...and no rows are drawn", after.rows.length, 0);
     await closeContext(c3);
@@ -953,8 +1031,19 @@ async function main() {
     yes("  ...with real threads in it", /\d+\s*\n?\s*(Upcoming|Past)/.test(txt) && /Invite link|kickoff|PM|AM/.test(txt));
     await closeContext(cc);
 
-    console.log("\n-- C3: the banner link lands on that match's thread --");
+    console.log("\n-- C3: the chat link lands on that match's thread --");
     const { ctx: c4, page: p4 } = await boot(browser, storageState, 1500, { byDate: true });
+    /* SELECTOR PATH: REACHED THROUGH ADJUST NOW, and the assertion bodies below are unchanged.
+     * The chat link used to be on a default-view banner; the default view draws none. It is the
+     * SAME element — GdayControls renders one block for both callers — so opening any row's
+     * controls is the shortest route to it, and it also proves the link works from a row, which
+     * before this change was not somewhere it existed. */
+    is("  CONTROL: no chat link on the page until a row's controls are opened",
+      await p4.locator('[data-testid="gday-chat"]').count(), 0);
+    await p4.locator('[data-testid="gday-adjust"]').first().click();
+    await p4.waitForSelector('[data-testid="gday-row-controls"]', { timeout: 10000 });
+    is("  CONTROL: ...and exactly one once they are",
+      await p4.locator('[data-testid="gday-chat"]').count(), 1);
     const href = await p4.locator('[data-testid="gday-chat"]').first().getAttribute("href");
     const chatId = await p4.locator('[data-testid="gday-chat"]').first().getAttribute("data-chat-id");
     yes(`  the href targets the real route - ${href}`, href.startsWith("/match-ops/match-chats?chatId="));
@@ -983,9 +1072,21 @@ async function main() {
   }
 
 
-  /* THE DATE-AWARE FIXTURE'S URGENT MATCH — the one the banner renders on today's board. RISK
-   * belongs to the OTHER fixture and is not on this board at all. */
+  /* THE DATE-AWARE FIXTURE'S URGENT MATCH. It used to be the one the DEFAULT VIEW banners; the
+   * default view banners nothing now, so it is simply the first match on today's board and its
+   * controls are reached through Adjust. RISK belongs to the OTHER fixture and is not on this
+   * board at all. */
   const URG = TODAY_FIX[0];
+  /* OPEN THAT MATCH'S CONTROLS AND PRESS Open match chat. One helper, because two blocks below
+   * reach for the chat button and both used to find it on a banner that is no longer drawn. It is
+   * the SAME element either way — GdayControls is one component with two callers. */
+  const clickChat = async (pg, id = URG.id) => {
+    if (await pg.locator(`[data-testid="gday-row-controls"][data-id="${id}"]`).count() === 0) {
+      await pg.click(`[data-testid="gday-adjust"][data-id="${id}"]`);
+      await pg.waitForSelector(`[data-testid="gday-row-controls"][data-id="${id}"]`, { timeout: 15000 });
+    }
+    await pg.click(`[data-testid="gday-row-controls"][data-id="${id}"] [data-testid="gday-chat"]`);
+  };
   // ══ C. THE CHAT PANEL ══════════════════════════════════════════════════════════════════════
   {
     const { ctx: cp, page: pp } = await boot(browser, storageState, 1500, { byDate: true });
@@ -1001,7 +1102,7 @@ async function main() {
     await pp.click('[data-testid="gday-panel-close"]'); await pp.waitForTimeout(900);
 
     console.log("\n-- C1/C2: Open match chat opens the SAME panel on Chat --");
-    await pp.click('[data-testid="gday-chat"]');
+    await clickChat(pp);
     await pp.waitForSelector('[data-testid="gday-panel"]', { timeout: 30000 });
     await pp.waitForTimeout(1500);
     is("  it did not navigate away", new URL(pp.url()).pathname, "/match-ops/gameday");
@@ -1032,7 +1133,7 @@ async function main() {
     await pp.waitForSelector('[data-testid="gday-row"]', { timeout: 60000 });
     await pp.waitForTimeout(900);
     const before = await pp.evaluate(() => ({ y: window.scrollY, strip: document.querySelector('[data-testid="gtile-risk"]')?.dataset.on }));
-    await pp.click('[data-testid="gday-chat"]');
+    await clickChat(pp);
     await pp.waitForSelector('[data-testid="gday-panel"]', { timeout: 30000 });
     await pp.waitForTimeout(900);
     await pp.click('[data-testid="gday-tab-details"]'); await pp.waitForTimeout(500);
@@ -1061,7 +1162,13 @@ async function main() {
     console.log("\n-- D1: Cancel now is gone --");
     is("  no Cancel now in the banner", await pd.locator('[data-testid="gday-cancel-now"]').count(), 0);
 
+    /* THE CONTROLS ARE OPENED THROUGH ADJUST, and every assertion below is unchanged. They used to
+     * resolve against the default view's banner for this match; the default view draws none. One
+     * row's block is open, so each bare [data-testid="gday-spots-*"] selector still matches exactly
+     * one element — which the count assertion immediately below is the control for. */
     console.log("\n-- the one fake control, on the urgent match --");
+    await pd.click(`[data-testid="gday-adjust"][data-id="${URG.id}"]`);
+    await pd.waitForSelector(`[data-testid="gday-row-controls"][data-id="${URG.id}"]`, { timeout: 15000 });
     const fv = () => pd.locator('[data-testid="gday-spots-value"]').textContent();
     const cap = URG.maxPlayerCount, real = URG._count.players - URG._count.fakePlayers;
     is("  exactly one fake control renders", await pd.locator('[data-testid="gday-spotstep"]').count(), 1);
@@ -1073,36 +1180,54 @@ async function main() {
     is("  the floor is 0", Number(await fv()), 0);
     is("  ...with − disabled at the bound", await pd.locator('[data-testid="gday-spots-down"]').isDisabled(), true);
     is("  CONTROL: + is not disabled at the floor", await pd.locator('[data-testid="gday-spots-up"]').isDisabled(), false);
-    is("  ...and at the floor every spot is fake", (await pd.locator('[data-testid="gday-spots-fakes"]').textContent()).trim(), `· ${cap - real} fake`);
+    is("  ...and at the floor every spot is fake", (await pd.locator('[data-testid="gday-spots-fakes"]').textContent()).trim(), `${cap - real} fake`);
     for (let i = 0; i < 40 && !(await pd.locator('[data-testid="gday-spots-up"]').isDisabled()); i++) {
       await pd.click('[data-testid="gday-spots-up"]'); await pd.waitForTimeout(90);
     }
     is("  the ceiling is capacity − real", Number(await fv()), cap - real);
     is("  ...with + disabled at the bound", await pd.locator('[data-testid="gday-spots-up"]').isDisabled(), true);
-    is("  ...and at the ceiling there are no fakes", (await pd.locator('[data-testid="gday-spots-fakes"]').textContent()).trim(), "· 0 fake");
+    is("  ...and at the ceiling there are no fakes", (await pd.locator('[data-testid="gday-spots-fakes"]').textContent()).trim(), "0 fake");
 
-    console.log("\n-- D4: the action area is a 2x2 grid --");
-    const acts = await pd.evaluate(() => {
-      const a = document.querySelector('[data-testid="gday-acts"]');
+    /* ── D4: THE ACTION AREA IS STILL A 2x2 GRID ON DESKTOP ───────────────────────────────────
+     * Measured on the EXPANDED ROW's block rather than a banner's, because that is where it is on
+     * this board now — it is the same component and the same rules, which is the thing worth
+     * proving: extracting it must not have turned the desktop grid into a column. The banner's own
+     * geometry is measured in the block further down that selects Needs attention.
+     *
+     * THE ROW'S HEIGHT REPLACES THE BANNER'S HEIGHT. Same question — does a pending change with a
+     * Save button and the explanatory sentence blow the container out — asked of the container the
+     * block is actually in. */
+    console.log("\n-- D4: the action area is a 2x2 grid, on an expanded row --");
+    const acts = await pd.evaluate((id) => {
+      const exp = document.querySelector(`[data-testid="gday-row-controls"][data-id="${id}"]`);
+      const a = exp.querySelector('[data-testid="gday-acts"]');
       const r = a.getBoundingClientRect();
       return { w: Math.round(r.width), cols: getComputedStyle(a).gridTemplateColumns.split(" ").length,
         tracks: getComputedStyle(a).gridTemplateColumns,
         kids: [...a.children].map((c) => ({ t: c.dataset?.testid ?? String(c.className).slice(0,18),
           w: Math.round(c.getBoundingClientRect().width), col: getComputedStyle(c).gridColumn })),
-        bannerH: Math.round(document.querySelector('[data-testid="gday-alert"]').getBoundingClientRect().height) };
-    });
+        rowH: Math.round(exp.closest('[data-testid="gday-row"]').getBoundingClientRect().height) };
+    }, URG.id);
     console.log(`     tracks=${acts.tracks} kids=${JSON.stringify(acts.kids)}`);
     is("  two columns", acts.cols, 2);
-    /* MEASURED, NOT ASSUMED. Three controls are not automatically narrower than four — the spots
-     * control is the widest of them and the save button and direction line span both columns. */
-    yes(`  the action area stays compact (${acts.w}px)`, acts.w < 420);
+    /* STRUCTURE, NOT WIDTH, ON A ROW. The block spans the row deliberately — it is not competing
+     * with a text column the way it is on a banner, where the 420px figure is asserted instead.
+     * What still has to hold is WHICH children span: the save, the direction line and the spots
+     * control each take a row of their own, and leaving the widest of the three in a column forced
+     * BOTH columns to its width (324px -> 498px, measured). */
+    is("  the spots control spans both columns",
+      acts.kids.find((k) => k.t === "gday-spotstep")?.col, "1 / -1");
+    is("  ...and so does the save",
+      acts.kids.find((k) => k.t === "gday-save-spots" || k.t === "gday-save-min")?.col, "1 / -1");
+    is("  CONTROL: the chat link and the minimum stepper do NOT span",
+      acts.kids.filter((k) => k.t === "gday-chat" || k.t === "gday-stepper").map((k) => k.col), ["auto", "auto"]);
     await pd.setViewportSize({ width: 1280, height: 1000 }); await pd.waitForTimeout(600);
-    const h1280 = await pd.evaluate(() => Math.round(document.querySelector('[data-testid="gday-alert"]').getBoundingClientRect().height));
-    /* THIS BANNER HAS A PENDING CHANGE TOO — the bounds loop above left the control at its ceiling
-     * — so it carries a Save button and the explanatory sentence, each on its own grid row. ~180px
-     * is the correct height for that state; the resting banner is ~103px and is checked with the
-     * panel open below. */
-    yes(`  the banner holds its height at 1280 with a pending change (${h1280}px)`, h1280 < 200);
+    const h1280 = await pd.evaluate((id) => Math.round(
+      document.querySelector(`[data-testid="gday-row-controls"][data-id="${id}"]`)
+        .closest('[data-testid="gday-row"]').getBoundingClientRect().height), URG.id);
+    /* THIS BLOCK HAS A PENDING CHANGE TOO — the bounds loop above left the control at its ceiling —
+     * so it carries a Save button and the explanatory sentence, each on its own grid row. */
+    yes(`  the expanded row holds its height at 1280 with a pending change (${h1280}px)`, h1280 < 320);
     await closeContext(cd);
   }
 
@@ -1243,12 +1368,19 @@ async function main() {
     yes(`  CONTROL: the panel rendered (${panelText.length - pageText.length} more chars)`, panelText.length > pageText.length);
     await pn.click('[data-testid="gday-panel-close"]'); await pn.waitForTimeout(900);
 
+    /* THE BANNER'S OWN GEOMETRY, so Needs attention is selected — the default view has no card to
+     * measure. This is where the "action area stays compact" figure belongs: on a banner .gacts is
+     * flex:0 0 auto beside the text block and must not eat it, which is the constraint the 420px
+     * came from. On an expanded row it spans the row by design, so D4 asserts structure instead. */
     console.log("\n-- three controls still fit the grid --");
+    await pn.click('[data-testid="gtile-risk"]');
+    await pn.waitForSelector('[data-testid="gday-alert"]', { timeout: 15000 });
     const g2 = await pn.evaluate(() => {
-      const a = document.querySelector('[data-testid="gday-acts"]');
+      const a = document.querySelector('[data-testid="gday-alert"] [data-testid="gday-acts"]');
       return { cols: getComputedStyle(a).gridTemplateColumns.split(" ").length, w: Math.round(a.getBoundingClientRect().width) };
     });
     is("  two columns", g2.cols, 2);
+    yes(`  the action area stays compact (${g2.w}px)`, g2.w < 420);
     await pn.setViewportSize({ width: 1280, height: 1000 }); await pn.waitForTimeout(700);
     const h = await pn.evaluate(() => Math.round(document.querySelector('[data-testid="gday-alert"]').getBoundingClientRect().height));
     /* TWO HEIGHTS, AND THEY ARE DIFFERENT ON PURPOSE. At rest the banner is ~103px. With a value
@@ -1286,7 +1418,7 @@ async function main() {
     is("  no band label anywhere", /\dh band/i.test(txt), false);
     is("  no 'rung' anywhere", /rung/i.test(txt), false);
     is("  the control reads 'Spots left now'",
-      (await pb.locator('[data-testid="gday-alert"][data-id="800"] .glab').textContent()).trim(), "Spots left now");
+      (await pb.locator('[data-testid="gday-alert"][data-id="800"] [data-testid="gday-spotstep"] .glab').textContent()).trim(), "Spots left now");
 
     console.log("\n-- the value is the rung in force --");
     const seen = [];
@@ -1304,7 +1436,7 @@ async function main() {
     for (let i = 0; i < 3; i++) {
       const v = Number(await pb.locator(`${one} [data-testid="gday-spots-value"]`).textContent());
       const f = (await pb.locator(`${one} [data-testid="gday-spots-fakes"]`).textContent()).trim();
-      is(`  step ${i}: ${CAP} − ${v} − ${REAL} fake`, f, `· ${Math.max(0, CAP - v - REAL)} fake`);
+      is(`  step ${i}: ${CAP} − ${v} − ${REAL} fake`, f, `${Math.max(0, CAP - v - REAL)} fake`);
       await pb.click(`${one} [data-testid="gday-spots-down"]`); await pb.waitForTimeout(260);
     }
 
@@ -1481,7 +1613,12 @@ async function main() {
      * narrows the board without changing the viewport, so a media query cannot see it. */
     for (const w of [1500, 1366, 1280]) {
       const { ctx: cc2, page: pc2 } = await boot(browser, storageState, w, { byDate: true });
-      await pc2.click('[data-testid="gday-row"] [data-testid="gday-name"]');
+      /* NEEDS ATTENTION FIRST — a card only exists there now. The panel is then opened by clicking
+       * the CARD rather than a row, because in this view the card IS the match's entry on the page.
+       * Same panel, same click-to-open contract, and it keeps the card on screen to measure. */
+      await pc2.click('[data-testid="gtile-risk"]');
+      await pc2.waitForSelector('[data-testid="gday-alert"]', { timeout: 15000 });
+      await pc2.click('[data-testid="gday-alert-head"]');
       await pc2.waitForSelector('[data-testid="gday-panel"]', { timeout: 30000 });
       await pc2.waitForTimeout(1400);
       const g = await pc2.evaluate(() => {
@@ -1505,21 +1642,32 @@ async function main() {
       is(`  ${w}: the headline is on one line`, g.headLines, 1);
       is(`  ${w}: the facts row is horizontal`, g.factsRows, 1);
       yes(`  ${w}: the text block is at least 280px (${g.txtW})`, g.txtW >= 280);
-      /* CONTROL: force the old desktop row layout back and show the collapse is caught. */
+      /* CONTROL: crush the text block and show the measurement catches it.
+       *
+       * IT USED TO DO THIS BY FORCING flex-direction:row — reproducing the old desktop layout,
+       * where three columns (text, countdown, actions) competed for the width. THE COUNTDOWN IS NO
+       * LONGER ONE OF THEM: it is a chip inside the text block, so the card has two flex children
+       * and forcing row direction no longer crushes anything — measured 1 line and 320px, a
+       * control that had quietly stopped controlling.
+       *
+       * SO IT CRUSHES THE BLOCK DIRECTLY. What this control exists to prove is that headLines and
+       * txtW can SEE a crushed text block, not that one particular historical layout caused one. A
+       * fixed 180px width is a crush by construction, which is exactly what a positive control
+       * should be. */
       const collapsed = await pc2.evaluate(() => {
         const a = document.querySelector('[data-testid="gday-alert"]');
         const prev = a.style.cssText;
-        a.style.flexDirection = "row";
         const txt = a.querySelector(".gtxt");
-        txt.style.minWidth = "0px";
+        const txtPrev = txt.style.cssText;
+        txt.style.minWidth = "0px"; txt.style.width = "180px"; txt.style.flex = "0 0 180px";
         const head = a.querySelector('[data-testid="gday-alert-head"]');
         const lh = parseFloat(getComputedStyle(head).lineHeight) || 20;
         const lines = Math.round(head.getBoundingClientRect().height / lh);
         const wNow = Math.round(txt.getBoundingClientRect().width);
-        a.style.cssText = prev; txt.style.minWidth = "";
+        a.style.cssText = prev; txt.style.cssText = txtPrev;
         return { lines, wNow };
       });
-      yes(`  ${w}: CONTROL - forcing the row layout DOES collapse the text (${collapsed.lines} lines, ${collapsed.wNow}px)`,
+      yes(`  ${w}: CONTROL - crushing the text block IS detected (${collapsed.lines} lines, ${collapsed.wNow}px)`,
         collapsed.lines > 1 || collapsed.wNow < 280,
         "the collapse check cannot see a crushed text block - every clean result above is worthless");
       await closeContext(cc2);
@@ -1530,9 +1678,15 @@ async function main() {
   {
     const { ctx: ce, page: pe } = await boot(browser, storageState, 1500, { byDate: true });
     console.log("\n-- E: 'Cancels below', not 'Adjust min' --");
+    /* REACHED THROUGH ADJUST, so the table stays on screen for the meter-label assertion at the
+     * foot of this block. The new control is labelled "Adjust ▾" — the word Adjust naming the
+     * disclosure, never the field — which is why the 'Adjust min' check below still means what it
+     * meant: no control claims to adjust a thing called "min". */
+    await pe.locator('[data-testid="gday-adjust"]').first().click();
+    await pe.waitForSelector('[data-testid="gday-row-controls"]', { timeout: 15000 });
     const page1 = await pe.evaluate(() => document.body.innerText);
     is("  no control is labelled 'Adjust min'", /Adjust min/i.test(page1), false);
-    yes("  the banner control reads 'Cancels below'",
+    yes("  the stepper reads 'Cancels below'",
       (await pe.locator('[data-testid="gday-stepper"]').textContent()).trim().startsWith("Cancels below"));
     /* IT STILL WRITES minPlayerCount — the label changed, the behaviour did not. */
     await pe.click('[data-testid="gday-step-down"]'); await pe.waitForTimeout(300);
@@ -1659,7 +1813,7 @@ async function main() {
     const rungBefore = Number(await pd2.locator('[data-testid="gday-spots-value"]').textContent());
     const fakeBefore = (await pd2.locator('[data-testid="gday-spots-fakes"]').textContent()).trim();
     is("  the stored rung is 10 (18 − 5 fake − 3 real)", rungBefore, 10);
-    is("  ...showing 5 fake", fakeBefore, "· 5 fake");
+    is("  ...showing 5 fake", fakeBefore, "5 fake");
     /* ONE MORE REAL PLAYER, same ladder. */
     M._count.players += 1;
     await pd2.reload({ waitUntil: "domcontentloaded" });
@@ -1668,7 +1822,7 @@ async function main() {
     const rungAfter = Number(await pd2.locator('[data-testid="gday-spots-value"]').textContent());
     const fakeAfter = (await pd2.locator('[data-testid="gday-spots-fakes"]').textContent()).trim();
     is("  the STORED RUNG is untouched", rungAfter, rungBefore);
-    is("  ...while the derived fake count drops by one", fakeAfter, "· 4 fake");
+    is("  ...while the derived fake count drops by one", fakeAfter, "4 fake");
     yes("  CONTROL: the two really did diverge", fakeAfter !== fakeBefore && rungAfter === rungBefore);
     await closeContext(cd2);
   }
@@ -2101,14 +2255,20 @@ async function main() {
       const bands = nonEmpty(g.lists.flatMap((L) => L.bands), `rows @${w}`);
       const rows = nonEmpty(v.rows, `READ rows @${w}`);
 
-      // ── B3: FIVE CELLS, AND THE COLUMNS DO NOT MOVE ─────────────────────────────────────────
-      is(`${tag} every row has exactly five cells`,
-        bands.filter((b) => b.colLefts.length !== 5).map((b) => [b.id, b.colLefts.length]), []);
+      /* ── B3: SIX CELLS, AND THE COLUMNS DO NOT MOVE ──────────────────────────────────────────
+       * SIX, NOT FIVE: the sixth is Adjust, the control that reaches the two steppers on a match
+       * the page is not alarmed about. The count is the whole point of this assertion — a row that
+       * renders a different number of cells than its neighbours is a row whose columns have moved —
+       * so the number is updated and the assertion is otherwise untouched. The header carries a
+       * sixth, wordless cell over it: five headed columns against six row tracks would be the
+       * misalignment this block exists to catch. */
+      is(`${tag} every row has exactly six cells`,
+        bands.filter((b) => b.colLefts.length !== 6).map((b) => [b.id, b.colLefts.length]), []);
       const first = bands[0].colLefts;
-      is(`${tag} every row's five column lefts are identical`,
+      is(`${tag} every row's six column lefts are identical`,
         bands.filter((b) => b.colLefts.some((x, i) => Math.abs(x - first[i]) > 0.5))
           .map((b) => [b.id, b.colLefts]), []);
-      is(`${tag} the header has five columns too`, g.headCols?.length, 5);
+      is(`${tag} the header has six columns too`, g.headCols?.length, 6);
       is(`${tag} ...and they agree with the rows within 9px`,
         (g.headCols ?? []).map((x, i) => (Math.abs(x - first[i]) > 9 ? [i, x, first[i]] : null)).filter(Boolean), []);
 
@@ -2211,37 +2371,47 @@ async function main() {
      * "does not open the panel". */
     {
       const { ctx: cg, page: pg, puts: gputs } = await boot(browser, storageState, 1500, { byDate: true });
-      is("  CONTROL: a banner is on the page to click into", await pg.locator('[data-testid="gday-alert"]').count(), 1);
+      /* NEEDS ATTENTION, because that is the only view with a card in it now. */
+      await pg.click('[data-testid="gtile-risk"]');
+      await pg.waitForSelector('[data-testid="gday-alert"]', { timeout: 15000 });
+      /* MORE THAN ONE CARD NOW — Needs attention holds all of them, where the default view used to
+       * hold a capped set — so every selector below is SCOPED TO ONE CARD. Unscoped, they resolved
+       * to two elements and Playwright's strict mode refused the click, which is the right failure
+       * for an ambiguous selector and the wrong way to learn about it. */
+      const nCards = await pg.locator('[data-testid="gday-alert"]').count();
+      yes(`  CONTROL: there is a card on the page to click into (${nCards})`, nCards >= 1);
+      const ONE = `[data-testid="gday-alert"][data-id="${URG.id}"]`;
+      is("  CONTROL: ...and the one under test is on it", await pg.locator(ONE).count(), 1);
       is("  CONTROL: no panel open to begin with", (await pg.evaluate(READ)).drawer, 0);
 
       /* THE BANNER REALLY IS CLICK-TO-OPEN. Without this the three guards below are all satisfied
        * by a banner that opens nothing no matter where you click it. */
-      await pg.click('[data-testid="gday-alert-head"]');
+      await pg.click(`${ONE} [data-testid="gday-alert-head"]`);
       await pg.waitForSelector('[data-testid="gday-panel"]', { timeout: 30000 });
       is("  CONTROL: clicking the banner's headline DOES open the panel", (await pg.evaluate(READ)).drawer, 1);
       await pg.click('[data-testid="gday-panel-close"]');
       await pg.waitForTimeout(900);
       is("  CONTROL: ...and it closes again", (await pg.evaluate(READ)).drawer, 0);
 
-      const stepV = () => pg.locator('[data-testid="gday-step-value"]').textContent();
-      const spotV = () => pg.locator('[data-testid="gday-spots-value"]').textContent();
+      const stepV = () => pg.locator(`${ONE} [data-testid="gday-step-value"]`).textContent();
+      const spotV = () => pg.locator(`${ONE} [data-testid="gday-spots-value"]`).textContent();
 
       const minBefore = await stepV();
-      await pg.click('[data-testid="gday-step-down"]');
+      await pg.click(`${ONE} [data-testid="gday-step-down"]`);
       await pg.waitForTimeout(500);
       is("  the Cancels below stepper does NOT open the panel", (await pg.evaluate(READ)).drawer, 0);
       const minAfter = await stepV();
       yes(`  ...and it still steps the minimum (${minBefore} -> ${minAfter})`, Number(minAfter) === Number(minBefore) - 1);
 
       const spotsBefore = await spotV();
-      await pg.click('[data-testid="gday-spots-down"]');
+      await pg.click(`${ONE} [data-testid="gday-spots-down"]`);
       await pg.waitForTimeout(500);
       is("  the Spots left now stepper does NOT open the panel", (await pg.evaluate(READ)).drawer, 0);
       const spotsAfter = await spotV();
       yes(`  ...and it still steps the spots (${spotsBefore} -> ${spotsAfter})`, Number(spotsAfter) === Number(spotsBefore) - 1);
 
       const putsBefore = gputs.length;
-      await pg.click('[data-testid="gday-save-min"]');
+      await pg.click(`${ONE} [data-testid="gday-save-min"]`);
       await pg.waitForTimeout(1800);
       is("  the banner Save does NOT open the panel", (await pg.evaluate(READ)).drawer, 0);
       yes(`  ...and it still sent exactly one write (${gputs.length - putsBefore})`, gputs.length - putsBefore === 1);
@@ -2319,6 +2489,96 @@ async function main() {
     yes(`  the footer names the minimum and the hatch - "${foot.slice(0, 90)}..."`,
       /match minimum/.test(foot) && /hatched/.test(foot));
     await closeContext(live);
+  }
+
+  /* ══ ADJUST: THE TWO STEPPERS ON ANY MATCH ══════════════════════════════════════════════════
+   * The controls used to be markup inside the alert banner, so they existed only on a match the
+   * page had decided to interrupt about. Ryan: "i want the ability to have this screen on all the
+   * matches because sometimes i want to adjust these 2 things on other games too."
+   *
+   * EVERY ASSERTION HERE IS ON A MATCH THAT IS NOT AT RISK, which is the whole point — on an
+   * at-risk one the old banner would have satisfied most of them. */
+  {
+    for (const w of [1500, 390]) {
+      const phone = w < 640;
+      const { ctx: cj, page: pj } = await boot(browser, storageState, w, { fix: FIX, mobile: phone, height: phone ? 900 : 1000 });
+      const tag = `  ${w}px:`;
+      console.log(`\n-- Adjust at ${w}px --`);
+      /* 102 and 104 are healthy: 30 of 40 against a minimum of 11, and 5 real against 4. Neither
+       * is at risk, so neither has ever had a banner. */
+      const HEALTHY = [102, 104];
+      is(`${tag} CONTROL: neither test match is at risk`,
+        (await pj.evaluate(READ)).rows.filter((r) => HEALTHY.includes(r.id) && r.risk).map((r) => r.id), []);
+      is(`${tag} ...and both carry an Adjust control`,
+        await pj.locator(`[data-testid="gday-adjust"][data-id="${HEALTHY[0]}"], [data-testid="gday-adjust"][data-id="${HEALTHY[1]}"]`).count(), 2);
+      is(`${tag} CONTROL: no controls are open to begin with`,
+        await pj.locator('[data-testid="gday-row-controls"]').count(), 0);
+
+      /* THE TARGET IS 44px IN ITS SHORT DIMENSION. On a phone it is the card's footer band. */
+      const abox = await pj.evaluate((id) => { const b = document.querySelector(`[data-testid="gday-adjust"][data-id="${id}"]`).getBoundingClientRect();
+        return { w: +b.width.toFixed(1), h: +b.height.toFixed(1) }; }, HEALTHY[0]);
+      yes(`${tag} the control is at least 44px tall (${abox.h} x ${abox.w})`, abox.h >= 43.5);
+
+      await pj.click(`[data-testid="gday-adjust"][data-id="${HEALTHY[0]}"]`);
+      await pj.waitForSelector(`[data-testid="gday-row-controls"][data-id="${HEALTHY[0]}"]`, { timeout: 15000 });
+      /* PRESSING ADJUST MUST NOT OPEN THE EDITOR. The row is click-to-open at every width and the
+       * button sits inside it, so this is the assertion the stopPropagation exists for. */
+      is(`${tag} pressing Adjust does NOT open the editor`, (await pj.evaluate(READ)).drawer, 0);
+      is(`${tag} ...and the block carries both steppers`,
+        await pj.locator(`[data-testid="gday-row-controls"][data-id="${HEALTHY[0]}"] .gstep`).count(), 2);
+
+      /* INSIDE ITS OWN ROW'S BOUNDS, on all four sides. A block that rendered between rows would
+       * satisfy every content check above and cover the row beneath it. */
+      const bounds = await pj.evaluate((id) => {
+        const exp = document.querySelector(`[data-testid="gday-row-controls"][data-id="${id}"]`);
+        const row = exp.closest('[data-testid="gday-row"]');
+        const e = exp.getBoundingClientRect(), r = row.getBoundingClientRect();
+        return { over: [+(r.top - e.top).toFixed(2), +(e.bottom - r.bottom).toFixed(2),
+                        +(r.left - e.left).toFixed(2), +(e.right - r.right).toFixed(2)],
+                 rowId: Number(row.dataset.id) };
+      }, HEALTHY[0]);
+      is(`${tag} the block is inside its own row on all four sides`, bounds.over.filter((x) => x > 0.5), []);
+      is(`${tag} ...and it is that match's row`, bounds.rowId, HEALTHY[0]);
+
+      /* SEVERAL AT ONCE. A single nullable id would make this an accordion, and comparing spots
+       * across four matches is the job it is for. */
+      await pj.click(`[data-testid="gday-adjust"][data-id="${HEALTHY[1]}"]`);
+      await pj.waitForSelector(`[data-testid="gday-row-controls"][data-id="${HEALTHY[1]}"]`, { timeout: 15000 });
+      is(`${tag} both rows' controls are open at once`,
+        await pj.locator('[data-testid="gday-row-controls"]').count(), 2);
+
+      /* THE UNSAVED MARK, AND IT SURVIVES FOLDING THE BLOCK AWAY. */
+      is(`${tag} CONTROL: no UNSAVED mark before anything is stepped`,
+        await pj.locator('[data-testid="gday-row-pending"]').count(), 0);
+      await pj.click(`[data-testid="gday-row-controls"][data-id="${HEALTHY[0]}"] [data-testid="gday-step-down"]`);
+      await pj.waitForTimeout(350);
+      is(`${tag} stepping marks that row UNSAVED`, await pj.evaluate(() =>
+        [...document.querySelectorAll('[data-testid="gday-row-pending"]')]
+          .map((e) => Number(e.closest('[data-testid="gday-row"]').dataset.id))), [HEALTHY[0]]);
+      is(`${tag} ...and the band says what the value was`,
+        (await pj.locator(`[data-testid="gday-row-controls"][data-id="${HEALTHY[0]}"] [data-testid="gday-step-was"]`).textContent()).trim(),
+        "was 11");
+      await pj.click(`[data-testid="gday-adjust"][data-id="${HEALTHY[0]}"]`);
+      await pj.waitForTimeout(350);
+      is(`${tag} folding the block away leaves the UNSAVED mark`, await pj.evaluate(() =>
+        [...document.querySelectorAll('[data-testid="gday-row-pending"]')]
+          .map((e) => Number(e.closest('[data-testid="gday-row"]').dataset.id))), [HEALTHY[0]]);
+      is(`${tag} CONTROL: ...and the block really did fold`,
+        await pj.locator(`[data-testid="gday-row-controls"][data-id="${HEALTHY[0]}"]`).count(), 0);
+
+      /* OPENING THE EDITOR ON ANOTHER MATCH MUST NOT DISCARD THIS ONE'S DRAFT.
+       * IT USED TO. openDrawer called setPendingMin({}) — every match's draft, not the one being
+       * opened. With one banner on the page that was invisible; with a draft available on every
+       * row it is data loss with a plausible shape. */
+      await pj.click(`[data-testid="gday-row"][data-id="${HEALTHY[1]}"] [data-testid="gday-name"]`);
+      await pj.waitForSelector('[data-testid="gday-panel"]', { timeout: 30000 });
+      await pj.waitForTimeout(900);
+      is(`${tag} CONTROL: the editor opened on the other match`, (await pj.evaluate(READ)).drawer, 1);
+      is(`${tag} the first row's draft survived it`, await pj.evaluate(() =>
+        [...document.querySelectorAll('[data-testid="gday-row-pending"]')]
+          .map((e) => Number(e.closest('[data-testid="gday-row"]').dataset.id))), [HEALTHY[0]]);
+      await closeContext(cj);
+    }
   }
 
   await closeBrowser(browser);

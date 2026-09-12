@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import {
   realFillPct, maxSpots, fieldSpots, atRisk, meter, dayBucket, DAY_BUCKETS, FILTERING_TILES,
   realCount, fakeCount, capacity, short, shortBy, vsMinDelta, passesStrip, inCities, minsToDeadline,
-  bannerUrgent, defaultBanners, riskSubtitle, BANNER_LEAD_MINUTES, DEFAULT_BANNER_CAP, showsDeadline, type ApiMatch,
+  bannerUrgent, riskSubtitle, BANNER_LEAD_MINUTES, showsDeadline, type ApiMatch,
 } from "../src/lib/gamedayModel";
 
 let pass = 0; const fails: string[] = [];
@@ -233,14 +233,18 @@ console.log("\nA BANNER IS AN INTERRUPT, SO MOST SHORT MATCHES DO NOT GET ONE");
   is("  CONTROL: ...and not when it meets its minimum", bannerUrgent(healthy, NOW, true), false);
   is("  CONTROL: ...and the far-out one really is short, by MORE", shortBy(farOut) > shortBy(urgent), true);
 
-  /* THE CAP, AND WHAT IS LEFT OVER. */
-  const five = [0, 1, 2, 3, 4].map((i) => armed({ id: 10 + i, players: 3, fakePlayers: 0, cap: 18, min: 9, offsetMin: 95 + i * 5, acm: 72 - i * 4 + i * 5 }));
-  const db = defaultBanners(five, NOW, true);
-  is("the default view caps at three", db.show.length, DEFAULT_BANNER_CAP);
-  is("  ...and says how many are left", db.more, 2);
-  is("  ...soonest deadline first", db.show.map((m) => m.id), [10, 11, 12]);
-  is("  CONTROL: a future date shows none of them", defaultBanners(five, NOW, false).show.length, 0);
-  is("  CONTROL: ...and reports nothing left over either", defaultBanners(five, NOW, false).more, 0);
+  /* THE CAP AND ITS REMAINDER WERE ASSERTED HERE AND ARE GONE WITH defaultBanners().
+   *
+   * FIVE ASSERTIONS REMOVED, NOT REWRITTEN. They covered the default view's banner list — that it
+   * capped at DEFAULT_BANNER_CAP, reported the remainder, ordered by deadline, and showed nothing
+   * on a future date. The default view no longer renders banners at all (cards belong to Needs
+   * attention, where the card replaces the row instead of duplicating it), so there is no cap to
+   * pin and no remainder to count. Editing them to expect zero would have recorded the new
+   * behaviour while pretending to still test the old one.
+   *
+   * NOTHING BELOW IT WAS LOST. bannerUrgent() is what those five reached through, it is still
+   * live — riskSubtitle() and the board's red city chips read it — and its five clauses each keep
+   * their own control assertion directly above. */
 
   /* THE SUBTITLE. "9 short of the minimum" on tomorrow's board describes a day that has not sold
    * yet, which is not a problem and must not read as one. */
