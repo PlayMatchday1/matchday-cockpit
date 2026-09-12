@@ -86,8 +86,12 @@ async function main() {
     };
   });
   eq("the rail is mounted", shell.rail, true);
-  eq("…with Field Pipeline in it", shell.items, ["Field Pipeline"]);
-  eq("…pointing at the new route", shell.hrefs, ["/growth/field-pipeline"]);
+  /* THE RAIL IS THE SECTION'S CONTENTS, AND IT HAS GROWN TWICE. This pinned ["Field Pipeline"]
+   * alone; VC Outreach joined it (0166) and 2026 Daily Matches after it, so the suite has been red
+   * on these two lines since the second board landed rather than since this change. The list stays
+   * EXACT rather than becoming a "contains" — the order and the hrefs are what this asserts. */
+  eq("…with the section's three pages in it", shell.items, ["Field Pipeline", "2026 Daily Matches", "VC Outreach"]);
+  eq("…each pointing at its own route", shell.hrefs, ["/growth/field-pipeline", "/growth/daily-matches", "/growth/vc-outreach"]);
   // The rail is 212px expanded; the content must sit clear of it, as it did under Match Ops.
   atLeast("content is offset clear of the rail", shell.h1Left ?? 0, 212);
   // Expects ≥ 1, so it is its own control: a page with no mobile bar yields 0 and fails.

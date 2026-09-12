@@ -28,6 +28,11 @@ export const GROWTH_SECTIONS: RailItem[] = [
     icon: <I><path d="M3 5h18l-7 8v6l-4 2v-8z" /></I>,
   },
   {
+    key: "daily-matches", group: "Fields", label: "2026 Daily Matches", href: "/growth/daily-matches",
+    desc: "The goal per field, and where it stands",
+    icon: <I><path d="M3 20h18M6 20V10m5 10V4m5 16v-7" /></I>,
+  },
+  {
     key: "vc-outreach", group: "Fundraising", label: "VC Outreach", href: "/growth/vc-outreach",
     desc: "Firms we're raising from",
     icon: <I><path d="M4 19V9m5 10V5m5 14v-7m5 7V8" /></I>,

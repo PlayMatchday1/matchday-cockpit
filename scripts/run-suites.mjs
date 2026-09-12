@@ -97,6 +97,9 @@ const NODE_SUITES = [
   // the whole Add venue drawer. Cheap, pure, and it pins the three call sites in the drawer she
   // used as well as the helper.
   "scripts/error-text-test.ts",
+  // THE GOAL SHEET'S ARITHMETIC. Pure, sub-second, and it pins the exact fault the spreadsheet it
+  // replaces has: a total that disagrees with its own rows because each row was rounded first.
+  "scripts/field-goals-test.ts",
   "scripts/write-routes-logged-test.ts",
   "scripts/walltime-guard-test.ts",
   // THE DRAWER'S DATE/TIME MODEL. A match-record write: a silent hour shift here moves
