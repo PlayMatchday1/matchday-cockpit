@@ -150,3 +150,87 @@ export async function fetchGoalMatches(
       .order("api_id") as never);
   return rows.filter(countsTowardGoals);
 }
+
+/* ════════════════════════════════════════════════════════════════════════════════════════════════
+ * WHICH ROWS COUNT, WHICH ROWS FOLD, AND IN WHAT ORDER
+ *
+ * Ryan: "there should be a way to hide to old rows we dont have games anymore also to remove count
+ * fields like for instance warsaw is a partner on a different stripe so that one too" and
+ * "there should also be organize by gap or by city".
+ *
+ * TWO EXCLUSIONS THAT MUST NOT BE CONFLATED:
+ *
+ *   DORMANT — computed. No match in the month on screen. It folds into one line at the foot of the
+ *   table and STILL COUNTS everywhere: a field that ran matches in June contributed to June, and
+ *   the year chart keeps it. Dormancy is about the table's length, not the arithmetic. A control
+ *   that did both would mean a field going quiet for a month silently left the year's numbers.
+ *
+ *   NOT COUNTED — stored, deliberate, and the only one that changes a number. It leaves every total
+ *   AND the chart, through rowCountsTowardTotals() and nothing else. Rows that exclude and bars
+ *   that do not would put the chart above the table's own sum, which is the exact fault the
+ *   spreadsheet has.
+ */
+
+/** THE PREDICATE. The row table and the twelve-month chart both read this and nothing else. */
+export const rowCountsTowardTotals = (row: { notCounted?: boolean | null }): boolean =>
+  row.notCounted !== true;
+
+/** Quiet in the month on screen: no match played, whatever the spots say. */
+export const isDormantIn = (
+  row: { monthly: { matches?: number }[] },
+  monthIndex0: number,
+): boolean => (row.monthly?.[monthIndex0]?.matches ?? 0) === 0;
+
+/* ── NO NUMBER RENDERS AS "-0" ───────────────────────────────────────────────────────────────────
+ * ATH Pearland sits 0.004 above its goal, so the gap rounded to one decimal and printed with its
+ * sign came out as "-0.0". A minus sign in front of a zero is not a number anybody means. The fix
+ * is to normalise the ROUNDED value, so what is printed and what is banded are the same thing. */
+export const roundTo = (v: number, dp: number): number => {
+  const f = 10 ** dp;
+  const r = Math.round(v * f) / f;
+  return r === 0 ? 0 : r;   // kills -0 before it can be formatted
+};
+
+/** The displayed daily/weekly figure, sign-safe. */
+export const fmtSigned = (daily: number, unit: "day" | "week"): string => {
+  const shown = unit === "day" ? roundTo(daily, 1) : roundTo(weekly(daily), 0);
+  const s = unit === "day" ? shown.toFixed(1) : shown.toFixed(0);
+  return shown > 0 ? `+${s}` : s;
+};
+
+/* ── THE BAND IS KEYED ON WHAT THE PAGE SHOWS ────────────────────────────────────────────────────
+ * Still the DAILY gap in both units — a threshold that moves when you press Weekly is a different
+ * metric wearing one name — but on the ROUNDED daily gap, so the dot and the printed number can
+ * never disagree. That is what makes ATH Pearland green: 0.004 above goal prints as 0.0, and the
+ * sheet's own legend puts level in "within 0.49" rather than "already above". A field genuinely
+ * ahead (-0.2) is still dark. */
+export const bandForDisplay = (dailyGap: number): Band => band(roundTo(dailyGap, 1));
+
+/* ── THE ORDER, AND IT IS WHY THE COLOURS LOOKED WRONG ───────────────────────────────────────────
+ * In an alphabetical list nobody can infer a rule where +3 weekly is green and +4 is amber (0.43
+ * and 0.57 daily — the rule is right, the order hid it). In gap order the dots run red, amber,
+ * green, dark in sequence and the rule explains itself with no legend.
+ *
+ * A ROW WITH NO GOAL HAS NO GAP, so it cannot take part in a gap sort: it goes LAST under every
+ * order rather than being treated as a zero gap and landing in the middle of the work. Ties break
+ * on the field name, so the order is stable between loads. */
+export type GoalSort = "gap" | "city" | "name";
+
+export function sortGoalRows<T extends { name: string; city?: string | null; gapDaily: number | null }>(
+  rows: T[],
+  sort: GoalSort,
+): T[] {
+  const byName = (a: T, b: T) => a.name.localeCompare(b.name);
+  return [...rows].sort((a, b) => {
+    const aNo = a.gapDaily == null, bNo = b.gapDaily == null;
+    if (aNo !== bNo) return aNo ? 1 : -1;          // no goal, no gap, last
+    if (sort === "gap") {
+      if (aNo && bNo) return byName(a, b);
+      return (b.gapDaily as number) - (a.gapDaily as number) || byName(a, b);
+    }
+    if (sort === "city") {
+      return (a.city ?? "").localeCompare(b.city ?? "") || byName(a, b);
+    }
+    return byName(a, b);
+  });
+}

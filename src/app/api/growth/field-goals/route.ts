@@ -22,7 +22,7 @@ import { authenticateCapability } from "@/lib/capabilityAuth";
 import { selectAll } from "@/lib/supabasePagination";
 import {
   GOAL_YEAR, MONTH_LABELS, countsTowardGoals, dailyAverage, daysElapsed,
-  matchMonthIndex, monthKey, rowKeyForField, type GoalMatch,
+  matchMonthIndex, monthKey, rowCountsTowardTotals, rowKeyForField, type GoalMatch,
 } from "@/lib/fieldGoals";
 
 export const runtime = "nodejs";
@@ -62,7 +62,7 @@ export async function GET(req: Request) {
      * A venue's several mdapi fields collapse into one row here, which is the whole reason the key
      * is the venue: keyed on field_id, Soccer Central would be two rows reading 1.1 and 3.3 rather
      * than one reading 4.4. */
-    type Acc = { key: string; name: string; city: string | null; venueId: number | null; fieldId: number | null; spots: number[]; matches: number };
+    type Acc = { key: string; name: string; city: string | null; venueId: number | null; fieldId: number | null; spots: number[]; perMonth: number[]; matches: number };
     const acc = new Map<string, Acc>();
     const monthSpots = new Array(12).fill(0);
     for (const m of matches) {
@@ -76,17 +76,23 @@ export async function GET(req: Request) {
         name: vid != null ? (venueById.get(vid)?.venue_name ?? `Venue ${vid}`) : (m.field_title ?? `Field ${fieldId}`),
         city: vid != null ? (venueById.get(vid)?.city ?? null) : (m.city_identifier ?? null),
         venueId: vid, fieldId: vid == null ? fieldId : null,
-        spots: new Array(12).fill(0), matches: 0,
+        spots: new Array(12).fill(0), perMonth: new Array(12).fill(0), matches: 0,
       };
       const s = m.player_count ?? 0;
-      a.spots[mi] += s; a.matches += 1;
+      /* MATCHES PER MONTH, not just spots: DORMANT is "no match played in the month on screen",
+       * which a zero average cannot tell you — a month with one empty match is not a quiet month. */
+      a.spots[mi] += s; a.perMonth[mi] += 1; a.matches += 1;
       acc.set(key, a);
       monthSpots[mi] += s;
     }
 
     // ── the stored half ────────────────────────────────────────────────────────────────────────
     const [{ data: goalRows, error: rowsErr }, { data: targets }, { data: actions }] = await Promise.all([
-      auth.supabase.from("field_goal_rows").select("id, venue_id, field_id, slot_name, city, sort_order"),
+      /* SELECT * DELIBERATELY, and not_counted is read defensively below. adminAuth does the same
+       * with app_users and for the same reason: code deploys before a migration is applied, and a
+       * named column that does not exist yet 500s the whole route. Before 0171 lands every row
+       * simply counts, which is today's behaviour. */
+      auth.supabase.from("field_goal_rows").select("*"),
       auth.supabase.from("field_goal_targets").select("row_id, month, goal_daily"),
       auth.supabase.from("field_goal_actions").select("id, row_id, text, done, sort_order").order("sort_order"),
     ]);
@@ -95,10 +101,10 @@ export async function GET(req: Request) {
     /* A STORED ROW IS MATCHED TO A COMPUTED ONE BY IDENTITY, never by name. A slot has neither a
      * venue nor a field, so it stands alone until somebody points it at a venue — which is how a
      * slot graduates without losing the goals and actions typed against it. */
-    const storedByKey = new Map<string, { id: string }>();
+    const storedByKey = new Map<string, { id: string; notCounted: boolean }>();
     for (const r of goalRows ?? []) {
       const k = r.venue_id != null ? `v${r.venue_id}` : r.field_id != null ? `f${r.field_id}` : null;
-      if (k) storedByKey.set(k, { id: r.id as string });
+      if (k) storedByKey.set(k, { id: r.id as string, notCounted: (r as Record<string, unknown>).not_counted === true });
     }
 
     const monthsOf = (rowId: string | null): Record<string, number> => {
@@ -117,11 +123,12 @@ export async function GET(req: Request) {
       const stored = storedByKey.get(a.key);
       const monthly = a.spots.map((spots, i) => {
         const { days, of, partial } = daysElapsed(i, year, now);
-        return { month: monthKey(year, i), label: MONTH_LABELS[i], spots, days, daysInMonth: of, partial, daily: dailyAverage(spots, days) };
+        return { month: monthKey(year, i), label: MONTH_LABELS[i], spots, matches: a.perMonth[i], days, daysInMonth: of, partial, daily: dailyAverage(spots, days) };
       });
       return {
         key: a.key, rowId: stored?.id ?? null, kind: "existing" as const,
         name: a.name, city: a.city, venueId: a.venueId, fieldId: a.fieldId,
+        notCounted: stored?.notCounted === true,
         matches: a.matches, monthly,
         targets: monthsOf(stored?.id ?? null),
         actions: actionsOf(stored?.id ?? null),
@@ -132,10 +139,11 @@ export async function GET(req: Request) {
     const slots = (goalRows ?? []).filter((r) => r.slot_name != null && String(r.slot_name).trim() !== "").map((r) => ({
       key: `s${r.id}`, rowId: r.id as string, kind: "slot" as const,
       name: r.slot_name as string, city: (r.city as string | null) ?? null, venueId: null, fieldId: null,
+      notCounted: (r as Record<string, unknown>).not_counted === true,
       matches: 0,
       monthly: MONTH_LABELS.map((label, i) => {
         const { days, of, partial } = daysElapsed(i, year, now);
-        return { month: monthKey(year, i), label, spots: 0, days, daysInMonth: of, partial, daily: 0 };
+        return { month: monthKey(year, i), label, spots: 0, matches: 0, days, daysInMonth: of, partial, daily: 0 };
       }),
       targets: monthsOf(r.id as string),
       actions: actionsOf(r.id as string),
@@ -145,10 +153,21 @@ export async function GET(req: Request) {
     /* THE YEAR'S TWELVE BUCKETS, off the SAME matches the rows came from — so the chart and the
      * table cannot disagree. Recorded months are computed; October to December have no elapsed days
      * and carry no average, only whatever targets the rows hold. */
+    /* THE BARS ARE SUMMED OVER THE COUNTED ROWS, not over every match — one predicate, read here
+     * and by the table, so a not-counted field leaves the chart and the totals together. Summing
+     * all matches here while the table excluded a row is exactly the spreadsheet's fault: bars
+     * sitting above the sum of the rows beneath them. Dormant rows DO count: they are folded in the
+     * table, not removed from the year. */
+    const countedSpots = new Array(12).fill(0);
+    for (const r of computed) {
+      if (!rowCountsTowardTotals(r)) continue;
+      r.monthly.forEach((m, i) => { countedSpots[i] += m.spots; });
+    }
     const months = MONTH_LABELS.map((label, i) => {
       const { days, of, partial } = daysElapsed(i, year, now);
-      return { month: monthKey(year, i), label, spots: monthSpots[i], days, daysInMonth: of, partial, daily: dailyAverage(monthSpots[i], days) };
+      return { month: monthKey(year, i), label, spots: countedSpots[i], days, daysInMonth: of, partial, daily: dailyAverage(countedSpots[i], days) };
     });
+    void monthSpots;   // kept as the unfiltered figure; nothing renders it
 
     return Response.json({
       year,

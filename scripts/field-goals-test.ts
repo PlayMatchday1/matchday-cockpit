@@ -6,8 +6,9 @@
  * rounding applied before the sum. Every assertion here is about a way that can happen again.
  */
 import {
-  SPOTS_PER_MATCH, band, countsTowardGoals, dailyAverage, daysElapsed, fmtUnit,
-  matchMonthIndex, monthKey, ramp, rowKeyForField, sumTargets, weekly,
+  SPOTS_PER_MATCH, band, bandForDisplay, countsTowardGoals, dailyAverage, daysElapsed, fmtSigned,
+  fmtUnit, isDormantIn, matchMonthIndex, monthKey, ramp, rowCountsTowardTotals, rowKeyForField,
+  roundTo, sortGoalRows, sumTargets, weekly,
 } from "@/lib/fieldGoals";
 
 let pass = 0, fail = 0;
@@ -100,6 +101,67 @@ const venueOf = new Map<number, number>([[22, 5], [1000, 5], [102, 9], [199, 9]]
 is("a venue's several fields collapse into one row", [22, 1000].map((f) => rowKeyForField(f, venueOf)), ["v5", "v5"]);
 is("…and two venues stay two rows", [22, 102].map((f) => rowKeyForField(f, venueOf)), ["v5", "v9"]);
 is("an unmapped field keys on itself", rowKeyForField(1684, venueOf), "f1684");
+
+
+/* ════════════════════════════════════════════════════════════════════════════════════════════════
+ * DORMANT vs NOT COUNTED, THE ORDER, AND THE "-0" BUG
+ * Appended when Ryan asked for the two exclusions and the sort. Every assertion here is about a way
+ * the table and the chart could end up disagreeing, or a number rendering as something nobody means.
+ */
+{
+  console.log("\n— not counted leaves every total; dormant leaves only the table —");
+  yes("a normal row counts", rowCountsTowardTotals({}));
+  yes("…and one marked not-counted does not", !rowCountsTowardTotals({ notCounted: true }));
+  /* THE ONE PREDICATE. If the table filtered on this and the chart did not, the bars would sit
+   * above the sum of the rows beneath them — the spreadsheet's own fault. */
+  const rows = [
+    { notCounted: false, monthly: [{ matches: 4 }, { matches: 0 }] },
+    { notCounted: true, monthly: [{ matches: 9 }, { matches: 9 }] },
+  ];
+  is("the counted set drops the excluded row", rows.filter(rowCountsTowardTotals).length, 1);
+  yes("a dormant row is still counted", rowCountsTowardTotals(rows[0]) && isDormantIn(rows[0], 1));
+  yes("dormancy is per month, not per row", !isDormantIn(rows[0], 0) && isDormantIn(rows[0], 1));
+  /* A ZERO AVERAGE IS NOT DORMANCY. A month with matches that nobody joined reads 0.0 and is not
+   * quiet; only the match COUNT can tell them apart. */
+  yes("a month with matches and no players is NOT dormant", !isDormantIn({ monthly: [{ matches: 3 }] }, 0));
+
+  console.log("\n— no number renders as -0 —");
+  is("a hair below zero rounds to plain zero", roundTo(-0.004, 1), 0);
+  is("…and prints without a sign", fmtSigned(-0.004, "day"), "0.0");
+  yes("…and Object.is confirms it is not negative zero", !Object.is(roundTo(-0.004, 1), -0));
+  is("a real surplus keeps its minus", fmtSigned(-0.2, "day"), "-0.2");
+  is("a real shortfall keeps its plus", fmtSigned(0.3, "day"), "+0.3");
+  is("weekly rounds to whole numbers", fmtSigned(0.43, "week"), "+3");
+  /* ATH PEARLAND. 0.004 above goal is LEVEL in any sense a person means, and the sheet's legend puts
+   * level in "within 0.49" rather than "already above". Banding the DISPLAYED value is what makes
+   * the dot and the printed number agree. */
+  is("level-by-rounding bands as within 0.49, not above", bandForDisplay(-0.004), "near");
+  is("…while a genuine surplus is still above", bandForDisplay(-0.2), "over");
+  is("…and the thresholds are unmoved", [bandForDisplay(0.3), bandForDisplay(0.6), bandForDisplay(1.2)], ["near", "warn", "behind"]);
+
+  console.log("\n— the order, and where a row with no goal goes —");
+  const set = [
+    { name: "Alpha", city: "Austin", gapDaily: 0.2 },
+    { name: "Bravo", city: "Dallas", gapDaily: 1.8 },
+    { name: "Charlie", city: "Austin", gapDaily: -0.5 },
+    { name: "Delta", city: "Boston", gapDaily: null },
+    { name: "Echo", city: "Austin", gapDaily: 0.7 },
+  ];
+  is("by gap runs worst-first", sortGoalRows(set, "gap").map((r) => r.name), ["Bravo", "Echo", "Alpha", "Charlie", "Delta"]);
+  /* THE BANDS THEN RUN IN SEQUENCE, which is the whole reason gap order is the default: the rule
+   * explains itself with no legend. */
+  is("…so the bands are monotonic down the list",
+    sortGoalRows(set, "gap").filter((r) => r.gapDaily != null).map((r) => bandForDisplay(r.gapDaily as number)),
+    ["behind", "warn", "near", "over"]);
+  is("by city groups, then names", sortGoalRows(set, "city").map((r) => r.name), ["Alpha", "Charlie", "Echo", "Bravo", "Delta"]);
+  is("A–Z is A–Z", sortGoalRows(set, "name").map((r) => r.name), ["Alpha", "Bravo", "Charlie", "Echo", "Delta"]);
+  yes("a row with no goal is last under EVERY order",
+    (["gap", "city", "name"] as const).every((k) => sortGoalRows(set, k).at(-1)?.name === "Delta"));
+  /* STABLE BETWEEN LOADS. Two rows with the same gap must not swap places on a reload. */
+  const tied = [{ name: "Zulu", city: "X", gapDaily: 0.5 }, { name: "Alpha", city: "X", gapDaily: 0.5 }];
+  is("ties break on the name", sortGoalRows(tied, "gap").map((r) => r.name), ["Alpha", "Zulu"]);
+  is("…and the same order comes back a second time", sortGoalRows(sortGoalRows(tied, "gap"), "gap").map((r) => r.name), ["Alpha", "Zulu"]);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
