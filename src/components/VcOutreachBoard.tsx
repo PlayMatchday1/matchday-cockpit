@@ -21,10 +21,12 @@ import { useKanbanBoard } from "@/lib/useKanbanBoard";
 import KanbanCardModal from "@/components/KanbanCardModal";
 import {
   VC_OUTREACH_STAGES, vcWaveLabel, vcFitGrade, vcIsWarm,
-  type KanbanCard,
+  ageBand, stageAge, vcDueChip, vcFocusCategory, vcFundFocus, vcNextStepDue,
+  type ChecklistItem, type KanbanCard, type KanbanOwner,
 } from "@/lib/kanban";
 
 const COLLAPSE_KEY = "vcoutreach:collapsed:v1";
+const ACTIONS_KEY = "vcoutreach:actions:v1";
 
 /* GRADE COLOURS. Four, and nothing for ungraded — 6 of the 90 are blank or "Unknown" and they are
  * not a fifth grade, so they get the neutral chip rather than a colour implying a rank. */
@@ -47,7 +49,7 @@ type Contact = { name?: string; title?: string; email?: string };
 const d = (c: KanbanCard) => c.data as Record<string, unknown>;
 const owners = (c: KanbanCard): string[] => (Array.isArray(d(c).owners) ? (d(c).owners as string[]) : []).filter(Boolean);
 const contacts = (c: KanbanCard): Contact[] => (Array.isArray(d(c).contacts) ? (d(c).contacts as Contact[]) : []);
-const focus = (c: KanbanCard) => String(d(c).fund_focus ?? "");
+const focus = (c: KanbanCard) => vcFundFocus(c);
 const wave = (c: KanbanCard) => vcWaveLabel(String(d(c).wave_raw ?? ""));
 const grade = (c: KanbanCard) => vcFitGrade(String(d(c).fit_raw ?? ""));
 const warm = (c: KanbanCard) => vcIsWarm(d(c).warm_raw);
@@ -65,11 +67,27 @@ export default function VcOutreachBoard() {
   const [own, setOwn] = useState<string>("all");
   const [warmOnly, setWarmOnly] = useState(false);
 
+  /* ── ACTIONS: HIDDEN BY DEFAULT, AND THAT DIFFERS FROM FIELD PIPELINE ON PURPOSE ─────────────
+   * Field Pipeline shows its to-dos by default and should keep doing so — it is a smaller board.
+   * Measured here: a card with three open actions is 180.8px against 108.3px, which takes a 620px
+   * column from 5 firms to 4. With ninety firms the board's first job is to be scannable, so it
+   * opens as a list of firms carrying "3 open" chips and the toggle is how you switch to working.
+   * Remembered per browser, like the collapse state. */
+  const [showActions, setShowActions] = useState<boolean>(() => readLS(ACTIONS_KEY, false));
+  const [actionsOnly, setActionsOnly] = useState(false);
   const [collapsedStored, setCollapsedStored] = useState<Record<string, boolean>>(() => readLS(COLLAPSE_KEY, {}));
   const [dragOverStage, setDragOverStage] = useState<string | null>(null);
   const [modal, setModal] = useState<{ mode: "edit"; card: KanbanCard } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const draggingId = useRef<string | null>(null);
+
+  /* OPEN ACTIONS PER CARD, from the same checklists map the modal edits — so a tick in the modal
+   * and the chip on the card cannot disagree. OPEN, never total: "0 actions" is not a state anybody
+   * is chasing, and a firm whose actions are all done earns a tick instead of a number. */
+  const openActions = useCallback((c: KanbanCard) => (api.checklists[c.id] ?? []).filter((i) => !i.done).length, [api.checklists]);
+  const totalActions = useCallback((c: KanbanCard) => (api.checklists[c.id] ?? []).length, [api.checklists]);
+  const openActionsTotal = useMemo(
+    () => cards.reduce((n, c) => n + openActions(c), 0), [cards, openActions]);
 
   const matches = useCallback((c: KanbanCard) => {
     const needle = q.trim().toLowerCase();
@@ -81,8 +99,9 @@ export default function VcOutreachBoard() {
     if (wv !== "all" && wave(c) !== wv) return false;
     if (own !== "all" && !(own === "__none" ? owners(c).length === 0 : owners(c).includes(own))) return false;
     if (warmOnly && !warm(c)) return false;
+    if (actionsOnly && openActions(c) === 0) return false;
     return true;
-  }, [q, fit, wv, own, warmOnly]);
+  }, [q, fit, wv, own, warmOnly, actionsOnly, openActions]);
 
   const shown = useMemo(() => cards.filter(matches), [cards, matches]);
   const byStage = useCallback((id: string) => shown.filter((c) => c.stage === id), [shown]);
@@ -94,6 +113,8 @@ export default function VcOutreachBoard() {
     const needle = q.trim().toLowerCase();
     if (needle && ![c.title, focus(c), ...contacts(c).map((x) => x.name ?? "")].join(" ").toLowerCase().includes(needle)) return false;
     if (warmOnly && !warm(c)) return false;
+    // The actions filter composes like every other axis: with it off, every count is what it was.
+    if (actionsOnly && openActions(c) === 0) return false;
     if (axis !== "fit" && fit !== "all" && grade(c) !== fit) return false;
     if (axis !== "wave" && wv !== "all" && wave(c) !== wv) return false;
     if (axis !== "owner" && own !== "all" && !(own === "__none" ? owners(c).length === 0 : owners(c).includes(own))) return false;
@@ -101,7 +122,7 @@ export default function VcOutreachBoard() {
     if (axis === "fit") return grade(c) === value;
     if (axis === "wave") return wave(c) === value;
     return value === "__none" ? owners(c).length === 0 : owners(c).includes(value);
-  }).length, [cards, q, warmOnly, fit, wv, own]);
+  }).length, [cards, q, warmOnly, fit, wv, own, actionsOnly, openActions]);
 
   const waveOptions = useMemo(
     () => ["High", "Medium", "Low", "Hold", "Exclude"].filter((w) => cards.some((c) => wave(c) === w)), [cards]);
@@ -133,6 +154,17 @@ export default function VcOutreachBoard() {
     if (!ok) setToast("Couldn't move that firm — it's back where it was.");
   }, [cards, api]);
 
+  /* WHO AN ACTION IS ASSIGNED TO, resolved from the app_users the api already loaded — the same
+   * initial-plus-name treatment Field Pipeline gives an assignee, one step quieter than the card's
+   * own owner avatars. */
+  const assigneeFor = useCallback((item: ChecklistItem): { name: string; initials: string } | null => {
+    if (!item.owner_user_id) return null;
+    const o: KanbanOwner | undefined = api.owners.find((x) => x.id === item.owner_user_id);
+    if (!o) return null;
+    const name = o.full_name?.trim() || o.email.split("@")[0];
+    return { name, initials: initials(name) || name.slice(0, 2).toUpperCase() };
+  }, [api.owners]);
+
   const Chip = ({ on, onClick, children, tone }: { on: boolean; onClick: () => void; children: React.ReactNode; tone?: string }) => (
     <button type="button" onClick={onClick} aria-pressed={on}
       className="rounded-full border px-3 py-1 text-[12.5px] font-semibold transition"
@@ -153,6 +185,28 @@ export default function VcOutreachBoard() {
           className="min-w-[220px] flex-1 rounded-lg border px-3 py-2 text-[13.5px]"
           style={{ borderColor: "#E0E7E2", background: "#fff" }} />
         <Chip on={warmOnly} onClick={() => setWarmOnly((v) => !v)} tone="#B4531A">Warm only</Chip>
+        {/* SHOWN OR HIDDEN, remembered per browser. See the state's own note for the default. */}
+        <button type="button" data-testid="vc-actions-toggle" aria-pressed={showActions}
+          onClick={() => { setShowActions((v) => { writeLS(ACTIONS_KEY, !v); return !v; }); }}
+          className="rounded-lg border px-3 py-1.5 text-[12px] font-bold transition"
+          style={showActions
+            ? { background: "#0F3323", borderColor: "#0F3323", color: "#fff" }
+            : { background: "#fff", borderColor: "#E0E7E2", color: "#0F3323" }}>
+          {showActions ? "Actions shown" : "Actions hidden"}
+        </button>
+        {/* THE MOST USEFUL CONTROL ON FIELD PIPELINE, PORTED: the number, and pressing it narrows
+            the board to the firms that have work. Absent when nothing is open, because a zero here
+            is not something anybody is chasing. */}
+        {openActionsTotal > 0 && (
+          <button type="button" data-testid="vc-actions-filter" aria-pressed={actionsOnly}
+            onClick={() => setActionsOnly((v) => !v)}
+            className="flex items-center gap-1.5 rounded-full border px-3 py-1 text-[12.5px] transition"
+            style={actionsOnly
+              ? { background: "#BFE4CF", borderColor: "#8FCBAA", color: "#12704A" }
+              : { background: "#E0F2E7", borderColor: "#C9E8D8", color: "#12704A" }}>
+            <b className="font-extrabold">{openActionsTotal}</b> open {openActionsTotal === 1 ? "action" : "actions"}
+          </button>
+        )}
       </div>
 
       <div className="mb-1.5 flex flex-wrap items-center gap-2" data-testid="vc-fit">
@@ -207,6 +261,9 @@ export default function VcOutreachBoard() {
                 </button>
                 <div className="flex max-h-[70vh] flex-col gap-2 overflow-y-auto px-2 pb-2">
                   {list.map((c) => <VcCard key={c.id} card={c}
+                    checklist={api.checklists[c.id] ?? []}
+                    showActions={showActions}
+                    assigneeFor={assigneeFor}
                     onDragStart={() => { draggingId.current = c.id; }}
                     onClick={() => setModal({ mode: "edit", card: c })} />)}
                 </div>
@@ -230,11 +287,57 @@ export default function VcOutreachBoard() {
   );
 }
 
-function VcCard({ card, onDragStart, onClick }: { card: KanbanCard; onDragStart: () => void; onClick: () => void }) {
+/* THE META ROW'S CHIP STYLES, one per kind, and `late` / `warn` / `crit` change the GROUND and not
+ * just the words — a date that reads "3d overdue" in the same grey as "due Sep 12" is a date nobody
+ * sees. */
+const META: Record<string, { bg: string; fg: string }> = {
+  cat: { bg: "#E8EFEA", fg: "#3F5B4E" },
+  due: { bg: "#EDF3FA", fg: "#2C5480" },
+  dueLate: { bg: "#FDE7E3", fg: "#A8341F" },
+  act: { bg: "#F1F4F2", fg: "#5C6F66" },
+  actDone: { bg: "#EAF4EE", fg: "#1F7A4D" },
+  age: { bg: "#F1F4F2", fg: "#5C6F66" },
+  ageWarn: { bg: "#FBF0DC", fg: "#8A5A12" },
+  ageCrit: { bg: "#FDE7E3", fg: "#A8341F" },
+};
+
+function VcCard({ card, checklist, showActions, assigneeFor, onDragStart, onClick }: {
+  card: KanbanCard;
+  checklist: ChecklistItem[];
+  showActions: boolean;
+  assigneeFor: (i: ChecklistItem) => { name: string; initials: string } | null;
+  onDragStart: () => void;
+  onClick: () => void;
+}) {
   const g = vcFitGrade(String((card.data as Record<string, unknown>).fit_raw ?? ""));
   const hue = g ? FIT_HUE[g] : { bg: "#E7EEEA", fg: "#5C6F66" };
   const os = owners(card);
   const first = contacts(card)[0];
+
+  /* ── EVERY CHIP COMES FROM A FIELD THE MODAL OWNS, AND ONLY WHAT APPLIES RENDERS ─────────────
+   * No placeholders and no empty row: a firm with no category, no due date and no actions is
+   * today's card minus the blurb, which on day one is most of the board. */
+  const cat = vcFocusCategory(vcFundFocus(card));
+  const due = vcDueChip(vcNextStepDue(card));
+  const open = checklist.filter((i) => !i.done);
+  const age = stageAge(card, Date.now(), "vc_outreach");
+  const band = age ? ageBand(age.days, "vc_outreach") : null;
+  const chips: { key: string; tone: { bg: string; fg: string }; text: string }[] = [];
+  if (cat) chips.push({ key: "cat", tone: META.cat, text: cat });
+  if (due) chips.push({ key: "due", tone: due.late ? META.dueLate : META.due, text: due.label });
+  // OPEN, NOT TOTAL. A firm whose actions are all ticked earns the tick; a firm with none says
+  // nothing at all.
+  if (checklist.length > 0) {
+    chips.push(open.length > 0
+      ? { key: "act", tone: META.act, text: `${open.length} open` }
+      : { key: "act", tone: META.actDone, text: "✓ done" });
+  }
+  // "≥ Nd" WHEN THE SOURCE IS A LOWER BOUND — the existing convention, not dropped quietly.
+  if (age) chips.push({
+    key: "age",
+    tone: band === "crit" ? META.ageCrit : band === "warn" ? META.ageWarn : META.age,
+    text: `${age.exact ? "" : "≥ "}${age.days}d`,
+  });
   return (
     <article draggable onDragStart={onDragStart} onClick={onClick} data-testid="vc-card" data-id={card.id}
       className="cursor-pointer rounded-lg border bg-white p-2.5 transition hover:shadow-sm"
@@ -247,11 +350,46 @@ function VcCard({ card, onDragStart, onClick }: { card: KanbanCard; onDragStart:
           <span className="flex-none rounded-full px-1.5 py-0.5 text-[10px] font-bold" style={{ background: "#EEF3F0", color: "#5C6F66" }}>{wave(card)}</span>
         )}
       </div>
-      {/* TWO LINES, CLAMPED. These run to 231 characters; a card cannot carry that, and the full
-          text is one click away in the modal. A SHORT ONE DOES NOT PAD — line-clamp is a maximum. */}
-      {focus(card) && (
-        <p data-testid="vc-focus" className="mt-1.5 overflow-hidden text-[11.5px] leading-[1.45]"
-          style={{ color: "#5C6F66", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{focus(card)}</p>
+      {/* THE BLURB IS GONE FROM THE CARD AND IS NOW A FIELD IN THE MODAL. It was two clamped lines
+          of up to 231 characters, and the comment here used to say the full text was one click away
+          — it was not, because the modal had no field for it. It does now (Fund focus), so the
+          claim is true and the space carries the state instead. What the trade actually bought is
+          in the report: not more firms per screen, the same number carrying what you act on. */}
+      {chips.length > 0 && (
+        <div data-testid="vc-meta" className="mt-1.5 flex flex-wrap items-center gap-[5px]">
+          {chips.map((c) => (
+            <span key={c.key} data-testid={`vc-meta-${c.key}`}
+              className="inline-flex items-center rounded-[5px] px-1.5 py-0.5 text-[10px] font-bold"
+              style={{ background: c.tone.bg, color: c.tone.fg }}>{c.text}</span>
+          ))}
+        </div>
+      )}
+      {/* ── THE OPEN ACTIONS THEMSELVES, Field Pipeline's treatment ported rather than reinvented:
+             a hairline rule, an empty 13px box, the text truncated with a title, and the assignee to
+             the right one step quieter than the card's owner. A TICKED ACTION NEVER RENDERS — the
+             card is the outstanding work, not the history — and a card with none shows no divider
+             and no empty element. */}
+      {showActions && open.length > 0 && (
+        <div data-testid="vc-card-actions" className="mt-2 flex flex-col gap-[5px] border-t pt-[7px]" style={{ borderColor: "#EFF3F1" }}>
+          {open.map((i) => {
+            const a = assigneeFor(i);
+            return (
+              <div key={i.id} data-testid="vc-card-action" className="flex items-center gap-[7px] text-[11.5px] leading-[1.35]" style={{ color: "#3A4D44" }}>
+                <span className="h-[13px] w-[13px] flex-none rounded border-[1.5px]" style={{ borderColor: "#B9C6BF", background: "#fff" }} />
+                <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap" title={i.text}>{i.text}</span>
+                {a ? (
+                  <span className="flex flex-none items-center gap-[4px]" title={a.name}>
+                    <span className="flex h-[15px] w-[15px] flex-none items-center justify-center rounded-full border text-[8px] font-bold"
+                      style={{ background: "#EEF3F0", borderColor: "#E2EAE5", color: "#46584F" }}>{a.initials}</span>
+                    <span className="whitespace-nowrap text-[10.5px]" style={{ color: "#626F68" }}>{a.name}</span>
+                  </span>
+                ) : (
+                  <span className="flex-none text-[10.5px] italic" style={{ color: "#626F68" }}>Unassigned</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
       <div className="mt-2 flex items-center gap-2">
         <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: first?.name ? "#3C4F44" : "#9AA8A1" }}>

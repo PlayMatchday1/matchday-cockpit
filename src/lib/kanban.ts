@@ -126,6 +126,10 @@ export type BoardConfig = {
   showChecklists: boolean;
   showCity: boolean;
   minColWidthPx: number;
+  /* WHAT THE CHECKLIST IS CALLED HERE. Ryan's word for the VC board is "Actions", and the two
+   * boards keep their own words on purpose: a field's to-dos are chores against a venue, a firm's
+   * actions are the outreach itself. One shared editor, one label per board. */
+  checklistLabel?: string;
 };
 
 // ---------------- stage definitions ----------------
@@ -177,6 +181,81 @@ export const vcFitGrade = (raw: string | null | undefined): "A" | "B" | "C" | "D
   return c === "A" || c === "B" || c === "C" || c === "D" ? c : "";
 };
 
+/* ── THE VC CARD'S OWN FIELDS ───────────────────────────────────────────────────────────────────
+ * The keys are SNAKE_CASE in the row and camelCase in the import file — `fund_focus` here,
+ * `fundFocus` there. Measured on all 90 live cards: fit_raw, warm_raw, wave_raw, fund_focus,
+ * relationship, owners, contacts, warm_rationale, next_steps, next_step_due, notes,
+ * last_touchpoint, source_id, plus the derived fit/warm/wave. Read through these helpers so the
+ * modal and the card cannot disagree about which spelling is real.
+ *
+ * next_steps IS NOT READ HERE ANY MORE. It was free text, empty on all 90 (measured), and the
+ * actions list replaces it — two places to write the same thing is how they drift. */
+export type VcContact = { name?: string; title?: string; email?: string };
+const vcData = (c: Pick<KanbanCard, "data">) => (c.data ?? {}) as Record<string, unknown>;
+const vcStr = (v: unknown) => (v == null ? "" : String(v));
+
+export const vcFitRaw = (c: Pick<KanbanCard, "data">) => vcStr(vcData(c).fit_raw);
+export const vcFundFocus = (c: Pick<KanbanCard, "data">) => vcStr(vcData(c).fund_focus);
+export const vcRelationship = (c: Pick<KanbanCard, "data">) => vcStr(vcData(c).relationship);
+export const vcNotes = (c: Pick<KanbanCard, "data">) => vcStr(vcData(c).notes);
+export const vcNextStepDue = (c: Pick<KanbanCard, "data">) => vcStr(vcData(c).next_step_due).slice(0, 10);
+export const vcOwners = (c: Pick<KanbanCard, "data">): string[] =>
+  (Array.isArray(vcData(c).owners) ? (vcData(c).owners as unknown[]) : []).map(vcStr).filter(Boolean);
+export const vcContacts = (c: Pick<KanbanCard, "data">): VcContact[] =>
+  (Array.isArray(vcData(c).contacts) ? (vcData(c).contacts as VcContact[]) : []).filter(Boolean);
+
+/* THE FIVE FIT OPTIONS, and the fifth is why this list exists. fit_raw holds the source file's own
+ * strings ("A – Top firm"), and 6 of 90 are blank or "Unknown" — ungraded. Without a bucket for
+ * ungraded, a select would have to invent a grade for a firm nobody has graded, and the board's
+ * A/B/C/D chips (13+21+27+23 = 84) would never sum to All (90). Ungraded writes "", which is what
+ * vcFitGrade already reads as no grade.
+ * NOTE: "Unknown" is folded into Ungraded on save — the two mean the same thing and only a save
+ * rewrites it. The BOARD'S chips are untouched by this build; adding an Ungraded chip there is the
+ * add-firm brief's business, and this one must not change the filters. */
+/* THE LABELS CARRY THE WORDS, as the mock's select does — "A" alone is a letter, "A — Top firm" is
+ * the grade the source file actually meant. The VALUES are the stored strings verbatim, EN DASH and
+ * all, so a save cannot quietly re-spell what 87 rows already hold. */
+export const VC_FIT_OPTIONS: readonly { label: string; value: string }[] = [
+  { label: "A — Top firm", value: "A – Top firm" },
+  { label: "B — Strong firm", value: "B – Strong firm" },
+  { label: "C — Opportunistic", value: "C – Opportunistic" },
+  { label: "D — Unlikely fit", value: "D – Unlikely fit" },
+  { label: "Ungraded", value: "" },
+];
+
+/** The stored fit_raw, matched to one of the five options — "" for blank, "Unknown" and anything
+ *  else that does not start with a grade letter. */
+export const vcFitOptionValue = (raw: string | null | undefined): string => {
+  const g = vcFitGrade(raw);
+  return g ? (VC_FIT_OPTIONS.find((o) => o.value.startsWith(g))?.value ?? "") : "";
+};
+
+/* THE ONE WORD THE BLURB CARRIED THAT YOU SCAN BY. 62 of 90 fund_focus values open with an
+ * ALL-CAPS category ("SPORTS. Spun out of…"), so it comes back as a chip and the other 28 show
+ * NOTHING rather than a placeholder. The token must be capitals and the run must end at a full
+ * stop, or "AUSTIN seed fund" would become a category it is not. */
+export const vcFocusCategory = (raw: string | null | undefined): string => {
+  const m = /^([A-Z][A-Z&/ -]{1,18})\./.exec(String(raw ?? "").trim());
+  return m ? m[1].trim() : "";
+};
+
+/* DUE, IN THE WORDS THE MOCK USES, and `late` is a separate flag so the colour can differ as well
+ * as the wording — a date that reads "3d overdue" in the same grey as "due Sep 12" is a date
+ * nobody sees. Compared as WALL-CLOCK DAYS in the viewer's zone: a due date is a day, not an
+ * instant, so it is parsed at noon to keep it away from either midnight. */
+export function vcDueChip(iso: string | null | undefined, nowMs: number = Date.now()): { label: string; late: boolean } | null {
+  const s = String(iso ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const due = new Date(`${s}T12:00:00`);
+  if (!Number.isFinite(due.getTime())) return null;
+  const now = new Date(nowMs);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12);
+  const days = Math.round((due.getTime() - today.getTime()) / 86_400_000);
+  if (days < 0) return { label: `${Math.abs(days)}d overdue`, late: true };
+  if (days === 0) return { label: "due today", late: true };
+  return { label: `due ${due.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`, late: false };
+}
+
 /** Warm is a yes/no, and 73 of 90 are "No" — so only a true yes earns a chip. */
 export const vcIsWarm = (raw: unknown): boolean => {
   const vals = Array.isArray(raw) ? raw : [raw];
@@ -198,6 +277,30 @@ export const AGE_WARN_DAYS = 21;
 export const AGE_CRIT_DAYS = 45;
 const STAGES_THAT_AGE = new Set(["backlog", "contacted", "negotiation"]);
 
+/* ── AGING IS PER BOARD, AND FIELD PIPELINE'S IS THE DEFAULT ────────────────────────────────────
+ * STAGES_THAT_AGE holds Field Pipeline's stage ids, so stageAge() returned null for every VC stage.
+ * Rather than widen that set — which would age Field Pipeline stages it deliberately does not age —
+ * each board brings its own stages and thresholds, and the parameter DEFAULTS to field_pipeline.
+ * Its two callers (FieldPipelineBoard :520-521) pass nothing and are unchanged by construction.
+ *
+ * VC: every stage EXCEPT not_contacted. All 90 firms are in not_contacted with the same
+ * stage_entered_at (the import, 2026-09-11), so an age there would be one number on ninety cards,
+ * which is not information. Thresholds 14/30 from the mock rather than Field Pipeline's 21/45: a
+ * fund that has not replied in two weeks is late in a way a field in negotiation is not.
+ *
+ * `reply_needed` is NOT given a tighter band of its own, though the brief argues for one. One band
+ * pair per board is a thing a person can hold; per-stage bands would be a second concept, and
+ * nobody has used the first one on this board yet. Worth revisiting once they have. */
+const BOARD_AGING: Record<BoardType, { stages: ReadonlySet<string>; warn: number; crit: number }> = {
+  field_pipeline: { stages: STAGES_THAT_AGE, warn: AGE_WARN_DAYS, crit: AGE_CRIT_DAYS },
+  vc_outreach: {
+    stages: new Set(["outreach_sent", "reply_needed", "engaged", "first_meeting", "second_scheduling", "second_scheduled"]),
+    warn: 14,
+    crit: 30,
+  },
+  tech_roadmap: { stages: new Set<string>(), warn: AGE_WARN_DAYS, crit: AGE_CRIT_DAYS },
+};
+
 // One source of truth for "how long has this card sat in its stage", returning
 // {days, exact}. EXACT when the row records when it entered the stage
 // (stage_entered_at, once the migration lands). Otherwise a TRUE LOWER BOUND
@@ -209,8 +312,9 @@ const STAGES_THAT_AGE = new Set(["backlog", "contacted", "negotiation"]);
 export function stageAge(
   card: Pick<KanbanCard, "stage" | "updated_at" | "stage_entered_at">,
   nowMs: number = Date.now(),
+  boardType: BoardType = "field_pipeline",
 ): { days: number; exact: boolean } | null {
-  if (!STAGES_THAT_AGE.has(card.stage)) return null;
+  if (!BOARD_AGING[boardType].stages.has(card.stage)) return null;
   const src = card.stage_entered_at ?? null;
   if (src) {
     const days = Math.floor((nowMs - new Date(src).getTime()) / 86_400_000);
@@ -221,9 +325,10 @@ export function stageAge(
   return { days: Math.max(0, days), exact: false };
 }
 
-export function ageBand(days: number): "warn" | "crit" | null {
-  if (days >= AGE_CRIT_DAYS) return "crit";
-  if (days >= AGE_WARN_DAYS) return "warn";
+export function ageBand(days: number, boardType: BoardType = "field_pipeline"): "warn" | "crit" | null {
+  const { warn, crit } = BOARD_AGING[boardType];
+  if (days >= crit) return "crit";
+  if (days >= warn) return "warn";
   return null;
 }
 
@@ -243,9 +348,13 @@ export const BOARD_CONFIG: Record<BoardType, BoardConfig> = {
     title: "VC Outreach",
     subtitle: "",
     stages: VC_OUTREACH_STAGES,
-    showChecklists: false,
+    /* ON, AND IT REPLACES THE FREE-TEXT NEXT STEP. The original brief deferred this deliberately;
+     * this is that second build. The checklist rides on its card in 0166's policy, so turning it on
+     * opens no new hole — proven with a confined token rather than assumed. */
+    showChecklists: true,
     showCity: false,
     minColWidthPx: 298,
+    checklistLabel: "Actions",
   },
   tech_roadmap: {
     boardType: "tech_roadmap",
