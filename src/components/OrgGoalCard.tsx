@@ -112,7 +112,7 @@ export default function OrgGoalCard({
 
   return (
     <div
-      className="relative overflow-hidden rounded-[16px] border p-[22px] transition hover:-translate-y-[2px]"
+      className="hg-card relative overflow-hidden rounded-[16px] border transition hover:-translate-y-[2px]"
       style={{
         background: "linear-gradient(178deg,#fffefc 0%, #f2f4f3 62%)",
         borderColor: "#e2e9e6",
@@ -127,8 +127,15 @@ export default function OrgGoalCard({
 
       {/* Top: ring + name/meta/chip */}
       <div className="relative flex items-center gap-[18px]">
-        <div className="relative h-[86px] w-[86px] flex-none">
-          <svg viewBox="0 0 86 86" width="86" height="86" aria-hidden style={{ transform: "rotate(-90deg)" }}>
+        {/* ── 66px ON A PHONE, 86px FROM 760 UP ──────────────────────────────────────────────
+            86px of fixed ring against a title that wraps to two lines was most of the card's top
+            half at 390. THE SVG SIZES ITSELF TO THE BOX now (width/height 100%) instead of
+            carrying its own 86px: the viewBox is unchanged, so every coordinate below — r=39,
+            cx/cy=43, the pace tick's ±5.5 — still means what it meant, and the whole drawing
+            scales. Hard-coding a second set of 66px coordinates would have been two rings to keep
+            in agreement. */}
+        <div className="hg-ring relative flex-none">
+          <svg viewBox="0 0 86 86" width="100%" height="100%" aria-hidden style={{ transform: "rotate(-90deg)" }}>
             <circle cx="43" cy="43" r={R} fill="none" stroke="#dae2de" strokeWidth="8" />
             <circle
               cx="43" cy="43" r={R} fill="none" strokeWidth="8" strokeLinecap="round"
@@ -140,12 +147,14 @@ export default function OrgGoalCard({
               </g>
             )}
           </svg>
+          {/* The numeral comes down with the ring — 22px inside a 66px circle leaves no room for
+              the DONE label beneath it. */}
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <div className="text-[22px] font-[750] leading-none tracking-[-0.035em] text-[#12241d]">
+            <div className="hg-ringpct font-[750] leading-none tracking-[-0.035em] text-[#12241d]">
               {goal.progress}
-              <i className="ml-px text-[13px] font-[650] not-italic text-[#8a978f]">%</i>
+              <i className="hg-ringpc ml-px font-[650] not-italic text-[#8a978f]">%</i>
             </div>
-            <div className="text-[8.5px] font-bold uppercase tracking-[0.1em] text-[#a2ada8]">done</div>
+            <div className="hg-ringlab font-bold uppercase tracking-[0.1em] text-[#a2ada8]">done</div>
           </div>
         </div>
 
@@ -154,7 +163,7 @@ export default function OrgGoalCard({
             type="button"
             onClick={() => onEdit(goal)}
             aria-label={`Edit goal ${goal.title}`}
-            className="rounded text-left text-[16px] font-[720] leading-[1.28] tracking-[-0.013em] text-[#12241d] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#35c77f]"
+            className="hg-goal-title rounded text-left text-[16px] font-[720] leading-[1.28] tracking-[-0.013em] text-[#12241d] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#35c77f]"
           >
             {goal.title}
           </button>
@@ -230,7 +239,7 @@ export default function OrgGoalCard({
 function Trend({ history, k }: { history: number[]; k: StatusKey }) {
   if (!history || history.length < 4) {
     return (
-      <div className="my-[16px] text-[11.5px] italic leading-[1.5] text-[#a8b2ad]">
+      <div className="hg-trend text-[11.5px] italic leading-[1.5] text-[#a8b2ad]" data-testid="goal-nohist">
         No history yet — a trend line appears once this goal has four or more updates.
       </div>
     );
@@ -246,7 +255,7 @@ function Trend({ history, k }: { history: number[]; k: StatusKey }) {
   const last = pts[pts.length - 1];
   const c = TREND_STROKE[k];
   return (
-    <div className="relative my-[18px]">
+    <div className="hg-trend relative">
       <svg viewBox={`0 0 ${w} ${h}`} width="100%" height="56" style={{ overflow: "visible" }} aria-hidden>
         <path d={area} fill={c} opacity="0.16" />
         <path d={d} fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />

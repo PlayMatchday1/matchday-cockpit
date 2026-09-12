@@ -57,6 +57,9 @@ export default function CalendarPanel() {
   const [view, setView] = useState<"today" | "week">("today");
   const [open, setOpen] = useState<Set<string>>(new Set()); // expanded fold day-keys
   const [expandWho, setExpandWho] = useState<Set<string>>(new Set());
+  /* The privacy note's disclosure. Collapsed by default — see the note itself for why it is one
+     line rather than three, and why it is not simply deleted. */
+  const [noteOpen, setNoteOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -180,10 +183,31 @@ export default function CalendarPanel() {
           )}
         </div>
 
-        <div className="note">
-          Only meetings with <b>2 or more people</b> are ever stored. Anything you mark <b>Private</b> in Google Calendar is skipped
-          entirely. Descriptions and locations are never saved.
+        {/* ── ONE LINE, WITH THE FULL DISCLOSURE ONE TAP AWAY ────────────────────────────────
+         * It was a three-line paragraph that measured TALLER THAN THE MEETING ABOVE IT, which is
+         * the wrong way round for a panel whose job is the meetings.
+         *
+         * IT IS NOT DELETED, AND THAT IS DELIBERATE. Ryan on this class of thing: "i dont want any
+         * of the extra bullshit banners and warnings and stuff." This one is not a banner or a
+         * warning — it is a privacy disclosure about what does and does not leave his Google
+         * Calendar, so it stays reachable rather than being trimmed away.
+         *
+         * THE REVEALED TEXT IS THE EXISTING WORDING, CHARACTER FOR CHARACTER, bold spans included.
+         * The summary line above it is new copy and the full text is not rewritten: a shortened
+         * privacy disclosure is a different privacy disclosure, and only one of the two was
+         * written with that in mind. */}
+        <div className="note" data-testid="cal-note">
+          <span>Only 2+ person meetings are stored. Nothing private, no descriptions.</span>
+          <button type="button" aria-expanded={noteOpen} onClick={() => setNoteOpen((v) => !v)}>
+            {noteOpen ? "Less" : "More"}
+          </button>
         </div>
+        {noteOpen && (
+          <div className="notefull" data-testid="cal-note-full">
+            Only meetings with <b>2 or more people</b> are ever stored. Anything you mark <b>Private</b> in Google Calendar is skipped
+            entirely. Descriptions and locations are never saved.
+          </div>
+        )}
       </div>
     </div>
   );
@@ -282,6 +306,16 @@ const CSS = `
 .twc .allday{display:inline-block;margin-left:7px;font-size:9px;font-weight:900;letter-spacing:.6px;text-transform:uppercase;color:#7A5200;background:#FFF6D6;border-radius:99px;padding:2px 7px;vertical-align:1.5px}
 .twc .empty{padding:26px 20px;text-align:center;font-size:12.5px;color:var(--muted);line-height:1.6}
 .twc .empty b{display:block;font-size:13.5px;font-weight:900;color:var(--forest);margin-bottom:4px}
-.twc .note{margin:14px 20px 18px;padding:11px 14px;background:var(--slot);border:1px solid var(--line);border-radius:11px;font-size:11px;color:var(--muted);line-height:1.55}
-.twc .note b{color:var(--forest);font-weight:850}
+/* ONE ROW: the summary, then More pushed to the end. The boxed, bordered, tinted slab is gone —
+   a hairline above it is enough separation for a footnote, and the box was most of why three lines
+   of 11px text read as a banner. */
+.twc .note{display:flex;align-items:center;gap:8px;margin:12px 20px 14px;padding-top:10px;
+  border-top:1px solid var(--line);font-size:10.5px;color:var(--muted);line-height:1.5}
+.twc .note > span{min-width:0}
+/* 32px, because it is a real control on a phone. */
+.twc .note button{margin-left:auto;flex:none;min-height:32px;min-width:32px;border:0;background:none;
+  font-family:inherit;font-size:12px;font-weight:850;color:var(--muted);cursor:pointer}
+.twc .note button:hover{color:var(--forest)}
+.twc .notefull{margin:0 20px 16px;font-size:10.5px;line-height:1.55;color:var(--muted)}
+.twc .notefull b{color:var(--forest);font-weight:850}
 `;

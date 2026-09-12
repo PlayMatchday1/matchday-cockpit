@@ -321,7 +321,9 @@ function NavBtn({
       type="button"
       aria-label={label}
       onClick={onClick}
-      className="flex h-[27px] w-[27px] items-center justify-center rounded-lg border text-[14px] leading-none transition hover:bg-[#e7edea]"
+      // 32px, not 27. These are the only way to change the month and they were a 27px square —
+      // the smallest targets on the page, on a panel an operator reaches for on a phone.
+      className="flex h-[32px] w-[32px] items-center justify-center rounded-lg border text-[14px] leading-none transition hover:bg-[#e7edea]"
       style={{ borderColor: "#d3ddd8", color: "#4b6459" }}
     >
       {children}
