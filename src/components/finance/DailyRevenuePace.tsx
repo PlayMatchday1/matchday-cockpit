@@ -426,17 +426,12 @@ export default function DailyRevenuePace() {
    * PINNED is the touch path. A tap sets it; a tap on another point moves it; a tap outside clears
    * it. Without that the chart is inert on a phone, where there is no hover at all.
    */
-  /* THE RAIL'S END STATE, measured from the element rather than assumed from the chip count —
-   * a rail that happens to fit has no more to reveal and must not wear a fade either. */
-  const railRef = useRef<HTMLDivElement | null>(null);
-  const [railAtEnd, setRailAtEnd] = useState(true);
-  const measureRail = useCallback(() => {
-    const el = railRef.current;
-    if (!el) return;
-    setRailAtEnd(el.scrollLeft + el.clientWidth >= el.scrollWidth - 1);
-  }, []);
-  const onRailScroll = useCallback(() => measureRail(), [measureRail]);
-  useEffect(() => { measureRail(); }, [measureRail, rows]);
+  /* THE COMPARE RAIL'S REF, END-STATE, SCROLL HANDLER AND MEASUREMENT WERE HERE AND ARE GONE.
+   * They drove a right-edge fade over a horizontal scroll that could not happen: the element
+   * carried the tray's flex-wrap AND an overflow-x:auto, and wrap won, so it wrapped and the
+   * overflow clipped the wrapped rows instead of scrolling them. Wrapping is the correct
+   * behaviour here and is already what the tray does; it just had to stop being drawn as a pill.
+   * See the stylesheet's zoom comment for why it must keep wrapping. */
 
   const [hoverAt, setHoverAt] = useState<number | null>(null);
   const [pinned, setPinned] = useState(false);
@@ -514,13 +509,12 @@ export default function DailyRevenuePace() {
         <div className={s.ctrlStack}>
           <div className={s.ctrlGroup}>
             <span className={s.ctrlLab}>Compare with</span>
-            {/* THE FADE IS DRIVEN BY MEASUREMENT, NOT BY A GUESS. data-atEnd flips once the rail is
-                scrolled to its end, which removes the gradient — a fade that never turns off tells
-                you there is more when there is not. */}
-            <div className={s.railWrap} data-testid="pace-cmp-rail"
-              data-atend={railAtEnd ? "true" : "false"}>
-            <div className={`${s.seg} ${s.rail}`} role="group" aria-label="Comparison series"
-              ref={railRef} onScroll={onRailScroll}>
+            {/* ONE ELEMENT, AND IT WRAPS. The tray is given the full width of its group on a
+                phone (see .ctrlGroup > .seg) and lays its three chips out over as many rows as it
+                needs. The testid names what this is now
+                and sits on the tray itself, where the wrapper's used to be. */}
+            <div className={s.seg} role="group" aria-label="Comparison series"
+              data-testid="pace-cmp-tray">
               {([
                 ["period", `Previous ${grain}`],
                 ["quarter", "Previous quarter avg"],
@@ -538,8 +532,7 @@ export default function DailyRevenuePace() {
                     onClick={() => has && setCompare(v)}>{t}</button>
                 );
               })}
-            </div>{/* rail */}
-            </div>{/* railWrap */}
+            </div>{/* compare tray */}
           </div>{/* ctrlGroup */}
           <div className={s.ctrlGroup}>
             <span className={s.ctrlLab}>View</span>

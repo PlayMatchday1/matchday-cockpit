@@ -7,9 +7,15 @@
 // zoomed. Reverting financeSection.module.css to its pre-fix state reproduces it — 13 of these
 // assertions fail, starting with the first.
 //
-// NO SINGLE RULE ISOLATES IT. The rail rule and the select rule each hold the width down on their
-// own, so mutating either alone still passes. That is a property of the bug, not a gap in the
+// NO SINGLE RULE ISOLATES IT. The tray's flex-wrap and the select rule each hold the width down on
+// their own, so mutating either alone still passes. That is a property of the bug, not a gap in the
 // suite — stated here so nobody removes one of them thinking it is dead weight.
+//
+// THE RULE THAT HOLDS IT DOWN IS WRAPPING, and it used to be described here as a scrolling "rail".
+// It never scrolled: the element carried flex-wrap AND overflow-x:auto and wrap won, so it wrapped
+// and the overflow clipped the wrapped rows. The rail is gone; wrapping — which is what actually
+// prevented the zoom — stays, and §4 below now tests the tray that exists rather than the scroll
+// that did not.
 //
 // SO THE FIRST ASSERTION IS innerWidth ITSELF. A page that fits because it was shrunk is not a page
 // that fits.
@@ -126,44 +132,59 @@ for (const [W, H] of SIZES) {
     }
   }
 
-  // ── 4. THE COMPARE RAIL ─────────────────────────────────────────────────────────────────────
-  console.log("\n── the compare rail ──");
+  /* ── 4. THE COMPARE TRAY WRAPS, AND EVERY CHIP IS REACHABLE ─────────────────────────────────
+   * THIS BLOCK USED TO TEST A SCROLL THAT COULD NOT HAPPEN, and it passed the whole time. The
+   * element carried .seg's flex-wrap AND .rail's overflow-x:auto; wrap won, so scrollWidth never
+   * exceeded clientWidth, so this took its `else` branch — "the rail fits, so it reports itself at
+   * the end" — and reported the control healthy while the tray was drawing a 134px ellipse that
+   * clipped the labels off its first and last rows. A vacuous pass is worse than a failure: it
+   * says the thing was checked.
+   *
+   * THE QUESTION IS UNCHANGED — can the operator see and reach all three comparisons — and it is
+   * now asked of the geometry that actually exists. Every chip on screen, inside its tray, not
+   * overlapping, at a real target size, with the tray no longer shaped like a pill. */
+  console.log("\n── the compare tray ──");
   {
-    const rail = await page.evaluate(() => {
-      const wrap = document.querySelector('[data-testid="pace-cmp-rail"]');
-      const scroller = wrap?.querySelector('[role="group"]');
-      const last = document.querySelector('[data-testid="pace-cmp-year"]');
-      const fade = wrap ? getComputedStyle(wrap, "::after") : null;
-      return {
-        hasWrap: !!wrap, scrollable: scroller ? scroller.scrollWidth > scroller.clientWidth + 1 : false,
-        atEnd: wrap?.getAttribute("data-atend"),
-        // THE GRADIENT ITSELF, not opacity — an empty pseudo-element also has opacity 1.
-        fadeImage: fade?.backgroundImage ?? "none",
-        lastRight: last ? Math.round(last.getBoundingClientRect().right) : null,
-      };
-    });
-    eq("  control — the rail wrapper is present", rail.hasWrap, true);
-    if (rail.scrollable) {
-      eq("the rail scrolls, so the last chip is reachable", rail.scrollable, true);
-      eq("  …and a fade is DRAWN (a gradient, not just an opaque box)", /gradient/.test(rail.fadeImage), true);
-      eq("  …and it is on while there is more to reach", rail.atEnd, "false");
-      // SCROLL TO THE END AND THE FADE MUST GO — a fade that never turns off says there is more
-      // when there is not.
-      await page.evaluate(() => {
-        const sc = document.querySelector('[data-testid="pace-cmp-rail"] [role="group"]');
-        if (sc) sc.scrollLeft = sc.scrollWidth;
-      });
-      await page.waitForTimeout(300);
-      const after = await page.evaluate(() => ({
-        atEnd: document.querySelector('[data-testid="pace-cmp-rail"]')?.getAttribute("data-atend"),
-        lastRight: Math.round(document.querySelector('[data-testid="pace-cmp-year"]')?.getBoundingClientRect().right ?? 0),
+    const tray = await page.evaluate(() => {
+      const t = document.querySelector('[data-testid="pace-cmp-tray"]');
+      if (!t) return null;
+      const R = (e) => { const b = e.getBoundingClientRect();
+        return { l: +b.left.toFixed(1), r: +b.right.toFixed(1), t: +b.top.toFixed(1), b: +b.bottom.toFixed(1),
+                 w: +b.width.toFixed(1), h: +b.height.toFixed(1) }; };
+      const box = R(t);
+      const chips = [...t.children].map((c) => ({
+        id: c.dataset.testid, label: c.textContent.trim(), ...R(c),
+        disabled: c.disabled, title: c.getAttribute("title"),
+        radius: parseFloat(getComputedStyle(c).borderTopLeftRadius),
+        truncated: c.scrollWidth > c.clientWidth + 1,
       }));
-      eq("scrolled to the end, the fade turns off", after.atEnd, "true");
-      eq("  …and the last chip is fully on screen", after.lastRight <= W, true);
-    } else {
-      // A RAIL THAT FITS HAS NOTHING TO REVEAL and must not wear a fade either.
-      eq("the rail fits, so it reports itself at the end", rail.atEnd, "true");
-    }
+      const st = getComputedStyle(t);
+      return { box, chips, radius: parseFloat(st.borderTopLeftRadius), flexWrap: st.flexWrap,
+        rows: [...new Set(chips.map((c) => Math.round(c.t)))].length,
+        groupW: t.parentElement ? +t.parentElement.getBoundingClientRect().width.toFixed(1) : null };
+    });
+    eq("  control — the compare tray is present", tray != null, true);
+    eq("  control — all three comparisons render", tray.chips.length, 3);
+    console.log(`     tray ${tray.box.w}x${tray.box.h} over ${tray.rows} row(s), radius ${tray.radius}px, group ${tray.groupW}px`);
+    /* IT STILL WRAPS. That is what keeps it inside the viewport and is what prevents the zoom-out;
+       nowrap plus a scroll is the thing that must never come back. */
+    eq("the tray still wraps rather than scrolling", tray.flexWrap, "wrap");
+    /* AND IT IS NO LONGER A PILL. A radius at or past half the box height IS the bubble. */
+    eq("  …and its radius is under half its own height", tray.radius < tray.box.h / 2, true);
+    eq("the tray takes the full width of its group", tray.box.w >= (tray.groupW ?? 0) - 1, true);
+    eq("every chip is fully on screen", tray.chips.filter((c) => c.r > W || c.l < 0).map((c) => c.id), []);
+    eq("  …and inside its tray on all four sides",
+      tray.chips.filter((c) => c.l < tray.box.l - 0.5 || c.r > tray.box.r + 0.5
+        || c.t < tray.box.t - 0.5 || c.b > tray.box.b + 0.5).map((c) => c.id), []);
+    eq("no chip label is truncated", tray.chips.filter((c) => c.truncated).map((c) => [c.id, c.label]), []);
+    eq("every chip is at least 44px wide", tray.chips.filter((c) => c.w < 43.5).map((c) => [c.id, c.w]), []);
+    /* THE CHIPS ARE STILL PILLS — the radius moved TO them, not away from everything. */
+    eq("  …and every chip is still a pill", tray.chips.filter((c) => c.radius < c.h / 2 - 0.5).map((c) => [c.id, c.radius, c.h]), []);
+    /* DISABLED IS VISIBLE AND EXPLAINED, never hidden. */
+    const dis = tray.chips.filter((c) => c.disabled);
+    console.log(`     disabled: ${dis.length ? dis.map((c) => c.id).join(", ") : "none on this data"}`);
+    eq("every disabled comparison still renders, with a reason",
+      dis.filter((c) => !c.title || c.title.length < 10).map((c) => c.id), []);
   }
 
   // ── 5. THE CHART IS A CHART ─────────────────────────────────────────────────────────────────

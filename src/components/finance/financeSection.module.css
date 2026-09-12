@@ -19,9 +19,31 @@
   color: color-mix(in srgb, var(--deep-green, #12352b) 55%, transparent);
   white-space: nowrap;
 }
-.seg { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 3px; border-radius: 999px; background: #fff; border: 1px solid var(--cream-line, #e6e2d8); }
+/* ── THE PILL BELONGS ON THE BUTTON, NOT ON THE TRAY ───────────────────────────────────────────
+   THE TRAY WAS border-radius:999px AND flex-wrap:wrap, WHICH CANNOT BOTH BE RIGHT. A 999px radius
+   is not "a pill" — it is "as round as this box allows", and the used value is clamped
+   proportionally to the shortest edge. On one row that lands at half the height and reads as a
+   pill. The moment the tray wraps it keeps doing exactly what it was told and the whole box turns
+   into a blob: measured at 390px, the compare tray went three rows / 134px tall and the Cost
+   page's City tray five rows / 214px, drawing a near-circle whose curve CUT THE LABELS off the
+   first and last rows. That is the "weird bubble".
+
+   A BUTTON IS ALWAYS ONE ROW TALL, so 999px is correct there and only there. The tray takes a
+   fixed 14px, which reads the same whether it is one row or five.
+
+   THIS CHANGED THE DESKTOP LOOK, deliberately: a rounded rectangle holding pills rather than a
+   pill holding pills. That is the standard segmented-control shape and it is the only way one rule
+   is right at every width. */
+.seg { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 3px; border-radius: 14px; background: #fff; border: 1px solid var(--cream-line, #e6e2d8); }
 .seg button {
-  min-height: 38px; padding: 6px 12px; border: 0; border-radius: 999px; background: transparent;
+  /* MIN-WIDTH MATTERS AS MUCH AS MIN-HEIGHT, and only the height was set. "All" measured 39.8px
+     and "OKC" 49.7px on 12px of padding — over the target in one dimension and under it in the
+     other, which is the same miss as being under it in both.
+     THE 38px HEIGHT IS LEFT ALONE ON PURPOSE. Two other rules are pinned to it by name — the
+     .brkHead padding (11px, chosen to keep that header inside its 70px budget) and .mvToggle's own
+     min-height (so the ROWS row does not jump when the note replaces the button). Raising this to
+     44 moves both. See the report: it is Ryan's call, not a silent change. */
+  min-height: 38px; min-width: 44px; padding: 6px 12px; border: 0; border-radius: 999px; background: transparent;
   font-size: 12px; font-weight: 700; color: var(--deep-green, #12352b); cursor: pointer;
 }
 .seg button.on { background: var(--mint, #cfeee0); }
@@ -172,40 +194,44 @@
   color: color-mix(in srgb, var(--deep-green, #12352b) 62%, transparent);
 }
 /* ── THE CONTROL ROW IS WHAT WAS ZOOMING THE PAGE OUT ──────────────────────────────────────
-   MEASURED, and not what I first assumed. The three compare chips in an unwrapped flex row plus
+   MEASURED, and not what I first assumed. The three compare chips in an UNWRAPPED flex row plus
    three fixed-width selects came to ~591px, and a 393px phone cannot show that — so the browser
    shrank the WHOLE APP to fit and window.innerWidth reported 591. The page never overflowed; it
    zoomed, which is why nothing caught it.
 
-   The two rules below each hold the width down INDEPENDENTLY, which is why removing either one on
-   its own does not reproduce it — only reverting this whole block does. Neither is redundant: the
-   rail one keeps the third chip reachable, the select one keeps its label from truncating.
+   ── SO THE TRAY WRAPS, AND IT MUST BE ALLOWED TO ───────────────────────────────────────────
+   WRAPPING IS WHAT PREVENTS THE ZOOM. A tray that wraps is never wider than its container, so
+   there is no width for the browser to shrink the app down to. Do NOT replace this with nowrap
+   plus a horizontal scroll: that puts the ~591px laid-out row straight back and reintroduces the
+   exact condition, and an overflow check cannot see it — verify-seg-wrap asserts
+   window.innerWidth for precisely this reason.
 
-   ── THE COMPARE RAIL, ON A PHONE ──────────────────────────────────────────────────────────
-   The third chip ("Previous year avg") was clipped with no hint it could be reached, and a
-   cut-off control with no affordance reads as a bug rather than as more content. The rail
-   scrolls and carries a right-edge fade; the fade is removed once it is scrolled to the end,
-   because a fade that stays on is lying about there being more. */
+   THE SCROLLING RAIL WAS HERE AND IS GONE, and it never worked. It set overflow-x:auto on the
+   same element as the tray WITHOUT resetting flex-wrap, so wrap won and it wrapped, not scrolled —
+   and because overflow-x:auto forces overflow-y to a non-visible value, the wrapped rows were
+   CLIPPED. That is the cut-off "Previous month" and "Previous year avg" in the screenshot. The
+   fade, the at-end flag, the scroll listener and the ref were all machinery for a scroll that
+   could not happen; verify-finance-mobile was passing its "the rail fits, so it reports itself at
+   the end" branch the whole time, which is what a vacuous pass looks like.
+
+   The remaining rules each hold the width down INDEPENDENTLY: the tray spans the grid so it has
+   room to wrap into, and the select rule keeps "DPP + Membership" from truncating. */
 @media (max-width: 767px) {
   /* REAL HEIGHT, not a 90px strip. The SVG is width:100% with a viewBox, so without a height floor
      it collapses to whatever the aspect ratio gives at 393px. */
   .paceWrap svg { min-height: 240px; }
-  .railWrap { position: relative; min-width: 0; }
-  .railWrap::after {
-    content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 34px; pointer-events: none;
-    background: linear-gradient(to right, rgba(255,255,255,0), rgba(255,255,255,0.95));
-    transition: opacity .15s ease;
-  }
-  .railWrap[data-atEnd="true"]::after { opacity: 0; }
-  .rail { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
-  .rail::-webkit-scrollbar { display: none; }
-  .rail > * { flex: 0 0 auto; }
   /* THE VIEW SELECTS GO TWO-UP, THEN ONE FULL WIDTH. Never three across: at 393px that is 106px
      each and "DPP + Membership" truncates inside its own box. */
   .ctrlGroup { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .ctrlGroup > .sel:last-child { grid-column: 1 / -1; }
   .ctrlLab { grid-column: 1 / -1; }
   .sel { width: 100%; min-width: 0; }
+  /* A TRAY IS NEVER A GRID CELL. The two-column rule above was written for the SELECTS and is
+     right for them; it also caught the compare tray and confined it to one column of about 175px,
+     which is three ~120px chips in 175px — a guaranteed three-row wrap, and the wrap that turned
+     the 999px radius into the bubble. A tray manages its own wrapping and needs the whole width to
+     do it with. */
+  .ctrlGroup > .seg { grid-column: 1 / -1; }
 }
 
 .ctrlStack { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
