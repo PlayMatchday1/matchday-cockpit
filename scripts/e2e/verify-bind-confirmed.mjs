@@ -191,12 +191,28 @@ async function main() {
   {
     const { ctx, p, writes } = await boot(browser, storageState, 1200);
     console.log("\n-- the dialog: create --");
+    /* THE CARD THE CHIP BELONGS TO, captured so the prefill can be asserted against its OWN title
+     * rather than against a constant — which card is first depends on the board's order. */
+    const chipCard = await p.evaluate(() => {
+      const b = document.querySelector('[data-testid="card-link"]');
+      const c = b?.closest('[data-testid="card"]');
+      return c ? { id: c.dataset.id, title: c.querySelector("[class*='break-words']")?.textContent.trim() ?? null } : null;
+    });
+    yes(`  CONTROL: there is an unbound card with a chip (${chipCard?.title})`, chipCard?.title != null);
     await p.click('[data-testid="card-link"]');
     await p.waitForSelector('[data-testid="bind-dialog"]', { timeout: 15000 });
     let d = await p.evaluate(READ);
     // 7. NO PICKER, NO SWITCH.
     is("  no picker and no pick-or-create switch", d.picker, 0);
     yes("  just a name for the field being created", d.name != null);
+    /* PRE-TYPED FROM THE CARD. 12 of the 27 Confirmed cards are named exactly after a field that
+     * already exists; opening on an empty box made a person retype those names EXACTLY to see an
+     * offer the app could already make. "With neither" is no longer reachable from a card, so it
+     * is reached by clearing the box — the requirement it asserts is unchanged. */
+    is("  the dialog opens pre-typed with the card's own name", d.name.value, chipCard.title);
+    await p.fill('[data-testid="bind-newname"]', "");
+    await p.waitForTimeout(300);
+    d = await p.evaluate(READ);
     // 3. BOTH ARE REQUIRED.
     is("  with neither, it cannot be saved", d.save.disabled, true);
     await p.fill('[data-testid="bind-newname"]', "Crossbar Rowlett North");

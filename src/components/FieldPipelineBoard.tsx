@@ -59,6 +59,16 @@ function fmtLaunch(iso: string): string {
 /** The fin_venues columns this board needs: enough to match a name, show a city and count down. */
 type VenueRow = { id: number; venue_name: string; city: string | null; launch_date: string | null };
 
+/* What a typed name resolves to. THE ONLY THREE ANSWERS, and every screen that offers to bind a
+ * field reads them from the same function:
+ *   create : the name matches no field — make one.
+ *   link   : it matches one exactly and no card holds it — use that record, never make a second.
+ *   taken  : it matches one another card already holds — refused, naming that card. */
+export type BindMatch =
+  | { mode: "create"; venue: null; holder: null }
+  | { mode: "link"; venue: VenueRow; holder: null }
+  | { mode: "taken"; venue: VenueRow; holder: KanbanCard };
+
 /** What the bind dialog is working on. Null when it is closed. */
 type BindState = {
   cardId: string;
@@ -298,6 +308,7 @@ export default function FieldPipelineBoard() {
   const [bind, setBind] = useState<BindState | null>(null);
   const [binding, setBinding] = useState(false);
   const [bindErr, setBindErr] = useState<string | null>(null);
+  const [matchOpen, setMatchOpen] = useState(false);
 
   /* WHICH CARD HOLDS WHICH VENUE. One field has one launch plan; this is how the dialog can say
    * WHO has it rather than only that somebody does. The partial unique index on venue_id is what
@@ -327,8 +338,9 @@ export default function FieldPipelineBoard() {
       if (stageId === "confirmed" && moving.venue_id == null) {
         setBindErr(null);
         setBind({
+          /* PRE-TYPED FROM THE CARD, the same as every other way into this dialog — see openBind. */
           cardId, cardTitle: moving.title, city: cityOf(moving),
-          fromStage: moving.stage, newName: "", launch: null, touchedDate: false,
+          fromStage: moving.stage, newName: moving.title, launch: null, touchedDate: false,
         });
         return;
       }
@@ -355,17 +367,28 @@ export default function FieldPipelineBoard() {
    * EXACT, CASE-INSENSITIVE, TRIMMED, AND NOTHING CLEVERER. No fuzzy matching and no suggestions:
    * "Soccer Central" has three fields whose names differ by a suffix, and anything looser turns
    * them into one venue or none. A person typed the name; a person reads the offer. */
-  const bindMatch = useMemo(() => {
-    const typed = (bind?.newName ?? "").trim().toLowerCase();
-    if (!typed) return { mode: "create" as const, venue: null, holder: null };
-    const venue = venues.find((v) => String(v.venue_name).trim().toLowerCase() === typed) ?? null;
-    if (!venue) return { mode: "create" as const, venue: null, holder: null };
-    const holder = cardByVenue.get(venue.id) ?? null;
-    /* A CARD CAN ALWAYS RE-BIND TO THE VENUE IT ALREADY HOLDS — otherwise reopening the dialog on
-     * a bound card would refuse it against itself. */
-    if (holder && holder.id !== bind?.cardId) return { mode: "taken" as const, venue, holder };
-    return { mode: "link" as const, venue, holder: null };
-  }, [bind?.newName, bind?.cardId, venues, cardByVenue]);
+  /* ONE RESOLVER, FOUR CALLERS: the dialog, the card chip, the modal's Field row and every row of
+   * the Match fields list. A second copy of this rule is how "Soccer Central" ends up linked from
+   * one screen and refused from another. */
+  const resolveName = useCallback(
+    (typedRaw: string, cardId: string): BindMatch => {
+      const typed = typedRaw.trim().toLowerCase();
+      if (!typed) return { mode: "create", venue: null, holder: null };
+      const venue = venues.find((v) => String(v.venue_name).trim().toLowerCase() === typed) ?? null;
+      if (!venue) return { mode: "create", venue: null, holder: null };
+      const holder = cardByVenue.get(venue.id) ?? null;
+      /* A CARD CAN ALWAYS RE-BIND TO THE VENUE IT ALREADY HOLDS — otherwise reopening the dialog
+       * on a bound card would refuse it against itself. */
+      if (holder && holder.id !== cardId) return { mode: "taken", venue, holder };
+      return { mode: "link", venue, holder: null };
+    },
+    [venues, cardByVenue],
+  );
+
+  const bindMatch = useMemo(
+    () => resolveName(bind?.newName ?? "", bind?.cardId ?? ""),
+    [bind?.newName, bind?.cardId, resolveName],
+  );
 
   /* THE MATCHED FIELD'S DATE IS BROUGHT IN, NOT RETYPED — 9 of the 12 cards that name an existing
    * field already have one. It stops the moment somebody edits the box, so bringing it in is a
@@ -374,6 +397,12 @@ export default function FieldPipelineBoard() {
     if (!bind || bind.touchedDate) return;
     const d = bindMatch.mode === "link" ? bindMatch.venue?.launch_date ?? null : null;
     if (d && bind.launch !== d) setBind((b) => (b ? { ...b, launch: d } : b));
+    /* AND IT LEAVES WITH THE OFFER. The date arrived as part of "already launches Jul 1, 2026" —
+     * if the name is edited until that offer is gone, the date belongs to a field this is no
+     * longer about, and keeping it would silently stamp another field's launch date on a brand new
+     * venue nobody typed a date for. Only an untouched date is withdrawn; one a person chose is
+     * theirs and stays. */
+    if (!d && bind.launch) setBind((b) => (b && !b.touchedDate ? { ...b, launch: null } : b));
   }, [bind, bindMatch]);
 
   const bindCanSave = !!(bind?.newName ?? "").trim() && !!bind?.launch && bindMatch.mode !== "taken";
@@ -386,32 +415,32 @@ export default function FieldPipelineBoard() {
    * nothing has moved and the dialog says why. If the card update failed after it, a venue row
    * exists with nobody pointing at it — which Finance can see and a person can re-bind, rather
    * than a Confirmed card with no field, which is the state this whole feature exists to remove. */
-  const saveBind = useCallback(async () => {
-    if (!bind || !bindCanSave || binding) return;
-    setBinding(true);
-    setBindErr(null);
-    try {
+  /* THE ONE SAVE PATH. The dialog calls it and every row of the Match fields list calls it. A
+   * second venue-create, a second seeder or a second copy of the collision rule would be three
+   * ways for the two screens to disagree about what binding a field means. */
+  const commitBind = useCallback(
+    async (input: { cardId: string; name: string; launch: string; match: BindMatch; city: string }): Promise<void> => {
       let venueId: number;
-      if (bindMatch.mode === "link" && bindMatch.venue) {
-        venueId = bindMatch.venue.id;
+      if (input.match.mode === "link") {
+        venueId = input.match.venue.id;
         /* THE DATE LIVES ON fin_venues AND IS WRITTEN THERE. If the person changed it while
          * linking, that is the launch date moving — one fact, one home. */
-        if (bind.launch && bind.launch !== bindMatch.venue.launch_date) {
+        if (input.launch !== input.match.venue.launch_date) {
           const { error } = await supabase.from("fin_venues")
-            .update({ launch_date: bind.launch }).eq("id", venueId);
+            .update({ launch_date: input.launch }).eq("id", venueId);
           if (error) throw new Error(error.message);
         }
       } else {
         const made = await insertFinVenue({
-          venue_name: bind.newName.trim(),
-          city: bind.city,
+          venue_name: input.name.trim(),
+          city: input.city,
           billing_type: NEW_FIELD_BILLING_TYPE,
-          launch_date: bind.launch,
+          launch_date: input.launch,
           is_active: true,
         });
         venueId = made.id;
       }
-      const ok = await api.updateCard(bind.cardId, { stage: "confirmed", venue_id: venueId });
+      const ok = await api.updateCard(input.cardId, { stage: "confirmed", venue_id: venueId });
       if (!ok) throw new Error("The field was saved but the card did not move. Reload and try again.");
       /* ── THE 24 TASKS THE PREVIEW PROMISED ────────────────────────────────────────────────
        * This is what makes the dialog's "24 tasks will be created" true. It is deliberately NOT
@@ -423,18 +452,31 @@ export default function FieldPipelineBoard() {
        *
        * THE COORDINATOR IS THE CARD'S OWNER — the only owner anything can honestly seed. The
        * sheet's Department column names roles, never people. */
-      const owner = cards.find((c) => c.id === bind.cardId)?.owner_user_id ?? null;
+      const owner = cards.find((c) => c.id === input.cardId)?.owner_user_id ?? null;
       const seeded = await seedLaunchPlan(venueId, owner);
       if (seeded.missingTable) setToast("Field linked. The launch plan starts once migration 0173 is applied.");
       else if (seeded.error) setToast("Field linked, but the launch plan did not seed. Open it to retry.");
       await loadVenues();
+    },
+    [api, cards, loadVenues],
+  );
+
+  const saveBind = useCallback(async () => {
+    if (!bind || !bindCanSave || binding) return;
+    setBinding(true);
+    setBindErr(null);
+    try {
+      await commitBind({
+        cardId: bind.cardId, name: bind.newName, launch: bind.launch as string,
+        match: bindMatch, city: bind.city,
+      });
       setBind(null);
     } catch (e) {
       setBindErr(e instanceof Error ? e.message : String(e));
     } finally {
       setBinding(false);
     }
-  }, [bind, bindCanSave, binding, bindMatch, api, loadVenues, cards]);
+  }, [bind, bindCanSave, binding, bindMatch, commitBind]);
 
   /** Confirmed cards with no fin_venues row yet — the backfill, counted for the column header. */
   const unlinkedCount = useMemo(
@@ -449,13 +491,32 @@ export default function FieldPipelineBoard() {
   );
   /* THE SAME DIALOG THE DROP OPENS, not a second one. A card already sitting in Confirmed is not
    * moving anywhere, so fromStage is its own stage and saving leaves it there. */
+  /* ── THE DIALOG OPENS PRE-TYPED WITH THE CARD'S OWN NAME ──────────────────────────────────
+   * 12 of the 27 Confirmed cards are named exactly after a field that already exists. Opening on
+   * an empty box asked a person to retype those 12 names EXACTLY to see an offer the app could
+   * already have made — and the match is exact, so a typo meant a duplicate venue instead.
+   *
+   * NOTHING ABOUT THE MATCHING CHANGES. Still exact, case-insensitive, trimmed; still no picker,
+   * no fuzzy matching, no suggestion list. The only change is where the first string comes from:
+   * the card was carrying it all along. Editing the box drops the offer, as it always did. */
   const openBind = useCallback((c: KanbanCard) => {
     setBindErr(null);
     setBind({
       cardId: c.id, cardTitle: c.title, city: cityOf(c),
-      fromStage: c.stage, newName: "", launch: null, touchedDate: false,
+      fromStage: c.stage, newName: c.title, launch: null, touchedDate: false,
     });
   }, [cityOf]);
+
+  /* WHAT THE CARD'S OWN CHIP SAYS. Ryan: "all these have fields so need an easy way to say that on
+   * them" — so the answer goes ON the card rather than three clicks in.
+   *
+   * A NAME ANOTHER CARD HOLDS READS AS "new". Linking to it is refused, so a create is genuinely
+   * what is on offer; the dialog then opens on the refusal and names the holding card, which is
+   * more useful than a chip that could only say the same thing in less room. */
+  const chipKindFor = useCallback(
+    (c: KanbanCard) => resolveName(c.title, c.id),
+    [resolveName],
+  );
 
   const onColumnDrop = (stageId: string) => {
     const id = draggingId.current;
@@ -630,8 +691,13 @@ export default function FieldPipelineBoard() {
                       reading order is title, total, then this — which is also where the mock puts
                       it, pushed to the end. */}
                   {st.id === "confirmed" && unlinkedCount > 0 && (
-                    <span data-testid="col-unlinked" className="flex-none rounded-full px-[7px] py-0.5 text-[9.5px] font-extrabold tracking-[0.03em]"
-                      style={{ background: "#FFF3E6", color: "#8a5a12" }}>{unlinkedCount} without a field</span>
+                    /* THE COUNT IS THE WAY IN. Twenty-seven cards to bind, and the alternative was
+                       opening twenty-seven modals; this opens all of them as one list. */
+                    <button type="button" data-testid="col-unlinked"
+                      onClick={(e) => { e.stopPropagation(); setMatchOpen(true); }}
+                      title="Match these cards to their fields"
+                      className="flex-none rounded-full border px-[7px] py-0.5 text-[9.5px] font-extrabold tracking-[0.03em]"
+                      style={{ background: "#FFF3E6", color: "#8a5a12", borderColor: "#f0d9b6" }}>{unlinkedCount} without a field</button>
                   )}
                   <button type="button" onClick={() => toggleCol(st.id, all.length)} aria-expanded title={`Collapse ${st.title}`} className="flex h-[26px] w-[26px] flex-none items-center justify-center rounded-[7px]" style={{ color: "#7d8c84" }}>
                     <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M15 6l-6 6 6 6" /></svg>
@@ -658,14 +724,14 @@ export default function FieldPipelineBoard() {
                           </button>
                           {!shut && (
                             <div className="flex flex-col gap-[7px]">
-                              {list.map((c) => <Card key={c.id} card={c} inGroup owner={ownerInfo(c)} cityDisplay={cityLabel(cardCity(c))} open={openTodos(c)} done={doneTodos(c)} showTodos={showTodos} checklist={checklists[c.id] ?? []} assigneeFor={assigneeInfo} onDragStart={() => { draggingId.current = c.id; }} onClick={() => setModal({ mode: "edit", card: c })} launch={launchOf(c)} onBind={() => openBind(c)} />)}
+                              {list.map((c) => <Card key={c.id} card={c} inGroup owner={ownerInfo(c)} cityDisplay={cityLabel(cardCity(c))} open={openTodos(c)} done={doneTodos(c)} showTodos={showTodos} checklist={checklists[c.id] ?? []} assigneeFor={assigneeInfo} onDragStart={() => { draggingId.current = c.id; }} onClick={() => setModal({ mode: "edit", card: c })} launch={launchOf(c)} onBind={() => openBind(c)} chipKind={chipKindFor(c)} />)}
                             </div>
                           )}
                         </div>
                       );
                     })
                   ) : (
-                    show.map((c) => <Card key={c.id} card={c} inGroup={false} owner={ownerInfo(c)} cityDisplay={cityLabel(cardCity(c))} open={openTodos(c)} done={doneTodos(c)} showTodos={showTodos} checklist={checklists[c.id] ?? []} assigneeFor={assigneeInfo} onDragStart={() => { draggingId.current = c.id; }} onClick={() => setModal({ mode: "edit", card: c })} launch={launchOf(c)} onBind={() => openBind(c)} />)
+                    show.map((c) => <Card key={c.id} card={c} inGroup={false} owner={ownerInfo(c)} cityDisplay={cityLabel(cardCity(c))} open={openTodos(c)} done={doneTodos(c)} showTodos={showTodos} checklist={checklists[c.id] ?? []} assigneeFor={assigneeInfo} onDragStart={() => { draggingId.current = c.id; }} onClick={() => setModal({ mode: "edit", card: c })} launch={launchOf(c)} onBind={() => openBind(c)} chipKind={chipKindFor(c)} />)
                   )}
                 </div>
               </section>
@@ -684,7 +750,10 @@ export default function FieldPipelineBoard() {
           Opened by a drop on Confirmed and by the Create control on a card already sitting there —
           ONE dialog, not two. Cancel puts the card back; only Save moves it. */}
       {bind && (
-        <div className="fixed inset-0 z-[55] flex items-center justify-center p-3.5" style={{ background: "rgba(7,42,32,.34)" }}
+        /* ABOVE THE EDIT MODAL (z-50) AND ABOVE THE MATCH LIST (z-55), NOT INSTEAD OF THEM. The
+           modal holds unsaved title and to-do edits in local state; closing it to open this would
+           throw them away, so this stacks and Cancel returns to whatever opened it. */
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-3.5" style={{ background: "rgba(7,42,32,.34)" }}
           onClick={(e) => { if (e.target === e.currentTarget && !binding) setBind(null); }}>
           <div role="dialog" aria-modal="true" data-testid="bind-dialog"
             className="dlg flex w-full max-w-[460px] flex-col overflow-auto rounded-[14px] bg-white"
@@ -800,8 +869,25 @@ export default function FieldPipelineBoard() {
 
       <style>{FP_CSS}</style>
 
+      {matchOpen && (
+        <MatchFieldsDialog
+          cards={cards.filter((c) => c.stage === "confirmed" && c.venue_id == null)}
+          cityOf={cityOf}
+          resolveName={resolveName}
+          commitBind={commitBind}
+          onClose={() => setMatchOpen(false)}
+        />
+      )}
+
       {modal && (
-        <KanbanCardModal boardType="field_pipeline" state={modal} api={api} existingMarkets={existingMarkets} onClose={() => setModal(null)} />
+        <KanbanCardModal boardType="field_pipeline" state={modal} api={api} existingMarkets={existingMarkets}
+          onClose={() => setModal(null)}
+          /* ONLY ON A CONFIRMED CARD BEING EDITED. A new card has no field yet and no id to bind
+             one to, and a card in Negotiation is not there yet. */
+          fieldRow={modal.mode === "edit" && modal.card.stage === "confirmed"
+            ? <ModalFieldRow card={modal.card} venue={modal.card.venue_id != null ? venueById.get(modal.card.venue_id) ?? null : null}
+                match={chipKindFor(modal.card)} onBind={() => openBind(modal.card)} />
+            : undefined} />
       )}
 
       {toast && (
@@ -841,9 +927,205 @@ function ToggleBtn({ on, onClick, label }: { on: boolean; onClick: () => void; l
   );
 }
 
+/* ── MATCH FIELDS — THE WHOLE BACKFILL AS ONE LIST ────────────────────────────────────────────
+ * Ryan: "all these have fields so need an easy way to say that on them." Twenty-seven Confirmed
+ * cards have no field record; twelve are named exactly after a field that exists and fifteen are
+ * named differently from theirs ("Hat / The Hattrick" is really "Hattrick"). Opening twenty-seven
+ * modals to fix that is the reason nobody fixed it.
+ *
+ * EVERY ROW IS PREFILLED AND RE-RESOLVES AS YOU TYPE, so the fifteen are corrected in place.
+ *
+ * THERE IS NO LINK ALL, AND THERE MUST NOT BE. The matching is exact and the data is genuinely
+ * ambiguous — "The Hattrick" in Houston and "Hat / The Hattrick" in Austin are two different
+ * fields, and two "Lou Fusz" cards face an Indoor and an Outdoor record. A bulk button would bind
+ * one of each pair to the wrong venue and the partial unique index would make the mistake stick.
+ * A person confirms each row.
+ *
+ * IT SHARES THE DIALOG'S SAVE. commitBind is passed in — not reimplemented. */
+function MatchFieldsDialog({
+  cards,
+  cityOf,
+  resolveName,
+  commitBind,
+  onClose,
+}: {
+  cards: KanbanCard[];
+  cityOf: (c: KanbanCard) => string;
+  resolveName: (typed: string, cardId: string) => BindMatch;
+  commitBind: (input: { cardId: string; name: string; launch: string; match: BindMatch; city: string }) => Promise<void>;
+  onClose: () => void;
+}) {
+  type RowState = { name: string; launch: string; touched: boolean; busy: boolean; err: string | null };
+  const [rows, setRows] = useState<Record<string, RowState>>({});
+  const rowFor = (c: KanbanCard): RowState =>
+    rows[c.id] ?? { name: c.title, launch: "", touched: false, busy: false, err: null };
+  const setRow = (id: string, patch: Partial<RowState>) =>
+    setRows((p) => ({ ...p, [id]: { ...(p[id] ?? { name: "", launch: "", touched: false, busy: false, err: null }), ...patch } }));
+
+  const go = async (c: KanbanCard, st: RowState, m: BindMatch) => {
+    setRow(c.id, { busy: true, err: null });
+    try {
+      await commitBind({ cardId: c.id, name: st.name, launch: st.launch, match: m, city: cityOf(c) });
+      /* A ROW THAT SUCCEEDS LEAVES THE LIST on its own: the card gains a venue_id, so the board's
+       * filter drops it and the header count falls. Nothing here has to remove it. */
+    } catch (e) {
+      setRow(c.id, { busy: false, err: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[55] flex items-start justify-center overflow-y-auto p-3.5 py-8"
+      style={{ background: "rgba(7,42,32,.34)" }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div role="dialog" aria-modal="true" data-testid="match-dialog"
+        className="flex w-full max-w-[660px] flex-col rounded-[14px] bg-white"
+        style={{ boxShadow: "0 18px 48px rgba(7,42,32,.22)" }}>
+        <div className="px-4 pb-2.5 pt-3.5">
+          <b className="block text-[17px] font-extrabold tracking-[-0.02em]">Match fields</b>
+          <span className="mt-1 block text-[11.5px]" style={{ color: "#7C8F86" }}>
+            {cards.length} confirmed {cards.length === 1 ? "card has" : "cards have"} no field record. The name is
+            prefilled from the card — correct it where the card is named differently from its field.
+          </span>
+          <div className="mt-2.5 rounded-[10px] border px-[11px] py-2 text-[11.5px]"
+            style={{ borderColor: "#f0d9b6", background: "#FFF8EC", color: "#7A5200" }}>
+            Each card is confirmed on its own. Nothing is linked until you press Link on that row,
+            and nothing is sent to anybody.
+          </div>
+        </div>
+        <div className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto px-4 pb-3">
+          {cards.length === 0 && (
+            <p className="py-6 text-center text-[12.5px]" style={{ color: "#8b9a93" }}>
+              Every confirmed card has a field. Nothing to match.
+            </p>
+          )}
+          {cards.map((c) => {
+            const st = rowFor(c);
+            const m = resolveName(st.name, c.id);
+            /* THE MATCHED FIELD'S DATE IS BROUGHT IN until somebody types over it — the same rule
+             * the dialog uses, so a row and the dialog cannot disagree about the date. */
+            const launch = !st.touched && m.mode === "link" && m.venue.launch_date ? m.venue.launch_date : st.launch;
+            const canGo = !!st.name.trim() && !!launch && m.mode !== "taken" && !st.busy;
+            return (
+              <div key={c.id} data-testid="match-row" data-id={c.id}
+                className="rounded-[11px] border px-3 py-2.5" style={{ borderColor: "#e6ebe8" }}>
+                <div className="text-[12.5px] font-[750]">
+                  {c.title} <span className="font-medium" style={{ color: "#6d7b74" }}>· {cityOf(c)}</span>
+                </div>
+                <div className="mgrid mt-2 grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(min(170px,100%),1fr))" }}>
+                  <label className="grid gap-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: "#6d7b74" }}>
+                    Field name
+                    <input data-testid="mr-name" value={st.name}
+                      onChange={(e) => setRow(c.id, { name: e.target.value })}
+                      className="w-full rounded-[9px] border px-2.5 text-[13px] font-medium normal-case tracking-normal"
+                      style={{ minHeight: 44, borderColor: "#CFDBD4", color: "#12241d" }} />
+                  </label>
+                  <label className="grid gap-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: "#6d7b74" }}>
+                    Launch date
+                    <input data-testid="mr-date" type="date" value={launch}
+                      onChange={(e) => setRow(c.id, { launch: e.target.value, touched: true })}
+                      className="w-full rounded-[9px] border px-2.5 text-[13px] font-medium normal-case tracking-normal"
+                      style={{ minHeight: 44, borderColor: "#CFDBD4", color: "#12241d" }} />
+                  </label>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                  <div data-testid="mr-res" className="min-w-0 flex-1 basis-[200px] text-[11.5px] leading-[1.4]"
+                    style={{ color: m.mode === "taken" ? "#a32020" : "#4b5d54" }}>
+                    {m.mode === "link" ? (
+                      <>Links to <b className="font-[750]">{m.venue.venue_name}</b> · {m.venue.city ?? "—"}
+                        {m.venue.launch_date ? <> · already launches {fmtLaunch(m.venue.launch_date)}</> : <> · no launch date yet</>}.</>
+                    ) : m.mode === "taken" ? (
+                      <><b className="font-[750]">{m.venue.venue_name}</b> is already linked to “{m.holder.title}”. Unlink that card first, or change the name.</>
+                    ) : (
+                      /* A COST IS NULL, NEVER ZERO, WHEN IT IS NOT RECORDED (fieldEconomics.ts:19).
+                         "with no rate yet" is a work item; it must never read as free. */
+                      <>No field carries this name. <b className="font-[750]">Creates</b> one in {cityOf(c)}, billed per match, with no rate yet.</>
+                    )}
+                    {st.err && <span className="mt-1 block font-[650]" style={{ color: "#a32020" }}>{st.err}</span>}
+                  </div>
+                  <button type="button" data-testid="mr-go" data-mode={m.mode} disabled={!canGo}
+                    onClick={() => void go(c, { ...st, launch }, m)}
+                    className="flex-none rounded-[9px] border px-3 text-[12.5px] font-[750] disabled:opacity-40"
+                    style={canGo
+                      ? { minHeight: 36, background: "#0d3b2e", borderColor: "#0d3b2e", color: "#fff" }
+                      : { minHeight: 36, background: "#fff", borderColor: "#CFDBD4", color: "#0d3b2e" }}>
+                    {st.busy ? "Saving…" : m.mode === "link" ? "Link" : m.mode === "taken" ? "Link" : "Create"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="flex gap-2 border-t px-4 py-3" style={{ borderColor: "#EEF3F0" }}>
+          <button type="button" data-testid="match-close" onClick={onClose}
+            className="ml-auto rounded-[9px] border px-4 text-[13px] font-[750]"
+            style={{ minHeight: 44, borderColor: "#CFDBD4", background: "#fff", color: "#0d3b2e" }}>
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── THE FIELD ROW IN THE EDIT CARD MODAL ─────────────────────────────────────────────────────
+ * "just make it a little tiny button in here" — in here is this modal, and this is where the
+ * FULL-SIZE control now lives. The card carries a 24px chip because a card is a dense list item;
+ * there is room here, which is the whole point of moving it.
+ *
+ * IT IS RENDERED BY THE BOARD AND PASSED DOWN. KanbanCardModal is shared by three boards and
+ * knows nothing about fin_venues. */
+function ModalFieldRow({
+  card,
+  venue,
+  match,
+  onBind,
+}: {
+  card: KanbanCard;
+  venue: VenueRow | null;
+  match: BindMatch;
+  onBind: () => void;
+}) {
+  const bound = card.venue_id != null && venue != null;
+  const cd = bound && venue.launch_date ? launchCountdown(venue.launch_date) : null;
+  return (
+    <div className="grid gap-1.5 text-[11px] font-bold uppercase tracking-wide text-deep-green/60">
+      Field
+      <div data-testid="m-field" data-state={bound ? "bound" : "none"}
+        className="flex flex-wrap items-center gap-2.5 rounded-lg border px-3 py-2.5"
+        style={bound
+          ? { borderColor: "#dbe6e0", background: "#fff" }
+          : { borderColor: "#f0d9b6", background: "#FFFDF8" }}>
+        <div className="min-w-0 flex-1 normal-case tracking-normal">
+          <div data-testid="m-field-name" className="text-[13.5px] font-[750] text-deep-green">
+            {bound ? venue.venue_name : "No field record yet"}
+          </div>
+          <div data-testid="m-field-meta" className="mt-0.5 text-[11.5px] font-medium" style={{ color: "#6d7b74" }}>
+            {bound
+              ? [venue.city ?? "—", venue.launch_date ? `launches ${fmtLaunch(venue.launch_date)}` : null, cd?.text]
+                  .filter(Boolean).join(" · ")
+              /* WHAT LINKING WILL ACTUALLY DO, said before it is pressed — and never a claim that
+                 a field exists when none does. */
+              : match.mode === "link"
+                ? `A field named ${match.venue.venue_name} already exists in ${match.venue.city ?? "—"}. Linking uses that record.`
+                : match.mode === "taken"
+                  ? `${match.venue.venue_name} is already linked to the card “${match.holder.title}”. Unlink that card first, or use a different name.`
+                  : "Nothing in Finance carries this name. Linking will create the record."}
+          </div>
+        </div>
+        <button type="button" data-testid="m-field-btn" data-kind={bound ? "change" : "bind"} onClick={onBind}
+          className="flex-none rounded-[9px] border px-3 text-[12.5px] font-[750] normal-case tracking-normal"
+          style={{ minHeight: 34, borderColor: "#cfdad4", background: "#fff", color: "#0d3b2e" }}>
+          {bound ? "Change…" : match.mode === "link" ? "Link…" : "Create…"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Card({
   launch,
   onBind,
+  chipKind,
   card,
   inGroup,
   owner,
@@ -871,6 +1153,8 @@ function Card({
   /** The bound field's launch date, or null when the card has no field yet. */
   launch: string | null;
   onBind: () => void;
+  /** What this card's own title resolves to, so the chip can name the field it will link to. */
+  chipKind: BindMatch;
 }) {
   const showT = showTodos && open > 0;
   const showD = showTodos && open === 0 && done > 0;
@@ -910,6 +1194,10 @@ function Card({
          than by a class name — a 3px amber left edge against the 1px neutral one. It is the
          backfill made visible on the card as well as counted in the header. */
       data-bound={card.venue_id != null ? "1" : "0"}
+      /* NEEDS A FIELD IS NOT THE SAME AS HAS NO FIELD. A Negotiation card has no venue either and
+         must not be marked: it is not late, it is not there yet. The amber edge and the chip are
+         both scoped to this, never to data-bound. */
+      data-needs={needsField ? "1" : "0"}
       className="relative w-full cursor-grab overflow-hidden rounded-[10px] border px-2.5 py-[9px] pl-3 text-left transition hover:border-[#cfdad4] focus:outline-none focus-visible:border-[#35c77f] active:cursor-grabbing"
       style={needsField
         ? { background: "#FFFDF8", borderColor: "#e6ebe8", borderLeft: "3px solid #D9A441" }
@@ -967,16 +1255,39 @@ function Card({
           </span>
         </div>
       )}
+      {/* ── THE FIELD CONTROL IS A CHIP ──────────────────────────────────────────────────────
+          It was a full-width 34px bordered button under a separate "no field record yet" line —
+          on a card that is otherwise a title, a city pill and an owner, the loudest thing in the
+          column, twenty-seven times over. Ryan: "i dont like the craete the field big button.
+          just make it a little tiny button".
+
+          BOTH COLLAPSED INTO ONE. The status line is gone because the chip's own label IS the
+          status: a card whose title already names an unclaimed field reads "Link Westlake", and
+          one that matches nothing reads "New field…". The colour is on top of the label, never
+          instead of it.
+
+          24px IS UNDER 44, AND THAT IS SAFE HERE. The card itself is a much larger tap target
+          that opens the modal, and the modal carries the full-size control. The chip is the
+          shortcut, not the only way in. */}
       {needsField && (
         <div className="mt-1.5">
-          <span className="text-[11px] font-bold" style={{ color: "#8a5a12" }}>no field record yet</span>
-          {/* THE SAME DIALOG THE DROP OPENS. stopPropagation because the card itself opens the
-              editor — reaching for the field must not open a modal on top of it. */}
-          <button type="button" data-testid="card-link" data-id={card.id}
+          {/* stopPropagation because the card itself opens the editor — reaching for the field
+              must not open a modal on top of the dialog. */}
+          <button type="button" data-testid="card-link" data-id={card.id} data-kind={chipKind.mode === "link" ? "link" : "new"}
             onClick={(e) => { e.stopPropagation(); onBind(); }}
-            className="mt-[7px] block w-full rounded-[8px] border px-2.5 text-[11.5px] font-[750]"
-            style={{ minHeight: 34, borderColor: "#D9A441", background: "#fff", color: "#7A5200" }}>
-            Create the field…
+            title={chipKind.mode === "link" ? `Link to ${chipKind.venue.venue_name}` : "Create the field record"}
+            className="inline-flex max-w-full items-center gap-1 rounded-full border px-2 text-[10.5px] font-[750] leading-none"
+            style={chipKind.mode === "link"
+              ? { minHeight: 24, borderColor: "#bfe0cc", background: "#E6F4EB", color: "#14603f" }
+              : { minHeight: 24, borderColor: "#D9A441", background: "#fff", color: "#7A5200" }}>
+            {chipKind.mode === "link" ? (
+              <>
+                Link
+                <span className="overflow-hidden text-ellipsis whitespace-nowrap">{chipKind.venue.venue_name}</span>
+              </>
+            ) : (
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap">New field…</span>
+            )}
           </button>
         </div>
       )}

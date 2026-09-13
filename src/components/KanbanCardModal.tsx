@@ -65,12 +65,19 @@ export default function KanbanCardModal({
   api,
   existingMarkets,
   onClose,
+  fieldRow,
 }: {
   boardType: BoardType;
   state: ModalState;
   api: KanbanApi;
   existingMarkets: string[];
   onClose: () => void;
+  /* ── THE FIELD ROW, RENDERED BY THE BOARD THAT UNDERSTANDS IT ──────────────────────────────
+   * This modal is shared by three boards and knows nothing about fin_venues — teaching it would
+   * make Tech Roadmap and VC Outreach import a venue model they have no use for. Field Pipeline
+   * passes the finished row down; the other two pass nothing and render exactly what they
+   * rendered before, which is what keeps this change invisible to them. */
+  fieldRow?: React.ReactNode;
 }) {
   const config = BOARD_CONFIG[boardType];
   const editing = state.mode === "edit" ? state.card : null;
@@ -394,6 +401,9 @@ export default function KanbanCardModal({
               />
             </label>
           )}
+
+          {/* Between Title and City, and only when a board hands one over. */}
+          {fieldRow}
 
           {/* THE GENERIC BLOCKS, UNCHANGED AND NOW SKIPPED BY ONE BOARD. Field Pipeline and Tech
               Roadmap render exactly the fields they rendered before; VC lays out its own above and

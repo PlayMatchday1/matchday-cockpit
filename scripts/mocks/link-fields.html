@@ -1,0 +1,460 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Field Pipeline — linking a card to its field</title>
+<style>
+  :root{
+    --cream:#FBF9F4; --line:#e6ebe8; --deep:#0E2A22; --soft:#F3F0E8;
+    --amber:#D9A441; --amberInk:#7A5200; --amberBg:#FFF3E6;
+    --green:#14603f; --greenBg:#E6F4EB; --greenLine:#bfe0cc;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       background:var(--cream);color:var(--deep);-webkit-font-smoothing:antialiased}
+  .sw{display:flex;gap:6px;flex-wrap:wrap;padding:8px 10px;border-bottom:1px solid var(--line);background:#fff;position:sticky;top:0;z-index:90}
+  .sw button{font:700 11px/1 inherit;padding:7px 9px;border:1px solid var(--line);background:#fff;border-radius:7px;cursor:pointer;color:#46584f}
+  .sw button[aria-pressed="true"]{background:var(--deep);color:#fff;border-color:var(--deep)}
+  .wrap{padding:12px;max-width:1180px;margin:0 auto}
+
+  /* ── board ───────────────────────────────────────────────────────────── */
+  .cols{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr))}
+  .col{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px}
+  .colhd{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:9px}
+  .colttl{font:800 12.5px/1.2 inherit;letter-spacing:-.2px}
+  .cnt{font:800 10.5px/1 inherit;background:var(--soft);color:#54655c;border-radius:999px;padding:4px 7px}
+  .unl{font:800 10.5px/1 inherit;background:var(--amberBg);color:#8a5a12;border:1px solid #f0d9b6;
+       border-radius:999px;padding:0 9px;min-height:28px;display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+  .cards{display:grid;gap:8px}
+  .card{position:relative;background:#fff;border:1px solid var(--line);border-radius:10px;
+        padding:9px 10px 9px 12px;overflow:hidden;cursor:grab;text-align:left;width:100%}
+  .card[data-needs="1"]{background:#FFFDF8;border-left:3px solid var(--amber)}
+  .ct{font:650 13px/1.3 inherit;letter-spacing:-.15px;word-break:break-word}
+  .row{display:flex;align-items:flex-start;gap:8px}
+  .own{display:flex;align-items:center;gap:5px;flex:none;max-width:116px}
+  .av{width:20px;height:20px;border-radius:999px;background:#eef3f0;border:1px solid #e2eae5;color:#46584f;
+      font:700 9.5px/1 inherit;display:flex;align-items:center;justify-content:center;flex:none}
+  .onm{font-size:11px;color:#6d7b74;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cityp{display:inline-flex;align-items:center;gap:5px;background:#eef3f0;border:1px solid #e2eae5;color:#54655c;
+         border-radius:999px;padding:1px 8px 1px 6px;font-size:11px;margin-top:6px}
+  .cityp i{width:8px;height:8px;border-radius:999px;background:#7aa7c7;display:block}
+  .cd{display:inline-block;margin-top:6px;border-radius:999px;padding:2px 7px;font:800 9.5px/1.5 inherit;letter-spacing:.03em;
+      background:var(--greenBg);color:var(--green)}
+  .cd[data-soon="1"]{background:#FEF6E7;color:#8a5a12}
+
+  /* THE TINY CONTROL. Inline, auto-width, one line. It replaces a full-width 34px button
+     plus a separate "no field record yet" line: the chip's own label is the status. */
+  .fchip{display:inline-flex;align-items:center;gap:4px;margin-top:6px;border-radius:999px;
+         border:1px solid var(--amber);background:#fff;color:var(--amberInk);
+         font:750 10.5px/1 inherit;padding:0 8px;min-height:24px;max-width:100%;cursor:pointer}
+  .fchip[data-kind="link"]{border-color:var(--greenLine);color:var(--green);background:var(--greenBg)}
+  .fchip .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* ── dialogs ─────────────────────────────────────────────────────────── */
+  .scrim{position:fixed;inset:0;background:rgba(14,42,34,.4);display:flex;align-items:flex-start;
+         justify-content:center;padding:24px 14px;overflow-y:auto}
+  #modalScrim{z-index:50}
+  #bindScrim{z-index:60}
+  #matchScrim{z-index:55}
+  .dlg{width:100%;max-width:576px;background:var(--cream);border:1px solid var(--line);border-radius:16px;padding:18px}
+  .dh{font:800 19px/1.2 inherit;letter-spacing:-.3px}
+  .dsub{font-size:12px;color:rgba(14,42,34,.55);margin-top:2px}
+  .lbl{font:700 11px/1 inherit;text-transform:uppercase;letter-spacing:.04em;color:rgba(14,42,34,.6);
+       display:grid;gap:6px;margin-top:12px}
+  .fld input,.fld select,.lbl input,.lbl select{height:44px;width:100%;border:1px solid var(--line);border-radius:9px;
+       background:#fff;padding:0 11px;font:500 14px/1 inherit;color:var(--deep);text-transform:none;letter-spacing:normal}
+  .df{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:16px}
+  .df button{min-height:44px;padding:0 15px;border-radius:10px;border:1px solid var(--line);background:#fff;
+             font:750 13px/1 inherit;color:var(--deep);cursor:pointer}
+  .df button.pri{background:var(--deep);color:#fff;border-color:var(--deep)}
+  .df button:disabled{opacity:.45;cursor:not-allowed}
+  .note{border-radius:10px;padding:9px 11px;font-size:12px;line-height:1.45;margin-top:10px}
+  .note.ok{background:var(--greenBg);color:#124e35;border:1px solid var(--greenLine)}
+  .note.warn{background:#FEF6E7;color:#7a4f0d;border:1px solid #f0d9b6}
+  .note.bad{background:#fdeae4;color:#8d2f13;border:1px solid #f0bda9}
+
+  /* THE FIELD ROW INSIDE THE EDIT CARD MODAL. */
+  .frow{margin-top:12px}
+  .fbox{border:1px solid var(--line);background:#fff;border-radius:10px;padding:10px 11px;
+        display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .fbox[data-state="none"]{border-color:#f0d9b6;background:#FFFDF8}
+  .fmain{min-width:0;flex:1 1 190px}
+  .fname{font:700 13.5px/1.3 inherit}
+  .fmeta{font-size:11.5px;color:#6d7b74;margin-top:2px}
+  .fbtn{flex:none;min-height:34px;padding:0 11px;border-radius:9px;border:1px solid var(--line);
+        background:#fff;font:750 12px/1 inherit;color:var(--deep);cursor:pointer}
+  .fbtn[data-kind="bind"]{border-color:var(--amber);color:var(--amberInk)}
+
+  /* ── match list ──────────────────────────────────────────────────────── */
+  .mlist{display:grid;gap:8px;margin-top:12px;max-height:none}
+  .mrow{border:1px solid var(--line);background:#fff;border-radius:11px;padding:10px 11px;display:grid;gap:8px}
+  .mttl{font:700 13px/1.3 inherit}
+  .mgrid{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(min(170px,100%),1fr))}
+  .mfoot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:space-between}
+  .mres{font-size:11.5px;line-height:1.4;min-width:0;flex:1 1 200px}
+  .mres b{font-weight:750}
+  .mbtn{flex:none;min-height:36px;padding:0 12px;border-radius:9px;border:1px solid var(--deep);
+        background:var(--deep);color:#fff;font:750 12.5px/1 inherit;cursor:pointer}
+  .mbtn:disabled{opacity:.4;cursor:not-allowed;background:#fff;color:var(--deep);border-color:var(--line)}
+  .hid{display:none !important}
+</style></head>
+<body>
+<div class="sw">
+  <button data-s="board" aria-pressed="true">board</button>
+  <button data-s="modal-none">modal · no field</button>
+  <button data-s="modal-bound">modal · bound</button>
+  <button data-s="prefill">dialog · prefilled offer</button>
+  <button data-s="stacked">dialog over modal</button>
+  <button data-s="match">match fields</button>
+</div>
+
+<div class="wrap">
+  <div class="cols">
+    <div class="col" data-testid="col-confirmed">
+      <div class="colhd">
+        <span class="colttl">Confirmed Fields</span>
+        <span class="cnt">4</span>
+        <button type="button" class="unl" data-testid="col-unlinked">3 without a field</button>
+      </div>
+      <div class="cards" id="cards"></div>
+    </div>
+    <div class="col" data-testid="col-negotiation">
+      <div class="colhd"><span class="colttl">Negotiation</span><span class="cnt">1</span></div>
+      <div class="cards">
+        <div class="card" data-testid="card" data-id="n1" data-bound="0" data-needs="0">
+          <div class="row"><div class="ct" style="flex:1">Kiwanis Park</div></div>
+          <span class="cityp"><i></i>Austin</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- EDIT CARD MODAL -->
+<div class="scrim hid" id="modalScrim">
+  <div class="dlg" role="dialog" aria-modal="true" data-testid="card-modal">
+    <div class="dh">Edit card</div>
+    <div class="dsub">Field Pipeline</div>
+    <label class="lbl">Title<input value="PRUMC" data-testid="m-title"></label>
+
+    <!-- ── THE FIELD, IN THE MODAL ──────────────────────────────────────────
+         Ryan: "just make it a little tiny button in here". This is "in here":
+         the card carries a chip, the whole control lives on the edit screen. -->
+    <div class="frow">
+      <div class="lbl" style="margin-top:0">Field</div>
+      <div class="fbox" id="fbox" data-testid="m-field">
+        <div class="fmain">
+          <div class="fname" data-testid="m-field-name"></div>
+          <div class="fmeta" data-testid="m-field-meta"></div>
+        </div>
+        <button type="button" class="fbtn" id="fbtn" data-testid="m-field-btn"></button>
+      </div>
+    </div>
+
+    <label class="lbl">City<select><option>Atlanta</option></select></label>
+    <label class="lbl">Owner<select><option>Michael Hollman</option></select></label>
+    <label class="lbl">Stage<select><option>Confirmed Fields</option></select></label>
+    <div class="df">
+      <button type="button" style="margin-right:auto;border-color:#f0bda9;color:#8d2f13">Delete</button>
+      <button type="button">Cancel</button>
+      <button type="button" class="pri">Save changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- BIND DIALOG -->
+<div class="scrim hid" id="bindScrim">
+  <div class="dlg" role="dialog" aria-modal="true" data-testid="bind-dialog">
+    <div class="dh" data-testid="bind-head"></div>
+    <div class="dsub">Confirmed Fields · a field and a launch date, then the plan</div>
+
+    <label class="lbl fld">Field name
+      <input data-testid="bind-newname" autocomplete="off">
+    </label>
+    <div class="note ok hid" data-testid="bind-match"></div>
+    <div class="note bad hid" data-testid="bind-dupe"></div>
+    <div class="note warn hid" data-testid="bind-city"></div>
+
+    <label class="lbl fld">Launch date
+      <input type="date" data-testid="bind-launch">
+    </label>
+    <div style="font-size:11.5px;color:#6d7b74;margin-top:6px" data-testid="bind-cd"></div>
+
+    <div class="note ok hid" data-testid="bind-preview"></div>
+
+    <div class="df">
+      <button type="button" data-testid="bind-cancel">Cancel</button>
+      <button type="button" class="pri" data-testid="bind-save" data-mode="create" disabled>Create the field</button>
+    </div>
+  </div>
+</div>
+
+<!-- MATCH FIELDS -->
+<div class="scrim hid" id="matchScrim">
+  <div class="dlg" style="max-width:660px" role="dialog" aria-modal="true" data-testid="match-dialog">
+    <div class="dh">Match fields</div>
+    <div class="dsub" data-testid="match-sub"></div>
+    <div class="note warn">Each card is confirmed on its own. Nothing is linked until you press Link
+      on that row, and nothing is sent to anybody.</div>
+    <div class="mlist" id="mlist"></div>
+    <div class="df"><button type="button" data-testid="match-close">Done</button></div>
+  </div>
+</div>
+
+<script>
+const TODAY = new Date("2026-09-13T00:00:00Z");
+const d0 = s => new Date(s + "T00:00:00Z");
+const days = s => Math.round((d0(s) - TODAY) / 86400000);
+const cdText = s => { const n = days(s); return n > 0 ? n + " days to launch" : n === 0 ? "launches today" : (-n) + " days since launch"; };
+const fmt = s => d0(s).toLocaleDateString("en-US",{timeZone:"UTC",day:"numeric",month:"short",year:"numeric"});
+
+/* fin_venues, as the board loads it. Westlake and The Hattrick exist; Stony Point does not. */
+const VENUES = [
+  { id: 41, venue_name:"Westlake",     city:"Austin",  launch_date:"2026-07-01" },
+  { id: 52, venue_name:"The Hattrick", city:"Atlanta", launch_date:"2026-10-02" },
+  { id: 63, venue_name:"Crossbar Rowlett", city:"Dallas", launch_date:"2026-09-18" },
+];
+/* Cards in Confirmed. c2 is already bound; c1/c3/c4 are the backfill. */
+const CARDS = [
+  { id:"c2", title:"Crossbar Rowlett", city:"Dallas",  owner:"Michael Hollman", venue_id:63 },
+  { id:"c1", title:"Westlake",         city:"Austin",  owner:"Jaimee Rodriguez", venue_id:null },
+  { id:"c4", title:"Hat / The Hattrick", city:"Atlanta", owner:"Michael Hollman", venue_id:null },
+  { id:"c3", title:"Stony Point",      city:"Austin",  owner:"Michael Hollman", venue_id:null },
+];
+const HOLDER = { 63:"c2" };  // venue_id -> card holding it
+
+const ini = n => n.split(/\s+/).slice(0,2).map(w=>w[0]).join("").toUpperCase();
+const norm = s => String(s||"").trim().toLowerCase();
+
+/* EXACT, CASE-INSENSITIVE, TRIMMED, AND NOTHING CLEVERER — the board's own rule
+   (FieldPipelineBoard bindMatch). The only change here is WHERE the string comes
+   from: the card's own title is pre-typed, instead of being retyped by hand. */
+function resolve(name, selfCardId){
+  const t = norm(name);
+  if (!t) return { mode:"create", venue:null, holder:null };
+  const v = VENUES.find(x => norm(x.venue_name) === t);
+  if (!v) return { mode:"create", venue:null, holder:null };
+  const h = HOLDER[v.id];
+  if (h && h !== selfCardId) return { mode:"taken", venue:v, holder:h };
+  return { mode:"link", venue:v, holder:null };
+}
+const cardTitle = id => (CARDS.find(c=>c.id===id)||{}).title || "";
+
+/* ── the board ─────────────────────────────────────────────────────────── */
+function renderCards(){
+  const host = document.getElementById("cards");
+  host.innerHTML = "";
+  for (const c of CARDS){
+    const bound = c.venue_id != null;
+    const v = bound ? VENUES.find(x=>x.id===c.venue_id) : null;
+    const r = bound ? null : resolve(c.title, c.id);
+    const el = document.createElement("div");
+    el.className = "card";
+    el.setAttribute("data-testid","card");
+    el.dataset.id = c.id;
+    el.dataset.bound = bound ? "1" : "0";
+    /* NEEDS A FIELD only in Confirmed. A Negotiation card has no business carrying
+       the amber edge or the chip — it is not late, it is just not there yet. */
+    el.dataset.needs = bound ? "0" : "1";
+    let html = `<div class="row"><div class="ct" style="flex:1;min-width:0">${c.title}</div>
+      <span class="own"><span class="av">${ini(c.owner)}</span><span class="onm">${c.owner}</span></span></div>
+      <span class="cityp"><i></i>${c.city}</span>`;
+    if (bound && v.launch_date){
+      html += `<br><span class="cd" data-testid="card-countdown" data-soon="${days(v.launch_date)<=14?1:0}">${cdText(v.launch_date)}</span>`;
+    }
+    if (!bound){
+      /* THE CHIP NAMES THE FIELD IT WILL LINK TO when the card's own title already
+         matches one. That is Ryan's "easy way to say that on them": the answer is
+         on the card, not three clicks in. A card whose title matches nothing says
+         so in the same place, in the same shape. */
+      const kind = r.mode === "link" ? "link" : "new";
+      const label = r.mode === "link"
+        ? `Link <span class="nm">${r.venue.venue_name}</span>`
+        : `<span class="nm">New field…</span>`;
+      html += `<br><button type="button" class="fchip" data-testid="card-link" data-kind="${kind}" data-id="${c.id}">${label}</button>`;
+    }
+    el.innerHTML = html;
+    el.addEventListener("click", e => {
+      if (e.target.closest('[data-testid="card-link"]')){ e.stopPropagation(); openBind(c.id, c.title); return; }
+      openModal(c.id);
+    });
+    host.appendChild(el);
+  }
+}
+
+/* ── the edit card modal's Field row ───────────────────────────────────── */
+let modalCard = "c3";
+function openModal(id){
+  modalCard = id;
+  const c = CARDS.find(x=>x.id===id);
+  document.querySelector('[data-testid="m-title"]').value = c.title;
+  const bound = c.venue_id != null;
+  const v = bound ? VENUES.find(x=>x.id===c.venue_id) : null;
+  const box = document.getElementById("fbox");
+  box.dataset.state = bound ? "bound" : "none";
+  const nm = document.querySelector('[data-testid="m-field-name"]');
+  const mt = document.querySelector('[data-testid="m-field-meta"]');
+  const bt = document.getElementById("fbtn");
+  if (bound){
+    nm.textContent = v.venue_name;
+    mt.textContent = `${v.city} · launches ${fmt(v.launch_date)} · ${cdText(v.launch_date)}`;
+    bt.textContent = "Change…";
+    bt.dataset.kind = "change";
+  } else {
+    const r = resolve(c.title, c.id);
+    nm.textContent = "No field record yet";
+    mt.textContent = r.mode === "link"
+      ? `A field named ${r.venue.venue_name} already exists in ${r.venue.city}. Linking uses that record.`
+      : "Nothing in Finance carries this name. Linking will create the record.";
+    bt.textContent = r.mode === "link" ? "Link…" : "Create…";
+    bt.dataset.kind = "bind";
+  }
+  document.getElementById("modalScrim").classList.remove("hid");
+}
+document.getElementById("fbtn").addEventListener("click", () => {
+  /* THE MODAL STAYS MOUNTED. Its unsaved title and to-do edits are local state; closing
+     it to open the bind dialog would throw them away, so the dialog stacks above it. */
+  openBind(modalCard, cardTitle(modalCard));
+});
+
+/* ── the bind dialog ───────────────────────────────────────────────────── */
+let bindCard = null;
+function openBind(id, prefill){
+  bindCard = id;
+  document.querySelector('[data-testid="bind-head"]').textContent = cardTitle(id) || "New field";
+  /* PREFILLED WITH THE CARD'S OWN TITLE. Not a picker and not a suggestion list — the
+     string that is already on the card, put in the box so the offer can be read rather
+     than summoned by retyping it exactly. It is editable, which is how the 15 cards
+     whose title is not the field's name get fixed. */
+  const inp = document.querySelector('[data-testid="bind-newname"]');
+  inp.value = prefill || "";
+  document.querySelector('[data-testid="bind-launch"]').value = "";
+  touched = false;
+  document.getElementById("bindScrim").classList.remove("hid");
+  syncBind();
+}
+let touched = false;
+document.querySelector('[data-testid="bind-launch"]').addEventListener("input", ()=>{touched=true;syncBind();});
+document.querySelector('[data-testid="bind-launch"]').addEventListener("change", ()=>{touched=true;syncBind();});
+document.querySelector('[data-testid="bind-newname"]').addEventListener("input", ()=>syncBind());
+document.querySelector('[data-testid="bind-cancel"]').addEventListener("click", ()=>{
+  document.getElementById("bindScrim").classList.add("hid");
+});
+
+function syncBind(){
+  const name = document.querySelector('[data-testid="bind-newname"]').value;
+  const dt   = document.querySelector('[data-testid="bind-launch"]');
+  const r = resolve(name, bindCard);
+  const match = document.querySelector('[data-testid="bind-match"]');
+  const dupe  = document.querySelector('[data-testid="bind-dupe"]');
+  const city  = document.querySelector('[data-testid="bind-city"]');
+  const save  = document.querySelector('[data-testid="bind-save"]');
+  const prev  = document.querySelector('[data-testid="bind-preview"]');
+  const cd    = document.querySelector('[data-testid="bind-cd"]');
+
+  match.classList.add("hid"); dupe.classList.add("hid"); city.classList.add("hid");
+
+  if (r.mode === "link"){
+    match.classList.remove("hid");
+    match.innerHTML = `<b>${r.venue.venue_name}</b> · ${r.venue.city} · already launches ${fmt(r.venue.launch_date)}.
+      Linking uses that record. If this is a different field, change the name.`;
+    if (!touched && !dt.value) dt.value = r.venue.launch_date;
+    save.dataset.mode = "link"; save.textContent = "Link the field";
+  } else if (r.mode === "taken"){
+    dupe.classList.remove("hid");
+    dupe.innerHTML = `<b>${r.venue.venue_name}</b> is already linked to the card
+      "${cardTitle(r.holder)}". One field has one launch plan — unlink that card first,
+      or change the name if this is a different field.`;
+    save.dataset.mode = "taken"; save.textContent = "Create the field";
+  } else {
+    if (norm(name)){
+      city.classList.remove("hid");
+      const c = CARDS.find(x=>x.id===bindCard);
+      city.innerHTML = `A new record in <b>${c ? c.city : "—"}</b>, taken from the card, billed
+        <b>per match</b>. Until somebody enters a rate it reads in Finance as a field needing one,
+        not as a field that costs nothing.`;
+    }
+    save.dataset.mode = "create"; save.textContent = "Create the field";
+  }
+  cd.textContent = dt.value ? cdText(dt.value) : "";
+  const can = !!norm(name) && !!dt.value && r.mode !== "taken";
+  save.disabled = !can;
+  if (can){
+    prev.classList.remove("hid");
+    prev.innerHTML = r.mode === "link"
+      ? `Links this card to <b>${r.venue.venue_name}</b> and starts its launch plan: <b>24 tasks</b>
+         dated from ${fmt(dt.value)}. Nothing is sent to anybody.`
+      : `Creates <b>${name.trim()}</b> and starts its launch plan: <b>24 tasks</b> dated from
+         ${fmt(dt.value)}. Nothing is sent to anybody.`;
+  } else prev.classList.add("hid");
+}
+
+/* ── match fields ──────────────────────────────────────────────────────── */
+document.querySelector('[data-testid="col-unlinked"]').addEventListener("click", openMatch);
+document.querySelector('[data-testid="match-close"]').addEventListener("click", ()=>{
+  document.getElementById("matchScrim").classList.add("hid");
+});
+function openMatch(){
+  const un = CARDS.filter(c => c.venue_id == null);
+  document.querySelector('[data-testid="match-sub"]').textContent =
+    `${un.length} confirmed cards have no field record. Each row starts from the card's own name.`;
+  const host = document.getElementById("mlist");
+  host.innerHTML = "";
+  for (const c of un){
+    const row = document.createElement("div");
+    row.className = "mrow";
+    row.setAttribute("data-testid","match-row");
+    row.dataset.id = c.id;
+    row.innerHTML = `
+      <div class="mttl">${c.title} <span style="font-weight:500;color:#6d7b74">· ${c.city}</span></div>
+      <div class="mgrid">
+        <label class="lbl fld" style="margin-top:0">Field name<input data-testid="mr-name" value="${c.title}"></label>
+        <label class="lbl fld" style="margin-top:0">Launch date<input type="date" data-testid="mr-date"></label>
+      </div>
+      <div class="mfoot">
+        <div class="mres" data-testid="mr-res"></div>
+        <button type="button" class="mbtn" data-testid="mr-go" disabled>Link</button>
+      </div>`;
+    host.appendChild(row);
+    const nameI = row.querySelector('[data-testid="mr-name"]');
+    const dateI = row.querySelector('[data-testid="mr-date"]');
+    let rowTouched = false;
+    const sync = () => {
+      const r = resolve(nameI.value, c.id);
+      const res = row.querySelector('[data-testid="mr-res"]');
+      const go  = row.querySelector('[data-testid="mr-go"]');
+      if (r.mode === "link"){
+        if (!rowTouched && !dateI.value && r.venue.launch_date) dateI.value = r.venue.launch_date;
+        res.innerHTML = `Links to <b>${r.venue.venue_name}</b> · ${r.venue.city} · already launches ${fmt(r.venue.launch_date)}.`;
+        go.textContent = "Link"; go.dataset.mode = "link";
+      } else if (r.mode === "taken"){
+        res.innerHTML = `<b>${r.venue.venue_name}</b> is already linked to "${cardTitle(r.holder)}". Unlink that card first, or change the name.`;
+        go.textContent = "Link"; go.dataset.mode = "taken";
+      } else {
+        res.innerHTML = `No field carries this name. <b>Creates</b> one in ${c.city}, billed per match, with no rate yet.`;
+        go.textContent = "Create"; go.dataset.mode = "create";
+      }
+      go.disabled = !(norm(nameI.value) && dateI.value && r.mode !== "taken");
+    };
+    nameI.addEventListener("input", sync);
+    dateI.addEventListener("input", ()=>{rowTouched=true;sync();});
+    dateI.addEventListener("change", ()=>{rowTouched=true;sync();});
+    sync();
+  }
+  document.getElementById("matchScrim").classList.remove("hid");
+}
+
+/* ── switcher ──────────────────────────────────────────────────────────── */
+const hideAll = () => ["modalScrim","bindScrim","matchScrim"].forEach(i=>document.getElementById(i).classList.add("hid"));
+function show(s){
+  hideAll();
+  if (s === "modal-none")  openModal("c3");
+  if (s === "modal-bound") openModal("c2");
+  if (s === "prefill")     openBind("c1", "Westlake");
+  if (s === "stacked")   { openModal("c3"); openBind("c3", "Stony Point"); }
+  if (s === "match")       openMatch();
+  document.querySelectorAll(".sw button").forEach(b=>b.setAttribute("aria-pressed", String(b.dataset.s===s)));
+}
+document.querySelectorAll(".sw button").forEach(b=>b.addEventListener("click",()=>show(b.dataset.s)));
+renderCards();
+show("board");
+</script>
+</body></html>
