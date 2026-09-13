@@ -100,7 +100,8 @@ export type LaunchRow = {
 };
 
 type CardRow = { venue_id: number | null; owner_user_id: string | null };
-type VenueRow = { id: number; venue_name: string; city: string | null; launch_date: string | null };
+type VenueRow = { id: number; venue_name: string; city: string | null; launch_date: string | null;
+  launch_plan_disabled_at?: string | null };
 type UserRow = { id: string; full_name: string | null; email: string };
 
 /* ── DONE / TOTAL / OVERDUE, COUNTED EXACTLY AS THE PLAN PAGE COUNTS THEM ──────────────────────
@@ -143,7 +144,10 @@ export default function LaunchIndex() {
       }
 
       const [venuesRes, usersRes, taskRes] = await Promise.all([
-        supabase.from("fin_venues").select("id, venue_name, city, launch_date").in("id", venueIds),
+        /* select("*") SO A REMOVED PLAN CAN BE SPOTTED BEFORE 0174 IS APPLIED. Naming
+         * launch_plan_disabled_at would 42703 the whole query and take the page down until the
+         * migration runs; an absent column reads as undefined, which is "not removed". */
+        supabase.from("fin_venues").select("*").in("id", venueIds),
         supabase.from("app_users").select("id, full_name, email"),
         loadTasksForVenues(venueIds),
       ]);
@@ -169,6 +173,9 @@ export default function LaunchIndex() {
          * computed from it. Binding requires one, so this is unreachable through the UI — it is
          * here so a row edited in Finance drops out quietly rather than rendering NaN. */
         if (!v.launch_date) continue;
+        /* A PLAN SOMEBODY REMOVED IS NOT IN FLIGHT, and must not be counted as finished either —
+         * it never ran. It leaves the page entirely. */
+        if ((v as unknown as Record<string, unknown>).launch_plan_disabled_at) continue;
         const c = counterFor(v.launch_date, today);
         const d = daysToLaunch(v.launch_date, today);
         if (!c || d == null) continue;

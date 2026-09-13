@@ -1,0 +1,361 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Finding the right field, and removing a plan that should not exist</title>
+<style>
+  :root{
+    --cream:#FBF9F4; --line:#e6ebe8; --deep:#0E2A22; --soft:#F3F0E8;
+    --amber:#D9A441; --amberInk:#7A5200; --amberBg:#FFF3E6;
+    --green:#14603f; --greenBg:#E6F4EB; --greenLine:#bfe0cc;
+    --red:#a8391a; --redBg:#fdeae4; --redLine:#f0bda9;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       background:var(--cream);color:var(--deep);-webkit-font-smoothing:antialiased}
+  .sw{display:flex;gap:6px;flex-wrap:wrap;padding:8px 10px;border-bottom:1px solid var(--line);background:#fff;position:sticky;top:0;z-index:90}
+  .sw button{font:700 11px/1 inherit;padding:7px 9px;border:1px solid var(--line);background:#fff;border-radius:7px;cursor:pointer;color:#46584f}
+  .sw button[aria-pressed="true"]{background:var(--deep);color:#fff;border-color:var(--deep)}
+  .wrap{padding:14px;max-width:820px;margin:0 auto}
+  .hid{display:none !important}
+
+  .dlg{width:100%;max-width:576px;background:var(--cream);border:1px solid var(--line);border-radius:16px;padding:18px;margin:0 auto}
+  .dh{font:800 19px/1.2 inherit;letter-spacing:-.3px}
+  .dsub{font-size:12px;color:rgba(14,42,34,.55);margin-top:2px}
+  .lbl{font:700 11px/1 inherit;text-transform:uppercase;letter-spacing:.04em;color:rgba(14,42,34,.6);
+       display:grid;gap:6px;margin-top:12px}
+  .fld input{height:44px;width:100%;border:1px solid var(--line);border-radius:9px;background:#fff;
+       padding:0 11px;font:500 14px/1 inherit;color:var(--deep);text-transform:none;letter-spacing:normal}
+  .df{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:16px}
+  .df button{min-height:44px;padding:0 15px;border-radius:10px;border:1px solid var(--line);background:#fff;
+             font:750 13px/1 inherit;color:var(--deep);cursor:pointer}
+  .df button.pri{background:var(--deep);color:#fff;border-color:var(--deep)}
+  .df button.dan{border-color:var(--redLine);background:#fff;color:#8d2f13}
+  .df button.danp{border-color:#8d2f13;background:#8d2f13;color:#fff}
+  .df button:disabled{opacity:.45;cursor:not-allowed}
+  .note{border-radius:10px;padding:9px 11px;font-size:12px;line-height:1.45;margin-top:10px}
+  .note.ok{background:var(--greenBg);color:#124e35;border:1px solid var(--greenLine)}
+  .note.warn{background:#FEF6E7;color:#7a4f0d;border:1px solid #f0d9b6}
+  .note.bad{background:var(--redBg);color:#8d2f13;border:1px solid var(--redLine)}
+
+  /* ── THE CANDIDATE LIST ───────────────────────────────────────────────────
+     Not a picker of all 61 fields. What you typed, narrowed, so a name you
+     cannot guess is findable. Nothing is selected for you. */
+  .cands{border:1px solid var(--line);border-radius:10px;background:#fff;margin-top:8px;overflow:hidden}
+  .candhd{font:700 10px/1 inherit;text-transform:uppercase;letter-spacing:.09em;color:#7C8F86;
+          padding:9px 11px 7px;background:#FAFCFB}
+  .cand{display:flex;align-items:center;gap:9px;width:100%;text-align:left;border:0;border-top:1px solid #F1F5F3;
+        background:#fff;padding:0 11px;min-height:44px;font:inherit;cursor:pointer;color:var(--deep)}
+  .cand:hover:not(:disabled){background:#F4FAF6}
+  .cand:disabled{cursor:not-allowed;background:#FAFAF8;color:#8a9992}
+  .cand .cn{font:700 13px/1.3 inherit;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cand .cm{font-size:11px;color:#6d7b74;margin-left:auto;flex:none;text-align:right;padding:6px 0}
+
+  /* ── THE PLAN PAGE ────────────────────────────────────────────────────────── */
+  .page{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px}
+  .phd{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}
+  .pttl{font:800 21px/1.2 inherit;letter-spacing:-.4px}
+  .pmeta{font-size:12px;color:#6d7b74;margin-top:3px}
+  .pcount{margin-left:auto;text-align:right;flex:none}
+  .pnum{font:800 30px/1 inherit;letter-spacing:-1px}
+  .plab{font:800 9.5px/1 inherit;letter-spacing:.09em;color:#7C8F86;margin-top:4px}
+  .bar{height:7px;border-radius:999px;background:#EEF3F0;margin-top:12px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--red)}
+  .prow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:9px;font-size:12px;color:#54655c}
+  .pill{border-radius:999px;padding:3px 9px;font:800 10.5px/1.4 inherit}
+  .pill.bad{background:var(--redBg);color:#8d2f13}
+  .pill.ok{background:var(--greenBg);color:var(--green)}
+  .ptool{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+  .tiny{min-height:32px;padding:0 11px;border-radius:9px;border:1px solid var(--line);background:#fff;
+        font:750 11.5px/1 inherit;color:#54655c;cursor:pointer}
+  .tiny.dan{border-color:var(--redLine);color:#8d2f13}
+  .tasks{margin-top:14px;display:grid;gap:6px}
+  .task{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:12.5px}
+  .task i{width:14px;height:14px;border:1.5px solid #b9c6bf;border-radius:4px;flex:none;display:block}
+  .task[data-done="1"] i{background:var(--green);border-color:var(--green)}
+  .task .tw{margin-left:auto;flex:none;font:800 10px/1 inherit;color:#7C8F86;letter-spacing:.05em}
+  .empty{border:1px dashed #CFDBD4;border-radius:12px;padding:20px 16px;text-align:center;margin-top:14px}
+  .empty b{display:block;font-size:15px;margin-bottom:5px}
+  .empty p{margin:0 auto;max-width:380px;font-size:12.5px;color:#6d7b74;line-height:1.5}
+</style></head>
+<body>
+<div class="sw">
+  <button data-s="find" aria-pressed="true">dialog · find the field</button>
+  <button data-s="claimed">dialog · already claimed</button>
+  <button data-s="plan">plan · with a plan</button>
+  <button data-s="worked">plan · work already done</button>
+  <button data-s="confirm">plan · confirm remove</button>
+  <button data-s="gone">plan · removed</button>
+</div>
+
+<div class="wrap">
+
+<!-- ── THE BIND DIALOG ─────────────────────────────────────────────────────── -->
+<div id="bindPane">
+  <div class="dlg" data-testid="bind-dialog">
+    <div class="dh" data-testid="bind-head">Hat / The Hattrick</div>
+    <div class="dsub">Confirmed Fields · a field and a launch date, then the plan</div>
+
+    <label class="lbl fld">Field name
+      <input data-testid="bind-newname" autocomplete="off" placeholder="Type a few letters of the field's name">
+    </label>
+
+    <!-- WHAT YOU TYPED, NARROWED. Never the whole table, never pre-selected. -->
+    <div class="cands hid" data-testid="bind-cands">
+      <div class="candhd" data-testid="bind-cands-hd"></div>
+      <div id="candList"></div>
+    </div>
+
+    <div class="note ok hid" data-testid="bind-match"></div>
+    <div class="note bad hid" data-testid="bind-dupe"></div>
+
+    <label class="lbl fld">Launch date
+      <input type="date" data-testid="bind-launch">
+    </label>
+
+    <div class="df">
+      <button type="button" data-testid="bind-cancel">Cancel</button>
+      <button type="button" class="pri" data-testid="bind-save" data-mode="create" disabled>Create the field</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── THE PLAN PAGE ───────────────────────────────────────────────────────── -->
+<div id="planPane" class="hid">
+  <div class="page" data-testid="plan-page">
+    <div class="phd">
+      <div style="min-width:0">
+        <div class="pttl" data-testid="plan-name">Keswick ATL Field 2</div>
+        <div class="pmeta" data-testid="plan-meta">Atlanta · Nick Zelfine · launched Sep 2, 2026</div>
+      </div>
+      <div class="pcount" data-testid="plan-counter">
+        <div class="pnum" data-testid="plan-num">2</div>
+        <div class="plab">LAUNCH WEEK OF 4</div>
+      </div>
+    </div>
+
+    <div id="planBody">
+      <div class="bar"><i data-testid="plan-bar" style="width:0%"></i></div>
+      <div class="prow">
+        <span data-testid="plan-done">0 of 24 done</span>
+        <span class="pill bad" data-testid="plan-overdue">10 overdue</span>
+        <span class="ptool">
+          <button type="button" class="tiny">Add a task</button>
+          <!-- THE CONTROL RYAN HAS NO WAY TO REACH TODAY. -->
+          <button type="button" class="tiny dan" data-testid="plan-remove">Remove this plan…</button>
+        </span>
+      </div>
+      <div class="tasks" id="taskList"></div>
+    </div>
+
+    <!-- AFTER REMOVAL -->
+    <div class="empty hid" data-testid="plan-gone">
+      <b>No launch plan for this field.</b>
+      <p data-testid="plan-gone-why"></p>
+      <div class="df" style="justify-content:center">
+        <button type="button" class="pri" data-testid="plan-restart">Start a plan</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONFIRM -->
+  <div class="dlg hid" data-testid="rm-dialog" style="margin-top:14px;border-color:var(--redLine)">
+    <div class="dh">Remove this plan?</div>
+    <div class="dsub" data-testid="rm-sub"></div>
+    <div class="note bad" data-testid="rm-loss"></div>
+    <div class="note warn" data-testid="rm-sticky">The field, its launch date and this card all stay exactly as they
+      are. Only the plan goes. It will not come back on its own the next time somebody opens this page, and you can
+      start a new one from here whenever you want.</div>
+    <div class="df">
+      <button type="button" data-testid="rm-cancel">Cancel</button>
+      <button type="button" class="danp" data-testid="rm-yes">Remove the plan</button>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<script>
+const TODAY = new Date("2026-09-13T00:00:00Z");
+const d0 = s => new Date(s + "T00:00:00Z");
+const fmt = s => d0(s).toLocaleDateString("en-US",{timeZone:"UTC",day:"numeric",month:"short",year:"numeric"});
+const norm = s => String(s||"").trim().toLowerCase();
+
+/* fin_venues. Two fields whose names both contain "hattrick" — which is the whole
+   point: "Hat / The Hattrick" is the CARD's name, and neither venue is spelled that
+   way, so no amount of exact typing from the card gets you there. */
+const VENUES = [
+  { id: 52, venue_name:"The Hattrick",     city:"Atlanta", launch_date:"2026-10-02" },
+  { id: 57, venue_name:"Hattrick Leander", city:"Austin",  launch_date:"2026-11-14" },
+  { id: 41, venue_name:"Westlake",         city:"Austin",  launch_date:"2026-07-01" },
+  { id: 63, venue_name:"Crossbar Rowlett", city:"Dallas",  launch_date:"2026-09-18" },
+];
+/* venue_id -> the card already holding it */
+const HOLDER = { 52:"Hattrick ATL (old card)" };
+const SELF = "c4";
+
+function resolve(name){
+  const t = norm(name);
+  if (!t) return { mode:"create", venue:null, holder:null };
+  const v = VENUES.find(x => norm(x.venue_name) === t);
+  if (!v) return { mode:"create", venue:null, holder:null };
+  const h = HOLDER[v.id];
+  if (h) return { mode:"taken", venue:v, holder:h };
+  return { mode:"link", venue:v, holder:null };
+}
+
+/* ── CANDIDATES ─────────────────────────────────────────────────────────────
+ * I ruled this out and I was wrong. The rule was "no picker, because a person
+ * typed the name" — which was aimed at AUTO-matching, where the machine decides
+ * that Soccer Central A is Soccer Central. Showing a person the fields whose
+ * names contain what they typed, and making them click one, is not that: the
+ * machine decides nothing, and it is the only way to reach a name you cannot
+ * guess. "Hat / The Hattrick" never becomes "Hattrick Leander" by typing harder.
+ *
+ * SUBSTRING, CASE-INSENSITIVE, AT LEAST TWO CHARACTERS, CAPPED AT SIX. Not fuzzy,
+ * not ranked, not scored — a filter, so what it shows is always explainable. */
+function candidates(typed){
+  const t = norm(typed);
+  if (t.length < 2) return [];
+  return VENUES.filter(v => norm(v.venue_name).includes(t))
+               .filter(v => norm(v.venue_name) !== t)   // the exact one is already an offer
+               .slice(0, 6);
+}
+
+const inp   = document.querySelector('[data-testid="bind-newname"]');
+const dt    = document.querySelector('[data-testid="bind-launch"]');
+const box   = document.querySelector('[data-testid="bind-cands"]');
+const hd    = document.querySelector('[data-testid="bind-cands-hd"]');
+const list  = document.getElementById("candList");
+const match = document.querySelector('[data-testid="bind-match"]');
+const dupe  = document.querySelector('[data-testid="bind-dupe"]');
+const save  = document.querySelector('[data-testid="bind-save"]');
+
+function syncBind(){
+  const name = inp.value;
+  const r = resolve(name);
+  const cs = candidates(name);
+
+  list.innerHTML = "";
+  if (cs.length){
+    box.classList.remove("hid");
+    hd.textContent = `${cs.length} field${cs.length>1?"s":""} in Finance match "${name.trim()}"`;
+    for (const v of cs){
+      const held = HOLDER[v.id];
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "cand";
+      b.setAttribute("data-testid","cand"); b.dataset.id = v.id;
+      b.dataset.held = held ? "1" : "0";
+      b.disabled = !!held;
+      /* A FIELD ANOTHER CARD HOLDS IS SHOWN, NOT HIDDEN. Hiding it makes the name look
+         like it does not exist, and the person types it again. It is listed, greyed,
+         and it says who has it. */
+      b.innerHTML = `<span class="cn">${v.venue_name}</span>
+        <span class="cm">${held ? "already linked to " + held : v.city + " · launches " + fmt(v.launch_date)}</span>`;
+      b.addEventListener("click", () => { inp.value = v.venue_name; syncBind(); });
+      list.appendChild(b);
+    }
+  } else box.classList.add("hid");
+
+  match.classList.add("hid"); dupe.classList.add("hid");
+  if (r.mode === "link"){
+    match.classList.remove("hid");
+    match.innerHTML = `<b>${r.venue.venue_name}</b> · ${r.venue.city} · already launches ${fmt(r.venue.launch_date)}.
+      Linking uses that record. If this is a different field, change the name.`;
+    if (!dt.value) dt.value = r.venue.launch_date;
+    save.dataset.mode = "link"; save.textContent = "Link and create the plan";
+  } else if (r.mode === "taken"){
+    dupe.classList.remove("hid");
+    dupe.innerHTML = `<b>${r.venue.venue_name}</b> is already linked to the card "${r.holder}".
+      One field has one launch plan. Unlink that card first, or change the name if this is a different field.`;
+    save.dataset.mode = "taken"; save.textContent = "Create the field";
+  } else {
+    save.dataset.mode = "create"; save.textContent = "Create the field";
+  }
+  save.disabled = !(norm(name) && dt.value && r.mode !== "taken");
+}
+inp.addEventListener("input", syncBind);
+dt.addEventListener("input", syncBind);
+dt.addEventListener("change", syncBind);
+
+/* ── THE PLAN PAGE ───────────────────────────────────────────────────────── */
+const TASKS = [
+  ["Create the field partner in the app","Ops",1],["Confirm the slate with the partner","Ops",1],
+  ["Photo and video shoot at the field","Content",2],["Geo-targeted paid launch","Paid",2],
+  ["Local club outreach","Community",3],["Founding-member offer live","Lifecycle",3],
+  ["Opening-week staffing plan","Ops",5],["First match day walkthrough","Ops",5],
+  ["Week-one player survey","Lifecycle",6],["Retarget no-shows","Paid",9],
+];
+let planState = { done: 0, na: 0, total: 24, overdue: 10, removed: false };
+
+function renderPlan(){
+  const tl = document.getElementById("taskList");
+  tl.innerHTML = "";
+  TASKS.forEach((t, i) => {
+    const done = i < planState.done;
+    const el = document.createElement("div");
+    el.className = "task"; el.dataset.done = done ? "1" : "0";
+    el.setAttribute("data-testid","task");
+    el.innerHTML = `<i></i><span>${t[0]}</span><span class="tw">WEEK ${t[2]}</span>`;
+    tl.appendChild(el);
+  });
+  document.querySelector('[data-testid="plan-done"]').textContent =
+    `${planState.done} of ${planState.total} done${planState.na ? `, ${planState.na} n/a` : ""}`;
+  document.querySelector('[data-testid="plan-bar"]').style.width =
+    Math.round(planState.done / planState.total * 100) + "%";
+  const ov = document.querySelector('[data-testid="plan-overdue"]');
+  ov.textContent = `${planState.overdue} overdue`;
+  ov.className = planState.overdue ? "pill bad" : "pill ok";
+
+  document.getElementById("planBody").classList.toggle("hid", planState.removed);
+  document.querySelector('[data-testid="plan-gone"]').classList.toggle("hid", !planState.removed);
+  document.querySelector('[data-testid="plan-counter"]').classList.toggle("hid", planState.removed);
+  document.querySelector('[data-testid="plan-gone-why"]').textContent =
+    "Somebody removed it on Sep 13, 2026. Keswick ATL Field 2 is still a field with a launch date of Sep 2, 2026, and its card is untouched. Starting a plan here creates the 24 tasks again, dated from that same launch date.";
+}
+
+document.querySelector('[data-testid="plan-remove"]').addEventListener("click", () => {
+  const worked = planState.done + planState.na;
+  document.querySelector('[data-testid="rm-sub"]').textContent =
+    `Keswick ATL Field 2 · Atlanta · launched Sep 2, 2026`;
+  /* WHAT IS ACTUALLY BEING THROWN AWAY, counted. 24 untouched rows and a plan somebody
+     has worked through for three weeks are not the same decision, and the confirm must
+     not use the same sentence for both. */
+  document.querySelector('[data-testid="rm-loss"]').innerHTML = worked === 0
+    ? `Deletes all <b>${planState.total} tasks</b>. None of them has been ticked or marked n/a, so nothing anybody did is lost.`
+    : `Deletes all <b>${planState.total} tasks</b>, including <b>${worked}</b> somebody has already ticked or marked n/a. That work is not recoverable.`;
+  document.querySelector('[data-testid="rm-dialog"]').classList.remove("hid");
+});
+document.querySelector('[data-testid="rm-cancel"]').addEventListener("click", () => {
+  document.querySelector('[data-testid="rm-dialog"]').classList.add("hid");
+});
+document.querySelector('[data-testid="rm-yes"]').addEventListener("click", () => {
+  planState.removed = true;
+  document.querySelector('[data-testid="rm-dialog"]').classList.add("hid");
+  renderPlan();
+});
+document.querySelector('[data-testid="plan-restart"]').addEventListener("click", () => {
+  planState.removed = false; renderPlan();
+});
+
+/* ── switcher ────────────────────────────────────────────────────────────── */
+function show(s){
+  const bindS = s === "find" || s === "claimed";
+  document.getElementById("bindPane").classList.toggle("hid", !bindS);
+  document.getElementById("planPane").classList.toggle("hid", bindS);
+  document.querySelector('[data-testid="rm-dialog"]').classList.add("hid");
+  if (bindS){
+    dt.value = ""; inp.value = s === "claimed" ? "The Hattrick" : "hattrick";
+    syncBind();
+  } else {
+    planState = s === "worked"
+      ? { done: 9, na: 3, total: 24, overdue: 4, removed: false }
+      : { done: 0, na: 0, total: 24, overdue: 10, removed: false };
+    renderPlan();
+    if (s === "confirm") document.querySelector('[data-testid="plan-remove"]').click();
+    if (s === "gone"){ planState.removed = true; renderPlan(); }
+  }
+  document.querySelectorAll(".sw button").forEach(b=>b.setAttribute("aria-pressed", String(b.dataset.s===s)));
+}
+document.querySelectorAll(".sw button").forEach(b=>b.addEventListener("click",()=>show(b.dataset.s)));
+show("find");
+</script>
+</body></html>

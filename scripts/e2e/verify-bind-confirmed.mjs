@@ -77,6 +77,7 @@ async function boot(browser, storageState, width, opts = {}) {
   const ctx = await browser.newContext({ storageState, viewport: { width, height: opts.height ?? 1100 },
     ...(width < 640 ? { isMobile: true, hasTouch: true } : {}) });
   const writes = [];
+  const injected = { id: null };
   /* NO WRITE REACHES THE DATABASE. Reads fall through; anything that changes a row is recorded and
    * answered. A suite about a control that creates records must not create any. */
   await ctx.route("**/rest/v1/fin_venues*", async (route) => {
@@ -111,7 +112,10 @@ async function boot(browser, storageState, width, opts = {}) {
     const j = await res.json().catch(() => null);
     if (!Array.isArray(j)) return route.fulfill({ response: res });
     const target = j.find((c) => c.stage === "confirmed" && c.venue_id == null);
-    if (target) target.venue_id = opts.bindCard;
+    /* WHICH CARD IT LANDED ON, recorded. Production now has real bound cards of its own, so
+     * "the first bound card on the board" is no longer this suite's card — and asserting a
+     * countdown against somebody else's past-window field is how this went red. */
+    if (target) { target.venue_id = opts.bindCard; injected.id = target.id; }
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(j) });
   });
   const p = await ctx.newPage();
@@ -120,7 +124,7 @@ async function boot(browser, storageState, width, opts = {}) {
   await p.goto(PAGE, { waitUntil: "domcontentloaded" });
   await p.waitForSelector('[data-testid="card"]', { timeout: 180000 });
   await p.waitForTimeout(1200);
-  return { ctx, p, writes, errs };
+  return { ctx, p, writes, errs, injected };
 }
 
 /** HTML5 drag, dispatched. The board keys off a ref set in onDragStart, so the events are enough. */
@@ -349,10 +353,12 @@ async function main() {
 
   // ══ 9 / 10 / 11 / 13: THE BOARD ═════════════════════════════════════════════════════════════
   {
-    const { ctx, p } = await boot(browser, storageState, 1200, { bindCard: linkVenue.id });
+    const { ctx, p, injected } = await boot(browser, storageState, 1200, { bindCard: linkVenue.id });
     console.log("\n-- the board --");
     const d = await p.evaluate(READ);
-    const bound = d.cards.filter((c) => c.bound === "1");
+    /* THIS SUITE'S OWN CARD, not whatever the board happens to have bound today. */
+    const mine = d.cards.find((c) => c.id === injected.id);
+    const bound = mine ? [mine] : [];
     const unbound = nonEmpty(d.cards.filter((c) => c.bound === "0"), "unbound cards");
     yes(`  the Confirmed column says how many have no field ("${d.unlinked}")`, d.unlinked != null);
     yes("  ...with a count", /\d+ without a field/.test(d.unlinked ?? ""));

@@ -417,6 +417,38 @@ export default function FieldPipelineBoard() {
     [bind?.newName, bind?.cardId, resolveName],
   );
 
+  /* ── FINDING A FIELD YOU CANNOT SPELL ─────────────────────────────────────────────────────
+   * Ryan: "the hattrick and some fields no way to says its hattrick leander."
+   *
+   * THE "NO PICKER" RULE WAS WRONG, AND THIS IS THE CORRECTION. That rule was argued from Soccer
+   * Central's three near-identical names, and the argument was sound — about AUTO-MATCHING. It was
+   * then applied to DISCOVERY, which is a different problem. The card says "Hat / The Hattrick";
+   * no amount of typing it exactly reaches a field filed under another name, the prefill actively
+   * makes it worse by filling the box with a string that resolves to nothing, and the chip then
+   * offers to create a SECOND record for a field that already exists. The rule was costing the
+   * exact thing it was meant to protect.
+   *
+   * SUBSTRING, CASE-INSENSITIVE, AT LEAST TWO CHARACTERS, CAPPED AT SIX. Not fuzzy, not ranked,
+   * not scored — a filter, so what it shows is always explainable. The exact match is left out
+   * because it is already the offer above. NOTHING IS SELECTED: the box is untouched and the
+   * action stays "create" until a person clicks a row. That is the whole difference from
+   * auto-matching, and bindMatch never learns this list exists. */
+  const candidatesFor = useCallback(
+    (typed: string) => {
+      const t = typed.trim().toLowerCase();
+      if (t.length < 2) return [];
+      return venues
+        .filter((v) => String(v.venue_name).trim().toLowerCase().includes(t))
+        .filter((v) => String(v.venue_name).trim().toLowerCase() !== t)
+        .slice(0, 6);
+    },
+    [venues],
+  );
+  const bindCandidates = useMemo(
+    () => candidatesFor(bind?.newName ?? ""),
+    [bind?.newName, candidatesFor],
+  );
+
   /* THE MATCHED FIELD'S DATE IS BROUGHT IN, NOT RETYPED — 9 of the 12 cards that name an existing
    * field already have one. It stops the moment somebody edits the box, so bringing it in is a
    * starting point rather than an override. */
@@ -851,6 +883,12 @@ export default function FieldPipelineBoard() {
                     Creates the record. It needs a city and a billing type as well as the name; both are set from here. Costs are filled in from Finance afterwards.
                   </p>
                 )}
+                <CandidateList
+                  candidates={bindCandidates}
+                  typed={bind.newName}
+                  cardByVenue={cardByVenue}
+                  onPick={(v) => setBind((b) => (b ? { ...b, newName: v.venue_name } : b))}
+                />
               </div>
 
               {/* fin_venues NEEDS venue_name, city AND billing_type — all NOT NULL, no defaults,
@@ -972,6 +1010,8 @@ export default function FieldPipelineBoard() {
           cards={cards.filter((c) => c.stage === "confirmed" && c.venue_id == null)}
           cityOf={cityOf}
           resolveName={resolveName}
+          candidatesFor={candidatesFor}
+          cardByVenue={cardByVenue}
           commitBind={commitBind}
           onClose={() => setMatchOpen(false)}
         />
@@ -1040,6 +1080,52 @@ function ToggleBtn({ on, onClick, label }: { on: boolean; onClick: () => void; l
  * A person confirms each row.
  *
  * IT SHARES THE DIALOG'S SAVE. commitBind is passed in — not reimplemented. */
+/* ── THE CANDIDATE LIST ───────────────────────────────────────────────────────────────────────
+ * A FIELD ANOTHER CARD HOLDS IS SHOWN, NOT HIDDEN. Hiding it makes the name look like it does not
+ * exist, so the person types it again and eventually creates a duplicate. It is listed, greyed,
+ * and it says who has it; clicking it does nothing. */
+function CandidateList({
+  candidates,
+  typed,
+  cardByVenue,
+  onPick,
+}: {
+  candidates: VenueRow[];
+  typed: string;
+  cardByVenue: Map<number, KanbanCard>;
+  onPick: (v: VenueRow) => void;
+}) {
+  if (candidates.length === 0) return null;
+  return (
+    <div className="mt-[7px] overflow-hidden rounded-[9px] border" data-testid="bind-cands"
+      style={{ borderColor: "#E3EAE6" }}>
+      <div className="px-[11px] py-[6px] text-[10.5px] font-[750]" data-testid="bind-cands-hd"
+        style={{ background: "#F7FAF8", color: "#6d7b74" }}>
+        {candidates.length} field{candidates.length > 1 ? "s" : ""} in Finance match &ldquo;{typed.trim()}&rdquo;
+      </div>
+      {candidates.map((v) => {
+        const held = cardByVenue.get(v.id) ?? null;
+        return (
+          <button key={v.id} type="button" data-testid="cand" data-id={v.id} data-held={held ? "1" : "0"}
+            disabled={!!held} onClick={() => onPick(v)}
+            className="flex w-full items-center gap-[9px] border-t px-[11px] text-left disabled:cursor-not-allowed"
+            style={{ minHeight: 44, borderColor: "#F1F5F3", background: held ? "#FAFAF8" : "#fff",
+              color: held ? "#8a9992" : "#12241d" }}>
+            <span className="cn min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[13px] font-[700]">
+              {v.venue_name}
+            </span>
+            <span className="cm ml-auto flex-none py-[6px] text-right text-[11px]" style={{ color: "#6d7b74" }}>
+              {held
+                ? `already linked to ${held.title}`
+                : `${v.city ?? "city unknown"}${v.launch_date ? ` · launches ${fmtLaunch(v.launch_date)}` : " · no launch date"}`}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /* THE SAME RULE AS THE DIALOG, IN THE SAME SENTENCE, ON THE ROW WHERE THE DECISION IS BEING TAKEN
  * rather than in a toast afterwards. */
 function planTail(launch: string) {
@@ -1052,13 +1138,19 @@ function MatchFieldsDialog({
   cards,
   cityOf,
   resolveName,
+  candidatesFor,
+  cardByVenue,
   commitBind,
   onClose,
 }: {
   cards: KanbanCard[];
   cityOf: (c: KanbanCard) => string;
   resolveName: (typed: string, cardId: string) => BindMatch;
-  commitBind: (input: { cardId: string; name: string; launch: string; match: BindMatch; city: string }) => Promise<void>;
+  /* THE SAME LIST AS THE DIALOG. This screen exists to work through the backfill, and it has the
+   * same problem on the same cards: "Hat / The Hattrick" never becomes the real field by typing. */
+  candidatesFor: (typed: string) => VenueRow[];
+  cardByVenue: Map<number, KanbanCard>;
+  commitBind: (input: { cardId: string; name: string; launch: string; match: BindMatch; city: string; force?: boolean }) => Promise<void>;
   onClose: () => void;
 }) {
   type RowState = { name: string; launch: string; touched: boolean; busy: boolean; err: string | null };
@@ -1124,6 +1216,12 @@ function MatchFieldsDialog({
                       onChange={(e) => setRow(c.id, { name: e.target.value })}
                       className="w-full rounded-[9px] border px-2.5 text-[13px] font-medium normal-case tracking-normal"
                       style={{ minHeight: 44, borderColor: "#CFDBD4", color: "#12241d" }} />
+                    <CandidateList
+                      candidates={candidatesFor(st.name)}
+                      typed={st.name}
+                      cardByVenue={cardByVenue}
+                      onPick={(v) => setRow(c.id, { name: v.venue_name, touched: false, launch: "" })}
+                    />
                   </label>
                   <label className="grid gap-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: "#6d7b74" }}>
                     Launch date

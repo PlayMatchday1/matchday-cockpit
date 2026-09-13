@@ -74,9 +74,25 @@ export type SeedResult = {
   inserted: number;
   missingTable: boolean;
   error: string | null;
-  /** Set when the plan was deliberately not made. NOT an error, and never fails a bind. */
-  skipped: "past-window" | null;
+  /* Set when the plan was deliberately not made. NEITHER IS AN ERROR, and neither can fail a bind.
+   *   past-window : the field opened too long ago for a plan to mean anything (0173, isLive).
+   *   opted-out   : somebody removed this field's plan on purpose (0174, launch_plan_disabled_at).
+   * They are different facts. A field can be inside its window and still have no plan because a
+   * person decided so, which is the whole point of the second one. */
+  skipped: "past-window" | "opted-out" | null;
 };
+
+/* ── HAS SOMEBODY TURNED THIS FIELD'S PLAN OFF ────────────────────────────────────────────────
+ * READ WITH select("*") DELIBERATELY. Code deploys before 0174 is applied by hand, and naming a
+ * column that does not exist yet makes PostgREST fail the whole query with 42703 — which would
+ * take seeding, and therefore binding, down with it. An absent column reads as undefined, which is
+ * exactly what "no, nobody has" means. */
+export async function planDisabledAt(venueId: number): Promise<string | null> {
+  const { data, error } = await supabase.from("fin_venues").select("*").eq("id", venueId).maybeSingle();
+  if (error || !data) return null;
+  const v = (data as Record<string, unknown>).launch_plan_disabled_at;
+  return typeof v === "string" ? v : null;
+}
 
 /* ── A FIELD THAT HAS BEEN RUNNING FOR MONTHS DOES NOT GET A PLAN ──────────────────────────────
  * Ryan, with the dialog open on PRUMC: "its saying link and create the plan but we dont need a
@@ -106,6 +122,13 @@ export async function seedLaunchPlan(
 ): Promise<SeedResult> {
   if (launchIso && !isLive(launchIso) && !opts.force) {
     return { inserted: 0, missingTable: false, error: null, skipped: "past-window" };
+  }
+  /* ── THE SECOND REFUSAL, AND IT IS READ HERE RATHER THAN PASSED IN ────────────────────────
+   * Both callers would otherwise have to remember to look the flag up and hand it over, and the
+   * repair pass is exactly the caller that would forget — it is the one that runs on a page load
+   * nobody thought about. The function already does its own SELECT, so it does this one too. */
+  if (!opts.force && (await planDisabledAt(venueId))) {
+    return { inserted: 0, missingTable: false, error: null, skipped: "opted-out" };
   }
   const existing = await supabase
     .from("field_launch_tasks")
@@ -144,4 +167,53 @@ export async function seedLaunchPlan(
     return { inserted: 0, missingTable: false, error: ins.error.message, skipped: null };
   }
   return { inserted: rows.length, missingTable: false, error: null, skipped: null };
+}
+
+/* ── REMOVING A PLAN ───────────────────────────────────────────────────────────────────────────
+ * Ryan: "some fields we might not want to have a launch plan for and should be able to remove it."
+ *
+ * THE ORDER IS THE WHOLE FUNCTION. The tombstone is written FIRST and the rows deleted second:
+ *
+ *   flag then delete — if the delete fails, the field has a plan that will not re-seed and still
+ *                      has its rows. Visibly wrong, and pressing Remove again fixes it.
+ *   delete then flag — if the flag fails, the rows are gone and the repair pass on the next page
+ *                      load writes them straight back. SILENTLY undone, and nobody finds out.
+ *
+ * Only one of those failure modes is recoverable by a person who can see what happened.
+ *
+ * IT TOUCHES NOTHING ELSE. The venue, its launch date and the card that points at it are all left
+ * exactly as they are; only the 24 rows go. */
+export async function removeLaunchPlan(venueId: number): Promise<{ error: string | null }> {
+  const flag = await supabase
+    .from("fin_venues")
+    .update({ launch_plan_disabled_at: new Date().toISOString() })
+    .eq("id", venueId);
+  if (flag.error) {
+    /* 42703 IS THE MIGRATION NOT BEING APPLIED YET, and it must not read as a mystery. Deleting
+     * the rows without the tombstone would be undone on the next page load. */
+    if (flag.error.code === "42703" || /launch_plan_disabled_at/.test(flag.error.message ?? "")) {
+      return { error: "Removing a plan needs migration 0174. Until it is applied the plan would come back on the next page load, so nothing was deleted." };
+    }
+    return { error: flag.error.message };
+  }
+  const del = await supabase.from("field_launch_tasks").delete().eq("venue_id", venueId);
+  if (del.error && !isMissingTable(del.error)) return { error: del.error.message };
+  return { error: null };
+}
+
+/* ── STARTING ONE AGAIN ────────────────────────────────────────────────────────────────────────
+ * The one place a removed plan comes back, and it is a person pressing a button. Clearing the flag
+ * first means the seed that follows is an ordinary seed — still idempotent, still guarded by
+ * isLive, and the partial unique index still has the last word if two tabs do it at once. */
+export async function restartLaunchPlan(
+  venueId: number,
+  coordinatorUserId: string | null,
+  launchIso: string | null,
+): Promise<SeedResult> {
+  const clear = await supabase
+    .from("fin_venues")
+    .update({ launch_plan_disabled_at: null })
+    .eq("id", venueId);
+  if (clear.error) return { inserted: 0, missingTable: false, error: clear.error.message, skipped: null };
+  return seedLaunchPlan(venueId, coordinatorUserId, launchIso);
 }

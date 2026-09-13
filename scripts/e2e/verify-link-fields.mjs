@@ -136,15 +136,17 @@ async function boot(browser, storageState, width, opts = {}) {
   await ctx.route("**/rest/v1/fin_venues*", async (route) => {
     const m = route.request().method();
     if (m === "GET" || m === "HEAD") {
-      if (!opts.shiftVenue) return route.fallback();
+      if (!opts.shiftVenue && !opts.shiftVenues) return route.fallback();
       /* ONE VENUE'S launch_date MOVED ON THE WAY PAST. A read-side fixture, never a write: the
        * present tense ("already launches") cannot otherwise be reached, because no venue in
        * production has a launch date in the future. */
       const res = await route.fetch();
       const j = await res.json().catch(() => null);
       if (!Array.isArray(j)) return route.fulfill({ response: res });
-      const t = j.find((v) => v.id === opts.shiftVenue.id);
-      if (t) t.launch_date = opts.shiftVenue.iso;
+      for (const sh of opts.shiftVenues ?? (opts.shiftVenue ? [opts.shiftVenue] : [])) {
+        const t = j.find((v) => v.id === sh.id);
+        if (t) t.launch_date = sh.iso;
+      }
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(j) });
     }
     writes.push({ table: "fin_venues", method: m, body: route.request().postData() });
@@ -235,34 +237,48 @@ async function main() {
     matching.filter((c) => isLiveIso(dated(c))),
     "confirmed cards matching a field still INSIDE the plan window",
   );
-  const pastMatches = nonEmpty(
-    matching.filter((c) => !isLiveIso(dated(c))),
-    "confirmed cards matching a field PAST the plan window",
-  );
-  if (pastMatches.length < 2) throw new Error(`need two past-window matching cards, found ${pastMatches.length}`);
   /* linkCard drives every "the plan is still promised" assertion, so it has to be a LIVE one. */
   const linkCard = liveMatches[0];
   const linkVenue = byName.get(norm(linkCard.title));
+
+  /* ── THE PAST-WINDOW SUBJECTS ARE MANUFACTURED, NOT FOUND ──────────────────────────────────
+   * They used to be picked off production, and production ran out of them: every card matching an
+   * old field has since been bound, so there is no unbound past-window card left to point at. A
+   * suite that depends on a backlog existing dies the day the backlog is cleared.
+   *
+   * So the dates are SHIFTED ON THE READ instead. A card matching a venue with no launch date at
+   * all becomes a past-window subject by giving that venue an old date on the way past. It is a
+   * read-side fixture, never a write, and it holds whatever the board looks like. */
+  const undatedMatches = nonEmpty(
+    confirmedUnbound.filter((c) => byName.has(norm(c.title)) && !dated(c) && c.id !== linkCard.id),
+    "confirmed cards matching a field that has NO launch date",
+  );
+  if (undatedMatches.length < 2) throw new Error(`need two undated matching cards, found ${undatedMatches.length}`);
+  const OLD_ISO = isoOffsetDays(-260);
   /* pastCard drives the new no-plan state. */
-  const pastCard = pastMatches[0];
-  const pastVenue = byName.get(norm(pastCard.title));
-  /* The injected pair. boundCard takes its own (past) venue; boundLiveCard takes a LIVE venue that
-   * no card is named after, so injecting it disturbs no name resolution anywhere else. */
-  const boundCard = pastMatches[1];
-  const boundVenue = byName.get(norm(boundCard.title));
+  const pastCard = undatedMatches[0];
+  const pastVenue = { ...byName.get(norm(pastCard.title)), launch_date: OLD_ISO };
+  /* The injected pair. boundCard takes its own (shifted, past) venue; boundLiveCard takes a LIVE
+   * venue that no card is named after, so injecting it disturbs no name resolution anywhere. */
+  const boundCard = undatedMatches[1];
+  const boundVenue = { ...byName.get(norm(boundCard.title)), launch_date: OLD_ISO };
   const liveVenueFree = nonEmpty(
     (venues ?? []).filter((v) => v.launch_date && isLiveIso(v.launch_date)
       && !matching.some((c) => norm(c.title) === norm(v.venue_name)) && v.id !== linkVenue.id),
     "live venues that no confirmed card is named after",
   )[0];
-  const boundLiveCard = nonEmpty(
-    confirmedUnbound.filter((c) => ![linkCard.id, pastCard.id, boundCard.id].includes(c.id) && !dated(c)),
-    "spare confirmed cards to inject a live venue onto",
-  )[0];
-  const newCard = nonEmpty(
-    confirmedUnbound.filter((c) => !byName.has(norm(c.title))),
+  /* ── THE TWO CARDS THAT MATCH NOTHING, TAKEN FROM ONE LIST SO THEY CANNOT BE THE SAME CARD ──
+   * newCard has to stay UNBOUND (it is the "New field…" chip subject) and boundLiveCard gets a
+   * venue injected onto it. Picking both with [0] of the same filter made them the same card, and
+   * the chip assertions then read against a bound card that carries no chip. */
+  const nonMatching = nonEmpty(
+    confirmedUnbound.filter((c) => ![linkCard.id, pastCard.id, boundCard.id].includes(c.id)
+      && !byName.has(norm(c.title))),
     "confirmed cards whose title matches no field",
-  )[0];
+  );
+  if (nonMatching.length < 2) throw new Error(`need two non-matching cards, found ${nonMatching.length}`);
+  const newCard = nonMatching[0];
+  const boundLiveCard = nonMatching[1];
   /* PREFER A LIVE STAGE OVER archived — a collapsed Archived column renders no cards, and the
    * "not marked outside Confirmed" control would then be asserting against nothing. */
   const outsideAll = nonEmpty(
@@ -278,10 +294,16 @@ async function main() {
   console.log(`outside      : "${outside.title}" in ${outside.stage}`);
   console.log(`unbound confirmed: ${confirmedUnbound.length}`);
 
-  const bindOpts = { inject: [
-    { cardId: boundCard.id, venueId: boundVenue.id },
-    { cardId: boundLiveCard.id, venueId: liveVenueFree.id },
-  ] };
+  const bindOpts = {
+    inject: [
+      { cardId: boundCard.id, venueId: boundVenue.id },
+      { cardId: boundLiveCard.id, venueId: liveVenueFree.id },
+    ],
+    shiftVenues: [
+      { id: pastVenue.id, iso: OLD_ISO },
+      { id: boundVenue.id, iso: OLD_ISO },
+    ],
+  };
 
   // ══ 1-5. THE CHIP ═════════════════════════════════════════════════════════════════════════
   {
@@ -523,7 +545,7 @@ async function main() {
   {
     const ahead = isoOffsetDays(30);
     const { ctx, p, errs } = await boot(browser, storageState, 1200,
-      { ...bindOpts, shiftVenue: { id: linkVenue.id, iso: ahead } });
+      { ...bindOpts, shiftVenues: [...bindOpts.shiftVenues, { id: linkVenue.id, iso: ahead }] });
     console.log("\n-- a launch still ahead --");
     await p.click(`[data-testid="card"][data-id="${linkCard.id}"] [data-testid="card-link"]`);
     await p.waitForSelector('[data-testid="bind-dialog"]', { timeout: 15000 });

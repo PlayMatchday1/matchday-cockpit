@@ -46,6 +46,9 @@ import {
   PLAN_TASK_COLUMNS,
   loadTasksForVenues,
   seedLaunchPlan,
+  removeLaunchPlan,
+  restartLaunchPlan,
+  planDisabledAt,
   isMissingTable,
   type PlanTask,
 } from "@/lib/launchTasks";
@@ -210,6 +213,26 @@ const LP_CSS = `
 .lp-err{font-size:11.5px;color:#a32020;font-weight:650}
 .lp-empty{background:var(--card);border:1px dashed var(--line);border-radius:15px;padding:22px 16px;
   text-align:center;font-size:12.5px;color:var(--ink-3)}
+
+/* A QUIET CONTROL, NOT A RED SLAB. Removing a plan is a normal decision somebody is allowed to
+   make, and a hazard-coloured button invites the double-take that makes people stop reading. */
+.lp-tiny{min-height:32px;padding:0 11px;border:1px solid var(--line);border-radius:8px;background:#fff;
+  font-family:inherit;font-size:11.5px;font-weight:700;color:var(--ink-2);cursor:pointer}
+.lp-tiny:hover{border-color:#E4C3BC;color:#a32020}
+.lp-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}
+.lp-rmdlg{background:#fff;border-radius:14px;width:100%;max-width:470px;max-height:90vh;overflow:auto}
+.lp-note{border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.45}
+.lp-note.bad{background:#FDF3F2;border:1px solid #F0CFC9;color:#8d2b2b}
+.lp-note.warn{background:#FFF8EC;border:1px solid #f0d9b6;color:#7A5200}
+/* THE CONFIRM'S BUTTONS WRAP RATHER THAN OVERLAP AT 390. */
+.lp-df{flex-wrap:wrap}
+.lp-gonebox{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px 16px;
+  text-align:center}
+.lp-gonebox b{display:block;font-size:15px;font-weight:800;color:var(--ink);margin-bottom:6px}
+.lp-gonebox p{margin:0 auto;max-width:520px;font-size:12.5px;line-height:1.5;color:var(--ink-2)}
+.lp-restart{margin-top:14px;min-height:44px;padding:0 18px;border-radius:10px;border:1px solid var(--deep);
+  background:var(--deep);color:#fff;font-family:inherit;font-size:13px;font-weight:750;cursor:pointer}
+.lp-restart:disabled{opacity:.5;cursor:default}
 `;
 
 type VenueRow = { id: number; venue_name: string; city: string | null; launch_date: string | null };
@@ -236,6 +259,10 @@ export default function LaunchPlanView({ venueId }: { venueId: number }) {
   const [needsMigration, setNeedsMigration] = useState(false);
   /** Set when this field is past the plan window, so the page says so instead of drawing an empty plan. */
   const [skippedPastWindow, setSkippedPastWindow] = useState(false);
+  /** When somebody removed this field's plan on purpose. The timestamp, so the page can say when. */
+  const [removedAt, setRemovedAt] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   /* ── WHICH PHASES ARE OPEN IS STATE, NOT A DERIVATION ──────────────────────────────────────
    * It was recomputed from the current week on every render, so every tick, every N/A and every
@@ -321,6 +348,9 @@ export default function LaunchPlanView({ venueId }: { venueId: number }) {
         if (seeded.error) throw new Error(seeded.error);
         setSkippedPastWindow(seeded.skipped === "past-window");
       }
+      /* READ EVERY TIME, not only when seeding ran. The second load of the page has seedingRef set
+       * and would otherwise forget that the plan was removed and draw an empty one. */
+      setRemovedAt(await planDisabledAt(venueId));
       const tRes = await loadTasksForVenues([venueId]);
       if (tRes.missingTable) {
         setNeedsMigration(true);
@@ -400,6 +430,34 @@ export default function LaunchPlanView({ venueId }: { venueId: number }) {
     [load],
   );
 
+  /* THE FLAG FIRST, THEN THE ROWS — see removeLaunchPlan for why that order is the whole point.
+   * The page moves to the removed state only once the write came back clean. */
+  const doRemove = useCallback(async () => {
+    setRemoving(true);
+    setErr(null);
+    const r = await removeLaunchPlan(venueId);
+    setRemoving(false);
+    if (r.error) { setErr(r.error); return; }
+    setConfirmRemove(false);
+    setTasks([]);
+    setRemovedAt(new Date().toISOString());
+  }, [venueId]);
+
+  /* THE ONE PLACE A REMOVED PLAN COMES BACK, and it is a person pressing a button. */
+  const doRestart = useCallback(async () => {
+    setRemoving(true);
+    setErr(null);
+    const r = await restartLaunchPlan(venueId, coordinator, venue?.launch_date ?? null);
+    setRemoving(false);
+    if (r.error) { setErr(r.error); return; }
+    if (r.missingTable) { setNeedsMigration(true); return; }
+    setRemovedAt(null);
+    /* RE-READ RATHER THAN ASSUME. seedLaunchPlan is idempotent and may have inserted nothing (the
+     * other tab won), so the rows on screen have to come from the table, not from a count. */
+    const tRes = await loadTasksForVenues([venueId]);
+    if (!tRes.error) setTasks(tRes.tasks);
+  }, [venueId, coordinator, venue?.launch_date]);
+
   const saveAdd = useCallback(async () => {
     if (!adding) return;
     const w1 = Number(adding.w1);
@@ -478,6 +536,37 @@ export default function LaunchPlanView({ venueId }: { venueId: number }) {
    * three empty phases and a timeline of nothing, which reads as a broken page rather than as the
    * deliberate answer it is. A field that HAS rows (seeded before this rule, or forced as a
    * relaunch) still renders its plan normally. */
+  /* ── A PLAN SOMEBODY REMOVED ON PURPOSE ──────────────────────────────────────────────────────
+   * No tasks, and NO LAUNCH-WEEK COUNTER, because there is nothing left to count. The page says
+   * what happened, when, that the field itself is unharmed, and offers the one way back. */
+  if (removedAt && tasks.length === 0) {
+    return (
+      <div className="lp" data-testid="lp-page">
+        <style>{LP_CSS}</style>
+        <div className="lp-wrap">
+          <div className="lp-navrow">
+            <Link className="lp-back" href="/growth/launch" data-testid="lp-back">
+              <span aria-hidden>←</span> All launches
+            </Link>
+          </div>
+          <div className="lp-gonebox" data-testid="plan-gone">
+            <b>{venue.venue_name} has no launch plan.</b>
+            <p data-testid="plan-gone-why">
+              Somebody removed it on {fmtLaunchDate(removedAt.slice(0, 10))}. {venue.venue_name} is
+              still a field with a launch date of {fmtLaunchDate(launch)}, and its card is untouched.
+              Starting a plan here creates the 24 tasks again, dated from that same launch date.
+            </p>
+            <button type="button" className="lp-restart" data-testid="plan-restart" disabled={removing}
+              onClick={() => void doRestart()}>
+              {removing ? "Starting…" : "Start a plan"}
+            </button>
+            {err && <p className="lp-err" style={{ marginTop: 10 }}>{err}</p>}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (skippedPastWindow && tasks.length === 0) {
     return (
       <div className="lp" data-testid="lp-page">
@@ -767,6 +856,29 @@ export default function LaunchPlanView({ venueId }: { venueId: number }) {
           );
         })}
 
+        {/* ── REMOVING THE WHOLE PLAN ───────────────────────────────────────────────────────
+            Next to the per-phase Add a task, not above the fold and not in red. It opens a confirm
+            and deletes nothing by itself. */}
+        <div className="lp-toolbar">
+          <button type="button" className="lp-tiny" data-testid="plan-remove" onClick={() => setConfirmRemove(true)}>
+            Remove this plan…
+          </button>
+        </div>
+
+        {confirmRemove && (
+          <RemoveDialog
+            fieldName={venue.venue_name}
+            city={venue.city}
+            launch={launch}
+            total={tasks.length}
+            worked={tasks.filter((t) => t.done || t.na).length}
+            busy={removing}
+            error={err}
+            onCancel={() => setConfirmRemove(false)}
+            onConfirm={() => void doRemove()}
+          />
+        )}
+
         {adding && (
           <AddDialog
             state={adding}
@@ -885,6 +997,63 @@ function AddDialog({
           <button type="button" data-testid="lp-add-cancel" onClick={onCancel}>Cancel</button>
           <button type="button" className="save" data-testid="lp-add-save" disabled={!canSave} onClick={onSave}>
             Add to this plan
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── THE CONFIRM ──────────────────────────────────────────────────────────────────────────────
+ * IT COUNTS WHAT IS ACTUALLY BEING THROWN AWAY, and it does not use one sentence for two different
+ * decisions. Twenty-four untouched rows and a plan somebody has worked through for three weeks are
+ * not the same choice, and a confirm that says the same thing about both teaches people to stop
+ * reading confirms. */
+function RemoveDialog({
+  fieldName, city, launch, total, worked, busy, error, onCancel, onConfirm,
+}: {
+  fieldName: string;
+  city: string | null;
+  launch: string;
+  total: number;
+  worked: number;
+  busy: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="lp-scrim">
+      <div className="lp-rmdlg" role="dialog" aria-modal="true" data-testid="rm-dialog">
+        <div className="lp-dh">
+          <b>Remove this launch plan?</b>
+          <span data-testid="rm-sub">
+            {fieldName}{city ? ` · ${city}` : ""} · launched {fmtLaunchDate(launch)}
+          </span>
+        </div>
+        <div className="lp-db">
+          <div className="lp-note bad" data-testid="rm-loss">
+            {worked === 0 ? (
+              <>Deletes all <b>{total} tasks</b>. None of them has been ticked or marked n/a, so
+                nothing anybody did is lost.</>
+            ) : (
+              <>Deletes all <b>{total} tasks</b>, including <b>{worked}</b> somebody has already
+                ticked or marked n/a. That work is not recoverable.</>
+            )}
+          </div>
+          {/* WHAT SURVIVES IT, including the thing nobody would guess: that it stays removed. */}
+          <div className="lp-note warn" data-testid="rm-sticky">
+            The field, its launch date and this card all stay exactly as they are. Only the plan
+            goes. It will not come back on its own the next time somebody opens this page, and you
+            can start a new one from here whenever you want.
+          </div>
+          {error && <p className="lp-err">{error}</p>}
+        </div>
+        <div className="lp-df">
+          <button type="button" data-testid="rm-cancel" disabled={busy} onClick={onCancel}>Keep it</button>
+          <button type="button" className="save" data-testid="rm-yes" disabled={busy} onClick={onConfirm}
+            style={{ background: "#a32020", borderColor: "#a32020" }}>
+            {busy ? "Removing…" : "Remove the plan"}
           </button>
         </div>
       </div>
