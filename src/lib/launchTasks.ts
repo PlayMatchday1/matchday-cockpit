@@ -7,7 +7,7 @@
 // server route to keep in step.
 
 import { supabase } from "@/lib/supabase";
-import { TEMPLATE, type ScopeKey } from "@/lib/launchPlan";
+import { TEMPLATE, isLive, type ScopeKey } from "@/lib/launchPlan";
 
 export type PlanTask = {
   id: number;
@@ -70,18 +70,51 @@ export async function loadTasksForVenues(
  * not people, so the 16 tasks it marks Launch Coordinator go to the pipeline card's owner and
  * everything else starts visibly unassigned. Inventing a default for the rest would make a guess
  * look like a decision. */
+export type SeedResult = {
+  inserted: number;
+  missingTable: boolean;
+  error: string | null;
+  /** Set when the plan was deliberately not made. NOT an error, and never fails a bind. */
+  skipped: "past-window" | null;
+};
+
+/* ── A FIELD THAT HAS BEEN RUNNING FOR MONTHS DOES NOT GET A PLAN ──────────────────────────────
+ * Ryan, with the dialog open on PRUMC: "its saying link and create the plan but we dont need a
+ * plan for ones that have been going for a long time." PRUMC opened 20 Jan 2026 — week 38 of a
+ * 20-week plan. All 24 tasks would be written already overdue, and isLive() would drop the plan
+ * off /growth/launch the instant it existed.
+ *
+ * THE RULE IS isLive(), NOT A NEW THRESHOLD. launchPlan.ts already draws this exact line: a plan
+ * runs from four weeks before launch to sixteen weeks after, and its own comment says a plan is
+ * finished once week 20 is past. Inventing a second number here (90 days, a quarter, anything that
+ * sounds round) would be a second rule that disagrees with the one the index already applies.
+ *
+ * THE GUARD IS HERE AND NOT AT THE CALL SITES because there are two callers and both were wrong:
+ * the bind dialog, and the REPAIR pass in LaunchPlanView that seeds a venue bound before 0173
+ * applied. Fixing only the dialog would leave a path that re-seeds a dead field's plan the first
+ * time somebody opened it.
+ *
+ * A NULL launch_date IS NOT A PAST WINDOW and is left exactly as it was — it falls through and
+ * seeds. It is unreachable from both callers today (the dialog cannot save without a date, and the
+ * plan page returns before seeding when the venue has none), so this is a defensive branch rather
+ * than a decision about what a dateless plan should mean. */
 export async function seedLaunchPlan(
   venueId: number,
   coordinatorUserId: string | null,
-): Promise<{ inserted: number; missingTable: boolean; error: string | null }> {
+  launchIso: string | null,
+  opts: { force?: boolean } = {},
+): Promise<SeedResult> {
+  if (launchIso && !isLive(launchIso) && !opts.force) {
+    return { inserted: 0, missingTable: false, error: null, skipped: "past-window" };
+  }
   const existing = await supabase
     .from("field_launch_tasks")
     .select("template_key")
     .eq("venue_id", venueId)
     .not("template_key", "is", null);
   if (existing.error) {
-    if (isMissingTable(existing.error)) return { inserted: 0, missingTable: true, error: null };
-    return { inserted: 0, missingTable: false, error: existing.error.message };
+    if (isMissingTable(existing.error)) return { inserted: 0, missingTable: true, error: null, skipped: null };
+    return { inserted: 0, missingTable: false, error: existing.error.message, skipped: null };
   }
   const have = new Set((existing.data ?? []).map((r) => (r as { template_key: string }).template_key));
   /* sort_order IS THE PLAYBOOK'S OWN ORDER, taken from the template index rather than from the
@@ -100,15 +133,15 @@ export async function seedLaunchPlan(
       sort_order: i + 1,
       owner_user_id: t.coordinator ? coordinatorUserId : null,
     }));
-  if (rows.length === 0) return { inserted: 0, missingTable: false, error: null };
+  if (rows.length === 0) return { inserted: 0, missingTable: false, error: null, skipped: null };
 
   const ins = await supabase.from("field_launch_tasks").insert(rows);
   if (ins.error) {
-    if (isMissingTable(ins.error)) return { inserted: 0, missingTable: true, error: null };
+    if (isMissingTable(ins.error)) return { inserted: 0, missingTable: true, error: null, skipped: null };
     /* 23505 IS THE OTHER TAB WINNING, NOT A FAILURE. The plan it wrote is the same plan, so this
      * reports success and the caller reloads onto its rows. */
-    if (ins.error.code === "23505") return { inserted: 0, missingTable: false, error: null };
-    return { inserted: 0, missingTable: false, error: ins.error.message };
+    if (ins.error.code === "23505") return { inserted: 0, missingTable: false, error: null, skipped: null };
+    return { inserted: 0, missingTable: false, error: ins.error.message, skipped: null };
   }
-  return { inserted: rows.length, missingTable: false, error: null };
+  return { inserted: rows.length, missingTable: false, error: null, skipped: null };
 }

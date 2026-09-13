@@ -90,7 +90,7 @@ ok(await p.$eval('[data-testid="bind-newname"]', e=>e.value)==='Westlake',
   'opening the dialog from a card pre-types that card\'s name');
 ok(await vis('[data-testid="bind-match"]'), '  so the offer is on screen without typing a character');
 const off = await T('[data-testid="bind-match"]');
-ok(/Westlake/.test(off) && /Austin/.test(off) && /already launches/.test(off),
+ok(/Westlake/.test(off) && /Austin/.test(off) && /already launched/.test(off),
   `  naming the field, its city and its launch date: "${off.slice(0,56)}…"`);
 ok(/different field, change the name/i.test(off), '  with the way out if it is not the same field');
 ok(await p.$eval('[data-testid="bind-launch"]', e=>e.value)==='2026-07-01', '  and the existing date is brought in');
@@ -140,11 +140,13 @@ ok(await p.$eval('[data-testid="col-unlinked"]', e=>e.tagName)==='BUTTON',
 await p.click('[data-testid="col-unlinked"]'); await p.waitForTimeout(150);
 ok(await vis('[data-testid="match-dialog"]'), '  and opens the whole backfill as one list');
 const rows = await p.$$('[data-testid="match-row"]');
-ok(rows.length===3, `every unbound confirmed card gets a row (${rows.length})`);
+ok(rows.length===4, `every unbound confirmed card gets a row (${rows.length})`);
 ok(await p.$$eval('[data-testid="match-row"] [data-testid="mr-name"]', es=>es.every(e=>e.value.length>0)),
   '  each prefilled with that card\'s own name');
 const r1 = await T('[data-testid="match-row"][data-id="c1"] [data-testid="mr-res"]');
 ok(/Links to/.test(r1) && /Westlake/.test(r1), `  and resolved on sight: "${r1.slice(0,48)}…"`);
+ok(/already launched/.test(r1) && !/already launches/.test(r1),
+  '  CONTROL: and a date in the past is described in the past tense');
 ok(await p.$eval('[data-testid="match-row"][data-id="c1"] [data-testid="mr-date"]', e=>e.value)==='2026-07-01',
   '  with the existing launch date brought in');
 ok(!await p.$eval('[data-testid="match-row"][data-id="c1"] [data-testid="mr-go"]', e=>e.disabled),
@@ -168,17 +170,86 @@ const mtx = await T('[data-testid="match-dialog"]');
 ok(/Nothing is linked until you press Link/.test(mtx), 'and the list says so before any of it is pressed');
 ok(/nothing is sent to anybody/i.test(mtx), '  along with the fact that nobody is messaged');
 
+// ══ 7b. A FIELD THAT HAS BEEN RUNNING FOR MONTHS GETS NO PLAN ════════════════
+// Ryan: "its saying link and create the plan but we dont need a plan for ones
+// that have been going for a long time." PRUMC opened 20 Jan 2026 — week 38 of
+// a 20-week plan. Every task would be seeded already overdue, and isLive() would
+// drop the plan off /growth/launch the moment it was written.
+await go('longrun');
+ok(await p.$eval('[data-testid="bind-launch"]', e=>e.value)==='2026-01-20',
+  'a long-running field brings its real launch date in');
+ok(/236 days since launch/.test(await T('[data-testid="bind-cd"]')),
+  `  and the dialog reads it back honestly: "${await T('[data-testid="bind-cd"]')}"`);
+ok(await vis('[data-testid="bind-noplan"]'), 'the dialog says there is no plan to make');
+const np = await T('[data-testid="bind-noplan"]');
+ok(/four weeks before to sixteen weeks after/.test(np), `  and why, in the plan's own terms: "${np.slice(0,58)}…"`);
+ok(!/—/.test(np), '  CONTROL: and no em-dash in copy Ryan will read');
+ok(/236 days ago/.test(np), '  with how long it has actually been running');
+ok(await p.$eval('[data-testid="bind-save"]', e=>e.dataset.plan)==='0', 'no plan will be seeded');
+ok(await T('[data-testid="bind-save"]')==='Link the field',
+  `and the button stops promising one: "${await T('[data-testid="bind-save"]')}"`);
+const pv = await T('[data-testid="bind-preview"]');
+ok(/No launch plan/.test(pv), `the preview says so too: "${pv.slice(0,56)}…"`);
+ok(!/24 tasks/.test(pv), '  CONTROL: and does not mention 24 tasks');
+ok(!await p.$eval('[data-testid="bind-save"]', e=>e.disabled), 'it can still be linked — the record is the point');
+
+// the relaunch escape hatch, opt-in and off by default
+ok(await vis('[data-testid="bind-planopt"]'), 'a plan can still be asked for');
+ok(!await p.$eval('[data-testid="bind-planopt-box"]', e=>e.checked), '  CONTROL: but it is off by default');
+ok(/relaunch/i.test(await T('[data-testid="bind-planopt"]')), '  and says what it is for');
+ok(!/—/.test(await T('[data-testid="bind-planopt"]')), '  CONTROL: em-dash free here too');
+ok(/open overdue/i.test(await T('[data-testid="bind-planopt"]')), '  and what it will look like');
+await p.check('[data-testid="bind-planopt-box"]'); await p.waitForTimeout(130);
+ok(await p.$eval('[data-testid="bind-save"]', e=>e.dataset.plan)==='1', 'ticking it brings the plan back');
+ok(/create the plan/i.test(await T('[data-testid="bind-save"]')), '  and the button says so again');
+ok(/24 tasks/.test(await T('[data-testid="bind-preview"]')), '  CONTROL: and the preview counts them');
+
+// CONTROL: a launch still ahead is untouched by any of this
+await go('prefill');
+ok(await p.$eval('[data-testid="bind-save"]', e=>e.dataset.plan)==='1', 'CONTROL: a field inside the window still gets its plan');
+ok(!await vis('[data-testid="bind-noplan"]'), '  CONTROL: with no no-plan notice');
+ok(!await vis('[data-testid="bind-planopt"]'), '  CONTROL: and nothing to opt into');
+ok(/Link and create the plan/.test(await T('[data-testid="bind-save"]')), '  CONTROL: the button promises the plan');
+// Westlake opened 1 Jul 2026, 74 days ago — launched, but week 12 of 20, still live.
+ok(/build-up weeks are already behind it/.test(await T('[data-testid="bind-preview"]')),
+  '  and a field that opened INSIDE the window says which part of its plan is already past');
+
+// ══ 7c. THE CARD AND THE MODAL AGREE ═════════════════════════════════════════
+await go('board');
+const longCd = await T('[data-testid="card"][data-id="c5"] [data-testid="card-countdown"]');
+ok(/launched Feb 2026/.test(longCd), `a long-running field's card says when it opened: "${longCd}"`);
+ok(!/days since launch/.test(longCd), '  CONTROL: not a counter that grows forever');
+ok(await p.$eval('[data-testid="card"][data-id="c5"] [data-testid="card-countdown"]', e=>e.dataset.live)==='0',
+  '  CONTROL: marked as past its window');
+ok(/days to launch/.test(await T('[data-testid="card"][data-id="c2"] [data-testid="card-countdown"]')),
+  'CONTROL: a live one still counts down');
+await p.click('[data-testid="card"][data-id="c5"] .ct'); await p.waitForTimeout(140);
+const lm = await T('[data-testid="m-field-meta"]');
+ok(/launched/.test(lm) && /no launch plan/.test(lm), `and the modal agrees: "${lm}"`);
+ok(!/days since launch/.test(lm), '  CONTROL: without the runaway counter');
+
+// ══ 7d. THE MATCH LIST CARRIES THE SAME RULE ═════════════════════════════════
+await load(1200); await go('match');
+const pr = await T('[data-testid="match-row"][data-id="c6"] [data-testid="mr-res"]');
+ok(/No plan/.test(pr), `a long-running row says no plan, in the list: "${pr.slice(0,64)}…"`);
+ok(await p.$eval('[data-testid="match-row"][data-id="c6"] [data-testid="mr-go"]', e=>e.dataset.plan)==='0',
+  '  and the row knows it');
+const wr = await T('[data-testid="match-row"][data-id="c1"] [data-testid="mr-res"]');
+ok(/24-task/.test(wr), `CONTROL: a row inside the window does start one: "${wr.slice(0,64)}…"`);
+ok(await p.$eval('[data-testid="match-row"][data-id="c1"] [data-testid="mr-go"]', e=>e.dataset.plan)==='1',
+  '  CONTROL: and knows that');
+
 // ══ 8. A PHONE ═══════════════════════════════════════════════════════════════
 for (const w of [390, 1200]){
   await load(w);
-  for (const s of ['board','modal-none','modal-bound','prefill','stacked','match']){
+  for (const s of ['board','modal-none','modal-bound','prefill','longrun','stacked','match']){
     await go(s);
     ok(await p.evaluate(()=>document.documentElement.scrollWidth)<=w+2, `${w}px ${s}: no horizontal scroll`);
   }
   await go('prefill');
   const db = await p.$$eval('[data-testid="bind-dialog"] .df button', es=>Math.min(...es.map(e=>e.getBoundingClientRect().height)));
   ok(db>=44, `  the bind dialog's buttons are ${Math.round(db)}px`);
-  const di = await p.$$eval('[data-testid="bind-dialog"] input', es=>Math.min(...es.map(e=>e.getBoundingClientRect().height)));
+  const di = await p.$$eval('[data-testid="bind-dialog"] .fld input', es=>Math.min(...es.map(e=>e.getBoundingClientRect().height)));
   ok(di>=44, `  and its inputs ${Math.round(di)}px`);
   const dw = await p.$eval('[data-testid="bind-dialog"]', e=>e.getBoundingClientRect().width);
   ok(dw<=w-20, `  it fits the screen (${Math.round(dw)} in ${w})`);

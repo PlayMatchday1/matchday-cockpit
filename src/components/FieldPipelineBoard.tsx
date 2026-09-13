@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { insertFinVenue, NEW_FIELD_BILLING_TYPE } from "@/lib/venueCreate";
 import { seedLaunchPlan } from "@/lib/launchTasks";
+import { daysToLaunch, isLive, localMidnight } from "@/lib/launchPlan";
 import { useKanbanBoard } from "@/lib/useKanbanBoard";
 import KanbanCardModal, { type ModalState } from "./KanbanCardModal";
 import {
@@ -47,6 +48,29 @@ export function launchCountdown(iso: string, today = new Date()): { text: string
   if (days > 0) return { text: `${days} days to launch`, soon: days <= 28 };
   if (days === 0) return { text: "Launches today", soon: true };
   return { text: `${Math.abs(days)} days since launch`, soon: false };
+}
+
+/* ── HAS IT OPENED, AND IS THERE STILL A PLAN TO MAKE ─────────────────────────────────────────
+ * Two different questions, and conflating them is what put "24 tasks will be created" directly
+ * under "236 days since launch". A field can have opened and still be inside its plan (Westlake,
+ * 74 days ago, week 12 of 20); a field past week 20 has no plan left to make.
+ *
+ * THE SECOND QUESTION IS isLive(), WHICH ALREADY EXISTS. Nothing here defines a new threshold. */
+function launchedAlready(iso: string, today = new Date()): boolean {
+  const d = daysToLaunch(iso, today);
+  return d != null && d < 0;
+}
+
+/** How long a field has actually been open, for copy that has to say it out loud. */
+function daysSinceLaunch(iso: string, today = new Date()): number {
+  return Math.abs(daysToLaunch(iso, today) ?? 0);
+}
+
+/** "Feb 2026" — what a card says once the countdown has stopped meaning anything. */
+function fmtMonthYear(iso: string): string {
+  const t = localMidnight(iso);
+  if (t == null) return iso;
+  return new Date(t).toLocaleDateString("en-US", { month: "short", year: "numeric" });
 }
 
 /** "1 Jul 2026" — the launch date a matched field already carries, read not retyped. */
@@ -81,6 +105,9 @@ type BindState = {
   launch: string | null;
   /** Once a person edits the date, a matched venue's date stops overwriting it. */
   touchedDate: boolean;
+  /* THE RELAUNCH OPT-IN. Off on open and reset by any date change, so the box a person ticks is
+   * always about the date currently in the box. Only this can seed a plan on a past-window date. */
+  force: boolean;
 };
 
 // Exactly the nine city hues from the mockup's CITY map, keyed by display name.
@@ -340,7 +367,7 @@ export default function FieldPipelineBoard() {
         setBind({
           /* PRE-TYPED FROM THE CARD, the same as every other way into this dialog — see openBind. */
           cardId, cardTitle: moving.title, city: cityOf(moving),
-          fromStage: moving.stage, newName: moving.title, launch: null, touchedDate: false,
+          fromStage: moving.stage, newName: moving.title, launch: null, touchedDate: false, force: false,
         });
         return;
       }
@@ -407,6 +434,12 @@ export default function FieldPipelineBoard() {
 
   const bindCanSave = !!(bind?.newName ?? "").trim() && !!bind?.launch && bindMatch.mode !== "taken";
 
+  /* ── A PLAN, OR NO PLAN, DECIDED BY THE DATE IN THE BOX ───────────────────────────────────
+   * Recomputed on every change to the date, so the note, the opt-in, the preview and the button
+   * label all follow it. The rule is isLive() and nothing else. */
+  const bindPastWindow = !!bind?.launch && !isLive(bind.launch);
+  const bindWillPlan = !bindPastWindow || !!bind?.force;
+
   /* ── SAVE: THE VENUE, THEN THE BINDING, THEN THE STAGE ────────────────────────────────────
    * ONE UPDATE FOR THE CARD. The stage and the venue go in the same patch, so the two halves of
    * "this card is Confirmed and it is about this field" cannot half-land.
@@ -419,7 +452,7 @@ export default function FieldPipelineBoard() {
    * second venue-create, a second seeder or a second copy of the collision rule would be three
    * ways for the two screens to disagree about what binding a field means. */
   const commitBind = useCallback(
-    async (input: { cardId: string; name: string; launch: string; match: BindMatch; city: string }): Promise<void> => {
+    async (input: { cardId: string; name: string; launch: string; match: BindMatch; city: string; force?: boolean }): Promise<void> => {
       let venueId: number;
       if (input.match.mode === "link") {
         venueId = input.match.venue.id;
@@ -453,9 +486,17 @@ export default function FieldPipelineBoard() {
        * THE COORDINATOR IS THE CARD'S OWNER — the only owner anything can honestly seed. The
        * sheet's Department column names roles, never people. */
       const owner = cards.find((c) => c.id === input.cardId)?.owner_user_id ?? null;
-      const seeded = await seedLaunchPlan(venueId, owner);
-      if (seeded.missingTable) setToast("Field linked. The launch plan starts once migration 0173 is applied.");
-      else if (seeded.error) setToast("Field linked, but the launch plan did not seed. Open it to retry.");
+      const seeded = await seedLaunchPlan(venueId, owner, input.launch, { force: input.force });
+      /* A SKIP IS A NORMAL OUTCOME AND SAYS NOTHING. The dialog already said there would be no
+       * plan and the button already stopped promising one; a toast here would read like a failure
+       * of the thing the person deliberately chose. */
+      if (seeded.skipped) {
+        /* deliberate: no toast */
+      } else if (seeded.missingTable) {
+        setToast("Field linked. The launch plan starts once migration 0173 is applied.");
+      } else if (seeded.error) {
+        setToast("Field linked, but the launch plan did not seed. Open it to retry.");
+      }
       await loadVenues();
     },
     [api, cards, loadVenues],
@@ -468,7 +509,7 @@ export default function FieldPipelineBoard() {
     try {
       await commitBind({
         cardId: bind.cardId, name: bind.newName, launch: bind.launch as string,
-        match: bindMatch, city: bind.city,
+        match: bindMatch, city: bind.city, force: bind.force,
       });
       setBind(null);
     } catch (e) {
@@ -503,7 +544,7 @@ export default function FieldPipelineBoard() {
     setBindErr(null);
     setBind({
       cardId: c.id, cardTitle: c.title, city: cityOf(c),
-      fromStage: c.stage, newName: c.title, launch: null, touchedDate: false,
+      fromStage: c.stage, newName: c.title, launch: null, touchedDate: false, force: false,
     });
   }, [cityOf]);
 
@@ -765,9 +806,14 @@ export default function FieldPipelineBoard() {
               <span className="mt-1 block text-[11.5px]" style={{ color: "#7C8F86" }}>
                 {bind.cardTitle} is becoming a real field.{" "}
                 {bindMatch.mode === "link"
-                  ? "A field with this name already exists — link to it rather than making a second record."
+                  ? "A field with this name already exists. Link to it rather than making a second record."
                   : "This makes its record and sets the launch date."}{" "}
-                The plan and every countdown are built from that date.
+                {/* IT MUST NOT PROMISE A PLAN THE NOTE BELOW IS ABOUT TO REFUSE. Past the window
+                    the date is still what the record is dated from, it just does not start
+                    anything. */}
+                {bindPastWindow
+                  ? "That date is when the field opened."
+                  : "The plan and every countdown are built from that date."}
               </span>
             </div>
 
@@ -781,15 +827,15 @@ export default function FieldPipelineBoard() {
                   placeholder="e.g. Crossbar Rowlett" disabled={binding}
                   onChange={(e) => setBind((b) => (b ? { ...b, newName: e.target.value } : b))}
                   className="w-full rounded-[9px] border px-[11px] text-[13px]"
-                  style={{ minHeight: 42, borderColor: "#CFDBD4", color: "#12241d", background: "#fff" }} />
+                  style={{ minHeight: 44, borderColor: "#CFDBD4", color: "#12241d", background: "#fff" }} />
                 {bindMatch.mode === "link" && bindMatch.venue ? (
                   /* AN EXACT MATCH IS AN OFFER, NOT A REFUSAL. Refusing it left 12 of the 27 cards
                      already in Confirmed with no way forward: the only control was Create, and
                      Create was refused. */
                   <p className="hint mt-[5px] text-[11px]" data-testid="bind-match" style={{ color: "#7C8F86" }}>
-                    <b>{bindMatch.venue.venue_name}</b> · {bindMatch.venue.city ?? "—"}
+                    <b>{bindMatch.venue.venue_name}</b> · {bindMatch.venue.city ?? "city unknown"}
                     {bindMatch.venue.launch_date
-                      ? ` · already launches ${fmtLaunch(bindMatch.venue.launch_date)}`
+                      ? ` · already ${launchedAlready(bindMatch.venue.launch_date) ? "launched" : "launches"} ${fmtLaunch(bindMatch.venue.launch_date)}`
                       : " · no launch date yet"}
                     . Linking uses that record. If this is a different field, change the name.
                   </p>
@@ -798,7 +844,7 @@ export default function FieldPipelineBoard() {
                      "The Hattrick" and "Hat / The Hattrick" are both in Confirmed right now. */
                   <p className="hint warn mt-[5px] text-[11px]" data-testid="bind-dupe" style={{ color: "#8a5a12" }}>
                     <b>{bindMatch.venue.venue_name}</b> is already linked to the card “{bindMatch.holder?.title}”.
-                    One field has one launch plan — unlink that card first, or change the name if this is a different field.
+                    One field has one launch plan. Unlink that card first, or change the name if this is a different field.
                   </p>
                 ) : (
                   <p className="hint mt-[5px] text-[11px]" style={{ color: "#7C8F86" }}>
@@ -814,13 +860,13 @@ export default function FieldPipelineBoard() {
                 <div className="fld">
                   <label className="mb-[5px] block text-[10px] font-extrabold uppercase tracking-[0.1em]" style={{ color: "#5c7267" }}>City</label>
                   <p className="ro m-0 flex items-center gap-[7px] rounded-[9px] border px-[11px] text-[13px] font-[650]"
-                    data-testid="bind-city" style={{ minHeight: 42, borderColor: "#EEF3F0", background: "#F7FAF8", color: "#12241d" }}>
+                    data-testid="bind-city" style={{ minHeight: 44, borderColor: "#EEF3F0", background: "#F7FAF8", color: "#12241d" }}>
                     {bind.city} <i className="not-italic text-[10.5px] font-[650]" style={{ color: "#9aa5a0" }}>from the card</i>
                   </p>
                   {/* NEVER "free" AND NEVER "$0". A cost is null, not zero, when it is not
                       recorded — fieldEconomics.ts:19 — and this says the work item out loud. */}
                   <p className="hint mt-[5px] text-[11px]" style={{ color: "#7C8F86" }}>
-                    Billed <b>per match</b> to start. Until a rate is entered in Finance the field shows as needing one — a work item, never a cost of zero.
+                    Billed <b>per match</b> to start. Until a rate is entered in Finance the field shows as needing one, a work item and never a cost of zero.
                   </p>
                 </div>
               )}
@@ -828,9 +874,9 @@ export default function FieldPipelineBoard() {
               <div className="fld">
                 <label htmlFor="bind-ld" className="mb-[5px] block text-[10px] font-extrabold uppercase tracking-[0.1em]" style={{ color: "#5c7267" }}>Launch date</label>
                 <input id="bind-ld" type="date" data-testid="bind-launch" value={bind.launch ?? ""} disabled={binding}
-                  onChange={(e) => setBind((b) => (b ? { ...b, launch: e.target.value || null, touchedDate: true } : b))}
+                  onChange={(e) => setBind((b) => (b ? { ...b, launch: e.target.value || null, touchedDate: true, force: false } : b))}
                   className="w-full rounded-[9px] border px-[11px] text-[13px]"
-                  style={{ minHeight: 42, borderColor: "#CFDBD4", color: "#12241d", background: "#fff" }} />
+                  style={{ minHeight: 44, borderColor: "#CFDBD4", color: "#12241d", background: "#fff" }} />
                 {bind.launch ? (
                   <p className="hint mt-[5px] text-[11px]" data-testid="bind-cd" style={{ color: "#7C8F86" }}>{launchCountdown(bind.launch).text}</p>
                 ) : (
@@ -838,12 +884,57 @@ export default function FieldPipelineBoard() {
                 )}
               </div>
 
-              {/* WHAT SAVING WILL DO, BEFORE IT IS PRESSED — and that nobody is messaged. */}
+              {/* ── NO PLAN TO MAKE, AND WHY ─────────────────────────────────────────────────
+                  The dialog was saying "236 days since launch" and "24 tasks will be created" one
+                  under the other. Past the window it says the first thing and stops promising the
+                  second. */}
+              {bindPastWindow && bind.launch && (
+                <div className="note warn rounded-[10px] border px-[11px] py-2.5 text-[11.5px]" data-testid="bind-noplan"
+                  style={{ borderColor: "#f0d9b6", background: "#FFF8EC", color: "#7A5200" }}>
+                  This field opened <b>{fmtLaunch(bind.launch)}</b>, {daysSinceLaunch(bind.launch)} days ago.
+                  A launch plan runs from four weeks before to sixteen weeks after, so there is no plan
+                  to make. Linking records the field and stops there.
+                </div>
+              )}
+              {/* THE RELAUNCH ESCAPE HATCH. Opt-in, unchecked, and it says what it will look like:
+                  every task is dated from the launch date, so on an old date they all open overdue. */}
+              {bindPastWindow && (
+                <label className="optrow flex items-start gap-2 text-[11.5px]" data-testid="bind-planopt"
+                  style={{ color: "#5c7267" }}>
+                  <input type="checkbox" data-testid="bind-planopt-box" checked={bind.force} disabled={binding}
+                    onChange={(e) => setBind((b) => (b ? { ...b, force: e.target.checked } : b))}
+                    className="mt-[2px] h-4 w-4 flex-none" />
+                  <span>
+                    Start a 20-week plan anyway. Only for a field being relaunched. Every task is dated
+                    from the launch date, so on a date this old they all open overdue.
+                  </span>
+                </label>
+              )}
+
+              {/* WHAT SAVING WILL DO, BEFORE IT IS PRESSED, and that nobody is messaged. */}
               {bindCanSave && (
                 <div className="prev rounded-[10px] border px-[11px] py-2.5 text-[11.5px]" data-testid="bind-preview"
                   style={{ borderColor: "#DDE9E2", background: "#F4FAF6", color: "#14603f" }}>
-                  <b className="mb-[3px] block text-[13px]">24 tasks will be created</b>
-                  Weeks 1–4 before launch, the launch window, then 12 weeks after. Nothing is sent to anyone.
+                  {bindWillPlan ? (
+                    <>
+                      <b className="mb-[3px] block text-[13px]">24 tasks will be created</b>
+                      {bindMatch.mode === "link" && bindMatch.venue
+                        ? <>Links this card to <b>{bindMatch.venue.venue_name}</b> and starts its launch plan: </>
+                        : <>Creates <b>{bind.newName.trim()}</b> in {bind.city} and starts its launch plan: </>}
+                      24 tasks dated from {bind.launch ? fmtLaunch(bind.launch) : ""}
+                      {bind.launch && launchedAlready(bind.launch)
+                        ? ", of which the build-up weeks are already behind it"
+                        : ""}. Nothing is sent to anybody.
+                    </>
+                  ) : (
+                    <>
+                      {bindMatch.mode === "link" && bindMatch.venue
+                        ? <>Links this card to <b>{bindMatch.venue.venue_name}</b>. </>
+                        : <>Creates <b>{bind.newName.trim()}</b> in {bind.city}. </>}
+                      <b>No launch plan.</b> Finance and Growth read the same record from here on.
+                      Nothing is sent to anybody.
+                    </>
+                  )}
                 </div>
               )}
               {bindErr && (
@@ -856,11 +947,18 @@ export default function FieldPipelineBoard() {
                 onClick={() => setBind(null)}
                 className="rounded-[9px] border px-4 text-[13px] font-[750]"
                 style={{ minHeight: 44, borderColor: "#CFDBD4", background: "#fff", color: "#0d3b2e" }}>Cancel</button>
+              {/* THE BUTTON DROPS THE PROMISE IT CANNOT KEEP. It stays ENABLED past the window:
+                  recording the field is the point, and that is what Ryan is trying to do. */}
               <button type="button" data-testid="bind-save" data-mode={bindMatch.mode}
+                data-plan={bindWillPlan ? "1" : "0"}
                 disabled={!bindCanSave || binding} onClick={() => void saveBind()}
                 className="ml-auto rounded-[9px] border px-4 text-[13px] font-[750] disabled:opacity-40"
                 style={{ minHeight: 44, borderColor: "#0d3b2e", background: "#0d3b2e", color: "#fff" }}>
-                {binding ? "Saving…" : bindMatch.mode === "create" ? "Create and start the plan" : "Link and create the plan"}
+                {binding
+                  ? "Saving…"
+                  : bindMatch.mode === "create"
+                    ? (bindWillPlan ? "Create and start the plan" : "Create the field")
+                    : (bindWillPlan ? "Link and create the plan" : "Link the field")}
               </button>
             </div>
           </div>
@@ -942,6 +1040,14 @@ function ToggleBtn({ on, onClick, label }: { on: boolean; onClick: () => void; l
  * A person confirms each row.
  *
  * IT SHARES THE DIALOG'S SAVE. commitBind is passed in — not reimplemented. */
+/* THE SAME RULE AS THE DIALOG, IN THE SAME SENTENCE, ON THE ROW WHERE THE DECISION IS BEING TAKEN
+ * rather than in a toast afterwards. */
+function planTail(launch: string) {
+  if (!launch) return null;
+  if (isLive(launch)) return <> Starts a <b className="font-[750]">24-task</b> plan.</>;
+  return <> <b className="font-[750]">No plan</b>: it opened {daysSinceLaunch(launch)} days ago, past the plan window.</>;
+}
+
 function MatchFieldsDialog({
   cards,
   cityOf,
@@ -1031,18 +1137,23 @@ function MatchFieldsDialog({
                   <div data-testid="mr-res" className="min-w-0 flex-1 basis-[200px] text-[11.5px] leading-[1.4]"
                     style={{ color: m.mode === "taken" ? "#a32020" : "#4b5d54" }}>
                     {m.mode === "link" ? (
-                      <>Links to <b className="font-[750]">{m.venue.venue_name}</b> · {m.venue.city ?? "—"}
-                        {m.venue.launch_date ? <> · already launches {fmtLaunch(m.venue.launch_date)}</> : <> · no launch date yet</>}.</>
+                      <>Links to <b className="font-[750]">{m.venue.venue_name}</b> · {m.venue.city ?? "city unknown"}
+                        {m.venue.launch_date
+                          ? <> · already {launchedAlready(m.venue.launch_date) ? "launched" : "launches"} {fmtLaunch(m.venue.launch_date)}</>
+                          : <> · no launch date yet</>}.
+                        {planTail(launch)}</>
                     ) : m.mode === "taken" ? (
                       <><b className="font-[750]">{m.venue.venue_name}</b> is already linked to “{m.holder.title}”. Unlink that card first, or change the name.</>
                     ) : (
                       /* A COST IS NULL, NEVER ZERO, WHEN IT IS NOT RECORDED (fieldEconomics.ts:19).
                          "with no rate yet" is a work item; it must never read as free. */
-                      <>No field carries this name. <b className="font-[750]">Creates</b> one in {cityOf(c)}, billed per match, with no rate yet.</>
+                      <>No field carries this name. <b className="font-[750]">Creates</b> one in {cityOf(c)}, billed per match, with no rate yet.
+                        {planTail(launch)}</>
                     )}
                     {st.err && <span className="mt-1 block font-[650]" style={{ color: "#a32020" }}>{st.err}</span>}
                   </div>
-                  <button type="button" data-testid="mr-go" data-mode={m.mode} disabled={!canGo}
+                  <button type="button" data-testid="mr-go" data-mode={m.mode}
+                    data-plan={!launch || isLive(launch) ? "1" : "0"} disabled={!canGo}
                     onClick={() => void go(c, { ...st, launch }, m)}
                     className="flex-none rounded-[9px] border px-3 text-[12.5px] font-[750] disabled:opacity-40"
                     style={canGo
@@ -1101,12 +1212,16 @@ function ModalFieldRow({
           </div>
           <div data-testid="m-field-meta" className="mt-0.5 text-[11.5px] font-medium" style={{ color: "#6d7b74" }}>
             {bound
-              ? [venue.city ?? "—", venue.launch_date ? `launches ${fmtLaunch(venue.launch_date)}` : null, cd?.text]
-                  .filter(Boolean).join(" · ")
+              /* PAST THE WINDOW THE ROW AGREES WITH THE CARD: when it opened, and that there is no
+                 plan. Inside the window it is unchanged. */
+              ? venue.launch_date && !isLive(venue.launch_date)
+                ? `${venue.city ?? "city unknown"} · launched ${fmtLaunch(venue.launch_date)} · past the plan window, no launch plan`
+                : [venue.city ?? "city unknown", venue.launch_date ? `launches ${fmtLaunch(venue.launch_date)}` : null, cd?.text]
+                    .filter(Boolean).join(" · ")
               /* WHAT LINKING WILL ACTUALLY DO, said before it is pressed — and never a claim that
                  a field exists when none does. */
               : match.mode === "link"
-                ? `A field named ${match.venue.venue_name} already exists in ${match.venue.city ?? "—"}. Linking uses that record.`
+                ? `A field named ${match.venue.venue_name} already exists in ${match.venue.city ?? "city unknown"}. Linking uses that record.`
                 : match.mode === "taken"
                   ? `${match.venue.venue_name} is already linked to the card “${match.holder.title}”. Unlink that card first, or use a different name.`
                   : "Nothing in Finance carries this name. Linking will create the record."}
@@ -1163,7 +1278,9 @@ function Card({
   // colour is never the only signal.
   /* NO FIELD RECORD YET, AND ONLY IN CONFIRMED. Elsewhere a card has no business having one. */
   const needsField = card.stage === "confirmed" && card.venue_id == null;
-  const cd = launch ? launchCountdown(launch) : null;
+  /* NULL PAST THE PLAN WINDOW, so the card falls to "launched Feb 2026" instead of a counter that
+   * only ever goes up. */
+  const cd = launch && isLive(launch) ? launchCountdown(launch) : null;
   const age = stageAge(card);
   const band = age ? ageBand(age.days) : null;
   const spineColor = band === "crit" ? "#d0512a" : band === "warn" ? "#e3c369" : "#eff3f1";
@@ -1247,12 +1364,22 @@ function Card({
           A card with a field carries its COUNTDOWN, because the launch date is the anchor every
           task in the plan is dated from. A card without one carries no countdown — it has no date
           to count from — and says so rather than showing nothing. */}
-      {cd && (
+      {/* A LAUNCH THAT IS OVER IS NOT A COUNTDOWN. Past the plan window "236 days since launch"
+          keeps climbing and says nothing anybody can act on, so the card states when the field
+          opened instead, in the neutral treatment. Inside the window nothing changes. */}
+      {launch && (
         <div className="mt-1.5">
-          <span data-testid="card-countdown" className="rounded-full px-[7px] py-0.5 text-[9.5px] font-extrabold tracking-[0.03em]"
-            style={cd.soon ? { background: "#FEF6E7", color: "#8a5a12" } : { background: "#E6F4EB", color: "#14603f" }}>
-            {cd.text}
-          </span>
+          {cd ? (
+            <span data-testid="card-countdown" data-past="0" className="rounded-full px-[7px] py-0.5 text-[9.5px] font-extrabold tracking-[0.03em]"
+              style={cd.soon ? { background: "#FEF6E7", color: "#8a5a12" } : { background: "#E6F4EB", color: "#14603f" }}>
+              {cd.text}
+            </span>
+          ) : (
+            <span data-testid="card-countdown" data-past="1" className="rounded-full px-[7px] py-0.5 text-[9.5px] font-extrabold tracking-[0.03em]"
+              style={{ background: "#eef3f0", color: "#54655c" }}>
+              launched {fmtMonthYear(launch)}
+            </span>
+          )}
         </div>
       )}
       {/* ── THE FIELD CONTROL IS A CHIP ──────────────────────────────────────────────────────

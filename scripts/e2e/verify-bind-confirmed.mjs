@@ -141,7 +141,20 @@ async function main() {
   const { createClient } = await import("@supabase/supabase-js");
   const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
   const { data: venues } = await sb.from("fin_venues").select("id,venue_name,city,launch_date").not("launch_date", "is", null).order("id");
-  const linkVenue = nonEmpty(venues ?? [], "fin_venues rows with a launch date")[0];
+  /* A VENUE STILL INSIDE ITS PLAN WINDOW, so this suite's countdown and "already launches"
+   * assertions keep testing what they were written to test. A field past the window now reads
+   * "launched Aug 2023" and gets no plan, which verify-link-fields covers on purpose; picking the
+   * first dated row made THIS suite fail on someone else's feature. The window is the app's own:
+   * planStart = launch - 28d, week = floor((today - planStart)/7d) + 1, live = week <= 20. */
+  const DAY = 86400000;
+  const midnight = (t) => new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime();
+  const localMid = (iso) => { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d).getTime(); };
+  const weekIso = (iso) => Math.floor((midnight(new Date()) - (localMid(iso) - 28 * DAY)) / (7 * DAY)) + 1;
+  const linkVenue = nonEmpty(
+    (venues ?? []).filter((v) => weekIso(v.launch_date) <= 20),
+    "fin_venues rows still inside the plan window",
+  )[0];
+  const launchedAlready = localMid(linkVenue.launch_date) < midnight(new Date());
   console.log(`\nlink fixture: #${linkVenue.id} "${linkVenue.venue_name}" (${linkVenue.city}) launches ${linkVenue.launch_date}`);
 
   // ══ 1 / 2 / 12: THE DROP, AND CANCEL ════════════════════════════════════════════════════════
@@ -292,7 +305,10 @@ async function main() {
     yes(`  ...naming the field and its city ("${String(d.match).slice(0, 48)}…")`,
       new RegExp(linkVenue.venue_name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).test(d.match ?? "")
       && new RegExp(String(linkVenue.city)).test(d.match ?? ""));
-    yes("  ...and the launch date it already carries", /already launches/.test(d.match ?? ""));
+    /* TENSE FOLLOWS THE FIXTURE'S OWN DATE. Every fin_venues launch date is in the past today, so
+     * pinning "already launches" would assert a string the app is right not to print. */
+    yes(`  ...and the launch date it already carries (${launchedAlready ? "past" : "future"} tense)`,
+      new RegExp(launchedAlready ? "already launched" : "already launches").test(d.match ?? ""));
     yes("  ...with the way out if it is not the same field", /different field, change the name/i.test(d.match ?? ""));
     is("  the action becomes a link, not a create", d.save.mode, "link");
     yes(`  ...and says so ("${d.save.text}")`, /Link/.test(d.save.text));

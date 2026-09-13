@@ -70,6 +70,8 @@
   .note.ok{background:var(--greenBg);color:#124e35;border:1px solid var(--greenLine)}
   .note.warn{background:#FEF6E7;color:#7a4f0d;border:1px solid #f0d9b6}
   .note.bad{background:#fdeae4;color:#8d2f13;border:1px solid #f0bda9}
+  .optrow{display:flex;gap:8px;align-items:flex-start;margin-top:9px;font-size:11.5px;line-height:1.4;color:#54655c}
+  .optrow input{width:18px;height:18px;flex:none;margin-top:1px}
 
   /* THE FIELD ROW INSIDE THE EDIT CARD MODAL. */
   .frow{margin-top:12px}
@@ -102,6 +104,7 @@
   <button data-s="modal-none">modal · no field</button>
   <button data-s="modal-bound">modal · bound</button>
   <button data-s="prefill">dialog · prefilled offer</button>
+  <button data-s="longrun">dialog · already running</button>
   <button data-s="stacked">dialog over modal</button>
   <button data-s="match">match fields</button>
 </div>
@@ -178,6 +181,12 @@
     </label>
     <div style="font-size:11.5px;color:#6d7b74;margin-top:6px" data-testid="bind-cd"></div>
 
+    <div class="note warn hid" data-testid="bind-noplan"></div>
+    <label class="optrow hid" data-testid="bind-planopt">
+      <input type="checkbox" data-testid="bind-planopt-box">
+      <span>Start a 20-week plan anyway. Only for a field being relaunched. Every task is dated
+        from the launch date, so on a date this old they all open overdue.</span>
+    </label>
     <div class="note ok hid" data-testid="bind-preview"></div>
 
     <div class="df">
@@ -205,21 +214,39 @@ const d0 = s => new Date(s + "T00:00:00Z");
 const days = s => Math.round((d0(s) - TODAY) / 86400000);
 const cdText = s => { const n = days(s); return n > 0 ? n + " days to launch" : n === 0 ? "launches today" : (-n) + " days since launch"; };
 const fmt = s => d0(s).toLocaleDateString("en-US",{timeZone:"UTC",day:"numeric",month:"short",year:"numeric"});
+const fmtMY = s => d0(s).toLocaleDateString("en-US",{timeZone:"UTC",month:"short",year:"numeric"});
+
+/* ── THE PLAN WINDOW, WHICH ALREADY EXISTS IN THE CODE ──────────────────────
+ * launchPlan.ts: PLAN_WEEKS 20, LAUNCH_WEEK 5, planStart = launch - 28d,
+ * weekOf = floor((today - planStart)/7d)+1, isLive = weekOf <= 20. So a plan
+ * runs from 4 weeks before launch to 16 weeks after, and isLive is ALREADY
+ * what drops a finished launch off /growth/launch. It is the same question
+ * Ryan is asking, so it is the same function — not a new threshold. */
+const PLAN_WEEKS = 20, LAUNCH_WEEK = 5;
+const weekOf = s => Math.floor((TODAY - (d0(s) - (LAUNCH_WEEK-1)*7*86400000)) / (7*86400000)) + 1;
+const isLive = s => weekOf(s) <= PLAN_WEEKS;
+const launched = s => days(s) < 0;
 
 /* fin_venues, as the board loads it. Westlake and The Hattrick exist; Stony Point does not. */
 const VENUES = [
   { id: 41, venue_name:"Westlake",     city:"Austin",  launch_date:"2026-07-01" },
   { id: 52, venue_name:"The Hattrick", city:"Atlanta", launch_date:"2026-10-02" },
   { id: 63, venue_name:"Crossbar Rowlett", city:"Dallas", launch_date:"2026-09-18" },
+  /* PRUMC launched 20 Jan 2026. It has been running for 236 days: week 38 of a 20-week
+     plan. Ryan: "we dont need a plan for ones that have been going for a long time". */
+  { id: 74, venue_name:"PRUMC",        city:"Atlanta", launch_date:"2026-01-20" },
+  { id: 85, venue_name:"Mercy Street", city:"Dallas",  launch_date:"2026-02-10" },
 ];
 /* Cards in Confirmed. c2 is already bound; c1/c3/c4 are the backfill. */
 const CARDS = [
   { id:"c2", title:"Crossbar Rowlett", city:"Dallas",  owner:"Michael Hollman", venue_id:63 },
+  { id:"c5", title:"Mercy Street",     city:"Dallas",  owner:"Ryan Mancuso",    venue_id:85 },
   { id:"c1", title:"Westlake",         city:"Austin",  owner:"Jaimee Rodriguez", venue_id:null },
+  { id:"c6", title:"PRUMC",            city:"Atlanta", owner:"Michael Hollman", venue_id:null },
   { id:"c4", title:"Hat / The Hattrick", city:"Atlanta", owner:"Michael Hollman", venue_id:null },
   { id:"c3", title:"Stony Point",      city:"Austin",  owner:"Michael Hollman", venue_id:null },
 ];
-const HOLDER = { 63:"c2" };  // venue_id -> card holding it
+const HOLDER = { 63:"c2", 85:"c5" };  // venue_id -> card holding it
 
 const ini = n => n.split(/\s+/).slice(0,2).map(w=>w[0]).join("").toUpperCase();
 const norm = s => String(s||"").trim().toLowerCase();
@@ -258,7 +285,12 @@ function renderCards(){
       <span class="own"><span class="av">${ini(c.owner)}</span><span class="onm">${c.owner}</span></span></div>
       <span class="cityp"><i></i>${c.city}</span>`;
     if (bound && v.launch_date){
-      html += `<br><span class="cd" data-testid="card-countdown" data-soon="${days(v.launch_date)<=14?1:0}">${cdText(v.launch_date)}</span>`;
+      /* A LAUNCH THAT IS OVER IS NOT A COUNTDOWN. "236 days since launch" grows forever and
+         says nothing; past the plan window the card says when the field opened instead. */
+      const live = isLive(v.launch_date);
+      html += `<br><span class="cd" data-testid="card-countdown" data-live="${live?1:0}"
+        data-soon="${live && days(v.launch_date)<=14 && days(v.launch_date)>=0 ?1:0}"
+        style="${live?'':'background:#eef3f0;color:#54655c'}">${live ? cdText(v.launch_date) : "launched " + fmtMY(v.launch_date)}</span>`;
     }
     if (!bound){
       /* THE CHIP NAMES THE FIELD IT WILL LINK TO when the card's own title already
@@ -295,7 +327,9 @@ function openModal(id){
   const bt = document.getElementById("fbtn");
   if (bound){
     nm.textContent = v.venue_name;
-    mt.textContent = `${v.city} · launches ${fmt(v.launch_date)} · ${cdText(v.launch_date)}`;
+    mt.textContent = isLive(v.launch_date)
+      ? `${v.city} · launches ${fmt(v.launch_date)} · ${cdText(v.launch_date)}`
+      : `${v.city} · launched ${fmt(v.launch_date)} · past the plan window, no launch plan`;
     bt.textContent = "Change…";
     bt.dataset.kind = "change";
   } else {
@@ -335,6 +369,7 @@ let touched = false;
 document.querySelector('[data-testid="bind-launch"]').addEventListener("input", ()=>{touched=true;syncBind();});
 document.querySelector('[data-testid="bind-launch"]').addEventListener("change", ()=>{touched=true;syncBind();});
 document.querySelector('[data-testid="bind-newname"]').addEventListener("input", ()=>syncBind());
+document.querySelector('[data-testid="bind-planopt-box"]').addEventListener("change", ()=>syncBind());
 document.querySelector('[data-testid="bind-cancel"]').addEventListener("click", ()=>{
   document.getElementById("bindScrim").classList.add("hid");
 });
@@ -354,16 +389,17 @@ function syncBind(){
 
   if (r.mode === "link"){
     match.classList.remove("hid");
-    match.innerHTML = `<b>${r.venue.venue_name}</b> · ${r.venue.city} · already launches ${fmt(r.venue.launch_date)}.
+    match.innerHTML = `<b>${r.venue.venue_name}</b> · ${r.venue.city} · already ${
+      launched(r.venue.launch_date) ? "launched" : "launches"} ${fmt(r.venue.launch_date)}.
       Linking uses that record. If this is a different field, change the name.`;
     if (!touched && !dt.value) dt.value = r.venue.launch_date;
-    save.dataset.mode = "link"; save.textContent = "Link the field";
+    save.dataset.mode = "link";
   } else if (r.mode === "taken"){
     dupe.classList.remove("hid");
     dupe.innerHTML = `<b>${r.venue.venue_name}</b> is already linked to the card
-      "${cardTitle(r.holder)}". One field has one launch plan — unlink that card first,
+      "${cardTitle(r.holder)}". One field has one launch plan. Unlink that card first,
       or change the name if this is a different field.`;
-    save.dataset.mode = "taken"; save.textContent = "Create the field";
+    save.dataset.mode = "taken";
   } else {
     if (norm(name)){
       city.classList.remove("hid");
@@ -372,18 +408,47 @@ function syncBind(){
         <b>per match</b>. Until somebody enters a rate it reads in Finance as a field needing one,
         not as a field that costs nothing.`;
     }
-    save.dataset.mode = "create"; save.textContent = "Create the field";
+    save.dataset.mode = "create";
   }
   cd.textContent = dt.value ? cdText(dt.value) : "";
+
+  /* ── A PLAN OR NO PLAN, DECIDED BY THE DATE ─────────────────────────────────
+   * Ryan: "its saying link and create the plan but we dont need a plan for ones
+   * that have been going for a long time." PRUMC opened 20 Jan 2026 — week 38 of
+   * a 20-week plan. Seeding it would write 24 tasks whose weeks are all behind it,
+   * and isLive() would drop the plan off /growth/launch the moment it was made.
+   * So the same isLive() decides whether it is made at all. */
+  const noplan = document.querySelector('[data-testid="bind-noplan"]');
+  const optrow = document.querySelector('[data-testid="bind-planopt"]');
+  const optbox = document.querySelector('[data-testid="bind-planopt-box"]');
+  const live   = dt.value ? isLive(dt.value) : true;
+  if (!dt.value || live){ optrow.classList.add("hid"); optbox.checked = false; noplan.classList.add("hid"); }
+  else {
+    noplan.classList.remove("hid");
+    noplan.innerHTML = `This field opened <b>${fmt(dt.value)}</b>, ${Math.abs(days(dt.value))} days ago.
+      A launch plan runs from four weeks before to sixteen weeks after, so there is no plan to make.
+      Linking records the field and stops there.`;
+    optrow.classList.remove("hid");
+  }
+  const willPlan = live || optbox.checked;
+  save.dataset.plan = willPlan ? "1" : "0";
+
   const can = !!norm(name) && !!dt.value && r.mode !== "taken";
   save.disabled = !can;
+  save.textContent = r.mode === "link"
+    ? (willPlan ? "Link and create the plan" : "Link the field")
+    : (willPlan ? "Create and start the plan" : "Create the field");
   if (can){
     prev.classList.remove("hid");
-    prev.innerHTML = r.mode === "link"
-      ? `Links this card to <b>${r.venue.venue_name}</b> and starts its launch plan: <b>24 tasks</b>
-         dated from ${fmt(dt.value)}. Nothing is sent to anybody.`
-      : `Creates <b>${name.trim()}</b> and starts its launch plan: <b>24 tasks</b> dated from
-         ${fmt(dt.value)}. Nothing is sent to anybody.`;
+    const what = r.mode === "link"
+      ? `Links this card to <b>${r.venue.venue_name}</b>`
+      : `Creates <b>${name.trim()}</b> in ${(CARDS.find(x=>x.id===bindCard)||{}).city}`;
+    prev.innerHTML = willPlan
+      ? `${what} and starts its launch plan: <b>24 tasks</b> dated from ${fmt(dt.value)}${
+          launched(dt.value) ? `, of which the build-up weeks are already behind it` : ``}.
+         Nothing is sent to anybody.`
+      : `${what}. <b>No launch plan.</b> Finance and Growth read the same record from here on.
+         Nothing is sent to anybody.`;
   } else prev.classList.add("hid");
 }
 
@@ -421,15 +486,27 @@ function openMatch(){
       const r = resolve(nameI.value, c.id);
       const res = row.querySelector('[data-testid="mr-res"]');
       const go  = row.querySelector('[data-testid="mr-go"]');
+      const live = dateI.value ? isLive(dateI.value) : true;
+      go.dataset.plan = live ? "1" : "0";
+      /* SAME RULE AS THE DIALOG, SAME SENTENCE. A row that will not make a plan says so
+         here, where the decision is actually being taken, not afterwards. */
+      const tail = !dateI.value ? ``
+        : live ? ` Starts a <b>24-task</b> plan.`
+        : ` <b>No plan</b>: it opened ${Math.abs(days(dateI.value))} days ago, past the plan window.`;
       if (r.mode === "link"){
         if (!rowTouched && !dateI.value && r.venue.launch_date) dateI.value = r.venue.launch_date;
-        res.innerHTML = `Links to <b>${r.venue.venue_name}</b> · ${r.venue.city} · already launches ${fmt(r.venue.launch_date)}.`;
+        const lv = dateI.value ? isLive(dateI.value) : true;
+        go.dataset.plan = lv ? "1" : "0";
+        const t2 = !dateI.value ? `` : lv ? ` Starts a <b>24-task</b> plan.`
+          : ` <b>No plan</b>: it opened ${Math.abs(days(dateI.value))} days ago, past the plan window.`;
+        res.innerHTML = `Links to <b>${r.venue.venue_name}</b> · ${r.venue.city} · already ${
+          launched(r.venue.launch_date) ? "launched" : "launches"} ${fmt(r.venue.launch_date)}.${t2}`;
         go.textContent = "Link"; go.dataset.mode = "link";
       } else if (r.mode === "taken"){
         res.innerHTML = `<b>${r.venue.venue_name}</b> is already linked to "${cardTitle(r.holder)}". Unlink that card first, or change the name.`;
         go.textContent = "Link"; go.dataset.mode = "taken";
       } else {
-        res.innerHTML = `No field carries this name. <b>Creates</b> one in ${c.city}, billed per match, with no rate yet.`;
+        res.innerHTML = `No field carries this name. <b>Creates</b> one in ${c.city}, billed per match, with no rate yet.${tail}`;
         go.textContent = "Create"; go.dataset.mode = "create";
       }
       go.disabled = !(norm(nameI.value) && dateI.value && r.mode !== "taken");
@@ -449,6 +526,7 @@ function show(s){
   if (s === "modal-none")  openModal("c3");
   if (s === "modal-bound") openModal("c2");
   if (s === "prefill")     openBind("c1", "Westlake");
+  if (s === "longrun")     openBind("c6", "PRUMC");
   if (s === "stacked")   { openModal("c3"); openBind("c3", "Stony Point"); }
   if (s === "match")       openMatch();
   document.querySelectorAll(".sw button").forEach(b=>b.setAttribute("aria-pressed", String(b.dataset.s===s)));

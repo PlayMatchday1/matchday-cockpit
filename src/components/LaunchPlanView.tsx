@@ -234,6 +234,8 @@ export default function LaunchPlanView({ venueId }: { venueId: number }) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [needsMigration, setNeedsMigration] = useState(false);
+  /** Set when this field is past the plan window, so the page says so instead of drawing an empty plan. */
+  const [skippedPastWindow, setSkippedPastWindow] = useState(false);
 
   /* ── WHICH PHASES ARE OPEN IS STATE, NOT A DERIVATION ──────────────────────────────────────
    * It was recomputed from the current week on every render, so every tick, every N/A and every
@@ -303,13 +305,21 @@ export default function LaunchPlanView({ venueId }: { venueId: number }) {
        * it on open is the repair and costs one small SELECT. */
       if (!seedingRef.current) {
         seedingRef.current = true;
-        const seeded = await seedLaunchPlan(venueId, coordinatorOf(bound, venueId));
+        /* ── THE REPAIR PASS IS GUARDED TOO, AND IT IS THE NASTIER OF THE TWO ────────────────
+         * This exists so a venue bound before 0173 applied gets its rows on first open. Left
+         * ungated it would re-seed a field that has been running for months every time somebody
+         * opened its plan, which is the bug the dialog's guard is there to prevent — just reached
+         * by a different door. The date is passed, so seedLaunchPlan refuses it. No force here:
+         * a relaunch is a deliberate choice made in the bind dialog, not a side effect of
+         * visiting a URL. */
+        const seeded = await seedLaunchPlan(venueId, coordinatorOf(bound, venueId), v.launch_date);
         if (seeded.missingTable) {
           setNeedsMigration(true);
           setTasks([]);
           return;
         }
         if (seeded.error) throw new Error(seeded.error);
+        setSkippedPastWindow(seeded.skipped === "past-window");
       }
       const tRes = await loadTasksForVenues([venueId]);
       if (tRes.missingTable) {
@@ -457,6 +467,31 @@ export default function LaunchPlanView({ venueId }: { venueId: number }) {
           <p className="lp-empty" data-testid="lp-nodate">
             <b>{venue.venue_name}</b> has no launch date, and every date on this plan is computed
             from it. Set one in Finance › Field Costs and the 20 weeks start.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  /* ── A FIELD PAST THE WINDOW WITH NO PLAN SAYS SO ────────────────────────────────────────────
+   * Seeding refused, so there are no rows. Rendering the plan anyway would draw "0 of 0 done",
+   * three empty phases and a timeline of nothing, which reads as a broken page rather than as the
+   * deliberate answer it is. A field that HAS rows (seeded before this rule, or forced as a
+   * relaunch) still renders its plan normally. */
+  if (skippedPastWindow && tasks.length === 0) {
+    return (
+      <div className="lp" data-testid="lp-page">
+        <style>{LP_CSS}</style>
+        <div className="lp-wrap">
+          <div className="lp-navrow">
+            <Link className="lp-back" href="/growth/launch" data-testid="lp-back">
+              <span aria-hidden>←</span> All launches
+            </Link>
+          </div>
+          <p className="lp-empty" data-testid="lp-pastwindow">
+            <b>{venue.venue_name}</b> opened {fmtLaunchDate(launch)}, {Math.abs(daysToLaunch(launch, today) ?? 0)} days
+            ago. A launch plan runs from four weeks before to sixteen weeks after, so there is no plan
+            for this field. Its record lives in Finance.
           </p>
         </div>
       </div>
