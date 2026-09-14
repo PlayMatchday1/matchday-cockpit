@@ -121,7 +121,19 @@ export async function POST(req: Request) {
    * IDS SURVIVE THE REPLACE. A row that is edited keeps its id, so its pushed_at survives too —
    * delete-all-and-reinsert would un-send every push on the match every time somebody fixed a
    * typo in a topic. */
-  const incoming = Array.isArray(body.pushes) ? body.pushes : [];
+  /* ── A BODY WITH NO `pushes` KEY IS A STALE TAB, AND IT IS REFUSED ────────────────────────
+   * AN EMPTY ARRAY AND A MISSING FIELD ARE NOT THE SAME THING. `pushes: []` is a real request —
+   * every channel turned off — and it deletes this match's rows. `pushes` ABSENT is a browser
+   * still running the pre-0176 bundle, posting { channels, pushAt, promoCode }; treated as an
+   * empty replace it would wipe every push on the match, and the person would watch their own
+   * Save do it. Nobody can hold a tab open across a deploy safely otherwise. */
+  if (!Array.isArray(body.pushes)) {
+    return Response.json({
+      outcome: "FAILED",
+      error: "This page is out of date. Reload it and make the change again. Nothing was written.",
+    }, { status: 409 });
+  }
+  const incoming = body.pushes;
   const parsed: { id: number | null; channel: ChannelKey; push_at: string | null; topic: string | null; promo_code: string | null }[] = [];
   for (const raw of incoming) {
     const channel = String(raw?.channel ?? "");

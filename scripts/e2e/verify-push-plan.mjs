@@ -112,6 +112,13 @@ async function boot(browser, storageState, { width = 1100, timezoneId = "America
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ outcome: "LANDED" }) });
     }
 
+    /* A BODY WITH NO `pushes` KEY IS A STALE TAB — the route refuses it rather than reading it as
+     * "delete everything", and so does this, because a fixture that is kinder than production
+     * tests the fixture. */
+    if (!Array.isArray(body.pushes)) {
+      return route.fulfill({ status: 409, contentType: "application/json",
+        body: JSON.stringify({ outcome: "FAILED", error: "This page is out of date. Reload it and make the change again. Nothing was written." }) });
+    }
     /* A FULL REPLACE, SCOPED TO THE MATCH — the same semantics the route implements, including
      * that ids survive so a sent stamp is not lost when a topic is edited. */
     const keep = new Set();
@@ -442,6 +449,41 @@ async function main() {
     const msg = await txt(p, '[data-testid="panel"]');
     yes("saving refuses and names the migration", /0176/.test(msg ?? ""));
     is("  CONTROL: the editor still opened and the toggle still worked", store.writes.length, 1);
+    await closeContext(ctx);
+  }
+
+  // ══ THE MIGRATION RACE ════════════════════════════════════════════════════════════════════
+  {
+    head("a stale tab cannot wipe a match's pushes");
+    /* MEASURED, NOT HYPOTHETICAL. 0176's backfill ran at 20:29 UTC on 2026-09-14 and nine plans
+     * were saved through the old editor between 20:33 and 20:48. A browser left open across the
+     * deploy posts { channels, pushAt, promoCode } with no `pushes` key at all; read as an empty
+     * replace that deletes every push on the match, and Save is what does it. */
+    const store = makeStore(base());
+    const { ctx, p, errs } = await boot(browser, storageState, { store });
+    is("no page error", errs.length, 0);
+    const before = store.rows.length;
+    const out = await p.evaluate(async () => {
+      const res = await fetch("/api/match-promotion", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        /* THE PRE-0176 BODY, EXACTLY. */
+        body: JSON.stringify({ matchApiId: 1, channels: { wa: true }, pushAt: null, promoCode: "" }),
+      });
+      return { status: res.status, json: await res.json().catch(() => null) };
+    });
+    is("the old body shape is refused, not obeyed", out.json?.outcome, "FAILED");
+    yes(`  and it says what to do: "${out.json?.error}"`, /out of date/i.test(out.json?.error ?? ""));
+    is("  CONTROL: nothing was deleted", store.rows.length, before);
+    /* AND AN EMPTY ARRAY IS STILL A REAL REQUEST — every channel off. The two must not collapse. */
+    const off = await p.evaluate(async () => {
+      const res = await fetch("/api/match-promotion", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matchApiId: 1, pushes: [] }),
+      });
+      return (await res.json().catch(() => null))?.outcome;
+    });
+    is("CONTROL: an EMPTY array is still honoured, because that is 'every channel off'", off, "LANDED");
+    is("  and it did clear the rows", store.rows.length, 0);
     await closeContext(ctx);
   }
 
