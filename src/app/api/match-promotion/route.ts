@@ -38,6 +38,15 @@ type SaveBody = {
   pushAt?: string | null;
   promoCode?: string | null;
   comment?: string | null;
+  /* ── MARK SENT ────────────────────────────────────────────────────────────────────────────
+   * ABSENT, not false, on an ordinary plan edit. Three states, and the difference matters:
+   *   true      somebody pressed Mark sent
+   *   false     somebody pressed it again to un-mark
+   *   undefined this save is about the channels or the time, and MUST NOT touch the stamp —
+   *             editing a plan is not un-sending its push.
+   * Omitting the columns entirely also means an ordinary save keeps working before 0175 is
+   * applied: only a mark-sent write can hit the missing column, and it says so. */
+  pushed?: boolean;
 };
 
 /** "" and whitespace collapse to NULL. An empty string is not a value, it is a cleared field. */
@@ -81,6 +90,22 @@ export async function POST(req: Request) {
   };
   for (const k of CHANNEL_KEYS) row[k] = body.channels?.[k] === true;
 
+  /* A ROW WITH NO push_at CANNOT BE MARKED SENT. Migration 0128 is explicit that a NULL push_at
+   * means "needs a decision", which is not the same as "no plan", and a sent flag must not blur
+   * that: there is nothing to have sent. The UI disables the control; this refuses it anyway,
+   * because a UI check is not a rule. */
+  if (body.pushed === true && pushAt === null) {
+    return Response.json({
+      outcome: "FAILED",
+      error: "This plan has no push time yet, so there is nothing to mark sent. Set a time first.",
+    }, { status: 400 });
+  }
+  if (typeof body.pushed === "boolean") {
+    row.pushed_at = body.pushed ? new Date().toISOString() : null;
+    /* THE SAME IDENTITY updated_by TAKES. A person asserting it happened. */
+    row.pushed_by = body.pushed ? auth.email ?? null : null;
+  }
+
   const sb = auth.supabase;
   try {
     // BEFORE, for the audit. Read first so a change can be reconstructed from the log alone.
@@ -96,12 +121,17 @@ export async function POST(req: Request) {
     // must never pretend. This is the message that tells Ryan the migration has not been applied.
     if (error) {
       const missing = /relation .* does not exist|schema cache/i.test(error.message);
+      /* THE SENT COLUMNS ARE 0175 AND MAY NOT BE APPLIED YET. Naming them separately is the
+       * difference between "apply the migration" and a 42703 nobody can read. */
+      const noSentCols = /pushed_at|pushed_by/.test(error.message);
       return Response.json({
         outcome: "FAILED",
-        error: missing
-          ? "match_promotion_plan does not exist yet — apply migration 0128 before saving a plan."
-          : error.message,
-      }, { status: missing ? 503 : 500 });
+        error: noSentCols
+          ? "Marking a push sent needs migration 0175. Nothing was written."
+          : missing
+            ? "match_promotion_plan does not exist yet — apply migration 0128 before saving a plan."
+            : error.message,
+      }, { status: missing || noSentCols ? 503 : 500 });
     }
     if (!written) {
       return Response.json({ outcome: "NOT APPLIED", error: "The write matched no rows." }, { status: 409 });

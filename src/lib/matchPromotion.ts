@@ -38,7 +38,50 @@ export type PromoPlan = {
   comment: string | null;
   updatedBy: string | null;
   updatedAt: string | null;
+  /** When somebody marked the push sent. NULL is "not sent". Migration 0175. */
+  pushedAt: string | null;
+  /** Who said so. The same identity updatedBy takes: a person, not a delivery receipt. */
+  pushedBy: string | null;
 };
+
+/* ── OVERDUE, IN ONE PLACE ────────────────────────────────────────────────────────────────────
+ * It used to be `j.at < now` written inline, which is why a push that went out at noon was still
+ * red at midnight: there was no column recording the send, so nothing could ever stop being
+ * overdue. Both surfaces read this now, so they cannot drift.
+ *
+ * A PLAN WITH NO push_at IS NOT OVERDUE. NULL there means "needs a decision" (migration 0128), and
+ * a decision nobody has made yet is not a deadline anybody has missed. */
+export function isPushOverdue(plan: Pick<PromoPlan, "pushAt" | "pushedAt"> | null | undefined, now = Date.now()): boolean {
+  if (!plan?.pushAt) return false;
+  if (plan.pushedAt) return false;
+  return Date.parse(plan.pushAt) < now;
+}
+
+/** True once somebody has marked it sent. */
+export const isPushSent = (plan: Pick<PromoPlan, "pushedAt"> | null | undefined): boolean =>
+  !!plan?.pushedAt;
+
+/* "Sent Mon 6:30 PM by Ryan". WHO AND WHEN, because the point of leaving a sent row on the strip is
+ * that somebody else can see it was handled and by whom. The local clock, like every other time on
+ * this strip. */
+export function sentStamp(plan: Pick<PromoPlan, "pushedAt" | "pushedBy">): string {
+  if (!plan.pushedAt) return "";
+  const d = new Date(plan.pushedAt);
+  if (Number.isNaN(d.getTime())) return "Sent";
+  const DOWS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  let h = d.getHours();
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ap = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  /* THE NAME, NOT THE ADDRESS. "social@playmatchday.com" is not who, it is where. */
+  const who = plan.pushedBy ? plan.pushedBy.split("@")[0] : null;
+  return `Sent ${DOWS[(d.getDay() + 6) % 7]} ${h}:${mm} ${ap}${who ? ` by ${who}` : ""}`;
+}
+
+/* A PUSH WITH NO TIME CANNOT BE MARKED SENT. There is nothing to have sent, and writing a stamp
+ * against it would blur "needs a decision" into "done". */
+export const canMarkSent = (plan: Pick<PromoPlan, "pushAt"> | null | undefined): boolean =>
+  !!plan?.pushAt;
 
 /* ── NEW TO THE SLATE ─────────────────────────────────────────────────────────────────────────
  *
@@ -174,6 +217,10 @@ async function fetchPlans(
         comment: r.comment ?? null,
         updatedBy: r.updated_by ?? null,
         updatedAt: r.updated_at ?? null,
+        /* READ DEFENSIVELY. The select is "*", so before 0175 applies these are simply absent and
+         * read as null, which is "not sent" and is exactly today's behaviour. */
+        pushedAt: (r.pushed_at as string | null) ?? null,
+        pushedBy: (r.pushed_by as string | null) ?? null,
       });
     }
   }

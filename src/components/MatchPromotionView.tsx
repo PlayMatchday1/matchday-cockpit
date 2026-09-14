@@ -25,8 +25,10 @@ import { getCancelPatterns } from "@/lib/cancelPatterns";
 import { mostRecentCompletedWeekMonday } from "@/lib/weekWindow";
 import {
   CHANNELS, CHANNEL_KEYS, NEW_FLAG_LABEL, coverageCaption, coverageStateOf, coverageSummary,
+  isPushOverdue, isPushSent, sentStamp,
   type ChannelKey, type PromoMatch, type PromoWeek,
 } from "@/lib/matchPromotion";
+import MarkPushSent from "@/components/MarkPushSent";
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -214,7 +216,11 @@ export default function MatchPromotionView() {
       .sort((a, b) => a.at - b.at);
   }, [week]);
   const now = Date.now();
-  const overdue = jobs.filter((j) => j.at < now).length;
+  /* OVERDUE IS push_at IN THE PAST AND NOT YET SENT. It used to be the first half alone, which is
+   * why a push that went out at noon was still red at midnight. The rule lives in matchPromotion
+   * so this strip and the phone's Due list cannot drift. */
+  const overdue = jobs.filter((j) => isPushOverdue(j.m.plan, now)).length;
+  const sentCount = jobs.filter((j) => isPushSent(j.m.plan)).length;
   const noPlan = week?.matches.filter((m) => m.state === "none").length ?? 0;
 
   // THE PHONE'S CANCEL RANKING — the desktop matrix's own numbers, flattened and ordered. 1-of-4
@@ -244,7 +250,7 @@ export default function MatchPromotionView() {
     return (
       <MatchPromotionMobile
         week={week} tab={mTab} setTab={setMTab}
-        jobs={jobs} overdue={overdue}
+        jobs={jobs} overdue={overdue} onReload={() => load(weekRef)}
         openId={openId} draft={draft} setDraft={setDraft}
         onOpen={openMatch} onClose={closePanel} onSave={() => void save()}
         saving={saving} toast={toast}
@@ -298,28 +304,46 @@ Which matches get promoted, on which channels, and when the push goes out.
           <div className="mb-2.5 flex items-baseline gap-2.5">
             <span className="text-[9.5px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Next 48 hours</span>
             <span className="text-[12px] font-bold text-deep-green/65" data-testid="strip-counts">
-              {jobs.length} push{jobs.length === 1 ? "" : "es"} · {overdue} overdue · {noPlan} match{noPlan === 1 ? "" : "es"} with no plan
+              {jobs.length} push{jobs.length === 1 ? "" : "es"}
+              {/* THE SENT COUNT ONLY APPEARS ONCE THERE IS ONE, so a clean week does not grow a
+                  permanent zero. */}
+              {sentCount > 0 && <> · <b data-testid="strip-sent">{sentCount} sent</b></>}
+              {" · "}{overdue} overdue · {noPlan} match{noPlan === 1 ? "" : "es"} with no plan
             </span>
           </div>
           <div className="flex flex-wrap gap-2" data-testid="jobs">
             {jobs.length === 0 && <span className="text-[12px] text-deep-green/40">Nothing scheduled this week.</span>}
-            {jobs.map(({ m, at }) => {
-              const late = at < now;
+            {jobs.map(({ m }) => {
+              /* THREE ROWS, THREE LOOKS, and the label carries it too so colour is never the only
+                 signal. A SENT row goes QUIET, NOT AWAY: Ryan asked for "they still show so
+                 everyone has visibility", so the red drops, the time is struck through and the
+                 channel chips grey out, but the row stays exactly where it was. */
+              const sent = isPushSent(m.plan);
+              const late = isPushOverdue(m.plan, now);
               const p = fmtPushLocal(m.plan!.pushAt!);
               return (
-                <div key={m.apiId} data-testid="job"
-                  className={`flex items-center gap-2.5 rounded-[9px] border px-2.5 py-[7px] text-[12.5px] ${
-                    late ? "border-coral/40 bg-coral-soft/40" : "border-cream-line bg-white"}`}>
-                  <span className={`whitespace-nowrap text-[12.5px] font-extrabold ${late ? "text-coral" : ""}`}>
+                <div key={m.apiId} data-testid="job" data-sent={sent ? "1" : "0"} data-late={late ? "1" : "0"}
+                  className={`flex flex-wrap items-center gap-2.5 rounded-[9px] border px-2.5 py-[7px] text-[12.5px] ${
+                    sent ? "border-cream-line bg-[#f4f7f5]"
+                      : late ? "border-coral/40 bg-coral-soft/40" : "border-cream-line bg-white"}`}>
+                  <span className={`whitespace-nowrap text-[12.5px] font-extrabold ${
+                    sent ? "text-deep-green/45 line-through" : late ? "text-coral" : ""}`}>
                     {late ? "Overdue · " : ""}{p.day} {p.time}
                   </span>
-                  <span className="text-deep-green/65">{m.venue} · {DOW[m.dayIdx]} {m.time}</span>
+                  <span className={sent ? "text-deep-green/45" : "text-deep-green/65"}>{m.venue} · {DOW[m.dayIdx]} {m.time}</span>
                   {/* ONLY LIT CHANNELS HERE. In a worklist an unsent channel is not work. */}
                   <span className="flex flex-wrap gap-[3px]">
                     {CHANNELS.filter((c) => m.plan!.channels[c.key]).map((c) => (
-                      <i key={c.key} className="inline-flex h-[18px] min-w-[24px] items-center justify-center rounded-[5px] border border-mint/40 bg-mint-soft/40 px-1 text-[9.5px] font-extrabold not-italic text-emerald-700">{c.short}</i>
+                      <i key={c.key} className={`inline-flex h-[18px] min-w-[24px] items-center justify-center rounded-[5px] border px-1 text-[9.5px] font-extrabold not-italic ${
+                        sent ? "border-cream-line bg-[#eef3f0] text-deep-green/40"
+                          : "border-mint/40 bg-mint-soft/40 text-emerald-700"}`}>{c.short}</i>
                     ))}
                   </span>
+                  {/* WHO AND WHEN, on the row. The point of leaving it visible is that somebody
+                      else can see it was handled and by whom. */}
+                  {sent && <span data-testid="job-stamp" className="text-[11.5px] text-deep-green/45">{sentStamp(m.plan!)}</span>}
+                  <MarkPushSent m={m} onDone={() => load(weekRef)}
+                    onError={(msg) => setToast({ msg, bad: true })} />
                 </div>
               );
             })}
@@ -439,22 +463,15 @@ function Plan({ week, byCity, openId, onOpen, openCity, panel }: {
     <>
       <div className="px-5 pb-0.5 pt-1">
         <h2 className="m-0 text-[15px] font-extrabold uppercase tracking-[0.02em]">The week</h2>
-        <p className="mt-1.5 max-w-[930px] text-[12.5px] text-deep-green/65">
-          Click a match to plan it. A tile shows only what is planned — a channel chip means that
-          channel is selected, and a tile with nothing on it has no plan.
-        </p>
-        {/* THE RULE, ON THE PAGE. Marketing has to be able to read what NEW means without asking,
-            and printing the dates it compared makes a wrong week visible instead of silent. */}
-        <p className="mt-1.5 max-w-[930px] text-[12.5px] text-deep-green/65" data-testid="new-rule">
-          <b className="rounded-[4px] bg-deep-green px-[5px] py-px text-[8.5px] font-extrabold tracking-[0.04em] text-white align-[2px]">NEW</b>{" "}
-          marks a slot that was not on <b>last week&apos;s slate for the same city</b> — the same seven
-          weekdays one week earlier ({priorLabel}), <b>including matches that were cancelled</b>,
-          because a cancelled slot was still scheduled and still published. Compared per field:{" "}
-          <b>NEW FIELD</b>{" "}the pitch is new to the city, <b>NEW DAY</b>{" "}the pitch is not new but this
-          weekday is, <b>NEW TIME</b>{" "}the pitch and weekday ran but at another time. Nothing here
-          reads a match&apos;s creation date — a match booked last month for a slot that has never run
-          is still new to a player.
-        </p>
+        {/* ── TWO PARAGRAPHS DELETED, AND THE RULE KEPT ────────────────────────────────────
+            The first restated what clicking a tile does. The second was the whole NEW definition,
+            eight lines of prose above the grid, and EVERY BADGE ALREADY CARRIES IT in its own
+            title. Ryan: "also remove all this its jus tnoise."
+
+            THE ONE THING THE PARAGRAPH HAD THAT THE BADGE DID NOT was the week it compared
+            against, and the reason for printing it was good: a wrong week should be visible rather
+            than silent. So the dates moved INTO the badge's title rather than being lost. The rule
+            is still checkable, one hover away, on the thing it describes. */}
       </div>
       {byCity.map(([city, matches]) => {
         const planned = matches.filter((m) => m.state === "planned").length;
@@ -486,7 +503,7 @@ function Plan({ week, byCity, openId, onOpen, openCity, panel }: {
                       <span>{d.dow}</span><b className="text-[12.5px] tracking-normal text-deep-green/65">{d.date}</b>
                     </div>
                     {dayMatches.length === 0 && <div className="pt-1.5 text-[11.5px] text-deep-green/30">No sessions</div>}
-                    {dayMatches.map((m) => <Tile key={m.apiId} m={m} open={m.apiId === openId} onOpen={onOpen} weekStart={week.weekStart} />)}
+                    {dayMatches.map((m) => <Tile key={m.apiId} m={m} open={m.apiId === openId} onOpen={onOpen} weekStart={week.weekStart} priorLabel={priorLabel} />)}
                   </div>
                 );
               })}
@@ -513,7 +530,7 @@ function Plan({ week, byCity, openId, onOpen, openCity, panel }: {
  * PLANNED TILES STAY DISTINCT BY WEIGHT, NOT BY LABEL. A tile with a plan carries chips and a push
  * line and a solid left rail; a tile without carries a dashed border and almost no ink. The eye
  * finds the planned ones because they are the only ones with anything in them. */
-function Tile({ m, open, onOpen, weekStart }: { m: PromoMatch; open: boolean; onOpen: (m: PromoMatch, el: HTMLElement) => void; weekStart: string }) {
+function Tile({ m, open, onOpen, weekStart, priorLabel }: { m: PromoMatch; open: boolean; onOpen: (m: PromoMatch, el: HTMLElement) => void; weekStart: string; priorLabel: string }) {
   const lit = CHANNELS.filter((c) => m.plan?.channels[c.key] === true);
   const border =
     m.state === "needs-decision" ? "border-amber-300 bg-amber-50"
@@ -528,7 +545,9 @@ function Tile({ m, open, onOpen, weekStart }: { m: PromoMatch; open: boolean; on
         <span className="text-[12.5px] font-extrabold">{m.time}</span>
         {m.newFlag && (
           <i data-testid="new-badge" data-flag={m.newFlag}
-            title={`This ${m.newFlag === "field" ? "field" : m.newFlag === "day" ? "weekday for this field" : "kick-off time for this field and weekday"} was not on last week's slate for ${m.city}.`}
+            /* THE RULE, THE CITY AND THE WEEK IT COMPARED, on the badge itself. The dates are
+               what makes a wrong comparison visible instead of silent. */
+            title={`This ${m.newFlag === "field" ? "field" : m.newFlag === "day" ? "weekday for this field" : "kick-off time for this field and weekday"} was not on last week's slate for ${m.city} (${priorLabel}). Cancelled matches count, because a cancelled slot was still scheduled and still published.`}
             className="shrink-0 rounded-[4px] bg-deep-green px-[5px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.04em] text-white">
             {NEW_FLAG_LABEL[m.newFlag]}
           </i>

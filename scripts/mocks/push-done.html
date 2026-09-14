@@ -1,0 +1,184 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mark the push sent</title>
+<style>
+  :root{
+    --card:#fff; --line:#e6ebe8; --ink:#0E2A22; --ink2:#4d6359; --ink3:#8a9992;
+    --grn:#12704a; --grnbg:#E6F4EB; --grnln:#bfe0cc;
+    --red:#a8391a; --redbg:#fdeae4; --redln:#f0bda9;
+    --amb:#8a6300; --ambbg:#fdf1d0; --ambln:#e3c369;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       background:#FBF9F4;color:var(--ink);-webkit-font-smoothing:antialiased}
+  .sw{display:flex;gap:6px;flex-wrap:wrap;padding:8px 10px;border-bottom:1px solid var(--line);background:#fff}
+  .sw button{font:700 11px/1 inherit;padding:7px 9px;border:1px solid var(--line);background:#fff;border-radius:7px;cursor:pointer;color:#46584f}
+  .sw button[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .wrap{padding:16px;max-width:1180px;margin:0 auto}
+
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+  .hd{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:11px}
+  .hd h3{margin:0;font:800 10.5px/1 inherit;letter-spacing:.1em;text-transform:uppercase;color:var(--ink3)}
+  .counts{font-size:12.5px;color:var(--ink2);font-weight:600}
+  .counts b{font-weight:800}
+  .counts .cOver{color:var(--red)}
+  .counts .cSent{color:var(--grn)}
+
+  .grid{display:grid;gap:9px;grid-template-columns:repeat(auto-fill,minmax(min(430px,100%),1fr))}
+  .job{display:flex;align-items:center;gap:7px 9px;flex-wrap:wrap;border:1px solid var(--line);
+       border-radius:10px;padding:8px 10px;background:#fff;min-width:0}
+  /* ON A PHONE THE ROW WRAPS rather than pushing its own right edge off screen.
+     The time and the mark stay on one line; the field name takes the next. */
+  .who{flex:1 1 100%}
+  @media (min-width:620px){ .who{flex:1 1 auto} }
+  .job[data-late="1"][data-sent="0"]{border-color:var(--redln);background:var(--redbg)}
+  /* SENT STAYS ON THE STRIP. Ryan: "they still show so everyone has visibility." It goes quiet,
+     not away: a white row with a green tick, not a red one and not a deleted one. */
+  .job[data-sent="1"]{border-color:var(--grnln);background:#fbfdfb}
+  .when{flex:none;font:800 12.5px/1.3 inherit;white-space:nowrap}
+  .job[data-late="1"][data-sent="0"] .when{color:var(--red)}
+  .job[data-sent="1"] .when{color:var(--ink3);font-weight:700;text-decoration:line-through}
+  .who{min-width:0;font-size:12.5px;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chips{display:flex;gap:4px;flex:none}
+  .ch{border:1px solid var(--grnln);background:var(--grnbg);color:var(--grn);border-radius:5px;
+      padding:1px 5px;font:800 9.5px/1.6 inherit;letter-spacing:.03em}
+  .job[data-sent="1"] .ch{border-color:var(--line);background:#f2f5f3;color:var(--ink3)}
+
+  /* ONE TAP, NOT A DIALOG. It is reversible, it moves no money, and it is the
+     thing somebody does twelve times in a row on a phone. */
+  .mark{flex:none;margin-left:auto;display:inline-flex;align-items:center;gap:5px;min-height:32px;padding:0 10px;
+        border-radius:8px;border:1px solid var(--line);background:#fff;cursor:pointer;
+        font:750 11.5px/1 inherit;color:var(--ink2)}
+  .mark:hover{background:#f4faf6;border-color:var(--grnln);color:var(--grn)}
+  .job[data-sent="1"] .mark{border-color:var(--grnln);background:var(--grnbg);color:var(--grn)}
+  .mark svg{width:13px;height:13px}
+  .sentby{flex:none;font-size:11px;color:var(--grn);font-weight:650;white-space:nowrap}
+
+  .weekhd{margin-top:20px;padding:0 2px}
+  .weekhd h2{margin:0;font:800 15px/1 inherit;letter-spacing:.02em;text-transform:uppercase}
+  .weekhd p{margin:6px 0 0;max-width:930px;font-size:12.5px;color:rgba(14,42,34,.65)}
+  .badge{display:inline-block;border-radius:4px;background:var(--ink);color:#fff;
+         padding:1px 5px;font:800 8.5px/1.5 inherit;letter-spacing:.04em;cursor:help}
+  .tiles{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .tile{border:1px solid var(--line);border-radius:10px;background:#fff;padding:9px 11px;min-width:150px}
+  .tile .t1{font:800 13px/1 inherit}
+  .tile .t2{font-size:11.5px;color:var(--ink3);margin-top:3px}
+  .hid{display:none !important}
+</style></head>
+<body>
+<div class="sw">
+  <button data-s="before" aria-pressed="true">before</button>
+  <button data-s="after">after · mark sent</button>
+  <button data-s="done">after · four marked</button>
+</div>
+
+<div class="wrap">
+  <div class="panel">
+    <div class="hd">
+      <h3>Next 48 hours</h3>
+      <span class="counts" data-testid="counts"></span>
+    </div>
+    <div class="grid" id="jobs"></div>
+  </div>
+
+  <div class="weekhd">
+    <h2>The week</h2>
+    <!-- TWO PARAGRAPHS OF RULES. The first restates what clicking a tile does; the
+         second explains NEW, which every badge already explains in its own title. -->
+    <p data-testid="explain-1" class="ex">Click a match to plan it. A tile shows only what is planned, a channel
+      chip means that channel is selected, and a tile with nothing on it has no plan.</p>
+    <p data-testid="explain-2" class="ex"><span class="badge">NEW</span> marks a slot that was not on
+      <b>last week's slate for the same city</b>, the same seven weekdays one week earlier
+      (Mon 7 Sep to Sun 13 Sep), <b>including matches that were cancelled</b>, because a cancelled slot
+      was still scheduled and still published. Compared per field: <b>NEW FIELD</b> the pitch is new to
+      the city, <b>NEW DAY</b> the pitch is not new but this weekday is, <b>NEW TIME</b> the pitch and
+      weekday ran but at another time. Nothing here reads a match's creation date.</p>
+    <div class="tiles">
+      <div class="tile"><div class="t1">8:00 PM
+        <span class="badge" data-testid="new-badge"
+              title="This weekday for this field was not on last week's slate for Atlanta (Mon 7 Sep to Sun 13 Sep).">NEW DAY</span></div>
+        <div class="t2">Keswick Park (Chamblee)</div></div>
+      <div class="tile"><div class="t1">7:00 PM</div><div class="t2">PRUMC</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const NOW = new Date("2026-09-14T18:30:00Z").getTime();   // Mon 1:30 PM Central,
+// which is after the 12:00 PM pushes and before Tuesday morning: the six and three in the strip.
+const fmt = t => new Date(t).toLocaleString("en-US",{timeZone:"UTC",weekday:"short",hour:"numeric",minute:"2-digit"});
+
+/* The six overdue and six upcoming from the strip, as they actually read. */
+const JOBS = [
+  { id:1, at:"2026-09-14T17:00:00Z", who:"Keswick Park (Chamblee) · Mon 8:00 PM", ch:["WA","MC","SMS"] },
+  { id:2, at:"2026-09-14T17:00:00Z", who:"Stony Point · Mon 7:00 PM",             ch:["WA","SMS"] },
+  { id:3, at:"2026-09-14T17:00:00Z", who:"Crockett High School · Mon 7:00 PM",    ch:["WA","SMS"] },
+  { id:4, at:"2026-09-14T17:00:00Z", who:"Bob Jones Park · Wed 8:00 PM",          ch:["WA","DM","SMS"] },
+  { id:5, at:"2026-09-14T17:00:00Z", who:"Lowell H. Strike M.S. · Wed 8:00 PM",   ch:["SMS"] },
+  { id:6, at:"2026-09-14T17:00:00Z", who:"Zipp Family Sports Park · Mon 8:00 PM", ch:["WA","MC","SMS"] },
+  { id:7, at:"2026-09-15T13:54:00Z", who:"Parmer · Tue 8:00 PM",                  ch:["WA","MC"] },
+  { id:8, at:"2026-09-15T13:58:00Z", who:"KISC (Katy Intl) · Tue 8:30 PM",        ch:["WA"] },
+  { id:9, at:"2026-09-15T13:59:00Z", who:"ATH Katy · Tue 9:15 PM",                ch:["WA"] },
+];
+/* pushed_at / pushed_by, the two columns migration 0175 adds. */
+const sent = new Map();
+
+let mode = "before";
+function render(){
+  const host = document.getElementById("jobs");
+  host.innerHTML = "";
+  for (const j of JOBS){
+    const at = Date.parse(j.at);
+    const s = sent.get(j.id) ?? null;
+    /* OVERDUE IS push_at < now AND pushed_at IS NULL. Marking it sent is what
+       takes it out of the count, and nothing else changes. */
+    const late = at < NOW && !s;
+    const el = document.createElement("div");
+    el.className = "job";
+    el.setAttribute("data-testid","job"); el.dataset.id = j.id;
+    el.dataset.late = at < NOW ? "1" : "0";
+    el.dataset.sent = s ? "1" : "0";
+    el.innerHTML = `
+      <span class="when" data-testid="when">${late ? "Overdue · " : ""}${fmt(at)}</span>
+      <span class="who">${j.who}</span>
+      ${s ? `<span class="sentby" data-testid="sentby">Sent ${fmt(s.at)} by ${s.by}</span>` : ``}
+      <span class="chips">${j.ch.map(c=>`<span class="ch">${c}</span>`).join("")}</span>
+      ${mode === "before" ? `` : `<button type="button" class="mark" data-testid="mark" data-id="${j.id}">
+        ${s ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>Sent`
+            : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="4"/></svg>Mark sent`}
+      </button>`}`;
+    host.appendChild(el);
+  }
+  host.querySelectorAll('[data-testid="mark"]').forEach(b => b.addEventListener("click", () => {
+    const id = +b.dataset.id;
+    /* A TOGGLE, SO A MIS-TAP COSTS ONE TAP. No confirm: it moves no money and it
+       is the thing somebody does twelve times in a row. */
+    if (sent.has(id)) sent.delete(id);
+    else sent.set(id, { at: NOW, by: "Ryan" });
+    render();
+  }));
+
+  const late = JOBS.filter(j => Date.parse(j.at) < NOW && !sent.has(j.id)).length;
+  const done = sent.size;
+  document.querySelector('[data-testid="counts"]').innerHTML =
+    `<b>${JOBS.length}</b> pushes` +
+    (done ? ` · <span class="cSent"><b>${done}</b> sent</span>` : ``) +
+    ` · <span class="cOver"><b>${late}</b> overdue</span> · <b>96</b> matches with no plan`;
+
+  /* THE TWO PARAGRAPHS GO. The first restates the interaction; the second says
+     what every NEW badge already says in its own title attribute, including the
+     week it compared against. */
+  document.querySelectorAll(".ex").forEach(p => p.classList.toggle("hid", mode !== "before"));
+}
+
+function show(s){
+  mode = s === "before" ? "before" : "after";
+  sent.clear();
+  if (s === "done") for (const id of [1,2,3,5]) sent.set(id, { at: NOW, by:"Ryan" });
+  render();
+  document.querySelectorAll(".sw button").forEach(b=>b.setAttribute("aria-pressed", String(b.dataset.s===s)));
+}
+document.querySelectorAll(".sw button").forEach(b=>b.addEventListener("click",()=>show(b.dataset.s)));
+show("before");
+</script>
+</body></html>

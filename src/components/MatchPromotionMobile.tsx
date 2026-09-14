@@ -18,7 +18,8 @@
 // SAME DATA, SAME ROUTES, SAME WRITES. Every figure here is computed by the desktop's own helpers
 // and passed in; nothing is re-derived and no count is redefined.
 
-import { CHANNELS, CHANNEL_KEYS, NEW_FLAG_LABEL, coverageCaption, coverageStateOf, coverageSummary, type ChannelKey, type PromoMatch, type PromoWeek } from "@/lib/matchPromotion";
+import { CHANNELS, CHANNEL_KEYS, NEW_FLAG_LABEL, coverageCaption, coverageStateOf, coverageSummary, isPushOverdue, isPushSent, sentStamp, type ChannelKey, type PromoMatch, type PromoWeek } from "@/lib/matchPromotion";
+import MarkPushSent from "@/components/MarkPushSent";
 import PageComments from "@/components/PageComments";
 import CancelRanking, { type RankTone } from "@/components/CancelRanking";
 
@@ -42,6 +43,8 @@ export type MobileProps = {
   onOpen: (m: PromoMatch, el: HTMLElement) => void;
   onClose: () => void;
   onSave: () => void;
+  /** Re-reads the week after a push is marked sent. The desktop's own loader, passed down. */
+  onReload: () => void | Promise<void>;
   saving: boolean;
   toast: { msg: string; bad: boolean } | null;
   onNav: (delta: number) => void;
@@ -75,34 +78,47 @@ function Chips({ m, litOnly = false }: { m: PromoMatch; litOnly?: boolean }) {
 
 /* ── DUE ─────────────────────────────────────────────────────────────────────────────────────── */
 
-function Due({ jobs, overdue, now, fmtPush, onOpen }: {
+function Due({ jobs, overdue, now, fmtPush, onOpen, onReload, onError }: {
   jobs: { m: PromoMatch; at: number }[]; overdue: number; now: number;
   fmtPush: MobileProps["fmtPush"]; onOpen: MobileProps["onOpen"];
+  onReload: () => void | Promise<void>; onError?: (msg: string) => void;
 }) {
+  /* THE SAME COUNTS AS THE DESKTOP STRIP, from the same functions. The phone's Due list read
+   * `at < now` of its own, which is the other half of why a sent push stayed red everywhere. */
+  const sentCount = jobs.filter((j) => isPushSent(j.m.plan)).length;
   return (
     <div data-testid="m-due">
       <div className="px-3 pb-0.5 pt-3.5">
         <h2 className="m-0 text-[11px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Due next</h2>
         <div className="mb-2 text-[11.5px] font-bold text-deep-green/65" data-testid="m-due-counts">
-          {jobs.length} push{jobs.length === 1 ? "" : "es"} · {overdue} overdue
+          {jobs.length} push{jobs.length === 1 ? "" : "es"}
+          {sentCount > 0 && <> · <b data-testid="m-due-sent">{sentCount} sent</b></>}
+          {" · "}{overdue} overdue
         </div>
       </div>
       {jobs.length === 0 && <p className="px-3 pb-4 text-[12.5px] text-deep-green/40">Nothing scheduled this week.</p>}
       {jobs.map(({ m, at }) => {
-        const late = at < now;
-        const soon = !late && at - now < 12 * 3600_000;
+        /* SENT GOES QUIET, NOT AWAY — the row stays on the list so everyone can see it was done. */
+        const sent = isPushSent(m.plan);
+        const late = isPushOverdue(m.plan, now);
+        const soon = !sent && !late && at - now < 12 * 3600_000;
         const p = fmtPush(m.plan!.pushAt!);
         return (
-          <div key={m.apiId} data-testid="m-due-card"
+          <div key={m.apiId} data-testid="m-due-card" data-sent={sent ? "1" : "0"} data-late={late ? "1" : "0"}
             className={`mx-3 mb-2 rounded-[11px] border px-3 py-2.5 ${
-              late ? "border-coral/45 bg-coral-soft/40" : soon ? "border-amber-300 bg-amber-50" : "border-cream-line bg-white"}`}>
-            <div className="flex items-baseline gap-2">
-              <span className={`text-[13px] font-extrabold ${late ? "text-coral" : soon ? "text-amber-700" : ""}`}>
+              sent ? "border-cream-line bg-[#f4f7f5]"
+                : late ? "border-coral/45 bg-coral-soft/40" : soon ? "border-amber-300 bg-amber-50" : "border-cream-line bg-white"}`}>
+            <div className="flex flex-wrap items-baseline gap-2">
+              <span className={`text-[13px] font-extrabold ${
+                sent ? "text-deep-green/45 line-through" : late ? "text-coral" : soon ? "text-amber-700" : ""}`}>
                 {late ? "Overdue · " : ""}{p.day} {p.time}
               </span>
+              {sent && <span data-testid="m-due-stamp" className="text-[11px] text-deep-green/45">{sentStamp(m.plan!)}</span>}
+              {/* THE SAME CONTROL THE DESKTOP STRIP USES, not a second implementation of one. */}
+              <MarkPushSent m={m} onDone={onReload} onError={onError} />
               <button type="button" data-testid="m-send"
                 onClick={(e) => onOpen(m, e.currentTarget as HTMLElement)}
-                className="ml-auto min-h-[32px] px-1 text-[12px] font-extrabold text-emerald-700">
+                className="min-h-[32px] px-1 text-[12px] font-extrabold text-emerald-700">
                 Send ›
               </button>
             </div>
@@ -391,7 +407,8 @@ export default function MatchPromotionMobile(p: MobileProps) {
         </div>
       )}
 
-      {tab === "due" && <Due jobs={p.jobs} overdue={p.overdue} now={now} fmtPush={p.fmtPush} onOpen={p.onOpen} />}
+      {tab === "due" && <Due jobs={p.jobs} overdue={p.overdue} now={now} fmtPush={p.fmtPush} onOpen={p.onOpen}
+        onReload={p.onReload} />}
       {/* THE SAME LIST AS THE DESKTOP, from the same table and the same route. */}
       <PageComments weekStart={week.weekStart} placeholder="Suggestion about this week" />
       {tab === "week" && <WeekByDay {...p} panel={<Panel {...p} />} />}
