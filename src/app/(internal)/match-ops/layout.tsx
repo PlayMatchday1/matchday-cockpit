@@ -22,12 +22,12 @@
 // themselves (they wrap it in their own header), so we add it here only for the
 // routes that do not.
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useState, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/useAuth";
 import ChatsRail from "./ChatsRail";
-import MatchOpsMobileBar from "./MatchOpsMobileBar";
-import { visibleSections } from "./sections";
+import { useSectionNav } from "@/components/SectionNav";
+import { visibleSections, tabForPath } from "./sections";
 import { CrmConversationProvider } from "@/lib/crmConversation";
 import CrmDock from "@/components/crm/CrmDock";
 
@@ -76,6 +76,10 @@ export default function MatchOpsLayout({
     });
 
   const hasRail = visibleSections(appUser).length > 0;
+  /* THE CURRENT TAB'S SCREENS, published to the shell's one app bar. The tab is derived from the
+   * route, so there is no tab state to fall out of sync with where the operator actually is. */
+  const barItems = useMemo(() => visibleSections(appUser, tabForPath(pathname)), [appUser, pathname]);
+  useSectionNav(hasRail ? { items: barItems, label: "Match Ops", showSwitch: true } : null);
   const railW = collapsed ? "60px" : "212px";
 
   return (
@@ -105,7 +109,6 @@ export default function MatchOpsLayout({
         {/* Non-chat routes get the mobile screen-picker app bar here (Gameday Ops
             carries its own in-header picker; chat consoles render the pill strip
             inside their inbox). */}
-        {!isChat && !isGameday && hasRail && <MatchOpsMobileBar />}
         {/* Phase 19 Step 2 B1: the CRM conversation/inbox data layer lives here, mounted once in
             the layout (which does not remount between Match Ops routes) so the open conversation
             survives navigation. Suspense wraps it because it reads useSearchParams (view +

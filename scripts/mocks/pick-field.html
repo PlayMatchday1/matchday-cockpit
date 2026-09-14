@@ -70,6 +70,8 @@
   <button data-s="seeded">dialog · opens already searched</button>
   <button data-s="browse">dialog · browse everything</button>
   <button data-s="words">dialog · the four substring missed</button>
+  <button data-s="generic">dialog · Lou Fusz</button>
+  <button data-s="generic2">dialog · STAR</button>
   <button data-s="city">dialog · same city first</button>
 </div>
 
@@ -134,6 +136,18 @@ const norm = s => String(s||"").trim().toLowerCase();
 
 /* fin_venues, using the real names from the item-3 report. */
 const VENUES = [
+  /* The names CC's item-14 walk actually surfaced, plus what it surfaced them
+     alongside. Three of its seven top hits are wrong and all three are one cause. */
+  { id:90, venue_name:"Wheatley Heights Sport Complex",   city:"Houston", launch_date:null },
+  { id:88, venue_name:"Mercy Street Sports Complex",      city:"Dallas",  launch_date:null },
+  { id:89, venue_name:"Gateway Sports Complex",           city:"Fort Worth", launch_date:null },
+  { id:91, venue_name:"Soccer Central",                   city:"San Antonio", launch_date:null },
+  { id:92, venue_name:"Lou Fusz Outdoor",                 city:"St. Louis", launch_date:null },
+  { id:93, venue_name:"Lou Fusz Indoor",                  city:"St. Louis", launch_date:null },
+  { id:94, venue_name:"ATH Katy",                         city:"Houston", launch_date:null },
+  { id:95, venue_name:"Centennial Commons Park",          city:"Dallas",  launch_date:null },
+  { id:96, venue_name:"Bicentennial Park",                city:"Dallas",  launch_date:null },
+  { id:97, venue_name:"Galatzan Park",                    city:"El Paso", launch_date:null },
   { id:65, venue_name:"Ann Richards School",              city:"Austin",  launch_date:"2026-10-19" },
   { id:5,  venue_name:"Onion Creek",                      city:"Austin",  launch_date:"2026-11-02" },
   { id:12, venue_name:"STAR",                             city:"Austin",  launch_date:null },
@@ -153,6 +167,8 @@ const HOLDER = { 51:"Crossbar Rowlett (bound yesterday)" };
 
 const CARDS = {
   ann:     { title:"Ann Richards",            city:"Austin" },
+  loufusz: { title:"Lou Fusz Athletic Complex", city:"St. Louis" },
+  starc:   { title:"STAR Soccer Complex",     city:"Austin" },
   rr:      { title:"RR MPC",                  city:"Austin" },
   katy:    { title:"Katy ISC",                city:"Houston" },
   onion:   { title:"OC / Onion Creek - AMSA", city:"Austin" },
@@ -177,8 +193,31 @@ const substringRule = typed => {
  * mean". A whole-string substring still counts, so "parmer" keeps working. */
 /* Three letters or more, minus a four-word stoplist. LBJ and OKC are three
    letters and matter; "the" and "and" are three letters and match noise. */
-const STOP = new Set(["the","and","for","new"]);
-const words = s => norm(s).split(/[^a-z0-9]+/).filter(w => w.length >= 3 && !STOP.has(w));
+const BASE_STOP = ["the","and","for","new"];
+const COMMON_AT = 3;
+const rawWords = s => norm(s).split(/[^a-z0-9]+/).filter(w => w.length >= 3);
+/* THE STOPLIST IS COMPUTED, NOT WRITTEN DOWN. Four hand-picked words let three of
+   seven cards surface the wrong field, all three for one reason: "Complex",
+   "Soccer" and "Park" appear in many venue names, so they match everything and
+   tell you nothing. A longer hand-list is the second rule nobody can predict that
+   the original comment warned about, so derive it instead: a word in COMMON_AT or
+   more field names cannot tell them apart, whatever it means in English, and the
+   rule stays one sentence as the table grows. */
+function buildStop(venues){
+  const n = new Map();
+  for (const v of venues) for (const w of new Set(rawWords(v.venue_name))) n.set(w, (n.get(w)||0)+1);
+  const stop = new Set(BASE_STOP);
+  for (const [w,c] of n) if (c >= COMMON_AT) stop.add(w);
+  return stop;
+}
+let STOP = new Set(BASE_STOP);
+const words = s => {
+  const all = rawWords(s);
+  const kept = all.filter(w => !STOP.has(w));
+  /* A NAME MADE ENTIRELY OF COMMON WORDS still has to be searchable, so if the
+     strip leaves nothing, keep what was there. */
+  return kept.length ? kept : all;
+};
 function searchRule(typed, cardCity){
   const t = norm(typed);
   const qw = words(typed);
@@ -232,6 +271,8 @@ function showRow(key){
 
 /* ── THE DIALOG ──────────────────────────────────────────────────────────── */
 let cardKey = "ann";
+/* Built once from the table the board already loads. */
+STOP = buildStop(VENUES);
 const inp = document.querySelector('[data-testid="bind-newname"]');
 inp.addEventListener("input", () => syncBind());
 
@@ -296,9 +337,13 @@ function syncBind(){
 
   /* The shipped rule, run on the same string, shown as a number. */
   const old = substringRule(typed);
+  const extra = [...STOP].filter(w=>!BASE_STOP.includes(w)).sort().join(", ") || "nothing";
+  document.querySelector('[data-testid="cmp-top"]') ;
   document.querySelector('[data-testid="cmp"]').innerHTML =
     `<b data-testid="cmp-new">${cands.length}</b> found by word match · <b data-testid="cmp-old">${old.length}</b> found by the
-     substring rule that shipped, on the same string.`;
+     substring rule that shipped, on the same string.
+     Top: <b data-testid="cmp-top">${cands[0] ? cands[0].venue_name : "none"}</b>.
+     Ignored as too common: <span data-testid="cmp-stop">${extra}</span>.`;
 }
 
 function openBind(key, prefill){
@@ -319,6 +364,8 @@ function show(s){
   if (s === "browse")   openBind("ann", "");
   if (s === "words")    openBind("katy");
   if (s === "city")     openBind("hattrick");
+  if (s === "generic")  openBind("loufusz");
+  if (s === "generic2") openBind("starc");
   document.querySelectorAll(".sw button").forEach(b=>b.setAttribute("aria-pressed", String(b.dataset.s===s)));
 }
 document.querySelectorAll(".sw button").forEach(b=>b.addEventListener("click",()=>show(b.dataset.s)));

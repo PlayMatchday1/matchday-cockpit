@@ -346,7 +346,10 @@ function ChatPaneInner({
   return (
     <section className={`min-w-0 flex-col ${visibility}`} style={{ background: "#ffffff" }}>
       {/* Header */}
-      <div className="flex min-h-[64px] flex-none items-center gap-3 border-b px-3 sm:px-[22px]" style={{ borderColor: "#eff3f1", paddingTop: "var(--sat)" }}>
+      {/* NO var(--sat) HERE. This header was written when the thread view WAS the top of the screen;
+          the shell's app bar is above it now and pays the inset once. Paying it again put a second
+          59px band inside the conversation, which the route walk caught. */}
+      <div className="flex min-h-[64px] flex-none items-center gap-3 border-b px-3 sm:px-[22px]" style={{ borderColor: "#eff3f1" }}>
         <button
           type="button"
           onClick={onBack}

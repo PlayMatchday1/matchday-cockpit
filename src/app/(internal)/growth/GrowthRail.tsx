@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 import ChatsRail from "../match-ops/ChatsRail";
-import MatchOpsMobileBar from "../match-ops/MatchOpsMobileBar";
+import { useSectionNav } from "@/components/SectionNav";
 import { GROWTH_SECTIONS } from "./growthSections";
 
 // Growth's own key. Collapsing a rail in one section must not collapse another's.
@@ -16,6 +16,9 @@ const COLLAPSE_KEY = "growth:rail-collapsed";
 const LABEL = "Growth";
 
 export default function GrowthRail({ children }: { children: React.ReactNode }) {
+  /* PUBLISHED TO THE SHELL'S ONE APP BAR instead of rendering a second one inside <main>.
+   * See src/components/SectionNav.tsx for why the bar cannot live in here. */
+  useSectionNav({ items: GROWTH_SECTIONS, label: LABEL, showSwitch: false });
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => {
     try { setCollapsed(window.localStorage.getItem(COLLAPSE_KEY) === "1"); } catch { /* private mode */ }
@@ -46,7 +49,6 @@ export default function GrowthRail({ children }: { children: React.ReactNode }) 
         style={{ "--mo-rail-w": railW } as React.CSSProperties}
         className="lg:pl-[var(--mo-rail-w)] max-[899px]:w-screen max-[899px]:ml-[calc(50%-50vw)]"
       >
-        <MatchOpsMobileBar items={GROWTH_SECTIONS} sheetTitle={LABEL} showSwitch={false} />
         {children}
       </div>
     </>

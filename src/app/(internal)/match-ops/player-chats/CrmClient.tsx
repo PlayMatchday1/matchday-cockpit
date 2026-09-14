@@ -74,7 +74,6 @@ import MessageBubble, {
   type ConversationMessage,
 } from "./components/MessageBubble";
 import Composer from "./components/Composer";
-import MatchOpsMobileBar from "../MatchOpsMobileBar";
 import MetricsStrip from "./components/MetricsStrip";
 import ContextPane from "./components/ContextPane";
 import { colorForCity } from "@/lib/cityColors";
@@ -741,9 +740,6 @@ export default function CrmClient() {
             }`}
             style={{ background: "#f8faf9", borderColor: "#e6ebe8" }}
           >
-            {/* Mobile-only section nav — desktop rail is hidden below 900px. */}
-            <MatchOpsMobileBar />
-
             {/* header */}
             <div className="flex flex-none items-center gap-2.5 px-4 pt-3.5">
               <h1 className="text-[19px] font-[760] tracking-[-0.02em]" style={{ color: "#12241d" }}>
@@ -1678,7 +1674,8 @@ function ConversationHeader({
 
   if (!detail) {
     return (
-      <div className="flex min-h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-2 pt-[var(--sat)] sm:px-4">
+      <div /* NO pt-[var(--sat)]: the shell's app bar is above this and pays the inset once. */
+      className="flex min-h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-2 sm:px-4">
         <button
           type="button"
           onClick={handleBack}
@@ -1695,7 +1692,8 @@ function ConversationHeader({
   const cityCode = cityCodeForThread(detail.thread);
   const channel = detail.thread.channel ?? "sms";
   return (
-    <div data-testid="crm-conv-header" data-thread-id={detail.thread.id} data-amb={detail.thread.match_ambiguous ? 1 : 0} className="flex min-h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-1 pt-[var(--sat)] sm:px-3">
+    <div data-testid="crm-conv-header" data-thread-id={detail.thread.id} data-amb={detail.thread.match_ambiguous ? 1 : 0} /* NO pt-[var(--sat)]: the shell's app bar is above this and pays the inset once. */
+      className="flex min-h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-1 sm:px-3">
       <button
         type="button"
         onClick={handleBack}

@@ -22,7 +22,7 @@ import MatchSidePanel, { MATCH_SIDE_PANEL_CSS } from "@/components/MatchSidePane
 import { useCrmConversationOptional } from "@/lib/crmConversation";
 import LogHealthBanner from "@/components/LogHealthBanner";
 import MatchOpsSectionSheet from "@/app/(internal)/match-ops/MatchOpsSectionSheet";
-import MatchOpsMobileBar from "@/app/(internal)/match-ops/MatchOpsMobileBar";
+import { usePageChrome, useSectionNav } from "@/components/SectionNav";
 import type { RailItem } from "@/app/(internal)/match-ops/sections";
 import RefreshIcon from "@/components/RefreshIcon";
 import { useAuth, canEditMatches } from "@/lib/useAuth";
@@ -209,6 +209,7 @@ export default function GamedayBoard({
   // `now` already ticks every 30s, so the "Nm ago" figure stays honest without its own timer.
   const staleMins = updatedAt == null ? 0 : Math.floor((now - updatedAt) / 60000);
 
+
   const say = (t: string, bad = false) => { setToast({ t, bad }); setTimeout(() => setToast(null), 2800); };
 
   // `quiet` = a manual refresh: keep the current rows on screen instead of flashing the loader,
@@ -232,6 +233,30 @@ export default function GamedayBoard({
     if (landed) setUpdatedAt(Date.now());
     setLoading(false); setRefreshing(false);
   }, [endpoint]);
+
+  /* ── PUBLISHED TO THE SHELL'S ONE APP BAR ──────────────────────────────────────────────────
+   * Gameday Ops used to render its own MatchOpsMobileBar to get these two slots, which is how a
+   * second bar could end up on screen. The slots go through the one bar now. The SECTION list is
+   * not published here: the match-ops and city layouts already publish theirs, and this page is
+   * rendered under both. */
+  usePageChrome(
+    () => ({
+      leading: badge.tone === "prod" ? <span className="livedot" aria-hidden /> : null,
+      actions: (
+        <span className="mfresh" data-testid="m-fresh">
+          <span className={"mstamp" + (staleFail ? " failed" : staleMins >= 2 ? " stale" : "")} data-testid="m-updated-at">
+            {/* KEEP THE TIME and APPEND the age — "11:51 PM · 3m ago". */}
+            {staleFail ? "not refreshed" : updatedAt == null ? "…" : staleMins >= 2 ? `${updatedLabel} · ${staleMins}m ago` : updatedLabel}
+          </span>
+          <button type="button" className="mrefresh" data-testid="m-gday-refresh" disabled={refreshing}
+            aria-label="Refresh the board" onClick={() => void load(date, true)}>
+            <RefreshIcon size={19} spinning={refreshing} />
+          </button>
+        </span>
+      ),
+    }),
+    [badge.tone, staleFail, staleMins, updatedAt, updatedLabel, refreshing, load, date],
+  );
   useEffect(() => { void load(date); }, [date, load]);
   // 15s, not 30s: this clock drives the freshness age, and at 30s the "2 minutes" threshold
   // could be reported up to half a minute late — which reads as "the stamp is not ageing".
@@ -700,27 +725,6 @@ export default function GamedayBoard({
             suppresses it on this route); the title itself is the screen picker. ── */}
         <span className={"prodstrip " + (badge.tone === "prod" ? "live" : "stg")} data-testid="prodstrip" aria-hidden />
         <div className="mhead" data-testid="mhead" ref={mheadRef}>
-          {/* THE SHARED HEADER. Gameday Ops used to build its own picker row here and Chats used a
-              different system entirely; this is the one component both now render, so they cannot
-              drift again. The page's own controls go in `actions`. */}
-          <MatchOpsMobileBar
-            items={nav?.items}
-            sheetTitle={nav?.title}
-            showSwitch={!nav}
-            leading={badge.tone === "prod" ? <span className="livedot" aria-hidden /> : null}
-            actions={
-              <span className="mfresh" data-testid="m-fresh">
-                <span className={"mstamp" + (staleFail ? " failed" : staleMins >= 2 ? " stale" : "")} data-testid="m-updated-at">
-                  {/* KEEP THE TIME and APPEND the age — "11:51 PM · 3m ago". */}
-                  {staleFail ? "not refreshed" : updatedAt == null ? "…" : staleMins >= 2 ? `${updatedLabel} · ${staleMins}m ago` : updatedLabel}
-                </span>
-                <button type="button" className="mrefresh" data-testid="m-gday-refresh" disabled={refreshing}
-                  aria-label="Refresh the board" onClick={() => void load(date, true)}>
-                  <RefreshIcon size={19} spinning={refreshing} />
-                </button>
-              </span>
-            }
-          />
           <div className="mband">
             <span className="mdaynav">
               <button className="marw" data-testid="m-day-prev" aria-label="Previous day" onClick={() => goDay(addDays(date, -1))}>‹</button>

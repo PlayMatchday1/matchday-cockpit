@@ -129,12 +129,38 @@ html.app-shell-locked body {
      '59px')) and prove the layout survives one. A raw env() cannot be
      overridden, so it cannot be tested; these can. */
   --sat: env(safe-area-inset-top, 0px);
+  /* ── THE ONE TOP-PADDING FORMULA, AND THE ONLY COPY OF IT ──────────────────────────────────
+   * AuthGate's <main> pays this, and the two chat consoles cancel it with calc(-1 * var(--main-pt))
+   * so their 100dvh shells sit flush under TopNav. It used to be the literal expression
+   * max(env(safe-area-inset-top), 26px) written out in THREE files that had to agree forever, and
+   * they stopped agreeing: only the two chat routes were ever brought back into line, which is why
+   * they were the only ones that looked right on a phone.
+   *
+   * ZERO BELOW THE RAIL BREAKPOINT, because down there the mobile app bar is above <main> and it
+   * pays var(--sat) itself. Paying it here as well is the double inset Ryan photographed. The bar
+   * renders on EVERY internal route, so this is unconditional and there is no per-route branch for
+   * a new page to get wrong. */
+  /* var(--sat) NOT env() DIRECTLY, so a harness that forces --sat moves this too. The literal
+     env() here is exactly why the double inset could not be measured without a real device. */
+  --main-pt: max(var(--sat), 26px);
+  /* THE MOBILE APP BAR'S TOTAL HEIGHT, for the 100dvh chat shells that now sit BELOW it rather
+     than containing it. 0 on desktop, where the bar is hidden. */
+  --appbar-h: 0px;
   --sab: env(safe-area-inset-bottom, 0px);
 }
 
 @media (max-width: 767.98px) {
   :root {
     --bottom-nav-h: calc(56px + env(safe-area-inset-bottom));
+  }
+}
+
+/* BELOW THE RAIL BREAKPOINT THE APP BAR OWNS THE INSET. 899.98 matches the min-[900px] the bar and
+   every rail already use, so there is no width at which both or neither pays. */
+@media (max-width: 899.98px) {
+  :root {
+    --main-pt: 0px;
+    --appbar-h: calc(44px + var(--sat));
   }
 }
 
@@ -242,4 +268,22 @@ h3 {
 
 .animate-sheet-slide-up {
   animation: sheet-slide-up 200ms ease-out;
+}
+
+/* ── THE PAGE HEADING THAT REPEATS THE APP BAR'S TITLE ────────────────────────────────────────
+ * MobileAppBar marks it (see useSuppressDuplicateHeading) only when the heading's OWN text is the
+ * same string as the bar's title, and only below the rail breakpoint. Collapsing font-size rather
+ * than hiding the element keeps any DESCRIPTION nested inside the heading visible, which is the
+ * whole reason this is a rule and not a display:none. */
+@media (max-width: 899.98px) {
+  main h1[data-dup-title] {
+    font-size: 0 !important;
+    line-height: 0 !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    border-top-width: 0 !important;
+    border-bottom-width: 0 !important;
+  }
 }

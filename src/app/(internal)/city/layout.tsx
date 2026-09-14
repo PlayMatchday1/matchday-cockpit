@@ -22,13 +22,16 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import ChatsRail from "../match-ops/ChatsRail";
-import MatchOpsMobileBar from "../match-ops/MatchOpsMobileBar";
+import { useSectionNav } from "@/components/SectionNav";
 import { CITY_SECTIONS } from "./citySections";
 
 const COLLAPSE_KEY = "city:rail-collapsed";
 
 export default function CityLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() ?? "";
+  /* PUBLISHED TO THE SHELL'S ONE APP BAR instead of rendering a second one inside <main>.
+   * See src/components/SectionNav.tsx for why the bar cannot live in here. */
+  useSectionNav({ items: CITY_SECTIONS, label: "City", showSwitch: false });
   // Gameday Ops carries its OWN app bar (the board wraps the shared bar in its header so the
   // refresh control and freshness stamp sit in the same 44px band). Rendering the layout's bar
   // there too would stack two navs on a phone — the exact thing Match Ops suppresses for the same
@@ -74,7 +77,6 @@ export default function CityLayout({ children }: { children: React.ReactNode }) 
         // pages get, so the two do not sit at different insets.
         className="lg:pl-[var(--mo-rail-w)] max-[899px]:w-screen max-[899px]:ml-[calc(50%-50vw)]"
       >
-        {!ownsBar && <MatchOpsMobileBar items={CITY_SECTIONS} sheetTitle="City" showSwitch={false} />}
         {children}
       </div>
     </>

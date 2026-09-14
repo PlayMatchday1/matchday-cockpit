@@ -1,0 +1,175 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Two cancellations, two facts</title>
+<style>
+  :root{
+    --card:#fff; --line:#e6ebe8; --ink:#0E2A22; --ink1:#12241d; --ink2:#4d6359; --ink3:#8a9992;
+    --ambbg:#fdf1d0; --amb:#8a6300; --ambln:#e3c369;
+    --blubg:#eef1f8; --blu:#4a539a; --bluln:#dde1f4;
+    --grnbg:#E6F4EB; --grnln:#bfe0cc;
+    --redbg:#fdeae4; --red:#a8391a; --redln:#f0bda9;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       background:#FBF9F4;color:var(--ink);-webkit-font-smoothing:antialiased}
+  .sw{display:flex;gap:6px;flex-wrap:wrap;padding:8px 10px;border-bottom:1px solid var(--line);background:#fff}
+  .sw button{font:700 11px/1 inherit;padding:7px 9px;border:1px solid var(--line);background:#fff;border-radius:7px;cursor:pointer;color:#46584f}
+  .sw button[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .wrap{padding:16px;max-width:860px;margin:0 auto}
+
+  .pl{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .hd{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line)}
+  .hd h3{margin:0;font:800 11.5px/1 inherit;letter-spacing:.09em;text-transform:uppercase;color:var(--ink2)}
+  .rows{display:block}
+  /* FOUR FIXED COLUMNS NEED 297px BEFORE THE NAME GETS ANY. At 390 that leaves
+     the title about 60px and "Ann Richards" renders one letter per line. The real
+     row (.pl .mrow, 84/96/84) is 33px worse. Below 560 it becomes two lines:
+     the name and date, then the badge and the amount. */
+  .row{display:grid;gap:11px;align-items:center;padding:11px 16px;border-bottom:1px solid var(--line);
+       grid-template-columns:minmax(0,1fr) 104px 96px 84px}
+  @media (max-width:560px){
+    .row{grid-template-columns:minmax(0,1fr) auto;gap:8px 10px}
+    .row .mtitle{grid-column:1 / -1}
+    .row .st{width:auto;justify-self:start;padding:4px 9px}
+    .row .mid.c-team{display:none}
+    .row .num{justify-self:end}
+  }
+  .row:last-child{border-bottom:0}
+  .l1{display:block;font-weight:650;overflow-wrap:anywhere}
+  .l2{display:block;font-size:11.5px;color:var(--ink3);overflow-wrap:anywhere;margin-top:2px}
+  .l2 b{color:var(--ink2);font-weight:700}
+  .mid{display:block;text-align:center;font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--ink2)}
+  .num{display:block;text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
+  .unk{color:var(--ink3);font-weight:600;cursor:help}
+  .st{display:inline-flex;align-items:center;justify-content:center;width:100%;padding:3px 6px;border-radius:6px;
+      font-size:10.5px;font-weight:800;letter-spacing:.03em;border:1px solid;white-space:nowrap}
+  .st.played{background:#f0f4f2;color:var(--ink2);border-color:var(--line)}
+  .st.player_cancelled{background:var(--ambbg);color:var(--amb);border-color:var(--ambln)}
+  .st.club_cancelled{background:var(--blubg);color:var(--blu);border-color:var(--bluln)}
+  /* BOTH. Amber, because the player's own cancellation is the half that decides
+     whether he is owed anything, and amber is where that half already lives. */
+  .st.both_cancelled{background:var(--ambbg);color:var(--amb);border-color:var(--ambln);
+                     box-shadow:inset 0 0 0 1px #fff, 0 0 0 1px var(--bluln)}
+  .pfoot{margin:0;padding:12px 16px;font-size:12px;color:var(--ink3);line-height:1.5;border-top:1px solid var(--line);background:#fafcfb}
+  .pfoot b{color:var(--ink2)}
+
+  .cmp{margin-top:16px;display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr))}
+  .col{background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px}
+  .col h4{margin:0 0 8px;font:800 10.5px/1 inherit;letter-spacing:.09em;text-transform:uppercase;color:var(--ink3)}
+  .col code{font:600 11.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink2);display:block;white-space:pre-wrap}
+  .verdict{margin-top:9px;font-size:12.5px;font-weight:700}
+  .verdict.bad{color:var(--red)} .verdict.ok{color:#12704a}
+  .hid{display:none !important}
+</style></head>
+<body>
+<div class="sw">
+  <button data-s="before" aria-pressed="true">before · one fact survives</button>
+  <button data-s="after">after · both survive</button>
+  <button data-s="paths">the two paths disagree</button>
+</div>
+
+<div class="wrap">
+  <div class="pl">
+    <div class="hd"><h3>Match history</h3></div>
+    <div class="rows" id="rows"></div>
+    <p class="pfoot" data-testid="foot"></p>
+  </div>
+
+  <div class="cmp hid" id="paths">
+    <div class="col">
+      <h4>mirrorHistory.ts:68</h4>
+      <code>state: m.is_cancelled === true ? "club_cancelled"
+  : playerCancelled.get(id) ? "player_cancelled"
+  : ...</code>
+      <div class="verdict bad" data-testid="v-mirror">Both true → <b>WE CANCELLED</b>. His own cancellation is discarded.</div>
+    </div>
+    <div class="col">
+      <h4>playerProfile.ts:90</h4>
+      <code>state: playerCancelled ? "player_cancelled"
+  : clubCancelled ? "club_cancelled"
+  : ...</code>
+      <div class="verdict bad" data-testid="v-profile">Both true → <b>THEY CANCELLED</b>. Ours is discarded.</div>
+    </div>
+    <div class="col" data-testid="col-fix">
+      <h4>both, as two booleans</h4>
+      <code>playerCancelled: boolean
+clubCancelled: boolean
+playerCancelledAt: string | null</code>
+      <div class="verdict ok" data-testid="v-fix">Both true → <b>BOTH CANCELLED</b>, with the date we actually hold. Neither path can pick a winner, because there is no winner to pick.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const money = n => n == null ? null : "$" + Number(n).toFixed(2);
+const fmt = s => new Date(s + "T00:00:00Z").toLocaleDateString("en-US",{timeZone:"UTC",month:"short",day:"numeric"});
+
+/* The row Ryan opened, plus the three it has to stay distinguishable from.
+   `playerCancelledAt` comes from mdapi_match_players.canceled_at, a column that
+   exists and that nothing in this path selects today. */
+const ROWS = [
+  { id:1, name:"Ann Richards", when:"Sep 12, 2026, 7:00 PM", price:null, mirrorOnly:true,
+    player:true, playerAt:"2026-09-11", club:true },
+  { id:2, name:"Parmer Stadium", when:"Sep 5, 2026, 8:00 PM", price:null, mirrorOnly:true,
+    player:false, playerAt:null, club:true },
+  { id:3, name:"Westlake", when:"Aug 29, 2026, 7:00 PM", price:25.98, mirrorOnly:false,
+    player:true, playerAt:"2026-08-28", club:false },
+  { id:4, name:"Crossbar Rowlett", when:"Aug 22, 2026, 9:00 PM", price:25.98, mirrorOnly:false,
+    player:false, playerAt:null, club:false },
+];
+
+/* ── BEFORE: mirrorHistory's rule, which is deliberate and commented ──────────
+ * "The club's cancellation outranks the player's: if the match was called off,
+ * that is what happened, whatever the booking says." True about the MATCH. Wrong
+ * about THIS PLAYER, whose own cancellation is the half that decides the money. */
+const stateBefore = r => r.club ? "club_cancelled" : r.player ? "player_cancelled" : "played";
+const stateAfter  = r => r.club && r.player ? "both_cancelled"
+                       : r.player ? "player_cancelled" : r.club ? "club_cancelled" : "played";
+const LABEL = {
+  played:"Played", player_cancelled:"They cancelled", club_cancelled:"We cancelled",
+  both_cancelled:"Both cancelled",
+};
+
+let mode = "before";
+function render(){
+  const host = document.getElementById("rows");
+  host.innerHTML = "";
+  for (const r of ROWS){
+    const st = mode === "before" ? stateBefore(r) : stateAfter(r);
+    const el = document.createElement("div");
+    el.className = "row"; el.setAttribute("data-testid","row"); el.dataset.id = r.id; el.dataset.state = st;
+    /* THE SECOND LINE CARRIES THE DATE WE ACTUALLY HAVE. We hold canceled_at for
+       the booking. mdapi_matches carries no cancel timestamp anywhere in this
+       codebase, so the row never claims who went first. */
+    const extra = (mode === "after" && r.player && r.playerAt)
+      ? ` · <b>they cancelled ${fmt(r.playerAt)}</b>` : "";
+    /* $0.00 IS A CLAIM ABOUT MONEY. mergeHistory's own comment says so and then
+       sets price: 0 anyway, so a mirror row prints $0.00 while Stripe below it
+       shows the charge that settled. Unknown prints as unknown. */
+    const amt = (mode === "after" && r.price == null)
+      ? `<span class="unk" data-testid="amt-unknown" title="Our mirror does not carry what this booking cost. See the Stripe payments below.">not in the mirror</span>`
+      : `<span class="mid">${money(r.price ?? 0)}</span>`;
+    el.innerHTML = `
+      <span class="mtitle"><span class="l1">${r.name}</span>
+        <span class="l2">${r.when}${r.mirrorOnly ? " · from our mirror" : ""}${extra}</span></span>
+      <span class="st ${st}" data-testid="badge">${LABEL[st].toUpperCase()}</span>
+      <span class="mid c-team"></span>
+      <span class="num" data-testid="amt">${amt}</span>`;
+    host.appendChild(el);
+  }
+  document.querySelector('[data-testid="foot"]').innerHTML = mode === "before"
+    ? `A match we called off reports as <b>WE CANCELLED</b> whatever the booking says, so a player who pulled out first looks like someone we let down.`
+    : `<b>Both cancelled</b> means he pulled out and the match was also called off. We hold the date he cancelled; we do not hold the date we did, so this never says who went first. A price of <b>not in the mirror</b> means the mirror does not carry what the booking cost, not that it was free. The Stripe payments below are what actually moved.`;
+}
+
+function show(s){
+  document.getElementById("paths").classList.toggle("hid", s !== "paths");
+  document.querySelector(".pl").classList.toggle("hid", s === "paths");
+  if (s !== "paths") mode = s;
+  render();
+  document.querySelectorAll(".sw button").forEach(b=>b.setAttribute("aria-pressed", String(b.dataset.s===s)));
+}
+document.querySelectorAll(".sw button").forEach(b=>b.addEventListener("click",()=>show(b.dataset.s)));
+show("before");
+</script>
+</body></html>

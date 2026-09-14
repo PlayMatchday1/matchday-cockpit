@@ -30,15 +30,16 @@ export default function PlayerChatPage() {
   return (
     <PagePermissionGuard page="chats">
       <div
-        className="relative left-1/2 flex h-[100dvh] w-screen -translate-x-1/2 flex-col md:h-[calc(100dvh-var(--nav-h))]"
+        className="relative left-1/2 flex h-[calc(100dvh-var(--appbar-h))] w-screen -translate-x-1/2 flex-col md:h-[calc(100dvh-var(--nav-h))]"
         style={{
           // Full-bleed escape from AuthGate <main> (mx-auto max-w-[1600px]
           // px-8 + vertical padding). Horizontal: left-1/2 w-screen
           // -translate-x-1/2 breaks out of the centered max-width without
           // touching <main>'s defaults (every other route is byte-identical).
-          // Vertical: cancel main's paddingTop max(env,26px) and paddingBottom
-          // calc(60px + var(--bottom-nav-h)). Same mechanism as Match Chats.
-          marginTop: "calc(-1 * max(env(safe-area-inset-top), 26px))",
+          // Vertical: cancel main's paddingTop and paddingBottom. Same mechanism as Match Chats.
+          // ONE FORMULA, NOT A COPY OF ONE — --main-pt is 0 below the rail breakpoint, so on a
+          // phone this cancels nothing and the shell starts under the app bar.
+          marginTop: "calc(-1 * var(--main-pt))",
           marginBottom: "calc(-1 * (60px + var(--bottom-nav-h)))",
         }}
       >

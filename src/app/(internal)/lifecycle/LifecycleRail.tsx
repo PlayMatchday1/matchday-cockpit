@@ -14,9 +14,9 @@
 // guards on `membership` and mounts nothing — it must not pull the growth aggregates to render a
 // members table that does not read them.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import ChatsRail from "../match-ops/ChatsRail";
-import MatchOpsMobileBar from "../match-ops/MatchOpsMobileBar";
+import { useSectionNav } from "@/components/SectionNav";
 import { canAccess, useAuth } from "@/lib/useAuth";
 import { LIFECYCLE_SECTIONS, SECTION_PAGE } from "./lifecycleSections";
 
@@ -41,7 +41,14 @@ export default function LifecycleRail({ children }: { children: React.ReactNode 
 
   // A link the user cannot open is not navigation. The six reports and Membership are separate
   // permissions, so each item is shown only to someone its guard would let through.
-  const items = LIFECYCLE_SECTIONS.filter((it) => canAccess(appUser, SECTION_PAGE[it.key] ?? "lifecycle"));
+  /* MEMOISED BECAUSE useSectionNav KEYS ON ARRAY IDENTITY. A fresh filter() every render would
+   * publish a new array every render and loop. */
+  const items = useMemo(
+    () => LIFECYCLE_SECTIONS.filter((it) => canAccess(appUser, SECTION_PAGE[it.key] ?? "lifecycle")),
+    [appUser],
+  );
+  /* PUBLISHED TO THE SHELL'S ONE APP BAR instead of rendering a second one inside <main>. */
+  useSectionNav({ items, label: LABEL, showSwitch: false });
 
   const railW = collapsed ? "60px" : "212px";
 
@@ -59,7 +66,6 @@ export default function LifecycleRail({ children }: { children: React.ReactNode 
         style={{ "--mo-rail-w": railW } as React.CSSProperties}
         className="lg:pl-[var(--mo-rail-w)] max-[899px]:w-screen max-[899px]:ml-[calc(50%-50vw)]"
       >
-        <MatchOpsMobileBar items={items} sheetTitle={LABEL} showSwitch={false} />
         {children}
       </div>
     </>

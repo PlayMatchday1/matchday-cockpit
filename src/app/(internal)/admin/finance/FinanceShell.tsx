@@ -24,7 +24,7 @@ import { createContext, Suspense, useCallback, useContext, useEffect, useMemo, u
 import { usePathname, useSearchParams } from "next/navigation";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import ChatsRail from "../../match-ops/ChatsRail";
-import MatchOpsMobileBar from "../../match-ops/MatchOpsMobileBar";
+import { useSectionNav } from "@/components/SectionNav";
 import FinanceExecHero from "@/components/FinanceExecHero";
 import FinancePeriodBar from "@/components/finance/FinancePeriodBar";
 import { FinancePeriodProvider } from "@/lib/financePeriodContext";
@@ -55,6 +55,9 @@ export default function FinanceShell({ children }: { children: React.ReactNode }
 
 function FinanceShellInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() ?? "";
+  /* PUBLISHED TO THE SHELL'S ONE APP BAR instead of rendering a second one inside <main>.
+   * See src/components/SectionNav.tsx for why the bar cannot live in here. */
+  useSectionNav({ items: FINANCE_SECTIONS, label: "Finance", showSwitch: false });
   const searchParams = useSearchParams();
 
   const [collapsed, setCollapsed] = useState(false);
@@ -145,7 +148,6 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
         style={{ "--mo-rail-w": railW } as React.CSSProperties}
         className="lg:pl-[var(--mo-rail-w)] max-[899px]:w-screen max-[899px]:ml-[calc(50%-50vw)]"
       >
-        <MatchOpsMobileBar items={FINANCE_SECTIONS} sheetTitle="Finance" showSwitch={false} />
 
         {/* THE WORDMARK IS DESKTOP-ONLY. On a phone it cost ~600px of scroll before the first
             dollar, and MatchOpsMobileBar directly above it already says which page this is —

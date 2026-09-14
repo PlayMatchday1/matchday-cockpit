@@ -11,7 +11,7 @@
 // Gameday board, that one by every other Match Ops route.
 
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/lib/useAuth";
 import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
 import { useManagerPayAttnCount } from "@/lib/useManagerPayAttnCount";
@@ -39,6 +39,36 @@ export default function MatchOpsSectionSheet({ open, onClose, items: itemsProp, 
   };
   const nav = (href: string) => { onClose(); if (!isActive(href)) router.push(href); };
 
+  /* ── A SEARCH FIELD, BUT ONLY WHEN THERE IS SOMETHING TO SEARCH ──────────────────────────────
+   * Four screens is a list you read; eleven is a list you hunt in. An empty search box over four
+   * items is furniture, so the threshold is six. */
+  const [q, setQ] = useState("");
+  const searchable = items.length >= 6;
+  const query = searchable ? q.trim().toLowerCase() : "";
+  const shown = useMemo(
+    () => (!query ? items : items.filter((s2) =>
+      [s2.label, s2.desc, s2.group].filter(Boolean).some((f) => String(f).toLowerCase().includes(query)))),
+    [items, query],
+  );
+  /* ── THE GROUPS THE DATA ALREADY CARRIED ─────────────────────────────────────────────────────
+   * RailItem.group has existed since the rail was built, the desktop rail renders it, and the
+   * sheet threw it away — so eleven Match Ops destinations arrived as one flat run. Rendered in
+   * FIRST-APPEARANCE ORDER, once each, so the sheet reads the same top-to-bottom as the rail. */
+  const groups = useMemo(() => {
+    const out: { name: string; rows: RailItem[] }[] = [];
+    for (const it of shown) {
+      const name = it.group ?? "";
+      const last = out[out.length - 1];
+      if (last && last.name === name) last.rows.push(it);
+      else out.push({ name, rows: [it] });
+    }
+    return out;
+  }, [shown]);
+  const currentLabel = items.find((s2) => isActive(s2.href))?.label ?? null;
+
+  /* The box is reset whenever the sheet is opened, so it never reopens mid-filter. */
+  useEffect(() => { if (!open) setQ(""); }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -62,21 +92,62 @@ export default function MatchOpsSectionSheet({ open, onClose, items: itemsProp, 
         * --bottom-nav-h already exists for exactly this (globals.css:137, 0 on desktop). Adding it
         * to the padding pushes the last row clear; subtracting it from the max-height means a
         * longer list becomes genuinely scrollable instead of growing under the nav. */}
-      <div className="relative overflow-y-auto overscroll-contain rounded-t-[22px]"
+      {/* ── A FIXED, GENEROUS HEIGHT ────────────────────────────────────────────────────────────
+        * It used to be max-height only, so Growth's four rows made it hug them and it opened as a
+        * small tray near the thumb: a popup menu, not a place you navigate from. A surface that
+        * changes size with its contents reads as a tooltip; one that does not reads as a place.
+        * HEIGHT, not max-height, so Growth (four screens) and Match Ops (eleven) open identically.
+        *
+        * --bottom-nav-h is subtracted for the reason below; 78vh capped at 620 keeps it generous
+        * on a small phone and stops it becoming a full-screen takeover on a tablet. */}
+      <div className="relative flex flex-col overscroll-contain rounded-t-[22px]"
         style={{ background: "#ffffff",
           boxShadow: "0 -2px 8px rgba(7,42,32,.06), 0 -26px 60px -20px rgba(7,42,32,.42)",
-          maxHeight: "calc(86% - var(--bottom-nav-h))",
+          height: "calc(min(78%, 620px) - var(--bottom-nav-h))",
           paddingBottom: "calc(14px + var(--sab) + var(--bottom-nav-h))" }}>
         <div className="flex justify-center pb-1 pt-2"><span className="h-[5px] w-[38px] rounded-full" style={{ background: "#dbe3df" }} /></div>
-        <div className="flex items-center gap-2.5 px-[18px] pb-2.5 pt-1.5">
-          <h2 className="text-[17px] font-[760] tracking-[-0.02em]" style={{ color: "#12241d" }}>{title}</h2>
-          <button type="button" onClick={onClose} aria-label="Close" className="ml-auto flex h-9 w-9 items-center justify-center rounded-full" style={{ color: "#42594e" }}>
+        {/* ── A HEADER THAT SAYS WHERE YOU ARE ──────────────────────────────────────────────── */}
+        <div className="flex flex-none items-start gap-2.5 px-[18px] pb-2 pt-1.5">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-[20px] font-[780] tracking-[-0.024em]" style={{ color: "#12241d" }} data-testid="sheet-title">{title}</h2>
+            <p className="mt-0.5 text-[12.5px] font-[540]" style={{ color: "#6d7b74" }} data-testid="sheet-sub">
+              {items.length} screen{items.length === 1 ? "" : "s"}
+              {currentLabel ? ` · you are on ${currentLabel}` : ""}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close" data-testid="sheet-close"
+            className="flex h-10 w-10 flex-none items-center justify-center rounded-full" style={{ color: "#42594e" }}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.1} strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </div>
-        <div className="px-2.5">
+        {searchable && (
+          <div className="flex-none px-[18px] pb-2">
+            <input
+              data-testid="sheet-search"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder={`Find a screen in ${title}`}
+              aria-label={`Find a screen in ${title}`}
+              className="w-full rounded-[11px] border px-3 text-[14px]"
+              style={{ minHeight: 44, borderColor: "#dfe7e3", background: "#f7faf8", color: "#12241d" }}
+            />
+          </div>
+        )}
+        {/* THE LIST IS THE ONLY THING THAT SCROLLS, so the header and the footer line stay put. */}
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2.5" data-testid="sheet-list">
           {showSwitch && <SectionSwitch />}
-          {items.map((s) => {
+          {query && shown.length === 0 && (
+            <p className="px-3 py-6 text-center text-[13px]" data-testid="sheet-none" style={{ color: "#8d9c94" }}>
+              No screen in {title} matches &ldquo;{q.trim()}&rdquo;.
+            </p>
+          )}
+          {groups.map((g) => (
+            <div key={g.name || "_"}>
+              {g.name && (
+                <p data-testid="sheet-group" className="px-3 pb-1 pt-3 text-[10.5px] font-[800] uppercase tracking-[0.09em]"
+                  style={{ color: "#9aa8a1" }}>{g.name}</p>
+              )}
+              {g.rows.map((s) => {
             const on = isActive(s.href);
             const n = countFor(s.badge);
             return (
@@ -105,7 +176,17 @@ export default function MatchOpsSectionSheet({ open, onClose, items: itemsProp, 
               </button>
             );
           })}
+            </div>
+          ))}
         </div>
+        {/* ── THE LINE THAT DRAWS THE BOUNDARY BETWEEN THE TWO NAVS ───────────────────────────
+          * The bottom bar carries the SECTIONS; this sheet carries the SCREENS inside one of them.
+          * That division is correct and is what every phone app does, but nothing on screen said
+          * so, which is how a list of four reads as "is this all there is?". */}
+        <p className="flex-none px-[18px] pt-2.5 text-[11.5px] font-[540] leading-[1.45]"
+          data-testid="sheet-foot" style={{ color: "#8d9c94" }}>
+          Sections live in the bar at the bottom. This list is the screens inside {title}.
+        </p>
       </div>
     </div>
   );

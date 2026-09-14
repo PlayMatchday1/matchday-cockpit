@@ -50,8 +50,9 @@ await go('browse');
 ok(await p.$eval('[data-testid="bind-newname"]', e=>e.value)==='', 'the box can be cleared');
 ok(await vis('[data-testid="bind-cands"]'), '  and an empty box lists every field rather than nothing');
 const all = await names();
-ok(all.length===14, `  all of them (${all.length})`);
-ok(/All 14 fields/.test(await T('[data-testid="bind-cands-hd"]')), '  and says so');
+const TOTAL = all.length;
+ok(TOTAL>=20, `  all of them (${TOTAL})`);
+ok(new RegExp(`All ${TOTAL} fields`).test(await T('[data-testid="bind-cands-hd"]')), '  and says so');
 ok(/Type to narrow/.test(await T('[data-testid="bind-cands-hint"]')), '  and what to do about it');
 const cityHds = await p.$$eval('[data-testid="cand-city"]', es=>es.map(e=>e.textContent.trim()));
 ok(cityHds.length>=3, `  grouped by city (${cityHds.join(", ")}), because a flat list of 14 is the same problem`);
@@ -87,12 +88,58 @@ for (const [key, cardTitle, wanted] of cases){
 // CONTROL: the word rule did not simply match everything
 await load(); await go('words'); await p.evaluate(() => window.__openBind('katy')); await p.waitForTimeout(160);
 const katyList = await names();
-ok(katyList.length>0 && katyList.length<14, `CONTROL: it is still a filter, not the whole table (${katyList.length} of 14)`);
+ok(katyList.length>0 && katyList.length<20, `CONTROL: it is still a filter, not the whole table (${katyList.length} of 14)`);
 ok(!katyList.includes('Westlake'), '  CONTROL: an unrelated field is not in it');
 // CONTROL: a whole-string substring that the old rule DID catch still works
 await p.fill('[data-testid="bind-newname"]', 'parmer'); await p.waitForTimeout(140);
 ok((await names()).includes('PARMER Stadium'), 'CONTROL: a case the substring rule handled still works');
 ok(+await T('[data-testid="cmp-old"]')>0, '  CONTROL: and the old rule agrees on that one, so nothing regressed');
+
+// ══ 4b. THE TOP HIT WAS WRONG ON THREE OF SEVEN ══════════════════════════════
+// Claude Code's own item-14 walk: "Lou Fusz Athletic Complex" -> Wheatley Heights
+// Sport Complex, "STAR Soccer Complex" -> Soccer Central, and Katy ISC -> ATH Katy.
+// One cause: "Complex", "Soccer" and "Park" are in many venue names, so they match
+// everything and tell you nothing. The four-word stoplist I wrote does not cover it.
+await load(); await go('generic');
+const lfTop = await T('[data-testid="cmp-top"]');
+ok(/^Lou Fusz/.test(lfTop), `"Lou Fusz Athletic Complex" now tops with ${lfTop}, not a Complex somewhere else`);
+const lfNames = await names();
+ok(!lfNames.includes('Wheatley Heights Sport Complex'),
+  `  CONTROL: the other Complex is gone from the list entirely: ${JSON.stringify(lfNames)}`);
+ok(lfNames.every(n=>/Lou Fusz/.test(n)), '  CONTROL: and every candidate is actually a Lou Fusz');
+
+await load(); await go('generic2');
+const stTop = await T('[data-testid="cmp-top"]');
+ok(stTop==='STAR', `"STAR Soccer Complex" now tops with ${stTop}, not Soccer Central`);
+// "soccer" is in ONE venue name in this corpus, so it stays a discriminator and
+// Soccer Central stays listed. That is the rule being honest rather than my taste:
+// it is ranked BELOW the real answer, not dropped by a word I disliked.
+const stNames = await names();
+ok(stNames.indexOf('STAR') < stNames.indexOf('Soccer Central'),
+  `  Soccer Central ranks below it rather than being hand-dropped: ${JSON.stringify(stNames)}`);
+ok(stNames.length<=4, `  CONTROL: and the list is still short (${stNames.length})`);
+
+// the derived list is visible, and it is derived rather than typed
+const stopTxt = await T('[data-testid="cmp-stop"]');
+ok(/complex/.test(stopTxt) && /park/.test(stopTxt),
+  `the words it ignored are named and were computed from the table: "${stopTxt}"`);
+ok(!/hattrick/.test(stopTxt) && !/richards/.test(stopTxt),
+  '  CONTROL: a word that appears in one or two names is NOT ignored');
+
+// CONTROL: the cases that were already right stay right
+await load(); await go('seeded');
+ok(await T('[data-testid="cmp-top"]')==='Ann Richards School', 'CONTROL: Ann Richards is unaffected');
+await load(); await go('words'); await p.evaluate(()=>window.__openBind('crock')); await p.waitForTimeout(150);
+ok(await T('[data-testid="cmp-top"]')==='Crockett High School',
+  'CONTROL: Crockett still finds Crockett High School, even though "school" is now ignored');
+await load(); await go('words'); await p.evaluate(()=>window.__openBind('onion')); await p.waitForTimeout(150);
+ok((await names()).includes('Onion Creek'), 'CONTROL: Onion Creek still found');
+
+// CONTROL: a name made only of common words is still searchable
+await load(); await go('browse');
+await p.fill('[data-testid="bind-newname"]', 'Soccer Central'); await p.waitForTimeout(150);
+ok(await p.$eval('[data-testid="bind-save"]', e=>e.dataset.mode)==='link',
+  'CONTROL: a venue whose name is ALL common words is still reachable by typing it in full');
 
 // ══ 5. TWO FIELDS WITH THE SAME NAME, SORTED BY THE CARD'S OWN CITY ══════════
 // Hattrick #3 is Austin and Hattrick T. #52 is Houston. Neither is picked.

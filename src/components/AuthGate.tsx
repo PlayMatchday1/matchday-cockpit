@@ -4,6 +4,8 @@ import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { hasAnyAccess, useAuth } from "@/lib/useAuth";
 import { supabase } from "@/lib/supabase";
+import MobileAppBar from "./MobileAppBar";
+import { SectionNavProvider } from "./SectionNav";
 import TopNav from "./TopNav";
 import MobileBottomNav from "./MobileBottomNav";
 
@@ -68,24 +70,31 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
       pathname.startsWith("/match-ops/player-chats"));
 
   return (
-    <>
+    /* THE PROVIDER WRAPS BOTH THE BAR AND <main>, because the bar READS what the section shells
+     * inside main PUBLISH. Anything narrower and the bar cannot see them. */
+    <SectionNavProvider>
       <TopNav />
+      {/* THE ONE MOBILE APP BAR, ABOVE <main> AND NOT INSIDE IT. Five section shells used to render
+          their own copy from inside main, and main also paid the notch inset, so a Dynamic Island
+          phone paid 59px twice before the bar's own 44px band. The shell owns the bar now; it pays
+          var(--sat), and main pays var(--main-pt), which is 0 at these widths. */}
+      <MobileAppBar />
       <main
         className="mx-auto max-w-[1600px] px-8"
         style={{
-          // max() so the top padding clears the iOS status bar on
-          // mobile PWA (TopNav hidden, no other chrome above) while
-          // staying at the mockup's 26px buffer on desktop and any
-          // viewport where env() resolves to 0. Widened container
-          // (was max-w-6xl / 1152px) so wide monitors aren't half-empty.
-          paddingTop: "max(env(safe-area-inset-top), 26px)",
+          // --main-pt is max(env(safe-area-inset-top), 26px) on desktop and 0 below the rail
+          // breakpoint, where MobileAppBar pays the inset instead. ONE formula, in globals.css,
+          // because the literal used to be written out here and negated in two page files that
+          // then had to agree with it forever. Widened container (was max-w-6xl / 1152px) so wide
+          // monitors aren't half-empty.
+          paddingTop: "var(--main-pt)",
           paddingBottom: "calc(60px + var(--bottom-nav-h))",
         }}
       >
         {children}
       </main>
       {!onChatShell && <MobileBottomNav />}
-    </>
+    </SectionNavProvider>
   );
 }
 

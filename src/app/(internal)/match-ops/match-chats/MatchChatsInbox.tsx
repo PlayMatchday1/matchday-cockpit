@@ -22,7 +22,6 @@ import { KNOWN_CITY_CODES, HIDDEN_CITY_CODES } from "@/lib/cityNormalization";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
 import { useAuth } from "@/lib/useAuth";
 import { isConfined } from "@/lib/cityConfinement";
-import MatchOpsMobileBar from "../MatchOpsMobileBar";
 
 export type InboxTab = "active" | "upcoming" | "past";
 
@@ -196,10 +195,6 @@ export default function MatchChatsInbox({
       }`}
       style={{ background: "#f8faf9", borderColor: "#e6ebe8" }}
     >
-      {/* Mobile-only section nav — the desktop rail is hidden below 900px, so
-          this is how you reach the rest of Match Ops on a phone. */}
-      <MatchOpsMobileBar />
-
       {/* Header */}
       <div className="flex-none px-4 pt-3.5">
         <div className="flex items-center gap-2.5">

@@ -24,12 +24,15 @@ export default function MatchChatsPage() {
   return (
     <PagePermissionGuard page="chats">
       <div
-        className="relative left-1/2 flex h-[100dvh] w-screen -translate-x-1/2 flex-col md:h-[calc(100dvh-var(--nav-h))]"
+        className="relative left-1/2 flex h-[calc(100dvh-var(--appbar-h))] w-screen -translate-x-1/2 flex-col md:h-[calc(100dvh-var(--nav-h))]"
         style={{
-          // Cancel AuthGate <main>'s paddingTop max(env,26px) and
-          // paddingBottom calc(60px + var(--bottom-nav-h)) so the shell
-          // occupies the full area under TopNav.
-          marginTop: "calc(-1 * max(env(safe-area-inset-top), 26px))",
+          // Cancel AuthGate <main>'s padding so the shell occupies the full area under TopNav.
+          // ONE FORMULA, NOT A COPY OF ONE. This used to spell out
+          // max(env(safe-area-inset-top), 26px) by hand and negate it, which meant three files had
+          // to agree about it forever and only these two were ever kept in line. --main-pt is 0
+          // below the rail breakpoint, so on a phone this cancels nothing and the shell simply
+          // starts under the app bar.
+          marginTop: "calc(-1 * var(--main-pt))",
           marginBottom: "calc(-1 * (60px + var(--bottom-nav-h)))",
         }}
       >
