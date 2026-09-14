@@ -16,6 +16,7 @@
 //   node scripts/e2e/verify-link-fields.mjs
 import { chromium } from "playwright";
 import { installHarnessGuard, fatal, closeContext, closeBrowser, storageStateFor, nonEmpty } from "./_session.mjs";
+import { patchCards } from "./_cardFixtures.mjs";
 installHarnessGuard();
 process.loadEnvFile(".env.local");
 
@@ -130,6 +131,7 @@ const READ = () => {
 const zOf = (sel) => (s) => s;
 void zOf;
 
+let UNBIND = [];
 async function boot(browser, storageState, width, opts = {}) {
   const ctx = await browser.newContext({ storageState, viewport: { width, height: opts.height ?? 1100 },
     ...(width < 640 ? { isMobile: true, hasTouch: true } : {}) });
@@ -166,14 +168,17 @@ async function boot(browser, storageState, width, opts = {}) {
       writes.push({ table: "kanban_cards", method: m, body: route.request().postData(), url: route.request().url() });
       return route.fulfill({ status: 204, body: "" });
     }
-    if (!opts.inject?.length && !opts.retitle?.length) return route.fallback();
+    if (!opts.inject?.length && !opts.retitle?.length && !UNBIND.length) return route.fallback();
     /* CARDS GIVEN A venue_id ON THE WAY PAST, so the bound assertions have subjects without a
      * write. TWO of them, deliberately: one venue past the plan window and one still inside it,
      * because "a launch that is over is not a countdown" needs both halves to mean anything. */
     const res = await route.fetch();
     const j = await res.json().catch(() => null);
     if (!Array.isArray(j)) return route.fulfill({ response: res });
-    for (const inj of opts.inject) {
+    /* CARDS UNBOUND ON THE READ. Every Confirmed card is bound now, so the five subjects below are
+     * made rather than found; nothing is written. */
+    patchCards(j, { unbind: UNBIND });
+    for (const inj of opts.inject ?? []) {
       const target = j.find((c) => c.id === inj.cardId);
       if (target) target.venue_id = inj.venueId;
     }
@@ -225,9 +230,11 @@ async function main() {
   const { data: allCards } = await sb.from("kanban_cards").select("id,title,stage,venue_id").eq("board_type", "field_pipeline");
   const norm = (s) => String(s ?? "").trim().toLowerCase();
   const byName = new Map(nonEmpty(venues ?? [], "fin_venues rows").map((v) => [norm(v.venue_name), v]));
-  const confirmedUnbound = nonEmpty(
-    (allCards ?? []).filter((c) => c.stage === "confirmed" && c.venue_id == null),
-    "confirmed cards with no venue",
+  /* CONFIRMED CARDS, bound or not. The five subjects are unbound on the READ further down, so this
+   * no longer requires production to have a backlog. */
+  const confirmedCards = nonEmpty(
+    (allCards ?? []).filter((c) => c.stage === "confirmed"),
+    "confirmed cards",
   );
   /* ── THE SUBJECTS ARE MANUFACTURED FROM PRODUCTION'S VENUES, NOT FOUND AMONG ITS CARDS ──────
    * This used to pick cards whose titles already matched a field. Every one of those has since
@@ -237,7 +244,10 @@ async function main() {
    *
    * "Inside the plan window" is a moving target too, so past-window subjects are made by shifting
    * a venue's launch_date on the read rather than hunting for an old one. */
-  const boundVenueIds = new Set((allCards ?? []).map((c) => c.venue_id).filter((x) => x != null));
+  /* VENUES FREED BY THE UNBIND ARE NOT HELD. Counting them as held would leave too few free ones. */
+  const freedIds = new Set(confirmedCards.slice(0, 5).map((c) => c.venue_id).filter((x) => x != null));
+  const boundVenueIds = new Set((allCards ?? []).map((c) => c.venue_id)
+    .filter((x) => x != null && !freedIds.has(x)));
   const freeVenues = nonEmpty(
     (venues ?? []).filter((v) => !boundVenueIds.has(v.id)),
     "fin_venues rows no card holds",
@@ -273,12 +283,18 @@ async function main() {
   )[0], launch_date: LIVE_ISO };
 
   /* FIVE DISTINCT CARDS, taken from one list so none can double up. */
-  const spare = nonEmpty(confirmedUnbound, "confirmed cards with no venue");
+  /* FIVE CARDS UNBOUND ON THE READ, since production has none left unbound. */
+  if (confirmedCards.length < 5) throw new Error(`need five confirmed cards, found ${confirmedCards.length}`);
+  UNBIND = confirmedCards.slice(0, 5).map((c) => c.id);
+  const spare = confirmedCards.slice(0, 5).map((c) => ({ ...c, venue_id: null }));
+  console.log(`\nunbound on the read: ${spare.map((c) => `"${c.title}"`).join(", ")}`);
   if (spare.length < 5) throw new Error(`need five unbound confirmed cards, found ${spare.length}`);
   const [linkCard, pastCard, boundCard, boundLiveCard, newCardRaw] = spare;
-  /* newCard must match NOTHING exactly, so it keeps its own title and is checked. */
-  const newCard = { ...newCardRaw };
-  if (byName.has(norm(newCard.title))) throw new Error(`newCard "${newCard.title}" unexpectedly matches a venue`);
+  /* newCard must match NOTHING exactly. Since the cards are manufactured anyway, it is renamed to
+   * a string no venue carries rather than hoping the fifth card happens to be unmatched. */
+  const NO_MATCH_TITLE = "Zzqx Nowhere Ground";
+  if (byName.has(norm(NO_MATCH_TITLE))) throw new Error(`"${NO_MATCH_TITLE}" unexpectedly matches a venue`);
+  const newCard = { ...newCardRaw, title: NO_MATCH_TITLE };
   const outsideAll = nonEmpty(
     (allCards ?? []).filter((c) => c.stage !== "confirmed" && c.venue_id == null),
     "unbound cards outside Confirmed",
@@ -307,6 +323,7 @@ async function main() {
     retitle: [
       { cardId: linkCard.id, title: linkVenue.venue_name },
       { cardId: pastCard.id, title: pastVenue.venue_name },
+      { cardId: newCard.id, title: NO_MATCH_TITLE },
     ],
   };
   linkCard.title = linkVenue.venue_name;
@@ -643,7 +660,7 @@ async function main() {
     yes("  it opens the whole backfill as one list", d.matchOpen);
     /* ONE ROW PER UNBOUND CONFIRMED CARD — minus the one this run injected a venue_id onto. */
     is("  every unbound confirmed card gets a row",
-      d.rows.length, confirmedUnbound.length - bindOpts.inject.length);
+      d.rows.length, spare.length - bindOpts.inject.length);
     yes("  each prefilled with that card's own name",
       d.rows.every((r) => (r.name ?? "").length > 0));
     const rLink = d.rows.find((r) => r.id === linkCard.id);

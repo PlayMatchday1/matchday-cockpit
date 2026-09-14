@@ -102,7 +102,20 @@ const SHEET = () => {
     close: close ? { h: Math.round(close.getBoundingClientRect().height) } : null,
     sub: T('[data-testid="sheet-sub"]'),
     foot: T('[data-testid="sheet-foot"]'),
-    none: T('[data-testid="sheet-none"]'),
+    fade: q('[data-testid="sheet-fade"]')?.getAttribute("data-on") ?? null,
+    /* ROWS WHOLLY INSIDE THE LIST'S BOX. "rendered" is not "visible": the whole bug was seven rows
+     * rendered and two on screen. */
+    visible: (() => { const l = q('[data-testid="sheet-list"]'); if (!l) return null;
+      const lb = l.getBoundingClientRect();
+      return [...document.querySelectorAll('[data-testid^="screen-dest-"]')]
+        .filter((r) => { const b = r.getBoundingClientRect(); return b.top >= lb.top - 1 && b.bottom <= lb.bottom + 1; }).length; })(),
+    rowsTotalH: [...document.querySelectorAll('[data-testid^="screen-dest-"]')]
+      .reduce((a, r) => a + r.getBoundingClientRect().height, 0),
+    padB: (() => { const pn = q('[data-testid="screen-sheet"] > div:nth-child(2)');
+      return pn ? parseFloat(getComputedStyle(pn).paddingBottom) : null; })(),
+    navH: (() => { const v = getComputedStyle(document.documentElement).getPropertyValue("--bottom-nav-h").trim();
+      const d = document.createElement("div"); d.style.height = v; document.body.appendChild(d);
+      const h = d.getBoundingClientRect().height; d.remove(); return h; })(),
     rows: rows.length,
     rowMinH: rows.length ? Math.min(...rows.map((r) => Math.round(r.getBoundingClientRect().height))) : null,
     clipped: rows.filter((r) => { const n = r.querySelector("span > span"); return n && n.scrollWidth > n.clientWidth + 1; })
@@ -307,26 +320,42 @@ async function main() {
       return p.evaluate(SHEET);
     };
     const g = await open("/growth/field-pipeline");
+    const g2 = await open("/match-ops/gameday");
     const m = await open("/match-ops/master-schedule");
     is("  no page error", errs, []);
     // 7. THE SAME HEIGHT WHATEVER IS IN IT.
-    is(`  Growth (${g.rows} screens) and Match Ops (${m.rows}) open at the same height`, g.panel.h, m.panel.h);
+    is(`  Growth (${g.rows} screens) and Daily Ops (${g2.rows}) open at the same height`, g.panel.h, g2.panel.h);
+    is(`  and so does Back Office (${m.rows})`, g.panel.h, m.panel.h);
     yes(`  and it is ${g.panel.pct}% of the viewport`, g.panel.pct >= 60);
-    yes(`  CONTROL: and no more than 82%`, g.panel.pct <= 82);
+    yes(`  CONTROL: and no more than 90%`, g.panel.pct <= 90);
     // 8. GROUPS.
     is("  Growth renders its two group headings", g.groups, ["Fields", "Fundraising"]);
     is(`  CONTROL: Match Ops renders four (${m.groups.join(", ")})`, m.groups.length, 4);
     is("  each once", new Set(m.groups).size, m.groups.length);
-    // 9. SEARCH.
-    is(`  CONTROL: no search over ${g.rows} screens`, g.search, null);
-    yes(`  a search field over ${m.rows}`, m.search != null);
-    yes(`  and it is ${m.search.h}px`, m.search.h >= 44);
+    // 1. ALL SEVEN OF DAILY OPS, AND NONE BELOW THE FOLD.
+    is(`  Daily Ops renders all ${g2.rows} of its screens`, g2.rows, 7);
+    is(`  and every one is on screen (list ${g2.list.ch}px for ${Math.round(g2.rowsTotalH)}px of rows)`,
+      g2.visible, g2.rows);
+    yes(`  with ${g2.list.ch - Math.round(g2.rowsTotalH)}px of margin, not by a hair`,
+      g2.list.ch - g2.rowsTotalH > 0);
+    // 2. THE NAV IS CLEARED ONCE.
+    yes(`  the sheet's bottom padding (${g2.padB}px) no longer includes the nav height (${g2.navH}px)`,
+      g2.padB < g2.navH);
+    // 3. NO SEARCH FIELD ANYWHERE.
+    is(`  CONTROL: no search field at ${g2.rows} screens`, g2.search, null);
+    is(`  CONTROL: nor at ${m.rows}, the largest list in the app`, m.search, null);
+
     // 11. THE CURRENT SCREEN, THREE SIGNALS.
     is("  the current screen carries aria-current", m.current.ariaCurrent, "page");
     yes("  a tick", m.current.tick);
     yes(`  and a tinted row (${m.current.tinted})`, m.current.tinted !== m.other.tinted);
     yes(`  CONTROL: another row carries none of the three`,
       m.other.ariaCurrent == null && !m.other.tick && m.other.tinted !== m.current.tinted);
+    // 4. THE FADE SAYS THERE IS MORE BELOW.
+    is(`  Back Office scrolls (${m.list.sh} in ${m.list.ch}) and shows the fade`, m.fade, "1");
+    is(`  CONTROL: Daily Ops fits, so it shows none`, g2.fade, "0");
+    is(`  CONTROL: nor does Growth's four`, g.fade, "0");
+
     // 13. THE SCRIM.
     is(`  the scrim starts below the status band`, m.scrimTop, SAT);
     // header + footer
@@ -334,20 +363,6 @@ async function main() {
     yes(`  and the footer draws the boundary: "${(m.foot ?? "").slice(0, 46)}…"`,
       /Sections live in the bar at the bottom/.test(m.foot ?? ""));
     is("  CONTROL: no em-dash in either", /—/.test((m.sub ?? "") + (m.foot ?? "")), false);
-
-    // 10. TYPING NARROWS ROWS AND HEADINGS TOGETHER.
-    await p.fill('[data-testid="sheet-search"]', "manager");
-    await p.waitForTimeout(450);
-    const f = await p.evaluate(SHEET);
-    yes(`  typing narrows the rows (${m.rows} to ${f.rows})`, f.rows > 0 && f.rows < m.rows);
-    yes(`  and the headings with them (${m.groups.length} to ${f.groups.length})`, f.groups.length < m.groups.length);
-    await p.fill('[data-testid="sheet-search"]', "zzqx");
-    await p.waitForTimeout(450);
-    const none = await p.evaluate(SHEET);
-    is("  CONTROL: a search matching nothing lists nothing", none.rows, 0);
-    yes(`  and says so: "${(none.none ?? "").slice(0, 40)}…"`, /matches/.test(none.none ?? ""));
-    await p.fill('[data-testid="sheet-search"]', "");
-    await p.waitForTimeout(450);
 
     // 12. THE LAST ROW CLEARS THE BOTTOM NAV. This is the :57 bug, re-proven.
     const scrolled = await p.evaluate(() => {
@@ -371,6 +386,16 @@ async function main() {
         scrolled.last <= scrolled.vh);
     }
     is(`  CONTROL: a four-item list does not invent a scrollbar`, g.list.sh > g.list.ch, false);
+    is(`  CONTROL: nor does Daily Ops' seven`, g2.list.sh > g2.list.ch, false);
+    /* THE FADE TURNS OFF AT THE END. On while there is something below, off once there is not. */
+    /* THE SCROLL IS SET FROM SCRIPT, so React has not flushed the resulting state when the next
+     * evaluate runs. Poll for the off state rather than sampling it one tick too early. */
+    const atEnd = await p.waitForFunction(
+      () => document.querySelector('[data-testid="sheet-fade"]')?.getAttribute("data-on") === "0",
+      { timeout: 8000 },
+    ).then(() => "0").catch(async () =>
+      p.evaluate(() => document.querySelector('[data-testid="sheet-fade"]')?.getAttribute("data-on")));
+    is("  and the fade turns off at the end of the list", atEnd, "0");
     await closeContext(ctx);
   }
 
@@ -389,7 +414,7 @@ async function main() {
     d = await p.evaluate(READ);
     is("  no horizontal scroll with the sheet open", d.hscroll, false);
     yes(`  rows are ${s.rowMinH}px`, s.rowMinH >= 56);
-    yes(`  the search field is ${s.search.h}px`, s.search.h >= 44);
+    is("  CONTROL: and still no search field", s.search, null);
     yes(`  the close button is ${s.close.h}px`, s.close.h >= 38);
     /* GUARDED: "nothing is clipped" is zero, and a sheet with no rows prints the same zero. */
     yes(`  CONTROL: there are ${nonEmpty(new Array(s.rows).fill(0), "sheet rows").length} rows to clip`, s.rows > 0);

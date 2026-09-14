@@ -15,6 +15,7 @@
 import { chromium } from "playwright";
 import { installHarnessGuard, fatal, closeContext, closeBrowser, storageStateFor, nonEmpty } from "./_session.mjs";
 import { readTemplate } from "./_launchFixtures.mjs";
+import { patchCards } from "./_cardFixtures.mjs";
 installHarnessGuard();
 process.loadEnvFile(".env.local");
 
@@ -65,11 +66,12 @@ const READ_BOARD = () => {
   };
 };
 
+let UNBIND = [];
 async function bootBoard(browser, storageState, width) {
   const ctx = await browser.newContext({ storageState, viewport: { width, height: 1100 },
     ...(width < 640 ? { isMobile: true, hasTouch: true } : {}) });
   const writes = [];
-  for (const t of ["fin_venues", "kanban_cards", "field_launch_tasks"]) {
+  for (const t of ["fin_venues", "field_launch_tasks"]) {
     await ctx.route(`**/rest/v1/${t}*`, async (route) => {
       const m = route.request().method();
       if (m === "GET" || m === "HEAD") {
@@ -81,6 +83,17 @@ async function bootBoard(browser, storageState, width) {
       return route.fulfill({ status: 204, body: "" });
     });
   }
+  /* ONE CARD UNBOUND ON THE READ, so the candidate half has a subject at all: every Confirmed card
+   * is bound now. Nothing is written. */
+  await ctx.route("**/rest/v1/kanban_cards*", async (route) => {
+    const m = route.request().method();
+    if (m !== "GET" && m !== "HEAD") { writes.push({ table: "kanban_cards", method: m }); return route.fulfill({ status: 204, body: "" }); }
+    const res = await route.fetch();
+    const j = await res.json().catch(() => null);
+    if (!Array.isArray(j)) return route.fulfill({ response: res });
+    patchCards(j, { unbind: UNBIND });
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(j) });
+  });
   const p = await ctx.newPage();
   const errs = [];
   p.on("pageerror", (e) => errs.push(String(e)));
@@ -233,10 +246,12 @@ async function main() {
   const probeCands = candFor(probe);
   const heldCand = probeCands.find((c) => held.has(c.id));
   const freeCand = probeCands.find((c) => !held.has(c.id));
-  const unboundCard = nonEmpty(
-    (allCards ?? []).filter((c) => c.stage === "confirmed" && c.venue_id == null),
-    "confirmed cards with no venue",
-  )[0];
+  /* MANUFACTURED, not found: every Confirmed card is bound. One is unbound on the READ. */
+  const confirmed = nonEmpty((allCards ?? []).filter((c) => c.stage === "confirmed"), "confirmed cards");
+  const unboundCard = confirmed.find((c) => c.venue_id != null) ?? confirmed[0];
+  UNBIND = [unboundCard.id];
+  if (unboundCard.venue_id != null) held.delete(unboundCard.venue_id);
+  console.log(`\nunbound on the read: "${unboundCard.title}"`);
   console.log(`\nprobe "${probe}" -> ${probeCands.length} candidates`);
   console.log(`  held: #${heldCand.id} ${heldCand.venue_name} (by "${held.get(heldCand.id).title}")`);
   console.log(`  free: #${freeCand.id} ${freeCand.venue_name}`);

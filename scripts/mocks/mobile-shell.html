@@ -75,7 +75,14 @@
   .srch{flex:none;padding:0 14px 8px}
   .srch input{width:100%;height:44px;border:1px solid var(--line);border-radius:11px;background:#f6f9f7;
               padding:0 13px;font:500 15px/1 inherit;color:var(--ink)}
+  .listwrap{flex:1;min-height:0;position:relative;display:flex}
   .list{flex:1;min-height:0;overflow-y:auto;padding:0 10px}
+  /* WHEN IT SCROLLS, IT HAS TO LOOK LIKE IT SCROLLS. A sheet that ends in flat
+     white reads as finished, which is how two visible rows out of seven read as
+     "that is all there is". */
+  .fade{position:absolute;left:0;right:0;bottom:0;height:26px;pointer-events:none;
+        background:linear-gradient(to top, #fff, rgba(255,255,255,0));opacity:0;transition:opacity .12s}
+  .fade[data-on="1"]{opacity:1}
   .grp{font:800 10px/1 inherit;letter-spacing:.11em;text-transform:uppercase;color:#98a8a0;
        padding:12px 8px 6px}
   .row{display:flex;align-items:center;gap:12px;width:100%;text-align:left;border:0;background:none;
@@ -94,7 +101,10 @@
   .row[aria-current] .bdg{background:#fff;color:#12704a}
   .row .tick{flex:none;width:20px;height:20px;color:#12764c}
   .empty{padding:26px 18px;text-align:center;font-size:13px;color:var(--mute)}
-  .foot{flex:none;padding:10px 18px calc(12px + var(--sab) + var(--bottom-nav-h));
+  /* THE BOTTOM NAV WAS SUBTRACTED TWICE. The sheet's height already clears it, and
+   then the padding cleared it again, so 76px of empty white sat under the footer
+   and the list lost a row and a half to it. Once is enough. */
+  .foot{flex:none;padding:10px 18px calc(12px + var(--sab));
         border-top:1px solid #f1f5f3;font-size:11.5px;color:#98a8a0}
   .hid{display:none !important}
 </style></head>
@@ -103,9 +113,8 @@
   <button data-s="before" aria-pressed="true">before · the gap</button>
   <button data-s="after">after · one bar</button>
   <button data-s="growth">sheet · Growth (4)</button>
-  <button data-s="ops">sheet · Match Ops (11)</button>
-  <button data-s="search">sheet · searched</button>
-  <button data-s="none">sheet · no match</button>
+  <button data-s="ops">sheet · Daily Ops (7)</button>
+  <button data-s="back">sheet · Back Office (12)</button>
   <button data-s="solo">bar · a page with no siblings</button>
 </div>
 
@@ -154,7 +163,8 @@
     <div class="srch hid" data-testid="sheet-search">
       <input type="search" data-testid="sheet-search-input" placeholder="Search screens" autocomplete="off">
     </div>
-    <div class="list" id="list"></div>
+    <div class="listwrap"><div class="list" id="list"></div>
+      <span class="fade" data-testid="sheet-fade" data-on="0"></span></div>
     <div class="foot" data-testid="sheet-foot"></div>
   </div>
 </div>
@@ -176,23 +186,30 @@ const GROWTH = {
 const OPS = {
   label: "Match Ops",
   items: [
-    { key:"gameday", group:"Today", label:"Gameday Ops", desc:"Every match today, and what needs a decision", icon:I('<path d="M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5l3 2"/>'), on:true },
-    { key:"match-chats", group:"Today", label:"Match Chats", desc:"The group chat for each match", icon:I('<path d="M4 5h16v11H9l-5 4z"/>'), badge:100 },
-    { key:"player-chats", group:"Today", label:"Player Chats", desc:"One-to-one with players", icon:I('<path d="M7 4h10v9H10l-3 3z"/>'), badge:3 },
-    { key:"schedule", group:"Planning", label:"Master Schedule", desc:"Every slot across every city", icon:I('<path d="M4 6h16v14H4zM4 10h16M8 3v4M16 3v4"/>') },
-    { key:"veo", group:"Planning", label:"Veo", desc:"Cameras, recordings and reconcile", icon:I('<path d="M4 7h11v10H4zM15 11l5-3v8l-5-3z"/>') },
-    { key:"templates", group:"Planning", label:"Chat Templates", desc:"What the automations send", icon:I('<path d="M5 4h9l5 5v11H5zM14 4v5h5"/>') },
-    { key:"partners", group:"Partners", label:"Partner Dashboards", desc:"What each field partner sees", icon:I('<path d="M4 20v-6h5v6M15 20v-9h5v9M4 11l8-7 8 7"/>'), badge:12 },
-    { key:"manager-pay", group:"Partners", label:"Manager Pay", desc:"What each city manager is owed", icon:I('<path d="M3 7h18v10H3zM7 12h.01M12 12h2"/>'), badge:4 },
-    { key:"reviews", group:"Quality", label:"Reviews", desc:"What players said after the match", icon:I('<path d="M12 4l2.5 5 5.5.8-4 3.9.9 5.5-4.9-2.6-4.9 2.6.9-5.5-4-3.9 5.5-.8z"/>') },
-    { key:"checkins", group:"Quality", label:"Check-ins", desc:"City manager reports from the field", icon:I('<path d="M5 12l4 4 10-10"/>') },
-    { key:"canned", group:"Quality", label:"Canned Responses", desc:"Replies the team reuses", icon:I('<path d="M4 6h16M4 12h16M4 18h10"/>') },
+    { key:"gameday", group:"Operations", label:"Gameday Ops", desc:"Today's matches, soonest first", icon:I('<path d="M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5l3 2"/>'), on:true },
+    { key:"veo", group:"Operations", label:"Veo", desc:"One day of camera matches", icon:I('<path d="M4 7h11v10H4zM15 11l5-3v8l-5-3z"/>') },
+    { key:"lookup", group:"Operations", label:"Player Lookup", desc:"One player, everything about them", icon:I('<path d="M11 4a6 6 0 100 12 6 6 0 000-12zM20 20l-4.5-4.5"/>') },
+    { key:"promos", group:"Operations", label:"Promo Codes", desc:"Codes and who used them", icon:I('<path d="M4 9h16v6H4zM9 9v6"/>') },
+    { key:"reviews", group:"Operations", label:"Reviews", desc:"What players said after the match", icon:I('<path d="M12 4l2.5 5 5.5.8-4 3.9.9 5.5-4.9-2.6-4.9 2.6.9-5.5-4-3.9 5.5-.8z"/>') },
+    { key:"match-chats", group:"Conversations", label:"Match Chats", desc:"The group chat for each match", icon:I('<path d="M4 5h16v11H9l-5 4z"/>'), badge:100 },
+    { key:"player-chats", group:"Conversations", label:"Player Chats", desc:"One-to-one with players", icon:I('<path d="M7 4h10v9H10l-3 3z"/>'), badge:3 },
   ],
 };
+/* BACK OFFICE, the longest section in the app at twelve. If twelve scrolls
+   comfortably, nothing needs a search box. */
+const BACK = { label:"Match Ops", items: Array.from({length:12}, (_,i) => ({
+  key:"b"+i, group: i<4?"Planning":i<8?"Partners":"Quality",
+  label:["Master Schedule","Chat Templates","Automation","Slate Review","Partner Dashboards","Manager Pay","Field Ops","Applications","Check-ins","Canned Responses","Change Log","Inventory"][i],
+  desc:"Back office screen", icon:I('<path d="M4 6h16v14H4z"/>'), badge: i===4?12:i===5?4:0,
+})) };
 
 /* SEARCH APPEARS WHEN THE LIST IS LONG ENOUGH TO NEED IT. Four screens is a
    list you read; eleven is a list you hunt in. */
-const SEARCH_AT = 6;
+/* NO SEARCH BOX. Ryan: "i have to search tabs? I dont remember the names and its
+   slow." The largest section in the app is Back Office at twelve, and twelve rows
+   is a thumb flick. A box you have to type a name into is the same "remember the
+   name" problem as the field picker, in a smaller costume. */
+const SEARCH_AT = Infinity;
 let SEC = GROWTH, query = "";
 
 function render(){
@@ -243,15 +260,24 @@ function render(){
    section has four screens or eleven, and never grows under the bottom nav. */
 function sizeSheet(){
   const ph = document.getElementById("phone").getBoundingClientRect().height;
-  const target = Math.min(ph * 0.78, 620);
+  /* 78% capped at 620 left the list 259px, which is two rows and a sliver of a
+     third. Daily Ops has seven. */
+  const target = Math.min(ph * 0.88, 720);
   document.getElementById("sheet").style.height = Math.round(target) + "px";
 }
 function openSheet(){
   document.getElementById("scrim").classList.remove("hid");
   document.getElementById("sheet").classList.remove("hid");
   document.getElementById("titlebtn").setAttribute("aria-expanded","true");
-  sizeSheet(); render();
+  sizeSheet(); render(); syncFade();
 }
+function syncFade(){
+  const l = document.getElementById("list");
+  const f = document.querySelector('[data-testid="sheet-fade"]');
+  const more = l.scrollHeight > l.clientHeight + 1 && l.scrollTop + l.clientHeight < l.scrollHeight - 1;
+  f.dataset.on = more ? "1" : "0";
+}
+document.getElementById("list").addEventListener("scroll", syncFade);
 function closeSheet(){
   document.getElementById("scrim").classList.add("hid");
   document.getElementById("sheet").classList.add("hid");
@@ -260,7 +286,6 @@ function closeSheet(){
 document.getElementById("titlebtn").addEventListener("click", openSheet);
 document.getElementById("scrim").addEventListener("click", closeSheet);
 document.querySelector('[data-testid="sheet-close"]').addEventListener("click", closeSheet);
-document.querySelector('[data-testid="sheet-search-input"]').addEventListener("input", e => { query = e.target.value; render(); });
 
 /* ── the two shells ──────────────────────────────────────────────────────── */
 function setShell(before){
@@ -304,9 +329,9 @@ function show(s){
   if (s === "before"){ SEC = GROWTH; setShell(true); }
   else { setShell(false); }
   if (s === "growth"){ SEC = GROWTH; query = ""; document.querySelector('[data-testid="sheet-search-input"]').value=""; openSheet(); }
-  if (s === "ops"){ SEC = OPS; query = ""; document.querySelector('[data-testid="sheet-search-input"]').value=""; openSheet(); }
-  if (s === "search"){ SEC = OPS; query = "chat"; openSheet(); document.querySelector('[data-testid="sheet-search-input"]').value="chat"; render(); }
-  if (s === "none"){ SEC = OPS; query = "zzzq"; openSheet(); document.querySelector('[data-testid="sheet-search-input"]').value="zzzq"; render(); }
+  if (s === "ops"){ SEC = OPS; query = ""; openSheet(); }
+  if (s === "back"){ SEC = BACK; query = ""; openSheet(); }
+
   /* A SECTION WITH ONE SCREEN STILL GETS THE BAR, so the top of every page is the
      same shape and main's padding is zero everywhere. No chevron, no menu, nothing
      to open: the bar is a title, not a broken button. */

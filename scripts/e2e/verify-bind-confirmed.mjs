@@ -13,6 +13,7 @@
 //   node scripts/e2e/verify-bind-confirmed.mjs
 import { chromium } from "playwright";
 import { installHarnessGuard, fatal, closeContext, closeBrowser, storageStateFor, nonEmpty } from "./_session.mjs";
+import { pickUnbindTarget, patchCards } from "./_cardFixtures.mjs";
 installHarnessGuard();
 process.loadEnvFile(".env.local");
 
@@ -73,6 +74,8 @@ const READ = () => {
 /** The column a card is currently rendered in, by its stage section. */
 const stageOf = (cardId) => `[data-testid="card"][data-id="${cardId}"]`;
 
+let UNBIND = [];
+let INJECT_CARD = null;
 async function boot(browser, storageState, width, opts = {}) {
   const ctx = await browser.newContext({ storageState, viewport: { width, height: opts.height ?? 1100 },
     ...(width < 640 ? { isMobile: true, hasTouch: true } : {}) });
@@ -105,17 +108,23 @@ async function boot(browser, storageState, width, opts = {}) {
       writes.push({ table: "kanban_cards", method: m, body: route.request().postData() });
       return route.fulfill({ status: 204, body: "" });
     }
-    if (!opts.bindCard) return route.fallback();
+    if (!opts.bindCard && !UNBIND.length) return route.fallback();
     /* ONE CARD GIVEN A venue_id ON THE WAY PAST, so the bound-card assertions (countdown, no
      * Create control, the border difference, and the taken path) have a subject without a write. */
     const res = await route.fetch();
     const j = await res.json().catch(() => null);
     if (!Array.isArray(j)) return route.fulfill({ response: res });
-    const target = j.find((c) => c.stage === "confirmed" && c.venue_id == null);
+    /* ONE CARD UNBOUND ON THE READ so this suite has a subject at all: every Confirmed card is
+     * bound now, and a suite that only runs while the backlog is unfinished stops testing the
+     * moment the feature works. Nothing is written. */
+    patchCards(j, { unbind: UNBIND });
+    /* THE INJECTION LANDS ON ITS OWN CARD, never on the chip subject. */
+    const target = j.find((c) => c.id === INJECT_CARD)
+      ?? j.find((c) => c.stage === "confirmed" && c.venue_id == null && c.id !== UNBIND[0]);
     /* WHICH CARD IT LANDED ON, recorded. Production now has real bound cards of its own, so
      * "the first bound card on the board" is no longer this suite's card — and asserting a
      * countdown against somebody else's past-window field is how this went red. */
-    if (target) { target.venue_id = opts.bindCard; injected.id = target.id; }
+    if (target && opts.bindCard) { target.venue_id = opts.bindCard; injected.id = target.id; }
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(j) });
   });
   const p = await ctx.newPage();
@@ -125,6 +134,17 @@ async function boot(browser, storageState, width, opts = {}) {
   await p.waitForSelector('[data-testid="card"]', { timeout: 180000 });
   await p.waitForTimeout(1200);
   return { ctx, p, writes, errs, injected };
+}
+
+/* THE MANUFACTURED CARD'S OWN CHIP. There is exactly one unbound card now, so a bare
+ * [data-testid="card-link"] can sit below the fold or inside a collapsed column; scoping the click
+ * and scrolling it in is what makes this independent of where the board happens to put it. */
+async function clickChip(p) {
+  const sel = `[data-testid="card"][data-id="${UNBIND[0]}"] [data-testid="card-link"]`;
+  await p.waitForSelector(sel, { timeout: 30000 });
+  await p.$eval(sel, (e) => e.scrollIntoView({ block: "center" }));
+  await p.waitForTimeout(200);
+  await p.click(sel);
 }
 
 /** HTML5 drag, dispatched. The board keys off a ref set in onDragStart, so the events are enough. */
@@ -157,8 +177,26 @@ async function main() {
   /* AND NOT ONE A CARD ALREADY HOLDS. Eight cards have been bound since this was written, and the
    * first live venue is now one of them — so the link path resolved to "taken" and seven
    * assertions about linking failed on somebody else's binding rather than on this feature. */
+  /* ── ONE CARD UNBOUND ON THE READ ──────────────────────────────────────────────────────────
+   * Every Confirmed card is bound, so there is no unbound subject on the board. One is made by
+   * stripping a venue_id on the way past; the venue it held is then free for the link path too. */
+  const allCards = ((await sb.from("kanban_cards").select("id,title,stage,venue_id")
+    .eq("board_type", "field_pipeline")).data ?? []);
+  /* TWO CARDS, because this suite needs BOTH an unbound subject (the chip, the dialog) and a bound
+   * one (the countdown, the taken refusal). Injecting onto the only unbound card would re-bind the
+   * very subject the chip assertions are about. */
+  const freed = pickUnbindTarget(allCards);
+  if (!freed) throw new Error("no confirmed bound card to unbind on the read");
+  const freed2 = pickUnbindTarget(allCards, { avoid: [freed.cardId] });
+  if (!freed2) throw new Error("need two confirmed bound cards to unbind on the read");
+  UNBIND = [freed.cardId, freed2.cardId];
+  INJECT_CARD = freed2.cardId;
+  console.log(`\nunbound on the read: "${freed.title}" (chip subject) and "${freed2.title}" (injection target)`);
+  console.log(`  freeing venues #${freed.freedVenueId} and #${freed2.freedVenueId}`);
+
   const boundVenueIds = new Set(((await sb.from("kanban_cards").select("venue_id")
-    .eq("board_type", "field_pipeline").not("venue_id", "is", null)).data ?? []).map((c) => c.venue_id));
+    .eq("board_type", "field_pipeline").not("venue_id", "is", null)).data ?? [])
+    .map((c) => c.venue_id).filter((id) => id !== freed.freedVenueId && id !== freed2.freedVenueId));
   const linkVenue = nonEmpty(
     (venues ?? []).filter((v) => weekIso(v.launch_date) <= 20 && !boundVenueIds.has(v.id)),
     "fin_venues rows inside the plan window that no card holds",
@@ -221,7 +259,7 @@ async function main() {
       return c ? { id: c.dataset.id, title: c.querySelector("[class*='break-words']")?.textContent.trim() ?? null } : null;
     });
     yes(`  CONTROL: there is an unbound card with a chip (${chipCard?.title})`, chipCard?.title != null);
-    await p.click('[data-testid="card-link"]');
+    await clickChip(p);
     await p.waitForSelector('[data-testid="bind-dialog"]', { timeout: 15000 });
     let d = await p.evaluate(READ);
     // 7. NO PICKER, NO SWITCH.
@@ -305,7 +343,7 @@ async function main() {
   {
     const { ctx, p } = await boot(browser, storageState, 1200);
     console.log("\n-- the dialog: an exact match offers a link --");
-    await p.click('[data-testid="card-link"]');
+    await clickChip(p);
     await p.waitForSelector('[data-testid="bind-dialog"]', { timeout: 15000 });
     await p.fill('[data-testid="bind-newname"]', linkVenue.venue_name);
     await p.waitForTimeout(500);
@@ -335,7 +373,8 @@ async function main() {
     const board = await p.evaluate(READ);
     const holder = board.cards.find((c) => c.bound === "1");
     yes(`  CONTROL: a card holds that venue ("${holder?.title}")`, holder != null);
-    await p.click('[data-testid="card-link"]');
+    void holder;
+    await clickChip(p);
     await p.waitForSelector('[data-testid="bind-dialog"]', { timeout: 15000 });
     await p.fill('[data-testid="bind-newname"]', linkVenue.venue_name);
     await p.waitForTimeout(500);
@@ -416,7 +455,7 @@ async function main() {
     is("  board: no horizontal scroll", d.hscroll, false);
     is("  no card title is truncated", d.cards.filter((c) => c.titleClipped).map((c) => c.title), []);
     is("  the columns stack to one", d.colXs.length, 1);
-    await p.click('[data-testid="card-link"]');
+    await clickChip(p);
     await p.waitForSelector('[data-testid="bind-dialog"]', { timeout: 15000 });
     await p.waitForTimeout(300);
     d = await p.evaluate(READ);

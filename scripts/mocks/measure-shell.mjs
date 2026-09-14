@@ -100,7 +100,7 @@ ok(sh.height >= ph.height*0.6, `a 4-screen section still opens a real surface ($
 await go('ops');
 const sh2 = await box('[data-testid="sheet"]');
 ok(Math.abs(sh2.height - sh.height) <= 2, `CONTROL: and an 11-screen one is the same height (${Math.round(sh2.height)}), so the surface does not flap about`);
-ok(sh2.height <= ph.height*0.82, '  CONTROL: without swallowing the whole screen');
+ok(sh2.height <= ph.height*0.90, '  CONTROL: without swallowing the whole screen');
 
 // ══ 3. THE GROUPS THE DATA ALREADY CARRIES ═══════════════════════════════════
 // RailItem.group has existed since the rail was built. The sheet threw it away.
@@ -109,23 +109,46 @@ const g1 = await p.$$eval('[data-testid="sheet-group"]', es=>es.map(e=>e.textCon
 ok(g1.join("|")==='Fields|Fundraising', `Growth's own two groups render: ${JSON.stringify(g1)}`);
 await go('ops');
 const g2 = await p.$$eval('[data-testid="sheet-group"]', es=>es.map(e=>e.textContent.trim()));
-const OPS_N = (await p.$$('[data-testid="sheet-row"]')).length;
-ok(g2.length===4, `and Match Ops' four: ${JSON.stringify(g2)}`);
+ok(g2.length===2, `and Daily Ops' two: ${JSON.stringify(g2)}`);
 ok(new Set(g2).size===g2.length, '  CONTROL: each heading appears once, not once per row');
 
-// ══ 4. SEARCH, WHEN THERE IS ENOUGH TO SEARCH ════════════════════════════════
-ok(await vis('[data-testid="sheet-search"]'), 'eleven screens get a search field');
-await go('growth');
-ok(!await vis('[data-testid="sheet-search"]'), 'CONTROL: four screens do not, because four is a list you read');
-await go('search');
-const rows = await p.$$eval('[data-testid="sheet-row"] .lb', es=>es.map(e=>e.textContent.trim()));
-ok(rows.length===3 && rows.every(r=>/Chat/.test(r)), `typing narrows it: ${JSON.stringify(rows)}`);
-ok(rows.length < OPS_N, `  CONTROL: from ${OPS_N} down to ${rows.length}`);
-ok((await p.$$('[data-testid="sheet-group"]')).length < g2.length, '  and the headings narrow with it');
-await go('none');
-ok(await vis('[data-testid="sheet-empty"]'), 'CONTROL: a search matching nothing says so');
-ok(/No screen in Match Ops matches/.test(await T('[data-testid="sheet-empty"]')), '  naming the section it looked in');
-ok((await p.$$('[data-testid="sheet-row"]')).length===0, '  CONTROL: and lists nothing');
+// ══ 4. NO SEARCH BOX, AND EVERY ROW ON SCREEN ═══════════════════════════════
+// Ryan, on the shipped sheet: "thats such a dumb system i have to search tabs?
+// I dont remember the names and its slow." He is right, and the box only looked
+// necessary because the list was showing two of seven rows.
+await go('ops');
+ok(!await vis('[data-testid="sheet-search"]'), 'seven screens get no search box');
+await go('back');
+ok(!await vis('[data-testid="sheet-search"]'), 'CONTROL: nor do twelve, the largest section in the app');
+
+// THE BOTTOM NAV WAS SUBTRACTED TWICE: once from the height, once as padding.
+await go('ops');
+const pad = await p.$eval('[data-testid="sheet"]', e=>Math.round(parseFloat(getComputedStyle(e).paddingBottom)));
+const navH = await p.evaluate(()=>parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bottom-nav-h')));
+ok(pad < navH, `the sheet's bottom padding is ${pad}px, below the ${navH}px nav it no longer clears twice`);
+
+// SEVEN ROWS, ALL OF THEM ON SCREEN.
+const rowsN = (await p.$$('[data-testid="sheet-row"]')).length;
+ok(rowsN===7, `Daily Ops renders all ${rowsN} of its screens`);
+const cut = await p.evaluate(() => {
+  const l = document.getElementById('list');
+  const lb = l.getBoundingClientRect().bottom;
+  return [...document.querySelectorAll('[data-testid="sheet-row"]')]
+    .filter(e => e.getBoundingClientRect().bottom > lb + 1).length;
+});
+ok(cut===0, '  and none of them is below the fold, so nothing has to be scrolled to or searched for');
+ok(await p.$eval('[data-testid="sheet-fade"]', e=>e.dataset.on)==='0',
+  '  CONTROL: with no scroll hint, because there is nothing below');
+
+// AND WHEN IT DOES SCROLL, IT LOOKS LIKE IT SCROLLS.
+await go('back');
+ok(await p.$eval('#list', e=>e.scrollHeight > e.clientHeight + 1), 'twelve screens do scroll');
+ok(await p.$eval('[data-testid="sheet-fade"]', e=>e.dataset.on)==='1',
+  '  and the sheet says so, instead of ending in flat white');
+await p.evaluate(() => { const l = document.getElementById('list'); l.scrollTop = l.scrollHeight; });
+await p.waitForTimeout(200);
+ok(await p.$eval('[data-testid="sheet-fade"]', e=>e.dataset.on)==='0',
+  '  CONTROL: and stops saying so at the end');
 
 // ══ 5. THE CURRENT SCREEN, IN THREE SIGNALS ══════════════════════════════════
 await go('ops');
@@ -140,9 +163,9 @@ ok(await p.$eval(other, e=>e.getAttribute('aria-current'))===null, 'CONTROL: ano
 ok(await p.$(other+' [data-testid="row-tick"]')===null, '  CONTROL: no tick');
 
 // ══ 6. THE LAST ROW CLEARS THE BOTTOM NAV ════════════════════════════════════
+await go('back');
 // The bug the existing sheet's own comment describes: the panel ran to the
 // viewport floor and Player Chats rendered behind the nav, unscrollable.
-await go('ops');
 await p.evaluate(() => { const l = document.getElementById('list'); l.scrollTop = l.scrollHeight; });
 await p.waitForTimeout(160);
 const lastRow = await p.$$eval('[data-testid="sheet-row"]', es=>es[es.length-1].getBoundingClientRect().bottom);
@@ -161,7 +184,7 @@ const phone = await box('#phone');
 ok(Math.round(scrim.y - phone.y) >= SAT - 2, `the scrim starts below the status band (${Math.round(scrim.y - phone.y)}px), so the clock stays readable`);
 
 // ══ 8. THE SHEET SAYS WHAT IT IS FOR ═════════════════════════════════════════
-ok(/11 screens/.test(await T('[data-testid="sheet-sub"]')), 'the sheet says how many screens are in here');
+ok(/7 screens/.test(await T('[data-testid="sheet-sub"]')), 'the sheet says how many screens are in here');
 ok(/you are on Gameday Ops/.test(await T('[data-testid="sheet-sub"]')), '  and which one you are on');
 const foot = await T('[data-testid="sheet-foot"]');
 ok(/Sections live in the bar at the bottom/.test(foot),
@@ -171,15 +194,13 @@ ok(!/—/.test(foot) && !/—/.test(await T('[data-testid="sheet-sub"]')), '  CO
 // ══ 9. SIZES ═════════════════════════════════════════════════════════════════
 for (const w of [390, 430]){
   await load(w);
-  for (const s of ['before','after','solo','growth','ops','search']){
+  for (const s of ['before','after','solo','growth','ops','back']){
     await go(s);
     ok(await p.evaluate(()=>document.documentElement.scrollWidth)<=w+2, `${w}px ${s}: no horizontal scroll`);
   }
   await go('ops');
   const rh = await p.$$eval('[data-testid="sheet-row"]', es=>Math.min(...es.map(e=>e.getBoundingClientRect().height)));
   ok(rh>=56, `  rows are ${Math.round(rh)}px`);
-  const si = await box('[data-testid="sheet-search-input"]');
-  ok(si.height>=44, `  the search field is ${Math.round(si.height)}px`);
   const cl = await p.$$eval('[data-testid="sheet-row"] .lb', es=>es.filter(e=>e.scrollWidth>e.clientWidth+1).length);
   ok(cl===0, '  and no screen name is clipped');
   const cb = await box('[data-testid="sheet-close"]');

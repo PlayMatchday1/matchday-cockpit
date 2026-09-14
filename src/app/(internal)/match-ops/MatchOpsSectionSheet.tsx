@@ -11,7 +11,7 @@
 // Gameday board, that one by every other Match Ops route.
 
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/useAuth";
 import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
 import { useManagerPayAttnCount } from "@/lib/useManagerPayAttnCount";
@@ -39,35 +39,56 @@ export default function MatchOpsSectionSheet({ open, onClose, items: itemsProp, 
   };
   const nav = (href: string) => { onClose(); if (!isActive(href)) router.push(href); };
 
-  /* ── A SEARCH FIELD, BUT ONLY WHEN THERE IS SOMETHING TO SEARCH ──────────────────────────────
-   * Four screens is a list you read; eleven is a list you hunt in. An empty search box over four
-   * items is furniture, so the threshold is six. */
-  const [q, setQ] = useState("");
-  const searchable = items.length >= 6;
-  const query = searchable ? q.trim().toLowerCase() : "";
-  const shown = useMemo(
-    () => (!query ? items : items.filter((s2) =>
-      [s2.label, s2.desc, s2.group].filter(Boolean).some((f) => String(f).toLowerCase().includes(query)))),
-    [items, query],
-  );
-  /* ── THE GROUPS THE DATA ALREADY CARRIED ─────────────────────────────────────────────────────
+  /* ── THERE IS NO SEARCH FIELD, AND THERE SHOULD NEVER HAVE BEEN ONE ──────────────────────────
+   * It was added on the argument that "eleven is a list you hunt in". ELEVEN DOES NOT EXIST. Match
+   * Ops is two tabs of 7 and 12; the rest are Finance 10, Lifecycle 8, Growth 4, City 3, Tech 3.
+   * The biggest list in the app is twelve rows, and twelve rows is a thumb flick.
+   *
+   * It only ever looked necessary because the list was showing two of seven — the double
+   * subtraction below. A layout bug made a search box feel like a design, and it is the same
+   * "remember the name" problem as the field picker in a smaller costume. Ryan: "thats such a dumb
+   * system i have to search tabs? I dont remember the names and its slow."
+   *
+   * ── THE GROUPS THE DATA ALREADY CARRIED ─────────────────────────────────────────────────────
    * RailItem.group has existed since the rail was built, the desktop rail renders it, and the
    * sheet threw it away — so eleven Match Ops destinations arrived as one flat run. Rendered in
    * FIRST-APPEARANCE ORDER, once each, so the sheet reads the same top-to-bottom as the rail. */
   const groups = useMemo(() => {
-    const out: { name: string; rows: RailItem[] }[] = [];
-    for (const it of shown) {
+    /* KEYED BY NAME, NOT BY RUN. Rendering consecutive runs emits the SAME heading twice for a
+     * section whose items are not contiguous by group, which is a list that looks duplicated
+     * rather than grouped. The order is each group's FIRST appearance, so the sheet still reads
+     * top-to-bottom the way the rail does. */
+    const order: string[] = [];
+    const byName = new Map<string, RailItem[]>();
+    for (const it of items) {
       const name = it.group ?? "";
-      const last = out[out.length - 1];
-      if (last && last.name === name) last.rows.push(it);
-      else out.push({ name, rows: [it] });
+      if (!byName.has(name)) { byName.set(name, []); order.push(name); }
+      byName.get(name)!.push(it);
     }
-    return out;
-  }, [shown]);
+    return order.map((name) => ({ name, rows: byName.get(name)! }));
+  }, [items]);
   const currentLabel = items.find((s2) => isActive(s2.href))?.label ?? null;
 
-  /* The box is reset whenever the sheet is opened, so it never reopens mid-filter. */
-  useEffect(() => { if (!open) setQ(""); }, [open]);
+  /* IS THERE ANYTHING BELOW THE FOLD. Measured from the element, not guessed from a row count, so
+   * it stays right whatever the rows end up being: a list that fits reports false and the fade
+   * never appears. Re-measured on open, on scroll, and when the rows change. */
+  const listRef = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState(false);
+  const measure = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    setMore(el.scrollHeight - el.clientHeight - el.scrollTop > 2);
+  }, []);
+  const onListScroll = measure;
+  useEffect(() => {
+    if (!open) { setMore(false); return; }
+    /* AFTER PAINT: on the frame the sheet opens the list has no height yet, so measuring inline
+     * reports "nothing below" for every list. */
+    const id = requestAnimationFrame(measure);
+    return () => cancelAnimationFrame(id);
+  }, [open, items, measure]);
+
+
 
   useEffect(() => {
     if (!open) return;
@@ -98,13 +119,23 @@ export default function MatchOpsSectionSheet({ open, onClose, items: itemsProp, 
         * changes size with its contents reads as a tooltip; one that does not reads as a place.
         * HEIGHT, not max-height, so Growth (four screens) and Match Ops (eleven) open identically.
         *
-        * --bottom-nav-h is subtracted for the reason below; 78vh capped at 620 keeps it generous
-        * on a small phone and stops it becoming a full-screen takeover on a tablet. */}
+        * ── THE NAV IS CLEARED ONCE, BY THE HEIGHT ──────────────────────────────────────────
+        * It used to be cleared twice. The height subtracted --bottom-nav-h AND the paddingBottom
+        * added it again, which on an 844px phone left a 620-76=544 panel with 124px of padding:
+        * about 259px of list, which is TWO ROWS of Daily Ops' seven. The header said "7 screens"
+        * and the list showed two.
+        *
+        * The pairing was right in the old component, where maxHeight let the panel grow to the
+        * floor and the padding is what pushed the last row clear. With a fixed height that already
+        * subtracts the nav it is double-counting: one was moved and the other was not re-checked.
+        *
+        * 90vh capped at 760 is what Daily Ops' SEVEN rows need without scrolling, measured rather
+        * than guessed, and it is still not a full-screen takeover on a tablet. */}
       <div className="relative flex flex-col overscroll-contain rounded-t-[22px]"
         style={{ background: "#ffffff",
           boxShadow: "0 -2px 8px rgba(7,42,32,.06), 0 -26px 60px -20px rgba(7,42,32,.42)",
-          height: "calc(min(78%, 620px) - var(--bottom-nav-h))",
-          paddingBottom: "calc(14px + var(--sab) + var(--bottom-nav-h))" }}>
+          height: "calc(min(90%, 760px) - var(--bottom-nav-h))",
+          paddingBottom: "calc(14px + var(--sab))" }}>
         <div className="flex justify-center pb-1 pt-2"><span className="h-[5px] w-[38px] rounded-full" style={{ background: "#dbe3df" }} /></div>
         {/* ── A HEADER THAT SAYS WHERE YOU ARE ──────────────────────────────────────────────── */}
         <div className="flex flex-none items-start gap-2.5 px-[18px] pb-2 pt-1.5">
@@ -120,28 +151,23 @@ export default function MatchOpsSectionSheet({ open, onClose, items: itemsProp, 
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.1} strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </div>
-        {searchable && (
-          <div className="flex-none px-[18px] pb-2">
-            <input
-              data-testid="sheet-search"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder={`Find a screen in ${title}`}
-              aria-label={`Find a screen in ${title}`}
-              className="w-full rounded-[11px] border px-3 text-[14px]"
-              style={{ minHeight: 44, borderColor: "#dfe7e3", background: "#f7faf8", color: "#12241d" }}
-            />
-          </div>
-        )}
-        {/* THE LIST IS THE ONLY THING THAT SCROLLS, so the header and the footer line stay put. */}
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2.5" data-testid="sheet-list">
-          {showSwitch && <SectionSwitch />}
-          {query && shown.length === 0 && (
-            <p className="px-3 py-6 text-center text-[13px]" data-testid="sheet-none" style={{ color: "#8d9c94" }}>
-              No screen in {title} matches &ldquo;{q.trim()}&rdquo;.
-            </p>
-          )}
-          {groups.map((g) => (
+        {/* ── THE TIER SWITCH IS CHROME, NOT A ROW ────────────────────────────────────────────
+          * It used to scroll inside the list, which cost the list about 84px — the difference
+          * between six of Daily Ops' seven screens and all seven — and meant the Daily Ops / Back
+          * Office tabs could scroll off the top of the thing they switch. */}
+        {showSwitch && <div className="flex-none px-2.5 pb-1"><SectionSwitch /></div>}
+
+        {/* ── WHEN A LIST DOES SCROLL, IT HAS TO LOOK LIKE IT SCROLLS ─────────────────────────
+          * Back Office has twelve and still scrolls. A sheet that ends in flat white reads as
+          * finished, which is exactly how two rows out of seven read as "that is all there is".
+          * The fade is on only while there is something below and off at the end, so it is a
+          * statement about the list rather than decoration. It is the one thing that would have
+          * made the double-subtraction visible instead of merely confusing. */}
+        <div className="relative min-h-0 flex-1">
+          {/* THE LIST IS THE ONLY THING THAT SCROLLS, so the header and the footer line stay put. */}
+          <div ref={listRef} onScroll={onListScroll}
+            className="h-full overflow-y-auto overscroll-contain px-2.5" data-testid="sheet-list">
+            {groups.map((g) => (
             <div key={g.name || "_"}>
               {g.name && (
                 <p data-testid="sheet-group" className="px-3 pb-1 pt-3 text-[10.5px] font-[800] uppercase tracking-[0.09em]"
@@ -176,8 +202,17 @@ export default function MatchOpsSectionSheet({ open, onClose, items: itemsProp, 
               </button>
             );
           })}
-            </div>
-          ))}
+              </div>
+            ))}
+          </div>
+          <span
+            aria-hidden
+            data-testid="sheet-fade"
+            data-on={more ? "1" : "0"}
+            className="pointer-events-none absolute inset-x-0 bottom-0 transition-opacity"
+            style={{ height: 26, opacity: more ? 1 : 0,
+              background: "linear-gradient(to bottom, rgba(255,255,255,0), #ffffff)" }}
+          />
         </div>
         {/* ── THE LINE THAT DRAWS THE BOUNDARY BETWEEN THE TWO NAVS ───────────────────────────
           * The bottom bar carries the SECTIONS; this sheet carries the SCREENS inside one of them.

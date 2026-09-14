@@ -16,6 +16,7 @@
 //   node scripts/e2e/verify-pick-field.mjs
 import { chromium } from "playwright";
 import { installHarnessGuard, fatal, closeContext, closeBrowser, storageStateFor, nonEmpty } from "./_session.mjs";
+import { pickUnbindTarget, patchCards } from "./_cardFixtures.mjs";
 installHarnessGuard();
 process.loadEnvFile(".env.local");
 
@@ -89,7 +90,10 @@ const READ = () => {
   };
 };
 
+let UNBIND = [];
+let RETITLE = null;
 async function boot(browser, storageState, width, opts = {}) {
+  opts = { ...opts, unbind: [...UNBIND, ...(opts.unbind ?? [])], retitle: opts.retitle ?? RETITLE ?? undefined };
   const ctx = await browser.newContext({ storageState, viewport: { width, height: opts.height ?? 1000 },
     ...(width < 640 ? { isMobile: true, hasTouch: true } : {}) });
   const writes = [];
@@ -102,15 +106,17 @@ async function boot(browser, storageState, width, opts = {}) {
   await ctx.route("**/rest/v1/kanban_cards*", async (route) => {
     const m = route.request().method();
     if (m !== "GET" && m !== "HEAD") { writes.push({ table: "kanban_cards" }); return route.fulfill({ status: 204, body: "" }); }
-    if (!opts.retitle) return route.fallback();
+    if (!opts.retitle && !opts.unbind) return route.fallback();
     /* ONE CARD RENAMED ON THE WAY PAST, so the "nothing looks like this" branch has a subject.
      * Every card on the board now returns at least one candidate — the two that did not have since
      * been bound or deleted — so the empty branch cannot be reached from real data. */
     const res = await route.fetch();
     const j = await res.json().catch(() => null);
     if (!Array.isArray(j)) return route.fulfill({ response: res });
-    const t = j.find((c) => c.id === opts.retitle.id);
-    if (t) t.title = opts.retitle.title;
+    patchCards(j, {
+      unbind: opts.unbind ?? [],
+      retitle: opts.retitle ? [{ cardId: opts.retitle.id, title: opts.retitle.title }] : [],
+    });
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(j) });
   });
   const p = await ctx.newPage();
@@ -144,7 +150,28 @@ async function main() {
   const allCards = (await sb.from("kanban_cards").select("id,title,stage,venue_id,data").eq("board_type", "field_pipeline")).data ?? [];
   const held = new Map();
   for (const c of allCards) if (c.venue_id != null) held.set(c.venue_id, c);
-  const unbound = nonEmpty(allCards.filter((c) => c.stage === "confirmed" && c.venue_id == null), "confirmed cards with no field");
+  /* ── THE SUBJECT IS MANUFACTURED, NOT FOUND ────────────────────────────────────────────────
+   * Every Confirmed card is bound now, so there is no unbound one to point at. One is unbound on
+   * the READ; nothing is written. */
+  const target = pickUnbindTarget(allCards);
+  if (!target) throw new Error("no confirmed bound card to unbind on the read");
+  UNBIND = [target.cardId];
+  /* AND RETITLED so it is the shape this suite is about: a card the OLD substring rule cannot find
+   * and the word rule can. Derived from a real venue's own first word plus a token that appears in
+   * no name, so it keeps working whatever Finance holds. */
+  const seedVenue = nonEmpty(
+    (venues ?? []).filter((v) => words(v.venue_name).length > 0 && !held.has(v.id) && v.id !== target.freedVenueId),
+    "unheld venues with a usable word",
+  )[0];
+  const MADE_TITLE = `${words(seedVenue.venue_name)[0]} Zzq`;
+  if (substringRule(venues, MADE_TITLE).length !== 0) throw new Error(`made title "${MADE_TITLE}" is findable by substring`);
+  if (wordRule(venues, MADE_TITLE).length === 0) throw new Error(`made title "${MADE_TITLE}" finds nothing`);
+  RETITLE = { id: target.cardId, title: MADE_TITLE };
+  const unbound = [{ ...allCards.find((c) => c.id === target.cardId), venue_id: null, title: MADE_TITLE }];
+  /* The venue it used to hold is now FREE, so it must not be treated as held below. */
+  held.delete(target.freedVenueId);
+  console.log(`\nunbound on the read: "${target.title}" -> retitled "${MADE_TITLE}" (freeing venue #${target.freedVenueId})`);
+  console.log(`  word rule finds ${wordRule(venues, MADE_TITLE).length}, substring finds ${substringRule(venues, MADE_TITLE).length}`);
 
   // ══ 14. THE WALK, PRINTED ═════════════════════════════════════════════════════════════════
   console.log(`\nfin_venues ${venues.length} · unbound confirmed ${unbound.length}`);
