@@ -80,7 +80,8 @@ const READ = () => {
       ? { tag: q('[data-testid="col-unlinked"]').tagName, text: T('[data-testid="col-unlinked"]') } : null,
     /* THE MODAL */
     modalOpen: q('[data-testid="card-modal"], [role="dialog"][data-modal="card"]') != null || q(".fixed.z-50") != null,
-    mfield: mfield ? { state: mfield.dataset.state, text: mfield.textContent.replace(/\s+/g, " ").trim() } : null,
+    mfield: mfield ? { state: mfield.dataset.state, cands: mfield.dataset.cands,
+      text: mfield.textContent.replace(/\s+/g, " ").trim() } : null,
     mname: T('[data-testid="m-field-name"]'),
     mmeta: T('[data-testid="m-field-meta"]'),
     mbtn: mbtn ? { text: mbtn.textContent.trim(), kind: mbtn.dataset.kind, ...R(mbtn) } : null,
@@ -165,7 +166,7 @@ async function boot(browser, storageState, width, opts = {}) {
       writes.push({ table: "kanban_cards", method: m, body: route.request().postData(), url: route.request().url() });
       return route.fulfill({ status: 204, body: "" });
     }
-    if (!opts.inject?.length) return route.fallback();
+    if (!opts.inject?.length && !opts.retitle?.length) return route.fallback();
     /* CARDS GIVEN A venue_id ON THE WAY PAST, so the bound assertions have subjects without a
      * write. TWO of them, deliberately: one venue past the plan window and one still inside it,
      * because "a launch that is over is not a countdown" needs both halves to mean anything. */
@@ -175,6 +176,13 @@ async function boot(browser, storageState, width, opts = {}) {
     for (const inj of opts.inject) {
       const target = j.find((c) => c.id === inj.cardId);
       if (target) target.venue_id = inj.venueId;
+    }
+    /* CARD TITLES BENT ON THE READ. Every card that exactly matched a field has since been bound,
+     * so there is no exact-match subject left on the board to point at. Renaming on the way past
+     * manufactures one without a write, and keeps working however the backlog moves. */
+    for (const rt of opts.retitle ?? []) {
+      const target = j.find((c) => c.id === rt.cardId);
+      if (target) target.title = rt.title;
     }
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(j) });
   });
@@ -221,78 +229,68 @@ async function main() {
     (allCards ?? []).filter((c) => c.stage === "confirmed" && c.venue_id == null),
     "confirmed cards with no venue",
   );
-  /* ── THE SUBJECTS, READ OFF PRODUCTION RATHER THAN PINNED ────────────────────────────────────
-   * "Inside the plan window" is a moving target, so which card is which is DERIVED from the data
-   * on the day the suite runs. On 2026-09-13 exactly one matching card (Westlake, week 15) is
-   * still inside it, and that is the kind of fact that must not be typed into a suite.
+  /* ── THE SUBJECTS ARE MANUFACTURED FROM PRODUCTION'S VENUES, NOT FOUND AMONG ITS CARDS ──────
+   * This used to pick cards whose titles already matched a field. Every one of those has since
+   * been bound, so there is nothing left to pick and the suite died on nonEmpty rather than on a
+   * regression. The VENUES are real and read at run time; the CARD TITLES are bent on the read to
+   * point at them. Nothing is written, and clearing the backlog cannot break it again.
    *
-   * EVERY SUBJECT IS A DIFFERENT CARD. A card the run injects a venue_id onto is BOUND, and a
-   * bound card carries no chip at all — using one card for two jobs asserts against null. */
-  const dated = (c) => byName.get(norm(c.title))?.launch_date;
-  const matching = nonEmpty(
-    confirmedUnbound.filter(dated),
-    "confirmed cards whose title matches a field that has a launch date",
+   * "Inside the plan window" is a moving target too, so past-window subjects are made by shifting
+   * a venue's launch_date on the read rather than hunting for an old one. */
+  const boundVenueIds = new Set((allCards ?? []).map((c) => c.venue_id).filter((x) => x != null));
+  const freeVenues = nonEmpty(
+    (venues ?? []).filter((v) => !boundVenueIds.has(v.id)),
+    "fin_venues rows no card holds",
   );
-  const liveMatches = nonEmpty(
-    matching.filter((c) => isLiveIso(dated(c))),
-    "confirmed cards matching a field still INSIDE the plan window",
+  const liveFree = nonEmpty(
+    freeVenues.filter((v) => v.launch_date && isLiveIso(v.launch_date)),
+    "unheld venues still inside the plan window",
   );
-  /* linkCard drives every "the plan is still promised" assertion, so it has to be a LIVE one. */
-  const linkCard = liveMatches[0];
-  const linkVenue = byName.get(norm(linkCard.title));
-
-  /* ── THE PAST-WINDOW SUBJECTS ARE MANUFACTURED, NOT FOUND ──────────────────────────────────
-   * They used to be picked off production, and production ran out of them: every card matching an
-   * old field has since been bound, so there is no unbound past-window card left to point at. A
-   * suite that depends on a backlog existing dies the day the backlog is cleared.
-   *
-   * So the dates are SHIFTED ON THE READ instead. A card matching a venue with no launch date at
-   * all becomes a past-window subject by giving that venue an old date on the way past. It is a
-   * read-side fixture, never a write, and it holds whatever the board looks like. */
-  const undatedMatches = nonEmpty(
-    confirmedUnbound.filter((c) => byName.has(norm(c.title)) && !dated(c) && c.id !== linkCard.id),
-    "confirmed cards matching a field that has NO launch date",
-  );
-  if (undatedMatches.length < 2) throw new Error(`need two undated matching cards, found ${undatedMatches.length}`);
+  if (freeVenues.length < 5) throw new Error(`need five unheld venues, found ${freeVenues.length}`);
   const OLD_ISO = isoOffsetDays(-260);
-  /* pastCard drives the new no-plan state. */
-  const pastCard = undatedMatches[0];
-  const pastVenue = { ...byName.get(norm(pastCard.title)), launch_date: OLD_ISO };
-  /* The injected pair. boundCard takes its own (shifted, past) venue; boundLiveCard takes a LIVE
-   * venue that no card is named after, so injecting it disturbs no name resolution anywhere. */
-  const boundCard = undatedMatches[1];
-  const boundVenue = { ...byName.get(norm(boundCard.title)), launch_date: OLD_ISO };
-  const liveVenueFree = nonEmpty(
-    (venues ?? []).filter((v) => v.launch_date && isLiveIso(v.launch_date)
-      && !matching.some((c) => norm(c.title) === norm(v.venue_name)) && v.id !== linkVenue.id),
-    "live venues that no confirmed card is named after",
-  )[0];
-  /* ── THE TWO CARDS THAT MATCH NOTHING, TAKEN FROM ONE LIST SO THEY CANNOT BE THE SAME CARD ──
-   * newCard has to stay UNBOUND (it is the "New field…" chip subject) and boundLiveCard gets a
-   * venue injected onto it. Picking both with [0] of the same filter made them the same card, and
-   * the chip assertions then read against a bound card that carries no chip. */
-  const nonMatching = nonEmpty(
-    confirmedUnbound.filter((c) => ![linkCard.id, pastCard.id, boundCard.id].includes(c.id)
-      && !byName.has(norm(c.title))),
-    "confirmed cards whose title matches no field",
-  );
-  if (nonMatching.length < 2) throw new Error(`need two non-matching cards, found ${nonMatching.length}`);
-  const newCard = nonMatching[0];
-  const boundLiveCard = nonMatching[1];
-  /* PREFER A LIVE STAGE OVER archived — a collapsed Archived column renders no cards, and the
-   * "not marked outside Confirmed" control would then be asserting against nothing. */
+
+  /* linkCard drives every "the plan is still promised" assertion, so its venue must be LIVE. */
+  const linkVenue = liveFree[0];
+  /* pastCard drives the no-plan state: an unheld venue shifted into the deep past. */
+  const pastVenue = { ...nonEmpty(freeVenues.filter((v) => v.id !== linkVenue.id), "spare unheld venues")[0],
+    launch_date: OLD_ISO };
+  /* The injected pair: one past-window venue and one live one, neither named after any card. */
+  const boundVenue = { ...nonEmpty(
+    freeVenues.filter((v) => ![linkVenue.id, pastVenue.id].includes(v.id)), "more spare unheld venues")[0],
+    launch_date: OLD_ISO };
+  /* SHIFTED LIVE, not found live. Production has exactly one unheld venue inside the window today,
+   * and linkVenue is it — so the second live subject is made the same way the past ones are. */
+  const LIVE_ISO = isoOffsetDays(-20);
+  const liveVenueFree = { ...nonEmpty(
+    freeVenues.filter((v) => ![linkVenue.id, pastVenue.id, boundVenue.id].includes(v.id)),
+    "a fourth unheld venue to inject as a live one",
+  )[0], launch_date: LIVE_ISO };
+  /* A FIFTH, LEFT UNHELD AND SHIFTED LIVE, for the match-row save: linking to it must still seed a
+   * plan, so it has to be inside the window and claimed by nobody. */
+  const rowVenue = { ...nonEmpty(
+    freeVenues.filter((v) => ![linkVenue.id, pastVenue.id, boundVenue.id, liveVenueFree.id].includes(v.id)),
+    "a fifth unheld venue for the match-row save",
+  )[0], launch_date: LIVE_ISO };
+
+  /* FIVE DISTINCT CARDS, taken from one list so none can double up. */
+  const spare = nonEmpty(confirmedUnbound, "confirmed cards with no venue");
+  if (spare.length < 5) throw new Error(`need five unbound confirmed cards, found ${spare.length}`);
+  const [linkCard, pastCard, boundCard, boundLiveCard, newCardRaw] = spare;
+  /* newCard must match NOTHING exactly, so it keeps its own title and is checked. */
+  const newCard = { ...newCardRaw };
+  if (byName.has(norm(newCard.title))) throw new Error(`newCard "${newCard.title}" unexpectedly matches a venue`);
   const outsideAll = nonEmpty(
     (allCards ?? []).filter((c) => c.stage !== "confirmed" && c.venue_id == null),
     "unbound cards outside Confirmed",
   );
   const outside = outsideAll.find((c) => c.stage !== "archived") ?? outsideAll[0];
-  console.log(`\nlink subject (LIVE)   : "${linkCard.title}" -> #${linkVenue.id} ${linkVenue.venue_name} launches ${linkVenue.launch_date} week ${weekIso(linkVenue.launch_date)}`);
-  console.log(`past subject          : "${pastCard.title}" -> #${pastVenue.id} ${pastVenue.venue_name} launched ${pastVenue.launch_date} week ${weekIso(pastVenue.launch_date)}`);
-  console.log(`bound past (injected) : "${boundCard.title}" -> #${boundVenue.id} ${boundVenue.venue_name} ${boundVenue.launch_date} week ${weekIso(boundVenue.launch_date)}`);
-  console.log(`bound live (injected) : "${boundLiveCard.title}" -> #${liveVenueFree.id} ${liveVenueFree.venue_name} ${liveVenueFree.launch_date} week ${weekIso(liveVenueFree.launch_date)}`);
-  console.log(`new subject  : "${newCard.title}" (matches nothing)`);
-  console.log(`outside      : "${outside.title}" in ${outside.stage}`);
-  console.log(`unbound confirmed: ${confirmedUnbound.length}`);
+
+  console.log(`\nlink subject (LIVE)   : "${linkVenue.venue_name}" on card ${linkCard.id.slice(0, 8)} week ${weekIso(linkVenue.launch_date)}`);
+  console.log(`past subject          : "${pastVenue.venue_name}" shifted to ${OLD_ISO} week ${weekIso(OLD_ISO)}`);
+  console.log(`bound past (injected) : "${boundVenue.venue_name}" shifted to ${OLD_ISO}`);
+  console.log(`bound live (injected) : "${liveVenueFree.venue_name}" ${liveVenueFree.launch_date}`);
+  console.log(`new subject           : "${newCard.title}" (matches nothing)`);
+  console.log(`outside               : "${outside.title}" in ${outside.stage}`);
 
   const bindOpts = {
     inject: [
@@ -302,8 +300,17 @@ async function main() {
     shiftVenues: [
       { id: pastVenue.id, iso: OLD_ISO },
       { id: boundVenue.id, iso: OLD_ISO },
+      { id: liveVenueFree.id, iso: LIVE_ISO },
+      { id: rowVenue.id, iso: LIVE_ISO },
+    ],
+    /* The two unbound subjects are renamed to the venues they are meant to resolve to. */
+    retitle: [
+      { cardId: linkCard.id, title: linkVenue.venue_name },
+      { cardId: pastCard.id, title: pastVenue.venue_name },
     ],
   };
+  linkCard.title = linkVenue.venue_name;
+  pastCard.title = pastVenue.venue_name;
 
   // ══ 1-5. THE CHIP ═════════════════════════════════════════════════════════════════════════
   {
@@ -376,11 +383,20 @@ async function main() {
     yes("  the edit card modal carries a Field row", d.mfield != null);
     is("  which knows it has none", d.mfield.state, "none");
     yes(`  and says so: "${d.mname}"`, /No field record/i.test(d.mname ?? ""));
-    yes(`  with what will happen: "${(d.mmeta ?? "").slice(0, 60)}…"`,
-      /Nothing in Finance carries this name/i.test(d.mmeta ?? ""));
+    /* THE ROW RUNS THE SEARCH NOW. It used to print "Nothing in Finance carries this name" on any
+     * create, which for this very card ("Ann Richards", against Ann Richards School) was a false
+     * statement about the business. It says what it found, or that it looked and found nothing. */
+    const rowCands = Number(d.mfield.cands ?? "0");
+    yes(`  with what will happen: "${(d.mmeta ?? "").slice(0, 62)}…"`,
+      rowCands > 0
+        ? /could be this one, including/.test(d.mmeta ?? "")
+        : /Nothing in Finance looks like this name/i.test(d.mmeta ?? ""));
+    is("  CONTROL: and never the old claim that nothing carries the name",
+      /Nothing in Finance carries this name/i.test(d.mmeta ?? ""), false);
     yes("  CONTROL: and does not claim a field exists when none does",
       !/already exists/i.test(d.mmeta ?? ""), d.mmeta);
-    yes(`  with the control to fix it: "${d.mbtn.text}"`, /Create/.test(d.mbtn.text));
+    yes(`  with the control to fix it: "${d.mbtn.text}"`,
+      rowCands > 0 ? /Find the field/.test(d.mbtn.text) : /Create/.test(d.mbtn.text));
     yes(`  the modal's control is ${d.mbtn.h}px — the full-size one, because there is room here`,
       d.mbtn.h >= 34);
     await closeModal(p);
@@ -662,12 +678,7 @@ async function main() {
     /* A LIVE VENUE, DELIBERATELY. Seeding a past-window field is now refused, so linking to one
      * would correctly write no plan and the shared-path assertion below would fail for the right
      * reason and tell us nothing. The refusal gets its own assertion afterwards. */
-    const freeVenue = nonEmpty(
-      (venues ?? []).filter((v) => v.launch_date && isLiveIso(v.launch_date)
-        && v.id !== boundVenue.id && v.id !== linkVenue.id && v.id !== liveVenueFree.id
-        && !(allCards ?? []).some((c) => c.venue_id === v.id)),
-      "LIVE venues with a launch date that no card holds",
-    )[0];
+    const freeVenue = rowVenue;
     await p.fill(`[data-testid="match-row"][data-id="${newCard.id}"] [data-testid="mr-name"]`, freeVenue.venue_name);
     await p.waitForTimeout(500);
     d = await p.evaluate(READ);

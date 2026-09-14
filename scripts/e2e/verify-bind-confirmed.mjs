@@ -154,9 +154,14 @@ async function main() {
   const midnight = (t) => new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime();
   const localMid = (iso) => { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d).getTime(); };
   const weekIso = (iso) => Math.floor((midnight(new Date()) - (localMid(iso) - 28 * DAY)) / (7 * DAY)) + 1;
+  /* AND NOT ONE A CARD ALREADY HOLDS. Eight cards have been bound since this was written, and the
+   * first live venue is now one of them — so the link path resolved to "taken" and seven
+   * assertions about linking failed on somebody else's binding rather than on this feature. */
+  const boundVenueIds = new Set(((await sb.from("kanban_cards").select("venue_id")
+    .eq("board_type", "field_pipeline").not("venue_id", "is", null)).data ?? []).map((c) => c.venue_id));
   const linkVenue = nonEmpty(
-    (venues ?? []).filter((v) => weekIso(v.launch_date) <= 20),
-    "fin_venues rows still inside the plan window",
+    (venues ?? []).filter((v) => weekIso(v.launch_date) <= 20 && !boundVenueIds.has(v.id)),
+    "fin_venues rows inside the plan window that no card holds",
   )[0];
   const launchedAlready = localMid(linkVenue.launch_date) < midnight(new Date());
   console.log(`\nlink fixture: #${linkVenue.id} "${linkVenue.venue_name}" (${linkVenue.city}) launches ${linkVenue.launch_date}`);

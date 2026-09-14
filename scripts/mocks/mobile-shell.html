@@ -1,0 +1,327 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>One app bar, and a screen picker worth opening</title>
+<style>
+  :root{
+    --cream:#FBF9F4; --line:#e6ebe8; --deep:#0E2A22; --soft:#F3F0E8;
+    --green:#14603f; --greenBg:#E6F4EB; --greenLine:#c9e8d8;
+    --ink:#12241d; --mute:#6d7b74;
+    /* The notch, forced, exactly as globals.css:131 says a harness may do. */
+    --sat: 59px;
+    --sab: 34px;
+    --bottom-nav-h: 76px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       background:var(--cream);color:var(--ink);-webkit-font-smoothing:antialiased}
+  .sw{display:flex;gap:6px;flex-wrap:wrap;padding:8px 10px;border-bottom:1px solid var(--line);background:#fff}
+  .sw button{font:700 11px/1 inherit;padding:7px 9px;border:1px solid var(--line);background:#fff;border-radius:7px;cursor:pointer;color:#46584f}
+  .sw button[aria-pressed="true"]{background:var(--deep);color:#fff;border-color:var(--deep)}
+
+  /* ── THE PHONE ───────────────────────────────────────────────────────────── */
+  .phone{position:relative;width:100%;max-width:430px;margin:14px auto;height:844px;
+         border:1px solid #d7e0db;border-radius:30px;overflow:hidden;background:var(--cream);
+         display:flex;flex-direction:column}
+  .status{position:absolute;inset:0 0 auto 0;height:var(--sat);z-index:80;pointer-events:none;
+          display:flex;align-items:flex-end;justify-content:space-between;padding:0 22px 7px;
+          font:700 13px/1 inherit;color:#12241d}
+
+  /* THE APP BAR. In `after` it is the shell's, above main, and pays --sat ONCE. */
+  .appbar{flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;min-height:44px;
+          background:#f8faf9;border-bottom:1px solid var(--line);z-index:40}
+  .appbar[data-pays="1"]{padding-top:var(--sat);min-height:calc(44px + var(--sat))}
+  .titlebtn{display:flex;align-items:center;gap:7px;min-height:38px;border:0;background:none;
+            padding:0;font:760 17.5px/1 inherit;letter-spacing:-.02em;color:var(--ink);cursor:pointer}
+  .titlebtn .chev{font-size:12px;color:#5c7168}
+  .main{flex:1;min-height:0;overflow-y:auto;padding:0 16px}
+  .main[data-pays="1"]{padding-top:var(--sat)}
+  .main[data-pad="1"]{padding-top:26px}
+
+  .h1{font:800 26px/1.15 inherit;letter-spacing:-.6px;margin:14px 0 2px}
+  .sub{font-size:13px;color:var(--mute)}
+  .chips{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}
+  .chip{background:#fff;border:1px solid var(--line);border-radius:999px;padding:6px 11px;font:600 12px/1.2 inherit;color:#54655c}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:10px}
+  .card b{display:block;font-size:14px}
+  .card span{font-size:12px;color:var(--mute)}
+
+  .btmnav{flex:none;height:var(--bottom-nav-h);border-top:1px solid var(--line);background:#fff;
+          display:flex;align-items:flex-start;padding-top:8px;z-index:45}
+  .btmnav a{flex:1;text-align:center;font:600 10.5px/1.3 inherit;color:#8a9992;text-decoration:none}
+  .btmnav a i{display:block;width:22px;height:22px;margin:0 auto 4px;border-radius:6px;background:#e6ebe8}
+  .btmnav a[aria-current]{color:var(--green)}
+  .btmnav a[aria-current] i{background:#cfe9da}
+
+  /* the measured gap, drawn */
+  .ghost{position:absolute;left:0;right:0;top:0;z-index:70;pointer-events:none;
+         border-bottom:1px dashed #d0512a}
+  .ghost span{position:absolute;right:8px;bottom:3px;font:800 10px/1 inherit;color:#a8391a;
+              background:#fdeae4;border:1px solid #f0bda9;border-radius:5px;padding:3px 6px}
+
+  /* ── THE SHEET ───────────────────────────────────────────────────────────── */
+  .scrim{position:absolute;inset:0;background:rgba(6,26,18,.42);z-index:60}
+  .scrim[data-top="sat"]{top:var(--sat)}
+  .sheet{position:absolute;left:0;right:0;bottom:0;z-index:61;background:#fff;
+         border-radius:22px 22px 0 0;display:flex;flex-direction:column;
+         box-shadow:0 -2px 8px rgba(7,42,32,.06), 0 -26px 60px -20px rgba(7,42,32,.42)}
+  .grab{flex:none;display:flex;justify-content:center;padding:9px 0 3px}
+  .grab i{width:38px;height:5px;border-radius:999px;background:#dbe3df;display:block}
+  .shd{flex:none;padding:4px 18px 10px;display:flex;align-items:flex-start;gap:10px}
+  .shd h2{margin:0;font:800 20px/1.15 inherit;letter-spacing:-.35px}
+  .shd p{margin:2px 0 0;font-size:12.5px;color:var(--mute)}
+  .shclose{margin-left:auto;flex:none;width:38px;height:38px;border-radius:999px;border:0;
+           background:#f1f5f3;color:#42594e;font-size:17px;cursor:pointer}
+  .srch{flex:none;padding:0 14px 8px}
+  .srch input{width:100%;height:44px;border:1px solid var(--line);border-radius:11px;background:#f6f9f7;
+              padding:0 13px;font:500 15px/1 inherit;color:var(--ink)}
+  .list{flex:1;min-height:0;overflow-y:auto;padding:0 10px}
+  .grp{font:800 10px/1 inherit;letter-spacing:.11em;text-transform:uppercase;color:#98a8a0;
+       padding:12px 8px 6px}
+  .row{display:flex;align-items:center;gap:12px;width:100%;text-align:left;border:0;background:none;
+       border-radius:14px;padding:9px 10px;min-height:60px;cursor:pointer;color:var(--ink);font:inherit}
+  .row[aria-current]{background:var(--greenBg)}
+  .row .ic{flex:none;width:40px;height:40px;border-radius:13px;border:1px solid #e2eae5;background:#eef3f0;
+           display:flex;align-items:center;justify-content:center;color:#4d6359}
+  .row[aria-current] .ic{background:#fff;border-color:var(--greenLine);color:#12704a}
+  .row .ic svg{width:19px;height:19px}
+  .row .tx{min-width:0;flex:1}
+  .row .lb{display:block;font:650 16px/1.25 inherit;letter-spacing:-.012em}
+  .row[aria-current] .lb{font-weight:790;color:#0f3d2e}
+  .row .ds{display:block;font:540 12.5px/1.3 inherit;color:var(--mute);margin-top:1px}
+  .row .bdg{flex:none;border-radius:999px;padding:2px 9px;font:730 12.5px/1.4 inherit;
+            background:rgba(0,0,0,.05);color:#8d9c94}
+  .row[aria-current] .bdg{background:#fff;color:#12704a}
+  .row .tick{flex:none;width:20px;height:20px;color:#12764c}
+  .empty{padding:26px 18px;text-align:center;font-size:13px;color:var(--mute)}
+  .foot{flex:none;padding:10px 18px calc(12px + var(--sab) + var(--bottom-nav-h));
+        border-top:1px solid #f1f5f3;font-size:11.5px;color:#98a8a0}
+  .hid{display:none !important}
+</style></head>
+<body>
+<div class="sw">
+  <button data-s="before" aria-pressed="true">before · the gap</button>
+  <button data-s="after">after · one bar</button>
+  <button data-s="growth">sheet · Growth (4)</button>
+  <button data-s="ops">sheet · Match Ops (11)</button>
+  <button data-s="search">sheet · searched</button>
+  <button data-s="none">sheet · no match</button>
+  <button data-s="solo">bar · a page with no siblings</button>
+</div>
+
+<div class="phone" id="phone">
+  <div class="status"><span>8:01</span><span>28%</span></div>
+  <div class="ghost hid" id="ghost"><span id="ghostlbl"></span></div>
+
+  <div class="appbar" id="appbar" data-pays="1">
+    <button type="button" class="titlebtn" id="titlebtn" data-testid="appbar-title"
+            aria-haspopup="dialog" aria-expanded="false">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#42594e" stroke-width="2.2" stroke-linecap="round" aria-hidden><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      <span id="bartitle">Field Pipeline</span>
+      <span class="chev" id="chev" data-testid="appbar-chev" aria-hidden>▾</span>
+    </button>
+  </div>
+
+  <div class="main" id="main" data-pays="1">
+    <div class="h1" data-testid="page-h1">Field Pipeline</div>
+    <div class="sub">Every field by stage, grouped by city and owner.</div>
+    <div class="chips"><span class="chip">61 fields</span><span class="chip">11 cities</span><span class="chip">5 owners</span></div>
+    <div class="card"><b>Field Backlog</b><span>Target fields pending outreach</span></div>
+    <div class="card"><b>Terril Mill</b><span>Atlanta · Nick Zelfine</span></div>
+    <div class="card"><b>Bryson Park</b><span>Atlanta · Nick Zelfine</span></div>
+    <div class="card"><b>Bowie</b><span>Austin · Nick Zelfine</span></div>
+    <div class="card"><b>Dallas Field (PIT PLANO / Frisco)</b><span>Dallas · Nick Zelfine</span></div>
+  </div>
+
+  <nav class="btmnav" data-testid="btmnav">
+    <a href="#"><i></i>Home</a>
+    <a href="#"><i></i>Finance</a>
+    <a href="#" aria-current="page"><i></i>Growth</a>
+    <a href="#"><i></i>Players</a>
+    <a href="#"><i></i>More</a>
+  </nav>
+
+  <div class="scrim hid" id="scrim" data-top="sat" data-testid="sheet-scrim"></div>
+  <div class="sheet hid" id="sheet" role="dialog" aria-modal="true" data-testid="sheet">
+    <div class="grab"><i></i></div>
+    <div class="shd">
+      <div>
+        <h2 data-testid="sheet-title"></h2>
+        <p data-testid="sheet-sub"></p>
+      </div>
+      <button type="button" class="shclose" data-testid="sheet-close" aria-label="Close">✕</button>
+    </div>
+    <div class="srch hid" data-testid="sheet-search">
+      <input type="search" data-testid="sheet-search-input" placeholder="Search screens" autocomplete="off">
+    </div>
+    <div class="list" id="list"></div>
+    <div class="foot" data-testid="sheet-foot"></div>
+  </div>
+</div>
+
+<script>
+const I = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden>${d}</svg>`;
+
+/* The real GROWTH_SECTIONS, groups included. The data has carried `group` all
+   along and the sheet has never rendered it. */
+const GROWTH = {
+  label: "Growth",
+  items: [
+    { key:"field-pipeline", group:"Fields", label:"Field Pipeline", desc:"Venues we're still chasing", icon:I('<path d="M3 5h18l-7 8v6l-4 2v-8z"/>'), on:true },
+    { key:"launch", group:"Fields", label:"Field Launches", desc:"The 20-week plan for each field we're opening", icon:I('<path d="M12 3v9m0 0 3.5-3.5M12 12 8.5 8.5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>'), badge:1 },
+    { key:"daily-matches", group:"Fields", label:"2026 Daily Matches", desc:"The goal per field, and where it stands", icon:I('<path d="M3 20h18M6 20V10m5 10V4m5 16v-7"/>') },
+    { key:"vc-outreach", group:"Fundraising", label:"VC Outreach", desc:"Firms we're raising from", icon:I('<path d="M4 19V9m5 10V5m5 14v-7m5 7V8"/>') },
+  ],
+};
+const OPS = {
+  label: "Match Ops",
+  items: [
+    { key:"gameday", group:"Today", label:"Gameday Ops", desc:"Every match today, and what needs a decision", icon:I('<path d="M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5l3 2"/>'), on:true },
+    { key:"match-chats", group:"Today", label:"Match Chats", desc:"The group chat for each match", icon:I('<path d="M4 5h16v11H9l-5 4z"/>'), badge:100 },
+    { key:"player-chats", group:"Today", label:"Player Chats", desc:"One-to-one with players", icon:I('<path d="M7 4h10v9H10l-3 3z"/>'), badge:3 },
+    { key:"schedule", group:"Planning", label:"Master Schedule", desc:"Every slot across every city", icon:I('<path d="M4 6h16v14H4zM4 10h16M8 3v4M16 3v4"/>') },
+    { key:"veo", group:"Planning", label:"Veo", desc:"Cameras, recordings and reconcile", icon:I('<path d="M4 7h11v10H4zM15 11l5-3v8l-5-3z"/>') },
+    { key:"templates", group:"Planning", label:"Chat Templates", desc:"What the automations send", icon:I('<path d="M5 4h9l5 5v11H5zM14 4v5h5"/>') },
+    { key:"partners", group:"Partners", label:"Partner Dashboards", desc:"What each field partner sees", icon:I('<path d="M4 20v-6h5v6M15 20v-9h5v9M4 11l8-7 8 7"/>'), badge:12 },
+    { key:"manager-pay", group:"Partners", label:"Manager Pay", desc:"What each city manager is owed", icon:I('<path d="M3 7h18v10H3zM7 12h.01M12 12h2"/>'), badge:4 },
+    { key:"reviews", group:"Quality", label:"Reviews", desc:"What players said after the match", icon:I('<path d="M12 4l2.5 5 5.5.8-4 3.9.9 5.5-4.9-2.6-4.9 2.6.9-5.5-4-3.9 5.5-.8z"/>') },
+    { key:"checkins", group:"Quality", label:"Check-ins", desc:"City manager reports from the field", icon:I('<path d="M5 12l4 4 10-10"/>') },
+    { key:"canned", group:"Quality", label:"Canned Responses", desc:"Replies the team reuses", icon:I('<path d="M4 6h16M4 12h16M4 18h10"/>') },
+  ],
+};
+
+/* SEARCH APPEARS WHEN THE LIST IS LONG ENOUGH TO NEED IT. Four screens is a
+   list you read; eleven is a list you hunt in. */
+const SEARCH_AT = 6;
+let SEC = GROWTH, query = "";
+
+function render(){
+  const list = document.getElementById("list");
+  const q = query.trim().toLowerCase();
+  const shown = SEC.items.filter(i =>
+    !q || i.label.toLowerCase().includes(q) || (i.desc||"").toLowerCase().includes(q) || (i.group||"").toLowerCase().includes(q));
+
+  document.querySelector('[data-testid="sheet-title"]').textContent = SEC.label;
+  document.querySelector('[data-testid="sheet-sub"]').textContent =
+    `${SEC.items.length} screens · you are on ${SEC.items.find(i=>i.on)?.label ?? "none"}`;
+  document.querySelector('[data-testid="sheet-search"]').classList.toggle("hid", SEC.items.length < SEARCH_AT);
+  document.querySelector('[data-testid="sheet-foot"]').textContent =
+    `Sections live in the bar at the bottom. This list is the screens inside ${SEC.label}.`;
+
+  list.innerHTML = "";
+  if (!shown.length){
+    list.innerHTML = `<div class="empty" data-testid="sheet-empty">No screen in ${SEC.label} matches “${query.trim()}”.</div>`;
+    return;
+  }
+  /* GROUPS, FROM THE DATA. RailItem.group has existed since the rail was built
+     and the sheet threw it away, so eleven destinations arrived as one flat run. */
+  let last = null;
+  for (const it of shown){
+    if (it.group && it.group !== last){
+      last = it.group;
+      const h = document.createElement("div");
+      h.className = "grp"; h.setAttribute("data-testid","sheet-group");
+      h.textContent = it.group;
+      list.appendChild(h);
+    }
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "row";
+    b.setAttribute("data-testid","sheet-row"); b.dataset.key = it.key;
+    if (it.on) b.setAttribute("aria-current","page");
+    /* THREE SIGNALS ON THE CURRENT SCREEN, never colour alone: the tinted row,
+       the heavier label, and the tick. */
+    b.innerHTML = `<span class="ic">${it.icon}</span>
+      <span class="tx"><span class="lb">${it.label}</span><span class="ds">${it.desc}</span></span>
+      ${it.badge ? `<span class="bdg" data-testid="row-badge">${it.badge}</span>` : ``}
+      ${it.on ? `<svg class="tick" data-testid="row-tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden><path d="M5 12.5l4.5 4.5L19 7"/></svg>` : ``}`;
+    b.addEventListener("click", closeSheet);
+    list.appendChild(b);
+  }
+}
+
+/* THE SHEET IS A SURFACE, NOT A TOOLTIP. It opens to a real height whether the
+   section has four screens or eleven, and never grows under the bottom nav. */
+function sizeSheet(){
+  const ph = document.getElementById("phone").getBoundingClientRect().height;
+  const target = Math.min(ph * 0.78, 620);
+  document.getElementById("sheet").style.height = Math.round(target) + "px";
+}
+function openSheet(){
+  document.getElementById("scrim").classList.remove("hid");
+  document.getElementById("sheet").classList.remove("hid");
+  document.getElementById("titlebtn").setAttribute("aria-expanded","true");
+  sizeSheet(); render();
+}
+function closeSheet(){
+  document.getElementById("scrim").classList.add("hid");
+  document.getElementById("sheet").classList.add("hid");
+  document.getElementById("titlebtn").setAttribute("aria-expanded","false");
+}
+document.getElementById("titlebtn").addEventListener("click", openSheet);
+document.getElementById("scrim").addEventListener("click", closeSheet);
+document.querySelector('[data-testid="sheet-close"]').addEventListener("click", closeSheet);
+document.querySelector('[data-testid="sheet-search-input"]').addEventListener("input", e => { query = e.target.value; render(); });
+
+/* ── the two shells ──────────────────────────────────────────────────────── */
+function setShell(before){
+  const bar = document.getElementById("appbar"), main = document.getElementById("main");
+  const ghost = document.getElementById("ghost"), lbl = document.getElementById("ghostlbl");
+  bar.dataset.pays = "1";                      // the bar always pays the notch
+  if (before){
+    /* WHAT SHIPS TODAY. The section bar lives INSIDE AuthGate's <main>, which pays
+       max(env(safe-area-inset-top), 26px) at AuthGate.tsx:81 — and then the bar pays
+       var(--sat) again at MatchOpsMobileBar.tsx:56, because each was written as if it
+       were the top of the screen. Only one of them can be. The notch is charged twice
+       and the bar lands below its own height of dead cream. */
+    main.insertBefore(bar, main.firstChild);
+    main.dataset.pays = "1"; main.style.paddingTop = "var(--sat)";
+    bar.style.margin = "0 -16px";               // the bar is full-bleed inside the padded column
+  } else {
+    /* THE SHELL OWNS THE BAR. It sits ABOVE main, pays the notch once, and main pays
+       nothing above it. */
+    document.querySelector(".phone").insertBefore(bar, main);
+    main.dataset.pays = "0"; main.style.paddingTop = "0";
+    bar.style.margin = "0";
+  }
+  /* THE TITLE IS ALSO PRINTED TWICE. The bar says "Field Pipeline" and then the
+     page's own H1 says "Field Pipeline" again, 26px tall, directly under it. On a
+     phone that band is a repetition, not a heading. The description and the stat
+     chips stay: they are not duplicates of anything. */
+  const h1 = document.querySelector('[data-testid="page-h1"]');
+  const dupe = h1.textContent.trim() === document.getElementById("bartitle").textContent.trim();
+  h1.classList.toggle("hid", !before && dupe);
+  ghost.classList.toggle("hid", false);
+  requestAnimationFrame(() => {
+    const t = document.querySelector('[data-testid="appbar-title"]').getBoundingClientRect();
+    const p = document.getElementById("phone").getBoundingClientRect();
+    ghost.style.height = Math.round(t.top - p.top) + "px";
+    lbl.textContent = `${Math.round(t.top - p.top)}px above the title`;
+  });
+}
+
+function show(s){
+  closeSheet();
+  if (s === "before"){ SEC = GROWTH; setShell(true); }
+  else { setShell(false); }
+  if (s === "growth"){ SEC = GROWTH; query = ""; document.querySelector('[data-testid="sheet-search-input"]').value=""; openSheet(); }
+  if (s === "ops"){ SEC = OPS; query = ""; document.querySelector('[data-testid="sheet-search-input"]').value=""; openSheet(); }
+  if (s === "search"){ SEC = OPS; query = "chat"; openSheet(); document.querySelector('[data-testid="sheet-search-input"]').value="chat"; render(); }
+  if (s === "none"){ SEC = OPS; query = "zzzq"; openSheet(); document.querySelector('[data-testid="sheet-search-input"]').value="zzzq"; render(); }
+  /* A SECTION WITH ONE SCREEN STILL GETS THE BAR, so the top of every page is the
+     same shape and main's padding is zero everywhere. No chevron, no menu, nothing
+     to open: the bar is a title, not a broken button. */
+  const solo = s === "solo";
+  document.getElementById("chev").classList.toggle("hid", solo);
+  const tb = document.getElementById("titlebtn");
+  tb.disabled = solo;
+  tb.style.cursor = solo ? "default" : "pointer";
+  tb.dataset.solo = solo ? "1" : "0";
+  document.getElementById("bartitle").textContent =
+    s==="solo" ? "Home" : (s==="ops"||s==="search"||s==="none") ? "Gameday Ops" : "Field Pipeline";
+  document.querySelectorAll(".sw button").forEach(b=>b.setAttribute("aria-pressed", String(b.dataset.s===s)));
+}
+document.querySelectorAll(".sw button").forEach(b=>b.addEventListener("click",()=>show(b.dataset.s)));
+window.addEventListener("resize", () => { if (!document.getElementById("sheet").classList.contains("hid")) sizeSheet(); });
+show("before");
+</script>
+</body></html>

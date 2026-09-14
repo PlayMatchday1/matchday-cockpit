@@ -1,0 +1,328 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pick the field. Do not remember it.</title>
+<style>
+  :root{
+    --cream:#FBF9F4; --line:#e6ebe8; --deep:#0E2A22; --soft:#F3F0E8;
+    --amber:#D9A441; --amberInk:#7A5200; --amberBg:#FFF3E6;
+    --green:#14603f; --greenBg:#E6F4EB; --greenLine:#bfe0cc;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       background:var(--cream);color:var(--deep);-webkit-font-smoothing:antialiased}
+  .sw{display:flex;gap:6px;flex-wrap:wrap;padding:8px 10px;border-bottom:1px solid var(--line);background:#fff;position:sticky;top:0;z-index:90}
+  .sw button{font:700 11px/1 inherit;padding:7px 9px;border:1px solid var(--line);background:#fff;border-radius:7px;cursor:pointer;color:#46584f}
+  .sw button[aria-pressed="true"]{background:var(--deep);color:#fff;border-color:var(--deep)}
+  .wrap{padding:14px;max-width:660px;margin:0 auto}
+
+  .dlg{width:100%;background:var(--cream);border:1px solid var(--line);border-radius:16px;padding:18px}
+  .dh{font:800 19px/1.2 inherit;letter-spacing:-.3px}
+  .dsub{font-size:12px;color:rgba(14,42,34,.55);margin-top:2px}
+  .lbl{font:700 11px/1 inherit;text-transform:uppercase;letter-spacing:.04em;color:rgba(14,42,34,.6);
+       display:grid;gap:6px;margin-top:12px}
+  .fld input{height:44px;width:100%;border:1px solid var(--line);border-radius:9px;background:#fff;
+       padding:0 11px;font:500 14px/1 inherit;color:var(--deep);text-transform:none;letter-spacing:normal}
+  .df{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:16px}
+  .df button{min-height:44px;padding:0 15px;border-radius:10px;border:1px solid var(--line);background:#fff;
+             font:750 13px/1 inherit;color:var(--deep);cursor:pointer}
+  .df button.pri{background:var(--deep);color:#fff;border-color:var(--deep)}
+  .df button:disabled{opacity:.45;cursor:not-allowed}
+  .note{border-radius:10px;padding:9px 11px;font-size:12px;line-height:1.45;margin-top:10px}
+  .note.ok{background:var(--greenBg);color:#124e35;border:1px solid var(--greenLine)}
+
+  /* ── THE LIST ─────────────────────────────────────────────────────────────
+     It is on screen before a character is typed, and an empty box is a browse
+     of every field nobody has claimed. Typing narrows it. It never asks you to
+     remember a name. */
+  .cands{border:1px solid var(--line);border-radius:10px;background:#fff;margin-top:8px;overflow:hidden}
+  .candhd{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;
+          font:700 10px/1.4 inherit;text-transform:uppercase;letter-spacing:.09em;color:#7C8F86;
+          padding:9px 11px 7px;background:#FAFCFB;border-bottom:1px solid #F1F5F3}
+  .candhd .hint{text-transform:none;letter-spacing:normal;font:500 11px/1.4 inherit;color:#8a9992}
+  .scroll{max-height:246px;overflow-y:auto}
+  .cityhd{font:800 9.5px/1 inherit;letter-spacing:.1em;color:#8a9992;padding:9px 11px 5px;background:#fff;
+          position:sticky;top:0;border-bottom:1px solid #F5F8F6}
+  .cand{display:flex;align-items:center;gap:4px 9px;flex-wrap:wrap;width:100%;text-align:left;border:0;
+        border-top:1px solid #F1F5F3;background:#fff;padding:7px 11px;min-height:44px;font:inherit;
+        cursor:pointer;color:var(--deep)}
+  .cand:hover:not(:disabled){background:#F4FAF6}
+  .cand:disabled{cursor:not-allowed;background:#FAFAF8;color:#8a9992}
+  .cand .cn{font:700 13px/1.3 inherit;min-width:0;flex:1 1 auto;overflow-wrap:anywhere}
+  .cand .cm{font-size:11px;line-height:1.35;color:#6d7b74;margin-left:auto;flex:0 1 auto;text-align:right;overflow-wrap:anywhere}
+  .more{padding:8px 11px;font-size:11px;color:#8a9992;border-top:1px solid #F1F5F3;background:#FAFCFB}
+
+  /* ── THE MODAL'S FIELD ROW ────────────────────────────────────────────────── */
+  .fbox{border:1px solid #f0d9b6;background:#FFFDF8;border-radius:10px;padding:10px 11px;
+        display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:6px}
+  .fmain{min-width:0;flex:1 1 200px}
+  .fname{font:700 13.5px/1.3 inherit}
+  .fmeta{font-size:11.5px;color:#6d7b74;margin-top:2px}
+  .fbtn{flex:none;min-height:34px;padding:0 11px;border-radius:9px;border:1px solid var(--amber);
+        background:#fff;font:750 12px/1 inherit;color:var(--amberInk);cursor:pointer}
+  .hid{display:none !important}
+  .cmp{margin-top:14px;font-size:11.5px;color:#6d7b74;border-top:1px dashed #CFDBD4;padding-top:10px}
+  .cmp b{color:var(--deep)}
+</style></head>
+<body>
+<div class="sw">
+  <button data-s="row" aria-pressed="true">modal row · Ann Richards</button>
+  <button data-s="rownone">modal row · RR MPC</button>
+  <button data-s="seeded">dialog · opens already searched</button>
+  <button data-s="browse">dialog · browse everything</button>
+  <button data-s="words">dialog · the four substring missed</button>
+  <button data-s="city">dialog · same city first</button>
+</div>
+
+<div class="wrap">
+
+<!-- ── THE EDIT CARD MODAL'S FIELD ROW ─────────────────────────────────────── -->
+<div id="rowPane">
+  <div class="dlg">
+    <div class="dh">Edit card</div>
+    <div class="dsub">Field Pipeline</div>
+    <div class="lbl" style="margin-top:14px">Title</div>
+    <div class="fld"><input data-testid="m-title" readonly></div>
+    <div class="lbl" style="margin-top:14px">Field</div>
+    <div class="fbox" data-testid="m-field">
+      <div class="fmain">
+        <div class="fname" data-testid="m-field-name">No field record yet</div>
+        <div class="fmeta" data-testid="m-field-meta"></div>
+      </div>
+      <button type="button" class="fbtn" data-testid="m-field-btn"></button>
+    </div>
+  </div>
+</div>
+
+<!-- ── THE BIND DIALOG ─────────────────────────────────────────────────────── -->
+<div id="bindPane" class="hid">
+  <div class="dlg" data-testid="bind-dialog">
+    <div class="dh" data-testid="bind-head"></div>
+    <div class="dsub">Confirmed Fields · pick the field, or type a name to create one</div>
+
+    <label class="lbl fld">Field name
+      <input data-testid="bind-newname" autocomplete="off" placeholder="Search, or type a new field's name">
+    </label>
+
+    <div class="cands hid" data-testid="bind-cands">
+      <div class="candhd">
+        <span data-testid="bind-cands-hd"></span>
+        <span class="hint" data-testid="bind-cands-hint"></span>
+      </div>
+      <div class="scroll" id="candScroll"></div>
+      <div class="more hid" data-testid="cand-more"></div>
+    </div>
+
+    <div class="note ok hid" data-testid="bind-match"></div>
+
+    <div class="df">
+      <button type="button">Cancel</button>
+      <button type="button" class="pri" data-testid="bind-save" data-mode="create" disabled>Create the field</button>
+    </div>
+
+    <!-- measured proof, not decoration: what the shipped substring rule returns -->
+    <div class="cmp" data-testid="cmp"></div>
+  </div>
+</div>
+
+</div>
+
+<script>
+const TODAY = new Date("2026-09-14T00:00:00Z");
+const d0 = s => new Date(s + "T00:00:00Z");
+const fmt = s => d0(s).toLocaleDateString("en-US",{timeZone:"UTC",day:"numeric",month:"short",year:"numeric"});
+const norm = s => String(s||"").trim().toLowerCase();
+
+/* fin_venues, using the real names from the item-3 report. */
+const VENUES = [
+  { id:65, venue_name:"Ann Richards School",              city:"Austin",  launch_date:"2026-10-19" },
+  { id:5,  venue_name:"Onion Creek",                      city:"Austin",  launch_date:"2026-11-02" },
+  { id:12, venue_name:"STAR",                             city:"Austin",  launch_date:null },
+  { id:9,  venue_name:"KISC (Katy Intl)",                 city:"Houston", launch_date:"2026-10-05" },
+  { id:55, venue_name:"LBJ Early College High School",    city:"Austin",  launch_date:"2026-12-07" },
+  { id:6,  venue_name:"Stony Point",                      city:"Austin",  launch_date:null },
+  { id:69, venue_name:"Crockett High School",             city:"Austin",  launch_date:"2026-11-16" },
+  { id:63, venue_name:"PARMER Stadium",                   city:"Austin",  launch_date:"2026-10-26" },
+  { id:3,  venue_name:"Hattrick",                         city:"Austin",  launch_date:"2026-02-03" },
+  { id:52, venue_name:"Hattrick T.",                      city:"Houston", launch_date:null },
+  { id:51, venue_name:"Crossbar Rowlett",                 city:"Dallas",  launch_date:"2026-09-18" },
+  { id:49, venue_name:"Westlake",                         city:"Austin",  launch_date:"2026-07-01" },
+  { id:18, venue_name:"Outdoor",                          city:"St. Louis", launch_date:null },
+  { id:19, venue_name:"Indoor",                           city:"St. Louis", launch_date:null },
+];
+const HOLDER = { 51:"Crossbar Rowlett (bound yesterday)" };
+
+const CARDS = {
+  ann:     { title:"Ann Richards",            city:"Austin" },
+  rr:      { title:"RR MPC",                  city:"Austin" },
+  katy:    { title:"Katy ISC",                city:"Houston" },
+  onion:   { title:"OC / Onion Creek - AMSA", city:"Austin" },
+  crock:   { title:"Crockett HS (AISD)",      city:"Austin" },
+  star:    { title:"STAR Soccer Complex",     city:"Austin" },
+  hattrick:{ title:"Hat / The Hattrick",      city:"Austin" },
+};
+
+/* ── THE RULE THAT SHIPPED, kept here so the mock can PROVE it fails ─────────
+ * FieldPipelineBoard.tsx:441 — venue_name.includes(the whole typed string).
+ * "Katy ISC" is not a substring of "KISC (Katy Intl)", so it returns nothing. */
+const substringRule = typed => {
+  const t = norm(typed);
+  if (t.length < 2) return [];
+  return VENUES.filter(v => norm(v.venue_name).includes(t)).filter(v => norm(v.venue_name) !== t);
+};
+
+/* ── THE RULE THAT ACTUALLY FINDS THESE FIELDS ──────────────────────────────
+ * Any WORD of three letters or more, shared between the query and the name.
+ * It is the same rule the item-3 report used to find them, so the screen and
+ * the report finally agree. Still a filter: no scoring, no fuzzy, no "did you
+ * mean". A whole-string substring still counts, so "parmer" keeps working. */
+/* Three letters or more, minus a four-word stoplist. LBJ and OKC are three
+   letters and matter; "the" and "and" are three letters and match noise. */
+const STOP = new Set(["the","and","for","new"]);
+const words = s => norm(s).split(/[^a-z0-9]+/).filter(w => w.length >= 3 && !STOP.has(w));
+function searchRule(typed, cardCity){
+  const t = norm(typed);
+  const qw = words(typed);
+  let out = VENUES.filter(v => {
+    if (norm(v.venue_name) === t) return false;          // already the offer above
+    if (t.length >= 2 && norm(v.venue_name).includes(t)) return true;
+    const vw = words(v.venue_name);
+    return qw.some(w => vw.includes(w));
+  });
+  if (!t) out = VENUES.slice();                          // EMPTY BOX = BROWSE EVERYTHING
+  out = out.filter(v => !(HOLDER[v.id] && false));       // held ones stay listed, greyed
+  /* SAME CITY FIRST, then by name. A stable sort on two facts the card already
+     knows — not a score. Hattrick Austin above Hattrick T. Houston for an
+     Austin card, and the other way round for a Houston one. */
+  return out.sort((a,b) => {
+    const ac = a.city === cardCity ? 0 : 1, bc = b.city === cardCity ? 0 : 1;
+    return ac - bc || a.venue_name.localeCompare(b.venue_name);
+  });
+}
+function resolve(name){
+  const t = norm(name);
+  if (!t) return { mode:"create", venue:null };
+  const v = VENUES.find(x => norm(x.venue_name) === t);
+  if (!v) return { mode:"create", venue:null };
+  return HOLDER[v.id] ? { mode:"taken", venue:v } : { mode:"link", venue:v };
+}
+
+/* ── THE MODAL ROW ───────────────────────────────────────────────────────── */
+function showRow(key){
+  const c = CARDS[key];
+  document.querySelector('[data-testid="m-title"]').value = c.title;
+  const cands = searchRule(c.title, c.city);
+  const meta = document.querySelector('[data-testid="m-field-meta"]');
+  const btn  = document.querySelector('[data-testid="m-field-btn"]');
+  /* THE ROW RUNS THE SEARCH. It used to run only the exact-match rule and then
+     say "Nothing in Finance carries this name" — which for "Ann Richards" is a
+     false statement about the business, because Ann Richards School is right
+     there. A row that says a field does not exist has to have looked. */
+  if (cands.length){
+    meta.innerHTML = `<b>${cands.length}</b> field${cands.length>1?"s":""} in Finance could be this one, including
+      <b>${cands[0].venue_name}</b>. Open the list to pick one.`;
+    btn.textContent = "Find the field…";
+    btn.dataset.kind = "find";
+  } else {
+    meta.textContent = "Nothing in Finance looks like this name. Linking will create the record.";
+    btn.textContent = "Create…";
+    btn.dataset.kind = "create";
+  }
+  document.querySelector('[data-testid="m-field"]').dataset.cands = String(cands.length);
+}
+
+/* ── THE DIALOG ──────────────────────────────────────────────────────────── */
+let cardKey = "ann";
+const inp = document.querySelector('[data-testid="bind-newname"]');
+inp.addEventListener("input", () => syncBind());
+
+function syncBind(){
+  const c = CARDS[cardKey];
+  const typed = inp.value;
+  const cands = searchRule(typed, c.city);
+  const box = document.querySelector('[data-testid="bind-cands"]');
+  const hd  = document.querySelector('[data-testid="bind-cands-hd"]');
+  const hint= document.querySelector('[data-testid="bind-cands-hint"]');
+  const host= document.getElementById("candScroll");
+  const more= document.querySelector('[data-testid="cand-more"]');
+  host.innerHTML = "";
+
+  const browsing = !norm(typed);
+  box.classList.toggle("hid", cands.length === 0);
+  if (cands.length){
+    hd.textContent = browsing
+      ? `All ${cands.length} fields in Finance`
+      : `${cands.length} field${cands.length>1?"s":""} like "${typed.trim()}"`;
+    hint.textContent = browsing
+      ? "Type to narrow it. Nothing is picked until you click a row."
+      : "Clear the box to see them all.";
+    /* GROUPED BY CITY when browsing, because 14 names with no structure is the
+       same memory problem in a longer list. */
+    let lastCity = null;
+    const shown = cands.slice(0, browsing ? 99 : 12);
+    for (const v of shown){
+      if (browsing && v.city !== lastCity){
+        lastCity = v.city;
+        const h = document.createElement("div");
+        h.className = "cityhd"; h.setAttribute("data-testid","cand-city");
+        h.textContent = v.city ?? "city unknown";
+        host.appendChild(h);
+      }
+      const held = HOLDER[v.id];
+      const b = document.createElement("button");
+      b.type="button"; b.className="cand"; b.setAttribute("data-testid","cand");
+      b.dataset.id = v.id; b.dataset.held = held ? "1":"0"; b.disabled = !!held;
+      b.innerHTML = `<span class="cn">${v.venue_name}</span>
+        <span class="cm">${held ? "already linked to " + held
+          : (v.city ?? "city unknown") + (v.launch_date ? " · launches " + fmt(v.launch_date) : " · no launch date yet")}</span>`;
+      b.addEventListener("click", () => { inp.value = v.venue_name; syncBind(); });
+      host.appendChild(b);
+    }
+    more.classList.toggle("hid", cands.length <= shown.length);
+    more.textContent = `${cands.length - shown.length} more. Type a little more to narrow it.`;
+  }
+
+  const r = resolve(typed);
+  const m = document.querySelector('[data-testid="bind-match"]');
+  const save = document.querySelector('[data-testid="bind-save"]');
+  m.classList.toggle("hid", r.mode !== "link");
+  if (r.mode === "link"){
+    m.innerHTML = `<b>${r.venue.venue_name}</b> · ${r.venue.city} · ${
+      r.venue.launch_date ? "already launches " + fmt(r.venue.launch_date) : "no launch date yet"}.
+      Linking uses that record.`;
+  }
+  save.dataset.mode = r.mode;
+  save.textContent = r.mode === "link" ? "Link the field" : "Create the field";
+  save.disabled = r.mode !== "link";
+
+  /* The shipped rule, run on the same string, shown as a number. */
+  const old = substringRule(typed);
+  document.querySelector('[data-testid="cmp"]').innerHTML =
+    `<b data-testid="cmp-new">${cands.length}</b> found by word match · <b data-testid="cmp-old">${old.length}</b> found by the
+     substring rule that shipped, on the same string.`;
+}
+
+function openBind(key, prefill){
+  cardKey = key;
+  document.querySelector('[data-testid="bind-head"]').textContent = CARDS[key].title;
+  /* SEEDED AND ALREADY RUN. The list is on screen before a character is typed. */
+  inp.value = prefill === undefined ? CARDS[key].title : prefill;
+  syncBind();
+}
+
+function show(s){
+  const rowS = s === "row" || s === "rownone";
+  document.getElementById("rowPane").classList.toggle("hid", !rowS);
+  document.getElementById("bindPane").classList.toggle("hid", rowS);
+  if (s === "row")      showRow("ann");
+  if (s === "rownone")  showRow("rr");
+  if (s === "seeded")   openBind("ann");
+  if (s === "browse")   openBind("ann", "");
+  if (s === "words")    openBind("katy");
+  if (s === "city")     openBind("hattrick");
+  document.querySelectorAll(".sw button").forEach(b=>b.setAttribute("aria-pressed", String(b.dataset.s===s)));
+}
+document.querySelectorAll(".sw button").forEach(b=>b.addEventListener("click",()=>show(b.dataset.s)));
+window.__openBind = openBind;   // for the assertions to walk the other cards
+show("row");
+</script>
+</body></html>

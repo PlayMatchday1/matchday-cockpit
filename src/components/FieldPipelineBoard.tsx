@@ -80,6 +80,23 @@ function fmtLaunch(iso: string): string {
   return new Date(y, m - 1, d).toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" });
 }
 
+/* ── THE WORDS A NAME IS MADE OF ──────────────────────────────────────────────────────────────
+ * THREE LETTERS OR MORE, minus a four-word stoplist. LBJ and OKC are three letters and matter;
+ * "the" is three letters and would drag every field with "The" in it into the Hattrick result.
+ * The stoplist is short and literal on purpose — a long one is a second rule nobody can predict. */
+const SEARCH_STOPWORDS = new Set(["the", "and", "for", "new"]);
+
+export function searchWords(s: string): string[] {
+  return String(s ?? "")
+    .trim()
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 3 && !SEARCH_STOPWORDS.has(w));
+}
+
+/** How many candidates the list shows while SEARCHING. Browsing an empty box is uncapped. */
+const CANDIDATE_CAP = 12;
+
 /** The fin_venues columns this board needs: enough to match a name, show a city and count down. */
 type VenueRow = { id: number; venue_name: string; city: string | null; launch_date: string | null };
 
@@ -433,20 +450,52 @@ export default function FieldPipelineBoard() {
    * because it is already the offer above. NOTHING IS SELECTED: the box is untouched and the
    * action stays "create" until a person clicks a row. That is the whole difference from
    * auto-matching, and bindMatch never learns this list exists. */
+  /* ── WORD OVERLAP, NOT SUBSTRING, AND THAT IS THE WHOLE FIX ───────────────────────────────
+   * The rule that shipped was venue_name.includes(the whole typed string). It works for "Ann
+   * Richards" and finds almost none of the real backlog, because the card's name is not INSIDE
+   * the field's name — they SHARE A WORD:
+   *     "Katy ISC"            vs "KISC (Katy Intl)"     includes() 0
+   *     "Crockett HS (AISD)"  vs "Crockett High School" includes() 0
+   *     "STAR Soccer Complex" vs "STAR"                 includes() 0
+   * Measured against production, all three return zero on substring and find their field on words.
+   *
+   * THE REPORT AND THE SCREEN USED TO DISAGREE. The item-3 report found these by shared words; the
+   * screen then used a different rule and did not. This is the report's rule, so there is now one.
+   *
+   * THE SUBSTRING ARM STAYS so nothing that works today stops working: "parmer" still finds PARMER
+   * Stadium, and both rules agree on it.
+   *
+   * STILL A FILTER. No scoring, no fuzzy distance, no "did you mean" — what it returns is always
+   * explainable in one sentence. The sort is two facts the card already carries, not a rank. */
   const candidatesFor = useCallback(
-    (typed: string) => {
+    (typed: string, city?: string) => {
       const t = typed.trim().toLowerCase();
-      if (t.length < 2) return [];
-      return venues
-        .filter((v) => String(v.venue_name).trim().toLowerCase().includes(t))
-        .filter((v) => String(v.venue_name).trim().toLowerCase() !== t)
-        .slice(0, 6);
+      const qw = searchWords(typed);
+      /* AN EMPTY BOX LISTS EVERYTHING. Clearing the box is how you browse, which is the answer to
+       * "i have to remember names" — there is nothing to remember if it is all on screen. */
+      const pool = !t
+        ? venues.slice()
+        : venues.filter((v) => {
+            const n = String(v.venue_name).trim().toLowerCase();
+            if (n === t) return false; // already the offer above the list
+            if (t.length >= 2 && n.includes(t)) return true;
+            const vw = searchWords(v.venue_name);
+            return qw.some((w) => vw.includes(w));
+          });
+      /* SAME CITY FIRST, THEN ALPHABETICAL. For the Hattrick pair this puts Austin's Hattrick above
+       * Houston's Hattrick T. on an Austin card and the other way round on a Houston one. IT STILL
+       * PICKS NEITHER — the order is a reading aid, not a choice. */
+      return pool.sort((a, z) => {
+        const ac = city && a.city === city ? 0 : 1;
+        const zc = city && z.city === city ? 0 : 1;
+        return ac - zc || String(a.venue_name).localeCompare(String(z.venue_name));
+      });
     },
     [venues],
   );
   const bindCandidates = useMemo(
-    () => candidatesFor(bind?.newName ?? ""),
-    [bind?.newName, candidatesFor],
+    () => candidatesFor(bind?.newName ?? "", bind?.city),
+    [bind?.newName, bind?.city, candidatesFor],
   );
 
   /* THE MATCHED FIELD'S DATE IS BROUGHT IN, NOT RETYPED — 9 of the 12 cards that name an existing
@@ -1024,7 +1073,9 @@ export default function FieldPipelineBoard() {
              one to, and a card in Negotiation is not there yet. */
           fieldRow={modal.mode === "edit" && modal.card.stage === "confirmed"
             ? <ModalFieldRow card={modal.card} venue={modal.card.venue_id != null ? venueById.get(modal.card.venue_id) ?? null : null}
-                match={chipKindFor(modal.card)} onBind={() => openBind(modal.card)} />
+                match={chipKindFor(modal.card)}
+                candidates={candidatesFor(modal.card.title, cityOf(modal.card))}
+                onBind={() => openBind(modal.card)} />
             : undefined} />
       )}
 
@@ -1096,32 +1147,60 @@ function CandidateList({
   onPick: (v: VenueRow) => void;
 }) {
   if (candidates.length === 0) return null;
+  const browsing = typed.trim().length === 0;
+  /* BROWSING IS UNCAPPED AND SCROLLS; searching is capped at 12 with the remainder said out loud,
+   * because a silently truncated list is a list that lies about what is in Finance. */
+  const shown = browsing ? candidates : candidates.slice(0, CANDIDATE_CAP);
+  const more = candidates.length - shown.length;
+  let lastCity: string | null = null;
   return (
     <div className="mt-[7px] overflow-hidden rounded-[9px] border" data-testid="bind-cands"
       style={{ borderColor: "#E3EAE6" }}>
       <div className="px-[11px] py-[6px] text-[10.5px] font-[750]" data-testid="bind-cands-hd"
         style={{ background: "#F7FAF8", color: "#6d7b74" }}>
-        {candidates.length} field{candidates.length > 1 ? "s" : ""} in Finance match &ldquo;{typed.trim()}&rdquo;
+        {browsing
+          ? `All ${candidates.length} fields in Finance. Type to narrow it. Nothing is picked until you click a row.`
+          : `${candidates.length} field${candidates.length > 1 ? "s" : ""} in Finance could be this one`}
       </div>
-      {candidates.map((v) => {
-        const held = cardByVenue.get(v.id) ?? null;
-        return (
-          <button key={v.id} type="button" data-testid="cand" data-id={v.id} data-held={held ? "1" : "0"}
-            disabled={!!held} onClick={() => onPick(v)}
-            className="flex w-full items-center gap-[9px] border-t px-[11px] text-left disabled:cursor-not-allowed"
-            style={{ minHeight: 44, borderColor: "#F1F5F3", background: held ? "#FAFAF8" : "#fff",
-              color: held ? "#8a9992" : "#12241d" }}>
-            <span className="cn min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[13px] font-[700]">
-              {v.venue_name}
-            </span>
-            <span className="cm ml-auto flex-none py-[6px] text-right text-[11px]" style={{ color: "#6d7b74" }}>
-              {held
-                ? `already linked to ${held.title}`
-                : `${v.city ?? "city unknown"}${v.launch_date ? ` · launches ${fmtLaunch(v.launch_date)}` : " · no launch date"}`}
-            </span>
-          </button>
-        );
-      })}
+      {/* A FIXED BOX THAT SCROLLS, so browsing 40 fields cannot push the dialog past the viewport. */}
+      <div className="overflow-y-auto" data-testid="bind-cands-scroll" style={{ maxHeight: 228 }}>
+        {shown.map((v) => {
+          const held = cardByVenue.get(v.id) ?? null;
+          /* CITY HEADINGS ONLY WHILE BROWSING. In a search the city is already on every row and a
+             heading per result would be noise. */
+          const head = browsing && (v.city ?? "") !== lastCity ? (lastCity = v.city ?? "", v.city ?? "No city") : null;
+          return (
+            <div key={v.id}>
+              {head && (
+                <div data-testid="cand-city" className="px-[11px] py-[4px] text-[9.5px] font-extrabold uppercase tracking-[0.08em]"
+                  style={{ background: "#FBFDFC", color: "#9aa5a0" }}>{head}</div>
+              )}
+              <button type="button" data-testid="cand" data-id={v.id} data-held={held ? "1" : "0"}
+                disabled={!!held} onClick={() => onPick(v)}
+                className="flex w-full items-start gap-[9px] border-t px-[11px] py-[7px] text-left disabled:cursor-not-allowed"
+                style={{ minHeight: 44, borderColor: "#F1F5F3", background: held ? "#FAFAF8" : "#fff",
+                  color: held ? "#8a9992" : "#12241d" }}>
+                {/* THE NAME WRAPS. It is the thing being read, and "LBJ Early College High School"
+                    ellipsed to "LBJ Early Colle…" is the problem this screen exists to solve. */}
+                <span className="cn min-w-0 flex-1 break-words text-[13px] font-[700] leading-[1.3]">
+                  {v.venue_name}
+                </span>
+                <span className="cm flex-none text-right text-[11px] leading-[1.3]" style={{ color: "#6d7b74" }}>
+                  {held
+                    ? `already linked to ${held.title}`
+                    : `${v.city ?? "city unknown"}${v.launch_date ? ` · launches ${fmtLaunch(v.launch_date)}` : " · no launch date yet"}`}
+                </span>
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {more > 0 && (
+        <div data-testid="cand-more" className="border-t px-[11px] py-[6px] text-[10.5px]"
+          style={{ borderColor: "#F1F5F3", background: "#F7FAF8", color: "#6d7b74" }}>
+          {more} more, type a little more to narrow it
+        </div>
+      )}
     </div>
   );
 }
@@ -1148,7 +1227,7 @@ function MatchFieldsDialog({
   resolveName: (typed: string, cardId: string) => BindMatch;
   /* THE SAME LIST AS THE DIALOG. This screen exists to work through the backfill, and it has the
    * same problem on the same cards: "Hat / The Hattrick" never becomes the real field by typing. */
-  candidatesFor: (typed: string) => VenueRow[];
+  candidatesFor: (typed: string, city?: string) => VenueRow[];
   cardByVenue: Map<number, KanbanCard>;
   commitBind: (input: { cardId: string; name: string; launch: string; match: BindMatch; city: string; force?: boolean }) => Promise<void>;
   onClose: () => void;
@@ -1217,7 +1296,7 @@ function MatchFieldsDialog({
                       className="w-full rounded-[9px] border px-2.5 text-[13px] font-medium normal-case tracking-normal"
                       style={{ minHeight: 44, borderColor: "#CFDBD4", color: "#12241d" }} />
                     <CandidateList
-                      candidates={candidatesFor(st.name)}
+                      candidates={candidatesFor(st.name, cityOf(c))}
                       typed={st.name}
                       cardByVenue={cardByVenue}
                       onPick={(v) => setRow(c.id, { name: v.venue_name, touched: false, launch: "" })}
@@ -1287,11 +1366,17 @@ function ModalFieldRow({
   card,
   venue,
   match,
+  candidates,
   onBind,
 }: {
   card: KanbanCard;
   venue: VenueRow | null;
   match: BindMatch;
+  /* THE ROW RUNS THE SEARCH. It used to branch on match.mode alone and print "Nothing in Finance
+   * carries this name" on any create — which for "Ann Richards" is a FALSE STATEMENT about the
+   * business, because Ann Richards School is right there. It is the sentence that stopped Ryan.
+   * A row that says a field does not exist has to have looked. */
+  candidates: VenueRow[];
   onBind: () => void;
 }) {
   const bound = card.venue_id != null && venue != null;
@@ -1300,6 +1385,7 @@ function ModalFieldRow({
     <div className="grid gap-1.5 text-[11px] font-bold uppercase tracking-wide text-deep-green/60">
       Field
       <div data-testid="m-field" data-state={bound ? "bound" : "none"}
+        data-cands={String(candidates.length)}
         className="flex flex-wrap items-center gap-2.5 rounded-lg border px-3 py-2.5"
         style={bound
           ? { borderColor: "#dbe6e0", background: "#fff" }
@@ -1322,13 +1408,23 @@ function ModalFieldRow({
                 ? `A field named ${match.venue.venue_name} already exists in ${match.venue.city ?? "city unknown"}. Linking uses that record.`
                 : match.mode === "taken"
                   ? `${match.venue.venue_name} is already linked to the card “${match.holder.title}”. Unlink that card first, or use a different name.`
-                  : "Nothing in Finance carries this name. Linking will create the record."}
+                  : candidates.length > 0
+                    ? `${candidates.length} field${candidates.length > 1 ? "s" : ""} in Finance could be this one, including ${candidates[0].venue_name}. Open the list to pick one.`
+                    : "Nothing in Finance looks like this name. Linking will create the record."}
           </div>
         </div>
-        <button type="button" data-testid="m-field-btn" data-kind={bound ? "change" : "bind"} onClick={onBind}
+        <button type="button" data-testid="m-field-btn"
+          data-kind={bound ? "change" : match.mode === "create" && candidates.length > 0 ? "find" : "bind"}
+          onClick={onBind}
           className="flex-none rounded-[9px] border px-3 text-[12.5px] font-[750] normal-case tracking-normal"
           style={{ minHeight: 34, borderColor: "#cfdad4", background: "#fff", color: "#0d3b2e" }}>
-          {bound ? "Change…" : match.mode === "link" ? "Link…" : "Create…"}
+          {bound
+            ? "Change…"
+            : match.mode === "link"
+              ? "Link…"
+              : match.mode === "create" && candidates.length > 0
+                ? "Find the field…"
+                : "Create…"}
         </button>
       </div>
     </div>

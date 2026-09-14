@@ -267,7 +267,7 @@ async function main() {
     yes(`  typing part of a name lists the fields that contain it (${d.cands.length})`, d.candsOpen);
     is("  and shows every one of them, capped", d.cands.length, probeCands.length);
     yes(`  the list says what it is showing: "${d.candsHd}"`,
-      new RegExp(`match .${probe}.`).test(d.candsHd ?? ""));
+      /could be this one/.test(d.candsHd ?? ""));
     yes("  each candidate carries its city and launch date",
       d.cands.filter((c) => c.held === "0").every((c) => /launches|no launch date/.test(c.meta) && c.meta.length > 6));
 
@@ -295,7 +295,13 @@ async function main() {
     yes("  and it resolves to the offer it always did", d.match != null);
     is("  as a link, not a create", d.save.mode, "link");
     if (freeCand.launch_date) is("  with that field's launch date brought in", d.launch, freeCand.launch_date);
-    is("  and the list steps out of the way once the name is exact", d.candsOpen, false);
+    /* THE EXACT ONE LEAVES THE LIST; THE LIST ITSELF DOES NOT. Under the word rule a picked name
+     * still shares words with other fields ("ATH Katy Sunday" still surfaces "ATH Katy"), and
+     * showing them is the point — the offer above says what was picked, the list says what else it
+     * could have been. The old assertion encoded substring behaviour, where an exact pick usually
+     * left nothing behind. */
+    is("  and the picked field leaves the list, because it is now the offer above",
+      d.cands.filter((c) => c.id === String(freeCand.id)).length, 0);
 
     // CONTROL: clicking a held one does nothing.
     await p.fill('[data-testid="bind-newname"]', probe);
