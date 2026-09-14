@@ -12,8 +12,9 @@ import "server-only"; // no-op under --conditions=react-server
  */
 import { readFileSync } from "node:fs";
 import {
-  MATCH_STATE_LABEL, MATCH_STATE_TONE, attachCharges, chargeLabel, isCancelled, mergeHistory,
-  sortHistory, type ChargeLike, type HistoryRow, type MirrorRow,
+  MATCH_STATE_LABEL, MATCH_STATE_TONE, atPitchClock, attachCharges, chargeLabel, deriveMatchState,
+  hoursBeforeKickoff, isCancelled, mergeHistory, sortHistory,
+  type ChargeLike, type HistoryRow, type MirrorRow,
 } from "../src/lib/matchHistory";
 
 let pass = 0, fail = 0;
@@ -33,10 +34,36 @@ const C = (over: Partial<ChargeLike> = {}): ChargeLike => ({
   card: "visa ••1216", matchId: null, userMatchId: null, isMembership: false, ...over,
 });
 
-console.log("— four states, because four different things happen —");
-is("the four are named", Object.keys(MATCH_STATE_LABEL).sort(), ["club_cancelled", "played", "player_cancelled", "upcoming"]);
+console.log("— five states, because five different things happen —");
+/* FIVE, NOT FOUR. The two flags are independent, and when BOTH are set the row used to report only
+ * one of them — whichever the code path that produced it happened to prefer, and the two paths
+ * preferred opposite ones. */
+is("the five are named", Object.keys(MATCH_STATE_LABEL).sort(),
+  ["both_cancelled", "club_cancelled", "played", "player_cancelled", "upcoming"]);
 is("he cancelled, and we cancelled, read differently",
   [MATCH_STATE_LABEL.player_cancelled, MATCH_STATE_LABEL.club_cancelled], ["They cancelled", "We cancelled"]);
+is("…and both happening reads as neither of those", MATCH_STATE_LABEL.both_cancelled, "Both cancelled");
+/* ONE DERIVATION, SO THE TWO PATHS CANNOT DISAGREE AGAIN. */
+is("both flags derive both_cancelled",
+  deriveMatchState({ playerCancelled: true, clubCancelled: true, upcoming: false }), "both_cancelled");
+is("…his alone derives player_cancelled",
+  deriveMatchState({ playerCancelled: true, clubCancelled: false, upcoming: false }), "player_cancelled");
+is("…ours alone derives club_cancelled",
+  deriveMatchState({ playerCancelled: false, clubCancelled: true, upcoming: false }), "club_cancelled");
+is("…and neither falls through to played or upcoming",
+  [deriveMatchState({ playerCancelled: false, clubCancelled: false, upcoming: false }),
+   deriveMatchState({ playerCancelled: false, clubCancelled: false, upcoming: true })], ["played", "upcoming"]);
+is("a both-cancelled row is still cancelled for every caller that asks", isCancelled("both_cancelled"), true);
+/* THE HOURS, AND THE PITCH CLOCK. Two instants subtracted needs no timezone; the clock does, and
+ * the offset is recovered from the match's own two date fields. */
+is("hours to kickoff is the gap in hours",
+  hoursBeforeKickoff("2026-09-13T00:00:00Z", "2026-09-12T19:07:00Z"), 4.9);
+is("…negative when the cancel came after kickoff",
+  hoursBeforeKickoff("2026-09-13T00:00:00Z", "2026-09-13T02:06:00Z"), -2.1);
+is("…and null, never zero, with no timestamp", hoursBeforeKickoff("2026-09-13T00:00:00Z", null), null);
+is("the pitch clock shifts the instant by the venue's own offset",
+  atPitchClock("2026-09-12T19:00:00+00:00", "2026-09-13T00:00:00+00:00", "2026-09-12T19:07:00+00:00"),
+  "2026-09-12T14:07:00.000Z");
 // NEITHER CANCELLATION IS RED. Amber at most for his decision; informational for ours.
 is("his cancellation is amber — it may carry a strike", MATCH_STATE_TONE.player_cancelled, "amber");
 is("ours is informational — he did nothing wrong", MATCH_STATE_TONE.club_cancelled, "info");
@@ -63,7 +90,9 @@ is("…and the API's rows are not", merged.find((m) => m.matchId === 100)?.mirro
 is("a merged row starts with no charge looked for", chargeLabel(merged.find((m) => m.matchId === 18321)!), null);
 is("…and after looking and finding none it says so, never $0.00",
   chargeLabel(attachCharges(merged, []).find((m) => m.matchId === 18321)!), "no charge found");
-is("…and its price is not dressed up as a charge", merged.find((m) => m.matchId === 18321)?.price, 0);
+/* NULL, NOT ZERO. The mirror does not carry what the booking cost, and $0.00 next to a Stripe block
+ * reading "$25.98 SUCCEEDED" says "he was not charged", which is backwards. */
+is("…and its price is unknown rather than zero", merged.find((m) => m.matchId === 18321)?.price, null);
 // The mirror holds one row per REGISTRATION, so a player who booked two spots has two rows.
 const dupes = mergeHistory([], [mirror[1], { ...mirror[1] }, { ...mirror[1] }]);
 is("three registrations on one match make ONE row", dupes.length, 1);

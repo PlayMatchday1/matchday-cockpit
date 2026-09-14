@@ -19,7 +19,7 @@ import "server-only";
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { MirrorRow } from "@/lib/matchHistory";
+import { deriveMatchState, type MirrorRow } from "@/lib/matchHistory";
 
 export async function loadMirrorHistory(
   supabase: SupabaseClient,
@@ -29,7 +29,10 @@ export async function loadMirrorHistory(
   try {
     const regs = await supabase
       .from("mdapi_match_players")
-      .select("match_api_id, is_cancelled")
+      /* canceled_at IS THE AMERICAN SPELLING, as the column is. Two other call sites already
+       * select it; this path did not, which is why the row could say THAT he cancelled and never
+       * WHEN. How close to kickoff he pulled out is the fact that decides the money. */
+      .select("match_api_id, is_cancelled, canceled_at")
       .eq("user_id", playerId)
       .is("deleted_at", null);
     if (regs.error) throw new Error(regs.error.message);
@@ -49,25 +52,38 @@ export async function loadMirrorHistory(
     // ANY of them is a cancellation by the player. De-duplication to one row per match happens in
     // mergeHistory.
     const playerCancelled = new Map<number, boolean>();
+    /* THE EARLIEST cancellation across a player's registrations for one match. Two spots booked and
+     * cancelled a minute apart is one decision, and the first instant is the one that describes it. */
+    const playerCancelledAt = new Map<number, string>();
     for (const r of regs.data ?? []) {
       const id = r.match_api_id as number;
       playerCancelled.set(id, (playerCancelled.get(id) ?? false) || r.is_cancelled === true);
+      const at = r.canceled_at as string | null;
+      if (r.is_cancelled === true && at) {
+        const cur = playerCancelledAt.get(id);
+        if (!cur || Date.parse(at) < Date.parse(cur)) playerCancelledAt.set(id, at);
+      }
     }
 
     return (ms.data ?? []).map((m) => {
       const utc = (m.start_date_utc as string | null) ?? null;
       const upcoming = !!utc && Date.parse(utc) > now;
+      const pc = playerCancelled.get(m.api_id as number) === true;
+      const cc = m.is_cancelled === true;
       return {
         matchId: m.api_id as number,
         name: (m.name as string | null) ?? (m.field_title as string | null) ?? `Match ${m.api_id}`,
         // startDate DISPLAYS (wall clock); startDateUtc ORDERS (true instant). Never swapped.
         startDate: (m.start_date as string | null) ?? null,
         startDateUtc: utc,
-        // The club's cancellation outranks the player's: if the match was called off, that is what
-        // happened, whatever the booking says.
-        state: m.is_cancelled === true ? "club_cancelled"
-          : playerCancelled.get(m.api_id as number) ? "player_cancelled"
-          : upcoming ? "upcoming" : "played",
+        /* BOTH FACTS SURVIVE. This used to collapse them with "the club's cancellation outranks
+         * the player's", which is true about the MATCH and wrong about this player: his own
+         * cancellation is the half that decides whether he is owed anything. The state is derived
+         * from the pair in matchHistory, so this path and playerProfile cannot disagree again. */
+        playerCancelled: pc,
+        clubCancelled: cc,
+        playerCancelledAt: playerCancelledAt.get(m.api_id as number) ?? null,
+        state: deriveMatchState({ playerCancelled: pc, clubCancelled: cc, upcoming }),
       } satisfies MirrorRow;
     });
   } catch (e) {

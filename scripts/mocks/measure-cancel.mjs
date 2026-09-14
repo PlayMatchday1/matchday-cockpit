@@ -19,25 +19,37 @@ ok(errs.length===0, `no script errors${errs.length?': '+errs[0]:''}`);
 await go('before');
 ok(await T(R(1)+' [data-testid="badge"]')==='WE CANCELLED',
   'today the row says only WE CANCELLED, on a booking the player had already pulled');
-ok(!/they cancelled/i.test(await T(R(1))), '  and his own cancellation appears nowhere on the row');
+ok(!/cancelled/i.test((await T(R(1))).replace('WE CANCELLED','')), '  and his own cancellation appears nowhere on the row');
 ok(await p.$eval(R(1), e=>e.dataset.state)==='club_cancelled', '  CONTROL: one state, one winner');
 
 await go('after');
 ok(await T(R(1)+' [data-testid="badge"]')==='BOTH CANCELLED',
   'both facts now survive on the badge');
-ok(/they cancelled Sep 11/.test(await T(R(1))),
-  `and the date we actually hold is on the row: "${(await T(R(1))).slice(0,74)}…"`);
+// ══ 1b. THE TIME, BECAUSE THE TIME IS WHAT DECIDES THE CREDIT ════════════════
+// "Sep 11" does not answer a billing question. How close to kickoff he pulled out
+// does, and playerProfile.ts:116 already computes exactly this for strike logs.
+const cx1 = await T(R(1)+' [data-testid="cx"]');
+ok(/25\.8h before kickoff/.test(cx1), `the row leads with the hours to kickoff: "${cx1}"`);
+ok(/Sep 11, 5:12 PM/.test(cx1), '  and the clock time at the pitch, not in UTC');
+ok(cx1.indexOf('25.8h') < cx1.indexOf('Sep 11'), '  CONTROL: hours first, timestamp second');
 ok(await p.$eval(R(1), e=>e.dataset.state)==='both_cancelled', '  the row carries both, not a winner');
+
+// A CANCEL WITH NO TIMESTAMP SAYS SO RATHER THAN GUESSING ONE.
+const cx5 = await T(R(5)+' [data-testid="cx"]');
+ok(/Time not recorded/.test(cx5), `a cancel the mirror has no timestamp for says so: "${cx5}"`);
+ok(!/0h|NaN|Invalid/.test(cx5), '  CONTROL: and never invents a zero or an NaN');
 
 // ══ 2. THE THREE SINGLE CASES STAY DISTINGUISHABLE ═══════════════════════════
 // A badge that says "both" is only useful if it cannot be confused with either.
 ok(await T(R(2)+' [data-testid="badge"]')==='WE CANCELLED', 'CONTROL: a match we alone called off still says WE CANCELLED');
-ok(!/they cancelled/i.test(await T(R(2))), '  CONTROL: with no player date, because there is none');
+ok(await p.$(R(2)+' [data-testid="cx"]')===null, '  CONTROL: and carries no cancel line, because the player did not');
 ok(await T(R(3)+' [data-testid="badge"]')==='THEY CANCELLED', 'CONTROL: a player who alone pulled out still says THEY CANCELLED');
-ok(/they cancelled Aug 28/.test(await T(R(3))), '  CONTROL: with his date');
+const cx3 = await T(R(3)+' [data-testid="cx"]');
+ok(/1\.5h before kickoff/.test(cx3), `CONTROL: a LATE cancel reads as ninety minutes, not "Aug 29": "${cx3}"`);
+ok(/Aug 29, 5:30 PM/.test(cx3), '  CONTROL: in the pitch\'s clock');
 ok(await T(R(4)+' [data-testid="badge"]')==='PLAYED', 'CONTROL: a played match is untouched');
 const states = await p.$$eval('[data-testid="row"]', es=>es.map(e=>e.dataset.state));
-ok(new Set(states).size===4, `all four rows are in different states: ${JSON.stringify(states)}`);
+ok(new Set(states).size===4, `the states in play: ${JSON.stringify(states)}`);
 // colour is on top of the words, never instead of them
 const cBoth = await p.$eval(R(1)+' [data-testid="badge"]', e=>getComputedStyle(e).backgroundColor);
 const cClub = await p.$eval(R(2)+' [data-testid="badge"]', e=>getComputedStyle(e).backgroundColor);

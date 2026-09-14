@@ -38,6 +38,10 @@
   .l1{display:block;font-weight:650;overflow-wrap:anywhere}
   .l2{display:block;font-size:11.5px;color:var(--ink3);overflow-wrap:anywhere;margin-top:2px}
   .l2 b{color:var(--ink2);font-weight:700}
+  /* ITS OWN LINE, not a tail on the date. It is the sentence an operator reads
+     out loud while the player is on the phone. */
+  .cx{display:block;margin-top:3px;font-size:12px;line-height:1.35;color:var(--amb)}
+  .cx b{font-weight:800}
   .mid{display:block;text-align:center;font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--ink2)}
   .num{display:block;text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
   .unk{color:var(--ink3);font-weight:600;cursor:help}
@@ -102,20 +106,46 @@ playerCancelledAt: string | null</code>
 
 <script>
 const money = n => n == null ? null : "$" + Number(n).toFixed(2);
-const fmt = s => new Date(s + "T00:00:00Z").toLocaleDateString("en-US",{timeZone:"UTC",month:"short",day:"numeric"});
+/* ── THE PITCH'S WALL CLOCK, DERIVED FROM WHAT IS ALREADY THERE ──────────────
+ * canceled_at is a true instant. start_date is the wall clock at the pitch
+ * carrying a Z it does not mean; start_date_utc is the same kickoff as an
+ * instant. Their difference IS the venue's UTC offset for that match, so adding
+ * it to canceled_at and printing in UTC gives the cancel in the pitch's own
+ * clock. Good to the minute unless the cancel and the kickoff sit on opposite
+ * sides of a DST change, where it is an hour out and the hours-before number
+ * below is unaffected. */
+const venueOffset = r => Date.parse(r.startLocal) - Date.parse(r.startUtc);
+const fmtAt = (iso, r) => new Date(Date.parse(iso) + venueOffset(r))
+  .toLocaleString("en-US",{timeZone:"UTC",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"});
+/* THE NUMBER THAT DECIDES THE MONEY, and it needs no timezone at all: two
+ * instants subtracted. playerProfile.ts:116 already computes exactly this for
+ * strike logs, and PlayerLookup.tsx:998 already prints it. It has simply never
+ * reached the match row, which is why a NON-MEMBER's timing is invisible. */
+const hoursBefore = (iso, r) =>
+  Math.round(((Date.parse(r.startUtc) - Date.parse(iso)) / 3600e3) * 10) / 10;
 
 /* The row Ryan opened, plus the three it has to stay distinguishable from.
    `playerCancelledAt` comes from mdapi_match_players.canceled_at, a column that
    exists and that nothing in this path selects today. */
 const ROWS = [
+  // Ann Richards, 7pm Central. startLocal is the wall clock; startUtc the instant.
   { id:1, name:"Ann Richards", when:"Sep 12, 2026, 7:00 PM", price:null, mirrorOnly:true,
-    player:true, playerAt:"2026-09-11", club:true },
+    startLocal:"2026-09-12T19:00:00Z", startUtc:"2026-09-13T00:00:00Z",
+    player:true, playerAt:"2026-09-11T22:12:00Z", club:true },
   { id:2, name:"Parmer Stadium", when:"Sep 5, 2026, 8:00 PM", price:null, mirrorOnly:true,
+    startLocal:"2026-09-05T20:00:00Z", startUtc:"2026-09-06T01:00:00Z",
     player:false, playerAt:null, club:true },
+  // A LATE ONE. Ninety minutes out is the case where the hours matter most.
   { id:3, name:"Westlake", when:"Aug 29, 2026, 7:00 PM", price:25.98, mirrorOnly:false,
-    player:true, playerAt:"2026-08-28", club:false },
+    startLocal:"2026-08-29T19:00:00Z", startUtc:"2026-08-30T00:00:00Z",
+    player:true, playerAt:"2026-08-29T22:30:00Z", club:false },
   { id:4, name:"Crossbar Rowlett", when:"Aug 22, 2026, 9:00 PM", price:25.98, mirrorOnly:false,
+    startLocal:"2026-08-22T21:00:00Z", startUtc:"2026-08-23T02:00:00Z",
     player:false, playerAt:null, club:false },
+  // CANCELLED, BUT THE MIRROR HAS NO TIMESTAMP. Says so rather than guessing.
+  { id:5, name:"NEMP", when:"Aug 15, 2026, 8:00 PM", price:null, mirrorOnly:true,
+    startLocal:"2026-08-15T20:00:00Z", startUtc:"2026-08-16T01:00:00Z",
+    player:true, playerAt:null, club:false },
 ];
 
 /* ── BEFORE: mirrorHistory's rule, which is deliberate and commented ──────────
@@ -141,8 +171,19 @@ function render(){
     /* THE SECOND LINE CARRIES THE DATE WE ACTUALLY HAVE. We hold canceled_at for
        the booking. mdapi_matches carries no cancel timestamp anywhere in this
        codebase, so the row never claims who went first. */
-    const extra = (mode === "after" && r.player && r.playerAt)
-      ? ` · <b>they cancelled ${fmt(r.playerAt)}</b>` : "";
+    /* HOURS FIRST, CLOCK SECOND. "Sep 11" does not answer a credit question;
+       "25.8h before kickoff" does, and it is the same number the strike block
+       already shows members. */
+    let cx = "";
+    if (mode === "after" && r.player){
+      if (r.playerAt){
+        const h = hoursBefore(r.playerAt, r);
+        const rel = h >= 0 ? `<b>${h}h before kickoff</b>` : `<b>${Math.abs(h)}h after kickoff</b>`;
+        cx = `<span class="cx" data-testid="cx">They cancelled ${rel} · ${fmtAt(r.playerAt, r)}</span>`;
+      } else {
+        cx = `<span class="cx" data-testid="cx">They cancelled. <b>Time not recorded</b> in the mirror.</span>`;
+      }
+    }
     /* $0.00 IS A CLAIM ABOUT MONEY. mergeHistory's own comment says so and then
        sets price: 0 anyway, so a mirror row prints $0.00 while Stripe below it
        shows the charge that settled. Unknown prints as unknown. */
@@ -151,7 +192,7 @@ function render(){
       : `<span class="mid">${money(r.price ?? 0)}</span>`;
     el.innerHTML = `
       <span class="mtitle"><span class="l1">${r.name}</span>
-        <span class="l2">${r.when}${r.mirrorOnly ? " · from our mirror" : ""}${extra}</span></span>
+        <span class="l2">${r.when}${r.mirrorOnly ? " · from our mirror" : ""}</span>${cx}</span>
       <span class="st ${st}" data-testid="badge">${LABEL[st].toUpperCase()}</span>
       <span class="mid c-team"></span>
       <span class="num" data-testid="amt">${amt}</span>`;
@@ -159,7 +200,7 @@ function render(){
   }
   document.querySelector('[data-testid="foot"]').innerHTML = mode === "before"
     ? `A match we called off reports as <b>WE CANCELLED</b> whatever the booking says, so a player who pulled out first looks like someone we let down.`
-    : `<b>Both cancelled</b> means he pulled out and the match was also called off. We hold the date he cancelled; we do not hold the date we did, so this never says who went first. A price of <b>not in the mirror</b> means the mirror does not carry what the booking cost, not that it was free. The Stripe payments below are what actually moved.`;
+    : `<b>Both cancelled</b> means he pulled out and the match was also called off. We hold the time he cancelled; we do not hold the time we did, so this never says who went first. A price of <b>not in the mirror</b> means the mirror does not carry what the booking cost, not that it was free. The Stripe payments below are what actually moved.`;
 }
 
 function show(s){

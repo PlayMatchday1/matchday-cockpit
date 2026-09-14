@@ -53,7 +53,9 @@ type ProfileMatch = {
   startDate: string | null;
   /** TRUE INSTANT — orders the list. Never formatted as a date. */
   startDateUtc: string | null;
-  price: number; charged: number | null; userStatus: string | null;
+  /* NULL MEANS UNKNOWN, NOT FREE — a mirror-only row carries no booking price. This pane never
+   * renders it (chargeLabel reads the Stripe charge), but the type must not claim a zero. */
+  price: number | null; charged: number | null; userStatus: string | null;
   state: MatchState; mirrorOnly: boolean; charge?: ChargeOnRow | null;
 };
 type PaymentRow = {

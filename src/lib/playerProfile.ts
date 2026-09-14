@@ -15,7 +15,8 @@ import "server-only";
 
 import type { MatchdayEnv } from "@/lib/matchdayStageApi";
 import {
-  attachCharges, mergeHistory, type ChargeLike, type HistoryRow, type MatchState, type MirrorRow,
+  attachCharges, deriveMatchState, hoursBeforeKickoff, mergeHistory,
+  type ChargeLike, type HistoryRow, type MatchState, type MirrorRow,
 } from "@/lib/matchHistory";
 
 const str = (v: unknown) => (typeof v === "string" ? v : v == null ? null : String(v));
@@ -87,7 +88,12 @@ export async function buildProfile(args: {
       price: num(um.amount) ?? num(m.registrationPrice) ?? 0,   // base spot price
       charged: num(um.totalAmount),                              // what Stripe actually took (base + card fee − credit); may differ from price
       userStatus: str(um.userStatus),                            // attendance/reason enum (NO_SHOW etc.)
-      state: (playerCancelled ? "player_cancelled" : clubCancelled ? "club_cancelled" : upcoming ? "upcoming" : "played") as MatchState,
+      /* BOTH FACTS SURVIVE, and the state comes from the SHARED derivation. This used to give the
+       * player precedence while mirrorHistory gave the club precedence — same player, same match,
+       * two sources, two answers, and the operator saw whichever row survived the merge. */
+      playerCancelled, clubCancelled,
+      playerCancelledAt: str(um.canceledAt) ?? null,
+      state: deriveMatchState({ playerCancelled, clubCancelled, upcoming }),
       removable: upcoming, // only a future booking can be pulled
       mirrorOnly: false,
     } satisfies HistoryRow;
@@ -113,8 +119,10 @@ export async function buildProfile(args: {
     const m = (um?.match as Record<string, unknown>) ?? {};
     const kickoff = str(m.startDateUtc) ?? str(m.startDate);
     const canceledAt = um ? str(um.canceledAt) : null;
-    const hoursBefore = canceledAt && kickoff && Number.isFinite(Date.parse(canceledAt)) && Number.isFinite(Date.parse(kickoff))
-      ? Math.round(((Date.parse(kickoff) - Date.parse(canceledAt)) / 3600e3) * 10) / 10 : null;
+    /* THE SAME FUNCTION THE MATCH ROW USES. This computation lived only here, and the Strikes
+     * block it feeds says "Members only", so for a non-member the number existed nowhere on the
+     * screen. It is one function now, called from both. */
+    const hoursBefore = hoursBeforeKickoff(kickoff, canceledAt);
     return {
       penaltyPoint: num(l.penaltyPoint) ?? 1, active: l.active === true,
       reason: um ? str(um.userStatus) : null,

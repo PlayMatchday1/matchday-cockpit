@@ -21,7 +21,7 @@ import PlayerFinder from "./PlayerFinder";
 import MatchManagersPanel from "./MatchManagersPanel";
 import MatchManagerRosterCard from "./MatchManagerRosterCard";
 import { validateAdjustment, fmtUsd, MAX_ADJUSTMENT_CENTS, REASON_REQUIRED } from "@/lib/creditsModel";
-import { MATCH_STATE_LABEL, attachCharges, chargeLabel, isCancelled, type ChargeOnRow, type MatchState } from "@/lib/matchHistory";
+import { MATCH_STATE_LABEL, atPitchClock, attachCharges, chargeLabel, hoursBeforeKickoff, isCancelled, type ChargeOnRow, type HistoryRow as MatchHistoryRow, type MatchState } from "@/lib/matchHistory";
 import { useDockSubject } from "@/lib/useDockSubject";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { envBadge } from "@/lib/matchEnvBadge";
@@ -49,7 +49,9 @@ async function authFetch(path: string, init?: RequestInit): Promise<Response> {
 
 // ---- types (mirror the lookup route) ----
 type SearchRow = { id: number; name: string; email: string | null; phone: string | null; city: string | null; status: "expelled" | "suspended" | "ok"; hasMembership: boolean };
-type MatchRow = { umId: number | null; matchId: number | null; name: string; startDate: string | null; startDateUtc: string | null; team: number | null; num: number | null; price: number; charged: number | null; userStatus: string | null; state: MatchState; removable: boolean; mirrorOnly: boolean; charge?: ChargeOnRow | null };
+/* ONE TYPE, NOT A HAND-COPY OF ONE. This was a structural duplicate of HistoryRow that had to be
+ * kept in step by hand, and it stopped being in step the moment HistoryRow gained a field. */
+type MatchRow = MatchHistoryRow;
 type MatchBucket = "all" | "upcoming" | "played" | "noshow" | "cancelled";
 // Single source of truth for the header facts AND the filter chips, so they can never
 // disagree. state partitions into upcoming/played/cancelled; no-show is carved out of
@@ -58,6 +60,38 @@ type MatchBucket = "all" | "upcoming" | "played" | "noshow" | "cancelled";
  * are unchanged by the split — a fifth chip would move numbers the last brief says must not move —
  * while the row itself now distinguishes "he cancelled" from "we cancelled", which is the
  * distinction an operator needs during a billing question. */
+/* ── THE CANCELLATION SENTENCE ────────────────────────────────────────────────────────────────
+ * "They cancelled 25.8h before kickoff · Sep 11, 5:12 PM".
+ *
+ * THE HOURS NEED NO TIMEZONE — two instants subtracted. THE CLOCK IS THE PITCH'S, recovered from
+ * the offset already in the match's own two date fields, because printing canceled_at raw puts a
+ * Central cancellation five hours out.
+ *
+ * A CANCEL AFTER KICKOFF reads "after kickoff", never a negative number. A cancel with no
+ * timestamp says the time is not recorded: never a zero, never an NaN, never a guess.
+ *
+ * IT SAYS NOTHING ABOUT WHO WENT FIRST. mdapi_matches carries no cancellation timestamp anywhere
+ * in this codebase, only is_cancelled, so we know when HE cancelled and not when WE did. Inferring
+ * an order from updated_at or a sync time would be inventing the one fact the operator is actually
+ * asking about. */
+function cancelLine(m: MatchRow): React.ReactNode {
+  const h = hoursBeforeKickoff(m.startDateUtc, m.playerCancelledAt);
+  if (h == null) {
+    return <>They cancelled <b>time not recorded in the mirror</b></>;
+  }
+  const when = atPitchClock(m.startDate, m.startDateUtc, m.playerCancelledAt);
+  const mag = Math.abs(h).toFixed(1).replace(/\.0$/, "");
+  return (
+    <>
+      They cancelled <b>{mag}h {h < 0 ? "after" : "before"} kickoff</b>
+      {when ? <> · {fmtWhen(when)}</> : null}
+      {/* THE API'S OWN JUDGMENT, NOT THIS SCREEN'S. Whether a cancellation is "late" is the enum's
+          call; the hours are simply reported. */}
+      {m.userStatus === "CANCEL_W_IN_SOME_HOURS" ? <> · <b>API flags this as a late cancel</b></> : null}
+    </>
+  );
+}
+
 function bucketOf(m: MatchRow): Exclude<MatchBucket, "all"> {
   if (isCancelled(m.state)) return "cancelled";
   if (m.state === "upcoming") return "upcoming";
@@ -849,9 +883,23 @@ function MatchHistoryPanel({ matches, counts, canEdit, onOpenMatch, onAdd, onRem
           {fmtWhen(m.startDate)}{m.team != null ? ` · T${m.team}` : ""}{m.num != null ? ` · #${m.num}` : ""}
           {/* THE MONEY ON THE ROW. A row with no charge says so; it never says $0.00, because zero
               is a claim about money and this does not know it. */}
-          {" · "}<span data-testid="mrow-charge">{chargeLabel(m) ?? money(m.price)}</span>
+          {/* AN UNKNOWN PRICE PRINTS AS UNKNOWN. A mirror-only row has no booking price, and
+              rendering 0 as "$0.00" directly above a Stripe block reading "$25.98 SUCCEEDED" says
+              "he was not charged", which is exactly backwards in a billing conversation. */}
+          {" · "}<span data-testid="mrow-charge">
+            {chargeLabel(m) ?? (m.price != null ? money(m.price)
+              : <i className="unk" title="Our mirror does not carry what this booking cost. The Stripe payments block below is what he was actually charged.">not in the mirror</i>)}
+          </span>
           {m.mirrorOnly && <span className="mirroronly" title="Our mirror has this booking; the MatchDay API does not send it"> · from our mirror</span>}
         </span>
+        {/* ── HOW CLOSE TO KICKOFF THEY PULLED OUT ────────────────────────────────────────────
+            A date does not answer a billing question. The distance to kickoff does, because it is
+            what decides whether he is owed anything, and it is the difference between "cancelled
+            the day before" and "cancelled ninety minutes out".
+
+            HOURS FIRST, CLOCK SECOND, on its own line rather than as a tail on the date. The clock
+            is the PITCH's, never raw UTC, which would put a Central cancellation five hours out. */}
+        {m.playerCancelled && <span className="l3" data-testid="mrow-cancel">{cancelLine(m)}</span>}
       </span>
       {/* FOUR LABELS FOR FOUR EVENTS. NEITHER CANCELLATION IS RED: a player who pulled out is amber
           because it may carry a strike, and a match we called off is informational — he did nothing
@@ -864,7 +912,8 @@ function MatchHistoryPanel({ matches, counts, canEdit, onOpenMatch, onAdd, onRem
         {m.removable
           ? <button className="rowbtn" data-remove={m.matchId} disabled={!canEdit}
             title={canEdit ? undefined : "Requires EDIT MATCHES"} onClick={() => onRemove(m)}>Remove</button>
-          : <span className="mid">{money(m.price)}</span>}
+          : <span className="mid">{m.price != null ? money(m.price)
+            : <i className="unk" title="Our mirror does not carry what this booking cost. See the Stripe payments block below.">not in the mirror</i>}</span>}
       </span>
     </div>
   );
@@ -1190,8 +1239,8 @@ function RemoveModal({ p, m, canEdit, onClose, onDone }: { p: Profile; m: MatchR
     <Modal title="Remove from match" onClose={onClose}>
       <div className="warn hard"><b>This removes a real person from a real match.</b>
         {p.player.name} · {m.name} · {fmtWhen(m.startDate)}{m.team != null ? ` · team ${m.team}` : ""}{m.num != null ? `, spot ${m.num}` : ""}</div>
-      {m.price > 0 && (
-        <div className="warn"><b>They paid {money(m.price)} for this spot (MatchDay).</b>
+      {(m.price ?? 0) > 0 && (
+        <div className="warn"><b>They paid {money(m.price ?? 0)} for this spot (MatchDay).</b>
           Whether removing them refunds it is UNCONFIRMED — the question is open with the backend. Assume it does not.
           <br /><b>After removing, re-check this player&apos;s Payments panel</b> (live Stripe) to see if a refund appears — this dialog can&apos;t tell you whether it does.</div>
       )}
@@ -1394,7 +1443,10 @@ const CSS = `
 .pl .chip.on b{color:#fff}
 .pl .showmore{display:block;width:calc(100% - 32px);margin:12px 16px;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:10px;font:inherit;font-weight:700;font-size:13px;color:var(--ink2);cursor:pointer;min-height:40px}
 .pl .showmore:hover{background:#f6faf8}
-.pl .mrow{grid-template-columns:minmax(0,1fr) 84px 96px 84px}
+/* THE BADGE COLUMN FITS THE LONGEST LABEL. "BOTH CANCELLED" is longer than anything that was here
+   before and clipped inside the old 84px; a badge that says "BOTH CANCELL" is worse than no badge
+   in a billing conversation. */
+.pl .mrow{grid-template-columns:minmax(0,1fr) 108px 96px 84px}
 .pl .mtitle{display:block;min-width:0;cursor:pointer}
 .pl .mtitle:hover .l1{text-decoration:underline}
 .pl .l1{display:block;font-weight:600;overflow-wrap:anywhere}
@@ -1409,6 +1461,15 @@ const CSS = `
    did nothing wrong, and it is the row an operator points at during a billing question. */
 .pl .st.player_cancelled{background:var(--ambbg);color:var(--amb);border-color:var(--ambln)}
 .pl .st.club_cancelled{background:#eef1f8;color:#4a539a;border-color:#dde1f4}
+/* BOTH. Amber, because the player's half is the one that may carry a strike and decide the money.
+   DELIBERATELY NOT club_cancelled's blue and deliberately a shade off player_cancelled's amber, so
+   it can be mistaken for neither single case at a glance. */
+.pl .st.both_cancelled{background:#fdeccd;color:#8a4b00;border-color:#f2d19a}
+/* THE CANCELLATION LINE: its own line under the date, not a tail on it. */
+.pl .l3{display:block;margin-top:2px;font-size:11.5px;color:var(--amb);overflow-wrap:anywhere}
+.pl .l3 b{font-weight:750}
+/* AN UNKNOWN PRICE READS AS UNKNOWN, never as money. */
+.pl .unk{font-style:italic;color:var(--ink3)}
 .pl .mirroronly{color:var(--ink3)}
 .pl .st.late{background:var(--ambbg);color:var(--amb);border-color:var(--ambln)}
 .pl .st.latecancel{background:var(--ambbg);color:var(--amb);border-color:var(--ambln)}
@@ -1497,6 +1558,18 @@ const CSS = `
   .pl .facts{grid-template-columns:repeat(2,minmax(0,1fr))}
   .pl .memgrid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
+/* ── THE MATCH ROW DOES NOT SURVIVE A PHONE AS THREE COLUMNS ──────────────────────────────────
+   84 + 96 + 84 plus gaps and the card's padding needs about 330px before the name gets anything,
+   so at 390 a title like "Ann Richards" was left roughly 60px and set one letter per line. Below
+   560 the row becomes TWO LINES: name and date across the top, badge and amount beneath. The team
+   column is empty on a mirror row anyway and drops out. */
+@media (max-width:559.98px){
+  .pl .mrow{grid-template-columns:minmax(0,1fr) auto;row-gap:7px}
+  .pl .mrow .c-team{display:none}
+  .pl .mrow > :first-child{grid-column:1 / -1}
+  .pl .mrow .st{grid-column:1;justify-self:start}
+  .pl .mrow .num{grid-column:2;justify-self:end}
+}
 @media (max-width:640px){
   .pl .livetag{margin-left:0}
   .pl .res{grid-template-columns:minmax(0,1fr) auto;gap:6px 10px}
@@ -1505,7 +1578,7 @@ const CSS = `
   .pl .res .c-city{display:none}
   .pl .res .rtags{grid-column:2;grid-row:1;order:1}
   .pl .memgrid{grid-template-columns:1fr}
-  .pl .mrow{grid-template-columns:minmax(0,1fr) 76px 84px}
+  .pl .mrow{grid-template-columns:minmax(0,1fr) 104px 84px}
   .pl .mrow .c-team{display:none}
   .pl .srow{grid-template-columns:minmax(0,1fr) 92px 76px}
   .pl .hrow{grid-template-columns:92px minmax(0,1fr) 96px}
