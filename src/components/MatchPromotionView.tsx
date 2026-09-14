@@ -24,11 +24,13 @@ import { useFinanceData } from "@/lib/useFinanceData";
 import { getCancelPatterns } from "@/lib/cancelPatterns";
 import { mostRecentCompletedWeekMonday } from "@/lib/weekWindow";
 import {
-  CHANNELS, CHANNEL_KEYS, NEW_FLAG_LABEL, coverageCaption, coverageStateOf, coverageSummary,
-  isPushOverdue, isPushSent, sentStamp,
-  type ChannelKey, type PromoMatch, type PromoWeek,
+  CHANNELS, NEW_FLAG_LABEL, channelsOn, codeFor, coverageCaption, coverageStateOf, coverageSummary,
+  datedPushes, draftFromPlan, draftToPushes, fmtPushIn, isPushOverdue, isPushSent, leadToKickoff,
+  sentStamp, venueOffsetMs,
+  type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode,
 } from "@/lib/matchPromotion";
 import MarkPushSent from "@/components/MarkPushSent";
+import PushPlanEditor from "@/components/PushPlanEditor";
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -52,46 +54,23 @@ function useIsMobile(): boolean {
   return m;
 }
 
-function fmtPushLocal(iso: string): { day: string; time: string } {
-  const d = new Date(iso);
-  let h = d.getHours();
-  const m = d.getMinutes();
-  const ap = h >= 12 ? "PM" : "AM";
-  h = h % 12 || 12;
-  return { day: DOW[(d.getDay() + 6) % 7], time: `${h}:${String(m).padStart(2, "0")} ${ap}` };
+/** This match's own venue offset, derived from its own wall/UTC pair. Never a map, never a guess. */
+const offsetOf = (m: PromoMatch): number | null => venueOffsetMs(m.startDate ?? null, m.startDateUtc);
+
+/** One push, in whichever clock is on screen. */
+const fmtPush = (m: PromoMatch, p: PromoPush, zone: ZoneMode) => fmtPushIn(p.pushAt, zone, offsetOf(m));
+
+/** The lead time, which is timezone free — two instants subtracted. */
+const leadOf = (m: PromoMatch, p: PromoPush): string => leadToKickoff(p.pushAt, m.startDateUtc)?.text ?? "";
+
+/* THE TILE SUMMARISES, IT DOES NOT LIST SIX LINES. First push, then how many more. A match can now
+ * carry three channels and five dates; printing all of them turns a 96px day cell into a page. */
+function tileSummary(m: PromoMatch, zone: ZoneMode): { first: string; lead: string; more: number } | null {
+  const all = datedPushes(m.plan);
+  if (all.length === 0) return null;
+  const f = fmtPush(m, all[0], zone);
+  return { first: `${f.day} ${f.time}`, lead: leadOf(m, all[0]), more: all.length - 1 };
 }
-
-/** Lead time between the push and kick-off, in the words the tile uses. */
-function leadLabel(pushIso: string, weekStart: string, dayIdx: number, minutes: number): string {
-  const [y, mo, da] = weekStart.split("-").map(Number);
-  const kick = new Date(y, mo - 1, da + dayIdx, Math.floor(minutes / 60), minutes % 60);
-  const diff = kick.getTime() - new Date(pushIso).getTime();
-  if (diff <= 0) return "after kick-off";
-  const h = Math.round(diff / 3600000);
-  if (h < 48) return `${h}h before`;
-  return `${Math.floor(h / 24)}d ${h % 24}h before`;
-}
-
-const dtLocalValue = (iso: string | null): string => {
-  if (!iso) return "";
-  const d = new Date(iso);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
-};
-
-type Draft = {
-  channels: Record<ChannelKey, boolean>;
-  pushAt: string; // datetime-local value; "" = needs a decision
-  promoCode: string;
-};
-
-const draftFrom = (m: PromoMatch): Draft => ({
-  channels: Object.fromEntries(
-    CHANNEL_KEYS.map((k) => [k, m.plan?.channels[k] === true]),
-  ) as Record<ChannelKey, boolean>,
-  pushAt: dtLocalValue(m.plan?.pushAt ?? null),
-  promoCode: m.plan?.promoCode ?? "",
-});
 
 export default function MatchPromotionView() {
   const [week, setWeek] = useState<PromoWeek | null>(null);
@@ -104,7 +83,11 @@ export default function MatchPromotionView() {
   const isMobile = useIsMobile();
   const [weekRef, setWeekRef] = useState("");
   const [openId, setOpenId] = useState<number | null>(null);
-  const [draft, setDraft] = useState<Draft | null>(null);
+  const [draft, setDraft] = useState<PushDraft | null>(null);
+  /* THE ZONE IS PAGE STATE, NOT PANEL STATE. The strip, the tiles and the editor all print push
+   * instants, and three of them disagreeing about which clock they are in is the failure this
+   * whole feature exists to prevent. The CONTROL lives in the editor; the ANSWER lives here. */
+  const [zone, setZone] = useState<ZoneMode>("me");
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ msg: string; bad: boolean } | null>(null);
 
@@ -147,7 +130,7 @@ export default function MatchPromotionView() {
   }
 
   function openMatch(m: PromoMatch, el: HTMLElement) {
-    anchor(el, () => { setOpenId(m.apiId); setDraft(draftFrom(m)); });
+    anchor(el, () => { setOpenId(m.apiId); setDraft(draftFromPlan(m.plan)); });
   }
 
   function closePanel() {
@@ -168,18 +151,13 @@ export default function MatchPromotionView() {
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({
           matchApiId: open.apiId,
-          channels: draft.channels,
-          // "" means NEEDS A DECISION, and must reach the route as null so it stores SQL NULL. An
-          // empty string here would be a third state nothing knows how to render.
-          pushAt: draft.pushAt === "" ? null : new Date(draft.pushAt).toISOString(),
-          promoCode: draft.promoCode,
-          /* match_promotion_plan.comment IS NO LONGER WRITTEN. Comments are one attributed list for
-           * the page (slate_notes kind='comment'), not a single unowned string per plan that
-           * whoever saved last overwrote. The column is left in place and never sent — measured
-           * 2026-08-25, it had never held a value: 2 plan rows, 0 comments, 9 audit entries, none
-           * setting one. It is not rendered either; an unreachable read-only fallback guarding a
-           * case that has never occurred is a thing someone deletes in six months wondering what
-           * it was for. */
+          /* THE COMPLETE SET, EVERY CHANNEL. The route replaces this match's rows with exactly
+           * this list, so a channel left out is a channel deleted — which is what turning one off
+           * means. Sending a diff instead would make "off" unrepresentable. */
+          pushes: draftToPushes(draft),
+          /* match_promotion_plan.comment IS NO LONGER WRITTEN, and from 0176 neither are its six
+           * booleans, push_at, promo_code, pushed_at or pushed_by. They are inert. A column
+           * nothing reads and something still writes is exactly the drift 0176 exists to end. */
         }),
       });
       const json = (await res.json()) as { outcome?: string; error?: string };
@@ -208,19 +186,19 @@ export default function MatchPromotionView() {
   };
 
   /* ── the numbers in the strip, derived from the SAME array the strip renders ─────────────── */
+  /* ONE ENTRY PER PUSH, NOT PER MATCH. A match with three pushes is three lines of work, each with
+   * its own time, its own topic and its own sent state — which is the whole point of 0176. */
   const jobs = useMemo(() => {
     if (!week) return [];
     return week.matches
-      .filter((m) => m.plan?.pushAt)
-      .map((m) => ({ m, at: new Date(m.plan!.pushAt!).getTime() }))
+      .flatMap((m) => datedPushes(m.plan).map((p) => ({ m, p, at: Date.parse(p.pushAt!) })))
       .sort((a, b) => a.at - b.at);
   }, [week]);
   const now = Date.now();
-  /* OVERDUE IS push_at IN THE PAST AND NOT YET SENT. It used to be the first half alone, which is
-   * why a push that went out at noon was still red at midnight. The rule lives in matchPromotion
-   * so this strip and the phone's Due list cannot drift. */
-  const overdue = jobs.filter((j) => isPushOverdue(j.m.plan, now)).length;
-  const sentCount = jobs.filter((j) => isPushSent(j.m.plan)).length;
+  /* OVERDUE IS push_at IN THE PAST AND NOT YET SENT, PER PUSH. Marking the WhatsApp one sent
+   * leaves the Klaviyo one overdue, because they are separate rows with separate stamps. */
+  const overdue = jobs.filter((j) => isPushOverdue(j.p, now)).length;
+  const sentCount = jobs.filter((j) => isPushSent(j.p)).length;
   const noPlan = week?.matches.filter((m) => m.state === "none").length ?? 0;
 
   // THE PHONE'S CANCEL RANKING — the desktop matrix's own numbers, flattened and ordered. 1-of-4
@@ -255,7 +233,7 @@ export default function MatchPromotionView() {
         onOpen={openMatch} onClose={closePanel} onSave={() => void save()}
         saving={saving} toast={toast}
         onNav={(d) => void nav(d)} weekLabel={weekLabel(week)}
-        fmtPush={fmtPushLocal} leadLabel={leadLabel}
+        zone={zone} setZone={setZone} onError={(msg) => setToast({ msg, bad: true })}
         ranking={ranking} rankingReady={rankReady} rankingTotal={rankTotal}
       />
     );
@@ -294,8 +272,8 @@ Which matches get promoted, on which channels, and when the push goes out.
 
         {!week.planTableReady && (
           <div className="mx-5 mb-4 rounded-[11px] border border-amber-300 bg-amber-50 px-3.5 py-2.5 text-[12.5px] text-amber-900">
-            <b>match_promotion_plan is not in the database yet.</b> Every match reads as “no plan”
-            until migration 0128 is applied. Saving will refuse rather than pretend.
+            <b>match_promotion_push is not in the database yet.</b> Every match reads as “no plan”
+            until migration 0176 is applied. Saving will refuse rather than pretend.
           </div>
         )}
 
@@ -313,36 +291,41 @@ Which matches get promoted, on which channels, and when the push goes out.
           </div>
           <div className="flex flex-wrap gap-2" data-testid="jobs">
             {jobs.length === 0 && <span className="text-[12px] text-deep-green/40">Nothing scheduled this week.</span>}
-            {jobs.map(({ m }) => {
+            {jobs.map(({ m, p }) => {
               /* THREE ROWS, THREE LOOKS, and the label carries it too so colour is never the only
                  signal. A SENT row goes QUIET, NOT AWAY: Ryan asked for "they still show so
                  everyone has visibility", so the red drops, the time is struck through and the
-                 channel chips grey out, but the row stays exactly where it was. */
-              const sent = isPushSent(m.plan);
-              const late = isPushOverdue(m.plan, now);
-              const p = fmtPushLocal(m.plan!.pushAt!);
+                 channel chip greys out, but the row stays exactly where it was. */
+              const sent = isPushSent(p);
+              const late = isPushOverdue(p, now);
+              const t = fmtPush(m, p, zone);
+              const chan = CHANNELS.find((c) => c.key === p.channel);
               return (
-                <div key={m.apiId} data-testid="job" data-sent={sent ? "1" : "0"} data-late={late ? "1" : "0"}
+                <div key={p.id} data-testid="job" data-push-id={p.id} data-channel={p.channel}
+                  data-sent={sent ? "1" : "0"} data-late={late ? "1" : "0"}
                   className={`flex flex-wrap items-center gap-2.5 rounded-[9px] border px-2.5 py-[7px] text-[12.5px] ${
                     sent ? "border-cream-line bg-[#f4f7f5]"
                       : late ? "border-coral/40 bg-coral-soft/40" : "border-cream-line bg-white"}`}>
                   <span className={`whitespace-nowrap text-[12.5px] font-extrabold ${
                     sent ? "text-deep-green/45 line-through" : late ? "text-coral" : ""}`}>
-                    {late ? "Overdue · " : ""}{p.day} {p.time}
+                    {late ? "Overdue · " : ""}{t.day} {t.time}
                   </span>
                   <span className={sent ? "text-deep-green/45" : "text-deep-green/65"}>{m.venue} · {DOW[m.dayIdx]} {m.time}</span>
-                  {/* ONLY LIT CHANNELS HERE. In a worklist an unsent channel is not work. */}
-                  <span className="flex flex-wrap gap-[3px]">
-                    {CHANNELS.filter((c) => m.plan!.channels[c.key]).map((c) => (
-                      <i key={c.key} className={`inline-flex h-[18px] min-w-[24px] items-center justify-center rounded-[5px] border px-1 text-[9.5px] font-extrabold not-italic ${
-                        sent ? "border-cream-line bg-[#eef3f0] text-deep-green/40"
-                          : "border-mint/40 bg-mint-soft/40 text-emerald-700"}`}>{c.short}</i>
-                    ))}
-                  </span>
+                  {/* ONE CHIP: this line IS one channel now, so a row of six would be a lie. */}
+                  <i data-testid="job-chan" className={`inline-flex h-[18px] min-w-[24px] items-center justify-center rounded-[5px] border px-1 text-[9.5px] font-extrabold not-italic ${
+                    sent ? "border-cream-line bg-[#eef3f0] text-deep-green/40"
+                      : "border-mint/40 bg-mint-soft/40 text-emerald-700"}`}>{chan?.short ?? p.channel}</i>
+                  {/* THE TOPIC IS WHAT TELLS TWO PUSHES ON ONE MATCH APART. Without it a three-push
+                      match is three identical rows at three times. */}
+                  {p.topic && (
+                    <span data-testid="job-topic" className={`min-w-0 truncate text-[12px] ${sent ? "text-deep-green/40" : "text-deep-green/55"}`}>
+                      {p.topic}
+                    </span>
+                  )}
                   {/* WHO AND WHEN, on the row. The point of leaving it visible is that somebody
                       else can see it was handled and by whom. */}
-                  {sent && <span data-testid="job-stamp" className="text-[11.5px] text-deep-green/45">{sentStamp(m.plan!)}</span>}
-                  <MarkPushSent m={m} onDone={() => load(weekRef)}
+                  {sent && <span data-testid="job-stamp" className="text-[11.5px] text-deep-green/45">{sentStamp(p)}</span>}
+                  <MarkPushSent push={p} onDone={() => load(weekRef)}
                     onError={(msg) => setToast({ msg, bad: true })} />
                 </div>
               );
@@ -357,57 +340,17 @@ Which matches get promoted, on which channels, and when the push goes out.
           placeholder="Suggestion about this week — anyone reviewing can add one" />
 
         {tab === "coverage"
-          ? <Coverage week={week} />
+          ? <Coverage week={week} zone={zone} />
           : <Plan week={week} byCity={byCity} openId={openId} onOpen={openMatch}
-                   openCity={open?.city ?? null}
+                   openCity={open?.city ?? null} zone={zone}
                    panel={tab === "plan" && open && draft ? (
             <div className="mb-4 rounded-xl border border-cream-line bg-[#fbfdfc] px-[13px] pb-[9px] pt-[9px]" data-testid="panel">
               <div className="mb-1.5 flex items-baseline gap-2">
                 <h3 className="m-0 text-[13.5px] font-extrabold">{open.venue} · {DOW[open.dayIdx]} {open.time}</h3>
                 <span className="text-[11.5px] font-bold text-deep-green/45">{open.city}</span>
               </div>
-              <div className="grid grid-cols-1 overflow-hidden rounded-[10px] border border-cream-line bg-white md:grid-cols-[1.15fr_1fr_1fr]">
-                <div className="border-b border-cream-line px-[13px] pb-[9px] pt-[9px] md:border-b-0 md:border-r">
-                  <div className="mb-1 text-[9px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Channels</div>
-                  <div className="flex flex-col gap-[3px]">
-                    {CHANNELS.map((c) => (
-                      // The input stays a real checkbox — visually hidden, not replaced — so the
-                      // control is still keyboard-reachable and still reports checked state.
-                      <label key={c.key} data-testid={`ch-${c.key}`}
-                        className="flex cursor-pointer items-center gap-2 text-[12.5px] font-semibold leading-none text-deep-green/70">
-                        <input type="checkbox" className="peer sr-only" checked={draft.channels[c.key]}
-                          onChange={(e) => setDraft({ ...draft, channels: { ...draft.channels, [c.key]: e.target.checked } })} />
-                        <span className="relative h-[17px] w-[30px] flex-none rounded-full bg-[#e6eae8] transition after:absolute after:left-0.5 after:top-0.5 after:h-[13px] after:w-[13px] after:rounded-full after:bg-white after:shadow-sm after:transition peer-checked:bg-mint peer-checked:after:left-[15px]" />
-                        {c.label}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="border-b border-cream-line px-[13px] pb-[9px] pt-[9px] md:border-b-0 md:border-r">
-                  <div className="mb-1 text-[9px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Push</div>
-                  <div className="mb-[7px] flex items-center gap-2">
-                    <label className="w-12 flex-none text-[12px] font-bold text-deep-green/45">When</label>
-                    <input type="datetime-local" data-testid="push-at" value={draft.pushAt}
-                      onChange={(e) => setDraft({ ...draft, pushAt: e.target.value })}
-                      className="rounded-[7px] border border-cream-line px-2 py-1 text-[12.5px] font-bold" />
-                    {/* The lead time is a fragment, not a sentence and not a box. */}
-                    <span data-testid="lead"
-                      className={`whitespace-nowrap text-[11px] font-bold ${draft.pushAt ? "text-deep-green/45" : "text-amber-700"}`}>
-                      {draft.pushAt
-                        ? leadLabel(new Date(draft.pushAt).toISOString(), week.weekStart, open.dayIdx, open.minutes)
-                        : "needs a decision"}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <label className="w-12 flex-none text-[12px] font-bold text-deep-green/45">Code</label>
-                    <input type="text" data-testid="promo-code" value={draft.promoCode} placeholder="none"
-                      onChange={(e) => setDraft({ ...draft, promoCode: e.target.value })}
-                      className="w-[132px] rounded-[7px] border border-cream-line px-2 py-1 text-[12.5px] font-bold" />
-                  </div>
-                </div>
-
-              </div>
+              {/* ONE EDITOR, SHARED WITH THE PHONE. Not a desktop copy of a channel block. */}
+              <PushPlanEditor m={open} draft={draft} setDraft={setDraft} zone={zone} setZone={setZone} />
               <div className="mt-2 flex items-center gap-3">
                 <button onClick={() => void save()} disabled={saving} data-testid="save"
                   className="rounded-full bg-deep-green px-[15px] py-1 text-[12.5px] font-extrabold text-white disabled:opacity-50">
@@ -450,8 +393,8 @@ function weekLabel(w: PromoWeek): string {
 }
 
 /* ── THE WEEK ───────────────────────────────────────────────────────────────────────────────── */
-function Plan({ week, byCity, openId, onOpen, openCity, panel }: {
-  week: PromoWeek; byCity: [string, PromoMatch[]][]; openId: number | null;
+function Plan({ week, byCity, openId, onOpen, openCity, zone, panel }: {
+  week: PromoWeek; byCity: [string, PromoMatch[]][]; openId: number | null; zone: ZoneMode;
   onOpen: (m: PromoMatch, el: HTMLElement) => void;
   // THE PANEL OPENS INLINE, UNDER THE CITY WHOSE TILE WAS CLICKED — not at the foot of the page.
   // Rendering it once at page level meant clicking an Atlanta match scrolled you past every other
@@ -503,7 +446,7 @@ function Plan({ week, byCity, openId, onOpen, openCity, panel }: {
                       <span>{d.dow}</span><b className="text-[12.5px] tracking-normal text-deep-green/65">{d.date}</b>
                     </div>
                     {dayMatches.length === 0 && <div className="pt-1.5 text-[11.5px] text-deep-green/30">No sessions</div>}
-                    {dayMatches.map((m) => <Tile key={m.apiId} m={m} open={m.apiId === openId} onOpen={onOpen} weekStart={week.weekStart} priorLabel={priorLabel} />)}
+                    {dayMatches.map((m) => <Tile key={m.apiId} m={m} open={m.apiId === openId} onOpen={onOpen} zone={zone} priorLabel={priorLabel} />)}
                   </div>
                 );
               })}
@@ -514,6 +457,14 @@ function Plan({ week, byCity, openId, onOpen, openCity, panel }: {
       })}
     </>
   );
+}
+
+/** The first push on a covered day, in the clock on screen. */
+function coverFirst(m: PromoMatch, zone: ZoneMode): string {
+  const first = datedPushes(m.plan)[0];
+  if (!first) return "";
+  const t = fmtPush(m, first, zone);
+  return `${t.day} ${t.time}`;
 }
 
 /* THE TILE SHOWS WHAT IS THERE, AND NOTHING ELSE.
@@ -530,8 +481,11 @@ function Plan({ week, byCity, openId, onOpen, openCity, panel }: {
  * PLANNED TILES STAY DISTINCT BY WEIGHT, NOT BY LABEL. A tile with a plan carries chips and a push
  * line and a solid left rail; a tile without carries a dashed border and almost no ink. The eye
  * finds the planned ones because they are the only ones with anything in them. */
-function Tile({ m, open, onOpen, weekStart, priorLabel }: { m: PromoMatch; open: boolean; onOpen: (m: PromoMatch, el: HTMLElement) => void; weekStart: string; priorLabel: string }) {
-  const lit = CHANNELS.filter((c) => m.plan?.channels[c.key] === true);
+function Tile({ m, open, onOpen, zone, priorLabel }: { m: PromoMatch; open: boolean; onOpen: (m: PromoMatch, el: HTMLElement) => void; zone: ZoneMode; priorLabel: string }) {
+  /* A CHIP PER CHANNEL THAT HAS A PUSH, or is on with none — which is what "on" is now. */
+  const lit = CHANNELS.filter((c) => channelsOn(m.plan).includes(c.key));
+  const code = codeFor(m.plan, lit[0]?.key ?? "wa") ?? lit.map((c) => codeFor(m.plan, c.key)).find(Boolean) ?? null;
+  const summary = tileSummary(m, zone);
   const border =
     m.state === "needs-decision" ? "border-amber-300 bg-amber-50"
     : m.state === "none" ? "border-dashed border-cream-line"
@@ -557,7 +511,7 @@ function Tile({ m, open, onOpen, weekStart, priorLabel }: { m: PromoMatch; open:
       {/* ONLY THE LIT CHANNELS. flex-wrap + min-w-0 still stops the widest chip running off the
           tile edge at seven columns — the failure this layout had before, and the reason the
           overflow measurement in verify-match-promotion is kept. */}
-      {(lit.length > 0 || m.plan?.promoCode) && (
+      {(lit.length > 0 || code) && (
         <div className="mt-[5px] flex min-w-0 flex-wrap items-center gap-1.5">
           {lit.length > 0 && (
             <span className="flex min-w-0 flex-wrap gap-[3px]" data-testid="chipset">
@@ -569,17 +523,20 @@ function Tile({ m, open, onOpen, weekStart, priorLabel }: { m: PromoMatch; open:
               ))}
             </span>
           )}
-          {m.plan?.promoCode && (
+          {code && (
             <span className="rounded-[5px] border border-amber-300 bg-amber-50 px-[5px] py-px text-[9.5px] font-extrabold text-amber-800">
-              {m.plan.promoCode}
+              {code}
             </span>
           )}
         </div>
       )}
       {/* NO "No push planned". An empty tile already says it, and the city header counts it. */}
-      {m.state === "planned" && m.plan?.pushAt && (
+      {summary && (
         <div className="mt-[5px] text-[10px] font-bold text-deep-green/45">
-          Push <b className="text-deep-green/70">{fmtPushLocal(m.plan.pushAt).day} {fmtPushLocal(m.plan.pushAt).time}</b> · {leadLabel(m.plan.pushAt, weekStart, m.dayIdx, m.minutes)}
+          {/* THE FIRST PUSH AND HOW MANY MORE. Not six lines: a match can carry three channels
+              and five dates, and a 96px day cell cannot print them. */}
+          Push <b className="text-deep-green/70">{summary.first}</b> · {summary.lead}
+          {summary.more > 0 && <span data-testid="tile-more"> and <b className="text-deep-green/70">{summary.more}</b> more</span>}
         </div>
       )}
       {m.state === "needs-decision" && (
@@ -601,7 +558,7 @@ function Tile({ m, open, onOpen, weekStart, priorLabel }: { m: PromoMatch; open:
  *
  * THE DISTINCTION THIS VIEW EXISTS FOR IS CARRIED BY CONTENT, NOT COLOUR: an open cell prints a
  * field and a time, an empty one prints a dash. That holds when nothing is coloured at all. */
-function Coverage({ week }: { week: PromoWeek }) {
+function Coverage({ week, zone }: { week: PromoWeek; zone: ZoneMode }) {
   const cities = [...new Set(week.matches.map((m) => m.city))].sort();
   const summary = coverageSummary(week);
   return (
@@ -637,7 +594,7 @@ function Coverage({ week }: { week: PromoWeek }) {
                 <td className="border-b border-cream-line/60 py-1.5 pl-0.5 align-middle text-[12.5px] font-extrabold tracking-[0.03em]">{city}</td>
                 {week.days.map((d, i) => {
                   const dayMatches = week.matches.filter((m) => m.city === city && m.dayIdx === i);
-                  const planned = dayMatches.filter((m) => m.plan?.pushAt);
+                  const planned = dayMatches.filter((m) => datedPushes(m.plan).length > 0);
                   const state = coverageStateOf(dayMatches);
                   if (state === "none") {
                     return <td key={d.iso} data-testid="coverage-day" data-cov="none" className="border-b border-l border-cream-line/60 p-1.5 align-top"><span className="block py-2 text-center text-[13px] text-deep-green/25">—</span></td>;
@@ -666,10 +623,10 @@ function Coverage({ week }: { week: PromoWeek }) {
                         <div key={m.apiId} data-testid="coverage-cell" className="mb-1 rounded-lg border-l-[3px] border-mint bg-mint-soft/60 px-2 py-1.5 last:mb-0">
                           <div className="text-[11.5px] font-extrabold leading-[1.2]">{m.venue}</div>
                           <div className="mb-1 mt-px text-[10.5px] text-deep-green/65">
-                            {m.time} · push {fmtPushLocal(m.plan!.pushAt!).day} {fmtPushLocal(m.plan!.pushAt!).time}
+                            {m.time} · push {coverFirst(m, zone)}
                           </div>
                           <span className="flex flex-wrap gap-[2px]">
-                            {CHANNELS.filter((c) => m.plan!.channels[c.key]).map((c) => (
+                            {CHANNELS.filter((c) => channelsOn(m.plan).includes(c.key)).map((c) => (
                               <i key={c.key} className="inline-flex h-[15px] min-w-[22px] items-center justify-center rounded-[5px] border border-mint/40 bg-mint-soft/40 px-[3px] text-[8.5px] font-extrabold not-italic text-emerald-700">{c.short}</i>
                             ))}
                           </span>

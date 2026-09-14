@@ -114,6 +114,25 @@ export async function refreshMatchMirror(
     patch.manager_last_name = (m?.lastName as string | undefined) ?? null;
     patch.manager_email = (m?.email as string | undefined) ?? null;
   }
+  /* ── THE TRUE INSTANT RIDES ON THE WALL CLOCK ─────────────────────────────────────────────
+   * start_date_utc has no COLUMN entry and can never have one, because it is never a key we
+   * WROTE: `docs/matchday-api-facts.md` is explicit that the *Utc fields are server-derived and
+   * read-only, and that sending one is forbidden. But the server RE-DERIVES it on a startDate
+   * write and returns it on the re-read — proven: "PUT { startDate } +1h moved startDateUtc by
+   * exactly +1h with the field offset preserved (5h, CDT)". So it is copied from `after` the same
+   * way the manager's name rides on managerId.
+   *
+   * WHY IT MATTERS NOW. Match Promotion derives the VENUE'S OWN OFFSET as start_date minus
+   * start_date_utc — that difference IS the offset, and it is what lets a push time render in
+   * "Venue time (Atlanta)" with no city-to-timezone map. Moving a match one hour and mirroring
+   * only the wall clock would leave the pair disagreeing until the nightly cron, and every push
+   * on that match would print an hour out in venue time with nothing on screen to say so. */
+  if (keys.includes("startDate") && "startDateUtc" in after) {
+    patch.start_date_utc = (after.startDateUtc as string | null) ?? null;
+  }
+  if (keys.includes("endDate") && "endDateUtc" in after) {
+    patch.end_date_utc = (after.endDateUtc as string | null) ?? null;
+  }
   /* THE FIELD'S NAME IS DENORMALISED TOO, for exactly the reason the manager's is: Master
    * Schedule renders field_title, so a fieldId change that left it alone would show the new id
    * beside the OLD pitch on the one screen this write-through exists to keep honest. */

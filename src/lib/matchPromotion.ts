@@ -30,43 +30,66 @@ export const CHANNELS = [
 export type ChannelKey = (typeof CHANNELS)[number]["key"];
 export const CHANNEL_KEYS = CHANNELS.map((c) => c.key) as readonly ChannelKey[];
 
-export type PromoPlan = {
+/* ── ONE ROW PER PUSH ─────────────────────────────────────────────────────────────────────────
+ *
+ * Migration 0176. A match has many pushes and a channel has many; each carries its own time, its
+ * own topic and its own sent stamp. Everything on match_promotion_plan that described a SEND — the
+ * six booleans, push_at, promo_code, pushed_at, pushed_by — is INERT from 0176 onward and is read
+ * nowhere. Two sources of truth is how they drift.
+ *
+ * "THIS CHANNEL IS ON" IS "THIS CHANNEL HAS A ROW". There is no boolean left to carry it. A channel
+ * chosen with no date settled is one row with pushAt null, which is 0128's "needs a decision" state
+ * moved down a level: per channel rather than per match. */
+export type PromoPush = {
+  id: number;
   matchApiId: number;
-  channels: Record<ChannelKey, boolean>;
-  pushAt: string | null; // ISO instant, or null = needs a decision
+  channel: ChannelKey;
+  /** ISO instant, or null = the channel is chosen and the time is not settled. */
+  pushAt: string | null;
+  /** What this push is about. Per date, because it varies between dates on one channel. */
+  topic: string | null;
+  /** Per channel in the UI, per row in the table. See 0176. */
   promoCode: string | null;
-  comment: string | null;
-  updatedBy: string | null;
-  updatedAt: string | null;
-  /** When somebody marked the push sent. NULL is "not sent". Migration 0175. */
+  /** When somebody marked THIS push sent. NULL is "not sent". */
   pushedAt: string | null;
   /** Who said so. The same identity updatedBy takes: a person, not a delivery receipt. */
   pushedBy: string | null;
 };
 
-/* ── OVERDUE, IN ONE PLACE ────────────────────────────────────────────────────────────────────
+export type PromoPlan = {
+  matchApiId: number;
+  /** Every push for this match, any channel, sorted by time with the undated last. */
+  pushes: PromoPush[];
+  comment: string | null;
+  updatedBy: string | null;
+  updatedAt: string | null;
+};
+
+/** An unsaved push. `id` is absent until the route writes it. */
+export type DraftPush = { id?: number; channel: ChannelKey; pushAt: string | null; topic: string; promoCode: string };
+
+/* ── OVERDUE, IN ONE PLACE, NOW PER PUSH ──────────────────────────────────────────────────────
  * It used to be `j.at < now` written inline, which is why a push that went out at noon was still
- * red at midnight: there was no column recording the send, so nothing could ever stop being
- * overdue. Both surfaces read this now, so they cannot drift.
+ * red at midnight. Both surfaces read this, so they cannot drift.
  *
- * A PLAN WITH NO push_at IS NOT OVERDUE. NULL there means "needs a decision" (migration 0128), and
- * a decision nobody has made yet is not a deadline anybody has missed. */
-export function isPushOverdue(plan: Pick<PromoPlan, "pushAt" | "pushedAt"> | null | undefined, now = Date.now()): boolean {
-  if (!plan?.pushAt) return false;
-  if (plan.pushedAt) return false;
-  return Date.parse(plan.pushAt) < now;
+ * A PUSH WITH NO push_at IS NOT OVERDUE. NULL means "needs a date", and a decision nobody has made
+ * is not a deadline anybody has missed. */
+export function isPushOverdue(push: Pick<PromoPush, "pushAt" | "pushedAt"> | null | undefined, now = Date.now()): boolean {
+  if (!push?.pushAt) return false;
+  if (push.pushedAt) return false;
+  return Date.parse(push.pushAt) < now;
 }
 
-/** True once somebody has marked it sent. */
-export const isPushSent = (plan: Pick<PromoPlan, "pushedAt"> | null | undefined): boolean =>
-  !!plan?.pushedAt;
+/** True once somebody has marked THIS push sent. Marking one leaves its siblings alone. */
+export const isPushSent = (push: Pick<PromoPush, "pushedAt"> | null | undefined): boolean =>
+  !!push?.pushedAt;
 
 /* "Sent Mon 6:30 PM by Ryan". WHO AND WHEN, because the point of leaving a sent row on the strip is
- * that somebody else can see it was handled and by whom. The local clock, like every other time on
- * this strip. */
-export function sentStamp(plan: Pick<PromoPlan, "pushedAt" | "pushedBy">): string {
-  if (!plan.pushedAt) return "";
-  const d = new Date(plan.pushedAt);
+ * that somebody else can see it was handled and by whom. The reader's own clock, like every other
+ * push time on this page. */
+export function sentStamp(push: Pick<PromoPush, "pushedAt" | "pushedBy">): string {
+  if (!push.pushedAt) return "";
+  const d = new Date(push.pushedAt);
   if (Number.isNaN(d.getTime())) return "Sent";
   const DOWS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   let h = d.getHours();
@@ -74,14 +97,248 @@ export function sentStamp(plan: Pick<PromoPlan, "pushedAt" | "pushedBy">): strin
   const ap = h >= 12 ? "PM" : "AM";
   h = h % 12 || 12;
   /* THE NAME, NOT THE ADDRESS. "social@playmatchday.com" is not who, it is where. */
-  const who = plan.pushedBy ? plan.pushedBy.split("@")[0] : null;
+  const who = push.pushedBy ? push.pushedBy.split("@")[0] : null;
   return `Sent ${DOWS[(d.getDay() + 6) % 7]} ${h}:${mm} ${ap}${who ? ` by ${who}` : ""}`;
 }
 
 /* A PUSH WITH NO TIME CANNOT BE MARKED SENT. There is nothing to have sent, and writing a stamp
- * against it would blur "needs a decision" into "done". */
-export const canMarkSent = (plan: Pick<PromoPlan, "pushAt"> | null | undefined): boolean =>
-  !!plan?.pushAt;
+ * against it would blur "needs a date" into "done". */
+export const canMarkSent = (push: Pick<PromoPush, "pushAt"> | null | undefined): boolean =>
+  !!push?.pushAt;
+
+/* ── READING A PLAN AS CHANNELS ───────────────────────────────────────────────────────────────
+ * Derived, never stored. The editor thinks in channels; the table thinks in pushes. */
+
+/** Every channel with at least one row, in CHANNELS order. */
+export function channelsOn(plan: PromoPlan | null): ChannelKey[] {
+  if (!plan) return [];
+  return CHANNEL_KEYS.filter((k) => plan.pushes.some((p) => p.channel === k));
+}
+
+/** One channel's pushes, dated first by time, undated last. */
+export function pushesFor(plan: PromoPlan | null, channel: ChannelKey): PromoPush[] {
+  return (plan?.pushes ?? []).filter((p) => p.channel === channel).sort(byPushTime);
+}
+
+/** The channel's code: the first non-empty one on its rows. The UI writes them all alike. */
+export function codeFor(plan: PromoPlan | null, channel: ChannelKey): string | null {
+  for (const p of pushesFor(plan, channel)) if (p.promoCode?.trim()) return p.promoCode.trim();
+  return null;
+}
+
+/** Dated pushes only, earliest first. The worklist, the tile summary and coverage all read this. */
+export function datedPushes(plan: PromoPlan | null): PromoPush[] {
+  return (plan?.pushes ?? []).filter((p) => p.pushAt).sort(byPushTime);
+}
+
+/** Undated before nothing: a row with no time sorts to the END, never to 1970. */
+export function byPushTime(a: Pick<PromoPush, "pushAt">, b: Pick<PromoPush, "pushAt">): number {
+  if (!a.pushAt && !b.pushAt) return 0;
+  if (!a.pushAt) return 1;
+  if (!b.pushAt) return -1;
+  return Date.parse(a.pushAt) - Date.parse(b.pushAt);
+}
+
+/* ── TWO CLOCKS, AND THEY OBEY DIFFERENT RULES ────────────────────────────────────────────────
+ *
+ * THE MATCH TIME IS A WALL CLOCK AND NEVER RE-RENDERS. start_date carries a Z it does not mean; it
+ * is printed once, in the pitch's own clock, labelled "at the pitch". Ryan: "The times of the
+ * matches dont change just the push times."
+ *
+ * EVERY push_at IS AN INSTANT AND ALWAYS RE-RENDERS, in the zone of whoever is reading. Teresa in
+ * Madrid and Austin see one push at two clock times, because it IS one moment.
+ *
+ * THE TRAP THIS SECTION EXISTS FOR: <input type="datetime-local"> HAS NO TIMEZONE. Its value is
+ * bare wall-clock characters. Rendering an instant into one and reading it back out are a pair of
+ * shifts, and getting either wrong is silent — every push quietly moves and the input still shows
+ * what you typed. */
+
+/** The reader's own zone, named. Printed on screen, because a time with no zone label is how this
+ *  goes wrong silently. */
+export function readerZoneLabel(): string {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "your device"; }
+  catch { return "your device"; }
+}
+
+/**
+ * THE VENUE'S OWN OFFSET FOR THAT DATE, in milliseconds, derived rather than looked up.
+ *
+ * start_date minus start_date_utc IS the offset — DST included, no city-to-timezone map, no
+ * America/Chicago standing in for a zone it is not. Warsaw is the case that kills the shortcut:
+ * measured 2026-09-14 the fleet spans UTC−4 (ATL), UTC−5 (ATX, DFW, HOU, OKC, SATX, STL) and
+ * UTC+2 (WAW).
+ *
+ * IT IS THE OFFSET ON KICK-OFF DAY, not a zone. A push a week either side of a DST change would
+ * render an hour out in "venue time"; the reader's own clock is unaffected, and a real IANA zone
+ * per venue is a separate job with a separate source of truth. Null when either half is missing.
+ */
+export function venueOffsetMs(startDateWall: string | null, startDateUtc: string | null): number | null {
+  if (!startDateWall || !startDateUtc) return null;
+  const w = Date.parse(startDateWall), u = Date.parse(startDateUtc);
+  if (Number.isNaN(w) || Number.isNaN(u)) return null;
+  return w - u;
+}
+
+export type ZoneMode = "me" | "venue";
+
+/** The offset to render an instant in. "me" asks the platform, so DST is exact for the reader. */
+export function offsetForZone(mode: ZoneMode, atMs: number, venueOffset: number | null): number {
+  if (mode === "venue" && venueOffset != null) return venueOffset;
+  return -new Date(atMs).getTimezoneOffset() * 60_000;
+}
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** An instant → the characters a datetime-local input wants, in the chosen zone. */
+export function toInputValue(iso: string | null, mode: ZoneMode, venueOffset: number | null): string {
+  if (!iso) return "";
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return "";
+  if (mode === "me" || venueOffset == null) {
+    /* THE READER'S OWN ZONE IS THE PLATFORM'S. Native accessors already are that zone, DST and
+     * all, so there is nothing to shift and nothing to get wrong. */
+    const d = new Date(ms);
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+  /* A FIXED OFFSET: shift the instant, then read it out in UTC. The same trick start_date already
+   * uses. Formatting in UTC is what makes the shift the ONLY thing that moved it. */
+  const d = new Date(ms + venueOffset);
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}T${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+}
+
+/** The characters back to an instant, undoing exactly the shift above. "" → null, which is a real
+ *  value here: the channel is on and the time is not settled. */
+export function fromInputValue(v: string, mode: ZoneMode, venueOffset: number | null): string | null {
+  const m = v?.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return null;
+  const [, y, mo, d, h, mi] = m.map(Number) as unknown as number[];
+  if (mode === "me" || venueOffset == null) {
+    /* NATIVE CONSTRUCTION, for the same reason as above — and it is also the only thing that
+     * resolves a local time correctly across the reader's own DST change. */
+    return new Date(y, mo - 1, d, h, mi, 0, 0).toISOString();
+  }
+  const asUtc = Date.UTC(y, mo - 1, d, h, mi, 0, 0);
+  return new Date(asUtc - venueOffset).toISOString();
+}
+
+/**
+ * A PUSH INSTANT, PRINTED IN THE CHOSEN CLOCK. "Mon 7:00 PM".
+ *
+ * ONE FORMATTER FOR EVERY SURFACE — the worklist strip, the tile, the phone's Due list. They used
+ * to share `fmtPushLocal`, which was the reader's clock and nothing else; the zone argument is the
+ * only thing that changed, and it is passed rather than re-derived so no two of them can disagree
+ * about which clock they are in.
+ */
+export function fmtPushIn(iso: string | null, mode: ZoneMode, venueOffset: number | null): { day: string; time: string } {
+  if (!iso) return { day: "", time: "" };
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return { day: "", time: "" };
+  const DOWS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const useNative = mode === "me" || venueOffset == null;
+  const d = useNative ? new Date(ms) : new Date(ms + venueOffset);
+  const dow = useNative ? d.getDay() : d.getUTCDay();
+  let h = useNative ? d.getHours() : d.getUTCHours();
+  const mi = useNative ? d.getMinutes() : d.getUTCMinutes();
+  const ap = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  return { day: DOWS[(dow + 6) % 7], time: `${h}:${String(mi).padStart(2, "0")} ${ap}` };
+}
+
+/**
+ * HOW LONG BEFORE KICK-OFF. TWO INSTANTS SUBTRACTED, which is what makes it the one number that
+ * reads identically in Madrid and in Austin.
+ *
+ * IT USED TO BE COMPUTED FROM THE WALL CLOCK — `new Date(y, mo, da + dayIdx, hh, mm)` — which
+ * builds kick-off in the READER'S zone out of the VENUE'S clock. Right in Austin, wrong in Madrid
+ * by the whole zone difference, and wrong silently. Returns null when the kick-off instant is
+ * missing, because a made-up number here is worse than no number.
+ */
+export function leadToKickoff(pushIso: string | null, kickoffUtc: string | null): { text: string; late: boolean } | null {
+  if (!pushIso || !kickoffUtc) return null;
+  const push = Date.parse(pushIso), kick = Date.parse(kickoffUtc);
+  if (Number.isNaN(push) || Number.isNaN(kick)) return null;
+  const diff = kick - push;
+  const late = diff < 0;
+  const abs = Math.abs(diff);
+  const days = Math.floor(abs / 86_400_000);
+  const hrs = Math.round((abs % 86_400_000) / 3_600_000);
+  const t = days ? `${days}d ${hrs}h` : `${Math.max(1, hrs)}h`;
+  return { text: late ? `${t} after` : `${t} before`, late };
+}
+
+/** A new push lands 8h before kick-off, which is what the plans on this board already use. It is
+ *  an instant, so it is right in every zone at once. Null kick-off falls back to undated. */
+export function defaultPushAt(kickoffUtc: string | null): string | null {
+  if (!kickoffUtc) return null;
+  const k = Date.parse(kickoffUtc);
+  return Number.isNaN(k) ? null : new Date(k - 8 * 3_600_000).toISOString();
+}
+
+/* ── THE EDITOR'S DRAFT ───────────────────────────────────────────────────────────────────────
+ *
+ * THE DRAFT HOLDS INSTANTS, NOT INPUT CHARACTERS, and that is the whole reason the round trip
+ * works. A datetime-local value is a wall clock with no zone; keeping one in state would mean the
+ * stored value silently changes meaning the moment somebody switches zone. So the draft stores the
+ * instant, and each render derives the characters for whichever zone is being shown.
+ *
+ * TOGGLING A CHANNEL OFF KEEPS ITS ROWS. Nothing is written until Save, so the draft IS the undo:
+ * turning WhatsApp off hides its pushes and stops sending them, and turning it back on in the same
+ * session restores them exactly. That is why there is no confirm on a destructive-looking toggle —
+ * a dialog guarding an action that already has an undo teaches people to dismiss dialogs. */
+export type DraftRow = { key: string; id?: number; pushAt: string | null; topic: string };
+export type DraftChannel = { on: boolean; code: string; rows: DraftRow[] };
+export type PushDraft = Record<ChannelKey, DraftChannel>;
+
+let draftKeySeq = 0;
+/** A stable React key for a row that has no id yet. Never rendered, never sent. */
+export const newDraftKey = (): string => `new-${++draftKeySeq}`;
+
+export function draftFromPlan(plan: PromoPlan | null): PushDraft {
+  const out = {} as PushDraft;
+  for (const k of CHANNEL_KEYS) {
+    const rows = pushesFor(plan, k);
+    out[k] = {
+      on: rows.length > 0,
+      code: codeFor(plan, k) ?? "",
+      rows: rows.map((p) => ({ key: `p-${p.id}`, id: p.id, pushAt: p.pushAt, topic: p.topic ?? "" })),
+    };
+  }
+  return out;
+}
+
+/** What the route is sent: every row of every ON channel, flattened. An OFF channel contributes
+ *  nothing, which is how its rows get deleted. */
+export function draftToPushes(draft: PushDraft): { id?: number; channel: ChannelKey; at: string | null; topic: string; promoCode: string }[] {
+  const out: { id?: number; channel: ChannelKey; at: string | null; topic: string; promoCode: string }[] = [];
+  for (const k of CHANNEL_KEYS) {
+    const c = draft[k];
+    if (!c?.on) continue;
+    /* AN ON CHANNEL WITH NO ROWS IS ONE ROW WITH NO DATE. That is how "chosen, not scheduled"
+     * survives at all now that there is no boolean to carry it. */
+    const rows = c.rows.length > 0 ? c.rows : [{ key: "implicit", pushAt: null, topic: "" } as DraftRow];
+    for (const r of rows) {
+      out.push({ id: r.id, channel: k, at: r.pushAt, topic: r.topic, promoCode: c.code });
+    }
+  }
+  return out;
+}
+
+/** The footer's counts, from the same draft the blocks render. */
+export function draftSummary(draft: PushDraft): { channels: number; pushes: number; codes: number; undated: number } {
+  let channels = 0, pushes = 0, codes = 0, undated = 0;
+  for (const k of CHANNEL_KEYS) {
+    const c = draft[k];
+    if (!c?.on) continue;
+    channels++;
+    const dated = c.rows.filter((r) => r.pushAt).length;
+    pushes += dated;
+    if (c.code.trim()) codes++;
+    /* "STILL NEEDS A DATE" COUNTS THE CHANNEL, not the rows: a channel with one undated row and a
+     * channel with none are the same unfinished decision. */
+    if (dated === 0) undated++;
+  }
+  return { channels, pushes, codes, undated };
+}
 
 /* ── NEW TO THE SLATE ─────────────────────────────────────────────────────────────────────────
  *
@@ -169,23 +426,22 @@ export type PromoWeek = {
   priorWeekStart: string;
   days: { dow: string; date: number; iso: string; today: boolean }[];
   matches: PromoMatch[];
-  /** False when match_promotion_plan is not in the database yet — every match reads as "no plan". */
+  /** False when match_promotion_push is not in the database yet — every match reads as "no plan". */
   planTableReady: boolean;
   generatedAt: string;
 };
 
-const emptyChannels = (): Record<ChannelKey, boolean> =>
-  Object.fromEntries(CHANNEL_KEYS.map((k) => [k, false])) as Record<ChannelKey, boolean>;
-
-/** Any channel lit. This — not the presence of the row — is what separates "no plan" from a plan. */
+/** Any channel chosen. This — not the presence of a parent row — separates "no plan" from a plan. */
 export function anyChannel(p: PromoPlan | null): boolean {
-  return !!p && CHANNEL_KEYS.some((k) => p.channels[k]);
+  return (p?.pushes.length ?? 0) > 0;
 }
 
 export function stateOf(p: PromoPlan | null): PromoMatch["state"] {
-  if (!p) return "none";
-  if (p.pushAt) return "planned";
-  return anyChannel(p) ? "needs-decision" : "none";
+  if (!p || p.pushes.length === 0) return "none";
+  /* PLANNED THE MOMENT ANY PUSH HAS A TIME. A match with WhatsApp dated and Klaviyo still undated
+   * is planned AND carries an amber channel; the tile says planned because something is going out,
+   * and the editor is where the undated one is visible. */
+  return p.pushes.some((x) => x.pushAt) ? "planned" : "needs-decision";
 }
 
 /**
@@ -202,28 +458,57 @@ async function fetchPlans(
   const plans = new Map<number, PromoPlan>();
   if (ids.length === 0) return { plans, ready: true };
   let ready = true;
+
+  const planFor = (id: number): PromoPlan => {
+    let p = plans.get(id);
+    if (!p) { p = { matchApiId: id, pushes: [], comment: null, updatedBy: null, updatedAt: null }; plans.set(id, p); }
+    return p;
+  };
+
+  /* THE PUSHES ARE THE PLAN. Migration 0176. Not one row per match any more, so this reads the
+   * child table and groups; the parent is read only for the things that stayed on it. */
   for (let i = 0; i < ids.length; i += 1000) {
     const chunk = ids.slice(i, i + 1000);
-    const { data, error } = await sb.from("match_promotion_plan").select("*").in("match_api_id", chunk);
+    const { data, error } = await sb.from("match_promotion_push").select("*").in("match_api_id", chunk);
     if (error) { ready = false; break; }
     for (const r of data ?? []) {
-      const channels = emptyChannels();
-      for (const k of CHANNEL_KEYS) channels[k] = r[k] === true;
-      plans.set(r.match_api_id, {
+      /* A CHANNEL VALUE THE APP DOES NOT KNOW IS DROPPED, not rendered as a seventh column. The
+       * CHECK constraint makes it unreachable; this is what keeps it unreachable in the UI too. */
+      if (!(CHANNEL_KEYS as readonly string[]).includes(r.channel)) continue;
+      planFor(r.match_api_id).pushes.push({
+        id: r.id,
         matchApiId: r.match_api_id,
-        channels,
+        channel: r.channel as ChannelKey,
         pushAt: r.push_at ?? null,
+        topic: r.topic ?? null,
         promoCode: r.promo_code ?? null,
-        comment: r.comment ?? null,
-        updatedBy: r.updated_by ?? null,
-        updatedAt: r.updated_at ?? null,
-        /* READ DEFENSIVELY. The select is "*", so before 0175 applies these are simply absent and
-         * read as null, which is "not sent" and is exactly today's behaviour. */
-        pushedAt: (r.pushed_at as string | null) ?? null,
-        pushedBy: (r.pushed_by as string | null) ?? null,
+        pushedAt: r.pushed_at ?? null,
+        pushedBy: r.pushed_by ?? null,
       });
     }
   }
+  if (!ready) return { plans, ready };
+
+  /* THE PARENT, FOR THE COMMENT AND WHO LAST TOUCHED IT, AND FOR NOTHING ELSE. Its six booleans,
+   * push_at, promo_code, pushed_at and pushed_by are inert from 0176 and are not read here or
+   * anywhere: two sources of truth is how they drift. A parent row with no pushes is not a plan,
+   * so it does not create one. */
+  for (let i = 0; i < ids.length; i += 1000) {
+    const chunk = ids.slice(i, i + 1000);
+    const { data } = await sb
+      .from("match_promotion_plan")
+      .select("match_api_id, comment, updated_by, updated_at")
+      .in("match_api_id", chunk);
+    for (const r of data ?? []) {
+      const p = plans.get(r.match_api_id);
+      if (!p) continue;
+      p.comment = r.comment ?? null;
+      p.updatedBy = r.updated_by ?? null;
+      p.updatedAt = r.updated_at ?? null;
+    }
+  }
+
+  for (const p of plans.values()) p.pushes.sort(byPushTime);
   return { plans, ready };
 }
 
@@ -280,10 +565,11 @@ export async function fetchPromoWeek(
  * coloured at all. */
 export type CoverageState = "planned" | "open" | "none";
 
-/** One city-day. `planned` iff any match that day has a push instant on it. */
+/** One city-day. `planned` iff any match that day has at least one DATED push on it. Unchanged in
+ *  meaning by 0176: the question is still "is anything going out", only the shape moved. */
 export function coverageStateOf(dayMatches: PromoMatch[]): CoverageState {
   if (dayMatches.length === 0) return "none";
-  return dayMatches.some((m) => m.plan?.pushAt) ? "planned" : "open";
+  return dayMatches.some((m) => datedPushes(m.plan).length > 0) ? "planned" : "open";
 }
 
 export type CoverageSummary = {

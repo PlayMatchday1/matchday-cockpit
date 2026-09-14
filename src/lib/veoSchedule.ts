@@ -155,6 +155,22 @@ export type VeoMatch = {
   /** registration_price, in CENTS, straight off the mirror. Formatted by priceLabel, never here. */
   price: number | null;
   hasEmoji: boolean; // 🎥 present in the raw MatchDay name
+  /**
+   * THE KICK-OFF AS A TRUE INSTANT, and the ONLY value on this type that may be handed to
+   * `new Date()`. `start_date` above is a wall clock wearing a Z; `start_date_utc` is the real
+   * moment, and the two together are the only way to know the VENUE'S OWN OFFSET for that date:
+   * start_date minus start_date_utc IS the offset, DST included, with no city-to-timezone map.
+   *
+   * Carried because "8h before kick-off" has to be two instants subtracted. Computing it from the
+   * wall clock instead builds kick-off in the READER'S zone, which is right in Austin and wrong in
+   * Madrid by the whole zone difference. Measured 2026-09-14 across the 270 matches in the two
+   * weeks around today: zero rows missing either half, and the derived offsets come out ATL −4,
+   * ATX/DFW/HOU/OKC/SATX/STL −5, WAW +2. Nullable anyway, because a mirror column is not a promise.
+   */
+  startDateUtc: string | null;
+  /** The WALL CLOCK stamp exactly as the mirror holds it, Z and all. Never `new Date()` this —
+   *  it travels only so that `startDate − startDateUtc` can give the venue's offset. */
+  startDate: string | null;
 };
 
 export type VeoWeek = {
@@ -205,7 +221,10 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
      * from the moment it READ the mirror, which says when the query ran and nothing at all about
      * how old the data is. max(synced_at) is the data's own age — the cron's write, or a
      * write-through, whichever touched a row last. */
-    .select("api_id, name, city_identifier, field_title, start_date, registration_price, is_cancelled, deleted_at, synced_at")
+    /* start_date_utc IS THE TRUE INSTANT AND start_date IS NOT. Both travel: their DIFFERENCE is
+     * the venue's own offset for that date, which is the only way this app can render a push time
+     * in "venue time" without inventing a city-to-timezone map. See VeoMatch.startDateUtc. */
+    .select("api_id, name, city_identifier, field_title, start_date, start_date_utc, registration_price, is_cancelled, deleted_at, synced_at")
     .is("deleted_at", null)
     .gte("start_date", ymd(mon))
     .lte("start_date", `${ymd(sun)}T23:59:59`);
@@ -251,6 +270,8 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
       slot: slotKeyOf(r.city_identifier ?? null, r.field_title ?? null, r.start_date as string),
       price: (r as { registration_price?: number | null }).registration_price ?? null,
       hasEmoji: hasCameraEmoji(r.name),
+      startDateUtc: (r as { start_date_utc?: string | null }).start_date_utc ?? null,
+      startDate: (r.start_date as string | null) ?? null,
     });
   }
 
@@ -334,7 +355,7 @@ export async function fetchVeoRange(
 ): Promise<VeoRange> {
   let q = sb
     .from("mdapi_matches")
-    .select("api_id, name, city_identifier, field_title, start_date, registration_price, is_cancelled, player_count, fake_player_count, min_player_count, max_player_count, deleted_at, synced_at")
+    .select("api_id, name, city_identifier, field_title, start_date, start_date_utc, registration_price, is_cancelled, player_count, fake_player_count, min_player_count, max_player_count, deleted_at, synced_at")
     .is("deleted_at", null)
     .gte("start_date", from)
     .lte("start_date", `${to}T23:59:59`);
@@ -360,6 +381,8 @@ export async function fetchVeoRange(
       apiId: r.api_id,
       city,
       date: String(r.start_date).slice(0, 10),  // wall clock, straight off the string
+      startDateUtc: (r as { start_date_utc?: string | null }).start_date_utc ?? null,
+      startDate: (r.start_date as string | null) ?? null,
       time: fmtTime(d),
       minutes: d.getHours() * 60 + d.getMinutes(),
       venue: canonicalVenueName(r.field_title ?? "") || (r.field_title ?? "Unknown"),

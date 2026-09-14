@@ -1,0 +1,325 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>A push per channel, per date, in your own clock</title>
+<style>
+  :root{
+    --card:#fff; --line:#e6ebe8; --ink:#0E2A22; --ink2:#4d6359; --ink3:#8a9992;
+    --grn:#12704a; --grnbg:#E6F4EB; --grnln:#bfe0cc; --grnsolid:#0d3b2e;
+    --amb:#8a6300; --ambbg:#fdf1d0; --ambln:#e3c369;
+    --red:#a8391a; --redbg:#fdeae4; --redln:#f0bda9;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       background:#FBF9F4;color:var(--ink);-webkit-font-smoothing:antialiased}
+  .sw{display:flex;gap:6px;flex-wrap:wrap;padding:8px 10px;border-bottom:1px solid var(--line);background:#fff}
+  .sw button{font:700 11px/1 inherit;padding:7px 9px;border:1px solid var(--line);background:#fff;border-radius:7px;cursor:pointer;color:#46584f}
+  .sw button[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .wrap{padding:16px;max-width:1100px;margin:0 auto}
+
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .phd{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:13px 16px;border-bottom:1px solid var(--line)}
+  .pttl{font:800 15px/1.2 inherit;letter-spacing:-.2px}
+  /* THE MATCH TIME NEVER MOVES. It is the wall clock at the pitch and it is labelled
+     as such, so switching the zone below can never look like it rescheduled a match. */
+  .kick{font:700 13px/1.2 inherit;color:var(--ink2)}
+  .kick i{font-style:normal;font-size:11px;color:var(--ink3);font-weight:600}
+  .city{font-size:12.5px;color:var(--ink3)}
+
+  .zone{margin-left:auto;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .zone span{font-size:11.5px;color:var(--ink3);font-weight:600}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#f7faf8}
+  .seg button{border:0;background:none;padding:0 10px;min-height:32px;font:750 11.5px/1 inherit;color:var(--ink2);cursor:pointer;white-space:nowrap}
+  .seg button[aria-pressed="true"]{background:var(--grnsolid);color:#fff}
+
+  .body{padding:14px 16px}
+  .chan{border:1px solid var(--line);border-radius:12px;margin-bottom:10px;overflow:hidden}
+  .chan[data-on="0"]{background:#fcfdfc}
+  .chan[data-on="1"][data-pushes="0"]{border-color:var(--ambln);background:#fffdf6}
+  .chd{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px}
+  .chan[data-on="1"] .chd{border-bottom:1px solid #f1f5f3}
+  .tog{position:relative;flex:none;width:38px;height:22px;border-radius:999px;border:0;cursor:pointer;
+       background:#dfe6e2;transition:background .13s}
+  .tog::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:999px;
+              background:#fff;transition:transform .13s;box-shadow:0 1px 2px rgba(0,0,0,.18)}
+  .chan[data-on="1"] .tog{background:#2fb673}
+  .chan[data-on="1"] .tog::after{transform:translateX(16px)}
+  .cname{font:750 13.5px/1.2 inherit;min-width:104px}
+  .cnote{font-size:11.5px;color:var(--ink3)}
+  .chan[data-on="1"][data-pushes="0"] .cnote{color:var(--amb);font-weight:700}
+
+  /* ONE CODE PER CHANNEL. Teresa: "eventually we could have multiple codes
+     (for different channels for example)." */
+  .codewrap{margin-left:auto;display:flex;align-items:center;gap:6px}
+  .codewrap label{font:700 10px/1 inherit;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3)}
+  .codewrap input{width:118px;height:32px;border:1px solid var(--line);border-radius:8px;background:#fff;
+                  padding:0 9px;font:600 12.5px/1 inherit;color:var(--ink);text-transform:uppercase}
+  .codewrap input::placeholder{text-transform:none;font-weight:500;color:#aab6b0}
+
+  .pushes{padding:8px 12px 10px}
+  .push{display:grid;gap:8px;align-items:center;padding:7px 0;
+        grid-template-columns:186px 108px minmax(0,1fr) 34px}
+  .push + .push{border-top:1px solid #f4f7f5}
+  .push input[type="datetime-local"]{height:36px;width:100%;border:1px solid var(--line);border-radius:8px;
+       background:#fff;padding:0 8px;font:600 12.5px/1 inherit;color:var(--ink)}
+  /* THE OFFSET TO KICKOFF IS TIMEZONE FREE: two instants subtracted. It is the one
+     number that reads the same for Teresa in Madrid and for Austin. */
+  .rel{font:700 11.5px/1.3 inherit;color:var(--ink2);white-space:nowrap}
+  .rel[data-late="1"]{color:var(--red)}
+  .topic{height:36px;width:100%;border:1px solid var(--line);border-radius:8px;background:#fff;
+         padding:0 9px;font:500 12.5px/1 inherit;color:var(--ink)}
+  .rm{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);background:#fff;
+      color:var(--ink3);cursor:pointer;font:700 15px/1 inherit}
+  .rm:hover{border-color:var(--redln);color:var(--red);background:var(--redbg)}
+  .add{margin-top:6px;min-height:32px;padding:0 11px;border-radius:8px;border:1px dashed #cfdbd4;
+       background:#fff;font:750 11.5px/1 inherit;color:var(--ink2);cursor:pointer}
+  .add:hover{border-color:var(--grnln);color:var(--grn);background:#f6fbf8}
+  .plabel{display:grid;gap:8px;grid-template-columns:186px 108px minmax(0,1fr) 34px;
+          font:700 9.5px/1 inherit;letter-spacing:.09em;text-transform:uppercase;color:var(--ink3);padding-bottom:2px}
+
+  .foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px;border-top:1px solid var(--line);background:#fafcfb}
+  .save{min-height:38px;padding:0 15px;border-radius:9px;border:1px solid var(--grnsolid);background:var(--grnsolid);
+        color:#fff;font:750 13px/1 inherit;cursor:pointer}
+  .cancel{min-height:38px;padding:0 11px;border:0;background:none;font:700 13px/1 inherit;color:var(--ink2);cursor:pointer}
+  .sum{font-size:12px;color:var(--ink3);margin-left:auto}
+  .sum b{color:var(--ink2)}
+
+  .tile{margin-top:16px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:10px 12px;max-width:290px}
+  .tile .t1{font:800 13px/1 inherit}
+  .tile .t2{font-size:11.5px;color:var(--ink3);margin-top:3px}
+  .tile .chips{display:flex;gap:4px;margin-top:6px;flex-wrap:wrap}
+  .tile .ch{border:1px solid var(--grnln);background:var(--grnbg);color:var(--grn);border-radius:5px;
+            padding:1px 5px;font:800 9.5px/1.6 inherit}
+  .tile .pl{font-size:11px;color:var(--ink2);margin-top:6px;line-height:1.5}
+  .tile .pl b{font-weight:800}
+  .hid{display:none !important}
+  @media (max-width:700px){
+    .push,.plabel{grid-template-columns:1fr 34px}
+    .plabel{display:none}
+    .rel{grid-column:1}
+    .codewrap{margin-left:0;width:100%}
+    .codewrap input{flex:1;width:auto}
+  }
+</style></head>
+<body>
+<div class="sw">
+  <button data-s="chi" aria-pressed="true">viewer in Austin</button>
+  <button data-s="mad">viewer in Madrid (Teresa)</button>
+  <button data-s="venue">venue time</button>
+</div>
+
+<div class="wrap">
+  <div class="panel">
+    <div class="phd">
+      <div>
+        <div class="pttl">Keswick Park (Chamblee)</div>
+        <div class="kick" data-testid="kick">Mon 14 Sep, 8:00 PM <i>at the pitch</i></div>
+      </div>
+      <span class="city">Atlanta</span>
+      <div class="zone">
+        <span>Push times in</span>
+        <div class="seg" role="group" aria-label="Show push times in">
+          <button type="button" data-z="me"    data-testid="z-me">My time</button>
+          <button type="button" data-z="venue" data-testid="z-venue">Venue time</button>
+        </div>
+        <span data-testid="z-label"></span>
+      </div>
+    </div>
+
+    <div class="body" id="chans"></div>
+
+    <div class="foot">
+      <button class="save" type="button">Save plan</button>
+      <button class="cancel" type="button">Cancel</button>
+      <span class="sum" data-testid="sum"></span>
+    </div>
+  </div>
+
+  <div class="tile">
+    <div class="t1">8:00 PM</div>
+    <div class="t2">Keswick Park (Chamblee)</div>
+    <div class="chips" data-testid="tile-chips"></div>
+    <div class="pl" data-testid="tile-plan"></div>
+  </div>
+</div>
+
+<script>
+/* ── THE MATCH IS A WALL CLOCK, THE PUSH IS AN INSTANT ────────────────────────
+ * Ryan: "The times of the matches dont change just the push times." So kickoff
+ * is printed once, in the pitch's own clock, labelled "at the pitch", and never
+ * re-rendered. Every push_at is a timestamptz and IS re-rendered, because the
+ * person reading it is in Madrid or in Austin and both need their own clock. */
+const KICK_UTC = Date.parse("2026-09-15T00:00:00Z");   // Mon 8:00 PM Atlanta
+const VENUE_OFFSET = -4 * 3600e3;                       // Atlanta, EDT
+const ZONES = {
+  chi:   { label: "America/Chicago",  off: -5 * 3600e3, name: "your time" },
+  mad:   { label: "Europe/Madrid",    off:  2 * 3600e3, name: "your time" },
+  venue: { label: "America/New_York", off: VENUE_OFFSET, name: "venue time" },
+};
+let viewer = "chi", zoneMode = "me";
+const activeZone = () => zoneMode === "venue" ? ZONES.venue : ZONES[viewer];
+
+const pad = n => String(n).padStart(2, "0");
+/* An instant rendered in a chosen offset. Printed in UTC after shifting, which
+   is the same trick the codebase already uses for start_date. */
+const inZone = (ms, off) => new Date(ms + off);
+const fmtWhen = (ms, off) => inZone(ms, off)
+  .toLocaleString("en-US", { timeZone:"UTC", weekday:"short", day:"numeric", month:"short", hour:"numeric", minute:"2-digit" });
+const toLocalInput = (ms, off) => { const d = inZone(ms, off);
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`; };
+const fromLocalInput = (v, off) => Date.parse(v + ":00Z") - off;
+
+/* HOW LONG BEFORE KICKOFF. Two instants subtracted, so it is the one number that
+   reads identically in Madrid and in Austin. It is also what "8h before" already
+   means on the tile today. */
+function relTo(ms){
+  const d = KICK_UTC - ms;
+  const late = d < 0;
+  const a = Math.abs(d), days = Math.floor(a / 86400e3), hrs = Math.round((a % 86400e3) / 3600e3);
+  const t = days ? `${days}d ${hrs}h` : `${Math.max(1, hrs)}h`;
+  return { text: late ? `${t} after` : `${t} before`, late };
+}
+
+const CHANNELS = [
+  { key:"wa",  name:"WhatsApp" },
+  { key:"mc",  name:"Match chat" },
+  { key:"fb",  name:"Facebook" },
+  { key:"dm",  name:"DM" },
+  { key:"ke",  name:"Klaviyo email" },
+  { key:"ks",  name:"Klaviyo SMS" },
+];
+
+/* ONE ROW PER PUSH, not one column per plan. Teresa: "Pick the date or dates
+   when we are doing the push in that channel ... and for each date, leave a
+   small field to add the topic of the push as it might vary between days." */
+let plan = {
+  wa: { on:true, code:"SEP20", pushes:[
+        { at: Date.parse("2026-09-14T17:00:00Z"), topic:"New field launch" },
+        { at: Date.parse("2026-09-16T16:00:00Z"), topic:"First match at the pitch" },
+      ] },
+  mc: { on:true, code:"", pushes:[
+        { at: Date.parse("2026-09-14T17:00:00Z"), topic:"New field launch" },
+      ] },
+  fb: { on:false, code:"", pushes:[] },
+  dm: { on:false, code:"", pushes:[] },
+  ke: { on:false, code:"", pushes:[] },
+  /* A CHANNEL ON WITH NO DATE IS A REAL STATE and migration 0128 says so:
+     "push_at NULL is a real state, not an absence ... the channels are chosen
+     and the send time is not settled yet." It stays, as an amber channel. */
+  ks: { on:true, code:"", pushes:[] },
+};
+
+function render(){
+  const z = activeZone();
+  document.querySelector('[data-testid="z-label"]').textContent = `${z.label}`;
+  document.querySelectorAll(".seg button").forEach(b =>
+    b.setAttribute("aria-pressed", String(b.dataset.z === zoneMode)));
+
+  const host = document.getElementById("chans");
+  host.innerHTML = "";
+  for (const c of CHANNELS){
+    const p = plan[c.key];
+    const el = document.createElement("div");
+    el.className = "chan";
+    el.setAttribute("data-testid","chan"); el.dataset.key = c.key;
+    el.dataset.on = p.on ? "1" : "0";
+    el.dataset.pushes = String(p.pushes.length);
+    const note = !p.on ? "not used for this match"
+      : p.pushes.length === 0 ? "needs a date"
+      : `${p.pushes.length} push${p.pushes.length > 1 ? "es" : ""}`;
+    el.innerHTML = `
+      <div class="chd">
+        <button type="button" class="tog" data-testid="tog" data-key="${c.key}"
+                role="switch" aria-checked="${p.on}" aria-label="${c.name}"></button>
+        <span class="cname">${c.name}</span>
+        <span class="cnote" data-testid="cnote">${note}</span>
+        ${p.on ? `<span class="codewrap">
+          <label for="code-${c.key}">Code</label>
+          <input id="code-${c.key}" data-testid="code" data-key="${c.key}" value="${p.code}"
+                 placeholder="none for this channel" autocomplete="off">
+        </span>` : ``}
+      </div>
+      ${p.on ? `<div class="pushes">
+        ${p.pushes.length ? `<div class="plabel"><span>When (${z.name})</span><span>To kickoff</span><span>Topic</span><span></span></div>` : ``}
+        ${p.pushes.map((x,i) => {
+          const r = relTo(x.at);
+          return `<div class="push" data-testid="push" data-i="${i}">
+            <input type="datetime-local" data-testid="at" data-key="${c.key}" data-i="${i}" value="${toLocalInput(x.at, z.off)}">
+            <span class="rel" data-testid="rel" data-late="${r.late?1:0}">${r.text}</span>
+            <input class="topic" data-testid="topic" data-key="${c.key}" data-i="${i}" value="${x.topic}" placeholder="What this push is about">
+            <button type="button" class="rm" data-testid="rm" data-key="${c.key}" data-i="${i}" aria-label="Remove this push">&times;</button>
+          </div>`;
+        }).join("")}
+        <button type="button" class="add" data-testid="add" data-key="${c.key}">+ Add a push</button>
+      </div>` : ``}`;
+    host.appendChild(el);
+  }
+
+  // wiring
+  host.querySelectorAll('[data-testid="tog"]').forEach(b => b.addEventListener("click", () => {
+    const p = plan[b.dataset.key];
+    p.on = !p.on;
+    /* TURNING A CHANNEL ON GIVES IT NOTHING. It lands in "needs a date", which is
+       the state 0128 already has, rather than inventing a time nobody chose. */
+    if (!p.on) { p.pushes = []; p.code = ""; }
+    render();
+  }));
+  host.querySelectorAll('[data-testid="add"]').forEach(b => b.addEventListener("click", () => {
+    const p = plan[b.dataset.key];
+    /* A NEW PUSH DEFAULTS TO 8h BEFORE KICKOFF, which is what the existing plan
+       on this match already uses, and it is an instant so it is right in every zone. */
+    p.pushes.push({ at: KICK_UTC - 8 * 3600e3, topic: "" });
+    p.pushes.sort((a, z2) => a.at - z2.at);
+    render();
+  }));
+  host.querySelectorAll('[data-testid="rm"]').forEach(b => b.addEventListener("click", () => {
+    plan[b.dataset.key].pushes.splice(+b.dataset.i, 1); render();
+  }));
+  host.querySelectorAll('[data-testid="at"]').forEach(inp => inp.addEventListener("change", () => {
+    plan[inp.dataset.key].pushes[+inp.dataset.i].at = fromLocalInput(inp.value, activeZone().off);
+    plan[inp.dataset.key].pushes.sort((a, z2) => a.at - z2.at);
+    render();
+  }));
+  host.querySelectorAll('[data-testid="topic"]').forEach(inp => inp.addEventListener("input", () => {
+    plan[inp.dataset.key].pushes[+inp.dataset.i].topic = inp.value;
+    paint();
+  }));
+  host.querySelectorAll('[data-testid="code"]').forEach(inp => inp.addEventListener("input", () => {
+    plan[inp.dataset.key].code = inp.value; paint();
+  }));
+  paint();
+}
+
+function paint(){
+  const z = activeZone();
+  const on = CHANNELS.filter(c => plan[c.key].on);
+  const total = on.reduce((n, c) => n + plan[c.key].pushes.length, 0);
+  const undated = on.filter(c => plan[c.key].pushes.length === 0).length;
+  const codes = on.filter(c => plan[c.key].code.trim()).length;
+  document.querySelector('[data-testid="sum"]').innerHTML =
+    `<b>${on.length}</b> channel${on.length===1?"":"s"} · <b>${total}</b> push${total===1?"":"es"}` +
+    (codes ? ` · <b>${codes}</b> with a code` : ``) +
+    (undated ? ` · <b style="color:#8a6300">${undated}</b> still needs a date` : ``);
+
+  document.querySelector('[data-testid="tile-chips"]').innerHTML =
+    on.map(c => `<span class="ch">${c.key.toUpperCase()}</span>`).join("");
+  /* THE TILE SUMMARISES, it does not list six lines. First push, then how many
+     more, in the reader's own clock. */
+  const all = on.flatMap(c => plan[c.key].pushes).sort((a,b)=>a.at-b.at);
+  document.querySelector('[data-testid="tile-plan"]').innerHTML = all.length
+    ? `Push <b>${fmtWhen(all[0].at, z.off)}</b> · ${relTo(all[0].at).text}` +
+      (all.length > 1 ? `<br>and <b>${all.length - 1}</b> more` : ``)
+    : `<b>No date yet</b>`;
+}
+
+document.querySelectorAll(".seg button").forEach(b => b.addEventListener("click", () => {
+  zoneMode = b.dataset.z; render();
+}));
+document.querySelectorAll(".sw button").forEach(b => b.addEventListener("click", () => {
+  if (b.dataset.s === "venue") { zoneMode = "venue"; }
+  else { viewer = b.dataset.s; zoneMode = "me"; }
+  document.querySelectorAll(".sw button").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.s === b.dataset.s)));
+  render();
+}));
+render();
+</script>
+</body></html>

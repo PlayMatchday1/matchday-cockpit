@@ -18,24 +18,25 @@
 // SAME DATA, SAME ROUTES, SAME WRITES. Every figure here is computed by the desktop's own helpers
 // and passed in; nothing is re-derived and no count is redefined.
 
-import { CHANNELS, CHANNEL_KEYS, NEW_FLAG_LABEL, coverageCaption, coverageStateOf, coverageSummary, isPushOverdue, isPushSent, sentStamp, type ChannelKey, type PromoMatch, type PromoWeek } from "@/lib/matchPromotion";
+import { CHANNELS, NEW_FLAG_LABEL, channelsOn, codeFor, coverageCaption, coverageStateOf, coverageSummary, datedPushes, fmtPushIn, isPushOverdue, isPushSent, leadToKickoff, sentStamp, venueOffsetMs, type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode } from "@/lib/matchPromotion";
 import MarkPushSent from "@/components/MarkPushSent";
+import PushPlanEditor from "@/components/PushPlanEditor";
 import PageComments from "@/components/PageComments";
 import CancelRanking, { type RankTone } from "@/components/CancelRanking";
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-export type MobileDraft = {
-  channels: Record<ChannelKey, boolean>;
-  pushAt: string;
-  promoCode: string;
-};
+/** The phone edits the same draft the desktop does, through the same editor. */
+export type MobileDraft = PushDraft;
+
+/** This match's own venue offset, from its own wall/UTC pair. */
+const offsetOf = (m: PromoMatch): number | null => venueOffsetMs(m.startDate ?? null, m.startDateUtc);
 
 export type MobileProps = {
   week: PromoWeek;
   tab: "due" | "week" | "coverage";
   setTab: (t: "due" | "week" | "coverage") => void;
-  jobs: { m: PromoMatch; at: number }[];
+  jobs: { m: PromoMatch; p: PromoPush; at: number }[];
   overdue: number;
   openId: number | null;
   draft: MobileDraft | null;
@@ -49,21 +50,26 @@ export type MobileProps = {
   toast: { msg: string; bad: boolean } | null;
   onNav: (delta: number) => void;
   weekLabel: string;
-  fmtPush: (iso: string) => { day: string; time: string };
-  leadLabel: (pushIso: string, weekStart: string, dayIdx: number, minutes: number) => string;
+  /* THE CLOCK IS THE PAGE'S, NOT THE PHONE'S. Same state the desktop holds, passed down, so the
+   * two surfaces cannot disagree about which zone a push time is printed in. */
+  zone: ZoneMode;
+  setZone: (z: ZoneMode) => void;
   ranking: { code: string; canonical: string; time: string; booked: number; n: number; slot: string; city: string }[];
   rankingReady: boolean;
   rankingTotal: number;
+  /** Surfaces a failed mark-sent as the page's own toast. */
+  onError?: (msg: string) => void;
 };
 
 /* ── shared bits ─────────────────────────────────────────────────────────────────────────────── */
 
 function Chips({ m, litOnly = false }: { m: PromoMatch; litOnly?: boolean }) {
-  const list = litOnly ? CHANNELS.filter((c) => m.plan?.channels[c.key]) : CHANNELS;
+  const lit = channelsOn(m.plan);
+  const list = litOnly ? CHANNELS.filter((c) => lit.includes(c.key)) : CHANNELS;
   return (
     <span className="flex min-w-0 flex-wrap gap-1" data-testid="m-chipset">
       {list.map((c) => {
-        const on = m.plan?.channels[c.key] === true;
+        const on = lit.includes(c.key);
         return (
           <i key={c.key} data-testid="m-chip" data-on={on ? "1" : "0"}
             className={`inline-flex h-[19px] min-w-[27px] items-center justify-center rounded-[5px] border px-[5px] text-[9.5px] font-extrabold not-italic ${
@@ -78,14 +84,14 @@ function Chips({ m, litOnly = false }: { m: PromoMatch; litOnly?: boolean }) {
 
 /* ── DUE ─────────────────────────────────────────────────────────────────────────────────────── */
 
-function Due({ jobs, overdue, now, fmtPush, onOpen, onReload, onError }: {
-  jobs: { m: PromoMatch; at: number }[]; overdue: number; now: number;
-  fmtPush: MobileProps["fmtPush"]; onOpen: MobileProps["onOpen"];
+function Due({ jobs, overdue, now, zone, onOpen, onReload, onError }: {
+  jobs: MobileProps["jobs"]; overdue: number; now: number; zone: ZoneMode;
+  onOpen: MobileProps["onOpen"];
   onReload: () => void | Promise<void>; onError?: (msg: string) => void;
 }) {
-  /* THE SAME COUNTS AS THE DESKTOP STRIP, from the same functions. The phone's Due list read
-   * `at < now` of its own, which is the other half of why a sent push stayed red everywhere. */
-  const sentCount = jobs.filter((j) => isPushSent(j.m.plan)).length;
+  /* THE SAME COUNTS AS THE DESKTOP STRIP, from the same functions, now per push. The phone's Due
+   * list read `at < now` of its own, which is the other half of why a sent push stayed red. */
+  const sentCount = jobs.filter((j) => isPushSent(j.p)).length;
   return (
     <div data-testid="m-due">
       <div className="px-3 pb-0.5 pt-3.5">
@@ -97,37 +103,43 @@ function Due({ jobs, overdue, now, fmtPush, onOpen, onReload, onError }: {
         </div>
       </div>
       {jobs.length === 0 && <p className="px-3 pb-4 text-[12.5px] text-deep-green/40">Nothing scheduled this week.</p>}
-      {jobs.map(({ m, at }) => {
+      {jobs.map(({ m, p, at }) => {
         /* SENT GOES QUIET, NOT AWAY — the row stays on the list so everyone can see it was done. */
-        const sent = isPushSent(m.plan);
-        const late = isPushOverdue(m.plan, now);
+        const sent = isPushSent(p);
+        const late = isPushOverdue(p, now);
         const soon = !sent && !late && at - now < 12 * 3600_000;
-        const p = fmtPush(m.plan!.pushAt!);
+        const t = fmtPushIn(p.pushAt, zone, offsetOf(m));
+        const chan = CHANNELS.find((c) => c.key === p.channel);
         return (
-          <div key={m.apiId} data-testid="m-due-card" data-sent={sent ? "1" : "0"} data-late={late ? "1" : "0"}
+          <div key={p.id} data-testid="m-due-card" data-push-id={p.id} data-channel={p.channel}
+            data-sent={sent ? "1" : "0"} data-late={late ? "1" : "0"}
             className={`mx-3 mb-2 rounded-[11px] border px-3 py-2.5 ${
               sent ? "border-cream-line bg-[#f4f7f5]"
                 : late ? "border-coral/45 bg-coral-soft/40" : soon ? "border-amber-300 bg-amber-50" : "border-cream-line bg-white"}`}>
             <div className="flex flex-wrap items-baseline gap-2">
               <span className={`text-[13px] font-extrabold ${
                 sent ? "text-deep-green/45 line-through" : late ? "text-coral" : soon ? "text-amber-700" : ""}`}>
-                {late ? "Overdue · " : ""}{p.day} {p.time}
+                {late ? "Overdue · " : ""}{t.day} {t.time}
               </span>
-              {sent && <span data-testid="m-due-stamp" className="text-[11px] text-deep-green/45">{sentStamp(m.plan!)}</span>}
+              <i data-testid="m-due-chan" className={`inline-flex h-[19px] min-w-[27px] items-center justify-center rounded-[5px] border px-[5px] text-[9.5px] font-extrabold not-italic ${
+                sent ? "border-cream-line bg-[#eef3f0] text-deep-green/40" : "border-mint/50 bg-mint-soft/50 text-emerald-700"}`}>
+                {chan?.short ?? p.channel}
+              </i>
+              {sent && <span data-testid="m-due-stamp" className="text-[11px] text-deep-green/45">{sentStamp(p)}</span>}
               {/* THE SAME CONTROL THE DESKTOP STRIP USES, not a second implementation of one. */}
-              <MarkPushSent m={m} onDone={onReload} onError={onError} />
+              <MarkPushSent push={p} onDone={onReload} onError={onError} />
               <button type="button" data-testid="m-send"
                 onClick={(e) => onOpen(m, e.currentTarget as HTMLElement)}
                 className="min-h-[32px] px-1 text-[12px] font-extrabold text-emerald-700">
                 Send ›
               </button>
             </div>
+            {/* THE TOPIC IS WHAT TELLS TWO PUSHES ON ONE MATCH APART. */}
+            {p.topic && <div data-testid="m-due-topic" className="mt-1 text-[12px] text-deep-green/55">{p.topic}</div>}
             {/* A phone has no column headers, so the row carries field, kick-off AND city. */}
             <div className="mb-[7px] mt-0.5 text-[12.5px] text-deep-green/65" data-testid="m-due-what">
               {m.venue} · {DOW[m.dayIdx]} {m.time} · {m.city}
             </div>
-            {/* ONLY THE CHANNELS GOING OUT — in a worklist an unsent channel is not work. */}
-            <Chips m={m} litOnly />
           </div>
         );
       })}
@@ -138,7 +150,7 @@ function Due({ jobs, overdue, now, fmtPush, onOpen, onReload, onError }: {
 /* ── THE WEEK, BY DAY ────────────────────────────────────────────────────────────────────────── */
 
 function WeekByDay(p: MobileProps & { panel: React.ReactNode }) {
-  const { week, openId, onOpen, fmtPush, leadLabel, panel } = p;
+  const { week, openId, onOpen, zone, panel } = p;
   return (
     <div data-testid="m-week">
       {week.days.map((d, i) => {
@@ -185,19 +197,23 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode }) {
                   </div>
                   {/* ONLY WHAT IS PLANNED — see the Tile note in MatchPromotionView. An unlit chip,
                       an absent code and an absent push are one fact stated three times. */}
-                  {(CHANNEL_KEYS.some((k) => m.plan?.channels[k]) || m.plan?.promoCode) && (
+                  {(channelsOn(m.plan).length > 0 || firstCode(m)) && (
                     <div className="mt-2 flex flex-wrap items-center gap-[7px]">
                       <Chips m={m} litOnly />
-                      {m.plan?.promoCode && (
+                      {firstCode(m) && (
                         <span className="rounded-[5px] border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9.5px] font-extrabold text-amber-800">
-                          {m.plan.promoCode}
+                          {firstCode(m)}
                         </span>
                       )}
                     </div>
                   )}
-                  {m.state === "planned" && m.plan?.pushAt && (
-                    <div className="mt-[7px] text-[11.5px] font-bold text-deep-green/45">
-                      Push <b className="text-deep-green/70">{fmtPush(m.plan.pushAt).day} {fmtPush(m.plan.pushAt).time}</b> · {leadLabel(m.plan.pushAt, week.weekStart, m.dayIdx, m.minutes)}
+                  {/* THE FIRST PUSH AND HOW MANY MORE, in the clock on screen. Not six lines. */}
+                  {datedPushes(m.plan).length > 0 && (
+                    <div className="mt-[7px] text-[11.5px] font-bold text-deep-green/45" data-testid="m-row-plan">
+                      Push <b className="text-deep-green/70">{rowFirst(m, zone)}</b> · {rowLead(m)}
+                      {datedPushes(m.plan).length > 1 && (
+                        <span data-testid="m-row-more"> and <b className="text-deep-green/70">{datedPushes(m.plan).length - 1}</b> more</span>
+                      )}
                     </div>
                   )}
                   {m.state === "needs-decision" && (
@@ -216,6 +232,20 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode }) {
   );
 }
 
+/** The first code on any of this match's channels. One per channel; the row has space for one. */
+function firstCode(m: PromoMatch): string | null {
+  for (const k of channelsOn(m.plan)) { const c = codeFor(m.plan, k); if (c) return c; }
+  return null;
+}
+const rowFirst = (m: PromoMatch, zone: ZoneMode): string => {
+  const f = datedPushes(m.plan)[0];
+  if (!f) return "";
+  const t = fmtPushIn(f.pushAt, zone, offsetOf(m));
+  return `${t.day} ${t.time}`;
+};
+const rowLead = (m: PromoMatch): string =>
+  leadToKickoff(datedPushes(m.plan)[0]?.pushAt ?? null, m.startDateUtc)?.text ?? "";
+
 function monthOf(iso: string): string {
   const M = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   return M[Number(iso.split("-")[1]) - 1] ?? "";
@@ -224,46 +254,19 @@ function monthOf(iso: string): string {
 /* ── THE PANEL, ONE COLUMN ───────────────────────────────────────────────────────────────────── */
 
 function Panel(p: MobileProps) {
-  const { week, openId, draft, setDraft, onClose, onSave, saving, toast, leadLabel } = p;
+  const { week, openId, draft, setDraft, onClose, onSave, saving, toast, zone, setZone } = p;
   const m = week.matches.find((x) => x.apiId === openId);
   if (!m || !draft) return null;
   return (
     // NOT position:fixed. It is in the flow, directly under its row.
     <div data-testid="m-panel"
       className="mb-2 rounded-[11px] border border-deep-green bg-[#fbfdfc] p-3">
-      <h3 className="m-0 mb-2.5 text-[13px] font-extrabold">{m.venue} · {DOW[m.dayIdx]} {m.time}</h3>
+      <h3 className="m-0 mb-2.5 text-[13px] font-extrabold">{m.venue} · {m.city}</h3>
 
-      <div className="mb-[7px] text-[9px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Channels</div>
-      {CHANNELS.map((c) => (
-        <label key={c.key} data-testid={`m-ch-${c.key}`}
-          className="flex cursor-pointer items-center gap-2.5 border-b border-cream-line/60 py-[7px] text-[13.5px] font-semibold text-deep-green/70 last:border-b-0">
-          <input type="checkbox" className="peer sr-only" checked={draft.channels[c.key]}
-            onChange={(e) => setDraft({ ...draft, channels: { ...draft.channels, [c.key]: e.target.checked } })} />
-          <span className="relative h-[21px] w-9 flex-none rounded-full bg-[#e6eae8] transition after:absolute after:left-0.5 after:top-0.5 after:h-[17px] after:w-[17px] after:rounded-full after:bg-white after:shadow-sm after:transition peer-checked:bg-mint peer-checked:after:left-[17px]" />
-          {c.label}
-        </label>
-      ))}
-
-      {/* 15px MINIMUM ON EVERY INPUT — below that iOS zooms the page on focus and the layout the
-          rest of this file is careful about is thrown away by the browser. */}
-      <div className="mt-3">
-        <label className="mb-1 block text-[9px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">When</label>
-        <input type="datetime-local" data-testid="m-push-at" value={draft.pushAt}
-          onChange={(e) => setDraft({ ...draft, pushAt: e.target.value })}
-          className="w-full rounded-[9px] border border-cream-line bg-white px-[11px] py-2.5 text-[15px] font-semibold" />
-        <div className="mt-1 text-[11.5px] font-bold text-deep-green/45" data-testid="m-lead">
-          {draft.pushAt
-            ? leadLabel(new Date(draft.pushAt).toISOString(), week.weekStart, m.dayIdx, m.minutes)
-            : "needs a decision"}
-        </div>
-      </div>
-
-      <div className="mt-3">
-        <label className="mb-1 block text-[9px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Code</label>
-        <input type="text" data-testid="m-promo-code" value={draft.promoCode} placeholder="none"
-          onChange={(e) => setDraft({ ...draft, promoCode: e.target.value })}
-          className="w-full rounded-[9px] border border-cream-line bg-white px-[11px] py-2.5 text-[15px] font-semibold" />
-      </div>
+      {/* THE SAME EDITOR THE DESKTOP RENDERS. Its own grid collapses to one column below 640px,
+          which is what a channel block has to do on a phone — not a second tree that has to be
+          kept in step by hand. */}
+      <PushPlanEditor m={m} draft={draft} setDraft={setDraft} zone={zone} setZone={setZone} />
 
       <div className="mt-3 flex gap-2.5">
         <button type="button" data-testid="m-save" onClick={onSave} disabled={saving}
@@ -403,12 +406,12 @@ export default function MatchPromotionMobile(p: MobileProps) {
 
       {!week.planTableReady && (
         <div className="mx-3 mt-3 rounded-[11px] border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
-          <b>match_promotion_plan is not in the database yet.</b> Saving will refuse rather than pretend.
+          <b>match_promotion_push is not in the database yet.</b> Saving will refuse rather than pretend.
         </div>
       )}
 
-      {tab === "due" && <Due jobs={p.jobs} overdue={p.overdue} now={now} fmtPush={p.fmtPush} onOpen={p.onOpen}
-        onReload={p.onReload} />}
+      {tab === "due" && <Due jobs={p.jobs} overdue={p.overdue} now={now} zone={p.zone} onOpen={p.onOpen}
+        onReload={p.onReload} onError={(msg) => p.onError?.(msg)} />}
       {/* THE SAME LIST AS THE DESKTOP, from the same table and the same route. */}
       <PageComments weekStart={week.weekStart} placeholder="Suggestion about this week" />
       {tab === "week" && <WeekByDay {...p} panel={<Panel {...p} />} />}
@@ -431,4 +434,3 @@ export default function MatchPromotionMobile(p: MobileProps) {
   );
 }
 
-export { CHANNEL_KEYS };

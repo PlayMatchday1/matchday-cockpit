@@ -153,9 +153,16 @@ console.log("\nTHE MEASURED WEEK, REPRODUCED — 2026-08-24 against 2026-08-17")
  * production, so a screen check can only ever see the no-plans half. The half that cannot be
  * observed is exactly the half worth pinning. */
 console.log("\nCOVERAGE — colour marks the exception, and content carries the distinction");
+/* A PUSH IS ITS OWN ROW FROM 0176, so a planned match is a plan carrying one dated push rather
+ * than a plan carrying a push_at. The ASSERTIONS below are unchanged — only the shape of the
+ * fixture they are handed, which is the thing the migration moved. */
 const pm = (city: string, dayIdx: number, pushAt: string | null): PromoMatch =>
   ({ city, dayIdx, venue: "V", minutes: 1140, apiId: 1, state: pushAt ? "planned" : "none",
-     plan: pushAt ? { pushAt } : null } as unknown as PromoMatch);
+     plan: pushAt
+       ? { matchApiId: 1, comment: null, updatedBy: null, updatedAt: null,
+           pushes: [{ id: 1, matchApiId: 1, channel: "wa", pushAt, topic: null,
+                      promoCode: null, pushedAt: null, pushedBy: null }] }
+       : null } as unknown as PromoMatch);
 const days7 = Array.from({ length: 7 }, (_, i) => ({ dow: "x", date: i, iso: `d${i}`, today: false }));
 {
   is("a day with no matches is 'none'", coverageStateOf([]), "none");

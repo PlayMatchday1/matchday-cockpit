@@ -5,6 +5,11 @@
 // Ryan: "we need a way to mark these things complete it should be really simple so you can show
 // them done and not overdue but they still show so everyone has visibility."
 //
+// ══ IT IS ADDRESSED TO A PUSH, NOT A MATCH ═══════════════════════════════════════════════════
+// Migration 0176 moved the stamp onto the push row, so a match with three pushes has three
+// independent sent states and marking the WhatsApp one leaves the Klaviyo one overdue. Before
+// that, one stamp per match was the only shape the table allowed.
+//
 // ══ WHY THERE IS NO CONFIRM ══════════════════════════════════════════════════════════════════
 // It is reversible, it moves no money, and it is the thing somebody does twelve times in a row on
 // a phone. A mis-tap costs one tap. A dialog on each of twelve is the reason nobody marks anything.
@@ -12,33 +17,29 @@
 // ══ IT GOES THROUGH THE PLAN'S OWN ROUTE ═════════════════════════════════════════════════════
 // The same POST, the same capability check and the same fin_change_log audit as every other plan
 // edit. A second write path for one boolean is a second place for the audit to be forgotten.
-//
-// THE WHOLE PLAN IS SENT, not just the flag, because the route UPSERTS: omitting the channels
-// would clear them. The row on screen already has them.
 
 import { useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { canMarkSent, isPushSent, type PromoMatch } from "@/lib/matchPromotion";
+import { canMarkSent, isPushSent, type PromoPush } from "@/lib/matchPromotion";
 
 export default function MarkPushSent({
-  m,
+  push,
   onDone,
   onError,
 }: {
-  m: PromoMatch;
+  push: PromoPush;
   onDone: () => void | Promise<void>;
   onError?: (msg: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const plan = m.plan;
-  const sent = isPushSent(plan);
+  const sent = isPushSent(push);
 
-  /* ── A PLAN WITH NO PUSH TIME GETS NO CONTROL AT ALL ──────────────────────────────────────
+  /* ── A PUSH WITH NO DATE GETS NO CONTROL AT ALL ───────────────────────────────────────────
    * DISABLED WAS THE OTHER OPTION AND IT IS WORSE HERE. Migration 0128 is explicit that a NULL
-   * push_at means "needs a decision" — the row is not late, it is unplanned — and a greyed
+   * push_at means "needs a decision" — the push is not late, it is unscheduled — and a greyed
    * "Mark sent" invites the reading that it is something you could do once you worked out how.
    * There is nothing to have sent. The route refuses it too, because a UI check is not a rule. */
-  if (!canMarkSent(plan)) return null;
+  if (!canMarkSent(push)) return null;
 
   const toggle = async () => {
     if (busy) return;
@@ -50,10 +51,7 @@ export default function MarkPushSent({
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({
-          matchApiId: m.apiId,
-          channels: plan!.channels,
-          pushAt: plan!.pushAt,
-          promoCode: plan!.promoCode,
+          pushId: push.id,
           /* TAPPING AGAIN UN-MARKS IT. */
           pushed: !sent,
         }),
@@ -72,6 +70,7 @@ export default function MarkPushSent({
     <button
       type="button"
       data-testid="mark-sent"
+      data-push-id={push.id}
       data-sent={sent ? "1" : "0"}
       disabled={busy}
       aria-pressed={sent}
