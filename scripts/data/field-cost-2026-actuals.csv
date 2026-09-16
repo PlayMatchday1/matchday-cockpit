@@ -1,0 +1,190 @@
+market,field_label,month,amount_usd
+Atlanta,Hammond Park,2026-01,
+Atlanta,Hammond Park,2026-02,
+Atlanta,Hammond Park,2026-03,1625.00
+Atlanta,Hammond Park,2026-04,
+Atlanta,Hammond Park,2026-05,
+Atlanta,Hammond Park,2026-06,
+Atlanta,Hammond Park,2026-07,
+Atlanta,Hammond Park,2026-08,
+Atlanta,Hammond Park,2026-09,
+Atlanta,PRUMC,2026-01,
+Atlanta,PRUMC,2026-02,
+Atlanta,PRUMC,2026-03,
+Atlanta,PRUMC,2026-04,
+Atlanta,PRUMC,2026-05,1411.00
+Atlanta,PRUMC,2026-06,
+Atlanta,PRUMC,2026-07,
+Atlanta,PRUMC,2026-08,
+Atlanta,PRUMC,2026-09,
+Austin,NEMP,2026-01,5464.00
+Austin,NEMP,2026-02,8748.00
+Austin,NEMP,2026-03,1200.00
+Austin,NEMP,2026-04,1650.00
+Austin,NEMP,2026-05,
+Austin,NEMP,2026-06,10996.00
+Austin,NEMP,2026-07,
+Austin,NEMP,2026-08,6304.00
+Austin,NEMP,2026-09,
+Austin,RRMPC,2026-01,
+Austin,RRMPC,2026-02,2464.00
+Austin,RRMPC,2026-03,847.00
+Austin,RRMPC,2026-04,104.00
+Austin,RRMPC,2026-05,150.00
+Austin,RRMPC,2026-06,
+Austin,RRMPC,2026-07,1531.00
+Austin,RRMPC,2026-08,360.00
+Austin,RRMPC,2026-09,
+Austin,Hattrick Leander,2026-01,
+Austin,Hattrick Leander,2026-02,
+Austin,Hattrick Leander,2026-03,
+Austin,Hattrick Leander,2026-04,
+Austin,Hattrick Leander,2026-05,955.00
+Austin,Hattrick Leander,2026-06,1075.00
+Austin,Hattrick Leander,2026-07,1088.00
+Austin,Hattrick Leander,2026-08,
+Austin,Hattrick Leander,2026-09,
+Austin,Stony Point,2026-01,
+Austin,Stony Point,2026-02,450.00
+Austin,Stony Point,2026-03,150.00
+Austin,Stony Point,2026-04,600.00
+Austin,Stony Point,2026-05,150.00
+Austin,Stony Point,2026-06,
+Austin,Stony Point,2026-07,
+Austin,Stony Point,2026-08,
+Austin,Stony Point,2026-09,
+Austin,Ann Richards,2026-01,
+Austin,Ann Richards,2026-02,
+Austin,Ann Richards,2026-03,
+Austin,Ann Richards,2026-04,
+Austin,Ann Richards,2026-05,
+Austin,Ann Richards,2026-06,99.00
+Austin,Ann Richards,2026-07,645.00
+Austin,Ann Richards,2026-08,
+Austin,Ann Richards,2026-09,
+Dallas,Bicentennial,2026-01,4135.00
+Dallas,Bicentennial,2026-02,1440.00
+Dallas,Bicentennial,2026-03,1550.00
+Dallas,Bicentennial,2026-04,985.00
+Dallas,Bicentennial,2026-05,500.00
+Dallas,Bicentennial,2026-06,-895.00
+Dallas,Bicentennial,2026-07,1250.00
+Dallas,Bicentennial,2026-08,
+Dallas,Bicentennial,2026-09,
+Dallas,Strike,2026-01,
+Dallas,Strike,2026-02,
+Dallas,Strike,2026-03,
+Dallas,Strike,2026-04,
+Dallas,Strike,2026-05,1623.00
+Dallas,Strike,2026-06,2043.00
+Dallas,Strike,2026-07,1262.00
+Dallas,Strike,2026-08,
+Dallas,Strike,2026-09,
+Dallas,Majestic,2026-01,
+Dallas,Majestic,2026-02,
+Dallas,Majestic,2026-03,
+Dallas,Majestic,2026-04,2321.00
+Dallas,Majestic,2026-05,
+Dallas,Majestic,2026-06,
+Dallas,Majestic,2026-07,
+Dallas,Majestic,2026-08,
+Dallas,Majestic,2026-09,
+El Paso,Galatzan Park,2026-01,
+El Paso,Galatzan Park,2026-02,
+El Paso,Galatzan Park,2026-03,40.00
+El Paso,Galatzan Park,2026-04,40.00
+El Paso,Galatzan Park,2026-05,
+El Paso,Galatzan Park,2026-06,
+El Paso,Galatzan Park,2026-07,
+El Paso,Galatzan Park,2026-08,
+El Paso,Galatzan Park,2026-09,
+Houston,ATH Pearland,2026-01,4384.00
+Houston,ATH Pearland,2026-02,7424.00
+Houston,ATH Pearland,2026-03,4704.00
+Houston,ATH Pearland,2026-04,4704.00
+Houston,ATH Pearland,2026-05,4704.00
+Houston,ATH Pearland,2026-06,8640.00
+Houston,ATH Pearland,2026-07,8640.00
+Houston,ATH Pearland,2026-08,
+Houston,ATH Pearland,2026-09,
+Houston,ATH Katy,2026-01,1820.00
+Houston,ATH Katy,2026-02,1680.00
+Houston,ATH Katy,2026-03,1820.00
+Houston,ATH Katy,2026-04,1960.00
+Houston,ATH Katy,2026-05,1680.00
+Houston,ATH Katy,2026-06,1820.00
+Houston,ATH Katy,2026-07,1960.00
+Houston,ATH Katy,2026-08,
+Houston,ATH Katy,2026-09,
+Houston,KISC,2026-01,
+Houston,KISC,2026-02,
+Houston,KISC,2026-03,
+Houston,KISC,2026-04,
+Houston,KISC,2026-05,
+Houston,KISC,2026-06,2730.00
+Houston,KISC,2026-07,
+Houston,KISC,2026-08,
+Houston,KISC,2026-09,
+Houston,PAC Global,2026-01,
+Houston,PAC Global,2026-02,
+Houston,PAC Global,2026-03,
+Houston,PAC Global,2026-04,
+Houston,PAC Global,2026-05,
+Houston,PAC Global,2026-06,
+Houston,PAC Global,2026-07,
+Houston,PAC Global,2026-08,263.00
+Houston,PAC Global,2026-09,
+OKC,Scissortail,2026-01,
+OKC,Scissortail,2026-02,1090.00
+OKC,Scissortail,2026-03,
+OKC,Scissortail,2026-04,
+OKC,Scissortail,2026-05,
+OKC,Scissortail,2026-06,
+OKC,Scissortail,2026-07,878.00
+OKC,Scissortail,2026-08,
+OKC,Scissortail,2026-09,
+San Antonio,Soccer Central,2026-01,5402.00
+San Antonio,Soccer Central,2026-02,3900.00
+San Antonio,Soccer Central,2026-03,3240.00
+San Antonio,Soccer Central,2026-04,3960.00
+San Antonio,Soccer Central,2026-05,5190.00
+San Antonio,Soccer Central,2026-06,7985.00
+San Antonio,Soccer Central,2026-07,9720.00
+San Antonio,Soccer Central,2026-08,2340.00
+San Antonio,Soccer Central,2026-09,180.00
+San Antonio,STAR,2026-01,
+San Antonio,STAR,2026-02,
+San Antonio,STAR,2026-03,
+San Antonio,STAR,2026-04,
+San Antonio,STAR,2026-05,500.00
+San Antonio,STAR,2026-06,
+San Antonio,STAR,2026-07,
+San Antonio,STAR,2026-08,
+San Antonio,STAR,2026-09,
+San Antonio,Zipp Family,2026-01,
+San Antonio,Zipp Family,2026-02,
+San Antonio,Zipp Family,2026-03,
+San Antonio,Zipp Family,2026-04,
+San Antonio,Zipp Family,2026-05,
+San Antonio,Zipp Family,2026-06,
+San Antonio,Zipp Family,2026-07,120.00
+San Antonio,Zipp Family,2026-08,
+San Antonio,Zipp Family,2026-09,
+St. Louis,Centennial Commons,2026-01,
+St. Louis,Centennial Commons,2026-02,
+St. Louis,Centennial Commons,2026-03,1600.00
+St. Louis,Centennial Commons,2026-04,
+St. Louis,Centennial Commons,2026-05,
+St. Louis,Centennial Commons,2026-06,
+St. Louis,Centennial Commons,2026-07,
+St. Louis,Centennial Commons,2026-08,
+St. Louis,Centennial Commons,2026-09,
+St. Louis,Lou Indoor,2026-01,1249.00
+St. Louis,Lou Indoor,2026-02,
+St. Louis,Lou Indoor,2026-03,
+St. Louis,Lou Indoor,2026-04,
+St. Louis,Lou Indoor,2026-05,
+St. Louis,Lou Indoor,2026-06,
+St. Louis,Lou Indoor,2026-07,
+St. Louis,Lou Indoor,2026-08,
+St. Louis,Lou Indoor,2026-09,

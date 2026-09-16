@@ -1,0 +1,535 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Growth › Competitors</title>
+<style>
+  :root{ --ink:#12261c; --mut:#5d6b62; --faint:#8b9a91; --line:#dfe5e0; --hair:#eef2ef; --bg:#f4f6f4;
+         --grn:#12402a; --mint:#e6f6ee; --ok:#0d6b45;
+         --amb:#8a5a12; --ambbg:#fdf6e6; --ambline:#ecdcb4;
+         --us:#12402a; --us-bg:#e6f6ee;
+         --plei:#5b4b8a; --plei-bg:#efecf7;
+         --gr:#12657a; --gr-bg:#e5f2f5; }
+  *{ box-sizing:border-box }
+  [hidden]{ display:none !important }
+  body{ margin:0; font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg) }
+  .num{ font-variant-numeric:tabular-nums }
+
+  .sw{ display:flex; gap:6px; padding:10px 12px; background:#fff; border-bottom:1px solid var(--line); flex-wrap:wrap; align-items:center }
+  .sw b{ font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--mut); margin-right:2px }
+  .sw button{ font:inherit; font-size:12.5px; font-weight:650; padding:6px 11px; border:1px solid var(--line);
+              background:#fff; color:var(--ink); border-radius:999px; cursor:pointer; min-height:32px }
+  .sw button[aria-pressed="true"]{ background:var(--grn); color:#fff; border-color:var(--grn) }
+
+  .wrap{ padding:16px; max-width:1060px; margin:0 auto }
+  h1{ margin:0; font-size:22px; font-weight:800; letter-spacing:-.01em }
+  .sub{ margin-top:3px; font-size:12.5px; color:var(--mut) }
+  .lbl{ font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--mut); font-weight:800 }
+
+  .cov{ margin-top:14px; border:1px solid var(--ambline); background:var(--ambbg); border-radius:9px;
+        padding:11px 13px; font-size:12.5px; color:var(--amb); line-height:1.5 }
+  .cov b{ font-weight:800 }
+
+  .city{ margin-top:20px; background:#fff; border:1px solid var(--line); border-radius:11px; overflow:hidden }
+  .chead{ padding:12px 14px; display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; border-bottom:1px solid var(--hair) }
+  .chead h2{ margin:0; font-size:16px; font-weight:800 }
+  .win{ font-size:11.5px; color:var(--faint) }
+
+  /* ── the four numbers that describe the market, before any row ─────────── */
+  .stats{ display:grid; grid-template-columns:repeat(4,1fr); border-bottom:1px solid var(--hair) }
+  .stat{ padding:11px 14px; border-left:1px solid var(--hair) }
+  .stat:first-child{ border-left:0 }
+  .stat .v{ font-size:18px; font-weight:800; letter-spacing:-.01em; margin-top:3px }
+  .stat .n{ font-size:11px; color:var(--faint); margin-top:1px }
+  @media (max-width:640px){ .stats{ grid-template-columns:repeat(2,1fr) }
+    .stat:nth-child(3){ border-left:0 } .stat:nth-child(n+3){ border-top:1px solid var(--hair) } }
+
+  .share{ padding:12px 14px; border-bottom:1px solid var(--hair); background:#fbfdfb }
+  .shareline{ font-size:12.5px; margin-bottom:9px }
+  .shareline b{ font-size:15px; font-weight:800 }
+  .shareline b.noshare{ font-size:12.5px; color:#8a6300 }
+  .whynot{ margin:4px 0 9px; padding-left:17px; font-size:11px; color:#8a6300; line-height:1.6 }
+  .sbar{ display:flex; height:22px; border-radius:5px; overflow:hidden; border:1px solid var(--line) }
+  .seg{ display:flex; align-items:center; justify-content:center; font-size:10.5px; font-weight:800; color:#fff; min-width:2px }
+  .seg.us{ background:var(--us) } .seg.plei{ background:var(--plei) } .seg.gr{ background:var(--gr) }
+  .skeys{ display:flex; gap:14px; flex-wrap:wrap; margin-top:8px; font-size:12px; color:var(--mut) }
+  .skeys span{ display:flex; align-items:center; gap:6px }
+  .dot{ width:9px; height:9px; border-radius:2px; flex:none }
+
+  /* ── the facility rows. A GRID, not a table: a table's auto layout is how
+       one bad cell pushed every number off screen. ─────────────────────────── */
+  .rhead, .frow{
+    display:grid;
+    grid-template-columns:minmax(0,1.6fr) 150px 64px 128px minmax(0,0.78fr);
+    gap:14px; align-items:center; padding:10px 14px;
+  }
+  .rhead{ border-bottom:1px solid var(--hair); background:#fafbfa }
+  .frow{ border-bottom:1px solid var(--hair) }
+  .frow:last-child{ border-bottom:0 }
+  .frow.ours{ background:var(--us-bg) }
+
+  .fname{ min-width:0 }
+  .fname .n{ font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .fname .m{ display:flex; gap:5px; align-items:center; margin-top:3px; flex-wrap:wrap }
+  .src{ font-size:9px; font-weight:800; padding:1.5px 5px; border-radius:3px; letter-spacing:.04em }
+  .src.plei{ background:var(--plei-bg); color:var(--plei) }
+  .src.gr{ background:var(--gr-bg); color:var(--gr) }
+  .src.us{ background:var(--us); color:#fff }
+  .ourschip{ font-size:9px; font-weight:800; padding:1.5px 5px; border-radius:3px; background:var(--us); color:#fff }
+
+  /* spots: a bar, so size reads before the number does */
+  .spots{ display:flex; align-items:center; gap:8px; min-width:0 }
+  .track{ flex:1; height:8px; background:var(--hair); border-radius:2px; overflow:hidden; min-width:10px }
+  /* display:block, because width and height do not apply to a non-replaced INLINE element and a
+     bare <span> is inline. Without it every bar renders at 0px and the column looks empty. */
+  .fill{ display:block; height:100%; border-radius:2px; min-width:2px }
+  .fill.plei{ background:var(--plei) } .fill.gr{ background:var(--gr) } .fill.us{ background:var(--us) }
+  .spots .v{ font-size:12.5px; font-weight:650; width:42px; text-align:right; flex:none }
+  .md{ font-size:12.5px; color:var(--mut); text-align:right }
+
+  /* PRICE IS A NUMBER, NOT A POSITION. The first cut drew each facility as a segment on a shared
+     $6 to $16 axis with a marker at our own price. It needed a legend to read, the axis labels
+     floated with nothing under them, and Ryan's verdict was "makes no sense". A number needs no
+     legend. The comparison it was trying to make already lives in the CHEAPER THAN US tile. */
+  .price{ text-align:right; font-size:12.5px; white-space:nowrap }
+  .price .u{ display:block; font-size:10.5px; font-weight:700; color:var(--amb); margin-top:1px }
+  .pnone{ color:var(--faint); font-style:italic; font-size:11.5px }
+
+  .fmts{ display:flex; gap:4px; flex-wrap:wrap; min-width:0 }
+  /* A chip in a row is a LABEL, not a control: it sits inside the row's <button> and a button
+     inside a button is invalid markup. The filter bubbles at the top of the page are the control,
+     and they are keyboard reachable. */
+  .fchip{ font-size:10.5px; font-weight:700; padding:3px 7px; border-radius:999px;
+          background:var(--hair); color:var(--mut) }
+  .fchip.hit{ background:var(--grn); color:#fff }
+
+  /* ── the format filter, page level ─────────────────────────────────────── */
+  .ffilter{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-top:12px }
+  .ffilter .lbl{ margin-right:2px }
+  .ffilter button{ font:inherit; font-size:12px; font-weight:700; padding:5px 11px; min-height:32px;
+                   border-radius:999px; border:1px solid var(--line); background:#fff; color:var(--ink); cursor:pointer }
+  .ffilter button[aria-pressed="true"]{ background:var(--grn); color:#fff; border-color:var(--grn) }
+  .fnote{ margin-top:8px; font-size:11.5px; color:var(--amb) }
+
+  /* ── expand / minimize ─────────────────────────────────────────────────── */
+  .fwrap{ border-bottom:1px solid var(--hair) }
+  .fwrap:last-child{ border-bottom:0 }
+  .frow{ width:100%; font:inherit; color:inherit; background:none; border:0; text-align:left; cursor:pointer }
+  .frow:hover{ background:#fafbfa }
+  .frow.ours:hover{ background:#dcf0e5 }
+  .frow:focus-visible{ outline:2px solid var(--grn); outline-offset:-2px }
+  .chev{ display:inline-block; width:13px; color:var(--faint); font-weight:800;
+         transition:transform .14s ease-out; transform-origin:45% 50% }
+  .frow[aria-expanded="true"] .chev{ transform:rotate(90deg); color:var(--ink) }
+  @media (prefers-reduced-motion:reduce){ .chev{ transition:none } }
+
+  .fdetail{ padding:2px 14px 14px 27px; background:#fafbfa }
+  .nodetail{ font-size:12px; color:var(--mut); line-height:1.5; padding:10px 0; max-width:62ch }
+  .dgrid{ display:grid; gap:10px }
+  .dday{ border:1px solid var(--line); border-radius:8px; background:#fff; overflow:hidden }
+  .dday h4{ margin:0; padding:7px 11px; font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+            color:var(--mut); background:#f7f9f7; border-bottom:1px solid var(--hair);
+            display:flex; justify-content:space-between; gap:10px }
+  .dday h4 span{ font-weight:650; letter-spacing:0; text-transform:none; color:var(--faint) }
+  .dm{ display:grid; grid-template-columns:78px 54px 1fr auto; gap:10px; align-items:center;
+       padding:6px 11px; border-top:1px solid var(--hair); font-size:12.5px }
+  .dm:first-of-type{ border-top:0 }
+  .dm .t{ color:var(--mut) }
+  .dm .s{ color:var(--faint) }
+  .dm .p{ font-weight:650; text-align:right }
+  @media (max-width:560px){
+    .fdetail{ padding-left:14px }
+    .dm{ grid-template-columns:70px 48px 1fr auto; gap:8px; font-size:12px }
+  }
+
+  .foot{ margin-top:16px; font-size:11.5px; color:var(--mut); line-height:1.5 }
+
+  @media (max-width:760px){
+    .rhead{ display:none }
+    .frow{ grid-template-columns:minmax(0,1fr) 128px; gap:6px 12px; padding:11px 14px }
+    .frow .md{ display:none }
+    .frow .price{ text-align:left; grid-column:1 }
+    .frow .fmts{ grid-column:2; justify-content:flex-end }
+  }
+</style>
+
+<div class="sw">
+  <b>Source</b>
+  <button data-s="both" aria-pressed="true">Both</button>
+  <button data-s="plei" aria-pressed="false">Plei</button>
+  <button data-s="goodrec" aria-pressed="false">GoodRec</button>
+</div>
+
+<div class="wrap">
+  <h1>Competitors</h1>
+  <div class="sub">Bookable supply per week, as captured. MatchDay's own fields are in the list.
+    Open a facility to see its week.</div>
+  <div class="ffilter" data-testid="ffilter"><span class="lbl">Format</span></div>
+  <div class="fnote" data-testid="fnote" hidden></div>
+  <div class="cov" data-testid="coverage"></div>
+  <div id="cities"></div>
+  <div class="foot">
+    <b>MD Standard</b> is bookable spots divided by 18, one MatchDay match being 18 spots. It is the
+    only figure comparable across formats: a 5v5 slot and an 11v11 slot are not the same match.
+    Matches per week was captured but does not reconcile with the formats at several facilities, so
+    it is not shown and is not the number to compare on.
+  </div>
+</div>
+
+<script>
+// OBJECTS, NOT POSITIONAL ARRAYS. The first cut of this page summed row[2] for the matches total,
+// and row[2] was the facility NAME — 26 names string-concatenated into one cell 3,596px wide, which
+// pushed every numeric column off screen. A key cannot be off by one.
+const CAPTURES = [
+  // start/end/note carry what the window ACTUALLY is, so alignment is decided by comparison
+  // rather than by knowing which city is which. See the share block below.
+  { source:"plei",    city:"Houston",             window:"Tue 15 to Mon 21 Sep 2026",
+    start:"2026-09-15", end:"2026-09-21", note:null },
+  { source:"plei",    city:"Dallas / Fort Worth", window:"Mon 21 plus Tue 15 to Sun 20 Sep 2026",
+    start:"2026-09-15", end:"2026-09-21", note:"Mon 21 plus Tue 15 to Sun 20; not a clean 7 days" },
+  { source:"goodrec", city:"Dallas / Fort Worth", window:"Wed 16 to Tue 22 Sep 2026",
+    start:"2026-09-16", end:"2026-09-22", note:null },
+];
+const ALL_CITIES = ["Austin","Dallas / Fort Worth","Houston","San Antonio","Atlanta","St. Louis","Oklahoma City","El Paso"];
+const CAPTURED = ["Houston","Dallas / Fort Worth"];
+
+const F = (source, city, facility, matches, spots, lo, hi, formats, ourVenueId=null) =>
+  ({ source, city, facility, matches, spots, lo, hi, formats, ourVenueId });
+
+// MatchDay's own supply for the same window. EXAMPLE FIGURES in this mock; the build reads spots
+// and price live so neither can go stale.
+const ROWS = [
+  F("us","Houston","ATH Pearland",           24,432,12.00,14.00,["7v7"],8),
+  F("us","Houston","ATH Katy",               14,252,12.00,14.00,["7v7"],7),
+  F("us","Houston","KISC (Katy Intl)",        6,108,12.00,13.00,["7v7"],9),
+  F("us","Houston","PAC Global",              4, 72,12.00,13.00,["7v7"],10),
+  F("us","Dallas / Fort Worth","Bicentennial",8,144,12.00,14.00,["7v7"],13),
+  F("us","Dallas / Fort Worth","Strike",      4, 72,12.00,13.00,["7v7"],54),
+
+  F("plei","Houston","Revolution Soccer Complex",53,662,9.50,15.50,["7v7","5v5"]),
+  F("plei","Houston","Toros Lifestyle Soccer Art District",38,426,11.50,14.50,["6v6","5v5"]),
+  F("plei","Houston","Pegaso HTX",35,420,11.50,13.50,["6v6"]),
+  F("plei","Houston","HTX Fieldhouse",32,384,10.50,12.50,["6v6"]),
+  F("plei","Houston","Houston Soccer Field",26,380,13.00,14.50,["8v8","6v6"]),
+  F("plei","Houston","Katy International Sports Complex",26,360,10.50,13.50,["6v6","8v8"],9),
+  F("plei","Houston","GoPro Arena",24,288,6.50,10.50,["6v6"]),
+  F("plei","Houston","Crossbar Academy",19,228,10.50,13.50,["6v6"]),
+  F("plei","Houston","Turf On Soccer Fields",16,224,9.50,9.50,["7v7"]),
+  F("plei","Houston","Peek Sports Texas",15,220,11.50,14.75,["7v7","8v8","10v10"]),
+  F("plei","Houston","Pac Global Academy | West Houston",12,188,10.50,11.50,["9v9","8v8","5v5","6v6"],10),
+  F("plei","Houston","The HatTrick Oakridge",12,146,10.50,12.50,["6v6","7v7"],52),
+  F("plei","Houston","Athlete Training & Health | Cypress",6,142,12.50,13.50,["11v11"]),
+  F("plei","Houston","The HatTrick Patio",9,90,8.50,8.50,["5v5"]),
+  F("plei","Houston","Cancha Five Stars | Hillcroft",6,84,9.75,10.75,["7v7"]),
+  F("plei","Houston","Q&amp;B Indoor Sports",6,71,12.50,12.50,["6v6","5v5"]),
+  F("plei","Houston","Memorial Indoor Soccer",2,70,11.25,11.25,["5v5"]),
+  F("plei","Houston","Futbolito-Golfo de Mexico",4,56,7.50,7.50,["7v7"]),
+  F("plei","Houston","King Soccer",4,54,11.75,13.75,["6v6"]),
+  F("plei","Houston","Athlete Training and Health | Katy",2,44,12.50,12.50,["11v11"],7),
+  F("plei","Houston","Houston Dynamo Sports Park",2,44,13.50,13.50,["11v11"]),
+  F("plei","Houston","Crossbar Academy | Indoor Soccer",4,40,8.50,11.50,["5v5"]),
+  F("plei","Houston","Indoor Soccer Box",3,35,11.25,12.50,["5v5"]),
+  F("plei","Houston","Community Fieldhouse",2,32,11.50,11.50,["8v8"]),
+  F("plei","Houston","PSG Academy Houston",1,12,9.50,9.50,["6v6"]),
+  F("plei","Houston","Houston Select FC",1,10,12.50,12.50,["5v5"]),
+
+  F("plei","Dallas / Fort Worth","City Futsal",43,516,12.50,16.50,["6v6"]),
+  F("plei","Dallas / Fort Worth","City Futsal The Colony",26,312,12.50,15.50,["6v6"]),
+  F("plei","Dallas / Fort Worth","Salient Touch Futbol Academy",26,312,9.50,12.50,["6v6"]),
+  F("plei","Dallas / Fort Worth","Foro Sports Club",24,308,9.50,14.50,["6v6","8v8"]),
+  F("plei","Dallas / Fort Worth","Ulete",19,258,12.50,15.75,["7v7","5v5"]),
+  F("plei","Dallas / Fort Worth","Pro Touch Soccer Center",17,204,13.50,14.50,["6v6"]),
+  F("plei","Dallas / Fort Worth","Vaqueros Field at Sycamore Park",7,203,10.00,10.50,["7v7"]),
+  F("plei","Dallas / Fort Worth","Rockwall Indoor Sports World",12,168,13.50,13.50,["7v7"]),
+  F("plei","Dallas / Fort Worth","UMB Bank Performance Center",13,156,14.50,14.50,["6v6"]),
+  F("plei","Dallas / Fort Worth","Upper 90 Soccer Center",7,98,12.50,15.50,["7v7"]),
+  F("plei","Dallas / Fort Worth","SoccerZone",7,94,9.50,12.50,["7v7","5v5"]),
+  F("plei","Dallas / Fort Worth","TOCA Soccer Center | The Colony",3,70,10.50,12.50,["7v7"]),
+  F("plei","Dallas / Fort Worth","Fut360",3,30,11.75,11.75,["5v5"]),
+  F("plei","Dallas / Fort Worth","Crossbar Soccer + Beer | Richardson",2,24,12.25,12.25,["6v6"]),
+  F("plei","Dallas / Fort Worth","Keller Fields | Futbol Evolution",1,22,14.50,14.50,["11v11"]),
+  F("plei","Dallas / Fort Worth","North Park Soccer Fields",1,14,11.50,11.50,["7v7"]),
+
+  F("goodrec","Dallas / Fort Worth","Crossbar, Denton",11,331,9.99,12.99,["5v5","7v7"]),
+  F("goodrec","Dallas / Fort Worth","Crossbar, Richardson",22,298,9.99,13.99,["7v7","6v6"]),
+  F("goodrec","Dallas / Fort Worth","ATH, Allen",11,242,9.99,13.99,["11v11"]),
+  F("goodrec","Dallas / Fort Worth","City Futsal, Austin Ranch",15,180,11.99,11.99,["6v6"]),
+  F("goodrec","Dallas / Fort Worth","Salient Touch",11,132,10.99,12.99,["6v6"]),
+  F("goodrec","Dallas / Fort Worth","CityFutsal Farmers Market",10,120,10.99,14.99,["6v6"]),
+  F("goodrec","Dallas / Fort Worth","Ulete, Southlake",7,98,14.99,14.99,["7v7"]),
+  F("goodrec","Dallas / Fort Worth","Crossbar, Rowlett",6,84,9.99,9.99,["7v7"],51),
+  F("goodrec","Dallas / Fort Worth","TOCA, Colony",3,56,9.99,13.99,["7v7"]),
+  F("goodrec","Dallas / Fort Worth","Foro Sports",4,46,9.99,9.99,["6v6","5v5"]),
+  F("goodrec","Dallas / Fort Worth","Gateway Park, Fort Worth",2,40,4.99,4.99,["10v10"]),
+  F("goodrec","Dallas / Fort Worth","TOCA, Allen",3,36,9.99,9.99,["5v5"]),
+  F("goodrec","Dallas / Fort Worth","Pro Touch, Lake Highlands",2,28,12.99,12.99,["7v7"]),
+  F("goodrec","Dallas / Fort Worth","TOCA, Carrollton",2,28,13.99,13.99,["7v7"]),
+  F("goodrec","Dallas / Fort Worth","FIT - Forney",2,24,null,null,["6v6"]),
+  F("goodrec","Dallas / Fort Worth","UMB Bank, Frisco",2,24,14.99,14.99,["6v6"]),
+  F("goodrec","Dallas / Fort Worth","Upper 90 Soccer Center",1,14,11.99,11.99,["7v7"]),
+];
+
+/* ── THE MATCH LOG, PER FACILITY PER DAY ───────────────────────────────────────────────────────
+ * Ryan: "we should be able to expand/minimize into each field and see their matches and size and
+ * price per day also."
+ *
+ * THIS IS A DIFFERENT GRAIN FROM THE SUMMARY ABOVE and the September capture does not have it:
+ * that capture recorded weekly totals per facility. The workbook's Match Log tab is where this
+ * comes from. So the page must render BOTH states, and the empty one has to say which it is
+ * rather than showing an empty panel that reads as "no matches".
+ *
+ * EXAMPLE ROWS below, for two facilities, so the expanded shape is specified.
+ */
+const DETAIL = {
+  "Revolution Soccer Complex": [
+    { day:"Mon", matches:[["6:00 PM","7v7",14,12.50],["7:15 PM","7v7",14,12.50],["8:30 PM","5v5",10,9.50]] },
+    { day:"Tue", matches:[["6:00 PM","7v7",14,12.50],["7:15 PM","7v7",14,13.50],["8:30 PM","7v7",14,13.50],["9:45 PM","5v5",10,9.50]] },
+    { day:"Wed", matches:[["6:00 PM","7v7",14,12.50],["7:15 PM","5v5",10,9.50]] },
+    { day:"Thu", matches:[["6:00 PM","7v7",14,13.50],["7:15 PM","7v7",14,13.50],["8:30 PM","7v7",14,15.50]] },
+    { day:"Fri", matches:[["7:00 PM","7v7",14,15.50],["8:15 PM","7v7",14,15.50]] },
+    { day:"Sat", matches:[["10:00 AM","7v7",14,12.50],["11:15 AM","7v7",14,12.50],["1:00 PM","5v5",10,9.50]] },
+    { day:"Sun", matches:[["10:00 AM","7v7",14,12.50],["11:15 AM","7v7",14,12.50]] },
+  ],
+  "ATH Pearland": [
+    { day:"Mon", matches:[["7:00 PM","7v7",18,12.00],["8:15 PM","7v7",18,12.00]] },
+    { day:"Tue", matches:[["7:00 PM","7v7",18,12.00],["8:15 PM","7v7",18,14.00]] },
+    { day:"Wed", matches:[["7:00 PM","7v7",18,12.00]] },
+    { day:"Thu", matches:[["7:00 PM","7v7",18,14.00],["8:15 PM","7v7",18,14.00]] },
+    { day:"Sat", matches:[["9:00 AM","7v7",18,12.00],["10:15 AM","7v7",18,12.00],["11:30 AM","7v7",18,12.00]] },
+    { day:"Sun", matches:[["9:00 AM","7v7",18,12.00],["10:15 AM","7v7",18,12.00]] },
+  ],
+};
+
+const SPOTS_PER_MD_MATCH = 18;
+const mdStd = spots => spots / SPOTS_PER_MD_MATCH;
+const one = n => n.toFixed(1);
+const money = n => "$" + n.toFixed(2);
+const srcLabel = s => s === "plei" ? "PLEI" : s === "goodrec" ? "GOODREC" : "MATCHDAY";
+const srcClass = s => s === "plei" ? "plei" : s === "goodrec" ? "gr" : "us";
+
+let source = "both";
+const fmtOn = new Set();          // empty = every format
+const open = new Set();           // which facilities are expanded, kept across a re-render
+
+// FORMAT ORDER IS THE GAME, not the alphabet. "10v10" sorts before "5v5" as a string.
+const FORMATS = [...new Set(ROWS.flatMap(r => r.formats))]
+  .sort((a,b) => Number(a.split("v")[0]) - Number(b.split("v")[0]));
+
+function dayTable(days){
+  return `<div class="dgrid">${days.map(d => {
+    const spots = d.matches.reduce((s,m) => s + m[2], 0);
+    const lo = Math.min(...d.matches.map(m => m[3])), hi = Math.max(...d.matches.map(m => m[3]));
+    return `<div class="dday" data-testid="day" data-day="${d.day}">
+      <h4>${d.day}
+        <span data-testid="daysum">${d.matches.length} ${d.matches.length === 1 ? "match" : "matches"}
+          · ${spots} spots · ${lo === hi ? money(lo) : money(lo) + " to " + money(hi)}</span></h4>
+      ${d.matches.map(([time, fmt, spots, price]) => `<div class="dm" data-testid="match">
+        <span class="t">${time}</span>
+        <span class="fchip" style="cursor:default">${fmt}</span>
+        <span class="s">${spots} spots</span>
+        <span class="p num">${money(price)}</span>
+      </div>`).join("")}
+    </div>`;
+  }).join("")}</div>`;
+}
+
+function render(){
+  document.querySelectorAll('.sw button').forEach(b =>
+    b.setAttribute("aria-pressed", String(b.dataset.s === source)));
+
+  // ── THE FORMAT FILTER. Multi-select: a market question is usually "7v7 and 8v8", not one.
+  document.querySelector('[data-testid="ffilter"]').innerHTML =
+    `<span class="lbl">Format</span>` +
+    FORMATS.map(f => `<button type="button" data-fmt="${f}" data-testid="fbtn"
+      aria-pressed="${fmtOn.has(f)}">${f}</button>`).join("") +
+    (fmtOn.size ? `<button type="button" data-fmt="__clear" data-testid="fclear"
+      aria-pressed="false">Clear</button>` : "");
+
+  /* THE FILTER NARROWS THE LIST AND NOTHING ELSE, and the page says so. The capture holds spots
+   * PER FACILITY, not per format, so a share or a spots total recomputed under a format filter
+   * would be a number the data cannot support. */
+  const fnote = document.querySelector('[data-testid="fnote"]');
+  fnote.hidden = fmtOn.size === 0;
+  if (fmtOn.size) fnote.textContent =
+    `Showing facilities that offer ${[...fmtOn].join(" or ")}. The totals and the share above each `
+    + `city still cover every format: the capture records spots per facility, not per format.`;
+
+  // MatchDay's own rows are never filtered out by SOURCE. The point of the page is where WE sit.
+  const rows = ROWS
+    .filter(r => r.source === "us" || source === "both" || r.source === source)
+    .filter(r => fmtOn.size === 0 || r.formats.some(f => fmtOn.has(f)));
+
+  const missing = ALL_CITIES.filter(c => !CAPTURED.includes(c));
+  document.querySelector('[data-testid="coverage"]').innerHTML =
+    `<b>Captured: ${CAPTURED.length} of ${ALL_CITIES.length} MatchDay cities.</b> ` +
+    `No capture yet for ${missing.join(", ")}. ` +
+    `A city missing from this page has not been looked at. It does not mean the competitor is not there.`;
+
+  // Everything ABOVE the rows is computed from the source filter only, never from the format
+  // filter, for the reason in the note above.
+  const allBySource = ROWS.filter(r => r.source === "us" || source === "both" || r.source === source);
+
+  document.getElementById("cities").innerHTML = CAPTURED.map(city => {
+    const all = allBySource.filter(r => r.city === city);
+    const cr  = rows.filter(r => r.city === city).sort((a,b) => b.spots - a.spots);
+    const them = all.filter(r => r.source !== "us");
+    const us   = all.filter(r => r.source === "us");
+
+    const theirSpots = them.reduce((s,r) => s + r.spots, 0);
+    const ourSpots   = us.reduce((s,r) => s + r.spots, 0);
+    const ourMd = mdStd(ourSpots), theirMd = mdStd(theirSpots);
+    const share = ourMd + theirMd > 0 ? (ourMd / (ourMd + theirMd)) * 100 : 0;
+
+    const ourLo = Math.min(...us.map(r => r.lo)), ourHi = Math.max(...us.map(r => r.hi));
+
+    // median price per player across every facility that published one, midpoint of its range
+    const mids = all.filter(r => r.lo != null).map(r => (r.lo + r.hi) / 2).sort((a,b) => a - b);
+    const median = mids.length ? (mids.length % 2 ? mids[(mids.length-1)/2]
+                                : (mids[mids.length/2 - 1] + mids[mids.length/2]) / 2) : null;
+    const under = them.filter(r => r.lo != null && r.lo < ourLo).length;
+
+    // Scaled to the city's biggest facility REGARDLESS of the format filter, so a bar means the
+    // same length before and after filtering.
+    const maxSpots = Math.max(...all.map(r => r.spots));
+    const wins = CAPTURES.filter(c => c.city === city && (source === "both" || c.source === source))
+      .map(c => `${c.source === "plei" ? "Plei" : "GoodRec"} ${c.window}`).join(" · ");
+    const byComp = ["plei","goodrec"]
+      .map(s => ({ s, md: mdStd(them.filter(r => r.source === s).reduce((t,r) => t + r.spots, 0)) }))
+      .filter(x => x.md > 0);
+    const total = ourMd + theirMd;
+
+    /* ── A PERCENTAGE ONLY WHERE THE WINDOWS ACTUALLY ALIGN ─────────────────────────────────
+     * Ryan: "A number with a footnote gets screenshotted without the footnote and ends up in a
+     * deck, and this feeds raise prep." So where the windows do not line up the RATIO IS NOT
+     * PRINTED AT ALL. The bar and both sides' MD Standard stay, because those are counts of real
+     * listings and are true whatever the window; only the division is withheld.
+     *
+     * DECIDED BY COMPARISON, NEVER BY CITY. A future capture that lines up starts showing a
+     * percentage on its own. A window_note is itself disqualifying: it exists only to record that
+     * the window is not what its two dates imply, which is the case dates alone cannot see. */
+    const shownCaps = CAPTURES.filter(c => c.city === city && (source === "both" || c.source === source));
+    const days = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 864e5) + 1;
+    const ourWin = shownCaps[0];
+    const why = [];
+    for (const c of shownCaps) {
+      const name = c.source === "plei" ? "Plei" : "GoodRec";
+      if (c.note) why.push(name + " is " + c.note);
+      else if (days(c.start, c.end) !== days(ourWin.start, ourWin.end))
+        why.push(name + " covers " + days(c.start, c.end) + " days against our " + days(ourWin.start, ourWin.end));
+      else if (c.start !== ourWin.start || c.end !== ourWin.end)
+        why.push(name + " covers " + c.window + " and ours is " + ourWin.window);
+    }
+    const aligned = why.length === 0;
+
+    return `<div class="city" data-testid="city" data-city="${city}">
+      <div class="chead"><h2>${city}</h2><span class="win" data-testid="window">${wins}</span></div>
+
+      <div class="stats">
+        <div class="stat"><div class="lbl">Facilities</div>
+          <div class="v num" data-testid="s-fac">${them.length}</div>
+          <div class="n">competing, plus our ${us.length}</div></div>
+        <div class="stat"><div class="lbl">Their spots / wk</div>
+          <div class="v num" data-testid="s-spots">${theirSpots.toLocaleString()}</div>
+          <div class="n">${one(theirMd)} MD Standard</div></div>
+        <div class="stat"><div class="lbl">Median price</div>
+          <div class="v num" data-testid="s-median">${median == null ? "n/a" : money(median)}</div>
+          <div class="n">we charge ${money(ourLo)} to ${money(ourHi)}</div></div>
+        <div class="stat"><div class="lbl">Cheaper than us</div>
+          <div class="v num" data-testid="s-under">${under}</div>
+          <div class="n">of ${them.length} competing facilities</div></div>
+      </div>
+
+      <div class="share" data-testid="share">
+        <div class="shareline">${aligned
+          ? `MatchDay holds <b data-testid="sharepct">${share.toFixed(0)}%</b>
+             of captured bookable supply, in MD Standard matches per week.`
+          : `<b class="noshare" data-testid="nosharepct">The windows do not line up, so there is no
+             percentage to give.</b> Both sides are still counted below.`}</div>
+        ${aligned ? `` : `<ul class="whynot" data-testid="sharewhy">${why.map(w => `<li>${w}</li>`).join("")}</ul>`}
+        <div class="sbar">
+          <div class="seg us" style="width:${(ourMd/total)*100}%" data-testid="seg-us">${one(ourMd)}</div>
+          ${byComp.map(x => `<div class="seg ${x.s === "plei" ? "plei" : "gr"}"
+            style="width:${(x.md/total)*100}%" data-testid="seg-${x.s}">${one(x.md)}</div>`).join("")}
+        </div>
+        <div class="skeys">
+          <span><i class="dot" style="background:var(--us)"></i>MatchDay ${one(ourMd)}</span>
+          ${byComp.map(x => `<span><i class="dot" style="background:${x.s === "plei" ? "var(--plei)" : "var(--gr)"}"></i>
+            ${x.s === "plei" ? "Plei" : "GoodRec"} ${one(x.md)}</span>`).join("")}
+        </div>
+      </div>
+
+      <div class="rhead">
+        <div class="lbl">Facility</div>
+        <div class="lbl">Spots / wk</div>
+        <div class="lbl" style="text-align:right">MD std</div>
+        <div class="lbl" style="text-align:right">Price per player</div>
+        <div class="lbl">Formats</div>
+      </div>
+
+      ${cr.length === 0 ? `<div class="nodetail" style="padding:14px" data-testid="noformat">
+        No facility in ${city} offers ${[...fmtOn].join(" or ")}.</div>` : ""}
+
+      ${cr.map(r => {
+        const isUs = r.source === "us";
+        const key = `${city}|${r.facility}`;
+        const days = DETAIL[r.facility] ?? null;
+        return `<div class="fwrap" data-testid="wrap" data-fac="${r.facility}">
+        <button class="frow ${isUs ? "ours" : ""}" type="button" aria-expanded="${open.has(key)}"
+                data-testid="row" data-fac="${r.facility}" data-src="${r.source}" data-key="${key}">
+          <div class="fname">
+            <div class="n" title="${r.facility}"><span class="chev" aria-hidden>›</span>${r.facility}</div>
+            <div class="m">
+              <span class="src ${srcClass(r.source)}">${srcLabel(r.source)}</span>
+              ${!isUs && r.ourVenueId != null
+                ? `<span class="ourschip" data-testid="ours">ALSO OUR FIELD</span>` : ""}
+            </div>
+          </div>
+          <div class="spots">
+            <span class="track"><span class="fill ${srcClass(r.source)}" style="width:${(r.spots/maxSpots)*100}%"></span></span>
+            <span class="v num" data-testid="spots">${r.spots}</span>
+          </div>
+          <div class="md num" data-testid="mdstd">${one(mdStd(r.spots))}</div>
+          <div class="price num" data-testid="price">
+            ${r.lo == null
+              ? `<span class="pnone" data-testid="noprice">not shown</span>`
+              : (r.lo === r.hi ? money(r.lo) : `${money(r.lo)} to ${money(r.hi)}`)}
+            ${!isUs && r.lo != null && r.lo < ourLo
+              ? `<span class="u" data-testid="under">under us</span>` : ""}
+          </div>
+          <div class="fmts" data-testid="formats">
+            ${r.formats.map(f => `<span class="fchip ${fmtOn.has(f) ? "hit" : ""}">${f}</span>`).join("")}
+          </div>
+        </button>
+        <div class="fdetail" data-testid="detail" data-fac="${r.facility}" ${open.has(key) ? "" : "hidden"}>
+          ${days ? dayTable(days) : `<div class="nodetail" data-testid="nodetail">
+            Match detail was not captured for this facility. The September capture recorded weekly
+            totals only; a capture with a match log fills this in.</div>`}
+        </div>
+      </div>`;
+      }).join("")}
+    </div>`;
+  }).join("");
+}
+
+document.querySelectorAll('.sw button').forEach(b => b.onclick = () => { source = b.dataset.s; render(); });
+
+// Delegated, because render() replaces this markup on every change.
+document.addEventListener("click", (e) => {
+  const fb = e.target.closest('[data-testid="fbtn"], [data-testid="fclear"]');
+  if (fb) {
+    const f = fb.dataset.fmt;
+    if (f === "__clear") fmtOn.clear();
+    else fmtOn.has(f) ? fmtOn.delete(f) : fmtOn.add(f);
+    render();
+    return;
+  }
+  const row = e.target.closest('[data-testid="row"]');
+  if (row) {
+    const k = row.dataset.key;
+    open.has(k) ? open.delete(k) : open.add(k);
+    render();
+    // keep focus where the reader put it, so the keyboard path survives the re-render
+    document.querySelector(`[data-testid="row"][data-key="${CSS.escape(k)}"]`)?.focus();
+  }
+});
+
+render();
+</script>

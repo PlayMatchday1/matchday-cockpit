@@ -41,6 +41,14 @@ export const GROWTH_SECTIONS: RailItem[] = [
     icon: <I><path d="M3 20h18M6 20V10m5 10V4m5 16v-7" /></I>,
   },
   {
+    // THE MARKET, NOT A FIELD. Plei and GoodRec supply captured by hand, next to our own over the
+    // same week. It sits in Fields because that is what it is about — who else is selling pitch
+    // time in a city we are opening — and there is no other group it belongs to yet.
+    key: "competitors", group: "Fields", label: "Competitors", href: "/growth/competitors",
+    desc: "What Plei and GoodRec are selling, next to us",
+    icon: <I><path d="M4 20V8m5 12V4m5 16v-9m5 9V6" /><path d="M2 20h20" /></I>,
+  },
+  {
     key: "vc-outreach", group: "Fundraising", label: "VC Outreach", href: "/growth/vc-outreach",
     desc: "Firms we're raising from",
     icon: <I><path d="M4 19V9m5 10V5m5 14v-7m5 7V8" /></I>,

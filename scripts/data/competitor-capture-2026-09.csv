@@ -1,0 +1,60 @@
+source,city_label,window_start,window_end,window_note,facility,matches_per_week,bookable_spots_per_week,price_low,price_high,formats
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,City Futsal,43,516,12.50,16.50,6v6
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,City Futsal The Colony,26,312,12.50,15.50,6v6
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Salient Touch Futbol Academy,26,312,9.50,12.50,6v6
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Foro Sports Club,24,308,9.50,14.50,6v6|8v8
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Ulete,19,258,12.50,15.75,7v7|5v5
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Pro Touch Soccer Center,17,204,13.50,14.50,6v6
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Vaqueros Field at Sycamore Park,7,203,10.00,10.50,7v7
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Rockwall Indoor Sports World,12,168,13.50,13.50,7v7
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,UMB Bank Performance Center,13,156,14.50,14.50,6v6
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Upper 90 Soccer Center,7,98,12.50,15.50,7v7
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,SoccerZone,7,94,9.50,12.50,7v7|5v5
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,TOCA Soccer Center | The Colony,3,70,10.50,12.50,7v7
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Fut360,3,30,11.75,11.75,5v5
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Crossbar Soccer + Beer | Richardson,2,24,12.25,12.25,6v6
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Keller Fields | Futbol Evolution,1,22,14.50,14.50,11v11
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,North Park Soccer Fields,1,14,11.50,11.50,7v7
+plei,Houston,2026-09-15,2026-09-21,,Revolution Soccer Complex,53,662,9.50,15.50,7v7|5v5
+plei,Houston,2026-09-15,2026-09-21,,Toros Lifestyle Soccer Art District,38,426,11.50,14.50,6v6|5v5
+plei,Houston,2026-09-15,2026-09-21,,Pegaso HTX,35,420,11.50,13.50,6v6
+plei,Houston,2026-09-15,2026-09-21,,HTX Fieldhouse,32,384,10.50,12.50,6v6
+plei,Houston,2026-09-15,2026-09-21,,Houston Soccer Field,26,380,13.00,14.50,8v8|6v6
+plei,Houston,2026-09-15,2026-09-21,,Katy International Sports Complex,26,360,10.50,13.50,6v6|8v8
+plei,Houston,2026-09-15,2026-09-21,,GoPro Arena,24,288,6.50,10.50,6v6
+plei,Houston,2026-09-15,2026-09-21,,Crossbar Academy,19,228,10.50,13.50,6v6
+plei,Houston,2026-09-15,2026-09-21,,Turf On Soccer Fields,16,224,9.50,9.50,7v7
+plei,Houston,2026-09-15,2026-09-21,,Peek Sports Texas,15,220,11.50,14.75,7v7|8v8|10v10
+plei,Houston,2026-09-15,2026-09-21,,Pac Global Academy | West Houston,12,188,10.50,11.50,9v9|8v8|5v5|6v6
+plei,Houston,2026-09-15,2026-09-21,,The HatTrick Oakridge,12,146,10.50,12.50,6v6|7v7
+plei,Houston,2026-09-15,2026-09-21,,Athlete Training & Health | Cypress,6,142,12.50,13.50,11v11
+plei,Houston,2026-09-15,2026-09-21,,The HatTrick Patio,9,90,8.50,8.50,5v5
+plei,Houston,2026-09-15,2026-09-21,,Cancha Five Stars | Hillcroft,6,84,9.75,10.75,7v7
+plei,Houston,2026-09-15,2026-09-21,,Q&B Indoor Sports,6,71,12.50,12.50,6v6|5v5
+plei,Houston,2026-09-15,2026-09-21,,Memorial Indoor Soccer,2,70,11.25,11.25,5v5
+plei,Houston,2026-09-15,2026-09-21,,Futbolito-Golfo de Mexico,4,56,7.50,7.50,7v7
+plei,Houston,2026-09-15,2026-09-21,,King Soccer,4,54,11.75,13.75,6v6
+plei,Houston,2026-09-15,2026-09-21,,Athlete Training and Health | Katy,2,44,12.50,12.50,11v11
+plei,Houston,2026-09-15,2026-09-21,,Houston Dynamo Sports Park,2,44,13.50,13.50,11v11
+plei,Houston,2026-09-15,2026-09-21,,Crossbar Academy | Indoor Soccer,4,40,8.50,11.50,5v5
+plei,Houston,2026-09-15,2026-09-21,,Indoor Soccer Box,3,35,11.25,12.50,5v5
+plei,Houston,2026-09-15,2026-09-21,,Community Fieldhouse,2,32,11.50,11.50,8v8
+plei,Houston,2026-09-15,2026-09-21,,PSG Academy Houston,1,12,9.50,9.50,6v6
+plei,Houston,2026-09-15,2026-09-21,,Houston Select FC,1,10,12.50,12.50,5v5
+goodrec,Dallas / Fort Worth,2026-09-16,2026-09-22,,"Crossbar, Denton",11,331,9.99,12.99,5v5|7v7
+goodrec,Dallas / Fort Worth,2026-09-16,2026-09-22,,"Crossbar, Richardson",22,298,9.99,13.99,7v7|6v6
+goodrec,Dallas / Fort Worth,2026-09-16,2026-09-22,,"ATH, Allen",11,242,9.99,13.99,11v11
+goodrec,Dallas / Fort Worth,2026-09-16,2026-09-22,,"City Futsal, Austin Ranch",15,180,11.99,11.99,6v6
+goodrec,Dallas / Fort Worth,2026-09-16,2026-09-22,,Salient Touch,11,132,10.99,12.99,6v6
+goodrec,Dallas / Fort Worth,2026-09-16,2026-09-22,,CityFutsal Farmers Market,10,120,10.99,14.99,6v6
+goodrec,Dallas / Fort Worth,2026-09-16,2026-09-22,,"Ulete, Southlake",7,98,14.99,14.99,7v7
+goodrec,Dallas / Fort Worth,2026-09-16,2026-09-22,,"Crossbar, Rowlett",6,84,9.99,9.99,7v7
+goodrec,Dallas / Fort Worth,2026-09-16,2026-09-22,,"TOCA, Colony",3,56,9.99,13.99,7v7
+goodrec,Dallas / Fort Worth,2026-09-16,2026-09-22,,Foro Sports,4,46,9.99,9.99,6v6|5v5
+goodrec,Dallas / Fort Worth,2026-09-16,2026-09-22,,"Gateway Park, Fort Worth",2,40,4.99,4.99,10v10
+goodrec,Dallas / Fort Worth,2026-09-16,2026-09-22,,"TOCA, Allen",3,36,9.99,9.99,5v5
+goodrec,Dallas / Fort Worth,2026-09-16,2026-09-22,,"Pro Touch, Lake Highlands",2,28,12.99,12.99,7v7
+goodrec,Dallas / Fort Worth,2026-09-16,2026-09-22,,"TOCA, Carrollton",2,28,13.99,13.99,7v7
+goodrec,Dallas / Fort Worth,2026-09-16,2026-09-22,,FIT - Forney,2,24,,,6v6
+goodrec,Dallas / Fort Worth,2026-09-16,2026-09-22,,"UMB Bank, Frisco",2,24,14.99,14.99,6v6
+goodrec,Dallas / Fort Worth,2026-09-16,2026-09-22,,Upper 90 Soccer Center,1,14,11.99,11.99,7v7
