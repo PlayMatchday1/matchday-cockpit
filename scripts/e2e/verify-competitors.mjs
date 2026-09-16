@@ -216,9 +216,12 @@ async function main() {
   head("format bubbles, in game order");
   const fbtns = await p.locator('[data-testid="fbtn"]').allTextContents();
   is("the bubbles run smallest to largest", fbtns.map((x) => x.trim()), ["5v5", "6v6", "7v7", "8v8", "9v9", "10v10", "11v11"]);
-  const chips = await p.locator(`${HOU} [data-testid="wrap"][data-fac="Peek Sports Texas"] .fchip`).allTextContents();
+  /* SCOPED TO THE FORMATS COLUMN. .fchip is also the format pill on a match row inside an open
+   * detail panel, so an unscoped count picks up the week as well as the row. */
+  const chips = await p.locator(`${HOU} [data-testid="wrap"][data-fac="Peek Sports Texas"] [data-testid="formats"] .fchip`).allTextContents();
   is("a multi-format facility shows each", chips.map((x) => x.trim()), ["7v7", "8v8", "10v10"]);
-  is("CONTROL: and a single-format one shows one", await p.locator(`${HOU} [data-testid="wrap"][data-fac="Pegaso HTX"] .fchip`).count(), 1);
+  is("CONTROL: and a single-format one shows one",
+    await p.locator(`${HOU} [data-testid="wrap"][data-fac="Pegaso HTX"] [data-testid="formats"] .fchip`).count(), 1);
 
   const spotsBefore = await inCity(p, HOU, "s-spots");
   const shareBefore = await inCity(p, HOU, "sharepct");
@@ -252,7 +255,9 @@ async function main() {
   // ══ THE SHARE, AND WHERE IT REFUSES ═══════════════════════════════════════════════════════
   head("a percentage only where the windows align");
   const hp = await inCity(p, HOU, "sharepct");
-  yes(`Houston aligns, so it gets a number: "${hp}"`, /MatchDay holds 9%/.test(hp ?? ""));
+  is(`Houston aligns, so it gets a number: "${hp}"`, hp, "9%");
+  const hline = await T(p, `${HOU} .shareline`);
+  yes(`  and the line reads as a sentence: "${hline?.slice(0, 44)}…"`, /MatchDay holds 9% of captured bookable supply/.test(hline ?? ""));
   is("DFW does NOT get a percentage", await p.locator(`${DFW} [data-testid="sharepct"]`).count(), 0);
   const nos = await inCity(p, DFW, "nosharepct");
   yes(`  it says so instead: "${nos}"`, /do not line up/.test(nos ?? ""));
