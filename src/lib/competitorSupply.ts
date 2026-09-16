@@ -295,20 +295,21 @@ export function parseCapture(text: string): { rows: ParsedRow[]; errors: string[
 
 /* ── WHEN MAY A SHARE BE A PERCENTAGE ─────────────────────────────────────────────────────────
  *
- * A PERCENTAGE IS ONLY PRINTED WHERE THE WINDOWS ACTUALLY ALIGN. Ryan: "A number with a footnote
- * gets screenshotted without the footnote and ends up in a deck, and this feeds raise prep."
+ * LENGTH, AND ONLY LENGTH. Two windows of the same number of days are comparable whether or not
+ * they start on the same date: Plei DFW is Tue 15 to Mon 21 and GoodRec DFW is Wed 16 to Tue 22,
+ * both seven days, one of each weekday, and a week of supply is a week of supply. The dates are on
+ * the city heading for anyone who wants to check the offset.
  *
- * Houston aligns: both sides are the same seven days. DFW does not: Plei's window is eight days of
- * listings ("Mon 21 plus Tue 15 to Sun 20") and GoodRec's is a different week again, both divided
- * against seven days of ours. The bar and both sides' MD Standard still show, because those are
- * counts of real listings and are true whatever the window; only the ratio is withheld.
+ * THE NOTE IS NOT AN INPUT. It used to be, and it was wrong: the Plei DFW capture was annotated
+ * "not a clean 7 days" and that annotation alone made the page refuse to divide. The match log
+ * settled it — 7 distinct dates, 2026-09-15 through 2026-09-21, one of each weekday, 211 matches —
+ * so the note was mistaken and the length check had been right all along. A free-text note can now
+ * say anything at all and this function will not read it.
  *
- * DECIDED BY COMPARISON, NEVER BY CITY. A future capture that lines up starts showing a percentage
- * on its own, and a Houston capture that stops lining up stops showing one. Nothing here knows
- * which city is which.
- *
- * A window_note is itself disqualifying: it exists only to record that the window is not what its
- * two dates imply, which is exactly the case a date comparison cannot see. */
+ * WHAT STILL REACHES THE REFUSAL: a capture whose window is a different NUMBER of days from ours.
+ * Nothing in the September data does, so the branch is unreachable today, but a fortnight-long or
+ * three-day capture would, and dividing that against our seven is the number that ends up in a
+ * deck without its caveat. */
 export type WindowSpec = { source: string; start: string; end: string; note?: string | null };
 
 export type Alignment =
@@ -321,11 +322,7 @@ export function windowsAlign(ours: { start: string; end: string }, theirs: Windo
   const reasons: string[] = [];
   for (const t of theirs) {
     const d = windowDays(t.start, t.end);
-    if (t.note) reasons.push(`${t.source} is ${t.note}`);
-    else if (d !== ourDays) reasons.push(`${t.source} covers ${d} days against our ${ourDays}`);
-    else if (t.start !== ours.start || t.end !== ours.end) {
-      reasons.push(`${t.source} covers ${fmtWindow(t.start, t.end)} and ours is ${fmtWindow(ours.start, ours.end)}`);
-    }
+    if (d !== ourDays) reasons.push(`${t.source} covers ${d} days against our ${ourDays}`);
   }
   return reasons.length ? { aligned: false, reasons } : { aligned: true, days: ourDays };
 }

@@ -176,7 +176,7 @@ const CAPTURES = [
   { source:"plei",    city:"Houston",             window:"Tue 15 to Mon 21 Sep 2026",
     start:"2026-09-15", end:"2026-09-21", note:null },
   { source:"plei",    city:"Dallas / Fort Worth", window:"Mon 21 plus Tue 15 to Sun 20 Sep 2026",
-    start:"2026-09-15", end:"2026-09-21", note:"Mon 21 plus Tue 15 to Sun 20; not a clean 7 days" },
+    start:"2026-09-15", end:"2026-09-21", note:"Mon 21 plus Tue 15 to Sun 20" },
   { source:"goodrec", city:"Dallas / Fort Worth", window:"Wed 16 to Tue 22 Sep 2026",
     start:"2026-09-16", end:"2026-09-22", note:null },
 ];
@@ -386,15 +386,17 @@ function render(){
       .filter(x => x.md > 0);
     const total = ourMd + theirMd;
 
-    /* ── A PERCENTAGE ONLY WHERE THE WINDOWS ACTUALLY ALIGN ─────────────────────────────────
-     * Ryan: "A number with a footnote gets screenshotted without the footnote and ends up in a
-     * deck, and this feeds raise prep." So where the windows do not line up the RATIO IS NOT
-     * PRINTED AT ALL. The bar and both sides' MD Standard stay, because those are counts of real
-     * listings and are true whatever the window; only the division is withheld.
+    /* ── A PERCENTAGE WHERE THE WINDOWS ARE THE SAME LENGTH ─────────────────────────────────
+     * LENGTH, AND ONLY LENGTH. Plei DFW is Tue 15 to Mon 21 and GoodRec DFW is Wed 16 to Tue 22:
+     * both seven days, one of each weekday, offset by one. An offset week is still a week, and the
+     * dates are on the city heading for anyone who wants to check.
      *
-     * DECIDED BY COMPARISON, NEVER BY CITY. A future capture that lines up starts showing a
-     * percentage on its own. A window_note is itself disqualifying: it exists only to record that
-     * the window is not what its two dates imply, which is the case dates alone cannot see. */
+     * THE NOTE IS NOT AN INPUT. It used to be, and it was wrong: "not a clean 7 days" alone made
+     * this refuse to divide two seven-day windows. The match log settled it — 7 distinct dates,
+     * 211 matches, 2,789 spots. A free-text note can now say anything and nothing here reads it.
+     *
+     * WHAT STILL REACHES THE REFUSAL is a window of a different NUMBER of days. Nothing in this
+     * fixture does, which is why the control below builds one. */
     const shownCaps = CAPTURES.filter(c => c.city === city && (source === "both" || c.source === source));
     const days = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 864e5) + 1;
     const ourWin = shownCaps[0];
@@ -405,11 +407,8 @@ function render(){
     const why = shownCaps.length === 0 ? ["not captured"] : [];
     for (const c of shownCaps) {
       const name = c.source === "plei" ? "Plei" : "GoodRec";
-      if (c.note) why.push(name + " is " + c.note);
-      else if (days(c.start, c.end) !== days(ourWin.start, ourWin.end))
+      if (days(c.start, c.end) !== days(ourWin.start, ourWin.end))
         why.push(name + " covers " + days(c.start, c.end) + " days against our " + days(ourWin.start, ourWin.end));
-      else if (c.start !== ourWin.start || c.end !== ourWin.end)
-        why.push(name + " covers " + c.window + " and ours is " + ourWin.window);
     }
     const aligned = why.length === 0;
     // The dates, small and grey, on one line. No explanation.
@@ -438,7 +437,7 @@ function render(){
       <div class="share" data-testid="share">
         <div class="shareline">${aligned
           ? `MatchDay holds <b data-testid="sharepct">${share.toFixed(0)}%</b>`
-          : `<b class="noshare" data-testid="nosharepct">Windows do not line up</b>`}
+          : `<b class="noshare" data-testid="nosharepct">${why[0]}, so there is no percentage</b>`}
           <i class="swin" data-testid="sharewindow">${aligned && ourWin ? ourWin.window : winDates}</i></div>
         <div class="sbar">
           <div class="seg us" style="width:${(ourMd/total)*100}%" data-testid="seg-us">${one(ourMd)}</div>

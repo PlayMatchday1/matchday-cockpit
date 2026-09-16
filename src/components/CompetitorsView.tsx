@@ -285,16 +285,16 @@ function CityPanel({ label, caps, data, src, fmts, open, toggle, onLink }: {
   const theirMd = mdStandard(totalSpots);
   const sharePct = oursMd + theirMd > 0 ? Math.round((oursMd / (oursMd + theirMd)) * 100) : 0;
 
-  /* A PERCENTAGE ONLY WHERE THE WINDOWS ACTUALLY ALIGN. Our side is measured over the primary
-   * capture's window, so that is what each source's window is compared against. Decided by
-   * comparison, never by city: a future capture that lines up starts showing a percentage on its
-   * own and nothing here needs changing. */
+  /* A PERCENTAGE WHERE THE WINDOWS ARE THE SAME LENGTH. An offset of a day or two does not make a
+   * week incomparable to a week; a fortnight against a week does. The capture's own note is NOT an
+   * input any more: one that read "not a clean 7 days" was mistaken, and it alone stopped this
+   * page dividing two windows that were both seven days. */
   const align = useMemo(
     () => windowsAlign(
       { start: primary?.window_start ?? "", end: primary?.window_end ?? "" },
       shown.map((c): WindowSpec => ({
         source: SOURCE_LABEL[c.source] ?? c.source,
-        start: c.window_start, end: c.window_end, note: c.window_note,
+        start: c.window_start, end: c.window_end,
       })),
     ),
     [primary, shown],
@@ -349,14 +349,14 @@ function CityPanel({ label, caps, data, src, fmts, open, toggle, onLink }: {
           <div className="shareline">
             {align.aligned
               ? <>MatchDay holds <b data-testid="sharepct">{sharePct}%</b> of captured bookable supply</>
-              /* NO NUMBER WITH A FOOTNOTE. Where the windows do not line up the ratio is not
-                 printed at all; the dates say which, and the absolutes below are unaffected. */
-              : <b className="noshare" data-testid="nosharepct">Windows do not line up</b>}
+              /* STILL REACHABLE, and deliberately so: a capture of a different NUMBER of days is
+                 not a week and dividing it against ours is the figure that ends up in a deck
+                 without its caveat. Nothing in the September data reaches this. */
+              : <b className="noshare" data-testid="nosharepct">
+                  {align.reasons[0]}, so there is no percentage
+                </b>}
             <i className="swin" data-testid="sharewindow">
-              {align.aligned
-                ? (primary ? fmtWindow(primary.window_start, primary.window_end) : "")
-                : shown.map((c) => `${SOURCE_LABEL[c.source] ?? c.source} ${fmtWindow(c.window_start, c.window_end)}${c.window_note ? " (8 days)" : ""}`)
-                    .concat(primary ? [`ours ${fmtWindow(primary.window_start, primary.window_end)}`] : []).join(" · ")}
+              {primary ? fmtWindow(primary.window_start, primary.window_end) : ""}
             </i>
           </div>
           <div className="sbar">

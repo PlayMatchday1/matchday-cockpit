@@ -86,7 +86,16 @@ async function main() {
   is("GoodRec DFW: 17 facilities, 1,781 spots", tot("goodrec", "Dallas / Fort Worth"), { n: 17, spots: 1781 });
   is("  which is 98.9 MD Standard", (tot("goodrec", "Dallas / Fort Worth").spots / 18).toFixed(1), "98.9");
   is("CONTROL: re-importing did not duplicate — still 3 captures and 59 rows", [caps.length, sup.length], [3, 59]);
-  is("CONTROL: nothing was auto-linked", sup.filter((s) => s.our_venue_id != null).length, 0);
+  /* NOTHING IS AUTO-LINKED BY THE IMPORTER — which is not the same as nothing being linked. Ryan
+   * accepted Crossbar Rowlett and PAC Global on the live page, so asserting a count of zero froze
+   * a state that was only true before anybody used the feature. The invariant that holds forever
+   * is that every link has a PERSON'S ruling behind it. */
+  const { data: rulings } = await sb.from("competitor_facility_rulings").select("*");
+  const linked = sup.filter((s) => s.our_venue_id != null);
+  const unruled = linked.filter((s) => !(rulings ?? []).some((r) => r.facility === s.facility && r.our_venue_id === s.our_venue_id));
+  is(`every venue link has a human ruling behind it (${linked.length} linked)`, unruled.map((s) => s.facility), []);
+  is("CONTROL: and every ruling names who made it",
+    (rulings ?? []).filter((r) => !r.ruled_by).length, 0);
   is("CONTROL: matches_per_week was imported and kept", sup.filter((s) => s.matches_per_week != null).length, 59);
 
   const { ctx, p, errs } = await boot(browser, storageState);
@@ -255,31 +264,38 @@ async function main() {
   // ══ THE SHARE, AND WHERE IT REFUSES ═══════════════════════════════════════════════════════
   head("a percentage only where the windows align");
   const hp = await inCity(p, HOU, "sharepct");
-  is(`Houston aligns, so it gets a number: "${hp}"`, hp, "9%");
+  is(`Houston is seven days against seven, so it gets a number: "${hp}"`, hp, "9%");
   const hline = await T(p, `${HOU} .shareline`);
   yes(`  and the line reads as a sentence: "${hline?.slice(0, 44)}…"`, /MatchDay holds 9% of captured bookable supply/.test(hline ?? ""));
-  is("DFW does NOT get a percentage", await p.locator(`${DFW} [data-testid="sharepct"]`).count(), 0);
-  const nos = await inCity(p, DFW, "nosharepct");
-  yes(`  it says so instead: "${nos}"`, /do not line up/.test(nos ?? ""));
-  yes("  CONTROL: and only that, with no explanation attached", (nos ?? "").length < 40);
-  /* THE DATES CARRY IT INSTEAD. The two amber reason lines were deleted; the windows themselves
-   * say which is which, small and grey on one line. */
-  const win = await inCity(p, DFW, "sharewindow");
-  yes(`the windows are named instead: "${win}"`, /Plei/.test(win ?? "") && /GoodRec/.test(win ?? "") && /ours/.test(win ?? ""));
-  is("  CONTROL: and the explanation lines are gone", await p.locator(`${DFW} [data-testid="sharewhy"]`).count(), 0);
+  /* DFW GETS ONE TOO, NOW THAT LENGTH IS THE TEST. Plei DFW is Tue 15 to Mon 21 and GoodRec DFW is
+   * Wed 16 to Tue 22: both seven days, one of each weekday, offset by one. An offset week is still
+   * a week. The refusal used to fire on a capture NOTE reading "not a clean 7 days", which the
+   * match log disproved: 7 distinct dates, 211 matches, 2,789 spots. */
+  const dp = await inCity(p, DFW, "sharepct");
+  yes(`DFW gets one as well: "${dp}"`, /^\d+%$/.test(dp ?? ""));
+  is("  CONTROL: and the refusal does not fire", await p.locator(`${DFW} [data-testid="nosharepct"]`).count(), 0);
   yes("CONTROL: the absolutes are still drawn", (await p.locator(`${DFW} [data-testid="seg-goodrec"]`).count()) > 0);
   yes("  CONTROL: including our own side", (await p.locator(`${DFW} [data-testid="seg-us"]`).count()) > 0);
-  /* DECIDED BY COMPARISON, NOT BY CITY: the two sources in ONE city answer differently. */
+  /* THE OFFSET IS STILL VISIBLE, on the city heading, for anyone who wants to check it. */
+  const dwin = await inCity(p, DFW, "window");
+  yes(`the two windows are named on the heading: "${dwin?.slice(0, 56)}…"`,
+    /15 to 21 Sep/.test(dwin ?? "") && /16 to 22 Sep/.test(dwin ?? ""));
+  /* AND IT MOVES WITH WHAT IS COUNTED. */
   await setSrc(p, "plei");
-  is("CONTROL: Plei alone in DFW still refuses, on its window note", await p.locator(`${DFW} [data-testid="sharepct"]`).count(), 0);
-  await setSrc(p, "goodrec");
-  yes("  CONTROL: but GoodRec alone DOES get one, so it is not hardcoded per city",
-    (await p.locator(`${DFW} [data-testid="sharepct"]`).count()) > 0);
+  const dPlei = await inCity(p, DFW, "sharepct");
   await setSrc(p, "both");
+  yes(`CONTROL: the share moves with the source (${dPlei} Plei only, ${dp} both)`, dPlei !== dp);
 
   // ══ THEY BOOK OUR FIELDS ══════════════════════════════════════════════════════════════════
   head("they are booking our fields");
-  const flag = (c, f) => p.locator(`${c} [data-testid="wrap"][data-fac="${f}"] [data-testid="maybe-ours"]`).count();
+  /* FLAGGED EITHER WAY. A row Ryan has accepted carries ALSO OUR FIELD; one nobody has ruled on
+   * yet carries LOOKS LIKE OURS. The assertion is that the row SAYS it is ours, not which of the
+   * two states it is in — Crossbar Rowlett and PAC Global moved from the second to the first the
+   * afternoon this shipped, and an assertion pinned to "proposed" would have gone red for the
+   * feature working. */
+  const flag = async (c, f) =>
+    (await p.locator(`${c} [data-testid="wrap"][data-fac="${f}"] [data-testid="maybe-ours"]`).count())
+    + (await p.locator(`${c} [data-testid="wrap"][data-fac="${f}"] [data-testid="ours"]`).count());
   yes("Plei selling KISC is flagged", (await flag(HOU, "Katy International Sports Complex")) > 0);
   yes("  so is PAC Global", (await flag(HOU, "Pac Global Academy | West Houston")) > 0);
   yes("  and ATH Katy", (await flag(HOU, "Athlete Training and Health | Katy")) > 0);

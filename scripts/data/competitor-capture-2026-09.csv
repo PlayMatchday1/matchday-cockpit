@@ -1,20 +1,20 @@
 source,city_label,window_start,window_end,window_note,facility,matches_per_week,bookable_spots_per_week,price_low,price_high,formats
-plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,City Futsal,43,516,12.50,16.50,6v6
-plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,City Futsal The Colony,26,312,12.50,15.50,6v6
-plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Salient Touch Futbol Academy,26,312,9.50,12.50,6v6
-plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Foro Sports Club,24,308,9.50,14.50,6v6|8v8
-plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Ulete,19,258,12.50,15.75,7v7|5v5
-plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Pro Touch Soccer Center,17,204,13.50,14.50,6v6
-plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Vaqueros Field at Sycamore Park,7,203,10.00,10.50,7v7
-plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Rockwall Indoor Sports World,12,168,13.50,13.50,7v7
-plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,UMB Bank Performance Center,13,156,14.50,14.50,6v6
-plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Upper 90 Soccer Center,7,98,12.50,15.50,7v7
-plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,SoccerZone,7,94,9.50,12.50,7v7|5v5
-plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,TOCA Soccer Center | The Colony,3,70,10.50,12.50,7v7
-plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Fut360,3,30,11.75,11.75,5v5
-plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Crossbar Soccer + Beer | Richardson,2,24,12.25,12.25,6v6
-plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,Keller Fields | Futbol Evolution,1,22,14.50,14.50,11v11
-plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20; not a clean 7 days,North Park Soccer Fields,1,14,11.50,11.50,7v7
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20,City Futsal,43,516,12.50,16.50,6v6
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20,City Futsal The Colony,26,312,12.50,15.50,6v6
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20,Salient Touch Futbol Academy,26,312,9.50,12.50,6v6
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20,Foro Sports Club,24,308,9.50,14.50,6v6|8v8
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20,Ulete,19,258,12.50,15.75,7v7|5v5
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20,Pro Touch Soccer Center,17,204,13.50,14.50,6v6
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20,Vaqueros Field at Sycamore Park,7,203,10.00,10.50,7v7
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20,Rockwall Indoor Sports World,12,168,13.50,13.50,7v7
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20,UMB Bank Performance Center,13,156,14.50,14.50,6v6
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20,Upper 90 Soccer Center,7,98,12.50,15.50,7v7
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20,SoccerZone,7,94,9.50,12.50,7v7|5v5
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20,TOCA Soccer Center | The Colony,3,70,10.50,12.50,7v7
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20,Fut360,3,30,11.75,11.75,5v5
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20,Crossbar Soccer + Beer | Richardson,2,24,12.25,12.25,6v6
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20,Keller Fields | Futbol Evolution,1,22,14.50,14.50,11v11
+plei,Dallas / Fort Worth,2026-09-15,2026-09-21,Mon 21 plus Tue 15 to Sun 20,North Park Soccer Fields,1,14,11.50,11.50,7v7
 plei,Houston,2026-09-15,2026-09-21,,Revolution Soccer Complex,53,662,9.50,15.50,7v7|5v5
 plei,Houston,2026-09-15,2026-09-21,,Toros Lifestyle Soccer Art District,38,426,11.50,14.50,6v6|5v5
 plei,Houston,2026-09-15,2026-09-21,,Pegaso HTX,35,420,11.50,13.50,6v6

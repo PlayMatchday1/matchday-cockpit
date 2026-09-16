@@ -208,29 +208,35 @@ ok(!/GoodRec/.test(await inCity(DFW,"window")), 'CONTROL: filtering shows only t
 // GoodRec is a different week again. The bar and both absolutes still render either way.
 await set("plei");
 // 864/18 = 48.0 ours against 4710/18 = 261.7 theirs. 48/309.7 = 15.50%, which rounds to 16.
-ok(/16%/.test(await inCity(HOU,"sharepct")), `Houston aligns, so it gets a number: 864 against 4,710 is 16%`);
+ok(/16%/.test(await inCity(HOU,"sharepct")), 'Houston is seven days against seven, so it gets a number');
 await set("both");
-ok(await p.$(`${DFW} ${D("sharepct")}`)===null, 'DFW does NOT get a percentage, because its windows do not line up');
-const nos = await inCity(DFW,"nosharepct");
-ok(/Windows do not line up/.test(nos), `  it says so instead, in three words: "${nos}"`);
-ok(nos.length < 40, `  CONTROL: and only that (${nos.length} chars)`);
-// THE DATES, NOT AN EXPLANATION. The two amber reason lines are deleted; the windows themselves
-// say which is which, small and grey on one line.
-const win = await inCity(DFW,"sharewindow");
-ok(/Plei/.test(win) && /GoodRec/.test(win), `  the dates carry it instead: "${win}"`);
-ok(await p.$(`${DFW} ${D("sharewhy")}`)===null, '  CONTROL: and the explanation lines are gone');
-// CONTROL: the ABSOLUTES are still there, because a listing count is true whatever the window.
+// DFW GETS ONE TOO. Plei is Tue 15 to Mon 21 and GoodRec is Wed 16 to Tue 22: both seven days, one
+// of each weekday, offset by one. An offset week is still a week.
+ok(await p.$(`${DFW} ${D("sharepct")}`)!==null, 'DFW gets one as well, on an offset but equal window');
+ok(await p.$(`${DFW} ${D("nosharepct")}`)===null, '  CONTROL: and the refusal does not fire');
 ok(await p.$(`${DFW} ${D("seg-goodrec")}`)!==null, 'GoodRec is its own segment, never merged into Plei');
 ok(await p.$(`${DFW} ${D("seg-us")}`)!==null, '  CONTROL: and our own side is still drawn');
-// CONTROL: the rule is decided by COMPARISON, not by city, and the sharpest proof is that the two
-// sources in ONE city answer differently. Plei alone still refuses, because its window_note says
-// eight days of listings. GoodRec alone covers a clean seven days and ours is measured over the
-// same seven, so it DOES get a percentage. Nothing here knows which city it is looking at.
+const dBoth = await inCity(DFW,"sharepct");
 await set("plei");
-ok(await p.$(`${DFW} ${D("sharepct")}`)===null, 'CONTROL: Plei alone in DFW still refuses, on its window note');
-await set("goodrec");
-ok(await p.$(`${DFW} ${D("sharepct")}`)!==null, '  CONTROL: but GoodRec alone DOES get one, so it is not hardcoded per city');
+const dPlei = await inCity(DFW,"sharepct");
+ok(dBoth!==dPlei, `CONTROL: the share moves with what is counted (${dPlei} Plei only, ${dBoth} both)`);
 await set("both");
+
+/* THE REFUSAL IS STILL REACHABLE and must still work: a capture of a different NUMBER of days is
+ * not a week, and dividing it against ours is the figure that ends up in a deck without its
+ * caveat. Nothing in this fixture is one, so the control BUILDS one rather than asserting a branch
+ * nobody can enter. */
+await p.evaluate(() => {
+  const c = CAPTURES.find(x => x.city === "Dallas / Fort Worth" && x.source === "goodrec");
+  c.end = "2026-09-29"; c.window = "Wed 16 to Wed 29 Sep 2026";
+  render();
+});
+await p.waitForTimeout(160);
+ok(await p.$(`${DFW} ${D("sharepct")}`)===null, 'CONTROL: a fortnight against our week refuses');
+const nos = await inCity(DFW,"nosharepct");
+ok(/14 days against our 7/.test(nos), `  and says which and by how much: "${nos}"`);
+ok(await p.$(`${DFW} ${D("seg-goodrec")}`)!==null, '  CONTROL: the absolutes survive the refusal');
+await load();
 
 // ══ 9. THEY BOOK OUR FIELDS ══════════════════════════════════════════════════
 ok(await p.$(`${HOU} [data-fac="Katy International Sports Complex"] ${D("ours")}`)!==null,
