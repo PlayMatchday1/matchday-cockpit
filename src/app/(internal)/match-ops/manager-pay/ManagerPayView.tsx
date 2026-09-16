@@ -94,8 +94,13 @@ export default function ManagerPayView() {
   }, [weekStart, refreshKey]);
 
   const isAdmin = payload?.isAdmin ?? false;
+  /* ── THE ALIAS MAP IS NOT ADMIN-ONLY, AND IT NEVER SHOULD HAVE BEEN ───────────────────────────
+   * This used to `setAliasMap({})` and return unless isAdmin, which is the FOURTH place deciding
+   * who may touch a Gusto mapping and the quietest of them. The route gates on Match Ops; with the
+   * editor now open to Match Ops too, an empty map would hand a non-admin an editor showing blank
+   * boxes for people who ARE mapped, and Save would overwrite a real mapping with whatever they
+   * typed. The GET is matchops-gated server-side, which is the boundary; this is just the read. */
   useEffect(() => {
-    if (!isAdmin) { setAliasMap({}); return; }
     let cancelled = false;
     (async () => {
       const { data: sess } = await supabase.auth.getSession();
@@ -109,7 +114,7 @@ export default function ManagerPayView() {
       } catch { /* ignore */ }
     })();
     return () => { cancelled = true; };
-  }, [isAdmin, refreshKey]);
+  }, [refreshKey]);
 
   const saveAdjustment = useCallback(async (r: ManagerRow, amount: number, notes: string | null) => {
     const { data: sess } = await supabase.auth.getSession();
@@ -476,7 +481,7 @@ export default function ManagerPayView() {
       </section>
 
       {addFor && (
-        <AddSomeoneModal city={addFor.city} weekStart={weekStart} unassigned={addFor.unassigned}
+        <AddSomeoneModal city={addFor.city} weekStart={weekStart} unassigned={addFor.unassigned} onSaveAlias={saveAlias}
           existingEmails={new Set(payload.cities.flatMap((c) => c.managers).map((m) => (m.managerEmail ?? "").toLowerCase()).filter(Boolean))}
           onClose={() => setAddFor(null)} onSave={submitAdded} />
       )}
@@ -601,10 +606,14 @@ type DirEntry = {
   city: string | null; cityName: string | null;
 };
 
-function AddSomeoneModal({ city, weekStart, unassigned, existingEmails, onClose, onSave }: {
+function AddSomeoneModal({ city, weekStart, unassigned, existingEmails, onClose, onSave, onSaveAlias }: {
   city: string; weekStart: string; unassigned: MatchSummary[]; existingEmails: Set<string>;
   onClose: () => void;
   onSave: (b: { city: string; managerEmail: string; managerId: number | null; amount: number; reason: string }) => Promise<string | null>;
+  /* THE SAME FUNCTION THE SHEET ROW AND THE CONFLICT DIALOG USE. Not a second save path: this
+   * screen is where the block happens, so this is where the fix is offered, but the write is the
+   * one that already exists. */
+  onSaveAlias: SaveAlias;
 }) {
   const [people, setPeople] = useState<DirEntry[] | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
@@ -617,6 +626,17 @@ function AddSomeoneModal({ city, weekStart, unassigned, existingEmails, onClose,
   const [reason, setReason] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /* ── THE MAPPING FORM, WHERE THE BLOCK USED TO BE ─────────────────────────────────────────────
+   * NOT PRE-FILLED FROM THE DIRECTORY NAME, deliberately, and for the same reason AliasEditor
+   * refuses to re-split managerName: the roster name is what MatchDay holds and the Gusto name is
+   * what Gusto holds, and a pre-filled guess is exactly the wrong-name-that-pays-nobody this whole
+   * guard exists to prevent. An empty box asks the question; a filled one answers it wrongly. */
+  const [mFirst, setMFirst] = useState("");
+  const [mLast, setMLast] = useState("");
+  const [mEmail, setMEmail] = useState("");
+  const [mErr, setMErr] = useState<string | null>(null);
+  const [mBusy, setMBusy] = useState(false);
+  const [mapped, setMapped] = useState<{ firstName: string; lastName: string; email: string | null } | null>(null);
 
   useEffect(() => {
     let dead = false;
@@ -635,6 +655,10 @@ function AddSomeoneModal({ city, weekStart, unassigned, existingEmails, onClose,
     })();
     return () => { dead = true; };
   }, []);
+
+  /* A NEW PERSON IS A NEW FORM. Carrying one person's half-typed Gusto name onto the next is how
+   * somebody gets paid under someone else's name. */
+  useEffect(() => { setMFirst(""); setMLast(""); setMEmail(""); setMErr(null); setMapped(null); }, [picked?.email]);
 
   const hit = useCallback((p: DirEntry, t: string) => !t || p.name.toLowerCase().includes(t) || p.email.includes(t), []);
 
@@ -661,6 +685,27 @@ function AddSomeoneModal({ city, weekStart, unassigned, existingEmails, onClose,
   const dupe = !!picked && existingEmails.has(picked.email.toLowerCase());
   const noGusto = !!picked && !picked.gusto;
   const blocked = !picked || dupe || noGusto || !Number.isFinite(amt) || amt === 0 || reason.trim() === "";
+
+  /* SAVE THE MAPPING, THEN CLEAR THE BLOCK IN PLACE. The dialog does not close, the person is not
+   * re-picked, and the fields below come alive where they stand. */
+  const saveMapping = async () => {
+    if (!picked || !mFirst.trim() || !mLast.trim() || mBusy) return;
+    setMBusy(true); setMErr(null);
+    const e = await onSaveAlias(picked.email, mFirst.trim(), mLast.trim(), mEmail.trim() || null, null);
+    setMBusy(false);
+    /* A 409 RENDERS IN THE FORM AND NOTHING IS SAVED. The unique index on the Gusto name already
+     * refuses two managers pointing at one worker; the dialog has to show that rather than swallow
+     * it, keep the form open to correct, and leave her unmapped. */
+    if (e) { setMErr(e); return; }
+    const gusto = { firstName: mFirst.trim(), lastName: mLast.trim() };
+    /* BOTH CACHES. The page-level aliasMap (and the week behind it) refresh through the refreshKey
+     * bump saveAlias already does, which is what puts the Gusto chip on the sheet row underneath
+     * without a reload. THIS patch is the dialog's own copy of the directory, so the chip on the
+     * person row flips immediately rather than after a round trip. */
+    setPeople((prev) => (prev ?? []).map((x) => (x.email === picked.email ? { ...x, gusto } : x)));
+    setPicked((prev) => (prev ? { ...prev, gusto } : prev));
+    setMapped({ ...gusto, email: mEmail.trim() || null });
+  };
 
   const submit = async () => {
     if (blocked || !picked) return;
@@ -709,8 +754,18 @@ function AddSomeoneModal({ city, weekStart, unassigned, existingEmails, onClose,
                 <div className="mb-1 flex items-baseline gap-2 text-[11.5px]" style={{ color: C.muted }} data-testid="mp-add-count">
                   <b style={{ color: C.ink }}>{shown.length}</b>
                   <span>{showAll ? "managers across every city" : `manager${shown.length === 1 ? "" : "s"} in ${city}`}</span>
+                  {/* A DEAD FACT BECOMES A DOOR. It said "hidden" and stopped there, which is why
+                      nobody noticed that 73 of the 85 people on the rosters are behind it. The
+                      DEFAULT is unchanged — this city's mapped people — it is the line's meaning
+                      that changes. */}
                   {!showAll && inCity.length > defaultSet.length && (
-                    <span data-testid="mp-add-hidden">· {inCity.length - defaultSet.length} in {city} with no Gusto mapping, hidden</span>
+                    <span data-testid="mp-add-hidden">
+                      · {inCity.length - defaultSet.length} in {city} have no Gusto mapping yet.{" "}
+                      <button type="button" data-testid="mp-add-showthem" onClick={() => setShowAll(true)}
+                        className="font-bold underline" style={{ color: C.forest, background: "none", border: "none", padding: 0, font: "inherit", cursor: "pointer" }}>
+                        Show them, they can be set up here
+                      </button>
+                    </span>
                   )}
                 </div>
                 <div className="mb-2 max-h-[190px] overflow-y-auto rounded-[8px] border" style={{ borderColor: C.chipLine }}>
@@ -759,11 +814,56 @@ function AddSomeoneModal({ city, weekStart, unassigned, existingEmails, onClose,
               </>
             )}
 
+            {/* ── THE BLOCK IS A FORM NOW ─────────────────────────────────────────────────────
+                THE REFUSAL WAS NEVER WRONG. A row with no mapping reaches payroll as a name split
+                off a string, pays nobody, and looks identical on the sheet to one that paid. What
+                was wrong was that there was nothing on this screen to fix it with, and the only
+                alias editor in the app lives inside an expanded row on the sheet — which she can
+                only reach by being added, which this dialog refuses. A closed loop for 73 of the
+                85 people on the rosters.
+
+                SO THE REASON STAYS AND THE DEAD END GOES. Same sentence, same weight, plus the
+                four fields that end it. */}
             {noGusto && (
-              <div className="mb-2 rounded-[8px] border p-2.5 text-[12px]" data-testid="mp-add-nogusto"
-                style={{ background: C.critBg, borderColor: C.critLine, color: C.critInk }}>
-                <b>{picked?.name} has no Gusto mapping, so this cannot be saved.</b> A row without one reaches payroll looking
-                identical to one that pays, and does not pay. Set them up in Gusto and add the mapping first.
+              <div className="mb-2 rounded-[8px] border p-2.5 text-[12px]" data-testid="mp-add-mapform"
+                style={{ background: C.warnBg, borderColor: C.warnLine, color: C.warnInk }}>
+                <b>{picked?.name} has no Gusto mapping yet.</b> A row without one reaches payroll looking
+                identical to one that pays, and does not pay. Add it here and carry on.
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <input value={mFirst} onChange={(e) => setMFirst(e.target.value)} disabled={mBusy}
+                    placeholder="Gusto first name" aria-label="Gusto first name" data-testid="mp-map-first"
+                    className="h-8 w-[150px] rounded-[7px] border bg-white px-2 text-[12px]" style={{ borderColor: C.chipLine, color: C.ink }} />
+                  <input value={mLast} onChange={(e) => setMLast(e.target.value)} disabled={mBusy}
+                    placeholder="Gusto last name" aria-label="Gusto last name" data-testid="mp-map-last"
+                    className="h-8 w-[150px] rounded-[7px] border bg-white px-2 text-[12px]" style={{ borderColor: C.chipLine, color: C.ink }} />
+                  <input value={mEmail} onChange={(e) => setMEmail(e.target.value)} disabled={mBusy}
+                    placeholder="Gusto email (optional)" aria-label="Gusto email" data-testid="mp-map-email"
+                    className="h-8 w-[200px] rounded-[7px] border bg-white px-2 text-[12px]" style={{ borderColor: C.chipLine, color: C.ink }} />
+                  {/* OFF UNTIL BOTH NAMES ARE THERE. The route refuses a missing one anyway — "no
+                      empty last names" — and a button that offers what the server will refuse is
+                      a button that teaches people the app is broken. */}
+                  <button type="button" onClick={() => void saveMapping()} data-testid="mp-map-save"
+                    disabled={mBusy || !mFirst.trim() || !mLast.trim()}
+                    className="h-8 rounded-[7px] px-3 text-[12px] font-[800] disabled:opacity-45"
+                    style={{ background: C.forest, color: "#fff" }}>{mBusy ? "Saving…" : "Save mapping"}</button>
+                </div>
+                {/* NOT OPTIONAL COPY. Clubhouse cannot ask Gusto whether this worker exists, so the
+                    only defence against a typo that silently pays nobody is saying so plainly. */}
+                <div className="mt-1.5 text-[11px]" data-testid="mp-map-hint" style={{ color: C.muted }}>
+                  Type the name <b>exactly</b> as Gusto has it. Clubhouse cannot check it: a name Gusto
+                  does not recognise produces a row that looks paid and is not. They must already exist
+                  as a worker in Gusto.
+                </div>
+                {mErr && (
+                  <div className="mt-2 rounded-[8px] border p-2.5 text-[12px]" data-testid="mp-map-error"
+                    style={{ background: C.critBg, borderColor: C.critLine, color: C.critInk }}>{mErr}</div>
+                )}
+              </div>
+            )}
+            {mapped && !noGusto && (
+              <div className="mb-2 rounded-[8px] border p-2.5 text-[12px]" data-testid="mp-add-mapped"
+                style={{ background: C.mint, borderColor: C.chipLine, color: C.ok }}>
+                <b>Gusto mapping saved: {mapped.firstName} {mapped.lastName}</b>{mapped.email ? ` · ${mapped.email}` : ""}. This row will pay.
               </div>
             )}
             {dupe && (
@@ -1003,7 +1103,7 @@ function MgrRow({ r, isAdmin, open, editing, alias, onToggle, onEditAdj, onCance
         <div className="text-right" style={{ padding: "11px 0" }}><span className="text-[13.5px] font-[800] tabular-nums" style={{ color: C.ink }}>{money(r.total)}</span></div>
         <div style={{ padding: "11px 0" }}><span className="inline-flex h-[26px] w-[26px] items-center justify-center rounded-[7px] text-[13px]" style={{ color: C.muted }}>{open ? "▾" : "▸"}</span></div>
       </div>
-      {open && <MgrDetail r={r} isAdmin={isAdmin} alias={alias} onSaveAlias={onSaveAlias} />}
+      {open && <MgrDetail r={r} alias={alias} onSaveAlias={onSaveAlias} />}
     </>
   );
 }
@@ -1090,7 +1190,7 @@ function AdjEditor({ r, onCancel, onSave }: { r: ManagerRow; onCancel: () => voi
   );
 }
 
-function MgrDetail({ r, isAdmin, alias, onSaveAlias }: { r: ManagerRow; isAdmin: boolean; alias: Alias | undefined; onSaveAlias: SaveAlias }) {
+function MgrDetail({ r, alias, onSaveAlias }: { r: ManagerRow; alias: Alias | undefined; onSaveAlias: SaveAlias }) {
   const rateWhy = (m: ManagerMatch): string => {
     if (m.coManaged) return `co-managed — ${money(20)} each`;
     if ((m.maxPlayerCount ?? 0) >= TOURNAMENT_THRESHOLD && m.payAmount === 30) return `tournament (capacity ${m.maxPlayerCount})`;
@@ -1098,7 +1198,10 @@ function MgrDetail({ r, isAdmin, alias, onSaveAlias }: { r: ManagerRow; isAdmin:
   };
   return (
     <div className="border-b px-4 py-3" style={{ background: C.board, borderColor: C.line }}>
-      {isAdmin && r.managerEmail && <AliasEditor managerEmail={r.managerEmail} managerName={r.managerName} alias={alias} onSaveAlias={onSaveAlias} />}
+      {/* MATCH OPS, NOT ADMIN. The route has gated on "matchops" for some time and the add dialog
+          now offers the same form; three places deciding the same thing differently is how this
+          drifts, and the one that was wrong was the one people could see. */}
+      {r.managerEmail && <AliasEditor managerEmail={r.managerEmail} managerName={r.managerName} alias={alias} onSaveAlias={onSaveAlias} />}
       <table className="w-full border-collapse">
         <thead>
           <tr className="text-[10px] font-bold tracking-[0.07em]" style={{ color: C.muted }}>

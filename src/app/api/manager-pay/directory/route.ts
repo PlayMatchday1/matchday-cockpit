@@ -14,9 +14,12 @@
  * city object whose `abbr` is exactly the ATX / HOU / SATX code the pay sheet groups by.
  *
  * MEASURED 2026-09-01: 100 rows total, and 100 is the REAL total, not a page cap — the per-city
- * queries sum to exactly the unfiltered call (28 ATX, 17 HOU, 15 SATX, 13 DFW, 9 STL, 8 ATL,
- * 5 OKC, 3 NYC, 1 ELP, 1 WAW). The endpoint IGNORES page/limit — asking for page 2 returns the
- * same 100 — so it is fetched once, unfiltered, and grouped here.
+ * queries sum to exactly the unfiltered call. The endpoint IGNORES page/limit — asking for page 2
+ * returns the same rows — so it is fetched once, unfiltered, and grouped here.
+ *
+ * RE-MEASURED 2026-09-15: 106 rows, 85 distinct people (somebody rostered in two cities is two
+ * rows). Per city: 29 ATX, 18 HOU, 17 SATX, 14 DFW, 10 STL, 9 ATL, 4 OKC, 3 NYC, 1 WAW, 1 ELP.
+ * The roster moves; this count is a measurement with a date on it, not a constant.
  *
  * BEING ON A CITY'S ROSTER IS NOT THE SAME AS HAVING RUN A MATCH. 72 of the 100 have ever been
  * assigned one, and the two sets are not subsets of each other. The roster is the right list for
@@ -24,10 +27,18 @@
  * question and is what the old directory wrongly answered.
  *
  * ── gusto: null IS RETURNED, NOT FILTERED ─────────────────────────────────────────────────────
- * Only 11 of the 100 carry a Gusto mapping. They are returned anyway, with `gusto: null`, so the
- * dialog can show them behind its "show all" toggle, greyed, with a chip saying why they cannot be
- * saved. Omitting them server-side would read as "this person does not exist" and send the
- * operator looking for a free-text box — which is the thing that must never exist here.
+ * Only 12 of the 85 carry a Gusto mapping (re-measured 2026-09-15; it was 11 of 100 on 09-01).
+ * They are returned anyway, with `gusto: null`, so the dialog can show them behind its "show all"
+ * toggle with a chip saying why they cannot be saved. Omitting them server-side would read as
+ * "this person does not exist" and send the operator looking for a free-text box — which is the
+ * thing that must never exist here.
+ *
+ * THE OTHER 73 WERE IN A CLOSED LOOP UNTIL 2026-09-15. The only Gusto-alias editor in the app was
+ * inside an expanded row on the pay sheet, and the only ways onto that sheet are managing a match
+ * or being added through AddSomeoneModal — which refused anyone with no mapping. So a person who
+ * had never managed a match could not acquire a mapping through any screen we ship. DFW and STL
+ * had zero mapped people between them: 24 people nobody could pay. The add dialog now offers the
+ * mapping form at the point of refusal, which is what closes it.
  */
 
 import { authenticateCapability } from "@/lib/capabilityAuth";

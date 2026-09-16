@@ -1,0 +1,201 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Specific Users, on a confined account</title>
+<style>
+  :root{ --ink:#12261c; --mut:#5d6b62; --line:#dfe5e0; --bg:#f4f6f4; --grn:#12402a; --amb:#8a5a12;
+         --ambbg:#fdf6e6; --red:#8c2f1f; --redbg:#fdefec; }
+  *{ box-sizing:border-box }
+  /* .scopeline and .chips are display:flex, which OUTSPECIFIES the UA's [hidden]{display:none}.
+     Without this, `el.hidden = true` hides nothing and an assertion on it passes on a visible
+     element. */
+  [hidden]{ display:none !important }
+  body{ margin:0; font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg) }
+  .sw{ display:flex; gap:6px; padding:10px 12px; background:#fff; border-bottom:1px solid var(--line); flex-wrap:wrap; align-items:center }
+  .sw b{ font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--mut); margin-right:2px }
+  .sw button{ font:inherit; font-size:12.5px; font-weight:650; padding:6px 11px; border:1px solid var(--line);
+              background:#fff; color:var(--ink); border-radius:999px; cursor:pointer; min-height:32px }
+  .sw button[aria-pressed="true"]{ background:var(--grn); color:#fff; border-color:var(--grn) }
+  .sw .gap{ width:14px }
+  .wrap{ padding:16px; max-width:560px }
+  .card{ background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px }
+  .lbl{ font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--mut); font-weight:750; margin-bottom:6px }
+  .segs{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px }
+  .seg{ font:inherit; font-size:12.5px; font-weight:650; padding:7px 13px; border:1px solid var(--line); background:#fff;
+        border-radius:999px; min-height:34px; cursor:default }
+  .seg.on{ background:var(--grn); color:#fff; border-color:var(--grn) }
+  input.s{ width:100%; font:inherit; padding:9px 11px; border:1.5px solid #2f6fd0; border-radius:9px; min-height:40px; outline:none }
+  .scopeline{ display:flex; align-items:center; gap:6px; margin-top:7px; font-size:12px; color:var(--mut) }
+  .pill{ display:inline-block; font-size:11px; font-weight:750; padding:2px 8px; border-radius:999px;
+         background:#eaf1ec; color:var(--grn); border:1px solid #d3e2d8 }
+  .res{ border:1px solid var(--line); border-top:none; border-radius:0 0 9px 9px; margin-top:-1px; overflow:hidden }
+  .row{ display:flex; align-items:center; gap:10px; padding:9px 11px; border-top:1px solid var(--line); background:#fff; min-height:48px }
+  .row:first-child{ border-top:none }
+  .nm{ flex:1; min-width:0 }
+  .nm b{ display:block; font-size:13.5px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  .nm span{ display:block; font-size:11.5px; color:var(--mut); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  .why{ font-size:11px; font-weight:700; padding:3px 8px; border-radius:999px; white-space:nowrap;
+        background:#eaf1ec; color:var(--grn); border:1px solid #d3e2d8 }
+  .why.played{ background:#fdf6e6; color:var(--amb); border-color:#ecdcb4 }
+  .add{ font:inherit; font-size:12px; font-weight:750; padding:6px 10px; min-height:32px; border-radius:8px;
+        border:1px solid var(--grn); background:#fff; color:var(--grn); cursor:pointer }
+  .empty{ padding:12px 11px; border-top:1px solid var(--line); background:#fff; font-size:12.5px; color:var(--mut) }
+  .empty.scoped{ background:var(--ambbg); color:var(--amb) }
+  .empty.err{ background:var(--redbg); color:var(--red); font-weight:600 }
+  .empty .also{ display:block; margin-top:5px; font-size:11.5px; font-weight:400; opacity:.9 }
+  .note{ margin-top:12px; font-size:12px; color:var(--mut) }
+  .chips{ display:flex; gap:6px; flex-wrap:wrap; margin-top:9px }
+  .chip{ font-size:12px; font-weight:650; padding:5px 9px; border-radius:999px; background:#eaf1ec; border:1px solid #d3e2d8 }
+  /* NARROW: the badge drops to its own line rather than eating the name. Four things in one row at
+     390px is how a title ends up one letter wide. */
+  @media (max-width:430px){
+    .row{ flex-wrap:wrap; row-gap:4px }
+    .nm{ order:1; flex:1 1 55% }
+    .add{ order:2 }
+    .why{ order:3; flex-basis:100%; text-align:center }
+  }
+</style>
+
+<div class="sw">
+  <b>Build</b>
+  <button data-s="before" aria-pressed="true">Today</button>
+  <button data-s="after" aria-pressed="false">Proposed</button>
+  <span class="gap"></span>
+  <b>Account</b>
+  <button data-a="admin" aria-pressed="true">Ryan (admin)</button>
+  <button data-a="waw" aria-pressed="false">Joao (Warsaw)</button>
+  <span class="gap"></span>
+  <b>Server</b>
+  <button data-e="ok" aria-pressed="true">Answers</button>
+  <button data-e="403" aria-pressed="false">Refuses</button>
+</div>
+
+<div class="wrap">
+  <div class="card">
+    <div class="lbl">Who can use it</div>
+    <div class="segs">
+      <span class="seg">All Users</span><span class="seg">New Users</span>
+      <span class="seg">Churn Users</span><span class="seg on">Specific Users</span>
+    </div>
+    <input class="s" id="q" data-testid="user-search" placeholder="Search users by name, email or phone">
+    <div class="scopeline" data-testid="scopeline" hidden></div>
+    <div class="res" data-testid="user-results"></div>
+    <div class="chips" data-testid="user-chips" hidden></div>
+    <div class="note" data-testid="note"></div>
+  </div>
+</div>
+
+<script>
+// ── THE PEOPLE. homeCity is preferable_city_name (the boundary today). wawSpots is bookings on a
+//    Warsaw match, from player_spots.city_name — the half the boundary does not have today.
+// Junior is REAL — player 88519, +48662229361, registered 25 Aug, played 2, PREFERABLE CITY AUSTIN.
+// A Polish phone on a Warsaw pitch with Austin on his account. He is the whole argument.
+const PEOPLE = [
+  { id: 88519, name:"Junior Mafunga",  email:"juniormafunga16@gmail.com", homeCity:"Austin",  wawSpots:2 },
+  { id: 91112, name:"Giovanni Liber",  email:"gy44nr78kv@privaterelay.appleid.com", homeCity:"Warsaw", wawSpots:1 },
+  { id: 91247, name:"Manu",            email:"manan.kayarat13@gmail.com", homeCity:"Warsaw",  wawSpots:0 },
+  { id: 90724, name:"jaxson jeter",    email:"billyjetter01@gmail.com",   homeCity:null,      wawSpots:1 },
+  { id: 41220, name:"Diego Ramos",     email:"dramos.atx@gmail.com",      homeCity:"Austin",  wawSpots:0 },
+];
+
+let build = "before", acct = "admin", server = "ok", picked = [];
+
+const matches = (p, t) => (p.name + " " + p.email).toLowerCase().includes(t.toLowerCase());
+
+// TODAY: preferable_city_name equality, and nothing else. NULL is a refusal.
+const visibleToday = (p) => acct === "admin" ? true : p.homeCity === "Warsaw";
+// PROPOSED: the union. Account city Warsaw, OR a booking on a Warsaw match.
+const visibleProposed = (p) => acct === "admin" ? true : (p.homeCity === "Warsaw" || p.wawSpots > 0);
+
+function render(){
+  document.querySelectorAll('.sw button').forEach(b=>{
+    const k = b.dataset.s ? ["s",build] : b.dataset.a ? ["a",acct] : ["e",server];
+    b.setAttribute("aria-pressed", String(b.dataset[k[0]] === k[1]));
+  });
+  const t = document.getElementById("q").value.trim();
+  const res = document.querySelector('[data-testid="user-results"]');
+  const scope = document.querySelector('[data-testid="scopeline"]');
+  const note = document.querySelector('[data-testid="note"]');
+  const chips = document.querySelector('[data-testid="user-chips"]');
+  res.innerHTML = ""; note.textContent = "";
+
+  // THE SCOPE, SAID BEFORE THE SEARCH RUNS. A boundary nobody can see is indistinguishable from a
+  // broken screen, which is exactly how this arrived.
+  const confined = acct === "waw";
+  scope.hidden = !(build === "after" && confined);
+  if (!scope.hidden) {
+    scope.innerHTML = '<span class="pill" data-testid="scope-pill">Warsaw only</span>' +
+      '<span>Players whose account city is Warsaw, or who have booked a Warsaw match.</span>';
+  }
+
+  chips.hidden = picked.length === 0;
+  chips.innerHTML = picked.map(p=>`<span class="chip">${p.name}</span>`).join("");
+
+  if (t.length < 2) { res.style.display = "none"; return; }
+  res.style.display = "";
+
+  // ── THE REFUSAL. Today the picker does `catch { }` around the fetch and never looks at res.ok,
+  //    so a 403 and a genuinely empty search render the SAME SENTENCE.
+  if (server === "403") {
+    if (build === "before") {
+      res.innerHTML = '<div class="empty" data-testid="empty">No matching users.</div>';
+      note.textContent = "The server refused this request. Nothing on screen says so.";
+    } else {
+      res.innerHTML = '<div class="empty err" data-testid="error">That resource is not in your city. '
+        + 'The search was refused, not empty.</div>';
+      note.textContent = "The server's own message, shown as an error rather than as a result.";
+    }
+    return;
+  }
+
+  const all = PEOPLE.filter(p => matches(p, t));
+  const show = all.filter(build === "before" ? visibleToday : visibleProposed);
+  const hidden = all.length - show.length;
+
+  if (show.length === 0) {
+    if (build === "before") {
+      res.innerHTML = '<div class="empty" data-testid="empty">No matching users.</div>';
+      note.textContent = confined
+        ? "There is a player with that email. The city filter removed him and the sentence does not say so."
+        : "";
+    } else {
+      res.innerHTML = '<div class="empty scoped" data-testid="empty">'
+        + (confined ? `No Warsaw player matches "${t}".` : `No player matches "${t}".`)
+        + (confined && hidden > 0
+            ? `<span class="also" data-testid="elsewhere">${hidden} player${hidden===1?"":"s"} matched outside Warsaw.</span>`
+            : "")
+        + '</div>';
+    }
+    return;
+  }
+
+  res.innerHTML = show.map(p => {
+    // WHY THIS PERSON IS HERE, on the row. Under a union the operator cannot otherwise tell a
+    // Warsaw regular from an Austin regular who played here once.
+    const home = p.homeCity ?? "No home city";
+    const why = build === "after" && confined
+      ? (p.homeCity === "Warsaw"
+          ? `<span class="why" data-testid="why">Warsaw account</span>`
+          : `<span class="why played" data-testid="why">Played Warsaw ×${p.wawSpots}</span>`)
+      : "";
+    return `<div class="row" data-testid="row" data-id="${p.id}">
+      <span class="nm"><b>${p.name}</b><span data-testid="sub">${p.email} · ${home}</span></span>
+      ${why}
+      <button class="add" data-testid="add">Add</button></div>`;
+  }).join("");
+
+  res.querySelectorAll('[data-testid="add"]').forEach((b,i)=>{
+    b.onclick = () => { const p = show[i]; if(!picked.some(x=>x.id===p.id)) picked.push(p); render(); };
+  });
+}
+
+document.querySelectorAll('.sw button').forEach(b=>{
+  b.onclick = () => {
+    if (b.dataset.s) build = b.dataset.s;
+    else if (b.dataset.a) acct = b.dataset.a;
+    else server = b.dataset.e;
+    render();
+  };
+});
+document.getElementById("q").addEventListener("input", render);
+render();
+</script>

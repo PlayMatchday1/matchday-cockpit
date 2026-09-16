@@ -94,6 +94,51 @@ for (const f of WRITE_ROUTES) {
   src.includes("canManagePlayers") ? ok("ban route gates on canManagePlayers (MANAGE PLAYERS)") : bad("ban route does NOT check canManagePlayers");
   src.includes('"manage"') ? ok('ban route passes requires:"manage" to apiWrite (not EDIT MATCHES)') : bad("ban route does not require manage authority"); }
 
+/* 5) MONEY WRITES TO OUR OWN TABLES ARE LOGGED TOO ───────────────────────────────────────────
+ * The scan above covers writes to the MatchDay API. These write SUPABASE, and one of them decided
+ * who a payroll row pays while writing nothing to change_log at all: manager_gusto_aliases. The
+ * Gusto CSV matches on First + Last, so changing an alias redirects a payroll row from one worker
+ * to another, and as of 2026-09-15 that is reachable by anyone with Match Ops from two screens
+ * rather than by an admin from one. An unlogged write that decides who gets paid is the one
+ * combination not to ship. */
+const MONEY_ROUTES: { file: string; source: string; methods: string[] }[] = [
+  { file: "src/app/api/manager-pay/aliases/route.ts", source: "Manager Pay — Gusto alias", methods: ["PUT", "DELETE"] },
+  { file: "src/app/api/manager-pay/added/route.ts", source: "Manager Pay — added", methods: ["POST", "DELETE"] },
+];
+for (const r of MONEY_ROUTES) {
+  const src = readFileSync(r.file, "utf8");
+  const name = r.file.split("/").slice(-2)[0];
+  const calls = (src.match(/recordWrite\(/g) ?? []).length;
+  calls >= r.methods.length
+    ? ok(`${name}: ${calls} recordWrite call sites for ${r.methods.length} write methods`)
+    : bad(`${name}: only ${calls} recordWrite call sites for ${r.methods.join("/")}`);
+  src.includes(`source: "${r.source}"`) ? ok(`  and logs under "${r.source}"`) : bad(`  ${name} does not log under "${r.source}"`);
+  src.includes("supabaseLogStore()") ? ok("  through supabaseLogStore (change_log)") : bad(`  ${name} does not use supabaseLogStore`);
+  /* THE READ-BACK IS THE VERDICT, not the absence of an error — the rule the whole hook exists for. */
+  src.includes("applied:") ? ok("  and its verdict is the read-back, not a 2xx") : bad(`  ${name} has no applied() read-back`);
+}
+/* NO BARE WRITE OUTSIDE THE HOOK. A second .upsert or .delete on the alias table would be a
+ * second path with no audit, which is exactly how this one went unlogged for so long. */
+{
+  /* COMMENTS ARE STRIPPED BEFORE COUNTING. The header on this route now QUOTES the stale
+   * "authenticateAdmin" claim it replaced, and explains the matchops gate in prose — so a scan of
+   * the raw text counted four gates and found the very word it was asserting the absence of. A
+   * guard that a comment can satisfy, or break, is not a guard. */
+  const raw = readFileSync("src/app/api/manager-pay/aliases/route.ts", "utf8");
+  const src = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+  const writes = (src.match(/\.(upsert|delete)\(/g) ?? []).length;
+  writes === 2
+    ? ok(`aliases route has exactly 2 table writes (one per method), both inside recordWrite`)
+    : bad(`aliases route has ${writes} table writes — every one must sit in a recordWrite closure`);
+  /* THE GATE, ASSERTED, because the header used to claim a different one. */
+  const gates = (src.match(/authenticateCapability\(req, "matchops"\)/g) ?? []).length;
+  gates === 3 ? ok("all three methods gate on matchops, which is what the header now says") : bad(`aliases route has ${gates} matchops gates, expected 3`);
+  src.includes("authenticateAdmin") ? bad("aliases route still CALLS authenticateAdmin") : ok("  and no code path calls authenticateAdmin");
+  /* THE HEADER HAS TO SAY THE REAL GATE. It said "Admin-only on app_users.is_admin" while the code
+   * gated on matchops, and it said it about money. */
+  /matchops/.test(raw.split("import")[0]) ? ok("  and the header names the gate the code actually uses") : bad("the aliases header does not name the matchops gate");
+}
+
 console.log(`\nCanonical write endpoints (${WRITE_ENDPOINTS.length}), all via recordWrite:`);
 for (const e of WRITE_ENDPOINTS) console.log(`  · ${e}`);
 console.log(`\n${pass} passed, ${fail} failed`);

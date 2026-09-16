@@ -1,0 +1,194 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>The Gusto mapping, from where the block happens</title>
+<style>
+  :root{ --ink:#12261c; --mut:#5d6b62; --line:#dfe5e0; --hair:#eef2ef; --bg:#f4f6f4; --grn:#12402a;
+         --accent:#7fe3b0; --red:#8c2f1f; --redbg:#fdefec; --redline:#f0c7bd;
+         --amb:#8a5a12; --ambbg:#fdf6e6; --ambline:#ecdcb4; --ok:#0d6b45; --mint:#e6f6ee }
+  *{ box-sizing:border-box }
+  [hidden]{ display:none !important }
+  body{ margin:0; font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg) }
+  .sw{ display:flex; gap:6px; padding:10px 12px; background:#fff; border-bottom:1px solid var(--line); flex-wrap:wrap; align-items:center }
+  .sw b{ font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--mut); margin-right:2px }
+  .sw button{ font:inherit; font-size:12.5px; font-weight:650; padding:6px 11px; border:1px solid var(--line);
+              background:#fff; color:var(--ink); border-radius:999px; cursor:pointer; min-height:32px }
+  .sw button[aria-pressed="true"]{ background:var(--grn); color:#fff; border-color:var(--grn) }
+  .sw .gap{ width:14px }
+  .wrap{ padding:16px; display:flex; justify-content:center }
+  .modal{ background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px; width:100%; max-width:600px;
+          box-shadow:0 8px 28px rgba(18,38,28,.10) }
+  h2{ margin:0; font-size:17px; font-weight:800 }
+  .sub{ margin-top:2px; font-size:12px; color:var(--mut) }
+  .lbl{ font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--mut); font-weight:800; margin:14px 0 5px }
+  .fld{ width:100%; font:inherit; font-size:13px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; min-height:38px; background:#fff }
+  .fld:disabled{ background:#f7f9f8; color:#9aa8a1 }
+  .person{ display:flex; align-items:center; gap:8px; border:1px solid var(--line); border-radius:8px; padding:8px 10px; min-height:40px; flex-wrap:wrap }
+  .person .who{ flex:1; min-width:0; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  .tag{ font-size:9.5px; font-weight:800; padding:2px 6px; border-radius:5px; white-space:nowrap }
+  .tag.ok{ background:var(--mint); color:var(--ok) }
+  .tag.no{ background:var(--ambbg); color:var(--amb); border:1px solid var(--ambline) }
+  .box{ margin-top:10px; border:1px solid; border-radius:8px; padding:10px 11px; font-size:12px }
+  .box.bad{ background:var(--redbg); border-color:var(--redline); color:var(--red) }
+  .box.fix{ background:#fff; border-color:var(--ambline) }
+  .box.good{ background:var(--mint); border-color:#bfe6d3; color:var(--ok); font-weight:650 }
+  .box b{ font-weight:800 }
+  .grid{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px }
+  .grid .fld{ flex:1 1 150px; width:auto }
+  .hint{ margin-top:7px; font-size:11.5px; color:var(--mut); line-height:1.4 }
+  .row2{ display:flex; gap:10px; flex-wrap:wrap }
+  .row2 > div{ flex:1 1 180px }
+  .foot{ display:flex; gap:8px; justify-content:flex-end; margin-top:16px; flex-wrap:wrap }
+  .btn{ font:inherit; font-size:12.5px; font-weight:750; padding:8px 14px; border-radius:8px; border:1px solid var(--line);
+        background:#fff; color:var(--ink); cursor:pointer; min-height:38px }
+  .btn.primary{ background:var(--grn); border-color:var(--grn); color:#fff }
+  .btn.small{ font-size:12px; padding:7px 11px; min-height:34px }
+  .btn:disabled{ opacity:.45; cursor:not-allowed }
+  .hiddenline{ margin-top:7px; font-size:11.5px; color:var(--mut) }
+  .hiddenline button{ font:inherit; font-size:11.5px; font-weight:700; color:var(--grn); background:none; border:none;
+                      padding:0 0 0 4px; text-decoration:underline; cursor:pointer; min-height:22px }
+</style>
+
+<div class="sw">
+  <b>Build</b>
+  <button data-s="before" aria-pressed="true">Today</button>
+  <button data-s="after" aria-pressed="false">Proposed</button>
+  <span class="gap"></span>
+  <b>Gusto says</b>
+  <button data-g="free" aria-pressed="true">Name is free</button>
+  <button data-g="taken" aria-pressed="false">Name is taken</button>
+</div>
+
+<div class="wrap">
+  <div class="modal" role="dialog" aria-label="Add someone not on the schedule">
+    <h2>Add someone not on the schedule</h2>
+    <div class="sub">SATX · week of 2026-09-07</div>
+
+    <div class="lbl">Person</div>
+    <div class="person" data-testid="person">
+      <span class="who">Chrystal Morales · pickingflowers2@yahoo.com</span>
+      <span class="tag no" data-testid="tag-nogusto">No Gusto mapping</span>
+      <span class="tag ok" data-testid="tag-gusto" hidden></span>
+    </div>
+    <div class="hiddenline" data-testid="hiddenline"></div>
+
+    <div data-testid="block-area"></div>
+
+    <div class="row2" style="margin-top:14px">
+      <div>
+        <div class="lbl" style="margin-top:0">Amount</div>
+        <input class="fld" data-testid="amount" placeholder="0.00">
+      </div>
+      <div style="flex:2 1 260px">
+        <div class="lbl" style="margin-top:0">Reason (required)</div>
+        <input class="fld" data-testid="reason" placeholder="Covered Tuesday at NEMP">
+      </div>
+    </div>
+    <div class="hint">The reason appears on the sheet and in the Gusto memo. It is the only account of why this was paid.</div>
+
+    <div class="foot">
+      <button class="btn" data-testid="cancel">Cancel</button>
+      <button class="btn primary" data-testid="save" disabled>Add to the sheet</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let build = "before", gusto = "free";
+// The mapping this dialog is trying to create. Null until it is saved.
+let mapping = null;
+let first = "", last = "", gEmail = "", saveErr = null, saved = false;
+
+const $ = s => document.querySelector(s);
+const T = id => document.querySelector(`[data-testid="${id}"]`);
+
+function render(){
+  document.querySelectorAll('.sw button').forEach(b=>{
+    const [k,v] = b.dataset.s ? ["s",build] : ["g",gusto];
+    b.setAttribute("aria-pressed", String(b.dataset[k] === v));
+  });
+
+  const area = T("block-area");
+  const amount = T("amount"), reason = T("reason"), save = T("save");
+
+  // The tag on the person row follows the mapping, so the thing that blocked the save stops
+  // saying it blocks the save the moment it is fixed.
+  T("tag-nogusto").hidden = !!mapping;
+  T("tag-gusto").hidden = !mapping;
+  if (mapping) T("tag-gusto").textContent = `Gusto: ${mapping.first} ${mapping.last}`;
+
+  // 89 of the 100 people on the rosters have no mapping. Today that line is a statement of fact
+  // with nothing behind it; after, it is a thing you can act on.
+  T("hiddenline").innerHTML = build === "before"
+    ? `· 12 in SATX with no Gusto mapping, hidden`
+    : `· 12 in SATX have no Gusto mapping yet. <button type="button" data-testid="showall">Show them, they can be set up here</button>`;
+
+  if (mapping) {
+    area.innerHTML = `<div class="box good" data-testid="mapped">Gusto mapping saved: ${mapping.first} ${mapping.last}${mapping.email ? ` · ${mapping.email}` : ""}. This row will pay.</div>`;
+  } else if (build === "before") {
+    // TODAY: a correct refusal with no door beside it. The only way to create a mapping is the
+    // editor inside an expanded row on the sheet, and she cannot get onto the sheet.
+    area.innerHTML = `<div class="box bad" data-testid="blocked">
+      <b>Chrystal Morales has no Gusto mapping, so this cannot be saved.</b> A row without one reaches
+      payroll looking identical to one that pays, and does not pay. Set them up in Gusto and add the
+      mapping first.</div>`;
+  } else {
+    area.innerHTML = `<div class="box fix" data-testid="mapform">
+      <b>Chrystal Morales has no Gusto mapping yet.</b> A row without one reaches payroll looking
+      identical to one that pays, and does not pay. Add it here and carry on.
+      <div class="grid">
+        <input class="fld" data-testid="m-first" placeholder="Gusto first name" value="${first}">
+        <input class="fld" data-testid="m-last" placeholder="Gusto last name" value="${last}">
+      </div>
+      <div class="grid">
+        <input class="fld" data-testid="m-email" placeholder="Gusto email (optional)" value="${gEmail}">
+        <button class="btn small primary" data-testid="m-save" ${first.trim() && last.trim() ? "" : "disabled"}>Save mapping</button>
+      </div>
+      <div class="hint" data-testid="m-hint">Type the name <b>exactly</b> as Gusto has it. Clubhouse cannot check it:
+        a name Gusto does not recognise produces a row that looks paid and is not. She must already
+        exist as a worker in Gusto.</div>
+      ${saveErr ? `<div class="box bad" style="margin-top:8px" data-testid="m-err">${saveErr}</div>` : ""}
+    </div>`;
+    T("m-first").oninput = e => { first = e.target.value; softRender(); };
+    T("m-last").oninput  = e => { last  = e.target.value; softRender(); };
+    T("m-email").oninput = e => { gEmail = e.target.value; softRender(); };
+    T("m-save").onclick = () => {
+      // The unique index on (lower(first), lower(last)) already refuses two managers pointing at
+      // one Gusto worker. The route surfaces it as a 409; the dialog has to show it.
+      if (gusto === "taken") {
+        saveErr = `Another manager is already mapped to "${first.trim()} ${last.trim()}". Two managers cannot share a Gusto worker.`;
+        render(); return;
+      }
+      saveErr = null; saved = true;
+      mapping = { first: first.trim(), last: last.trim(), email: gEmail.trim() || null };
+      render();
+    };
+  }
+
+  // THE MAPPING IS NOT A BYPASS. Amount and reason are still required, and the pay row is still
+  // one row per person per week.
+  const blockedByMapping = !mapping;
+  amount.disabled = blockedByMapping;
+  reason.disabled = blockedByMapping;
+  const amt = Number(amount.value);
+  save.disabled = blockedByMapping || !Number.isFinite(amt) || amt === 0 || reason.value.trim() === "";
+}
+
+// Re-render only the button's disabled state while typing, so the inputs keep focus and the
+// caret does not jump to the end of the field on every keystroke.
+function softRender(){
+  const b = T("m-save");
+  if (b) b.disabled = !(first.trim() && last.trim());
+}
+
+document.querySelectorAll('.sw button').forEach(b=>{
+  b.onclick = () => {
+    if (b.dataset.s) build = b.dataset.s; else gusto = b.dataset.g;
+    mapping = null; first = ""; last = ""; gEmail = ""; saveErr = null; saved = false;
+    T("amount").value = ""; T("reason").value = "";
+    render();
+  };
+});
+T("amount").addEventListener("input", render);
+T("reason").addEventListener("input", render);
+render();
+</script>
