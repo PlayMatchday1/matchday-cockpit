@@ -329,3 +329,135 @@ export function windowsAlign(ours: { start: string; end: string }, theirs: Windo
   }
   return reasons.length ? { aligned: false, reasons } : { aligned: true, days: ourDays };
 }
+
+/* ── THE MATCH LOG ────────────────────────────────────────────────────────────────────────────
+ * A DIFFERENT GRAIN from the weekly summary, and the two agreeing is the whole validation: the
+ * September log sums to exactly the three capture totals, 360/4,710, 211/2,789 and 114/1,781.
+ *
+ * THE LOG NAMES FIELDS, THE SUMMARY NAMES FACILITIES. Three log names have no summary row, and
+ * merging them is justified by ARITHMETIC rather than by the names looking similar:
+ *
+ *   Q&B Indoor Sports 56 spots + "- Sphere" 15  = 71, and the summary says 71.
+ *   ATH Cypress "and" spelling 22 + "- Cypress | Morby" 120 = 142, and the summary says 142.
+ *
+ * That is proof. It is also why this map is a LIST OF MEASURED PAIRS and not a fuzzy matcher: the
+ * two Cypress variants stay on the CYPRESS row, which is not one of ours, and nothing here can
+ * drift them onto ATH Katy, which is. */
+export const MATCHLOG_FACILITY_ALIASES: Record<string, string> = {
+  "Q&B Indoor Sports - Sphere": "Q&B Indoor Sports",
+  "Athlete Training and Health | Cypress": "Athlete Training & Health | Cypress",
+  "Athlete Training & Health - Cypress | Morby": "Athlete Training & Health | Cypress",
+};
+
+export const resolveLogFacility = (facility: string): string =>
+  MATCHLOG_FACILITY_ALIASES[facility] ?? facility;
+
+const LOG_COLUMNS = [
+  "source", "city_label", "facility", "match_date", "kickoff_local", "duration_minutes", "format",
+  "bookable_spots", "price", "listing_title", "note",
+] as const;
+
+export type ParsedMatch = {
+  source: string; city_label: string; facility: string; resolved_facility: string;
+  match_date: string; kickoff_local: string | null; duration_minutes: number | null;
+  format: string; spots: number; price_cents: number | null;
+  listing_title: string | null; note: string | null;
+};
+
+const TIME_RX = /^(\d{1,2}):(\d{2})(:\d{2})?$/;
+
+export function parseMatchLog(text: string): { rows: ParsedMatch[]; errors: string[] } {
+  const errors: string[] = [];
+  const lines = text.replace(/\r\n?/g, "\n").split("\n").filter((l) => l.trim() !== "");
+  if (lines.length === 0) return { rows: [], errors: ["The file is empty."] };
+
+  const header = parseCsvLine(lines[0]).map((h) => h.toLowerCase());
+  const unknown = header.filter((h) => !(LOG_COLUMNS as readonly string[]).includes(h));
+  const missing = LOG_COLUMNS.filter((c) => !header.includes(c));
+  if (unknown.length) errors.push(`Unknown column${unknown.length > 1 ? "s" : ""}: ${unknown.join(", ")}`);
+  if (missing.length) errors.push(`Missing column${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}`);
+  if (errors.length) return { rows: [], errors };
+
+  const idx = Object.fromEntries(header.map((h, i) => [h, i])) as Record<string, number>;
+  const rows: ParsedMatch[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const c = parseCsvLine(lines[i]);
+    const where = `row ${i + 1}`;
+    if (c.length !== header.length) { errors.push(`${where}: ${c.length} fields, expected ${header.length}`); continue; }
+    const g = (k: string) => c[idx[k]] ?? "";
+    const source = g("source").toLowerCase();
+    if (source !== "plei" && source !== "goodrec") { errors.push(`${where}: unknown source "${g("source")}"`); continue; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(g("match_date"))) errors.push(`${where}: match_date "${g("match_date")}" is not YYYY-MM-DD`);
+    /* A BLANK TIME IS A REAL VALUE, NOT A BAD ROW. One listing was recorded with its time cut off;
+     * dropping it would break the sum that validates the capture. */
+    const rawTime = g("kickoff_local").trim();
+    let kickoff: string | null = null;
+    if (rawTime !== "") {
+      const m = TIME_RX.exec(rawTime);
+      if (!m) errors.push(`${where}: kickoff_local "${rawTime}" is not HH:MM`);
+      else kickoff = `${m[1].padStart(2, "0")}:${m[2]}:00`;
+    }
+    if (!g("facility")) errors.push(`${where}: facility is blank`);
+    if (!/^\d+$/.test(g("bookable_spots"))) errors.push(`${where}: bookable_spots "${g("bookable_spots")}" is not a whole number`);
+    /* BLANK PRICE IS NULL, A WRITTEN 0 IS ZERO. The log has exactly one genuine free game and six
+     * rows where nothing was published; reading either as the other misprices a market. */
+    const rawPrice = g("price").trim();
+    let priceCents: number | null = null;
+    if (rawPrice !== "") {
+      if (!/^\$?\d+(\.\d{1,2})?$/.test(rawPrice)) errors.push(`${where}: price "${rawPrice}" is not a price`);
+      else priceCents = Math.round(Number(rawPrice.replace("$", "")) * 100);
+    }
+    /* BLANK DURATION IS NORMAL, NOT BAD. Every GoodRec row has none because GoodRec publishes a
+     * start time only. A zero would be a broken slot, so it is refused; blank is not. */
+    const rawDur = g("duration_minutes").trim();
+    let duration: number | null = null;
+    if (rawDur !== "") {
+      if (!/^\d+$/.test(rawDur) || Number(rawDur) <= 0) errors.push(`${where}: duration_minutes "${rawDur}" is not a positive whole number of minutes`);
+      else duration = Number(rawDur);
+    }
+    rows.push({
+      source, city_label: g("city_label"), facility: g("facility"),
+      resolved_facility: resolveLogFacility(g("facility")),
+      match_date: g("match_date"), kickoff_local: kickoff, duration_minutes: duration,
+      format: g("format").trim(),
+      spots: Number(g("bookable_spots")) || 0, price_cents: priceCents,
+      listing_title: g("listing_title").trim() || null,
+      note: g("note").trim() || null,
+    });
+  }
+  if (!rows.length && !errors.length) errors.push("The file has a header and no rows.");
+  return { rows: errors.length ? [] : rows, errors };
+}
+
+/* ── SPOTS PER HOUR, THE UNIT THAT MAKES THE QUALITY CHECK HONEST ─────────────────────────────
+ * Spots per MATCH called Memorial Indoor a 3.5x outlier: 35 spots in a 5v5 against an implied 10.
+ * It is a 180-minute open play, which is 11.7 an hour against the same implied 10. The capture was
+ * never wrong; the unit was.
+ *
+ * NULL WHERE THE DURATION IS UNKNOWN, which is every GoodRec row by construction. A per-hour figure
+ * for a slot of unknown length is not a worse number, it is not a number. */
+export function spotsPerHour(spots: number, durationMinutes: number | null): number | null {
+  if (durationMinutes == null || !(durationMinutes > 0)) return null;
+  return (spots / durationMinutes) * 60;
+}
+
+/** What one hour of this format implies: 7v7 is 14 players on the pitch. */
+export const impliedSpotsPerHour = (format: string): number | null => {
+  const n = formatSize(format);
+  return Number.isFinite(n) ? 2 * n : null;
+};
+
+/**
+ * Is this listing's supply out of line with its format, per hour?
+ *
+ * Returns null when it cannot be judged rather than guessing: no duration means no per-hour figure,
+ * and a check that silently falls back to per-match is the one that produced the wrong answer.
+ */
+export function listingOutlierRatio(
+  spots: number, durationMinutes: number | null, format: string,
+): number | null {
+  const per = spotsPerHour(spots, durationMinutes);
+  const implied = impliedSpotsPerHour(format);
+  if (per == null || implied == null || implied <= 0) return null;
+  return per / implied;
+}

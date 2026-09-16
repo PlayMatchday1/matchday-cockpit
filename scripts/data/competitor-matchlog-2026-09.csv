@@ -1,0 +1,686 @@
+source,city_label,facility,match_date,kickoff_local,duration_minutes,format,bookable_spots,price,listing_title,note
+plei,Houston,HTX Fieldhouse,2026-09-21,22:00,60,6v6,12,12.50,East End indoor,Intermediate
+plei,Houston,Memorial Indoor Soccer,2026-09-21,20:00,180,5v5,35,11.25,Open play Memorial indoor,High-level
+plei,Houston,Houston Select FC,2026-09-21,21:00,60,5v5,10,12.50,10% OFF Memorial outdoor,Intermediate
+plei,Houston,Pac Global Academy | West Houston,2026-09-21,21:00,60,8v8,16,11.50,Happy hour West Houston outdoor,Intermediate
+plei,Houston,GoPro Arena,2026-09-21,19:00,60,6v6,12,8.50,20% OFF West Houston indoor,Intermediate
+plei,Houston,GoPro Arena,2026-09-21,20:00,60,6v6,12,10.50,West Houston indoor,Intermediate
+plei,Houston,GoPro Arena,2026-09-21,21:00,60,6v6,12,10.50,West Houston indoor,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-21,23:00,60,6v6,12,14.50,Downtown outdoor,High-level
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-21,20:00,60,5v5,10,13.50,Downtown outdoor Small Field,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-21,21:00,60,5v5,10,13.50,Downtown outdoor Small Field,Intermediate
+plei,Houston,Houston Soccer Field,2026-09-21,22:00,60,8v8,16,13.50,Cypress outdoor,Intermediate
+plei,Houston,Houston Soccer Field,2026-09-21,20:00,60,6v6,12,13.00,Cypress outdoor,Intermediate
+plei,Houston,Turf On Soccer Fields,2026-09-21,19:00,60,7v7,14,9.50,40% OFF North Houston outdoor,Intermediate
+plei,Houston,Turf On Soccer Fields,2026-09-21,20:00,60,7v7,14,9.50,40% OFF North Houston outdoor,Intermediate
+plei,Houston,Turf On Soccer Fields,2026-09-21,21:00,60,7v7,14,9.50,40% OFF North Houston outdoor,High-level
+plei,Houston,Pegaso HTX,2026-09-21,22:00,60,6v6,12,12.50,Downtown outdoor,High-level
+plei,Houston,Pegaso HTX,2026-09-21,23:00,60,6v6,12,12.50,Downtown outdoor,High-level
+plei,Houston,Pegaso HTX,2026-09-21,17:00,60,6v6,12,11.50,Happy hour Downtown outdoor,Intermediate
+plei,Houston,Pegaso HTX,2026-09-21,18:00,60,6v6,12,12.50,Downtown outdoor,High-level
+plei,Houston,Pegaso HTX,2026-09-21,21:00,90,6v6,12,,adidas Futbol Society FREE pickup,"Friendly Game ful Game full (max spots inferred from same facility/format) Free brand-sponsored game; max not shown, 12 assumed"
+plei,Houston,Pegaso HTX,2026-09-21,21:30,60,6v6,12,12.50,Downtown outdoor,High-level
+plei,Houston,HTX Fieldhouse,2026-09-21,23:00,60,6v6,12,10.50,20% OFF East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-21,19:00,60,6v6,12,10.50,20% OFF East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-21,20:00,60,6v6,12,10.50,20% OFF East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-21,21:00,60,6v6,12,12.50,East End indoor,Intermediate (max spots inferred from same facility/format)
+plei,Houston,Peek Sports Texas,2026-09-21,22:00,60,7v7,14,14.50,Katy outdoor,High-level
+plei,Houston,Peek Sports Texas,2026-09-21,21:00,60,8v8,16,14.50,Katy outdoor,High-level
+plei,Houston,Revolution Soccer Complex,2026-09-21,22:00,60,7v7,14,14.50,Northwest outdoor,High-level
+plei,Houston,Revolution Soccer Complex,2026-09-21,23:00,60,7v7,14,12.50,Happy hour Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-21,18:00,60,7v7,14,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-21,19:00,60,5v5,10,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-21,19:00,60,7v7,14,14.50,Northwest outdoor,High-level
+plei,Houston,Revolution Soccer Complex,2026-09-21,20:00,60,5v5,10,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-21,20:00,60,7v7,14,14.50,Northwest outdoor,High-level
+plei,Houston,Revolution Soccer Complex,2026-09-21,21:00,60,5v5,10,14.50,Northwest outdoor,High-level
+plei,Houston,Revolution Soccer Complex,2026-09-21,21:00,60,7v7,14,14.50,Northwest outdoor,Intermediate
+plei,Houston,Katy International Sports Complex,2026-09-21,22:30,60,8v8,16,13.50,Katy outdoor,Intermediate
+plei,Houston,Katy International Sports Complex,2026-09-21,22:30,60,6v6,12,10.50,30% OFF Katy outdoor,High-level
+plei,Houston,Katy International Sports Complex,2026-09-21,20:30,60,6v6,12,13.50,Katy outdoor,Intermediate
+plei,Houston,Katy International Sports Complex,2026-09-21,21:30,60,8v8,16,13.50,Katy outdoor,Intermediate
+plei,Houston,Katy International Sports Complex,2026-09-21,21:30,60,6v6,12,10.50,30% OFF Katy outdoor,High-level
+plei,Houston,Crossbar Academy,2026-09-21,19:00,60,6v6,12,10.50,30% OFF Tomball outdoor,Intermediate
+plei,Houston,Crossbar Academy,2026-09-21,20:00,60,6v6,12,13.50,Tomball outdoor,High-level
+plei,Houston,Crossbar Academy,2026-09-21,21:00,60,6v6,12,11.50,20% GEF Tomball ontdoor,Intermediate
+plei,Houston,Futbolito-Golfo de Mexico,2026-09-21,22:15,60,7v7,14,7.50,30% OFF South Houston outdoor,Intermediate
+plei,Houston,The HatTrick Patio,2026-09-21,20:00,60,5v5,10,8.50,happy hour Tomball indoor,Intermediate
+plei,Houston,The HatTrick Patio,2026-09-21,21:00,60,5v5,10,8.50,happy hour Tomball indoor,Intermediate
+plei,Houston,The HatTrick Oakridge,2026-09-21,21:00,60,6v6,12,12.50,10% OFF Conroe indoor,Intermediate
+plei,Houston,Indoor Soccer Box,2026-09-15,19:00,60,5v5,10,11.25,10% OFF Memorial City indoor,Intermediate
+plei,Houston,Indoor Soccer Box,2026-09-15,21:30,90,5v5,15,12.50,KOTT Memorial City indoor,Intermediate
+plei,Houston,Q&B Indoor Sports,2026-09-15,22:30,60,6v6,12,12.50,West Houston indoor,Intermediate
+plei,Houston,Q&B Indoor Sports - Sphere,2026-09-15,21:00,60,5v5,15,12.50,NEW 3 Team soccer experience powered by,Beginner
+plei,Houston,Cancha Five Stars | Hillcroft,2026-09-15,19:00,60,7v7,14,9.75,40% OFF West Houston outdoor,Intermediate
+plei,Houston,Pac Global Academy | West Houston,2026-09-15,21:00,60,8v8,16,11.50,20% OFF West Houston outdoor,High-level
+plei,Houston,GoPro Arena,2026-09-15,23:00,60,6v6,12,8.50,20% OFF West Houston indoor,High-level
+plei,Houston,GoPro Arena,2026-09-15,19:00,60,6v6,12,10.50,West Houston indoor,High-level
+plei,Houston,Pegaso HTX,2026-09-15,18:00,60,6v6,12,12.50,Downtown outdoor,High-level
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-15,23:00,60,6v6,12,14.50,Downtown outdoor,High-level
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-15,20:00,60,5v5,10,13.50,Downtown outdoor - Small Field,Intermediate 2 spots left!
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-15,21:00,60,5v5,10,13.50,Downtown outdoor - Small Field,Intermediate
+plei,Houston,Houston Soccer Field,2026-09-15,22:00,60,8v8,16,13.50,Cypress outdoor,High-level 3 spots left!
+plei,Houston,Houston Soccer Field,2026-09-15,20:00,60,6v6,12,13.00,Cypress outdoor,Intermediate
+plei,Houston,Houston Soccer Field,2026-09-15,21:00,60,6v6,12,14.50,Cypress outdoor,Intermediate
+plei,Houston,King Soccer,2026-09-15,22:00,90,6v6,18,11.75,20% OFF KOTT Cypress indoor,High-level
+plei,Houston,Turf On Soccer Fields,2026-09-15,19:00,60,7v7,14,9.50,40% OFF North Houston outdoor,Intermediate
+plei,Houston,Turf On Soccer Fields,2026-09-15,20:00,60,7v7,14,9.50,40% OFF North Houston outdoor,Intermediate
+plei,Houston,Turf On Soccer Fields,2026-09-15,21:00,60,7v7,14,9.50,40% OFF North Houston outdoor,High-level
+plei,Houston,Pegaso HTX,2026-09-15,22:00,60,6v6,12,12.50,Downtown outdoor,High-level 3 spots left!
+plei,Houston,Pegaso HTX,2026-09-15,23:00,60,6v6,12,12.50,Downtown outdoor,High-level
+plei,Houston,Pegaso HTX,2026-09-15,00:00,60,6v6,12,12.50,Downtown outdoor,High-level
+plei,Houston,Pegaso HTX,2026-09-15,17:00,60,6v6,12,11.50,Happy hour Downtown outdoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-15,22:00,60,6v6,12,12.50,East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-15,23:00,60,6v6,12,10.50,20% OFF East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-15,19:00,60,6v6,12,10.50,20% OFF East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-15,20:00,60,6v6,12,12.50,East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-15,21:00,60,6v6,12,12.50,East End indoor,Intermediate
+plei,Houston,Peek Sports Texas,2026-09-15,20:00,60,7v7,14,14.75,Katy outdoor,Intermediate
+plei,Houston,Peek Sports Texas,2026-09-15,21:00,60,7v7,14,14.75,Katy outdoor,High-level
+plei,Houston,Revolution Soccer Complex,2026-09-15,22:00,60,7v7,14,15.50,Northwest outdoor,High-level
+plei,Houston,Revolution Soccer Complex,2026-09-15,19:00,60,5v5,10,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-15,19:00,60,7v7,14,15.50,Northwest outdoor,High-level 3 spots left!
+plei,Houston,Revolution Soccer Complex,2026-09-15,20:00,60,5v5,10,14.50,Northwest outdoor - Field 1,High-level
+plei,Houston,Revolution Soccer Complex,2026-09-15,21:00,60,5v5,10,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-15,21:00,60,7v7,14,14.50,Northwest outdoor,High-level
+plei,Houston,Katy International Sports Complex,2026-09-15,22:30,60,8v8,16,13.50,Katy outdoor,High-level
+plei,Houston,Katy International Sports Complex,2026-09-15,21:30,60,6v6,12,13.50,Katy outdoor,Intermediate
+plei,Houston,Katy International Sports Complex,2026-09-15,21:30,60,8v8,16,13.50,Katy outdoor,Intermediate (max spots inferred from same facility/format)
+plei,Houston,Crossbar Academy,2026-09-15,20:00,60,6v6,12,13.50,Tomball outdoor,Intermediate
+plei,Houston,Crossbar Academy,2026-09-15,21:00,60,6v6,12,11.50,20% OFF Tomball outdoor,High-level
+plei,Houston,Athlete Training and Health | Cypress,2026-09-15,20:30,60,11v11,22,12.50,Cypress outdoor,Intermediate
+plei,Houston,Athlete Training & Health - Cypress | Morby,2026-09-15,21:30,60,11v11,24,13.50,Cypress outdoor,Intermediate
+plei,Houston,The HatTrick Patio,2026-09-15,20:00,60,5v5,10,8.50,happy hour Tomball indoor,Intermediate
+plei,Houston,The HatTrick Oakridge,2026-09-15,20:00,60,7v7,14,10.50,30% OFF Conroe outdoor,Intermediate
+plei,Houston,Q&B Indoor Sports,2026-09-16,22:30,60,6v6,12,12.50,West Houston indoor,Intermediate
+plei,Houston,Cancha Five Stars | Hillcroft,2026-09-16,19:00,60,7v7,14,9.75,40% OFF West Houston outdoor,Intermediate
+plei,Houston,Pac Global Academy | West Houston,2026-09-16,20:00,60,6v6,12,11.50,20% OFF West Houston outdoor,High-level
+plei,Houston,Pac Global Academy | West Houston,2026-09-16,21:00,60,8v8,16,11.50,20% OFF West Houston outdoor,Intermediate
+plei,Houston,GoPro Arena,2026-09-16,22:00,60,6v6,12,8.50,20% OFF West Houston indoor,Intermediate
+plei,Houston,GoPro Arena,2026-09-16,18:00,60,6v6,12,6.50,Happy Hour West Houston indoor,High-level
+plei,Houston,GoPro Arena,2026-09-16,20:00,60,6v6,12,10.50,West Houston indoor,Intermediate 3 spots left
+plei,Houston,GoPro Arena,2026-09-16,21:00,60,6v6,12,10.50,West Houston indoor,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-16,22:00,60,5v5,10,13.50,Downtown outdoor Small Field,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-16,23:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-16,19:00,60,5v5,10,13.50,Downtown outdoor Small Field,High-level
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-16,20:00,60,5v5,10,13.50,Downtown outdoor Small Field,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-16,21:00,60,5v5,10,13.50,Downtown outdoor Small Field,Intermediate
+plei,Houston,Houston Soccer Field,2026-09-16,22:00,60,8v8,16,13.50,Cypress outdoor,intermediate
+plei,Houston,Houston Soccer Field,2026-09-16,20:00,60,6v6,12,13.50,Cypress outdoor,High-level
+plei,Houston,Houston Soccer Field,2026-09-16,21:00,60,6v6,12,13.00,Cypress outdoor,Intermediate 3 spots left!
+plei,Houston,King Soccer,2026-09-16,20:00,60,6v6,12,13.75,Cypress indoor,High-level
+plei,Houston,Turf On Soccer Fields,2026-09-16,19:00,60,7v7,14,9.50,40% OFF North Houston outdoor,High-level
+plei,Houston,Turf On Soccer Fields,2026-09-16,20:00,60,7v7,14,9.50,40% OFF North Houston outdoor,Intermediate
+plei,Houston,Turf On Soccer Fields,2026-09-16,21:00,60,7v7,14,9.50,40% OFF North Houston outdoor,High-level
+plei,Houston,Pegaso HTX,2026-09-16,22:00,60,6v6,12,12.50,Downtown outdoor,Intermediate 3 spots left!
+plei,Houston,Pegaso HTX,2026-09-16,23:00,60,6v6,12,12.50,Downtown outdoor,High-level
+plei,Houston,Pegaso HTX,2026-09-16,00:00,60,6v6,12,12.50,Downtown outdoor,High-level
+plei,Houston,Pegaso HTX,2026-09-16,17:00,60,6v6,12,11.50,Happy hour Downtown outdoor,Intermediate
+plei,Houston,Pegaso HTX,2026-09-16,18:00,60,6v6,12,12.50,Downtown outdoor,High-level
+plei,Houston,HTX Fieldhouse,2026-09-16,22:00,60,6v6,12,12.50,East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-16,23:00,60,6v6,12,10.50,20% OFF East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-16,19:00,60,6v6,12,12.50,East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-16,20:00,60,6v6,12,12.50,East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-16,21:00,60,6v6,12,12.50,East End indoor,Intermediate
+plei,Houston,Athlete Training and Health | Katy,2026-09-16,22:30,60,11v11,22,12.50,20% OFF Katy outdoor,Intermediate
+plei,Houston,Peek Sports Texas,2026-09-16,20:00,60,7v7,14,14.50,Katy outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-16,22:00,60,7v7,14,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-16,23:00,60,7v7,14,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-16,18:00,60,7v7,14,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-16,19:00,60,5v5,10,14.50,Northwest outdoor,Intermediate (max spots inferred from same facility/format)
+plei,Houston,Revolution Soccer Complex,2026-09-16,19:00,60,7v7,14,14.50,Northwest outdoor,Intermediate 3 spots left!
+plei,Houston,Revolution Soccer Complex,2026-09-16,20:00,60,5v5,10,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-16,21:00,60,5v5,10,14.50,Northwest outdoor,Intermediate
+plei,Houston,Katy International Sports Complex,2026-09-16,22:30,60,8v8,16,13.50,Katy outdoor,Intermediate
+plei,Houston,Katy International Sports Complex,2026-09-16,23:00,60,8v8,16,10.50,Happy hour Katy outdoor,Intermediate
+plei,Houston,Katy International Sports Complex,2026-09-16,20:30,60,6v6,12,13.50,Katy outdoor,High-level
+plei,Houston,Katy International Sports Complex,2026-09-16,21:30,60,6v6,12,13.50,Katy outdoor,Intermediate
+plei,Houston,Crossbar Academy,2026-09-16,19:00,60,6v6,12,10.50,30% OFF Tomball outdoor,High-level
+plei,Houston,Crossbar Academy,2026-09-16,20:00,60,6v6,12,13.50,Tomball outdoor,Intermediate
+plei,Houston,Crossbar Academy,2026-09-16,21:00,60,6v6,12,11.50,20% OFF Tomball outdoor,High-level
+plei,Houston,Futbolito-Golfo de Mexico,2026-09-16,22:30,60,7v7,14,7.50,30% OFF South Houston outdoor,High-level
+plei,Houston,Crossbar Academy | Indoor Soccer,2026-09-16,22:00,60,5v5,10,8.50,40% OFF Tomball indoor,Intermediate
+plei,Houston,The HatTrick Patio,2026-09-16,20:00,60,5v5,10,8.50,happy hour Tomball indoor,High-level
+plei,Houston,The HatTrick Patio,2026-09-16,21:00,60,5v5,10,8.50,happy hour Tomball indoor,Intermediate
+plei,Houston,The HatTrick Oakridge,2026-09-16,22:00,60,6v6,12,12.50,10% OFF Conroe indoor,High-level
+plei,Houston,The HatTrick Oakridge,2026-09-16,21:00,60,6v6,12,11.50,20% OFF Conroe indoor,Intermediate
+plei,Houston,Cancha Five Stars | Hillcroft,2026-09-17,22:00,60,7v7,14,9.75,40% OFF West Houston outdoor,High-level
+plei,Houston,Pac Global Academy | West Houston,2026-09-17,21:00,60,9v9,16,11.50,20% OFF West Houston outdoor,High-level
+plei,Houston,GoPro Arena,2026-09-17,22:00,60,6v6,12,10.50,West Houston indoor,Intermediate
+plei,Houston,GoPro Arena,2026-09-17,18:00,60,6v6,12,7.50,Happy hour West Houston indoor,Intermediate
+plei,Houston,GoPro Arena,2026-09-17,19:00,60,6v6,12,10.50,West Houston indoor,Intermediate
+plei,Houston,GoPro Arena,2026-09-17,20:00,60,6v6,12,9.50,10% OFF West Houston indoor,High-level
+plei,Houston,GoPro Arena,2026-09-17,21:00,60,6v6,12,10.50,West Houston indoor,High-level (max spots inferred from same facility/format)
+plei,Houston,The HatTrick Oakridge,2026-09-17,21:00,60,6v6,12,12.50,10% OFF Conroe indoor,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-17,22:00,60,5v5,10,13.50,Downtown outdoor - Small Field,High-level
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-17,22:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-17,23:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-17,19:00,60,6v6,12,14.50,Downtown outdoor,Intermediate 3 spots left!
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-17,20:00,60,5v5,10,13.50,Downtown outdoor - Small Field,High-level 3 spots left!
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-17,20:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-17,21:00,60,5v5,10,13.50,Downtown outdoor - Small Field,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-17,21:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Houston,Houston Soccer Field,2026-09-17,22:00,60,8v8,16,13.50,Cypress outdoor,High-level
+plei,Houston,Houston Soccer Field,2026-09-17,20:00,60,6v6,12,13.00,Cypress outdoor,Intermediate
+plei,Houston,Houston Soccer Field,2026-09-17,21:00,60,6v6,12,13.00,Cypress outdoor,Intermediate (max spots inferred from same facility/format)
+plei,Houston,Turf On Soccer Fields,2026-09-17,20:00,60,7v7,14,9.50,40% OFF North Houston outdoor,High-level
+plei,Houston,Turf On Soccer Fields,2026-09-17,21:00,60,7v7,14,9.50,40% OFF North Houston outdoor,Intermediate
+plei,Houston,Pegaso HTX,2026-09-17,23:00,60,6v6,12,12.50,Downtown outdoor,Intermediate
+plei,Houston,Pegaso HTX,2026-09-17,17:00,60,6v6,12,11.50,Happy hour Downtown outdoor,Intermediate
+plei,Houston,Pegaso HTX,2026-09-17,18:00,60,6v6,12,12.50,Downtown outdoor - Field #2,High-level
+plei,Houston,HTX Fieldhouse,2026-09-17,22:00,60,6v6,12,12.50,East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-17,23:00,60,6v6,12,10.50,20% OFF East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-17,18:00,60,6v6,12,10.50,20% OFF East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-17,21:00,60,6v6,12,12.50,East End indoor,Intermediate
+plei,Houston,Peek Sports Texas,2026-09-17,22:00,60,7v7,14,14.50,Katy outdoor,High-level
+plei,Houston,Athlete Training and Health | Katy,2026-09-17,22:30,60,11v11,22,12.50,20% OFF Katy outdoor,Intermediate
+plei,Houston,Peek Sports Texas,2026-09-17,19:00,60,7v7,14,14.50,Katy outdoor,Intermediate
+plei,Houston,Peek Sports Texas,2026-09-17,20:00,60,7v7,14,14.50,Katy outdoor,Intermediate
+plei,Houston,Peek Sports Texas,2026-09-17,21:00,60,8v8,16,12.50,20% OFF Katy outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-17,22:00,60,5v5,10,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-17,22:00,60,7v7,14,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-17,23:00,60,7v7,14,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-17,18:00,60,7v7,14,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-17,19:00,60,5v5,10,14.50,Northwest outdoor,High-level (max spots inferred from same facility/format)
+plei,Houston,Revolution Soccer Complex,2026-09-17,19:00,60,7v7,14,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-17,20:00,60,5v5,10,14.50,Northwest outdoor - Field 2,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-17,21:00,60,5v5,10,14.50,Northwest outdoor,intermediate
+plei,Houston,Katy International Sports Complex,2026-09-17,22:30,60,8v8,16,13.50,Katy outdoor,Intermediate
+plei,Houston,Katy International Sports Complex,2026-09-17,20:30,60,6v6,12,13.50,Katy outdoor,Intermediate
+plei,Houston,Katy International Sports Complex,2026-09-17,21:30,60,6v6,12,13.50,Katy outdoor,High-level
+plei,Houston,Crossbar Academy,2026-09-17,19:00,60,6v6,12,10.50,Happy hour Tomball outdoor,Intermediate
+plei,Houston,Crossbar Academy,2026-09-17,20:00,60,6v6,12,10.50,Happy hour Tomball outdoor,High-level
+plei,Houston,Crossbar Academy,2026-09-17,21:00,60,6v6,12,12.50,Tomball outdoor,Intermediate
+plei,Houston,Athlete Training & Health - Cypress | Morby,2026-09-17,20:00,60,11v11,24,13.50,Cypress outdoor,Intermediate
+plei,Houston,Crossbar Academy | Indoor Soccer,2026-09-17,22:00,60,5v5,10,8.50,40% OFF Tomball indoor,Intermediate
+plei,Houston,The HatTrick Patio,2026-09-17,21:00,60,5v5,10,8.50,happy hour Tomball indoor,Intermediate
+plei,Houston,The HatTrick Oakridge,2026-09-17,22:00,60,6v6,12,12.50,10% OFF Conroe indoor,Intermediate
+plei,Houston,Q&B Indoor Sports,2026-09-18,22:30,60,5v5,10,12.50,West Houston indoor,Intermediate
+plei,Houston,Memorial Indoor Soccer,2026-09-18,20:00,180,5v5,35,11.25,Open play Memorial indoor,High-level
+plei,Houston,Cancha Five Stars | Hillcroft,2026-09-18,22:00,60,7v7,14,10.75,30% OFF West Houston outdoor,High-level
+plei,Houston,Pac Global Academy | West Houston,2026-09-18,19:00,60,9v9,16,10.50,30% OFF West Houston outdoor,Intermediate
+plei,Houston,Pac Global Academy | West Houston,2026-09-18,20:00,60,9v9,16,11.50,20% OFF West Houston outdoor,High-level
+plei,Houston,Pac Global Academy | West Houston,2026-09-18,21:00,60,9v9,16,11.50,20% OFF West Houston outdoor,High-level
+plei,Houston,GoPro Arena,2026-09-18,22:00,60,6v6,12,10.50,West Houston indoor,Intermediate
+plei,Houston,GoPro Arena,2026-09-18,23:00,60,6v6,12,10.50,West Houston indoor,Intermediate
+plei,Houston,GoPro Arena,2026-09-18,18:00,60,6v6,12,7.50,Happy Hour West Houston indoor,High-level
+plei,Houston,GoPro Arena,2026-09-18,19:00,60,6v6,12,10.50,West Houston indoor,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-18,22:00,60,6v6,12,14.50,Downtown outdoor,Intermediate 2 spats left!
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-18,22:00,60,5v5,10,13.50,Downtown outdoor Small Field,High-level
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-18,23:00,60,6v6,12,14.50,Downtown outdoor,High-level
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-18,20:00,60,5v5,10,13.50,Downtown outdoor - Small Field,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-18,21:00,60,5v5,10,13.50,Downtown outdoor - Small Field,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-18,21:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Houston,Houston Soccer Field,2026-09-18,22:00,60,8v8,16,13.50,Cypress outdoor,Intermediate
+plei,Houston,Houston Soccer Field,2026-09-18,23:00,60,8v8,16,13.50,Cypress outdoor,High-level
+plei,Houston,Houston Soccer Field,2026-09-18,19:00,60,8v8,16,13.50,Cypress outdoor,Intermediate
+plei,Houston,Houston Soccer Field,2026-09-18,20:00,60,8v8,16,13.50,Cypress outdoor,Intermediate
+plei,Houston,Houston Soccer Field,2026-09-18,20:00,60,6v6,12,13.00,Cypress outdoor,High-level
+plei,Houston,Houston Soccer Field,2026-09-18,21:00,60,8v8,16,13.50,Cypress outdoor,Intermediate
+plei,Houston,Turf On Soccer Fields,2026-09-18,20:00,60,7v7,14,9.50,40% OFF North Houston outdoor,Intermediate
+plei,Houston,Pegaso HTX,2026-09-18,22:00,60,6v6,12,12.50,Downtown outdoor,Intermediate
+plei,Houston,Pegaso HTX,2026-09-18,23:00,60,6v6,12,12.50,Downtown outdoor,High-level
+plei,Houston,Pegaso HTX,2026-09-18,00:00,60,6v6,12,12.50,Downtown outdoor,Intermediate
+plei,Houston,Pegaso HTX,2026-09-18,18:00,60,6v6,12,12.50,Downtown outdoor,High-level
+plei,Houston,Pegaso HTX,2026-09-18,19:00,60,6v6,12,13.50,Downtown outdoor,Intermediate
+plei,Houston,Pegaso HTX,2026-09-18,20:00,60,6v6,12,12.50,Downtown outdoor,High-level
+plei,Houston,Pegaso HTX,2026-09-18,21:00,60,6v6,12,12.50,Downtown outdoor,High-level
+plei,Houston,HTX Fieldhouse,2026-09-18,22:00,60,6v6,12,12.50,East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-18,23:00,60,6v6,12,10.50,20% OFF East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-18,21:00,60,6v6,12,12.50,East End indoor,Intermediate
+plei,Houston,Houston Dynamo Sports Park,2026-09-18,20:00,60,11v11,22,13.50,Southwest outdoor,Intermediate
+plei,Houston,Houston Dynamo Sports Park,2026-09-18,21:00,60,11v11,22,13.50,Southwest outdoor,Intermediate
+plei,Houston,Peek Sports Texas,2026-09-18,22:00,60,7v7,14,14.75,Katy outdoor,High-level
+plei,Houston,Peek Sports Texas,2026-09-18,20:00,60,10v10,20,14.50,Katy outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-18,23:00,60,7v7,14,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-18,17:00,60,7v7,14,10.50,Happy hour Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-18,18:00,60,7v7,14,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-18,20:00,60,5v5,10,14.50,Northwest outdoor,High-level
+plei,Houston,Revolution Soccer Complex,2026-09-18,21:00,60,5v5,10,14.50,Northwest outdoor,Intermediate 2 spots left!
+plei,Houston,Katy International Sports Complex,2026-09-18,22:30,60,8v8,16,13.50,Katy outdoor,Intermediate
+plei,Houston,Katy International Sports Complex,2026-09-18,20:30,60,6v6,12,13.50,Katy outdoor,High-level
+plei,Houston,Katy International Sports Complex,2026-09-18,21:30,60,6v6,12,13.50,Katy outdoor,Intermediate
+plei,Houston,Crossbar Academy,2026-09-18,19:00,60,6v6,12,10.50,30% OFF Tomball outdoor,High-level
+plei,Houston,Crossbar Academy,2026-09-18,20:00,60,6v6,12,13.50,Tomball outdoor,Intermediate
+plei,Houston,Crossbar Academy,2026-09-18,21:00,60,6v6,12,13.50,Tomball outdoor,Intermediate
+plei,Houston,Athlete Training & Health - Cypress | Morby,2026-09-18,21:00,60,11v11,24,13.50,Cypress outdoor,intermediate
+plei,Houston,Futbolito-Golfo de Mexico,2026-09-18,23:00,60,7v7,14,7.50,30% OFF South Houston outdoor,Intermediate
+plei,Houston,The HatTrick Patio,2026-09-18,20:00,60,5v5,10,8.50,happy hour Tomball indoor,High-level
+plei,Houston,Community Fieldhouse,2026-09-18,21:00,60,8v8,16,11.50,Spring outdoor,Intermediate
+plei,Houston,The HatTrick Patio,2026-09-18,21:00,60,5v5,10,8.50,happy hour Tomball indoor,Intermediate
+plei,Houston,The HatTrick Oakridge,2026-09-18,22:00,60,6v6,12,12.50,10% OFF Conroe indoor,High-level
+plei,Houston,The HatTrick Oakridge,2026-09-18,19:00,60,6v6,12,12.50,10% OFF Conroe indoor,Intermediate
+plei,Houston,Crossbar Academy,2026-09-19,20:00,60,6v6,12,13.50,Tomball outdoor,Intermediate
+plei,Houston,Indoor Soccer Box,2026-09-19,18:00,60,5v5,10,11.25,10% OFF Memorial City indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-19,23:00,60,6v6,12,10.50,20% OFF East End indoor,Intermediate
+plei,Houston,Q&B Indoor Sports,2026-09-19,22:00,60,5v5,10,12.50,West Houston indoor,Intermediate
+plei,Houston,Cancha Five Stars | Hillcroft,2026-09-19,23:00,60,7v7,14,9.75,40% OFF West Houston outdoor,High-level
+plei,Houston,Pac Global Academy | West Houston,2026-09-19,20:00,60,5v5,16,11.50,20% OFF West Houston outdoor,Intermediate
+plei,Houston,Pac Global Academy | West Houston,2026-09-19,20:00,60,9v9,16,11.50,20% OFF West Houston outdoor,Intermediate
+plei,Houston,GoPro Arena,2026-09-19,19:00,60,6v6,12,8.50,20% OFF West Houston indoor,High-level
+plei,Houston,GoPro Arena,2026-09-19,20:00,60,6v6,12,10.50,West Houston indoor,Intermediate
+plei,Houston,GoPro Arena,2026-09-19,21:00,60,6v6,12,10.50,West Houston indoor,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-19,22:00,60,6v6,12,14.50,Downtown outdoor,High-level
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-19,23:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-19,14:00,60,6v6,12,11.50,Happy hour Downtown outdoor,High-level
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-19,18:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-19,19:00,60,6v6,12,14.50,Downtown outdoor,High-level
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-19,20:00,60,6v6,12,14.50,Downtown outdoor,High-level
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-19,21:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Houston,Houston Soccer Field,2026-09-19,22:00,60,8v8,16,13.50,Cypress outdoor,High-level
+plei,Houston,Houston Soccer Field,2026-09-19,19:00,60,8v8,16,14.50,Cypress outdoor,Intermediate
+plei,Houston,Houston Soccer Field,2026-09-19,20:00,60,8v8,16,13.50,Cypress outdoor,Intermediate
+plei,Houston,Houston Soccer Field,2026-09-19,21:00,60,8v8,16,13.50,Cypress outdoor,Intermediate
+plei,Houston,King Soccer,2026-09-19,22:00,60,6v6,12,13.75,Cypress indoor,Intermediate
+plei,Houston,Turf On Soccer Fields,2026-09-19,19:00,60,7v7,14,9.50,40% OFF North Houston outdoor,Intermediate
+plei,Houston,Turf On Soccer Fields,2026-09-19,20:00,60,7v7,14,9.50,40% OFF North Houston outdoor,Intermediate
+plei,Houston,Pegaso HTX,2026-09-19,22:30,60,6v6,12,12.50,Downtown outdoor,Intermediate
+plei,Houston,Pegaso HTX,2026-09-19,17:30,90,6v6,12,,adidas Futbol Society FREE pickup,"Friendly Game fu Game full (max spots inferred from same facility/format) Free brand-sponsored game; max not shown, 12 assumed"
+plei,Houston,Pegaso HTX,2026-09-19,20:00,60,6v6,12,12.50,Downtown outdoor,Intermediate
+plei,Houston,Pegaso HTX,2026-09-19,09:00,60,6v6,12,12.50,Downtown outdoor - Field 1,High-level
+plei,Houston,Pegaso HTX,2026-09-19,21:00,60,6v6,12,12.50,Downtown outdoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-19,22:00,60,6v6,12,12.50,East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-19,19:00,60,6v6,12,10.50,20% OFF East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-19,20:00,60,6v6,12,10.50,20% OFF East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-19,21:00,60,6v6,12,12.50,East End indoor,Intermediate
+plei,Houston,Peek Sports Texas,2026-09-19,19:00,60,7v7,14,14.50,Katy outdoor,Intermediate
+plei,Houston,Peek Sports Texas,2026-09-19,20:00,60,7v7,14,14.50,Katy outdoor,High-level
+plei,Houston,Revolution Soccer Complex,2026-09-19,22:00,60,7v7,14,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-19,23:00,60,7v7,14,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-19,12:00,60,7v7,14,9.50,30% OFF Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-19,18:00,60,7v7,14,14.50,Northwest outdoor,High-level
+plei,Houston,Revolution Soccer Complex,2026-09-19,19:00,60,5v5,10,11.50,30% OFF Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-19,20:00,60,7v7,14,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-19,21:00,60,7v7,14,15.50,Northwest outdoor,Intermediate
+plei,Houston,Katy International Sports Complex,2026-09-19,22:30,60,8v8,16,13.50,Katy outdoor,Intermediate
+plei,Houston,Katy International Sports Complex,2026-09-19,19:30,60,6v6,12,10.50,Happy hour Katy outdoor,High-level
+plei,Houston,Katy International Sports Complex,2026-09-19,20:30,60,6v6,12,13.50,Katy outdoor,High-level
+plei,Houston,Katy International Sports Complex,2026-09-19,21:30,60,8v8,16,13.50,Katy outdoor,Intermediate
+plei,Houston,Crossbar Academy,2026-09-19,19:00,60,6v6,12,13.50,Tomball outdoor,High-level
+plei,Houston,Athlete Training & Health - Cypress | Morby,2026-09-19,20:00,60,11v11,24,13.50,Cypress outdoor,Intermediate
+plei,Houston,Crossbar Academy | Indoor Soccer,2026-09-19,18:00,60,5v5,10,8.50,40% OFF Tomball indoor,Intermediate
+plei,Houston,Community Fieldhouse,2026-09-19,21:00,60,8v8,16,11.50,Spring outdoor - Field 2,Intermediate
+plei,Houston,The HatTrick Oakridge,2026-09-19,21:00,60,6v6,12,12.50,10% OFF Conroe indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-20,19:00,60,6v6,12,10.50,20% OFF East End indoor,Intermediate
+plei,Houston,Q&B Indoor Sports,2026-09-20,22:30,60,6v6,12,12.50,West Houston indoor,Intermediate
+plei,Houston,Cancha Five Stars | Hillcroft,2026-09-20,21:00,60,7v7,14,9.75,40% OFF West Houston outdoor,Intermediate
+plei,Houston,Pac Global Academy | West Houston,2026-09-20,20:00,60,5v5,16,11.50,20% OFF West Houston outdoor,High-level
+plei,Houston,Pac Global Academy | West Houston,2026-09-20,20:00,60,9v9,16,11.50,20% OFF West Houston outdoor,High-level
+plei,Houston,GoPro Arena,2026-09-20,19:00,60,6v6,12,10.50,West Houston indoor,High-level
+plei,Houston,GoPro Arena,2026-09-20,20:00,60,6v6,12,10.50,West Houston indoor,Intermediate
+plei,Houston,GoPro Arena,2026-09-20,21:00,60,6v6,12,10.50,West Houston indoor,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-20,22:00,60,6v6,12,14.50,Downtown outdoor,High-level
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-20,23:00,60,6v6,12,14.50,Downtown outdoor,High-level
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-20,17:00,60,6v6,12,11.50,Happy hour Downtown outdoor,High-level
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-20,19:00,60,5v5,10,13.50,Downtown outdoor Small Field,Intermediate
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-20,20:00,60,6v6,12,14.50,Downtown outdoor,High-level
+plei,Houston,Toros Lifestyle Soccer Art District,2026-09-20,21:00,60,6v6,12,14.50,Downtown outdoor,High-level
+plei,Houston,Houston Soccer Field,2026-09-20,22:00,60,8v8,16,13.50,Cypress outdoor,High-level
+plei,Houston,PSG Academy Houston,2026-09-20,22:00,60,6v6,12,9.50,25% OFF North Katy indoor,Intermediate
+plei,Houston,Houston Soccer Field,2026-09-20,18:00,60,8v8,16,13.50,Cypress outdoor,Intermediate (max spots inferred from same facility/format)
+plei,Houston,Houston Soccer Field,2026-09-20,19:00,60,8v8,16,13.50,Cypress outdoor,Intermediate
+plei,Houston,Houston Soccer Field,2026-09-20,20:00,60,6v6,12,13.00,Cypress outdoor,Intermediate
+plei,Houston,Houston Soccer Field,2026-09-20,21:00,60,8v8,16,13.50,Cypress outdoor,Intermediate
+plei,Houston,King Soccer,2026-09-20,20:00,60,6v6,12,11.75,Happy hour Cypress indoor,Intermediate
+plei,Houston,Turf On Soccer Fields,2026-09-20,19:00,60,7v7,14,9.50,40% OFF North Houston outdoor,Intermediate
+plei,Houston,Turf On Soccer Fields,2026-09-20,20:00,60,7v7,14,9.50,40% OFF North Houston outdoor,Intermediate
+plei,Houston,Pegaso HTX,2026-09-20,22:00,60,6v6,12,12.50,Downtown outdoor,High-level
+plei,Houston,Pegaso HTX,2026-09-20,19:00,60,6v6,12,12.50,Downtown outdoor,High-level
+plei,Houston,Pegaso HTX,2026-09-20,20:00,60,6v6,12,12.50,Downtown outdoor,High-level
+plei,Houston,Pegaso HTX,2026-09-20,09:00,60,6v6,12,12.50,Downtown outdoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-20,22:00,60,6v6,12,12.50,East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-20,23:00,60,6v6,12,10.50,20% OFF East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-20,20:00,60,6v6,12,10.50,20% OFF East End indoor,Intermediate
+plei,Houston,HTX Fieldhouse,2026-09-20,21:00,60,6v6,12,10.50,20% OFF East End indoor,intermediate
+plei,Houston,Peek Sports Texas,2026-09-20,18:00,60,7v7,14,11.50,30% OFF Katy outdoor,High-level
+plei,Houston,Peek Sports Texas,2026-09-20,19:00,60,7v7,14,14.50,Katy outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-20,22:00,60,5v5,10,11.50,30% OFF Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-20,22:00,60,7v7,14,14.75,Northwest outdoor,High-level
+plei,Houston,Revolution Soccer Complex,2026-09-20,23:00,60,7v7,14,11.50,Happy hour Northwest outdoor,High-level
+plei,Houston,Revolution Soccer Complex,2026-09-20,12:00,60,7v7,14,9.50,30% OFF Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-20,17:00,60,7v7,14,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-20,18:00,60,5v5,10,14.50,Northwest outdoor,High-level
+plei,Houston,Revolution Soccer Complex,2026-09-20,19:00,60,7v7,14,12.50,Happy hour Northwest outdoor,High-level
+plei,Houston,Revolution Soccer Complex,2026-09-20,20:00,60,5v5,10,11.50,30% OFF Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-20,20:00,60,7v7,14,14.50,Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-20,21:00,60,5v5,10,11.50,30% OFF Northwest outdoor,Intermediate
+plei,Houston,Revolution Soccer Complex,2026-09-20,21:00,60,7v7,14,14.50,Northwest outdoor,High-level
+plei,Houston,Katy International Sports Complex,2026-09-20,22:30,60,8v8,16,13.50,Katy outdoor,High-level
+plei,Houston,Katy International Sports Complex,2026-09-20,19:30,60,6v6,12,10.50,Happy hour Katy outdoor,High-level
+plei,Houston,Katy International Sports Complex,2026-09-20,20:30,60,6v6,12,13.50,Katy outdoor,Intermediate
+plei,Houston,Katy International Sports Complex,2026-09-20,21:30,60,8v8,16,13.50,Katy outdoor,Intermediate
+plei,Houston,Crossbar Academy,2026-09-20,16:00,60,6v6,12,10.50,Happy hour Tomball outdoor,Intermediate
+plei,Houston,Crossbar Academy,2026-09-20,20:00,60,6v6,12,10.50,30% OFF Tomball outdoor,Intermediate
+plei,Houston,Crossbar Academy,2026-09-20,21:00,60,6v6,12,13.50,Tomball outdoor,Intermediate
+plei,Houston,Athlete Training & Health - Cypress | Morby,2026-09-20,21:00,60,11v11,24,13.50,Cypress outdoor,Intermediate
+plei,Houston,Futbolito-Golfo de Mexico,2026-09-20,21:00,60,7v7,14,7.50,30% OFF South Houston outdoor,Intermediate
+plei,Houston,Crossbar Academy | Indoor Soccer,2026-09-20,19:00,60,5v5,10,11.50,20% OFF Tomball indoor,Intermediate
+plei,Houston,The HatTrick Patio,2026-09-20,21:00,60,5v5,10,8.50,happy hour Tomball indoor,Intermediate
+plei,Houston,The HatTrick Oakridge,2026-09-20,19:00,60,6v6,12,12.50,10% OFF Conroe indoor,Intermediate
+plei,Houston,The HatTrick Oakridge,2026-09-20,20:00,60,6v6,12,12.50,10% OFF Conroe indoor,Intermediate
+plei,Houston,The HatTrick Oakridge,2026-09-20,21:00,60,6v6,12,12.50,10% OFF Conroe indoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-18,18:00,60,6v6,12,14.50,Austin ranch outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-18,19:00,60,6v6,12,14.50,Austin ranch outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-18,20:00,60,6v6,12,14.50,Austin ranch outdoor,High-level
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-18,21:00,60,6v6,12,14.50,Austin ranch outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-18,22:00,60,6v6,12,14.50,Austin ranch outdoor,High-level
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-18,22:00,60,6v6,12,14.50,Austin ranch outdoor,Intermediate
+plei,Dallas / Fort Worth,UMB Bank Performance Center,2026-09-18,19:00,60,6v6,12,14.50,Frisco indoor,Intermediate
+plei,Dallas / Fort Worth,UMB Bank Performance Center,2026-09-18,20:00,60,6v6,12,14.50,Frisco indoor,High-level
+plei,Dallas / Fort Worth,UMB Bank Performance Center,2026-09-18,21:00,60,6v6,12,14.50,Frisco indoor,Intermediate
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-18,19:00,60,6v6,12,10.50,Happy hour North Dallas outdoor,High-level
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-18,20:00,60,6v6,12,13.50,North Dallas outdoor,Intermediate
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-18,,,6v6,12,,15% OFF North Dallas outdoor,Card partially visible; 2/12 going
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-18,21:00,60,6v6,12,13.50,North Dallas outdoor,High-level
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-18,22:00,60,6v6,12,10.50,30% OFF North Dallas outdoor,High-level
+plei,Dallas / Fort Worth,Ulete,2026-09-18,19:00,60,7v7,14,15.75,Southlake outdoor,High-level
+plei,Dallas / Fort Worth,Ulete,2026-09-18,20:00,60,7v7,14,13.50,Southlake outdoor,Intermediate
+plei,Dallas / Fort Worth,Ulete,2026-09-18,20:00,60,7v7,14,15.75,Southlake indoor,High-level
+plei,Dallas / Fort Worth,Pro Touch Soccer Center,2026-09-18,20:00,60,6v6,12,13.50,Northwest Dallas indoor,Intermediate
+plei,Dallas / Fort Worth,Pro Touch Soccer Center,2026-09-18,22:30,60,6v6,12,14.50,Northwest Dallas indoor,Intermediate
+plei,Dallas / Fort Worth,Pro Touch Soccer Center,2026-09-18,23:30,60,6v6,12,14.50,Northwest Dallas indoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-18,17:00,60,6v6,12,14.50,Downtown outdoor - Field #2,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-18,18:00,60,6v6,12,14.50,Downtown outdoor - Field 2,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-18,18:00,60,6v6,12,14.50,Downtown outdoor - Field 1,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-18,19:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-18,20:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-18,21:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-18,22:00,60,6v6,12,14.50,Downtown outdoor - Field 2,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-18,22:00,60,6v6,12,14.50,Downtown futsal,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-18,22:00,60,6v6,12,14.50,Downtown outdoor,High-level
+plei,Dallas / Fort Worth,Fut360,2026-09-18,21:00,60,5v5,10,11.75,Happy hour West Dallas indoor,Intermediate
+plei,Dallas / Fort Worth,Fut360,2026-09-18,22:00,60,5v5,10,11.75,Happy hour West Dallas indoor,Intermediate
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-18,19:00,60,6v6,12,12.50,North Richland Hills indoor,Intermediate
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-18,21:00,60,6v6,12,12.50,North Richland Hills indoor,Intermediate
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-18,22:00,60,6v6,12,12.50,North Richland Hills indoor,High-level
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-18,23:00,60,6v6,12,12.50,North Richland Hills indoor,Intermediate
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-18,00:00,60,6v6,12,9.50,30% OFF North Richland Hills indoor,Intermediate
+plei,Dallas / Fort Worth,Rockwall Indoor Sports World,2026-09-18,20:00,60,7v7,14,13.50,Rockwall Indoor,Intermediate
+plei,Dallas / Fort Worth,Rockwall Indoor Sports World,2026-09-18,20:30,60,7v7,14,13.50,Rockwall Indoor,Intermediate
+plei,Dallas / Fort Worth,Rockwall Indoor Sports World,2026-09-18,21:00,60,7v7,14,13.50,Rockwall Indoor,Intermediate
+plei,Dallas / Fort Worth,Rockwall Indoor Sports World,2026-09-18,21:30,60,7v7,14,13.50,Rockwall Indoor,Intermediate
+plei,Dallas / Fort Worth,Rockwall Indoor Sports World,2026-09-18,22:00,60,7v7,14,13.50,Rockwall Indoor,Intermediate
+plei,Dallas / Fort Worth,SoccerZone,2026-09-18,20:00,60,7v7,14,9.50,30% OFF South Dallas outdoor,High-level
+plei,Dallas / Fort Worth,Upper 90 Soccer Center,2026-09-18,17:00,60,7v7,14,12.50,Happy hour Arlington indoor,Intermediate
+plei,Dallas / Fort Worth,Vaqueros Field at Sycamore Park,2026-09-18,18:30,90,7v7,28,10.00,30% OFF KOTT Fort Worth outdoor,"Intermediate. 90 min, 28 spots (two-field or rotation format)"
+plei,Dallas / Fort Worth,TOCA Soccer Center | The Colony,2026-09-19,20:00,90,7v7,28,12.50,Pick-up The Colony indoor,"Intermediate. 90 min, 28 spots"
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-19,19:00,60,6v6,12,10.50,30% OFF North Dallas outdoor,High-level
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-19,19:30,60,8v8,16,14.50,North Dallas outdoor,Friendly
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-19,20:00,60,8v8,16,14.50,North Dallas outdoor,Intermediate
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-19,21:00,60,8v8,16,12.50,20% OFF North Dallas outdoor,High-level
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-19,22:00,60,6v6,12,10.50,30% OFF North Dallas outdoor,Intermediate
+plei,Dallas / Fort Worth,Crossbar Soccer + Beer | Richardson,2026-09-19,21:00,60,6v6,12,12.25,Richardson indoor,Intermediate
+plei,Dallas / Fort Worth,Ulete,2026-09-19,19:00,60,7v7,14,13.50,Southlake outdoor,High-level
+plei,Dallas / Fort Worth,Ulete,2026-09-19,20:00,60,7v7,14,14.50,Southlake outdoor,High-level
+plei,Dallas / Fort Worth,Pro Touch Soccer Center,2026-09-19,18:30,60,6v6,12,13.50,Northwest Dallas indoor,Intermediate
+plei,Dallas / Fort Worth,Pro Touch Soccer Center,2026-09-19,20:30,60,6v6,12,13.50,Northwest Dallas indoor,Intermediate
+plei,Dallas / Fort Worth,Pro Touch Soccer Center,2026-09-19,23:00,60,6v6,12,13.50,Northwest Dallas indoor,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-19,08:00,60,6v6,12,14.50,Downtown outdoor,Game full
+plei,Dallas / Fort Worth,City Futsal,2026-09-19,09:00,60,6v6,12,14.50,Downtown outdoor - Field #1,Game full
+plei,Dallas / Fort Worth,City Futsal,2026-09-19,10:00,60,6v6,12,14.50,Downtown outdoor - Field #1,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-19,14:00,60,6v6,12,12.50,Happy hour Downtown outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-19,15:00,60,6v6,12,12.50,Happy hour Downtown outdoor,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-19,18:00,60,6v6,12,12.50,Happy hour Downtown outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-19,19:00,60,6v6,12,14.50,Downtown outdoor - Field #1,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-19,20:00,60,6v6,12,14.50,Downtown outdoor - Field #1,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-19,20:00,60,6v6,12,14.50,Downtown outdoor - Field #2,Intermediate
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-19,17:00,60,6v6,12,9.50,30% OFF North Richland Hills indoor,High-level
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-19,18:00,60,6v6,12,10.50,Happy hour North Richland Hills indoor,Intermediate
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-19,21:00,60,6v6,12,12.50,North Richland Hills indoor,High-level
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-19,22:00,60,6v6,12,12.50,North Richland Hills indoor,Intermediate
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-19,23:00,60,6v6,12,12.50,North Richland Hills indoor,High-level
+plei,Dallas / Fort Worth,Rockwall Indoor Sports World,2026-09-19,21:00,60,7v7,14,13.50,Rockwall Indoor,Intermediate
+plei,Dallas / Fort Worth,Rockwall Indoor Sports World,2026-09-19,22:00,60,7v7,14,13.50,Rockwall Indoor,Intermediate
+plei,Dallas / Fort Worth,SoccerZone,2026-09-19,20:00,60,5v5,10,11.75,20% OFF South Dallas indoor,High-level
+plei,Dallas / Fort Worth,Upper 90 Soccer Center,2026-09-19,18:00,60,7v7,14,12.50,Happy hour Arlington indoor,Intermediate
+plei,Dallas / Fort Worth,Vaqueros Field at Sycamore Park,2026-09-19,20:30,90,7v7,28,10.00,20% OFF KOTT Fort Worth outdoor,"Intermediate. 90 min, 28 spots"
+plei,Dallas / Fort Worth,Ulete,2026-09-21,20:00,60,7v7,14,13.50,Southlake outdoor,Intermediate
+plei,Dallas / Fort Worth,Ulete,2026-09-21,21:00,60,7v7,14,13.50,Southlake outdoor,High-level
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-21,22:00,60,6v6,12,12.50,North Richland Hills indoor,High-level
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-21,23:00,60,6v6,12,12.50,North Richland Hills indoor,Intermediate
+plei,Dallas / Fort Worth,Vaqueros Field at Sycamore Park,2026-09-21,20:30,90,7v7,28,10.00,20% OFF KOTT Fort Worth outdoor,Intermediate
+plei,Dallas / Fort Worth,Upper 90 Soccer Center,2026-09-21,18:00,60,7v7,14,13.50,Arlington indoor,High-level
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-21,19:00,60,6v6,12,14.50,Austin ranch outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-21,20:00,60,6v6,12,14.50,Austin ranch outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-21,21:00,60,6v6,12,14.50,Austin ranch outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-21,22:00,60,6v6,12,14.50,Austin ranch outdoor,Intermediate
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-21,21:00,60,6v6,12,13.50,North Dallas outdoor,Intermediate
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-21,22:30,60,6v6,12,11.50,20% OFF North Dallas outdoor,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-21,18:00,60,6v6,12,14.50,Downtown outdoor - Field #2,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-21,18:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-21,22:00,60,6v6,12,14.50,Downtown futsal,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-21,22:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Dallas / Fort Worth,UMB Bank Performance Center,2026-09-21,19:00,60,6v6,12,14.50,Frisco indoor,Intermediate
+plei,Dallas / Fort Worth,UMB Bank Performance Center,2026-09-21,20:00,60,6v6,12,14.50,Frisco indoor,High-level
+plei,Dallas / Fort Worth,UMB Bank Performance Center,2026-09-21,21:00,60,6v6,12,14.50,Frisco indoor,Intermediate
+plei,Dallas / Fort Worth,SoccerZone,2026-09-21,19:00,60,7v7,14,10.50,20% OFF South Dallas outdoor,Intermediate
+plei,Dallas / Fort Worth,Pro Touch Soccer Center,2026-09-21,19:00,60,6v6,12,13.50,Northwest Dallas indoor,Intermediate
+plei,Dallas / Fort Worth,Pro Touch Soccer Center,2026-09-21,21:00,60,6v6,12,13.50,Northwest Dallas indoor,Intermediate
+plei,Dallas / Fort Worth,Pro Touch Soccer Center,2026-09-21,22:00,60,6v6,12,13.50,Northwest Dallas indoor,High-level
+plei,Dallas / Fort Worth,Ulete,2026-09-15,20:00,60,7v7,14,15.75,Southlake indoor,High-level
+plei,Dallas / Fort Worth,Ulete,2026-09-15,21:00,60,7v7,14,13.50,Southlake outdoor,Intermediate
+plei,Dallas / Fort Worth,Ulete,2026-09-15,21:00,60,5v5,10,12.50,Southlake Indoor,Intermediate
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-15,21:00,60,6v6,12,12.50,North Richland Hills indoor,High-level. Game full
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-15,22:00,60,6v6,12,12.50,North Richland Hills indoor,Intermediate
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-15,00:00,60,6v6,12,9.50,30% OFF North Richland Hills indoor,Intermediate
+plei,Dallas / Fort Worth,North Park Soccer Fields,2026-09-15,20:30,60,7v7,14,11.50,7v7 High Level Pickup with Host,Third-party organizer (gambeta) listing on Plei
+plei,Dallas / Fort Worth,Vaqueros Field at Sycamore Park,2026-09-15,20:30,90,7v7,28,10.50,30% OFF KOTT Fort Worth outdoor,Intermediate
+plei,Dallas / Fort Worth,Upper 90 Soccer Center,2026-09-15,18:00,60,7v7,14,12.50,10% OFF Arlington indoor,High-level
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-15,18:00,60,6v6,12,14.50,Austin ranch outdoor,High-level
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-15,19:00,60,6v6,12,14.50,Austin ranch outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-15,19:00,60,6v6,12,14.50,Austin ranch outdoor,High-level
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-15,20:00,60,6v6,12,14.50,Austin ranch outdoor,High-level
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-15,21:00,60,6v6,12,14.50,Austin ranch outdoor,High-level
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-15,22:00,60,6v6,12,14.50,Austin ranch outdoor,High-level
+plei,Dallas / Fort Worth,TOCA Soccer Center | The Colony,2026-09-15,22:00,120,7v7,28,10.50,20% OFF Pick-up The Colony indoor,"Intermediate. 2 hrs, 28 spots"
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-15,21:00,60,6v6,12,13.50,North Dallas outdoor,Intermediate
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-15,22:00,60,6v6,12,13.50,North Dallas outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-15,17:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-15,18:00,60,6v6,12,16.50,Downtown outdoor - Field 2,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-15,18:00,60,6v6,12,14.50,Downtown futsal,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-15,22:00,60,6v6,12,14.50,Downtown futsal,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-15,22:00,60,6v6,12,14.50,Downtown outdoor,Intermediate. Game full
+plei,Dallas / Fort Worth,UMB Bank Performance Center,2026-09-15,20:00,60,6v6,12,14.50,Frisco indoor,High-level
+plei,Dallas / Fort Worth,UMB Bank Performance Center,2026-09-15,21:00,60,6v6,12,14.50,Frisco indoor,Intermediate
+plei,Dallas / Fort Worth,SoccerZone,2026-09-15,20:00,60,7v7,14,11.50,Happy hour South Dallas outdoor,Intermediate
+plei,Dallas / Fort Worth,Pro Touch Soccer Center,2026-09-15,19:00,60,6v6,12,13.50,Northwest Dallas indoor,Intermediate
+plei,Dallas / Fort Worth,Pro Touch Soccer Center,2026-09-15,22:30,60,6v6,12,13.50,Northwest Dallas indoor,Intermediate
+plei,Dallas / Fort Worth,Rockwall Indoor Sports World,2026-09-15,22:15,60,7v7,14,13.50,Rockwall Indoor,Intermediate
+plei,Dallas / Fort Worth,Ulete,2026-09-16,20:00,60,7v7,14,13.50,Southlake outdoor,Intermediate
+plei,Dallas / Fort Worth,Ulete,2026-09-16,21:00,60,7v7,14,15.75,Southlake indoor,High-level
+plei,Dallas / Fort Worth,Ulete,2026-09-16,21:00,60,7v7,14,13.50,Southlake outdoor,Intermediate
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-16,21:00,60,6v6,12,12.50,North Richland Hills indoor,High-level
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-16,22:00,60,6v6,12,12.50,North Richland Hills indoor,Intermediate
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-16,23:00,60,6v6,12,12.50,North Richland Hills indoor,Intermediate
+plei,Dallas / Fort Worth,Keller Fields | Futbol Evolution,2026-09-16,20:15,60,11v11,22,14.50,Keller outdoor,Intermediate. Game full
+plei,Dallas / Fort Worth,Vaqueros Field at Sycamore Park,2026-09-16,20:30,90,7v7,28,10.00,20% OFF KOTT Fort Worth outdoor,Intermediate
+plei,Dallas / Fort Worth,Upper 90 Soccer Center,2026-09-16,17:00,60,7v7,14,12.50,10% OFF Arlington indoor,High-level
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-16,18:00,60,6v6,12,14.50,Austin ranch outdoor,High-level
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-16,19:00,60,6v6,12,15.50,Austin ranch outdoor,High-level
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-16,20:00,60,6v6,12,15.50,Austin ranch outdoor,Intermediate. Game full
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-16,21:00,60,6v6,12,14.50,Austin ranch outdoor,High-level. Game full
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-16,22:00,60,6v6,12,12.50,Happy hour Austin ranch outdoor,Intermediate
+plei,Dallas / Fort Worth,TOCA Soccer Center | The Colony,2026-09-16,23:15,60,7v7,14,12.50,The Colony indoor,High-level
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-16,20:00,60,6v6,12,13.50,North Dallas outdoor,Intermediate
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-16,21:00,60,6v6,12,13.50,North Dallas outdoor,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-16,17:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-16,18:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-16,20:00,60,6v6,12,14.50,Downtown futsal,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-16,22:00,60,6v6,12,14.50,Downtown futsal,High-level
+plei,Dallas / Fort Worth,UMB Bank Performance Center,2026-09-16,19:00,60,6v6,12,14.50,Frisco indoor,High-level
+plei,Dallas / Fort Worth,UMB Bank Performance Center,2026-09-16,20:00,60,6v6,12,14.50,Frisco indoor,High-level
+plei,Dallas / Fort Worth,UMB Bank Performance Center,2026-09-16,21:00,60,6v6,12,14.50,Frisco indoor,Intermediate
+plei,Dallas / Fort Worth,SoccerZone,2026-09-16,20:00,60,7v7,14,12.50,South Dallas outdoor,Intermediate
+plei,Dallas / Fort Worth,Pro Touch Soccer Center,2026-09-16,19:00,60,6v6,12,13.50,Northwest Dallas indoor,Intermediate
+plei,Dallas / Fort Worth,Rockwall Indoor Sports World,2026-09-16,20:00,60,7v7,14,13.50,Rockwall Indoor,Intermediate
+plei,Dallas / Fort Worth,Rockwall Indoor Sports World,2026-09-16,22:00,60,7v7,14,13.50,Rockwall Indoor,Intermediate
+plei,Dallas / Fort Worth,Ulete,2026-09-17,20:00,60,7v7,14,15.75,Southlake indoor,High-level
+plei,Dallas / Fort Worth,Ulete,2026-09-17,21:00,60,7v7,14,13.50,Southlake outdoor,Intermediate
+plei,Dallas / Fort Worth,Ulete,2026-09-17,21:00,60,5v5,10,12.50,Southlake Indoor,Intermediate
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-17,22:00,60,6v6,12,12.50,North Richland Hills indoor,Intermediate
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-17,23:00,60,6v6,12,12.50,North Richland Hills indoor,Intermediate
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-17,00:00,60,6v6,12,12.50,North Richland Hills indoor,Intermediate
+plei,Dallas / Fort Worth,Vaqueros Field at Sycamore Park,2026-09-17,20:30,90,7v7,28,10.50,30% OFF KOTT Fort Worth outdoor,Intermediate
+plei,Dallas / Fort Worth,Upper 90 Soccer Center,2026-09-17,18:00,60,7v7,14,12.50,Happy hour Arlington indoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-17,18:00,60,6v6,12,14.50,Austin ranch outdoor,High-level
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-17,19:00,60,6v6,12,14.50,Austin ranch outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-17,20:00,60,6v6,12,15.50,Austin ranch outdoor,High-level
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-17,21:00,60,6v6,12,14.50,Austin ranch outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal The Colony,2026-09-17,22:00,60,6v6,12,14.50,Austin ranch outdoor,High-level
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-17,17:00,60,6v6,12,10.50,30% OFF North Dallas outdoor,High-level
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-17,21:00,60,6v6,12,13.50,North Dallas outdoor,Intermediate
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-17,22:00,60,6v6,12,13.50,North Dallas outdoor,Intermediate
+plei,Dallas / Fort Worth,Fut360,2026-09-17,20:00,60,5v5,10,11.75,Happy hour West Dallas indoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-17,18:00,60,6v6,12,16.50,Downtown outdoor - Field 2,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-17,18:00,60,6v6,12,16.50,Downtown outdoor - Field 1,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-17,19:00,60,6v6,12,14.50,Downtown futsal,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-17,20:00,60,6v6,12,14.50,Downtown futsal,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-17,22:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-17,22:00,60,6v6,12,14.50,Downtown outdoor,High-level
+plei,Dallas / Fort Worth,UMB Bank Performance Center,2026-09-17,20:00,60,6v6,12,14.50,Frisco indoor,High-level
+plei,Dallas / Fort Worth,UMB Bank Performance Center,2026-09-17,21:00,60,6v6,12,14.50,Frisco indoor,Intermediate
+plei,Dallas / Fort Worth,SoccerZone,2026-09-17,20:00,60,7v7,14,11.00,20% OFF South Dallas outdoor,Intermediate
+plei,Dallas / Fort Worth,Pro Touch Soccer Center,2026-09-17,19:00,60,6v6,12,13.50,Northwest Dallas indoor,Intermediate
+plei,Dallas / Fort Worth,Pro Touch Soccer Center,2026-09-17,22:15,60,6v6,12,13.50,Northwest Dallas indoor,Intermediate
+plei,Dallas / Fort Worth,Rockwall Indoor Sports World,2026-09-17,22:15,60,7v7,14,13.50,Rockwall Indoor,Intermediate
+plei,Dallas / Fort Worth,Ulete,2026-09-20,18:00,60,7v7,14,13.50,Southlake outdoor,Intermediate
+plei,Dallas / Fort Worth,Ulete,2026-09-20,19:00,60,7v7,14,14.50,Southlake outdoor,High-level
+plei,Dallas / Fort Worth,Ulete,2026-09-20,20:00,60,7v7,14,14.50,Southlake outdoor,Intermediate
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-20,18:00,60,6v6,12,12.50,North Richland Hills indoor,High-level
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-20,20:00,60,6v6,12,12.50,North Richland Hills indoor,Intermediate
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-20,21:00,60,6v6,12,12.50,North Richland Hills indoor,High-level
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-20,22:00,60,6v6,12,12.50,North Richland Hills indoor,Intermediate
+plei,Dallas / Fort Worth,Salient Touch Futbol Academy,2026-09-20,23:00,60,6v6,12,12.50,North Richland Hills indoor,High-level
+plei,Dallas / Fort Worth,Vaqueros Field at Sycamore Park,2026-09-20,15:00,120,7v7,35,0.00,FREE KOTT Fort Worth outdoor,"Intermediate. Free game, 2 hrs, 35 spots"
+plei,Dallas / Fort Worth,Upper 90 Soccer Center,2026-09-20,21:00,60,7v7,14,15.50,Arlington indoor,High-level
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-20,17:00,60,6v6,12,9.50,40% OFF North Dallas outdoor,Intermediate
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-20,18:00,60,6v6,12,13.50,North Dallas outdoor,High-level
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-20,19:00,60,6v6,12,13.50,North Dallas outdoor,Intermediate
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-20,20:00,60,8v8,16,14.50,North Dallas outdoor,High-level
+plei,Dallas / Fort Worth,Foro Sports Club,2026-09-20,21:00,60,8v8,16,14.00,"10% OFF North Dallas outdoor - Fields 2,3",Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-20,08:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-20,09:00,60,6v6,12,14.50,Downtown outdoor - Field #1,High-level
+plei,Dallas / Fort Worth,City Futsal,2026-09-20,09:00,60,6v6,12,14.50,Downtown outdoor - Field #2,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-20,18:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-20,19:00,60,6v6,12,14.50,Downtown outdoor,Intermediate
+plei,Dallas / Fort Worth,City Futsal,2026-09-20,20:00,60,6v6,12,14.50,Downtown outdoor,High-level
+plei,Dallas / Fort Worth,Crossbar Soccer + Beer | Richardson,2026-09-20,19:00,60,6v6,12,12.25,Richardson indoor,Intermediate
+plei,Dallas / Fort Worth,SoccerZone,2026-09-20,19:00,60,7v7,14,10.50,20% OFF South Dallas outdoor,Intermediate
+plei,Dallas / Fort Worth,Pro Touch Soccer Center,2026-09-20,19:00,60,6v6,12,13.50,Northwest Dallas indoor,High-level
+plei,Dallas / Fort Worth,Pro Touch Soccer Center,2026-09-20,21:30,60,6v6,12,13.50,Northwest Dallas indoor,Intermediate
+plei,Dallas / Fort Worth,Pro Touch Soccer Center,2026-09-20,22:30,60,6v6,12,13.50,Northwest Dallas indoor,Intermediate
+plei,Dallas / Fort Worth,Rockwall Indoor Sports World,2026-09-20,15:30,60,7v7,14,13.50,Rockwall Indoor,Intermediate
+goodrec,Dallas / Fort Worth,"ATH, Allen",2026-09-16,23:05,,11v11,22,11.99,,
+goodrec,Dallas / Fort Worth,"City Futsal, Austin Ranch",2026-09-16,17:50,,6v6,12,11.99,,
+goodrec,Dallas / Fort Worth,"City Futsal, Austin Ranch",2026-09-16,19:50,,6v6,12,11.99,,
+goodrec,Dallas / Fort Worth,"City Futsal, Austin Ranch",2026-09-16,20:50,,6v6,12,11.99,,
+goodrec,Dallas / Fort Worth,"City Futsal, Austin Ranch",2026-09-16,21:50,,6v6,12,11.99,,
+goodrec,Dallas / Fort Worth,CityFutsal Farmers Market,2026-09-16,19:50,,6v6,12,14.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Denton",2026-09-16,19:50,,5v5,75,12.99,,Listed max 75 spots (multi-team or open-play format)
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-16,11:50,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-16,13:50,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,FIT - Forney,2026-09-16,20:05,,6v6,12,,,
+goodrec,Dallas / Fort Worth,"Pro Touch, Lake Highlands",2026-09-16,19:50,,7v7,14,12.99,,
+goodrec,Dallas / Fort Worth,Salient Touch,2026-09-16,19:50,,6v6,12,12.99,,
+goodrec,Dallas / Fort Worth,"TOCA, Allen",2026-09-16,21:50,,5v5,12,9.99,,
+goodrec,Dallas / Fort Worth,"Ulete, Southlake",2026-09-16,20:50,,7v7,14,14.99,,
+goodrec,Dallas / Fort Worth,"ATH, Allen",2026-09-17,23:05,,11v11,22,11.99,,
+goodrec,Dallas / Fort Worth,"City Futsal, Austin Ranch",2026-09-17,19:50,,6v6,12,11.99,,
+goodrec,Dallas / Fort Worth,"City Futsal, Austin Ranch",2026-09-17,20:50,,6v6,12,11.99,,
+goodrec,Dallas / Fort Worth,"City Futsal, Austin Ranch",2026-09-17,21:50,,6v6,12,11.99,,
+goodrec,Dallas / Fort Worth,CityFutsal Farmers Market,2026-09-17,18:50,,6v6,12,11.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Denton",2026-09-17,19:50,,5v5,12,9.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-17,11:50,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-17,12:50,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-17,13:50,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-17,19:50,,6v6,12,12.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-17,20:50,,6v6,12,12.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-17,21:50,,7v7,14,12.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-17,22:50,,7v7,14,,,
+goodrec,Dallas / Fort Worth,"Crossbar, Rowlett",2026-09-17,20:20,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Rowlett",2026-09-17,21:20,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,Salient Touch,2026-09-17,19:50,,6v6,12,12.99,,
+goodrec,Dallas / Fort Worth,Salient Touch,2026-09-17,20:50,,6v6,12,12.99,,
+goodrec,Dallas / Fort Worth,"TOCA, Allen",2026-09-17,20:50,,5v5,12,9.99,,
+goodrec,Dallas / Fort Worth,"Ulete, Southlake",2026-09-17,19:50,,7v7,14,14.99,,
+goodrec,Dallas / Fort Worth,"ATH, Allen",2026-09-18,20:50,,11v11,22,13.99,,
+goodrec,Dallas / Fort Worth,"City Futsal, Austin Ranch",2026-09-18,19:50,,6v6,12,11.99,,
+goodrec,Dallas / Fort Worth,"City Futsal, Austin Ranch",2026-09-18,20:50,,6v6,12,11.99,,
+goodrec,Dallas / Fort Worth,"City Futsal, Austin Ranch",2026-09-18,21:50,,6v6,12,11.99,,
+goodrec,Dallas / Fort Worth,CityFutsal Farmers Market,2026-09-18,18:50,,6v6,12,13.99,,
+goodrec,Dallas / Fort Worth,CityFutsal Farmers Market,2026-09-18,19:50,,6v6,12,13.99,,
+goodrec,Dallas / Fort Worth,CityFutsal Farmers Market,2026-09-18,20:50,,6v6,12,10.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Denton",2026-09-18,19:50,,5v5,75,12.99,,Listed max 75 spots (multi-team or open-play format)
+goodrec,Dallas / Fort Worth,"Crossbar, Denton",2026-09-18,20:50,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Denton",2026-09-18,21:50,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-18,19:50,,6v6,12,13.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-18,20:50,,6v6,12,13.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-18,21:50,,6v6,12,13.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Rowlett",2026-09-18,19:50,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,Foro Sports,2026-09-18,21:20,,6v6,12,9.99,,
+goodrec,Dallas / Fort Worth,"Gateway Park, Fort Worth",2026-09-18,17:50,,10v10,20,4.99,,
+goodrec,Dallas / Fort Worth,Salient Touch,2026-09-18,19:50,,6v6,12,12.99,,
+goodrec,Dallas / Fort Worth,"TOCA, Colony",2026-09-18,22:20,,7v7,21,9.99,,Listed max 21 spots (multi-team or open-play format)
+goodrec,Dallas / Fort Worth,"UMB Bank, Frisco",2026-09-18,19:50,,6v6,12,14.99,,
+goodrec,Dallas / Fort Worth,"Ulete, Southlake",2026-09-18,19:50,,7v7,14,14.99,,
+goodrec,Dallas / Fort Worth,"ATH, Allen",2026-09-19,14:50,,11v11,22,11.99,,
+goodrec,Dallas / Fort Worth,"ATH, Allen",2026-09-19,15:50,,11v11,22,11.99,,
+goodrec,Dallas / Fort Worth,"ATH, Allen",2026-09-19,18:50,,11v11,22,13.99,,
+goodrec,Dallas / Fort Worth,"City Futsal, Austin Ranch",2026-09-19,18:50,,6v6,12,11.99,,
+goodrec,Dallas / Fort Worth,"City Futsal, Austin Ranch",2026-09-19,19:50,,6v6,12,11.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Denton",2026-09-19,17:50,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-19,21:50,,7v7,14,12.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-19,22:50,,7v7,14,12.99,,
+goodrec,Dallas / Fort Worth,Foro Sports,2026-09-19,20:50,,5v5,10,9.99,,
+goodrec,Dallas / Fort Worth,Salient Touch,2026-09-19,18:50,,6v6,12,12.99,,
+goodrec,Dallas / Fort Worth,Salient Touch,2026-09-19,19:50,,6v6,12,12.99,,
+goodrec,Dallas / Fort Worth,"TOCA, Carrollton",2026-09-19,18:50,,7v7,14,13.99,,
+goodrec,Dallas / Fort Worth,"TOCA, Colony",2026-09-19,17:50,,7v7,14,12.99,,
+goodrec,Dallas / Fort Worth,"Ulete, Southlake",2026-09-19,19:50,,7v7,14,14.99,,
+goodrec,Dallas / Fort Worth,"ATH, Allen",2026-09-20,21:05,,11v11,22,9.99,,
+goodrec,Dallas / Fort Worth,"ATH, Allen",2026-09-20,22:05,,11v11,22,9.99,,
+goodrec,Dallas / Fort Worth,"City Futsal, Austin Ranch",2026-09-20,19:50,,6v6,12,11.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Denton",2026-09-20,18:50,,5v5,75,12.99,,Listed max 75 spots (multi-team or open-play format)
+goodrec,Dallas / Fort Worth,"Crossbar, Denton",2026-09-20,19:50,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Denton",2026-09-20,20:50,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-20,21:50,,7v7,14,12.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-20,22:50,,7v7,14,12.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Rowlett",2026-09-20,16:50,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,FIT - Forney,2026-09-20,20:05,,6v6,12,,,
+goodrec,Dallas / Fort Worth,Foro Sports,2026-09-20,20:20,,6v6,12,9.99,,
+goodrec,Dallas / Fort Worth,Salient Touch,2026-09-20,18:50,,6v6,12,12.99,,
+goodrec,Dallas / Fort Worth,"TOCA, Carrollton",2026-09-20,18:50,,7v7,14,13.99,,
+goodrec,Dallas / Fort Worth,"Ulete, Southlake",2026-09-20,18:50,,7v7,14,14.99,,
+goodrec,Dallas / Fort Worth,Upper 90 Soccer Center,2026-09-20,19:50,,7v7,14,11.99,,
+goodrec,Dallas / Fort Worth,"ATH, Allen",2026-09-21,20:50,,11v11,22,13.99,,
+goodrec,Dallas / Fort Worth,"City Futsal, Austin Ranch",2026-09-21,17:50,,6v6,12,11.99,,
+goodrec,Dallas / Fort Worth,CityFutsal Farmers Market,2026-09-21,18:50,,6v6,12,10.99,,
+goodrec,Dallas / Fort Worth,CityFutsal Farmers Market,2026-09-21,19:50,,6v6,12,10.99,,
+goodrec,Dallas / Fort Worth,CityFutsal Farmers Market,2026-09-21,20:50,,6v6,12,10.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Denton",2026-09-21,19:50,,5v5,12,9.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-21,11:50,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-21,12:50,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-21,22:50,,7v7,14,12.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Rowlett",2026-09-21,20:20,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,"Gateway Park, Fort Worth",2026-09-21,18:50,,10v10,20,4.99,,
+goodrec,Dallas / Fort Worth,"Pro Touch, Lake Highlands",2026-09-21,19:50,,7v7,14,12.99,,
+goodrec,Dallas / Fort Worth,Salient Touch,2026-09-21,19:50,,6v6,12,12.99,,
+goodrec,Dallas / Fort Worth,Salient Touch,2026-09-21,20:50,,6v6,12,10.99,,
+goodrec,Dallas / Fort Worth,"TOCA, Allen",2026-09-21,21:50,,5v5,12,9.99,,
+goodrec,Dallas / Fort Worth,"Ulete, Southlake",2026-09-21,19:50,,7v7,14,14.99,,
+goodrec,Dallas / Fort Worth,"ATH, Allen",2026-09-22,22:20,,11v11,22,13.99,,
+goodrec,Dallas / Fort Worth,"ATH, Allen",2026-09-22,23:20,,11v11,22,11.99,,
+goodrec,Dallas / Fort Worth,"City Futsal, Austin Ranch",2026-09-22,19:50,,6v6,12,11.99,,
+goodrec,Dallas / Fort Worth,CityFutsal Farmers Market,2026-09-22,17:50,,6v6,12,13.99,,
+goodrec,Dallas / Fort Worth,CityFutsal Farmers Market,2026-09-22,20:50,,6v6,12,10.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Denton",2026-09-22,19:50,,5v5,12,9.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-22,11:50,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-22,12:50,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Richardson",2026-09-22,22:45,,7v7,14,12.99,,
+goodrec,Dallas / Fort Worth,"Crossbar, Rowlett",2026-09-22,20:50,,7v7,14,9.99,,
+goodrec,Dallas / Fort Worth,Foro Sports,2026-09-22,22:20,,6v6,12,9.99,,
+goodrec,Dallas / Fort Worth,Salient Touch,2026-09-22,19:50,,6v6,12,12.99,,
+goodrec,Dallas / Fort Worth,Salient Touch,2026-09-22,22:50,,6v6,12,12.99,,
+goodrec,Dallas / Fort Worth,"TOCA, Colony",2026-09-22,21:50,,7v7,21,13.99,,Listed max 21 spots (multi-team or open-play format)
+goodrec,Dallas / Fort Worth,"UMB Bank, Frisco",2026-09-22,18:50,,6v6,12,14.99,,
+goodrec,Dallas / Fort Worth,"Ulete, Southlake",2026-09-22,20:50,,7v7,14,14.99,,

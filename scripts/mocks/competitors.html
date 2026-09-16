@@ -45,8 +45,8 @@
   .share{ padding:12px 14px; border-bottom:1px solid var(--hair); background:#fbfdfb }
   .shareline{ font-size:12.5px; margin-bottom:9px }
   .shareline b{ font-size:15px; font-weight:800 }
-  .shareline b.noshare{ font-size:12.5px; color:#8a6300 }
-  .whynot{ margin:4px 0 9px; padding-left:17px; font-size:11px; color:#8a6300; line-height:1.6 }
+  .shareline b.noshare{ font-size:13px; color:#8a6300 }
+  .shareline .swin{ font-style:normal; font-size:11px; color:#8a9992; margin-left:8px }
   .sbar{ display:flex; height:22px; border-radius:5px; overflow:hidden; border:1px solid var(--line) }
   .seg{ display:flex; align-items:center; justify-content:center; font-size:10.5px; font-weight:800; color:#fff; min-width:2px }
   .seg.us{ background:var(--us) } .seg.plei{ background:var(--plei) } .seg.gr{ background:var(--gr) }
@@ -160,18 +160,10 @@
 
 <div class="wrap">
   <h1>Competitors</h1>
-  <div class="sub">Bookable supply per week, as captured. MatchDay's own fields are in the list.
-    Open a facility to see its week.</div>
   <div class="ffilter" data-testid="ffilter"><span class="lbl">Format</span></div>
   <div class="fnote" data-testid="fnote" hidden></div>
   <div class="cov" data-testid="coverage"></div>
   <div id="cities"></div>
-  <div class="foot">
-    <b>MD Standard</b> is bookable spots divided by 18, one MatchDay match being 18 spots. It is the
-    only figure comparable across formats: a 5v5 slot and an 11v11 slot are not the same match.
-    Matches per week was captured but does not reconcile with the formats at several facilities, so
-    it is not shown and is not the number to compare on.
-  </div>
 </div>
 
 <script>
@@ -359,9 +351,7 @@ function render(){
 
   const missing = ALL_CITIES.filter(c => !CAPTURED.includes(c));
   document.querySelector('[data-testid="coverage"]').innerHTML =
-    `<b>Captured: ${CAPTURED.length} of ${ALL_CITIES.length} MatchDay cities.</b> ` +
-    `No capture yet for ${missing.join(", ")}. ` +
-    `A city missing from this page has not been looked at. It does not mean the competitor is not there.`;
+    `<b>${CAPTURED.length} of ${ALL_CITIES.length} cities captured.</b> Missing: ${missing.join(", ")}.`;
 
   // Everything ABOVE the rows is computed from the source filter only, never from the format
   // filter, for the reason in the note above.
@@ -408,7 +398,11 @@ function render(){
     const shownCaps = CAPTURES.filter(c => c.city === city && (source === "both" || c.source === source));
     const days = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 864e5) + 1;
     const ourWin = shownCaps[0];
-    const why = [];
+    /* NO CAPTURE FOR THIS SOURCE IN THIS CITY. There is nothing to align and nothing to divide, and
+     * dereferencing a window that does not exist threw here once: the render died mid-map, the
+     * innerHTML assignment never ran, and the PREVIOUS filter's rows stayed on screen looking
+     * perfectly normal. Two assertions caught it and both were about something else. */
+    const why = shownCaps.length === 0 ? ["not captured"] : [];
     for (const c of shownCaps) {
       const name = c.source === "plei" ? "Plei" : "GoodRec";
       if (c.note) why.push(name + " is " + c.note);
@@ -418,6 +412,10 @@ function render(){
         why.push(name + " covers " + c.window + " and ours is " + ourWin.window);
     }
     const aligned = why.length === 0;
+    // The dates, small and grey, on one line. No explanation.
+    const winDates = shownCaps.length === 0
+      ? "not captured for this source"
+      : shownCaps.map(c => (c.source === "plei" ? "Plei" : "GoodRec") + " " + c.window).join(" · ");
 
     return `<div class="city" data-testid="city" data-city="${city}">
       <div class="chead"><h2>${city}</h2><span class="win" data-testid="window">${wins}</span></div>
@@ -439,11 +437,9 @@ function render(){
 
       <div class="share" data-testid="share">
         <div class="shareline">${aligned
-          ? `MatchDay holds <b data-testid="sharepct">${share.toFixed(0)}%</b>
-             of captured bookable supply, in MD Standard matches per week.`
-          : `<b class="noshare" data-testid="nosharepct">The windows do not line up, so there is no
-             percentage to give.</b> Both sides are still counted below.`}</div>
-        ${aligned ? `` : `<ul class="whynot" data-testid="sharewhy">${why.map(w => `<li>${w}</li>`).join("")}</ul>`}
+          ? `MatchDay holds <b data-testid="sharepct">${share.toFixed(0)}%</b>`
+          : `<b class="noshare" data-testid="nosharepct">Windows do not line up</b>`}
+          <i class="swin" data-testid="sharewindow">${aligned && ourWin ? ourWin.window : winDates}</i></div>
         <div class="sbar">
           <div class="seg us" style="width:${(ourMd/total)*100}%" data-testid="seg-us">${one(ourMd)}</div>
           ${byComp.map(x => `<div class="seg ${x.s === "plei" ? "plei" : "gr"}"
@@ -459,7 +455,7 @@ function render(){
       <div class="rhead">
         <div class="lbl">Facility</div>
         <div class="lbl">Spots / wk</div>
-        <div class="lbl" style="text-align:right">MD std</div>
+        <div class="lbl" style="text-align:right" title="Bookable spots &divide; 18, one MatchDay match">MD std</div>
         <div class="lbl" style="text-align:right">Price per player</div>
         <div class="lbl">Formats</div>
       </div>
@@ -499,9 +495,7 @@ function render(){
           </div>
         </button>
         <div class="fdetail" data-testid="detail" data-fac="${r.facility}" ${open.has(key) ? "" : "hidden"}>
-          ${days ? dayTable(days) : `<div class="nodetail" data-testid="nodetail">
-            Match detail was not captured for this facility. The September capture recorded weekly
-            totals only; a capture with a match log fills this in.</div>`}
+          ${days ? dayTable(days) : `<div class="nodetail" data-testid="nodetail">No match log in this capture.</div>`}
         </div>
       </div>`;
       }).join("")}

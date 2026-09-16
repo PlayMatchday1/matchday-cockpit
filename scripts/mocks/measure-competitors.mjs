@@ -137,8 +137,10 @@ ok(await p.$eval(ROW("ATH Pearland"), e=>e.getAttribute("aria-expanded"))==="tru
 // match log. An empty panel would read as "no matches".
 await p.click(ROW("Pegaso HTX")); await p.waitForTimeout(150);
 const nod = await p.$eval(`${DET("Pegaso HTX")} ${D("nodetail")}`, e=>e.textContent.replace(/\s+/g,' ').trim());
-ok(/not captured for this facility/.test(nod), `a facility with no match log says so: "${nod.slice(0,44)}…"`);
-ok(/weekly totals only/.test(nod), '  and says why, so it does not read as zero matches');
+ok(nod==="No match log in this capture.", `a facility with no match log says so in one line: "${nod}"`);
+// IT STILL SAYS "log", NOT "matches". Those are different facts and the short version keeps the
+// one that matters; the sentence explaining the September capture is deleted.
+ok(/match log/.test(nod) && !/weekly totals only/.test(nod), '  CONTROL: naming the log, not claiming zero matches');
 
 // ══ 5. FORMATS, AND FILTERING ON THEM ════════════════════════════════════════
 await load();
@@ -183,9 +185,12 @@ ok(await p.$(D("fnote")).then(async e => !(await e.isVisible())), '  CONTROL: an
 
 // ══ 6. ABSENCE IS NOT EVIDENCE ═══════════════════════════════════════════════
 const cov = await T("coverage");
-ok(/2 of 8 MatchDay cities/.test(cov), 'coverage is stated before any table');
+ok(/2 of 8 cities captured/.test(cov), 'coverage is stated before any table, in one line');
 ok(/Austin/.test(cov) && /El Paso/.test(cov), '  every uncaptured city named');
-ok(/has not been looked at/.test(cov), '  saying what an empty city means');
+// THE EXPLANATION IS GONE ON PURPOSE. The fact stays; the sentence about what an absent city means
+// was two lines of prose above a table and is deleted.
+ok(!/has not been looked at/.test(cov), '  CONTROL: and the explanation sentence is gone');
+ok(cov.length < 110, `  CONTROL: it fits one line (${cov.length} chars)`);
 
 // ══ 7. THE WINDOW TRAVELS WITH THE NUMBERS ═══════════════════════════════════
 const w = await inCity(DFW,"window");
@@ -207,10 +212,13 @@ ok(/16%/.test(await inCity(HOU,"sharepct")), `Houston aligns, so it gets a numbe
 await set("both");
 ok(await p.$(`${DFW} ${D("sharepct")}`)===null, 'DFW does NOT get a percentage, because its windows do not line up');
 const nos = await inCity(DFW,"nosharepct");
-ok(/do not line up/.test(nos), `  it says so instead: "${nos}"`);
-const why = await inCity(DFW,"sharewhy");
-ok(/Plei is Mon 21 plus/.test(why), `  and names which window is wrong: "${why.slice(0,54)}…"`);
-ok(/GoodRec/.test(why), '  including the second source');
+ok(/Windows do not line up/.test(nos), `  it says so instead, in three words: "${nos}"`);
+ok(nos.length < 40, `  CONTROL: and only that (${nos.length} chars)`);
+// THE DATES, NOT AN EXPLANATION. The two amber reason lines are deleted; the windows themselves
+// say which is which, small and grey on one line.
+const win = await inCity(DFW,"sharewindow");
+ok(/Plei/.test(win) && /GoodRec/.test(win), `  the dates carry it instead: "${win}"`);
+ok(await p.$(`${DFW} ${D("sharewhy")}`)===null, '  CONTROL: and the explanation lines are gone');
 // CONTROL: the ABSOLUTES are still there, because a listing count is true whatever the window.
 ok(await p.$(`${DFW} ${D("seg-goodrec")}`)!==null, 'GoodRec is its own segment, never merged into Plei');
 ok(await p.$(`${DFW} ${D("seg-us")}`)!==null, '  CONTROL: and our own side is still drawn');
@@ -258,6 +266,15 @@ for (const w of [390, 1200]){
   ok(px.length>25, `  (${px.length} price cells to measure)`);
   ok(Math.min(...px)>=90, `  every price cell is ${Math.round(Math.min(...px))}px, wide enough for a range`);
 }
+
+// ══ 11. THE UNIT IS A TOOLTIP, NOT A PARAGRAPH ═══════════════════════════════
+// It was a four-line footer under the page. The definition has not changed; only where it lives.
+const mdTitle = await p.$eval('.rhead .lbl[title]', e => e.getAttribute("title"));
+ok(/18/.test(mdTitle), `MD Standard is defined on the column header: "${mdTitle}"`);
+ok(await p.$eval('body', b => !/bookable spots divided by 18/.test(b.innerText)),
+  '  CONTROL: and the paragraph that used to say it is gone');
+ok(await p.$eval('body', b => !/Open a facility to see its week/.test(b.innerText)),
+  'the page subtitle is gone too');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 await b.close(); process.exit(fail?1:0);

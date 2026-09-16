@@ -34,11 +34,11 @@ type Capture = {
 type Supply = {
   id: number; capture_id: number; facility: string; matches_per_week: number | null;
   bookable_spots_per_week: number; price_low_cents: number | null; price_high_cents: number | null;
-  formats: string[]; our_venue_id: number | null;
+  formats: string[]; our_venue_id: number | null; not_ours?: boolean;
 };
 type CMatch = {
-  id: number; supply_id: number; match_date: string; kickoff_local: string;
-  format: string; spots: number; price_cents: number | null;
+  id: number; supply_id: number; match_date: string; kickoff_local: string | null;
+  format: string; spots: number; price_cents: number | null; note?: string | null;
 };
 type OurSide = { spots: number; matches: number; priceFloorCents: number | null };
 type Payload = {
@@ -71,6 +71,8 @@ type Row = {
   /* THE COMPETITOR'S OWN COUNT. Off the row on purpose; see the panel header. */
   theirMatchCount: number | null;
   proposal: Proposal | null;
+  /* A PERSON RULED THIS IS NOT OURS. Different from "nobody has looked", which is null. */
+  notOurs: boolean;
 };
 
 export default function CompetitorsView() {
@@ -102,13 +104,13 @@ export default function CompetitorsView() {
   }, []);
   useEffect(() => { void load(); }, [load]);
 
-  const acceptLink = useCallback(async (supplyId: number, venueId: number | null) => {
+  const acceptLink = useCallback(async (supplyId: number, venueId: number | null, notOurs = false) => {
     const { data: sess } = await supabase.auth.getSession();
     const token = sess.session?.access_token;
     const res = await fetch("/api/growth/competitors", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify({ acceptLink: { supplyId, venueId } }),
+      body: JSON.stringify({ acceptLink: { supplyId, venueId, notOurs } }),
     });
     if (res.ok) await load();
     else setErr((await res.json().catch(() => ({})))?.error ?? `HTTP ${res.status}`);
@@ -149,9 +151,6 @@ export default function CompetitorsView() {
         Growth · Competitors
       </div>
       <h1 className="m-0 text-[26px] font-black uppercase tracking-[-0.03em]">Competitors</h1>
-      <p className="mt-1.5 max-w-[680px] text-[13px] text-deep-green/65">
-        Bookable supply captured by hand from Plei and GoodRec, next to our own over the same week.
-      </p>
 
       {!data.tableReady && (
         <div className="mt-3 rounded-[11px] border border-amber-300 bg-amber-50 px-3.5 py-2.5 text-[12.5px] text-amber-900">
@@ -160,16 +159,10 @@ export default function CompetitorsView() {
         </div>
       )}
 
-      {/* ── COVERAGE, BEFORE ANY ROW ──────────────────────────────────────────────────────────
-          ABSENCE IS NOT EVIDENCE. A city missing from this page has not been looked at; it does
-          not mean the competitor is absent there. This codebase has paid for that lesson twice in
-          Warsaw and it is written up in docs/matchday-api-facts.md. */}
+      {/* COVERAGE, BEFORE ANY ROW. A city that is not here has not been looked at. */}
       <div className="coverage mt-3.5" data-testid="coverage">
-        <b>{data.capturedOurCities.length} of {data.ourCities.length} MatchDay cities</b> have been captured.
-        {uncaptured.length > 0 && (
-          <> Not captured: <b>{uncaptured.join(", ")}</b>. A city that is not here <b>has not been looked at</b>,
-          which is not the same as a competitor being absent from it.</>
-        )}
+        <b>{data.capturedOurCities.length} of {data.ourCities.length} cities captured.</b>
+        {uncaptured.length > 0 && <> Missing: {uncaptured.join(", ")}.</>}
       </div>
 
       {/* ── THE CONTROLS ──────────────────────────────────────────────────────────────────── */}
@@ -233,7 +226,7 @@ function CityPanel({ label, caps, data, src, fmts, open, toggle, onLink }: {
   label: string; caps: Capture[]; data: Payload;
   src: "both" | "plei" | "goodrec"; fmts: string[];
   open: Set<string>; toggle: (k: string) => void;
-  onLink: (supplyId: number, venueId: number | null) => void | Promise<void>;
+  onLink: (supplyId: number, venueId: number | null, notOurs?: boolean) => void | Promise<void>;
 }) {
   const shown = caps.filter((c) => src === "both" || c.source === src);
   const ourCity = data.cityLabelToOurs[label] ?? null;
@@ -253,7 +246,7 @@ function CityPanel({ label, caps, data, src, fmts, open, toggle, onLink }: {
       key: `us-${v.id}`, facility: v.venue_name, source: "us" as const,
       spots: o!.spots, lowCents: o!.priceFloorCents, highCents: o!.priceFloorCents,
       formats: [], ourVenueId: v.id, supplyId: null, isOurs: true,
-      theirMatchCount: null, proposal: null,
+      theirMatchCount: null, proposal: null, notOurs: false,
     }));
 
   /** Our cheapest published price in this city, which is what "under us" is measured against. */
@@ -272,6 +265,7 @@ function CityPanel({ label, caps, data, src, fmts, open, toggle, onLink }: {
         formats: sortFormats(s.formats ?? []), ourVenueId: s.our_venue_id, supplyId: s.id, isOurs: false,
         theirMatchCount: s.matches_per_week == null ? null : Number(s.matches_per_week),
         proposal: data.proposals?.find((p) => p.supplyId === s.id) ?? null,
+        notOurs: s.not_ours === true,
       };
     });
   }, [data.supply, data.proposals, shown]);
@@ -329,8 +323,7 @@ function CityPanel({ label, caps, data, src, fmts, open, toggle, onLink }: {
 
       {notCaptured && (
         <div className="notcaptured" data-testid="notcaptured">
-          <b>{SOURCE_LABEL[src] ?? src} has not been captured in {label}.</b> That is not the same as
-          {" "}{SOURCE_LABEL[src] ?? src} selling nothing here. Our own fields are still listed below.
+          <b>{SOURCE_LABEL[src] ?? src} not captured in {label}.</b>
         </div>
       )}
 
@@ -354,20 +347,15 @@ function CityPanel({ label, caps, data, src, fmts, open, toggle, onLink }: {
           {align.aligned
             ? <b data-testid="sharepct">MatchDay holds {sharePct}%</b>
             /* NO NUMBER WITH A FOOTNOTE. Where the windows do not line up the ratio is not printed
-               at all, because a figure that needs its caveat to be true is a figure that will be
-               screenshotted without it. The two sides' absolutes are still here and still true. */
-            : <b className="noshare" data-testid="nosharepct">
-                The windows do not line up, so there is no percentage to give
-              </b>}
+               at all. The dates say which windows; the absolutes below are unaffected. */
+            : <b className="noshare" data-testid="nosharepct">Windows do not line up</b>}
           <i data-testid="sharewindow">
-            {primary ? `ours: ${fmtWindow(primary.window_start, primary.window_end)}` : ""}
+            {align.aligned
+              ? (primary ? fmtWindow(primary.window_start, primary.window_end) : "")
+              : shown.map((c) => `${SOURCE_LABEL[c.source] ?? c.source} ${fmtWindow(c.window_start, c.window_end)}${c.window_note ? " (8 days)" : ""}`)
+                  .concat(primary ? [`ours ${fmtWindow(primary.window_start, primary.window_end)}`] : []).join(" · ")}
           </i>
         </div>
-        {!align.aligned && (
-          <ul className="whynot" data-testid="sharewhy">
-            {align.reasons.map((r, i) => <li key={i}>{r}</li>)}
-          </ul>
-        )}
         <div className="bar">
           <span className="seg us" data-testid="seg-us"
             style={{ width: `${pct(oursMd, oursMd + theirMd)}%` }} title={`MatchDay ${oursMd.toFixed(1)}`} />
@@ -384,13 +372,14 @@ function CityPanel({ label, caps, data, src, fmts, open, toggle, onLink }: {
             const s = data.supply.filter((x) => x.capture_id === c.id).reduce((a, b) => a + b.bookable_spots_per_week, 0);
             return <span key={c.id}><i className={`sw ${c.source}`} /> {SOURCE_LABEL[c.source]} {fmtMdStandard(s)}</span>;
           })}
-          <span className="mdnote">MD Standard is bookable spots ÷ 18, one MatchDay match</span>
         </div>
       </div>}
 
       {/* ── THE ROWS ───────────────────────────────────────────────────────────────────────── */}
       <div className="rhead">
-        <span>Facility</span><span>Spots a week</span><span className="r">MD Std</span><span className="r">Price per player</span>
+        <span>Facility</span><span>Spots a week</span>
+        <span className="r" title="Bookable spots ÷ 18, one MatchDay match">MD Std</span>
+        <span className="r">Price per player</span>
       </div>
       {rows.map((r) => (
         <FacilityRow key={r.key} r={r} maxSpots={maxSpots} ourFloor={ourFloor}
@@ -410,7 +399,7 @@ const pct = (a: number, b: number): number => (b > 0 ? Math.max(0, Math.min(100,
 function FacilityRow({ r, maxSpots, ourFloor, matches, isOpen, onToggle, onLink }: {
   r: Row; maxSpots: number; ourFloor: number | null; matches: CMatch[];
   isOpen: boolean; onToggle: () => void;
-  onLink: (supplyId: number, venueId: number | null) => void | Promise<void>;
+  onLink: (supplyId: number, venueId: number | null, notOurs?: boolean) => void | Promise<void>;
 }) {
   const btn = useRef<HTMLButtonElement>(null);
   const price = fmtPrice({ lowCents: r.lowCents, highCents: r.highCents });
@@ -421,7 +410,7 @@ function FacilityRow({ r, maxSpots, ourFloor, matches, isOpen, onToggle, onLink 
    * Health | Cypress" and "Athlete Training and Health | Katy" differ by one word and are
    * different places. Our own row never claims to also be our field. */
   const confirmed = !r.isOurs && r.ourVenueId != null;
-  const proposed = !r.isOurs && r.ourVenueId == null && r.proposal?.venueId != null;
+  const proposed = !r.isOurs && r.ourVenueId == null && !r.notOurs && r.proposal?.venueId != null;
 
   const byDay = useMemo(() => {
     const m = new Map<string, CMatch[]>();
@@ -430,7 +419,17 @@ function FacilityRow({ r, maxSpots, ourFloor, matches, isOpen, onToggle, onLink 
       if (!m.has(d)) m.set(d, []);
       m.get(d)!.push(x);
     }
-    for (const list of m.values()) list.sort((a, b) => a.kickoff_local.localeCompare(b.kickoff_local));
+    /* A LISTING WITH NO TIME SORTS LAST IN ITS DAY, never first. One Foro Sports Club row was
+     * recorded with its time cut off; treating null as 00:00 would put an unknown hour at the top
+     * of Friday as if it were a midnight kick-off. */
+    for (const list of m.values()) {
+      list.sort((a, b) => {
+        if (a.kickoff_local == null && b.kickoff_local == null) return 0;
+        if (a.kickoff_local == null) return 1;
+        if (b.kickoff_local == null) return -1;
+        return a.kickoff_local.localeCompare(b.kickoff_local);
+      });
+    }
     return DOW.filter((d) => m.has(d)).map((d) => ({ day: d, list: m.get(d)! }));
   }, [matches]);
 
@@ -463,6 +462,15 @@ function FacilityRow({ r, maxSpots, ourFloor, matches, isOpen, onToggle, onLink 
 
       {isOpen && (
         <div className="detail" data-testid="detail" data-fac={r.facility}>
+          {r.notOurs && (
+            <div className="linkbox ruled" data-testid="ruledout">
+              <b>Ruled not ours.</b> Somebody looked at this one and said it is a different facility,
+              so the matcher will not ask again. That ruling survives the next capture of this city.
+              <button type="button" data-testid="unrule" onClick={(e) => { e.stopPropagation(); void onLink(r.supplyId!, null, false); }}>
+                Reopen the question
+              </button>
+            </div>
+          )}
           {(proposed || confirmed) && (
             <div className={`linkbox${confirmed ? " done" : ""}`} data-testid="linkbox">
               {confirmed ? (
@@ -477,9 +485,17 @@ function FacilityRow({ r, maxSpots, ourFloor, matches, isOpen, onToggle, onLink 
                   <b>This looks like our {r.proposal!.venueName}.</b>{" "}
                   Matched on <i>{r.proposal!.via}</i> because it {r.proposal!.why}.
                   Nothing is linked until you say so.
-                  <button type="button" data-testid="accept-link" onClick={(e) => { e.stopPropagation(); void onLink(r.supplyId!, r.proposal!.venueId!); }}>
-                    Yes, this is our field
-                  </button>
+                  <span className="lbtns">
+                    <button type="button" data-testid="accept-link" onClick={(e) => { e.stopPropagation(); void onLink(r.supplyId!, r.proposal!.venueId!); }}>
+                      Yes, this is our field
+                    </button>
+                    {/* A RULING, NOT A DISMISSAL. It records that somebody looked and said no, which
+                        our_venue_id NULL could never say, and it survives the next capture. */}
+                    <button type="button" className="no" data-testid="reject-link"
+                      onClick={(e) => { e.stopPropagation(); void onLink(r.supplyId!, null, true); }}>
+                      No, different facility
+                    </button>
+                  </span>
                 </>
               )}
             </div>
@@ -498,14 +514,9 @@ function FacilityRow({ r, maxSpots, ourFloor, matches, isOpen, onToggle, onLink 
             </div>
           )}
           {byDay.length === 0 ? (
-            /* THE EMPTY STATE IS THE COMMON ONE AND IT MUST SAY WHY. The September capture recorded
-               weekly totals only, so most facilities have no match log. An empty panel would read
-               as "no matches this week", which is false. */
-            <div className="nodetail" data-testid="nodetail">
-              The match log was <b>not captured for this facility</b>. This capture recorded
-              <b> weekly totals only</b>, so this is not a week with no matches. A capture that includes
-              a match log fills this in.
-            </div>
+            /* THE COMMON STATE: this capture recorded weekly totals only. One line, and it says
+               "no match log" rather than "no matches", which are different facts. */
+            <div className="nodetail" data-testid="nodetail">No match log in this capture.</div>
           ) : byDay.map(({ day, list }) => {
             const spots = list.reduce((a, b) => a + b.spots, 0);
             const prices = list.map((m) => m.price_cents).filter((x): x is number => x != null);
@@ -521,11 +532,20 @@ function FacilityRow({ r, maxSpots, ourFloor, matches, isOpen, onToggle, onLink 
                   </span>
                 </div>
                 {list.map((m) => (
-                  <div className="match" key={m.id} data-testid="match">
-                    <span>{fmtTime(m.kickoff_local)}</span>
+                  <div className="match" key={m.id} data-testid="match" data-notime={m.kickoff_local == null ? "1" : "0"}>
+                    <span data-testid="mtime">{m.kickoff_local == null ? <i className="notime">time not captured</i> : fmtTime(m.kickoff_local)}</span>
                     <span>{m.format}</span>
                     <span>{m.spots} spots</span>
-                    <span className="r">{m.price_cents == null ? "not shown" : money(m.price_cents)}</span>
+                    {/* NULL IS "not shown", 0 IS FREE. The log has exactly one genuine free game and
+                        six listings that published nothing; collapsing them misprices a market. */}
+                    <span className="r" data-testid="mprice">
+                      {m.price_cents == null ? <i className="noprice">not shown</i>
+                        : m.price_cents === 0 ? "free" : money(m.price_cents)}
+                    </span>
+                    {/* THE NOTE IS WHY A SPOTS FIGURE THAT LOOKS IMPOSSIBLE IS NOT. Memorial Indoor
+                        at 35 spots in a 5v5 is annotated open play; without it the only reading
+                        left is that the capture is wrong. */}
+                    {m.note && <span className="mnote" data-testid="mnote">{m.note}</span>}
                   </div>
                 ))}
               </div>
@@ -654,9 +674,7 @@ const CSS = [
   ".seg.us{background:#0d3b2e}.seg.plei{background:#e6a532}.seg.goodrec{background:#7aa6c2}",
   ".legend{display:flex;flex-wrap:wrap;gap:12px;margin-top:6px;font-size:11px;color:#4d6359}",
   ".legend .sw{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px}",
-  ".legend .mdnote{color:#8a9992}",
-  ".sharehead b.noshare{font:800 12px/1.4 inherit;color:#8a6300;max-width:100%}",
-  ".whynot{margin:6px 0 0;padding-left:17px;font-size:11px;color:#8a6300;line-height:1.6}",
+  ".sharehead b.noshare{font:800 13px/1.3 inherit;color:#8a6300}",
   ".notcaptured{font-size:12px;color:#8a6300;background:#fdf1d0;border:1px solid #e3c369;border-radius:9px;padding:9px 11px;margin-bottom:10px;line-height:1.5}",
   ".theircount{font-size:11.5px;color:#4d6359;background:#f7faf8;border:1px solid #e6ebe8;border-radius:8px;padding:7px 9px;margin-bottom:8px;line-height:1.5}",
   ".rhead,.frow{display:grid;grid-template-columns:minmax(0,1fr) 128px 62px 132px;gap:10px;align-items:center}",
@@ -676,6 +694,9 @@ const CSS = [
   ".tag.maybe{background:#fdf1d0;color:#8a6300;border:1px dashed #e3c369}",
   ".linkbox{font-size:11.5px;color:#8a6300;background:#fdf1d0;border:1px solid #e3c369;border-radius:8px;padding:8px 10px;margin-bottom:8px;line-height:1.5}",
   ".linkbox.done{color:#a8391a;background:#fdeae4;border-color:#f0bda9}",
+  ".linkbox.ruled{color:#4d6359;background:#f4f7f5;border-color:#e6ebe8}",
+  ".lbtns{display:flex;gap:7px;flex-wrap:wrap}",
+  ".linkbox button.no{background:#fff;color:#4d6359;border-color:#cfdbd4}",
   ".linkbox i{font-style:italic}",
   ".linkbox button{display:block;margin-top:6px;min-height:32px;padding:0 11px;border:1px solid #0d3b2e;background:#0d3b2e;color:#fff;border-radius:8px;font:700 11.5px/1 inherit;cursor:pointer}",
   ".chips{display:flex;gap:3px;flex-wrap:wrap;min-width:0}",
@@ -690,12 +711,14 @@ const CSS = [
   ".fprice .noprice{font-style:italic;font-weight:500;color:#8a9992}",
   ".fprice .under{display:block;font-style:normal;font-size:10px;font-weight:800;color:#a8391a}",
   ".detail{background:#fbfdfc;border-top:1px solid #f1f5f3;padding:8px 10px 10px 22px}",
-  ".nodetail{font-size:11.5px;color:#8a6300;background:#fdf1d0;border:1px solid #e3c369;border-radius:8px;padding:8px 10px;line-height:1.5}",
+  ".nodetail{font-size:11.5px;color:#8a9992;padding:2px 0}",
   ".day{margin-bottom:8px}",
   ".dhead{display:flex;gap:8px;align-items:baseline;font-size:11px;color:#8a9992;border-bottom:1px solid #eef2f0;padding-bottom:3px}",
   ".dhead b{font-size:12px;color:#0E2A22}",
-  ".match{display:grid;grid-template-columns:86px 56px 74px minmax(0,1fr);gap:8px;font-size:11.5px;color:#4d6359;padding:3px 0}",
+  ".match{display:grid;grid-template-columns:96px 56px 74px 78px minmax(0,1fr);gap:8px;font-size:11.5px;color:#4d6359;padding:3px 0;align-items:baseline}",
   ".match .r{text-align:right}",
+  ".match .notime,.match .noprice{font-style:italic;color:#8a9992}",
+  ".mnote{color:#8a9992;font-size:11px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
   ".importer{border:1px solid #bfe0cc;background:#f6fbf8;border-radius:12px;padding:12px;margin-top:10px}",
   ".ihead{font:800 13px/1 inherit;color:#0E2A22;margin-bottom:5px}",
   ".ihint{font-size:11.5px;color:#4d6359;line-height:1.5;margin:0 0 8px}",
@@ -715,6 +738,7 @@ const CSS = [
   "  .fname{grid-column:1 / -1}",
   "  .fspots{grid-column:1}",
   "  .frow .r.fprice{grid-column:1 / -1;text-align:left}",
-  "  .match{grid-template-columns:76px 50px 64px minmax(0,1fr)}",
+  "  .match{grid-template-columns:84px 48px 62px 66px;row-gap:2px}",
+  "  .mnote{grid-column:1 / -1}",
   "}",
 ].join("\n");

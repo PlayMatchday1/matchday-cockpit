@@ -113,10 +113,11 @@ async function main() {
   // ══ COVERAGE, BEFORE ANY ROW ══════════════════════════════════════════════════════════════
   head("absence is not evidence");
   const cov = await T(p, '[data-testid="coverage"]');
-  yes(`coverage is stated first: "${cov?.slice(0, 46)}…"`, /2 of 8 MatchDay cities/.test(cov ?? ""));
+  yes(`coverage is stated first, in one line: "${cov}"`, /2 of 8 cities captured/.test(cov ?? ""));
   for (const c of ["Atlanta", "Austin", "El Paso", "OKC", "San Antonio", "St. Louis"])
     yes(`  names ${c} as uncaptured`, new RegExp(c.replace(".", "\\.")).test(cov ?? ""));
-  yes("  and says what an uncaptured city means", /has not been looked at/.test(cov ?? ""));
+  yes("  CONTROL: and the explanation sentence is gone", !/has not been looked at/.test(cov ?? ""));
+  yes(`  CONTROL: it fits one line (${(cov ?? "").length} chars)`, (cov ?? "").length < 120);
   is("CONTROL: an uncaptured city renders no panel at all", await p.locator('[data-testid="city"]').count(), 2);
 
   // ══ WE ARE IN THE TABLE ═══════════════════════════════════════════════════════════════════
@@ -134,8 +135,8 @@ async function main() {
   /* AND THE CITY DOES NOT DISAPPEAR. GoodRec has no Houston capture; dropping the panel would take
    * our own rows with it AND read as "GoodRec sells nothing here", which nobody has looked at. */
   const nc = await inCity(p, HOU, "notcaptured");
-  yes(`  CONTROL: and the page says which it is: "${nc?.slice(0, 48)}…"`, /has not been captured in Houston/.test(nc ?? ""));
-  yes("  CONTROL: naming it as uncaptured, not as zero", /not the same as/.test(nc ?? ""));
+  yes(`  CONTROL: and the page says which it is: "${nc}"`, /not captured in Houston/.test(nc ?? ""));
+  yes("  CONTROL: stating the fact and nothing else", (nc ?? "").length < 45);
   is("  CONTROL: with no stats tile claiming a zero", await p.locator(`${HOU} [data-testid="s-fac"]`).count(), 0);
   await setSrc(p, "both");
 
@@ -185,11 +186,20 @@ async function main() {
   is("a second opens", await p.locator(ROW("Pegaso HTX")).getAttribute("aria-expanded"), "true");
   is("  CONTROL: and the first stays open", await p.locator(ROW("Revolution Soccer Complex")).getAttribute("aria-expanded"), "true");
 
-  /* THE EMPTY STATE IS THE COMMON ONE HERE. The September capture is weekly totals only, so EVERY
-   * facility has no match log and the panel must say which, not read as "no matches this week". */
-  const nod = await T(p, `${DET("Revolution Soccer Complex")} [data-testid="nodetail"]`);
-  yes(`a facility with no match log says so: "${nod?.slice(0, 48)}…"`, /not captured for this facility/.test(nod ?? ""));
-  yes("  and says why, so it does not read as zero matches", /weekly totals only/.test(nod ?? ""));
+  /* ── THE WEEK, NOW THAT THE LOG IS IN ────────────────────────────────────────────────────
+   * 685 listings across the three captures, and the log summing to the weekly summary is the
+   * whole validation: two independent recordings of the same week agreeing to the spot. */
+  const days = await p.locator(`${DET("Revolution Soccer Complex")} [data-testid="day"]`).evaluateAll((es) => es.map((e) => e.dataset.day));
+  const WEEK = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  is("the panel groups the week by day, in week order", days, WEEK.filter((d) => days.includes(d)));
+  const ms = nonEmpty(await p.locator(`${DET("Revolution Soccer Complex")} [data-testid="match"]`).allInnerTexts(), "Revolution match rows");
+  ok(`every listing in the week is there (${ms.length})`);
+  const firstM = ms[0].replace(/\s+/g, " ");
+  yes(`and each carries time, size, spots and price: "${firstM}"`,
+    /\d{1,2}:\d{2} (AM|PM)/.test(firstM) && /\dv\d/.test(firstM) && /\d+ spots/.test(firstM) && /(\$\d|free|not shown)/.test(firstM));
+  const dsum = await T(p, `${DET("Revolution Soccer Complex")} [data-testid="daysum"]`);
+  yes(`each day totals itself: "${dsum}"`, /\d+ match(es)? · \d+ spots/.test(dsum ?? ""));
+  yes("a listing carries its captured note", (await p.locator(`${DET("Revolution Soccer Complex")} [data-testid="mnote"]`).count()) > 0);
   /* THEIR OWN MATCH COUNT LIVES HERE, not on the row, and carries its caveat. */
   const tc = await T(p, `${DET("Revolution Soccer Complex")} [data-testid="theircount"]`);
   yes(`the competitor's own match count is in the panel: "${tc?.slice(0, 44)}…"`, /Plei lists \d+ matches a week/.test(tc ?? ""));
@@ -246,9 +256,12 @@ async function main() {
   is("DFW does NOT get a percentage", await p.locator(`${DFW} [data-testid="sharepct"]`).count(), 0);
   const nos = await inCity(p, DFW, "nosharepct");
   yes(`  it says so instead: "${nos}"`, /do not line up/.test(nos ?? ""));
-  const why = await inCity(p, DFW, "sharewhy");
-  yes(`  and names which window is wrong: "${why?.slice(0, 50)}…"`, /Plei is Mon 21 plus/.test(why ?? ""));
-  yes("  including the second source", /GoodRec/.test(why ?? ""));
+  yes("  CONTROL: and only that, with no explanation attached", (nos ?? "").length < 40);
+  /* THE DATES CARRY IT INSTEAD. The two amber reason lines were deleted; the windows themselves
+   * say which is which, small and grey on one line. */
+  const win = await inCity(p, DFW, "sharewindow");
+  yes(`the windows are named instead: "${win}"`, /Plei/.test(win ?? "") && /GoodRec/.test(win ?? "") && /ours/.test(win ?? ""));
+  is("  CONTROL: and the explanation lines are gone", await p.locator(`${DFW} [data-testid="sharewhy"]`).count(), 0);
   yes("CONTROL: the absolutes are still drawn", (await p.locator(`${DFW} [data-testid="seg-goodrec"]`).count()) > 0);
   yes("  CONTROL: including our own side", (await p.locator(`${DFW} [data-testid="seg-us"]`).count()) > 0);
   /* DECIDED BY COMPARISON, NOT BY CITY: the two sources in ONE city answer differently. */
@@ -277,6 +290,63 @@ async function main() {
   yes(`the proposal shows its evidence: "${lb?.slice(0, 52)}…"`, /Matched on/.test(lb ?? ""));
   yes("  and says nothing is linked yet", /Nothing is linked until you say so/.test(lb ?? ""));
   await closeContext(ctx);
+
+  // ══ THE THREE EDGE CASES IN THE LOG ═══════════════════════════════════════════════════════
+  {
+    head("the timeless listing, the free game, and the empty state");
+    const b3 = await boot(browser, storageState);
+    is("no page error", b3.errs.length, 0);
+    const openRow = async (city, fac) => {
+      const r = b3.p.locator(`${city} [data-testid="row"][data-fac="${fac}"]`);
+      await r.scrollIntoViewIfNeeded(); await r.click(); await b3.p.waitForTimeout(400);
+    };
+
+    /* A LISTING WITH NO TIME SORTS LAST IN ITS DAY, never first. Treating null as 00:00 would put
+     * an unknown hour at the top of Friday as if it were a midnight kick-off. */
+    await openRow(DFW, "Foro Sports Club");
+    const fri = nonEmpty(
+      await b3.p.locator(`${DFW} [data-testid="detail"][data-fac="Foro Sports Club"] [data-testid="day"][data-day="Fri"] [data-testid="match"]`)
+        .evaluateAll((es) => es.map((e) => e.dataset.notime)), "Foro Friday listings");
+    is("the timeless listing is last in its day", fri[fri.length - 1], "1");
+    is("  CONTROL: and it is the only one", fri.filter((x) => x === "1").length, 1);
+    is("  CONTROL: every earlier listing has a time", fri.slice(0, -1).every((x) => x === "0"), true);
+    const notime = await T(b3.p, `${DFW} [data-testid="detail"][data-fac="Foro Sports Club"] [data-testid="match"][data-notime="1"] [data-testid="mtime"]`);
+    is("  and it says the time was not captured, rather than showing midnight", notime, "time not captured");
+
+    /* NULL PRICE AND ZERO PRICE ARE DIFFERENT FACTS. */
+    await openRow(DFW, "Vaqueros Field at Sycamore Park");
+    const sun = await b3.p.locator(`${DFW} [data-testid="detail"][data-fac="Vaqueros Field at Sycamore Park"] [data-testid="day"][data-day="Sun"] [data-testid="mprice"]`).allInnerTexts();
+    is("a genuine free game reads free", sun.map((x) => x.trim()), ["free"]);
+    const foroPrice = await T(b3.p, `${DFW} [data-testid="detail"][data-fac="Foro Sports Club"] [data-testid="match"][data-notime="1"] [data-testid="mprice"]`);
+    is("  CONTROL: a listing that published no price reads not shown, not free and not $0.00", foroPrice, "not shown");
+    await closeContext(b3.ctx);
+  }
+
+  {
+    /* THE EMPTY STATE IS NOW UNREACHABLE WITH REAL DATA — every facility has a log — so it is
+     * driven from a fixture. It has to keep working: the next capture may arrive without one, and
+     * an empty panel reads as "no matches this week", which is a different and false claim. */
+    head("the empty state, for a future capture with no match log");
+    const ctx4 = await browser.newContext({ storageState, viewport: { width: 1200, height: 1100 } });
+    await ctx4.route("**/api/growth/competitors**", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const res = await route.fetch();
+      const j = await res.json().catch(() => null);
+      if (!j) return route.fulfill({ response: res });
+      j.matches = [];
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(j) });
+    });
+    const p4 = await ctx4.newPage();
+    await p4.goto(PAGE, { waitUntil: "domcontentloaded", timeout: 240000 });
+    await p4.waitForSelector('[data-testid="city"]', { timeout: 150000 });
+    await p4.waitForTimeout(1000);
+    await p4.locator(`${HOU} [data-testid="row"][data-fac="Revolution Soccer Complex"]`).click();
+    await p4.waitForTimeout(400);
+    const nod = await T(p4, `${HOU} [data-testid="detail"][data-fac="Revolution Soccer Complex"] [data-testid="nodetail"]`);
+    is("a capture with no match log says so, in one line", nod, "No match log in this capture.");
+    yes("  CONTROL: naming the LOG, not claiming zero matches", /match log/.test(nod ?? "") && !/no matches/i.test(nod ?? ""));
+    await closeContext(ctx4);
+  }
 
   // ══ SIZES ═════════════════════════════════════════════════════════════════════════════════
   for (const width of [390, 1200]) {

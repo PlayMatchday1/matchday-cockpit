@@ -17,7 +17,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import {
-  MD_STANDARD_SPOTS, PROPOSE_AT, parseCapture, proposeLink, sortFormats,
+  MD_STANDARD_SPOTS, PROPOSE_AT, parseCapture, parseMatchLog, proposeLink, sortFormats,
   type NameCandidate, type ParsedRow,
 } from "@/lib/competitorSupply";
 
@@ -27,6 +27,7 @@ export const maxDuration = 60;
 const CAPTURES = "competitor_captures";
 const SUPPLY = "competitor_facility_supply";
 const MATCHES = "competitor_matches";
+const RULINGS = "competitor_facility_rulings";
 
 /** What the capture calls a city, against what fin_venues calls it. */
 const CITY_LABEL_TO_OURS: Record<string, string> = {
@@ -165,9 +166,13 @@ export async function GET(req: Request) {
         for (const via of [v.venue_name, ...(titlesByVenue.get(v.id) ?? [])])
           cands.push({ venueId: v.id, venueName: v.venue_name, via });
       }
+      /* A FACILITY SOMEBODY HAS ALREADY RULED ON IS NOT PROPOSED AGAIN. Ryan ruled both HatTrick
+       * locations are a different facility from our venue 52, same owner; re-asking every time
+       * Houston is re-captured is how a settled question becomes noise. */
+      if (s.not_ours === true || s.our_venue_id != null) return null;
       const p = proposeLink(String(s.facility), cands);
       return { supplyId: Number(s.id), ...p };
-    }).filter((p) => p.venueId != null);
+    }).filter((p): p is NonNullable<typeof p> => p != null && p.venueId != null);
 
     /* THE CITIES WE OPERATE IN. Coverage is stated before any row: a city missing from this page
      * has not been LOOKED AT, which is not the same as a competitor being absent there. */
@@ -209,7 +214,7 @@ export async function POST(req: Request) {
     return Response.json({ error: "Importing a capture is admin only." }, { status: 403 });
   }
 
-  let body: { csv?: string; dryRun?: boolean; acceptLink?: { supplyId?: number; venueId?: number | null } };
+  let body: { csv?: string; kind?: "capture" | "matchlog"; dryRun?: boolean; acceptLink?: { supplyId?: number; venueId?: number | null; notOurs?: boolean } };
   try { body = (await req.json()) as typeof body; }
   catch { return Response.json({ outcome: "FAILED", error: "Body is not JSON. Nothing was written." }, { status: 400 }); }
 
@@ -218,33 +223,60 @@ export async function POST(req: Request) {
   if (body.acceptLink) {
     const supplyId = Number(body.acceptLink.supplyId);
     const venueId = body.acceptLink.venueId == null ? null : Number(body.acceptLink.venueId);
+    /* notOurs TRUE is a real answer, not the absence of one: "somebody looked and it is not ours",
+     * which our_venue_id NULL alone could never say. It stops the matcher re-proposing. */
+    const notOurs = body.acceptLink.notOurs === true;
     if (!Number.isInteger(supplyId) || supplyId <= 0) {
       return Response.json({ outcome: "FAILED", error: "supplyId is required." }, { status: 400 });
     }
     const { data: before } = await auth.supabase.from(SUPPLY).select("*").eq("id", supplyId).maybeSingle();
     if (!before) return Response.json({ outcome: "NOT APPLIED", error: "That facility row no longer exists." }, { status: 409 });
     const { data: after, error } = await auth.supabase.from(SUPPLY)
-      .update({ our_venue_id: venueId }).eq("id", supplyId).select("*").maybeSingle();
+      .update({ our_venue_id: venueId, not_ours: notOurs }).eq("id", supplyId).select("*").maybeSingle();
     if (error) return Response.json({ outcome: "FAILED", error: error.message }, { status: 500 });
     if (!after || (after.our_venue_id ?? null) !== venueId) {
       return Response.json({ outcome: "NOT APPLIED", error: "The link read back different. Nothing was retried." }, { status: 409 });
     }
+    /* THE DURABLE HALF. The supply row is a cache that the next import rebuilds; this is the
+     * record that makes the ruling outlive it. Both-null is not a ruling, so it is deleted. */
+    const { data: capRow } = await auth.supabase.from(CAPTURES).select("source, city_label")
+      .eq("id", before.capture_id).maybeSingle();
+    if (capRow) {
+      if (venueId == null && !notOurs) {
+        await auth.supabase.from(RULINGS).delete()
+          .eq("source", capRow.source).eq("city_label", capRow.city_label).eq("facility", before.facility);
+      } else {
+        await auth.supabase.from(RULINGS).upsert({
+          source: capRow.source, city_label: capRow.city_label, facility: before.facility,
+          our_venue_id: venueId, not_ours: notOurs, ruled_by: auth.email ?? "unknown",
+          ruled_at: new Date().toISOString(),
+        }, { onConflict: "source,city_label,facility" });
+      }
+    }
+
     const audit = await recordWrite(
       {
         env: "production", source: "Growth — competitor capture", actorName: auth.email, actorEmail: auth.email,
         saveId: randomUUID(), matchId: null, matchName: null,
         method: "POST", path: `/growth/competitors/link/${supplyId}`,
-        body: { supplyId, venueId }, keys: [], label: (k) => k, applied: () => true,
+        body: { supplyId, venueId, notOurs }, keys: [], label: (k) => k, applied: () => true,
         changes: [{
-          key: "our_venue_id", field: `Shared field link for "${before.facility}"`,
-          before: before.our_venue_id ?? "—", after: venueId ?? "— (cleared)",
+          key: "our_venue_id", field: `Shared field ruling for "${before.facility}"`,
+          before: before.our_venue_id ?? (before.not_ours ? "ruled not ours" : "—"),
+          after: venueId ?? (notOurs ? "ruled not ours" : "— (cleared)"),
         }],
       },
       { readResource: async () => ({}), write: async () => ({ ok: true }), now: () => new Date().toISOString() },
       supabaseLogStore(),
     );
-    return Response.json({ outcome: "LANDED", supplyId, venueId, logRecorded: audit.logged }, { status: 200 });
+    return Response.json({ outcome: "LANDED", supplyId, venueId, notOurs, logRecorded: audit.logged }, { status: 200 });
   }
+
+  /* ── THE MATCH LOG IS A SECOND FILE AT A DIFFERENT GRAIN ──────────────────────────────────
+   * It joins to facilities that already exist; it never creates one. A log row whose facility has
+   * no supply row is an error that rejects the file, because the two files agreeing is the whole
+   * validation and a silently dropped row breaks it. */
+  if (body.kind === "matchlog") return importMatchLog(auth, String(body.csv ?? ""), body.dryRun === true);
 
   const { rows, errors } = parseCapture(String(body.csv ?? ""));
   if (errors.length) {
@@ -305,13 +337,26 @@ export async function POST(req: Request) {
       }).select("*").single();
       if (capErr) throw new Error(`creating the capture: ${capErr.message}`);
 
+      /* ── RULINGS SURVIVE THE RE-IMPORT ──────────────────────────────────────────────────
+       * A re-import is a correction to the CAPTURE and its numbers should be replaced. A human
+       * ruling about whether a named facility is one of ours is not part of the capture and must
+       * not be. 0179 cascaded both away together, which would have erased every accepted link the
+       * first time a city was re-captured. Rulings are keyed on (source, city, facility) so they
+       * outlive any number of re-imports. */
+      const { data: rulings } = await sb.from(RULINGS).select("*")
+        .eq("source", source).eq("city_label", city_label);
+      const ruleFor = new Map((rulings ?? []).map((x) => [String(x.facility), x]));
+
       const { error: supErr } = await sb.from(SUPPLY).insert(rs.map((r) => ({
         capture_id: cap.id, facility: r.facility,
         matches_per_week: r.matches_per_week,
         bookable_spots_per_week: r.bookable_spots_per_week,
         price_low_cents: r.price_low_cents, price_high_cents: r.price_high_cents,
         formats: r.formats,
-        our_venue_id: null, // NEVER AUTO-LINKED. The page proposes; a person accepts.
+        /* NEVER AUTO-LINKED FROM A NAME. The only thing that sets these is a person's ruling,
+         * carried forward here from the durable record. */
+        our_venue_id: ruleFor.get(r.facility)?.our_venue_id ?? null,
+        not_ours: ruleFor.get(r.facility)?.not_ours ?? false,
       })));
       if (supErr) throw new Error(`writing facilities: ${supErr.message}`);
 
@@ -344,6 +389,122 @@ export async function POST(req: Request) {
     return Response.json({ outcome: "LANDED", written, logRecorded: audit.logged }, { status: 200 });
   } catch (e) {
     console.error("[api/growth/competitors] POST failed", e);
+    return Response.json({ outcome: "FAILED", error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
+}
+
+/**
+ * IMPORT THE MATCH LOG. Joined to competitor_facility_supply on (source, city_label, facility).
+ *
+ * THE SUMS ARE THE VALIDATION. The log and the weekly summary are two independent recordings of the
+ * same week; if they agree to the spot, both are probably right, and if they do not, one of them is
+ * wrong and importing either would be worse than importing neither. So the totals are checked per
+ * capture BEFORE anything is written, and a mismatch rejects the file.
+ */
+async function importMatchLog(
+  auth: { supabase: SupabaseClient; email?: string | null },
+  csv: string,
+  dryRun: boolean,
+): Promise<Response> {
+  const actor = auth.email ?? "unknown";
+  const { rows, errors } = parseMatchLog(csv);
+  if (errors.length) {
+    return Response.json({
+      outcome: "FAILED",
+      error: `The match log was rejected and nothing was written. ${errors.length} problem${errors.length > 1 ? "s" : ""}:`,
+      problems: errors.slice(0, 20),
+    }, { status: 400 });
+  }
+
+  const sb = auth.supabase;
+  try {
+    const { data: caps } = await sb.from(CAPTURES).select("*");
+    const { data: sup } = await sb.from(SUPPLY).select("id, capture_id, facility, bookable_spots_per_week");
+    const capById = new Map((caps ?? []).map((c) => [Number(c.id), c]));
+    const supKey = new Map<string, { id: number; spots: number }>();
+    for (const s of sup ?? []) {
+      const c = capById.get(Number(s.capture_id));
+      if (!c) continue;
+      supKey.set(`${c.source}|${c.city_label}|${s.facility}`, { id: Number(s.id), spots: Number(s.bookable_spots_per_week) });
+    }
+
+    /* A LOG FACILITY WITH NO SUPPLY ROW REJECTS THE FILE. It is either a new field we have not
+     * captured a summary for, or a spelling the alias map does not know; either way the answer is
+     * a person looking, not a dropped row. */
+    const orphans = [...new Set(rows.map((r) => `${r.source}|${r.city_label}|${r.resolved_facility}`))]
+      .filter((k) => !supKey.has(k));
+    if (orphans.length) {
+      return Response.json({
+        outcome: "FAILED",
+        error: `${orphans.length} facilit${orphans.length === 1 ? "y" : "ies"} in the log have no captured summary row. Nothing was written.`,
+        problems: orphans.map((o) => o.split("|").join(" · ")),
+      }, { status: 400 });
+    }
+
+    /* THE TOTALS, PER CAPTURE, BEFORE ANY WRITE. */
+    const perCapture = new Map<number, { matches: number; spots: number }>();
+    for (const r of rows) {
+      const s = supKey.get(`${r.source}|${r.city_label}|${r.resolved_facility}`)!;
+      const capId = Number((sup ?? []).find((x) => Number(x.id) === s.id)!.capture_id);
+      const cur = perCapture.get(capId) ?? { matches: 0, spots: 0 };
+      cur.matches += 1; cur.spots += r.spots;
+      perCapture.set(capId, cur);
+    }
+    const plan = [...perCapture.entries()].map(([capId, v]) => {
+      const c = capById.get(capId)!;
+      const summarySpots = (sup ?? []).filter((x) => Number(x.capture_id) === capId)
+        .reduce((a, b) => a + Number(b.bookable_spots_per_week), 0);
+      return {
+        capture: `${c.source} ${c.city_label} ${c.window_start}..${c.window_end}`,
+        matches: v.matches, logSpots: v.spots, summarySpots, agrees: v.spots === summarySpots,
+      };
+    });
+    const disagree = plan.filter((p) => !p.agrees);
+    if (disagree.length) {
+      return Response.json({
+        outcome: "FAILED",
+        error: "The match log does not sum to the captured weekly totals. Nothing was written.",
+        problems: disagree.map((d) => `${d.capture}: log ${d.logSpots} spots, summary ${d.summarySpots}`),
+      }, { status: 400 });
+    }
+
+    if (dryRun) return Response.json({ outcome: "DRY RUN", plan }, { status: 200 });
+
+    /* REPLACE THE LOG FOR THE CAPTURES THIS FILE COVERS, and only those. */
+    const supplyIds = [...new Set(rows.map((r) => supKey.get(`${r.source}|${r.city_label}|${r.resolved_facility}`)!.id))];
+    for (let i = 0; i < supplyIds.length; i += 200) {
+      const { error } = await sb.from(MATCHES).delete().in("supply_id", supplyIds.slice(i, i + 200));
+      if (error) throw new Error(`clearing the previous match log: ${error.message}`);
+    }
+    const payload = rows.map((r) => ({
+      supply_id: supKey.get(`${r.source}|${r.city_label}|${r.resolved_facility}`)!.id,
+      match_date: r.match_date, kickoff_local: r.kickoff_local,
+      duration_minutes: r.duration_minutes, format: r.format,
+      spots: r.spots, price_cents: r.price_cents,
+      listing_title: r.listing_title, note: r.note,
+    }));
+    for (let i = 0; i < payload.length; i += 500) {
+      const { error } = await sb.from(MATCHES).insert(payload.slice(i, i + 500));
+      if (error) throw new Error(`writing the match log: ${error.message}`);
+    }
+
+    const audit = await recordWrite(
+      {
+        env: "production", source: "Growth — competitor capture", actorName: actor, actorEmail: actor,
+        saveId: randomUUID(), matchId: null, matchName: null,
+        method: "POST", path: "/growth/competitors/matchlog",
+        body: { rows: rows.length, captures: plan.length }, keys: [], label: (k) => k, applied: () => true,
+        changes: plan.map((pl, i) => ({
+          key: `log-${i}`, field: "Match log imported", before: "—",
+          after: `${pl.capture} · ${pl.matches} matches · ${pl.logSpots} spots, agreeing with the summary`,
+        })),
+      },
+      { readResource: async () => ({}), write: async () => ({ ok: true }), now: () => new Date().toISOString() },
+      supabaseLogStore(),
+    );
+    return Response.json({ outcome: "LANDED", plan, rows: rows.length, logRecorded: audit.logged }, { status: 200 });
+  } catch (e) {
+    console.error("[api/growth/competitors] match log import failed", e);
     return Response.json({ outcome: "FAILED", error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }
