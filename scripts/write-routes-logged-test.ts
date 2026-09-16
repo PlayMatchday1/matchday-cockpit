@@ -139,6 +139,49 @@ for (const r of MONEY_ROUTES) {
   /matchops/.test(raw.split("import")[0]) ? ok("  and the header names the gate the code actually uses") : bad("the aliases header does not name the matchops gate");
 }
 
+/* 6) THE NAMED UNLOCK IS COUNTED, NOT TRUSTED ─────────────────────────────────────────────────
+ * DELETE /admin/matches/{id} stays on the write client's endpoint deny-list and is reachable only
+ * by a caller passing unlock: "delete-match" by name. A named unlock is only worth anything if a
+ * SECOND one is visible the day it appears, so this counts them.
+ *
+ * Match cancel was removed from that deny-list outright in Phase 23 and its protection moved into a
+ * dedicated route. Delete is not being treated the same way, because a cancel leaves a record and a
+ * delete leaves nothing. */
+{
+  const strip = (t: string) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+  const callers: string[] = [];
+  for (const f of files) {
+    if (strip(readFileSync(f, "utf8")).includes('"delete-match"')) callers.push(f);
+  }
+  // src/lib is scanned too: an unlock passed from a helper would be just as reachable as one
+  // passed from a route, and would not show up in the route scan above.
+  const libHits: string[] = [];
+  for (const e of readdirSync("src/lib")) {
+    if (!e.endsWith(".ts")) continue;
+    const p2 = join("src/lib", e);
+    const src = strip(readFileSync(p2, "utf8"));
+    // The definition in matchdayStageApi is the deny-list entry itself, not a call.
+    if (src.includes('"delete-match"') && e !== "matchdayStageApi.ts") libHits.push(p2);
+  }
+  const all = [...callers, ...libHits];
+  all.length === 1
+    ? ok(`exactly one call site unlocks the match-delete endpoint: ${all[0]}`)
+    : bad(`${all.length} call sites unlock the match-delete endpoint`, all.join(", ") || "(none)");
+  const expected = "src/app/api/matchday/[env]/matches/[id]/route.ts";
+  all[0] === expected
+    ? ok("  and it is the delete route, not somewhere else")
+    : bad(`  the unlocked call site is ${all[0]}, expected ${expected}`);
+  /* THE ENTRY IS STILL ON THE LIST. An unlock that worked by deleting the line would pass the count
+   * above and protect nothing. */
+  const client = readFileSync("src/lib/matchdayStageApi.ts", "utf8");
+  /DELETE[\s\S]{0,120}segs: \["admin", "matches", null\]/.test(client)
+    ? ok("  and DELETE /admin/matches/{id} is still ON the deny-list, not removed from it")
+    : bad("  the match-delete deny-list entry is gone, so the unlock guards nothing");
+  /unlock: "delete-match"/.test(client)
+    ? ok("  with the unlock named on the entry itself")
+    : bad("  the deny-list entry carries no named unlock");
+}
+
 console.log(`\nCanonical write endpoints (${WRITE_ENDPOINTS.length}), all via recordWrite:`);
 for (const e of WRITE_ENDPOINTS) console.log(`  · ${e}`);
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -24,6 +24,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCancelMatch, cancelStakes } from "@/lib/useCancelMatch";
+import { rosterRowCounts, type RosterRow as GamedayRosterRow } from "@/lib/gamedayModel";
 import { useCreditEveryone, creditStakes } from "@/lib/useCreditEveryone";
 import { fmtUsd } from "@/lib/creditsModel";
 import { can } from "@/lib/capabilities";
@@ -121,6 +122,21 @@ function hhmmTo12(hhmm: string): string {
   return `${h % 12 || 12}:${m} ${ap}`;
 }
 
+/* THE MATCH TIME FOR THE CONFIRM. start_date carries a Z it does not mean, so the characters are
+ * read straight off the string: no Date is constructed and no zone can shift the day. */
+function delWhen(startDate: string | null | undefined): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(startDate ?? ""));
+  if (!m) return "date unknown";
+  const [, y, mo, d, hh, mi] = m;
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const dow = DOW[new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d))).getUTCDay()];
+  let h = Number(hh);
+  const ap = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  return `${dow} ${Number(d)} ${MON[Number(mo) - 1]} ${y}, ${h}:${mi} ${ap}`;
+}
+
 async function authHeaders(): Promise<Record<string, string> | null> {
   const { data } = await supabase.auth.getSession();
   const t = data.session?.access_token;
@@ -136,7 +152,7 @@ export type PanelSavedPatch = {
   price: number | null; capacity: number | null; minPlayers: number | null; cancelled: boolean;
 };
 
-export default function MatchPanel({ matchId, env = "production", onDirtyChange, onSaved, onCancelLanded, slot }: {
+export default function MatchPanel({ matchId, env = "production", onDirtyChange, onSaved, onCancelLanded, onDeleted, slot }: {
   matchId: string; env?: "production" | "staging";
   /** The recurring slot, from the schedule row. Absent on hosts with no schedule row, and the
    *  CAMERA section below is then absent rather than guessing the key. */
@@ -146,6 +162,9 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
   onSaved?: (patch: PanelSavedPatch) => void;
   /** Fired ONLY when a cancel is confirmed LANDED by the re-read. Never on NOT APPLIED or UNKNOWN. */
   onCancelLanded?: () => void;
+  /** Fired ONLY when a delete is confirmed LANDED by a 404 read-back. The host drops the row and
+   *  its counts; the match no longer exists anywhere to be re-read. */
+  onDeleted?: (matchApiId: number) => void;
 }) {
   // THE SAME RULE THE ROUTE ENFORCES. Not a guess and not a second copy — matchEditAccess() is
   // pinned to adminGate + deriveMatchOpsFlags by an equivalence assertion in matchops-auth-test.
@@ -235,6 +254,36 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
   // cannot be undone, so the friction is deliberately the opposite of the chat composer: live numbers
   // read at confirm time + the match NAME typed, not a yes/no.
   const [cancelOpen, setCancelOpen] = useState(false);
+  /* ── DELETE A CANCELLED MATCH ─────────────────────────────────────────────────────────────
+   * Ryan: "we dont want it counting as a cancelled match because it confuses the data." The
+   * section exists ONLY on a cancelled match; on a live one there is no control to disable. */
+  const [delOpen, setDelOpen] = useState(false);
+  const [delBusy, setDelBusy] = useState(false);
+  const [delResult, setDelResult] = useState<string | null>(null);
+
+  /* THE DELETE ITSELF. One request, no retry: a write that destroys a record must never fire twice
+   * because the first answer was slow. `delBusy` is set before the fetch and cleared only when it
+   * resolves, and the button is disabled on it. */
+  const runDelete = useCallback(async () => {
+    if (delBusy) return;
+    setDelBusy(true); setDelResult(null);
+    try {
+      const headers = await authHeaders();
+      const res = await fetch(`/api/matchday/${env}/matches/${matchId}`, {
+        method: "DELETE", headers: headers ?? {},
+      });
+      const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; players?: number };
+      if (res.ok && j.ok) {
+        setDelOpen(false);
+        setDelResult("Deleted. The match is gone from MatchDay and off the grid.");
+        onDeleted?.(Number(matchId));
+      } else {
+        setDelResult(j.error ?? `Delete failed (HTTP ${res.status}). Nothing was deleted.`);
+      }
+    } catch (e) {
+      setDelResult(`${e instanceof Error ? e.message : String(e)}. Nothing was deleted.`);
+    } finally { setDelBusy(false); }
+  }, [delBusy, env, matchId, onDeleted]);
 
   const load = useCallback(async () => {
     setLoadErr(null);
@@ -2295,6 +2344,65 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
             )}
             {cancel.result && <div className="mp-note info" data-testid="mp-cancel-result" style={{ marginTop: 10 }}>{cancel.result}</div>}
           </div>
+
+          {/* ── DELETE, AND ONLY ON A CANCELLED MATCH ────────────────────────────────────────
+              THE SECTION DOES NOT EXIST ON A LIVE MATCH. Not a disabled button: there is nothing
+              here at all until the match is cancelled, and the route refuses it anyway because a
+              UI check is not a rule.
+
+              Retool does this with one click and no confirmation and no roster check, relying on
+              the operator having removed the players first. This checks, and says the count. */}
+          {orig?.isCancelled === true && (
+            <div className="mp-danger mp-dz-del" data-testid="mp-del-zone">
+              <div className="mp-danger-hd">DANGER ZONE · DELETE THE MATCH</div>
+              {(() => {
+                const attached = (roster?.players ?? []).filter((r) => rosterRowCounts(r as unknown as GamedayRosterRow)).length;
+                const blocked = attached > 0;
+                return (
+                  <>
+                    {!delOpen ? (
+                      <div className="mp-del-row">
+                        {/* OUTLINED, NOT SOLID. A solid red button in a panel is an invitation and
+                            this is not one; only the confirm's own button is solid. */}
+                        <button type="button" className="mp-delbtn" data-testid="mp-del-open"
+                          disabled={blocked || delBusy} onClick={() => { setDelResult(null); setDelOpen(true); }}>
+                          Delete this match…
+                        </button>
+                        {blocked && (
+                          <span className="mp-del-why" data-testid="mp-del-blocked">
+                            {attached} player{attached === 1 ? " is" : "s are"} still attached. Deleting it would destroy
+                            their record of a match they were refunded for. Remove them from the match first.
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="mp-cancelconfirm" data-testid="mp-del-confirm">
+                        {/* THE CONFIRM NAMES THE MATCH. An operator confirming a destroy should be
+                            reading back the thing in front of them, not trusting the click. */}
+                        <p className="mp-cancel-line" data-testid="mp-del-what">
+                          <b>{orig?.fieldTitle ?? "Unknown field"}</b> · {delWhen(orig?.startDate as string | null)} · match {matchId}
+                        </p>
+                        <p className="mp-cancel-line" data-testid="mp-del-warn">
+                          This is <b>destroyed in MatchDay</b> and <b>cannot be restored</b>. It will leave the
+                          cancellation figures on Slate Review, Cities and the Cancellations lens, which is the
+                          point of doing it.
+                        </p>
+                        <div className="mp-cancel-acts">
+                          <button type="button" className="mp-btn mp-nowrap" data-testid="mp-del-keep"
+                            onClick={() => setDelOpen(false)}>Keep it</button>
+                          <button type="button" className="mp-delbtn mp-delbtn-go mp-nowrap" data-testid="mp-del-go"
+                            disabled={delBusy} onClick={() => void runDelete()}>
+                            {delBusy ? "Deleting…" : "Delete the match"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {delResult && <div className="mp-note info" data-testid="mp-del-result" style={{ marginTop: 10 }}>{delResult}</div>}
+                  </>
+                );
+              })()}
+            </div>
+          )}
         </div>
 
         </fieldset>
@@ -2996,6 +3104,17 @@ const CSS = `
 .mp-cancelbtn{border:1px solid #8a1a12;background:#a4231e;color:#fff;border-radius:9px;padding:0 16px;font:inherit;font-weight:700;cursor:pointer;min-height:40px}
 .mp-cancelbtn:hover:not(:disabled){background:#8a1a12}
 .mp-cancelbtn:disabled{opacity:.5;cursor:not-allowed}
+/* DELETE. The zone sits BELOW the cancel zone, under its own rule, because it is a different and
+   worse act. The button here is OUTLINED, not solid: a solid red button in a panel is an
+   invitation, and only the confirm's own button is solid. */
+.mp-dz-del{margin-top:14px;border-top:1px solid #e6d5d3;padding-top:12px}
+.mp-del-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.mp-delbtn{border:1px solid #a4231e;background:#fff;color:#a4231e;border-radius:9px;padding:0 16px;font:inherit;font-weight:700;cursor:pointer;min-height:40px}
+.mp-delbtn:hover:not(:disabled){background:#fdeae4}
+.mp-delbtn:disabled{opacity:.5;cursor:not-allowed}
+.mp-delbtn-go{background:#a4231e;color:#fff}
+.mp-delbtn-go:hover:not(:disabled){background:#8a1a12}
+.mp-del-why{font-size:12px;color:#8a1a12;line-height:1.45;flex:1;min-width:180px}
 .mp-cancelconfirm{display:block}
 .mp-mgrconfirm{border:1px solid #F0C98A;background:#FFF7EA;border-radius:10px;padding:11px 13px;margin:0 0 10px;font-size:13px;color:#5E3D05;line-height:1.5}
 .mp-mgrconfirm b{display:block;margin-bottom:5px;color:#4A3004}

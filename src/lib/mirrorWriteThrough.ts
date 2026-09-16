@@ -220,3 +220,40 @@ export async function insertMatchMirror(
   }
   return { inserted: true };
 }
+
+/**
+ * TOMBSTONE A MATCH IN THE MIRROR, because it no longer exists upstream.
+ *
+ * ══ WHY THIS IS NOT refreshMatchMirror ═══════════════════════════════════════════════════════
+ * That function copies fields out of the API's own RE-READ. A destroyed match has no re-read: the
+ * by-id endpoint 404s, which is exactly the verdict the delete route uses to decide the write
+ * landed. So there is nothing to copy and this sets the one column the API can never tell us about.
+ *
+ * It lives HERE rather than inline in the route for the reason the mirror-writethrough guard
+ * enforces: every mirror write goes through this module, so there is one place that knows the rules
+ * (production only, the mirror holds production ids) and one place to change them.
+ *
+ * ══ AND THE SYNC CANNOT UNDO IT ══════════════════════════════════════════════════════════════
+ * mdapiMatchesSync's mapMatchToRow sets deleted_at: null on EVERY upsert, deliberately, so a match
+ * that reappears upstream is resurrected. That is safe here only because the delete is HARD:
+ * measured on staging 2609 before this shipped, DELETE removed it from /admin/matches and a by-id
+ * read returned 404. A match the API never returns again is never upserted again. If MatchDay ever
+ * makes that a soft delete, this tombstone starts getting cleared on the next sync and the carve-out
+ * has to move into the sync itself.
+ */
+export async function tombstoneMatchMirror(
+  supabase: SupabaseClient,
+  env: string,
+  matchApiId: number,
+): Promise<{ tombstoned: boolean; reason?: string }> {
+  // THE MIRROR HOLDS PRODUCTION IDS. A staging delete must never tombstone a production row that
+  // happens to share a number.
+  if (env !== "production") return { tombstoned: false, reason: "staging: the mirror holds production ids" };
+  const { error } = await supabase
+    .from("mdapi_matches")
+    .update({ deleted_at: new Date().toISOString() })
+    .eq("api_id", matchApiId)
+    .is("deleted_at", null); // already tombstoned is not a failure
+  if (error) return { tombstoned: false, reason: error.message };
+  return { tombstoned: true };
+}

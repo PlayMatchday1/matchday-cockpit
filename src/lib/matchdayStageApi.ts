@@ -226,8 +226,27 @@ import { DENY_WRITE_FIELDS } from "./denyWriteFields";
 // the Retool prod export proved Retool cancels with this SINGLE PATCH and no separate credit/notify
 // call (there is no credit/notify endpoint or non-MatchDay host anywhere in the export) — the credit
 // and the SMS are server-side effects of /cancel. Calling it alone therefore reproduces Retool exactly.
-const DENY_WRITE_ENDPOINTS: { method: string; segs: (string | null)[]; why: string }[] = [
-  { method: "DELETE", segs: ["admin", "matches", null], why: "permanently destroys the match" },
+//
+// ══ DELETE /admin/matches/{id} IS STILL ON THIS LIST, AND STAYS ON IT ═══════════════════════════
+// It is reachable by ONE call site, which passes unlock: "delete-match" by name. Everything else in
+// the codebase is refused exactly as before.
+//
+// WHY NOT REMOVE THE LINE, THE WAY CANCEL WAS. Match cancel was taken off this list OUTRIGHT in
+// Phase 23 Step 2 Part C and its protection moved into a dedicated route. Delete is deliberately
+// NOT being treated the same way: A CANCEL LEAVES A RECORD AND A DELETE LEAVES NOTHING. A wrong
+// cancel is visible on every screen that counts cancellations and can be reasoned about afterwards;
+// a wrong delete leaves no row to find, upstream or here.
+//
+// AND THE THREAT MODEL IS NOT THE FEATURE. This guard matches on (method, path shape) and cannot
+// see its caller, so it was never protecting against a considered delete route. It protects against
+// the paths that are NOT that route: a mis-templated URL that lands an id in the wrong segment, a
+// future caller copying the neighbouring DELETE /admin/matches/user-matches/{id} (one segment away
+// and legitimately allowed), a screen shipping a destructive control without review. Removing the
+// line would make apiWrite(env, "DELETE", "/admin/matches/" + id) succeed from anywhere, forever.
+// A named unlock keeps the default refusal and makes the exceptions countable: see
+// scripts/write-routes-logged-test.ts, which asserts there is exactly one.
+const DENY_WRITE_ENDPOINTS: { method: string; segs: (string | null)[]; why: string; unlock?: string }[] = [
+  { method: "DELETE", segs: ["admin", "matches", null], why: "permanently destroys the match", unlock: "delete-match" },
   { method: "PATCH", segs: ["admin", "matches", null, "players", null, "refund-and-cancel"], why: "refunds money and cancels the player (moves money)" },
 ];
 // Parse a URL to its clean path segments: drop the query, ignore a trailing slash,
@@ -237,8 +256,15 @@ function pathSegments(url: string): string[] | null {
   try { pathname = new URL(url).pathname; } catch { return null; }
   return pathname.replace(/\/+$/, "").split("/").filter(Boolean);
 }
+/** The name a caller must pass to reach a denied endpoint. One string, one call site. */
+export type WriteUnlock = "delete-match";
+
 // Throws BEFORE any network call if (method, path) matches a denied endpoint.
-export function assertAllowedEndpoint(method: string, url: string): void {
+//
+// AN UNLOCK IS PER CALL AND BY NAME. It is not a mode, not a flag on the client and not something a
+// route can set once and forget: the caller names the exact shape it means to reach, at the call,
+// and any other denied shape is still refused even with an unlock in hand.
+export function assertAllowedEndpoint(method: string, url: string, unlock?: WriteUnlock): void {
   const segs = pathSegments(url);
   if (!segs) return;
   const m = method.toUpperCase();
@@ -246,6 +272,7 @@ export function assertAllowedEndpoint(method: string, url: string): void {
     if (d.method !== m) continue;
     if (segs.length !== d.segs.length) continue;
     if (!d.segs.every((want, i) => want === null || want === segs[i])) continue;
+    if (d.unlock && unlock === d.unlock) return; // named, deliberate, and counted by a test
     const shape = "/" + d.segs.map((s) => s === null ? "{id}" : s).join("/");
     throw new DeniedEndpointError(
       `Refusing ${m} ${shape}: this endpoint ${d.why}. It is on the write client's ` +
@@ -305,10 +332,10 @@ export function assertStagingHost(url: string): void { assertAllowedHost("stagin
 // The exact write preflight apiWrite runs, exported so it can be asserted offline.
 // Order: host allowlist -> field deny-list (both envs) -> endpoint deny-list (both
 // envs) -> production bolt. All before any network call.
-export function preflightWrite(env: MatchdayEnv, method: string, url: string, body: unknown): void {
+export function preflightWrite(env: MatchdayEnv, method: string, url: string, body: unknown, unlock?: WriteUnlock): void {
   assertAllowedHost(env, url);
   assertNoDeniedFields(body);
-  assertAllowedEndpoint(method, url);
+  assertAllowedEndpoint(method, url, unlock);
   if (env === "production" && !PRODUCTION_WRITES_ENABLED) {
     throw new ProductionWriteBoltedError(
       `Refusing PRODUCTION write to ${url}: production writes are bolted (PRODUCTION_WRITES_ENABLED=false). ` +
@@ -392,7 +419,7 @@ export async function apiGet<T = unknown>(env: MatchdayEnv, path: string, query?
 }
 
 // WRITES — env-explicit, single-shot, host-allowlisted, deny-listed, prod-bolted.
-export async function apiWrite<T = unknown>(env: MatchdayEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor, requires: "edit" | "manage" | "promos" | "city" | "credits" = "edit"): Promise<T> {
+export async function apiWrite<T = unknown>(env: MatchdayEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor, requires: "edit" | "manage" | "promos" | "city" | "credits" = "edit", unlock?: WriteUnlock): Promise<T> {
   // STEP 2 in the write pipeline (authenticated is step 1, in the route): does the caller
   // hold the required authority — EDIT MATCHES for match/roster writes, MANAGE PLAYERS for
   // ban writes, MANAGE PROMOS for promo writes? These are INDEPENDENT grants; each path names
@@ -411,7 +438,10 @@ export async function apiWrite<T = unknown>(env: MatchdayEnv, method: "POST" | "
   }
   const { baseUrl } = getCreds(env);
   const url = buildUrl(baseUrl, path);
-  preflightWrite(env, method, url, body); // host -> field deny -> endpoint deny -> (prod bolt, already checked), all pre-network
+  /* THE UNLOCK TRAVELS NO FURTHER THAN THIS CALL. It is the last argument, named by the one route
+   * that needs it, and it reaches nothing but the endpoint deny check: the host guard, the field
+   * deny-list, the authority guard and the production bolt are all untouched by it. */
+  preflightWrite(env, method, url, body, unlock); // host -> field deny -> endpoint deny -> (prod bolt, already checked), all pre-network
   const token = await freshToken(env);
 
   let res: Response;

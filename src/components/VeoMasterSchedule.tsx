@@ -1412,6 +1412,11 @@ export default function VeoMasterSchedule() {
              MatchPanel now gates on it, so a failed or unknown outcome leaves the grid exactly as
              it was with the message still on the panel. */
           onCancelLanded={() => { showToast("Match cancelled - schedule refreshed."); void load(weekRef, true); }}
+          /* THE NUMBER MOVING IS THE WHOLE POINT. A deleted match must leave the grid AND both
+             counts, matches and cancelled, in the same beat — waiting for a sync pass would show
+             the operator a row they just destroyed. The route tombstones mdapi_matches in the same
+             operation; this re-reads so the page agrees with it. */
+          onDeleted={() => { closeDrawer(); showToast("Match deleted - it is gone from MatchDay."); void load(weekRef, true); }}
           /* STEPPING THROUGH THE DAY, mapped from the drawer's up/down to the panel's prev/next.
              The dirty guard is openCard's and is unchanged: it refuses to move off a dirty match. */
           steps={{

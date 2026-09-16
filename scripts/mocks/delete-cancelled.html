@@ -1,0 +1,246 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Delete a cancelled match</title>
+<style>
+  :root{ --ink:#12261c; --mut:#5d6b62; --faint:#8b9a91; --line:#dfe5e0; --hair:#eef2ef; --bg:#f4f6f4;
+         --grn:#12402a; --mint:#e6f6ee; --ok:#0d6b45;
+         --amb:#8a5a12; --ambbg:#fdf6e6; --ambline:#ecdcb4;
+         --red:#8c2f1f; --redbg:#fdefec; --redline:#f0c7bd; }
+  *{ box-sizing:border-box }
+  [hidden]{ display:none !important }
+  body{ margin:0; font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg) }
+  .num{ font-variant-numeric:tabular-nums }
+
+  .sw{ display:flex; gap:6px; padding:10px 12px; background:#fff; border-bottom:1px solid var(--line); flex-wrap:wrap; align-items:center }
+  .sw b{ font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--mut); margin-right:2px }
+  .sw button{ font:inherit; font-size:12.5px; font-weight:650; padding:6px 11px; border:1px solid var(--line);
+              background:#fff; color:var(--ink); border-radius:999px; cursor:pointer; min-height:32px }
+  .sw button[aria-pressed="true"]{ background:var(--grn); color:#fff; border-color:var(--grn) }
+
+  .wrap{ padding:16px; max-width:1100px; margin:0 auto; display:grid; grid-template-columns:minmax(0,1fr) 316px; gap:16px }
+  @media (max-width:860px){ .wrap{ grid-template-columns:minmax(0,1fr) } }
+
+  .card{ background:#fff; border:1px solid var(--line); border-radius:11px; overflow:hidden }
+  .chead{ padding:12px 14px; border-bottom:1px solid var(--hair); display:flex; align-items:center; gap:12px; flex-wrap:wrap }
+  .chead h2{ margin:0; font-size:16px; font-weight:800 }
+  .counts{ font-size:12.5px; color:var(--mut); margin-left:auto }
+  .counts b{ color:var(--ink); font-weight:750 }
+
+  .tog{ display:flex; align-items:center; gap:7px; font-size:12.5px; font-weight:600; cursor:pointer;
+        border:1px solid var(--line); border-radius:999px; padding:5px 11px; min-height:32px; background:#fff }
+  .tog[aria-pressed="true"]{ background:var(--mint); border-color:#bfe6d3; color:var(--ok) }
+  .knob{ width:26px; height:15px; border-radius:999px; background:var(--line); position:relative; flex:none }
+  .tog[aria-pressed="true"] .knob{ background:var(--ok) }
+  .knob i{ position:absolute; top:2px; left:2px; width:11px; height:11px; border-radius:50%; background:#fff; transition:left .14s }
+  .tog[aria-pressed="true"] .knob i{ left:13px }
+  @media (prefers-reduced-motion:reduce){ .knob i{ transition:none } }
+
+  .grid{ display:grid; grid-template-columns:repeat(7,minmax(0,1fr)) }
+  .dh{ font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--mut); font-weight:800;
+       padding:7px 8px; background:#fafbfa; border-bottom:1px solid var(--hair) }
+  .cell{ min-height:82px; padding:6px; border-right:1px solid var(--hair); border-bottom:1px solid var(--hair) }
+  .cell:nth-child(7n){ border-right:0 }
+  .dnum{ font-size:11px; color:var(--faint); font-weight:700; margin-bottom:4px }
+  .m{ display:block; width:100%; text-align:left; font:inherit; font-size:11px; font-weight:600; cursor:pointer;
+      border:1px solid #cfe3d6; background:var(--mint); color:var(--ok); border-radius:5px;
+      padding:4px 6px; margin-bottom:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .m.cx{ background:var(--ambbg); border-color:var(--ambline); color:var(--amb); text-decoration:line-through }
+  .m[aria-pressed="true"]{ outline:2px solid var(--grn); outline-offset:1px }
+  .m:focus-visible{ outline:2px solid var(--grn); outline-offset:1px }
+
+  /* ── the panel ─────────────────────────────────────────────────────────── */
+  .panel{ position:sticky; top:16px; align-self:start }
+  .pempty{ padding:16px; font-size:12.5px; color:var(--mut) }
+  .pbody{ padding:14px }
+  .pname{ font-size:15px; font-weight:800 }
+  .pwhen{ font-size:12.5px; color:var(--mut); margin-top:2px }
+  .tag{ display:inline-block; font-size:9.5px; font-weight:800; padding:2px 6px; border-radius:4px; margin-top:8px }
+  .tag.cx{ background:var(--ambbg); color:var(--amb); border:1px solid var(--ambline) }
+  .tag.live{ background:var(--mint); color:var(--ok); border:1px solid #bfe6d3 }
+  .kv{ display:grid; grid-template-columns:auto 1fr; gap:4px 12px; margin-top:12px; font-size:12.5px }
+  .kv dt{ color:var(--mut) } .kv dd{ margin:0; font-weight:600; text-align:right }
+
+  /* DESTRUCTIVE CONTROLS SIT BELOW A RULE, NOT BESIDE THE ROUTINE ONES. */
+  .danger{ margin-top:16px; padding-top:13px; border-top:1px solid var(--line) }
+  .dlbl{ font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--mut); font-weight:800 }
+  .btn{ font:inherit; font-size:12.5px; font-weight:700; padding:8px 13px; border-radius:8px; min-height:36px;
+        border:1px solid var(--line); background:#fff; color:var(--ink); cursor:pointer }
+  .btn.del{ border-color:var(--redline); color:var(--red); background:#fff; margin-top:9px; width:100% }
+  .btn.del:hover:not(:disabled){ background:var(--redbg) }
+  .btn.del:disabled{ opacity:.45; cursor:not-allowed }
+  .btn.danger-solid{ background:var(--red); border-color:var(--red); color:#fff }
+  .why{ margin-top:9px; font-size:12px; line-height:1.5; border-radius:8px; padding:9px 11px }
+  .why.block{ background:var(--ambbg); border:1px solid var(--ambline); color:var(--amb) }
+
+  /* ── confirm ───────────────────────────────────────────────────────────── */
+  .scrim{ position:fixed; inset:0; background:rgba(15,35,26,.34); display:flex; align-items:center;
+          justify-content:center; padding:16px; z-index:20 }
+  .dlg{ background:#fff; border-radius:12px; width:100%; max-width:420px; padding:16px;
+        box-shadow:0 14px 40px rgba(15,35,26,.22) }
+  .dlg h3{ margin:0; font-size:16px; font-weight:800 }
+  .dlg .what{ margin-top:11px; padding:10px 12px; background:#fafbfa; border:1px solid var(--line);
+              border-radius:8px; font-size:13px; font-weight:650 }
+  .dlg .what span{ display:block; font-weight:400; color:var(--mut); font-size:12px; margin-top:2px }
+  .dlg .warn{ margin-top:11px; font-size:12.5px; color:var(--red); line-height:1.5 }
+  .dbtns{ display:flex; gap:8px; justify-content:flex-end; margin-top:16px; flex-wrap:wrap }
+
+  .note{ grid-column:1 / -1; font-size:11.5px; color:var(--mut); line-height:1.5 }
+</style>
+
+<div class="sw">
+  <b>Match</b>
+  <button data-s="clean" aria-pressed="true">Cancelled, empty</button>
+  <button data-s="players" aria-pressed="false">Cancelled, 3 players</button>
+  <button data-s="live" aria-pressed="false">Not cancelled</button>
+</div>
+
+<div class="wrap">
+  <div class="card">
+    <div class="chead">
+      <h2>Master Schedule</h2>
+      <button class="tog" data-testid="showcx" aria-pressed="true">
+        <span class="knob"><i></i></span>Show cancelled in grid</button>
+      <span class="counts" data-testid="counts"></span>
+    </div>
+    <div class="grid" id="grid"></div>
+  </div>
+
+  <div class="card panel" data-testid="panel"></div>
+
+  <div class="note">
+    Back Office · September 2026 · Houston · ATH Pearland. Example week.
+  </div>
+</div>
+
+<div id="dlgroot"></div>
+
+<script>
+/* THE MATCHES. `players` is who is still attached AFTER the cancellation: a cancelled match can
+ * still carry a roster, and deleting one that does is how a player loses a record of a match they
+ * were refunded for. Retool does not check it; this does. */
+const seed = () => ([
+  { id: 18601, day: 14, field: "ATH Pearland", time: "9:15 PM", price: 12, cancelled: false, players: 40 },
+  { id: 18602, day: 15, field: "ATH Pearland", time: "9:15 PM", price: 12, cancelled: false, players: 35 },
+  { id: 18603, day: 16, field: "ATH Pearland", time: "9:15 PM", price: 12, cancelled: true,  players: 0  },
+  { id: 18604, day: 17, field: "ATH Pearland", time: "9:15 PM", price: 12, cancelled: false, players: 2  },
+  { id: 18605, day: 18, field: "ATH Pearland", time: "8:15 PM", price: 12, cancelled: true,  players: 0  },
+  { id: 18606, day: 18, field: "ATH Pearland", time: "9:15 PM", price: 12, cancelled: false, players: 1  },
+  { id: 18607, day: 19, field: "ATH Pearland", time: "8:00 PM", price: 12, cancelled: false, players: 0  },
+  { id: 18608, day: 20, field: "ATH Pearland", time: "9:15 PM", price: 12, cancelled: false, players: 0  },
+]);
+
+let MATCHES = seed();
+let showCx = true, picked = null, confirming = false, scenario = "clean";
+
+// The scenario switch edits the match the reader will click, so all three states are one click away.
+function applyScenario(s){
+  scenario = s; MATCHES = seed(); picked = null; confirming = false;
+  const m = MATCHES.find(x => x.id === 18603);
+  if (s === "players") m.players = 3;
+  if (s === "live")    { m.cancelled = false; m.players = 22; }
+}
+
+const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+const dateOf = d => `${DAYS[(d - 14) % 7]} ${d} Sep 2026`;
+const alive = () => MATCHES;                       // nothing is hidden from the counts
+const cxCount = () => MATCHES.filter(m => m.cancelled).length;
+
+// ── WHY A DELETE IS OR IS NOT ALLOWED. One function, so the button, the reason and the confirm
+//    can never disagree about it.
+function deletable(m){
+  if (!m) return { ok:false, reason:"none" };
+  if (!m.cancelled) return { ok:false, reason:"not-cancelled" };
+  if (m.players > 0) return { ok:false, reason:"has-players" };
+  return { ok:true, reason:"ok" };
+}
+
+function render(){
+  document.querySelectorAll('.sw button').forEach(b =>
+    b.setAttribute("aria-pressed", String(b.dataset.s === scenario)));
+  document.querySelector('[data-testid="showcx"]').setAttribute("aria-pressed", String(showCx));
+
+  document.querySelector('[data-testid="counts"]').innerHTML =
+    `<b class="num" data-testid="c-total">${alive().length}</b> matches · ` +
+    `<b class="num" data-testid="c-cx">${cxCount()}</b> cancelled`;
+
+  document.getElementById("grid").innerHTML =
+    DAYS.map(d => `<div class="dh">${d}</div>`).join("") +
+    [14,15,16,17,18,19,20].map(day => {
+      const list = MATCHES.filter(m => m.day === day && (showCx || !m.cancelled));
+      return `<div class="cell">
+        <div class="dnum">${day}</div>
+        ${list.map(m => `<button class="m ${m.cancelled ? "cx" : ""}" type="button"
+           data-testid="chip" data-id="${m.id}" aria-pressed="${picked === m.id}"
+           title="${m.time} ${m.field}">${m.time} ${m.field}</button>`).join("")}
+      </div>`;
+    }).join("");
+
+  const m = MATCHES.find(x => x.id === picked) ?? null;
+  const panel = document.querySelector('[data-testid="panel"]');
+  if (!m) {
+    panel.innerHTML = `<div class="pempty" data-testid="p-empty">Pick a match in the grid.</div>`;
+  } else {
+    const d = deletable(m);
+    panel.innerHTML = `<div class="pbody">
+      <div class="pname" data-testid="p-name">${m.field}</div>
+      <div class="pwhen" data-testid="p-when">${dateOf(m.day)} · ${m.time}</div>
+      <span class="tag ${m.cancelled ? "cx" : "live"}" data-testid="p-state">${m.cancelled ? "CANCELLED" : "SCHEDULED"}</span>
+      <dl class="kv">
+        <dt>Match ID</dt><dd class="num" data-testid="p-id">${m.id}</dd>
+        <dt>Players attached</dt><dd class="num" data-testid="p-players">${m.players}</dd>
+        <dt>Price</dt><dd class="num">$${m.price.toFixed(2)}</dd>
+      </dl>
+
+      ${m.cancelled ? `<div class="danger" data-testid="danger">
+        <div class="dlbl">Delete</div>
+        <button class="btn del" type="button" data-testid="del" ${d.ok ? "" : "disabled"}>Delete this match</button>
+        ${d.reason === "has-players" ? `<div class="why block" data-testid="blocked">
+          ${m.players} player${m.players === 1 ? " is" : "s are"} still attached. Remove them first;
+          deleting now would destroy their record of a match they were refunded for.</div>` : ""}
+      </div>` : ""}
+    </div>`;
+  }
+
+  // ── THE CONFIRM. It names the match, and it says what cannot be undone.
+  document.getElementById("dlgroot").innerHTML = !confirming || !m ? "" :
+    `<div class="scrim" data-testid="scrim">
+      <div class="dlg" role="dialog" aria-modal="true" aria-label="Delete this match">
+        <h3>Delete this match?</h3>
+        <div class="what" data-testid="d-what">${m.field}
+          <span>${dateOf(m.day)} · ${m.time} · match ${m.id}</span></div>
+        <div class="warn" data-testid="d-warn">This destroys the match in MatchDay. It cannot be
+          restored, and it will disappear from every report that counts it, including the
+          cancellation figures.</div>
+        <div class="dbtns">
+          <button class="btn" type="button" data-testid="d-cancel">Keep it</button>
+          <button class="btn danger-solid" type="button" data-testid="d-go">Delete permanently</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+document.addEventListener("click", e => {
+  const sw = e.target.closest('.sw button');
+  if (sw) { applyScenario(sw.dataset.s); render(); return; }
+
+  if (e.target.closest('[data-testid="showcx"]')) {
+    showCx = !showCx;
+    // A hidden match cannot stay selected, or the panel describes something off screen.
+    if (!showCx && picked != null && MATCHES.find(x => x.id === picked)?.cancelled) picked = null;
+    render(); return;
+  }
+
+  const chip = e.target.closest('[data-testid="chip"]');
+  if (chip) { picked = Number(chip.dataset.id); render(); return; }
+
+  if (e.target.closest('[data-testid="del"]'))      { confirming = true;  render(); return; }
+  if (e.target.closest('[data-testid="d-cancel"]')) { confirming = false; render(); return; }
+  if (e.target.closest('[data-testid="d-go"]')) {
+    MATCHES = MATCHES.filter(x => x.id !== picked);
+    picked = null; confirming = false; render(); return;
+  }
+});
+
+applyScenario("clean");
+render();
+</script>

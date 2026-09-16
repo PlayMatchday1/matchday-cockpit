@@ -10,12 +10,12 @@ import { authenticateCapability } from "@/lib/capabilityAuth";
 import { authenticateMatchOpsRead, assertMatchInScope } from "@/lib/matchOpsAuth"; // GET is a Match Ops READ (Part D round 2); PUT stays admin + EDIT MATCHES
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, StageHostGuardError, StageConfigError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { EDITABLE_KEYS } from "@/lib/matchEditModel";
-import { realOccupancyFromRoster, type RosterRow } from "@/lib/gamedayModel";
+import { realOccupancyFromRoster, rosterRowCounts, type RosterRow } from "@/lib/gamedayModel";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 // The refusal wording lives with the rule (matchEditAccess.ts) so the panel and this route cannot
 // say different things about the same denial. The GATE below is unchanged.
 import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
-import { refreshMatchMirror } from "@/lib/mirrorWriteThrough";
+import { refreshMatchMirror, tombstoneMatchMirror } from "@/lib/mirrorWriteThrough";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -191,6 +191,123 @@ export async function PUT(req: Request, ctx: { params: Promise<{ env: string; id
     return Response.json({
       ok: true, outcome, logRecorded: logged, match: pickMatch(cached),
       mirrored: mirror.refreshed, mirrorReason: mirror.reason ?? null,
+    });
+  } catch (e) {
+    return errToResponse(e);
+  }
+}
+
+/* ── DELETE A CANCELLED MATCH ─────────────────────────────────────────────────────────────────
+ *
+ * Ryan: "in retool we have this removed cancelled match for deleting matches so they dont show as
+ * cancelled. For instance we dont have the reservation or something changed. We dont want it
+ * counting as a cancelled match because it confuses the data."
+ *
+ * WHAT RETOOL DOES, read out of retool-export-prod.json rather than guessed: a DELETE against
+ * /admin/matches/{selectedRow.id} with requireConfirmation FALSE. One click, no confirm, no roster
+ * check. It relies entirely on the operator having used "Remove Player From Match" first.
+ *
+ * THIS ROUTE CHECKS INSTEAD OF RELYING. Four refusals before any upstream call, in this order:
+ *
+ *   1. EDIT MATCHES, the same capability the PUT above uses. Not a new grant.
+ *   2. The match is in the caller's city. assertMatchInScope, same as the PUT: filtering a list is
+ *      not authorisation and a confined account must not act on an id it was never shown.
+ *   3. The match is CANCELLED. A live match can never be deleted here. The panel renders no control
+ *      at all on one, and this refuses it anyway, because a UI check is not a rule.
+ *   4. The match has NO PLAYERS ATTACHED, counted from the live roster and refused WITH the count.
+ *      A cancelled match can still carry a roster, and deleting one destroys a player's record of a
+ *      match they were refunded for.
+ *
+ * THE UPSTREAM DELETE IS HARD. Proven on staging 2609 before this was written: after DELETE the
+ * match is gone from /admin/matches (45 rows to 44) and a by-id read 404s. That matters because
+ * mdapiMatchesSync's mapMatchToRow sets deleted_at: null on EVERY upsert, deliberately, so a match
+ * that came back upstream would clear our tombstone. It cannot come back, so it cannot.
+ */
+export async function DELETE(req: Request, ctx: { params: Promise<{ env: string; id: string }> }) {
+  const auth = await authenticateCapability(req, "editMatches");
+  if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
+  const { env, id } = await ctx.params;
+
+  {
+    const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, id);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  }
+  if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });
+  if (!/^\d+$/.test(id)) return Response.json({ error: "Match id must be numeric" }, { status: 400 });
+
+  try {
+    /* READ THE MATCH FIRST, and refuse on what it says rather than on what the caller claims. */
+    const match = await apiGet<Record<string, unknown>>(env, `/admin/matches/${id}`);
+    if (match?.isCancelled !== true) {
+      return Response.json({
+        error: "This match is not cancelled. Only a cancelled match can be deleted, and cancelling is a different act with its own confirmation.",
+      }, { status: 409 });
+    }
+
+    /* THE ROSTER, COUNTED. rosterRowCounts is the one predicate for "this row occupies a spot" and
+     * is used here rather than _count.players so the refusal can name a number the operator can go
+     * and act on. */
+    const roster = await apiGet<RosterRow[]>(env, `/admin/matches/${id}/players`).catch(() => [] as RosterRow[]);
+    const attached = (Array.isArray(roster) ? roster : []).filter(rosterRowCounts).length;
+    if (attached > 0) {
+      return Response.json({
+        error: `${attached} player${attached === 1 ? " is" : "s are"} still attached to this match. Deleting it would destroy their record of a match they were refunded for. Remove them from the match first.`,
+        players: attached,
+      }, { status: 409 });
+    }
+
+    const field = (match.field ?? {}) as Record<string, unknown>;
+    const label = `${(field.title as string) ?? "unknown field"} · ${String(match.startDate ?? "").slice(0, 16)}`;
+    const readBack = async (): Promise<Record<string, unknown>> => {
+      /* THE VERDICT IS A 404. A destroyed match is not "a match with a flag"; the only honest
+       * read-back is that the upstream record has stopped existing. */
+      try { await apiGet(env, `/admin/matches/${id}`); return { present: true }; }
+      catch { return { present: false }; }
+    };
+
+    const { outcome, error, logged } = await recordWrite(
+      {
+        env, source: "Master Schedule · delete cancelled match",
+        actorName: auth.email, actorEmail: auth.email,
+        saveId: randomUUID(), matchId: Number(id), matchName: (match.name as string) ?? null,
+        method: "DELETE", path: `/admin/matches/${id}`,
+        body: { id: Number(id) }, keys: [], label: (k) => k,
+        applied: (_b, a) => a.present === false,
+        changes: [
+          { key: "deleted", field: "Match deleted in MatchDay", before: label, after: "— (destroyed, cannot be restored)" },
+          { key: "was_cancelled", field: "Was cancelled", before: true, after: "— (row gone)" },
+          { key: "players", field: "Players attached at delete", before: 0, after: 0 },
+        ],
+      },
+      {
+        readResource: readBack,
+        write: async () => apiWrite(
+          env, "DELETE", `/admin/matches/${id}`, undefined,
+          { canEditMatches: true, email: auth.email },
+          "edit",
+          /* THE ONE UNLOCKED CALL SITE IN THE CODEBASE. scripts/write-routes-logged-test.ts asserts
+           * there is exactly one and that it is this file. */
+          "delete-match",
+        ),
+        now: () => new Date().toISOString(),
+      },
+      supabaseLogStore(),
+    );
+
+    if (error) return errToResponse(error);
+    if (outcome !== "landed") {
+      return Response.json({ error: `The delete did not confirm (${outcome}). Nothing was retried.`, outcome }, { status: 502 });
+    }
+
+    /* THE MIRROR, IN THE SAME OPERATION. Without this the grid and every count that reads
+     * mdapi_matches keep showing the match until a sync pass, and the number moving is the whole
+     * point of the feature. Production only: the mirror holds production ids. */
+    const mirror = await tombstoneMatchMirror(auth.supabase, env, Number(id));
+
+    return Response.json({
+      ok: true, outcome, logRecorded: logged,
+      tombstoned: mirror.tombstoned, mirrorReason: mirror.reason ?? null,
+      deleted: Number(id),
     });
   } catch (e) {
     return errToResponse(e);

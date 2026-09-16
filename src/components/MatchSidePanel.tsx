@@ -25,7 +25,7 @@ export type PanelTab = "details" | "chat";
 
 export default function MatchSidePanel({
   matchId, tab, onTab, onClose, width, right = 0, className = "", notice, steps, onDirtyChange,
-  onSaved, onCancelLanded, slot,
+  onSaved, onCancelLanded, onDeleted, slot,
 }: {
   /** The match api id. It is ALSO the chat id — proven, and no second lookup. */
   matchId: number;
@@ -51,6 +51,8 @@ export default function MatchSidePanel({
    * reload; a host without one passes neither and the panel behaves exactly as it did. */
   onSaved?: (patch: PanelSavedPatch) => void;
   onCancelLanded?: () => void;
+  /** Fired only when a delete is confirmed LANDED by a 404 read-back. */
+  onDeleted?: (matchApiId: number) => void;
 }) {
   return (
     <aside className={`gpanel ${className}`} data-testid="gday-panel"
@@ -82,7 +84,7 @@ export default function MatchSidePanel({
       <div className={"gpanel-body" + (tab === "details" ? "" : " gpanel-hide")}
         data-testid="gday-panel-details" aria-hidden={tab !== "details"}>
         <MatchPanel key={matchId} matchId={String(matchId)} onDirtyChange={onDirtyChange}
-          onSaved={onSaved} onCancelLanded={onCancelLanded} slot={slot} />
+          onSaved={onSaved} onCancelLanded={onCancelLanded} onDeleted={onDeleted} slot={slot} />
       </div>
       {/* CHAT RESOLVES THE THREAD THE WAY IT WAS PROVEN TO RESOLVE: chatId is the match api_id. */}
       <div className={"gpanel-body gpanel-chat" + (tab === "chat" ? "" : " gpanel-hide")}
