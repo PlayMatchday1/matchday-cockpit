@@ -9,16 +9,16 @@ import "server-only"; // no-op under --conditions=react-server
 // this deliberately does not reuse it: a mirror can agree with the page today and drift tomorrow,
 // and the whole point of this file is to catch exactly that kind of divergence.
 //
-// THE BEFORE COLUMN COMES FROM THE BACKUP. fin_venue_cost_overrides_bak_20260916 holds the override
-// set as it stood before the load, so before and after are the same code path over two override
+// THE BEFORE COLUMN COMES FROM A BACKUP, named by SNAPSHOT. Each change takes its own before it
+// writes, so before and after are always the same code path over two override
 // sets rather than two different calculations. That is what makes the month-shift arithmetic
 // trustworthy: any difference is the data, never the method.
 import { readFileSync } from "node:fs";
 
 import { canonicalVenueCost, isEventSchedule } from "../src/lib/financeCosts";
-import { resolveSplitRateVenueId } from "../src/lib/venueGroups";
+import { resolveSplitRateVenueId, groupVenues } from "../src/lib/venueGroups";
 import { venueCategory } from "../src/lib/venueResolver";
-import { emptyMdapiMemberSpotIndex } from "../src/lib/financeStats";
+import { emptyMdapiMemberSpotIndex, legPerMatchUnitCost, venueChargedMatchCountFor } from "../src/lib/financeStats";
 import { buildPartnerPayoutsByVenueMonth, fetchAllEnabledPartnerDashboards } from "../src/lib/partnerStats";
 import { fetchLegacyMatchRegistrations } from "../src/lib/mdapiMatchesRead";
 import { createClient } from "@supabase/supabase-js";
@@ -58,17 +58,24 @@ async function all<T = Record<string, unknown>>(path: string): Promise<T[]> {
   }
 }
 
+// Which snapshot is "before". bak_20260916 is the pre-everything state; bak_20260917_twins is the
+// state after the 184-row load and before the twin legs were zeroed.
+const SNAPSHOT = process.env.SNAPSHOT || "fin_venue_cost_overrides_bak_20260917_twins";
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug"];
 const MONTHS = MON.map((m) => `${m} 2026`) as Q2Month[];
 const RECONCILED = [8, 11, 2, 7, 13, 4, 54, 3, 9, 15, 21, 17, 20, 16, 6, 19, 65, 12, 10, 64, 22];
 const FREE = [5, 55];
-const IN_SCOPE = [...RECONCILED, ...FREE];
+// The two split-rate secondary legs, zeroed in the follow-on change. No mdapi field links to
+// either; resolveSplitRateVenueId is the only way a match reaches them, which is why a count that
+// stops at fin_venue_fields saw them as empty and this load originally left them out.
+const TWINS = [53, 23];
+const IN_SCOPE = [...RECONCILED, ...FREE, ...TWINS];
 const LABEL_OF: Record<number, string> = {
   8: "ATH Pearland", 11: "Soccer Central", 2: "NEMP", 7: "ATH Katy", 13: "Bicentennial", 4: "RRMPC",
   54: "Strike", 3: "Hattrick Leander", 9: "KISC", 15: "Majestic", 21: "Scissortail",
   17: "Hammond Park", 20: "Centennial Commons", 16: "PRUMC", 6: "Stony Point", 19: "Lou Indoor",
   65: "Ann Richards", 12: "STAR", 10: "PAC Global", 64: "Zipp Family", 22: "Galatzan Park",
-  5: "Onion Creek", 55: "LBJ Early College HS",
+  5: "Onion Creek", 55: "LBJ Early College HS", 53: "Soccer Central Tourn.", 23: "ATH Katy Sunday",
 };
 const money = (n: number) => (n < 0 ? "-" : "") + "$" +
   Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -81,12 +88,19 @@ async function build() {
   const venuesRaw = await all("fin_venues?select=*&order=id");
   const links = await all("fin_venue_fields?select=*");
   const liveOv = await all("fin_venue_cost_overrides?select=*");
-  const bakOv = await all("fin_venue_cost_overrides_bak_20260916?select=*");
+  const bakOv = await all(`${SNAPSHOT}?select=*`);
   const dashRaw = await all("partner_dashboards?select=*");
+  // venue_name is the POST-alias canonical name and raw_venue_name the DB one. groupVenues buckets
+  // on venue_name; resolveSplitRateVenueId matches COMBINE_BY_NAME on raw_venue_name. Conflating
+  // them makes the harness group venues differently from the page.
+  const aliases = new Map<string, string>(
+    (await all("fin_venue_aliases?select=alias,canonical_venue")).map((a) => [String(a.alias), String(a.canonical_venue)]),
+  );
 
   const venues = venuesRaw.map((v) => ({
     ...v,
-    raw_venue_name: (v.raw_venue_name as string) ?? (v.venue_name as string),
+    venue_name: aliases.get(String(v.venue_name)) ?? v.venue_name,
+    raw_venue_name: v.venue_name as string,
     charge_on_cancel: v.charge_on_cancel !== false,
     bills_per_reservation: v.bills_per_reservation === true,
   })) as unknown as FinVenue[];
@@ -188,10 +202,20 @@ console.log(`overrides: live ${liveOv.length}, backup ${bakOv.length}\n`);
 console.log("=== 0. THE HARNESS ITSELF ===");
 ok("the schedule is not empty", counts.alive > 0, `${counts.alive} alive rows`);
 ok("pagination did not silently truncate at 1000", counts.raw > 1000, `${counts.raw} rows`);
-const modelProbe = canonicalVenueCost(before, 8, "Jan 2026");
+// DERIVE, DO NOT PIN. The first version named ATH Pearland Jan 2026, which was modelled before the
+// first load and an override after it, so the control went red the moment the snapshot moved on.
+// Search for any venue-month that is genuinely modelled in whichever snapshot is loaded.
+let modelProbe: { id: number; m: Q2Month; kind: string; amount: number; n: number } | null = null;
+for (const v of venues) {
+  for (const m of MONTHS) {
+    const c = canonicalVenueCost(before, v.id, m);
+    if (c.kind === "per_match" && c.amount > 0) { modelProbe = { id: v.id, m, kind: c.kind, amount: c.amount, n: c.matchCount }; break; }
+  }
+  if (modelProbe) break;
+}
 ok("CONTROL: the model path computes a non-override figure somewhere",
-  modelProbe.kind === "per_match" && modelProbe.amount > 0,
-  `ATH Pearland Jan 2026 before = ${modelProbe.kind} ${money(modelProbe.amount)} on ${modelProbe.matchCount} matches`);
+  modelProbe != null,
+  modelProbe ? `venue ${modelProbe.id} ${modelProbe.m} = ${modelProbe.kind} ${money(modelProbe.amount)} on ${modelProbe.n} matches` : "no modelled venue-month found anywhere");
 
 // ── 1. THE TOTAL, TO THE CENT ───────────────────────────────────────────────────────────────────
 console.log("\n=== 1. THE 21 RECONCILED VENUES, JAN-AUG, THROUGH canonicalVenueCost ===");
@@ -210,6 +234,14 @@ ok("16 rows for the two free venues", freeRows.length === 16, `${freeRows.length
 ok("every free row is zero with the free reason",
   freeRows.every((o) => Number(o.override_amount) === 0 && String(o.reason).startsWith("Free field, no charge")),
   `${freeRows.filter((o) => Number(o.override_amount) === 0).length}/16 zero`);
+const twinRows = liveOv.filter((o) => TWINS.includes(Number(o.venue_id)) && MONTHS.includes(o.month as Q2Month));
+const twinKeys = twinRows.map((o) => `${o.venue_id}|${o.month}`);
+ok("16 rows for the two twin legs", twinRows.length === 16, `${twinRows.length}`);
+ok("no duplicates on (venue_id, month) across the twins", new Set(twinKeys).size === twinKeys.length,
+  `${twinKeys.length} rows, ${new Set(twinKeys).size} keys`);
+ok("every twin row is zero with the twin-leg reason",
+  twinRows.every((o) => Number(o.override_amount) === 0 && String(o.reason).startsWith("Split-rate twin leg")),
+  `${twinRows.filter((o) => Number(o.override_amount) === 0).length}/16 zero`);
 
 // ── 3. EVERY CELL READS AS AN OVERRIDE ──────────────────────────────────────────────────────────
 // This is also what makes item 1 sound: kind "override" means the amount came from the override
@@ -220,11 +252,14 @@ for (const id of IN_SCOPE) for (const m of MONTHS) {
   const c = canonicalVenueCost(after, id, m);
   if (c.kind !== "override") notOverride.push(`${LABEL_OF[id]} ${m} = ${c.kind}`);
 }
-ok("all 184 in-scope cells read override", notOverride.length === 0, notOverride.slice(0, 4).join("; ") || "none missed");
+ok(`all ${IN_SCOPE.length * MONTHS.length} in-scope cells read override`, notOverride.length === 0, notOverride.slice(0, 4).join("; ") || "none missed");
 // The negative control: the same assertion against the BEFORE data must fail, or it proves nothing.
 let beforeOverrides = 0;
 for (const id of IN_SCOPE) for (const m of MONTHS) if (canonicalVenueCost(before, id, m).kind === "override") beforeOverrides++;
-ok("CONTROL: before the load only 22 of 184 read override", beforeOverrides === 22, `${beforeOverrides}`);
+const cellCount = IN_SCOPE.length * MONTHS.length;
+ok("CONTROL: strictly fewer cells read override in the snapshot than now",
+  beforeOverrides < cellCount,
+  `${beforeOverrides} of ${cellCount} before, ${cellCount} after — so the assertion above is not passing vacuously`);
 
 // ── 4. THE NEGATIVE ─────────────────────────────────────────────────────────────────────────────
 console.log("\n=== 4. BICENTENNIAL JUNE ===");
@@ -353,39 +388,68 @@ ok("every override outside the loaded window is unchanged",
   JSON.stringify(outBak.map(k).sort()) === JSON.stringify(outLive.map(k).sort()),
   `${outBak.length} rows`);
 
-// ── 7b. SOCCER CENTRAL, BOTH HALVES ─────────────────────────────────────────────────────────────
-console.log("\n=== 7b. SOCCER CENTRAL 11 AND ITS TWIN 53 ===");
-// THE PREMISE THIS ITEM WAS WRITTEN ON IS FALSE, AND IT CAME FROM MY OWN EARLIER REPORT.
-// The brief says both twins carry zero 2026 matches, so nothing is stranded outside the override on
-// venue 11. Measured, both twins carry real volume, because NO mdapi field links to either twin:
-// all four Soccer Central fields link to venue 11 and all ATH Katy fields to venue 7, and the split
-// resolver then re-routes rows by capacity (Soccer Central, >22 players) and by day of week (ATH
-// Katy, Sunday). A count that reads fin_venue_fields without replaying that routing sees every
-// match on the primary leg and the twin looks empty. That is the error in the earlier report.
-const t53 = MONTHS.reduce((t, m) => t + canonicalVenueCost(after, 53, m).amount, 0);
-const m53 = MONTHS.reduce((t, m) => t + canonicalVenueCost(after, 53, m).matchCount, 0);
-const t11 = MONTHS.reduce((t, m) => t + canonicalVenueCost(after, 11, m).amount, 0);
-const t23 = MONTHS.reduce((t, m) => t + canonicalVenueCost(after, 23, m).amount, 0);
-const m23 = MONTHS.reduce((t, m) => t + canonicalVenueCost(after, 23, m).matchCount, 0);
-console.log(`  venue 11 Soccer Central       : ${money(t11).padStart(12)}  (override, the bank figure for the whole facility)`);
-console.log(`  venue 53 Soccer Central Tourn.: ${money(t53).padStart(12)}  on ${m53} matches at $180, STILL MODELLED`);
-console.log(`  venue  7 ATH Katy             : ${money(MONTHS.reduce((t, m) => t + canonicalVenueCost(after, 7, m).amount, 0)).padStart(12)}  (override)`);
-console.log(`  venue 23 ATH Katy Sunday      : ${money(t23).padStart(12)}  on ${m23} matches at $160, STILL MODELLED`);
-console.log(`  FINDING: ${money(t53 + t23)} sits on the two twin legs with no override and no bank figure behind it.`);
-console.log(`  Soccer Central across both legs after the load: ${money(t11 + t53)} against a reconciled ${money(t11)}.`);
-const jul11 = canonicalVenueCost(after, 11, "Jul 2026");
-console.log(`  Jul 2026, Cash Flow (canonicalVenueCost, venue 11): ${money(jul11.amount)} (${jul11.kind}, ${jul11.matchCount} matches)`);
-console.log(`  Jul 2026, Field Costs ledger (11 + 53 combined)   : ${money(jul11.amount + canonicalVenueCost(after, 53, "Jul 2026").amount)}`);
-console.log(`  Those two are EXPECTED to disagree. Do not reconcile them against each other.`);
-// What must be true, and is: the load stayed inside its scope. Neither twin was written to, which
-// is correct per the brief, and is also why the strand above is Ryan's call and not mine to fix.
-ok("the load wrote nothing to either twin",
-  !liveOv.some((o) => [53, 23].includes(Number(o.venue_id))),
-  "venues 53 and 23 carry no override rows at all");
-ok("the twins were untouched by this load",
-  JSON.stringify(bakOv.filter((o) => [53, 23].includes(Number(o.venue_id)))) ===
-  JSON.stringify(liveOv.filter((o) => [53, 23].includes(Number(o.venue_id)))),
-  "identical before and after");
+// ── 7b. THE SPLIT-RATE GROUPS, WHOLE ────────────────────────────────────────────────────────────
+// A facility's field fee is one number under one payee. It has to read that way across BOTH legs,
+// because the schedule routes matches to the secondary and no field links to it.
+console.log("\n=== 7b. EACH SPLIT-RATE GROUP, SUMMED ACROSS ITS LEGS ===");
+const legSum = (d: FinanceData, ids: number[]) =>
+  ids.reduce((t, id) => t + MONTHS.reduce((u, m) => u + canonicalVenueCost(d, id, m).amount, 0), 0);
+const scBefore = legSum(before, [11, 53]), scAfter = legSum(after, [11, 53]);
+const atBefore = legSum(before, [7, 23]), atAfter = legSum(after, [7, 23]);
+console.log(`  Soccer Central 11 + 53: ${money(scBefore)} before  ->  ${money(scAfter)} after`);
+console.log(`    leg 11 ${money(legSum(after, [11]))}   leg 53 ${money(legSum(after, [53]))}`);
+console.log(`  ATH 7 + 23            : ${money(atBefore)} before  ->  ${money(atAfter)} after`);
+console.log(`    leg  7 ${money(legSum(after, [7]))}   leg 23 ${money(legSum(after, [23]))}`);
+ok("Soccer Central across 11 and 53 reads 41736.84, not 98796.84", cents(scAfter) === 4173684, money(scAfter));
+ok("ATH across 7 and 23 reads 12740.00", cents(atAfter) === 1274000, money(atAfter));
+ok("every twin cell reads kind override",
+  TWINS.every((id) => MONTHS.every((m) => canonicalVenueCost(after, id, m).kind === "override")), "16/16");
+// CONTROL: the same assertion against the pre-write snapshot must fail, or it proves nothing.
+const twinOverridesBefore = TWINS.reduce((t, id) =>
+  t + MONTHS.filter((m) => canonicalVenueCost(before, id, m).kind === "override").length, 0);
+ok("CONTROL: before this write none of the 16 read override", twinOverridesBefore === 0, `${twinOverridesBefore}/16`);
+
+// ── 7c. THE COST PAGE, WHICH MUST NOT MOVE ──────────────────────────────────────────────────────
+// legPerMatchUnitCost order: the leg's own cost_per_match, THEN a secondary leg's per_match_rate,
+// THEN the primary's cost_per_match. Venue 53 already had cost_per_match = 180 so zeroing its rate
+// could never reach here. Venue 23's was NULL, so the Cost page was borrowing its BILLING rate
+// through the second rule; cost_per_match = 160 writes down the number already in use. The test is
+// that it changes NOTHING a page renders.
+console.log("\n=== 7c. COST PAGE PER-MATCH, PER SPLIT-RATE GROUP ===");
+const groups = groupVenues(after.venues);
+for (const g of groups.filter((x) => x.legs.some((l) => [11, 53, 7, 23].includes(l.id)))) {
+  const primary = g.legs[0];
+  let unit = 0, n = 0;
+  for (const leg of g.legs) {
+    const cpm = legPerMatchUnitCost(leg, primary);
+    const cnt = MONTHS.reduce((t, m) => t + venueChargedMatchCountFor(after, leg.id, m), 0);
+    unit += cpm * cnt; n += cnt;
+    const via = leg.cost_per_match != null ? "own cost_per_match"
+      : leg.id !== primary.id && leg.per_match_rate != null ? "SECONDARY fallback to per_match_rate"
+      : "primary cost_per_match";
+    console.log(`  ${g.displayName.padEnd(16)} leg ${String(leg.id).padStart(2)} unit $${String(cpm).padStart(4)} x ${String(cnt).padStart(4)} = ${money(cpm * cnt).padStart(12)}  via ${via}`);
+  }
+  console.log(`  ${g.displayName.padEnd(16)} group ${money(unit)} over ${n} matches = ${n ? money(unit / n) : "n/a"} per match`);
+  // KEY ON THE LEG IDS, NOT THE DISPLAY NAME. The first version of these two assertions was gated
+  // on g.displayName === "ATH Katy" / "Soccer Central" and neither ever ran, because zeroing the
+  // secondary leg's per_match_rate re-sorts the legs and changes the group's displayName. Two
+  // assertions that silently never execute are worse than two that fail.
+  const ids = g.legs.map((l) => l.id);
+  if (ids.includes(7) && ids.includes(23)) {
+    ok("ATH group per-match normalized cost is unchanged at $144.26", n > 0 && Math.abs(unit / n - 144.2553191489362) < 0.005, `${money(unit / n)} over ${n}`);
+    ok("  and its group total is unchanged at $20,340.00", cents(unit) === 2034000, money(unit));
+  }
+  if (ids.includes(11) && ids.includes(53)) {
+    ok("Soccer Central group per-match normalized cost is unchanged at $152.29", n > 0 && Math.abs(unit / n - 152.29257641921398) < 0.005, `${money(unit / n)} over ${n}`);
+    ok("  and its group total is unchanged at $69,750.00", cents(unit) === 6975000, money(unit));
+  }
+  // THE SIDE EFFECT THE RATE ZEROING DOES HAVE. groupVenues sorts legs by per_match_rate ASC and
+  // takes legs[0] as the primary, so a secondary leg at 0 now sorts ahead of its primary. That sets
+  // the group's displayName and drives COMBINED_LEG_LABELS, which is documented as being in
+  // per_match_rate ASC order. Report it rather than assert a value: it is a real rendering change.
+  console.log(`  ${"".padEnd(16)} legs[0] is venue ${g.legs[0].id}, so displayName = "${g.displayName}"` +
+    `  (leg order ${ids.join(" then ")})`);
+}
 
 console.log(`\n${"=".repeat(60)}\nPASS ${pass}  FAIL ${fail}`);
 if (fails.length) { console.log("FAILURES:\n" + fails.map((f) => "  - " + f).join("\n")); process.exit(1); }
