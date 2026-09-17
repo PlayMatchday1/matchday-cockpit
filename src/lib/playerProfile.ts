@@ -124,6 +124,11 @@ export async function buildProfile(args: {
      * screen. It is one function now, called from both. */
     const hoursBefore = hoursBeforeKickoff(kickoff, canceledAt);
     return {
+      /* THE TWO IDS THE SCREEN NEEDS TO NAME A STRIKE. Both were dropped here, and StrikePanel
+       * keyed its rows by array index, so nothing on that page could tell the API which strike was
+       * meant. `id` is the strike-log id the DELETE addresses; `userMatchId` is what Retool sends
+       * as `matchId` in the body — the user-match row id, not the match id, despite the key. */
+      id: num(l.id), userMatchId: num(l.userMatchId),
       penaltyPoint: num(l.penaltyPoint) ?? 1, active: l.active === true,
       reason: um ? str(um.userStatus) : null,
       matchName: str(m.name), when: str(m.startDate) ?? kickoff,

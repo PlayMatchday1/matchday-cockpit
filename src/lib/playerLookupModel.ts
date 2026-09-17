@@ -193,3 +193,81 @@ export function suggestSpot(teams: SpotTeam[]): { team: number; spot: number } |
   cands.sort((a, b) => a.taken - b.taken || a.i - b.i);
   return { team: cands[0].i, spot: cands[0].free[0] };
 }
+
+// ---- removing a strike ------------------------------------------------------
+// A penalty against a paying member is reversible, and Retool reverses it with one click, no
+// confirm and no record of why. These two helpers are the arithmetic that replaces that, kept out
+// of the component so the numbers can be asserted without a browser.
+
+/** One strike log, reduced to the fields the decision needs. */
+export type RemovableLog = { id: number | null; penaltyPoint: number; active: boolean };
+
+/* WHEN THE CONTROL IS LIVE. Retool's rule is
+ *   penaltyPoint > 0 && strikeLog.strike.expiredAt && new Date(expiredAt) > now
+ * which cannot be evaluated as written against /admin/players/{id}: a strike log there carries
+ * exactly id, strikeId, userMatchId, penaltyPoint, active, createdAt, updatedAt. There is no
+ * nested strike object and no per-log expiredAt. The window lives on the PARENT strike record and
+ * every log points at it through strikeId, so it arrives here as one expiredAt for the block.
+ *
+ * `active` is a per-LOG field and stays per-log. Every log observed live is active:true, but a log
+ * going false while the record is still inside its window is representable and the panel already
+ * renders ACTIVE/EXPIRED per row from it, so this does not collapse into a block-level state on the
+ * strength of the rows that happened to be there.
+ *
+ * THREE STATES, AND THE LABEL IS THE STATE. A zero-point log is a cancellation early enough to be
+ * recorded and not charged (production 74253 carries two). Removing it would move nothing, so the
+ * control is disabled and says why. "Remove 0" and "Expired 0" are both nonsense and neither is
+ * rendered. */
+export function strikeControl(
+  log: RemovableLog,
+  strikeExpiredAt: string | null,
+  now: number = Date.now(),
+): { label: string; enabled: boolean; why: string } {
+  const pts = Number.isFinite(log.penaltyPoint) ? log.penaltyPoint : 0;
+  if (pts <= 0) return { label: "No penalty", enabled: false, why: "this strike carries no points, so removing it would change nothing" };
+  const windowOpen = strikeExpiredAt != null && Date.parse(strikeExpiredAt) > now;
+  if (!log.active || !windowOpen) return { label: `Expired ${pts}`, enabled: false, why: "this strike is already off the total" };
+  if (log.id == null) return { label: `Remove ${pts}`, enabled: false, why: "this strike has no id, so nothing can name it to the API" };
+  return { label: `Remove ${pts}`, enabled: true, why: "" };
+}
+
+/* WHAT THE CONFIRM PROMISES, AND WHY IT IS COMPUTED FROM THE POINT TOTAL.
+ *
+ * activeCount is the SERVER's sum of penaltyPoints, never a row count, so removing one row moves it
+ * by that row's own weight: a LATE is 1 and a NO SHOW is 2, and only one of those takes a member
+ * from 4 to 3. Deriving the promise from rows would be right for the first case and wrong for the
+ * second.
+ *
+ * AND THE TOTAL CAN EXCEED THE LIMIT. Five points minus one is four, which is still the threshold
+ * and still a suspension. A confirm that promised a lift there would be a lie an operator acts on,
+ * so the held case is a distinct outcome rather than the absence of a lift. */
+export function removalEffect(
+  activeCount: number,
+  penaltyPoint: number,
+  isSuspended: boolean,
+  limit: number = STRIKE_LIMIT,
+): { after: number; weight: string; outcome: "lifts" | "held" | "plain"; sentence: string } {
+  const pts = Number.isFinite(penaltyPoint) ? penaltyPoint : 0;
+  const after = Math.max(0, activeCount - pts);
+  const weight = `Removes ${pts} strike point${pts === 1 ? "" : "s"}.`;
+  const outcome = isSuspended && after < limit ? "lifts" : isSuspended ? "held" : "plain";
+  const tail =
+    outcome === "lifts" ? `They go to ${after} of ${limit}, and the suspension lifts.`
+    : outcome === "held" ? `They go to ${after} of ${limit}, and stay suspended, because ${limit} is still the threshold.`
+    : `They go to ${after} of ${limit}.`;
+  return { after, weight, outcome, sentence: `${weight} ${tail}` };
+}
+
+/* DID THE REMOVAL LAND? MEASURED ON STAGING, NOT ASSUMED.
+ *
+ * DELETE /admin/strikes/strike-logs/{id} does NOT delete the row. On staging player 569 the log
+ * stayed in place, still active:true, with penaltyPoint moved 1 -> 0, and the parent's
+ * activeStrikes dropped 3 -> 2. When the last points go, the whole strike record disappears and the
+ * player's strike block comes back with no strikeLogs key at all.
+ *
+ * So the penalty is reversed in either of two shapes, and a predicate that checks only for absence
+ * reports NOT APPLIED on a write that plainly landed. That is recordWrite's own failure mode
+ * running backwards, and it is why this is a named function with a test rather than a closure. */
+export function strikeRemovalApplied(after: { present: boolean; points: number | null }): boolean {
+  return after.present === false || after.points === 0;
+}

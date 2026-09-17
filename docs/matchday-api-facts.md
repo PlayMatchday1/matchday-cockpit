@@ -5733,3 +5733,47 @@ grant raises 42501. Worth knowing before reading "it saved" off an empty respons
 `e instanceof Error` is false and the `String(e)` fallback prints that literal text — it reached a
 person on Field Ops. `errorText()` in `src/lib/errorText.ts` is the one helper; `scripts/error-text-test.ts`
 guards it. 39 other sites in 29 files still use the old fallback where a Supabase error can reach them.
+
+## REMOVING A STRIKE ZEROES THE LOG, IT DOES NOT DELETE IT (2026-09-17)
+
+`DELETE /admin/strikes/strike-logs/{id}` with body `{ userId, matchId }`. Evidence: staging player
+569, strike record 617, two logs — 614 (1 point, `LATE`, userMatch 5231) and 613 (2 points,
+`NO_SHOW`, userMatch 5232).
+
+**The row survives with its penalty zeroed.** After removing log 614, `GET /admin/players/569`
+returned that log still present, still `active: true`, with `penaltyPoint` moved **1 → 0**, and the
+parent's `activeStrikes` moved **3 → 2**. A predicate that classifies the write by the log's absence
+reports NOT APPLIED on a write that plainly landed; use "gone **or** carrying zero"
+(`strikeRemovalApplied`, `src/lib/playerLookupModel.ts`).
+
+**The strike record disappears when the last points go.** After removing log 613 as well, the
+player's `strike` block came back as `{ isSuspended: false, activeStrikes: 0, suspensionStartedAt:
+null, firstStrikeAt: null }` — **no `id`, no `expiredAt`, and no `strikeLogs` key at all.** Anything
+reading `strike.strikeLogs` must tolerate its absence, not just an empty array.
+
+### A strike log carries no nested `strike` object
+
+The keys are exactly `id, strikeId, userMatchId, penaltyPoint, active, createdAt, updatedAt`. Retool's
+`removeStrike` enable rule reads `currentRow.strikeLog.strike.expiredAt`, which **cannot be evaluated
+against this endpoint** — Retool builds that row from `membershipUserMatchDetails`, a different query.
+The window lives on the PARENT strike record as `strike.expiredAt`, shared by every log through
+`strikeId`. The faithful translation is `penaltyPoint > 0 && active === true && strike.expiredAt > now`.
+
+### `penaltyPoint: 0` logs are real and are not errors
+
+Production player 74253 carries four logs — `1, 0, 0, 1` — and `activeStrikes` is 2. Both zeros are
+`CANCEL_W_IN_SOME_HOURS`: a cancellation early enough to be recorded and not charged. `activeStrikes`
+is the SUM of `penaltyPoint` (3 = 1+2 on staging 569; 2 = 1+0+0+1 here), never a row count.
+
+### `POST /admin/strikes { userId }` (Retool `setStrike`) grants NO penalty points
+
+Measured on staging 569: calling it left `activeStrikes` at 3 and added no log, but flipped
+`isSuspended` to **true** and pushed `expiredAt` out by three days. So it starts or refreshes the
+suspension window; it is not a way to manufacture strike points for a test. Points come from the
+user-match status (`LATE`, `NO_SHOW`, `CANCEL_W_IN_SOME_HOURS`), and there is no Retool query that
+adds one directly — `addStrike` / `AddStrike` are UI components, not queries.
+
+### Strike data is rare
+
+Scanning `/admin/players` detail: **1 of 256 staging players** and **2 of 323 production players**
+had any strike log at all.

@@ -150,6 +150,10 @@ is("authenticateMatchOpsRead is imported by EXACTLY the 19 intended routes", imp
   "promos/matches/route.ts", "promos/check/route.ts",
   // round 2 — the one WRITE moved, onto its own flag
   "lookup/[env]/ban/route.ts",
+  // Removing a strike. The same shape as the ban write and deliberately on the same authority:
+  // Match Ops read gate, an explicit MANAGE PLAYERS check before any outbound call, and
+  // requires:"manage" at the write chokepoint. A penalty on a player, like suspend / expel / lift.
+  "matchday/[env]/strikes/[strikeLogId]/route.ts",
   // round 2 — dual-gate: GET on the read gate, the write still authenticateAdmin + EDIT MATCHES
   "matchday/[env]/matches/[id]/route.ts", "matchday/[env]/roster/[matchId]/route.ts",
   "matchday/[env]/matches/[id]/cancel/route.ts",

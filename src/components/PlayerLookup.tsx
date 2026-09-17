@@ -28,6 +28,7 @@ import { envBadge } from "@/lib/matchEnvBadge";
 import {
   detectKind, SEARCH_HINT, money, openSpots as openSpotsOf, suggestSpot, STRIKE_LIMIT, strikeReasonLabel, isKnownStrikeReason,
   SEARCH_PAGE_SIZE, resultHeader, pageCount,
+  strikeControl, removalEffect,
   type SpotTeam, type SearchKind,
 } from "@/lib/playerLookupModel";
 
@@ -103,7 +104,10 @@ function matchCounts(ms: MatchRow[]) {
   return c;
 }
 type Membership = { status: string; number: string | null; since: string | null; renews: string | null; canceledAt: string | null; price: number | null; city: string | null } | null;
-type StrikeLog = { penaltyPoint: number; active: boolean; reason: string | null; matchName: string | null; when: string | null; issued: string | null; canceledAt: string | null; hoursBefore: number | null };
+// id = the strike-log id the DELETE addresses. userMatchId = what the API wants as `matchId` in the
+// body: the user-match row id, not the match id, despite the key. Both are nullable because a log
+// that arrives without them cannot be named to the API, and the control says so rather than guessing.
+type StrikeLog = { id: number | null; userMatchId: number | null; penaltyPoint: number; active: boolean; reason: string | null; matchName: string | null; when: string | null; issued: string | null; canceledAt: string | null; hoursBefore: number | null };
 type Strikes = { activeCount: number; limit: number; isSuspended: boolean; suspendedTo: string | null; expiredAt: string | null; firstStrikeAt: string | null; logs: StrikeLog[] };
 type HistoryRow = { action: "suspend" | "expel"; reason: string | null; when: string | null; until: string | null; by: string | null };
 type SearchMeta = { total: number; totalKnown: boolean; page: number; pageSize: number; via: string; dropped: number };
@@ -465,6 +469,7 @@ export default function PlayerLookup() {
               Putting the action on their card means there is no second search box to rebuild. */}
           <MatchManagerRosterCard playerId={profile.player.id} playerName={profile.player.name} />
           <ProfileView p={profile} fields={fields} canEdit={canEdit} canManage={canManage} canCredit={canCredit}
+            onReload={reloadProfile}
             onOpenMatch={(id) => router.push(`/match-ops/matches/${id}`)}
             onAdd={() => setModal({ type: "add" })}
             onRemove={(m) => setModal({ type: "remove", m })}
@@ -498,10 +503,13 @@ function Fact({ k, v, big }: { k: string; v: React.ReactNode; big?: boolean }) {
   return <span className="f"><span className="k">{k}</span><span className={`v${big ? " big" : ""}`}>{v}</span></span>;
 }
 
-function ProfileView({ p, fields, canEdit, canManage, canCredit, onOpenMatch, onAdd, onRemove, onSuspend, onExpel, onLift }: {
+function ProfileView({ p, fields, canEdit, canManage, canCredit, onOpenMatch, onAdd, onRemove, onSuspend, onExpel, onLift, onReload }: {
   p: Profile; fields: Record<FieldKey, boolean>; canEdit: boolean; canManage: boolean; canCredit: boolean;
   onOpenMatch: (id: number) => void; onAdd: () => void; onRemove: (m: MatchRow) => void;
   onSuspend: () => void; onExpel: () => void; onLift: () => void;
+  /* Re-read the whole profile. The strike total is the SERVER's point sum and a removal must not
+   * be applied client-side, so the panel asks for a refetch instead of decrementing anything. */
+  onReload: () => void;
 }) {
   const pl = p.player;
   const tags = statusTags({ status: pl.status, hasMembership: !!p.membership && p.membership.status !== "canceled" });
@@ -560,7 +568,8 @@ function ProfileView({ p, fields, canEdit, canManage, canCredit, onOpenMatch, on
 
       <MembershipPanel m={p.membership} />
 
-      <StrikePanel s={p.strikes} isMember={!!p.membership} />
+      <StrikePanel s={p.strikes} isMember={!!p.membership} playerId={pl.id} playerName={pl.name}
+        canManage={canManage} onRemoved={onReload} />
 
       <MatchHistoryPanel matches={matches} counts={counts} canEdit={canEdit}
         onOpenMatch={onOpenMatch} onAdd={onAdd} onRemove={onRemove} />
@@ -998,7 +1007,14 @@ function MembershipPanel({ m }: { m: Membership }) {
 }
 
 // ---------- strikes (display only) ----------
-function StrikePanel({ s, isMember }: { s: Strikes; isMember: boolean }) {
+function StrikePanel({ s, isMember, playerId, playerName, canManage, onRemoved }: {
+  s: Strikes; isMember: boolean; playerId: number; playerName: string; canManage: boolean; onRemoved: () => void;
+}) {
+  const [pending, setPending] = useState<StrikeLog | null>(null);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   // Strikes are a members-only penalty. A pay-per-match player who no-shows already
   // forfeits the fee (the 24h refund rule), so there is no strike to show.
   if (!isMember && s.logs.length === 0 && s.activeCount === 0) {
@@ -1048,17 +1064,100 @@ function StrikePanel({ s, isMember }: { s: Strikes; isMember: boolean }) {
             : l.reason === "NO_SHOW" ? "Never checked in"
             : l.reason === "LATE" ? "Arrived after kickoff"
             : known ? "" : "Reason not recorded on the linked match";
+          const ctl = strikeControl({ id: l.id, penaltyPoint: l.penaltyPoint, active: l.active }, s.expiredAt);
           return (
-            <div className="row srow" key={i}>
+            <div className="row srow" data-testid="row" data-id={l.id ?? ""} key={l.id ?? i}>
               <span className="stitle"><span className="l1">{l.matchName ?? "Match"}</span>
                 <span className="l2">{fmtWhen(l.when)}{detail ? ` · ${detail}` : ""}{l.penaltyPoint > 1 ? ` · ×${l.penaltyPoint}` : ""}</span></span>
               <span className={`st ${cls}`}>{label}</span>
               <span className={`st ${l.active ? "sactive" : "expired"}`}>{l.active ? "ACTIVE" : "EXPIRED"}</span>
+              {/* THE LABEL IS THE STATE AND THE NUMBER IS THE WEIGHT. A disabled control, never a
+                  missing one: a row with no button where its neighbours have one reads as a broken
+                  page, and the two words say why pressing it would do nothing. */}
+              <button className="rm" type="button" data-testid="rm" data-id={l.id ?? ""}
+                disabled={!ctl.enabled || !canManage || busy}
+                title={canManage ? ctl.why : "Removing a strike needs MANAGE PLAYERS"}
+                onClick={() => { setErr(null); setNote(null); setReason(""); setPending(l); }}>
+                {ctl.label}
+              </button>
             </div>
           );
         })}
       </div>
-      <p className="pfoot">A member is struck for arriving late, not showing, or cancelling inside 6 hours of kickoff (see docs). {s.limit} active strikes suspends the membership for a week. Read-only here — issuing and removing strikes stays in MatchDay.</p>
+      {err && <p className="pfoot" data-testid="strike-err" style={{ color: "var(--bad)" }}>{err}</p>}
+      {note && <p className="pfoot" data-testid="strike-note">{note}</p>}
+      {pending && (
+        <RemoveStrikeConfirm
+          log={pending} s={s} playerId={playerId} playerName={playerName}
+          reason={reason} setReason={setReason} busy={busy}
+          onCancel={() => { setPending(null); setReason(""); }}
+          onGo={async () => {
+            const text = reason.trim();
+            if (!text || pending.id == null || busy) return;
+            setBusy(true); setErr(null);
+            try {
+              const res = await authFetch(`/api/matchday/${ENV}/strikes/${pending.id}`, {
+                method: "DELETE",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ playerId, userMatchId: pending.userMatchId, reason: text, playerName }),
+              });
+              const j = await res.json().catch(() => ({}));
+              if (!res.ok) { setErr(j?.error || `Remove failed (${res.status})`); return; }
+              setPending(null); setReason("");
+              /* A 2xx IS NOT PROOF, and the total is the server's. Say what the route classified,
+               * then refetch rather than decrementing anything here. */
+              setNote(j?.status === "LANDED" ? "Strike removed." : `Reported ${j?.status ?? "UNKNOWN"} — the panel below is a fresh read.`);
+              onRemoved();
+            } catch (e) {
+              setErr(e instanceof Error ? e.message : String(e));
+            } finally { setBusy(false); }
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* THE CONFIRM RETOOL DOES NOT HAVE. Retool deletes a penalty against a paying member with one
+ * click, no confirm, and no record of why. The reason field is the whole argument for building
+ * this here, so it is required and whitespace does not satisfy it. */
+function RemoveStrikeConfirm({ log, s, playerId, playerName, reason, setReason, busy, onCancel, onGo }: {
+  log: StrikeLog; s: Strikes; playerId: number; playerName: string;
+  reason: string; setReason: (v: string) => void; busy: boolean; onCancel: () => void; onGo: () => void;
+}) {
+  const eff = removalEffect(s.activeCount, log.penaltyPoint, s.isSuspended, s.limit);
+  const known = isKnownStrikeReason(log.reason);
+  const label = strikeReasonLabel(log.reason);
+  const detail = log.reason === "CANCEL_W_IN_SOME_HOURS" && log.hoursBefore != null ? `Cancelled ${log.hoursBefore}h before kickoff`
+    : log.reason === "NO_SHOW" ? "Never checked in"
+    : log.reason === "LATE" ? "Arrived after kickoff"
+    : known ? "" : "Reason not recorded on the linked match";
+  return (
+    <div className="scrim strikeconfirm" data-testid="scrim"
+      onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div className="dlg" role="dialog" aria-modal="true" aria-label="Remove this strike">
+        <h3>Remove this strike?</h3>
+        <div className="what" data-testid="d-what">{label} · {log.matchName ?? "Match"}
+          <span>{fmtWhen(log.when)}{detail ? ` · ${detail}` : ""} · strike {log.id}</span></div>
+        {/* THE WEIGHT LEADS. "Remove this strike" reads as one point; a NO SHOW is two, and that is
+            the difference between a member coming off a suspension and not. */}
+        <div className={`effect${eff.outcome === "held" ? " held" : ""}`}
+          data-testid={eff.outcome === "lifts" ? "d-lifts" : eff.outcome === "held" ? "d-held" : "d-effect"}>
+          {eff.sentence}
+        </div>
+        <label className="lbl" htmlFor="rsn">Reason (required)</label>
+        <input className="fld" id="rsn" data-testid="d-reason" value={reason} autoFocus disabled={busy}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="Issued in error, we cancelled the match" />
+        <div className="hint" data-testid="d-hint">This is the only record of why a penalty against a
+          member was reversed. It goes in the change log with your name.</div>
+        <div className="dbtns">
+          <button className="btn" type="button" data-testid="d-cancel" onClick={onCancel} disabled={busy}>Keep it</button>
+          <button className="btn go" type="button" data-testid="d-go" onClick={onGo} disabled={!reason.trim() || busy}>
+            {busy ? "Removing…" : "Remove strike"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1485,7 +1584,36 @@ const CSS = `
 .pl .pip.pipover{width:auto;min-width:16px;padding:0 5px;background:var(--red);border-color:var(--red);color:#fff;font-size:10.5px;font-weight:800;line-height:16px;text-align:center}
 .pl .strikebar .stxt{font-size:12.5px;color:var(--ink2)}
 .pl .strikebar .stxt b{color:var(--ink)}
-.pl .srow{grid-template-columns:minmax(0,1fr) 104px 84px}
+.pl .srow{grid-template-columns:minmax(0,1fr) auto auto auto;gap:12px}
+/* THE REMOVE CONTROL AND ITS CONFIRM. Lifted from scripts/mocks/remove-strike.html rather than
+   re-derived: the mock deliberately reuses this panel's own class names, and the only new ones are
+   .rm plus the dialog. Quiet by default and red only on hover, because a destructive control that
+   looks like an invitation gets pressed. */
+.pl .rm{font:inherit;font-size:12px;font-weight:700;padding:6px 11px;min-height:32px;border-radius:7px;
+  border:1px solid var(--line);background:#fff;color:var(--ink2);cursor:pointer;white-space:nowrap}
+.pl .rm:hover:not(:disabled){border-color:var(--redln);color:var(--red);background:var(--redbg)}
+.pl .rm:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.pl .rm:disabled{opacity:.42;cursor:not-allowed}
+.pl .scrim.strikeconfirm{align-items:center;padding:16px}
+.pl .dlg{background:#fff;border-radius:12px;width:100%;max-width:430px;padding:16px;
+  box-shadow:0 14px 40px rgba(15,35,26,.22)}
+.pl .dlg h3{margin:0;font-size:16px;font-weight:800}
+.pl .what{margin-top:11px;padding:10px 12px;background:#fafbfa;border:1px solid var(--line);
+  border-radius:8px;font-size:13px;font-weight:650}
+.pl .what span{display:block;font-weight:400;color:var(--ink2);font-size:12px;margin-top:2px}
+.pl .lbl{display:block;font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink2);font-weight:800;margin:13px 0 5px}
+.pl .fld{width:100%;font:inherit;font-size:13px;padding:8px 10px;border:1px solid var(--line);
+  border-radius:8px;min-height:38px;background:#fff}
+.pl .hint{margin-top:7px;font-size:11.5px;color:var(--ink2);line-height:1.45}
+.pl .effect{margin-top:11px;font-size:12.5px;border-radius:8px;padding:9px 11px;
+  background:var(--grnbg);border:1px solid var(--grnln);color:var(--grn);font-weight:600}
+.pl .effect.held{background:var(--ambbg);border-color:var(--ambln);color:var(--amb)}
+.pl .dbtns{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap}
+.pl .dbtns .btn{font:inherit;font-size:12.5px;font-weight:700;padding:8px 13px;border-radius:8px;
+  min-height:36px;border:1px solid var(--line);background:#fff;color:var(--ink);cursor:pointer}
+.pl .dbtns .btn.go{background:var(--grn);border-color:var(--grn);color:#fff}
+.pl .dbtns .btn:disabled{opacity:.45;cursor:not-allowed}
 .pl .stitle{display:block;min-width:0}
 .pl .st.suspend{background:var(--ambbg);color:var(--amb);border-color:var(--ambln)}
 .pl .st.expel{background:var(--redbg);color:var(--red);border-color:var(--redln)}
@@ -1580,7 +1708,9 @@ const CSS = `
   .pl .memgrid{grid-template-columns:1fr}
   .pl .mrow{grid-template-columns:minmax(0,1fr) 104px 84px}
   .pl .mrow .c-team{display:none}
-  .pl .srow{grid-template-columns:minmax(0,1fr) 92px 76px}
+  .pl .srow{grid-template-columns:minmax(0,1fr) auto;gap:8px 10px}
+  .pl .srow .st.sactive,.pl .srow .st.expired{justify-self:end}
+  .pl .srow .rm{grid-column:2;justify-self:end}
   .pl .hrow{grid-template-columns:92px minmax(0,1fr) 96px}
   .pl .hrow .c-until{display:none}
   .pl .prow{grid-template-columns:minmax(0,1fr) 88px 80px}

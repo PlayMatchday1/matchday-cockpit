@@ -1,0 +1,255 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Remove a strike</title>
+<style>
+  /* CLASS NAMES ARE THE ONES ALREADY IN PlayerLookup.tsx — .panel .ptitle .note .banner.susp
+   * .strikebar .pips .pip .stxt .rows .row.srow .stitle .l1 .l2 .st .pfoot. The only new ones are
+   * .rm (the per-row control) and the confirm. Lift this, do not re-style the panel. */
+  :root{ --ink:#12261c; --ink2:#5d6b62; --faint:#8b9a91; --line:#dfe5e0; --hair:#eef2ef; --bg:#f4f6f4;
+         --grn:#12402a; --mint:#e6f6ee; --ok:#0d6b45;
+         --amb:#8a5a12; --ambbg:#fdf6e6; --ambline:#ecdcb4;
+         --red:#8c2f1f; --redbg:#fdefec; --redline:#f0c7bd;
+         --pip:#8a5a12; --pipoff:#e4e8e4; }
+  *{ box-sizing:border-box }
+  [hidden]{ display:none !important }
+  body{ margin:0; font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg) }
+  .num{ font-variant-numeric:tabular-nums }
+
+  .sw{ display:flex; gap:6px; padding:10px 12px; background:#fff; border-bottom:1px solid var(--line); flex-wrap:wrap; align-items:center }
+  .sw b{ font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink2); margin-right:2px }
+  .sw button{ font:inherit; font-size:12.5px; font-weight:650; padding:6px 11px; border:1px solid var(--line);
+              background:#fff; color:var(--ink); border-radius:999px; cursor:pointer; min-height:32px }
+  .sw button[aria-pressed="true"]{ background:var(--grn); color:#fff; border-color:var(--grn) }
+
+  .pl{ padding:16px; max-width:940px; margin:0 auto }
+  .panel{ background:#fff; border:1px solid var(--line); border-radius:11px; overflow:hidden }
+  .ptitle{ padding:12px 14px; border-bottom:1px solid var(--hair); display:flex; align-items:center; gap:10px }
+  .ptitle h3{ margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink2); font-weight:800 }
+  .ptitle .note{ margin-left:auto; font-size:12.5px; color:var(--ink2) }
+
+  .banner.susp{ display:flex; gap:9px; padding:10px 14px; background:var(--redbg);
+                border-bottom:1px solid var(--redline); color:var(--red); font-size:12.5px }
+  .banner.susp b{ display:block; font-weight:800 }
+  .banner.susp small{ color:var(--red); opacity:.85 }
+
+  .strikebar{ display:flex; align-items:center; gap:10px; padding:12px 14px;
+              border-bottom:1px solid var(--hair); flex-wrap:wrap; background:#fbfdfb }
+  .pips{ display:flex; gap:4px; align-items:center; flex:none }
+  .pip{ width:15px; height:15px; border-radius:3px; background:var(--pipoff) }
+  .pip.on{ background:var(--pip) }
+  .pip.trip{ background:var(--red) }
+  .pip.pipover{ width:auto; height:auto; padding:1px 5px; background:var(--redbg); color:var(--red);
+                border:1px solid var(--redline); font-size:10.5px; font-weight:800 }
+  .stxt{ font-size:12.5px; color:var(--ink2) }
+  .stxt b{ color:var(--ink); font-weight:750 }
+
+  .rows .row.srow{ display:grid; grid-template-columns:minmax(0,1fr) auto auto auto; gap:12px;
+                   align-items:center; padding:11px 14px; border-bottom:1px solid var(--hair) }
+  .rows .row.srow:last-child{ border-bottom:0 }
+  .stitle{ min-width:0 }
+  .stitle .l1{ display:block; font-size:13.5px; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .stitle .l2{ display:block; font-size:12px; color:var(--ink2); margin-top:2px }
+  .st{ font-size:10px; font-weight:800; padding:4px 9px; border-radius:5px; white-space:nowrap }
+  .st.strike{ background:var(--hair); color:var(--ink) }
+  .st.late,.st.latecancel{ background:var(--ambbg); color:var(--amb); border:1px solid var(--ambline) }
+  .st.noshow{ background:var(--redbg); color:var(--red); border:1px solid var(--redline) }
+  .st.sactive{ background:var(--redbg); color:var(--red); border:1px solid var(--redline) }
+  .st.expired{ background:var(--hair); color:var(--faint) }
+
+  .rm{ font:inherit; font-size:12px; font-weight:700; padding:6px 11px; min-height:32px; border-radius:7px;
+       border:1px solid var(--line); background:#fff; color:var(--ink2); cursor:pointer; white-space:nowrap }
+  .rm:hover:not(:disabled){ border-color:var(--redline); color:var(--red); background:var(--redbg) }
+  .rm:focus-visible{ outline:2px solid var(--grn); outline-offset:1px }
+  .rm:disabled{ opacity:.42; cursor:not-allowed }
+
+  .scrim{ position:fixed; inset:0; background:rgba(15,35,26,.34); display:flex; align-items:center;
+          justify-content:center; padding:16px; z-index:20 }
+  .dlg{ background:#fff; border-radius:12px; width:100%; max-width:430px; padding:16px;
+        box-shadow:0 14px 40px rgba(15,35,26,.22) }
+  .dlg h3{ margin:0; font-size:16px; font-weight:800 }
+  .what{ margin-top:11px; padding:10px 12px; background:#fafbfa; border:1px solid var(--line);
+         border-radius:8px; font-size:13px; font-weight:650 }
+  .what span{ display:block; font-weight:400; color:var(--ink2); font-size:12px; margin-top:2px }
+  .lbl{ display:block; font-size:10px; letter-spacing:.08em; text-transform:uppercase;
+        color:var(--ink2); font-weight:800; margin:13px 0 5px }
+  .fld{ width:100%; font:inherit; font-size:13px; padding:8px 10px; border:1px solid var(--line);
+        border-radius:8px; min-height:38px; background:#fff }
+  .hint{ margin-top:7px; font-size:11.5px; color:var(--ink2); line-height:1.45 }
+  .effect{ margin-top:11px; font-size:12.5px; border-radius:8px; padding:9px 11px;
+           background:var(--mint); border:1px solid #bfe6d3; color:var(--ok); font-weight:600 }
+  .effect.held{ background:var(--ambbg); border-color:var(--ambline); color:var(--amb) }
+  .dbtns{ display:flex; gap:8px; justify-content:flex-end; margin-top:16px; flex-wrap:wrap }
+  .btn{ font:inherit; font-size:12.5px; font-weight:700; padding:8px 13px; border-radius:8px; min-height:36px;
+        border:1px solid var(--line); background:#fff; color:var(--ink); cursor:pointer }
+  .btn.go{ background:var(--grn); border-color:var(--grn); color:#fff }
+  .btn:disabled{ opacity:.45; cursor:not-allowed }
+
+  @media (max-width:560px){
+    .rows .row.srow{ grid-template-columns:minmax(0,1fr) auto; gap:8px 10px }
+    .rows .row.srow .st.sactive,.rows .row.srow .st.expired{ justify-self:end }
+    .rows .row.srow .rm{ grid-column:2; justify-self:end }
+  }
+</style>
+
+<div class="sw">
+  <b>Member</b>
+  <button data-s="two"  aria-pressed="true">2 of 4</button>
+  <button data-s="susp" aria-pressed="false">4 of 4, suspended</button>
+  <button data-s="over" aria-pressed="false">5 of 4, over</button>
+</div>
+
+<div class="pl">
+  <div class="panel" data-testid="strikes">
+    <div class="ptitle"><h3>STRIKES</h3><span class="note" data-testid="strike-count"></span></div>
+    <div id="banner"></div>
+    <div class="strikebar" data-testid="strikebar"></div>
+    <div class="rows" id="rows"></div>
+  </div>
+</div>
+<div id="dlgroot"></div>
+
+<script>
+/* THE TOTAL IS SERVER-COMPUTED. PlayerLookup renders `s.activeCount`, which is MatchDay's
+ * `strike.activeStrikes` — a SUM of penaltyPoints, not a count of rows, and a single strike can
+ * weigh 2. Retool never decrements it either: removeStrike's success handler re-runs
+ * getUserByIdFromMembership and re-reads the number. `SERVER` below stands in for that refetch.
+ * Do not compute the total from the rows on screen. */
+const LIMIT = 4;
+
+const seed = () => ([
+  { id: 90412, umId: 733104, reason:"LATE", pts:1, active:true, hoursBefore:null,
+    matchName:"Soccer Central Field 4", when:"Sep 15, 2026, 9:00 PM" },
+  { id: 90388, umId: 731902, reason:"CANCEL_W_IN_SOME_HOURS", pts:1, active:true, hoursBefore:3,
+    matchName:"Soccer Central Field 4", when:"Sep 8, 2026, 9:00 PM" },
+  { id: 90301, umId: 728815, reason:"NO_SHOW", pts:2, active:false, hoursBefore:null,
+    matchName:"ATH Pearland 2", when:"Jul 20, 2026, 8:00 PM" },
+  { id: 90277, umId: 727440, reason:null, pts:1, active:false, hoursBefore:null,
+    matchName:null, when:"Jun 30, 2026, 7:00 PM" },
+]);
+
+let LOGS = seed(), SERVER = { active:0, suspended:false, suspendedTo:null },
+    scenario = "two", pending = null, reason = "";
+
+/* The scenarios differ only in WHICH logs are still inside the strike window. The server number is
+ * then set to the sum of those, because that is what the server would have returned. */
+function applyScenario(s){
+  scenario = s; LOGS = seed(); pending = null; reason = "";
+  if (s === "susp") { LOGS[2].active = true; }                       // 1 + 1 + 2 = 4
+  if (s === "over") { LOGS[2].active = true; LOGS[3].active = true; } // 1 + 1 + 2 + 1 = 5
+  SERVER.active = LOGS.filter(l => l.active).reduce((n,l) => n + l.pts, 0);
+  SERVER.suspended = SERVER.active >= LIMIT;
+  SERVER.suspendedTo = SERVER.suspended ? "Sep 23, 2026" : null;
+}
+
+const LABEL = { LATE:"LATE", NO_SHOW:"NO SHOW", CANCEL_W_IN_SOME_HOURS:"LATE CANCEL" };
+const label = r => LABEL[r] ?? "STRIKE";
+const cls   = r => r === "NO_SHOW" ? "noshow" : r === "CANCEL_W_IN_SOME_HOURS" ? "latecancel"
+                 : r === "LATE" ? "late" : "strike";
+const detail = l => l.reason === "CANCEL_W_IN_SOME_HOURS" && l.hoursBefore != null
+    ? `Cancelled ${l.hoursBefore}h before kickoff`
+  : l.reason === "NO_SHOW" ? "Never checked in"
+  : l.reason === "LATE" ? "Arrived after kickoff"
+  : l.reason == null ? "Reason not recorded on the linked match" : "";
+/* A strike is removable when it is still inside the window AND carries a point. Retool's own
+ * enable condition, read out of the export: penaltyPoint > 0 and strike.expiredAt in the future. */
+const removable = l => l.active && l.pts > 0;
+
+function render(){
+  document.querySelectorAll('.sw button').forEach(b =>
+    b.setAttribute("aria-pressed", String(b.dataset.s === scenario)));
+
+  const active = SERVER.active, tripped = active >= LIMIT;
+  const over = Math.max(0, active - LIMIT), remaining = Math.max(0, LIMIT - active);
+
+  document.querySelector('[data-testid="strike-count"]').innerHTML =
+    `<span class="num" data-testid="hdr-pts">${active} of ${LIMIT}</span> points`;
+
+  document.getElementById("banner").innerHTML = !SERVER.suspended ? "" :
+    `<div class="banner susp" data-testid="strike-suspended"><span><b>Suspended by strikes</b>
+      <small>${LIMIT} strike points = a one-week suspension${SERVER.suspendedTo ? ` · until ${SERVER.suspendedTo}` : ""}</small></span></div>`;
+
+  document.querySelector('[data-testid="strikebar"]').innerHTML =
+    `<span class="pips">${Array.from({length:LIMIT}, (_,i) =>
+       `<span class="pip ${i < Math.min(active,LIMIT) ? (tripped ? "trip" : "on") : ""}"></span>`).join("")
+     }${over > 0 ? `<span class="pip pipover" data-testid="pip-over">+${over}</span>` : ""}</span>
+     <span class="stxt"><b class="num" data-testid="s-pts">${active} of ${LIMIT} strike points</b>
+       · ${LIMIT} suspends a member for a week
+       · ${over > 0 ? `${over} OVER the threshold` : active < LIMIT ? `${remaining} to go` : "at the threshold"}
+       · current strikes expire Sep 23, 2026</span>`;
+
+  document.getElementById("rows").innerHTML = LOGS.map(l => `
+    <div class="row srow" data-testid="row" data-id="${l.id}">
+      <span class="stitle">
+        <span class="l1">${l.matchName ?? "Match"}</span>
+        <span class="l2">${l.when}${detail(l) ? ` · ${detail(l)}` : ""}${l.pts > 1 ? ` · ×${l.pts}` : ""}</span>
+      </span>
+      <span class="st ${cls(l.reason)}" data-testid="kind">${label(l.reason)}</span>
+      <span class="st ${l.active ? "sactive" : "expired"}" data-testid="state">${l.active ? "ACTIVE" : "EXPIRED"}</span>
+      <button class="rm" type="button" data-testid="rm" data-id="${l.id}"
+        ${removable(l) ? "" : `disabled`}>${l.active ? "Remove" : "Expired"} ${l.pts}</button>
+    </div>`).join("");
+
+  /* THE CONFIRM. The number it promises is the SERVER total minus this strike's own weight, which
+   * is why a LATE CANCEL worth 1 and a NO SHOW worth 2 do not move it by the same amount. */
+  const l = LOGS.find(x => x.id === pending) ?? null;
+  const after = l ? active - l.pts : active;
+  /* A NO SHOW WEIGHS 2. Say the number, because "remove this strike" reads as one point and it is
+   * the difference between a member coming off a suspension and not. */
+  const weight = l ? `Removes ${l.pts} strike point${l.pts === 1 ? "" : "s"}.` : "";
+  const lifts = !!l && SERVER.suspended && after < LIMIT;
+  const held  = !!l && SERVER.suspended && after >= LIMIT;   // over the threshold: still suspended
+  document.getElementById("dlgroot").innerHTML = !l ? "" :
+    `<div class="scrim" data-testid="scrim">
+      <div class="dlg" role="dialog" aria-modal="true" aria-label="Remove this strike">
+        <h3>Remove this strike?</h3>
+        <div class="what" data-testid="d-what">${label(l.reason)} · ${l.matchName ?? "Match"}
+          <span>${l.when}${detail(l) ? ` · ${detail(l)}` : ""} · strike ${l.id}</span></div>
+
+        ${lifts ? `<div class="effect" data-testid="d-lifts">${weight} They go to ${after} of ${LIMIT}, and the suspension lifts.</div>`
+        : held ? `<div class="effect held" data-testid="d-held">${weight} They go to ${after} of ${LIMIT}, and stay suspended, because ${LIMIT} is still the threshold.</div>`
+        : `<div class="effect" data-testid="d-effect">${weight} They go to ${after} of ${LIMIT}.</div>`}
+
+        <label class="lbl" for="rsn">Reason (required)</label>
+        <input class="fld" id="rsn" data-testid="d-reason" value="${reason}"
+               placeholder="Issued in error, we cancelled the match">
+        <div class="hint" data-testid="d-hint">This is the only record of why a penalty against a
+          member was reversed. It goes in the change log with your name.</div>
+
+        <div class="dbtns">
+          <button class="btn" type="button" data-testid="d-cancel">Keep it</button>
+          <button class="btn go" type="button" data-testid="d-go" ${reason.trim() ? "" : "disabled"}>Remove strike</button>
+        </div>
+      </div>
+    </div>`;
+  const inp = document.querySelector('[data-testid="d-reason"]');
+  if (inp) {
+    inp.oninput = e => {
+      reason = e.target.value;
+      document.querySelector('[data-testid="d-go"]').disabled = !reason.trim();
+    };
+    if (document.activeElement !== inp && reason === "") inp.focus();
+  }
+}
+
+document.addEventListener("click", e => {
+  const sw = e.target.closest('.sw button');
+  if (sw) { applyScenario(sw.dataset.s); render(); return; }
+  const rm = e.target.closest('[data-testid="rm"]');
+  if (rm && !rm.disabled) { pending = Number(rm.dataset.id); reason = ""; render(); return; }
+  if (e.target.closest('[data-testid="d-cancel"]')) { pending = null; reason = ""; render(); return; }
+  const go = e.target.closest('[data-testid="d-go"]');
+  if (go && !go.disabled) {
+    /* WHAT THE REFETCH WOULD RETURN. The row goes, and the total comes back from the server with
+     * this strike's own weight taken off it. Nothing here counts rows. */
+    const l = LOGS.find(x => x.id === pending);
+    LOGS = LOGS.filter(x => x.id !== pending);
+    SERVER.active = Math.max(0, SERVER.active - (l && l.active ? l.pts : 0));
+    SERVER.suspended = SERVER.active >= LIMIT;
+    SERVER.suspendedTo = SERVER.suspended ? SERVER.suspendedTo : null;
+    pending = null; reason = ""; render();
+  }
+});
+
+applyScenario("two");
+render();
+</script>
