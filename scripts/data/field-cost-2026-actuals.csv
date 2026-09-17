@@ -29,11 +29,11 @@ Austin,NEMP,2026-09,
 Austin,RRMPC,2026-01,
 Austin,RRMPC,2026-02,2464.00
 Austin,RRMPC,2026-03,847.00
-Austin,RRMPC,2026-04,104.00
+Austin,RRMPC,2026-04,104.01
 Austin,RRMPC,2026-05,150.00
 Austin,RRMPC,2026-06,
 Austin,RRMPC,2026-07,1531.00
-Austin,RRMPC,2026-08,360.00
+Austin,RRMPC,2026-08,359.99
 Austin,RRMPC,2026-09,
 Austin,Hattrick Leander,2026-01,
 Austin,Hattrick Leander,2026-02,
@@ -41,7 +41,7 @@ Austin,Hattrick Leander,2026-03,
 Austin,Hattrick Leander,2026-04,
 Austin,Hattrick Leander,2026-05,955.00
 Austin,Hattrick Leander,2026-06,1075.00
-Austin,Hattrick Leander,2026-07,1088.00
+Austin,Hattrick Leander,2026-07,1087.50
 Austin,Hattrick Leander,2026-08,
 Austin,Hattrick Leander,2026-09,
 Austin,Stony Point,2026-01,
@@ -58,8 +58,8 @@ Austin,Ann Richards,2026-02,
 Austin,Ann Richards,2026-03,
 Austin,Ann Richards,2026-04,
 Austin,Ann Richards,2026-05,
-Austin,Ann Richards,2026-06,99.00
-Austin,Ann Richards,2026-07,645.00
+Austin,Ann Richards,2026-06,99.36
+Austin,Ann Richards,2026-07,645.42
 Austin,Ann Richards,2026-08,
 Austin,Ann Richards,2026-09,
 Dallas,Bicentennial,2026-01,4135.00
@@ -75,7 +75,7 @@ Dallas,Strike,2026-01,
 Dallas,Strike,2026-02,
 Dallas,Strike,2026-03,
 Dallas,Strike,2026-04,
-Dallas,Strike,2026-05,1623.00
+Dallas,Strike,2026-05,1623.05
 Dallas,Strike,2026-06,2043.00
 Dallas,Strike,2026-07,1262.00
 Dallas,Strike,2026-08,
@@ -83,7 +83,7 @@ Dallas,Strike,2026-09,
 Dallas,Majestic,2026-01,
 Dallas,Majestic,2026-02,
 Dallas,Majestic,2026-03,
-Dallas,Majestic,2026-04,2321.00
+Dallas,Majestic,2026-04,2321.08
 Dallas,Majestic,2026-05,
 Dallas,Majestic,2026-06,
 Dallas,Majestic,2026-07,
@@ -140,10 +140,10 @@ OKC,Scissortail,2026-03,
 OKC,Scissortail,2026-04,
 OKC,Scissortail,2026-05,
 OKC,Scissortail,2026-06,
-OKC,Scissortail,2026-07,878.00
+OKC,Scissortail,2026-07,877.50
 OKC,Scissortail,2026-08,
 OKC,Scissortail,2026-09,
-San Antonio,Soccer Central,2026-01,5402.00
+San Antonio,Soccer Central,2026-01,5401.84
 San Antonio,Soccer Central,2026-02,3900.00
 San Antonio,Soccer Central,2026-03,3240.00
 San Antonio,Soccer Central,2026-04,3960.00
@@ -179,7 +179,7 @@ St. Louis,Centennial Commons,2026-06,
 St. Louis,Centennial Commons,2026-07,
 St. Louis,Centennial Commons,2026-08,
 St. Louis,Centennial Commons,2026-09,
-St. Louis,Lou Indoor,2026-01,1249.00
+St. Louis,Lou Indoor,2026-01,1248.66
 St. Louis,Lou Indoor,2026-02,
 St. Louis,Lou Indoor,2026-03,
 St. Louis,Lou Indoor,2026-04,
