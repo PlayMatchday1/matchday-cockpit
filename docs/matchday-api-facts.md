@@ -2003,13 +2003,90 @@ ratio therefore divides non-event cost by ALL revenue. **ATH Pearland, July 2026
 matches against $16,368 of revenue → a 2.0% ratio** that says the pitch is nearly free.
 `fieldEconomics.rollup` holds event revenue out of the denominator and states the exclusion.
 
-### `fin_revenue` history — the usable record starts 2026-03
-Rows span 2023-05-09 → present, but 2025 has only **two** months with any rows (Jun $5,032,
+### `fin_revenue` history — ~~the usable record starts 2026-03~~ THE LEDGER IS NOW COMPLETE FROM 2023-05
+**SUPERSEDED 2026-09-17. The paragraph below was true when written and is not true now** — it is
+kept because a stale fact left unmarked will justify the next wrong decision, and "there is no
+history" is a decision-shaped claim.
+
+~~Rows span 2023-05-09 → present, but 2025 has only **two** months with any rows (Jun $5,032,
 Nov $2,679) and 2026-02 is empty. First substantial month is **2026-03 ($32,245)**. A
 year-over-year comparison would divide by an empty ledger, which is why Revenue's "Previous year
-avg" control is **disabled with its reason stated** rather than rendered.
+avg" control is **disabled with its reason stated** rather than rendered.~~
+
+**Measured 2026-09-17 by a full paged read of all 8,363 rows: EVERY month from 2023-05 to 2026-09
+carries rows, 41 consecutive months with no gap.** 2025 is complete and substantial in all twelve
+(Jan $23,334 → Dec $50,021); 2026-02 holds $63,176 across 386 rows. Membership as an explicit
+`type` starts **2024-03** ($2,304), which is the first month after the first subscription activated
+(2024-02-29). A year-over-year comparison no longer divides by an empty ledger, so whatever
+Revenue's "Previous year avg" control is disabled *for*, it is no longer this.
+
 Current-month rows are all `source: Stripe` actuals — no PROJECTION rows leak into the
-month totals, so the "so far" mark is measured, not projected.
+month totals, so the "so far" mark is measured, not projected. **Confirmed: zero PROJECTION rows
+exist in the table at all**, across every month, so `filterRevenueRows` is a tripwire rather than
+an active filter.
+
+### The Membership page's revenue read is TRUNCATED, and its month key re-shifts a wall clock
+Both measured against the running app 2026-09-17, while extracting the membership metrics for the
+data room. **Neither is fixed** — the extraction was forbidden from touching application code — so
+both are live on `/membership` today and both affect a rendered figure.
+
+**1. `fin_revenue` is read UNPAGED at `src/app/api/membership/route.ts:168`.** PostgREST caps at
+1,000 rows; `type = 'Membership'` has **1,819**. The route therefore sees 1,000 rows covering
+**18 of 31 months**, and because `GET` without an `ORDER BY` has no defined order, *which* 1,000 is
+not stable. Aug 2026 arrives as **13 of its 102 rows — $14,938.40 against a true $18,255.73 net
+($18,930.43 gross)**. Sep 2026 does not arrive at all, which is why the headline
+**"AVG PRICE / MEMBER SPOT" KPI renders `$0.00`** and every month tile is low. The same route pages
+`mdapi_subscriptions` twenty lines above and its comment says why — *"a bare select caps at 1,000
+rows … 217 is a plausible-looking number, which is the worst kind of wrong."* The read below it was
+never given the same loop.
+
+**2. `monthKey` at `route.ts:31-34` is `new Date(iso).getUTCMonth()`.** `toLegacyShape` emits
+`match_start` from `dateToLocalIso`, i.e. `"2026-08-31T19:00:00"` **with no offset**, so `new Date()`
+parses it as LOCAL and `getUTCMonth()` pushes an evening match into the next month. **959 rows in
+the page's own 4-month window** sit at 19:00–22:59 on the last day of a month and every one is
+misfiled. Aug 2026 loses its own 360 Aug-31 evening rows and gains 341 Jul-31 evening rows, so the
+page reads `member 2377 / daily 6192 / promo 423 / other 374` where the wall clock gives
+`2365 / 6216 / 431 / 373`. Reconciled to the row: replaying the route's key reproduces the page's
+four numbers exactly, so **the entire discrepancy is the key and none of it is drift**. The fix is
+the one the route's own `dayMix` block already applies eleven lines later — read the month off the
+string.
+
+### Membership revenue is `.net` on the Membership page and `.gross` everywhere else
+`route.ts:168` sums `net`; `cityMembershipRevenueFor` (financeStats.ts:1637) sums `gross` and
+carries the note explaining that net *was* the bug on the Cities page. So the same label means two
+things in two places, differing by Stripe fees — **$674.70 on Aug 2026's $18,930.43**. Anything
+putting membership revenue over a Finance total must use gross, because Finance › Revenue and
+Finance › Cities are gross and tax-inclusive. `scripts/export-membership-metrics.mts` uses gross and
+states why in its header.
+
+### `members_monthly_snapshots.churning_count` is a STRUCTURAL ZERO before 2026-06
+`isChurningAsOf` requires the row to still be `status = 'ACTIVE'` at the captured instant — a member
+inside the 6th-to-6th grace cycle has cancelled but has not yet flipped. **That predicate decays**:
+replayed later, everyone in an old window has since flipped to CANCELED and the count collapses.
+Every row from **2024-02 to 2026-03 was written in one backfill at `2026-05-04T21:16:33–36Z` and all
+26 carry `churning_count = 0`.** 2026-04 was captured mid-cutover (`phase-3b-cutover-refresh`,
+2026-04-28) and reads 5; 2026-05 was captured 2026-05-03, three days before its own cycle closed,
+and reads 0. Every complete cron cycle since reads 56 / 69 / 81 / 87, and the live `isChurning(now)`
+was verified at **87 = the Sep 2026 captured value**. So **2026-06 is the first measured month**;
+26 consecutive zeroes beside a 56–87 range is a predicate with nothing left to see, not a quiet
+period.
+
+**`active_count` on those same backfilled rows IS sound — the two columns of one row are not
+equally usable.** Proven rather than assumed: replaying `isActiveAsOf` over today's subscriptions
+gives 7 for 2024-08 against the stored 125, and 33 for 2025-08 against the stored 207, so the
+backfill cannot have been computed from today's status and must have carried point-in-time data.
+The naive alternative — activation ≤ month-end AND (no `canceled_at` OR `canceled_at` > month-end) —
+gives 798 for Aug 2026 against the stored 406, because **581 of 2,413 paid-external subscriptions
+are CANCELED with `canceled_at` NULL** and read as never-cancelled, i.e. active forever. Use the
+snapshot.
+
+### A spot has no city until its field is linked, and 2024 is a seventh unmapped
+A spot's city comes from `fin_venue_fields` → `fin_venues.city`. There are **52 links**, none
+currently excluded, and a field outside them yields a NULL city — so the row counts estate-wide and
+in no city. Measured over all 175,088 non-cancelled spots: **2023 328 of 7,632 · 2024 5,421 of
+38,570 · 2025 644 of 58,961 · 2026 ZERO**, last affected month 2025-12. `fin_revenue` and the
+snapshot's `by_city` carry their own city and sum to the estate exactly in all 42 months; **spot
+counts do not, and any by-city spot figure before 2026-01 understates.**
 
 ### Both loaders must gate the render
 `useFinanceData` (quarter-scoped) resolves long before `useMatchData` (every match-player row).
