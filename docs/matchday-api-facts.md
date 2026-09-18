@@ -4289,6 +4289,49 @@ id 12  OKC dark control, Sep 2026
 
 Atlanta Android is inside ATL of necessity: `mdapi_users` has no platform column.
 
+### 0187 APPLIED: THE INSTALL LOG, AND MATCHED MATURITY IS THE ONLY OPTION
+
+`fin_meta_install_observations` is live and empty. `fin_growth_experiment.metric` now allows only
+`('played_within_7d','registrations')` and experiment 12 reads `played_within_7d`.
+
+**`reported_at` ON `fin_meta_adset_daily` CANNOT MEASURE RESTATEMENT AND IS NOT THE MECHANISM.**
+The sync upserts on the PK, so a payload column is overwritten every run and it would only ever say
+when we last asked. Omitting it freezes the timestamp but still gives no first-seen VALUE. A single
+mutable row cannot hold a history of itself. The append-only log is the mechanism: first sighting
+always recorded, then a row only when `installs` moves.
+
+**MATCHED MATURITY, MEASURED.** The same experiment read two ways gave incremental 27.1
+(`became_players`) against 17.5 (`played_within_7d`). An estimator needs both sides to measure the
+SAME thing, not to be complete: `became_players` is complete and incomparable across ages, and its
+censoring errors run in OPPOSITE directions so they do not cancel. Conversion curve on settled
+cohorts (Jun-Jul 2026, seven paid markets, 3,716 registrations, 1,886 who ever played):
+
+```
+ 1d 71.2%    3d 80.7%    7d 87.2%    14d 91.5%    30d 96.1%    60d 98.8%
+```
+
+Seven days holds 87.2%; fourteen buys 4.3 points for another week of lag. The 12.8% it misses is
+missed identically on both sides and cancels in the ratio.
+
+### DROP THE CHECK, THEN MOVE THE ROW, THEN ADD IT BACK
+
+0187 was refused on its first run with `ERROR 23514 ... violates check constraint
+fin_growth_experiment_metric_known`, and the refusal was on the **UPDATE**, not the ALTER.
+
+The file ran the UPDATE first, reasoning that adding a CHECK validates existing rows so the row must
+be corrected first. **Both halves are true and the conclusion does not follow** — the OLD constraint
+is still in force while the UPDATE runs, and it does not list the new value. The row has to be
+unguarded for exactly as long as it takes to move it, which is safe inside one transaction.
+
+**THE PRE-FLIGHT THAT CATCHES THIS COSTS SECONDS AND WAS NOT RUN.** DDL cannot be executed from
+here, but a data statement can: `PATCH /fin_growth_experiment?id=eq.12 {"metric":"played_within_7d"}`
+through PostgREST returns the identical 23514 against the live constraint. **Any migration whose
+UPDATE must pass a constraint that is currently in force can be tested this way before it is handed
+over.**
+
+Two ordering errors in one file — this and the `array_length` NULL — caught by the verdict block and
+by the database respectively, both before anything landed.
+
 ### A CHECK CONSTRAINT PASSES ON NULL, AND `array_length` RETURNS NULL ON EMPTY
 
 0186 was refused on its first run with `AN EMPTY TREATMENT SET WAS ACCEPTED` and rolled back whole.
