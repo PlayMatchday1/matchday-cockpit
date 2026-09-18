@@ -310,7 +310,11 @@ function Row({ item, rw, onCycle, updates, api, author, siblings }: {
   siblings: CmItem[];
 }) {
   const [menu, setMenu] = useState(false);
-  const [mode, setMode] = useState<null | "progress" | "body" | "owner">(null);
+  /* ONE STATE MACHINE, NOT TWO. Editing an update needs to know WHICH update — the latest one and
+   * every row in the expanded history are all editable — so the new member carries an id rather
+   * than being a fourth bare string. `mode === "body"` and friends still read exactly as before. */
+  const [mode, setMode] = useState<null | "progress" | "body" | "owner" | { update: string }>(null);
+  const editingUpdate = typeof mode === "object" && mode !== null ? mode.update : null;
   const [showAll, setShowAll] = useState(false);
   const s = item.status as CmStatus;
   const history = updateHistory(updates, item.id);
@@ -348,7 +352,25 @@ function Row({ item, rw, onCycle, updates, api, author, siblings }: {
           )}
           {latest ? (
             <div data-testid="cm-update" className="mt-1 text-[11.5px] leading-[1.45]" style={{ color: C.mut }}>
-              <b style={{ color: C.ink2 }}>{shortDate(latest.reported_on)}</b> · {latest.body}{" "}
+              <b style={{ color: C.ink2 }}>{shortDate(latest.reported_on)}</b> ·{" "}
+              {/* THE BODY IS THE CLICK TARGET, AND ONLY THE BODY. The date is the day being
+                  reported about and the author is who said it; rewording a line does not make
+                  either of those a different fact, so neither is editable.
+
+                  READ ONLY MEANS READ ONLY. On a past month this renders as plain text with no
+                  button semantics at all, so the PAST MONTH · READ ONLY badge stays true for a
+                  keyboard and a screen reader as well as a mouse. */}
+              {editingUpdate === latest.id ? (
+                <InlineEdit initial={latest.body} label="Progress update" testid="cm-edit-update"
+                  onCancel={() => setMode(null)}
+                  onSave={(v) => { void api.editUpdate(latest.id, v); setMode(null); }} />
+              ) : rw ? (
+                <button type="button" data-testid="cm-update-body" onClick={() => setMode({ update: latest.id })}
+                  className="text-left underline decoration-transparent underline-offset-2 transition-colors hover:decoration-current"
+                  style={{ color: "inherit", font: "inherit" }}>{latest.body}</button>
+              ) : (
+                <span data-testid="cm-update-body">{latest.body}</span>
+              )}{" "}
               {latest.author && <span style={{ color: C.faint }}>{latest.author}</span>}
               {/* THE TABLE KEEPS EVERY UPDATE AND THE PAGE RENDERED ONE. The point of keeping a
                   past month is that it is a record, so let someone read it. */}
@@ -383,7 +405,21 @@ function Row({ item, rw, onCycle, updates, api, author, siblings }: {
           {showAll && history.slice(1).map((u) => (
             <div key={u.id} data-testid="cm-update-old" className="mt-0.5 pl-2 text-[11.5px] leading-[1.45]"
               style={{ color: C.faint, borderLeft: `2px solid ${C.line2}` }}>
-              <b style={{ color: C.mut }}>{shortDate(u.reported_on)}</b> · {u.body} {u.author && <span>{u.author}</span>}
+              <b style={{ color: C.mut }}>{shortDate(u.reported_on)}</b> ·{" "}
+              {/* SAME COMPONENT, SAME HANDLER. A history row is not a lesser update; the only
+                  thing that makes it older is its date. */}
+              {editingUpdate === u.id ? (
+                <InlineEdit initial={u.body} label="Progress update" testid="cm-edit-update-old"
+                  onCancel={() => setMode(null)}
+                  onSave={(v) => { void api.editUpdate(u.id, v); setMode(null); }} />
+              ) : rw ? (
+                <button type="button" data-testid="cm-update-old-body" onClick={() => setMode({ update: u.id })}
+                  className="text-left underline decoration-transparent underline-offset-2 transition-colors hover:decoration-current"
+                  style={{ color: "inherit", font: "inherit" }}>{u.body}</button>
+              ) : (
+                <span data-testid="cm-update-old-body">{u.body}</span>
+              )}{" "}
+              {u.author && <span>{u.author}</span>}
             </div>
           ))}
           {mode === "progress" && (
@@ -413,6 +449,15 @@ function Row({ item, rw, onCycle, updates, api, author, siblings }: {
                     { t: "Edit wording", id: "edit-body", on: () => setMode("body") },
                     { t: "Set owner", id: "edit-owner", on: () => setMode("owner") },
                     { t: "Report progress", id: "report", on: () => setMode("progress") },
+                    /* DELETE LIVES HERE RATHER THAN ON EACH UPDATE, because the menu already
+                       exists, already sits inside the rw gate, and already owns the confirm
+                       pattern — a hover control on every update would be three new things for
+                       the same job. THE COST, STATED: it acts on the LATEST update only, so an
+                       older history row can be reworded but not removed. Disabled, not hidden,
+                       when the row has no update at all. */
+                    { t: "Delete update", id: "delete-update", off: !latest,
+                      on: () => { if (latest && confirm(`Delete the progress update “${latest.body}”?`)) void api.deleteUpdate(latest.id); },
+                      danger: true },
                     { t: "Move up", id: "up", on: () => void api.reorder(siblings, item.id, -1), off: i <= 0 },
                     { t: "Move down", id: "down", on: () => void api.reorder(siblings, item.id, 1), off: i < 0 || i >= siblings.length - 1 },
                     { t: "Delete", id: "delete", on: () => { if (confirm(`Delete “${item.body}”? Its progress updates go with it.`)) void api.deleteItem(item.id); }, danger: true },

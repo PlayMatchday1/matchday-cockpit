@@ -17,6 +17,10 @@ export type CmApi = {
   reload: () => Promise<void>;
   setStatus: (id: string, status: CmStatus) => Promise<void>;
   addUpdate: (itemId: string, body: string, author: string | null, reportedOn?: string) => Promise<void>;
+  /** Reword an existing progress line. The date and the author are not editable. */
+  editUpdate: (id: string, body: string) => Promise<void>;
+  /** Remove a progress line entirely. Burying it under a newer one was the only option before. */
+  deleteUpdate: (id: string) => Promise<void>;
   carryForward: (fromMonth: string, toMonth: string) => Promise<number>;
   addItem: (input: NewItem) => Promise<void>;
   updateItem: (id: string, patch: { body?: string; owner?: string | null; source?: string }) => Promise<void>;
@@ -78,6 +82,33 @@ export function useCmActions(month: string): CmApi {
     if (ins.error || !ins.data) { setError(ins.error?.message ?? "Could not save the update"); return; }
     setUpdates((prev) => [...prev, ins.data as CmUpdate]);
   }, []);
+
+  /* ── EDIT AND DELETE A PROGRESS LINE ─────────────────────────────────────────────────────────
+   * cm_action_updates has only ever been inserted into, so a typo could be buried under a newer
+   * update and never corrected. RLS is `for all to authenticated` (0158), so both verbs already
+   * work and no migration is involved.
+   *
+   * THE EMPTY BODY IS REFUSED HERE, NOT BY POSTGRES. `body` carries
+   * check (length(btrim(body)) > 0), so sending a blank is a round trip that can only come back
+   * as a constraint violation in the error banner. The caller's InlineEdit already disables Save
+   * on an empty value; this is the second belt, because the function is public on CmApi.
+   *
+   * OPTIMISTIC, THEN THE SERVER'S TRUTH ON FAILURE — the shape setStatus and updateItem use. */
+  const editUpdate = useCallback(async (id: string, body: string) => {
+    const clean = body.trim();
+    if (!clean) { setError("A progress update cannot be empty."); return; }
+    setError(null);
+    setUpdates((prev) => prev.map((u) => (u.id === id ? { ...u, body: clean } : u)));
+    const upd = await supabase.from("cm_action_updates").update({ body: clean }).eq("id", id);
+    if (upd.error) { setError(upd.error.message); void reload(); }
+  }, [reload]);
+
+  const deleteUpdate = useCallback(async (id: string) => {
+    setError(null);
+    setUpdates((prev) => prev.filter((u) => u.id !== id));
+    const del = await supabase.from("cm_action_updates").delete().eq("id", id);
+    if (del.error) { setError(del.error.message); void reload(); }
+  }, [reload]);
 
   /* ── ADD ─────────────────────────────────────────────────────────────────────────────────────
    * The row shape is built by buildInsert, where 0158's three CHECK constraints live in one place.
@@ -143,6 +174,6 @@ export function useCmActions(month: string): CmApi {
     return rows.length;
   }, [reload]);
 
-  return { items, updates, loading, error, reload, setStatus, addUpdate, carryForward,
-    addItem, updateItem, deleteItem, reorder };
+  return { items, updates, loading, error, reload, setStatus, addUpdate, editUpdate, deleteUpdate,
+    carryForward, addItem, updateItem, deleteItem, reorder };
 }
