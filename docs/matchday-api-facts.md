@@ -4420,7 +4420,7 @@ The action vocabulary this account returns (Sep 1-17): `mobile_app_install` 766 
 **`reach` SURVIVES the comscore breakdown but MUST NOT BE SUMMED.** It is de-duplicated, so the
 same person reached in two markets counts once at the account and twice across the rows.
 
-## THE ATTRIBUTION WINDOW IS ONE DAY, AND IT IS READABLE (2026-09-18)
+## THE ATTRIBUTION WINDOW IS ONE DAY ON THE ACTIVE AD SETS AND SEVEN ON THE REST (2026-09-18)
 
 Every ACTIVE ad set, from `GET /adsets?fields=attribution_spec`:
 
@@ -4435,11 +4435,29 @@ Seven active of twenty-five, all `optimization_goal = APP_INSTALLS`.
 `7d_click`, `28d_click`, `1d_view` and `7d_view` all returned **766** — the ad sets' own spec is one
 day, so the request parameter changes nothing. That is not a broken parameter.
 
-**So the 28-day re-pull is 28x the horizon an install can restate over.** It stays right, and the
-`attribution_spec` is stored per ad set so a change by the agency is visible rather than inferred
-from a number drifting. Installs have never been stored, so their restatement has never been
-measured and cannot be retrospectively — `reported_at` on the new table is what makes the first
-measurement possible.
+**CORRECTED THE SAME DAY, BY STORING IT.** The reading above is of the seven ACTIVE ad sets, and
+generalising from it was wrong. The backfill stored `attribution_spec` for all **35** ad sets that
+have spent since 2026-08-01:
+
+```
+x28   [{"CLICK_THROUGH": 7}, {"VIEW_THROUGH": 1}]    optimization_goal OFFSITE_CONVERSIONS
+x 6   [{"CLICK_THROUGH": 1}]                          optimization_goal APP_INSTALLS
+x 1   [{"CLICK_THROUGH": 1}, {"VIEW_THROUGH": 1}, {"ENGAGED_VIDEO_VIEW": 1}]   APP_INSTALLS
+```
+
+**The majority of August's data was produced under a SEVEN-DAY click window**, on ad sets
+optimising for `OFFSITE_CONVERSIONS`. The seven on one day are the current `APP_INSTALLS` build.
+So the agency changed both the optimization goal and the attribution window at the August rebuild,
+which is the same event that broke the campaign naming convention.
+
+**So an install can restate for up to SEVEN days on historical rows, not one.** The 28-day re-pull
+still covers it four times over, so nothing changes operationally — but the claim "installs settle
+in a day" was true of a seven-ad-set sample and false of the account.
+
+**THIS IS WHY THE SPEC IS STORED RATHER THAN ASSUMED**, and it earned that on the first run.
+Installs have never been stored either, so their restatement has never been measured and cannot be
+retrospectively; `fin_meta_install_observations` is what makes the first real measurement possible,
+and it should be read against the spec rather than instead of it.
 
 ## THE PLAYER SIDE HAS NO PLATFORM, AND `first_match_date` CAN BE IN THE FUTURE (2026-09-18)
 
