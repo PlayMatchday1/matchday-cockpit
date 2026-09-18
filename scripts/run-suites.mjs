@@ -89,6 +89,13 @@ const NODE_SUITES = [
   // renders five months of P&L that read as complete and are not. Lowering the constant looks
   // harmless and is not; this fails with the reason in the message.
   "scripts/meta-expense-floor-test.ts",
+  /* AN EMPTY PULL MUST NOT EMPTY THE LEDGER, driven rather than reasoned about. If Meta answers
+   * with nothing — outage, revoked token, paused account, a 200 with an empty data array — the
+   * old code deleted every Meta expense row and returned 200 with rows_replaced: 0. This runs
+   * syncMetaAdSpend against a stubbed Graph and a fake client that records every statement, and
+   * checks what reached the database. Demonstrated red against the pre-fix rollup: DELETE ran,
+   * INSERT did not, $4,900.00 of ledger gone, reported as a success. */
+  "scripts/meta-empty-pull-test.ts",
   "scripts/mutation-tests.ts",
   "scripts/prod-guard-test.ts",
   "scripts/stage-denylist-test.ts",
