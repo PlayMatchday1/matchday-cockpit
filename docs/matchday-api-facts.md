@@ -4221,6 +4221,86 @@ Every change is the final day, which was still accruing when the sync ran. **28 
 not tight**, and the upsert handles it for free. Recorded so nobody widens the window looking for a
 problem that is one day deep.
 
+## THE META BACKFILL LANDED, AND IT TIES TO THE ACCOUNT (2026-09-18)
+
+Run through the deployed route with a session bearer, `triggered_by='manual'`, HTTP 200 in 3.4s,
+28-day window `2026-08-22 .. 2026-09-18`, 859 rows imported, 16 ledger rows replacing 8.
+
+```
+                       predicted        actual        delta
+store rows (owned)         ~1,008         1,011
+coverage 2026-08            31/31         31/31       exact
+coverage 2026-09            18/18         18/18       exact
+ledger rows                    16            16       exact
+ledger total            $7,738.70     $7,744.29       +$5.59
+  Aug 2026              $4,387.45     $4,387.50       +$0.05
+  Sep 2026              $3,351.20     $3,356.79       +$5.59
+```
+
+**AGAINST META'S OWN ACCOUNT TOTALS, pulled fresh after the run:** Aug store $4,387.50 against
+$4,387.41 (**+$0.09, 0.002%**), Sep $3,356.79 against $3,356.76 (**+$0.03, 0.001%**). **Every day is
+within two cents and no day is missing.** The +$0.12 is the per-day rounding this file already
+records — Meta rounds each day, so a sum of daily rows sits a little above the monthly aggregate.
+
+**THE $5.59 MISS IS THE CLOCK, NOT THE MODEL.** The whole of it is September and the whole of
+September is 2026-09-18, which was still accruing: the account total for the month read $3,346.83
+when the prediction was made and $3,356.76 two and a half hours later when the run happened. The
+closed month landed at five cents.
+
+**fin_expenses is otherwise untouched:** 356 rows, 23 Meta (16 owned + **7 hand-entered July still
+at $3,450.00**), 333 non-Meta at $198,859.85, and every Meta row still `category='Marketing'`.
+
+### THE "UNALLOCATED" LEDGER ROW IS NO LONGER DUST, AND IT IS THE `Unknown` EPISODE
+
+It was $0.05 for August. It is now **$118.12 for August and $271.84 for September** — 2.7% and
+**8.1%** of those months.
+
+```
+2026-08  $118.12   of which Unknown $114.35, then Waco $1.23, Tyler-Longview $0.97, +47 markets
+2026-09  $271.84   of which Unknown $253.50, then Waco $5.68, Tyler-Longview $2.93, +92 markets
+```
+
+`monthlyExpenseRows` sends every market with no city code to the unallocated row, so this is the
+designed behaviour working: the money is carried and named rather than dropped. August moved from
+$0.05 because the six days the old store never had — 2026-08-26 to 31 — were the peak of the
+episode. **`Unknown` on or after 2026-09-10 is $0.26 in total**, so it is over.
+
+**IT MATTERS FOR ANY PER-MARKET COST FIGURE.** 8.1% of September's spend belongs to no city, so a
+September cost-per-player by market is understated on the spend side by that much. This is the
+column the item-4 collapsed row exists to show.
+
+### THE OKC HOLDOUT IS INTACT, AND THE LEDGER NOW SHOWS IT
+
+`Aug 2026 $379.78 · Sep 2026 $0.22`. The dark control market stopped receiving spend and the
+ledger records it directly, without anyone having to read an ad-set export.
+
+## SUB-MARKET AD SETS: DERIVE THE PARENT FROM DELIVERY, NEVER FROM THE NAME (2026-09-18)
+
+TOMBALL and NBTX are ad sets named for Houston and San Antonio sub-markets. Measured over all 58
+ad sets, lifetime, against where the money actually landed:
+
+```
+ad sets whose dominant NAMED market maps to a city   56 of 58
+the two that do not                                  both El Paso, $374.58 lifetime
+dominant share of NAMED spend    min 80.1%   p10 98.1%   median 100.0%
+```
+
+**Not one ad set is ambiguous.** TOMBALL resolves to `Houston, TX` at **100.0%**; NBTX to
+`San Antonio, TX` at 84.5% and 80.1%, the two lowest in the account and still decisive. The two
+that refuse are El Paso, which is correct — it is a market we ran in and do not map, and the rule
+declines to invent a city for it.
+
+**EXCLUDE `Unknown` FROM THE VOTE, NEVER FROM THE MONEY.** This is the detail that makes the rule
+survive what actually happened. During the episode the HTX ad set was only **58.3% named** overall,
+which would defeat a naive majority test — but of its NAMED spend, Houston was **98.6%**. Voting on
+named markets makes the grouping immune to Meta declining to resolve geography.
+
+**DERIVE, DO NOT MAINTAIN A MAPPING.** A maintained list fails silently: somebody has to notice a
+new ad set, and Cedar & Cactus rebuild campaigns and ad sets at every structural change (Meta locks
+conversion location and performance goal once an ad set has spent). Delivery does not rename itself.
+A future KATY or ROUND ROCK ad set lands in Houston or Austin the first time it spends, with nothing
+to update.
+
 ## THE CAMPAIGN NAMING CONVENTION BROKE IN AUGUST 2026 — DO NOT DERIVE GEOGRAPHY FROM IT
 
 Proposed: use campaign names (which carry `ATL`, `DFW`, `HTX`, …) instead of the `comscore_market`
