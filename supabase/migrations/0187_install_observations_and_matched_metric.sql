@@ -62,8 +62,9 @@
 -- misses is missed IDENTICALLY on both sides, so it cancels in the ratio — which
 -- is the only thing the estimator consumes.
 --
--- THE ROW IS UPDATED BEFORE THE CHECK IS TIGHTENED. Adding a CHECK validates
--- existing rows, and experiment 12 currently carries 'became_players'.
+-- THE CONSTRAINT IS DROPPED, THEN THE ROW MOVED, THEN THE CONSTRAINT ADDED. Doing
+-- the UPDATE first is the intuitive order and it is wrong — see the note at that
+-- statement. This file was refused once for exactly that.
 --
 -- Apply via Supabase Dashboard -> SQL Editor -> paste & run.
 
@@ -100,14 +101,27 @@ revoke all on public.fin_meta_install_observations from anon, authenticated;
 grant select on public.fin_meta_install_observations to service_role;
 
 -- ── 2. the metric allowlist ──────────────────────────────────────────────────
--- UPDATE FIRST. The CHECK below validates existing rows and experiment 12 holds
--- 'became_players'; tightening before updating would refuse its own table.
+--
+-- DROP, THEN UPDATE, THEN ADD. THE OBVIOUS ORDER IS WRONG AND THIS FILE SHIPPED
+-- IT ONCE. The first version ran the UPDATE first, reasoning that adding a CHECK
+-- validates existing rows so the row must be corrected before the constraint
+-- tightens. Both halves of that are true and the conclusion does not follow: the
+-- OLD constraint is still in force during the UPDATE, and it does not list
+-- 'played_within_7d'. Postgres refused the UPDATE, not the ALTER:
+--
+--   ERROR 23514: new row for relation "fin_growth_experiment" violates check
+--   constraint "fin_growth_experiment_metric_known"
+--
+-- The row has to be unguarded for exactly as long as it takes to move it. The
+-- whole script is one transaction, so there is no window in which a bad value
+-- could be written by anything else.
+alter table public.fin_growth_experiment
+  drop constraint if exists fin_growth_experiment_metric_known;
+
 update public.fin_growth_experiment
    set metric = 'played_within_7d'
  where metric = 'became_players';
 
-alter table public.fin_growth_experiment
-  drop constraint if exists fin_growth_experiment_metric_known;
 -- became_players IS GONE, NOT DEPRECATED. A value the CHECK still accepts is a
 -- value somebody will set, and the whole point is that the fork cannot be
 -- reopened by a query. 'registrations' stays: it is a different question
