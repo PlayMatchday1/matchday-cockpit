@@ -4274,6 +4274,81 @@ column the item-4 collapsed row exists to show.
 `Aug 2026 $379.78 · Sep 2026 $0.22`. The dark control market stopped receiving spend and the
 ledger records it directly, without anyone having to read an ad-set export.
 
+## META WITHHOLDS APP INSTALLS UNDER `comscore_market` (2026-09-18)
+
+**CPI BY MARKET CANNOT COME FROM THE GEO BREAKDOWN.** Measured across nine dimension
+combinations, Sep 1-17, live account:
+
+```
+account, whole period, no breakdown          installs 766
+account, DAILY, no breakdown                 installs 766
+CAMPAIGN, whole period, no breakdown         installs 766
+ADSET, whole period, no breakdown            installs 766
+ADSET, DAILY, no breakdown                   installs 766
+account, whole period, country breakdown     installs 766
+account, whole period, region breakdown      installs 766
+account, whole period, comscore breakdown    installs   0   <-
+ADSET,   whole period, comscore breakdown    installs   0   <-
+```
+
+**The comscore rows are not empty** — 67 and 121 of them carry `link_click`, `video_view` and the
+rest. App-install actions specifically are withheld. `country` and `region` keep them, but region
+is US states, which lumps Austin, Houston, Dallas and San Antonio into "Texas".
+
+So installs reach a market only through the ad set: `mobile_app_install` at ad-set grain, attributed
+by that ad set's derived parent market. It means **spend is delivery-attributed and installs are
+ad-set-attributed**, and any CPI-by-market figure must say so on its face.
+
+The action vocabulary this account returns (Sep 1-17): `mobile_app_install` 766 and
+`omni_app_install` 766 are the same number; `complete_registration` 88 likewise mirrors
+`omni_complete_registration`. `link_click` 1,910 against `clicks` 3,534, `reach` 224,208.
+
+**`reach` SURVIVES the comscore breakdown but MUST NOT BE SUMMED.** It is de-duplicated, so the
+same person reached in two markets counts once at the account and twice across the rows.
+
+## THE ATTRIBUTION WINDOW IS ONE DAY, AND IT IS READABLE (2026-09-18)
+
+Every ACTIVE ad set, from `GET /adsets?fields=attribution_spec`:
+
+```
+APP_INSTALLS   [{"event_type":"CLICK_THROUGH","window_days":1}]                        ATL STL SATX ATX HTX DFW
+APP_INSTALLS   [CLICK_THROUGH 1, VIEW_THROUGH 1, ENGAGED_VIDEO_VIEW 1]                 ATL
+```
+
+Seven active of twenty-five, all `optimization_goal = APP_INSTALLS`.
+
+**This is why `action_attribution_windows` appears to do nothing.** Asking for `1d_click`,
+`7d_click`, `28d_click`, `1d_view` and `7d_view` all returned **766** — the ad sets' own spec is one
+day, so the request parameter changes nothing. That is not a broken parameter.
+
+**So the 28-day re-pull is 28x the horizon an install can restate over.** It stays right, and the
+`attribution_spec` is stored per ad set so a change by the agency is visible rather than inferred
+from a number drifting. Installs have never been stored, so their restatement has never been
+measured and cannot be retrospectively — `reported_at` on the new table is what makes the first
+measurement possible.
+
+## THE PLAYER SIDE HAS NO PLATFORM, AND `first_match_date` CAN BE IN THE FUTURE (2026-09-18)
+
+**`mdapi_users` carries no platform, device or OS column.** So "Atlanta Android" cannot be a
+treatment cell distinct from Atlanta on any player-side metric; it folds into ATL by necessity, not
+by choice. Download-side platform exists (`growth_downloads_month_ios`, the Play and App Store
+install syncs); the user side does not.
+
+**`growth_player_profile.first_match_date` IS THE DATE OF THE MATCH, AND THE MATCH CAN BE IN THE
+FUTURE.** On 2026-09-18 it carried new players dated 09-19, 09-20 and 09-21 for matches that had not
+happened. Correct for cohorts and retention, where the cohort IS the first play. **Wrong for cost
+per acquisition**, where it files a player weeks away from the spend that bought them. Acquisition
+work dates a player by `completed_sign_up_at` and uses the first match only as a qualifier.
+
+**THREE CLOCKS, AND CHICAGO IS THE CHEAP ONE.** Meta buckets in the ad account's zone,
+`America/Bogota`, UTC-5 with no DST. `America/Chicago` is UTC-5 from March to November. So the two
+agree EXACTLY for two thirds of the year and are one hour apart for the rest. `growth_participation`
+is UTC, which is five to six hours out: **24.9% of signups since 2026-08-01 — 840 of 3,369 — fall on
+a different DAY under UTC than under Chicago.**
+
+**9 of 15,478 players in `growth_player_profile` have no completed signup**, so a signup-dated
+player count undercounts players by 0.06%.
+
 ## SUB-MARKET AD SETS: DERIVE THE PARENT FROM DELIVERY, NEVER FROM THE NAME (2026-09-18)
 
 TOMBALL and NBTX are ad sets named for Houston and San Antonio sub-markets. Measured over all 58
