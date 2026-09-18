@@ -4274,6 +4274,62 @@ column the item-4 collapsed row exists to show.
 `Aug 2026 $379.78 · Sep 2026 $0.22`. The dark control market stopped receiving spend and the
 ledger records it directly, without anyone having to read an ad-set export.
 
+## 0184-0186 APPLIED, AND THE OKC EXPERIMENT IS ROW 12 (2026-09-18)
+
+`fin_meta_adset`, `fin_meta_adset_market_daily`, `fin_meta_adset_daily`,
+`growth_acquisition_daily` and `fin_growth_experiment` are LIVE and empty except for the one
+experiment row. Nothing reads them yet.
+
+```
+id 12  OKC dark control, Sep 2026
+       control OKC   treatment ATL ATX DFW HTX SATX STL
+       baseline 2026-08-12 .. 2026-09-08   period 2026-09-09 .. running
+       metric became_players
+```
+
+Atlanta Android is inside ATL of necessity: `mdapi_users` has no platform column.
+
+### A CHECK CONSTRAINT PASSES ON NULL, AND `array_length` RETURNS NULL ON EMPTY
+
+0186 was refused on its first run with `AN EMPTY TREATMENT SET WAS ACCEPTED` and rolled back whole.
+`array_length(arr, 1)` is **NULL** for an empty array and a CHECK only fails on FALSE, so
+`array_length(treatment_markets,1) >= 1` was `NULL >= 1` and accepted everything. **`cardinality()`
+returns 0 and is the right function.**
+
+**The same trap sat unfired in the control guard.** `not (control_market = any (treatment_markets))`
+is NULL-blind: `'OKC' = any(ARRAY['ATL',NULL])` is NULL, `not NULL` is NULL, CHECK passes. Replaced
+with `coalesce(control_market <> all (treatment_markets), false)`, which fails closed on both.
+
+**Both failures point the same way** — an empty treatment set makes the counterfactual zero and the
+incremental equal to the full actual, which is a perfect-looking result.
+
+Every guard in both tables was then re-fired against the APPLIED constraints through PostgREST,
+not re-read: 0184 eight probes (floor both directions, negative spend/installs/reach, NULL installs
+accepted, confidence 1.5 refused and 0.986 accepted), 0186 six probes. Zero rows left behind.
+
+### THE INCREMENTALITY MATHS RUNS, AND THE CONTROL IS TOO SMALL TO READ IT
+
+Computed on the real definition, 2026-09-18:
+
+```
+baseline  treatment 741  control 33   ratio 22.455
+period    treatment 195  control  5   counterfactual 112.3   incremental 82.7
+spend $1,787.03   naive CAC $9.16   incremental CAC $21.60
+```
+
+**Do not quote that $21.60.** Two reasons, and only the first goes away with time.
+
+**MATURITY.** Baseline treatment conversion is 741/1,756 = **42.2%** and settled; the period is
+195/621 = **31.4%** at nine days old and still filling. The two censoring errors run in OPPOSITE
+directions and do not cancel: a censored `pT` understates the incremental, while a censored `pC`
+understates the counterfactual and so OVERstates it.
+
+**THE CONTROL IS THE BINDING CONSTRAINT AND WAITING DOES NOT FIX IT.** The counterfactual is
+`control x 22.455`, so **one player either way in OKC moves it by 22** — and OKC put up 2 to 5
+players over the readable period. A matched-maturity read (`played_within_7d` on both sides, period
+cut at today-7) gives ratio 26.269 and incremental 17.5 against 27.1 unmatched, on a control of 2.
+The estimator is a ratio to a single-digit denominator.
+
 ## META WITHHOLDS APP INSTALLS UNDER `comscore_market` (2026-09-18)
 
 **CPI BY MARKET CANNOT COME FROM THE GEO BREAKDOWN.** Measured across nine dimension
