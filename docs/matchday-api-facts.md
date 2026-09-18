@@ -4324,11 +4324,26 @@ spend $1,787.03   naive CAC $9.16   incremental CAC $21.60
 directions and do not cancel: a censored `pT` understates the incremental, while a censored `pC`
 understates the counterfactual and so OVERstates it.
 
-**THE CONTROL IS THE BINDING CONSTRAINT AND WAITING DOES NOT FIX IT.** The counterfactual is
-`control x 22.455`, so **one player either way in OKC moves it by 22** — and OKC put up 2 to 5
+**THE CONTROL'S SIZE IS THE BINDING CONSTRAINT, AND IT SETS A DATE.** The counterfactual is
+`control x 22.455`, so **one player either way in OKC moves it by 22.5** — and OKC put up 2 to 5
 players over the readable period. A matched-maturity read (`played_within_7d` on both sides, period
 cut at today-7) gives ratio 26.269 and incremental 17.5 against 27.1 unmatched, on a control of 2.
 The estimator is a ratio to a single-digit denominator.
+
+Waiting DOES fix this one, proportionally — the sensitivity is `1 / control count`, and the control
+accrues at **0.56 players/day while dark** (against 1.18/day lit, which is itself the effect being
+measured). So:
+
+```
+control   5   20.0% per player   ~2026-09-18   <- today
+control  10   10.0% per player   ~2026-09-27
+control  15    6.7% per player   ~2026-10-06
+control  20    5.0% per player   ~2026-10-15
+control  33    3.0% per player   ~2026-11-08
+```
+
+**Do not read this experiment before mid-October.** At 5% per control player it is worth quoting;
+at 20% it is a number with a 22-player error bar on a 112-player counterfactual.
 
 ## META WITHHOLDS APP INSTALLS UNDER `comscore_market` (2026-09-18)
 
