@@ -106,6 +106,15 @@ const NODE_SUITES = [
   // the second-run skip that stops a player being paid twice.
   "scripts/credit-all-test.ts",
   "scripts/write-routes-logged-test.ts",
+  /* EVERY SCHEDULED PATH MUST ANSWER THE VERB VERCEL SENDS. Cron issues a GET; a route exporting
+   * only POST answers 405 every night and NOTHING says so — the cron dashboard shows the job
+   * firing, no fin_sync_log row is written, and a table just stops filling. Four of the five
+   * scheduled paths were in that state on 2026-09-18, one of them hourly, and meta-ad-spend had
+   * a single log row in its entire life while $4,392.97 of ad spend went unrecorded. The routes
+   * are fixed; this is here for the NEXT cron somebody adds. Pure, sub-second, and its detector
+   * carries its own controls — the comment blocks on those routes discuss GET at length, so a
+   * naive /GET/ test reports green on the exact bug it exists to catch. */
+  "scripts/cron-verb-test.ts",
   "scripts/walltime-guard-test.ts",
   // THE DRAWER'S DATE/TIME MODEL. A match-record write: a silent hour shift here moves
   // kickoff for everyone holding a spot, and it looks correct on screen while it does so.

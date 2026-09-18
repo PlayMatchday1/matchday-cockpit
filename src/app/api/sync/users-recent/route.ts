@@ -155,3 +155,16 @@ export async function POST(req: Request) {
     { status: result.ok ? 200 : 500 },
   );
 }
+
+/* ── VERCEL CRON SENDS GET, AND THIS ROUTE ONLY EXPORTED POST ──────────────────────────────────
+ * Scheduled `5 * * * *`, so it has been answering 405 TWENTY-FOUR TIMES A DAY. Read from the
+ * production invocation logs on 2026-09-18 rather than inferred — 24 rows in 24 hours, every one
+ * `GET -> 405`, at :05 past every hour.
+ *
+ * It was found by scripts/cron-verb-test.ts on the run that was meant to prove the OTHER three
+ * fixed routes, which is the argument for the guard existing at all.
+ *
+ * SAME HANDLER, SAME AUTH. The bearer is read from headers and the cron path consumes no body, so
+ * the verb is the only difference between the two entry points.
+ * https://vercel.com/docs/cron-jobs#how-cron-jobs-work */
+export const GET = POST;

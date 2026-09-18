@@ -146,3 +146,23 @@ export async function POST(req: Request) {
     { status: result.ok ? 200 : 500 },
   );
 }
+
+/* ── VERCEL CRON SENDS GET, AND THESE ROUTES ONLY EXPORTED POST ────────────────────────────────
+ * So the scheduled call has been returning 405 every night since the day it was scheduled. The
+ * cron was firing perfectly; nothing was answering it. Read from the production invocation logs
+ * on 2026-09-18 rather than inferred:
+ *
+ *   /api/sync/meta-ad-spend    10:00:39Z  GET -> 405   (and 09-17, 09-16)
+ *   /api/sync/users-full       09:00:35Z  GET -> 405   (and 09-17, 09-16)
+ *   /api/sync/wp-submissions   12:00:42Z  GET -> 405   (and 09-17, 09-16)
+ *   /api/sync/cron             11:00:03Z  GET -> 200   (and 09-17, 09-16)
+ *
+ * /api/sync/cron is the only scheduled route that carried this line, and it is the only one that
+ * has ever run. fin_sync_log agrees: every source inside it has 30 rows in 30 days, and
+ * meta-ad-spend has ONE row in its entire life, triggered_by='manual'.
+ *
+ * SAME HANDLER, SAME AUTH. The bearer is read from headers and the cron path consumes no body, so
+ * the verb is the only difference between the two entry points. This is the line /api/sync/cron
+ * has carried since it was written, with the Vercel doc reference on it:
+ * https://vercel.com/docs/cron-jobs#how-cron-jobs-work */
+export const GET = POST;
