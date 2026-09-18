@@ -96,6 +96,13 @@ const NODE_SUITES = [
    * checks what reached the database. Demonstrated red against the pre-fix rollup: DELETE ran,
    * INSERT did not, $4,900.00 of ledger gone, reported as a success. */
   "scripts/meta-empty-pull-test.ts",
+  /* WHICH MARKET AN AD SET BELONGS TO, AND WHEN AN INSTALL MOVED. Both decisions are invisible
+   * on screen and both fail toward a plausible number: a wrong parent files a market's whole CPI
+   * under another city with every figure still rendering, and a missed observation makes install
+   * restatement unmeasurable, which is the only reason that log exists. Carries the real
+   * geo-automation episode as a fixture — the ad set was 59.7% Houston of TOTAL spend and 99.1%
+   * of NAMED, which is why Unknown is excluded from the vote and never from the money. */
+  "scripts/meta-adset-model-test.ts",
   "scripts/mutation-tests.ts",
   "scripts/prod-guard-test.ts",
   "scripts/stage-denylist-test.ts",

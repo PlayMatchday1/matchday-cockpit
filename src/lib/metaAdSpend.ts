@@ -293,6 +293,145 @@ export function coverageShortfall(cov: readonly MonthCoverage[]): MonthCoverage[
 /** The note on an unallocated row. Named so the ledger says what it is rather than showing a gap. */
 export const UNALLOCATED_NOTE = "Meta ads - unallocated";
 
+/* ══ CAMPAIGN AND AD SET GRAIN ═══════════════════════════════════════════════════════════════════
+ *
+ * WHY THIS IS A SECOND SET OF SHAPES AND NOT MORE COLUMNS ON THE FIRST. Meta SUPPRESSES app-install
+ * actions under `comscore_market` — measured across nine dimension combinations on 2026-09-18, 766
+ * installs at every grain without it and 0 with it, on rows that carry link clicks and video views
+ * perfectly well. So geography and installs cannot sit on one row, and installs reach a market only
+ * through the ad set that produced them.
+ */
+
+/** The new tables' floor (0184). EARLIER than the ledger's, LATER than the daily store's — a third
+ *  floor for a third reason: the campaign structure was rebuilt in August, so pre-August campaign
+ *  rows describe a structure that no longer exists. A backfill reaching further back must not try
+ *  to write them; the CHECK would refuse the row and the whole run with it. */
+export const META_ADSET_FLOOR_YMD = "2026-08-01";
+
+export function isAtOrAfterAdsetFloor(ymd: string): boolean {
+  return isAtOrAfterFloor(ymd, META_ADSET_FLOOR_YMD);
+}
+
+/* ── THE PARENT MARKET, DERIVED FROM DELIVERY ────────────────────────────────────────────────────
+ * Never from the name. The convention held at 100% of spend for eight months and fell to 28.5% in
+ * six weeks when the account was rebuilt, and a campaign name is targeting INTENT while
+ * comscore_market is where the impression was SERVED.
+ *
+ * MEASURED over all 58 ad sets, lifetime: 56 resolve to a city, dominant share of NAMED spend min
+ * 80.1%, p10 98.1%, median 100.0%. Restricted to the 2026-08-01 floor the tables can actually see:
+ * 35 ad sets, ALL 35 agreeing with their lifetime parent, min 80.1%, none below the floor.
+ */
+export const MARKET_CONFIDENCE_FLOOR = 0.6;
+
+/** Meta's own name for "we could not resolve this". A real returned market, not a null. */
+export const UNKNOWN_MARKET = "Unknown";
+
+export type AdsetMarketSpend = { marketRaw: string; spendCents: number };
+
+export type DerivedParent = {
+  /** The dominant NAMED market, populated even when it maps to nothing or clears no floor, so the
+   *  not-attributed block can name the market rather than only report that there wasn't one. */
+  marketRaw: string | null;
+  /** Our city code. Null when the dominant market is unmapped, or the floor was not cleared. */
+  marketKey: string | null;
+  /** Share of NAMED spend held by the dominant market. Null when there is no named spend at all. */
+  confidence: number | null;
+  attributed: boolean;
+};
+
+/**
+ * UNKNOWN IS EXCLUDED FROM THE VOTE AND NEVER FROM THE MONEY.
+ *
+ * This is the line that makes the rule survive what actually happened. During the geo-automation
+ * episode the HTX ad set was only 58.3% NAMED overall — a naive majority on TOTAL spend would have
+ * refused to attribute it, or worse, attributed it to "Unknown". Of its NAMED spend, Houston was
+ * 98.6%. Unknown is the absence of a place, so it cannot win a vote about which place this is.
+ *
+ * TIES BREAK ON THE MARKET NAME, so two runs over identical data cannot disagree.
+ */
+export function deriveParentMarket(rows: readonly AdsetMarketSpend[]): DerivedParent {
+  const byMarket = new Map<string, number>();
+  for (const r of rows) {
+    if (r.marketRaw === UNKNOWN_MARKET) continue;
+    // Defensive: the account-grain reconciliation row has no business at this grain, and if it ever
+    // appeared it would be a market called "__unallocated__" winning a vote about geography.
+    if (r.marketRaw === UNALLOCATED_MARKET) continue;
+    byMarket.set(r.marketRaw, (byMarket.get(r.marketRaw) ?? 0) + r.spendCents);
+  }
+  const namedTotal = [...byMarket.values()].reduce((a, b) => a + b, 0);
+  if (namedTotal <= 0) return { marketRaw: null, marketKey: null, confidence: null, attributed: false };
+  const ranked = [...byMarket.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const [marketRaw, top] = ranked[0];
+  const confidence = top / namedTotal;
+  const mapped = cityForMarket(marketRaw);
+  return {
+    marketRaw,
+    marketKey: confidence >= MARKET_CONFIDENCE_FLOOR ? mapped : null,
+    confidence,
+    attributed: confidence >= MARKET_CONFIDENCE_FLOOR && mapped != null,
+  };
+}
+
+/* ── ACTIONS ─────────────────────────────────────────────────────────────────────────────────────
+ * Meta returns `actions: [{action_type, value}]` with value as a STRING. `mobile_app_install` and
+ * `omni_app_install` carry the same number on this account (766 over Sep 1-17), as do
+ * `complete_registration` and `omni_complete_registration` (88). The non-omni names are read.
+ *
+ * ABSENT IS NOT ZERO, the rule impressions already follow. A row with NO actions array is a row we
+ * learned nothing from — every geo row is like this — and returns null. A row WITH an actions array
+ * but no install action genuinely had none, and returns 0. Collapsing the two would make a day Meta
+ * declined to break down look like a day nobody installed on. */
+export const META_INSTALL_ACTION = "mobile_app_install";
+export const META_REGISTRATION_ACTION = "complete_registration";
+
+export function actionValue(actions: unknown, actionType: string): number | null {
+  if (!Array.isArray(actions)) return null;
+  let total = 0;
+  for (const a of actions) {
+    if (!a || typeof a !== "object") continue;
+    const row = a as { action_type?: unknown; value?: unknown };
+    if (row.action_type !== actionType) continue;
+    const n = Number(row.value);
+    if (Number.isFinite(n) && n >= 0) total += n;
+  }
+  return Math.round(total);
+}
+
+/* ── THE INSTALL OBSERVATION LOG (0187) ──────────────────────────────────────────────────────────
+ * fin_meta_adset_daily.reported_at CANNOT measure restatement: the sync upserts on the primary key,
+ * so a column in the payload is overwritten every run and would only ever say when we last asked.
+ * A single mutable row cannot hold a history of itself.
+ *
+ * So an append-only log, written ONLY WHEN THE NUMBER MOVES. First sighting always recorded; after
+ * that a row appears only if installs differ from the last recorded value. On a stable series that
+ * is one row per day per ad set forever, and the restatement CURVE falls out rather than only its
+ * endpoints.
+ *
+ * A NULL installs APPENDS NOTHING. Null means the pull told us nothing, which is not an observation
+ * of zero and must not be logged as one — that would manufacture a restatement from 0 the first
+ * time a real number arrived. */
+export type FreshInstallRow = { spendDate: string; adsetId: string; installs: number | null; spendCents: number };
+export type InstallObservation = { spendDate: string; adsetId: string; installs: number; spendCents: number };
+
+export function observationKey(spendDate: string, adsetId: string): string {
+  return `${spendDate}|${adsetId}`;
+}
+
+export function observationsToAppend(
+  fresh: readonly FreshInstallRow[],
+  lastKnown: ReadonlyMap<string, number>,
+): InstallObservation[] {
+  const out: InstallObservation[] = [];
+  for (const r of fresh) {
+    if (r.installs == null) continue;
+    const k = observationKey(r.spendDate, r.adsetId);
+    const prev = lastKnown.get(k);
+    if (prev !== undefined && prev === r.installs) continue;
+    out.push({ spendDate: r.spendDate, adsetId: r.adsetId, installs: r.installs, spendCents: r.spendCents });
+  }
+  return out;
+}
+
 /* ── ERROR REDACTION ────────────────────────────────────────────────────────────────────────────
  * Graph errors quote the request. If a URL ever carried the token it would land in a log, an
  * exception and a Vercel trace at once. The token is sent as a header so it should never be in a

@@ -32,6 +32,10 @@ import {
   spendStringToCents, impressionsToInt, assertUsd, isAtOrAfterFloor, isAtOrAfterDailyFloor, windowFor,
   reconcileDay, toDailyRows, monthlyExpenseRows, cityForMarket,
   ledgerMonthCoverage, coverageShortfall,
+  META_ADSET_FLOOR_YMD, isAtOrAfterAdsetFloor, deriveParentMarket, actionValue,
+  observationsToAppend, observationKey,
+  META_INSTALL_ACTION, META_REGISTRATION_ACTION,
+  type AdsetMarketSpend, type FreshInstallRow, type DerivedParent,
   META_VENDOR, META_CATEGORY, UNALLOCATED_NOTE, UNALLOCATED_MARKET,
   type MetaBreakdownRow, type DailyRow, type LedgerSourceRow, type MonthCoverage,
 } from "./metaAdSpend";
@@ -58,6 +62,23 @@ export type MetaSyncResult = {
   ledgerSourceRows: number;
   /** Per owned month: days present in the daily store against days that have happened. */
   coverage: MonthCoverage[];
+
+  /* ── CAMPAIGN AND AD SET GRAIN. Zero on a run whose window is entirely below the 2026-08-01
+   * ad-set floor, which is a legitimate historical load and not a failure. */
+  adsetsSeen: number;
+  adsetMarketRows: number;
+  adsetDailyRows: number;
+  parentsAttributed: number;
+  /** Named, never dropped: the block an operator has to act on. */
+  parentsNotAttributed: {
+    adsetId: string; adsetName: string | null;
+    marketRaw: string | null; confidence: number | null; spendCents: number;
+  }[];
+  observationsAppended: number;
+  /* THE TWO GRAINS WILL NOT TIE, and this reports by how much rather than asserting they do. Meta
+   * withholds low-volume breakdown rows at the finer grain too, so ad-set x market sums to slightly
+   * LESS than account x market over the same days. A growing gap means more is being withheld. */
+  adsetVsAccountCents: number;
   apiCalls: number;
 };
 
@@ -198,6 +219,192 @@ export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string, opts
     }
   }
 
+  /* ══ WRITE 1b: CAMPAIGN AND AD SET GRAIN ══════════════════════════════════════════════════════
+   *
+   * TWO PULLS, because Meta will not serve geography and installs on one row: `comscore_market`
+   * suppresses app-install actions entirely. One pull carries the market and no installs, the other
+   * carries installs and no market, and the ad set is the join between them.
+   *
+   * THE AD-SET FLOOR IS ITS OWN. These tables start at 2026-08-01 because the campaign structure was
+   * rebuilt then. A historical load reaching back to the DAILY floor (2025-12-01) is legitimate and
+   * must not try to write them — the CHECK would refuse the row and take the whole run with it — so
+   * every row is filtered here rather than at the database. */
+  const adsetWindowOpen = until >= META_ADSET_FLOOR_YMD;
+  let adsetsSeen = 0, adsetMarketRows = 0, adsetDailyRows = 0;
+  let parentsAttributed = 0, observationsAppended = 0, adsetVsAccountCents = 0;
+  const parentsNotAttributed: MetaSyncResult["parentsNotAttributed"] = [];
+
+  if (adsetWindowOpen) {
+    const adsetSince = since > META_ADSET_FLOOR_YMD ? since : META_ADSET_FLOOR_YMD;
+    const adsetCommon = { time_range: JSON.stringify({ since: adsetSince, until }), time_increment: "1", limit: "500" };
+
+    /* THE DIMENSION. attribution_spec is read on every run rather than assumed: every active ad set
+     * is CLICK_THROUGH window_days 1 today, which is what decides how long an install can restate,
+     * and a change by the agency has to be visible here instead of inferred from a number drifting. */
+    const adsetMeta = await pageAll(`${account.id}/adsets`, {
+      fields: "id,name,campaign_id,campaign{name},optimization_goal,attribution_spec,effective_status",
+      limit: "200",
+    });
+    const geo = await pageAll(`${account.id}/insights`, {
+      ...adsetCommon, level: "adset", breakdowns: BREAKDOWN_PARAM,
+      fields: "adset_id,campaign_id,spend,impressions,clicks",
+    });
+    const flat = await pageAll(`${account.id}/insights`, {
+      ...adsetCommon, level: "adset",
+      fields: "adset_id,campaign_id,spend,impressions,clicks,reach,actions",
+    });
+
+    // ── geo rows ──────────────────────────────────────────────────────────────────────────────
+    const geoRows = geo
+      .filter((r) => isAtOrAfterAdsetFloor(String(r.date_start ?? "")))
+      .filter((r) => String(r[BREAKDOWN_PARAM] ?? "") !== "")
+      .map((r) => ({
+        spend_date: String(r.date_start),
+        ad_account_id: account.id,
+        adset_id: String(r.adset_id ?? ""),
+        campaign_id: String(r.campaign_id ?? ""),
+        market_raw: String(r[BREAKDOWN_PARAM]),
+        market_key: cityForMarket(String(r[BREAKDOWN_PARAM])),
+        spend_cents: spendStringToCents(r.spend),
+        impressions: impressionsToInt(r.impressions),
+        clicks: impressionsToInt(r.clicks),
+        synced_at: new Date().toISOString(),
+      }))
+      .filter((r) => r.adset_id !== "");
+    for (let i = 0; i < geoRows.length; i += 500) {
+      const { error } = await sb.from("fin_meta_adset_market_daily")
+        .upsert(geoRows.slice(i, i + 500), { onConflict: "spend_date,ad_account_id,adset_id,market_raw" });
+      if (error) throw new Error(`fin_meta_adset_market_daily upsert failed: ${error.message}`);
+    }
+    adsetMarketRows = geoRows.length;
+
+    // ── install-bearing rows ──────────────────────────────────────────────────────────────────
+    const flatRows = flat
+      .filter((r) => isAtOrAfterAdsetFloor(String(r.date_start ?? "")))
+      .map((r) => ({
+        spend_date: String(r.date_start),
+        ad_account_id: account.id,
+        adset_id: String(r.adset_id ?? ""),
+        campaign_id: String(r.campaign_id ?? ""),
+        spend_cents: spendStringToCents(r.spend),
+        impressions: impressionsToInt(r.impressions),
+        clicks: impressionsToInt(r.clicks),
+        // NEVER SUMMED downstream — de-duplicated, stored at the grain it was fetched at.
+        reach: impressionsToInt(r.reach),
+        installs: actionValue(r.actions, META_INSTALL_ACTION),
+        registrations: actionValue(r.actions, META_REGISTRATION_ACTION),
+        reported_at: new Date().toISOString(),
+      }))
+      .filter((r) => r.adset_id !== "");
+    for (let i = 0; i < flatRows.length; i += 500) {
+      const { error } = await sb.from("fin_meta_adset_daily")
+        .upsert(flatRows.slice(i, i + 500), { onConflict: "spend_date,ad_account_id,adset_id" });
+      if (error) throw new Error(`fin_meta_adset_daily upsert failed: ${error.message}`);
+    }
+    adsetDailyRows = flatRows.length;
+
+    /* ── THE OBSERVATION LOG. Read the LAST recorded value per (day, ad set), then append only what
+     * moved. The read is bounded by the window, not the table, so it does not grow with history. */
+    const priorObs = await selectAll<{ spend_date: string; adset_id: string; installs: number; observed_at: string }>(() =>
+      sb.from("fin_meta_install_observations")
+        .select("spend_date, adset_id, installs, observed_at")
+        .gte("spend_date", adsetSince).lte("spend_date", until)
+        .order("observed_at"),
+    );
+    const lastKnown = new Map<string, number>();
+    for (const o of priorObs) lastKnown.set(observationKey(o.spend_date, o.adset_id), o.installs);
+    const fresh: FreshInstallRow[] = flatRows.map((r) => ({
+      spendDate: r.spend_date, adsetId: r.adset_id, installs: r.installs, spendCents: r.spend_cents,
+    }));
+    const append = observationsToAppend(fresh, lastKnown);
+    if (append.length) {
+      const payload = append.map((o) => ({
+        spend_date: o.spendDate, ad_account_id: account.id, adset_id: o.adsetId,
+        installs: o.installs, spend_cents: o.spendCents,
+      }));
+      for (let i = 0; i < payload.length; i += 500) {
+        const { error } = await sb.from("fin_meta_install_observations").insert(payload.slice(i, i + 500));
+        if (error) throw new Error(`fin_meta_install_observations insert failed: ${error.message}`);
+      }
+    }
+    observationsAppended = append.length;
+
+    /* ── THE PARENT MARKET, DERIVED FROM THIS RUN'S OWN ROWS ──────────────────────────────────
+     * Not from a second, wider pull: the parent is derived from exactly the rows that were just
+     * stored, so the two can never disagree. Measured — the Aug-1 window and the lifetime window
+     * produce identical parents for all 35 ad sets they share.
+     *
+     * AN AD SET WITH NO ROWS IN THIS RUN KEEPS ITS STORED PARENT, because it is simply absent from
+     * the payload and the upsert does not touch it. That is what makes the nightly 28-day window
+     * safe: it sees 16 of the 35 ad sets, and the other 19 stopped spending in August and keep the
+     * parent the backfill gave them. */
+    const byAdset = new Map<string, AdsetMarketSpend[]>();
+    const spendByAdset = new Map<string, number>();
+    for (const r of geoRows) {
+      (byAdset.get(r.adset_id) ?? byAdset.set(r.adset_id, []).get(r.adset_id)!)
+        .push({ marketRaw: r.market_raw, spendCents: r.spend_cents });
+      spendByAdset.set(r.adset_id, (spendByAdset.get(r.adset_id) ?? 0) + r.spend_cents);
+    }
+    const nameOf = new Map<string, { name: string | null; campaignId: string; campaignName: string | null; goal: string | null; spec: unknown }>();
+    for (const a of adsetMeta) {
+      nameOf.set(String(a.id), {
+        name: (a.name as string) ?? null,
+        campaignId: String(a.campaign_id ?? ""),
+        campaignName: ((a.campaign as { name?: string } | undefined)?.name) ?? null,
+        goal: (a.optimization_goal as string) ?? null,
+        spec: a.attribution_spec ?? null,
+      });
+    }
+    const dimRows: Record<string, unknown>[] = [];
+    for (const [adsetId, rows] of byAdset) {
+      const parent: DerivedParent = deriveParentMarket(rows);
+      const meta = nameOf.get(adsetId);
+      if (parent.attributed) parentsAttributed++;
+      else parentsNotAttributed.push({
+        adsetId, adsetName: meta?.name ?? null,
+        marketRaw: parent.marketRaw, confidence: parent.confidence,
+        spendCents: spendByAdset.get(adsetId) ?? 0,
+      });
+      dimRows.push({
+        ad_account_id: account.id, adset_id: adsetId,
+        campaign_id: meta?.campaignId || (rows.length ? "" : ""),
+        adset_name: meta?.name ?? null, campaign_name: meta?.campaignName ?? null,
+        optimization_goal: meta?.goal ?? null, attribution_spec: meta?.spec ?? null,
+        market_key: parent.marketKey, market_raw: parent.marketRaw,
+        market_confidence: parent.confidence, market_method: "derived",
+        computed_at: new Date().toISOString(),
+      });
+    }
+    /* campaign_id is NOT NULL. An ad set with rows but no dimension row (deleted upstream between
+     * the two calls) takes its campaign_id from the insight rows rather than failing the insert. */
+    const campaignOf = new Map<string, string>();
+    for (const r of geoRows) if (r.campaign_id) campaignOf.set(r.adset_id, r.campaign_id);
+    for (const d of dimRows) if (!d.campaign_id) d.campaign_id = campaignOf.get(String(d.adset_id)) ?? "unknown";
+    if (dimRows.length) {
+      const { error } = await sb.from("fin_meta_adset")
+        .upsert(dimRows, { onConflict: "ad_account_id,adset_id" });
+      if (error) throw new Error(`fin_meta_adset upsert failed: ${error.message}`);
+    }
+    adsetsSeen = dimRows.length;
+
+    /* ── RECONCILIATION, REPORTED NOT ASSERTED. Ad-set x market against account x market over the
+     * same days and markets. They will NOT tie: Meta withholds low-volume breakdown rows at the
+     * finer grain too, so the ad-set total sits slightly below. A GROWING gap is the signal. */
+    const acctByKey = new Map<string, number>();
+    for (const r of daily) {
+      if (r.marketRaw === UNALLOCATED_MARKET) continue;
+      if (!isAtOrAfterAdsetFloor(r.date)) continue;
+      acctByKey.set(`${r.date}|${r.marketRaw}`, (acctByKey.get(`${r.date}|${r.marketRaw}`) ?? 0) + r.spendCents);
+    }
+    const adsetByKey = new Map<string, number>();
+    for (const r of geoRows) {
+      adsetByKey.set(`${r.spend_date}|${r.market_raw}`, (adsetByKey.get(`${r.spend_date}|${r.market_raw}`) ?? 0) + r.spend_cents);
+    }
+    let a = 0, b = 0;
+    for (const [k, v] of acctByKey) { a += v; b += adsetByKey.get(k) ?? 0; }
+    adsetVsAccountCents = b - a;
+  }
+
   // ── WRITE 2: the ledger. THE OWNERSHIP PREDICATE AND NOTHING ELSE.
   //   vendor='Meta' AND manual_entry=false AND date >= 2026-08-01
   // Delete-then-insert inside that predicate, mirroring RECOMPUTE_OWNED_CATEGORIES. It is
@@ -223,6 +430,8 @@ export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string, opts
       expenseRowsWritten: 0, expenseRowsDeleted: 0,
       ownedBefore: -1, ownedAfter: -1,   // -1 = not inspected, distinct from "zero rows owned"
       ledgerSourceRows: -1, coverage: [],
+      adsetsSeen, adsetMarketRows, adsetDailyRows,
+      parentsAttributed, parentsNotAttributed, observationsAppended, adsetVsAccountCents,
       apiCalls,
     };
   }
@@ -309,8 +518,24 @@ export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string, opts
     expenseRowsWritten: rows.length, expenseRowsDeleted,
     ownedBefore, ownedAfter,
     ledgerSourceRows: ledgerSource.length, coverage,
+    adsetsSeen, adsetMarketRows, adsetDailyRows,
+    parentsAttributed, parentsNotAttributed, observationsAppended, adsetVsAccountCents,
     apiCalls,
   };
+}
+
+/* AD SETS THAT REACHED NO MARKET, NAMED. An exclusion nobody can see is the worse bug — the same
+ * reasoning as unattributedVenues on the Revenue page. Empty string when every ad set resolved. */
+export function notAttributedVerdict(rows: MetaSyncResult["parentsNotAttributed"]): string {
+  if (!rows.length) return "";
+  const shown = rows.slice(0, 5).map((r) =>
+    `${r.adsetName ?? r.adsetId} ($${(r.spendCents / 100).toFixed(2)}, dominant ${r.marketRaw ?? "none"}`
+    + `${r.confidence == null ? "" : ` at ${(r.confidence * 100).toFixed(1)}%`})`);
+  const more = rows.length > shown.length ? ` +${rows.length - shown.length} more` : "";
+  const total = rows.reduce((a, r) => a + r.spendCents, 0);
+  return `NOT ATTRIBUTED: ${rows.length} ad set${rows.length === 1 ? "" : "s"} carrying `
+    + `$${(total / 100).toFixed(2)} reached no market we map, or cleared no confidence floor: `
+    + `${shown.join(", ")}${more}. Their spend is stored and counted; it is not in any market row.`;
 }
 
 /* The verdict line for a store short of days. Empty string when it is complete.

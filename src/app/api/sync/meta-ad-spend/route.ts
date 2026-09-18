@@ -28,7 +28,7 @@
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { syncMetaAdSpend, coverageVerdict, type MetaSyncResult } from "@/lib/metaAdSpendSync";
+import { syncMetaAdSpend, coverageVerdict, notAttributedVerdict, type MetaSyncResult } from "@/lib/metaAdSpendSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 
 /* A 28-day window at day granularity with one geo breakdown is a handful of paged GETs plus two
@@ -118,11 +118,30 @@ export async function POST(req: Request) {
    * That is the loud direction: a re-sync that quietly skipped would leave scrubbed accounts
    * readable while Recent Syncs showed nothing wrong. */
   const todayYmd = new Date().toISOString().slice(0, 10);
+
+  /* ── AN EXPLICIT WINDOW, MANUAL ONLY ────────────────────────────────────────────────────────
+   * The nightly 28-day window reaches back to today-27, and the campaign/ad-set tables floor at
+   * 2026-08-01. There is therefore a stretch the cron can NEVER populate, and a backfill is the
+   * only way to fill it — the same shape /api/sync/stripe already has.
+   *
+   * GATED ON triggeredBy, NOT ON THE BODY BEING ABSENT. Vercel cron sends no body, so
+   * `body.since` would be undefined anyway; keying on the trigger means a future change to how
+   * cron is invoked cannot quietly hand it a window. A scheduled run always gets windowFor().
+   *
+   * NOT VALIDATED HERE BEYOND ITS SHAPE. syncMetaAdSpend clamps to the daily floor and REFUSES
+   * anything below it, which is one rule in one place; a second check here could disagree. */
+  let body: { since?: unknown; until?: unknown } = {};
+  try { body = (await req.json()) as typeof body; } catch { /* no body: the cron path */ }
+  const ymd = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined);
+  const opts = triggeredBy === "manual"
+    ? { since: ymd(body.since), until: ymd(body.until) }
+    : {};
+
   const result = await runWithLog(
     "meta-ad-spend",
     triggeredBy,
     supabase,
-    (sb) => syncMetaAdSpend(sb, todayYmd),
+    (sb) => syncMetaAdSpend(sb, todayYmd, opts),
     (r: MetaSyncResult) => ({
       rows_imported: r.marketRows + r.unallocatedRows,
       rows_replaced: r.expenseRowsWritten,
@@ -147,6 +166,7 @@ export async function POST(req: Request) {
             ? ""
             : `VARIANCE: ${r.varianceByDay.length} day(s) whose market rows did not sum to the account total. Net ${(r.varianceTotalCents / 100).toFixed(2)} USD; ${(r.unallocatedCents / 100).toFixed(2)} USD carried as unallocated. A NEGATIVE day carries nothing — market rows exceeding the account total would need a negative expense row, which would corrupt the total the other way.`,
           coverageVerdict(r.coverage),
+          notAttributedVerdict(r.parentsNotAttributed),
         ].filter(Boolean);
         // 500 chars is what the catch path truncates to; the patch path does not, so it is done
         // here rather than discovered as a rejected update on a run nobody was watching.

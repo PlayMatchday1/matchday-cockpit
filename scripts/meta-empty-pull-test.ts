@@ -52,6 +52,10 @@ function makeClient(store: LedgerSourceRow[], ownedCount: number) {
       delete: () => record("delete"),
       eq: (c: string, v: unknown) => { op.filters.push(`${c}=${String(v)}`); return self(); },
       gte: (c: string, v: unknown) => { op.filters.push(`${c}>=${String(v)}`); return self(); },
+      // ADDED WHEN THE SYNC GREW THE OBSERVATION READ. The fake implements exactly what the code
+      // calls and nothing more, so a new call surfaces as "is not a function" rather than being
+      // silently absorbed by a permissive stub.
+      lte: (c: string, v: unknown) => { op.filters.push(`${c}<=${String(v)}`); return self(); },
       order: () => self(),
       range: (lo: number, hi: number) => Promise.resolve(
         // The store, paged the way selectAll expects. One page is enough at this size; the slice
@@ -102,15 +106,35 @@ const { client, ops } = makeClient(STORE, 8);
 const res = await syncMetaAdSpend(client, "2026-09-18");
 
 is("the pull really did come back empty", [res.daysPulled, res.marketRows, res.spendCents], [0, 0, 0]);
-// POSITIVE CONTROL: the sync actually reached Meta and asked the right questions, rather than
-// failing early somewhere and producing zeroes for an unrelated reason.
-is("control — it called adaccounts, lifetime spend, the breakdown and the totals",
-  g.calls, ["/v25.0/me/adaccounts", "/v25.0/act_1/insights?lifetime", "/v25.0/act_1/insights?breakdowns", "/v25.0/act_1/insights"]);
+/* POSITIVE CONTROL: the sync actually reached Meta and asked the right questions, rather than
+ * failing early somewhere and producing zeroes for an unrelated reason.
+ *
+ * ITEMISED — AN EXPECTATION CHANGE. Three calls were added when the sync grew campaign and ad set
+ * grain: the ad set dimension, and the two insight pulls that cannot be one pull because
+ * comscore_market suppresses install actions. The assertion body is unchanged. */
+is("control — it called adaccounts, lifetime spend, both account pulls, and all three ad-set pulls",
+  g.calls, ["/v25.0/me/adaccounts", "/v25.0/act_1/insights?lifetime",
+            "/v25.0/act_1/insights?breakdowns", "/v25.0/act_1/insights",
+            "/v25.0/act_1/adsets",
+            "/v25.0/act_1/insights?breakdowns", "/v25.0/act_1/insights"]);
 
 console.log("\nnothing was written to the daily store, and everything was read back out of it");
 is("no upsert was attempted, because there was nothing to upsert",
   ops.filter((o) => o.verb === "upsert").length, 0);
 is("the store was read for the ledger", res.ledgerSourceRows, STORE.length);
+
+/* THE NEW TABLES MUST ALSO BE LEFT ALONE. An empty pull has nothing to say about campaigns or ad
+ * sets either, and a write of zero rows to any of them would be the same class of bug one table
+ * over — the delete-then-write shape does not exist there, but an upsert of [] with a stale payload
+ * would still be a write nobody asked for. */
+console.log("\nand nothing was written at campaign or ad set grain");
+for (const t of ["fin_meta_adset_market_daily", "fin_meta_adset_daily", "fin_meta_adset", "fin_meta_install_observations"]) {
+  is(`${t} was not written`, ops.filter((o) => o.table === t && o.verb !== "select").length, 0);
+}
+is("the result reports zero ad-set rows",
+  [res.adsetMarketRows, res.adsetDailyRows, res.adsetsSeen, res.observationsAppended], [0, 0, 0, 0]);
+is("…and no ad set is reported as unattributed, because none was seen",
+  res.parentsNotAttributed, []);
 
 console.log("\nthe ledger was rewritten, not emptied");
 const del = ops.find((o) => o.table === "fin_expenses" && o.verb === "delete");
