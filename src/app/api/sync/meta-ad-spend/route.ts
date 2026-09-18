@@ -7,11 +7,16 @@
 // WHAT IT DOES. Pulls a trailing 28-day window at day granularity, broken down by
 // `comscore_market` — the parameter Meta actually accepts; `dma` returns a hard 400 telling you so.
 // Upserts the daily series into fin_meta_ad_spend_daily, then rewrites the monthly ledger rows it
-// owns in fin_expenses.
+// owns in fin_expenses FROM THAT STORE — not from the window it just pulled. The daily table is
+// the evidence; fin_expenses is a projection of it. Building the ledger from the window while
+// deleting the whole owned range is how a closed month gets restated down to whatever the last
+// 28 days happened to touch.
 //
 // THE TRAILING RE-PULL IS DELIBERATE. Meta revises recent days, so pulling only yesterday would
 // freeze the first (wrong) figure. Re-pulling 28 days and upserting on the primary key costs
-// nothing and self-heals.
+// nothing and self-heals. MEASURED 2026-09-18: of 179 market rows stored on 2026-08-26, 171 came
+// back identical and all 7 changes were on 2026-08-25 — the day still accruing when that run
+// happened. Restatement is real, confined to the tail, and 28 days is generous.
 //
 // THE OWNERSHIP PREDICATE — vendor='Meta' AND manual_entry=false AND date >= 2026-08-01 — is the
 // whole safety story. April through July are reconciled by hand and carry manual entries; the
@@ -23,7 +28,7 @@
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { syncMetaAdSpend, type MetaSyncResult } from "@/lib/metaAdSpendSync";
+import { syncMetaAdSpend, coverageVerdict, type MetaSyncResult } from "@/lib/metaAdSpendSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 
 /* A 28-day window at day granularity with one geo breakdown is a handful of paged GETs plus two
@@ -125,9 +130,28 @@ export async function POST(req: Request) {
        * gap between the account total and the sum of its market rows means Meta is withholding
        * more breakdown detail over time, and the ledger is quietly carrying more unallocated
        * spend. That is visible in Recent Syncs or it is invisible. */
-      error_message: r.varianceTotalCents === 0
-        ? undefined
-        : `VARIANCE (sync OK): ${r.varianceByDay.length} day(s) whose market rows did not sum to the account total. Net ${(r.varianceTotalCents / 100).toFixed(2)} USD; ${(r.unallocatedCents / 100).toFixed(2)} USD carried as unallocated. A NEGATIVE day carries nothing — market rows exceeding the account total would need a negative expense row, which would corrupt the total the other way.`,
+      /* TWO ADVISORIES, ONE FIELD, AND NEITHER MAY SWALLOW THE OTHER. fin_sync_log carries one
+       * error_message, so they are JOINED rather than chained through `??` — a variance and a
+       * coverage gap are independent facts and a run can carry both.
+       *
+       * THE "ADVISORY" PREFIX IS LOAD-BEARING AND WAS MISSING. isSyncAdvisory (syncAdvisory.ts)
+       * matches /^\s*advisory\b/ and NOTHING ELSE; the SyncCard and Recent Syncs colour a row
+       * amber on that match and RED otherwise. "VARIANCE (sync OK): …" has never matched, so a
+       * successful run carrying a two-cent variance has always rendered as a FAILURE. That was
+       * survivable while the message was rare. It is not survivable now: the coverage line is
+       * true on every run until the store is complete, so the fix would have painted this sync
+       * permanently red and taught everyone to ignore it. One prefix, both messages, ONCE. */
+      error_message: (() => {
+        const parts = [
+          r.varianceTotalCents === 0
+            ? ""
+            : `VARIANCE: ${r.varianceByDay.length} day(s) whose market rows did not sum to the account total. Net ${(r.varianceTotalCents / 100).toFixed(2)} USD; ${(r.unallocatedCents / 100).toFixed(2)} USD carried as unallocated. A NEGATIVE day carries nothing — market rows exceeding the account total would need a negative expense row, which would corrupt the total the other way.`,
+          coverageVerdict(r.coverage),
+        ].filter(Boolean);
+        // 500 chars is what the catch path truncates to; the patch path does not, so it is done
+        // here rather than discovered as a rejected update on a run nobody was watching.
+        return parts.length ? `ADVISORY (sync OK). ${parts.join(" · ")}`.slice(0, 500) : undefined;
+      })(),
     }),
   );
 

@@ -19,8 +19,10 @@ import {
   META_MARKET_TO_CITY, cityForMarket, spendStringToCents, impressionsToInt,
   isAtOrAfterFloor, windowFor, assertUsd, reconcileDay, toDailyRows, monthlyExpenseRows,
   ownsExpenseRow, redactMetaError, UNALLOCATED_MARKET, META_FLOOR_YMD,
-  type MetaBreakdownRow,
+  ledgerMonthCoverage, coverageShortfall, META_WINDOW_DAYS, META_EXPENSE_FLOOR_YMD,
+  type MetaBreakdownRow, type LedgerSourceRow,
 } from "../src/lib/metaAdSpend";
+import { coverageVerdict } from "../src/lib/metaAdSpendSync";
 
 let pass = 0, fail = 0;
 const ok = (n: string) => { pass++; console.log(`  ok  ${n}`); };
@@ -181,6 +183,100 @@ is("a bare EA-prefixed token is stripped",
   redactMetaError("oops EAAGm0PX4ZCpsBO7abc123DEF456ghi789 here"), "oops [REDACTED] here");
 is("CONTROL — ordinary text is untouched",
   redactMetaError("Unsupported get request for breakdowns"), "Unsupported get request for breakdowns");
+
+/* ── 8. THE LEDGER IS A PROJECTION OF THE STORE, NOT OF THE LAST PULL ──────────────────────────
+ *
+ * THE DEFECT, measured on production 2026-09-18 before the fix: the fin_expenses DELETE covers
+ * every owned row from 2026-08-01, while the INSERT was built from `daily` — the 28-day window.
+ * A run that day would have deleted $3,321.02 of August and written back $554.46, because the
+ * window started 2026-08-22. August's marketing cost would have fallen by two thirds in silence.
+ *
+ * It never fired only because the cron has been answering 405 since the day it shipped and the
+ * single manual run happened inside the month it had just backfilled. So this suite is the only
+ * thing that can hold the line — there is no screen on which the wrong number would have looked
+ * wrong, and no second run to notice the first one.
+ *
+ * EVERY ASSERTION BELOW CARRIES THE PRE-FIX ARITHMETIC BESIDE IT. `monthlyExpenseRows(window)` is
+ * exactly what the code used to do, so if the two ever agree the assertion is proving nothing. */
+console.log("\nthe ledger is built from the store, not the window");
+{
+  // A full August in the daily store, plus the first days of September.
+  const store: LedgerSourceRow[] = [];
+  for (let d = 1; d <= 31; d++) {
+    store.push({ date: `2026-08-${String(d).padStart(2, "0")}`, marketKey: "HTX", spendCents: 10000 });
+  }
+  for (let d = 1; d <= 18; d++) {
+    store.push({ date: `2026-09-${String(d).padStart(2, "0")}`, marketKey: "HTX", spendCents: 10000 });
+  }
+  const today = "2026-09-18";
+  const w = windowFor(today, META_WINDOW_DAYS);
+  is("CONTROL — the window really does start mid-August, which is what makes this a trap",
+    [w.since, w.until], ["2026-08-22", "2026-09-18"]);
+
+  const window = store.filter((r) => r.date >= w.since && r.date <= w.until);
+  const fromWindow = monthlyExpenseRows(window);
+  const fromStore = monthlyExpenseRows(store);
+
+  const aug = (rows: { month: string; amountCents: number }[]) =>
+    rows.filter((m) => m.month === "2026-08").reduce((s, m) => s + m.amountCents, 0);
+
+  is("the ledger's August is the WHOLE month, from the store", aug(fromStore), 31 * 10000);
+  /* THE CONTROL. This is the old code's answer, computed here rather than described: August
+   * rebuilt from the ten days the window happened to reach. If this ever equals the line above,
+   * the window has stopped being narrower than the month and the test is asleep. */
+  is("CONTROL — building it from the window instead gives ten days, not thirty-one",
+    aug(fromWindow), 10 * 10000);
+  is("CONTROL — and the two are genuinely different figures", aug(fromStore) > aug(fromWindow), true);
+  is("September is unaffected either way, because the window covers all of it",
+    [fromStore.filter((m) => m.month === "2026-09").reduce((s, m) => s + m.amountCents, 0),
+     fromWindow.filter((m) => m.month === "2026-09").reduce((s, m) => s + m.amountCents, 0)],
+    [18 * 10000, 18 * 10000]);
+
+  /* AN EMPTY PULL MUST NOT EMPTY THE LEDGER. Same line, second failure mode: Meta returning
+   * nothing — an outage, a revoked token, a paused account — made `daily` empty, so the rollup
+   * produced no rows while the DELETE still ran. Every Meta expense row gone, reported as a
+   * successful sync. Reading the store makes an empty pull a no-op. */
+  is("an EMPTY pull still rebuilds the ledger from the store", aug(monthlyExpenseRows(store)), 31 * 10000);
+  is("CONTROL — the old form would have written nothing at all", monthlyExpenseRows([]).length, 0);
+
+  // The rows before the expense floor stay out, whichever way the ledger is built.
+  const withDecember: LedgerSourceRow[] = [...store, { date: "2026-01-15", marketKey: "ATL", spendCents: 99999 }];
+  is("a pre-floor day in the store still cannot reach the ledger",
+    monthlyExpenseRows(withDecember).some((m) => m.month < META_EXPENSE_FLOOR_YMD.slice(0, 7)), false);
+}
+
+/* ── 9. COVERAGE, THE GUARD THE PROJECTION NEEDS ───────────────────────────────────────────────
+ * Making the ledger a projection swaps one silent understatement for another if the store has a
+ * hole: the month simply comes out short. So the hole is counted and reported. It is live right
+ * now — the store stops at 2026-08-25 because the cron has never run. */
+console.log("\ncoverage");
+{
+  const full: LedgerSourceRow[] = [];
+  for (let d = 1; d <= 31; d++) full.push({ date: `2026-08-${String(d).padStart(2, "0")}`, marketKey: "HTX", spendCents: 1 });
+  for (let d = 1; d <= 18; d++) full.push({ date: `2026-09-${String(d).padStart(2, "0")}`, marketKey: "HTX", spendCents: 1 });
+  is("a complete store reports no shortfall", coverageShortfall(ledgerMonthCoverage(full, "2026-09-18")), []);
+  is("CONTROL — and it did look at both months",
+    ledgerMonthCoverage(full, "2026-09-18").map((c) => `${c.month} ${c.daysPresent}/${c.daysExpected}`),
+    ["2026-08 31/31", "2026-09 18/18"]);
+  is("the CURRENT month is bounded by today, not by its length",
+    ledgerMonthCoverage(full, "2026-09-18").find((c) => c.month === "2026-09")?.daysExpected, 18);
+
+  // The live shape: August stops on the 25th, September absent entirely.
+  const live = full.filter((r) => r.date <= "2026-08-25");
+  const short = coverageShortfall(ledgerMonthCoverage(live, "2026-09-18"));
+  is("the real gap is reported, both months", short.map((c) => `${c.month} ${c.daysPresent}/${c.daysExpected}`),
+    ["2026-08 25/31", "2026-09 0/18"]);
+  /* A MONTH WITH NO ROWS AT ALL IS THE ONE A ROWS-DRIVEN LOOP CANNOT SEE. September has zero
+   * rows here; enumerating months from the floor is what makes it appear. */
+  is("CONTROL — a month with ZERO rows still appears, rather than vanishing",
+    short.some((c) => c.month === "2026-09" && c.daysPresent === 0), true);
+
+  const v = coverageVerdict(ledgerMonthCoverage(live, "2026-09-18"));
+  is("the verdict names the months", /2026-08 25\/31/.test(v) && /2026-09 0\/18/.test(v), true);
+  is("…and carries NO advisory prefix of its own, because the route adds one for the pair",
+    /^\s*advisory/i.test(v), false);
+  is("CONTROL — a complete store produces no verdict line at all", coverageVerdict(ledgerMonthCoverage(full, "2026-09-18")), "");
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

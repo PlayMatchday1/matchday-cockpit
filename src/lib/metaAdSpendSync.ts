@@ -31,9 +31,11 @@ import {
   META_GRAPH_VERSION, META_EXPENSE_FLOOR_YMD, META_DAILY_FLOOR_YMD, META_WINDOW_DAYS, redactMetaError,
   spendStringToCents, impressionsToInt, assertUsd, isAtOrAfterFloor, isAtOrAfterDailyFloor, windowFor,
   reconcileDay, toDailyRows, monthlyExpenseRows, cityForMarket,
+  ledgerMonthCoverage, coverageShortfall,
   META_VENDOR, META_CATEGORY, UNALLOCATED_NOTE, UNALLOCATED_MARKET,
-  type MetaBreakdownRow, type DailyRow,
+  type MetaBreakdownRow, type DailyRow, type LedgerSourceRow, type MonthCoverage,
 } from "./metaAdSpend";
+import { selectAll } from "./supabasePagination";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type MetaSyncResult = {
@@ -50,6 +52,12 @@ export type MetaSyncResult = {
   unallocatedCents: number;
   expenseRowsWritten: number; expenseRowsDeleted: number;
   ownedBefore: number; ownedAfter: number;
+  /* HOW MANY DAILY ROWS THE LEDGER WAS BUILT FROM. Not the window's row count — the whole owned
+   * range read back out of fin_meta_ad_spend_daily. -1 on a dailyOnly run, where the ledger is
+   * not inspected at all, matching ownedBefore's convention. */
+  ledgerSourceRows: number;
+  /** Per owned month: days present in the daily store against days that have happened. */
+  coverage: MonthCoverage[];
   apiCalls: number;
 };
 
@@ -214,6 +222,7 @@ export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string, opts
       unallocatedCents: varianceByDay.reduce((s, v) => s + (v.cents > 0 ? v.cents : 0), 0),
       expenseRowsWritten: 0, expenseRowsDeleted: 0,
       ownedBefore: -1, ownedAfter: -1,   // -1 = not inspected, distinct from "zero rows owned"
+      ledgerSourceRows: -1, coverage: [],
       apiCalls,
     };
   }
@@ -234,7 +243,41 @@ export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string, opts
   if (del.error) throw new Error(`fin_expenses delete failed: ${del.error.message}`);
   const expenseRowsDeleted = del.count ?? 0;
 
-  const monthly = monthlyExpenseRows(daily);
+  /* ── THE LEDGER IS A PROJECTION OF THE DAILY STORE, NOT OF THE LAST PULL ────────────────────
+   *
+   * This read is the whole fix. It was `monthlyExpenseRows(daily)` — `daily` being the 28-day
+   * window — while the DELETE above covers EVERY owned row from 2026-08-01. So each run deleted
+   * the whole owned range and rewrote only the months the window happened to touch, and any
+   * earlier month was deleted and never written back.
+   *
+   * MEASURED before the fix, on 2026-09-18 against the real stored rows: the delete removed
+   * $3,321.02 of August and the insert put back $554.46. August's marketing cost would have
+   * fallen by roughly two thirds, silently, on the first successful call. It never bit only
+   * because the cron has been answering 405 since the day this shipped and the one manual run
+   * happened inside the month it had just backfilled.
+   *
+   * IT ALSO CLOSES A SECOND HOLE ON THE SAME LINE. If Meta returns nothing — an outage, a
+   * revoked token, a paused account — `daily` is EMPTY, the old rollup produced zero rows, and
+   * the delete still ran: every Meta expense row gone, reported as a successful sync. Reading
+   * the store instead means an empty pull rewrites what is already there.
+   *
+   * READ AFTER THE UPSERT so this run's own days are included, and PAGED, because PostgREST caps
+   * at 1,000 and this range grows by ~8 rows a day forever.
+   *
+   * THREE COLUMNS, NOT `*`. monthlyExpenseRows now takes LedgerSourceRow, which is exactly what
+   * it reads; selecting the rest would be inviting a future reader to use it. */
+  const stored = await selectAll<{ spend_date: string; market_key: string | null; spend_cents: number }>(() =>
+    sb.from("fin_meta_ad_spend_daily")
+      .select("spend_date, market_key, spend_cents")
+      .gte("spend_date", META_EXPENSE_FLOOR_YMD)
+      .order("spend_date"),
+  );
+  const ledgerSource: LedgerSourceRow[] = stored.map((r) => ({
+    date: r.spend_date, marketKey: r.market_key, spendCents: r.spend_cents,
+  }));
+  const coverage = ledgerMonthCoverage(ledgerSource, todayYmd);
+
+  const monthly = monthlyExpenseRows(ledgerSource);
   const rows = monthly.map((m) => ({
     date: m.date,
     month: monthLabel(m.month),
@@ -265,8 +308,24 @@ export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string, opts
     unallocatedCents: varianceByDay.reduce((s, v) => s + (v.cents > 0 ? v.cents : 0), 0),
     expenseRowsWritten: rows.length, expenseRowsDeleted,
     ownedBefore, ownedAfter,
+    ledgerSourceRows: ledgerSource.length, coverage,
     apiCalls,
   };
+}
+
+/* The verdict line for a store short of days. Empty string when it is complete.
+ *
+ * NO "ADVISORY" PREFIX HERE. The route joins this with the variance line and prefixes the pair
+ * once; two prefixes in one field would read as two failures. See the note at that call site for
+ * why the prefix matters at all. */
+export function coverageVerdict(cov: readonly MonthCoverage[]): string {
+  const short = coverageShortfall(cov);
+  if (!short.length) return "";
+  /* CAPPED. One entry per short month, and the list only grows: unbounded, this would eventually
+   * push the variance line out of a 500-character field, which is the half that reports money. */
+  const shown = short.slice(0, 6).map((c) => `${c.month} ${c.daysPresent}/${c.daysExpected} days`);
+  const more = short.length > shown.length ? ` +${short.length - shown.length} more` : "";
+  return `COVERAGE: fin_expenses is a projection of fin_meta_ad_spend_daily and that store is short of days, so ${short.length === 1 ? "this month is" : "these months are"} understated: ${shown.join(", ")}${more}. Re-run with an explicit window to fill them.`;
 }
 
 /** fin_expenses.month is a display label ("Aug 2026"), matching the hand-entered rows. */

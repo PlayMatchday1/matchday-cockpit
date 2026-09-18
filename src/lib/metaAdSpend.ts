@@ -197,8 +197,16 @@ export function ownsExpenseRow(r: ExpenseRowish): boolean {
 
 export type MonthlyExpense = { month: string; date: string; city: string | null; amountCents: number; unallocated: boolean };
 
+/* THE THREE FIELDS THE LEDGER ROLLUP ACTUALLY READS, and no more.
+ *
+ * It took DailyRow[] — the shape of a FRESH PULL — which quietly made the ledger a projection of
+ * whatever the last API call returned. It is now fed from fin_meta_ad_spend_daily, and a read of
+ * that table selects three columns rather than seven. DailyRow still satisfies this structurally,
+ * so every existing caller is unchanged. */
+export type LedgerSourceRow = { date: string; marketKey: string | null; spendCents: number };
+
 /** Roll daily rows into one expense row per city per month, plus one unallocated row per month. */
-export function monthlyExpenseRows(rows: DailyRow[]): MonthlyExpense[] {
+export function monthlyExpenseRows(rows: readonly LedgerSourceRow[]): MonthlyExpense[] {
   const acc = new Map<string, { amountCents: number; city: string | null; unallocated: boolean }>();
   for (const r of rows) {
     // THE EXPENSE FLOOR, not the daily one. A December daily row is legitimate and must never
@@ -227,6 +235,59 @@ function lastDayOfMonth(ym: string): string {
   const y = Number(ym.slice(0, 4)), m = Number(ym.slice(5, 7));
   const d = new Date(Date.UTC(y, m, 0));
   return d.toISOString().slice(0, 10);
+}
+
+/* ── COVERAGE, BECAUSE THE LEDGER IS NOW A PROJECTION AND INHERITS THE STORE'S GAPS ─────────────
+ *
+ * Making fin_expenses a projection of fin_meta_ad_spend_daily is what stops the 28-day window from
+ * truncating a closed month. It also means a HOLE IN THE STORE is now a quietly short ledger
+ * month, where before it was a quietly short one for a different reason. Swapping one invisible
+ * understatement for another is not a fix, so the gap is counted and reported.
+ *
+ * It is live right now, which is why this exists rather than being hypothetical: the store stops
+ * at 2026-08-25 because the nightly cron has never run, so August is missing six days.
+ *
+ * MONTHS ARE ENUMERATED FROM THE FLOOR, NOT FROM THE ROWS. A month with NO rows at all is the
+ * worst case and the one a rows-driven loop cannot see — it simply would not appear.
+ *
+ * `todayYmd` bounds the current month: September is not missing the days that have not happened. */
+export type MonthCoverage = { month: string; daysPresent: number; daysExpected: number };
+
+export function ledgerMonthCoverage(
+  rows: readonly LedgerSourceRow[],
+  todayYmd: string,
+  floorYmd: string = META_EXPENSE_FLOOR_YMD,
+): MonthCoverage[] {
+  const present = new Map<string, Set<string>>();
+  for (const r of rows) {
+    if (!isAtOrAfterFloor(r.date, floorYmd)) continue;
+    const ym = r.date.slice(0, 7);
+    const set = present.get(ym) ?? new Set<string>();
+    set.add(r.date);
+    present.set(ym, set);
+  }
+  const out: MonthCoverage[] = [];
+  for (let ym = floorYmd.slice(0, 7); ym <= todayYmd.slice(0, 7); ym = nextMonth(ym)) {
+    // The first day counted is the floor's own day in the floor's month, and the 1st thereafter.
+    const first = ym === floorYmd.slice(0, 7) ? floorYmd : `${ym}-01`;
+    const last = ym === todayYmd.slice(0, 7) ? todayYmd : lastDayOfMonth(ym);
+    if (last < first) continue;
+    const daysExpected = Math.round(
+      (Date.parse(`${last}T00:00:00Z`) - Date.parse(`${first}T00:00:00Z`)) / 86_400_000,
+    ) + 1;
+    out.push({ month: ym, daysPresent: present.get(ym)?.size ?? 0, daysExpected });
+  }
+  return out;
+}
+
+function nextMonth(ym: string): string {
+  const y = Number(ym.slice(0, 4)), m = Number(ym.slice(5, 7));
+  return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
+}
+
+/** The months short of a full set of days, for the sync verdict. Empty when the store is complete. */
+export function coverageShortfall(cov: readonly MonthCoverage[]): MonthCoverage[] {
+  return cov.filter((c) => c.daysPresent < c.daysExpected);
 }
 
 /** The note on an unallocated row. Named so the ledger says what it is rather than showing a gap. */
