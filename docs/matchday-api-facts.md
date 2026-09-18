@@ -4146,6 +4146,113 @@ Row count 322 → 322, August Meta $3,321.02 → $3,321.02, and a sha256 over ev
 unchanged at `cc8123c0d6893b268795fb2ffbb3a4bb97dae4befe3862bd5eb631389c3fee44`. `dailyOnly` returns
 before the count query, so the delete never executes.
 
+## VERCEL CRON SENDS GET, AND FOUR OF FIVE SCHEDULED ROUTES ONLY EXPORTED POST (2026-09-18)
+
+Read from the production invocation logs, not inferred:
+
+```
+/api/sync/meta-ad-spend    10:00:39Z  GET -> 405   (and 09-17, 09-16)
+/api/sync/users-full       09:00:35Z  GET -> 405   (and 09-17, 09-16)
+/api/sync/wp-submissions   12:00:42Z  GET -> 405   (and 09-17, 09-16)
+/api/sync/users-recent     hourly at :05, GET -> 405, 24 of 24 in 24 hours
+/api/sync/cron             11:00:03Z  GET -> 200   (and 09-17, 09-16)
+```
+
+`/api/sync/cron` was the ONLY scheduled route carrying `export const GET = POST`, and the only one
+that has ever run. `fin_sync_log` agrees: every source inside it has 30 rows in 30 days, while
+**`meta-ad-spend` had ONE row in its entire life** — `triggered_by='manual'`, 2026-08-26 — with
+**$4,392.97 of ad spend unrecorded** behind it (Aug 26-31 $1,046.14, Sep 1-18 $3,346.83, straight
+from Meta's account totals).
+
+**THE FAILURE IS SILENT IN EVERY DIRECTION.** The cron dashboard shows the job firing, the route
+never runs, `runWithLog` never reaches its insert so there is no log row at all, and a table simply
+stops filling. The only place it was visible was a log nobody had reason to open.
+
+`scripts/cron-verb-test.ts` walks `vercel.json`, resolves each path to its route file and asserts
+both verbs. **Its detector carries controls because the obvious one reports green on the bug**: these
+routes' headers discuss GET at length ("Every Graph request is a GET"), so a naive `/GET/` test
+passes a POST-only route. `users-recent` was found by that suite on the run meant to prove the other
+three.
+
+## THE META LEDGER WAS A PROJECTION OF THE LAST PULL, NOT OF THE STORE (2026-09-18)
+
+`fin_expenses`' DELETE covers every owned row from `2026-08-01`; the INSERT was built from `daily`,
+the trailing 28-day window. **So each run deleted the whole owned range and rewrote only the months
+the window happened to reach.** Measured with the real `windowFor` and `monthlyExpenseRows` against
+the real stored rows on 2026-09-18: a run that day would have deleted **$3,321.02** of August and
+written back **$554.46**. It never fired only because the cron was 405ing and the single manual run
+happened inside the month it had just backfilled.
+
+**A SECOND HOLE ON THE SAME LINE.** An empty pull — outage, revoked token, paused account — left
+`daily` empty, so the rollup produced no rows **and the DELETE still ran**: every Meta expense row
+gone, reported as a successful sync.
+
+Fixed by reading `fin_meta_ad_spend_daily` back from the expense floor after the upsert and rolling
+the ledger from that. 0151's header already said the daily table is the evidence and the month row
+is the artefact; this makes it true. Delete-all plus insert-all is then idempotent.
+
+**COVERAGE IS THE GUARD THE PROJECTION NEEDS.** A hole in the store is now a quietly short ledger
+month, which would swap one invisible understatement for another. Days present are counted against
+days elapsed per owned month and reported in the verdict. Live at the time of the fix: August 25/31,
+September 0/18.
+
+### `isSyncAdvisory` MATCHES A LEADING "ADVISORY" AND NOTHING ELSE
+
+`syncAdvisory.ts` is `/^\s*advisory\b/i`. The SyncCard and Recent Syncs colour a row amber on that
+match and **RED otherwise**. The Meta route's `"VARIANCE (sync OK): …"` has **never matched**, so a
+successful run carrying a two-cent variance has always rendered as a failure. Survivable while rare;
+not survivable beside a coverage line that is true on every run until the store is complete. Both
+messages now sit behind one `ADVISORY (sync OK).` prefix. `error_message` is truncated to 500 in the
+catch path and **not** in the patch path, so the route truncates its own.
+
+### META'S RESTATEMENT IS REAL AND CONFINED TO THE TAIL
+
+179 market rows stored 2026-08-26 for Aug 1-25, re-pulled 2026-09-18:
+
+```
+identical        171
+changed            7   ALL of them on 2026-08-25
+only in fresh      1
+only in stored     0   (nothing vanished, so the upsert leaves nothing stale)
+net             +$20.31
+```
+
+Every change is the final day, which was still accruing when the sync ran. **28 days is generous,
+not tight**, and the upsert handles it for free. Recorded so nobody widens the window looking for a
+problem that is one day deep.
+
+## THE CAMPAIGN NAMING CONVENTION BROKE IN AUGUST 2026 — DO NOT DERIVE GEOGRAPHY FROM IT
+
+Proposed: use campaign names (which carry `ATL`, `DFW`, `HTX`, …) instead of the `comscore_market`
+breakdown, to keep one mapping instead of two. **Measured against the live account, it has already
+failed:**
+
+```
+window                campaigns   spend       market code present in the campaign name
+2025-12 .. 2026-01        7       $5,576.09   100.0% of spend
+2026-02 .. 2026-03       13       $4,882.36   100.0%
+2026-04 .. 2026-05        9       $4,537.13   100.0%
+2026-06 .. 2026-07       21       $4,802.68   100.0%
+2026-08 .. 2026-09-17    13       $7,707.38    28.5%   <-
+```
+
+Eight months of `ATL - Eng - Feb Advantage+`, then `MD / Multiple Locations / App Promotion -
+September 2026` and `MD / All Locations / App Not Installed - August 2026`, which together carry
+**$5,167 of $7,707 and contain no market at all**. Separator, word order and vocabulary all changed.
+
+**IT IS NOT ARBITRARY AND IT WILL HAPPEN AGAIN.** Meta locks conversion location and performance
+goal once an ad set has spent, so the switch to App Promotion forced new campaigns and ad sets.
+Expect the same on any move of the optimization event (installs to registrations).
+
+**A SECOND REASON THAT HOLDS EVEN WHEN THE CONVENTION DOES.** A campaign name is targeting INTENT;
+`comscore_market` is where the impression was SERVED. The `ATL` Android campaign delivered 99.8% in
+Atlanta and the rest in Birmingham, Nashville and Macon. For cost per new player you want the market
+the money reached, and that is the figure that matched Ads Manager to the cent in the August control.
+
+**SETTLED:** `campaign_id` is the key, the name is a historical label only, geography always comes
+from `comscore_market`. `level=campaign` and `breakdowns=comscore_market` combine in ONE call —
+measured at 140 campaign x market rows for 4 campaigns.
+
 ## PARMER: $1,815 vs $2,006 — TWO IMPLEMENTATIONS OF ONE PAYOUT (2026-08-26)
 
 `buildPartnerPayoutsByVenueMonth` had a **fixed argument list that could express exactly one deal**:
