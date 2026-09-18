@@ -196,6 +196,14 @@ const NODE_SUITES = [
   // stay reconciled because both are spots x one rate.
   "scripts/member-rate-test.ts",
   "scripts/revenue-basis-test.ts",
+  /* ONE BASIS PER GRAIN, AND MEMBERSHIP COUNTED ONCE. Finance › Revenue's city table held
+   * $14,099.07 of allocated membership inside a column headed DPP REVENUE and then added
+   * membership again beside it on the other basis — a Total of $100,183.81 against $91,818.65
+   * collected, with Member mix dividing by it. Every figure involved looked like revenue, which
+   * is why three people read the page and nobody saw it; what can be checked is the arithmetic
+   * identity, so that is all this asserts. Pure, sub-second, and it carries the pre-fix
+   * arithmetic beside each assertion so none of them can pass vacuously. */
+  "scripts/revenue-city-basis-test.ts",
   "scripts/promo-model-test.ts",
   "scripts/cost-basis-confinement-test.ts",
   "scripts/cost-ratio-band-test.ts",

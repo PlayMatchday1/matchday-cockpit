@@ -30,9 +30,13 @@ import {
   buildFieldCostSlots, buildFieldMonths, buildMatchRows, byCity, byField, canonCity, hasKickedOff,
   COST_BASIS_LABEL, type FieldMonth, type MatchRow,
 } from "@/lib/fieldEconomics";
-import { cityMembershipRevenueFor, unattributedVenues, CITY_DISPLAY_ORDER, type Q2Month } from "@/lib/financeStats";
+import {
+  cityMembershipRevenueFor, cityNonMembershipRevenueFor, revenueOutsideCities,
+  unattributedVenues, CITY_DISPLAY_ORDER, type CityRevenueSplit, type Q2Month,
+} from "@/lib/financeStats";
 import { loadMembershipWindowsByUserId, type MembershipWindowsByUserId } from "@/lib/mdapiMatchesRead";
 import { isCityHidden } from "@/lib/types";
+import { buildGroupRows } from "@/lib/revenueGroupRows";
 import { downloadCsv, fmtMoney, fmtInt } from "@/components/growth/format";
 import MatchView from "./MatchView";
 import DailyRevenuePace from "./DailyRevenuePace";
@@ -188,6 +192,11 @@ export default function RevenueSection() {
   // ALWAYS SCOPED NOW. This was false only while a FIELD filter narrowed the table to one pitch,
   // and that control is gone — membership is a city figure and Field View's rows are the fields,
   // so the filter was redundant. The withheld note went with the state that could raise it.
+  /* ONE SPELLING OF "THE MONTH THE TABLE IS ON". It was written inline three times as
+   * `period.months[period.months.length - 1] ?? ""`, and the city table's two ledger reads have
+   * to agree with the membership read exactly or the row stops adding up. */
+  const anchorMonth: Q2Month = period.months[period.months.length - 1] ?? "";
+
   const membershipScoped = true;
   const membershipCities = useMemo(
     () => (cityFilter === "all" ? cities : cities.filter((c) => c === canonCity(cityFilter))),
@@ -416,8 +425,6 @@ export default function RevenueSection() {
   // THE KPI CARDS READ GROSS TOO — they sat on the same roster-derived figure as the headline.
   const anchorGross = grossFor(anchorPoint as SeriesPoint);
   const anchorValue = anchorGross ?? valueOf(anchorPoint);
-  // What the roster walk matched to a venue, for the gap line below the table.
-  const anchorMatched = valueOf(anchorPoint);
 
   // ELAPSED AND TOTAL COME FROM THE PERIOD, at whatever grain it is — 17 of 31 for August, 48 of
   // 92 for Q3. Computing them here from the day of the month would have been right only at Month
@@ -472,21 +479,30 @@ export default function RevenueSection() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [period, grossRows, anchorValue, daysElapsed, daysInMonth]);
 
+  /* ── TOP REVENUE CITY, OFF THE LEDGER ───────────────────────────────────────────────────────
+   * A CITY, so it reads what every other city figure on this page now reads. It used to sum
+   * FieldMonth.revenue and then ADD cityMembershipRevenueFor on top — and FieldMonth.revenue
+   * already contains the allocated member slice, so this tile counted membership twice on two
+   * bases exactly as the table did. The ranking survived it because the error is roughly
+   * proportional to size; the FIGURE printed beside the name did not.
+   *
+   * SPANS THE WHOLE PERIOD, not just the anchor month, which is what it always did — at quarter
+   * grain the tile means the quarter's top city. */
   const topCity = useMemo(() => {
     if (!data) return null;
     let best: { city: string; value: number } | null = null;
     for (const c of cities) {
       if (cityFilter !== "all" && c !== canonCity(cityFilter)) continue;
-      const ms = new Set(period.months);
-      const dpp = shownFields.filter((r) => ms.has(r.month) && r.city === c).reduce((a, r) => a + r.revenue, 0);
-      let membership = 0;
-      if (membershipScoped) for (const m of period.months) membership += cityMembershipRevenueFor(data, c, m);
-      const value = valueOf({ dpp, membership });
+      let value = 0;
+      for (const m of period.months) {
+        value += cityNonMembershipRevenueFor(data, c, m).gross;
+        if (membershipScoped) value += cityMembershipRevenueFor(data, c, m);
+      }
       if (value <= 0) continue;
       if (!best || value > best.value) best = { city: c, value };
     }
     return best;
-  }, [data, cities, cityFilter, shownFields, period, membershipScoped]);
+  }, [data, cities, cityFilter, period, membershipScoped]);
 
 
   /* THE PACE CARD IS NOT GATED ON THIS SECTION'S DATA, because it does not read any of it. It goes
@@ -542,7 +558,6 @@ export default function RevenueSection() {
     setGrain(next);
   };
 
-  const max = Math.max(1, ...series.map((p) => valueOf(p)));
 
 
   function exportTable() {
@@ -557,13 +572,43 @@ export default function RevenueSection() {
       ]);
       return;
     }
-    const grouped = grain === "city" ? byCity(shownFields) : byField(shownFields);
+    /* ── CITY GRAIN EXPORTS THE CITY TABLE, not a roster walk grouped by city ─────────────────
+     * Built from the SAME call the table renders from, so the CSV cannot hold a different basis
+     * than the screen it was clicked on. The columns are the table's columns; Billing, Private
+     * Rental and Field Cost are venue facts and have no city row to sit on. */
+    if (grain === "city") {
+      const built = data ? buildGroupRows({
+        rows: shownFields, matchRows: shownMatchesBase, grain: "city", month: anchorMonth,
+        membershipOf: (c) => cityMembershipRevenueFor(data, c, anchorMonth),
+        membershipScoped,
+        cityNonMembershipOf: (c) => cityNonMembershipRevenueFor(data, c, anchorMonth),
+      }) : null;
+      const out = data ? revenueOutsideCities(data, anchorMonth, cities) : null;
+      downloadCsv(`matchday-revenue-city-${period.key}.csv`, [
+        ["Month", "City", "Venues", "Matches", "Total revenue", "DPP revenue", "Membership revenue", "Member mix"],
+        ...(built?.list ?? []).map((r) => [
+          anchorMonth, r.label, r.venueCount, r.matches, r.total.toFixed(2), r.dpp.toFixed(2),
+          r.membership == null ? "" : r.membership.toFixed(2),
+          r.membership == null || r.total <= 0 ? "" : `${((r.membership / r.total) * 100).toFixed(1)}%`,
+        ]),
+        /* THE REMAINDER RIDES ALONG. A spreadsheet that does not tie to the card is a spreadsheet
+         * somebody reconciles by hand; these rows are why it does not tie, by name. */
+        ...(out?.rows ?? []).map((r) => [anchorMonth, `${r.city} (not shown in table)`, "", "", r.gross.toFixed(2), "", "", ""]),
+      ]);
+      return;
+    }
+    const grouped = byField(shownFields);
     downloadCsv(`matchday-revenue-${grain}-${period.key}.csv`, [
-      ["Month", grain === "city" ? "City" : "Location", "Billing", "Matches", "DPP Revenue", "Private Rental", "Field Cost"],
+      ["Month", "Location", "City", "Billing", "Matches", "DPP Revenue", "Private Rental", "Membership Revenue", "Field Cost"],
       ...[...grouped.values()].flatMap((rows) =>
         rows.map((r) => [
-          r.month, grain === "city" ? r.city : r.field, COST_BASIS_LABEL[r.basis], r.matches,
-          (r.revenue - r.privateRental).toFixed(2), r.privateRental.toFixed(2),
+          r.month, r.field, r.city, COST_BASIS_LABEL[r.basis], r.matches,
+          /* MINUS THE MEMBER SLICE, exactly as the column on screen does. This said
+             `r.revenue - r.privateRental` and FieldMonth.revenue carries the allocated
+             membership, so every exported DPP figure was that field's DPP plus its members. */
+          (r.revenue - (r.membership ?? 0) - r.privateRental).toFixed(2),
+          r.privateRental.toFixed(2),
+          r.membership == null ? "" : r.membership.toFixed(2),
           r.cost == null ? "" : r.cost.toFixed(2),
         ]),
       ),
@@ -779,9 +824,20 @@ export default function RevenueSection() {
               fin_venues.launch_date and does not move with the period. Match view is not covered
               because its rows are matches, each carrying its own date. */}
           {grain !== "match" && (
-            <span className={s.brkCount} data-testid="breakdown-scope">
-              · Figures are for the selected month{grain === "field" ? ", except Launched" : ""}
-            </span>
+            <>
+              <span className={s.brkCount} data-testid="breakdown-scope">
+                · Figures are for the selected month{grain === "field" ? ", except Launched" : ""}
+              </span>
+              {/* WHICH BASIS, WHERE THE READER IS LOOKING. Two grains read two different sources
+                  and they will not agree; saying so here is cheaper than the day spent finding
+                  out why. Field and city are NOT reconciled to each other and are not meant to
+                  be, in the same way the Field Costs ledger and Cash Flow are not. */}
+              <span className={s.brkCount} data-testid="breakdown-basis">
+                · {grain === "city"
+                    ? "Money collected, from fin_revenue. Tax-inclusive, dated by the charge."
+                    : "Play reconstructed from the roster. Pre-tax, dated by kick-off."}
+              </span>
+            </>
           )}
           <span className={s.brkGrow} />
           <button type="button" className={s.btn} data-testid="breakdown-export"
@@ -831,7 +887,13 @@ export default function RevenueSection() {
           <GroupTable rows={shownFields} matchRows={shownMatchesBase} grain={grain}
             month={period.months[period.months.length - 1] ?? ""}
             gapRows={gapRows} launchOf={launchOf}
-            membershipOf={(c) => (data ? cityMembershipRevenueFor(data, c, period.months[period.months.length - 1] ?? "") : 0)}
+            membershipOf={(c) => (data ? cityMembershipRevenueFor(data, c, anchorMonth) : 0)}
+            /* NULL AT FIELD GRAIN, DELIBERATELY. See the prop's own note: handing the ledger to
+               a grain the ledger cannot reach is how the second basis gets back in. */
+            cityNonMembershipOf={data && grain === "city"
+              ? (c) => cityNonMembershipRevenueFor(data, c, anchorMonth) : null}
+            outside={data && grain === "city"
+              ? revenueOutsideCities(data, anchorMonth, cities) : null}
             membershipScoped={membershipScoped} />
         )}
       </div>
@@ -1015,6 +1077,97 @@ function NotMatchedInfo({ rows }: { rows: { key: string; month: string; gap: num
   );
 }
 
+/* ── WHAT THE DPP COLUMN IS MADE OF ─────────────────────────────────────────────────────────────
+ * The column is headed DPP revenue because that is what the summary card above it is headed, and
+ * both are the same rows: everything in the ledger that is not Membership. That is not the same
+ * sentence as "this is all DPP", and the difference is what this popover exists to state.
+ *
+ * It renders the BASIS too, at the point the reader is looking at the number rather than only in
+ * the page header, because the three-way disagreement this fixes happened with all three figures
+ * on one screen and none of them saying which one it was. */
+function DppTypeInfo({ grain, rows }: { grain: "city" | "field"; rows: { type: string; gross: number }[] }) {
+  const total = rows.reduce((a, r) => a + r.gross, 0);
+  return (
+    <InfoPopover
+      testid="dpp-type-info"
+      panelTestid="dpp-type-panel"
+      ariaLabel="What the DPP revenue column contains"
+      title={grain === "city" ? "Money collected, less membership" : "Play at this pitch, pre-tax"}
+      width={300}
+    >
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.type} data-testid="dpp-type-row" data-type={r.type}>
+            <td className="l">{r.type}</td>
+            <td data-testid="dpp-type-amount">{fmtMoney(r.gross, 2)}</td>
+          </tr>
+        ))}
+        <tr className={s.infoRule}><td colSpan={2} /></tr>
+        <tr data-testid="dpp-type-row" data-type="__total">
+          <td className="l">Column total</td>
+          <td data-testid="dpp-type-total">{fmtMoney(total, 2)}</td>
+        </tr>
+        <tr>
+          <td className={s.infoNote} colSpan={2} data-testid="dpp-type-basis">
+            {grain === "city"
+              ? "fin_revenue, the same rows as the card above. Tax-inclusive, and dated by when the card was charged."
+              : "mdapi_match_players, daily-paid spots at this pitch. Pre-tax, and dated by when the match kicked off."}
+          </td>
+        </tr>
+      </tbody>
+    </InfoPopover>
+  );
+}
+
+/* ── THE TOTAL COLUMN'S RECONCILIATION, AT CITY GRAIN ───────────────────────────────────────────
+ * The table's rows are the displayed cities. fin_revenue also carries rows no displayed city
+ * owns — the "Deleted Account Revenue" pseudo-city, and any city in HIDDEN_CITIES — so the
+ * table's Total is SHORT of the card by exactly those, and the honest thing is to print the
+ * identity rather than to reach for a tie that would need a row invented to get it.
+ *
+ * $43.23 of $91,818.65 in Aug 2026. Small enough to round away, which is the reason to show it:
+ * the next person to find a $43 hole should find it already named here. */
+function ReconcileInfo({ month, tableTotal, outside }: {
+  month: Q2Month;
+  tableTotal: number;
+  outside: { rows: { city: string; gross: number }[]; gross: number; monthGross: number };
+}) {
+  return (
+    <InfoPopover
+      testid="reconcile-info"
+      panelTestid="reconcile-panel"
+      ariaLabel="How the table total reconciles to money collected"
+      title={`Reconciles to ${month}`}
+      width={320}
+    >
+      <tbody>
+        <tr data-testid="reconcile-row" data-row="table">
+          <td className="l">These {month} rows</td>
+          <td data-testid="reconcile-table">{fmtMoney(tableTotal, 2)}</td>
+        </tr>
+        {outside.rows.map((r) => (
+          <tr key={r.city} data-testid="reconcile-row" data-row={r.city}>
+            <td className="l">{r.city}</td>
+            <td data-testid="reconcile-outside">{fmtMoney(r.gross, 2)}</td>
+          </tr>
+        ))}
+        <tr className={s.infoRule}><td colSpan={2} /></tr>
+        <tr data-testid="reconcile-row" data-row="__collected">
+          <td className="l">Collected, all cities</td>
+          <td data-testid="reconcile-collected">{fmtMoney(outside.monthGross, 2)}</td>
+        </tr>
+        <tr>
+          <td className={s.infoNote} colSpan={2} data-testid="reconcile-note">
+            The rows above are the cities this table shows. Everything else in fin_revenue is
+            listed here by name so the two figures tie. Shown to the cent: the table rounds to
+            the dollar, so a row there can read a dollar off its own two cells.
+          </td>
+        </tr>
+      </tbody>
+    </InfoPopover>
+  );
+}
+
 // SCOPED TO ONE MONTH, which the note beside the row count says once (the four "(in month)"
 // headers that used to say it four times are gone). The previous table paired
 // each thing with each month and ranked by DPP across the span; that answered a different question
@@ -1028,7 +1181,8 @@ function NotMatchedInfo({ rows }: { rows: { key: string; month: string; gap: num
 // NUMERATOR as the average. ATH Pearland — 0 matches, $6,972 of revenue — read "$6,972 avg
 // revenue / match", which is worse than Infinity because it looks like an answer. "No rows" never
 // catches it: there IS a row, and it has money on it.
-function GroupTable({ rows, matchRows, grain, month, membershipOf, membershipScoped, gapRows, launchOf }: {
+function GroupTable({ rows, matchRows, grain, month, membershipOf, membershipScoped, gapRows, launchOf,
+  cityNonMembershipOf, outside }: {
   rows: FieldMonth[]; grain: "city" | "field"; month: Q2Month;
   /* THE MATCH ROWS ARE HERE FOR ONE REASON: membership at FIELD grain.
    *
@@ -1049,6 +1203,20 @@ function GroupTable({ rows, matchRows, grain, month, membershipOf, membershipSco
    * here would silently attach one city's members to another's pitch. */
   matchRows: MatchRow[];
   membershipOf: (city: string) => number; membershipScoped: boolean;
+  /* ── CITY GRAIN READS THE LEDGER; FIELD GRAIN READS THE ROSTER. THAT IS THE WHOLE FIX. ───────
+   * A city IS a fin_revenue row, so at city grain both money columns come from the same table
+   * the summary cards read, split by `type`, and the Total reconciles to the card by
+   * construction. A FIELD is not a fin_revenue row — the ledger carries a venue NAME string and
+   * no field id, and no match id at all — so field grain keeps the roster walk, which is the
+   * only derivation that reaches that grain. The two will differ, for the reasons in the DPP
+   * popover, and they are not reconciled to each other.
+   *
+   * Null at field grain, and the caller passes null there rather than this component deciding —
+   * a component that picks its own source is how a second basis gets in. */
+  cityNonMembershipOf: ((city: string) => CityRevenueSplit) | null;
+  /* The month's revenue in no displayed city, for the Total header's reconciliation. Null at
+   * field grain, where the Total is roster-derived and has nothing to reconcile TO. */
+  outside: { rows: { city: string; gross: number }[]; gross: number; monthGross: number } | null;
   gapRows: { key: string; month: string; gap: number; pct: number }[];
   // LAUNCHED is field-only and is NEW data, not a relabelled column: fin_venues.launch_date was
   // not reaching this table. A field group can span several venue rows (split-rate legs), so the
@@ -1056,62 +1224,9 @@ function GroupTable({ rows, matchRows, grain, month, membershipOf, membershipSco
   // second rate tier was added.
   launchOf: (field: string) => string | null;
 }) {
-  const scoped = rows.filter((r) => r.month === month);
-  if (scoped.length === 0) return <div className={s.empty}>No rows for this selection.</div>;
-
-  const keyed = new Map<string, { label: string; city: string; venues: Set<string>; keys: Set<string>; matches: number; dpp: number }>();
-  for (const r of scoped) {
-    const label = grain === "city" ? r.city : r.field;
-    let e = keyed.get(label);
-    if (!e) { e = { label, city: r.city, venues: new Set(), keys: new Set(), matches: 0, dpp: 0 }; keyed.set(label, e); }
-    e.venues.add(r.field);
-    e.keys.add(r.key);   // FieldMonth.key === MatchRow.fieldKey — the join, on an id
-    e.matches += r.matches;
-    e.dpp += r.revenue;
-  }
-
-  // The month's allocated member revenue and member spots, per field group.
-  /* A NULL ALLOCATION IS NOT A ZERO, AND MUST NOT BE ADDED AS ONE. `?? 0` here printed $0 against
-   * pitches with real member spots whenever the city had no prior-month rate — including for the
-   * second or two before the member-spot data lands, where every pitch on the page read $0. A row
-   * whose member revenue is unknown says so; `noRate` carries that up. */
-  const memberByKey = new Map<string, { rev: number; spots: number; noRate: boolean }>();
-  for (const m of matchRows) {
-    if (m.month !== month) continue;
-    const e = memberByKey.get(m.fieldKey) ?? { rev: 0, spots: 0, noRate: false };
-    if (m.memberRevenue == null) e.noRate = true;
-    else e.rev += m.memberRevenue;
-    e.spots += m.memberSpots;
-    memberByKey.set(m.fieldKey, e);
-  }
-  /* MEMBERSHIP IS number | null, AND THE DIFFERENCE IS THE POINT. null renders —, and means "no
-   * basis to allocate on". 0 would mean "we allocated and it came to nothing", which is a claim
-   * this table cannot make about a pitch no member played at. This mirrors cityPnl, where a pitch
-   * with no spot data gets null and never 0.
-   *
-   * FIELD GRAIN: null when the pitch had NO MEMBER SPOTS this month — including when the whole
-   * city has no member-spot data, in which case every allocation is 0 and printing $0 across a
-   * column would read as a measurement. */
-  const list = [...keyed.values()].map((e) => {
-    let membership: number | null;
-    if (grain === "city") {
-      membership = membershipScoped ? membershipOf(e.city) : null;
-    } else {
-      let rev = 0, spots = 0, noRate = false;
-      for (const k of e.keys) { const m = memberByKey.get(k); if (m) { rev += m.rev; spots += m.spots; if (m.noRate) noRate = true; } }
-      membership = noRate || spots === 0 ? null : rev;
-    }
-    const total = e.dpp + (membership ?? 0);
-    return { ...e, membership, total, venueCount: e.venues.size };
-  }).sort((a, b) => b.total - a.total);
-
-  const T = list.reduce((a, r) => ({
-    venues: a.venues + r.venueCount, matches: a.matches + r.matches,
-    total: a.total + r.total, dpp: a.dpp + r.dpp,
-    // The total sums the rows that HAVE a figure. If none does, it stays null and prints — as they
-    // all do; summing nulls to 0 would invent a total the rows above it never claimed.
-    membership: r.membership == null ? a.membership : (a.membership ?? 0) + r.membership,
-  }), { venues: 0, matches: 0, total: 0, dpp: 0, membership: null as number | null });
+  const built = buildGroupRows({ rows, matchRows, grain, month, membershipOf, membershipScoped, cityNonMembershipOf });
+  if (!built) return <div className={s.empty}>No rows for this selection.</div>;
+  const { list, T, dppSplit } = built;
 
   /* MEMBER MIX — THE DEFINITION, WRITTEN DOWN BECAUSE DEFINITIONS DRIFT:
    *
@@ -1149,11 +1264,24 @@ function GroupTable({ rows, matchRows, grain, month, membershipOf, membershipSco
                 before it counts anything), and LAUNCHED is NOT — it is fin_venues.launch_date, a
                 fixed date. That is why the note above says "except Launched" on Field view. A
                 blanket statement that is untrue of one column is worse than four repetitions. */}
+            {/* TWO DIFFERENT CAVEATS, ONE PER BASIS, AND NEVER BOTH. Field grain's Total is the
+                roster walk, so the caveat is what the walk could not match to a venue. City
+                grain's Total is the ledger, so there is nothing to "not match" — the caveat
+                there is the opposite one: what the ledger holds that no displayed city owns. */}
             <th>Total revenue
-              {gapRows.length > 0 && <NotMatchedInfo rows={gapRows} />}</th>
+              {grain === "city" && outside
+                ? <ReconcileInfo month={month} tableTotal={T.total} outside={outside} />
+                : gapRows.length > 0 && <NotMatchedInfo rows={gapRows} />}</th>
             <th>Avg revenue / match</th>
             {grain === "city" && <th>Avg revenue / venue</th>}
-            <th>DPP revenue</th>
+            {/* THE HEADER IS THE CARDS' HEADER, AND SO IS THE FIGURE UNDER IT. The summary card
+                labelled DPP is every fin_revenue row that is not Membership, which at city
+                grain is exactly this column. The heading is inherited rather than re-guessed,
+                and the ⓘ prints the type split so "DPP revenue" is never the only thing the
+                reader is told about what is in there. That is the defect this column is
+                being fixed out of; a new unlabelled aggregate would be the same defect. */}
+            <th>DPP revenue
+              {dppSplit.length > 0 && <DppTypeInfo grain={grain} rows={dppSplit} />}</th>
             <th>Membership revenue</th>
             <th>Member mix</th>
           </tr>

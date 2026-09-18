@@ -189,7 +189,14 @@ console.log("\n── the figures ──");
    * total below — both of which were pinned, both of which drifted on live data, and both of which
    * are now checked relationally — the venue count only changes when someone adds or removes a
    * venue, which is exactly the thing worth being told about. Being told is what just happened. */
-  eq("venues 31", f.venues, 31);
+  /* 31 -> 37, AND IT IS NOT A CHANGE TO THIS PAGE. Derived rather than re-read off the screen,
+   * which is the whole reason a constant is kept here: fin_venues holds 40 rows, one is in
+   * El Paso (HIDDEN_CITIES), and COMBINE_BY_NAME merges two split-rate pairs — ATH Katy with ATH
+   * Katy Sunday in Houston, Soccer Central with Soccer Central Tournament in San Antonio. So
+   * 40 - 1 - 2 = 37 venue groups, and the column sums exactly those. Checked against the venue
+   * table on 2026-09-17, six venues having been added since this was last read at 31 on
+   * 2026-08-25. Being told is the point. */
+  eq("venues 37", f.venues, 37);
   // WAS PINNED AT 344 AND DRIFTED TO 346 — August is a live month and matches keep landing, so a
   // constant here fails on a page that is working. The Total is now checked against the column it
   // totals, which catches a broken or mis-summed column without dating the suite.
@@ -200,12 +207,31 @@ console.log("\n── the figures ──");
    * this against a stashed tree. What must hold whatever the amount is: the parts add to the
    * whole, and membership is a real figure rather than a zero or a dash. */
   eq("membership is a real figure, not zero", f.member > 0, true);
-  eq("  …and DPP + membership still equals the total", f.dpp + f.member, f.total);
+  /* ── ITEMISED — AN EXPECTATION CHANGE, NOT A SELECTOR EDIT, AND THE TOLERANCE IS DERIVED ──────
+   * This was `=== f.total` and it passed by luck. Every cell is fmtMoney at ZERO digits, so each
+   * of the three is the true figure rounded to the dollar; two rounded addends can sum a dollar
+   * away from the rounded sum, and whether they do depends on the cents. Before 2026-09-17 the
+   * city DPP column was the roster walk and the Aug cents happened to line up. It now holds the
+   * ledger's non-membership gross and they do not: Aug 2026 reads $72,888 + $18,888 = $91,776
+   * against a printed total of $91,775, and Dallas and St. Louis are each a dollar out the other
+   * way. Nothing is wrong with the arithmetic — $72,887.68 + $18,887.74 = $91,775.42 exactly.
+   *
+   * SO THE TOLERANCE IS EXACTLY $1, WHICH IS THE MOST TWO ROUNDED DOLLARS CAN LIE BY, and not a
+   * round number somebody picked. A real broken column moves by more than a dollar; the cent-exact
+   * identity is asserted where the cents exist, in scripts/revenue-city-basis-test.ts, and shown
+   * on screen in the Total column's ⓘ. */
+  eq("  …and DPP + membership still equals the total, within the dollar both are rounded to",
+     Math.abs(f.dpp + f.member - f.total) <= 1, true);
   // NOT HARDCODED. The DPP figure and the total have both moved $101 since the brief was written —
   // the mirror refreshes daily and revenue rows land. What must hold whatever the amounts are is
   // that the parts add to the whole; a rename cannot break that and a broken column would.
-  eq("DPP + membership equals the total exactly", f.dpp + f.member, f.total);
+  eq("DPP + membership equals the total", Math.abs(f.dpp + f.member - f.total) <= 1, true);
+  /* CONTROL FOR THE TOLERANCE, not just for the figures: $1 must still be tight enough to catch
+   * the defect this page was fixed out of. The membership that used to sit inside the DPP column
+   * was $14,099.07 in Aug 2026, four orders of magnitude past the tolerance. */
   eq("  control — the figures are non-zero, so the sum is a real check", f.total > 1000 && f.dpp > 1000, true);
+  eq("  control — $1 is far tighter than the defect it guards ($14,099 of membership in the DPP column)",
+     f.member > 1000, true);
   console.log(`     total $${f.total.toLocaleString()} = DPP $${f.dpp.toLocaleString()} + membership $${f.member.toLocaleString()}`);
 }
 
@@ -311,6 +337,84 @@ await setGrain("city");
   eq("  …including TOTAL REVENUE, with the ⓘ present", tr != null && Math.abs(tr.delta) <= 1, true);
   console.log(`     TOTAL REVENUE header ink is ${tr?.delta}px from its numbers`);
 }
+
+/* ── THE TOTAL COLUMN CARRIES A DIFFERENT ⓘ AT EACH GRAIN, AND THAT IS THE POINT ───────────────
+ * ITEMISED — A GRAIN CHANGE, NOT A SELECTOR EDIT, AND THE ASSERTION BODIES BELOW ARE UNCHANGED.
+ *
+ * "Not matched to a venue" is a caveat about the ROSTER WALK: revenue collected that no venue
+ * row could be found for. City grain stopped being a roster walk on 2026-09-17 — it reads
+ * fin_revenue, the same table the summary cards read — so there is nothing there that can fail
+ * to match a venue, and the caveat would be answering a question the column no longer raises.
+ * The ⓘ therefore lives at FIELD grain now, where the walk still is, and city grain carries the
+ * opposite caveat instead: what the ledger holds that no displayed city owns.
+ *
+ * Every block from here down is about the roster ⓘ, so the grain is switched ONCE, here. */
+console.log("\n── city grain reconciles to the card instead ──");
+{
+  await setGrain("city");
+  const rec = page.locator('[data-testid="reconcile-info"]');
+  eq("city grain carries the reconciliation ⓘ", await rec.count(), 1);
+  eq("…and NOT the roster's not-matched ⓘ", await page.locator('[data-testid="notmatched-info"]').count(), 0);
+  await rec.click();
+  await page.waitForSelector('[data-testid="reconcile-panel"]', { timeout: 8000 });
+  const r = await page.evaluate(() => {
+    const n = (t) => Number(String(t ?? "").replace(/[^0-9.-]/g, ""));
+    const rows = [...document.querySelectorAll('[data-testid="reconcile-row"]')];
+    return {
+      table: n(rows.find((x) => x.dataset.row === "table")?.querySelectorAll("td")[1]?.innerText),
+      collected: n(rows.find((x) => x.dataset.row === "__collected")?.querySelectorAll("td")[1]?.innerText),
+      outside: rows.filter((x) => !["table", "__collected"].includes(x.dataset.row))
+        .map((x) => ({ city: x.dataset.row, gross: n(x.querySelectorAll("td")[1]?.innerText) })),
+    };
+  });
+  const sumOutside = r.outside.reduce((a, x) => a + x.gross, 0);
+  // THE IDENTITY, TO THE CENT, off the rendered panel. The panel prints cents precisely so this
+  // can be checked; the table itself rounds to the dollar and cannot carry it.
+  eq("table total + everything outside it = money collected, to the cent",
+     Math.round((r.table + sumOutside) * 100), Math.round(r.collected * 100));
+  // CONTROLS. An empty panel would satisfy the identity trivially (0 + 0 = 0), so both sides are
+  // proven non-trivial, and the remainder is proven to be a real non-zero amount with a name.
+  eq("  control — the table side is a real figure", r.table > 1000, true);
+  eq("  control — there IS something outside the table, and it is named",
+     r.outside.length > 0 && r.outside.every((x) => x.city && x.gross !== 0), true);
+  console.log(`     ${r.table} + ${sumOutside.toFixed(2)} (${r.outside.map((x) => x.city).join(", ")}) = ${r.collected}`);
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+}
+
+console.log("\n── and the roster ⓘ moves to Field grain, where the walk is ──");
+await setGrain("field");
+eq("field grain does NOT carry the reconciliation ⓘ", await page.locator('[data-testid="reconcile-info"]').count(), 0);
+
+/* ── THE ROSTER ⓘ IS UNREACHABLE ON TODAY'S DATA, AND THIS SAYS SO INSTEAD OF SKIPPING ─────────
+ * Everything below here needs the not-matched ⓘ on the page, and it only renders when some
+ * period has gross ABOVE what the roster walk matched (gapRows, RevenueSection.tsx). No period
+ * does: `matched` is the walk PLUS the allocated member slice PLUS membership again, so it runs
+ * above gross every month. Aug 2026, measured: $91,818.65 collected against $100,183.81 matched.
+ *
+ * THIS IS PRE-EXISTING, and was proved rather than argued — run against a stashed tree on the
+ * same dev server on 2026-09-17, HEAD renders ZERO not-matched ⓘ at city grain and zero at field
+ * grain, and this suite crashed on `btn.parentElement` of a null button in exactly the same place.
+ * The change that moved the ⓘ to field grain did not cause it and does not fix it.
+ *
+ * A SKIP THAT REPORTS GREEN IS THE THING NOT TO DO HERE — 250 lines below this would assert
+ * nothing and say they passed. So it exits NON-ZERO with the reason, which is a suite that
+ * decided something is wrong (exit 1), not one that never got to decide (exit 2). */
+if (await page.locator('[data-testid="notmatched-info"]').count() === 0) {
+  console.log("\n  !! THE NOT-MATCHED ⓘ IS NOT ON THE PAGE AT EITHER GRAIN, so the "
+    + `${"sections below it"} cannot run.`);
+  console.log("     CAUSE: gapRows is empty. `matched` = FieldMonth.revenue (which already holds the");
+  console.log("     allocated member slice) + membership again, so it exceeds gross every month and");
+  console.log("     every gap is negative. Aug 2026: $91,818.65 gross against $100,183.81 matched.");
+  console.log("     PRE-EXISTING: HEAD renders zero of these too, verified against a stashed tree.");
+  console.log(`\n${PASS} passed, ${FAIL + 1} failed`);
+  fails.forEach((f) => console.log(`  ✗ ${f}`));
+  console.log("  ✗ the not-matched ⓘ is unreachable — gapRows is empty (see the note above)");
+  await closeContext(ctx);
+  await closeBrowser(browser);
+  process.exit(1);
+}
+eq("field grain carries the not-matched ⓘ", await page.locator('[data-testid="notmatched-info"]').count(), 1);
 
 // THE ⓘ COSTS NO LAYOUT — proven by removing it and re-measuring.
 {

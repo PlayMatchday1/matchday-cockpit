@@ -1656,6 +1656,87 @@ export function cityMembershipRevenueFor(
     .reduce((s, r) => s + r.gross, 0);
 }
 
+/* ── THE OTHER HALF OF THE SAME LEDGER, split by type. TAX-INCLUSIVE, like its sibling above. ──
+ *
+ * `cityMembershipRevenueFor` is `type === "Membership"`; this is everything else. The two
+ * PARTITION fin_revenue, so a city's two figures add to that city's gross for the month and the
+ * city rows add to the card. Measured over all 8,363 rows: the exact-match test and the
+ * `/member/i` test the summary cards use return the same $349,695.08, so the split here and the
+ * split on the cards are the same split, not two that happen to agree this month.
+ *
+ * WHY IT IS NOT NAMED cityDppRevenueFor. It is not DPP. Aug 2026 carries $400.00 of Private
+ * Rental and $21.65 of Strike inside it, and across all history there is $6,704.42 of
+ * Unclassified. The Revenue page prints the figure under a DPP heading because that is the
+ * heading the summary cards use for the same rows — and it prints `byType` beside it so the
+ * reader can see what is in there. A column whose name is a guess about its contents is the
+ * defect this helper exists downstream of.
+ *
+ * ORDERED BY SIZE, so the popover that renders it leads with what the money actually is. */
+export type CityRevenueSplit = {
+  /** Non-membership types present in this city-month, largest first. Empty when there are none. */
+  byType: { type: string; gross: number }[];
+  /** Their sum. The DPP column's figure at city grain. */
+  gross: number;
+};
+
+export function cityNonMembershipRevenueFor(
+  data: FinanceData,
+  city: string,
+  month: Q2Month,
+): CityRevenueSplit {
+  const byType = new Map<string, number>();
+  let gross = 0;
+  for (const r of data.revenue) {
+    if (r.city !== city || r.month !== month) continue;
+    if (r.type === "Membership") continue;
+    byType.set(r.type, (byType.get(r.type) ?? 0) + r.gross);
+    gross += r.gross;
+  }
+  return {
+    byType: [...byType.entries()]
+      .map(([type, g]) => ({ type, gross: g }))
+      .sort((a, b) => b.gross - a.gross),
+    gross,
+  };
+}
+
+/* ── WHAT THE CITY TABLE CANNOT SHOW, NAMED RATHER THAN DROPPED ────────────────────────────────
+ *
+ * The city table's rows are CITY_DISPLAY_ORDER minus the hidden ones. fin_revenue carries two
+ * kinds of row that no such city owns, so the table's Total CANNOT equal the summary card and
+ * chasing an exact tie would mean either inventing a row or quietly widening the card:
+ *
+ *   "Deleted Account Revenue"  a pseudo-city, where revenue whose email resolves to no member
+ *                              lands. $42.69 of Membership in Aug 2026.
+ *   El Paso                    a REAL city, deliberately hidden (HIDDEN_CITIES). $0.54 of DPP.
+ *
+ * $43.23 of $91,818.65, which is 0.05% and is also exactly the kind of remainder that gets
+ * rounded away and then re-discovered as a bug. So it is returned, rendered, and asserted:
+ * table total + this = the card, to the cent. The precedent is unattributedVenues() — an
+ * exclusion nobody can see is the worse bug of the two.
+ *
+ * `shown` is the caller's row set, so this cannot drift from what was actually rendered. */
+export function revenueOutsideCities(
+  data: FinanceData,
+  month: Q2Month,
+  shown: readonly string[],
+): { rows: { city: string; gross: number }[]; gross: number; monthGross: number } {
+  const inTable = new Set(shown);
+  const byCity = new Map<string, number>();
+  let monthGross = 0;
+  for (const r of data.revenue) {
+    if (r.month !== month) continue;
+    monthGross += r.gross;
+    if (inTable.has(r.city)) continue;
+    byCity.set(r.city, (byCity.get(r.city) ?? 0) + r.gross);
+  }
+  const rows = [...byCity.entries()]
+    .map(([city, gross]) => ({ city, gross }))
+    .filter((r) => Math.abs(r.gross) > 0.005)
+    .sort((a, b) => b.gross - a.gross);
+  return { rows, gross: rows.reduce((a, r) => a + r.gross, 0), monthGross };
+}
+
 /* ── PRE-TAX. Callers: Slate Review, Match P&L, cityPnl, fieldEconomics — every place membership
  * is combined with roster-derived revenue, which is mdapi_match_players.amount and pre-tax.
  *

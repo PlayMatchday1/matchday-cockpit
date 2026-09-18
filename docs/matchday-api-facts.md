@@ -530,6 +530,140 @@ to the second must be pre-taxed first — `cityMembershipRevenuePreTaxFor`, guar
 7.65% network-wide for Jul 2026: $97,023.58 gross against $89,601.26 pre-tax. The comment in
 `RevenueSection.tsx` records the wrong diagnosis with the correction beneath it.
 
+### The Revenue page's city table "DPP revenue" column IS NOT DPP — it carries allocated membership
+
+Measured 2026-09-17 on production, Aug 2026, and reproduced **to the cent** against the rendered
+figure ($81,296):
+
+```
+city-table "DPP revenue", Aug 2026                       $81,296.07
+  roster DAILY-PAID amount, pre-tax                      $66,797.00   6,216 rows
+  Private Rental (fin_revenue gross)                        $400.00
+  ALLOCATED MEMBERSHIP, pre-tax                          $14,099.07   <- not DPP
+fin_revenue non-membership gross ("DPP" card)            $72,888.22
+  DPP $72,466.57 + Private Rental $400.00 + Strike $21.65
+GAP                                                       $8,407.85
+```
+
+`FieldMonth.revenue` is `venuePartnerRevenueFor(...) + (memberSlice(...) ?? 0)`
+(`fieldEconomics.ts:431`) and `GroupTable` puts that whole figure in the **DPP revenue** cell —
+`e.dpp += r.revenue` (`RevenueSection.tsx:1070`). The field name is honest; the column header is
+not. **The membership term is 168% of the Aug gap on its own**; every other cause nets *against* it.
+
+**THE TOTAL COLUMN THEREFORE DOUBLE-COUNTS MEMBERSHIP AT CITY GRAIN.** `total = e.dpp +
+(membership ?? 0)` (`RevenueSection.tsx:1104`) with `membershipOf = cityMembershipRevenueFor`
+(`:834`) — tax-inclusive gross. So Aug 2026's Total carries membership twice, on two different
+bases: $14,099.07 pre-tax allocated inside DPP plus $18,930.43 gross beside it. Not fixed here.
+
+**The full bridge, city table → fin_revenue, Aug 2026.** Signed contributions to the $8,407.85:
+
+```
++ $14,099.07  allocated membership sitting in the DPP column
++  $5,330.30  credit applied at checkout — `amount` is pre-credit, Stripe only saw the cash
+-  $5,104.10  SALES TAX — works AGAINST the gap; the tax-inclusive side is the SMALLER one
+-  $5,368.36  rows on CANCELLED matches: charged, in fin_revenue, excluded by venuePartnerRevenueFor
+-    $357.92  is_absent rows: charged, dropped at mapJoinedRow
+-    $211.40  promo-code redemptions: paymentType PROMOCODE != "DAILY PAID", so excluded
+-     $21.65  Strike, in the non-membership card and in no city row
++     $18.94  timing, net (charge month != match month; $880.90 Jul + $97.71 Sep in, $959.67 out)
++     $22.97  residual, 0.03%
+```
+
+**Free first matches and refunds contribute EXACTLY ZERO, and for different reasons.** All 3,646
+`paid_status='FREE'` rows on Aug matches carry `amount = 0` AND `total_amount = 0` — they are
+absent from both sides, not netted between them. (`is_first_match` is not "free": 1,063 Aug rows
+carry it with $8,551.00 of `amount`.) Refunds never move `fin_revenue` either — `gross =
+charge.amount` (`stripeSync.ts:291`) and a refund is never subtracted, so the $5,640.73 refunded
+on Aug matches sits inside the ledger in full and inside the cancelled-match line above.
+
+**fin_revenue CANNOT be joined to a match.** It is a rollup of Stripe charges by
+date x city x venue x type — no match id, no charge id. The bridge is the roster's own
+`total_amount` and `created_at`: settled rows created in Aug 2026 total $72,489.54 of card charge
+against the ledger's $72,466.57, **0.03% apart**. That also proves `WAITING` never reaches Stripe —
+1,228 Aug WAITING rows carry $14,489.91 of `total_amount` and 1,006 carry a `payment_intent_id`,
+and none of it is in the ledger.
+
+**Sep 2026 is the same shape and the membership term is nearly the WHOLE gap**: $39,622.00 roster
+DPP + $0 rental + $8,787.80 allocated membership = $48,409.80 against $38,932.42 of ledger, a
+$9,477.38 gap read on 2026-09-17 (the month is live and moves daily; the $8,514 read earlier sits
+within a day of DPP of this). The allocation does not scale with DPP volume — it is
+`member spots this month x prior-month $/member-spot` — which is why half the DPP volume carries
+the same dollar gap.
+
+### FIXED 2026-09-17 — city grain reads the ledger, and membership is counted once
+
+`GroupTable` no longer adds `memberSlice` into the DPP cell (`e.dpp += r.revenue - (r.membership ?? 0)`),
+and at CITY grain both money columns come from `fin_revenue` split on `type` —
+`cityNonMembershipRevenueFor` and `cityMembershipRevenueFor`. FIELD grain keeps the roster walk,
+because the ledger carries a venue NAME string, no field id and no match id, and cannot reach that
+grain. The row builder moved to `src/lib/revenueGroupRows.ts` so Export and the render call one
+function and a node suite can load it. `fieldEconomics.ts` is UNTOUCHED — Cost still needs
+`FieldMonth.revenue` to carry the member slice, so the subtraction is at the consumer.
+
+**Aug 2026, measured before and after on the same data:**
+
+```
+                 BEFORE                              AFTER
+DPP column       $81,296.07                          $72,887.68   = the card's DPP row, less El Paso
+Membership       $18,887.74                          $18,887.74   unchanged
+Total            $100,183.81                         $91,775.42
+Member mix       18.9%                               20.6%
+```
+
+**Member mix moved ONE WAY, not both.** The numerator did not change basis — city grain already read
+`cityMembershipRevenueFor`, tax-inclusive gross, and still does. Only the denominator moved, so every
+city's mix ROSE: +0.0pp (OKC) to +5.2pp (Atlanta). Predicting "both directions" assumed a numerator
+change that was never there.
+
+**THE TABLE CANNOT TIE TO THE CARD ON ITS OWN, AND NOW SAYS SO.** `revenueOutsideCities` names what
+no displayed city owns — Aug 2026: $42.69 on the pseudo-city "Deleted Account Revenue" and $0.54 on
+El Paso (HIDDEN_CITIES), $43.23 of $91,818.65. The Total column's ⓘ prints
+`table + remainder = collected` to the cent, asserted on the rendered page by
+`verify-revenue-notmatched`. Chasing an exact tie would mean inventing a row or widening the card.
+
+**The two ⓘ on that header are not the same caveat.** "Not matched to a venue" is about the ROSTER
+walk and now renders at FIELD grain only; city grain carries the reconciliation instead.
+
+**STILL OPEN, NOT FIXED HERE.** `series[].dpp` (`RevenueSection.tsx:260`) still sums
+`FieldMonth.revenue` and `valueOf` still adds membership on top, so `gapRows` carries the SAME double
+count. It renders nothing today — `matched` runs above gross every month, so every gap is negative
+and the not-matched ⓘ is unreachable at both grains (verified against a stashed tree at HEAD). It was
+left alone deliberately: removing the double count alone would make the popover LIVE while its
+arithmetic still compares a PRE-TAX roster figure to TAX-INCLUSIVE gross, which is the wrong
+diagnosis this file already records at "The Revenue page's 7-8% low every month". Fix the basis and
+the double count together or not at all.
+
+### Refunds are in every reported revenue figure, and nothing subtracts them
+
+`fin_revenue.gross` is `charge.amount` (`stripeSync.ts:291`). A refund is never netted, so every
+Finance total, the cards, the city table and anything quoted from them is overstated by refunds.
+
+**2026, by charge month.** UPPER BOUND, and the bound matters: the only source reachable without the
+production Stripe key is `mdapi_match_players.refunded`, which is a BOOLEAN, so a partial refund
+counts in full. DPP only — membership, Private Rental and Strike refunds are invisible from here.
+Keyed on the row's `created_at`, which is the same charge-date basis `fin_revenue` uses.
+
+```
+          reported      refunds      n     net of refunds    %
+Jan      $55,392.17   $2,440.61    230       $52,951.56   4.41
+Feb      $63,175.52   $2,912.05    284       $60,263.47   4.61
+Mar      $63,196.48   $3,553.31    400       $59,643.17   5.62
+Apr      $65,258.26   $2,535.24    293       $62,723.02   3.88
+May      $71,008.76   $4,216.36    471       $66,792.40   5.94
+Jun      $74,011.18   $3,563.45    400       $70,447.73   4.81
+Jul      $97,023.58   $4,904.18    467       $92,119.40   5.05
+Aug      $91,818.65   $5,571.06    519       $86,247.59   6.07
+Sep*     $56,579.99   $2,538.26    232       $54,041.73   4.49
+YTD     $637,464.59  $32,234.52  3,296      $605,230.07   5.06
+                                                   * to 2026-09-17
+```
+
+**The authoritative figure is UNKNOWN from here.** It is Stripe's `charge.amount_refunded`, and
+`STRIPE_SECRET_KEY` is EMPTY in `.env.local` — the production key lives only in Vercel. Whether
+reported revenue changes basis is an accounting decision, not a projection change; the same sentence
+0154 already writes about re-deriving the ledger.
+
+
 ## endDate is independently writable, and the API does NOT validate the pair
 
 Proven 2026-08-28 on staging, by us, with read-back. This answers two questions Phase 7 left
