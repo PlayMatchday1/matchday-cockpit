@@ -328,11 +328,33 @@ export function costBand(value: number | null, blended: number | null, dark: boo
   return "bad";
 }
 
-/** Share of players less share of spend, in POINTS. Positive returns more than it takes. Null when
- *  either side has no total to be a share of. */
-export function reallocationGap(playerShare: number | null, spendShare: number | null): number | null {
-  if (playerShare == null || spendShare == null) return null;
-  return (playerShare - spendShare) * 100;
+/* ── FAIR SHARE, AND WHY IT IS IN DOLLARS ───────────────────────────────────────────────────────
+ *
+ * This was share-of-players minus share-of-spend, in points. Same arithmetic, but a reader had to
+ * convert "−15.0 points" into a budget before it meant anything, and nobody moves points. The
+ * money version states the thing you would act on: Dallas is carrying $1,175 more budget than its
+ * players justify, and Austin $1,031 less.
+ *
+ * FAIR SHARE IS A COUNTERFACTUAL, NOT A TARGET. It is what this market's spend would be if every
+ * dollar in the account followed new players in proportion. It assumes nothing about diminishing
+ * returns, market size or what a market would do with more money; moving budget to the cheapest
+ * market until the rates equalise is not what it says. It says where the money is now against
+ * where the players are now, which is the question the page is for.
+ *
+ * IT SUMS TO ZERO ACROSS THE PAID MARKETS BY CONSTRUCTION — the fair shares are a partition of the
+ * same total the actual spends partition — so there is no total row figure worth printing. */
+
+/** This market's share of new players applied to total paid spend. Null when nobody has become a
+ *  player anywhere, because a share of zero players is not a share of anything. */
+export function fairShareCents(becamePlayers: number, totalPlayers: number, totalSpendCents: number): number | null {
+  const share = shareOf(becamePlayers, totalPlayers);
+  return share == null ? null : share * totalSpendCents;
+}
+
+/** Actual spend minus fair share. POSITIVE MEANS OVER: this market takes more budget than its
+ *  players justify. Negative means under. */
+export function overUnderCents(spendCents: number, fairCents: number | null): number | null {
+  return fairCents == null ? null : spendCents - fairCents;
 }
 
 /** A share of a total, or null when the total is zero. Never 0-for-unknown: a market with no

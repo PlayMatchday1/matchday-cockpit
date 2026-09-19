@@ -1307,7 +1307,56 @@
  * reaches a number which column it is being asked to read. */
 .adsHeadKey { color: var(--ink); font-weight: 700; }
 /* THE GLYPH RIDES WITH THE NAME, so a wrapped header never leaves its icon on its own line. */
-.adsTh { display: inline-flex; align-items: center; gap: 5px; cursor: help; }
+.adsTh { display: inline-flex; align-items: center; gap: 3px; }
+
+/* ── THE DEFINITION TRIGGER ──────────────────────────────────────────────────
+ * 22px of hit area on a 12px glyph, pulled back by negative margins so the box's
+ * own padding cannot widen the column or make the header row taller. The header
+ * is right-aligned, so the right margin has to come back over the cell padding
+ * for the last character to line up with the numbers below it. */
+.adsTipBtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; margin: -6px -6px -6px 0; padding: 0;
+  border: 0; background: transparent; cursor: help; line-height: 1;
+  color: var(--muted); opacity: 0.6;
+}
+.adsTipBtn:hover, .adsTipBtn[aria-expanded="true"] { color: var(--forest); opacity: 1; }
+.adsTipBtn:focus-visible { outline: 2px solid var(--div-above-2); outline-offset: 1px; border-radius: 6px; opacity: 1; }
+
+/* Portalled to <body> and fixed, so neither .tableWrap's overflow-x nor the
+ * card's overflow: hidden can clip it, and no column can be widened by it.
+ *
+ * EVERY COLOUR HERE CARRIES A LITERAL FALLBACK, AND THAT IS NOT BELT AND BRACES.
+ * The palette is declared on .dash and cascades to its children; a node
+ * portalled to document.body is NOT one of those children, so `var(--surface)`
+ * resolves to nothing, the declaration is invalid at computed-value time, and
+ * the property drops to its initial value — background: transparent and
+ * border-color: currentColor. The first cut rendered a panel you could read the
+ * table straight through. The token stays first so this still tracks the palette
+ * if it is ever moved inside .dash; the literal is what actually paints today. */
+.adsTip {
+  position: fixed; z-index: 60;
+  padding: 10px 13px 11px;
+  background: var(--surface, #ffffff);
+  border: 1px solid var(--line, #e6ebe8);
+  border-radius: 11px;
+  box-shadow: 0 10px 28px rgba(18, 53, 43, 0.16);
+  /* NOT the table's uppercase caption styling: this is prose and has to read as
+     prose, so it is left-aligned, sentence-cased and given a reading measure. */
+  font-size: 0.76rem;
+  line-height: 1.5;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  text-align: left;
+  white-space: normal;
+  color: var(--ink, #12241d);
+}
+.adsTipHead {
+  margin-bottom: 5px;
+  font-size: 0.64rem; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--muted, #626f68);
+}
 .adsRow { cursor: pointer; }
 .adsRow:hover { background: var(--hair); }
 .adsRowOpen { background: var(--mint); }
@@ -1331,8 +1380,10 @@
  * from and the lengths meant nothing. */
 .adsFill { height: 7px; border-radius: 4px; }
 
-/* The signed gap, sitting where the diverging bar used to be. */
-.adsGap { font-size: 0.8rem; font-weight: 600; }
+/* Over / under, in money. Deliberately NOT .adsKey sized — cost per new player
+ * stays the single dominant figure on the row, and this is the second thing you
+ * read, not a rival headline. */
+.adsOverUnder { font-size: 0.8rem; font-weight: 600; }
 
 .adsBadge {
   margin-left: 2px;
@@ -1365,13 +1416,3 @@
 .adsLineVal { width: 74px; text-align: right; font-size: 0.78rem; font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .adsUnknown { color: var(--gold-ink); font-weight: 600; }
 .adsDead { color: var(--negative); font-weight: 600; }
-.adsFoot {
-  display: flex;
-  justify-content: space-between;
-  gap: 32px;
-  padding: 12px 20px 16px;
-  font-size: 0.72rem;
-  line-height: 1.55;
-  color: var(--muted);
-  flex-wrap: wrap;
-}

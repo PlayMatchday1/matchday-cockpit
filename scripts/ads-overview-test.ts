@@ -18,7 +18,7 @@
  */
 import {
   buildAdsOverview, servedBreakdown, shareOf, perUnit, PAID_MARKETS,
-  orderAdsets, duplicateNames, CONFIDENCE_WORTH_FLAGGING, costBand, reallocationGap,
+  orderAdsets, duplicateNames, CONFIDENCE_WORTH_FLAGGING, costBand, fairShareCents, overUnderCents,
   BAND_MID_AT, BAND_BAD_AT,
   type GeoRow, type FlatRow, type DimRow, type AcqRow, type AdsetRow,
 } from "../src/lib/adsOverview";
@@ -223,18 +223,51 @@ console.log("\nthe colour bands are relative to the blended rate, not fixed doll
   is("the breakpoints are where they say they are", [BAND_MID_AT, BAND_BAD_AT], [1, 2]);
 }
 
-console.log("\nthe reallocation gap is players less spend, in points");
+console.log("\nover / under is fair share in money, and it sums to zero");
 {
-  // Houston: 32.4% of players on 23.0% of spend.
-  is("a market returning more than it takes is positive",
-    Math.round((reallocationGap(0.324, 0.230) ?? 0) * 10) / 10, 9.4);
-  // Dallas: 6.1% of players on 21.1% of spend.
-  is("…and one taking more than it returns is negative",
-    Math.round((reallocationGap(0.061, 0.211) ?? 0) * 10) / 10, -15.0);
-  is("control — the two are opposite signs, which is the whole read",
-    (reallocationGap(0.324, 0.230) ?? 0) > 0 && (reallocationGap(0.061, 0.211) ?? 0) < 0, true);
-  is("a missing share is not a zero gap", reallocationGap(null, 0.2), null);
-  is("…on either side", reallocationGap(0.2, null), null);
+  /* THE SEVEN MARKETS AS THEY STOOD ON 2026-09-18, Aug 1 to Sep 18: $7,830 of spend and 1,375 new
+   * players across the paid markets. Every figure below is the function's own output rounded to
+   * the dollar, NOT a number copied off the screen and pinned — the inputs are the inputs and the
+   * arithmetic is the assertion.
+   *
+   * fair share = this market's share of new players × total paid spend
+   * over / under = actual spend − fair share, POSITIVE MEANS OVER. */
+  const TOTAL_SPEND_CENTS = 783_000, TOTAL_PLAYERS = 1375;
+  const fair = (players: number) => Math.round((fairShareCents(players, TOTAL_PLAYERS, TOTAL_SPEND_CENTS) ?? 0) / 100);
+  const over = (spendDollars: number, players: number) =>
+    Math.round((overUnderCents(spendDollars * 100, fairShareCents(players, TOTAL_PLAYERS, TOTAL_SPEND_CENTS)) ?? 0) / 100);
+
+  is("Houston's fair share", fair(446), 2540);
+  is("…and it is under by", over(1799, 446), -741);
+  is("Dallas's fair share", fair(84), 478);
+  is("…and it is OVER by", over(1653, 84), 1175);
+  is("Atlanta over by", over(1609, 85), 1125);
+  is("Austin under by", over(1321, 413), -1031);
+  is("San Antonio under by", over(560, 252), -875);
+  is("St. Louis over by", over(507, 44), 256);
+  is("OKC over by", over(380, 51), 90);
+
+  /* THE SIGNS ARE THE READ, and they are the thing a reversed subtraction would break silently:
+   * every figure would still be the right size and every colour would be exactly wrong. */
+  is("control — the column carries both signs", [over(1653, 84) > 0, over(1321, 413) < 0], [true, true]);
+  is("taking more budget than your players justify is POSITIVE", over(1653, 84) > 0, true);
+
+  /* SUMS TO ZERO BY CONSTRUCTION — the fair shares partition the same total the actual spends do.
+   * Run on a self-consistent set: these seven spends total $7,829, so that is the total they are
+   * measured against, and the players already total 1,375 exactly. */
+  const MK: [number, number][] = [[1799, 446], [1653, 84], [1609, 85], [1321, 413], [560, 252], [507, 44], [380, 51]];
+  const spendSum = MK.reduce((a, [d]) => a + d * 100, 0);
+  const playerSum = MK.reduce((a, [, p]) => a + p, 0);
+  is("control — the fixture's own totals", [spendSum, playerSum], [782_900, 1375]);
+  const zero = MK.reduce((a, [d, p]) => a + (overUnderCents(d * 100, fairShareCents(p, playerSum, spendSum)) ?? 0), 0);
+  is("the column sums to zero across the paid markets", Math.round(zero), 0);
+  /* CONTROL FOR THAT ZERO. A function returning null on every row, or a fixture with no rows,
+   * also sums to zero — so prove the terms being cancelled are large. */
+  is("control — it is a cancellation, not an empty sum",
+    MK.reduce((a, [d, p]) => a + Math.abs(overUnderCents(d * 100, fairShareCents(p, playerSum, spendSum)) ?? 0), 0) > 500_00, true);
+
+  is("no players anywhere means no fair share, not a zero one", fairShareCents(0, 0, 783_000), null);
+  is("…and no fair share means no over / under", overUnderCents(179_900, null), null);
 }
 
 console.log(`\n${pass} passed, ${fails.length} failed`);

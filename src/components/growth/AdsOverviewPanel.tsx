@@ -15,11 +15,12 @@
  * Registrations, 7d, 30d, Home, Unattributed and Other are behind All columns.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import styles from "./growth.module.css";
 import { fmtInt, fmtMoney } from "./format";
 import {
-  perUnit, shareOf, costBand, reallocationGap, duplicateNames, BAND_BAD_AT,
+  perUnit, shareOf, costBand, fairShareCents, overUnderCents, duplicateNames,
   CONFIDENCE_WORTH_FLAGGING, type AdsOverview, type Band, type MarketRow,
 } from "@/lib/adsOverview";
 import { UNKNOWN_MARKET } from "@/lib/metaAdSpend";
@@ -67,27 +68,109 @@ const KEY_CLASS: Record<Band, string> = {
   good: styles.adsKeyGood, mid: styles.adsKeyMid, bad: styles.adsKeyBad, dark: styles.adsKeyDark,
 };
 
-/* A header with its definition on hover, replacing the paragraph that used to sit above the table.
+/* ── THE COLUMN DEFINITIONS, AS A REAL TOOLTIP ───────────────────────────────────────────────────
  *
- * A CIRCLED i, NOT A DOTTED UNDERLINE. The underline did not read as interactive — it looks like
- * emphasis, or like nothing, and it is easy to miss entirely. A glyph after the name says there is
- * something here to ask. Every header that carries a definition shows one, so its absence means
- * "nothing more to say" rather than "we ran out of room". */
-function InfoDot() {
+ * THE `title` ATTRIBUTE DID NOT WORK AND WAS NEVER GOING TO. It waits about a second before the
+ * browser decides you meant it, it was hung on an inline <svg> that reports its own hit area
+ * inconsistently, it cannot be styled or line-wrapped, it never appears for a keyboard user at
+ * all, and it is suppressed outright on touch. The icon looked live and answered nothing, which is
+ * the one thing a control must not do.
+ *
+ * PORTALLED TO document.body, position: fixed. The table sits inside .tableWrap (overflow-x: auto)
+ * inside a card with overflow: hidden, so a panel rendered in the header would be clipped twice
+ * over. Portalling escapes both; placing off the trigger's own rect keeps it attached, and it is
+ * re-placed on scroll in the CAPTURE phase so the table's own sideways scroll counts, not just the
+ * window's.
+ *
+ * HOVER, CLICK, AND KEYBOARD FOCUS, and the three do not fight. On a pointer device the mouse
+ * arrives before the click, so a naive toggle opens on hover then shuts on the click that follows
+ * and the control reads as dead; hover-opened is provisional and closes on mouse-out, a click
+ * takes ownership. Focus only opens what is not already open, so clicking (which also focuses)
+ * cannot hand ownership over mid-gesture.
+ *
+ * IT NEVER CHANGES THE HEADER'S LAYOUT. The trigger is sized in the flow open or shut, with
+ * negative margins so its 22px hit area cannot widen a column, and the panel is out of flow. */
+function HeaderTip({ label, tip }: { label: string; tip: string }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const hoverOwned = useRef(false);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+
+  const place = useCallback(() => {
+    const el = btnRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const W = TIP_WIDTH, M = 8;
+    // RIGHT EDGES FLUSH, because every one of these headers is right-aligned and the rightmost
+    // would otherwise run off the card. Clamped to the viewport either way.
+    let left = r.right - W;
+    left = Math.max(M, Math.min(left, window.innerWidth - W - M));
+    setPos({ top: r.bottom + 6, left });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    // MEASURED MORE THAN ONCE. A single read on open is the layout at that instant, which after a
+    // late reflow is the layout the trigger has already left.
+    place();
+    const raf = requestAnimationFrame(place);
+    const onScroll = () => place();
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open, place]);
+
   return (
-    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
-      strokeLinecap="round" style={{ opacity: 0.55, flexShrink: 0 }} aria-hidden>
-      <circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 7.5v.01" />
-    </svg>
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className={styles.adsTipBtn}
+        data-testid="ads-tip-btn"
+        aria-label={`What ${label} means`}
+        aria-expanded={open}
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          if (open && !hoverOwned.current) { setOpen(false); return; }
+          hoverOwned.current = false;
+          setOpen(true);
+        }}
+        onMouseEnter={() => { if (!open) { hoverOwned.current = true; setOpen(true); } }}
+        onMouseLeave={() => { if (hoverOwned.current) setOpen(false); }}
+        onFocus={() => { if (!open) { hoverOwned.current = false; setOpen(true); } }}
+        onBlur={() => { if (!hoverOwned.current) setOpen(false); }}
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth="2.4" strokeLinecap="round" aria-hidden>
+          <circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 7.5v.01" />
+        </svg>
+      </button>
+      {open && pos && createPortal(
+        <div role="tooltip" className={styles.adsTip} data-testid="ads-tip"
+          style={{ top: pos.top, left: pos.left, width: TIP_WIDTH }}>
+          <div className={styles.adsTipHead}>{label}</div>
+          {tip}
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
+
+const TIP_WIDTH = 284;
 
 function Th({ label, tip, className }: { label: string; tip?: string; className?: string }) {
   return (
     <th className={className}>
-      {tip ? (
-        <span title={tip} className={styles.adsTh}>{label}<InfoDot /></span>
-      ) : label}
+      <span className={styles.adsTh}>{label}{tip && <HeaderTip label={label} tip={tip} />}</span>
     </th>
   );
 }
@@ -129,7 +212,10 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
     return {
       r, span, dark, cpnp,
       band: costBand(cpnp, blended, dark),
-      gap: reallocationGap(shareOf(r.becamePlayers, totals?.becamePlayers ?? 0), shareOf(r.spendCents, totals?.spendCents ?? 0)),
+      /* WHAT THIS MARKET WOULD HOLD IF BUDGET FOLLOWED PLAYERS, against what it holds. Positive
+       * is over. It is the same arithmetic the points version did, in the unit anyone would act
+       * in: "$1,175 more than its players justify" is a decision, "−15.0 points" is homework. */
+      over: overUnderCents(r.spendCents, fairShareCents(r.becamePlayers, totals?.becamePlayers ?? 0, totals?.spendCents ?? 0)),
     };
   }), [rows, windowDays, blended, totals]);
 
@@ -220,32 +306,29 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
                 <thead>
                   <tr>
                     <Th label="Market" />
-                    <Th label="Spend" tip="Ad spend served in this market's own ad sets, from Meta's comscore_market breakdown." />
-                    <Th label="Installs" tip="Mobile app installs, attributed through each ad set's derived home market. Meta returns none under the geo breakdown." />
-                    <Th label="CPI" tip="Spend divided by installs. Context for the headline, not a competing measure." />
-                    {allCols && <Th label="Regs" tip="Registrations in this market during the window, by the player's declared city." />}
-                    <Th label="New players" tip="Everyone who registered in this market during the window and has since played a match. It counts every new player, not only the ones the ads brought." />
+                    <Th label="Spend" tip="What Meta charged for ads shown in this market." />
+                    <Th label="Installs" tip="App installs from this market's ads. Meta won't say which city an install came from, so we credit it to the market its ad set was targeting." />
+                    <Th label="CPI" tip="Spend divided by installs. The two are counted slightly differently, so treat it as close rather than exact." />
+                    {allCols && <Th label="Regs" tip="People who signed up here, whether they've played yet or not." />}
+                    {/* THE RECONCILIATION POINT TRAVELS WITH THE NUMBER. It was a footnote under
+                        the table carrying live counts; it is now the last sentence of this
+                        definition, where someone reading the column will actually meet it. */}
+                    <Th label="New players" tip="People who signed up in this market and have since played a match. Includes everyone, not just people the ads brought in. Markets we don't buy ads in are left out of this table, so these don't add up to the company total." />
                     {/* NO BAR BESIDE IT. The figure is already the largest thing on the row and
                         colour-coded; a bar re-encoding the same number across seven rows added a
                         column and no information. */}
                     <Th label="Cost per new player" className={styles.adsHeadKey}
-                      tip="Ad spend in this market divided by every new player in it, organic ones included. A ratio for comparing markets against each other, not a cost of acquisition." />
-                    {allCols && <Th label="7d" tip="Registrations that played within 7 days. Settled: every registration in the window has had that long." />}
-                    {allCols && <Th label="30d" tip="Registrations that played within 30 days." />}
-                    {allCols && <Th label="Home" tip="Share of this market's spend served in its own comscore market." />}
-                    {allCols && <Th label="Unattrib" tip="Share served where Meta would not name a market at all." />}
-                    {allCols && <Th label="Other" tip="Share served in a named market that is not this one." />}
-                    {/* SHORTENED, WITH THE PHRASE IN THE TOOLTIP. "Share of players less share of
-                        spend" is a thirty-seven character header over a five-character number, and
-                        it pushed that number off the right edge of the card at 1440px — the signed
-                        gap being the thing the bar exists to anchor. */}
-                    {/* THE DIVERGING BAR IS GONE AND ITS FAILURE IS WORTH RECORDING: the 1px
-                        centre axis did not render against the row background, so there was nothing
-                        to diverge FROM and the lengths carried no meaning at all. The signed number
-                        was also stranded at the far right, away from the bar it annotated. The
-                        number now sits where the bar was. */}
-                    <Th label="Players less spend" className={styles.adsHeadKey}
-                      tip="This market's share of new players minus its share of spend, in points. Positive returns more than it takes; negative takes more budget than it returns." />
+                      tip="Spend divided by every new player in the market, including ones who found us on their own. Use it to compare markets, not as what a player costs to acquire." />
+                    {allCols && <Th label="7d" tip="New players who played within 7 days of signing up. These don't change as time passes, so they're safe to compare across dates." />}
+                    {allCols && <Th label="30d" tip="New players who played within 30 days of signing up. These don't change as time passes, so they're safe to compare across dates." />}
+                    {allCols && <Th label="Home" tip="How much of this market's spend Meta served inside the market." />}
+                    {allCols && <Th label="Unattributed" tip="Spend Meta wouldn't tell us the location of. Not money that went elsewhere, money with no location attached." />}
+                    {allCols && <Th label="Other" tip="Spend served into other named markets." />}
+                    {/* IN MONEY, NOT POINTS. "Share of players less share of spend" asked the
+                        reader to turn a percentage-point difference into a budget before it meant
+                        anything, and nobody moves points. Same arithmetic, stated as dollars. */}
+                    <Th label="Over / under" className={styles.adsHeadKey}
+                      tip="What this market's spend would be if budget followed players, against what it actually got. Red means it's taking more than its share." />
                   </tr>
                 </thead>
                 <tbody>
@@ -265,32 +348,19 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
                     {allCols && <td>{fmtInt(totals?.playedWithin7d ?? 0)}</td>}
                     {allCols && <td>{fmtInt(rows.reduce((a, r) => a + r.playedWithin30d, 0))}</td>}
                     {allCols && <td colSpan={3} />}
-                    {/* NO TOTAL GAP. It is a share of this total minus another share of it, so
-                        the total is zero by construction. */}
+                    {/* NO TOTAL. The fair shares partition the same total the actual spends do,
+                        so the column sums to zero by construction and printing it would be
+                        printing an identity, not a measurement. */}
                     <td />
                   </tr>
                 </tbody>
               </table>
             </div>
 
-            <div className={styles.adsFoot}>
-              <span data-testid="ads-excluded-note">
-                Paid markets only. {data.excluded.registrations > 0 ? (
-                  <>
-                    <b>{fmtInt(data.excluded.registrations)} registrations</b> and{" "}
-                    <b>{fmtInt(data.excluded.becamePlayers)} new players</b> fall in markets we do not
-                    buy in{data.excluded.cities.length ? ` (${data.excluded.cities.join(", ")})` : ""}, so the
-                    player columns do not add to the company total.
-                  </>
-                ) : <>No registrations fell outside the paid markets in this window.</>}
-              </span>
-              {!allCols && (
-                <button type="button" className={styles.adsNoteWhy} style={{ marginLeft: 0 }}
-                  data-testid="ads-allcols-foot" onClick={() => setAllCols(true)}>
-                  Registrations, 7d and 30d settled counts, home and unattributed shares →
-                </button>
-              )}
-            </div>
+            {/* NOTHING UNDER THE TABLE. The "paid markets only" footnote is now the last line of
+                the New players definition, where it travels with the number it qualifies, and the
+                "Registrations, 7d and 30d…" link duplicated the All columns button sitting in the
+                controls above. Two lines of chrome for one button and one sentence. */}
           </div>
 
           {data.notAttributed.length > 0 && (
@@ -323,13 +393,13 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
   );
 }
 
-type ViewRow = { r: MarketRow; span: number; dark: boolean; cpnp: number | null; band: Band | null; gap: number | null };
+type ViewRow = { r: MarketRow; span: number; dark: boolean; cpnp: number | null; band: Band | null; over: number | null };
 
 function Row({ v, open, onToggle, windowDays, allCols }: {
   v: ViewRow; open: boolean; onToggle: () => void;
   windowDays: number; allCols: boolean;
 }) {
-  const { r, band, cpnp, gap, dark } = v;
+  const { r, band, cpnp, over, dark } = v;
   const keyCls = band ? KEY_CLASS[band] : "";
   const dupes = duplicateNames(r.adsets);
   const maxServed = Math.max(1, ...r.served.map((s) => s.spendCents));
@@ -364,10 +434,13 @@ function Row({ v, open, onToggle, windowDays, allCols }: {
         {allCols && <td>{pct(shareOf(r.homeCents, r.spendCents))}</td>}
         {allCols && <td className={r.unknownCents > 0 ? styles.adsUnknown : undefined}>{pct(shareOf(r.unknownCents, r.spendCents))}</td>}
         {allCols && <td>{pct(shareOf(r.otherNamedCents, r.spendCents))}</td>}
-        {/* THE SIGNED GAP ALONE, where the bar was. One number carries the whole reallocation
-            read: positive returns more than it takes, negative takes more than it returns. */}
-        <td data-testid="ads-gap" className={`${styles.adsGap} ${gap == null ? "" : gap > 0 ? styles.adsKeyGood : styles.adsKeyBad}`}>
-          {gap == null ? "—" : `${gap > 0 ? "+" : "−"}${Math.abs(gap).toFixed(1)}`}
+        {/* A DARK MARKET IS UNBANDED HERE TOO, for the same reason its rate is. Its spend stopped
+            part-way through a window its players accrued across all of, so "under by $X" is
+            measuring the stop, not the allocation. The figure is shown and left grey: neutral,
+            not a verdict. */}
+        <td data-testid="ads-over"
+          className={`${styles.adsOverUnder} ${over == null ? "" : dark ? styles.adsKeyDark : over > 0 ? styles.adsKeyBad : styles.adsKeyGood}`}>
+          {over == null ? "—" : `${over > 0 ? "+" : "−"}${money0(Math.abs(over))}`}
         </td>
       </tr>
 
