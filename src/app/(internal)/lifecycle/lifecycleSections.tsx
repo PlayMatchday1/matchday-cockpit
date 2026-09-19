@@ -56,6 +56,14 @@ export const LIFECYCLE_SECTIONS: RailItem[] = [
     desc: "Who has stopped playing, and when they last did",
     icon: <I><path d="M4 5v14" /><path d="M4 8l5 4.5-3.2 3.5" /><path d="M20 6l-6.5 6.5L20 19" /></I>,
   },
+  /* ADS sits with the reports and not in a group of its own: it answers the same question the
+     others do — where do players come from — with money on one side of it. A group of one is not
+     structure, it is a heading. */
+  {
+    key: "growth-ads", group: "Reports", label: "Ads", href: "/lifecycle/ads",
+    desc: "Meta spend by market, and what it bought",
+    icon: <I><path d="M3.5 9.5h4l7-4.5v14l-7-4.5h-4z" /><path d="M18 9.2a4 4 0 0 1 0 5.6" /></I>,
+  },
   {
     key: "growth-dataroom", group: "Reports", label: "Player Data Room", href: "/lifecycle/data-room",
     desc: "The rows behind every number on the other five",

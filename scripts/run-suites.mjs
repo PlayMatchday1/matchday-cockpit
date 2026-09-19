@@ -103,6 +103,13 @@ const NODE_SUITES = [
    * geo-automation episode as a fixture — the ad set was 59.7% Houston of TOTAL spend and 99.1%
    * of NAMED, which is why Unknown is excluded from the vote and never from the money. */
   "scripts/meta-adset-model-test.ts",
+  /* THE ADS OVERVIEW'S SHAPING. Three decisions that are invisible on screen and all fail toward a
+   * plausible table: a row is the ad set's PARENT market and not the market its money landed in
+   * (group by served market and home share is 100% by construction, Unknown belongs to nobody, and
+   * the 39.9% Houston story disappears); the expansion rolls a 50-market tail but NEVER Unknown;
+   * and everything left out — sub-floor ad sets, markets we do not buy in — is counted somewhere
+   * or the page quietly loses money and players. */
+  "scripts/ads-overview-test.ts",
   "scripts/mutation-tests.ts",
   "scripts/prod-guard-test.ts",
   "scripts/stage-denylist-test.ts",
