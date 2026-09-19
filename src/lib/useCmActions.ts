@@ -17,8 +17,9 @@ export type CmApi = {
   reload: () => Promise<void>;
   setStatus: (id: string, status: CmStatus) => Promise<void>;
   addUpdate: (itemId: string, body: string, author: string | null, reportedOn?: string) => Promise<void>;
-  /** Reword an existing progress line. The date and the author are not editable. */
-  editUpdate: (id: string, body: string) => Promise<void>;
+  /** Reword an existing progress line. `reportedOn` moves the date with it; the author is
+   *  recorded on insert and never changes. */
+  editUpdate: (id: string, body: string, reportedOn?: string) => Promise<void>;
   /** Remove a progress line entirely. Burying it under a newer one was the only option before. */
   deleteUpdate: (id: string) => Promise<void>;
   carryForward: (fromMonth: string, toMonth: string) => Promise<number>;
@@ -94,12 +95,22 @@ export function useCmActions(month: string): CmApi {
    * on an empty value; this is the second belt, because the function is public on CmApi.
    *
    * OPTIMISTIC, THEN THE SERVER'S TRUTH ON FAILURE — the shape setStatus and updateItem use. */
-  const editUpdate = useCallback(async (id: string, body: string) => {
+  /* THE DATE MOVES WITH THE EDIT, and that reorders the history. reported_on is what
+   * updateHistory sorts on, so rewording a September 5th line on the 18th makes it the NEWEST
+   * update and the one the collapsed row shows. That is the intended behaviour — a corrected line
+   * is current — but it is worth knowing before it surprises somebody, because the row they were
+   * looking at will move.
+   *
+   * THE CALLER SUPPLIES THE DAY, not this hook. Same shape addUpdate already has: the clock lives
+   * at the edge, in America/Chicago, and the data layer stays clock-free. Omit it and only the
+   * wording changes. */
+  const editUpdate = useCallback(async (id: string, body: string, reportedOn?: string) => {
     const clean = body.trim();
     if (!clean) { setError("A progress update cannot be empty."); return; }
     setError(null);
-    setUpdates((prev) => prev.map((u) => (u.id === id ? { ...u, body: clean } : u)));
-    const upd = await supabase.from("cm_action_updates").update({ body: clean }).eq("id", id);
+    const patch = { body: clean, ...(reportedOn ? { reported_on: reportedOn } : {}) };
+    setUpdates((prev) => prev.map((u) => (u.id === id ? { ...u, ...patch } : u)));
+    const upd = await supabase.from("cm_action_updates").update(patch).eq("id", id);
     if (upd.error) { setError(upd.error.message); void reload(); }
   }, [reload]);
 

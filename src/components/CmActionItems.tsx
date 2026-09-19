@@ -36,8 +36,9 @@ export default function CmActionItems({ month, setMonth, city, setCity, currentM
   const { items, updates, loading, error } = api;
   const past = isPastMonth(month, currentMonth);
   const { appUser } = useAuth();
-  // Who wrote a progress line. The name if we have one, the email if not — an update with no
-  // author beside it is a note nobody can follow up on.
+  // Who wrote a progress line. The name if we have one, the email if not. RECORDED, NOT RENDERED:
+  // it is written to cm_action_updates.author and is no longer shown beside the update, so the
+  // record survives without a byline on every line of the board.
   const author = appUser?.full_name || appUser?.email || null;
 
   /* EVERY CONTROL IS GATED THE SAME WAY. `past` used to gate only the status pill; with add, edit,
@@ -304,6 +305,9 @@ function Chip({ on, onClick, children, testid }: {
  * migration 0158 created. Used by both a city goal and a thing to try, because they are the same
  * thing — somebody has to do them. A takeaway is not rendered here; it has no status and no owner
  * and the database refuses it both. */
+/** Today in America/Chicago, the same clock ProgressForm defaults its date picker to. */
+const todayChicago = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+
 function Row({ item, rw, onCycle, updates, api, author, siblings }: {
   item: CmItem; rw: boolean; onCycle: () => void;
   updates: CmUpdate[]; api: ReturnType<typeof useCmActions>; author: string | null;
@@ -354,8 +358,9 @@ function Row({ item, rw, onCycle, updates, api, author, siblings }: {
             <div data-testid="cm-update" className="mt-1 text-[11.5px] leading-[1.45]" style={{ color: C.mut }}>
               <b style={{ color: C.ink2 }}>{shortDate(latest.reported_on)}</b> ·{" "}
               {/* THE BODY IS THE CLICK TARGET, AND ONLY THE BODY. The date is the day being
-                  reported about and the author is who said it; rewording a line does not make
-                  either of those a different fact, so neither is editable.
+                  reported about. It is not typed here, but it DOES move: an edit restamps it to
+                  today, so a corrected line reads as current and sorts as the newest update. The
+                  author is recorded and no longer rendered.
 
                   READ ONLY MEANS READ ONLY. On a past month this renders as plain text with no
                   button semantics at all, so the PAST MONTH · READ ONLY badge stays true for a
@@ -363,15 +368,18 @@ function Row({ item, rw, onCycle, updates, api, author, siblings }: {
               {editingUpdate === latest.id ? (
                 <InlineEdit initial={latest.body} label="Progress update" testid="cm-edit-update"
                   onCancel={() => setMode(null)}
-                  onSave={(v) => { void api.editUpdate(latest.id, v); setMode(null); }} />
+                  onSave={(v) => { void api.editUpdate(latest.id, v, todayChicago()); setMode(null); }} />
               ) : rw ? (
                 <button type="button" data-testid="cm-update-body" onClick={() => setMode({ update: latest.id })}
                   className="text-left underline decoration-transparent underline-offset-2 transition-colors hover:decoration-current"
                   style={{ color: "inherit", font: "inherit" }}>{latest.body}</button>
               ) : (
                 <span data-testid="cm-update-body">{latest.body}</span>
-              )}{" "}
-              {latest.author && <span style={{ color: C.faint }}>{latest.author}</span>}
+              )}
+              {/* THE AUTHOR IS STILL RECORDED, JUST NOT RENDERED. addUpdate keeps writing it and
+                  cm_action_updates.author still holds it, so who said what survives for anyone
+                  reading the table. The byline was a name repeated on every line of a board where
+                  there is usually one person reporting, which is noise rather than provenance. */}
               {/* THE TABLE KEEPS EVERY UPDATE AND THE PAGE RENDERED ONE. The point of keeping a
                   past month is that it is a record, so let someone read it. */}
               {history.length > 1 && (
@@ -411,15 +419,14 @@ function Row({ item, rw, onCycle, updates, api, author, siblings }: {
               {editingUpdate === u.id ? (
                 <InlineEdit initial={u.body} label="Progress update" testid="cm-edit-update-old"
                   onCancel={() => setMode(null)}
-                  onSave={(v) => { void api.editUpdate(u.id, v); setMode(null); }} />
+                  onSave={(v) => { void api.editUpdate(u.id, v, todayChicago()); setMode(null); }} />
               ) : rw ? (
                 <button type="button" data-testid="cm-update-old-body" onClick={() => setMode({ update: u.id })}
                   className="text-left underline decoration-transparent underline-offset-2 transition-colors hover:decoration-current"
                   style={{ color: "inherit", font: "inherit" }}>{u.body}</button>
               ) : (
                 <span data-testid="cm-update-old-body">{u.body}</span>
-              )}{" "}
-              {u.author && <span>{u.author}</span>}
+              )}
             </div>
           ))}
           {mode === "progress" && (
