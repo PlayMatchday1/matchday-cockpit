@@ -1352,6 +1352,17 @@
   white-space: normal;
   color: var(--ink, #12241d);
 }
+.adsTip p { margin: 0 0 8px; }
+.adsTip p:last-child { margin-bottom: 0; }
+/* The worked example is set off so it reads as a calculation to follow rather
+   than more prose, and its figures line up with the column's. */
+.adsTipEg {
+  padding: 7px 10px;
+  border-left: 2px solid var(--div-above-2, #bfe8d2);
+  background: var(--chip-bg, #eef3f0);
+  border-radius: 0 6px 6px 0;
+  font-variant-numeric: tabular-nums;
+}
 .adsTipHead {
   margin-bottom: 5px;
   font-size: 0.64rem; font-weight: 700; letter-spacing: 0.05em;
@@ -1368,10 +1379,21 @@
 .adsMuted { font-size: 0.75rem; color: var(--muted); }
 
 .adsKey { font-size: 1.05rem; font-weight: 600; text-align: right; padding-right: 0; }
-.adsKeyGood { color: var(--ok-ink); }
-.adsKeyMid  { color: var(--gold-ink); }
-.adsKeyBad  { color: var(--negative); font-weight: 700; }
-.adsKeyDark { color: var(--ns-ink); }
+/* ── THE BANDS, AND WHY THEY HAD NEVER PAINTED ───────────────────────────────
+ * These were four single-class rules, (0,1,0). `.adsTable td` above sets
+ * `color: var(--ink)` and is (0,1,1) — a class PLUS a type selector — so it beat
+ * every one of them, whatever the source order. Measured on 2026-09-18: all
+ * seven markets computed to rgb(18, 36, 29) in BOTH banded columns. The green /
+ * amber / red the whole column exists to carry has never been on the screen,
+ * and the classes were all present and correct the whole time, which is why
+ * reading the DOM said it worked.
+ *
+ * Qualified with the element these are (0,1,2) and win. Both band classes are
+ * only ever applied to a <td>, so the qualifier costs nothing. */
+.adsTable td.adsKeyGood { color: var(--ok-ink); }
+.adsTable td.adsKeyMid  { color: var(--gold-ink); }
+.adsTable td.adsKeyBad  { color: var(--negative); font-weight: 700; }
+.adsTable td.adsKeyDark { color: var(--ns-ink); }
 
 /* THE ONLY BAR LEFT IS IN THE EXPANSION. Two were dropped from the row: the cost-per-player bar
  * re-encoded a number that is already the largest thing on the row and colour-coded, and across

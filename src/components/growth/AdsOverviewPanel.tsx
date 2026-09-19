@@ -90,7 +90,7 @@ const KEY_CLASS: Record<Band, string> = {
  *
  * IT NEVER CHANGES THE HEADER'S LAYOUT. The trigger is sized in the flow open or shut, with
  * negative margins so its 22px hit area cannot widen a column, and the panel is out of flow. */
-function HeaderTip({ label, tip }: { label: string; tip: string }) {
+function HeaderTip({ label, tip }: { label: string; tip: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const hoverOwned = useRef(false);
@@ -167,7 +167,7 @@ function HeaderTip({ label, tip }: { label: string; tip: string }) {
 
 const TIP_WIDTH = 284;
 
-function Th({ label, tip, className }: { label: string; tip?: string; className?: string }) {
+function Th({ label, tip, className }: { label: string; tip?: React.ReactNode; className?: string }) {
   return (
     <th className={className}>
       <span className={styles.adsTh}>{label}{tip && <HeaderTip label={label} tip={tip} />}</span>
@@ -218,6 +218,43 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
       over: overUnderCents(r.spendCents, fairShareCents(r.becamePlayers, totals?.becamePlayers ?? 0, totals?.spendCents ?? 0)),
     };
   }), [rows, windowDays, blended, totals]);
+
+  /* ── THE ARITHMETIC, ON THE MARKET AT THE TOP OF THE SORT ───────────────────────────────────
+   * "Red means it's taking more than its share" states the idea and leaves the number unprovable.
+   * This walks the calculation on a row the reader can see, so the column can be checked rather
+   * than believed.
+   *
+   * DERIVED, NOT WRITTEN INTO THE COPY. A hardcoded worked example is right for one window and
+   * silently wrong for every other one — every figure in it moves when the range changes — and a
+   * worked example that disagrees with the table it sits above is worse than none.
+   *
+   * THE SHARE IS SHOWN TO TWO DECIMALS ON PURPOSE. At one, "6.2% of $7,830" multiplies out to
+   * $486 against the $484 on the row, and a reader checking the sum would find it did not. The
+   * money comes from the exact share either way; two decimals is what makes the printed version
+   * reconcile. */
+  const overUnderTip = useMemo(() => {
+    const idea = "This market's share of new players, applied to total spend, is its fair share. Over / under is what it actually spent minus that.";
+    const legend = "Red means it's spending more than its players justify.";
+    const top = view[0];
+    if (!top || !totals || totals.becamePlayers <= 0 || totals.spendCents <= 0) {
+      return <><p>{idea}</p><p>{legend}</p></>;
+    }
+    const { r, over } = top;
+    const share = r.becamePlayers / totals.becamePlayers;
+    const fair = share * totals.spendCents;
+    return (
+      <>
+        <p>{idea}</p>
+        <p className={styles.adsTipEg} data-testid="ads-tip-example">
+          {CITY_LABEL[r.marketKey] ?? r.marketKey}: {fmtInt(r.becamePlayers)} of{" "}
+          {fmtInt(totals.becamePlayers)} new players is {(share * 100).toFixed(2)}%.{" "}
+          {(share * 100).toFixed(2)}% of {money0(totals.spendCents)} is {money0(fair)}. It spent{" "}
+          {money0(r.spendCents)}, so {over == null ? "—" : `${over > 0 ? "+" : "−"}${money0(Math.abs(over))}`}.
+        </p>
+        <p>{legend}</p>
+      </>
+    );
+  }, [view, totals]);
 
   return (
     <div className={styles.ads}>
@@ -327,8 +364,7 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
                     {/* IN MONEY, NOT POINTS. "Share of players less share of spend" asked the
                         reader to turn a percentage-point difference into a budget before it meant
                         anything, and nobody moves points. Same arithmetic, stated as dollars. */}
-                    <Th label="Over / under" className={styles.adsHeadKey}
-                      tip="What this market's spend would be if budget followed players, against what it actually got. Red means it's taking more than its share." />
+                    <Th label="Over / under" className={styles.adsHeadKey} tip={overUnderTip} />
                   </tr>
                 </thead>
                 <tbody>
