@@ -18,7 +18,8 @@
  */
 import {
   buildAdsOverview, servedBreakdown, shareOf, perUnit, PAID_MARKETS,
-  type GeoRow, type FlatRow, type DimRow, type AcqRow,
+  orderAdsets, duplicateNames, CONFIDENCE_WORTH_FLAGGING,
+  type GeoRow, type FlatRow, type DimRow, type AcqRow, type AdsetRow,
 } from "../src/lib/adsOverview";
 import { UNKNOWN_MARKET } from "../src/lib/metaAdSpend";
 
@@ -141,6 +142,58 @@ console.log("\nrates refuse a zero denominator rather than inventing one");
   const zeroReported = buildAdsOverview({ geo, flat: [{ spend_date: "2026-09-01", adset_id: "a", spend_cents: 100, installs: 0, clicks: 0, registrations: null }], dim, acq: [] });
   is("a market with no install figure reports null", noneReported.rows.find((r) => r.marketKey === "ATX")!.installs, null);
   is("control — one that reported zero reports 0", zeroReported.rows.find((r) => r.marketKey === "ATX")!.installs, 0);
+}
+
+console.log("\nthe spending period, because the window is not it");
+{
+  const dim: DimRow[] = [{ adset_id: "a", adset_name: "OKC", campaign_name: "c", market_key: "OKC", market_raw: "Oklahoma City, OK", market_confidence: 1 }];
+  /* OKC'S REAL SHAPE: it bought from the 1st to the 28th and then stopped, while players kept
+   * arriving to the 18th of the next month. The rate divides bounded spend by unbounded players. */
+  const geo: GeoRow[] = [
+    { spend_date: "2026-08-01", adset_id: "a", market_raw: "Oklahoma City, OK", market_key: "OKC", spend_cents: 1000, clicks: 1 },
+    { spend_date: "2026-08-28", adset_id: "a", market_raw: "Oklahoma City, OK", market_key: "OKC", spend_cents: 1000, clicks: 1 },
+    // A REPORTED DAY WITH NO MONEY IS NOT A SPENDING DAY. Counting it would drag lastSpend to the
+    // end of the window and hide exactly the thing this column exists to show.
+    { spend_date: "2026-09-18", adset_id: "a", market_raw: "Oklahoma City, OK", market_key: "OKC", spend_cents: 0, clicks: 0 },
+  ];
+  const o = buildAdsOverview({ geo, flat: [], dim, acq: [] });
+  const okc = o.rows.find((r) => r.marketKey === "OKC")!;
+  is("first and last are the days money actually moved", [okc.firstSpend, okc.lastSpend], ["2026-08-01", "2026-08-28"]);
+  is("…and a zero-spend day is not counted", okc.spendDays, 2);
+  // CONTROL: the zero-spend row WAS in the input, so "not counted" is a real exclusion.
+  is("control — the input carried a later, zero-spend day", geo.some((g) => g.spend_date === "2026-09-18"), true);
+  const untouched = o.rows.find((r) => r.marketKey === "ATL")!;
+  is("a market with no spend has no period at all, rather than a made-up one",
+    [untouched.firstSpend, untouched.lastSpend, untouched.spendDays], [null, null, 0]);
+}
+
+console.log("\nduplicate ad set names sit together");
+{
+  const mk = (id: string, name: string, cents: number): AdsetRow =>
+    ({ adsetId: id, adsetName: name, campaignName: `camp-${id}`, spendCents: cents, installs: 0, confidence: 1 });
+  /* THE REAL HOUSTON LIST: two "New Engagement Ad Set" rows, separated only by campaign, which
+   * spend-only ordering scattered to opposite ends. */
+  /* THE SPENDS MATTER HERE. The first version of this fixture used the real Houston figures, where
+   * the two same-named rows land adjacent under spend ordering BY COINCIDENCE — so the control
+   * passed while proving nothing. These are chosen so spend-only ordering genuinely separates
+   * them, which is the only shape that can tell the two orderings apart. */
+  const rows = [mk("1", "HTX", 90300), mk("2", "New Engagement Ad Set", 12200),
+                mk("3", "TOMBALL", 5000), mk("4", "New Engagement Ad Set", 1900)];
+  const ordered = orderAdsets(rows);
+  is("the biggest spender is still first", ordered[0].adsetName, "HTX");
+  const names = ordered.map((r) => r.adsetName);
+  const first = names.indexOf("New Engagement Ad Set"), last = names.lastIndexOf("New Engagement Ad Set");
+  is("the two same-named rows are ADJACENT", last - first, 1);
+  is("…and the larger of the pair comes first", ordered[first].spendCents > ordered[last].spendCents, true);
+  /* CONTROL: spend-only ordering really does scatter them, so the grouping is doing work. */
+  const bySpend = [...rows].sort((a, b) => b.spendCents - a.spendCents).map((r) => r.adsetName);
+  is("control — sorted by spend alone they are NOT adjacent",
+    bySpend.lastIndexOf("New Engagement Ad Set") - bySpend.indexOf("New Engagement Ad Set"), 2);
+  is("the duplicate name is reported, the unique ones are not",
+    [...duplicateNames(rows)], ["New Engagement Ad Set"]);
+  is("control — a list with no duplicates reports none", [...duplicateNames([mk("1", "a", 1), mk("2", "b", 2)])], []);
+  is("the flagging threshold is above the attribution floor, not equal to it",
+    CONFIDENCE_WORTH_FLAGGING > 0.6, true);
 }
 
 console.log(`\n${pass} passed, ${fails.length} failed`);

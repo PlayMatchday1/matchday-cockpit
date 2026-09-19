@@ -10,7 +10,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import styles from "./growth.module.css";
 import { fmtInt, fmtMoney } from "./format";
-import { perUnit, shareOf, type AdsOverview, type MarketRow } from "@/lib/adsOverview";
+import {
+  perUnit, shareOf, duplicateNames, CONFIDENCE_WORTH_FLAGGING,
+  type AdsOverview, type MarketRow,
+} from "@/lib/adsOverview";
 import { UNKNOWN_MARKET } from "@/lib/metaAdSpend";
 
 const CITY_LABEL: Record<string, string> = {
@@ -36,11 +39,40 @@ const minus = (ymd: string, days: number) => {
   const s = d.toISOString().slice(0, 10); return s < FLOOR ? FLOOR : s;
 };
 
+/* NO MONTH-TO-DATE. It reads well on the 28th and falls apart on the 2nd, and at roughly 6.7 new
+ * players per city-day an early-month sample puts several markets into single digits — which is
+ * the share-of-spend against share-of-players read reduced to noise. */
+type Mode = "floor" | "d30" | "d7" | "custom";
+const PRESETS: { mode: Mode; label: string; since: () => string }[] = [
+  { mode: "floor", label: "Since Aug 1", since: () => FLOOR },
+  { mode: "d30", label: "Last 30 days", since: () => minus(todayChicago(), 29) },
+  { mode: "d7", label: "Last 7 days", since: () => minus(todayChicago(), 6) },
+];
+
+/** `Aug 1` — the compact form the spending-period column uses. */
+const shortDay = (ymd: string | null) => {
+  if (!ymd) return "—";
+  const [, m, d] = ymd.split("-");
+  return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][Number(m) - 1]} ${Number(d)}`;
+};
+const daysBetween = (a: string, b: string) =>
+  Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000) + 1;
+
+/* ── WHEN A SPENDING PERIOD IS SHORT ENOUGH TO CHANGE THE READING ───────────────────────────────
+ * The rate divides a market's spend by players accrued across the WHOLE window, so a market whose
+ * money stopped early looks cheaper than it is. OKC is the live case: 28 spending days of 49, and
+ * $7.45 per new player against $10.26 over its own period, 38% understated.
+ *
+ * 10% OF THE WINDOW is the line. Below that the arithmetic barely moves; a week missing from seven
+ * is a number somebody would quote without knowing. */
+const SHORT_SPAN = 0.9;
+
 const pct = (v: number | null, digits = 1) => (v == null ? "—" : `${(v * 100).toFixed(digits)}%`);
 const money0 = (cents: number) => fmtMoney(cents / 100);
 const money2 = (cents: number | null) => (cents == null ? "—" : `$${(cents / 100).toFixed(2)}`);
 
 export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<string, string> }) {
+  const [mode, setMode] = useState<Mode>("floor");
   const [since, setSince] = useState(FLOOR);
   const [until, setUntil] = useState(todayChicago);
   const [data, setData] = useState<AdsOverview & { since: string; until: string } | null>(null);
@@ -58,7 +90,7 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
     return () => { alive = false; };
   }, [since, until, authHeaders]);
 
-  const preset = useCallback((s: string) => { setSince(s); setUntil(todayChicago()); }, []);
+  const preset = useCallback((m: Mode, s: string) => { setMode(m); setSince(s); setUntil(todayChicago()); }, []);
 
   const totals = data?.totals;
   const rows = useMemo(() => data?.rows ?? [], [data]);
@@ -78,22 +110,31 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
         </div>
         <div className={styles.controlsRow} style={{ padding: "0 18px 16px" }}>
           <div className={styles.segmented} data-testid="ads-presets">
-            {[["Since Aug 1", FLOOR], ["Last 28 days", minus(todayChicago(), 27)], ["Last 7 days", minus(todayChicago(), 6)]].map(([label, s]) => (
-              <button key={label} type="button" data-testid={`ads-preset-${s}`}
-                className={since === s ? `${styles.segBtn} ${styles.segBtnActive}` : styles.segBtn}
-                onClick={() => preset(s)}>{label}</button>
+            {PRESETS.map((p) => (
+              <button key={p.mode} type="button" data-testid={`ads-preset-${p.mode}`}
+                className={mode === p.mode ? `${styles.segBtn} ${styles.segBtnActive}` : styles.segBtn}
+                onClick={() => preset(p.mode, p.since())}>{p.label}</button>
             ))}
+            {/* CUSTOM HAS A JOB. It reveals the two date fields, which are hidden under a preset —
+                a fourth button that only lit up would be a control that changes nothing. */}
+            <button type="button" data-testid="ads-preset-custom"
+              className={mode === "custom" ? `${styles.segBtn} ${styles.segBtnActive}` : styles.segBtn}
+              onClick={() => setMode("custom")}>Custom</button>
           </div>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>From</span>
-            <input type="date" className={styles.control} value={since} min={FLOOR} max={until}
-              data-testid="ads-since" onChange={(e) => setSince(e.target.value < FLOOR ? FLOOR : e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>To</span>
-            <input type="date" className={styles.control} value={until} min={since}
-              data-testid="ads-until" onChange={(e) => setUntil(e.target.value)} />
-          </label>
+          {mode === "custom" && (
+            <>
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>From</span>
+                <input type="date" className={styles.control} value={since} min={FLOOR} max={until}
+                  data-testid="ads-since" onChange={(e) => setSince(e.target.value < FLOOR ? FLOOR : e.target.value)} />
+              </label>
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>To</span>
+                <input type="date" className={styles.control} value={until} min={since}
+                  data-testid="ads-until" onChange={(e) => setUntil(e.target.value)} />
+              </label>
+            </>
+          )}
         </div>
       </div>
 
@@ -128,7 +169,11 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
                 <span className={styles.cardTitle}>By market</span>
                 <div className={styles.cardSub}>
                   {data.since} to {data.until} · click a market for where its money landed and which
-                  ad sets spent it
+                  ad sets spent it. <b>Regs</b> registrations, <b>Players</b> registrations that went
+                  on to play, <b>$ / player</b> spend per one of those, <b>Spend %</b> and{" "}
+                  <b>Player %</b> this market&rsquo;s share of each across the paid markets.{" "}
+                  <b>Bought</b> flags a market whose spending period is materially shorter than the
+                  window; every market&rsquo;s dates are in its expansion.
                 </div>
               </div>
             </div>
@@ -137,19 +182,25 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
                 <thead>
                   <tr>
                     <th>Market</th>
+                    <th>Bought</th>
                     <th>Spend</th>
                     <th>Installs</th>
                     <th>CPI</th>
-                    <th>Registrations</th>
-                    <th>New players</th>
-                    <th>Cost / new player</th>
+                    {/* SHORT HEADERS, BECAUSE THE HEADERS ARE WHAT IS WIDE. "Cost / new player"
+                        is seventeen characters over a six-character number, and the four long ones
+                        together pushed Spend % and Player % off the right edge at 1900px — which
+                        is the reallocation read, the thing the table exists for. The card's
+                        sub-line carries the full names. */}
+                    <th>Regs</th>
+                    <th>Players</th>
+                    <th>$ / player</th>
                     <th>7d</th>
                     <th>30d</th>
                     <th>Home</th>
-                    <th>Unattributed</th>
-                    <th>Other named</th>
-                    <th>Spend share</th>
-                    <th>Player share</th>
+                    <th>Unattrib</th>
+                    <th>Other</th>
+                    <th>Spend %</th>
+                    <th>Player %</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -159,11 +210,13 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
                     return (
                       <FragmentRow key={r.marketKey} r={r} open={open === r.marketKey}
                         onToggle={() => setOpen((v) => (v === r.marketKey ? null : r.marketKey))}
-                        spendShare={sSpend} playerShare={sPlay} />
+                        spendShare={sSpend} playerShare={sPlay}
+                        windowDays={daysBetween(data.since, data.until)} />
                     );
                   })}
                   <tr style={{ fontWeight: 700 }} data-testid="ads-total-row">
                     <td>Total</td>
+                    <td />
                     <td>{money0(totals?.spendCents ?? 0)}</td>
                     <td>{fmtInt(totals?.installs ?? 0)}</td>
                     <td>{money2(perUnit(totals?.spendCents ?? 0, totals?.installs ?? 0))}</td>
@@ -233,13 +286,19 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
   );
 }
 
-function FragmentRow({ r, open, onToggle, spendShare, playerShare }: {
+function FragmentRow({ r, open, onToggle, spendShare, playerShare, windowDays }: {
   r: MarketRow; open: boolean; onToggle: () => void;
-  spendShare: number | null; playerShare: number | null;
+  spendShare: number | null; playerShare: number | null; windowDays: number;
 }) {
   const home = shareOf(r.homeCents, r.spendCents);
   const unk = shareOf(r.unknownCents, r.spendCents);
   const other = shareOf(r.otherNamedCents, r.spendCents);
+  /* THE SPAN, NOT THE DAY COUNT. Interior gaps do not move the rate — San Antonio bought on 38 of
+   * 49 days and is undistorted because it still spans the window. A market that STOPPED divides
+   * less spend by the same players and reads cheaper than it is. */
+  const span = r.firstSpend && r.lastSpend ? daysBetween(r.firstSpend, r.lastSpend) : 0;
+  const short = span > 0 && span < windowDays * SHORT_SPAN;
+  const dupes = duplicateNames(r.adsets);
   return (
     <>
       <tr data-testid="ads-row" data-market={r.marketKey} onClick={onToggle}
@@ -250,6 +309,17 @@ function FragmentRow({ r, open, onToggle, spendShare, playerShare }: {
             <span aria-hidden style={{ display: "inline-block", width: 12 }}>{open ? "▾" : "▸"}</span>
             {CITY_LABEL[r.marketKey] ?? r.marketKey}
           </button>
+        </td>
+        {/* THE SPENDING PERIOD IS AN EXCEPTION MARKER, NOT A COLUMN OF DATES. Six of seven markets
+            span the whole window, so printing "Aug 1–Sep 18" on each of them is a wide column of
+            one repeated fact that pushed the two share columns off the right edge. The dates for
+            every market are in the expansion, which is where the brief allows them; the collapsed
+            row carries only the case that changes the reading. */}
+        <td data-testid="ads-span" data-short={short || undefined}
+          style={short ? { color: "var(--negative)", fontWeight: 700 } : { color: "var(--muted)" }}>
+          {short
+            ? `${shortDay(r.firstSpend)}–${shortDay(r.lastSpend)} · ${span}d of ${windowDays}`
+            : r.firstSpend ? "full" : "—"}
         </td>
         <td data-testid="ads-spend">{money0(r.spendCents)}</td>
         <td>{r.installs == null ? "—" : fmtInt(r.installs)}</td>
@@ -271,12 +341,13 @@ function FragmentRow({ r, open, onToggle, spendShare, playerShare }: {
       </tr>
       {open && (
         <tr>
-          <td colSpan={14} style={{ padding: 0 }}>
+          <td colSpan={15} style={{ padding: 0 }}>
             <div className={styles.detailPanel} data-testid="ads-detail">
               <div className={styles.detailHead}>
                 <b>Where {CITY_LABEL[r.marketKey] ?? r.marketKey}&rsquo;s money landed</b>
                 <span className={styles.footnote} style={{ margin: 0 }}>
-                  Served markets down to 99% of this market&rsquo;s spend. The rest is one row.{" "}
+                  Bought on {r.spendDays} of {windowDays} days{r.firstSpend ? `, ${shortDay(r.firstSpend)} to ${shortDay(r.lastSpend)}` : ""}.
+                  {" "}Served markets down to 99% of this market&rsquo;s spend. The rest is one row.{" "}
                   {UNKNOWN_MARKET} is never rolled up.
                 </span>
               </div>
@@ -298,23 +369,56 @@ function FragmentRow({ r, open, onToggle, spendShare, playerShare }: {
               <div className={styles.detailHead} style={{ marginTop: 16 }}>
                 <b>Ad sets that spent it</b>
                 <span className={styles.footnote} style={{ margin: 0 }}>
-                  All of them, no floor. Installs are per ad set, which is the only grain Meta
-                  reports them at.
+                  All of them, no floor, grouped so a repeated name sits beside itself. Installs are
+                  per ad set, the only grain Meta reports them at. <b>Spend with no installs behind
+                  it is marked.</b>
                 </span>
               </div>
               <table className={styles.dataTable}>
-                <thead><tr><th>Ad set</th><th>Campaign</th><th>Spend</th><th>Installs</th><th>Parent confidence</th></tr></thead>
+                {/* NO PARENT CONFIDENCE COLUMN. It read 98.7% or 100.0% on every row, which is a
+                    column of noise; it only says something when it is LOW, so the exception is
+                    flagged on the name instead. */}
+                {/* SPEND AND INSTALLS BEFORE THE CAMPAIGN. The campaign name runs to sixty
+                    characters and pushed Installs off the right edge of the scroller, which made
+                    the no-installs marking invisible at rest — the one thing in this table worth
+                    acting on. The long text goes last, where running out of room costs nothing. */}
+                <thead><tr><th>Ad set</th><th>Spend</th><th>Installs</th><th>Campaign</th></tr></thead>
                 <tbody>
-                  {r.adsets.map((a) => (
-                    <tr key={a.adsetId} data-testid="ads-adset-row">
-                      <td>{a.adsetName ?? a.adsetId}</td>
-                      <td>{a.campaignName ?? "—"}</td>
-                      <td>{money0(a.spendCents)}</td>
-                      <td>{a.installs == null ? "—" : fmtInt(a.installs)}</td>
-                      <td>{pct(a.confidence)}</td>
-                    </tr>
-                  ))}
-                  {r.adsets.length === 0 && <tr><td colSpan={5}>No ad sets in this window.</td></tr>}
+                  {r.adsets.map((a) => {
+                    const dead = a.installs === 0 && a.spendCents > 0;
+                    const shaky = a.confidence != null && a.confidence < CONFIDENCE_WORTH_FLAGGING;
+                    return (
+                      <tr key={a.adsetId} data-testid="ads-adset-row" data-dead={dead || undefined}>
+                        <td>
+                          {a.adsetName ?? a.adsetId}{" "}
+                          {/* A REPEATED NAME IS MARKED AS WELL AS GROUPED, so two adjacent rows
+                              reading the same do not look like one row drawn twice. */}
+                          {dupes.has(a.adsetName ?? a.adsetId) && (
+                            <span className={styles.footnote} style={{ marginLeft: 6 }} data-testid="ads-adset-dupe">
+                              same name, different campaign
+                            </span>
+                          )}
+                          {" "}
+                          {shaky && (
+                            <span data-testid="ads-adset-shaky" style={{ marginLeft: 6, color: "var(--negative)", fontWeight: 700 }}>
+                              only {pct(a.confidence, 0)} of its money in this market
+                            </span>
+                          )}
+                        </td>
+                        <td>{money0(a.spendCents)}</td>
+                        {/* SPEND WITH NOTHING TO SHOW FOR IT is the actionable row in this table —
+                            five of Houston's seven ad sets, $674 of its $1,799 — and nothing used
+                            to mark it. */}
+                        <td data-testid="ads-adset-installs"
+                          style={dead ? { color: "var(--negative)", fontWeight: 700 } : undefined}>
+                          {a.installs == null ? "—" : fmtInt(a.installs)}
+                          {dead && <span style={{ fontWeight: 400 }}> · no installs</span>}
+                        </td>
+                        <td>{a.campaignName ?? "—"}</td>
+                      </tr>
+                    );
+                  })}
+                  {r.adsets.length === 0 && <tr><td colSpan={4}>No ad sets in this window.</td></tr>}
                 </tbody>
               </table>
             </div>

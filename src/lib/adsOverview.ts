@@ -49,6 +49,23 @@ export type AdsetRow = { adsetId: string; adsetName: string | null; campaignName
 export type MarketRow = {
   marketKey: string;
   spendCents: number;
+  /* ── THE SPENDING PERIOD, BECAUSE THE WINDOW IS NOT IT ────────────────────────────────────────
+   * Spend is bounded by the days a market actually bought; players accrue across the whole window
+   * either way. A market that stopped early therefore divides less spend by the same players and
+   * looks CHEAPER than it is.
+   *
+   * MEASURED 2026-09-18 over 2026-08-01..2026-09-18: every market first spent on 2026-08-01, so
+   * nothing starts late — but OKC's ad sets last spent on 2026-08-28, and its cost per new player
+   * reads $7.45 against $10.26 over its own spending period. 38% understated.
+   *
+   * THE SPAN IS WHAT DISTORTS, NOT THE DAY COUNT. San Antonio and St. Louis bought on 38 of 49
+   * days and are undistorted, because their first and last days are still the window's. Interior
+   * gaps do not move the rate; a short span does. */
+  firstSpend: string | null;
+  lastSpend: string | null;
+  /** Distinct days with spend above zero. Reported in the expansion; it is NOT what the flag
+   *  keys on, for the reason above. */
+  spendDays: number;
   homeCents: number;
   unknownCents: number;
   otherNamedCents: number;
@@ -145,13 +162,17 @@ export function buildAdsOverview(input: {
   }
 
   const seed = (): MarketRow => ({
-    marketKey: "", spendCents: 0, homeCents: 0, unknownCents: 0, otherNamedCents: 0,
+    marketKey: "", spendCents: 0, firstSpend: null, lastSpend: null, spendDays: 0,
+    homeCents: 0, unknownCents: 0, otherNamedCents: 0,
     installs: null, clicks: 0, registrations: 0, becamePlayers: 0, playedWithin7d: 0,
     playedWithin30d: 0, served: [], adsets: [],
   });
   const byMarket = new Map<string, MarketRow>();
   const servedRaw = new Map<string, { marketRaw: string; spendCents: number }[]>();
-  for (const k of PAID_MARKETS) { const r = seed(); r.marketKey = k; byMarket.set(k, r); servedRaw.set(k, []); }
+  const spendDaysOf = new Map<string, Set<string>>();
+  for (const k of PAID_MARKETS) {
+    const r = seed(); r.marketKey = k; byMarket.set(k, r); servedRaw.set(k, []); spendDaysOf.set(k, new Set());
+  }
 
   const notAttributed: NotAttributed[] = [];
 
@@ -183,6 +204,14 @@ export function buildAdsOverview(input: {
       else if (r.market_key === key) row.homeCents += r.spend_cents;
       else row.otherNamedCents += r.spend_cents;
       servedRaw.get(key)!.push({ marketRaw: r.market_raw, spendCents: r.spend_cents });
+      /* A DAY COUNTS ONLY IF MONEY MOVED. A zero-spend row is a day Meta reported on, not a day
+       * the market bought, and counting it would put the last-spend date wherever reporting
+       * happened to stop. */
+      if (r.spend_cents > 0) {
+        spendDaysOf.get(key)!.add(r.spend_date);
+        if (!row.firstSpend || r.spend_date < row.firstSpend) row.firstSpend = r.spend_date;
+        if (!row.lastSpend || r.spend_date > row.lastSpend) row.lastSpend = r.spend_date;
+      }
     }
     if (flat?.installs != null) row.installs = (row.installs ?? 0) + flat.installs;
     row.clicks += flat?.clicks ?? 0;
@@ -195,7 +224,8 @@ export function buildAdsOverview(input: {
   for (const k of PAID_MARKETS) {
     const row = byMarket.get(k)!;
     row.served = servedBreakdown(servedRaw.get(k)!);
-    row.adsets.sort((a, b) => b.spendCents - a.spendCents);
+    row.spendDays = spendDaysOf.get(k)!.size;
+    row.adsets = orderAdsets(row.adsets);
   }
 
   // ── the player side ──────────────────────────────────────────────────────────────────────────
@@ -228,6 +258,41 @@ export function buildAdsOverview(input: {
     excluded: { registrations: exRegs, becamePlayers: exPlayers, cities: [...exCities].sort() },
   };
 }
+
+/* ── DUPLICATE NAMES SIT TOGETHER ────────────────────────────────────────────────────────────────
+ * Two ad sets are called "New Engagement Ad Set" and two are called "TOMBALL - App Not Installed",
+ * separated only by their campaign. Sorted by spend alone they scatter, and two rows with the same
+ * name in different places read as one row rendered twice.
+ *
+ * GROUPED BY NAME, GROUPS ORDERED BY THEIR COMBINED SPEND, and spend order kept inside each group.
+ * So the biggest spenders are still at the top and a repeated name is always adjacent to itself. */
+export function orderAdsets(rows: readonly AdsetRow[]): AdsetRow[] {
+  const groups = new Map<string, AdsetRow[]>();
+  for (const r of rows) {
+    const k = r.adsetName ?? r.adsetId;
+    (groups.get(k) ?? groups.set(k, []).get(k)!).push(r);
+  }
+  return [...groups.entries()]
+    .map(([name, rs]) => ({ name, rs: [...rs].sort((a, b) => b.spendCents - a.spendCents), total: rs.reduce((a, r) => a + r.spendCents, 0) }))
+    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name))
+    .flatMap((g) => g.rs);
+}
+
+/** How many ad sets in this list share a name with another. Drives the duplicate marker. */
+export function duplicateNames(rows: readonly AdsetRow[]): Set<string> {
+  const seen = new Map<string, number>();
+  for (const r of rows) { const k = r.adsetName ?? r.adsetId; seen.set(k, (seen.get(k) ?? 0) + 1); }
+  return new Set([...seen].filter(([, n]) => n > 1).map(([k]) => k));
+}
+
+/* ── CONFIDENCE IS ONLY WORTH PRINTING WHEN IT IS LOW ───────────────────────────────────────────
+ * It read 98.7% or 100.0% on every row of the Houston expansion, which is a column of noise. The
+ * exception is what matters, so the column is gone and the exception is flagged.
+ *
+ * 0.90, not the 0.60 attribution floor. The floor decides whether an ad set gets a market at all;
+ * this decides whether a reader should know its money was not all in one place. A tenth of the
+ * budget landing elsewhere is worth a mark. */
+export const CONFIDENCE_WORTH_FLAGGING = 0.9;
 
 /** A share of a total, or null when the total is zero. Never 0-for-unknown: a market with no
  *  spend has no share of spend, and printing 0.0% would read as a measurement. */
