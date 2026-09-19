@@ -1,18 +1,26 @@
 "use client";
 
-/* ADS OVERVIEW — one row per paid market, expandable.
+/* ADS OVERVIEW — paid spend by market against the players it bought.
  *
- * EVERYTHING THIS PAGE HAS TO SAY, IT SAYS ON THE PAGE. The two attributions, the censoring and
- * its direction, and the markets deliberately left out are all one click from the number they
- * qualify, because a caveat that lives in a doc is a caveat nobody reading the number will see.
+ * THE PAGE HAS ONE FINDING AND THE FIRST CUT DID NOT SAY SO. Austin at $3.20 against Dallas at
+ * $19.68 is a six-times spread that read as seven identical numbers, because every cell on the row
+ * carried the same size and weight. Cost per new player is now the only thing at 17px, coloured by
+ * band and barred across the markets; CPI drops to caption size beside it; and share of spend
+ * against share of players collapses into one diverging bar with the signed gap, which is the
+ * reallocation read stated rather than left as two percentages to subtract.
+ *
+ * WHAT MOVED OUT OF THE WAY. Four blocks sat above the table — a range card, two callouts and a
+ * paragraph of column definitions — so the table began below the fold on a laptop. The definitions
+ * are tooltips on the headers they define, the three banners are one line with a Why, and
+ * Registrations, 7d, 30d, Home, Unattributed and Other are behind All columns.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import styles from "./growth.module.css";
 import { fmtInt, fmtMoney } from "./format";
 import {
-  perUnit, shareOf, duplicateNames, CONFIDENCE_WORTH_FLAGGING,
-  type AdsOverview, type MarketRow,
+  perUnit, shareOf, costBand, reallocationGap, duplicateNames, BAND_BAD_AT,
+  CONFIDENCE_WORTH_FLAGGING, type AdsOverview, type Band, type MarketRow,
 } from "@/lib/adsOverview";
 import { UNKNOWN_MARKET } from "@/lib/metaAdSpend";
 
@@ -21,17 +29,6 @@ const CITY_LABEL: Record<string, string> = {
   OKC: "OKC", SATX: "San Antonio", STL: "St. Louis",
 };
 
-/* ── THE DEFAULT RANGE IS EVERYTHING THE TABLES HOLD ─────────────────────────────────────────────
- * 2026-08-01 to today, and the reason is that anything earlier is a DIFFERENT ACCOUNT. The campaign
- * and ad set structure was rebuilt in August — eight months of `ATL - Eng - Feb Advantage+` became
- * `MD / Multiple Locations / App Promotion`, and the market code in the name went from 100% of
- * spend to 28.5% — so the tables floor there and a wider window would put two structures under one
- * heading.
- *
- * A SHORTER DEFAULT WAS THE OTHER CANDIDATE and it loses more than it gains: new players run about
- * 6.7 per city-day, so a 28-day default puts several markets into single digits and the
- * share-of-spend against share-of-players read becomes noise. The presets are there for when a
- * narrower question is actually being asked. */
 const FLOOR = "2026-08-01";
 const todayChicago = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
 const minus = (ymd: string, days: number) => {
@@ -40,45 +37,58 @@ const minus = (ymd: string, days: number) => {
 };
 
 /* NO MONTH-TO-DATE. It reads well on the 28th and falls apart on the 2nd, and at roughly 6.7 new
- * players per city-day an early-month sample puts several markets into single digits — which is
- * the share-of-spend against share-of-players read reduced to noise. */
+ * players per city-day an early-month sample puts several markets into single digits. */
 type Mode = "floor" | "d30" | "d7" | "custom";
 const PRESETS: { mode: Mode; label: string; since: () => string }[] = [
   { mode: "floor", label: "Since Aug 1", since: () => FLOOR },
-  { mode: "d30", label: "Last 30 days", since: () => minus(todayChicago(), 29) },
-  { mode: "d7", label: "Last 7 days", since: () => minus(todayChicago(), 6) },
+  { mode: "d30", label: "30d", since: () => minus(todayChicago(), 29) },
+  { mode: "d7", label: "7d", since: () => minus(todayChicago(), 6) },
 ];
 
-/** `Aug 1` — the compact form the spending-period column uses. */
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const shortDay = (ymd: string | null) => {
   if (!ymd) return "—";
   const [, m, d] = ymd.split("-");
-  return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][Number(m) - 1]} ${Number(d)}`;
+  return `${MONTHS[Number(m) - 1]} ${Number(d)}`;
 };
 const daysBetween = (a: string, b: string) =>
   Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000) + 1;
 
-/* ── WHEN A SPENDING PERIOD IS SHORT ENOUGH TO CHANGE THE READING ───────────────────────────────
- * The rate divides a market's spend by players accrued across the WHOLE window, so a market whose
- * money stopped early looks cheaper than it is. OKC is the live case: 28 spending days of 49, and
- * $7.45 per new player against $10.26 over its own period, 38% understated.
- *
- * 10% OF THE WINDOW is the line. Below that the arithmetic barely moves; a week missing from seven
- * is a number somebody would quote without knowing. */
+/* A SPAN SHORTER THAN 90% OF THE WINDOW CHANGES THE READING. The rate divides a market's spend by
+ * players accrued across the whole window, so a market that stopped early looks cheaper than it is:
+ * OKC reads $7.45 against $10.26 over its own period. Interior gaps do not move it — San Antonio
+ * bought on 38 of 49 days and still spans the window. */
 const SHORT_SPAN = 0.9;
 
 const pct = (v: number | null, digits = 1) => (v == null ? "—" : `${(v * 100).toFixed(digits)}%`);
 const money0 = (cents: number) => fmtMoney(cents / 100);
 const money2 = (cents: number | null) => (cents == null ? "—" : `$${(cents / 100).toFixed(2)}`);
+const KEY_CLASS: Record<Band, string> = {
+  good: styles.adsKeyGood, mid: styles.adsKeyMid, bad: styles.adsKeyBad, dark: styles.adsKeyDark,
+};
+const FILL_CLASS: Record<Band, string> = {
+  good: styles.adsFillGood, mid: styles.adsFillMid, bad: styles.adsFillBad, dark: styles.adsFillDark,
+};
+
+/** A header with its definition on hover, replacing the paragraph that used to sit above the table. */
+function Th({ label, tip, className }: { label: string; tip?: string; className?: string }) {
+  return (
+    <th className={className}>
+      {tip ? <span title={tip} style={{ cursor: "help", borderBottom: "1px dotted currentColor" }}>{label}</span> : label}
+    </th>
+  );
+}
 
 export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<string, string> }) {
   const [mode, setMode] = useState<Mode>("floor");
   const [since, setSince] = useState(FLOOR);
   const [until, setUntil] = useState(todayChicago);
-  const [data, setData] = useState<AdsOverview & { since: string; until: string } | null>(null);
+  const [data, setData] = useState<(AdsOverview & { since: string; until: string }) | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  const [allCols, setAllCols] = useState(false);
+  const [why, setWhy] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -92,335 +102,342 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
 
   const preset = useCallback((m: Mode, s: string) => { setMode(m); setSince(s); setUntil(todayChicago()); }, []);
 
-  const totals = data?.totals;
   const rows = useMemo(() => data?.rows ?? [], [data]);
+  const totals = data?.totals;
+  const windowDays = data ? daysBetween(data.since, data.until) : 0;
+
+  /* THE SCALES ARE ACROSS THE MARKETS ON SCREEN, not fixed. A bar whose full width meant a number
+   * nobody is looking at would flatten the spread this column exists to show. */
+  const blended = totals ? perUnit(totals.spendCents, totals.becamePlayers) : null;
+  const view = useMemo(() => rows.map((r) => {
+    const span = r.firstSpend && r.lastSpend ? daysBetween(r.firstSpend, r.lastSpend) : 0;
+    const dark = span > 0 && span < windowDays * SHORT_SPAN;
+    const cpnp = perUnit(r.spendCents, r.becamePlayers);
+    return {
+      r, span, dark, cpnp,
+      band: costBand(cpnp, blended, dark),
+      gap: reallocationGap(shareOf(r.becamePlayers, totals?.becamePlayers ?? 0), shareOf(r.spendCents, totals?.spendCents ?? 0)),
+    };
+  }), [rows, windowDays, blended, totals]);
+  const maxCpnp = Math.max(1, ...view.map((v) => v.cpnp ?? 0));
+  const maxGap = Math.max(1, ...view.map((v) => Math.abs(v.gap ?? 0)));
 
   return (
-    <>
-      {/* ── THE RANGE ─────────────────────────────────────────────────────────────────────────── */}
-      <div className={styles.card}>
-        <div className={styles.cardHead}>
-          <div>
-            <span className={styles.cardTitle}>Range</span>
-            <div className={styles.cardSub} data-testid="ads-range-sub">
-              The tables start on {FLOOR}. Anything earlier is a different campaign structure, not an
-              empty month.
-            </div>
-          </div>
-        </div>
-        <div className={styles.controlsRow} style={{ padding: "0 18px 16px" }}>
-          <div className={styles.segmented} data-testid="ads-presets">
+    <div className={styles.ads}>
+      {/* ── SUMMARY AND CONTROLS ON ONE LINE ─────────────────────────────────────────────────── */}
+      <div className={styles.adsBar}>
+        <span className={styles.adsSummary} data-testid="ads-summary">
+          {totals
+            ? `${money0(totals.spendCents)} spend · ${fmtInt(totals.installs)} installs · ${fmtInt(totals.becamePlayers)} new players · ${money2(blended)} blended`
+            : "…"}
+        </span>
+        <div className={styles.adsControls}>
+          <div className={styles.adsPills} data-testid="ads-presets">
             {PRESETS.map((p) => (
               <button key={p.mode} type="button" data-testid={`ads-preset-${p.mode}`}
-                className={mode === p.mode ? `${styles.segBtn} ${styles.segBtnActive}` : styles.segBtn}
+                className={mode === p.mode ? `${styles.adsPill} ${styles.adsPillOn}` : styles.adsPill}
                 onClick={() => preset(p.mode, p.since())}>{p.label}</button>
             ))}
-            {/* CUSTOM HAS A JOB. It reveals the two date fields, which are hidden under a preset —
-                a fourth button that only lit up would be a control that changes nothing. */}
-            <button type="button" data-testid="ads-preset-custom"
-              className={mode === "custom" ? `${styles.segBtn} ${styles.segBtnActive}` : styles.segBtn}
-              onClick={() => setMode("custom")}>Custom</button>
           </div>
+          {/* CUSTOM HAS A JOB: it reveals the two date fields, which are hidden under a preset. */}
+          <button type="button" data-testid="ads-preset-custom"
+            className={mode === "custom" ? `${styles.adsBtn} ${styles.adsBtnOn}` : styles.adsBtn}
+            onClick={() => setMode("custom")}>
+            {data ? `${shortDay(data.since)} – ${shortDay(data.until)}` : "Custom"}
+          </button>
           {mode === "custom" && (
             <>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>From</span>
-                <input type="date" className={styles.control} value={since} min={FLOOR} max={until}
-                  data-testid="ads-since" onChange={(e) => setSince(e.target.value < FLOOR ? FLOOR : e.target.value)} />
-              </label>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>To</span>
-                <input type="date" className={styles.control} value={until} min={since}
-                  data-testid="ads-until" onChange={(e) => setUntil(e.target.value)} />
-              </label>
+              <input type="date" className={styles.adsBtn} value={since} min={FLOOR} max={until}
+                aria-label="From" data-testid="ads-since"
+                onChange={(e) => setSince(e.target.value < FLOOR ? FLOOR : e.target.value)} />
+              <input type="date" className={styles.adsBtn} value={until} min={since}
+                aria-label="To" data-testid="ads-until" onChange={(e) => setUntil(e.target.value)} />
             </>
           )}
+          <button type="button" data-testid="ads-allcols"
+            className={allCols ? `${styles.adsBtn} ${styles.adsBtnOn}` : styles.adsBtn}
+            aria-pressed={allCols} onClick={() => setAllCols((v) => !v)}>All columns</button>
         </div>
       </div>
 
-      {/* ── WHAT THE NUMBERS ARE, WHERE THE NUMBERS ARE ───────────────────────────────────────── */}
-      <div className={styles.calloutBanner} data-testid="ads-attribution-note">
-        <b>Two different attributions on one row.</b>{" "}
-        <b>Spend</b>{" "}is delivery data, from Meta&rsquo;s <code>comscore_market</code>{" "}breakdown: it is
-        where the money was actually served. <b>Installs</b>{" "}are attributed through the ad set&rsquo;s
-        derived home market, because Meta returns <b>zero installs</b>{" "}under that same geo breakdown.
-        So a cost per install is this market&rsquo;s ad sets divided by the installs those ad sets
-        produced, and the home, unattributed and other-market shares beside it describe where their
-        money landed.
+      {/* ── ONE LINE, WITH THE REST BEHIND IT ────────────────────────────────────────────────── */}
+      <div className={styles.adsNote} data-testid="ads-note" style={{ marginTop: 12 }}>
+        <span aria-hidden>ⓘ</span>
+        <span>
+          Spend is where Meta served it. Installs are attributed through each ad set&rsquo;s home
+          market. Recent days are still filling, so cost per new player reads too expensive.
+        </span>
+        <button type="button" className={styles.adsNoteWhy} data-testid="ads-why"
+          aria-expanded={why} onClick={() => setWhy((v) => !v)}>{why ? "Hide" : "Why"}</button>
       </div>
-
-      <div className={styles.calloutBanner} data-testid="ads-censoring-note" style={{ marginTop: 10 }}>
-        <b>New players are still arriving for recent days.</b>{" "}A player is dated by when they
-        registered and counted once they have played, so somebody who signed up this week may play
-        next week. <b>The count is short, which makes cost per new player read too EXPENSIVE, not too
-        cheap.</b>{" "}The <b>7d</b>{" "}and <b>30d</b>{" "}columns are the settled figures: every registration in
-        the window has had that long to convert, so they are comparable across dates in a way the
-        headline is not.
-      </div>
+      {why && (
+        <div className={styles.adsWhy} data-testid="ads-why-panel" style={{ marginTop: 8 }}>
+          <p>
+            <b>Two different attributions on one row.</b>{" "}
+            <b>Spend</b> is delivery data, from Meta&rsquo;s <code>comscore_market</code> breakdown:
+            where the money was actually served. <b>Installs</b> come through each ad set&rsquo;s
+            derived home market, because Meta returns <b>zero installs</b> under that geo breakdown.
+          </p>
+          <p>
+            <b>New players are still arriving for recent days.</b> A player is dated by when they
+            registered and counted once they have played, so somebody who signed up this week may
+            play next week. The count is short, which makes cost per new player read{" "}
+            <b>too expensive, not too cheap</b>. The 7d and 30d columns, under All columns, are the
+            settled figures.
+          </p>
+          <p>
+            <b>The range starts {FLOOR}.</b> Anything earlier is a different campaign structure, not
+            an empty month: the account was rebuilt in August.
+          </p>
+          <p>
+            <b>Bands are relative, not fixed.</b> Green is at or below the blended rate across all
+            markets, amber up to twice it, red beyond. A market whose spending period is materially
+            shorter than the window is greyed and badged <b>DARK</b> rather than banded, because its
+            rate divides less spend by the same players and reads cheaper than it is.
+          </p>
+        </div>
+      )}
 
       {err && <div className={`${styles.stateMsg} ${styles.errorMsg}`} data-testid="ads-error">Could not load: {err}</div>}
       {loading && !data && <div className={styles.stateMsg} data-testid="ads-loading">Loading ads data…</div>}
 
       {data && (
         <>
-          <div className={styles.card} style={{ marginTop: 10 }}>
-            <div className={styles.cardHead}>
-              <div>
-                <span className={styles.cardTitle}>By market</span>
-                <div className={styles.cardSub}>
-                  {data.since} to {data.until} · click a market for where its money landed and which
-                  ad sets spent it. <b>Regs</b> registrations, <b>Players</b> registrations that went
-                  on to play, <b>$ / player</b> spend per one of those, <b>Spend %</b> and{" "}
-                  <b>Player %</b> this market&rsquo;s share of each across the paid markets.{" "}
-                  <b>Bought</b> flags a market whose spending period is materially shorter than the
-                  window; every market&rsquo;s dates are in its expansion.
-                </div>
-              </div>
-            </div>
+          <div className={styles.card} style={{ marginTop: 12, overflow: "hidden" }}>
             <div className={styles.tableWrap}>
-              <table className={styles.dataTable} data-testid="ads-table">
+              <table className={styles.adsTable} data-testid="ads-table">
                 <thead>
                   <tr>
-                    <th>Market</th>
-                    <th>Bought</th>
-                    <th>Spend</th>
-                    <th>Installs</th>
-                    <th>CPI</th>
-                    {/* SHORT HEADERS, BECAUSE THE HEADERS ARE WHAT IS WIDE. "Cost / new player"
-                        is seventeen characters over a six-character number, and the four long ones
-                        together pushed Spend % and Player % off the right edge at 1900px — which
-                        is the reallocation read, the thing the table exists for. The card's
-                        sub-line carries the full names. */}
-                    <th>Regs</th>
-                    <th>Players</th>
-                    <th>$ / player</th>
-                    <th>7d</th>
-                    <th>30d</th>
-                    <th>Home</th>
-                    <th>Unattrib</th>
-                    <th>Other</th>
-                    <th>Spend %</th>
-                    <th>Player %</th>
+                    <Th label="Market" />
+                    <Th label="Spend" tip="Ad spend served in this market's own ad sets, from Meta's comscore_market breakdown." />
+                    <Th label="Installs" tip="Mobile app installs, attributed through each ad set's derived home market. Meta returns none under the geo breakdown." />
+                    <Th label="CPI" tip="Spend divided by installs. Context for the headline, not a competing measure." />
+                    {allCols && <Th label="Regs" tip="Registrations in this market during the window, by the player's declared city." />}
+                    <Th label="New players" tip="Everyone who registered in this market during the window and has since played a match. It counts every new player, not only the ones the ads brought." />
+                    <Th label="Cost per new player" className={styles.adsHeadKey}
+                      tip="Ad spend in this market divided by every new player in it, organic ones included. A ratio for comparing markets against each other, not a cost of acquisition." />
+                    <th />
+                    {allCols && <Th label="7d" tip="Registrations that played within 7 days. Settled: every registration in the window has had that long." />}
+                    {allCols && <Th label="30d" tip="Registrations that played within 30 days." />}
+                    {allCols && <Th label="Home" tip="Share of this market's spend served in its own comscore market." />}
+                    {allCols && <Th label="Unattrib" tip="Share served where Meta would not name a market at all." />}
+                    {allCols && <Th label="Other" tip="Share served in a named market that is not this one." />}
+                    {/* SHORTENED, WITH THE PHRASE IN THE TOOLTIP. "Share of players less share of
+                        spend" is a thirty-seven character header over a five-character number, and
+                        it pushed that number off the right edge of the card at 1440px — the signed
+                        gap being the thing the bar exists to anchor. */}
+                    <Th label="Players less spend" className={styles.adsHeadKey}
+                      tip="This market's share of new players minus its share of spend, in points. Positive returns more than it takes; negative takes more budget than it returns." />
+                    <th />
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((r) => {
-                    const sSpend = shareOf(r.spendCents, totals?.spendCents ?? 0);
-                    const sPlay = shareOf(r.becamePlayers, totals?.becamePlayers ?? 0);
-                    return (
-                      <FragmentRow key={r.marketKey} r={r} open={open === r.marketKey}
-                        onToggle={() => setOpen((v) => (v === r.marketKey ? null : r.marketKey))}
-                        spendShare={sSpend} playerShare={sPlay}
-                        windowDays={daysBetween(data.since, data.until)} />
-                    );
-                  })}
-                  <tr style={{ fontWeight: 700 }} data-testid="ads-total-row">
+                  {view.map((v) => (
+                    <Row key={v.r.marketKey} v={v} open={open === v.r.marketKey} allCols={allCols}
+                      onToggle={() => setOpen((o) => (o === v.r.marketKey ? null : v.r.marketKey))}
+                      maxCpnp={maxCpnp} maxGap={maxGap} windowDays={windowDays} />
+                  ))}
+                  <tr className={styles.adsTotal} data-testid="ads-total-row">
                     <td>Total</td>
-                    <td />
                     <td>{money0(totals?.spendCents ?? 0)}</td>
                     <td>{fmtInt(totals?.installs ?? 0)}</td>
-                    <td>{money2(perUnit(totals?.spendCents ?? 0, totals?.installs ?? 0))}</td>
-                    <td>{fmtInt(totals?.registrations ?? 0)}</td>
+                    <td className={styles.adsMuted}>{money2(perUnit(totals?.spendCents ?? 0, totals?.installs ?? 0))}</td>
+                    {allCols && <td>{fmtInt(totals?.registrations ?? 0)}</td>}
                     <td>{fmtInt(totals?.becamePlayers ?? 0)}</td>
-                    <td>{money2(perUnit(totals?.spendCents ?? 0, totals?.becamePlayers ?? 0))}</td>
-                    <td>{fmtInt(totals?.playedWithin7d ?? 0)}</td>
-                    {/* NO TOTAL FOR THE SHARE COLUMNS. They are shares OF this total, so a total
-                        share is 100% by construction and says nothing. The 30d total is real and
-                        belongs here; the five after it do not. */}
-                    <td>{fmtInt(rows.reduce((a, r) => a + r.playedWithin30d, 0))}</td>
-                    <td colSpan={5} />
+                    <td className={styles.adsKey}>{money2(blended)}</td>
+                    <td />
+                    {allCols && <td>{fmtInt(totals?.playedWithin7d ?? 0)}</td>}
+                    {allCols && <td>{fmtInt(rows.reduce((a, r) => a + r.playedWithin30d, 0))}</td>}
+                    {allCols && <td colSpan={3} />}
+                    {/* NO TOTAL FOR THE SHARES. They are shares OF this total, so a total share is
+                        100% by construction and a total gap is zero. */}
+                    <td colSpan={2} />
                   </tr>
                 </tbody>
               </table>
             </div>
 
-            {/* ── THE GAP, STATED RATHER THAN PADDED ───────────────────────────────────────────── */}
-            <div className={styles.footnote} data-testid="ads-excluded-note" style={{ padding: "0 18px 14px" }}>
-              Paid markets only. {data.excluded.registrations > 0 ? (
-                <>
-                  <b>{fmtInt(data.excluded.registrations)} registrations</b>{" "}and{" "}
-                  <b>{fmtInt(data.excluded.becamePlayers)} new players</b>{" "}in this window are in
-                  markets we do not buy in{data.excluded.cities.length ? ` (${data.excluded.cities.join(", ")})` : ""},
-                  so the player columns do not add up to the company total. They are left out rather
-                  than padded in with no spend beside them.
-                </>
-              ) : <>No registrations fell outside the paid markets in this window.</>}
+            <div className={styles.adsFoot}>
+              <span data-testid="ads-excluded-note">
+                Paid markets only. {data.excluded.registrations > 0 ? (
+                  <>
+                    <b>{fmtInt(data.excluded.registrations)} registrations</b> and{" "}
+                    <b>{fmtInt(data.excluded.becamePlayers)} new players</b> fall in markets we do not
+                    buy in{data.excluded.cities.length ? ` (${data.excluded.cities.join(", ")})` : ""}, so the
+                    player columns do not add to the company total.
+                  </>
+                ) : <>No registrations fell outside the paid markets in this window.</>}
+              </span>
+              {!allCols && (
+                <button type="button" className={styles.adsNoteWhy} style={{ marginLeft: 0 }}
+                  data-testid="ads-allcols-foot" onClick={() => setAllCols(true)}>
+                  Registrations, 7d and 30d settled counts, home and unattributed shares →
+                </button>
+              )}
             </div>
           </div>
 
-          {/* ── AD SETS THAT REACHED NO MARKET ───────────────────────────────────────────────── */}
           {data.notAttributed.length > 0 && (
-            <div className={styles.card} style={{ marginTop: 10 }} data-testid="ads-notattributed">
+            <div className={styles.card} style={{ marginTop: 12 }} data-testid="ads-notattributed">
               <div className={styles.cardHead}>
                 <div>
                   <span className={styles.cardTitle}>Not attributed to a market</span>
                   <div className={styles.cardSub}>
-                    Below the 60% confidence floor, or a dominant served market we do not map. Their
-                    spend is counted here and in no market row above.
+                    Below the 60% confidence floor, or a dominant served market we do not map. Counted
+                    here and in no market row above.
                   </div>
                 </div>
               </div>
-              <div className={styles.tableWrap}>
-                <table className={styles.dataTable}>
-                  <thead>
-                    <tr><th>Ad set</th><th>Campaign</th><th>Spend</th><th>Confidence</th><th>Where it landed</th></tr>
-                  </thead>
-                  <tbody>
-                    {data.notAttributed.map((n) => (
-                      <tr key={n.adsetId} data-testid="ads-notattributed-row">
-                        <td>{n.adsetName ?? n.adsetId}</td>
-                        <td>{n.campaignName ?? "—"}</td>
-                        <td>{money0(n.spendCents)}</td>
-                        <td>{pct(n.confidence)}</td>
-                        <td>{n.topMarkets.map((t) => `${t.marketRaw} ${money0(t.spendCents)}`).join(" · ") || "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className={styles.adsDetail} style={{ paddingLeft: 20 }}>
+                <div className={styles.adsDetailCol}>
+                  {data.notAttributed.map((n) => (
+                    <div key={n.adsetId} className={styles.adsLine} data-testid="ads-notattributed-row">
+                      <span className={styles.adsLineName}>{n.adsetName ?? n.adsetId}</span>
+                      <span className={styles.adsMuted}>{n.topMarkets.map((t) => t.marketRaw).join(", ") || "—"}</span>
+                      <span className={styles.adsLineVal}>{money0(n.spendCents)}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           )}
         </>
       )}
-    </>
+    </div>
   );
 }
 
-function FragmentRow({ r, open, onToggle, spendShare, playerShare, windowDays }: {
-  r: MarketRow; open: boolean; onToggle: () => void;
-  spendShare: number | null; playerShare: number | null; windowDays: number;
+type ViewRow = { r: MarketRow; span: number; dark: boolean; cpnp: number | null; band: Band | null; gap: number | null };
+
+function Row({ v, open, onToggle, maxCpnp, maxGap, windowDays, allCols }: {
+  v: ViewRow; open: boolean; onToggle: () => void;
+  maxCpnp: number; maxGap: number; windowDays: number; allCols: boolean;
 }) {
-  const home = shareOf(r.homeCents, r.spendCents);
-  const unk = shareOf(r.unknownCents, r.spendCents);
-  const other = shareOf(r.otherNamedCents, r.spendCents);
-  /* THE SPAN, NOT THE DAY COUNT. Interior gaps do not move the rate — San Antonio bought on 38 of
-   * 49 days and is undistorted because it still spans the window. A market that STOPPED divides
-   * less spend by the same players and reads cheaper than it is. */
-  const span = r.firstSpend && r.lastSpend ? daysBetween(r.firstSpend, r.lastSpend) : 0;
-  const short = span > 0 && span < windowDays * SHORT_SPAN;
+  const { r, band, cpnp, gap, dark } = v;
+  const keyCls = band ? KEY_CLASS[band] : "";
+  const fillCls = band ? FILL_CLASS[band] : styles.adsFillDark;
   const dupes = duplicateNames(r.adsets);
+  const maxServed = Math.max(1, ...r.served.map((s) => s.spendCents));
+  const cols = 8 + (allCols ? 5 : 0);
+
   return (
     <>
-      <tr data-testid="ads-row" data-market={r.marketKey} onClick={onToggle}
-        style={{ cursor: "pointer", background: open ? "var(--mint)" : undefined }}>
+      <tr className={`${styles.adsRow} ${open ? styles.adsRowOpen : ""}`} data-testid="ads-row"
+        data-market={r.marketKey} data-band={band ?? undefined} onClick={onToggle}>
         <td>
-          <button type="button" data-testid="ads-expand" aria-expanded={open}
-            style={{ font: "inherit", color: "inherit", background: "none", border: 0, padding: 0, cursor: "pointer" }}>
-            <span aria-hidden style={{ display: "inline-block", width: 12 }}>{open ? "▾" : "▸"}</span>
+          <span className={styles.adsMarket}>
+            <span className={styles.adsCaret} aria-hidden>{open ? "▾" : "▸"}</span>
             {CITY_LABEL[r.marketKey] ?? r.marketKey}
-          </button>
-        </td>
-        {/* THE SPENDING PERIOD IS AN EXCEPTION MARKER, NOT A COLUMN OF DATES. Six of seven markets
-            span the whole window, so printing "Aug 1–Sep 18" on each of them is a wide column of
-            one repeated fact that pushed the two share columns off the right edge. The dates for
-            every market are in the expansion, which is where the brief allows them; the collapsed
-            row carries only the case that changes the reading. */}
-        <td data-testid="ads-span" data-short={short || undefined}
-          style={short ? { color: "var(--negative)", fontWeight: 700 } : { color: "var(--muted)" }}>
-          {short
-            ? `${shortDay(r.firstSpend)}–${shortDay(r.lastSpend)} · ${span}d of ${windowDays}`
-            : r.firstSpend ? "full" : "—"}
+            {/* THE SPENDING PERIOD AS A BADGE, not a column of six identical date ranges. */}
+            {dark && (
+              <span className={styles.adsBadge} data-testid="ads-dark"
+                title={`Bought on ${r.spendDays} of ${windowDays} days, ${shortDay(r.firstSpend)} to ${shortDay(r.lastSpend)}. Its rate divides less spend by the same players, so it reads cheaper than it is.`}>
+                dark
+              </span>
+            )}
+          </span>
         </td>
         <td data-testid="ads-spend">{money0(r.spendCents)}</td>
         <td>{r.installs == null ? "—" : fmtInt(r.installs)}</td>
-        <td data-testid="ads-cpi">{money2(perUnit(r.spendCents, r.installs))}</td>
-        <td>{fmtInt(r.registrations)}</td>
+        <td className={styles.adsMuted} data-testid="ads-cpi">{money2(perUnit(r.spendCents, r.installs))}</td>
+        {allCols && <td>{fmtInt(r.registrations)}</td>}
         <td data-testid="ads-newplayers">{fmtInt(r.becamePlayers)}</td>
-        <td data-testid="ads-cpnp">{money2(perUnit(r.spendCents, r.becamePlayers))}</td>
-        <td>{fmtInt(r.playedWithin7d)}</td>
-        <td>{fmtInt(r.playedWithin30d)}</td>
-        {/* THE THREE SHARES ARE OF THIS ROW'S OWN SPEND, so they add to 100% and a reader can
-            check them against the spend cell beside them. */}
-        <td data-testid="ads-home">{pct(home)}</td>
-        <td data-testid="ads-unattributed" style={unk != null && unk > 0.05 ? { color: "var(--negative)", fontWeight: 700 } : undefined}>{pct(unk)}</td>
-        <td>{pct(other)}</td>
-        <td>{pct(spendShare)}</td>
-        {/* THE REALLOCATION READ. Share of spend against share of new players says which market is
-            buying more than its output, which neither rate on its own can tell you. */}
-        <td data-testid="ads-playershare">{pct(playerShare)}</td>
+        <td className={`${styles.adsKey} ${keyCls}`} data-testid="ads-cpnp">{money2(cpnp)}</td>
+        <td>
+          <div className={styles.adsTrack}>
+            <div className={`${styles.adsFill} ${fillCls}`}
+              style={{ width: `${Math.min(100, ((cpnp ?? 0) / maxCpnp) * 100)}%` }} />
+          </div>
+        </td>
+        {allCols && <td>{fmtInt(r.playedWithin7d)}</td>}
+        {allCols && <td>{fmtInt(r.playedWithin30d)}</td>}
+        {allCols && <td>{pct(shareOf(r.homeCents, r.spendCents))}</td>}
+        {allCols && <td className={r.unknownCents > 0 ? styles.adsUnknown : undefined}>{pct(shareOf(r.unknownCents, r.spendCents))}</td>}
+        {allCols && <td>{pct(shareOf(r.otherNamedCents, r.spendCents))}</td>}
+        {/* ONE DIVERGING BAR REPLACES TWO PERCENTAGES. Left of the axis takes more budget than it
+            returns; right of it returns more than it takes. The subtraction was the reallocation
+            read and it was being left to the reader. */}
+        <td>
+          <div className={styles.adsDiv}>
+            <div className={`${styles.adsDivHalf} ${styles.adsDivLeft}`}>
+              {gap != null && gap < 0 && (
+                <div className={styles.adsDivBar}
+                  style={{ width: `${(Math.abs(gap) / maxGap) * 100}%`, background: `var(--ads-neg-fill)` }} />
+              )}
+            </div>
+            <div className={styles.adsDivAxis} />
+            <div className={styles.adsDivHalf}>
+              {gap != null && gap > 0 && (
+                <div className={styles.adsDivBar}
+                  style={{ width: `${(gap / maxGap) * 100}%`, background: `var(--accent)` }} />
+              )}
+            </div>
+          </div>
+        </td>
+        <td data-testid="ads-gap" className={gap == null ? undefined : gap > 0 ? styles.adsKeyGood : styles.adsKeyBad}
+          style={{ fontSize: "0.78rem", fontWeight: 600 }}>
+          {gap == null ? "—" : `${gap > 0 ? "+" : "−"}${Math.abs(gap).toFixed(1)}`}
+        </td>
       </tr>
-      {open && (
-        <tr>
-          <td colSpan={15} style={{ padding: 0 }}>
-            <div className={styles.detailPanel} data-testid="ads-detail">
-              <div className={styles.detailHead}>
-                <b>Where {CITY_LABEL[r.marketKey] ?? r.marketKey}&rsquo;s money landed</b>
-                <span className={styles.footnote} style={{ margin: 0 }}>
-                  Bought on {r.spendDays} of {windowDays} days{r.firstSpend ? `, ${shortDay(r.firstSpend)} to ${shortDay(r.lastSpend)}` : ""}.
-                  {" "}Served markets down to 99% of this market&rsquo;s spend. The rest is one row.{" "}
-                  {UNKNOWN_MARKET} is never rolled up.
-                </span>
-              </div>
-              <table className={styles.dataTable}>
-                <thead><tr><th>Served market</th><th>Spend</th><th>Share</th></tr></thead>
-                <tbody>
-                  {r.served.map((s) => (
-                    <tr key={s.marketRaw} data-testid="ads-served-row" data-rolled={s.rolled || undefined}
-                      style={s.marketRaw === UNKNOWN_MARKET ? { fontWeight: 700 } : undefined}>
-                      <td>{s.marketRaw}</td>
-                      <td>{money0(s.spendCents)}</td>
-                      <td>{pct(shareOf(s.spendCents, r.spendCents))}</td>
-                    </tr>
-                  ))}
-                  {r.served.length === 0 && <tr><td colSpan={3}>No spend in this window.</td></tr>}
-                </tbody>
-              </table>
 
-              <div className={styles.detailHead} style={{ marginTop: 16 }}>
-                <b>Ad sets that spent it</b>
-                <span className={styles.footnote} style={{ margin: 0 }}>
-                  All of them, no floor, grouped so a repeated name sits beside itself. Installs are
-                  per ad set, the only grain Meta reports them at. <b>Spend with no installs behind
-                  it is marked.</b>
-                </span>
+      {open && (
+        <tr className={styles.adsRowOpen}>
+          <td colSpan={cols} style={{ padding: 0 }}>
+            <div className={styles.adsDetail} data-testid="ads-detail">
+              <div className={styles.adsDetailCol}>
+                <div className={styles.adsDetailHead}>
+                  Where the money landed · bought on {r.spendDays} of {windowDays} days
+                  {r.firstSpend ? `, ${shortDay(r.firstSpend)} to ${shortDay(r.lastSpend)}` : ""}
+                </div>
+                {r.served.map((s) => {
+                  const unk = s.marketRaw === UNKNOWN_MARKET;
+                  return (
+                    <div key={s.marketRaw} className={styles.adsLine} data-testid="ads-served-row">
+                      <span className={`${styles.adsLineName} ${unk ? styles.adsUnknown : ""}`}>
+                        {unk ? "Unknown · Meta did not say" : s.marketRaw}
+                      </span>
+                      <div className={styles.adsLineTrack}>
+                        <div className={styles.adsFill} style={{ height: 8,
+                          width: `${(s.spendCents / maxServed) * 100}%`,
+                          background: unk ? "var(--gold-dot)" : "var(--div-above-2)" }} />
+                      </div>
+                      <span className={`${styles.adsLineVal} ${unk ? styles.adsUnknown : ""}`}>{money0(s.spendCents)}</span>
+                    </div>
+                  );
+                })}
+                {r.served.length === 0 && <div className={styles.adsMuted}>No spend in this window.</div>}
               </div>
-              <table className={styles.dataTable}>
-                {/* NO PARENT CONFIDENCE COLUMN. It read 98.7% or 100.0% on every row, which is a
-                    column of noise; it only says something when it is LOW, so the exception is
-                    flagged on the name instead. */}
-                {/* SPEND AND INSTALLS BEFORE THE CAMPAIGN. The campaign name runs to sixty
-                    characters and pushed Installs off the right edge of the scroller, which made
-                    the no-installs marking invisible at rest — the one thing in this table worth
-                    acting on. The long text goes last, where running out of room costs nothing. */}
-                <thead><tr><th>Ad set</th><th>Spend</th><th>Installs</th><th>Campaign</th></tr></thead>
-                <tbody>
-                  {r.adsets.map((a) => {
-                    const dead = a.installs === 0 && a.spendCents > 0;
-                    const shaky = a.confidence != null && a.confidence < CONFIDENCE_WORTH_FLAGGING;
-                    return (
-                      <tr key={a.adsetId} data-testid="ads-adset-row" data-dead={dead || undefined}>
-                        <td>
-                          {a.adsetName ?? a.adsetId}{" "}
-                          {/* A REPEATED NAME IS MARKED AS WELL AS GROUPED, so two adjacent rows
-                              reading the same do not look like one row drawn twice. */}
-                          {dupes.has(a.adsetName ?? a.adsetId) && (
-                            <span className={styles.footnote} style={{ marginLeft: 6 }} data-testid="ads-adset-dupe">
-                              same name, different campaign
-                            </span>
-                          )}
-                          {" "}
-                          {shaky && (
-                            <span data-testid="ads-adset-shaky" style={{ marginLeft: 6, color: "var(--negative)", fontWeight: 700 }}>
-                              only {pct(a.confidence, 0)} of its money in this market
-                            </span>
-                          )}
-                        </td>
-                        <td>{money0(a.spendCents)}</td>
-                        {/* SPEND WITH NOTHING TO SHOW FOR IT is the actionable row in this table —
-                            five of Houston's seven ad sets, $674 of its $1,799 — and nothing used
-                            to mark it. */}
-                        <td data-testid="ads-adset-installs"
-                          style={dead ? { color: "var(--negative)", fontWeight: 700 } : undefined}>
-                          {a.installs == null ? "—" : fmtInt(a.installs)}
-                          {dead && <span style={{ fontWeight: 400 }}> · no installs</span>}
-                        </td>
-                        <td>{a.campaignName ?? "—"}</td>
-                      </tr>
-                    );
-                  })}
-                  {r.adsets.length === 0 && <tr><td colSpan={4}>No ad sets in this window.</td></tr>}
-                </tbody>
-              </table>
+
+              <div className={styles.adsDetailCol}>
+                <div className={styles.adsDetailHead}>Ad sets</div>
+                {r.adsets.map((a) => {
+                  const dead = a.installs === 0 && a.spendCents > 0;
+                  const shaky = a.confidence != null && a.confidence < CONFIDENCE_WORTH_FLAGGING;
+                  return (
+                    <div key={a.adsetId} className={styles.adsLine} data-testid="ads-adset-row" data-dead={dead || undefined}>
+                      <span className={styles.adsLineName} title={a.campaignName ?? undefined}>
+                        {a.adsetName ?? a.adsetId}
+                        {dupes.has(a.adsetName ?? a.adsetId) && (
+                          <span className={styles.adsMuted} data-testid="ads-adset-dupe"> · {a.campaignName ?? "no campaign"}</span>
+                        )}
+                        {shaky && (
+                          <span className={styles.adsDead} data-testid="ads-adset-shaky">
+                            {" "}· only {pct(a.confidence, 0)} here
+                          </span>
+                        )}
+                      </span>
+                      {/* SPEND WITH NOTHING TO SHOW FOR IT is the actionable line in this list —
+                          five of Houston's seven ad sets, $674 of its $1,799 — and the first cut
+                          did not mark it at all. */}
+                      <span className={`${styles.adsLineVal} ${dead ? styles.adsDead : ""}`} data-testid="ads-adset-installs"
+                        style={{ width: 150 }}>
+                        {money0(a.spendCents)} · {a.installs == null ? "—" : dead ? "no installs" : `${fmtInt(a.installs)} installs`}
+                      </span>
+                    </div>
+                  );
+                })}
+                {r.adsets.length === 0 && <div className={styles.adsMuted}>No ad sets in this window.</div>}
+              </div>
             </div>
           </td>
         </tr>

@@ -294,6 +294,47 @@ export function duplicateNames(rows: readonly AdsetRow[]): Set<string> {
  * budget landing elsewhere is worth a mark. */
 export const CONFIDENCE_WORTH_FLAGGING = 0.9;
 
+/* ── THE COLOUR BANDS, AND WHY THEY ARE RELATIVE ────────────────────────────────────────────────
+ *
+ * The mockup eyeballed them against today's seven markets. Fixed dollar thresholds would need
+ * re-tuning every time the account's efficiency moved, and would be wrong the first time it did.
+ *
+ * THE BLENDED RATE IS THE ONLY NON-ARBITRARY REFERENCE ON THE PAGE: total spend over total new
+ * players, which is what a market would cost if budget were spread perfectly evenly. So:
+ *
+ *     GOOD   at or below the blended rate   — this market beats the account average
+ *     MID    up to twice it
+ *     BAD    more than twice it             — it costs more than double the average
+ *
+ * At today's $5.69 blended that is <= $5.69 / $5.69-$11.38 / > $11.38, which reproduces the
+ * mockup's bands except for St. Louis at $11.53 — fifteen cents the wrong side of the line, drawn
+ * amber and banded red. The rule is not bent to match the picture; a threshold chosen to reproduce
+ * a drawing is a threshold that has to be redrawn.
+ *
+ * A DARK MARKET IS NEUTRAL, NOT GOOD. OKC's $7.45 divides 28 days of spend by 49 days of players
+ * and is 38% understated, so colouring it as though it were comparable would recommend the market
+ * on the strength of its having stopped. It is greyed and badged instead. */
+export type Band = "good" | "mid" | "bad" | "dark";
+
+export const BAND_MID_AT = 1;
+export const BAND_BAD_AT = 2;
+
+export function costBand(value: number | null, blended: number | null, dark: boolean): Band | null {
+  if (dark) return "dark";
+  if (value == null || blended == null || blended <= 0) return null;
+  const ratio = value / blended;
+  if (ratio <= BAND_MID_AT) return "good";
+  if (ratio <= BAND_BAD_AT) return "mid";
+  return "bad";
+}
+
+/** Share of players less share of spend, in POINTS. Positive returns more than it takes. Null when
+ *  either side has no total to be a share of. */
+export function reallocationGap(playerShare: number | null, spendShare: number | null): number | null {
+  if (playerShare == null || spendShare == null) return null;
+  return (playerShare - spendShare) * 100;
+}
+
 /** A share of a total, or null when the total is zero. Never 0-for-unknown: a market with no
  *  spend has no share of spend, and printing 0.0% would read as a measurement. */
 export function shareOf(part: number, total: number): number | null {

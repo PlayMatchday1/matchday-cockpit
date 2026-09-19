@@ -21,7 +21,7 @@ export default function LifecycleAdsPage() {
   return (
     <SectionFrame
       title="Ads"
-      subtitle="Meta spend by market against the players it brought in. Set the range below; this page does not follow the time period."
+      subtitle="Meta spend by market against the players it brought in."
       period={false}
       needsGrowthData={false}
     >

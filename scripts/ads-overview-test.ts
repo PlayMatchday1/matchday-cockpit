@@ -18,7 +18,8 @@
  */
 import {
   buildAdsOverview, servedBreakdown, shareOf, perUnit, PAID_MARKETS,
-  orderAdsets, duplicateNames, CONFIDENCE_WORTH_FLAGGING,
+  orderAdsets, duplicateNames, CONFIDENCE_WORTH_FLAGGING, costBand, reallocationGap,
+  BAND_MID_AT, BAND_BAD_AT,
   type GeoRow, type FlatRow, type DimRow, type AcqRow, type AdsetRow,
 } from "../src/lib/adsOverview";
 import { UNKNOWN_MARKET } from "../src/lib/metaAdSpend";
@@ -194,6 +195,46 @@ console.log("\nduplicate ad set names sit together");
   is("control — a list with no duplicates reports none", [...duplicateNames([mk("1", "a", 1), mk("2", "b", 2)])], []);
   is("the flagging threshold is above the attribution floor, not equal to it",
     CONFIDENCE_WORTH_FLAGGING > 0.6, true);
+}
+
+console.log("\nthe colour bands are relative to the blended rate, not fixed dollars");
+{
+  /* THE LIVE NUMBERS. Blended is $5.69 across the account, so green ends there, amber at twice it
+   * ($11.38), red beyond. Fixed thresholds would need re-tuning the first time efficiency moved. */
+  const blended = 5.69;
+  const at = (v: number) => costBand(v, blended, false);
+  is("San Antonio at $2.22 beats the blended rate", at(2.22), "good");
+  is("Austin at $3.20 too", at(3.20), "good");
+  is("Houston at $4.03 too", at(4.03), "good");
+  is("the blended rate itself is the top of green, not the bottom of amber", at(blended), "good");
+  is("Dallas at $19.68 is more than twice it", at(19.68), "bad");
+  is("Atlanta at $18.93 too", at(18.93), "bad");
+  /* STATED RATHER THAN TUNED AWAY: the mockup eyeballed St. Louis amber and the rule bands it red,
+   * fifteen cents over 2x. A threshold picked to reproduce a drawing is one that gets redrawn. */
+  is("St. Louis at $11.53 lands RED, fifteen cents over twice the blended rate", at(11.53), "bad");
+  is("control — and $11.30, just under, is amber", at(11.30), "mid");
+
+  /* A DARK MARKET IS NEUTRAL, NOT GOOD. OKC's $7.45 divides 28 days of spend by 49 days of players
+   * and is 38% understated; banding it would recommend the market for having stopped. */
+  is("a dark market is greyed whatever its number says", costBand(7.45, blended, true), "dark");
+  is("control — the same number NOT dark would have been amber", costBand(7.45, blended, false), "mid");
+  is("no blended rate means no band, rather than a default one", costBand(5, null, false), null);
+  is("no value means no band", costBand(null, blended, false), null);
+  is("the breakpoints are where they say they are", [BAND_MID_AT, BAND_BAD_AT], [1, 2]);
+}
+
+console.log("\nthe reallocation gap is players less spend, in points");
+{
+  // Houston: 32.4% of players on 23.0% of spend.
+  is("a market returning more than it takes is positive",
+    Math.round((reallocationGap(0.324, 0.230) ?? 0) * 10) / 10, 9.4);
+  // Dallas: 6.1% of players on 21.1% of spend.
+  is("…and one taking more than it returns is negative",
+    Math.round((reallocationGap(0.061, 0.211) ?? 0) * 10) / 10, -15.0);
+  is("control — the two are opposite signs, which is the whole read",
+    (reallocationGap(0.324, 0.230) ?? 0) > 0 && (reallocationGap(0.061, 0.211) ?? 0) < 0, true);
+  is("a missing share is not a zero gap", reallocationGap(null, 0.2), null);
+  is("…on either side", reallocationGap(0.2, null), null);
 }
 
 console.log(`\n${pass} passed, ${fails.length} failed`);

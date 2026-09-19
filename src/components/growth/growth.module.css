@@ -1175,3 +1175,207 @@
   margin: 4px 0 0; font-size: 12.5px; line-height: 1.55; color: #5b7568;
 }
 .methodList dd b { color: #12241d; font-weight: 700; }
+
+/* ══ ADS OVERVIEW ════════════════════════════════════════════════════════════
+ * The mockup's palette mapped onto the house tokens rather than imported: its
+ * #2C7A4B / #C98A2E / #A3231B / #B9C7BD are --ok-ink / --gold-ink / --negative
+ * / --ns-ink to within a shade, and --accent is already the fill-only green.
+ * Two fills have no token because nothing here has needed a red or a grey BAR
+ * before; they are declared once, next to the ones they sit beside.
+ *
+ * THE COLUMN THAT CARRIES THE FINDING. Austin at $3.20 against Dallas at $19.68
+ * is a six-times spread that read as seven identical numbers, because every cell
+ * on the row had the same size and weight. Cost per new player is now the only
+ * thing on the row at 17px, coloured by band, with a bar scaled across the
+ * markets so the spread lands before any arithmetic. */
+.ads {
+  --ads-neg-fill: #c2543a;
+  --ads-dark-fill: #b9c7bd;
+  --ads-track: #f1f4ef;
+}
+
+/* The one-line summary beside the title, and the controls opposite it. */
+.adsBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.adsSummary {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.adsControls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* Range pills: one segmented group, not a card. */
+.adsPills {
+  display: inline-flex;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.adsPill {
+  padding: 7px 13px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+}
+.adsPill:first-child { border-left: 0; }
+.adsPillOn { background: var(--forest); color: #fff; font-weight: 600; }
+.adsBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+}
+.adsBtnOn { background: var(--mint); color: var(--forest); border-color: var(--div-above-2); font-weight: 600; }
+
+/* ONE STRIP, NOT FOUR BLOCKS. The range note, the two-attributions block and the
+ * censoring block were three stacked banners and a paragraph of column
+ * definitions above a table nobody had reached yet. */
+.adsNote {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  background: var(--chip-bg);
+  border-radius: 9px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.adsNoteWhy {
+  margin-left: auto;
+  flex-shrink: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--ok-ink);
+  cursor: pointer;
+}
+.adsWhy {
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--ink);
+}
+.adsWhy p { margin: 0 0 8px; }
+.adsWhy p:last-child { margin-bottom: 0; }
+
+/* ── the table ─────────────────────────────────────────────────────────────── */
+.adsTable { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.adsTable th {
+  padding: 10px 11px;
+  text-align: right;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  background: var(--slot-bg);
+  white-space: nowrap;
+}
+.adsTable th:first-child, .adsTable td:first-child { text-align: left; padding-left: 20px; }
+.adsTable td {
+  padding: 11px 11px;
+  text-align: right;
+  border-bottom: 1px solid var(--hair);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  white-space: nowrap;
+}
+/* THE HEADLINE COLUMN IS MARKED IN THE HEADER TOO, so the eye knows before it
+ * reaches a number which column it is being asked to read. */
+.adsHeadKey { color: var(--ink); font-weight: 700; text-align: left; }
+.adsRow { cursor: pointer; }
+.adsRow:hover { background: var(--hair); }
+.adsRowOpen { background: var(--mint); }
+.adsMarket { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; color: var(--forest); }
+.adsCaret { color: var(--muted); flex-shrink: 0; }
+
+/* A HINT, NOT A SECOND NUMBER. CPI drops to the size of a caption because it is
+ * context for the headline, not a competing measure. */
+.adsMuted { font-size: 0.75rem; color: var(--muted); }
+
+.adsKey { font-size: 1.05rem; font-weight: 600; text-align: right; padding-right: 0; }
+.adsKeyGood { color: var(--ok-ink); }
+.adsKeyMid  { color: var(--gold-ink); }
+.adsKeyBad  { color: var(--negative); font-weight: 700; }
+.adsKeyDark { color: var(--ns-ink); }
+
+.adsTrack { width: 132px; height: 7px; background: var(--ads-track); border-radius: 4px; overflow: hidden; }
+.adsFill { height: 7px; border-radius: 4px; }
+.adsFillGood { background: var(--accent); }
+.adsFillMid  { background: var(--gold-dot); }
+.adsFillBad  { background: var(--ads-neg-fill); }
+.adsFillDark { background: var(--ads-dark-fill); }
+
+/* ── the diverging bar: budget taken against players returned ──────────────── */
+.adsDiv { width: 118px; height: 16px; display: flex; align-items: center; }
+.adsDivHalf { width: 59px; display: flex; }
+.adsDivLeft { justify-content: flex-end; }
+.adsDivAxis { width: 1px; height: 16px; background: var(--chip-line); flex-shrink: 0; }
+.adsDivBar { height: 9px; border-radius: 2px; }
+
+.adsBadge {
+  margin-left: 2px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--chip-bg);
+  border: 1px solid var(--chip-line);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--ns-ink);
+  text-transform: uppercase;
+}
+.adsTotal td { background: var(--slot-bg); font-weight: 600; border-bottom: 0; }
+
+/* ── the expansion ─────────────────────────────────────────────────────────── */
+.adsDetail { display: flex; gap: 32px; padding: 2px 20px 18px 40px; flex-wrap: wrap; }
+.adsDetailCol { flex: 1 1 320px; min-width: 300px; }
+.adsDetailHead {
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 9px;
+}
+.adsLine { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+.adsLineName { flex: 1 1 auto; min-width: 0; font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adsLineTrack { width: 180px; height: 8px; background: var(--ads-track); border-radius: 4px; flex-shrink: 0; overflow: hidden; }
+.adsLineVal { width: 74px; text-align: right; font-size: 0.78rem; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.adsUnknown { color: var(--gold-ink); font-weight: 600; }
+.adsDead { color: var(--negative); font-weight: 600; }
+.adsFoot {
+  display: flex;
+  justify-content: space-between;
+  gap: 32px;
+  padding: 12px 20px 16px;
+  font-size: 0.72rem;
+  line-height: 1.55;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
