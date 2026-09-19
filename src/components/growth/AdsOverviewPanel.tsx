@@ -66,15 +66,28 @@ const money2 = (cents: number | null) => (cents == null ? "—" : `$${(cents / 1
 const KEY_CLASS: Record<Band, string> = {
   good: styles.adsKeyGood, mid: styles.adsKeyMid, bad: styles.adsKeyBad, dark: styles.adsKeyDark,
 };
-const FILL_CLASS: Record<Band, string> = {
-  good: styles.adsFillGood, mid: styles.adsFillMid, bad: styles.adsFillBad, dark: styles.adsFillDark,
-};
 
-/** A header with its definition on hover, replacing the paragraph that used to sit above the table. */
+/* A header with its definition on hover, replacing the paragraph that used to sit above the table.
+ *
+ * A CIRCLED i, NOT A DOTTED UNDERLINE. The underline did not read as interactive — it looks like
+ * emphasis, or like nothing, and it is easy to miss entirely. A glyph after the name says there is
+ * something here to ask. Every header that carries a definition shows one, so its absence means
+ * "nothing more to say" rather than "we ran out of room". */
+function InfoDot() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+      strokeLinecap="round" style={{ opacity: 0.55, flexShrink: 0 }} aria-hidden>
+      <circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 7.5v.01" />
+    </svg>
+  );
+}
+
 function Th({ label, tip, className }: { label: string; tip?: string; className?: string }) {
   return (
     <th className={className}>
-      {tip ? <span title={tip} style={{ cursor: "help", borderBottom: "1px dotted currentColor" }}>{label}</span> : label}
+      {tip ? (
+        <span title={tip} className={styles.adsTh}>{label}<InfoDot /></span>
+      ) : label}
     </th>
   );
 }
@@ -119,8 +132,6 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
       gap: reallocationGap(shareOf(r.becamePlayers, totals?.becamePlayers ?? 0), shareOf(r.spendCents, totals?.spendCents ?? 0)),
     };
   }), [rows, windowDays, blended, totals]);
-  const maxCpnp = Math.max(1, ...view.map((v) => v.cpnp ?? 0));
-  const maxGap = Math.max(1, ...view.map((v) => Math.abs(v.gap ?? 0)));
 
   return (
     <div className={styles.ads}>
@@ -214,9 +225,11 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
                     <Th label="CPI" tip="Spend divided by installs. Context for the headline, not a competing measure." />
                     {allCols && <Th label="Regs" tip="Registrations in this market during the window, by the player's declared city." />}
                     <Th label="New players" tip="Everyone who registered in this market during the window and has since played a match. It counts every new player, not only the ones the ads brought." />
+                    {/* NO BAR BESIDE IT. The figure is already the largest thing on the row and
+                        colour-coded; a bar re-encoding the same number across seven rows added a
+                        column and no information. */}
                     <Th label="Cost per new player" className={styles.adsHeadKey}
                       tip="Ad spend in this market divided by every new player in it, organic ones included. A ratio for comparing markets against each other, not a cost of acquisition." />
-                    <th />
                     {allCols && <Th label="7d" tip="Registrations that played within 7 days. Settled: every registration in the window has had that long." />}
                     {allCols && <Th label="30d" tip="Registrations that played within 30 days." />}
                     {allCols && <Th label="Home" tip="Share of this market's spend served in its own comscore market." />}
@@ -226,16 +239,20 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
                         spend" is a thirty-seven character header over a five-character number, and
                         it pushed that number off the right edge of the card at 1440px — the signed
                         gap being the thing the bar exists to anchor. */}
+                    {/* THE DIVERGING BAR IS GONE AND ITS FAILURE IS WORTH RECORDING: the 1px
+                        centre axis did not render against the row background, so there was nothing
+                        to diverge FROM and the lengths carried no meaning at all. The signed number
+                        was also stranded at the far right, away from the bar it annotated. The
+                        number now sits where the bar was. */}
                     <Th label="Players less spend" className={styles.adsHeadKey}
                       tip="This market's share of new players minus its share of spend, in points. Positive returns more than it takes; negative takes more budget than it returns." />
-                    <th />
                   </tr>
                 </thead>
                 <tbody>
                   {view.map((v) => (
                     <Row key={v.r.marketKey} v={v} open={open === v.r.marketKey} allCols={allCols}
                       onToggle={() => setOpen((o) => (o === v.r.marketKey ? null : v.r.marketKey))}
-                      maxCpnp={maxCpnp} maxGap={maxGap} windowDays={windowDays} />
+                      windowDays={windowDays} />
                   ))}
                   <tr className={styles.adsTotal} data-testid="ads-total-row">
                     <td>Total</td>
@@ -245,13 +262,12 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
                     {allCols && <td>{fmtInt(totals?.registrations ?? 0)}</td>}
                     <td>{fmtInt(totals?.becamePlayers ?? 0)}</td>
                     <td className={styles.adsKey}>{money2(blended)}</td>
-                    <td />
                     {allCols && <td>{fmtInt(totals?.playedWithin7d ?? 0)}</td>}
                     {allCols && <td>{fmtInt(rows.reduce((a, r) => a + r.playedWithin30d, 0))}</td>}
                     {allCols && <td colSpan={3} />}
-                    {/* NO TOTAL FOR THE SHARES. They are shares OF this total, so a total share is
-                        100% by construction and a total gap is zero. */}
-                    <td colSpan={2} />
+                    {/* NO TOTAL GAP. It is a share of this total minus another share of it, so
+                        the total is zero by construction. */}
+                    <td />
                   </tr>
                 </tbody>
               </table>
@@ -309,16 +325,16 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
 
 type ViewRow = { r: MarketRow; span: number; dark: boolean; cpnp: number | null; band: Band | null; gap: number | null };
 
-function Row({ v, open, onToggle, maxCpnp, maxGap, windowDays, allCols }: {
+function Row({ v, open, onToggle, windowDays, allCols }: {
   v: ViewRow; open: boolean; onToggle: () => void;
-  maxCpnp: number; maxGap: number; windowDays: number; allCols: boolean;
+  windowDays: number; allCols: boolean;
 }) {
   const { r, band, cpnp, gap, dark } = v;
   const keyCls = band ? KEY_CLASS[band] : "";
-  const fillCls = band ? FILL_CLASS[band] : styles.adsFillDark;
   const dupes = duplicateNames(r.adsets);
   const maxServed = Math.max(1, ...r.served.map((s) => s.spendCents));
-  const cols = 8 + (allCols ? 5 : 0);
+  // Two bar columns went; the expansion spans what is left.
+  const cols = 6 + (allCols ? 5 : 0);
 
   return (
     <>
@@ -343,39 +359,14 @@ function Row({ v, open, onToggle, maxCpnp, maxGap, windowDays, allCols }: {
         {allCols && <td>{fmtInt(r.registrations)}</td>}
         <td data-testid="ads-newplayers">{fmtInt(r.becamePlayers)}</td>
         <td className={`${styles.adsKey} ${keyCls}`} data-testid="ads-cpnp">{money2(cpnp)}</td>
-        <td>
-          <div className={styles.adsTrack}>
-            <div className={`${styles.adsFill} ${fillCls}`}
-              style={{ width: `${Math.min(100, ((cpnp ?? 0) / maxCpnp) * 100)}%` }} />
-          </div>
-        </td>
         {allCols && <td>{fmtInt(r.playedWithin7d)}</td>}
         {allCols && <td>{fmtInt(r.playedWithin30d)}</td>}
         {allCols && <td>{pct(shareOf(r.homeCents, r.spendCents))}</td>}
         {allCols && <td className={r.unknownCents > 0 ? styles.adsUnknown : undefined}>{pct(shareOf(r.unknownCents, r.spendCents))}</td>}
         {allCols && <td>{pct(shareOf(r.otherNamedCents, r.spendCents))}</td>}
-        {/* ONE DIVERGING BAR REPLACES TWO PERCENTAGES. Left of the axis takes more budget than it
-            returns; right of it returns more than it takes. The subtraction was the reallocation
-            read and it was being left to the reader. */}
-        <td>
-          <div className={styles.adsDiv}>
-            <div className={`${styles.adsDivHalf} ${styles.adsDivLeft}`}>
-              {gap != null && gap < 0 && (
-                <div className={styles.adsDivBar}
-                  style={{ width: `${(Math.abs(gap) / maxGap) * 100}%`, background: `var(--ads-neg-fill)` }} />
-              )}
-            </div>
-            <div className={styles.adsDivAxis} />
-            <div className={styles.adsDivHalf}>
-              {gap != null && gap > 0 && (
-                <div className={styles.adsDivBar}
-                  style={{ width: `${(gap / maxGap) * 100}%`, background: `var(--accent)` }} />
-              )}
-            </div>
-          </div>
-        </td>
-        <td data-testid="ads-gap" className={gap == null ? undefined : gap > 0 ? styles.adsKeyGood : styles.adsKeyBad}
-          style={{ fontSize: "0.78rem", fontWeight: 600 }}>
+        {/* THE SIGNED GAP ALONE, where the bar was. One number carries the whole reallocation
+            read: positive returns more than it takes, negative takes more than it returns. */}
+        <td data-testid="ads-gap" className={`${styles.adsGap} ${gap == null ? "" : gap > 0 ? styles.adsKeyGood : styles.adsKeyBad}`}>
           {gap == null ? "—" : `${gap > 0 ? "+" : "−"}${Math.abs(gap).toFixed(1)}`}
         </td>
       </tr>

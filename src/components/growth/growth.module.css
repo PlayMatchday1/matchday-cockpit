@@ -1181,7 +1181,7 @@
  * #2C7A4B / #C98A2E / #A3231B / #B9C7BD are --ok-ink / --gold-ink / --negative
  * / --ns-ink to within a shade, and --accent is already the fill-only green.
  * Two fills have no token because nothing here has needed a red or a grey BAR
- * before; they are declared once, next to the ones they sit beside.
+ * before.
  *
  * THE COLUMN THAT CARRIES THE FINDING. Austin at $3.20 against Dallas at $19.68
  * is a six-times spread that read as seven identical numbers, because every cell
@@ -1189,8 +1189,6 @@
  * thing on the row at 17px, coloured by band, with a bar scaled across the
  * markets so the spread lands before any arithmetic. */
 .ads {
-  --ads-neg-fill: #c2543a;
-  --ads-dark-fill: #b9c7bd;
   --ads-track: #f1f4ef;
 }
 
@@ -1307,7 +1305,9 @@
 }
 /* THE HEADLINE COLUMN IS MARKED IN THE HEADER TOO, so the eye knows before it
  * reaches a number which column it is being asked to read. */
-.adsHeadKey { color: var(--ink); font-weight: 700; text-align: left; }
+.adsHeadKey { color: var(--ink); font-weight: 700; }
+/* THE GLYPH RIDES WITH THE NAME, so a wrapped header never leaves its icon on its own line. */
+.adsTh { display: inline-flex; align-items: center; gap: 5px; cursor: help; }
 .adsRow { cursor: pointer; }
 .adsRow:hover { background: var(--hair); }
 .adsRowOpen { background: var(--mint); }
@@ -1324,19 +1324,15 @@
 .adsKeyBad  { color: var(--negative); font-weight: 700; }
 .adsKeyDark { color: var(--ns-ink); }
 
-.adsTrack { width: 132px; height: 7px; background: var(--ads-track); border-radius: 4px; overflow: hidden; }
+/* THE ONLY BAR LEFT IS IN THE EXPANSION. Two were dropped from the row: the cost-per-player bar
+ * re-encoded a number that is already the largest thing on the row and colour-coded, and across
+ * seven rows the figures compare perfectly well on their own. The diverging bar failed outright —
+ * its 1px centre axis did not render against the row background, so there was nothing to diverge
+ * from and the lengths meant nothing. */
 .adsFill { height: 7px; border-radius: 4px; }
-.adsFillGood { background: var(--accent); }
-.adsFillMid  { background: var(--gold-dot); }
-.adsFillBad  { background: var(--ads-neg-fill); }
-.adsFillDark { background: var(--ads-dark-fill); }
 
-/* ── the diverging bar: budget taken against players returned ──────────────── */
-.adsDiv { width: 118px; height: 16px; display: flex; align-items: center; }
-.adsDivHalf { width: 59px; display: flex; }
-.adsDivLeft { justify-content: flex-end; }
-.adsDivAxis { width: 1px; height: 16px; background: var(--chip-line); flex-shrink: 0; }
-.adsDivBar { height: 9px; border-radius: 2px; }
+/* The signed gap, sitting where the diverging bar used to be. */
+.adsGap { font-size: 0.8rem; font-weight: 600; }
 
 .adsBadge {
   margin-left: 2px;
