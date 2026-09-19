@@ -349,31 +349,89 @@ export function assertConfinedRoute(
 }
 
 /* ── THE CITY BOUNDARY ON A PLAYER-GRAIN ROUTE ─────────────────────────────────────────────────
- * A confined account may read and adjust credits ONLY for players whose stated city is its own.
- * The city comes from app_users.city_identifier via the session — never from the request.
  *
- * WHY preferable_city_name AND NOT A ROSTER TEST. There is no player-in-city definition to build
- * one from: GET /admin/players rejects every city parameter, and a roster-based test breaks on real
- * people — someone who plays in Warsaw but prefers Austin, someone who prefers Warsaw and has never
- * played. A stated preference is the only field that exists, and in a NEW market there is no legacy
- * overlap for it to be wrong about.
+ * THE RULE IS A UNION: a confined account may act on a player whose STATED HOME CITY is its city,
+ * OR who has PLAYED AT LEAST ONE MATCH in its city.
  *
- * IT IS PLAYER-EDITABLE, KNOWINGLY. A player can change their own preferable city, so this bounds
- * WHO AN OPERATOR MAY ACT ON, not who may enter the set. A player switching to Warsaw does not
- * credit themselves — it puts them in a list an operator still has to act on. The operator is the
- * control. Revisit if a confined market ever stops being new.
+ * ── THIS FILE USED TO ARGUE THE OPPOSITE, AND THE DATA INVERTED THE ARGUMENT ───────────────────
+ * The comment here read: "a roster-based test breaks on real people — someone who plays in Warsaw
+ * but prefers Austin, someone who prefers Warsaw and has never played. A stated preference is the
+ * only city that exists at player level." Both halves were wrong in the same direction.
  *
- * NULL IS A REFUSAL. 4,187 players have no preferred city and none of them belong to anybody.
- * Deny by default: an unreadable player, a missing city, or any mismatch is a 403 by id. */
-export function playerCityAllowed(confinedCity: string | null, player: Record<string, unknown>): boolean {
+ * The first half named a hypothetical. MEASURED on production 2026-09-19, he is two people:
+ * Junior Mafunga (88519, home Austin, +48 mobile, two matches at Hala Pilkarska Bemowo) and Sulav
+ * Lama (88512, home New York City, +48 mobile, two matches there). Neither has ever played a match
+ * in the city they named. Both were invisible to the Warsaw account, and the lookup route's own
+ * header had predicted exactly them.
+ *
+ * The second half is answered by the union rather than by an intersection. A Warsaw signup who has
+ * never played is still in scope BECAUSE HOME CITY IS STILL ONE OF THE TWO BRANCHES. The finder
+ * once ANDed these two tests instead of ORing them and lost every registered-but-never-played
+ * signup; OR keeps them and adds the travellers. AND and OR are not a detail here, they are the
+ * whole difference between the bug and the fix.
+ *
+ * IT IS STILL PLAYER-EDITABLE ON ONE BRANCH, KNOWINGLY. A player can change their own preferable
+ * city, so that branch bounds WHO AN OPERATOR MAY ACT ON, not who may enter the set. The played-in
+ * branch cannot be self-served: it is a match a player actually turned up to in that city.
+ *
+ * NULL HOME CITY IS NOT A REFUSAL BY ITSELF ANY MORE. It refuses only when the played-in branch is
+ * also false. A player with no stated city who played in Warsaw is a Warsaw player. Derive the
+ * population rather than quoting it: the figure once written here (4,187), the one in an earlier
+ * brief (4,010) and the live number are three stale snapshots of a moving count.
+ *
+ * DENY BY DEFAULT ON THE EVIDENCE. playedInScope defaults to FALSE, so a caller that forgets to
+ * gather it gets today's narrower answer rather than an accidental widening. The failure direction
+ * of a forgotten argument is a 403, never an unintended grant. */
+
+/** What the played-in branch needs to know, gathered by the caller from the mirror. */
+export type ScopeEvidence = {
+  /** The player's stated city NAME ("Warsaw"), from the payload or the mirror row. */
+  homeCityName?: string | null;
+  /** The player's stated city ABBR ("WAW"), when the payload carries one. */
+  homeCityAbbr?: string | null;
+  /** True when this player has >= 1 non-cancelled spot in a match in the confined city. */
+  playedInScope?: boolean;
+};
+
+/**
+ * THE ONE DECISION, and every enforcement point calls it rather than re-writing the OR.
+ *
+ * There are four of them in the lookup route alone (the mirror query, the mirror post-filter, the
+ * API post-filter and the profile 403) plus the three write gates, and a union written seven times
+ * is a union that will disagree with itself.
+ */
+export function playerInConfinedScope(confinedCity: string | null, ev: ScopeEvidence): boolean {
   if (!confinedCity) return true; // unconfined accounts are unaffected
-  const pc = player.preferableCity as Record<string, unknown> | null | undefined;
-  if (!pc) return false;
+  if (ev.playedInScope === true) return true;
   // `abbr` IS the same identifier app_users stores ("WAW"), so the common path needs no name
   // mapping at all. The name is a fallback for a payload that omits abbr, never the primary test.
-  const abbr = typeof pc.abbr === "string" ? pc.abbr.trim() : "";
+  const abbr = typeof ev.homeCityAbbr === "string" ? ev.homeCityAbbr.trim() : "";
   if (abbr) return abbr === confinedCity;
-  const name = typeof pc.name === "string" ? pc.name.trim() : "";
+  const name = typeof ev.homeCityName === "string" ? ev.homeCityName.trim() : "";
   const want = cityNameFor(confinedCity);
   return !!name && !!want && name === want;
+}
+
+/**
+ * The write gate for credits, strikes and ban, reading the API's player payload.
+ *
+ * THE SHAPE CHANGED AND THE THIRD ARGUMENT IS WHY. The payload this receives is
+ * GET /admin/players/{id}, which carries preferableCity and NO match history at all, so the
+ * played-in branch cannot be answered from it. The caller resolves that against the mirror and
+ * passes the answer in. The alternative was making this function async and giving a pure predicate
+ * a database dependency, which would have put a network call inside every gate and made the rule
+ * untestable offline.
+ */
+export function playerCityAllowed(
+  confinedCity: string | null,
+  player: Record<string, unknown>,
+  playedInScope = false,
+): boolean {
+  if (!confinedCity) return true;
+  const pc = player.preferableCity as Record<string, unknown> | null | undefined;
+  return playerInConfinedScope(confinedCity, {
+    homeCityAbbr: pc && typeof pc.abbr === "string" ? pc.abbr : null,
+    homeCityName: pc && typeof pc.name === "string" ? pc.name : null,
+    playedInScope,
+  });
 }

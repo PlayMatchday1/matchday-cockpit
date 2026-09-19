@@ -4,7 +4,7 @@
 // rule and someone will eventually "fix" the inconsistency; this fails when they do.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { isConfined, confinedCity, confinedCityName, assertConfinedScope, CONFINED_CAPABILITIES, CONFINED_RAIL_KEYS, confinementSummary, assertConfinedRoute, isConfinedRouteAllowed } from "../src/lib/cityConfinement";
+import { isConfined, confinedCity, confinedCityName, assertConfinedScope, CONFINED_CAPABILITIES, CONFINED_RAIL_KEYS, confinementSummary, assertConfinedRoute, isConfinedRouteAllowed, playerInConfinedScope, playerCityAllowed } from "../src/lib/cityConfinement";
 import { can } from "../src/lib/capabilities";
 
 let n = 0;
@@ -201,6 +201,84 @@ console.log("\n── the route allowlist ──");
     assert.equal(assertConfinedRoute(WAW, "https://x/api/match-chats/active").ok, true));
   t("a query string cannot smuggle a path past it", () =>
     assert.equal(assertConfinedRoute(WAW, "https://x/api/manager-pay/aliases?x=/api/reviews").ok, false));
+}
+
+console.log("\n── the player boundary is a UNION, not an intersection ──");
+{
+  const WAWC = "WAW";
+  const home = { homeCityName: "Warsaw" };
+  const away = { homeCityName: "Austin" };
+
+  /* BRANCH ONE — home city. This is what the boundary has always been, and it MUST survive:
+   * the finder once ANDed the two branches and lost every registered-but-never-played signup. */
+  t("home city in scope, never played: still visible", () =>
+    assert.equal(playerInConfinedScope(WAWC, { ...home, playedInScope: false }), true));
+  t("  …and that is the whole regression the old intersection caused", () =>
+    assert.equal(playerInConfinedScope(WAWC, { homeCityName: "Warsaw", playedInScope: false }), true));
+
+  /* BRANCH TWO — a played match. Junior Mafunga and Sulav Lama, by shape. */
+  t("home city elsewhere but played here: NOW visible", () =>
+    assert.equal(playerInConfinedScope(WAWC, { ...away, playedInScope: true }), true));
+  t("no home city at all but played here: visible", () =>
+    assert.equal(playerInConfinedScope(WAWC, { homeCityName: null, playedInScope: true }), true));
+
+  /* NEITHER BRANCH — the control that proves the union is a union and not "everybody". */
+  t("CONTROL — home elsewhere and never played here: still refused", () =>
+    assert.equal(playerInConfinedScope(WAWC, { ...away, playedInScope: false }), false));
+  t("CONTROL — no home city and never played here: still refused", () =>
+    assert.equal(playerInConfinedScope(WAWC, { homeCityName: null, playedInScope: false }), false));
+  t("CONTROL — an unconfined account is unaffected either way", () =>
+    assert.equal(playerInConfinedScope(null, { ...away, playedInScope: false }), true));
+
+  /* THE ABBR PATH, which is the common one: app_users stores "WAW" and so does the payload. */
+  t("the abbr is the primary test", () =>
+    assert.equal(playerInConfinedScope(WAWC, { homeCityAbbr: "WAW" }), true));
+  t("  …and a different abbr is refused", () =>
+    assert.equal(playerInConfinedScope(WAWC, { homeCityAbbr: "ATX" }), false));
+  t("  …and abbr WINS over a name that disagrees", () =>
+    assert.equal(playerInConfinedScope(WAWC, { homeCityAbbr: "ATX", homeCityName: "Warsaw" }), false));
+
+  /* ── THE WRITE GATE, AND ITS DENY-BY-DEFAULT THIRD ARGUMENT ─────────────────────────────────
+   * playerCityAllowed gained a `playedInScope` parameter because the payload it reads
+   * (GET /admin/players/{id}) carries no match history. It DEFAULTS TO FALSE so a caller that
+   * forgets to gather the evidence gets today's narrower answer — a 403 — rather than an
+   * accidental widening. The direction of a forgotten argument is the whole point. */
+  const junior = { preferableCity: { abbr: "ATX", name: "Austin" } };
+  const warsawLocal = { preferableCity: { abbr: "WAW", name: "Warsaw" } };
+  t("the write gate still admits a Warsaw-home player", () =>
+    assert.equal(playerCityAllowed(WAWC, warsawLocal), true));
+  t("the write gate admits a traveller ONCE the evidence is passed", () =>
+    assert.equal(playerCityAllowed(WAWC, junior, true), true));
+  t("CONTROL — and refuses the same player when it is not", () =>
+    assert.equal(playerCityAllowed(WAWC, junior, false), false));
+  t("CONTROL — a forgotten third argument denies rather than grants", () =>
+    assert.equal(playerCityAllowed(WAWC, junior), false));
+  t("CONTROL — a player with no preferableCity key at all is refused without evidence", () =>
+    assert.equal(playerCityAllowed(WAWC, {}), false));
+  t("  …and admitted with it", () =>
+    assert.equal(playerCityAllowed(WAWC, {}, true), true));
+  t("CONTROL — an unconfined caller is allowed whatever the payload says", () =>
+    assert.equal(playerCityAllowed(null, junior), true));
+}
+
+console.log("\n── the boundary widens WHO is inside it, never HOW it is enforced ──");
+{
+  /* assertScope is untouched by any of this, and this is the assertion that says so. Widening the
+   * set a confined account may see must not soften the refusal when it NAMES another city. */
+  t("a confined account naming another city is still refused", () =>
+    assert.equal(assertConfinedScope(WAW, "ATX").ok, false));
+  t("  …with a 403, not a silent re-point", () => {
+    const r = assertConfinedScope(WAW, "ATX");
+    assert.equal(r.ok === false && r.status, 403);
+  });
+  t("  …and naming its OWN city is still fine", () =>
+    assert.equal(assertConfinedScope(WAW, "WAW").ok, true));
+  t("  …and naming nothing falls back to its own scope", () =>
+    assert.equal(assertConfinedScope(WAW, null).ok, true));
+  t("CONTROL — no new route opened for any of this", () =>
+    assert.equal(isConfinedRouteAllowed("/api/players/finder"), true));
+  t("CONTROL — …and the allowlist still refuses what it refused", () =>
+    assert.equal(isConfinedRouteAllowed("/api/manager-pay/aliases"), false));
 }
 
 console.log("\n── the sentence on the User access screen ──");

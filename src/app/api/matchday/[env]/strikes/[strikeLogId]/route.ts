@@ -28,6 +28,9 @@ import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { CONFINED_CITY_ERROR, playerCityAllowed } from "@/lib/cityConfinement";
+import { hasPlayedInCity } from "@/lib/playerCityScope";
+import { cityNameFor } from "@/lib/cityScope";
+import { makeServerClient } from "@/lib/supabaseServer";
 import { strikeControl, removalEffect, strikeRemovalApplied, STRIKE_LIMIT } from "@/lib/playerLookupModel";
 import type { Change } from "@/lib/changeLogModel";
 
@@ -93,7 +96,14 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ env: string;
     /* CONFINEMENT IS CHECKED ON THE SERVER'S COPY OF THE PLAYER, not on a list that happened not to
      * offer them. The id can be sent directly, so a Warsaw operator must be refused here and not
      * merely find the control absent from a page. */
-    if (!playerCityAllowed(auth.confinedCity, playerRaw)) {
+    /* THE PLAYED-IN HALF OF THE BOUNDARY, resolved against the mirror. The payload above is
+     * GET /admin/players/{id} and carries no match history, so the union's second branch cannot be
+     * answered from it. Asked only when the account is confined: an unconfined caller is allowed
+     * by the first line of playerCityAllowed and must not pay for a query to prove it. */
+    const playedInScopeP = auth.confinedCity
+      ? await hasPlayedInCity(makeServerClient(), cityNameFor(auth.confinedCity) ?? "", Number(playerId))
+      : false;
+    if (!playerCityAllowed(auth.confinedCity, playerRaw, playedInScopeP)) {
       console.warn(`[strikes] 403: ${auth.email} (confined to ${auth.confinedCity}) tried to remove strike ${logId} on player ${playerId}`);
       return Response.json({ error: CONFINED_CITY_ERROR }, { status: 403 });
     }

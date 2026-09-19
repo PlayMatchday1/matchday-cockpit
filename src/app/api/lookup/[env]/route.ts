@@ -26,7 +26,9 @@
 
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { cityNameFor } from "@/lib/cityScope";
-import { CONFINED_CITY_ERROR } from "@/lib/cityConfinement";
+import { CONFINED_CITY_ERROR, playerInConfinedScope } from "@/lib/cityConfinement";
+import { playedInCity, hasPlayedInCity, playerIdsWhoPlayedIn, ScopeTooLargeError } from "@/lib/playerCityScope";
+import { isFakePlayerEmail } from "@/lib/mdapiFakePlayer";
 import { apiGet, StageHostGuardError, StageConfigError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import {
   detectKind, serverQuery, usesMirror, splitNameTerms, nameOrFilter, SEARCH_PAGE_SIZE,
@@ -69,6 +71,21 @@ function lightRow(r: Record<string, unknown>) {
   };
 }
 
+/* ── WHY A SEARCH CAME BACK SHORT, IN THE LOGS AND NOWHERE ELSE ────────────────────────────────
+ * Junior read as a data problem for a week because the page said "No player found" and no surface
+ * anywhere said a row had been removed by scope. Nothing changes on screen — telling a confined
+ * operator "3 hidden" would leak the existence of players outside their city — but the next time
+ * this happens the answer is one log line instead of four rounds of reading this file.
+ *
+ * ONLY WHEN IT ACTUALLY DROPS SOMETHING. A line per search would bury the one that matters. */
+function logScopeDrop(kind: string, email: string, city: string | null, before: number, after: number) {
+  if (after >= before) return;
+  console.warn(
+    `[lookup] city scope removed ${before - after} of ${before} ${kind} result(s) for ${email} ` +
+    `(confined to ${city}). Reason: neither home city nor a played match in that city.`,
+  );
+}
+
 export async function GET(req: Request, ctx: { params: Promise<{ env: string }> }) {
   const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
@@ -109,13 +126,31 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
        * THE BOUNDARY IS THIS REFUSAL. Omitting someone from a list does not stop ?id= being typed,
        * so a request for a player outside the scope is refused outright — 403, not a filtered-empty
        * result, so the difference between "no such player" and "not yours" stays visible to us and
-       * invisible to them. */
+       * invisible to them.
+       *
+       * ── THE CORRECTION THE BLOCK ABOVE PREDICTED ──────────────────────────────────────────────
+       * "a Warsaw regular who set 'Austin' is INVISIBLE to the Warsaw account" was written as a
+       * known cost of using preferableCity. It came true twice, by name: 88519 and 88512. The
+       * boundary is now a UNION — home city OR a played match in the city — so option (b) from
+       * that list is no longer "a derivation the search endpoint cannot return": it is one indexed
+       * read against the mirror, which this route already talks to for name search. */
       if (auth.confinedCity) {
-        const want = cityNameFor(auth.confinedCity);
         const lr = (listRow ?? {}) as Record<string, unknown>;
         const pc = (lr.preferableCity as Record<string, unknown> | undefined) ?? null;
-        const has = pc ? str(pc.name) : null;
-        if (has !== want) return Response.json({ error: CONFINED_CITY_ERROR }, { status: 403 });
+        const want = cityNameFor(auth.confinedCity);
+        const homeMatches = pc ? str(pc.name) === want : false;
+        /* THE MIRROR IS ONLY ASKED WHEN THE CHEAP BRANCH SAYS NO. A Warsaw-home player is already
+         * in scope, and a query to prove it again would be a round trip per profile view. */
+        const played = homeMatches
+          ? false
+          : await hasPlayedInCity(makeServerClient(), want ?? "", Number(id));
+        const allowed = playerInConfinedScope(auth.confinedCity, {
+          homeCityName: pc ? str(pc.name) : null,
+          homeCityAbbr: pc ? str(pc.abbr) : null,
+          /* A SYNTHETIC PLAYER NEVER ENTERS THROUGH THE NEW DOOR. See the search block below. */
+          playedInScope: played && !isFakePlayerEmail(str(lr.email) ?? str(raw?.email)),
+        });
+        if (!allowed) return Response.json({ error: CONFINED_CITY_ERROR }, { status: 403 });
       }
       /* THE MAPPING MOVED TO src/lib/playerProfile.ts, UNCHANGED, and this route now calls it.
        * The Player Chats context pane shows the same player — Ryan's ask was that it show "all the
@@ -180,9 +215,23 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
           const f = nameOrFilter(t);
           if (f) sel = sel.or(f);
         }
-        // CONFINEMENT IN THE QUERY, not after it — otherwise the count is the unscoped one and the
-        // page is a filtered slice of somebody else's page.
-        if (want) sel = sel.eq("preferable_city_name", want);
+        /* CONFINEMENT IN THE QUERY, not after it — otherwise the count is the unscoped one and the
+         * page is a filtered slice of somebody else's page.
+         *
+         * THE UNION, AS AN OR INSIDE THAT QUERY. It was `.eq("preferable_city_name", want)`; it is
+         * now home city OR membership of the set that has played in this city. PostgREST ANDs
+         * successive .or() calls, so this composes with the per-term name predicates above rather
+         * than replacing them: (term1) AND (term2) AND (home OR played).
+         *
+         * THE ID LIST IS BOUNDED AND THE BOUND REFUSES. playerIdsWhoPlayedIn throws over
+         * SCOPE_ID_CAP rather than silently truncating, because a truncated list is a boundary
+         * that quietly loses people. Warsaw is 97. */
+        if (want) {
+          const playedIds = await playerIdsWhoPlayedIn(sb, want);
+          sel = playedIds.length
+            ? sel.or(`preferable_city_name.eq.${want},id.in.(${playedIds.join(",")})`)
+            : sel.eq("preferable_city_name", want);
+        }
         const from = (pageN - 1) * SEARCH_PAGE_SIZE;
         // Ordered the same way the API orders — first_name ascending — so the two paths agree
         // about who is on page 1. last_name and id break ties so paging is deterministic.
@@ -206,7 +255,21 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
         // rather than rendered from the mirror, and SAID — otherwise the count overstates the list.
         const dropped = ids.length - live.length;
         let results = live.map(lightRow);
-        if (want) results = results.filter((r) => r.city === want);
+        /* THE SAME UNION AGAIN, ON THE ROWS THE API HANDED BACK. The query above already scoped
+         * the ids; this is the belt to that braces, and it has to ask the same question or it
+         * would re-narrow to home city and undo the widening one line after making it.
+         *
+         * The ids are already known to be in scope, so the only thing to re-check is that the API
+         * row still agrees — and the played-in answer is carried over rather than re-queried. */
+        if (want) {
+          const scoped = await playedInCity(sb, want, results.map((r) => r.id ?? 0));
+          const before = results.length;
+          results = results.filter((r) => playerInConfinedScope(auth.confinedCity, {
+            homeCityName: r.city,
+            playedInScope: scoped.has(r.id ?? 0) && !isFakePlayerEmail(r.email),
+          }));
+          logScopeDrop("name", auth.email, want, before, results.length);
+        }
         return Response.json({
           kind: d.kind, results, page: pageN, pageSize: SEARCH_PAGE_SIZE,
           total: count ?? 0, totalKnown: count != null, dropped,
@@ -228,7 +291,19 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
       let total = typeof totalItems === "number" ? totalItems : null;
       if (auth.confinedCity) {
         const before = results.length;
-        results = results.filter((r) => r.city === want);
+        /* THIS IS THE LINE THAT ATE JUNIOR. `r.city === want` on rows the upstream API returned
+         * with no match history attached — so a Warsaw regular whose stated city was Austin was
+         * dropped here, and the page said "No player found".
+         *
+         * THE HISTORY IS NOT ON THESE ROWS AND CANNOT BE. /admin/players returns no roster, so the
+         * played-in half is resolved against the mirror for the handful of ids on this page. It is
+         * one indexed read for at most SEARCH_PAGE_SIZE ids. */
+        const scoped = await playedInCity(makeServerClient(), want ?? "", results.map((r) => r.id ?? 0));
+        results = results.filter((r) => playerInConfinedScope(auth.confinedCity, {
+          homeCityName: r.city,
+          playedInScope: scoped.has(r.id ?? 0) && !isFakePlayerEmail(r.email),
+        }));
+        logScopeDrop(d.kind, auth.email, want, before, results.length);
         /* A CONFINED ACCOUNT'S TOTAL IS NOT KNOWABLE FROM totalItems — that count is the unscoped
          * one, and the filter runs after the page arrives. Printing it would tell a Warsaw operator
          * there are 69 matches when they can see four. So the total is withheld, and the header
@@ -245,6 +320,12 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
   } catch (e) {
     if (e instanceof StageHostGuardError) return Response.json({ error: e.message }, { status: 500 });
     if (e instanceof StageConfigError) return Response.json({ error: e.message }, { status: 500 });
+    /* A REFUSAL, NOT A DEGRADED PAGE. The city boundary could not be expressed in one query, so no
+     * answer is given rather than a page scoped to a truncated list. See playerCityScope.ts. */
+    if (e instanceof ScopeTooLargeError) {
+      console.error(`[lookup] ${e.message}`);
+      return Response.json({ error: e.message }, { status: 500 });
+    }
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }

@@ -27,6 +27,9 @@ import { authenticateCredits } from "@/lib/creditsAuth";
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { CONFINED_CITY_ERROR, playerCityAllowed } from "@/lib/cityConfinement";
+import { hasPlayedInCity } from "@/lib/playerCityScope";
+import { cityNameFor } from "@/lib/cityScope";
+import { makeServerClient } from "@/lib/supabaseServer";
 import { MAX_ADJUSTMENT_CENTS, raceCheck, fmtUsd } from "@/lib/creditsModel";
 import type { Change } from "@/lib/changeLogModel";
 
@@ -52,7 +55,14 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; pl
   try {
     const p = await apiGet<Record<string, unknown>>(env, `/admin/players/${playerId}`);
     // REFUSED BY ID, FROM THE SERVER — not by a list that happened not to offer this player.
-    if (!playerCityAllowed(auth.confinedCity, p)) {
+    /* THE PLAYED-IN HALF OF THE BOUNDARY, resolved against the mirror. The payload above is
+     * GET /admin/players/{id} and carries no match history, so the union's second branch cannot be
+     * answered from it. Asked only when the account is confined: an unconfined caller is allowed
+     * by the first line of playerCityAllowed and must not pay for a query to prove it. */
+    const playedInScopeP = auth.confinedCity
+      ? await hasPlayedInCity(makeServerClient(), cityNameFor(auth.confinedCity) ?? "", Number(playerId))
+      : false;
+    if (!playerCityAllowed(auth.confinedCity, p, playedInScopeP)) {
       console.warn(`[credits] 403: ${auth.email} (confined to ${auth.confinedCity}) read player ${playerId}`);
       return Response.json({ error: CONFINED_CITY_ERROR }, { status: 403 });
     }
@@ -93,7 +103,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; p
     // THE BOUNDARY BEFORE THE MONEY. Refused by id, from the server, on the same read the race
     // check uses — so a confined account cannot adjust a player outside its city even by posting
     // the id directly. This returns BEFORE any write, like every other guard on this route.
-    if (!playerCityAllowed(auth.confinedCity, player)) {
+    /* THE PLAYED-IN HALF OF THE BOUNDARY, resolved against the mirror. The payload above is
+     * GET /admin/players/{id} and carries no match history, so the union's second branch cannot be
+     * answered from it. Asked only when the account is confined: an unconfined caller is allowed
+     * by the first line of playerCityAllowed and must not pay for a query to prove it. */
+    const playedInScopeP = auth.confinedCity
+      ? await hasPlayedInCity(makeServerClient(), cityNameFor(auth.confinedCity) ?? "", Number(playerId))
+      : false;
+    if (!playerCityAllowed(auth.confinedCity, player, playedInScopeP)) {
       console.warn(`[credits] 403: ${auth.email} (confined to ${auth.confinedCity}) attempted an adjustment on player ${playerId}`);
       return Response.json({ error: CONFINED_CITY_ERROR }, { status: 403 });
     }
