@@ -712,7 +712,21 @@ function CreateDrawer({ onClose, onCreated, editing, onEdited }: {
   const initialValue = editing ? (editing.discountType === "USD" ? String(editing.discountValue / 100) : String(editing.discountValue)) : "";
   const [f, setF] = useState<Form>({ code: editing?.code ?? "", type: editing?.discountType ?? "PERCENT", value: initialValue, sD: s0.date, sT: s0.time, eD: e0.date, eT: e0.time, who: editing?.targetUserType ?? "ALL_USERS", which: editing?.targetMatchType ?? "ALL_MATCHES", uses: String(editing?.numberOfUsesPerUser ?? 1), users: [], matches: [], fields: [], mpSD: mp0.date, mpST: mp0.time, mpED: mp1.date, mpET: mp1.time });
   const [writeResult, setWriteResult] = useState<{ status: string; fields: { key: string; sent: unknown; got: unknown; landed: boolean }[]; notApplied: string[] } | null>(null);
-  const [scopeNote, setScopeNote] = useState<string | null>(null);
+  /* ── ONE NOTE PER AXIS, BECAUSE THERE ARE TWO AXES ──────────────────────────────────────────
+   * This was a single `scopeNote` written by BOTH setWho and setWhich and rendered in exactly one
+   * place: inside WHICH MATCHES. So switching the audience away from Specific Users printed
+   * "3 users deselected" under the MATCH picker, describing a control two sections up.
+   *
+   * MISPLACED, NOT STALE. The text was correct and current — setWho writes it synchronously with
+   * the click that dropped the selection. Only its position was wrong.
+   *
+   * AND SHARING ONE SLOT WAS A SECOND BUG: setWhich overwrote the note setWho had just written
+   * (with null, when the match axis had nothing to drop), so touching either control could erase
+   * the other's message. Who and which are independent — ALL_SCOPE_KEYS in promoEditModel.ts
+   * deliberately excludes userIDs for exactly that reason — and one shared note made them look
+   * coupled on screen when the model says they are not. */
+  const [whoNote, setWhoNote] = useState<string | null>(null);
+  const [whichNote, setWhichNote] = useState<string | null>(null);
   const [dupe, setDupe] = useState<{ state: "idle" | "checking" | "free" | "taken" | "inconclusive" | "error"; existing?: { id: number; code: string; state: string } }>({ state: "idle" });
   const [submitting, setSubmitting] = useState(false);
   const [submitErr, setSubmitErr] = useState<string | null>(null);
@@ -728,14 +742,14 @@ function CreateDrawer({ onClose, onCreated, editing, onEdited }: {
   const valOk = f.value !== "" && Number.isFinite(valNum) && valNum > 0 && (f.type !== "PERCENT" || valNum <= 100);
   // Switching scope AWAY from a specific option DROPS its selection (never sent stale) and says so.
   const setWho = (w: TargetUserType) => {
-    setScopeNote(f.who === "SPECIFIC_USERS" && w !== "SPECIFIC_USERS" && f.users.length ? `${f.users.length} user${f.users.length > 1 ? "s" : ""} deselected` : null);
+    setWhoNote(f.who === "SPECIFIC_USERS" && w !== "SPECIFIC_USERS" && f.users.length ? `${f.users.length} user${f.users.length > 1 ? "s" : ""} deselected` : null);
     set({ who: w, ...(w === "SPECIFIC_USERS" ? {} : { users: [] }) });
   };
   const setWhich = (w: TargetMatchType) => {
     const drops: string[] = [];
     if (f.which === "SPECIFIC_MATCHES" && w !== "SPECIFIC_MATCHES" && f.matches.length) drops.push(`${f.matches.length} match${f.matches.length > 1 ? "es" : ""}`);
     if (f.which === "SPECIFIC_FIELDS" && w !== "SPECIFIC_FIELDS" && f.fields.length) drops.push(`${f.fields.length} field${f.fields.length > 1 ? "s" : ""}`);
-    setScopeNote(drops.length ? `${drops.join(" and ")} deselected` : null);
+    setWhichNote(drops.length ? `${drops.join(" and ")} deselected` : null);
     set({ which: w, ...(w === "SPECIFIC_MATCHES" ? {} : { matches: [] }), ...(w === "SPECIFIC_FIELDS" ? {} : { fields: [] }) });
   };
   const scopeOk = (f.who !== "SPECIFIC_USERS" || f.users.length > 0)
@@ -895,6 +909,7 @@ function CreateDrawer({ onClose, onCreated, editing, onEdited }: {
 
           <div className="sect"><h3>WHO CAN USE IT</h3>
             <span className="radios">{WHO_OPTS.map((v) => <button key={v} type="button" className="rad" data-testid={`f-who-${v}`} aria-pressed={f.who === v} onClick={() => setWho(v)}>{USER_TYPE_LABEL[v]}</button>)}</span>
+            {whoNote && <span className="help" data-testid="f-who-note">{whoNote}.</span>}
             {f.who === "SPECIFIC_USERS" && <UserPicker selected={f.users} onChange={(users) => set({ users })} />}
             <label className="fld" style={{ marginTop: 13 }}><span className="lb">USES PER {f.which === "TOTAL_USAGE" ? "CODE (TOTAL)" : "PERSON"} <span className="auto">PREFILLED 1</span></span>
               <input data-testid="f-uses" inputMode="numeric" value={f.uses} onChange={(e) => set({ uses: e.target.value })} />
@@ -906,7 +921,7 @@ function CreateDrawer({ onClose, onCreated, editing, onEdited }: {
 
           <div className="sect"><h3>WHICH MATCHES</h3>
             <span className="radios">{WHICH_OPTS.map((v) => <button key={v} type="button" className="rad" data-testid={`f-which-${v}`} aria-pressed={f.which === v} onClick={() => setWhich(v)}>{MATCH_TYPE_LABEL[v]}</button>)}</span>
-            {scopeNote && <span className="help" data-testid="f-scope-note">{scopeNote}.</span>}
+            {whichNote && <span className="help" data-testid="f-scope-note">{whichNote}.</span>}
             {f.which === "TIME_PERIOD" && (
               <div className="fgrid" style={{ marginTop: 13 }}>
                 <span className="fld"><span className="lb">MATCHES KICKING OFF FROM <span className="auto">PREFILLED</span></span>
@@ -1044,17 +1059,37 @@ function MatchPicker({ selected, promoFrom, promoTo, onChange }: { selected: Pic
 // ── D4: Specific Fields — grouped by city, multi-select toggle chips. ──
 function FieldPicker({ selected, onChange }: { selected: PickedField[]; onChange: (f: PickedField[]) => void }) {
   const [data, setData] = useState<PickedField[]>([]); const [q, setQ] = useState(""); const [loading, setLoading] = useState(true); const [err, setErr] = useState<string | null>(null);
+  /* THE CALLER'S OWN CITY, WHEN THEY HAVE ONE. Null for everybody else, and everybody else's
+   * picker is byte-for-byte what it was. */
+  const [defaultCity, setDefaultCity] = useState<string | null>(null);
   useEffect(() => { (async () => {
     try { const res = await authFetch(`/api/promos/fields`); const j = await res.json();
-      if (!res.ok) setErr(j.error || "couldn't load fields"); else setData((j.fields ?? []).map((f: Record<string, unknown>) => ({ id: Number(f.id), title: String(f.title), city: String(f.city) })));
+      if (!res.ok) setErr(j.error || "couldn't load fields");
+      else {
+        setData((j.fields ?? []).map((f: Record<string, unknown>) => ({ id: Number(f.id), title: String(f.title), city: String(f.city) })));
+        setDefaultCity(typeof j.defaultCity === "string" && j.defaultCity ? j.defaultCity : null);
+      }
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setLoading(false); }
   })(); }, []);
-  const shown = data.filter((f) => !q.trim() || `${f.title} ${f.city}`.toLowerCase().includes(q.trim().toLowerCase()));
+  /* ── A DEFAULT VIEW, NOT A FILTER THEY CANNOT LEAVE ──────────────────────────────────────────
+   * A confined operator opens on their own city, because handing them every field in eight cities
+   * to find one of their own is not a list, it is a haystack. TYPING REACHES EVERYTHING: the
+   * moment there is a search term the city default is dropped and the whole estate is searched,
+   * because a promo carries no city and pinning one to another city's field is allowed. */
+  const term = q.trim().toLowerCase();
+  const shown = data.filter((f) => term
+    ? `${f.title} ${f.city}`.toLowerCase().includes(term)
+    : (!defaultCity || f.city.trim() === defaultCity));
   const cities = [...new Set(shown.map((f) => f.city))];
   const toggle = (fl: PickedField) => selected.some((s) => s.id === fl.id) ? onChange(selected.filter((s) => s.id !== fl.id)) : onChange([...selected, fl]);
   return (
     <div className="pk" data-testid="field-picker">
-      <input className="pk-search" data-testid="field-search" placeholder="Filter fields by name or city" value={q} onChange={(e) => setQ(e.target.value)} />
+      <input className="pk-search" data-testid="field-search" placeholder={defaultCity ? `Showing ${defaultCity} — type to search every city` : "Filter fields by name or city"} value={q} onChange={(e) => setQ(e.target.value)} />
+      {defaultCity && !term && (
+        <div className="pk-empty" data-testid="field-default-note" style={{ padding: "4px 0 0" }}>
+          {defaultCity} fields by default. Search to reach any other city.
+        </div>
+      )}
       {selected.length > 0 && <div className="pk-chips" data-testid="field-chips">{selected.map((fl) => <span key={fl.id} className="pk-chip">{fl.title}<button type="button" aria-label={`Remove ${fl.title}`} onClick={() => toggle(fl)}>×</button></span>)}</div>}
       <div className="pk-results" data-testid="field-results">
         {loading ? <div className="pk-empty">Loading fields…</div> : err ? <div className="pk-empty">{err}</div> : cities.length === 0 ? <div className="pk-empty">No fields.</div> :

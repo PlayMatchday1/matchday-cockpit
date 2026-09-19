@@ -7,8 +7,21 @@
 //                            numberOfUsesPerUser, targetUserType, targetMatchType }
 // discountValue is stored in CENTS for USD; the client sends dollars and we ×100 here so the
 // cents rule lives in one place. Code is stored EXACTLY as typed — no normalisation (7i/8c).
-// This phase supports the non-picker audiences/scopes (ALL/NEW/CHURN, ALL_MATCHES/TOTAL_USAGE);
-// SPECIFIC_* and TIME_PERIOD need selectors and are rejected with a clear message.
+// ── A CORRECTION TO THIS HEADER ───────────────────────────────────────────────────────────────
+// It read: "This phase supports the non-picker audiences/scopes (ALL/NEW/CHURN,
+// ALL_MATCHES/TOTAL_USAGE); SPECIFIC_* and TIME_PERIOD need selectors and are rejected with a
+// clear message." That stopped being true when the pickers landed. WHO_ALLOWED carries
+// SPECIFIC_USERS and WHICH_ALLOWED carries all five targetMatchType values, selectors and all.
+//
+// THE TWO AXES ARE INDEPENDENT, and the body below is where that is decided: targetUserType and
+// targetMatchType are two keys assembled by two separate spreads, so SPECIFIC_USERS and
+// SPECIFIC_FIELDS travel together in one code. The only exclusivity is INSIDE targetMatchType,
+// whose five values are one enum — a code is total-capped OR pinned to fields, never both.
+//
+// A PROMO CARRIES NO CITY. The endpoint takes no city field, so a code is redeemable estate-wide
+// unless it is pinned to specific fields or matches. A confined operator creating one is
+// therefore creating an estate-wide code, knowingly: see cityConfinement.ts's /api/promos/create
+// entry for the ruling. The change_log row is the only record of who made it.
 import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { getMatchdayApiClient } from "@/lib/matchdayApi";

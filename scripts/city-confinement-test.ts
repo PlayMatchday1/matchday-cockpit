@@ -3,6 +3,7 @@
 // THE ONE THAT MATTERS MOST is confinement-beats-is_admin. It is the opposite of the city-manager
 // rule and someone will eventually "fix" the inconsistency; this fails when they do.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { isConfined, confinedCity, confinedCityName, assertConfinedScope, CONFINED_CAPABILITIES, CONFINED_RAIL_KEYS, confinementSummary, assertConfinedRoute, isConfinedRouteAllowed } from "../src/lib/cityConfinement";
 import { can } from "../src/lib/capabilities";
 
@@ -65,7 +66,15 @@ console.log("\n── the route allowlist ──");
     // Master Schedule's week — the bare path only, and only because fetchVeoWeek is scoped to the
     // caller's confined city in the same commit.
     "/api/veo",
-    "/api/promos/list", "/api/promos/detail/99", "/api/reviews",
+    "/api/promos/list", "/api/promos/detail/99", "/api/promos/check",
+    "/api/promos/fields", "/api/promos/matches",
+    /* CREATE, AND THIS LINE MOVED FROM THE REFUSED LIST BELOW ON PURPOSE — the behaviour changed,
+     * the assertion was not bent to fit it. A confined operator could read every code on the page
+     * and was refused the one thing the page is for. Both Warsaw accounts already hold
+     * can_manage_promos (measured 2026-09-19, six holders estate-wide), so the capability was
+     * never the block; this list was. */
+    "/api/promos/create",
+    "/api/reviews",
     "/api/match-chats/active", "/api/match-chats/18215/reply", "/api/crm/threads",
   ];
   const REFUSED = [
@@ -77,7 +86,11 @@ console.log("\n── the route allowlist ──");
      * changes no fleet configuration. */
     "/api/veo/codes", "/api/veo/cameras", "/api/veo/intent", "/api/veo/inbound",
     "/api/inventory/7", "/api/match-promotion", "/api/slate-notes",
-    "/api/admin/users/permissions", "/api/promos/create", "/api/promos/delete/12",
+    /* EDIT, DELETE AND USES STAY SHUT, which is why create is an EXACT entry and not a
+     * "/api/promos/" prefix. A promo carries NO OWNER field, so "his own codes" cannot be
+     * expressed and opening delete would let one city's operator remove another city's code. */
+    "/api/admin/users/permissions", "/api/promos/edit", "/api/promos/delete/12",
+    "/api/promos/uses/12",
   ];
   /* ── THE DOOR, NOT JUST THE ROOMS ────────────────────────────────────────────────────────────
    * /api/match-chats/ was allowed and the chat LIST rendered perfectly for a Warsaw account — two
@@ -102,12 +115,77 @@ console.log("\n── the route allowlist ──");
   t("…and so is a path beneath it", () =>
     assert.equal(isConfinedRouteAllowed("/api/firebase-token/mint"), false));
 
+  /* ── PROMO CREATE IS EXACT, AND THE SIBLINGS PROVE IT ────────────────────────────────────────
+   * The whole risk of this change is reaching for "/api/promos/" as a prefix, which would open
+   * edit, delete and uses with it. These four assert the one entry did not become four. */
+  t("promo create is open to a confined account", () =>
+    assert.equal(isConfinedRouteAllowed("/api/promos/create"), true));
+  t("  …but edit is still refused", () =>
+    assert.equal(isConfinedRouteAllowed("/api/promos/edit"), false));
+  t("  …and delete, with an id", () =>
+    assert.equal(isConfinedRouteAllowed("/api/promos/delete/12"), false));
+  t("  …and a path BENEATH create, which the exact entry must not open", () =>
+    assert.equal(isConfinedRouteAllowed("/api/promos/create/bulk"), false));
+  /* CONTROL FOR ALL FOUR. If isConfinedRouteAllowed had started returning true for everything,
+   * the three refusals above would be the failures — but a bare "promos" path proves the
+   * function still discriminates inside this very subtree. */
+  t("  CONTROL — an unlisted promos path is refused, so the subtree is not simply open", () =>
+    assert.equal(isConfinedRouteAllowed("/api/promos"), false));
+
   for (const p of ALLOWED) {
     t(`allowed: ${p}`, () => assert.equal(isConfinedRouteAllowed(p), true));
   }
   for (const p of REFUSED) {
     t(`REFUSED: ${p}`, () => assert.equal(isConfinedRouteAllowed(p), false));
   }
+  /* ── THE WHOLE GATE ON PROMO CREATE, IN THE ROUTE'S OWN ORDER ────────────────────────────────
+   * authenticateCapability runs the CAPABILITY first and this allowlist second. Asserting only the
+   * allowlist would miss the case that actually matters: a confined holder of MANAGE PROMOS who
+   * passes the capability and dies on the route list, which is exactly where Joao was. So both
+   * terms are asserted, in order, for the row shape the Warsaw accounts really carry.
+   *
+   * WHY THE ROW LOOKS LIKE THIS. Measured against app_users on 2026-09-19: jf@playmatchday.pl and
+   * rgmstrategicventures@gmail.com both carry city_identifier WAW, can_access_matchops true and
+   * can_manage_promos TRUE. The capability was never the block. */
+  {
+    const WAW_PROMOS = { ...(WAW as object), can_manage_promos: true } as never;
+    t("a Warsaw promo-holder passes the CAPABILITY term", () =>
+      assert.equal(can(WAW_PROMOS, "managePromos"), true));
+    t("  …and now passes the ROUTE term too, which is what was refusing them", () =>
+      assert.equal(assertConfinedRoute(WAW_PROMOS, "https://x/api/promos/create").ok, true));
+    /* CONTROL, AND IT IS THE POINT OF THE WHOLE BLOCK: confinement must still not GRANT the
+     * capability. An account without the flag is refused whatever this list says, so opening the
+     * route did not become a way in. */
+    t("  CONTROL — a confined account WITHOUT the flag still fails the capability term", () =>
+      assert.equal(can(WAW, "managePromos"), false));
+    t("  CONTROL — and edit is still refused even to a holder", () =>
+      assert.equal(assertConfinedRoute(WAW_PROMOS, "https://x/api/promos/edit").ok, false));
+  }
+
+  /* ── NO CITY SCOPE WAS ADDED TO THE CREATE ROUTE, AND THIS IS THE ASSERTION THAT SAYS SO ──────
+   * An earlier draft of this brief called for forcing a confined account into SPECIFIC_FIELDS and
+   * validating every field id against their city. Ryan ruled against all of it: a promo carries no
+   * city, a code is not discoverable, and estate-wide redemption is acceptable. Nothing of that
+   * restriction was built — and this fails the day somebody adds it back. */
+  {
+    const src = readFileSync("src/app/api/promos/create/route.ts", "utf8");
+    t("the create route imports no confinement helper", () =>
+      assert.equal(/from "@\/lib\/cityConfinement"/.test(src), false));
+    t("  …and reads no confined city", () =>
+      assert.equal(/confinedCity/.test(src), false));
+    t("  …and all five match scopes stay allowed", () => {
+      for (const v of ["ALL_MATCHES", "TOTAL_USAGE", "TIME_PERIOD", "SPECIFIC_FIELDS", "SPECIFIC_MATCHES"]) {
+        assert.equal(src.includes(`"${v}"`), true, `${v} missing from the create route`);
+      }
+    });
+    /* CONTROL for the two absence checks above. A regex that matches nothing and a file that
+     * failed to load both produce "absent", so prove the same read finds something that IS there. */
+    t("  CONTROL — the same source read finds the capability the route DOES gate on", () =>
+      assert.equal(src.includes("managePromos"), true));
+    t("  CONTROL — …and the two-axis body it assembles", () =>
+      assert.equal(src.includes("targetUserType") && src.includes("targetMatchType"), true));
+  }
+
   // DENY BY DEFAULT — a route nobody has listed is refused, which is the only safe direction.
   t("a route invented tomorrow is refused until listed", () =>
     assert.equal(isConfinedRouteAllowed("/api/something-new/thing"), false));

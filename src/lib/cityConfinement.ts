@@ -196,7 +196,10 @@ export const CONFINED_ROUTE_PREFIXES: readonly string[] = [
   // reaches it and sees only its own city; the city SELECT is a convenience and this list plus
   // assertScope() is the boundary.
   "/api/players/finder",
-  // Promo Codes — reads only; every write route gates on managePromos, which this account lacks.
+  /* Promo Codes — the reads. CREATE is opened too, as an EXACT route below; edit, delete and uses
+   * stay refused. This comment used to read "reads only; every write route gates on managePromos,
+   * which this account lacks" and the second half of that was measured false: both Warsaw accounts
+   * hold can_manage_promos. See the /api/promos/create entry for what changed and what did not. */
   "/api/promos/list",
   "/api/promos/detail/",
   "/api/promos/check",
@@ -273,6 +276,33 @@ const CONFINED_ROUTE_EXACT: readonly string[] = [
    * EXACT, NOT A PREFIX, for the reason the Veo entry above records: "/api/firebase" as a prefix
    * would open anything added beneath it later. */
   "/api/firebase-token",
+  /* PROMO CREATE, AND ONLY CREATE. A confined operator could read the Promo Codes page and every
+   * code on it, and the one thing the page exists to do was refused. The comment beside the promo
+   * READ routes in the prefix list said "reads only; every write route gates on managePromos,
+   * which this account lacks" — and that premise is no longer true. MEASURED 2026-09-19: six
+   * accounts hold can_manage_promos and TWO OF THEM ARE THE WARSAW ACCOUNTS, so the capability
+   * was never what was stopping them. This list was.
+   *
+   * WHICH MAKES THE ORDER WORTH STATING: authenticateCapability checks the capability FIRST and
+   * this allowlist second, and confinedBlocks() returns false for managePromos because it is in
+   * NEEDS_MATCHOPS. So a confined holder of the flag passed the capability gate and died here,
+   * on CONFINED_ERROR — a refusal whose words are about pages, on a request about a write.
+   *
+   * NO CITY SCOPE COMES WITH IT, DELIBERATELY. A promo carries no city: POST /admin/promocodes
+   * takes code, dates, discount, uses, targetUserType and targetMatchType and nothing else, so a
+   * code is redeemable estate-wide unless it is pinned to specific fields or matches. Ryan's
+   * ruling is that this is acceptable, because a code is not discoverable — you have to be given
+   * the string — and a redemption is visible in reporting either way. So a confined account gets
+   * all five targetMatchType values like anyone else, and nothing here validates that a field or
+   * match id belongs to the caller's city.
+   *
+   * EDIT AND DELETE STAY SHUT, and the reason is the same missing field: a promo has no owner, so
+   * "his own codes" cannot be expressed, and opening delete would let one city's operator remove
+   * another city's code. A follow-up, not this change.
+   *
+   * EXACT, NOT A PREFIX. "/api/promos/" would open edit, delete and uses along with it — the same
+   * trap the Veo entries above are written to avoid. */
+  "/api/promos/create",
   /* MATCH MANAGERS — the collapsible roster under Player Finder, on the SAME PAGE a confined
    * account already reaches. Adding it here is the whole lesson of the firebase-token entry above:
    * the page opened, the panel rendered, and one route it calls was on no list. The route scopes
