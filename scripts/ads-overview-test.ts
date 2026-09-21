@@ -19,6 +19,7 @@
 import {
   buildAdsOverview, servedBreakdown, shareOf, perUnit, PAID_MARKETS,
   orderAdsets, duplicateNames, CONFIDENCE_WORTH_FLAGGING, costBand, fairShareCents, overUnderCents,
+  metaRegistrationsUsable, META_REG_FROM, registrationRebuildStart, attributionLabel, spendVsAverageExample,
   BAND_MID_AT, BAND_BAD_AT,
   type GeoRow, type FlatRow, type DimRow, type AcqRow, type AdsetRow,
 } from "../src/lib/adsOverview";
@@ -268,6 +269,90 @@ console.log("\nover / under is fair share in money, and it sums to zero");
 
   is("no players anywhere means no fair share, not a zero one", fairShareCents(0, 0, 783_000), null);
   is("…and no fair share means no over / under", overUnderCents(179_900, null), null);
+}
+
+console.log("\nMeta's registration columns are blank before the event existed");
+{
+  is("the window starts the day the first registration landed", META_REG_FROM, "2026-09-12");
+  is("a window starting that day is usable", metaRegistrationsUsable("2026-09-12"), true);
+  is("a later window is usable", metaRegistrationsUsable("2026-09-20"), true);
+  /* 2026-09-11 CARRIES $181 OF SPEND AND ZERO REGISTRATIONS. Including it would print a real
+   * number against a real zero, which reads as terrible performance rather than as an event that
+   * did not exist yet. */
+  is("the day before is NOT usable", metaRegistrationsUsable("2026-09-11"), false);
+  is("and the August floor certainly is not", metaRegistrationsUsable("2026-08-01"), false);
+}
+
+console.log("\nthe rebuild preset only exists once a registration-optimized ad set has spent");
+{
+  const flat = (adset_id: string, spend_date: string, spend_cents: number) =>
+    ({ adset_id, spend_date, spend_cents, installs: null, clicks: null, registrations: null });
+  const dim = (adset_id: string, optimization_goal: string) =>
+    ({ adset_id, adset_name: null, campaign_name: null, market_key: "HTX", market_raw: null,
+       market_confidence: 1, optimization_goal });
+
+  /* TODAY'S DATA, IN MINIATURE. The live cohort is APP_INSTALLS; the old conversion cohort
+   * stopped on 2026-08-28, before the event it would have optimised for existed. */
+  const today = registrationRebuildStart(
+    [dim("live", "APP_INSTALLS"), dim("old", "OFFSITE_CONVERSIONS")],
+    [flat("live", "2026-09-15", 1000), flat("old", "2026-08-20", 1000)],
+  );
+  is("nothing in today's shape lights the preset", today, null);
+
+  const after = registrationRebuildStart(
+    [dim("live", "APP_INSTALLS"), dim("old", "OFFSITE_CONVERSIONS"), dim("new", "OFFSITE_CONVERSIONS")],
+    [flat("live", "2026-09-15", 1000), flat("old", "2026-08-20", 1000),
+     flat("new", "2026-09-25", 500), flat("new", "2026-09-26", 500)],
+  );
+  is("a conversion ad set spending AFTER the event does light it", after, "2026-09-25");
+  is("CONTROL — the old ad set's own date is not what it returns", after !== "2026-08-20", true);
+
+  /* A DAY META REPORTED ON IS NOT A DAY THE AD SET BOUGHT. Same rule the spending period uses. */
+  const zero = registrationRebuildStart(
+    [dim("new", "OFFSITE_CONVERSIONS")],
+    [flat("new", "2026-09-20", 0), flat("new", "2026-09-22", 900)],
+  );
+  is("a zero-spend day does not start the window", zero, "2026-09-22");
+  is("APP_INSTALLS_AND_OFFSITE_CONVERSIONS counts as registration optimisation",
+    registrationRebuildStart([dim("n", "APP_INSTALLS_AND_OFFSITE_CONVERSIONS")], [flat("n", "2026-09-30", 100)]), "2026-09-30");
+  is("an unknown goal does not", registrationRebuildStart([dim("n", "LINK_CLICKS")], [flat("n", "2026-09-30", 100)]), null);
+}
+
+console.log("\nthe attribution window is shown, not summarised");
+{
+  is("the six one-window ad sets", attributionLabel([{ event_type: "CLICK_THROUGH", window_days: 1 }]), "1d click");
+  /* THE ATLANTA ANDROID AD SET. Three windows, so Meta can credit a signup nobody clicked, and its
+   * cost per registration is not comparable with its neighbours'. */
+  is("the Atlanta Android ad set reads all three", attributionLabel([
+    { event_type: "CLICK_THROUGH", window_days: 1 },
+    { event_type: "VIEW_THROUGH", window_days: 1 },
+    { event_type: "ENGAGED_VIDEO_VIEW", window_days: 1 },
+  ]), "1d click, 1d view, 1d video");
+  is("a 7-day window keeps its number", attributionLabel([{ event_type: "CLICK_THROUGH", window_days: 7 }]), "7d click");
+  is("no spec is no label, not an empty string", attributionLabel(null), null);
+  is("an empty array is no label", attributionLabel([]), null);
+  is("an unrecognised event type is dropped rather than printed raw",
+    attributionLabel([{ event_type: "SOMETHING_NEW", window_days: 1 }]), null);
+}
+
+console.log("\nthe spend-vs-average example is computed, never written down");
+{
+  const rows = [
+    { marketKey: "HTX", becamePlayers: 461, spendCents: 188600 },
+    { marketKey: "ATX", becamePlayers: 100, spendCents: 50000 },
+  ];
+  const blended = 2669_00 / 461;   // the company average, in cents per player
+  const ex = spendVsAverageExample(rows, blended)!;
+  is("it names Houston when Houston is in the window", ex.market, "HTX");
+  is("  …with Houston's own player count", ex.players, 461);
+  is("  …its players at the company average", Math.round(ex.atAverageCents), 266900);
+  is("  …against what it actually spent", ex.spendCents, 188600);
+  is("  …and the difference, negative for spending less", Math.round(ex.deltaCents), -78300);
+  /* CONTROL: the example must FOLLOW the window, not describe a market that is not in it. */
+  const noHtx = spendVsAverageExample([rows[1]], blended)!;
+  is("CONTROL — without Houston it falls back to the first row", noHtx.market, "ATX");
+  is("no blended rate means no example, rather than a sentence built on a null", spendVsAverageExample(rows, null), null);
+  is("no rows means no example", spendVsAverageExample([], blended), null);
 }
 
 console.log(`\n${pass} passed, ${fails.length} failed`);

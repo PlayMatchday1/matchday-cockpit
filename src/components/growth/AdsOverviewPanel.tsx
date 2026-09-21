@@ -21,6 +21,7 @@ import styles from "./growth.module.css";
 import { fmtInt, fmtMoney } from "./format";
 import {
   perUnit, shareOf, costBand, fairShareCents, overUnderCents, duplicateNames,
+  metaRegistrationsUsable, spendVsAverageExample, META_REG_FROM,
   CONFIDENCE_WORTH_FLAGGING, type AdsOverview, type Band, type MarketRow,
 } from "@/lib/adsOverview";
 import { UNKNOWN_MARKET } from "@/lib/metaAdSpend";
@@ -39,7 +40,7 @@ const minus = (ymd: string, days: number) => {
 
 /* NO MONTH-TO-DATE. It reads well on the 28th and falls apart on the 2nd, and at roughly 6.7 new
  * players per city-day an early-month sample puts several markets into single digits. */
-type Mode = "floor" | "d30" | "d7" | "custom";
+type Mode = "rebuild" | "floor" | "d30" | "d7" | "custom";
 const PRESETS: { mode: Mode; label: string; since: () => string }[] = [
   { mode: "floor", label: "Since Aug 1", since: () => FLOOR },
   { mode: "d30", label: "30d", since: () => minus(todayChicago(), 29) },
@@ -62,6 +63,15 @@ const daysBetween = (a: string, b: string) =>
 const SHORT_SPAN = 0.9;
 
 const pct = (v: number | null, digits = 1) => (v == null ? "—" : `${(v * 100).toFixed(digits)}%`);
+const MONTH_DAY = (ymd: string) => shortDay(ymd);
+/* META'S REGISTRATION COLUMNS, BLANK RATHER THAN WRONG. A window that starts before the SDK event
+ * existed would divide weeks of spend by days of registrations; a dash with a reason on hover is
+ * the honest rendering. */
+const REG_BLANK_TIP =
+  `Meta could not count registrations before ${MONTH_DAY(META_REG_FROM)}, when the in-app signup ` +
+  `event went live. This window starts earlier, so these columns would divide a full window of ` +
+  `spend by a few days of registrations. Pick a range starting ${MONTH_DAY(META_REG_FROM)} or ` +
+  `later to see them.`;
 const money0 = (cents: number) => fmtMoney(cents / 100);
 const money2 = (cents: number | null) => (cents == null ? "—" : `$${(cents / 100).toFixed(2)}`);
 const KEY_CLASS: Record<Band, string> = {
@@ -167,6 +177,29 @@ function HeaderTip({ label, tip }: { label: string; tip: React.ReactNode }) {
 
 const TIP_WIDTH = 284;
 
+/* ── THE WORKED EXAMPLE, COMPUTED FROM THE ROW IT NAMES ─────────────────────────────────────────
+ * Houston unless the window does not contain it, then the biggest spender. Every figure is derived
+ * from live data: a hardcoded example is right for one window and quietly wrong for every other,
+ * and this one sits inside a tooltip where nobody would notice it had gone stale. */
+function SpendVsAverageTip({ example, blended }: { example: ReturnType<typeof spendVsAverageExample>; blended: number | null }) {
+  return (
+    <>
+      <p>
+        Compares actual spending with what the same number of new players would cost at the
+        company-wide average. Green means you spent less; red means you spent more.
+      </p>
+      {example && blended != null && (
+        <p className={styles.adsTipEg} data-testid="ads-sva-example">
+          Example: {CITY_LABEL[example.market] ?? example.market}&rsquo;s {fmtInt(example.players)} new
+          players would cost {money0(example.atAverageCents)} at the company average. You spent{" "}
+          {money0(example.spendCents)}, which is {money0(Math.abs(example.deltaCents))}{" "}
+          {example.deltaCents < 0 ? "less" : "more"}.
+        </p>
+      )}
+    </>
+  );
+}
+
 function Th({ label, tip, className }: { label: string; tip?: React.ReactNode; className?: string }) {
   return (
     <th className={className}>
@@ -205,6 +238,13 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
   /* THE SCALES ARE ACROSS THE MARKETS ON SCREEN, not fixed. A bar whose full width meant a number
    * nobody is looking at would flatten the spread this column exists to show. */
   const blended = totals ? perUnit(totals.spendCents, totals.becamePlayers) : null;
+  /* META'S COLUMNS ARE BLANK FOR A WINDOW THAT PREDATES THE EVENT. Keyed on the window the SERVER
+   * actually used, not on what the control asked for, because the route clamps to the floor. */
+  const regUsable = data ? metaRegistrationsUsable(data.since) : false;
+  const example = useMemo(
+    () => spendVsAverageExample(rows, blended),
+    [rows, blended],
+  );
   const view = useMemo(() => rows.map((r) => {
     const span = r.firstSpend && r.lastSpend ? daysBetween(r.firstSpend, r.lastSpend) : 0;
     const dark = span > 0 && span < windowDays * SHORT_SPAN;
@@ -262,11 +302,23 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
       <div className={styles.adsBar}>
         <span className={styles.adsSummary} data-testid="ads-summary">
           {totals
-            ? `${money0(totals.spendCents)} spend · ${fmtInt(totals.installs)} installs · ${fmtInt(totals.becamePlayers)} new players · ${money2(blended)} blended`
+            ? `${money0(totals.spendCents)} spend · ${fmtInt(totals.installs)} installs${regUsable ? ` · ${fmtInt(totals.metaRegistrations)} registrations from ads` : ""} · ${fmtInt(totals.registrations)} all registrations · ${fmtInt(totals.becamePlayers)} new players · ${money2(blended)} blended`
             : "…"}
         </span>
         <div className={styles.adsControls}>
           <div className={styles.adsPills} data-testid="ads-presets">
+            {/* ── SINCE REBUILD, AND IT DOES NOT EXIST YET ────────────────────────────────────
+                Rendered only when the server found a registration-optimized ad set that has
+                actually spent. Today none has: the live cohort is APP_INSTALLS and the old
+                conversion cohort stopped on 2026-08-28, before the event it would have optimised
+                for existed. A preset that is always there and always empty teaches nothing; one
+                that appears the day the data does is the control doing its job. */}
+            {data?.rebuildStart && (
+              <button type="button" data-testid="ads-preset-rebuild"
+                title={`The first day a registration-optimized ad set spent (${shortDay(data.rebuildStart)}).`}
+                className={mode === "rebuild" ? `${styles.adsPill} ${styles.adsPillOn}` : styles.adsPill}
+                onClick={() => preset("rebuild", data.rebuildStart!)}>Since rebuild</button>
+            )}
             {PRESETS.map((p) => (
               <button key={p.mode} type="button" data-testid={`ads-preset-${p.mode}`}
                 className={mode === p.mode ? `${styles.adsPill} ${styles.adsPillOn}` : styles.adsPill}
@@ -298,8 +350,9 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
       <div className={styles.adsNote} data-testid="ads-note" style={{ marginTop: 12 }}>
         <span aria-hidden>ⓘ</span>
         <span>
-          Spend is where Meta served it. Installs are attributed through each ad set&rsquo;s home
-          market. Recent days are still filling, so cost per new player reads too expensive.
+          Meta can only credit some signups to ads, so its registrations read low. Our own counts
+          include everyone. Recent days are still filling, so cost per new player reads too
+          expensive.
         </span>
         <button type="button" className={styles.adsNoteWhy} data-testid="ads-why"
           aria-expanded={why} onClick={() => setWhy((v) => !v)}>{why ? "Hide" : "Why"}</button>
@@ -341,53 +394,82 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
             <div className={styles.tableWrap}>
               <table className={styles.adsTable} data-testid="ads-table">
                 <thead>
+                  {/* ── TWO GROUPS, SO THE SOURCE IS OBVIOUS ────────────────────────────────────
+                      Six of the nine columns are two different measurements of the same thing, and
+                      the page never said which came from where. Meta counts what Meta can credit;
+                      we count everyone. Spend sits outside both because Meta is the only possible
+                      source for it, and Spend vs. average sits outside because it is derived from
+                      both sides at once. */}
+                  <tr className={styles.adsGroupRow} data-testid="ads-group-row">
+                    <th colSpan={2} />
+                    <th colSpan={4} className={styles.adsGroupMeta} data-testid="ads-group-meta">From Meta</th>
+                    {/* 7d and 30d are ours; Home, Unattributed and Other are Meta's view of where
+                        it served the money, so under All columns they get their own Meta group
+                        rather than being labelled as ours for being positioned late. */}
+                    <th colSpan={allCols ? 5 : 3} className={styles.adsGroupOurs} data-testid="ads-group-ours">From our data</th>
+                    {allCols && <th colSpan={3} className={styles.adsGroupMeta} data-testid="ads-group-meta2">From Meta</th>}
+                    <th className={styles.adsGroupEdge} />
+                  </tr>
                   <tr>
                     <Th label="Market" />
                     <Th label="Spend" tip="What Meta charged for ads shown in this market." />
-                    <Th label="Installs" tip="App installs from this market's ads. Meta won't say which city an install came from, so we credit it to the market its ad set was targeting." />
+
+                    {/* ── FROM META ──────────────────────────────────────────────────────────── */}
+                    <Th label="Installs" className={styles.adsGroupStart}
+                      tip="App installs from this market's ads. Meta won't say which city an install came from, so we credit it to the market its ad set was targeting." />
                     <Th label="CPI" tip="Spend divided by installs. The two are counted slightly differently, so treat it as close rather than exact." />
-                    {allCols && <Th label="Regs" tip="People who signed up here, whether they've played yet or not." />}
-                    {/* THE RECONCILIATION POINT TRAVELS WITH THE NUMBER. It was a footnote under
-                        the table carrying live counts; it is now the last sentence of this
-                        definition, where someone reading the column will actually meet it. */}
-                    <Th label="New players" tip="People who signed up in this market and have since played a match. Includes everyone, not just people the ads brought in. Markets we don't buy ads in are left out of this table, so these don't add up to the company total." />
-                    {/* NO BAR BESIDE IT. The figure is already the largest thing on the row and
-                        colour-coded; a bar re-encoding the same number across seven rows added a
-                        column and no information. */}
-                    <Th label="Cost per new player" className={styles.adsHeadKey}
+                    <Th label="Registrations from ads"
+                      tip={regUsable
+                        ? "Signups Meta could connect to someone clicking or seeing an ad. Meta receives every signup but can only credit some of them to ads, so this is lower than the real number from ads, never higher."
+                        : REG_BLANK_TIP} />
+                    <Th label="Cost / reg"
+                      tip={regUsable
+                        ? "Spend divided by registrations from ads. Reads high, because Meta can't credit every signup the ads brought in."
+                        : REG_BLANK_TIP} />
+
+                    {/* ── FROM OUR DATA ──────────────────────────────────────────────────────── */}
+                    {/* ALL REGISTRATIONS IS NO LONGER BEHIND "All columns". The two registration
+                        counts only mean anything beside each other: one of them alone is a number
+                        with no scale. */}
+                    <Th label="All registrations" className={styles.adsGroupStart}
+                      tip="Everyone who signed up in this market, counted in our own data, whether or not an ad brought them." />
+                    <Th label="New players"
+                      tip="People who signed up in this market and have since played a match. Includes everyone, not just people the ads brought in. Markets we don't buy ads in are left out of this table, so these don't add up to the company total." />
+                    <Th label="Cost / new player" className={styles.adsHeadKey}
                       tip="Spend divided by every new player in the market, including ones who found us on their own. Use it to compare markets, not as what a player costs to acquire." />
                     {allCols && <Th label="7d" tip="New players who played within 7 days of signing up. These don't change as time passes, so they're safe to compare across dates." />}
                     {allCols && <Th label="30d" tip="New players who played within 30 days of signing up. These don't change as time passes, so they're safe to compare across dates." />}
-                    {allCols && <Th label="Home" tip="How much of this market's spend Meta served inside the market." />}
+                    {allCols && <Th label="Home" className={styles.adsGroupStart} tip="How much of this market's spend Meta served inside the market." />}
                     {allCols && <Th label="Unattributed" tip="Spend Meta wouldn't tell us the location of. Not money that went elsewhere, money with no location attached." />}
                     {allCols && <Th label="Other" tip="Spend served into other named markets." />}
-                    {/* IN MONEY, NOT POINTS. "Share of players less share of spend" asked the
-                        reader to turn a percentage-point difference into a budget before it meant
-                        anything, and nobody moves points. Same arithmetic, stated as dollars. */}
-                    <Th label="Over / under" className={styles.adsHeadKey} tip={overUnderTip} />
+
+                    <Th label="Spend vs. average" className={`${styles.adsHeadKey} ${styles.adsGroupStart}`}
+                      tip={<SpendVsAverageTip example={example} blended={blended} />} />
                   </tr>
                 </thead>
                 <tbody>
                   {view.map((v) => (
-                    <Row key={v.r.marketKey} v={v} open={open === v.r.marketKey} allCols={allCols}
+                    <Row key={v.r.marketKey} v={v} open={open === v.r.marketKey} allCols={allCols} regUsable={regUsable}
                       onToggle={() => setOpen((o) => (o === v.r.marketKey ? null : v.r.marketKey))}
                       windowDays={windowDays} />
                   ))}
                   <tr className={styles.adsTotal} data-testid="ads-total-row">
                     <td>Total</td>
                     <td>{money0(totals?.spendCents ?? 0)}</td>
-                    <td>{fmtInt(totals?.installs ?? 0)}</td>
+                    <td className={styles.adsGroupStart}>{fmtInt(totals?.installs ?? 0)}</td>
                     <td className={styles.adsMuted}>{money2(perUnit(totals?.spendCents ?? 0, totals?.installs ?? 0))}</td>
-                    {allCols && <td>{fmtInt(totals?.registrations ?? 0)}</td>}
+                    <td>{regUsable ? fmtInt(totals?.metaRegistrations ?? 0) : "—"}</td>
+                    <td className={styles.adsMuted}>{regUsable ? money2(perUnit(totals?.spendCents ?? 0, totals?.metaRegistrations ?? 0)) : "—"}</td>
+                    <td className={styles.adsGroupStart}>{fmtInt(totals?.registrations ?? 0)}</td>
                     <td>{fmtInt(totals?.becamePlayers ?? 0)}</td>
                     <td className={styles.adsKey}>{money2(blended)}</td>
                     {allCols && <td>{fmtInt(totals?.playedWithin7d ?? 0)}</td>}
                     {allCols && <td>{fmtInt(rows.reduce((a, r) => a + r.playedWithin30d, 0))}</td>}
-                    {allCols && <td colSpan={3} />}
+                    {allCols && <td className={styles.adsGroupStart} colSpan={3} />}
                     {/* NO TOTAL. The fair shares partition the same total the actual spends do,
                         so the column sums to zero by construction and printing it would be
                         printing an identity, not a measurement. */}
-                    <td />
+                    <td className={styles.adsGroupStart} />
                   </tr>
                 </tbody>
               </table>
@@ -431,16 +513,18 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
 
 type ViewRow = { r: MarketRow; span: number; dark: boolean; cpnp: number | null; band: Band | null; over: number | null };
 
-function Row({ v, open, onToggle, windowDays, allCols }: {
+function Row({ v, open, onToggle, windowDays, allCols, regUsable }: {
   v: ViewRow; open: boolean; onToggle: () => void;
   windowDays: number; allCols: boolean;
+  /** False when the window starts before Meta could count registrations. See REG_BLANK_TIP. */
+  regUsable: boolean;
 }) {
   const { r, band, cpnp, over, dark } = v;
   const keyCls = band ? KEY_CLASS[band] : "";
   const dupes = duplicateNames(r.adsets);
   const maxServed = Math.max(1, ...r.served.map((s) => s.spendCents));
   // Two bar columns went; the expansion spans what is left.
-  const cols = 6 + (allCols ? 5 : 0);
+  const cols = 10 + (allCols ? 5 : 0);
 
   return (
     <>
@@ -460,23 +544,30 @@ function Row({ v, open, onToggle, windowDays, allCols }: {
           </span>
         </td>
         <td data-testid="ads-spend">{money0(r.spendCents)}</td>
-        <td>{r.installs == null ? "—" : fmtInt(r.installs)}</td>
+        <td className={styles.adsGroupStart}>{r.installs == null ? "—" : fmtInt(r.installs)}</td>
         <td className={styles.adsMuted} data-testid="ads-cpi">{money2(perUnit(r.spendCents, r.installs))}</td>
-        {allCols && <td>{fmtInt(r.registrations)}</td>}
+        {/* BLANK, NOT ZERO, FOR A WINDOW THAT PREDATES THE EVENT. See REG_BLANK_TIP. */}
+        <td data-testid="ads-metareg">{!regUsable ? <span className={styles.adsMuted} title={REG_BLANK_TIP}>—</span> : r.metaRegistrations == null ? "—" : fmtInt(r.metaRegistrations)}</td>
+        <td className={styles.adsMuted} data-testid="ads-costreg">
+          {!regUsable ? <span title={REG_BLANK_TIP}>—</span> : money2(perUnit(r.spendCents, r.metaRegistrations))}
+        </td>
+        <td className={styles.adsGroupStart} data-testid="ads-allreg">{fmtInt(r.registrations)}</td>
         <td data-testid="ads-newplayers">{fmtInt(r.becamePlayers)}</td>
         <td className={`${styles.adsKey} ${keyCls}`} data-testid="ads-cpnp">{money2(cpnp)}</td>
         {allCols && <td>{fmtInt(r.playedWithin7d)}</td>}
         {allCols && <td>{fmtInt(r.playedWithin30d)}</td>}
-        {allCols && <td>{pct(shareOf(r.homeCents, r.spendCents))}</td>}
+        {allCols && <td className={styles.adsGroupStart}>{pct(shareOf(r.homeCents, r.spendCents))}</td>}
         {allCols && <td className={r.unknownCents > 0 ? styles.adsUnknown : undefined}>{pct(shareOf(r.unknownCents, r.spendCents))}</td>}
         {allCols && <td>{pct(shareOf(r.otherNamedCents, r.spendCents))}</td>}
         {/* A DARK MARKET IS UNBANDED HERE TOO, for the same reason its rate is. Its spend stopped
             part-way through a window its players accrued across all of, so "under by $X" is
             measuring the stop, not the allocation. The figure is shown and left grey: neutral,
             not a verdict. */}
+        {/* A DARK MARKET IS A DASH, not a number. Its spend stopped part-way through a window its
+            players accrued across all of, so the comparison measures the stop. */}
         <td data-testid="ads-over"
-          className={`${styles.adsOverUnder} ${over == null ? "" : dark ? styles.adsKeyDark : over > 0 ? styles.adsKeyBad : styles.adsKeyGood}`}>
-          {over == null ? "—" : `${over > 0 ? "+" : "−"}${money0(Math.abs(over))}`}
+          className={`${styles.adsOverUnder} ${styles.adsGroupStart} ${over == null || dark ? "" : over > 0 ? styles.adsKeyBad : styles.adsKeyGood}`}>
+          {over == null || dark ? <span className={styles.adsMuted}>—</span> : `${over > 0 ? "+" : "−"}${money0(Math.abs(over))}`}
         </td>
       </tr>
 
@@ -525,13 +616,26 @@ function Row({ v, open, onToggle, windowDays, allCols }: {
                             {" "}· only {pct(a.confidence, 0)} here
                           </span>
                         )}
+                        {/* ── THE ATTRIBUTION WINDOW, ON THE LINE ─────────────────────────────
+                            Six of the seven live ad sets are 1-day click only; Atlanta's Android
+                            one also carries 1-day view and 1-day engaged video view, so Meta can
+                            credit it for a signup nobody clicked. Its cost per registration sits
+                            on a looser basis than its neighbours', and without this the two read
+                            like the same measurement. */}
+                        {a.attribution && (
+                          <span className={styles.adsMuted} data-testid="ads-adset-attribution"
+                            title="The windows Meta will credit a registration against. A wider window credits more signups to the same spend, so a cost per registration is only comparable with an ad set on the same windows.">
+                            {" "}· {a.attribution}
+                          </span>
+                        )}
                       </span>
                       {/* SPEND WITH NOTHING TO SHOW FOR IT is the actionable line in this list —
                           five of Houston's seven ad sets, $674 of its $1,799 — and the first cut
                           did not mark it at all. */}
                       <span className={`${styles.adsLineVal} ${dead ? styles.adsDead : ""}`} data-testid="ads-adset-installs"
-                        style={{ width: 150 }}>
+                        style={{ width: 200 }}>
                         {money0(a.spendCents)} · {a.installs == null ? "—" : dead ? "no installs" : `${fmtInt(a.installs)} installs`}
+                        {regUsable && a.registrations != null && a.registrations > 0 && ` · ${fmtInt(a.registrations)} regs`}
                       </span>
                     </div>
                   );

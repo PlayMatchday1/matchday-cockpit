@@ -45,7 +45,11 @@ export async function GET(req: Request) {
         .select("spend_date, adset_id, spend_cents, installs, clicks, registrations")
         .gte("spend_date", since).lte("spend_date", until).order("spend_date")),
       selectAll<DimRow>(() => sb.from("fin_meta_adset")
-        .select("adset_id, adset_name, campaign_name, market_key, market_raw, market_confidence")
+        /* optimization_goal IDENTIFIES A REGISTRATION-OPTIMIZED AD SET (with the date rule in
+         * registrationRebuildStart); attribution_spec is shown in the expansion because the
+         * Atlanta Android ad set carries three windows where its six neighbours carry one, so its
+         * cost per registration sits on a looser basis and must not be read like theirs. */
+        .select("adset_id, adset_name, campaign_name, market_key, market_raw, market_confidence, optimization_goal, attribution_spec")
         .order("adset_id")),
       /* THE PLAYER SIDE IS ALREADY ON AMERICA/CHICAGO (0185), which is the same wall clock as
        * Meta's America/Bogota from March to November and one hour off the rest of the year. On UTC

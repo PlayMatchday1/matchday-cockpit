@@ -1283,7 +1283,13 @@
 /* ── the table ─────────────────────────────────────────────────────────────── */
 .adsTable { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
 .adsTable th {
-  padding: 10px 11px;
+  /* ── TEN COLUMNS HAVE TO FIT, AND THE LAST ONE IS THE POINT ─────────────────
+   * The registration pair took the table past the card at 1440px and clipped
+   * Spend vs. average off the right edge entirely: the comparison column was
+   * invisible with no scroll affordance to say so. Headers WRAP now rather than
+   * forcing their column to the width of the longest word run, which is what
+   * "REGISTRATIONS FROM ADS" was doing on a column of two-digit numbers. */
+  padding: 9px 8px;
   text-align: right;
   font-size: 0.66rem;
   font-weight: 600;
@@ -1292,17 +1298,42 @@
   color: var(--muted);
   border-bottom: 1px solid var(--line);
   background: var(--slot-bg);
-  white-space: nowrap;
+  white-space: normal;
+  vertical-align: bottom;
 }
-.adsTable th:first-child, .adsTable td:first-child { text-align: left; padding-left: 20px; }
+.adsTable th:first-child, .adsTable td:first-child { text-align: left; padding-left: 18px; white-space: nowrap; }
+.adsTable th:last-child, .adsTable td:last-child { padding-right: 18px; }
 .adsTable td {
-  padding: 11px 11px;
+  padding: 11px 8px;
   text-align: right;
   border-bottom: 1px solid var(--hair);
   font-variant-numeric: tabular-nums;
   color: var(--ink);
   white-space: nowrap;
 }
+/* ── THE TWO SOURCE GROUPS ───────────────────────────────────────────────────
+ * Six of the nine columns are two different measurements of the same thing and
+ * the page never said which came from where: Meta counts what Meta can credit,
+ * we count everyone. The tint is the label's background, not the column's, so
+ * the numbers keep one reading surface and only the header carries the group. */
+.adsGroupRow th {
+  padding: 7px 11px 5px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: left;
+  border-bottom: 0;
+  background: var(--surface);
+}
+.adsGroupMeta { background: var(--slot-bg) !important; color: var(--muted); }
+.adsGroupOurs { background: var(--mint) !important; color: var(--ok-ink); }
+.adsGroupEdge { background: var(--surface) !important; }
+/* ONE HAIRLINE AT EACH BOUNDARY, on the first column of every group, so the
+   grouping survives into the body where the tint deliberately does not. */
+.adsTable th.adsGroupStart, .adsTable td.adsGroupStart { border-left: 1px solid var(--line); }
+.adsGroupRow th.adsGroupMeta, .adsGroupRow th.adsGroupOurs { border-left: 1px solid var(--line); }
+
 /* THE HEADLINE COLUMN IS MARKED IN THE HEADER TOO, so the eye knows before it
  * reaches a number which column it is being asked to read. */
 .adsHeadKey { color: var(--ink); font-weight: 700; }
