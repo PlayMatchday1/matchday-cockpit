@@ -324,6 +324,14 @@ export async function fetchWeekMatchPnL(
       .gte("start_date", `${ymd(weekStart)}T00:00:00Z`)
       .lte("start_date", `${ymd(weekEnd)}T23:59:59Z`),
   );
+  /* FROM data.venueFieldLinks, WHICH THIS FUNCTION ALREADY RECEIVES. Not a new field on
+   * FinanceData and not a second query: the links are loaded once in useFinanceData and carry
+   * counts_as_regular_play per link (useFinanceData:746). */
+  const countsAsRegular = new Set<number>(
+    data.venueFieldLinks
+      .filter((l) => l.counts_as_regular_play === true)
+      .map((l) => l.mdapi_field_id),
+  );
   const matchMaxPlayer = new Map<string, number | null>();
   const matchIsEvent = new Map<string, boolean>();
   for (const m of matchMetaRows) {
@@ -337,7 +345,27 @@ export async function fetchWeekMatchPnL(
      * stays exactly as it was for all of them — except a Soccer Central match that occupies both
      * pitches, which is a regular match by Ryan's ruling and has been discarded here since this
      * guard was written. Field 1123 is not in SOCC_TWO_PITCH_FIELD_IDS, so it keeps being dropped. */
-    const isEventByCategory = venueCategory(m.field_title) === "event";
+    /* ── counts_as_regular_play, AND WHY IT HAD TO BE REPEATED HERE ────────────────────────────
+     * useFinanceData:462 applies this exception ONCE, where `category` is decided, precisely so
+     * that no consumer has to know the column exists. This function is the consumer that does not
+     * read that category: it re-derives it from field_title on its own window query, so the
+     * exception never reached it.
+     *
+     * READING THE RESOLVED CATEGORY WOULD HAVE BEEN BETTER AND IS NOT AVAILABLE. data.matches is
+     * bounded by the selected finance period (smBounds), and a slate week can sit outside it —
+     * which is the whole reason this function issues its own mdapi_matches query above. So the
+     * rule is mirrored from :462 rather than read, and the two are now a pair that must move
+     * together.
+     *
+     * ATH PEARLAND IS THE CASE. mdapi field 22 is titled "Tourney ATH Pearland", so \btourney\b
+     * fires and 319 of 335 Pearland matches were classified as events and dropped from the Slate
+     * P&L. The word describes the PITCH CONFIGURATION, not the match, exactly as at Soccer
+     * Central. fin_venue_fields already carries counts_as_regular_play = true for field 22;
+     * field 21, "Tournaments at ATH Pearland", is false and stays an event. */
+    const countsRegular =
+      m.field_id != null && countsAsRegular.has(Number(m.field_id));
+    const isEventByCategory =
+      !countsRegular && venueCategory(m.field_title) === "event";
     matchIsEvent.set(k, isEventByCategory && !survivesEventDrop(m.field_id, m.max_player_count));
   }
 
