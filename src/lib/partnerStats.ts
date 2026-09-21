@@ -161,7 +161,19 @@ export type PartnerRevenueModel = "flat_percentage" | "per_match_minus_manager";
 /* THE SUCCESSOR MODEL. A partner's terms can change on a date, and only forward: `revenue_model`
  * still governs every period before `revenueModelFrom`, so a settled month recomputes exactly as it
  * was paid and never sprouts a divergence marker on the partner's own page. */
-export type PartnerRevenueModelNext = PartnerRevenueModel | "per_match_fee";
+export type PartnerRevenueModelNext =
+  | PartnerRevenueModel
+  | "per_match_fee"
+  /* flat_percentage, plus MEMBER spots valued at the field's DPP list price. Hattrick only, from
+   * 2026-09-01 (migration 0189). A member spot is a free booking against an active subscription,
+   * so its own match_price_paid is $0 and the flat model has always skipped it; this counts it at
+   * the same price a daily player pays at that field.
+   *
+   * IT IS A MODEL AND NOT A DATE IN THE CALCULATION because two things have to be expressed, WHICH
+   * PARTNER and FROM WHEN. A date gate expresses only the second, and PAC Global and Parmer are on
+   * plain flat_percentage with $0 of member spots today — which is exactly why the scoping has to
+   * be explicit now rather than discovered the day one of them takes a member. */
+  | "flat_percentage_with_members";
 
 /* ONE ROW PER MATCH — NOT PER REGISTRATION.
  *
@@ -282,7 +294,8 @@ function rowToPartnerConfig(row: Record<string, unknown>): PartnerConfig {
   const pairOk = rawNext != null && rawFrom != null;
   const revenueModelNext: PartnerRevenueModelNext | null = !pairOk
     ? null
-    : rawNext === "per_match_fee" || rawNext === "per_match_minus_manager" || rawNext === "flat_percentage"
+    : rawNext === "per_match_fee" || rawNext === "per_match_minus_manager"
+      || rawNext === "flat_percentage" || rawNext === "flat_percentage_with_members"
       ? (rawNext as PartnerRevenueModelNext)
       : null;
   return {
@@ -469,6 +482,16 @@ export type PartnerWeeklyPaymentRecord = {
   calculated_amount: number;
   /** What was actually PAID, when it differed. Null means it matched calculated_amount. (0163) */
   paid_amount: number | null;
+  /* ── THE FROZEN MEMBER RATE (0189) ──────────────────────────────────────────────────────────
+   * The DPP list price in CENTS this period's member spots were valued at, and the count, written
+   * when the period was generated. fin_venues.dpp_price is a single live config value with an
+   * editor in Field Costs and no history, so reading it at render time would re-value every period
+   * that recomputes — including months already paid.
+   *
+   * NULL MEANS "not computed under a member-spot model", which is every existing row and every
+   * row for every other partner. It never means the rate was zero. */
+  member_spot_rate_cents?: number | null;
+  member_spots?: number | null;
   status: "pending" | "paid" | "disputed";
   paid_at: string | null;
   paid_notes: string | null;
@@ -482,6 +505,19 @@ export type PartnerWeeklyPaymentRecord = {
 // partner page still renders. Resilient to migration 0004 not yet
 // applied: if is_pre_system_settlement column is missing, falls back
 // to the legacy column set with the flag defaulted to false.
+/* DOLLARS TO CENTS, ONCE. fin_venues.dpp_price is numeric DOLLARS; mdapi_match_players.amount is
+ * CENTS. This codebase has already eaten an 80x error from that divide being missed, and 0150's
+ * per_match_fee_cents carries its unit in its name for the same reason.
+ *
+ * NULL FOR ANYTHING THAT IS NOT A POSITIVE NUMBER, including 0. A venue with no list price cannot
+ * value a member spot, and returning 0 would quietly pay the partner nothing for spots that were
+ * really played. The caller reports "could not be valued" instead. */
+export function dppPriceToCents(v: unknown): number | null {
+  const n = typeof v === "number" ? v : v == null ? NaN : Number(v);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n * 100);
+}
+
 export async function fetchPartnerWeeklyPayments(
   supabase: SupabaseClient,
   partnerDashboardId: string,
@@ -492,6 +528,19 @@ export async function fetchPartnerWeeklyPayments(
   let error: any = null;
   /* NEWEST COLUMN TIER FIRST — 0163's paid_amount, then without it. Code deploys before a
    * migration applies, and a named column that does not exist yet fails the whole select. */
+  /* 0189's frozen member pair is the newest tier. Same ladder as 0163's paid_amount and for the
+   * same reason: code deploys before a migration applies, and a named column that does not exist
+   * yet fails the whole select rather than one field. */
+  const withMember = await supabase
+    .from("partner_weekly_payments")
+    .select(
+      "id, partner_dashboard_id, week_start_date, calculated_amount, paid_amount, status, paid_at, paid_notes, dispute_note, disputed_at, is_pre_system_settlement, member_spot_rate_cents, member_spots",
+    )
+    .eq("partner_dashboard_id", partnerDashboardId)
+    .order("week_start_date", { ascending: true });
+  if (!withMember.error) {
+    return (withMember.data ?? []) as PartnerWeeklyPaymentRecord[];
+  }
   const withPaid = await supabase
     .from("partner_weekly_payments")
     .select(
@@ -559,11 +608,16 @@ export async function fetchPartnerRows(
   rows: PartnerRegRow[];
   extra: PartnerExtraRevRow[];
   venueName: string;
+  /** fin_venues.dpp_price in CENTS, or null when the venue carries no list price. */
+  memberSpotRateCents: number | null;
   matches: PartnerMatchRow[];
 }> {
   const { data: venue, error: venueErr } = await supabase
     .from("fin_venues")
-    .select("venue_name")
+    /* dpp_price COMES FROM HERE AND NOWHERE ELSE. Resolved through the partner's venue_id, which
+     * is the only join that is safe: fin_pricing has its own id space (its id 10 is ATH Pearland
+     * while fin_venues id 10 is PAC Global) and its rows were all last touched 2026-04-25. */
+    .select("venue_name, dpp_price")
     .eq("id", venueId)
     .maybeSingle();
   if (venueErr || !venue) {
@@ -637,7 +691,10 @@ export async function fetchPartnerRows(
     notes: r.notes ?? null,
   }));
 
-  return { rows: out, extra, venueName: venue.venue_name, matches };
+  return {
+    rows: out, extra, venueName: venue.venue_name, matches,
+    memberSpotRateCents: dppPriceToCents(venue.dpp_price),
+  };
 }
 
 // ----- pure compute (mirrors pac_global_dashboard.html buildDashboard) -----
@@ -1023,6 +1080,17 @@ export type PartnerWeeklyPayment = {
   // owedAmount — that is already correct; they are for the table's columns.
   matches: number;
   managerPay: number;
+  /* ── THE MEMBER TERM, FOR THE ITEMISED REVENUE CELL ─────────────────────────────────────────
+   * Null on every model that does not value member spots. memberRateCents is the rate ACTUALLY
+   * USED for this period: the frozen one when the row carries it, the live one when it does not.
+   * memberFrozen says which, so the dashboard can tell a partner what they were paid at rather
+   * than what the config happens to say today. */
+  memberSpots?: number | null;
+  memberRevenue?: number | null;
+  memberRateCents?: number | null;
+  memberFrozen?: boolean;
+  /** Why the member component is absent when it should have been present. */
+  memberUnvalued?: string | null;
   status: "pending" | "paid" | "disputed";
   // When a partner_weekly_payments row exists for this week, these
   // mirror the persisted row. When no row exists, status='pending'
@@ -1130,6 +1198,22 @@ type PeriodCalcConfig = {
   revenueModelNext?: PartnerRevenueModelNext | null;
   revenueModelFrom?: string | null;   // YYYY-MM-DD
   perMatchFeeCents?: number | null;
+  /* ── THE DPP LIST PRICE, IN CENTS, RESOLVED BY THE CALLER ────────────────────────────────────
+   * fin_venues.dpp_price for the partner's OWN venue, reached through partner_dashboards.venue_id.
+   * partnerStats holds no FinanceData and must not acquire one, so the caller resolves it.
+   *
+   * NOT fin_pricing.dpp_price. MEASURED 2026-09-21: fin_pricing says $5 for Hattrick while 242 of
+   * 283 priced September daily rows are $8 and the rest are exact multiples of $8. Every
+   * fin_pricing row carries the same updated_at of 2026-04-25 and the table has no editor in the
+   * app; fin_venues.dpp_price has one in Field Costs and agrees with the charges.
+   *
+   * THE TWO TABLES HAVE DIFFERENT ID SPACES. fin_pricing id 10 is ATH Pearland, fin_venues id 10
+   * is PAC Global, and they coincide for Hattrick at id 3 only by luck. Resolve through venue_id
+   * into fin_venues, never a bare id against whichever table is to hand.
+   *
+   * NULL IS NOT ZERO. A null here means the member component cannot be valued, and periodOwed
+   * says so rather than adding $0 of member revenue to a partner's payment. */
+  memberSpotRateCents?: number | null;
   matchList?: PartnerMatchRow[];
 };
 
@@ -1189,13 +1273,65 @@ export function modelForPeriod(cfg: PeriodCalcConfig, periodStart: string): Part
 // match count and the manager-pay deduction — which is NOT recoverable as
 // qualifying − owed once the $0 floor fires. managerPay is 0 for flat_percentage
 // partners (that model has no manager-pay subtraction).
+/* ── A PAID PERIOD IS PAID AT THE RATE IT WAS PAID AT ───────────────────────────────────────────
+ *
+ * fin_venues.dpp_price is one live config value, editable in Field Costs, with no history. If the
+ * period's member term were recomputed from it on every render, an edit would silently re-value
+ * every month that recomputes — including months already paid, on a page the partner reads.
+ *
+ * SO A ROW THAT CARRIES A FROZEN RATE IS AUTHORITATIVE and config is not consulted for it. The
+ * count is frozen with it (migration 0189 constrains them both-or-neither) so the arithmetic on a
+ * paid period can be re-derived from the row alone rather than trusted.
+ *
+ * A ROW WITHOUT ONE RECOMPUTES, which is every period before the freeze existed and every open
+ * period. That is the intended direction: an open month should move as spots accrue.
+ *
+ * qualifyingRevenue AND owedAmount ARE REBUILT FROM THE FROZEN PAIR, not adjusted by a delta. The
+ * non-member half is whatever periodOwed just computed; only the member term is replaced.
+ */
+function applyFrozenMemberRate(
+  base: ReturnType<typeof periodOwed>,
+  rec: PartnerWeeklyPaymentRecord | undefined,
+  cfg: PeriodCalcConfig,
+): ReturnType<typeof periodOwed> & { memberFrozen: boolean } {
+  const frozenCents = rec?.member_spot_rate_cents ?? null;
+  const frozenSpots = rec?.member_spots ?? null;
+  if (frozenCents == null || frozenSpots == null) return { ...base, memberFrozen: false };
+  const memberRevenue = (frozenSpots * frozenCents) / 100;
+  const nonMember = base.qualifyingRevenue - (base.memberRevenue ?? 0);
+  const qualifyingRevenue = nonMember + memberRevenue;
+  return {
+    ...base,
+    qualifyingRevenue,
+    owedAmount: Math.round(qualifyingRevenue * cfg.revenueSharePct) / 100,
+    memberSpots: frozenSpots,
+    memberRevenue,
+    memberRateCents: frozenCents,
+    // A frozen period is valued by definition; any live-config complaint is not its problem.
+    memberUnvalued: null,
+    memberFrozen: true,
+  };
+}
+
 export function periodOwed(
   matchActive: PartnerRegRow[],
   finRevRows: PartnerExtraRevRow[],
   periodStart: string,
   periodEnd: string,
   cfg: PeriodCalcConfig,
-): { qualifyingRevenue: number; owedAmount: number; matches: number; managerPay: number; matchesCancelled: number } {
+): {
+  qualifyingRevenue: number; owedAmount: number; matches: number; managerPay: number;
+  matchesCancelled: number;
+  /* THE MEMBER TERM, SURFACED SO IT CAN BE FROZEN AND ITEMISED. Null on every model that does not
+   * value member spots, which is every model but one. */
+  memberSpots: number | null;
+  memberRevenue: number | null;
+  memberRateCents: number | null;
+  /* WHY THE MEMBER COMPONENT IS ABSENT, when it should have been present. A partner underpaid by
+   * a silent $0 is worse than one who reads "not yet calculated", so this carries the reason to
+   * the surface instead of letting a missing price look like a month with no members. */
+  memberUnvalued: string | null;
+} {
   const model = modelForPeriod(cfg, periodStart);
 
   /* ── PER-MATCH FEE ──────────────────────────────────────────────────────────────────────────
@@ -1229,6 +1365,9 @@ export function periodOwed(
       }
     }
     return {
+      // The member term belongs to one model. Null is "this model does not value member spots",
+      // never "it valued them at zero".
+      memberSpots: null, memberRevenue: null, memberRateCents: null, memberUnvalued: null,
       qualifyingRevenue,
       owedAmount: Math.round(billable.length * feeCents) / 100,
       matches: billable.length,
@@ -1278,6 +1417,9 @@ export function periodOwed(
     const owed = Math.max(0, qualifyingRevenue - totalManagerPay);
     // Round to cents once at the end.
     return {
+      // The member term belongs to one model. Null is "this model does not value member spots",
+      // never "it valued them at zero".
+      memberSpots: null, memberRevenue: null, memberRateCents: null, memberUnvalued: null,
       qualifyingRevenue,
       owedAmount: Math.round(owed * 100) / 100,
       matches: byMatch.size,
@@ -1288,7 +1430,21 @@ export function periodOwed(
     };
   }
 
-  // flat_percentage (default)
+  // flat_percentage (default), and flat_percentage_with_members
+  /* dpRev IS DELIBERATELY UNCHANGED. It sums match_price_paid out of matchActive, which filters
+   * only fake emails and MATCH-cancelled rows, so a PLAYER-cancelled daily booking is still in it
+   * and still carries its price.
+   *
+   * THAT IS MOSTLY CORRECT AND PARTLY NOT, MEASURED 2026-09-21. A late cancel (inside 24 hours)
+   * gets no credit, MatchDay keeps the money, and a 50% share of money actually collected is
+   * right: $751.00 across the three flat-percentage partners, April to September. But a REFUNDED
+   * cancellation also keeps its price here, because match_price_paid is amount/100 and never
+   * subtracts a refund — $295.00 across the same three, $147.50 paid out at 50%, and April
+   * through August are affected. PartnerDashboardView already tells the partner qualifying
+   * revenue is "what players were charged, less any refunds", which is not true today.
+   *
+   * IT IS NOT FIXED HERE ON PURPOSE. Reducing a partner's future payments and reopening closed
+   * months is its own decision, not a side effect of adding member spots. */
   let dpRev = 0;
   const flatMatches = new Set<string>();
   for (const r of matchActive) {
@@ -1304,13 +1460,55 @@ export function periodOwed(
     if (!e.date || e.date < periodStart || e.date > periodEnd) continue;
     prRev += Number(e.gross ?? 0) || 0;
   }
-  const qualifyingRevenue = dpRev + prRev;
+
+  /* ── THE THIRD TERM ──────────────────────────────────────────────────────────────────────────
+   * PLAYED, NOT BOOKED. matchActive does NOT filter player-cancelled rows — isCanceled() exists in
+   * this file and is used for the weekly display counts, never in here — so the filter is applied
+   * explicitly. A member who booked and cancelled gave the pitch nothing, which is the same ruling
+   * that landed for the Membership card in 842dac9, and the two must agree.
+   *
+   * GUEST ROWS ARE EXCLUDED TOO. A host buying a second seat produces a second row under their own
+   * user_id at amount 0; it is one booking, not two members.
+   *
+   * payment_type IS READ, NEVER RE-DERIVED. derivePaymentType decides MEMBER against
+   * FREE_NON_MEMBER using the membership windows, and a second implementation here would be the
+   * one place those two could disagree. */
+  const valuesMembers = model === "flat_percentage_with_members";
+  let memberSpots: number | null = null;
+  let memberRevenue: number | null = null;
+  let memberRateCents: number | null = null;
+  let memberUnvalued: string | null = null;
+  if (valuesMembers) {
+    memberSpots = 0;
+    for (const r of matchActive) {
+      if (r.payment_type !== "MEMBER") continue;
+      const matchYmd = r.match_start.slice(0, 10);
+      if (matchYmd < periodStart || matchYmd > periodEnd) continue;
+      if (isCanceled(r)) continue;          // booked and cancelled: the pitch got nothing
+      if (r.user_type === "GUEST") continue; // a host's second seat, not a second member
+      memberSpots += 1;
+    }
+    const cents = cfg.memberSpotRateCents;
+    if (cents == null || !Number.isFinite(cents) || cents <= 0) {
+      /* NOT $0 OF MEMBER REVENUE. The spots are counted and reported; the money is withheld with a
+       * reason, so the surface can say "not yet calculated" instead of quietly paying nothing. */
+      memberUnvalued = cents == null
+        ? "No DPP list price is set for this venue, so member spots could not be valued."
+        : "The venue's DPP list price is zero or invalid, so member spots could not be valued.";
+    } else {
+      memberRateCents = cents;
+      memberRevenue = (memberSpots * cents) / 100;
+    }
+  }
+
+  const qualifyingRevenue = dpRev + prRev + (memberRevenue ?? 0);
   return {
     qualifyingRevenue,
     owedAmount: Math.round(qualifyingRevenue * cfg.revenueSharePct) / 100,
     matches: flatMatches.size,
     managerPay: 0, // flat_percentage has no manager-pay subtraction
     matchesCancelled: cancelledInPeriod(cfg, periodStart, periodEnd),
+    memberSpots, memberRevenue, memberRateCents, memberUnvalued,
   };
 }
 
@@ -1351,6 +1549,10 @@ export function computeWeeklyPayments(
     revenueModelNext?: PartnerRevenueModelNext | null;
     revenueModelFrom?: string | null;
     perMatchFeeCents?: number | null;
+    /* fin_venues.dpp_price for THIS partner's venue, in cents, resolved by the caller through
+     * partner_dashboards.venue_id. Optional so every existing caller is untouched; a caller that
+     * omits it on a member-spot partner gets "could not be valued", never $0. */
+    memberSpotRateCents?: number | null;
   },
   records: PartnerWeeklyPaymentRecord[] = [],
   now: Date = new Date(),
@@ -1371,6 +1573,7 @@ export function computeWeeklyPayments(
     revenueModelNext: config.revenueModelNext ?? null,
     revenueModelFrom: config.revenueModelFrom ?? null,
     perMatchFeeCents: config.perMatchFeeCents ?? null,
+    memberSpotRateCents: config.memberSpotRateCents ?? null,
     matchList,
   };
 
@@ -1430,7 +1633,7 @@ export function computeWeeklyPayments(
     let cursor = firstQualifyingPeriod;
     while (cursor <= today) {
       const monthEnd = lastDayOfMonth(cursor);
-      const { qualifyingRevenue, owedAmount, matches, managerPay, matchesCancelled } = periodOwed(
+      const base = periodOwed(
         matchActive,
         finRevRows,
         cursor,
@@ -1438,6 +1641,8 @@ export function computeWeeklyPayments(
         calcConfig,
       );
       const rec = recordByPeriod.get(cursor);
+      const { qualifyingRevenue, owedAmount, matches, managerPay, matchesCancelled, ...mem } =
+        applyFrozenMemberRate(base, rec, calcConfig);
       generatedRows.push({
         weekStartDate: cursor,
         weekEndDate: monthEnd,
@@ -1446,6 +1651,7 @@ export function computeWeeklyPayments(
         matches,
         managerPay,
         matchesCancelled,
+        ...mem,
         status: rec?.status ?? "pending",
         recordId: rec?.id ?? null,
         calculatedAmount: rec?.calculated_amount ?? null,
@@ -1462,7 +1668,7 @@ export function computeWeeklyPayments(
     let cursor = firstQualifyingPeriod;
     while (cursor <= today) {
       const weekEnd = addDays(cursor, 6);
-      const { qualifyingRevenue, owedAmount, matches, managerPay, matchesCancelled } = periodOwed(
+      const base = periodOwed(
         matchActive,
         finRevRows,
         cursor,
@@ -1470,6 +1676,8 @@ export function computeWeeklyPayments(
         calcConfig,
       );
       const rec = recordByPeriod.get(cursor);
+      const { qualifyingRevenue, owedAmount, matches, managerPay, matchesCancelled, ...mem } =
+        applyFrozenMemberRate(base, rec, calcConfig);
       generatedRows.push({
         weekStartDate: cursor,
         weekEndDate: weekEnd,
@@ -1478,6 +1686,7 @@ export function computeWeeklyPayments(
         matches,
         managerPay,
         matchesCancelled,
+        ...mem,
         status: rec?.status ?? "pending",
         recordId: rec?.id ?? null,
         calculatedAmount: rec?.calculated_amount ?? null,

@@ -97,7 +97,8 @@ export default function PartnerDashboardView({ partnerName, venue, city, launchD
       {/* ── recent weeks (monthly partners only; the weekly table above already is the week view) ── */}
       {cadence === "monthly" && <RecentWeeks stats={stats} />}
 
-      <Footer rows={rows} stats={stats} totalMatches={totalMatches} owed={owed.owed} venue={venue} launch={launch} today={today} cadence={cadence} perMatch={perMatch} sharePct={payment.revenueSharePct} />
+      <Footer rows={rows} stats={stats} totalMatches={totalMatches} owed={owed.owed} venue={venue} launch={launch} today={today} cadence={cadence} perMatch={perMatch} sharePct={payment.revenueSharePct}
+        memberRateCents={payment.weeklyPayments.find((w) => w.memberRateCents != null)?.memberRateCents ?? null} />
     </div>
   );
 }
@@ -225,8 +226,12 @@ function RecentWeeks({ stats }: { stats: PartnerStats }) {
   );
 }
 
-function Footer({ rows, stats, totalMatches, owed, venue, launch, today, cadence, perMatch, sharePct }: {
+function Footer({ rows, stats, totalMatches, owed, venue, launch, today, cadence, perMatch, sharePct, memberRateCents }: {
   rows: PeriodRow[]; stats: PartnerStats; totalMatches: number; owed: number; venue: string; launch: string | null; today: string; cadence: "weekly" | "monthly"; perMatch: boolean; sharePct: number;
+  /* THE RATE THIS PARTNER'S MEMBER SPOTS ARE VALUED AT, or null when this partner has no member
+   * term. Null is what keeps a plain flat_percentage partner from being told about a rule that
+   * does not apply to them. */
+  memberRateCents?: number | null;
 }) {
   const t = stats.totals;
   const none = rows.filter((r) => r.state === "nothing" && r.shortfall > 0);
@@ -243,7 +248,13 @@ function Footer({ rows, stats, totalMatches, owed, venue, launch, today, cadence
     `Everything here covers ${venue} only${launch ? `, from ${dfull(launch)} — the first match MatchDay ran at this venue —` : ""} through ${dfull(today)}, and counts ${plural(totalMatches, "match", "matches")}. ` +
     `Spots filled means a spot was paid for and held; MatchDay does not record who physically arrived, so no number on this page is attendance, including the ${t.uniquePlayers} distinct people. ` +
     `${t.cancels} spots were cancelled inside 24 hours: those are non-refundable, so they are still counted as charged. ` +
-    `Qualifying revenue is what players were charged, less any refunds. ${paymentRule}${floorSentence}. ` +
+    `Qualifying revenue is what players were charged, less any refunds. ` +
+    /* ONLY WHERE THE MODEL IS IN FORCE. A partner on plain flat_percentage must not be told about
+     * a rule that does not apply to them, so this sentence is keyed on the rate being present
+     * rather than on the feature existing. The price is NAMED, because "the same price a daily
+     * player pays" is checkable by the partner only if the number is on the page. */
+    `${memberRateCents ? `Member spots count too: a member playing at ${venue} counts at ${money(memberRateCents / 100)}, the same price a daily player pays at your field. ` : ""}` +
+    `${paymentRule}${floorSentence}. ` +
     `Payments run ${cadence}, ${dueCopy}; ${owed > 0 ? `${money(owed)} is currently scheduled or outstanding` : "nothing is currently outstanding"}. ` +
     `${open ? `${open.label} is still open — it closes ${dfull(open.pw.weekEndDate)}, so its figures are partial and no payment is calculated for it yet. ` : ""}` +
     `Figures update when the match data syncs, roughly hourly. If a number here does not match your own records, use the link directly under the table above and MatchDay will reconcile it.`;

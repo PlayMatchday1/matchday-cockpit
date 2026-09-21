@@ -93,7 +93,7 @@ export async function GET(req: Request) {
 
   const out = [];
   for (const p of partners) {
-    const { rows, extra, venueName } = await fetchPartnerRows(supabase, p.venueId);
+    const { rows, extra, venueName, memberSpotRateCents } = await fetchPartnerRows(supabase, p.venueId);
     const records = await fetchPartnerWeeklyPayments(supabase, p.id);
     const stats = computePartnerStats(rows, extra);
     const payment = computeWeeklyPayments(
@@ -108,6 +108,17 @@ export async function GET(req: Request) {
         managerPayBase: p.managerPayBase,
         managerPayHigh: p.managerPayHigh,
         managerPayThreshold: p.managerPayThreshold,
+        /* ── THE DATED SUCCESSOR WAS NOT PASSED HERE AND SHOULD HAVE BEEN ───────────────────────
+         * partnerDashboardData (the page the partner reads) passes these three; this route did
+         * not, so Crossbar's dated move to per_match_fee never applied on the admin index and the
+         * two surfaces disagreed for that partner. Adding them is a correction, and it is required
+         * either way: without them Hattrick's member-spot model would never fire on the route that
+         * SNAPSHOTS calculated_amount at mark-paid time, so the frozen figure would disagree with
+         * the partner's own page. */
+        revenueModelNext: p.revenueModelNext,
+        revenueModelFrom: p.revenueModelFrom,
+        perMatchFeeCents: p.perMatchFeeCents,
+        memberSpotRateCents,
       },
       records,
     );
@@ -194,11 +205,12 @@ export async function POST(req: Request) {
   // Both branches end at the same table (partner_weekly_payments) and the same key
   // (week_start_date), so a rental partner is not a second ledger — only a second way of
   // computing the authoritative amount to snapshot. The amount is NEVER taken from the client.
-  const { rows, extra } = await fetchPartnerRows(supabase, partner.venueId);
+  const { rows, extra, memberSpotRateCents } = await fetchPartnerRows(supabase, partner.venueId);
   const records = await fetchPartnerWeeklyPayments(supabase, partner.id);
 
   const rentalParams = rentalParamsOf(partner);
   let owedAmount: number;
+  let memberFreeze: { member_spot_rate_cents: number; member_spots: number } | null = null;
   let periodIsOpen: boolean;
   let periodLabel: string;
 
@@ -233,6 +245,12 @@ export async function POST(req: Request) {
         managerPayBase: partner.managerPayBase,
         managerPayHigh: partner.managerPayHigh,
         managerPayThreshold: partner.managerPayThreshold,
+        // See the note on the other call site: the successor and the member rate are required for
+        // the snapshot written below to agree with the partner's own page.
+        revenueModelNext: partner.revenueModelNext,
+        revenueModelFrom: partner.revenueModelFrom,
+        perMatchFeeCents: partner.perMatchFeeCents,
+        memberSpotRateCents,
       },
       records,
     );
@@ -241,6 +259,12 @@ export async function POST(req: Request) {
     if (period.isPreSystem) return Response.json({ error: "Historical settlements can't be changed here" }, { status: 400 });
     const today = new Date().toISOString().slice(0, 10);
     owedAmount = period.owedAmount;
+    /* The pair to freeze, from the SAME recompute that produced owedAmount, so the snapshot and
+     * the figure cannot come from two different reads. Null unless this period genuinely valued
+     * member spots. */
+    memberFreeze = period.memberRateCents != null && period.memberSpots != null
+      ? { member_spot_rate_cents: period.memberRateCents, member_spots: period.memberSpots }
+      : null;
     periodIsOpen = period.weekEndDate >= today && period.status !== "paid";
     periodLabel = weekStartDate;
   }
@@ -313,6 +337,19 @@ export async function POST(req: Request) {
            * PRE-0163 FALLBACK: if the column does not exist yet the write is retried without it,
            * so marking a period paid still works and only the difference is not recorded. */
           const paidCols = paidAmount == null ? {} : { paid_amount: paidAmount };
+          /* ── FREEZE THE MEMBER RATE AT MARK-PAID TIME (0189) ──────────────────────────────────
+           * fin_venues.dpp_price is one live config value with an editor in Field Costs and no
+           * history. Recomputed from it on every render, an edit would re-value every period that
+           * recomputes, including this one after it is paid, on a page the partner reads.
+           *
+           * BOTH COLUMNS OR NEITHER, which the DB also constrains: the rate alone lets the
+           * dashboard show a price but not re-derive the total. Written only when this period
+           * actually had a valued member term, so every other partner and every pre-0189 row
+           * keeps NULL, which reads as "not computed under a member-spot model" and never as a
+           * rate of zero.
+           *
+           * SAME 42703 LADDER AS paid_amount. Code deploys before a migration applies. */
+          const memberCols = memberFreeze == null ? {} : memberFreeze;
           const write = async (cols: Record<string, unknown>) => (existing
             ? supabase.from("partner_weekly_payments")
               .update({ status: "paid", paid_at: paidAt, calculated_amount: owedAmount, ...cols })
@@ -326,7 +363,8 @@ export async function POST(req: Request) {
               is_pre_system_settlement: false,
               ...cols,
             }));
-          let res = await write(paidCols);
+          let res = await write({ ...paidCols, ...memberCols });
+          if (res.error?.code === "42703") res = await write(paidCols);
           if (res.error?.code === "42703" && paidAmount != null) res = await write({});
           if (res.error) throw new Error(res.error.message);
         } else if (existing) {

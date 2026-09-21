@@ -37,6 +37,13 @@ export type GrainRow = {
   matchesBillable: number | null;
   matchesCancelled: number | null;
   revenue: number | null; rentals: RentalLine[];
+  /* ── THE MEMBER TERM, FOR THE ITEMISED REVENUE CELL ─────────────────────────────────────────
+   * Null on every partner and period that does not value member spots, which is everything except
+   * Hattrick from 2026-09. memberRateCents is the rate the period was ACTUALLY valued at: the one
+   * frozen on the payment row once it is paid, the live list price while it is open. */
+  memberSpots: number | null; memberRevenue: number | null; memberRateCents: number | null;
+  /** Set when the period should have had a member term and could not be valued. */
+  memberUnvalued: string | null;
   payment: number | null; paymentUnavailable: boolean;
   state: PeriodState; paidOn: string | null; dueDate: string; periodEnd: string;
   diverged: boolean; frozenPaid: number | null; livePayment: number | null;
@@ -93,6 +100,10 @@ function rowFromPeriod(pw: PartnerWeeklyPayment, pr: PeriodRow, rows: PartnerReg
     matchesCancelled: isFee && !pw.isPreSystem ? (pw.matchesCancelled ?? null) : null,
     revenue: pw.isPreSystem ? null : pr.qualifying,
     rentals: pw.isPreSystem ? [] : rentalsIn(extra, start, end),
+    memberSpots: pw.isPreSystem ? null : (pw.memberSpots ?? null),
+    memberRevenue: pw.isPreSystem ? null : (pw.memberRevenue ?? null),
+    memberRateCents: pw.isPreSystem ? null : (pw.memberRateCents ?? null),
+    memberUnvalued: pw.isPreSystem ? null : (pw.memberUnvalued ?? null),
     payment: pr.payment, paymentUnavailable: false,
     state: pr.state, paidOn: pr.paidOn, dueDate: pr.dueDate, periodEnd: end,
     diverged, frozenPaid: diverged ? pw.calculatedAmount : null, livePayment: diverged ? pw.owedAmount : null,
@@ -120,6 +131,7 @@ function rollMonth(monthKey: string, weeks: { pw: PartnerWeeklyPayment; pr: Peri
     key: start, label, isOpening: false, isOpen: open,
     matches: seats.matches, spots: seats.spots, daily: seats.daily, guests: seats.guests,
     matchesBillable: null, matchesCancelled: null,   // weekly roll-up; the fee partner is monthly
+    memberSpots: null, memberRevenue: null, memberRateCents: null, memberUnvalued: null,
     revenue, rentals: rentalsIn(extra, start, end),
     payment: open ? null : payment, paymentUnavailable: false,
     state, paidOn, dueDate: "", periodEnd: end, diverged, frozenPaid: null, livePayment: null,
@@ -170,6 +182,7 @@ export function derivePartnerGrains(
           key: cur, label: `Week of ${MON[+cur.slice(5, 7) - 1]} ${+cur.slice(8, 10)}`, isOpening: false, isOpen: end >= today,
           matches: seats.matches, spots: seats.spots, daily: seats.daily, guests: seats.guests,
           matchesBillable: null, matchesCancelled: null,   // display-only week strip; no payment
+          memberSpots: null, memberRevenue: null, memberRateCents: null, memberUnvalued: null,
           revenue: null, rentals: rentalsIn(extra, cur, end),
           payment: null, paymentUnavailable: true, state: "nothing", paidOn: null, dueDate: "", periodEnd: end,
           diverged: false, frozenPaid: null, livePayment: null,

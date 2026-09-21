@@ -83,6 +83,7 @@ const NODE_SUITES = [
   // wherever the split clears the floor), exact reconciliation including where MatchDay goes
   // negative, and that no site branches on the bare model literal.
   "scripts/partner-floor-payout-test.ts",
+  "scripts/partner-member-spots-test.ts",
   "scripts/meta-ad-spend-test.ts",
   // THE LEDGER FLOOR IS NOT A TUNABLE. Its own suite because the reason it exists is not the
   // obvious one: fin_expenses has NO rows of any kind before 2026-04-30, so ad spend in Dec-Mar

@@ -42,7 +42,7 @@ export async function buildPartnerDashboardData(
   const partner = await fetchPartnerBySlug(supabase, slug);
   if (!partner) return null;
 
-  const { rows, extra, venueName, matches: matchList } = await fetchPartnerRows(supabase, partner.venueId);
+  const { rows, extra, venueName, matches: matchList, memberSpotRateCents } = await fetchPartnerRows(supabase, partner.venueId);
 
   // ── RENTAL_PLUS_PROFIT_SHARE branches out FIRST, before any of the flat-model derivation runs.
   // Not a flag threaded through computePartnerStats/periodOwed: this model shares no arithmetic
@@ -106,6 +106,8 @@ export async function buildPartnerDashboardData(
     revenueModelNext: partner.revenueModelNext,
     revenueModelFrom: partner.revenueModelFrom,
     perMatchFeeCents: partner.perMatchFeeCents,
+    // fin_venues.dpp_price for this partner's own venue, resolved by fetchPartnerRows.
+    memberSpotRateCents,
   }, records, now, matchList);
 
   const grains = derivePartnerGrains(statsRows, statsExtra, payment, now);
@@ -133,6 +135,14 @@ export async function buildPartnerDashboardData(
       `Spots filled is every seat paid for and held; MatchDay does not record check-in, so it is not attendance. Daily players and Guests are shown; the remainder of Spots filled is made up of other seat types. ` +
       `A private rental is a booking with no MatchDay match behind it — no players and no spots — so it adds to qualifying revenue but not to the match or spot counts. Rentals are listed separately inside the revenue column so you can see what you are being paid for. ` +
       `The opening period is a single settled payment with no match-level detail behind it, so it adds to the payment total but not to the counts.` +
+      /* ── THE MEMBER-SPOT SENTENCE, ONLY WHERE THE MODEL IS IN FORCE ─────────────────────────
+       * Keyed on this partner actually having the model, so a partner on plain flat_percentage is
+       * never told about a rule that does not apply to them. The PRICE IS NAMED because the claim
+       * is "the same price a daily player pays at your field", and a partner can only check that
+       * against their own pitch if the number is on the page. */
+      (memberSpotRateCents && partner.revenueModelNext === "flat_percentage_with_members"
+        ? ` A member playing at ${venueName} counts toward qualifying revenue at $${(memberSpotRateCents / 100).toFixed(2)}, the same price a daily player pays at your field. Member spots are listed separately inside the revenue column, next to rentals.`
+        : "") +
       (running ? ` ${running.label} is still running and is not paid until the month closes, so it adds to the counts but not to the payment total.` : "");
     /* THE TERMS LINE, DERIVED FROM THE MODEL — never from revenue_share_pct.
      *
@@ -151,7 +161,13 @@ export async function buildPartnerDashboardData(
         ? `$${((partner.perMatchFeeCents ?? 0) / 100).toFixed(0)} per match that goes ahead`
         : m === "per_match_minus_manager"
           ? "match revenue less match manager pay"
-          : `${partner.revenueSharePct}% of qualifying revenue`;
+          /* THE SUCCESSOR HAS TO READ DIFFERENTLY FROM WHAT IT SUCCEEDS. Without this case it fell
+           * through to the same sentence as flat_percentage and the terms line rendered "50% of
+           * qualifying revenue through August 2026, then 50% of qualifying revenue from September
+           * 2026" — a dated change described as no change at all. */
+          : m === "flat_percentage_with_members"
+            ? `${partner.revenueSharePct}% of qualifying revenue, with member spots counted`
+            : `${partner.revenueSharePct}% of qualifying revenue`;
     const monthName = (ymd: string) =>
       `${MONTH_FULL[Number(ymd.slice(5, 7)) - 1]} ${ymd.slice(0, 4)}`;
     const terms = partner.revenueModelNext && partner.revenueModelFrom

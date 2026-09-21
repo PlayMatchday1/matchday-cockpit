@@ -109,7 +109,26 @@ export default function PartnerMonthlyView({ partnerName, sub, terms, since, mon
                   <td>{num(m.spots)}</td>
                   <td>{num(m.daily)}</td>
                   <td>{num(m.guests)}</td>
-                  <td>{money(m.revenue)}{rent > 0 && m.revenue != null && <span className="sub rent">{money(m.revenue - rent)} matches + {money(rent)} {m.rentals[0].label}</span>}</td>
+                  {/* ── THE TOTAL NEVER MOVES WITHOUT A LINE EXPLAINING IT ─────────────────────
+                      Private rentals were already broken out here. Member spots are the third
+                      term and get the same treatment: a partner reading a bigger number must be
+                      able to see where it came from without asking. */}
+                  <td data-testid="rev-cell">{money(m.revenue)}
+                    {m.revenue != null && (rent > 0 || (m.memberRevenue ?? 0) > 0) && (
+                      <span className="sub rent" data-testid="rev-itemised">
+                        {money(m.revenue - rent - (m.memberRevenue ?? 0))} matches
+                        {rent > 0 && <> + {money(rent)} {m.rentals[0].label}</>}
+                        {(m.memberRevenue ?? 0) > 0 && (
+                          <> + {money(m.memberRevenue ?? 0)} member spots</>
+                        )}
+                      </span>
+                    )}
+                    {/* NOT $0. A member term that could not be valued says so where the money
+                        would have been, because a silent zero reads as "no members that month". */}
+                    {m.memberUnvalued && (
+                      <span className="sub" data-testid="rev-member-unvalued">Member spots not yet calculated</span>
+                    )}
+                  </td>
                   <td>{m.payment == null ? <>{em}<span className="sub">Not yet calculated</span></> : <>{money(m.payment)}{m.diverged && <span className="diverge" title={`Figures changed after payment — ${money(m.frozenPaid ?? 0)} was paid; a fresh recompute now reads ${money(m.livePayment ?? 0)}. The paid amount stands.`}> ✱</span>}</>}</td>
                   <td style={{ textAlign: "right" }}>{statusPill(m)}</td>
                   <td><span className={`when ${w.cls}`}>{w.t}</span></td>
