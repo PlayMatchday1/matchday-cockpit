@@ -135,14 +135,9 @@ export async function buildPartnerDashboardData(
       `Spots filled is every seat paid for and held; MatchDay does not record check-in, so it is not attendance. Daily players and Guests are shown; the remainder of Spots filled is made up of other seat types. ` +
       `A private rental is a booking with no MatchDay match behind it — no players and no spots — so it adds to qualifying revenue but not to the match or spot counts. Rentals are listed separately inside the revenue column so you can see what you are being paid for. ` +
       `The opening period is a single settled payment with no match-level detail behind it, so it adds to the payment total but not to the counts.` +
-      /* ── THE MEMBER-SPOT SENTENCE, ONLY WHERE THE MODEL IS IN FORCE ─────────────────────────
-       * Keyed on this partner actually having the model, so a partner on plain flat_percentage is
-       * never told about a rule that does not apply to them. The PRICE IS NAMED because the claim
-       * is "the same price a daily player pays at your field", and a partner can only check that
-       * against their own pitch if the number is on the page. */
-      (memberSpotRateCents && partner.revenueModelNext === "flat_percentage_with_members"
-        ? ` A member playing at ${venueName} counts toward qualifying revenue at $${(memberSpotRateCents / 100).toFixed(2)}, the same price a daily player pays at your field. Member spots are listed separately inside the revenue column, next to rentals.`
-        : "") +
+      /* THE MEMBER-SPOT SENTENCE WAS HERE AND IS GONE. Ryan: "dont need the footnote". The
+       * terms line above already says "with member spots counted", which is the durable statement
+       * of what changed; a paragraph restating it was padding on a page that is already long. */
       (running ? ` ${running.label} is still running and is not paid until the month closes, so it adds to the counts but not to the payment total.` : "");
     /* THE TERMS LINE, DERIVED FROM THE MODEL — never from revenue_share_pct.
      *

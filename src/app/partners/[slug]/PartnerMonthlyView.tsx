@@ -113,18 +113,24 @@ export default function PartnerMonthlyView({ partnerName, sub, terms, since, mon
                       Private rentals were already broken out here. Member spots are the third
                       term and get the same treatment: a partner reading a bigger number must be
                       able to see where it came from without asking. */}
+                  {/* ── NO BREAKDOWN ON A PERIOD THAT CARRIES A MEMBER TERM ────────────────────
+                      Ryan: "dont show member spots here". The fragment goes, and so does the whole
+                      line on those periods, because "$3,016 matches + $200 Morning Match" under a
+                      $4,024 total is a breakdown that does not foot. A partial breakdown invites
+                      the reader to do arithmetic that comes out $808 short, which is worse than
+                      showing the total alone.
+                      EVERY OTHER PERIOD KEEPS ITS LINE unchanged: pre-September Hattrick months,
+                      and every partner with no member term at all. */}
                   <td data-testid="rev-cell">{money(m.revenue)}
-                    {m.revenue != null && (rent > 0 || (m.memberRevenue ?? 0) > 0) && (
+                    {m.revenue != null && rent > 0 && (m.memberRevenue ?? 0) === 0 && (
                       <span className="sub rent" data-testid="rev-itemised">
-                        {money(m.revenue - rent - (m.memberRevenue ?? 0))} matches
-                        {rent > 0 && <> + {money(rent)} {m.rentals[0].label}</>}
-                        {(m.memberRevenue ?? 0) > 0 && (
-                          <> + {money(m.memberRevenue ?? 0)} member spots</>
-                        )}
+                        {money(m.revenue - rent)} matches + {money(rent)} {m.rentals[0].label}
                       </span>
                     )}
-                    {/* NOT $0. A member term that could not be valued says so where the money
-                        would have been, because a silent zero reads as "no members that month". */}
+                    {/* THIS ONE STAYS, and it is not an itemisation. It fires only when the venue
+                        has no usable DPP list price, and it says the TOTAL IS SHORT. Dropping it
+                        with the breakdown would let a period quietly under-report a partner's
+                        revenue with nothing on the page saying so. */}
                     {m.memberUnvalued && (
                       <span className="sub" data-testid="rev-member-unvalued">Member spots not yet calculated</span>
                     )}
