@@ -124,16 +124,39 @@ console.log("\nagreement: one month, three readouts, one number");
   const t = totalsByMonth(rows, months);
   const aug = t.find((x) => x.month === "Aug 2026")!;
   is("the chart's Aug member column", aug.member, 795);
-  const kpi = buildKpis({ activeMembers: 201, memberSpots: aug.member, membershipRevenue: 6438.75, churnedNow: 169, churnedPrior: 175 });
+  const kpi = buildKpis({ activeMembers: 201, memberSpots: aug.member, memberMatchesConsumed: aug.memberMatchesConsumed, membershipRevenue: 6438.75, churnedNow: 169, churnedPrior: 175 });
   is("the KPI divides by the SAME member-spot figure the column draws",
     kpi.avgMatchesPerMember, 795 / 201);
   is("avg price per member spot uses the same denominator",
     kpi.avgPricePerMemberSpot, 6438.75 / 795);
   is("…and equals $8.10 to the cent", Math.round((kpi.avgPricePerMemberSpot ?? 0) * 100) / 100, 8.10);
+  /* ── BOOKED AND CONSUMED, THE SPLIT THE PRICE TILE TURNS ON ─────────────────────────────────
+   * A member who booked and cancelled did not get a spot. The charts still count the booking
+   * (demand is real); the PRICE divides by what was taken. MEASURED on production Aug 2026:
+   * Austin 976 booked against 865 consumed, San Antonio 652 against 555.
+   *
+   * THE FIXTURE ABOVE HAS NO CANCELLED ROWS, which is why every assertion above it is unchanged
+   * by this split. These rows add some so the two counts can actually diverge. */
+  {
+    const withCx: SpotRow[] = [
+      ...Array.from({ length: 10 }, (_, i) => ({ month: "Aug 2026", cls: "MEMBER" as const, city: "Austin", fieldId: 1, amount: 0, userId: `k${i}`, matchApiId: 900 + i })),
+      ...Array.from({ length: 4 }, (_, i) => ({ month: "Aug 2026", cls: "MEMBER" as const, city: "Austin", fieldId: 1, amount: 0, userId: `x${i}`, matchApiId: 950 + i, playerCanceled: true })),
+    ];
+    const c = totalsByMonth(withCx, ["Aug 2026"])[0];
+    is("booked counts the cancellations", c.member, 14);
+    is("consumed does not", c.memberConsumed, 10);
+    is("…and at match grain too", c.memberMatchesConsumed, 10);
+    is("CONTROL — the two genuinely differ, so the exclusion is doing work", c.member !== c.memberConsumed, true);
+    // THE PRICE MOVES, and by how much is the whole point: same revenue, smaller denominator.
+    is("the same revenue over consumed spots is a HIGHER price", 100 / c.memberConsumed > 100 / c.member, true);
+    // AN ABSENT FLAG IS NOT A CANCELLATION. Most rows omit it entirely.
+    const noFlag = totalsByMonth([{ month: "Aug 2026", cls: "MEMBER" as const, city: "Austin", fieldId: 1, amount: 0, userId: "n1", matchApiId: 1 }], ["Aug 2026"])[0];
+    is("a row with no playerCanceled field counts as consumed", [noFlag.member, noFlag.memberConsumed], [1, 1]);
+  }
   is("a month with no rows is zero, not missing", t.find((x) => x.month === "Jul 2026")!.daily, 0);
   is("every month asked for is present", t.map((x) => x.month), months);
   // NULL, NOT ZERO, when there is nobody to divide by.
-  const empty = buildKpis({ activeMembers: 0, memberSpots: 0, membershipRevenue: 0, churnedNow: 0, churnedPrior: 0 });
+  const empty = buildKpis({ activeMembers: 0, memberSpots: 0, memberMatchesConsumed: 0, membershipRevenue: 0, churnedNow: 0, churnedPrior: 0 });
   is("no members -> avg matches is null, not 0", empty.avgMatchesPerMember, null);
   is("no spots -> avg price is null, not 0", empty.avgPricePerMemberSpot, null);
   is("no prior churn -> MoM is null, not 0%", empty.churnedMoMPct, null);
@@ -221,7 +244,7 @@ console.log("\nevery KPI equals its chart");
   for (const m of months) {
     const rows: SpotRow[] = Array.from({ length: SPOTS[m] }, (_, i) => ({ month: m, cls: "MEMBER" as const, city: "Austin", fieldId: 1, amount: 0, userId: `u${i}`, matchApiId: i }));
     const col = totalsByMonth(rows, [m])[0];
-    const k = buildKpis({ activeMembers: ACTIVE[m], memberSpots: col.memberMatches, membershipRevenue: REV[m], churnedNow: 9532, churnedPrior: 8737 });
+    const k = buildKpis({ activeMembers: ACTIVE[m], memberSpots: col.memberMatches, memberMatchesConsumed: col.memberMatchesConsumed, membershipRevenue: REV[m], churnedNow: 9532, churnedPrior: 8737 });
 
     // KPI 1 — active members. The chart draws the same number the KPI prints.
     is(`${m}: the active-members chart equals the KPI`, ACTIVE[m], k.activeMembers);

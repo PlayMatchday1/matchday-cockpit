@@ -115,18 +115,44 @@ export type SpotRow = {
    * playing. Exactly the trap 0147 fixed in player_play_stats, where `plays` was count(*) over
    * spots and 343 players read as having played twice for one match they brought a guest to. */
   userId: string | null; matchApiId: number | null;
+  /* BOOKED OR PLAYED. True when the player cancelled their own spot: the match went ahead, this
+   * person did not take a place in it, and the venue got nothing from the booking.
+   *
+   * IT IS A FACT ON THE ROW, NOT A FILTER, because this page legitimately wants BOTH counts. The
+   * charts are about demand and a booking is a real demand event; the price is about what was
+   * consumed and a cancelled booking bought nothing. Filtering at the source would have moved
+   * every chart on the page to answer the price tile's question. */
+  playerCanceled?: boolean;
 };
 
 export type MonthTotals = {
-  month: MonthKey; member: number; daily: number; promo: number; other: number;
+  month: MonthKey;
+  /** BOOKED member spots, cancellations included. What the charts count. */
+  member: number;
+  daily: number; promo: number; other: number;
   /** DISTINCT (user_id, match_api_id) among MEMBER rows — one match is one match. */
   memberMatches: number;
+  /* ── CONSUMED, AND WHY IT IS A SECOND FIELD RATHER THAN A CORRECTION ─────────────────────────
+   * MEMBER rows the player did not cancel. This is the only honest denominator for a PRICE: the
+   * tile says "what a member actually paid per spot", and a spot they cancelled is not a spot
+   * they got. MEASURED Aug 2026: Austin 975 booked against 865 consumed, San Antonio 648 against
+   * 551 — an 11 to 15% wedge, and the whole of the gap between this page and memberSpotRateFor.
+   *
+   * player_spots, the finance-side definition, has always excluded cancelled, refunded, WAITING
+   * and deleted rows. This page was the outlier. */
+  memberConsumed: number;
+  /** The same exclusion at match grain, for the KPI that divides by matches. */
+  memberMatchesConsumed: number;
 };
 
 export function totalsByMonth(rows: readonly SpotRow[], months: readonly MonthKey[]): MonthTotals[] {
   const m = new Map<MonthKey, MonthTotals>();
   const seen = new Map<MonthKey, Set<string>>();
-  for (const k of months) { m.set(k, { month: k, member: 0, daily: 0, promo: 0, other: 0, memberMatches: 0 }); seen.set(k, new Set()); }
+  const seenConsumed = new Map<MonthKey, Set<string>>();
+  for (const k of months) {
+    m.set(k, { month: k, member: 0, daily: 0, promo: 0, other: 0, memberMatches: 0, memberConsumed: 0, memberMatchesConsumed: 0 });
+    seen.set(k, new Set()); seenConsumed.set(k, new Set());
+  }
   for (const r of rows) {
     const t = m.get(r.month);
     if (!t) continue;
@@ -138,6 +164,13 @@ export function totalsByMonth(rows: readonly SpotRow[], months: readonly MonthKe
       const set = seen.get(r.month)!;
       if (id == null) t.memberMatches++;
       else if (!set.has(id)) { set.add(id); t.memberMatches++; }
+      // The consumed pair, counted the same two ways, over the rows the player did not cancel.
+      if (r.playerCanceled !== true) {
+        t.memberConsumed++;
+        const cset = seenConsumed.get(r.month)!;
+        if (id == null) t.memberMatchesConsumed++;
+        else if (!cset.has(id)) { cset.add(id); t.memberMatchesConsumed++; }
+      }
     }
     else if (r.cls === "DAILY PAID") t.daily++;
     else if (r.cls === "PROMOCODE") t.promo++;
@@ -178,11 +211,19 @@ export type Kpis = {
 export function buildKpis(args: {
   activeMembers: number;
   memberSpots: number;
+  /* ── TWO DENOMINATORS, BECAUSE THEY ANSWER TWO QUESTIONS ────────────────────────────────────
+   * `memberSpots` (booked matches) drives AVG MATCHES PER MEMBER: a member who booked is a member
+   * who engaged, and that metric is about behaviour.
+   *
+   * `memberMatchesConsumed` drives AVG PRICE PER MEMBER SPOT: a price divides by what was
+   * actually taken. One argument served both and the price tile was dividing by bookings while
+   * its own subtitle said spots. */
+  memberMatchesConsumed: number;
   membershipRevenue: number;
   churnedNow: number;
   churnedPrior: number;
 }): Kpis {
-  const { activeMembers, memberSpots, membershipRevenue, churnedNow, churnedPrior } = args;
+  const { activeMembers, memberSpots, memberMatchesConsumed, membershipRevenue, churnedNow, churnedPrior } = args;
   return {
     activeMembers,
     // NULL, NOT ZERO, when there is nobody to divide by. "0 matches per member" is a claim about
@@ -191,13 +232,19 @@ export function buildKpis(args: {
      * — see MonthTotals.memberMatches. Counting rows counted a member who booked for a friend
      * twice for one match. */
     avgMatchesPerMember: activeMembers > 0 ? memberSpots / activeMembers : null,
-    /* AVG PRICE PER MEMBER SPOT = membership revenue / member spots.
+    /* AVG PRICE PER MEMBER SPOT = membership GROSS / member matches ACTUALLY PLAYED.
      *
      * The numerator is fin_revenue.type='Membership' — AN EXPLICIT CATEGORY, not a residual. The
      * design deck computes fieldMember = fieldRevenue − fieldDpp, and a residual absorbs every
      * upstream error and returns a plausible wrong number rather than an obvious one. Ours does
-     * not; see the report in the commit for the measurement. */
-    avgPricePerMemberSpot: memberSpots > 0 ? membershipRevenue / memberSpots : null,
+     * not; see the report in the commit for the measurement.
+     *
+     * BOTH HALVES MOVED, 2026-09-21. It was net over BOOKED matches; net is what we kept after
+     * Stripe rather than what the member paid, and a booking the member cancelled is not a spot
+     * they got. This is NOT memberSpotRateFor, which divides PRE-TAX revenue from the PRIOR month
+     * because it joins to pre-tax roster money. Two questions, two numbers, and comparing them
+     * cost somebody an afternoon. */
+    avgPricePerMemberSpot: memberMatchesConsumed > 0 ? membershipRevenue / memberMatchesConsumed : null,
     churnedMoMPct: churnedPrior > 0 ? ((churnedNow - churnedPrior) / churnedPrior) * 100 : null,
     churnedNow,
     churnedPrior,

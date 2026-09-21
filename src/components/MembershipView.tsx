@@ -35,7 +35,7 @@ type Payload = {
   dayMix: { day: string; member: number; daily: number; promo: number; total: number }[];
   byCity: { name: string; member: number; daily: number; promo: number }[];
   byField: { name: string; member: number; daily: number; promo: number }[];
-  revenueByMonth: Record<string, number>;
+  membershipGrossByMonth: Record<string, number>;
   snapshots: { month: string; value: number; avgMatches: number | null }[];
   churnDays: number; scope: string | null; confined: boolean;
   churnedNow: number; churnedPrior: number; hasPriorMonth: boolean;
@@ -127,7 +127,7 @@ export default function MembershipView() {
   const fieldName = field === "all" ? null : (data?.fields.find((f) => String(f.fieldId) === field)?.name ?? null);
   const scope = scopeLabel(cityName, fieldName, cityName);
 
-  const revenue = thisMonth ? (data?.revenueByMonth[thisMonth.month] ?? 0) : 0;
+  const revenue = thisMonth ? (data?.membershipGrossByMonth[thisMonth.month] ?? 0) : 0;
   /* THE KPI READS THE SAME NUMBER THE CHART DRAWS. It used to read the LIVE subscription count
    * while the chart beside it read the captured snapshot — 451 against 383 for the same month. The
    * live figure has not gone away; it is stated on the all-time line where it belongs, as a
@@ -144,6 +144,8 @@ export default function MembershipView() {
     activeMembers: activeThisMonth,
     // MATCHES, not spots — one match is one match.
     memberSpots: thisMonth?.memberMatches ?? 0,
+    // The price divides by what was played, never by what was booked. See buildKpis.
+    memberMatchesConsumed: thisMonth?.memberMatchesConsumed ?? 0,
     membershipRevenue: revenue,
     // Churn is a PLAYER concept — days since last played, the 90-day floor /api/lifecycle/churn
     // already defaults to. It is not a membership status, and the two disagree by design.
@@ -198,9 +200,12 @@ export default function MembershipView() {
           s={`paying, external · as of now${data?.fieldScoped ? ` · ${data.membersScope === "city" ? "city" : "network"}-wide, not per field` : ""}`} />
         <Kpi k="Avg matches / member" v={kpis.avgMatchesPerMember == null ? "—" : kpis.avgMatchesPerMember.toFixed(1)}
           s={`${thisMonth?.month ?? ""}${partSuffix(part)}`} />
+        {/* THE SUBTITLE NAMES ITS OWN DENOMINATOR NOW. It used to read "membership revenue ÷
+            member spots" while dividing by booked MATCHES, which is two inaccuracies in six
+            words. */}
         <Kpi k="Avg price / member spot"
           v={kpis.avgPricePerMemberSpot == null ? "—" : money(kpis.avgPricePerMemberSpot)}
-          s={`${thisMonth?.month ?? ""} · membership revenue ÷ member spots${partSuffix(part)}`} />
+          s={`${thisMonth?.month ?? ""} · gross membership revenue ÷ matches members played${partSuffix(part)}`} />
         <Kpi k="MoM change in churned players" v={kpis.churnedMoMPct == null ? "—" : `${kpis.churnedMoMPct.toFixed(1)}%`}
           s={kpis.churnedNow > 0
             ? `${num(kpis.churnedNow)} players ${data?.churnDays ?? 90}+ days inactive, against ${num(kpis.churnedPrior)} the month before`
@@ -226,7 +231,7 @@ export default function MembershipView() {
         daysInMonth={part?.total ?? 31} />
       <Breakdown totals={totals} scope={scope}
         byCity={data?.byCity ?? []} byField={data?.byField ?? []} />
-      <PriceTiles totals={totals} revenueByMonth={data?.revenueByMonth ?? {}} />
+      <PriceTiles totals={totals} revenueByMonth={data?.membershipGrossByMonth ?? {}} />
 
       <style jsx>{`
         .ms { padding: 4px 0 44px; position: relative }
@@ -586,18 +591,37 @@ function PriceTiles({ totals, revenueByMonth }: { totals: MonthTotals[]; revenue
     <div className="mscard">
       <div className="mshead">
         <div className="mstitle">Average price per member spot</div>
-        <div className="mssub">What a member actually paid per spot · membership revenue ÷ member spots</div>
+        {/* ── THE LABEL IS THE FIX, AS MUCH AS THE ARITHMETIC ──────────────────────────────────
+            Two surfaces in this estate carry a per-member-spot rate and they answer different
+            questions. This one is what a member paid for a spot they played, on that month's own
+            gross. memberSpotRateFor is pre-tax member revenue per spot on the PRIOR month, because
+            it joins to roster money that is pre-tax and it must not move under a reader mid-month.
+            Somebody compared the two and lost an afternoon; saying which is which is what stops
+            that happening again. */}
+        <div className="mssub">
+          What a member paid per spot they played · gross membership revenue ÷ spots played, this month
+        </div>
+        <div className="mssub" style={{ marginTop: 2, opacity: 0.75 }}>
+          Not the same as the partner rate, which is pre-tax and uses the prior month.
+        </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 10, padding: "8px 16px 0" }}>
         {totals.map((t) => {
           const rev = revenueByMonth[t.month] ?? 0;
-          const rate = t.member > 0 ? rev / t.member : null;
+          /* CONSUMED, NOT BOOKED. The charts above this tile still count bookings, on purpose, so
+             the two numbers differ and the line below says by how much rather than leaving a
+             reader to wonder why one page shows 975 and 865 for the same month. */
+          const cancelled = t.member - t.memberConsumed;
+          const rate = t.memberConsumed > 0 ? rev / t.memberConsumed : null;
           return (
             <div key={t.month} style={{ border: "1px solid #EFF3EF", borderRadius: 9, padding: "10px 12px" }} data-testid="ms-price-tile">
               <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: "#93A49A" }}>{t.month}</div>
               {/* NULL, NOT ZERO. "$0.00 per spot" is a claim; "—" is the absence of one. */}
               <div style={{ fontSize: 19, fontWeight: 900 }}>{rate == null ? "—" : money(rate)}</div>
-              <div style={{ fontSize: 10.5, color: "rgba(16,35,26,.45)" }}>{num(t.member)} member spots</div>
+              <div style={{ fontSize: 10.5, color: "rgba(16,35,26,.45)" }} data-testid="ms-price-spots">
+                {num(t.memberConsumed)} spots played
+                {cancelled > 0 && <span data-testid="ms-price-cancelled"> · {num(cancelled)} booked and cancelled, not counted</span>}
+              </div>
             </div>
           );
         })}

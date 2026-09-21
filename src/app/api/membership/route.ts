@@ -22,6 +22,7 @@ import { countActiveMembers } from "@/lib/membershipStats";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { fetchLegacyMatchRegistrations, loadMembershipWindowsByUserId } from "@/lib/mdapiMatchesRead";
 import { classify, CHURN_DAYS, type SpotRow } from "@/lib/membershipModel";
+import { selectAll } from "@/lib/supabasePagination";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -114,6 +115,9 @@ export async function GET(req: Request) {
         city, fieldId: r.field_id ?? null, amount: Number(r.match_price_paid ?? 0) || 0,
         userId: r.user_id != null ? String(r.user_id) : null,
         matchApiId: r.match_api_id ?? null,
+        /* CARRIED, NOT FILTERED. The charts want the booking; the price wants the spot that was
+         * actually taken. See SpotRow.playerCanceled. */
+        playerCanceled: !!(r.player_canceled_at && String(r.player_canceled_at).trim() !== ""),
       });
       /* THE DAY GRAIN, for the 100% stacked mix. match_start is LOCAL WALL CLOCK wearing a Z — the
        * day is read off the string, never through new Date(), which would re-shift it and move a
@@ -164,13 +168,39 @@ export async function GET(req: Request) {
      * were the members of one field. */
     const membersScope: "network" | "city" = scopeCity ? "city" : "network";
 
-    // MEMBERSHIP REVENUE — AN EXPLICIT CATEGORY, never a residual. fin_revenue.type='Membership'.
-    let revQ = sb.from("fin_revenue").select("month,city,net,type").eq("type", "Membership");
-    const rev = (await revQ).data ?? [];
+    /* ── MEMBERSHIP REVENUE — AN EXPLICIT CATEGORY, never a residual. fin_revenue.type='Membership'.
+     *
+     * PAGED AND ORDERED, AND HERE IS WHAT THE UNPAGED VERSION COST. This read was
+     * `sb.from("fin_revenue").select(...).eq("type","Membership")` with no .range() and no
+     * .order(). PostgREST caps a response at 1,000 rows and says nothing. MEASURED 2026-09-21:
+     * 1,829 Membership rows exist, the query returned 1,000, and because nothing ordered the
+     * result the 829 it dropped were the most recently inserted — so AUGUST 2026 SAW 13 OF ITS
+     * 102 ROWS. The card divided a numerator missing 87% of that month and printed $6.70 per
+     * member spot for Austin against a true $9.50. June and July were untouched, which is what
+     * made it invisible: the bug only ever eats the newest month, and it eats more of it every
+     * month that passes.
+     *
+     * .order("id") IS NOT DECORATION. Without it a future cap is silent and arbitrary; with it,
+     * a cap truncates the OLDEST rows deterministically and the newest month stays whole, so the
+     * failure is visible in the place people are looking.
+     *
+     * selectAll is what useFinanceData already uses on this exact table, which is why that path
+     * was never wrong. One pager, one table, one behaviour. */
+    const rev = await selectAll<{ month: unknown; city: unknown; net: unknown; gross: unknown; type: unknown }>(
+      () => sb.from("fin_revenue").select("month,city,net,gross,type").eq("type", "Membership").order("id"),
+    );
+    /* GROSS, NOT NET, AND THE TILE'S OWN SUBTITLE IS THE ARGUMENT. It says "what a member actually
+     * paid". A member paid the gross; `net` is gross minus what Stripe took from US, which is a
+     * fact about our processing costs and not about what the member handed over. Austin Aug 2026:
+     * gross $8,216.37, net $7,934.43.
+     *
+     * NOT PRE-TAX EITHER, and that is the other half of the split this page got tangled in.
+     * memberSpotRateFor divides PRE-TAX revenue because it joins to roster money that is pre-tax;
+     * this page joins to nothing, so it reports the amount that actually left the member's card. */
     const revByMonth = new Map<string, number>();
     for (const r of rev) {
       if (scopeCity && cityCodeOf(r.city as string) !== scopeCity) continue;
-      revByMonth.set(String(r.month), (revByMonth.get(String(r.month)) ?? 0) + Number(r.net ?? 0));
+      revByMonth.set(String(r.month), (revByMonth.get(String(r.month)) ?? 0) + Number(r.gross ?? 0));
     }
 
     // ALL-TIME ACTIVE SERIES — the existing captured series, unchanged.
@@ -300,7 +330,10 @@ export async function GET(req: Request) {
       byField: groupBy((r) => (r.fieldId != null ? (fieldName.get(r.fieldId) ?? String(r.fieldId)) : null)),
       activeMembers,
       activeMembersPaid, membersScope, fieldScoped: fieldId != null,
-      revenueByMonth: Object.fromEntries(revByMonth),
+      /* RENAMED FROM revenueByMonth, deliberately. It changed BASIS from net to gross, and a key
+       * that keeps its name through a change of meaning is how a consumer keeps reading the old
+       * thing. The name now says which of the three bases it is. */
+      membershipGrossByMonth: Object.fromEntries(revByMonth),
       snapshots: snaps,
       churnDays: CHURN_DAYS,
       scope: scopeCity, confined: confined !== null,
