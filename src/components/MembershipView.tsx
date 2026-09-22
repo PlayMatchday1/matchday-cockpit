@@ -16,12 +16,12 @@
 // and asserted by membership-chart-test. Two of those rules caught bugs in the mockup that were
 // invisible by eye: an axis stopping below its own max, and a tooltip escaping its card.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   SERIES, ALLTIME_COLOUR, axisTop, scaleTicks, clampTip, totalsByMonth, activeSeries,
   buildKpis, shares, pctShares, scopeLabel, classify,
-  type SpotRow, type MonthTotals, type ActivePoint,
+  type SpotRow, type MonthTotals, type ActivePoint, type MemberShareRow, shareOfPair,
 } from "@/lib/membershipModel";
 
 type Payload = {
@@ -36,6 +36,8 @@ type Payload = {
   byCity: { name: string; member: number; daily: number; promo: number }[];
   byField: { name: string; member: number; daily: number; promo: number }[];
   membershipGrossByMonth: Record<string, number>;
+  memberShare: MemberShareRow[];
+  memberShareLaunchMonth: string;
   snapshots: { month: string; value: number; avgMatches: number | null }[];
   churnDays: number; scope: string | null; confined: boolean;
   churnedNow: number; churnedPrior: number; hasPriorMonth: boolean;
@@ -232,6 +234,7 @@ export default function MembershipView() {
       <Breakdown totals={totals} scope={scope}
         byCity={data?.byCity ?? []} byField={data?.byField ?? []} />
       <PriceTiles totals={totals} revenueByMonth={data?.membershipGrossByMonth ?? {}} />
+      <MemberShare rows={data?.memberShare ?? []} />
 
       <style jsx>{`
         .ms { padding: 4px 0 44px; position: relative }
@@ -249,6 +252,41 @@ export default function MembershipView() {
       `}</style>
       <style jsx global>{`
         .mscard { background: #fff; border: 1px solid #E4EAE5; border-radius: 12px; padding: 0 0 12px; margin-bottom: 14px; position: relative }
+        /* ── MEMBER SHARE BY MONTH ─────────────────────────────────────────
+           Thirty-one months are a HORIZONTAL SCROLL inside one card, not
+           thirty-one rows down the page. The card is budgeted under 420px. */
+        /* THE CARD IS BUDGETED UNDER 420px and the first cut came in at 431. Every
+           value below is trimmed against that budget, not chosen for taste. */
+        .mscard .msh2 { margin: 0 0 6px; padding: 10px 14px 0; font-size: 12.5px; font-weight: 800;
+          letter-spacing: .8px; text-transform: uppercase; color: #6d7b74 }
+        .mscard .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 2px }
+        .mstable { border-collapse: separate; border-spacing: 0 }
+        .mstable th, .mstable td { white-space: nowrap; font-variant-numeric: tabular-nums }
+        /* THE STICKY LABEL COLUMN. Without it every figure past the fold is a
+           number with no name. OPAQUE, so figures do not slide under it, and
+           the background matches the card so it reads as one surface. */
+        .mstable .lab { position: sticky; left: 0; z-index: 2; background: #fff; text-align: left;
+          padding: 0 14px; min-width: 150px }
+        .mstable thead .lab { z-index: 3 }
+        .mstable thead th { font-size: 9px; font-weight: 800; letter-spacing: .4px;
+          text-transform: uppercase; color: #6d7b74; text-align: right; padding: 0 13px 6px 0;
+          border-bottom: 1px solid #dce5e0 }
+        .mstable thead th .y { display: block; font-size: 8px; color: #9aa8a0; font-weight: 700 }
+        .mstable .grp td { font-size: 9px; font-weight: 800; letter-spacing: .6px;
+          text-transform: uppercase; color: #9aa8a0; padding: 7px 14px 2px }
+        .mstable .grp:first-child td { padding-top: 6px }
+        .mstable tbody td { padding: 2px 13px 2px 0; text-align: right; border-bottom: 1px solid #eff3ef }
+        .mstable tbody td.lab { padding: 2px 14px; border-bottom: 1px solid #eff3ef }
+        /* THE FIGURE IS THE POINT; the share is the supporting line. Larger,
+           no lighter, and a different ink from both the share and its total. */
+        .mstable .v { font-size: 13.5px; font-weight: 700; color: #12241d }
+        .mstable .t { font-size: 12.5px; font-weight: 500; color: #6d7b74 }
+        .mstable .s { font-size: 11px; font-weight: 700; color: #9aa8a0 }
+        .mstable tr.share td { border-bottom: 1px solid #dce5e0 }
+        .mstable tr.share td.lab { color: #9aa8a0; font-size: 10.5px; font-weight: 600 }
+        .mstable tbody tr:not(.grp):hover td { background: #f6f9f7 }
+        .mstable .rl { font-size: 11.5px; font-weight: 600; color: #12241d }
+        .mstable .rl2 { font-size: 11.5px; font-weight: 500; color: #6d7b74 }
         /* AUTO HEIGHT, NOT A FIXED 34. The fixed height matched the SVG plot's y-offset, which is
            right for the charts and wrong for a card whose subtitle wraps to two lines — the
            breakdown's "Aug 2026 · All Matchday · monthly proportion of…" wrapped and the bar below
@@ -625,6 +663,98 @@ function PriceTiles({ totals, revenueByMonth }: { totals: MonthTotals[]; revenue
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+
+/* ── MEMBER SHARE BY MONTH ──────────────────────────────────────────────────────────────────────
+ *
+ * MONTHS RUN ACROSS THE TOP, CURRENT MONTH FIRST. Thirty-one months as rows would be the whole
+ * page; as columns they are a horizontal scroll inside one card. The current month holds column 1
+ * and never moves, so the figure you came for is on screen at rest; history runs rightward. The
+ * alternative — chronological with the container auto-scrolled to its far end — puts the current
+ * month at the end of a scroll that grows every month.
+ *
+ * THE FIGURE IS THE POINT, THE SHARE IS SECONDARY. The part figure is larger, no lighter and a
+ * different ink from both the share and its own total, so the hierarchy survives someone reading
+ * only the sizes.
+ *
+ * NO PROSE. A title and nothing else. Every subtitle, footnote and partial-month badge that could
+ * live here would be a sentence competing with thirty-one columns of numbers.
+ *
+ * THE STICKY LABEL COLUMN IS LOAD-BEARING. Thirty-one columns fit no screen, so without it every
+ * figure past the fold is a number with no name. It is opaque so figures do not slide under it.
+ */
+const MS_MONEY = (n: number) => "$" + Math.round(n).toLocaleString("en-US");
+const MS_INT = (n: number) => Math.round(n).toLocaleString("en-US");
+const MS_SHARE = (part: number, whole: number) => {
+  const v = shareOfPair(part, whole);
+  return v == null ? "—" : `${(v * 100).toFixed(1)}%`;
+};
+
+function MemberShare({ rows }: { rows: MemberShareRow[] }) {
+  if (!rows.length) return null;
+  const GROUPS: {
+    key: string; name: string; part: string; whole: string;
+    fmt: (n: number) => string; pi: (r: MemberShareRow) => number; wi: (r: MemberShareRow) => number;
+  }[] = [
+    { key: "rev", name: "Revenue", part: "Membership", whole: "Total revenue", fmt: MS_MONEY,
+      pi: (r) => r.membershipRevenue, wi: (r) => r.totalRevenue },
+    { key: "spots", name: "Spots", part: "Member", whole: "Booked", fmt: MS_INT,
+      pi: (r) => r.memberSpots, wi: (r) => r.bookedSpots },
+    { key: "players", name: "Players", part: "Members", whole: "Played", fmt: MS_INT,
+      pi: (r) => r.members, wi: (r) => r.played },
+  ];
+  return (
+    <div className="mscard card" data-testid="member-share">
+      <h2 className="msh2">Member share by month</h2>
+      <div className="scroll">
+        <table className="mstable">
+          <thead>
+            <tr>
+              <th className="lab" data-testid="corner" />
+              {rows.map((r) => {
+                const [mo, y] = r.month.split(" ");
+                return <th key={r.month} data-testid="mcol" data-m={r.month}>{mo}<span className="y">{y}</span></th>;
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {GROUPS.map((g) => (
+              <Fragment key={g.key}>
+                <tr className="grp" data-testid="grp" data-g={g.key}>
+                  <td className="lab" colSpan={rows.length + 1}>{g.name}</td>
+                </tr>
+                <tr data-testid="part" data-g={g.key}>
+                  <td className="lab rl">{g.part}</td>
+                  {rows.map((r) => (
+                    <td key={r.month} data-testid="partc" data-g={g.key} data-m={r.month}>
+                      <span className="v" data-testid="vnum">{g.fmt(g.pi(r))}</span>
+                    </td>
+                  ))}
+                </tr>
+                <tr data-testid="whole" data-g={g.key}>
+                  <td className="lab rl2">{g.whole}</td>
+                  {rows.map((r) => (
+                    <td key={r.month} data-testid="wholec" data-g={g.key} data-m={r.month}>
+                      <span className="t">{g.fmt(g.wi(r))}</span>
+                    </td>
+                  ))}
+                </tr>
+                <tr className="share" data-testid="share" data-g={g.key}>
+                  <td className="lab">Share</td>
+                  {rows.map((r) => (
+                    <td key={r.month} data-testid="sharec" data-g={g.key} data-m={r.month}>
+                      <span className="s" data-testid="vpct">{MS_SHARE(g.pi(r), g.wi(r))}</span>
+                    </td>
+                  ))}
+                </tr>
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );

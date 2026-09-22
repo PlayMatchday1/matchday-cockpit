@@ -278,3 +278,97 @@ export function scopeLabel(city: string | null, field: string | null, cityName?:
   if (city) return cityName ?? city;
   return "All Matchday";
 }
+
+
+/* ── MEMBER SHARE BY MONTH ──────────────────────────────────────────────────────────────────────
+ *
+ * One row per month, three ways of asking the same question: what fraction of the business is
+ * membership. Revenue, spots and people are three different grains and they do NOT agree, which is
+ * the point of showing all three rather than picking one.
+ *
+ * ── THE TWO GRAINS, AND WHY EACH PAIR IS COMPARABLE ───────────────────────────────────────────
+ *
+ * SPOTS are bookings. memberSpots is MEMBER rows; bookedSpots is every classified row in the
+ * month. BOOKED, NOT PLAYED, and the column label says so: this is the same `member` count the
+ * charts above use, NOT memberConsumed. The price tile one card up divides by spots PLAYED and is
+ * correct for its own question; both live on the page and the labels are where the difference is
+ * stated. They are not reconciled and must not be.
+ *
+ * PEOPLE are distinct user_ids. members is the number of distinct people who took a MEMBER spot;
+ * played is the number of distinct people who took ANY spot. BOTH COME FROM THE SAME ROWS AND ARE
+ * COUNTED THE SAME WAY, which is the only reason the share means anything.
+ *
+ * NOT members_monthly_snapshots FOR THE NUMERATOR, and this is the trap. That table holds ACTIVE
+ * SUBSCRIPTIONS per month — people who were paying, whether or not they played. Divided by people
+ * who played, it would be a ratio between two different populations: a member who paid and never
+ * turned up would raise the share without ever appearing in the denominator. Same source, same
+ * filter, same grain, or the number is decoration.
+ *
+ * A ROW WITH NO user_id CANNOT BE DEDUPED, so it counts as its own person rather than collapsing
+ * into someone else's. The safe direction, and the same rule memberMatches already follows.
+ */
+export type MemberShareRow = {
+  month: MonthKey;
+  membershipRevenue: number;
+  totalRevenue: number;
+  memberSpots: number;
+  bookedSpots: number;
+  members: number;
+  played: number;
+};
+
+/* THE MONTH LIST IS DERIVED AND HAS NO GAPS. Every month from the first with membership revenue
+ * through the current one, INCLUDING any month that had none: a month with no membership is a
+ * real month and renders as zeroes, because skipping it would draw a line straight from the month
+ * before to the month after and invent a trend across a gap nobody can see.
+ *
+ * NEVER HARDCODED. Three figures quoted from comments in this codebase this week turned out to be
+ * stale; a launch month written into the source is the same mistake with a longer fuse. */
+export function monthsFrom(firstMonth: MonthKey, lastMonth: MonthKey): MonthKey[] {
+  const parse = (m: MonthKey) => {
+    const [mo, y] = String(m).split(" ");
+    const i = MONTHS_SHORT.indexOf(mo);
+    return i < 0 ? null : { y: Number(y), i };
+  };
+  const a = parse(firstMonth), b = parse(lastMonth);
+  if (!a || !b) return [];
+  const out: MonthKey[] = [];
+  let { y, i } = a;
+  for (let guard = 0; guard < 600; guard++) {
+    out.push(`${MONTHS_SHORT[i]} ${y}` as MonthKey);
+    if (y === b.y && i === b.i) break;
+    if (y > b.y || (y === b.y && i > b.i)) break;   // lastMonth before firstMonth: one month, not 600
+    i++; if (i > 11) { i = 0; y++; }
+  }
+  return out;
+}
+
+export const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Newest first: the month you are looking at is the current one, so it holds column 1 and never
+ *  moves. History runs rightward into the scroll. The alternative — chronological, auto-scrolled
+ *  to the far end — puts the current month at the end of a scroll that grows every month. */
+export function buildMemberShare(input: {
+  months: readonly MonthKey[];
+  revenueByMonth: ReadonlyMap<MonthKey, { membership: number; total: number }>;
+  spotsByMonth: ReadonlyMap<MonthKey, { memberSpots: number; bookedSpots: number; members: number; played: number }>;
+}): MemberShareRow[] {
+  return [...input.months].reverse().map((month) => {
+    const r = input.revenueByMonth.get(month);
+    const s = input.spotsByMonth.get(month);
+    return {
+      month,
+      membershipRevenue: r?.membership ?? 0,
+      totalRevenue: r?.total ?? 0,
+      memberSpots: s?.memberSpots ?? 0,
+      bookedSpots: s?.bookedSpots ?? 0,
+      members: s?.members ?? 0,
+      played: s?.played ?? 0,
+    };
+  });
+}
+
+/** A share, or null when there is no total to be a share of. Never 0.0% for "no denominator". */
+export function shareOfPair(part: number, whole: number): number | null {
+  return whole > 0 ? part / whole : null;
+}

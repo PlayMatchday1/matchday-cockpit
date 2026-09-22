@@ -1,0 +1,104 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Member share by month</title>
+<style>
+  :root{ --bg:#f4f7f5; --card:#fff; --ink:#12241d; --mut:#6d7b74; --faint:#9aa8a0;
+    --line:#dce5e0; --line2:#eff3ef; --hi:#f6f9f7; }
+  :root:not([data-theme="light"]){ @media (prefers-color-scheme: dark){
+    --bg:#101413; --card:#171c1a; --ink:#e8efea; --mut:#8fa096; --faint:#6b7c73;
+    --line:#26302c; --line2:#1e2523; --hi:#1b211f; }}
+  :root[data-theme="dark"]{ --bg:#101413; --card:#171c1a; --ink:#e8efea; --mut:#8fa096;
+    --faint:#6b7c73; --line:#26302c; --line2:#1e2523; --hi:#1b211f; }
+  *{box-sizing:border-box}
+  body{margin:0;padding:20px 16px;background:var(--bg);color:var(--ink);
+    font:14px/1.35 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .card{max-width:1180px;margin:0 auto;background:var(--card);border:1px solid var(--line);
+    border-radius:16px;padding:14px 0 8px}
+  h2{margin:0 0 10px;padding:0 14px;font-size:12.5px;font-weight:800;letter-spacing:.8px;
+    text-transform:uppercase;color:var(--mut)}
+  .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{border-collapse:separate;border-spacing:0}
+  th,td{white-space:nowrap;font-variant-numeric:tabular-nums}
+  /* STICKY LABEL COLUMN. Nineteen month columns fit no screen, so the row label has to survive
+     the horizontal scroll or every figure past the fold is unattributable. Asserted. */
+  .lab{position:sticky;left:0;z-index:2;background:var(--card);text-align:left;padding:0 14px;
+    min-width:150px}
+  thead .lab{z-index:3}
+  thead th{font-size:9px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;
+    color:var(--mut);text-align:right;padding:0 13px 6px 0;border-bottom:1px solid var(--line)}
+  thead th .y{display:block;font-size:8px;color:var(--faint);font-weight:700}
+  .grp td{font-size:9px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;
+    color:var(--faint);padding:9px 14px 2px}
+  .grp:first-child td{padding-top:6px}
+  tbody td{padding:3px 13px 3px 0;text-align:right;border-bottom:1px solid var(--line2)}
+  tbody td.lab{padding:3px 14px;border-bottom:1px solid var(--line2)}
+  /* THE FIGURE IS THE POINT; the share is the supporting line. */
+  .v{font-size:13.5px;font-weight:700;color:var(--ink)}
+  .t{font-size:12.5px;font-weight:500;color:var(--mut)}
+  .s{font-size:11px;font-weight:700;color:var(--faint)}
+  tr.share td{border-bottom:1px solid var(--line)}
+  tr.share td.lab{color:var(--faint);font-size:10.5px;font-weight:600}
+  tbody tr:not(.grp):hover td{background:var(--hi)}
+  .rl{font-size:11.5px;font-weight:600;color:var(--ink)}
+  .rl2{font-size:11.5px;font-weight:500;color:var(--mut)}
+</style>
+<body>
+<div class="card">
+  <h2>Member share by month</h2>
+  <div class="scroll">
+    <table>
+      <thead><tr id="hd"></tr></thead>
+      <tbody id="bd"></tbody>
+    </table>
+  </div>
+</div>
+<script>
+const DATA = [
+  ["Mar 2025",   1180,  18400,  148, 2180,  38,  902],
+  ["Apr 2025",   1920,  20100,  236, 2340,  61,  978],
+  ["May 2025",   2740,  22600,  330, 2510,  86, 1044],
+  ["Jun 2025",   3610,  24900,  428, 2690, 112, 1108],
+  ["Jul 2025",   4480,  27300,  522, 2880, 137, 1176],
+  ["Aug 2025",   5390,  29800,  618, 3060, 163, 1242],
+  ["Sep 2025",   6280,  32400,  712, 3250, 188, 1308],
+  ["Oct 2025",   9240,  41300, 1102, 4880, 246, 1910],
+  ["Nov 2025",  10110,  44900, 1188, 5120, 268, 1988],
+  ["Dec 2025",   9880,  39700, 1046, 4410, 274, 1802],
+  ["Jan 2026",  12340,  52100, 1362, 5690, 312, 2240],
+  ["Feb 2026",  13020,  55800, 1431, 5940, 331, 2356],
+  ["Mar 2026",  14460,  61200, 1588, 6410, 358, 2512],
+  ["Apr 2026",  15210,  66400, 1672, 6880, 379, 2684],
+  ["May 2026",  16040,  70900, 1744, 7120, 398, 2790],
+  ["Jun 2026",  17418,  74011, 1812, 7340, 416, 2868],
+  ["Jul 2026",  17857,  97024, 1896, 8940, 428, 3310],
+  ["Aug 2026",  18930,  91819, 1934, 8520, 441, 3186],
+  ["Sep 2026",  17852,  65833, 1391, 5937, 451, 2402],
+];
+/* NEWEST FIRST. The month you look at is the current one, so it sits at column 1 and never
+   moves; history runs rightward into the scroll. The alternative, chronological order with the
+   container auto-scrolled to its far end, puts the current month at the end of a scroll that
+   grows every month. Asserted: the current month is visible at scrollLeft 0 at 390px. */
+const COLS = [...DATA].reverse();
+const money = n => "$" + n.toLocaleString("en-US");
+const int   = n => n.toLocaleString("en-US");
+const share = (a,b) => b > 0 ? (a/b*100).toFixed(1) + "%" : "—";
+const GROUPS = [
+  { key:"rev",     name:"Revenue", fmt:money, part:"Membership", whole:"Total revenue", pi:1, wi:2 },
+  { key:"spots",   name:"Spots",   fmt:int,   part:"Member",     whole:"Booked",        pi:3, wi:4 },
+  { key:"players", name:"Players", fmt:int,   part:"Members",    whole:"Played",        pi:5, wi:6 },
+];
+document.getElementById("hd").innerHTML =
+  `<th class="lab" data-testid="corner"></th>` +
+  COLS.map(r => { const [m,y] = r[0].split(" ");
+    return `<th data-testid="mcol" data-m="${r[0]}">${m}<span class="y">${y}</span></th>`; }).join("");
+document.getElementById("bd").innerHTML = GROUPS.map(g => {
+  const row = (cls, label, lcls, cell, tid) =>
+    `<tr class="${cls}" data-testid="${tid}" data-g="${g.key}"><td class="lab ${lcls}">${label}</td>` +
+    COLS.map(r => `<td data-testid="${tid}c" data-g="${g.key}" data-m="${r[0]}">${cell(r)}</td>`).join("") + `</tr>`;
+  return `<tr class="grp" data-testid="grp" data-g="${g.key}"><td class="lab" colspan="${COLS.length+1}">${g.name}</td></tr>`
+    + row("", g.part,  "rl",  r => `<span class="v" data-testid="vnum">${g.fmt(r[g.pi])}</span>`, "part")
+    + row("", g.whole, "rl2", r => `<span class="t">${g.fmt(r[g.wi])}</span>`, "whole")
+    + row("share", "Share", "", r => `<span class="s" data-testid="vpct">${share(r[g.pi], r[g.wi])}</span>`, "share");
+}).join("");
+</script>

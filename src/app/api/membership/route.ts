@@ -21,7 +21,7 @@ import { assertScope } from "@/lib/cityConfinement";
 import { countActiveMembers } from "@/lib/membershipStats";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { fetchLegacyMatchRegistrations, loadMembershipWindowsByUserId } from "@/lib/mdapiMatchesRead";
-import { classify, CHURN_DAYS, type SpotRow } from "@/lib/membershipModel";
+import { classify, CHURN_DAYS, type SpotRow, type MonthKey, monthsFrom, buildMemberShare, MONTHS_SHORT } from "@/lib/membershipModel";
 import { selectAll } from "@/lib/supabasePagination";
 
 export const runtime = "nodejs";
@@ -96,16 +96,94 @@ export async function GET(req: Request) {
     const venueOfField = new Map(links.map((l) => [l.mdapi_field_id, l.fin_venue_id]));
     const fieldName = new Map(links.map((l) => [l.mdapi_field_id, l.field_title_at_link]));
 
+    /* ── EVERY TYPE, NOT JUST MEMBERSHIP ────────────────────────────────────────────────────────
+     * The .eq("type","Membership") filter came off so the share table has a denominator. Membership
+     * is split out below; everything else is the rest of the business.
+     *
+     * WHICH MAKES THE PAGING MATTER MORE, NOT LESS. This read was unpaged and silently capped at
+     * 1,000 of 1,829 Membership rows, losing 87% of August (842dac9). Dropping the filter takes the
+     * row count from 1,829 to 8,464, so an unpaged version would now lose four fifths of the table.
+     * selectAll with .order("id") is what makes that impossible. */
+    const rev = await selectAll<{ month: unknown; city: unknown; net: unknown; gross: unknown; type: unknown }>(
+      () => sb.from("fin_revenue").select("month,city,net,gross,type").order("id"),
+    );
+    /* GROSS, NOT NET, AND THE TILE'S OWN SUBTITLE IS THE ARGUMENT. It says "what a member actually
+     * paid". A member paid the gross; `net` is gross minus what Stripe took from US, which is a
+     * fact about our processing costs and not about what the member handed over. Austin Aug 2026:
+     * gross $8,216.37, net $7,934.43.
+     *
+     * NOT PRE-TAX EITHER, and that is the other half of the split this page got tangled in.
+     * memberSpotRateFor divides PRE-TAX revenue because it joins to roster money that is pre-tax;
+     * this page joins to nothing, so it reports the amount that actually left the member's card. */
+    const revByMonth = new Map<string, number>();
+    /* MEMBERSHIP AND EVERYTHING ELSE, per month, for the share table. GROSS on both sides: the
+     * share is membership over total and a ratio of two different bases is not a share. The
+     * MATCHDAY REVENUE card on Finance reads gross too, which is what lets the two tie. */
+    const shareRevByMonth = new Map<string, { membership: number; total: number }>();
+    for (const r of rev) {
+      if (scopeCity && cityCodeOf(r.city as string) !== scopeCity) continue;
+      const key = String(r.month);
+      const gross = Number(r.gross ?? 0);
+      const isMembership = r.type === "Membership";
+      if (isMembership) revByMonth.set(key, (revByMonth.get(key) ?? 0) + gross);
+      const cur = shareRevByMonth.get(key) ?? { membership: 0, total: 0 };
+      cur.total += gross;
+      if (isMembership) cur.membership += gross;
+      shareRevByMonth.set(key, cur);
+    }
+
+    /* ── THE SHARE TABLE NEEDS EVERY MONTH SINCE LAUNCH, AND THE LAUNCH MONTH IS DERIVED ────────
+     * The earliest month carrying membership revenue, read from the ledger. NOT A DATE IN THE
+     * CODE: three figures quoted from comments in this codebase this week were stale, and a
+     * hardcoded launch month is the same mistake with a longer fuse. It resolved to Mar 2024 when
+     * this was written, and if it moves the table follows it without an edit.
+     *
+     * THE COST IS REAL AND IS STATED. 31 months is 177,287 registration rows against 37,000 for
+     * the four-month window, and it measured 7.0s. The rows are fetched ONCE and used twice: the
+     * charts keep their four-month slice exactly as before, the share table gets the whole set. */
+    const memberMonthKeys = [...shareRevByMonth.entries()]
+      .filter(([, v]) => v.membership > 0)
+      .map(([k]) => k)
+      .sort((a, b) => monthSortKey(a).localeCompare(monthSortKey(b)));
+    const launchMonth = memberMonthKeys[0] ?? months[0];
+    const shareMonths = monthsFrom(launchMonth as MonthKey, months[months.length - 1]);
+    const wideFrom = monthStartIso(launchMonth) ?? from.toISOString().slice(0, 10);
+
     const regs = await fetchLegacyMatchRegistrations(
-      sb, { fromDate: from.toISOString().slice(0, 10), toDate: endIso.slice(0, 10) }, subsWin,
+      sb, { fromDate: wideFrom, toDate: endIso.slice(0, 10) }, subsWin,
     );
 
     // City for a registration comes from the venue its field is linked to — the same mapping the
     // finance surfaces use, never an ILIKE on a title.
     const rows: SpotRow[] = [];
     const days: { day: string; cls: ReturnType<typeof classify> }[] = [];
+    /* ── THE SHARE TABLE'S OWN ACCUMULATOR, over the WIDE set ────────────────────────────────────
+     * Distinct people, not spots, on the players line: members is distinct user_ids on a MEMBER
+     * row, played is distinct user_ids on any row. SAME ROWS, SAME FILTER, SAME GRAIN, which is
+     * the only thing that makes their ratio mean anything. A row with no user_id counts as its
+     * own person rather than collapsing into someone else's. */
+    const spotsByMonth = new Map<string, { memberSpots: number; bookedSpots: number; memberU: Set<string>; playedU: Set<string> }>();
+    const monthsWanted = new Set<string>(months);
+    let anon = 0;
     for (const r of regs) {
       if (r.match_canceled) continue;
+      {
+        const mk = monthKey(r.match_start);
+        const cls = classify(r.payment_type);
+        const vid0 = r.field_id != null ? venueOfField.get(r.field_id) : undefined;
+        const city0 = vid0 != null ? (vById.get(vid0)?.city ?? null) : null;
+        const inScope = (!scopeCity || cityCodeOf(city0) === scopeCity) && (!fieldId || r.field_id === fieldId);
+        if (inScope && cls !== "OTHER") {
+          const a = spotsByMonth.get(mk) ?? { memberSpots: 0, bookedSpots: 0, memberU: new Set<string>(), playedU: new Set<string>() };
+          const uid = r.user_id != null ? String(r.user_id) : `anon:${anon++}`;
+          a.bookedSpots++; a.playedU.add(uid);
+          if (cls === "MEMBER") { a.memberSpots++; a.memberU.add(uid); }
+          spotsByMonth.set(mk, a);
+        }
+      }
+      /* THE CHARTS KEEP THEIR FOUR-MONTH WINDOW. Widening the fetch must not widen dayMix, byCity
+       * or byField, which read every row in `rows` rather than filtering by month. */
+      if (!monthsWanted.has(monthKey(r.match_start))) continue;
       const vid = r.field_id != null ? venueOfField.get(r.field_id) : undefined;
       const city = vid != null ? (vById.get(vid)?.city ?? null) : null;
       if (scopeCity && cityCodeOf(city) !== scopeCity) continue;
@@ -186,22 +264,6 @@ export async function GET(req: Request) {
      *
      * selectAll is what useFinanceData already uses on this exact table, which is why that path
      * was never wrong. One pager, one table, one behaviour. */
-    const rev = await selectAll<{ month: unknown; city: unknown; net: unknown; gross: unknown; type: unknown }>(
-      () => sb.from("fin_revenue").select("month,city,net,gross,type").eq("type", "Membership").order("id"),
-    );
-    /* GROSS, NOT NET, AND THE TILE'S OWN SUBTITLE IS THE ARGUMENT. It says "what a member actually
-     * paid". A member paid the gross; `net` is gross minus what Stripe took from US, which is a
-     * fact about our processing costs and not about what the member handed over. Austin Aug 2026:
-     * gross $8,216.37, net $7,934.43.
-     *
-     * NOT PRE-TAX EITHER, and that is the other half of the split this page got tangled in.
-     * memberSpotRateFor divides PRE-TAX revenue because it joins to roster money that is pre-tax;
-     * this page joins to nothing, so it reports the amount that actually left the member's card. */
-    const revByMonth = new Map<string, number>();
-    for (const r of rev) {
-      if (scopeCity && cityCodeOf(r.city as string) !== scopeCity) continue;
-      revByMonth.set(String(r.month), (revByMonth.get(String(r.month)) ?? 0) + Number(r.gross ?? 0));
-    }
 
     // ALL-TIME ACTIVE SERIES — the existing captured series, unchanged.
     /* THE EXISTING CAPTURED SERIES, UNCHANGED — same table, same column, same meaning. The columns
@@ -334,6 +396,25 @@ export async function GET(req: Request) {
        * that keeps its name through a change of meaning is how a consumer keeps reading the old
        * thing. The name now says which of the three bases it is. */
       membershipGrossByMonth: Object.fromEntries(revByMonth),
+      /* ── THE SHARE TABLE, NEWEST MONTH FIRST ───────────────────────────────────────────────
+       * Every month from the derived launch month through the current one, with no gaps: a month
+       * with no membership revenue still renders, as zeroes, because skipping it would draw a
+       * line from the month before to the month after and invent a trend across a hole. */
+      memberShare: buildMemberShare({
+        months: shareMonths,
+        revenueByMonth: new Map(shareMonths.map((m) => [m, {
+          membership: shareRevByMonth.get(m)?.membership ?? 0,
+          total: shareRevByMonth.get(m)?.total ?? 0,
+        }])),
+        spotsByMonth: new Map(shareMonths.map((m) => {
+          const a = spotsByMonth.get(m);
+          return [m, {
+            memberSpots: a?.memberSpots ?? 0, bookedSpots: a?.bookedSpots ?? 0,
+            members: a?.memberU.size ?? 0, played: a?.playedU.size ?? 0,
+          }];
+        })),
+      }),
+      memberShareLaunchMonth: launchMonth,
       snapshots: snaps,
       churnDays: CHURN_DAYS,
       scope: scopeCity, confined: confined !== null,
@@ -358,6 +439,18 @@ const CODE: Record<string, string> = {
   Atlanta: "ATL", OKC: "OKC", "St. Louis": "STL", Warsaw: "WAW",
 };
 const cityCodeOf = (display: string | null): string | null => (display ? CODE[display] ?? display : null);
+
+/** "Aug 2026" -> "2026-08", so months sort as dates rather than alphabetically ("Apr" < "Aug"). */
+const monthSortKey = (m: string): string => {
+  const [mo, y] = String(m).split(" ");
+  const i = MONTHS_SHORT.indexOf(mo);
+  return i < 0 ? "0000-00" : `${y}-${String(i + 1).padStart(2, "0")}`;
+};
+/** "Aug 2026" -> "2026-08-01", the first day of that month. */
+const monthStartIso = (m: string): string | null => {
+  const k = monthSortKey(m);
+  return k === "0000-00" ? null : `${k}-01`;
+};
 
 /** "2026-08-01" -> "Aug 2026". String surgery; a captured month is a label, not an instant. */
 const monthLabelFromIso = (ymd: string) => `${MON[Number(ymd.slice(5, 7)) - 1]} ${ymd.slice(0, 4)}`;
