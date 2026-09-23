@@ -1,6 +1,6 @@
-/* THE MOCK'S 36 ASSERTIONS, RUN AGAINST THE REAL PAGE. Only the loader and the selector scope
-   change: every `ok(...)` body is the mock's, verbatim. The scope is needed because the real page
-   carries other cards, and an unscoped `.card` would measure whichever came first. */
+/* THE MOCK'S ASSERTIONS, RUN AGAINST THE REAL PAGE. Only the loader and the selector scope
+   change; every ok(...) body is the mock's. The scope is needed because the real page carries
+   other cards and an unscoped `.card` would measure whichever came first. */
 import { chromium } from 'playwright';
 import { storageStateFor, installHarnessGuard } from '../e2e/_session.mjs';
 installHarnessGuard();
@@ -12,7 +12,7 @@ let pass=0,fail=0; const ok=(c,m)=>{console.log((c?'✓ ':'✗ ')+m); c?pass++:f
 const ctx = await b.newContext({ storageState, viewport:{width:1200,height:900} });
 const p = await ctx.newPage();
 const errs=[]; p.on('pageerror',e=>errs.push(e.message));
-const D = t => `${'[data-testid="member-share"]'} [data-testid="${t}"]`;
+const D = t => `[data-testid="member-share"] [data-testid="${t}"]`;
 const CARD = '[data-testid="member-share"]';
 let loaded = false;
 const load = async (w=1200,h=900) => {
@@ -33,7 +33,26 @@ ok(/^[A-Z][a-z]{2} 20\d\d$/.test(cols[0]), `  the current month is column 1 (${c
 ok(/^[A-Z][a-z]{2} 20\d\d$/.test(cols[cols.length-1]), `  history runs rightward to the launch month (${cols[cols.length-1]})`);
 ok(new Set(cols).size===cols.length, '  CONTROL: no month repeats');
 const rowsN = await p.$$eval(CARD+' tbody tr', es=>es.length);
-ok(rowsN===12, `twelve rows, three groups of three plus their headings (${rowsN})`);
+ok(rowsN===13, `thirteen rows: three groups of three, three headings, and a bare price row (${rowsN})`);
+ok(await p.$$eval(D('grp'), es=>es.length)===3, '  CONTROL: three headings, none over the one-row price group');
+
+// ══ 1b. THE PRICE ROW ══════════════════════════════════════════════════════
+// George's item 4, "average member price per spot per month". One row, not a card and not a
+// city breakdown: the page's own city filter is the drill-down. Same figure the tile above
+// shows, extended to every month.
+for (const [m,v] of [['Jun 2026','$7.85'],['Jul 2026','$7.34'],['Aug 2026','$9.01'],['Sep 2026','$12.70']]){
+  ok(await at('partc','price',m)===v, `  price ${m} is ${v}, matching the tile above`);
+}
+const plab = await p.$eval(`${D('part')}[data-g="price"] .lab`, e=>e.textContent.trim());
+ok(/price/i.test(plab) && /played/i.test(plab),
+  `  its own label carries both the metric and the denominator ("${plab}")`);
+// CONTROL: played is not booked. The spots row above divides by booked, and the two differ by
+// 11-15%, so a price computed on booked would be quietly wrong and look fine.
+const booked = Number((await at('wholec','spots','Aug 2026')).replace(/[^0-9]/g,''));
+const rev = Number((await at('partc','rev','Aug 2026')).replace(/[^0-9]/g,''));
+ok(Math.abs(rev/booked - 9.01) > 0.5,
+  `  CONTROL: $9.01 is not revenue over BOOKED spots, which would be $${(rev/booked).toFixed(2)}`);
+ok(await p.$(`${D('whole')}[data-g="price"]`)===null, '  CONTROL: the price group has no total row');
 
 // ══ 2. THE FIGURE IS THE POINT, THE SHARE IS SECONDARY ═════════════════════
 // Ryan: "make the number the main point, % could be secondary". So this is a type-weight
@@ -54,19 +73,16 @@ const trev = await at('wholec','rev','Aug 2026');
 const srev = await at('sharec','rev','Aug 2026');
 ok(mrev==='$18,930' && trev==='$91,819', `Aug revenue reads ${mrev} of ${trev}`);
 ok(srev==='20.6%', `  and its share renders as ${srev}`);
-/* DERIVED, NOT PINNED. The mock's section heading is "every share is checkable against the two
-   figures above it", and against a live page that is a stronger assertion than either set of
-   numbers: it recomputes the share from the two rendered cells, so it cannot pass on a stale
-   constant and cannot fail because the data moved. The mock's spots and players samples are not
-   production (its Aug spots read 1,934/8,520 against a real 2,377/8,992, and its 441 members is
-   neither the spot count nor the subscription count), while its REVENUE rows are exact. */
+/* DERIVED, NOT PINNED, and the section heading is the argument: "every share is checkable
+   against the two figures above it". Against a live page that is stronger than any constant. The
+   mock's spots and players samples are not production (Aug spots read 1,934/8,520 against a real
+   2,377/8,992); its REVENUE rows are exact. */
 const num = t => Number(String(t).replace(/[$,]/g,''));
 for (const g of ['rev','spots','players']) {
-  const pv = num(await at('partc',g,'Aug 2026'));
-  const wv = num(await at('wholec',g,'Aug 2026'));
+  const pv = num(await at('partc',g,'Aug 2026')), wv = num(await at('wholec',g,'Aug 2026'));
   const sv = await at('sharec',g,'Aug 2026');
-  const want = wv > 0 ? (pv/wv*100).toFixed(1)+'%' : '—';
-  ok(sv===want, `  ${g}: ${pv.toLocaleString()} of ${wv.toLocaleString()} renders as ${sv}`);
+  ok(sv === (wv>0 ? (pv/wv*100).toFixed(1)+'%' : '—'),
+    `  ${g}: ${pv.toLocaleString()} of ${wv.toLocaleString()} renders as ${sv}`);
 }
 const three = [srev, await at('sharec','spots','Aug 2026'), await at('sharec','players','Aug 2026')];
 ok(new Set(three).size===3, `  CONTROL: the three shares differ (${three.join(' / ')}), so the rows are not wired to one source`);

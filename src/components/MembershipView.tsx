@@ -21,7 +21,7 @@ import { supabase } from "@/lib/supabase";
 import {
   SERIES, ALLTIME_COLOUR, axisTop, scaleTicks, clampTip, totalsByMonth, activeSeries,
   buildKpis, shares, pctShares, scopeLabel, classify,
-  type SpotRow, type MonthTotals, type ActivePoint, type MemberShareRow, shareOfPair,
+  type SpotRow, type MonthTotals, type ActivePoint, type MemberShareRow, shareOfPair, pricePerSpotPlayed,
 } from "@/lib/membershipModel";
 
 type Payload = {
@@ -273,10 +273,10 @@ export default function MembershipView() {
           border-bottom: 1px solid #dce5e0 }
         .mstable thead th .y { display: block; font-size: 8px; color: #9aa8a0; font-weight: 700 }
         .mstable .grp td { font-size: 9px; font-weight: 800; letter-spacing: .6px;
-          text-transform: uppercase; color: #9aa8a0; padding: 7px 14px 2px }
+          text-transform: uppercase; color: #9aa8a0; padding: 6px 14px 1px }
         .mstable .grp:first-child td { padding-top: 6px }
-        .mstable tbody td { padding: 2px 13px 2px 0; text-align: right; border-bottom: 1px solid #eff3ef }
-        .mstable tbody td.lab { padding: 2px 14px; border-bottom: 1px solid #eff3ef }
+        .mstable tbody td { padding: 1px 13px 1px 0; text-align: right; border-bottom: 1px solid #eff3ef }
+        .mstable tbody td.lab { padding: 1px 14px; border-bottom: 1px solid #eff3ef }
         /* THE FIGURE IS THE POINT; the share is the supporting line. Larger,
            no lighter, and a different ink from both the share and its total. */
         .mstable .v { font-size: 13.5px; font-weight: 700; color: #12241d }
@@ -693,6 +693,11 @@ const MS_SHARE = (part: number, whole: number) => {
   const v = shareOfPair(part, whole);
   return v == null ? "—" : `${(v * 100).toFixed(1)}%`;
 };
+/* A DASH, NOT $0.00, when nobody played. "$0.00 per spot" is a claim that members paid nothing. */
+const MS_PRICE = (r: MemberShareRow) => {
+  const v = pricePerSpotPlayed(r.membershipRevenue, r.memberConsumed);
+  return v == null ? "—" : `$${v.toFixed(2)}`;
+};
 
 function MemberShare({ rows }: { rows: MemberShareRow[] }) {
   if (!rows.length) return null;
@@ -753,6 +758,21 @@ function MemberShare({ rows }: { rows: MemberShareRow[] }) {
                 </tr>
               </Fragment>
             ))}
+            {/* ── THE PRICE ROW ───────────────────────────────────────────────────────────────
+                ONE ROW AND NO HEADING OVER IT. A group label above a single label is noise, and
+                it costs 20px of a card that has a height budget.
+                ITS DENOMINATOR IS PLAYED, NOT THE BOOKED FIGURE TWO ROWS UP. They differ by 11
+                to 15%, the booked number is sitting in this same table, and a price computed on
+                it would read $2.22 for August instead of $8.98 and look entirely plausible.
+                NO CITY BREAKDOWN: the page's own city filter is the drill-down. */}
+            <tr className="share" data-testid="part" data-g="price">
+              <td className="lab rl">Price per spot played</td>
+              {rows.map((r) => (
+                <td key={r.month} data-testid="partc" data-g="price" data-m={r.month}>
+                  <span className="v" data-testid="vnum">{MS_PRICE(r)}</span>
+                </td>
+              ))}
+            </tr>
           </tbody>
         </table>
       </div>

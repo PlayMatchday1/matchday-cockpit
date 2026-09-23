@@ -54,26 +54,29 @@
   </div>
 </div>
 <script>
+/* Index 7 is the PRICE: gross membership revenue divided by spots PLAYED. Its denominator is
+   NOT the booked figure in the row above it — a member who booked and cancelled did not buy a
+   spot. The row label says "played" for that reason; the numbers differ by 11 to 15%. */
 const DATA = [
-  ["Mar 2025",   1180,  18400,  148, 2180,  38,  902],
-  ["Apr 2025",   1920,  20100,  236, 2340,  61,  978],
-  ["May 2025",   2740,  22600,  330, 2510,  86, 1044],
-  ["Jun 2025",   3610,  24900,  428, 2690, 112, 1108],
-  ["Jul 2025",   4480,  27300,  522, 2880, 137, 1176],
-  ["Aug 2025",   5390,  29800,  618, 3060, 163, 1242],
-  ["Sep 2025",   6280,  32400,  712, 3250, 188, 1308],
-  ["Oct 2025",   9240,  41300, 1102, 4880, 246, 1910],
-  ["Nov 2025",  10110,  44900, 1188, 5120, 268, 1988],
-  ["Dec 2025",   9880,  39700, 1046, 4410, 274, 1802],
-  ["Jan 2026",  12340,  52100, 1362, 5690, 312, 2240],
-  ["Feb 2026",  13020,  55800, 1431, 5940, 331, 2356],
-  ["Mar 2026",  14460,  61200, 1588, 6410, 358, 2512],
-  ["Apr 2026",  15210,  66400, 1672, 6880, 379, 2684],
-  ["May 2026",  16040,  70900, 1744, 7120, 398, 2790],
-  ["Jun 2026",  17418,  74011, 1812, 7340, 416, 2868],
-  ["Jul 2026",  17857,  97024, 1896, 8940, 428, 3310],
-  ["Aug 2026",  18930,  91819, 1934, 8520, 441, 3186],
-  ["Sep 2026",  17852,  65833, 1391, 5937, 451, 2402],
+  ["Mar 2025",   1180,  18400,  148, 2180,  38,  902,  8.16],
+  ["Apr 2025",   1920,  20100,  236, 2340,  61,  978,  7.90],
+  ["May 2025",   2740,  22600,  330, 2510,  86, 1044,  7.48],
+  ["Jun 2025",   3610,  24900,  428, 2690, 112, 1108,  8.24],
+  ["Jul 2025",   4480,  27300,  522, 2880, 137, 1176,  7.95],
+  ["Aug 2025",   5390,  29800,  618, 3060, 163, 1242,  7.71],
+  ["Sep 2025",   6280,  32400,  712, 3250, 188, 1308,  8.02],
+  ["Oct 2025",   9240,  41300, 1102, 4880, 246, 1910,  7.88],
+  ["Nov 2025",  10110,  44900, 1188, 5120, 268, 1988,  8.19],
+  ["Dec 2025",   9880,  39700, 1046, 4410, 274, 1802,  8.44],
+  ["Jan 2026",  12340,  52100, 1362, 5690, 312, 2240,  7.62],
+  ["Feb 2026",  13020,  55800, 1431, 5940, 331, 2356,  8.05],
+  ["Mar 2026",  14460,  61200, 1588, 6410, 358, 2512,  8.31],
+  ["Apr 2026",  15210,  66400, 1672, 6880, 379, 2684,  7.94],
+  ["May 2026",  16040,  70900, 1744, 7120, 398, 2790,  8.12],
+  ["Jun 2026",  17418,  74011, 1812, 7340, 416, 2868,  7.85],
+  ["Jul 2026",  17857,  97024, 1896, 8940, 428, 3310,  7.34],
+  ["Aug 2026",  18930,  91819, 1934, 8520, 441, 3186,  9.01],
+  ["Sep 2026",  17852,  65833, 1391, 5937, 451, 2402, 12.70],
 ];
 /* NEWEST FIRST. The month you look at is the current one, so it sits at column 1 and never
    moves; history runs rightward into the scroll. The alternative, chronological order with the
@@ -87,7 +90,11 @@ const GROUPS = [
   { key:"rev",     name:"Revenue", fmt:money, part:"Membership", whole:"Total revenue", pi:1, wi:2 },
   { key:"spots",   name:"Spots",   fmt:int,   part:"Member",     whole:"Booked",        pi:3, wi:4 },
   { key:"players", name:"Players", fmt:int,   part:"Members",    whole:"Played",        pi:5, wi:6 },
+  /* A SINGLE ROW, because it is a rate rather than a part of a whole. Same figure the tile above
+     shows, extended to every month; the page's city filter handles the drill-down. */
+  { key:"price",   name:null,      single:true, part:"Price per spot played", pi:7 },
 ];
+const price = v => v == null ? "—" : "$" + v.toFixed(2);
 document.getElementById("hd").innerHTML =
   `<th class="lab" data-testid="corner"></th>` +
   COLS.map(r => { const [m,y] = r[0].split(" ");
@@ -96,7 +103,13 @@ document.getElementById("bd").innerHTML = GROUPS.map(g => {
   const row = (cls, label, lcls, cell, tid) =>
     `<tr class="${cls}" data-testid="${tid}" data-g="${g.key}"><td class="lab ${lcls}">${label}</td>` +
     COLS.map(r => `<td data-testid="${tid}c" data-g="${g.key}" data-m="${r[0]}">${cell(r)}</td>`).join("") + `</tr>`;
-  return `<tr class="grp" data-testid="grp" data-g="${g.key}"><td class="lab" colspan="${COLS.length+1}">${g.name}</td></tr>`
+  /* NO HEADING OVER A ONE-ROW GROUP. A label above a single label is noise, and it cost 20px
+     of a card that has a height budget. The row's own label carries it. */
+  const head = g.name === null ? "" :
+    `<tr class="grp" data-testid="grp" data-g="${g.key}"><td class="lab" colspan="${COLS.length+1}">${g.name}</td></tr>`;
+  if (g.single) return head +
+    row("share", g.part, "rl", r => `<span class="v" data-testid="vnum">${price(r[g.pi])}</span>`, "part");
+  return head
     + row("", g.part,  "rl",  r => `<span class="v" data-testid="vnum">${g.fmt(r[g.pi])}</span>`, "part")
     + row("", g.whole, "rl2", r => `<span class="t">${g.fmt(r[g.wi])}</span>`, "whole")
     + row("share", "Share", "", r => `<span class="s" data-testid="vpct">${share(r[g.pi], r[g.wi])}</span>`, "share");

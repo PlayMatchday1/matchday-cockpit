@@ -315,6 +315,13 @@ export type MemberShareRow = {
   bookedSpots: number;
   members: number;
   played: number;
+  /* ── THE PRICE ROW'S DENOMINATOR, AND IT IS NOT bookedSpots ─────────────────────────────────
+   * MEMBER spots the player did NOT cancel. The Spots group two rows up divides by BOOKED; this
+   * divides by PLAYED, and they differ by 11 to 15%. The booked figure is sitting in the same
+   * table, which is exactly how this gets wired to the wrong denominator and still looks
+   * plausible: Aug would read $2.22 instead of $8.98. The row label says "played" and that is
+   * where the distinction is stated. */
+  memberConsumed: number;
 };
 
 /* THE MONTH LIST IS DERIVED AND HAS NO GAPS. Every month from the first with membership revenue
@@ -351,7 +358,7 @@ export const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "A
 export function buildMemberShare(input: {
   months: readonly MonthKey[];
   revenueByMonth: ReadonlyMap<MonthKey, { membership: number; total: number }>;
-  spotsByMonth: ReadonlyMap<MonthKey, { memberSpots: number; bookedSpots: number; members: number; played: number }>;
+  spotsByMonth: ReadonlyMap<MonthKey, { memberSpots: number; bookedSpots: number; members: number; played: number; memberConsumed: number }>;
 }): MemberShareRow[] {
   return [...input.months].reverse().map((month) => {
     const r = input.revenueByMonth.get(month);
@@ -364,6 +371,7 @@ export function buildMemberShare(input: {
       bookedSpots: s?.bookedSpots ?? 0,
       members: s?.members ?? 0,
       played: s?.played ?? 0,
+      memberConsumed: s?.memberConsumed ?? 0,
     };
   });
 }
@@ -371,4 +379,17 @@ export function buildMemberShare(input: {
 /** A share, or null when there is no total to be a share of. Never 0.0% for "no denominator". */
 export function shareOfPair(part: number, whole: number): number | null {
   return whole > 0 ? part / whole : null;
+}
+
+
+/* ── AVERAGE PRICE PER MEMBER SPOT PLAYED ───────────────────────────────────────────────────────
+ *
+ * The same figure the tile above the table shows, extended to every month: that month's own gross
+ * membership revenue over the member spots actually played.
+ *
+ * NULL, NOT ZERO, WHEN NOBODY PLAYED. "$0.00 per spot" is a claim that members paid nothing;
+ * a dash is the absence of one. Null becoming zero has produced three separate defects this week.
+ */
+export function pricePerSpotPlayed(membershipRevenue: number, memberConsumed: number): number | null {
+  return memberConsumed > 0 ? membershipRevenue / memberConsumed : null;
 }

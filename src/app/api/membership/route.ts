@@ -162,7 +162,7 @@ export async function GET(req: Request) {
      * row, played is distinct user_ids on any row. SAME ROWS, SAME FILTER, SAME GRAIN, which is
      * the only thing that makes their ratio mean anything. A row with no user_id counts as its
      * own person rather than collapsing into someone else's. */
-    const spotsByMonth = new Map<string, { memberSpots: number; bookedSpots: number; memberU: Set<string>; playedU: Set<string> }>();
+    const spotsByMonth = new Map<string, { memberSpots: number; bookedSpots: number; memberConsumed: number; memberU: Set<string>; playedU: Set<string> }>();
     const monthsWanted = new Set<string>(months);
     let anon = 0;
     for (const r of regs) {
@@ -174,10 +174,15 @@ export async function GET(req: Request) {
         const city0 = vid0 != null ? (vById.get(vid0)?.city ?? null) : null;
         const inScope = (!scopeCity || cityCodeOf(city0) === scopeCity) && (!fieldId || r.field_id === fieldId);
         if (inScope && cls !== "OTHER") {
-          const a = spotsByMonth.get(mk) ?? { memberSpots: 0, bookedSpots: 0, memberU: new Set<string>(), playedU: new Set<string>() };
+          const a = spotsByMonth.get(mk) ?? { memberSpots: 0, bookedSpots: 0, memberConsumed: 0, memberU: new Set<string>(), playedU: new Set<string>() };
           const uid = r.user_id != null ? String(r.user_id) : `anon:${anon++}`;
           a.bookedSpots++; a.playedU.add(uid);
-          if (cls === "MEMBER") { a.memberSpots++; a.memberU.add(uid); }
+          if (cls === "MEMBER") {
+            a.memberSpots++; a.memberU.add(uid);
+            /* PLAYED, for the price row only. A member who booked and cancelled did not buy a
+             * spot, so the price divides by this and the Spots group divides by memberSpots. */
+            if (!(r.player_canceled_at && String(r.player_canceled_at).trim() !== "")) a.memberConsumed++;
+          }
           spotsByMonth.set(mk, a);
         }
       }
@@ -411,6 +416,7 @@ export async function GET(req: Request) {
           return [m, {
             memberSpots: a?.memberSpots ?? 0, bookedSpots: a?.bookedSpots ?? 0,
             members: a?.memberU.size ?? 0, played: a?.playedU.size ?? 0,
+            memberConsumed: a?.memberConsumed ?? 0,
           }];
         })),
       }),

@@ -21,7 +21,26 @@ ok(cols[0]==='Sep 2026', `  the current month is column 1 (${cols[0]})`);
 ok(cols[cols.length-1]==='Mar 2025', `  history runs rightward to the launch month (${cols[cols.length-1]})`);
 ok(new Set(cols).size===cols.length, '  CONTROL: no month repeats');
 const rowsN = await p.$$eval('tbody tr', es=>es.length);
-ok(rowsN===12, `twelve rows, three groups of three plus their headings (${rowsN})`);
+ok(rowsN===13, `thirteen rows: three groups of three, three headings, and a bare price row (${rowsN})`);
+ok(await p.$$eval(D('grp'), es=>es.length)===3, '  CONTROL: three headings, none over the one-row price group');
+
+// ══ 1b. THE PRICE ROW ══════════════════════════════════════════════════════
+// George's item 4, "average member price per spot per month". One row, not a card and not a
+// city breakdown: the page's own city filter is the drill-down. Same figure the tile above
+// shows, extended to every month.
+for (const [m,v] of [['Jun 2026','$7.85'],['Jul 2026','$7.34'],['Aug 2026','$9.01'],['Sep 2026','$12.70']]){
+  ok(await at('partc','price',m)===v, `  price ${m} is ${v}, matching the tile above`);
+}
+const plab = await p.$eval(`${D('part')}[data-g="price"] .lab`, e=>e.textContent.trim());
+ok(/price/i.test(plab) && /played/i.test(plab),
+  `  its own label carries both the metric and the denominator ("${plab}")`);
+// CONTROL: played is not booked. The spots row above divides by booked, and the two differ by
+// 11-15%, so a price computed on booked would be quietly wrong and look fine.
+const booked = Number((await at('wholec','spots','Aug 2026')).replace(/[^0-9]/g,''));
+const rev = Number((await at('partc','rev','Aug 2026')).replace(/[^0-9]/g,''));
+ok(Math.abs(rev/booked - 9.01) > 0.5,
+  `  CONTROL: $9.01 is not revenue over BOOKED spots, which would be $${(rev/booked).toFixed(2)}`);
+ok(await p.$(`${D('whole')}[data-g="price"]`)===null, '  CONTROL: the price group has no total row');
 
 // ══ 2. THE FIGURE IS THE POINT, THE SHARE IS SECONDARY ═════════════════════
 // Ryan: "make the number the main point, % could be secondary". So this is a type-weight
