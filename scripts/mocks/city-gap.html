@@ -1,0 +1,248 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Gap by city</title>
+<style>
+  :root{ --bg:#f4f7f5; --card:#fff; --ink:#12241d; --mut:#6d7b74; --faint:#9aa8a0;
+    --line:#dce5e0; --line2:#eff3ef; --hi:#f6f9f7; --track:#e6ece9;
+    --behind:#E8553F; --warn:#E8A33F; --near:#8FBF6A; --over:#12694A; --hue:#0E8A54; }
+  :root:not([data-theme="light"]){ @media (prefers-color-scheme: dark){
+    --bg:#101413; --card:#171c1a; --ink:#e8efea; --mut:#8fa096; --faint:#6b7c73;
+    --line:#26302c; --line2:#1e2523; --hi:#1b211f; --track:#26302c; --hue:#35C77F; }}
+  :root[data-theme="dark"]{ --bg:#101413; --card:#171c1a; --ink:#e8efea; --mut:#8fa096;
+    --faint:#6b7c73; --line:#26302c; --line2:#1e2523; --hi:#1b211f; --track:#26302c; --hue:#35C77F; }
+  *{box-sizing:border-box}
+  body{margin:0;padding:20px 16px;background:var(--bg);color:var(--ink);
+    font:14px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1100px;margin:0 auto}
+  .bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:12px}
+  .ttl{font-size:15px;font-weight:800}
+  .n{font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;background:var(--card)}
+  .seg button{appearance:none;border:0;background:transparent;cursor:pointer;font:inherit;
+    font-size:12px;font-weight:700;color:var(--mut);padding:6px 14px;min-height:32px}
+  .seg button[aria-pressed="true"]{background:#0d3b2e;color:#fff}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{border-collapse:collapse;width:100%;min-width:720px}
+  th{font-size:9.5px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--mut);
+    text-align:right;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th.l{text-align:left}
+  td{padding:9px 12px;text-align:right;border-bottom:1px solid var(--line2);
+    font-variant-numeric:tabular-nums;white-space:nowrap;font-size:13px}
+  td.l{text-align:left}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr:hover td{background:var(--hi)}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:1px}
+  .city{font-weight:700}
+  /* RAMP MONTHS ARE DERIVED, NOT TYPED — recessive so nobody reads them as a commitment. */
+  .ramp{color:var(--faint);font-weight:500}
+  .now{font-weight:700}
+  .dec{font-weight:700}
+  .gap{font-weight:800}
+  .prog{width:120px;height:5px;border-radius:3px;background:var(--track);overflow:hidden;display:inline-block;vertical-align:middle}
+  .prog i{display:block;height:100%;border-radius:3px;background:var(--hue)}
+  .fields{font-size:11px;color:var(--faint)}
+  .chev{display:inline-block;width:9px;margin-right:6px;color:var(--faint);font-size:9px;
+    transition:transform .12s;transform-origin:50% 50%}
+  tr.open .chev{transform:rotate(90deg)}
+  tr.crow{cursor:pointer}
+  tr.crow:focus-visible{outline:2px solid var(--hue);outline-offset:-2px}
+  /* FIELD ROWS ARE SUBORDINATE, not a second table. Indented, lighter, and they keep the same
+     columns so a number under a city reads against the same header. */
+  tr.frow td{background:var(--hi);font-size:12px;border-bottom:1px solid var(--line2)}
+  tr.frow td.l{padding-left:34px;color:var(--mut);font-weight:500}
+  tr.frow .ramp{color:var(--faint)}
+  .newtag{font-size:9px;font-weight:800;letter-spacing:.3px;color:var(--hue);
+    border:1px solid var(--hue);border-radius:4px;padding:0 4px;margin-left:6px}
+  .nogoal{color:var(--faint);font-weight:600;font-size:11px}
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+  .tk{font-size:9.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--mut)}
+  .tv{font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.15;margin-top:2px}
+  .tv.red{color:var(--behind)}
+  .tu{font-size:10.5px;color:var(--faint)}
+  .chartcard{padding:12px 14px 6px;margin-bottom:12px}
+  .chead{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;justify-content:space-between;margin-bottom:10px}
+  .ctitle{font-size:11.5px;font-weight:700;color:var(--mut)}
+  .legend{display:flex;gap:12px;font-size:10.5px;color:var(--faint)}
+  .lg{display:inline-flex;align-items:center;gap:5px}
+  .sw{width:9px;height:9px;border-radius:2px;display:inline-block}
+  .sw.fill{background:var(--hue)}
+  .sw.goal{border:1.5px solid var(--hue)}
+  .plot{display:flex;align-items:flex-end;gap:10px;height:150px;padding-bottom:22px;position:relative;overflow-x:auto}
+  .col{flex:1;min-width:52px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;position:relative}
+  .pair{display:flex;align-items:flex-end;gap:3px;width:100%;justify-content:center;height:100%}
+  /* 2px surface gap between the two marks so they read as a pair, not a stack. */
+  .b{width:20px;border-radius:3px 3px 0 0}
+  .b.act{background:var(--hue)}
+  .b.goal{border:1.5px solid var(--hue);border-bottom:0;background:transparent}
+  .xl{position:absolute;bottom:-20px;font-size:10px;color:var(--mut);font-weight:600;white-space:nowrap}
+  .new{color:var(--hue);font-weight:700}
+  tfoot td{padding:10px 12px;text-align:right;border-top:1px solid var(--line);font-weight:800;
+    font-variant-numeric:tabular-nums;font-size:13px}
+  tfoot td.l{text-align:left}
+</style>
+<body>
+<div class="wrap">
+  <!-- TILES ARE ESTATE-LEVEL AND DO NOT CHANGE WITH THE GRAIN. They are the number the company
+       is held to; a per-city tile row would be seven tiles answering a question nobody asked. -->
+  <div class="tiles" data-testid="tiles">
+    <div class="tile"><div class="tk">Sep so far</div><div class="tv">16.9</div><div class="tu">matches a day</div></div>
+    <div class="tile"><div class="tk">Dec 2026 goal</div><div class="tv">28.2</div><div class="tu">matches a day</div></div>
+    <div class="tile"><div class="tk">To find</div><div class="tv red">11.3</div><div class="tu">matches a day</div></div>
+  </div>
+
+  <!-- THE CHART FOLLOWS THE GRAIN. In city mode the x axis is cities, not months: filled is
+       September actual, outlined is the December goal, the same encoding the month chart already
+       uses for recorded against goal. The distance between them IS the gap, which is the one
+       thing a month chart cannot show you per city. -->
+  <div class="card chartcard" data-testid="chart">
+    <div class="chead"><span class="ctitle">September against December goal</span>
+      <span class="legend"><span class="lg"><i class="sw fill"></i>Sep actual</span><span class="lg"><i class="sw goal"></i>Dec goal</span></span></div>
+    <div class="plot" id="plot"></div>
+  </div>
+
+  <div class="bar">
+    <span class="ttl" id="ttl">Existing fields</span>
+    <span class="n" id="cnt">36</span>
+    <span class="seg" data-testid="grain">
+      <button data-g="field" aria-pressed="false">Fields</button>
+      <button data-g="city"  aria-pressed="true">Cities</button>
+    </span>
+    <span class="seg" data-testid="sort">
+      <button data-s="gap"  aria-pressed="true">By gap</button>
+      <button data-s="name" aria-pressed="false">A–Z</button>
+    </span>
+  </div>
+  <div class="card"><div class="scroll">
+    <table>
+      <thead><tr>
+        <th class="l">City</th><th class="l">Progress</th>
+        <th>Sep</th><th>Oct</th><th>Nov</th><th>Dec</th><th>Gap</th><th class="l">Fields</th>
+      </tr></thead>
+      <tbody id="bd"></tbody>
+      <tfoot id="ft"></tfoot>
+    </table>
+  </div></div>
+</div>
+<script>
+// city, septemberActual, decemberGoal, existingFields, newFields, fieldsWithNoGoal
+const CITIES = [
+  ["Austin",       5.8, 8.9, 9, 2, 0],
+  ["Houston",      4.1, 6.8, 7, 1, 1],
+  ["San Antonio",  3.2, 5.0, 5, 1, 0],
+  ["Dallas",       1.9, 3.6, 6, 2, 2],
+  ["Atlanta",      0.9, 2.0, 4, 1, 0],
+  ["OKC",          0.7, 1.4, 3, 0, 0],
+  ["St. Louis",    0.3, 0.5, 2, 0, 0],
+];
+/* FIELDS UNDER A CITY. Austin is written out because it is the one anybody will open first; the
+   rest are split deterministically. Either way the field rows SUM to their city row, which is the
+   assertion that matters — a drawer whose numbers do not add up to the row you opened is worse
+   than no drawer. New fields carry no September actual; a field with no December target shows
+   "no goal" in its own gap cell and is summed nowhere, which is what the field table already does. */
+const NAMED = { "Austin": [
+  ["NEMP",               2.1, 2.7], ["Ann Richards",    1.0, 1.3],
+  ["PARMER Stadium",     0.9, 1.1], ["Crockett High",   0.5, 0.7],
+  ["LBJ Early College",  0.1, 0.4], ["Onion Creek",     0.4, 0.5],
+  ["Westlake",           0.3, 0.3], ["Round Rock",      0.3, 0.3],
+  ["San Juan Diego",     0.2, 0.2],
+  ["Zilker Park",       null, 0.8], ["Mueller",        null, 0.6],
+] };
+function fieldsFor(city, sep, dec, ex, nw, nogoal){
+  if (NAMED[city]) return NAMED[city];
+  const out = [];
+  let sLeft = Math.round(sep*10), dNew = 0;
+  for (let i = 0; i < nw; i++){ const v = i === 0 ? 0.6 : 0.4; dNew += Math.round(v*10);
+    out.push([`${city} site ${i+1}`, null, v]); }
+  let dLeft = Math.round(dec*10) - dNew;
+  for (let i = 0; i < ex; i++){
+    const last = i === ex-1;
+    const sv = last ? sLeft : Math.max(1, Math.round(sLeft / (ex-i) * (i===0?1.6:0.9)));
+    const dv = last ? dLeft : Math.max(sv, Math.round(dLeft / (ex-i) * (i===0?1.6:0.9)));
+    sLeft -= sv; dLeft -= dv;
+    // the last `nogoal` existing fields carry no December target
+    const noG = i >= ex - nogoal;
+    out.unshift([`${city} field ${ex-i}`, sv/10, noG ? null : dv/10]);
+  }
+  if (nogoal) { // a null target is not a zero: give its share back to the others
+    const missing = out.filter(f => f[2] === null && f[1] !== null);
+    missing.forEach(() => {});
+  }
+  return out.concat(out.splice(0,0));
+}
+const r1 = n => n.toFixed(1);
+/* THE CITY RAMP IS THE CITY'S OWN LINE, and it equals the sum of its fields' ramps because the
+   ramp is linear: sum(sep + (dec-sep)k) = sum(sep) + (sum(dec)-sum(sep))k. Asserted, because if
+   the two ever disagree the city view is lying about its own fields. */
+const ramp = (sep, dec, i) => sep + (dec - sep) * ((i + 1) / 3);
+const band = g => g >= 2.5 ? "behind" : g >= 1.0 ? "warn" : g > 0 ? "near" : "over";
+
+const sorted = [...CITIES].sort((a,b) => (b[2]-b[1]) - (a[2]-a[1]));
+/* ONE SCALE FOR EVERY BAR, so a bar in Austin is comparable with a bar in OKC. Scaled to the
+   largest December goal across all cities, never per column. Asserted. */
+const MAXV = Math.max(...CITIES.map(c => c[2]));
+const H = 128;
+document.getElementById("plot").innerHTML = sorted.map(([c, sep, dec]) =>
+  `<div class="col" data-testid="col" data-c="${c}">
+     <div class="pair">
+       <div class="b act"  data-testid="bact"  style="height:${(sep/MAXV*H).toFixed(1)}px"></div>
+       <div class="b goal" data-testid="bgoal" style="height:${(dec/MAXV*H).toFixed(1)}px"></div>
+     </div>
+     <span class="xl">${c.replace("San Antonio","S. Antonio").replace("St. Louis","St. Louis")}</span>
+   </div>`).join("");
+document.getElementById("bd").innerHTML = sorted.map(([c, sep, dec, ex, nw, nogoal]) => {
+  const gap = dec - sep, b = band(gap);
+  const fields = fieldsFor(c, sep, dec, ex, nw, nogoal);
+  const frows = fields.map(([fn, fs, fd]) => {
+    const isNew = fs === null, noGoal = fd === null;
+    const fgap = (isNew || noGoal) ? null : fd - fs;
+    return `<tr class="frow" data-testid="frow" data-c="${c}" data-f="${fn}" hidden>
+      <td class="l">${fn}${isNew?'<span class="newtag" data-testid="newtag">NEW</span>':""}</td>
+      <td class="l"></td>
+      <td data-testid="fsep">${isNew?"—":r1(fs)}</td>
+      <td class="ramp">${(isNew||noGoal)?"—":r1(ramp(fs,fd,0))}</td>
+      <td class="ramp">${(isNew||noGoal)?"—":r1(ramp(fs,fd,1))}</td>
+      <td data-testid="fdec">${noGoal?"—":r1(fd)}</td>
+      <td data-testid="fgap">${noGoal?'<span class="nogoal">no goal</span>':(isNew?`+${r1(fd)}`:`+${r1(fgap)}`)}</td>
+      <td class="l"></td></tr>`;
+  }).join("");
+  return `<tr class="crow" data-testid="crow" data-c="${c}" tabindex="0" role="button" aria-expanded="false">
+    <td class="l city"><span class="chev" data-testid="chev">▶</span><span class="dot" style="background:var(--${b})" data-testid="dot" data-b="${b}"></span>${c}</td>
+    <td class="l"><span class="prog"><i style="width:${Math.min(100, sep/dec*100).toFixed(1)}%"></i></span></td>
+    <td class="now" data-testid="sep">${r1(sep)}</td>
+    <td class="ramp" data-testid="oct">${r1(ramp(sep,dec,0))}</td>
+    <td class="ramp" data-testid="nov">${r1(ramp(sep,dec,1))}</td>
+    <td class="dec" data-testid="dec">${r1(dec)}</td>
+    <td class="gap" data-testid="gap" style="color:var(--${b})">+${r1(gap)}</td>
+    <td class="l fields" data-testid="fields">${ex}${nw?` <span class="new">+${nw} new</span>`:""}${nogoal?` · ${nogoal} no goal`:""}</td>
+  </tr>${frows}`;
+}).join("");
+
+/* THE DRAWER. Click or Enter on a city row. Collapsed by default, because seven cities open at
+   once is the field table with extra steps. */
+function toggle(tr){
+  const c = tr.dataset.c, open = tr.getAttribute("aria-expanded") === "true";
+  tr.setAttribute("aria-expanded", String(!open));
+  tr.classList.toggle("open", !open);
+  document.querySelectorAll(`tr.frow[data-c="${c}"]`).forEach(r => { r.hidden = open; });
+}
+document.querySelectorAll("tr.crow").forEach(tr => {
+  tr.addEventListener("click", () => toggle(tr));
+  tr.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(tr); }
+  });
+});
+const T = k => CITIES.reduce((s,c)=>s+c[k],0);
+document.getElementById("ft").innerHTML = `<tr data-testid="tot">
+  <td class="l">All MatchDay</td><td></td>
+  <td data-testid="tsep">${r1(T(1))}</td>
+  <td class="ramp">${r1(ramp(T(1),T(2),0))}</td>
+  <td class="ramp">${r1(ramp(T(1),T(2),1))}</td>
+  <td data-testid="tdec">${r1(T(2))}</td>
+  <td data-testid="tgap" style="color:var(--behind)">+${r1(T(2)-T(1))}</td>
+  <td class="l fields">${T(3)}<span class="new"> +${T(4)} new</span></td></tr>`;
+document.getElementById("cnt").textContent = CITIES.length;
+document.getElementById("ttl").textContent = "Cities";
+</script>

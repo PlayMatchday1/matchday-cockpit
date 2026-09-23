@@ -234,3 +234,129 @@ export function sortGoalRows<T extends { name: string; city?: string | null; gap
     return byName(a, b);
   });
 }
+
+/* ════════════════════════════════════════════════════════════════════════════════════════════════
+ * THE CITY GRAIN
+ *
+ * Ryan: "I want to add a city view so I can see the gap per city too for each month" and "should
+ * have drop down per city to see the fields under each city if you want."
+ *
+ * ── IT ROLLS UP THE ROWS THE PAGE ALREADY COUNTS, AND NOTHING ELSE ────────────────────────────
+ * Same predicate (rowCountsTowardTotals), same September figure (monthly[cur].daily), same
+ * December rule (an absent target is not a zero). A city sum built on its own filter would miss
+ * the headline above it by a rounding amount nobody could find.
+ *
+ * ── OCTOBER AND NOVEMBER ARE THE SUM OF THE ROWS' OWN RAMPS, NOT A RAMP OF THE CITY TOTAL ─────
+ * The two are equal ONLY when every row in the city has a December target, and on this estate they
+ * do not: eleven counted fields carry a September actual and no December goal, so their September
+ * is inside the city's total and their December is inside nothing. MEASURED on production
+ * 2026-09-23: the estate October is 20.54 summed from the rows' ramps — which is what the year
+ * chart draws — against 20.64 ramped from the aggregate. 0.11 apart, with no visible symptom.
+ *
+ * So this sums each row's own ramp, exactly as the twelve-month chart does. The city view then
+ * equals the sum of its fields BY CONSTRUCTION rather than by a linearity argument that the data
+ * does not satisfy.
+ *
+ * ── A ROW WITH NO CITY LANDS SOMEWHERE VISIBLE ────────────────────────────────────────────────
+ * MEASURED on production 2026-09-23: every counted EXISTING row has a city (it comes off
+ * fin_venues.city through fin_venue_fields, and all 40 venues carry one). All nine SLOTS have a
+ * null city, and five of them hold 3.5 of the 28.2 December goal — 12.4% of the number the company
+ * is held to. Dropping them would leave the city column summing to 24.7 under a tile reading 28.2,
+ * which fails as arithmetic and reads as a bug in the rollup.
+ *
+ * They are not folded into a city by parsing their names. The convention is "New Field - Houston",
+ * it is enforced nowhere, and it is ALREADY broken: "New Field - Oklahoma" against a venue city
+ * string of "OKC" would have produced an eighth city that is really the seventh.
+ */
+
+/** The row a city-less field lands under. It is a bucket, not a city, and it says so. */
+export const NO_CITY = "No city set";
+
+/** A field inside a city's drawer. Nulls are absences and render as a dash, never as a zero. */
+export type CityFieldRow = {
+  key: string; name: string; kind: "existing" | "slot";
+  sep: number | null;   // null for a new field: it has no September, and 0.0 would be a claim
+  oct: number | null; nov: number | null;
+  dec: number | null;   // null is "no goal"
+  gapDaily: number | null;
+};
+
+export type CityRow = {
+  city: string; hasCity: boolean;
+  sep: number; oct: number; nov: number; dec: number; gapDaily: number;
+  existing: number; slots: number; noGoal: number;
+  fields: CityFieldRow[];
+};
+
+/** What cityRollup needs off a page row. Narrow on purpose, so the maths is exercisable. */
+export type RollupRow = {
+  key: string; kind: "existing" | "slot"; name: string; city: string | null;
+  notCounted?: boolean | null;
+  monthly: { daily: number }[];
+  targets: Record<string, number>;
+};
+
+const DEC_INDEX = 11;
+const RAMP_INDEXES = [9, 10] as const;   // October, November
+
+/** The rollup. `rows` is every row the page holds, existing AND slots: a city's December goal
+ *  spans both tables and this is the only place they meet. */
+export function cityRollup(rows: RollupRow[], year: number, currentMonth: number, sort: GoalSort = "gap"): CityRow[] {
+  const decKey = monthKey(year, DEC_INDEX);
+  const byCity = new Map<string, CityRow>();
+
+  for (const r of rows) {
+    if (!rowCountsTowardTotals(r)) continue;
+    const label = r.city != null && r.city.trim() !== "" ? r.city.trim() : NO_CITY;
+    let c = byCity.get(label);
+    if (!c) {
+      c = { city: label, hasCity: label !== NO_CITY, sep: 0, oct: 0, nov: 0, dec: 0, gapDaily: 0,
+            existing: 0, slots: 0, noGoal: 0, fields: [] };
+      byCity.set(label, c);
+    }
+
+    const sep = r.monthly[currentMonth]?.daily ?? 0;
+    const dec = r.targets[decKey] ?? null;
+    const suggested = ramp(sep, dec);
+    const monthAt = (i: 0 | 1): number | null =>
+      r.targets[monthKey(year, RAMP_INDEXES[i])] ?? suggested[i] ?? null;
+    const oct = monthAt(0), nov = monthAt(1);
+
+    c.sep += sep;
+    c.dec += dec ?? 0;
+    c.oct += oct ?? 0;
+    c.nov += nov ?? 0;
+    if (r.kind === "slot") c.slots += 1; else c.existing += 1;
+    if (dec == null) c.noGoal += 1;
+
+    c.fields.push({
+      key: r.key, name: r.name, kind: r.kind,
+      /* A NEW FIELD HAS NO SEPTEMBER. Its spots are zero because it does not exist, which is not
+       * the same statement as a field that ran no matches, and 0.0 would read as the second. */
+      sep: r.kind === "slot" ? null : sep,
+      oct, nov, dec,
+      gapDaily: dec == null ? null : dec - sep,
+    });
+  }
+
+  for (const c of byCity.values()) {
+    c.gapDaily = c.dec - c.sep;
+    c.fields = sortGoalRows(c.fields.map((f) => ({ ...f, city: c.city })), sort);
+  }
+
+  /* NO CITY SET GOES LAST UNDER EVERY ORDER, the same treatment a row with no goal already gets:
+   * it is not a city, so it cannot take part in a ranking of cities, and putting it in the middle
+   * of the work would answer "which city is worst" with something that is not a city. It keeps its
+   * real gap and its real band, so how much is unassigned is still on the screen. */
+  const list = sortGoalRows([...byCity.values()].map((c) => ({ ...c, name: c.city })), sort);
+  return [...list.filter((c) => c.hasCity), ...list.filter((c) => !c.hasCity)];
+}
+
+/** The footer. Summed from the city rows on screen, so it cannot be a second source. */
+export function cityTotals(cities: CityRow[]) {
+  const s = (k: "sep" | "oct" | "nov" | "dec") => cities.reduce((a, c) => a + c[k], 0);
+  const sep = s("sep"), dec = s("dec");
+  return { sep, oct: s("oct"), nov: s("nov"), dec, gapDaily: dec - sep,
+           existing: cities.reduce((a, c) => a + c.existing, 0),
+           slots: cities.reduce((a, c) => a + c.slots, 0) };
+}

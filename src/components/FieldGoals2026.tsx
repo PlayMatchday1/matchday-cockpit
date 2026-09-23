@@ -22,8 +22,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { errorText } from "@/lib/errorText";
 import {
-  MONTH_LABELS, bandForDisplay, fmtSigned, fmtUnit, isDormantIn, monthKey, ramp,
-  rowCountsTowardTotals, roundTo, sortGoalRows, weekly, type Band, type GoalSort,
+  MONTH_LABELS, bandForDisplay, cityRollup, cityTotals, fmtSigned, fmtUnit, isDormantIn,
+  monthKey, ramp, rowCountsTowardTotals, roundTo, sortGoalRows, weekly,
+  type Band, type CityFieldRow, type CityRow, type GoalSort,
 } from "@/lib/fieldGoals";
 
 async function authFetch(path: string, init?: RequestInit): Promise<Response> {
@@ -51,6 +52,14 @@ const CHART_HUE = "#0E8A54";
 const RAMP_MONTHS = [9, 10] as const; // October, November — the two the ramp fills
 const DEC = 11;
 
+/* ── THE GRAIN ─────────────────────────────────────────────────────────────────────────────────
+ * Ryan: "I want to add a city view so I can see the gap per city too for each month."
+ *
+ * IT MOVES THE CHART AND THE TABLE AND NOTHING ELSE. The three tiles are estate-level in both
+ * grains, because they are the number the company is held to and seven per-city tiles answer a
+ * question nobody asked. Field mode is what it was. */
+type Grain = "field" | "city";
+
 export default function FieldGoals2026() {
   const [data, setData] = useState<Payload | null>(null);
   /* TWO ERROR STATES, BECAUSE THEY MEAN DIFFERENT THINGS. A LOAD failure blanks the page: a table
@@ -77,6 +86,10 @@ export default function FieldGoals2026() {
    * the dots run red, amber, green, dark in sequence, which alphabetical order scrambles. */
   const [sort, setSort] = useState<GoalSort>("gap");
   const [showDormant, setShowDormant] = useState(false);
+  const [grain, setGrain] = useState<Grain>("field");
+  /* SHUT AT REST. Seven cities open at once is the field table with extra steps. A Set rather than
+   * one open key: opening Austin does not close Houston, and opening one opens nobody else. */
+  const [openCities, setOpenCities] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     let live = true;
@@ -184,6 +197,20 @@ export default function FieldGoals2026() {
     saved();
   }, [failed, saved]);
 
+  /* A SLOT'S CITY IS TYPED, because a slot has no venue to read one from. MEASURED on production
+   * 2026-09-23: all nine slots carry a null city and five of them hold 3.5 of the 28.2 December
+   * goal, so without this control 12.4% of the goal sits in a bucket with no way to move it and the
+   * city grain is a view the operator cannot finish. The city is NOT parsed out of the slot's name:
+   * "New Field - Oklahoma" against a venue city of "OKC" would silently invent an eighth city. */
+  const setSlotCity = useCallback(async (r: Row, city: string) => {
+    if (!r.rowId) return;
+    const v = city.trim();
+    const { error } = await supabase.from("field_goal_rows")
+      .update({ city: v === "" ? null : v }).eq("id", r.rowId);
+    if (error) { failed(r.key, error); return; }
+    saved();
+  }, [failed, saved]);
+
   const removeSlot = useCallback(async (r: Row) => {
     if (!r.rowId) return;
     const { error } = await supabase.from("field_goal_rows").delete().eq("id", r.rowId);
@@ -205,6 +232,23 @@ export default function FieldGoals2026() {
     const goal = counted.reduce((s, r) => s + (r.targets[monthKey(data?.year ?? 2026, DEC)] ?? 0), 0);
     return { now, goal, gap: goal - now };
   }, [all, cur, data?.year]);
+
+  /* ONE ROLLUP, OVER THE SAME `all` THE TOTALS AND THE CHART USE, through the same predicate. A
+   * city sum built on its own filter would miss the headline above it by a rounding amount nobody
+   * could find. Existing fields and slots go in together: a city's December goal spans both tables
+   * and this is the only place they meet. */
+  const cities = useMemo(
+    () => cityRollup(all, data?.year ?? 2026, cur, sort),
+    [all, data?.year, cur, sort]);
+  const cityTot = useMemo(() => cityTotals(cities), [cities]);
+
+  const toggleCity = useCallback((city: string) => {
+    setOpenCities((prev) => {
+      const next = new Set(prev);
+      if (next.has(city)) next.delete(city); else next.add(city);
+      return next;
+    });
+  }, []);
 
   const decOf = (r: Row) => r.targets[monthKey(data?.year ?? 2026, DEC)] ?? null;
   const sepOf = (r: Row) => r.monthly[cur]?.daily ?? 0;
@@ -278,7 +322,9 @@ export default function FieldGoals2026() {
         </div>
       </div>
 
-      <YearChart months={chart} unit={unit} />
+      {grain === "city"
+        ? <CityChart cities={cities} unit={unit} cur={cur} />
+        : <YearChart months={chart} unit={unit} />}
 
       <div className="mb-3 mt-3 flex flex-wrap items-center gap-2">
         <span className="inline-flex overflow-hidden rounded-[9px] border bg-white" style={{ borderColor: "#D3DCD8" }}>
@@ -297,22 +343,34 @@ export default function FieldGoals2026() {
         </span>
       </div>
 
-      <GoalTable
-        title="Existing fields" rows={rows} unit={unit} year={data.year} cur={cur} busy={busy}
-        open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
-        onTarget={setTarget} onAddAction={addAction} onToggleAction={toggleAction} onRemoveAction={removeAction}
-        onNotCounted={setNotCounted} writeErr={writeErr} revert={revert}
-        sort={sort} setSort={setSort} showDormant={showDormant} setShowDormant={setShowDormant}
-        testId="fg-existing"
-      />
-      <GoalTable
-        title="New fields" rows={slots} unit={unit} year={data.year} cur={cur} busy={busy}
-        open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
-        onTarget={setTarget} onAddAction={addAction} onToggleAction={toggleAction} onRemoveAction={removeAction}
-        onNotCounted={setNotCounted} writeErr={writeErr} revert={revert} sort={sort}
-        onAddRow={addSlot} onRename={renameSlot} onRemoveRow={removeSlot}
-        testId="fg-new"
-      />
+      {grain === "city" ? (
+        <CityTable
+          cities={cities} totals={cityTot} unit={unit} cur={cur}
+          sort={sort} setSort={setSort} grain={grain} setGrain={setGrain}
+          openCities={openCities} toggleCity={toggleCity}
+        />
+      ) : (
+        <>
+          <GoalTable
+            title="Existing fields" rows={rows} unit={unit} year={data.year} cur={cur} busy={busy}
+            open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
+            onTarget={setTarget} onAddAction={addAction} onToggleAction={toggleAction} onRemoveAction={removeAction}
+            onNotCounted={setNotCounted} writeErr={writeErr} revert={revert}
+            sort={sort} setSort={setSort} grain={grain} setGrain={setGrain}
+            showDormant={showDormant} setShowDormant={setShowDormant}
+            testId="fg-existing"
+          />
+          <GoalTable
+            title="New fields" rows={slots} unit={unit} year={data.year} cur={cur} busy={busy}
+            open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
+            onTarget={setTarget} onAddAction={addAction} onToggleAction={toggleAction} onRemoveAction={removeAction}
+            onNotCounted={setNotCounted} writeErr={writeErr} revert={revert} sort={sort}
+            onAddRow={addSlot} onRename={renameSlot} onRemoveRow={removeSlot}
+            onCity={setSlotCity}
+            testId="fg-new"
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -399,11 +457,265 @@ function YearChart({ months, unit }: { months: { label: string; value: number; s
   );
 }
 
+/* ── THE GRAIN TOGGLE ──────────────────────────────────────────────────────────────────────────
+ * Beside the sort, because they are the same kind of control: what the rows are and in what order.
+ * 32px tall, which is the height every control on this page already is. */
+function GrainSeg({ grain, setGrain }: { grain: Grain; setGrain: (g: Grain) => void }) {
+  return (
+    <span className="ml-3 inline-flex overflow-hidden rounded-lg border" style={{ borderColor: "#D3DCD8" }} data-testid="grain">
+      {([["field", "Fields"], ["city", "Cities"]] as const).map(([k, label]) => (
+        <button key={k} type="button" data-testid={`grain-${k}`} data-g={k} aria-pressed={grain === k}
+          onClick={() => setGrain(k)} className="px-2.5 py-1 text-[11.5px] font-bold"
+          style={{ minHeight: 32, ...(grain === k ? { background: "#003326", color: "#fff" } : { background: "#fff", color: "#3C4F44" }) }}>
+          {label}
+        </button>
+      ))}
+    </span>
+  );
+}
+
+/* ── THE CHART FOLLOWS THE GRAIN ───────────────────────────────────────────────────────────────
+ * In city mode the x axis is cities, not months: a FILLED bar for the current month's actual and an
+ * OUTLINED bar for the December goal, which is the encoding the month chart already uses for
+ * recorded against goal. The distance between the pair IS the gap, and a per-city gap is the one
+ * thing a twelve-month chart cannot show you.
+ *
+ * ONE SCALE ACROSS EVERY CITY, never per column. Per column, OKC at 0.6 of 1.0 and Austin at 6.2 of
+ * 9.9 would draw identically and the chart would say every city is equally far along, which is the
+ * opposite of the point. The hue is CHART_HUE for the same reason it is everywhere else on this
+ * page: the brand mint fails contrast on this surface at 1.77:1. */
+function CityChart({ cities, unit, cur }: { cities: CityRow[]; unit: "day" | "week"; cur: number }) {
+  const [tip, setTip] = useState<{ x: number; y: number; html: string } | null>(null);
+  const W = 920, H = 250, L = 38, R = 8, T = 16, B = 30;
+  const val = (v: number) => (unit === "day" ? v : weekly(v));
+  /* THE TOP OF THE AXIS IS A MULTIPLE OF FOUR, because there are four gaps between five
+   * gridlines. Rounded to the nearest 2 it lands on 10, whose quarters are 2.5, and the labels
+   * printed 0 / 3 / 5 / 8 / 10 against lines actually sitting at 2.5 and 7.5. A gridline labelled
+   * 3 that is drawn at 2.5 makes every bar misreadable against it. */
+  const peak = Math.max(...cities.map((c) => Math.max(val(c.sep), val(c.dec))), 1);
+  const max = Math.max(4, Math.ceil(peak / 4) * 4);
+  const iw = W - L - R, ih = H - T - B;
+  const step = iw / Math.max(1, cities.length);
+  const bw = Math.min(20, (step - 14) / 2);
+  const y = (v: number) => T + ih - (v / max) * ih;
+
+  return (
+    <div className="relative rounded-2xl border-[1.5px] bg-white px-4 pb-2 pt-3" style={{ borderColor: "#D3DCD8" }} data-testid="chart">
+      <div className="mb-1 flex flex-wrap items-start justify-between gap-3">
+        <div className="text-[13px] font-extrabold">{MONTH_LABELS[cur]} against December goal</div>
+        <div className="flex flex-wrap items-center gap-3 text-[11.5px]" style={{ color: "#5C6F66" }} data-testid="fg-legend">
+          <span className="inline-flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-[3px]" style={{ background: CHART_HUE }} />{MONTH_LABELS[cur]} actual</span>
+          <span className="inline-flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-[3px] border-2" style={{ borderColor: CHART_HUE, background: "#fff" }} />Dec goal</span>
+        </div>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="block w-full overflow-visible" role="img"
+        aria-label={`${MONTH_LABELS[cur]} actual against the December goal, by city`}>
+        {Array.from({ length: 5 }, (_, g) => (max / 4) * g).map((g) => (
+          <g key={g}>
+            <line x1={L} x2={W - R} y1={y(g)} y2={y(g)} stroke="#E8EEEA" strokeWidth={1} />
+            <text x={L - 8} y={y(g) + 3.5} textAnchor="end" fontSize={10} fill="#8FA096">{Math.round(g)}</text>
+          </g>
+        ))}
+        {cities.map((c, i) => {
+          const a = val(c.sep), gl = val(c.dec);
+          const cx = L + i * step + step / 2;
+          const xa = cx - bw - 1.5, xg = cx + 1.5;
+          const ha = Math.max(1.5, (a / max) * ih), hg = Math.max(1.5, (gl / max) * ih);
+          return (
+            <g key={c.city}>
+              <rect data-testid="bact" data-c={c.city} data-v={a.toFixed(2)}
+                x={xa} y={T + ih - ha} width={bw} height={ha} rx={3} fill={CHART_HUE} />
+              <rect data-testid="bgoal" data-c={c.city} data-v={gl.toFixed(2)}
+                x={xg} y={T + ih - hg} width={bw} height={hg} rx={3} fill="#fff" stroke={CHART_HUE} strokeWidth={2} />
+              <text x={xg + bw / 2} y={T + ih - hg - 5} textAnchor="middle" fontSize={10} fontWeight={700} fill="#12694A">
+                {unit === "day" ? gl.toFixed(1) : gl.toFixed(0)}
+              </text>
+              <rect data-testid="col" data-c={c.city} x={cx - step / 2} y={T} width={step} height={ih} fill="transparent"
+                onMouseMove={(e) => {
+                  const box = (e.currentTarget.ownerSVGElement?.parentElement as HTMLElement)?.getBoundingClientRect();
+                  setTip({ x: e.clientX - (box?.left ?? 0) + 12, y: e.clientY - (box?.top ?? 0) - 10,
+                    html: `${c.city} · ${MONTH_LABELS[cur]} ${fmtUnit(c.sep, unit)} · Dec ${fmtUnit(c.dec, unit)} · gap ${fmtSigned(c.gapDaily, unit)}` });
+                }}
+                onMouseLeave={() => setTip(null)} />
+              <text x={cx} y={H - 10} textAnchor="middle" fontSize={9.5} fontWeight={600}
+                fill={c.hasCity ? "#54655C" : "#9AA8A1"}>{c.city}</text>
+            </g>
+          );
+        })}
+      </svg>
+      {tip && (
+        <div className="pointer-events-none absolute z-10 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[11.5px] text-white"
+          data-testid="fg-tip" style={{ left: tip.x, top: tip.y, background: "#0b2018" }}>{tip.html}</div>
+      )}
+    </div>
+  );
+}
+
+/* ── THE CITY TABLE ───────────────────────────────────────────────────────────────────────────
+ * Same columns as the field table, one level up. The footer is the SUM OF THE ROWS ON SCREEN, so it
+ * cannot be a second source, and it ties to the three tiles above by construction.
+ *
+ * EACH CITY OPENS TO ITS FIELDS. Ryan: "should have drop down per city to see the fields under each
+ * city if you want." "If you want" is the spec, so it is shut at rest. The field rows are the same
+ * rows field mode shows for that city, existing AND unsigned, and they SUM to the row above them —
+ * a drawer whose numbers do not add up to the row you opened is worse than no drawer on a page
+ * whose entire job is a gap. */
+function CityTable({
+  cities, totals, unit, cur, sort, setSort, grain, setGrain, openCities, toggleCity,
+}: {
+  cities: CityRow[];
+  totals: ReturnType<typeof cityTotals>;
+  unit: "day" | "week"; cur: number;
+  sort: GoalSort; setSort: (s: GoalSort) => void;
+  grain: Grain; setGrain: (g: Grain) => void;
+  openCities: Set<string>; toggleCity: (city: string) => void;
+}) {
+  return (
+    <>
+      <h2 className="mb-2 mt-6 flex items-baseline gap-2 text-[15px] font-extrabold">
+        Cities <span className="text-[11.5px] font-semibold" style={{ color: "#5C6F66" }} data-testid="fg-city-count">{cities.length}</span>
+        <GrainSeg grain={grain} setGrain={setGrain} />
+        <span className="inline-flex overflow-hidden rounded-lg border" style={{ borderColor: "#D3DCD8" }} data-testid="fg-sort">
+          {([["gap", "By gap"], ["city", "By city"], ["name", "A–Z"]] as const).map(([k, label]) => (
+            <button key={k} type="button" data-testid={`fg-sort-${k}`} aria-pressed={sort === k}
+              onClick={() => setSort(k)} className="px-2.5 py-1 text-[11.5px] font-bold"
+              style={{ minHeight: 32, ...(sort === k ? { background: "#003326", color: "#fff" } : { background: "#fff", color: "#3C4F44" }) }}>
+              {label}
+            </button>
+          ))}
+        </span>
+      </h2>
+      <div className="overflow-x-auto rounded-xl border-[1.5px] scroll" style={{ borderColor: "#D3DCD8" }}>
+        <table className="w-full min-w-[620px] border-collapse bg-white" data-testid="fg-cities">
+          <thead>
+            <tr>
+              {["City", "Progress", MONTH_LABELS[cur], "Oct", "Nov", "Dec", "Gap", "Fields"].map((h, i) => (
+                <th key={h} className={`whitespace-nowrap border-b px-3 py-2 text-[10px] font-extrabold uppercase tracking-wider ${i >= 2 && i <= 6 ? "text-right" : "text-left"}`}
+                  style={{ color: "#5C6F66", background: "#F2F4F3", borderColor: "#D3DCD8" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {cities.map((c) => {
+              const isOpen = openCities.has(c.city);
+              const band = bandForDisplay(c.gapDaily);
+              return (
+                <Fragmentish key={c.city}>
+                  <tr data-testid="crow" data-c={c.city} data-band={band} data-open={isOpen ? "1" : "0"}
+                    role="button" tabIndex={0} aria-expanded={isOpen}
+                    aria-label={`${c.city}, ${c.fields.length} fields`}
+                    onClick={() => toggleCity(c.city)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleCity(c.city); } }}
+                    className="cursor-pointer hover:bg-[#FAFCFB] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[#0E8A54]">
+                    <td className="border-t px-3 py-2 text-[13px]" style={{ borderColor: "#EDF2EF" }}>
+                      <span data-testid="chev" aria-hidden className="mr-1.5 inline-block text-[8px] align-middle"
+                        style={{ color: "#9AA8A1", transform: isOpen ? "rotate(90deg)" : "none", transformOrigin: "50% 50%", transition: "transform .12s" }}>▶</span>
+                      <span className="mr-2 inline-block h-2.5 w-2.5 rounded-full align-middle" data-testid="dot" data-b={band}
+                        style={{ background: BAND_HUE[band] }} />
+                      {/* NO CITY SET IS A BUCKET, NOT A CITY, and the row says so by being the only
+                          italic label in the column. Its figures are real and stay on screen. */}
+                      <b className={`font-bold ${c.hasCity ? "" : "italic"}`} style={c.hasCity ? undefined : { color: "#5C6F66" }}>{c.city}</b>
+                    </td>
+                    <td className="border-t px-3 py-2" style={{ borderColor: "#EDF2EF" }}>
+                      {c.dec > 0 && (
+                        <span className="relative inline-block h-[7px] w-24 overflow-hidden rounded-full border align-middle prog" style={{ background: "#F2F4F3", borderColor: "#D3DCD8" }}>
+                          <i className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${Math.min(100, (c.sep / c.dec) * 100)}%`, background: c.gapDaily < 0 ? "#12694A" : "#2CDB87" }} />
+                        </span>
+                      )}
+                    </td>
+                    <td className="border-t px-3 py-2 text-right text-[13px] font-bold tabular-nums" style={{ borderColor: "#EDF2EF", color: "#003326" }} data-v={c.sep.toFixed(4)} data-testid="sep">{fmtUnit(c.sep, unit)}</td>
+                    {/* OCT AND NOV ARE DERIVED AND LOOK DERIVED: lighter ink and a lighter weight
+                        than both the actual beside them and the December a person typed. */}
+                    <td className="border-t px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#EDF2EF", color: "#9AA8A1", fontWeight: 500 }} data-v={c.oct.toFixed(4)} data-testid="oct">{fmtUnit(c.oct, unit)}</td>
+                    <td className="border-t px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#EDF2EF", color: "#9AA8A1", fontWeight: 500 }} data-v={c.nov.toFixed(4)} data-testid="nov">{fmtUnit(c.nov, unit)}</td>
+                    <td className="border-t px-3 py-2 text-right text-[13px] font-bold tabular-nums" style={{ borderColor: "#EDF2EF", color: "#003326" }} data-v={c.dec.toFixed(4)} data-testid="dec">{fmtUnit(c.dec, unit)}</td>
+                    <td className="border-t px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#EDF2EF", color: BAND_HUE[band] }} data-v={c.gapDaily.toFixed(4)} data-testid="gap">{fmtSigned(c.gapDaily, unit)}</td>
+                    {/* "9 +2 new · 2 no goal". A city with no unsigned fields says nothing rather than
+                        "+0 new", and a December figure carrying absent targets says so here rather
+                        than reading as low. */}
+                    <td className="border-t px-3 py-2 text-[11px]" style={{ borderColor: "#EDF2EF", color: "#9AA8A1" }} data-testid="fields">
+                      {c.existing}
+                      {c.slots > 0 && <>{" "}<span className="font-bold" style={{ color: CHART_HUE }}>+{c.slots} new</span></>}
+                      {c.noGoal > 0 && <>{" \u00b7 "}{c.noGoal} no goal</>}
+                    </td>
+                  </tr>
+                  {isOpen && c.fields.map((f) => <CityFieldTr key={f.key} f={f} city={c.city} unit={unit} />)}
+                </Fragmentish>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr data-testid="tot" style={{ background: "#F7FAF8" }}>
+              <td className="border-t-2 px-3 py-2 text-[13px] font-extrabold" style={{ borderColor: "#D3DCD8" }}>All MatchDay</td>
+              <td className="border-t-2" style={{ borderColor: "#D3DCD8" }} />
+              <td className="border-t-2 px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#D3DCD8", color: "#003326" }} data-v={totals.sep.toFixed(4)} data-testid="tsep">{fmtUnit(totals.sep, unit)}</td>
+              <td className="border-t-2 px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#D3DCD8", color: "#9AA8A1", fontWeight: 500 }} data-v={totals.oct.toFixed(4)} data-testid="toct">{fmtUnit(totals.oct, unit)}</td>
+              <td className="border-t-2 px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#D3DCD8", color: "#9AA8A1", fontWeight: 500 }} data-v={totals.nov.toFixed(4)} data-testid="tnov">{fmtUnit(totals.nov, unit)}</td>
+              <td className="border-t-2 px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#D3DCD8", color: "#003326" }} data-v={totals.dec.toFixed(4)} data-testid="tdec">{fmtUnit(totals.dec, unit)}</td>
+              <td className="border-t-2 px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#D3DCD8", color: "#A8341F" }} data-v={totals.gapDaily.toFixed(4)} data-testid="tgap">{fmtSigned(totals.gapDaily, unit)}</td>
+              <td className="border-t-2 px-3 py-2 text-[11px]" style={{ borderColor: "#D3DCD8", color: "#9AA8A1" }}>
+                {totals.existing}{totals.slots > 0 && <>{" "}<span className="font-bold" style={{ color: CHART_HUE }}>+{totals.slots} new</span></>}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </>
+  );
+}
+
+/* A FIELD INSIDE A CITY. Subordinate, not a second table: indented and lighter, keeping the same
+ * columns, so a number under a city reads against the same header it would in field mode.
+ * A NULL IS A DASH, NEVER A ZERO. A new field has no September because it does not exist, which is
+ * not the same statement as a field that ran no matches; and a field with no December target reads
+ * "no goal" in its own gap cell, which is the rule the field table already follows. */
+function CityFieldTr({ f, city, unit }: { f: CityFieldRow; city: string; unit: "day" | "week" }) {
+  const dash = <span style={{ color: "#C3CEC8" }}>—</span>;
+  const cell = (v: number | null, derived: boolean, tid: string) => (
+    <td className="border-t px-3 py-1.5 text-right text-[12px] tabular-nums" data-testid={tid}
+      data-v={v == null ? "" : v.toFixed(4)}
+      style={{ borderColor: "#EDF2EF", background: "#FAFCFB", color: derived ? "#9AA8A1" : "#3A4D44", fontWeight: derived ? 500 : 600 }}>
+      {v == null ? dash : fmtUnit(v, unit)}
+    </td>
+  );
+  return (
+    <tr data-testid="frow" data-c={city} data-f={f.name} data-kind={f.kind}>
+      <td className="border-t py-1.5 pl-9 pr-3 text-[12px]" style={{ borderColor: "#EDF2EF", background: "#FAFCFB", color: "#5C6F66" }}>
+        {f.name}
+        {f.kind === "slot" && (
+          <span data-testid="newtag" className="ml-1.5 rounded border px-1 text-[9px] font-extrabold tracking-wide"
+            style={{ borderColor: CHART_HUE, color: CHART_HUE }}>NEW</span>
+        )}
+      </td>
+      <td className="border-t" style={{ borderColor: "#EDF2EF", background: "#FAFCFB" }} />
+      <td className="border-t px-3 py-1.5 text-right text-[12px] tabular-nums" data-testid="fsep"
+        data-v={f.sep == null ? "" : f.sep.toFixed(4)}
+        style={{ borderColor: "#EDF2EF", background: "#FAFCFB", color: "#3A4D44", fontWeight: 600 }}>
+        {f.sep == null ? dash : fmtUnit(f.sep, unit)}
+      </td>
+      {cell(f.oct, true, "foct")}
+      {cell(f.nov, true, "fnov")}
+      <td className="border-t px-3 py-1.5 text-right text-[12px] tabular-nums" data-testid="fdec"
+        data-v={f.dec == null ? "" : f.dec.toFixed(4)}
+        style={{ borderColor: "#EDF2EF", background: "#FAFCFB", color: "#3A4D44", fontWeight: 600 }}>
+        {f.dec == null ? dash : fmtUnit(f.dec, unit)}
+      </td>
+      <td className="border-t px-3 py-1.5 text-right text-[12px] font-bold tabular-nums" data-testid="fgap"
+        style={{ borderColor: "#EDF2EF", background: "#FAFCFB" }}>
+        {f.gapDaily == null
+          ? <span data-testid="nogoal" className="text-[11px] font-normal italic" style={{ color: "#9AA8A1" }}>no goal</span>
+          : <span style={{ color: roundTo(f.gapDaily, 1) < 0 ? "#12694A" : "#003326" }}>{fmtSigned(f.gapDaily, unit)}</span>}
+      </td>
+      <td className="border-t" style={{ borderColor: "#EDF2EF", background: "#FAFCFB" }} />
+    </tr>
+  );
+}
+
 function GoalTable({
   title, rows, unit, year, cur, busy, open, setOpen, draft, setDraft,
   onTarget, onAddAction, onToggleAction, onRemoveAction, onNotCounted, writeErr, revert,
-  sort, setSort, showDormant, setShowDormant,
-  onAddRow, onRename, onRemoveRow, testId,
+  sort, setSort, grain, setGrain, showDormant, setShowDormant,
+  onAddRow, onRename, onRemoveRow, onCity, testId,
 }: {
   title: string; rows: Row[]; unit: "day" | "week"; year: number; cur: number; busy: boolean;
   open: string | null; setOpen: (k: string | null) => void;
@@ -418,8 +730,10 @@ function GoalTable({
   writeErr: { key: string; message: string } | null;
   revert: number;
   sort: GoalSort; setSort?: (s: GoalSort) => void;
+  grain?: Grain; setGrain?: (g: Grain) => void;
   showDormant?: boolean; setShowDormant?: (v: boolean) => void;
   onAddRow?: () => void; onRename?: (r: Row, name: string) => void; onRemoveRow?: (r: Row) => void;
+  onCity?: (r: Row, city: string) => void;
   testId: string;
 }) {
   const decKey = monthKey(year, DEC);
@@ -440,8 +754,9 @@ function GoalTable({
     <>
       <h2 className="mb-2 mt-6 flex items-baseline gap-2 text-[15px] font-extrabold">
         {title} <span className="text-[11.5px] font-semibold" style={{ color: "#5C6F66" }} data-testid={`${testId}-count`}>{rows.length}</span>
+        {setGrain && grain && <GrainSeg grain={grain} setGrain={setGrain} />}
         {setSort && (
-          <span className="ml-3 inline-flex overflow-hidden rounded-lg border" style={{ borderColor: "#D3DCD8" }} data-testid="fg-sort">
+          <span className="inline-flex overflow-hidden rounded-lg border" style={{ borderColor: "#D3DCD8" }} data-testid="fg-sort">
             {([["gap", "By gap"], ["city", "By city"], ["name", "A–Z"]] as const).map(([k, label]) => (
               <button key={k} type="button" data-testid={`fg-sort-${k}`} aria-pressed={sort === k}
                 onClick={() => setSort(k)} className="px-2.5 py-1 text-[11.5px] font-bold"
@@ -499,6 +814,16 @@ function GoalTable({
                               ever reviews the decision. */}
                           {out && <span className="ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold" data-testid="fg-notcounted"
                             style={{ background: "#EEF3F0", color: "#5C6F66" }}>not counted</span>}</>
+                      )}
+                      {/* THE CITY, TYPED, and it is what puts this row in a city row rather than in
+                          the "No city set" bucket. Placeholder rather than a label: a state that
+                          belongs on a row goes on the row. */}
+                      {r.kind === "slot" && onCity && (
+                        <input key={`${r.key}-city-${revert}`} data-testid="fg-slot-city" defaultValue={r.city ?? ""}
+                          disabled={busy} placeholder="city" aria-label={`City for ${r.name}`}
+                          onBlur={(e) => { if (e.target.value.trim() !== (r.city ?? "")) onCity(r, e.target.value); }}
+                          className="ml-1 w-[110px] rounded-md border border-transparent px-1.5 py-0.5 text-[11.5px] hover:border-[#D3DCD8] focus:border-[#2CDB87] focus:outline-none"
+                          style={{ color: r.city ? "#5C6F66" : "#9AA8A1" }} />
                       )}
                       {r.kind === "slot" && onRemoveRow && (
                         <button type="button" data-testid="fg-slot-remove" aria-label={`Remove ${r.name}`} disabled={busy}
