@@ -1433,6 +1433,15 @@
  * from and the lengths meant nothing. */
 .adsFill { height: 7px; border-radius: 4px; }
 
+.adsThin {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: help;
+}
+
 /* Over / under, in money. Deliberately NOT .adsKey sized — cost per new player
  * stays the single dominant figure on the row, and this is the second thing you
  * read, not a rival headline. */

@@ -21,7 +21,7 @@ import styles from "./growth.module.css";
 import { fmtInt, fmtMoney } from "./format";
 import {
   perUnit, shareOf, costBand, fairShareCents, overUnderCents, duplicateNames,
-  metaRegistrationsUsable, spendVsAverageExample, META_REG_FROM,
+  metaRegistrationsUsable, spendVsAverageExample, META_REG_FROM, rateIsThin, MIN_PLAYERS_FOR_RATE,
   CONFIDENCE_WORTH_FLAGGING, type AdsOverview, type Band, type MarketRow,
 } from "@/lib/adsOverview";
 import { UNKNOWN_MARKET } from "@/lib/metaAdSpend";
@@ -248,14 +248,25 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
   const view = useMemo(() => rows.map((r) => {
     const span = r.firstSpend && r.lastSpend ? daysBetween(r.firstSpend, r.lastSpend) : 0;
     const dark = span > 0 && span < windowDays * SHORT_SPAN;
-    const cpnp = perUnit(r.spendCents, r.becamePlayers);
+    /* ── NO SPEND IS NOT A COST OF ZERO ──────────────────────────────────────────────────────
+     * A market that bought nothing in the window has no cost per new player, and $0.00 is a claim
+     * that its players were free. It also banded GREEN, because 0 divided by anything is under
+     * the blended rate, so the market that spent nothing read as the best performer on the page.
+     * `dark` did not catch it: dark keys on a SHORT SPAN, and a market with no spend at all has
+     * a span of zero, so it was never dark to begin with. */
+    const noSpend = r.spendCents <= 0;
+    const cpnp = noSpend ? null : perUnit(r.spendCents, r.becamePlayers);
+    /* A RATE ON A HANDFUL OF PLAYERS KEEPS ITS FIGURE AND LOSES ITS VERDICT. See rateIsThin. */
+    const thin = rateIsThin(r.becamePlayers);
     return {
-      r, span, dark, cpnp,
-      band: costBand(cpnp, blended, dark),
+      r, span, dark, cpnp, noSpend, thin,
+      band: thin ? null : costBand(cpnp, blended, dark),
       /* WHAT THIS MARKET WOULD HOLD IF BUDGET FOLLOWED PLAYERS, against what it holds. Positive
        * is over. It is the same arithmetic the points version did, in the unit anyone would act
        * in: "$1,175 more than its players justify" is a decision, "−15.0 points" is homework. */
-      over: overUnderCents(r.spendCents, fairShareCents(r.becamePlayers, totals?.becamePlayers ?? 0, totals?.spendCents ?? 0)),
+      over: noSpend
+        ? null   // nothing was spent, so there is nothing to compare with the average
+        : overUnderCents(r.spendCents, fairShareCents(r.becamePlayers, totals?.becamePlayers ?? 0, totals?.spendCents ?? 0)),
     };
   }), [rows, windowDays, blended, totals]);
 
@@ -511,7 +522,7 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
   );
 }
 
-type ViewRow = { r: MarketRow; span: number; dark: boolean; cpnp: number | null; band: Band | null; over: number | null };
+type ViewRow = { r: MarketRow; span: number; dark: boolean; cpnp: number | null; band: Band | null; over: number | null; noSpend: boolean; thin: boolean };
 
 function Row({ v, open, onToggle, windowDays, allCols, regUsable }: {
   v: ViewRow; open: boolean; onToggle: () => void;
@@ -519,7 +530,7 @@ function Row({ v, open, onToggle, windowDays, allCols, regUsable }: {
   /** False when the window starts before Meta could count registrations. See REG_BLANK_TIP. */
   regUsable: boolean;
 }) {
-  const { r, band, cpnp, over, dark } = v;
+  const { r, band, cpnp, over, dark, thin } = v;
   const keyCls = band ? KEY_CLASS[band] : "";
   const dupes = duplicateNames(r.adsets);
   const maxServed = Math.max(1, ...r.served.map((s) => s.spendCents));
@@ -553,7 +564,18 @@ function Row({ v, open, onToggle, windowDays, allCols, regUsable }: {
         </td>
         <td className={styles.adsGroupStart} data-testid="ads-allreg">{fmtInt(r.registrations)}</td>
         <td data-testid="ads-newplayers">{fmtInt(r.becamePlayers)}</td>
-        <td className={`${styles.adsKey} ${keyCls}`} data-testid="ads-cpnp">{money2(cpnp)}</td>
+        <td className={`${styles.adsKey} ${keyCls}`} data-testid="ads-cpnp">
+          {money2(cpnp)}
+          {/* THE FIGURE STAYS, THE VERDICT GOES. An operator watching a new market wants to see
+              the first numbers arrive; what they must not get is a colour telling them what the
+              numbers mean while one player still moves the answer by a tenth. */}
+          {thin && cpnp != null && (
+            <span className={styles.adsThin} data-testid="ads-thin"
+              title={`Only ${r.becamePlayers} new player${r.becamePlayers === 1 ? "" : "s"} in this window, so one more or fewer moves this figure by more than a tenth. Too few to rank until there are ${MIN_PLAYERS_FOR_RATE}.`}>
+              {" "}too few
+            </span>
+          )}
+        </td>
         {allCols && <td>{fmtInt(r.playedWithin7d)}</td>}
         {allCols && <td>{fmtInt(r.playedWithin30d)}</td>}
         {allCols && <td className={styles.adsGroupStart}>{pct(shareOf(r.homeCents, r.spendCents))}</td>}

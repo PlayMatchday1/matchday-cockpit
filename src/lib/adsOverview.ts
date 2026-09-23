@@ -529,3 +529,25 @@ export function attributionLabel(spec: unknown): string | null {
   }
   return parts.length ? parts.join(", ") : null;
 }
+
+
+/* ── A WINDOW CAN BE TOO YOUNG TO READ ──────────────────────────────────────────────────────────
+ *
+ * Two days after the rebuild Atlanta read $49.89 per new player off a SINGLE player. The figure is
+ * arithmetically correct and tells you nothing: one more player takes it to $24.95, one fewer takes
+ * it to infinity. Rendering it to the cent, in a colour band that says "bad", is the page making a
+ * claim the data cannot support.
+ *
+ * TEN IS WHERE ONE PLAYER STOPS MOVING THE ANSWER BY MORE THAN A TENTH. Below that the rate is
+ * dominated by its own denominator: at 9 players one arrival moves it 11%, at 3 it moves it 33%.
+ * It is a threshold on the DENOMINATOR, not on the window length, because a young window and a
+ * quiet market fail the same way and for the same reason.
+ *
+ * THE FIGURE IS STILL SHOWN. Hiding it would be worse: an operator watching a new market wants to
+ * see the first numbers arrive. It loses its band colour, because the colour is the verdict, and
+ * carries a marker saying how thin it is. */
+export const MIN_PLAYERS_FOR_RATE = 10;
+
+export function rateIsThin(becamePlayers: number): boolean {
+  return becamePlayers > 0 && becamePlayers < MIN_PLAYERS_FOR_RATE;
+}

@@ -20,6 +20,7 @@ import {
   buildAdsOverview, servedBreakdown, shareOf, perUnit, PAID_MARKETS,
   orderAdsets, duplicateNames, CONFIDENCE_WORTH_FLAGGING, costBand, fairShareCents, overUnderCents,
   metaRegistrationsUsable, META_REG_FROM, registrationRebuildStart, attributionLabel, spendVsAverageExample,
+  rateIsThin, MIN_PLAYERS_FOR_RATE,
   BAND_MID_AT, BAND_BAD_AT,
   type GeoRow, type FlatRow, type DimRow, type AcqRow, type AdsetRow,
 } from "../src/lib/adsOverview";
@@ -353,6 +354,20 @@ console.log("\nthe spend-vs-average example is computed, never written down");
   is("CONTROL — without Houston it falls back to the first row", noHtx.market, "ATX");
   is("no blended rate means no example, rather than a sentence built on a null", spendVsAverageExample(rows, null), null);
   is("no rows means no example", spendVsAverageExample([], blended), null);
+}
+
+console.log("\na window can be too young to read");
+{
+  is("the threshold is where one player stops moving the answer by a tenth", MIN_PLAYERS_FOR_RATE, 10);
+  /* ATLANTA, TWO DAYS AFTER THE REBUILD: $49.89 per new player off ONE player. Arithmetically
+   * right and informationally empty — one more takes it to $24.95. */
+  is("one player is too few to rank", rateIsThin(1), true);
+  is("nine is still too few", rateIsThin(9), true);
+  is("ten is enough", rateIsThin(10), false);
+  is("CONTROL — a healthy market is not marked", rateIsThin(461), false);
+  /* ZERO IS NOT THIN, IT IS ABSENT. A market with no players has no rate at all, and the cell is
+   * a dash rather than a figure with a caveat attached to it. */
+  is("zero players is not 'thin', it is no rate at all", rateIsThin(0), false);
 }
 
 console.log(`\n${pass} passed, ${fails.length} failed`);
