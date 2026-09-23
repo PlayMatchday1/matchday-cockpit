@@ -100,7 +100,15 @@ const KEY_CLASS: Record<Band, string> = {
  *
  * IT NEVER CHANGES THE HEADER'S LAYOUT. The trigger is sized in the flow open or shut, with
  * negative margins so its 22px hit area cannot widen a column, and the panel is out of flow. */
-function HeaderTip({ label, tip }: { label: string; tip: React.ReactNode }) {
+function HeaderTip({ label, tip, trigger, triggerClass }: {
+  label: string; tip: React.ReactNode;
+  /* THE TRIGGER IS USUALLY THE CIRCLED i, and for an in-cell marker it is the marker's own words.
+   * Same panel either way: `title` was tried on that marker and it is the same attribute that
+   * failed on these headers — about a second of delay, unstyleable, invisible to a keyboard user,
+   * suppressed on touch. A marker that looks like it explains itself and does not is worse than
+   * no marker. */
+  trigger?: React.ReactNode; triggerClass?: string;
+}) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const hoverOwned = useRef(false);
@@ -142,7 +150,7 @@ function HeaderTip({ label, tip }: { label: string; tip: React.ReactNode }) {
       <button
         ref={btnRef}
         type="button"
-        className={styles.adsTipBtn}
+        className={triggerClass ?? styles.adsTipBtn}
         data-testid="ads-tip-btn"
         aria-label={`What ${label} means`}
         aria-expanded={open}
@@ -158,10 +166,12 @@ function HeaderTip({ label, tip }: { label: string; tip: React.ReactNode }) {
         onFocus={() => { if (!open) { hoverOwned.current = false; setOpen(true); } }}
         onBlur={() => { if (!hoverOwned.current) setOpen(false); }}
       >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-          strokeWidth="2.4" strokeLinecap="round" aria-hidden>
-          <circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 7.5v.01" />
-        </svg>
+        {trigger ?? (
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="2.4" strokeLinecap="round" aria-hidden>
+            <circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 7.5v.01" />
+          </svg>
+        )}
       </button>
       {open && pos && createPortal(
         <div role="tooltip" className={styles.adsTip} data-testid="ads-tip"
@@ -313,7 +323,11 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
       <div className={styles.adsBar}>
         <span className={styles.adsSummary} data-testid="ads-summary">
           {totals
-            ? `${money0(totals.spendCents)} spend · ${fmtInt(totals.installs)} installs${regUsable ? ` · ${fmtInt(totals.metaRegistrations)} registrations from ads` : ""} · ${fmtInt(totals.registrations)} all registrations · ${fmtInt(totals.becamePlayers)} new players · ${money2(blended)} blended`
+            /* STATED, NOT DROPPED. The line used to omit the figure entirely on a window Meta
+             * cannot answer for, which leaves a reader counting five items where there were six
+             * and wondering which one they misread. Saying "none before Sep 12" costs four words
+             * and answers the question the gap was raising. */
+            ? `${money0(totals.spendCents)} spend · ${fmtInt(totals.installs)} installs · ${regUsable ? `${fmtInt(totals.metaRegistrations)} registrations from ads` : `no registrations from ads before ${shortDay(META_REG_FROM)}`} · ${fmtInt(totals.registrations)} all registrations · ${fmtInt(totals.becamePlayers)} new players · ${money2(blended)} blended`
             : "…"}
         </span>
         <div className={styles.adsControls}>
@@ -486,10 +500,19 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
               </table>
             </div>
 
-            {/* NOTHING UNDER THE TABLE. The "paid markets only" footnote is now the last line of
-                the New players definition, where it travels with the number it qualifies, and the
-                "Registrations, 7d and 30d…" link duplicated the All columns button sitting in the
-                controls above. Two lines of chrome for one button and one sentence. */}
+            {/* ── ONE LINE, AND ONLY WHEN THE COLUMNS ARE BLANK ───────────────────────────────
+                Two dashed columns with the reason only on hover read as broken data. A reader who
+                does not hover concludes the pull is failing, which is the opposite of what the
+                dashes mean. It names the presets that DO answer, so the next click is obvious
+                rather than a hunt. It disappears entirely on a window that has the data, because
+                a permanent caveat is a caveat nobody reads. */}
+            {!regUsable && (
+              <div className={styles.adsBlankNote} data-testid="ads-reg-blank-note">
+                Meta could not see registrations before {shortDay(META_REG_FROM)}, so this window
+                has none to show. Pick{" "}
+                {data.rebuildStart && (<><b>Since rebuild</b> or </>)}<b>7d</b>.
+              </div>
+            )}
           </div>
 
           {data.notAttributed.length > 0 && (
@@ -570,10 +593,30 @@ function Row({ v, open, onToggle, windowDays, allCols, regUsable }: {
               the first numbers arrive; what they must not get is a colour telling them what the
               numbers mean while one player still moves the answer by a tenth. */}
           {thin && cpnp != null && (
-            <span className={styles.adsThin} data-testid="ads-thin"
-              title={`Only ${r.becamePlayers} new player${r.becamePlayers === 1 ? "" : "s"} in this window, so one more or fewer moves this figure by more than a tenth. Too few to rank until there are ${MIN_PLAYERS_FOR_RATE}.`}>
-              {" "}too few
-            </span>
+            <>
+              {" "}
+              <HeaderTip label="too few" triggerClass={styles.adsThin}
+                trigger={<span data-testid="ads-thin">too few</span>}
+                tip={
+                  <>
+                    {/* IT READS LIKE META'S LEARNING PHASE AND IT IS NOT. Saying what it is not is
+                        the first line, because that is the wrong reading a reader arrives with. */}
+                    <p>
+                      Nothing to do with Meta&rsquo;s learning phase. This is our own count:{" "}
+                      {CITY_LABEL[r.marketKey] ?? r.marketKey} has {fmtInt(r.becamePlayers)} new
+                      player{r.becamePlayers === 1 ? "" : "s"} in this window, too few for the cost
+                      figure to be reliable.
+                    </p>
+                    <p>
+                      One more or fewer would move it by{" "}
+                      {Math.round(100 / r.becamePlayers)}%. We stop ranking a market below{" "}
+                      {MIN_PLAYERS_FOR_RATE} new players, which is where one arrival stops moving
+                      the answer by more than a tenth. The figure is still shown; only the colour
+                      ranking it is withheld.
+                    </p>
+                  </>
+                } />
+            </>
           )}
         </td>
         {allCols && <td>{fmtInt(r.playedWithin7d)}</td>}

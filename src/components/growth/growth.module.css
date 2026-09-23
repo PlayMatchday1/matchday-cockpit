@@ -1433,7 +1433,19 @@
  * from and the lengths meant nothing. */
 .adsFill { height: 7px; border-radius: 4px; }
 
+.adsBlankNote {
+  padding: 9px 20px 12px;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.adsBlankNote b { color: var(--ink); font-weight: 600; }
+
 .adsThin {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
   font-size: 0.6rem;
   font-weight: 700;
   letter-spacing: 0.04em;
