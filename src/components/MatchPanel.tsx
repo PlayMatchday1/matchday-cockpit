@@ -1506,6 +1506,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
                     the box showed the FIRST size instead and one blur would have saved 16 over it. */}
                 <select data-testid="mp-max2" value={Number(cur.maxTeamSize2Team) || 0} className={isDirty("maxTeamSize2Team") ? "mp-chg" : ""} onChange={(e) => setField("maxTeamSize2Team", Number(e.target.value))}>
                   <option value={0}>not available as a 2-team match</option>
+                  <RungOption total={Number(cur.maxTeamSize2Team) || 0} teams={2} />
                   {SIZES.map((v) => <option key={v} value={v * 2}>{v} × {v}</option>)}
                 </select>
                 {/* THE TOTAL IS THE NUMBER RIGHT OF THE EQUALS SIGN, always — the standing trap is a
@@ -1519,6 +1520,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
                     the only way to reach the field, which is the coupling above. */}
                 <select data-testid="mp-max4" value={Number(cur.maxTeamSize4Team) || 0} className={isDirty("maxTeamSize4Team") ? "mp-chg" : ""} onChange={(e) => setField("maxTeamSize4Team", Number(e.target.value))}>
                   <option value={0}>not available as a 4-team match</option>
+                  <RungOption total={Number(cur.maxTeamSize4Team) || 0} teams={4} />
                   {SIZES.map((v) => <option key={v} value={v * 4}>{v} each</option>)}
                 </select>
                 <span className="mp-help">{Number(cur.maxTeamSize4Team) ? <>4 × {Number(cur.maxTeamSize4Team) / 4} = <b>{Number(cur.maxTeamSize4Team)} spots</b></> : "not available as a 4-team match"}</span></label>
@@ -2512,6 +2514,30 @@ function shownVal(k: string, v: unknown, managers: Manager[]): string {
   if (k === "type") return EXPOSED_TYPES[String(v)] ?? String(v);
   const s = String(v ?? "");
   return s.length > 44 ? s.slice(0, 44) + "…" : s || "empty";
+}
+
+/* ── THE STORED VALUE ALWAYS HAS AN OPTION, EVEN IF THE LIST HAS NEVER HEARD OF IT ─────────────
+ * The same rule CATEGORY and the manager dropdowns on this panel already follow, and it belongs on
+ * the rung selects for the same reason: a select whose value is not among its options silently
+ * falls back to index 0 and REPORTS A NUMBER NOBODY CHOSE.
+ *
+ * SIZES stops at 12 a side; the SPOTS PER TEAM stepper has no ceiling. So stepping a 4-team match
+ * to 15 a side raises the rung to 60, the select cannot draw 60, and it fell back — to "4 each"
+ * (16) before, and to "not available as a 4-team match" once the 0 option was added. MEASURED on
+ * 18760: the state and the help line read "4 x 15 = 60 spots" while the control read "not
+ * available". Either fallback is the control lying about what it holds, and the second one claims
+ * the format is unavailable on a match that IS that format.
+ *
+ * Rendered only when the total is off-list and non-zero: 0 has its own option. */
+function RungOption({ total, teams }: { total: number; teams: 2 | 4 }) {
+  if (!Number.isFinite(total) || total <= 0) return null;
+  if (SIZES.some((v) => v * teams === total)) return null;
+  const per = total / teams;
+  return (
+    <option value={total}>
+      {Number.isInteger(per) ? (teams === 2 ? `${per} \u00d7 ${per}` : `${per} each`) : `${total} total`}
+    </option>
+  );
 }
 
 function Section({ title, dirty, children }: { title: string; dirty?: boolean; children: React.ReactNode }) {

@@ -1,74 +1,89 @@
-/* READ ONLY against the live panel for match 18760. It stages changes in the browser and reads the
- * PENDING diff; it never presses Save, so nothing is written to production. */
+/* The Spots section of the match panel, driven. READ ONLY: it stages in the browser and reads the
+ * pending state, and never presses Save, so nothing is written to the match.
+ *
+ *   node --env-file=.env.local scripts/_check_spots_panel.mjs            # localhost
+ *   BASE=https://matchday-clubhouse.vercel.app  node --env-file=... ...  # the deployed build
+ *
+ * DERIVE, DO NOT PIN. The first version hardcoded 18760's spots per team as 8 and its ceiling as
+ * 44, and reported four failures the day the match grew to 11 a side. Every expectation below is
+ * computed from what the panel is showing when the run starts.
+ */
 import { chromium } from 'playwright';
 import { installHarnessGuard, storageStateFor } from './e2e/_session.mjs';
 installHarnessGuard();
 const BASE = process.env.BASE || 'http://localhost:3000';
-const ADMIN = 'rmancuso@playmatchday.com';
 const M = process.env.MATCH || '18760';
-const { storageState } = await storageStateFor(ADMIN, BASE);
+const { storageState } = await storageStateFor('rmancuso@playmatchday.com', BASE);
 const b = await chromium.launch();
-const p = await (await b.newContext({ storageState, viewport:{width:1500,height:1100} })).newPage();
-const errs = []; p.on('pageerror', e => errs.push(e.message));
-let pass=0, fail=0;
-const ok=(c,m)=>{console.log((c?'PASS ':'FAIL ')+m); c?pass++:fail++;};
-const D = t => `[data-testid="${t}"]`;
+const p = await (await b.newContext({ storageState, viewport: { width: 1500, height: 1100 } })).newPage();
+const errs = []; p.on('pageerror', (e) => errs.push(e.message));
+let pass = 0, fail = 0;
+const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); c ? pass++ : fail++; };
+const D = (t) => `[data-testid="${t}"]`;
 
-await p.goto(`${BASE}/match-ops/match-panel/${M}`, { waitUntil:'domcontentloaded' });
-await p.waitForSelector(D('mp-max4'), { timeout:40000 });
-await p.waitForTimeout(800);
-ok(errs.length===0, `no page errors${errs.length?': '+errs[0]:''}`);
+await p.goto(`${BASE}/match-ops/match-panel/${M}`, { waitUntil: 'domcontentloaded' });
+await p.waitForSelector(D('mp-max4'), { timeout: 40000 });
+await p.waitForTimeout(900);
+ok(errs.length === 0, `no page errors${errs.length ? ': ' + errs[0] : ''}`);
 
-const val = async t => p.$eval(D(t), e => e.value);
-const txt = async t => p.$eval(D(t), e => e.textContent.trim());
-const teams = await p.$$eval(`${D('mp-teams-seg')} button`, es => es.map(e=>({n:e.textContent.trim(), on:e.dataset.on})));
-const teamOn = teams.find(t=>t.on==='true')?.n;
-console.log(`\nmatch ${M}: teams=${teamOn}  spots/team=${await txt('mp-spt')}  capacity=${await txt('mp-capacity')}`);
-console.log(`max2=${await val('mp-max2')}  max4=${await val('mp-max4')}  bump=${await p.$eval(D('mp-bump'), e=>e.getAttribute('aria-checked') ?? e.dataset.on ?? 'n/a')}`);
-ok(teamOn === '4', `it is a 4-team match (${teamOn})`);
-const max4Before = Number(await val('mp-max4'));
-const sptBefore = Number(await txt('mp-spt'));
-ok(max4Before === 44, `the 4-team max reads 44 before anything is touched (${max4Before})`);
-ok(sptBefore === 8, `and spots per team reads 8 (${sptBefore})`);
+const num = async (t) => Number(await p.$eval(D(t), (e) => e.textContent.trim()));
+const rung4 = () => p.$eval(D('mp-max4'), (e) => Number(e.value));
+const cap = () => p.$eval(D('mp-capacity'), (e) => Number(e.dataset.value));
+const step = async (dir, times) => { for (let i = 0; i < times; i++) { await p.click(D(`mp-spt-${dir}`)); await p.waitForTimeout(70); } await p.waitForTimeout(200); };
 
-// ── BUG 2 FIRST: the control must be reachable with auto bump OFF ────────────────────────────
-ok(await p.$eval(D('mp-max4'), e => !e.disabled), 'the 4-team max is enabled with auto bump ON');
-await p.click(D('mp-bump'));
-await p.waitForTimeout(150);
-ok(await p.$eval(D('mp-max4'), e => !e.disabled), 'and STILL enabled after turning auto bump OFF');
-const opts = await p.$$eval(`${D('mp-max4')} option`, es => es.map(e=>({v:e.value, t:e.textContent.trim(), d:e.disabled})));
-ok(opts.some(o=>o.t==='11 each' && !o.d), `"11 each" (44) is selectable with auto bump off`);
-await p.selectOption(D('mp-max4'), '44');
-await p.waitForTimeout(120);
-ok(Number(await val('mp-max4'))===44, '  and 4 teams x 11 can be set with no auto bump');
-ok(/44 spots/.test(await p.$eval(`${D('mp-max4')} ~ .mp-help, ${D('mp-max4')} + .mp-help`, e=>e.textContent).catch(()=> '')) || true, '  (help line read)');
-await p.click(D('mp-bump'));           // put the toggle back; nothing is saved either way
-await p.waitForTimeout(150);
+const teams = await p.$$eval(`${D('mp-teams-seg')} button`, (es) => es.map((e) => ({ n: Number(e.textContent.trim()), on: e.dataset.on === 'true' })));
+const teamCount = teams.find((t) => t.on)?.n ?? 0;
+// EVERY EXPECTATION BELOW COMES FROM THESE THREE, read at rest.
+const spt0 = await num('mp-spt'), cap0 = await cap(), rung0 = await rung4();
+console.log(`\n${BASE}\nmatch ${M} at rest: teams=${teamCount} spots/team=${spt0} capacity=${cap0} max4=${rung0} max2=${await p.$eval(D('mp-max2'), (e) => Number(e.value))}`);
 
-// ── BUG 1: lower spots per team and read the PENDING diff ───────────────────────────────────
-const pendingKeys = async () => p.$$eval('[data-testid="mp-diff-row"], [data-testid^="mp-diff"]', es => es.map(e=>e.textContent.trim()));
-await p.click(D('mp-spt-minus'));      // 8 -> 7
-await p.waitForTimeout(180);
-console.log(`\nafter one press of minus: spots/team=${await txt('mp-spt')}  capacity=${await txt('mp-capacity')}  max4=${await val('mp-max4')}`);
-ok(Number(await txt('mp-spt'))===7, 'spots per team stepped 8 -> 7');
-ok(Number(await val('mp-max4'))===44, 'the 4-team max is STILL 44 — the ceiling was not pulled down');
-ok(await p.$eval(D('mp-max4'), e => !e.className.includes('mp-chg')), '  and it is not marked as a pending change');
+ok(teamCount === 4, `it is a 4-team match (${teamCount})`);
+ok(cap0 === spt0 * teamCount, `capacity ${cap0} is ${teamCount} x ${spt0}, so the panel is internally consistent`);
+ok(rung0 > 0, `CONTROL: the 4-team ceiling is a real number (${rung0}), not absent — the checks below would be vacuous on 0`);
 
-// step it UP past the ceiling: the clamp must work in that direction
-for (let i=0;i<5;i++){ await p.click(D('mp-spt-plus')); await p.waitForTimeout(60); }   // 7 -> 12
-await p.waitForTimeout(200);
-console.log(`after stepping to ${await txt('mp-spt')}: capacity=${await txt('mp-capacity')}  max4=${await val('mp-max4')}`);
-ok(Number(await txt('mp-spt'))===12, 'stepped up to 12 a side');
-ok(Number(await val('mp-max4'))===48, '  the ceiling was RAISED to 48, because 44 would be below the new capacity');
-// and back down: it must not follow
-for (let i=0;i<4;i++){ await p.click(D('mp-spt-minus')); await p.waitForTimeout(60); }  // 12 -> 8
-await p.waitForTimeout(200);
-ok(Number(await txt('mp-spt'))===8, `stepped back down to ${await txt('mp-spt')}`);
-ok(Number(await val('mp-max4'))===48, '  and the ceiling stayed at 48 rather than following it down');
+// ── BUG 2. The ceiling must be reachable with auto bump OFF. ────────────────────────────────────
+ok(await p.$eval(D('mp-max4'), (e) => !e.disabled), 'the 4-team max is editable with auto bump ON');
+await p.click(D('mp-bump')); await p.waitForTimeout(200);
+ok(await p.$eval(D('mp-max4'), (e) => !e.disabled), '  and STILL editable after turning auto bump OFF');
+const opts = await p.$$eval(`${D('mp-max4')} option`, (es) => es.map((e) => ({ v: Number(e.value), t: e.textContent.trim(), d: e.disabled })));
+const eleven = opts.find((o) => o.v === 11 * 4);
+ok(!!eleven && !eleven.d, `  "${eleven?.t}" (44 spots) is selectable with no auto bump`);
+await p.selectOption(D('mp-max4'), String(11 * 4)); await p.waitForTimeout(150);
+ok(await rung4() === 44, '  and 4 teams x 11 can be set with no auto bump');
+await p.selectOption(D('mp-max4'), String(rung0)); await p.waitForTimeout(150);
+await p.click(D('mp-bump')); await p.waitForTimeout(200);   // toggle back; nothing is saved either way
+ok(await rung4() === rung0, `  CONTROL: the ceiling is back to what it was (${rung0}), so what follows starts clean`);
 
-// ── CONTROL: the capacity DID move, so the assertions above are not reading a frozen panel ──
-ok(/32/.test(await txt('mp-capacity')), `CONTROL: capacity tracked the stepper back to ${await txt('mp-capacity')}`);
-ok(errs.length===0, `no page errors across the run${errs.length?': '+errs[0]:''}`);
+// ── BUG 1. Lowering spots per team must not drag the ceiling down. ──────────────────────────────
+await step('minus', 1);
+const sptDown = await num('mp-spt');
+console.log(`\nafter one minus: spots/team=${sptDown} capacity=${await cap()} max4=${await rung4()}`);
+ok(sptDown === spt0 - 1, `spots per team stepped ${spt0} -> ${sptDown}`);
+ok(await cap() === sptDown * teamCount, `  capacity followed it to ${await cap()}`);
+ok(await rung4() === rung0, `  the ceiling is STILL ${rung0} — it was not pulled down`);
+ok(await p.$eval(D('mp-max4'), (e) => !e.className.includes('mp-chg')), '  and it is not marked as a pending change');
+
+// ── THE CLAMP IS UPWARD. Step past the ceiling and it must rise. ────────────────────────────────
+// The target is derived: the first per-team figure whose capacity exceeds the saved ceiling.
+const perOver = Math.floor(rung0 / teamCount) + 1;
+await step('plus', perOver - sptDown);
+const sptUp = await num('mp-spt'), capUp = await cap(), rungUp = await rung4();
+console.log(`after stepping to ${sptUp}: capacity=${capUp} max4=${rungUp}`);
+ok(sptUp === perOver, `stepped up to ${sptUp} a side, the first figure that clears the ${rung0} ceiling`);
+ok(capUp > rung0, `  CONTROL: capacity ${capUp} really is above the old ceiling ${rung0}`);
+ok(rungUp === capUp, `  the ceiling was RAISED to ${rungUp}, because ${rung0} would sit below the capacity`);
+// THE SELECT MUST SAY WHAT IT HOLDS. SIZES stops at 12 a side, so a raised ceiling can be off-list;
+// a select that cannot draw its value falls back to index 0 and reports a number nobody chose.
+const shown = await p.$eval(D('mp-max4'), (e) => ({ v: Number(e.value), t: e.options[e.selectedIndex]?.textContent.trim() ?? '' }));
+ok(shown.v === rungUp, `  and the control reads it back as ${shown.v} ("${shown.t}"), not a fallback`);
+
+// ── AND IT DOES NOT FOLLOW THE STEPPER BACK DOWN. ──────────────────────────────────────────────
+await step('minus', perOver - spt0);
+ok(await num('mp-spt') === spt0, `stepped back down to ${await num('mp-spt')}`);
+ok(await cap() === cap0, `  CONTROL: capacity tracked all the way back to ${await cap()}, so the panel is not frozen`);
+ok(await rung4() === rungUp, `  and the ceiling stayed at ${rungUp} rather than following it down`);
+
+ok(errs.length === 0, `no page errors across the run${errs.length ? ': ' + errs[0] : ''}`);
 console.log(`\n${pass} passed, ${fail} failed`);
 await b.close();
-process.exit(fail?1:0);
+process.exit(fail ? 1 : 0);

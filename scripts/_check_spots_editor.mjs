@@ -32,20 +32,31 @@ if (toggle) { await toggle.click(); await p.waitForTimeout(200); }
 ok(await p.$eval(D('in-maxTeamSize4Team'), e=>!e.disabled), 'and STILL editable with auto bump off');
 if (toggle) { await toggle.click(); await p.waitForTimeout(200); }
 
+/* DERIVE, DO NOT PIN. This pinned 18760 at 7 and 12 a side and went red the day the match grew
+ * to 11. Everything below is computed from what the editor shows at rest. */
+const spt0 = Number(await txt('me-spt'));
+const rung0 = Number(await val('in-maxTeamSize4Team'));
+ok(rung0 > 0, `CONTROL: the ceiling is a real number (${rung0}), so the checks below are not vacuous`);
+
 // spots per team must not drag the rung down
 await p.click(D('me-spt-minus'));
 await p.waitForTimeout(250);
 console.log(`after minus: spots/team=${await txt('me-spt')}  capacity=${await txt('me-capacity')}  max4=${await val('in-maxTeamSize4Team')}`);
-ok(Number(await txt('me-spt'))===7, 'spots per team stepped down');
-ok(Number(await val('in-maxTeamSize4Team'))===44, '  and the 4-team max is still 44');
+ok(Number(await txt('me-spt'))===spt0-1, `spots per team stepped ${spt0} -> ${await txt('me-spt')}`);
+ok(Number(await val('in-maxTeamSize4Team'))===rung0, `  and the 4-team max is still ${rung0}`);
 const dirty = await p.$eval(`[data-f="maxTeamSize4Team"]`, e=>e.className);
 ok(!/dirty/.test(dirty), `  and the field is not marked dirty (class "${dirty}")`);
 const capDirty = await p.$eval(`[data-f="maxPlayerCount"]`, e=>e.className);
 ok(/dirty/.test(capDirty), `  CONTROL: capacity IS marked dirty (class "${capDirty}"), so the dirty mark works`);
-for (let i=0;i<5;i++){ await p.click(D('me-spt-plus')); await p.waitForTimeout(70); }
-await p.waitForTimeout(200);
-ok(Number(await txt('me-spt'))===12 && Number(await val('in-maxTeamSize4Team'))===48,
-  `stepping to ${await txt('me-spt')} raised the ceiling to ${await val('in-maxTeamSize4Team')}`);
+
+// the first per-team figure whose capacity clears the saved ceiling
+const perOver = Math.floor(rung0 / 4) + 1;
+for (let i = spt0 - 1; i < perOver; i++) { await p.click(D('me-spt-plus')); await p.waitForTimeout(70); }
+await p.waitForTimeout(250);
+const sptUp = Number(await txt('me-spt')), rungUp = Number(await val('in-maxTeamSize4Team'));
+ok(sptUp === perOver, `stepped up to ${sptUp} a side, the first figure that clears ${rung0}`);
+ok(rungUp === sptUp * 4, `  the ceiling was RAISED to ${rungUp}`);
+ok(rungUp > rung0, `  CONTROL: and ${rungUp} really is above the old ${rung0}`);
 ok(errs.length===0, `no page errors across the run${errs.length?': '+errs[0]:''}`);
 console.log(`\n${pass} passed, ${fail} failed`);
 await b.close(); process.exit(fail?1:0);
