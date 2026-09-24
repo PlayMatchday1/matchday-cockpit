@@ -442,14 +442,58 @@ export function clearApplied(p: Pending, w: PlannedWrite): Pending {
  *
  * THREE TEAMS HAS NO RUNG. The API models only maxTeamSize2Team and maxTeamSize4Team, so a 3-team
  * match's capacity lives in maxPlayerCount alone — confirmed on 28 live 3-team matches. We still
- * write maxPlayerCount; there is simply no rung field to write beside it. */
-export function teamCountWrites(target: number, perTeam: number): Record<string, number> {
+ * write maxPlayerCount; there is simply no rung field to write beside it.
+ *
+ * ── BUT IT RAISES THE RUNG, IT NEVER LOWERS IT ────────────────────────────────────────────────
+ * Ryan: "Spots per team sets the current capacity only. The auto bump max is an independent
+ * ceiling and should keep its saved value."
+ *
+ * The rung is the total for that FORMAT; maxPlayerCount is what the match holds NOW. They are not
+ * two views of one number, and the estate proves it. MEASURED on the mirror, non-cancelled matches
+ * 2026-07-01 to 2026-09-30:
+ *
+ *   4-team matches      433, of which  91 (21%) have a 4-team rung that is not the capacity
+ *   2-team matches      662, of which 284 (43%) have a 2-team rung that is not the capacity
+ *   match 18760         Parmer Premier: capacity 32 (4 x 8), 4-team rung 44 (4 x 11), bump on
+ *
+ * 18760 is the shape this rule exists for: start at 4 x 8 and let auto bump grow it to 4 x 11.
+ * Writing the rung unconditionally turned a spots-per-team edit into "and throw away the ceiling",
+ * which is what happened when Spots per team went 11 -> 8 and the pending diff carried a 4-team
+ * max of 32 that nobody had touched.
+ *
+ * RAISING IS STILL REQUIRED, so 18125 cannot come back: that match went 2 -> 4 teams carrying a
+ * stale 4-team rung of 22, and the player app divided 22 by 4 and showed 5.5 players a team. A
+ * rung BELOW the new capacity, or absent, or zero, is not a ceiling anyone set — it is the gap
+ * that bug fell through, so it is raised to the capacity.
+ *
+ * DIVISIBILITY SURVIVES THE CLAMP. When it clamps, it clamps to the capacity, and a capacity that
+ * does not divide by the team count is already refused by teamShapeError. When it does not clamp,
+ * it leaves the saved number alone — and MEASURED over the same 1143 matches, ZERO have a rung
+ * that is not divisible by their own team count, so there is nothing there to round.
+ *
+ * savedRung ABSENT MEANS UNKNOWN, AND UNKNOWN WRITES. A caller that cannot say what the ceiling is
+ * gets the old behaviour, which is the 18125-safe direction. */
+export function teamCountWrites(
+  target: number,
+  perTeam: number,
+  savedRung?: number | null,
+): Record<string, number> {
   const total = Math.max(target, Math.round(perTeam) * target);
   const out: Record<string, number> = { maxPlayerCount: total };
-  if (target === 2) out.maxTeamSize2Team = total;
-  else if (target === 4) out.maxTeamSize4Team = total;
+  const rungKey = target === 2 ? "maxTeamSize2Team" : target === 4 ? "maxTeamSize4Team" : null;
+  if (!rungKey) return out;
+  const saved = Number(savedRung);
+  /* 0 IS "THIS FORMAT IS NOT AVAILABLE", not a ceiling of zero — so it is raised like an absent
+   * one. Leaving it would put a match into a format whose total says nobody can sign up, which is
+   * the contradiction capacityContradiction already flags on load. */
+  if (!Number.isFinite(saved) || saved <= 0 || saved < total) out[rungKey] = total;
   return out;
 }
+
+/** The rung a team count writes, or null when the API models none for it. One place, so a call
+ *  site never has to remember that 3 teams has no field. */
+export const rungKeyFor = (teamCount: number): "maxTeamSize2Team" | "maxTeamSize4Team" | null =>
+  teamCount === 2 ? "maxTeamSize2Team" : teamCount === 4 ? "maxTeamSize4Team" : null;
 
 /* THE BLOCK. The player app can render a fractional team size; Clubhouse must never be able to
  * produce one. A total that does not divide by the team count is refused with the reason on

@@ -130,8 +130,17 @@ export function convertRefusal(
   return null;
 }
 
+/** A stored rung as a number, or null when it is absent or unreadable. */
+const rungOf = (v: unknown): number | null => {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
 export function buildConvertPlan(
-  match: { maxPlayerCount?: unknown; teamCount: number },
+  /* maxTeamSize4Team rides in so the shape can RAISE a stale 4-team rung without lowering a
+   * deliberate one. Optional: absent means unknown, and teamCountWrites then writes it. */
+  match: { maxPlayerCount?: unknown; maxTeamSize4Team?: unknown; teamCount: number },
   players: ConvertPlayer[],
 ): ConvertPlan {
   const live = dealtPlayers(players);
@@ -141,7 +150,9 @@ export function buildConvertPlan(
    * per-team figure comes from the CURRENT shape: 22 across 2 teams is 11 a side, so 4 teams is 44.
    * Not auto-bump's 28, which nothing derives. */
   const perTeam = match.teamCount > 0 && spotsBefore % match.teamCount === 0 ? spotsBefore / match.teamCount : 0;
-  const shape = teamCountWrites(4, perTeam);
+  /* THE 4-TEAM RUNG IS RAISED, NEVER LOWERED. A conversion sets the shape the operator confirmed;
+   * it has no business discarding a ceiling somebody set for the format it is converting INTO. */
+  const shape = teamCountWrites(4, perTeam, rungOf(match.maxTeamSize4Team));
   const spotsAfter = Number(shape.maxPlayerCount) || 0;
   const moves = dealFourTeams(players);
   return {

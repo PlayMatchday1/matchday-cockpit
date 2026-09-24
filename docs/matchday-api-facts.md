@@ -6382,3 +6382,31 @@ adds one directly — `addStrike` / `AddStrike` are UI components, not queries.
 
 Scanning `/admin/players` detail: **1 of 256 staging players** and **2 of 323 production players**
 had any strike log at all.
+
+## The rung is a FORMAT TOTAL, not the auto-bump destination (2026-09-24)
+
+Evidence: `mdapi_matches` mirror, non-cancelled, `start_date` 2026-07-01 to 2026-09-30,
+1143 matches (662 two-team, 48 three-team, 433 four-team; team count read off `raw.teamNumbers`).
+
+- `maxPlayerCount` and the format rung are INDEPENDENT in practice, not just in theory:
+  **91 of 433 (21%)** four-team matches have `max_team_size_4team != max_player_count`, and
+  **284 of 662 (43%)** two-team matches have `max_team_size_2team != max_player_count`.
+- Match **18760** (Parmer Stadium - Premier, Austin) is the canonical shape:
+  `max_player_count 32` (4 x 8), `max_team_size_4team 44` (4 x 11), `max_team_size_2team 20`,
+  `is_auto_bump true`. It starts at 32 and auto bump grows it to 44.
+- **272 of the 433 four-team matches run with `is_auto_bump` false**, and 15 matches currently sit
+  at a capacity of 44. Several of those are four-team with bump OFF (17426, 17563, 17956, 18642),
+  so "four teams of eleven, no bump" is a real production configuration and not a hypothetical.
+  Clubhouse greyed `maxTeamSize4Team` on `!isAutoBump` in both editors, which made that
+  configuration unreachable; the rung is the total for the 4-team FORMAT, which a match that IS
+  four teams has whether or not it ever grows. The grey-out is gone.
+- A rung BELOW its own match's capacity is real but rare: 12 four-team and 87 two-team. 17556
+  (Parmer Premier) reads capacity 44 against a 4-team rung of 20. A rung of 0 while the match IS
+  that team count: 0 four-team, 88 two-team (all "The Hattrick (Leander)").
+- **ZERO of the 1143 have a rung that is not divisible by their own team count.** So clamping a
+  rung up to the capacity (which `teamShapeError` already forces to be divisible) is enough to keep
+  the player app from rendering a fractional team size; no rounding step is needed.
+
+`teamCountWrites(target, perTeam, savedRung)` therefore RAISES a rung that is absent, zero, or
+below the new capacity and LEAVES a higher one alone. Omitting `savedRung` keeps the old
+write-always behaviour, which is the 18125-safe direction.

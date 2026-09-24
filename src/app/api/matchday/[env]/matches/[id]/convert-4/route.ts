@@ -50,7 +50,7 @@ const todayYmd = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chi
 
 type ApiMatch = {
   id: number; name?: string; startDate?: string | null; isCancelled?: unknown;
-  maxPlayerCount?: unknown; teams?: unknown[]; players?: Record<string, unknown>[];
+  maxPlayerCount?: unknown; maxTeamSize4Team?: unknown; teams?: unknown[]; players?: Record<string, unknown>[];
 };
 
 const toPlayers = (m: ApiMatch): ConvertPlayer[] =>
@@ -73,7 +73,7 @@ async function planFor(env: "production" | "staging", id: string) {
   const teamCount = (m.teams ?? []).length;
   const players = toPlayers(m);
   const refusal = convertRefusal({ startDate: m.startDate ?? null, isCancelled: m.isCancelled, teamCount }, todayYmd());
-  const plan = buildConvertPlan({ maxPlayerCount: m.maxPlayerCount, teamCount }, players);
+  const plan = buildConvertPlan({ maxPlayerCount: m.maxPlayerCount, maxTeamSize4Team: m.maxTeamSize4Team, teamCount }, players);
   return { m, teamCount, plan, refusal };
 }
 

@@ -34,7 +34,7 @@ import MoneyInput from "@/components/MoneyInput";
  * functions Match panel calls — pure functions of (teamCount, perTeam) and (total, teamCount), so
  * there is nothing panel-specific in them and nothing to fork. Reimplementing either here would
  * bring back the stale-rung bug that put production match 18125 at 5.5 players a team. */
-import { teamCountWrites, teamShapeError } from "@/lib/rosterEditModel";
+import { rungKeyFor, teamCountWrites, teamShapeError } from "@/lib/rosterEditModel";
 import { noteLogResponse } from "@/lib/logHealth";
 import LogHealthBanner from "@/components/LogHealthBanner";
 import { useAuth, canEditMatches } from "@/lib/useAuth";
@@ -540,15 +540,27 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
    * count alone is what put a match into 4-team mode reading a rung nobody had set. A capacity
    * that does not divide has no honest per-team figure to carry, so it is left exactly as stored
    * rather than reshaped behind the operator. */
+  /* THE SAVED CEILING FOR A TEAM COUNT, off the staged values so a rung edited earlier in this
+   * session counts. null for 3 teams, which the API models no rung for. */
+  const rungValue = (count: number): number | null => {
+    const k = rungKeyFor(count);
+    if (!k) return null;
+    return capNum(state[k]);
+  };
   const stageTeams = (target: number) => {
     set("teamNumbers", target);
     if (perTeamNow == null) return;
-    const writes = teamCountWrites(target, perTeamNow);
+    // The DESTINATION rung rides along: teamCountWrites raises a stale one and leaves a deliberate
+    // ceiling alone, so switching mode cannot throw away a 4-team max somebody set.
+    const writes = teamCountWrites(target, perTeamNow, rungValue(target));
     for (const [k, v] of Object.entries(writes)) set(k, v);
   };
+  /* SPOTS PER TEAM SETS THE CAPACITY, NOT THE CEILING — the same rule as Match panel, through the
+   * same function. It used to write the rung too, which turned a capacity edit into "and discard
+   * the auto-bump max". */
   const setPerTeam = (per: number) => {
     if (per < 1) return;
-    const writes = teamCountWrites(teamCount, per);
+    const writes = teamCountWrites(teamCount, per, rungValue(teamCount));
     for (const [k, v] of Object.entries(writes)) set(k, v);
   };
   const capContradiction = capacityContradiction(state, teamCount);
@@ -1121,12 +1133,13 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
               {shapeErr && <div className="ladderNote bad" data-testid="me-shape-err" style={{ marginTop: 4 }}>{shapeErr}</div>}
               <div className="grid" data-testid="capacity">
                 {capField("maxPlayerCount", "Capacity now", teamCount, "special event (no cap)")}
-                {/* ALWAYS RENDERED, as Match panel renders them. The 4-team rung GREYS OUT when
-                    auto bump is off rather than vanishing: a control that disappears reads as
-                    "this match has no 4-team total", which is a different claim from "this match
-                    will not grow into one". The stored number is still shown either way. */}
+                {/* BOTH RUNGS ARE ALWAYS EDITABLE. The 4-team one used to grey out when auto bump
+                    was off, on the reading that it is the bump destination. It is not: it is the
+                    total for the 4-team FORMAT, which a match that is already 4 teams has either
+                    way. 272 of the 433 4-team matches in Jul-Sep 2026 run with auto bump off, and
+                    none of them could state its own shape while this was grey. */}
                 {capField("maxTeamSize2Team", "Max spots, 2 teams", 2, "not available as a 2-team match")}
-                {capField("maxTeamSize4Team", "Max spots, 4 teams", 4, "not available as a 4-team match", !state.isAutoBump)}
+                {capField("maxTeamSize4Team", "Max spots, 4 teams", 4, "not available as a 4-team match")}
               </div>
               {capContradiction ? (
                 <div className="ladderNote" data-testid="cap-contradiction" style={{ marginTop: 4 }}>

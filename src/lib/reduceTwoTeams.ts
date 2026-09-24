@@ -43,6 +43,13 @@
 
 import { teamCountWrites, teamShapeError } from "./rosterEditModel";
 
+/** A stored rung as a number, or null when it is absent or unreadable. */
+const rungOf = (v: unknown): number | null => {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
 /** Ryan's number, and the default. 2 x 11 = 22, which divides by 2. */
 export const REDUCE_PER_TEAM = 11;
 export const REDUCE_TARGET_TEAMS = 2;
@@ -112,7 +119,10 @@ const key = (t: number, n: number) => `${t}:${n}`;
  * 2 x 11 match, and the second of two players sharing a spot.
  */
 export function buildReducePlan(
-  match: { maxPlayerCount?: unknown; teamCount: number },
+  /* maxTeamSize2Team rides in so the shape can RAISE a stale 2-team rung without lowering a
+   * deliberate one. Optional: absent means unknown, and teamCountWrites then writes it, which is
+   * the 18125-safe direction and exactly what this plan did before. */
+  match: { maxPlayerCount?: unknown; maxTeamSize2Team?: unknown; teamCount: number },
   players: ReducePlayer[],
   perTeam: number = REDUCE_PER_TEAM,
 ): ReducePlan {
@@ -123,7 +133,7 @@ export function buildReducePlan(
   const reals = live.filter((p) => !isFakeRow(p)).sort(bySignup);
   const capBefore = Number(match.maxPlayerCount) || 0;
 
-  const shape = teamCountWrites(targetTeams, perTeam);
+  const shape = teamCountWrites(targetTeams, perTeam, rungOf(match.maxTeamSize2Team));
   const base = {
     perTeam, targetTeams, total, shape,
     beforeMap: live.slice().sort(bySignup).map((p) => ({

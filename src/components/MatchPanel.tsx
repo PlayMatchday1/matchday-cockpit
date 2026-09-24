@@ -43,7 +43,7 @@ import {
 } from "@/lib/managerAssign";
 import {
   emptyPending, normalizePending, pendingCount, sortedTeam, spotsOfTeam, planMove, effectiveRow,
-  savePlan, clearApplied, teamCountWrites, teamShapeError,
+  savePlan, clearApplied, rungKeyFor, teamCountWrites, teamShapeError,
   playerKinds, teamMemberCount, textsForSelection, moneyKinds, teamMoney, sumMoney, rosterCounts,
   boardSlots, boardTeamFill, dropHint, gestureFor, usd, usdPlain,
   type Pending, type RosterOrigin, type EditRow, type PlannedWrite, type PlayerKind,
@@ -632,7 +632,10 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
     // A match whose stored capacity does not divide evenly has no honest per-team figure to carry,
     // so the capacity is left exactly as stored rather than reshaped behind the operator.
     if (per == null) return;
-    const writes = teamCountWrites(target, per);
+    /* THE DESTINATION RUNG RIDES ALONG so teamCountWrites can tell "stale, raise it" from "set on
+     * purpose, leave it". Without it, switching 18760 to 4 teams at 8 a side would write 32 over a
+     * 4-team max of 44 that the Premier ladder depends on. */
+    const writes = teamCountWrites(target, per, rungValue(target));
     setCur((c) => ({ ...c, ...writes }));
   };
   const stageRename = (teamId: number, value: string) => {
@@ -910,14 +913,25 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
    * team-count change and a capacity edit alike. */
   const shapeErr = teamShapeError(capacity, rosterTeamCount);
 
-  const rungKey: "maxTeamSize2Team" | "maxTeamSize4Team" | null =
-    teamCount === 2 ? "maxTeamSize2Team" : teamCount === 4 ? "maxTeamSize4Team" : null;
-  // Sets the TOTAL from a per-team figure, and touches ONLY this rung. The other rung is the
-  // alternate configuration the auto-bump ladder moves between; writing it would corrupt that.
+  const rungKey = rungKeyFor(teamCount);
+  /* THE SAVED CEILING FOR A GIVEN TEAM COUNT, read off the staged values so a rung edited earlier
+   * in this same session counts. null for 3 teams, which has no rung field at all. */
+  const rungValue = (count: number): number | null => {
+    const k = rungKeyFor(count);
+    if (!k) return null;
+    const v = Number(cur[k]);
+    return Number.isFinite(v) ? v : null;
+  };
+  /* SPOTS PER TEAM SETS THE CAPACITY. It does NOT set the ceiling.
+   *
+   * It used to write the rung too, so lowering Spots per team from 11 to 8 on match 18760 put
+   * "Max spots, 4 teams: 8 each (32)" into the pending diff over a saved 44 that nobody had
+   * touched — and 44 is the whole point of a Premier match that starts at 32 and bumps to 44.
+   * teamCountWrites now raises a rung that is below the new capacity and leaves a higher one
+   * alone, so the clamp is upward only. */
   const setPerTeam = (per: number) => {
-    const total = Math.max(teamCount, Math.round(per) * teamCount);
-    setField("maxPlayerCount", total);
-    if (rungKey) setField(rungKey, total);
+    const writes = teamCountWrites(teamCount, per, rungValue(teamCount));
+    for (const [k, v] of Object.entries(writes)) setField(k, v);
   };
 
   // ── ONE roster write, then the RE-READ that decides its verdict ─────────────────────────────────
@@ -1487,15 +1501,27 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange,
               title="Auto bump to tournament" sub="Grow the match to a tournament if it fills" />
             <div className="mp-grid">
               <label className="mp-f"><span className="mp-lb">MAX SPOTS, 2 TEAMS <em>total</em></span>
+                {/* 0 IS "NOT AVAILABLE AS THIS FORMAT", and it needs an option or the select cannot
+                    render what is stored. 88 live 2-team matches hold 0 here; without this option
+                    the box showed the FIRST size instead and one blur would have saved 16 over it. */}
                 <select data-testid="mp-max2" value={Number(cur.maxTeamSize2Team) || 0} className={isDirty("maxTeamSize2Team") ? "mp-chg" : ""} onChange={(e) => setField("maxTeamSize2Team", Number(e.target.value))}>
+                  <option value={0}>not available as a 2-team match</option>
                   {SIZES.map((v) => <option key={v} value={v * 2}>{v} × {v}</option>)}
                 </select>
-                <span className="mp-help">{(Number(cur.maxTeamSize2Team) || 0) / 2} v {(Number(cur.maxTeamSize2Team) || 0) / 2} = <b>{Number(cur.maxTeamSize2Team) || 0} spots</b></span></label>
+                {/* THE TOTAL IS THE NUMBER RIGHT OF THE EQUALS SIGN, always — the standing trap is a
+                    "10 x 10" control that sends 20. And 0 reads as unavailable, not as "0 spots". */}
+                <span className="mp-help">{Number(cur.maxTeamSize2Team) ? <>{Number(cur.maxTeamSize2Team) / 2} v {Number(cur.maxTeamSize2Team) / 2} = <b>{Number(cur.maxTeamSize2Team)} spots</b></> : "not available as a 2-team match"}</span></label>
               <label className="mp-f"><span className="mp-lb">MAX SPOTS, 4 TEAMS <em>total</em></span>
-                <select data-testid="mp-max4" value={Number(cur.maxTeamSize4Team) || 0} className={isDirty("maxTeamSize4Team") ? "mp-chg" : ""} disabled={!cur.isAutoBump} onChange={(e) => setField("maxTeamSize4Team", Number(e.target.value))}>
+                {/* NOT TIED TO AUTO BUMP. This is the total for the 4-TEAM FORMAT, which a match
+                    that is already 4 teams has whether or not it ever grows: 272 of the 433 4-team
+                    matches in Jul-Sep 2026 run with auto bump OFF, and greying this left every one
+                    of them unable to say it is 4 x 11. It also left the spots-per-team stepper as
+                    the only way to reach the field, which is the coupling above. */}
+                <select data-testid="mp-max4" value={Number(cur.maxTeamSize4Team) || 0} className={isDirty("maxTeamSize4Team") ? "mp-chg" : ""} onChange={(e) => setField("maxTeamSize4Team", Number(e.target.value))}>
+                  <option value={0}>not available as a 4-team match</option>
                   {SIZES.map((v) => <option key={v} value={v * 4}>{v} each</option>)}
                 </select>
-                <span className="mp-help">4 × {(Number(cur.maxTeamSize4Team) || 0) / 4} = <b>{Number(cur.maxTeamSize4Team) || 0} spots</b></span></label>
+                <span className="mp-help">{Number(cur.maxTeamSize4Team) ? <>4 × {Number(cur.maxTeamSize4Team) / 4} = <b>{Number(cur.maxTeamSize4Team)} spots</b></> : "not available as a 4-team match"}</span></label>
             </div>
           </Section>
 

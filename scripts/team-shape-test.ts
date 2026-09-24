@@ -18,7 +18,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { teamCountWrites, teamShapeError } from "../src/lib/rosterEditModel";
+import { rungKeyFor, teamCountWrites, teamShapeError } from "../src/lib/rosterEditModel";
 
 let pass = 0; const fails: string[] = [];
 const ok = (m: string) => { pass++; console.log(`  ✓ ${m}`); };
@@ -49,6 +49,84 @@ console.log("\na team-count change writes a TOTAL, not a per-side number");
   is("3 teams writes maxPlayerCount and NO rung", teamCountWrites(3, 6), { maxPlayerCount: 18 });
   is("…and specifically not the 4-team rung", "maxTeamSize4Team" in teamCountWrites(3, 6), false);
   is("a team count can never write a total below itself", teamCountWrites(4, 0).maxPlayerCount, 4);
+}
+
+console.log("\nbut it RAISES the rung and never lowers it");
+{
+  /* THE BUG. Match 18760 — Parmer Stadium - Premier, Austin — is a 4-team match whose capacity is
+   * 32 (4 x 8) and whose 4-team max is 44 (4 x 11): it starts at 32 and auto bump grows it to 44.
+   * Lowering Spots per team from 11 to 8 put "Max spots, 4 teams: 8 each (32)" into the pending
+   * diff over a 44 nobody had touched. These are that match's real stored numbers. */
+  is("18760: dropping to 8 a side writes the capacity and LEAVES the 44 alone",
+    teamCountWrites(4, 8, 44), { maxPlayerCount: 32 });
+  is("…so the pending diff carries no rung at all",
+    "maxTeamSize4Team" in teamCountWrites(4, 8, 44), false);
+  /* THE CONTROL. Passing no rung must still WRITE one, or the assertion above would pass for a
+   * function that had simply stopped writing rungs — which is the 18125 bug coming back. */
+  is("control: with no saved rung it still writes one",
+    teamCountWrites(4, 8), { maxPlayerCount: 32, maxTeamSize4Team: 32 });
+
+  /* 18125. It went 2 -> 4 teams carrying a stale 4-team rung of 22, and the player app divided 22
+   * by 4 and showed players 5.5 a team. A rung BELOW the new capacity is not a ceiling anyone set. */
+  is("18125: a stale rung of 22 under a new capacity of 28 is RAISED to 28",
+    teamCountWrites(4, 7, 22), { maxPlayerCount: 28, maxTeamSize4Team: 28 });
+  is("a rung exactly at the new capacity is left alone",
+    teamCountWrites(4, 7, 28), { maxPlayerCount: 28 });
+  /* 0 IS "NOT AVAILABLE AS THIS FORMAT", not a ceiling of zero — 88 live 2-team matches hold it.
+   * Left alone it would put a match into a format whose total says nobody can sign up. */
+  is("a rung of 0 is raised, because 0 means the format is unavailable",
+    teamCountWrites(2, 9, 0), { maxPlayerCount: 18, maxTeamSize2Team: 18 });
+  is("…and so is a null one", teamCountWrites(2, 9, null), { maxPlayerCount: 18, maxTeamSize2Team: 18 });
+
+  /* THE CLAMP IS UPWARD ONLY, IN BOTH DIRECTIONS OF THE EDIT. Stepping UP past the ceiling raises
+   * it; stepping back DOWN must not pull it with them. */
+  is("stepping up past the ceiling raises it", teamCountWrites(4, 12, 44), { maxPlayerCount: 48, maxTeamSize4Team: 48 });
+  is("…and stepping back down does not pull it back", teamCountWrites(4, 8, 48), { maxPlayerCount: 32 });
+
+  // THREE TEAMS STILL HAS NO RUNG, whatever is passed for one.
+  is("3 teams writes no rung even when a ceiling is handed to it", teamCountWrites(3, 6, 99), { maxPlayerCount: 18 });
+  is("rungKeyFor names the field each count writes",
+    [rungKeyFor(2), rungKeyFor(3), rungKeyFor(4)], ["maxTeamSize2Team", null, "maxTeamSize4Team"]);
+}
+
+console.log("\nand the 4-team rung is not an auto-bump-only field");
+{
+  /* BUG 2. "We sometimes start a match already at 4 teams of 11 (44 spots). In that case no auto
+   * bump is needed." Both surfaces greyed the 4-team rung on !isAutoBump, so a 4-team match with
+   * auto bump off could not state its own shape — 272 of the 433 4-team matches in Jul-Sep 2026
+   * run with auto bump off. Asserted as the ABSENCE of the coupling, with the presence of the
+   * control proven first: an absence check over a file that failed to read is free. */
+  const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const panel = strip(readFileSync("src/components/MatchPanel.tsx", "utf8"));
+  const ed = strip(readFileSync("src/app/(internal)/match-ops/matches/[id]/MatchEditor.tsx", "utf8"));
+
+  const max4 = panel.slice(panel.indexOf('data-testid="mp-max4"'), panel.indexOf('data-testid="mp-max4"') + 400);
+  if (/data-testid="mp-max4"/.test(panel)) ok("control: the 4-team rung control is on the panel");
+  else bad("control: the 4-team rung control is on the panel", "THE ABSENCE CHECKS BELOW ARE FREE");
+  if (!/disabled=\{!cur\.isAutoBump\}/.test(max4)) ok("…and it is not disabled on auto bump");
+  else bad("…and it is not disabled on auto bump", "4 TEAMS OF 11 WITH NO BUMP IS STILL UNREACHABLE");
+  // CONTROL: the panel DOES still disable other things, so the regex is not matching nothing.
+  if (/disabled=\{!cur\.autoCanceled/.test(panel)) ok("control: auto-cancel's own fields are still gated, so the pattern finds real disables");
+  else bad("control: the disabled= pattern finds real disables", "THE ABSENCE ABOVE PROVES NOTHING");
+
+  if (/capField\("maxTeamSize4Team"/.test(ed)) ok("control: the editor renders the 4-team rung");
+  else bad("control: the editor renders the 4-team rung", "THE ABSENCE CHECK BELOW IS FREE");
+  if (!/capField\("maxTeamSize4Team"[^)]*isAutoBump/.test(ed)) ok("…and does not pass isAutoBump as its disabled flag");
+  else bad("…and does not pass isAutoBump as its disabled flag", "STILL GREY IN THE FULL EDITOR");
+
+  /* 0 NEEDS AN OPTION OR THE SELECT CANNOT RENDER WHAT IS STORED. 88 live 2-team matches hold 0,
+   * and without the option the box showed the first SIZE instead — one blur from saving 16. */
+  if (/not available as a 4-team match/.test(panel) && /not available as a 2-team match/.test(panel))
+    ok("both rung selects can say 'not available', so a stored 0 renders as itself");
+  else bad("both rung selects can say 'not available'", "A STORED 0 SHOWS AS THE FIRST SIZE");
+
+  /* THE STEPPER MUST NOT BE THE ONLY WAY TO REACH THE RUNG — that was the coupling. */
+  const sp = panel.slice(panel.indexOf("const setPerTeam"), panel.indexOf("const runRosterWrite"));
+  if (/teamCountWrites\(teamCount, per, rungValue\(teamCount\)\)/.test(sp))
+    ok("the stepper hands the saved ceiling to teamCountWrites rather than overwriting it");
+  else bad("the stepper hands the saved ceiling to teamCountWrites", "SPOTS PER TEAM STILL CLOBBERS THE MAX");
+  if (!/setField\(rungKey, total\)/.test(sp)) ok("…and no longer writes the rung directly");
+  else bad("…and no longer writes the rung directly", "THE DIRECT WRITE IS BACK");
 }
 
 console.log("\nand it refuses a total that would show a fraction");
@@ -94,7 +172,7 @@ console.log("\nthe wiring");
 
   /* THE BUG IN ONE LINE WAS stageTeamCount STAGING teamCount ALONE. */
   const fn = panel.slice(panel.indexOf("const stageTeamCount"), panel.indexOf("const stageRename"));
-  if (/teamCountWrites\(target, per\)/.test(fn)) ok("stageTeamCount carries the capacity into the new mode");
+  if (/teamCountWrites\(target, per\b/.test(fn)) ok("stageTeamCount carries the capacity into the new mode");
   else bad("stageTeamCount carries the capacity into the new mode", "PUT {teamNumbers} ALONE IS BACK");
   if (/setCur\(\(c\) => \(\{ \.\.\.c, \.\.\.writes \}\)\)/.test(fn)) ok("…and stages it onto the match write");
   else bad("…and stages it onto the match write");
@@ -123,12 +201,12 @@ console.log("\nand the Master Schedule editor is the SAME implementation, not a 
   if (/export default function MatchEditor/.test(ed)) ok("control: MatchEditor was read");
   else bad("control: MatchEditor was read", "THE CHECKS BELOW WOULD PASS ON AN EMPTY STRING");
 
-  if (/import \{ teamCountWrites, teamShapeError \} from "@\/lib\/rosterEditModel"/.test(ed))
+  if (/import \{[^}]*\bteamCountWrites\b[^}]*\bteamShapeError\b[^}]*\} from "@\/lib\/rosterEditModel"/.test(ed))
     ok("it imports both shared functions");
   else bad("it imports both shared functions", "A SECOND COPY OF THE SHAPE");
-  if (/teamCountWrites\(target, perTeamNow\)/.test(ed)) ok("a team-count change goes through teamCountWrites");
+  if (/teamCountWrites\(target, perTeamNow\b/.test(ed)) ok("a team-count change goes through teamCountWrites");
   else bad("a team-count change goes through teamCountWrites", "PUT {teamNumbers} ALONE IS BACK ON THIS SCREEN");
-  if (/teamCountWrites\(teamCount, per\)/.test(ed)) ok("…and so does the spots-per-team stepper");
+  if (/teamCountWrites\(teamCount, per\b/.test(ed)) ok("…and so does the spots-per-team stepper");
   else bad("…and so does the spots-per-team stepper");
 
   /* THE COUNT IS READ, NOT GUESSED BETWEEN TWO. The old expression is asserted ABSENT by its

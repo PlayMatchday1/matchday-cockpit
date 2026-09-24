@@ -68,7 +68,7 @@ const todayYmd = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chi
 
 type ApiMatch = {
   id: number; name?: string; startDate?: string | null; isCancelled?: unknown;
-  maxPlayerCount?: unknown; teams?: unknown[]; players?: Record<string, unknown>[];
+  maxPlayerCount?: unknown; maxTeamSize2Team?: unknown; teams?: unknown[]; players?: Record<string, unknown>[];
 };
 
 /* THE SAME MAPPING convert-4 USES, deliberately: a fake is `user.isFakePlayer` on the payload, and
@@ -91,7 +91,7 @@ const toPlayers = (m: ApiMatch): ReducePlayer[] =>
 async function planFor(env: "production" | "staging", id: string, perTeam: number) {
   const m = await apiGet<ApiMatch>(env, `/admin/matches/${id}`);
   const teamCount = (m.teams ?? []).length;
-  const plan = buildReducePlan({ maxPlayerCount: m.maxPlayerCount, teamCount }, toPlayers(m), perTeam);
+  const plan = buildReducePlan({ maxPlayerCount: m.maxPlayerCount, maxTeamSize2Team: m.maxTeamSize2Team, teamCount }, toPlayers(m), perTeam);
   const refusal = reduceRefusal({ startDate: m.startDate ?? null, isCancelled: m.isCancelled, teamCount }, todayYmd());
   return { m, teamCount, plan, refusal };
 }
