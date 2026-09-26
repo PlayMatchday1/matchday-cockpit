@@ -89,12 +89,26 @@ type Args = {
   p_play_mode: PlayMode;
   p_play_from: string | null;
   p_play_to: string | null;
-  /** HOME city — the city on the player's account (preferable_city_name). NOT where they played. */
+  /** HOME city — the city on the player's account (preferable_city_name). NOT where they played,
+   *  and NOT the confined boundary. An operator's own choice of filter. */
   p_city: string | null;
   p_member: Member;
-  /** Home city IS NULL. 4,010 players have none, and a "= Austin" filter has always dropped them
-   *  silently; this is what makes them reachable. */
+  /** Home city IS NULL. A large population has none, and a "= Austin" filter has always dropped
+   *  them silently; this is what makes them reachable. The count moves, so it is not quoted here:
+   *  the three figures previously written down in this codebase were all stale. */
   p_city_unset: boolean;
+  /* ── THE CONFINED BOUNDARY. NOT A FILTER, AND NOT EITHER OF THE TWO CITIES ABOVE. ────────────
+   * Set from auth.confinedCity and from nothing else — never from the query string. A row is in
+   * scope when its home city is this city OR the player has played a match in it. Null for an
+   * unconfined account, which has no boundary at all.
+   *
+   * THREE CITY PARAMETERS NOW, AND THEY ARE DELIBERATELY NOT INTERCHANGEABLE:
+   *   p_city        the operator's HOME-CITY filter          (they choose it)
+   *   p_match_city  the operator's PLAYED-AT filter          (they choose it)
+   *   p_scope_city  the boundary they cannot choose at all   (their account decides)
+   * Conflating the first two cost Warsaw its never-played signups; conflating either with this
+   * one would do it again. */
+  p_scope_city: string | null;
   // ── PLAYED AT — filters on the MATCHES, not on the player (migration 0147) ──
   p_match_city: string | null;
   p_field_id: number | null;
@@ -131,7 +145,7 @@ type PageRow = {
 const DEFAULTS: Record<string, unknown> = {
   p_search: null, p_reg_from: null, p_reg_to: null, p_history: "any",
   p_play_mode: "any", p_play_from: null, p_play_to: null, p_city: null, p_member: "any",
-  p_city_unset: false, p_match_city: null, p_field_id: null,
+  p_city_unset: false, p_match_city: null, p_scope_city: null, p_field_id: null,
   p_kick_from: null, p_kick_to: null, p_match_from: null, p_match_to: null,
 };
 function compact(args: Record<string, unknown>): Record<string, unknown> {
@@ -211,8 +225,17 @@ export async function GET(req: Request) {
   const scopeCheck = assertScope(auth.confinedCity, asked === "all" ? null : asked, auth.confinedCity !== null);
   if (!scopeCheck.ok) return Response.json({ error: scopeCheck.error }, { status: scopeCheck.status });
 
-  let scope: string | null = auth.confinedCity;
-  if (!scope && asked && asked !== "all") {
+  /* ── THE BOUNDARY AND THE FILTER, SEPARATED ─────────────────────────────────────────────────
+   * `scope` used to be both: a confined account's city was pushed into p_city, which is the HOME
+   * CITY filter, so the boundary WAS "home city = mine" and could be nothing else.
+   *
+   * Under the union that would re-narrow the set one line after widening it, so the boundary moves
+   * to its own parameter and p_city goes back to meaning only what its name says. A confined
+   * account that genuinely wants to filter to home-city-Warsaw can still pass ?city=WAW and gets
+   * exactly that, intersected with its boundary; assertScope above still refuses any other city. */
+  const boundary: string | null = auth.confinedCity;
+  let scope: string | null = null;
+  if (asked && asked !== "all") {
     if (!resolveCityScope(asked)) {
       return Response.json({ error: `${JSON.stringify(asked)} is not a known city.` }, { status: 400 });
     }
@@ -338,6 +361,7 @@ export async function GET(req: Request) {
     p_history: history,
     p_play_mode, p_play_from, p_play_to,
     p_city: scope ? cityNameFor(scope) : null,
+    p_scope_city: boundary ? cityNameFor(boundary) : null,
     p_member: member,
     p_city_unset: url.searchParams.get("homeCity") === "unset",
     p_match_city: matchCity ? cityNameFor(matchCity) : null,
