@@ -45,8 +45,11 @@ ok(await p.$$eval(D('match-tile'), es => es.length) > 0, '  CONTROL: and the til
 // ══ 2. THE APP'S OWN LANGUAGE ═════════════════════════════════════════════════════════════════
 const rail = await p.$eval(`${D('match-tile')}[data-state="planned"]`, e => getComputedStyle(e).borderLeftColor);
 ok(/44, 219, 135/.test(rail), `a planned tile keeps its mint rail (${rail})`);
-const dashed = await p.$eval(`${D('match-tile')}[data-state="none"]`, e => getComputedStyle(e).borderStyle);
-ok(dashed === 'dashed', '  and a tile with no push stays dashed');
+/* ASKED OF data-cover, NOT data-state. A tile whose own plan is "none" may now be COVERED by a
+   general push, and covered is a dotted rail rather than a dashed border. The dashed state means
+   nothing at all, not even a slate blast, which is what the third state was introduced to separate. */
+const dashed = await p.$eval(`${D('match-tile')}[data-cover="none"]`, e => getComputedStyle(e).borderStyle);
+ok(dashed === 'dashed', '  and a tile with NOTHING at all stays dashed');
 
 // ══ 3. THE RAMP ═══════════════════════════════════════════════════════════════════════════════
 const ramp = await p.evaluate(() => {
@@ -98,14 +101,18 @@ ok(!/no plan/i.test(strip), `the headline does not report a shortfall ("${strip}
 const mm = strip.match(/(\d+) of (\d+)/);
 ok(!!mm, `  and reads N of M ("${strip}")`);
 const liveTiles = await p.$$eval(`${D('match-tile')}:not([data-state="cancelled"])`, es => es.length);
-const plannedTiles = await p.$$eval(`${D('match-tile')}[data-state="planned"]`, es => es.length);
+/* N IS OWN PLUS COVERED. A match a general push carried is promoted; counting only its own push
+   would report the week emptier than it is, which is what counting up was meant to stop. */
+const plannedTiles = await p.$$eval(
+  `${D('match-tile')}[data-cover="planned"], ${D('match-tile')}[data-cover="covered"], ${D('match-tile')}[data-cover="needs-decision"]`,
+  es => es.length);
 ok(mm && Number(mm[2]) === liveTiles, `  M is every non-cancelled match (${mm?.[2]} against ${liveTiles} tiles)`);
-ok(mm && Number(mm[1]) === plannedTiles, `  N is every match carrying a push (${mm?.[1]} against ${plannedTiles})`);
+ok(mm && Number(mm[1]) === plannedTiles, `  N is every match carrying or covered by a push (${mm?.[1]} against ${plannedTiles})`);
 const cancelledTiles = await p.$$eval(`${D('match-tile')}[data-state="cancelled"]`, es => es.length);
 ok(cancelledTiles === 0 || Number(mm[2]) < liveTiles + cancelledTiles,
   `  CONTROL: and ${cancelledTiles} cancelled tiles are excluded from it`);
 
-const tilesWithPush = await p.$$eval(`${D('match-tile')}[data-state="planned"]`, es => es.length);
+const tilesWithPush = await p.$$eval(`${D('match-tile')}[data-cover="planned"]`, es => es.length);
 let queued = 0;
 for (let i = 0; i < 7; i++) {
   await p.click(`${D('day-tab')}[data-d="${i}"]`);
@@ -120,6 +127,7 @@ for (let i = 0; i < 7; i++) {
 // The sum is asserted rather than the days, since a day counted twice shows up nowhere else.
 ok(queued > 0 && tilesWithPush > 0, `the week has ${tilesWithPush} planned tiles and the seven days hold ${queued} pushes`);
 ok(queued >= tilesWithPush, '  CONTROL: at least one push per planned tile, since a tile is planned only if it has one');
+
 /* THE PAYLOAD, FETCHED FROM NODE WITH A REAL TOKEN. An in-page fetch() has no Authorization
    header — the page attaches one per request — so it came back as an error object and the
    assertion died on `undefined.reduce` rather than reporting anything. */
@@ -127,8 +135,15 @@ const { token } = await storageStateFor('rmancuso@playmatchday.com', BASE);
 const apiRes = await fetch(`${BASE}/api/match-promotion`, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
 const apiJson = await apiRes.json();
 const apiWeek = apiJson.week ?? apiJson;
-const allDated = (apiWeek.matches ?? []).reduce((s, m) => s + (m.plan?.pushes ?? []).filter(x => x.pushAt).length, 0);
-ok(queued === allDated, `  and they are EXACTLY the week's dated pushes (${queued} against the payload's ${allDated})`);
+/* THE WEEK'S DATED PUSHES ARE MATCH PUSHES PLUS GENERAL ONES. They come from one table (0191)
+   and the queue is one projection of it; counting only the match pushes would make the queue look
+   like it had invented rows. */
+const datedMatch = (apiWeek.matches ?? []).reduce((s, m) => s + (m.plan?.pushes ?? []).filter(x => x.pushAt).length, 0);
+const datedGeneral = (apiWeek.generals ?? []).filter(g => g.pushAt).length;
+const allDated = datedMatch + datedGeneral;
+ok(queued === allDated,
+  `  and they are EXACTLY the week's dated pushes (${queued} against ${datedMatch} match + ${datedGeneral} general = ${allDated})`);
+ok(datedGeneral > 0, '  CONTROL: general pushes are in that total, so the sum is not match-only by accident');
 
 // ══ 5. IT OPENS ON TODAY ══════════════════════════════════════════════════════════════════════
 await load();
@@ -243,6 +258,192 @@ for (const vw of [390, 1320]) {
       && e.getBoundingClientRect().height < 31.5).map(e => e.textContent.trim().slice(0, 20)));
   ok(small.length === 0, `  ${vw}px: every control at least 32px${small.length ? ': ' + small.slice(0, 4).join(' / ') : ''}`);
 }
+
+// ══ R2a. THE PHONE CAME ALONG ═════════════════════════════════════════════════════════════════
+/* THE THREE STATES ON THE PHONE, READ OFF THE COMPUTED RAIL AND NOT OFF THE CLASS LIST. This is
+   the assertion that caught border-l-dotted emitting nothing: the class was on the element, the
+   markup looked right, and the rail rendered SOLID — identical to an own push, which is the one
+   distinction the third state exists to make. */
+await load(390);
+await p.click(D('m-tab-week'));
+await p.waitForSelector(D('m-row'), { timeout: 20000 });
+const mob = await p.evaluate(() => {
+  const rows = [...document.querySelectorAll('[data-testid="m-row"]')];
+  const styleOf = c => {
+    const r = rows.find(e => e.dataset.cover === c);
+    return r ? getComputedStyle(r).borderLeftStyle : null;
+  };
+  return {
+    rows: rows.length,
+    own: rows.filter(e => e.dataset.cover === 'planned').length,
+    covered: rows.filter(e => e.dataset.cover === 'covered').length,
+    none: rows.filter(e => e.dataset.cover === 'none').length,
+    ownStyle: styleOf('planned'), coverStyle: styleOf('covered'), noneStyle: styleOf('none'),
+    coverTags: document.querySelectorAll('[data-testid="m-cover-tag"]').length,
+    tags: document.querySelectorAll('[data-testid="m-tag"]').length,
+    maxTags: Math.max(0, ...rows.map(r => r.querySelectorAll('[data-testid="m-tag"]').length)),
+  };
+});
+// CONTROL FIRST: every count below is zero on a phone view that did not render its week.
+ok(mob.rows > 0, `CONTROL: the phone rendered its week (${mob.rows} rows), so the counts below are not free`);
+ok(mob.own > 0 && mob.none > 0, `  the phone carries the same states as the grid (own ${mob.own}, covered ${mob.covered}, none ${mob.none})`);
+ok(mob.ownStyle === 'solid' && mob.noneStyle === 'dashed',
+  `  own is SOLID and no plan is DASHED on the phone too (${mob.ownStyle} / ${mob.noneStyle})`);
+ok(mob.covered === 0 || (mob.coverStyle === 'dotted' && mob.coverTags > 0),
+  `  and a covered row is DOTTED and names what carried it (${mob.coverStyle}, ${mob.coverTags} labelled)`);
+ok(mob.maxTags <= 3, `  no phone row renders more than three tag pills (max ${mob.maxTags})`);
+await p.click(D('m-tab-due'));
+await p.waitForSelector(D('m-due'), { timeout: 20000 });
+const dueScopes = await p.$$eval(D('m-due-scope'), es => es.map(e => e.textContent.trim()));
+const dueCards = await p.$$eval(D('m-due-card'), es => es.length);
+ok(dueCards > 0, `CONTROL: the phone's due list rendered (${dueCards} cards)`);
+/* ONE QUEUE SOURCE, BOTH SURFACES. The phone flattened week.matches itself before, so a general
+   push existed on the desktop queue and nowhere here. Asserted only when the week has one. */
+ok(dueScopes.length > 0 || mob.covered === 0,
+  `  a general push reaches the phone's due list too (${dueScopes.join(', ') || 'none this week'})`);
+
+// ══ R2. THREE COVERAGE STATES, GENERAL PUSHES, TAGS, CODES ════════════════════════════════════
+await load();
+const cov = await p.evaluate(() => ({
+  own: document.querySelectorAll('[data-testid="match-tile"][data-cover="planned"]').length,
+  covered: document.querySelectorAll('[data-testid="match-tile"][data-cover="covered"]').length,
+  none: document.querySelectorAll('[data-testid="match-tile"][data-cover="none"]').length,
+  cancelled: document.querySelectorAll('[data-testid="match-tile"][data-cover="cancelled"]').length,
+  live: document.querySelectorAll('[data-testid="match-tile"]:not([data-cover="cancelled"])').length,
+}));
+ok(cov.own > 0 && cov.covered > 0 && cov.none > 0,
+  `all three coverage states are on screen at once (own ${cov.own}, covered ${cov.covered}, none ${cov.none})`);
+const rails = await p.evaluate(() => {
+  const g = sel => { const e = document.querySelector(sel); return e ? getComputedStyle(e).borderLeftStyle : null; };
+  return { own: g('[data-testid="match-tile"][data-cover="planned"]'), covered: g('[data-testid="match-tile"][data-cover="covered"]') };
+});
+ok(rails.own === 'solid' && rails.covered === 'dotted',
+  `  own push is a SOLID rail, covered is DOTTED (${rails.own} / ${rails.covered})`);
+ok(await p.$$eval('[data-testid="cover-tag"]', es => es.length) === cov.covered,
+  '  and every covered tile names what carried it, so the mark is never a mystery');
+// CONTROL: a general push covers its OWN DAY only, so a week with one still has matches reading no plan.
+ok(cov.none > 0, 'a week with general pushes in it still has matches reading no plan');
+// CONTROL: the three sum to the city's live matches, per city. A match counted twice or missed
+// shows up nowhere else on the page.
+/* READ OFF THE HEADER'S OWN NUMBERS, NOT OFF ITS TEXT. The row reads "3 of 4 · 1 covered" now,
+   so a digit-scrape sums the denominator into the total and reports 8 of 4. Each figure is asserted
+   against the tiles UNDER that header, in both directions: own against planned + needs-decision,
+   covered against covered, and the denominator against the live tiles. The remainder is no plan,
+   which is why the word does not have to appear for the arithmetic to hold. */
+const perCity = await p.$$eval('[data-testid="city-block"]', es => es.map(e => {
+  const h = e.querySelector('[data-testid="city-counts"]');
+  const n = s => e.querySelectorAll(`[data-testid="match-tile"][data-cover="${s}"]`).length;
+  return {
+    city: e.querySelector('h2')?.textContent.trim(),
+    own: Number(h?.dataset.own), covered: Number(h?.dataset.covered), live: Number(h?.dataset.live),
+    tOwn: n('planned') + n('needs-decision'), tCovered: n('covered'),
+    tLive: e.querySelectorAll('[data-testid="match-tile"]:not([data-cover="cancelled"])').length,
+    text: h?.textContent.replace(/\s+/g, ' ').trim(),
+  };
+}));
+ok(perCity.length > 0 && perCity.every(x =>
+    x.own === x.tOwn && x.covered === x.tCovered && x.live === x.tLive
+    && x.own + x.covered <= x.live),
+  `  CONTROL: own + covered + no plan equals each city's live matches (${perCity.map(x => `${x.own}+${x.covered}+${x.live - x.own - x.covered}=${x.tLive}`).join(', ')})`);
+/* AND THE ROW PRINTS THE FRACTION IT HOLDS. The data attributes above could agree with the tiles
+   while the text said something else entirely. */
+ok(perCity.every(x => x.text.startsWith(`${x.own} of ${x.live}`)
+    && (x.covered === 0 ? !/covered/.test(x.text) : x.text.includes(`${x.covered} covered`))),
+  `  and prints it, covered omitted at zero ("${perCity[0].text}")`);
+// AND THE HEADLINE COUNTS OWN PLUS COVERED.
+const strip2 = await p.$eval(D('strip-counts'), e => e.textContent.replace(/\s+/g, ' ').trim());
+const m2 = strip2.match(/(\d+) of (\d+)/);
+ok(m2 && Number(m2[1]) === cov.own + cov.covered + (await p.$$eval('[data-testid="match-tile"][data-cover="needs-decision"]', es => es.length)),
+  `  the headline counts own PLUS covered ("${strip2}")`);
+ok(m2 && Number(m2[2]) === cov.live, `  and its denominator excludes cancelled (${m2?.[2]} against ${cov.live})`);
+
+// ── THE GENERAL PUSH IS IN THE SAME QUEUE ────────────────────────────────────────────────────
+const genDay = await p.evaluate(async () => {
+  const tabs = [...document.querySelectorAll('[data-testid="day-tab"]')];
+  for (let i = 0; i < tabs.length; i++) {
+    tabs[i].click(); await new Promise(r => setTimeout(r, 200));
+    if (document.querySelector('[data-testid="queue-scope"]')) return i;
+  }
+  return -1;
+});
+ok(genDay >= 0, `a general push sits in the same queue as the match pushes (day ${genDay})`);
+if (genDay >= 0) {
+  const gq = await p.evaluate(() => ({
+    scopes: [...document.querySelectorAll('[data-testid="queue-scope"]')].map(e => e.textContent.trim()),
+    audience: document.querySelector('[data-testid="queue-audience"]')?.textContent.trim(),
+    reach: document.querySelector('[data-testid="queue-reach"]')?.textContent.trim(),
+    marks: [...document.querySelectorAll('[data-testid="queue-row"]')].filter(r => r.querySelector('[data-testid="queue-scope"]') && /Mark sent/.test(r.textContent)).length,
+  }));
+  ok(gq.scopes.some(t => /CITY|FIELD/.test(t)), `  labelled with its scope (${gq.scopes.join(', ')})`);
+  ok(!!gq.audience, `  and carrying its audience, which a tile has no room for ("${gq.audience}")`);
+  ok(/\d+ match(es)?$/.test(gq.reach ?? ''), `  with the reach it actually has, pluralised ("${gq.reach}")`);
+  ok(gq.marks > 0, '  CONTROL: and the same Mark sent, because the operator\u2019s action is unchanged');
+}
+// CREATED FROM THE CITY, and NOT from the queue, which still creates nothing.
+const addN = await p.$$eval(D('add-general'), es => es.length);
+const cityN = await p.$$eval(D('city-block'), es => es.length);
+ok(addN === cityN, `each city header offers a General push control (${addN} of ${cityN})`);
+ok(await p.$$eval(`${D('day-queue')} ${D('add-general')}`, es => es.length) === 0,
+  '  CONTROL: and not in the queue, which still creates nothing');
+const addH = await p.$eval(D('add-general'), e => e.getBoundingClientRect().height);
+ok(addH >= 32, `  at ${Math.round(addH)}px`);
+
+// ── TAGS ─────────────────────────────────────────────────────────────────────────────────────
+const tagInfo = await p.evaluate(() => {
+  const pills = [...document.querySelectorAll('[data-testid="tag"]')];
+  const byKey = {};
+  for (const e of pills) if (!byKey[e.dataset.t]) byKey[e.dataset.t] = getComputedStyle(e).color;
+  return {
+    labels: [...new Set(pills.map(e => e.textContent.trim()))],
+    colours: byKey,
+    bg: pills[0] ? getComputedStyle(pills[0]).backgroundColor : null,
+    titled: pills.filter(e => e.getAttribute('title')).length, total: pills.length,
+    maxPerTile: Math.max(0, ...[...document.querySelectorAll('[data-testid="tags"]')].map(g => g.querySelectorAll('[data-testid="tag"]').length)),
+    more: document.querySelectorAll('[data-testid="tag-more"]').length,
+    keyItems: document.querySelectorAll('[data-testid="tag-key-item"]').length,
+    keyText: document.querySelector('[data-testid="tag-key"]')?.textContent ?? '',
+  };
+});
+ok(tagInfo.labels.includes('KEY FIELD'), `the manual tags render (${tagInfo.labels.join(', ')})`);
+ok(!tagInfo.labels.includes('NEW FIELD'), '  CONTROL: and none of them says NEW FIELD, the automatic badge\u2019s words');
+ok(await p.$$eval(D('new-badge'), es => es.length) > 0, '  CONTROL: while the automatic NEW badges are untouched and still there');
+const tagCols = Object.values(tagInfo.colours);
+ok(tagCols.length >= 3 && new Set(tagCols).size === tagCols.length, `${tagCols.length} tags on screen, ${new Set(tagCols).size} distinct colours`);
+// CONTROL: the collision check, not merely a count. Four distinct colours that include mint would
+// pass a count and fail a reader.
+const TAKEN = ['rgb(44, 219, 135)', 'rgb(244, 196, 48)', 'rgb(232, 134, 42)', 'rgb(217, 69, 47)', 'rgb(143, 42, 23)', 'rgb(0, 51, 38)'];
+ok(tagCols.every(c => !TAKEN.includes(c)), `  CONTROL: and none is a colour the page already uses (${tagCols.join(' | ')})`);
+ok(tagInfo.bg === 'rgba(0, 0, 0, 0)', `a tag is outlined, not filled (${tagInfo.bg})`);
+const chipBg = await p.$eval(D('risk-chip'), e => getComputedStyle(e).backgroundColor).catch(() => null);
+ok(chipBg === null || chipBg !== tagInfo.bg, `  CONTROL: while the cancel chip stays filled (${chipBg})`);
+ok(tagInfo.maxPerTile <= 3, `no tile renders more than three tag pills (max ${tagInfo.maxPerTile})`);
+ok(tagInfo.more > 0, `  and a field with more than three shows the rest as a count (${tagInfo.more} tiles)`);
+ok(tagInfo.titled === tagInfo.total, `  CONTROL: every tag carries its meaning on hover (${tagInfo.titled} of ${tagInfo.total})`);
+/* THE KEY LISTS ONLY WHAT IS IN USE. Asserted against the tags actually rendered somewhere on the
+   page rather than against a constant, so a key that listed all four when only two were in use
+   would fail. */
+const rendered = new Set(Object.keys(tagInfo.colours));
+ok(tagInfo.keyItems >= rendered.size && tagInfo.keyItems <= 4,
+  `the key lists the tags in use (${tagInfo.keyItems} items, ${rendered.size} distinct tags rendered on tiles)`);
+ok(/Starting 11 promo code is live/.test(tagInfo.keyText), '  and says what each one means');
+ok(await p.$$eval('[data-testid="add-tag"]', es => es.length) === 0,
+  'CONTROL: no sub-32px add-tag control was invented to fit the tile row');
+const toggleH = await p.$$eval(D('tag-toggle'), es => es.map(e => Math.round(e.getBoundingClientRect().height))).catch(() => []);
+ok(toggleH.length === 0 || Math.min(...toggleH) >= 32, `  tags are set from the panel, at ${toggleH[0] ?? 'n/a'}px`);
+
+// ── CODES PER CHANNEL ────────────────────────────────────────────────────────────────────────
+const codeInfo = await p.evaluate(() => {
+  const rows = [...document.querySelectorAll('[data-testid="queue-row"]')];
+  return {
+    codes: [...document.querySelectorAll('[data-testid="queue-code"]')].map(e => e.textContent.trim()),
+    onChip: [...document.querySelectorAll('[data-testid="queue-code"]')].every(e => e.closest('[data-testid="queue-chan"]') !== null),
+    bare: rows.some(r => r.querySelector('[data-testid="queue-chan"]') && !r.querySelector('[data-testid="queue-code"]')),
+  };
+});
+ok(codeInfo.codes.length === 0 || codeInfo.onChip,
+  `each code sits on its own channel chip rather than on the row (${codeInfo.codes.length} codes)`);
+ok(codeInfo.codes.every(c => c === c.toUpperCase()), `  and every one is normalised to upper case (${codeInfo.codes.join(', ')})`);
+ok(codeInfo.bare, '  CONTROL: a push with no code shows its channels bare rather than inventing one');
 
 // ══ 12. THE CANCEL SECTION IS GONE, AND THE SCALE IS NOT ══════════════════════════════════════
 await load();

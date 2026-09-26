@@ -18,7 +18,9 @@
 // SAME DATA, SAME ROUTES, SAME WRITES. Every figure here is computed by the desktop's own helpers
 // and passed in; nothing is re-derived and no count is redefined.
 
-import { CHANNELS, NEW_FLAG_LABEL, channelsOn, codeFor, coverageCaption, coverageStateOf, coverageSummary, datedPushes, fmtPushIn, isPushOverdue, isPushSent, leadToKickoff, sentStamp, venueOffsetMs, type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode } from "@/lib/matchPromotion";
+import { CHANNELS, NEW_FLAG_LABEL, channelsOn, codeFor, coverLabel, coverageCaption, coverageOf, coverageStateOf, coverageSummary, datedPushes, fmtPushIn, isPushOverdue, isPushSent, leadToKickoff, sentStamp, venueOffsetMs, type GeneralPush, type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode } from "@/lib/matchPromotion";
+import { TAG_META, splitTags, type TagKey } from "@/lib/promoTags";
+import type { QueueEntry } from "@/lib/promoDayQueue";
 import MarkPushSent from "@/components/MarkPushSent";
 import PushPlanEditor from "@/components/PushPlanEditor";
 import PageComments from "@/components/PageComments";
@@ -36,9 +38,19 @@ export type MobileProps = {
   /** The tile's cancel history, keyed on field and weekday with times clustered. Optional so the
    *  phone renders uncoloured rather than crashing if the cancel data has not loaded. */
   riskOf?: (m: PromoMatch) => { cancelCount: 1 | 2 | 3 | 4; booked: number; times: string[] } | null;
+  /* THE PHONE DERIVES NO COVERAGE OF ITS OWN. Same map the desktop's tiles, city headers and
+   * headline read, passed down — a second derivation is how two surfaces end up describing
+   * different sets while both look right. */
+  coverOf: (m: PromoMatch) => ReturnType<typeof coverageOf>;
+  /** The general pushes that carried it, for the label. Empty unless coverOf is "covered". */
+  coversOf: (m: PromoMatch) => GeneralPush[];
+  /** This match's field tags, keyed on the field upstream. */
+  tagsOf: (m: PromoMatch) => TagKey[];
   tab: "due" | "week" | "coverage";
   setTab: (t: "due" | "week" | "coverage") => void;
-  jobs: { m: PromoMatch; p: PromoPush; at: number }[];
+  /* THE SAME ROWS THE DESKTOP QUEUE HOLDS, general pushes included. `m` is null on a general
+   * one: it belongs to no match, which is the whole point of it. */
+  jobs: QueueEntry[];
   overdue: number;
   openId: number | null;
   draft: MobileDraft | null;
@@ -102,13 +114,18 @@ function Due({ jobs, overdue, now, zone, onOpen, onReload, onError }: {
         </div>
       </div>
       {jobs.length === 0 && <p className="px-3 pb-4 text-[12.5px] text-deep-green/40">Nothing scheduled this week.</p>}
-      {jobs.map(({ m, p, at }) => {
+      {jobs.map(({ m, p, at, general }) => {
         /* SENT GOES QUIET, NOT AWAY — the row stays on the list so everyone can see it was done. */
         const sent = isPushSent(p);
         const late = isPushOverdue(p, now);
         const soon = !sent && !late && at - now < 12 * 3600_000;
-        const t = fmtPushIn(p.pushAt, zone, offsetOf(m));
+        /* A GENERAL PUSH HAS NO MATCH TO TAKE A VENUE OFFSET FROM, so its time renders in the
+         * reader's own clock rather than in a venue clock that does not exist for it. */
+        const t = fmtPushIn(p.pushAt, m ? zone : "me", m ? offsetOf(m) : null);
         const chan = CHANNELS.find((c) => c.key === p.channel);
+        /* THE CHIP CARRIES ITS OWN CODE, one per channel. A push with no code shows its channel
+         * bare; nothing is invented. */
+        const code = p.promoCode?.trim() || null;
         return (
           <div key={p.id} data-testid="m-due-card" data-push-id={p.id} data-channel={p.channel}
             data-sent={sent ? "1" : "0"} data-late={late ? "1" : "0"}
@@ -120,24 +137,40 @@ function Due({ jobs, overdue, now, zone, onOpen, onReload, onError }: {
                 sent ? "text-deep-green/45 line-through" : late ? "text-coral" : soon ? "text-amber-700" : ""}`}>
                 {late ? "Overdue · " : ""}{t.day} {t.time}
               </span>
-              <i data-testid="m-due-chan" className={`inline-flex h-[19px] min-w-[27px] items-center justify-center rounded-[5px] border px-[5px] text-[9.5px] font-extrabold not-italic ${
+              <span data-testid="m-due-chan" className={`inline-flex h-[19px] min-w-[27px] items-center justify-center gap-1 rounded-[5px] border px-[5px] text-[9.5px] font-extrabold ${
                 sent ? "border-cream-line bg-[#eef3f0] text-deep-green/40" : "border-mint/50 bg-mint-soft/50 text-emerald-700"}`}>
-                {chan?.short ?? p.channel}
-              </i>
+                <i className="not-italic">{chan?.short ?? p.channel}</i>
+                {code && <i data-testid="m-due-code" className="not-italic tracking-[0.03em] opacity-80">{code}</i>}
+              </span>
+              {/* THE SCOPE, SAID OUT LOUD. A general push looks like a match push at a glance and
+                  is not one; the label is what stops it being read as a push for a fixture. */}
+              {general && (
+                <i data-testid="m-due-scope" className="rounded-[5px] border border-deep-green/25 bg-[#eef3f0] px-[5px] py-px text-[9px] font-extrabold not-italic tracking-[0.05em] text-deep-green/70">
+                  {general.scope === "city" ? "CITY" : "FIELD"}
+                </i>
+              )}
               {sent && <span data-testid="m-due-stamp" className="text-[11px] text-deep-green/45">{sentStamp(p)}</span>}
               {/* THE SAME CONTROL THE DESKTOP STRIP USES, not a second implementation of one. */}
               <MarkPushSent push={p} onDone={onReload} onError={onError} />
-              <button type="button" data-testid="m-send"
-                onClick={(e) => onOpen(m, e.currentTarget as HTMLElement)}
-                className="min-h-[32px] px-1 text-[12px] font-extrabold text-emerald-700">
-                Send ›
-              </button>
+              {/* NO SEND › ON A GENERAL PUSH. There is no match panel to open, and a control that
+                  opened nothing would be a fake affordance. Mark sent is the action it has. */}
+              {m && (
+                <button type="button" data-testid="m-send"
+                  onClick={(e) => onOpen(m, e.currentTarget as HTMLElement)}
+                  className="min-h-[32px] px-1 text-[12px] font-extrabold text-emerald-700">
+                  Send ›
+                </button>
+              )}
             </div>
             {/* THE TOPIC IS WHAT TELLS TWO PUSHES ON ONE MATCH APART. */}
             {p.topic && <div data-testid="m-due-topic" className="mt-1 text-[12px] text-deep-green/55">{p.topic}</div>}
-            {/* A phone has no column headers, so the row carries field, kick-off AND city. */}
+            {/* A phone has no column headers, so the row carries field, kick-off AND city. A
+                general push has no kick-off; it carries its audience instead, which is the thing
+                the operator needs to judge whether the blast was enough. */}
             <div className="mb-[7px] mt-0.5 text-[12.5px] text-deep-green/65" data-testid="m-due-what">
-              {m.venue} · {DOW[m.dayIdx]} {m.time} · {m.city}
+              {m ? <>{m.venue} · {DOW[m.dayIdx]} {m.time} · {m.city}</>
+                 : <>{general!.scope === "city" ? general!.city : `${general!.city} · one field`}
+                     {general!.audience ? <> · <span data-testid="m-due-audience">{general!.audience}</span></> : null}</>}
             </div>
           </div>
         );
@@ -169,19 +202,30 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode }) {
                 </span>
               )}
             </div>
-            {dayMatches.map((m) => (
+            {dayMatches.map((m) => {
+              /* ── THE SAME THREE COVERAGE STATES AS THE GRID, NO FOURTH ──────────────────────
+               *   own push   SOLID mint rail    this match got its own push
+               *   covered    DOTTED mint rail   a city or field push carried it
+               *   no plan    dashed, no rail    nothing at all, not even a slate blast
+               * border-l-dotted IS NOT A TAILWIND CLASS — see the Tile note in
+               * MatchPromotionView. The inline style is the only way to dot one edge. */
+              const cover = p.coverOf(m);
+              const covers = p.coversOf(m);
+              const { shown: shownTags, more: moreTags } = splitTags(p.tagsOf(m));
+              return (
               <div key={m.apiId}>
                 <div data-testid="m-row" data-state={m.state} data-api-id={m.apiId}
                   onClick={(e) => onOpen(m, e.currentTarget as HTMLElement)}
-                  data-new={m.newFlag ?? ""} data-r={p.riskOf?.(m)?.cancelCount ?? 0}
+                  data-new={m.newFlag ?? ""} data-r={p.riskOf?.(m)?.cancelCount ?? 0} data-cover={cover}
                   data-booked={m.state === "cancelled" ? String(m.playerCount ?? 0) : undefined}
+                  style={cover === "covered" ? { borderLeftStyle: "dotted" } : undefined}
                   /* NO bg-white IN THE BASE — see the Tile note in MatchPromotionView: it ties
                      with the wash class on specificity and wins on emission order. */
                   className={`mb-2 rounded-[11px] border px-3 py-[11px] ${
                     m.state === "cancelled" ? "border-dashed border-cream-line bg-[#f7f8f7]"
                     : M_WASH[p.riskOf?.(m)?.cancelCount ?? 0]
-                    ?? (m.state === "needs-decision" ? "border-amber-300 bg-amber-50"
-                    : m.state === "none" ? "border-dashed border-cream-line bg-white" : "border-cream-line border-l-[3px] border-l-mint bg-white")} ${
+                    ?? (cover === "needs-decision" ? "border-amber-300 bg-amber-50"
+                    : cover === "none" ? "border-dashed border-cream-line bg-white" : "border-cream-line border-l-[3px] border-l-mint bg-white")} ${
                     m.apiId === openId ? "border-deep-green shadow-[0_0_0_2px_#e6efe9]" : ""}`}>
                   <div className="flex items-baseline gap-2">
                     <span className={`text-[15px] font-black tabular-nums ${m.state === "cancelled" ? "text-deep-green/40 line-through" : ""}`}>{m.time}</span>
@@ -218,6 +262,31 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode }) {
                       </span>
                     </div>
                   )}
+                  {/* EVERY COVERED ROW NAMES WHAT CARRIED IT. A dotted rail with no explanation is
+                      a mystery, and on a phone there is no tooltip to fall back on. */}
+                  {cover === "covered" && covers.length > 0 && (
+                    <div data-testid="m-cover-tag" className="mt-[3px] text-[11px] font-bold text-emerald-700">
+                      {coverLabel(covers[0], m.venue)}{covers.length > 1 ? ` +${covers.length - 1}` : ""}
+                    </div>
+                  )}
+                  {/* TAGS: OUTLINED, NEVER FILLED, three then a count — the row already spends
+                      filled pills on the cancel ratio and the NEW badge. */}
+                  {shownTags.length > 0 && (
+                    <div className="mt-1.5 flex flex-wrap gap-1" data-testid="m-tags">
+                      {shownTags.map((t) => (
+                        <i key={t} data-testid="m-tag" data-t={t} title={TAG_META[t].meaning}
+                          className="rounded-[4px] border px-[5px] py-px text-[9px] font-extrabold not-italic tracking-[0.03em]"
+                          style={{ color: TAG_META[t].colour, borderColor: TAG_META[t].colour, background: "transparent" }}>
+                          {TAG_META[t].label}
+                        </i>
+                      ))}
+                      {moreTags > 0 && (
+                        <i data-testid="m-tag-more" className="rounded-[4px] border border-cream-line px-[5px] py-px text-[9px] font-extrabold not-italic text-deep-green/45">
+                          +{moreTags}
+                        </i>
+                      )}
+                    </div>
+                  )}
                   {/* ONLY WHAT IS PLANNED — see the Tile note in MatchPromotionView. An unlit chip,
                       an absent code and an absent push are one fact stated three times. */}
                   {(channelsOn(m.plan).length > 0 || firstCode(m)) && (
@@ -239,7 +308,7 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode }) {
                       )}
                     </div>
                   )}
-                  {m.state === "needs-decision" && (
+                  {cover === "needs-decision" && (
                     <div className="mt-[7px] text-[11.5px] font-bold text-amber-700">Needs a decision</div>
                   )}
                 </div>
@@ -247,7 +316,8 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode }) {
                     place in a sixty-row list, and there is nothing here that needs to trap focus. */}
                 {m.apiId === openId && panel}
               </div>
-            ))}
+              );
+            })}
           </div>
         );
       })}
@@ -429,7 +499,8 @@ export default function MatchPromotionMobile(p: MobileProps) {
       )}
       {tab === "week" && (
         <div className="px-3.5 pb-6 pt-3 text-[11.5px] leading-[1.8] text-deep-green/65">
-          A dashed row has no plan. Amber needs a push date.
+          A solid mint rail is this match&rsquo;s own push. A dotted one means a city or field slate
+          blast carried it. A dashed row has no plan at all. Amber needs a push date.
         </div>
       )}
     </div>

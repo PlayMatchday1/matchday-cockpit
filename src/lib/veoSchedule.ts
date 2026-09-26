@@ -173,6 +173,10 @@ export type VeoMatch = {
   isCancelled: boolean;
   /** Bookings on the match. The cancelled tile's headline figure on Match Promotion. */
   playerCount: number | null;
+  /* THE FIELD'S ID, not its title. Match Promotion's tags are keyed on the field, and a title is
+   * edited upstream and normalised three different ways in this codebase; an id is none of those
+   * things. Null on a match with no field, which then simply has no tags. */
+  fieldId: number | null;
   /** The WALL CLOCK stamp exactly as the mirror holds it, Z and all. Never `new Date()` this —
    *  it travels only so that `startDate − startDateUtc` can give the venue's offset. */
   startDate: string | null;
@@ -233,7 +237,7 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
      * week and how many players had booked, and the booked figure is the whole point: a
      * cancellation with 16 booked cost sixteen players, one with 1 was never going to run. One
      * more column on a row already being read. Every existing consumer ignores it. */
-    .select("api_id, name, city_identifier, field_title, start_date, start_date_utc, registration_price, player_count, is_cancelled, deleted_at, synced_at")
+    .select("api_id, name, city_identifier, field_id, field_title, start_date, start_date_utc, registration_price, player_count, is_cancelled, deleted_at, synced_at")
     .is("deleted_at", null)
     .gte("start_date", ymd(mon))
     .lte("start_date", `${ymd(sun)}T23:59:59`);
@@ -285,6 +289,7 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
        * so `isCancelled` reads false for every row it receives — which is true of what it got. */
       isCancelled: r.is_cancelled === true,
       playerCount: (r as { player_count?: number | null }).player_count ?? null,
+      fieldId: (r as { field_id?: number | null }).field_id ?? null,
     });
   }
 
@@ -332,7 +337,7 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
 export type VeoRangeMatch = /* THE RANGE ROW ALREADY SAYS BOTH OF THESE, under its own names: `cancelled` and `players`, which
  * it has carried since the month grid needed them. Omitted rather than duplicated — two fields for
  * one fact on one row is how they drift. */
-Omit<VeoMatch, "dayIdx" | "isCancelled" | "playerCount"> & {
+Omit<VeoMatch, "dayIdx" | "isCancelled" | "playerCount" | "fieldId"> & {
   /** YYYY-MM-DD, wall clock — the day the match is played at the pitch. */
   date: string;
   /* ── FOUR MORE COLUMNS OFF THE SAME ROW ───────────────────────────────────────────────────

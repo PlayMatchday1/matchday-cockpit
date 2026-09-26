@@ -9,9 +9,14 @@
  * tile that disagree is the one failure this page cannot afford, so the queue is a projection of
  * `week.matches` and never a second list. It creates nothing: the plans are made on the week below.
  */
-import { datedPushes, isPushOverdue, isPushSent, type PromoMatch, type PromoWeek, type PromoPush } from "./matchPromotion";
+import { datedPushes, generalPushDayIdx, isPushOverdue, isPushSent,
+  type GeneralPush, type PromoMatch, type PromoWeek, type PromoPush } from "./matchPromotion";
 
-export type QueueEntry = { m: PromoMatch; p: PromoPush; at: number };
+/* ONE ROW SHAPE FOR BOTH. A general push sits in the same queue with the same Mark sent, and the
+ * operator's action is unchanged; what it adds is a scope label and an audience, because a tile has
+ * no room for "all registered in Atlanta" and the operator needs it to judge whether the blast was
+ * enough. `m` is null for a general push — it belongs to no match, which is the whole point. */
+export type QueueEntry = { m: PromoMatch | null; p: PromoPush; at: number; general?: GeneralPush };
 export type DayQueue = {
   dayIdx: number;
   /** Unsent and the moment has gone. Shown first, in its own group. */
@@ -26,8 +31,20 @@ export type DayQueue = {
 
 /** Every dated push in the week, tagged with the day column it belongs to. */
 export function weekQueueEntries(week: PromoWeek): QueueEntry[] {
-  return week.matches.flatMap((m) =>
+  const own: QueueEntry[] = week.matches.flatMap((m) =>
     datedPushes(m.plan).map((p) => ({ m, p, at: Date.parse(p.pushAt as string) })));
+  /* GENERAL PUSHES COME FROM THE SAME TABLE and join the same list. An undated one is not in the
+   * queue for the same reason an undated match push is not: a worklist is ordered by time. */
+  const general: QueueEntry[] = (week.generals ?? [])
+    .filter((g) => g.pushAt)
+    .map((g) => ({
+      m: null, general: g, at: Date.parse(g.pushAt as string),
+      p: {
+        id: g.id, matchApiId: 0, channel: g.channel, pushAt: g.pushAt, topic: g.topic,
+        promoCode: g.promoCode, pushedAt: g.pushedAt, pushedBy: g.pushedBy,
+      } as PromoPush,
+    }));
+  return [...own, ...general];
 }
 
 /* A PAST WEEK HAS NOTHING OUTSTANDING. Nothing in a week that has been and gone should ask the
@@ -45,7 +62,7 @@ export function isPastWeek(week: PromoWeek, now: number = Date.now()): boolean {
 export function dayQueue(week: PromoWeek, dayIdx: number, now: number = Date.now()): DayQueue {
   const past = isPastWeek(week, now);
   const mine = weekQueueEntries(week)
-    .filter((e) => e.m.dayIdx === dayIdx)
+    .filter((e) => (e.general ? generalPushDayIdx(e.general, week.days) === dayIdx : e.m?.dayIdx === dayIdx))
     .sort((a, b) => a.at - b.at);
   const done = mine.filter((e) => isPushSent(e.p));
   const unsent = mine.filter((e) => !isPushSent(e.p));

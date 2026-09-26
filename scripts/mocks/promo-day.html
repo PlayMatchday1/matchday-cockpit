@@ -1,0 +1,579 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Promotion by day</title>
+<style>
+  /* THE APP'S OWN TOKENS, from globals.css. The first pass invented a palette; this one does not. */
+  :root{ --cream-line:#d3dcd8; --deep-green:#003326; --mint:#2cdb87; --mint-soft:#d5f7e6;
+    --coral:#ff6955; --coral-soft:#ffe0da; --bg:#f4f7f5; --card:#fff; --ink:#12241d;
+    --mut:#5c6f66; --faint:#8b9a92; --emerald:#047857;
+    /* THE CANCEL RAMP: yellow, orange, light red, dark red for 1, 2, 3, 4.
+     * MONOTONIC, WHICH THE EXISTING ONE IS NOT. MatchPromotionView.tsx:649-652 runs #e6a532 amber
+     * at 2, then #7d3220 at 3 — a very dark maroon — then #c0392b at 4, which is brighter. So 3
+     * currently reads heavier than 4, which is backwards, and it is why maroon-against-red was
+     * hard to separate: they are not ordered. This ramp gets steadily darker as it gets worse, so
+     * severity is legible without reading the number, and the number is printed anyway. */
+    --c1:#F4C430; --c1t:#3A2A00;   /* 1 of 4 — yellow  */
+    --c2:#E8862A; --c2t:#2E1B00;   /* 2 of 4 — orange  */
+    --c3:#D9452F; --c3t:#ffffff;   /* 3 of 4 — light red */
+    --c4:#8F2A17; --c4t:#ffffff; } /* 4 of 4 — dark red  */
+  /* LIGHT BY DEFAULT, like the app. The first pass followed prefers-color-scheme and went dark on
+     a machine set to dark, which is not a choice this page makes anywhere else. Dark is reachable
+     for testing with data-theme, and nothing else turns it on. */
+  :root[data-theme="dark"]{ --bg:#101413; --card:#171c1a; --ink:#e8efea; --mut:#8fa096;
+    --faint:#6b7c73; --cream-line:#26302c; --deep-green:#d5f7e6; --mint-soft:#163a28;
+    --emerald:#35C77F; }
+  *{box-sizing:border-box}
+  body{margin:0;padding:18px 16px 40px;background:var(--bg);color:var(--ink);
+    font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1320px;margin:0 auto}
+  h1{font-size:21px;font-weight:900;letter-spacing:-.3px;margin:0 0 2px;text-transform:uppercase}
+  .sub{font-size:12px;color:var(--mut);margin:0 0 13px}
+  .weeknav{display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+  .arrow{appearance:none;border:1px solid var(--cream-line);background:var(--card);color:var(--ink);
+    border-radius:9px;min-width:32px;min-height:32px;cursor:pointer;font:inherit}
+  .arrow:disabled{opacity:.35;cursor:default}
+  .weeklabel{font-size:13.5px;font-weight:800}
+  .seg{display:inline-flex;border:1px solid var(--cream-line);border-radius:999px;overflow:hidden;background:#f2f5f3}
+  :root[data-theme="dark"] .seg{background:var(--card)}
+  .seg button{appearance:none;border:0;background:transparent;cursor:pointer;font:inherit;
+    font-size:12px;font-weight:700;color:var(--mut);padding:6px 14px;min-height:32px}
+  .seg button[aria-pressed="true"]{background:var(--deep-green);color:#fff}
+  :root[data-theme="dark"] .seg button[aria-pressed="true"]{color:#0b1a14}
+  .sect{font-size:11px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--mut);
+    margin:18px 0 8px}
+
+  /* ── THE QUEUE. Seven day tabs, today first, in the same mint-for-done, coral-for-missing
+     language the rest of the page speaks rather than a palette of its own. ─────────────────── */
+  .days{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-bottom:10px}
+  .day{appearance:none;font:inherit;cursor:pointer;text-align:left;background:var(--card);
+    border:1px solid var(--cream-line);border-radius:11px;padding:8px 9px;min-height:32px;
+    display:flex;flex-direction:column;gap:4px;color:var(--ink);min-width:0}
+  .day[aria-selected="true"]{border-color:var(--mint);box-shadow:0 0 0 2px var(--mint-soft)}
+  .day .dow{font-size:10px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--mut)}
+  .day[data-today="1"] .dow{color:var(--emerald)}
+  .day .dnum{font-size:16px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
+  .pips{display:flex;gap:4px;flex-wrap:wrap;font-size:10px;font-weight:800;font-variant-numeric:tabular-nums}
+  .pip{border-radius:5px;padding:1px 5px;white-space:nowrap}
+  .pip.done{background:var(--c1);color:var(--faint)}
+  .pip.todo{background:var(--mint-soft);color:var(--emerald)}
+  .pip.late{background:var(--coral);color:#fff}
+  .pip.gap{background:var(--coral-soft);color:#b0301c}
+  .pip.cx{background:#e9edeb;color:var(--mut);text-decoration:line-through}
+  :root[data-theme="dark"] .pip.gap{background:#3a1d17;color:var(--coral)}
+
+  .panel{background:var(--card);border:1px solid var(--cream-line);border-radius:12px;overflow:hidden}
+  .phead{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;justify-content:space-between;
+    padding:11px 13px;border-bottom:1px solid var(--cream-line)}
+  .ptitle{font-size:13.5px;font-weight:800}
+  .pcount{font-size:11.5px;color:var(--mut);font-variant-numeric:tabular-nums}
+  .blabel{font-size:9.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--mut);
+    padding:10px 13px 4px}
+  .push{display:flex;align-items:center;gap:10px;padding:8px 13px;border-top:1px solid #eef3f0}
+  :root[data-theme="dark"] .push{border-top-color:#1e2523}
+  .push[data-state="late"]{background:#fff6f4}
+  :root[data-theme="dark"] .push[data-state="late"]{background:#2a1a17}
+  .when{font-size:12.5px;font-weight:800;font-variant-numeric:tabular-nums;min-width:64px}
+  .pbody{flex:1;min-width:0}
+  .l1{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .pfield{font-size:12.5px;font-weight:700}
+  .mt{font-size:11px;color:var(--faint)}
+  .stamp{font-size:10.5px;color:var(--faint);white-space:nowrap}
+  /* A GENERAL PUSH IS THE SAME ROW WITH A WIDER TARGET. Nothing about marking it done changes. */
+  .scope{font-size:8.5px;font-weight:800;letter-spacing:.05em;border-radius:4px;padding:1px 5px;
+    background:var(--deep-green);color:#fff}
+  :root[data-theme="dark"] .scope{color:#0b1a14}
+  .reach{font-size:10.5px;color:var(--mut);font-weight:600}
+  /* THE CODE SITS ON THE CHANNEL, NOT ON THE ROW. Two channels, two codes, side by side, so the
+     operator can see at a glance that the test is actually set up rather than sharing one code. */
+  .chpair{display:inline-flex;align-items:center;gap:2px}
+  .code{font-size:9px;font-weight:800;letter-spacing:.03em;border-radius:4px;padding:1px 4px;
+    border:1px solid var(--amber-b,#fcd34d);background:#fffbeb;color:#92400e;font-style:normal}
+  :root[data-theme="dark"] .code{background:#2a2412;border-color:#6b5a1f;color:#e6a532}
+  .mark{appearance:none;font:inherit;font-size:12px;font-weight:800;cursor:pointer;border-radius:9px;
+    min-height:32px;padding:0 13px;border:0;background:var(--deep-green);color:#fff;white-space:nowrap}
+  :root[data-theme="dark"] .mark{color:#0b1a14}
+  .sentmark{font-size:11px;font-weight:700;color:var(--emerald)}
+  .latetag{font-size:9.5px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;color:#fff;
+    background:var(--coral);border-radius:5px;padding:2px 6px}
+  .fold{appearance:none;border:0;background:transparent;font:inherit;font-size:11.5px;font-weight:700;
+    color:var(--mut);cursor:pointer;padding:9px 13px;min-height:32px;text-decoration:underline;
+    text-underline-offset:3px;text-decoration-color:var(--cream-line);display:block;width:100%;text-align:left}
+  .empty{padding:13px;font-size:12.5px;color:var(--mut)}
+  .allgood{color:var(--emerald);font-weight:700}
+
+  /* ── THE WEEK, KEPT. City down, seven days across: the layout the page already has and the one
+     the first pass threw away. ──────────────────────────────────────────────────────────────── */
+  .city{margin-top:16px}
+  .cityhead{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:7px}
+  .cityname{font-size:15px;font-weight:800}
+  .citystat{font-size:11.5px;color:var(--mut)}
+  .citystat b{color:var(--ink)}
+  .citynew{font-size:11.5px;font-weight:800;color:var(--emerald)}
+  .genpill{font-size:11px;font-weight:700;color:var(--emerald);background:var(--mint-soft);
+    border-radius:5px;padding:1px 6px}
+  /* CREATED FROM THE CITY, because that is the object it is scoped to. A field push is made from
+     here too, with the field picked in the sheet; a field is not an object anywhere else on the
+     page that a control could hang off. */
+  .addgen{appearance:none;font:inherit;font-size:11px;font-weight:700;cursor:pointer;border-radius:8px;
+    min-height:32px;padding:0 10px;border:1px dashed var(--mint);background:transparent;
+    color:var(--emerald);margin-left:auto}
+  .gridscroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .grid{display:grid;grid-template-columns:repeat(7,minmax(146px,1fr));gap:7px;min-width:1050px}
+  .col{background:var(--card);border:1px solid var(--cream-line);border-radius:11px;padding:7px;min-height:96px}
+  .col[data-today="1"]{border-color:var(--mint);box-shadow:0 0 0 2px var(--mint-soft)}
+  .colhead{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+  .coldow{font-size:9.5px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--mut)}
+  .colnum{font-size:12.5px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--mut)}
+  .nosess{font-size:11px;color:var(--faint)}
+
+  /* THE TILE. Border language unchanged: mint left rail = a push exists, dashed = none. */
+  .tile{border:1px solid var(--cream-line);border-radius:9px;background:var(--card);
+    padding:7px 8px;margin-bottom:6px}
+  .tile:last-child{margin-bottom:0}
+  /* ── THREE STATES, NOT TWO. A general push is real promotion, so a match it covers must not read
+   * as forgotten. But it is not the same as a push written for that match, so it must not read as
+   * the same either. The middle state is the whole point of the feature.
+   *   own      full mint rail   this match got its own push
+   *   covered  dotted mint rail a city or field push carried it
+   *   none     dashed           nothing at all, not even a slate blast
+   * That keeps "no plan" meaning what it says, which is the number the old header got wrong. */
+  .tile[data-state="planned"]{border-left:3px solid var(--mint)}
+  .tile[data-state="covered"]{border-left:3px dotted var(--mint)}
+  .tile[data-state="none"]{border-style:dashed}
+  .covtag{font-size:9px;font-weight:700;color:var(--emerald);margin-top:5px;display:block}
+  /* ── A CANCELLED MATCH, IN A WEEK THAT HAS BEEN AND GONE ────────────────────────────────────
+   * Its own state, not a variant of "no plan": nothing was missed, the match was called off.
+   * Struck time and a muted body so it reads as gone at a glance.
+   *
+   * THE BOOKED COUNT IS THE POINT, so it is the loudest thing on the tile rather than a footnote.
+   * A cancellation with 16 booked cost you sixteen players and is a different event entirely from
+   * one with 1 booked, which was never going to run. Rendering both as "cancelled" throws away the
+   * only number that tells them apart, and it is the number that decides whether the slot moves. */
+  .tile[data-state="cancelled"]{background:#f7f8f7;border-color:var(--cream-line);border-style:solid}
+  .tile[data-state="cancelled"] .ttime{text-decoration:line-through;color:var(--faint);font-weight:700}
+  .tile[data-state="cancelled"] .tvenue{color:var(--faint)}
+  .xline{display:flex;align-items:baseline;gap:5px;margin-top:5px}
+  .xtag{font-size:8.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;
+    color:var(--mut);background:#e9edeb;border-radius:4px;padding:1px 5px}
+  .booked{font-size:11px;font-weight:800;font-variant-numeric:tabular-nums}
+  .booked[data-heavy="1"]{color:var(--c4)}
+  .booked[data-heavy="0"]{color:var(--faint)}
+  .citycx{font-size:11.5px;font-weight:800;color:var(--c4)}
+  .trow{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
+  .ttime{font-size:12.5px;font-weight:800}
+  .tvenue{font-size:11px;line-height:1.25;color:var(--mut);margin-top:1px}
+  .badges{display:flex;gap:4px;flex-shrink:0;align-items:center}
+  .newb{border-radius:4px;background:var(--deep-green);color:#fff;font-size:8.5px;font-weight:800;
+    letter-spacing:.04em;padding:1px 5px;white-space:nowrap}
+  :root[data-theme="dark"] .newb{color:#0b1a14}
+  .chips{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}
+  .chip{display:inline-flex;height:18px;min-width:24px;align-items:center;justify-content:center;
+    border-radius:5px;border:1px solid rgba(44,219,135,.4);background:rgba(213,247,230,.4);
+    padding:0 4px;font-size:9.5px;font-weight:800;color:var(--emerald)}
+  .pushline{font-size:10px;color:var(--mut);margin-top:5px;line-height:1.3}
+  .pushline b{color:var(--ink)}
+
+  /* ── CANCEL HISTORY, ON THE TILE, in the app's own ramp at all four levels.
+   * THE WASH IS ONLY AT 3 AND 4, and that is a decision rather than timidity: level 2 is amber in
+   * this ramp, and amber on a tile ALREADY means "needs a decision" on this very page
+   * (border-amber-300 bg-amber-50, MatchPromotionView.tsx:491). Washing a tile amber for a cancel
+   * count would make one colour answer two questions on one card. So 2 states itself in the chip
+   * and leaves the tile alone. Worth confirming rather than inheriting from me.
+   *
+   * THE RATIO IS ALWAYS PRINTED. #c0392b against #7d3220 is a hard pair to separate at tile size,
+   * which was my objection to this ramp; printing 3/4 answers it without replacing a scale
+   * operators have already learned. */
+  .rchip{border-radius:4px;font-size:8.5px;font-weight:800;padding:1px 5px;white-space:nowrap;
+    font-variant-numeric:tabular-nums}
+  .rchip[data-r="4"]{background:var(--c4);color:var(--c4t)}
+  .rchip[data-r="3"]{background:var(--c3);color:var(--c3t)}
+  .rchip[data-r="2"]{background:var(--c2);color:var(--c2t)}
+  .rchip[data-r="1"]{background:var(--c1);color:var(--c1t)}
+  /* THE TILE IS WASHED AT EVERY LEVEL, since all four now have a colour of their own, and the wash
+     tracks the chip so the two never disagree. Light at 1 and 2 so a board of ones does not read
+     as a board on fire; heavier at 3 and 4 where it should stop you.
+     ONE THING TO WATCH: 2 is orange and "needs a decision" on this page is amber
+     (border-amber-300 bg-amber-50, MatchPromotionView.tsx:491). They are neighbours. If a tile can
+     ever be both at once, that pair needs separating before this ships. */
+  .tile[data-r="1"]{background:rgba(244,196,48,.13)}
+  .tile[data-r="2"]{background:rgba(232,134,42,.15)}
+  .tile[data-r="3"]{background:rgba(217,69,47,.15)}
+  .tile[data-r="4"]{background:rgba(143,42,23,.15)}
+  /* ── TAGS. Manually added, several per field, each its own colour.
+   * OUTLINED, NOT FILLED, and that is the whole reason they are safe here. The tile already spends
+   * filled pills on two other things: the cancel ratio and the NEW badges. A filled red tag would
+   * read as a 4/4 cancel at a glance. Outline is one structural difference that keeps the three
+   * classes apart before colour is even considered.
+   * The colours deliberately avoid the families already in use: mint is push state, yellow through
+   * dark red is cancel history, deep green is NEW, amber is needs-a-decision and the promo code. */
+  .tags{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}
+  .tag{font-size:8.5px;font-weight:800;letter-spacing:.03em;border-radius:4px;padding:1px 5px;
+    background:transparent;border:1px solid currentColor;white-space:nowrap}
+  .tag[data-t="key"]{color:#2563EB}
+  .tag[data-t="prio"]{color:#7C3AED}
+  .tag[data-t="s11"]{color:#DB2777}
+  .tag[data-t="ptnr"]{color:#0891B2}
+  .tag.more{color:var(--faint);border-color:var(--cream-line)}
+  /* THE KEY, AND ONLY FOR TAGS ACTUALLY IN USE THIS WEEK. A permanent legend listing every tag
+     that could exist is a legend nobody reads, which this codebase has already written down once. */
+  .key{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:0 0 10px;
+    font-size:11px;color:var(--mut)}
+  .keyitem{display:inline-flex;align-items:center;gap:5px}
+  .legend{font-size:11px;color:var(--faint);margin:10px 0 0}
+  @media (max-width:820px){
+    .pip .w{display:none}
+    .days{gap:4px} .day{padding:7px 4px;align-items:center;text-align:center}
+    .pips{justify-content:center}
+  }
+</style>
+<body>
+<div class="wrap">
+  <h1>Match promotion</h1>
+  <p class="sub">Which matches get promoted, on which channels, and when the push goes out.</p>
+
+  <div class="weeknav">
+    <button class="arrow" data-testid="wk-prev" aria-label="Previous week">‹</button>
+    <span class="weeklabel" data-testid="weeklabel"></span>
+    <button class="arrow" data-testid="wk-next" aria-label="Next week">›</button>
+    <span class="seg" data-testid="view">
+      <button data-v="plan" aria-pressed="true">Plan</button>
+      <button data-v="coverage" aria-pressed="false">Coverage</button>
+    </span>
+  </div>
+
+  <div class="sect">Pushes to send</div>
+  <div class="days" role="tablist" data-testid="days" id="days"></div>
+  <div class="panel" data-testid="panel" id="panel"></div>
+
+  <div class="sect">The week</div>
+  <div class="key" data-testid="key" id="key"></div>
+  <div id="week"></div>
+  <p class="legend" data-testid="legend">Tags are set from the tile itself. A mint rail means a push is set. A dashed tile means none. A struck tile is a match that was cancelled, with the number of players who had booked. The chip on the right is how often that field has cancelled on that weekday in the last four weeks.</p>
+</div>
+
+<script>
+/* ════════════════════════════════════════════════════════════════════════════════════════════
+ * REAL WEEK, Mon 14 – Sun 20 Sep, Atlanta and Austin exactly as the page renders them, every NEW
+ * badge and every push line included. The per-city counts are COMPUTED from these rows and
+ * reproduce the page's own headers: Atlanta 2 planned · 6 no plan · 1 new; Austin 7 planned ·
+ * 24 no plan · 8 new.
+ *
+ * CANCEL COUNTS ARE ILLUSTRATIVE — four weeks of history was not pulled for this mock. A build
+ * reads them from getCancelPatterns, whose cancelCount is already typed 1|2|3|4 with absent
+ * meaning a plain tile.
+ * ══════════════════════════════════════════════════════════════════════════════════════════ */
+/* TWO WEEKS. The current one is the real Mon 14 – Sun 20 read off the page. The previous one is
+ * ILLUSTRATIVE, built to exercise the case Ryan asked for: go back a week and see what cancelled,
+ * with the number of players each cancelled match was carrying. A build reads cancellations from
+ * the match rows themselves (mdapi_matches.is_cancelled with player_count), and getCancelPatterns
+ * already carries bookedCount per cancelled slot for the same purpose. */
+const TODAY = "thu";
+const NOW = { day:"thu", mins: 15*60 };
+const DAYS = [{k:"mon",dow:"Mon",n:14},{k:"tue",dow:"Tue",n:15},{k:"wed",dow:"Wed",n:16},
+  {k:"thu",dow:"Thu",n:17},{k:"fri",dow:"Fri",n:18},{k:"sat",dow:"Sat",n:19},{k:"sun",dow:"Sun",n:20}];
+const DIDX = Object.fromEntries(DAYS.map((d,i)=>[d.k,i]));
+const MIN = t => { const m=t.match(/(\d+):(\d+) (AM|PM)/); let h=+m[1]%12; if(m[3]==="PM") h+=12; return h*60+ +m[2]; };
+const isOverdue = (k,t) => DIDX[k] < DIDX[NOW.day] || (k===NOW.day && MIN(t) < NOW.mins);
+
+/* TAGS PER FIELD. Manual, several per field. KEY is Ryan's "new field" tag renamed: NEW FIELD is
+ * already an automatic badge computed against last week's slate, and two pills reading the same
+ * words, one earned and one typed, makes the earned one untrustworthy. */
+const TAGDEF = { key:{label:"KEY FIELD", why:"worth watching this week"},
+                 prio:{label:"PRIORITY",  why:"needs attention before the others"},
+                 s11:{label:"STARTING 11",why:"Starting 11 promo code is live"},
+                 ptnr:{label:"PARTNER",   why:"run with a partner operator"} };
+const TAGS = {
+  "NEMP": ["key","s11"], "Hattrick": ["prio"], "Crockett High School": ["key"],
+  "Parmer": ["s11"], "PRUMC": ["prio","s11"], "Hattrick T.": ["ptnr"],
+  "Keswick Park (Chamblee)": ["key","prio","s11","ptnr"],
+};
+const tagsOf = f => TAGS[f] ?? [];
+
+const RISK = { "Hattrick":4, "Parmer":3, "NEMP":2, "Round Rock":2, "Westlake":1,
+  "PRUMC":0, "Keswick Park (Chamblee)":0, "Crockett High School":0, "Stony Point":0 };
+const riskOf = f => RISK[f] ?? 0;
+
+// [time, venue, newFlag|null, chips[]|null, pushLine|null, cancelled?, bookedCount?]
+const CUR = {
+  "Atlanta": {
+    mon:[["7:00 PM","PRUMC",null,null,null],
+         ["8:00 PM","Keswick Park (Chamblee)","NEW DAY",["WA","MC","SMS"],"Push <b>Mon 12:00 PM</b> · 7h before and <b>2</b> more"]],
+    tue:[["7:00 PM","PRUMC",null,null,null]],
+    wed:[["8:00 PM","Keswick Park (Chamblee)",null,null,null]],
+    thu:[["7:00 PM","PRUMC",null,null,null]],
+    fri:[["7:00 PM","PRUMC",null,null,null],
+         ["8:00 PM","Keswick Park (Chamblee)",null,["WA"],"Push <b>Fri 3:27 PM</b> · 4h before"]],
+    sat:[], sun:[["6:00 PM","PRUMC",null,null,null]] },
+  "Austin": {
+    mon:[["7:00 PM","Stony Point","NEW FIELD",["WA","SMS"],"Push <b>Mon 12:00 PM</b> · 7h before and <b>1</b> more"],
+         ["7:00 PM","Crockett High School","NEW DAY",["WA","SMS"],"Push <b>Mon 12:00 PM</b> · 7h before and <b>1</b> more"],
+         ["7:00 PM","Stony Point","NEW FIELD",null,null],
+         ["7:30 PM","NEMP","NEW DAY",null,null],
+         ["8:00 PM","Hattrick",null,null,null],
+         ["8:30 PM","NEMP","NEW DAY",null,null]],
+    tue:[["6:45 PM","Crockett High School","NEW TIME",null,null],
+         ["7:30 PM","NEMP",null,null,null],
+         ["8:00 PM","Hattrick",null,["WA"],"Push <b>Mon 12:00 PM</b> · 1d 8h before"],
+         ["8:00 PM","Parmer",null,["WA","MC"],"Push <b>Tue 8:54 AM</b> · 11h before and <b>1</b> more"],
+         ["8:30 PM","NEMP",null,null,null]],
+    wed:[["7:00 PM","Hattrick",null,null,null],["8:00 PM","Hattrick",null,null,null],
+         ["8:00 PM","Parmer",null,null,null],
+         ["9:00 PM","Hattrick",null,["WA"],"Push <b>Wed 12:33 PM</b> · 8h before"]],
+    thu:[["6:30 PM","NEMP",null,["WA","DM"],"Push <b>Thu 8:40 AM</b> · 10h before and <b>1</b> more"],
+         ["7:30 PM","NEMP",null,null,null],["8:00 PM","Parmer",null,null,null],
+         ["8:30 PM","NEMP",null,null,null]],
+    fri:[["6:30 PM","Crockett High School","NEW DAY",["WA"],"Push <b>Fri 8:55 AM</b> · 10h before"],
+         ["7:30 PM","NEMP",null,null,null],["8:00 PM","Hattrick",null,null,null],
+         ["8:30 PM","NEMP",null,null,null]],
+    sat:[["7:00 PM","Hattrick",null,null,null],["8:00 PM","Westlake",null,null,null],
+         ["8:00 PM","Parmer",null,null,null]],
+    sun:[["7:00 PM","Hattrick",null,null,null],["7:00 PM","Round Rock",null,null,null],
+         ["8:00 PM","Hattrick",null,null,null],["8:00 PM","Parmer","NEW DAY",null,null],
+         ["8:00 PM","Westlake",null,null,null]] },
+};
+
+/* LAST WEEK. Same shape; the cancelled rows carry how many players were booked when it was called
+ * off. ILLUSTRATIVE DATA — see the note above. */
+const PREV = {
+  "Atlanta": {
+    mon:[["7:00 PM","PRUMC",null,["WA"],"Push <b>Mon 12:00 PM</b> · 7h before"]],
+    tue:[["7:00 PM","PRUMC",null,null,null]],
+    wed:[["8:00 PM","Keswick Park (Chamblee)",null,null,null,true,3]],
+    thu:[["7:00 PM","PRUMC",null,["WA"],"Push <b>Thu 11:00 AM</b> · 8h before"]],
+    fri:[["7:00 PM","PRUMC",null,null,null]],
+    sat:[], sun:[["6:00 PM","PRUMC",null,null,null,true,5]] },
+  "Austin": {
+    mon:[["7:00 PM","Crockett High School",null,["WA","SMS"],"Push <b>Mon 12:00 PM</b> · 7h before"],
+         ["8:00 PM","Hattrick",null,null,null,true,4],
+         ["8:30 PM","NEMP",null,null,null]],
+    tue:[["7:30 PM","NEMP",null,null,null],
+         ["8:00 PM","Hattrick",null,null,null,true,2],
+         ["8:00 PM","Parmer",null,["WA","MC"],"Push <b>Tue 9:00 AM</b> · 11h before"]],
+    wed:[["7:00 PM","Hattrick",null,null,null,true,16],
+         ["8:00 PM","Parmer",null,null,null,true,9]],
+    thu:[["6:30 PM","NEMP",null,["WA"],"Push <b>Thu 8:40 AM</b> · 10h before"],
+         ["8:00 PM","Parmer",null,null,null]],
+    fri:[["7:30 PM","NEMP",null,null,null],
+         ["8:00 PM","Hattrick",null,null,null,true,1]],
+    sat:[["7:00 PM","Hattrick",null,null,null,true,7],
+         ["8:00 PM","Westlake",null,null,null]],
+    sun:[["7:00 PM","Round Rock",null,null,null,true,11],
+         ["8:00 PM","Hattrick",null,null,null,true,6]] },
+};
+/* ── GENERAL PUSHES. A push that is not attached to one match.
+ * [city, fieldOrNull, sendDay, sendTime, chips, audience]
+ * A field push covers every match at that field in the week; a city push covers every match in the
+ * city. Ryan: "we should add an option per city so we can add general pushes (pushing all the
+ * slate to registered users or pushing general slate for a specific field for example)". */
+/* ── ONE CODE PER CHANNEL, NOT PER MATCH.
+ * Ryan: "we sometimes try different codes to understand the effect of different channels."
+ * With one code across WhatsApp and SMS every redemption is attributable to both and the test
+ * cannot be read. NOT A SCHEMA CHANGE: DraftChannel is already { on, code, rows } and codeFor()
+ * reads the channel's own code — the comment on it says the UI writes them all alike, which is
+ * the flattening this undoes.
+ * [venue|city, day] -> { channel: code } */
+const CODES = {
+  "Crockett High School|mon": { WA:"ATX10WA", SMS:"ATX10SMS" },
+  "Hattrick|wed":             { WA:"HAT15WA" },
+  "Parmer|tue":               { WA:"PARM5WA", MC:"PARM5MC" },
+  "NEMP|thu":                 { WA:"NEMPWA",  DM:"NEMPDM"  },
+  "Austin|mon":               { WA:"SLATEWA", SMS:"SLATESMS" },
+};
+const codeFor = (key, ch) => (CODES[key] ?? {})[ch] ?? null;
+
+const GENERAL_CUR = [
+  ["Austin",  null,      "mon", "10:30 AM", ["WA","SMS"], "all registered in Austin"],
+  ["Austin",  "Hattrick","wed", "12:00 PM", ["WA"],       "players who follow Hattrick"],
+  ["Austin",  null,      "sun", "9:00 AM",  ["WA"],       "all registered in Austin"],
+  ["Atlanta", null,      "thu", "9:00 AM",  ["WA"],       "all registered in Atlanta"],
+];
+const GENERAL_PREV = [
+  ["Austin", null, "mon", "10:30 AM", ["WA","SMS"], "all registered in Austin"],
+];
+
+const WEEKS = [
+  { id:"prev", label:"Mon 7 Sep \u2013 Sun 13 Sep 2026", nums:[7,8,9,10,11,12,13], data:PREV, gen:GENERAL_PREV, past:true },
+  { id:"cur",  label:"Mon 14 Sep \u2013 Sun 20 Sep 2026", nums:[14,15,16,17,18,19,20], data:CUR, gen:GENERAL_CUR, past:false },
+];
+let wi = 1;
+const W = () => WEEKS[wi];
+const WEEK = () => W().data;
+const GEN = () => W().gen;
+/* WHAT A GENERAL PUSH COVERS. A city push covers every match in the city; a field push covers every
+ * match at that field. Counted here rather than stored, so a match added later is covered without
+ * anyone remembering to update a number. */
+/* A GENERAL PUSH COVERS THE DAY IT IS SENT FOR, not the whole week — the same rule a match push
+ * already follows by being dated. A city wanting the week covered sends one a day, which is what
+ * the operator does anyway, and it keeps "no plan" meaning something: cover the week in one blast
+ * and every tile goes green, at which point the column stops telling anyone anything. */
+const coveredBy = (city, venue, day) =>
+  GEN().filter(g => g[0] === city && g[2] === day && (g[1] === null || g[1] === venue));
+const reachOf = g => { const wk = WEEK()[g[0]]; if (!wk) return 0;
+  return (wk[g[2]] ?? []).filter(r => !r[5] && (g[1] === null || r[1] === g[1])).length; };
+const numOf = k => W().nums[DIDX[k]];
+
+/* THE QUEUE IS DERIVED FROM THE WEEK, not carried beside it. A push on the strip and a push on a
+ * tile that disagree is the one failure this page cannot afford, so there is one source. */
+let QUEUE = {};
+function buildQueue(){
+  QUEUE = {}; DAYS.forEach(d => QUEUE[d.k] = []);
+  const past = W().past;
+  for (const [city, wk] of Object.entries(WEEK()))
+    for (const [k, rows] of Object.entries(wk))
+      rows.forEach(([time, venue, , chips, line]) => {
+        if (!chips) return;
+        const m = line.match(/Push <b>(\w+) ([\d:]+ [AP]M)<\/b>/);
+        const pd = {Mon:"mon",Tue:"tue",Wed:"wed",Thu:"thu",Fri:"fri",Sat:"sat",Sun:"sun"}[m[1]];
+        /* A WEEK THAT HAS BEEN AND GONE HAS NOTHING OUTSTANDING. Everything in it was sent, so
+           nothing there asks the operator to do something they can no longer do. */
+        QUEUE[pd].push({ at:m[2], city, venue, day:pd, mt:`${DAYS[DIDX[k]].dow} ${time}`, chips,
+          sent: past || DIDX[pd] < DIDX[NOW.day] ? `${m[1]} ${m[2]}` : null });
+      });
+  /* GENERAL PUSHES JOIN THE SAME QUEUE. Same row shape, same Mark sent: what differs is the target
+     and the reach, not the operator's action. */
+  GEN().forEach(g => {
+    const [city, field, day, at, chips, audience] = g;
+    QUEUE[day].push({ at, city, venue: field ?? city, day, chips, general: true, field,
+      mt: field ? "whole slate" : "whole slate", audience, reach: reachOf(g),
+      sent: past || DIDX[day] < DIDX[NOW.day] ? `${DAYS[DIDX[day]].dow} ${at}` : null });
+  });
+  DAYS.forEach(d => QUEUE[d.k].sort((a,b)=>MIN(a.at)-MIN(b.at)));
+}
+
+const noPlanOf = k => Object.values(WEEK()).reduce((s,wk)=>s+wk[k].filter(r=>!r[3]&&!r[5]).length,0);
+const cxOf = k => Object.values(WEEK()).reduce((s,wk)=>s+wk[k].filter(r=>r[5]).length,0);
+const lateOf = k => QUEUE[k].filter(p=>!p.sent && isOverdue(k,p.at)).length;
+let sel = TODAY;
+
+function drawDays(){
+  document.getElementById("days").innerHTML = DAYS.map(d=>{
+    const q=QUEUE[d.k], todo=q.filter(p=>!p.sent).length, late=W().past?0:lateOf(d.k),
+          done=q.length-todo, gaps=noPlanOf(d.k), cx=cxOf(d.k);
+    return `<button class="day" role="tab" data-testid="day" data-k="${d.k}"
+        data-today="${!W().past&&d.k===TODAY?1:0}" aria-selected="${d.k===sel}"
+        aria-label="${d.dow} ${numOf(d.k)}, ${todo} to send, ${gaps} with no plan, ${cx} cancelled">
+      <span class="dow">${d.dow}${!W().past&&d.k===TODAY?" · today":""}</span><span class="dnum">${numOf(d.k)}</span>
+      <span class="pips">
+        ${late?`<i class="pip late" data-testid="pip-late"><b>${late}</b><span class="w"> past due</span></i>`:""}
+        ${todo-late>0?`<i class="pip todo" data-testid="pip-todo"><b>${todo-late}</b><span class="w"> to send</span></i>`:""}
+        ${!todo&&q.length?`<i class="pip done" data-testid="pip-done"><b>${done}</b><span class="w"> sent</span></i>`:""}
+        ${gaps?`<i class="pip gap" data-testid="pip-gap"><b>${gaps}</b><span class="w"> no plan</span></i>`:""}
+        ${cx?`<i class="pip cx" data-testid="pip-cx"><b>${cx}</b><span class="w"> cancelled</span></i>`:""}
+      </span></button>`; }).join("");
+  document.querySelectorAll('[data-testid="day"]').forEach(b=>{
+    b.addEventListener("click",()=>{ sel=b.dataset.k; drawDays(); drawPanel(); });
+    b.addEventListener("keydown",e=>{ const i=DIDX[sel];
+      if(e.key==="ArrowRight"&&i<6){ sel=DAYS[i+1].k; drawDays(); drawPanel(); focusSel(); }
+      if(e.key==="ArrowLeft"&&i>0){ sel=DAYS[i-1].k; drawDays(); drawPanel(); focusSel(); } }); });
+}
+const focusSel = () => document.querySelector(`[data-testid="day"][data-k="${sel}"]`)?.focus();
+
+const pushRow = (p,k) => { const late = !p.sent && isOverdue(k,p.at);
+  return `<div class="push" data-testid="push" data-state="${late?"late":p.sent?"sent":"todo"}">
+    <span class="when">${p.at}</span>
+    <span class="pbody"><span class="l1">
+      ${p.general?`<i class="scope" data-testid="scope" data-s="${p.field?"field":"city"}">${p.field?"FIELD":"CITY"}</i>`:""}
+      <span class="pfield">${p.venue}</span>
+      <span class="mt">${p.general?`${p.field?p.city+" · ":""}whole slate`:`${p.city} · ${p.mt}`}</span>
+      ${p.chips.map(c=>{ const code = codeFor(`${p.general?(p.field??p.city):p.venue}|${p.day}`, c);
+        return `<span class="chpair">${`<i class="chip" data-testid="ch">${c}</i>`}${code?`<i class="code" data-testid="code">${code}</i>`:""}</span>`;}).join("")}
+      ${p.general?`<span class="reach" data-testid="reach">${p.reach} ${p.reach===1?"match":"matches"} · ${p.audience}</span>`:""}</span></span>
+    ${late?`<span class="latetag" data-testid="late">past due</span>`:""}
+    ${p.sent?`<span class="sentmark" data-testid="sent">✓ sent</span><span class="stamp">${p.sent}</span>`
+            :`<button class="mark" data-testid="mark">Mark sent</button>`}</div>`; };
+
+function drawPanel(){
+  const q=QUEUE[sel];
+  const todo=q.filter(p=>!p.sent), done=q.filter(p=>p.sent);
+  const late=W().past?[]:todo.filter(p=>isOverdue(sel,p.at)), soon=todo.filter(p=>!late.includes(p));
+  const full={mon:"Monday",tue:"Tuesday",wed:"Wednesday",thu:"Thursday",fri:"Friday",sat:"Saturday",sun:"Sunday"}[sel];
+  /* A QUEUE, NOT A PLANNER. The plans are made on the week below; here you see what was planned,
+     mark it sent, and are told what slipped. Nothing here creates a push. */
+  let h = `<div class="phead"><span class="ptitle" data-testid="ptitle">${full} ${numOf(sel)} September${!W().past&&sel===TODAY?" \u00b7 today":""}</span>
+    <span class="pcount" data-testid="pcount">${q.length} ${q.length===1?"push":"pushes"} · ${done.length} sent${late.length?` · ${late.length} past due`:todo.length?` · ${todo.length} to send`:""}</span></div>`;
+  if (late.length) h += `<div class="blabel">Past due</div>${late.map(p=>pushRow(p,sel)).join("")}`;
+  if (soon.length) h += `<div class="blabel">To send</div>${soon.map(p=>pushRow(p,sel)).join("")}`;
+  if (!q.length) h += `<div class="empty">Nothing planned for this day. Plan it on the week below.</div>`;
+  else if (!todo.length) h += `<div class="empty"><span class="allgood">✓ Everything planned for this day has gone out.</span></div>`;
+  if (done.length) h += `<button class="fold" data-testid="fold" aria-expanded="false">Show ${done.length} already sent</button>
+    <div data-testid="donewrap" hidden>${done.map(p=>pushRow(p,sel)).join("")}</div>`;
+  document.getElementById("panel").innerHTML = h;
+  const fold = document.querySelector('[data-testid="fold"]');
+  if (fold) fold.addEventListener("click",()=>{ const w=document.querySelector('[data-testid="donewrap"]');
+    const open = fold.getAttribute("aria-expanded")==="true";
+    fold.setAttribute("aria-expanded",String(!open)); w.hidden = open;
+    fold.textContent = open ? `Show ${done.length} already sent` : `Hide ${done.length} already sent`; });
+}
+
+/* ONLY THE TAGS ACTUALLY ON SCREEN. A key listing every tag that could exist is a key nobody
+ * reads; this one shrinks to what the week is using and disappears when nothing is tagged. */
+function drawKey(){
+  const used = new Set();
+  for (const wk of Object.values(WEEK()))
+    for (const rows of Object.values(wk))
+      for (const r of rows) tagsOf(r[1]).forEach(t => used.add(t));
+  const el = document.getElementById("key");
+  el.innerHTML = used.size
+    ? `<span style="font-weight:700">Tags in use</span>` + [...used].map(k =>
+        `<span class="keyitem" data-testid="keyitem"><i class="tag" data-t="${k}">${TAGDEF[k].label}</i>${TAGDEF[k].why}</span>`).join("")
+    : "";
+  el.hidden = used.size === 0;
+}
+
+function drawWeek(){
+  document.getElementById("week").innerHTML = Object.entries(WEEK()).map(([city, wk])=>{
+    const all = Object.values(wk).flat();
+    const cx = all.filter(r=>r[5]);
+    const own = all.filter(r=>r[3]).length;
+    const live = all.filter(r=>!r[5]);
+    let covered = 0, none = 0;
+    for (const [dk, rows] of Object.entries(wk))
+      for (const r of rows) {
+        if (r[5] || r[3]) continue;
+        (coveredBy(city, r[1], dk).length ? covered++ : none++);
+      }
+    const neu = all.filter(r=>r[2]).length, booked = cx.reduce((s,r)=>s+r[6],0);
+    const gens = GEN().filter(g=>g[0]===city);
+    return `<div class="city" data-testid="city" data-c="${city}">
+      <div class="cityhead"><span class="cityname">${city}</span>
+        <span class="citystat" data-testid="citystat"><b>${own}</b> own push${covered?` \u00b7 <b>${covered}</b> covered`:""} \u00b7 <b>${none}</b> no plan</span>
+        ${neu?`<span class="citynew" data-testid="citynew">${neu} new</span>`:""}
+        ${cx.length?`<span class="citycx" data-testid="citycx">${cx.length} cancelled \u00b7 ${booked} booked</span>`:""}
+        ${gens.length?`<span class="genpill" data-testid="genpill">${gens.length} general ${gens.length===1?"push":"pushes"}</span>`:""}
+        <button class="addgen" data-testid="add-general" data-c="${city}">+ General push</button></div>
+      <div class="gridscroll"><div class="grid">${DAYS.map(d=>{
+        const rows = wk[d.k];
+        return `<div class="col" data-testid="col" data-d="${d.k}" data-today="${!W().past&&d.k===TODAY?1:0}">
+          <div class="colhead"><span class="coldow">${d.dow}</span><span class="colnum">${numOf(d.k)}</span></div>
+          ${rows.length ? rows.map(([time,venue,flag,chips,line,cancelled,booked])=>{
+            const r = riskOf(venue);
+            const cov = cancelled ? [] : coveredBy(city, venue, d.k);
+            const state = cancelled ? "cancelled" : chips ? "planned" : cov.length ? "covered" : "none";
+            return `<div class="tile" data-testid="tile" data-state="${state}" data-r="${r}"
+                ${cancelled?`data-booked="${booked}"`:""}
+                title="${venue} ${time}${cancelled?` · CANCELLED with ${booked} booked`:""}${r?` · cancelled ${r} of the last 4 weeks on this weekday`:" · no cancellations in the last 4 weeks"}">
+              <div class="trow"><span class="ttime">${time}</span><span class="badges">
+                ${r?`<i class="rchip" data-testid="rchip" data-r="${r}">${r}/4</i>`:""}
+                ${flag?`<i class="newb" data-testid="newb">${flag}</i>`:""}</span></div>
+              <div class="tvenue">${venue}</div>
+              ${(()=>{const t=tagsOf(venue); if(!t.length) return "";
+                const shown=t.slice(0,3), rest=t.length-3;
+                return `<div class="tags" data-testid="tags">${shown.map(k=>`<i class="tag" data-testid="tag" data-t="${k}" title="${TAGDEF[k].label} — ${TAGDEF[k].why}">${TAGDEF[k].label}</i>`).join("")}${rest>0?`<i class="tag more" data-testid="tagmore">+${rest}</i>`:""}</div>`;})()}
+              ${cancelled?`<div class="xline"><i class="xtag">Cancelled</i><span class="booked" data-testid="booked" data-heavy="${booked>=8?1:0}">${booked} booked</span></div>`:""}
+              ${state==="covered"?`<span class="covtag" data-testid="covtag">in ${cov[0][1]?cov[0][1]+" slate":"city slate"}</span>`:""}
+              ${chips?`<div class="chips">${chips.map(c=>`<i class="chip">${c}</i>`).join("")}</div>`:""}
+              ${line?`<div class="pushline">${line}</div>`:""}</div>`; }).join("")
+            : `<span class="nosess">No sessions</span>`}
+        </div>`; }).join("")}</div></div></div>`; }).join("");
+}
+function render(){
+  document.querySelector('[data-testid="weeklabel"]').textContent = W().label;
+  document.querySelector('[data-testid="wk-prev"]').disabled = wi === 0;
+  document.querySelector('[data-testid="wk-next"]').disabled = wi === WEEKS.length - 1;
+  buildQueue(); drawDays(); drawPanel(); drawWeek(); drawKey(); drawKey();
+}
+document.querySelector('[data-testid="wk-prev"]').addEventListener("click",()=>{ if(wi>0){wi--; render();} });
+document.querySelector('[data-testid="wk-next"]').addEventListener("click",()=>{ if(wi<WEEKS.length-1){wi++; render();} });
+render();
+</script>

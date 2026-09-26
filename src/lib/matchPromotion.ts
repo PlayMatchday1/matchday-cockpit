@@ -423,6 +423,10 @@ export type PromoMatch = VeoMatch & {
 
 export type PromoWeek = {
   weekStart: string;
+  /** Pushes scoped to a city or a field. Same table as the match pushes; see 0191. */
+  generals: GeneralPush[];
+  /** field_id -> its tags. Keyed on the FIELD, so a pitch reads the same on every tile. */
+  tagsByField: Record<number, string[]>;
   /** The Monday of the week the NEW test compared against — printed on the page so the rule is
    *  legible without asking, and so a wrong week is visible rather than silent. */
   priorWeekStart: string;
@@ -547,11 +551,18 @@ export async function fetchPromoWeek(
   // City, then day, then time. The grid renders in this order and so does the worklist fallback.
   matches.sort((a, b) => a.city.localeCompare(b.city) || a.dayIdx - b.dayIdx || a.minutes - b.minutes);
 
+  const [generals, tagsByField] = await Promise.all([
+    fetchGeneralPushes(sb, week.days),
+    fetchFieldTags(sb, matches.map((m) => m.fieldId).filter((x): x is number => x != null)),
+  ]);
+
   return {
     weekStart: week.weekStart,
     priorWeekStart: prior.weekStart,
     days: week.days,
     matches,
+    generals,
+    tagsByField,
     planTableReady: ready,
     generatedAt: now.toISOString(),
   };
@@ -616,3 +627,164 @@ export function coverageCaption(s: CoverageSummary): string {
 }
 
 export { weekMonday };
+
+/* ════════════════════════════════════════════════════════════════════════════════════════════════
+ * GENERAL PUSHES — a push scoped to a CITY or a FIELD rather than to one match
+ *
+ * Ryan: "We should add an option per city so we can add general pushes (pushing all the slate to
+ * registered users or pushing general slate for a specific field for example)."
+ *
+ * ── ONE TABLE, NOT TWO ───────────────────────────────────────────────────────────────────────
+ * Migration 0191 puts scope on match_promotion_push rather than giving general pushes a table of
+ * their own. Ryan's reasoning, and it is the right one: the day queue and the tile's coverage are
+ * two projections of ONE set, and two tables means two reads, two filters and two places to forget
+ * one. The symptom would be a queue total that disagrees with the grid by a number nobody can
+ * source, weeks later.
+ *
+ * ── IT COVERS THE DAY IT IS SENT FOR, NOT THE WEEK ──────────────────────────────────────────
+ * Built the other way first and Austin went to zero "no plan" instantly, at which point the column
+ * tells nobody anything. A city wanting its week covered sends one a day, which is what the
+ * operator does anyway. So coverage is matched on the DAY, and a general push with no date covers
+ * nothing at all — an undated push has not been scheduled, and a match cannot be covered by a
+ * decision nobody has made. */
+export type PushScope = "match" | "field" | "city";
+
+export type GeneralPush = {
+  id: number;
+  scope: Exclude<PushScope, "match">;
+  channel: ChannelKey;
+  pushAt: string | null;
+  topic: string | null;
+  promoCode: string | null;
+  pushedAt: string | null;
+  pushedBy: string | null;
+  /** The city header it was created from. Present on BOTH scopes; see 0191's shape CHECK. */
+  city: string;
+  /** mdapi field_id, for a field-scoped push. Null on a city push. */
+  fieldId: number | null;
+  /** Who it went to, in the operator's own words. Never derived. */
+  audience: string | null;
+};
+
+/** The day column a general push falls in, or null when it carries no date. */
+export function generalPushDayIdx(g: Pick<GeneralPush, "pushAt">, days: { iso: string }[]): number | null {
+  if (!g.pushAt) return null;
+  /* THE READER'S OWN CLOCK, like every other push time on this page. A push is scheduled for a
+   * moment, and which day that moment falls in is a question about the reader's calendar. */
+  const d = new Date(g.pushAt);
+  if (Number.isNaN(d.getTime())) return null;
+  const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const i = days.findIndex((x) => x.iso === ymd);
+  return i >= 0 ? i : null;
+}
+
+/** Every general push that covers this match: same day, and the city or the field matches. */
+export function generalsCovering(
+  m: Pick<PromoMatch, "city" | "dayIdx" | "fieldRaw"> & { fieldId?: number | null },
+  generals: readonly GeneralPush[],
+  days: { iso: string }[],
+): GeneralPush[] {
+  return generals.filter((g) => {
+    if (generalPushDayIdx(g, days) !== m.dayIdx) return false;
+    if (g.scope === "city") return g.city === m.city;
+    return g.fieldId != null && g.fieldId === (m.fieldId ?? null);
+  });
+}
+
+/* THE THREE COVERAGE STATES, AND THE MIDDLE ONE IS THE FEATURE. A general push is real promotion,
+ * so a match it carried must not read as forgotten; it is not a push written for that match, so it
+ * must not read the same either. Cancelled still wins over all three: nothing was missed. */
+export function coverageOf(
+  m: PromoMatch,
+  generals: readonly GeneralPush[],
+  days: { iso: string }[],
+): "planned" | "covered" | "none" | "needs-decision" | "cancelled" {
+  if (m.state === "cancelled") return "cancelled";
+  if (m.state === "planned" || m.state === "needs-decision") return m.state;
+  return generalsCovering(m, generals, days).length > 0 ? "covered" : "none";
+}
+
+/** "in city slate" / "in Hattrick slate" — a dotted rail with no explanation is a mystery. */
+export function coverLabel(g: GeneralPush, fieldName: string | null): string {
+  return g.scope === "city" ? "in city slate" : `in ${fieldName ?? "field"} slate`;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════════════════════════
+ * PROMO CODES — normalised and made unique AT ENTRY, never generated
+ *
+ * MEASURED on production 2026-09-26: 6,514 promo codes, 71 exact duplicates, 83 case-insensitive
+ * collisions, 486 mixing upper and lower case, and five spellings of one refund concept (refund,
+ * ref, freeref, ref7, reF). Attribution was already unreadable before anyone split by channel, and
+ * splitting doubles the surface.
+ *
+ * GENERATING THEM WOULD BE WORSE, not better. A promo code only works if it exists in MatchDay,
+ * and this planner does not create promo codes — POST /admin/promocodes is a different tool. A
+ * generated string would render on the tile, go out to players, and redeem nothing. Free text at
+ * least reflects a code somebody actually made.
+ *
+ * SO: normalise, and refuse the collision that actually breaks attribution. */
+export const normalizePromoCode = (raw: string | null | undefined): string | null => {
+  const v = (raw ?? "").trim().toUpperCase().replace(/\s+/g, "");
+  return v === "" ? null : v;
+};
+
+/* THE ONE COLLISION THAT MATTERS: the same code on two channels of one match. That is precisely
+ * what makes a redemption attributable to both and the test unreadable, which is the whole reason
+ * the code moved per channel. Two DIFFERENT matches sharing a code is a separate question and is
+ * NOT refused here — campaigns legitimately run one code across a week. */
+export function duplicateCodeChannels(codes: Record<string, string | null>): string[][] {
+  const by = new Map<string, string[]>();
+  for (const [ch, raw] of Object.entries(codes)) {
+    const c = normalizePromoCode(raw);
+    if (!c) continue;
+    (by.get(c) ?? by.set(c, []).get(c)!).push(ch);
+  }
+  return [...by.values()].filter((chs) => chs.length > 1);
+}
+
+/* THE WEEK'S GENERAL PUSHES. Read by DATE RANGE rather than by match, because they belong to no
+ * match — that is the whole point of the scope column. A failure here is soft: the page still
+ * renders every match push, and a general push that cannot be read is better than a page that
+ * cannot. */
+async function fetchGeneralPushes(sb: SupabaseClient, days: { iso: string }[]): Promise<GeneralPush[]> {
+  if (days.length === 0) return [];
+  const from = `${days[0].iso}T00:00:00`;
+  const to = `${days[days.length - 1].iso}T23:59:59.999`;
+  const { data, error } = await sb.from("match_promotion_push")
+    .select("*").neq("scope", "match").gte("push_at", from).lte("push_at", to);
+  if (error) return [];
+  const out: GeneralPush[] = [];
+  for (const r of data ?? []) {
+    const scope = String(r.scope);
+    if (scope !== "city" && scope !== "field") continue;
+    if (!(CHANNEL_KEYS as readonly string[]).includes(String(r.channel))) continue;
+    out.push({
+      id: r.id as number, scope, channel: r.channel as ChannelKey,
+      pushAt: (r.push_at as string | null) ?? null, topic: (r.topic as string | null) ?? null,
+      promoCode: (r.promo_code as string | null) ?? null,
+      pushedAt: (r.pushed_at as string | null) ?? null, pushedBy: (r.pushed_by as string | null) ?? null,
+      city: String(r.scope_city ?? ""), fieldId: (r.scope_field_id as number | null) ?? null,
+      audience: (r.audience as string | null) ?? null,
+    });
+  }
+  return out.sort(byPushTime);
+}
+
+/* THE TAGS, KEYED ON FIELD. select("*") deliberately, the adminAuth precedent: code deploys before
+ * a migration applies, and a named column that does not exist yet turns every load of this page
+ * into a 500. An unreadable table degrades to "no tags", which is exactly what is true then. */
+async function fetchFieldTags(sb: SupabaseClient, fieldIds: number[]): Promise<Record<number, string[]>> {
+  const out: Record<number, string[]> = {};
+  const ids = [...new Set(fieldIds)];
+  if (ids.length === 0) return out;
+  for (let i = 0; i < ids.length; i += 500) {
+    const { data, error } = await sb.from("match_promotion_field_tag")
+      .select("*").in("field_id", ids.slice(i, i + 500));
+    if (error) return out;
+    for (const r of data ?? []) {
+      const f = Number(r.field_id);
+      (out[f] ?? (out[f] = [])).push(String(r.tag));
+    }
+  }
+  return out;
+}

@@ -14,7 +14,8 @@
 // Reads mdapi_matches read-only. Reaches the MatchDay API nowhere.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateCapability } from "@/lib/capabilityAuth";
-import { fetchPromoWeek, CHANNEL_KEYS, type ChannelKey } from "@/lib/matchPromotion";
+import { fetchPromoWeek, CHANNEL_KEYS, normalizePromoCode, type ChannelKey } from "@/lib/matchPromotion";
+import { isTagKey } from "@/lib/promoTags";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -58,6 +59,17 @@ type SaveBody = {
    * siblings overdue. `pushed` is true to mark, false to un-mark. */
   pushId?: number;
   pushed?: boolean;
+  /* ── A GENERAL PUSH ───────────────────────────────────────────────────────────────────────
+   * Scoped to a CITY or a FIELD, belonging to no match. Same table as the match pushes, so the
+   * queue and the tiles stay one projection of one set; see 0191 for why not two tables. */
+  general?: {
+    id?: number; scope?: "city" | "field"; channel?: string; at?: string | null;
+    topic?: string | null; promoCode?: string | null; city?: string;
+    fieldId?: number | null; audience?: string | null; remove?: boolean;
+  };
+  /* ── A FIELD TAG, TOGGLED ─────────────────────────────────────────────────────────────────
+   * Keyed on the FIELD. `on` false removes it; the unique constraint makes the toggle safe. */
+  tag?: { fieldId?: number; tag?: string; on?: boolean };
 };
 
 /** "" and whitespace collapse to NULL. An empty string is not a value, it is a cleared field. */
@@ -109,6 +121,12 @@ export async function POST(req: Request) {
   /* ── BRANCH ONE: MARK ONE PUSH SENT ───────────────────────────────────────────────────────── */
   if (typeof body.pushed === "boolean") return markSent(auth, body);
 
+  /* ── BRANCH 1b: A FIELD TAG ───────────────────────────────────────────────────────────────── */
+  if (body.tag) return saveTag(auth, body.tag);
+
+  /* ── BRANCH 1c: A GENERAL PUSH ────────────────────────────────────────────────────────────── */
+  if (body.general) return saveGeneral(auth, body.general);
+
   const id = Number(body.matchApiId);
   if (!Number.isInteger(id) || id <= 0) {
     return Response.json({ outcome: "FAILED", error: "matchApiId is required." }, { status: 400 });
@@ -156,8 +174,38 @@ export async function POST(req: Request) {
       channel: channel as ChannelKey,
       push_at: at,
       topic: nullable(raw.topic),
-      promo_code: nullable(raw.promoCode),
+      /* NORMALISED AT ENTRY, NOT GENERATED. Measured on production: 6,514 codes, 83
+       * case-insensitive collisions and 486 mixing case. Upper-casing and stripping whitespace
+       * kills that class going forward. Generating instead would be worse, not better: a promo
+       * code only works if it exists in MatchDay, and this planner does not create them, so a
+       * generated string would render on the tile, go to players and redeem nothing. */
+      promo_code: normalizePromoCode(raw.promoCode ?? null),
     });
+  }
+
+  /* ── THE ONE COLLISION THAT BREAKS ATTRIBUTION, REFUSED ─────────────────────────────────────
+   * The same code on two channels of one match makes every redemption attributable to both, which
+   * is precisely the thing per-channel codes exist to fix. Refused here rather than warned about,
+   * because a warning on a page this busy is a warning nobody reads.
+   *
+   * TWO DIFFERENT MATCHES SHARING A CODE IS NOT REFUSED. Campaigns legitimately run one code
+   * across a week, and that is a different question from which channel a redemption came through. */
+  const byCode = new Map<string, Set<string>>();
+  for (const row of parsed) {
+    if (!row.promo_code) continue;
+    const set = byCode.get(row.promo_code) ?? new Set<string>();
+    set.add(row.channel);
+    byCode.set(row.promo_code, set);
+  }
+  for (const [code, channels] of byCode) {
+    if (channels.size > 1) {
+      return Response.json({
+        outcome: "FAILED",
+        error: `${code} is on ${[...channels].join(" and ")}. A code shared across channels cannot be `
+          + `attributed to either, which is the whole reason it is per channel. Give each its own code, `
+          + `or clear one. Nothing was written.`,
+      }, { status: 400 });
+    }
   }
 
   const sb = auth.supabase;
@@ -319,5 +367,101 @@ async function markSent(
   } catch (e) {
     console.error("[api/match-promotion] markSent failed", e);
     return Response.json({ outcome: "FAILED", error: "Nothing was written." }, { status: 500 });
+  }
+}
+
+/* ── A FIELD TAG, TOGGLED ────────────────────────────────────────────────────────────────────
+ * Keyed on the FIELD, so a pitch reads the same on every tile it appears on. The unique
+ * constraint from 0190 is what makes the toggle safe: two operators pressing PARTNER at once
+ * cannot produce two rows, and the second insert simply reports the conflict. */
+async function saveTag(
+  auth: { supabase: SupabaseClient; email?: string | null },
+  t: NonNullable<SaveBody["tag"]>,
+): Promise<Response> {
+  const fieldId = Number(t.fieldId);
+  if (!Number.isInteger(fieldId) || fieldId <= 0) {
+    return Response.json({ outcome: "FAILED", error: "A tag needs a field." }, { status: 400 });
+  }
+  if (!isTagKey(t.tag)) {
+    return Response.json({ outcome: "FAILED", error: `Unknown tag ${JSON.stringify(t.tag)} - nothing written.` }, { status: 400 });
+  }
+  const sb = auth.supabase;
+  try {
+    if (t.on === false) {
+      const { error } = await sb.from("match_promotion_field_tag").delete().eq("field_id", fieldId).eq("tag", t.tag);
+      if (error) {
+        const named = missingTableError(error.message);
+        return Response.json({ outcome: "FAILED", error: named ?? error.message }, { status: named ? 503 : 500 });
+      }
+      return Response.json({ outcome: "LANDED", fieldId, tag: t.tag, on: false });
+    }
+    /* UPSERT ON THE CONSTRAINT rather than select-then-insert. The read-then-write has a window
+     * two operators can both pass through, and the failure is a duplicate nobody can see. */
+    const { error } = await sb.from("match_promotion_field_tag")
+      .upsert({ field_id: fieldId, tag: t.tag, set_by: auth.email ?? null }, { onConflict: "field_id,tag" });
+    if (error) {
+      const named = missingTableError(error.message);
+      return Response.json({ outcome: "FAILED", error: named ?? error.message }, { status: named ? 503 : 500 });
+    }
+    return Response.json({ outcome: "LANDED", fieldId, tag: t.tag, on: true });
+  } catch (e) {
+    return Response.json({ outcome: "FAILED", error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
+}
+
+/* ── A GENERAL PUSH ──────────────────────────────────────────────────────────────────────────
+ * Written into match_promotion_push with a scope, so the day queue reads ONE table and the tile's
+ * coverage is a projection of the same rows. 0191's shape CHECK is the backstop: a malformed
+ * combination is refused by the database rather than stored and reasoned about later. */
+async function saveGeneral(
+  auth: { supabase: SupabaseClient; email?: string | null },
+  g: NonNullable<SaveBody["general"]>,
+): Promise<Response> {
+  const sb = auth.supabase;
+  if (g.remove && Number.isInteger(Number(g.id))) {
+    const { error } = await sb.from("match_promotion_push").delete().eq("id", Number(g.id)).neq("scope", "match");
+    if (error) return Response.json({ outcome: "FAILED", error: error.message }, { status: 500 });
+    return Response.json({ outcome: "LANDED", removed: Number(g.id) });
+  }
+  const scope = g.scope === "field" ? "field" : "city";
+  const channel = String(g.channel ?? "");
+  if (!(CHANNEL_KEYS as readonly string[]).includes(channel)) {
+    return Response.json({ outcome: "FAILED", error: `Unknown channel ${JSON.stringify(channel)} - nothing written.` }, { status: 400 });
+  }
+  const city = String(g.city ?? "").trim();
+  if (!city) return Response.json({ outcome: "FAILED", error: "A general push needs a city." }, { status: 400 });
+  const fieldId = scope === "field" ? Number(g.fieldId) : null;
+  if (scope === "field" && (!Number.isInteger(fieldId) || (fieldId as number) <= 0)) {
+    return Response.json({ outcome: "FAILED", error: "A field push needs a field." }, { status: 400 });
+  }
+  /* AN UNDATED GENERAL PUSH COVERS NOTHING, and the page says so rather than silently covering the
+   * whole week. It is still a legal row - the channel is chosen and the time is not settled, which
+   * is 0176's own state - so it is stored and simply carries no coverage until it has a date. */
+  let at: string | null = null;
+  if (typeof g.at === "string" && g.at.trim() !== "") {
+    const t = new Date(g.at);
+    if (Number.isNaN(t.getTime())) {
+      return Response.json({ outcome: "FAILED", error: "The push time is not a date - nothing written." }, { status: 400 });
+    }
+    at = t.toISOString();
+  }
+  const row = {
+    scope, channel, push_at: at, topic: nullable(g.topic),
+    promo_code: normalizePromoCode(g.promoCode ?? null),
+    scope_city: city, scope_field_id: fieldId, audience: nullable(g.audience),
+    match_api_id: null,
+    updated_by: auth.email ?? null, updated_at: new Date().toISOString(),
+  };
+  try {
+    const res = Number.isInteger(Number(g.id)) && Number(g.id) > 0
+      ? await sb.from("match_promotion_push").update(row).eq("id", Number(g.id)).neq("scope", "match").select("id").maybeSingle()
+      : await sb.from("match_promotion_push").insert(row).select("id").maybeSingle();
+    if (res.error) {
+      const named = missingTableError(res.error.message);
+      return Response.json({ outcome: "FAILED", error: named ?? res.error.message }, { status: named ? 503 : 500 });
+    }
+    return Response.json({ outcome: "LANDED", id: res.data?.id ?? null });
+  } catch (e) {
+    return Response.json({ outcome: "FAILED", error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }
