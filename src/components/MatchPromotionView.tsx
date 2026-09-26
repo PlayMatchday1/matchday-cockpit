@@ -21,7 +21,9 @@ import PageComments from "@/components/PageComments";
 import MatchPromotionMobile from "@/components/MatchPromotionMobile";
 import { useMatchData } from "@/lib/useMatchData";
 import { useFinanceData } from "@/lib/useFinanceData";
-import { getCancelPatterns } from "@/lib/cancelPatterns";
+import { getCancelPatterns, rollUpSlotRisk, clustersForField, slotRiskKey, type SlotRisk } from "@/lib/cancelPatterns";
+import { normalizeMatchName } from "@/lib/venueNormalization";
+import { weekQueues, isPastWeek, defaultDayIdx, tabCounts, type QueueEntry } from "@/lib/promoDayQueue";
 import { mostRecentCompletedWeekMonday } from "@/lib/weekWindow";
 import {
   CHANNELS, NEW_FLAG_LABEL, channelsOn, codeFor, coverageCaption, coverageStateOf, coverageSummary,
@@ -205,6 +207,22 @@ export default function MatchPromotionView() {
   // slots are dropped on the phone only: a list has to be short to be read, and one bad week is
   // not a pattern. The desktop grid still shows them.
   const cancels = useCancelRanking();
+  /* THE TILE'S CANCEL HISTORY. getCancelPatterns keys a slot on (field, weekday, TIME), so a slate
+   * time that moves orphans its own history and a chronically cancelled slot renders clean —
+   * Ryan's "sometimes that one is hard as it has slate no longer active". rollUpSlotRisk re-keys
+   * on field and weekday with the times CLUSTERED rather than dropped; see cancelPatterns.ts for
+   * the measurement that ruled dropping them out. getCancelPatterns itself is untouched. */
+  const riskByKey = useMemo(() => {
+    if (!cancels.ready) return new Map<string, SlotRisk>();
+    return rollUpSlotRisk(cancels.result);
+  }, [cancels.ready, cancels.result]);
+  const riskOf = useCallback((m: PromoMatch): SlotRisk | null => {
+    if (!cancels.ready) return null;
+    const canonical = cancels.canonicalOf(m.fieldRaw);
+    if (!canonical) return null;
+    const clusters = clustersForField(cancels.result, canonical, m.dayIdx);
+    return riskByKey.get(slotRiskKey(canonical, m.dayIdx, m.minutes, clusters)) ?? null;
+  }, [cancels, riskByKey]);
   const { all: rankAll, headline: rankTotal, ready: rankReady } = cancels;
   const ranking = useMemo(
     () => rankAll.filter((s) => s.n >= 2).sort((a, b) => b.n - a.n || b.booked - a.booked),
@@ -228,7 +246,7 @@ export default function MatchPromotionView() {
     return (
       <MatchPromotionMobile
         week={week} tab={mTab} setTab={setMTab}
-        jobs={jobs} overdue={overdue} onReload={() => load(weekRef)}
+        jobs={jobs} overdue={overdue} onReload={() => load(weekRef)} riskOf={riskOf}
         openId={openId} draft={draft} setDraft={setDraft}
         onOpen={openMatch} onClose={closePanel} onSave={() => void save()}
         saving={saving} toast={toast}
@@ -263,7 +281,7 @@ Which matches get promoted, on which channels, and when the push goes out.
           <span className="ml-1.5 inline-flex rounded-full border border-cream-line bg-[#f2f5f3] p-0.5" data-testid="view-tabs">
             {(["plan", "coverage"] as const).map((t) => (
               <button key={t} onClick={() => setTab(t)}
-                className={`rounded-full px-3.5 py-[5px] text-[13px] font-bold capitalize ${tab === t ? "bg-deep-green text-white" : "text-deep-green/65"}`}>
+                className={`min-h-[32px] rounded-full px-3.5 py-[5px] text-[13px] font-bold capitalize ${tab === t ? "bg-deep-green text-white" : "text-deep-green/65"}`}>
                 {t}
               </button>
             ))}
@@ -277,61 +295,20 @@ Which matches get promoted, on which channels, and when the push goes out.
           </div>
         )}
 
-        {/* ── NEXT 48 HOURS ─────────────────────────────────────────────────────────────────── */}
-        <div className="mx-5 mb-4 rounded-[11px] border border-cream-line bg-[#fbfdfc] px-3.5 py-3">
-          <div className="mb-2.5 flex items-baseline gap-2.5">
-            <span className="text-[9.5px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Next 48 hours</span>
-            <span className="text-[12px] font-bold text-deep-green/65" data-testid="strip-counts">
-              {jobs.length} push{jobs.length === 1 ? "" : "es"}
-              {/* THE SENT COUNT ONLY APPEARS ONCE THERE IS ONE, so a clean week does not grow a
-                  permanent zero. */}
-              {sentCount > 0 && <> · <b data-testid="strip-sent">{sentCount} sent</b></>}
-              {" · "}{overdue} overdue · {noPlan} match{noPlan === 1 ? "" : "es"} with no plan
-            </span>
-          </div>
-          <div className="flex flex-wrap gap-2" data-testid="jobs">
-            {jobs.length === 0 && <span className="text-[12px] text-deep-green/40">Nothing scheduled this week.</span>}
-            {jobs.map(({ m, p }) => {
-              /* THREE ROWS, THREE LOOKS, and the label carries it too so colour is never the only
-                 signal. A SENT row goes QUIET, NOT AWAY: Ryan asked for "they still show so
-                 everyone has visibility", so the red drops, the time is struck through and the
-                 channel chip greys out, but the row stays exactly where it was. */
-              const sent = isPushSent(p);
-              const late = isPushOverdue(p, now);
-              const t = fmtPush(m, p, zone);
-              const chan = CHANNELS.find((c) => c.key === p.channel);
-              return (
-                <div key={p.id} data-testid="job" data-push-id={p.id} data-channel={p.channel}
-                  data-sent={sent ? "1" : "0"} data-late={late ? "1" : "0"}
-                  className={`flex flex-wrap items-center gap-2.5 rounded-[9px] border px-2.5 py-[7px] text-[12.5px] ${
-                    sent ? "border-cream-line bg-[#f4f7f5]"
-                      : late ? "border-coral/40 bg-coral-soft/40" : "border-cream-line bg-white"}`}>
-                  <span className={`whitespace-nowrap text-[12.5px] font-extrabold ${
-                    sent ? "text-deep-green/45 line-through" : late ? "text-coral" : ""}`}>
-                    {late ? "Overdue · " : ""}{t.day} {t.time}
-                  </span>
-                  <span className={sent ? "text-deep-green/45" : "text-deep-green/65"}>{m.venue} · {DOW[m.dayIdx]} {m.time}</span>
-                  {/* ONE CHIP: this line IS one channel now, so a row of six would be a lie. */}
-                  <i data-testid="job-chan" className={`inline-flex h-[18px] min-w-[24px] items-center justify-center rounded-[5px] border px-1 text-[9.5px] font-extrabold not-italic ${
-                    sent ? "border-cream-line bg-[#eef3f0] text-deep-green/40"
-                      : "border-mint/40 bg-mint-soft/40 text-emerald-700"}`}>{chan?.short ?? p.channel}</i>
-                  {/* THE TOPIC IS WHAT TELLS TWO PUSHES ON ONE MATCH APART. Without it a three-push
-                      match is three identical rows at three times. */}
-                  {p.topic && (
-                    <span data-testid="job-topic" className={`min-w-0 truncate text-[12px] ${sent ? "text-deep-green/40" : "text-deep-green/55"}`}>
-                      {p.topic}
-                    </span>
-                  )}
-                  {/* WHO AND WHEN, on the row. The point of leaving it visible is that somebody
-                      else can see it was handled and by whom. */}
-                  {sent && <span data-testid="job-stamp" className="text-[11.5px] text-deep-green/45">{sentStamp(p)}</span>}
-                  <MarkPushSent push={p} onDone={() => load(weekRef)}
-                    onError={(msg) => setToast({ msg, bad: true })} />
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        {/* ── THE DAY QUEUE ─────────────────────────────────────────────────────────────────
+            Ryan: "Maybe it should show matches of the day to push, with a way to easily change the
+            day, defaulting to the current day, and tab between days" and "the top part is where
+            you see the planned pushes and the operator can mark if they are sent, or if it's past
+            due it will show."
+
+            IT REPLACES THE 48-HOUR STRIP, which was one flat list of every push in the week — the
+            "ugly and long" list. Same pushes, same Mark sent control, grouped by day with past due
+            first and the sent ones folded away.
+
+            IT CREATES NOTHING. The plans are made on the week below; a second way to create a push
+            is how two sources of truth start. */}
+        <DayQueue week={week} zone={zone} onMarked={() => load(weekRef)}
+          onError={(msg) => setToast({ msg, bad: true })} noPlan={noPlan} />
 
         {/* ONE LIST FOR THE PAGE, ABOVE THE GRID, ON BOTH TABS. Comments are about the week's
             promotion plan, not about a city or a fixture — so they sit here rather than inside a
@@ -342,7 +319,7 @@ Which matches get promoted, on which channels, and when the push goes out.
         {tab === "coverage"
           ? <Coverage week={week} zone={zone} />
           : <Plan week={week} byCity={byCity} openId={openId} onOpen={openMatch}
-                   openCity={open?.city ?? null} zone={zone}
+                   openCity={open?.city ?? null} zone={zone} riskOf={riskOf}
                    panel={tab === "plan" && open && draft ? (
             <div className="mb-4 rounded-xl border border-cream-line bg-[#fbfdfc] px-[13px] pb-[9px] pt-[9px]" data-testid="panel">
               <div className="mb-1.5 flex items-baseline gap-2">
@@ -393,8 +370,157 @@ function weekLabel(w: PromoWeek): string {
 }
 
 /* ── THE WEEK ───────────────────────────────────────────────────────────────────────────────── */
-function Plan({ week, byCity, openId, onOpen, openCity, zone, panel }: {
+const DOW_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+/* ── THE DAY QUEUE ────────────────────────────────────────────────────────────────────────────
+ *
+ * Seven tabs defaulting to today, each carrying what is outstanding so the operator can CHOOSE a
+ * day without opening any. Within the day: past due first in its own group, then still to send,
+ * then already-sent behind a fold.
+ *
+ * DERIVED FROM THE WEEK, NEVER CARRIED BESIDE IT. Every entry comes from dayQueue(), which is a
+ * projection of week.matches. A push on the queue and a push on a tile that disagree is the one
+ * failure this page cannot afford.
+ *
+ * ARROW KEYS MOVE BETWEEN DAYS AND STOP AT THE ENDS. Wrapping from Sunday to Monday inside one
+ * week reads as having moved to the next week, which it has not. */
+function DayQueue({ week, zone, onMarked, onError, noPlan }: {
+  week: PromoWeek; zone: ZoneMode; onMarked: () => void; onError: (msg: string) => void; noPlan: number;
+}) {
+  const now = Date.now();
+  const past = isPastWeek(week, now);
+  const [sel, setSel] = useState(() => defaultDayIdx(week));
+  const [showDone, setShowDone] = useState(false);
+  // THE WEEK CAN CHANGE UNDER THE TAB. Stepping back a week has no "today", so the selection
+  // returns to the first day rather than pointing at a day the new week does not highlight.
+  useEffect(() => { setSel(defaultDayIdx(week)); setShowDone(false); }, [week.weekStart]);
+
+  const queues = useMemo(() => weekQueues(week, now), [week, now]);
+  const q = queues[sel];
+  const total = q.late.length + q.todo.length + q.done.length;
+
+  const move = (d: number) => {
+    const next = Math.min(6, Math.max(0, sel + d));   // STOPS AT THE ENDS, never wraps
+    setSel(next);
+    requestAnimationFrame(() => {
+      (document.querySelector(`[data-testid="day-tab"][data-d="${next}"]`) as HTMLElement | null)?.focus();
+    });
+  };
+
+  return (
+    <div className="mx-5 mb-4 rounded-[11px] border border-cream-line bg-[#fbfdfc] px-3.5 py-3" data-testid="day-queue">
+      <div className="mb-2.5 flex flex-wrap items-baseline gap-2.5">
+        <span className="text-[9.5px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Pushes by day</span>
+        <span className="text-[12px] font-bold text-deep-green/65" data-testid="strip-counts">
+          {noPlan} match{noPlan === 1 ? "" : "es"} with no plan this week
+        </span>
+      </div>
+      {/* THE TABS CARRY THE OUTSTANDING WORK, so choosing a day never means opening one. */}
+      <div className="mb-2.5 flex flex-wrap gap-1.5" role="tablist" aria-label="Day" data-testid="day-tabs">
+        {week.days.map((d, i) => {
+          const c = tabCounts(queues[i]);
+          const on = i === sel;
+          return (
+            <button key={d.iso} role="tab" aria-selected={on} tabIndex={on ? 0 : -1}
+              data-testid="day-tab" data-d={i} data-today={d.today ? "1" : "0"}
+              onClick={() => setSel(i)}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowRight") { e.preventDefault(); move(1); }
+                if (e.key === "ArrowLeft") { e.preventDefault(); move(-1); }
+              }}
+              className={`flex min-h-[32px] flex-col items-start rounded-[9px] border px-2.5 py-1 text-left ${
+                on ? "border-deep-green bg-deep-green text-white"
+                   : d.today ? "border-mint bg-white" : "border-cream-line bg-white"}`}>
+              <span className="text-[11px] font-extrabold uppercase tracking-[0.06em]">
+                {d.dow} <b className="tracking-normal" data-testid="day-tab-date">{d.date}</b>
+              </span>
+              <span className={`flex gap-1.5 text-[9.5px] font-bold ${on ? "text-white/75" : "text-deep-green/45"}`}>
+                {c.late > 0 && <i data-testid="pip-late" className="not-italic text-coral">{c.late} past due</i>}
+                {c.late === 0 && c.todo > 0 && <i data-testid="pip-todo" className="not-italic">{c.todo} to send</i>}
+                {c.late === 0 && c.todo === 0 && c.done > 0 && <i data-testid="pip-done" className="not-italic">{c.done} sent</i>}
+                {c.late === 0 && c.todo === 0 && c.done === 0 && <i className="not-italic opacity-60">none</i>}
+                {c.cancelled > 0 && <i data-testid="pip-cx" className="not-italic text-coral">{c.cancelled} cancelled</i>}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div data-testid="queue-panel">
+        <div className="mb-1.5 flex flex-wrap items-baseline gap-2.5">
+          <span className="text-[13.5px] font-extrabold" data-testid="queue-title">
+            {DOW_FULL[sel]} {week.days[sel].date}{week.days[sel].today ? " · today" : ""}
+          </span>
+          <span className="text-[12px] font-bold text-deep-green/55" data-testid="queue-count">
+            {total} push{total === 1 ? "" : "es"} · {q.done.length} sent
+            {q.late.length > 0 ? ` · ${q.late.length} past due` : q.todo.length > 0 ? ` · ${q.todo.length} to send` : ""}
+          </span>
+        </div>
+        {/* PAST DUE FIRST, IN ITS OWN GROUP. A push whose moment has gone is late; one whose moment
+            has not arrived is not, however soon it is. */}
+        {q.late.length > 0 && <div className="mb-1 mt-1.5 text-[9.5px] font-extrabold uppercase tracking-[0.08em] text-coral">Past due</div>}
+        {q.late.map((e) => <QueueRow key={e.p.id} e={e} zone={zone} late past={past} onMarked={onMarked} onError={onError} />)}
+        {q.todo.length > 0 && <div className="mb-1 mt-1.5 text-[9.5px] font-extrabold uppercase tracking-[0.08em] text-deep-green/45">To send</div>}
+        {q.todo.map((e) => <QueueRow key={e.p.id} e={e} zone={zone} past={past} onMarked={onMarked} onError={onError} />)}
+        {total === 0 && (
+          <div className="py-1.5 text-[12px] text-deep-green/40" data-testid="queue-empty">
+            Nothing planned for this day. Plan it on the week below.
+          </div>
+        )}
+        {total > 0 && q.late.length === 0 && q.todo.length === 0 && (
+          <div className="py-1.5 text-[12px] font-bold text-emerald-700" data-testid="queue-clear">
+            Everything planned for this day has gone out.
+          </div>
+        )}
+        {/* SENT GOES QUIET, NOT AWAY. Ryan: "they still show so everyone has visibility." */}
+        {q.done.length > 0 && (
+          <>
+            <button data-testid="queue-fold" aria-expanded={showDone} onClick={() => setShowDone((v) => !v)}
+              className="mt-1.5 min-h-[32px] rounded-[9px] border border-cream-line bg-white px-2.5 text-[12px] font-bold text-deep-green/65">
+              {showDone ? "Hide" : "Show"} {q.done.length} already sent
+            </button>
+            {showDone && q.done.map((e) => <QueueRow key={e.p.id} e={e} zone={zone} past={past} onMarked={onMarked} onError={onError} />)}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ONE ROW. Mark sent stays exactly as good as it is — Ryan volunteered that the current format
+ * makes marking done easy — so it is the same full-size control, on the row, unchanged. */
+function QueueRow({ e, zone, late, past, onMarked, onError }: {
+  e: QueueEntry; zone: ZoneMode; late?: boolean; past: boolean; onMarked: () => void; onError: (msg: string) => void;
+}) {
+  const { m, p } = e;
+  const sent = isPushSent(p);
+  const t = fmtPush(m, p, zone);
+  const chan = CHANNELS.find((c) => c.key === p.channel);
+  return (
+    <div data-testid="queue-row" data-push-id={p.id} data-channel={p.channel}
+      data-sent={sent ? "1" : "0"} data-late={late ? "1" : "0"}
+      className={`mb-1.5 flex flex-wrap items-center gap-2.5 rounded-[9px] border px-2.5 py-[7px] text-[12.5px] ${
+        sent ? "border-cream-line bg-[#f4f7f5]" : late ? "border-coral/40 bg-coral-soft/40" : "border-cream-line bg-white"}`}>
+      <span className={`whitespace-nowrap text-[12.5px] font-extrabold ${sent ? "text-deep-green/45 line-through" : late ? "text-coral" : ""}`}>
+        {t.time}
+      </span>
+      <span className={sent ? "text-deep-green/45" : "text-deep-green/65"}>{m.venue} · {m.city} · {m.time}</span>
+      <i data-testid="queue-chan" className={`inline-flex h-[18px] min-w-[24px] items-center justify-center rounded-[5px] border px-1 text-[9.5px] font-extrabold not-italic ${
+        sent ? "border-cream-line bg-[#eef3f0] text-deep-green/40" : "border-mint/40 bg-mint-soft/40 text-emerald-700"}`}>{chan?.short ?? p.channel}</i>
+      {p.topic && <span data-testid="queue-topic" className={`min-w-0 truncate text-[12px] ${sent ? "text-deep-green/40" : "text-deep-green/55"}`}>{p.topic}</span>}
+      {late && <span data-testid="queue-late" className="rounded-[5px] bg-coral px-[5px] py-px text-[9.5px] font-extrabold text-white">past due</span>}
+      {sent && <span data-testid="queue-stamp" className="text-[11.5px] text-deep-green/45">{sentStamp(p)}</span>}
+      {/* A PAST WEEK OFFERS NO MARK SENT. Nothing in a week that has been and gone should ask the
+          operator to do something they can no longer do. */}
+      {!sent && !past && <MarkPushSent push={p} onDone={onMarked} onError={onError} />}
+    </div>
+  );
+}
+
+function Plan({ week, byCity, openId, onOpen, openCity, zone, panel, riskOf }: {
   week: PromoWeek; byCity: [string, PromoMatch[]][]; openId: number | null; zone: ZoneMode;
+  /** The tile's cancel history, keyed on field and weekday with times CLUSTERED. See cancelPatterns. */
+  riskOf: (m: PromoMatch) => SlotRisk | null;
   onOpen: (m: PromoMatch, el: HTMLElement) => void;
   // THE PANEL OPENS INLINE, UNDER THE CITY WHOSE TILE WAS CLICKED — not at the foot of the page.
   // Rendering it once at page level meant clicking an Atlanta match scrolled you past every other
@@ -420,6 +546,10 @@ function Plan({ week, byCity, openId, onOpen, openCity, zone, panel }: {
         const planned = matches.filter((m) => m.state === "planned").length;
         const check = matches.filter((m) => m.state === "needs-decision").length;
         const none = matches.filter((m) => m.state === "none").length;
+        /* CANCELLED IS COUNTED SEPARATELY, as count AND players. It is excluded from "no plan"
+           above by being its own state: nothing was missed, the match was called off. */
+        const cx = matches.filter((m) => m.state === "cancelled");
+        const cxBooked = cx.reduce((a, m) => a + (m.playerCount ?? 0), 0);
         // Counted from the SAME rows the grid renders, so the header can never describe a
         // different set of tiles than the one below it.
         const fresh = matches.filter((m) => m.newFlag !== null).length;
@@ -435,6 +565,11 @@ function Plan({ week, byCity, openId, onOpen, openCity, zone, panel }: {
                   {fresh} new
                 </span>
               )}
+              {cx.length > 0 && (
+                <span className="text-[11.5px] font-extrabold text-coral" data-testid="city-cx-count">
+                  {cx.length} cancelled &middot; {cxBooked} booked
+                </span>
+              )}
             </div>
             <div className="grid grid-cols-7 gap-2 pb-2.5">
               {week.days.map((d, i) => {
@@ -446,7 +581,7 @@ function Plan({ week, byCity, openId, onOpen, openCity, zone, panel }: {
                       <span>{d.dow}</span><b className="text-[12.5px] tracking-normal text-deep-green/65">{d.date}</b>
                     </div>
                     {dayMatches.length === 0 && <div className="pt-1.5 text-[11.5px] text-deep-green/30">No sessions</div>}
-                    {dayMatches.map((m) => <Tile key={m.apiId} m={m} open={m.apiId === openId} onOpen={onOpen} zone={zone} priorLabel={priorLabel} />)}
+                    {dayMatches.map((m) => <Tile key={m.apiId} m={m} open={m.apiId === openId} onOpen={onOpen} zone={zone} priorLabel={priorLabel} risk={riskOf(m)} />)}
                   </div>
                 );
               })}
@@ -481,22 +616,48 @@ function coverFirst(m: PromoMatch, zone: ZoneMode): string {
  * PLANNED TILES STAY DISTINCT BY WEIGHT, NOT BY LABEL. A tile with a plan carries chips and a push
  * line and a solid left rail; a tile without carries a dashed border and almost no ink. The eye
  * finds the planned ones because they are the only ones with anything in them. */
-function Tile({ m, open, onOpen, zone, priorLabel }: { m: PromoMatch; open: boolean; onOpen: (m: PromoMatch, el: HTMLElement) => void; zone: ZoneMode; priorLabel: string }) {
+function Tile({ m, open, onOpen, zone, priorLabel, risk }: { m: PromoMatch; open: boolean; onOpen: (m: PromoMatch, el: HTMLElement) => void; zone: ZoneMode; priorLabel: string; risk?: SlotRisk | null }) {
   /* A CHIP PER CHANNEL THAT HAS A PUSH, or is on with none — which is what "on" is now. */
   const lit = CHANNELS.filter((c) => channelsOn(m.plan).includes(c.key));
   const code = codeFor(m.plan, lit[0]?.key ?? "wa") ?? lit.map((c) => codeFor(m.plan, c.key)).find(Boolean) ?? null;
   const summary = tileSummary(m, zone);
+  const cancelled = m.state === "cancelled";
+  const r = risk?.cancelCount ?? 0;
+  /* THE CANCEL WASH IS THE OUTERMOST STATE except for a cancellation itself. A washed tile keeps
+   * its own border colour, which is what stops orange-at-2 colliding with the amber that already
+   * means "needs a decision" on this page. */
   const border =
-    m.state === "needs-decision" ? "border-amber-300 bg-amber-50"
-    : m.state === "none" ? "border-dashed border-cream-line"
-    : "border-cream-line border-l-[3px] border-l-mint";
+    cancelled ? "border-dashed border-cream-line bg-[#f7f8f7]"
+    : r > 0 ? WASH[r as 1 | 2 | 3 | 4]
+    : m.state === "needs-decision" ? "border-amber-300 bg-amber-50"
+    : m.state === "none" ? "border-dashed border-cream-line bg-white"
+    : "border-cream-line border-l-[3px] border-l-mint bg-white";
   return (
     <div data-testid="match-tile" data-state={m.state} data-api-id={m.apiId} data-open={open ? "1" : "0"}
-      data-new={m.newFlag ?? ""}
+      data-new={m.newFlag ?? ""} data-r={r}
+      data-booked={cancelled ? String(m.playerCount ?? 0) : undefined}
+      /* THE EXACT TIME LIVES IN THE TITLE, because the tile is coloured on a slot key whose times
+         are clustered — a slot that drifted from 8:00 to 8:30 is one slot to a player and must be
+         one slot here, but the operator still needs to see which time this match actually is. */
+      title={risk ? `Cancelled in ${r} of the last 4 weeks. Seen at ${risk.times.join(", ")}.` : undefined}
       onClick={(e) => onOpen(m, e.currentTarget as HTMLElement)}
-      className={`mb-1.5 cursor-pointer rounded-[9px] border bg-white p-[7px_8px] last:mb-0 ${border} ${open ? "border-deep-green shadow-[0_0_0_2px_#e6efe9]" : ""}`}>
+      /* NO bg-white IN THE BASE. It and the wash class have equal specificity, so which one wins is
+         decided by Tailwind's own emission order rather than by this line — the wash lost, and
+         every shaded tile rendered white while its chip was coloured. The default background is
+         part of the state chain below instead, so exactly one background class is ever applied. */
+      className={`mb-1.5 cursor-pointer rounded-[9px] border p-[7px_8px] last:mb-0 ${border} ${open ? "border-deep-green shadow-[0_0_0_2px_#e6efe9]" : ""}`}>
       <div className="flex items-baseline justify-between gap-1.5">
-        <span className="text-[12.5px] font-extrabold">{m.time}</span>
+        <span className={`text-[12.5px] font-extrabold ${cancelled ? "text-deep-green/40 line-through" : ""}`}>{m.time}</span>
+        {/* THE RATIO, ON EVERY SHADED TILE. #D9452F against #8F2A17 is a hard pair at tile size,
+            which is the only real objection to this ramp; printing the number answers it without
+            changing the colours. */}
+        {r > 0 && (
+          <i data-testid="risk-chip" data-r={r}
+            className="shrink-0 rounded-[4px] px-[5px] py-px text-[9px] font-extrabold not-italic tracking-[0.03em]"
+            style={{ background: RAMP_HEX[r as 1 | 2 | 3 | 4], color: RAMP_INK[r as 1 | 2 | 3 | 4] }}>
+            {r}/4
+          </i>
+        )}
         {m.newFlag && (
           <i data-testid="new-badge" data-flag={m.newFlag}
             /* THE RULE, THE CITY AND THE WEEK IT COMPARED, on the badge itself. The dates are
@@ -507,7 +668,20 @@ function Tile({ m, open, onOpen, zone, priorLabel }: { m: PromoMatch; open: bool
           </i>
         )}
       </div>
-      <div className="mt-px text-[11px] leading-[1.25] text-deep-green/65">{m.venue}</div>
+      <div className={`mt-px text-[11px] leading-[1.25] ${cancelled ? "text-deep-green/40" : "text-deep-green/65"}`}>{m.venue}</div>
+      {/* A CANCELLED MATCH IS ITS OWN STATE, not a variant of "no plan": nothing was missed, the
+          match was called off. THE BOOKED COUNT IS THE POINT and so it is the loudest thing here —
+          a cancellation with 16 booked cost sixteen players, one with 1 was never going to run, and
+          rendering both as "cancelled" throws away the only number that separates them. */}
+      {cancelled && (
+        <div className="mt-[5px] flex items-center gap-1.5">
+          <i data-testid="cx-tag" className="rounded-[4px] border border-cream-line bg-white px-[5px] py-px text-[8.5px] font-extrabold not-italic uppercase tracking-[0.05em] text-deep-green/45">Cancelled</i>
+          <span data-testid="booked" data-heavy={(m.playerCount ?? 0) >= 10 ? "1" : "0"}
+            className={`text-[12px] font-extrabold ${(m.playerCount ?? 0) >= 10 ? "text-coral" : "text-deep-green/70"}`}>
+            {m.playerCount ?? 0} booked
+          </span>
+        </div>
+      )}
       {/* ONLY THE LIT CHANNELS. flex-wrap + min-w-0 still stops the widest chip running off the
           tile edge at seven columns — the failure this layout had before, and the reason the
           overflow measurement in verify-match-promotion is kept. */}
@@ -644,12 +818,43 @@ function Coverage({ week, zone }: { week: PromoWeek; zone: ZoneMode }) {
   );
 }
 
-/* ── CANCEL PATTERNS ────────────────────────────────────────────────────────────────────────── */
+/* ── CANCEL PATTERNS ──────────────────────────────────────────────────────────────────────────
+ *
+ * RYAN'S RAMP: yellow, orange, light red, dark red for 1, 2, 3, 4. It replaces one that was NOT
+ * ORDERED, and that is a fix rather than a preference. The old scale ran #e6a532 amber at 2, then
+ * #7d3220 at 3 — a very dark maroon — then #c0392b at 4, which is BRIGHTER than 3. So three read
+ * heavier than four, which is why the two reds were impossible to separate.
+ *
+ * MEASURED luminance, old, 1 to 4: 239.4 > 170.5 > 64.6 > 84.7. It falls and then climbs again.
+ * MEASURED luminance, new, 1 to 4: 195.5 > 148.2 > 98.9 > 62.1. Strictly monotonic, and asserted
+ * as such so the ordering cannot silently break later.
+ *
+ * ONE SCALE FOR ONE METRIC. This map is the Cancel tab's too, so changing it changes both, which
+ * is intended: a metric with two scales is worse than an imperfect scale. */
+const RAMP_HEX: Record<1 | 2 | 3 | 4, string> = { 1: "#F4C430", 2: "#E8862A", 3: "#D9452F", 4: "#8F2A17" };
+const RAMP_INK: Record<1 | 2 | 3 | 4, string> = { 1: "#3A2A00", 2: "#2E1B00", 3: "#ffffff", 4: "#ffffff" };
 const TIER: Record<number, string> = {
-  4: "bg-[#c0392b] text-white",
-  3: "bg-[#7d3220] text-white",
-  2: "bg-[#e6a532] text-[#3d2a05]",
-  1: "bg-[#eef0ee] text-deep-green/65 border border-cream-line",
+  4: "bg-[#8F2A17] text-white",
+  3: "bg-[#D9452F] text-white",
+  2: "bg-[#E8862A] text-[#2E1B00]",
+  1: "bg-[#F4C430] text-[#3A2A00]",
+};
+
+/* THE TILE WASH. Light at 1 and 2 so a board of ones does not read as a board on fire, and the
+ * ratio is printed on every chip regardless — nobody reads 2/4 against 3/4 off a shade, and that
+ * is exactly the distinction between moving a slot and watching it.
+ *
+ * TWO IS ORANGE AND "NEEDS A DECISION" IS AMBER on this page (border-amber-300 bg-amber-50), which
+ * are neighbours. MEASURED on the live week: 0 tiles are both at once, because needs-decision
+ * requires a plan with every push undated and the cancel wash requires a cancellation history, and
+ * no match currently holds both. They are separated anyway — a washed tile keeps its cancel border
+ * and the needs-decision amber only ever shows on an unwashed one — so the pair cannot collide if
+ * the data changes. */
+const WASH: Record<1 | 2 | 3 | 4, string> = {
+  1: "bg-[#FEF8E7] border-[#F4C430]",
+  2: "bg-[#FDF0E3] border-[#E8862A]",
+  3: "bg-[#FBE9E6] border-[#D9452F]",
+  4: "bg-[#F6E4E0] border-[#8F2A17]",
 };
 
 /**
@@ -720,7 +925,16 @@ export function useCancelRanking() {
     return max === 0 ? null : { dow: DOW[c.indexOf(max)], n: max };
   }, [grid]);
 
-  return { grid, all, headline, worst, worstDay, ready: !loading && !!meta };
+  /* THE WHOLE-ESTATE RESULT AND THE CANONICALISER, for the tile rollup. getCancelPatterns is
+   * city-agnostic, so the grid above calls it once per city; the tile needs one result across the
+   * estate and needs to resolve a match's raw field_title through THE SAME pipeline the slots were
+   * built with. Exposed rather than rebuilt at the call site, which is how two canonicalisations
+   * start. */
+  const result = useMemo(() => getCancelPatterns(rows, aliases, "patterns"), [rows, aliases]);
+  const canonicalOf = useCallback(
+    (fieldRaw: string) => normalizeMatchName(fieldRaw, aliases).canonical, [aliases]);
+
+  return { grid, all, headline, worst, worstDay, result, canonicalOf, ready: !loading && !!meta };
 }
 
 /** Desktop matrix. Takes the derivation as a prop so it is computed once for both layouts. */

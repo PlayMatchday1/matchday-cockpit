@@ -413,8 +413,10 @@ export function newnessOf(m: SlotLike, slate: PriorSlate): NewFlag | null {
 /** A match plus whatever plan exists for it. `plan` is null when no row has ever been written. */
 export type PromoMatch = VeoMatch & {
   plan: PromoPlan | null;
-  /** planned | needs-decision | none — derived once here so no view re-derives it. */
-  state: "planned" | "needs-decision" | "none";
+  /* planned | needs-decision | none | cancelled — derived once here so no view re-derives it.
+   * CANCELLED IS ITS OWN STATE, NOT A VARIANT OF "none". Nothing was missed; the match was called
+   * off, so it is excluded from the no-plan count and totalled separately per city. */
+  state: "planned" | "needs-decision" | "none" | "cancelled";
   /** The most significant thing new about this slot against the prior week's slate, or null. */
   newFlag: NewFlag | null;
 };
@@ -436,7 +438,12 @@ export function anyChannel(p: PromoPlan | null): boolean {
   return (p?.pushes.length ?? 0) > 0;
 }
 
-export function stateOf(p: PromoPlan | null): PromoMatch["state"] {
+/* CANCELLED WINS OVER EVERY OTHER STATE. A cancelled match with a push planned is not "planned" —
+ * the push is moot — and a cancelled match with no push is not "no plan", because no plan was
+ * needed. The flag is passed rather than read off the plan, so the existing single-argument
+ * callers keep their exact behaviour. */
+export function stateOf(p: PromoPlan | null, isCancelled = false): PromoMatch["state"] {
+  if (isCancelled) return "cancelled";
   if (!p || p.pushes.length === 0) return "none";
   /* PLANNED THE MOMENT ANY PUSH HAS A TIME. A match with WhatsApp dated and Klaviyo still undated
    * is planned AND carries an amber channel; the tile says planned because something is going out,
@@ -517,7 +524,11 @@ export async function fetchPromoWeek(
   now: Date,
   weekRef: Date = now,
 ): Promise<PromoWeek> {
-  const week = await fetchVeoWeek(sb, now, weekRef);
+  /* THE DISPLAYED WEEK INCLUDES CANCELLED MATCHES. Ryan: "the operator wants to be able to see
+   * what cancelled last week by going to last week." They arrive flagged and are given their own
+   * state below, so they never reach the no-plan count. /api/veo is untouched: it calls
+   * fetchVeoWeek without this argument and still receives live matches only. */
+  const week = await fetchVeoWeek(sb, now, weekRef, null, true);
   const ids = week.matches.map((m) => m.apiId);
   const { plans, ready } = await fetchPlans(sb, ids);
 
@@ -531,7 +542,7 @@ export async function fetchPromoWeek(
 
   const matches: PromoMatch[] = week.matches.map((m) => {
     const plan = plans.get(m.apiId) ?? null;
-    return { ...m, plan, state: stateOf(plan), newFlag: newnessOf(m, slate) };
+    return { ...m, plan, state: stateOf(plan, m.isCancelled), newFlag: newnessOf(m, slate) };
   });
   // City, then day, then time. The grid renders in this order and so does the worklist fallback.
   matches.sort((a, b) => a.city.localeCompare(b.city) || a.dayIdx - b.dayIdx || a.minutes - b.minutes);

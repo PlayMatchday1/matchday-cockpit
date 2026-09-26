@@ -326,3 +326,107 @@ export function getCancelPatterns(
 }
 
 export const CANCEL_PATTERNS_DOW_LABELS = DOW_ABBR;
+
+/* ════════════════════════════════════════════════════════════════════════════════════════════════
+ * THE TILE'S ROLLUP — field and weekday, with times CLUSTERED rather than dropped
+ *
+ * Ryan: "sometimes that one is hard as it has slate no longer active". The slot key above is
+ * (canonical_field, day_of_week, time_of_day), so a slate time that moves by half an hour changes
+ * the key, orphans the history, and renders a chronically cancelled slot clean.
+ *
+ * DROPPING TIME ENTIRELY WAS THE FIRST PROPOSAL AND IT IS WORSE THAN THE PROBLEM. MEASURED over
+ * the four-week window getCancelPatterns itself uses (2026-08-24 to 2026-09-21, 429 matches, 142
+ * slots keyed with time, 100 keyed without), 32 of the 100 field-and-weekday pairs carry more than
+ * one distinct time, and the spread between them falls into two populations:
+ *
+ *     15 min    2 pairs    a slot that DRIFTED   (Round Rock Fri 19:00/19:15)
+ *     30 min    3 pairs    a slot that DRIFTED   (KISC Fri 20:00/20:30)
+ *     60 min   18 pairs    BACK-TO-BACK matches  (STAR Tue 19:30 and 20:30)
+ *    120 min    9 pairs    BACK-TO-BACK matches  (Soccer Central Fri 19:00, 20:00, 21:00)
+ *
+ * So only 5 of 32 are the drift this is meant to rescue; the other 27 are different matches on the
+ * same evening. Merging them would paint all three Soccer Central tiles with one count and report
+ * one slot dying where three died. The clincher: STAR Tuesday cancelled at BOTH 19:30 and 20:30 in
+ * the window, which is two slots dying, not one dying twice as hard.
+ *
+ * ── WHY FORTY ────────────────────────────────────────────────────────────────────────────────
+ * Not because of anything about forty. Because the measured distribution has a HOLE in it: the
+ * drift cases stop at 30 and the back-to-back cases start at 60, and there is nothing in between.
+ * Forty sits in that hole. WHOEVER MEETS A 45-MINUTE PAIR IS OUTSIDE THE EVIDENCE and should
+ * re-measure rather than nudge this number — a 45-minute gap is equally consistent with a slot
+ * that moved and with a short turnaround, and this data cannot tell them apart. */
+export const SLOT_CLUSTER_GAP_MIN = 40;
+
+/* ── AND WHY THE SPAN IS CAPPED SEPARATELY ────────────────────────────────────────────────────
+ * A gap rule alone is single-link clustering, which CHAINS: 19:00, 19:35 and 20:10 are two
+ * 35-minute steps, each inside the gap, and they would merge into one 70-minute group — quietly
+ * reproducing the back-to-back merge the gap rule exists to prevent. So a cluster also has a total
+ * width, measured from its first member.
+ *
+ * FORTY-FIVE, because the widest real drift observed is 30 (LBJ Sun 19:00/19:15/19:30, three
+ * points inside half an hour) and the narrowest real back-to-back is 60. 45 admits every observed
+ * drift and refuses the 70-minute chain. */
+export const SLOT_CLUSTER_SPAN_MIN = 45;
+
+/** Minutes-of-day, sorted ascending, grouped into clusters. Both bounds apply: a time joins the
+ *  open cluster only if it is within GAP of the previous member AND within SPAN of the first. */
+export function clusterMinutes(minutes: readonly number[]): number[][] {
+  const sorted = [...new Set(minutes)].sort((a, b) => a - b);
+  const out: number[][] = [];
+  for (const m of sorted) {
+    const open = out[out.length - 1];
+    if (open && m - open[open.length - 1] <= SLOT_CLUSTER_GAP_MIN && m - open[0] <= SLOT_CLUSTER_SPAN_MIN) open.push(m);
+    else out.push([m]);
+  }
+  return out;
+}
+
+/** The key a tile is coloured by: field, weekday, and which time-cluster the kickoff falls in.
+ *  The cluster is identified by its FIRST member, so every time in it resolves to one key. */
+export function slotRiskKey(canonicalField: string, dowIdx: number, minutes: number, clusters: number[][]): string {
+  const c = clusters.find((g) => minutes >= g[0] && minutes <= g[g.length - 1]);
+  return `${canonicalField}|${dowIdx}|${c ? c[0] : minutes}`;
+}
+
+export type SlotRisk = { cancelCount: 1 | 2 | 3 | 4; booked: number; times: string[] };
+
+/* THE ROLLUP, BUILT FROM getCancelPatterns' OWN OUTPUT rather than re-reading the match rows.
+ * That function owns the canonicalisation, the four-week window and the lenient-Sunday anchor;
+ * deriving this at the call site would mean a second copy of all three, which is exactly how the
+ * per_match_rate and cost_per_match figures ended up $36 apart. It is ADDED BESIDE it and changes
+ * nothing about it, so the cities index card and the Cancel tab are untouched.
+ *
+ * cancelCount is the MAX across the merged times, not the sum. Two slots in one cluster are the
+ * same slot observed either side of a move, so a 4-week count of 2 and a count of 1 is one slot
+ * that cancelled in at most 2 of the 4 weeks — adding them would invent a fifth week. */
+export function rollUpSlotRisk(result: CancelPatternsResult): Map<string, SlotRisk> {
+  const byFieldDow = new Map<string, number[]>();
+  const slots: CancelSlot[] = [];
+  for (const w of result.weeks) for (const day of w.byDay) for (const s of day) {
+    slots.push(s);
+    const k = `${s.canonicalField}|${s.dowIdx}`;
+    (byFieldDow.get(k) ?? byFieldDow.set(k, []).get(k)!).push(s.timeMinutes);
+  }
+  const clustersFor = new Map<string, number[][]>();
+  for (const [k, mins] of byFieldDow) clustersFor.set(k, clusterMinutes(mins));
+
+  const out = new Map<string, SlotRisk>();
+  for (const s of slots) {
+    const clusters = clustersFor.get(`${s.canonicalField}|${s.dowIdx}`) ?? [[s.timeMinutes]];
+    const key = slotRiskKey(s.canonicalField, s.dowIdx, s.timeMinutes, clusters);
+    const prev = out.get(key);
+    if (!prev) { out.set(key, { cancelCount: s.cancelCount, booked: s.bookedCount, times: [s.time] }); continue; }
+    prev.cancelCount = Math.max(prev.cancelCount, s.cancelCount) as 1 | 2 | 3 | 4;
+    prev.booked += s.bookedCount;
+    if (!prev.times.includes(s.time)) prev.times.push(s.time);
+  }
+  return out;
+}
+
+/** The clusters for one field and weekday, so a caller holding a match can find its own key. */
+export function clustersForField(result: CancelPatternsResult, canonicalField: string, dowIdx: number): number[][] {
+  const mins: number[] = [];
+  for (const w of result.weeks) for (const day of w.byDay) for (const s of day)
+    if (s.canonicalField === canonicalField && s.dowIdx === dowIdx) mins.push(s.timeMinutes);
+  return clusterMinutes(mins);
+}

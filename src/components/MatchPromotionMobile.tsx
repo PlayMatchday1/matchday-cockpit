@@ -34,6 +34,9 @@ const offsetOf = (m: PromoMatch): number | null => venueOffsetMs(m.startDate ?? 
 
 export type MobileProps = {
   week: PromoWeek;
+  /** The tile's cancel history, keyed on field and weekday with times clustered. Optional so the
+   *  phone renders uncoloured rather than crashing if the cancel data has not loaded. */
+  riskOf?: (m: PromoMatch) => { cancelCount: 1 | 2 | 3 | 4; booked: number; times: string[] } | null;
   tab: "due" | "week" | "coverage";
   setTab: (t: "due" | "week" | "coverage") => void;
   jobs: { m: PromoMatch; p: PromoPush; at: number }[];
@@ -174,13 +177,27 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode }) {
               <div key={m.apiId}>
                 <div data-testid="m-row" data-state={m.state} data-api-id={m.apiId}
                   onClick={(e) => onOpen(m, e.currentTarget as HTMLElement)}
-                  data-new={m.newFlag ?? ""}
-                  className={`mb-2 rounded-[11px] border bg-white px-3 py-[11px] ${
-                    m.state === "needs-decision" ? "border-amber-300 bg-amber-50"
-                    : m.state === "none" ? "border-dashed border-cream-line" : "border-cream-line border-l-[3px] border-l-mint"} ${
+                  data-new={m.newFlag ?? ""} data-r={p.riskOf?.(m)?.cancelCount ?? 0}
+                  data-booked={m.state === "cancelled" ? String(m.playerCount ?? 0) : undefined}
+                  /* NO bg-white IN THE BASE — see the Tile note in MatchPromotionView: it ties
+                     with the wash class on specificity and wins on emission order. */
+                  className={`mb-2 rounded-[11px] border px-3 py-[11px] ${
+                    m.state === "cancelled" ? "border-dashed border-cream-line bg-[#f7f8f7]"
+                    : M_WASH[p.riskOf?.(m)?.cancelCount ?? 0]
+                    ?? (m.state === "needs-decision" ? "border-amber-300 bg-amber-50"
+                    : m.state === "none" ? "border-dashed border-cream-line bg-white" : "border-cream-line border-l-[3px] border-l-mint bg-white")} ${
                     m.apiId === openId ? "border-deep-green shadow-[0_0_0_2px_#e6efe9]" : ""}`}>
                   <div className="flex items-baseline gap-2">
-                    <span className="text-[15px] font-black tabular-nums">{m.time}</span>
+                    <span className={`text-[15px] font-black tabular-nums ${m.state === "cancelled" ? "text-deep-green/40 line-through" : ""}`}>{m.time}</span>
+                    {/* THE SAME RAMP AND THE SAME RATIO AS THE DESKTOP TILE. One metric, one scale,
+                        on both surfaces — see MatchPromotionView's RAMP_HEX. */}
+                    {(p.riskOf?.(m)?.cancelCount ?? 0) > 0 && (
+                      <i data-testid="m-risk-chip" data-r={p.riskOf!(m)!.cancelCount}
+                        className="rounded-[4px] px-[5px] py-px text-[9px] font-extrabold not-italic"
+                        style={{ background: M_RAMP_HEX[p.riskOf!(m)!.cancelCount], color: M_RAMP_INK[p.riskOf!(m)!.cancelCount] }}>
+                        {p.riskOf!(m)!.cancelCount}/4
+                      </i>
+                    )}
                     <span className="min-w-0 flex-1 truncate text-[13.5px] font-bold">{m.venue}</span>
                     {m.newFlag && (
                       <span data-testid="m-new-badge" data-flag={m.newFlag}
@@ -195,6 +212,16 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode }) {
                       {m.city}
                     </span>
                   </div>
+                  {/* A CANCELLED MATCH IS ITS OWN STATE, and the booked count is the point. */}
+                  {m.state === "cancelled" && (
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <i data-testid="m-cx-tag" className="rounded-[4px] border border-cream-line bg-white px-[5px] py-px text-[9px] font-extrabold not-italic uppercase tracking-[0.05em] text-deep-green/45">Cancelled</i>
+                      <span data-testid="m-booked" data-heavy={(m.playerCount ?? 0) >= 10 ? "1" : "0"}
+                        className={`text-[13px] font-extrabold ${(m.playerCount ?? 0) >= 10 ? "text-coral" : "text-deep-green/70"}`}>
+                        {m.playerCount ?? 0} booked
+                      </span>
+                    </div>
+                  )}
                   {/* ONLY WHAT IS PLANNED — see the Tile note in MatchPromotionView. An unlit chip,
                       an absent code and an absent push are one fact stated three times. */}
                   {(channelsOn(m.plan).length > 0 || firstCode(m)) && (
@@ -377,6 +404,17 @@ function Coverage({ week }: { week: PromoWeek }) {
 }
 
 /* ── THE PHONE SHELL ─────────────────────────────────────────────────────────────────────────── */
+
+/* THE RAMP AND THE WASH, THE DESKTOP'S OWN VALUES. Duplicated as constants rather than imported
+ * because MatchPromotionView imports this file and the cycle is not worth a shared module for four
+ * hex strings; the ramp assertion checks BOTH surfaces so they cannot drift apart silently. */
+const M_RAMP_HEX: Record<number, string> = { 1: "#F4C430", 2: "#E8862A", 3: "#D9452F", 4: "#8F2A17" };
+const M_RAMP_INK: Record<number, string> = { 1: "#3A2A00", 2: "#2E1B00", 3: "#ffffff", 4: "#ffffff" };
+const M_WASH: Record<number, string | undefined> = {
+  0: undefined,
+  1: "bg-[#FEF8E7] border-[#F4C430]", 2: "bg-[#FDF0E3] border-[#E8862A]",
+  3: "bg-[#FBE9E6] border-[#D9452F]", 4: "bg-[#F6E4E0] border-[#8F2A17]",
+};
 
 export default function MatchPromotionMobile(p: MobileProps) {
   const { tab, setTab, weekLabel, onNav, week } = p;

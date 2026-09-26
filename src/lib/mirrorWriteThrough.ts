@@ -145,6 +145,23 @@ export async function refreshMatchMirror(
       patch.field_zipcode = (f.zipCode as string | undefined) ?? null;
     }
   }
+  /* ── THE BOOKING COUNT RIDES ON EVERY WRITE-THROUGH, FROM THE READ-BACK'S OWN _count ────────
+   * player_count has no COLUMN entry and can never have one: it is never a key we WRITE. It is
+   * `_count.players`, which the server maintains. But the re-read carries it — the insert path's
+   * note above says so in as many words, "`_count` on GET /admin/matches/{id} carries `players`"
+   * — so it is copied the same way the manager's name rides on managerId.
+   *
+   * WHY IT MATTERS NOW. Match Promotion renders it on a cancelled tile as "16 booked", which is
+   * the number that decides whether the slot moves; and mirror-writethrough-test asserts that
+   * every column veoSchedule SELECTS is reachable this way, precisely so a rendered column cannot
+   * go stale until the nightly cron. Adding the column to that select without this would have
+   * left a figure on screen that no Clubhouse write could correct.
+   *
+   * WRITTEN ONLY WHEN THE READ-BACK ACTUALLY CARRIED IT. Absent means the endpoint did not say,
+   * and a guessed 0 is a number nobody can tell from a measured one. */
+  const cnt = after._count as { players?: unknown } | null | undefined;
+  if (cnt && typeof cnt === "object" && typeof cnt.players === "number") patch.player_count = cnt.players;
+
   if (Object.keys(patch).length === 0) return { refreshed: false, reason: "no mirrored fields" };
   /* THE ROW IS NOW NEWER THAN THE LAST SYNC, AND IT MUST SAY SO. The Master Schedule stamps its
    * freshness from max(synced_at), so a write-through that did not move it would leave the page

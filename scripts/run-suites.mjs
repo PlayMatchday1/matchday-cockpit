@@ -323,6 +323,10 @@ const NODE_SUITES = [
   // nesting per field rather than per city (a city-wide reading lost 19 cases). A badge is a badge
   // on screen whichever way it was derived.
   "scripts/match-promotion-new-test.ts",
+  /* THE SLOT KEY THE CANCEL COLOUR IS BUILT ON. Keying on (field, weekday, time) orphans a slot
+   * that moves; dropping time merges back-to-back matches, which is worse — measured, 5 drift
+   * cases against 27 parallel ones. Times are CLUSTERED, and this pins both shapes. */
+  "scripts/slot-cluster-test.ts",
   // MATCH MANAGERS. Not here for the arithmetic — here for the NAME and the DEAD CONTROL. "City
   // manager" means three unrelated things in this codebase (a Clubhouse login with confinement, a
   // 6-row directory table, and this 87-person roster), and a label using the API's word would read
