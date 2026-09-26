@@ -228,15 +228,17 @@ for (const vw of [390, 1320]) {
   ok(small.length === 0, `  ${vw}px: every control at least 32px${small.length ? ': ' + small.slice(0, 4).join(' / ') : ''}`);
 }
 
-// ══ 12. THE CANCEL TAB STILL READS CORRECTLY ══════════════════════════════════════════════════
+// ══ 12. THE CANCEL SECTION IS GONE, AND THE SCALE IS NOT ══════════════════════════════════════
 await load();
-const cancelChips = await p.$$eval(D('cancel-chip'), es => es.map(e => ({
-  cls: e.className, bg: getComputedStyle(e).backgroundColor, t: e.textContent.trim() })));
-ok(cancelChips.length > 0, `the Cancel tab still renders its ${cancelChips.length} slot chips`);
-const bgs = [...new Set(cancelChips.map(c => c.bg))];
-ok(bgs.every(bg => Object.values(WANT).includes(bg)),
-  `  and every one uses the new ramp (${bgs.join(', ')})`);
-ok(!cancelChips.some(c => /c0392b|7d3220|e6a532/.test(c.cls)), '  CONTROL: none of the old hexes survives');
+ok(await p.$(D('cancel-patterns')) === null, 'the cancel section is gone from the page');
+ok(await p.$$eval(D('cancel-chip'), es => es.length) === 0, '  and so are its pills');
+const tabNames = await p.$$eval(`${D('view-tabs')} button`, es => es.map(e => e.textContent.trim().toLowerCase()));
+ok(tabNames.length === 2 && tabNames.join(',') === 'plan,coverage', `the view is two tabs (${tabNames.join(', ')})`);
+/* CONTROL: the scale did NOT go with it. The tile chips are the only consumer now, and they read
+   the same four colours the pills used to. */
+const stillRamped = await p.$$eval(D('risk-chip'), es => [...new Set(es.map(e => getComputedStyle(e).backgroundColor))]);
+ok(stillRamped.length > 0 && stillRamped.every(bg => Object.values(WANT).includes(bg)),
+  `  CONTROL: the tile chips still read the four ramp colours (${stillRamped.join(', ')})`);
 
 ok(errs.length === 0, `no page errors across the whole run${errs.length ? ': ' + errs[0] : ''}`);
 console.log(`\n${pass} passed, ${fail} failed`);

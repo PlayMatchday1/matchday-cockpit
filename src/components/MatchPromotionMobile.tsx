@@ -22,7 +22,6 @@ import { CHANNELS, NEW_FLAG_LABEL, channelsOn, codeFor, coverageCaption, coverag
 import MarkPushSent from "@/components/MarkPushSent";
 import PushPlanEditor from "@/components/PushPlanEditor";
 import PageComments from "@/components/PageComments";
-import CancelRanking, { type RankTone } from "@/components/CancelRanking";
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -57,9 +56,6 @@ export type MobileProps = {
    * two surfaces cannot disagree about which zone a push time is printed in. */
   zone: ZoneMode;
   setZone: (z: ZoneMode) => void;
-  ranking: { code: string; canonical: string; time: string; booked: number; n: number; slot: string; city: string }[];
-  rankingReady: boolean;
-  rankingTotal: number;
   /** Surfaces a failed mark-sent as the page's own toast. */
   onError?: (msg: string) => void;
 };
@@ -310,41 +306,10 @@ function Panel(p: MobileProps) {
   );
 }
 
-/* ── CANCEL PATTERNS AS A RANKING ──────────────────────────────────────────────────────────────
- * THE LIST ITSELF NOW LIVES IN components/CancelRanking. Slate Review needed the same ranking on a
- * phone, and a second copy is how two screens start disagreeing about the same cancellations. What
- * stays here is this screen's own ramp and its heading — the rendering is shared.
- *
- * TIER IS DELIBERATELY NON-MONOTONIC IN LIGHTNESS (3-of-4 darker than 4-of-4) and is unchanged.
- * It is safe only because the badge prints the count, which CancelRanking guarantees. */
-
-const TIER: Record<number, RankTone> = {
-  4: { bg: "#c0392b", fg: "#ffffff" },
-  3: { bg: "#7d3220", fg: "#ffffff" },
-  2: { bg: "#e6a532", fg: "#3d2a05" },
-  1: { bg: "#eef0ee", fg: "rgba(13,59,46,.65)", border: "#e7ece7" },
-};
-
-function Ranking({ ranking, ready, total }: { ranking: MobileProps["ranking"]; ready: boolean; total: number }) {
-  if (!ready) return <div className="px-3 py-5 text-[12.5px] text-deep-green/45">Loading cancel patterns…</div>;
-  return (
-    <div data-testid="m-cancel">
-      <div className="px-3 pb-0.5 pt-4">
-        <h2 className="m-0 text-[11px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Cancel patterns</h2>
-        <div className="mb-2 text-[11.5px] font-bold text-deep-green/65" data-testid="m-cancel-counts">
-          {total} slots · last 4 completed weeks
-        </div>
-      </div>
-      <div className="px-3 pb-1">
-        <CancelRanking outOf={4} ramp={TIER} emptyText="No slot died more than once."
-          slots={ranking.map((s) => ({
-            key: s.slot, name: s.canonical, when: `${DOW[Number(s.slot.split("|")[1])]} ${s.time}`,
-            booked: s.booked, city: s.city, n: s.n,
-          }))} />
-      </div>
-    </div>
-  );
-}
+/* THE CANCEL RANKING IS GONE FROM THIS SCREEN. The history lives on the row itself now — same
+ * ramp, same ratio chip as the desktop tile — so a separate list of the same cancellations below
+ * the week was the page saying it twice. components/CancelRanking stays; Slate Review still
+ * renders it, and this screen's own TIER went with the list that used it. */
 
 /* ── COVERAGE AS SEVEN DOTS ──────────────────────────────────────────────────────────────────── */
 
@@ -454,7 +419,6 @@ export default function MatchPromotionMobile(p: MobileProps) {
       <PageComments weekStart={week.weekStart} placeholder="Suggestion about this week" />
       {tab === "week" && <WeekByDay {...p} panel={<Panel {...p} />} />}
       {tab === "coverage" && <Coverage week={week} />}
-      {tab === "week" && <Ranking ranking={p.ranking} ready={p.rankingReady} total={p.rankingTotal} />}
 
       {/* The legend explains the coverage dots and the row states. It is not on DUE, where there
           are neither — a key to symbols that are not on screen is just noise above the fold. */}

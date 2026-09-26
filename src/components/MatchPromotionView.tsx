@@ -24,7 +24,6 @@ import { useFinanceData } from "@/lib/useFinanceData";
 import { getCancelPatterns, rollUpSlotRisk, clustersForField, slotRiskKey, type SlotRisk } from "@/lib/cancelPatterns";
 import { normalizeMatchName } from "@/lib/venueNormalization";
 import { weekQueues, isPastWeek, defaultDayIdx, tabCounts, type QueueEntry } from "@/lib/promoDayQueue";
-import { mostRecentCompletedWeekMonday } from "@/lib/weekWindow";
 import {
   CHANNELS, NEW_FLAG_LABEL, channelsOn, codeFor, coverageCaption, coverageStateOf, coverageSummary,
   datedPushes, draftFromPlan, draftToPushes, fmtPushIn, isPushOverdue, isPushSent, leadToKickoff,
@@ -206,28 +205,38 @@ export default function MatchPromotionView() {
   // THE PHONE'S CANCEL RANKING — the desktop matrix's own numbers, flattened and ordered. 1-of-4
   // slots are dropped on the phone only: a list has to be short to be read, and one bad week is
   // not a pattern. The desktop grid still shows them.
-  const cancels = useCancelRanking();
+  /* THE TILE'S CANCEL HISTORY, ANCHORED ON THE WEEK BEING DISPLAYED.
+   *
+   * cancelPatterns anchors on the last four FULLY COMPLETED weeks relative to a date, so anchoring
+   * on TODAY meant that while the current week was on screen every cancellation in front of the
+   * operator was outside the window by construction. Live on Sep 21-27: Keswick Park cancelled on
+   * the Monday with 9 booked and its chip was empty, while the same field's Friday tile read 1/4
+   * from an earlier Friday. Both counts were correct and together they read as broken.
+   *
+   * Anchoring on the displayed week's Monday makes the chip mean "before the week you are looking
+   * at", which is the only reading that survives sitting beside a cancellation, and it steps back
+   * with the arrow. It is also MORE deterministic than the default: mostRecentCompletedWeekMonday
+   * has a lenient-Sunday special case, and a Monday is never a Sunday, so that branch can never
+   * fire here.
+   *
+   * getCancelPatterns' own default is untouched — the anchor is passed in. */
+  const cancels = useTileCancelHistory(week?.weekStart ?? null);
   /* THE TILE'S CANCEL HISTORY. getCancelPatterns keys a slot on (field, weekday, TIME), so a slate
    * time that moves orphans its own history and a chronically cancelled slot renders clean —
    * Ryan's "sometimes that one is hard as it has slate no longer active". rollUpSlotRisk re-keys
    * on field and weekday with the times CLUSTERED rather than dropped; see cancelPatterns.ts for
    * the measurement that ruled dropping them out. getCancelPatterns itself is untouched. */
   const riskByKey = useMemo(() => {
-    if (!cancels.ready) return new Map<string, SlotRisk>();
+    if (!cancels.ready || !cancels.result) return new Map<string, SlotRisk>();
     return rollUpSlotRisk(cancels.result);
   }, [cancels.ready, cancels.result]);
   const riskOf = useCallback((m: PromoMatch): SlotRisk | null => {
-    if (!cancels.ready) return null;
+    if (!cancels.ready || !cancels.result) return null;
     const canonical = cancels.canonicalOf(m.fieldRaw);
     if (!canonical) return null;
     const clusters = clustersForField(cancels.result, canonical, m.dayIdx);
     return riskByKey.get(slotRiskKey(canonical, m.dayIdx, m.minutes, clusters)) ?? null;
   }, [cancels, riskByKey]);
-  const { all: rankAll, headline: rankTotal, ready: rankReady } = cancels;
-  const ranking = useMemo(
-    () => rankAll.filter((s) => s.n >= 2).sort((a, b) => b.n - a.n || b.booked - a.booked),
-    [rankAll],
-  );
 
   const byCity = useMemo(() => {
     const map = new Map<string, PromoMatch[]>();
@@ -252,7 +261,6 @@ export default function MatchPromotionView() {
         saving={saving} toast={toast}
         onNav={(d) => void nav(d)} weekLabel={weekLabel(week)}
         zone={zone} setZone={setZone} onError={(msg) => setToast({ msg, bad: true })}
-        ranking={ranking} rankingReady={rankReady} rankingTotal={rankTotal}
       />
     );
   }
@@ -339,9 +347,7 @@ Which matches get promoted, on which channels, and when the push goes out.
             </div>
                    ) : null} />}
 
-        {tab === "plan" && (
-          <CancelGrid c={cancels} />
-        )}
+
       </div>
       {toast && !open && (
         <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 rounded-full px-4 py-2 text-[13px] font-bold text-white ${toast.bad ? "bg-coral" : "bg-deep-green"}`}>{toast.msg}</div>
@@ -833,12 +839,11 @@ function Coverage({ week, zone }: { week: PromoWeek; zone: ZoneMode }) {
  * is intended: a metric with two scales is worse than an imperfect scale. */
 const RAMP_HEX: Record<1 | 2 | 3 | 4, string> = { 1: "#F4C430", 2: "#E8862A", 3: "#D9452F", 4: "#8F2A17" };
 const RAMP_INK: Record<1 | 2 | 3 | 4, string> = { 1: "#3A2A00", 2: "#2E1B00", 3: "#ffffff", 4: "#ffffff" };
-const TIER: Record<number, string> = {
-  4: "bg-[#8F2A17] text-white",
-  3: "bg-[#D9452F] text-white",
-  2: "bg-[#E8862A] text-[#2E1B00]",
-  1: "bg-[#F4C430] text-[#3A2A00]",
-};
+/* TIER IS GONE, AND THE COLOURS ARE NOT. It was a Tailwind-class encoding of exactly the four
+ * values above — #F4C430/#3A2A00, #E8862A/#2E1B00, #D9452F/#fff, #8F2A17/#fff — built for the
+ * cancel grid's pills, and the grid was its only consumer. RAMP_HEX and RAMP_INK are the same four
+ * pairs, owned by the tiles that read them, so nothing about the scale moved; one of two encodings
+ * of it did. */
 
 /* THE TILE WASH. Light at 1 and 2 so a board of ones does not read as a board on fire, and the
  * ratio is printed on every chip regardless — nobody reads 2/4 against 3/4 off a shade, and that
@@ -857,157 +862,41 @@ const WASH: Record<1 | 2 | 3 | 4, string> = {
   4: "bg-[#F6E4E0] border-[#8F2A17]",
 };
 
-/**
- * THE WINDOW, DERIVED. The mockup prints "Jul 20 – Aug 16" because a mockup is a photograph; on a
- * live page a hardcoded range is a lie from next Monday. Anchored on the SAME helper
- * getCancelPatterns uses, so the caption cannot drift from the data underneath it.
+/* ── THE TILE'S CANCEL HISTORY ────────────────────────────────────────────────────────────────
+ *
+ * WHAT THIS REPLACES. useCancelRanking built a city-by-weekday matrix and a phone ranking for the
+ * Cancel section, and grew `result` and `canonicalOf` when the tiles started reading it. The
+ * section is gone — the history lives on the tiles now, which is what it was for — so the matrix,
+ * the ranking, the headline and the worst-slot figures go with it and only the two things the
+ * tiles actually use survive. THE CANCEL SECTION WAS ITS ONLY OTHER CALLER; checked before cutting.
+ *
+ * ANCHORED ON THE WEEK BEING DISPLAYED, not on today. See the call site for the Keswick Park case
+ * that made that necessary. getCancelPatterns' own default is untouched, so any other caller keeps
+ * anchoring on today; the anchor is passed in.
  */
-function cancelWindowLabel(now: Date = new Date()): string {
-  const M = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const newest = mostRecentCompletedWeekMonday(now);
-  const from = new Date(newest.getFullYear(), newest.getMonth(), newest.getDate() - 21);
-  const to = new Date(newest.getFullYear(), newest.getMonth(), newest.getDate() + 6);
-  return `${M[from.getMonth()]} ${from.getDate()} – ${M[to.getMonth()]} ${to.getDate()}`;
-}
-
-/**
- * ONE DERIVATION, TWO LAYOUTS. The desktop matrix and the phone ranking are the same numbers seen
- * two ways, so the computation is lifted here rather than written twice. The body below is the
- * memo that used to sit inside CancelGrid, moved verbatim — desktop renders from exactly what it
- * rendered from before.
- */
-export function useCancelRanking() {
+function useTileCancelHistory(weekStart: string | null) {
   const { rows, meta, loading } = useMatchData();
   const { data: finData } = useFinanceData();
   const aliases = useMemo(() => finData?.venueAliases ?? new Map<string, string>(), [finData]);
 
-  // One call per city — getCancelPatterns is city-agnostic, so scoping the rows before it sees them
-  // is how CancelPatterns.tsx does it too. Folded here into ONE grid: city down, weekday across.
-  const cities = useMemo(() => [...new Set(rows.map((r) => r.city).filter(Boolean))].sort(), [rows]);
-  const grid = useMemo(() => {
-    return cities.map((city) => {
-      const res = getCancelPatterns(rows.filter((r) => r.city === city), aliases, "patterns");
-      // Fold the four weeks into one row: a slot appears once per weekday, carrying its cancelCount
-      // (identical on every pill of that slot) and the largest booked count seen.
-      const byDay: { code: string; canonical: string; time: string; booked: number; n: number; slot: string }[][] =
-        [[], [], [], [], [], [], []];
-      const seen = new Set<string>();
-      for (const w of res.weeks) {
-        for (let d = 0; d < 7; d++) {
-          for (const s of w.byDay[d]) {
-            const key = `${s.canonicalField}|${d}|${s.timeMinutes}`;
-            if (seen.has(key)) {
-              const found = byDay[d].find((x) => x.slot === key);
-              if (found) found.booked = Math.max(found.booked, s.bookedCount);
-              continue;
-            }
-            seen.add(key);
-            byDay[d].push({
-              code: s.venueCode, canonical: s.canonicalField, time: s.time,
-              booked: s.bookedCount, n: s.cancelCount, slot: key,
-            });
-          }
-        }
-      }
-      for (const d of byDay) d.sort((a, b) => b.n - a.n || a.time.localeCompare(b.time));
-      const total = byDay.flat().length;
-      return { city, byDay, total };
-    }).filter((c) => c.total > 0);
-  }, [cities, rows, aliases]);
+  /* THE DISPLAYED WEEK'S MONDAY, AS A LOCAL DATE. mostRecentCompletedWeekMonday then returns that
+   * Monday minus seven, so the window is the four weeks ending the Sunday BEFORE the week on
+   * screen. Parsed from the parts rather than Date.parse: "2026-09-21" parses as UTC midnight and
+   * would land on the 20th in every western zone, moving the whole window a week. */
+  const anchor = useMemo(() => {
+    if (!weekStart) return null;
+    const [y, m, d] = weekStart.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  }, [weekStart]);
 
-  const headline = grid.reduce((s, c) => s + c.total, 0);
-  const all = grid.flatMap((c) => c.byDay.flat().map((s) => ({ ...s, city: c.city })));
-  const worst = all.slice().sort((a, b) => b.n - a.n || b.booked - a.booked)[0] ?? null;
-  const worstDay = useMemo(() => {
-    const c = [0, 0, 0, 0, 0, 0, 0];
-    for (const g of grid) g.byDay.forEach((d, i) => { c[i] += d.length; });
-    const max = Math.max(...c);
-    return max === 0 ? null : { dow: DOW[c.indexOf(max)], n: max };
-  }, [grid]);
-
-  /* THE WHOLE-ESTATE RESULT AND THE CANONICALISER, for the tile rollup. getCancelPatterns is
-   * city-agnostic, so the grid above calls it once per city; the tile needs one result across the
-   * estate and needs to resolve a match's raw field_title through THE SAME pipeline the slots were
-   * built with. Exposed rather than rebuilt at the call site, which is how two canonicalisations
-   * start. */
-  const result = useMemo(() => getCancelPatterns(rows, aliases, "patterns"), [rows, aliases]);
+  const result = useMemo(
+    () => (anchor ? getCancelPatterns(rows, aliases, "patterns", anchor) : null),
+    [rows, aliases, anchor],
+  );
   const canonicalOf = useCallback(
     (fieldRaw: string) => normalizeMatchName(fieldRaw, aliases).canonical, [aliases]);
 
-  return { grid, all, headline, worst, worstDay, result, canonicalOf, ready: !loading && !!meta };
-}
-
-/** Desktop matrix. Takes the derivation as a prop so it is computed once for both layouts. */
-function CancelGrid({ c }: { c: ReturnType<typeof useCancelRanking> }) {
-  const { grid, headline, worst, worstDay, ready } = c;
-  if (!ready) return <div className="px-5 py-6 text-[12.5px] text-deep-green/45">Loading cancel patterns…</div>;
-
-  return (
-    <div data-testid="cancel-patterns">
-      <div className="mt-2 border-t border-cream-line px-5 pb-0.5 pt-5">
-        <h2 className="m-0 text-[15px] font-extrabold uppercase tracking-[0.02em]">Cancel patterns</h2>
-        <p className="mt-1.5 max-w-[930px] text-[12.5px] text-deep-green/65">
-Last 4 completed weeks · Jul 20 – Aug 16. Chip reads field, time, spots booked, and how many
-          of the four weeks it died.
-        </p>
-      </div>
-
-      <div className="mx-5 mt-3 grid grid-cols-1 overflow-hidden rounded-[11px] border border-cream-line bg-white md:grid-cols-3">
-        <Stat label="Cancelled slots" value={String(headline)} note={`over 4 weeks · ${grid.length} cities`} testid="stat-total" />
-        <Stat label="Worst slot" small value={worst ? `${worst.canonical} · ${DOW[Number(worst.slot.split("|")[1])]} ${worst.time}` : "—"}
-          note={worst ? `${worst.n} of 4 weeks · ${worst.booked} spots booked` : ""} testid="stat-worst" />
-        <Stat label="Worst day" small value={worstDay?.dow ?? "—"} note={worstDay ? `${worstDay.n} cancelled slots` : ""} testid="stat-worstday" />
-      </div>
-
-      <div className="mx-5 mt-3 overflow-x-auto">
-        <table className="w-full table-fixed border-collapse">
-          <colgroup><col className="w-28" />{DOW.map((d) => <col key={d} />)}</colgroup>
-          <thead>
-            <tr>
-              <th className="border-b border-cream-line px-2.5 py-2.5 text-left text-[10px] font-extrabold uppercase tracking-[0.08em] text-deep-green/45">City</th>
-              {DOW.map((d) => <th key={d} className="border-b border-cream-line px-2.5 py-2.5 text-left text-[10px] font-extrabold uppercase tracking-[0.08em] text-deep-green/45">{d}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {grid.map((c) => (
-              <tr key={c.city} data-testid="cancel-row">
-                <td className="border-b border-cream-line/60 py-2 pl-0.5 align-middle">
-                  <div className="text-[12.5px] font-extrabold tracking-[0.03em]">{c.city}</div>
-                  <div className="mt-px text-[10.5px] font-bold text-deep-green/45" data-testid="cancel-row-count">{c.total} slots</div>
-                </td>
-                {c.byDay.map((day, i) => (
-                  <td key={i} className="border-b border-l border-cream-line/60 p-2 align-top">
-                    {day.length === 0 && <span className="block py-1.5 text-center text-[13px] text-deep-green/25">—</span>}
-                    {day.map((s) => (
-                        <div key={s.slot} data-testid="cancel-chip"
-                          className={`mb-1 flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[10.5px] leading-[1.15] last:mb-0 ${TIER[s.n]}`}>
-                          <span className="font-extrabold tracking-[0.02em]">{s.code}</span>
-                          <span className="font-semibold opacity-90">{s.time}</span>
-                          <span className="ml-auto font-bold opacity-80">{s.booked}</span>
-                          {/* N OF 4 AS TEXT, not shade alone — 3/4 against 2/4 is unreadable across a
-                              wide screen and gone entirely in print. */}
-                          <span className={`whitespace-nowrap rounded px-1 font-extrabold ${s.n >= 3 ? "bg-white/25" : "bg-black/10"}`}>{s.n}/4</span>
-                        </div>
-                    ))}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-4 px-5 py-3 text-[12px] text-deep-green/65">
-        {[4, 3, 2, 1].map((t) => (
-          <span key={t} className="flex items-center gap-1.5">
-            <i className={`inline-block h-3 w-5.5 rounded ${TIER[t]}`} style={{ width: 22, height: 12 }} />
-            {t === 4 ? "cancelled all 4 weeks" : t === 1 ? "1 of 4 — once" : `${t} of 4`}
-          </span>
-        ))}
-        <span className="text-deep-green/45">The number to the right of each chip is spots already booked when it died.</span>
-      </div>
-    </div>
-  );
+  return { result, canonicalOf, ready: !loading && !!meta && !!result };
 }
 
 function Stat({ label, value, note, small, testid }: { label: string; value: string; note: string; small?: boolean; testid: string }) {

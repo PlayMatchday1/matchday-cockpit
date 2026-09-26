@@ -327,6 +327,11 @@ const NODE_SUITES = [
    * that moves; dropping time merges back-to-back matches, which is worse — measured, 5 drift
    * cases against 27 parallel ones. Times are CLUSTERED, and this pins both shapes. */
   "scripts/slot-cluster-test.ts",
+  /* THE CANCEL WINDOW FOLLOWS THE WEEK ON SCREEN, not today — a chip beside a cancellation has to
+   * mean "before the week you are looking at" or it reads as a contradiction. Also pins what the
+   * removed cancel section was not allowed to take with it: the four-colour scale and
+   * getCancelPatterns' own default anchor. */
+  "scripts/cancel-window-test.ts",
   // MATCH MANAGERS. Not here for the arithmetic — here for the NAME and the DEAD CONTROL. "City
   // manager" means three unrelated things in this codebase (a Clubhouse login with confinement, a
   // 6-row directory table, and this 87-person roster), and a label using the API's word would read
