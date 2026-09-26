@@ -79,9 +79,17 @@ is("a ramp from a level field is flat", ramp(0.4, 0.4).map((v) => +(v ?? 0).toFi
 is("a ramp can go DOWN when the goal is lower", ramp(0.7, 0.1).map((v) => +(v ?? 0).toFixed(2)), [0.5, 0.3, 0.1]);
 
 console.log("\n— the days that divide —");
-const now = new Date(2026, 8, 12, 10); // 12 Sep 2026
+/* AN EXPLICIT INSTANT, NOT LOCAL PARTS. This was new Date(2026, 8, 12, 10), which builds from the
+ * RUNNER's timezone — the same class of bug the current month's divisor had, sitting in the suite
+ * meant to catch it. At 10:00 it happened to resolve to 12 Sep in Chicago from UTC through London
+ * and would have resolved to the 11th from about UTC+9, so it was one differently-configured CI
+ * box away from a flake. 15:00Z is 10:00 in Chicago, the same wall clock it always meant. */
+const now = new Date("2026-09-12T15:00:00Z"); // 10:00 Chicago, 12 Sep 2026
 is("a finished month divides by its own length", daysElapsed(7, 2026, now), { days: 31, of: 31, partial: false });
-is("the current month divides by days elapsed INCLUDING today", daysElapsed(8, 2026, now), { days: 12, of: 30, partial: true });
+/* COMPLETED DAYS, TODAY EXCLUDED. This read "INCLUDING today" and wanted 12, which is the contract
+ * the completed-days change reverses: the divisor now covers the 11 days through the 11th, so the
+ * figure moves once a day instead of drifting all afternoon as bookings land. */
+is("the current month divides by COMPLETED days, today excluded", daysElapsed(8, 2026, now), { days: 11, of: 30, partial: true });
 is("a future month has no elapsed days", daysElapsed(11, 2026, now), { days: 0, of: 31, partial: false });
 yes("…so a future month has no average", dailyAverage(0, daysElapsed(11, 2026, now).days) === 0);
 

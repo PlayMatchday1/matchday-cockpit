@@ -22,6 +22,7 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { todayBusinessDate } from "./goalPace";
 
 /** One match is eighteen spots. The whole page is arithmetic on this. */
 export const SPOTS_PER_MATCH = 18;
@@ -68,19 +69,69 @@ export const matchMonthIndex = (startDate: string, year: number = GOAL_YEAR): nu
   return m >= 1 && m <= 12 ? m - 1 : null;
 };
 
-/* ── HOW MANY DAYS DIVIDE ─────────────────────────────────────────────────────────────────────
- * A finished month divides by its own length. The CURRENT month divides by the days elapsed
- * INCLUDING today — Ryan's call, and the sheet's own reading (11 of 30 on the 11th). A future month
- * has no elapsed days at all and no average to compute. */
+/* ── THE CALENDAR IS CHICAGO'S, NOT THE RUNTIME'S ─────────────────────────────────────────────
+ * daysElapsed used now.getFullYear() / getMonth() / getDate(). Those are LOCAL getters, and the
+ * fix is not to swap them for the UTC ones: a Vercel function's local zone IS UTC, so they were
+ * already returning UTC calendar parts. The zone has to be named.
+ *
+ * MEASURED: at 2026-09-26T00:05Z the Chicago date is still 25 Sep, but the runtime read 26, so the
+ * divisor stepped at 7pm Chicago instead of midnight and the average fell for five hours — 3.8% on
+ * the 25th, 50% on the 1st. And the boundary MOVES: UTC midnight is 7pm Chicago today and 6pm from
+ * 1 November, so offset arithmetic would go wrong that day. todayBusinessDate formats through Intl
+ * in BUSINESS_TZ and is DST-correct by construction.
+ *
+ * ── AND THE CURRENT MONTH COUNTS COMPLETED DAYS ONLY ────────────────────────────────────────
+ * Through the END OF YESTERDAY, today excluded. The figure then changes once a day instead of
+ * drifting all afternoon as bookings land. A finished month is untouched: it divides by its own
+ * length. A future month has no elapsed days and no average.
+ *
+ * DAY ONE HAS NO COMPLETED DAY. It returns days 0 with partial true, which is not the same state
+ * as a future month (days 0, partial false) and must not render as 0.0 — see hasNoCompletedDay. */
 export function daysElapsed(monthIndex0: number, year: number, now: Date): { days: number; of: number; partial: boolean } {
   const of = new Date(year, monthIndex0 + 1, 0).getDate();
-  const cur = now.getFullYear() === year && now.getMonth() === monthIndex0;
-  if (now.getFullYear() > year || (now.getFullYear() === year && now.getMonth() > monthIndex0)) {
-    return { days: of, of, partial: false };
-  }
-  if (!cur) return { days: 0, of, partial: false };
-  return { days: now.getDate(), of, partial: true };
+  const [ty, tm, td] = todayBusinessDate(now).split("-").map(Number);
+  const curMonth = tm - 1;
+  if (ty > year || (ty === year && curMonth > monthIndex0)) return { days: of, of, partial: false };
+  if (!(ty === year && curMonth === monthIndex0)) return { days: 0, of, partial: false };
+  return { days: td - 1, of, partial: true };
 }
+
+/* ── THE ONE DAY WITH NOTHING TO AVERAGE ──────────────────────────────────────────────────────
+ * On the 1st, no day has completed, so the current month has no average — a different statement
+ * from "the average is zero", which is what dividing by one would have said. Distinguished from a
+ * FUTURE month by `partial`, because a future month is not awaiting anything. */
+export const hasNoCompletedDay = (cell: { days: number; partial?: boolean }): boolean =>
+  cell.partial === true && cell.days === 0;
+
+/** The Chicago calendar date one day before `now`, as YYYY-MM-DD. Differenced through Date.UTC on
+ *  the calendar parts, so a DST boundary cannot add or drop an hour and move the date. */
+export function businessYesterday(now: Date): string {
+  const [y, m, d] = todayBusinessDate(now).split("-").map(Number);
+  const prev = new Date(Date.UTC(y, m - 1, d - 1));
+  return `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, "0")}-${String(prev.getUTCDate()).padStart(2, "0")}`;
+}
+
+/** The month index (0-11) and year the page is CURRENTLY on, in Chicago rather than the runtime. */
+export function businessMonthIndex(now: Date): { year: number; monthIndex0: number } {
+  const [y, m] = todayBusinessDate(now).split("-").map(Number);
+  return { year: y, monthIndex0: m - 1 };
+}
+
+/* ── WHICH MATCHES THE CURRENT MONTH'S NUMERATOR MAY COUNT ────────────────────────────────────
+ * Only those that have actually been played: start_date on or before yesterday. A match later
+ * today, or later this month, brings its bookings-so-far with it and inflates a figure whose
+ * divisor covers completed days only — worst at the start of a month, when most of the month's
+ * matches are still ahead. MEASURED on 2026-09-25: 73 of September's 383 counted matches were
+ * still to come and carried 172 of 7,897 spots, reading 17.55 against 17.17 on played matches.
+ *
+ * SLICED, NEVER PARSED. start_date is local wall clock carrying a Z it does not mean, so the
+ * comparison is string against string — the same trap matchMonthIndex exists to avoid.
+ *
+ * ONE BOUNDARY, CHICAGO'S. Atlanta runs an hour ahead, so a late Atlanta match could in principle
+ * sit either side of a midnight that is not its own; the estate is otherwise America/Chicago and
+ * one business calendar is what every other figure on this page already uses. */
+export const playedByYesterday = (startDate: string, yesterdayYmd: string): boolean =>
+  String(startDate).slice(0, 10) <= yesterdayYmd;
 
 /** spots ÷ 18 ÷ days, at FULL PRECISION. Rounding happens at render and nowhere else: the sheet's
  *  own 29 rows sum to 16.6 against a stored total of 16.7, which is what rounding early looks

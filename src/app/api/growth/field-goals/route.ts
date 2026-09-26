@@ -21,9 +21,11 @@
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { selectAll } from "@/lib/supabasePagination";
 import {
-  GOAL_YEAR, MONTH_LABELS, countsTowardGoals, dailyAverage, daysElapsed,
-  matchMonthIndex, monthKey, rowCountsTowardTotals, rowKeyForField, type GoalMatch,
+  GOAL_YEAR, MONTH_LABELS, businessMonthIndex, businessYesterday, countsTowardGoals, dailyAverage,
+  daysElapsed, matchMonthIndex, monthKey, playedByYesterday, rowCountsTowardTotals, rowKeyForField,
+  type GoalMatch,
 } from "@/lib/fieldGoals";
+import { todayBusinessDate } from "@/lib/goalPace";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,7 +39,11 @@ export async function GET(req: Request) {
 
   try {
     const year = GOAL_YEAR;
+    /* ONE CLOCK, READ ONCE, AND IT IS CHICAGO'S. Every derived date below comes off `now` through
+     * the business-calendar helpers; nothing calls a raw getter on it. Read once so the three
+     * daysElapsed call sites and the numerator filter cannot straddle a midnight mid-request. */
     const now = new Date();
+    const yesterday = businessYesterday(now);
 
     // ── every match the year counts, through the one filter ────────────────────────────────────
     const raw = await selectAll<GoalMatch & { field_title: string | null; city_identifier: string | null }>(() =>
@@ -48,6 +54,13 @@ export async function GET(req: Request) {
         .lt("start_date", `${year + 1}-01-01T00:00:00`)
         .is("deleted_at", null)
         .order("api_id"));
+    /* THE ROW SET COMES FROM EVERY COUNTED MATCH; ONLY THE SPOTS ARE FILTERED. Filtering here
+     * instead deleted two whole fields from the page: Turf On (Houston, 14 matches) and One Touch
+     * (Atlanta, 13), both signed and both starting 1 October, so every match they have is still
+     * ahead. They are precisely what this page exists to surface — "every venue with a 2026 match
+     * is a row, whether or not anybody has given it a goal" — and they would have gone silently.
+     * They now render with a zero actual and fold under the dormant line, which is what a field
+     * that has not played this month is. */
     const matches = raw.filter(countsTowardGoals);
 
     // ── field → venue, an ID join the estate already keeps ──────────────────────────────────────
@@ -78,6 +91,11 @@ export async function GET(req: Request) {
         venueId: vid, fieldId: vid == null ? fieldId : null,
         spots: new Array(12).fill(0), perMonth: new Array(12).fill(0), matches: 0,
       };
+      /* THE ROW EXISTS EITHER WAY. Only a PLAYED match adds spots — a match later today or later
+       * this month brings its bookings-so-far into a numerator whose divisor covers completed days
+       * only, which is what made the figure drift all afternoon. */
+      acc.set(key, a);
+      if (!playedByYesterday(m.start_date, yesterday)) continue;
       const s = m.player_count ?? 0;
       /* MATCHES PER MONTH, not just spots: DORMANT is "no match played in the month on screen",
        * which a zero average cannot tell you — a month with one empty match is not a quiet month. */
@@ -171,8 +189,12 @@ export async function GET(req: Request) {
 
     return Response.json({
       year,
-      today: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`,
-      currentMonth: now.getMonth(),
+      today: todayBusinessDate(now),
+      /* THE PAGE'S CURRENT MONTH, CHICAGO'S. This read now.getMonth() off a UTC runtime, so for the
+       * five hours between 7pm and midnight on the 30th the page relabelled to the next month,
+       * closed the current one as finished and opened the new one with one elapsed day. Everything
+       * derived from `cur` moved with it. */
+      currentMonth: businessMonthIndex(now).monthIndex0,
       months,
       rows: computed,
       slots,

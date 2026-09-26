@@ -22,7 +22,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { errorText } from "@/lib/errorText";
 import {
-  MONTH_LABELS, bandForDisplay, cityRollup, cityTotals, fmtSigned, fmtUnit, isDormantIn,
+  MONTH_LABELS, bandForDisplay, cityRollup, hasNoCompletedDay, cityTotals, fmtSigned, fmtUnit, isDormantIn,
   monthKey, ramp, rowCountsTowardTotals, roundTo, sortGoalRows, weekly,
   type Band, type CityFieldRow, type CityRow, type GoalSort,
 } from "@/lib/fieldGoals";
@@ -219,6 +219,14 @@ export default function FieldGoals2026() {
   }, [failed, saved]);
 
   const cur = data?.currentMonth ?? 8;
+  /* ── THE 1st OF A MONTH ───────────────────────────────────────────────────────────────────────
+   * The current month's average covers COMPLETED days, so on the 1st there is nothing to average.
+   * That is not zero and it is not "one day in": dividing by one would publish whatever happened
+   * to be booked overnight as a daily rate. Every figure derived from the current month's actual —
+   * the headline, each row's actual, its gap, its ramp, the city column — reads as a dash for that
+   * one day, and the tile says why. A typed December goal still shows; it was typed, not derived. */
+  const noCompletedDay = data ? hasNoCompletedDay(data.months[cur]) : false;
+  const DASH = "\u2014";
   const rows = useMemo(() => [...(data?.rows ?? [])], [data]);
   const slots = useMemo(() => [...(data?.slots ?? [])], [data]);
   const all = useMemo(() => [...rows, ...slots], [rows, slots]);
@@ -283,11 +291,17 @@ export default function FieldGoals2026() {
         const v = idx >= 0 ? rampOf(r)[idx] : null;
         return s + (v ?? 0);
       }, 0);
-      return { label, value, state: "goal" as const, days: 0, of: data.months[i].daysInMonth };
+      /* ON THE 1st A RAMP MONTH IS UNKNOWN, NOT LOW. The ramp is a straight line FROM the current
+       * month's actual, and on day one there is no actual, so it would run from zero: measured on
+       * the day-one render, October drew 9.5 and November 18.5 against the ~21 and ~25 they carry
+       * the rest of the month. A third of the December goal is not a suggestion anybody made.
+       * December is untouched — it is a number a person typed, not a line drawn from anything. */
+      const unknown = noCompletedDay && i !== DEC && RAMP_MONTHS.indexOf(i as 9 | 10) >= 0;
+      return { label, value: unknown ? 0 : value, state: "goal" as const, unknown, days: 0, of: data.months[i].daysInMonth };
     });
     // rampOf/decOf are derived from `all` and `data`, which are the dependencies that matter.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, all, cur]);
+  }, [data, all, cur, noCompletedDay]);
 
   /* THE EARLY RETURN IS FOR A LOAD FAILURE AND NOTHING ELSE. A page that cannot read its data must
    * not pretend to render; a page whose last write was refused must not blank itself. */
@@ -304,9 +318,12 @@ export default function FieldGoals2026() {
       {/* ── THE ONE NUMBER, AND IT IS A MONTH RATHER THAN A DAY. Labelled "Today" it read as today's
              count, which is not what a month-to-date average is. ────────────────────────────── */}
       <div className="mb-4 flex flex-wrap items-stretch gap-3">
-        <Big k={`${MONTH_LABELS[cur]} so far`} v={fmtUnit(totals.now, unit)} u={u} testId="fg-now" />
+        <Big k={`${MONTH_LABELS[cur]} so far`} v={noCompletedDay ? DASH : fmtUnit(totals.now, unit)}
+          u={noCompletedDay ? "no completed days yet" : u} testId="fg-now" />
         <Big k={`Dec ${data.year} goal`} v={fmtUnit(totals.goal, unit)} u={u} tone="#12694A" testId="fg-goal" />
-        <Big k="To find" v={fmtUnit(totals.gap, unit)} u={u} tone="#A8341F" testId="fg-gap" />
+        <Big k="To find" v={noCompletedDay ? DASH : fmtUnit(totals.gap, unit)}
+          u={noCompletedDay ? "needs a completed day" : u} tone="#A8341F" testId="fg-gap" />
+        {!noCompletedDay && (
         <div className="flex min-w-[240px] flex-1 flex-col justify-center rounded-2xl border-[1.5px] bg-white px-4 py-3" style={{ borderColor: "#D3DCD8" }}>
           <div className="relative h-3 overflow-hidden rounded-full border" style={{ background: "#F2F4F3", borderColor: "#D3DCD8" }}>
             <i data-testid="fg-bar" className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${pct}%`, background: "linear-gradient(90deg,#2CDB87,#12694A)" }} />
@@ -320,11 +337,12 @@ export default function FieldGoals2026() {
             </span>
           </div>
         </div>
+        )}
       </div>
 
       {grain === "city"
-        ? <CityChart cities={cities} unit={unit} cur={cur} />
-        : <YearChart months={chart} unit={unit} />}
+        ? <CityChart cities={cities} unit={unit} cur={cur} noCompletedDay={noCompletedDay} />
+        : <YearChart months={chart} unit={unit} noCompletedDay={noCompletedDay} />}
 
       <div className="mb-3 mt-3 flex flex-wrap items-center gap-2">
         <span className="inline-flex overflow-hidden rounded-[9px] border bg-white" style={{ borderColor: "#D3DCD8" }}>
@@ -345,7 +363,7 @@ export default function FieldGoals2026() {
 
       {grain === "city" ? (
         <CityTable
-          cities={cities} totals={cityTot} unit={unit} cur={cur}
+          cities={cities} totals={cityTot} unit={unit} cur={cur} noCompletedDay={noCompletedDay}
           sort={sort} setSort={setSort} grain={grain} setGrain={setGrain}
           openCities={openCities} toggleCity={toggleCity}
         />
@@ -357,7 +375,7 @@ export default function FieldGoals2026() {
             onTarget={setTarget} onAddAction={addAction} onToggleAction={toggleAction} onRemoveAction={removeAction}
             onNotCounted={setNotCounted} writeErr={writeErr} revert={revert}
             sort={sort} setSort={setSort} grain={grain} setGrain={setGrain}
-            showDormant={showDormant} setShowDormant={setShowDormant}
+            showDormant={showDormant} setShowDormant={setShowDormant} noCompletedDay={noCompletedDay}
             testId="fg-existing"
           />
           <GoalTable
@@ -366,7 +384,7 @@ export default function FieldGoals2026() {
             onTarget={setTarget} onAddAction={addAction} onToggleAction={toggleAction} onRemoveAction={removeAction}
             onNotCounted={setNotCounted} writeErr={writeErr} revert={revert} sort={sort}
             onAddRow={addSlot} onRename={renameSlot} onRemoveRow={removeSlot}
-            onCity={setSlotCity}
+            onCity={setSlotCity} noCompletedDay={noCompletedDay}
             testId="fg-new"
           />
         </>
@@ -390,7 +408,7 @@ function Big({ k, v, u, tone, testId }: { k: string; v: string; u: string; tone?
  * months is a lie by omission, and it is direct-labelled with its own value. The remaining months
  * are the same hue OUTLINED — the same measure in a different state, not a second series in a
  * second colour. Three marks, three legend entries, and a tooltip on every bar. */
-function YearChart({ months, unit }: { months: { label: string; value: number; state: "done" | "partial" | "goal"; days: number; of: number }[]; unit: "day" | "week" }) {
+function YearChart({ months, unit, noCompletedDay }: { months: { label: string; value: number; state: "done" | "partial" | "goal"; unknown?: boolean; days: number; of: number }[]; unit: "day" | "week"; noCompletedDay?: boolean }) {
   const [tip, setTip] = useState<{ x: number; y: number; html: string } | null>(null);
   const W = 920, H = 250, L = 38, R = 8, T = 16, B = 26;
   const shown = months.map((m) => (unit === "day" ? m.value : weekly(m.value)));
@@ -435,13 +453,19 @@ function YearChart({ months, unit }: { months: { label: string; value: number; s
                 onMouseMove={(e) => {
                   const box = (e.currentTarget.ownerSVGElement?.parentElement as HTMLElement)?.getBoundingClientRect();
                   setTip({ x: e.clientX - (box?.left ?? 0) + 12, y: e.clientY - (box?.top ?? 0) - 10,
-                    html: `${m.label} · ${v.toFixed(1)} a ${unit === "day" ? "day" : "week"}` +
+                    html: m.unknown
+                      ? `${m.label} · no suggestion yet · the ramp needs a completed day to run from`
+                      : `${m.label} · ${v.toFixed(1)} a ${unit === "day" ? "day" : "week"}` +
                       (m.state === "partial" ? ` · ${m.days} of ${m.of} days so far` : m.state === "goal" ? " · goal" : "") +
                       (unit === "day" ? ` · ${weekly(m.value).toFixed(0)} a week` : "") });
                 }}
                 onMouseLeave={() => setTip(null)} />
+              {/* THE 1st: the month-to-date bar has no value to label. A "0.0" over a flat bar
+                  reads as a month that has started badly rather than one that has not started. */}
               {m.state !== "done" && (
-                <text x={x + bw / 2} y={yy - 6} textAnchor="middle" fontSize={10.5} fontWeight={700} fill="#12694A">{v.toFixed(1)}</text>
+                <text x={x + bw / 2} y={yy - 6} textAnchor="middle" fontSize={10.5} fontWeight={700} fill="#12694A">
+                  {(noCompletedDay && m.state === "partial") || m.unknown ? "\u2014" : v.toFixed(1)}
+                </text>
               )}
               <text x={x + bw / 2} y={H - 8} textAnchor="middle" fontSize={10.5}
                 fill={m.state === "goal" ? "#8FA096" : "#54655C"} fontWeight={m.state === "partial" ? 800 : 400}>{m.label}</text>
@@ -484,7 +508,7 @@ function GrainSeg({ grain, setGrain }: { grain: Grain; setGrain: (g: Grain) => v
  * 9.9 would draw identically and the chart would say every city is equally far along, which is the
  * opposite of the point. The hue is CHART_HUE for the same reason it is everywhere else on this
  * page: the brand mint fails contrast on this surface at 1.77:1. */
-function CityChart({ cities, unit, cur }: { cities: CityRow[]; unit: "day" | "week"; cur: number }) {
+function CityChart({ cities, unit, cur, noCompletedDay }: { cities: CityRow[]; unit: "day" | "week"; cur: number; noCompletedDay?: boolean }) {
   const [tip, setTip] = useState<{ x: number; y: number; html: string } | null>(null);
   const W = 920, H = 250, L = 38, R = 8, T = 16, B = 30;
   const val = (v: number) => (unit === "day" ? v : weekly(v));
@@ -502,9 +526,11 @@ function CityChart({ cities, unit, cur }: { cities: CityRow[]; unit: "day" | "we
   return (
     <div className="relative rounded-2xl border-[1.5px] bg-white px-4 pb-2 pt-3" style={{ borderColor: "#D3DCD8" }} data-testid="chart">
       <div className="mb-1 flex flex-wrap items-start justify-between gap-3">
-        <div className="text-[13px] font-extrabold">{MONTH_LABELS[cur]} against December goal</div>
+        {/* ON THE 1st THERE IS NO ACTUAL TO COMPARE AGAINST, so the chart stops claiming to be a
+            comparison and shows the goal alone rather than a row of empty bars. */}
+        <div className="text-[13px] font-extrabold">{noCompletedDay ? "December goal by city" : `${MONTH_LABELS[cur]} against December goal`}</div>
         <div className="flex flex-wrap items-center gap-3 text-[11.5px]" style={{ color: "#5C6F66" }} data-testid="fg-legend">
-          <span className="inline-flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-[3px]" style={{ background: CHART_HUE }} />{MONTH_LABELS[cur]} actual</span>
+          {!noCompletedDay && <span className="inline-flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-[3px]" style={{ background: CHART_HUE }} />{MONTH_LABELS[cur]} actual</span>}
           <span className="inline-flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-[3px] border-2" style={{ borderColor: CHART_HUE, background: "#fff" }} />Dec goal</span>
         </div>
       </div>
@@ -523,8 +549,10 @@ function CityChart({ cities, unit, cur }: { cities: CityRow[]; unit: "day" | "we
           const ha = Math.max(1.5, (a / max) * ih), hg = Math.max(1.5, (gl / max) * ih);
           return (
             <g key={c.city}>
-              <rect data-testid="bact" data-c={c.city} data-v={a.toFixed(2)}
-                x={xa} y={T + ih - ha} width={bw} height={ha} rx={3} fill={CHART_HUE} />
+              {!noCompletedDay && (
+                <rect data-testid="bact" data-c={c.city} data-v={a.toFixed(2)}
+                  x={xa} y={T + ih - ha} width={bw} height={ha} rx={3} fill={CHART_HUE} />
+              )}
               <rect data-testid="bgoal" data-c={c.city} data-v={gl.toFixed(2)}
                 x={xg} y={T + ih - hg} width={bw} height={hg} rx={3} fill="#fff" stroke={CHART_HUE} strokeWidth={2} />
               <text x={xg + bw / 2} y={T + ih - hg - 5} textAnchor="middle" fontSize={10} fontWeight={700} fill="#12694A">
@@ -534,7 +562,9 @@ function CityChart({ cities, unit, cur }: { cities: CityRow[]; unit: "day" | "we
                 onMouseMove={(e) => {
                   const box = (e.currentTarget.ownerSVGElement?.parentElement as HTMLElement)?.getBoundingClientRect();
                   setTip({ x: e.clientX - (box?.left ?? 0) + 12, y: e.clientY - (box?.top ?? 0) - 10,
-                    html: `${c.city} · ${MONTH_LABELS[cur]} ${fmtUnit(c.sep, unit)} · Dec ${fmtUnit(c.dec, unit)} · gap ${fmtSigned(c.gapDaily, unit)}` });
+                    html: noCompletedDay
+                      ? `${c.city} · Dec ${fmtUnit(c.dec, unit)} · no completed days yet this month`
+                      : `${c.city} · ${MONTH_LABELS[cur]} ${fmtUnit(c.sep, unit)} · Dec ${fmtUnit(c.dec, unit)} · gap ${fmtSigned(c.gapDaily, unit)}` });
                 }}
                 onMouseLeave={() => setTip(null)} />
               <text x={cx} y={H - 10} textAnchor="middle" fontSize={9.5} fontWeight={600}
@@ -561,11 +591,13 @@ function CityChart({ cities, unit, cur }: { cities: CityRow[]; unit: "day" | "we
  * a drawer whose numbers do not add up to the row you opened is worse than no drawer on a page
  * whose entire job is a gap. */
 function CityTable({
-  cities, totals, unit, cur, sort, setSort, grain, setGrain, openCities, toggleCity,
+  cities, totals, unit, cur, noCompletedDay, sort, setSort, grain, setGrain, openCities, toggleCity,
 }: {
   cities: CityRow[];
   totals: ReturnType<typeof cityTotals>;
   unit: "day" | "week"; cur: number;
+  /** The 1st of a month: no completed day, so every current-month figure is a dash. */
+  noCompletedDay?: boolean;
   sort: GoalSort; setSort: (s: GoalSort) => void;
   grain: Grain; setGrain: (g: Grain) => void;
   openCities: Set<string>; toggleCity: (city: string) => void;
@@ -610,26 +642,26 @@ function CityTable({
                     <td className="border-t px-3 py-2 text-[13px]" style={{ borderColor: "#EDF2EF" }}>
                       <span data-testid="chev" aria-hidden className="mr-1.5 inline-block text-[8px] align-middle"
                         style={{ color: "#9AA8A1", transform: isOpen ? "rotate(90deg)" : "none", transformOrigin: "50% 50%", transition: "transform .12s" }}>▶</span>
-                      <span className="mr-2 inline-block h-2.5 w-2.5 rounded-full align-middle" data-testid="dot" data-b={band}
-                        style={{ background: BAND_HUE[band] }} />
+                      <span className="mr-2 inline-block h-2.5 w-2.5 rounded-full align-middle" data-testid="dot" data-b={noCompletedDay ? "none" : band}
+                        style={{ background: noCompletedDay ? "#C3CEC8" : BAND_HUE[band] }} />
                       {/* NO CITY SET IS A BUCKET, NOT A CITY, and the row says so by being the only
                           italic label in the column. Its figures are real and stay on screen. */}
                       <b className={`font-bold ${c.hasCity ? "" : "italic"}`} style={c.hasCity ? undefined : { color: "#5C6F66" }}>{c.city}</b>
                     </td>
                     <td className="border-t px-3 py-2" style={{ borderColor: "#EDF2EF" }}>
-                      {c.dec > 0 && (
+                      {c.dec > 0 && !noCompletedDay && (
                         <span className="relative inline-block h-[7px] w-24 overflow-hidden rounded-full border align-middle prog" style={{ background: "#F2F4F3", borderColor: "#D3DCD8" }}>
                           <i className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${Math.min(100, (c.sep / c.dec) * 100)}%`, background: c.gapDaily < 0 ? "#12694A" : "#2CDB87" }} />
                         </span>
                       )}
                     </td>
-                    <td className="border-t px-3 py-2 text-right text-[13px] font-bold tabular-nums" style={{ borderColor: "#EDF2EF", color: "#003326" }} data-v={c.sep.toFixed(4)} data-testid="sep">{fmtUnit(c.sep, unit)}</td>
+                    <td className="border-t px-3 py-2 text-right text-[13px] font-bold tabular-nums" style={{ borderColor: "#EDF2EF", color: "#003326" }} data-v={c.sep.toFixed(4)} data-testid="sep">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(c.sep, unit)}</td>
                     {/* OCT AND NOV ARE DERIVED AND LOOK DERIVED: lighter ink and a lighter weight
                         than both the actual beside them and the December a person typed. */}
-                    <td className="border-t px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#EDF2EF", color: "#9AA8A1", fontWeight: 500 }} data-v={c.oct.toFixed(4)} data-testid="oct">{fmtUnit(c.oct, unit)}</td>
-                    <td className="border-t px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#EDF2EF", color: "#9AA8A1", fontWeight: 500 }} data-v={c.nov.toFixed(4)} data-testid="nov">{fmtUnit(c.nov, unit)}</td>
+                    <td className="border-t px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#EDF2EF", color: "#9AA8A1", fontWeight: 500 }} data-v={c.oct.toFixed(4)} data-testid="oct">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(c.oct, unit)}</td>
+                    <td className="border-t px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#EDF2EF", color: "#9AA8A1", fontWeight: 500 }} data-v={c.nov.toFixed(4)} data-testid="nov">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(c.nov, unit)}</td>
                     <td className="border-t px-3 py-2 text-right text-[13px] font-bold tabular-nums" style={{ borderColor: "#EDF2EF", color: "#003326" }} data-v={c.dec.toFixed(4)} data-testid="dec">{fmtUnit(c.dec, unit)}</td>
-                    <td className="border-t px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#EDF2EF", color: BAND_HUE[band] }} data-v={c.gapDaily.toFixed(4)} data-testid="gap">{fmtSigned(c.gapDaily, unit)}</td>
+                    <td className="border-t px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#EDF2EF", color: BAND_HUE[band] }} data-v={c.gapDaily.toFixed(4)} data-testid="gap">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtSigned(c.gapDaily, unit)}</td>
                     {/* "9 +2 new · 2 no goal". A city with no unsigned fields says nothing rather than
                         "+0 new", and a December figure carrying absent targets says so here rather
                         than reading as low. */}
@@ -639,7 +671,7 @@ function CityTable({
                       {c.noGoal > 0 && <>{" \u00b7 "}{c.noGoal} no goal</>}
                     </td>
                   </tr>
-                  {isOpen && c.fields.map((f) => <CityFieldTr key={f.key} f={f} city={c.city} unit={unit} />)}
+                  {isOpen && c.fields.map((f) => <CityFieldTr key={f.key} f={f} city={c.city} unit={unit} noCompletedDay={noCompletedDay} />)}
                 </Fragmentish>
               );
             })}
@@ -648,11 +680,11 @@ function CityTable({
             <tr data-testid="tot" style={{ background: "#F7FAF8" }}>
               <td className="border-t-2 px-3 py-2 text-[13px] font-extrabold" style={{ borderColor: "#D3DCD8" }}>All MatchDay</td>
               <td className="border-t-2" style={{ borderColor: "#D3DCD8" }} />
-              <td className="border-t-2 px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#D3DCD8", color: "#003326" }} data-v={totals.sep.toFixed(4)} data-testid="tsep">{fmtUnit(totals.sep, unit)}</td>
-              <td className="border-t-2 px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#D3DCD8", color: "#9AA8A1", fontWeight: 500 }} data-v={totals.oct.toFixed(4)} data-testid="toct">{fmtUnit(totals.oct, unit)}</td>
-              <td className="border-t-2 px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#D3DCD8", color: "#9AA8A1", fontWeight: 500 }} data-v={totals.nov.toFixed(4)} data-testid="tnov">{fmtUnit(totals.nov, unit)}</td>
+              <td className="border-t-2 px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#D3DCD8", color: "#003326" }} data-v={totals.sep.toFixed(4)} data-testid="tsep">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(totals.sep, unit)}</td>
+              <td className="border-t-2 px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#D3DCD8", color: "#9AA8A1", fontWeight: 500 }} data-v={totals.oct.toFixed(4)} data-testid="toct">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(totals.oct, unit)}</td>
+              <td className="border-t-2 px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#D3DCD8", color: "#9AA8A1", fontWeight: 500 }} data-v={totals.nov.toFixed(4)} data-testid="tnov">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(totals.nov, unit)}</td>
               <td className="border-t-2 px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#D3DCD8", color: "#003326" }} data-v={totals.dec.toFixed(4)} data-testid="tdec">{fmtUnit(totals.dec, unit)}</td>
-              <td className="border-t-2 px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#D3DCD8", color: "#A8341F" }} data-v={totals.gapDaily.toFixed(4)} data-testid="tgap">{fmtSigned(totals.gapDaily, unit)}</td>
+              <td className="border-t-2 px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#D3DCD8", color: "#A8341F" }} data-v={totals.gapDaily.toFixed(4)} data-testid="tgap">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtSigned(totals.gapDaily, unit)}</td>
               <td className="border-t-2 px-3 py-2 text-[11px]" style={{ borderColor: "#D3DCD8", color: "#9AA8A1" }}>
                 {totals.existing}{totals.slots > 0 && <>{" "}<span className="font-bold" style={{ color: CHART_HUE }}>+{totals.slots} new</span></>}
               </td>
@@ -669,13 +701,15 @@ function CityTable({
  * A NULL IS A DASH, NEVER A ZERO. A new field has no September because it does not exist, which is
  * not the same statement as a field that ran no matches; and a field with no December target reads
  * "no goal" in its own gap cell, which is the rule the field table already follows. */
-function CityFieldTr({ f, city, unit }: { f: CityFieldRow; city: string; unit: "day" | "week" }) {
+function CityFieldTr({ f, city, unit, noCompletedDay }: { f: CityFieldRow; city: string; unit: "day" | "week"; noCompletedDay?: boolean }) {
   const dash = <span style={{ color: "#C3CEC8" }}>—</span>;
+  /* ON THE 1st every figure derived from the current month's actual is a dash, here too. A drawer
+   * whose rows read 0.0 under a city row reading "—" is the two disagreeing about the same fact. */
   const cell = (v: number | null, derived: boolean, tid: string) => (
     <td className="border-t px-3 py-1.5 text-right text-[12px] tabular-nums" data-testid={tid}
       data-v={v == null ? "" : v.toFixed(4)}
       style={{ borderColor: "#EDF2EF", background: "#FAFCFB", color: derived ? "#9AA8A1" : "#3A4D44", fontWeight: derived ? 500 : 600 }}>
-      {v == null ? dash : fmtUnit(v, unit)}
+      {v == null || noCompletedDay ? dash : fmtUnit(v, unit)}
     </td>
   );
   return (
@@ -691,7 +725,7 @@ function CityFieldTr({ f, city, unit }: { f: CityFieldRow; city: string; unit: "
       <td className="border-t px-3 py-1.5 text-right text-[12px] tabular-nums" data-testid="fsep"
         data-v={f.sep == null ? "" : f.sep.toFixed(4)}
         style={{ borderColor: "#EDF2EF", background: "#FAFCFB", color: "#3A4D44", fontWeight: 600 }}>
-        {f.sep == null ? dash : fmtUnit(f.sep, unit)}
+        {f.sep == null || noCompletedDay ? dash : fmtUnit(f.sep, unit)}
       </td>
       {cell(f.oct, true, "foct")}
       {cell(f.nov, true, "fnov")}
@@ -704,6 +738,7 @@ function CityFieldTr({ f, city, unit }: { f: CityFieldRow; city: string; unit: "
         style={{ borderColor: "#EDF2EF", background: "#FAFCFB" }}>
         {f.gapDaily == null
           ? <span data-testid="nogoal" className="text-[11px] font-normal italic" style={{ color: "#9AA8A1" }}>no goal</span>
+          : noCompletedDay ? dash
           : <span style={{ color: roundTo(f.gapDaily, 1) < 0 ? "#12694A" : "#003326" }}>{fmtSigned(f.gapDaily, unit)}</span>}
       </td>
       <td className="border-t" style={{ borderColor: "#EDF2EF", background: "#FAFCFB" }} />
@@ -715,7 +750,7 @@ function GoalTable({
   title, rows, unit, year, cur, busy, open, setOpen, draft, setDraft,
   onTarget, onAddAction, onToggleAction, onRemoveAction, onNotCounted, writeErr, revert,
   sort, setSort, grain, setGrain, showDormant, setShowDormant,
-  onAddRow, onRename, onRemoveRow, onCity, testId,
+  onAddRow, onRename, onRemoveRow, onCity, noCompletedDay, testId,
 }: {
   title: string; rows: Row[]; unit: "day" | "week"; year: number; cur: number; busy: boolean;
   open: string | null; setOpen: (k: string | null) => void;
@@ -734,6 +769,8 @@ function GoalTable({
   showDormant?: boolean; setShowDormant?: (v: boolean) => void;
   onAddRow?: () => void; onRename?: (r: Row, name: string) => void; onRemoveRow?: (r: Row) => void;
   onCity?: (r: Row, city: string) => void;
+  /** The 1st of a month: no completed day, so every current-month figure is a dash. */
+  noCompletedDay?: boolean;
   testId: string;
 }) {
   const decKey = monthKey(year, DEC);
@@ -790,7 +827,8 @@ function GoalTable({
               const noGoal = dec == null;
               const gap = noGoal ? 0 : dec - sep;
               const over = !noGoal && gap < 0;
-              const suggestions = ramp(sep, dec);
+              // No completed day means no actual to ramp FROM, so there is no suggestion to make.
+              const suggestions = noCompletedDay ? [null, null, null] : ramp(sep, dec);
               const openN = r.actions.filter((a) => !a.done).length;
               const out = r.notCounted === true;   // deliberate, stored, and out of every total
               const dormantHere = r.kind !== "slot" && isDormantIn(r, cur);
@@ -803,7 +841,7 @@ function GoalTable({
                     onClick={(e) => { if ((e.target as HTMLElement).closest("input,button")) return; setOpen(open === r.key ? null : r.key); }}>
                     <td className="border-t px-3 py-2 text-[13px]" style={{ borderColor: "#EDF2EF" }}>
                       <span className="mr-2 inline-block h-2.5 w-2.5 rounded-full align-middle" data-testid="fg-dot"
-                        style={{ background: out ? "#C3CEC8" : noGoal ? "#C3CEC8" : BAND_HUE[bandForDisplay(gap)] }} />
+                        style={{ background: out || noGoal || noCompletedDay ? "#C3CEC8" : BAND_HUE[bandForDisplay(gap)] }} />
                       {r.kind === "slot" && onRename ? (
                         <input key={`${r.key}-${revert}`} data-testid="fg-slot-name" defaultValue={r.name} disabled={busy}
                           onBlur={(e) => { if (e.target.value.trim() !== r.name) onRename(r, e.target.value); }}
@@ -831,13 +869,14 @@ function GoalTable({
                       )}
                     </td>
                     <td className="border-t px-3 py-2" style={{ borderColor: "#EDF2EF" }}>
-                      {!noGoal && (
+                      {!noGoal && !noCompletedDay && (
                         <span className="relative inline-block h-[7px] w-24 overflow-hidden rounded-full border align-middle" style={{ background: "#F2F4F3", borderColor: "#D3DCD8" }}>
                           <i className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${dec > 0 ? Math.min(100, (sep / dec) * 100) : 100}%`, background: over ? "#12694A" : "#2CDB87" }} />
                         </span>
                       )}
                     </td>
-                    <td className="border-t px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#EDF2EF" }} data-testid="fg-actual">{fmtUnit(sep, unit)}</td>
+                    <td className="border-t px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#EDF2EF" }} data-testid="fg-actual">
+                      {noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(sep, unit)}</td>
                     {RAMP_MONTHS.map((mi, idx) => {
                       const k = monthKey(year, mi);
                       const typed = r.targets[k];
@@ -860,6 +899,11 @@ function GoalTable({
                     <td className="border-t px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#EDF2EF" }} data-testid="fg-gap-cell">
                       {noGoal
                         ? <span className="text-[11px] italic font-normal" style={{ color: "#9AA8A1" }}>no goal</span>
+                        : noCompletedDay
+                        /* A GAP IS A GOAL MINUS AN ACTUAL. With no actual there is no gap, and
+                           printing the whole December goal as though it were one would read as the
+                           worst day of the year, every month, on the 1st. */
+                        ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span>
                         : /* SIGN-SAFE. ATH Pearland sits 0.004 above goal, which rounded to one
                              decimal and printed with its sign came out "-0.0". fmtSigned normalises
                              the rounded value, so the number and the dot agree. */

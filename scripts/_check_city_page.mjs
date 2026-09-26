@@ -98,7 +98,13 @@ ok(new Set(bands).size >= 2, `the dots use ${new Set(bands).size} bands, not one
 const gaps = await Promise.all(rows.map(c => cellOf(c, 'gap')));
 const cityGaps = gaps.slice(0, rows.length - (rows.includes('No city set') ? 1 : 0));
 ok(cityGaps.every((g, i) => i === 0 || num(cityGaps[i - 1]) >= num(g)), `  CONTROL: real cities are in gap order (${cityGaps.join(' ')})`);
-ok(rows.at(-1) === 'No city set', `  the ${rows.at(-1)} bucket is last, so it does not lead a ranking of cities`);
+/* THE BUCKET IS LAST ONLY IF IT EXISTS. It pinned "No city set" as the final row, and once the
+   slots were given cities the bucket stopped existing and the assertion reported a defect that was
+   its own. Conditional on presence, and the control says which branch ran. */
+const bucketAt = rows.indexOf('No city set');
+ok(bucketAt === -1 || bucketAt === rows.length - 1,
+  bucketAt === -1 ? `  CONTROL: no unassigned bucket today, every slot carries a city`
+                  : `  the No city set bucket is last, so it does not lead a ranking of cities`);
 
 // ── 3. "+N new" AND "no goal" ──────────────────────────────────────────────────────────────────
 const fieldsCells = Object.fromEntries(await Promise.all(rows.map(async c => [c, await cellOf(c, 'fields')])));
@@ -145,9 +151,20 @@ ok(Math.abs(fOct - await rawOf(biggest, 'oct')) < 1e-3, `  and its October ramp 
 ok(fSep > 0 && fDec > 0, '  CONTROL: both sums are non-zero, so the match is not two empty columns');
 
 // A FIELD WITH NO DECEMBER TARGET READS "no goal"
-const gapsIn = await p.$$eval(`${D('frow')}[data-c="${biggest}"] ${D('fgap')}`, es => es.map(e => e.textContent.trim()));
-ok(gapsIn.some(g => /no goal/.test(g)), `  a field with no December target reads "no goal" (${gapsIn.join(' / ')})`);
-ok(gapsIn.some(g => /^[+-]/.test(g)), '  CONTROL: and the others show a signed gap');
+/* "no goal" APPEARS ONLY IF SOME FIELD LACKS A DECEMBER TARGET. Pinning it to the largest city
+   failed the day every Austin field had one. Find a city that actually has such a field, from the
+   Fields column the page itself renders, and open that one. */
+const noGoalCity = (await Promise.all(rows.map(async (c) => ({ c, f: await cellOf(c, 'fields') }))))
+  .find((x) => /no goal/.test(x.f))?.c;
+if (noGoalCity) {
+  if (noGoalCity !== biggest) { await p.click(`${D('crow')}[data-c="${noGoalCity}"]`); await p.waitForTimeout(150); }
+  const gapsIn = await p.$$eval(`${D('frow')}[data-c="${noGoalCity}"] ${D('fgap')}`, es => es.map(e => e.textContent.trim()));
+  ok(gapsIn.some(g => /no goal/.test(g)), `  ${noGoalCity}: a field with no December target reads "no goal" (${gapsIn.join(' / ')})`);
+  ok(gapsIn.some(g => /^[+-]/.test(g) || g === '0.0'), '  CONTROL: and the others show a gap figure');
+  if (noGoalCity !== biggest) { await p.click(`${D('crow')}[data-c="${noGoalCity}"]`); await p.waitForTimeout(150); }
+} else {
+  ok(true, '  CONTROL: no city carries a field without a December target today, so there is nothing to render');
+}
 
 // SUBORDINATE, NOT A SECOND TABLE
 const sub = await p.evaluate(() => {
@@ -158,17 +175,21 @@ const sub = await p.evaluate(() => {
 ok(sub.fPad > sub.cPad, `  field rows are indented (${sub.fPad}px against ${sub.cPad}px)`);
 ok(sub.fSize < sub.cSize, `  CONTROL: and smaller (${sub.fSize}px against ${sub.cSize}px), not indent alone`);
 
-// NEW FIELDS: a dash, never a zero
-await p.click(`${D('crow')}[data-c="No city set"]`);
-await p.waitForTimeout(150);
+/* NEW FIELDS: A DASH, NEVER A ZERO. Open whichever city actually holds unsigned fields rather than
+   the bucket, which stopped existing once the slots were given cities. */
+const newFieldCity = (await Promise.all(rows.map(async (c) => ({ c, f: await cellOf(c, 'fields') }))))
+  .find((x) => /new/.test(x.f))?.c;
+ok(!!newFieldCity, `CONTROL: a city holding unsigned fields exists to open (${newFieldCity ?? 'none'})`);
+await p.click(`${D('crow')}[data-c="${newFieldCity}"]`);
+await p.waitForTimeout(200);
 const newSeps = await p.$$eval(`${D('frow')}[data-kind="slot"] ${D('fsep')}`, es => es.map(e => e.textContent.trim()));
-ok(newSeps.length > 0 && newSeps.every(v => !/[0-9]/.test(v)), `  all ${newSeps.length} new fields show a dash for September, never 0.0`);
+ok(newSeps.length > 0 && newSeps.every(v => !/[0-9]/.test(v)), `  all ${newSeps.length} new fields show a dash for the current month, never 0.0`);
 ok(await p.$$eval(D('newtag'), es => es.length) === newSeps.length, `  CONTROL: and all ${newSeps.length} carry a NEW tag`);
 
 // KEYBOARD
 await p.click(`${D('crow')}[data-c="${biggest}"]`);            // shut it
-await p.click(`${D('crow')}[data-c="No city set"]`);           // shut it
-await p.waitForTimeout(120);
+await p.click(`${D('crow')}[data-c="${newFieldCity}"]`);      // shut it
+await p.waitForTimeout(200);
 ok(await p.$$eval(D('frow'), es => es.length) === 0, 'a second click shuts a drawer again');
 const last = rows[rows.length - 2];
 await p.focus(`${D('crow')}[data-c="${last}"]`);
