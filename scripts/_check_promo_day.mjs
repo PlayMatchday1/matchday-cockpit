@@ -91,6 +91,20 @@ ok(washedBgs.length === 0 || washedBgs.every(bg => bg !== plainBg),
   `  CONTROL: and every shaded tile's background differs from the plain one (${plainBg})`);
 
 // ══ 4 + 3 of the verification list. THE QUEUE IS DERIVED FROM THE WEEK ════════════════════════
+/* THE HEADLINE COUNTS UP. Asserted against the tiles it describes rather than against a number
+   typed here, and the denominator must exclude cancelled matches. */
+const strip = await p.$eval(D('strip-counts'), e => e.textContent.replace(/\s+/g, ' ').trim());
+ok(!/no plan/i.test(strip), `the headline does not report a shortfall ("${strip}")`);
+const mm = strip.match(/(\d+) of (\d+)/);
+ok(!!mm, `  and reads N of M ("${strip}")`);
+const liveTiles = await p.$$eval(`${D('match-tile')}:not([data-state="cancelled"])`, es => es.length);
+const plannedTiles = await p.$$eval(`${D('match-tile')}[data-state="planned"]`, es => es.length);
+ok(mm && Number(mm[2]) === liveTiles, `  M is every non-cancelled match (${mm?.[2]} against ${liveTiles} tiles)`);
+ok(mm && Number(mm[1]) === plannedTiles, `  N is every match carrying a push (${mm?.[1]} against ${plannedTiles})`);
+const cancelledTiles = await p.$$eval(`${D('match-tile')}[data-state="cancelled"]`, es => es.length);
+ok(cancelledTiles === 0 || Number(mm[2]) < liveTiles + cancelledTiles,
+  `  CONTROL: and ${cancelledTiles} cancelled tiles are excluded from it`);
+
 const tilesWithPush = await p.$$eval(`${D('match-tile')}[data-state="planned"]`, es => es.length);
 let queued = 0;
 for (let i = 0; i < 7; i++) {
@@ -181,9 +195,11 @@ ok(cx.every(c => /^\d+ booked$/.test(c.t || '')), '  and every one states how ma
 const bs = cx.map(c => c.b).sort((a, z) => a - z);
 ok(bs[bs.length - 1] > bs[0], `  across a real range (${bs[0]} to ${bs[bs.length - 1]})`);
 ok(await p.$$eval(`${D('booked')}[data-heavy="1"]`, es => es.length) > 0, '  and the heaviest are picked out rather than read alike');
-// CONTROL: a cancelled match is its own state, NOT "no plan".
-const stat = await p.$eval(D('city-block'), e => e.textContent);
-ok(!/cancelled.*no plan|no plan.*\d+ cancelled/.test(stat.replace(/\s+/g, ' ')) || true, '  (city line read)');
+/* NO PLAN IS NOT SHOWN ANYWHERE. Ryan: "don't need to show no plan." This assertion used to end
+   in `|| true`, which is an assertion that cannot fail; it is a real one now. */
+const cityText = await p.$$eval(D('city-block'), es => es.map(e => e.textContent.replace(/\s+/g, ' ')));
+ok(cityText.length > 0, `CONTROL: ${cityText.length} city blocks read, so the check below is not free`);
+ok(cityText.every(t => !/no plan/i.test(t)), '  no city header says "no plan"');
 const noPlanStates = await p.$$eval(`${D('match-tile')}[data-state="cancelled"]`, es => es.every(e => e.dataset.state === 'cancelled'));
 ok(noPlanStates, '  CONTROL: cancelled tiles carry their own state, so the no-plan count cannot include them');
 ok(await p.$$eval(D('city-cx-count'), es => es.length) > 0, '  and each city totals its own cancellations and their bookings');

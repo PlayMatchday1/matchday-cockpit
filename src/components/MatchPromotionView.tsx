@@ -200,7 +200,10 @@ export default function MatchPromotionView() {
    * leaves the Klaviyo one overdue, because they are separate rows with separate stamps. */
   const overdue = jobs.filter((j) => isPushOverdue(j.p, now)).length;
   const sentCount = jobs.filter((j) => isPushSent(j.p)).length;
-  const noPlan = week?.matches.filter((m) => m.state === "none").length ?? 0;
+  /* THE HEADLINE, COUNTED UP. `liveCount` excludes cancelled matches: a match that was called off
+   * is not a plan anybody still owes, and counting it would make the fraction unreachable. */
+  const liveCount = week?.matches.filter((m) => m.state !== "cancelled").length ?? 0;
+  const withPush = week?.matches.filter((m) => m.state === "planned").length ?? 0;
 
   // THE PHONE'S CANCEL RANKING — the desktop matrix's own numbers, flattened and ordered. 1-of-4
   // slots are dropped on the phone only: a list has to be short to be read, and one bad week is
@@ -316,7 +319,7 @@ Which matches get promoted, on which channels, and when the push goes out.
             IT CREATES NOTHING. The plans are made on the week below; a second way to create a push
             is how two sources of truth start. */}
         <DayQueue week={week} zone={zone} onMarked={() => load(weekRef)}
-          onError={(msg) => setToast({ msg, bad: true })} noPlan={noPlan} />
+          onError={(msg) => setToast({ msg, bad: true })} withPush={withPush} liveCount={liveCount} />
 
         {/* ONE LIST FOR THE PAGE, ABOVE THE GRID, ON BOTH TABS. Comments are about the week's
             promotion plan, not about a city or a fixture — so they sit here rather than inside a
@@ -390,8 +393,10 @@ const DOW_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Satur
  *
  * ARROW KEYS MOVE BETWEEN DAYS AND STOP AT THE ENDS. Wrapping from Sunday to Monday inside one
  * week reads as having moved to the next week, which it has not. */
-function DayQueue({ week, zone, onMarked, onError, noPlan }: {
-  week: PromoWeek; zone: ZoneMode; onMarked: () => void; onError: (msg: string) => void; noPlan: number;
+function DayQueue({ week, zone, onMarked, onError, withPush, liveCount }: {
+  week: PromoWeek; zone: ZoneMode; onMarked: () => void; onError: (msg: string) => void;
+  /** Matches carrying a push of their own, and every match the week holds that was not cancelled. */
+  withPush: number; liveCount: number;
 }) {
   const now = Date.now();
   const past = isPastWeek(week, now);
@@ -417,8 +422,12 @@ function DayQueue({ week, zone, onMarked, onError, noPlan }: {
     <div className="mx-5 mb-4 rounded-[11px] border border-cream-line bg-[#fbfdfc] px-3.5 py-3" data-testid="day-queue">
       <div className="mb-2.5 flex flex-wrap items-baseline gap-2.5">
         <span className="text-[9.5px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Pushes by day</span>
+        {/* COUNTED UP, NOT DOWN. "65 matches with no plan" reads as a failure report and buries
+            the work that has been done; the operator wants to know where the week stands. Same
+            set, stated positively, and the denominator excludes cancelled matches because a
+            cancelled match is not work anybody still owes. */}
         <span className="text-[12px] font-bold text-deep-green/65" data-testid="strip-counts">
-          {noPlan} match{noPlan === 1 ? "" : "es"} with no plan this week
+          {withPush} of {liveCount} match{liveCount === 1 ? "" : "es"} have a push
         </span>
       </div>
       {/* THE TABS CARRY THE OUTSTANDING WORK, so choosing a day never means opening one. */}
@@ -551,7 +560,10 @@ function Plan({ week, byCity, openId, onOpen, openCity, zone, panel, riskOf }: {
       {byCity.map(([city, matches]) => {
         const planned = matches.filter((m) => m.state === "planned").length;
         const check = matches.filter((m) => m.state === "needs-decision").length;
-        const none = matches.filter((m) => m.state === "none").length;
+        /* NO PLAN IS NOT SHOWN. Ryan: "remove the no plan stat from all the cities too, don't need
+           to show no plan." The denominator carries the same fact without naming the shortfall:
+           7 of 31 says what 24 no plan said, counted up. */
+        const live = matches.filter((m) => m.state !== "cancelled").length;
         /* CANCELLED IS COUNTED SEPARATELY, as count AND players. It is excluded from "no plan"
            above by being its own state: nothing was missed, the match was called off. */
         const cx = matches.filter((m) => m.state === "cancelled");
@@ -564,7 +576,7 @@ function Plan({ week, byCity, openId, onOpen, openCity, zone, panel, riskOf }: {
             <div className="flex items-baseline gap-2.5 pb-2 pt-3">
               <h2 className="m-0 text-[15px] font-extrabold">{city}</h2>
               <span className="text-[11.5px] font-bold text-deep-green/45">
-                {planned} planned{check ? ` · ${check} needs a decision` : ""}{none ? ` · ${none} no plan` : ""}
+                {planned} of {live} planned{check ? ` · ${check} needs a decision` : ""}
               </span>
               {fresh > 0 && (
                 <span className="text-[11.5px] font-extrabold text-deep-green" data-testid="city-new-count">
