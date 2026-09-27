@@ -16,10 +16,11 @@
  */
 import { isRevenueShareVenue } from "@/lib/revenueShare";
 import {
-  PARTNER_BADGE, TAG_KEYS, TAG_KEY_ORDER, TAG_META, TAGS_SHOWN, isTagKey,
+  TAG_KEYS, TAG_KEY_ORDER, TAG_META, TAGS_SHOWN, isTagKey,
   splitAtCap, splitTags, tagTitle, tagsAtScope, tagsForDisplay, tagsInUse, type TagKey,
 } from "@/lib/promoTags";
 import { buildPriorSlate, newnessOf, priorTimesFor, type SlotLike } from "@/lib/matchPromotion";
+import * as PromoTagsModule from "@/lib/promoTags";
 import { clusterMinutes, slotRiskKey, SLOT_CLUSTER_GAP_MIN } from "@/lib/cancelPatterns";
 
 let pass = 0, fail = 0;
@@ -46,7 +47,13 @@ console.log("\n— three tags at two scopes —");
   yes("  CONTROL: while all three real tags can", TAG_KEYS.every((k) => isTagKey(k)));
   yes("  and partner is absent from TAG_META, so the picker cannot offer it",
     !Object.keys(TAG_META).includes("partner"));
-  yes("  CONTROL: while the derived badge still exists as its own constant", PARTNER_BADGE.label === "PARTNER");
+  /* NOT EVEN AS A BADGE. It was a tag, then a derived read-only badge, and now it is off this page
+   * entirely. isRevenueShareVenue survives only because basisOf calls it on the finance side. */
+  /* A STATIC NAMESPACE IMPORT, not a dynamic one: this guard compiles to cjs and has no top-level
+   * await. The point is the same - the module must export nothing called PARTNER_BADGE. */
+  yes("  and promoTags exports no PARTNER badge either",
+    !Object.keys(PromoTagsModule).includes("PARTNER_BADGE"));
+  yes("  CONTROL: while it does still export the three tags", Object.keys(PromoTagsModule).includes("TAG_KEYS"));
 }
 
 console.log("\n— one concept, one colour; the scope is the label —");
@@ -60,10 +67,10 @@ console.log("\n— one concept, one colour; the scope is the label —");
   /* CONTROL: the collision check, not merely "they differ". Two distinct colours that happen to
    * include mint would pass a difference test and fail a reader. */
   const TAKEN = ["#2CDB87", "#F4C430", "#E8862A", "#D9452F", "#8F2A17", "#003326"];
-  const mine = [TAG_META.priority.colour, TAG_META.starting_11.colour, PARTNER_BADGE.colour];
+  const mine = [TAG_META.priority.colour, TAG_META.starting_11.colour];
   yes("CONTROL: none collides with mint, the cancel ramp or deep green",
     mine.every((c) => !TAKEN.includes(c)), mine.join(" "));
-  is("  and the three are distinct from each other", new Set(mine).size, 3);
+  is("  and the two are distinct from each other", new Set(mine).size, 2);
 }
 
 console.log("\n— KEY FIELD swallows PRIORITY on the tile, and never in the panel —");

@@ -24,60 +24,6 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); c ? pass++ : fail++; };
 const D = t => `[data-testid="${t}"]`;
 
-/* ── THE REVENUE-SHARE FIELDS, QUERIED FROM THE CONTRACT AND NOT PINNED HERE ──────────────────
- * The PARTNER badge is derived, so the assertion has to come from the same place the derivation
- * does or it is just the page agreeing with itself. This runs the join independently — field ->
- * fin_venue_fields -> fin_venues -> partner_dashboards — and applies the SAME predicate, imported
- * rather than restated. A hardcoded list of five ids would go stale the first time a venue signs.
- *
- * IF THE QUERY FAILS the list is null and the partner assertions say so and fail, rather than
- * silently becoming "no field is a partner", which every badge would then violate or satisfy by
- * accident depending on which way the check is written. */
-const { createClient } = await import('@supabase/supabase-js');
-const { isRevenueShareVenue } = await import('../src/lib/revenueShare.ts');
-/* THE TAG SET ITSELF, so the tab count and the view names are DERIVED from what ships rather than
-   pinned at whatever is true today. A third tag should add a tab, not a failure. */
-const { TAG_KEYS, TAG_META } = await import('../src/lib/promoTags.ts');
-const SHARE_FIELDS = await (async () => {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL, key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return null;
-  const sb = createClient(url, key);
-  const [links, venues, dashes] = await Promise.all([
-    sb.from('fin_venue_fields').select('fin_venue_id, mdapi_field_id'),
-    sb.from('fin_venues').select('id, billing_type'),
-    sb.from('partner_dashboards').select('venue_id, revenue_model').eq('enabled', true),
-  ]);
-  if (links.error || venues.error) return null;
-  const billing = new Map((venues.data ?? []).map(v => [Number(v.id), v.billing_type ?? null]));
-  const model = new Map((dashes.data ?? []).map(d => [Number(d.venue_id), d.revenue_model ?? null]));
-  return (links.data ?? [])
-    .filter(l => isRevenueShareVenue(billing.get(Number(l.fin_venue_id)), model.get(Number(l.fin_venue_id))))
-    .map(l => Number(l.mdapi_field_id)).sort((a, b) => a - b);
-})();
-/* ── HOW MANY TAG ROWS EXIST AT ALL ───────────────────────────────────────────────────────────
- * "0 tags exist, so no tile could carry one" and "tags exist and none rendered" are DIFFERENT
- * FAILURES and they used to print the same line. One is a page that is fine and a table that is
- * empty; the other is a broken render. Every tag assertion below carries this count in its message
- * so the output says which, without anyone having to go and look. */
-const TAG_ROWS = await (async () => {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL, key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return null;
-  const r = await createClient(url, key).from('promo_tags').select('tag, match_id, field_id');
-  if (r.error) return null;
-  return { total: r.data.length, onMatch: r.data.filter(x => x.match_id != null).length,
-           onField: r.data.filter(x => x.field_id != null).length,
-           tags: [...new Set(r.data.map(x => x.tag))] };
-})();
-/* THE PHRASE EVERY TAG FAILURE ENDS WITH. Not "no tags found" - that is the symptom. This is the
- * cause, or the absence of one. */
-const TAGCTX = TAG_ROWS === null ? ' [promo_tags UNREADABLE - treat any zero below as UNKNOWN]'
-  : TAG_ROWS.total === 0 ? ' [promo_tags holds 0 rows, so NO TILE COULD CARRY A TAG: this is missing DATA, not a broken render]'
-  : ` [promo_tags holds ${TAG_ROWS.total} row(s) (${TAG_ROWS.onMatch} on matches, ${TAG_ROWS.onField} on fields: ${TAG_ROWS.tags.join(', ')}), so a zero here IS A BROKEN RENDER]`;
-ok(TAG_ROWS !== null, `CONTROL: promo_tags is readable, holding ${TAG_ROWS?.total ?? 'UNKNOWN'} row(s)${TAG_ROWS?.total === 0 ? ' - the tag assertions below will report UNPROVEN rather than pass' : ''}`);
-
-ok(SHARE_FIELDS !== null && SHARE_FIELDS.length > 0,
-  `CONTROL: the contract names ${SHARE_FIELDS?.length ?? 'UNKNOWN'} revenue-share field(s) (${SHARE_FIELDS?.join(', ') ?? 'query failed'})`);
-
 const load = async (w = 1320) => {
   await p.setViewportSize({ width: w, height: 1000 });
   await p.goto(`${BASE}/match-ops/match-promotion`, { waitUntil: 'domcontentloaded' });
@@ -550,27 +496,25 @@ ok(tagInfo.titled === tagInfo.total, `  CONTROL: every tag carries its meaning o
 ok(!tagInfo.labels.includes('NEW FIELD'), '  CONTROL: and none of them says NEW FIELD, the automatic badge’s words');
 ok(await p.$$eval(D('new-badge'), es => es.length) > 0, '  CONTROL: while the automatic NEW badges still render');
 
-/* ── NO PARTNER TAG, AND THE DERIVED BADGE STILL THERE ──────────────────────────────────────── */
-ok(tagInfo.partnerAsTag === 0, `no PARTNER is rendered as a tag pill (${tagInfo.partnerAsTag})`);
-ok(await p.$$eval('[data-testid="tag-toggle"][data-t="partner"]', es => es.length) === 0,
-  '  and no PARTNER toggle exists in the picker');
-const partnerOnFields = await p.$$eval('[data-testid="match-tile"]', es => {
-  const on = new Set(), off = new Set();
-  for (const e of es) {
-    const f = e.dataset.fieldId;
-    if (f == null || f === '') continue;
-    (e.querySelector('[data-testid="partner-badge"]') ? on : off).add(Number(f));
-  }
-  return { on: [...on].sort((a, b) => a - b), off: [...off].sort((a, b) => a - b) };
-});
-const onScreen = [...partnerOnFields.on, ...partnerOnFields.off];
-const expectPartner = [...new Set(onScreen.filter(f => SHARE_FIELDS.includes(f)))].sort((a, b) => a - b);
-ok(onScreen.length > 0, `CONTROL: ${onScreen.length} field(s) on screen`);
-ok(expectPartner.length > 0,
-  `  CONTROL: and ${expectPartner.length} are revenue-share (${expectPartner.join(', ')}), so the badge check can fail`);
-ok(partnerOnFields.on.slice().sort((a, b) => a - b).join() === expectPartner.join(),
-  `  CONTROL: the derived PARTNER badge is on EXACTLY those fields (${partnerOnFields.on.join(', ') || 'none'})`);
-ok(!partnerOnFields.on.includes(1717), '  and 1717 Keswick Park, a per_match rental, carries none');
+/* ── NO PARTNER, ANYWHERE ON THIS PAGE ────────────────────────────────────────────────────────
+   It was a hand-set tag, then a derived read-only badge, and now it is gone from the page entirely.
+   basisOf still derives the contract fact on the finance side; this page does not render it.
+   ABSENCE WITH A PRESENCE CONTROL, as every absence check in this suite must have: the control is
+   that the tags and the NEW badges DO render, so a page that failed to load cannot pass this. */
+const partnerGone = await p.evaluate(() => ({
+  badge: document.querySelectorAll('[data-testid="partner-badge"]').length,
+  panelBadge: document.querySelectorAll('[data-testid="partner-panel-badge"]').length,
+  keyRow: document.querySelectorAll('[data-testid="partner-key"], [data-testid="keyitem"][data-t="partner"]').length,
+  toggle: document.querySelectorAll('[data-testid="tag-toggle"][data-t="partner"]').length,
+  anywhere: /\bPARTNER\b/.test(document.body.innerText),
+}));
+ok(partnerGone.badge === 0, `no PARTNER badge on any tile (${partnerGone.badge})`);
+ok(partnerGone.panelBadge === 0, `  none in the panel (${partnerGone.panelBadge})`);
+ok(partnerGone.keyRow === 0, `  no PARTNER row in the key (${partnerGone.keyRow})`);
+ok(partnerGone.toggle === 0, `  and no PARTNER toggle in the picker (${partnerGone.toggle})`);
+ok(!partnerGone.anywhere, '  and the word PARTNER is nowhere in the rendered page');
+ok(await p.$$eval(D('new-badge'), es => es.length) > 0,
+  '  CONTROL: while the automatic NEW badges still render, so the page did load');
 
 /* ── THE KEY: TWO GRIDS, VERBATIM, LABEL AND SENTENCE READ SEPARATELY ────────────────────────
    Separately, so a mismatch says WHICH HALF is wrong rather than handing back one long string.
@@ -1022,17 +966,6 @@ ok(mTag.rows.slice().sort().join() === wantPriority.join(),
   `  and they are the same matches the desktop shows (${mTag.rows.length} against ${wantPriority.length})`);
 ok(mTag.withChip === mTag.rows.length, `  every row carries the chip (${mTag.withChip} of ${mTag.rows.length})`);
 ok(mTag.shown === mTag.rows.length, `  and its count matches its rows (${mTag.shown})`);
-const mPartner = await p.$$eval('[data-testid="m-row"]', es => {
-  const on = [], off = [];
-  for (const e of es) {
-    const f = Number(e.dataset.fieldId);
-    if (!f) continue;
-    (e.querySelector('[data-testid="m-partner-badge"]') ? on : off).push(f);
-  }
-  return { on: [...new Set(on)], off: [...new Set(off)] };
-});
-ok(mPartner.on.every(f => SHARE_FIELDS.includes(f)),
-  `  and the phone's PARTNER badge is on revenue-share fields only (${mPartner.on.join(', ') || 'none on screen'})`);
 
 // ── CODES PER CHANNEL ────────────────────────────────────────────────────────────────────────
 /* BACK TO THE DESKTOP, AND ONTO A DAY THAT ACTUALLY HAS PUSHES.

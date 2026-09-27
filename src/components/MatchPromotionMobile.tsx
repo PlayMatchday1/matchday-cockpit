@@ -19,7 +19,7 @@
 // and passed in; nothing is re-derived and no count is redefined.
 
 import { CHANNELS, NEW_FLAG_LABEL, channelsOn, codeFor, coverLabel, coverageCaption, coverageOf, coverageStateOf, coverageSummary, datedPushes, fmtPushIn, isPushOverdue, isPushSent, leadToKickoff, sentStamp, venueOffsetMs, type GeneralPush, type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode } from "@/lib/matchPromotion";
-import { PARTNER_BADGE, TAG_META, splitTags, tagTitle, tagsAtScope, type TagKey } from "@/lib/promoTags";
+import { TAG_META, splitTags, tagTitle, tagsAtScope, type TagKey } from "@/lib/promoTags";
 /* THE VIEW LIST AND ITS LABELS COME FROM THE DESKTOP. Not a second list to keep in step — a
  * phone tab the desktop does not have is how the two surfaces end up offering different views. */
 import { MOBILE_VIEWS, VIEW_LABEL, type MobileView } from "@/components/MatchPromotionView";
@@ -51,8 +51,6 @@ export type MobileProps = {
   tagsOf: (m: PromoMatch) => TagKey[];
   /** Sets or clears one tag. The SCOPE is derived from the tag upstream, never passed from here. */
   onToggleTag: (m: PromoMatch, t: TagKey, on: boolean) => void;
-  /** True when the FIELD is at a revenue-share venue. Derived upstream; read-only here. */
-  partnerOf: (m: PromoMatch) => boolean;
   tab: MobileView;
   setTab: (t: MobileView) => void;
   /* THE SAME ROWS THE DESKTOP QUEUE HOLDS, general pushes included. `m` is null on a general
@@ -255,7 +253,7 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode; viewTag?: TagKey |
                 <div data-testid="m-row" data-state={m.state} data-api-id={m.apiId}
                   onClick={(e) => onOpen(m, e.currentTarget as HTMLElement)}
                   data-new={m.newFlag ?? ""} data-r={p.riskOf?.(m)?.cancelCount ?? 0} data-cover={cover}
-                  data-field-id={m.fieldId ?? ""} data-partner={p.partnerOf(m) ? "1" : "0"}
+                  data-field-id={m.fieldId ?? ""}
                   data-booked={m.state === "cancelled" ? String(m.playerCount ?? 0) : undefined}
                   style={cover === "covered" ? { borderLeftStyle: "dotted" } : undefined}
                   /* NO bg-white IN THE BASE — see the Tile note in MatchPromotionView: it ties
@@ -310,17 +308,10 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode; viewTag?: TagKey |
                   )}
                   {/* TAGS: OUTLINED, NEVER FILLED, three then a count — the row already spends
                       filled pills on the cancel ratio and the NEW badge. */}
-                  {(shownTags.length > 0 || p.partnerOf(m)) && (
+                  {shownTags.length > 0 && (
                     <div className="mt-1.5 flex flex-wrap gap-1" data-testid="m-tags">
                       {/* DERIVED, AND FIRST. No data-t, which is how the assertion separates the
                           read-only badge from the two tags a person can set. */}
-                      {p.partnerOf(m) && (
-                        <i data-testid="m-partner-badge" title={PARTNER_BADGE.meaning}
-                          className="rounded-[4px] border px-[5px] py-px text-[9px] font-extrabold not-italic tracking-[0.03em]"
-                          style={{ color: PARTNER_BADGE.colour, borderColor: PARTNER_BADGE.colour, background: "transparent" }}>
-                          {PARTNER_BADGE.label}
-                        </i>
-                      )}
                       {shownTags.map((t) => (
                         <i key={t} data-testid="m-tag" data-t={t} title={tagTitle(t)}
                           className="rounded-[4px] border px-[5px] py-px text-[9px] font-extrabold not-italic tracking-[0.03em]"
@@ -598,8 +589,6 @@ export default function MatchPromotionMobile(p: MobileProps) {
         <div className="px-3.5 pb-6 pt-3 text-[11.5px] leading-[1.8] text-deep-green/65">
           A solid mint rail is this match&rsquo;s own push. A dotted one means a city or field slate
           blast carried it. A dashed row has no plan at all. Amber needs a push date.
-          {" "}<b>{PARTNER_BADGE.label}</b> is derived from the venue&rsquo;s revenue model and cannot
-          be set by hand.
         </div>
       )}
     </div>

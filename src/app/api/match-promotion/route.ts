@@ -410,14 +410,28 @@ async function saveTag(
       await auditTag(sb, "delete", data?.[0]?.id ?? null, t.tag, col, id, auth.email ?? null);
       return Response.json({ outcome: "LANDED", scope, id, tag: t.tag, on: false });
     }
-    /* UPSERT ON THE SCOPE'S OWN PARTIAL UNIQUE INDEX rather than select-then-insert: the
-     * read-then-write has a window two operators can both pass through and the failure is a
-     * duplicate nobody can see. 0193 split the old UNIQUE (field_id, tag) into one partial index
-     * per scope, so the conflict target is per scope too. */
+    /* ── INSERT, NOT UPSERT, AND THE REASON IS STRUCTURAL ───────────────────────────────────
+     * THIS SHIPPED BROKEN AND FAILED IN PRODUCTION: "there is no unique or exclusion constraint
+     * matching the ON CONFLICT specification". 0193 replaced UNIQUE (field_id, tag) with two PARTIAL
+     * unique indexes, one per scope, and a partial index CANNOT BE INFERRED by ON CONFLICT unless the
+     * statement repeats the index predicate. PostgREST's on_conflict takes column names only, so it
+     * has no way to express one. The upsert could never have worked against this schema.
+     *
+     * AND A TAG TOGGLE WAS NEVER AN UPSERT. The row is (scope id, tag) and there is no column to
+     * update except set_at, so the operation is: insert when absent, delete when present. An upsert
+     * here was expressing "write this row, whatever is there" for a row that has nothing to write.
+     *
+     * 23505 IS TREATED AS ALREADY-ON rather than read-then-insert. Reading first leaves a window two
+     * operators can both pass through, and the loser sees an error for a tag that is in the state
+     * they asked for. The constraint is the arbiter; the duplicate is not a failure, it is the
+     * answer. */
     const row: Record<string, unknown> = { [col]: id, tag: t.tag, set_by: auth.email ?? null };
-    const { data, error } = await sb.from("promo_tags")
-      .upsert(row, { onConflict: `${col},tag` }).select("id");
+    const { data, error } = await sb.from("promo_tags").insert(row).select("id");
     if (error) {
+      // 23505 = unique_violation. The row already exists, which is the state the caller wanted.
+      if (error.code === "23505") {
+        return Response.json({ outcome: "LANDED", scope, id, tag: t.tag, on: true, already: true });
+      }
       const named = missingTableError(error.message);
       return Response.json({ outcome: "FAILED", error: named ?? error.message }, { status: named ? 503 : 500 });
     }

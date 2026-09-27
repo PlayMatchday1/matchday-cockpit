@@ -23,7 +23,7 @@ import { useMatchData } from "@/lib/useMatchData";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { getCancelPatterns, rollUpSlotRisk, clustersForField, slotRiskKey, type SlotRisk } from "@/lib/cancelPatterns";
 import { normalizeMatchName } from "@/lib/venueNormalization";
-import { PARTNER_BADGE, TAG_KEYS, TAG_KEY_ORDER, TAG_META, splitTags, tagTitle, tagsAtScope, tagsInUse, isTagKey, type TagKey } from "@/lib/promoTags";
+import { TAG_KEYS, TAG_KEY_ORDER, TAG_META, splitTags, tagTitle, tagsAtScope, tagsInUse, isTagKey, type TagKey } from "@/lib/promoTags";
 import { weekQueueEntries, weekQueues, isPastWeek, defaultDayIdx, tabCounts, type QueueEntry } from "@/lib/promoDayQueue";
 import {
   CHANNELS, NEW_FLAG_LABEL, channelsOn, codeFor, coverageCaption, coverageStateOf, coverageSummary,
@@ -296,13 +296,6 @@ export default function MatchPromotionView() {
     const match = week?.tagsByMatch?.[m.apiId] ?? [];
     return [...match, ...field].filter(isTagKey);
   }, [week]);
-  /* ── THE PARTNER BADGE, READ-ONLY, DERIVED FROM THE CONTRACT ──────────────────────────────
-   * A Set because every tile asks. week.partnerFields is computed server-side from
-   * fin_venue_fields -> fin_venues -> partner_dashboards through the SAME predicate basisOf uses;
-   * see fetchPartnerFields. There is no flag on the match and nothing here can set one. */
-  const partnerSet = useMemo(() => new Set(week?.partnerFields ?? []), [week]);
-  const partnerOf = useCallback((m: PromoMatch): boolean =>
-    m.fieldId != null && partnerSet.has(m.fieldId), [partnerSet]);
   const [genCity, setGenCity] = useState<string | null>(null);
   const openGeneral = useCallback((city: string) => setGenCity(city), []);
 
@@ -419,7 +412,6 @@ export default function MatchPromotionView() {
         onOpen={openMatch} onClose={closePanel} onSave={() => void save()}
         saving={saving} toast={toast}
         onNav={(d) => void nav(d)} weekLabel={weekLabel(week)}
-        partnerOf={partnerOf}
         zone={zone} setZone={setZone} onError={(msg) => setToast({ msg, bad: true })}
       />
     );
@@ -488,7 +480,7 @@ Which matches get promoted, on which channels, and when the push goes out.
           ? <Coverage week={week} zone={zone} />
           : <Plan week={week} byCity={tab === "plan" ? byCity : byCityTagged} openId={openId} onOpen={openMatch}
                    zone={zone} riskOf={riskOf}
-                   coverage={coverage} coversOf={coversOf} tagsOf={tagsOf} partnerOf={partnerOf}
+                   coverage={coverage} coversOf={coversOf} tagsOf={tagsOf}
                    onAddGeneral={openGeneral} viewTag={viewTag}
                    editing={open != null && draft != null} />}
 
@@ -519,7 +511,7 @@ Which matches get promoted, on which channels, and when the push goes out.
           so that was the wrong shape. */}
       {open && draft && (
         <MatchEditorPanel m={open} draft={draft} setDraft={setDraft} zone={zone} setZone={setZone}
-          dirty={dirty} saving={saving} toast={toast} tags={tagsOf(open)} partner={partnerOf(open)}
+          dirty={dirty} saving={saving} toast={toast} tags={tagsOf(open)}
           onToggleTag={(t, on) => void toggleTag(open, t, on)}
           onSave={() => void save()} onClose={closePanel} />
       )}
@@ -586,12 +578,12 @@ const TILE_STATE_KEY: readonly [ReturnType<typeof coverageOf>, string, string][]
  * channel and none inside an off one, so this panel does not touch codes at all — putting one on
  * this header would undo the per-channel split in the one place an operator types it.
  */
-function MatchEditorPanel({ m, draft, setDraft, zone, setZone, dirty, saving, toast, tags, partner, onToggleTag, onSave, onClose }: {
+function MatchEditorPanel({ m, draft, setDraft, zone, setZone, dirty, saving, toast, tags, onToggleTag, onSave, onClose }: {
   m: PromoMatch; draft: PushDraft; setDraft: (d: PushDraft) => void;
   zone: ZoneMode; setZone: (z: ZoneMode) => void;
   dirty: boolean; saving: boolean; toast: { msg: string; bad: boolean } | null;
-  /** This FIELD's tags, and whether its venue is on a revenue share. */
-  tags: TagKey[]; partner: boolean;
+  /** This match's tags at both scopes, raw and unsuppressed. */
+  tags: TagKey[];
   onToggleTag: (t: TagKey, on: boolean) => void;
   onSave: () => void; onClose: () => void;
 }) {
@@ -609,8 +601,7 @@ function MatchEditorPanel({ m, draft, setDraft, zone, setZone, dirty, saving, to
         {/* ── FIELD TAGS, AND THEY MOVED HERE WITH THE PANEL ───────────────────────────────────
             They were inside the inline editor, so detaching that would have deleted the only way to
             set a tag. Still keyed on the FIELD: tagging this match tags the pitch, on every tile it
-            appears on, this week and next. PARTNER sits alongside as a statement rather than a
-            control — the contract sets it, nobody here can. */}
+            appears on, this week and next. */}
         {/* ── TAGS, GROUPED BY SCOPE, AND THE HEADING IS THE WHOLE FIX ─────────────────────────
             Three pills that look alike where one affects a match and two affect a week of them is
             how someone tags one match and finds seven tagged. "Every match at <field>" says out loud
@@ -646,17 +637,6 @@ function MatchEditorPanel({ m, draft, setDraft, zone, setZone, dirty, saving, to
                       </button>
                     );
                   })}
-                  {/* PARTNER SITS IN THE FIELD GROUP AS A STATEMENT, NOT A CONTROL. It belongs to the
-                      venue, the contract sets it, and a disabled button would say "you may not"
-                      where the truth is "this is". */}
-                  {scope === "field" && partner && (
-                    <span data-testid="partner-panel-badge" title={PARTNER_BADGE.meaning}
-                      className="inline-flex min-h-[32px] items-center rounded-[7px] border px-2.5 text-[11px] font-extrabold tracking-[0.03em]"
-                      style={{ color: PARTNER_BADGE.colour, borderColor: PARTNER_BADGE.colour, background: "transparent" }}>
-                      {PARTNER_BADGE.label}
-                      <i className="ml-1.5 text-[9px] font-bold not-italic opacity-70">from the contract</i>
-                    </span>
-                  )}
                 </span>
               </div>
             );
@@ -1022,7 +1002,7 @@ function GeneralPushSheet({ city, week, saving, onClose, onSave }: {
   );
 }
 
-function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, coversOf, tagsOf, partnerOf, onAddGeneral, viewTag }: {
+function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, coversOf, tagsOf, onAddGeneral, viewTag }: {
   week: PromoWeek; byCity: [string, PromoMatch[]][]; openId: number | null; zone: ZoneMode;
   /** The tile's cancel history, keyed on field and weekday with times CLUSTERED. See cancelPatterns. */
   riskOf: (m: PromoMatch) => SlotRisk | null;
@@ -1030,8 +1010,6 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
   coverage: Map<number, ReturnType<typeof coverageOf>>;
   coversOf: (m: PromoMatch) => GeneralPush[];
   tagsOf: (m: PromoMatch) => TagKey[];
-  /** True when this match's FIELD is at a revenue-share venue. Derived; nothing can set it. */
-  partnerOf: (m: PromoMatch) => boolean;
   /** Non-null on a tag view: the grid is already filtered to it, and the heading says which. */
   viewTag: TagKey | null;
   onAddGeneral: (city: string) => void;
@@ -1050,7 +1028,6 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
    * by construction, so a key built from the visible set would list exactly one entry and stop
    * explaining the others. */
   const keyTags = tagsInUse(week.matches.map((m) => tagsOf(m)));
-  const anyPartner = week.matches.some((m) => partnerOf(m));
   /* THE TILE COUNT, FROM THE ROWS BEING RENDERED. On a tag view this is the whole claim the view
    * makes, so it is counted off `byCity` rather than recomputed from the week. */
   const shown = byCity.reduce((n, [, ms]) => n + ms.length, 0);
@@ -1097,7 +1074,7 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
           {/* THE TAGS IN USE THIS WEEK, in the key's own order: Starting 11, Priority, Key Field.
               NO SCOPE LABEL. The sentences carry it ("for this match", "for all matches here")
               better than a repeated lead-in did, and a label restating the sentence is noise. */}
-          {(keyTags.length > 0 || anyPartner) && (
+          {keyTags.length > 0 && (
             <div className="mt-1.5 grid gap-x-5 gap-y-1 sm:grid-cols-2" data-testid="key-tags">
               {keyTags.map((t) => (
                 <span key={t} data-testid="keyitem" data-t={t} title={tagTitle(t)}
@@ -1109,15 +1086,6 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
                 </span>
               ))}
               {/* THE DERIVED BADGE IN THE SAME KEY, so a reader meets one vocabulary. */}
-              {anyPartner && (
-                <span data-testid="keyitem" data-t="partner" title={PARTNER_BADGE.meaning}
-                  className="inline-flex items-baseline gap-2 text-[11px] text-deep-green/65">
-                  <i data-testid="partner-key"
-                    className="rounded-[4px] border px-[4px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.03em]"
-                    style={{ color: PARTNER_BADGE.colour, borderColor: PARTNER_BADGE.colour }}>{PARTNER_BADGE.label}</i>
-                  <span>{PARTNER_BADGE.meaning}</span>
-                </span>
-              )}
             </div>
           )}
         </div>
@@ -1205,7 +1173,7 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
                     {dayMatches.length === 0 && <div className="pt-1.5 text-[11.5px] text-deep-green/30">No sessions</div>}
                     {dayMatches.map((m) => <Tile key={m.apiId} m={m} open={m.apiId === openId} onOpen={onOpen} zone={zone}
                       priorLabel={priorLabel} priorWeeks={week.priorWeeks} risk={riskOf(m)} cover={coverage.get(m.apiId) ?? "none"}
-                      covers={coversOf(m)} tags={tagsOf(m)} partner={partnerOf(m)} shifted={m.shiftedFrom} />)}
+                      covers={coversOf(m)} tags={tagsOf(m)} shifted={m.shiftedFrom} />)}
                   </div>
                 );
               })}
@@ -1240,7 +1208,7 @@ function coverFirst(m: PromoMatch, zone: ZoneMode): string {
  * PLANNED TILES STAY DISTINCT BY WEIGHT, NOT BY LABEL. A tile with a plan carries chips and a push
  * line and a solid left rail; a tile without carries a dashed border and almost no ink. The eye
  * finds the planned ones because they are the only ones with anything in them. */
-function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shifted, covers, tags, partner }: {
+function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shifted, covers, tags }: {
   m: PromoMatch; open: boolean; onOpen: (m: PromoMatch, el: HTMLElement) => void; zone: ZoneMode;
   priorLabel: string; priorWeeks: number; risk?: SlotRisk | null;
   /** planned | covered | none | needs-decision | cancelled, derived once at page level. */
@@ -1250,8 +1218,6 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shif
   /** The general pushes that carried it, for the label. Empty unless `cover` is "covered". */
   covers: GeneralPush[];
   tags: TagKey[];
-  /** Derived from the venue's revenue model. READ-ONLY: there is no row and no toggle for it. */
-  partner: boolean;
 }) {
   /* A CHIP PER CHANNEL THAT HAS A PUSH, or is on with none — which is what "on" is now. */
   const lit = CHANNELS.filter((c) => channelsOn(m.plan).includes(c.key));
@@ -1277,9 +1243,9 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shif
   return (
     <div data-testid="match-tile" data-state={m.state} data-api-id={m.apiId} data-open={open ? "1" : "0"}
       data-new={m.newFlag ?? ""} data-r={r} data-cover={cover}
-      /* THE FIELD ID, so an assertion can join a tile to the contract the PARTNER badge is derived
-         from instead of trusting the badge to describe itself. */
-      data-field-id={m.fieldId ?? ""} data-partner={partner ? "1" : "0"}
+      /* THE FIELD ID, so an assertion can tell a field-scoped tag from a match-scoped one without
+         trusting the pill to describe itself. */
+      data-field-id={m.fieldId ?? ""}
       data-booked={cancelled ? String(m.playerCount ?? 0) : undefined}
       /* THE EXACT TIME LIVES IN THE TITLE, because the tile is coloured on a slot key whose times
          are clustered — a slot that drifted from 8:00 to 8:30 is one slot to a player and must be
@@ -1337,19 +1303,8 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shif
       {/* TAGS: OUTLINED, NEVER FILLED. The tile already spends filled pills on the cancel ratio and
           the NEW badge; a filled tag would read as a 4/4 cancel at a glance. Three render and the
           rest become a count, because five pills on one tile is unreadable. */}
-      {(shownTags.length > 0 || partner) && (
+      {shownTags.length > 0 && (
         <div className="mt-[5px] flex flex-wrap gap-1" data-testid="tags">
-          {/* PARTNER IS FIRST AND IT IS NOT A TAG. Derived from fin_venues.billing_type /
-              partner_dashboards.revenue_model through the same predicate basisOf uses, so it cannot
-              disagree with the finance pages. It carries no data-t, which is how the assertion tells
-              the derived badge from the two things a person can actually set. */}
-          {partner && (
-            <i data-testid="partner-badge" title={PARTNER_BADGE.meaning}
-              className="rounded-[4px] border px-[4px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.03em]"
-              style={{ color: PARTNER_BADGE.colour, borderColor: PARTNER_BADGE.colour, background: "transparent" }}>
-              {PARTNER_BADGE.label}
-            </i>
-          )}
           {shownTags.map((t) => (
             <i key={t} data-testid="tag" data-t={t} title={tagTitle(t)}
               className="rounded-[4px] border px-[4px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.03em]"

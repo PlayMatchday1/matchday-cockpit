@@ -22,9 +22,10 @@
  * whose CLAIM can be wrong: it asserts a code is live while being set by hand. That caveat lives
  * in `note` and renders on hover rather than on the row.
  *
- * ── PARTNER IS NOT HERE AND IS NOT COMING BACK AS A TAG ─────────────────────────────────────
- * It is derived from the contract by isRevenueShareVenue and rendered read-only; the hand-set
- * version was wrong on its one field and absent from all five that qualified. See PARTNER_BADGE.
+ * ── PARTNER IS NOT HERE IN ANY FORM ─────────────────────────────────────────────────────────
+ * A hand-set tag first (removed by 0192: wrong on its one field, absent from all five that
+ * qualified), then a derived read-only badge, and now off this page entirely. See the note further
+ * down. The contract fact still lives on the finance side, where basisOf derives it.
  */
 export const TAG_KEYS = ["priority", "key_field", "starting_11"] as const;
 export type TagKey = (typeof TAG_KEYS)[number];
@@ -38,8 +39,8 @@ export const isTagKey = (v: unknown): v is TagKey => TAG_KEYS.includes(v as TagK
  * THE LABEL CARRIES THE SCOPE. STARTING 11 is a different idea and keeps its own.
  *
  * Neither collides with anything the page already spends: mint is push state, yellow through dark
- * red is cancel history, deep green is the NEW badge, amber is needs-a-decision and the promo code,
- * and #0891B2 is the derived PARTNER badge.
+ * red is cancel history, deep green is the NEW badge, and amber is needs-a-decision and the promo
+ * code.
  *
  * OUTLINED, NOT FILLED, and that is structural rather than decorative: the tile spends filled pills
  * on the cancel ratio and the NEW badges, so a filled tag would read as a 4/4 cancel at a glance. */
@@ -72,13 +73,13 @@ export const tagTitle = (k: TagKey): string =>
 /** The tags at one scope, for the panel's two groups. */
 export const tagsAtScope = (s: TagScope): TagKey[] => TAG_KEYS.filter((k) => TAG_META[k].scope === s);
 
-/* THE DERIVED BADGE. Not a tag: no row, no toggle, no way to set it. It sits beside the tags on the
- * tile and in the key so a reader sees one vocabulary, and its own wording says where it comes from. */
-export const PARTNER_BADGE = {
-  label: "PARTNER",
-  colour: "#0891B2",
-  meaning: "A revenue-share venue. A quiet week hurts the partner too.",
-} as const;
+/* ── PARTNER IS NOT HERE, AT ALL, IN ANY FORM ─────────────────────────────────────────────────
+ * It was a hand-set tag (removed by 0192 because it was wrong on its one field and absent from all
+ * five that qualified), then a derived read-only badge, and now it is gone from this page entirely.
+ * Ryan: "Remove it from everything." The contract fact still lives on the finance side and basisOf
+ * still derives it there; this page simply does not render it.
+ *
+ * isRevenueShareVenue STAYS in lib/revenueShare because basisOf calls it. Nothing here does. */
 
 /* THE COLOURS THE PAGE HAS ALREADY SPENT. Exported so the assertion can check the COLLISION rather
  * than merely counting distinct values: two distinct colours that happen to include mint would pass

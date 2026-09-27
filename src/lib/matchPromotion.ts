@@ -16,9 +16,6 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { fetchVeoWeek, weekMonday, type VeoMatch } from "./veoSchedule";
-/* THE PARTNER RULE, NOT A COPY OF IT. basisOf calls this same predicate; see fetchPartnerFields.
- * From the LEAF module, never from fieldEconomics — that file reaches "use client" code. */
-import { isRevenueShareVenue } from "./revenueShare";
 /* ── THE SAME TIME CLUSTER THE CANCEL ROLLUP USES, NOT A SECOND ONE ──────────────────────────
  * clusterMinutes and slotRiskKey are what rollUpSlotRisk keys a tile's cancel history by, so a
  * time inside the window is already ONE SLOT to the ramp. Newness read exact minutes, so the tile
@@ -555,9 +552,6 @@ export type PromoWeek = {
   /** match api_id -> its MATCH-scoped tags (priority). Dies with the match, so there is nothing to
    *  expire: see the note on TAG_META. */
   tagsByMatch: Record<number, string[]>;
-  /** The field ids on a REVENUE SHARE, derived from the contract. Never a stored flag; see
-   *  fetchPartnerFields. Empty is a legitimate answer and also what a failed read returns. */
-  partnerFields: number[];
   /** The Monday of the EARLIEST week the NEW test compared against — printed on the page so the
    *  rule is legible without asking, and so a wrong window is visible rather than silent. */
   priorWeekStart: string;
@@ -701,10 +695,9 @@ export async function fetchPromoWeek(
   matches.sort((a, b) => a.city.localeCompare(b.city) || a.dayIdx - b.dayIdx || a.minutes - b.minutes);
 
   const fieldIds = matches.map((m) => m.fieldId).filter((x): x is number => x != null);
-  const [generals, tags, partnerFields] = await Promise.all([
+  const [generals, tags] = await Promise.all([
     fetchGeneralPushes(sb, week.days),
     fetchPromoTags(sb, fieldIds, matches.map((m) => m.apiId)),
-    fetchPartnerFields(sb, fieldIds),
   ]);
 
   return {
@@ -716,7 +709,6 @@ export async function fetchPromoWeek(
     generals,
     tagsByField: tags.byField,
     tagsByMatch: tags.byMatch,
-    partnerFields,
     planTableReady: ready,
     generatedAt: now.toISOString(),
   };
@@ -976,58 +968,3 @@ async function fetchPromoTags(
   return { byField, byMatch };
 }
 
-/* ── THE PARTNER BADGE IS DERIVED, AND THIS IS THE DERIVATION ────────────────────────────────
- *
- * PARTNER USED TO BE A TAG ANYONE COULD APPLY. It was wrong on the only field carrying it and
- * absent on every field it belonged on, measured on prod 2026-09-26:
- *
- *   TAGGED, NOT A SHARE   1717 Keswick Park (Chamblee) -> fin_venue 66, billing_type per_match,
- *                         cost_per_match 80, no partner_dashboards row. A rental.
- *   A SHARE, NOT TAGGED   1024 The Hattrick, 1189 PAC GLOBAL, 1288 The Hattrick T.,
- *                         1321 Crossbar Rowlett, 1585 PARMER Stadium.
- *
- * THE RULE IS NOT RE-IMPLEMENTED HERE. isRevenueShareVenue is the predicate basisOf itself calls,
- * so the promo page and the finance pages cannot disagree about who is a partner. A second copy of
- * the test is precisely what the hand-applied tag was, and it drifted.
- *
- * THE JOIN IS field_id -> fin_venue_fields.mdapi_field_id -> fin_venues -> partner_dashboards,
- * because a tag is keyed on a FIELD and a contract is signed with a VENUE. A field with no mapping
- * row is simply not a partner field, which is correct rather than a gap: an unmapped pitch has no
- * venue and therefore no contract.
- *
- * A FAILED READ RETURNS EMPTY, NOT A THROW. The badge is a courtesy on a planning page; losing it
- * must not cost the operator the week. An empty result is indistinguishable from "no partners this
- * week" here, which is the one thing this softness buys and the reason the node guard asserts the
- * derivation directly rather than through the page.
- *
- * NO `excluded_from_venue` FILTER. That flag excludes a field from a venue's COST accounting, not
- * from its contract - an excluded field at a revenue-share venue is still at a revenue-share venue.
- */
-async function fetchPartnerFields(sb: SupabaseClient, fieldIds: number[]): Promise<number[]> {
-  const ids = [...new Set(fieldIds)];
-  if (ids.length === 0) return [];
-  const links: { field: number; venue: number }[] = [];
-  for (let i = 0; i < ids.length; i += 500) {
-    const { data, error } = await sb.from("fin_venue_fields")
-      .select("fin_venue_id, mdapi_field_id").in("mdapi_field_id", ids.slice(i, i + 500));
-    if (error) return [];
-    for (const r of data ?? []) links.push({ field: Number(r.mdapi_field_id), venue: Number(r.fin_venue_id) });
-  }
-  if (links.length === 0) return [];
-  const venueIds = [...new Set(links.map((l) => l.venue))];
-  const [venues, dashes] = await Promise.all([
-    sb.from("fin_venues").select("id, billing_type").in("id", venueIds),
-    /* ENABLED ONLY. A disabled dashboard is a partner we no longer settle with, and basisOf reads
-     * FinanceData.partnerDashboards which is itself the enabled set (fetchAllEnabledPartnerDashboards).
-     * Reading disabled rows here would make this stricter than the rule it is meant to share. */
-    sb.from("partner_dashboards").select("venue_id, revenue_model").eq("enabled", true).in("venue_id", venueIds),
-  ]);
-  if (venues.error) return [];
-  const billing = new Map<number, string | null>((venues.data ?? []).map((v) => [Number(v.id), v.billing_type ?? null]));
-  const model = new Map<number, string | null>((dashes.data ?? []).map((d) => [Number(d.venue_id), d.revenue_model ?? null]));
-  const out = new Set<number>();
-  for (const l of links) {
-    if (isRevenueShareVenue(billing.get(l.venue), model.get(l.venue))) out.add(l.field);
-  }
-  return [...out].sort((a, b) => a - b);
-}
