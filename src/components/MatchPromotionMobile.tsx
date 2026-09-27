@@ -19,7 +19,10 @@
 // and passed in; nothing is re-derived and no count is redefined.
 
 import { CHANNELS, NEW_FLAG_LABEL, channelsOn, codeFor, coverLabel, coverageCaption, coverageOf, coverageStateOf, coverageSummary, datedPushes, fmtPushIn, isPushOverdue, isPushSent, leadToKickoff, sentStamp, venueOffsetMs, type GeneralPush, type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode } from "@/lib/matchPromotion";
-import { TAG_META, splitTags, type TagKey } from "@/lib/promoTags";
+import { PARTNER_BADGE, TAG_META, splitTags, type TagKey } from "@/lib/promoTags";
+/* THE VIEW LIST AND ITS LABELS COME FROM THE DESKTOP. Not a second list to keep in step — a
+ * phone tab the desktop does not have is how the two surfaces end up offering different views. */
+import { MOBILE_VIEWS, VIEW_LABEL, type MobileView } from "@/components/MatchPromotionView";
 import type { QueueEntry } from "@/lib/promoDayQueue";
 import MarkPushSent from "@/components/MarkPushSent";
 import PushPlanEditor from "@/components/PushPlanEditor";
@@ -46,8 +49,10 @@ export type MobileProps = {
   coversOf: (m: PromoMatch) => GeneralPush[];
   /** This match's field tags, keyed on the field upstream. */
   tagsOf: (m: PromoMatch) => TagKey[];
-  tab: "due" | "week" | "coverage";
-  setTab: (t: "due" | "week" | "coverage") => void;
+  /** True when the FIELD is at a revenue-share venue. Derived upstream; read-only here. */
+  partnerOf: (m: PromoMatch) => boolean;
+  tab: MobileView;
+  setTab: (t: MobileView) => void;
   /* THE SAME ROWS THE DESKTOP QUEUE HOLDS, general pushes included. `m` is null on a general
    * one: it belongs to no match, which is the whole point of it. */
   jobs: QueueEntry[];
@@ -70,6 +75,17 @@ export type MobileProps = {
   setZone: (z: ZoneMode) => void;
   /** Surfaces a failed mark-sent as the page's own toast. */
   onError?: (msg: string) => void;
+  /* ── THE PHONE SHARES THE DESKTOP'S OPEN RULES, NOT A COPY OF THEM ─────────────────────────
+   * `onOpen` IS the desktop's openMatch, so both new refusals already hold here: a cancelled match
+   * does not open, and a row tapped while another panel has unsaved changes is ignored. What the
+   * phone needs of its own is the EXPLANATION — a tap that silently does nothing reads as the page
+   * being broken rather than as the panel holding on to what was typed.
+   *
+   * WHAT THE PHONE DOES NOT TAKE is the fixed side panel. Its editor opens under its own row, which
+   * is a decision recorded in this file: a modal loses your place in a sixty-row list. At 390px the
+   * desktop tree is not rendered at all (the breakpoint is 767px), so there is no side panel to
+   * place and no week padding to drop. */
+  dirty: boolean;
 };
 
 /* ── shared bits ─────────────────────────────────────────────────────────────────────────────── */
@@ -181,12 +197,32 @@ function Due({ jobs, overdue, now, zone, onOpen, onReload, onError }: {
 
 /* ── THE WEEK, BY DAY ────────────────────────────────────────────────────────────────────────── */
 
-function WeekByDay(p: MobileProps & { panel: React.ReactNode }) {
+/* ONE COMPONENT FOR WEEK AND FOR BOTH TAG VIEWS, exactly as the desktop has one Plan. `viewTag`
+ * filters the matches and nothing else changes: same rows, same panel, same states. A phone-only
+ * copy of "the week, filtered" would be the third implementation of one idea. */
+function WeekByDay(p: MobileProps & { panel: React.ReactNode; viewTag?: TagKey | null }) {
   const { week, openId, onOpen, zone, panel } = p;
+  const viewTag = p.viewTag ?? null;
+  const pool = viewTag == null ? week.matches : week.matches.filter((m) => p.tagsOf(m).includes(viewTag));
+  const shown = pool.length;
   return (
-    <div data-testid="m-week">
+    <div data-testid="m-week" data-view-tag={viewTag ?? ""}>
+      {viewTag && (
+        <div className="px-3 pt-3.5">
+          <h2 className="m-0 text-[11px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">{TAG_META[viewTag].label}</h2>
+          {/* A FILTERED LIST SAYS SO. Same reason as the desktop: a quiet subset gets read as all. */}
+          <div className="text-[11.5px] font-bold text-deep-green/55" data-testid="m-filter-note">
+            <b data-testid="m-shown">{shown}</b> match{shown === 1 ? "" : "es"} carrying {TAG_META[viewTag].label}
+          </div>
+          {shown === 0 && (
+            <p className="pb-2 pt-1 text-[12.5px] text-deep-green/40" data-testid="m-grid-empty">
+              No match this week is at a field tagged {TAG_META[viewTag].label}.
+            </p>
+          )}
+        </div>
+      )}
       {week.days.map((d, i) => {
-        const dayMatches = week.matches.filter((m) => m.dayIdx === i).sort((a, b) => a.minutes - b.minutes);
+        const dayMatches = pool.filter((m) => m.dayIdx === i).sort((a, b) => a.minutes - b.minutes);
         if (dayMatches.length === 0) return null;
         return (
           <div key={d.iso} className="px-3 pt-4" data-testid="m-day">
@@ -217,6 +253,7 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode }) {
                 <div data-testid="m-row" data-state={m.state} data-api-id={m.apiId}
                   onClick={(e) => onOpen(m, e.currentTarget as HTMLElement)}
                   data-new={m.newFlag ?? ""} data-r={p.riskOf?.(m)?.cancelCount ?? 0} data-cover={cover}
+                  data-field-id={m.fieldId ?? ""} data-partner={p.partnerOf(m) ? "1" : "0"}
                   data-booked={m.state === "cancelled" ? String(m.playerCount ?? 0) : undefined}
                   style={cover === "covered" ? { borderLeftStyle: "dotted" } : undefined}
                   /* NO bg-white IN THE BASE — see the Tile note in MatchPromotionView: it ties
@@ -271,8 +308,17 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode }) {
                   )}
                   {/* TAGS: OUTLINED, NEVER FILLED, three then a count — the row already spends
                       filled pills on the cancel ratio and the NEW badge. */}
-                  {shownTags.length > 0 && (
+                  {(shownTags.length > 0 || p.partnerOf(m)) && (
                     <div className="mt-1.5 flex flex-wrap gap-1" data-testid="m-tags">
+                      {/* DERIVED, AND FIRST. No data-t, which is how the assertion separates the
+                          read-only badge from the two tags a person can set. */}
+                      {p.partnerOf(m) && (
+                        <i data-testid="m-partner-badge" title={PARTNER_BADGE.meaning}
+                          className="rounded-[4px] border px-[5px] py-px text-[9px] font-extrabold not-italic tracking-[0.03em]"
+                          style={{ color: PARTNER_BADGE.colour, borderColor: PARTNER_BADGE.colour, background: "transparent" }}>
+                          {PARTNER_BADGE.label}
+                        </i>
+                      )}
                       {shownTags.map((t) => (
                         <i key={t} data-testid="m-tag" data-t={t} title={TAG_META[t].meaning}
                           className="rounded-[4px] border px-[5px] py-px text-[9px] font-extrabold not-italic tracking-[0.03em]"
@@ -347,14 +393,20 @@ function monthOf(iso: string): string {
 /* ── THE PANEL, ONE COLUMN ───────────────────────────────────────────────────────────────────── */
 
 function Panel(p: MobileProps) {
-  const { week, openId, draft, setDraft, onClose, onSave, saving, toast, zone, setZone } = p;
+  const { week, openId, draft, setDraft, onClose, onSave, saving, toast, zone, setZone, dirty } = p;
   const m = week.matches.find((x) => x.apiId === openId);
   if (!m || !draft) return null;
   return (
     // NOT position:fixed. It is in the flow, directly under its row.
-    <div data-testid="m-panel"
+    <div data-testid="m-panel" data-dirty={dirty ? "1" : "0"}
       className="mb-2 rounded-[11px] border border-deep-green bg-[#fbfdfc] p-3">
       <h3 className="m-0 mb-2.5 text-[13px] font-extrabold">{m.venue} · {m.city}</h3>
+      {/* WHY ANOTHER ROW WILL NOT OPEN. Same rule as the desktop, same words. */}
+      {dirty && (
+        <div data-testid="m-dirty" className="mb-2 text-[11.5px] font-extrabold text-coral">
+          Unsaved · Save or Cancel
+        </div>
+      )}
 
       {/* THE SAME EDITOR THE DESKTOP RENDERS. Its own grid collapses to one column below 640px,
           which is what a channel block has to do on a phone — not a second tree that has to be
@@ -465,13 +517,16 @@ export default function MatchPromotionMobile(p: MobileProps) {
           <button type="button" onClick={() => onNav(1)} data-testid="m-next"
             className="h-[34px] w-[34px] flex-none rounded-lg bg-white/15 text-[15px]">›</button>
         </div>
-        <div className="mt-2.5 flex rounded-[9px] bg-white/15 p-0.5" data-testid="m-tabs">
-          {(["due", "week", "coverage"] as const).map((t) => (
+        {/* FIVE TABS AT 390px. They WRAP rather than scroll: a carousel hides a view behind a
+            gesture nobody knows is there, and "Starting 11" is the widest label on the page. The
+            labels are the desktop's own, so the two surfaces name the same views identically. */}
+        <div className="mt-2.5 flex flex-wrap gap-0.5 rounded-[9px] bg-white/15 p-0.5" data-testid="m-tabs">
+          {MOBILE_VIEWS.map((t) => (
             <button key={t} type="button" data-testid={`m-tab-${t}`} data-on={tab === t ? "1" : "0"}
               onClick={() => setTab(t)}
-              className={`min-h-[32px] flex-1 rounded-[7px] py-[7px] text-[12.5px] font-extrabold capitalize ${
+              className={`min-h-[32px] flex-1 whitespace-nowrap rounded-[7px] px-1.5 py-[7px] text-[12px] font-extrabold ${
                 tab === t ? "bg-white text-deep-green" : "text-white/70"}`}>
-              {t}
+              {VIEW_LABEL[t] ?? t}
             </button>
           ))}
         </div>
@@ -489,6 +544,10 @@ export default function MatchPromotionMobile(p: MobileProps) {
       <PageComments weekStart={week.weekStart} placeholder="Suggestion about this week" />
       {tab === "week" && <WeekByDay {...p} panel={<Panel {...p} />} />}
       {tab === "coverage" && <Coverage week={week} />}
+      {/* THE TAG VIEWS ARE THE WEEK WITH A FILTER, same component, same panel. */}
+      {tab !== "due" && tab !== "week" && tab !== "coverage" && (
+        <WeekByDay {...p} panel={<Panel {...p} />} viewTag={tab} />
+      )}
 
       {/* The legend explains the coverage dots and the row states. It is not on DUE, where there
           are neither — a key to symbols that are not on screen is just noise above the fold. */}
@@ -497,10 +556,12 @@ export default function MatchPromotionMobile(p: MobileProps) {
           <b>✓</b> push planned · <b>!</b> matches, no push · <b>–</b> no matches
         </div>
       )}
-      {tab === "week" && (
+      {tab !== "due" && tab !== "coverage" && (
         <div className="px-3.5 pb-6 pt-3 text-[11.5px] leading-[1.8] text-deep-green/65">
           A solid mint rail is this match&rsquo;s own push. A dotted one means a city or field slate
           blast carried it. A dashed row has no plan at all. Amber needs a push date.
+          {" "}<b>{PARTNER_BADGE.label}</b> is derived from the venue&rsquo;s revenue model and cannot
+          be set by hand.
         </div>
       )}
     </div>

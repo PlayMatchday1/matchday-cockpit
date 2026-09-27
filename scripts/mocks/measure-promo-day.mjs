@@ -284,10 +284,35 @@ ok(await p.$$eval(D('addtag'), es => es.length) === 0,
 
 // THE KEY, AND ONLY FOR TAGS IN USE. A key listing every tag that could exist is a key nobody
 // reads, which this codebase has already written down once about a permanent caveat.
+// THE KEY CARRIES THE FOUR TILE STATES FIRST. They are the grid's core language and every one
+// appears in a real week, so unlike the tags they are not conditional.
+const states = await p.$$eval(D('keystate'), es => es.map(e => e.dataset.s));
+ok(states.join() === 'planned,covered,none,cancelled',
+  `the key shows all four tile states (${states.join(', ')})`);
+// THE SWATCHES ARE THE REAL THING, NOT A DRAWING OF IT. A key whose sample does not match the
+// tile it explains is worse than none, and only a computed check catches the drift.
+const sw = await p.evaluate(() => ({
+  planned: getComputedStyle(document.querySelector('.keyswatch[data-s="planned"]')).borderLeftStyle,
+  covered: getComputedStyle(document.querySelector('.keyswatch[data-s="covered"]')).borderLeftStyle,
+  none: getComputedStyle(document.querySelector('.keyswatch[data-s="none"]')).borderStyle,
+  tPlanned: getComputedStyle(document.querySelector('[data-testid="tile"][data-state="planned"]')).borderLeftStyle,
+  tNone: getComputedStyle(document.querySelector('[data-testid="tile"][data-state="none"]')).borderStyle }));
+ok(sw.planned === 'solid' && sw.covered === 'dotted' && sw.none === 'dashed',
+  `  solid, dotted, dashed (${sw.planned} / ${sw.covered} / ${sw.none})`);
+ok(sw.planned === sw.tPlanned && sw.none === sw.tNone,
+  '  CONTROL: and each swatch matches the tile it explains, computed rather than assumed');
+// WORDING IS "PUSH", NOT "PROMO". The queue, the Mark sent button and every push line say push;
+// a key introducing a second word for one thing does the opposite of its job.
+const keyTxt = await p.$eval(D('key'), e => e.textContent);
+ok(/push/i.test(keyTxt) && !/promo(?!tion code)/i.test(keyTxt),
+  '  CONTROL: the key says push throughout, never promo');
+
 const keyN = await p.$$eval(D('keyitem'), es => es.length);
-ok(keyN === 4, `the key lists the four tags actually on screen (${keyN})`);
-ok(await p.$eval(D('key'), e => /Starting 11 promo code is live/.test(e.textContent)),
-  '  and says what each one means');
+ok(keyN === 4, `the key then lists the four tags on screen (${keyN})`);
+ok(/Starting 11 is live at this field/.test(keyTxt),
+  '  each with a full sentence, not a fragment');
+ok(/can go stale/.test(keyTxt),
+  '  CONTROL: including that STARTING 11 is hand-set and can go stale, which is the one that would mislead');
 ok(await p.$$eval(`${D('tag')}[title]`, es => es.length > 0),
   '  CONTROL: and each tag carries its meaning on hover too, so the key is a reference not a prerequisite');
 
@@ -306,6 +331,62 @@ ok(/WA\s*SLATEWA/.test(pair) || /WA\s*ATX10WA/.test(pair),
 ok(await p.$$eval(D('push'), es => es.some(e => e.querySelector('[data-testid="ch"]')
   && !e.querySelector('[data-testid="code"]'))),
   '  CONTROL: a push with no code shows its channels bare');
+
+// ══ 7e. THE EDITOR AS A SIDE PANEL ═════════════════════════════════════════
+// It used to open in the page flow, so clicking a tile pushed the grid down and the row you were
+// working in moved out from under you. Eight cities clicked in turn is the actual job.
+await load();
+ok(await p.$eval(D('side'), e => getComputedStyle(e).display) === 'none', 'the panel is closed at rest');
+const gridBefore = await p.$eval('.city', e => Math.round(e.getBoundingClientRect().top));
+await p.click(`${D('tile')}[data-state="planned"]`); await p.waitForTimeout(300);
+ok(await p.$eval(D('side'), e => getComputedStyle(e).display) === 'flex', 'clicking a tile opens it');
+const gridAfter = await p.$eval('.city', e => Math.round(e.getBoundingClientRect().top));
+// THE ASSERTION THE WHOLE CHANGE EXISTS FOR. Not "roughly", exactly: the week must not move.
+ok(gridBefore === gridAfter, `the week does not move when it opens (${gridBefore} then ${gridAfter})`);
+// CONTROL: and nothing hides under the panel. The week is padded rather than overlaid.
+const geom = await p.evaluate(() => ({
+  tile: Math.round(document.querySelector('[data-testid="tile"][data-sel="1"]').getBoundingClientRect().right),
+  panel: Math.round(document.querySelector('[data-testid="side"]').getBoundingClientRect().left) }));
+ok(geom.tile < geom.panel, `  CONTROL: the selected tile is clear of the panel (${geom.tile} < ${geom.panel})`);
+
+// WITH THE PANEL OFF TO THE SIDE, THE TILE MUST STAY MARKED. Nothing else says which of eighty
+// eight tiles you are editing.
+ok(await p.$$eval(`${D('tile')}[data-sel="1"]`, es => es.length) === 1,
+  'exactly one tile is marked as the one being edited');
+const title = await txt(D('side-title'));
+ok(/\u00b7/.test(title), `  and the panel names it (${title})`);
+
+// SIX CHANNELS, AND THE CODE SITS ON THE CHANNEL. Putting it back on the panel header would undo
+// the per-channel split in the one place an operator types it.
+ok(await p.$$eval(D('chan'), es => es.length) === 6, 'six channels');
+ok(await p.$$eval(`${D('chan')}[data-on="1"] ${D('code-in')}`, es => es.length > 0),
+  '  and a lit channel carries its own code input');
+ok(await p.$$eval(`${D('chan')}[data-on="0"] ${D('code-in')}`, es => es.length) === 0,
+  '  CONTROL: an unused channel has no code field to fill in by mistake');
+
+// AN UNSAVED PANEL IS NOT SWAPPED OUT FROM UNDER YOU. Losing typed pushes to a stray click on
+// another tile is the one thing this panel must not do.
+await p.fill(D('code-in'), 'TEST10'); await p.waitForTimeout(250);
+ok(await p.$(D('dirty')) !== null, 'editing marks the panel unsaved');
+const tiles = await p.$$(`${D('tile')}[data-state="planned"]`);
+await tiles[1].click(); await p.waitForTimeout(250);
+ok(await txt(D('side-title')) === title,
+  '  and clicking another tile while unsaved does not swap it');
+await p.keyboard.press('Escape'); await p.waitForTimeout(200);
+ok(await p.$eval(D('side'), e => getComputedStyle(e).display) === 'flex',
+  '  CONTROL: nor does Escape, while there are changes');
+await p.click(D('cancel')); await p.waitForTimeout(250);
+ok(await p.$eval(D('side'), e => getComputedStyle(e).display) === 'none',
+  '  Cancel is the way out, and it closes');
+ok(await p.$$eval(`${D('tile')}[data-sel="1"]`, es => es.length) === 0,
+  '  CONTROL: and the tile stops being marked');
+
+// A CANCELLED MATCH HAS NOTHING TO PLAN.
+await load();
+const cx2 = await p.$(`${D('tile')}[data-state="cancelled"]`);
+if (cx2) { await cx2.click(); await p.waitForTimeout(200);
+  ok(await p.$eval(D('side'), e => getComputedStyle(e).display) === 'none',
+    'CONTROL: a cancelled match does not open the editor, there is nothing to plan'); }
 
 // ══ 8. 390 AND 1320 ════════════════════════════════════════════════════════
 for (const vw of [390, 1320]) {

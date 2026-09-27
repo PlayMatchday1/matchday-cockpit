@@ -18,7 +18,7 @@ import "server-only"; // no-op under --conditions=react-server
 // suite against docs/matchday-api-facts.md rather than against its own fixtures.
 
 import {
-  buildPriorSlate, newnessOf, NEW_FLAG_LABEL,
+  buildPriorSlate, newnessOf, NEW_FLAG_LABEL, NEW_LOOKBACK_WEEKS,
   coverageCaption, coverageStateOf, coverageSummary,
   type NewFlag, type PromoMatch, type SlotLike,
 } from "../src/lib/matchPromotion";
@@ -206,6 +206,131 @@ const days7 = Array.from({ length: 7 }, (_, i) => ({ dow: "x", date: i, iso: `d$
   is("...no covered days", s.plannedDays, 0);
   is("...and reports zero matches open", s.openMatches, 0);
   is("  CONTROL — a non-empty week does report some", coverageSummary({ days: days7, matches: [pm("Austin", 0, null)] }).openMatches, 1);
+}
+
+console.log("\nTHE WINDOW IS FOUR WEEKS, AND THESE ARE THE SLOTS THAT PROVE IT");
+{
+  /* ── WHY THIS SECTION EXISTS ────────────────────────────────────────────────────────────────
+   * The window was ONE week, so a slot that ran three weeks, skipped one and came back read NEW DAY
+   * — the single week it was compared against was the one it missed. A wrong badge is worse than no
+   * badge, because it is still believed.
+   *
+   * EVERY SLOT BELOW IS REAL, read off mdapi_matches on 2026-09-26 for the displayed week of
+   * 2026-09-21 against the four prior weeks. w1 = Aug 24, w2 = Aug 31, w3 = Sep 7, w4 = Sep 14 — so
+   * w4 is "last week" and was the ONLY week the old rule ever compared against. The four fields are
+   * carried at their real weekdays and real kick-off times; nothing here is invented, which is what
+   * lets a reader check the fixture against the database rather than against itself.
+   *
+   * THE MEASUREMENT: of 8 NEW DAY / NEW TIME badges on that week, 4 and 4 were wrong. NEW FIELD had
+   * none wrong — fields are the stable one, days and times are what drift. */
+  is("the lookback is four weeks", NEW_LOOKBACK_WEEKS, 4);
+
+  const LBJ = "LBJ Early College High School";
+  const LOWELL = "Lowell H. Strike Middle School";
+  const ROUNDROCK = "Stadium Field at Round Rock M.C.";
+  const HATTRICK = "The Hattrick L.";
+
+  const w1 = [ // Aug 24
+    slot("Austin", LBJ, FRI, at(19, 30)), slot("Austin", LBJ, MON, at(20)),
+    slot("Austin", LBJ, SAT, at(9, 30)), slot("Austin", LBJ, SUN, at(19, 30)),
+    slot("Austin", LBJ, TUE, at(20)),
+    slot("Dallas", LOWELL, MON, at(20)), slot("Dallas", LOWELL, THU, at(20)),
+    slot("Dallas", LOWELL, TUE, at(20)),
+    slot("Austin", HATTRICK, SAT, at(20)), slot("Austin", HATTRICK, FRI, at(20)),
+  ];
+  const w2 = [ // Aug 31
+    slot("Austin", LBJ, FRI, at(19, 30)), slot("Austin", LBJ, MON, at(20)),
+    slot("Austin", LBJ, SAT, at(9, 30)), slot("Austin", LBJ, SUN, at(19, 15)),
+    slot("Austin", LBJ, TUE, at(20)),
+    slot("Dallas", LOWELL, FRI, at(20)), slot("Dallas", LOWELL, THU, at(20)),
+    slot("Dallas", LOWELL, WED, at(20)),
+    slot("Austin", HATTRICK, SAT, at(20)), slot("Austin", HATTRICK, FRI, at(20)),
+  ];
+  const w3 = [ // Sep 7
+    slot("Austin", LBJ, FRI, at(19, 30)), slot("Austin", LBJ, MON, at(20)),
+    slot("Austin", LBJ, SAT, at(9, 30)), slot("Austin", LBJ, SUN, at(19)),
+    slot("Dallas", LOWELL, MON, at(20)), slot("Dallas", LOWELL, THU, at(20)),
+    slot("Dallas", LOWELL, TUE, at(20)),
+    slot("Austin", ROUNDROCK, SUN, at(19)),
+    slot("Austin", HATTRICK, SAT, at(19)), slot("Austin", HATTRICK, FRI, at(20)),
+  ];
+  /* LAST WEEK. Not one of the four returning slots is in it — that is the entire bug, as a fixture.
+   * Every field IS here on some other day, which is why the old rule produced NEW DAY and NEW TIME
+   * rather than NEW FIELD: it could see the pitch, just not the slot. */
+  const w4 = [ // Sep 14
+    slot("Austin", LBJ, MON, at(20)), slot("Austin", LBJ, SAT, at(9, 30)),
+    slot("Austin", LBJ, SUN, at(19)),
+    slot("Dallas", LOWELL, FRI, at(20)), slot("Dallas", LOWELL, THU, at(20)),
+    slot("Dallas", LOWELL, WED, at(20)),
+    slot("Austin", ROUNDROCK, FRI, at(19)),
+    slot("Austin", HATTRICK, SAT, at(19)), slot("Austin", HATTRICK, FRI, at(20)),
+  ];
+
+  const fourWeeks = buildPriorSlate([...w1, ...w2, ...w3, ...w4]);
+  const lastWeekOnly = buildPriorSlate(w4);
+
+  /* ── THE ASSERTION: A SLOT PRESENT IN ANY OF THE FOUR IS NOT NEW DAY ──────────────────────── */
+  // LBJ TUESDAY 20:00 — ran w1 and w2, two weeks off, back. Ryan's case, exactly.
+  is("LBJ Tuesday 20:00, absent from the last two weeks, is NOT new",
+     newnessOf(slot("Austin", LBJ, TUE, at(20)), fourWeeks), null);
+  // LOWELL MONDAY 20:00 — alternating weeks: w1, w3, back in the displayed week.
+  is("Lowell H. Strike Monday 20:00, alternating weeks, is NOT new",
+     newnessOf(slot("Dallas", LOWELL, MON, at(20)), fourWeeks), null);
+  // ROUND ROCK SUNDAY 19:00 — seen ONCE, three weeks back, and once is enough.
+  is("Round Rock Sunday 19:00, seen once three weeks back, is NOT new",
+     newnessOf(slot("Austin", ROUNDROCK, SUN, at(19)), fourWeeks), null);
+  // HATTRICK SATURDAY 20:00 — ran w1 and w2 at 20:00, moved to 19:00 for w3 and w4, back at 20:00.
+  is("The Hattrick L. Saturday 20:00, back after two weeks at 19:00, is NOT new",
+     newnessOf(slot("Austin", HATTRICK, SAT, at(20)), fourWeeks), null);
+
+  /* ── THE CASE THE WIDER WINDOW DEMOTES RATHER THAN CLEARS, AND IT IS THE INTERESTING ONE ────
+   * LBJ FRIDAY ran at 19:30 in w1, w2 and w3, missed w4, and came back at 19:00. The WEEKDAY is not
+   * new — three of the four weeks carried it — but 19:00 on an LBJ Friday genuinely never happened.
+   * So the right badge is NEW TIME, and the old window called it NEW DAY. The fix does not silence
+   * this slot, it tells the truth about it, which is a better outcome than either badge alone. */
+  is("LBJ Friday 19:00, a weekday that ran three of four weeks at a NEW time, is NEW TIME",
+     newnessOf(slot("Austin", LBJ, FRI, at(19)), fourWeeks), "time");
+  is("  and the one-week window called that same slot NEW DAY — wrongly",
+     newnessOf(slot("Austin", LBJ, FRI, at(19)), lastWeekOnly), "day");
+
+  /* ── THE CONTROL: ABSENT FROM ALL FOUR STILL FLAGS ────────────────────────────────────────
+   * Without these, every null above is satisfied by a slate that matches everything — which is what
+   * a union across four weeks could quietly become. */
+  is("CONTROL: Bob Jones Park Monday, a field absent from all four, is NEW FIELD",
+     newnessOf(slot("Dallas", "Bob Jones Park", MON, at(20)), fourWeeks), "field");
+  is("  CONTROL: Wheatley Heights, a field in a city absent from all four, is NEW FIELD",
+     newnessOf(slot("San Antonio", "Wheatley Heights Sports Complex", WED, at(20, 30)), fourWeeks), "field");
+  /* THE CONTROL THAT MATTERS MOST — a KNOWN field on a weekday absent from all four must still read
+   * NEW DAY. If widening the window had made the day test toothless, this is the line that goes red
+   * and not one of the nulls above would. LBJ never ran a Wednesday in any of the four weeks. */
+  is("  CONTROL: LBJ on a WEDNESDAY, absent from all four, is still NEW DAY",
+     newnessOf(slot("Austin", LBJ, WED, at(20)), fourWeeks), "day");
+  is("  CONTROL: Lowell H. Strike on a SATURDAY, absent from all four, is still NEW DAY",
+     newnessOf(slot("Dallas", LOWELL, SAT, at(20)), fourWeeks), "day");
+  // AND NEW TIME survives at the innermost level too.
+  is("  CONTROL: LBJ Monday at 18:00, a time absent from all four, is still NEW TIME",
+     newnessOf(slot("Austin", LBJ, MON, at(18)), fourWeeks), "time");
+
+  /* ── THE OLD WINDOW GETTING IT WRONG ON THE SAME FIXTURES ─────────────────────────────────
+   * The regression guard. Narrow the window back to one week and these are the badges that return,
+   * so the suite states the wrong answers explicitly rather than only the right ones. */
+  is("the ONE-week window called LBJ Tuesday NEW DAY",
+     newnessOf(slot("Austin", LBJ, TUE, at(20)), lastWeekOnly), "day");
+  is("  and Lowell H. Strike Monday NEW DAY",
+     newnessOf(slot("Dallas", LOWELL, MON, at(20)), lastWeekOnly), "day");
+  is("  and Round Rock Sunday NEW DAY, a Sunday that had run three weeks back",
+     newnessOf(slot("Austin", ROUNDROCK, SUN, at(19)), lastWeekOnly), "day");
+  is("  and The Hattrick L. Saturday 20:00 NEW TIME",
+     newnessOf(slot("Austin", HATTRICK, SAT, at(20)), lastWeekOnly), "time");
+  is("  CONTROL: while a genuinely new field reads the same under either window",
+     [newnessOf(slot("Dallas", "Bob Jones Park", MON, at(20)), lastWeekOnly),
+      newnessOf(slot("Dallas", "Bob Jones Park", MON, at(20)), fourWeeks)].join(","), "field,field");
+
+  /* ── THE UNION IS A UNION, not last-week-wins. A slot in the OLDEST week alone must count. ──── */
+  is("a slot present ONLY in the oldest of the four weeks is not new",
+     newnessOf(slot("Austin", LBJ, TUE, at(20)), buildPriorSlate(w1)), null);
+  is("  CONTROL: and against that same single week, an absent weekday flags",
+     newnessOf(slot("Austin", LBJ, WED, at(20)), buildPriorSlate(w1)), "day");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

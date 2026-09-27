@@ -23,7 +23,7 @@ import { useMatchData } from "@/lib/useMatchData";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { getCancelPatterns, rollUpSlotRisk, clustersForField, slotRiskKey, type SlotRisk } from "@/lib/cancelPatterns";
 import { normalizeMatchName } from "@/lib/venueNormalization";
-import { TAG_KEYS, TAG_META, splitTags, tagsInUse, isTagKey, type TagKey } from "@/lib/promoTags";
+import { PARTNER_BADGE, TAG_KEYS, TAG_META, splitTags, tagsInUse, isTagKey, type TagKey } from "@/lib/promoTags";
 import { weekQueueEntries, weekQueues, isPastWeek, defaultDayIdx, tabCounts, type QueueEntry } from "@/lib/promoDayQueue";
 import {
   CHANNELS, NEW_FLAG_LABEL, channelsOn, codeFor, coverageCaption, coverageStateOf, coverageSummary,
@@ -34,6 +34,39 @@ import {
 } from "@/lib/matchPromotion";
 import MarkPushSent from "@/components/MarkPushSent";
 import PushPlanEditor from "@/components/PushPlanEditor";
+
+/* ── THE FOUR VIEWS, AND WHY THE TAG ONES ARE NOT THEIR OWN COMPONENT ────────────────────────
+ *
+ * Plan | Coverage | Priority | Starting 11. A tag view is the PLAN grid with the week's matches
+ * filtered to those carrying one tag — same city rows, same seven day columns, same tiles, same
+ * panel. So it is the same component with a `viewTag`, and the filter is applied ONCE where byCity
+ * is built. Two separate implementations of "the grid, but filtered" is how one of them ends up
+ * counting cancelled matches and the other does not.
+ *
+ * THE VIEW IS NAMED BY THE TAG KEY, so adding a third tag adds a view by adding it to TAG_KEYS.
+ * Nothing here enumerates "priority" or "starting_11" by hand.
+ *
+ * WHAT A TAG VIEW DOES NOT TOUCH: the day queue and the Pushes-by-day strip above the grid. Those
+ * are the week's outstanding work and filtering them would hide pushes the operator still owes.
+ * Ryan's ruling, and it is the right one - a filter on a worklist is a way to forget something. */
+export const PROMO_VIEWS = ["plan", "coverage", ...TAG_KEYS] as const;
+export type PromoView = (typeof PROMO_VIEWS)[number];
+/* ONE LABEL MAP FOR BOTH SURFACES, including the phone's own Due and Week. A view named in two
+ * places gets renamed in one of them. TAG_META is the source of a tag view's label, so "STARTING 11"
+ * becomes "Starting 11" here and nothing hardcodes either spelling. */
+export const VIEW_LABEL: Record<PromoView | "due" | "week", string> = {
+  plan: "Plan",
+  coverage: "Coverage",
+  due: "Due",
+  week: "Week",
+  ...Object.fromEntries(TAG_KEYS.map((k) => [k, TAG_META[k].label
+    .toLowerCase().replace(/^./, (c) => c.toUpperCase())])) as Record<TagKey, string>,
+};
+
+/* THE PHONE'S OWN LIST. Due and Week are shapes the desktop does not have (see
+ * MatchPromotionMobile), and the three shared views follow the desktop's own order. */
+export const MOBILE_VIEWS = ["due", "week", "coverage", ...TAG_KEYS] as const;
+export type MobileView = (typeof MOBILE_VIEWS)[number];
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -79,10 +112,14 @@ export default function MatchPromotionView() {
   const [week, setWeek] = useState<PromoWeek | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<"plan" | "coverage">("plan");
+  /* ── FOUR VIEWS, AND THE TAG ONES ARE FILTERED PLAN VIEWS ────────────────────────────────
+   * Plan stays: it IS the week grid, and the tag views keep its city grouping and day columns, so
+   * they are Plan with a filter rather than a relative of Coverage. A tag view is named by its tag
+   * key, which is what lets ONE component serve both instead of two implementations drifting. */
+  const [tab, setTab] = useState<PromoView>("plan");
   // THE PHONE OPENS ON DUE; desktop opens on Plan and is untouched. Separate state because "due"
   // is not a desktop view and must never leak into the desktop tab set.
-  const [mTab, setMTab] = useState<"due" | "week" | "coverage">("due");
+  const [mTab, setMTab] = useState<MobileView>("due");
   const isMobile = useIsMobile();
   const [weekRef, setWeekRef] = useState("");
   const [openId, setOpenId] = useState<number | null>(null);
@@ -115,6 +152,17 @@ export default function MatchPromotionView() {
 
   const open = week?.matches.find((m) => m.apiId === openId) ?? null;
 
+  /* ── HAS THIS PANEL BEEN EDITED? DERIVED, NEVER A FLAG ────────────────────────────────────
+   * draftFromPlan is deterministic for a given plan — row keys included, since an existing row
+   * keys on `p-${id}` — so the draft as loaded can be recomputed and compared rather than stored.
+   * A `dirty` boolean set by every onChange in the editor is the same fact kept in two places, and
+   * the copy is the one that ends up wrong: a toggle flipped twice leaves it true.
+   *
+   * THIS IS WHAT STOPS AN UNSAVED PANEL BEING SWAPPED OUT. Losing typed pushes to a stray click on
+   * a grid of 88 tiles is the one thing this panel must not do. */
+  const dirty = !!open && !!draft
+    && JSON.stringify(draft) !== JSON.stringify(draftFromPlan(open.plan));
+
   /**
    * KEEP THE CLICKED TILE WHERE IT IS. Opening a panel inserts a block into the flow, and closing
    * one removes it. Neither should move the thing you just clicked: if a panel is already open in
@@ -133,6 +181,13 @@ export default function MatchPromotionView() {
   }
 
   function openMatch(m: PromoMatch, el: HTMLElement) {
+    /* A CANCELLED MATCH HAS NOTHING TO PLAN. The match was called off; a push for it is moot, and
+     * an editor that opens on one invites a plan nobody can use. */
+    if (m.state === "cancelled") return;
+    /* AN UNSAVED PANEL IS NOT SWAPPED OUT FROM UNDER YOU. The click is ignored rather than
+     * silently discarding what was typed; Save or Cancel is the only way out. Nothing is flashed
+     * at the operator here beyond the Unsaved marker the panel already carries — see `dirty`. */
+    if (dirty && m.apiId !== openId) return;
     anchor(el, () => { setOpenId(m.apiId); setDraft(draftFromPlan(m.plan)); });
   }
 
@@ -142,6 +197,21 @@ export default function MatchPromotionView() {
       : null;
     anchor(el, () => { setOpenId(null); setDraft(null); });
   }
+
+  /* ── ESCAPE CLOSES, AND ONLY WHEN THERE IS NOTHING TO LOSE ────────────────────────────────
+   * The same rule as clicking another tile: Save or Cancel is the only way out of an edited panel.
+   * Bound on the document because the panel is fixed and the operator's focus may be anywhere on
+   * the week behind it — a handler on the panel itself would need focus to be inside it. */
+  useEffect(() => {
+    if (openId == null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || dirty) return;
+      const el = document.querySelector(`[data-testid="match-tile"][data-api-id="${openId}"]`) as HTMLElement | null;
+      anchor(el, () => { setOpenId(null); setDraft(null); });
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [openId, dirty]);
 
   async function save() {
     if (!open || !draft) return;
@@ -219,6 +289,13 @@ export default function MatchPromotionView() {
     const raw = m.fieldId != null ? (week?.tagsByField?.[m.fieldId] ?? []) : [];
     return raw.filter(isTagKey);
   }, [week]);
+  /* ── THE PARTNER BADGE, READ-ONLY, DERIVED FROM THE CONTRACT ──────────────────────────────
+   * A Set because every tile asks. week.partnerFields is computed server-side from
+   * fin_venue_fields -> fin_venues -> partner_dashboards through the SAME predicate basisOf uses;
+   * see fetchPartnerFields. There is no flag on the match and nothing here can set one. */
+  const partnerSet = useMemo(() => new Set(week?.partnerFields ?? []), [week]);
+  const partnerOf = useCallback((m: PromoMatch): boolean =>
+    m.fieldId != null && partnerSet.has(m.fieldId), [partnerSet]);
   const [genCity, setGenCity] = useState<string | null>(null);
   const openGeneral = useCallback((city: string) => setGenCity(city), []);
 
@@ -303,6 +380,18 @@ export default function MatchPromotionView() {
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [week]);
 
+  /* ── ONE FILTER, APPLIED WHERE THE GROUPING IS BUILT ──────────────────────────────────────
+   * So the city header, the tile count and the day columns all read the same filtered set and
+   * cannot disagree. EMPTY CITIES ARE DROPPED: a city row with seven empty day cells is a row that
+   * says nothing, and eight of them bury the two cities that do carry the tag.
+   *
+   * CANCELLED TAGGED MATCHES STAY, styled exactly as they are on Plan. The tag is on the pitch, and
+   * a cancellation at a priority field is a thing the operator most wants to see, not less. */
+  const viewTag: TagKey | null = tab === "plan" || tab === "coverage" ? null : tab;
+  const byCityTagged = viewTag == null ? byCity : byCity
+    .map(([city, ms]) => [city, ms.filter((m) => tagsOf(m).includes(viewTag))] as [string, PromoMatch[]])
+    .filter(([, ms]) => ms.length > 0);
+
   if (loading && !week) return <div className="p-8 text-sm text-deep-green/60">Loading the week…</div>;
   if (error) return <div className="p-8 text-sm text-coral">{error}</div>;
   if (!week) return null;
@@ -313,10 +402,11 @@ export default function MatchPromotionView() {
         week={week} tab={mTab} setTab={setMTab}
         jobs={jobs} overdue={overdue} onReload={() => load(weekRef)} riskOf={riskOf}
         coverOf={(m) => coverage.get(m.apiId) ?? "none"} coversOf={coversOf} tagsOf={tagsOf}
-        openId={openId} draft={draft} setDraft={setDraft}
+        openId={openId} draft={draft} setDraft={setDraft} dirty={dirty}
         onOpen={openMatch} onClose={closePanel} onSave={() => void save()}
         saving={saving} toast={toast}
         onNav={(d) => void nav(d)} weekLabel={weekLabel(week)}
+        partnerOf={partnerOf}
         zone={zone} setZone={setZone} onError={(msg) => setToast({ msg, bad: true })}
       />
     );
@@ -343,11 +433,11 @@ Which matches get promoted, on which channels, and when the push goes out.
           <button onClick={() => void nav(-1)} className="h-8 w-8 rounded-[9px] border border-cream-line bg-white text-[15px] text-deep-green/65">‹</button>
           <div className="text-[16px] font-extrabold">{weekLabel(week)}</div>
           <button onClick={() => void nav(1)} className="h-8 w-8 rounded-[9px] border border-cream-line bg-white text-[15px] text-deep-green/65">›</button>
-          <span className="ml-1.5 inline-flex rounded-full border border-cream-line bg-[#f2f5f3] p-0.5" data-testid="view-tabs">
-            {(["plan", "coverage"] as const).map((t) => (
-              <button key={t} onClick={() => setTab(t)}
-                className={`min-h-[32px] rounded-full px-3.5 py-[5px] text-[13px] font-bold capitalize ${tab === t ? "bg-deep-green text-white" : "text-deep-green/65"}`}>
-                {t}
+          <span className="ml-1.5 inline-flex flex-wrap rounded-full border border-cream-line bg-[#f2f5f3] p-0.5" data-testid="view-tabs">
+            {PROMO_VIEWS.map((t) => (
+              <button key={t} onClick={() => setTab(t)} data-testid={`view-tab-${t}`} data-on={tab === t ? "1" : "0"}
+                className={`min-h-[32px] whitespace-nowrap rounded-full px-3.5 py-[5px] text-[13px] font-bold ${tab === t ? "bg-deep-green text-white" : "text-deep-green/65"}`}>
+                {VIEW_LABEL[t]}
               </button>
             ))}
           </span>
@@ -383,51 +473,10 @@ Which matches get promoted, on which channels, and when the push goes out.
 
         {tab === "coverage"
           ? <Coverage week={week} zone={zone} />
-          : <Plan week={week} byCity={byCity} openId={openId} onOpen={openMatch}
-                   openCity={open?.city ?? null} zone={zone} riskOf={riskOf}
-                   coverage={coverage} coversOf={coversOf} tagsOf={tagsOf} onAddGeneral={openGeneral}
-                   panel={tab === "plan" && open && draft ? (
-            <div className="mb-4 rounded-xl border border-cream-line bg-[#fbfdfc] px-[13px] pb-[9px] pt-[9px]" data-testid="panel">
-              <div className="mb-1.5 flex items-baseline gap-2">
-                <h3 className="m-0 text-[13.5px] font-extrabold">{open.venue} · {DOW[open.dayIdx]} {open.time}</h3>
-                <span className="text-[11.5px] font-bold text-deep-green/45">{open.city}</span>
-              </div>
-              {/* ── TAGS ARE SET HERE, NOT FROM A PILL ON THE TILE ────────────────────────────
-                  A "+ tag" control sized to sit beside the others is a 14px tap target, which is a
-                  fake affordance. The tile already opens this panel on click, so the toggles live
-                  where there is room for them to be pressed. Keyed on the FIELD: tagging this match
-                  tags the pitch, on every tile it appears on, this week and next. */}
-              {open.fieldId != null && (
-                <div className="mb-2 flex flex-wrap items-center gap-1.5" data-testid="tag-editor">
-                  <span className="text-[10px] font-extrabold uppercase tracking-[0.08em] text-deep-green/45">Field tags</span>
-                  {TAG_KEYS.map((t) => {
-                    const on = tagsOf(open).includes(t);
-                    return (
-                      <button key={t} type="button" data-testid="tag-toggle" data-t={t} data-on={on ? "1" : "0"}
-                        disabled={saving} title={TAG_META[t].meaning}
-                        onClick={() => void toggleTag(open.fieldId as number, t, !on)}
-                        className="min-h-[32px] rounded-[7px] border px-2.5 text-[11px] font-extrabold tracking-[0.03em]"
-                        style={on
-                          ? { color: "#fff", background: TAG_META[t].colour, borderColor: TAG_META[t].colour }
-                          : { color: TAG_META[t].colour, borderColor: TAG_META[t].colour, background: "transparent" }}>
-                        {TAG_META[t].label}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              {/* ONE EDITOR, SHARED WITH THE PHONE. Not a desktop copy of a channel block. */}
-              <PushPlanEditor m={open} draft={draft} setDraft={setDraft} zone={zone} setZone={setZone} />
-              <div className="mt-2 flex items-center gap-3">
-                <button onClick={() => void save()} disabled={saving} data-testid="save"
-                  className="rounded-full bg-deep-green px-[15px] py-1 text-[12.5px] font-extrabold text-white disabled:opacity-50">
-                  {saving ? "Saving…" : "Save plan"}
-                </button>
-                <span onClick={closePanel} className="cursor-pointer text-[12.5px] font-bold text-deep-green/65">Cancel</span>
-                {toast && <span className={`text-[12px] font-bold ${toast.bad ? "text-coral" : "text-emerald-700"}`}>{toast.msg}</span>}
-              </div>
-            </div>
-                   ) : null} />}
+          : <Plan week={week} byCity={tab === "plan" ? byCity : byCityTagged} openId={openId} onOpen={openMatch}
+                   zone={zone} riskOf={riskOf}
+                   coverage={coverage} coversOf={coversOf} tagsOf={tagsOf} partnerOf={partnerOf}
+                   onAddGeneral={openGeneral} viewTag={viewTag} editing={open != null && draft != null} />}
 
 
       </div>
@@ -449,6 +498,17 @@ Which matches get promoted, on which channels, and when the push goes out.
             } finally { setSaving(false); }
           }} />
       )}
+      {/* ── THE EDITOR, A FIXED PANEL ────────────────────────────────────────────────────────────
+          At page level and OUTSIDE the week, which is the whole change: it used to be inserted into
+          the flow under its own city block, so clicking a tile pushed the grid down and the row
+          being worked on moved out from under the pointer. The job is eight cities clicked in turn,
+          so that was the wrong shape. */}
+      {open && draft && (
+        <MatchEditorPanel m={open} draft={draft} setDraft={setDraft} zone={zone} setZone={setZone}
+          dirty={dirty} saving={saving} toast={toast} tags={tagsOf(open)} partner={partnerOf(open)}
+          onToggleTag={(t, on) => void toggleTag(open.fieldId as number, t, on)}
+          onSave={() => void save()} onClose={closePanel} />
+      )}
       {toast && !open && (
         <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 rounded-full px-4 py-2 text-[13px] font-bold text-white ${toast.bad ? "bg-coral" : "bg-deep-green"}`}>{toast.msg}</div>
       )}
@@ -456,13 +516,113 @@ Which matches get promoted, on which channels, and when the push goes out.
   );
 }
 
+/* ── THE MATCH EDITOR AS A FIXED SIDE PANEL ───────────────────────────────────────────────────
+ *
+ * FULL HEIGHT, 420px, ON THE RIGHT. The week is padded to match rather than the panel overlaying
+ * it, so no tile is ever hidden behind it — see the padding note in Plan, which is where the trap
+ * lives.
+ *
+ * THREE REGIONS, AND ONLY THE MIDDLE ONE SCROLLS. The title has to stay legible while scrolling a
+ * six-channel editor (there is nothing else on screen naming which of 88 tiles this is), and Save
+ * must stay reachable without scrolling back to find it. A panel whose footer scrolls away is a
+ * panel where someone types a plan and never saves it.
+ *
+ * NO × IN THE CORNER. Escape and Cancel are the two ways out, which is what was asked for; a third
+ * control doing the same thing is a third thing to keep in step with the unsaved rule.
+ *
+ * THE CODE STAYS ON THE CHANNEL. PushPlanEditor already renders one code input inside each lit
+ * channel and none inside an off one, so this panel does not touch codes at all — putting one on
+ * this header would undo the per-channel split in the one place an operator types it.
+ */
+function MatchEditorPanel({ m, draft, setDraft, zone, setZone, dirty, saving, toast, tags, partner, onToggleTag, onSave, onClose }: {
+  m: PromoMatch; draft: PushDraft; setDraft: (d: PushDraft) => void;
+  zone: ZoneMode; setZone: (z: ZoneMode) => void;
+  dirty: boolean; saving: boolean; toast: { msg: string; bad: boolean } | null;
+  /** This FIELD's tags, and whether its venue is on a revenue share. */
+  tags: TagKey[]; partner: boolean;
+  onToggleTag: (t: TagKey, on: boolean) => void;
+  onSave: () => void; onClose: () => void;
+}) {
+  return (
+    <aside data-testid="panel" data-dirty={dirty ? "1" : "0"} aria-label="Match push plan"
+      className="fixed right-0 top-0 bottom-0 z-40 flex w-full flex-col border-l border-cream-line bg-white shadow-[-8px_0_24px_rgba(0,0,0,0.06)] md:w-[420px]">
+      <div className="flex-none border-b border-cream-line px-3.5 py-3">
+        <div className="text-[14px] font-extrabold" data-testid="panel-title">
+          {m.venue} · {DOW[m.dayIdx]} {m.time}
+        </div>
+        <div className="mt-px text-[11.5px] text-deep-green/45">{m.city}</div>
+      </div>
+      {/* THE ONLY SCROLLING REGION. */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-3.5 py-3">
+        {/* ── FIELD TAGS, AND THEY MOVED HERE WITH THE PANEL ───────────────────────────────────
+            They were inside the inline editor, so detaching that would have deleted the only way to
+            set a tag. Still keyed on the FIELD: tagging this match tags the pitch, on every tile it
+            appears on, this week and next. PARTNER sits alongside as a statement rather than a
+            control — the contract sets it, nobody here can. */}
+        {m.fieldId != null && (
+          <div className="mb-3 flex flex-wrap items-center gap-1.5" data-testid="tag-editor">
+            <span className="text-[10px] font-extrabold uppercase tracking-[0.08em] text-deep-green/45">Field tags</span>
+            {partner && (
+              <span data-testid="partner-panel-badge" title={PARTNER_BADGE.meaning}
+                className="inline-flex min-h-[32px] items-center rounded-[7px] border px-2.5 text-[11px] font-extrabold tracking-[0.03em]"
+                style={{ color: PARTNER_BADGE.colour, borderColor: PARTNER_BADGE.colour, background: "transparent" }}>
+                {PARTNER_BADGE.label}
+                <i className="ml-1.5 text-[9px] font-bold not-italic opacity-70">from the contract</i>
+              </span>
+            )}
+            {TAG_KEYS.map((t) => {
+              const on = tags.includes(t);
+              return (
+                <button key={t} type="button" data-testid="tag-toggle" data-t={t} data-on={on ? "1" : "0"}
+                  disabled={saving} title={TAG_META[t].meaning}
+                  onClick={() => onToggleTag(t, !on)}
+                  className="min-h-[32px] rounded-[7px] border px-2.5 text-[11px] font-extrabold tracking-[0.03em]"
+                  style={on
+                    ? { color: "#fff", background: TAG_META[t].colour, borderColor: TAG_META[t].colour }
+                    : { color: TAG_META[t].colour, borderColor: TAG_META[t].colour, background: "transparent" }}>
+                  {TAG_META[t].label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {/* ONE EDITOR, SHARED WITH THE PHONE. Not a desktop copy of a channel block. */}
+        <PushPlanEditor m={m} draft={draft} setDraft={setDraft} zone={zone} setZone={setZone} />
+      </div>
+      <div className="flex flex-none flex-wrap items-center gap-2.5 border-t border-cream-line px-3.5 py-2.5">
+        <button onClick={onSave} disabled={saving} data-testid="save"
+          className="rounded-full bg-deep-green px-[15px] py-1 text-[12.5px] font-extrabold text-white disabled:opacity-50">
+          {saving ? "Saving…" : "Save plan"}
+        </button>
+        <button type="button" onClick={onClose} data-testid="cancel"
+          className="min-h-[32px] px-1.5 text-[12.5px] font-bold text-deep-green/65">
+          Cancel
+        </button>
+        {/* THE UNSAVED MARKER IS THE WHOLE EXPLANATION for why another tile refuses to open. Without
+            it the ignored click reads as the page being broken rather than as the panel holding on
+            to what was typed. */}
+        {dirty && (
+          <span data-testid="dirty" className="ml-auto text-[11.5px] font-extrabold text-coral">
+            Unsaved · Save or Cancel
+          </span>
+        )}
+        {toast && <span className={`text-[12px] font-bold ${toast.bad ? "text-coral" : "text-emerald-700"}`}>{toast.msg}</span>}
+      </div>
+    </aside>
+  );
+}
+
 /** "Mon 17 Aug – Sun 23 Aug" for a Monday ISO date. Built component-wise from the string: these
  *  are calendar dates with no zone, and re-parsing one through a Date with a time is the trap. */
-function weekRangeLabel(mondayIso: string): string {
+/* THE WINDOW THE NEW BADGE COMPARED AGAINST. `weeks` spans it: one week ends on its own Sunday,
+ * four weeks end on the Sunday 27 days after the Monday it starts on. Passed in from
+ * week.priorWeeks rather than typed as a 4 here, so the label follows NEW_LOOKBACK_WEEKS instead of
+ * having to be remembered alongside it. */
+function weekRangeLabel(mondayIso: string, weeks = 1): string {
   const [y, m, d] = mondayIso.split("-").map(Number);
   if (!y || !m || !d) return mondayIso;
   const mon = new Date(y, m - 1, d);
-  const sun = new Date(y, m - 1, d + 6);
+  const sun = new Date(y, m - 1, d + 7 * weeks - 1);
   const M = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   return `${DOW[0]} ${mon.getDate()} ${M[mon.getMonth()]} – ${DOW[6]} ${sun.getDate()} ${M[sun.getMonth()]}`;
 }
@@ -786,7 +946,7 @@ function GeneralPushSheet({ city, week, saving, onClose, onSave }: {
   );
 }
 
-function Plan({ week, byCity, openId, onOpen, openCity, zone, panel, riskOf, coverage, coversOf, tagsOf, onAddGeneral }: {
+function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, coversOf, tagsOf, partnerOf, onAddGeneral, viewTag }: {
   week: PromoWeek; byCity: [string, PromoMatch[]][]; openId: number | null; zone: ZoneMode;
   /** The tile's cancel history, keyed on field and weekday with times CLUSTERED. See cancelPatterns. */
   riskOf: (m: PromoMatch) => SlotRisk | null;
@@ -794,26 +954,52 @@ function Plan({ week, byCity, openId, onOpen, openCity, zone, panel, riskOf, cov
   coverage: Map<number, ReturnType<typeof coverageOf>>;
   coversOf: (m: PromoMatch) => GeneralPush[];
   tagsOf: (m: PromoMatch) => TagKey[];
+  /** True when this match's FIELD is at a revenue-share venue. Derived; nothing can set it. */
+  partnerOf: (m: PromoMatch) => boolean;
+  /** Non-null on a tag view: the grid is already filtered to it, and the heading says which. */
+  viewTag: TagKey | null;
   onAddGeneral: (city: string) => void;
   onOpen: (m: PromoMatch, el: HTMLElement) => void;
   // THE PANEL OPENS INLINE, UNDER THE CITY WHOSE TILE WAS CLICKED — not at the foot of the page.
   // Rendering it once at page level meant clicking an Atlanta match scrolled you past every other
   // city to reach the editor. A panel that is correct but a page away is the bug.
-  openCity: string | null; panel: React.ReactNode;
+  /* THE EDITOR IS NO LONGER IN THIS TREE. It is a fixed panel rendered at page level, so all Plan
+   * needs to know is whether to make room for it. `openCity` went with the inline panel: it existed
+   * only to decide which city block the editor was inserted under, and there is no insertion now. */
+  /** True while the side panel is open. Pads the WEEK — see the note on the padding below. */
+  editing: boolean;
 }) {
-  const priorLabel = weekRangeLabel(week.priorWeekStart);
+  const priorLabel = weekRangeLabel(week.priorWeekStart, week.priorWeeks);
+  /* THE KEY READS THE WHOLE WEEK, NOT THE FILTERED GRID. On a tag view every tile carries that tag
+   * by construction, so a key built from the visible set would list exactly one entry and stop
+   * explaining the others. */
   const keyTags = tagsInUse(new Map(week.matches
     .filter((m) => m.fieldId != null)
     .map((m) => [m.fieldId as number, tagsOf(m)])));
+  const anyPartner = week.matches.some((m) => partnerOf(m));
+  /* THE TILE COUNT, FROM THE ROWS BEING RENDERED. On a tag view this is the whole claim the view
+   * makes, so it is counted off `byCity` rather than recomputed from the week. */
+  const shown = byCity.reduce((n, [, ms]) => n + ms.length, 0);
   return (
     <>
       <div className="px-5 pb-0.5 pt-1">
-        <h2 className="m-0 text-[15px] font-extrabold uppercase tracking-[0.02em]">The week</h2>
+        <h2 className="m-0 text-[15px] font-extrabold uppercase tracking-[0.02em]" data-testid="grid-heading">
+          {viewTag ? TAG_META[viewTag].label : "The week"}
+        </h2>
+        {/* A FILTERED GRID SAYS SO, AND SAYS WHAT IT DROPPED. A grid that is quietly a subset is a
+            grid someone reads as the whole week. The count is the view's own claim, asserted. */}
+        {viewTag && (
+          <div className="mt-0.5 text-[11.5px] font-bold text-deep-green/55" data-testid="grid-filter-note">
+            <b data-testid="grid-shown">{shown}</b> match{shown === 1 ? "" : "es"} carrying{" "}
+            {TAG_META[viewTag].label} · {byCity.length} cit{byCity.length === 1 ? "y" : "ies"} ·
+            {" "}the day queue above is the whole week, unfiltered
+          </div>
+        )}
         {/* ── THE KEY, AND ONLY FOR TAGS ACTUALLY ON SCREEN ─────────────────────────────────
             A key listing every tag that could exist is a key nobody reads, which this codebase
             has already written down once about a permanent caveat. Every tag also carries its
             meaning in a title, so this is a reference rather than a prerequisite. */}
-        {keyTags.length > 0 && (
+        {(keyTags.length > 0 || anyPartner) && (
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="tag-key">
             {keyTags.map((t) => (
               <span key={t} className="inline-flex items-center gap-1.5 text-[11px] text-deep-green/65" data-testid="tag-key-item">
@@ -822,6 +1008,16 @@ function Plan({ week, byCity, openId, onOpen, openCity, zone, panel, riskOf, cov
                 {TAG_META[t].meaning}
               </span>
             ))}
+            {/* THE DERIVED BADGE IS IN THE SAME KEY. A reader sees one vocabulary on the tile and
+                should find one vocabulary here; that it comes from the contract rather than from a
+                click is what its own wording says. */}
+            {anyPartner && (
+              <span className="inline-flex items-center gap-1.5 text-[11px] text-deep-green/65" data-testid="tag-key-item">
+                <i data-testid="partner-key" className="rounded-[4px] border px-[4px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.03em]"
+                  style={{ color: PARTNER_BADGE.colour, borderColor: PARTNER_BADGE.colour }}>{PARTNER_BADGE.label}</i>
+                {PARTNER_BADGE.meaning}
+              </span>
+            )}
           </div>
         )}
         {/* ── TWO PARAGRAPHS DELETED, AND THE RULE KEPT ────────────────────────────────────
@@ -834,6 +1030,30 @@ function Plan({ week, byCity, openId, onOpen, openCity, zone, panel, riskOf, cov
             than silent. So the dates moved INTO the badge's title rather than being lost. The rule
             is still checkable, one hover away, on the thing it describes. */}
       </div>
+      {/* ── THE PADDING GOES ON THE WEEK, NOT ON THE PAGE ──────────────────────────────────────
+          THIS IS THE TRAP, AND IT WAS HIT ON THE FIRST ATTEMPT. Padding the page wrapper narrows
+          everything, which reflows the day tabs and the queue ABOVE the grid and pushes the grid
+          down 47px — precisely the problem a fixed panel exists to solve. Only the city list
+          narrows. Nothing above it is inside this div, so nothing above it can move, and the
+          assertion measures exactly that: the first city block's top, before and after, equal.
+
+          THE TILES NARROW RATHER THAN THE WEEK SCROLLING. The mock's week sits in its own
+          horizontal scroller; this one is a seven-column grid that shrinks, so at 1320px the
+          columns go from about 180px to about 121px. Nothing hides under the panel either way,
+          which is what the padding is for. A tile whose venue name wraps onto a second line does
+          grow taller, which can move a tile in a city FURTHER DOWN the page — that is what anchor()
+          already handles, by restoring the clicked tile's own viewport offset after paint. */}
+      <div className={editing ? "pr-[432px] transition-[padding] duration-150" : ""} data-testid="week-pad">
+      {/* AN EMPTY TAG VIEW SAYS SO. starting_11 has no rows in production today, so this is the
+          state that actually renders — and a page that just stops after the heading reads as a load
+          failure. It also gives the assertion something to find, which is what separates a real zero
+          from a filter that matched nothing because it was broken. */}
+      {viewTag && byCity.length === 0 && (
+        <p className="px-5 pb-4 pt-1 text-[12.5px] text-deep-green/45" data-testid="grid-empty">
+          No match this week is at a field tagged {TAG_META[viewTag].label}. Tags are set from a
+          tile&rsquo;s own panel.
+        </p>
+      )}
       {byCity.map(([city, matches]) => {
         const planned = matches.filter((m) => m.state === "planned").length;
         const check = matches.filter((m) => m.state === "needs-decision").length;
@@ -892,16 +1112,16 @@ function Plan({ week, byCity, openId, onOpen, openCity, zone, panel, riskOf, cov
                     </div>
                     {dayMatches.length === 0 && <div className="pt-1.5 text-[11.5px] text-deep-green/30">No sessions</div>}
                     {dayMatches.map((m) => <Tile key={m.apiId} m={m} open={m.apiId === openId} onOpen={onOpen} zone={zone}
-                      priorLabel={priorLabel} risk={riskOf(m)} cover={coverage.get(m.apiId) ?? "none"}
-                      covers={coversOf(m)} tags={tagsOf(m)} />)}
+                      priorLabel={priorLabel} priorWeeks={week.priorWeeks} risk={riskOf(m)} cover={coverage.get(m.apiId) ?? "none"}
+                      covers={coversOf(m)} tags={tagsOf(m)} partner={partnerOf(m)} />)}
                   </div>
                 );
               })}
             </div>
-            {city === openCity && panel}
           </div>
         );
       })}
+      </div>
     </>
   );
 }
@@ -928,14 +1148,16 @@ function coverFirst(m: PromoMatch, zone: ZoneMode): string {
  * PLANNED TILES STAY DISTINCT BY WEIGHT, NOT BY LABEL. A tile with a plan carries chips and a push
  * line and a solid left rail; a tile without carries a dashed border and almost no ink. The eye
  * finds the planned ones because they are the only ones with anything in them. */
-function Tile({ m, open, onOpen, zone, priorLabel, risk, cover, covers, tags }: {
+function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, covers, tags, partner }: {
   m: PromoMatch; open: boolean; onOpen: (m: PromoMatch, el: HTMLElement) => void; zone: ZoneMode;
-  priorLabel: string; risk?: SlotRisk | null;
+  priorLabel: string; priorWeeks: number; risk?: SlotRisk | null;
   /** planned | covered | none | needs-decision | cancelled, derived once at page level. */
   cover: ReturnType<typeof coverageOf>;
   /** The general pushes that carried it, for the label. Empty unless `cover` is "covered". */
   covers: GeneralPush[];
   tags: TagKey[];
+  /** Derived from the venue's revenue model. READ-ONLY: there is no row and no toggle for it. */
+  partner: boolean;
 }) {
   /* A CHIP PER CHANNEL THAT HAS A PUSH, or is on with none — which is what "on" is now. */
   const lit = CHANNELS.filter((c) => channelsOn(m.plan).includes(c.key));
@@ -968,6 +1190,9 @@ function Tile({ m, open, onOpen, zone, priorLabel, risk, cover, covers, tags }: 
   return (
     <div data-testid="match-tile" data-state={m.state} data-api-id={m.apiId} data-open={open ? "1" : "0"}
       data-new={m.newFlag ?? ""} data-r={r} data-cover={cover}
+      /* THE FIELD ID, so an assertion can join a tile to the contract the PARTNER badge is derived
+         from instead of trusting the badge to describe itself. */
+      data-field-id={m.fieldId ?? ""} data-partner={partner ? "1" : "0"}
       data-booked={cancelled ? String(m.playerCount ?? 0) : undefined}
       /* THE EXACT TIME LIVES IN THE TITLE, because the tile is coloured on a slot key whose times
          are clustered — a slot that drifted from 8:00 to 8:30 is one slot to a player and must be
@@ -996,7 +1221,11 @@ function Tile({ m, open, onOpen, zone, priorLabel, risk, cover, covers, tags }: 
           <i data-testid="new-badge" data-flag={m.newFlag}
             /* THE RULE, THE CITY AND THE WEEK IT COMPARED, on the badge itself. The dates are
                what makes a wrong comparison visible instead of silent. */
-            title={`This ${m.newFlag === "field" ? "field" : m.newFlag === "day" ? "weekday for this field" : "kick-off time for this field and weekday"} was not on last week's slate for ${m.city} (${priorLabel}). Cancelled matches count, because a cancelled slot was still scheduled and still published.`}
+            /* THE WINDOW IS IN THE WORDS, AND IT IS FOUR WEEKS NOW. It said "last week's slate",
+               which was the whole bug: a slot that ran three weeks, skipped one and came back read
+               NEW DAY because the single week it was compared against was the one it missed. The
+               count comes from priorWeeks so the sentence cannot go stale against the constant. */
+            title={`This ${m.newFlag === "field" ? "field" : m.newFlag === "day" ? "weekday for this field" : "kick-off time for this field and weekday"} was not on the last ${priorWeeks} weeks' slates for ${m.city} (${priorLabel}). Cancelled matches count, because a cancelled slot was still scheduled and still published.`}
             className="shrink-0 rounded-[4px] bg-deep-green px-[5px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.04em] text-white">
             {NEW_FLAG_LABEL[m.newFlag]}
           </i>
@@ -1013,8 +1242,19 @@ function Tile({ m, open, onOpen, zone, priorLabel, risk, cover, covers, tags }: 
       {/* TAGS: OUTLINED, NEVER FILLED. The tile already spends filled pills on the cancel ratio and
           the NEW badge; a filled tag would read as a 4/4 cancel at a glance. Three render and the
           rest become a count, because five pills on one tile is unreadable. */}
-      {shownTags.length > 0 && (
+      {(shownTags.length > 0 || partner) && (
         <div className="mt-[5px] flex flex-wrap gap-1" data-testid="tags">
+          {/* PARTNER IS FIRST AND IT IS NOT A TAG. Derived from fin_venues.billing_type /
+              partner_dashboards.revenue_model through the same predicate basisOf uses, so it cannot
+              disagree with the finance pages. It carries no data-t, which is how the assertion tells
+              the derived badge from the two things a person can actually set. */}
+          {partner && (
+            <i data-testid="partner-badge" title={PARTNER_BADGE.meaning}
+              className="rounded-[4px] border px-[4px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.03em]"
+              style={{ color: PARTNER_BADGE.colour, borderColor: PARTNER_BADGE.colour, background: "transparent" }}>
+              {PARTNER_BADGE.label}
+            </i>
+          )}
           {shownTags.map((t) => (
             <i key={t} data-testid="tag" data-t={t} title={TAG_META[t].meaning}
               className="rounded-[4px] border px-[4px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.03em]"

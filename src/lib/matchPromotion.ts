@@ -16,6 +16,9 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { fetchVeoWeek, weekMonday, type VeoMatch } from "./veoSchedule";
+/* THE PARTNER RULE, NOT A COPY OF IT. basisOf calls this same predicate; see fetchPartnerFields.
+ * From the LEAF module, never from fieldEconomics — that file reaches "use client" code. */
+import { isRevenueShareVenue } from "./revenueShare";
 
 /** The six channels, fixed, and always rendered in this order. */
 export const CHANNELS = [
@@ -346,7 +349,29 @@ export function draftSummary(draft: PushDraft): { channels: number; pushes: numb
  * NOT carry is a field that was not there before, a slot moved to a different weekday, or a slot
  * moved to a different time — and those are the three things a player would notice. So a match is
  * NEW when its own field, or that field's weekday, or that field-weekday's kick-off time did not
- * appear in the prior week's slate for its city.
+ * appear in the PRIOR FOUR WEEKS' slates for its city.
+ *
+ * ── THE WINDOW IS FOUR WEEKS, AND IT WAS ONE ────────────────────────────────────────────────
+ * One week called a returning slot new. A slot that ran three weeks, skipped one and came back is
+ * not new to anybody, and it read NEW DAY because the single week it was compared against happened
+ * to be the one it missed. MEASURED on the week of 2026-09-21 against the four weeks from
+ * 2026-08-24, with the one-week window:
+ *
+ *   NEW DAY    4 of 8 badges were wrong
+ *              ATX LBJ Early College High School Fri  ran weeks 1, 2, 3 · skipped 4 · back
+ *              ATX LBJ Early College High School Tue  ran weeks 1, 2 · skipped 3, 4 · back
+ *              DFW Lowell H. Strike Middle School Mon ran weeks 1, 3 · back
+ *              ATX Stadium Field at Round Rock Sun    ran week 3 · back
+ *   NEW TIME   4 wrong, the same shape — ATX The Hattrick L. Sat 20:00 among them
+ *   NEW FIELD  0 wrong this week. Fields are the stable one; days and times are what drift.
+ *
+ * So eight of the badges on screen were telling marketing a returning slot was new. A badge that is
+ * wrong half the time is worse than no badge, because it is still believed.
+ *
+ * AND IT MAKES THE PAGE HOLD ONE WINDOW INSTEAD OF TWO. The cancel history already looks back four
+ * weeks (cancelPatterns.ts:158, `for (let i = 3; i >= 0; i--)`), so a tile was comparing its NEW
+ * badge against one week and its cancel ratio against four. Two lookbacks on one tile is two
+ * different questions being asked in the same visual language.
  *
  * NOT FROM A CREATION DATE. A match created last month for a slot that has never run is still new
  * to a player, and one created yesterday for the same slot as always is not. The comparison is
@@ -363,6 +388,11 @@ export function draftSummary(draft: PushDraft): { channels: number; pushes: numb
  * field-day's time. Testing each against the city's whole slate instead loses the case this exists
  * for: NEMP running on a Friday for the first time does not flag if any Austin pitch played a
  * Friday. Measured, the city-wide reading flags 13 of 109 and disagrees on 19, wrongly each time. */
+/** How many weeks back the NEW badges compare against. FOUR, matching the cancel history's own
+ *  window (cancelPatterns.ts:158) so one tile does not hold two lookbacks. See the block above for
+ *  the eight wrong badges the one-week version was producing on 2026-09-21. */
+export const NEW_LOOKBACK_WEEKS = 4;
+
 export type NewFlag = "field" | "day" | "time";
 
 /** Shown on the badge. The order of the keys is the precedence order below. */
@@ -372,13 +402,17 @@ export const NEW_FLAG_LABEL: Record<NewFlag, string> = {
   time: "NEW TIME",
 };
 
-/** One city's prior-week slate, indexed for the three nested tests. */
+/** One city's prior slate over NEW_LOOKBACK_WEEKS, indexed for the three nested tests. */
 export type CitySlate = { venues: Set<string>; venueDay: Set<string>; venueDayTime: Set<string> };
 export type PriorSlate = Map<string, CitySlate>;
 
 /** Anything with the four fields the comparison reads. VeoMatch satisfies it structurally. */
 export type SlotLike = Pick<VeoMatch, "city" | "venue" | "dayIdx" | "minutes">;
 
+/* A UNION ACROSS THE WHOLE WINDOW, NOT A WEEK PER ENTRY. The question is "has this slot appeared
+ * at all recently", so four weeks of matches go in as one list and presence in ANY of them is
+ * presence. Keeping the weeks apart would let someone write "present in 3 of 4", which is the cancel
+ * ramp's question and not this one. */
 export function buildPriorSlate(prior: SlotLike[]): PriorSlate {
   const out: PriorSlate = new Map();
   for (const m of prior) {
@@ -400,6 +434,9 @@ export function buildPriorSlate(prior: SlotLike[]): PriorSlate {
  *
  * A CITY ABSENT FROM THE PRIOR SLATE IS ALL-NEW. Warsaw's first week is the live case: no prior
  * slate at all, so every field on it is a new field.
+ *
+ * THE SLATE IS FOUR WEEKS WIDE NOW (see NEW_LOOKBACK_WEEKS). This function did not change: it asks
+ * the slate whether it has seen the slot, and what changed is how much the slate has seen.
  */
 export function newnessOf(m: SlotLike, slate: PriorSlate): NewFlag | null {
   const c = slate.get(m.city);
@@ -427,9 +464,15 @@ export type PromoWeek = {
   generals: GeneralPush[];
   /** field_id -> its tags. Keyed on the FIELD, so a pitch reads the same on every tile. */
   tagsByField: Record<number, string[]>;
-  /** The Monday of the week the NEW test compared against — printed on the page so the rule is
-   *  legible without asking, and so a wrong week is visible rather than silent. */
+  /** The field ids on a REVENUE SHARE, derived from the contract. Never a stored flag; see
+   *  fetchPartnerFields. Empty is a legitimate answer and also what a failed read returns. */
+  partnerFields: number[];
+  /** The Monday of the EARLIEST week the NEW test compared against — printed on the page so the
+   *  rule is legible without asking, and so a wrong window is visible rather than silent. */
   priorWeekStart: string;
+  /** How many weeks that window spans. Carried so the label and the tooltip render the real number
+   *  rather than a 4 typed into a component that would not change when the constant did. */
+  priorWeeks: number;
   days: { dow: string; date: number; iso: string; today: boolean }[];
   matches: PromoMatch[];
   /** False when match_promotion_push is not in the database yet — every match reads as "no plan". */
@@ -536,13 +579,21 @@ export async function fetchPromoWeek(
   const ids = week.matches.map((m) => m.apiId);
   const { plans, ready } = await fetchPlans(sb, ids);
 
-  /* THE PRIOR WEEK — the same seven weekdays one week earlier, and its SLATE rather than its play.
-   * Built from the Monday of the week on screen, so paging back a week moves the comparison with
-   * it. `includeCancelled` is the whole point (see newnessOf). */
+  /* THE PRIOR FOUR WEEKS, and their SLATE rather than their play. Built from the Monday of the week
+   * on screen, so paging back moves the whole comparison with it. `includeCancelled` is the whole
+   * point (see newnessOf): a cancelled slot was still scheduled and still published.
+   *
+   * FOUR CALLS, ONE ROUND TRIP OF LATENCY. Promise.all rather than a loop, and fetchVeoWeek rather
+   * than fetchVeoRange because the range reader OMITS dayIdx — the weekday would have to be
+   * re-derived from a date string, and a second derivation of the weekday is exactly the kind of
+   * thing that puts a slot in the wrong bucket on a DST boundary. */
   const [y, mo, d] = week.weekStart.split("-").map(Number);
-  const priorRef = new Date(y, mo - 1, d - 7);
-  const prior = await fetchVeoWeek(sb, now, priorRef, null, true);
-  const slate = buildPriorSlate(prior.matches);
+  const priors = await Promise.all(
+    Array.from({ length: NEW_LOOKBACK_WEEKS }, (_, i) =>
+      fetchVeoWeek(sb, now, new Date(y, mo - 1, d - 7 * (i + 1)), null, true)));
+  /* OLDEST FIRST, so priorWeekStart below is the start of the window rather than of whichever call
+   * resolved first. Array.from produced i=0 as one week back, so the earliest is the LAST entry. */
+  const slate = buildPriorSlate(priors.flatMap((w) => w.matches));
 
   const matches: PromoMatch[] = week.matches.map((m) => {
     const plan = plans.get(m.apiId) ?? null;
@@ -551,18 +602,22 @@ export async function fetchPromoWeek(
   // City, then day, then time. The grid renders in this order and so does the worklist fallback.
   matches.sort((a, b) => a.city.localeCompare(b.city) || a.dayIdx - b.dayIdx || a.minutes - b.minutes);
 
-  const [generals, tagsByField] = await Promise.all([
+  const fieldIds = matches.map((m) => m.fieldId).filter((x): x is number => x != null);
+  const [generals, tagsByField, partnerFields] = await Promise.all([
     fetchGeneralPushes(sb, week.days),
-    fetchFieldTags(sb, matches.map((m) => m.fieldId).filter((x): x is number => x != null)),
+    fetchFieldTags(sb, fieldIds),
+    fetchPartnerFields(sb, fieldIds),
   ]);
 
   return {
     weekStart: week.weekStart,
-    priorWeekStart: prior.weekStart,
+    priorWeekStart: priors[priors.length - 1].weekStart,
+    priorWeeks: NEW_LOOKBACK_WEEKS,
     days: week.days,
     matches,
     generals,
     tagsByField,
+    partnerFields,
     planTableReady: ready,
     generatedAt: now.toISOString(),
   };
@@ -787,4 +842,60 @@ async function fetchFieldTags(sb: SupabaseClient, fieldIds: number[]): Promise<R
     }
   }
   return out;
+}
+
+/* ── THE PARTNER BADGE IS DERIVED, AND THIS IS THE DERIVATION ────────────────────────────────
+ *
+ * PARTNER USED TO BE A TAG ANYONE COULD APPLY. It was wrong on the only field carrying it and
+ * absent on every field it belonged on, measured on prod 2026-09-26:
+ *
+ *   TAGGED, NOT A SHARE   1717 Keswick Park (Chamblee) -> fin_venue 66, billing_type per_match,
+ *                         cost_per_match 80, no partner_dashboards row. A rental.
+ *   A SHARE, NOT TAGGED   1024 The Hattrick, 1189 PAC GLOBAL, 1288 The Hattrick T.,
+ *                         1321 Crossbar Rowlett, 1585 PARMER Stadium.
+ *
+ * THE RULE IS NOT RE-IMPLEMENTED HERE. isRevenueShareVenue is the predicate basisOf itself calls,
+ * so the promo page and the finance pages cannot disagree about who is a partner. A second copy of
+ * the test is precisely what the hand-applied tag was, and it drifted.
+ *
+ * THE JOIN IS field_id -> fin_venue_fields.mdapi_field_id -> fin_venues -> partner_dashboards,
+ * because a tag is keyed on a FIELD and a contract is signed with a VENUE. A field with no mapping
+ * row is simply not a partner field, which is correct rather than a gap: an unmapped pitch has no
+ * venue and therefore no contract.
+ *
+ * A FAILED READ RETURNS EMPTY, NOT A THROW. The badge is a courtesy on a planning page; losing it
+ * must not cost the operator the week. An empty result is indistinguishable from "no partners this
+ * week" here, which is the one thing this softness buys and the reason the node guard asserts the
+ * derivation directly rather than through the page.
+ *
+ * NO `excluded_from_venue` FILTER. That flag excludes a field from a venue's COST accounting, not
+ * from its contract - an excluded field at a revenue-share venue is still at a revenue-share venue.
+ */
+async function fetchPartnerFields(sb: SupabaseClient, fieldIds: number[]): Promise<number[]> {
+  const ids = [...new Set(fieldIds)];
+  if (ids.length === 0) return [];
+  const links: { field: number; venue: number }[] = [];
+  for (let i = 0; i < ids.length; i += 500) {
+    const { data, error } = await sb.from("fin_venue_fields")
+      .select("fin_venue_id, mdapi_field_id").in("mdapi_field_id", ids.slice(i, i + 500));
+    if (error) return [];
+    for (const r of data ?? []) links.push({ field: Number(r.mdapi_field_id), venue: Number(r.fin_venue_id) });
+  }
+  if (links.length === 0) return [];
+  const venueIds = [...new Set(links.map((l) => l.venue))];
+  const [venues, dashes] = await Promise.all([
+    sb.from("fin_venues").select("id, billing_type").in("id", venueIds),
+    /* ENABLED ONLY. A disabled dashboard is a partner we no longer settle with, and basisOf reads
+     * FinanceData.partnerDashboards which is itself the enabled set (fetchAllEnabledPartnerDashboards).
+     * Reading disabled rows here would make this stricter than the rule it is meant to share. */
+    sb.from("partner_dashboards").select("venue_id, revenue_model").eq("enabled", true).in("venue_id", venueIds),
+  ]);
+  if (venues.error) return [];
+  const billing = new Map<number, string | null>((venues.data ?? []).map((v) => [Number(v.id), v.billing_type ?? null]));
+  const model = new Map<number, string | null>((dashes.data ?? []).map((d) => [Number(d.venue_id), d.revenue_model ?? null]));
+  const out = new Set<number>();
+  for (const l of links) {
+    if (isRevenueShareVenue(billing.get(l.venue), model.get(l.venue))) out.add(l.field);
+  }
+  return [...out].sort((a, b) => a - b);
 }

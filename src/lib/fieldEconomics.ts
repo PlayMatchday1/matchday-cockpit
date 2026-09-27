@@ -102,15 +102,21 @@ export const COST_BASIS_LABEL: Record<CostBasis, string> = {
   monthly_flat: "Monthly flat",
 };
 
+/* THE REVENUE-SHARE PREDICATE LIVES IN A LEAF MODULE (lib/revenueShare) and is re-exported here,
+ * where basisOf's callers already look for it. Match Promotion renders a read-only PARTNER badge
+ * from the same function — it cannot import THIS file, which reaches "use client" code through
+ * useFinanceData and would drag React into a nodejs API route. One rule, two callers, no copy. */
+export { isRevenueShareVenue } from "./revenueShare";
+import { isRevenueShareVenue } from "./revenueShare";
+
 // The structure a venue is billed under, independent of whether this particular month has a
 // figure. per_match_minus_manager (Crossbar Rowlett) is stored as per_match but paid as a share
 // of match revenue, so it reads as profit_share here — the label has to describe how the money
 // actually moves, or a >100% ratio month looks like an error instead of a share month.
 export function basisOf(venue: FinVenue, data: FinanceData): CostBasis {
   if (venue.billing_type === "monthly_flat") return "monthly_flat";
-  if (venue.billing_type === "profit_share") return "profit_share";
   const dash = data.partnerDashboards.find((d) => d.venueId === venue.id);
-  if (dash?.revenueModel === "per_match_minus_manager") return "profit_share";
+  if (isRevenueShareVenue(venue.billing_type, dash?.revenueModel)) return "profit_share";
   return "per_match";
 }
 
