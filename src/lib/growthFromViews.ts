@@ -213,9 +213,26 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
   const funnelByMonth = [...funnelAgg.entries()].sort().map(([m, r]) => ({ m, ...r }));
 
   // THE SAME COHORT FUNNEL, SPLIT BY THE CITY DECLARED AT REGISTRATION — mirrors computeGrowth so
-  // both producers of GrowthData agree. Downloads are absent by definition (the stores report
-  // country/region, never city), and registrations with no usable declared city are counted
-  // separately rather than folded into a city, so the cities do not sum to the national row.
+  // both producers of GrowthData agree.
+  //
+  // A CITY HERE IS WHERE A PLAYER SAID THEY WERE WHEN THEY REGISTERED, not where they played. Play
+  // city never enters this funnel; attributedCity (above) is the play side and is a different rule
+  // for a different question. So a city's funnel is its SIGNUPS, not its operations, and the page
+  // says so in visible text because a reader will otherwise take it for local activity.
+  //
+  // DOWNLOADS ARE ABSENT BY DEFINITION: the stores report country and region, never city.
+  //
+  // THE CITIES DO SUM TO THE NATIONAL ROW, and the comment here used to say the opposite. It claimed
+  // registrations with no usable declared city were counted separately so the totals differed. Both
+  // halves were false: normalizeDeclared is `DECLARED_TO_CANONICAL[t] ?? t`, so it never returns null
+  // for a non-empty string and funnelUnattributed is EMPTY. Measured on prod 2026-09-27: 29,238
+  // completed registrations, 29,238 distinct user_ids, 0 without a declared city, and 28,692 in the
+  // eight fleet cities plus 546 outside them (New York City 398, Warsaw 148) summing to 29,238
+  // exactly. funnelUnattributed is kept because the fall-through is a choice that could change, and
+  // an empty list costs nothing; what is not kept is a comment describing code that is not there.
+  //
+  // THE COST OF THAT FALL-THROUGH is that an unrecognised spelling becomes its own city rather than
+  // being dropped, which is why the picker groups the two non-fleet cities apart from the eight.
   const funnelCityAgg = new Map<string, { registrations: number; played1: number; played3: number; played5: number; played10: number }>();
   const funnelUnattributedAgg = new Map<string, number>();
   for (const u of completedUsers) {

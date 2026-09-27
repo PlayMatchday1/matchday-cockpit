@@ -328,6 +328,7 @@ const NODE_SUITES = [
    * cases against 27 parallel ones. Times are CLUSTERED, and this pins both shapes. */
   "scripts/slot-cluster-test.ts",
   "scripts/promo-tags-test.ts",
+  "scripts/funnel-month-test.ts",
   /* THE CANCEL WINDOW FOLLOWS THE WEEK ON SCREEN, not today — a chip beside a cancellation has to
    * mean "before the week you are looking at" or it reads as a contradiction. Also pins what the
    * removed cancel section was not allowed to take with it: the four-colour scale and

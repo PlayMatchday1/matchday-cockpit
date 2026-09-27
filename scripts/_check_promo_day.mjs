@@ -12,7 +12,16 @@
  * computed from what the page is showing.
  */
 import { chromium } from 'playwright';
+/* STATIC, AT THE TOP, NOT A dynamic import buried in whichever block first needed it. It was
+ * declared inside the revenue-share block and vanished with it when that block was removed, and the
+ * run died on a ReferenceError 84 assertions in. An import at the top cannot be deleted by editing
+ * something that merely sat near it. */
+import { createClient } from '@supabase/supabase-js';
 import { installHarnessGuard, storageStateFor } from './e2e/_session.mjs';
+/* THE TAG SET ITSELF, so the tab count and the view names are DERIVED from what ships rather than
+ * pinned at whatever is true today. A third tag should add a tab, not a failure. Static for the same
+ * reason as createClient above: these were dynamic imports inside a block that got removed. */
+import { TAG_KEYS, TAG_META } from '../src/lib/promoTags.ts';
 installHarnessGuard();
 const BASE = process.env.BASE || 'http://localhost:3000';
 const { storageState } = await storageStateFor('rmancuso@playmatchday.com', BASE);
@@ -23,6 +32,31 @@ const errs = []; p.on('pageerror', e => errs.push(e.message));
 let pass = 0, fail = 0;
 const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); c ? pass++ : fail++; };
 const D = t => `[data-testid="${t}"]`;
+
+/* ── HOW MANY TAG ROWS EXIST AT ALL ───────────────────────────────────────────────────────────
+ * "0 tags exist, so no tile could carry one" and "tags exist and none rendered" are DIFFERENT
+ * FAILURES and they used to print the same line. One is a fine page and an empty table; the other is
+ * a broken render. Every tag assertion appends this so the output says which, without anyone having
+ * to go and look.
+ *
+ * THIS BLOCK WAS ONCE DELETED BY ACCIDENT, taken out inside a slice that was removing the
+ * revenue-share plumbing it happened to sit next to. `node --check` passed, because an undefined
+ * identifier is not a syntax error, and the run died 84 assertions in with exit 2. A parse check is
+ * not a bind check. */
+const TAG_ROWS = await (async () => {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL, key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return null;
+  const r = await createClient(url, key).from('promo_tags').select('tag, match_id, field_id');
+  if (r.error) return null;
+  return { total: r.data.length, onMatch: r.data.filter(x => x.match_id != null).length,
+           onField: r.data.filter(x => x.field_id != null).length,
+           tags: [...new Set(r.data.map(x => x.tag))] };
+})();
+const TAGCTX = TAG_ROWS === null ? ' [promo_tags UNREADABLE - treat any zero below as UNKNOWN]'
+  : TAG_ROWS.total === 0 ? ' [promo_tags holds 0 rows, so NO TILE COULD CARRY A TAG: this is missing DATA, not a broken render]'
+  : ` [promo_tags holds ${TAG_ROWS.total} row(s) (${TAG_ROWS.onMatch} on matches, ${TAG_ROWS.onField} on fields: ${TAG_ROWS.tags.join(', ')}), so a zero here IS A BROKEN RENDER]`;
+ok(TAG_ROWS !== null,
+  `CONTROL: promo_tags is readable, holding ${TAG_ROWS?.total ?? 'UNKNOWN'} row(s)${TAG_ROWS?.total === 0 ? ' - the tag assertions below will report the DATA condition rather than pass' : ''}`);
 
 const load = async (w = 1320) => {
   await p.setViewportSize({ width: w, height: 1000 });
@@ -483,7 +517,7 @@ const TAKEN = ['rgb(44, 219, 135)', 'rgb(244, 196, 48)', 'rgb(232, 134, 42)', 'r
 const partnerCol = await p.$eval(D('partner-badge'), e => getComputedStyle(e).color).catch(() => null);
 const allCols = [...tagCols, partnerCol].filter(Boolean);
 ok(allCols.length > 0 && allCols.every(c => !TAKEN.includes(c)),
-  `  CONTROL: none collides with mint, the cancel ramp or deep green (${allCols.join(' | ')})`);
+  `  CONTROL: none collides with mint, the cancel ramp or deep green (${allCols.join(' | ')})${allCols.length === 0 ? TAGCTX : ''}`);
 ok(tagInfo.bg === 'rgba(0, 0, 0, 0)', `a tag is outlined, not filled (${tagInfo.bg})${tagInfo.bg === null ? TAGCTX : ''}`);
 const chipBg = await p.$eval(D('risk-chip'), e => getComputedStyle(e).backgroundColor).catch(() => null);
 ok(chipBg === null || chipBg !== tagInfo.bg, `  CONTROL: while the cancel chip stays filled (${chipBg})`);

@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Player Funnel, cities compared</title>
+<style>
+/* ── APP TOKENS, VERBATIM from globals.css. An earlier mock in this repo invented a palette and was
+ * rejected for it; these are the ones the page actually renders. Light only, because the app is
+ * light only and does not honour prefers-color-scheme anywhere. */
+:root{
+  --cream:#f4f7f5; --card:#ffffff; --cream-line:#d3dcd8; --deep-green:#003326;
+  --mint:#2cdb87; --mint-soft:#d5f7e6; --coral:#ff6955; --ink:#12241d; --mut:#6d7b74;
+  --track:#eceff0;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cream);color:var(--ink);
+  font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1240px;margin:0 auto;padding:24px 16px 64px}
+h1{font-size:30px;margin:0 0 4px;letter-spacing:-.01em}
+.sub{color:var(--mut);margin:0 0 20px}
+.card{background:var(--card);border:1px solid var(--cream-line);border-radius:14px}
+
+/* ── THE RANGE, ONCE. Ryan: "we dont need time periods at top because already a custom range for
+ * last row." Correct, but deleting the bubbles alone orphans the four KPI cards, which read
+ * period.start/period.end. So the range moves UP to the top of the page and drives BOTH. One
+ * control, both panels, which is what having one range actually means. */
+.range{display:flex;flex-wrap:wrap;align-items:flex-end;gap:14px;padding:14px 16px;margin:0 0 14px}
+.fld{display:flex;flex-direction:column;gap:5px}
+.lbl{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);font-weight:700}
+.inp{min-height:34px;padding:0 10px;border:1px solid var(--cream-line);border-radius:8px;
+  background:var(--card);font:inherit;color:var(--ink)}
+.rangenote{margin-left:auto;color:var(--mut);font-size:12px;max-width:340px;text-align:right}
+
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(224px,1fr));gap:12px;margin:0 0 16px}
+.kpi{padding:14px 16px}
+.kpi .k{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);font-weight:700}
+.kpi .v{font-size:30px;font-weight:800;color:var(--deep-green);letter-spacing:-.02em;margin:4px 0 2px}
+.kpi .n{font-size:12px;color:var(--mut)}
+.kpi[data-lead="1"]{border-top:3px solid var(--mint)}
+
+/* ── CITY PICKER. Chips, not a native multi-select: eight cities fit, and a native multiple select
+ * is close to unusable on a phone. Every chip is a real 32px target. */
+.panel{padding:16px}
+.phead{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:0 0 4px}
+.ptitle{font-size:17px;font-weight:700;margin:0}
+.cities{display:flex;flex-wrap:wrap;gap:7px;margin:10px 0 4px}
+.chip{min-height:32px;padding:0 12px;border-radius:8px;cursor:pointer;background:transparent;
+  border:1px solid var(--cream-line);color:var(--mut);font:700 12px/1 inherit}
+.chip[data-on="1"]{border-color:var(--deep-green);background:var(--mint-soft);color:var(--deep-green)}
+.chip[data-all="1"]{border-style:dashed}
+.picknote{color:var(--mut);font-size:12px;margin:6px 0 0}
+
+/* ── THE GRID. Stage columns with an arrow and a conversion between each pair. */
+.scroll{overflow-x:auto;margin-top:14px}
+table{border-collapse:collapse;width:100%;min-width:900px}
+th,td{padding:9px 8px;text-align:left;vertical-align:middle}
+thead th{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);font-weight:700;
+  border-bottom:1px solid var(--cream-line)}
+th.conv,td.conv{text-align:center;width:62px;color:var(--mut);font-size:12px;font-weight:700}
+.rowname{font-weight:700;white-space:nowrap}
+.rowmeta{display:block;font-size:10px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--mut);font-weight:700}
+.cell{background:var(--track);border-radius:10px;padding:10px 12px;min-width:104px}
+.num{font-size:21px;font-weight:800;color:var(--deep-green);letter-spacing:-.01em}
+.bar{height:6px;border-radius:99px;background:#dfe4e2;margin-top:7px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--mint);border-radius:99px}
+tbody tr[data-total="1"] .cell{background:var(--mint-soft)}
+tbody tr[data-total="1"] .rowname{color:var(--deep-green)}
+tbody tr[data-partial="1"] .rowname::after{content:" ·";color:var(--coral)}
+.dash{color:var(--mut);font-size:21px;font-weight:800}
+.why{display:block;font-size:10px;color:var(--mut);font-weight:600;letter-spacing:.02em;margin-top:4px;
+  max-width:104px;line-height:1.3}
+.foot{color:var(--mut);font-size:12px;margin:14px 0 0}
+.foot b{color:var(--ink)}
+.illus{color:var(--coral);font-weight:700}
+</style></head>
+<body><div class="wrap">
+
+<h1>Player Funnel</h1>
+<p class="sub">Download to registration to a fifth match, where players arrive and where they fall away.</p>
+
+<div class="card range" data-testid="range">
+  <div class="fld"><span class="lbl">Start</span>
+    <select class="inp" id="start" data-testid="start"></select></div>
+  <div class="fld"><span class="lbl">End</span>
+    <select class="inp" id="end" data-testid="end"></select></div>
+  <div class="rangenote">One range for the whole page. The four cards and the table below both read it.</div>
+</div>
+
+<div class="kpis" id="kpis"></div>
+
+<div class="card panel">
+  <div class="phead"><h2 class="ptitle">Player funnel comparison</h2></div>
+  <div class="cities" id="cities" data-testid="cities"></div>
+  <p class="picknote" id="picknote" data-testid="picknote"></p>
+  <div class="scroll"><table>
+    <thead><tr id="thead"></tr></thead>
+    <tbody id="tbody"></tbody>
+  </table></div>
+  <p class="foot" id="foot"></p>
+</div>
+
+<script>
+/* ════════════════════════════════════════════════════════════════════════════════════════════════
+ * TODAY IS 27 SEPTEMBER 2026. Pinned, so the "current month" assertion means something rather than
+ * passing on whatever day the check happens to run.
+ * ════════════════════════════════════════════════════════════════════════════════════════════════ */
+const TODAY = "2026-09";
+
+/* THE OCTOBER BUG, WHICH IS NOT AN OFF-BY-ONE.
+ *
+ *   growthFromViews.ts:270-273
+ *     behaviorAxis = monthRange(firstRegMonth, [nowMonth, last(playMonths)].sort().pop())
+ *   growthFromViews.ts:192-194
+ *     playMonths comes from playDims[].match_month, which includes matches that have not
+ *     happened yet.
+ *
+ * MatchDay schedules matches weeks ahead, so the axis runs into the FUTURE, and PlayerFunnel calls
+ * months[months.length-1] the current month. That is why the top row reads Oct 2026 with zeros on
+ * 27 September: not a shifted label, a phantom row. Two consequences worth stating:
+ *
+ *   1. Nothing beneath it is shifted. The row labelled "previous month" holds real September data.
+ *      One phantom row, not a whole table off by one.
+ *   2. It drifts further than one month as the calendar fills. The furthest-out booked match sets
+ *      the ceiling, so a December fixture put on sale today moves this row to December.
+ *
+ * THE FIX IS LOCAL. Do not change behaviorAxis: BehaviorPanel reads it and future months there may
+ * be wanted. Clamp in PlayerFunnel, to the current calendar month in the BUSINESS timezone rather
+ * than raw UTC. businessHours.ts already exports BUSINESS_TZ = "America/Chicago". On the 1st of a
+ * month a UTC runtime is already in the new month while Chicago is still in the old one, which is
+ * the identical defect the Daily Matches divisor had. */
+const MONTHS = ["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07","2026-08",
+                "2026-09","2026-10"];   // 2026-10 exists only because matches are booked into it
+const clampToToday = ms => ms.filter(m => m <= TODAY);
+const LABEL = m => ({"01":"Jan","02":"Feb","03":"Mar","04":"Apr","05":"May","06":"Jun","07":"Jul",
+  "08":"Aug","09":"Sep","10":"Oct","11":"Nov","12":"Dec"}[m.slice(5)] + " " + m.slice(0,4));
+
+/* ── DATA ────────────────────────────────────────────────────────────────────────────────────────
+ * The ALL-CITIES totals and the September row are REAL, read off the live page. The per-city split
+ * and the August row are ILLUSTRATIVE and labelled as such on the page; the split is constructed to
+ * sum exactly to the real totals so the arithmetic on screen is honest even where the split is not.
+ *
+ * DOWNLOADS HAVE NO CITY, AND THAT IS NOT A GAP IN THIS MOCK. funnelByMonthCity carries
+ * registrations and played1/3/5/10 only (PlayerFunnel.tsx:37). App Store and Play Console installs
+ * arrive with no city dimension at all, so a per-city funnel CANNOT start at downloads. The column
+ * renders a dash with the reason, which is the honest rendering; inventing a per-city download
+ * number would be the alternative and it would be fiction. */
+const STAGES = ["downloads","registrations","played1","played3","played5","played10"];
+const HEAD   = ["Downloads","Registrations","1 match","3 matches","5 matches","10 matches"];
+
+const CITY = {                       //           reg  p1    p3   p5   p10
+  "Austin":        {reg:3842, p1:2014, p3:742, p5:471, p10:224},
+  "Houston":       {reg:1616, p1: 795, p3:268, p5:165, p10: 74},
+  "San Antonio":   {reg:1489, p1: 742, p3:251, p5:152, p10: 68},
+  "Atlanta":       {reg: 892, p1: 416, p3:133, p5: 80, p10: 35},
+  "Dallas":        {reg: 731, p1: 337, p3:103, p5: 62, p10: 27},
+  "St. Louis":     {reg: 508, p1: 244, p3: 76, p5: 48, p10: 21},
+  "Oklahoma City": {reg: 390, p1: 186, p3: 52, p5: 36, p10: 14},
+};
+const CITIES = Object.keys(CITY);
+
+/* Real, off the live page, for Mar 2026 – Aug 2026. */
+const NATIONAL = {downloads:12903, registrations:9468, played1:4734, played3:1625, played5:1014, played10:463};
+/* Real September, from the live page's own row. Illustrative August. */
+const TIMEROWS = {
+  "2026-09": {downloads:3235, registrations:2211, played1:727, played3:100, played5:43, played10:11},
+  "2026-08": {downloads:2980, registrations:2065, played1:688, played3:214, played5:132, played10:58, illus:true},
+  "ytd":     {downloads:18921, registrations:13722, played1:6559, played3:2206, played5:1405, played10:696},
+};
+
+let start = "2026-03", end = "2026-08";
+let picked = new Set();          // empty === all cities
+
+const sumCities = ks => { const a={registrations:0,played1:0,played3:0,played5:0,played10:0};
+  for (const k of ks){ const c=CITY[k];
+    a.registrations+=c.reg; a.played1+=c.p1; a.played3+=c.p3; a.played5+=c.p5; a.played10+=c.p10; }
+  return a; };
+
+const fmt = n => n === null || n === undefined ? null : n.toLocaleString("en-US");
+const pct = (a,b) => !a || b === null || b === undefined ? "–" : (b/a*100).toFixed(1) + "%";
+
+/* ── ROWS. The picker decides the row dimension, so there is no separate mode switch to forget.
+ *    none or one city → the time rows, exactly as today, filtered to that city
+ *    two or more      → one row per city over the range, plus the total they sum to
+ * "Compare the funnels" means reading conversion down a column across cities, which time rows
+ * cannot show however they are filtered. */
+function buildRows(){
+  if (picked.size >= 2){
+    const ks = CITIES.filter(c => picked.has(c));
+    const rows = ks.map(c => ({ name:c, meta:"city", city:true,
+      v:{downloads:null, registrations:CITY[c].reg, played1:CITY[c].p1,
+         played3:CITY[c].p3, played5:CITY[c].p5, played10:CITY[c].p10} }));
+    const t = sumCities(ks);
+    rows.push({ name: ks.length === CITIES.length ? "All cities" : `All ${ks.length} selected`,
+      meta:"total", total:true, city:true,
+      v:{downloads:null, ...t} });
+    return rows;
+  }
+  /* CURRENT MONTH IS CLAMPED. months[last] is October because of the booked-match ceiling above;
+     clampToToday is the whole fix, and the row below it follows from it. */
+  const avail = clampToToday(MONTHS);
+  const cur = avail[avail.length-1], prev = avail[avail.length-2];
+  const scale = picked.size === 1 ? CITY[[...picked][0]].reg / NATIONAL.registrations : 1;
+  const sc = o => { const out={}; for (const k of STAGES)
+      out[k] = o[k] === null || o[k] === undefined ? null
+             : k === "downloads" && scale !== 1 ? null : Math.round(o[k]*scale); return out; };
+  return [
+    { name:LABEL(cur),  meta:"current month",  partial:true, v:sc(TIMEROWS[cur]) },
+    { name:LABEL(prev), meta:"previous month", illus:TIMEROWS[prev].illus, v:sc(TIMEROWS[prev]) },
+    { name:"2026 YTD",  meta:"year to date",   v:sc(TIMEROWS.ytd) },
+    { name:`${LABEL(start)} – ${LABEL(end)}`, meta:"custom range", v:sc(NATIONAL) },
+  ];
+}
+
+function draw(){
+  /* KPI cards read the same range as the table. */
+  const k = document.getElementById("kpis");
+  const label = `${LABEL(start)} – ${LABEL(end)}`.toUpperCase();
+  const cards = [
+    ["App downloads · iOS + Android", fmt(NATIONAL.downloads), "iOS 10,377 · Android 2,526", 1],
+    [`Registrations · ${label}`, fmt(NATIONAL.registrations), "All time: 29,219 completed", 0],
+    [`Played 1 match · ${label}`, fmt(NATIONAL.played1), "50.0% of registrations", 0],
+    [`Played 5 matches · ${label}`, fmt(NATIONAL.played5), "21.4% of first-match players", 0],
+  ];
+  k.innerHTML = cards.map(([a,b,c,lead]) =>
+    `<div class="card kpi" data-testid="kpi" data-lead="${lead}">
+       <div class="k">${a}</div><div class="v">${b}</div><div class="n">${c}</div></div>`).join("");
+
+  /* City chips. */
+  const all = picked.size === 0;
+  document.getElementById("cities").innerHTML =
+    `<button class="chip" data-testid="chip" data-all="1" data-on="${all?1:0}">All cities</button>` +
+    CITIES.map(c => `<button class="chip" data-testid="chip" data-city="${c}"
+       data-on="${picked.has(c)?1:0}">${c}</button>`).join("");
+  document.getElementById("picknote").textContent =
+    all ? "All cities. Pick two or more to compare them side by side."
+        : picked.size === 1 ? `${[...picked][0]} only, by month. Pick another city to compare them side by side.`
+        : `${picked.size} cities, compared over ${LABEL(start)} to ${LABEL(end)}.`;
+
+  const rows = buildRows();
+  const byCity = picked.size >= 2;
+  document.getElementById("thead").innerHTML =
+    `<th></th>` + HEAD.map((h,i) => `${i?'<th class="conv"></th>':''}<th>${h}</th>`).join("");
+
+  const max = {}; for (const s of STAGES)
+    max[s] = Math.max(...rows.filter(r=>!r.total).map(r => r.v[s] ?? 0), 1);
+
+  document.getElementById("tbody").innerHTML = rows.map(r => {
+    const cells = STAGES.map((s,i) => {
+      const v = r.v[s];
+      const prev = i ? r.v[STAGES[i-1]] : null;
+      const conv = i ? `<td class="conv" data-testid="conv">${pct(prev, v)}</td>` : "";
+      const body = v === null
+        ? `<span class="dash">—</span>${s === "downloads" && r.city
+            ? `<span class="why" data-testid="whydash">Installs carry no city</span>` : ""}`
+        : `<span class="num">${fmt(v)}</span><span class="bar"><i style="width:${
+            Math.max(2, Math.round(v/max[s]*100))}%"></i></span>`;
+      return `${conv}<td><div class="cell" data-testid="cell" data-stage="${s}">${body}</div></td>`;
+    }).join("");
+    return `<tr data-testid="row" data-total="${r.total?1:0}" data-partial="${r.partial?1:0}"
+              data-name="${r.name}">
+      <td class="rowname">${r.name}<span class="rowmeta">${r.meta}</span></td>${cells}</tr>`;
+  }).join("");
+
+  document.getElementById("foot").innerHTML = byCity
+    ? `Per-city rows start at registrations: App Store and Play Console installs arrive with no city, so there is no honest way to split downloads. <span class="illus">The per-city split is illustrative</span> and sums exactly to the real all-cities totals.`
+    : `The current month is part-elapsed and its downloads lag, so its conversion sits on a denominator still arriving. Marked, not excluded. <span class="illus">August is illustrative</span>; September and the range totals are real.`;
+}
+
+document.getElementById("cities").addEventListener("click", e => {
+  const b = e.target.closest("[data-testid='chip']"); if (!b) return;
+  if (b.dataset.all === "1") picked.clear();
+  else { const c = b.dataset.city; picked.has(c) ? picked.delete(c) : picked.add(c); }
+  draw();
+});
+for (const id of ["start","end"]){
+  const sel = document.getElementById(id);
+  sel.innerHTML = clampToToday(MONTHS).map(m => `<option value="${m}">${LABEL(m)}</option>`).join("");
+  sel.value = id === "start" ? start : end;
+  sel.addEventListener("change", () => { if (id==="start") start = sel.value; else end = sel.value; draw(); });
+}
+draw();
+</script>
+</div></body></html>

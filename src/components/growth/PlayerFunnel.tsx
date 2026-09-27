@@ -6,6 +6,8 @@ import type { Period } from "./GlobalPeriod";
 import styles from "./growth.module.css";
 import { fmtInt, monthLabel } from "./format";
 import { canonCity } from "@/lib/reviewsDerive";
+import { CANONICAL_CITIES } from "@/lib/growthAnalytics";
+import { clampMonthsToNow } from "@/lib/funnelMonth";
 
 // PART 1 (c0d3853, unchanged): a nested COHORT funnel. For the users who completed
 // sign-up in a window, how many went on to play ≥1/≥3/≥5/≥10 non-cancelled
@@ -64,6 +66,19 @@ function sumCohort(rows: GrowthData["funnelByMonth"], monthSet: Set<string>): Co
   return acc;
 }
 
+/* EVERY CHIP IS A 32px TARGET, from one function, so none can drift smaller than the others.
+ * maxWidth keeps a long name from pushing the row wider than a 390px screen. */
+function chipStyle(on: boolean): React.CSSProperties {
+  return {
+    minHeight: 32, padding: "0 10px", borderRadius: 999, cursor: "pointer",
+    fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", maxWidth: "100%",
+    overflow: "hidden", textOverflow: "ellipsis",
+    border: `1px solid ${on ? "var(--deep-green, #003326)" : "var(--cream-line, #dfe6e2)"}`,
+    background: on ? "var(--deep-green, #003326)" : "var(--card, #fff)",
+    color: on ? "#fff" : "var(--mut, #5b6b63)",
+  };
+}
+
 export default function PlayerFunnel({
   data,
   period,
@@ -73,11 +88,39 @@ export default function PlayerFunnel({
   period: Period;
   scopeChip?: ReactNode;
 }) {
-  const months = data.behaviorOverall.map((p) => p.m);
-  const [customStart, setCustomStart] = useState(period.start);
-  const [customEnd, setCustomEnd] = useState(period.end);
-  // LIVE, no Apply button — every other filter in Clubhouse applies on change.
-  const [city, setCity] = useState<string>(ALL_CITIES);
+  /* ── THE AXIS, CLAMPED TO THE MONTH CHICAGO IS ACTUALLY IN ────────────────────────────────
+   * behaviorOverall runs off behaviorAxis, whose ceiling is max(nowMonth, last booked match month)
+   * - and growth_play_dims carries BOOKED matches, so the axis runs into the future. This page then
+   * called its last entry the current month. Measured on prod 2026-09-27: the axis ended 2026-10
+   * while Chicago was in 2026-09.
+   *
+   * CLAMPED HERE AND NOT IN THE AXIS, because behaviorAxis has other readers (BehaviorPanel among
+   * them) that may legitimately want a future month. See lib/funnelMonth for why the clamp is to the
+   * calendar rather than to the data, and why it reads the business timezone.
+   *
+   * EVERYTHING DOWNSTREAM INHERITS IT, including the range pickers' own max: an end month there can
+   * no longer be a month that has no data by definition. One clamp, not four. */
+  const months = useMemo(() => clampMonthsToNow(data.behaviorOverall.map((p) => p.m)), [data.behaviorOverall]);
+  /* THE RANGE COMES FROM THE PAGE AND IS NOT DUPLICATED HERE. These were local state with their own
+   * two month inputs in this card's header, which meant the page had two range controls: one driving
+   * the cards and one driving the bottom row of this table. Ryan: "there's already a custom range for
+   * the last row" - so that one moved up and now drives both. */
+  const customStart = period.start;
+  const customEnd = period.end;
+  /* ── CITIES ARE A SET NOW, AND THE SET DECIDES THE ROW DIMENSION ──────────────────────────
+   * Ryan: "Develop an option to compare all cities or multiple cities simultaneously. Currently we
+   * can only filter one city at a time."
+   *
+   * THE PICKER IS THE MODE CONTROL, so there is no second control to leave in the wrong position:
+   *   none      the month rows, exactly as before
+   *   one       the month rows filtered to it, exactly as before
+   *   two-plus  one row per city over the range, plus the total they sum to
+   *
+   * "COMPARE THE FUNNELS" MEANS READING A COLUMN DOWN, which month rows cannot show however they
+   * are filtered. Filtering to one city is a different question and keeps its old answer. */
+  const [picked, setPicked] = useState<readonly string[]>([]);
+  const compare = picked.length >= 2;
+  const city = picked.length === 1 ? picked[0] : ALL_CITIES;
 
   // ONE VOCABULARY AT THE POINT OF COMPARISON. canonCity runs on BOTH sides, so a cockpit name can
   // never be compared against a normalised one. That exact mismatch made /city/reviews return zero
@@ -89,7 +132,98 @@ export default function PlayerFunnel({
     return [...set].sort();
   }, [data.funnelByMonthCity]);
 
+  /* ── FLEET FIRST, THEN THE TWO THAT ARE NOT FLEET CITIES, WITH THEIR COUNTS ─────────────────
+   * Measured on prod 2026-09-27: 29,238 completed registrations, 28,692 in the eight fleet cities and
+   * 546 outside them - New York City 398 and Warsaw 148.
+   *
+   * NEITHER IS FILTERED OUT, AND THE PICKER IS THE FILTER. Anyone wanting MatchDay-only deselects
+   * Warsaw. A separate exclusion was built and reverted: it removed Warsaw from the national row as
+   * well, and a page with a hidden exclusion is a page whose total cannot be checked against its
+   * source. On the full set the city rows and the total reconcile to 29,238 exactly, which is the one
+   * property that makes these rows trustworthy.
+   *
+   * THEY ARE NOT THE SAME KIND OF THING, AND THE SEPARATOR SAYS SO.
+   *   NEW YORK CITY  real MatchDay signups in a city with no pitch. Expansion signal.
+   *   WARSAW         A SEPARATE OPERATOR ON A BRAND LICENCE, not a MatchDay market and not a
+   *                  spelling variant. It is counted here today; that is a decision, not an
+   *                  oversight, and the label is what stops it being read as a ninth market.
+   *
+   * THE COUNTS RIDE THE CHIPS because "Warsaw" alone tells a reader nothing about whether it matters.
+   * 148 against Austin's 13,297 is the context that makes the label actionable. */
+  const LICENSEE_CITIES = useMemo(() => new Set(["Warsaw"].map((c) => canonCity(c))), []);
+  const regsByCity = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of data.funnelByMonthCity) {
+      const c = canonCity(r.city);
+      m.set(c, (m.get(c) ?? 0) + r.registrations);
+    }
+    return m;
+  }, [data.funnelByMonthCity]);
+  const { fleetCities, otherCities } = useMemo(() => {
+    const fleet = new Set((CANONICAL_CITIES as readonly string[]).map((c) => canonCity(c)));
+    return {
+      fleetCities: cityOptions.filter((c) => fleet.has(c)),
+      otherCities: cityOptions.filter((c) => !fleet.has(c)),
+    };
+  }, [cityOptions]);
+
+  const toggleCity = (c: string) =>
+    setPicked((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
+
+  /* THE RANGE THE NOTE AND THE CITY ROWS BOTH NAME, ordered once here so the two cannot disagree
+   * about which end is which when the pickers are set backwards. */
+  const range = useMemo<[string, string]>(() => {
+    const lo = period.start <= period.end ? period.start : period.end;
+    const hi = period.start <= period.end ? period.end : period.start;
+    const inRange = months.filter((m) => m >= lo && m <= hi);
+    return [inRange[0] ?? lo, inRange[inRange.length - 1] ?? hi];
+  }, [period.start, period.end, months]);
+
   const rows = useMemo(() => {
+    /* ── TWO OR MORE CITIES: ONE ROW PER CITY, PLUS THE TOTAL ────────────────────────────────
+     * The month rows GIVE WAY rather than doubling up: the table has one row dimension at a time,
+     * because a table that stacked city rows under month rows would invite reading a city row as a
+     * subtotal of the month above it.
+     *
+     * THE TOTAL ROW IS THE ARITHMETIC CONTROL. City rows that do not sum to their own total is the
+     * failure this table would otherwise hide, since every row looks plausible alone. It is computed
+     * by summing the CITY rows, not by re-querying the national cohort, so a mismatch means the city
+     * split lost or duplicated somebody rather than meaning two queries disagree.
+     *
+     * DOWNLOADS ARE A DASH ON EVERY CITY ROW AND ON THE TOTAL. The stores report country and region,
+     * never city, so there is no honest way to split them, and the total of dashes is a dash rather
+     * than the national number - which would silently compare city registrations against a national
+     * denominator. So the first conversion in a city row is a dash too; the other four are real. */
+    const lo0 = customStart <= customEnd ? customStart : customEnd;
+    const hi0 = customStart <= customEnd ? customEnd : customStart;
+    const rangeMonths = months.filter((m) => m >= lo0 && m <= hi0);
+    if (compare) {
+      const span = rangeMonths.length
+        ? `${monthLabel(rangeMonths[0])} – ${monthLabel(rangeMonths[rangeMonths.length - 1])}`
+        : "no months in range";
+      const monthsOf = new Set(rangeMonths);
+      const per = picked.map((c) => ({ city: c, c: sumCohortCity(data.funnelByMonthCity, monthsOf, c) }));
+      const total = per.reduce((a, x) => ({
+        registrations: a.registrations + x.c.registrations,
+        played1: a.played1 + x.c.played1,
+        played3: a.played3 + x.c.played3,
+        played5: a.played5 + x.c.played5,
+        played10: a.played10 + x.c.played10,
+      }), { registrations: 0, played1: 0, played3: 0, played5: 0, played10: 0 });
+      return [
+        ...per.map(({ city: c, c: v }) => ({
+          name: c, meta: span, months: rangeMonths, partial: false, isCity: true, isTotal: false,
+          vals: [null, v.registrations, v.played1, v.played3, v.played5, v.played10] as (number | null)[],
+          dlNote: null as string | null,
+        })),
+        {
+          name: `Total of ${picked.length} cities`, meta: span, months: rangeMonths, partial: false,
+          isCity: true, isTotal: true,
+          vals: [null, total.registrations, total.played1, total.played3, total.played5, total.played10] as (number | null)[],
+          dlNote: null as string | null,
+        },
+      ];
+    }
     // "Current" is the latest data month (independent of the global period);
     // "Custom" is driven by the Custom start/end inputs.
     const end = months[months.length - 1];
@@ -181,9 +315,10 @@ export default function PlayerFunnel({
           console.error(`Funnel not nested in "${r.name}" at stage ${i}`, vals);
         }
       }
-      return { ...r, vals, dlNote, partial: "partial" in r ? Boolean(r.partial) : false };
+      return { ...r, vals, dlNote, partial: "partial" in r ? Boolean(r.partial) : false,
+               isCity: false, isTotal: false };
     });
-  }, [data.funnelByMonth, data.funnelByMonthCity, data.downloads, city, customStart, customEnd, months]);
+  }, [data.funnelByMonth, data.funnelByMonthCity, data.downloads, city, compare, picked, customStart, customEnd, months]);
 
   return (
     <div className={styles.card}>
@@ -197,50 +332,70 @@ export default function PlayerFunnel({
         <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
           {scopeChip}
           <div className={styles.controlsRow}>
-          <div className={styles.field}>
-            <label className={styles.fieldLabel} htmlFor="funnelCity">
-              City
-            </label>
-            <select
-              id="funnelCity"
-              data-testid="funnel-city"
-              className={styles.control}
-              value={city}
-              onChange={(e) => setCity(e.target.value)}
-            >
-              <option value={ALL_CITIES}>{ALL_CITIES}</option>
-              {cityOptions.map((c) => (
-                <option key={c} value={c}>{c}</option>
+          {/* ── CHIPS, NOT A MULTI-SELECT ─────────────────────────────────────────────────────
+              Ten fit, and a native <select multiple> is close to unusable on a phone: it needs a
+              modifier key to pick a second option, which a touch screen does not have. Every chip is
+              a real 32px target.
+              THE SEPARATOR IS NOT DECORATION. Eight fleet cities, then the two declared cities that
+              are not in that list, so nobody reads them as peers of Austin. */}
+          <div className={styles.field} style={{ minWidth: 0 }}>
+            <span className={styles.fieldLabel} id="funnelCityLabel">City</span>
+            <div role="group" aria-labelledby="funnelCityLabel" data-testid="funnel-city-chips"
+              style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+              <button type="button" data-testid="funnel-city-chip" data-city={ALL_CITIES}
+                data-on={picked.length === 0 ? "1" : "0"} aria-pressed={picked.length === 0}
+                onClick={() => setPicked([])}
+                style={chipStyle(picked.length === 0)}>
+                {ALL_CITIES}
+              </button>
+              {fleetCities.map((c) => (
+                <button key={c} type="button" data-testid="funnel-city-chip" data-city={c}
+                  data-on={picked.includes(c) ? "1" : "0"} aria-pressed={picked.includes(c)}
+                  onClick={() => toggleCity(c)} style={chipStyle(picked.includes(c))}>
+                  {c}
+                </button>
               ))}
-            </select>
-          </div>
-          <div className={styles.field}>
-            <label className={styles.fieldLabel} htmlFor="funnelCustomStart">
-              Custom start
-            </label>
-            <input
-              id="funnelCustomStart"
-              className={styles.control}
-              type="month"
-              min={months[0]}
-              max={months[months.length - 1]}
-              value={customStart}
-              onChange={(e) => setCustomStart(e.target.value)}
-            />
-          </div>
-          <div className={styles.field}>
-            <label className={styles.fieldLabel} htmlFor="funnelCustomEnd">
-              Custom end
-            </label>
-            <input
-              id="funnelCustomEnd"
-              className={styles.control}
-              type="month"
-              min={months[0]}
-              max={months[months.length - 1]}
-              value={customEnd}
-              onChange={(e) => setCustomEnd(e.target.value)}
-            />
+              {otherCities.length > 0 && (
+                <>
+                  <span data-testid="funnel-city-sep" aria-hidden="true"
+                    style={{ alignSelf: "stretch", width: 1, minHeight: 24, background: "var(--cream-line, #dfe6e2)", margin: "0 2px" }} />
+                  <span className={styles.fieldLabel} style={{ margin: 0 }} data-testid="funnel-city-sep-label"
+                    title="Not MatchDay markets. New York City is real MatchDay signups where we have no pitch. Warsaw is a separate operator on a brand licence, not a market and not a spelling variant. Both are counted in the totals on this page; deselect one to leave it out.">
+                    Not fleet cities
+                  </span>
+                  {otherCities.map((c) => (
+                    <button key={c} type="button" data-testid="funnel-city-chip" data-city={c}
+                      data-other="1" data-licensee={LICENSEE_CITIES.has(c) ? "1" : "0"}
+                      data-on={picked.includes(c) ? "1" : "0"} aria-pressed={picked.includes(c)}
+                      onClick={() => toggleCity(c)} style={chipStyle(picked.includes(c))}
+                      title={LICENSEE_CITIES.has(c)
+                        ? `${c} is a separate operator on a brand licence, not a MatchDay market. Counted in the totals on this page; deselect it for MatchDay only.`
+                        : `${c}: players declared it at signup and MatchDay has no pitch there.`}>
+                      {c}
+                      {LICENSEE_CITIES.has(c) && (
+                        <i data-testid="funnel-city-licensee" style={{ fontStyle: "normal", opacity: 0.75, marginLeft: 5, fontSize: 10.5 }}>
+                          licensee
+                        </i>
+                      )}
+                      <i data-testid="funnel-city-count" style={{ fontStyle: "normal", opacity: 0.7, marginLeft: 5, fontSize: 11 }}>
+                        {(regsByCity.get(c) ?? 0).toLocaleString()}
+                      </i>
+                    </button>
+                  ))}
+                </>
+              )}
+            </div>
+            {/* ── WHAT THIS SELECTION MEANS, AND WHAT THE NEXT CLICK WOULD DO ─────────────────
+                The picker is also the mode control, so the mode has to be legible from the picker.
+                Without this line, "pick a second city and the rows change dimension" is a behaviour
+                the operator discovers by accident. */}
+            <p className={styles.funnelPickNote} data-testid="funnel-pick-note">
+              {picked.length === 0
+                ? "All cities. Pick two or more to compare them side by side."
+                : picked.length === 1
+                  ? `${picked[0]} only, by month. Pick another city to compare them side by side.`
+                  : `${picked.length} cities, compared over ${monthLabel(range[0])} to ${monthLabel(range[1])}.`}
+            </p>
           </div>
           </div>
         </div>
@@ -262,25 +417,38 @@ export default function PlayerFunnel({
             })}
           </div>
 
+          {/* KEYED ON name, NOT meta. In compare mode every city row shares the same meta (the
+              range), so keying on meta collapsed them to one row. */}
           {rows.map((r) => (
-            <div key={r.meta} className={styles.funnelRow}>
+            <div key={r.name} className={styles.funnelRow} data-testid="funnel-row"
+              data-city-row={r.isCity ? "1" : "0"} data-total-row={r.isTotal ? "1" : "0"}>
               <div className={styles.funnelPeriod}>
                 <span className={styles.funnelPeriodName}>{r.name}</span>
                 <span className={styles.funnelPeriodMeta}>{r.meta}</span>
               </div>
-              {renderRowCells(r.vals, r.dlNote, r.partial)}
+              {renderRowCells(r.vals, r.dlNote, r.partial, r.isCity)}
             </div>
           ))}
         </div>
       </div>
 
+      {/* ── WHAT A CITY MEANS HERE, IN VISIBLE TEXT ─────────────────────────────────────────────
+          Someone will put this table in a board deck and read a city row as local activity. The two
+          facts that stop them belong on the same line and on the page, not in a tooltip: the city is
+          DECLARED AT SIGNUP, and downloads have no city at all. Asserted as visible text. */}
+      <p className={styles.funnelFootnote} data-testid="funnel-city-rule">
+        A city here is the city a player <b>declared when they registered</b>, not where they played.
+        So Austin&rsquo;s funnel is Austin&rsquo;s signups, not Austin&rsquo;s operations. Downloads
+        have no city at all: the app stores report country and region, never city, so that column and
+        its first conversion are a dash on every city row.
+      </p>
     </div>
   );
 }
 
 // Builds a row's stage + conversion cells. The conversion between stage i and i+1
 // is b/a (b = vals[i+1], a = vals[i]); a dash when either is null or a is 0.
-function renderRowCells(vals: (number | null)[], dlNote?: string | null, partial = false): ReactNode[] {
+function renderRowCells(vals: (number | null)[], dlNote?: string | null, partial = false, isCity = false): ReactNode[] {
   // Bars are a share of the LARGEST stage in the row (Downloads when known, else
   // Registrations) so the funnel narrows left → right even now that Downloads is
   // a real, larger-than-registrations value.
@@ -294,12 +462,21 @@ function renderRowCells(vals: (number | null)[], dlNote?: string | null, partial
     const stageDashed = isNull;
     if (isNull && !stageDashed) throw new Error(`funnel: null stage at ${i} not dashed`);
     out.push(
-      <div key={`s${i}`} className={`${styles.funnelStage} ${stageDashed ? styles.funnelStageNull : ""}`}>
+      <div key={`s${i}`} data-testid="funnel-cell" data-stage={i === 0 ? "downloads" : STAGES[i].label.toLowerCase().replace(/\s+/g, "-")}
+        className={`${styles.funnelStage} ${stageDashed ? styles.funnelStageNull : ""}`}>
         <span className={styles.funnelSnum}>{isNull ? "—" : fmtInt(v)}</span>
         {/* STORE COVERAGE, on the Downloads cell only. A bare combined number on a row the two
             stores do not both cover would read as one metric when it is two spliced together. */}
         {i === 0 && dlNote && (
           <span className={styles.funnelDlNote} data-testid="funnel-dl-coverage">{dlNote}</span>
+        )}
+        {/* ── THE DASH CARRIES ITS REASON, ON THE CELL ─────────────────────────────────────────
+            The footnote says it once for the table; this says it where the dash is. A dash with no
+            reason beside it reads as missing data that somebody could go and fetch, and this one
+            cannot be fetched: the stores report country and region and there is no city dimension to
+            split. A number here would be invented. */}
+        {i === 0 && isCity && (
+          <span className={styles.funnelDlNote} data-testid="funnel-why-dash">Installs carry no city</span>
         )}
         {isNull ? (
           <span className={styles.funnelSbar} style={{ background: "transparent" }} />
