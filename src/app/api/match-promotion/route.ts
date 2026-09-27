@@ -15,7 +15,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { fetchPromoWeek, CHANNEL_KEYS, normalizePromoCode, type ChannelKey } from "@/lib/matchPromotion";
-import { isTagKey } from "@/lib/promoTags";
+import { TAG_META, isTagKey } from "@/lib/promoTags";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -69,7 +69,11 @@ type SaveBody = {
   };
   /* ── A FIELD TAG, TOGGLED ─────────────────────────────────────────────────────────────────
    * Keyed on the FIELD. `on` false removes it; the unique constraint makes the toggle safe. */
-  tag?: { fieldId?: number; tag?: string; on?: boolean };
+  /* ── A TAG, AT ONE OF TWO SCOPES ──────────────────────────────────────────────────────────
+   * priority carries matchId; key_field and starting_11 carry fieldId. THE SCOPE IS NOT TRUSTED
+   * FROM THE CLIENT: it is re-derived from the tag via TAG_META, and 0193's promo_tags_scope_ck is
+   * the backstop if this route is ever wrong. */
+  tag?: { fieldId?: number; matchId?: number; tag?: string; on?: boolean };
 };
 
 /** "" and whitespace collapse to NULL. An empty string is not a value, it is a cleared field. */
@@ -378,34 +382,84 @@ async function saveTag(
   auth: { supabase: SupabaseClient; email?: string | null },
   t: NonNullable<SaveBody["tag"]>,
 ): Promise<Response> {
-  const fieldId = Number(t.fieldId);
-  if (!Number.isInteger(fieldId) || fieldId <= 0) {
-    return Response.json({ outcome: "FAILED", error: "A tag needs a field." }, { status: 400 });
-  }
   if (!isTagKey(t.tag)) {
     return Response.json({ outcome: "FAILED", error: `Unknown tag ${JSON.stringify(t.tag)} - nothing written.` }, { status: 400 });
   }
+  /* THE SCOPE COMES FROM THE TAG, NOT FROM THE CALLER. A client sending a fieldId for `priority`
+   * would otherwise write a field-scoped priority row, the exact shape 0193 exists to forbid; here
+   * it cannot be attempted. The database still checks, because a route is not a constraint. */
+  const scope = TAG_META[t.tag].scope;
+  const id = Number(scope === "match" ? t.matchId : t.fieldId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return Response.json({
+      outcome: "FAILED",
+      error: scope === "match" ? "A match tag needs a match." : "A field tag needs a field.",
+    }, { status: 400 });
+  }
+  const col: "match_id" | "field_id" = scope === "match" ? "match_id" : "field_id";
   const sb = auth.supabase;
   try {
     if (t.on === false) {
-      const { error } = await sb.from("match_promotion_field_tag").delete().eq("field_id", fieldId).eq("tag", t.tag);
+      /* .select() SO THE AUDIT CAN NAME THE ROW. A delete by predicate knows what it matched only
+       * if it asks. */
+      const { data, error } = await sb.from("promo_tags").delete().eq(col, id).eq("tag", t.tag).select("id");
       if (error) {
         const named = missingTableError(error.message);
         return Response.json({ outcome: "FAILED", error: named ?? error.message }, { status: named ? 503 : 500 });
       }
-      return Response.json({ outcome: "LANDED", fieldId, tag: t.tag, on: false });
+      await auditTag(sb, "delete", data?.[0]?.id ?? null, t.tag, col, id, auth.email ?? null);
+      return Response.json({ outcome: "LANDED", scope, id, tag: t.tag, on: false });
     }
-    /* UPSERT ON THE CONSTRAINT rather than select-then-insert. The read-then-write has a window
-     * two operators can both pass through, and the failure is a duplicate nobody can see. */
-    const { error } = await sb.from("match_promotion_field_tag")
-      .upsert({ field_id: fieldId, tag: t.tag, set_by: auth.email ?? null }, { onConflict: "field_id,tag" });
+    /* UPSERT ON THE SCOPE'S OWN PARTIAL UNIQUE INDEX rather than select-then-insert: the
+     * read-then-write has a window two operators can both pass through and the failure is a
+     * duplicate nobody can see. 0193 split the old UNIQUE (field_id, tag) into one partial index
+     * per scope, so the conflict target is per scope too. */
+    const row: Record<string, unknown> = { [col]: id, tag: t.tag, set_by: auth.email ?? null };
+    const { data, error } = await sb.from("promo_tags")
+      .upsert(row, { onConflict: `${col},tag` }).select("id");
     if (error) {
       const named = missingTableError(error.message);
       return Response.json({ outcome: "FAILED", error: named ?? error.message }, { status: named ? 503 : 500 });
     }
-    return Response.json({ outcome: "LANDED", fieldId, tag: t.tag, on: true });
+    await auditTag(sb, "insert", data?.[0]?.id ?? null, t.tag, col, id, auth.email ?? null);
+    return Response.json({ outcome: "LANDED", scope, id, tag: t.tag, on: true });
   } catch (e) {
     return Response.json({ outcome: "FAILED", error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
+}
+
+/* ── THE AUDIT, WHICH WAS MISSING ─────────────────────────────────────────────────────────────
+ * 0190 widened fin_change_log's table_name allowlist FOR A CALL THAT WAS NEVER WIRED: this route had
+ * zero audit calls, so every tag write since has gone unlogged against the standing rule that every
+ * write goes through the change log. My gap, from 0190. 0193 permits 'promo_tags'.
+ *
+ * BEST EFFORT, AND IT NEVER THROWS OVER THE WRITE. The write already happened; a logging outage must
+ * not turn a landed edit into an error the operator retries into a duplicate. Same contract as
+ * finLog in api/admin/fields/assign and financeAudit.logChange in the browser.
+ *
+ * A THIRD COPY, KNOWINGLY. One shared helper would mean editing financeAudit (browser, anon client)
+ * and the fields/assign route (a money path with its own testing bar) for an audit refactor nobody
+ * asked for. The three agree on the contract and each says so. If a fourth appears, extract then.
+ *
+ * A TAG CARRIES NO PLAYER PII, so the row is logged whole.
+ */
+async function auditTag(
+  sb: SupabaseClient, action: "insert" | "delete", rowId: number | null,
+  tag: string, col: "match_id" | "field_id", id: number, email: string | null,
+): Promise<void> {
+  try {
+    const { error } = await sb.from("fin_change_log").insert({
+      table_name: "promo_tags",
+      row_id: rowId,
+      action,
+      changed_by: email ?? "unknown",
+      before_json: null,
+      after_json: action === "delete" ? null : { [col]: id, tag },
+      note: `promo tag ${tag} ${action === "delete" ? "cleared" : "set"} on ${col} ${id}`,
+    });
+    if (error) throw new Error(error.message);
+  } catch (e) {
+    console.error("fin_change_log insert failed (tag write already applied):", e);
   }
 }
 

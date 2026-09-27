@@ -23,7 +23,7 @@ import { useMatchData } from "@/lib/useMatchData";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { getCancelPatterns, rollUpSlotRisk, clustersForField, slotRiskKey, type SlotRisk } from "@/lib/cancelPatterns";
 import { normalizeMatchName } from "@/lib/venueNormalization";
-import { PARTNER_BADGE, TAG_KEYS, TAG_META, splitTags, tagsInUse, isTagKey, type TagKey } from "@/lib/promoTags";
+import { PARTNER_BADGE, TAG_KEYS, TAG_KEY_ORDER, TAG_META, splitTags, tagTitle, tagsAtScope, tagsInUse, isTagKey, type TagKey } from "@/lib/promoTags";
 import { weekQueueEntries, weekQueues, isPastWeek, defaultDayIdx, tabCounts, type QueueEntry } from "@/lib/promoDayQueue";
 import {
   CHANNELS, NEW_FLAG_LABEL, channelsOn, codeFor, coverageCaption, coverageStateOf, coverageSummary,
@@ -59,8 +59,10 @@ export const VIEW_LABEL: Record<PromoView | "due" | "week", string> = {
   coverage: "Coverage",
   due: "Due",
   week: "Week",
+  /* TITLE CASE PER WORD, not just the first letter: lowercasing "KEY FIELD" and capitalising once
+   * gives "Key field", which sits badly next to "Starting 11" in the same strip. */
   ...Object.fromEntries(TAG_KEYS.map((k) => [k, TAG_META[k].label
-    .toLowerCase().replace(/^./, (c) => c.toUpperCase())])) as Record<TagKey, string>,
+    .toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase())])) as Record<TagKey, string>,
 };
 
 /* THE PHONE'S OWN LIST. Due and Week are shapes the desktop does not have (see
@@ -283,11 +285,16 @@ export default function MatchPromotionView() {
     return out;
   }, [week]);
   const coversOf = useCallback((m: PromoMatch) => (week ? generalsCovering(m, week.generals, week.days) : []), [week]);
-  /* TAGS ARE KEYED ON THE FIELD, so a pitch reads the same on every tile it appears on rather than
-   * being re-tagged each week. A match with no field simply has none. */
+  /* ── TAGS FROM BOTH SCOPES, RAW AND UNSUPPRESSED ──────────────────────────────────────────
+   * priority is keyed on the MATCH and dies with it; key_field and starting_11 are keyed on the
+   * FIELD and ride every match at that pitch. This returns the TRUE set. The tile suppresses
+   * priority under key_field for display (tagsForDisplay) and THE PANEL MUST NOT — a toggle reading
+   * the suppressed set would come up dark on a priority that IS set, and the next save would
+   * silently clear it. */
   const tagsOf = useCallback((m: PromoMatch): TagKey[] => {
-    const raw = m.fieldId != null ? (week?.tagsByField?.[m.fieldId] ?? []) : [];
-    return raw.filter(isTagKey);
+    const field = m.fieldId != null ? (week?.tagsByField?.[m.fieldId] ?? []) : [];
+    const match = week?.tagsByMatch?.[m.apiId] ?? [];
+    return [...match, ...field].filter(isTagKey);
   }, [week]);
   /* ── THE PARTNER BADGE, READ-ONLY, DERIVED FROM THE CONTRACT ──────────────────────────────
    * A Set because every tile asks. week.partnerFields is computed server-side from
@@ -312,10 +319,15 @@ export default function MatchPromotionView() {
     return { res, j: await res.json().catch(() => ({} as Record<string, unknown>)) };
   }, []);
 
-  const toggleTag = useCallback(async (fieldId: number, tag: TagKey, on: boolean) => {
+  /* THE SCOPE IS DERIVED FROM THE TAG, never passed in: TAG_META owns it and the database enforces
+   * it (promo_tags_scope_ck), so a caller cannot address the wrong column even by accident. */
+  const toggleTag = useCallback(async (m: PromoMatch, tag: TagKey, on: boolean) => {
     setSaving(true);
     try {
-      const { res, j } = await postPromo({ tag: { fieldId, tag, on } });
+      const scoped = TAG_META[tag].scope === "match"
+        ? { matchId: m.apiId, tag, on }
+        : { fieldId: m.fieldId, tag, on };
+      const { res, j } = await postPromo({ tag: scoped });
       if (!res.ok || j?.outcome !== "LANDED") {
         setToast({ msg: String(j?.error ?? "That tag did not save."), bad: true });
         return;
@@ -402,6 +414,7 @@ export default function MatchPromotionView() {
         week={week} tab={mTab} setTab={setMTab}
         jobs={jobs} overdue={overdue} onReload={() => load(weekRef)} riskOf={riskOf}
         coverOf={(m) => coverage.get(m.apiId) ?? "none"} coversOf={coversOf} tagsOf={tagsOf}
+        onToggleTag={(m, t, on) => void toggleTag(m, t, on)}
         openId={openId} draft={draft} setDraft={setDraft} dirty={dirty}
         onOpen={openMatch} onClose={closePanel} onSave={() => void save()}
         saving={saving} toast={toast}
@@ -476,7 +489,8 @@ Which matches get promoted, on which channels, and when the push goes out.
           : <Plan week={week} byCity={tab === "plan" ? byCity : byCityTagged} openId={openId} onOpen={openMatch}
                    zone={zone} riskOf={riskOf}
                    coverage={coverage} coversOf={coversOf} tagsOf={tagsOf} partnerOf={partnerOf}
-                   onAddGeneral={openGeneral} viewTag={viewTag} editing={open != null && draft != null} />}
+                   onAddGeneral={openGeneral} viewTag={viewTag}
+                   editing={open != null && draft != null} />}
 
 
       </div>
@@ -506,7 +520,7 @@ Which matches get promoted, on which channels, and when the push goes out.
       {open && draft && (
         <MatchEditorPanel m={open} draft={draft} setDraft={setDraft} zone={zone} setZone={setZone}
           dirty={dirty} saving={saving} toast={toast} tags={tagsOf(open)} partner={partnerOf(open)}
-          onToggleTag={(t, on) => void toggleTag(open.fieldId as number, t, on)}
+          onToggleTag={(t, on) => void toggleTag(open, t, on)}
           onSave={() => void save()} onClose={closePanel} />
       )}
       {toast && !open && (
@@ -515,6 +529,44 @@ Which matches get promoted, on which channels, and when the push goes out.
     </div>
   );
 }
+
+/* ── THE TILE'S BORDER, IN ONE PLACE, BECAUSE THE KEY DRAWS ITSELF FROM IT ────────────────────
+ *
+ * The key used to be four hand-drawn stubs beside four words. A picture of the tiles drifts from the
+ * tiles: whoever changes a rail changes it here and the key keeps showing the old one, and nothing
+ * fails. So the key's swatches call THIS, with r = 0, and are miniatures of the real thing.
+ *
+ * border-l-dotted IS NOT A TAILWIND CLASS. Tailwind has border-dotted for all four sides and nothing
+ * for one edge, so the first version of the covered rail emitted no rule at all and rendered SOLID,
+ * identical to an own push — the one distinction that state exists to make. The dotted edge is an
+ * inline style on the caller (tile and swatch alike) and the assertion reads the COMPUTED value
+ * rather than the class list, which is what caught it.
+ */
+function tileBorderFor(cover: ReturnType<typeof coverageOf>, r: number): string {
+  if (cover === "cancelled") return "border-dashed border-cream-line bg-[#f7f8f7]";
+  if (r > 0) return WASH[r as 1 | 2 | 3 | 4] ?? "border-cream-line bg-white";
+  if (cover === "needs-decision") return "border-amber-300 bg-amber-50";
+  if (cover === "covered") return "border-cream-line border-l-[3px] border-l-mint bg-white";
+  if (cover === "none") return "border-dashed border-cream-line bg-white";
+  return "border-cream-line border-l-[3px] border-l-mint bg-white";
+}
+
+/** True when this state's left edge must be dotted. The ONLY way to dot one edge; see above. */
+const tileDotted = (cover: ReturnType<typeof coverageOf>): boolean => cover === "covered";
+
+/* ── THE FOUR TILE STATES THE KEY EXPLAINS, VERBATIM AND IN THIS ORDER ────────────────────────
+ * The label always names a PUSH. The sentence is free to call the activity promotion, which is why
+ * the old "the key never says promo" rule is retired rather than bent: pinning the exact words does
+ * that job and cannot be argued with later.
+ *
+ * THE CANCELLED ROW DOES NOT MENTION THE BOOKED COUNT, deliberately: the tile already prints it in
+ * the one place it matters, and repeating it in a key spends a line saying something already said. */
+const TILE_STATE_KEY: readonly [ReturnType<typeof coverageOf>, string, string][] = [
+  ["planned", "Match push", "Promoted individually."],
+  ["covered", "Group push", "Included in a city or field push."],
+  ["none", "No push planned", "No promotion scheduled."],
+  ["cancelled", "Cancelled", "Match called off."],
+];
 
 /* ── THE MATCH EDITOR AS A FIXED SIDE PANEL ───────────────────────────────────────────────────
  *
@@ -559,33 +611,57 @@ function MatchEditorPanel({ m, draft, setDraft, zone, setZone, dirty, saving, to
             set a tag. Still keyed on the FIELD: tagging this match tags the pitch, on every tile it
             appears on, this week and next. PARTNER sits alongside as a statement rather than a
             control — the contract sets it, nobody here can. */}
-        {m.fieldId != null && (
-          <div className="mb-3 flex flex-wrap items-center gap-1.5" data-testid="tag-editor">
-            <span className="text-[10px] font-extrabold uppercase tracking-[0.08em] text-deep-green/45">Field tags</span>
-            {partner && (
-              <span data-testid="partner-panel-badge" title={PARTNER_BADGE.meaning}
-                className="inline-flex min-h-[32px] items-center rounded-[7px] border px-2.5 text-[11px] font-extrabold tracking-[0.03em]"
-                style={{ color: PARTNER_BADGE.colour, borderColor: PARTNER_BADGE.colour, background: "transparent" }}>
-                {PARTNER_BADGE.label}
-                <i className="ml-1.5 text-[9px] font-bold not-italic opacity-70">from the contract</i>
-              </span>
-            )}
-            {TAG_KEYS.map((t) => {
-              const on = tags.includes(t);
-              return (
-                <button key={t} type="button" data-testid="tag-toggle" data-t={t} data-on={on ? "1" : "0"}
-                  disabled={saving} title={TAG_META[t].meaning}
-                  onClick={() => onToggleTag(t, !on)}
-                  className="min-h-[32px] rounded-[7px] border px-2.5 text-[11px] font-extrabold tracking-[0.03em]"
-                  style={on
-                    ? { color: "#fff", background: TAG_META[t].colour, borderColor: TAG_META[t].colour }
-                    : { color: TAG_META[t].colour, borderColor: TAG_META[t].colour, background: "transparent" }}>
-                  {TAG_META[t].label}
-                </button>
-              );
-            })}
-          </div>
-        )}
+        {/* ── TAGS, GROUPED BY SCOPE, AND THE HEADING IS THE WHOLE FIX ─────────────────────────
+            Three pills that look alike where one affects a match and two affect a week of them is
+            how someone tags one match and finds seven tagged. "Every match at <field>" says out loud
+            what the control does before it is pressed.
+            THE TOGGLES READ THE TRUE SET, not the tile's suppressed one: a PRIORITY hidden under a
+            KEY FIELD still comes up lit here, because a toggle showing it dark would let the next
+            save clear a tag nobody meant to clear. */}
+        <div className="mb-3" data-testid="tagset">
+          <p className="m-0 mb-1.5 text-[10px] font-extrabold uppercase tracking-[0.08em] text-deep-green/45">Tags</p>
+          {(["match", "field"] as const).map((scope) => {
+            const keys = tagsAtScope(scope);
+            if (keys.length === 0) return null;
+            // A FIELD-SCOPED GROUP NEEDS A FIELD. A match with no field_id can still take PRIORITY.
+            if (scope === "field" && m.fieldId == null) return null;
+            return (
+              <div key={scope} data-testid="tagscope" data-scope={scope}
+                className="mb-1.5 rounded-[9px] border border-cream-line bg-[#fbfdfc] px-2.5 py-2">
+                <span className="mb-1.5 block text-[10px] font-extrabold uppercase tracking-[0.06em] text-deep-green/45">
+                  {scope === "match" ? "This match only" : `Every match at ${m.venue}`}
+                </span>
+                <span className="flex flex-wrap gap-1.5">
+                  {keys.map((t) => {
+                    const on = tags.includes(t);
+                    return (
+                      <button key={t} type="button" data-testid="tag-toggle" data-t={t} data-on={on ? "1" : "0"}
+                        aria-pressed={on} disabled={saving} title={tagTitle(t)}
+                        onClick={() => onToggleTag(t, !on)}
+                        className="min-h-[32px] rounded-[7px] border px-2.5 text-[11px] font-extrabold tracking-[0.03em]"
+                        style={on
+                          ? { color: "#fff", background: TAG_META[t].colour, borderColor: TAG_META[t].colour }
+                          : { color: TAG_META[t].colour, borderColor: TAG_META[t].colour, background: "transparent" }}>
+                        {TAG_META[t].label}
+                      </button>
+                    );
+                  })}
+                  {/* PARTNER SITS IN THE FIELD GROUP AS A STATEMENT, NOT A CONTROL. It belongs to the
+                      venue, the contract sets it, and a disabled button would say "you may not"
+                      where the truth is "this is". */}
+                  {scope === "field" && partner && (
+                    <span data-testid="partner-panel-badge" title={PARTNER_BADGE.meaning}
+                      className="inline-flex min-h-[32px] items-center rounded-[7px] border px-2.5 text-[11px] font-extrabold tracking-[0.03em]"
+                      style={{ color: PARTNER_BADGE.colour, borderColor: PARTNER_BADGE.colour, background: "transparent" }}>
+                      {PARTNER_BADGE.label}
+                      <i className="ml-1.5 text-[9px] font-bold not-italic opacity-70">from the contract</i>
+                    </span>
+                  )}
+                </span>
+              </div>
+            );
+          })}
+        </div>
         {/* ONE EDITOR, SHARED WITH THE PHONE. Not a desktop copy of a channel block. */}
         <PushPlanEditor m={m} draft={draft} setDraft={setDraft} zone={zone} setZone={setZone} />
       </div>
@@ -973,9 +1049,7 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
   /* THE KEY READS THE WHOLE WEEK, NOT THE FILTERED GRID. On a tag view every tile carries that tag
    * by construction, so a key built from the visible set would list exactly one entry and stop
    * explaining the others. */
-  const keyTags = tagsInUse(new Map(week.matches
-    .filter((m) => m.fieldId != null)
-    .map((m) => [m.fieldId as number, tagsOf(m)])));
+  const keyTags = tagsInUse(week.matches.map((m) => tagsOf(m)));
   const anyPartner = week.matches.some((m) => partnerOf(m));
   /* THE TILE COUNT, FROM THE ROWS BEING RENDERED. On a tag view this is the whole claim the view
    * makes, so it is counted off `byCity` rather than recomputed from the week. */
@@ -995,40 +1069,58 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
             {" "}the day queue above is the whole week, unfiltered
           </div>
         )}
-        {/* ── THE KEY, AND ONLY FOR TAGS ACTUALLY ON SCREEN ─────────────────────────────────
-            A key listing every tag that could exist is a key nobody reads, which this codebase
-            has already written down once about a permanent caveat. Every tag also carries its
-            meaning in a title, so this is a reference rather than a prerequisite. */}
-        {(keyTags.length > 0 || anyPartner) && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="tag-key">
-            {keyTags.map((t) => (
-              <span key={t} className="inline-flex items-center gap-1.5 text-[11px] text-deep-green/65" data-testid="tag-key-item">
-                <i className="rounded-[4px] border px-[4px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.03em]"
-                  style={{ color: TAG_META[t].colour, borderColor: TAG_META[t].colour }}>{TAG_META[t].label}</i>
-                {TAG_META[t].meaning}
+        {/* ── THE KEY: TWO GRIDS OF ROWS, EACH SWATCH RENDERED FROM THE TILE'S OWN RULES ──────
+            The swatch strip it replaces was four coloured stubs and a word. These are LIVE SWATCHES:
+            each one is a miniature of the tile it explains, built from the same border expression
+            (tileBorderFor), so a key that drifts from the tiles is not possible without the tiles
+            changing too. The assertion reads the COMPUTED style, not the class name, which is what
+            caught border-l-dotted emitting nothing at all.
+
+            THE WORDING IS VERBATIM and the label and the sentence are separate elements, so a
+            mismatch names which half is wrong rather than handing back one long string. The label
+            always names a PUSH; the sentence is free to call the activity promotion. */}
+        <div className="mt-2" data-testid="key">
+          <div className="grid gap-x-5 gap-y-1 sm:grid-cols-2" data-testid="key-states">
+            {TILE_STATE_KEY.map(([state, label, sentence]) => (
+              <span key={state} data-testid="keystate" data-state={state}
+                className="inline-flex items-baseline gap-2 text-[11px] text-deep-green/65">
+                {/* THE SWATCH IS THE TILE. Same border expression, same wash-free base. */}
+                <i data-testid="keyswatch" data-state={state}
+                  style={tileDotted(state) ? { borderLeftStyle: "dotted" } : undefined}
+                  className={`mt-[2px] inline-block h-[13px] w-[26px] flex-none rounded-[4px] border ${tileBorderFor(state, 0)} ${
+                    state === "cancelled" ? "opacity-60" : ""}`} />
+                <b data-testid="keylab" className="whitespace-nowrap font-extrabold text-deep-green/80">{label}</b>
+                <span data-testid="keysent">{sentence}</span>
               </span>
             ))}
-            {/* THE DERIVED BADGE IS IN THE SAME KEY. A reader sees one vocabulary on the tile and
-                should find one vocabulary here; that it comes from the contract rather than from a
-                click is what its own wording says. */}
-            {anyPartner && (
-              <span className="inline-flex items-center gap-1.5 text-[11px] text-deep-green/65" data-testid="tag-key-item">
-                <i data-testid="partner-key" className="rounded-[4px] border px-[4px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.03em]"
-                  style={{ color: PARTNER_BADGE.colour, borderColor: PARTNER_BADGE.colour }}>{PARTNER_BADGE.label}</i>
-                {PARTNER_BADGE.meaning}
-              </span>
-            )}
           </div>
-        )}
-        {/* ── TWO PARAGRAPHS DELETED, AND THE RULE KEPT ────────────────────────────────────
-            The first restated what clicking a tile does. The second was the whole NEW definition,
-            eight lines of prose above the grid, and EVERY BADGE ALREADY CARRIES IT in its own
-            title. Ryan: "also remove all this its jus tnoise."
-
-            THE ONE THING THE PARAGRAPH HAD THAT THE BADGE DID NOT was the week it compared
-            against, and the reason for printing it was good: a wrong week should be visible rather
-            than silent. So the dates moved INTO the badge's title rather than being lost. The rule
-            is still checkable, one hover away, on the thing it describes. */}
+          {/* THE TAGS IN USE THIS WEEK, in the key's own order: Starting 11, Priority, Key Field.
+              NO SCOPE LABEL. The sentences carry it ("for this match", "for all matches here")
+              better than a repeated lead-in did, and a label restating the sentence is noise. */}
+          {(keyTags.length > 0 || anyPartner) && (
+            <div className="mt-1.5 grid gap-x-5 gap-y-1 sm:grid-cols-2" data-testid="key-tags">
+              {keyTags.map((t) => (
+                <span key={t} data-testid="keyitem" data-t={t} title={tagTitle(t)}
+                  className="inline-flex items-baseline gap-2 text-[11px] text-deep-green/65">
+                  <i data-testid="tag-key-swatch"
+                    className="rounded-[4px] border px-[4px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.03em]"
+                    style={{ color: TAG_META[t].colour, borderColor: TAG_META[t].colour }}>{TAG_META[t].label}</i>
+                  <span>{TAG_META[t].why}</span>
+                </span>
+              ))}
+              {/* THE DERIVED BADGE IN THE SAME KEY, so a reader meets one vocabulary. */}
+              {anyPartner && (
+                <span data-testid="keyitem" data-t="partner" title={PARTNER_BADGE.meaning}
+                  className="inline-flex items-baseline gap-2 text-[11px] text-deep-green/65">
+                  <i data-testid="partner-key"
+                    className="rounded-[4px] border px-[4px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.03em]"
+                    style={{ color: PARTNER_BADGE.colour, borderColor: PARTNER_BADGE.colour }}>{PARTNER_BADGE.label}</i>
+                  <span>{PARTNER_BADGE.meaning}</span>
+                </span>
+              )}
+            </div>
+          )}
+        </div>
       </div>
       {/* ── THE PADDING GOES ON THE WEEK, NOT ON THE PAGE ──────────────────────────────────────
           THIS IS THE TRAP, AND IT WAS HIT ON THE FIRST ATTEMPT. Padding the page wrapper narrows
@@ -1113,7 +1205,7 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
                     {dayMatches.length === 0 && <div className="pt-1.5 text-[11.5px] text-deep-green/30">No sessions</div>}
                     {dayMatches.map((m) => <Tile key={m.apiId} m={m} open={m.apiId === openId} onOpen={onOpen} zone={zone}
                       priorLabel={priorLabel} priorWeeks={week.priorWeeks} risk={riskOf(m)} cover={coverage.get(m.apiId) ?? "none"}
-                      covers={coversOf(m)} tags={tagsOf(m)} partner={partnerOf(m)} />)}
+                      covers={coversOf(m)} tags={tagsOf(m)} partner={partnerOf(m)} shifted={m.shiftedFrom} />)}
                   </div>
                 );
               })}
@@ -1148,11 +1240,13 @@ function coverFirst(m: PromoMatch, zone: ZoneMode): string {
  * PLANNED TILES STAY DISTINCT BY WEIGHT, NOT BY LABEL. A tile with a plan carries chips and a push
  * line and a solid left rail; a tile without carries a dashed border and almost no ink. The eye
  * finds the planned ones because they are the only ones with anything in them. */
-function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, covers, tags, partner }: {
+function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shifted, covers, tags, partner }: {
   m: PromoMatch; open: boolean; onOpen: (m: PromoMatch, el: HTMLElement) => void; zone: ZoneMode;
   priorLabel: string; priorWeeks: number; risk?: SlotRisk | null;
   /** planned | covered | none | needs-decision | cancelled, derived once at page level. */
   cover: ReturnType<typeof coverageOf>;
+  /** What this slot ran at before, when its time moved INSIDE the cluster window. Null otherwise. */
+  shifted: { times: string[]; weeks: number } | null;
   /** The general pushes that carried it, for the label. Empty unless `cover` is "covered". */
   covers: GeneralPush[];
   tags: TagKey[];
@@ -1165,6 +1259,10 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, cove
   const summary = tileSummary(m, zone);
   const cancelled = cover === "cancelled";
   const r = risk?.cancelCount ?? 0;
+  /* KEY FIELD SWALLOWS PRIORITY HERE, inside splitTags -> tagsForDisplay. A match at a KEY FIELD is
+   * already one we are pushing harder, so a PRIORITY pill beside it says nothing and spends a third
+   * of the row. THE PANEL READS THE RAW SET and still lights the hidden toggle, which is what stops
+   * the next save clearing a tag nobody meant to clear. */
   const { shown: shownTags, more: moreTags } = splitTags(tags);
   /* THE CANCEL WASH IS THE OUTERMOST STATE except for a cancellation itself. A washed tile keeps
    * its own border colour, which is what stops orange-at-2 colliding with the amber that already
@@ -1175,18 +1273,7 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, cove
    *   no plan    dashed, no rail    nothing at all, not even a slate blast
    * A general push is real promotion, so a match it carried must not read as forgotten; it is not
    * a push written for that match, so it must not read the same either. */
-  const border =
-    cancelled ? "border-dashed border-cream-line bg-[#f7f8f7]"
-    : r > 0 ? WASH[r as 1 | 2 | 3 | 4]
-    : cover === "needs-decision" ? "border-amber-300 bg-amber-50"
-    /* border-l-dotted IS NOT A TAILWIND CLASS. Tailwind has border-dotted for all four sides and
-     * nothing for one, so the first version emitted no rule at all and the covered rail rendered
-     * SOLID — identical to an own push, which is the one distinction this state exists to make.
-     * The style below is the only way to dot one edge, and the assertion reads the computed value
-     * rather than the class list, which is what caught it. */
-    : cover === "covered" ? "border-cream-line border-l-[3px] border-l-mint bg-white"
-    : cover === "none" ? "border-dashed border-cream-line bg-white"
-    : "border-cream-line border-l-[3px] border-l-mint bg-white";
+  const border = tileBorderFor(cover, r);
   return (
     <div data-testid="match-tile" data-state={m.state} data-api-id={m.apiId} data-open={open ? "1" : "0"}
       data-new={m.newFlag ?? ""} data-r={r} data-cover={cover}
@@ -1197,8 +1284,16 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, cove
       /* THE EXACT TIME LIVES IN THE TITLE, because the tile is coloured on a slot key whose times
          are clustered — a slot that drifted from 8:00 to 8:30 is one slot to a player and must be
          one slot here, but the operator still needs to see which time this match actually is. */
-      title={risk ? `Cancelled in ${r} of the last 4 weeks. Seen at ${risk.times.join(", ")}.` : undefined}
-      style={cover === "covered" ? { borderLeftStyle: "dotted" } : undefined}
+      /* ── THE SHIFT THAT NO LONGER BADGES STILL SAYS SO ON HOVER ────────────────────────────
+         A slot that moved INSIDE the cluster window is one slot to the cancel ramp, so it stopped
+         badging NEW TIME - the tile cannot say "this slot cancelled 2 of 4" and "this time is new"
+         at once and be believed. What the operator actually wanted was the old time, which a badge
+         could never carry. It goes here, beside the cancel history, in the one tooltip. */
+      title={[
+        shifted && `Moved from ${shifted.times.join(", ")}, which ran ${shifted.weeks} of the last ${priorWeeks} weeks. Same slot, so it is not new.`,
+        risk && `Cancelled in ${r} of the last 4 weeks. Seen at ${risk.times.join(", ")}.`,
+      ].filter(Boolean).join(" ") || undefined}
+      style={tileDotted(cover) ? { borderLeftStyle: "dotted" } : undefined}
       onClick={(e) => onOpen(m, e.currentTarget as HTMLElement)}
       /* NO bg-white IN THE BASE. It and the wash class have equal specificity, so which one wins is
          decided by Tailwind's own emission order rather than by this line — the wash lost, and
@@ -1256,7 +1351,7 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, cove
             </i>
           )}
           {shownTags.map((t) => (
-            <i key={t} data-testid="tag" data-t={t} title={TAG_META[t].meaning}
+            <i key={t} data-testid="tag" data-t={t} title={tagTitle(t)}
               className="rounded-[4px] border px-[4px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.03em]"
               style={{ color: TAG_META[t].colour, borderColor: TAG_META[t].colour, background: "transparent" }}>
               {TAG_META[t].label}

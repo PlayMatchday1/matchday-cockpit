@@ -210,10 +210,20 @@
   .tags{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}
   .tag{font-size:8.5px;font-weight:800;letter-spacing:.03em;border-radius:4px;padding:1px 5px;
     background:transparent;border:1px solid currentColor;white-space:nowrap}
-  .tag[data-t="key"]{color:#2563EB}
-  .tag[data-t="prio"]{color:#7C3AED}
+  .tag[data-t="prio"],.tag[data-t="key"]{color:#7C3AED}
   .tag[data-t="s11"]{color:#DB2777}
-  .tag[data-t="ptnr"]{color:#0891B2}
+  .keyscope{display:block;font-size:10px;letter-spacing:.05em;text-transform:uppercase;
+    color:#6d7b74;font-weight:700}
+  .tagset{display:flex;flex-direction:column;gap:9px;margin:0 0 15px}
+  .tagscope{display:flex;flex-wrap:wrap;align-items:center;gap:7px}
+  .tagscopehead{flex:0 0 100%;font-size:10px;letter-spacing:.05em;text-transform:uppercase;
+    color:#6d7b74;font-weight:700}
+  .tagtog{min-height:32px;padding:0 11px;border-radius:7px;background:transparent;cursor:pointer;
+    font:700 10.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:.05em;
+    border:1px solid currentColor}
+  .tagtog[data-t="prio"],.tagtog[data-t="key"]{color:#7C3AED}
+  .tagtog[data-t="s11"]{color:#DB2777}
+  .tagtog[data-on="0"]{color:#8c9a93}
   .tag.more{color:var(--faint);border-color:var(--cream-line)}
   /* THE KEY, AND ONLY FOR TAGS ACTUALLY IN USE THIS WEEK. A permanent legend listing every tag
      that could exist is a legend nobody reads, which this codebase has already written down once. */
@@ -361,20 +371,68 @@ const DIDX = Object.fromEntries(DAYS.map((d,i)=>[d.k,i]));
 const MIN = t => { const m=t.match(/(\d+):(\d+) (AM|PM)/); let h=+m[1]%12; if(m[3]==="PM") h+=12; return h*60+ +m[2]; };
 const isOverdue = (k,t) => DIDX[k] < DIDX[NOW.day] || (k===NOW.day && MIN(t) < NOW.mins);
 
-/* TAGS PER FIELD. Manual, several per field. KEY is Ryan's "new field" tag renamed: NEW FIELD is
- * already an automatic badge computed against last week's slate, and two pills reading the same
- * words, one earned and one typed, makes the earned one untrustworthy. */
+/* TAGS, AND THE TWO SCOPES THEY LIVE AT. This is the correction: PRIORITY is a property of a
+ * MATCH, not of a field. "We are pushing this one harder" is a thing you say about Wednesday 7pm
+ * at Hattrick, not about Hattrick. KEY FIELD and STARTING 11 really are field facts and stay there.
+ *
+ * Putting PRIORITY on the match also kills its staleness problem outright: a match happens and is
+ * gone, so the tag cannot outlive what it describes. STARTING 11 is now the only hand-set tag that
+ * can go stale, which is why it is the only one whose sentence says so.
+ *
+ * PARTNER is deleted rather than moved. It was derivable from basisOf() all along, and the
+ * hand-set version was wrong on the one field that carried it and missing from all five that
+ * qualified. A tag that is wrong six times out of six is worse than no tag.
+ *
+ * KEY FIELD IS THE SAME CONCEPT AT FIELD SCOPE, which is Ryan's framing: "the priority version of
+ * the full field". So the two share a colour and differ only in label, because colour carries the
+ * concept and the label carries the scope. That is a deliberate break from "each tag a different
+ * colour": two names for one idea rendered in two colours would read as two ideas.
+ *
+ * It also means they are redundant together. A match at a KEY FIELD is already a match we are
+ * pushing harder, so a PRIORITY pill beside it says nothing and costs a third of the row. KEY
+ * FIELD wins and PRIORITY is suppressed on the tile. The panel still shows both toggles with
+ * their true state, because that is where you go to change one. */
+/* RYAN'S WORDING, VERBATIM. It carries the scope inside the sentence ("for this match", "for all
+ * matches here", "at this field"), which is why the separate scope lead-in came back out: it was
+ * saying a second time what the sentence already says.
+ *
+ * It also settles the promo-versus-push argument rather than losing it. A PUSH is the thing the
+ * operator sends and it is called a push everywhere. A PROMO is a discount code. Starting 11's
+ * "active promo" is a code being live, which is the correct word for it, and "extra promotion" is
+ * the activity rather than the object. Neither one renames a push. */
 const TAGDEF = {
-  key: {label:"KEY FIELD",  why:"Worth watching this week."},
-  prio:{label:"PRIORITY",   why:"A field we are pushing harder. Set by hand and it stays until someone clears it."},
-  s11: {label:"STARTING 11",why:"Starting 11 is live at this field. Set by hand, so it can go stale when a venue's code ends."},
-  ptnr:{label:"PARTNER",    why:"Run with a partner operator."} };
-const TAGS = {
-  "NEMP": ["key","s11"], "Hattrick": ["prio"], "Crockett High School": ["key"],
-  "Parmer": ["s11"], "PRUMC": ["prio","s11"], "Hattrick T.": ["ptnr"],
-  "Keswick Park (Chamblee)": ["key","prio","s11","ptnr"],
+  s11: {label:"STARTING 11",scope:"field", why:"Active promo at this field.",
+        /* THE CAVEAT SURVIVES ON HOVER. Ryan asked for a short line, and this is the only tag whose
+           claim can be wrong: it asserts a code is live while being set by hand. Off the row, still
+           findable. */
+        note:"Set by hand, so it can go stale when a venue's code ends."},
+  prio:{label:"PRIORITY",   scope:"match", why:"Extra promotion for this match."},
+  key: {label:"KEY FIELD",  scope:"field", why:"Extra promotion for all matches here."} };
+const TAG_ORDER = ["s11","prio","key"];
+
+/* FIELD SCOPE: one row per field, and it shows up on every match at that field. */
+const FIELD_TAGS = {
+  "NEMP": ["key","s11"], "Crockett High School": ["key"], "Parmer": ["s11"],
+  "PRUMC": ["s11"], "Keswick Park (Chamblee)": ["s11"],
 };
-const tagsOf = f => TAGS[f] ?? [];
+/* MATCH SCOPE: one row per match. Keswick Monday carries it and Keswick Wednesday does not, which
+ * is the whole point of the split rendered on screen: same field, same week, different tag rows. */
+const mkey = (city,day,time,venue) => `${city}|${day}|${time}|${venue}`;
+const MATCH_PRIORITY = new Set([
+  mkey("Atlanta","mon","8:00 PM","Keswick Park (Chamblee)"),
+  mkey("Austin","wed","7:00 PM","Hattrick"),
+  /* AND ONE THAT MUST NOT RENDER: NEMP is already a KEY FIELD, so this match's own PRIORITY is
+     swallowed rather than printed beside it. The panel still shows it set. */
+  mkey("Austin","mon","7:30 PM","NEMP"),
+]);
+/* PRIORITY LEADS. It is the one that is about this match on this day; the field tags are context
+ * that was already true last week. */
+const tagsSet = (venue, city, day, time) =>
+  (city && MATCH_PRIORITY.has(mkey(city,day,time,venue)) ? ["prio"] : []).concat(FIELD_TAGS[venue] ?? []);
+/* WHAT THE TILE SHOWS: the same set with PRIORITY dropped when KEY FIELD already covers it. */
+const tagsOf = (venue, city, day, time) => {
+  const t = tagsSet(venue, city, day, time);
+  return t.includes("key") ? t.filter(k => k !== "prio") : t; };
 
 const RISK = { "Hattrick":4, "Parmer":3, "NEMP":2, "Round Rock":2, "Westlake":1,
   "PRUMC":0, "Keswick Park (Chamblee)":0, "Crockett High School":0, "Stony Point":0 };
@@ -597,17 +655,24 @@ function drawPanel(){
 /* THE FOUR TILE STATES, ALWAYS. They are what the grid is saying, and unlike the tags every one
  * of them appears in any real week. The wording is Ryan's, which does more work than mine did:
  * "a push written for this match" beats "a push is set". */
+/* RYAN'S WORDING, VERBATIM. Shorter than mine everywhere and better in two places: "Promoted
+ * individually" says what the rail means rather than describing the database row behind it, and
+ * "Cancelled: match called off" drops my "with the players who had booked", which the tile already
+ * prints in the one place it matters. The label carries the object and it is always a push; the
+ * sentence may use promotion as an activity. Neither renames a push. */
 const STATE_KEY = [
-  ["planned",  "Match push",       "A push written for this match."],
-  ["covered",  "In a group push",  "Carried by a city or field push, with none of its own."],
-  ["none",     "No push planned",  "Nothing at all, individual or group."],
-  ["cancelled","Cancelled",        "The match was called off, with the players who had booked."],
+  ["planned",  "Match push",       "Promoted individually."],
+  ["covered",  "Group push",       "Included in a city or field push."],
+  ["none",     "No push planned",  "No promotion scheduled."],
+  ["cancelled","Cancelled",        "Match called off."],
 ];
 function drawKey(){
+  /* WALK MATCHES, NOT FIELDS. With PRIORITY living on the match, a key built from the field table
+     would silently omit it. */
   const used = new Set();
-  for (const wk of Object.values(WEEK()))
-    for (const rows of Object.values(wk))
-      for (const r of rows) tagsOf(r[1]).forEach(t => used.add(t));
+  for (const [city, wk] of Object.entries(WEEK()))
+    for (const [day, rows] of Object.entries(wk))
+      for (const r of rows) tagsOf(r[1], city, day, r[0]).forEach(t => used.add(t));
   document.getElementById("key").innerHTML =
     `<div class="keygrid">${STATE_KEY.map(([st,lab,why])=>
       `<span class="keyrow" data-testid="keystate" data-s="${st}">
@@ -617,8 +682,9 @@ function drawKey(){
        with a fragment: the four states earn their space by saying what they mean, and a tag that
        only says "worth watching" next to them reads as the lesser thing. */
     (used.size
-      ? `<div class="keygrid" data-testid="keytaggrid">${[...used].map(k =>
-          `<span class="keyrow" data-testid="keyitem" data-t="${k}">
+      ? `<div class="keygrid" data-testid="keytaggrid">${TAG_ORDER.filter(k=>used.has(k)).map(k =>
+          `<span class="keyrow" data-testid="keyitem" data-t="${k}"
+                 title="${TAGDEF[k].label}: ${TAGDEF[k].why}${TAGDEF[k].note?` ${TAGDEF[k].note}`:``}">
              <i class="tag keyswatchtag" data-t="${k}">${TAGDEF[k].label}</i>
              <span>${TAGDEF[k].why}</span></span>`).join("")}</div>`
       : "");
@@ -670,9 +736,9 @@ function drawWeek(){
                 ${r?`<i class="rchip" data-testid="rchip" data-r="${r}">${r}/4</i>`:""}
                 ${flag?`<i class="newb" data-testid="newb">${flag}</i>`:""}</span></div>
               <div class="tvenue">${venue}</div>
-              ${(()=>{const t=tagsOf(venue); if(!t.length) return "";
+              ${(()=>{const t=tagsOf(venue, city, d.k, time); if(!t.length) return "";
                 const shown=t.slice(0,3), rest=t.length-3;
-                return `<div class="tags" data-testid="tags">${shown.map(k=>`<i class="tag" data-testid="tag" data-t="${k}" title="${TAGDEF[k].label}: ${TAGDEF[k].why}">${TAGDEF[k].label}</i>`).join("")}${rest>0?`<i class="tag more" data-testid="tagmore">+${rest}</i>`:""}</div>`;})()}
+                return `<div class="tags" data-testid="tags">${shown.map(k=>`<i class="tag" data-testid="tag" data-t="${k}" title="${TAGDEF[k].label}: ${TAGDEF[k].why}${TAGDEF[k].note?` ${TAGDEF[k].note}`:``}">${TAGDEF[k].label}</i>`).join("")}${rest>0?`<i class="tag more" data-testid="tagmore">+${rest}</i>`:""}</div>`;})()}
               ${cancelled?`<div class="xline"><i class="xtag">Cancelled</i><span class="booked" data-testid="booked" data-heavy="${booked>=8?1:0}">${booked} booked</span></div>`:""}
               ${state==="covered"?`<span class="covtag" data-testid="covtag">in ${cov[0][1]?cov[0][1]+" slate":"city slate"}</span>`:""}
               ${chips?`<div class="chips">${chips.map(c=>`<i class="chip">${c}</i>`).join("")}</div>`:""}
@@ -708,7 +774,8 @@ function drawEditor(){
   if (!sel_tile) return;
   const { city, day, time, venue } = sel_tile;
   const dow = DAYS[DIDX[day]].dow, num = numOf(day);
-  const tags = tagsOf(venue);
+  const tags = tagsSet(venue, city, day, time);          // true state, for the toggles
+  const shown = tagsOf(venue, city, day, time);         // what the tile shows, for the head pills
   const codes = CODES[`${venue}|${day}`] ?? {};
   const on = ch => ch === "WhatsApp";
   document.getElementById("side").innerHTML = `
@@ -716,10 +783,29 @@ function drawEditor(){
       <button class="sideclose" data-testid="side-close" aria-label="Close">×</button>
       <div class="sidetitle" data-testid="side-title">${venue} · ${dow} ${time}</div>
       <div class="sidesub">${city} · ${dow} ${num} September</div>
-      ${tags.length?`<div class="tags" style="margin-top:7px">${tags.map(k=>
-        `<i class="tag" data-t="${k}" title="${TAGDEF[k].label}: ${TAGDEF[k].why}">${TAGDEF[k].label}</i>`).join("")}</div>`:""}
+      ${shown.length?`<div class="tags" style="margin-top:7px">${shown.map(k=>
+        `<i class="tag" data-t="${k}" title="${TAGDEF[k].label}: ${TAGDEF[k].why}${TAGDEF[k].note?` ${TAGDEF[k].note}`:``}">${TAGDEF[k].label}</i>`).join("")}</div>`:""}
     </div>
     <div class="sidebody">
+      <!-- TAGS ARE SET HERE, AND THE SCOPE IS THE LABEL. Ryan: "dont want to overcomplicate just
+           want easy way to add". One toggle each. But KEY FIELD applied from this panel lights up
+           every match at this field all week, and a control that does that without saying so is
+           how someone tags one match and finds seven tagged. The group heading is the whole fix. -->
+      <p class="srow">Tags</p>
+      <div class="tagset" data-testid="tagset">
+        <div class="tagscope" data-testid="tagscope" data-scope="match">
+          <span class="tagscopehead">This match only</span>
+          ${["prio"].map(k=>`<button class="tagtog" data-testid="tagtog" data-t="${k}"
+              data-on="${tags.includes(k)?1:0}" aria-pressed="${tags.includes(k)}"
+              title="${TAGDEF[k].label}: ${TAGDEF[k].why}${TAGDEF[k].note?` ${TAGDEF[k].note}`:``}">${TAGDEF[k].label}</button>`).join("")}
+        </div>
+        <div class="tagscope" data-testid="tagscope" data-scope="field">
+          <span class="tagscopehead">Every match at ${venue}</span>
+          ${["key","s11"].map(k=>`<button class="tagtog" data-testid="tagtog" data-t="${k}"
+              data-on="${tags.includes(k)?1:0}" aria-pressed="${tags.includes(k)}"
+              title="${TAGDEF[k].label}: ${TAGDEF[k].why}${TAGDEF[k].note?` ${TAGDEF[k].note}`:``}">${TAGDEF[k].label}</button>`).join("")}
+        </div>
+      </div>
       <p class="srow">Channels</p>
       ${CHANNELS.map(ch=>{
         const lit = on(ch), code = codes[ch==="WhatsApp"?"WA":ch] ?? "";

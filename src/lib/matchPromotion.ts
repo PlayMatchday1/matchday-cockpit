@@ -19,6 +19,17 @@ import { fetchVeoWeek, weekMonday, type VeoMatch } from "./veoSchedule";
 /* THE PARTNER RULE, NOT A COPY OF IT. basisOf calls this same predicate; see fetchPartnerFields.
  * From the LEAF module, never from fieldEconomics — that file reaches "use client" code. */
 import { isRevenueShareVenue } from "./revenueShare";
+/* ── THE SAME TIME CLUSTER THE CANCEL ROLLUP USES, NOT A SECOND ONE ──────────────────────────
+ * clusterMinutes and slotRiskKey are what rollUpSlotRisk keys a tile's cancel history by, so a
+ * time inside the window is already ONE SLOT to the ramp. Newness read exact minutes, so the tile
+ * could say "this slot cancelled 2 of 4" and "this time is new" at the same moment, and both could
+ * not be true. Two implementations of one window drift and nobody notices until they disagree on a
+ * tile, so this imports the window rather than restating it.
+ *
+ * SAFE TO IMPORT: cancelPatterns' only value imports are venueNormalization and weekWindow, both
+ * leaf files with no imports at all, and its useMatchData import is type-only. Checked, because the
+ * identical-looking import of fieldEconomics would have dragged React into this nodejs route. */
+import { clusterMinutes, slotRiskKey } from "./cancelPatterns";
 
 /** The six channels, fixed, and always rendered in this order. */
 export const CHANNELS = [
@@ -402,12 +413,29 @@ export const NEW_FLAG_LABEL: Record<NewFlag, string> = {
   time: "NEW TIME",
 };
 
-/** One city's prior slate over NEW_LOOKBACK_WEEKS, indexed for the three nested tests. */
-export type CitySlate = { venues: Set<string>; venueDay: Set<string>; venueDayTime: Set<string> };
+/** One city's prior slate over NEW_LOOKBACK_WEEKS, indexed for the three nested tests.
+ *
+ *  `venueDayTime` holds CLUSTER keys, not raw minutes — see buildPriorSlate. `clusters` keeps the
+ *  cluster members so a shifted slot can say on hover what it ran at before and for how long. */
+export type CitySlate = {
+  venues: Set<string>;
+  venueDay: Set<string>;
+  /* THE RAW PRIOR MINUTES PER venue|dayIdx, and how many WEEKS carried each.
+   *
+   * NOT PRE-CLUSTERED, and that was a real bug: clustering the prior minutes ALONE means the
+   * candidate time is never a member of any cluster, so slotRiskKey falls through to the candidate's
+   * own raw minute, which is by definition absent from the slate — and every shifted slot still
+   * badged NEW TIME. Measured: 0 of 110 tiles changed, on a week where I had found the case myself.
+   * The window has to be computed over the prior minutes PLUS the candidate; see timeSeenNear. */
+  minutes: Map<string, Map<number, number>>;
+};
 export type PriorSlate = Map<string, CitySlate>;
 
-/** Anything with the four fields the comparison reads. VeoMatch satisfies it structurally. */
-export type SlotLike = Pick<VeoMatch, "city" | "venue" | "dayIdx" | "minutes">;
+/** Anything with the four fields the comparison reads. VeoMatch satisfies it structurally.
+ *
+ *  `weekKey` is OPTIONAL and only the prior slate uses it: it is how "ran 3 of the last 4 weeks" is
+ *  counted in weeks rather than in matches. fetchPromoWeek tags each prior week with its own Monday. */
+export type SlotLike = Pick<VeoMatch, "city" | "venue" | "dayIdx" | "minutes"> & { weekKey?: string };
 
 /* A UNION ACROSS THE WHOLE WINDOW, NOT A WEEK PER ENTRY. The question is "has this slot appeared
  * at all recently", so four weeks of matches go in as one list and presence in ANY of them is
@@ -415,14 +443,65 @@ export type SlotLike = Pick<VeoMatch, "city" | "venue" | "dayIdx" | "minutes">;
  * ramp's question and not this one. */
 export function buildPriorSlate(prior: SlotLike[]): PriorSlate {
   const out: PriorSlate = new Map();
+  /* ONE PASS. The minutes are kept RAW, per venue|dayIdx, with a count of the distinct prior WEEKS
+   * that carried each — not a count of matches, because two matches at one time in one week is one
+   * week, and weeks is the number an operator is reading when they ask how settled a slot was. */
+  const weeksSeen = new Map<string, Set<string>>();
   for (const m of prior) {
     let c = out.get(m.city);
-    if (!c) { c = { venues: new Set(), venueDay: new Set(), venueDayTime: new Set() }; out.set(m.city, c); }
+    if (!c) { c = { venues: new Set(), venueDay: new Set(), minutes: new Map() }; out.set(m.city, c); }
     c.venues.add(m.venue);
     c.venueDay.add(`${m.venue}|${m.dayIdx}`);
-    c.venueDayTime.add(`${m.venue}|${m.dayIdx}|${m.minutes}`);
+    const fd = `${m.venue}|${m.dayIdx}`;
+    const byMin = c.minutes.get(fd) ?? c.minutes.set(fd, new Map()).get(fd)!;
+    /* DISTINCT WEEKS, COUNTED BY THE CALLER'S OWN weekKey. Two matches at one time in one week is
+     * ONE week, and weeks is the number the tooltip reports. A caller that omits weekKey gets every
+     * row in one bucket, so the count is 1: honest for a flat list rather than silently inflated. */
+    const seenKey = `${fd}|${m.minutes}`;
+    const set = weeksSeen.get(`${m.city}|${seenKey}`)
+      ?? weeksSeen.set(`${m.city}|${seenKey}`, new Set()).get(`${m.city}|${seenKey}`)!;
+    set.add(m.weekKey ?? "");
+    byMin.set(m.minutes, set.size);
   }
   return out;
+}
+
+/* ── IS THIS TIME THE SAME SLOT AS ONE THE SLATE ALREADY HELD? ────────────────────────────────
+ *
+ * THE CANDIDATE IS CLUSTERED WITH THE PRIOR MINUTES, not against clusters built without it. That
+ * distinction is the whole correctness of this function: cluster [1170] alone and 1140 belongs to no
+ * cluster, so a 19:30 slot returning at 19:00 reads as new. Cluster [1140, 1170] together and they
+ * are one slot, which is exactly what the cancel ramp already says about that pitch on that weekday.
+ *
+ * clusterMinutes and slotRiskKey are the CANCEL ROLLUP'S OWN helpers, imported rather than restated,
+ * so the two cannot drift into disagreeing on a tile. */
+function timeSeenNear(m: SlotLike, slate: PriorSlate): { hit: boolean; others: [number, number][] } {
+  const c = slate.get(m.city);
+  const byMin = c?.minutes.get(`${m.venue}|${m.dayIdx}`);
+  if (!byMin || byMin.size === 0) return { hit: false, others: [] };
+  const clusters = clusterMinutes([...byMin.keys(), m.minutes]);
+  const key = slotRiskKey(m.venue, m.dayIdx, m.minutes, clusters);
+  const others: [number, number][] = [];
+  let hit = false;
+  for (const [mins, weeks] of byMin) {
+    if (slotRiskKey(m.venue, m.dayIdx, mins, clusters) !== key) continue;
+    hit = true;
+    if (mins !== m.minutes) others.push([mins, weeks]);
+  }
+  return { hit, others };
+}
+
+/* ── WHAT A SHIFTED SLOT RAN AT BEFORE ────────────────────────────────────────────────────────
+ * The badge is gone for a shift inside the window; the information is not, and this is what the
+ * tooltip says instead. Null when the slot is genuinely new, or when it has not moved at all. */
+export function priorTimesFor(m: SlotLike, slate: PriorSlate): { times: string[]; weeks: number } | null {
+  const { hit, others } = timeSeenNear(m, slate);
+  if (!hit || others.length === 0) return null;
+  const hhmm = (x: number) => `${String(Math.floor(x / 60)).padStart(2, "0")}:${String(x % 60).padStart(2, "0")}`;
+  return {
+    times: others.sort((a, b) => a[0] - b[0]).map(([mins]) => hhmm(mins)),
+    weeks: Math.max(...others.map(([, n]) => n)),
+  };
 }
 
 /**
@@ -443,7 +522,11 @@ export function newnessOf(m: SlotLike, slate: PriorSlate): NewFlag | null {
   if (!c) return "field";
   if (!c.venues.has(m.venue)) return "field";
   if (!c.venueDay.has(`${m.venue}|${m.dayIdx}`)) return "day";
-  if (!c.venueDayTime.has(`${m.venue}|${m.dayIdx}|${m.minutes}`)) return "time";
+  /* THE TIME TEST ASKS THE CLUSTER, NOT THE MINUTE. A kick-off inside the window shares a cluster
+   * with a time the slate already held, so a 19:30 slot returning at 19:00 is not new — which is
+   * what the cancel ramp has always said about that pitch on that weekday. A move OUTSIDE the
+   * window shares no cluster and still flags. */
+  if (!timeSeenNear(m, slate).hit) return "time";
   return null;
 }
 
@@ -456,14 +539,22 @@ export type PromoMatch = VeoMatch & {
   state: "planned" | "needs-decision" | "none" | "cancelled";
   /** The most significant thing new about this slot against the prior week's slate, or null. */
   newFlag: NewFlag | null;
+  /* WHAT THIS SLOT RAN AT BEFORE, when its kick-off moved INSIDE the cluster window. Null when it
+   * has not moved, or when the slot is genuinely new. The badge is gone for this case — the cancel
+   * ramp already calls it one slot — and this is where the information went instead. */
+  shiftedFrom: { times: string[]; weeks: number } | null;
 };
 
 export type PromoWeek = {
   weekStart: string;
   /** Pushes scoped to a city or a field. Same table as the match pushes; see 0191. */
   generals: GeneralPush[];
-  /** field_id -> its tags. Keyed on the FIELD, so a pitch reads the same on every tile. */
+  /** field_id -> its FIELD-scoped tags (key_field, starting_11). A pitch reads the same on every
+   *  tile it appears on, this week and next. */
   tagsByField: Record<number, string[]>;
+  /** match api_id -> its MATCH-scoped tags (priority). Dies with the match, so there is nothing to
+   *  expire: see the note on TAG_META. */
+  tagsByMatch: Record<number, string[]>;
   /** The field ids on a REVENUE SHARE, derived from the contract. Never a stored flag; see
    *  fetchPartnerFields. Empty is a legitimate answer and also what a failed read returns. */
   partnerFields: number[];
@@ -593,19 +684,26 @@ export async function fetchPromoWeek(
       fetchVeoWeek(sb, now, new Date(y, mo - 1, d - 7 * (i + 1)), null, true)));
   /* OLDEST FIRST, so priorWeekStart below is the start of the window rather than of whichever call
    * resolved first. Array.from produced i=0 as one week back, so the earliest is the LAST entry. */
-  const slate = buildPriorSlate(priors.flatMap((w) => w.matches));
+  /* EACH PRIOR WEEK TAGGED WITH ITS OWN MONDAY, so "ran 3 of the last 4 weeks" counts weeks and not
+   * matches — a pitch running twice on one Friday is one week, not two. */
+  const slate = buildPriorSlate(priors.flatMap((w) => w.matches.map((m) => ({ ...m, weekKey: w.weekStart }))));
 
   const matches: PromoMatch[] = week.matches.map((m) => {
     const plan = plans.get(m.apiId) ?? null;
-    return { ...m, plan, state: stateOf(plan, m.isCancelled), newFlag: newnessOf(m, slate) };
+    /* THE SHIFT IS COMPUTED WHERE THE SLATE LIVES. The client has no slate and building one there
+     * would mean shipping four weeks of matches to the browser to answer a tooltip. */
+    return {
+      ...m, plan, state: stateOf(plan, m.isCancelled), newFlag: newnessOf(m, slate),
+      shiftedFrom: priorTimesFor(m, slate),
+    };
   });
   // City, then day, then time. The grid renders in this order and so does the worklist fallback.
   matches.sort((a, b) => a.city.localeCompare(b.city) || a.dayIdx - b.dayIdx || a.minutes - b.minutes);
 
   const fieldIds = matches.map((m) => m.fieldId).filter((x): x is number => x != null);
-  const [generals, tagsByField, partnerFields] = await Promise.all([
+  const [generals, tags, partnerFields] = await Promise.all([
     fetchGeneralPushes(sb, week.days),
-    fetchFieldTags(sb, fieldIds),
+    fetchPromoTags(sb, fieldIds, matches.map((m) => m.apiId)),
     fetchPartnerFields(sb, fieldIds),
   ]);
 
@@ -616,7 +714,8 @@ export async function fetchPromoWeek(
     days: week.days,
     matches,
     generals,
-    tagsByField,
+    tagsByField: tags.byField,
+    tagsByMatch: tags.byMatch,
     partnerFields,
     planTableReady: ready,
     generatedAt: now.toISOString(),
@@ -828,20 +927,53 @@ async function fetchGeneralPushes(sb: SupabaseClient, days: { iso: string }[]): 
 /* THE TAGS, KEYED ON FIELD. select("*") deliberately, the adminAuth precedent: code deploys before
  * a migration applies, and a named column that does not exist yet turns every load of this page
  * into a 500. An unreadable table degrades to "no tags", which is exactly what is true then. */
-async function fetchFieldTags(sb: SupabaseClient, fieldIds: number[]): Promise<Record<number, string[]>> {
-  const out: Record<number, string[]> = {};
-  const ids = [...new Set(fieldIds)];
-  if (ids.length === 0) return out;
-  for (let i = 0; i < ids.length; i += 500) {
-    const { data, error } = await sb.from("match_promotion_field_tag")
-      .select("*").in("field_id", ids.slice(i, i + 500));
-    if (error) return out;
+/* ── THE TAGS, AT BOTH SCOPES, OUT OF ONE TABLE ───────────────────────────────────────────────
+ * 0193 renamed match_promotion_field_tag to promo_tags and gave it a nullable match_id beside the
+ * nullable field_id, under a TAG-AWARE check: priority is match-scoped, key_field and starting_11
+ * are field-scoped, and the database refuses any other combination. So one read returns both maps
+ * and neither can carry a row of the wrong shape.
+ *
+ * A FAILED READ RETURNS EMPTY MAPS, NOT A THROW. Tags are a courtesy on a planning page; losing
+ * them must not cost the operator the week. The node guard asserts the scope split directly rather
+ * than through the page, because empty is also what a broken read looks like here. */
+async function fetchPromoTags(
+  sb: SupabaseClient, fieldIds: number[], matchIds: number[],
+): Promise<{ byField: Record<number, string[]>; byMatch: Record<number, string[]> }> {
+  const byField: Record<number, string[]> = {};
+  const byMatch: Record<number, string[]> = {};
+  const fids = [...new Set(fieldIds)];
+  const mids = [...new Set(matchIds)];
+  /* TWO `in` FILTERS, OR'd, so one round trip covers both scopes. A row is field-scoped or
+   * match-scoped and never both, so nothing is double-counted. */
+  const chunk = <T,>(xs: T[], n: number): T[][] => {
+    const out: T[][] = [];
+    for (let i = 0; i < xs.length; i += n) out.push(xs.slice(i, i + n));
+    return out;
+  };
+  const fChunks = fids.length ? chunk(fids, 400) : [[]];
+  const mChunks = mids.length ? chunk(mids, 400) : [[]];
+  const rounds = Math.max(fChunks.length, mChunks.length);
+  for (let i = 0; i < rounds; i++) {
+    const f = fChunks[i] ?? [];
+    const m = mChunks[i] ?? [];
+    if (f.length === 0 && m.length === 0) continue;
+    const ors: string[] = [];
+    if (f.length) ors.push(`field_id.in.(${f.join(",")})`);
+    if (m.length) ors.push(`match_id.in.(${m.join(",")})`);
+    const { data, error } = await sb.from("promo_tags").select("*").or(ors.join(","));
+    if (error) return { byField: {}, byMatch: {} };
     for (const r of data ?? []) {
-      const f = Number(r.field_id);
-      (out[f] ?? (out[f] = [])).push(String(r.tag));
+      const tag = String(r.tag);
+      if (r.match_id != null) {
+        const k = Number(r.match_id);
+        (byMatch[k] ?? (byMatch[k] = [])).push(tag);
+      } else if (r.field_id != null) {
+        const k = Number(r.field_id);
+        (byField[k] ?? (byField[k] = [])).push(tag);
+      }
     }
   }
-  return out;
+  return { byField, byMatch };
 }
 
 /* ── THE PARTNER BADGE IS DERIVED, AND THIS IS THE DERIVATION ────────────────────────────────

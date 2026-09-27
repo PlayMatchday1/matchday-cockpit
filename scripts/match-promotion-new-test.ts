@@ -18,7 +18,7 @@ import "server-only"; // no-op under --conditions=react-server
 // suite against docs/matchday-api-facts.md rather than against its own fixtures.
 
 import {
-  buildPriorSlate, newnessOf, NEW_FLAG_LABEL, NEW_LOOKBACK_WEEKS,
+  buildPriorSlate, newnessOf, priorTimesFor, NEW_FLAG_LABEL, NEW_LOOKBACK_WEEKS,
   coverageCaption, coverageStateOf, coverageSummary,
   type NewFlag, type PromoMatch, type SlotLike,
 } from "../src/lib/matchPromotion";
@@ -107,12 +107,30 @@ console.log("\nCITIES DO NOT LEAK INTO EACH OTHER");
   is("  CONTROL — in its own city it is not new", newnessOf(slot("Houston", "ATH Katy", MON, at(21, 15)), prior), null);
 }
 
-console.log("\nMINUTES ARE EXACT — a fifteen-minute move is a move");
+console.log("\nMINUTES ARE CLUSTERED, NOT EXACT — a move inside the window is the SAME slot");
 {
+  /* ── THIS SECTION REVERSES ITSELF, DELIBERATELY ──────────────────────────────────────────────
+   * It read "MINUTES ARE EXACT - a fifteen-minute move is a move", and asserted that 8:00 against a
+   * prior 8:30 is NEW TIME. That contract is gone. The CANCEL ROLLUP already treats times inside
+   * SLOT_CLUSTER_GAP_MIN as one slot, which is why an 8:00 tile carries the 8:30 cancel history - so
+   * the tile was saying "this slot has cancelled N of 4" and "this time is new" at the same moment,
+   * and both could not be true. newnessOf now asks the same clusterMinutes the rollup asks.
+   *
+   * The OLD expected value is left in this comment on purpose: a reader should be able to see what
+   * changed rather than find a suite that always said this. */
   const prior = buildPriorSlate([slot("Houston", "ATH Pearland", SAT, at(20, 30))]);
-  // The real case: Saturday was 8:30 last week and is 8:00 this week.
-  is("8:00 against a prior 8:30 is NEW TIME", newnessOf(slot("Houston", "ATH Pearland", SAT, at(20)), prior), "time");
-  is("  CONTROL — 8:30 against 8:30 is not new", newnessOf(slot("Houston", "ATH Pearland", SAT, at(20, 30)), prior), null);
+  // The real case: Saturday was 8:30 and is 8:00. Thirty minutes. WAS "time"; is now null.
+  is("8:00 against a prior 8:30 is NOT new, being the same slot moved",
+     newnessOf(slot("Houston", "ATH Pearland", SAT, at(20)), prior), null);
+  is("  and it says so on hover instead of badging",
+     priorTimesFor(slot("Houston", "ATH Pearland", SAT, at(20)), prior)?.times.join(","), "20:30");
+  is("  CONTROL — 8:30 against 8:30 is not new either, and has nothing to report",
+     `${newnessOf(slot("Houston", "ATH Pearland", SAT, at(20, 30)), prior)}/${priorTimesFor(slot("Houston", "ATH Pearland", SAT, at(20, 30)), prior)}`,
+     "null/null");
+  /* CONTROL: THE WINDOW HAS AN EDGE. A move far enough out is still a new time, or the rule above
+   * would be "no time is ever new", which asserts nothing. */
+  is("  CONTROL — 6:00 against 8:30, two and a half hours out, IS still NEW TIME",
+     newnessOf(slot("Houston", "ATH Pearland", SAT, at(18)), prior), "time");
 }
 
 console.log("\nTHE MEASURED WEEK, REPRODUCED — 2026-08-24 against 2026-08-17");
@@ -136,7 +154,9 @@ console.log("\nTHE MEASURED WEEK, REPRODUCED — 2026-08-24 against 2026-08-17")
     ["Austin NEMP Fri 8:30", slot("Austin", "NEMP", FRI, at(20, 30)), "day"],
     ["Austin NEMP Sun 6:30", slot("Austin", "NEMP", SUN, at(18, 30)), "day"],
     ["Austin NEMP Sun 7:30", slot("Austin", "NEMP", SUN, at(19, 30)), "day"],
-    ["Houston ATH Pearland Sat 8:00", slot("Houston", "ATH Pearland", SAT, at(20)), "time"],
+    // REVERSED with the clustered window: 8:00 against a prior 8:30 is thirty minutes, so it is the
+    // same slot moved rather than a new time. WAS "time".
+    ["Houston ATH Pearland Sat 8:00", slot("Houston", "ATH Pearland", SAT, at(20)), null],
     ["San Antonio Soccer Central Sun 9:00", slot("San Antonio", "Soccer Central", SUN, at(21)), "time"],
     // …and the ones that must stay quiet.
     ["Austin NEMP Tue 6:30 (unchanged)", slot("Austin", "NEMP", TUE, at(18, 30)), null],
@@ -145,7 +165,9 @@ console.log("\nTHE MEASURED WEEK, REPRODUCED — 2026-08-24 against 2026-08-17")
   ];
   for (const [label, m, want] of cases) is(label, newnessOf(m, prior), want);
   const flagged = cases.filter(([, m]) => newnessOf(m, prior) !== null).length;
-  is("seven of the ten reproduce as new, three as unchanged", flagged, 7);
+  /* SIX, NOT SEVEN, and the one that dropped out is the ATH Pearland half-hour move. Soccer Central
+   * Sun 9:00 against 7:00 is two hours and still flags, which is what keeps this count meaningful. */
+  is("six of the ten reproduce as new, four as unchanged", flagged, 6);
 }
 
 /* ── COVERAGE ─────────────────────────────────────────────────────────────────────────────────
@@ -283,14 +305,22 @@ console.log("\nTHE WINDOW IS FOUR WEEKS, AND THESE ARE THE SLOTS THAT PROVE IT")
   is("The Hattrick L. Saturday 20:00, back after two weeks at 19:00, is NOT new",
      newnessOf(slot("Austin", HATTRICK, SAT, at(20)), fourWeeks), null);
 
-  /* ── THE CASE THE WIDER WINDOW DEMOTES RATHER THAN CLEARS, AND IT IS THE INTERESTING ONE ────
-   * LBJ FRIDAY ran at 19:30 in w1, w2 and w3, missed w4, and came back at 19:00. The WEEKDAY is not
-   * new — three of the four weeks carried it — but 19:00 on an LBJ Friday genuinely never happened.
-   * So the right badge is NEW TIME, and the old window called it NEW DAY. The fix does not silence
-   * this slot, it tells the truth about it, which is a better outcome than either badge alone. */
-  is("LBJ Friday 19:00, a weekday that ran three of four weeks at a NEW time, is NEW TIME",
-     newnessOf(slot("Austin", LBJ, FRI, at(19)), fourWeeks), "time");
-  is("  and the one-week window called that same slot NEW DAY — wrongly",
+  /* ── THE CASE THIS SUITE GOT WRONG TWICE, AND IT IS THE INTERESTING ONE ─────────────────────
+   * LBJ FRIDAY ran at 19:30 in w1, w2 and w3, missed w4, came back at 19:00.
+   *
+   * ONE WEEK, EXACT MINUTES   NEW DAY   wrong: the weekday ran three of the four weeks
+   * FOUR WEEKS, EXACT MINUTES NEW TIME  what I asserted last commit, and still wrong
+   * FOUR WEEKS, CLUSTERED     no badge  the cancel ramp already calls 19:00 and 19:30 one slot
+   *
+   * The second line is mine. I wrote "the fix does not silence this slot, it tells the truth about
+   * it" and the truth was that a thirty-minute move is not a new time to anyone, least of all to a
+   * page that was simultaneously showing that slot's 19:30 cancel history. The information is not
+   * lost: it moved to the tooltip, which is where it always belonged. */
+  is("LBJ Friday 19:00, back after three weeks at 19:30, is NOT new",
+     newnessOf(slot("Austin", LBJ, FRI, at(19)), fourWeeks), null);
+  is("  and the tooltip carries what the badge used to claim",
+     priorTimesFor(slot("Austin", LBJ, FRI, at(19)), fourWeeks)?.times.join(","), "19:30");
+  is("  CONTROL — the one-week window still called that same slot NEW DAY, wrongly",
      newnessOf(slot("Austin", LBJ, FRI, at(19)), lastWeekOnly), "day");
 
   /* ── THE CONTROL: ABSENT FROM ALL FOUR STILL FLAGS ────────────────────────────────────────

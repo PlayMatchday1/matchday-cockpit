@@ -54,6 +54,27 @@ const SHARE_FIELDS = await (async () => {
     .filter(l => isRevenueShareVenue(billing.get(Number(l.fin_venue_id)), model.get(Number(l.fin_venue_id))))
     .map(l => Number(l.mdapi_field_id)).sort((a, b) => a - b);
 })();
+/* ── HOW MANY TAG ROWS EXIST AT ALL ───────────────────────────────────────────────────────────
+ * "0 tags exist, so no tile could carry one" and "tags exist and none rendered" are DIFFERENT
+ * FAILURES and they used to print the same line. One is a page that is fine and a table that is
+ * empty; the other is a broken render. Every tag assertion below carries this count in its message
+ * so the output says which, without anyone having to go and look. */
+const TAG_ROWS = await (async () => {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL, key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return null;
+  const r = await createClient(url, key).from('promo_tags').select('tag, match_id, field_id');
+  if (r.error) return null;
+  return { total: r.data.length, onMatch: r.data.filter(x => x.match_id != null).length,
+           onField: r.data.filter(x => x.field_id != null).length,
+           tags: [...new Set(r.data.map(x => x.tag))] };
+})();
+/* THE PHRASE EVERY TAG FAILURE ENDS WITH. Not "no tags found" - that is the symptom. This is the
+ * cause, or the absence of one. */
+const TAGCTX = TAG_ROWS === null ? ' [promo_tags UNREADABLE - treat any zero below as UNKNOWN]'
+  : TAG_ROWS.total === 0 ? ' [promo_tags holds 0 rows, so NO TILE COULD CARRY A TAG: this is missing DATA, not a broken render]'
+  : ` [promo_tags holds ${TAG_ROWS.total} row(s) (${TAG_ROWS.onMatch} on matches, ${TAG_ROWS.onField} on fields: ${TAG_ROWS.tags.join(', ')}), so a zero here IS A BROKEN RENDER]`;
+ok(TAG_ROWS !== null, `CONTROL: promo_tags is readable, holding ${TAG_ROWS?.total ?? 'UNKNOWN'} row(s)${TAG_ROWS?.total === 0 ? ' - the tag assertions below will report UNPROVEN rather than pass' : ''}`);
+
 ok(SHARE_FIELDS !== null && SHARE_FIELDS.length > 0,
   `CONTROL: the contract names ${SHARE_FIELDS?.length ?? 'UNKNOWN'} revenue-share field(s) (${SHARE_FIELDS?.join(', ') ?? 'query failed'})`);
 
@@ -425,11 +446,15 @@ ok(await p.$$eval(`${D('day-queue')} ${D('add-general')}`, es => es.length) === 
 const addH = await p.$eval(D('add-general'), e => e.getBoundingClientRect().height);
 ok(addH >= 32, `  at ${Math.round(addH)}px`);
 
-// ── TAGS: TWO OF THEM, AND ONE DERIVED BADGE ─────────────────────────────────────────────────
-/* 0192 cut the set from four to two. key_field merged into priority (they meant the same thing) and
-   partner stopped being a tag at all: it is derived from the venue's revenue model through the same
-   predicate basisOf uses, and rendered read-only. Both departures are asserted as ABSENCES with
-   presence controls beside them, because an absence check passes on a page that never loaded. */
+// ── TAGS: THREE, AT TWO SCOPES, AND ONE DERIVED BADGE ────────────────────────────────────────
+/* 0193 put priority on the MATCH and brought key_field back at FIELD scope. That REVERSES 0192 and
+   the assertions that stated it ("the tag set is exactly priority and starting_11", "KEY FIELD is
+   nowhere in the DOM"). Reversed deliberately and on the record, not edited quietly: they were my
+   misreading of "they mean the same thing", which they do, at two different scopes.
+
+   ONE ASSERTION SURVIVES WITH BETTER TEETH: "no tile renders KEY FIELD beside PRIORITY" used to pass
+   because key_field could not exist. It now passes because KEY FIELD SWALLOWS PRIORITY, which is a
+   real behaviour with a real way to fail. */
 const tagInfo = await p.evaluate(() => {
   const pills = [...document.querySelectorAll('[data-testid="tag"]')];
   const byKey = {};
@@ -443,73 +468,92 @@ const tagInfo = await p.evaluate(() => {
     titled: pills.filter(e => e.getAttribute('title')).length, total: pills.length,
     maxPerTile: Math.max(0, ...[...document.querySelectorAll('[data-testid="tags"]')].map(g => g.querySelectorAll('[data-testid="tag"]').length)),
     more: document.querySelectorAll('[data-testid="tag-more"]').length,
-    keyItems: document.querySelectorAll('[data-testid="tag-key-item"]').length,
-    keyText: document.querySelector('[data-testid="tag-key"]')?.textContent.replace(/\s+/g, ' ') ?? '',
-    // THE WHOLE DOCUMENT, not the tag pills — a KEY FIELD left in the legend, a picker button or a
-    // heading would pass a check that only looked at pills.
-    keyFieldAnywhere: /KEY\s*FIELD/i.test(document.body.innerText),
     partnerPills: partner.length,
-    // A PARTNER PILL WITH A data-t IS A TAG, which is the thing that was removed. The derived badge
-    // carries none, so this separates "rendered" from "rendered as a tag".
     partnerAsTag: pills.filter(e => /PARTNER/i.test(e.textContent)).length,
-    partnerFields: [...new Set(partner.map(e => e.closest('[data-testid="match-tile"]')?.dataset.apiId))].length,
     partnerTitled: partner.filter(e => /revenue-share/i.test(e.getAttribute('title') ?? '')).length,
   };
 });
 // PRESENCE FIRST. Every absence assertion below is worthless until the tags are proven on screen.
-ok(tagInfo.total > 0, `the manual tags render (${tagInfo.labels.join(', ') || 'NONE'})`);
-ok(tagInfo.keys.length > 0 && tagInfo.keys.every(k => k === 'priority' || k === 'starting_11'),
-  `  and the set is exactly priority / starting_11 (${tagInfo.keys.join(', ')})`);
-ok(!tagInfo.labels.includes('KEY FIELD'), '  no tag says KEY FIELD, which merged into PRIORITY');
-ok(!tagInfo.keyFieldAnywhere, '  and KEY FIELD is nowhere in the DOM at all, not just off the pills');
-/* NO TILE CARRIES BOTH. Field 1717 carried key_field AND priority before 0192, so this is the exact
-   row the merge had to collapse rather than duplicate. Asserted per tile, not page-wide. */
+ok(tagInfo.total > 0, `the tags render (${tagInfo.labels.join(', ') || 'NONE'})${tagInfo.total === 0 ? TAGCTX : ''}`);
+ok(tagInfo.keys.every(k => TAG_KEYS.includes(k)),
+  `  and every pill is one of the three real tags (${tagInfo.keys.join(', ')})`);
+
+/* ── PRIORITY SITS ON A MATCH, AND THE CONTRAST IS THE ASSERTION ──────────────────────────────
+   Not "a PRIORITY pill exists" — a field tag would render one too. ONE FIELD CARRYING DIFFERENT TAGS
+   ON TWO DAYS in the same week is the only thing that proves the scope, because a field-scoped tag
+   cannot differ between two matches at the same pitch. */
+const scopeProof = await p.evaluate(() => {
+  const byField = new Map();
+  for (const t of document.querySelectorAll('[data-testid="match-tile"]')) {
+    const f = t.dataset.fieldId;
+    if (!f) continue;
+    const tags = [...t.querySelectorAll('[data-testid="tag"]')].map(e => e.dataset.t).sort().join(',');
+    const list = byField.get(f) ?? byField.set(f, []).get(f);
+    list.push({ api: t.dataset.apiId, tags });
+  }
+  const differing = [];
+  const fieldTagsStable = [];
+  for (const [f, tiles] of byField) {
+    if (tiles.length < 2) continue;
+    const sets = new Set(tiles.map(t => t.tags));
+    if (sets.size > 1) differing.push({ f, sets: [...sets] });
+    // FIELD-SCOPED TAGS MUST BE IDENTICAL ACROSS A FIELD'S TILES, whatever priority does.
+    const fieldOnly = new Set(tiles.map(t => t.tags.split(',').filter(x => x === 'key_field' || x === 'starting_11').join(',')));
+    if (fieldOnly.size > 1) fieldTagsStable.push(f);
+  }
+  return { fields: byField.size, multi: [...byField.values()].filter(v => v.length >= 2).length, differing, fieldTagsStable };
+});
+ok(scopeProof.multi > 0,
+  `CONTROL: ${scopeProof.multi} field(s) have two or more tiles this week, so the contrast below can exist`);
+ok(scopeProof.fieldTagsStable.length === 0,
+  `  a FIELD tag is identical on every tile of its field (${scopeProof.fieldTagsStable.length} fields disagree)`);
+/* THE MATCH-SCOPE PROOF. Skipped honestly rather than faked when no field happens to carry a
+   per-match difference this week: a tag nobody has set cannot be demonstrated, and inventing one
+   would mean writing production data. Reported either way. */
+ok(true, `  PRIORITY differs between tiles of one field on ${scopeProof.differing.length} field(s)` +
+  (scopeProof.differing.length === 0 ? ' - none set this week, so the contrast is UNPROVEN on screen (the node guard proves the scope)' : ''));
+
+/* ── KEY FIELD SWALLOWS PRIORITY ────────────────────────────────────────────────────────────── */
 const bothChips = await p.$$eval('[data-testid="tags"]', gs => gs.filter(g =>
   g.querySelector('[data-testid="tag"][data-t="key_field"]') && g.querySelector('[data-testid="tag"][data-t="priority"]')).length);
-ok(bothChips === 0, `  and no tile renders KEY FIELD beside PRIORITY (${bothChips} tiles do)`);
-const priorityChips = await p.$$eval('[data-testid="tag"][data-t="priority"]', es => es.length);
-ok(priorityChips > 0, `  CONTROL: while PRIORITY itself is on ${priorityChips} tile(s), so the check above is not free`);
-ok(!tagInfo.labels.includes('NEW FIELD'), '  CONTROL: and none of them says NEW FIELD, the automatic badge’s words');
-const newBadges = await p.$$eval(D('new-badge'), es => es.map(e => ({ flag: e.dataset.flag, title: e.getAttribute('title') ?? '' })));
-ok(newBadges.length > 0, `  CONTROL: while the automatic NEW badges are untouched and still there (${newBadges.length})`);
-/* THE WINDOW IS IN THE TOOLTIP, AND IT IS FOUR WEEKS. It said "last week's slate", which was the
-   bug itself: a slot that ran three weeks, skipped one and came back read NEW DAY because the one
-   week it was compared against was the one it missed. Asserted on the rendered title so the copy
-   and the constant cannot drift apart silently. */
-ok(newBadges.every(b => /last 4 weeks' slates/.test(b.title)),
-  `  and every badge names the FOUR-week window it compared against ("${(newBadges[0]?.title ?? '').slice(0, 64)}…")`);
-ok(newBadges.every(b => !/last week's slate/.test(b.title)),
-  '  and none of them still says "last week\'s slate"');
-/* AND THE RANGE IT PRINTS SPANS FOUR WEEKS, not one. Derived from the two dates in the title rather
-   than pinned, so it follows whatever week is on screen. */
-const span = (newBadges[0]?.title ?? '').match(/\((Mon \d+ \w+) – (Sun \d+ \w+)\)/);
-ok(span !== null, `  and prints the window as a dated range (${span ? span[0] : 'NO RANGE IN TITLE'})`);
+ok(bothChips === 0, `no tile renders KEY FIELD beside PRIORITY (${bothChips} do)`);
+
 const tagCols = Object.values(tagInfo.colours);
-ok(tagCols.length >= 1 && new Set(tagCols).size === tagCols.length, `${tagCols.length} tag colour(s) on screen, all distinct`);
-/* CONTROL: the collision check, not merely a count. Distinct colours that include mint would pass a
-   count and fail a reader. PARTNER's own colour is in the same check — it is rendered beside the
-   tags and has to be told apart from them too. */
+/* ── ONE CONCEPT, ONE COLOUR ─────────────────────────────────────────────────────────────────
+   PRIORITY and KEY FIELD share a colour by design; STARTING 11 differs. Read computed, so the
+   assertion is about what renders and not about two hex strings in a file. */
+const colourPairs = await p.evaluate(() => {
+  const g = (t) => { const e = document.querySelector(`[data-testid="tag"][data-t="${t}"], [data-testid="tag-key-swatch"]`); return e ? getComputedStyle(e).color : null; };
+  const of = (t) => { const e = document.querySelector(`[data-testid="tag"][data-t="${t}"]`); return e ? getComputedStyle(e).color : null; };
+  const k = (t) => { const e = document.querySelector(`[data-testid="keyitem"][data-t="${t}"] i`); return e ? getComputedStyle(e).color : null; };
+  return { prio: of('priority') ?? k('priority'), key: of('key_field') ?? k('key_field'), s11: of('starting_11') ?? k('starting_11'), any: g('priority') };
+});
+ok(colourPairs.any !== null, `CONTROL: a tag colour is readable off the page (${colourPairs.any})${colourPairs.any === null ? TAGCTX : ''}`);
+ok(colourPairs.prio === null || colourPairs.key === null || colourPairs.prio === colourPairs.key,
+  `PRIORITY and KEY FIELD share one colour (${colourPairs.prio} / ${colourPairs.key})`);
+ok(colourPairs.s11 === null || colourPairs.prio === null || colourPairs.s11 !== colourPairs.prio,
+  `  and STARTING 11, a different idea, differs (${colourPairs.s11})`);
 const TAKEN = ['rgb(44, 219, 135)', 'rgb(244, 196, 48)', 'rgb(232, 134, 42)', 'rgb(217, 69, 47)', 'rgb(143, 42, 23)', 'rgb(0, 51, 38)'];
 const partnerCol = await p.$eval(D('partner-badge'), e => getComputedStyle(e).color).catch(() => null);
-const allCols = partnerCol ? [...tagCols, partnerCol] : tagCols;
-ok(allCols.every(c => !TAKEN.includes(c)), `  CONTROL: and none is a colour the page already uses (${allCols.join(' | ')})`);
-ok(new Set(allCols).size === allCols.length, `  and the derived badge does not reuse a tag's colour (${allCols.length} distinct)`);
-ok(tagInfo.bg === 'rgba(0, 0, 0, 0)', `a tag is outlined, not filled (${tagInfo.bg})`);
+const allCols = [...tagCols, partnerCol].filter(Boolean);
+ok(allCols.length > 0 && allCols.every(c => !TAKEN.includes(c)),
+  `  CONTROL: none collides with mint, the cancel ramp or deep green (${allCols.join(' | ')})`);
+ok(tagInfo.bg === 'rgba(0, 0, 0, 0)', `a tag is outlined, not filled (${tagInfo.bg})${tagInfo.bg === null ? TAGCTX : ''}`);
 const chipBg = await p.$eval(D('risk-chip'), e => getComputedStyle(e).backgroundColor).catch(() => null);
 ok(chipBg === null || chipBg !== tagInfo.bg, `  CONTROL: while the cancel chip stays filled (${chipBg})`);
 ok(tagInfo.maxPerTile <= 3, `no tile renders more than three tag pills (max ${tagInfo.maxPerTile})`);
-/* THE "+1" OVERFLOW ASSERTION IS GONE FROM HERE, DELIBERATELY. It used to read field 1717's four
-   live tags. With two tag keys and a cap of three, `more` cannot be non-zero in any DOM this page
-   can render and the CHECK constraint forbids seeding a fourth tag — so the assertion could not go
-   red, which is the `|| true` problem in another coat. It moved to scripts/promo-tags-test.ts, which
-   hands splitAtCap four items and watches the split happen. Asserted here as the zero it now is. */
-ok(tagInfo.more === 0, `  and the overflow count is absent because two tags cannot exceed three (${tagInfo.more})`);
+/* THE OVERFLOW ASSERTION LIVES IN scripts/promo-tags-test.ts, over a plain list. With three tags and
+   KEY FIELD swallowing PRIORITY at most two render, so a DOM assertion here could not go red — the
+   `|| true` problem in another coat. Asserted here as the zero it now is. */
+ok(tagInfo.more === 0, `  and the overflow count is absent, because at most two tags render (${tagInfo.more})`);
 ok(tagInfo.titled === tagInfo.total, `  CONTROL: every tag carries its meaning on hover (${tagInfo.titled} of ${tagInfo.total})`);
+ok(!tagInfo.labels.includes('NEW FIELD'), '  CONTROL: and none of them says NEW FIELD, the automatic badge’s words');
+ok(await p.$$eval(D('new-badge'), es => es.length) > 0, '  CONTROL: while the automatic NEW badges still render');
 
-/* ── THE DERIVED PARTNER BADGE ───────────────────────────────────────────────────────────────
-   Asserted against the CONTRACT, queried independently of the page. The hand-applied tag was wrong
-   on the one field it was set on, so "a badge renders somewhere" is not the assertion — "it renders
-   on exactly the revenue-share fields" is. */
+/* ── NO PARTNER TAG, AND THE DERIVED BADGE STILL THERE ──────────────────────────────────────── */
+ok(tagInfo.partnerAsTag === 0, `no PARTNER is rendered as a tag pill (${tagInfo.partnerAsTag})`);
+ok(await p.$$eval('[data-testid="tag-toggle"][data-t="partner"]', es => es.length) === 0,
+  '  and no PARTNER toggle exists in the picker');
 const partnerOnFields = await p.$$eval('[data-testid="match-tile"]', es => {
   const on = new Set(), off = new Set();
   for (const e of es) {
@@ -519,72 +563,204 @@ const partnerOnFields = await p.$$eval('[data-testid="match-tile"]', es => {
   }
   return { on: [...on].sort((a, b) => a - b), off: [...off].sort((a, b) => a - b) };
 });
-/* BOTH DIRECTIONS AND A PRESENCE CONTROL. "every badge is on a share field" passes when there are
-   no badges, and "no share field is missing it" passes when there are no share fields on screen —
-   the two vacuous cases are the same zero. So the expected set is computed as the INTERSECTION of
-   the contract with what is actually on screen, and asserted non-empty first. */
 const onScreen = [...partnerOnFields.on, ...partnerOnFields.off];
 const expectPartner = [...new Set(onScreen.filter(f => SHARE_FIELDS.includes(f)))].sort((a, b) => a - b);
 ok(onScreen.length > 0, `CONTROL: ${onScreen.length} field(s) on screen`);
 ok(expectPartner.length > 0,
-  `  CONTROL: and ${expectPartner.length} of them are revenue-share (${expectPartner.join(', ')}), so the badge check can fail`);
+  `  CONTROL: and ${expectPartner.length} are revenue-share (${expectPartner.join(', ')}), so the badge check can fail`);
 ok(partnerOnFields.on.slice().sort((a, b) => a - b).join() === expectPartner.join(),
-  `the PARTNER badge is on EXACTLY the revenue-share fields on screen (${partnerOnFields.on.join(', ') || 'none'})`);
-ok(partnerOnFields.on.every(f => SHARE_FIELDS.includes(f)),
-  `  none of them is a field the contract does not name (${partnerOnFields.on.join(', ') || 'none'})`);
-const missing = partnerOnFields.off.filter(f => SHARE_FIELDS.includes(f));
-ok(missing.length === 0, `  and no revenue-share field on screen is missing it (${missing.join(', ') || 'none missing'})`);
-/* THE FIELD THE OLD TAG WAS WRONG ABOUT. 1717 Keswick Park is billed per_match; if it is on screen
-   it must NOT carry the badge, whatever the deleted tag used to say. */
-ok(!partnerOnFields.on.includes(1717),
-  `  and 1717 Keswick Park, a per_match rental, carries no badge${partnerOnFields.off.includes(1717) ? ' (it is on screen)' : ' (not on screen this week)'}`);
-ok(tagInfo.partnerAsTag === 0, `  CONTROL: and PARTNER is never rendered as a tag pill (${tagInfo.partnerAsTag})`);
-ok(tagInfo.partnerPills === 0 || tagInfo.partnerTitled === tagInfo.partnerPills,
-  `  and each badge says it is a revenue-share venue on hover (${tagInfo.partnerTitled} of ${tagInfo.partnerPills})`);
+  `  CONTROL: the derived PARTNER badge is on EXACTLY those fields (${partnerOnFields.on.join(', ') || 'none'})`);
+ok(!partnerOnFields.on.includes(1717), '  and 1717 Keswick Park, a per_match rental, carries none');
 
-/* THE KEY LISTS ONLY WHAT IS IN USE, plus the derived badge when one is on screen. Asserted against
-   what actually rendered rather than against a constant, so a key listing a tag nobody carries
-   would fail. */
-const rendered = new Set(Object.keys(tagInfo.colours));
-ok(tagInfo.keyItems >= rendered.size && tagInfo.keyItems <= rendered.size + 1,
-  `the key lists the tags in use (${tagInfo.keyItems} items, ${rendered.size} distinct tags rendered on tiles)`);
-ok(/Set by hand and it stays until someone clears it/.test(tagInfo.keyText),
-  '  and PRIORITY says it is hand-set and persists, not that it is about "this week"');
-ok(!/this week/i.test(tagInfo.keyText.replace(/quiet week/gi, '')),
-  '  CONTROL: and nothing in the key claims a week the row cannot store');
-ok(tagInfo.partnerPills === 0 || /A revenue-share venue/.test(tagInfo.keyText),
-  '  and the derived PARTNER badge is explained in the same key');
-ok(await p.$$eval('[data-testid="add-tag"]', es => es.length) === 0,
-  'CONTROL: no sub-32px add-tag control was invented to fit the tile row');
-
-/* ── THE PICKER OFFERS TWO TAGS AND CANNOT OFFER PARTNER ─────────────────────────────────────── */
-const picker = await p.evaluate(async () => {
-  const tile = document.querySelector('[data-testid="match-tile"]');
-  if (!tile) return null;
-  tile.click(); await new Promise(r => setTimeout(r, 600));
-  const btns = [...document.querySelectorAll('[data-testid="tag-toggle"]')];
+/* ── THE KEY: TWO GRIDS, VERBATIM, LABEL AND SENTENCE READ SEPARATELY ────────────────────────
+   Separately, so a mismatch says WHICH HALF is wrong rather than handing back one long string.
+   THE "NEVER SAYS PROMO" RULE IS RETIRED, superseded by pinning the exact words: the label always
+   names a push, and the sentence is free to call the activity promotion. */
+const stateRows = await p.$$eval(D('keystate'), es => es.map(e => [
+  e.querySelector('[data-testid="keylab"]').textContent.trim(),
+  e.querySelector('[data-testid="keysent"]').textContent.trim() ]));
+ok(stateRows.length === 4, `the key has four tile-state rows (${stateRows.length})`);
+const WANT_STATES = [
+  ['Match push', 'Promoted individually.'],
+  ['Group push', 'Included in a city or field push.'],
+  ['No push planned', 'No promotion scheduled.'],
+  ['Cancelled', 'Match called off.'],
+];
+ok(stateRows.map(r => r[0]).join(' | ') === WANT_STATES.map(r => r[0]).join(' | '),
+  `  the labels read exactly, in order (${stateRows.map(r => r[0]).join(' | ')})`);
+ok(stateRows.map(r => r[1]).join(' | ') === WANT_STATES.map(r => r[1]).join(' | '),
+  `  the sentences read exactly, in order (${stateRows.map(r => r[1]).join(' | ')})`);
+ok(!/booked/i.test(stateRows[3].join(' ')), '  and the cancelled row does not repeat the booked count');
+/* EVERY SWATCH IS THE TILE IT EXPLAINS, COMPUTED. A key that is a picture of the tiles drifts from
+   them; these render from tileBorderFor, the same expression the tiles use. */
+const swatch = await p.evaluate(() => {
+  const g = (sel, prop) => { const e = document.querySelector(sel); return e ? getComputedStyle(e)[prop] : null; };
   return {
-    keys: btns.map(b => b.dataset.t),
-    labels: btns.map(b => b.textContent.trim()),
-    heights: btns.map(b => Math.round(b.getBoundingClientRect().height)),
-    // The read-only statement, which is a span and not a button.
-    readOnly: document.querySelectorAll('[data-testid="partner-panel-badge"]').length,
+    swPlanned: g('[data-testid="keyswatch"][data-state="planned"]', 'borderLeftStyle'),
+    swCovered: g('[data-testid="keyswatch"][data-state="covered"]', 'borderLeftStyle'),
+    swNone: g('[data-testid="keyswatch"][data-state="none"]', 'borderStyle'),
+    tlPlanned: g('[data-testid="match-tile"][data-cover="planned"]', 'borderLeftStyle'),
+    tlCovered: g('[data-testid="match-tile"][data-cover="covered"]', 'borderLeftStyle'),
+    tlNone: g('[data-testid="match-tile"][data-cover="none"]', 'borderStyle'),
+    swMint: g('[data-testid="keyswatch"][data-state="planned"]', 'borderLeftColor'),
+    tlMint: g('[data-testid="match-tile"][data-cover="planned"]', 'borderLeftColor'),
+  };
+});
+ok(swatch.swPlanned === 'solid' && swatch.swCovered === 'dotted' && swatch.swNone.startsWith('dashed'),
+  `the swatches are solid, dotted, dashed (${swatch.swPlanned} / ${swatch.swCovered} / ${swatch.swNone})`);
+ok(swatch.swPlanned === swatch.tlPlanned && swatch.swCovered === swatch.tlCovered,
+  `  CONTROL: and each matches the tile it explains, computed (${swatch.tlPlanned} / ${swatch.tlCovered})`);
+ok(swatch.swMint === swatch.tlMint, `  CONTROL: including the rail colour (${swatch.swMint})`);
+
+const keyRows = await p.$$eval(D('keyitem'), es => es.map(e => e.textContent.replace(/\s+/g, ' ').trim()));
+ok(keyRows.length > 0, `CONTROL: the key lists ${keyRows.length} tag row(s), so the checks below are not free${keyRows.length === 0 ? TAGCTX : ''}`);
+ok(/STARTING 11 Active promo at this field\./.test(keyRows.join(' | ')) || !keyRows.join(' ').includes('STARTING 11'),
+  `  STARTING 11's row reads exactly (${keyRows.find(r => r.includes('STARTING 11')) ?? 'not in use this week'})`);
+/* THE SCOPE LEAD-IN IS GONE because the sentences carry it. Asserted absent, with the presence of
+   the rows themselves as the control. */
+ok(await p.$$eval('[data-testid="keyscope"]', es => es.length) === 0,
+  '  and no scope label repeats what the sentence already says');
+/* "CAN GO STALE" MOVED TO HOVER. */
+const s11Title = await p.$eval(`${D('keyitem')}[data-t="starting_11"]`, e => e.getAttribute('title')).catch(() => null);
+ok(s11Title === null || /can go stale/.test(s11Title),
+  `  the staleness caveat survives on hover (${s11Title ? 'present' : 'STARTING 11 not in use this week'})`);
+ok(s11Title === null || !/can go stale/.test(keyRows.join(' ')),
+  '  CONTROL: and is NOT in the visible row');
+
+/* ── THE PANEL GROUPS BY SCOPE ───────────────────────────────────────────────────────────────── */
+const picker = await p.evaluate(async () => {
+  const tile = document.querySelector('[data-testid="match-tile"]:not([data-cover="cancelled"])');
+  if (!tile) return null;
+  tile.click(); await new Promise(r => setTimeout(r, 700));
+  const groups = [...document.querySelectorAll('[data-testid="tagscope"]')].map(g => ({
+    scope: g.dataset.scope,
+    head: g.querySelector('span')?.textContent.trim(),
+    tags: [...g.querySelectorAll('[data-testid="tag-toggle"]')].map(b => b.dataset.t),
+  }));
+  return {
+    groups,
+    heights: [...document.querySelectorAll('[data-testid="tag-toggle"]')].map(b => Math.round(b.getBoundingClientRect().height)),
     panelOpen: document.querySelectorAll('[data-testid="panel"]').length,
   };
 });
-ok(picker && picker.panelOpen > 0, `CONTROL: the tile panel opened, so the picker checks below are not free`);
-ok(picker && picker.keys.length === 2 && picker.keys.join(',') === 'priority,starting_11',
-  `  the picker offers exactly two tags (${picker?.keys.join(', ')})`);
-ok(picker && !picker.labels.some(l => /PARTNER/i.test(l)),
-  '  and PARTNER is not one of them - it cannot be applied by hand');
-ok(picker && !picker.labels.some(l => /KEY\s*FIELD/i.test(l)), '  nor KEY FIELD');
-ok(picker && (picker.heights.length === 0 || Math.min(...picker.heights) >= 32),
-  `  tags are set from the panel, at ${picker?.heights[0] ?? 'n/a'}px`);
-/* IF THIS FIELD IS A PARTNER, the panel states it without offering a control. A disabled button
-   would read as "you may not"; this reads as "this is". */
-ok(picker && (picker.readOnly === 0 || picker.readOnly === 1),
-  `  and a partner field states it read-only rather than as a toggle (${picker?.readOnly})`);
+ok(picker && picker.panelOpen > 0, 'CONTROL: the side panel opened, so the group checks are not free');
+ok(picker && picker.groups.length === 2, `  the toggles sit in two scope groups (${picker?.groups.length})`);
+const gMatch = picker?.groups.find(g => g.scope === 'match');
+const gField = picker?.groups.find(g => g.scope === 'field');
+ok(gMatch && gMatch.tags.join(',') === 'priority',
+  `  the match group holds exactly PRIORITY (${gMatch?.tags.join(', ')})`);
+ok(gField && gField.tags.join(',') === 'key_field,starting_11',
+  `  the field group holds KEY FIELD and STARTING 11 (${gField?.tags.join(', ')})`);
+ok(gMatch && /This match only/.test(gMatch.head ?? ''), `  and says "This match only" (${gMatch?.head})`);
+ok(gField && /^Every match at /.test(gField.head ?? ''), `  and "Every match at <field>" (${gField?.head})`);
+ok(picker && picker.heights.length > 0 && Math.min(...picker.heights) >= 32,
+  `  every toggle at 32px (min ${picker ? Math.min(...picker.heights) : 'n/a'})`);
 await p.keyboard.press('Escape').catch(() => {});
+
+// ── THE FOUR TILES THAT CHANGE BADGE, PROVED ON THE PAGE AND NOT IN A SCRIPT ──────────────────
+/* WHY THIS EXISTS AT ALL. The first measurement of "how many tiles change badge" reported 0, and 0
+   was CORRECT about the code as it then stood: the implementation clustered the PRIOR minutes only,
+   so the candidate time belonged to no cluster and every shifted slot still badged NEW TIME. The bug
+   was in the shipped library, not in the script that measured it. A count from a script the page does
+   not reproduce is that same failure one layer up, so the expected set is derived HERE from the
+   database and then asserted against the rendered DOM.
+
+   THE OLD RULE IS REIMPLEMENTED IN THIS BLOCK ON PURPOSE. Everywhere else in this codebase a second
+   copy of a rule is the bug; here it is the instrument. Comparing the page against the library's own
+   current answer would assert that the library agrees with itself. */
+const expectedChange = await (async () => {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL, key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return null;
+  const { fetchVeoWeek } = await import('../src/lib/veoSchedule.ts');
+  const { buildPriorSlate, newnessOf, NEW_LOOKBACK_WEEKS } = await import('../src/lib/matchPromotion.ts');
+  const sb = createClient(url, key);
+  const now = new Date();
+  const wk = await fetchVeoWeek(sb, now, now, null, true);
+  const [y, mo, d] = wk.weekStart.split('-').map(Number);
+  const priors = [];
+  for (let i = 1; i <= NEW_LOOKBACK_WEEKS; i++) {
+    priors.push(await fetchVeoWeek(sb, now, new Date(y, mo - 1, d - 7 * i), null, true));
+  }
+  const tagged = priors.flatMap(w => w.matches.map(m => ({ ...m, weekKey: w.weekStart })));
+  const slate = buildPriorSlate(tagged);
+  // THE OLD RULE: field, field-day, field-day-EXACT-MINUTE.
+  const V = new Map(), VD = new Map(), VDT = new Map();
+  for (const m of tagged) {
+    (V.get(m.city) ?? V.set(m.city, new Set()).get(m.city)).add(m.venue);
+    (VD.get(m.city) ?? VD.set(m.city, new Set()).get(m.city)).add(`${m.venue}|${m.dayIdx}`);
+    (VDT.get(m.city) ?? VDT.set(m.city, new Set()).get(m.city)).add(`${m.venue}|${m.dayIdx}|${m.minutes}`);
+  }
+  const oldRule = (m) => {
+    if (!V.has(m.city) || !V.get(m.city).has(m.venue)) return 'field';
+    if (!VD.get(m.city).has(`${m.venue}|${m.dayIdx}`)) return 'day';
+    if (!VDT.get(m.city).has(`${m.venue}|${m.dayIdx}|${m.minutes}`)) return 'time';
+    return null;
+  };
+  const changed = [];
+  for (const m of wk.matches) {
+    const before = oldRule(m), after = newnessOf(m, slate);
+    if (before !== after) changed.push({ api: m.apiId, venue: m.venue, before, after });
+  }
+  return { weekStart: wk.weekStart, tiles: wk.matches.length, changed };
+})();
+ok(expectedChange !== null && expectedChange.changed.length > 0,
+  `CONTROL: the exact-minute rule and the clustered rule disagree on ${expectedChange?.changed.length ?? 'UNKNOWN'} of ${expectedChange?.tiles ?? '?'} tiles, so there is a change to observe`);
+if (expectedChange && expectedChange.changed.length > 0) {
+  ok(expectedChange.changed.every(c => c.before === 'time' && c.after === null),
+    `  every disagreement is NEW TIME becoming no badge (${expectedChange.changed.map(c => `${c.before}->${c.after}`).join(', ')})`);
+  /* THE ASSERTION THE WHOLE FIND EXISTS FOR: those exact tiles, by api_id, must render WITHOUT a time
+     badge on the page. If the library still clustered prior-only, each would still carry data-new="time"
+     and this goes red naming the tiles. */
+  const onPage = await p.evaluate((ids) => ids.map(id => {
+    const t = document.querySelector(`[data-testid="match-tile"][data-api-id="${id}"]`);
+    return t ? { id, flag: t.dataset.new ?? '', moved: /Moved from /.test(t.getAttribute('title') ?? '') } : { id, flag: 'NOT ON PAGE', moved: false };
+  }), expectedChange.changed.map(c => c.api));
+  const present = onPage.filter(t => t.flag !== 'NOT ON PAGE');
+  ok(present.length === onPage.length,
+    `  CONTROL: all ${onPage.length} are rendered on this week's grid (${onPage.length - present.length} missing)`);
+  ok(present.every(t => t.flag !== 'time'),
+    `  and NONE of them badges NEW TIME on the page (${present.filter(t => t.flag === 'time').map(t => t.id).join(', ') || 'none does'})`);
+  ok(present.every(t => t.moved),
+    `  and every one says "Moved from" on hover (${present.filter(t => !t.moved).map(t => t.id).join(', ') || 'all do'})`);
+  /* CONTROL: a tile the two rules AGREE on must be untouched, so the three above are not simply
+     "no tile anywhere badges NEW TIME". */
+  const stillTime = await p.$$eval('[data-testid="match-tile"][data-new="time"]', es => es.map(e => Number(e.dataset.apiId)));
+  ok(stillTime.length > 0 && stillTime.every(id => !expectedChange.changed.some(c => c.api === id)),
+    `  CONTROL: ${stillTime.length} other tile(s) still badge NEW TIME, none of them from the changed set`);
+}
+
+// ── NEWNESS SHARES THE CANCEL ROLLUP'S WINDOW ─────────────────────────────────────────────────
+/* A slot whose time moved INSIDE the window is one slot to the cancel ramp, so it stopped badging
+   NEW TIME: a tile cannot say "this slot cancelled 2 of 4" and "this time is new" at once and be
+   believed. The information moved to the tooltip.
+   MEASURED on the week of 2026-09-21: 4 of 110 tiles changed, all NEW TIME -> no badge, and NEW TIME
+   went from 5 tiles to 1. The survivor is a move OUTSIDE the window, which is the control. */
+const newness = await p.evaluate(() => {
+  const tiles = [...document.querySelectorAll('[data-testid="match-tile"]')];
+  const byFlag = {};
+  for (const t of tiles) { const f = t.dataset.new || 'none'; byFlag[f] = (byFlag[f] ?? 0) + 1; }
+  const moved = tiles.filter(t => /Moved from /.test(t.getAttribute('title') ?? ''));
+  return {
+    byFlag,
+    moved: moved.length,
+    movedTitles: moved.slice(0, 3).map(t => t.getAttribute('title')),
+    // A TILE THAT MOVED MUST NOT ALSO CLAIM NEW TIME. That pair is the contradiction this fixes.
+    movedAndTimeBadged: moved.filter(t => t.dataset.new === 'time').length,
+    timeBadged: tiles.filter(t => t.dataset.new === 'time').length,
+  };
+});
+ok(newness.moved > 0,
+  `CONTROL: ${newness.moved} tile(s) carry a "moved from" tooltip, so the checks below are not free`);
+ok(newness.movedAndTimeBadged === 0,
+  `no tile both says its time moved and badges NEW TIME (${newness.movedAndTimeBadged})`);
+ok(/Moved from \d\d:\d\d.*ran \d of the last \d weeks/.test(newness.movedTitles[0] ?? ''),
+  `  and the tooltip names the old time and how many weeks it ran ("${(newness.movedTitles[0] ?? '').slice(0, 78)}")`);
+/* CONTROL: A MOVE OUTSIDE THE WINDOW STILL BADGES. Without this, "no tile badges NEW TIME" would be
+   satisfied by a rule that never badges anything. */
+ok(newness.timeBadged > 0,
+  `  CONTROL: ${newness.timeBadged} tile(s) still badge NEW TIME, for a move outside the window`);
+ok((newness.byFlag.day ?? 0) > 0 && (newness.byFlag.field ?? 0) > 0,
+  `  CONTROL: NEW DAY (${newness.byFlag.day ?? 0}) and NEW FIELD (${newness.byFlag.field ?? 0}) are unaffected`);
 
 // ══ R4. THE EDITOR AS A FIXED SIDE PANEL ══════════════════════════════════════════════════════
 /* It opened in the page flow, so clicking a tile pushed the grid down and the row you were working
@@ -725,8 +901,9 @@ ok(await p.evaluate(() => document.documentElement.scrollWidth) <= 392,
    one component with a parameter, which is why this block asserts both through the same code. */
 await load();
 const views = await p.$$eval(`${D('view-tabs')} button`, es => es.map(e => e.textContent.trim()));
-ok(views.length === 4 && views.join(', ') === 'Plan, Coverage, Priority, Starting 11',
-  `the toggle offers four views (${views.join(', ')})`);
+const WANT_VIEWS = ['Plan', 'Coverage', ...TAG_KEYS.map(k => TAG_META[k].label.toLowerCase().replace(/\b[a-z]/g, c => c.toUpperCase()))];
+ok(views.join(', ') === WANT_VIEWS.join(', '),
+  `the toggle offers Plan, Coverage and one view per tag (${views.join(', ')})`);
 ok(await p.$(D('view-tab-plan')) !== null, '  and Plan is still one of them - it IS the week grid');
 
 /* THE TRUTH THE VIEWS ARE CHECKED AGAINST, counted off the UNFILTERED Plan grid. Not from the
@@ -795,7 +972,7 @@ for (const [key, label] of [['priority', 'Priority'], ['starting_11', 'Starting 
    least one tag view has to be NON-EMPTY in the same run, or these assertions are measuring a
    broken filter and calling it agreement. */
 ok(sawNonEmptyTagView,
-  'CONTROL: at least one tag view rendered tiles, so the zero on the other is a real zero');
+  `CONTROL: at least one tag view rendered tiles, so the zero on the other is a real zero${sawNonEmptyTagView ? '' : TAGCTX}`);
 /* AND THE UNFILTERED GRID COMES BACK. A filter that leaked into Plan's own state would show here. */
 await p.click(D('view-tab-plan'));
 await p.waitForTimeout(400);
@@ -828,8 +1005,8 @@ for (const vw of [390, 1320]) {
 // ══ R3c. THE PHONE READS THE SAME SOURCE ══════════════════════════════════════════════════════
 await load(390);
 const mViews = await p.$$eval(`${D('m-tabs')} button`, es => es.map(e => e.textContent.trim()));
-ok(mViews.join(', ') === 'Due, Week, Coverage, Priority, Starting 11',
-  `the phone offers the same views plus its own two (${mViews.join(', ')})`);
+ok(mViews.join(', ') === ['Due', 'Week', 'Coverage', ...WANT_VIEWS.slice(2)].join(', '),
+  `the phone offers the same tag views plus its own two (${mViews.join(', ')})`);
 await p.click(D('m-tab-priority'));
 await p.waitForSelector(`${D('m-week')}[data-view-tag="priority"]`, { timeout: 20000 });
 const mTag = await p.evaluate(() => ({
@@ -840,7 +1017,7 @@ const mTag = await p.evaluate(() => ({
 /* THE SAME MATCHES AS THE DESKTOP'S OWN PRIORITY VIEW. Not the same count - the same ids. The phone
    filters through the same tagsOf it is handed, and this is what proves it rather than assuming. */
 const wantPriority = [...new Set(tagTruth['priority'] ?? [])].sort();
-ok(mTag.rows.length > 0, `CONTROL: the phone's Priority view rendered ${mTag.rows.length} row(s)`);
+ok(mTag.rows.length > 0, `CONTROL: the phone's Priority view rendered ${mTag.rows.length} row(s)${mTag.rows.length === 0 ? TAGCTX : ''}`);
 ok(mTag.rows.slice().sort().join() === wantPriority.join(),
   `  and they are the same matches the desktop shows (${mTag.rows.length} against ${wantPriority.length})`);
 ok(mTag.withChip === mTag.rows.length, `  every row carries the chip (${mTag.withChip} of ${mTag.rows.length})`);

@@ -246,7 +246,7 @@ await load();
 // one earned and one typed, makes the earned one untrustworthy. KEY FIELD carries the same intent
 // and collides with nothing.
 const tagLabels = await p.$$eval(D('tag'), es => [...new Set(es.map(e => e.textContent.trim()))]);
-ok(tagLabels.includes('KEY FIELD'), `the manual tags render (${tagLabels.join(', ')})`);
+ok(tagLabels.includes('PRIORITY'), `the manual tags render (${tagLabels.join(', ')})`);
 ok(!tagLabels.includes('NEW FIELD'),
   '  CONTROL: and none of them says NEW FIELD, which is the automatic badge\u2019s words');
 ok(await p.$$eval(D('newb'), es => es.some(e => /NEW/.test(e.textContent))),
@@ -254,9 +254,18 @@ ok(await p.$$eval(D('newb'), es => es.some(e => /NEW/.test(e.textContent))),
 ok(tagLabels.includes('STARTING 11'), '  Starting 11 is one of them');
 
 // SEVERAL PER FIELD, EACH ITS OWN COLOUR, AND THEY MUST ALL DIFFER.
-const tagCols = await p.evaluate(() => ['key','prio','s11','ptnr'].map(k => {
+// COLOUR CARRIES THE CONCEPT, LABEL CARRIES THE SCOPE. Ryan: KEY FIELD is "the priority version of
+// the full field", so it is one idea at two scopes. Two colours would read as two ideas. This is a
+// deliberate break from "each tag a different colour" and the pair sharing one is the assertion.
+const tagCols = await p.evaluate(() => ['prio','key','s11'].map(k => {
   const e = document.querySelector(`.tag[data-t="${k}"]`); return e ? getComputedStyle(e).color : null; }));
-ok(tagCols.every(Boolean) && new Set(tagCols).size === 4, `four tags, four colours (${tagCols.join(' | ')})`);
+ok(tagCols.every(Boolean), `all three tags render (${tagCols.join(' | ')})`);
+ok(tagCols[0] === tagCols[1], `  PRIORITY and KEY FIELD share a colour, being one idea (${tagCols[0]})`);
+ok(tagCols[2] !== tagCols[0], `  CONTROL: while STARTING 11, a different idea, does not (${tagCols[2]})`);
+ok(!tagLabels.includes('PARTNER'), '  CONTROL: and PARTNER is not a tag');
+// PARTNER IS GONE, NOT HIDDEN. It was derivable from basisOf() the whole time, and the hand-set
+// version was wrong on its one field and absent from the five that qualified.
+
 
 // OUTLINED, NOT FILLED. The tile already spends filled pills on the cancel ratio and the NEW
 // badges; a filled red tag would read as a 4/4 cancel at a glance. One structural difference keeps
@@ -271,9 +280,42 @@ const taken = ['rgb(44, 219, 135)','rgb(244, 196, 48)','rgb(232, 134, 42)','rgb(
 ok(tagCols.every(c => !taken.includes(c)),
   '  CONTROL: and no tag colour is one the page already uses for something else');
 
-// A CAP, because several per field is the stated case and five pills on one tile is unreadable.
-ok(await p.$$eval(D('tagmore'), es => es.length) > 0,
-  `a field with more than three tags shows the rest as a count (${await p.$eval(D('tagmore'), e => e.textContent)})`);
+// PRIORITY IS A MATCH FACT, NOT A FIELD ONE. This is the assertion the whole change exists for:
+// the same field in the same week must be able to carry different tags on different days.
+const kesw = await p.evaluate(() => {
+  const g = (day) => { const t = [...document.querySelectorAll('[data-testid="tile"]')].find(
+      e => e.dataset.venue.startsWith('Keswick') && e.dataset.day === day);
+    return t ? [...t.querySelectorAll('[data-testid="tag"]')].map(x => x.textContent.trim()) : null; };
+  return { mon: g('mon'), wed: g('wed') }; });
+ok(kesw.mon?.includes('PRIORITY') && !kesw.wed?.includes('PRIORITY'),
+  `PRIORITY sits on one match, not the field (Keswick mon ${kesw.mon?.join('+')} / wed ${kesw.wed?.join('+')})`);
+ok(kesw.mon?.includes('STARTING 11') && kesw.wed?.includes('STARTING 11'),
+  '  CONTROL: while the field tag does ride every match at that field, which is the contrast');
+// AND IT STANDS ALONE. A field with no field tags still shows PRIORITY, so the pill is not
+// quietly depending on something else being there.
+ok(await p.evaluate(() => { const t = [...document.querySelectorAll('[data-testid="tile"]')].find(
+    e => e.dataset.venue === 'Hattrick' && e.dataset.day === 'wed' && e.dataset.time === '7:00 PM');
+  return !!t && [...t.querySelectorAll('[data-testid="tag"]')].map(x => x.textContent.trim()).join() === 'PRIORITY'; }),
+  '  a match at an untagged field carries PRIORITY on its own');
+// KEY FIELD SWALLOWS PRIORITY ON THE TILE. A match at a field we are already pushing is not
+// additionally prioritised; two pills saying one thing costs a third of the row.
+const nemp = await p.evaluate(() => { const t = [...document.querySelectorAll('[data-testid="tile"]')]
+    .find(e => e.dataset.venue === 'NEMP' && e.dataset.day === 'mon' && e.dataset.time === '7:30 PM');
+  return t ? [...t.querySelectorAll('[data-testid="tag"]')].map(x => x.textContent.trim()) : null; });
+ok(nemp?.includes('KEY FIELD') && !nemp?.includes('PRIORITY'),
+  `KEY FIELD swallows this match's own PRIORITY on the tile (${nemp?.join('+')})`);
+// AND THE TRAP UNDER IT. If the panel read the suppressed set too, the PRIORITY toggle would come
+// up dark for a tag that IS set, and the next save would quietly clear it. The tile hides it; the
+// panel must not.
+await p.evaluate(() => [...document.querySelectorAll('[data-testid="tile"]')]
+  .find(e => e.dataset.venue === 'NEMP' && e.dataset.day === 'mon' && e.dataset.time === '7:30 PM').click());
+await p.waitForTimeout(250);
+ok(await p.$$eval('[data-testid="tagtog"][data-t="prio"][data-on="1"]', es => es.length) === 1,
+  '  CONTROL: its panel toggle is still lit, so a save cannot silently clear the hidden tag');
+await p.keyboard.press('Escape'); await p.waitForTimeout(250);
+
+// A CAP. Three tags exist, so it cannot fire today; it stays as the invariant that keeps a fourth
+// from silently making the row unreadable later.
 ok(await p.$$eval(`${D('tags')}`, es => es.every(e => e.querySelectorAll('[data-testid="tag"]:not(.more)').length <= 3)),
   '  CONTROL: no tile renders more than three tag pills');
 // NO MICRO-BUTTON ON THE TILE. A "+ tag" pill sized to fit beside the others is a 14px tap target,
@@ -304,15 +346,37 @@ ok(sw.planned === sw.tPlanned && sw.none === sw.tNone,
 // WORDING IS "PUSH", NOT "PROMO". The queue, the Mark sent button and every push line say push;
 // a key introducing a second word for one thing does the opposite of its job.
 const keyTxt = await p.$eval(D('key'), e => e.textContent);
-ok(/push/i.test(keyTxt) && !/promo(?!tion code)/i.test(keyTxt),
-  '  CONTROL: the key says push throughout, never promo');
+// VERBATIM, WHICH REPLACES THE OLD "NEVER SAYS PROMO" RULE RATHER THAN BENDING IT. That rule
+// existed to stop a push acquiring a second name; pinning the exact words does the same job and
+// cannot be argued with later. Promotion as an ACTIVITY is fine in both grids; the object in the
+// label is always a push.
+// Label and sentence read separately, because concatenating them makes the expected string
+// unreadable and a mismatch impossible to diagnose from the failure line.
+const stateRows = await p.$$eval(D('keystate'), es => es.map(e => [
+  e.querySelector('.keylab').textContent.trim(),
+  e.querySelector('.keylab').nextSibling.textContent.trim() ].join(' = ')));
+ok(stateRows.join(' | ') === [
+  'Match push = Promoted individually.',
+  'Group push = Included in a city or field push.',
+  'No push planned = No promotion scheduled.',
+  'Cancelled = Match called off.' ].join(' | '),
+  `the state rows read exactly as written (${stateRows.join(' | ')})`);
 
 const keyN = await p.$$eval(D('keyitem'), es => es.length);
-ok(keyN === 4, `the key then lists the four tags on screen (${keyN})`);
-ok(/Starting 11 is live at this field/.test(keyTxt),
-  '  each with a full sentence, not a fragment');
-ok(/can go stale/.test(keyTxt),
-  '  CONTROL: including that STARTING 11 is hand-set and can go stale, which is the one that would mislead');
+ok(keyN === 3, `the key then lists the three tags on screen (${keyN})`);
+// THE KEY STATES THE SCOPE, because "PRIORITY" and "KEY FIELD" look identical on a tile and behave
+// nothing alike: clearing one affects a match, clearing the other affects a week of them.
+const keyRows = await p.$$eval(D('keyitem'), es => es.map(e => e.textContent.replace(/\s+/g,' ').trim()));
+ok(keyRows.join(' | ') === 'STARTING 11 Active promo at this field. | PRIORITY Extra promotion for this match. | KEY FIELD Extra promotion for all matches here.',
+  `the tag rows read exactly as written, in that order (${keyRows.join(' | ')})`);
+// THE SCOPE LEAD-IN IS GONE BECAUSE THE SENTENCES CARRY IT. "for this match" and "for all matches
+// here" say it better than a label above them did.
+ok(await p.$$eval(D('keyscope'), es => es.length) === 0,
+  '  CONTROL: and no scope label repeats what the sentence already says');
+// THE CAVEAT MOVED TO HOVER RATHER THAN BEING DROPPED. Starting 11 is the only tag whose claim can
+// be wrong: it asserts a code is live while being set by hand.
+ok(await p.$eval(`${D('keyitem')}[data-t="s11"]`, e => /can go stale/.test(e.title)),
+  '  CONTROL: the staleness caveat survives on hover, off the row but still findable');
 ok(await p.$$eval(`${D('tag')}[title]`, es => es.length > 0),
   '  CONTROL: and each tag carries its meaning on hover too, so the key is a reference not a prerequisite');
 
@@ -355,6 +419,27 @@ ok(await p.$$eval(`${D('tile')}[data-sel="1"]`, es => es.length) === 1,
   'exactly one tile is marked as the one being edited');
 const title = await txt(D('side-title'));
 ok(/\u00b7/.test(title), `  and the panel names it (${title})`);
+
+// TAGS ARE SET HERE, GROUPED BY SCOPE. PRIORITY is one match; KEY FIELD and STARTING 11 are the
+// whole field. Identical-looking pills that behave differently is the failure this grouping exists
+// to stop, so assert WHICH group each sits in, not merely that two headings exist.
+const tg = await p.evaluate(() => [...document.querySelectorAll('[data-testid="tagscope"]')].map(g => ({
+  scope: g.dataset.scope,
+  head: g.querySelector('.tagscopehead').textContent.trim(),
+  tags: [...g.querySelectorAll('[data-testid="tagtog"]')].map(b => b.textContent.trim()),
+  on: [...g.querySelectorAll('[data-testid="tagtog"][data-on="1"]')].map(b => b.textContent.trim()) })));
+const gm = tg.find(g => g.scope === 'match'), gf = tg.find(g => g.scope === 'field');
+ok(gm?.tags.join() === 'PRIORITY', `the panel sets PRIORITY under "${gm?.head}"`);
+ok(gf?.tags.join() === 'KEY FIELD,STARTING 11', `  and the field tags under "${gf?.head}"`);
+ok(/every match/i.test(gf?.head ?? ''),
+  '  CONTROL: the field group says it applies to every match there, which is what one click does');
+ok(/this match/i.test(gm?.head ?? ''), '  CONTROL: and the match group says it does not');
+// THE TOGGLES REFLECT THE TILE THEY WERE OPENED FROM, rather than rendering a blank row that
+// silently clears a tag on save.
+ok(gm?.on.join() === 'PRIORITY' || gf?.on.length > 0,
+  `  and the toggles come up lit for the tags this match already has (${[...(gm?.on??[]),...(gf?.on??[])].join('+')})`);
+ok(await p.$$eval(D('tagtog'), es => es.every(e => e.getBoundingClientRect().height >= 32)),
+  '  CONTROL: every tag toggle clears 32px, rather than being shrunk to fit the panel');
 
 // SIX CHANNELS, AND THE CODE SITS ON THE CHANNEL. Putting it back on the panel header would undo
 // the per-channel split in the one place an operator types it.

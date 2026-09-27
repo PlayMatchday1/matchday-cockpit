@@ -19,7 +19,7 @@
 // and passed in; nothing is re-derived and no count is redefined.
 
 import { CHANNELS, NEW_FLAG_LABEL, channelsOn, codeFor, coverLabel, coverageCaption, coverageOf, coverageStateOf, coverageSummary, datedPushes, fmtPushIn, isPushOverdue, isPushSent, leadToKickoff, sentStamp, venueOffsetMs, type GeneralPush, type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode } from "@/lib/matchPromotion";
-import { PARTNER_BADGE, TAG_META, splitTags, type TagKey } from "@/lib/promoTags";
+import { PARTNER_BADGE, TAG_META, splitTags, tagTitle, tagsAtScope, type TagKey } from "@/lib/promoTags";
 /* THE VIEW LIST AND ITS LABELS COME FROM THE DESKTOP. Not a second list to keep in step — a
  * phone tab the desktop does not have is how the two surfaces end up offering different views. */
 import { MOBILE_VIEWS, VIEW_LABEL, type MobileView } from "@/components/MatchPromotionView";
@@ -47,8 +47,10 @@ export type MobileProps = {
   coverOf: (m: PromoMatch) => ReturnType<typeof coverageOf>;
   /** The general pushes that carried it, for the label. Empty unless coverOf is "covered". */
   coversOf: (m: PromoMatch) => GeneralPush[];
-  /** This match's field tags, keyed on the field upstream. */
+  /** This match's tags at BOTH scopes, raw and unsuppressed — the panel needs the true set. */
   tagsOf: (m: PromoMatch) => TagKey[];
+  /** Sets or clears one tag. The SCOPE is derived from the tag upstream, never passed from here. */
+  onToggleTag: (m: PromoMatch, t: TagKey, on: boolean) => void;
   /** True when the FIELD is at a revenue-share venue. Derived upstream; read-only here. */
   partnerOf: (m: PromoMatch) => boolean;
   tab: MobileView;
@@ -320,7 +322,7 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode; viewTag?: TagKey |
                         </i>
                       )}
                       {shownTags.map((t) => (
-                        <i key={t} data-testid="m-tag" data-t={t} title={TAG_META[t].meaning}
+                        <i key={t} data-testid="m-tag" data-t={t} title={tagTitle(t)}
                           className="rounded-[4px] border px-[5px] py-px text-[9px] font-extrabold not-italic tracking-[0.03em]"
                           style={{ color: TAG_META[t].colour, borderColor: TAG_META[t].colour, background: "transparent" }}>
                           {TAG_META[t].label}
@@ -401,6 +403,42 @@ function Panel(p: MobileProps) {
     <div data-testid="m-panel" data-dirty={dirty ? "1" : "0"}
       className="mb-2 rounded-[11px] border border-deep-green bg-[#fbfdfc] p-3">
       <h3 className="m-0 mb-2.5 text-[13px] font-extrabold">{m.venue} · {m.city}</h3>
+      {/* ── THE SAME TWO SCOPE GROUPS THE DESKTOP PANEL HAS ────────────────────────────────────
+          Brought along rather than left desktop-only: a phone operator could see tags on the rows
+          and had no way to set one. The heading is the whole fix here too - KEY FIELD pressed from a
+          phone lights up every match at that pitch all week. THE TOGGLES READ THE TRUE SET, so a
+          PRIORITY suppressed on the row still comes up lit and a save cannot clear it. */}
+      <div className="mb-2.5" data-testid="m-tagset">
+        {(["match", "field"] as const).map((scope) => {
+          const keys = tagsAtScope(scope);
+          if (keys.length === 0 || (scope === "field" && m.fieldId == null)) return null;
+          const tags = p.tagsOf(m);
+          return (
+            <div key={scope} data-testid="m-tagscope" data-scope={scope}
+              className="mb-1.5 rounded-[9px] border border-cream-line bg-white px-2.5 py-2">
+              <span className="mb-1.5 block text-[10px] font-extrabold uppercase tracking-[0.06em] text-deep-green/45">
+                {scope === "match" ? "This match only" : `Every match at ${m.venue}`}
+              </span>
+              <span className="flex flex-wrap gap-1.5">
+                {keys.map((t) => {
+                  const on = tags.includes(t);
+                  return (
+                    <button key={t} type="button" data-testid="m-tag-toggle" data-t={t} data-on={on ? "1" : "0"}
+                      aria-pressed={on} disabled={saving} title={tagTitle(t)}
+                      onClick={() => p.onToggleTag(m, t, !on)}
+                      className="min-h-[32px] rounded-[7px] border px-2.5 text-[11px] font-extrabold tracking-[0.03em]"
+                      style={on
+                        ? { color: "#fff", background: TAG_META[t].colour, borderColor: TAG_META[t].colour }
+                        : { color: TAG_META[t].colour, borderColor: TAG_META[t].colour, background: "transparent" }}>
+                      {TAG_META[t].label}
+                    </button>
+                  );
+                })}
+              </span>
+            </div>
+          );
+        })}
+      </div>
       {/* WHY ANOTHER ROW WILL NOT OPEN. Same rule as the desktop, same words. */}
       {dirty && (
         <div data-testid="m-dirty" className="mb-2 text-[11.5px] font-extrabold text-coral">
