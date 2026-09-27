@@ -132,25 +132,28 @@ export default function PlayerFunnel({
     return [...set].sort();
   }, [data.funnelByMonthCity]);
 
-  /* ── FLEET FIRST, THEN THE TWO THAT ARE NOT FLEET CITIES, WITH THEIR COUNTS ─────────────────
-   * Measured on prod 2026-09-27: 29,238 completed registrations, 28,692 in the eight fleet cities and
-   * 546 outside them - New York City 398 and Warsaw 148.
+  /* ── ACTIVE CITIES FIRST, THEN OUTSIDE ACTIVE CITIES, WITH COUNTS ──────────────────────────
+   * Measured on prod 2026-09-27: 29,238 completed registrations. New York City 398, Warsaw 148,
+   * El Paso 102.
    *
-   * NEITHER IS FILTERED OUT, AND THE PICKER IS THE FILTER. Anyone wanting MatchDay-only deselects
-   * Warsaw. A separate exclusion was built and reverted: it removed Warsaw from the national row as
-   * well, and a page with a hidden exclusion is a page whose total cannot be checked against its
+   * NOTHING IS FILTERED OUT AND THE PICKER IS THE FILTER. Anyone wanting a narrower read deselects.
+   * An exclusion was built for Warsaw and reverted: it took Warsaw out of the national row as well,
+   * and a page carrying a hidden exclusion is a page whose total cannot be checked against its
    * source. On the full set the city rows and the total reconcile to 29,238 exactly, which is the one
    * property that makes these rows trustworthy.
    *
-   * THEY ARE NOT THE SAME KIND OF THING, AND THE SEPARATOR SAYS SO.
-   *   NEW YORK CITY  real MatchDay signups in a city with no pitch. Expansion signal.
-   *   WARSAW         A SEPARATE OPERATOR ON A BRAND LICENCE, not a MatchDay market and not a
-   *                  spelling variant. It is counted here today; that is a decision, not an
-   *                  oversight, and the label is what stops it being read as a ninth market.
+   * THE GROUP IS "OUTSIDE ACTIVE CITIES", NOT "NOT FLEET CITIES", because El Paso belongs in it and
+   * El Paso IS a fleet city - it is simply not running. A label naming the fleet would be wrong about
+   * the one member that makes the group necessary.
    *
-   * THE COUNTS RIDE THE CHIPS because "Warsaw" alone tells a reader nothing about whether it matters.
-   * 148 against Austin's 13,297 is the context that makes the label actionable. */
-  const LICENSEE_CITIES = useMemo(() => new Set(["Warsaw"].map((c) => canonCity(c))), []);
+   * TWO WAYS IN, DELIBERATELY. A city qualifies if it is absent from CANONICAL_CITIES (New York,
+   * Warsaw) OR if it is a fleet city that is not running (El Paso). The first half is automatic, so a
+   * new declared spelling lands here without anyone remembering to add it; the second is a list,
+   * because "running" is not a fact this data carries.
+   *
+   * NO "LICENSEE" LABEL. Warsaw's arrangement is not settled, and a label on the page would harden a
+   * decision nobody has made. It is in the group and in the totals like the others. */
+  const NOT_RUNNING = useMemo(() => new Set(["El Paso"].map((c) => canonCity(c))), []);
   const regsByCity = useMemo(() => {
     const m = new Map<string, number>();
     for (const r of data.funnelByMonthCity) {
@@ -161,11 +164,12 @@ export default function PlayerFunnel({
   }, [data.funnelByMonthCity]);
   const { fleetCities, otherCities } = useMemo(() => {
     const fleet = new Set((CANONICAL_CITIES as readonly string[]).map((c) => canonCity(c)));
+    const outside = (c: string) => !fleet.has(c) || NOT_RUNNING.has(c);
     return {
-      fleetCities: cityOptions.filter((c) => fleet.has(c)),
-      otherCities: cityOptions.filter((c) => !fleet.has(c)),
+      fleetCities: cityOptions.filter((c) => !outside(c)),
+      otherCities: cityOptions.filter((c) => outside(c)),
     };
-  }, [cityOptions]);
+  }, [cityOptions, NOT_RUNNING]);
 
   const toggleCity = (c: string) =>
     setPicked((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
@@ -360,23 +364,18 @@ export default function PlayerFunnel({
                   <span data-testid="funnel-city-sep" aria-hidden="true"
                     style={{ alignSelf: "stretch", width: 1, minHeight: 24, background: "var(--cream-line, #dfe6e2)", margin: "0 2px" }} />
                   <span className={styles.fieldLabel} style={{ margin: 0 }} data-testid="funnel-city-sep-label"
-                    title="Not MatchDay markets. New York City is real MatchDay signups where we have no pitch. Warsaw is a separate operator on a brand licence, not a market and not a spelling variant. Both are counted in the totals on this page; deselect one to leave it out.">
-                    Not fleet cities
+                    title="Cities with no active MatchDay operation. Some have never had one and some have stopped. Their registrations are real and are counted in every total on this page; deselect one to leave it out.">
+                    Outside active cities
                   </span>
                   {otherCities.map((c) => (
                     <button key={c} type="button" data-testid="funnel-city-chip" data-city={c}
-                      data-other="1" data-licensee={LICENSEE_CITIES.has(c) ? "1" : "0"}
+                      data-other="1"
                       data-on={picked.includes(c) ? "1" : "0"} aria-pressed={picked.includes(c)}
                       onClick={() => toggleCity(c)} style={chipStyle(picked.includes(c))}
-                      title={LICENSEE_CITIES.has(c)
-                        ? `${c} is a separate operator on a brand licence, not a MatchDay market. Counted in the totals on this page; deselect it for MatchDay only.`
-                        : `${c}: players declared it at signup and MatchDay has no pitch there.`}>
+                      title={`${c} has no active MatchDay operation. Its registrations are real and are counted in every total on this page.`}>
                       {c}
-                      {LICENSEE_CITIES.has(c) && (
-                        <i data-testid="funnel-city-licensee" style={{ fontStyle: "normal", opacity: 0.75, marginLeft: 5, fontSize: 10.5 }}>
-                          licensee
-                        </i>
-                      )}
+                      {/* THE COUNT RIDES THE CHIP, because a city name alone says nothing about
+                          whether it matters. 102 against Austin's 13,297 is the context. */}
                       <i data-testid="funnel-city-count" style={{ fontStyle: "normal", opacity: 0.7, marginLeft: 5, fontSize: 11 }}>
                         {(regsByCity.get(c) ?? 0).toLocaleString()}
                       </i>
@@ -423,7 +422,15 @@ export default function PlayerFunnel({
             <div key={r.name} className={styles.funnelRow} data-testid="funnel-row"
               data-city-row={r.isCity ? "1" : "0"} data-total-row={r.isTotal ? "1" : "0"}>
               <div className={styles.funnelPeriod}>
-                <span className={styles.funnelPeriodName}>{r.name}</span>
+                <span className={styles.funnelPeriodName}>
+                  {r.name}
+                  {/* ONCE, ON THE ROW IT DESCRIBES. Clamping the current month to the real one is
+                      not the same as pretending it closed, so the marker stays - it just stopped
+                      being repeated across every conversion in the row. */}
+                  {r.partial && (
+                    <i data-testid="funnel-in-progress" className={styles.funnelInProgress}> · in progress</i>
+                  )}
+                </span>
                 <span className={styles.funnelPeriodMeta}>{r.meta}</span>
               </div>
               {renderRowCells(r.vals, r.dlNote, r.partial, r.isCity)}
@@ -433,14 +440,12 @@ export default function PlayerFunnel({
       </div>
 
       {/* ── WHAT A CITY MEANS HERE, IN VISIBLE TEXT ─────────────────────────────────────────────
-          Someone will put this table in a board deck and read a city row as local activity. The two
-          facts that stop them belong on the same line and on the page, not in a tooltip: the city is
-          DECLARED AT SIGNUP, and downloads have no city at all. Asserted as visible text. */}
+          Someone will put this table in a board deck and read a city row as local activity. Both
+          facts that stop them are on the page rather than in a tooltip: the city is the one chosen
+          AT SIGNUP, and downloads have no city at all. Wording is Ryan's, verbatim. */}
       <p className={styles.funnelFootnote} data-testid="funnel-city-rule">
-        A city here is the city a player <b>declared when they registered</b>, not where they played.
-        So Austin&rsquo;s funnel is Austin&rsquo;s signups, not Austin&rsquo;s operations. Downloads
-        have no city at all: the app stores report country and region, never city, so that column and
-        its first conversion are a dash on every city row.
+        Players are grouped by the city selected at signup, regardless of where they play.
+        Downloads and download-to-signup conversion aren&rsquo;t available by city.
       </p>
     </div>
   );
@@ -497,13 +502,16 @@ function renderRowCells(vals: (number | null)[], dlNote?: string | null, partial
       if (mustDash && known) throw new Error(`funnel: conversion at ${i} should be dashed`);
       out.push(
         <div key={`c${i}`} className={styles.funnelConv}>
+          {/* ── NO "SO FAR" ON THE CONVERSIONS ────────────────────────────────────────────────
+              It said the same thing five times in one row, and five copies of a caveat read as five
+              separate caveats. The row says it ONCE instead, in its own label. The pill keeps its
+              open-period styling and its title, so the reason is still one hover away on the number
+              it applies to. */}
           <span
             className={`${styles.funnelCpill} ${known ? "" : styles.funnelCpillNone} ${partial && known ? styles.funnelCpillPartial : ""}`}
-            data-testid={partial && known ? "funnel-conv-partial" : undefined}
-            title={partial && known ? "So far — this month is still open and Apple's daily feed lags, so the denominator is incomplete. Not comparable to the closed rows below." : undefined}
+            title={partial && known ? "This month is still open and Apple's daily feed lags, so the denominator is incomplete. Not comparable to the closed rows below." : undefined}
           >
             {known ? `${((b! / a!) * 100).toFixed(1)}%` : "—"}
-            {partial && known && <i className={styles.funnelCpillSoFar}>so far</i>}
           </span>
         </div>,
       );

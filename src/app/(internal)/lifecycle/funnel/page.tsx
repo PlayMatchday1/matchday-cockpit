@@ -60,7 +60,7 @@ export default function LifecycleFunnelPage() {
   return (
     <SectionFrame
       title="Player Funnel"
-      subtitle="Download to registration to a fifth match — where players arrive and where they fall away."
+      subtitle="Track player conversion and drop-off from download to fifth match."
       period={false}
     >
       {g.data && months.length > 0 && (

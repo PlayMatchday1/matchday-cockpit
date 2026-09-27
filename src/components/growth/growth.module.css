@@ -1153,16 +1153,6 @@
   border-style: dashed;
   color: #8a5a00;
 }
-.funnelCpillSoFar {
-  font-style: normal;
-  margin-left: 4px;
-  font-size: 8.5px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  opacity: 0.85;
-}
-
 /* The Data Room's methodology list — every explanatory statement on Growth, in one place. Term and
    definition rather than paragraphs, so a reader can find the one fact they came for. */
 .methodList { margin: 0; padding: 4px 18px 18px; }
@@ -1523,4 +1513,14 @@
   margin: 6px 0 0;
   font-size: 12px;
   color: var(--mut, #5b6b63);
+}
+
+/* THE OPEN-PERIOD MARKER, ON THE ROW AND ONCE. It replaced "so far" repeated across all five
+   conversions, which read as five separate caveats about five separate numbers. */
+.funnelInProgress {
+  font-style: normal;
+  font-weight: 700;
+  font-size: 10.5px;
+  color: #8a5a00;
+  white-space: nowrap;
 }

@@ -114,10 +114,14 @@ const nowKey = businessMonthKey();
 const prevKey = (() => { const [y, m] = nowKey.split('-').map(Number); return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`; })();
 const cur = rowNames.find(r => r.meta === 'current month');
 const prv = rowNames.find(r => r.meta === 'previous month');
-ok(cur?.name === labelFor(nowKey), `the current-month row reads ${labelFor(nowKey)} (${cur?.name})`);
+/* THE MARKER IS INSIDE THE NAME ELEMENT, so it is stripped for this comparison rather than the
+   assertion being loosened to a substring: "contains Sep 2026" would also pass on a row that read
+   "Sep 2026 – Sep 2027". The marker itself is asserted separately below. */
+const bareName = n => (n ?? '').replace(/\s*·\s*in progress$/, '').trim();
+ok(bareName(cur?.name) === labelFor(nowKey), `the current-month row reads ${labelFor(nowKey)} (${cur?.name})`);
 /* CONTROL: AND THE PREVIOUS ROW MOVED WITH IT. A relabel would leave that row on the old month,
    which is the only thing separating a fix from a cosmetic patch. */
-ok(prv?.name === labelFor(prevKey), `  CONTROL: and the previous-month row moved to ${labelFor(prevKey)} (${prv?.name})`);
+ok(bareName(prv?.name) === labelFor(prevKey), `  CONTROL: and the previous-month row moved to ${labelFor(prevKey)} (${prv?.name})`);
 /* CONTROL: the future month appears nowhere. Asserted against the page text, not just these rows. */
 const nextKey = (() => { const [y, m] = nowKey.split('-').map(Number); return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`; })();
 const bodyText = await p.evaluate(() => document.body.innerText);
@@ -127,9 +131,27 @@ ok(bodyText.includes(labelFor(nowKey)), `  CONTROL: while ${labelFor(nowKey)} do
 const axisEnd = await p.evaluate(() => document.querySelector('[data-testid="funnel-range-end"]').max);
 ok(clampMonthsToNow([axisEnd, nextKey]).join() === axisEnd,
   `  CONTROL: clampMonthsToNow drops ${nextKey} and keeps ${axisEnd}, so the page and the library agree`);
-/* THE CURRENT MONTH IS STILL MARKED PART-ELAPSED. Clamping it is not the same as pretending it closed. */
-ok(await p.$$eval(D('funnel-conv-partial'), es => es.length) > 0,
-  '  and the current month is still marked part-elapsed');
+/* ── STILL MARKED PART-ELAPSED, ONCE ──────────────────────────────────────────────────────────
+   Clamping the current month to the real one is not the same as pretending it closed. "SO FAR" used
+   to repeat across all five conversions in the row, which read as five separate caveats about five
+   separate numbers; the row says it once instead. */
+const prog = await p.evaluate(() => {
+  const marks = [...document.querySelectorAll('[data-testid="funnel-in-progress"]')];
+  return {
+    count: marks.length,
+    text: marks.map(e => e.textContent.trim()),
+    onRowMetas: marks.map(e => e.closest('[data-testid="funnel-row"]')
+      ?.querySelector('[class*="funnelPeriodMeta"]')?.textContent.trim()),
+    soFar: /so far/i.test(document.body.innerText),
+  };
+});
+ok(prog.count === 1, `the in-progress marker appears exactly once (${prog.count})`);
+ok(prog.onRowMetas[0] === 'current month',
+  `  and only on the current-month row (${prog.onRowMetas[0]})`);
+ok(/in progress/.test(prog.text[0] ?? ''), `  reading "${(prog.text[0] ?? '').trim()}"`);
+ok(!prog.soFar, '  and "so far" appears nowhere on the page');
+ok(await p.$$eval(D('funnel-row'), es => es.length) > 1,
+  '  CONTROL: with more than one row on screen, so "exactly once" is a real constraint');
 
 // ══ 3. THE CITY PICKER, AND WHAT IS NOT A FLEET CITY ══════════════════════════════════════════
 const chips = await p.$$eval(D('funnel-city-chip'), es => es.map(e => ({
@@ -144,22 +166,33 @@ ok(await p.$$eval('select[multiple]', es => es.length) === 0,
   '  CONTROL: and there is no native multiple-select, which needs a modifier key a phone lacks');
 const others = chips.filter(c => c.other);
 ok(others.length > 0, `CONTROL: ${others.length} chip(s) sit below the separator`);
+/* ── THE GROUP IS NAMED FOR WHAT IT HOLDS ──────────────────────────────────────────────────────
+   "Not fleet cities" was wrong the moment El Paso joined it: El Paso IS a fleet city, it is just not
+   running. The label has to be true of every member. */
+const sepLabel = await p.$eval(D('funnel-city-sep-label'), e => e.textContent.trim());
+ok(/^outside active cities$/i.test(sepLabel), `the group is labelled OUTSIDE ACTIVE CITIES ("${sepLabel}")`);
+ok(!/fleet/i.test(sepLabel), '  CONTROL: and does not name the fleet, which El Paso belongs to');
+/* EXACTLY THESE THREE. Pinned by name, because which cities are outside an active operation is a
+   business fact this data cannot derive: El Paso is in CANONICAL_CITIES and reads as active from the
+   data alone. A change here should be a deliberate edit, not a silent drift. */
+const WANT_OUTSIDE = ['El Paso', 'New York City', 'Warsaw'];
+ok(others.map(c => c.city).sort().join(', ') === WANT_OUTSIDE.join(', '),
+  `  holding exactly New York City, Warsaw and El Paso (${others.map(c => c.city).sort().join(', ')})`);
 ok(others.every(c => c.count && /\d/.test(c.count)),
-  `  and each carries its registration count (${others.map(c => `${c.city} ${c.count}`).join(', ')})`);
+  `  each with its registration count (${others.map(c => `${c.city} ${c.count}`).join(', ')})`);
 ok(chips.filter(c => !c.other && c.city !== 'All cities').every(c => c.count === null),
-  '  CONTROL: while fleet chips carry no count, so the count marks them out rather than decorating');
+  '  CONTROL: while active-city chips carry no count, so the count marks the group out');
 ok(await p.$(D('funnel-city-sep')) !== null, '  and a separator divides the two groups');
-const licensees = others.filter(c => c.licensee);
-ok(licensees.length > 0, `a licensee is labelled as one (${licensees.map(c => c.city).join(', ')})`);
-ok(await p.$$eval(`${D('funnel-city-chip')}[data-licensee="1"] ${D('funnel-city-licensee')}`, es => es.length) === licensees.length,
-  '  with the word visible on the chip, not only in a title');
-const licTitle = await p.$eval(`${D('funnel-city-chip')}[data-licensee="1"]`, e => e.getAttribute('title') ?? '');
-ok(/brand licence/.test(licTitle) && /not a MatchDay market/.test(licTitle),
-  '  and its own title says it is a separate operator, not a spelling variant');
-/* NOT FILTERED OUT. The picker IS the filter, so a licensee is present and deselectable rather than
-   hidden - and the totals therefore reconcile on the full set. */
-ok(licensees.every(c => c.count && Number(c.count.replace(/,/g, '')) > 0),
-  `  CONTROL: it is counted, not hidden (${licensees.map(c => c.count).join(', ')})`);
+/* NOTHING IS FILTERED OUT. The picker is the filter, so every one of the three is present and
+   deselectable rather than hidden - which is what keeps the total reconcilable. */
+ok(others.every(c => Number(c.count.replace(/,/g, '')) > 0),
+  `  CONTROL: all three are counted, not hidden (${others.map(c => c.count).join(', ')})`);
+/* AND NO "LICENSEE" LABEL ANYWHERE. Warsaw's arrangement is not settled, so the page does not
+   harden it. Absence, with the chips themselves as the presence control. */
+ok(await p.$$eval(`${D('funnel-city-chip')}`, es => es.every(e => !/licensee/i.test(e.textContent))),
+  '  and no chip carries a "licensee" label');
+ok(!/licensee/i.test(await p.evaluate(() => document.body.innerText)),
+  '  CONTROL: nor does the word appear anywhere on the page');
 
 // ══ 4. TWO OR MORE CITIES BECOME CITY ROWS, AND THE TOTAL IS THE CONTROL ══════════════════════
 const pickable = chips.filter(c => c.city !== 'All cities').slice(0, 2).map(c => c.city);
@@ -200,6 +233,30 @@ for (let i = 0; i < stageCount; i++) {
 }
 ok(detail.length >= 4, `CONTROL: ${detail.length} numeric stages to reconcile, so the sum check is not free`);
 ok(sumsOk, `  the city rows sum to their total on every stage (${detail.join(', ')})`);
+/* ── AND THE NATIONAL ROW IS UNTOUCHED BY ANY OF THIS ──────────────────────────────────────────
+   No city leaves the page and nothing leaves the total, so all-time registrations still read the
+   source figure. An exclusion was built for Warsaw and reverted precisely so this stays checkable
+   against the raw table. */
+await load();
+await p.fill(D('funnel-range-start'), '2023-03');
+await p.waitForTimeout(800);
+const national = await p.evaluate(() => {
+  const r = [...document.querySelectorAll('[data-testid="funnel-row"]')].at(-1);
+  const cell = [...r.querySelectorAll('[data-testid="funnel-cell"]')]
+    .find(c => c.dataset.stage === 'registrations');
+  return cell?.querySelector('[class*="funnelSnum"]')?.textContent.trim() ?? null;
+});
+ok(national === '29,238',
+  `the all-time national row still reads the full set, 29,238 (${national})`);
+/* BACK INTO COMPARE MODE. load() above dropped the page to month rows, and everything below measures
+   CITY rows - where a download figure must be absent, and where a month row would legitimately carry
+   one. A missing re-select is invisible in the output: the numbers are all present and the assertion
+   simply fails for the wrong reason. */
+await p.click(`${D('funnel-city-chip')}[data-city="${pickable[0]}"]`);
+await p.click(`${D('funnel-city-chip')}[data-city="${pickable[1]}"]`);
+await p.waitForTimeout(700);
+ok(await p.$$eval(D('funnel-row'), es => es.every(e => e.dataset.cityRow === '1')),
+  '  CONTROL: and the table is back in city-row mode for the checks below');
 
 // ══ 5. NO PER-CITY DOWNLOAD FIGURE, AND THE DASH SAYS WHY ═════════════════════════════════════
 /* funnelByMonthCity carries registrations and played1/3/5/10 only. Store installs arrive with NO city
@@ -228,10 +285,13 @@ ok(firstConv[0] === '—', `  and the first conversion is a dash as well (${firs
 // ══ 6. THE CITY RULE IS ON THE PAGE, IN VISIBLE TEXT ══════════════════════════════════════════
 const rule = await p.$eval(D('funnel-city-rule'), e => e.textContent.replace(/\s+/g, ' ').trim());
 ok(rule.length > 0, `CONTROL: the footnote rendered (${rule.length} chars)`);
-ok(/declared when they registered/.test(rule), '  and it says the city is DECLARED at registration');
-ok(/not where they played/.test(rule), '  and explicitly not where they played');
-ok(/signups, not/.test(rule), '  and that a city funnel is signups rather than operations');
-ok(/never city/.test(rule), '  and that the stores report country and region, never city');
+const WANT_RULE = "Players are grouped by the city selected at signup, regardless of where they play. "
+  + "Downloads and download-to-signup conversion aren\u2019t available by city.";
+ok(rule === WANT_RULE, `the footnote reads exactly as written ("${rule}")`);
+/* THE SUBTITLE TOO, in the same spot under the title. */
+const subtitle = await p.$eval(D('growth-subtitle'), e => e.textContent.replace(/\s+/g, ' ').trim());
+ok(subtitle === "Track player conversion and drop-off from download to fifth match.",
+  `the page subtitle reads exactly as written ("${subtitle}")`);
 
 // ══ 7. 390 AND 1320 ═══════════════════════════════════════════════════════════════════════════
 for (const vw of [390, 1320]) {
