@@ -50,6 +50,25 @@ import { chicagoYmd, wallClockYmd, weekKey, lastWeeks, weeksInMonthRange, weekEn
  * null for an unknown code where normalizeMatchCity falls back to the code itself. That difference
  * alone was dropping 85 Warsaw spots and hiding the city completely. */
 import { normalizeDeclared, normalizeMatchCity, UNASSIGNED_CITY } from "@/lib/growthAnalytics";
+/* ── ONE FIELD VOCABULARY, AND IT IS THE ONE MONTHLY ALREADY USES ─────────────────────────────
+ * Exactly the problem normalizeDeclared/normalizeMatchCity solved for CITIES, one level down.
+ * This route grouped fields on the RAW `field_title`; growthFromViews groups them on
+ * `canonicalVenueName(field_title)` (see its `fieldOf`). Those are two vocabularies:
+ *
+ *     monthly keyed   "NEMP"            weekly/window keyed   "NEMP Tournaments"
+ *     monthly keyed   "Soccer Central"  weekly/window keyed   "Soccer Central Complex"
+ *                                                       AND   "Premier Match at Soccer Central"
+ *     monthly keyed   "ATH Pearland"    weekly/window keyed   "Tourney ATH Pearland"
+ *
+ * MEASURED: 34 of 53 monthly field keys had NO match in this route's output. Two things broke on
+ * that, both silently. Switching grain re-listed the fields under different names. And the panel
+ * looks a field's DISTINCT period total up by the monthly key, so every canonical-named field read
+ * its unique count as ZERO — a wrong number that looks like a real one, which is the failure mode
+ * this page keeps producing.
+ *
+ * canonicalVenueName is the SAME function the monthly path calls, not a second map, so the two
+ * agree by construction rather than by being kept in step. */
+import { canonicalVenueName } from "@/lib/venueResolver";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -250,7 +269,7 @@ export async function GET(req: Request) {
        * every window-only match would land in the "" bucket and be dropped. The axis-gated maps
        * below are unchanged - matchWeek is still the thing that says "this match is on screen". */
       matchCity.set(Number(m.api_id), normalizeMatchCity(String(m.city_identifier ?? "")));
-      matchField.set(Number(m.api_id), String(m.field_title ?? "").trim());
+      matchField.set(Number(m.api_id), canonicalVenueName(String(m.field_title ?? "")));
       const w = bucketOf(day);
       if (!inAxis.has(w)) continue;
       matchWeek.set(Number(m.api_id), w);

@@ -317,7 +317,20 @@ console.log("\nTHE FIELD BREAKDOWN IS IN THE ROUTE, AND REGISTRATIONS ARE NOT FA
   const Rcode = R.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
   const code = R.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
   is("  byField is returned", /byField,/.test(code), true);
-  is("  …keyed on field_title", /matchField\.set\(Number\(m\.api_id\), String\(m\.field_title/.test(code), true);
+  /* ── CONVERTED 2026-09-29, because the change broke it ────────────────────────────────────
+   * This pinned the expression `matchField.set(Number(m.api_id), String(m.field_title` verbatim.
+   * The route now CANONICALISES the title first — growthFromViews has always grouped fields on
+   * canonicalVenueName, and the two vocabularies did not meet: 34 of 53 monthly field keys had no
+   * match here, so every canonical-named field read its distinct total as zero.
+   *
+   * NARROWED TO THE PAIRING, per this repo's rule for source assertions: matchField is keyed on
+   * field_title THROUGH the canonicaliser. The NEGATIVE is the load-bearing half — it is what
+   * catches a future call site that goes back to the raw title, which would arrive as an ADDED
+   * line rather than a changed one. */
+  is("  …keyed on the CANONICALISED field_title", /matchField\.set\(Number\(m\.api_id\), canonicalVenueName\(String\(m\.field_title/.test(code), true);
+  is("  control: no raw field_title grouping survives", /matchField\.set\(Number\(m\.api_id\), String\(m\.field_title/.test(code), false);
+  is("  control: and it is the same canonicaliser growthFromViews uses",
+    /canonicalVenueName/.test(readFileSync("src/lib/growthFromViews.ts", "utf8")), true);
   is("  …with the same three play metrics", /newPlayers: newByWeekField/.test(code) && /totalPlayers: activeByWeekField/.test(code) && /spots: spotsByWeekField/.test(code), true);
   /* A REGISTRATION HAS NO FIELD. It carries the city declared at signup and nobody registers at a
    * pitch, so a per-field registration figure would be invented. The monthly path says the same. */
