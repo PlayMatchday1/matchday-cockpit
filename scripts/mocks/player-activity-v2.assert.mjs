@@ -1,12 +1,24 @@
 // Assertions for scripts/mocks/player-activity-v2.html
 // Run: node scripts/mocks/player-activity-v2.assert.mjs [url]
 // Default target is the mock. Point it at the deployed page to check the build against the spec:
-//   node scripts/e2e/auth.mjs          # writes .auth/state.json for the deployed origin
-//   PA_STATE=.auth/state.json node scripts/mocks/player-activity-v2.assert.mjs \
+//   node -e 'import("./scripts/e2e/_session.mjs").then(async m=>{process.loadEnvFile(".env.local");
+//     const {storageState}=await m.storageStateFor("rmancuso@playmatchday.com",process.argv[1]);
+//     require("fs").writeFileSync("/tmp/pa-state.json",JSON.stringify(storageState));})' \
+//     https://matchday-clubhouse.vercel.app
+//   PA_STATE=/tmp/pa-state.json node scripts/mocks/player-activity-v2.assert.mjs \
 //     https://matchday-clubhouse.vercel.app/lifecycle/behavior
-// Without PA_STATE the app redirects to /login and the run times out on pa-card. For a LOCAL run the
-// state's origin must be the local one, which storageStateFor(email, base) in scripts/e2e/_session.mjs
-// builds.
+//
+// Without PA_STATE the app redirects to /login and the run times out on pa-card. Two things about
+// that state matter and both cost time once:
+//
+//   THE ORIGIN MUST MATCH THE TARGET. storageState is keyed by origin, so a state built for the
+//   deployed host does nothing against http://localhost:3001 — pass the base you are testing.
+//
+//   IT MUST NOT BE THE E2E SERVICE ACCOUNT. `scripts/e2e/auth.mjs` writes .auth/state.json for
+//   E2E_EMAIL, and that identity is BLOCKED AT THE DATABASE BY DESIGN: the page loads and
+//   /api/lifecycle answers, but /api/lifecycle/behavior-weekly returns
+//   403 {"error":"Service accounts hold no permissions."} and the distinct totals sit on a dash.
+//   That reads exactly like a broken aggregate and is not one. Use a real admin email.
 // Rule: every absence assertion is paired with a presence control in the same run.
 import { chromium } from "playwright";
 import { fileURLToPath } from "node:url";
