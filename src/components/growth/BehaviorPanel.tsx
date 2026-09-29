@@ -7,20 +7,29 @@
 // metric. All series/values come from the shared computation (growthMetricGrid /
 // GrowthData) so this card can never disagree with the Player Data Room.
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { supabase } from "@/lib/supabase";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { GrowthData, BehaviorPoint } from "@/lib/growthAnalytics";
 import type { Period } from "./GlobalPeriod";
-import { METRIC_LABEL, networkSeries, metricValue, IS_RATE, type GridMetric } from "@/lib/growthMetricGrid";
+import { METRIC_LABEL, networkSeries, metricValue, hasFieldDimension, isAdditive, isDistinct,
+  sumAcrossBuckets, IS_RATE, type GridMetric } from "@/lib/growthMetricGrid";
 import { UNASSIGNED_CITY } from "@/lib/growthAnalytics";
 import { downloadCsv } from "./format";
+import { exportBody, exportHeader } from "@/lib/behaviorExport";
 import styles from "./playerBehavior.module.css";
-import { supabase } from "@/lib/supabase";
 import {
-  changeColumnLabel, weekRangeLabel, weekTick, type Granularity, isWeekComplete, isBucketComplete, lastTwoComplete, chicagoToday } from "@/lib/weekBuckets";
+  changeColumnLabel, grainUnitWord, matchedMonthWindow, monthEnd, weekRangeLabel, weekTick, type Granularity, isWeekComplete, isBucketComplete, lastTwoComplete, chicagoToday } from "@/lib/weekBuckets";
 
 /* THE WEEKLY PAYLOAD, as /api/lifecycle/behavior-weekly returns it. `w` is a Monday YYYY-MM-DD;
  * it is renamed to `m` on the way in so the rest of this file is unchanged. */
 type WeekPoint = { w: string; registrations: number; newPlayers: number; totalPlayers: number; spots: number };
+/** One requested window's aggregate. totalPlayers and recurring are DISTINCT over the whole window,
+ *  which is the only way they can be right; see growthMetricGrid's AdditiveMetric guard. */
+type WindowAgg = {
+  from: string; to: string;
+  registrations: number; newPlayers: number; spots: number;
+  totalPlayers: number; recurring: number;
+};
 type WeeklyPayload = {
   axis: string[];
   overall: WeekPoint[];
@@ -67,12 +76,16 @@ const NEUTRAL_COLOR = "#65716b"; // fallback for any unexpected city
 
 const MON_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const monthLabel = (m: string) => `${MON_ABBR[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
-/* ONE LABELLER FOR BOTH GRANULARITIES. A weekly key is a Monday YYYY-MM-DD and reads as its full
- * date range — "Aug 24 – Aug 30", never a week number. A monthly key is YYYY-MM and is unchanged. */
-const bucketLabel = (k: string, g: Granularity) => (g === "weekly" ? weekRangeLabel(k) : monthLabel(k));
+/* ONE LABELLER FOR ALL THREE GRAINS. A weekly key is a Monday YYYY-MM-DD and reads as its full date
+ * range — "Aug 24 – Aug 30", never a week number. A daily key is YYYY-MM-DD and reads as one day. A
+ * monthly key is YYYY-MM and is unchanged. */
+const dayLabelOf = (k: string) => `${MON_ABBR[Number(k.slice(5, 7)) - 1]} ${Number(k.slice(8, 10))}`;
+const bucketLabel = (k: string, g: Granularity) =>
+  g === "daily" ? dayLabelOf(k) : g === "weekly" ? weekRangeLabel(k) : monthLabel(k);
 /* THE CHART AXIS gets the short form: 13 full ranges will not fit across a chart, so the tick is
- * the Monday and the table below carries both ends. */
-const bucketTick = (k: string, g: Granularity) => (g === "weekly" ? weekTick(k) : monthLabel(k));
+ * the Monday and the table below carries both ends. A day is already short. */
+const bucketTick = (k: string, g: Granularity) =>
+  g === "daily" ? dayLabelOf(k) : g === "weekly" ? weekTick(k) : monthLabel(k);
 const fmt = (n: number) => n.toLocaleString("en-US");
 const pctChange = (a: number, b: number) => (b === 0 ? (a === 0 ? 0 : 100) : ((a - b) / b) * 100);
 
@@ -175,15 +188,21 @@ function buildChart(
   return { gridlines, baseline, monthTicks, polys, pts, partialIdx, plot: { l: M.l, r: M.l + IW, t: M.t, b: M.t + IH } };
 }
 
-type Row = { name: string; cells: number[]; total: number; mom: number; rank?: number; dot?: string; points?: boolean };
+type Row = { name: string; cells: number[]; total: number; mom: number; rank?: number; dot?: string;
+  points?: boolean;
+  /** The city name or field key this row is, in detail modes. Null in Overall, where rows ARE metrics. */
+  entity?: string };
 
 export default function BehaviorPanel({
   data,
   period,
+  authHeaders,
   scopeChip,
 }: {
   data: GrowthData;
   period: Period;
+  /** The provider's own Authorization header. ONE AUTH PATH PER PAGE; see the aggregate effect. */
+  authHeaders: Record<string, string>;
   scopeChip?: ReactNode;
 }) {
   const [view, setView] = useState<"matchday" | "city" | "field">("matchday");
@@ -218,9 +237,12 @@ export default function BehaviorPanel({
    * flipping 6 → 3 → 6 must not re-run the read three times. The cache is a ref rather than state
    * because writing to it must not itself render. */
   const weeklyCache = useRef(new Map<string, WeeklyPayload>());
-  const winKey = `${period.start}:${period.end}`;
+  /* THE CACHE KEY CARRIES THE GRAIN. Without it, switching weekly → daily over one window served the
+   * weekly payload out of cache and rendered week sums in day columns: plausible numbers, wrong axis,
+   * and no error anywhere. */
+  const winKey = `${gran}:${period.start}:${period.end}`;
   useEffect(() => {
-    if (gran !== "weekly") return;
+    if (gran === "monthly") return;
     const cached = weeklyCache.current.get(winKey);
     if (cached) { setWeekly(cached); setWeeklyErr(null); return; }
     let dead = false;
@@ -230,10 +252,17 @@ export default function BehaviorPanel({
     setWeekly(null); setWeeklyErr(null);
     (async () => {
       try {
+        /* ── getSession, NOT THE PROVIDER'S authHeaders ─────────────────────────────────────────
+         * Switching this to the provider's header BROKE weekly grain: the table rendered zero
+         * columns because the request 401'd. So `g.authHeaders` is EMPTY by the time this runs, and
+         * getSession was never what was wrong with this fetch. Reverted, and the finding recorded
+         * rather than the symptom chased: whatever stalls the window aggregate, it is not this. */
         const { data: sess } = await supabase.auth.getSession();
         const token = sess.session?.access_token;
         const res = await fetch(
-          `/api/lifecycle/behavior-weekly?start=${encodeURIComponent(period.start)}&end=${encodeURIComponent(period.end)}`,
+          `/api/lifecycle/behavior-weekly?grain=${gran}`
+            + `&start=${encodeURIComponent(gran === "daily" ? period.end : period.start)}`
+            + `&end=${encodeURIComponent(period.end)}`,
           { cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {} },
         );
         const j = await res.json();
@@ -266,13 +295,110 @@ export default function BehaviorPanel({
 
   /* FROM HERE DOWN, `src` REPLACES `data` AND `months` IS THE AXIS. Monthly resolves to exactly
    * what it resolved to before — same array, same filter, same order. */
-  const src = gran === "weekly" && weeklyData ? weeklyData : data;
+  /* NOT `gran === "weekly"` ANY MORE. Daily reads the SAME fetched payload from the same route with
+   * grain=daily, so the test is "is this the monthly aggregate or the re-derived one". Writing it as
+   * a weekly check would have sent daily to the monthly maps and rendered a month's value in every
+   * day column, which looks like data rather than like a bug. */
+  const fetched = gran !== "monthly";
+  const src = fetched && weeklyData ? weeklyData : data;
   const months = useMemo(
-    () => (gran === "weekly" && weekly
+    () => (fetched && weekly
       ? weekly.axis
       : data.behaviorOverall.map((p) => p.m).filter((m) => m >= period.start && m <= period.end)),
-    [gran, weekly, data.behaviorOverall, period],
+    [fetched, weekly, data.behaviorOverall, period],
   );
+
+  /* ── DECLARED HERE, ABOVE THE MODEL THAT READS IT ─────────────────────────────────────────
+   * This block sat below the model's useMemo, and toRow reads winAgg: the page died with "Cannot
+   * access 'winAgg' before initialization" and rendered its error boundary. TDZ IS A RUNTIME ERROR
+   * AND tsc PASSES ON IT - twice in this change - so the only thing that catches it is opening the
+   * page. Second instance: the route's own window accumulators had the same fault. */
+  /* ── THE MATCHED WINDOW NEEDS DAY RESOLUTION, SO IT FETCHES ITS OWN ───────────────────────
+   * The change column compares DAYS 1..N of the final period against days 1..N of the one before it,
+   * and at monthly grain the monthly aggregate cannot answer that: "August's first 27 days" is not a
+   * number a month total contains. So the two months either side of the boundary are fetched at DAY
+   * grain, from the same route, and summed into the two windows.
+   *
+   * ONLY WHEN THE FINAL COLUMN IS PART-ELAPSED. A closed final period has nothing to match, and the
+   * comparison reverts to whole periods, which the monthly data already holds - so no request is made
+   * and nothing about the closed case changes.
+   *
+   * THIS REPLACES lastTwoComplete FOR THIS COLUMN, and that helper was RIGHT while the current month
+   * was off the axis: with nothing part-elapsed on screen there was nothing to match, and skipping
+   * the partial bucket was the honest move. With the current period as a column, skipping it means
+   * the pill describes two periods nobody is looking at. */
+  const matchWin = useMemo(() => {
+    if (gran !== "monthly" || months.length < 2) return null;
+    const lastM = months[months.length - 1];
+    const prevM = months[months.length - 2];
+    const win = matchedMonthWindow(lastM, prevM, chicagoToday());
+    return win.days == null ? null : { ...win, lastM, prevM };
+  }, [gran, months]);
+
+  /* ── THE WINDOWS THIS PAGE ASKS THE ROUTE TO AGGREGATE ────────────────────────────────────
+   * THREE, in one request:
+   *   0  the whole displayed period  -> the PERIOD TOTAL for a distinct count
+   *   1  the final period, days 1..N -> the day-matched change, latest side
+   *   2  the previous period, 1..N   -> the day-matched change, earlier side
+   *
+   * WINDOW 0 IS REQUESTED WHATEVER THE GRAIN, because the Period total column is wrong at every
+   * grain without it: summing per-bucket Set sizes overstated Apr-Sep by 86.9% (15,625 against a
+   * true 8,361) and looked right because it landed 0.9% from the all-time figure. Windows 1 and 2
+   * are only requested when the final column is part-elapsed. */
+  const periodDays = useMemo(() => {
+    if (months.length === 0) return null;
+    const first = months[0];
+    const last = months[months.length - 1];
+    const toDay = (k: string, end: boolean) =>
+      k.length === 7 ? (end ? monthEnd(k) : `${k}-01`) : k;
+    return { from: toDay(first, false), to: toDay(last, true) };
+  }, [months]);
+
+  const windowsParam = useMemo(() => {
+    if (!periodDays) return "";
+    const list = [`${periodDays.from}:${periodDays.to}`];
+    if (matchWin) list.push(`${matchWin.last.from}:${matchWin.last.to}`, `${matchWin.prev.from}:${matchWin.prev.to}`);
+    return list.join(",");
+  }, [periodDays, matchWin]);
+
+  const [winAgg, setWinAgg] = useState<WindowAgg[] | null>(null);
+  useEffect(() => {
+    if (!windowsParam) { setWinAgg(null); return; }
+    let dead = false;
+    (async () => {
+      try {
+        /* ── ONE AUTH PATH PER PAGE ────────────────────────────────────────────────────────────
+         * The token comes from GrowthDataProvider, which has already authenticated two requests by
+         * the time this runs. A second auth path on the same page is redundant whether or not
+         * getSession() was what blocked here - and it WAS blocking: this effect entered twice with
+         * correct parameters and nothing after its first await ever executed, with neither the
+         * success nor the failure branch reached.
+         *
+         * THE AXIS IS IRRELEVANT TO THE AGGREGATE, so this asks for the cheapest one it can: a single
+         * month at day grain. The windows carry their own bounds and the route widens its reads to
+         * cover them. */
+        const res = await fetch(
+          `/api/lifecycle/behavior-weekly?grain=daily`
+            + `&start=${encodeURIComponent(period.end)}&end=${encodeURIComponent(period.end)}`
+            + `&windows=${encodeURIComponent(windowsParam)}`,
+          { cache: "no-store", headers: authHeaders },
+        );
+        const j = await res.json();
+        if (!res.ok) throw new Error(j?.error ?? `HTTP ${res.status}`);
+        if (!dead) setWinAgg((j as { windows?: WindowAgg[] }).windows ?? null);
+      } catch (e) {
+        /* A FAILED AGGREGATE LEAVES THE DISTINCT TOTALS AS A DASH rather than falling back to the
+         * sum. The sum is the wrong number; an em-dash is an honest absence.
+         * LOGGED, NOT SWALLOWED. A silent catch here is indistinguishable from "no aggregate was
+         * asked for", which cost an hour once already. */
+        // eslint-disable-next-line no-console
+        console.error("behavior window aggregate failed:", e);
+        if (!dead) setWinAgg(null);
+      }
+    })();
+    return () => { dead = true; };
+  }, [windowsParam, period.end, authHeaders]);
+
 
   /* ── WHICH BUCKETS ARE FINISHED ───────────────────────────────────────────────────────────────
    * The clock comes from the PAYLOAD, not from this browser: the buckets were cut in
@@ -308,16 +434,36 @@ export default function BehaviorPanel({
    *
    * A city qualifies on ANY metric being non-zero, not on spots alone. It is still scoped to the
    * PERIOD, so a city that existed only in 2024 stays out of a 2026 window. */
+  /* ── THE SEVEN PLAY MARKETS, AND WHAT IS EXCLUDED ─────────────────────────────────────────
+   * This page is about PLAYING, so a city belongs on it if MatchDay runs matches there. Measured
+   * from growth_play_dims on prod 2026-09-27, nine cities have play rows and seven are markets:
+   *
+   *   ATX 101,586 spots · HOU 27,659 · SATX 21,894 · DFW 2,778 · STL 2,592 · ATL 2,406 · OKC 1,537
+   *
+   * THREE ARE EXCLUDED, EACH FOR ITS OWN REASON, named rather than filtered silently:
+   *   EL PASO   0 play rows. Registrations but no matches, so nothing to show on a page about
+   *             playing - the same shape as registrations having no field.
+   *   WARSAW    a separate operator on a brand licence. 1 field, 214 spots, Aug-Sep 2026.
+   *   NEW YORK  no CURRENT operation. It DID run three fields - NYCSC at DeWitt Clinton Park, at
+   *             Nike Field, at Pier 40 - for one month, 2025-10, 85 spots. "No pitch" was too
+   *             strong a claim and is corrected here.
+   *
+   * NOT DERIVED FROM THE DATA, because the data cannot tell a market from a licensee or a closed
+   * city from an open one. A list is the honest form, and the counts are here so a reader can see
+   * what each exclusion costs. */
+  const NON_MARKET_CITIES = useMemo(
+    () => new Set(["Warsaw", "New York City", "El Paso", UNASSIGNED_CITY]), []);
   const cities = useMemo(() => {
     const inPeriod = new Set(months);
     const active = (p: BehaviorPoint) =>
       (p.spots ?? 0) > 0 || (p.registrations ?? 0) > 0 || (p.totalPlayers ?? 0) > 0 || (p.newPlayers ?? 0) > 0;
     return Object.keys(src.behaviorByCity)
+      .filter((c) => !NON_MARKET_CITIES.has(c))
       .filter((c) => src.behaviorByCity[c].some((p) => inPeriod.has(p.m) && active(p)))
       /* UNASSIGNED SORTS LAST. It is a residual, not a market, and alphabetical order would file
        * it between St. Louis and Warsaw as though it were one. */
       .sort((a, b) => (a === UNASSIGNED_CITY ? 1 : b === UNASSIGNED_CITY ? -1 : 0) || a.localeCompare(b));
-  }, [src.behaviorByCity, months]);
+  }, [src.behaviorByCity, months, NON_MARKET_CITIES]);
   const cityMode = view === "city";
   const fieldMode = view === "field";
   const detailMode = cityMode || fieldMode;
@@ -495,7 +641,16 @@ export default function BehaviorPanel({
     // POINTS, not +10%. Reporting the relative change of a percentage is a classic way to overstate
     // a move by a factor of the base, and it is the one thing this metric makes easy to get wrong.
     const isRate = IS_RATE.has(metric as GridMetric);
-    const toRow = (name: string, cells: number[], extra?: { rank: number; dot: string }, rateRow = false): Row => {
+    /* WHICH METRIC A ROW IS, so the total can be computed the right way. Overall rows know it; in
+     * detail modes every row is the SELECTED metric, so they all share one. */
+    const toRow = (
+      name: string, cells: number[],
+      extra?: { rank: number; dot: string; entity?: string },
+      rateRow = false,
+      key?: GridMetric,
+    ): Row => {
+      const distinctKey = key && isDistinct(key) ? key : null;
+      const additiveKey = key && isAdditive(key) ? key : null;
       /* THE CHANGE IS BETWEEN THE LAST TWO COMPLETE BUCKETS. It used to be the last two cells
        * whatever they were, so on 2026-09-01 every row compared one day of Aug 31 – Sep 6 against
        * a whole week and reported a 45–68% collapse that had not happened.
@@ -508,8 +663,24 @@ export default function BehaviorPanel({
       const last = cells[li] ?? 0;
       const prev = cells[pi] ?? 0;
       const rate = rateRow || (isRate && !!extra);
-      // A rate's "period" figure is its LATEST value, never a sum — summing percentages is meaningless.
-      const total = rate ? cells[cells.length - 1] ?? 0 : cells.reduce((a, b) => a + b, 0);
+      /* ── THE PERIOD TOTAL, AND THE ONE THAT WAS WRONG FOR SIX MONTHS ─────────────────────────
+       *   A RATE is its LATEST value, never a sum: averaging percentages is meaningless.
+       *   A DISTINCT COUNT is the route's window aggregate, never a sum: adding per-bucket Set
+       *     sizes double-counts everyone who appears in two, which overstated Apr-Sep by 86.9%
+       *     (15,625 against a true 8,361) and read as right because it landed 0.9% from the
+       *     all-time figure.
+       *   EVERYTHING ELSE is additive and sums, through sumAcrossBuckets, which will not accept a
+       *     distinct key - see the AdditiveMetric guard in growthMetricGrid.
+       *
+       * A MISSING AGGREGATE IS NULL, NOT A FALLBACK TO THE SUM. The sum is the wrong number; a dash
+       * says so. Only the OVERALL rows can use it today, because the aggregate is network-wide -
+       * a per-city distinct count is a further window per city and is not requested. */
+      const distinctTotal = distinctKey && winAgg?.[0] ? winAgg[0][distinctKey] : null;
+      const total = rate
+        ? cells[cells.length - 1] ?? 0
+        : distinctKey
+          ? (distinctTotal ?? NaN)
+          : sumAcrossBuckets(additiveKey ?? "spots", cells);
       const mom = rate ? last - prev : pctChange(last, prev);
       return { name, cells, total, mom, points: rate, ...extra };
     };
@@ -523,18 +694,18 @@ export default function BehaviorPanel({
         label: METRIC_LABEL[md.key],
         width: 3,
       }));
-      rows = series.map((s) => toRow(s.label, s.data));
+      rows = series.map((s, k) => toRow(s.label, s.data, undefined, false, METRIC_DEFS[k].key as GridMetric));
       // BOTH RECURRING FIGURES AS ROWS. The count says how many came back; the rate says whether we
       // are keeping them. A count falls whenever the month is smaller even when loyalty has not
       // moved, so the rate is the one that carries the signal — and the rate alone hides the size
       // of the group it describes.
       for (const rm of ["recurring", "pctRecurring"] as GridMetric[]) {
-        rows.push(toRow(METRIC_LABEL[rm], networkSeries(src, rm, months).map((v) => v ?? 0), undefined, rm === "pctRecurring"));
+        rows.push(toRow(METRIC_LABEL[rm], networkSeries(src, rm, months).map((v) => v ?? 0), undefined, rm === "pctRecurring", rm));
       }
       chartTitle = "Overall Matchday performance";
       chartSub = `${monthRange} · registrations, new players, total players and spots booked`;
-      detailTitle = "Historical Matchday metrics";
-      scope = "All Matchday";
+      detailTitle = "Player Metrics";
+      scope = "Overall";
     } else if (fieldMode) {
       /* ONLY THE SELECTED PITCHES. This mapped over every field in the period — 43 of them — so
        * the palette wrapped four times, the legend filled a third of the card, and no individual
@@ -550,7 +721,7 @@ export default function BehaviorPanel({
         width: 2.4,
       }));
       // THE TABLE FOLLOWS THE CHART, in the same order — rows are built from the same array.
-      rows = series.map((s2, k) => toRow(s2.label, s2.data, { rank: k + 1, dot: s2.color }));
+      rows = series.map((s2, k) => toRow(s2.label, s2.data, { rank: k + 1, dot: s2.color, entity: selectedFields[k] }, false, metric as GridMetric));
       const label = METRIC_LABEL[metric as GridMetric];
       chartTitle = `${label} by field`;
       /* THE HEADER SAYS WHAT IT IS SHOWING AND OUT OF HOW MANY. A chart drawing 5 of 43 lines
@@ -569,7 +740,7 @@ export default function BehaviorPanel({
         label: c,
         width: 2.9,
       }));
-      rows = series.map((s, k) => toRow(s.label, s.data, { rank: k + 1, dot: s.color }));
+      rows = series.map((s, k) => toRow(s.label, s.data, { rank: k + 1, dot: s.color, entity: cities[k] }, false, metric as GridMetric));
       const label = METRIC_LABEL[metric as GridMetric];
       chartTitle = `${label} by city`;
       chartSub = `${monthRange} · every city`;
@@ -583,10 +754,13 @@ export default function BehaviorPanel({
     const legend = series.map((sx) => ({ label: sx.label, color: sx.color }));
     /* THE CEILING, SAID OUT LOUD. A custom range longer than 53 weeks keeps the most recent 53;
      * without this line the chart would read as the whole period and be short by the difference. */
-    const dropped = gran === "weekly" ? (weekly?.window?.dropped ?? 0) : 0;
+    const dropped = fetched ? (weekly?.window?.dropped ?? 0) : 0;
     if (dropped > 0) chartSub += ` · earliest ${dropped} week${dropped === 1 ? "" : "s"} of this period not shown (53-week maximum)`;
     return { chart, rows, chartTitle, chartSub, detailTitle, scope, legend };
-  }, [cityMode, fieldMode, detailMode, src, months, cities, fields, selectedFields, usingDefault, metric, gran, weekly, complete, cmp]);
+  /* winAgg IS A DEPENDENCY. toRow reads it for the distinct totals, and without it here the rows kept
+   * their placeholder when the aggregate landed: the two distinct metrics rendered a dash forever and
+   * looked like a deliberate "not available" rather than a memo that never recomputed. */
+  }, [cityMode, fieldMode, detailMode, src, months, cities, fields, selectedFields, usingDefault, metric, gran, weekly, complete, cmp, winAgg]);
 
   /* ── HOVER ────────────────────────────────────────────────────────────────────────────────────
    * The chart had nothing to hover. The other Clubhouse charts put a marker on the series and name
@@ -594,6 +768,21 @@ export default function BehaviorPanel({
    * still one hover away. Index-based, resolved from the pointer's x in VIEWBOX units — the svg is
    * width:100% so client pixels are the wrong scale. */
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  /* ── ONE ROW OPEN AT A TIME ────────────────────────────────────────────────────────────────
+   * Ryan: "clicking a city should reveal a dropdown of the metrics". With entities as rows and time
+   * as columns the metric is the THIRD dimension, and this is where it fits without a second table.
+   * A single open row rather than many, because six child rows per city across seven cities is
+   * forty-nine rows and no longer a comparison. */
+  const [openRow, setOpenRow] = useState<string | null>(null);
+  /* ── SORTING, WHICH THIS PAGE HAS NEVER HAD ────────────────────────────────────────────────
+   * `col` is a bucket key or "total". Absent in Overall, where ranking six metrics by size means
+   * nothing, so the state simply goes unread there rather than being conditionally created. */
+  const [sort, setSort] = useState<{ col: string; dir: "asc" | "desc" } | null>(null);
+  /* THE CHART IS NOT THE DEFAULT VIEW. Not deleted: spots booked runs 6,573 to 9,716 while new
+   * players runs 585 to 1,123, so on ONE SHARED AXIS three of the four series are flat lines along
+   * the bottom and a real move in new players cannot show. That is a dual-scale problem, not a
+   * clutter one, which is why the fix is a toggle rather than a redesign. */
+  const [chartOpen, setChartOpen] = useState(false);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
     const c = model.chart;
@@ -607,16 +796,84 @@ export default function BehaviorPanel({
 
   /* THE UNIT FOLLOWS THE GRANULARITY. This read "26 months · oldest to newest" in weekly mode,
    * because `months` is the axis whatever the axis is made of. A count is not unit-free. */
-  const unit = gran === "weekly" ? "week" : "month";
-  const metricPeriodText = `${months.length} ${unit}${months.length === 1 ? "" : "s"} · oldest to newest`;
+  /* THE UNIT WORD FOLLOWS THE GRAIN, from weekBuckets so the header and the CSV cannot disagree. */
+  const unitWord = grainUnitWord(gran);
+  const unit = unitWord;
+  /* THE "N months · oldest to newest" LINE IS GONE. It restated the axis the reader is looking at,
+   * and in weekly mode it said "4 weeks" beside a table of months. Nothing replaces it: the column
+   * headers already name every bucket. */
   const firstColHead = fieldMode ? "Field" : cityMode ? "City" : "Metric";
   /* WHICH TWO BUCKETS THE CHANGE COLUMN USED, named on the column itself and in its tooltip. */
-  const bucketUnit = gran === "weekly" ? "week" : "month";
+  const bucketUnit = unitWord;
   const cmpSub = cmp
     ? (gran === "weekly"
       ? `${weekTick(months[cmp.prev])} → ${weekTick(months[cmp.last])}`
       : `${monthLabel(months[cmp.prev])} → ${monthLabel(months[cmp.last])}`)
     : "";
+  /* ── SORTING, APPLIED AFTER THE MODEL AND ONLY IN DETAIL MODES ────────────────────────────
+   * Ranking six metrics by size says nothing, so Overall is left alone rather than given a control
+   * that would look consistent and mean nothing.
+   *
+   * SORTED FROM A COPY. Mutating model.rows would reorder the CSV and the chart legend too, and the
+   * chart's colours are assigned by position - a sort would then recolour the lines. */
+  const sortedRows = useMemo(() => {
+    if (!detailMode || !sort) return model.rows;
+    const at = (r: Row): number => {
+      if (sort.col === "total") return r.total;
+      const i = months.indexOf(sort.col);
+      return i >= 0 ? (r.cells[i] ?? 0) : 0;
+    };
+    const out = [...model.rows];
+    out.sort((a, b) => (sort.dir === "desc" ? at(b) - at(a) : at(a) - at(b)));
+    return out;
+  }, [model.rows, sort, detailMode, months]);
+
+  /* ── THE SIX METRICS FOR ONE OPEN ENTITY ──────────────────────────────────────────────────
+   * REGISTRATIONS HAVE NO FIELD. A player registers before choosing a pitch, so that row is absent
+   * from a field's expansion rather than rendered as zero - the same shape as downloads having no
+   * city on the funnel, and the page says so. hasFieldDimension owns that rule. */
+  const childRows = useMemo(() => {
+    if (!detailMode || !openRow) return [];
+    const points = fieldMode
+      ? src.behaviorByField[openRow]?.points
+      : src.behaviorByCity[openRow];
+    if (!points) return [];
+    const idx = new Map(points.map((pt) => [pt.m, pt]));
+    const keys = (["registrations", "newPlayers", "totalPlayers", "spots", "recurring", "pctRecurring"] as GridMetric[])
+      .filter((k) => !fieldMode || hasFieldDimension(k));
+    return keys.map((k) => {
+      const cells = months.map((m) => metricValue(idx.get(m), k) ?? 0);
+      const rate = k === "pctRecurring";
+      const li = cmp ? cmp.last : cells.length - 1;
+      const pi = cmp ? cmp.prev : cells.length - 2;
+      const last = cells[li] ?? 0;
+      const prev = cells[pi] ?? 0;
+      return {
+        name: METRIC_LABEL[k], cells,
+        total: rate ? cells[cells.length - 1] ?? 0 : cells.reduce((a, b) => a + b, 0),
+        mom: rate ? last - prev : pctChange(last, prev),
+        points: rate,
+      } as Row;
+    });
+  }, [detailMode, openRow, fieldMode, src, months, cmp]);
+
+  /* aria-sort ON THE HEADER, so the state is ANNOUNCED and not only coloured. "none" on a sortable
+   * column that is not the active one; absent entirely where sorting does not exist. */
+  const sortAria = (col: string): "ascending" | "descending" | "none" | undefined =>
+    !detailMode ? undefined
+      : sort?.col === col ? (sort.dir === "asc" ? "ascending" : "descending")
+      : "none";
+  /* FIRST CLICK DESCENDS. "Highest to lowest" is what was asked for, so the first press gives it. */
+  const toggleSort = (col: string) =>
+    setSort((cur) => (cur?.col === col
+      ? { col, dir: cur.dir === "desc" ? "asc" : "desc" }
+      : { col, dir: "desc" }));
+
+  /* ONE STRING FOR THE COLUMN HEADING, read by the screen AND the file. Two copies of this is how
+   * a header and an export disagree about what they compared. */
+  const changeHeadText = cmpSub
+    ? `Change vs. last ${unitWord} (${cmpSub})`
+    : `Change vs. last ${unitWord}`;
   const cmpTitle = cmp
     ? `${gran === "weekly" ? "Week over week" : "Month over month"} — ${bucketLabel(months[cmp.last], gran)} `
       + `against ${bucketLabel(months[cmp.prev], gran)}. Both are COMPLETE ${bucketUnit}s; `
@@ -636,19 +893,16 @@ export default function BehaviorPanel({
      * This is the specific failure being guarded against: when the weekly fix landed, the screen
      * was corrected and the export kept shipping the old number. It is the same `cmp` and the same
      * `complete` array on both sides now, so they cannot diverge without both moving. */
-    const header = [firstColHead,
-      ...months.map((k, i) => (complete[i] ? bucketLabel(k, gran) : `${bucketLabel(k, gran)} (partial)`)),
-      "Selected period",
-      cmpSub ? `Latest ${changeColumnLabel(gran)} (${cmpSub})` : `Latest ${changeColumnLabel(gran)}`];
-    const body = model.rows.map((r) => [
-      r.name,
-      // A rate is written with its unit so a spreadsheet cannot mistake 44 for a count.
-      ...r.cells.map((c) => (r.points ? `${c.toFixed(1)}%` : String(c))),
-      r.points ? `${r.total.toFixed(1)}%` : String(r.total),
-      // PERCENTAGE POINTS for a rate, percent for a count — the unit is in the value, so the
-      // column cannot be read as the wrong kind of change.
-      r.points ? `${r.mom >= 0 ? "+" : ""}${r.mom.toFixed(1)} pts` : `${r.mom >= 0 ? "+" : ""}${r.mom.toFixed(1)}%`,
-    ]);
+    /* BUILT BY lib/behaviorExport FROM model.rows — THE SAME ROWS THE TABLE RENDERS. Not a second
+     * computation: that is exactly what diverged when the weekly fix landed on screen and the file
+     * kept shipping the old change. The guard compares the two cell for cell. */
+    const header = exportHeader({
+      firstColHead,
+      bucketLabels: months.map((k) => bucketLabel(k, gran)),
+      complete,
+      changeHead: changeHeadText,
+    });
+    const body = exportBody(model.rows);
 
     // IN DETAIL MODES THE ROWS ARE ONE METRIC ACROSS SCOPES, so the recurring pair would otherwise
     // be missing from the file entirely. Both are appended per scope, and they reconcile against
@@ -744,6 +998,17 @@ export default function BehaviorPanel({
             >
               Weekly
             </button>
+            {/* DAILY NARROWS THE RANGE TO ONE MONTH, visibly, in the pickers the operator can
+                reopen. Six months of days is 180 columns, which is not a table anyone reads. */}
+            <button
+              type="button"
+              className={`${styles.segBtn} ${gran === "daily" ? styles.segBtnActive : ""}`}
+              data-value="daily"
+              data-testid="behavior-gran-daily"
+              onClick={() => setGran("daily")}
+            >
+              Daily
+            </button>
           </div>
           <div className={styles.segmented} id="growthBehaviorView">
             <button
@@ -752,7 +1017,7 @@ export default function BehaviorPanel({
               data-value="matchday"
               onClick={() => setView("matchday")}
             >
-              Overall Matchday
+              Overall
             </button>
             <button
               type="button"
@@ -798,8 +1063,29 @@ export default function BehaviorPanel({
         <div className={styles.chart} data-testid="behavior-weekly-loading" style={{ padding: 24 }}>Loading {monthLabel(period.start)} – {monthLabel(period.end)} by week…</div>
       ) : (
       <>
-      {/* chart */}
-      <div className={styles.chart}>
+      {/* ── THE CHART, BEHIND A TOGGLE, NOT DELETED ─────────────────────────────────────────────
+          Ryan: "remove the line graphs, keep everything in tables, but make it so you can open the
+          graphs still, just not the default view."
+
+          THE REASON IS A DUAL-SCALE PROBLEM, NOT CLUTTER, which is why the fix is a toggle rather
+          than a redesign: spots booked runs 6,573 to 9,716 while new players runs 585 to 1,123, so on
+          ONE SHARED AXIS three of the four series are flat lines along the bottom and a real move in
+          new players cannot show. Said on the page, with the figures, so the toggle is not a mystery.
+          hidden RATHER THAN UNMOUNTED, so opening it does not re-run buildChart. */}
+      <div className={styles.chartToggleRow}>
+        <button type="button" className={styles.btn} data-testid="behavior-chart-toggle"
+          aria-expanded={chartOpen} onClick={() => setChartOpen((v) => !v)}>
+          {chartOpen ? "Hide chart" : "Show chart"}
+        </button>
+        {chartOpen && (
+          <span className={styles.chartHint} data-testid="behavior-chart-hint">
+            One shared axis cannot carry these together: spots booked runs 6,573 to 9,716 while new
+            players runs 585 to 1,123, so three of the four series flatten along the bottom and a real
+            move in new players cannot show. The tables are the reliable read.
+          </span>
+        )}
+      </div>
+      <div className={styles.chart} data-testid="behavior-chartbox" hidden={!chartOpen}>
         {/* THE LEGEND, above the plot. This replaces four end-of-line labels that overlapped in
             the right margin; a horizontal row cannot collide however many series there are, it
             wraps. */}
@@ -998,54 +1284,105 @@ export default function BehaviorPanel({
           <strong className={styles.detailStrong} id="growthDetailTitle">
             {model.detailTitle}
           </strong>
-          <span className={styles.metricPeriod} id="growthMetricPeriod">
-            {metricPeriodText}
-          </span>
+
         </div>
         <span className={styles.behaviorScope} id="growthBehaviorScope">
           {model.scope}
         </span>
       </div>
 
+      {/* ── A NUMBER THAT USED TO BE THERE DOES NOT JUST VANISH ────────────────────────────────
+          Total players and Returning players are DISTINCT counts, and their Period total was the sum
+          of the monthly figures - which double-counts anyone who played in two of them. Over Apr-Sep
+          that read 15,625 against a true 8,361: 86.9% too high, and it looked right because it landed
+          0.9% from the all-time player count.
+          THE WRONG NUMBER IS GONE AND THE RIGHT ONE IS NOT WIRED IN YET, so the cell is a dash. A
+          dash with no explanation is its own defect when a figure has been on screen for months, so
+          the reason is on the page. THE PER-PERIOD COLUMNS ARE UNAFFECTED and always were: only the
+          total was summing something that must not be summed. */}
+      {!detailMode && winAgg === null && (
+        <p className={styles.tableNote} data-testid="behavior-distinct-note">
+          <b>Total players</b> and <b>Returning players</b> are distinct counts, so their period
+          figure is not the sum of the months and is being rewired; it shows a dash meanwhile. Every
+          month column is correct, and so is <b>Returning player %</b>, which has always read its
+          latest value rather than an average.
+        </p>
+      )}
+      {/* REGISTRATIONS HAVE NO FIELD, said where the missing row is. A player registers before
+          choosing a pitch, so a field's expansion is five metrics rather than six - and a reader who
+          counts them deserves the reason rather than a suspicion. */}
+      {fieldMode && (
+        <p className={styles.tableNote} data-testid="behavior-no-field-registrations">
+          A field&rsquo;s metrics are five, not six: <b>registrations have no field</b>. A player
+          registers before choosing a pitch, so there is no honest per-pitch figure to show.
+        </p>
+      )}
       {/* summary table */}
       <div className={styles.summaryWrap}>
         <table className={styles.table}>
           <thead id="growthSummaryHead">
             <tr>
-              <th>{firstColHead}</th>
+              <th className={styles.stickyHead} data-testid="behavior-th" data-k="name">{firstColHead}</th>
               {/* THE HEADER IS THE BUCKET, NOT ITS MONTH. `monthLabel` was used unconditionally,
                   so in weekly mode five consecutive columns all read "Jun 2026" — 21 of 27 headers
                   were duplicates and the table could not be read at all. bucketLabel is the same
                   labeller the CSV already used and it names the full range: "Jun 1 – Jun 7". */}
               {months.map((m, i) => (
-                <th key={m} data-testid="behavior-col-head"
+                <th key={m} data-testid="behavior-col-head" data-k={m}
                     data-partial={!complete[i] ? "1" : "0"}
-                    className={!complete[i] ? styles.thPartial : undefined}>
+                    aria-sort={sortAria(m)}
+                    className={`${!complete[i] ? styles.thPartial : ""} ${detailMode ? styles.sortable : ""}`}
+                    onClick={detailMode ? () => toggleSort(m) : undefined}>
                   {bucketLabel(m, gran)}
-                  {!complete[i] && <span className={styles.thPartialTag}>partial</span>}
+                  {/* ── THE LIVE COLUMN IS MARKED ONCE, ON THE HEADER ─────────────────────────
+                      Not on six cells: one caveat said six times reads as six caveats. The current
+                      period is a column now because the change pill compares a MATCHED WINDOW, so
+                      including it is safe - but clamping it is not the same as pretending it closed. */}
+                  {!complete[i] && <span className={styles.thPartialTag} data-testid="behavior-in-progress">in progress</span>}
                 </th>
               ))}
-              <th>Selected period</th>
+              <th data-testid="behavior-period-total-head" data-k="total"
+                  aria-sort={sortAria("total")}
+                  className={detailMode ? styles.sortable : undefined}
+                  onClick={detailMode ? () => toggleSort("total") : undefined}>
+                Period total
+              </th>
               {/* THE COLUMN SAYS WHICH TWO BUCKETS IT COMPARED. "Latest WoW" over an unnamed pair
                   is how a partial week hid inside a −68% badge for as long as it did. */}
+              {/* ── THE CHANGE COLUMN NAMES THE UNIT AND THE WINDOW ──────────────────────────
+                  "Latest MoM" over a daily column would be wrong, so the unit follows the grain.
+                  And the SUB-LINE names the two windows it actually used, with both weekend counts,
+                  which is what lets this pill sit beside cells it does not equal without lying. */}
               <th title={cmpTitle} data-testid="behavior-change-head">
-                Latest {changeColumnLabel(gran)}
+                Change vs. last {unitWord}
                 {cmpSub && <span className={styles.thSub} data-testid="behavior-change-sub">{cmpSub}</span>}
               </th>
             </tr>
           </thead>
           <tbody id="growthSummaryBody">
-            {model.rows.map((r) => (
-              <tr key={r.name}>
-                <td className={styles.nameCell}>
+            {sortedRows.map((r) => (
+              <Fragment key={r.name}>
+              <tr data-testid="behavior-row" data-name={r.name}
+                  data-open={r.entity && openRow === r.entity ? "1" : "0"}
+                  className={r.entity ? styles.rowClickable : undefined}
+                  onClick={r.entity ? () => setOpenRow(openRow === r.entity ? null : r.entity!) : undefined}>
+                <td className={`${styles.nameCell} ${styles.stickyCell}`}>
                   {r.rank != null && <span className={styles.rank}>{r.rank}</span>}
                   {r.dot && <span className={styles.cityKey} style={{ background: r.dot }} />}
                   {r.name}
+                  {/* THE AFFORDANCE, because a row that opens has to look like one. */}
+                  {r.entity && <span className={styles.rowCaret} aria-hidden="true">{openRow === r.entity ? "▾" : "▸"}</span>}
                 </td>
                 {r.cells.map((v, i) => (
                   <td key={i}>{r.points ? `${v.toFixed(1)}%` : fmt(v)}</td>
                 ))}
-                <td>{r.points ? `${r.total.toFixed(1)}%` : fmt(r.total)}</td>
+                {/* A DASH WHERE A DISTINCT TOTAL IS NOT AVAILABLE. Never the sum: the sum is the
+                    wrong number, and "—" says so. Never "NaN" either, which reads as a crash. */}
+                <td data-testid="behavior-period-total">
+                  {r.points ? `${r.total.toFixed(1)}%`
+                    : Number.isFinite(r.total) ? fmt(r.total)
+                    : <span title="A distinct count over this period is not available right now. It is never the sum of the monthly figures, which double-counts anyone who played in two of them.">—</span>}
+                </td>
                 <td>
                   {/* PERCENTAGE POINTS for a rate. A rate that moves 40% → 44% moved +4 POINTS;
                       calling it +10% overstates it by the size of the base. */}
@@ -1059,6 +1396,25 @@ export default function BehaviorPanel({
                   </span>
                 </td>
               </tr>
+              {/* ── ALL SIX METRICS FOR THE OPEN ENTITY ──────────────────────────────────────
+                  A field's expansion omits REGISTRATIONS: a player registers before choosing a
+                  pitch, so there is no honest per-field figure and the page says so below. */}
+              {r.entity && openRow === r.entity && childRows.map((cr) => (
+                <tr key={`${r.name}-${cr.name}`} data-testid="behavior-child" data-metric={cr.name}
+                    className={styles.childRow}>
+                  <td className={`${styles.nameCell} ${styles.stickyCell} ${styles.childName}`}>{cr.name}</td>
+                  {cr.cells.map((v, i) => (
+                    <td key={i}>{cr.points ? `${v.toFixed(1)}%` : fmt(v)}</td>
+                  ))}
+                  <td>{cr.points ? `${cr.total.toFixed(1)}%` : fmt(cr.total)}</td>
+                  <td>
+                    <span className={`${styles.status} ${cr.mom >= 0 ? styles.statusGreen : styles.statusRed}`}>
+                      {cr.mom >= 0 ? "+" : ""}{cr.mom.toFixed(1)}{cr.points ? " pts" : "%"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+              </Fragment>
             ))}
           </tbody>
         </table>

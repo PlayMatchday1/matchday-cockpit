@@ -30,7 +30,8 @@
 
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { selectAll } from "@/lib/supabasePagination";
-import { chicagoYmd, wallClockYmd, weekKey, lastWeeks, weeksInMonthRange, weekEnd, addDays, MAX_WEEKS } from "@/lib/weekBuckets";
+import { chicagoYmd, wallClockYmd, weekKey, lastWeeks, weeksInMonthRange, weekEnd, addDays, MAX_WEEKS,
+  daysInMonthRange, lastDays, MAX_DAYS } from "@/lib/weekBuckets";
 /* ONE CITY VOCABULARY, AND IT IS THE ONE MONTHLY ALREADY USES.
  *
  * This route used to group registrations on the RAW `preferable_city_name` and play on
@@ -66,6 +67,40 @@ export async function GET(req: Request) {
   const end = qs.get("end");
   const n = Number(qs.get("weeks") ?? 13);
   const weeks = Number.isInteger(n) && n >= 1 && n <= MAX_WEEKS ? n : 13;
+  /* ── DAILY IS THIS QUERY WITH THE BUCKETING STEP REMOVED ─────────────────────────────────────
+   * This route already re-derives from the row-level mirrors, and it buckets with
+   * `weekKey(chicagoYmd(...))` for signups and `weekKey(wallClockYmd(...))` for matches. SO
+   * chicagoYmd AND wallClockYmd *ARE* THE DAY KEYS; weekKey is the wrapper around them.
+   *
+   * WHICH MEANS THE TWO DATE RULES SURVIVE BY CONSTRUCTION rather than by being carried across:
+   * they live in the inner call, and taking the outer one off cannot change which day a row lands
+   * on. Verified empirically in scripts/behavior-daily-test.ts, because "by construction" is a
+   * claim about code and not a fact about data - a registration at 02:30Z and a match at the same
+   * wall clock are the same day in the raw strings and land on different days once the rules run.
+   *
+   * AT MONTH GRAIN A SWAPPED RULE MOVES A HANDFUL OF ROWS. At day grain it moves rows every single
+   * day, in OPPOSITE directions for the two reads, so the error doubles rather than partly
+   * cancelling.
+   *
+   * DAYS ALIGN TO MONTHS, so daily does NOT inherit weekly's permanent "weeks do not align to
+   * months" caveat. A month's days sum to that month exactly, which weekly can never promise. */
+  const grain = qs.get("grain") === "daily" ? "daily" : "weekly";
+  /* ── DISTINCT COUNTS OVER ARBITRARY DAY WINDOWS ──────────────────────────────────────────────
+   * `windows=from:to,from:to` - up to four, each a pair of YYYY-MM-DD bounds, inclusive.
+   *
+   * WHY THE ROUTE AND NOT THE CALLER. totalPlayers is a DISTINCT count: the caller holds one Set
+   * size per bucket and no amount of arithmetic over those recovers the distinct count over a range,
+   * because it cannot know who appears in two of them. Summing them instead was 86.9% too high on
+   * Apr-Sep 2026 - 15,619 against a true 8,357 - and looked right because it landed 0.9% from the
+   * all-time figure.
+   *
+   * ONE AGGREGATE SERVES BOTH CALLERS: the Period total for a distinct count over the displayed
+   * period, and the day-matched change over each of the two compared windows. */
+  const windowSpec = (qs.get("windows") ?? "")
+    .split(",").map((x) => x.trim()).filter(Boolean).slice(0, 4)
+    .map((pair) => { const [from, to] = pair.split(":"); return { from, to }; })
+    .filter((w) => /^\d{4}-\d{2}-\d{2}$/.test(w.from ?? "") && /^\d{4}-\d{2}-\d{2}$/.test(w.to ?? "") && w.from <= w.to);
+  const bucketOf = (ymd: string): string => (grain === "daily" ? ymd : weekKey(ymd));
   const sb = auth.supabase;
 
   try {
@@ -79,8 +114,13 @@ export async function GET(req: Request) {
       return Response.json({ error: "start must not be after end" }, { status: 400 });
     }
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
-    const ranged = start && end ? weeksInMonthRange(start, end) : null;
-    const full = ranged ? ranged.axis : lastWeeks(today, weeks);
+    /* SIX MONTHS OF DAYS IS 180 COLUMNS, which is not a table anyone reads, so daily is capped at
+     * MAX_DAYS and front-drops like the weekly axis does. The CALLER also collapses its range,
+     * visibly, so the cap is a backstop rather than the mechanism. */
+    const ranged = start && end
+      ? (grain === "daily" ? daysInMonthRange(start, end) : weeksInMonthRange(start, end))
+      : null;
+    const full = ranged ? ranged.axis : (grain === "daily" ? lastDays(today, MAX_DAYS) : lastWeeks(today, weeks));
     /* WEEKS THAT HAVE NOT STARTED ARE DROPPED, not rendered as zero. A period ending in the
      * current or a future month contains weeks whose Monday is still ahead; they can only ever
      * plot as 0 and a run of zeros at the right edge reads as a collapse, which is the same lie
@@ -91,7 +131,11 @@ export async function GET(req: Request) {
     if (axis.length === 0) {
       return Response.json({ error: "that period is entirely in the future" }, { status: 400 });
     }
-    const first = axis[0];
+    /* THE LOWER BOUND COVERS THE WINDOWS TOO. The reads are bounded by the axis, and a compared
+     * window legitimately reaches BEFORE it - the previous period's window always does. Without this
+     * the window's rows are never fetched and it reads zero, which would make every change pill on a
+     * part-elapsed period look like a total collapse. */
+    const first = [axis[0], ...windowSpec.map((w) => w.from)].sort()[0];
     /* THE UPPER BOUND, WHICH THE FIXED WINDOW NEVER NEEDED. The old axis always ended today, so
      * `.gte(first)` alone bounded the read. A period ending in the past does not: without this the
      * route would fetch every row from `first` to now and throw almost all of it away.
@@ -101,9 +145,21 @@ export async function GET(req: Request) {
      * day; the match read is wall clock and needs only the day itself. One margin covers both and
      * `inAxis` does the exact filtering either way — the bound is for the query planner, never for
      * correctness. */
-    const lastDay = weekEnd(axis[axis.length - 1]);
-    const upper = addDays(lastDay, 2);
+    /* A DAY BUCKET IS ITS OWN LAST DAY; a week bucket's is its Sunday. */
+    const lastDay = grain === "daily" ? axis[axis.length - 1] : weekEnd(axis[axis.length - 1]);
+    /* AND THE UPPER BOUND COVERS THEM, for the same reason in the other direction. */
+    const lastNeeded = [lastDay, ...windowSpec.map((w) => w.to)].sort().pop()!;
+    const upper = addDays(lastNeeded, 2);
     const inAxis = new Set(axis);
+
+    /* THE WINDOW ACCUMULATORS, DECLARED BEFORE THE FIRST LOOP THAT TOUCHES ONE. They were beside
+     * matchWeek, which sits AFTER the registrations loop, so `winReg` was read in its temporal dead
+     * zone: a 502 reading "Cannot access 'winReg' before initialization". tsc passes on TDZ - it is
+     * a runtime error - which is why the probe that exercises the route is what found it. */
+    const winActive: Set<number>[] = windowSpec.map(() => new Set<number>());
+    const winSpots: number[] = windowSpec.map(() => 0);
+    const winNew: number[] = windowSpec.map(() => 0);
+    const winReg: number[] = windowSpec.map(() => 0);
 
     /* ── REGISTRATIONS. A UTC instant, bucketed by its CHICAGO day. Fake players excluded, the
      * same rule growth_registration applies. Only completed signups count — an abandoned
@@ -119,7 +175,11 @@ export async function GET(req: Request) {
     const regByWeekCity = new Map<string, Map<string, number>>();
     for (const u of users) {
       if (u.is_fake_player === true) continue;
-      const w = weekKey(chicagoYmd(String(u.completed_sign_up_at)));
+      /* CHICAGO DAY FIRST, then the bucket. The window test uses the DAY, because a window is a day
+       * range; the bucket test is separate and can legitimately exclude a row a window includes. */
+      const regDay = chicagoYmd(String(u.completed_sign_up_at));
+      windowSpec.forEach((wd, wi) => { if (regDay >= wd.from && regDay <= wd.to) winReg[wi] += 1; });
+      const w = bucketOf(regDay);
       if (!inAxis.has(w)) continue;
       regByWeek.set(w, (regByWeek.get(w) ?? 0) + 1);
       /* A REGISTRATION WITHOUT A CITY GETS A ROW, NOT A BIN. `if (city)` dropped it, and a
@@ -142,6 +202,10 @@ export async function GET(req: Request) {
         .order("api_id"),
     );
     const matchWeek = new Map<number, string>();
+    /* THE MATCH'S OWN DAY, kept beside its bucket. A window is a day range, and a bucket key is not
+     * a day once the grain is weekly or monthly. SLICED from wall clock, the same rule as the
+     * bucket - a Chicago conversion here would shift a 7pm match by the server's offset. */
+    const matchDay = new Map<number, string>();
     const matchCity = new Map<number, string>();
     /* THE FIELD, for Behavior's field mode. Same aggregation keyed on field_title instead of city —
      * a genuinely small addition, which is why it is here rather than deferred. Registrations are
@@ -149,14 +213,27 @@ export async function GET(req: Request) {
      * and never a pitch, so a per-field registration figure would be invented. */
     const matchField = new Map<number, string>();
     for (const m of matches) {
-      const w = weekKey(wallClockYmd(String(m.start_date)));
+      const day = wallClockYmd(String(m.start_date));
+      /* THE DAY IS RECORDED BEFORE THE AXIS GUARD. A window can legitimately reach outside the
+       * displayed axis - the previous period's matched window does exactly that - and dropping the
+       * day here would silently empty it. */
+      matchDay.set(Number(m.api_id), day);
+      const w = bucketOf(day);
       if (!inAxis.has(w)) continue;
       matchWeek.set(Number(m.api_id), w);
       matchCity.set(Number(m.api_id), normalizeMatchCity(String(m.city_identifier ?? "")));
       matchField.set(Number(m.api_id), String(m.field_title ?? "").trim());
     }
 
-    const ids = [...matchWeek.keys()];
+    /* ── THE ROSTER FETCH IS DRIVEN BY EVERY MATCH READ, NOT BY THE AXIS-FILTERED ONES ──────────
+     * This was `[...matchWeek.keys()]`, and matchWeek only holds matches whose BUCKET is on the
+     * displayed axis. A compared window reaches outside that axis by definition - the previous
+     * period's window always does - so its matches had a day recorded and their roster rows were
+     * never fetched, and the window came back 0. Every metric in it then read as a total collapse.
+     *
+     * matchDay HOLDS EVERY MATCH THE QUERY RETURNED, and the query's bounds already cover the
+     * windows, so this is the set that makes both the axis and the windows answerable. */
+    const ids = [...matchDay.keys()];
     const spotsByWeek = new Map<string, number>();
     const spotsByWeekCity = new Map<string, Map<string, number>>();
     const activeByWeek = new Map<string, Set<number>>();
@@ -196,6 +273,20 @@ export async function GET(req: Request) {
       }
       for (const p of rows) {
         if (p.is_cancelled === true || p.user_is_fake_player === true) continue;
+        /* WINDOWS FIRST, AXIS SECOND. A roster row whose match falls outside the displayed axis can
+         * still belong to a compared window; skipping on `!w` before the window test is what would
+         * make the previous period's window read zero. */
+        const dayOfMatch0 = matchDay.get(Number(p.match_api_id));
+        const uid0 = Number(p.user_id);
+        if (dayOfMatch0 && uid0) {
+          windowSpec.forEach((wd, wi) => {
+            if (dayOfMatch0 >= wd.from && dayOfMatch0 <= wd.to) {
+              winActive[wi].add(uid0);
+              winSpots[wi] += 1;
+              if (p.is_first_match === true) winNew[wi] += 1;
+            }
+          });
+        }
         const w = matchWeek.get(Number(p.match_api_id));
         if (!w) continue;
         const city = matchCity.get(Number(p.match_api_id)) ?? "";
@@ -281,6 +372,23 @@ export async function GET(req: Request) {
       byField,
       cities,
       fields,
+      /* ── THE WINDOW AGGREGATE. Distinct counts that cannot be derived from the buckets. ─────────
+       * One entry per requested window, in request order. `totalPlayers` is a Set size over the WHOLE
+       * window rather than a sum of per-bucket Sets, which is the entire reason this exists:
+       * Apr-Sep 2026 summed to 15,619 and is truly 8,357.
+       *
+       * recurring = totalPlayers - newPlayers, computed HERE from the window's own two figures rather
+       * than by the caller from bucket sums, so it inherits the correct denominator.
+       * pctRecurring is left to the caller: a rate is the LATEST value, never an average, and the
+       * window has no "latest". */
+      windows: windowSpec.map((w, i) => ({
+        from: w.from, to: w.to,
+        registrations: winReg[i],
+        newPlayers: winNew[i],
+        spots: winSpots[i],
+        totalPlayers: winActive[i].size,
+        recurring: Math.max(0, winActive[i].size - winNew[i]),
+      })),
       /* SAID OUT LOUD, not left to be discovered. The panel renders this beside the chart. */
       /* WHAT THE WINDOW ACTUALLY IS, so the panel states it rather than implying it. */
       /* `today` TRAVELS WITH THE DATA. The panel decides which buckets are complete, and it must

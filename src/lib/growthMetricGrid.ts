@@ -41,8 +41,12 @@ export const METRIC_LABEL: Record<GridMetric, string> = {
   registrations: "Registrations",
   newPlayers: "New players",
   totalPlayers: "Total players",
-  recurring: "Recurring players",
-  pctRecurring: "% recurring",
+  /* RETURNING, NOT RECURRING. Ryan's wording, and the better word: "recurring" is what a
+   * subscription does, "returning" is what a player does. The KEYS are untouched, so nothing that
+   * reads the data changes; only the label does. METRIC_LABEL has ONE consumer (BehaviorPanel) despite
+   * this file's header claiming the Data Room shares it, so there is no second page to keep in step. */
+  recurring: "Returning players",
+  pctRecurring: "Returning player %",
   spots: "Spots booked",
   spotsPerPlayer: "Spots per player",
 };
@@ -50,8 +54,44 @@ export const METRIC_LABEL: Record<GridMetric, string> = {
 /** A rate, charted 0–100 and moved in PERCENTAGE POINTS rather than percent. */
 export const IS_RATE = new Set<GridMetric>(["pctRecurring"]);
 
-const ADDITIVE = new Set<GridMetric>(["registrations", "newPlayers", "spots"]);
-export const isAdditive = (m: GridMetric): boolean => ADDITIVE.has(m);
+/* ── SUMMING A DISTINCT COUNT IS NOW A COMPILE ERROR ─────────────────────────────────────────
+ *
+ * This file's own header has said "totalPlayers -> a DISTINCT count; summing double-counts anyone
+ * active in two months/markets, so it is read per group, never summed" since it was written. The
+ * Period total column summed it anyway, for six months, and the figure was 86.9% too high:
+ *
+ *   sum of six monthly Set sizes, Apr-Sep 2026   15,619
+ *   COUNT(DISTINCT user_id) over the same range   8,357
+ *
+ * AND IT SURVIVED BECAUSE IT LOOKED RIGHT. 15,619 is 0.9% off the all-time player count, so it read
+ * as "almost everyone who ever played, played this half-year" - a plausible and flattering story.
+ * The truth is 53% of all time, which is a different claim about the business.
+ *
+ * DOCUMENTING THE RULE AGAIN WOULD CHANGE NOTHING; it was documented and the bug shipped. So the
+ * rule is a TYPE: anything that sums across buckets takes AdditiveMetric, and a distinct count will
+ * not typecheck as one. `isAdditive` is a type guard rather than a boolean, so narrowing is what a
+ * caller gets for checking.
+ */
+export type AdditiveMetric = Extract<GridMetric, "registrations" | "newPlayers" | "spots">;
+const ADDITIVE: ReadonlySet<GridMetric> = new Set<GridMetric>(["registrations", "newPlayers", "spots"]);
+export const isAdditive = (m: GridMetric): m is AdditiveMetric => ADDITIVE.has(m);
+
+/** A count that is a DISTINCT set per bucket. Never summed across buckets; see above. */
+export type DistinctMetric = Extract<GridMetric, "totalPlayers" | "recurring">;
+export const isDistinct = (m: GridMetric): m is DistinctMetric =>
+  m === "totalPlayers" || m === "recurring";
+
+/**
+ * Sum one metric across buckets. THE ONLY SANCTIONED SUMMING PATH.
+ *
+ * It accepts AdditiveMetric and nothing else, so `sumAcrossBuckets("totalPlayers", ...)` is a
+ * compile error rather than a number that is 87% too high. A distinct count over a range comes from
+ * the route's own window aggregate instead.
+ */
+export function sumAcrossBuckets(m: AdditiveMetric, values: readonly (number | null)[]): number {
+  void m; // named so the call site reads as "sum THIS metric", and so the type is load-bearing
+  return values.reduce<number>((a, b) => a + (b ?? 0), 0);
+}
 export const isRatio = (m: GridMetric): boolean => m === "spotsPerPlayer";
 // A registration attaches to a market, never a pitch → no field dimension.
 export const hasFieldDimension = (m: GridMetric): boolean => m !== "registrations";

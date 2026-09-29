@@ -116,9 +116,39 @@ console.log("\nTHE ROUTE READS THE RIGHT CLOCK FOR EACH SOURCE, AND PAGES PAST T
    * the old sentence, and the raw scan found the quotation. */
   const Rcode = R.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
   const code = R.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-  is("  signups go through chicagoYmd", /weekKey\(chicagoYmd\(String\(u\.completed_sign_up_at\)\)\)/.test(code), true);
-  is("  matches go through wallClockYmd", /weekKey\(wallClockYmd\(String\(m\.start_date\)\)\)/.test(code), true);
-  is("  control: the two are NOT swapped", /chicagoYmd\(String\(m\.start_date\)\)|wallClockYmd\(String\(u\.completed_sign_up_at\)\)/.test(code), false);
+  /* ── A SOURCE ASSERTION ON PURPOSE, AND THIS IS WHY ─────────────────────────────────────────
+   * Everything else in this area should be a runtime assertion on computed values. THESE FOUR MAY
+   * NOT BE, and the reason is not laziness:
+   *
+   *   The pairing of DATE RULE to FIELD lives inside a route that needs a DATABASE and an HTTP
+   *   boundary. It cannot be observed from inside `npm run verify`, and a runtime check against the
+   *   live route would sit OUTSIDE the pre-push gate - which is a net loss, because this is the most
+   *   consequential pairing on the page.
+   *
+   * SO: NARROWED TO THE PAIRING, NOT THE EXPRESSION. No bucketing wrapper appears in any of the four
+   * patterns, so they survive the next refactor of bucketOf - which is exactly what broke their
+   * predecessors, which pinned `weekKey(chicagoYmd(...))` verbatim.
+   *
+   * AND THE NEGATIVE HALF MATTERS MORE THAN THE POSITIVE. A positive pattern proves the right
+   * pairing exists SOMEWHERE; it cannot prove a wrong one does not. In a file that keeps growing,
+   * the swap this guards against arrives as an ADDED call site, not a changed one.
+   *
+   * WHAT IS AT STAKE: a registration is a true UTC instant and is CONVERTED to Chicago; a match's
+   * start_date carries a Z it does not mean and is SLICED. Swapping them moves both reads in
+   * OPPOSITE directions, so the error doubles rather than partly cancelling - proven on a
+   * near-midnight pair in scripts/behavior-daily-test.ts. At month grain that is a handful of rows;
+   * at day grain it is every single day.
+   *
+   * DO NOT "MODERNISE" THESE INTO A GREP FOR SOMETHING ELSE. If the route ever becomes reachable
+   * without a database, replace them with the runtime equivalent and delete this note. */
+  is("  chicagoYmd is paired with completed_sign_up_at",
+    /chicagoYmd\([^)]*completed_sign_up_at/.test(code), true);
+  is("  wallClockYmd is paired with start_date",
+    /wallClockYmd\([^)]*start_date/.test(code), true);
+  is("  control: chicagoYmd NEVER appears with start_date",
+    /chicagoYmd\([^)]*start_date/.test(code), false);
+  is("  control: wallClockYmd NEVER appears with completed_sign_up_at",
+    /wallClockYmd\([^)]*completed_sign_up_at/.test(code), false);
   /* THE 1,000-ROW CAP. The first version chunked match ids and trusted the result — every week
    * came back with exactly 1,000 roster rows and metrics of 554, 15, 535, 45, which read as
    * seasonality and were truncation. */
@@ -192,15 +222,21 @@ console.log("\nTHE PANEL TOGGLE — monthly untouched, weekly normalised into th
   is("  …and read back on mount", /localStorage\.getItem\(BEHAVIOR_GRAN_KEY\)/.test(code), true);
   /* THE PICKER IS WIRED. This used to assert `const WEEKS = 13` — the constant that MADE the
    * period picker inert. The constant is gone and the request now carries the picker's range. */
-  is("  weekly asks for the SELECTED PERIOD, not a fixed window",
-    /behavior-weekly\?start=\$\{encodeURIComponent\(period\.start\)\}&end=\$\{encodeURIComponent\(period\.end\)\}/.test(code), true);
+  /* RETIRED: this pinned the fetch URL's exact shape, which the grain parameter changed. The
+   * PROPERTY - that the axis is bounded by the selected period rather than a fixed window - is
+   * asserted on weeksInMonthRange / daysInMonthRange in scripts/behavior-daily-test.ts, and the
+   * component actually passing the period is observed in scripts/_check_behavior_tables.mjs by
+   * moving the range and watching the columns change. The negative below is the load-bearing half
+   * and stays. */
   is("  control: the fixed 13-week constant is gone", /const WEEKS = 13/.test(code), false);
   is("  …and the fetch re-runs when the window changes", /\[gran, winKey, period\.start, period\.end\]/.test(code), true);
   /* THE STALE-CHART GUARD. Without the clear, the previous window's bars stay on screen under the
    * new window's caption while the new read is in flight, and nothing on the page says so. */
   is("  …clearing the old window's data first", /setWeekly\(null\); setWeeklyErr\(null\);/.test(code), true);
   is("  the window is cached so a pill round-trip does not refetch", /weeklyCache\.current\.get\(winKey\)/.test(code), true);
-  is("  the count's UNIT follows the granularity", /gran === "weekly" \? "week" : "month"/.test(code), true);
+  /* RETIRED: pinned the ternary, which became grainUnitWord(gran) when a third grain arrived. The
+   * property - each grain names its own unit AND no other - is asserted in
+   * scripts/behavior-export-test.ts across all three. */
   is("  a capped window says how many weeks it dropped", /not shown \(53-week maximum\)/.test(code), true);
 
   /* THE WHOLE DESIGN IN ONE ASSERTION. Weekly is normalised to the monthly point shape — `w`
@@ -209,15 +245,25 @@ console.log("\nTHE PANEL TOGGLE — monthly untouched, weekly normalised into th
   is("  weekly wears the monthly shape (w -> m)", /m: p\.w, registrations: p\.registrations/.test(code), true);
   is("  …and monthly resolves to exactly the old expression",
     /data\.behaviorOverall\.map\(\(p\) => p\.m\)\.filter\(\(m\) => m >= period\.start && m <= period\.end\)/.test(code), true);
-  is("  the source switches, the consumers do not",
-    /const src = gran === "weekly" && weeklyData \? weeklyData : data;/.test(code), true);
+  /* RETIRED: pinned `gran === "weekly" && weeklyData`, which became `fetched && weeklyData` once
+   * daily read the same payload. Writing that test as a weekly check is precisely what would have
+   * sent daily to the monthly maps and rendered a month's value in every day column - plausible
+   * numbers, wrong axis, no error. The two controls BELOW are the structural guard and are kept:
+   * nothing reads the raw monthly maps, and networkSeries is fed src. */
   // CONTROL: no consumer still reads the raw monthly maps directly, which would ignore the toggle.
   is("  control: nothing reads data.behaviorByCity/ByField any more", /data\.behaviorBy(City|Field)\[/.test(code), false);
   is("  control: …and networkSeries is fed src", /networkSeries\(src,/.test(code), true);
 
   console.log("  -- labels and the change column --");
-  is("  the change column relabels", /Latest \{changeColumnLabel\(gran\)\}/.test(code), true);
-  is("  …in the CSV header too", /`Latest \$\{changeColumnLabel\(gran\)\}`/.test(code), true);
+  /* ── TWO SOURCE-TEXT REGEXES RETIRED, NOT LOST ──────────────────────────────────────────────
+   * These pinned the literal `Latest ${changeColumnLabel(gran)}` in the component and in the CSV.
+   * They guarded the SPELLING: renaming the column broke them, while a real divergence between the
+   * screen and the file would still have walked past, because nothing in a regex over a template
+   * string can tell you the two produce the same numbers.
+   * BOTH PROPERTIES NOW LIVE IN scripts/behavior-export-test.ts, observed on computed values:
+   * the heading names the grain's own unit and no other, and the exported change and total equal
+   * the table's cell for cell. Still in the push gate, because the builder was extracted to
+   * lib/behaviorExport rather than the check being moved to a browser. */
   /* CHANGED DELIBERATELY. The tooltip used to be the generic changeColumnTitle; it now NAMES the
    * two buckets compared, which is what stops a partial week hiding inside the badge again.
    * changeColumnTitle is still the monthly branch of cmpTitle. */
@@ -235,7 +281,21 @@ console.log("\nTHE PANEL TOGGLE — monthly untouched, weekly normalised into th
   console.log("  -- city and field detail follow the granularity --");
   is("  the city list reads src", /Object\.keys\(src\.behaviorByCity\)/.test(code), true);
   is("  the field list reads src", /Object\.keys\(src\.behaviorByField\)/.test(code), true);
-  is("  the model recomputes on a granularity change", /\[cityMode, fieldMode, detailMode, src, months, cities, fields, selectedFields, usingDefault, metric, gran, weekly, complete, cmp\]/.test(code), true);
+  /* ── THE PROPERTY, NOT THE EXACT ARRAY ──────────────────────────────────────────────────────
+   * This pinned the model's dependency list verbatim and broke when a legitimate dependency was
+   * ADDED (winAgg, which toRow reads for the distinct totals). A verbatim array fails on every
+   * correct addition and says nothing about whether the right things are in it.
+   *
+   * WHAT MATTERS is that the model recomputes when the things it reads change. Asserted by naming
+   * the ones whose absence would be a real bug, each independently, so a future addition is silent
+   * and a REMOVAL is loud. */
+  {
+    const deps = (code.match(/\}, \[cityMode[^\]]*\]\);/) ?? [""])[0];
+    is("  the model's dependency list is found at all", deps.length > 0, true);
+    for (const d of ["gran", "src", "months", "complete", "cmp", "metric", "winAgg"]) {
+      is(`  the model recomputes on a change to ${d}`, deps.includes(d), true);
+    }
+  }
   // A failed weekly fetch must be an error, not an empty chart.
   is("  a failed weekly fetch is an ERROR", /this is not an empty chart/.test(P), true);
   is("  …and loading says so", /data-testid="behavior-weekly-loading"/.test(code), true);
@@ -399,8 +459,24 @@ console.log("\nTHE WEEKLY PANEL AND ROUTE — the wiring behind the browser suit
    * of place a wrong number survives. This absence scan is what found it. */
   is("  control: NO unconditional last-two survives anywhere in the file",
     /const last = cells\[cells\.length - 1\] \?\? 0;\s*const prev = cells\[cells\.length - 2\]/.test(code), false);
-  is("  the CSV's detail rows use the same complete pair", (code.match(/const li = cmp \? cmp\.last/g) ?? []).length, 2);
-  is("  …and the CSV header names the pair", /Latest \$\{changeColumnLabel\(gran\)\} \(\$\{cmpSub\}\)/.test(code), true);
+  /* ── EVERY CHANGE SITE READS cmp, ASSERTED AS A PROPERTY RATHER THAN A COUNT ────────────────
+   * This pinned the number of sites at TWO and broke when a legitimate THIRD arrived (the per-entity
+   * expansion, which uses the same cmp). A count says "there are two"; what matters is "no site uses
+   * anything else", and a count cannot say that - it fails on a correct addition and passes on a
+   * wrong one as long as the total happens to match.
+   *
+   * SO: EVERY `li` IS DEFINED FROM cmp. Any site that derived its index another way would add an `li`
+   * declaration that this does not match, and the counts would diverge. Paired with the negative
+   * above, which rules out the specific unconditional last-two that shipped in the CSV. */
+  {
+    const liDecls = (code.match(/const li = /g) ?? []).length;
+    const liFromCmp = (code.match(/const li = cmp \? cmp\.last/g) ?? []).length;
+    is("  every change site derives its index from cmp", liFromCmp, liDecls);
+    is("  control: and there is at least one, so the equality is not two zeros",
+      liFromCmp >= 1, true);
+  }
+  /* RETIRED: see the note above. The CSV header is now built by exportHeader from one changeHeadText
+   * string that the screen reads too, so "names the pair" is structural rather than textual. */
   is("  the table header is the BUCKET, not its month", /<th key=\{m\} data-testid="behavior-col-head"/.test(code) && /\{bucketLabel\(m, gran\)\}/.test(code), true);
   is("  control: the header no longer calls monthLabel unconditionally", /<th key=\{m\}>\{monthLabel\(m\)\}<\/th>/.test(code), false);
   is("  completeness is judged in the payload's clock, not the browser's",
@@ -598,9 +674,27 @@ console.log("\nEVERY MONTHLY-BUCKET CALL SITE — changed, or already handled");
 
   /* ── THE EXPORT, WHICH IS THE ONE THAT WAS MISSED LAST TIME ───────────────────────────────────
    * Three separate things have to be true of the file, and the third is the one nobody checks. */
-  is("  the CSV labels the partial column", /complete\[i\] \? bucketLabel\(k, gran\) : `\$\{bucketLabel\(k, gran\)\} \(partial\)`/.test(panel), true);
-  is("  the CSV header names the compared pair", /Latest \$\{changeColumnLabel\(gran\)\} \(\$\{cmpSub\}\)/.test(panel), true);
-  is("  BOTH change sites read the same complete pair", (panel.match(/const li = cmp \? cmp\.last/g) ?? []).length, 2);
+  /* RETIRED, FIFTH OF THE SAME CLASS. This grepped the component for the partial-tag ternary, which
+   * moved into exportHeader when the builder was extracted. The PROPERTY is asserted directly in
+   * scripts/behavior-export-test.ts: a header built with complete=[true,true,false] renders
+   * "Sep 2026 (partial)" on the third bucket and leaves the other two bare. */
+  /* RETIRED: see behavior-export-test.ts. One string feeds both the header and the file. */
+  /* ── EVERY CHANGE SITE READS cmp, ASSERTED AS A PROPERTY RATHER THAN A COUNT ────────────────
+   * This pinned the number of sites at TWO and broke when a legitimate THIRD arrived (the per-entity
+   * expansion, which uses the same cmp). A count says "there are two"; what matters is "no site uses
+   * anything else", and a count cannot say that - it fails on a correct addition and passes on a
+   * wrong one as long as the total happens to match.
+   *
+   * SO: EVERY `li` IS DEFINED FROM cmp. Any site that derived its index another way would add an `li`
+   * declaration that this does not match, and the counts would diverge. Paired with the negative
+   * above, which rules out the specific unconditional last-two that shipped in the CSV. */
+  {
+    const liDecls = (panel.match(/const li = /g) ?? []).length;
+    const liFromCmp = (panel.match(/const li = cmp \? cmp\.last/g) ?? []).length;
+    is("  every change site derives its index from cmp", liFromCmp, liDecls);
+    is("  control: and there is at least one, so the equality is not two zeros",
+      liFromCmp >= 1, true);
+  }
   is("  control: no unconditional last-two survives",
     /const li = cells\.length - 1;\s*const pi = cells\.length - 2;/.test(panel), false);
 

@@ -1524,3 +1524,31 @@
   color: #8a5a00;
   white-space: nowrap;
 }
+
+/* ── PLAYER ACTIVITY: THE TABLE IS THE PAGE ──────────────────────────────────────────────────
+   The chart is reachable, not default. See BehaviorPanel for why it is a dual-scale problem. */
+.chartToggleRow { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin: 0 0 12px; }
+.chartHint { font-size: 11.5px; line-height: 1.5; color: var(--mut, #5b6b63); max-width: 74ch; }
+.tableNote { margin: 0 0 8px; font-size: 11.5px; line-height: 1.5; color: var(--mut, #5b6b63); max-width: 88ch; }
+
+/* THE FIRST COLUMN IS PINNED while the periods scroll. A metric name that scrolls away leaves a row
+   of numbers belonging to nothing, which is the real failure of a wide table. */
+.stickyHead, .stickyCell {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--card, #fff);
+}
+.stickyHead { z-index: 3; }
+
+/* A SORTABLE HEADER LOOKS PRESSABLE AND CLEARS 32px. */
+.sortable { cursor: pointer; user-select: none; min-height: 32px; }
+.sortable:hover { color: var(--ink, #12211a); }
+
+/* AN ENTITY ROW OPENS ITS SIX METRICS. The caret is the affordance; the child rows are inset so a
+   reader cannot mistake one for a peer of the cities above it. */
+.rowClickable { cursor: pointer; }
+.rowClickable:hover { background: var(--surface-2, #f4f7f5); }
+.rowCaret { margin-left: 6px; font-size: 10px; opacity: 0.55; }
+.childRow { background: var(--surface-2, #f7f9f8); }
+.childName { padding-left: 26px !important; font-weight: 500; opacity: 0.85; }

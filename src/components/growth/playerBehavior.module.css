@@ -46,6 +46,12 @@
 .segBtn {
   border: 0; background: transparent; font-size: 11.5px; font-weight: 800; color: var(--muted);
   padding: 7px 13px; border-radius: 8px; cursor: pointer; font-family: inherit;
+  /* 32px, WHICH IT WAS NOT: 31.25 measured, from 7px padding on an 11.5px line. Under the tap target
+     this estate holds every control to, and there are now THREE grains side by side on a phone.
+     THE RULE LIVES HERE, in playerBehavior.module.css, which is the sheet this panel imports for the
+     segmented controls - an identical .segBtn in growth.module.css belongs to other components and
+     was edited first by mistake, which the computed min-height of "auto" is what caught. */
+  min-height: 32px;
 }
 .segBtnActive { background: var(--surface); color: var(--forest); box-shadow: 0 1px 3px rgba(0, 43, 34, 0.13); }
 .filterField label {

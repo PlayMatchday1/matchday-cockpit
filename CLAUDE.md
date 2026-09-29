@@ -143,6 +143,33 @@ restore does not survive the process being killed, and one did not.
 cause: one assertion with a specific wrong value is a DATED suite; every assertion failing
 including its own controls is a page that never loaded.
 
+## Source-text assertions
+
+**Set 2026-09-27.** `scripts/week-buckets-test.ts` carries **96 source-text assertions out of 243** —
+regexes over `BehaviorPanel.tsx` and `behavior-weekly/route.ts` rather than over anything either one
+computes. They break on refactors that change nothing, and they do not catch what they exist for:
+ten of them broke in one sitting on a rename and a parameterisation, while a genuine divergence
+between the screen and the CSV export had walked past them for weeks.
+
+**Prefer a runtime assertion on computed values.** Extract the thing under test if that is what it
+takes — `lib/behaviorExport` exists because pulling the CSV builder out of the component is what let
+"the file equals the table, cell for cell" be asserted at all, and asserted **inside the gate**.
+
+**A stronger check outside `npm run verify` is a net loss.** That is easy to get wrong in the
+direction that feels more rigorous.
+
+**Use a source grep only where a database or an HTTP boundary makes the behaviour unobservable
+inside the gate.** Then: narrow it to the **pairing** rather than the expression, so the next
+refactor of a wrapper does not break it, and **assert the negative as well as the positive** — a
+positive pattern proves the right pairing exists somewhere and cannot prove a wrong one does not. In
+a file that keeps growing, the swap you are guarding against arrives as an ADDED call site, not a
+changed one. The four `chicagoYmd` / `wallClockYmd` pairing assertions are the worked example, and
+they carry their own note saying why they are source assertions so nobody modernises them into a
+grep for something else.
+
+**The remaining 91 are a logged job, not a standard.** They will break on the next change to the
+same expressions. Convert what a change breaks; do not add more.
+
 ## Reading what a tool actually said
 
 **An exit code from a pipeline is the LAST command's.** `npm run verify | tail -5`

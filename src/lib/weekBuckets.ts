@@ -82,10 +82,16 @@ export const weekTick = (mondayYmd: string): string => dayLabel(mondayYmd);
 /* ── GRANULARITY ───────────────────────────────────────────────────────────────────────────────
  * The column that reads "MoM" monthly must not read "MoM" weekly — a change labelled month over
  * month showing a week over week delta is a number that means something other than what it says. */
-export type Granularity = "monthly" | "weekly";
-export const changeColumnLabel = (g: Granularity): string => (g === "weekly" ? "WoW" : "MoM");
+export type Granularity = "monthly" | "weekly" | "daily";
+/* THE UNIT WORD, WHICH THE CHANGE HEADER NAMES. "Change vs. last month" over a daily column is
+ * simply wrong, so three grains means three words and one place to read them from. */
+export const grainUnitWord = (g: Granularity): string =>
+  g === "daily" ? "day" : g === "weekly" ? "week" : "month";
+export const changeColumnLabel = (g: Granularity): string =>
+  g === "daily" ? "DoD" : g === "weekly" ? "WoW" : "MoM";
 export const changeColumnTitle = (g: Granularity): string =>
-  g === "weekly" ? "Week over week — the last full week against the one before it"
+  g === "daily" ? "Day over day — the matched window against the same window a day earlier"
+    : g === "weekly" ? "Week over week — the last full week against the one before it"
     : "Month over month — the last month against the one before it";
 
 /* ── THE PERIOD PICKER DRIVES THE WEEKLY WINDOW ────────────────────────────────────────────────
@@ -185,8 +191,145 @@ export const isMonthComplete = (ym: string, todayYmd: string): boolean => monthE
 
 /** Completeness for either bucket, chosen by granularity. One call site, one rule. */
 export const isBucketComplete = (key: string, todayYmd: string, g: Granularity): boolean =>
-  g === "weekly" ? isWeekComplete(key, todayYmd) : isMonthComplete(key, todayYmd);
+  g === "daily" ? isDayComplete(key, todayYmd)
+    : g === "weekly" ? isWeekComplete(key, todayYmd)
+    : isMonthComplete(key, todayYmd);
 
 /** Today's date in America/Chicago — the clock every bucket on this page is cut in. */
 export const chicagoToday = (): string =>
   new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
+
+/* ── DAILY: THE SAME DERIVATION WITH THE BUCKETING STEP REMOVED ───────────────────────────────
+ *
+ * Ryan asked for a daily option and the brief called it cheap. It is cheaper than that, and the
+ * reason is worth stating exactly: behavior-weekly/route.ts already re-derives from the row-level
+ * mirrors, and it buckets with `weekKey(chicagoYmd(...))` for signups and `weekKey(wallClockYmd(...))`
+ * for matches. SO chicagoYmd AND wallClockYmd *ARE* THE DAY KEYS. weekKey is the bucketing wrapped
+ * around them. Daily is that query with the wrapper taken off.
+ *
+ * WHICH MEANS THE TWO DATE RULES SURVIVE BY CONSTRUCTION rather than by being carried: they live in
+ * the inner call, and removing the outer one cannot change which day a row lands on.
+ *
+ * VERIFIED EMPIRICALLY, because "by construction" is a claim about code and not a fact about data.
+ * A registration at 2026-09-15T02:30:00Z and a match at 2026-09-15T02:30:00+00:00 are the same
+ * calendar day in the raw strings and land on DIFFERENT days once the rules run: the registration on
+ * the 14th (converted to Chicago) and the match on the 15th (sliced, never converted). Swapping the
+ * rules moves BOTH rows in OPPOSITE directions, so the error doubles rather than partly cancelling.
+ *
+ * DAYS ALIGN TO MONTHS, so daily does NOT inherit weekly's permanent "weeks do not align to months"
+ * caveat. A month's days sum to that month exactly, which weekly can never promise.
+ */
+export const dayKey = (ymd: string): string => ymd;
+
+/* SIX MONTHS OF DAYS IS 180 COLUMNS, which is not a table anyone reads. The cap is one month's
+ * worth plus a little slack, mirroring MAX_WEEKS in intent: a ceiling that makes the axis honest
+ * rather than an error. The caller collapses the RANGE as well, visibly, so it can be widened on
+ * purpose rather than being silently truncated. */
+export const MAX_DAYS = 31;
+
+/** Every calendar day in [start of `startYm`, end of `endYm`], oldest first, front-dropped at `max`. */
+export function daysInMonthRange(
+  startYm: string,
+  endYm: string,
+  max: number = MAX_DAYS,
+): { axis: string[]; dropped: number } {
+  const lo = monthStart(startYm);
+  const hi = monthEnd(endYm);
+  const all: string[] = [];
+  for (let d = lo; d <= hi; d = addDays(d, 1)) all.push(d);
+  const dropped = Math.max(0, all.length - max);
+  return { axis: all.slice(dropped), dropped };
+}
+
+/** The last `n` calendar days ending on `todayYmd`, oldest first. The daily twin of lastWeeks. */
+export function lastDays(todayYmd: string, n: number = MAX_DAYS): string[] {
+  const out: string[] = [];
+  for (let i = n - 1; i >= 0; i--) out.push(addDays(todayYmd, -i));
+  return out;
+}
+
+/** A day is complete once it has passed in Chicago. Today is in progress, not absent. */
+export const isDayComplete = (ymd: string, todayYmd: string): boolean => ymd < todayYmd;
+
+/* ── THE MATCHED WINDOW, WHICH REPLACES "SKIP THE PARTIAL BUCKET" ─────────────────────────────
+ *
+ * lastTwoComplete finds the last two COMPLETE buckets and ignores the partial one. That was right
+ * while the current month was excluded from the axis: there was nothing part-elapsed on screen to
+ * compare. With the current period as a column, ignoring it means the change pill describes two
+ * months nobody is looking at.
+ *
+ * SO THE COMPARISON IS DAY-MATCHED: days 1..N of the final period against days 1..N of the one
+ * before it, where N is how far the final period has actually got.
+ *
+ * DAY-MATCHED RATHER THAN WEEKEND-MATCHED, deliberately. A weekend-matched window would compare
+ * "August through its 4th weekend" against "September through its 4th weekend", which lands on
+ * DIFFERENT DAY COUNTS - and signups, which have no weekly shape, would then be compared across
+ * windows of unequal length. Day-matching pins one variable and NAMES the other: the caller prints
+ * both weekend counts, so a reader can see that August's first 27 days hold five weekends and
+ * September's four. Spots booked is overwhelmingly weekend volume, so that is the difference that
+ * moves the number, and printing it is what stops a 20% swing on nothing.
+ *
+ * AND THE CELLS ARE NEVER TRUNCATED. This describes the CHANGE only. August really did book 8,870
+ * spots; a truncated August is a figure that exists to serve a comparison and has no business in a
+ * column of its own.
+ */
+export type MatchedWindow = {
+  /** 1-based day count both windows are cut to, or null when the final period is complete. */
+  days: number | null;
+  /** Inclusive day bounds of the two windows, for the query and for the header. */
+  last: { from: string; to: string };
+  prev: { from: string; to: string };
+  /** Saturdays plus Sundays in each window. NOT decoration: see above. */
+  lastWeekends: number;
+  prevWeekends: number;
+};
+
+/** Saturdays and Sundays in an inclusive day range. */
+export function weekendDays(fromYmd: string, toYmd: string): number {
+  let n = 0;
+  for (let d = fromYmd; d <= toYmd; d = addDays(d, 1)) {
+    const dow = isoDow(d);
+    if (dow === 6 || dow === 7) n++;
+  }
+  return n;
+}
+
+/**
+ * The two windows the change column compares, for a MONTH pair.
+ *
+ * `todayYmd` is the Chicago day. When `lastYm` is the month that day falls in, both windows are cut
+ * to the same day count; when it is a closed month, the windows are the whole months.
+ */
+export function matchedMonthWindow(lastYm: string, prevYm: string, todayYmd: string): MatchedWindow {
+  const lastStart = monthStart(lastYm);
+  const lastFullEnd = monthEnd(lastYm);
+  const prevStart = monthStart(prevYm);
+  const inProgress = todayYmd >= lastStart && todayYmd <= lastFullEnd;
+  if (!inProgress) {
+    const prevEnd = monthEnd(prevYm);
+    return {
+      days: null,
+      last: { from: lastStart, to: lastFullEnd },
+      prev: { from: prevStart, to: prevEnd },
+      lastWeekends: weekendDays(lastStart, lastFullEnd),
+      prevWeekends: weekendDays(prevStart, prevEnd),
+    };
+  }
+  /* N IS DAYS ELAPSED *INCLUDING* TODAY. Today is part-elapsed itself, and excluding it would
+   * compare 26 finished days against 26 finished days while the column above showed 27 days of
+   * data - the pill would then disagree with its own cell for a reason nobody could see. */
+  const days = Number(todayYmd.slice(8, 10));
+  const lastTo = todayYmd;
+  /* CLAMPED TO THE PREVIOUS MONTH'S LENGTH. Comparing the first 31 days of a 31-day month against
+   * February is not a window February has. */
+  const prevEndFull = monthEnd(prevYm);
+  const prevToDay = Math.min(days, Number(prevEndFull.slice(8, 10)));
+  const prevTo = `${prevYm}-${String(prevToDay).padStart(2, "0")}`;
+  return {
+    days,
+    last: { from: lastStart, to: lastTo },
+    prev: { from: prevStart, to: prevTo },
+    lastWeekends: weekendDays(lastStart, lastTo),
+    prevWeekends: weekendDays(prevStart, prevTo),
+  };
+}

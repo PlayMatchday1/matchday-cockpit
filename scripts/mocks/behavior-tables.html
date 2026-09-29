@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Player Activity, tables first</title>
+<style>
+/* APP TOKENS from globals.css. Light only: the app honours prefers-color-scheme nowhere. */
+:root{
+  --cream:#f4f7f5; --card:#fff; --line:#d3dcd8; --deep:#003326; --mint:#2cdb87;
+  --mint-soft:#d5f7e6; --coral:#ff6955; --ink:#12241d; --mut:#6d7b74; --amber:#e6a532;
+  --rule:#eceff0; --band:#eef3f0;
+  --up-bg:#dff3e7; --up-ink:#0b6b43; --dn-bg:#fbe3e0; --dn-ink:#a8341f;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cream);color:var(--ink);
+  font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1400px;margin:0 auto;padding:22px 16px 72px}
+h1{font-size:26px;margin:0 0 2px;letter-spacing:-.015em}
+.sub{color:var(--mut);margin:0 0 16px;font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:13px}
+.lbl{font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--mut);font-weight:700}
+
+/* ── CONTROLS ────────────────────────────────────────────────────────────────────────────── */
+.bar{display:flex;flex-wrap:wrap;gap:13px;align-items:flex-end;padding:11px 13px}
+.fld{display:flex;flex-direction:column;gap:4px}
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{min-height:32px;padding:0 12px;border:0;background:var(--card);cursor:pointer;
+  font:700 12px/1 inherit;color:var(--mut)}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--deep);color:#fff}
+.inp{min-height:32px;padding:0 8px;border:1px solid var(--line);border-radius:8px;
+  background:var(--card);font:inherit;font-size:13px;color:var(--ink)}
+.spacer{margin-left:auto;display:flex;gap:8px;align-items:flex-end}
+.tog{min-height:32px;padding:0 11px;border:1px solid var(--line);border-radius:8px;
+  background:var(--card);cursor:pointer;font:700 12px/1 inherit;color:var(--mut)}
+.tog[aria-pressed="true"]{border-color:var(--deep);background:var(--mint-soft);color:var(--deep)}
+/* The metric picker only does a job when the rows are cities or fields: in Overall the metrics
+   ARE the rows, so a picker that hides rows of the thing you came to read is a trap. */
+.mrow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:10px 13px;
+  border-top:1px solid var(--rule)}
+.mrow[hidden]{display:none}
+.mchip{min-height:32px;padding:0 10px;border-radius:7px;border:1px solid var(--line);
+  background:transparent;cursor:pointer;font:700 11.5px/1 inherit;color:var(--mut)}
+.mchip[aria-pressed="true"]{border-color:var(--deep);background:var(--mint-soft);color:var(--deep)}
+
+/* ── THE TABLE. Rows are the small fixed set, columns are the thing that extends. That is the
+ *    shape this page already had and it was right: six metrics down, time across, a period total
+ *    and one delta pill. Everything below adds to it rather than replacing it. ──────────────── */
+.panel{margin-top:12px;overflow:hidden}
+.phead{display:flex;flex-wrap:wrap;gap:9px;align-items:baseline;padding:13px 15px;
+  background:var(--band);border-bottom:1px solid var(--line)}
+.ptitle{font-size:15px;font-weight:700;margin:0}
+.pnote{color:var(--mut);font-size:12px}
+.pright{margin-left:auto;font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--mut);font-weight:700}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%}
+th,td{padding:0 16px;text-align:right;white-space:nowrap;height:46px}
+th:first-child,td:first-child{text-align:left;padding-left:15px;position:sticky;left:0;
+  background:var(--card);z-index:1}
+thead th{height:52px;font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--mut);font-weight:700;border-bottom:1px solid var(--line);vertical-align:middle}
+thead th.sortable{cursor:pointer;user-select:none}
+thead th[aria-sort]:not([aria-sort="none"]){color:var(--deep)}
+thead th:first-child{background:var(--card)}
+.arrow{font-size:8px;margin-left:3px}
+.thsub{display:block;font-size:9px;letter-spacing:.04em;text-transform:none;font-weight:600;
+  color:var(--mut);margin-top:2px}
+tbody td{border-bottom:1px solid var(--rule);font-variant-numeric:tabular-nums;font-size:14px}
+tbody tr:last-child td{border-bottom:0}
+.rowname{font-weight:700;font-size:14px}
+/* The period total and the delta are the two columns the eye goes to, so they get a band rather
+   than a heavier weight: emphasis without shouting. */
+td.total,th.total{background:#fafcfb;font-weight:700}
+.pill{display:inline-block;padding:3px 8px;border-radius:99px;font:800 11.5px/1.35 inherit}
+.pill[data-d="up"]{background:var(--up-bg);color:var(--up-ink)}
+.pill[data-d="dn"]{background:var(--dn-bg);color:var(--dn-ink)}
+/* The live period is marked on its own column, once, in the header — not on six cells. */
+th.live{color:var(--amber)}
+th.live .thsub{color:var(--amber)}
+.caret{display:inline-block;width:11px;color:var(--mut);font-size:9px}
+tbody tr[data-open="1"] td{background:var(--mint-soft)}
+tbody tr[data-open="1"] td:first-child{background:var(--mint-soft)}
+tbody tr.child td{background:#fafcfb;color:var(--mut);font-size:13px;height:38px}
+tbody tr.child td:first-child{background:#fafcfb;padding-left:34px;font-weight:600;color:var(--mut)}
+.wk{display:block;font-size:10px;font-weight:600;color:var(--mut);letter-spacing:.03em}
+
+.foot{color:var(--mut);font-size:11.5px;margin:0;padding:12px 15px;line-height:1.6;
+  border-top:1px solid var(--rule)}
+.illus{color:var(--coral);font-weight:700}
+.chartbox{margin:0;padding:12px 15px;border-top:1px solid var(--rule);background:#f9fbfa}
+.chartbox[hidden]{display:none}
+.charthint{color:var(--mut);font-size:12px;margin:0;line-height:1.6}
+</style></head>
+<body><div class="wrap">
+
+<h1>Player Activity</h1>
+<p class="sub">Track signups, bookings and returning players.</p>
+
+<div class="card">
+  <div class="bar" data-testid="bar">
+    <div class="fld"><span class="lbl">View by</span>
+      <div class="seg" id="grain" data-testid="grain">
+        <button data-g="monthly" aria-pressed="true">Monthly</button>
+        <button data-g="weekly"  aria-pressed="false">Weekly</button>
+        <button data-g="daily"   aria-pressed="false">Daily</button>
+      </div></div>
+    <div class="fld"><span class="lbl">Group by</span>
+      <div class="seg" id="scope" data-testid="scope">
+        <button data-s="overall" aria-pressed="true">Overall</button>
+        <button data-s="city"    aria-pressed="false">By city</button>
+        <button data-s="field"   aria-pressed="false">By field</button>
+      </div></div>
+    <div class="fld"><span class="lbl">From</span><select class="inp" id="start" data-testid="start"></select></div>
+    <div class="fld"><span class="lbl">To</span><select class="inp" id="end" data-testid="end"></select></div>
+    <div class="spacer">
+      <button class="tog" id="chart" data-testid="charttog" aria-pressed="false">Show chart</button>
+    </div>
+  </div>
+  <div class="mrow" id="metrics" data-testid="metrics" hidden></div>
+</div>
+
+<div class="card panel">
+  <div class="phead">
+    <h2 class="ptitle" id="ptitle">Player Metrics</h2>
+    <span class="pnote" id="pnote"></span>
+    <span class="pright" id="pright">Overall</span>
+  </div>
+  <div class="scroll"><table>
+    <thead><tr id="thead"></tr></thead>
+    <tbody id="tbody"></tbody>
+  </table></div>
+  <div class="chartbox" id="chartbox" data-testid="chartbox" hidden>
+    <p class="charthint" data-testid="charthint">
+      <b>One axis cannot carry these four.</b> Spots booked runs 6,573 to 9,716 while new players
+      runs 585 to 1,123, so on a shared axis the three smaller series sit flat along the bottom and
+      a real move in new players is invisible. That is why the chart is no longer the default view,
+      and why the table reads a metric across its own row instead.
+    </p>
+  </div>
+  <p class="foot" id="foot"></p>
+</div>
+
+<script>
+/* TODAY IS 27 SEPTEMBER 2026, pinned so the current-period assertions mean something. */
+const TODAY_M = "2026-09", DAY_OF_MONTH = 27;
+
+/* ── WHY SEPTEMBER IS IN THE DEFAULT, AND WHY IT NEEDS THE TOGGLE BESIDE IT ───────────────────
+ * GrowthDataProvider.defaultPeriod filters to `m < nowMonth` — COMPLETED MONTHS ONLY. September's
+ * absence is deliberate, not a bug: a part-elapsed month beside five full ones reads as a collapse
+ * every month, which is the defect that bit the Daily Matches page. Including the current month
+ * and same-days-elapsed are therefore ONE change. */
+
+/* ── THE WEEKEND TRAP ─────────────────────────────────────────────────────────────────────────
+ * Day 15 against day 15 is not like-for-like for a weekend business, and spots booked is
+ * overwhelmingly weekend volume. The mock day-matches as asked and prints each window's weekend
+ * count under its column header, so the mismatch is visible rather than silent. */
+const WEEKENDS_TO_27 = {"2026-03":4,"2026-04":4,"2026-05":4,"2026-06":4,"2026-07":4,"2026-08":5,"2026-09":4};
+
+const METRICS = [
+  ["reg","Registrations",0],["newp","New players",0],["tot","Total players",0],
+  ["spots","Spots booked",0],["rec","Returning players",0],["pct","Returning player %",1],
+];
+const isRate = k => METRICS.find(m=>m[0]===k)[2]===1;
+const MLABEL = k => METRICS.find(m=>m[0]===k)[1];
+
+/* Mar–Aug 2026 REAL, off the live page. September's registrations (2,230) real, off the funnel's
+   own September row. Everything else illustrative and labelled on the page. */
+const MONTHS = ["2026-03","2026-04","2026-05","2026-06","2026-07","2026-08","2026-09"];
+const FULL = {
+  "2026-03":{reg:1185,newp:585, tot:1923,spots:6573,rec:1338,pct:69.6},
+  "2026-04":{reg:1269,newp:732, tot:2243,spots:7528,rec:1511,pct:67.4},
+  "2026-05":{reg:1297,newp:681, tot:2170,spots:7270,rec:1489,pct:68.6},
+  "2026-06":{reg:1525,newp:766, tot:2300,spots:7667,rec:1534,pct:66.7},
+  "2026-07":{reg:2255,newp:1123,tot:2896,spots:9716,rec:1773,pct:61.2},
+  "2026-08":{reg:1937,newp:1093,tot:2886,spots:8870,rec:1793,pct:62.1},
+  "2026-09":{reg:2230,newp:1038,tot:2804,spots:8243,rec:1766,pct:63.0},
+};
+/* DAYS 1-27 OF EVERY MONTH. September is identical to its full row because the month has only
+   reached the 27th; every other month shrinks. That pair is the control that the toggle does
+   arithmetic rather than relabelling — either half alone would not prove it. */
+const TO27 = {
+  "2026-03":{reg:1032,newp:509, tot:1719,spots:5724,rec:1183,pct:68.8},
+  "2026-04":{reg:1142,newp:659, tot:2031,spots:6775,rec:1361,pct:67.0},
+  "2026-05":{reg:1129,newp:593, tot:1903,spots:6331,rec:1301,pct:68.4},
+  "2026-06":{reg:1373,newp:690, tot:2078,spots:6900,rec:1386,pct:66.7},
+  "2026-07":{reg:1962,newp:977, tot:2529,spots:8457,rec:1550,pct:61.3},
+  "2026-08":{reg:1686,newp:951, tot:2519,spots:7723,rec:1568,pct:62.2},
+  "2026-09":{reg:2230,newp:1038,tot:2804,spots:8243,rec:1766,pct:63.0},
+};
+/* Seven play markets: BehaviorPanel's own comment says City Detail plots the seven. El Paso is not
+   among them — it carries registrations but no matches, so it has nothing to show on a page about
+   playing. Shares are of the network total, applied per period. */
+const CITY_SHARE = { "Austin":.362,"Houston":.173,"San Antonio":.157,"Atlanta":.106,
+  "Dallas":.083,"St. Louis":.070,"Oklahoma City":.049 };
+const FIELD_SHARE = { "Hattrick":.136,"NEMP":.111,"Soccer Central":.084,"Parmer":.079,
+  "Crockett High School":.056,"Keswick Park (Chamblee)":.055,"Crossbar Rowlett":.045,"PRUMC":.042 };
+const FIELD_CITY = { "Hattrick":"Austin","NEMP":"Austin","Parmer":"Austin",
+  "Crockett High School":"Austin","Soccer Central":"Houston","Crossbar Rowlett":"Dallas",
+  "Keswick Park (Chamblee)":"Atlanta","PRUMC":"Atlanta" };
+
+let grain="monthly", scope="overall", showChart=false;
+let start="2026-04", end="2026-09";
+let metric="spots";                    // only used when the rows are cities or fields
+let sortCol=null, sortDir=-1, openRow=null;
+
+const ML = m => ({"01":"Jan","02":"Feb","03":"Mar","04":"Apr","05":"May","06":"Jun","07":"Jul",
+  "08":"Aug","09":"Sep","10":"Oct","11":"Nov","12":"Dec"}[m.slice(5)] + " " + m.slice(0,4));
+const fmt = (v,k) => v==null ? "—" : isRate(k) ? v.toFixed(1)+"%" : Math.round(v).toLocaleString("en-US");
+const hash = s => { let h=2166136261; for(const c of s) h=Math.imul(h^c.charCodeAt(0),16777619); return (h>>>0)/4294967296; };
+
+/* WEEKLY AND DAILY ARE DERIVED, not a second dataset. behavior-weekly/route.ts already re-derives
+   from row-level mirrors — weekKey(chicagoYmd(...)) for signups, weekKey(wallClockYmd(...)) for
+   matches — so DAILY IS THAT QUERY WITHOUT THE BUCKETING: the day key is what those two helpers
+   already return. The two date rules must survive into daily; at month grain a swapped rule moves
+   a handful of rows, at day grain it moves rows every single day. */
+function columns(){
+  const ms = MONTHS.filter(m => m>=start && m<=end);
+  if (grain==="monthly") return ms.map(m => ({k:m, m, label:ML(m), live:m===TODAY_M}));
+  if (grain==="weekly")
+    return ms.flatMap(m => [1,2,3,4].map(w => ({k:`${m}-w${w}`, m, label:`${ML(m).slice(0,3)} wk${w}`,
+      live:m===TODAY_M&&w===4, div:4, j:.72+hash(m+"w"+w)*.56})));
+  return ms.flatMap(m => { const n = m===TODAY_M ? DAY_OF_MONTH : 30;
+    return Array.from({length:n},(_,i)=>{ const d=i+1, dow=(d+2)%7;
+      return {k:`${m}-${String(d).padStart(2,"0")}`, m, label:`${ML(m).slice(0,3)} ${d}`, div:n,
+        live:m===TODAY_M&&d===DAY_OF_MONTH,
+        j:(dow===0||dow===6?1.9:.62)*(.8+hash(m+"d"+d)*.4)}; }); });
+}
+const netValue = (c,k) => { const src=FULL[c.m]; if(!src) return null;
+  const v=src[k]; return c.div && !isRate(k) ? v/c.div*(c.j??1) : v; };
+const scaled = (c,k,share) => { const v=netValue(c,k); return v==null?null:(isRate(k)?v:v*share); };
+/* THE MATCHED-WINDOW READING of a column: days 1 to 27 when the final column is part-elapsed, the
+   whole column otherwise. Only the change pill uses it; every visible cell stays true. */
+const matchedOf = (r,c) => { const live = columns().slice(-1)[0].live;
+  const src = (live ? TO27 : FULL)[c.m]; if(!src) return null;
+  const v = src[r.metric]; if (v==null) return null;
+  const base = c.div && !isRate(r.metric) ? v/c.div*(c.j??1) : v;
+  return isRate(r.metric) ? base : base*r.share; };
+
+/* ROWS. All MatchDay keeps the shape the page already had: one row per metric. By city and by
+   field swap the row dimension to the entity and show ONE metric, which is the only way a third
+   dimension fits a two-dimensional table — and is why clicking a row has to open its metrics. */
+function rowSet(){
+  if (scope==="overall")
+    return METRICS.map(([k,l]) => ({key:k, name:l, metric:k, share:1}));
+  const src = scope==="city" ? CITY_SHARE : FIELD_SHARE;
+  return Object.entries(src).map(([name,share]) => ({key:name, name, metric, share,
+    sub: scope==="field" ? FIELD_CITY[name] : null}));
+}
+
+/* WHAT THE CHANGE COLUMN COMPARED, spelled out. When the last column is live the two windows are
+   truncated, and their weekend counts differ — August holds five in its first 27 days, the others
+   four — which is exactly the mismatch that would otherwise move spots booked on nothing. */
+function momSub(cols){
+  const a = cols[cols.length-2], b = cols[cols.length-1];
+  if (!b.live || grain!=="monthly") return `${a.label} → ${b.label}`;
+  const wa = WEEKENDS_TO_27[a.m], wb = WEEKENDS_TO_27[b.m];
+  return `first ${DAY_OF_MONTH} days · ${a.label.slice(0,3)} ${wa} weekends → ${b.label.slice(0,3)} ${wb}`;
+}
+
+function draw(){
+  document.getElementById("metrics").hidden = scope==="overall";
+  document.getElementById("metrics").innerHTML =
+    `<span class="lbl" style="margin-right:4px">Metric</span>` + METRICS.map(([k,l]) =>
+      `<button class="mchip" data-testid="mchip" data-m="${k}" aria-pressed="${metric===k}">${l}</button>`).join("");
+
+  const cols = columns();
+  const firstHead = scope==="overall" ? "Metric" : scope==="city" ? "City" : "Field";
+  const sortable = scope!=="overall";   // sorting metrics by size is meaningless; sorting cities is the ask
+  const th = (k,label,sub,extra="") =>
+    `<th data-testid="th" data-k="${k}" class="${sortable?"sortable ":""}${extra}"
+       aria-sort="${sortCol===k?(sortDir<0?"descending":"ascending"):"none"}">${label}${
+       sortCol===k?`<span class="arrow">${sortDir<0?"▼":"▲"}</span>`:""}${
+       sub?`<span class="thsub">${sub}</span>`:""}</th>`;
+
+  document.getElementById("thead").innerHTML =
+    th("name", firstHead, null) +
+    cols.map(c => th(c.k, c.label,
+      c.live ? "in progress" : null,
+      c.live?"live":"")).join("") +
+    th("total","Period total",null,"total") +
+    /* THE DELTA HEADER NAMES THE UNIT IT IS ACTUALLY COMPARING. "vs. last month" sitting over
+       a daily column would be wrong; the sub-line still carries the two exact periods. */
+    th("mom", `Change vs. last ${grain==="monthly"?"month":grain==="weekly"?"week":"day"}`,
+       cols.length>1 ? momSub(cols) : null, "total");
+
+  let rs = rowSet();
+  const cellOf = (r,c) => scaled(c, r.metric, r.share);
+  const totalOf = r => isRate(r.metric)
+    ? cellOf(r, cols[cols.length-1])                       // a rate does not sum
+    : cols.reduce((a,c)=>a+(cellOf(r,c)??0),0);
+  if (sortCol && sortable){
+    const val = r => sortCol==="name" ? null : sortCol==="total" ? totalOf(r)
+      : cellOf(r, cols.find(c=>c.k===sortCol) ?? cols[0]);
+    rs = rs.slice().sort((a,b) => sortCol==="name"
+      ? a.name.localeCompare(b.name)*sortDir
+      : ((val(a) ?? -Infinity)-(val(b) ?? -Infinity))*sortDir);
+  }
+
+  document.getElementById("tbody").innerHTML = rs.map(r => {
+    /* THE CHANGE COLUMN ALWAYS COMPARES MATCHED WINDOWS, which is why there is no toggle.
+     * A toggle was doing two jobs stitched together: truncating the visible cells AND unlocking
+     * this pill. Split them and neither needs a mode. The CELLS always show the true figure,
+     * because August really did book 8,870 spots and a truncated August is a number that exists
+     * only to serve a comparison. The COMPARISON always runs on the same elapsed window, and the
+     * sub-line names exactly which two, so the pill never silently disagrees with the cells
+     * beside it. A mode that can sit in the wrong position is a mode someone will misread. */
+    const liveLast = cols[cols.length-1].live;
+    const last = matchedOf(r, cols[cols.length-1]), prev = matchedOf(r, cols[cols.length-2]);
+    let mom = "—";
+    /* THE DELTA ONLY MEANS SOMETHING ON A LIKE BASIS. Off the toggle the final column is a
+       27-day month against 31-day ones, so the pill would be a lie with a percent sign on it. */
+    if (prev && last!=null){
+      const d = isRate(r.metric) ? last-prev : (last-prev)/prev*100;
+      mom = `<span class="pill" data-testid="delta" data-d="${d>=0?"up":"dn"}">${d>=0?"+":""}${d.toFixed(1)}${isRate(r.metric)?" pts":"%"}</span>`;
+    }
+    const caret = scope!=="overall" ? `<span class="caret">${openRow===r.key?"▾":"▸"}</span> ` : "";
+    let out = `<tr data-testid="row" data-name="${r.name}" data-key="${r.key}" data-open="${openRow===r.key?1:0}">
+      <td class="rowname">${caret}${r.name}${r.sub?`<span class="wk">${r.sub}</span>`:""}</td>
+      ${cols.map(c => `<td data-testid="cell" data-c="${c.k}">${fmt(cellOf(r,c), r.metric)}</td>`).join("")}
+      <td class="total" data-testid="periodtotal">${fmt(totalOf(r), r.metric)}</td>
+      <td class="total">${mom}</td></tr>`;
+
+    /* CLICKING A CITY OPENS ALL SIX METRICS FOR IT. Ryan: "for city and field detail, display all
+       metrics simultaneously — clicking a city should reveal a dropdown of the metrics." With
+       entities as rows and time as columns, the metric is the third dimension, and this is where
+       it fits without a second table. */
+    if (openRow===r.key && scope!=="overall"){
+      out += METRICS.map(([k,l]) => {
+        const cells = cols.map(c => `<td>${fmt(scaled(c,k,r.share), k)}</td>`).join("");
+        const t = isRate(k) ? scaled(cols[cols.length-1],k,r.share)
+                            : cols.reduce((a,c)=>a+(scaled(c,k,r.share)??0),0);
+        return `<tr class="child" data-testid="child"><td>${l}</td>${cells}
+          <td class="total">${fmt(t,k)}</td><td class="total"></td></tr>`;
+      }).join("");
+    }
+    return out;
+  }).join("");
+
+  document.getElementById("ptitle").textContent =
+    scope==="overall" ? "Player Metrics" : scope==="city" ? "By city" : "By field";
+  document.getElementById("pnote").textContent = "";
+  document.getElementById("pright").textContent =
+    scope==="overall" ? "Overall" : MLABEL(metric);
+  document.getElementById("chartbox").hidden = !showChart;
+  document.getElementById("foot").innerHTML =
+    (scope!=="overall" ? `Click a row to open all six metrics for it. ` : "") +
+    (scope==="field" ? `Registrations have no field: a player registers before choosing where to play. ` : "") +
+    `Change compares the same elapsed window in both periods, so a part-elapsed month is never set against a full one. The columns themselves always show the true figure. ` +
+    `Mar to Aug 2026 are real. <span class="illus">September's five non-registration metrics, and every city, field, week and day split, are illustrative.</span>`;
+}
+
+document.getElementById("grain").addEventListener("click", e => {
+  const b=e.target.closest("button"); if(!b) return; grain=b.dataset.g; sortCol=null;
+  /* DAILY NARROWS THE RANGE TO ONE MONTH. Six months of days is 180 columns, which is not a table
+     anyone can read; the range picker is right there to widen it deliberately. */
+  if (grain==="daily" && start!==end) start = end;
+  document.getElementById("start").value = start;
+  [...e.currentTarget.children].forEach(x=>x.setAttribute("aria-pressed",String(x===b))); draw(); });
+document.getElementById("scope").addEventListener("click", e => {
+  const b=e.target.closest("button"); if(!b) return; scope=b.dataset.s; openRow=null; sortCol=null;
+  [...e.currentTarget.children].forEach(x=>x.setAttribute("aria-pressed",String(x===b))); draw(); });
+document.getElementById("metrics").addEventListener("click", e => {
+  const b=e.target.closest("[data-testid='mchip']"); if(!b) return; metric=b.dataset.m; draw(); });
+document.getElementById("chart").addEventListener("click", e => {
+  showChart=!showChart; e.currentTarget.setAttribute("aria-pressed",String(showChart)); draw(); });
+document.getElementById("thead").addEventListener("click", e => {
+  const t=e.target.closest("[data-testid='th']"); if(!t||scope==="overall") return;
+  const k=t.dataset.k; if (sortCol===k) sortDir=-sortDir; else { sortCol=k; sortDir=-1; } draw(); });
+document.getElementById("tbody").addEventListener("click", e => {
+  const tr=e.target.closest("[data-testid='row']"); if(!tr||scope==="overall") return;
+  openRow = openRow===tr.dataset.key ? null : tr.dataset.key; draw(); });
+for (const id of ["start","end"]){
+  const sel=document.getElementById(id);
+  sel.innerHTML = MONTHS.map(m=>`<option value="${m}">${ML(m)}</option>`).join("");
+  sel.value = id==="start" ? start : end;
+  sel.addEventListener("change", ()=>{ if(id==="start") start=sel.value; else end=sel.value;
+    if (start>end) { if(id==="start") end=start; else start=end;
+      document.getElementById("start").value=start; document.getElementById("end").value=end; }
+    draw(); });
+}
+draw();
+</script>
+</div></body></html>
