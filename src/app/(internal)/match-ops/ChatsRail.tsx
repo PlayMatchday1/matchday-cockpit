@@ -117,8 +117,13 @@ export default function ChatsRail({
               <span className="flex-none [&_svg]:h-[17px] [&_svg]:w-[17px]" style={{ color: active ? "#14764c" : "#3f544a", opacity: active ? 1 : 0.72, strokeWidth: 1.9 }}>
                 {it.icon}
               </span>
+              {/* THE LABEL CARRIES THE ITEM'S OWN testId WHEN IT HAS ONE, and the Link keeps
+                  `rail-item` regardless. Putting it on the Link instead would have taken that item
+                  OUT of every `querySelectorAll('[data-testid="rail-item"]')` enumeration — five
+                  E2E suites list the rail that way and would each have lost a row. Here the
+                  enumerations are untouched and the named item is still addressable. */}
               {!collapsed && (
-                <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{it.label}</span>
+                <span data-testid={it.testId} className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{it.label}</span>
               )}
               {!collapsed && typeof count === "number" && count > 0 && (
                 <span

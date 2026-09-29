@@ -28,8 +28,7 @@ import PlayerFunnel from "@/components/growth/PlayerFunnel";
 import SectionFrame from "@/components/growth/SectionFrame";
 import { useGrowth } from "@/components/growth/GrowthDataProvider";
 import { clampMonthsToNow } from "@/lib/funnelMonth";
-import { monthLabel } from "@/components/growth/format";
-import styles from "@/components/growth/growth.module.css";
+import MonthRangeBar from "@/components/growth/MonthRangeBar";
 
 export default function LifecycleFunnelPage() {
   const g = useGrowth();
@@ -65,22 +64,16 @@ export default function LifecycleFunnelPage() {
     >
       {g.data && months.length > 0 && (
         <>
-          {/* THE ONE RANGE CONTROL ON THIS PAGE. Above both panels because it drives both. */}
-          <div className={styles.funnelRangeBar} data-testid="funnel-range">
-            <span className={styles.fieldLabel} id="funnelRangeLabel">Range</span>
-            <div role="group" aria-labelledby="funnelRangeLabel" className={styles.funnelRangeInputs}>
-              <input type="month" aria-label="Range start" data-testid="funnel-range-start"
-                className={styles.control} min={first} max={last}
-                value={range.start} onChange={(e) => setStart(e.target.value)} />
-              <span className={styles.funnelRangeDash} aria-hidden="true">to</span>
-              <input type="month" aria-label="Range end" data-testid="funnel-range-end"
-                className={styles.control} min={first} max={last}
-                value={range.end} onChange={(e) => setEnd(e.target.value)} />
-            </div>
-            <span className={styles.funnelRangeEcho} data-testid="funnel-range-echo">
-              {monthLabel(range.start)} to {monthLabel(range.end)}
-            </span>
-          </div>
+          {/* THE ONE RANGE CONTROL ON THIS PAGE. Above both panels because it drives both.
+              MOVED INTO MonthRangeBar so Player Activity uses this control rather than a copy of
+              it. The markup, the classes and all three `data-testid`s are unchanged — this page
+              renders exactly what it rendered before. */}
+          <MonthRangeBar
+            range={range} min={first} max={last}
+            onStart={setStart} onEnd={setEnd}
+            testId="funnel-range" startTestId="funnel-range-start"
+            endTestId="funnel-range-end" echoTestId="funnel-range-echo"
+          />
           <KpiRow data={g.data} period={range} />
           <PlayerFunnel data={g.data} period={range} />
         </>

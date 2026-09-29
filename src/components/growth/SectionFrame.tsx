@@ -24,10 +24,19 @@ import { useGrowth } from "./GrowthDataProvider";
 // to false, so there is no switch left to turn a banner back on by accident.
 export default function SectionFrame({
   title, subtitle, period = true, needsGrowthData = true, children,
+  titleTestId, titleAccessory,
 }: {
   title: string;
   subtitle: string;
   period?: boolean;
+  /* ── TWO ADDITIVE PROPS, BOTH OPTIONAL, BOTH UNSET EVERYWHERE BUT PLAYER ACTIVITY ───────────
+   * `titleTestId` overrides the default `growth-title` so a page whose own spec names its title
+   * can be asserted by that name. `titleAccessory` renders INSIDE the h1, after the text — Player
+   * Activity hangs its assumptions "i" there, which has to sit beside the title rather than under
+   * it. Omitted, the header is byte-identical to what every other section renders, which is why
+   * this is a prop rather than an edit to Head. */
+  titleTestId?: string;
+  titleAccessory?: React.ReactNode;
   /* ── DOES THIS SECTION ACTUALLY NEED /api/lifecycle? ──────────────────────────────────────────
    * The frame held EVERY section behind `g.data && g.activePeriod`, so a section that reads
    * neither still waited for a 1.4-second payload before it could mount — and a panel that has not
@@ -46,7 +55,7 @@ export default function SectionFrame({
   if (g.error) {
     return (
       <div className={styles.dash}>
-        <Head title={title} subtitle={subtitle} />
+        <Head title={title} subtitle={subtitle} titleTestId={titleTestId} titleAccessory={titleAccessory} />
         <div className={`${styles.stateMsg} ${styles.errorMsg}`}>Could not load growth data: {g.error}</div>
       </div>
     );
@@ -54,7 +63,7 @@ export default function SectionFrame({
   if (needsGrowthData && (!g.data || !g.activePeriod)) {
     return (
       <div className={styles.dash}>
-        <Head title={title} subtitle={subtitle} />
+        <Head title={title} subtitle={subtitle} titleTestId={titleTestId} titleAccessory={titleAccessory} />
         <div className={styles.stateMsg}>Loading growth analytics…</div>
       </div>
     );
@@ -62,7 +71,7 @@ export default function SectionFrame({
 
   return (
     <div className={styles.dash} data-testid="growth-section" data-section={title}>
-      <Head title={title} subtitle={subtitle} />
+      <Head title={title} subtitle={subtitle} titleTestId={titleTestId} titleAccessory={titleAccessory} />
       {/* The period bar needs the payload even when the section does not, so it waits on its own
           rather than holding the whole page back. */}
       {period && g.data && g.activePeriod && (
@@ -80,10 +89,19 @@ export default function SectionFrame({
   );
 }
 
-function Head({ title, subtitle }: { title: string; subtitle: string }) {
+function Head({ title, subtitle, titleTestId, titleAccessory }: {
+  title: string; subtitle: string;
+  titleTestId?: string; titleAccessory?: React.ReactNode;
+}) {
   return (
     <div className={styles.header}>
-      <h1 className={styles.title} data-testid="growth-title">{title}</h1>
+      {/* THE ACCESSORY IS A SIBLING OF THE h1, NEVER A CHILD OF IT. Inside, it joins the title's
+          textContent — an assertion reading the title as exactly "Player Activity" gets
+          "Player Activityi" and fails on a change that is purely decorative. */}
+      <div className={styles.titleRow}>
+        <h1 className={styles.title} data-testid={titleTestId ?? "growth-title"}>{title}</h1>
+        {titleAccessory}
+      </div>
       <p className={styles.subtitle} data-testid="growth-subtitle">{subtitle}</p>
     </div>
   );

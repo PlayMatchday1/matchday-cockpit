@@ -50,6 +50,7 @@
 .header {
   /* spacing comes from the parent flex gap, not a per-element margin */
 }
+.titleRow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .title {
   font-size: 1.9rem;
   font-weight: 800;

@@ -37,8 +37,8 @@ export const LIFECYCLE_SECTIONS: RailItem[] = [
     icon: <I><path d="M3 4.5h18l-7 8.5v6.5l-4 2v-8.5z" /></I>,
   },
   {
-    key: "growth-behavior", group: "Reports", label: "Player Behavior", href: "/lifecycle/behavior",
-    desc: "How playing habits change month over month",
+    key: "growth-behavior", group: "Reports", label: "Player Activity", href: "/lifecycle/behavior",
+    desc: "Signups, bookings and returning players", testId: "nav-player-activity",
     icon: <I><path d="M4 19V5" /><path d="M4 15l4.5-4.5 3.5 3.5L20 6" /><circle cx="20" cy="6" r="1.6" /></I>,
   },
   {

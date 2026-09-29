@@ -160,6 +160,25 @@ export async function GET(req: Request) {
     const winSpots: number[] = windowSpec.map(() => 0);
     const winNew: number[] = windowSpec.map(() => 0);
     const winReg: number[] = windowSpec.map(() => 0);
+    /* ── THE SAME AGGREGATE, GROUPED ─────────────────────────────────────────────────────────────
+     * A distinct count cannot be split after the fact: knowing the network's 8,361 says nothing
+     * about Austin's, and knowing every city's says nothing about the network's, because the same
+     * player is in both. So each GROUP gets its own Set over the whole window, built in the same
+     * pass — this is the GROUP BY, and it costs one more Set per city/field rather than another
+     * query.
+     *
+     * WITHOUT THIS EVERY CITY AND FIELD ROW SHOWED THE NETWORK FIGURE. The panel read windows[0]
+     * for every row it drew, so all 26 fields reported the same 8,955 as their Period total. */
+    const winActiveCity: Map<string, Set<number>>[] = windowSpec.map(() => new Map());
+    const winNewCity: Map<string, number>[] = windowSpec.map(() => new Map());
+    const winSpotsCity: Map<string, number>[] = windowSpec.map(() => new Map());
+    const winRegCity: Map<string, number>[] = windowSpec.map(() => new Map());
+    const winActiveField: Map<string, Set<number>>[] = windowSpec.map(() => new Map());
+    const winNewField: Map<string, number>[] = windowSpec.map(() => new Map());
+    const winSpotsField: Map<string, number>[] = windowSpec.map(() => new Map());
+    const bump = (m: Map<string, number>, k: string) => m.set(k, (m.get(k) ?? 0) + 1);
+    const addTo = (m: Map<string, Set<number>>, k: string, uid: number) =>
+      (m.get(k) ?? m.set(k, new Set()).get(k)!).add(uid);
 
     /* ── REGISTRATIONS. A UTC instant, bucketed by its CHICAGO day. Fake players excluded, the
      * same rule growth_registration applies. Only completed signups count — an abandoned
@@ -178,7 +197,13 @@ export async function GET(req: Request) {
       /* CHICAGO DAY FIRST, then the bucket. The window test uses the DAY, because a window is a day
        * range; the bucket test is separate and can legitimately exclude a row a window includes. */
       const regDay = chicagoYmd(String(u.completed_sign_up_at));
-      windowSpec.forEach((wd, wi) => { if (regDay >= wd.from && regDay <= wd.to) winReg[wi] += 1; });
+      /* THE DECLARED CITY IS RESOLVED BEFORE THE AXIS GUARD, because the window needs it and the
+       * window can reach outside the axis. Same normaliser and same Unassigned fallback as below;
+       * resolving it twice with two different rules is how the two halves drift apart. */
+      const regCity = normalizeDeclared(u.preferable_city_name as string | null) ?? UNASSIGNED_CITY;
+      windowSpec.forEach((wd, wi) => {
+        if (regDay >= wd.from && regDay <= wd.to) { winReg[wi] += 1; bump(winRegCity[wi], regCity); }
+      });
       const w = bucketOf(regDay);
       if (!inAxis.has(w)) continue;
       regByWeek.set(w, (regByWeek.get(w) ?? 0) + 1);
@@ -186,7 +211,7 @@ export async function GET(req: Request) {
        * dropped row is one the city table can never be reconciled against — the sum is short and
        * nothing on the page says by how much. Zero rows land here today (0 of 9,482 in
        * Mar–Aug 2026), which is exactly why it has to be built now rather than when it bites. */
-      const city = normalizeDeclared(u.preferable_city_name as string | null) ?? UNASSIGNED_CITY;
+      const city = regCity; // ONE resolution per row — see the note above it.
       const m = regByWeekCity.get(city) ?? new Map<string, number>();
       m.set(w, (m.get(w) ?? 0) + 1); regByWeekCity.set(city, m);
     }
@@ -218,11 +243,17 @@ export async function GET(req: Request) {
        * displayed axis - the previous period's matched window does exactly that - and dropping the
        * day here would silently empty it. */
       matchDay.set(Number(m.api_id), day);
+      /* ── THE CITY AND THE FIELD ARE RECORDED BEFORE THE AXIS GUARD TOO, FOR THE SAME REASON ───
+       * They used to sit below it, so a match that belongs to a compared WINDOW but not to the
+       * displayed axis had a day and no city. That was survivable while the window aggregate was
+       * network-wide; it is not now that the aggregate is grouped BY city and BY field, because
+       * every window-only match would land in the "" bucket and be dropped. The axis-gated maps
+       * below are unchanged - matchWeek is still the thing that says "this match is on screen". */
+      matchCity.set(Number(m.api_id), normalizeMatchCity(String(m.city_identifier ?? "")));
+      matchField.set(Number(m.api_id), String(m.field_title ?? "").trim());
       const w = bucketOf(day);
       if (!inAxis.has(w)) continue;
       matchWeek.set(Number(m.api_id), w);
-      matchCity.set(Number(m.api_id), normalizeMatchCity(String(m.city_identifier ?? "")));
-      matchField.set(Number(m.api_id), String(m.field_title ?? "").trim());
     }
 
     /* ── THE ROSTER FETCH IS DRIVEN BY EVERY MATCH READ, NOT BY THE AXIS-FILTERED ONES ──────────
@@ -279,11 +310,25 @@ export async function GET(req: Request) {
         const dayOfMatch0 = matchDay.get(Number(p.match_api_id));
         const uid0 = Number(p.user_id);
         if (dayOfMatch0 && uid0) {
+          /* THE MATCH'S CITY AND FIELD, from the maps that now cover EVERY match read rather than
+           * only the on-axis ones. A window-only match has both. */
+          const wCity = matchCity.get(Number(p.match_api_id)) ?? "";
+          const wField = matchField.get(Number(p.match_api_id)) ?? "";
           windowSpec.forEach((wd, wi) => {
             if (dayOfMatch0 >= wd.from && dayOfMatch0 <= wd.to) {
               winActive[wi].add(uid0);
               winSpots[wi] += 1;
               if (p.is_first_match === true) winNew[wi] += 1;
+              if (wCity) {
+                addTo(winActiveCity[wi], wCity, uid0);
+                bump(winSpotsCity[wi], wCity);
+                if (p.is_first_match === true) bump(winNewCity[wi], wCity);
+              }
+              if (wField) {
+                addTo(winActiveField[wi], wField, uid0);
+                bump(winSpotsField[wi], wField);
+                if (p.is_first_match === true) bump(winNewField[wi], wField);
+              }
             }
           });
         }
@@ -381,14 +426,40 @@ export async function GET(req: Request) {
        * than by the caller from bucket sums, so it inherits the correct denominator.
        * pctRecurring is left to the caller: a rate is the LATEST value, never an average, and the
        * window has no "latest". */
-      windows: windowSpec.map((w, i) => ({
-        from: w.from, to: w.to,
-        registrations: winReg[i],
-        newPlayers: winNew[i],
-        spots: winSpots[i],
-        totalPlayers: winActive[i].size,
-        recurring: Math.max(0, winActive[i].size - winNew[i]),
-      })),
+      windows: windowSpec.map((w, i) => {
+        /* ONE SHAPE FOR ALL THREE SCOPES, so the caller reads a city row exactly as it reads the
+         * network row. `recurring` is derived from the SAME scope's own two figures — deriving it
+         * from the network's newPlayers is the class of mistake that put 8,955 on every field. */
+        const grouped = (
+          active: Map<string, Set<number>>, nw: Map<string, number>,
+          sp: Map<string, number>, rg: Map<string, number> | null,
+        ) => {
+          const out: Record<string, { registrations: number; newPlayers: number; spots: number; totalPlayers: number; recurring: number }> = {};
+          const keys = new Set([...active.keys(), ...sp.keys(), ...(rg ? rg.keys() : [])]);
+          for (const k of keys) {
+            const tp = active.get(k)?.size ?? 0;
+            const np = nw.get(k) ?? 0;
+            out[k] = {
+              // REGISTRATIONS HAVE NO FIELD. `rg` is null for the field scope and the figure is 0
+              // there, never an invented split of the city's — see the note by matchField.
+              registrations: rg ? rg.get(k) ?? 0 : 0,
+              newPlayers: np, spots: sp.get(k) ?? 0,
+              totalPlayers: tp, recurring: Math.max(0, tp - np),
+            };
+          }
+          return out;
+        };
+        return {
+          from: w.from, to: w.to,
+          registrations: winReg[i],
+          newPlayers: winNew[i],
+          spots: winSpots[i],
+          totalPlayers: winActive[i].size,
+          recurring: Math.max(0, winActive[i].size - winNew[i]),
+          byCity: grouped(winActiveCity[i], winNewCity[i], winSpotsCity[i], winRegCity[i]),
+          byField: grouped(winActiveField[i], winNewField[i], winSpotsField[i], null),
+        };
+      }),
       /* SAID OUT LOUD, not left to be discovered. The panel renders this beside the chart. */
       /* WHAT THE WINDOW ACTUALLY IS, so the panel states it rather than implying it. */
       /* `today` TRAVELS WITH THE DATA. The panel decides which buckets are complete, and it must

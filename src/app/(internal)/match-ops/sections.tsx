@@ -45,6 +45,8 @@ export type RailItem = {
   desc: string; // one-line, used by the mobile sheet
   icon: React.ReactNode;
   badge?: "awaiting" | "manager-pay" | "partner-dashboards"; // which shared count feeds this item's badge
+  /** An optional `data-testid` for the item's LABEL. The Link itself always stays `rail-item`. */
+  testId?: string;
 };
 
 export type MatchOpsSection = RailItem & {

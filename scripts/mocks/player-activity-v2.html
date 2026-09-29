@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Player Activity v2</title>
+<style>
+  :root{
+    --nav:#0b3a28; --nav-ink:#d8efe3; --accent:#22c55e; --accent-ink:#06291a;
+    --bg:#f3f4f1; --card:#fff; --line:#e6e8e3; --line-2:#eef0ec;
+    --ink:#10231a; --ink-2:#44564c; --muted:#7a8a81;
+    --up:#15803d; --up-bg:#e7f6ec; --down:#b42318; --down-bg:#fdecea;
+    --a:#16835a; --b:#2f63d6; --a-bg:#e6f4ee; --b-bg:#e9effd;
+    --sel:#0f3d2b; --hover:#f7f8f5; --sortcol:#f4f8f5;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  button,select,input{font:inherit;color:inherit}
+  .mocknote{background:#fff7d6;border-bottom:1px solid #eadb9c;color:#5b4a00;font-size:12px;padding:6px 24px}
+  .nav{background:var(--nav);height:64px;display:flex;align-items:center;padding:0 24px;gap:28px}
+  .logo{color:var(--accent);font-weight:800;font-style:italic;font-size:22px;letter-spacing:.5px;margin-right:120px}
+  .logo small{font-size:12px;font-style:italic;margin-left:4px}
+  .nav a{color:var(--nav-ink);text-decoration:none;font-size:14px;padding:7px 12px;border-radius:999px}
+  .nav a.on{background:var(--accent);color:var(--accent-ink)}
+  .shell{display:flex;min-height:calc(100vh - 64px)}
+  aside{width:210px;flex:none;background:#fafbf8;border-right:1px solid var(--line);padding:18px 10px}
+  aside h6{font-size:10px;letter-spacing:1.4px;color:var(--muted);margin:6px 10px 10px;font-weight:700}
+  aside a{display:block;padding:9px 12px;border-radius:8px;color:var(--ink-2);text-decoration:none;font-weight:500;margin-bottom:2px}
+  aside a.on{background:#fff;color:var(--ink);font-weight:700;box-shadow:inset 3px 0 0 var(--accent),0 1px 2px rgba(0,0,0,.05)}
+  main{flex:1;min-width:0;padding:28px 32px 60px}
+  h1{font-size:30px;margin:0 0 4px;font-weight:800;letter-spacing:-.3px}
+  .sub{color:var(--ink-2);margin:0 0 22px}
+
+  /* range, matches Player Funnel */
+  .range{display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap}
+  .range .lbl{font-size:12px;font-weight:700;letter-spacing:.8px;color:var(--ink-2)}
+  .range input{border:1px solid var(--line);background:#fff;border-radius:8px;padding:8px 10px;min-width:170px}
+  .range .to{color:var(--muted)}
+  .range .resolved{font-weight:700;font-size:13px;color:var(--ink-2);margin-left:4px}
+  .range .clamp{font-size:12px;color:#8a5a00;margin-left:6px}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+  .toolbar{display:flex;align-items:center;gap:14px;padding:14px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .ctl{display:flex;align-items:center;gap:8px}
+  .ctl .cl{font-size:11px;font-weight:700;letter-spacing:.8px;color:var(--muted);text-transform:uppercase}
+  .seg{display:inline-flex;background:#f1f3ef;border:1px solid var(--line);border-radius:10px;padding:3px}
+  .seg button{border:0;background:transparent;padding:6px 12px;border-radius:7px;font-weight:600;color:var(--ink-2);cursor:pointer}
+  .seg button[aria-pressed="true"]{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .spacer{flex:1}
+  .btn{border:1px solid var(--line);background:#fff;border-radius:9px;padding:7px 14px;font-weight:700;cursor:pointer}
+  .btn:hover{background:var(--hover)}
+
+  .sub2{display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .sub2 .cl{font-size:11px;font-weight:700;letter-spacing:.8px;color:var(--muted);text-transform:uppercase;margin-right:2px}
+  .chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:5px 12px;font-weight:600;cursor:pointer;color:var(--ink-2)}
+  .chip[aria-pressed="true"]{background:var(--sel);border-color:var(--sel);color:#fff}
+  .chip:disabled{opacity:.45;cursor:not-allowed}
+  .chip .n{font-weight:500;opacity:.7;margin-left:4px;font-size:12px}
+  .divider{width:1px;height:22px;background:var(--line);margin:0 4px}
+  .toggle{display:inline-flex;align-items:center;gap:6px;color:var(--ink-2);font-size:13px;cursor:pointer;user-select:none}
+
+  .vs{display:flex;align-items:center;gap:10px}
+  .vs select{border:1px solid var(--line);border-radius:9px;padding:7px 10px;font-weight:700;background:#fff;min-width:150px}
+  .vs .dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+  .vs .word{color:var(--muted);font-weight:700}
+  .swap{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 9px;cursor:pointer}
+
+  .section{border-bottom:1px solid var(--line)}
+  .section:last-child{border-bottom:0}
+  .sechead{display:flex;align-items:baseline;gap:12px;padding:16px 18px 8px}
+  .sechead h3{margin:0;font-size:15px;font-weight:800}
+  .sechead .meta{color:var(--muted);font-size:12px}
+  .sechead .sortnote{margin-left:auto;font-size:12px;color:var(--ink-2)}
+  .sechead .sortnote b{color:var(--ink)}
+
+  .tw{overflow-x:auto}
+  table{border-collapse:separate;border-spacing:0;width:100%;font-variant-numeric:tabular-nums}
+  th,td{padding:11px 14px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line-2)}
+  thead th{font-size:11px;letter-spacing:.6px;color:var(--muted);font-weight:700;text-transform:uppercase;background:#fafbf9;border-bottom:1px solid var(--line);vertical-align:bottom}
+  th:first-child,td:first-child{text-align:left;position:sticky;left:0;z-index:1;background:#fff;min-width:220px;box-shadow:1px 0 0 var(--line)}
+  thead th:first-child{background:#fafbf9;z-index:2}
+  tbody tr:hover td{background:var(--hover)}
+  tbody tr:last-child td{border-bottom:0}
+  th.cur{color:#8a5a00}
+  th .ip{display:block;font-size:9px;letter-spacing:.8px}
+  td.cur{color:var(--ink-2)}
+  th.tot,td.tot{border-left:1px solid var(--line);font-weight:700}
+  td.tot{background:#fbfcfa}
+  th.chg,td.chg{min-width:120px}
+
+  /* sorting: always visible */
+  th.sortable{cursor:pointer;user-select:none}
+  th.sortable .sh{display:inline-flex;align-items:center;gap:5px;justify-content:flex-end}
+  th.sortable .si{display:inline-flex;flex-direction:column;line-height:.6;font-size:9px;color:#8f9d95}
+  th.sortable:hover{color:var(--ink)}
+  th.sortable:hover .si{color:var(--ink-2)}
+  th[aria-sort="descending"],th[aria-sort="ascending"]{color:var(--ink);background:#eef5f0}
+  th[aria-sort="descending"] .si .d,th[aria-sort="ascending"] .si .u{color:var(--up)}
+  td.sorted{background:var(--sortcol)}
+  th:first-child.sortable .sh{justify-content:flex-start}
+
+  tr[data-row]{cursor:pointer}
+  .caret{display:inline-block;width:14px;color:var(--muted);font-size:10px;transition:transform .12s}
+  tr[aria-expanded="true"] .caret{transform:rotate(90deg);color:var(--ink)}
+  tr[aria-expanded="true"] td{background:#f6faf7;border-bottom-color:transparent}
+  tr.detail td{background:#fbfcfa;font-size:13px;color:var(--ink-2);padding-top:7px;padding-bottom:7px;border-bottom:1px solid var(--line-2)}
+  tr.detail td:first-child{padding-left:66px;background:#fbfcfa}
+  tr.detail.cur-metric td:first-child{color:var(--ink);font-weight:700}
+  tr.detail.last td{border-bottom:1px solid var(--line)}
+  .desc{display:block;font-weight:400;font-size:12px;color:var(--muted);white-space:normal;max-width:300px;line-height:1.35;margin-top:2px}
+  .secdesc{margin:0;padding:0 18px 10px;color:var(--ink-2);font-size:13px}
+  .info{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;border:1px solid #cfd6d1;color:var(--muted);font:italic 700 10px/1 Georgia,serif;margin-left:6px;cursor:help;vertical-align:1px;text-transform:none;letter-spacing:0;opacity:.7}
+  .info:hover,.info:focus{opacity:1;color:var(--ink);border-color:var(--ink-2);outline:none}
+  #tip{position:fixed;z-index:50;max-width:260px;background:#10231a;color:#fff;font-size:12.5px;line-height:1.4;padding:8px 10px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.18);pointer-events:none;text-transform:none;letter-spacing:0;font-weight:500}
+  #tip[hidden]{display:none}
+  .name{font-weight:700}
+  .name .city{display:block;font-weight:500;font-size:12px;color:var(--muted)}
+  .rank{display:inline-block;min-width:22px;height:20px;line-height:20px;text-align:center;border-radius:6px;background:#f1f3ef;color:var(--ink-2);font-size:11px;font-weight:700;margin-right:8px}
+  .zero{color:#c3cbc6}
+  .u{font-size:10px;font-weight:600;color:var(--muted);margin-left:3px;letter-spacing:.3px}
+
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:700}
+  .pill.up{background:var(--up-bg);color:var(--up)}
+  .pill.down{background:var(--down-bg);color:var(--down)}
+  .pill.flat{background:#f1f3ef;color:var(--ink-2)}
+
+  .foot{padding:6px 18px 16px;color:var(--muted);font-size:12px;border-top:1px solid var(--line)}
+  .foot p{margin:0 0 4px}
+
+  /* compare */
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;padding:16px 18px}
+  .cc{border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .cc h4{margin:0 0 10px;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--ink-2)}
+  .bar{display:grid;grid-template-columns:78px 1fr auto;align-items:center;gap:8px;margin-bottom:6px;font-weight:700}
+  .bar .bn{font-size:12px;font-weight:600;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bar .trk{height:8px;border-radius:4px;background:#f1f3ef;overflow:hidden}
+  .bar .fill{height:100%;border-radius:4px}
+  .cc .lead{font-size:12px;color:var(--ink-2);margin-top:8px}
+  .cc .lead b{font-weight:800}
+  tr.grp td{background:#fafbf9;font-weight:800;font-size:12px;letter-spacing:.4px;text-transform:uppercase;color:var(--ink-2);padding-top:14px}
+  tr.gap td{color:var(--ink-2);font-size:12px}
+  .sw{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px}
+  .gapv.a{color:var(--a);font-weight:700}
+  .gapv.b{color:var(--b);font-weight:700}
+</style>
+</head>
+<body>
+<div class="mocknote" data-testid="mock-note">MOCK. Overall figures Mar to Sep 2026 and four field rows (Soccer Central, Crossbar Rowlett, Zipp Family Sports Park, Bob Jones Park) are production values from the live page. Every other number is illustrative and shaped to be plausible.</div>
+<nav class="nav">
+  <div class="logo">MATCHDAY<small>Clubhouse</small></div>
+  <a href="#">Home</a><a href="#">Finance</a><a href="#">Growth</a><a class="on" href="#">Player Lifecycle</a><a href="#">Match Ops</a><a href="#">Tech</a>
+</nav>
+<div class="shell">
+  <aside>
+    <h6>REPORTS</h6>
+    <a href="#">Player Funnel</a>
+    <a href="#" class="on" data-testid="nav-player-activity">Player Activity</a>
+    <a href="#">Revenue per Player</a>
+    <a href="#">Retention</a>
+    <a href="#">Churn</a>
+    <a href="#">Ads</a>
+    <a href="#">Player Data Room</a>
+    <h6 style="margin-top:14px">MEMBERSHIP</h6>
+    <a href="#">Membership</a>
+    <a href="#">Members by City</a>
+  </aside>
+  <main>
+    <h1 data-testid="pa-title">Player Activity</h1>
+    <p class="sub">Track signups, bookings and returning players.</p>
+
+    <div class="range" data-testid="pa-range">
+      <span class="lbl">RANGE</span>
+      <input type="month" data-testid="pa-range-from" min="2025-03" max="2026-09">
+      <span class="to">to</span>
+      <input type="month" data-testid="pa-range-to" min="2025-03" max="2026-09">
+      <span class="resolved" data-testid="pa-range-label"></span>
+      <span class="clamp" data-testid="pa-daily-note" hidden></span>
+    </div>
+
+    <div class="card" data-testid="pa-card">
+      <div class="toolbar">
+        <div class="ctl"><span class="cl">View by</span>
+          <div class="seg" role="group" aria-label="View by">
+            <button data-testid="pa-grain-monthly" data-grain="monthly">Monthly</button>
+            <button data-testid="pa-grain-weekly" data-grain="weekly">Weekly</button>
+            <button data-testid="pa-grain-daily" data-grain="daily">Daily</button>
+          </div>
+        </div>
+        <div class="ctl"><span class="cl">Group by</span>
+          <div class="seg" role="group" aria-label="Group by">
+            <button data-testid="pa-group-overall" data-group="overall">Overall</button>
+            <button data-testid="pa-group-cities" data-group="cities">Cities</button>
+            <button data-testid="pa-group-fields" data-group="fields">Fields</button>
+            <button data-testid="pa-group-compare" data-group="compare">Compare</button>
+          </div>
+        </div>
+        <span class="spacer"></span>
+        <button class="btn" data-testid="pa-export">Export</button>
+      </div>
+      <div id="sub2"></div>
+      <div id="body"></div>
+    </div>
+  </main>
+</div>
+
+<div id="tip" role="tooltip" data-testid="pa-tip" hidden></div>
+<script>
+/* ---------------- data ---------------- */
+const TODAY = new Date(2026, 8, 29); // Tue 29 Sep 2026, BUSINESS_TZ
+const CUR_MONTH = "2026-09";
+const MONTHS = [];
+for (let y = 2025, m = 3; y < 2026 || (y === 2026 && m <= 9); m++) { if (m > 12) { m = 1; y++; } MONTHS.push(`${y}-${String(m).padStart(2, "0")}`); }
+
+const METRICS = [
+  { key: "registrations", label: "Registrations", kind: "add", field: false, desc: "Completed signups, grouped by city selected at signup." },
+  { key: "newPlayers", label: "New players", kind: "add", field: true, desc: "Players who played their first MatchDay match." },
+  { key: "totalPlayers", label: "Total players", kind: "distinct", field: true, desc: "Players who played, counted once per period." },
+  { key: "spots", label: "Spots booked", kind: "add", field: true, desc: "Total spots booked in matches that took place." },
+  { key: "returning", label: "Returning players", kind: "distinct", field: true, desc: "Players who played again after an earlier match." },
+  { key: "returningPct", label: "Returning player %", kind: "rate", field: true, desc: "Percentage of players who were returning." },
+];
+const M = Object.fromEntries(METRICS.map(m => [m.key, m]));
+const info = (m, tid) => `<span class="info" tabindex="0" role="button" aria-label="What is ${m.label}?" data-tip="${m.desc}"${tid ? ` data-testid="${tid}"` : ""}>i</span>`;
+
+// Overall, production values Mar to Sep 2026; earlier months illustrative
+const OV = {
+  registrations: [620,660,690,720,760,790,820,880,760,900,1020,1100, 1185,1269,1297,1525,2255,1937,2449],
+  newPlayers:    [360,380,390,410,430,440,470,500,420,520,560,600, 585,732,681,766,1123,1093,944],
+  totalPlayers:  [980,1040,1090,1150,1210,1260,1320,1410,1380,1500,1640,1780, 1923,2243,2170,2300,2896,2886,2720],
+  spots:         [3200,3420,3590,3810,4010,4180,4400,4700,4520,4990,5460,5950, 6573,7528,7270,7667,9716,8870,8492],
+};
+const KNOWN_DISTINCT = { "overall|2026-04|2026-09": 8361 }; // verified COUNT(DISTINCT) Apr to Sep 2026
+
+const ACTIVE = ["Atlanta","Austin","Dallas","Houston","OKC","San Antonio","St. Louis"];
+const OUTSIDE = ["El Paso","New York City","Warsaw"];
+const SHARE = { Austin:.24, Houston:.21, "San Antonio":.22, Dallas:.16, Atlanta:.06, "St. Louis":.05, OKC:.04, "El Paso":.02 };
+
+function hash(s){ let h = 2166136261; for (const c of s) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return ((h >>> 0) % 1000) / 1000; }
+const noise = (s, amp = .08) => 1 - amp + hash(s) * amp * 2;
+const mi = k => MONTHS.indexOf(k);
+
+function cityMonth(city, metric, k){
+  const i = mi(k);
+  if (city === "Warsaw") { if (k < "2026-08") return 0; return { registrations: k === "2026-08" ? 49 : 99, newPlayers: k === "2026-08" ? 52 : 41, totalPlayers: k === "2026-08" ? 58 : 77, spots: k === "2026-08" ? 96 : 115 }[metric]; }
+  if (city === "New York City") { if (metric === "registrations") return Math.round(22 * noise(city + k, .4)); return k === "2025-10" ? { newPlayers: 31, totalPlayers: 44, spots: 118 }[metric] : 0; }
+  if (city === "El Paso" && k > "2026-05") return metric === "registrations" ? Math.round(9 * noise(city + k, .4)) : 0;
+  return Math.round(OV[metric][i] * SHARE[city] * noise(city + metric + k));
+}
+
+// fields: [name, city, weight of city, first month, last month]
+const FIELDS = [
+  ["ATH Pearland","Houston",.45],["ATH Katy","Houston",.30],["KISC","Houston",.18],["PAC Global","Houston",.07,"2026-06"],
+  ["NEMP","Austin",.40],["RRMPC","Austin",.18],["Hattrick Leander","Austin",.16],["Stony Point","Austin",.12],["Ann Richards","Austin",.08],
+  ["Westlake","Austin",.10,null,"2025-12"],["SJD","Austin",.08,null,"2025-12"],
+  ["Soccer Central","San Antonio",.85],["STAR","San Antonio",.06],["Zipp Family Sports Park","San Antonio",.08,"2026-08"],
+  ["Bicentennial","Dallas",.40],["Strike","Dallas",.30],["Majestic","Dallas",.20],["Crossbar Rowlett","Dallas",.10,"2026-05"],["Bob Jones Park","Dallas",.08,"2026-09"],
+  ["Hammond Park","Atlanta",.55],["PRUMC","Atlanta",.45],
+  ["Centennial Commons","St. Louis",.5],["Lou Indoor","St. Louis",.3],["Lou Outdoor","St. Louis",.2,null,"2025-11"],
+  ["Scissortail","OKC",1],["Galatzan Park","El Paso",1,null,"2026-05"],
+].map(([name, city, w, from, to]) => ({ id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"), name, city, w, from: from || "2025-03", to: to || "2026-09" }));
+// production total players, Mar to Sep 2026, from the live Field Detail view
+const FIELD_REAL = {
+  "soccer-central": [365,434,447,417,522,525,468],
+  "crossbar-rowlett": [0,0,25,38,70,73,65],
+  "zipp-family-sports-park": [0,0,0,0,0,49,84],
+  "bob-jones-park": [0,0,0,0,0,0,45],
+};
+function fieldMonth(f, metric, k){
+  if (metric === "registrations") return null;
+  if (k < f.from || k > f.to) return 0;
+  const ri = mi(k) - mi("2026-03");
+  let tp = FIELD_REAL[f.id] && ri >= 0 ? FIELD_REAL[f.id][ri] : Math.round(cityMonth(f.city, "totalPlayers", k) * f.w * noise(f.id + k));
+  if (metric === "totalPlayers") return tp;
+  if (metric === "newPlayers") return Math.round(tp * .28 * noise(f.id + "n" + k, .15));
+  if (metric === "spots") return Math.round(tp * 3.2 * noise(f.id + "s" + k, .1));
+}
+
+function baseMonth(ent, metric, k){
+  if (ent.type === "overall") return OV[metric][mi(k)];
+  if (ent.type === "city") return cityMonth(ent.id, metric, k);
+  return fieldMonth(ent.f, metric, k);
+}
+function monthVal(ent, metric, k){
+  if (metric === "returning") return baseMonth(ent, "totalPlayers", k) - baseMonth(ent, "newPlayers", k);
+  if (metric === "returningPct") { const t = baseMonth(ent, "totalPlayers", k); return t ? (t - baseMonth(ent, "newPlayers", k)) / t : null; }
+  return baseMonth(ent, metric, k);
+}
+
+/* ---------------- state ---------------- */
+const S = {
+  from: "2026-04", to: CUR_MONTH, grain: "monthly", group: "overall",
+  metrics: ["spots"], cityFilter: "all", showInactive: false, showOutside: false,
+  a: "Austin", b: "Houston", sort: {}, expanded: new Set(),
+};
+
+/* ---------------- buckets ---------------- */
+const MN = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const mLabel = k => `${MN[+k.slice(5) - 1]} ${k.slice(0, 4)}`;
+const dim = k => new Date(+k.slice(0, 4), +k.slice(5), 0).getDate();
+const elapsed = k => k === CUR_MONTH ? TODAY.getDate() : dim(k);
+const keyOf = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+
+function rangeMonths(){ return MONTHS.filter(k => k >= S.from && k <= S.to); }
+
+function buckets(){
+  if (S.grain === "monthly") return rangeMonths().map(k => ({ id: k, label: mLabel(k), cur: k === CUR_MONTH, parts: [[k, 1]] }));
+  if (S.grain === "daily") {
+    const k = S.to, out = [];
+    for (let d = 1; d <= elapsed(k); d++) {
+      const dt = new Date(+k.slice(0, 4), +k.slice(5) - 1, d);
+      out.push({ id: `${k}-${d}`, label: `${MN[dt.getMonth()]} ${d}`, sub: "SMTWTFS"[dt.getDay()], cur: k === CUR_MONTH && d === TODAY.getDate(), day: dt, parts: [[k, dayWeight(k, d)]] });
+    }
+    return out;
+  }
+  // weekly, Monday start, clipped to range and to today
+  const start = new Date(+S.from.slice(0, 4), +S.from.slice(5) - 1, 1);
+  const endM = S.to; const end = new Date(+endM.slice(0, 4), +endM.slice(5) - 1, elapsed(endM));
+  const out = []; let cur = new Date(start); cur.setDate(cur.getDate() - ((cur.getDay() + 6) % 7));
+  while (cur <= end) {
+    const ws = new Date(cur), we = new Date(cur); we.setDate(we.getDate() + 6);
+    const parts = {};
+    for (let d = new Date(Math.max(ws, start)); d <= we && d <= end; d.setDate(d.getDate() + 1)) { const k = keyOf(d); parts[k] = (parts[k] || 0) + 1 / elapsed(k); }
+    out.push({ id: `w${ws.toISOString().slice(0, 10)}`, label: `${MN[ws.getMonth()]} ${ws.getDate()}`, sub: "WK OF", cur: we >= TODAY, parts: Object.entries(parts) });
+    cur.setDate(cur.getDate() + 7);
+  }
+  return out;
+}
+function dayWeight(k, d){
+  let tot = 0, mine = 0;
+  for (let i = 1; i <= elapsed(k); i++) { const wd = new Date(+k.slice(0, 4), +k.slice(5) - 1, i).getDay(); const w = (wd === 0 || wd === 6) ? 1.8 : 0.72; tot += w; if (i === d) mine = w; }
+  return mine / tot;
+}
+const DISTINCT_SCALE = { monthly: 1, weekly: 1.9, daily: 2.4 }; // a week or day holds a larger slice of its month's distinct players than its day share
+
+function val(ent, metric, bk){
+  if (metric === "registrations" && ent.type === "field") return null;
+  if (metric === "returningPct") { const t = val(ent, "totalPlayers", bk); return t ? val(ent, "returning", bk) / t : null; }
+  const k = M[metric].kind;
+  let v = 0;
+  for (const [mk, frac] of bk.parts) v += monthVal(ent, metric, mk) * frac * (k === "distinct" && S.grain !== "monthly" ? Math.min(1 / frac, DISTINCT_SCALE[S.grain]) : 1);
+  if (metric === "returning") v = val(ent, "totalPlayers", bk) - val(ent, "newPlayers", bk);
+  return Math.max(0, Math.round(v));
+}
+
+function periodDistinctTotal(ent){
+  const months = S.grain === "daily" ? [S.to] : rangeMonths();
+  const known = KNOWN_DISTINCT[`${ent.type === "overall" ? "overall" : ent.type + ":" + ent.id}|${months[0]}|${months[months.length - 1]}`];
+  if (known) return known;
+  const xs = months.map(k => monthVal(ent, "totalPlayers", k));
+  const mx = Math.max(...xs), sum = xs.reduce((a, b) => a + b, 0);
+  return Math.round(mx + .44 * (sum - mx));
+}
+function total(ent, metric, bks){
+  if (metric === "registrations" && ent.type === "field") return null;
+  const k = M[metric].kind;
+  if (k === "add") return (S.grain === "daily" ? [S.to] : rangeMonths()).reduce((a, mk) => a + monthVal(ent, metric, mk), 0); // grain never changes a period total
+  const newSum = bks.reduce((a, b) => a + val(ent, "newPlayers", b), 0);
+  if (metric === "totalPlayers") return periodDistinctTotal(ent);
+  if (metric === "returning") return Math.max(0, periodDistinctTotal(ent) - newSum);
+  // rate: weighted average of the buckets
+  let r = 0, t = 0; for (const b of bks) { r += val(ent, "returning", b); t += val(ent, "totalPlayers", b); }
+  return t ? r / t : null;
+}
+function changeWindow(bks){
+  // last complete bucket vs the one before it
+  const complete = bks.filter(b => !b.cur);
+  if (complete.length < 2) return null;
+  return [complete[complete.length - 2], complete[complete.length - 1]];
+}
+function change(ent, metric, bks){
+  const w = changeWindow(bks); if (!w) return null;
+  const p = val(ent, metric, w[0]), c = val(ent, metric, w[1]);
+  if (p == null || c == null) return null;
+  if (metric === "returningPct") return { pts: (c - p) * 100 };
+  if (!p) return c ? { pct: Infinity } : null;
+  return { pct: (c - p) / p * 100 };
+}
+
+/* ---------------- formatting ---------------- */
+const fmtN = v => v == null ? "" : Number(v).toLocaleString("en-US");
+function fmt(metric, v){ if (v == null) return ""; return metric === "returningPct" ? (v * 100).toFixed(1) + "%" : fmtN(v); }
+function cell(metric, v){ if (v === 0) return `<span class="zero">0</span>`; return fmt(metric, v); }
+function pill(ch){
+  if (!ch) return `<span class="zero">n/a</span>`;
+  if (ch.pts != null) { const s = ch.pts; const c = Math.abs(s) < .05 ? "flat" : s > 0 ? "up" : "down"; return `<span class="pill ${c}">${s > 0 ? "+" : ""}${s.toFixed(1)} pts</span>`; }
+  if (ch.pct === Infinity) return `<span class="pill up">new</span>`;
+  const s = ch.pct; const c = Math.abs(s) < .05 ? "flat" : s > 0 ? "up" : "down";
+  return `<span class="pill ${c}">${s > 0 ? "+" : ""}${s.toFixed(1)}%</span>`;
+}
+function chgHeader(bks){
+  const w = changeWindow(bks);
+  const unit = { monthly: "month", weekly: "week", daily: "day" }[S.grain];
+  return `Change<span class="ip" style="color:var(--muted);text-transform:none;letter-spacing:0;font-weight:500">${w ? `${w[1].label} vs ${w[0].label}` : `needs two complete ${unit}s`}</span>`;
+}
+function bucketTh(b, sortable, key){
+  const inner = `${b.sub && S.grain !== "monthly" ? `<span class="ip" style="color:var(--muted)">${b.sub}</span>` : ""}${b.label}${b.cur ? `<span class="ip">IN PROGRESS</span>` : ""}`;
+  return th(inner, b.id, sortable, key, b.cur ? "cur" : "");
+}
+function th(inner, col, sortable, key, cls = ""){
+  if (!sortable) return `<th class="${cls}" data-col="${col}">${inner}</th>`;
+  const st = S.sort[key] || {};
+  const on = st.col === col;
+  const aria = on ? (st.dir === "desc" ? "descending" : "ascending") : "none";
+  return `<th class="sortable ${cls}" data-col="${col}" data-sortkey="${key}" aria-sort="${aria}" tabindex="0" data-testid="pa-sort-${key}-${col}" title="Sort by this column"><span class="sh">${inner}<span class="si" aria-hidden="true"><span class="u">&#9650;</span><span class="d">&#9660;</span></span></span></th>`;
+}
+
+/* ---------------- entities ---------------- */
+function cityEntities(){ return (S.showOutside ? [...ACTIVE, ...OUTSIDE] : ACTIVE).map(c => ({ type: "city", id: c, name: c })); }
+function fieldEntities(bks){
+  return FIELDS.filter(f => S.cityFilter === "all" || f.city === S.cityFilter)
+    .map(f => ({ type: "field", id: f.id, name: f.name, city: f.city, f }))
+    .filter(e => S.showInactive || bks.some(b => val(e, "totalPlayers", b) > 0));
+}
+
+/* ---------------- render ---------------- */
+const $ = s => document.querySelector(s);
+function render(){
+  $('[data-testid="pa-range-from"]').value = S.from;
+  $('[data-testid="pa-range-to"]').value = S.to;
+  $('[data-testid="pa-range-label"]').textContent = S.grain === "daily" ? `${mLabel(S.to)}, by day` : `${mLabel(S.from)} to ${mLabel(S.to)}`;
+  const dn = $('[data-testid="pa-daily-note"]');
+  dn.hidden = S.grain !== "daily"; dn.textContent = "Daily shows one month: the To month.";
+  $('[data-testid="pa-range-from"]').disabled = S.grain === "daily";
+  document.querySelectorAll("[data-grain]").forEach(b => b.setAttribute("aria-pressed", b.dataset.grain === S.grain));
+  document.querySelectorAll("[data-group]").forEach(b => b.setAttribute("aria-pressed", b.dataset.group === S.group));
+  const bks = buckets();
+  renderSub2(bks);
+  const body = $("#body");
+  if (S.group === "overall") body.innerHTML = renderOverall(bks);
+  else if (S.group === "compare") body.innerHTML = renderCompare(bks);
+  else body.innerHTML = S.metrics.map(m => renderEntitySection(m, bks)).join("");
+}
+
+function renderSub2(bks){
+  const el = $("#sub2");
+  if (S.group === "overall") { el.innerHTML = ""; return; }
+  if (S.group === "compare") {
+    const opts = (sel, other) => [...ACTIVE, ...OUTSIDE].map(c => `<option value="${c}" ${c === sel ? "selected" : ""} ${c === other ? "disabled" : ""}>${c}</option>`).join("");
+    el.innerHTML = `<div class="sub2"><span class="cl">Compare</span><div class="vs">
+      <span class="dot" style="background:var(--a)"></span><select data-testid="pa-compare-a" id="ca">${opts(S.a, S.b)}</select>
+      <button class="swap" data-testid="pa-compare-swap" title="Swap">&#8646;</button>
+      <span class="dot" style="background:var(--b)"></span><select data-testid="pa-compare-b" id="cb">${opts(S.b, S.a)}</select></div></div>`;
+    return;
+  }
+  const isField = S.group === "fields";
+  let html = `<div class="sub2" data-testid="pa-metric-chips"><span class="cl">Metrics</span>`;
+  for (const m of METRICS) {
+    const dis = isField && !m.field;
+    html += `<button class="chip" data-metric="${m.key}" data-testid="pa-metric-chip-${m.key}" aria-pressed="${S.metrics.includes(m.key)}" title="${m.desc}" ${dis ? `disabled title="Registrations have no field: a player registers before choosing a pitch."` : ""}>${m.label}</button>`;
+  }
+  html += `</div>`;
+  if (isField) {
+    const cities = [...ACTIVE, "El Paso"];
+    html += `<div class="sub2" data-testid="pa-field-filters"><span class="cl">City</span>
+      <button class="chip" data-city="all" data-testid="pa-field-city-all" aria-pressed="${S.cityFilter === "all"}">All cities</button>
+      ${cities.map(c => `<button class="chip" data-city="${c}" data-testid="pa-field-city-${c.toLowerCase().replace(/[^a-z]+/g, "-")}" aria-pressed="${S.cityFilter === c}">${c}</button>`).join("")}
+      <span class="divider"></span>
+      <label class="toggle"><input type="checkbox" data-testid="pa-show-inactive" ${S.showInactive ? "checked" : ""}> Show fields with no activity</label></div>`;
+  } else {
+    html += `<div class="sub2"><label class="toggle"><input type="checkbox" data-testid="pa-show-outside" ${S.showOutside ? "checked" : ""}> Include cities outside active operations (El Paso, New York City, Warsaw)</label></div>`;
+  }
+  el.innerHTML = html;
+}
+
+function renderOverall(bks){
+  const ent = { type: "overall" };
+  let h = `<div class="section" data-testid="pa-section-overall"><div class="sechead"><h3>All of MatchDay</h3><span class="meta">${bks.length} ${S.grain === "monthly" ? "months" : S.grain === "weekly" ? "weeks" : "days"}</span></div><div class="tw"><table data-testid="pa-table-overall"><thead><tr><th>Metric</th>`;
+  h += bks.map(b => bucketTh(b, false)).join("") + `<th class="tot">Period total</th><th class="chg">${chgHeader(bks)}</th></tr></thead><tbody>`;
+  for (const m of METRICS) {
+    const t = total(ent, m.key, bks);
+    h += `<tr data-testid="pa-row-${m.key}"><td class="name">${m.label}${info(m, `pa-info-${m.key}`)}</td>${bks.map(b => `<td class="${b.cur ? "cur" : ""}">${cell(m.key, val(ent, m.key, b))}</td>`).join("")}
+      <td class="tot" data-testid="pa-total-${m.key}">${fmt(m.key, t)}${m.kind === "distinct" ? `<span class="u">unique</span>` : m.kind === "rate" ? `<span class="u">avg</span>` : ""}</td><td class="chg">${pill(change(ent, m.key, bks))}</td></tr>`;
+  }
+  return h + `</tbody></table></div></div>`;
+}
+
+function renderEntitySection(metric, bks){
+  const m = M[metric];
+  const isField = S.group === "fields";
+  const ents = isField ? fieldEntities(bks) : cityEntities();
+  const key = metric;
+  const st = S.sort[key] || (S.sort[key] = { col: "total", dir: "desc" });
+  const rows = ents.map(e => {
+    const vals = Object.fromEntries(bks.map(b => [b.id, val(e, metric, b)]));
+    const t = total(e, metric, bks), ch = change(e, metric, bks);
+    return { e, vals, t, ch };
+  });
+  const sv = r => st.col === "name" ? r.e.name : st.col === "total" ? r.t : st.col === "change" ? (r.ch ? (r.ch.pts ?? (r.ch.pct === Infinity ? 1e9 : r.ch.pct)) : -1e9) : r.vals[st.col];
+  rows.sort((x, y) => { const a = sv(x), b = sv(y); const c = typeof a === "string" ? a.localeCompare(b) : (a ?? -1e9) - (b ?? -1e9); return st.dir === "desc" ? -c : c; });
+  const colName = st.col === "name" ? (isField ? "Field" : "City") : st.col === "total" ? "Period total" : st.col === "change" ? "Change" : bks.find(b => b.id === st.col)?.label;
+  const dirWord = st.col === "name" ? (st.dir === "desc" ? "Z to A" : "A to Z") : (st.dir === "desc" ? "high to low" : "low to high");
+  let h = `<div class="section" data-testid="pa-section-${metric}"><div class="sechead"><h3>${m.label}${info(m, `pa-info-section-${metric}`)}</h3><span class="meta" data-testid="pa-count-${metric}">${ents.length} ${isField ? "fields" : "cities"}${isField && !S.showInactive ? " with activity" : ""}</span>
+    <span class="sortnote" data-testid="pa-sortnote-${metric}">Sorted by <b>${colName}</b>, ${dirWord}. Click a header to sort, a row to see all its metrics.</span></div>
+    <div class="tw"><table data-testid="pa-table-${metric}"><thead><tr>${th(isField ? "Field" : "City", "name", true, key)}`;
+  h += bks.map(b => bucketTh(b, true, key)).join("") + th("Period total", "total", true, key, "tot") + th(chgHeader(bks), "change", true, key, "chg") + `</tr></thead><tbody>`;
+  rows.forEach((r, i) => {
+    const sc = c => st.col === c ? " sorted" : "";
+    const slug = r.e.id.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const exKey = `${metric}|${r.e.id}`, open = S.expanded.has(exKey);
+    h += `<tr data-testid="pa-row-${slug}" data-row data-expand="${exKey}" aria-expanded="${open}" tabindex="0" title="Show all metrics for ${r.e.name}"><td class="${sc("name")}"><span class="caret" aria-hidden="true">&#9654;</span><span class="rank">${i + 1}</span><span class="name">${r.e.name}${isField ? `<span class="city">${r.e.city}</span>` : ""}</span></td>
+      ${bks.map(b => `<td class="${b.cur ? "cur" : ""}${sc(b.id)}" data-col="${b.id}">${cell(metric, r.vals[b.id])}</td>`).join("")}
+      <td class="tot${sc("total")}" data-col="total">${fmt(metric, r.t)}${m.kind === "distinct" ? `<span class="u">unique</span>` : m.kind === "rate" ? `<span class="u">avg</span>` : ""}</td><td class="chg${sc("change")}">${pill(r.ch)}</td></tr>`;
+    if (open) {
+      const ms = METRICS.filter(x => !isField || x.field);
+      ms.forEach((dm, j) => {
+        const t = total(r.e, dm.key, bks);
+        h += `<tr class="detail${dm.key === metric ? " cur-metric" : ""}${j === ms.length - 1 ? " last" : ""}" data-detail data-testid="pa-detail-${metric}-${slug}-${dm.key}"><td>${dm.label}${info(dm)}</td>
+          ${bks.map(b => `<td class="${b.cur ? "cur" : ""}">${cell(dm.key, val(r.e, dm.key, b))}</td>`).join("")}
+          <td class="tot" data-dtotal>${fmt(dm.key, t)}${dm.kind === "distinct" ? `<span class="u">unique</span>` : dm.kind === "rate" ? `<span class="u">avg</span>` : ""}</td><td class="chg">${pill(change(r.e, dm.key, bks))}</td></tr>`;
+      });
+    }
+  });
+  return h + `</tbody></table></div></div>`;
+}
+
+function renderCompare(bks){
+  const A = { type: "city", id: S.a, name: S.a }, B = { type: "city", id: S.b, name: S.b };
+  let cards = `<div class="cards" data-testid="pa-compare-cards">`;
+  for (const m of METRICS) {
+    const ta = total(A, m.key, bks), tb = total(B, m.key, bks);
+    const mx = Math.max(ta || 0, tb || 0) || 1;
+    let lead;
+    if (m.kind === "rate") { const d = ((ta || 0) - (tb || 0)) * 100; lead = Math.abs(d) < .05 ? "Level" : `<b style="color:var(--${d > 0 ? "a" : "b"})">${d > 0 ? S.a : S.b}</b> higher by ${Math.abs(d).toFixed(1)} pts`; }
+    else { const lo = Math.min(ta, tb), hi = Math.max(ta, tb); lead = ta === tb ? "Level" : lo === 0 ? `<b style="color:var(--${ta > tb ? "a" : "b"})">${ta > tb ? S.a : S.b}</b> only` : `<b style="color:var(--${ta > tb ? "a" : "b"})">${ta > tb ? S.a : S.b}</b> ahead by ${((hi - lo) / lo * 100).toFixed(0)}%`; }
+    cards += `<div class="cc" data-testid="pa-compare-card-${m.key}"><h4>${m.label}${info(m)}</h4>
+      <div class="bar"><span class="bn">${S.a}</span><div class="trk"><div class="fill" style="width:${(ta || 0) / mx * 100}%;background:var(--a)"></div></div><span data-testid="pa-compare-a-${m.key}">${fmt(m.key, ta)}</span></div>
+      <div class="bar"><span class="bn">${S.b}</span><div class="trk"><div class="fill" style="width:${(tb || 0) / mx * 100}%;background:var(--b)"></div></div><span data-testid="pa-compare-b-${m.key}">${fmt(m.key, tb)}</span></div>
+      <div class="lead">${lead}</div></div>`;
+  }
+  cards += `</div>`;
+  let h = `<div class="section" data-testid="pa-section-compare"><div class="sechead"><h3><span class="sw" style="background:var(--a)"></span>${S.a} vs <span class="sw" style="background:var(--b);margin-left:6px"></span>${S.b}</h3><span class="meta">${mLabel(S.grain === "daily" ? S.to : S.from)}${S.grain === "daily" ? "" : " to " + mLabel(S.to)}</span></div>${cards}
+    <div class="tw"><table data-testid="pa-table-compare"><thead><tr><th>Metric</th>${bks.map(b => bucketTh(b, false)).join("")}<th class="tot">Period total</th><th class="chg">${chgHeader(bks)}</th></tr></thead><tbody>`;
+  for (const m of METRICS) {
+    h += `<tr class="grp"><td>${m.label}${info(m)}</td>${bks.map(() => "<td></td>").join("")}<td class="tot"></td><td></td></tr>`;
+    for (const [ent, c] of [[A, "a"], [B, "b"]]) {
+      h += `<tr data-testid="pa-cmp-${m.key}-${c}"><td><span class="sw" style="background:var(--${c})"></span>${ent.name}</td>${bks.map(b => `<td class="${b.cur ? "cur" : ""}">${cell(m.key, val(ent, m.key, b))}</td>`).join("")}<td class="tot">${fmt(m.key, total(ent, m.key, bks))}</td><td class="chg">${pill(change(ent, m.key, bks))}</td></tr>`;
+    }
+    const gap = (va, vb) => {
+      if (va == null || vb == null) return "";
+      if (m.kind === "rate") { const d = (va - vb) * 100; return Math.abs(d) < .05 ? "level" : `<span class="gapv ${d > 0 ? "a" : "b"}">${d > 0 ? "+" : ""}${d.toFixed(1)} pts</span>`; }
+      if (va === vb) return "level"; if (!vb) return `<span class="gapv a">${S.a} only</span>`; if (!va) return `<span class="gapv b">${S.b} only</span>`;
+      const d = (va - vb) / vb * 100; return `<span class="gapv ${d > 0 ? "a" : "b"}">${d > 0 ? "+" : ""}${d.toFixed(0)}%</span>`;
+    };
+    h += `<tr class="gap" data-testid="pa-cmp-${m.key}-gap"><td>${S.a} vs ${S.b}</td>${bks.map(b => `<td>${gap(val(A, m.key, b), val(B, m.key, b))}</td>`).join("")}<td class="tot">${gap(total(A, m.key, bks), total(B, m.key, bks))}</td><td></td></tr>`;
+  }
+  return h + `</tbody></table></div></div>`;
+}
+
+/* ---------------- events ---------------- */
+const tip = () => document.getElementById("tip");
+function showTip(el){ const t = tip(); t.textContent = el.dataset.tip; t.hidden = false; const r = el.getBoundingClientRect(); const w = t.offsetWidth; t.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2)) + "px"; t.style.top = (r.bottom + 8) + "px"; }
+function hideTip(){ tip().hidden = true; }
+document.addEventListener("mouseover", e => { const i = e.target.closest(".info"); if (i) showTip(i); });
+document.addEventListener("mouseout", e => { if (e.target.closest(".info")) hideTip(); });
+document.addEventListener("focusin", e => { if (e.target.matches(".info")) showTip(e.target); });
+document.addEventListener("focusout", e => { if (e.target.matches(".info")) hideTip(); });
+document.addEventListener("scroll", hideTip, true);
+document.addEventListener("click", e => {
+  const inf = e.target.closest(".info"); if (inf) { e.stopPropagation(); tip().hidden ? showTip(inf) : hideTip(); return; }
+  const g = e.target.closest("[data-grain]"); if (g) { S.grain = g.dataset.grain; return render(); }
+  const gr = e.target.closest("[data-group]"); if (gr) { S.group = gr.dataset.group; if (S.group === "fields") S.metrics = S.metrics.filter(k => M[k].field); if (!S.metrics.length) S.metrics = ["spots"]; return render(); }
+  const mc = e.target.closest("[data-metric]"); if (mc && !mc.disabled) {
+    const k = mc.dataset.metric;
+    if (S.metrics.includes(k)) { if (S.metrics.length > 1) S.metrics = S.metrics.filter(x => x !== k); }
+    else S.metrics = METRICS.map(m => m.key).filter(x => x === k || S.metrics.includes(x));
+    return render();
+  }
+  const cc = e.target.closest("[data-city]"); if (cc) { S.cityFilter = cc.dataset.city; return render(); }
+  if (e.target.closest('[data-testid="pa-compare-swap"]')) { [S.a, S.b] = [S.b, S.a]; return render(); }
+  const sh = e.target.closest("th.sortable"); if (sh) {
+    const key = sh.dataset.sortkey, col = sh.dataset.col, st = S.sort[key] || {};
+    S.sort[key] = st.col === col ? { col, dir: st.dir === "desc" ? "asc" : "desc" } : { col, dir: col === "name" ? "asc" : "desc" };
+    return render();
+  }
+  const ex = e.target.closest("tr[data-expand]"); if (ex) { const k = ex.dataset.expand; S.expanded.has(k) ? S.expanded.delete(k) : S.expanded.add(k); return render(); }
+  if (e.target.closest('[data-testid="pa-export"]')) alert("Export downloads the table as shown: same grain, grouping, metrics, sort and range.");
+});
+document.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && e.target.matches("th.sortable, tr[data-expand]")) { e.preventDefault(); e.target.click(); } });
+document.addEventListener("change", e => {
+  const t = e.target;
+  if (t.matches('[data-testid="pa-range-from"]')) { if (t.value) S.from = t.value; if (S.from > S.to) S.to = S.from; }
+  else if (t.matches('[data-testid="pa-range-to"]')) { if (t.value) S.to = t.value > CUR_MONTH ? CUR_MONTH : t.value; if (S.to < S.from) S.from = S.to; }
+  else if (t.matches('[data-testid="pa-show-inactive"]')) S.showInactive = t.checked;
+  else if (t.matches('[data-testid="pa-show-outside"]')) S.showOutside = t.checked;
+  else if (t.id === "ca") S.a = t.value;
+  else if (t.id === "cb") S.b = t.value;
+  else return;
+  render();
+});
+render();
+</script>
+</body>
+</html>
