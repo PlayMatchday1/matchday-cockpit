@@ -11,6 +11,12 @@
  * not-yet-existing field names, and the actions. The spreadsheet this replaces stores a total of
  * 16.7 while its own rows sum to 16.6, which is what a typed derived number looks like.
  *
+ * AND EVERY TOTAL HERE IS THE SUM OF ITS PARTS AS DISPLAYED. A row is its own spots/18/days at full
+ * precision and is rounded once to show it; anything that AGGREGATES rows — the three tiles, the
+ * twelve bars, a city row, the city chart, the footer — sums those displayed values. It costs up to
+ * a tenth against the full-precision figure and it buys the thing this page is for: a column a
+ * reader can add up, that adds up. See cityRollup in lib/fieldGoals for the measurement.
+ *
  * NO BANNERS, NO EXPLAINER COPY. Ryan: "i dont want any of the extra bullshit banners and warnings
  * and stuff". One line of prose survives — "18 spots = 1 match" beside the unit toggle — because
  * without it "18.5 daily matches" reads as 18.5 matches and it is not. A state that belongs on a
@@ -86,7 +92,9 @@ export default function FieldGoals2026() {
    * the dots run red, amber, green, dark in sequence, which alphabetical order scrambles. */
   const [sort, setSort] = useState<GoalSort>("gap");
   const [showDormant, setShowDormant] = useState(false);
-  const [grain, setGrain] = useState<Grain>("field");
+  /* CITIES ON LOAD. The sort default is untouched and still per the sort control — "by gap",
+     descending — which means the page opens on the city with the most to find. */
+  const [grain, setGrain] = useState<Grain>("city");
   /* SHUT AT REST. Seven cities open at once is the field table with extra steps. A Set rather than
    * one open key: opening Austin does not close Houston, and opening one opens nobody else. */
   const [openCities, setOpenCities] = useState<Set<string>>(() => new Set());
@@ -231,14 +239,30 @@ export default function FieldGoals2026() {
   const slots = useMemo(() => [...(data?.slots ?? [])], [data]);
   const all = useMemo(() => [...rows, ...slots], [rows, slots]);
 
-  /* THE CURRENT MONTH'S ACTUAL, THE DECEMBER TARGET AND THE GAP — summed at FULL PRECISION over the
-   * rows, and rounded once at render. A one-decimal sum of one-decimal rows is how the sheet ends
-   * up claiming 16.7 for rows that add to 16.6. */
+  /* ── A TOTAL IS THE SUM OF ITS PARTS AS DISPLAYED. ONE RULE, THE WHOLE PAGE. ─────────────────
+   * These three tiles USED TO SUM AT FULL PRECISION and round once at render, which is the purer
+   * arithmetic and was deliberate: a one-decimal sum of one-decimal rows is how the spreadsheet
+   * this page replaced ends up claiming 16.7 for rows that add to 16.6.
+   *
+   * IT STOPPED BEING TENABLE WHEN THE CITY ROWS STARTED FOOTING TO THEIR FIELDS. The city column
+   * now sums the field values AS DISPLAYED, so the "All MatchDay" footer read 16.7 while the tile
+   * directly above it read 16.5 — the same 0.2 disagreement the spreadsheet has, printed twice on
+   * one screen, which is precisely the fault this page exists to end. Purity in the tile bought a
+   * visible contradiction, and a reader adds up the column in front of them.
+   *
+   * SO EVERY TOTAL ON THIS PAGE IS NOW A SUM OF ROUNDED PARTS: these tiles, the year chart's bars,
+   * the city rows, the city chart and the footer. They agree with each other and with the rows
+   * beneath them by construction. The ROWS themselves are unchanged — each is still its own
+   * spots/18/days at full precision, rounded once for display. Only the aggregation moved.
+   *
+   * THE HEADLINE MOVES BY UP TO A TENTH as a result (measured 16.5 to 16.7 on 2026-09-29). That is
+   * the number the rows have always added up to. */
   const totals = useMemo(() => {
     const counted = all.filter(rowCountsTowardTotals);
-    const now = counted.reduce((s, r) => s + (r.monthly[cur]?.daily ?? 0), 0);
-    const goal = counted.reduce((s, r) => s + (r.targets[monthKey(data?.year ?? 2026, DEC)] ?? 0), 0);
-    return { now, goal, gap: goal - now };
+    const r1 = (v: number) => roundTo(v, 1);
+    const now = r1(counted.reduce((s, r) => s + r1(r.monthly[cur]?.daily ?? 0), 0));
+    const goal = r1(counted.reduce((s, r) => s + r1(r.targets[monthKey(data?.year ?? 2026, DEC)] ?? 0), 0));
+    return { now, goal, gap: r1(goal - now) };
   }, [all, cur, data?.year]);
 
   /* ONE ROLLUP, OVER THE SAME `all` THE TOTALS AND THE CHART USE, through the same predicate. A
@@ -249,6 +273,11 @@ export default function FieldGoals2026() {
     () => cityRollup(all, data?.year ?? 2026, cur, sort),
     [all, data?.year, cur, sort]);
   const cityTot = useMemo(() => cityTotals(cities), [cities]);
+  /* THE ROLLUP KEEPS ONLY WHAT IT NEEDS TO ADD UP — a CityFieldRow, not a page Row — so the drawer
+   * needs a way back to the row the write handlers take. `key` is the same string on both sides
+   * (cityRollup copies `r.key` straight onto the field line), which is what makes this a lookup and
+   * not a match. */
+  const rowByKey = useMemo(() => new Map(all.map((r) => [r.key, r])), [all]);
 
   const toggleCity = useCallback((city: string) => {
     setOpenCities((prev) => {
@@ -274,23 +303,24 @@ export default function FieldGoals2026() {
      * governs the table, the headline and every bar. The route still supplies the calendar facts
      * (how many days elapsed) because those are not row data. */
     const counted = all.filter(rowCountsTowardTotals);
-    const dailyFromRows = (i: number) => {
-      const spots = counted.reduce((sum, r) => sum + (r.monthly[i]?.spots ?? 0), 0);
-      const days = data.months[i].days;
-      return days > 0 ? spots / 18 / days : 0;
-    };
+    const r1 = (v: number) => roundTo(v, 1);
+    /* SUMMED FROM THE ROWS AS DISPLAYED, the same rule the tiles and the city column now use, so a
+     * bar and the tile beside it cannot disagree. This was `sum(spots)/18/days`, which is the same
+     * quantity at full precision and therefore 0.2 away from a tile that rounds its parts. */
+    const dailyFromRows = (i: number) =>
+      r1(counted.reduce((sum, r) => sum + r1(r.monthly[i]?.daily ?? 0), 0));
     return MONTH_LABELS.map((label, i) => {
       if (i < cur) return { label, value: dailyFromRows(i), state: "done" as const, days: data.months[i].days, of: data.months[i].daysInMonth };
       if (i === cur) return { label, value: dailyFromRows(i), state: "partial" as const, days: data.months[i].days, of: data.months[i].daysInMonth };
       const k = monthKey(data.year, i);
-      const value = all.filter(rowCountsTowardTotals).reduce((s, r) => {
+      const value = r1(all.filter(rowCountsTowardTotals).reduce((s, r) => {
         const typed = r.targets[k];
-        if (typed != null) return s + typed;
+        if (typed != null) return s + r1(typed);
         if (i === DEC) return s;
         const idx = RAMP_MONTHS.indexOf(i as 9 | 10);
         const v = idx >= 0 ? rampOf(r)[idx] : null;
-        return s + (v ?? 0);
-      }, 0);
+        return s + r1(v ?? 0);
+      }, 0));
       /* ON THE 1st A RAMP MONTH IS UNKNOWN, NOT LOW. The ramp is a straight line FROM the current
        * month's actual, and on day one there is no actual, so it would run from zero: measured on
        * the day-one render, October drew 9.5 and November 18.5 against the ~21 and ~25 they carry
@@ -366,6 +396,10 @@ export default function FieldGoals2026() {
           cities={cities} totals={cityTot} unit={unit} cur={cur} noCompletedDay={noCompletedDay}
           sort={sort} setSort={setSort} grain={grain} setGrain={setGrain}
           openCities={openCities} toggleCity={toggleCity}
+          rowByKey={rowByKey} year={data.year} busy={busy} revert={revert}
+          onTarget={setTarget} open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
+          onAddAction={addAction} onToggleAction={toggleAction} onRemoveAction={removeAction}
+          onNotCounted={setNotCounted} writeErr={writeErr}
         />
       ) : (
         <>
@@ -487,7 +521,10 @@ function YearChart({ months, unit, noCompletedDay }: { months: { label: string; 
 function GrainSeg({ grain, setGrain }: { grain: Grain; setGrain: (g: Grain) => void }) {
   return (
     <span className="ml-3 inline-flex overflow-hidden rounded-lg border" style={{ borderColor: "#D3DCD8" }} data-testid="grain">
-      {([["field", "Fields"], ["city", "Cities"]] as const).map(([k, label]) => (
+      {/* CITIES FIRST. Ryan: the toggle reads Cities, then Fields, and the page opens on Cities —
+          the per-city gap is the question this page gets opened to answer, and the field list is
+          where you go once you know which city to look at. */}
+      {([["city", "Cities"], ["field", "Fields"]] as const).map(([k, label]) => (
         <button key={k} type="button" data-testid={`grain-${k}`} data-g={k} aria-pressed={grain === k}
           onClick={() => setGrain(k)} className="px-2.5 py-1 text-[11.5px] font-bold"
           style={{ minHeight: 32, ...(grain === k ? { background: "#003326", color: "#fff" } : { background: "#fff", color: "#3C4F44" }) }}>
@@ -592,6 +629,8 @@ function CityChart({ cities, unit, cur, noCompletedDay }: { cities: CityRow[]; u
  * whose entire job is a gap. */
 function CityTable({
   cities, totals, unit, cur, noCompletedDay, sort, setSort, grain, setGrain, openCities, toggleCity,
+  rowByKey, year, busy, revert, onTarget, open, setOpen, draft, setDraft,
+  onAddAction, onToggleAction, onRemoveAction, onNotCounted, writeErr,
 }: {
   cities: CityRow[];
   totals: ReturnType<typeof cityTotals>;
@@ -601,6 +640,20 @@ function CityTable({
   sort: GoalSort; setSort: (s: GoalSort) => void;
   grain: Grain; setGrain: (g: Grain) => void;
   openCities: Set<string>; toggleCity: (city: string) => void;
+  /* ── EVERYTHING BELOW IS THE FIELD TABLE'S EDIT SURFACE, PASSED THROUGH UNCHANGED ───────────
+   * The drawer edits through the SAME handlers the field table edits through, so there is one
+   * save path on this page and a fix to it cannot reach one grain and miss the other.
+   * `rowByKey` is what turns a rollup line back into the page row those handlers expect. */
+  rowByKey: Map<string, Row>;
+  year: number; busy: boolean; revert: number;
+  onTarget: (r: Row, month: string, v: number | null) => void;
+  open: string | null; setOpen: (k: string | null) => void;
+  draft: Record<string, string>; setDraft: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  onAddAction: (r: Row, text: string) => void;
+  onToggleAction: (a: Action, rowKey: string) => void;
+  onRemoveAction: (a: Action, rowKey: string) => void;
+  onNotCounted: (r: Row, value: boolean) => void;
+  writeErr: { key: string; message: string } | null;
 }) {
   return (
     <>
@@ -671,7 +724,14 @@ function CityTable({
                       {c.noGoal > 0 && <>{" \u00b7 "}{c.noGoal} no goal</>}
                     </td>
                   </tr>
-                  {isOpen && c.fields.map((f) => <CityFieldTr key={f.key} f={f} city={c.city} unit={unit} noCompletedDay={noCompletedDay} />)}
+                  {isOpen && c.fields.map((f) => (
+                    <CityFieldTr key={f.key} f={f} city={c.city} row={rowByKey.get(f.key)}
+                      unit={unit} cur={cur} year={year} busy={busy} revert={revert}
+                      noCompletedDay={noCompletedDay} onTarget={onTarget}
+                      open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
+                      onAddAction={onAddAction} onToggleAction={onToggleAction}
+                      onRemoveAction={onRemoveAction} onNotCounted={onNotCounted} writeErr={writeErr} />
+                  ))}
                 </Fragmentish>
               );
             })}
@@ -701,48 +761,232 @@ function CityTable({
  * A NULL IS A DASH, NEVER A ZERO. A new field has no September because it does not exist, which is
  * not the same statement as a field that ran no matches; and a field with no December target reads
  * "no goal" in its own gap cell, which is the rule the field table already follows. */
-function CityFieldTr({ f, city, unit, noCompletedDay }: { f: CityFieldRow; city: string; unit: "day" | "week"; noCompletedDay?: boolean }) {
+/* A FIELD INSIDE A CITY, AND IT IS EDITABLE — the same inputs, the same save path, the same
+ * validation and the same drawer as the field table, because they are literally the same two
+ * components. Ryan: the drawer should edit "exactly the same way field rows are editable in the
+ * Fields view today".
+ *
+ * WHAT STAYS DIFFERENT IS STYLE ONLY: indented, lighter ink, a paler background, so a number under
+ * a city still reads as subordinate to it. The COLUMNS are the field table's columns, which is what
+ * lets a reader check the drawer against the row above it.
+ *
+ * A SAVE HERE REFRESHES THE WHOLE PAGE'S DATA through the same `saved()` → `reload()` the field
+ * table uses, so the city row and its GAP move the moment a field goal changes. There is no second
+ * write path and no local mutation to keep in step.
+ *
+ * A NULL IS A DASH, NEVER A ZERO. A new field has no September because it does not exist, which is
+ * not the same statement as a field that ran no matches. September is COMPUTED and stays read-only
+ * in both grains — it is what happened, not a thing anyone types. */
+function CityFieldTr({
+  f, city, row, unit, cur, year, busy, revert, noCompletedDay,
+  onTarget, open, setOpen, draft, setDraft,
+  onAddAction, onToggleAction, onRemoveAction, onNotCounted, writeErr,
+}: {
+  f: CityFieldRow; city: string;
+  /** The page row behind this drawer line. Absent only if the rollup outran the page's own rows,
+   *  in which case the line stays read-only rather than rendering inputs that cannot save. */
+  row: Row | undefined;
+  unit: "day" | "week"; cur: number; year: number; busy: boolean; revert: number;
+  noCompletedDay?: boolean;
+  onTarget: (r: Row, month: string, v: number | null) => void;
+  open: string | null; setOpen: (k: string | null) => void;
+  draft: Record<string, string>; setDraft: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  onAddAction: (r: Row, text: string) => void;
+  onToggleAction: (a: Action, rowKey: string) => void;
+  onRemoveAction: (a: Action, rowKey: string) => void;
+  onNotCounted: (r: Row, value: boolean) => void;
+  writeErr: { key: string; message: string } | null;
+}) {
   const dash = <span style={{ color: "#C3CEC8" }}>—</span>;
-  /* ON THE 1st every figure derived from the current month's actual is a dash, here too. A drawer
-   * whose rows read 0.0 under a city row reading "—" is the two disagreeing about the same fact. */
-  const cell = (v: number | null, derived: boolean, tid: string) => (
-    <td className="border-t px-3 py-1.5 text-right text-[12px] tabular-nums" data-testid={tid}
-      data-v={v == null ? "" : v.toFixed(4)}
-      style={{ borderColor: "#EDF2EF", background: "#FAFCFB", color: derived ? "#9AA8A1" : "#3A4D44", fontWeight: derived ? 500 : 600 }}>
-      {v == null || noCompletedDay ? dash : fmtUnit(v, unit)}
-    </td>
-  );
+  const TONE = { bg: "#FAFCFB", pad: "px-3 py-1.5" };
+  const tdStyle = { borderColor: "#EDF2EF", background: TONE.bg };
+  const out = row?.notCounted === true;
+  const openN = row ? row.actions.filter((a) => !a.done).length : 0;
+  const isOpen = row != null && open === row.key;
   return (
-    <tr data-testid="frow" data-c={city} data-f={f.name} data-kind={f.kind}>
-      <td className="border-t py-1.5 pl-9 pr-3 text-[12px]" style={{ borderColor: "#EDF2EF", background: "#FAFCFB", color: "#5C6F66" }}>
-        {f.name}
-        {f.kind === "slot" && (
-          <span data-testid="newtag" className="ml-1.5 rounded border px-1 text-[9px] font-extrabold tracking-wide"
-            style={{ borderColor: CHART_HUE, color: CHART_HUE }}>NEW</span>
-        )}
+    <>
+      <tr data-testid="frow" data-c={city} data-f={f.name} data-kind={f.kind}
+        data-editable={row ? "1" : "0"} style={out ? { opacity: 0.55 } : undefined}>
+        <td className="border-t py-1.5 pl-9 pr-3 text-[12px]" style={{ ...tdStyle, color: "#5C6F66" }}>
+          {f.name}
+          {f.kind === "slot" && (
+            <span data-testid="newtag" className="ml-1.5 rounded border px-1 text-[9px] font-extrabold tracking-wide"
+              style={{ borderColor: CHART_HUE, color: CHART_HUE }}>NEW</span>
+          )}
+          {/* THE MARK STAYS VISIBLE HERE TOO. An excluded field nobody can see is a decision nobody
+              reviews, and this drawer is now a place the decision can be made. */}
+          {out && <span className="ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold" data-testid="fg-notcounted"
+            style={{ background: "#EEF3F0", color: "#5C6F66" }}>not counted</span>}
+        </td>
+        {/* THE PROGRESS COLUMN STAYS EMPTY in the drawer: the city row above already carries one,
+            and a second bar at a second scale in the same column reads as the same measure. */}
+        <td className="border-t" style={tdStyle} />
+        <td className="border-t px-3 py-1.5 text-right text-[12px] tabular-nums" data-testid="fsep"
+          data-v={f.sep == null ? "" : f.sep.toFixed(4)}
+          style={{ ...tdStyle, color: "#3A4D44", fontWeight: 600 }}>
+          {f.sep == null || noCompletedDay ? dash : fmtUnit(f.sep, unit)}
+        </td>
+        {row
+          ? <GoalCells r={row} year={year} cur={cur} unit={unit} busy={busy} revert={revert}
+              noCompletedDay={noCompletedDay} onTarget={onTarget} tone={TONE} />
+          : <>
+              {/* NO PAGE ROW BEHIND THIS LINE, so it shows its numbers and no inputs rather than
+                  controls that would look live and save nothing. */}
+              <td className="border-t px-3 py-1.5 text-right text-[12px] tabular-nums" data-testid="foct"
+                data-v={f.oct == null ? "" : f.oct.toFixed(4)} style={{ ...tdStyle, color: "#9AA8A1", fontWeight: 500 }}>
+                {f.oct == null || noCompletedDay ? dash : fmtUnit(f.oct, unit)}</td>
+              <td className="border-t px-3 py-1.5 text-right text-[12px] tabular-nums" data-testid="fnov"
+                data-v={f.nov == null ? "" : f.nov.toFixed(4)} style={{ ...tdStyle, color: "#9AA8A1", fontWeight: 500 }}>
+                {f.nov == null || noCompletedDay ? dash : fmtUnit(f.nov, unit)}</td>
+              <td className="border-t px-3 py-1.5 text-right text-[12px] tabular-nums" data-testid="fdec"
+                data-v={f.dec == null ? "" : f.dec.toFixed(4)} style={{ ...tdStyle, color: "#3A4D44", fontWeight: 600 }}>
+                {f.dec == null ? dash : fmtUnit(f.dec, unit)}</td>
+              <td className="border-t px-3 py-1.5 text-right text-[12px] font-bold tabular-nums" data-testid="fgap" style={tdStyle}>
+                {f.gapDaily == null
+                  ? <span data-testid="nogoal" className="text-[11px] font-normal italic" style={{ color: "#9AA8A1" }}>no goal</span>
+                  : noCompletedDay ? dash
+                  : <span style={{ color: roundTo(f.gapDaily, 1) < 0 ? "#12694A" : "#003326" }}>{fmtSigned(f.gapDaily, unit)}</span>}
+              </td>
+            </>}
+        {/* THE LAST COLUMN IS "FIELDS" ON A CITY ROW AND ACTIONS ON A FIELD ROW, which is what it
+            already is in the field table. Clicking it opens the same drawer. */}
+        <td className="border-t px-3 py-1.5 text-[11px]" style={tdStyle} data-testid="fg-action-count">
+          {row
+            ? <button type="button" data-testid="frow-open" aria-expanded={isOpen}
+                onClick={() => setOpen(isOpen ? null : row.key)}
+                className="rounded-full px-2 py-0.5 font-bold"
+                style={{ background: "#EEF3F0", color: "#5C6F66" }}>
+                {row.actions.length ? `${openN} open` : "edit"}
+              </button>
+            : <span style={{ color: "#9AA8A1" }}>—</span>}
+        </td>
+      </tr>
+      {/* IN PLACE, NOT INSTEAD OF THE PAGE, exactly as the field table does it. */}
+      {row && writeErr?.key === row.key && (
+        <tr data-testid="fg-write-error" data-key={row.key}>
+          <td colSpan={8} className="px-3 pb-2 text-[12px]" style={{ color: "#A8341F", background: "#FDF3EF" }}>
+            {writeErr.message}
+          </td>
+        </tr>
+      )}
+      {row && isOpen && (
+        <tr data-testid="fg-actions-row"><td colSpan={8} className="px-3 pb-3 pl-9" style={{ background: TONE.bg }}>
+          <ActionsDrawer r={row} busy={busy} draft={draft} setDraft={setDraft}
+            onAddAction={onAddAction} onToggleAction={onToggleAction}
+            onRemoveAction={onRemoveAction} onNotCounted={onNotCounted} />
+        </td></tr>
+      )}
+    </>
+  );
+}
+
+/* ── THE EDITABLE GOAL CELLS, SHARED BY BOTH GRAINS ───────────────────────────────────────────
+ * Oct, Nov, Dec and the gap that falls out of them. EXTRACTED rather than reimplemented: the city
+ * drawer used to render four read-only <td>s that happened to look like these, so a field was
+ * editable in one view and dead in the other, and any fix to validation or to the suggested-goal
+ * rule had to be made twice or silently made once. One component, one `onTarget`, one GoalInput.
+ *
+ * IT RENDERS <td>s AND NOTHING ELSE, so the caller owns the <tr> and its own padding. The city
+ * drawer is indented and lighter; the field table is not. That is a style the row decides, which
+ * is why `tone` is a prop rather than a second copy of the markup. */
+function GoalCells({
+  r, year, cur, unit, busy, revert, noCompletedDay, onTarget, tone,
+}: {
+  r: Row; year: number; cur: number; unit: "day" | "week"; busy: boolean; revert: number;
+  noCompletedDay?: boolean;
+  onTarget: (r: Row, month: string, v: number | null) => void;
+  /** The city drawer's subordinate styling. Undefined in the field table. */
+  tone?: { bg: string; pad: string };
+}) {
+  const decKey = monthKey(year, DEC);
+  const sep = r.monthly[cur]?.daily ?? 0;
+  const dec = r.targets[decKey] ?? null;
+  const noGoal = dec == null;
+  const gap = noGoal ? 0 : dec - sep;
+  // No completed day means no actual to ramp FROM, so there is no suggestion to make.
+  const suggestions = noCompletedDay ? [null, null, null] : ramp(sep, dec);
+  const cls = `border-t text-right ${tone ? `${tone.pad}` : "px-3 py-2"}`;
+  const st = { borderColor: "#EDF2EF", ...(tone ? { background: tone.bg } : {}) };
+  return (
+    <>
+      {RAMP_MONTHS.map((mi, idx) => {
+        const k = monthKey(year, mi);
+        const typed = r.targets[k];
+        const shown = typed ?? suggestions[idx];
+        return (
+          <td key={k} className={cls} style={st}>
+            <GoalInput value={shown == null ? "" : fmtUnit(shown, unit)} suggested={typed == null}
+              revert={revert} testId={`fg-goal-${MONTH_LABELS[mi]}`} disabled={busy}
+              title={typed != null ? "set" : noGoal ? "no December goal to ramp to" : "suggested by the ramp from this month to December"}
+              onCommit={(v) => onTarget(r, k, v == null ? null : unit === "day" ? v : v / 7)} />
+          </td>
+        );
+      })}
+      <td className={cls} style={st}>
+        <GoalInput value={dec == null ? "" : fmtUnit(dec, unit)} suggested={false} placeholder="set"
+          revert={revert} testId="fg-goal-Dec" disabled={busy} title="set"
+          onCommit={(v) => onTarget(r, decKey, v == null ? null : unit === "day" ? v : v / 7)} />
       </td>
-      <td className="border-t" style={{ borderColor: "#EDF2EF", background: "#FAFCFB" }} />
-      <td className="border-t px-3 py-1.5 text-right text-[12px] tabular-nums" data-testid="fsep"
-        data-v={f.sep == null ? "" : f.sep.toFixed(4)}
-        style={{ borderColor: "#EDF2EF", background: "#FAFCFB", color: "#3A4D44", fontWeight: 600 }}>
-        {f.sep == null || noCompletedDay ? dash : fmtUnit(f.sep, unit)}
+      <td className={`${cls} text-[13px] font-extrabold tabular-nums`} style={st} data-testid="fg-gap-cell">
+        {noGoal
+          ? <span className="text-[11px] italic font-normal" style={{ color: "#9AA8A1" }}>no goal</span>
+          : noCompletedDay
+          /* A GAP IS A GOAL MINUS AN ACTUAL. With no actual there is no gap, and printing the whole
+             December goal as though it were one would read as the worst day of the year, every
+             month, on the 1st. */
+          ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span>
+          : /* SIGN-SAFE. ATH Pearland sits 0.004 above goal, which rounded to one decimal and
+               printed with its sign came out "-0.0". fmtSigned normalises the rounded value, so the
+               number and the dot agree. */
+            <span style={{ color: roundTo(gap, 1) < 0 ? "#12694A" : "#003326" }}>{fmtSigned(gap, unit)}</span>}
       </td>
-      {cell(f.oct, true, "foct")}
-      {cell(f.nov, true, "fnov")}
-      <td className="border-t px-3 py-1.5 text-right text-[12px] tabular-nums" data-testid="fdec"
-        data-v={f.dec == null ? "" : f.dec.toFixed(4)}
-        style={{ borderColor: "#EDF2EF", background: "#FAFCFB", color: "#3A4D44", fontWeight: 600 }}>
-        {f.dec == null ? dash : fmtUnit(f.dec, unit)}
-      </td>
-      <td className="border-t px-3 py-1.5 text-right text-[12px] font-bold tabular-nums" data-testid="fgap"
-        style={{ borderColor: "#EDF2EF", background: "#FAFCFB" }}>
-        {f.gapDaily == null
-          ? <span data-testid="nogoal" className="text-[11px] font-normal italic" style={{ color: "#9AA8A1" }}>no goal</span>
-          : noCompletedDay ? dash
-          : <span style={{ color: roundTo(f.gapDaily, 1) < 0 ? "#12694A" : "#003326" }}>{fmtSigned(f.gapDaily, unit)}</span>}
-      </td>
-      <td className="border-t" style={{ borderColor: "#EDF2EF", background: "#FAFCFB" }} />
-    </tr>
+    </>
+  );
+}
+
+/* ── THE DRAWER, LIKEWISE SHARED ──────────────────────────────────────────────────────────────
+ * "Do not count this field" and the action list. Same component in both grains, so the city view
+ * is not a second, quietly diverging copy of the one control that removes a field from every
+ * total on the page. */
+function ActionsDrawer({
+  r, busy, draft, setDraft, onAddAction, onToggleAction, onRemoveAction, onNotCounted,
+}: {
+  r: Row; busy: boolean;
+  draft: Record<string, string>; setDraft: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  onAddAction: (r: Row, text: string) => void;
+  onToggleAction: (a: Action, rowKey: string) => void;
+  onRemoveAction: (a: Action, rowKey: string) => void;
+  onNotCounted: (r: Row, value: boolean) => void;
+}) {
+  const out = r.notCounted === true;
+  return (
+    <div className="flex flex-col gap-1.5 pt-1">
+      {/* REVERSIBLE IN PLACE, from the same panel that holds the actions. */}
+      <button type="button" data-testid="fg-notcounted-toggle" disabled={busy}
+        onClick={() => onNotCounted(r, !out)}
+        className="self-start rounded-md border px-2.5 py-1 text-[11.5px] font-bold"
+        style={{ borderColor: "#D3DCD8", background: "#fff", color: out ? "#12694A" : "#8A5A12" }}>
+        {out ? "Count this field again" : "Do not count this field"}
+      </button>
+      {r.actions.map((a) => (
+        <div key={a.id} className="flex items-center gap-2 text-[12.5px]" style={{ color: "#3A4D44" }} data-testid="fg-action">
+          <input type="checkbox" checked={a.done} disabled={busy} onChange={() => onToggleAction(a, r.key)}
+            className="h-3.5 w-3.5 accent-[#12694A]" aria-label={a.text} />
+          <span className={`min-w-0 flex-1 ${a.done ? "line-through opacity-60" : ""}`}>{a.text}</span>
+          <button type="button" aria-label="Remove action" disabled={busy} onClick={() => onRemoveAction(a, r.key)}
+            className="px-1 text-[14px]" style={{ color: "#9AA8A1" }}>×</button>
+        </div>
+      ))}
+      <div className="mt-0.5 flex gap-2">
+        <input data-testid="fg-action-input" placeholder="Add an action" disabled={busy}
+          value={draft[r.key] ?? ""} onChange={(e) => setDraft((d) => ({ ...d, [r.key]: e.target.value }))}
+          onKeyDown={(e) => { if (e.key === "Enter") { onAddAction(r, draft[r.key] ?? ""); setDraft((d) => ({ ...d, [r.key]: "" })); } }}
+          className="max-w-[460px] flex-1 rounded-md border border-dashed bg-white px-2 py-1.5 text-[12.5px]" style={{ borderColor: "#D3DCD8" }} />
+        <button type="button" data-testid="fg-action-add" disabled={busy}
+          onClick={() => { onAddAction(r, draft[r.key] ?? ""); setDraft((d) => ({ ...d, [r.key]: "" })); }}
+          className="rounded-md px-3 text-[12px] font-bold text-white" style={{ background: "#003326" }}>Add</button>
+      </div>
+    </div>
   );
 }
 
@@ -827,8 +1071,6 @@ function GoalTable({
               const noGoal = dec == null;
               const gap = noGoal ? 0 : dec - sep;
               const over = !noGoal && gap < 0;
-              // No completed day means no actual to ramp FROM, so there is no suggestion to make.
-              const suggestions = noCompletedDay ? [null, null, null] : ramp(sep, dec);
               const openN = r.actions.filter((a) => !a.done).length;
               const out = r.notCounted === true;   // deliberate, stored, and out of every total
               const dormantHere = r.kind !== "slot" && isDormantIn(r, cur);
@@ -877,38 +1119,10 @@ function GoalTable({
                     </td>
                     <td className="border-t px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#EDF2EF" }} data-testid="fg-actual">
                       {noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(sep, unit)}</td>
-                    {RAMP_MONTHS.map((mi, idx) => {
-                      const k = monthKey(year, mi);
-                      const typed = r.targets[k];
-                      const sugg = suggestions[idx];
-                      const shown = typed ?? sugg;
-                      return (
-                        <td key={k} className="border-t px-3 py-2 text-right" style={{ borderColor: "#EDF2EF" }}>
-                          <GoalInput value={shown == null ? "" : fmtUnit(shown, unit)} suggested={typed == null}
-                            revert={revert} testId={`fg-goal-${MONTH_LABELS[mi]}`} disabled={busy}
-                            title={typed != null ? "set" : noGoal ? "no December goal to ramp to" : "suggested by the ramp from this month to December"}
-                            onCommit={(v) => onTarget(r, k, v == null ? null : unit === "day" ? v : v / 7)} />
-                        </td>
-                      );
-                    })}
-                    <td className="border-t px-3 py-2 text-right" style={{ borderColor: "#EDF2EF" }}>
-                      <GoalInput value={dec == null ? "" : fmtUnit(dec, unit)} suggested={false} placeholder="set"
-                        revert={revert} testId="fg-goal-Dec" disabled={busy} title="set"
-                        onCommit={(v) => onTarget(r, decKey, v == null ? null : unit === "day" ? v : v / 7)} />
-                    </td>
-                    <td className="border-t px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#EDF2EF" }} data-testid="fg-gap-cell">
-                      {noGoal
-                        ? <span className="text-[11px] italic font-normal" style={{ color: "#9AA8A1" }}>no goal</span>
-                        : noCompletedDay
-                        /* A GAP IS A GOAL MINUS AN ACTUAL. With no actual there is no gap, and
-                           printing the whole December goal as though it were one would read as the
-                           worst day of the year, every month, on the 1st. */
-                        ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span>
-                        : /* SIGN-SAFE. ATH Pearland sits 0.004 above goal, which rounded to one
-                             decimal and printed with its sign came out "-0.0". fmtSigned normalises
-                             the rounded value, so the number and the dot agree. */
-                          <span style={{ color: roundTo(gap, 1) < 0 ? "#12694A" : "#003326" }}>{fmtSigned(gap, unit)}</span>}
-                    </td>
+                    {/* THE SAME FOUR CELLS THE CITY DRAWER RENDERS. One component, so a field is
+                        editable identically in both grains. */}
+                    <GoalCells r={r} year={year} cur={cur} unit={unit} busy={busy} revert={revert}
+                      noCompletedDay={noCompletedDay} onTarget={onTarget} />
                     <td className="border-t px-3 py-2 text-[11px]" style={{ borderColor: "#EDF2EF" }} data-testid="fg-action-count">
                       {r.actions.length
                         ? <span className="rounded-full px-2 py-0.5 font-bold" style={{ background: "#EEF3F0", color: "#5C6F66" }}>{openN} open</span>
@@ -925,33 +1139,9 @@ function GoalTable({
                   )}
                   {open === r.key && (
                     <tr data-testid="fg-actions-row"><td colSpan={8} className="px-3 pb-3" style={{ background: "#FAFCFB" }}>
-                      <div className="flex flex-col gap-1.5 pt-1">
-                        {/* REVERSIBLE IN PLACE, from the same panel that holds the actions. */}
-                        <button type="button" data-testid="fg-notcounted-toggle" disabled={busy}
-                          onClick={() => onNotCounted(r, !out)}
-                          className="self-start rounded-md border px-2.5 py-1 text-[11.5px] font-bold"
-                          style={{ borderColor: "#D3DCD8", background: "#fff", color: out ? "#12694A" : "#8A5A12" }}>
-                          {out ? "Count this field again" : "Do not count this field"}
-                        </button>
-                        {r.actions.map((a) => (
-                          <div key={a.id} className="flex items-center gap-2 text-[12.5px]" style={{ color: "#3A4D44" }} data-testid="fg-action">
-                            <input type="checkbox" checked={a.done} disabled={busy} onChange={() => onToggleAction(a, r.key)}
-                              className="h-3.5 w-3.5 accent-[#12694A]" aria-label={a.text} />
-                            <span className={`min-w-0 flex-1 ${a.done ? "line-through opacity-60" : ""}`}>{a.text}</span>
-                            <button type="button" aria-label="Remove action" disabled={busy} onClick={() => onRemoveAction(a, r.key)}
-                              className="px-1 text-[14px]" style={{ color: "#9AA8A1" }}>×</button>
-                          </div>
-                        ))}
-                        <div className="mt-0.5 flex gap-2">
-                          <input data-testid="fg-action-input" placeholder="Add an action" disabled={busy}
-                            value={draft[r.key] ?? ""} onChange={(e) => setDraft((d) => ({ ...d, [r.key]: e.target.value }))}
-                            onKeyDown={(e) => { if (e.key === "Enter") { onAddAction(r, draft[r.key] ?? ""); setDraft((d) => ({ ...d, [r.key]: "" })); } }}
-                            className="max-w-[460px] flex-1 rounded-md border border-dashed bg-white px-2 py-1.5 text-[12.5px]" style={{ borderColor: "#D3DCD8" }} />
-                          <button type="button" data-testid="fg-action-add" disabled={busy}
-                            onClick={() => { onAddAction(r, draft[r.key] ?? ""); setDraft((d) => ({ ...d, [r.key]: "" })); }}
-                            className="rounded-md px-3 text-[12px] font-bold text-white" style={{ background: "#003326" }}>Add</button>
-                        </div>
-                      </div>
+                      <ActionsDrawer r={r} busy={busy} draft={draft} setDraft={setDraft}
+                        onAddAction={onAddAction} onToggleAction={onToggleAction}
+                        onRemoveAction={onRemoveAction} onNotCounted={onNotCounted} />
                     </td></tr>
                   )}
                 </Fragmentish>

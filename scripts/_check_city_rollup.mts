@@ -118,8 +118,22 @@ const chartMonth = (i: 9 | 10) => counted.reduce((s, r) => {
   return s + (ramp(sep, dec)[i - 9] ?? 0);
 }, 0);
 const chartOct = chartMonth(9), chartNov = chartMonth(10);
-ok(Math.abs(tot.oct - chartOct) < 1e-9, `the city Oct ${tot.oct.toFixed(2)} equals the year chart's Oct ${chartOct.toFixed(2)}`);
-ok(Math.abs(tot.nov - chartNov) < 1e-9, `  and Nov ${tot.nov.toFixed(2)} equals ${chartNov.toFixed(2)}`);
+/* TOLERANCE, NOT EQUALITY, AND THE REASON IS DELIBERATE. The city columns are now summed from the
+ * field values AS DISPLAYED (one decimal each) so the drawer adds up to the row above it; the year
+ * chart still sums the rows at FULL precision, because nothing sits directly beneath it to add up.
+ * The two therefore differ by the discarded halves and must not be asserted equal. 0.05 is a tenth
+ * of a displayed unit — wide enough for the rounding, far too narrow for a real divergence. */
+/* A BAND, NOT EQUALITY, AND THE BAND IS CHOSEN TO STILL DISCRIMINATE. The city columns are now
+ * summed from the field values AS DISPLAYED so the drawer adds up to the row above it; the year
+ * chart sums the rows at FULL precision, because nothing sits directly beneath it to add up. The
+ * two differ by the discarded halves — measured 0.09 on Oct across 35 fields.
+ *
+ * 0.5 IS NOT A SHRUG: the CONTROL below computes the WRONG construction (ramping the aggregate
+ * instead of ramping each row) and it lands 0.8 away, so this band separates the right answer from
+ * the wrong one with room to spare. The exact-footing guarantee is item 3, which is exact. */
+const OCT_BAND = 0.5;
+ok(Math.abs(tot.oct - chartOct) < OCT_BAND, `the city Oct ${tot.oct.toFixed(2)} matches the year chart's Oct ${chartOct.toFixed(2)} (rounding drift ${Math.abs(tot.oct - chartOct).toFixed(2)})`);
+ok(Math.abs(tot.nov - chartNov) < OCT_BAND, `  and Nov ${tot.nov.toFixed(2)} matches ${chartNov.toFixed(2)} (drift ${Math.abs(tot.nov - chartNov).toFixed(2)})`);
 // CONTROL: the aggregate ramp §2 proposed is a DIFFERENT number on this data, which is the reason
 // for the construction above. If these ever coincide the control has stopped controlling.
 const aggOct = tSep + (tDec - tSep) / 3;
@@ -127,16 +141,25 @@ ok(Math.abs(aggOct - chartOct) > 0.02,
   `  CONTROL: ramping the aggregate gives ${aggOct.toFixed(2)}, ${Math.abs(aggOct - chartOct).toFixed(2)} away, so the construction is not a free choice`);
 
 // ── 3. EVERY CITY'S DRAWER SUMS TO THE CITY ROW ────────────────────────────────────────────────
+/* ── AS DISPLAYED, WHICH IS THE WHOLE POINT ──────────────────────────────────────────────────
+ * This used to sum the drawer at FULL precision and compare at 1e-9, which proved the drawer and
+ * the row came from the same numbers but NOT that they look like they do. Austin printed 6.1 over
+ * fields printing 6.2 and passed this check every time. The sum is now over the ROUNDED field
+ * values — what is actually on the screen — and the comparison is exact, because both sides are
+ * one-decimal numbers. */
+const r1 = (v: number) => Math.round(v * 10) / 10;
+const sumShown = (xs: (number | null)[]) => r1(xs.reduce<number>((a, v) => a + r1(v ?? 0), 0));
 let drawerOk = 0;
 for (const c of cities) {
-  const fSep = c.fields.reduce((s, f) => s + (f.sep ?? 0), 0);
-  const fDec = c.fields.reduce((s, f) => s + (f.dec ?? 0), 0);
-  const fOct = c.fields.reduce((s, f) => s + (f.oct ?? 0), 0);
-  const good = Math.abs(fSep - c.sep) < 1e-9 && Math.abs(fDec - c.dec) < 1e-9 && Math.abs(fOct - c.oct) < 1e-9;
+  const fSep = sumShown(c.fields.map((f) => f.sep));
+  const fDec = sumShown(c.fields.map((f) => f.dec));
+  const fOct = sumShown(c.fields.map((f) => f.oct));
+  const fGap = sumShown(c.fields.map((f) => f.gapDaily));
+  const good = fSep === r1(c.sep) && fDec === r1(c.dec) && fOct === r1(c.oct) && fGap === r1(c.gapDaily);
   if (good) drawerOk++;
-  else console.log(`   MISMATCH ${c.city}: fields Sep ${fSep.toFixed(3)} vs row ${c.sep.toFixed(3)}, Dec ${fDec.toFixed(3)} vs ${c.dec.toFixed(3)}, Oct ${fOct.toFixed(3)} vs ${c.oct.toFixed(3)}`);
+  else console.log(`   MISMATCH ${c.city}: fields Sep ${fSep.toFixed(1)} vs row ${r1(c.sep).toFixed(1)}, Dec ${fDec.toFixed(1)} vs ${r1(c.dec).toFixed(1)}, Oct ${fOct.toFixed(1)} vs ${r1(c.oct).toFixed(1)}, Gap ${fGap.toFixed(1)} vs ${r1(c.gapDaily).toFixed(1)}`);
 }
-ok(drawerOk === cities.length, `all ${cities.length} drawers sum to their city row on Sep, Oct and Dec (${drawerOk} of ${cities.length})`);
+ok(drawerOk === cities.length, `all ${cities.length} drawers add up to their city row AS DISPLAYED on Sep, Oct, Dec and Gap (${drawerOk} of ${cities.length})`);
 const biggest = cities.reduce((a, c) => (c.fields.length > a.fields.length ? c : a));
 ok(biggest.fields.length >= 5, `  CONTROL: the largest drawer holds ${biggest.fields.length} fields (${biggest.city}), so the sum is not over an empty list`);
 
@@ -163,7 +186,13 @@ ok(cities.filter((c) => !c.hasCity).length <= 1, `  CONTROL: at most one bucket,
 // ── 6. FIELD MODE IS UNCHANGED: one field's figures read the same in both grains ────────────────
 const probe = counted.find((r) => r.kind === "existing" && (r.monthly[cur]?.daily ?? 0) > 0.5 && r.targets[monthKey(year, 11)] != null);
 if (probe) {
-  const inField = { sep: probe.monthly[cur].daily, dec: probe.targets[monthKey(year, 11)], oct: ramp(probe.monthly[cur].daily, probe.targets[monthKey(year, 11)])[0] };
+  /* OCTOBER IS `typed ?? ramp`, NOT `ramp`. This compared the city drawer against the RAW ramp and
+   * so failed on any field with a typed October target — ATH Pearland has one, and this assertion
+   * had been red on that account rather than on anything being wrong. The rule here is now the rule
+   * the component uses, which is what "reads the same in both grains" was always meant to check. */
+  const octTyped = probe.targets[monthKey(year, 9)];
+  const inField = { sep: probe.monthly[cur].daily, dec: probe.targets[monthKey(year, 11)],
+    oct: octTyped ?? ramp(probe.monthly[cur].daily, probe.targets[monthKey(year, 11)])[0] };
   const inCity = cities.flatMap((c) => c.fields).find((f) => f.key === probe.key)!;
   ok(Math.abs((inCity.sep ?? -1) - inField.sep) < 1e-9 && Math.abs((inCity.dec ?? -1) - inField.dec) < 1e-9 && Math.abs((inCity.oct ?? -1) - (inField.oct ?? -1)) < 1e-9,
     `${probe.name} reads the same in both grains: Sep ${inField.sep.toFixed(2)} Oct ${(inField.oct ?? 0).toFixed(2)} Dec ${inField.dec.toFixed(2)}`);

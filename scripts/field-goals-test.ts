@@ -6,9 +6,10 @@
  * rounding applied before the sum. Every assertion here is about a way that can happen again.
  */
 import {
-  SPOTS_PER_MATCH, band, bandForDisplay, countsTowardGoals, dailyAverage, daysElapsed, fmtSigned,
-  fmtUnit, isDormantIn, matchMonthIndex, monthKey, ramp, rowCountsTowardTotals, rowKeyForField,
-  roundTo, sortGoalRows, sumTargets, weekly,
+  SPOTS_PER_MATCH, band, bandForDisplay, countsTowardGoals, cityRollup, cityTotals, dailyAverage,
+  daysElapsed, fmtSigned, fmtUnit, isDormantIn, matchMonthIndex, monthKey, ramp,
+  rowCountsTowardTotals, rowKeyForField, roundTo, sortGoalRows, sumTargets, weekly,
+  type RollupRow,
 } from "@/lib/fieldGoals";
 
 let pass = 0, fail = 0;
@@ -169,6 +170,71 @@ is("an unmapped field keys on itself", rowKeyForField(1684, venueOf), "f1684");
   const tied = [{ name: "Zulu", city: "X", gapDaily: 0.5 }, { name: "Alpha", city: "X", gapDaily: 0.5 }];
   is("ties break on the name", sortGoalRows(tied, "gap").map((r) => r.name), ["Alpha", "Zulu"]);
   is("…and the same order comes back a second time", sortGoalRows(sortGoalRows(tied, "gap"), "gap").map((r) => r.name), ["Alpha", "Zulu"]);
+}
+
+console.log("\n— a city equals the sum of the fields AS DISPLAYED —");
+{
+  /* ── THE BUG THIS PINS ────────────────────────────────────────────────────────────────────
+   * Austin printed 6.1 for September over ten field rows that read 0.1, 0.4, 2.2, 0.2, 0.2, 1.2,
+   * 0.0, 0.5, 1.1, 0.3 — which add to 6.2 — and a GAP of 3.8 over field gaps adding to 3.7. The
+   * city summed at full precision and rounded once; each field rounded on its own. Both are
+   * defensible and only one can be on screen, because the reader adds up the column in front of
+   * them.
+   *
+   * THE FIXTURE IS BUILT TO REPRODUCE IT rather than to pass. Ten fields whose raw dailies each
+   * sit just under a rounding boundary: full-precision they sum below the rounded sum, so a
+   * regression to the old rule changes the answer here and the assertion fails. */
+  const year = 2026, cur = 8, DEC_I = 11;
+  const decKey = monthKey(year, DEC_I);
+  // Raw dailies that each round UP, so sum-of-rounded > rounded-of-sum.
+  const RAW = [0.1499, 0.1499, 0.1499, 0.1499, 0.1499, 0.1499, 0.1499, 0.1499, 0.1499, 0.1499];
+  const mk = (i: number, daily: number, dec: number | null): RollupRow => ({
+    key: `f${i}`, kind: "existing", name: `Field ${i}`, city: "Austin",
+    monthly: Array.from({ length: 12 }, (_, m) => ({ daily: m === cur ? daily : 0 })),
+    targets: dec == null ? {} : { [decKey]: dec },
+  });
+  const rows = RAW.map((d, i) => mk(i, d, 0.4499));
+  const [austin] = cityRollup(rows, year, cur, "gap");
+
+  const shownSep = RAW.map((d) => roundTo(d, 1));           // what each field row prints
+  const sumShownSep = roundTo(shownSep.reduce((a, b) => a + b, 0), 1);
+  is("the city September equals the sum of the field Septembers as printed", austin.sep, sumShownSep);
+  /* THE CONTROL THAT MAKES THIS A TEST. Under the OLD rule the city would print the rounded
+   * full-precision sum, which on this fixture is a different number. If these ever coincide the
+   * fixture has stopped exercising the bug. */
+  const oldWay = roundTo(RAW.reduce((a, b) => a + b, 0), 1);
+  yes("  CONTROL: the old full-precision rule gives a different answer on this fixture",
+    oldWay !== sumShownSep, `both ${sumShownSep}`);
+
+  const shownGap = rows.map(() => roundTo(0.4499 - 0.1499, 1));
+  is("the city GAP equals the sum of the field GAPs as printed",
+    austin.gapDaily, roundTo(shownGap.reduce((a, b) => a + b, 0), 1));
+  is("  and Dec likewise", austin.dec, roundTo(rows.map(() => roundTo(0.4499, 1)).reduce((a, b) => a + b, 0), 1));
+
+  /* A NEGATIVE GAP STILL COUNTS. Onion Creek sits at -0.3 — already past its goal — and dropping
+   * it would overstate the city's remaining work by exactly that much. */
+  const withOver = cityRollup([...rows, mk(99, 1.0, 0.7)], year, cur, "gap")[0];
+  is("a field already past its goal pulls the city GAP down",
+    withOver.gapDaily, roundTo(shownGap.reduce((a, b) => a + b, 0) + roundTo(0.7 - 1.0, 1), 1));
+
+  /* A NEW FIELD WITH NO DATA CONTRIBUTES NOTHING, which is what it did before this change. Its
+   * September is null — it does not exist yet, which is not the same as having run no matches. */
+  const withSlot = cityRollup([...rows, { key: "s1", kind: "slot", name: "New Field - ", city: "Austin",
+    monthly: Array.from({ length: 12 }, () => ({ daily: 0 })), targets: {} }], year, cur, "gap")[0];
+  is("a new field with no goal leaves the city September untouched", withSlot.sep, austin.sep);
+  is("  …and its GAP untouched", withSlot.gapDaily, austin.gapDaily);
+  is("  …and it carries a null September so it renders a dash",
+    withSlot.fields.find((f) => f.kind === "slot")?.sep, null);
+
+  /* THE FOOTER IS THE SUM OF THE COLUMN ABOVE IT, with the same guarantee one level up. */
+  const many = cityRollup([...rows, mk(50, 0.1499, 0.4499), { key: "h1", kind: "existing", name: "H", city: "Houston",
+    monthly: Array.from({ length: 12 }, (_, m) => ({ daily: m === cur ? 0.1499 : 0 })), targets: { [decKey]: 0.4499 } }], year, cur, "gap");
+  const tot = cityTotals(many);
+  is("the footer September equals the sum of the city Septembers",
+    tot.sep, roundTo(many.reduce((a, c) => a + c.sep, 0), 1));
+  is("  and the footer GAP the sum of the city GAPs",
+    tot.gapDaily, roundTo(many.reduce((a, c) => a + c.gapDaily, 0), 1));
+  yes("  CONTROL: more than one city, so the footer is not one row wearing a total", many.length > 1);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

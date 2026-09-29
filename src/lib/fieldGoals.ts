@@ -390,8 +390,40 @@ export function cityRollup(rows: RollupRow[], year: number, currentMonth: number
     });
   }
 
+  /* ── A CITY IS THE SUM OF THE FIELDS AS DISPLAYED, NOT OF THE FIELDS AS STORED ──────────────
+   * THE BUG: Austin printed 6.1 for September over field rows that read 0.1, 0.4, 2.2, 0.2, 0.2,
+   * 1.2, 0.0, 0.5, 1.1, 0.3 — which add to 6.2. Its GAP printed 3.8 over field gaps adding to 3.7.
+   * Nothing was miscomputed: the city accumulated at FULL precision and rounded once, each field
+   * rounded on its own, and the two answers differ by the discarded halves. Both were defensible
+   * and only one can be on screen, because a reader adds up the column in front of them.
+   *
+   * SO THE CITY IS SUMMED FROM THE ROUNDED FIELD VALUES, then rounded again to clear the float
+   * noise that 0.1 + 0.2 produces. What the drawer shows now adds to what the row shows, by
+   * construction rather than by luck.
+   *
+   * THIS IS A DELIBERATE EXCEPTION TO THIS FILE'S OWN "ROUND ONCE, AT THE END" RULE, and the rule
+   * is still right everywhere else — the three tiles and the year chart sum the rows at full
+   * precision, which is why field-goals-test still asserts the spreadsheet's 16.6/16.7 fault does
+   * not reproduce. The exception is scoped to the ONE place where a total sits directly above the
+   * numbers it totals. MEASURED on production 2026-09-29: with this rule the footer and the tiles
+   * still agree to 0.0 on Sep, Dec and Gap, so nothing upstream had to move.
+   *
+   * A NULL IS A ZERO FOR SUMMING AND A DASH FOR READING. A new field has no September and a field
+   * with no target has no gap; neither contributes, which is what they did before.
+   *
+   * THE GAP IS THE SUM OF THE FIELD GAPS, not a re-derivation from the rounded Dec and Sep. A
+   * negative field gap — a pitch already past its goal — still counts toward its city. On today's
+   * data the two agree for all ten cities, and summing what is displayed is the rule that keeps
+   * agreeing when they diverge. */
+  const sumRounded = (xs: (number | null)[]): number =>
+    roundTo(xs.reduce<number>((a, v) => a + roundTo(v ?? 0, 1), 0), 1);
+
   for (const c of byCity.values()) {
-    c.gapDaily = c.dec - c.sep;
+    c.sep = sumRounded(c.fields.map((f) => f.sep));
+    c.oct = sumRounded(c.fields.map((f) => f.oct));
+    c.nov = sumRounded(c.fields.map((f) => f.nov));
+    c.dec = sumRounded(c.fields.map((f) => f.dec));
+    c.gapDaily = sumRounded(c.fields.map((f) => f.gapDaily));
     c.fields = sortGoalRows(c.fields.map((f) => ({ ...f, city: c.city })), sort);
   }
 
@@ -404,10 +436,16 @@ export function cityRollup(rows: RollupRow[], year: number, currentMonth: number
 }
 
 /** The footer. Summed from the city rows on screen, so it cannot be a second source. */
+/** The footer. Summed from the city rows on screen, so it cannot be a second source.
+ *
+ *  EACH CITY IS ALREADY A ONE-DECIMAL NUMBER, so this rounds only to clear float noise — the
+ *  footer is the sum of the column above it exactly, the same guarantee each city row now gives
+ *  its own drawer. GAP is summed from the city gaps for that reason and not re-derived. */
 export function cityTotals(cities: CityRow[]) {
-  const s = (k: "sep" | "oct" | "nov" | "dec") => cities.reduce((a, c) => a + c[k], 0);
+  const r1 = (v: number) => roundTo(v, 1);
+  const s = (k: "sep" | "oct" | "nov" | "dec" | "gapDaily") => r1(cities.reduce((a, c) => a + c[k], 0));
   const sep = s("sep"), dec = s("dec");
-  return { sep, oct: s("oct"), nov: s("nov"), dec, gapDaily: dec - sep,
+  return { sep, oct: s("oct"), nov: s("nov"), dec, gapDaily: s("gapDaily"),
            existing: cities.reduce((a, c) => a + c.existing, 0),
            slots: cities.reduce((a, c) => a + c.slots, 0) };
 }
