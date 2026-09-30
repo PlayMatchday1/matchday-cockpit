@@ -329,6 +329,12 @@ const NODE_SUITES = [
    * cases against 27 parallel ones. Times are CLUSTERED, and this pins both shapes. */
   "scripts/slot-cluster-test.ts",
   "scripts/promo-tags-test.ts",
+  /* A PROMO CODE BELONGS TO A PUSH. It always did in the table; the draft model held one per CHANNEL
+   * and fanned it onto every row on save, so a Thursday code and a Saturday blank came back as two
+   * Thursday codes. Pure functions, invisible in the DOM — and the last block runs the real rows
+   * through a load-and-save with no edits, read-only, which is the only place the old fan-out and
+   * the new per-row write could ever disagree. */
+  "scripts/promo-push-code-test.ts",
   "scripts/funnel-month-test.ts",
   "scripts/behavior-daily-test.ts",
   "scripts/behavior-export-test.ts",

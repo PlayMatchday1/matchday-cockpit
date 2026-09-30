@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Match Promotion Fixes</title>
+<style>
+  :root{--nav:#0b3a28;--accent:#22c55e;--bg:#f3f4f1;--card:#fff;--line:#e3e6e1;--ink:#10231a;--ink-2:#44564c;--muted:#7a8a81;
+    --gp:#0e7490;--gp-bg:#ecfeff;--gp-line:#a5e4ee;--pri:#7c3aed;--wa:#15803d;--wa-bg:#e7f6ec}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  button,input,textarea{font:inherit;color:inherit}
+  .mocknote{background:#fff7d6;border-bottom:1px solid #eadb9c;color:#5b4a00;font-size:12px;padding:6px 20px}
+  .layout{display:flex;align-items:flex-start}
+  .page{flex:1;min-width:0;padding:22px 24px}
+  /* city block */
+  .cityhead{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+  .cityhead h2{margin:0;font-size:19px;font-weight:800}
+  .cityhead .m{color:var(--muted);font-weight:600;font-size:13px}
+  .cityhead .sp{flex:1}
+  .btn{border:1px solid var(--line);background:#fff;border-radius:9px;padding:7px 13px;font-weight:700;cursor:pointer}
+  .cx{color:#c2410c;font-weight:700;font-size:13px}
+  /* general pushes strip */
+  .gp{background:var(--gp-bg);border:1px solid var(--gp-line);border-radius:12px;padding:10px 12px;margin-bottom:12px}
+  .gp h3{margin:0 0 8px;font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--gp);display:flex;gap:8px;align-items:center}
+  .gp h3 .n{background:#fff;border:1px solid var(--gp-line);border-radius:999px;padding:0 7px;font-size:11px}
+  .gp-list{display:flex;flex-wrap:wrap;gap:8px}
+  .gpc{background:#fff;border:1px solid var(--gp-line);border-left:4px solid var(--gp);border-radius:10px;padding:8px 11px;min-width:220px;cursor:pointer;text-align:left}
+  .gpc:hover{box-shadow:0 1px 4px rgba(0,0,0,.08)}
+  .gpc .t{font-weight:800}
+  .gpc .w{font-size:12px;color:var(--ink-2);margin-top:2px}
+  .gpc .w b{color:var(--ink)}
+  .gpc .msg{font-size:12px;color:var(--muted);margin-top:3px;max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ch{display:inline-block;font-size:11px;font-weight:800;padding:1px 6px;border-radius:5px;background:var(--wa-bg);color:var(--wa);border:1px solid #bfe5cb;margin-right:4px}
+  .status{font-size:10px;font-weight:800;letter-spacing:.6px;color:var(--gp);margin-left:6px}
+  .week{display:grid;grid-template-columns:repeat(7,1fr);gap:10px}
+  .day{background:#fff;border:1px solid var(--line);border-radius:12px;min-height:180px;padding:10px}
+  .day .dh{display:flex;justify-content:space-between;font-size:11px;font-weight:700;letter-spacing:.6px;color:var(--muted)}
+  .tile{border:1px dashed var(--line);border-radius:10px;padding:8px 10px;margin-top:8px}
+  .tile.sel{border:2px solid var(--ink)}
+  .tile b{font-size:15px}
+  .tile div{color:var(--ink-2);font-size:13px}
+
+  /* side panel, at the real width */
+  .panel{width:490px;flex:none;background:#fff;border-left:1px solid var(--line);min-height:100vh;position:sticky;top:0}
+  .ph{padding:16px 18px;border-bottom:1px solid var(--line)}
+  .ph h2{margin:0;font-size:17px;font-weight:800}
+  .ph .c{color:var(--muted)}
+  .pb{padding:14px 18px}
+  .lbl{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--muted);font-weight:700;margin:0 0 6px}
+  .chan{border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:12px}
+  .chan-top{display:flex;align-items:center;gap:12px}
+  .tog{width:40px;height:22px;border-radius:999px;background:var(--accent);position:relative;flex:none}
+  .tog::after{content:"";position:absolute;right:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#fff}
+  .chan-top .nm{font-weight:800;font-size:15px}
+  .chan-top .ct{color:var(--muted);font-size:13px;margin-left:auto}
+  .field{display:grid;grid-template-columns:1fr;gap:4px;margin-top:12px}
+  .field label{font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--ink-2);font-weight:700}
+  .field input,.field textarea{width:100%;border:1px solid #cfd6d1;border-radius:9px;padding:9px 11px;background:#fff}
+  .field input:focus,.field textarea:focus{outline:2px solid var(--accent);outline-offset:0;border-color:transparent}
+  .field .hint{font-size:12px;color:var(--muted)}
+  .push{border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:12px;background:#fbfcfa}
+  .push-row{display:flex;align-items:center;gap:10px;min-width:0}
+  .push-row input[type=datetime-local]{flex:1;min-width:0;border:1px solid #cfd6d1;border-radius:9px;padding:8px 10px;background:#fff}
+  .push-row .off{color:var(--muted);font-size:13px;white-space:nowrap}
+  .rm{flex:none;width:32px;height:32px;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:pointer;color:var(--muted)}
+  .push textarea{min-height:92px;resize:vertical}
+  .cnt{text-align:right;font-size:11px;color:var(--muted)}
+  .add{margin-top:10px;border:1px dashed #cfd6d1;background:#fff;border-radius:9px;padding:7px 12px;font-weight:700;cursor:pointer}
+</style>
+</head>
+<body>
+<div class="mocknote" data-testid="mock-note">MOCK. Two fixes from Teresa's feedback: general pushes get their own section per city, and each push stacks its time, its own promo code and a full-width message. Data is illustrative.</div>
+<div class="layout">
+  <div class="page">
+    <section data-testid="city-austin">
+      <div class="cityhead">
+        <h2>Austin</h2><span class="m">4 of 42 · 4 covered</span><b>8 new</b>
+        <span class="sp"></span>
+        <button class="btn" data-testid="general-push-add">+ General push</button>
+        <span class="cx">3 cancelled · 16 booked</span>
+      </div>
+
+      <div class="gp" data-testid="general-pushes" id="gp">
+        <h3>General pushes <span class="n" data-testid="general-push-count"></span></h3>
+        <div class="gp-list" id="gpList"></div>
+      </div>
+
+      <div class="week">
+        <div class="day"><div class="dh"><span>MON</span><span>28</span></div><div class="tile"><b>6:30 PM</b><div>Crockett High School</div></div></div>
+        <div class="day"><div class="dh"><span>TUE</span><span>29</span></div><div class="tile"><b>6:30 PM</b><div>NEMP</div></div></div>
+        <div class="day"><div class="dh"><span>WED</span><span>30</span></div><div class="tile sel"><b>8:00 PM</b><div>Parmer</div></div></div>
+        <div class="day"><div class="dh"><span>THU</span><span>1</span></div><div class="tile"><b>7:30 PM</b><div>NEMP</div></div></div>
+        <div class="day"><div class="dh"><span>FRI</span><span>2</span></div><div class="tile"><b>8:00 PM</b><div>Parmer</div></div></div>
+        <div class="day"><div class="dh"><span>SAT</span><span>3</span></div><div class="tile"><b>7:00 PM</b><div>Westlake</div></div></div>
+        <div class="day"><div class="dh"><span>SUN</span><span>4</span></div><div class="tile"><b>7:00 PM</b><div>Ann Richards</div></div></div>
+      </div>
+    </section>
+  </div>
+
+  <aside class="panel" data-testid="promo-panel">
+    <div class="ph"><h2>Parmer · Wed 8:00 PM</h2><div class="c">Austin</div></div>
+    <div class="pb">
+      <p class="lbl">Channels</p>
+      <div class="chan" data-testid="channel-whatsapp">
+        <div class="chan-top"><span class="tog" aria-hidden="true"></span><span class="nm">WhatsApp</span><span class="ct" data-testid="push-count">1 push</span></div>
+
+        <div id="pushes"></div>
+        <button class="add" data-testid="push-add">+ Add a push</button>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script>
+const GP = [
+  { id: 1, title: "Registered Users ATX", ch: ["WA", "SMS"], when: "Thu 11:00 AM", status: "SCHEDULED", msg: "Games every night this week at NEMP and Parmer. Grab a spot before they fill." },
+  { id: 2, title: "Lapsed players, 30 days", ch: ["WA"], when: "Sat 10:00 AM", status: "SCHEDULED", msg: "We miss you on the pitch. Your first match back is on us with code BACK10." },
+];
+function renderGP(){
+  const list = document.getElementById("gpList");
+  document.getElementById("gp").hidden = GP.length === 0;
+  document.querySelector('[data-testid="general-push-count"]').textContent = GP.length;
+  list.innerHTML = GP.map(g => `<button class="gpc" data-testid="general-push-card" data-id="${g.id}">
+    <div class="t">${g.title}<span class="status">${g.status}</span></div>
+    <div class="w">${g.ch.map(c => `<span class="ch">${c}</span>`).join("")} <b>${g.when}</b></div>
+    <div class="msg" title="${g.msg}">${g.msg}</div></button>`).join("");
+}
+document.querySelector('[data-testid="general-push-add"]').addEventListener("click", () => {
+  GP.push({ id: GP.length + 1, title: "Registered Users ATL", ch: ["WA"], when: "Fri 11:00 AM", status: "SCHEDULED", msg: "New week, new matches. Book your spot." });
+  renderGP();
+});
+
+let pushes = [{ at: "2026-09-30T12:00", code: "", msg: "" }];
+function renderPushes(){
+  document.getElementById("pushes").innerHTML = pushes.map((p, i) => `
+    <div class="push" data-testid="push-item">
+      <div class="push-row">
+        <input type="datetime-local" data-testid="push-time" value="${p.at}">
+        <span class="off">8h before</span>
+        <button class="rm" data-testid="push-remove" data-i="${i}" aria-label="Remove push">✕</button>
+      </div>
+      <div class="field">
+        <label for="code-${i}">Promo code</label>
+        <input id="code-${i}" data-testid="push-code" data-i="${i}" placeholder="e.g. PARMER10" value="${p.code}">
+        <span class="hint">Optional. Leave blank for no code on this push.</span>
+      </div>
+      <div class="field">
+        <label for="msg-${i}">Message</label>
+        <textarea id="msg-${i}" data-testid="push-message" data-i="${i}" placeholder="What players will read">${p.msg}</textarea>
+        <div class="cnt" data-testid="push-message-count">${p.msg.length} characters</div>
+      </div>
+    </div>`).join("");
+  document.querySelector('[data-testid="push-count"]').textContent = `${pushes.length} push${pushes.length === 1 ? "" : "es"}`;
+}
+document.addEventListener("input", e => {
+  if (e.target.matches('[data-testid="push-code"]')) { pushes[+e.target.dataset.i].code = e.target.value; }
+  if (e.target.matches('[data-testid="push-message"]')) { const i = +e.target.dataset.i; pushes[i].msg = e.target.value; e.target.parentElement.querySelector('[data-testid="push-message-count"]').textContent = `${e.target.value.length} characters`; }
+});
+document.addEventListener("click", e => {
+  if (e.target.matches('[data-testid="push-remove"]')) { pushes.splice(+e.target.dataset.i, 1); renderPushes(); }
+  if (e.target.matches('[data-testid="push-add"]')) { pushes.push({ at: "2026-09-30T17:00", code: "", msg: "" }); renderPushes(); }
+});
+renderGP(); renderPushes();
+</script>
+</body>
+</html>

@@ -135,10 +135,31 @@ export function pushesFor(plan: PromoPlan | null, channel: ChannelKey): PromoPus
   return (plan?.pushes ?? []).filter((p) => p.channel === channel).sort(byPushTime);
 }
 
-/** The channel's code: the first non-empty one on its rows. The UI writes them all alike. */
-export function codeFor(plan: PromoPlan | null, channel: ChannelKey): string | null {
-  for (const p of pushesFor(plan, channel)) if (p.promoCode?.trim()) return p.promoCode.trim();
-  return null;
+/* ── codeFor STOOD HERE AND IS RETIRED ───────────────────────────────────────────────────────
+ * It returned "the first non-empty code on this channel's rows", under the comment "The UI writes
+ * them all alike" — true only because draftToPushes fanned one channel code across every row.
+ *
+ * CODES ARE PER PUSH NOW. Two pushes on one channel can carry different codes, or one and none, so
+ * "the channel's code" is no longer a question with an answer. Anything that needs a code reads it
+ * off the push it belongs to, or asks matchCodes() for the whole set. */
+
+/**
+ * Every DISTINCT code on this match's pushes, in push order. Empty when no push carries one.
+ *
+ * DISTINCT IS CASE-INSENSITIVE, AND THE FIRST SPELLING IS THE ONE SHOWN. Both entry points upper-case
+ * on the way in, but production already holds 486 mixed-case codes and `PARMER10` beside `parmer10`
+ * is one code and one chip — two would read as two offers on one match.
+ */
+export function matchCodes(plan: PromoPlan | null): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const p of (plan?.pushes ?? []).slice().sort(byPushTime)) {
+    const c = p.promoCode?.trim();
+    if (!c || seen.has(c.toUpperCase())) continue;
+    seen.add(c.toUpperCase());
+    out.push(c);
+  }
+  return out;
 }
 
 /** Dated pushes only, earliest first. The worklist, the tile summary and coverage all read this. */
@@ -300,8 +321,22 @@ export function defaultPushAt(kickoffUtc: string | null): string | null {
  * turning WhatsApp off hides its pushes and stops sending them, and turning it back on in the same
  * session restores them exactly. That is why there is no confirm on a destructive-looking toggle —
  * a dialog guarding an action that already has an undo teaches people to dismiss dialogs. */
-export type DraftRow = { key: string; id?: number; pushAt: string | null; topic: string };
-export type DraftChannel = { on: boolean; code: string; rows: DraftRow[] };
+/* ── THE CODE LIVES ON THE PUSH, NOT ON THE CHANNEL ──────────────────────────────────────────
+ * `promo_code` has ALWAYS been a per-row column on match_promotion_push, and the route has always
+ * written it per row. What collapsed it to one-per-channel was this draft model: DraftChannel held
+ * a single `code` and draftToPushes fanned it across every row of the channel, while codeFor read
+ * back "the first non-empty one on its rows". So two pushes on one channel could not carry
+ * different codes even though the table could hold them.
+ *
+ * NO MIGRATION WAS NEEDED and none was run. Measured on the 176 live rows: 21 carry a code across
+ * 167 (match, channel) groups, 9 of which hold more than one push, and not one of those 9 has
+ * differing codes — exactly what a channel-level write produces. Every existing row therefore
+ * already carries its channel's code, so the backfill this change would have needed had already
+ * happened, continuously, as a side effect of how saving worked. */
+export type DraftRow = { key: string; id?: number; pushAt: string | null; topic: string; code: string };
+/* `code` IS GONE FROM THE CHANNEL. It is deliberately not left in place unread: a field nothing
+ * reads and something still writes is the drift this change exists to end. */
+export type DraftChannel = { on: boolean; rows: DraftRow[] };
 export type PushDraft = Record<ChannelKey, DraftChannel>;
 
 let draftKeySeq = 0;
@@ -314,8 +349,10 @@ export function draftFromPlan(plan: PromoPlan | null): PushDraft {
     const rows = pushesFor(plan, k);
     out[k] = {
       on: rows.length > 0,
-      code: codeFor(plan, k) ?? "",
-      rows: rows.map((p) => ({ key: `p-${p.id}`, id: p.id, pushAt: p.pushAt, topic: p.topic ?? "" })),
+      // EACH ROW CARRIES ITS OWN. No channel-wide read, so a saved per-push code survives a load.
+      rows: rows.map((p) => ({
+        key: `p-${p.id}`, id: p.id, pushAt: p.pushAt, topic: p.topic ?? "", code: p.promoCode ?? "",
+      })),
     };
   }
   return out;
@@ -330,9 +367,10 @@ export function draftToPushes(draft: PushDraft): { id?: number; channel: Channel
     if (!c?.on) continue;
     /* AN ON CHANNEL WITH NO ROWS IS ONE ROW WITH NO DATE. That is how "chosen, not scheduled"
      * survives at all now that there is no boolean to carry it. */
-    const rows = c.rows.length > 0 ? c.rows : [{ key: "implicit", pushAt: null, topic: "" } as DraftRow];
+    const rows = c.rows.length > 0 ? c.rows : [{ key: "implicit", pushAt: null, topic: "", code: "" } as DraftRow];
     for (const r of rows) {
-      out.push({ id: r.id, channel: k, at: r.pushAt, topic: r.topic, promoCode: c.code });
+      // EACH PUSH SENDS ITS OWN CODE. This was `c.code` — the channel's — written onto every row.
+      out.push({ id: r.id, channel: k, at: r.pushAt, topic: r.topic, promoCode: r.code });
     }
   }
   return out;
@@ -347,7 +385,9 @@ export function draftSummary(draft: PushDraft): { channels: number; pushes: numb
     channels++;
     const dated = c.rows.filter((r) => r.pushAt).length;
     pushes += dated;
-    if (c.code.trim()) codes++;
+    /* CODES ARE COUNTED PER PUSH. This was one-or-zero per channel; a channel can now carry a code
+     * on one push and none on the next, and the footer has to be able to say so. */
+    codes += c.rows.filter((r) => r.code.trim()).length;
     /* "STILL NEEDS A DATE" COUNTS THE CHANNEL, not the rows: a channel with one undated row and a
      * channel with none are the same unfinished decision. */
     if (dated === 0) undated++;
@@ -1102,13 +1142,29 @@ export function duplicateCodeChannels(codes: Record<string, string | null>): str
 /* THE WEEK'S GENERAL PUSHES. Read by DATE RANGE rather than by match, because they belong to no
  * match — that is the whole point of the scope column. A failure here is soft: the page still
  * renders every match push, and a general push that cannot be read is better than a page that
- * cannot. */
+ * cannot.
+ *
+ * ── AN UNDATED GENERAL PUSH IS READ IN EVERY WEEK ────────────────────────────────────────────
+ * `push_at` is nullable and the panel lets you save a general push without a time, so it can and
+ * does happen: live row 135, a city push for Atlanta on klaviyo_sms, has no time. It failed BOTH
+ * range comparisons — `NULL >= x` and `NULL <= y` are both NULL, never true — so it was invisible
+ * in every week of the year at once. There was no week you could go to to find it and give it one.
+ *
+ * So the filter is "in this week OR undated". The undated ones come back on EVERY week's read,
+ * deliberately: an undated push is an unfinished decision, not a thing that happened in a week, and
+ * it stays in front of whoever opens the page until it is dated or deleted. They sort last —
+ * byPushTime puts a null after every instant — and the card says "No send time" where the time
+ * would be.
+ *
+ * THIS IS FIXED IN THE READ, NOT ON THE PAGE. A page that special-cased nulls it had asked the
+ * database to exclude would be a page holding a workaround for a query defect one file away. */
 async function fetchGeneralPushes(sb: SupabaseClient, days: { iso: string }[]): Promise<GeneralPush[]> {
   if (days.length === 0) return [];
   const from = `${days[0].iso}T00:00:00`;
   const to = `${days[days.length - 1].iso}T23:59:59.999`;
   const { data, error } = await sb.from("match_promotion_push")
-    .select("*").neq("scope", "match").gte("push_at", from).lte("push_at", to);
+    .select("*").neq("scope", "match")
+    .or(`push_at.is.null,and(push_at.gte.${from},push_at.lte.${to})`);
   if (error) return [];
   const out: GeneralPush[] = [];
   for (const r of data ?? []) {

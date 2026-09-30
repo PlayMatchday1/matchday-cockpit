@@ -26,7 +26,7 @@ import { normalizeMatchName } from "@/lib/venueNormalization";
 import { TAG_KEYS, TAG_KEY_ORDER, TAG_META, splitTags, tagTitle, tagsAtScope, tagsInUse, isTagKey, type TagKey } from "@/lib/promoTags";
 import { weekQueueEntries, weekQueues, isPastWeek, defaultDayIdx, tabCounts, type QueueEntry } from "@/lib/promoDayQueue";
 import {
-  CHANNELS, NEW_FLAG_LABEL, channelsOn, codeFor, coverageCaption, coverageStateOf, coverageSummary,
+  CHANNELS, NEW_FLAG_LABEL, channelsOn, coverageCaption, coverageStateOf, coverageSummary, matchCodes,
   coverageOf, coverLabel, generalsCovering, generalPushDayIdx, type GeneralPush,
   datedPushes, draftFromPlan, draftToPushes, fmtPushIn, isPushOverdue, isPushSent, leadToKickoff,
   sentStamp, venueOffsetMs,
@@ -296,8 +296,12 @@ export default function MatchPromotionView() {
     const match = week?.tagsByMatch?.[m.apiId] ?? [];
     return [...match, ...field].filter(isTagKey);
   }, [week]);
-  const [genCity, setGenCity] = useState<string | null>(null);
-  const openGeneral = useCallback((city: string) => setGenCity(city), []);
+  /* ONE SHEET, TWO JOBS. `push` null is "create a new one for this city"; a push is "edit that
+   * one". The route has always taken an id on the same payload — it was only the page that had no
+   * way to hand it one, because there was nothing on screen to click. */
+  const [gen, setGen] = useState<{ city: string; push: GeneralPush | null } | null>(null);
+  const openGeneral = useCallback((city: string) => setGen({ city, push: null }), []);
+  const editGeneral = useCallback((g: GeneralPush) => setGen({ city: g.city, push: g }), []);
 
   /* ONE WRITE PER TAG, ADDRESSED TO THE FIELD. Not a bulk save: a tag is a single fact and the
    * unique constraint from 0190 makes the toggle safe against two operators at once. */
@@ -481,24 +485,48 @@ Which matches get promoted, on which channels, and when the push goes out.
           : <Plan week={week} byCity={tab === "plan" ? byCity : byCityTagged} openId={openId} onOpen={openMatch}
                    zone={zone} riskOf={riskOf}
                    coverage={coverage} coversOf={coversOf} tagsOf={tagsOf}
-                   onAddGeneral={openGeneral} viewTag={viewTag}
+                   onAddGeneral={openGeneral} onOpenGeneral={editGeneral} viewTag={viewTag}
                    editing={open != null && draft != null} />}
 
 
       </div>
-      {genCity && week && (
+      {gen && week && (
         <GeneralPushSheet
-          city={genCity} week={week} saving={saving}
-          onClose={() => setGenCity(null)}
+          /* KEYED ON THE ROW. The sheet seeds its fields from `push` once, at mount, so opening a
+             different card has to be a different component instance or it would show the first
+             card's values. */
+          key={gen.push?.id ?? `new-${gen.city}`}
+          city={gen.city} push={gen.push} week={week} saving={saving}
+          onClose={() => setGen(null)}
           onSave={async (payload) => {
             setSaving(true);
             try {
-              const { res, j } = await postPromo({ general: { ...payload, city: genCity } });
+              /* THE ID GOES WITH IT WHEN THERE IS ONE, which is what turns this from a second
+               * insert into an update of the row the card was rendered from. */
+              const { res, j } = await postPromo({
+                general: { ...payload, city: gen.city, ...(gen.push ? { id: gen.push.id } : {}) },
+              });
               if (!res.ok || j?.outcome !== "LANDED") {
                 setToast({ msg: String(j?.error ?? "That push did not save."), bad: true });
                 return false;
               }
-              setGenCity(null);
+              setGen(null);
+              /* RE-READ, SO THE SECTION IS RIGHT WITHOUT A RELOAD. The card list is a projection of
+               * week.generals, so the same load() that already refreshed the tiles refreshes it. */
+              await load(weekRef);
+              return true;
+            } finally { setSaving(false); }
+          }}
+          onRemove={async () => {
+            if (!gen.push) return false;
+            setSaving(true);
+            try {
+              const { res, j } = await postPromo({ general: { id: gen.push.id, remove: true } });
+              if (!res.ok || j?.outcome !== "LANDED") {
+                setToast({ msg: String(j?.error ?? "That push did not delete."), bad: true });
+                return false;
+              }
+              setGen(null);
               await load(weekRef);
               return true;
             } finally { setSaving(false); }
@@ -885,9 +913,112 @@ function generalReach(g: GeneralPush, week: PromoWeek): number {
     m.state !== "cancelled" && generalsCovering(m, [g], week.days).length > 0).length;
 }
 
+/** An instant as `datetime-local` characters in the READER'S clock. "" when there is no time. */
+function toLocalInput(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 /** The field's name, from the week rather than from a second lookup. */
 function fieldNameOf(g: GeneralPush, week: PromoWeek): string {
   return week.matches.find((m) => m.fieldId === g.fieldId)?.venue ?? "field";
+}
+
+/** This city's general pushes: its own, plus every undated one, which byPushTime sorts last. */
+function generalsForCity(week: PromoWeek, city: string): GeneralPush[] {
+  return week.generals.filter((g) => g.city === city);
+}
+
+/* ── THE CITY'S GENERAL PUSHES, ON THE PAGE ───────────────────────────────────────────────────
+ *
+ * THEY SAVED. THEY WERE NEVER RENDERED. `week.generals` reached this file and was read in exactly
+ * three places — coverageOf, generalsCovering, and the count of covered matches — every one of them
+ * a question about a MATCH tile. So a city push existed, changed the dotted rails on four tiles,
+ * and could not be seen, named, corrected or deleted. Teresa saved them and they vanished.
+ *
+ * A SECTION PER CITY, BETWEEN THE HEADER AND THE GRID. A general push belongs to the city, not to a
+ * day, so it cannot live in a day cell; and it is the thing the "+ General push" button in that same
+ * header creates, so it belongs next to it. It is hidden entirely when the city has none — an empty
+ * box on eight cities is eight boxes saying nothing.
+ *
+ * THE CARD IS THE WAY IN. Clicking one opens it in the sheet it was created in, pre-filled, which is
+ * what makes a wrong time or a wrong code fixable and an undated push datable. */
+function GeneralPushes({ city, week, onOpen }: {
+  city: string; week: PromoWeek; onOpen: (g: GeneralPush) => void;
+}) {
+  const gs = generalsForCity(week, city);
+  if (gs.length === 0) return null;
+  return (
+    <div data-testid="general-pushes" data-city={city} data-count={gs.length}
+      className="mb-2.5 rounded-xl border border-[#a5e4ee] bg-[#ecfeff] px-3 py-2.5">
+      <h3 className="m-0 mb-2 flex items-center gap-2 text-[10px] font-extrabold uppercase tracking-[0.09em] text-[#0e7490]">
+        General pushes
+        <span data-testid="general-push-count"
+          className="rounded-full border border-[#a5e4ee] bg-white px-[7px] text-[11px] font-bold">{gs.length}</span>
+      </h3>
+      <div className="flex flex-wrap gap-2">
+        {gs.map((g) => {
+          const t = fmtPushIn(g.pushAt, "me", null);
+          /* THE READER'S OWN CLOCK, and null-safe: a general push has no venue, so there is no
+             venue offset to shift it by. The same call the day queue makes for a match-less push. */
+          const chans = CHANNELS.filter((c) => c.key === g.channel);
+          /* TOPIC FIRST, AUDIENCE AS THE FALLBACK. A push saved with no topic is not nameless — the
+             operator typed who it was going to, and "all registered in Atlanta" identifies it. */
+          const title = g.topic?.trim() || g.audience?.trim() || "General push";
+          const status = g.pushedAt ? "SENT" : g.pushAt ? "SCHEDULED" : "NO DATE";
+          return (
+            <button key={g.id} type="button" data-testid="general-push-card" data-id={g.id}
+              data-scope={g.scope} data-dated={g.pushAt ? "1" : "0"}
+              onClick={() => onOpen(g)}
+              className="min-w-[220px] max-w-[280px] rounded-[10px] border border-[#a5e4ee] border-l-4 border-l-[#0e7490] bg-white px-2.5 py-2 text-left hover:shadow-[0_1px_4px_rgba(0,0,0,0.08)]">
+              <div className="text-[12.5px] font-extrabold" data-testid="general-push-title">
+                {title}
+                <span data-testid="general-push-status"
+                  className={`ml-1.5 text-[9.5px] font-extrabold tracking-[0.06em] ${g.pushAt ? "text-[#0e7490]" : "text-amber-700"}`}>
+                  {status}
+                </span>
+              </div>
+              <div className="mt-[3px] flex flex-wrap items-center gap-1 text-[11.5px] text-deep-green/65">
+                {chans.map((c) => (
+                  <i key={c.key} data-testid="general-push-chan"
+                    className="inline-flex items-center rounded-[5px] border border-mint/40 bg-mint-soft/50 px-[5px] text-[9.5px] font-extrabold not-italic text-emerald-700">
+                    {c.short}
+                  </i>
+                ))}
+                {/* AN UNDATED PUSH SAYS SO IN AMBER, where the time would be. It is the one thing
+                    wrong with the push and the only thing a click can fix, so it reads as the
+                    warning it is rather than as a blank. */}
+                {g.pushAt
+                  ? <b data-testid="general-push-when" className="font-extrabold text-deep-green">{t.day} {t.time}</b>
+                  : <b data-testid="general-push-when" data-warn="1" className="font-extrabold text-amber-700">No send time</b>}
+                {/* THE FIELD IT IS SCOPED TO, ON THE CARD. A field push sits in its city's section
+                    because that is where it was created, and without the name it is indistinguishable
+                    from the city-wide push beside it. */}
+                {g.scope === "field" && (
+                  <span data-testid="general-push-field" className="text-[11px] text-deep-green/55">
+                    &middot; {fieldNameOf(g, week)}
+                  </span>
+                )}
+                {g.promoCode && (
+                  <span data-testid="general-push-code"
+                    className="rounded-[5px] border border-amber-300 bg-amber-50 px-[5px] text-[9.5px] font-extrabold text-amber-800">
+                    {g.promoCode}
+                  </span>
+                )}
+              </div>
+              {g.topic?.trim() && g.audience?.trim() && (
+                <div data-testid="general-push-aud" title={g.audience}
+                  className="mt-[3px] max-w-[260px] truncate text-[11.5px] text-deep-green/45">{g.audience}</div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 /* ── THE GENERAL PUSH SHEET ───────────────────────────────────────────────────────────────────
@@ -903,18 +1034,24 @@ function fieldNameOf(g: GeneralPush, week: PromoWeek): string {
  * THE AUDIENCE IS TYPED, NOT DERIVED. "all registered in Atlanta" is what the operator tells the
  * reader; deriving it would mean this page knowing what a Klaviyo segment holds, which it does not.
  */
-function GeneralPushSheet({ city, week, saving, onClose, onSave }: {
-  city: string; week: PromoWeek; saving: boolean; onClose: () => void;
+function GeneralPushSheet({ city, push, week, saving, onClose, onSave, onRemove }: {
+  city: string;
+  /** Null creates. A push EDITS that row — same sheet, pre-filled, and the id travels with save. */
+  push: GeneralPush | null;
+  week: PromoWeek; saving: boolean; onClose: () => void;
   onSave: (p: { scope: "city" | "field"; channel: string; at: string | null; topic: string | null;
                 promoCode: string | null; fieldId: number | null; audience: string | null }) => Promise<boolean>;
+  onRemove: () => Promise<boolean>;
 }) {
-  const [scope, setScope] = useState<"city" | "field">("city");
-  const [channel, setChannel] = useState<string>(CHANNELS[0]?.key ?? "wa");
-  const [at, setAt] = useState("");
-  const [topic, setTopic] = useState("");
-  const [code, setCode] = useState("");
-  const [audience, setAudience] = useState(`all registered in ${city}`);
-  const [fieldId, setFieldId] = useState<number | "">("");
+  const [scope, setScope] = useState<"city" | "field">(push?.scope ?? "city");
+  const [channel, setChannel] = useState<string>(push?.channel ?? CHANNELS[0]?.key ?? "wa");
+  /* THE INPUT WANTS LOCAL CHARACTERS, THE ROW HOLDS AN INSTANT. Same pair the push editor runs, in
+   * the reader's own clock — a general push has no venue to be shifted by. */
+  const [at, setAt] = useState(() => toLocalInput(push?.pushAt ?? null));
+  const [topic, setTopic] = useState(push?.topic ?? "");
+  const [code, setCode] = useState(push?.promoCode ?? "");
+  const [audience, setAudience] = useState(push?.audience ?? `all registered in ${city}`);
+  const [fieldId, setFieldId] = useState<number | "">(push?.fieldId ?? "");
 
   /* THE FIELDS THIS CITY ACTUALLY RUNS THIS WEEK, from the week on screen. A picker listing every
    * field in the estate would offer pitches this city does not use. */
@@ -928,7 +1065,9 @@ function GeneralPushSheet({ city, week, saving, onClose, onSave }: {
     <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/20 p-0 sm:items-center sm:p-6" data-testid="general-sheet">
       <div className="w-full max-w-[520px] rounded-t-[14px] border border-cream-line bg-white p-4 sm:rounded-[14px]">
         <div className="mb-2 flex items-baseline gap-2">
-          <h3 className="m-0 text-[14px] font-extrabold">General push &middot; {city}</h3>
+          <h3 className="m-0 text-[14px] font-extrabold" data-testid="gen-heading">
+            {push ? "Edit general push" : "General push"} &middot; {city}
+          </h3>
           <span className="text-[11.5px] text-deep-green/55">covers the day it is sent for</span>
         </div>
         <div className="mb-2 flex gap-1.5" role="group" aria-label="Scope">
@@ -996,13 +1135,21 @@ function GeneralPushSheet({ city, week, saving, onClose, onSave }: {
           </button>
           <button type="button" data-testid="gen-cancel" onClick={onClose}
             className="min-h-[32px] rounded-full px-2 text-[12.5px] font-bold text-deep-green/65">Cancel</button>
+          {/* DELETE EXISTS ONLY WHEN THERE IS A ROW TO DELETE. The route has always accepted a
+              remove; nothing on the page could reach it, so a push saved by mistake was permanent. */}
+          {push && (
+            <button type="button" data-testid="gen-remove" disabled={saving} onClick={() => void onRemove()}
+              className="ml-auto min-h-[32px] rounded-full border border-coral/40 px-3 text-[12.5px] font-bold text-coral disabled:opacity-50">
+              Delete
+            </button>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, coversOf, tagsOf, onAddGeneral, viewTag }: {
+function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, coversOf, tagsOf, onAddGeneral, onOpenGeneral, viewTag }: {
   week: PromoWeek; byCity: [string, PromoMatch[]][]; openId: number | null; zone: ZoneMode;
   /** The tile's cancel history, keyed on field and weekday with times CLUSTERED. See cancelPatterns. */
   riskOf: (m: PromoMatch) => SlotRisk | null;
@@ -1013,6 +1160,8 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
   /** Non-null on a tag view: the grid is already filtered to it, and the heading says which. */
   viewTag: TagKey | null;
   onAddGeneral: (city: string) => void;
+  /** Opens an EXISTING general push in the sheet it was created in. Same sheet, pre-filled. */
+  onOpenGeneral: (g: GeneralPush) => void;
   onOpen: (m: PromoMatch, el: HTMLElement) => void;
   // THE PANEL OPENS INLINE, UNDER THE CITY WHOSE TILE WAS CLICKED — not at the foot of the page.
   // Rendering it once at page level meant clicking an Atlanta match scrolled you past every other
@@ -1192,6 +1341,8 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
                 </span>
               )}
             </div>
+            {/* BETWEEN THE HEADER AND THE GRID, and it renders nothing when the city has none. */}
+            <GeneralPushes city={city} week={week} onOpen={onOpenGeneral} />
             <div className="grid grid-cols-7 gap-2 pb-2.5">
               {week.days.map((d, i) => {
                 const dayMatches = matches.filter((m) => m.dayIdx === i);
@@ -1263,7 +1414,10 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shif
 }) {
   /* A CHIP PER CHANNEL THAT HAS A PUSH, or is on with none — which is what "on" is now. */
   const lit = CHANNELS.filter((c) => channelsOn(m.plan).includes(c.key));
-  const code = codeFor(m.plan, lit[0]?.key ?? "wa") ?? lit.map((c) => codeFor(m.plan, c.key)).find(Boolean) ?? null;
+  /* ONE CHIP, AND A COUNT WHEN THERE IS MORE THAN ONE CODE. Codes are per push now, so "the
+   * match's code" can be two different codes; a 96px day cell prints one, and the "+1" is what
+   * stops it reading as the only one. The panel is where you see which push carries which. */
+  const codes = matchCodes(m.plan);
   const summary = tileSummary(m, zone);
   const cancelled = cover === "cancelled";
   const r = risk?.cancelCount ?? 0;
@@ -1412,7 +1566,7 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shif
       {/* ONLY THE LIT CHANNELS. flex-wrap + min-w-0 still stops the widest chip running off the
           tile edge at seven columns — the failure this layout had before, and the reason the
           overflow measurement in verify-match-promotion is kept. */}
-      {(lit.length > 0 || code) && (
+      {(lit.length > 0 || codes.length > 0) && (
         <div className="mt-[5px] flex min-w-0 flex-wrap items-center gap-1.5">
           {lit.length > 0 && (
             <span className="flex min-w-0 flex-wrap gap-[3px]" data-testid="chipset">
@@ -1424,9 +1578,9 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shif
               ))}
             </span>
           )}
-          {code && (
-            <span className="rounded-[5px] border border-amber-300 bg-amber-50 px-[5px] py-px text-[9.5px] font-extrabold text-amber-800">
-              {code}
+          {codes.length > 0 && (
+            <span data-testid="tile-code" className="rounded-[5px] border border-amber-300 bg-amber-50 px-[5px] py-px text-[9.5px] font-extrabold text-amber-800">
+              {codes[0]}{codes.length > 1 && ` +${codes.length - 1}`}
             </span>
           )}
         </div>

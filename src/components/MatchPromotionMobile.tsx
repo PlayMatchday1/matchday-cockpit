@@ -18,7 +18,7 @@
 // SAME DATA, SAME ROUTES, SAME WRITES. Every figure here is computed by the desktop's own helpers
 // and passed in; nothing is re-derived and no count is redefined.
 
-import { CHANNELS, NEW_FLAG_LABEL, channelsOn, codeFor, coverLabel, coverageCaption, coverageOf, coverageStateOf, coverageSummary, datedPushes, fmtPushIn, isPushOverdue, isPushSent, leadToKickoff, sentStamp, venueOffsetMs, type GeneralPush, type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode } from "@/lib/matchPromotion";
+import { CHANNELS, NEW_FLAG_LABEL, channelsOn, coverLabel, coverageCaption, coverageOf, coverageStateOf, coverageSummary, datedPushes, fmtPushIn, isPushOverdue, isPushSent, leadToKickoff, matchCodes, sentStamp, venueOffsetMs, type GeneralPush, type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode } from "@/lib/matchPromotion";
 import { TAG_META, splitTags, tagTitle, tagsAtScope, type TagKey } from "@/lib/promoTags";
 /* THE VIEW LIST AND ITS LABELS COME FROM THE DESKTOP. Not a second list to keep in step — a
  * phone tab the desktop does not have is how the two surfaces end up offering different views. */
@@ -364,10 +364,11 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode; viewTag?: TagKey |
   );
 }
 
-/** The first code on any of this match's channels. One per channel; the row has space for one. */
+/** THE ROW'S CODE CHIP: the first code on any push, plus "+N" for the rest. Codes are per push. */
 function firstCode(m: PromoMatch): string | null {
-  for (const k of channelsOn(m.plan)) { const c = codeFor(m.plan, k); if (c) return c; }
-  return null;
+  const codes = matchCodes(m.plan);
+  if (codes.length === 0) return null;
+  return codes.length > 1 ? `${codes[0]} +${codes.length - 1}` : codes[0];
 }
 const rowFirst = (m: PromoMatch, zone: ZoneMode): string => {
   const f = datedPushes(m.plan)[0];
