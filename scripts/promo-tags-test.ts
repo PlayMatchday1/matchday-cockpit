@@ -181,8 +181,8 @@ console.log("\n— ONE cluster window, called from both places —");
   is("  CONTROL: and carries no shifted tooltip, because it is not the same slot",
     priorTimesFor(slot("Austin", "LBJ", FRI, at(17)), slate), null);
   /* CONTROL: THE OTHER TWO TESTS ARE UNAFFECTED. */
-  is("CONTROL: NEW DAY still flags, unaffected by the time window",
-    newnessOf(slot("Austin", "LBJ", MON, at(19, 30)), slate), "day");
+  is("CONTROL: NEW MATCH still flags, unaffected by the time window",
+    newnessOf(slot("Austin", "LBJ", MON, at(19, 30)), slate), "match");
   is("  CONTROL: NEW FIELD still flags", newnessOf(slot("Austin", "Onion Creek", FRI, at(19, 30)), slate), "field");
   is("  CONTROL: an unmoved slot is not new and has no tooltip",
     [newnessOf(slot("Austin", "LBJ", FRI, at(19, 30)), slate),

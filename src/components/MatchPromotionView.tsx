@@ -1281,13 +1281,23 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shif
         {m.newFlag && (
           <i data-testid="new-badge" data-flag={m.newFlag}
             /* THE RULE, THE CITY AND THE WEEK IT COMPARED, on the badge itself. The dates are
-               what makes a wrong comparison visible instead of silent. */
-            /* THE WINDOW IS IN THE WORDS, AND IT IS FOUR WEEKS NOW. It said "last week's slate",
-               which was the whole bug: a slot that ran three weeks, skipped one and came back read
-               NEW DAY because the single week it was compared against was the one it missed. The
-               count comes from priorWeeks so the sentence cannot go stale against the constant. */
-            title={`This ${m.newFlag === "field" ? "field" : m.newFlag === "day" ? "weekday for this field" : "kick-off time for this field and weekday"} was not on the last ${priorWeeks} weeks' slates for ${m.city} (${priorLabel}). Cancelled matches count, because a cancelled slot was still scheduled and still published.`}
-            className="shrink-0 rounded-[4px] bg-deep-green px-[5px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.04em] text-white">
+               what makes a wrong comparison visible instead of silent.
+               THE WINDOW IS IN THE WORDS, AND IT IS FOUR WEEKS. It said "last week's slate", which
+               was the whole bug: a slot that ran three weeks, skipped one and came back read NEW
+               because the single week it was compared against was the one it missed. The count
+               comes from priorWeeks so the sentence cannot go stale against the constant.
+               RETURNING SAYS SOMETHING ELSE ENTIRELY — it names the label it displaced, which is
+               the only way to check from the screen that the interception fired rather than that
+               no tag happened to apply. */
+            title={m.newFlag === "back"
+              ? `This slot has run at ${m.venue} before and went missing — it is not on the last ${priorWeeks} weeks' slates for ${m.city} (${priorLabel}), so without this it would read ${m.wouldBe ? NEW_FLAG_LABEL[m.wouldBe] : "NEW"}. Every slate on record was searched, not just the last ${priorWeeks} weeks. Cancelled matches count as scheduled.`
+              : m.newFlag === "time"
+              ? `This field and weekday ran at a nearby kick-off on the last ${priorWeeks} weeks' slates for ${m.city} (${priorLabel})${m.movedFrom ? `, and ${m.movedFrom} is gone` : ""} — so this is a move, not an extra match.`
+              : `This ${m.newFlag === "field" ? "field" : "slot for this field"} was not on the last ${priorWeeks} weeks' slates for ${m.city} (${priorLabel}), and nothing was dropped to make room for it. Cancelled matches count, because a cancelled slot was still scheduled and still published.`}
+            /* THE THREE THAT MEAN NEW SHARE THE DEEP GREEN FILL. RETURNING is filled too — it is a
+               claim, not an absence — but in slate blue, because it is the OPPOSITE claim. Asserted
+               by computed colour rather than by class name. */
+            className={`shrink-0 rounded-[4px] px-[5px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.04em] text-white ${m.newFlag === "back" ? "bg-[#4A5C8A]" : "bg-deep-green"}`}>
             {NEW_FLAG_LABEL[m.newFlag]}
           </i>
         )}

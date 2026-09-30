@@ -1,0 +1,261 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Slate tags and cancellation recency</title>
+<style>
+  /* THE APP'S OWN TOKENS, from globals.css, and the ramp from promo-day.html. Nothing new invented. */
+  :root{ --cream-line:#d3dcd8; --deep-green:#003326; --mint:#2cdb87; --mint-soft:#d5f7e6;
+    --coral:#ff6955; --bg:#f4f7f5; --card:#fff; --ink:#12241d;
+    --mut:#5c6f66; --faint:#8b9a92;
+    --c1:#F4C430; --c1t:#3A2A00;   /* 1 of 4 */
+    --c2:#E8862A; --c2t:#2E1B00;   /* 2 of 4 */
+    --c3:#D9452F; --c3t:#ffffff;   /* 3 of 4 */
+    --c4:#8F2A17; --c4t:#ffffff;   /* 4 of 4 */
+    --tagv:#7C3AED;  /* PRIORITY and KEY FIELD, ONE colour. The shape is what separates them. */
+    --tagp:#DB2777;  /* STARTING 11 */
+    --back:#4A5C8A; } /* RETURNING SLATE. Not green: it is not new, it is back. */
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:16px}
+  h1{font-size:15px;letter-spacing:.02em;margin:0 0 3px}
+  .sub{font-size:12.5px;color:var(--mut);margin:0 0 14px}
+
+  .gridscroll{overflow-x:auto}
+  .grid{display:grid;grid-template-columns:repeat(4,minmax(210px,1fr));gap:10px;min-width:0}
+  .col{background:var(--card);border:1px solid var(--cream-line);border-radius:11px;padding:9px}
+  .colhead{display:flex;align-items:baseline;gap:6px;padding:0 2px 8px;border-bottom:1px solid #eef2ef;margin-bottom:8px}
+  .coldow{font-size:11px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--mut)}
+  .colnum{font-size:11px;color:var(--faint)}
+
+  .tile{margin-bottom:7px;border:1px solid var(--cream-line);border-left-width:3px;border-radius:9px;
+        padding:7px 8px;background:#fff}
+  .tile:last-child{margin-bottom:0}
+  .tile[data-r="1"]{background:rgba(244,196,48,.15)}
+  .tile[data-r="2"]{background:rgba(232,134,42,.15)}
+  .tile[data-r="3"]{background:rgba(217,69,47,.15)}
+  .tile[data-r="4"]{background:rgba(143,42,23,.15)}
+  .tile[data-state="cancelled"]{border-left-color:var(--coral)}
+  .trow{display:flex;align-items:baseline;justify-content:space-between;gap:5px}
+  .ttime{font-size:12.5px;font-weight:800}
+  .tile[data-state="cancelled"] .ttime{opacity:.42;text-decoration:line-through}
+  .badges{display:flex;align-items:center;gap:3px;flex-wrap:wrap;justify-content:flex-end}
+  .tvenue{font-size:11px;line-height:1.25;color:rgba(0,51,38,.65);margin-top:1px}
+
+  /* ── THE CANCEL RATIO. Unchanged: colour and number both mean "how many of the last 4 weeks". */
+  .rchip{font-size:9px;font-weight:800;letter-spacing:.03em;border-radius:4px;padding:1px 5px;font-style:normal}
+  .rchip[data-r="1"]{background:var(--c1);color:var(--c1t)}
+  .rchip[data-r="2"]{background:var(--c2);color:var(--c2t)}
+  .rchip[data-r="3"]{background:var(--c3);color:var(--c3t)}
+  .rchip[data-r="4"]{background:var(--c4);color:var(--c4t)}
+
+  /* ── HOW RECENT THE LAST ONE WAS. The new part.
+   * 2/4 four weeks ago and 2/4 last week are the same chip today and opposite decisions. The
+   * marker carries WHEN, and its weight falls off as it ages, so a stale cancellation stops
+   * shouting without being hidden. Nothing renders past 4 weeks: that is outside the window the
+   * ratio is computed over, and Ryan set it as the point where a cancellation stops earning a push. */
+  .age{font-size:8.5px;font-weight:800;letter-spacing:.04em;border-radius:4px;padding:1px 4px;
+       font-style:normal;white-space:nowrap;border:1px solid transparent}
+  .age[data-w="1"]{background:#3A1710;color:#fff}                          /* last week: loudest */
+  .age[data-w="2"]{background:#EBD9D3;color:#6B2A18}
+  .age[data-w="3"]{background:transparent;color:#8a6d63;border-color:#d8c8c2}
+  .age[data-w="4"]{background:transparent;color:#a9a09c;border-color:#e4dbd8}  /* 4 weeks: quietest */
+
+  /* ── THE CHANGE TAG. One per tile, mutually exclusive, filled, deep green for the three that are
+   * genuinely new. RETURNING SLATE is filled too but in slate blue, because it is the opposite
+   * claim: this is not new, you have had it before and it went away. */
+  .newb{font-size:8.5px;font-weight:800;letter-spacing:.04em;border-radius:4px;padding:1px 5px;
+        background:var(--deep-green);color:#fff;font-style:normal;white-space:nowrap}
+  .newb[data-f="back"]{background:var(--back)}
+
+  /* ── PROMO TAGS. Outlined, never filled, so they can never be mistaken for a cancel ratio or a
+   * change tag at a glance.
+   * PRIORITY AND KEY FIELD SHARE ONE COLOUR ON PURPOSE: Key Field is Priority at field scope, and a
+   * second colour would break that into two unrelated ideas. The SHAPE carries the scope instead.
+   * DASHED MEANS INHERITED FROM SOMETHING WIDER, which is the meaning this page already gives a
+   * dotted rail on a covered tile. Solid is about this match; dashed is about the whole field. */
+  .tags{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}
+  .tag{font-size:8.5px;font-weight:800;letter-spacing:.03em;border-radius:4px;padding:1px 5px;
+       background:transparent;border:1px solid currentColor;font-style:normal;white-space:nowrap}
+  .tag[data-t="prio"]{color:var(--tagv);border-style:solid}
+  .tag[data-t="key"] {color:var(--tagv);border-style:dashed}
+  .tag[data-t="s11"] {color:var(--tagp);border-style:solid}
+
+  .xline{display:flex;align-items:center;gap:6px;margin-top:5px}
+  .xtag{font-size:9px;font-weight:800;color:var(--coral);font-style:normal}
+  .booked{font-size:9px;font-weight:800;color:rgba(0,51,38,.7)}
+
+  .key{margin-top:16px;background:var(--card);border:1px solid var(--cream-line);border-radius:11px;padding:13px 14px}
+  .key h2{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--mut);margin:0 0 9px;font-weight:800}
+  .key h2+ h2{margin-top:15px}
+  .keyrow{display:flex;align-items:flex-start;gap:8px;margin-bottom:7px;font-size:12px;color:var(--mut)}
+  .keyrow b{color:var(--ink)}
+  .keyrow > i,.keyrow > span:first-child{flex:none}
+  .note{margin:10px 0 0;font-size:11.5px;color:var(--faint);line-height:1.5}
+  .note b{color:var(--mut)}
+  @media (max-width:760px){ .grid{grid-template-columns:repeat(4,minmax(190px,1fr))} }
+</style>
+
+<div class="wrap">
+  <h1>Atlanta, week of Sep 28</h1>
+  <p class="sub">Four change tags, one per match. Cancellation history now says <b>when</b>, not only how often.</p>
+  <div class="gridscroll"><div class="grid" id="grid"></div></div>
+  <div class="key" id="key"></div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════════════════════════
+ * THE TAXONOMY, replacing NEW FIELD / NEW DAY / NEW TIME.
+ *
+ * The old set split on the WRONG axis. "New day" and "new time" both fired for a slot that had
+ * never run, and "new time" ALSO fired for a slot that merely moved. So one tag meant two things
+ * and two tags meant one thing. The new test is not day versus time, it is:
+ *
+ *   does this slot have history, and if so, what happened to it?
+ *
+ *   RETURNING SLATE  CHECKED FIRST. This field has run this slot before, and the last time it was
+ *                    scheduled it did not happen: cancelled, or simply absent. It is not new.
+ *   NEW FIELD        the venue has never been on a slate
+ *   NEW MATCH        the venue ran, this (day, time) slot did not, and nothing was dropped to
+ *                    make room for it. Covers a new weekday AND a time added beside an existing one.
+ *   NEW TIME         this venue-day ran at a nearby time recently, and that time is gone now.
+ *                    A move, not an addition.
+ *
+ * RETURNING IS A PRECEDENCE RULE, NOT A FOURTH TAG. Its job is to stop a slot that went missing
+ * from coming back wearing NEW. A slot last seen five weeks ago is invisible to the 4-week window
+ * the new tags use, so without this it reads NEW MATCH: the field team has had exactly that, and a
+ * badge that calls a familiar slot new is the failure the one-week window already produced once.
+ * So it is asked before the three new tests, and it needs a LONGER lookback than they do.
+ *
+ * Cancelled matches still count as present in the prior slate, which is what lets "cancelled" and
+ * "absent" be one rule rather than two.
+ * ═══════════════════════════════════════════════════════════════════════════════════════════════ */
+/* ONE LINE EACH. The key is read every week by people who already know what the tags mean; it is
+ * there to settle a doubt, not to teach. The reasoning lives in this file's comments and the
+ * tooltips carry the per-tile detail. */
+const NEWDEF = {
+  field: ["NEW FIELD",       "Venue is new."],
+  match: ["NEW MATCH",       "A slot this field has never run. New day, or an extra time."],
+  time:  ["NEW TIME",        "An existing match moved. The old time is gone."],
+  back:  ["RETURNING SLATE", "Ran here before, missed last time. Not new."],
+};
+const TAGDEF = {
+  s11:  {label:"STARTING 11", scope:"field", why:"Active promo at this field.",
+         note:"Set by hand, so it can go stale when a venue's code ends."},
+  prio: {label:"PRIORITY",    scope:"match", why:"Extra promotion for this match."},
+  key:  {label:"KEY FIELD",   scope:"field", why:"Extra promotion for all matches here."},
+};
+const FIELD_TAGS = { "Keswick Park (Chamblee)":["key"], "PRUMC":["s11"], "Hattrick":["s11"],
+                     "Westlake":["key","s11"] };
+const mkey = (d,t,v) => `${d}|${t}|${v}`;
+const MATCH_PRIORITY = new Set([
+  mkey("mon","7:00 PM","Hattrick"),
+  mkey("wed","7:30 PM","Stony Point"),
+  /* AND ONE THAT MUST NOT RENDER: Westlake is already a KEY FIELD, so this match's own PRIORITY is
+     swallowed rather than printed beside it. Unchanged from the shipped rule. */
+  mkey("tue","7:00 PM","Westlake"),
+]);
+const tagsSet = (v,d,t) => (MATCH_PRIORITY.has(mkey(d,t,v)) ? ["prio"] : []).concat(FIELD_TAGS[v] ?? []);
+const tagsOf  = (v,d,t) => { const s = tagsSet(v,d,t); return s.includes("key") ? s.filter(k=>k!=="prio") : s; };
+
+/* [time, venue, change|null, cancelWeeks 0-4, lastCancelWeeksAgo|null, cancelledThisWeek?, booked?]
+ *
+ * THE PAIR THIS WHOLE FEATURE EXISTS FOR IS THE FIRST COLUMN. Keswick and Hattrick both read 2/4.
+ * Under the shipped tile they are the same orange chip and the same decision. One last cancelled a
+ * MONTH ago and needs nothing; the other cancelled last week and is actively bleeding. */
+const WEEK = {
+  mon: { dow:"Mon", num:"Sep 28", rows:[
+    ["6:30 PM","PRUMC","time",0,null],
+    ["8:00 PM","Keswick Park (Chamblee)",null,2,4],
+    ["7:00 PM","Hattrick",null,2,1],
+  ]},
+  tue: { dow:"Tue", num:"Sep 29", rows:[
+    ["6:00 PM","Westlake",null,1,3],
+    ["7:00 PM","Westlake","match",0,null],
+  ]},
+  wed: { dow:"Wed", num:"Sep 30", rows:[
+    ["8:00 PM","Keswick Park (Chamblee)","match",0,null],
+    ["7:30 PM","Stony Point","back",3,1],
+  ]},
+  fri: { dow:"Fri", num:"Oct 2", rows:[
+    ["7:00 PM","Bicentennial Park","field",0,null],
+    ["8:00 PM","Parmer",null,4,1,true,9],
+  ]},
+};
+const DAYS = ["mon","tue","wed","fri"];
+/* ONE SHAPE FOR ALL FOUR STEPS. "LAST WK" beside "2W" made the newest step read as a different
+ * kind of thing from the rest of the scale, when it is just the first rung of it. Scanning a column
+ * of tiles, a consistent shape is what lets the eye compare without reading. */
+const AGEWORD = { 1:"1W AGO", 2:"2W AGO", 3:"3W AGO", 4:"4W AGO" };
+const AGEFULL = { 1:"1 week ago", 2:"2 weeks ago", 3:"3 weeks ago", 4:"4 weeks ago" };
+
+/* WHY EACH TILE CARRIES THE TAG IT DOES, in the tooltip, naming the comparison. A badge whose rule
+ * is invisible is a badge that gets believed when it is wrong, which is how the one-week window
+ * survived long enough to mislabel 8 of its badges. */
+const WHY = {
+  "mon|6:30 PM|PRUMC":            "PRUMC ran Mondays at 6:00 PM for 4 weeks. 6:00 is gone this week, so this is the same match moved, not an extra one.",
+  "tue|7:00 PM|Westlake":         "Westlake still runs Tuesdays at 6:00 PM. Nothing was dropped, so 7:00 PM is an additional match rather than a move.",
+  "wed|8:00 PM|Keswick Park (Chamblee)": "Keswick has run Mondays for 4 weeks and has never run a Wednesday. The field is not new; this slot is.",
+  "wed|7:30 PM|Stony Point":      "Stony Point ran this Wednesday slot for months, was cancelled on 2026-09-23 and has not been on a slate since. Without this tag it would read NEW MATCH, because the 4-week window cannot see it.",
+  "fri|7:00 PM|Bicentennial Park":"Bicentennial Park was on none of the last 4 weeks' Atlanta slates.",
+};
+
+function tile(day, [time, venue, change, r, age, cancelled, booked]){
+  const tg = tagsOf(venue, day, time);
+  const state = cancelled ? "cancelled" : "live";
+  const hist = r === 0
+    ? "No cancellations in the last 4 weeks."
+    : `Cancelled in ${r} of the last 4 weeks, most recently ${AGEFULL[age]}.`;
+  const why = change ? ` ${NEWDEF[change][0]}: ${WHY[mkey(day,time,venue)] ?? NEWDEF[change][1]}` : "";
+  return `<div class="tile" data-testid="tile" data-state="${state}" data-r="${r}"
+      data-day="${day}" data-time="${time}" data-venue="${venue}"
+      data-change="${change ?? ""}" data-age="${age ?? ""}" data-wouldbe="${change === "back" ? "match" : ""}"
+      title="${venue} ${time}. ${hist}${why}">
+    <div class="trow"><span class="ttime">${time}</span><span class="badges">
+      ${r ? `<i class="rchip" data-testid="rchip" data-r="${r}">${r}/4</i>` : ""}
+      ${r ? `<i class="age" data-testid="age" data-w="${age}">${AGEWORD[age]}</i>` : ""}
+      ${change ? `<i class="newb" data-testid="newb" data-f="${change}">${NEWDEF[change][0]}</i>` : ""}
+    </span></div>
+    <div class="tvenue">${venue}</div>
+    ${tg.length ? `<div class="tags" data-testid="tags">${tg.map(k =>
+      `<i class="tag" data-testid="tag" data-t="${k}" title="${TAGDEF[k].label}: ${TAGDEF[k].why}${TAGDEF[k].note?" "+TAGDEF[k].note:""}">${TAGDEF[k].label}</i>`).join("")}</div>` : ""}
+    ${cancelled ? `<div class="xline"><i class="xtag">Cancelled</i><span class="booked" data-testid="booked">${booked} booked</span></div>` : ""}
+  </div>`;
+}
+
+document.getElementById("grid").innerHTML = DAYS.map(d => {
+  const c = WEEK[d];
+  return `<div class="col" data-testid="col" data-d="${d}">
+    <div class="colhead"><span class="coldow">${c.dow}</span><span class="colnum">${c.num}</span></div>
+    ${c.rows.map(r => tile(d, r)).join("")}</div>`;
+}).join("");
+
+/* THE KEY LISTS ONLY WHAT IS ON SCREEN THIS WEEK, which is the rule the shipped page already
+ * follows. A legend naming every tag that could exist is a legend nobody reads. */
+const used = new Set(), usedTags = new Set(), usedAges = new Set();
+for (const d of DAYS) for (const [time, venue, change, r, age] of WEEK[d].rows) {
+  if (change) used.add(change);
+  if (r) usedAges.add(age);
+  tagsOf(venue, d, time).forEach(t => usedTags.add(t));
+}
+const ORDER = ["field","match","time","back"];
+document.getElementById("key").innerHTML = `
+  <h2>What changed this week</h2>
+  ${ORDER.filter(k => used.has(k)).map(k =>
+    `<div class="keyrow" data-testid="keynew"><i class="newb" data-f="${k}">${NEWDEF[k][0]}</i><span>${NEWDEF[k][1]}</span></div>`).join("")}
+
+  <h2>Cancellation history</h2>
+  <div class="keyrow"><i class="rchip" data-r="2">2/4</i><span>Cancelled in 2 of the last 4 weeks.</span></div>
+  ${/* ALL FOUR RUNGS, ALWAYS. The tag list above shows only what is in use, which is right for a
+       TAG: it applies to a match or it does not. A SCALE is not that. Its steps mean something only
+       against each other, so a ramp with a gap reads as broken rather than as unused. */ ""}
+  ${[1,2,3,4].map(w =>
+    `<div class="keyrow" data-testid="keyage" data-used="${usedAges.has(w) ? 1 : 0}">
+      <i class="age" data-w="${w}">${AGEWORD[w]}</i><span>Last cancelled ${AGEFULL[w]}.</span></div>`).join("")}
+  <p class="note" data-testid="cutoff">Nothing older than 4 weeks is marked.</p>
+
+  <h2>Promotion tags</h2>
+  ${["prio","key","s11"].filter(k => usedTags.has(k)).map(k =>
+    `<div class="keyrow" data-testid="keytag"><i class="tag" data-t="${k}">${TAGDEF[k].label}</i>
+      <span>${TAGDEF[k].why}</span></div>`).join("")}
+  <p class="note" data-testid="whyshape">Solid is this match. Dashed is the whole field.</p>`;
+</script>
