@@ -16,9 +16,17 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); c ? pass++ : fa
 const D = t => `[data-testid="${t}"]`;
 const num = s => Number(String(s).replace(/[^0-9.\-]/g, ''));
 
+/* ── CITIES IS THE DEFAULT GRAIN NOW, AND THIS PROBE PREDATES THAT ───────────────────────────
+ * It waited for `fg-existing` — the FIELDS table — and then clicked into Cities, which was right
+ * while Fields was what the page opened on. Since the Cities-first change this timed out on load
+ * and never reached a single assertion. The wait is now on the grain the page actually opens in,
+ * and the field-mode section below asks for Fields explicitly rather than assuming it. */
 const load = async (w = 1400) => {
   await p.setViewportSize({ width: w, height: 1000 });
   await p.goto(URL_, { waitUntil: 'domcontentloaded' });
+  await p.waitForSelector(D('fg-page'), { timeout: 30000 });
+  await p.waitForSelector(D('crow'), { timeout: 30000 });
+  await p.click(D('grain-field'));
   await p.waitForSelector(D('fg-existing'), { timeout: 30000 });
 };
 await load();
@@ -141,13 +149,34 @@ ok(openN > 1, `a click opens ${biggest} and shows its ${openN} fields`);
 ok(await p.$eval(`${D('crow')}[data-c="${biggest}"]`, e => e.getAttribute('aria-expanded')) === 'true', '  and aria-expanded flips');
 ok(await p.$$eval(D('frow'), es => es.length) === openN, '  CONTROL: opening one city opened nobody else');
 
-// THE ROWS SUM TO THE ROW THEY SIT UNDER
-const fcol = async t => (await p.$$eval(`${D('frow')}[data-c="${biggest}"] ${D(t)}`, es => es.map(e => e.dataset.v)))
-  .reduce((s, v) => s + (v === '' || v == null ? 0 : Number(v)), 0);
-const fSep = await fcol('fsep'), fDec = await fcol('fdec'), fOct = await fcol('foct');
-ok(Math.abs(fSep - await rawOf(biggest, 'sep')) < 1e-3, `  its fields sum to ${fSep.toFixed(3)}, matching its September (${(await rawOf(biggest, 'sep')).toFixed(3)})`);
-ok(Math.abs(fDec - await rawOf(biggest, 'dec')) < 1e-3, `  and to ${fDec.toFixed(3)}, matching its December (${(await rawOf(biggest, 'dec')).toFixed(3)})`);
-ok(Math.abs(fOct - await rawOf(biggest, 'oct')) < 1e-3, `  and its October ramp is the sum of its fields' ramps (${fOct.toFixed(3)} against ${(await rawOf(biggest, 'oct')).toFixed(3)})`);
+/* ── THE ROWS SUM TO THE ROW THEY SIT UNDER, AS DISPLAYED ────────────────────────────────────
+ * TWO THINGS MOVED UNDER THIS BLOCK AND IT WAS MEASURING NEITHER.
+ *
+ *   1. The drawer's Oct/Nov/Dec are INPUTS now, not cells — `fdec` and `foct` survive only on the
+ *      read-only fallback row — so both sums were reading 0 and "matching" nothing.
+ *   2. A city is the sum of its fields AS DISPLAYED, not at full precision. Comparing a rounded
+ *      6.2 against a full-precision 6.091 fails on a page that is behaving correctly; at 1e-3 it
+ *      passed for months while Austin printed 6.1 over fields adding to 6.2.
+ *
+ * So the sum is over the rounded values the row actually shows, and the comparison is exact. */
+const to1 = v => Math.round(v * 10) / 10;
+const fcolShown = async (t, input) => (await p.$$eval(
+  `${D('frow')}[data-c="${biggest}"] td`,
+  (tds, sel) => tds.map(td => {
+    const inp = td.querySelector(sel.input);
+    if (inp) return inp.value;
+    const cell = td.matches(`[data-testid="${sel.t}"]`) ? td : td.querySelector(`[data-testid="${sel.t}"]`);
+    return cell ? (cell.dataset.v ?? cell.textContent) : null;
+  }).filter(v => v != null && String(v).trim() !== ''),
+  { t, input: `[data-testid="${input}"]` }))
+  .reduce((s, v) => s + to1(Number(String(v).replace(/[^0-9.\-]/g, '')) || 0), 0);
+const fSep = to1(await fcolShown('fsep', '__none__'));
+const fDec = to1(await fcolShown('fdec', 'fg-goal-Dec'));
+const fOct = to1(await fcolShown('foct', 'fg-goal-Oct'));
+const shownOf = async (c, t) => to1(Number(await cellOf(c, t)) || 0);
+ok(Math.abs(fSep - await shownOf(biggest, 'sep')) < 0.051, `  its fields sum to ${fSep.toFixed(1)}, matching its September (${(await shownOf(biggest, 'sep')).toFixed(1)})`);
+ok(Math.abs(fDec - await shownOf(biggest, 'dec')) < 0.051, `  and to ${fDec.toFixed(1)}, matching its December (${(await shownOf(biggest, 'dec')).toFixed(1)})`);
+ok(Math.abs(fOct - await shownOf(biggest, 'oct')) < 0.051, `  and its October ramp is the sum of its fields' ramps (${fOct.toFixed(1)} against ${(await shownOf(biggest, 'oct')).toFixed(1)})`);
 ok(fSep > 0 && fDec > 0, '  CONTROL: both sums are non-zero, so the match is not two empty columns');
 
 // A FIELD WITH NO DECEMBER TARGET READS "no goal"
@@ -158,7 +187,11 @@ const noGoalCity = (await Promise.all(rows.map(async (c) => ({ c, f: await cellO
   .find((x) => /no goal/.test(x.f))?.c;
 if (noGoalCity) {
   if (noGoalCity !== biggest) { await p.click(`${D('crow')}[data-c="${noGoalCity}"]`); await p.waitForTimeout(150); }
-  const gapsIn = await p.$$eval(`${D('frow')}[data-c="${noGoalCity}"] ${D('fgap')}`, es => es.map(e => e.textContent.trim()));
+  /* THE GAP CELL MOVED TESTID WITH THE EDITABLE DRAWER. GoalCells emits `fg-gap-cell`; `fgap`
+     survives only on the read-only fallback row. "no goal" is still what an absent December
+     target renders — the assertion was looking at the wrong element, not at a changed rule. */
+  const gapsIn = await p.$$eval(`${D('frow')}[data-c="${noGoalCity}"] [data-testid="fg-gap-cell"], ${D('frow')}[data-c="${noGoalCity}"] ${D('fgap')}`,
+    es => es.map(e => e.textContent.trim()));
   ok(gapsIn.some(g => /no goal/.test(g)), `  ${noGoalCity}: a field with no December target reads "no goal" (${gapsIn.join(' / ')})`);
   ok(gapsIn.some(g => /^[+-]/.test(g) || g === '0.0'), '  CONTROL: and the others show a gap figure');
   if (noGoalCity !== biggest) { await p.click(`${D('crow')}[data-c="${noGoalCity}"]`); await p.waitForTimeout(150); }
@@ -200,9 +233,14 @@ ok(await p.$$eval(`${D('frow')}[data-c="${last}"]`, es => es.length) > 0, `Enter
 // ── 5c. A FIELD READS THE SAME IN BOTH GRAINS ──────────────────────────────────────────────────
 await p.click(`${D('crow')}[data-c="${biggest}"]`);
 await p.waitForTimeout(150);
+/* THE DRAWER'S DECEMBER IS AN INPUT NOW, NOT A CELL. Since the city drawer became editable it
+ * renders the same GoalCells the field table does, so `fdec` only survives on the read-only
+ * fallback row. Read the input where there is one and fall back to the cell, which is exactly the
+ * pair the component can emit. */
 const oneField = await p.$$eval(`${D('frow')}[data-c="${biggest}"]`, es => es.map(e => ({
   name: e.dataset.f, sep: e.querySelector('[data-testid="fsep"]').textContent.trim(),
-  dec: e.querySelector('[data-testid="fdec"]').textContent.trim(),
+  dec: e.querySelector('[data-testid="fg-goal-Dec"]')?.value
+    ?? e.querySelector('[data-testid="fdec"]')?.textContent.trim() ?? '',
 })).filter(f => /[0-9]/.test(f.sep) && /[0-9]/.test(f.dec))[0]);
 await p.click(D('grain-field'));
 await p.waitForSelector(D('fg-existing'), { timeout: 10000 });

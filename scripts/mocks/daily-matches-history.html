@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>2026 Daily Matches, with history</title>
+<style>
+/* APP TOKENS from globals.css. Light only: the app honours prefers-color-scheme nowhere. */
+:root{
+  --cream:#f4f7f5; --card:#fff; --line:#d3dcd8; --deep:#003326; --mint:#2cdb87;
+  --mint-soft:#d5f7e6; --coral:#ff6955; --ink:#12241d; --mut:#6d7b74; --amber:#e6a532;
+  --rule:#eceff0; --band:#eef3f0;
+  --past:#4c6058;        /* actuals behind the current month: solid ink, one step recessive */
+  --target:#9aa8a2;      /* waypoints ahead: the page already renders these grey */
+  --up:#0b6b43; --dn:#c0392b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cream);color:var(--ink);
+  font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1320px;margin:0 auto;padding:22px 16px 72px}
+h1{font-size:24px;margin:0 0 2px;letter-spacing:-.015em}
+.sub{color:var(--mut);margin:0 0 16px;font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:13px}
+
+/* ── CONTROLS. The history toggle sits with the other view switches, not beside the data. ──── */
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:11px 13px}
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{min-height:32px;padding:0 13px;border:0;background:var(--card);cursor:pointer;
+  font:700 12px/1 inherit;color:var(--mut)}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--deep);color:#fff}
+.title{font-size:14px;font-weight:700;margin-right:4px}
+.count{color:var(--mut);font-size:12px;font-weight:600}
+.spacer{margin-left:auto;display:flex;gap:8px;align-items:center}
+.tog{min-height:32px;padding:0 12px;border:1px solid var(--line);border-radius:8px;
+  background:var(--card);cursor:pointer;font:700 12px/1 inherit;color:var(--mut)}
+.tog[aria-pressed="true"]{border-color:var(--deep);background:var(--mint-soft);color:var(--deep)}
+
+/* ── TABLE ───────────────────────────────────────────────────────────────────────────────── */
+.panel{margin-top:12px;overflow:hidden}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%}
+th,td{padding:0 13px;text-align:right;white-space:nowrap;height:44px}
+th:first-child,td:first-child{text-align:left;padding-left:15px;position:sticky;left:0;
+  background:var(--card);z-index:2}
+thead th{height:44px;font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--mut);font-weight:700;border-bottom:1px solid var(--line);vertical-align:middle}
+thead th:first-child{background:var(--card)}
+tbody td{border-bottom:1px solid var(--rule);font-variant-numeric:tabular-nums;font-size:14px}
+
+/* THE BREAK AT TODAY. One hairline, and the two captions above it, are what stop an actual and a
+   target reading as the same kind of number. The chart above this table already teaches the
+   distinction with solid versus outlined bars; this is the same idea in a row. */
+.boundary{border-left:1px solid var(--deep) !important}
+.capband td{height:24px;padding:0 13px;border-bottom:1px solid var(--line);
+  font:800 9px/1 inherit;letter-spacing:.09em;text-transform:uppercase;color:var(--mut);
+  background:var(--band);text-align:center}
+.capband td:first-child{background:var(--band)}
+
+/* PAST MONTHS ARE SOLID AND RECESSIVE. They happened, so they are ink, not grey — but the current
+   month stays the anchor, so history is one step back rather than equal weight. */
+td.past{color:var(--past);font-weight:600}
+td.now{color:var(--ink);font-weight:800}
+td.target{color:var(--target);font-weight:600}
+td.goal{color:var(--ink);font-weight:800}
+.nodata{color:#c3ccc7;font-weight:600}
+
+.cityname{font-weight:700;font-size:14px}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;
+  vertical-align:1px;background:var(--coral)}
+.dot[data-ok="1"]{background:var(--mint)}
+.caret{display:inline-block;width:11px;color:var(--mut);font-size:9px}
+.prog{width:118px;height:7px;border-radius:99px;background:#e6ebe8;overflow:hidden;display:inline-block}
+.prog i{display:block;height:100%;background:var(--mint)}
+.gap{font-weight:800;color:var(--coral)}
+.gap[data-zero="1"]{color:var(--mut)}
+.trend{font-weight:800;font-size:13px}
+.trend[data-t="up"]{color:var(--up)}
+.trend[data-t="flat"]{color:var(--mut)}
+.trend[data-t="dn"]{color:var(--dn)}
+.trend .gl{font-size:10px;margin-right:3px}
+.newnote{display:inline-block;margin-left:7px;padding:1px 5px;border-radius:4px;
+  background:#eef3f0;color:var(--mut);font:800 8.5px/1.6 inherit;letter-spacing:.05em;
+  text-transform:uppercase;vertical-align:1px}
+.inprog{display:inline-block;padding:1px 5px;border-radius:4px;background:#fff3d6;color:#6b4c00;
+  font:800 8.5px/1.5 inherit;letter-spacing:.05em;text-transform:uppercase;margin-left:6px}
+tr.child td{background:#fafcfb;font-size:13px;height:38px}
+tr.child td:first-child{background:#fafcfb;padding-left:36px;color:var(--mut);font-weight:600}
+.fields{color:var(--mut);font-size:12px;font-weight:600}
+
+.foot{color:var(--mut);font-size:11.5px;margin:0;padding:12px 15px;line-height:1.6;
+  border-top:1px solid var(--rule)}
+.illus{color:var(--coral);font-weight:700}
+</style></head>
+<body><div class="wrap">
+
+<h1>2026 Daily Matches</h1>
+<p class="sub">Daily match average against each city's December goal.</p>
+
+<div class="card">
+  <div class="bar">
+    <span class="title">Cities</span><span class="count" id="count"></span>
+    <div class="seg" id="grain" data-testid="grain">
+      <button data-g="cities" aria-pressed="true">Cities</button>
+      <button data-g="fields" aria-pressed="false">Fields</button>
+    </div>
+    <div class="seg" id="sortseg" data-testid="sortseg">
+      <button data-s="gap"  aria-pressed="true">By gap</button>
+      <button data-s="city" aria-pressed="false">By city</button>
+      <button data-s="az"   aria-pressed="false">A–Z</button>
+    </div>
+    <div class="spacer">
+      <!-- OPTIONAL, AND OFF BY DEFAULT. The table's job is the climb to December; history is
+           context for that climb, not a second subject. Four extra columns on by default would
+           push the current month and the goal apart, which are the two people actually read. -->
+      <button class="tog" id="hist" data-testid="histtog" aria-pressed="false">Show history</button>
+    </div>
+  </div>
+</div>
+
+<div class="card panel">
+  <div class="scroll"><table>
+    <thead id="thead"></thead>
+    <tbody id="tbody"></tbody>
+  </table></div>
+  <p class="foot" id="foot"></p>
+</div>
+
+<script>
+/* TODAY IS 29 SEPTEMBER 2026. September is the live month: nearly complete, but not complete. */
+const NOW = "sep";
+const PAST = ["jun","jul","aug"];          // shown only when history is on
+const FUTURE = ["oct","nov","dec"];
+const ML = { jun:"Jun", jul:"Jul", aug:"Aug", sep:"Sep", oct:"Oct", nov:"Nov", dec:"Dec" };
+
+/* ── DATA ─────────────────────────────────────────────────────────────────────────────────────
+ * SEP and DEC are REAL, read off the live page and its chart. OCT and NOV are the page's own
+ * interpolated waypoints. JUN, JUL and AUG are ILLUSTRATIVE and labelled on the page.
+ *
+ * `hist: null` means the city had no goal that far back — San Diego and Philadelphia are new
+ * markets. That is NOT zero, and rendering it as 0.0 beside a target would read as a city that
+ * collapsed rather than one that did not exist yet. It renders as a dash with a NEW note. */
+const CITIES = [
+  { city:"Austin",       hist:[4.1,4.9,5.6], sep:6.2,  oct:7.7, nov:8.6, dec:9.9, fields:"10",
+    sub:[ {n:"Hattrick",         hist:[1.1,1.3,1.4], sep:1.6, oct:1.9, nov:2.1, dec:2.4, f:"edit"},
+          {n:"NEMP",             hist:[0.9,1.1,1.2], sep:1.4, oct:1.7, nov:1.9, dec:2.2, f:"edit"},
+          {n:"Parmer",           hist:[0.7,0.8,0.9], sep:1.0, oct:1.3, nov:1.5, dec:1.8, f:"1 open"} ] },
+  { city:"Houston",      hist:[2.2,2.7,3.1], sep:3.5,  oct:4.0, nov:4.8, dec:5.5, fields:"4 +2 new",
+    sub:[ {n:"TBD",              hist:null,          sep:null, oct:0.0, nov:0.3, dec:0.5, f:"edit", isNew:true},
+          {n:"Turf On",          hist:null,          sep:null, oct:0.1, nov:0.3, dec:0.5, f:"edit", isNew:true},
+          {n:"KISC (Katy Intl)", hist:[0.1,0.1,0.2], sep:0.2,  oct:0.4, nov:0.5, dec:0.6, f:"0 open"},
+          {n:"ATH Katy",         hist:[0.5,0.5,0.6], sep:0.6,  oct:0.7, nov:0.7, dec:0.9, f:"1 open"},
+          {n:"Hattrick T. - Tomball", hist:[0.2,0.2,0.2], sep:0.2, oct:0.3, nov:0.5, dec:0.5, f:"1 open"},
+          {n:"ATH Pearland",     hist:[2.4,2.5,2.5], sep:2.5,  oct:2.5, nov:2.5, dec:2.5, f:"edit"} ] },
+  { city:"San Antonio",  hist:[4.9,5.0,5.0], sep:5.0,  oct:5.1, nov:5.1, dec:5.2, fields:"6" },
+  { city:"Dallas",       hist:[0.3,0.4,0.6], sep:0.7,  oct:1.2, nov:1.6, dec:1.9, fields:"3 +3 new · 2 no goal",
+    sub:[ {n:"Richardson Field", hist:null,          sep:null, oct:0.2, nov:0.3, dec:0.4, f:"edit", isNew:true},
+          {n:"Bob Jones Park",   hist:[0.1,0.2,0.2], sep:0.2,  oct:0.3, nov:0.5, dec:0.5, f:"edit"} ] },
+  { city:"Atlanta",      hist:[1.3,1.1,0.9], sep:0.8,  oct:1.2, nov:1.6, dec:1.9, fields:"4" },
+  { city:"St. Louis",    hist:[0.2,0.2,0.2], sep:0.2,  oct:0.4, nov:0.7, dec:0.9, fields:"2 · 1 no goal" },
+  { city:"OKC",          hist:[0.4,0.4,0.3], sep:0.3,  oct:0.5, nov:0.8, dec:1.0, fields:"2" },
+  { city:"San Diego",    hist:null,          sep:0.05, oct:0.3, nov:0.6, dec:1.0, fields:"1 +1 new" },
+  { city:"Philadelphia", hist:null,          sep:0.02, oct:0.2, nov:0.3, dec:0.5, fields:"1 new" },
+];
+
+let grain="cities", sort="gap", hist=false, open=null;
+
+const fmt = v => v==null ? "—" : v.toFixed(1);
+const gapOf = r => r.dec - r.sep;
+/* THE TREND IS WHY HISTORY EARNS ITS COLUMNS. A gap on its own does not say whether it is closing.
+   Austin at +3.7 having climbed 4.1 to 6.2 is a city on a trajectory; Austin at +3.7 having sat
+   flat since June is a city that needs someone on a plane. Same gap, opposite decisions. */
+const trendOf = r => r.hist == null ? null : r.sep - r.hist[0];
+const trendKind = t => t == null ? null : t > 0.15 ? "up" : t < -0.15 ? "dn" : "flat";
+
+function draw(){
+  const cols = (hist ? PAST : []).concat([NOW], FUTURE);
+  const firstFuture = FUTURE[0];
+
+  /* THE CAPTION BAND ONLY EXISTS WITH HISTORY ON. Without past columns there is one actual and
+     three targets and the grey already carries it; with four actuals the reader needs telling
+     once, at the top, which side of the line they are on. */
+  const cap = hist
+    ? `<tr class="capband"><td></td><td></td>
+         <td colspan="${PAST.length+1}">Actual</td>
+         <td colspan="${FUTURE.length}" class="boundary">Goal</td>
+         <td></td><td></td>${""}</tr>`
+    : "";
+  document.getElementById("thead").innerHTML = cap +
+    `<tr><th>City</th><th>Progress</th>` +
+      cols.map(m => `<th data-testid="mh" data-m="${m}" class="${m===firstFuture&&hist?"boundary":""}">${ML[m]}${
+        m===NOW?`<span class="inprog" data-testid="inprog">live</span>`:""}</th>`).join("") +
+      (hist ? `<th data-testid="trendhead">Trend</th>` : "") +
+      `<th>Gap</th><th>Fields</th></tr>`;
+
+  let rows = CITIES.slice();
+  if (sort==="gap") rows.sort((a,b)=>gapOf(b)-gapOf(a));
+  if (sort==="az")  rows.sort((a,b)=>a.city.localeCompare(b.city));
+
+  const cell = (r,m,isSub) => {
+    const v = r[m];
+    if (m===NOW) return `<td class="now" data-testid="cell" data-m="${m}">${fmt(v)}</td>`;
+    if (FUTURE.includes(m))
+      return `<td class="${m==="dec"?"goal":"target"} ${m===firstFuture&&hist?"boundary":""}"
+        data-testid="cell" data-m="${m}">${fmt(v)}</td>`;
+    /* A PAST MONTH WITH NO GOAL IS NOT ZERO. A new market renders a dash, never 0.0 — a zero
+       beside a target reads as a city that collapsed rather than one that did not exist. */
+    const h = r.hist;
+    const i = PAST.indexOf(m);
+    return h == null
+      ? `<td class="nodata" data-testid="cell" data-m="${m}" data-none="1">—</td>`
+      : `<td class="past" data-testid="cell" data-m="${m}">${fmt(h[i])}</td>`;
+  };
+
+  document.getElementById("tbody").innerHTML = rows.map(r => {
+    const g = gapOf(r), t = trendOf(r), tk = trendKind(t);
+    const pct = Math.max(2, Math.min(100, Math.round(r.sep / r.dec * 100)));
+    let out = `<tr data-testid="row" data-city="${r.city}">
+      <td class="cityname">${r.sub?`<span class="caret">${open===r.city?"▾":"▸"}</span> `:`<span class="caret"></span> `}<span class="dot" data-ok="${g<=0.1?1:0}"></span>${r.city}</td>
+      <td><span class="prog"><i style="width:${pct}%"></i></span></td>
+      ${cols.map(m => cell(r,m)).join("")}
+      ${hist ? `<td>${t==null
+          ? `<span class="nodata" data-testid="trend" data-none="1">—</span><span class="newnote" data-testid="newnote">new</span>`
+          : `<span class="trend" data-testid="trend" data-t="${tk}"><span class="gl">${tk==="up"?"▲":tk==="dn"?"▼":"–"}</span>${t>0?"+":""}${t.toFixed(1)}</span>`}</td>` : ""}
+      <td><span class="gap" data-zero="${g<=0.1?1:0}">+${g.toFixed(1)}</span></td>
+      <td class="fields">${r.fields}</td></tr>`;
+    if (open===r.city && r.sub){
+      out += r.sub.map(s => `<tr class="child" data-testid="child">
+        <td>${s.n}${s.isNew?`<span class="newnote">new</span>`:""}</td><td></td>
+        ${cols.map(m => cell(s,m,true)).join("")}
+        ${hist ? `<td>${s.hist==null
+            ? `<span class="nodata">—</span>`
+            : (()=>{const d=s.sep-s.hist[0], k=trendKind(d);
+                return `<span class="trend" data-t="${k}"><span class="gl">${k==="up"?"▲":k==="dn"?"▼":"–"}</span>${d>0?"+":""}${d.toFixed(1)}</span>`;})()}</td>` : ""}
+        <td><span class="gap">+${(s.dec-(s.sep??0)).toFixed(1)}</span></td>
+        <td class="fields">${s.f}</td></tr>`).join("");
+    }
+    return out;
+  }).join("");
+
+  document.getElementById("count").textContent = `${CITIES.length}`;
+  document.getElementById("foot").innerHTML =
+    (hist
+      ? `Actuals are what happened; goals are the climb to December. Trend is the change from June to now, which is what says whether a gap is closing on its own. A city with no history is new, not at zero. `
+      : `Sep is the live month and Dec is the goal. Turn on history to see how each city got here. `) +
+    `Sep and Dec are real. <span class="illus">Jun, Jul and Aug are illustrative.</span>`;
+}
+
+document.getElementById("hist").addEventListener("click", e => {
+  hist=!hist; e.currentTarget.setAttribute("aria-pressed",String(hist)); draw(); });
+document.getElementById("grain").addEventListener("click", e => {
+  const b=e.target.closest("button"); if(!b) return; grain=b.dataset.g;
+  [...e.currentTarget.children].forEach(x=>x.setAttribute("aria-pressed",String(x===b))); draw(); });
+document.getElementById("sortseg").addEventListener("click", e => {
+  const b=e.target.closest("button"); if(!b) return; sort=b.dataset.s;
+  [...e.currentTarget.children].forEach(x=>x.setAttribute("aria-pressed",String(x===b))); draw(); });
+document.getElementById("tbody").addEventListener("click", e => {
+  const tr=e.target.closest("[data-testid='row']"); if(!tr) return;
+  const c=tr.dataset.city; const row=CITIES.find(r=>r.city===c);
+  if (!row?.sub) return; open = open===c ? null : c; draw(); });
+draw();
+</script>
+</div></body></html>

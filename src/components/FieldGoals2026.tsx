@@ -24,12 +24,12 @@
  * nowhere. There is no sentence anywhere telling you how many of those there are.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { supabase } from "@/lib/supabase";
 import { errorText } from "@/lib/errorText";
 import {
   MONTH_LABELS, bandForDisplay, cityRollup, hasNoCompletedDay, cityTotals, fmtSigned, fmtUnit, isDormantIn,
-  monthKey, ramp, rowCountsTowardTotals, roundTo, sortGoalRows, weekly,
+  historyIndexes, monthKey, ramp, rowCountsTowardTotals, roundTo, sortGoalRows, trendKind, weekly,
   type Band, type CityFieldRow, type CityRow, type GoalSort,
 } from "@/lib/fieldGoals";
 
@@ -92,6 +92,15 @@ export default function FieldGoals2026() {
    * the dots run red, amber, green, dark in sequence, which alphabetical order scrambles. */
   const [sort, setSort] = useState<GoalSort>("gap");
   const [showDormant, setShowDormant] = useState(false);
+  /* ── HISTORY IS OFF BY DEFAULT, AND THAT IS THE DECISION ─────────────────────────────────────
+   * Ryan: "What's the best way to show historical months? I want it to be optional."
+   *
+   * This table's job is the climb to December. The two numbers people read are the live month and
+   * the goal, and four extra columns push them apart. History is CONTEXT for that climb, not a
+   * second subject — so it is a thing you ask for, and the table you get without asking is exactly
+   * the table that was there before. Not persisted: every load opens on the question the page is
+   * for. */
+  const [showHistory, setShowHistory] = useState(false);
   /* CITIES ON LOAD. The sort default is untouched and still per the sort control — "by gap",
      descending — which means the page opens on the city with the most to find. */
   const [grain, setGrain] = useState<Grain>("city");
@@ -400,6 +409,7 @@ export default function FieldGoals2026() {
           onTarget={setTarget} open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
           onAddAction={addAction} onToggleAction={toggleAction} onRemoveAction={removeAction}
           onNotCounted={setNotCounted} writeErr={writeErr}
+          showHistory={showHistory} setShowHistory={setShowHistory}
         />
       ) : (
         <>
@@ -512,6 +522,25 @@ function YearChart({ months, unit, noCompletedDay }: { months: { label: string; 
           data-testid="fg-tip" style={{ left: tip.x, top: tip.y, background: "#0b2018" }}>{tip.html}</div>
       )}
     </div>
+  );
+}
+
+/* ── THE HISTORY SWITCH ────────────────────────────────────────────────────────────────────────
+ * WITH THE OTHER SWITCHES, NOT BESIDE THE DATA. Cities/Fields and the three sorts already say what
+ * the rows are and in what order; this says how far back they reach. A control that changes the
+ * shape of the table belongs with the other controls that change the shape of the table, and one
+ * floating above a column would read as being about that column.
+ *
+ * 32px, which is the height every control on this page already is. */
+function HistorySeg({ on, set }: { on: boolean; set: (v: boolean) => void }) {
+  return (
+    <button type="button" data-testid="histtog" aria-pressed={on} onClick={() => set(!on)}
+      className="ml-3 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11.5px] font-bold"
+      style={{ minHeight: 32, borderColor: on ? "#003326" : "#D3DCD8",
+               ...(on ? { background: "#003326", color: "#fff" } : { background: "#fff", color: "#3C4F44" }) }}>
+      <span aria-hidden style={{ fontSize: 9 }}>{on ? "\u25c0\u25c0" : "\u25c0"}</span>
+      Show history
+    </button>
   );
 }
 
@@ -631,6 +660,7 @@ function CityTable({
   cities, totals, unit, cur, noCompletedDay, sort, setSort, grain, setGrain, openCities, toggleCity,
   rowByKey, year, busy, revert, onTarget, open, setOpen, draft, setDraft,
   onAddAction, onToggleAction, onRemoveAction, onNotCounted, writeErr,
+  showHistory, setShowHistory,
 }: {
   cities: CityRow[];
   totals: ReturnType<typeof cityTotals>;
@@ -654,12 +684,23 @@ function CityTable({
   onRemoveAction: (a: Action, rowKey: string) => void;
   onNotCounted: (r: Row, value: boolean) => void;
   writeErr: { key: string; message: string } | null;
+  showHistory: boolean; setShowHistory: (v: boolean) => void;
 }) {
+  /* THE MONTHS ON SCREEN, LEFT TO RIGHT. With history off this is exactly what it was: the live
+   * month and the three targets. */
+  const histIdx = showHistory ? historyIndexes(cur) : [];
+  const COL = { past: "#3A4D44", live: "#003326", target: "#9AA8A1", goal: "#003326" };
+  /* THE HAIRLINE, AND IT FALLS AFTER THE LIVE MONTH. Everything left of it happened; everything
+   * right of it is a plan. Only drawn with history open — with one actual and three targets the
+   * existing grey already carries the distinction, which is the same reason the caption band is
+   * conditional. */
+  const rule = showHistory ? { borderLeft: "1px solid #C3CEC8" } : {};
   return (
     <>
       <h2 className="mb-2 mt-6 flex items-baseline gap-2 text-[15px] font-extrabold">
         Cities <span className="text-[11.5px] font-semibold" style={{ color: "#5C6F66" }} data-testid="fg-city-count">{cities.length}</span>
         <GrainSeg grain={grain} setGrain={setGrain} />
+        <HistorySeg on={showHistory} set={setShowHistory} />
         <span className="inline-flex overflow-hidden rounded-lg border" style={{ borderColor: "#D3DCD8" }} data-testid="fg-sort">
           {([["gap", "By gap"], ["city", "By city"], ["name", "A–Z"]] as const).map(([k, label]) => (
             <button key={k} type="button" data-testid={`fg-sort-${k}`} aria-pressed={sort === k}
@@ -673,9 +714,58 @@ function CityTable({
       <div className="overflow-x-auto rounded-xl border-[1.5px] scroll" style={{ borderColor: "#D3DCD8" }}>
         <table className="w-full min-w-[620px] border-collapse bg-white" data-testid="fg-cities">
           <thead>
+            {/* ── THE CAPTION BAND, ONLY WITH HISTORY OPEN ──────────────────────────────────
+                Without past columns there is one actual against three targets and the grey
+                already carries it. With FOUR actuals the reader has to be told once, at the top,
+                which side of the line they are on — the same solid-versus-outlined distinction
+                the chart above this table already teaches, said in words because a table cell
+                cannot be outlined. */}
+            {showHistory && (
+              <tr data-testid="capband" style={{ background: "#F2F4F3" }}>
+                <td style={{ background: "#F2F4F3" }} /><td />
+                <td colSpan={histIdx.length + 1} data-testid="cap-actual"
+                  className="border-b px-3 text-[9.5px] font-extrabold uppercase tracking-[0.13em]"
+                  style={{ height: 24, color: "#5C6F66", borderColor: "#D3DCD8" }}>Actual</td>
+                <td colSpan={3} data-testid="cap-goal"
+                  className="border-b px-3 text-[9.5px] font-extrabold uppercase tracking-[0.13em]"
+                  style={{ height: 24, color: "#5C6F66", borderColor: "#D3DCD8", ...rule }}>Goal</td>
+                <td /><td /><td />
+              </tr>
+            )}
             <tr>
-              {["City", "Progress", MONTH_LABELS[cur], "Oct", "Nov", "Dec", "Gap", "Fields"].map((h, i) => (
-                <th key={h} className={`whitespace-nowrap border-b px-3 py-2 text-[10px] font-extrabold uppercase tracking-wider ${i >= 2 && i <= 6 ? "text-right" : "text-left"}`}
+              <th className="sticky left-0 z-[2] whitespace-nowrap border-b px-3 py-2 text-left text-[10px] font-extrabold uppercase tracking-wider"
+                style={{ color: "#5C6F66", background: "#F2F4F3", borderColor: "#D3DCD8" }}>City</th>
+              <th className="whitespace-nowrap border-b px-3 py-2 text-left text-[10px] font-extrabold uppercase tracking-wider"
+                style={{ color: "#5C6F66", background: "#F2F4F3", borderColor: "#D3DCD8" }}>Progress</th>
+              {histIdx.map((i) => (
+                <th key={i} data-testid="mh" data-m={MONTH_LABELS[i].toLowerCase()}
+                  className="whitespace-nowrap border-b px-3 py-2 text-right text-[10px] font-extrabold uppercase tracking-wider"
+                  style={{ color: "#5C6F66", background: "#F2F4F3", borderColor: "#D3DCD8" }}>{MONTH_LABELS[i]}</th>
+              ))}
+              <th data-testid="mh" data-m={MONTH_LABELS[cur].toLowerCase()}
+                className="whitespace-nowrap border-b px-3 py-2 text-right text-[10px] font-extrabold uppercase tracking-wider"
+                style={{ color: "#5C6F66", background: "#F2F4F3", borderColor: "#D3DCD8" }}>
+                {MONTH_LABELS[cur]}
+                {/* THE LIVE MONTH SAYS SO. Among three complete months it is the one still
+                    running, and a reader comparing it to them has to know that. */}
+                <span data-testid="inprog" className="ml-1 rounded px-1 text-[8.5px] font-bold tracking-normal"
+                  style={{ background: "#FFF3E0", color: "#8A5A12" }}>live</span>
+              </th>
+              {([9, 10, 11] as const).map((i, k) => (
+                <th key={i} data-testid="mh" data-m={MONTH_LABELS[i].toLowerCase()}
+                  data-boundary={showHistory && k === 0 ? "1" : undefined}
+                  className="whitespace-nowrap border-b px-3 py-2 text-right text-[10px] font-extrabold uppercase tracking-wider"
+                  style={{ color: "#5C6F66", background: "#F2F4F3", borderColor: "#D3DCD8", ...(k === 0 ? rule : {}) }}>
+                  {MONTH_LABELS[i]}
+                </th>
+              ))}
+              {showHistory && (
+                <th data-testid="trendhead"
+                  className="whitespace-nowrap border-b px-3 py-2 text-right text-[10px] font-extrabold uppercase tracking-wider"
+                  style={{ color: "#5C6F66", background: "#F2F4F3", borderColor: "#D3DCD8" }}>Trend</th>
+              )}
+              {["Gap", "Fields"].map((h, i) => (
+                <th key={h} className={`whitespace-nowrap border-b px-3 py-2 text-[10px] font-extrabold uppercase tracking-wider ${i === 0 ? "text-right" : "text-left"}`}
                   style={{ color: "#5C6F66", background: "#F2F4F3", borderColor: "#D3DCD8" }}>{h}</th>
               ))}
             </tr>
@@ -692,7 +782,12 @@ function CityTable({
                     onClick={() => toggleCity(c.city)}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleCity(c.city); } }}
                     className="cursor-pointer hover:bg-[#FAFCFB] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[#0E8A54]">
-                    <td className="border-t px-3 py-2 text-[13px]" style={{ borderColor: "#EDF2EF" }}>
+                    {/* ── THE NAME STAYS PUT WHILE THE MONTHS SCROLL ──────────────────────────
+                        With history open the table is twelve columns and scrolls in its own
+                        container on a narrow screen. A row of figures whose city has scrolled off
+                        the left is a row you cannot read, so the first column is pinned. Opaque
+                        background, or the scrolling cells show through it. */}
+                    <td className="sticky left-0 z-[1] border-t px-3 py-2 text-[13px]" style={{ borderColor: "#EDF2EF", background: "#fff" }}>
                       <span data-testid="chev" aria-hidden className="mr-1.5 inline-block text-[8px] align-middle"
                         style={{ color: "#9AA8A1", transform: isOpen ? "rotate(90deg)" : "none", transformOrigin: "50% 50%", transition: "transform .12s" }}>▶</span>
                       <span className="mr-2 inline-block h-2.5 w-2.5 rounded-full align-middle" data-testid="dot" data-b={noCompletedDay ? "none" : band}
@@ -708,12 +803,48 @@ function CityTable({
                         </span>
                       )}
                     </td>
-                    <td className="border-t px-3 py-2 text-right text-[13px] font-bold tabular-nums" style={{ borderColor: "#EDF2EF", color: "#003326" }} data-v={c.sep.toFixed(4)} data-testid="sep">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(c.sep, unit)}</td>
+                    {/* ── HISTORY: A DASH IS NOT A ZERO ──────────────────────────────────────
+                        A market with no pitch open that month renders a dash. 0.0 beside a
+                        December target reads as a city that collapsed; the truth is that it had
+                        not opened yet, and once a zero is printed the two are indistinguishable.
+                        Past months are INK — one step back from the live month, which stays the
+                        anchor — against the grey the targets already wear. */}
+                    {histIdx.map((mi, k) => (
+                      <td key={mi} data-testid="hcell" data-m={MONTH_LABELS[mi].toLowerCase()}
+                        data-none={c.hist[k] == null ? "1" : undefined}
+                        data-v={c.hist[k] == null ? "" : (c.hist[k] as number).toFixed(4)}
+                        className="border-t px-3 py-2 text-right text-[13px] tabular-nums"
+                        style={{ borderColor: "#EDF2EF", color: c.hist[k] == null ? "#C3CEC8" : COL.past, fontWeight: 600 }}>
+                        {c.hist[k] == null ? "\u2013" : fmtUnit(c.hist[k] as number, unit)}
+                      </td>
+                    ))}
+                    <td className="border-t px-3 py-2 text-right text-[13px] font-bold tabular-nums" style={{ borderColor: "#EDF2EF", color: COL.live }} data-v={c.sep.toFixed(4)} data-testid="sep" data-m={MONTH_LABELS[cur].toLowerCase()}>{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(c.sep, unit)}</td>
                     {/* OCT AND NOV ARE DERIVED AND LOOK DERIVED: lighter ink and a lighter weight
                         than both the actual beside them and the December a person typed. */}
-                    <td className="border-t px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#EDF2EF", color: "#9AA8A1", fontWeight: 500 }} data-v={c.oct.toFixed(4)} data-testid="oct">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(c.oct, unit)}</td>
-                    <td className="border-t px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#EDF2EF", color: "#9AA8A1", fontWeight: 500 }} data-v={c.nov.toFixed(4)} data-testid="nov">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(c.nov, unit)}</td>
-                    <td className="border-t px-3 py-2 text-right text-[13px] font-bold tabular-nums" style={{ borderColor: "#EDF2EF", color: "#003326" }} data-v={c.dec.toFixed(4)} data-testid="dec">{fmtUnit(c.dec, unit)}</td>
+                    <td className="border-t px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#EDF2EF", color: COL.target, fontWeight: 500, ...rule }} data-v={c.oct.toFixed(4)} data-testid="oct" data-m="oct">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(c.oct, unit)}</td>
+                    <td className="border-t px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#EDF2EF", color: COL.target, fontWeight: 500 }} data-v={c.nov.toFixed(4)} data-testid="nov" data-m="nov">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(c.nov, unit)}</td>
+                    <td className="border-t px-3 py-2 text-right text-[13px] font-bold tabular-nums" style={{ borderColor: "#EDF2EF", color: COL.goal }} data-v={c.dec.toFixed(4)} data-testid="dec" data-m="dec">{fmtUnit(c.dec, unit)}</td>
+                    {/* ── TREND IS WHY HISTORY EARNS ITS COLUMNS ─────────────────────────────
+                        A gap alone does not say whether it is closing. NEVER FABRICATED: a market
+                        with no June has no trend, and is labelled new so the absence reads as
+                        specific rather than as missing data. */}
+                    {showHistory && (
+                      <td className="border-t px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#EDF2EF" }}>
+                        {c.trend == null
+                          ? <>
+                              <span data-testid="trend" data-none="1" style={{ color: "#C3CEC8" }}>{"\u2013"}</span>
+                              <span data-testid="newnote" className="ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold"
+                                style={{ background: "#EAF4EE", color: "#12694A" }}>new</span>
+                            </>
+                          : <span data-testid="trend" data-t={trendKind(c.trend)!} className="font-extrabold"
+                              style={{ color: trendKind(c.trend) === "up" ? "#12694A" : trendKind(c.trend) === "dn" ? "#A8341F" : "#8C9E93" }}>
+                              <span aria-hidden className="mr-1 text-[10px]">
+                                {trendKind(c.trend) === "up" ? "\u25b2" : trendKind(c.trend) === "dn" ? "\u25bc" : "\u2013"}
+                              </span>
+                              {fmtSigned(c.trend, unit)}
+                            </span>}
+                      </td>
+                    )}
                     <td className="border-t px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#EDF2EF", color: BAND_HUE[band] }} data-v={c.gapDaily.toFixed(4)} data-testid="gap">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtSigned(c.gapDaily, unit)}</td>
                     {/* "9 +2 new · 2 no goal". A city with no unsigned fields says nothing rather than
                         "+0 new", and a December figure carrying absent targets says so here rather
@@ -730,7 +861,8 @@ function CityTable({
                       noCompletedDay={noCompletedDay} onTarget={onTarget}
                       open={open} setOpen={setOpen} draft={draft} setDraft={setDraft}
                       onAddAction={onAddAction} onToggleAction={onToggleAction}
-                      onRemoveAction={onRemoveAction} onNotCounted={onNotCounted} writeErr={writeErr} />
+                      onRemoveAction={onRemoveAction} onNotCounted={onNotCounted} writeErr={writeErr}
+                      histIdx={histIdx} showHistory={showHistory} rule={rule} />
                   ))}
                 </Fragmentish>
               );
@@ -738,12 +870,18 @@ function CityTable({
           </tbody>
           <tfoot>
             <tr data-testid="tot" style={{ background: "#F7FAF8" }}>
-              <td className="border-t-2 px-3 py-2 text-[13px] font-extrabold" style={{ borderColor: "#D3DCD8" }}>All MatchDay</td>
+              <td className="sticky left-0 z-[1] border-t-2 px-3 py-2 text-[13px] font-extrabold" style={{ borderColor: "#D3DCD8", background: "#F7FAF8" }}>All MatchDay</td>
               <td className="border-t-2" style={{ borderColor: "#D3DCD8" }} />
+              {/* ── THE FOOTER SPANS THE HISTORY COLUMNS WITHOUT TOTALLING THEM ──────────────
+                  An estate figure for June would be a fourth number nobody asked for, in a row
+                  whose job is the climb to December. The cells exist so the columns line up and
+                  say nothing, which is the honest thing for them to say. */}
+              {histIdx.map((mi) => <td key={mi} className="border-t-2" style={{ borderColor: "#D3DCD8" }} />)}
               <td className="border-t-2 px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#D3DCD8", color: "#003326" }} data-v={totals.sep.toFixed(4)} data-testid="tsep">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(totals.sep, unit)}</td>
-              <td className="border-t-2 px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#D3DCD8", color: "#9AA8A1", fontWeight: 500 }} data-v={totals.oct.toFixed(4)} data-testid="toct">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(totals.oct, unit)}</td>
+              <td className="border-t-2 px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#D3DCD8", color: "#9AA8A1", fontWeight: 500, ...rule }} data-v={totals.oct.toFixed(4)} data-testid="toct">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(totals.oct, unit)}</td>
               <td className="border-t-2 px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#D3DCD8", color: "#9AA8A1", fontWeight: 500 }} data-v={totals.nov.toFixed(4)} data-testid="tnov">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(totals.nov, unit)}</td>
               <td className="border-t-2 px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#D3DCD8", color: "#003326" }} data-v={totals.dec.toFixed(4)} data-testid="tdec">{fmtUnit(totals.dec, unit)}</td>
+              {showHistory && <td className="border-t-2" style={{ borderColor: "#D3DCD8" }} />}
               <td className="border-t-2 px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#D3DCD8", color: "#A8341F" }} data-v={totals.gapDaily.toFixed(4)} data-testid="tgap">{noCompletedDay ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtSigned(totals.gapDaily, unit)}</td>
               <td className="border-t-2 px-3 py-2 text-[11px]" style={{ borderColor: "#D3DCD8", color: "#9AA8A1" }}>
                 {totals.existing}{totals.slots > 0 && <>{" "}<span className="font-bold" style={{ color: CHART_HUE }}>+{totals.slots} new</span></>}
@@ -781,8 +919,11 @@ function CityFieldTr({
   f, city, row, unit, cur, year, busy, revert, noCompletedDay,
   onTarget, open, setOpen, draft, setDraft,
   onAddAction, onToggleAction, onRemoveAction, onNotCounted, writeErr,
+  histIdx, showHistory, rule,
 }: {
   f: CityFieldRow; city: string;
+  /** The history month indexes on screen, and the hairline. Empty when history is shut. */
+  histIdx: number[]; showHistory: boolean; rule: React.CSSProperties;
   /** The page row behind this drawer line. Absent only if the rollup outran the page's own rows,
    *  in which case the line stays read-only rather than rendering inputs that cannot save. */
   row: Row | undefined;
@@ -803,11 +944,27 @@ function CityFieldTr({
   const out = row?.notCounted === true;
   const openN = row ? row.actions.filter((a) => !a.done).length : 0;
   const isOpen = row != null && open === row.key;
+  /* A FIELD TRENDS ON THE SAME RULE AS ITS CITY: earliest history month to the live one, and
+   * nothing at all when that month is a dash. Built here and INJECTED into GoalCells so it lands
+   * between Dec and the gap, where the header puts it. */
+  const fTrend = f.hist[0] == null || f.sep == null ? null : roundTo(f.sep - (f.hist[0] as number), 1);
+  const fk = trendKind(fTrend);
+  const trendCell = showHistory ? (
+    <td className="border-t px-3 py-1.5 text-right text-[12px] tabular-nums" style={{ borderColor: "#EDF2EF", background: "#FAFCFB" }}>
+      {fTrend == null
+        ? <span data-testid="trend" data-none="1" style={{ color: "#C3CEC8" }}>{"\u2013"}</span>
+        : <span data-testid="trend" data-t={fk!} className="font-bold"
+            style={{ color: fk === "up" ? "#12694A" : fk === "dn" ? "#A8341F" : "#8C9E93" }}>
+            <span aria-hidden className="mr-1 text-[9px]">{fk === "up" ? "\u25b2" : fk === "dn" ? "\u25bc" : "\u2013"}</span>
+            {fmtSigned(fTrend, unit)}
+          </span>}
+    </td>
+  ) : undefined;
   return (
     <>
       <tr data-testid="frow" data-c={city} data-f={f.name} data-kind={f.kind}
         data-editable={row ? "1" : "0"} style={out ? { opacity: 0.55 } : undefined}>
-        <td className="border-t py-1.5 pl-9 pr-3 text-[12px]" style={{ ...tdStyle, color: "#5C6F66" }}>
+        <td className="sticky left-0 z-[1] border-t py-1.5 pl-9 pr-3 text-[12px]" style={{ ...tdStyle, color: "#5C6F66" }}>
           {f.name}
           {f.kind === "slot" && (
             <span data-testid="newtag" className="ml-1.5 rounded border px-1 text-[9px] font-extrabold tracking-wide"
@@ -821,14 +978,26 @@ function CityFieldTr({
         {/* THE PROGRESS COLUMN STAYS EMPTY in the drawer: the city row above already carries one,
             and a second bar at a second scale in the same column reads as the same measure. */}
         <td className="border-t" style={tdStyle} />
+        {/* THE SAME DASH RULE, ONE LEVEL DOWN. A pitch that did not exist in June dashes there
+            too — the city row above it is the sum of exactly these cells. */}
+        {histIdx.map((mi, k) => (
+          <td key={mi} data-testid="hcell" data-m={MONTH_LABELS[mi].toLowerCase()}
+            data-none={f.hist[k] == null ? "1" : undefined}
+            data-v={f.hist[k] == null ? "" : (f.hist[k] as number).toFixed(4)}
+            className="border-t px-3 py-1.5 text-right text-[12px] tabular-nums"
+            style={{ ...tdStyle, color: f.hist[k] == null ? "#C3CEC8" : "#5C6F66", fontWeight: 600 }}>
+            {f.hist[k] == null ? "\u2013" : fmtUnit(f.hist[k] as number, unit)}
+          </td>
+        ))}
         <td className="border-t px-3 py-1.5 text-right text-[12px] tabular-nums" data-testid="fsep"
-          data-v={f.sep == null ? "" : f.sep.toFixed(4)}
+          data-v={f.sep == null ? "" : f.sep.toFixed(4)} data-m={MONTH_LABELS[cur].toLowerCase()}
           style={{ ...tdStyle, color: "#3A4D44", fontWeight: 600 }}>
           {f.sep == null || noCompletedDay ? dash : fmtUnit(f.sep, unit)}
         </td>
         {row
           ? <GoalCells r={row} year={year} cur={cur} unit={unit} busy={busy} revert={revert}
-              noCompletedDay={noCompletedDay} onTarget={onTarget} tone={TONE} />
+              noCompletedDay={noCompletedDay} onTarget={onTarget} tone={TONE} rule={rule}
+              trendCell={trendCell} />
           : <>
               {/* NO PAGE ROW BEHIND THIS LINE, so it shows its numbers and no inputs rather than
                   controls that would look live and save nothing. */}
@@ -841,6 +1010,7 @@ function CityFieldTr({
               <td className="border-t px-3 py-1.5 text-right text-[12px] tabular-nums" data-testid="fdec"
                 data-v={f.dec == null ? "" : f.dec.toFixed(4)} style={{ ...tdStyle, color: "#3A4D44", fontWeight: 600 }}>
                 {f.dec == null ? dash : fmtUnit(f.dec, unit)}</td>
+              {trendCell}
               <td className="border-t px-3 py-1.5 text-right text-[12px] font-bold tabular-nums" data-testid="fgap" style={tdStyle}>
                 {f.gapDaily == null
                   ? <span data-testid="nogoal" className="text-[11px] font-normal italic" style={{ color: "#9AA8A1" }}>no goal</span>
@@ -864,13 +1034,13 @@ function CityFieldTr({
       {/* IN PLACE, NOT INSTEAD OF THE PAGE, exactly as the field table does it. */}
       {row && writeErr?.key === row.key && (
         <tr data-testid="fg-write-error" data-key={row.key}>
-          <td colSpan={8} className="px-3 pb-2 text-[12px]" style={{ color: "#A8341F", background: "#FDF3EF" }}>
+          <td colSpan={8 + histIdx.length + (showHistory ? 1 : 0)} className="px-3 pb-2 text-[12px]" style={{ color: "#A8341F", background: "#FDF3EF" }}>
             {writeErr.message}
           </td>
         </tr>
       )}
       {row && isOpen && (
-        <tr data-testid="fg-actions-row"><td colSpan={8} className="px-3 pb-3 pl-9" style={{ background: TONE.bg }}>
+        <tr data-testid="fg-actions-row"><td colSpan={8 + histIdx.length + (showHistory ? 1 : 0)} className="px-3 pb-3 pl-9" style={{ background: TONE.bg }}>
           <ActionsDrawer r={row} busy={busy} draft={draft} setDraft={setDraft}
             onAddAction={onAddAction} onToggleAction={onToggleAction}
             onRemoveAction={onRemoveAction} onNotCounted={onNotCounted} />
@@ -890,13 +1060,21 @@ function CityFieldTr({
  * drawer is indented and lighter; the field table is not. That is a style the row decides, which
  * is why `tone` is a prop rather than a second copy of the markup. */
 function GoalCells({
-  r, year, cur, unit, busy, revert, noCompletedDay, onTarget, tone,
+  r, year, cur, unit, busy, revert, noCompletedDay, onTarget, tone, rule, trendCell,
 }: {
   r: Row; year: number; cur: number; unit: "day" | "week"; busy: boolean; revert: number;
   noCompletedDay?: boolean;
   onTarget: (r: Row, month: string, v: number | null) => void;
   /** The city drawer's subordinate styling. Undefined in the field table. */
   tone?: { bg: string; pad: string };
+  /** The actual/goal hairline, drawn on the first future month. Empty when history is shut. */
+  rule?: React.CSSProperties;
+  /* ── THE TREND CELL IS INJECTED, NOT APPENDED AFTER THIS COMPONENT ────────────────────────
+   * GoalCells emits Oct, Nov, Dec AND the gap, so a trend rendered after it lands to the RIGHT of
+   * the gap — while a city row puts trend to its LEFT. The drawer's columns then disagree with the
+   * row they hang under and with the header above both, which is exactly what shipped in the first
+   * cut of this: Houston's slots showed their gap under TREND and a dash under GAP. */
+  trendCell?: ReactNode;
 }) {
   const decKey = monthKey(year, DEC);
   const sep = r.monthly[cur]?.daily ?? 0;
@@ -914,7 +1092,7 @@ function GoalCells({
         const typed = r.targets[k];
         const shown = typed ?? suggestions[idx];
         return (
-          <td key={k} className={cls} style={st}>
+          <td key={k} data-m={MONTH_LABELS[mi].toLowerCase()} className={cls} style={idx === 0 ? { ...st, ...(rule ?? {}) } : st}>
             <GoalInput value={shown == null ? "" : fmtUnit(shown, unit)} suggested={typed == null}
               revert={revert} testId={`fg-goal-${MONTH_LABELS[mi]}`} disabled={busy}
               title={typed != null ? "set" : noGoal ? "no December goal to ramp to" : "suggested by the ramp from this month to December"}
@@ -922,11 +1100,12 @@ function GoalCells({
           </td>
         );
       })}
-      <td className={cls} style={st}>
+      <td data-m="dec" className={cls} style={st}>
         <GoalInput value={dec == null ? "" : fmtUnit(dec, unit)} suggested={false} placeholder="set"
           revert={revert} testId="fg-goal-Dec" disabled={busy} title="set"
           onCommit={(v) => onTarget(r, decKey, v == null ? null : unit === "day" ? v : v / 7)} />
       </td>
+      {trendCell}
       <td className={`${cls} text-[13px] font-extrabold tabular-nums`} style={st} data-testid="fg-gap-cell">
         {noGoal
           ? <span className="text-[11px] italic font-normal" style={{ color: "#9AA8A1" }}>no goal</span>

@@ -7,9 +7,9 @@
  */
 import {
   SPOTS_PER_MATCH, band, bandForDisplay, countsTowardGoals, cityRollup, cityTotals, dailyAverage,
-  daysElapsed, fmtSigned, fmtUnit, isDormantIn, matchMonthIndex, monthKey, ramp,
-  rowCountsTowardTotals, rowKeyForField, roundTo, sortGoalRows, sumTargets, weekly,
-  type RollupRow,
+  daysElapsed, fmtSigned, fmtUnit, historyIndexes, isDormantIn, matchMonthIndex, monthKey, ramp,
+  rowCountsTowardTotals, rowKeyForField, roundTo, sortGoalRows, sumTargets, trendKind,
+  TREND_DEAD_BAND, weekly, type RollupRow,
 } from "@/lib/fieldGoals";
 
 let pass = 0, fail = 0;
@@ -235,6 +235,70 @@ console.log("\n— a city equals the sum of the fields AS DISPLAYED —");
   is("  and the footer GAP the sum of the city GAPs",
     tot.gapDaily, roundTo(many.reduce((a, c) => a + c.gapDaily, 0), 1));
   yes("  CONTROL: more than one city, so the footer is not one row wearing a total", many.length > 1);
+}
+
+console.log("\n— history: a dash is not a zero, and a trend is not a gap —");
+{
+  /* ── WHY THIS IS HERE AND NOT ONLY IN THE BROWSER ────────────────────────────────────────
+   * PRODUCTION HAS ONLY CLIMBING CITIES TODAY. Measured 2026-09-29: all seven cities with
+   * history trend up, and none is flat or falling. The browser check therefore cannot exercise
+   * two of the three states, and MANUFACTURING ONE BY EDITING PRODUCTION would be the worst
+   * possible way to make a line green. A fixture is the honest place for it. */
+  is("a climb past the dead band is up", trendKind(0.2), "up");
+  is("a fall past it is down", trendKind(-0.2), "dn");
+  is("anything inside it is flat, not a direction", trendKind(0.1), "flat");
+  is("  …in both directions", trendKind(-0.1), "flat");
+  /* THE BAND IS EXCLUSIVE AT THE EDGE, so a value exactly on it does not get an arrow. */
+  is("  the boundary itself is flat", trendKind(TREND_DEAD_BAND), "flat");
+  /* NULL IN, NULL OUT. A market with no history must NOT be handed a zero: zero classifies as
+   * "flat", which is a claim about a trajectory that was never measured. */
+  is("no history means no trend, never a flat zero", trendKind(null), null);
+  yes("  CONTROL: and zero WOULD have read as flat, which is why null must not become it",
+    trendKind(0) === "flat");
+
+  is("history is the three months before the live one", historyIndexes(8), [5, 6, 7]);
+  is("  …and never runs off the front of the year", historyIndexes(1), [0]);
+
+  const year = 2026, cur = 8, decKey = monthKey(year, 11);
+  /* `matches` IS WHAT SAYS A PITCH EXISTED. Both rows below read daily 0 in June; only one of
+   * them had a pitch open. Without the match count they are indistinguishable, and the quiet one
+   * would be printed as 0.0 — the exact misread this rule exists to prevent. */
+  const mk = (key: string, city: string, dailies: number[], matches: number[], dec: number | null): RollupRow => ({
+    key, kind: "existing", name: key, city,
+    monthly: Array.from({ length: 12 }, (_, m) => ({ daily: dailies[m] ?? 0, matches: matches[m] ?? 0 })),
+    targets: dec == null ? {} : { [decKey]: dec },
+  });
+  const zeros = new Array(12).fill(0);
+  const open = (...at: number[]) => { const a = new Array(12).fill(0); for (const i of at) a[i] = 4; return a; };
+
+  // Old pitch: open since May. Quiet in June (no spots) but it EXISTED.
+  const old = mk("old", "Austin", Object.assign([...zeros], { 5: 0, 6: 0.4, 7: 0.6, 8: 0.9 }), open(4, 5, 6, 7, 8), 2.0);
+  // New pitch: first match in August only.
+  const fresh = mk("fresh", "Austin", Object.assign([...zeros], { 7: 0.2, 8: 0.3 }), open(7, 8), 1.0);
+  const [austin] = cityRollup([old, fresh], year, cur, "gap");
+
+  is("a month BEFORE a pitch opened dashes", austin.fields.find((f) => f.key === "fresh")!.hist.slice(0, 2), [null, null]);
+  yes("  CONTROL: while the month it opened carries a figure, so the dash is about existence",
+    austin.fields.find((f) => f.key === "fresh")!.hist[2] === 0.2);
+  is("a QUIET month for a pitch that existed is a real 0, not a dash",
+    austin.fields.find((f) => f.key === "old")!.hist[0], 0);
+  /* THE CITY TAKES THE FIGURE WHEREVER ANY PITCH EXISTED, and sums as displayed — the same rule
+   * September and December already follow, so a history column foots to its drawer. */
+  is("the city June is its open pitches only", austin.hist[0], 0);
+  is("  and August sums both, as displayed", austin.hist[2], roundTo(roundTo(0.6, 1) + roundTo(0.2, 1), 1));
+  yes("  CONTROL: which is a different number from June, so the columns are not one value repeated",
+    austin.hist[2] !== austin.hist[0]);
+  is("the trend runs from the EARLIEST history month to the live one",
+    austin.trend, roundTo(austin.sep - (austin.hist[0] as number), 1));
+  yes("  CONTROL: and is not the gap", austin.trend !== austin.dec - austin.sep);
+
+  // A city where NOTHING was ever open: every history month dashes, it is new, and it has no trend.
+  const brandNew = cityRollup([mk("p1", "Philadelphia", zeros, zeros, 0.5)], year, cur, "gap")[0];
+  is("a market with nothing open dashes every history month", brandNew.hist, [null, null, null]);
+  yes("  …and is flagged new", brandNew.isNew);
+  is("  …and carries NO trend rather than a fabricated one", brandNew.trend, null);
+  yes("  CONTROL: while the climbing city is not flagged new", austin.isNew === false);
+  yes("  CONTROL: …and does have a trend, so the null above is specific", austin.trend != null);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

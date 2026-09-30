@@ -330,6 +330,8 @@ export type CityFieldRow = {
   oct: number | null; nov: number | null;
   dec: number | null;   // null is "no goal"
   gapDaily: number | null;
+  /** The three months before the live one, oldest first. A null is "not yet a pitch", never 0.0. */
+  hist: (number | null)[];
 };
 
 export type CityRow = {
@@ -337,24 +339,72 @@ export type CityRow = {
   sep: number; oct: number; nov: number; dec: number; gapDaily: number;
   existing: number; slots: number; noGoal: number;
   fields: CityFieldRow[];
+  /** The three months before the live one, oldest first. Null is "no market yet", never 0.0. */
+  hist: (number | null)[];
+  /** Live month minus the EARLIEST history month. Null when there is no history to trend from. */
+  trend: number | null;
+  /** No activity in any history month — a market that did not exist yet, not one at zero. */
+  isNew: boolean;
 };
 
 /** What cityRollup needs off a page row. Narrow on purpose, so the maths is exercisable. */
 export type RollupRow = {
   key: string; kind: "existing" | "slot"; name: string; city: string | null;
   notCounted?: boolean | null;
-  monthly: { daily: number }[];
+  /* `matches` IS WHAT SAYS A PITCH EXISTED THAT MONTH, and `daily` cannot say it: a month with no
+   * matches and a month whose matches carried no spots both read 0. History needs the difference,
+   * because "no market yet" and "a quiet month" are opposite statements about a city. Optional so
+   * every existing caller still typechecks; absent, a month is treated as having existed. */
+  monthly: { daily: number; matches?: number }[];
   targets: Record<string, number>;
 };
 
 const DEC_INDEX = 11;
 const RAMP_INDEXES = [9, 10] as const;   // October, November
 
+/** How many completed months sit to the left of the live one when history is open. */
+export const HISTORY_MONTHS = 3;
+
+/** The month indexes history covers, oldest first, for a given live month. */
+export const historyIndexes = (currentMonth: number): number[] =>
+  Array.from({ length: HISTORY_MONTHS }, (_, i) => currentMonth - HISTORY_MONTHS + i).filter((i) => i >= 0);
+
+/* ── THE TREND'S THREE STATES ─────────────────────────────────────────────────────────────────
+ * A gap does not say whether it is closing. Austin at +3.7 having climbed from 4.1 is a city on a
+ * trajectory; Austin at +3.7 having sat flat since June needs someone on a plane. Same gap,
+ * opposite decisions, and the table cannot tell them apart without this.
+ *
+ * THE DEAD BAND IS +/-0.15, which is wider than the tenth the table prints. Without it a city that
+ * moved 0.04 — noise at this scale, and invisible in the column beside it — would be decorated
+ * with an arrow claiming a direction. `null` in gives `null` out: a market with no history has no
+ * trend, and MUST NOT be handed a zero, which would read as "flat" and say something untrue. */
+export type TrendKind = "up" | "flat" | "dn";
+export const TREND_DEAD_BAND = 0.15;
+export const trendKind = (t: number | null): TrendKind | null =>
+  t == null ? null : t > TREND_DEAD_BAND ? "up" : t < -TREND_DEAD_BAND ? "dn" : "flat";
+
 /** The rollup. `rows` is every row the page holds, existing AND slots: a city's December goal
  *  spans both tables and this is the only place they meet. */
 export function cityRollup(rows: RollupRow[], year: number, currentMonth: number, sort: GoalSort = "gap"): CityRow[] {
   const decKey = monthKey(year, DEC_INDEX);
   const byCity = new Map<string, CityRow>();
+  const HIST = historyIndexes(currentMonth);
+
+  /* ── A MONTH BEFORE A PITCH EXISTED IS A DASH, NOT A ZERO ────────────────────────────────────
+   * THIS IS THE RULE THAT WOULD OTHERWISE SHIP WRONG. A 0.0 sitting in June beside a December
+   * target reads as a market that collapsed. The truth is the opposite — it had not opened yet —
+   * and the two are indistinguishable once a zero is printed.
+   *
+   * SO THE TEST IS FIRST ACTIVITY, NOT EMPTINESS. A month at or after a pitch's first match shows
+   * its figure, INCLUDING a genuine 0.0 for a month that really was quiet; a month before it
+   * dashes. That distinction is why RollupRow carries `matches` — `daily` is 0 in both cases.
+   *
+   * A SLOT HAS NO HISTORY AT ALL. It is a field that does not exist yet, which is the same
+   * statement its September already makes by being null. */
+  const firstActive = (r: RollupRow): number => {
+    const i = r.monthly.findIndex((m) => (m?.matches ?? 1) > 0);
+    return i < 0 ? Number.POSITIVE_INFINITY : i;
+  };
 
   for (const r of rows) {
     if (!rowCountsTowardTotals(r)) continue;
@@ -362,7 +412,7 @@ export function cityRollup(rows: RollupRow[], year: number, currentMonth: number
     let c = byCity.get(label);
     if (!c) {
       c = { city: label, hasCity: label !== NO_CITY, sep: 0, oct: 0, nov: 0, dec: 0, gapDaily: 0,
-            existing: 0, slots: 0, noGoal: 0, fields: [] };
+            existing: 0, slots: 0, noGoal: 0, fields: [], hist: HIST.map(() => null), trend: null, isNew: false };
       byCity.set(label, c);
     }
 
@@ -380,8 +430,11 @@ export function cityRollup(rows: RollupRow[], year: number, currentMonth: number
     if (r.kind === "slot") c.slots += 1; else c.existing += 1;
     if (dec == null) c.noGoal += 1;
 
+    const fa = r.kind === "slot" ? Number.POSITIVE_INFINITY : firstActive(r);
+    const fHist = HIST.map((i) => (i < fa ? null : r.monthly[i]?.daily ?? 0));
+
     c.fields.push({
-      key: r.key, name: r.name, kind: r.kind,
+      key: r.key, name: r.name, kind: r.kind, hist: fHist,
       /* A NEW FIELD HAS NO SEPTEMBER. Its spots are zero because it does not exist, which is not
        * the same statement as a field that ran no matches, and 0.0 would read as the second. */
       sep: r.kind === "slot" ? null : sep,
@@ -419,7 +472,26 @@ export function cityRollup(rows: RollupRow[], year: number, currentMonth: number
     roundTo(xs.reduce<number>((a, v) => a + roundTo(v ?? 0, 1), 0), 1);
 
   for (const c of byCity.values()) {
+    /* ── THE CITY'S HISTORY, UNDER THE SAME TWO RULES AS THE REST OF THE COLUMN ───────────────
+     * SUMMED FROM THE FIELD VALUES AS DISPLAYED, so a history column foots to its drawer exactly
+     * as September and December do. And a month where EVERY pitch dashes dashes at city level too
+     * — that is a market with nothing open yet, and summing a row of dashes into 0.0 is the same
+     * lie one level up. A month where some pitches dash and others do not is a real figure: the
+     * ones that existed are what the city was. */
+    c.hist = HIST.map((_, k) => {
+      const vals = c.fields.map((f) => f.hist[k]);
+      return vals.every((v) => v == null) ? null : sumRounded(vals);
+    });
+    /* NEW MEANS NO ACTIVITY IN ANY HISTORY MONTH — the state that earns the dash and the label. */
+    c.isNew = c.hist.every((v) => v == null);
+    /* THE TREND RUNS FROM THE EARLIEST HISTORY MONTH TO THE LIVE ONE, and only if that month is a
+     * real figure. A city whose June dashes gets NO trend rather than one computed from July: a
+     * shorter window is a different measurement wearing the same column, and a reader comparing
+     * two cities would be comparing three months against two without being told. */
     c.sep = sumRounded(c.fields.map((f) => f.sep));
+    /* AFTER c.sep, deliberately: the trend is the change in the number the ROW SHOWS, so it is
+     * built from the displayed September and the displayed June and cannot disagree with either. */
+    c.trend = c.hist[0] == null ? null : roundTo(c.sep - c.hist[0], 1);
     c.oct = sumRounded(c.fields.map((f) => f.oct));
     c.nov = sumRounded(c.fields.map((f) => f.nov));
     c.dec = sumRounded(c.fields.map((f) => f.dec));
