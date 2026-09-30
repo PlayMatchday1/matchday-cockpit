@@ -6410,3 +6410,149 @@ Evidence: `mdapi_matches` mirror, non-cancelled, `start_date` 2026-07-01 to 2026
 `teamCountWrites(target, perTeam, savedRung)` therefore RAISES a rung that is absent, zero, or
 below the new capacity and LEAVES a higher one alone. Omitting `savedRung` keeps the old
 write-always behaviour, which is the 18125-safe direction.
+
+## SUBSCRIPTIONS — the four admin writes, read out of the Nest source (2026-09-30)
+
+**HOW THIS WAS ESTABLISHED, AND WHAT THAT IS WORTH.** Every fact below is a READ OF SOURCE in the
+sibling repo `~/Code/backend` (the NestJS API behind Retool and admin.playmatchday), located by
+SYMBOL NAME and the line recorded as found. **None of it is a probe against a running instance**,
+so it describes what the code says it does, not what a call was observed to do. Two facts are the
+exception and are marked PROBED. The endpoint inventory earlier in this file (the `/admin/subscriptions`
+rows) lists RETOOL QUERY LABELS — `subscribeUser`, `unsibscribeMember`, `updateSubscriptionPriceForMember`
+— which are a different layer from the Nest service methods named here. Both are real; neither is
+evidence of the other.
+
+### Routing — `backend`, `src/core/subscriptions/admin-subscriptions.controller.ts`
+
+`@Controller('admin/subscriptions')`, whole controller behind `@UseGuards(CityManagerOrAdminAuthGuard)`
+(line 29). A CITY MANAGER, not only an admin, can reach every one of these.
+
+| verb | path | line | service method |
+|---|---|---|---|
+| `POST` | `/admin/subscriptions/users/:userId` | 59 | `subscribeSpecificUser` |
+| `POST` | `/admin/subscriptions/users/:userId/free` | 69 | `subscribeSpecificUserFree` |
+| `POST` | `/admin/subscriptions/:userSubscriptionId/unsubscribe` | 96 | `unsubscribeForAdmin` |
+| `PATCH` | `/admin/subscriptions/:userSubscriptionId` | 112 | `updateSubscriptionPrice` |
+
+- **Both add endpoints take NO BODY.** The kind of membership is the PATH, not a parameter.
+- Every id is `ParseIntPipe`, so the NUMERIC `userSubscriptions.id` is required. The Stripe
+  `sub_…` string is not accepted. See the `playerProfile.ts` note below — the client does not
+  currently carry that number.
+
+### The two adds are not variants of one thing — `subscriptions.service.ts`
+
+**THIS IS A TRAP.** The endpoints differ by a four-character suffix and produce different objects.
+
+`subscribeSpecificUser` (line 440) — the COMP:
+- Blocks on an existing row with `status in (ACTIVE, ADDED_FROM_ADMIN)` → `USER_ALREADY_SUBSCRIBED`.
+- Writes `status: ADDED_FROM_ADMIN`, `amount: subscription.price` (the CITY PLAN price),
+  `stripePriceId` from the city plan.
+- **Creates NO Stripe customer and NO Stripe subscription.** Nothing is ever charged.
+- Returns `true`.
+- MINOR DEFECT: the city fallback is inconsistent — `getByCityId(user.preferableCityId ?? 1)` then
+  `validateByIdOrThrowError(user.preferableCityId ?? 0)`. A user with no preferable city is priced
+  off city 1 and then validated against city 0, which throws. Comping such a player fails.
+
+`subscribeSpecificUserFree` (line 476) — the $0 SUBSCRIPTION:
+- Same `USER_ALREADY_SUBSCRIBED` block.
+- Creates the Stripe customer if missing, then `createRecurringProductAndPrice(0, city.abbr)`, then
+  a REAL Stripe subscription, then back-fills `stripeSubscriptionId` / `currentPeriodStart` /
+  `currentPeriodEnd`.
+- Writes `status: ACTIVE`, `amount: 0`.
+
+**A `CANCELED` row does NOT block either add.** The filter is `in (ACTIVE, ADDED_FROM_ADMIN)`, so a
+closed membership can be reopened. Confirmed by reading the filter, both methods.
+
+### Ending — and only the admin path touches Stripe
+
+`unsubscribeForAdmin` (line 566) matches `{ id, status: { not: CANCELED }, deletedAt: null }` and
+**returns `false` when nothing matches — on a 2xx**. It then calls `cancelSubscriptionsForAdmin`.
+
+`cancelSubscriptionsForAdmin` (line 647), for each row:
+1. **if `stripeSubscriptionId` is set**, calls `stripeService.cancelSubscription(...)`;
+2. writes `canceledAt`, `cancelReason`, **and `status: CANCELED`**.
+
+`cancelSubscriptions` (line 635) is the PLAYER's own path and is a different animal: it writes
+`canceledAt` and `cancelReason` ONLY. It sets no status and **calls no Stripe at all**. This is why
+`status` stays `ACTIVE` on a player-cancelled row — corroborating the 2026-09-04 `canceledAt`
+section above from the other side.
+
+`stripe.service.ts` `cancelSubscription` (line 220) is `this._stripe.subscriptions.cancel(id)` —
+**IMMEDIATE, not at period end.** No proration and no refund are requested.
+
+**CORRECTION TO A COMMON BELIEF.** `cancel_at_period_end: true` does appear at
+`stripe.service.ts:633`, but it is inside the **`invoice.paid` WEBHOOK handler**, not in the
+player's cancel request. It fires only when an invoice is paid on a row that already has
+`canceledAt`. So "the player keeps it to the period end" is produced by a later webhook, not by the
+cancel call, and it is conditional on another invoice being paid.
+
+### Pricing — `updateSubscriptionPrice` (line 582)
+
+- Looks up `findOneByArgs({ id })` — **no status filter and no `deletedAt` filter.** It will
+  happily reprice a CANCELED or soft-deleted row and return `true`.
+- Returns `false` when the id does not exist — again on a 2xx.
+- If `status === ADDED_FROM_ADMIN`: creates a new recurring price and updates `amount` +
+  `stripePriceId` **locally only** — there is no Stripe subscription to update.
+- Otherwise `updateUserSubscriptionPrice` → `stripe.service.ts` `updatePriceForSubscription`
+  (line 171), which retrieves the subscription and updates item 0 with
+  **`proration_behavior: 'none'`**. The current period is neither re-charged nor refunded.
+
+### THE TRAP THAT MATTERS MOST — a Stripe failure is swallowed and the row still changes
+
+Both admin write paths catch the Stripe error and carry on:
+
+```
+// cancelSubscriptionsForAdmin, line ~652
+const res = await this.stripeService.cancelSubscription(stripeSubscriptionId ?? '');
+if (res instanceof Error) {
+  // TODO: handle cases if Stripe failed to cancel subscription
+}
+await this.userSubscriptionsRepository.updateById(id, { …, status: CANCELED });
+```
+
+`updateUserSubscriptionPrice` has the identical shape around `updatePriceForSubscription`.
+
+**CONSEQUENCE FOR ANY CALLER.** Reading the subscription back after a write proves the MATCHDAY ROW
+changed. It does **not** prove Stripe changed: a row can read `CANCELED` while Stripe keeps billing,
+or carry a new `amount` while Stripe charges the old one. There is no signal on the response that
+distinguishes the two. An "applied" check built on the row is the best available evidence and must
+not be described as more than that; the Stripe side is UNKNOWN from this API and needs the Stripe
+dashboard to settle.
+
+### Units and validation — `src/core/subscriptions/dto/`
+
+- `create-subscription-dto.ts` — the CITY PLAN endpoint. `price` is CENTS, `@IsNumber() @Min(50)`.
+- `update-subscription-dto.ts` — the per-member PATCH. `price` is CENTS, `@IsNumber()` and
+  **nothing else: no `@Min`, no `@IsInt`.** Zero, negative and fractional cents all pass validation.
+  Every guard on this number has to be ours.
+- `cancel-subscription-dto.ts` — `reason`, `@IsString()` only. **An empty string passes.** The API
+  does not require a non-empty reason; that guard has to be ours too.
+
+Corroborated in this repo by `retool-export-prod.json`: the PATCH body is
+`{{ editMemberInput.value * 100 }}` (a bare dollar field multiplied on send — an operator typing
+`4900` meaning $49 sends $4,900 and nothing contradicts them), and the single unsubscribe query
+sends the literal `"Removed by Retool"` as its reason, so Retool captures no reason at all.
+
+### What reaches our mirror — and the comp that does not
+
+- `membershipStats.ts` `isPaidExternalMember` (line 56) returns false on `price_cents <= 0`, so
+  **both comp kinds are excluded from paid-member counts** whatever else happens.
+- `mdapiSubscriptionsSync.ts` loops `[ACTIVE, CANCELED, PAST_DUE]`. Its recorded probe: `ACTIVE`
+  and `PAST_DUE` filter strictly, every other value returns an "ignored dump" of **CANCELED +
+  PAST_DUE rows only**. The union of those three is therefore ACTIVE, CANCELED and PAST_DUE —
+  **`ADDED_FROM_ADMIN` is captured by none of them.**
+- **PROBED, 2026-09-30, against `mdapi_subscriptions`:** the only statuses present are
+  `CANCELED` 2,374 and `ACTIVE` 450. **`ADDED_FROM_ADMIN`: 0 rows.** Source-read and live data
+  agree.
+
+**SO A COMP IS INVISIBLE TO EVERY MEMBERSHIP PAGE**, which all read the mirror, while
+`/admin/players/{id}` shows it live. The two disagree by construction and always will until the
+sync captures that status. A $0 ACTIVE membership is the opposite case: it DOES reach the mirror
+and is then excluded from paid counts by the `price_cents` rule. Two different invisibilities with
+two different causes.
+
+### The id the client does not have
+
+`src/lib/playerProfile.ts:166` is `number: str(sub.stripeSubscriptionId) ?? str(sub.id)`. The
+numeric `userSubscriptions.id` — the path parameter every write above requires — is MASKED whenever
+a Stripe id exists. Nothing keyed on it can be built until the profile carries both.
