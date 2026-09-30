@@ -1088,6 +1088,34 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
               {/* THE DERIVED BADGE IN THE SAME KEY, so a reader meets one vocabulary. */}
             </div>
           )}
+          {/* ── THE CANCEL SCALE, AND ALL FOUR RUNGS ALWAYS RENDER ────────────────────────────
+              A TAG applies or it does not, so listing only the ones in use is right for tags. A
+              SCALE is different: its steps mean something only against each other, and a key
+              showing 1W AGO alone tells a reader nothing about whether that is the loud end or the
+              quiet one. So all four render every week, including a week using none of them. */}
+          <div className="mt-2 grid gap-x-5 gap-y-1 border-t border-cream-line pt-2 sm:grid-cols-2" data-testid="key-recency">
+            <span data-testid="keyitem" className="inline-flex items-baseline gap-2 text-[11px] text-deep-green/65">
+              <i className="shrink-0 rounded-[4px] px-[5px] py-px text-[9px] font-extrabold not-italic tracking-[0.03em]"
+                style={{ background: RAMP_HEX[2], color: RAMP_INK[2] }}>2/4</i>
+              <span>Cancelled in 2 of the last 4 weeks.</span>
+            </span>
+            {([1, 2, 3, 4] as const).map((w) => (
+              <span key={w} data-testid="keyitem" data-w={w} className="inline-flex items-baseline gap-2 text-[11px] text-deep-green/65">
+                <i data-testid="key-recency-swatch" data-w={w}
+                  className={`shrink-0 rounded-[3px] border px-[4px] py-px text-[8px] font-extrabold not-italic tracking-[0.04em] ${AGE_CLASS[w]}`}>
+                  {w}W AGO
+                </i>
+                <span>Last cancelled {w} week{w === 1 ? "" : "s"} ago.</span>
+              </span>
+            ))}
+            <span data-testid="keyitem" className="text-[11px] text-deep-green/50">
+              Nothing older than 4 weeks is marked.
+            </span>
+            {/* THE SCOPE RULE, ONCE, IN THE LANGUAGE THE TILES USE. */}
+            <span data-testid="keyitem" className="text-[11px] text-deep-green/50">
+              Solid is this match. Dashed is the whole field.
+            </span>
+          </div>
         </div>
       </div>
       {/* ── THE PADDING GOES ON THE WEEK, NOT ON THE PAGE ──────────────────────────────────────
@@ -1208,6 +1236,17 @@ function coverFirst(m: PromoMatch, zone: ZoneMode): string {
  * PLANNED TILES STAY DISTINCT BY WEIGHT, NOT BY LABEL. A tile with a plan carries chips and a push
  * line and a solid left rail; a tile without carries a dashed border and almost no ink. The eye
  * finds the planned ones because they are the only ones with anything in them. */
+/* ── THE FOUR RUNGS OF RECENCY, ONE SHAPE ───────────────────────────────────────────────────
+ * Last week is the loudest and four weeks ago is the quietest, and all four are the same pill at
+ * four weights. A different SHAPE for the newest would make it read as a different kind of fact;
+ * these are four steps of one scale, and a scale is only legible against its own other steps. */
+const AGE_CLASS: Record<1 | 2 | 3 | 4, string> = {
+  1: "border-transparent bg-[#3A1710] text-white",
+  2: "border-transparent bg-[#EBD9D3] text-[#6B2A18]",
+  3: "border-[#d8c8c2] bg-transparent text-[#8a6d63]",
+  4: "border-[#e4dbd8] bg-transparent text-[#a9a09c]",
+};
+
 function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shifted, covers, tags }: {
   m: PromoMatch; open: boolean; onOpen: (m: PromoMatch, el: HTMLElement) => void; zone: ZoneMode;
   priorLabel: string; priorWeeks: number; risk?: SlotRisk | null;
@@ -1278,6 +1317,21 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shif
             {r}/4
           </i>
         )}
+        {/* ── HOW OFTEN, THEN WHEN ────────────────────────────────────────────────────────────
+            The ratio never said when. Two slots reading 2/4 — one last cancelled a month ago, one
+            last week — are the same chip and opposite decisions; the Monday column is that pair.
+            ONE SHAPE FOR ALL FOUR, NO SPECIAL CASE FOR THE NEWEST. "LAST WK" beside "2W" would make
+            the newest step read as a different KIND of thing rather than the loudest step of one
+            scale, and a scale's steps only mean anything against each other.
+            THE RAMP IS NOT RE-KEYED. The ratio chip keeps its colour and its meaning; this is a
+            second fact beside it, falling off as it ages. */}
+        {risk && (
+          <i data-testid="recency" data-w={risk.lastCancelWeeksAgo}
+            title={`Last cancelled ${risk.lastCancelWeeksAgo} week${risk.lastCancelWeeksAgo === 1 ? "" : "s"} ago. Nothing older than 4 weeks is marked.`}
+            className={`shrink-0 rounded-[3px] border px-[4px] py-px text-[8px] font-extrabold not-italic tracking-[0.04em] ${AGE_CLASS[risk.lastCancelWeeksAgo]}`}>
+            {risk.lastCancelWeeksAgo}W AGO
+          </i>
+        )}
         {m.newFlag && (
           <i data-testid="new-badge" data-flag={m.newFlag}
             /* THE RULE, THE CITY AND THE WEEK IT COMPARED, on the badge itself. The dates are
@@ -1316,9 +1370,19 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shif
       {shownTags.length > 0 && (
         <div className="mt-[5px] flex flex-wrap gap-1" data-testid="tags">
           {shownTags.map((t) => (
-            <i key={t} data-testid="tag" data-t={t} title={tagTitle(t)}
+            /* ── ONE COLOUR, TWO SHAPES ────────────────────────────────────────────────────────
+               PRIORITY and KEY FIELD KEEP THE ONE COLOUR, because KEY FIELD *is* PRIORITY at field
+               scope — they are one concept at two scopes, and colouring them apart would say they
+               are two concepts. THE BORDER CARRIES THE SCOPE instead: SOLID is this match, DASHED
+               is the whole field, which is the meaning a dotted rail already has on a covered tile.
+               So the page uses one visual language for "this one" against "everything here".
+               BOTH STAY OUTLINED, NEVER FILLED. The tile already spends filled pills on the cancel
+               ratio and the NEW badge; a filled tag reads as a 4/4 cancel at a glance.
+               PRIORITY IS STILL SWALLOWED where a KEY FIELD covers it — see splitTags above. */
+            <i key={t} data-testid="tag" data-t={t} data-scope={TAG_META[t].scope} title={tagTitle(t)}
               className="rounded-[4px] border px-[4px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.03em]"
-              style={{ color: TAG_META[t].colour, borderColor: TAG_META[t].colour, background: "transparent" }}>
+              style={{ color: TAG_META[t].colour, borderColor: TAG_META[t].colour, background: "transparent",
+                       borderStyle: TAG_META[t].scope === "field" ? "dashed" : "solid" }}>
               {TAG_META[t].label}
             </i>
           ))}

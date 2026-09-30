@@ -42,6 +42,11 @@ export type CancelSlot = {
   // the 4-week window. 1 = isolated, 4 = chronic by streak. Used
   // by "live" mode where chronic colors apply to the current week.
   streak: 1 | 2 | 3 | 4;
+  /* WHICH WEEK OF THE WINDOW THIS CELL IS, COUNTING FROM THE NEWEST. 0 = the anchor week, 3 = the
+   * oldest. The slot is built inside the chronological loop (0 = oldest) and `weeks` is reversed on
+   * the way out, so this is converted at construction and never re-derived — rollUpSlotRisk reads
+   * it to answer "how long ago did this last cancel". */
+  weekIdxFromNewest: 0 | 1 | 2 | 3;
   // Count of weeks (out of 4) the slot canceled in the window — any
   // order. Same value on every pill of the same slot. Used by
   // "patterns" mode where colors apply across all 4 weeks.
@@ -289,7 +294,12 @@ export function getCancelPatterns(
     for (const [weekIdx, state] of weekMap) {
       if (state !== "canceled") continue;
       const streak = backwardStreak(key, weekIdx) as 1 | 2 | 3 | 4;
+      /* FLIPPED HERE, ONCE. weekIdx counts from the OLDEST because the streak walk goes backwards;
+       * `weeks` is reversed before it is returned, so everything downstream counts from the newest.
+       * Converting at construction is what stops the two conventions meeting on a tile. */
+      const weekIdxFromNewest = (weeks.length - 1 - weekIdx) as 0 | 1 | 2 | 3;
       const slot: CancelSlot = {
+        weekIdxFromNewest,
         canonicalField: meta.canonical,
         venueCode: venueCodeFor(meta.canonical),
         dow: DOW_ABBR[meta.dowIdx],
@@ -388,7 +398,27 @@ export function slotRiskKey(canonicalField: string, dowIdx: number, minutes: num
   return `${canonicalField}|${dowIdx}|${c ? c[0] : minutes}`;
 }
 
-export type SlotRisk = { cancelCount: 1 | 2 | 3 | 4; booked: number; times: string[] };
+export type SlotRisk = {
+  cancelCount: 1 | 2 | 3 | 4;
+  booked: number;
+  times: string[];
+  /* ── HOW LONG AGO THE LAST CANCELLATION WAS, IN WEEKS ────────────────────────────────────────
+   * 1 = the week before the one on screen, 4 = the oldest week in the window. The ratio says HOW
+   * OFTEN and never said WHEN, so two slots reading 2/4 — one last cancelled a month ago, one last
+   * week — are the same chip and opposite decisions.
+   *
+   * THE INDEX IS THE AGE, +1, AND THAT DEPENDS ON THE MODE. `result.weeks` is reversed before it is
+   * returned, so index 0 is the anchor week. In "patterns" mode the anchor is
+   * mostRecentCompletedWeekMonday, which for a Monday anchor is that Monday minus seven — the week
+   * BEFORE the one being displayed. So index 0 is "1W AGO". In "live" mode the anchor is getMonday,
+   * the current in-progress week, and index 0 would be "this week" instead. Match Promotion passes
+   * "patterns"; the mapping is asserted against a dated fixture rather than reasoned about, because
+   * reasoning about it is exactly how it would end up one week out.
+   *
+   * NEVER 0 AND NEVER ABOVE 4. A slot only appears in `result.weeks` when it CANCELLED that week,
+   * so any slot with a risk row has at least one, and the window holds four. */
+  lastCancelWeeksAgo: 1 | 2 | 3 | 4;
+};
 
 /* THE ROLLUP, BUILT FROM getCancelPatterns' OWN OUTPUT rather than re-reading the match rows.
  * That function owns the canonicalisation, the four-week window and the lenient-Sunday anchor;
@@ -414,11 +444,22 @@ export function rollUpSlotRisk(result: CancelPatternsResult): Map<string, SlotRi
   for (const s of slots) {
     const clusters = clustersFor.get(`${s.canonicalField}|${s.dowIdx}`) ?? [[s.timeMinutes]];
     const key = slotRiskKey(s.canonicalField, s.dowIdx, s.timeMinutes, clusters);
+    /* THE AGE IS THE WEEK INDEX THIS SLOT WAS WALKED OUT OF, +1. Carried on the slot above rather
+     * than recomputed here: the walk that produces it is the same one `streak` already uses, and a
+     * second derivation of "which week was this" is how two numbers on one tile drift apart. */
+    const ago = (s.weekIdxFromNewest + 1) as 1 | 2 | 3 | 4;
     const prev = out.get(key);
-    if (!prev) { out.set(key, { cancelCount: s.cancelCount, booked: s.bookedCount, times: [s.time] }); continue; }
+    if (!prev) {
+      out.set(key, { cancelCount: s.cancelCount, booked: s.bookedCount, times: [s.time], lastCancelWeeksAgo: ago });
+      continue;
+    }
     prev.cancelCount = Math.max(prev.cancelCount, s.cancelCount) as 1 | 2 | 3 | 4;
     prev.booked += s.bookedCount;
     if (!prev.times.includes(s.time)) prev.times.push(s.time);
+    /* THE MOST RECENT WINS, which is a MIN on the index. Two times in one cluster are the same slot
+     * observed either side of a move, and the question is when that SLOT last cancelled — the older
+     * of the pair is not an answer to it. Same reasoning as cancelCount taking the max. */
+    if (ago < prev.lastCancelWeeksAgo) prev.lastCancelWeeksAgo = ago;
   }
   return out;
 }

@@ -107,6 +107,75 @@ console.log("\n— stepping back changes what a slot's chip says —");
     always.weeks.some((w) => w.byDay.some((d) => d.length > 0)));
 }
 
+console.log("\n— HOW LONG AGO, and the index-to-label mapping is asserted, not reasoned about —");
+{
+  /* ── WHICH WEEK IS INDEX 0 DEPENDS ON THE MODE, AND GETTING IT WRONG IS ONE WEEK OFF ────────
+   * getCancelPatterns anchors on mostRecentCompletedWeekMonday in "patterns" and getMonday in
+   * "live", so index 0 is the week BEFORE the anchor in one and the anchor's own week in the other.
+   * Match Promotion passes "patterns" with the DISPLAYED week's Monday, so index 0 must be the week
+   * immediately before the one on screen — "1W AGO". That is a fact about two helpers meeting, and
+   * the only honest way to hold it is a dated fixture with one cancellation in a known week. */
+  const at = (iso: string) => new Date(iso);
+  const row = (dateIso: string, cancelled: boolean) => ({
+    city: "ATX", field: "Keswick Park", matchStart: at(dateIso), matchCanceled: cancelled,
+    playerCanceledAt: null, paymentType: null, promocode: null, email: null,
+  });
+  const aliases = new Map<string, string>();
+  // Viewing the week of Mon 28 Sep 2026. The four weeks behind it are 21, 14, 7 Sep and 31 Aug.
+  const view = new Date(2026, 8, 28);
+  const agoFor = (cancelledOn: string) => {
+    const rows = [row(cancelledOn, true)] as never[];
+    const risk = rollUpSlotRisk(getCancelPatterns(rows, aliases, "patterns", view));
+    const hit = [...risk.entries()].find(([k]) => k.startsWith("Keswick Park|0"));
+    return hit ? hit[1].lastCancelWeeksAgo : null;
+  };
+  is("a cancellation in the week before the one on screen reads 1W AGO", agoFor("2026-09-21T20:00:00"), 1);
+  is("  two weeks before reads 2W AGO", agoFor("2026-09-14T20:00:00"), 2);
+  is("  three weeks before reads 3W AGO", agoFor("2026-09-07T20:00:00"), 3);
+  is("  four weeks before reads 4W AGO", agoFor("2026-08-31T20:00:00"), 4);
+  /* NOTHING OLDER IS MARKED, because nothing older is in the window at all — the slot does not
+   * appear in the rollup, so there is no marker rather than a 5W one. */
+  is("  and five weeks before is outside the window entirely", agoFor("2026-08-24T20:00:00"), null);
+  /* CONTROL: the four readings are genuinely different, or a constant would pass all of them. */
+  yes("  CONTROL: the four ages are four different numbers",
+    new Set([agoFor("2026-09-21T20:00:00"), agoFor("2026-09-14T20:00:00"),
+             agoFor("2026-09-07T20:00:00"), agoFor("2026-08-31T20:00:00")]).size === 4);
+
+  /* ── THE PAIR THIS FEATURE EXISTS FOR ────────────────────────────────────────────────────────
+   * Two slots with the SAME ratio and opposite decisions. Under the shipped tile they are the same
+   * chip; the only thing that can separate them is when they last cancelled. */
+  const pair = [
+    // Recent: cancelled 21 Sep and 14 Sep -> 2/4, last one week ago.
+    row("2026-09-21T20:00:00", true), row("2026-09-14T20:00:00", true),
+    row("2026-09-07T20:00:00", false), row("2026-08-31T20:00:00", false),
+    // Stale: cancelled 7 Sep and 31 Aug -> 2/4, last three weeks ago. A different field, same day.
+    { ...row("2026-09-07T21:00:00", true), field: "Hattrick" },
+    { ...row("2026-08-31T21:00:00", true), field: "Hattrick" },
+    { ...row("2026-09-21T21:00:00", false), field: "Hattrick" },
+    { ...row("2026-09-14T21:00:00", false), field: "Hattrick" },
+  ] as never[];
+  const risk = rollUpSlotRisk(getCancelPatterns(pair, aliases, "patterns", view));
+  const one = [...risk.entries()].find(([k]) => k.startsWith("Keswick Park|0"))?.[1];
+  const two = [...risk.entries()].find(([k]) => k.startsWith("Hattrick|0"))?.[1];
+  yes("both slots of the pair are in the rollup", one != null && two != null);
+  is("  they carry the SAME ratio, so the chip cannot tell them apart", one?.cancelCount, two?.cancelCount);
+  is("  the recent one last cancelled 1 week ago", one?.lastCancelWeeksAgo, 1);
+  is("  the stale one last cancelled 3 weeks ago", two?.lastCancelWeeksAgo, 3);
+  yes("  CONTROL: which is the whole point — same ratio, different age",
+    one?.cancelCount === two?.cancelCount && one?.lastCancelWeeksAgo !== two?.lastCancelWeeksAgo);
+
+  /* THE MOST RECENT WINS WHEN TWO TIMES MERGE INTO ONE CLUSTER. They are the same slot seen either
+   * side of a move, so the older of the pair is not an answer to "when did this slot last cancel". */
+  const merged = [
+    row("2026-09-21T20:00:00", true),   // 20:00, one week ago
+    row("2026-09-07T20:20:00", true),   // 20:20 — inside the 40-minute cluster, three weeks ago
+  ] as never[];
+  const m = rollUpSlotRisk(getCancelPatterns(merged, aliases, "patterns", view));
+  const only = [...m.values()][0];
+  is("  a merged cluster reports the MOST RECENT of its times", only?.lastCancelWeeksAgo, 1);
+  yes("  CONTROL: and the two really did merge into one slot", m.size === 1);
+}
+
 console.log("\n— what the cancel section was not allowed to take with it —");
 {
   const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
