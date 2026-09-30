@@ -142,15 +142,20 @@ function weekRangeLabel(days: VeoDay[]): string {
   return `${start} – ${end}`;
 }
 
-// A view of the week narrowed to the selected cities (empty set = all cities).
-// Both the stat tiles AND the coverage grid read from this, so the filter moves
-// every number together — nothing is computed from the unfiltered week.
-function filterWeek(week: VeoWeek, cities: Set<string>): VeoWeek {
-  if (cities.size === 0) return week;
+/* A view of the week narrowed to the selected city (null = all cities).
+ * Both the stat tiles AND the coverage grid read from this, so the filter moves every number
+ * together — nothing is computed from the unfiltered week.
+ *
+ * ONE CITY, NOT A SET (2026-09-30). This took a Set and the chips added to it, so clicking Houston
+ * with Dallas selected left BOTH lit. That was not only a styling fault: `monthCity` resolves to a
+ * city only when the selection holds exactly one, so a two-city selection fell through to null and
+ * the Month grid silently showed EVERY city while two chips claimed otherwise. */
+function filterWeek(week: VeoWeek, city: string | null): VeoWeek {
+  if (city == null) return week;
   return {
     ...week,
-    cities: week.cities.filter((c) => cities.has(c.city)),
-    matches: week.matches.filter((m) => cities.has(m.city)),
+    cities: week.cities.filter((c) => c.city === city),
+    matches: week.matches.filter((m) => m.city === city),
   };
 }
 // Match ids in the same city + day as `apiId`, ordered by time — the set the
@@ -251,13 +256,19 @@ export default function VeoMasterSchedule() {
     try {
       const raw = window.localStorage.getItem(VMS_PREFS);
       if (!raw) { setHydrated(true); return; }
-      const p = JSON.parse(raw) as { v?: number; view?: View; from?: string; to?: string; fields?: string[]; city?: string[]; fieldsOpen?: boolean };
+      const p = JSON.parse(raw) as { v?: number; view?: View; from?: string; to?: string; fields?: string[]; city?: string | string[] | null; fieldsOpen?: boolean };
       /* "veo" IS NOT RESTORABLE. That view was deleted; a blob still holding it falls through to
        * the "month" default rather than restoring a view that no longer exists. */
       if (p.v === VMS_PREFS_V && (p.view === "month" || p.view === "schedule")) setView(p.view);
       if (p.from && p.to) setRange({ from: p.from, to: p.to });
       if (Array.isArray(p.fields)) setFieldSel(new Set(p.fields));
-      if (Array.isArray(p.city)) setCityFilter(new Set(p.city));
+      /* PERSISTED AS ONE VALUE NOW, and an OLD BLOB HELD AN ARRAY. Reading only the new shape
+       * would silently drop a saved city on first load after this ships; reading only the old one
+       * would break the moment it is rewritten. Both are accepted, and an old multi-city array
+       * collapses to its first entry rather than being discarded — that is the city the operator
+       * last clicked into, and it is a better answer than "all cities". */
+      if (typeof p.city === "string") setCity(p.city);
+      else if (Array.isArray(p.city)) setCity(p.city[0] ?? null);
       if (typeof p.fieldsOpen === "boolean") setFieldsOpen(p.fieldsOpen);
     } catch { /* private mode, or a prefs blob from an older shape — defaults are fine */ }
     setHydrated(true);
@@ -281,9 +292,20 @@ export default function VeoMasterSchedule() {
   const [resyncFail, setResyncFail] = useState<string | null>(null);
   const [staleFail, setStaleFail] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  // City filter (empty = all). Drawer state. drawerDirty is reported UP by the
-  // drawer so week-nav / card-switch / filter can be blocked while edits pend.
-  const [cityFilter, setCityFilter] = useState<Set<string>>(new Set());
+  /* ── THE CITY FILTER IS ONE CITY, OR null FOR ALL ────────────────────────────────────────
+   * IT WAS A Set AND THE CHIPS ADDED TO IT. Selecting Dallas and then clicking Houston produced
+   * {Dallas, Houston} and left both chips lit — the reported bug — and worse, `monthCity` below
+   * only resolves when the selection holds exactly ONE city, so the grid fell back to showing all
+   * of them while the chips said two. The mobile PickerSheet was already single-select
+   * (`onPickCity` wrote `new Set([c])`), so the two halves of this page disagreed.
+   *
+   * SINGLE-SELECT IS SCOPED TO THIS PAGE BY CONSTRUCTION: the chips are inline buttons in this
+   * file styled by `vms-chip`, which appears in no other file. There is no shared chip component
+   * to give a mode to.
+   *
+   * Drawer state below. drawerDirty is reported UP by the drawer so week-nav / card-switch /
+   * filter can be blocked while edits pend. */
+  const [city, setCity] = useState<string | null>(null);
   const [drawerId, setDrawerId] = useState<number | null>(null);
   const [drawerDirty, setDrawerDirty] = useState(false);
   /* THE PANEL'S OWN TAB. Details on open, exactly as Gameday Ops does; it is the panel's state and
@@ -405,17 +427,20 @@ export default function VeoMasterSchedule() {
     if (!hydrated) return;   // see the note on `hydrated` — never write over a blob not yet read
     try {
       window.localStorage.setItem(VMS_PREFS, JSON.stringify({
-        v: VMS_PREFS_V, view, from: range?.from, to: range?.to, fields: [...fieldSel], city: [...cityFilter], fieldsOpen,
+        v: VMS_PREFS_V, view, from: range?.from, to: range?.to, fields: [...fieldSel], city, fieldsOpen,
       }));
     } catch { /* private mode */ }
-  }, [hydrated, view, range, fieldSel, cityFilter, fieldsOpen]);
+  }, [hydrated, view, range, fieldSel, city, fieldsOpen]);
 
   /* ── THE FILTERED SET, AND THE CHIPS BUILT FROM IT ──────────────────────────────────────────
    * The field list comes from the matches actually in the range, so it can never offer a filter
    * with nothing behind it. When the range or the city changes, a selection that no longer has
    * matches is DROPPED and SAID — silently keeping it would filter the grid to nothing on a chip
    * the operator can no longer see. */
-  const monthCity = useMemo(() => (cityFilter.size === 1 ? [...cityFilter][0] : null), [cityFilter]);
+  /* KEPT AS A NAME, NOT AS A DERIVATION. It used to mean "the city IF exactly one is selected",
+   * which is how a two-city selection turned into "all cities" without saying so. There is only
+   * ever one city now, so this is the city. */
+  const monthCity = city;
   const monthFields = useMemo(
     () => fieldsAvailable(monthData?.matches ?? [], monthCity), [monthData, monthCity]);
   useEffect(() => {
@@ -645,7 +670,7 @@ export default function VeoMasterSchedule() {
 
 
   // The week narrowed to the selected cities. The coverage stats that also read it are gone.
-  const fweek = useMemo<VeoWeek | null>(() => (week ? filterWeek(week, cityFilter) : null), [week, cityFilter]);
+  const fweek = useMemo<VeoWeek | null>(() => (week ? filterWeek(week, city) : null), [week, city]);
   // The displayed week contains the real "today" only when the server flagged one
   // of its days — the definitive "are we on the current week?" signal.
   const isCurrentWeek = week ? week.days.some((d) => d.today) : false;
@@ -920,14 +945,29 @@ export default function VeoMasterSchedule() {
     });
   }, [monthData, range, loadRange]);
 
-  // City filter toggle. Selecting/deselecting a chip; empty set = all. If the open
-  // drawer's city drops out of view, the drawer closes.
-  const toggleCity = useCallback((city: string | null) => {
-    setCityFilter((prev) => {
-      let next: Set<string>;
-      if (city === null) next = new Set(); // "All cities"
-      else { next = new Set(prev); if (next.has(city)) next.delete(city); else next.add(city); }
-      const visible = next.size === 0 || (drawerCity != null && next.has(drawerCity));
+  /* ── PICKING A CITY SWITCHES TO IT. IT DOES NOT ACCUMULATE ─────────────────────────────────
+   * `null` is "All cities", which is a CHOICE of its own and not the absence of one: picking it
+   * clears the city, and picking a city clears it.
+   *
+   * CLICKING THE CITY ALREADY SELECTED DOES NOTHING. Not "deselect to empty" — a chip that
+   * un-picks itself on a second click leaves the page showing every city when the operator meant
+   * to confirm the one they were on, and that is indistinguishable on screen from having clicked
+   * All cities on purpose. Returning early also means no state changes, so the field reset below
+   * cannot fire and throw away a field filter on a click that asked for nothing.
+   *
+   * THE FIELD FILTER RESETS WHEN THE CITY CHANGES, because the old city's fields do not exist in
+   * the new one: keeping "Bicentennial Park" selected while switching to Houston would filter the
+   * grid down to nothing and read as an empty week. The Month view has a reconcile effect that
+   * drops absent fields, but it runs only in Month and only after a render, so the grid would
+   * flash the wrong thing first. Resetting in the same setState is what makes the chips, the
+   * count and the grid land in ONE render.
+   *
+   * IF THE OPEN DRAWER'S CITY DROPS OUT OF VIEW, the drawer closes — unchanged. */
+  const pickCity = useCallback((next: string | null) => {
+    setCity((prev) => {
+      if (prev === next) return prev; // already there: no change, and no field reset
+      setFieldSel(new Set());          // the old city's fields are not the new city's
+      const visible = next === null || (drawerCity != null && drawerCity === next);
       if (drawerId != null && drawerCity != null && !visible) {
         if (drawerDirty) showToast(`Discarded unsaved changes to match ${drawerId}.`, true);
         setDrawerId(null); setDrawerDirty(false);
@@ -1087,11 +1127,13 @@ export default function VeoMasterSchedule() {
           <div className={"vms-filter" + (view === "month" ? " vms-filter-month" : "")}
             data-testid="city-filter" role="group" aria-label="Filter cities">
             <span className="vms-control-label">Cities</span>
-            <button type="button" data-testid="city-chip-all" aria-pressed={cityFilter.size === 0}
-              className={"vms-chip" + (cityFilter.size === 0 ? " vms-chip-on" : "")} onClick={() => toggleCity(null)}>All cities</button>
-            {week.cities.map(({ city }) => (
-              <button type="button" key={city} data-testid={`city-chip-${city}`} aria-pressed={cityFilter.has(city)}
-                className={"vms-chip" + (cityFilter.has(city) ? " vms-chip-on" : "")} onClick={() => toggleCity(city)}>{city}</button>
+            <button type="button" data-testid="city-chip-all" aria-pressed={city === null}
+              className={"vms-chip" + (city === null ? " vms-chip-on" : "")} onClick={() => pickCity(null)}>All cities</button>
+            {/* `c`, NOT `city` — destructuring the row as `city` shadowed the selected-city state
+                and every chip would have compared itself against itself. */}
+            {week.cities.map(({ city: c }) => (
+              <button type="button" key={c} data-testid={`city-chip-${c}`} aria-pressed={city === c}
+                className={"vms-chip" + (city === c ? " vms-chip-on" : "")} onClick={() => pickCity(c)}>{c}</button>
             ))}
           </div>
         )}
@@ -1299,7 +1341,7 @@ export default function VeoMasterSchedule() {
               onClose={() => setSheet(null)}
               cities={(week?.cities ?? []).map((c) => c.city)}
               city={monthCity}
-              onPickCity={(c) => { setCityFilter(c ? new Set([c]) : new Set()); setSheet(null); }}
+              onPickCity={(c) => { pickCity(c); setSheet(null); }}
               fields={monthFields}
               /* THE UNFILTERED RANGE, city-scoped only. `monthAll` has the FIELD filter already
                  applied, so counting from it made every unselected field read 0 — which is the
