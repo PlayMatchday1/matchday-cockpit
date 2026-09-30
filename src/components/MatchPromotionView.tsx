@@ -1079,8 +1079,12 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
               {keyTags.map((t) => (
                 <span key={t} data-testid="keyitem" data-t={t} title={tagTitle(t)}
                   className="inline-flex items-baseline gap-2 text-[11px] text-deep-green/65">
-                  <i data-testid="tag-key-swatch"
-                    className="rounded-[4px] border px-[4px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.03em]"
+                  {/* THE SWATCH AND THE TILE READ ONE VALUE. This is the element that shipped the
+                      contradiction: the tile was dashed and this was not, so the key described
+                      something the reader could not see. Both take colour AND border from
+                      TAG_META, so a change to a tag cannot reach one and miss the other. */}
+                  <i data-testid="tag-key-swatch" data-t={t}
+                    className="rounded-[4px] border border-solid px-[4px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.03em]"
                     style={{ color: TAG_META[t].colour, borderColor: TAG_META[t].colour }}>{TAG_META[t].label}</i>
                   <span>{TAG_META[t].why}</span>
                 </span>
@@ -1111,10 +1115,9 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
             <span data-testid="keyitem" className="text-[11px] text-deep-green/50">
               Nothing older than 4 weeks is marked.
             </span>
-            {/* THE SCOPE RULE, ONCE, IN THE LANGUAGE THE TILES USE. */}
-            <span data-testid="keyitem" className="text-[11px] text-deep-green/50">
-              Solid is this match. Dashed is the whole field.
-            </span>
+            {/* THE BORDER-STYLE LINE STOOD HERE AND IS GONE WITH THE RULE IT EXPLAINED. Nothing is
+                told apart by border any more, and the scope is already carried by the descriptions
+                above: "Extra promotion for this match" against "for all matches here". */}
           </div>
         </div>
       </div>
@@ -1370,19 +1373,19 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shif
       {shownTags.length > 0 && (
         <div className="mt-[5px] flex flex-wrap gap-1" data-testid="tags">
           {shownTags.map((t) => (
-            /* ── ONE COLOUR, TWO SHAPES ────────────────────────────────────────────────────────
-               PRIORITY and KEY FIELD KEEP THE ONE COLOUR, because KEY FIELD *is* PRIORITY at field
-               scope — they are one concept at two scopes, and colouring them apart would say they
-               are two concepts. THE BORDER CARRIES THE SCOPE instead: SOLID is this match, DASHED
-               is the whole field, which is the meaning a dotted rail already has on a covered tile.
-               So the page uses one visual language for "this one" against "everything here".
-               BOTH STAY OUTLINED, NEVER FILLED. The tile already spends filled pills on the cancel
-               ratio and the NEW badge; a filled tag reads as a 4/4 cancel at a glance.
+            /* ── THREE TAGS, THREE COLOURS, ALL SOLID ──────────────────────────────────────────
+               THE BORDER NO LONGER CARRIES ANYTHING. PRIORITY and KEY FIELD shared one colour and
+               were split solid-against-dashed; it did not read at tile size, and the legend swatch
+               rendered solid under a caption saying dashed, so the key contradicted the page. The
+               dashed rule is GONE rather than left on an element nobody compares.
+               THE COLOUR IS THE WHOLE SIGNAL NOW, and it comes from TAG_META — the same value the
+               legend swatch reads, which is what makes the two incapable of disagreeing.
+               ALL THREE STAY OUTLINED, NEVER FILLED. The tile already spends filled pills on the
+               cancel ratio and the NEW badge; a filled tag reads as a 4/4 cancel at a glance.
                PRIORITY IS STILL SWALLOWED where a KEY FIELD covers it — see splitTags above. */
             <i key={t} data-testid="tag" data-t={t} data-scope={TAG_META[t].scope} title={tagTitle(t)}
-              className="rounded-[4px] border px-[4px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.03em]"
-              style={{ color: TAG_META[t].colour, borderColor: TAG_META[t].colour, background: "transparent",
-                       borderStyle: TAG_META[t].scope === "field" ? "dashed" : "solid" }}>
+              className="rounded-[4px] border border-solid px-[4px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.03em]"
+              style={{ color: TAG_META[t].colour, borderColor: TAG_META[t].colour, background: "transparent" }}>
               {TAG_META[t].label}
             </i>
           ))}

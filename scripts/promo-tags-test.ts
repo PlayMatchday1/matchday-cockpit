@@ -56,21 +56,34 @@ console.log("\n— three tags at two scopes —");
   yes("  CONTROL: while it does still export the three tags", Object.keys(PromoTagsModule).includes("TAG_KEYS"));
 }
 
-console.log("\n— one concept, one colour; the scope is the label —");
+console.log("\n— three tags, three colours —");
 {
-  /* A DELIBERATE BREAK from "maybe have each tag a different colour": two colours for one idea would
-   * read as two ideas. COLOUR CARRIES THE CONCEPT, THE LABEL CARRIES THE SCOPE. */
-  is("PRIORITY and KEY FIELD share a colour", TAG_META.priority.colour, TAG_META.key_field.colour);
-  is("  and it is the purple priority already had", TAG_META.priority.colour, "#7C3AED");
-  yes("STARTING 11, a different idea, differs", TAG_META.starting_11.colour !== TAG_META.priority.colour);
-  is("  and keeps its own", TAG_META.starting_11.colour, "#DB2777");
-  /* CONTROL: the collision check, not merely "they differ". Two distinct colours that happen to
-   * include mint would pass a difference test and fail a reader. */
-  const TAKEN = ["#2CDB87", "#F4C430", "#E8862A", "#D9452F", "#8F2A17", "#003326"];
-  const mine = [TAG_META.priority.colour, TAG_META.starting_11.colour];
-  yes("CONTROL: none collides with mint, the cancel ramp or deep green",
-    mine.every((c) => !TAKEN.includes(c)), mine.join(" "));
-  is("  and the two are distinct from each other", new Set(mine).size, 2);
+  /* ── REVERSED 2026-09-30, AND THE OLD RULE IS WORTH RECORDING ────────────────────────────────
+   * This asserted that PRIORITY and KEY FIELD SHARE a colour, on the reasoning that two colours
+   * for one idea read as two ideas — KEY FIELD being PRIORITY at field scope. The scope was carried
+   * by the border instead, solid against dashed.
+   *
+   * IT FAILED TWICE OVER IN PRACTICE. A 1px border style does not read at tile size, and the legend
+   * swatch was rendered WITHOUT the dashed rule while its own caption announced it, so the key
+   * contradicted the page it exists to explain. The field team asked for two colours twice.
+   *
+   * The concept is still one concept; it is now carried by the DESCRIPTIONS ("for this match"
+   * against "for all matches here"), which is where scope was always legible. */
+  const cols = [TAG_META.priority.colour, TAG_META.key_field.colour, TAG_META.starting_11.colour];
+  is("three tags carry three colours", new Set(cols).size, 3);
+  is("  PRIORITY keeps its violet", TAG_META.priority.colour, "#7C3AED");
+  is("  KEY FIELD takes teal, which is the gap in this page's wheel", TAG_META.key_field.colour, "#0E7490");
+  is("  STARTING 11 keeps its pink", TAG_META.starting_11.colour, "#DB2777");
+  yes("  CONTROL: and PRIORITY and KEY FIELD are genuinely no longer the same",
+    TAG_META.priority.colour !== TAG_META.key_field.colour);
+  /* CONTROL: the collision check, not merely "they differ". Three distinct colours that happen to
+   * include mint would pass a difference test and fail a reader. THE WHEEL THIS PAGE ALREADY
+   * SPENDS: deep green and slate blue are the change tags, yellow through dark red the cancel
+   * ramp, mint and emerald push state, coral cancelled, amber a decision pending. */
+  const TAKEN = ["#2CDB87", "#F4C430", "#E8862A", "#D9452F", "#8F2A17", "#003326", "#4A5C8A", "#0E8A54"];
+  yes("CONTROL: none collides with mint, the cancel ramp, the change tags or deep green",
+    cols.every((c) => !TAKEN.includes(c)), cols.join(" "));
+  is("  and all three are distinct from each other", new Set(cols).size, 3);
 }
 
 console.log("\n— KEY FIELD swallows PRIORITY on the tile, and never in the panel —");

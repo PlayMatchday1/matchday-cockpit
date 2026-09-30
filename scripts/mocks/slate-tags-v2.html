@@ -10,7 +10,16 @@
     --c2:#E8862A; --c2t:#2E1B00;   /* 2 of 4 */
     --c3:#D9452F; --c3t:#ffffff;   /* 3 of 4 */
     --c4:#8F2A17; --c4t:#ffffff;   /* 4 of 4 */
-    --tagv:#7C3AED;  /* PRIORITY and KEY FIELD, ONE colour. The shape is what separates them. */
+    /* THREE TAGS, THREE COLOURS. An earlier pass gave PRIORITY and KEY FIELD one colour and split
+     * them on border style, solid against dashed, on the argument that Key Field IS Priority at
+     * field scope. It does not read: a 1px dashed border on a pill this small is invisible at a
+     * glance, and the legend swatch rendered it solid anyway, so the key contradicted itself.
+     * Colour is the only channel that survives at tile size. TEAL is the gap in the page's wheel:
+     * violet and pink are the other two tags, deep green and slate blue are the change tags, yellow
+     * through dark red is the cancel ramp, mint and emerald are push state, coral is cancelled and
+     * amber is a decision pending. */
+    --tagv:#7C3AED;  /* PRIORITY, match scope */
+    --tagk:#0E7490;  /* KEY FIELD, field scope */
     --tagp:#DB2777;  /* STARTING 11 */
     --back:#4A5C8A; } /* RETURNING SLATE. Not green: it is not new, it is back. */
   *{box-sizing:border-box}
@@ -69,16 +78,15 @@
 
   /* ── PROMO TAGS. Outlined, never filled, so they can never be mistaken for a cancel ratio or a
    * change tag at a glance.
-   * PRIORITY AND KEY FIELD SHARE ONE COLOUR ON PURPOSE: Key Field is Priority at field scope, and a
-   * second colour would break that into two unrelated ideas. The SHAPE carries the scope instead.
-   * DASHED MEANS INHERITED FROM SOMETHING WIDER, which is the meaning this page already gives a
-   * dotted rail on a covered tile. Solid is about this match; dashed is about the whole field. */
+   * ONE COLOUR EACH, and the scope is in the wording rather than in the shape: PRIORITY is "for this
+   * match", KEY FIELD is "for all matches here". Those two lines are what the legend already says,
+   * so nothing else has to carry it. */
   .tags{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}
   .tag{font-size:8.5px;font-weight:800;letter-spacing:.03em;border-radius:4px;padding:1px 5px;
        background:transparent;border:1px solid currentColor;font-style:normal;white-space:nowrap}
-  .tag[data-t="prio"]{color:var(--tagv);border-style:solid}
-  .tag[data-t="key"] {color:var(--tagv);border-style:dashed}
-  .tag[data-t="s11"] {color:var(--tagp);border-style:solid}
+  .tag[data-t="prio"]{color:var(--tagv)}
+  .tag[data-t="key"] {color:var(--tagk)}
+  .tag[data-t="s11"] {color:var(--tagp)}
 
   .xline{display:flex;align-items:center;gap:6px;margin-top:5px}
   .xtag{font-size:9px;font-weight:800;color:var(--coral);font-style:normal}
@@ -257,5 +265,5 @@ document.getElementById("key").innerHTML = `
   ${["prio","key","s11"].filter(k => usedTags.has(k)).map(k =>
     `<div class="keyrow" data-testid="keytag"><i class="tag" data-t="${k}">${TAGDEF[k].label}</i>
       <span>${TAGDEF[k].why}</span></div>`).join("")}
-  <p class="note" data-testid="whyshape">Solid is this match. Dashed is the whole field.</p>`;
+`;
 </script>

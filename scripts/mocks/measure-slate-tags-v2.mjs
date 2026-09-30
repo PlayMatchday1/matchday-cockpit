@@ -83,25 +83,35 @@ ok(inks.field === inks.match && inks.match === inks.time,
 ok((await p.$eval(tile("wed", "Stony Point"), e => e.title)).includes("would read NEW MATCH"),
   "  and the tooltip names the label it displaced, which is the only way to check the rule fired");
 
-// ══ 6. PRIORITY AND KEY FIELD: ONE COLOUR, TWO SHAPES ═════════════════════════════════════════
+// ══ 6. THREE TAGS, THREE COLOURS ═════════════════════════════════════════════════════════════
+// An earlier pass gave PRIORITY and KEY FIELD one colour and split them on border style. It did
+// not read at tile size, and the legend swatch rendered solid while its caption said dashed, so
+// the key contradicted itself on screen. Colour is the only channel that survives here.
 const shape = await p.evaluate(() => {
   const g = t => { const e = document.querySelector(`[data-testid="tag"][data-t="${t}"]`);
     if (!e) return null; const s = getComputedStyle(e);
     return { color: s.color, style: s.borderTopStyle, width: s.borderTopWidth }; };
   return { prio: g("prio"), key: g("key"), s11: g("s11") }; });
-// BOTH MUST EXIST FOR ANY OF THIS TO MEAN ANYTHING. Comparing against a missing element throws
-// rather than failing, which is a worse outcome than a red line.
-ok(shape.prio != null && shape.key != null, "both PRIORITY and KEY FIELD are on screen to compare");
-ok(shape.prio.color === shape.key.color,
-  `  they keep one colour, because Key Field is Priority at field scope (${shape.prio.color})`);
-ok(shape.prio.style !== shape.key.style,
-  `  and are told apart by border style instead (${shape.prio.style} vs ${shape.key.style})`);
-ok(shape.key.style === "dashed" && shape.prio.style === "solid",
-  "  dashed is the field, solid is the match, matching the dotted rail's existing meaning");
-ok(shape.s11.color !== shape.prio.color,
-  "  CONTROL: STARTING 11 is a different colour, so colour still separates unrelated tags");
-ok(shape.prio.width !== "0px" && shape.key.width !== "0px",
-  "  CONTROL: both borders are actually drawn, so 'different style' is not two invisible borders");
+// ALL THREE MUST EXIST FOR ANY OF THIS TO MEAN ANYTHING. Comparing against a missing element
+// throws rather than failing, which is a worse outcome than a red line.
+ok(shape.prio != null && shape.key != null && shape.s11 != null,
+  "all three promo tags are on screen to compare");
+const cols = [shape.prio.color, shape.key.color, shape.s11.color];
+ok(new Set(cols).size === 3, `each carries its own colour (${cols.join(" / ")})`);
+ok(shape.prio.color !== shape.key.color,
+  "  PRIORITY and KEY FIELD are no longer the same colour, which is the whole change");
+ok([shape.prio, shape.key, shape.s11].every(x => x.style === "solid"),
+  "  and none of them leans on a border style to be told apart");
+ok([shape.prio, shape.key, shape.s11].every(x => x.width !== "0px"),
+  "  CONTROL: every border is actually drawn, so 'all solid' is not three invisible borders");
+// THE LEGEND SWATCH IS THE SAME ELEMENT, which is what failed last time: the tile was dashed and
+// the swatch was not, so the key described something the reader could not see.
+ok(await p.evaluate(() => {
+  const tile = document.querySelector('[data-testid="tag"][data-t="key"]');
+  const key = document.querySelector('[data-testid="keytag"] .tag[data-t="key"]');
+  if (!tile || !key) return false;
+  return getComputedStyle(tile).color === getComputedStyle(key).color; }),
+  "  and the legend swatch is the same colour as the tile, so the key cannot contradict the page");
 
 // ══ 7. PRIORITY IS STILL SWALLOWED BY KEY FIELD ═══════════════════════════════════════════════
 const wt = await p.$$eval(`${D("tile")}[data-day="tue"][data-venue="Westlake"][data-time="7:00 PM"] ${D("tag")}`,
@@ -157,8 +167,8 @@ ok(await p.$$eval(D("keyage"), es => es.map(e => e.querySelector(".age").textCon
   "  every step is labelled in one shape, with no special case for the newest");
 ok((await p.$eval(D("cutoff"), e => e.textContent)).includes("older than 4 weeks"),
   "  and states the 4 week cut-off once, rather than on a rung");
-ok((await p.$eval(D("whyshape"), e => e.textContent)).toLowerCase().includes("dashed is the whole field"),
-  "  and what the two border styles mean");
+ok(await p.$$eval(D("whyshape"), es => es.length) === 0,
+  "  and no shape caption survives, since nothing is told apart by shape any more");
 // EVERY DESCRIPTION IS ONE SHORT LINE. The key is read weekly by people who know what the tags
 // mean; a paragraph there is clutter that stops being read, which is how a legend dies.
 ok(await p.$$eval(".keyrow span", es => es.every(e => e.textContent.trim().length <= 70)),

@@ -52,7 +52,21 @@ export const TAG_META: Record<TagKey, {
     why: "Extra promotion for this match.",
   },
   key_field: {
-    label: "KEY FIELD", colour: "#7C3AED", scope: "field",
+    /* ── ITS OWN COLOUR, AND IT WAS SHARED WITH PRIORITY UNTIL 2026-09-30 ──────────────────────
+     * The pair shared #7C3AED and were split on border style, solid against dashed. That failed
+     * twice over: it does not read at tile size, and the LEGEND SWATCH rendered solid while its
+     * own caption said dashed — the key contradicting the page it explains. The field team asked
+     * for two colours twice.
+     *
+     * TEAL IS THE GAP IN THIS PAGE'S WHEEL, which is why it is this teal and not a lighter violet:
+     * deep green and slate blue are the change tags, yellow through dark red is the cancel ramp,
+     * mint and emerald are push state, coral is cancelled, amber is a decision pending. #0E7490 is
+     * the one hue left that collides with none of them.
+     *
+     * KEY FIELD IS STILL PRIORITY AT FIELD SCOPE — that has not changed and the descriptions carry
+     * it ("for this match" against "for all matches here"). What changed is that scope is no
+     * longer asked to ride on a border nobody could compare. */
+    label: "KEY FIELD", colour: "#0E7490", scope: "field",
     why: "Extra promotion for all matches here.",
   },
   starting_11: {
