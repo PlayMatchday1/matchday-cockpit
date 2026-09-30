@@ -6556,3 +6556,54 @@ two different causes.
 `src/lib/playerProfile.ts:166` is `number: str(sub.stripeSubscriptionId) ?? str(sub.id)`. The
 numeric `userSubscriptions.id` — the path parameter every write above requires — is MASKED whenever
 a Stripe id exists. Nothing keyed on it can be built until the profile carries both.
+
+## `match_promotion_push`: `push_at` IS NULLABLE, AND A NULL FAILS BOTH RANGE COMPARISONS (2026-09-30)
+
+**Evidence: probed against the live table 2026-09-30, service role, read-only.**
+
+`match_promotion_push` holds BOTH the match pushes and the general (city / field) pushes, split by
+`scope`. `push_at` is nullable on both — the general-push sheet saves a row with the channel chosen
+and the time not settled, which is 0176's own state and a legal row.
+
+The week reader filtered `.gte("push_at", from).lte("push_at", to)`. **`NULL >= x` and `NULL <= y`
+are both NULL, never true**, so an undated general push was excluded from EVERY week of the year at
+once. There was no week you could navigate to to find it and give it a time.
+
+Quoted, all four non-match rows as they stood:
+
+```
+id=125 scope=city  city=Atlanta            ch=wa          push_at=2026-09-23T15:00:00+00  topic="Weekend slate"  code=null
+id=126 scope=field city=Atlanta field=1717 ch=klaviyo_sms push_at=2026-09-23T15:00:00+00  topic="Field slate"    code="SLATE10SMS"
+id=135 scope=city  city=Atlanta            ch=klaviyo_sms push_at=NULL                    topic=null             code=null
+id=200 scope=city  city=Austin             ch=wa          push_at=2026-10-01T09:09:00+00  topic="test"           code="TST"
+```
+
+The week of 2026-09-21 returned **2 rows** under the old filter and **3** under
+`.or("push_at.is.null,and(push_at.gte.…,push_at.lte.…)")` — row 135 is the difference. A week with
+no generals in range returns the undated row and nothing else, so the range half still excludes.
+
+Fixed in `fetchGeneralPushes` (`src/lib/matchPromotion.ts`). **Any other reader of this table that
+filters on a `push_at` range has the same hole.**
+
+## THE PROMO CODE IS PER PUSH ROW, AND ALWAYS WAS (2026-09-30)
+
+**Evidence: 175 match-scoped rows read live 2026-09-30, plus `src/app/api/match-promotion/route.ts`
+which updates `promo_code` inside its per-row `.update(...).eq("id", p.id)`.**
+
+`promo_code` is a column on `match_promotion_push`, one value per push. It was the **draft model**
+that collapsed it: `DraftChannel` held a single `code`, `draftToPushes` wrote it onto every row of
+the channel, and `codeFor` read it back as "the first non-empty one on this channel's rows". Two
+pushes on one channel could not carry different codes.
+
+Measured before the change: **94 matches, 9 (match, channel) groups holding more than one push, 22
+rows carrying a code, and not one group with differing codes.** That uniformity is the fan-out's own
+signature — which is also why **no migration was needed**: every multi-push group already held one
+code repeated, so the "backfill" had been happening continuously as a side effect of the bug.
+
+`codeFor` is retired. `matchCodes(plan)` gives the tile chip the distinct set (case-insensitive,
+first spelling wins — production holds 486 mixed-case codes). `scripts/promo-push-code-test.ts` runs
+the real rows through a load-and-save with no edits, read-only, and asserts every code survives.
+
+**Nothing downstream reads `promo_code` to send anything.** There is no send route; `pushed_at` /
+`pushed_by` are inert from 0176 and written only by the manual "mark as pushed" toggle. The code is
+read off the screen by whoever sends in Klaviyo or WhatsApp.
