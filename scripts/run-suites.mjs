@@ -287,6 +287,7 @@ const NODE_SUITES = [
   "scripts/vacuous-assertion-guard-test.ts",
   "scripts/roster-edit-model-test.ts",
   "scripts/credits-model-test.ts",
+  "scripts/membership-model-test.ts",
   "scripts/promo-edit-model-test.ts",
   // The 🎥 name transform — a MatchDay match-name write that reaches players in the live app.
   "scripts/veo-name-sync-test.ts",

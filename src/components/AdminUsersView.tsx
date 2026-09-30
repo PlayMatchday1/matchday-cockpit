@@ -14,6 +14,7 @@ import { CITY_SECTIONS } from "@/app/(internal)/city/citySections";
 type PermissionKey =
   | "can_manage_promos"
   | "can_edit_credits"
+  | "can_edit_memberships"
   | "is_admin"
   | "can_access_home"
   | "can_access_finance"
@@ -431,6 +432,7 @@ export default function AdminUsersView() {
                                 <div className="flex items-center gap-1 pl-3" title={u.is_service_account ? "The E2E service account can never hold EDIT CREDITS" : "EDIT CREDITS — adjust a player's balance. Granted separately from Match Ops."}>
                                   <span className="text-[8px] leading-none text-deep-green/40">↳ credits</span>
                                   <ToggleBox on={!!u.can_edit_credits} disabled={!!u.is_service_account} onClick={() => togglePermission(u, "can_edit_credits")} label={`EDIT CREDITS (write) for ${u.email}`} />
+                                  <ToggleBox on={!!u.can_edit_memberships} disabled={!!u.is_service_account} onClick={() => togglePermission(u, "can_edit_memberships")} label={`EDIT MEMBERSHIPS (write) for ${u.email}`} />
                                 </div>
                                 {permErr?.id === u.id && (
                                   <span className="mt-1 max-w-[160px] text-[10px] leading-tight text-coral" data-testid="perm-error">{permErr.msg}</span>

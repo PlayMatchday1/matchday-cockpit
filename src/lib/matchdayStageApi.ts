@@ -118,7 +118,7 @@ export class NotAuthorizedError extends Error {
 // Who is performing a write, and whether they may. Derived server-side from the
 // authenticated user's app_users row (can_edit_matches AND can_access_matchops) — never
 // from client state. Reads (apiGet) need no actor; only writes do.
-export type WriteActor = { canEditMatches: boolean; canManagePlayers?: boolean; canManagePromos?: boolean; canEditCredits?: boolean; email?: string; userId?: string;
+export type WriteActor = { canEditMatches: boolean; canManagePlayers?: boolean; canManagePromos?: boolean; canEditCredits?: boolean; canEditMemberships?: boolean; email?: string; userId?: string;
   // Phase 25 — a CITY MANAGER's scope. A FOURTH authority, not a variant of EDIT MATCHES: it
   // permits exactly one field (managerId) on matches the route has already proven are in this
   // city. Set only by the city-manager route, from the DB row, never from client state.
@@ -183,6 +183,17 @@ export function assertCanEditCredits(actor: WriteActor | undefined): void {
     );
   }
 }
+// The EDIT MEMBERSHIPS check (0195). A SIXTH authority and the SECOND that moves money, so it is
+// shaped on EDIT CREDITS and not on EDIT MATCHES: pricing or ending a live subscription is not a
+// Match Ops power and holding Match Ops must never imply it. Independent of every other grant.
+export function assertCanEditMemberships(actor: WriteActor | undefined): void {
+  if (!actor || actor.canEditMemberships !== true) {
+    throw new NotAuthorizedError(
+      `Refusing write: the caller does not hold EDIT MEMBERSHIPS. No request was sent to MatchDay. ` +
+      `(actor: ${actor?.email ? JSON.stringify(actor.email) : "none"})`,
+    );
+  }
+}
 // Indirection so a mutation test can monkeypatch a guard to a no-op and prove the
 // no-fetch test goes RED without it. TEST-ONLY — no route imports the setters.
 let editGuard: (a: WriteActor | undefined) => void = assertCanEditMatches;
@@ -204,6 +215,10 @@ export function __setPromoGuardForTest(fn: (a: WriteActor | undefined) => void):
 let creditsGuard: (a: WriteActor | undefined) => void = assertCanEditCredits;
 export function __setCreditsGuardForTest(fn: (a: WriteActor | undefined) => void): () => void {
   const prev = creditsGuard; creditsGuard = fn; return () => { creditsGuard = prev; };
+}
+let membershipsGuard: (a: WriteActor | undefined) => void = assertCanEditMemberships;
+export function __setMembershipsGuardForTest(fn: (a: WriteActor | undefined) => void): () => void {
+  const prev = membershipsGuard; membershipsGuard = fn; return () => { membershipsGuard = prev; };
 }
 // A write actor for out-of-band CLI/proof scripts (run server-side by a developer who
 // already holds the API credentials). Routes MUST NOT import this — the enumeration
@@ -419,14 +434,15 @@ export async function apiGet<T = unknown>(env: MatchdayEnv, path: string, query?
 }
 
 // WRITES — env-explicit, single-shot, host-allowlisted, deny-listed, prod-bolted.
-export async function apiWrite<T = unknown>(env: MatchdayEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor, requires: "edit" | "manage" | "promos" | "city" | "credits" = "edit", unlock?: WriteUnlock): Promise<T> {
+export async function apiWrite<T = unknown>(env: MatchdayEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor, requires: "edit" | "manage" | "promos" | "city" | "credits" | "memberships" = "edit", unlock?: WriteUnlock): Promise<T> {
   // STEP 2 in the write pipeline (authenticated is step 1, in the route): does the caller
   // hold the required authority — EDIT MATCHES for match/roster writes, MANAGE PLAYERS for
   // ban writes, MANAGE PROMOS for promo writes? These are INDEPENDENT grants; each path names
   // its own so holding one never implies another. This runs BEFORE the bolt and host guard,
   // before creds load — a caller without it produces ZERO network calls. Low-level,
   // unbypassable chokepoint; a route that forgets its own early check is still stopped here.
-  (requires === "promos" ? promoGuard : requires === "manage" ? manageGuard : requires === "city" ? cityGuard : requires === "credits" ? creditsGuard : editGuard)(actor);
+  (requires === "promos" ? promoGuard : requires === "manage" ? manageGuard : requires === "city" ? cityGuard
+    : requires === "credits" ? creditsGuard : requires === "memberships" ? membershipsGuard : editGuard)(actor);
   // The bolt fires next, before creds are even loaded — production is refused
   // regardless of whether prod credentials happen to be configured. Nothing about
   // a production write can proceed while the bolt is engaged.

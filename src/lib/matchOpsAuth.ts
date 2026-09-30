@@ -17,6 +17,8 @@ import { confinedCity, assertConfinedRoute, CONFINED_CITY_ERROR } from "./cityCo
 export type MatchOpsAuthResult =
   | { ok: true; supabase: SupabaseClient; appUserId: string; email: string; isAdmin: boolean;
       canEditMatches: boolean; canManagePlayers: boolean; canManagePromos: boolean;
+      // 0195 — NOT gated on Match Ops; see deriveMatchOpsFlags. Moves money, stands alone.
+      canEditMemberships: boolean;
       // THE SCOPE EVERY MATCH-OPS ROUTE MUST PUSH INTO ITS QUERY. null = unconfined, and the route
       // filters on nothing. Non-null = the route MUST add .eq() before fetching — filtering after
       // the fetch leaks through pagination counts, which is the whole reason this is returned by

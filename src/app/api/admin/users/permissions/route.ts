@@ -22,7 +22,7 @@
 // access than intended, which is safe. A revoke that silently fails leaves them with MORE, and the
 // screen looked identical either way.
 //
-// THE WRITE GRANTS ARE NOT DECORATIVE, even for an admin: can_send_messages, can_edit_credits,
+// THE WRITE GRANTS ARE NOT DECORATIVE, even for an admin: can_send_messages, can_edit_credits, can_edit_memberships,
 // can_manage_promos and can_edit_matches are each read independently of is_admin. A failed revoke
 // on one of those left a real capability in place.
 import { randomUUID } from "node:crypto";
@@ -42,7 +42,7 @@ const BOOLEAN_KEYS = [
   "can_access_home", "can_access_finance", "can_access_lifecycle", "can_access_growth",
   "can_access_membership",
   "can_access_matchops", "can_access_chats", "can_access_tech", "can_access_org",
-  "can_manage_promos", "can_edit_matches", "can_edit_credits", "can_send_messages",
+  "can_manage_promos", "can_edit_matches", "can_edit_credits", "can_edit_memberships", "can_send_messages",
 ] as const;
 const TEXT_KEYS = ["full_name"] as const;
 
@@ -53,7 +53,8 @@ const LABEL: Record<string, string> = {
   can_access_membership: "Membership", can_access_matchops: "Match Ops", can_access_chats: "Chats",
   can_access_tech: "Tech", can_access_org: "Org",
   can_manage_promos: "Manage promos", can_edit_matches: "Edit matches",
-  can_edit_credits: "Edit credits", can_send_messages: "Send messages",
+  can_edit_credits: "Edit credits", can_edit_memberships: "Edit memberships",
+  can_send_messages: "Send messages",
   full_name: "Name",
 };
 

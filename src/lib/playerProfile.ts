@@ -162,8 +162,24 @@ export async function buildProfile(args: {
   // Defensive mapping — the exact userSubscriptions shape for active members is
   // unconfirmed live; render only fields that are present, never "undefined".
   const membership = sub ? {
+    /* ── THE NUMERIC id IS CARRIED SEPARATELY, AND THAT IS THE WHOLE REASON THIS CHANGED ────────
+     * `number` below is `stripeSubscriptionId ?? id`, so on any member who HAS a Stripe
+     * subscription the numeric userSubscriptions.id never reached the client. Every admin write
+     * is keyed on that number — the controller takes it through ParseIntPipe and will not accept
+     * a `sub_…` string — so nothing could be built until the profile carried both.
+     *
+     * `number` IS LEFT EXACTLY AS IT WAS. It is what the card has always displayed and what the
+     * Payments panel reconciles against; changing it would move a number on screen to fix a
+     * problem that is about a different one. */
+    id: num(sub.id),
+    /* RAW, NOT NORMALISED. ADDED_FROM_ADMIN is a real status and the panel has to tell it apart
+     * from ACTIVE — a comp and a paying member are different objects, not two skins of one. The
+     * `?? "canceled"/"active"` fallback below is a DISPLAY default for a payload with no status
+     * at all and must not be allowed to launder ADDED_FROM_ADMIN into "active". */
+    statusRaw: str(sub.status),
     status: str(sub.status) ?? (sub.canceledAt ? "canceled" : "active"),
     number: str(sub.stripeSubscriptionId) ?? str(sub.id),
+    stripeSubscriptionId: str(sub.stripeSubscriptionId),
     since: str(sub.activationDate) ?? str(sub.createdAt) ?? str(sub.currentPeriodStart),
     renews: str(sub.currentPeriodEnd),
     canceledAt: str(sub.canceledAt),

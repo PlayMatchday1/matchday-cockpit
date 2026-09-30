@@ -122,3 +122,50 @@ export async function fetchPlayerPayments(email: string | null, userId: string |
   for (const e of entries) for (const v of e.via) via.add(v);
   return { rows: entries.map((e) => toRow(e.charge)), foundVia: [...via], customerMatched };
 }
+
+/* ── READING A SUBSCRIPTION BACK, WHICH IS WHY THIS IS NOT A GUESS ───────────────────────────
+ * MatchDay's admin write paths SWALLOW a Stripe failure and update their own row regardless
+ * (subscriptions.service `cancelSubscriptionsForAdmin` / `updateUserSubscriptionPrice`, both with a
+ * bare `// TODO: handle cases if Stripe failed`). So a MatchDay row reading CANCELED proves the row
+ * changed and NOTHING about whether the player is still being charged.
+ *
+ * This reads the other half directly, with the same client and the same key the Payments panel
+ * already uses. It NEVER writes: `subscriptions.retrieve` only.
+ *
+ * A MISSING SUBSCRIPTION IS NOT A FAILURE HERE. Stripe answers 404 for an id it does not hold, and
+ * `resource_missing` on a cancelled-and-purged id is a legitimate state; the caller distinguishes
+ * "absent" from "unreadable" and neither is reported as "Stripe did not move". */
+export type StripeSubRead = {
+  found: boolean;
+  status: string | null;          // 'active' | 'canceled' | 'past_due' | …
+  cancelAtPeriodEnd: boolean | null;
+  canceledAt: string | null;      // ISO, converted from Stripe's epoch seconds
+  unitAmount: number | null;      // CENTS on item 0 — what the player is actually charged
+  error: string | null;           // set only when Stripe could not be reached or read
+};
+
+export async function readStripeSubscription(subscriptionId: string | null | undefined): Promise<StripeSubRead> {
+  const id = (subscriptionId ?? "").trim();
+  const miss: StripeSubRead = { found: false, status: null, cancelAtPeriodEnd: null, canceledAt: null, unitAmount: null, error: null };
+  if (!id) return miss;
+  let stripe: Stripe;
+  try { stripe = getStripe(); } catch (e) { return { ...miss, error: e instanceof Error ? e.message : "Stripe is not configured" }; }
+  try {
+    const sub = await stripe.subscriptions.retrieve(id);
+    const item = sub.items?.data?.[0];
+    return {
+      found: true,
+      status: typeof sub.status === "string" ? sub.status : null,
+      cancelAtPeriodEnd: sub.cancel_at_period_end === true,
+      canceledAt: typeof sub.canceled_at === "number" ? new Date(sub.canceled_at * 1000).toISOString() : null,
+      unitAmount: typeof item?.price?.unit_amount === "number" ? item.price.unit_amount : null,
+      error: null,
+    };
+  } catch (e) {
+    const code = (e as { code?: string })?.code;
+    // AN ID STRIPE DOES NOT HOLD IS AN ABSENCE, NOT AN UNREADABLE. Reported as found:false with no
+    // error so the caller says "there is nothing to check" rather than raising a false alarm.
+    if (code === "resource_missing") return miss;
+    return { ...miss, error: e instanceof Error ? e.message.slice(0, 200) : "Stripe request failed" };
+  }
+}

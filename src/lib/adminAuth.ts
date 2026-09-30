@@ -51,12 +51,22 @@ export function isCityManagerConfined(row: AppUserRow): boolean {
 export const CITY_MANAGER_CONFINED_ERROR =
   "City manager accounts are scoped to their own city. Use Manager Pay, Reviews or Gameday Ops under /city.";
 
-export function deriveMatchOpsFlags(row: AppUserRow): { canEditMatches: boolean; canManagePlayers: boolean; canManagePromos: boolean } {
+export function deriveMatchOpsFlags(row: AppUserRow): { canEditMatches: boolean; canManagePlayers: boolean; canManagePromos: boolean; canEditMemberships: boolean } {
   const matchops = row.can_access_matchops === true;
   return {
     canEditMatches: row.can_edit_matches === true && matchops,
     canManagePlayers: row.can_manage_players === true && matchops,
     canManagePromos: row.can_manage_promos === true && matchops,
+    /* ── NOT `&& matchops`, AND THAT IS THE RULING, NOT AN OVERSIGHT (0195) ──────────────────
+     * The three above are powers you exercise INSIDE Match Ops, so they are gated on holding it.
+     * EDIT MEMBERSHIPS moves money — ending one cancels a live Stripe subscription immediately
+     * with no refund — and 0195 put it in EDIT CREDITS' shape: neither implied by
+     * can_access_matchops nor cascaded off by it, in either direction.
+     *
+     * READ OFF THE ROW WITH NO NAMED COLUMN ANYWHERE ELSE: adminAuth selects "*", so on a deploy
+     * that lands before the migration this reads `undefined`, `=== true` is false, and the caller
+     * is denied. It cannot 500. */
+    canEditMemberships: row.can_edit_memberships === true,
   };
 }
 

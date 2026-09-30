@@ -56,8 +56,24 @@ is("E2E constant is the expected email", E2E_SERVICE_EMAIL, "clubhouse-e2e@playm
 is("any is_service_account row is blocked regardless of email", matchOpsReadGate({ ...E2E, id: "svc" }, "someone-else@x.com").ok, false);
 
 console.log("\nWRITE flags stay gated (read open ≠ write open):");
-is("a Match-Ops-only account derives NO write flags", deriveMatchOpsFlags(MATCHOPS_ONLY), { canEditMatches: false, canManagePlayers: false, canManagePromos: false });
-is("Deonna derives MANAGE PLAYERS only — never EDIT MATCHES or MANAGE PROMOS", deriveMatchOpsFlags(DEONNA), { canEditMatches: false, canManagePlayers: true, canManagePromos: false });
+is("a Match-Ops-only account derives NO write flags", deriveMatchOpsFlags(MATCHOPS_ONLY), { canEditMatches: false, canManagePlayers: false, canManagePromos: false, canEditMemberships: false });
+is("Deonna derives MANAGE PLAYERS only — never EDIT MATCHES or MANAGE PROMOS", deriveMatchOpsFlags(DEONNA), { canEditMatches: false, canManagePlayers: true, canManagePromos: false, canEditMemberships: false });
+
+/* ── EDIT MEMBERSHIPS IS NOT GATED ON MATCH OPS, AND THAT IS THE RULING (0195) ────────────────
+ * The three flags above are `&& matchops` because they are powers exercised inside Match Ops.
+ * EDIT MEMBERSHIPS moves money — ending one cancels a live Stripe subscription immediately with no
+ * refund — so 0195 gave it EDIT CREDITS' shape: neither implied by can_access_matchops nor
+ * cascaded off by it. These two assertions are the pair that proves BOTH directions. */
+is("EDIT MEMBERSHIPS does NOT require Match Ops — it is granted on its own",
+  deriveMatchOpsFlags({ can_edit_memberships: true }).canEditMemberships, true);
+is("  CONTROL: while EDIT MATCHES on the same row still does require it",
+  deriveMatchOpsFlags({ can_edit_matches: true }).canEditMatches, false);
+is("  and holding Match Ops alone never confers it",
+  deriveMatchOpsFlags({ can_access_matchops: true }).canEditMemberships, false);
+/* A ROW FROM BEFORE THE MIGRATION HAS NO SUCH COLUMN. adminAuth selects "*", so the field reads
+ * undefined and must DENY rather than throw — this is what lets code deploy ahead of a migration. */
+is("  a row with no can_edit_memberships column denies rather than throwing",
+  deriveMatchOpsFlags({ can_access_matchops: true, can_edit_matches: true }).canEditMemberships, false);
 is("an admin WITHOUT manage-promos still cannot write promos", deriveMatchOpsFlags(PROMO_ADMIN).canManagePromos, false);
 is("manage-promos requires Match Ops too (flag true but no matchops → false)", deriveMatchOpsFlags({ can_manage_promos: true }).canManagePromos, false);
 is("manage-promos true + matchops → true", deriveMatchOpsFlags({ can_manage_promos: true, can_access_matchops: true }).canManagePromos, true);
@@ -85,7 +101,15 @@ const rel = (p: string) => p.replace("src/app/api/", "");
 // EXACTLY the intended routes are on the read gate — no more (a further move must edit this test).
 // Round 1 moved 3; round 2 moved 9 more (6 reads + the 3 dual-gate routes whose GET moved and whose
 // write stayed) — the ban route is on the read gate too, but with a MANAGE PLAYERS check on top.
-is("authenticateMatchOpsRead is imported by EXACTLY the 19 intended routes", importsMatchOpsRead.map(rel).sort(), [
+is("authenticateMatchOpsRead is imported by EXACTLY the 22 intended routes", importsMatchOpsRead.map(rel).sort(), [
+  /* 0195 — THE THREE MEMBERSHIP WRITES. On this gate, like the strikes and ban routes, because a
+   * confined operator must be refused against the SERVER's copy of the player rather than merely
+   * finding the control missing from a page — and this gate is what hands the route its scope.
+   * The authority on top is EDIT MEMBERSHIPS, checked before any MatchDay call and again at the
+   * apiWrite chokepoint with requires:"memberships". */
+  "matchday/[env]/memberships/[subscriptionId]/end/route.ts",
+  "matchday/[env]/memberships/[subscriptionId]/price/route.ts",
+  "matchday/[env]/memberships/add/route.ts",
   // Phase 30 — the Registered Players table under Player Lookup. A pure READ of the mdapi mirror
   // (mdapi_users + mdapi_match_players), so can_access_matchops gates the whole route with no
   // write flag on top. It is on this gate rather than the admin one BECAUSE a confined account
@@ -429,7 +453,7 @@ is("the E2E service account is BLOCKED by email", cityManagerGate({ id: "e", is_
 is("any is_service_account row is blocked regardless of email",
   cityManagerGate({ id: "e2", is_city_manager: true, city_identifier: "ATX", is_service_account: true }, "someone@x.com").ok, false);
 // the city tier grants NO match-ops write flags
-is("the city tier derives NO Match Ops write flags", deriveMatchOpsFlags(CITYMGR), { canEditMatches: false, canManagePlayers: false, canManagePromos: false });
+is("the city tier derives NO Match Ops write flags", deriveMatchOpsFlags(CITYMGR), { canEditMatches: false, canManagePlayers: false, canManagePromos: false, canEditMemberships: false });
 // and it does NOT open the Match Ops read gate
 is("a city manager is REFUSED by the Match Ops read gate (separate tiers)", matchOpsReadGate(CITYMGR, "cm@playmatchday.com").ok, false);
 

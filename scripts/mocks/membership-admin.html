@@ -1,0 +1,345 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Membership admin on Player Lookup</title>
+<style>
+  /* CLASS NAMES ARE THE ONES ALREADY IN PlayerLookup.tsx — .panel .ptitle .note .memgrid .fact
+   * .nomem .memsum .pfoot .tag, plus .rm and the .scrim/.dlg confirm lifted verbatim from
+   * remove-strike.html. The only new ones are .acts, .kindcard and .wire. */
+  :root{ --ink:#12261c; --ink2:#5d6b62; --faint:#8b9a91; --line:#dfe5e0; --hair:#eef2ef; --bg:#f4f6f4;
+         --grn:#12402a; --mint:#e6f6ee; --ok:#0d6b45;
+         --amb:#8a5a12; --ambbg:#fdf6e6; --ambline:#ecdcb4;
+         --red:#8c2f1f; --redbg:#fdefec; --redline:#f0c7bd; }
+  *{ box-sizing:border-box }
+  [hidden]{ display:none !important }
+  body{ margin:0; font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg) }
+  .num{ font-variant-numeric:tabular-nums }
+
+  .sw{ display:flex; gap:6px; padding:10px 12px; background:#fff; border-bottom:1px solid var(--line); flex-wrap:wrap; align-items:center }
+  .sw b{ font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink2); margin-right:2px }
+  .sw button{ font:inherit; font-size:12.5px; font-weight:650; padding:6px 11px; border:1px solid var(--line);
+              background:#fff; color:var(--ink); border-radius:999px; cursor:pointer; min-height:32px }
+  .sw button[aria-pressed="true"]{ background:var(--grn); color:#fff; border-color:var(--grn) }
+
+  .pl{ padding:16px; max-width:940px; margin:0 auto }
+  .panel{ background:#fff; border:1px solid var(--line); border-radius:11px; overflow:hidden }
+  .ptitle{ padding:12px 14px; border-bottom:1px solid var(--hair); display:flex; align-items:center; gap:10px }
+  .ptitle h3{ margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink2); font-weight:800 }
+  .ptitle .note{ margin-left:auto; font-size:12.5px; color:var(--ink2) }
+  .tag{ font-size:10px; font-weight:800; padding:4px 9px; border-radius:5px; letter-spacing:.03em }
+  .tag.ok{ background:var(--mint); color:var(--ok) }
+  .tag.none{ background:var(--hair); color:var(--ink2) }
+  .tag.susp{ background:var(--ambbg); color:var(--amb); border:1px solid var(--ambline) }
+  .tag.comp{ background:var(--ambbg); color:var(--amb); border:1px solid var(--ambline) }
+
+  .memgrid{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px 18px; padding:14px }
+  .fact{ min-width:0 }
+  .fact .k{ display:block; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--faint); font-weight:750 }
+  .fact .v{ display:block; font-size:14px; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .nomem{ padding:18px 14px; color:var(--ink2); font-size:13px }
+  .nomem b{ display:block; color:var(--ink); font-size:14px; margin-bottom:3px }
+  .memsum{ margin:0; padding:11px 14px; border-top:1px solid var(--hair); background:#fbfdfb; font-size:12.5px; color:var(--ink2) }
+  .memsum b{ color:var(--ink) }
+  .warn{ margin:0; padding:11px 14px; border-top:1px solid var(--ambline); background:var(--ambbg); font-size:12.5px; color:var(--amb) }
+  .warn b{ display:block; font-weight:800 }
+  .pfoot{ margin:0; padding:10px 14px; border-top:1px solid var(--hair); font-size:11.5px; color:var(--faint) }
+
+  .acts{ display:flex; gap:8px; padding:12px 14px; border-top:1px solid var(--hair); background:#fbfdfb; flex-wrap:wrap }
+  .rm{ font:inherit; font-size:12px; font-weight:700; padding:6px 11px; min-height:32px; border-radius:7px;
+       border:1px solid var(--line); background:#fff; color:var(--ink2); cursor:pointer; white-space:nowrap }
+  .rm:hover:not(:disabled){ border-color:var(--grn); color:var(--grn) }
+  .rm.danger:hover:not(:disabled){ border-color:var(--redline); color:var(--red); background:var(--redbg) }
+  .rm:focus-visible{ outline:2px solid var(--grn); outline-offset:1px }
+  .rm:disabled{ opacity:.42; cursor:not-allowed }
+  .whynot{ font-size:12px; color:var(--ink2); align-self:center }
+
+  .scrim{ position:fixed; inset:0; background:rgba(15,35,26,.34); display:flex; align-items:center;
+          justify-content:center; padding:16px; z-index:20; overflow:auto }
+  .dlg{ background:#fff; border-radius:12px; width:100%; max-width:460px; padding:16px;
+        box-shadow:0 14px 40px rgba(15,35,26,.22) }
+  .dlg h3{ margin:0; font-size:16px; font-weight:800 }
+  .what{ margin-top:11px; padding:10px 12px; background:#fafbfa; border:1px solid var(--line);
+         border-radius:8px; font-size:12.5px; color:var(--ink2) }
+  .what b{ color:var(--ink) }
+  .what.hot{ background:var(--redbg); border-color:var(--redline); color:var(--red) }
+  .what.hot b{ color:var(--red) }
+  label.fl{ display:block; margin-top:12px; font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+            color:var(--ink2); font-weight:750 }
+  input[type=text],input[type=number]{ font:inherit; width:100%; margin-top:5px; padding:9px 10px; min-height:38px;
+        border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink) }
+  input:focus-visible{ outline:2px solid var(--grn); outline-offset:0 }
+  .wire{ margin-top:7px; font-size:11.5px; color:var(--faint) }
+  .wire b{ color:var(--ink2); font-variant-numeric:tabular-nums }
+  .kinds{ margin-top:12px; display:grid; gap:8px }
+  .kindcard{ display:block; border:1px solid var(--line); border-radius:9px; padding:11px 12px; cursor:pointer }
+  .kindcard[data-on="1"]{ border-color:var(--grn); background:#f7fbf8; box-shadow:inset 0 0 0 1px var(--grn) }
+  .kindcard .t{ display:flex; align-items:center; gap:8px; font-size:13.5px; font-weight:750 }
+  .kindcard .d{ display:block; margin-top:4px; font-size:12px; color:var(--ink2) }
+  .drow{ display:flex; gap:8px; margin-top:14px; justify-content:flex-end }
+  .btn{ font:inherit; font-size:13px; font-weight:750; padding:8px 14px; min-height:38px; border-radius:8px;
+        border:1px solid var(--line); background:#fff; color:var(--ink); cursor:pointer }
+  .btn.go{ background:var(--grn); border-color:var(--grn); color:#fff }
+  .btn.go.danger{ background:var(--red); border-color:var(--red) }
+  .btn:disabled{ opacity:.45; cursor:not-allowed }
+  .note2{ margin:14px 0 0; font-size:11.5px; color:var(--faint) }
+
+  @media (max-width:620px){ .memgrid{ grid-template-columns:repeat(2,minmax(0,1fr)) } }
+</style>
+
+<div class="sw">
+  <b>Player</b>
+  <button data-testid="sw" data-k="paid" aria-pressed="true">Paying member</button>
+  <button data-testid="sw" data-k="comped" aria-pressed="false">Comped (admin)</button>
+  <button data-testid="sw" data-k="free" aria-pressed="false">Free ($0 Stripe)</button>
+  <button data-testid="sw" data-k="none" aria-pressed="false">Not a member</button>
+  <button data-testid="sw" data-k="selfcancel" aria-pressed="false">Player cancelled</button>
+  <button data-testid="sw" data-k="adminend" aria-pressed="false">Ended by admin</button>
+</div>
+
+<div class="pl"><div id="panel"></div></div>
+<div id="modal"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════════════════════════
+ * THREE WRITES, READ OUT OF THE BACKEND AND retool-export-prod.json. Not guessed.
+ *
+ *   END       POST  /admin/subscriptions/{userSubscriptionId}/unsubscribe   { reason }
+ *   PRICE     PATCH /admin/subscriptions/{userSubscriptionId}               { price }   <- CENTS
+ *   ADD       POST  /admin/subscriptions/users/{userId}                     (no body)
+ *   ADD FREE  POST  /admin/subscriptions/users/{userId}/free                (no body)
+ *
+ * THE ID THESE THREE NEED IS NOT ON THE PANEL TODAY. playerProfile.ts sets
+ *   number: str(sub.stripeSubscriptionId) ?? str(sub.id)
+ * so the card shows the STRIPE id (sub_1UJH…) and the numeric userSubscriptions.id — which is what
+ * every write above is keyed on, and what Retool calls membershipId — never reaches the client.
+ * Adding it to the membership object is the first line of this build.
+ * ═══════════════════════════════════════════════════════════════════════════════════════════════ */
+
+const CITY_PLAN = { DFW: 4900, ATX: 4900, HOU: 4500 };   // GET /admin/subscriptions/cities/{abbr}
+
+const P = {
+  paid: { name:"Miguel Alvarez", userId:41277, city:"DFW",
+    m:{ membershipId:8123, number:"sub_1UJHRsD8rM0p4Ya4n8liV7wB", status:"ACTIVE",
+        since:"2026-09-24", renews:"2026-10-01", canceledAt:null, price:4900, city:"DFW", stripe:true } },
+  comped: { name:"Dana Okafor", userId:39810, city:"ATX",
+    m:{ membershipId:8140, number:null, status:"ADDED_FROM_ADMIN",
+        since:"2026-08-02", renews:null, canceledAt:null, price:4900, city:"ATX", stripe:false } },
+  free: { name:"Chris Boone", userId:42015, city:"HOU",
+    m:{ membershipId:8155, number:"sub_1UKm2ND8rM0p4Ya4qQ1xZ0", status:"ACTIVE",
+        since:"2026-07-11", renews:"2026-10-11", canceledAt:null, price:0, city:"HOU", stripe:true } },
+  none: { name:"Priya Raman", userId:43902, city:"DFW", m:null },
+  selfcancel: { name:"Tom Reyes", userId:38221, city:"DFW",
+    m:{ membershipId:8099, number:"sub_1UGx0PD8rM0p4Ya4bb7Lq2", status:"ACTIVE",
+        since:"2026-03-14", renews:"2026-10-14", canceledAt:"2026-09-26T14:02:00Z", price:4900, city:"DFW",
+        stripe:true, endedBy:"player" } },
+  adminend: { name:"Sam Whitfield", userId:40551, city:"ATX",
+    m:{ membershipId:8077, number:"sub_1UFa9LD8rM0p4Ya4cc3Mk8", status:"CANCELED",
+        since:"2026-02-08", renews:"2026-10-08", canceledAt:"2026-09-29T19:41:00Z", price:4900, city:"ATX",
+        stripe:true, endedBy:"admin", endedReason:"Duplicate account, merged into 40551" } },
+};
+
+let key = "paid", dlg = null, form = {};
+const $ = s => document.querySelector(s);
+const usd = c => "$" + (c/100).toFixed(2);
+const day = s => s ? new Date(s).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric",timeZone:"UTC"}) : "—";
+
+/* ── LIVE, COMPED, OR OVER ─────────────────────────────────────────────────────────────────────
+ * "Is there a membership to act on" is NOT m.status. A subscription cancelled at period end keeps
+ * status ACTIVE until the period runs out, which is why the existing badge reads canceledAt rather
+ * than status. The write endpoints use a third rule again: unsubscribeForAdmin matches on
+ * status != CANCELED, so the SELF-CANCELLED row above is still endable and the admin-ended one is
+ * not. Three rules, so each is named where it is used rather than folded into one flag. */
+const isOver   = m => !m ? true : String(m.status).toUpperCase() === "CANCELED";
+const isComped = m => !!m && String(m.status).toUpperCase() === "ADDED_FROM_ADMIN";
+// subscribeSpecificUser / …Free both throw USER_ALREADY_SUBSCRIBED on status in (ACTIVE,
+// ADDED_FROM_ADMIN). A CANCELED row does not block, which is why "Ended by admin" can add again.
+const canAdd   = m => !m || isOver(m);
+
+function badge(m){
+  if (!m) return null;
+  if (isComped(m)) return ["comp","COMPED BY ADMIN"];
+  if (m.canceledAt || isOver(m)) {
+    if (m.endedBy === "admin") return ["none","ENDED " + day(m.canceledAt).toUpperCase()];
+    const running = m.renews && Date.parse(m.renews) > Date.parse("2026-09-30T12:00:00Z");
+    return ["none", running ? "CANCELLED, RUNS TO " + day(m.renews).toUpperCase() : "CANCELLED"];
+  }
+  if (m.price === 0) return ["ok","ACTIVE, $0"];
+  return ["ok","ACTIVE"];
+}
+
+function panel(){
+  const p = P[key], m = p.m, b = badge(m);
+  const facts = !m ? "" : [
+    ["MEMBERSHIP ID", String(m.membershipId)],
+    ["SUBSCRIPTION", m.number ?? "none in Stripe"],
+    ["STATUS", m.status],
+    ["SINCE", day(m.since)],
+    [m.canceledAt ? "ENDED" : "RENEWS", m.stripe && !m.canceledAt ? day(m.renews) : (m.canceledAt ? day(m.canceledAt) : "—")],
+    ["PRICE", usd(m.price)],
+    ["CITY", m.city],
+  ].map(([k,v]) => `<div class="fact" data-testid="fact" data-k="${k}"><span class="k">${k}</span><span class="v">${v}</span></div>`).join("");
+
+  /* ── THE SENTENCE UNDER THE CARD IS THE WHOLE POINT OF THIS PANEL ──────────────────────────
+   * The existing card has ONE cancellation sentence: "already paid to <date>, nothing further
+   * will be charged." That sentence is true when the PLAYER cancels, because the app sets
+   * cancel_at_period_end. It is FALSE when an admin ends it here: cancelSubscriptionsForAdmin
+   * calls stripe.subscriptions.cancel(), which ends the subscription THE MOMENT IT IS CALLED,
+   * with no refund of the unused days. Shipping the End button without splitting this sentence
+   * would put a wrong reassurance on screen the first time anyone uses the feature. */
+  let after = "";
+  if (m && isComped(m)) after =
+    `<p class="warn" data-testid="comp-note"><b>This membership has never been charged.</b>
+      It was added by an admin, so there is no Stripe subscription behind it. The price below is what
+      the record says the plan is worth, not money collected. It does not count toward paid members.</p>`;
+  else if (m && m.price === 0) after =
+    `<p class="warn" data-testid="zero-note"><b>A real Stripe subscription at $0.00.</b>
+      It renews on schedule and charges nothing. It does not count toward paid members.</p>`;
+  else if (m && m.endedBy === "admin") after =
+    `<p class="memsum" data-testid="ended-admin">Ended by an admin ${day(m.canceledAt)}, <b>immediately</b>.
+      Stripe was cancelled the same moment, and the rest of the paid period was not refunded.
+      Reason on file: <b>${m.endedReason}</b>.</p>`;
+  else if (m && m.canceledAt) after =
+    `<p class="memsum" data-testid="ended-player">Cancelled by the player ${day(m.canceledAt)}, already paid to
+      ${day(m.renews)}. <b>Nothing further will be charged</b>, and they keep the membership until then.</p>`;
+
+  const acts = canAdd(m)
+    ? `<button class="rm" data-testid="act-add">Add membership</button>
+       <span class="whynot" data-testid="add-why">${m ? "The old membership is closed, so a new one can be opened." : "No membership on file."}</span>`
+    : `<button class="rm" data-testid="act-price">Change price</button>
+       <button class="rm danger" data-testid="act-end">End membership</button>
+       ${isComped(m) ? `<span class="whynot" data-testid="price-why">Changing the price on a comp changes the record, not a charge.</span>` : ""}`;
+
+  $("#panel").innerHTML = `
+    <div class="panel" data-testid="mempanel" data-kind="${!m ? "none" : isComped(m) ? "comped" : isOver(m) ? "over" : m.price === 0 ? "free" : "paid"}">
+      <div class="ptitle"><h3>MEMBERSHIP</h3>
+        <span class="note">${p.name} · player ${p.userId}</span>
+        ${b ? `<span class="tag ${b[0]}" data-testid="mem-badge">${b[1]}</span>` : ""}</div>
+      ${m ? `<div class="memgrid">${facts}</div>` : `<div class="nomem"><b>Not a member</b>No subscription on file in ${p.city}.</div>`}
+      ${after}
+      <div class="acts" data-testid="acts">${acts}</div>
+      <p class="pfoot">From MatchDay subscriptions. Every change here is written to the change log with your name and a reason.</p>
+    </div>`;
+  wire();
+}
+
+function wire(){
+  document.querySelectorAll('[data-testid="sw"]').forEach(b => b.onclick = () => {
+    key = b.dataset.k;
+    document.querySelectorAll('[data-testid="sw"]').forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+    panel();
+  });
+  const on = (t, f) => { const e = document.querySelector(`[data-testid="${t}"]`); if (e) e.onclick = f; };
+  on("act-price", () => openDlg("price"));
+  on("act-end",   () => openDlg("end"));
+  on("act-add",   () => openDlg("add"));
+}
+
+function openDlg(kind){
+  const m = P[key].m;
+  dlg = kind;
+  form = kind === "price" ? { dollars: (m.price/100).toFixed(2) }
+       : kind === "end"   ? { reason: "" }
+       : { pick: "comp" };
+  draw();
+}
+const close = () => { dlg = null; $("#modal").innerHTML = ""; };
+
+function draw(){
+  const p = P[key], m = p.m;
+  let body = "";
+
+  if (dlg === "price") {
+    /* THE FORM IS IN DOLLARS AND THE WIRE IS IN CENTS, and the dialog shows both. Retool's field
+     * is a bare number multiplied by 100 on send, so an operator who types 4900 meaning $49 sends
+     * $4,900 and nothing on screen contradicts them. Echoing the cents is one line and removes the
+     * entire class of mistake. */
+    const cents = Math.round(Number(form.dollars) * 100);
+    const valid = Number.isFinite(cents) && cents >= 0 && String(form.dollars).trim() !== "";
+    const changed = valid && cents !== m.price;
+    body = `
+      <h3>Change the membership price</h3>
+      <div class="what">
+        ${isComped(m)
+          ? `<b>No charge exists to change.</b> This is a comped membership with no Stripe subscription, so
+             this updates the amount on the record and creates the matching Stripe price for later. Nobody is billed.`
+          : `<b>Future charges only.</b> The new price takes effect at the next renewal on
+             ${day(m.renews)}. Stripe is updated with proration off, so this month is neither
+             re-charged nor refunded.`}
+      </div>
+      <label class="fl" for="px">New price (dollars)</label>
+      <input id="px" type="text" inputmode="decimal" data-testid="px" value="${form.dollars}">
+      <p class="wire" data-testid="wire">Now <b class="num">${usd(m.price)}</b> ·
+        sends <b class="num" data-testid="cents">${valid ? cents : "—"}</b> cents to MatchDay</p>
+      <div class="drow">
+        <button class="btn" data-testid="cancel">Cancel</button>
+        <button class="btn go" data-testid="save" ${changed ? "" : "disabled"}>Change price</button>
+      </div>
+      <p class="note2">PATCH /admin/subscriptions/${m.membershipId}</p>`;
+  }
+
+  if (dlg === "end") {
+    const ok = form.reason.trim().length > 0;
+    body = `
+      <h3>End this membership</h3>
+      <div class="what hot">
+        <b>This ends the membership immediately.</b>
+        ${m.stripe
+          ? `Stripe is cancelled the moment you press this, not at the end of the paid period.
+             ${p.name} paid through ${day(m.renews)} and <b>that remainder is not refunded</b>.
+             If they should get it back, refund in Stripe separately.`
+          : `There is no Stripe subscription behind this comp, so nothing is refunded or cancelled
+             at Stripe. The record is closed.`}
+      </div>
+      <label class="fl" for="rs">Why (required)</label>
+      <input id="rs" type="text" data-testid="reason" placeholder="Duplicate account, moved city, agreed refund…" value="${form.reason}">
+      <p class="wire">Retool sends the literal string <b>&ldquo;Removed by Retool&rdquo;</b> for every
+        cancellation, so no membership ended there has a reason on file. This one does.</p>
+      <div class="drow">
+        <button class="btn" data-testid="cancel">Keep it</button>
+        <button class="btn go danger" data-testid="save" ${ok ? "" : "disabled"}>End membership</button>
+      </div>
+      <p class="note2">POST /admin/subscriptions/${m.membershipId}/unsubscribe</p>`;
+  }
+
+  if (dlg === "add") {
+    /* TWO ENDPOINTS, AND THEY ARE NOT VARIANTS OF ONE THING. The names on the buttons are what
+     * each one DOES, not what the API calls it — /users/{id} is named "subscribe" in the backend
+     * and creates no Stripe subscription at all, while /users/{id}/free creates a real one. An
+     * operator choosing between "Subscribe" and "Subscribe free" cannot possibly guess that. */
+    const plan = CITY_PLAN[p.city] ?? 4900;
+    const card = (k, title, tag, desc) => `
+      <label class="kindcard" data-testid="kind" data-k="${k}" data-on="${form.pick === k ? 1 : 0}">
+        <span class="t">${title}<span class="tag ${tag[0]}">${tag[1]}</span></span>
+        <span class="d">${desc}</span></label>`;
+    body = `
+      <h3>Add a membership for ${p.name}</h3>
+      <div class="kinds">
+        ${card("comp", "Comp it", ["comp","NO STRIPE"],
+          `Marks them a member at the ${p.city} plan price of <b>${usd(plan)}</b> and never charges them.
+           No Stripe subscription is created, so nothing can renew and nothing can fail. Use this for
+           make-goods, staff and trials.`)}
+        ${card("free", "Free Stripe subscription", ["ok","$0.00"],
+          `Creates a real Stripe subscription at <b>$0.00</b> that renews on schedule and charges
+           nothing. Use this when the membership has to exist in Stripe: a card on file, an invoice
+           trail, or a plan you intend to raise off zero later.`)}
+      </div>
+      <div class="what">Neither one charges anybody, and neither counts toward paid members on the
+        Membership pages, which require a price above zero.
+        ${P[key].m ? `The previous membership (id ${P[key].m.membershipId}) stays closed on the record.` : ""}</div>
+      <div class="drow">
+        <button class="btn" data-testid="cancel">Cancel</button>
+        <button class="btn go" data-testid="save">Add membership</button>
+      </div>
+      <p class="note2" data-testid="addpath">POST /admin/subscriptions/users/${p.userId}${form.pick === "free" ? "/free" : ""}</p>`;
+  }
+
+  $("#modal").innerHTML = `<div class="scrim" data-testid="scrim"><div class="dlg" role="dialog" aria-modal="true">${body}</div></div>`;
+  const q = t => document.querySelector(`[data-testid="${t}"]`);
+  q("cancel").onclick = close;
+  if (dlg === "price") { const i = q("px"); i.oninput = () => { form.dollars = i.value; draw(); q("px").focus(); }; }
+  if (dlg === "end")   { const i = q("reason"); i.oninput = () => { form.reason = i.value; draw(); q("reason").focus(); }; }
+  if (dlg === "add")   document.querySelectorAll('[data-testid="kind"]').forEach(c =>
+                         c.onclick = () => { form.pick = c.dataset.k; draw(); });
+}
+
+panel();
+</script>

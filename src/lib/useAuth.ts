@@ -27,6 +27,7 @@ export type AppUser = {
   city_identifier?: string | null;
   can_manage_promos?: boolean;     // Phase 18b — the promo-code WRITE permission (create/edit/delete)
   can_edit_credits?: boolean;      // Phase 27 — adjust a player's credit balance. MOVES MONEY; not tied to Match Ops
+  can_edit_memberships?: boolean;  // 0195 — add, price and end a membership. MOVES MONEY; not tied to Match Ops
   can_send_messages?: boolean;     // Phase 19 — the chat SEND permission (read is can_access_chats)
   is_service_account?: boolean;    // the Clubhouse E2E account (never holds a write permission)
   created_at: string;
@@ -130,6 +131,14 @@ export function canManagePlayers(appUser: AppUser | null | undefined): boolean {
 // Courtesy gate only — the route re-checks against a fresh database read on every request.
 export function canEditCredits(appUser: AppUser | null | undefined): boolean {
   return can(appUser as CapRow | null, "editCredits", appUser?.email);
+}
+
+// EDIT MEMBERSHIPS (0195) — the SECOND grant that moves money, and like EDIT CREDITS it does not
+// also require Match Ops. Ending a membership cancels a live Stripe subscription IMMEDIATELY with
+// no refund (subscriptions.cancel, not cancel_at_period_end), so it is nobody's side effect.
+// Courtesy gate only — the route re-checks against a fresh database read on every request.
+export function canEditMemberships(appUser: AppUser | null | undefined): boolean {
+  return can(appUser as CapRow | null, "editMemberships", appUser?.email);
 }
 
 // MANAGE PROMOS (Phase 18b) — INDEPENDENT of EDIT MATCHES and MANAGE PLAYERS. This is the WRITE

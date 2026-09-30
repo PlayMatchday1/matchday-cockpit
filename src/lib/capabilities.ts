@@ -25,7 +25,7 @@ export type Capability =
   // Page access — the broad "can they open this section" flags.
   | "home" | "finance" | "lifecycle" | "growth" | "membership" | "matchops" | "chats" | "tech" | "org"
   // Write grants — each nested under Match Ops on the grid, each off by default.
-  | "editMatches" | "managePlayers" | "managePromos" | "editCredits" | "sendMessages"
+  | "editMatches" | "managePlayers" | "managePromos" | "editCredits" | "editMemberships" | "sendMessages"
   // The ONE thing is_admin still means: who may grant permissions.
   | "grantAccess";
 
@@ -35,13 +35,17 @@ const COLUMN: Record<Capability, string> = {
   tech: "can_access_tech", org: "can_access_org",
   editMatches: "can_edit_matches", managePlayers: "can_manage_players",
   managePromos: "can_manage_promos", editCredits: "can_edit_credits",
+  editMemberships: "can_edit_memberships",
   sendMessages: "can_send_messages",
   grantAccess: "is_admin",
 };
 
 // The write grants are exercised INSIDE Match Ops, so they also need the section they live in.
 // EDIT CREDITS is deliberately not one of them: adjusting a balance is not a Match Ops power and
-// must not arrive as a side effect of a read grant.
+// must not arrive as a side effect of a read grant. EDIT MEMBERSHIPS (0195) is excluded for the
+// same reason and by the same ruling — re-pricing or ending a live subscription moves money, so it
+// stands alone. It is also NOT tied to can_access_membership: that flag opens the membership
+// REPORTS, and reading a dashboard must not confer the ability to cancel a paying member.
 const NEEDS_MATCHOPS: ReadonlySet<Capability> = new Set<Capability>([
   "editMatches", "managePlayers", "managePromos",
 ]);
@@ -51,7 +55,7 @@ export const LABEL: Record<Capability, string> = {
   membership: "Membership",
   matchops: "Match Ops", chats: "Chats", tech: "Tech", org: "Org",
   editMatches: "EDIT MATCHES", managePlayers: "MANAGE PLAYERS", managePromos: "MANAGE PROMOS",
-  editCredits: "EDIT CREDITS", sendMessages: "SEND MESSAGES",
+  editCredits: "EDIT CREDITS", editMemberships: "EDIT MEMBERSHIPS", sendMessages: "SEND MESSAGES",
   grantAccess: "Admin",
 };
 
