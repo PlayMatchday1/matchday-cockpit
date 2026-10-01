@@ -26,18 +26,13 @@ import { supabase } from "@/lib/supabase";
 import { selectAll } from "@/lib/supabasePagination";
 import { countActiveMembers } from "@/lib/membershipStats";
 import {
-  buildMembersByCity, membersByCityCsv, dollars, mixLabel,
-  CUTOFF_YMD, WINDOW_START_YMD, UNASSIGNED_CODE,
+  buildMembersByCity, membersByCityCsv, dollars, mixLabel, prettyDate, prettyDateShort, reportDatesFor,
   type ByCityRow, type SubscriptionRow,
 } from "@/lib/membersByCity";
 
 const COLS = "user_id, status, price, member_email, activation_date, canceled_at, city_identifier, synced_at";
 
 type Loaded = { rows: (SubscriptionRow & { synced_at?: string | null })[]; pulled: number; expected: number | null };
-
-/** "Aug 6, 2026" from a YYYY-MM-DD, in UTC — these are calendar constants, not local instants. */
-const prettyYmd = (ymd: string): string =>
-  new Date(`${ymd}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 
 /** "Aug 31, 2026 · 11:00 UTC" — the sync instant, stated in UTC because that is what it is. */
 const prettyStamp = (iso: string): string => {
@@ -82,9 +77,16 @@ export default function MembersByCityView() {
      * Date so the page's Active cannot drift from what countActiveMembers would say. Never assert
      * against a literal: 395 was a literal, and it was a number the count merely passed through. */
     const asOf = new Date();
+    /* THE DATES COME FROM THAT INSTANT AND FROM NOWHERE ELSE. Not a constant, not localStorage,
+     * not a query param — there is no branch here that can be handed a date, which is the only way
+     * the cutoff cannot be pinned to an old month again. Derived inside this memo, so a visit that
+     * spans midnight on the 6th rolls forward on the next load rather than holding what it opened
+     * on. */
+    const dates = reportDatesFor(asOf);
     const stamps = loaded.rows.map((r) => String(r.synced_at ?? "")).filter(Boolean).sort();
     return {
-      table: buildMembersByCity(loaded.rows, asOf),
+      dates,
+      table: buildMembersByCity(loaded.rows, dates),
       // Home's number, from Home's function, over the same rows at the same instant.
       homeActive: countActiveMembers(loaded.rows, asOf),
       asOfLabel: stamps.length ? prettyStamp(stamps[stamps.length - 1]) : prettyStamp(asOf.toISOString()),
@@ -93,10 +95,12 @@ export default function MembersByCityView() {
 
   const exportCsv = useCallback(() => {
     if (!view) return;
-    const blob = new Blob([membersByCityCsv(view.table, view.asOfLabel)], { type: "text/csv;charset=utf-8" });
+    /* THE SAME `view.dates` THE HEADER AND THE COLUMNS READ, so the file cannot name a different
+     * cutoff than the screen it was exported from. */
+    const blob = new Blob([membersByCityCsv(view.table, view.asOfLabel, view.dates)], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = `members-by-city-${CUTOFF_YMD}.csv`;
+    a.href = url; a.download = `members-by-city-${view.dates.cutoffYmd}.csv`;
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   }, [view]);
@@ -105,30 +109,43 @@ export default function MembersByCityView() {
     <span className={`mbc-n${n === 0 ? " mbc-zero" : ""}`}>{n.toLocaleString("en-US")}</span>
   );
 
-  const bodyRow = (r: ByCityRow) => (
-    <tr key={r.code}>
-      <td className="mbc-l">
-        <span className="mbc-city">
-          {r.city ?? "Unassigned"}
-          <small>{r.code}</small>
-        </span>
-      </td>
-      <td>{num(r.active)}</td>
-      <td>{num(r.cancelledInWindow)}</td>
-      <td>{num(r.cancelledAfterCutoff)}</td>
-      <td className="mbc-chg">{num(r.beingCharged)}</td>
-      <td>
+  /* ONE CELL BUILDER FOR BOTH THE BODY AND THE FOOTER. The MATCHDAY row carries the same five
+   * figures in the same order as a city row, so they are emitted from one expression — a total
+   * rendered by its own copy of the markup is a total that can disagree with the rows above it.
+   *
+   * data-col ON EVERY CELL, matching the mock. The columns are named rather than counted, so a
+   * column inserted later cannot silently shift what an assertion is reading. */
+  const figures = (r: ByCityRow) => (
+    <>
+      <td data-col="total">{num(r.totalActive)}</td>
+      <td data-col="before">{num(r.cancelledBefore)}</td>
+      <td className="mbc-hl mbc-big" data-col="paying">{num(r.paying)}</td>
+      <td className="mbc-hl mbc-big" data-col="billing">
         <span className="mbc-money">
           {dollars(r.billingCents)}
           <small>{mixLabel(r.mix) || "—"}</small>
         </span>
       </td>
+      {/* SET OFF BY A RULE, as in the mock: it is the one column that is not about this charge. */}
+      <td className="mbc-grp" data-col="after">{num(r.cancelledAfter)}</td>
+    </>
+  );
+
+  const bodyRow = (r: ByCityRow) => (
+    <tr key={r.code} data-testid={`mbc-row-${r.code.toLowerCase()}`} data-code={r.code}>
+      <td className="mbc-l mbc-city-cell">
+        <b>{r.city}</b><span>{r.code}</span>
+      </td>
+      {figures(r)}
     </tr>
   );
 
   return (
     <div className="mbc">
       <h1>Members by City</h1>
+      {/* THE ONE SENTENCE THE PAGE IS ALLOWED, and it is the mock's. It names the report rather
+          than explaining the columns — the sub-labels do that. */}
+      <p className="mbc-sub">Month-end membership: who pays on the 1st, and what drops off the month after.</p>
 
       {err ? (
         <div className="mbc-err" data-testid="mbc-error">
@@ -139,47 +156,59 @@ export default function MembersByCityView() {
         <div className="mbc-state">Loading…</div>
       ) : view ? (
         <div className="mbc-card">
-          <div className="mbc-bar">
-            <span className="mbc-lbl">Cutoff</span>
-            <span className="mbc-chip">{prettyYmd(CUTOFF_YMD)}</span>
-            <span className="mbc-lbl mbc-gap">Window</span>
-            <span className="mbc-chip">{prettyYmd(WINDOW_START_YMD)} – {prettyYmd(CUTOFF_YMD)}</span>
+          {/* NO WINDOW PILL AND NO PICKER. Both were removed deliberately: every column's base is
+              status ACTIVE TODAY, which is not an as-of quantity, so an earlier cutoff cannot be
+              reproduced from this data and a control offering one would render a confident,
+              understated month. The dates below are derived from now.
+              THE BAR CARRIES THE YEAR; the column labels do not. */}
+          <div className="mbc-bar" data-testid="mbc-dates"
+            data-cutoff={view.dates.cutoffYmd} data-billing={view.dates.billingYmd} data-runrate={view.dates.runRateYmd}>
+            <span className="mbc-kv"><span className="mbc-k">Cutoff</span>
+              <span className="mbc-v" data-testid="mbc-cutoff">{prettyDate(view.dates.cutoffYmd)}</span></span>
+            <span className="mbc-dot">&middot;</span>
+            <span className="mbc-kv"><span className="mbc-k">Bills</span>
+              <span className="mbc-v" data-testid="mbc-bills">{prettyDate(view.dates.billingYmd)}</span></span>
             <span className="mbc-asof" data-testid="mbc-asof">As of {view.asOfLabel}</span>
+            <span className="mbc-sp" />
             <button type="button" className="mbc-ghost" onClick={exportCsv} data-testid="mbc-export">Export CSV</button>
           </div>
 
           <div className="mbc-scroll">
-            <table>
+            <table data-testid="mbc-table">
               <thead>
                 <tr>
                   <th className="mbc-l">City</th>
-                  <th>Active<small>status ACTIVE today</small></th>
-                  <th>Cancelled<small>{prettyYmd(WINDOW_START_YMD)} – {prettyYmd(CUTOFF_YMD)}</small></th>
-                  <th>Cancelled<small>after {prettyYmd(CUTOFF_YMD)}</small></th>
-                  <th className="mbc-chg">Being charged<small>active minus {prettyYmd(WINDOW_START_YMD)} – {prettyYmd(CUTOFF_YMD)}</small></th>
-                  <th>Billing next cycle<small>summed, not averaged</small></th>
+                  <th data-col="total">Total active<small>status ACTIVE, over $0</small></th>
+                  <th data-col="before">Cancelled before {prettyDateShort(view.dates.cutoffYmd)}<small>still active, won&apos;t bill</small></th>
+                  <th className="mbc-hl" data-col="paying">Paying members<small>total minus cancelled before</small></th>
+                  <th className="mbc-hl" data-col="billing">Billing {prettyDateShort(view.dates.billingYmd)}<small>sum of each member&apos;s price</small></th>
+                  <th className="mbc-grp" data-col="after">Cancelled {prettyDateShort(view.dates.cutoffYmd)}+<small>pay {prettyDateShort(view.dates.billingYmd)}, not {prettyDateShort(view.dates.runRateYmd)}</small></th>
                 </tr>
               </thead>
               <tbody data-testid="mbc-rows">{view.table.rows.map(bodyRow)}</tbody>
               <tfoot>
-                <tr data-testid="mbc-total">
+                <tr className="mbc-totalrow" data-testid="mbc-row-total">
                   <td className="mbc-l">MATCHDAY</td>
-                  <td data-testid="mbc-total-active">{num(view.table.total.active)}</td>
-                  <td>{num(view.table.total.cancelledInWindow)}</td>
-                  <td>{num(view.table.total.cancelledAfterCutoff)}</td>
-                  <td className="mbc-chg">{num(view.table.total.beingCharged)}</td>
-                  <td>
-                    <span className="mbc-money">
-                      {dollars(view.table.total.billingCents)}
-                      <small>{mixLabel(view.table.total.mix) || "—"}</small>
-                    </span>
-                  </td>
+                  {figures(view.table.total)}
                 </tr>
               </tfoot>
             </table>
           </div>
 
-          <div className="mbc-foot">Excludes price $0</div>
+          <div className="mbc-foot">
+            {/* THE UNASSIGNED LINE, AND IT IS NOT A ROW. A member whose city code is not in the map
+                cannot be allocated to a city, and folding them into MATCHDAY would make the total
+                unreconcilable against the rows above it. Today that is one NYC member at $100 — the
+                largest single price on the board, which is exactly the kind of thing that should
+                not disappear into a skip. Hidden entirely when there are none. */}
+            {view.table.unassigned.members > 0 && (
+              <span data-testid="mbc-unassigned"
+                data-members={view.table.unassigned.members} data-cents={view.table.unassigned.cents}>
+                Not in totals: <b>{view.table.unassigned.members} unassigned member{view.table.unassigned.members === 1 ? "" : "s"}, {dollars(view.table.unassigned.cents)}</b>.
+              </span>
+            )}
+            <span data-testid="mbc-footnote">Excludes $0 members and internal accounts.</span>
+          </div>
         </div>
       ) : null}
 
@@ -192,42 +221,49 @@ export default function MembersByCityView() {
  * backtick ends the template literal mid-rule and the remainder of the sheet is dropped silently.
  * :global() is also invalid here; ordinary descendant selectors only. */
 const CSS = `
-.mbc { padding: 24px 28px 80px; max-width: 1420px; }
-.mbc h1 { font-size: 28px; letter-spacing: -0.5px; margin: 0 0 16px; }
-.mbc-card { background: #fff; border: 1px solid var(--line, #e4eae5); border-radius: 10px; overflow: hidden; }
-.mbc-bar { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; padding: 12px 18px; border-bottom: 1px solid #eff3ef; }
-.mbc-lbl { font-size: 10.5px; font-weight: 700; letter-spacing: 0.09em; color: #93a49a; text-transform: uppercase; }
-.mbc-gap { margin-left: 8px; }
-.mbc-chip { border: 1px solid #e4eae5; background: #fff; border-radius: 999px; padding: 6px 13px; font-size: 13px; font-weight: 600; color: #3c4f44; white-space: nowrap; }
-.mbc-asof { margin-left: 14px; font-size: 12.5px; font-weight: 600; color: #6e8076; white-space: nowrap; }
-.mbc-ghost { margin-left: auto; border: 1px solid #e4eae5; background: #fff; border-radius: 999px; padding: 7px 15px; font: inherit; font-size: 13px; font-weight: 700; color: #3c4f44; cursor: pointer; }
+.mbc { padding: 24px 28px 80px; max-width: 1440px; }
+.mbc h1 { font-size: 28px; letter-spacing: -0.5px; margin: 0 0 4px; font-weight: 800; }
+.mbc-sub { color: #44564c; margin: 0 0 18px; }
+.mbc-card { background: #fff; border: 1px solid var(--line, #e3e7e1); border-radius: 14px; overflow: hidden; }
+.mbc-bar { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; padding: 16px 20px; border-bottom: 1px solid #e3e7e1; }
+.mbc-kv { display: flex; align-items: baseline; gap: 8px; }
+.mbc-k { font-size: 11px; font-weight: 700; letter-spacing: 0.09em; color: #7a8a81; text-transform: uppercase; }
+.mbc-v { font-weight: 800; font-size: 15px; }
+.mbc-dot { color: #c3cbc6; }
+.mbc-sp { flex: 1; }
+.mbc-asof { font-size: 13px; color: #7a8a81; white-space: nowrap; }
+.mbc-ghost { border: 1px solid #e3e7e1; background: #fff; border-radius: 999px; padding: 8px 16px; font: inherit; font-weight: 700; color: #3c4f44; cursor: pointer; }
 .mbc-ghost:hover { background: #f4f7f4; }
 .mbc-scroll { overflow-x: auto; }
-.mbc table { width: 100%; border-collapse: collapse; }
-.mbc thead th { background: #f7faf8; border-bottom: 1px solid #e4eae5; font-size: 10.5px; font-weight: 700; letter-spacing: 0.09em; color: #8c9e93; text-transform: uppercase; padding: 11px 14px; text-align: right; white-space: nowrap; vertical-align: bottom; }
-.mbc thead th small { display: block; font-size: 10px; letter-spacing: 0.04em; text-transform: none; color: #a9b8af; font-weight: 600; margin-top: 3px; }
+.mbc table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.mbc th, .mbc td { padding: 14px 12px; text-align: right; white-space: nowrap; border-bottom: 1px solid #eef1ec; }
+.mbc th { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: #7a8a81; text-transform: uppercase; vertical-align: bottom; background: #f7f9f6; }
+.mbc th small { display: block; font-size: 10.5px; letter-spacing: 0.02em; text-transform: none; font-weight: 500; margin-top: 3px; color: #7a8a81; }
 .mbc th.mbc-l, .mbc td.mbc-l { text-align: left; }
-.mbc thead th.mbc-chg { background: #e4fbec; color: #0b3d24; }
-.mbc thead th.mbc-chg small { color: #3e8c60; }
-.mbc tbody td { padding: 12px 14px; text-align: right; border-bottom: 1px solid #eff3ef; font-variant-numeric: tabular-nums; }
-.mbc tbody tr:hover { background: #fbfdfb; }
-.mbc td.mbc-chg { background: #e4fbec; }
-.mbc td.mbc-chg .mbc-n { color: #0b3d24; }
-.mbc-city { font-weight: 700; font-size: 14.5px; }
-.mbc-city small { display: block; font-weight: 600; font-size: 11.5px; color: #6e8076; letter-spacing: 0.04em; }
-.mbc-n { font-weight: 700; font-size: 15px; }
-.mbc-zero { color: #b9c6be; font-weight: 600; }
-.mbc-money { font-weight: 700; font-size: 15px; }
-.mbc-money small { display: block; font-weight: 600; font-size: 11.5px; color: #6e8076; }
-.mbc tfoot td { padding: 14px; text-align: right; border-top: 2px solid #e4eae5; font-variant-numeric: tabular-nums; background: #f7faf8; }
-.mbc tfoot td.mbc-l { text-align: left; font-weight: 800; font-size: 13px; letter-spacing: 0.06em; }
-.mbc tfoot .mbc-n { font-size: 16px; }
-.mbc tfoot td.mbc-chg { background: #d6f5e2; }
-.mbc-foot { color: #6e8076; font-size: 12.5px; padding: 12px 18px; }
+.mbc td { font-size: 15px; }
+.mbc-city-cell b { display: block; font-weight: 700; }
+.mbc-city-cell span { font-size: 12px; color: #7a8a81; }
+.mbc th.mbc-hl { background: #d5f2de; color: #14532d; }
+.mbc th.mbc-hl small { color: #2f6b45; }
+.mbc td.mbc-hl { background: #e3f7e9; }
+.mbc td.mbc-big { font-weight: 800; }
+/* THE ONE COLUMN THAT IS NOT ABOUT THIS CHARGE, set off by a rule rather than by a colour. */
+.mbc .mbc-grp { border-left: 1px solid #e3e7e1; }
+.mbc-n { font-weight: 700; }
+.mbc-zero { color: #c3cbc6; font-weight: 600; }
+.mbc-money { font-weight: 800; }
+/* THE MIX IS THE ONLY WRAPPING TEXT IN THE TABLE. Bounded and right-aligned so it stacks under its
+   own figure rather than widening the column. */
+.mbc-money small { display: block; font-weight: 500; font-size: 11.5px; color: #7a8a81; white-space: normal; max-width: 210px; margin-left: auto; }
+.mbc tfoot td { background: #f3f6f2; font-weight: 800; border-top: 2px solid #e3e7e1; border-bottom: 0; }
+.mbc tfoot td.mbc-hl { background: #d5f2de; }
+.mbc tfoot td.mbc-l { font-weight: 800; font-size: 13px; letter-spacing: 0.06em; }
+.mbc-foot { display: flex; gap: 24px; flex-wrap: wrap; padding: 12px 20px 16px; border-top: 1px solid #e3e7e1; color: #7a8a81; font-size: 13px; }
+.mbc-foot b { color: #44564c; }
 .mbc-state { color: #6e8076; padding: 24px 0; }
 .mbc-err { background: #fdece8; border: 1px solid #f3c4b8; color: #8c2c14; border-radius: 9px; padding: 12px 15px; font-size: 13px; }
 @media (max-width: 900px) {
   .mbc { padding: 16px 12px 60px; }
-  .mbc thead th, .mbc tbody td, .mbc tfoot td { padding: 9px 8px; font-size: 12.5px; }
+  .mbc h1 { font-size: 22px; }
 }
 `;

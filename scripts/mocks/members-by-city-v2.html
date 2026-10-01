@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Members by City v2</title>
+<style>
+  :root{--nav:#0b3a28;--accent:#22c55e;--bg:#eef1ec;--card:#fff;--line:#e3e7e1;--line-2:#eef1ec;--ink:#10231a;--ink-2:#44564c;--muted:#7a8a81;
+    --hl:#e3f7e9;--hl-head:#d5f2de;--neg:#b42318;--neg-bg:#fdecea}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  .mocknote{background:#fff7d6;border-bottom:1px solid #eadb9c;color:#5b4a00;font-size:12px;padding:6px 20px}
+  .sim{background:#fff7d6;border-bottom:1px solid #eadb9c;padding:6px 20px;font-size:12px;color:#5b4a00;display:flex;gap:10px;align-items:center}
+  .sim input{font:inherit;border:1px solid #d9c98a;border-radius:6px;padding:2px 6px;background:#fffdf3}
+  .nav{background:var(--nav);height:56px;display:flex;align-items:center;padding:0 24px}
+  .logo{color:var(--accent);font-weight:800;font-style:italic;font-size:21px}
+  .logo small{font-size:12px;margin-left:4px}
+  main{max-width:1440px;margin:0 auto;padding:28px 24px 60px}
+  h1{font-size:28px;margin:0 0 4px;font-weight:800}
+  .sub{color:var(--ink-2);margin:0 0 18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .bar{display:flex;align-items:center;gap:18px;padding:16px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .kv{display:flex;align-items:baseline;gap:8px}
+  .kv .k{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--muted);font-weight:700}
+  .kv .v{font-weight:800;font-size:15px}
+  .dot{color:#c3cbc6}
+  .asof{color:var(--muted);font-size:13px}
+  .sp{flex:1}
+  .btn{border:1px solid var(--line);background:#fff;border-radius:999px;padding:8px 16px;font-weight:700;cursor:pointer;font:inherit;font-weight:700}
+  .tw{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+  th,td{padding:14px 12px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line-2)}
+  th{font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);font-weight:700;vertical-align:bottom;background:#f7f9f6}
+  th .s{display:block;font-size:10.5px;letter-spacing:.2px;text-transform:none;font-weight:500;margin-top:3px;color:var(--muted)}
+  th:first-child,td:first-child{text-align:left}
+  td{font-size:15px}
+  td.city b{display:block;font-weight:700}
+  td.city span{font-size:12px;color:var(--muted)}
+  .hl{background:var(--hl)}
+  th.hl{background:var(--hl-head);color:#14532d}
+  th.hl .s{color:#2f6b45}
+  td.big{font-weight:800}
+  td.neg{color:var(--neg)}
+  td.zero{color:#c3cbc6}
+  .grp{border-left:1px solid var(--line)}
+  tr.total td{background:#f3f6f2;font-weight:800;border-top:2px solid var(--line);border-bottom:0}
+  tr.total td.hl{background:#d5f2de}
+  .foot{padding:12px 20px 16px;color:var(--muted);font-size:13px;display:flex;gap:24px;flex-wrap:wrap;border-top:1px solid var(--line)}
+  .foot b{color:var(--ink-2)}
+  .flow{margin-top:18px;background:#fff;border:1px dashed #cfd6d1;border-radius:12px;padding:14px 18px;color:var(--ink-2);font-size:13px}
+  .flow h3{margin:0 0 8px;font-size:12px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+  .flow ol{margin:0;padding-left:18px}
+  .flow li{margin-bottom:4px}
+</style>
+</head>
+<body>
+<div class="mocknote" data-testid="mock-note">MOCK. Numbers are the real read-only run for the end-of-September report (status as of Sep 30, 2026). Price mix lines are left out: that run did not return them, and the build keeps the page's existing mix line.</div>
+<div class="sim" data-testid="mock-sim">MOCK ONLY, not built: pretend today is <input type="date" id="today" value="2026-09-30" data-testid="sim-today"> to see the dates roll. The numbers stay fixed; only the dates and labels change.</div>
+<div class="nav"><div class="logo">MATCHDAY<small>Clubhouse</small></div></div>
+<main>
+  <h1>Members by City</h1>
+  <p class="sub">Month-end membership: who pays on the 1st, and what drops off the month after.</p>
+
+  <div class="card" data-testid="mbc-card">
+    <div class="bar">
+      <div class="kv"><span class="k">Cutoff</span><span class="v" data-testid="mbc-cutoff"></span></div>
+      <span class="dot">·</span>
+      <div class="kv"><span class="k">Bills</span><span class="v" data-testid="mbc-bills"></span></div>
+      <span class="asof">As of Sep 30, 2026 · 11:00 UTC</span>
+      <span class="sp"></span>
+      <button class="btn" data-testid="mbc-export">Export CSV</button>
+    </div>
+    <div class="tw">
+      <table data-testid="mbc-table">
+        <thead><tr id="head"></tr></thead>
+        <tbody id="body"></tbody>
+      </table>
+    </div>
+    <div class="foot">
+      <span data-testid="mbc-unassigned">Not in totals: <b>1 unassigned member, $100</b>.</span>
+      <span data-testid="mbc-footnote">Excludes $0 members and internal accounts.</span>
+    </div>
+  </div>
+
+  <div class="flow" data-testid="mock-explainer">
+    <h3>How each number is made (mock explainer, not built)</h3>
+    <ol>
+      <li><b>Total active</b>: every member whose status is ACTIVE today, priced above $0.</li>
+      <li><b>Cancelled before <span class="d-cut"></span></b>: of those, anyone who cancelled before the cutoff. They are still marked active but will not be billed.</li>
+      <li><b>Paying members</b> = Total active minus Cancelled before.</li>
+      <li><b>Billing <span class="d-bill"></span></b> = each paying member's own price, added up.</li>
+      <li><b>Cancelled <span class="d-cut"></span>+</b>: paying members who cancelled on or after the cutoff. They pay on <span class="d-bill"></span> but not on <span class="d-next"></span>.</li>
+    </ol>
+  </div>
+</main>
+
+<script>
+const ROWS = [
+  ["Austin","ATX",136,25,111,6895,21,1352,5543],
+  ["San Antonio","SATX",99,19,80,5117,15,957,4160],
+  ["Houston","HOU",78,23,55,3630,7,462,3168],
+  ["Atlanta","ATL",29,8,21,1321,2,132,1189],
+  ["Dallas","DFW",18,5,13,523,3,128,395],
+  ["St. Louis","STL",22,4,18,308,2,60,248],
+  ["OKC","OKC",10,3,7,295,0,0,295],
+].sort((a,b) => b[5] - a[5]);
+const MN = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const fmtD = (d, yr = true) => `${MN[d.getMonth()]} ${d.getDate()}${yr ? ", " + d.getFullYear() : ""}`;
+const n = v => v.toLocaleString("en-US"), $ = v => "$" + v.toLocaleString("en-US");
+
+function dates(today){
+  // most recent 6th on or before today; billing is the 1st of the following month; run rate the 1st after
+  let y = today.getFullYear(), m = today.getMonth();
+  if (today.getDate() < 6) { m -= 1; if (m < 0) { m = 11; y -= 1; } }
+  return { cut: new Date(y, m, 6), bill: new Date(y, m + 1, 1), next: new Date(y, m + 2, 1) };
+}
+
+function render(){
+  const [ty, tm, td] = document.getElementById("today").value.split("-").map(Number);
+  const D = dates(new Date(ty, tm - 1, td));
+  const cut = fmtD(D.cut, false), bill = fmtD(D.bill, false), next = fmtD(D.next, false);
+  document.querySelector('[data-testid="mbc-cutoff"]').textContent = fmtD(D.cut);
+  document.querySelector('[data-testid="mbc-bills"]').textContent = fmtD(D.bill);
+  document.querySelectorAll(".d-cut").forEach(e => e.textContent = cut);
+  document.querySelectorAll(".d-bill").forEach(e => e.textContent = bill);
+  document.querySelectorAll(".d-next").forEach(e => e.textContent = next);
+
+  document.getElementById("head").innerHTML = `
+    <th>City</th>
+    <th data-col="total">Total active<span class="s">status ACTIVE, over $0</span></th>
+    <th data-col="before">Cancelled before ${cut}<span class="s">still active, won't bill</span></th>
+    <th class="hl" data-col="paying">Paying members<span class="s">total minus cancelled before</span></th>
+    <th class="hl" data-col="billing">Billing ${bill}<span class="s">sum of each member's price</span></th>
+    <th class="grp" data-col="after">Cancelled ${cut}+<span class="s">pay ${bill}, not ${next}</span></th>`;
+
+  const T = ROWS.reduce((s, r) => s.map((v, i) => i < 2 ? v : v + r[i]), ["", "", 0,0,0,0,0,0,0]);
+  const row = (r, tot) => `<tr ${tot ? 'class="total" data-testid="mbc-row-total"' : `data-testid="mbc-row-${r[1].toLowerCase()}"`}>
+    <td class="city">${tot ? "MATCHDAY" : `<b>${r[0]}</b><span>${r[1]}</span>`}</td>
+    <td data-col="total">${n(r[2])}</td>
+    <td data-col="before" class="${r[3] ? "" : "zero"}">${n(r[3])}</td>
+    <td data-col="paying" class="hl big">${n(r[4])}</td>
+    <td data-col="billing" class="hl big">${$(r[5])}</td>
+    <td data-col="after" class="grp ${r[6] ? "" : "zero"}">${n(r[6])}</td></tr>`;
+  document.getElementById("body").innerHTML = ROWS.map(r => row(r)).join("") + row(T, true);
+}
+document.getElementById("today").addEventListener("input", render);
+render();
+</script>
+</body>
+</html>
