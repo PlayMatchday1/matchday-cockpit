@@ -40,9 +40,7 @@ export type FinTxnRow = {
   dispute_reason: string | null;
 };
 
-/* STRIPE'S OWN CATEGORY NAMES, MAPPED. Anything outside this set is kept as a 'fee' row rather
- * than dropped: a movement we cannot name is still money that left or arrived, and dropping it is
- * how a reconciliation silently stops tying. `charge_failure` is Stripe's name; ours is 'failed'. */
+/* STRIPE'S OWN CATEGORY NAMES, MAPPED. `charge_failure` is Stripe's name; ours is 'failed'. */
 const CATEGORY: Record<string, TxnKind> = {
   charge: "charge",
   refund: "refund",
@@ -53,8 +51,40 @@ const CATEGORY: Record<string, TxnKind> = {
   fee: "fee",
 };
 
-export function kindFromCategory(category: string | null | undefined): TxnKind {
-  return CATEGORY[String(category ?? "")] ?? "fee";
+/* ── TRANSFERS ARE NOT ACTIVITY, AND ARE SKIPPED ────────────────────────────────────────────────
+ * A payout moves money that has ALREADY been counted as charges from the Stripe balance to the
+ * bank. It is neither revenue nor cost, and storing it would understate every month by roughly its
+ * own gross. Stripe's "Balance change from activity" export excludes these by design; the API's
+ * balance_transactions.list includes them.
+ *
+ * MEASURED: September carried 21 payouts totalling -$86,274.96, and an earlier version of this file
+ * swallowed every one of them into `fee` — 659 fee rows and -$86,851.17 against the export's 638
+ * and -$576.21. That is what the fallback below used to do. */
+const TRANSFER = new Set([
+  "payout", "payout_cancel", "payout_failure",
+  "transfer", "transfer_cancel", "transfer_failure",
+  "topup",
+]);
+
+export const isTransferCategory = (category: string | null | undefined): boolean =>
+  TRANSFER.has(String(category ?? ""));
+
+/**
+ * The kind for a category, or NULL when the row must not be stored.
+ *
+ * ── THERE IS NO FALLBACK BUCKET ANY MORE ────────────────────────────────────────────────────────
+ * This returned `?? "fee"` on the reasoning that an unnamed movement is still money and dropping it
+ * is how a reconciliation stops tying. The reasoning holds; the bucket was the mistake — it made
+ * payouts look like fees and the September fee line wrong by $86,274.96, silently.
+ *
+ * An unrecognised category is now SKIPPED AND REPORTED: the sync collects it and raises an advisory
+ * on the fin_sync_log row naming the category, the count and the total. Loud beats absorbed, and a
+ * row nobody can classify is not a row to guess at.
+ */
+export function kindFromCategory(category: string | null | undefined): TxnKind | null {
+  const c = String(category ?? "");
+  if (TRANSFER.has(c)) return null;
+  return CATEGORY[c] ?? null;
 }
 
 /* INTERNAL ACCOUNTS. The same regex membershipStats uses, so "internal" means one thing estate-wide.
@@ -83,7 +113,10 @@ export function mapBalanceTxn(
     /** mdapi field id → fin_venues.id, from fin_venue_fields. */
     venueOfField: (fieldId: number) => number | null;
   },
-): FinTxnRow & { fin_venue_id: number | null } {
+): (FinTxnRow & { fin_venue_id: number | null }) | null {
+  // A TRANSFER OR AN UNKNOWN CATEGORY IS NOT A ROW. The caller counts and reports it.
+  const kind = kindFromCategory(bt.reporting_category);
+  if (kind == null) return null;
   const src = bt.source as Stripe.Charge | Stripe.Refund | Stripe.Dispute | null;
   // THE CHARGE IS WHERE THE METADATA LIVES. A refund or dispute carries the charge it reverses, so
   // attribution flows from there — a refund inherits its charge's city, type and field.
@@ -106,7 +139,7 @@ export function mapBalanceTxn(
 
   return {
     created_at_utc: new Date(bt.created * 1000).toISOString(),
-    kind: kindFromCategory(bt.reporting_category),
+    kind,
     // CENTS, STRAIGHT FROM STRIPE, SIGNED AS STRIPE SIGNS THEM. No rounding, no division: the
     // dollar figure is formed once, on screen. Reversals arrive negative and stay negative.
     gross_cents: bt.amount,

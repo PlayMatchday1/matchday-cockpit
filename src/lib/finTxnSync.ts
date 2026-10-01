@@ -21,7 +21,7 @@
 import Stripe from "stripe";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { classifyCharge, cityFromIdentifier } from "./financeImport";
-import { mapBalanceTxn, type FinTxnRow } from "./finTxnMap";
+import { mapBalanceTxn, isTransferCategory, type FinTxnRow } from "./finTxnMap";
 import { BUSINESS_TZ, zonedWallClockToUtcMs } from "./businessHours";
 
 export type FinTxnSyncResult = {
@@ -30,6 +30,10 @@ export type FinTxnSyncResult = {
   inserted: number;
   updated: number;
   unmappedFieldIds: number[];
+  /** Transfers and top-ups: counted, never stored. Expected and not an advisory. */
+  skippedTransfers: number;
+  /** A category this build does not recognise. SKIPPED AND REPORTED — never bucketed. */
+  unknownCategories: { category: string; count: number; grossCents: number }[];
   sinceIso: string;
   untilIso: string;
 };
@@ -57,7 +61,8 @@ export async function syncFinTxn(
   const unmapped = new Set<number>();
 
   const rows: (FinTxnRow & { fin_venue_id: number | null })[] = [];
-  let fetched = 0;
+  const unknown = new Map<string, { count: number; grossCents: number }>();
+  let fetched = 0, skippedTransfers = 0;
   for await (const bt of stripe.balanceTransactions.list({
     created: { gte: Math.floor(opts.since.getTime() / 1000), lt: Math.floor(opts.until.getTime() / 1000) },
     limit: 100,
@@ -65,6 +70,7 @@ export async function syncFinTxn(
   })) {
     fetched++;
     if (opts.onProgress && fetched % 500 === 0) opts.onProgress(fetched);
+    const cat = String(bt.reporting_category ?? "");
     const row = mapBalanceTxn(bt, {
       classify: classifyCharge,
       cityOf: cityFromIdentifier,
@@ -74,6 +80,15 @@ export async function syncFinTxn(
         return v ?? null;
       },
     });
+    if (row == null) {
+      // A TRANSFER IS EXPECTED AND SILENT. ANYTHING ELSE IS AN ADVISORY: a category nobody has
+      // classified must be visible, not absorbed into whichever bucket happens to be the default.
+      if (isTransferCategory(cat)) { skippedTransfers++; continue; }
+      const e = unknown.get(cat) ?? { count: 0, grossCents: 0 };
+      e.count++; e.grossCents += bt.amount;
+      unknown.set(cat, e);
+      continue;
+    }
     rows.push(row);
   }
 
@@ -111,19 +126,35 @@ export async function syncFinTxn(
   return {
     fetched, upserted: payload.length, inserted, updated,
     unmappedFieldIds: [...unmapped].sort((a, b) => a - b),
+    skippedTransfers,
+    unknownCategories: [...unknown].map(([category, e]) => ({ category, ...e }))
+      .sort((a, b) => b.count - a.count),
     sinceIso: opts.since.toISOString(), untilIso: opts.until.toISOString(),
   };
 }
 
 /** What runWithLog writes onto the fin_sync_log row. */
-export const finTxnLogPatch = (r: FinTxnSyncResult) => ({
-  charges_fetched: r.fetched,
-  rows_imported: r.inserted,
-  rows_replaced: r.updated,
-  ...(r.unmappedFieldIds.length
-    ? { error_message: `ADVISORY (sync OK) — ${r.unmappedFieldIds.length} fieldId(s) map to no fin_venue_fields row: ${r.unmappedFieldIds.join(", ")}` }
-    : {}),
-});
+export const finTxnLogPatch = (r: FinTxnSyncResult) => {
+  /* BOTH ADVISORIES ON ONE LINE. error_message on a COMPLETED row is the house's advisory channel —
+   * the run succeeded, and something about it needs a human. An unknown category is the louder of
+   * the two: it means money moved in a shape this build has never seen and did not store. */
+  const notes: string[] = [];
+  if (r.unknownCategories.length) {
+    notes.push(
+      `UNKNOWN reporting_category, SKIPPED and NOT stored: ` +
+      r.unknownCategories.map((u) => `${u.category} ×${u.count} ($${(u.grossCents / 100).toFixed(2)})`).join(", "),
+    );
+  }
+  if (r.unmappedFieldIds.length) {
+    notes.push(`${r.unmappedFieldIds.length} fieldId(s) map to no fin_venue_fields row: ${r.unmappedFieldIds.join(", ")}`);
+  }
+  return {
+    charges_fetched: r.fetched,
+    rows_imported: r.inserted,
+    rows_replaced: r.updated,
+    ...(notes.length ? { error_message: `ADVISORY (sync OK) — ${notes.join(" · ")}` } : {}),
+  };
+};
 
 /* ── THE WINDOW, IN CENTRAL, DST AND ALL ───────────────────────────────────────────────────────
  * "the last 3 days" means three Central CALENDAR days ending now, not 72 hours: a sync at 00:30
