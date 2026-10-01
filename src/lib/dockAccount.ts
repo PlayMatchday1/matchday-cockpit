@@ -115,14 +115,23 @@ export function billingLine(a: DockAccount | null, nowMs = Date.now()): string |
  * A LINE THAT STATES A FACT IS ONLY OFFERED WHEN THE FACT IS LOADED AND TRUE. Everything below
  * either comes from `a`, or says nothing specific. A snippet still only ever INSERTS into the
  * draft; nothing here sends. */
-export function dockSnippets(a: DockAccount | null, opts?: { canSend?: boolean }): string[] {
+export function dockSnippets(
+  a: DockAccount | null,
+  /* `now` IS INJECTED, THE WAY billingLine TAKES IT. It was missing, so the cancelled-membership
+   * sentence read the wall clock while the suite pinned 2026-09-04 — and the fixture's paid period
+   * ends Oct 1, so the suite went red at midnight Central on 1 October and stayed red. The two
+   * functions answer the same question about the same membership and must not read two different
+   * clocks. Defaults to Date.now(), so the only caller that passes one is a test. */
+  opts?: { canSend?: boolean; now?: number },
+): string[] {
   if (opts?.canSend === false) return [];
+  const now = opts?.now ?? Date.now();
   const out: string[] = [];
   const m = a?.membership ?? null;
 
   if (m?.canceledAt) {
     out.push(
-      stillRunning(m)
+      stillRunning(m, now)
         ? `Your membership was cancelled on ${cancelDay(m.canceledAt)} and runs to ${periodDay(m.renews)}.`
         : `Your membership was cancelled on ${cancelDay(m.canceledAt)}.`,
     );

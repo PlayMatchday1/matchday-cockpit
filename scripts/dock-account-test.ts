@@ -80,10 +80,10 @@ eq("no membership, no line", billingLine(nomem, NOW), null);
 eq("no account loaded, no line", billingLine(null, NOW), null);
 
 console.log("\n— dockSnippets: a line that states a fact needs the fact —");
-const sCancelled = dockSnippets(cancelled);
-const sActive = dockSnippets(active);
-const sNomem = dockSnippets(nomem);
-const sNull = dockSnippets(null);
+const sCancelled = dockSnippets(cancelled, { now: NOW });
+const sActive = dockSnippets(active, { now: NOW });
+const sNomem = dockSnippets(nomem, { now: NOW });
+const sNull = dockSnippets(null, { now: NOW });
 yes("a cancelled membership offers a line naming the cancellation",
   sCancelled.some((l) => /cancelled on Aug 8/.test(l)) && sCancelled.some((l) => /runs to Oct 1/.test(l)));
 yes("and a line saying nothing further will be charged", sCancelled.includes("Nothing further will be charged."));
@@ -94,7 +94,7 @@ no("and neither does a thread whose account never loaded", mentionsMembership(sN
 yes("both still get the line that states nothing", sNomem.includes("I'm looking at your account now.") && sNull.includes("I'm looking at your account now."));
 yes("a credit balance is offered only when there is one",
   sActive.some((l) => /\$12\.50 in credits/.test(l)) && !sCancelled.some((l) => /credits/.test(l)));
-eq("no send permission ⇒ no snippets at all", dockSnippets(cancelled, { canSend: false }), []);
+eq("no send permission ⇒ no snippets at all", dockSnippets(cancelled, { canSend: false, now: NOW }), []);
 
 // POSITIVE CONTROL for the two absence assertions above: the same matcher finds a membership
 // sentence where one genuinely exists. Without this, a dockSnippets() that returned [] for
