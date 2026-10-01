@@ -48,6 +48,7 @@
 import type { FinanceData, FinVenue, FinExpense } from "./useFinanceData";
 import { buildFieldCostRows } from "./financeCosts";
 import { daysInMonth } from "./checkIns";
+import { groupVenues, type VenueGroup } from "./venueGroups";
 
 const SHORT_MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -93,12 +94,29 @@ export type CalRow = {
   edit?: { expense: FinExpense };
   // Set on a non-editable leaf row → renders locked with a why + link(s).
   lock?: CalRowLock;
+  // AS-OF CALENDAR ONLY (buildOpexCalendarAsOf). Money this row owes the month that sits on no
+  // day: `paidUndated` is a bank payment whose day the bank does not record and whose venue has no
+  // billing day; `undated` is a projection with no billing day set. Both are in the row's total.
+  paidUndated?: number;
+  undated?: number;
+  info?: RowInfo;
+};
+
+// What the row's i says. Plain words; no table names.
+export type RowInfo = {
+  title: string;
+  billed: string;
+  rate: string;
+  source: string;
+  ytd: string | null;
+  notes: string[];
 };
 
 export type CalGroup = {
   key: string;
   name: string;
   src: string;
+  how?: string;              // the category i, in plain words (as-of calendar only)
   tag?: string;              // header pill (e.g. 'weekly', 'monthly · quarterly')
   defaultOpen: boolean;
   rows: CalRow[];
@@ -366,6 +384,9 @@ function fieldCostGroup(
   monthKey: string,
   year: number,
   month0: number,
+  // true → a venue whose amount has no day becomes its own row carrying `undated`, instead of
+  // folding anonymously into the group remainder. The as-of calendar needs to say WHO is undated.
+  attachUndated = false,
 ): CalGroup {
   const venueById = new Map<number, FinVenue>();
   for (const v of data.venues) venueById.set(v.id, v);
@@ -394,6 +415,16 @@ function fieldCostGroup(
         monthKey,
       },
     });
+  };
+
+  const pushUndated = (
+    fc: { key: string; displayName: string; city: string; primaryVenueId: number; amount: number },
+    tag: string,
+  ) => {
+    undated += fc.amount;
+    if (!attachUndated) return;
+    push(fc, {}, tag);
+    rows[rows.length - 1].undated = fc.amount;
   };
 
   for (const fc of buildFieldCostRows(data, monthKey)) {
@@ -425,7 +456,7 @@ function fieldCostGroup(
       // Cells always reconcile for pure per-match; the tolerance + undated
       // fallback is defensive so a drift never distorts the subtotal.
       if (Math.abs(datedSum - fc.amount) <= 1) push(fc, cells, "per-match");
-      else undated += fc.amount;
+      else pushUndated(fc, "per-match");
       continue;
     }
 
@@ -435,7 +466,7 @@ function fieldCostGroup(
       const wd = primary?.billing_weekday;
       const weeklyDays = wd == null ? [] : weeklyDaysFor(year, month0, wd);
       if (weeklyDays.length === 0) {
-        undated += fc.amount; // no weekday captured → honest remainder
+        pushUndated(fc, "weekly"); // no weekday captured → honest remainder
         continue;
       }
       let cells: Record<number, number>;
@@ -455,7 +486,7 @@ function fieldCostGroup(
     // never defaulted to day 1. Both resolve through resolveBillingDates so the
     // Field Costs column cannot answer this question differently.
     const { days } = resolveBillingDates(primary, year, month0);
-    if (days.length === 0) undated += fc.amount;
+    if (days.length === 0) pushUndated(fc, cadence);
     else if (cadence === "custom") push(fc, splitEven(fc.amount, days), "custom");
     else push(fc, { [days[0]]: fc.amount }, cadence, cadence !== "monthly");
   }
@@ -609,5 +640,341 @@ export function buildOpexCalendar(
     undatedFieldCosts,
     biggestHit,
     categoriesWithSpend,
+  };
+}
+
+// =================================================================================================
+// THE AS-OF CALENDAR — what the OpEx page renders. (buildOpexCalendar above is the pure projection
+// and is kept as-is for its suite.)
+//
+// ONE RULE, SPLIT AT TODAY:
+//   days up to and including today → what was actually PAID
+//   days after today               → the PROJECTION from venue settings
+//
+// FIELD COSTS, PAID = the bank. The 2026 QuickBooks "Sports Field Fees" reconciliation is loaded
+// into fin_venue_cost_overrides by scripts/load-field-cost-2026.mjs, one row per venue per month,
+// every row stamped created_by = BANK_SOURCE. That stamp is what separates a bank figure from an
+// operator's "Custom billing month" override, which is a plan, not a payment.
+//
+// THE BANK RECORDS THE MONTH, NOT THE DAY (the source CSV has `month`, no date). So a paid amount
+// is placed on the venue's own billing day for that month where one is set, and otherwise counts in
+// the row's Month total with no day. It is NEVER smeared, and never put on day 1.
+//
+// A PAST MONTH WITH NO BANK ROW SHOWS NOTHING for that venue — not the model. That is also true of
+// a past month the bank load does not reach yet (September 2026 is excluded by the loader), so the
+// category i states how far the bank data runs.
+//
+// EVERYTHING ELSE (City Manager, Match Manager, every expense category) is already an actual
+// ledger row on its own date; past-or-future is just which side of today its date falls.
+// =================================================================================================
+
+export const BANK_SOURCE = "field-cost-2026-reconciliation";
+
+export type MonthState = "past" | "current" | "future";
+
+export type OpexCalendarAsOf = OpexCalendar & {
+  state: MonthState;
+  // Last day of THIS month that counts as paid: days in a past month, today in the current one,
+  // 0 in a future one. A cell is paid iff its day <= paidThrough.
+  paidThrough: number;
+  paidTotal: number;
+  bankThrough: string | null; // "Aug 2026" — the last month the bank load covers
+};
+
+const fmtUsd = (n: number) =>
+  `$${n.toLocaleString("en-US", {
+    minimumFractionDigits: Number.isInteger(Math.round(n * 100) / 100) ? 0 : 2,
+    maximumFractionDigits: 2,
+  })}`;
+
+function monthStateOf(year: number, month0: number, now: Date): MonthState {
+  const a = year * 12 + month0;
+  const b = now.getFullYear() * 12 + now.getMonth();
+  return a < b ? "past" : a > b ? "future" : "current";
+}
+
+function monthIndex(key: string): number {
+  // "Aug 2026" → 2026*12+7, or -1
+  const m = /^([A-Z][a-z]{2}) (\d{4})$/.exec(key);
+  if (!m) return -1;
+  const i = SHORT_MONTHS.indexOf(m[1]);
+  return i < 0 ? -1 : Number(m[2]) * 12 + i;
+}
+
+function addCells(into: Record<number, number>, from: Record<number, number>) {
+  for (const [d, v] of Object.entries(from)) {
+    const day = Number(d);
+    into[day] = Math.round(((into[day] ?? 0) + v) * 100) / 100;
+  }
+}
+
+export function rowTotal(r: CalRow): number {
+  let t = (r.paidUndated ?? 0) + (r.undated ?? 0);
+  for (const v of Object.values(r.cells)) t += v;
+  return Math.round(t * 100) / 100;
+}
+
+function billedAndRate(v: FinVenue | undefined, data: FinanceData): { billed: string; rate: string } {
+  if (!v) return { billed: "Not set", rate: "Not set" };
+  const dash = data.partnerDashboards.find((d) => d.venueId === v.id);
+  const when =
+    v.billing_cadence === "weekly" ? ", invoiced weekly"
+    : v.billing_cadence === "custom" ? ", invoiced on set dates"
+    : v.billing_cadence === "quarterly" ? ", invoiced quarterly"
+    : v.billing_cadence === "annual" ? ", invoiced yearly"
+    : v.billing_day != null ? ", invoiced monthly" : "";
+  if (v.billing_type === "profit_share" || dash?.revenueModel === "per_match_minus_manager") {
+    return { billed: "Share of match revenue", rate: "The partner's share, from their dashboard" };
+  }
+  if (v.billing_type === "monthly_flat") {
+    return { billed: "Monthly", rate: v.monthly_flat != null ? `${fmtUsd(v.monthly_flat)} / month` : "Not set" };
+  }
+  if (v.per_match_rate == null && v.hourly_rate != null) {
+    return { billed: `Per hour${when}`, rate: `${fmtUsd(v.hourly_rate)} / hour` };
+  }
+  return {
+    billed: `Per match${when}`,
+    rate: v.per_match_rate != null ? `${fmtUsd(v.per_match_rate)} / match` : "Not set",
+  };
+}
+
+function fieldCostGroupAsOf(
+  data: FinanceData,
+  monthKey: string,
+  year: number,
+  month0: number,
+  state: MonthState,
+  paidThrough: number,
+  bankThrough: string | null,
+): CalGroup {
+  const venueById = new Map<number, FinVenue>();
+  for (const v of data.venues) venueById.set(v.id, v);
+  const groupOf = new Map<number, VenueGroup>();
+  for (const g of groupVenues(data.venues)) for (const l of g.legs) groupOf.set(l.id, g);
+
+  const bank = data.overrides.filter((o) => o.created_by === BANK_SOURCE);
+  const byPrimary = new Map<number, CalRow>();
+  const placedOnBillingDay = new Set<number>();
+  // NAMED FOR THE VENUE THE BANK PAID. A group's primary is its cheapest leg (venueGroups sorts by
+  // rate), so Soccer Central's money would otherwise sit under "Soccer Central Tournament" at $0.
+  const paidVenueOf = new Map<number, number>();
+  const getRow = (venueId: number): { row: CalRow; primary: FinVenue | undefined } => {
+    const g = groupOf.get(venueId);
+    const primary = g?.legs[0] ?? venueById.get(venueId);
+    const pid = primary?.id ?? venueId;
+    let row = byPrimary.get(pid);
+    if (!row) {
+      const name = g?.displayName ?? primary?.venue_name ?? `Venue ${pid}`;
+      row = {
+        key: `field:${pid}`,
+        label: name,
+        sublabel: primary?.city,
+        cells: {},
+        lock: { kind: "field-cost", venueId: pid, venueName: name, monthKey },
+      };
+      byPrimary.set(pid, row);
+    }
+    return { row, primary };
+  };
+
+  // ── PAID: the bank, for any month that has started.
+  if (state !== "future") {
+    for (const o of bank) {
+      if (o.month !== monthKey || Math.abs(o.override_amount) < 0.005) continue;
+      const { row } = getRow(o.venue_id);
+      const paidVenue = venueById.get(o.venue_id);
+      if (paidVenue && row.lock?.kind === "field-cost") {
+        paidVenueOf.set(row.lock.venueId, paidVenue.id);
+        row.label = paidVenue.venue_name;
+        row.lock.venueName = paidVenue.venue_name;
+      }
+      const { days, cadence } = resolveBillingDates(paidVenue, year, month0);
+      const usable = days.filter((d) => d <= paidThrough);
+      if (usable.length === 0) {
+        row.paidUndated = Math.round(((row.paidUndated ?? 0) + o.override_amount) * 100) / 100;
+      } else {
+        addCells(row.cells, cadence === "custom" ? splitEven(o.override_amount, usable) : { [usable[0]]: o.override_amount });
+        placedOnBillingDay.add(row.lock!.kind === "field-cost" ? row.lock!.venueId : 0);
+      }
+    }
+  }
+
+  // ── PROJECTED: venue settings, for days after today. Bank rows are taken out first so the
+  // projection is the model (or an operator's planned override), never a bank figure re-dated.
+  if (state !== "past") {
+    const planned: FinanceData = { ...data, overrides: data.overrides.filter((o) => o.created_by !== BANK_SOURCE) };
+    const proj = fieldCostGroup(planned, monthKey, year, month0, true);
+    for (const pr of proj.rows) {
+      const venueId = pr.lock?.kind === "field-cost" ? pr.lock.venueId : null;
+      if (venueId == null) continue;
+      const { row } = getRow(venueId);
+      const future: Record<number, number> = {};
+      for (const [d, v] of Object.entries(pr.cells)) if (Number(d) > paidThrough) future[Number(d)] = v;
+      addCells(row.cells, future);
+      if (pr.undated) row.undated = Math.round(((row.undated ?? 0) + pr.undated) * 100) / 100;
+      row.tag = pr.tag;
+    }
+  }
+
+  // ── The i, per row.
+  const yearNum = year;
+  const rows = [...byPrimary.values()].filter((r) => Math.abs(rowTotal(r)) >= 0.005);
+  for (const r of rows) {
+    const pid = r.lock?.kind === "field-cost" ? r.lock.venueId : -1;
+    const primary = venueById.get(paidVenueOf.get(pid) ?? pid);
+    const legs = new Set((groupOf.get(pid)?.legs ?? []).map((l) => l.id).concat(pid));
+    const ytd = bank
+      .filter((o) => legs.has(o.venue_id) && o.month.endsWith(String(yearNum)))
+      .reduce((s, o) => s + o.override_amount, 0);
+    const { billed, rate } = billedAndRate(primary, data);
+    const notes: string[] = [];
+    if (placedOnBillingDay.has(pid)) {
+      notes.push("The bank records the month a payment cleared, not the day. It is shown on this venue's billing day.");
+    }
+    if (r.paidUndated) {
+      notes.push(`${fmtUsd(r.paidUndated)} paid this month with no billing day set. It is in the Month total, not on a day.`);
+    }
+    if (r.undated) {
+      notes.push(`${fmtUsd(r.undated)} projected with no billing day set. It is in the Month total, not on a day.`);
+    }
+    r.info = {
+      title: `${r.label}${r.sublabel ? `, ${r.sublabel}` : ""}`,
+      billed,
+      rate,
+      source:
+        state === "past" ? "Paid: bank payments."
+        : state === "future" ? "Projected from venue settings."
+        : "Up to today: bank payments. After today: projected from venue settings.",
+      ytd: `${fmtUsd(Math.round(ytd * 100) / 100)} paid${bankThrough ? ` (bank, through ${bankThrough})` : ""}`,
+      notes,
+    };
+  }
+  rows.sort((a, b) => (a.sublabel ?? "").localeCompare(b.sublabel ?? "") || a.label.localeCompare(b.label));
+
+  const { agg } = aggregateAndSubtotal(rows);
+  const subtotal = Math.round(rows.reduce((s, r) => s + rowTotal(r), 0) * 100) / 100;
+  const undated = rows.reduce((s, r) => s + (r.paidUndated ?? 0) + (r.undated ?? 0), 0);
+  return {
+    key: "field",
+    name: "Field Costs",
+    src: "",
+    how:
+      "What we pay each venue. Days up to today show what the bank paid" +
+      (bankThrough ? ` (loaded through ${bankThrough}; a later past month shows nothing until it is loaded)` : "") +
+      ". Days after today are projected from each venue's billing settings. The bank records the month, not the day: a paid amount sits on the venue's billing day, or only in the Month total if none is set.",
+    defaultOpen: true,
+    rows,
+    agg,
+    subtotal,
+    undated,
+  };
+}
+
+function ledgerInfo(
+  data: FinanceData,
+  r: CalRow,
+  kind: "city" | "match" | "expense",
+  category: string,
+  year: number,
+  now: Date,
+): RowInfo {
+  const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const exp = r.edit?.expense;
+  const same = (e: FinExpense) =>
+    kind === "match"
+      ? e.category === "Match Manager Pay" && (e.city?.trim() || "Unknown") === r.label
+      : e.category === category && (e.vendor?.trim() || e.notes?.trim() || "") === (exp?.vendor?.trim() || exp?.notes?.trim() || "");
+  const ytd = data.expenses
+    .filter((e) => same(e) && (e.date ?? "").startsWith(String(year)) && (e.date ?? "") <= todayIso)
+    .reduce((s, e) => s + e.amount, 0);
+  const month = rowTotal(r);
+  const notes: string[] = [];
+  if (exp && exp.manual_entry) notes.push("Click an amount to change it.");
+  if (exp && !exp.manual_entry) notes.push("Imported. Re-upload it on Q2 Import to change it.");
+  if (kind === "match") notes.push("Recomputed on the Manager Pay page. Change it there.");
+  return {
+    title: `${r.label}${r.sublabel && kind !== "match" ? `, ${r.sublabel}` : ""}`,
+    billed: kind === "city" ? "Monthly" : kind === "match" ? "Weekly" : "As entered",
+    rate: kind === "match" ? "Per match managed" : `${fmtUsd(month)} this month`,
+    source: kind === "match" ? "Manager Pay page." : "Expenses ledger, on the date entered.",
+    ytd: `${fmtUsd(Math.round(ytd * 100) / 100)} paid`,
+    notes,
+  };
+}
+
+export function buildOpexCalendarAsOf(
+  data: FinanceData | null,
+  year: number,
+  month0: number,
+  now: Date,
+): OpexCalendarAsOf {
+  const state = monthStateOf(year, month0, now);
+  const days = daysInMonth(year, month0);
+  const paidThrough = state === "past" ? days : state === "current" ? now.getDate() : 0;
+  const monthKey = monthKeyFor(year, month0);
+
+  let bankThrough: string | null = null;
+  let groups: CalGroup[] = [];
+  if (data) {
+    let best = -1;
+    for (const o of data.overrides) {
+      if (o.created_by !== BANK_SOURCE) continue;
+      const i = monthIndex(o.month);
+      if (i > best) { best = i; bankThrough = o.month; }
+    }
+    const city = cityManagerGroup(data, monthKey, year, month0);
+    city.how = "Monthly pay to each city manager, from the Expenses ledger, on the day it is paid.";
+    for (const r of city.rows) r.info = ledgerInfo(data, r, "city", "City Manager", year, now);
+    const match = matchManagerGroup(data, monthKey, year, month0);
+    match.how = "Weekly pay to match managers, by city, from the Manager Pay page. It is recomputed there, so it is changed there.";
+    for (const r of match.rows) r.info = ledgerInfo(data, r, "match", "Match Manager Pay", year, now);
+    const field = fieldCostGroupAsOf(data, monthKey, year, month0, state, paidThrough, bankThrough);
+    const rest = expenseCategoryGroups(data, monthKey, year, month0);
+    for (const g of rest) {
+      g.how = `${g.name} spending from the Expenses ledger, on the date of each expense.`;
+      for (const r of g.rows) r.info = ledgerInfo(data, r, "expense", g.name, year, now);
+      // Ledger rows with no date carry their amount as undated, so the row total still holds it.
+      for (const r of g.rows) {
+        const dated = Object.values(r.cells).reduce((s, v) => s + v, 0);
+        const amt = r.edit?.expense.amount ?? dated;
+        if (Math.abs(amt - dated) >= 0.005) r.undated = amt - dated;
+      }
+    }
+    groups = [city, match, field, ...rest];
+  }
+
+  const dayTotal = new Array<number>(days + 1).fill(0);
+  for (const g of groups) for (const [d, v] of Object.entries(g.agg)) dayTotal[Number(d)] += v;
+  const cumulative = new Array<number>(days + 1).fill(0);
+  let run = 0;
+  for (let d = 1; d <= days; d++) { run += dayTotal[d]; cumulative[d] = run; }
+
+  const monthTotal = Math.round(groups.reduce((s, g) => s + g.subtotal, 0) * 100) / 100;
+  const undatedFieldCosts = groups.reduce((s, g) => s + g.undated, 0);
+  let paidTotal = 0;
+  for (const g of groups) {
+    for (const r of g.rows) {
+      for (const [d, v] of Object.entries(r.cells)) if (Number(d) <= paidThrough) paidTotal += v;
+      paidTotal += r.paidUndated ?? 0;
+      if (state === "past") paidTotal += r.undated ?? 0;
+    }
+  }
+  let biggestHit: { day: number; amount: number } | null = null;
+  for (let d = 1; d <= days; d++) {
+    if (dayTotal[d] > 0 && (!biggestHit || dayTotal[d] > biggestHit.amount)) biggestHit = { day: d, amount: dayTotal[d] };
+  }
+  return {
+    groups,
+    dayTotal,
+    cumulative,
+    monthTotal,
+    datedTotal: monthTotal - undatedFieldCosts,
+    undatedFieldCosts,
+    biggestHit,
+    categoriesWithSpend: groups.filter((g) => g.subtotal > 0).length,
+    state,
+    paidThrough,
+    paidTotal: Math.round(paidTotal * 100) / 100,
+    bankThrough,
   };
 }

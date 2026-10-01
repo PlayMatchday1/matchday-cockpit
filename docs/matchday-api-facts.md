@@ -6607,3 +6607,25 @@ the real rows through a load-and-save with no edits, read-only, and asserts ever
 **Nothing downstream reads `promo_code` to send anything.** There is no send route; `pushed_at` /
 `pushed_by` are inert from 0176 and written only by the manual "mark as pushed" toggle. The code is
 read off the screen by whoever sends in Klaviyo or WhatsApp.
+
+## OpEx field costs: paid = the bank rows, and the bank has no day (2026-10-01)
+
+- **The 2026 bank actuals ARE loaded**, as `fin_venue_cost_overrides` rows with
+  `created_by = 'field-cost-2026-reconciliation'` (reason "QuickBooks Sports Field Fees, cash basis…"),
+  written by `scripts/load-field-cost-2026.mjs` from `scripts/data/field-cost-2026-actuals.csv`.
+  Grain is **venue × month**. The CSV has `month`, no date, so **the payment DAY is UNKNOWN**
+  everywhere in the estate.
+- The CSV totals **$170,646.41**. The DB holds **$170,466.41**: the loader excludes September, so
+  Soccer Central's **Sep 2026 $180 is not loaded**. Sep 2026 for venue 11 is instead a $5,600
+  `q3-prefill-script` override ("monthly_flat · May lump sum"), which is not a bank figure.
+  Probe 2026-10-01, read-only.
+- **OpEx does NOT read `fieldEconomics.ts`.** It goes `opexSources.ts` → `buildFieldCostRows` →
+  `canonicalVenueCost` (`financeCosts.ts:309`), which returns an override first. Cash Flow
+  (`fieldCostsFor`) and Cities (`cityPnl.ts:156`) read that same override-first source. The Cost page
+  (`fieldEconomics.ts`) ignores overrides.
+- `groupVenues` makes the CHEAPEST leg the primary (`venueGroups.ts:55`). Soccer Central's group
+  primary is venue 53 "Soccer Central Tournament" ($0), not 11. Label money by the venue that was paid.
+- OpEx now uses `buildOpexCalendarAsOf` (`opexSources.ts`): paid = bank rows (keyed on that
+  `created_by`) up to today; projected from venue settings after today; a past month with no bank row
+  shows nothing. Measured on the page, Jan–Sep 2026 per venue = the bank rows to the cent, 21 venues,
+  $170,466.41.
