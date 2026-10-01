@@ -324,15 +324,16 @@ console.log("\nTHE PAGE SAYS NOTHING BEYOND THE TABLE, and renders the dates it 
   const VIEW = readFileSync("src/components/MembersByCityView.tsx", "utf8");
   const noComments = VIEW.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/^\s*\/\/.*$/gm, "");
   is("control: the view was read and still renders a table", /<table[ >]/.test(noComments), true);
-  /* ONE PARAGRAPH, AND IT IS THE MOCK'S SUBTITLE. This assertion used to read "no <p> at all"; the
-   * v2 mock carries a one-line subtitle above the card and the brief names the mock as the spec, so
-   * the rule is now EXACTLY ONE and its text is pinned. The guard it replaces existed to stop the
-   * page growing explanatory prose, and a count of one still stops that. */
-  is("exactly one paragraph is rendered", (noComments.match(/<p[ >]/g) ?? []).length, 1);
-  is("  and it is the subtitle, verbatim",
-     /Month-end membership: who pays on the 1st, and what drops off the month after\./.test(noComments), true);
-  is("CONTROL: the prose scan counts a second one when it is there",
-     ("<p>a</p><p>b</p>".match(/<p[ >]/g) ?? []).length, 2);
+  /* NO PARAGRAPH AT ALL — the original rule, restored. d658286 relaxed this to "exactly one, and it
+   * is the mock's subtitle"; the subtitle is gone and so is the exception. The bar states the cutoff
+   * and the billing date, so a sentence announcing that the page is a month-end report repeats what
+   * is already on screen. The mock has one; the page deliberately does not. */
+  is("no <p> paragraph element is rendered", /<p[ >]/.test(noComments), false);
+  is("CONTROL: the prose scan finds a tag when one is present", /<p[ >]/.test("<p>explanatory sentence</p>"), true);
+  // AND THE SUBTITLE'S OWN TEXT IS GONE, not merely re-tagged as something other than a <p>.
+  is("the mock's subtitle text is absent", /Month-end membership/.test(noComments), false);
+  is("CONTROL: that scan fires on the sentence itself",
+     /Month-end membership/.test("Month-end membership: who pays on the 1st"), true);
   is("the footer line names both exclusions", /Excludes \$0 members and internal accounts\./.test(noComments), true);
 
   // THE WINDOW PILL AND THE PICKER ARE GONE, and must not come back: an earlier cutoff cannot be

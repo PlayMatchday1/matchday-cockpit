@@ -8,6 +8,11 @@
  * are the ENTIRE explanation. No subtitle, no status chip, no paragraphs, no callouts — asserted
  * by members-by-city-test, which reads this file and fails on any sentence outside that set.
  *
+ * THE v2 MOCK CARRIES A SUBTITLE AND THIS PAGE DOES NOT. It was built from the mock in d658286 and
+ * removed immediately after: the bar states the cutoff and the billing date, so a sentence saying
+ * the page is a month-end report is telling the reader what the two dates above it already say.
+ * Ryan: "the page needs no explanatory prose."
+ *
  * ── THE AS-OF IS THE SYNC INSTANT, NOT THE PAGE LOAD ──────────────────────────────────────────
  * Active moves 4-5 people a day (353 -> 406 over eleven days in August), so a bare number is
  * stale within 48 hours and someone reconciles against a figure that no longer exists — which is
@@ -143,9 +148,6 @@ export default function MembersByCityView() {
   return (
     <div className="mbc">
       <h1>Members by City</h1>
-      {/* THE ONE SENTENCE THE PAGE IS ALLOWED, and it is the mock's. It names the report rather
-          than explaining the columns — the sub-labels do that. */}
-      <p className="mbc-sub">Month-end membership: who pays on the 1st, and what drops off the month after.</p>
 
       {err ? (
         <div className="mbc-err" data-testid="mbc-error">
@@ -222,8 +224,7 @@ export default function MembersByCityView() {
  * :global() is also invalid here; ordinary descendant selectors only. */
 const CSS = `
 .mbc { padding: 24px 28px 80px; max-width: 1440px; }
-.mbc h1 { font-size: 28px; letter-spacing: -0.5px; margin: 0 0 4px; font-weight: 800; }
-.mbc-sub { color: #44564c; margin: 0 0 18px; }
+.mbc h1 { font-size: 28px; letter-spacing: -0.5px; margin: 0 0 18px; font-weight: 800; }
 .mbc-card { background: #fff; border: 1px solid var(--line, #e3e7e1); border-radius: 14px; overflow: hidden; }
 .mbc-bar { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; padding: 16px 20px; border-bottom: 1px solid #e3e7e1; }
 .mbc-kv { display: flex; align-items: baseline; gap: 8px; }
