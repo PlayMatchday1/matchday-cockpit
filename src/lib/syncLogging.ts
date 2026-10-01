@@ -40,7 +40,16 @@ export type SourceName =
   | "telnyx-sms"
   | "play-installs"
   | "app-store-installs"
-  | "google-calendar";
+  | "google-calendar"
+  // fin_txn, the per-balance-transaction ledger. TWO NAMES ON PURPOSE: 'stripe-txn' is the
+  // RECURRING sync (hourly over 3 days, daily over 60, and the Sync now button) and is what the
+  // "Last synced" label reads; 'stripe-txn-backfill' is the one-off historical walk, month by
+  // month. Sharing one name would make a finished back-fill look like a fresh sync. Added to the
+  // DB CHECK by 0196 and 0197 — runWithLog will not run either until those are applied, and the
+  // insert fails CLOSED (ok:false, no throw), so the sync would otherwise write every row and
+  // never appear in Recent Syncs.
+  | "stripe-txn"
+  | "stripe-txn-backfill";
 
 // fin_sync_log columns the orchestrator/manual routes write on
 // success. Stripe-specific columns (charges_*) stay null for mdapi

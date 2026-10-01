@@ -27,6 +27,7 @@ import ChatsRail from "../../match-ops/ChatsRail";
 import { useSectionNav } from "@/components/SectionNav";
 import FinanceExecHero from "@/components/FinanceExecHero";
 import FinancePeriodBar from "@/components/finance/FinancePeriodBar";
+import SyncNowCard from "@/components/finance/SyncNowCard";
 import { FinancePeriodProvider } from "@/lib/financePeriodContext";
 import {
   anchorParam, changeGrain, containingQuarter, currentPeriod, periodFromUrl, stepPeriod,
@@ -169,6 +170,20 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
           onJumpToNow={() => setPeriod(currentPeriod(shownPeriod.grain, now))}
           links={null}
         />
+
+        {/* ── HOW FRESH THE NUMBERS ARE, ON EVERY FINANCE PAGE ──────────────────────────────────
+            In the shell rather than on two pages, because every figure under Finance comes from
+            the same sync and the question "is this current?" is the same question on all of them.
+            On 1 October the Revenue page was $1,821 short of September until the 06:00 Central job
+            caught up, and nothing on screen said the number was waiting on anything.
+
+            THE BUTTON IS NOT RENDERED YET. `canSync` stays false until fin_txn is the page's
+            source: a Sync now that fills fin_txn while the figures still come from fin_revenue is
+            a control that visibly changes nothing. `source` moves to "stripe-txn" at the same
+            moment, and both are this one line. */}
+        <div className="mb-6">
+          <SyncNowCard source="stripe-api" canSync={false} />
+        </div>
 
         {/* The exec banner is Cash-Flow context (quarter P&L, current-month gross, MTD vs prior).
             It stayed with that tab before the split and stays with that route now. */}

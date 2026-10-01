@@ -19,6 +19,14 @@
     {
       "path": "/api/sync/wp-submissions",
       "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/sync/fin-txn/recent",
+      "schedule": "20 * * * *"
+    },
+    {
+      "path": "/api/sync/fin-txn/catchup",
+      "schedule": "40 12 * * *"
     }
   ]
 }

@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Finance Revenue v2</title>
+<style>
+  :root{--nav:#0b3a28;--accent:#22c55e;--bg:#eef1ec;--card:#fff;--line:#e2e7df;--line-2:#eef1ec;--ink:#10231a;--ink-2:#46594e;--muted:#7b8b82;
+    --pos:#15803d;--neg:#b42318;--hl:#e5f6ea;--soft:#f6f8f5;--tip:#10231a}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  button,select{font:inherit;color:inherit}
+  .mocknote{background:#fff7d6;border-bottom:1px solid #eadb9c;color:#5b4a00;font-size:12px;padding:6px 20px}
+  .nav{background:var(--nav);height:56px;display:flex;align-items:center;padding:0 24px}
+  .logo{color:var(--accent);font-weight:800;font-style:italic;font-size:21px}
+  .logo small{font-size:12px;margin-left:4px}
+  main{max-width:1240px;margin:0 auto;padding:24px 24px 64px;display:grid;gap:16px}
+  .num{font-variant-numeric:tabular-nums}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px}
+
+  .top{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  h1{margin:0;font-size:30px;font-weight:800;display:flex;align-items:center;gap:8px}
+  .seg{display:inline-flex;background:var(--soft);border:1px solid var(--line);border-radius:999px;padding:3px}
+  .seg button{border:0;background:transparent;padding:6px 14px;border-radius:999px;font-weight:600;color:var(--ink-2)}
+  .seg button[aria-pressed="true"]{background:var(--ink);color:#fff}
+  .month{display:flex;align-items:center;gap:8px;font-weight:800;font-size:18px}
+  .month button{border:1px solid var(--line);background:#fff;border-radius:9px;width:32px;height:32px}
+  .status{border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;background:#fff3d6;color:#7a5400;border:1px solid #f0d99a}
+  .sp{flex:1}
+
+  /* info popovers */
+  .i{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:50%;border:1px solid #c7d0ca;color:var(--muted);
+     font:italic 700 11px/1 Georgia,serif;cursor:pointer;background:#fff;vertical-align:middle;padding:0;flex:none}
+  .i:hover,.i[aria-expanded="true"]{color:var(--ink);border-color:var(--ink-2)}
+  .i.lg{width:20px;height:20px;font-size:13px}
+  .pop{position:absolute;z-index:40;width:min(380px,calc(100vw - 32px));background:var(--tip);color:#fff;border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.45;box-shadow:0 10px 30px rgba(0,0,0,.2)}
+  .pop[hidden]{display:none}
+  .pop b{color:#fff}
+  .pop ul{margin:6px 0 0;padding-left:16px}
+  .pop li{margin-bottom:5px}
+  .pop .h{font-weight:800;margin-bottom:2px}
+
+  /* hero */
+  .hero{padding:20px 22px;display:grid;gap:14px}
+  .hero-top{display:flex;align-items:flex-end;gap:28px;flex-wrap:wrap}
+  .big .k{font-size:12px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);font-weight:700;display:flex;gap:6px;align-items:center}
+  .big .v{font-size:40px;font-weight:800;line-height:1.1;margin-top:4px}
+  .big .c{color:var(--ink-2);font-size:13px}
+  .minis{display:flex;gap:28px;flex-wrap:wrap;margin-left:auto}
+  .mini .k{font-size:12px;color:var(--muted);font-weight:600;display:flex;gap:6px;align-items:center}
+  .mini .v{font-size:20px;font-weight:800}
+  .hero-top{align-items:flex-start}
+  .calc{margin-top:10px;width:340px;max-width:100%;display:grid;gap:2px;font-size:14px}
+  .cl{display:flex;justify-content:space-between;gap:16px;padding:3px 0;color:var(--ink-2)}
+  .cl span:first-child{display:flex;align-items:center;gap:6px}
+  .cl.neg span:last-child{color:var(--neg)}
+  .cl.tot{border-top:2px solid var(--ink);margin-top:4px;padding-top:7px;color:var(--ink);font-weight:800;font-size:16px}
+  .cl.fee{margin-top:6px;color:var(--muted);font-size:13px}
+  .cl.fee span:last-child{color:var(--muted)}
+  .cl.kept{color:var(--muted);font-size:13px}
+  .big .toggle{margin:12px 0 0}
+  .mini .s{font-size:11px;color:var(--muted)}
+  .minis{align-self:flex-start;padding-top:6px}
+  .bridge{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;background:var(--soft);border:1px solid var(--line-2);border-radius:12px;padding:10px 14px}
+  .step{display:flex;flex-direction:column;min-width:0}
+  .step .l{font-size:11px;color:var(--muted);font-weight:600}
+  .step .a{font-weight:700}
+  .step.neg .a{color:var(--neg)}
+  .step.tot .a{font-weight:800}
+  .op{color:#a6b2ab;font-weight:700}
+  .after{color:var(--ink-2);font-size:13px}
+  .after b{color:var(--ink)}
+  .toggle{margin-left:auto;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font-weight:700;cursor:pointer}
+  table.items{border-collapse:collapse;width:100%}
+  table.items td{padding:8px 4px;border-bottom:1px solid var(--line-2)}
+  table.items td.amt{text-align:right;font-weight:600;width:140px}
+  table.items td.cnt{color:var(--muted);width:90px;text-align:right}
+  table.items td.src{color:var(--muted);font-size:12px;width:170px}
+  table.items tr.sub td{font-weight:800;border-top:2px solid var(--line);background:var(--hl)}
+  table.items tr.sub2 td{font-weight:700;background:var(--soft)}
+  table.items .neg{color:var(--neg)}
+  .lbl{display:flex;align-items:center;gap:6px}
+
+  /* tables */
+  .sec{padding:16px 18px}
+  .sechead{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+  .sechead h2{margin:0;font-size:15px;font-weight:800;letter-spacing:.3px;text-transform:uppercase}
+  .sechead .m{color:var(--muted);font-size:12px}
+  .tw{overflow-x:auto}
+  table.city{border-collapse:collapse;width:100%;min-width:720px}
+  table.city th,table.city td{padding:10px 12px;text-align:right;border-bottom:1px solid var(--line-2);white-space:nowrap}
+  table.city th{font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);font-weight:700}
+  table.city th .lbl{justify-content:flex-end}
+  table.city th:first-child,table.city td:first-child{text-align:left}
+  table.city th:first-child .lbl{justify-content:flex-start}
+  table.city td.net{font-weight:800;background:var(--hl)}
+  table.city th.net{background:var(--hl);color:#14532d}
+  table.city td.neg{color:var(--neg)}
+  table.city tr.un td{color:var(--muted);font-style:italic}
+  table.city tr.tot td{font-weight:800;background:var(--soft);border-bottom:0}
+  table.city tr.tot td.net{background:#d5f2de}
+
+  /* chart */
+  .chartbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-left:auto}
+  .chartbar select{border:1px solid var(--line);border-radius:9px;padding:6px 10px;background:#fff;font-weight:600}
+  svg text{font:11px/1 Inter,ui-sans-serif,system-ui,sans-serif;fill:var(--muted)}
+  .legend{display:flex;gap:16px;color:var(--ink-2);font-size:12px;margin-top:6px}
+  .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+</style>
+</head>
+<body>
+<div class="mocknote" data-testid="mock-note">MOCK. Totals are September 2026 from the Stripe export in Central time, plus the two Venmo rentals. Sales tax is estimated from city rates for the mock; the build calculates it exactly. The membership split by city and the field names in the dropdown are illustrative.</div>
+<div class="nav"><div class="logo">MATCHDAY<small>Clubhouse</small></div></div>
+<main>
+  <div class="top">
+    <h1>Revenue <button class="i lg" data-pop="how" aria-expanded="false" aria-label="How we count revenue" data-testid="info-how">i</button></h1>
+    <div class="seg" role="group"><button aria-pressed="true">Month</button><button>Quarter</button><button>Year</button></div>
+    <div class="month"><button aria-label="Previous">‹</button><span data-testid="period">September 2026</span><button aria-label="Next">›</button></div>
+    <span class="status" data-testid="status">Updating · final by Oct 2</span>
+    <button class="i" data-pop="status" aria-expanded="false" aria-label="What updating and final mean" data-testid="info-status">i</button>
+  </div>
+
+  <section class="card hero" data-testid="hero">
+    <div class="hero-top">
+      <div class="big">
+        <div class="k">Gross collected <button class="i" data-pop="gross" aria-expanded="false" aria-label="What gross collected is" data-testid="info-gross">i</button></div>
+        <div class="v num" data-testid="gross-revenue"></div>
+        <div class="calc" data-testid="bridge">
+          <div class="cl neg"><span>Refunds &amp; failed payments</span><span class="num" data-b="ref"></span></div>
+          <div class="cl neg"><span>Disputes</span><span class="num" data-b="dis"></span></div>
+          <div class="cl neg"><span>Sales tax</span><span class="num" data-b="tax"></span></div>
+          <div class="cl tot"><span>Net revenue <button class="i" data-pop="net" aria-expanded="false" aria-label="What net revenue is" data-testid="info-net">i</button></span><span class="num" data-b="net" data-testid="net-revenue"></span></div>
+          <div class="cl fee"><span>Stripe fees</span><span class="num" data-b="fees"></span></div>
+          <div class="cl kept"><span>Kept after fees</span><span class="num" data-b="kept"></span></div>
+        </div>
+        <button class="toggle" data-testid="toggle-items" aria-expanded="false">Show line items</button>
+      </div>
+      <div class="minis">
+        <div class="mini"><div class="k">DPP <button class="i" data-pop="dpp" aria-expanded="false" aria-label="What DPP is">i</button></div><div class="v num" data-testid="mini-dpp"></div><div class="s">net</div></div>
+        <div class="mini"><div class="k">Membership <button class="i" data-pop="mem" aria-expanded="false" aria-label="What membership is">i</button></div><div class="v num" data-testid="mini-mem"></div><div class="s">net</div></div>
+        <div class="mini"><div class="k">Avg daily DPP <button class="i" data-pop="avg" aria-expanded="false" aria-label="How average daily is calculated">i</button></div><div class="v num" data-testid="mini-avg"></div><div class="s">net</div></div>
+      </div>
+    </div>
+
+    <div id="items" hidden data-testid="line-items">
+      <table class="items"><tbody id="itemsBody"></tbody></table>
+    </div>
+  </section>
+
+  <section class="card sec" data-testid="city-section">
+    <div class="sechead"><h2>By city</h2><span class="m">September 2026 · net revenue, Central time</span></div>
+    <div class="tw"><table class="city" data-testid="city-table">
+      <thead><tr>
+        <th><span class="lbl">City</span></th>
+        <th><span class="lbl">Matches</span></th>
+        <th><span class="lbl">DPP <button class="i" data-pop="dpp" aria-expanded="false" aria-label="What DPP is">i</button></span></th>
+        <th><span class="lbl">Membership <button class="i" data-pop="mem" aria-expanded="false" aria-label="What membership is">i</button></span></th>
+        <th><span class="lbl">Refunds &amp; disputes <button class="i" data-pop="rev" aria-expanded="false" aria-label="Refunds and disputes">i</button></span></th>
+        <th class="net"><span class="lbl">Net revenue</span></th>
+        <th><span class="lbl">Share</span></th>
+      </tr></thead>
+      <tbody id="cityBody"></tbody>
+    </table></div>
+  </section>
+
+  <section class="card sec" data-testid="chart-section">
+    <div class="sechead"><h2>Daily DPP</h2><span class="m">Net of tax, by day in Central time</span>
+      <div class="chartbar">
+        <select aria-label="City"><option>All cities</option><option>Austin</option><option>San Antonio</option><option>Houston</option></select>
+        <select aria-label="Field" data-testid="field-select"><option>All fields</option><option>ATH Katy</option><option>ATH Pearland</option><option>Crockett High School</option><option>Hattrick Leander</option><option>NEMP</option><option>Parmer Stadium</option><option>Soccer Central</option></select>
+        <button class="i" data-pop="fields" aria-expanded="false" aria-label="How fields are listed">i</button>
+      </div>
+    </div>
+    <svg id="chart" viewBox="0 0 1180 220" width="100%" role="img" aria-label="Daily DPP, September 2026"></svg>
+    <div class="legend"><span><i class="sw" style="background:#22a05a"></i>September 2026</span><span><i class="sw" style="background:#b8c4bd"></i>Daily average</span></div>
+  </section>
+</main>
+
+<!-- popover content -->
+<template id="t-how"><div class="h">How we count revenue</div><ul>
+  <li>Days and months are <b>Central time</b>. A charge at 9pm on Sep 30 counts in September.</li>
+  <li><b>Net revenue</b> is what customers paid, minus refunds, disputes and sales tax.</li>
+  <li>Refunds and disputes count in the month they happen, even if the original charge was earlier.</li>
+  <li>Sales tax is calculated from each city's rate (Texas 8.25%).</li>
+  <li>Stripe fees are shown separately and are not taken out of net revenue.</li>
+  <li>Includes Venmo payments for private rentals, entered by hand.</li>
+  <li>Excludes test matches and internal accounts.</li>
+  <li>Members with no city on file are shown as Unassigned, so cities always add up to the total.</li>
+  <li>A month shows <b>Updating</b> until Stripe's data for its last day has synced, about 2 days later, then <b>Final</b>.</li>
+</ul></template>
+<template id="t-status"><div class="h">Updating and final</div>Stripe makes each day's payments available by noon the next day, so the last days of a month can still be arriving. September shows <b>Updating</b> until Sep 30 has fully synced, then <b>Final</b>. A final month does not change on its own: new refunds and disputes count in the month they happen. If anything is entered or edited for a final month later, such as a Venmo rental, it shows <b>Adjusted after final</b> with the amount.</template>
+<template id="t-net"><div class="h">Net revenue</div>Everything customers paid in the month (Stripe and Venmo), minus refunds, failed payments, disputes and sales tax. It is the money that is ours before Stripe's fees.</template>
+<template id="t-dpp"><div class="h">DPP</div>Drop-in pay-per-play: single match bookings and strike fees. Net of sales tax.</template>
+<template id="t-mem"><div class="h">Membership</div>Monthly membership charges. Most bill on the 1st; members who joined mid-month bill on their own date. Net of sales tax.</template>
+<template id="t-avg"><div class="h">Avg daily DPP</div>DPP for the month divided by the days in it. Membership is left out because most of it bills on the 1st and would distort a daily average.</template>
+<template id="t-rev"><div class="h">Refunds &amp; disputes</div>Money returned to customers this month, net of the tax that came back with it. A dispute is a chargeback: the cardholder's bank reversed the payment. Each dispute also costs a $15 Stripe fee, shown under Stripe fees.</template>
+<template id="t-fields"><div class="h">Fields</div>Lists only real fields that had revenue in the selected month and city, matched by field ID, not by match name.</template>
+<template id="t-gross"><div class="h">Gross collected</div>Every successful charge in the month, including sales tax, plus Venmo payments entered by hand.</template>
+<template id="t-tax"><div class="h">Sales tax</div>Collected from customers on behalf of the state, so it is not our revenue. Calculated per city from its rate.</template>
+<template id="t-fees"><div class="h">Stripe fees</div>Card processing, invoicing and billing fees, and dispute fees, as Stripe reports them for the month.</template>
+<template id="t-failed"><div class="h">Failed payments</div>Charges that looked successful and were later reversed by the bank before settling.</template>
+<template id="t-venmo"><div class="h">Venmo (manual)</div>Private rental payments received outside Stripe and entered by hand.</template>
+<div class="pop" id="pop" role="dialog" hidden data-testid="popover"></div>
+
+<script>
+const F = {gross:88084.66,nCh:5451,venmo:200,nVen:2,refunds:-228.96,nRef:4,failed:-12.99,nFail:1,disputes:-812.10,nDis:13,tax:-6673.18,fees:-4852.13,
+  dpp:{ATX:26993.73,SATX:16353.36,HOU:13777.28,OKC:2979.58,DFW:1820.76,ATL:1764.01,STL:726.15},
+  dppRev:{ATX:-36,SATX:-12,HOU:-12,OKC:0,DFW:0,ATL:0,STL:0},
+  memNet:16916.28, memRev:-913.72,
+  days:[2197.72,2166.85,2707.27,2038.42,2042.82,2318.02,2074.14,2706.48,2046.53,2931.49,1985.89,1653.33,1733.34,2368.22,2635.67,2140.66,2379.84,2288.5,1416.71,2110.72,2262.67,2112.84,2244.88,2532.77,2085.84,1285.44,1935.49,2171.52,2131.63,1709.17]};
+const NAMES = {ATX:"Austin",SATX:"San Antonio",HOU:"Houston",OKC:"OKC",DFW:"Dallas",ATL:"Atlanta",STL:"St. Louis"};
+const MATCHES = {ATX:124,SATX:103,HOU:69,OKC:22,DFW:30,ATL:31,STL:14};
+// illustrative membership share by city (from the current page's September split)
+const MSH = {ATX:6918,SATX:5094,HOU:3901,ATL:825,STL:456,DFW:447,OKC:338,UN:146.03};
+const MT = Object.values(MSH).reduce((a,b)=>a+b,0);
+const r2 = v => Math.round(v*100)/100;
+const $ = (v, c) => (v < 0 ? "−" : "") + "$" + Math.abs(v).toLocaleString("en-US", c ? {minimumFractionDigits:2, maximumFractionDigits:2} : {maximumFractionDigits:0});
+
+const rev = r2(F.refunds + F.failed + F.disputes);
+const grossAll = r2(F.gross + F.venmo);
+const net = r2(grossAll + rev + F.tax);
+const dppNet = r2(Object.values(F.dpp).reduce((a,b)=>a+b,0));
+const kept = r2(net + F.fees);
+document.querySelector('[data-testid="gross-revenue"]').textContent = $(grossAll);
+document.querySelector('[data-testid="mini-dpp"]').textContent = $(dppNet);
+document.querySelector('[data-testid="mini-mem"]').textContent = $(F.memNet);
+document.querySelector('[data-testid="mini-avg"]').textContent = $(dppNet / 30);
+const B = {gross:grossAll, ref:r2(F.refunds+F.failed), dis:F.disputes, tax:F.tax, net, fees:F.fees, kept};
+document.querySelectorAll("[data-b]").forEach(e => e.textContent = $(B[e.dataset.b]));
+
+// line items
+const pct = v => (Math.abs(v)/grossAll*100).toFixed(1) + "%";
+const items = [
+  ["Card charges", F.gross, F.nCh, "Stripe", "gross"],
+  ["Venmo (manual)", F.venmo, F.nVen, "Entered by hand", "venmo"],
+  ["Refunds", F.refunds, F.nRef, "Stripe", "rev"],
+  ["Failed payments", F.failed, F.nFail, "Stripe", "failed"],
+  ["Disputes", F.disputes, F.nDis, "Stripe", "rev"],
+  ["Sales tax", F.tax, null, "Calculated by city", "tax"],
+  ["Net revenue", net, null, "", "net", "sub"],
+  ["Stripe fees", F.fees, null, pct(F.fees) + " of gross", "fees"],
+  ["Kept after fees", kept, null, "", null, "sub2"],
+];
+document.getElementById("itemsBody").innerHTML = items.map(([l, v, n, src, pop, cls]) => `<tr class="${cls || ""}" data-testid="item-${l.toLowerCase().replace(/[^a-z]+/g, "-")}">
+  <td><span class="lbl">${l}${pop ? ` <button class="i" data-pop="${pop}" aria-expanded="false" aria-label="About ${l}">i</button>` : ""}</span></td>
+  <td class="cnt num">${n != null ? n.toLocaleString("en-US") : ""}</td>
+  <td class="src">${src}</td>
+  <td class="amt num ${v < 0 ? "neg" : ""}" data-v="${v}">${$(v, true)}</td></tr>`).join("");
+const tg = document.querySelector('[data-testid="toggle-items"]');
+tg.addEventListener("click", () => { const box = document.getElementById("items"); box.hidden = !box.hidden; tg.setAttribute("aria-expanded", !box.hidden); tg.textContent = box.hidden ? "Show line items" : "Hide line items"; });
+
+// city table
+const rows = Object.keys(NAMES).map(k => {
+  const mem = r2(F.memNet * MSH[k] / MT), rv = r2(F.dppRev[k] + F.memRev * MSH[k] / MT);
+  return { k, name: NAMES[k], m: MATCHES[k], dpp: F.dpp[k], mem, rv, net: r2(F.dpp[k] + mem + rv + (k === "ATX" ? F.venmo : 0)) };
+}).sort((a, b) => b.net - a.net);
+const un = { k:"UN", name:"Unassigned", m:null, dpp:0, mem:r2(F.memNet*MSH.UN/MT), rv:r2(F.memRev*MSH.UN/MT) }; un.net = r2(un.mem + un.rv);
+const all = [...rows, un];
+const tot = all.reduce((t, r) => ({dpp:t.dpp+r.dpp, mem:t.mem+r.mem, rv:t.rv+r.rv, net:t.net+r.net, m:t.m+(r.m||0)}), {dpp:0,mem:0,rv:0,net:0,m:0});
+document.getElementById("cityBody").innerHTML = all.map(r => `<tr class="${r.k === "UN" ? "un" : ""}" data-testid="row-${r.k.toLowerCase()}">
+  <td>${r.name}${r.k === "ATX" ? ' <button class="i" data-pop="venmo" aria-expanded="false" aria-label="Includes Venmo">i</button>' : ""}</td><td class="num">${r.m ?? "—"}</td><td class="num">${$(r.dpp)}</td><td class="num">${$(r.mem)}</td>
+  <td class="num ${r.rv < 0 ? "neg" : ""}">${r.rv ? $(r.rv) : "$0"}</td><td class="num net" data-net="${r.net}">${$(r.net)}</td><td class="num">${(r.net / net * 100).toFixed(1)}%</td></tr>`).join("")
+  + `<tr class="tot" data-testid="row-total"><td>Total</td><td class="num">${tot.m}</td><td class="num">${$(tot.dpp)}</td><td class="num">${$(tot.mem)}</td><td class="num neg">${$(tot.rv)}</td><td class="num net" data-net="${r2(tot.net)}">${$(tot.net)}</td><td class="num">100%</td></tr>`;
+
+// chart
+(function(){
+  const svg = document.getElementById("chart"), W = 1180, H = 220, L = 52, R = 10, T = 10, Bm = 26, max = 3500;
+  const bw = (W - L - R) / 30, y = v => T + (H - T - Bm) * (1 - v / max);
+  let s = "";
+  [0, 1000, 2000, 3000].forEach(v => s += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#e6ebe4"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${v ? "$" + v / 1000 + "k" : "$0"}</text>`);
+  F.days.forEach((v, i) => { const x = L + i * bw + 3; s += `<rect x="${x}" y="${y(v)}" width="${bw - 6}" height="${y(0) - y(v)}" rx="2" fill="#22a05a"><title>Sep ${i + 1}: ${$(v)}</title></rect>`; if ((i + 1) % 3 === 1) s += `<text x="${x + (bw - 6) / 2}" y="${H - 8}" text-anchor="middle">${i + 1}</text>`; });
+  const avg = dppNet / 30; s += `<line x1="${L}" x2="${W - R}" y1="${y(avg)}" y2="${y(avg)}" stroke="#b8c4bd" stroke-width="2" stroke-dasharray="5 4"/>`;
+  svg.innerHTML = s;
+})();
+
+// popovers: click to open, click again or outside or Esc to close
+const pop = document.getElementById("pop"); let openBtn = null;
+function closePop(){ pop.hidden = true; if (openBtn) openBtn.setAttribute("aria-expanded", "false"); openBtn = null; }
+document.addEventListener("click", e => {
+  const b = e.target.closest(".i");
+  if (b) { e.stopPropagation(); if (openBtn === b) return closePop(); closePop();
+    pop.innerHTML = document.getElementById("t-" + b.dataset.pop).innerHTML; pop.hidden = false; openBtn = b; b.setAttribute("aria-expanded", "true");
+    const r = b.getBoundingClientRect(), w = pop.offsetWidth;
+    pop.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left + scrollX - 20)) + "px"; pop.style.top = (r.bottom + scrollY + 8) + "px"; return; }
+  if (!e.target.closest("#pop")) closePop();
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape") closePop(); });
+</script>
+</body>
+</html>
