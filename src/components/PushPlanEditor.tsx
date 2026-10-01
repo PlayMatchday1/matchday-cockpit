@@ -35,7 +35,8 @@
 
 import { useMemo } from "react";
 import {
-  CHANNELS, defaultPushAt, draftSummary, fromInputValue, leadToKickoff, newDraftKey,
+  CHANNELS, codeAlsoOnChannels, defaultPushAt, draftSummary, fromInputValue, leadToKickoff,
+  listChannels, newDraftKey,
   readerZoneLabel, toInputValue, venueOffsetMs,
   type ChannelKey, type DraftRow, type PromoMatch, type PushDraft, type ZoneMode,
 } from "@/lib/matchPromotion";
@@ -151,6 +152,10 @@ export default function PushPlanEditor({
               <div className="px-3 pb-2.5 pt-2">
                 {rows.map((r) => {
                   const lead = leadToKickoff(r.pushAt, kickoff);
+                  /* READ OFF THE DRAFT, NOT OFF THE SAVED PLAN, so the note appears as the code is
+                   * typed rather than after a save — which is the only moment it can still change
+                   * the decision it is about. */
+                  const alsoOn = codeAlsoOnChannels(draft, c.key, r.code);
                   return (
                     /* ── ONE PUSH IS A STACKED BLOCK, NOT A ROW ─────────────────────────────
                      * It was a four-column grid — [time | 8h before | message | ✕] — and at the
@@ -202,7 +207,24 @@ export default function PushPlanEditor({
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) => set(c.key, { rows: rows.map((x) => (x.key === r.key ? { ...x, code: e.target.value.toUpperCase() } : x)) })}
                           className="h-9 w-full min-w-0 rounded-lg border border-cream-line bg-white px-2.5 text-[12.5px] font-semibold uppercase placeholder:font-medium placeholder:normal-case placeholder:text-deep-green/25" />
-                        <span className="text-[11.5px] text-deep-green/45">Optional. Leave blank for no code on this push.</span>
+                        {/* ── THE SHARED-CODE NOTE, WHERE THE DECISION IS MADE ────────────────
+                            A 400 from the save route used to stand here instead: the same code on
+                            two channels of one match was refused outright. Teresa runs one campaign
+                            code across WhatsApp and SMS deliberately — she is not splitting
+                            bookings by channel, she is sending one offer twice — so the planner now
+                            states the consequence and lets her decide.
+                            IT REPLACES THE HINT RATHER THAN STACKING UNDER IT. Two lines of grey
+                            under one field is how a line that matters stops being read, and
+                            "optional, leave blank" is the less useful of the two once a code is
+                            typed. */}
+                        {alsoOn.length > 0 ? (
+                          <span data-testid="code-shared" data-channels={alsoOn.join(",")}
+                            className="text-[11.5px] font-semibold text-amber-700">
+                            Also used on {listChannels(alsoOn)}. Bookings with this code can&apos;t be split by channel.
+                          </span>
+                        ) : (
+                          <span className="text-[11.5px] text-deep-green/45">Optional. Leave blank for no code on this push.</span>
+                        )}
                       </div>
 
                       {/* LINE 3: WHAT PLAYERS WILL READ. A textarea, full width, tall enough to

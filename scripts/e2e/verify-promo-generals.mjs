@@ -344,6 +344,75 @@ async function main() {
     await closeContext(ctx);
   }
 
+  // ══ ONE CODE ACROSS TWO CHANNELS: SAVES, SURVIVES A RELOAD, AND SAYS SO ═══════════════════
+  {
+    head("a shared code saves, reloads intact, and carries the note on both channels");
+    const store = makeStore();
+    const { ctx, p, errs } = await boot(browser, storageState, { store });
+    store.pushes = [
+      { id: 701, channel: "wa", pushAt: "2026-09-24T17:00:00.000Z", topic: "WhatsApp send", promoCode: "", pushedAt: null, pushedBy: null },
+      { id: 702, channel: "klaviyo_sms", pushAt: "2026-09-24T18:00:00.000Z", topic: "SMS send", promoCode: "", pushedAt: null, pushedBy: null },
+      { id: 703, channel: "dm", pushAt: "2026-09-24T19:00:00.000Z", topic: "DM send", promoCode: "OTHER5", pushedAt: null, pushedBy: null },
+    ];
+    await p.reload({ waitUntil: "domcontentloaded" });
+    await p.waitForSelector('[data-testid="city-block"]', { timeout: 120000 });
+    await p.waitForTimeout(1200);
+    yes("no page errors", errs.length === 0, errs[0] ?? "");
+
+    const openEditor = async () => {
+      await p.locator(`[data-testid="match-tile"][data-api-id="${store.matchApiId}"]`).first().click();
+      await p.waitForSelector('[data-testid="push-editor"]', { timeout: 20000 });
+      await p.waitForTimeout(500);
+    };
+    await openEditor();
+    const C = (k) => `[data-testid="chan"][data-key="${k}"]`;
+    nonEmpty(await p.$$(`${C("wa")} [data-testid="push"]`), "WhatsApp push blocks");
+    ok("PRESENCE CONTROL: the editor opened with push blocks on both channels");
+
+    // PRESENCE CONTROL FIRST: with no shared code anywhere, no note is on the page at all.
+    is("CONTROL: before anything is shared, there is no note", await p.locator('[data-testid="code-shared"]').count(), 0);
+    is("CONTROL: and the DM push with its own unique code has none either",
+       await p.locator(`${C("dm")} [data-testid="code-shared"]`).count(), 0);
+
+    // TYPE THE SAME CODE ON TWO CHANNELS. This is exactly what the route used to answer with a 400.
+    await p.locator(`${C("wa")} [data-testid="push-code"]`).first().fill("PARMER10");
+    await p.locator(`${C("klaviyo_sms")} [data-testid="push-code"]`).first().fill("PARMER10");
+    await p.waitForTimeout(300);
+    is("the note appears on WhatsApp", await txt(p, `${C("wa")} [data-testid="code-shared"]`),
+       "Also used on Klaviyo SMS. Bookings with this code can't be split by channel.");
+    is("  and on Klaviyo SMS, naming the other one", await txt(p, `${C("klaviyo_sms")} [data-testid="code-shared"]`),
+       "Also used on WhatsApp. Bookings with this code can't be split by channel.");
+    is("  it names the actual channels", await p.locator(`${C("wa")} [data-testid="code-shared"]`).getAttribute("data-channels"), "Klaviyo SMS");
+    is("CONTROL: the DM push, with a code of its own, still has no note",
+       await p.locator(`${C("dm")} [data-testid="code-shared"]`).count(), 0);
+
+    // SAVE. No refusal, no toast.
+    await p.locator('[data-testid="save"]').click();
+    await p.waitForTimeout(2500);
+    is("the save landed — both rows carry the shared code",
+       store.pushes.map((r) => [r.id, r.channel, r.promoCode]).sort((a, b) => a[0] - b[0]),
+       [[701, "wa", "PARMER10"], [702, "klaviyo_sms", "PARMER10"], [703, "dm", "OTHER5"]]);
+    is("  and nothing was refused", await p.locator("text=/cannot be attributed to either/").count(), 0);
+
+    // RELOAD, AND BOTH STILL HAVE IT.
+    await p.reload({ waitUntil: "domcontentloaded" });
+    await p.waitForSelector('[data-testid="city-block"]', { timeout: 120000 });
+    await p.waitForTimeout(1200);
+    await openEditor();
+    is("after a reload both channels still show the code",
+       [await p.locator(`${C("wa")} [data-testid="push-code"]`).first().inputValue(),
+        await p.locator(`${C("klaviyo_sms")} [data-testid="push-code"]`).first().inputValue()],
+       ["PARMER10", "PARMER10"]);
+    is("  and the note is on both, from the saved plan", await p.locator('[data-testid="code-shared"]').count(), 2);
+    is("  CONTROL: the DM push is still noteless", await p.locator(`${C("dm")} [data-testid="code-shared"]`).count(), 0);
+
+    // AND CLEARING ONE TAKES BOTH NOTES AWAY — the note is about the pairing, not about the field.
+    await p.locator(`${C("klaviyo_sms")} [data-testid="push-code"]`).first().fill("");
+    await p.waitForTimeout(300);
+    is("clearing one side removes the note from both", await p.locator('[data-testid="code-shared"]').count(), 0);
+    await closeContext(ctx);
+  }
+
   await closeBrowser(browser);
   console.log(`\n${PASS} passed, ${FAIL} failed`);
   for (const f of fails) console.log(`  XX ${f}`);

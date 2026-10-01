@@ -187,30 +187,25 @@ export async function POST(req: Request) {
     });
   }
 
-  /* ── THE ONE COLLISION THAT BREAKS ATTRIBUTION, REFUSED ─────────────────────────────────────
-   * The same code on two channels of one match makes every redemption attributable to both, which
-   * is precisely the thing per-channel codes exist to fix. Refused here rather than warned about,
-   * because a warning on a page this busy is a warning nobody reads.
+  /* ── A SHARED CODE IS NO LONGER REFUSED ────────────────────────────────────────────────────
+   * A refusal stood here: the same code on two channels of one match returned 400 and wrote
+   * nothing, on the reasoning that a redemption attributable to both channels defeats the point of
+   * a per-channel code.
    *
-   * TWO DIFFERENT MATCHES SHARING A CODE IS NOT REFUSED. Campaigns legitimately run one code
-   * across a week, and that is a different question from which channel a redemption came through. */
-  const byCode = new Map<string, Set<string>>();
-  for (const row of parsed) {
-    if (!row.promo_code) continue;
-    const set = byCode.get(row.promo_code) ?? new Set<string>();
-    set.add(row.channel);
-    byCode.set(row.promo_code, set);
-  }
-  for (const [code, channels] of byCode) {
-    if (channels.size > 1) {
-      return Response.json({
-        outcome: "FAILED",
-        error: `${code} is on ${[...channels].join(" and ")}. A code shared across channels cannot be `
-          + `attributed to either, which is the whole reason it is per channel. Give each its own code, `
-          + `or clear one. Nothing was written.`,
-      }, { status: 400 });
-    }
-  }
+   * THE REASONING WAS RIGHT AND THE REFUSAL WAS STILL WRONG. Teresa runs one campaign code across
+   * WhatsApp and SMS on purpose — she is not trying to split bookings by channel, she is trying to
+   * send one offer twice. The refusal made a legitimate plan unsaveable to protect a report nobody
+   * had asked for, and it was not even enforcing a real invariant: THE DATABASE HAS NEVER HAD A
+   * CONSTRAINT HERE, and production already holds three (match, code) pairs spanning two channels
+   * -- 18686 and 18663 both carry "50% FOR TUESDAY" on wa and dm, 19371 carries "100" on
+   * klaviyo_sms and wa. The route was refusing to write what the table was already storing.
+   *
+   * WHAT REPLACES IT IS A NOTE, NOT A BLOCK. The editor says "Also used on <channel>. Bookings with
+   * this code can't be split by channel." under the field, so the consequence is stated where the
+   * decision is made and the operator decides. See codeAlsoOnChannels in matchPromotion.
+   *
+   * NOTHING IS CHECKED HERE ANY MORE. Normalisation at entry (above) is the only thing this route
+   * does to a code. */
 
   const sb = auth.supabase;
   const stamp = { updated_by: auth.email ?? null, updated_at: new Date().toISOString() };

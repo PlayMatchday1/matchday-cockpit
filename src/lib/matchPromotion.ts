@@ -1125,18 +1125,47 @@ export const normalizePromoCode = (raw: string | null | undefined): string | nul
   return v === "" ? null : v;
 };
 
-/* THE ONE COLLISION THAT MATTERS: the same code on two channels of one match. That is precisely
- * what makes a redemption attributable to both and the test unreadable, which is the whole reason
- * the code moved per channel. Two DIFFERENT matches sharing a code is a separate question and is
- * NOT refused here — campaigns legitimately run one code across a week. */
-export function duplicateCodeChannels(codes: Record<string, string | null>): string[][] {
-  const by = new Map<string, string[]>();
-  for (const [ch, raw] of Object.entries(codes)) {
-    const c = normalizePromoCode(raw);
-    if (!c) continue;
-    (by.get(c) ?? by.set(c, []).get(c)!).push(ch);
+/* ── SHARING A CODE IS ALLOWED, AND SAID OUT LOUD ────────────────────────────────────────────
+ * duplicateCodeChannels stood here, returning the channel groups that shared a code so the save
+ * could be refused. The refusal is gone (see the note in the save route) and so is it — it had no
+ * callers by then anyway, because the code moved from the channel to the push and its
+ * Record<channel, code> shape could no longer describe the draft.
+ *
+ * THE CONSEQUENCE IS REAL AND IT IS NOT A BLOCK. One code on two channels means a redemption
+ * cannot be attributed to either, so the editor states that under the field and the operator
+ * decides. Campaigns run one code across channels on purpose; the planner's job is to say what
+ * that costs, not to forbid it. */
+
+/**
+ * The OTHER channels of this match whose pushes carry the same code, by label, in CHANNELS order.
+ * Empty when the code is blank or unique to this channel — which is what makes the note absent
+ * rather than empty.
+ *
+ * COMPARED NORMALISED, so "parmer10" beside "PARMER10 " is one code and not two. That is the same
+ * rule the save applies, so the note cannot disagree with what is about to be written.
+ *
+ * OTHER CHANNELS ONLY. Two pushes on the SAME channel sharing a code is the ordinary case — a
+ * Thursday and a Saturday send of one campaign — and carries none of the attribution problem.
+ */
+export function codeAlsoOnChannels(
+  draft: PushDraft, channel: ChannelKey, code: string | null | undefined,
+): string[] {
+  const want = normalizePromoCode(code);
+  if (!want) return [];
+  const out: string[] = [];
+  for (const c of CHANNELS) {
+    if (c.key === channel) continue;
+    const ch = draft[c.key];
+    if (!ch?.on) continue;
+    if (ch.rows.some((r) => normalizePromoCode(r.code) === want)) out.push(c.label);
   }
-  return [...by.values()].filter((chs) => chs.length > 1);
+  return out;
+}
+
+/** "Klaviyo SMS", "Klaviyo SMS and DM", "Klaviyo SMS, DM and Facebook". */
+export function listChannels(labels: readonly string[]): string {
+  if (labels.length <= 1) return labels[0] ?? "";
+  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
 }
 
 /* THE WEEK'S GENERAL PUSHES. Read by DATE RANGE rather than by match, because they belong to no
