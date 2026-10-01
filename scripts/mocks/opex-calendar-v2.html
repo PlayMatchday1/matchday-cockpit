@@ -35,9 +35,19 @@
   .barcap b{color:var(--ink)}
   .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:1px}
   .dot.paid{background:#22a05a}.dot.left{background:#cfdcd3}
-  .cats{margin-top:14px;padding-top:12px;border-top:1px solid var(--line-2);display:grid;gap:6px;font-size:13px}
-  .cats div{display:grid;grid-template-columns:1fr auto;gap:10px;color:var(--ink-2)}
-  .cats b{color:var(--ink);font-variant-numeric:tabular-nums}
+  .cats{margin-top:16px;padding-top:14px;border-top:1px solid var(--line-2);display:grid;gap:10px}
+  .crow{display:grid;grid-template-columns:10px 1fr auto auto;align-items:center;gap:4px 10px;font-size:13px}
+  .crow .sw{width:10px;height:10px;border-radius:3px}
+  .crow .n{color:var(--ink-2)}
+  .crow .pc{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;width:38px;text-align:right}
+  .crow b{color:var(--ink);font-variant-numeric:tabular-nums;width:84px;text-align:right}
+  .crow .tr{grid-column:2 / -1;height:6px;border-radius:999px;background:#eef2ef;overflow:hidden}
+  .crow .tr span{display:block;height:100%;border-radius:999px}
+  .stack{display:flex;height:12px;border-radius:999px;overflow:hidden;gap:2px;margin-top:2px}
+  .stack span{display:block;height:100%}
+  .dayt{cursor:pointer;text-align:left;font:inherit;color:inherit}
+  .dayt:hover,.dayt[aria-expanded="true"]{border-color:#22a05a}
+  .dayt .more{color:#16803c;font-weight:700}
   .hdr-right{border-left:1px solid var(--line-2);padding-left:28px;min-width:0}
   @media (max-width:900px){.hdr-right{border-left:0;padding-left:0}}
   .days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;margin-top:10px}
@@ -165,7 +175,7 @@ const CATS = [
     { name: "PRUMC", city: "Atlanta", bill: "Monthly", rate: "$360 / month", ytd: 1411, pays: { 1: 360 } },
   ]},
 ];
-const open = { city: true, match: true, field: true };
+const open = { city: false, match: false, field: false };
 const sumObj = o => Object.values(o).reduce((a, b) => a + b, 0);
 const chip = (v, d, tid) => `<span class="chip ${d <= TODAY ? "actual" : "proj"}" ${tid ? `data-testid="${tid}"` : ""}>${fmt(v)}</span>`;
 
@@ -197,17 +207,21 @@ function render(){
   document.querySelector('[data-testid="sum-paid"]').textContent = fmt(paid);
   document.querySelector('[data-testid="sum-left"]').textContent = fmt(total - paid);
   document.getElementById("paidFill").style.width = (paid / total * 100).toFixed(1) + "%";
-  document.getElementById("cats").innerHTML = CATS.map(c => { const t = c.rows.reduce((a, r) => a + sumObj(r.pays), 0); return `<div><span>${c.name}</span><b>${fmt(t)}</b></div>`; }).join("");
+  const COL = ["#2f6b4f", "#5aa77a", "#a7d3b6", "#e0a33a", "#8a7fd1"];
+  const ct = CATS.map(c => ({ name: c.name, t: c.rows.reduce((a, r) => a + sumObj(r.pays), 0) })).sort((a, b) => b.t - a.t).map((c, i) => ({ ...c, col: COL[i % COL.length] }));
+  const mx = Math.max(...ct.map(c => c.t));
+  document.getElementById("cats").innerHTML = ct.map(c => `<div class="crow" data-testid="cat-line"><span class="sw" style="background:${c.col}"></span><span class="n">${c.name}</span><span class="pc">${Math.round(c.t / total * 100)}%</span><b>${fmt(c.t)}</b><span class="tr"><span style="width:${(c.t / mx * 100).toFixed(1)}%;background:${c.col}"></span></span></div>`).join("");
   const days = [];
   for (let d = TODAY + 1; d <= Math.min(DAYS, TODAY + 7); d++) {
     const items = {}; all.filter(x => x.d === d).forEach(x => items[x.name] = (items[x.name] || 0) + x.v);
     days.push({ d, t: Object.values(items).reduce((a, b) => a + b, 0), items: Object.entries(items).sort((a, b) => b[1] - a[1]) });
   }
   const maxT = Math.max(...days.map(x => x.t));
-  document.getElementById("next7").innerHTML = days.map(x => `<div class="dayt ${x.t ? "busy" : ""} ${x.t && x.t === maxT ? "top" : ""}" data-testid="next-day" title="${x.items.map(([n, v]) => n + " " + fmt(v)).join("\n")}">
+  window.__days = days;
+  document.getElementById("next7").innerHTML = days.map((x, k) => `<button class="dayt ${x.t ? "busy" : ""} ${x.t && x.t === maxT ? "top" : ""}" data-testid="next-day" data-day="${k}" aria-expanded="false" ${x.t ? "" : "disabled"}>
     <span class="w">${"SUN MON TUE WED THU FRI SAT".split(" ")[WD(x.d)]}</span><span class="d">Oct ${x.d}</span>
     <span class="a ${x.t ? "" : "none"}">${x.t ? fmt(x.t) : "—"}</span>
-    <ul>${x.items.slice(0, 2).map(([n]) => `<li>${n}</li>`).join("")}${x.items.length > 2 ? `<li>+${x.items.length - 2} more</li>` : ""}</ul></div>`).join("");
+    <ul>${x.items.slice(0, 2).map(([n]) => `<li>${n}</li>`).join("")}${x.items.length > 2 ? `<li class="more">+${x.items.length - 2} more</li>` : ""}</ul></button>`).join("");
 }
 render();
 
@@ -219,7 +233,17 @@ document.addEventListener("click", e => {
 // popovers
 const pop = document.getElementById("pop"); let openBtn = null;
 function closePop(){ pop.hidden = true; if (openBtn) openBtn.setAttribute("aria-expanded", "false"); openBtn = null; }
+function showDay(t){
+  const x = window.__days[+t.dataset.day]; closePop();
+  pop.innerHTML = `<div class="h">Oct ${x.d} · ${fmt(x.t)}</div><dl>${x.items.map(([n, v]) => `<dt>${n}</dt><dd style="text-align:right">${fmt(v)}</dd>`).join("")}</dl>`;
+  pop.hidden = false; openBtn = t; t.setAttribute("aria-expanded", "true");
+  const rc = t.getBoundingClientRect();
+  pop.style.left = Math.min(innerWidth - 316, rc.left + scrollX) + "px"; pop.style.top = (rc.bottom + scrollY + 8) + "px";
+}
+document.addEventListener("mouseover", e => { const t = e.target.closest(".dayt:not([disabled])"); if (t && openBtn !== t) showDay(t); });
+document.addEventListener("mouseout", e => { const t = e.target.closest(".dayt"); if (t && openBtn === t && !t.contains(e.relatedTarget)) closePop(); });
 document.addEventListener("click", e => {
+  const dt = e.target.closest(".dayt:not([disabled])"); if (dt) { e.stopPropagation(); if (openBtn === dt && !pop.hidden) { closePop(); } else showDay(dt); return; }
   const b = e.target.closest(".i");
   if (b) { e.stopPropagation(); if (openBtn === b) return closePop(); closePop();
     const [t, ck, ri] = b.dataset.pop.split(":"); const c = CATS.find(x => x.key === ck);

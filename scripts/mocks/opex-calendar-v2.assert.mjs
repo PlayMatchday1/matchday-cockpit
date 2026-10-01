@@ -9,12 +9,15 @@ const tid = id => `[data-testid="${id}"]`;
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log((c ? "PASS " : "FAIL ") + m); };
 const num = s => Number(String(s).replace(/[^0-9.]/g, ""));
-// OPEX_STATE (optional): a Playwright storageState JSON, so the same checks can run against the signed-in dev page.
-const state = process.env.OPEX_STATE ? JSON.parse((await import("node:fs")).readFileSync(process.env.OPEX_STATE, "utf8")) : undefined;
-const b = await chromium.launch(); const p = await (await b.newContext({ viewport: { width: 1400, height: 900 }, storageState: state })).newPage();
+const b = await chromium.launch(); const p = await b.newPage({ viewport: { width: 1400, height: 900 } });
 const errs = []; p.on("pageerror", e => errs.push(e.message));
-await p.goto(url); await p.waitForSelector(tid("grid"), { timeout: 120000 });
+await p.goto(url); await p.waitForSelector(tid("grid"));
 ok(true, "instrument ran: grid rendered");
+
+// categories start collapsed
+ok(await p.locator("tr.sub").count() === 0, "categories are collapsed by default");
+for (const c of ["city", "match", "field"]) await p.click(`${tid("cat-" + c)} .catbtn`);
+ok(await p.locator("tr.sub").count() > 10, "presence control: expanding all shows the line items");
 
 // clutter gone
 const grid = await p.textContent(tid("grid"));
@@ -58,6 +61,14 @@ const month = num(await p.textContent(tid("sum-month")));
 ok(month === cats.reduce((a, c) => a + c.tot, 0), `Cash out in October equals the categories (${month})`);
 ok(num(await p.textContent(tid("sum-paid"))) + num(await p.textContent(tid("sum-left"))) === month, "paid so far + still to go = month");
 ok(await p.locator(tid("next-day")).count() === 7, "next 7 days shows seven day tiles");
+const busy = p.locator(`${tid("next-day")}:not([disabled])`).first();
+await busy.hover();
+ok(await p.isVisible(tid("popover")) && /\$/.test(await p.textContent(tid("popover"))), "hovering a day tile lists every payment for that day");
+await p.mouse.move(5, 5);
+ok(await p.isHidden(tid("popover")), "moving away closes it");
+const many = p.locator(`${tid("next-day")}:has(.more)`).first();
+if (await many.count()) { await many.click(); const n = await p.locator(`${tid("popover")} dt`).count(); ok(n > 2, `clicking a "+ more" tile shows all ${n} payees`); await many.click(); }
+ok(await p.locator(tid("cat-line")).count() === 3, "cash out card shows a bar per category");
 const dsum = await p.$$eval('[data-testid="next-day"] .a', e => e.reduce((s, x) => s + (Number(x.textContent.replace(/[^0-9]/g, "")) || 0), 0));
 ok(dsum > 0, `next 7 days totals come from the grid (${dsum})`);
 const fill = await p.$eval("#paidFill", e => parseFloat(e.style.width));

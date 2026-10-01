@@ -49,7 +49,12 @@ function catKey(g: CalGroup): string {
   return g.key;
 }
 
-type PopState = { id: string; x: number; y: number; group: CalGroup; row?: CalRow } | null;
+type DayPop = { label: string; total: number; items: [string, number][] };
+type PopState = { id: string; x: number; y: number; group?: CalGroup; row?: CalRow; day?: DayPop } | null;
+
+// Category bar colours, biggest category first: the mock's three greens, extended in the same
+// family (deep → teal → light) so five or six categories stay distinguishable.
+const CAT_COL = ["#2f6b4f", "#5aa77a", "#a7d3b6", "#3f8f8a", "#8cc7c0", "#1f4d4a"];
 
 export default function OpExCalendarView() {
   const { data, loading, error } = useFinanceData();
@@ -119,8 +124,8 @@ export default function OpExCalendarView() {
   }, [data, now]);
   const maxNext = Math.max(0, ...next7.map((x) => x.total));
 
-  // Every category starts open, as in the mock; collapse is per category and survives month nav.
-  const isOpen = (g: CalGroup) => open[g.key] ?? true;
+  // Every category starts collapsed, as in the mock; open state is per category and survives month nav.
+  const isOpen = (g: CalGroup) => open[g.key] ?? false;
   const toggle = (g: CalGroup) => {
     setPop(null);
     setOpen((s) => ({ ...s, [g.key]: !isOpen(g) }));
@@ -133,11 +138,30 @@ export default function OpExCalendarView() {
     const rc = el.getBoundingClientRect();
     setPop({ id, x: Math.max(8, Math.min(window.innerWidth - 316, rc.left - 10)), y: rc.bottom + 8, group, row });
   };
+  // A day tile: hover shows every payment that day, leaving closes it, a click pins/unpins it.
+  const showDay = (id: string, el: HTMLElement, day: DayPop) => {
+    anchorRef.current = el;
+    const rc = el.getBoundingClientRect();
+    setPop({ id, x: Math.max(8, Math.min(window.innerWidth - 316, rc.left)), y: rc.bottom + 8, day });
+  };
+  const catLines = useMemo(() => {
+    const total = cal.monthTotal;
+    const sorted = [...cal.groups].sort((a, b) => b.subtotal - a.subtotal);
+    const mx = Math.max(0, ...sorted.map((g) => g.subtotal));
+    return sorted.map((g, i) => ({
+      key: g.key,
+      name: g.name,
+      t: g.subtotal,
+      col: CAT_COL[i % CAT_COL.length],
+      pct: total > 0 ? Math.round((g.subtotal / total) * 100) : 0,
+      w: mx > 0 ? Math.max(0, (g.subtotal / mx) * 100) : 0,
+    }));
+  }, [cal]);
   useEffect(() => {
     if (!pop) return;
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement;
-      if (popRef.current?.contains(t) || t.closest?.(".i")) return;
+      if (popRef.current?.contains(t) || t.closest?.(".i") || t.closest?.(".dayt")) return;
       setPop(null);
     };
     const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === "Escape") setPop(null); };
@@ -167,11 +191,6 @@ export default function OpExCalendarView() {
         <h1 className="font-display">OpEx</h1>
         <span className="month" data-testid="month">{monthLabel(year, month0)}</span>
         <span className="sp" />
-        <div className="legend" data-testid="legend">
-          <span className="lg"><i className="lg-paid" />Paid</span>
-          <span className="lg"><i className="lg-proj" />Projected</span>
-          <span className="lg"><i className="lg-today" />Today</span>
-        </div>
         <Link className="ox-add" href="/admin/finance/ledger/expenses">+ Add expense</Link>
       </div>
 
@@ -189,30 +208,48 @@ export default function OpExCalendarView() {
             <span><i className="dot left" /><b className="num" data-testid="sum-left">{fmt(left)}</b> still to go</span>
           </div>
           <div className="cats" data-testid="cat-split">
-            {cal.groups.map((g) => (
-              <div key={g.key}><span>{g.name}</span><b>{fmt(g.subtotal)}</b></div>
+            {catLines.map((c) => (
+              <div key={c.key} className="crow" data-testid="cat-line">
+                <span className="sw" style={{ background: c.col }} />
+                <span className="n">{c.name}</span>
+                <span className="pc">{c.pct}%</span>
+                <b>{fmt(c.t)}</b>
+                <span className="tr"><span style={{ width: `${c.w.toFixed(1)}%`, background: c.col }} /></span>
+              </div>
             ))}
           </div>
         </div>
         <div className="hdr-right">
           <div className="k">Next 7 days</div>
           <div className="days" data-testid="next7">
-            {next7.map((x) => (
-              <div
+            {next7.map((x) => {
+              const id = `day:${x.key}`;
+              const day = { label: x.label, total: x.total, items: x.items };
+              return (
+              <button
+                type="button"
                 key={x.key}
                 className={`dayt${x.total ? " busy" : ""}${x.total && x.total === maxNext ? " topday" : ""}`}
                 data-testid="next-day"
-                title={x.items.map(([n, v]) => `${n} ${fmt(v)}`).join("\n")}
+                disabled={!x.total}
+                aria-expanded={pop?.id === id}
+                onMouseEnter={(e) => { if (pop?.id !== id) showDay(id, e.currentTarget, day); }}
+                onMouseLeave={(e) => {
+                  const to = e.relatedTarget as Node | null;
+                  if (pop?.id === id && !(to && popRef.current?.contains(to))) setPop(null);
+                }}
+                onClick={(e) => (pop?.id === id ? setPop(null) : showDay(id, e.currentTarget, day))}
               >
                 <span className="w">{WD3[x.wd]}</span>
                 <span className="d">{x.label}</span>
                 <span className={`a${x.total ? "" : " none"}`}>{x.total ? fmt(x.total) : "—"}</span>
                 <ul>
                   {x.items.slice(0, 2).map(([n]) => <li key={n}>{n}</li>)}
-                  {x.items.length > 2 && <li>+{x.items.length - 2} more</li>}
+                  {x.items.length > 2 && <li className="more">+{x.items.length - 2} more</li>}
                 </ul>
-              </div>
-            ))}
+              </button>
+              );
+            })}
           </div>
         </div>
       </section>
@@ -307,7 +344,17 @@ export default function OpExCalendarView() {
         hidden={!pop}
         style={pop ? { left: pop.x, top: pop.y } : undefined}
       >
-        {pop && !pop.row && (
+        {pop?.day && (
+          <>
+            <div className="h">{pop.day.label} · {fmt(pop.day.total)}</div>
+            <dl>
+              {pop.day.items.map(([n, v]) => (
+                <span key={n} style={{ display: "contents" }}><dt>{n}</dt><dd className="amt">{fmt(v)}</dd></span>
+              ))}
+            </dl>
+          </>
+        )}
+        {pop?.group && !pop.row && (
           <>
             <div className="h">{pop.group.name}</div>
             {pop.group.how}
@@ -547,9 +594,19 @@ const OPEX_CSS = `
 .opex-cal .barcap b{color:var(--ink)}
 .opex-cal .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:1px}
 .opex-cal .dot.paid{background:#22a05a}.opex-cal .dot.left{background:#cfdcd3}
-.opex-cal .cats{margin-top:14px;padding-top:12px;border-top:1px solid var(--line-2);display:grid;gap:6px;font-size:13px}
-.opex-cal .cats div{display:grid;grid-template-columns:1fr auto;gap:10px;color:var(--ink-2)}
-.opex-cal .cats b{color:var(--ink);font-variant-numeric:tabular-nums}
+.opex-cal .cats{margin-top:16px;padding-top:14px;border-top:1px solid var(--line-2);display:grid;gap:10px}
+.opex-cal .crow{display:grid;grid-template-columns:10px 1fr auto auto;align-items:center;gap:4px 10px;font-size:13px}
+.opex-cal .crow .sw{width:10px;height:10px;border-radius:3px}
+.opex-cal .crow .n{color:var(--ink-2)}
+.opex-cal .crow .pc{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;width:38px;text-align:right}
+.opex-cal .crow b{color:var(--ink);font-variant-numeric:tabular-nums;width:84px;text-align:right}
+.opex-cal .crow .tr{grid-column:2 / -1;height:6px;border-radius:999px;background:#eef2ef;overflow:hidden}
+.opex-cal .crow .tr span{display:block;height:100%;border-radius:999px}
+.opex-cal .dayt{cursor:pointer;text-align:left;font:inherit;color:inherit}
+.opex-cal .dayt:disabled{cursor:default}
+.opex-cal .dayt:not(:disabled):hover,.opex-cal .dayt[aria-expanded="true"]{border-color:#22a05a}
+.opex-cal .dayt .more{color:#16803c;font-weight:700}
+.opex-cal .pop dd.amt{text-align:right;font-variant-numeric:tabular-nums}
 .opex-cal .hdr-right{border-left:1px solid var(--line-2);padding-left:28px;min-width:0}
 @media (max-width:900px){.opex-cal .hdr-right{border-left:0;padding-left:0}}
 .opex-cal .days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;margin-top:10px}

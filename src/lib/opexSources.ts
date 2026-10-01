@@ -861,7 +861,7 @@ function fieldCostGroupAsOf(
     how:
       "What we pay each venue. Days up to today show what the bank paid" +
       (bankThrough ? ` (loaded through ${bankThrough}; a later past month shows nothing until it is loaded)` : "") +
-      ". Days after today are projected from each venue's billing settings. The bank records the month, not the day: a paid amount sits on the venue's billing day, or only in the Month total if none is set.",
+      ". Days after today are projected from each venue's billing settings. The bank records the month, not the day: a paid amount sits on the venue's billing day, or only in the Month total if none is set. Solid amounts are paid (bank payments). Dashed amounts are projected from each venue's billing settings. Today is highlighted.",
     defaultOpen: true,
     rows,
     agg,
