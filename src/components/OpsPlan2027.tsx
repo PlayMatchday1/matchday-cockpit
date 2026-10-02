@@ -628,7 +628,9 @@ function FieldRow({ f, city, ctx, span, showCity }: { f: PlanField; city: City; 
   const anchorNow = isActualAnchor(f, ctx.threshold);
   const td = "border-t px-1.5 py-1 text-[12px]";
   const st = { borderColor: HAIR, background: "#FAFCFB" };
-  const linkable = f.kind === "slot" && f.role === "field" && !removed;
+  /* ONLY A ROW CREATED FOR 2027 CAN BE LINKED. ops_plan_link_venue refuses a 2026 slot (so this page
+   * never changes the 2026 one); offering the picker there would be a control that can only fail. */
+  const linkable = f.kind === "slot" && f.role === "field" && f.createdForPlan === true && !removed;
   const venueChoices = linkable
     ? ctx.venues.filter((v) => city.venueAliases.some((a) => a.trim().toLowerCase() === (v.city ?? "").trim().toLowerCase()))
     : [];

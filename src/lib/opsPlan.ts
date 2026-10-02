@@ -115,6 +115,10 @@ export type PlanRole = "field" | "forecast_base" | "unplanned";
 export type PlanField = {
   key: string; rowId: string | null; name: string;
   kind: "venue" | "field" | "slot";
+  /** A slot row CREATED FOR this plan year (field_goal_rows.plan_year). Only these can be linked to a
+   *  venue from the plan page: 0199's ops_plan_link_venue refuses a 2026 slot, so the 2026 page is
+   *  never changed from this one. */
+  createdForPlan?: boolean;
   venueId: number | null; fieldId: number | null;
   cityId: string;
   role: PlanRole;

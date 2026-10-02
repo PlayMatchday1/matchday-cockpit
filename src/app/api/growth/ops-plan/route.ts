@@ -169,6 +169,7 @@ export async function GET(req: Request) {
         : String(r?.slot_name ?? "Unnamed field");
       fields.push({
         key, rowId: (r?.id as string | undefined) ?? null, name, kind, venueId, fieldId, cityId, role,
+        createdForPlan: r != null && Number(r.plan_year) === PLAN_YEAR,
         status: plan ? (plan.status as PlanStatus) : null,
         plannedType: (plan?.planned_type as PlanType | null | undefined) ?? null,
         openMonth: plan?.planned_open_month ? String(plan.planned_open_month).slice(0, 10) : null,
