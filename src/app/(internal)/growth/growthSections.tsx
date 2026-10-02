@@ -41,6 +41,13 @@ export const GROWTH_SECTIONS: RailItem[] = [
     icon: <I><path d="M3 20h18M6 20V10m5 10V4m5 16v-7" /></I>,
   },
   {
+    // THE 2027 VERSION OF THE PAGE ABOVE, grouped by region. Same tables, same actuals; see
+    // components/OpsPlan2027 and migration 0199.
+    key: "ops-plan", group: "Fields", label: "2027 Operations Plan", href: "/growth/ops-plan",
+    desc: "The 2027 plan by region, against what is played",
+    icon: <I><path d="M3 20h18M5 20V9l4-3 4 3v11M13 20v-6l4-3 2 1.5V20" /></I>,
+  },
+  {
     // THE MARKET, NOT A FIELD. Plei and GoodRec supply captured by hand, next to our own over the
     // same week. It sits in Fields because that is what it is about — who else is selling pitch
     // time in a city we are opening — and there is no other group it belongs to yet.

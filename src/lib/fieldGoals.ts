@@ -185,6 +185,23 @@ export const rowKeyForField = (fieldId: number, venueOf: Map<number, number>): s
 export const rowKeyOf = (r: { venue_id: number | null; field_id: number | null; id: string }): string =>
   r.venue_id != null ? `v${r.venue_id}` : r.field_id != null ? `f${r.field_id}` : `s${r.id}`;
 
+/* ── A 2027 ROW MUST NEVER REACH THIS PAGE ────────────────────────────────────────────────────
+ * Migration 0199 put the 2027 Operations Plan into these same tables. field_goal_rows.plan_year is
+ * the year a row was CREATED FOR: NULL is every row this page has ever made, and every venue and
+ * unmapped-field row (those are shared across years). A row created for another year is not this
+ * page's. Read defensively — `select("*")` before 0199 lands has no plan_year at all, which is null.
+ *
+ * AND A TARGET OUTSIDE THIS YEAR, OR IN SPOTS, IS NOT THIS PAGE'S EITHER. A shared venue row can
+ * carry 2027 estimates in goal_spots; read as goal_daily they would be Number(null) = 0 under a
+ * 2027 key — harmless today, and a different payload, which Ryan ruled out. */
+export const rowBelongsToGoalYear = (r: Record<string, unknown>, year: number = GOAL_YEAR): boolean =>
+  r.plan_year == null || Number(r.plan_year) === year;
+
+export const targetBelongsToGoalYear = (
+  t: { month: string | null; goal_daily?: number | string | null },
+  year: number = GOAL_YEAR,
+): boolean => t.goal_daily != null && String(t.month ?? "").startsWith(`${year}-`);
+
 /** Pull every 2026 match this page counts, through the caller's own client (so RLS applies). */
 export async function fetchGoalMatches(
   supabase: SupabaseClient,

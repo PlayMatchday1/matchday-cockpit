@@ -123,6 +123,10 @@ const NODE_SUITES = [
   // THE GOAL SHEET'S ARITHMETIC. Pure, sub-second, and it pins the exact fault the spreadsheet it
   // replaces has: a total that disagrees with its own rows because each row was rounded first.
   "scripts/field-goals-test.ts",
+  // THE 2027 OPERATIONS PLAN'S ARITHMETIC. Ryan asked for these by name: the seed equals the forecast
+  // (parsed from the 0200 SQL itself), a city is the sum of its rows, add-then-remove returns every
+  // total, and the 2026 route's filters keep 2027 rows off the 2026 page. Pure, sub-second.
+  "scripts/ops-plan-test.ts",
   // The current month's average: whose calendar (Chicago, not the runtime's UTC) and which
   // days (completed only, through yesterday). Guards a figure that moved twice a day.
   "scripts/goal-clock-test.ts",

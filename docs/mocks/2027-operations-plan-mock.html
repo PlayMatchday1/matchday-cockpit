@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2027 Operations Plan (mock)</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Archivo:wght@800;900&display=swap">
+<style>
+body{margin:0;background:#f1f3f0;font-family:'Instrument Sans',system-ui,sans-serif;color:#12261f}
+button,input,select{font-family:inherit}
+.top{background:#12332a;color:#fff;padding:0 24px;display:flex;align-items:center;gap:28px;min-height:64px;flex-wrap:wrap}
+.logo{font-family:Archivo,sans-serif;font-weight:900;font-style:italic;font-size:24px;color:#6fdc97}
+.nav{display:flex;gap:22px;flex-wrap:wrap;align-items:center}.nav b{background:#6fdc97;color:#12332a;padding:8px 16px;border-radius:999px;font-weight:600}
+.wrap{max-width:1280px;margin:0 auto;padding:32px 16px 64px;display:flex;flex-direction:column;gap:24px}
+h1{margin:4px 0 0;font-family:Archivo,sans-serif;font-weight:800;font-size:28px}
+.mut{color:#4d6159}.lab{font-size:12px;letter-spacing:1.5px;font-weight:700;color:#4d6159}
+.card{background:#fff;border:1px solid #dfe5e0;border-radius:16px;padding:24px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}.tiles .card{padding:20px}
+.big{font-weight:700;font-size:34px;line-height:1.2;margin-top:6px}
+.seg{display:flex;border:1px solid #c9d2cc;border-radius:10px;overflow:hidden;background:#fff}
+.seg button{min-height:44px;padding:0 20px;border:0;font-size:15px;font-weight:700;cursor:pointer;background:#fff;color:#12261f}.seg button.on{background:#12332a;color:#fff}
+.scroll{overflow-x:auto}
+.chart{display:flex;gap:16px;align-items:flex-end;min-width:720px;height:300px;border-bottom:1px solid #c9d2cc;margin-top:16px}
+.chart>div{flex:1 1 0;display:flex;justify-content:center;align-items:flex-end;gap:6px}
+.b26{width:34px;background:#2f7d55;border-radius:6px 6px 0 0}.b27{width:34px;box-sizing:border-box;border:3px solid #2f7d55;border-bottom:0;border-radius:8px 8px 0 0}
+.months{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:8px;min-width:1100px;margin-top:16px}
+.mo{border:1px solid #dfe5e0;border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:8px;background:#fafbf9}
+.tagL{font-size:12px;font-weight:600;background:#dff3e6;border-radius:6px;padding:4px 6px}.tagH{font-size:12px;font-weight:600;background:#12332a;color:#fff;border-radius:6px;padding:4px 6px}
+.hg{display:grid;grid-template-columns:110px 1.3fr 110px 2fr;gap:12px;padding:12px 0;font-size:15px;border-bottom:1px solid #eef1ee}
+.g{display:grid;grid-template-columns:210px 100px 56px repeat(12,52px) 60px 70px 76px 84px;gap:8px;align-items:center}.sub select{width:100%;padding:0 2px;font-size:12px}
+.g>div:nth-child(n+3){text-align:right}
+.hd{padding:12px 0;border-bottom:1px solid #dfe5e0}
+.cityb{min-height:44px;border:0;background:transparent;cursor:pointer;font-size:15px;font-weight:700;color:#12261f;padding:0;text-align:left}
+.pill{font-size:12px;font-weight:600;color:#4d6159;background:#eef1ee;border-radius:6px;padding:2px 6px;margin-left:4px}
+.bar{height:8px;background:#e6eae6;border-radius:999px;overflow:hidden}.bar i{display:block;height:8px;background:#2f7d55;border-radius:999px}
+.sub{background:#f6f8f5;border-radius:12px;padding:4px 14px 12px;margin:0 0 12px 18px}.sub .g{padding:9px 0;font-size:14px;border-bottom:1px solid #e6eae6}
+.sub input,.sub select{min-height:44px;border:1px solid #c9d2cc;border-radius:8px;padding:0 8px;font-size:14px;background:#fff;box-sizing:border-box;max-width:100%}
+.addb{margin-top:10px;min-height:44px;padding:0 16px;border:1px dashed #2f7d55;border-radius:10px;background:#fff;color:#1f6b47;font-weight:700;font-size:14px;cursor:pointer}
+.rm{min-height:44px;border:0;background:transparent;color:#a3331f;font-weight:600;font-size:14px;cursor:pointer}
+.note{background:#fff8e6;border:1px solid #ead9a8;border-radius:16px;padding:20px 24px;font-size:14px;line-height:1.5;color:#4a3d12}
+</style></head><body><div id="app"></div>
+<script>
+class DCLogic{constructor(){this.state={};this.props={}}setState(s){Object.assign(this.state,s);render()}}
+
+class Component extends DCLogic {
+renderVals() {
+var weekly = !!(this.state && this.state.weekly);
+var self = this;
+function f(spots) {
+if (spots === null) return '-';
+if (weekly && spots < 270) return (spots / 540 * 7).toFixed(1);
+var d = spots / 540;
+return weekly ? String(Math.round(d * 7)) : d.toFixed(1);
+}
+var st = this.state || {};
+var open = st.open || {}, added = st.added || {};
+var MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+var RAMP = [14.3,28.1,60.5,74.1,76,76,76,86.1,86.1,88,102.3,102.3];
+function ramp(m) { return RAMP[12 - m]; }
+function upd(city, fn) {
+var cur = (self.state && self.state.added) || {};
+var next = {}; for (var k in cur) next[k] = cur[k];
+next[city] = fn((cur[city] || []).slice());
+self.setState({ added: next });
+}
+// [name, tag, spots Dec26, spots Dec27, fields Dec27, anchor slots, anchors today, named live fields, unnamed live, 2026 openings, 2027 openings by month]
+var MS = {
+'Austin':[5472,5230,5897,6086,6465,6327,6687,6795,6668,7004,6468,6802],
+'Dallas / Fort Worth':[1349,1409,1975,2162,2476,3015,3337,3634,4047,4367,4741,5521],
+'Oklahoma City':[547,517,580,853,902,875,1220,1235,1224,1293,1299,1369],
+'San Antonio':[3139,3018,3436,3495,3713,3711,3900,4003,3976,4390,4349,4738],
+'Waco - Temple - Bryan':[0,0,0,0,0,0,29,56,121,148,152,152],
+'Tulsa':[0,0,0,0,0,0,0,0,0,0,29,56],
+'Houston':[3358,3300,3785,4309,4781,5621,6520,6280,6593,7144,7374,7696],
+'McAllen / Rio Grande Valley':[0,29,56,121,162,194,255,329,425,487,539,593],
+'El Paso':[0,0,0,29,56,121,162,194,255,315,383,398],
+'Corpus Christi':[0,0,0,0,0,0,29,56,121,148,152,152],
+'Phoenix':[0,0,0,0,29,56,121,191,279,418,556,622],
+'Albuquerque':[0,0,0,0,0,0,0,29,56,121,148,152],
+'Atlanta':[1149,1090,1348,1365,1483,1702,1962,2204,2377,2629,2699,2844],
+'Tampa':[0,0,0,0,0,29,56,121,162,180,212,226],
+'Jacksonville':[0,0,0,0,0,0,0,0,29,56,121,148],
+'Nashville':[0,0,0,0,0,0,0,0,29,56,121,148],
+'San Diego':[695,712,859,1314,1605,1763,2256,2346,2795,2881,2891,3026],
+'Fresno':[0,0,0,0,29,56,121,191,279,418,556,622],
+'Philadelphia':[383,370,412,398,422,408,433,438,423,449,433,459],
+'Washington DC':[0,0,0,0,0,0,0,29,56,121,148,152],
+'Baltimore':[0,0,0,0,0,0,0,0,0,29,56,121],
+'Richmond':[0,0,0,0,0,0,0,0,0,0,0,29],
+'St. Louis':[492,517,412,398,422,408,433,438,423,449,619,647]
+};
+function cells(arr) { return arr.map(function (v, j) { return { v: v ? f(v) : (v === 0 ? '-' : ''), w: j === 11 ? '700' : '400' }; }); }
+function rampYear(m) { var o = []; for (var j = 0; j < 12; j++) o.push(j + 1 >= m ? RAMP[j + 1 - m] : 0); return o; }
+var BLANK = [null,null,null,null,null,null,null,null,null,null,null,null];
+var Z = [0,0,0,0,0,0,0,0,0,0,0,0];
+var raw = [
+['CENTRAL TEXAS', 'Central TX', 'Regional manager hired Nov 2026, running Feb 2027', 40, [
+['Austin', 'existing', 5018, 6802, 11, 4, 1, ['NEMP','RRMPC','Hattrick Leander','Stony Point','Ann Richards','Parmer','Westlake','LBJ'], 1, [], [0,0,0,0,1,0,1,0,0,0,0,0]],
+['Dallas / Fort Worth', 'existing', 1037, 5521, 34, 8, 0, ['Bicentennial','Strike','Majestic','Crossbar Rowlett'], 1, ['Oct 2026','Dec 2026'], [3,3,3,3,3,3,3,3,3,0,0,0]],
+['San Antonio', 'existing', 2860, 4738, 11, 3, 1, ['Soccer Central','STAR','New Braunfels','Wheatley'], 0, ['Nov 2026'], [1,1,1,1,0,1,0,1,0,0,0,0]],
+['Oklahoma City', 'existing', 503, 1369, 2, 1, 0, ['Scissortail'], 0, [], [0,0,0,0,0,0,0,0,1,0,0,0]],
+['Waco - Temple - Bryan', 'launch Jul', null, 152, 2, 1, 0, [], 0, [], [0,0,0,0,0,0,2,0,0,0,0,0]],
+['Tulsa', 'launch Nov', null, 56, 2, 1, 0, [], 0, [], [0,0,0,0,0,0,0,0,0,0,2,0]]]],
+['GULF COAST & WEST TEXAS', 'Gulf & West TX', 'Regional manager hired Jan 2027, running Apr 2027', 38, [
+['Houston', 'existing', 2962, 7696, 35, 8, 1, ['ATH Pearland','ATH Katy','KISC','PAC Global','Hattrick Tomball'], 2, ['Sep 2026','Oct 2026','Nov 2026','Dec 2026'], [0,4,4,4,3,3,2,2,2,0,0,0]],
+['McAllen / Rio Grande Valley', 'launch Feb', null, 593, 7, 1, 0, [], 0, [], [0,2,0,0,1,1,1,1,1,0,0,0]],
+['El Paso', 'launch Apr', null, 398, 5, 1, 0, [], 0, [], [0,0,0,2,0,0,1,1,1,0,0,0]],
+['Corpus Christi', 'launch Jul', null, 152, 2, 1, 0, [], 0, [], [0,0,0,0,0,0,2,0,0,0,0,0]]]],
+['PACIFIC', 'Pacific', 'Regional manager hired Jan 2027, running Apr 2027', 20, [
+['San Diego', 'existing', 531, 3026, 14, 3, 0, [], 0, ['Oct 2026','Oct 2026'], [0,3,3,3,3,0,0,0,0,0,0,0]],
+['Fresno', 'launch May', null, 622, 8, 1, 0, [], 0, [], [0,0,0,0,2,0,0,3,3,0,0,0]]]],
+['SOUTHEAST', 'Southeast', 'Regional manager hired Apr 2027, running Jul 2027', 21, [
+['Atlanta', 'existing', 937, 2844, 17, 5, 0, ['PRUMC','Hammond Park','Keswick'], 0, [], [0,0,0,0,3,3,3,3,2,0,0,0]],
+['Tampa', 'launch Jun', null, 226, 3, 4, 0, [], 0, [], [0,0,0,0,0,2,0,0,1,0,0,0]],
+['Jacksonville', 'launch Sep', null, 148, 2, 1, 0, [], 0, [], [0,0,0,0,0,0,0,0,2,0,0,0]],
+['Nashville', 'launch Sep', null, 148, 2, 1, 0, [], 0, [], [0,0,0,0,0,0,0,0,2,0,0,0]]]],
+['SOUTHWEST', 'Southwest', 'Regional manager hired Apr 2027, running Jul 2027', 10, [
+['Phoenix', 'launch May', null, 622, 8, 4, 0, [], 0, [], [0,0,0,0,2,0,0,3,3,0,0,0]],
+['Albuquerque', 'launch Aug', null, 152, 2, 1, 0, [], 0, [], [0,0,0,0,0,0,0,2,0,0,0,0]]]],
+['EAST', 'East', 'Regional manager hired Apr 2027, running Jul 2027', 6, [
+['Philadelphia', 'existing', 287, 459, null, 5, 0, [], 0, [], Z],
+['Washington DC', 'launch Aug', null, 152, 2, 1, 0, [], 0, [], [0,0,0,0,0,0,0,2,0,0,0,0]],
+['Baltimore', 'launch Oct', null, 121, 2, 1, 0, [], 0, [], [0,0,0,0,0,0,0,0,0,2,0,0]],
+['Richmond', 'launch Dec', null, 29, 2, 1, 0, [], 0, [], [0,0,0,0,0,0,0,0,0,0,0,2]]]],
+['UNASSIGNED', 'St. Louis', 'No regional manager. City manager stays.', 0, [
+['St. Louis', 'existing', 415, 647, 1, 3, 0, ['Lou Fusz'], 0, [], Z]]]
+];
+var addCount = 0, addSpots = 0;
+var regions = raw.map(function (r) {
+var s26 = 0, s27 = 0, fl = 0, opened = r[3];
+var cities = r[4].map(function (c) {
+var name = c[0], mine = added[name] || [];
+var list = [], left = c[5] - c[6], n = 0;
+c[7].forEach(function (nm) { list.push({ label: nm, sub: 'Live today', mo: cells(BLANK), type: '' }); });
+if (c[8]) list.push({ label: '+' + c[8] + ' more live', sub: 'Names load from Clubhouse', mo: cells(BLANK), type: '' });
+c[9].forEach(function (lab) { n++; list.push({ label: 'New field ' + n, sub: 'Opens ' + lab, mo: cells(BLANK), type: left-- > 0 ? 'Anchor' : 'Satellite' }); });
+c[10].forEach(function (k, i) { for (var j = 0; j < k; j++) { n++; list.push({ label: 'New field ' + n, sub: 'Opens ' + MN[i] + ' 2027', mo: cells(rampYear(i + 1)), type: left-- > 0 ? 'Anchor' : 'Satellite' }); } });
+var xs = 0, xa = 0, tot = MS[name].slice();
+var custom = mine.map(function (a) {
+var sp = ramp(a.m); xs += sp; if (a.type === 'Anchor') xa++;
+var ry = rampYear(a.m); for (var q = 0; q < 12; q++) tot[q] += ry[q];
+return { name: a.name, m: String(a.m), type: a.type, mo: cells(ry),
+rename: function (e) { var v = e.target.value; upd(name, function (l) { return l.map(function (x) { return x.id === a.id ? { id: x.id, name: v, m: x.m, type: x.type } : x; }); }); },
+setMonth: function (e) { var v = Number(e.target.value); upd(name, function (l) { return l.map(function (x) { return x.id === a.id ? { id: x.id, name: x.name, m: v, type: x.type } : x; }); }); },
+setType: function (e) { var v = e.target.value; upd(name, function (l) { return l.map(function (x) { return x.id === a.id ? { id: x.id, name: x.name, m: x.m, type: v } : x; }); }); },
+remove: function () { upd(name, function (l) { return l.filter(function (x) { return x.id !== a.id; }); }); } };
+});
+addCount += mine.length; addSpots += xs; opened += mine.length;
+var e27 = c[3] + xs, base = c[4];
+var fTot = (base || 0) + mine.length;
+s26 += c[2] || 0; s27 += e27; fl += fTot;
+var bA = base === null ? 0 : Math.min(c[5], base), bS = base === null ? 0 : Math.max(0, base - c[5]);
+var tbd = base === null && !mine.length;
+var live = c[7].length + c[8];
+return {
+name: name, tag: c[1], v26: f(c[2]), v27: f(e27), mo: cells(tot),
+gap: '+' + f(e27 - (c[2] || 0)), pct: (c[2] ? Math.round(100 * c[2] / e27) : 0) + '%',
+fields: live + ' / ' + (tbd ? 'TBD' : String(fTot)),
+anchors: c[6] + ' / ' + (tbd ? String(c[5]) : String(bA + xa)),
+sats: (live - c[6]) + ' / ' + (tbd ? 'TBD' : String(bS + mine.length - xa)),
+open: !!open[name], chev: open[name] ? '▾' : '▸', list: list, custom: custom,
+toggle: function () { var o = {}; var cur = (self.state && self.state.open) || {}; for (var k in cur) o[k] = cur[k]; o[name] = !cur[name]; self.setState({ open: o }); },
+add: function () { var id = Date.now() + Math.random(); upd(name, function (l) { l.push({ id: id, name: '', m: 1, type: 'Satellite' }); return l; }); }
+};
+});
+return {
+name: r[0], short: r[1], rm: r[2], opened: String(opened), fields: String(fl),
+v26: f(s26), v27: f(s27),
+h26: Math.max(2, Math.round(s26 / 540 / 36 * 250)) + 'px',
+h27: Math.max(6, Math.round(s27 / 540 / 36 * 250)) + 'px',
+cities: cities
+};
+});
+var md = [
+['JAN', 921, 4, [], ['Gulf RM', 'Pacific RM']],
+['FEB', 900, 13, ['McAllen'], []],
+['MAR', 1042, 11, [], []],
+['APR', 1141, 13, ['El Paso'], ['Southwest RM', 'Southeast RM', 'East RM']],
+['MAY', 1253, 18, ['Phoenix', 'Fresno'], []],
+['JUN', 1349, 13, ['Tampa'], ['HQ hire']],
+['JUL', 1529, 15, ['Waco', 'Corpus Christi'], []],
+['AUG', 1587, 21, ['Albuquerque', 'Washington DC'], []],
+['SEP', 1686, 21, ['Jacksonville', 'Nashville'], []],
+['OCT', 1839, 2, ['Baltimore'], []],
+['NOV', 1891, 2, ['Tulsa'], ['HQ hire']],
+['DEC', 2037, 2, ['Richmond'], []]
+];
+var months = md.map(function (m) {
+var d = m[1] / 30;
+return { name: m[0], v: weekly ? String(Math.round(d * 7)) : d.toFixed(1), fields: String(m[2]), launch: m[3], hire: m[4] };
+});
+var hires = [
+{ when: 'Nov 2026', role: 'Regional manager, Central Texas', running: 'Feb 2027', owns: 'Density in Austin, San Antonio, Dallas and OKC, plus Waco and Tulsa. 40 fields in 2027.' },
+{ when: 'Jan 2027', role: 'Regional manager, Gulf Coast & West Texas', running: 'Apr 2027', owns: 'Houston density plus McAllen, El Paso and Corpus Christi. 38 fields in 2027.' },
+{ when: 'Jan 2027', role: 'Regional manager, Pacific', running: 'Apr 2027', owns: 'Takes San Diego from Mike, launches Fresno in May. 20 fields in 2027.' },
+{ when: 'Jan 2027', role: 'Personnel step, may not be a hire', running: 'Jan 2027', owns: 'Personnel line rises $1,200 a month. Too small for a hire; confirm against the org plan.' },
+{ when: 'Apr 2027', role: 'Regional manager, Southwest', running: 'Jul 2027', owns: 'Phoenix in May, Albuquerque in August. 10 fields in 2027.' },
+{ when: 'Apr 2027', role: 'Regional manager, Southeast', running: 'Jul 2027', owns: 'Absorbs Atlanta, launches Tampa, Jacksonville and Nashville. 21 fields in 2027.' },
+{ when: 'Apr 2027', role: 'Regional manager, East', running: 'Jul 2027', owns: 'Washington DC, Baltimore and Richmond. 6 fields in 2027.' },
+{ when: 'Jun 2027', role: 'HQ hire [ROLE FROM ORG PLAN]', running: 'Jun 2027', owns: 'One full-time HQ hire at $6,500 a month. Marketing headcount sits in this line.' },
+{ when: 'Nov 2027', role: 'HQ hire [ROLE FROM ORG PLAN]', running: 'Nov 2027', owns: 'One full-time HQ hire at $7,000 a month. Takes the team to 15 for 2028.' }
+];
+return {
+regions: regions, months: months, hires: hires,
+unit: weekly ? 'a week' : 'a day',
+t26: f(14550), t27: f(36674 + addSpots), tGap: f(36674 + addSpots - 14550), tFields: String(174 + addCount), tOpened: String(135 + addCount),
+dailyBg: weekly ? '#ffffff' : '#12332a', dailyFg: weekly ? '#12261f' : '#ffffff',
+weeklyBg: weekly ? '#12332a' : '#ffffff', weeklyFg: weekly ? '#ffffff' : '#12261f',
+setDaily: function () { self.setState({ weekly: false }); },
+setWeekly: function () { self.setState({ weekly: true }); }
+};
+}
+}
+var comp=new Component();var V;
+function esc(t){return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;')}
+var MO=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function render(){V=comp.renderVals();var w=comp.state.weekly;var h='';
+h+='<div class="top"><div class="logo">MATCHDAY <span style="font-size:14px">Clubhouse</span></div><div class="nav"><span>Home</span><span>Finance</span><b>Growth</b><span>Player Lifecycle</span><span>Match Ops</span><span>Tech</span></div></div><div class="wrap">';
+h+='<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap"><div><h1>2027 OPERATIONS PLAN</h1><div class="mut" style="margin-top:6px;font-size:15px">Built from MatchDay Forecast, Sep 2026. 18 spots = 1 match, 30 days a month.</div></div><div class="seg"><button data-a="daily" class="'+(w?'':'on')+'">Daily</button><button data-a="weekly" class="'+(w?'on':'')+'">Weekly</button></div></div>';
+function tile(l,v,s,c){return '<div class="card"><div class="lab">'+l+'</div><div class="big" style="color:'+(c||'inherit')+'">'+v+'</div><div class="mut" style="font-size:14px">'+s+'</div></div>'}
+h+='<div class="tiles">'+tile('DEC 2026 START',V.t26,'matches '+V.unit)+tile('DEC 2027 GOAL',V.t27,'matches '+V.unit,'#1f6b47')+tile('TO FIND',V.tGap,'matches '+V.unit,'#a3331f')+tile('FIELDS',V.tFields,'up from 39, '+V.tOpened+' opened in 2027')+tile('CITIES','23','up from 9, across 6 regions')+'</div>';
+h+='<div class="card"><div style="font-size:18px;font-weight:700">Dec 2026 against Dec 2027 goal, by region</div><div class="mut" style="font-size:14px">Solid = Dec 2026. Outline = Dec 2027 goal.</div><div class="scroll"><div class="chart">'+V.regions.map(function(r){return '<div><div class="b26" style="height:'+r.h26+'"></div><div style="display:flex;flex-direction:column;align-items:center;gap:4px"><div style="font-weight:700;color:#1f6b47">'+r.v27+'</div><div class="b27" style="height:'+r.h27+'"></div></div></div>'}).join('')+'</div><div style="display:flex;gap:16px;min-width:720px;margin-top:10px">'+V.regions.map(function(r){return '<div style="flex:1 1 0;text-align:center;font-size:14px;font-weight:600">'+esc(r.short)+'</div>'}).join('')+'</div></div></div>';
+h+='<div class="card"><div style="font-size:18px;font-weight:700">2027 month by month</div><div class="mut" style="font-size:14px;margin-top:4px">Q4 is a consolidation quarter: density pauses and only new markets open. Light tag = city launch. Dark tag = hire.</div><div class="scroll"><div class="months">'+V.months.map(function(m){return '<div class="mo"><div class="lab">'+m.name+'</div><div><div style="font-family:Archivo,sans-serif;font-weight:900;font-size:22px">'+m.v+'</div><div class="mut" style="font-size:12px">matches '+V.unit+'</div></div><div style="font-size:13px"><b>'+m.fields+'</b> fields open</div>'+m.launch.map(function(l){return '<div class="tagL">'+esc(l)+'</div>'}).join('')+m.hire.map(function(l){return '<div class="tagH">'+esc(l)+'</div>'}).join('')+'</div>'}).join('')+'</div></div></div>';
+h+='<div class="card"><div style="font-size:18px;font-weight:700">Who we hire, when</div><div class="scroll"><div style="min-width:760px"><div class="hg lab"><div>HIRE</div><div>ROLE</div><div>RUNNING</div><div>OWNS</div></div>'+V.hires.map(function(x){return '<div class="hg"><div><b>'+x.when+'</b></div><div style="font-weight:600">'+esc(x.role)+'</div><div class="mut">'+x.running+'</div><div>'+esc(x.owns)+'</div></div>'}).join('')+'</div></div><div class="mut" style="font-size:14px;margin-top:12px">City managers wind down as each regional manager takes over: Central Texas from May, Houston and San Diego from July, Atlanta from October. St. Louis and Philadelphia keep theirs.</div></div>';
+h+='<div><div style="font-size:22px;font-weight:700">Regions and cities</div><div class="mut" style="font-size:14px">Fields, anchors and satellites read actual today / plan for Dec 2027. Open a city to see its fields and add more.</div></div>';
+V.regions.forEach(function(r,ri){
+h+='<div class="card" style="padding:0;overflow:hidden"><div style="padding:18px 24px;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;background:#f6f8f5;border-bottom:1px solid #dfe5e0"><div><div style="font-family:Archivo,sans-serif;font-weight:800;font-size:18px">'+esc(r.name)+'</div><div class="mut" style="font-size:14px">'+esc(r.rm)+'</div></div><div class="mut" style="display:flex;gap:28px;font-size:14px;flex-wrap:wrap"><div><div style="font-weight:700;font-size:20px;color:#12261f">'+r.v26+' to '+r.v27+'</div>matches '+V.unit+'</div><div><div style="font-weight:700;font-size:20px;color:#12261f">'+r.fields+'</div>fields, Dec 2027</div><div><div style="font-weight:700;font-size:20px;color:#12261f">'+r.opened+'</div>opened in 2027</div></div></div><div class="scroll"><div style="min-width:1430px;padding:0 24px 8px"><div class="g hd lab"><div>CITY</div><div>PROGRESS</div><div>DEC 26</div><div>JAN</div><div>FEB</div><div>MAR</div><div>APR</div><div>MAY</div><div>JUN</div><div>JUL</div><div>AUG</div><div>SEP</div><div>OCT</div><div>NOV</div><div>DEC</div><div>GAP</div><div>FIELDS</div><div>ANCHORS</div><div>SATELLITES</div></div>';
+r.cities.forEach(function(c,ci){var k=ri+':'+ci;
+h+='<div style="border-bottom:1px solid #eef1ee"><div class="g" style="padding:6px 0;font-size:15px"><div><button class="cityb" data-a="toggle" data-k="'+k+'"><span class="mut" style="display:inline-block;width:18px">'+c.chev+'</span>'+esc(c.name)+'</button><span class="pill">'+c.tag+'</span></div><div class="bar"><i style="width:'+c.pct+'"></i></div><div class="mut">'+c.v26+'</div>'+c.mo.map(function(m){return '<div style="font-weight:'+m.w+'">'+m.v+'</div>'}).join('')+'<div style="font-weight:700;color:#a3331f">'+c.gap+'</div><div>'+c.fields+'</div><div>'+c.anchors+'</div><div>'+c.sats+'</div></div>';
+if(c.open){h+='<div class="sub">'+c.list.map(function(f){return '<div class="g"><div style="font-weight:600">'+esc(f.label)+'</div><div class="mut">'+esc(f.sub)+'</div><div></div>'+f.mo.map(function(m){return '<div style="font-weight:'+m.w+'">'+m.v+'</div>'}).join('')+'<div></div><div></div><div>'+f.type+'</div><div></div></div>'}).join('');
+h+=c.custom.map(function(f,fi){var kk=k+':'+fi;return '<div class="g"><div><input aria-label="Field name" placeholder="Field name" value="'+esc(f.name)+'" data-c="rename" data-k="'+kk+'" style="width:100%"></div><div style="text-align:left"><select aria-label="Opening month" data-c="setMonth" data-k="'+kk+'">'+MO.map(function(m,i){return '<option value="'+(i+1)+'"'+(String(i+1)===f.m?' selected':'')+'>'+m+' 27</option>'}).join('')+'</select></div><div></div>'+f.mo.map(function(m){return '<div style="font-weight:'+m.w+'">'+m.v+'</div>'}).join('')+'<div></div><div></div><div><select aria-label="Field type" data-c="setType" data-k="'+kk+'"><option'+(f.type==='Anchor'?' selected':'')+'>Anchor</option><option'+(f.type==='Satellite'?' selected':'')+'>Satellite</option></select></div><div><button class="rm" data-a="remove" data-k="'+kk+'">Remove</button></div></div>'}).join('');
+h+='<button class="addb" data-a="add" data-k="'+k+'">+ Add field</button></div>'}
+h+='</div>'});
+h+='</div></div></div>'});
+h+='<div class="note"><b>Open items in this mock</b><div>Actual field, anchor and satellite counts are from the forecast notes. The build reads them from Clubhouse.</div><div>HQ hire roles are to be confirmed against the org plan.</div><div>Philadelphia has spots in the model but no field count.</div><div>Added fields are not saved in this mock.</div></div></div>';
+document.getElementById('app').innerHTML=h}
+function at(k){var p=k.split(':');var c=V.regions[p[0]].cities[p[1]];return p.length>2?c.custom[p[2]]:c}
+document.addEventListener('click',function(e){var b=e.target.closest('[data-a]');if(!b)return;var a=b.dataset.a;
+if(a==='daily')V.setDaily();else if(a==='weekly')V.setWeekly();else at(b.dataset.k)[a]()});
+document.addEventListener('change',function(e){var c=e.target.dataset.c;if(c)at(e.target.dataset.k)[c](e)});
+render();
+</script></body></html>

@@ -22,7 +22,8 @@ import { authenticateCapability } from "@/lib/capabilityAuth";
 import { selectAll } from "@/lib/supabasePagination";
 import {
   GOAL_YEAR, MONTH_LABELS, businessMonthIndex, businessYesterday, countsTowardGoals, dailyAverage,
-  daysElapsed, matchMonthIndex, monthKey, playedByYesterday, rowCountsTowardTotals, rowKeyForField,
+  daysElapsed, matchMonthIndex, monthKey, playedByYesterday, rowBelongsToGoalYear, rowCountsTowardTotals, rowKeyForField,
+  targetBelongsToGoalYear,
   type GoalMatch,
 } from "@/lib/fieldGoals";
 import { todayBusinessDate } from "@/lib/goalPace";
@@ -105,16 +106,24 @@ export async function GET(req: Request) {
     }
 
     // ── the stored half ────────────────────────────────────────────────────────────────────────
-    const [{ data: goalRows, error: rowsErr }, { data: targets }, { data: actions }] = await Promise.all([
+    const [{ data: allGoalRows, error: rowsErr }, { data: allTargets }, { data: actions }] = await Promise.all([
       /* SELECT * DELIBERATELY, and not_counted is read defensively below. adminAuth does the same
        * with app_users and for the same reason: code deploys before a migration is applied, and a
        * named column that does not exist yet 500s the whole route. Before 0171 lands every row
        * simply counts, which is today's behaviour. */
       auth.supabase.from("field_goal_rows").select("*"),
-      auth.supabase.from("field_goal_targets").select("row_id, month, goal_daily"),
+      /* FILTERED IN SQL, NOT ONLY BELOW. The 2027 seed adds ~1,050 goal_spots rows to this table,
+       * and an unfiltered read is capped at 1,000 by PostgREST — it would silently drop 2026 goals.
+       * goal_daily has existed since 0170, so naming it is safe whatever has been applied. */
+      auth.supabase.from("field_goal_targets").select("row_id, month, goal_daily")
+        .not("goal_daily", "is", null).gte("month", `${year}-01-01`).lt("month", `${year + 1}-01-01`),
       auth.supabase.from("field_goal_actions").select("id, row_id, text, done, sort_order").order("sort_order"),
     ]);
     if (rowsErr) throw new Error(`field_goal_rows: ${rowsErr.message}`);
+    /* THE 2027 PLAN SHARES THESE TABLES (0199). Its rows and its spot estimates are filtered here,
+     * once, before anything below reads them — see rowBelongsToGoalYear. */
+    const goalRows = (allGoalRows ?? []).filter((r) => rowBelongsToGoalYear(r as Record<string, unknown>, year));
+    const targets = (allTargets ?? []).filter((t) => targetBelongsToGoalYear(t, year));
 
     /* A STORED ROW IS MATCHED TO A COMPUTED ONE BY IDENTITY, never by name. A slot has neither a
      * venue nor a field, so it stands alone until somebody points it at a venue — which is how a

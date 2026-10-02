@@ -6629,3 +6629,27 @@ read off the screen by whoever sends in Klaviyo or WhatsApp.
   `created_by`) up to today; projected from venue settings after today; a past month with no bank row
   shows nothing. Measured on the page, Jan–Sep 2026 per venue = the bank rows to the cent, 21 venues,
   $170,466.41.
+
+## 2027 Operations Plan: the goal tables, city spellings, and two traps (2026-10-02)
+
+- **`schedule_master` is NOT actuals.** It is the recurring schedule template (`source = 'template'`,
+  `match_api_id` NULL for seeded rows — migration 0082 header). Played volume comes from
+  `mdapi_matches` through `countsTowardGoals` (`src/lib/fieldGoals.ts:48`), as the 2026 Daily
+  Matches route does (`src/app/api/growth/field-goals/route.ts`).
+- **There is no city-level goal table.** 2026 city figures are sums of `field_goal_rows`, keyed
+  venue / unmapped mdapi field / slot (0170). Read-only probe 2026-10-02: 46 rows (36 venue, 2 field,
+  8 slot), 10 `not_counted`, targets only for 2026-10/11/12 (27/25/34).
+- **One city, three spellings.** `fin_venues.city` says `Dallas`, `OKC`; `mdapi_matches.city_identifier`
+  says `DFW`, `ATX`, `SATX`, `HOU`, `ATL`, `STL`, `OKC`, `WAW`; 2026 slot rows carry typed text (one
+  says `HOU`). 0199's `plan_cities` holds both alias lists; never parse a city out of a name.
+- **El Paso played in 2026** (`ELP`, matches 2026-04-22 and 04-29) and has one `fin_venues` row,
+  though the forecast lists it as a 2027-04 launch. **San Diego and Philadelphia have no 2026 matches
+  and no `fin_venues` rows** (probe 2026-10-02); their mdapi city codes are UNKNOWN until they play.
+- **`field_goal_targets` will cross 1,000 rows** once 0200 is applied (+1,052 `goal_spots` rows). An
+  unfiltered `select` is capped at 1,000 by PostgREST and drops rows silently. The 2026 route filters
+  year and `goal_daily IS NOT NULL` in SQL; the 2027 route uses `selectAll`.
+- **`app_settings` predates `supabase/migrations/`**: columns `key`, `value`, `updated_at`; one key
+  (`hero_message`) on 2026-10-02; its policies and the type of `value` are NOT in this repo (UNKNOWN).
+  0199 adds two permissive policies scoped to `ops_plan_anchor_threshold_spots` only.
+- **Trailing-30-day anchors, 2026-09-02 → 2026-10-01, ≥ 670 spots:** NEMP 1,187, ATH Pearland,
+  Soccer Central, PARMER at exactly 670 (generator output, `scripts/gen-ops-plan-seed.mts`).

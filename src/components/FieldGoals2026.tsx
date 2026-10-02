@@ -64,7 +64,7 @@ const DEC = 11;
  * IT MOVES THE CHART AND THE TABLE AND NOTHING ELSE. The three tiles are estate-level in both
  * grains, because they are the number the company is held to and seven per-city tiles answer a
  * question nobody asked. Field mode is what it was. */
-type Grain = "field" | "city";
+export type Grain = "field" | "city";
 
 export default function FieldGoals2026() {
   const [data, setData] = useState<Payload | null>(null);
@@ -437,7 +437,7 @@ export default function FieldGoals2026() {
   );
 }
 
-function Big({ k, v, u, tone, testId }: { k: string; v: string; u: string; tone?: string; testId: string }) {
+export function Big({ k, v, u, tone, testId }: { k: string; v: string; u: string; tone?: string; testId: string }) {
   return (
     <div className="min-w-[170px] rounded-2xl border-[1.5px] bg-white px-4 py-3" style={{ borderColor: "#D3DCD8" }} data-testid={testId}>
       <div className="text-[10.5px] font-extrabold uppercase tracking-widest" style={{ color: "#5C6F66" }}>{k}</div>
@@ -532,7 +532,7 @@ function YearChart({ months, unit, noCompletedDay }: { months: { label: string; 
  * floating above a column would read as being about that column.
  *
  * 32px, which is the height every control on this page already is. */
-function HistorySeg({ on, set }: { on: boolean; set: (v: boolean) => void }) {
+export function HistorySeg({ on, set }: { on: boolean; set: (v: boolean) => void }) {
   return (
     <button type="button" data-testid="histtog" aria-pressed={on} onClick={() => set(!on)}
       className="ml-3 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11.5px] font-bold"
@@ -547,7 +547,7 @@ function HistorySeg({ on, set }: { on: boolean; set: (v: boolean) => void }) {
 /* ── THE GRAIN TOGGLE ──────────────────────────────────────────────────────────────────────────
  * Beside the sort, because they are the same kind of control: what the rows are and in what order.
  * 32px tall, which is the height every control on this page already is. */
-function GrainSeg({ grain, setGrain }: { grain: Grain; setGrain: (g: Grain) => void }) {
+export function GrainSeg({ grain, setGrain }: { grain: Grain; setGrain: (g: Grain) => void }) {
   return (
     <span className="ml-3 inline-flex overflow-hidden rounded-lg border" style={{ borderColor: "#D3DCD8" }} data-testid="grain">
       {/* CITIES FIRST. Ryan: the toggle reads Cities, then Fields, and the page opens on Cities —
@@ -1350,9 +1350,11 @@ function GoalTable({
 
 /* A SUGGESTED GOAL IS NOT A SET ONE, and it says so by being grey and italic. Typing over it stores
  * a number and it stops being a suggestion; clearing it hands the cell back to the ramp. */
-function GoalInput({ value, suggested, onCommit, testId, disabled, title, placeholder, revert }: {
+export function GoalInput({ value, suggested, onCommit, testId, disabled, title, placeholder, revert, widthClass = "w-14" }: {
   value: string; suggested: boolean; onCommit: (v: number | null) => void;
   testId: string; disabled: boolean; title: string; placeholder?: string; revert: number;
+  /** The 2027 plan edits monthly spots, which need more room than a one-decimal daily figure. */
+  widthClass?: string;
 }) {
   const [local, setLocal] = useState(value);
   // `revert` is in the deps on purpose: a refused write bumps it, and the cell goes back to the
@@ -1370,7 +1372,7 @@ function GoalInput({ value, suggested, onCommit, testId, disabled, title, placeh
         if (local !== value) onCommit(n);
       }}
       onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-      className={`w-14 rounded-md border border-transparent px-1.5 py-0.5 text-right text-[13px] tabular-nums hover:border-[#D3DCD8] hover:bg-white focus:border-[#2CDB87] focus:bg-white focus:outline-none ${suggested ? "italic" : "font-semibold"}`}
+      className={`${widthClass} rounded-md border border-transparent px-1.5 py-0.5 text-right text-[13px] tabular-nums hover:border-[#D3DCD8] hover:bg-white focus:border-[#2CDB87] focus:bg-white focus:outline-none ${suggested ? "italic" : "font-semibold"}`}
       style={{ color: suggested ? "#9AA8A1" : "#003326" }}
     />
   );
