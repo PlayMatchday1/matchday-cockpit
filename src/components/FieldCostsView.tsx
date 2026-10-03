@@ -21,7 +21,7 @@ import {
   type FieldCostSplit,
 } from "@/lib/financeCosts";
 import { hasKickedOff } from "@/lib/fieldEconomics";
-import { fieldCostTotals, inactiveFieldCostKeys, rateMismatches } from "@/lib/fieldCostActivity";
+import { fieldCostTotals, inactiveFieldCostKeys } from "@/lib/fieldCostActivity";
 import { isSoccerCentralTwoPitch } from "@/lib/soccerCentralTwoPitch";
 import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
@@ -738,7 +738,6 @@ export default function FieldCostsView() {
                         month={month}
                         matchDays={md}
                         inactive={inactiveKeys.has(row.key)}
-                        rateMismatch={data ? rateMismatches(data, row) : []}
                       />
                       {expanded && venue && data && (
                         <VenuePanel
@@ -956,7 +955,6 @@ function FieldCostTableRow({
   month,
   matchDays,
   inactive,
-  rateMismatch,
 }: {
   index: number;
   row: FieldCostRow;
@@ -969,8 +967,6 @@ function FieldCostTableRow({
   matchDays: { d: number; amount: number }[];
   /** Shown only with "Show inactive" on: one step back in ink, and says so. */
   inactive: boolean;
-  /** Legs whose cost per match and invoice rate disagree (fieldCostActivity.rateMismatches). */
-  rateMismatch: { venueId: number; name: string; cost: number; invoice: number }[];
 }) {
   const model = modelOf(row);
   const p = monthParts(month);
@@ -1009,24 +1005,14 @@ function FieldCostTableRow({
       </td>
       <td className="r cost" data-cost={r2(row.amount)}>
         <b>{money0(row.amount)}</b>
-        {ov ? (
-          <small className="ov">set by hand · computed {money0(row.autoAmount)}</small>
-        ) : model === "share" ? (
+        {/* A hand-set month shows the amount only; "set by hand · auto $X · reset" lives in the panel,
+            beside the box where it is edited. */}
+        {ov ? null : model === "share" ? (
           <small>partner payout</small>
         ) : (
           <small>{calcText(row)}</small>
         )}
         {hasNoRate(row, venue) && <small className="norate">no rate</small>}
-        {rateMismatch.map((m) => (
-          <small
-            key={m.venueId}
-            className="norate"
-            data-testid={`rates-differ-${index}`}
-            title="This venue bills per match, but its cost per match (Match P&L, Cities) and its invoice rate (this page) are different numbers. Check which one is current."
-          >
-            rates differ{m.venueId !== row.primaryVenueId ? ` (${m.name})` : ""} · cost {money0(m.cost)} · invoice {money0(m.invoice)}
-          </small>
-        ))}
       </td>
       <td className="when" data-testid={`when-${index}`}>
         <b>{when.b}</b>

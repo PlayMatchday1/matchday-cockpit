@@ -181,7 +181,7 @@ function render(){
       <td class="v"><b>${v.name}</b><span>${v.city}</span></td>
       <td><span class="tag ${v.model === "share" ? "share" : ""}" data-testid="tag-${i}">${v.model === "share" ? "Profit share" : `Per match · ${rateText(v)}`}</span></td>
       <td class="r">${v.matches}</td>
-      <td class="r cost" data-cost="${c}"><b>${fmt(c)}</b>${ov ? `<small class="ov">set by hand · computed ${fmt(comp)}</small>` : v.model === "share" ? `<small>partner payout</small>` : `<small>${calcText(v)}</small>`}</td>
+      <td class="r cost" data-cost="${c}"><b>${fmt(c)}</b>${ov ? "" : v.model === "share" ? `<small>partner payout</small>` : `<small>${calcText(v)}</small>`}</td>
       <td class="when" data-testid="when-${i}"><b>${w.b}</b><span>${w.s}</span></td>
       <td class="chev">${v.open ? "▾" : "▸"}</td></tr>` + (v.open ? panel(v, i) : "");
   }).join("");

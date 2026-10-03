@@ -71,26 +71,3 @@ export function fieldCostTotals(rows: FieldCostRow[]): { matches: number; amount
     amount: Math.round(rows.reduce((a, r) => a + r.amount, 0) * 100) / 100,
   };
 }
-
-/**
- * "RATES DIFFER" — a per-match venue whose cost per match (what the pitch costs to run, used by
- * Match P&L and Cities) and invoice rate (per_match_rate, what Field Costs charges) disagree
- * (Ryan, 2026-10-03). One entry per leg that disagrees. Exempt: profit-share rows and dashboard-
- * priced ones (Crossbar), and any leg not billed per match — their two numbers are meant to differ.
- * A missing value is not a disagreement: a missing invoice rate is the "no rate" flag's job.
- */
-export function rateMismatches(
-  data: FinanceData,
-  row: FieldCostRow,
-): { venueId: number; name: string; cost: number; invoice: number }[] {
-  if (row.dashboardPriced || row.billingType === "profit_share") return [];
-  const out: { venueId: number; name: string; cost: number; invoice: number }[] = [];
-  for (const id of [row.primaryVenueId, ...row.secondaryVenueIds]) {
-    const v = data.venues.find((x) => x.id === id);
-    if (!v || v.billing_type !== "per_match") continue;
-    if (v.cost_per_match == null || v.per_match_rate == null) continue;
-    if (Math.abs(v.cost_per_match - v.per_match_rate) < 0.005) continue;
-    out.push({ venueId: v.id, name: v.raw_venue_name || v.venue_name, cost: v.cost_per_match, invoice: v.per_match_rate });
-  }
-  return out;
-}

@@ -101,7 +101,7 @@ await p.click(tid("row-3")); await p.click(tid("row-0"));
 ok(await p.locator(`${tid("panel-0")} select`).count() === 1, "one dropdown only (the billing model)");
 
 // override
-ok(/set by hand · auto \$1,440/.test(await p.textContent(tid("calc"))) && /set by hand · computed \$1,440/.test(await p.textContent(`${tid("row-0")} td.cost`)), "overridden month is flagged in the panel and the list");
+ok(/set by hand · auto \$1,440/.test(await p.textContent(tid("calc"))) && !/set by hand/.test(await p.textContent(`${tid("row-0")} td.cost`)), "overridden month is flagged in the panel; the list shows the amount only");
 await p.click(`${tid("panel-0")} [data-clear]`);
 ok(num(await p.getAttribute(`${tid("row-0")} td.cost`, "data-cost")) === 1440 && (await p.getAttribute(tid("override"), "placeholder")) === "1440", "reset clears it; the empty box shows the auto amount");
 
@@ -212,7 +212,7 @@ if (S) {
 
   // override: flagged when set (from fin_venue_cost_overrides), and reset shows the computed figure
   if (ovFor(v.id)) {
-    ok((await p.textContent(tid("calc"))).includes(`set by hand · auto ${fmt0(C)}`) && (await p.textContent(`${tid(`row-${I}`)} td.cost`)).includes(`set by hand · computed ${fmt0(C)}`), `LIVE ${S.name}'s hand-set month is flagged in the panel and the list (computed ${fmt0(C)})`);
+    ok((await p.textContent(tid("calc"))).includes(`set by hand · auto ${fmt0(C)}`) && !(await p.textContent(`${tid(`row-${I}`)} td.cost`)).includes("set by hand"), `LIVE ${S.name}'s hand-set month is flagged in the panel (auto ${fmt0(C)}); the list shows the amount only`);
     await p.click(`${panel} [data-clear]`);
   } else {
     ok(/^auto ·/.test((await p.textContent(tid("calc"))).trim()), `LIVE ${S.name} has nothing set by hand for ${monSel}, and the panel says auto`);
@@ -290,7 +290,7 @@ ok(/\$500 Oct 1 · \$1,320 Oct 15/.test(await p.textContent(tid("when-1"))), "AT
 ok(/\$0 Mon–Thu · \$140 Fri–Sun/.test(await p.textContent(tid("tag-1"))) && /4 Mon–Thu × \$0 \+ 13 Fri–Sun × \$140/.test(await p.textContent(`${tid("row-1")} td.cost`)) && num(await p.getAttribute(`${tid("row-1")} td.cost`, "data-cost")) === 1820, "ATH Katy: Mon–Thu free, Fri–Sun $140, 13 matches = $1,820");
 ok(/Paid Sep 10/.test(await p.textContent(tid("when-3"))), "Bob Jones Park row reads Paid Sep 10");
 ok(/Every other Friday/.test(await p.textContent(tid("when-7"))), "NEMP row reads Every other Friday");
-ok(/Profit share/.test(await p.textContent(tid("tag-6"))) && /set by hand · computed \$630/.test(await p.textContent(`${tid("row-6")} td.cost`)) && num(await p.getAttribute(`${tid("row-6")} td.cost`, "data-cost")) === 4334.4, "PARMER: profit share with a hand-set invoice total, payout shown underneath");
+ok(/Profit share/.test(await p.textContent(tid("tag-6"))) && !/set by hand|partner payout/.test(await p.textContent(`${tid("row-6")} td.cost`)) && num(await p.getAttribute(`${tid("row-6")} td.cost`, "data-cost")) === 4334.4, "PARMER: profit share with a hand-set invoice total, shown as the amount only");
 await p.click(tid("row-7"));
 ok(await p.locator(`${tid("panel-7")} .g .l`).filter({ hasText: "Fields" }).count() === 1 && await p.locator(`${tid("panel-7")} [data-field]`).count() === 2 && !(await p.isChecked(`${tid("panel-7")} [data-field="1"]`)), "a venue with two fields shows the Fields row; NEMP's tournament field is unchecked");
 ok(await p.locator(tid("panel-0")).count() === 0, "opening one venue closes the other");
@@ -326,7 +326,7 @@ ok(await p.locator(tid("panel-0")).count() === 0, "opening one venue closes the 
   ok(shareSet.length >= 1, `LIVE positive control: at least one profit-share venue has an amount set for ${monthKeyFull} (${shareSet.map(x => x.n.name).join(", ")})`);
   for (const x of shareSet) {
     const cell = `${tid(`row-${x.n.i}`)} td.cost`;
-    ok(/set by hand · computed \$[\d,]+/.test(await p.textContent(cell)) && Math.abs(num(await p.getAttribute(cell, "data-cost")) - Number(x.o.override_amount)) < 0.005, `LIVE ${x.n.name}: profit share with a hand-set total ($${x.o.override_amount}), payout shown underneath`);
+    ok(!/set by hand|partner payout/.test(await p.textContent(cell)) && Math.abs(num(await p.getAttribute(cell, "data-cost")) - Number(x.o.override_amount)) < 0.005, `LIVE ${x.n.name}: profit share with a hand-set total ($${x.o.override_amount}), shown as the amount only`);
   }
 
   // LIVE: a venue with two or more linked fields shows the Fields row, one box per field, ticked
@@ -372,29 +372,6 @@ ok(await p.locator(tid("panel-0")).count() === 0, "opening one venue closes the 
   }
   ok(tables >= 1, `LIVE positive control: ${tables} per-match venues have an underlying-matches table`);
   console.log(`INFO  weekday-rate rows checked that fall on a Sunday this month: ${sundays}`);
-
-  // LIVE, RATES DIFFER: every flag names a leg (the row's own venue, or "(leg name)" for another leg of
-  // a combined row) whose cost per match and invoice rate, both on file, really differ — with both
-  // numbers. And a row whose OWN venue's rates differ carries its unnamed flag. Profit share exempt.
-  let flagged = 0, quiet = 0;
-  const differs = (v) => v && v.billing_type === "per_match" && v.cost_per_match != null && v.per_match_rate != null && Math.abs(v.cost_per_match - v.per_match_rate) >= 0.005;
-  const m0$ = (n) => `$${Math.round(n).toLocaleString("en-US")}`;
-  for (const n of names) {
-    const v = venueOfRow(n);
-    if (!v) continue;
-    const share = /Profit share/.test(await p.textContent(tid(`tag-${n.i}`)));
-    const texts = await p.$$eval(`[data-testid="rates-differ-${n.i}"]`, es => es.map(e => e.textContent.trim()));
-    if (share) { ok(texts.length === 0, `LIVE ${n.name} (profit share) carries no "rates differ" flag`); continue; }
-    if (!texts.length) { if (differs(v)) ok(false, `LIVE ${n.name}: cost $${v.cost_per_match} vs invoice $${v.per_match_rate} but no flag`); else quiet++; continue; }
-    for (const t of texts) {
-      const leg = /^rates differ \((.+?)\)/.exec(t)?.[1];
-      const lv = leg ? [...loaded.fin_venues.values()].find(x => x.venue_name === leg && (x.city ?? "") === n.city) : v;
-      flagged++;
-      ok(differs(lv) && t.includes(`cost ${m0$(lv.cost_per_match)}`) && t.includes(`invoice ${m0$(lv.per_match_rate)}`), `LIVE ${n.name}${leg ? ` (leg ${leg})` : ""}: "${t}" matches fin_venues (cost $${lv?.cost_per_match}, invoice $${lv?.per_match_rate})`);
-    }
-    if (differs(v)) ok(texts.some(t => !/^rates differ \(/.test(t)), `LIVE ${n.name}: its own rates differ, and the unnamed flag is there`);
-  }
-  ok(flagged >= 1 && quiet >= 1, `LIVE positive and negative control: ${flagged} flag(s) checked, ${quiet} venue(s) correctly quiet`);
 
   // LIVE, SHOW INACTIVE: the footer reads the same with inactive venues hidden and shown.
   const foot = async () => [await p.textContent(tid("total-matches")), await p.getAttribute(tid("total-cost"), "data-total")].join(" | ");

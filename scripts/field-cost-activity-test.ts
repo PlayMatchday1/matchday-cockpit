@@ -14,7 +14,7 @@
 //      shown or hidden. Asserted on the computed totals, both ways.
 
 import { buildFieldCostRows } from "../src/lib/financeCosts";
-import { fieldCostTotals, inactiveFieldCostKeys, isInactiveFieldCostRow, rateMismatches } from "../src/lib/fieldCostActivity";
+import { fieldCostTotals, inactiveFieldCostKeys, isInactiveFieldCostRow } from "../src/lib/fieldCostActivity";
 import { BANK_SOURCE, buildOpexCalendarAsOf, fieldCostPayeesIn } from "../src/lib/opexSources";
 import type { FinanceData, FinVenue } from "../src/lib/useFinanceData";
 
@@ -136,25 +136,6 @@ console.log("\nA FUTURE MONTH HIDES ONLY WHAT IS ALSO IDLE NOW (matches there ar
   is("a past month (September) uses the rule as built: Busy Pitch, idle in September, is hidden", sepHidden.includes(1), true);
   const oct = [...inactiveFieldCostKeys(data, rows, MONTH, NOW)].map((k) => rows.find((r) => r.key === k)!.primaryVenueId).sort();
   is("the current month (October) is unchanged: [3,7]", JSON.stringify(oct), "[3,7]");
-}
-
-console.log("\n\"RATES DIFFER\" — per-match venues whose cost per match and invoice rate disagree");
-{
-  const d = makeData();
-  d.venues = [
-    venue(11, "Westlake Like", { cost_per_match: 114, per_match_rate: 135 }),
-    venue(12, "Katy Like", { cost_per_match: 140, per_match_rate: 140 }),
-    venue(13, "Share Like", { billing_type: "profit_share", cost_per_match: 32, per_match_rate: null }),
-    venue(14, "Flat Like", { billing_type: "monthly_flat", cost_per_match: 32, per_match_rate: 90 }),
-    venue(15, "No Rate Like", { cost_per_match: 40, per_match_rate: null }),
-  ];
-  const rs = buildFieldCostRows(d, MONTH as never);
-  const flag = (id: number) => rateMismatches(d, rs.find((r) => r.primaryVenueId === id)!);
-  is("a per-match venue at $114 cost vs $135 invoice is flagged, with both numbers", JSON.stringify(flag(11).map((m) => [m.cost, m.invoice])), "[[114,135]]");
-  is("CONTROL — equal cost and invoice raise nothing", flag(12).length, 0);
-  is("a profit-share venue is exempt", flag(13).length, 0);
-  is("a flat-rate venue is exempt", flag(14).length, 0);
-  is("a missing invoice rate is not 'differ' (that is the no-rate flag)", flag(15).length, 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
