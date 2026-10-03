@@ -65,11 +65,7 @@ export const FINANCE_SECTIONS: RailItem[] = [
     desc: "Every city on one line, ranked by net",
     icon: <I><path d="M3 20h18" /><path d="M5 20V9l5-3.5V20" /><path d="M14 20V11l5 2.5V20" /><path d="M7.5 12.5v0M7.5 16v0" /></I>,
   },
-  {
-    key: "fin-cash-flow", group: "Reports", label: "Cash Flow", href: "/admin/finance/cash-flow",
-    desc: "Month by month against starting cash",
-    icon: <I><rect x="2.5" y="6" width="19" height="12" rx="2.5" /><circle cx="12" cy="12" r="2.6" /><path d="M6 12h.01M18 12h.01" /></I>,
-  },
+  // Cash Flow is hidden from the rail until the field cost sources are unified; /admin/finance/cash-flow still works by URL.
   {
     key: "fin-opex", group: "Reports", label: "OpEx", href: "/admin/finance/opex",
     desc: "When each recurring expense is billed",
