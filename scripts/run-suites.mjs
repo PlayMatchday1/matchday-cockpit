@@ -323,6 +323,11 @@ const NODE_SUITES = [
   // times) with fixtures whose two readings disagree on purpose, and pins that NO path on that
   // page reads a cost override — the fixtures key one 100× the derived figure.
   "scripts/cost-realized-test.ts",
+  // Field Costs' "$540 ran so far · $900 scheduled". The parts must add to the computed figure for
+  // every row — weekday rates, reservation slots straddling now, charged cancellations, combined
+  // legs — and the cut must be the true instant, not the wall clock. Pure arithmetic, so it is
+  // checked on computed values; the page cannot show a drift of a cent.
+  "scripts/field-cost-split-test.ts",
   // Match Promotion's NEW badge. Both decisions that carry the rule are invisible in the DOM — the
   // prior slate INCLUDING cancelled matches (excluding them mis-flagged 21 of 31), and the tests
   // nesting per field rather than per city (a city-wide reading lost 19 cases). A badge is a badge

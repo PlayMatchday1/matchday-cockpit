@@ -194,6 +194,51 @@ export function chargedAmount(
   return Math.round(total * 100) / 100;
 }
 
+/* ── THE SAME MONTH, SPLIT AT "NOW" (Field Costs: "$540 ran so far · $900 scheduled") ────────────
+ * Walks exactly the rows chargedAmount prices, at exactly the same rate, and files each priced unit
+ * on one side of the kicked-off cut. ONE walk, not chargedAmount run twice with opposite filters:
+ * a reservation slot holding one played and one future match would be counted on both sides by two
+ * filtered runs. A slot is "ran" once ANY of its matches has kicked off — the pitch was taken.
+ *
+ * `kicked` is the caller's fieldEconomics.hasKickedOff (passed in: fieldEconomics imports this
+ * file). It must read start_utc_ms, never match_date / match_time — those are wall clock. */
+export function chargedAmountSplit(
+  data: FinanceData,
+  venue: FinVenue,
+  month: Q2Month,
+  single: number | null,
+  kicked: (s: FinMasterSchedule) => boolean,
+): { ran: number; scheduled: number; ranUnits: number; scheduledUnits: number } {
+  const rates: DayRate[] | null = venue.rate_days ?? null;
+  const perReservation = venue.bills_per_reservation === true;
+  const slots = new Map<string, { r: number; ran: boolean }>();
+  let ran = 0, scheduled = 0, ranUnits = 0, scheduledUnits = 0;
+  const take = (s: FinMasterSchedule) => {
+    const r = rates ? rateForYmd(rates, single, s.match_date) : (single ?? 0);
+    const k = kicked(s);
+    if (perReservation) {
+      const key = `${s.mdapi_field_id ?? "?"}|${s.match_date}|${s.match_time}`;
+      const prev = slots.get(key);
+      slots.set(key, { r: prev ? prev.r : r, ran: (prev?.ran ?? false) || k });
+    } else if (k) { ran += r; ranUnits += 1; }
+    else { scheduled += r; scheduledUnits += 1; }
+  };
+  for (const s of data.masterSchedule) {
+    if (isEventSchedule(s)) continue;
+    if (s.venue_id === venue.id && s.month === month) take(s);
+  }
+  if (venue.charge_on_cancel) {
+    for (const s of data.cancelledSchedule) {
+      if (isEventSchedule(s)) continue;
+      if (s.venue_id === venue.id && s.month === month) take(s);
+    }
+  }
+  for (const v of slots.values()) {
+    if (v.ran) { ran += v.r; ranUnits += 1; } else { scheduled += v.r; scheduledUnits += 1; }
+  }
+  return { ran: Math.round(ran * 100) / 100, scheduled: Math.round(scheduled * 100) / 100, ranUnits, scheduledUnits };
+}
+
 /** "4 Mon–Thu × $0 + 13 Fri–Sun × $140" — the formula for a multi-rate month, counted on the same
  *  rows chargedAmount prices. Null for a single-rate venue (the caller prints "N × $rate"). */
 export function chargedFormulaByRate(data: FinanceData, venue: FinVenue, month: Q2Month): string | null {
@@ -654,4 +699,53 @@ export function buildFieldCostRows(
   }
 
   return rows;
+}
+
+/**
+ * A Field Costs row's COMPUTED figure (autoAmount — never the hand-set one) split at now.
+ *
+ * `priced` is true only when every leg is a plain per-match venue: there each part is matches ×
+ * that match's rate, and ran + scheduled === autoAmount to the cent (scripts/field-cost-split-test).
+ * A profit-share venue or a dashboard-priced one (Crossbar) is a payout on revenue, not a price per
+ * match, so it has no dollar split to show — only the unit counts, which are still exact.
+ */
+export type FieldCostSplit = {
+  priced: boolean;
+  ran: number;
+  scheduled: number;
+  ranUnits: number;
+  scheduledUnits: number;
+};
+
+export function fieldCostSplit(
+  data: FinanceData,
+  row: FieldCostRow,
+  month: Q2Month,
+  kicked: (s: FinMasterSchedule) => boolean,
+): FieldCostSplit {
+  const ids = [row.primaryVenueId, ...row.secondaryVenueIds];
+  const venues = ids.map((id) => data.venues.find((v) => v.id === id)).filter((v): v is FinVenue => !!v);
+  const priced = !row.dashboardPriced && venues.length === ids.length && venues.every((v) => v.billing_type === "per_match");
+  const out: FieldCostSplit = { priced, ran: 0, scheduled: 0, ranUnits: 0, scheduledUnits: 0 };
+  for (const v of venues) {
+    const s = chargedAmountSplit(data, v, month, priced ? v.per_match_rate : 0, kicked);
+    out.ran += s.ran;
+    out.scheduled += s.scheduled;
+    out.ranUnits += s.ranUnits;
+    out.scheduledUnits += s.scheduledUnits;
+  }
+  out.ran = Math.round(out.ran * 100) / 100;
+  out.scheduled = Math.round(out.scheduled * 100) / 100;
+  return out;
+}
+
+/** "$540 ran so far · $900 scheduled", in whole dollars that ADD UP to the computed figure as the
+ *  page shows it (rounded to the dollar): the scheduled part is the displayed total less the
+ *  displayed ran part, so rounding can never leave the line a dollar off. A payout venue has no
+ *  price per match to split, so it reads in matches. */
+export function fieldCostSplitText(split: FieldCostSplit, computed: number): string {
+  if (!split.priced) return `${split.ranUnits} ran so far · ${split.scheduledUnits} scheduled`;
+  const usd = (v: number) => `$${v.toLocaleString("en-US")}`;
+  const ran = Math.round(split.ran);
+  return `${usd(ran)} ran so far · ${usd(Math.round(computed) - ran)} scheduled`;
 }

@@ -24,6 +24,8 @@ const heads = await p.$$eval(`${tid("venues")} thead th`, e => e.map(x => (x.chi
 ok(JSON.stringify(heads.slice(0, 5)) === JSON.stringify(["Venue", "Billing", "Oct matches", "Oct cost", "Pays on"]), `columns: ${heads.join(" | ")}`);
 
 // compact, few words
+// Every venue starts collapsed on the live page; open the first one (the mock starts it open).
+if (await p.locator(tid("panel-0")).count() === 0) { await p.click(tid("row-0")); await p.waitForSelector(tid("panel-0")); }
 const panelH = await p.$eval(`${tid("panel-0")} .pan`, e => e.getBoundingClientRect().height);
 ok(panelH < 340, `open panel without the matches table is under 340px (${Math.round(panelH)}px)`);
 const words = await p.$eval(`${tid("panel-0")} .pan`, e => e.innerText.split(/\s+/).filter(w => /[a-z]{3,}/i.test(w)).length);

@@ -8,13 +8,17 @@ import { insertFinVenue } from "@/lib/venueCreate";
 import { logChange } from "@/lib/financeAudit";
 import {
   buildFieldCostRows,
+  fieldCostSplit,
+  fieldCostSplitText,
   fieldCostsFor,
   isEventSchedule,
   overrideOnlyTotalFor,
   perMatchTotalFor,
   totalOverrideAmountFor,
   type FieldCostRow,
+  type FieldCostSplit,
 } from "@/lib/financeCosts";
+import { hasKickedOff } from "@/lib/fieldEconomics";
 import { isSoccerCentralTwoPitch } from "@/lib/soccerCentralTwoPitch";
 import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
@@ -44,6 +48,7 @@ import {
   refetchFinanceData,
   useFinanceData,
   type FinanceData,
+  type FinMasterSchedule,
   type FinVenue,
   type FinVenueCostOverride,
 } from "@/lib/useFinanceData";
@@ -120,7 +125,9 @@ export default function FieldCostsView() {
   const [billingFilter, setBillingFilter] = useState<BillingFilter>("ALL");
 
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
-  const openedFirst = useRef(false);
+  // "Now" for the ran / scheduled cut, re-read whenever the data does. Labels and the split only:
+  // no cost on this page depends on it.
+  const nowMs = useMemo(() => Date.now(), [data]);
 
 
 
@@ -433,12 +440,6 @@ export default function FieldCostsView() {
     return rows.sort((a, b) => a.displayName.localeCompare(b.displayName));
   }, [allRows, cityFilter, billingFilter]);
 
-  useEffect(() => {
-    if (openedFirst.current || filtered.length === 0) return;
-    openedFirst.current = true;
-    setExpandedKey(filtered[0].key);
-  }, [filtered]);
-
   // Reconciliation: fieldCostsFor is now the canonical Cash Flow line, so
   // its sum always matches the per-row total here by construction. We
   // surface the breakdown for trust — per-match auto, override-billed,
@@ -717,6 +718,8 @@ export default function FieldCostsView() {
                           fields={fieldsFor(row)}
                           error={errorFor(row.primaryVenueId)}
                           scheduleRows={buildMatchLineItems(data, row, month)}
+                          split={fieldCostSplit(data, row, month, kickedAt(nowMs))}
+                          nowMs={nowMs}
                           onPatch={(patch, field) => void saveVenuePatch(row.primaryVenueId, patch, field)}
                           onOverride={(raw) => void saveCustomAmount(row.primaryVenueId, month, raw)}
                           onField={(fieldId, counted) => void saveFieldCounted(row.primaryVenueId, fieldId, counted)}
@@ -1014,6 +1017,8 @@ function VenuePanel({
   fields,
   error,
   scheduleRows,
+  split,
+  nowMs,
   onPatch,
   onOverride,
   onField,
@@ -1026,6 +1031,9 @@ function VenuePanel({
   fields: FieldBox[];
   error: string | null;
   scheduleRows: MatchLineItem[];
+  /** The computed figure split at now (financeCosts.fieldCostSplit). */
+  split: FieldCostSplit;
+  nowMs: number;
   /** Write these fin_venues columns. The caller sends only what differs from the row on file. */
   onPatch: (patch: VenuePatch, key: EditableField) => void;
   onOverride: (raw: string) => void;
@@ -1168,6 +1176,9 @@ function VenuePanel({
           `auto · ${calcText(row)}`
         )}
       </span>
+      {split.ranUnits + split.scheduledUnits > 0 && (
+        <span className="u split" data-testid="split">{fieldCostSplitText(split, comp)}</span>
+      )}
     </>
   );
 
@@ -1362,7 +1373,7 @@ function VenuePanel({
         </div>
         {row.billingType === "per_match" && row.legs.length > 0 && (
           <div className="matches">
-            <PerMatchExpand row={row} scheduleRows={scheduleRows} />
+            <PerMatchExpand row={row} scheduleRows={scheduleRows} nowMs={nowMs} />
           </div>
         )}
       </td>
@@ -1375,7 +1386,20 @@ type MatchLineItem = {
   venue: string;
   rate: number;
   cancelled: boolean;
+  /** The true instant (start_date_utc), for the ran / scheduled label. Never match_date: wall clock. */
+  startUtcMs: number | null;
 };
+
+/** Has this schedule row kicked off? fieldEconomics.hasKickedOff on start_utc_ms — the same cut the
+ *  Cost page and the Match panel use. A null instant reads as not yet. */
+const kickedAt = (nowMs: number) => (s: FinMasterSchedule) => hasKickedOff({ startUtcMs: s.start_utc_ms }, nowMs);
+
+/** The status a line reads. A label only: every one of these is in the month's cost. */
+function matchStatus(it: MatchLineItem, nowMs: number): string {
+  const past = hasKickedOff({ startUtcMs: it.startUtcMs }, nowMs);
+  if (it.cancelled) return past ? "cancelled, charged" : "cancelled, will be charged";
+  return past ? "ran" : "scheduled";
+}
 
 function buildMatchLineItems(
   data: FinanceData,
@@ -1388,7 +1412,7 @@ function buildMatchLineItems(
     for (const s of data.masterSchedule) {
       if (isEventSchedule(s)) continue;
       if (s.venue_id === leg.venueId && s.month === month) {
-        items.push({ date: s.match_date, venue: label, rate: leg.rate, cancelled: false });
+        items.push({ date: s.match_date, venue: label, rate: leg.rate, cancelled: false, startUtcMs: s.start_utc_ms });
       }
     }
     const venue = data.venues.find((v) => v.id === leg.venueId);
@@ -1396,7 +1420,7 @@ function buildMatchLineItems(
       for (const s of data.cancelledSchedule) {
         if (isEventSchedule(s)) continue;
         if (s.venue_id === leg.venueId && s.month === month) {
-          items.push({ date: s.match_date, venue: label, rate: leg.rate, cancelled: true });
+          items.push({ date: s.match_date, venue: label, rate: leg.rate, cancelled: true, startUtcMs: s.start_utc_ms });
         }
       }
     }
@@ -1406,9 +1430,11 @@ function buildMatchLineItems(
 
 function PerMatchExpand({
   scheduleRows,
+  nowMs,
 }: {
   row: FieldCostRow;
   scheduleRows: MatchLineItem[];
+  nowMs: number;
 }) {
   if (scheduleRows.length === 0) {
     return (
@@ -1442,7 +1468,7 @@ function PerMatchExpand({
                 <td
                   className={`py-1 pr-3 ${s.cancelled ? "text-[#9a6a00]" : "text-deep-green/45"}`}
                 >
-                  {s.cancelled ? "cancelled, charged" : "ran"}
+                  {matchStatus(s, nowMs)}
                 </td>
                 <td className="py-1 pr-3 text-right tabular-nums text-deep-green/55">
                   ${s.rate}
