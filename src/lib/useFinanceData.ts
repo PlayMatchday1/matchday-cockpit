@@ -1,7 +1,9 @@
 "use client";
 
+import { parsePaySchedule, parseRateDays, type DayRate, type PaySchedule } from "./venuePay";
 import { useEffect, useState } from "react";
 import { includedLinks } from "./venueLinkFilter";
+import { excludedLinks } from "./venueLinkFilter";
 import { supabase } from "./supabase";
 import { selectAll } from "./supabasePagination";
 import { cityFromAbbr } from "./cityMap";
@@ -209,6 +211,11 @@ export type FinVenue = {
   // only the day(s); a flat venue's per-month AMOUNT stays in
   // fin_venue_cost_overrides. Pre-migration cached rows → {}.
   billing_custom_days: Record<string, number[]>;
+  // Migration 0201 (Field Costs v2). Parsed through lib/venuePay; a missing or malformed value is
+  // null ("not set"), never a guess. pay_schedule decides WHEN cash leaves; rate_days what each
+  // match costs by weekday (null = the one rate, per_match_rate / cost_per_match, as before).
+  pay_schedule?: PaySchedule | null;
+  rate_days?: DayRate[] | null;
 };
 
 export type FinMemberSpotsRow = {
@@ -289,6 +296,9 @@ export type FinanceData = {
   venueFields: Map<number, number>;
   // Every fin_venue_fields row, so the venue panel can show what a venue is actually made of.
   venueFieldLinks: FinVenueFieldLink[];
+  /** The links excluded_from_venue (0155) leaves out of every figure — still linked, so the Field
+   *  Costs panel can show them unchecked. Never read by a cost, revenue or spot path. */
+  excludedFieldLinks?: FinVenueFieldLink[];
   config: Record<string, string>;
   // Member-spot counts derived from mdapi_match_players, used as the
   // denominator for the member-revenue allocation helpers in
@@ -747,6 +757,14 @@ async function load(quarter: QuarterInfo): Promise<void> {
       });
     }
   }
+  const excludedFieldLinks: FinVenueFieldLink[] = excludedLinks(vfRows)
+    .map((f) => ({
+      fin_venue_id: Number(f.fin_venue_id),
+      mdapi_field_id: Number(f.mdapi_field_id),
+      field_title_at_link: cleanText(f.field_title_at_link),
+      counts_as_regular_play: f.counts_as_regular_play === true,
+    }))
+    .filter((l) => Number.isFinite(l.fin_venue_id) && Number.isFinite(l.mdapi_field_id));
   // The single canonical resolver replaces the fin_venue_aliases (canonVenue)
   // path. Read-time only — fin_revenue.venue is unchanged on disk.
   function canonVenue(v: unknown): string {
@@ -877,6 +895,8 @@ async function load(quarter: QuarterInfo): Promise<void> {
           ? null
           : Math.round(asNumber(r.billing_weekday)),
       billing_custom_days: parseCustomDays(r.billing_custom_days),
+      pay_schedule: parsePaySchedule(r.pay_schedule),
+      rate_days: parseRateDays(r.rate_days),
     };
   });
 
@@ -1041,6 +1061,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
       venueAliases,
       venueFields,
       venueFieldLinks,
+      excludedFieldLinks,
       config,
       mdapiMemberSpots,
       partnerDashboards,

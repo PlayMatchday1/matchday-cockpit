@@ -86,9 +86,11 @@ function rowCity(g: CalGroup, r: CalRow): string | null {
 export function paymentsOf(cal: OpexCalendarAsOf): Payment[] {
   const out: Payment[] = [];
   for (const g of cal.groups) {
-    const { cat, sub } = groupCat(g);
+    const { cat, sub: groupSub } = groupCat(g);
     for (const r of g.rows) {
       const city = rowCity(g, r);
+      // A PREPAID venue's cash for next month's matches reads "for November" (Field Costs v2).
+      const sub = r.forMonth ?? groupSub;
       for (const [d, v] of Object.entries(r.cells)) {
         if (Math.abs(v) < 0.005) continue;
         const day = Number(d);

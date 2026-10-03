@@ -19,8 +19,10 @@ import type { FinVenue } from "./useFinanceData";
  * they are pointing a field ID at splits its matches onto a second leg at a different rate. The
  * page must not carry its own copy of this list — a duplicated pair list that drifts is exactly
  * how one page comes to bill at a rate another page does not. */
+/* ATH KATY IS NO LONGER HERE (migration 0201, Ryan 2026-10-02): it is one venue row with
+ * day-of-week rates ($140 Mon–Sat, $160 Sun) and its Sunday row (23) is folded into it. Soccer
+ * Central stays: its split is by CAPACITY, which day-of-week rates cannot express. */
 export const COMBINE_BY_NAME: Array<{ primary: string; secondary: string }> = [
-  { primary: "ATH Katy", secondary: "ATH Katy Sunday" },
   { primary: "Soccer Central", secondary: "Soccer Central Tournament" },
 ];
 
@@ -31,7 +33,6 @@ export const COMBINE_BY_NAME: Array<{ primary: string; secondary: string }> = [
 export const COMBINED_LEG_LABELS: Record<string, string[]> = {
   // Display name → leg labels in per_match_rate ASC order. legs[0] = lowest
   // rate (e.g. weekday $140), legs[1] = next (e.g. Sunday $160).
-  "ATH Katy": ["weekday", "Sunday"],
   "Soccer Central": ["normal", "tournament"],
 };
 
@@ -86,12 +87,13 @@ export function groupVenues(venues: FinVenue[]): VenueGroup[] {
   // (lowest = primary). For non-per_match billing, sort by id for stability.
   const out: VenueGroup[] = [];
   for (const [key, legs] of buckets.entries()) {
-    const sorted = [...legs].sort((a, b) => {
-      const ra = a.per_match_rate ?? 0;
-      const rb = b.per_match_rate ?? 0;
-      if (ra !== rb) return ra - rb;
-      return a.id - b.id;
-    });
+    /* THE MAIN ROW IS THE VENUE, NOT THE CHEAPEST LEG (Ryan, 2026-10-02). "Lowest rate wins" made
+     * an inactive $0 split row the primary — ATH Katy's panel edited its Sunday row and Soccer
+     * Central's its Tournament row. Now: the COMBINE_BY_NAME primary, then an active row, then the
+     * lowest id. The other legs follow in id order. */
+    const primaryNames = new Set(COMBINE_BY_NAME.map((c) => c.primary));
+    const rank = (v: FinVenue) => (primaryNames.has(v.raw_venue_name ?? v.venue_name) ? 0 : v.is_active === false ? 2 : 1);
+    const sorted = [...legs].sort((a, b) => rank(a) - rank(b) || a.id - b.id);
     out.push({
       key,
       displayName: sorted[0].venue_name,

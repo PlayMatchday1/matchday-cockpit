@@ -45,6 +45,7 @@
 // field-cost remainder is carried on the group (in the subtotal) but
 // sits on no day, so it is the one honest exception to "all dated".
 
+import { cashDays, cashMonthOffset, monthName, rateForYmd } from "./venuePay";
 import type { FinanceData, FinVenue, FinExpense } from "./useFinanceData";
 import { buildFieldCostRows } from "./financeCosts";
 import { daysInMonth } from "./checkIns";
@@ -100,6 +101,8 @@ export type CalRow = {
   paidUndated?: number;
   undated?: number;
   info?: RowInfo;
+  /** A PREPAID venue's cash drawn in this month for NEXT month's matches: "for November". */
+  forMonth?: string;
 };
 
 // What the row's i says. Plain words; no table names.
@@ -336,16 +339,18 @@ function perMatchHits(
   const hits: Array<{ day: number; rate: number }> = [];
   for (const leg of fc.legs) {
     const legVenue = venueById.get(leg.venueId);
+    // THE RATE FOR EACH MATCH'S WEEKDAY when the venue has day-of-week rates (0201).
+    const rateOf = (ymd: string) => (legVenue?.rate_days ? rateForYmd(legVenue.rate_days, leg.rate, ymd) : leg.rate);
     for (const s of data.masterSchedule) {
       if (s.venue_id !== leg.venueId || s.month !== monthKey) continue;
       const day = dayInMonth(s.match_date, year, month0);
-      if (day != null) hits.push({ day, rate: leg.rate });
+      if (day != null) hits.push({ day, rate: rateOf(s.match_date) });
     }
     if (legVenue?.charge_on_cancel) {
       for (const s of data.cancelledSchedule) {
         if (s.venue_id !== leg.venueId || s.month !== monthKey) continue;
         const day = dayInMonth(s.match_date, year, month0);
-        if (day != null) hits.push({ day, rate: leg.rate });
+        if (day != null) hits.push({ day, rate: rateOf(s.match_date) });
       }
     }
   }
@@ -427,10 +432,64 @@ function fieldCostGroup(
     rows[rows.length - 1].undated = fc.amount;
   };
 
+  /* ── THE PAY SCHEDULE DECIDES WHERE THE CASH LANDS (migration 0201) ─────────────────────────
+   * A venue with pay_schedule is dated by it and nothing else; the legacy cadence code below only
+   * runs for a venue that has none. The AMOUNT is the month's cost (hand-set or auto) — the schedule
+   * never changes it, only where it sits.
+   *
+   * PREPAID: the cash for a month's matches leaves the month BEFORE. So this month skips its own
+   * prepaid venues (that cash went last month) and draws NEXT month's on this month's dates, marked
+   * "for <next month>". Cost (and Cities) still put that cost in the month the matches happen. */
+  const scheduledCells = (
+    fc: ReturnType<typeof buildFieldCostRows>[number],
+    sched: NonNullable<FinVenue["pay_schedule"]>,
+    costKey: string, costYear: number, costMonth0: number,
+  ): { cells: Record<number, number>; left: number } => {
+    if (sched.mode === "match") {
+      const scheduleDriven = fc.billingType === "per_match" && fc.override == null && !isDashboardDriven(data, fc.primaryVenueId);
+      const hits = perMatchHits(data, fc, venueById, costKey, costYear, costMonth0);
+      const cells: Record<number, number> = {};
+      if (!hits.length) return { cells, left: fc.amount };
+      // Priced per match when the amount IS the matches; a hand-set or partner amount is spread
+      // evenly over the match dates instead, so the cells still add to the month's amount.
+      const even = splitEven(fc.amount, hits.map((h) => h.day));
+      if (scheduleDriven) {
+        let sum = 0;
+        for (const h of hits) { cells[h.day] = (cells[h.day] ?? 0) + h.rate; sum += h.rate; }
+        if (Math.abs(sum - fc.amount) <= 1) return { cells, left: 0 };
+      }
+      return { cells: even, left: 0 };
+    }
+    const r = cashDays(sched, year, month0, fc.amount);
+    const cells: Record<number, number> = {};
+    for (const x of r.days) cells[x.d] = Math.round(((cells[x.d] ?? 0) + x.amount) * 100) / 100;
+    return { cells, left: Math.max(0, r.unscheduled) };
+  };
+  const nextM0 = (month0 + 1) % 12, nextY = month0 === 11 ? year + 1 : year;
+  const nextKey = monthKeyFor(nextY, nextM0);
+  for (const fc of buildFieldCostRows(data, nextKey)) {
+    const primary = venueById.get(fc.primaryVenueId);
+    const sched = primary?.pay_schedule ?? null;
+    if (!sched || cashMonthOffset(sched) !== 1 || Math.abs(fc.amount) < 0.005) continue;
+    subtotal += fc.amount;
+    const { cells, left } = scheduledCells(fc, sched, nextKey, nextY, nextM0);
+    push({ ...fc, key: `${fc.key}:prepaid` }, cells, "prepaid");
+    rows[rows.length - 1].forMonth = `for ${monthName(nextM0)}`;
+    if (left > 0.005) { rows[rows.length - 1].undated = left; undated += left; }
+  }
+
   for (const fc of buildFieldCostRows(data, monthKey)) {
     if (Math.abs(fc.amount) < 0.005) continue;
-    subtotal += fc.amount;
     const primary = venueById.get(fc.primaryVenueId);
+    const sched = primary?.pay_schedule ?? null;
+    if (sched && cashMonthOffset(sched) === 1) continue;   // paid last month, for this month
+    subtotal += fc.amount;
+    if (sched) {
+      const { cells, left } = scheduledCells(fc, sched, monthKey, year, month0);
+      push(fc, cells, sched.mode);
+      if (left > 0.005) { rows[rows.length - 1].undated = left; undated += left; }
+      continue;
+    }
     const cadence = primary?.billing_cadence ?? "monthly";
 
     // A per-match venue whose amount can be dated off its own schedule
@@ -788,12 +847,22 @@ function fieldCostGroupAsOf(
         row.label = paidVenue.venue_name;
         row.lock.venueName = paidVenue.venue_name;
       }
-      const { days, cadence } = resolveBillingDates(paidVenue, year, month0);
+      /* THE BANK MONTH IS THE CASH MONTH, so a bank payment sits on the venue's PAY SCHEDULE dates in
+       * that month (0201) — never shifted for prepaid, which only moves projected cash. "Each match"
+       * has no single date for a lump, so it stays in the Month total, as an undated bank row did. */
+      const sched = paidVenue?.pay_schedule ?? null;
+      let days: number[]; let cadence: string;
+      if (sched) {
+        cadence = sched.mode === "dates" && sched.dates.length > 1 ? "custom" : sched.mode;
+        days = sched.mode === "match" ? [] : cashDays(sched, year, month0, o.override_amount).days.map((x) => x.d);
+      } else {
+        ({ days, cadence } = resolveBillingDates(paidVenue, year, month0));
+      }
       const usable = days.filter((d) => d <= paidThrough);
       if (usable.length === 0) {
         row.paidUndated = Math.round(((row.paidUndated ?? 0) + o.override_amount) * 100) / 100;
       } else {
-        addCells(row.cells, cadence === "custom" ? splitEven(o.override_amount, usable) : { [usable[0]]: o.override_amount });
+        addCells(row.cells, cadence === "custom" || cadence === "weekly" || cadence === "biweekly" ? splitEven(o.override_amount, usable) : { [usable[0]]: o.override_amount });
         placedOnBillingDay.add(row.lock!.kind === "field-cost" ? row.lock!.venueId : 0);
       }
     }
@@ -808,6 +877,7 @@ function fieldCostGroupAsOf(
       const venueId = pr.lock?.kind === "field-cost" ? pr.lock.venueId : null;
       if (venueId == null) continue;
       const { row } = getRow(venueId);
+      if (pr.forMonth) row.forMonth = pr.forMonth;   // a prepaid venue's next-month cash
       const future: Record<number, number> = {};
       for (const [d, v] of Object.entries(pr.cells)) if (Number(d) > paidThrough) future[Number(d)] = v;
       addCells(row.cells, future);

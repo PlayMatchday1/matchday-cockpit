@@ -27,7 +27,7 @@
 //
 // MONTH KEYS are Q2Month — "Aug 2026" — the same string financeStats uses.
 
-import { chargedUnitCount, isEventSchedule, perMatchMinusManagerOwed, type VenueCostKind } from "./financeCosts";
+import { chargedAmount, chargedUnitCount, isEventSchedule, perMatchMinusManagerOwed, type VenueCostKind } from "./financeCosts";
 import {
   cityMembershipRevenuePreTaxFor,
   venueAllocatedMemberRevenueFor,
@@ -200,7 +200,10 @@ function groupCost({ data, group, month, realizedThroughMs }: CostArgs): { amoun
   // realized `keep`. Multiplying them by hand anywhere else would be a fourth derivation.
   let total = 0;
   for (const leg of group.legs) {
-    total += legPerMatchUnitCost(leg, primary) * chargedUnitCount(data, leg, month, (s) => kickedOffSchedule(s, realizedThroughMs));
+    const keep = (s: Parameters<typeof kickedOffSchedule>[0]) => kickedOffSchedule(s, realizedThroughMs);
+    // DAY-OF-WEEK RATES (0201): each kicked-off match at its weekday's rate.
+    total += leg.rate_days ? chargedAmount(data, leg, month, legPerMatchUnitCost(leg, primary), keep)
+      : legPerMatchUnitCost(leg, primary) * chargedUnitCount(data, leg, month, keep);
   }
   return { amount: total, kind: "per_match" };
 }

@@ -18,6 +18,7 @@ import {
   fieldCostsFor,
   findOverride,
   isEventSchedule,
+  chargedAmount,
   chargedUnitCount,
   perMatchMinusManagerOwed,
   perMatchTotalFor,
@@ -1575,7 +1576,8 @@ export function groupPerMatchCostFor(
     // Charged count (alive + cancelled-when-charge_on_cancel) so the
     // Per-Match cost view reflects what we'd actually pay. Cancelled
     // matches at a no-cancel-fee venue contribute zero.
-    total += cpm * venueChargedMatchCountFor(data, leg.id, month);
+    // DAY-OF-WEEK RATES (0201): priced match by match at the rate for its weekday instead.
+    total += leg.rate_days ? chargedAmount(data, leg, month, cpm) : cpm * venueChargedMatchCountFor(data, leg.id, month);
   }
   return total;
 }
@@ -1611,6 +1613,8 @@ export function groupPerMatchCostRealizedFor(
   let total = 0;
   for (const leg of group.legs) {
     const cpm = legPerMatchUnitCost(leg, primary);
+    // DAY-OF-WEEK RATES (0201): the same played-by-today rows, each at its weekday's rate.
+    if (leg.rate_days) { total += chargedAmount(data, leg, month, cpm, (s) => s.match_date <= today); continue; }
     let count = 0;
     for (const s of data.masterSchedule) {
       if (isEventSchedule(s)) continue;

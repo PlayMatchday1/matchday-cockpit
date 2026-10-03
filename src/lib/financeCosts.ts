@@ -13,6 +13,7 @@ import type { Q2Month } from "./financeStats";
 import { getLegLabel, groupVenues, type VenueGroup } from "./venueGroups";
 import { isCityHidden } from "./types";
 import { partnerPaymentOwedForMonth } from "./partnerStats";
+import { dayRange, rateForYmd, type DayRate } from "./venuePay";
 
 // A schedule row that is a special EVENT (tournament/combine) carries NO venue
 // cost — Ryan's decision. Every cost-count site consults this flag, so cost is
@@ -156,6 +157,68 @@ export function chargedUnitCount(
   return slots ? slots.size : n;
 }
 
+/* ── WHAT A VENUE-MONTH COSTS, MATCH BY MATCH (Field Costs v2, migration 0201) ──────────────────
+ * The same rows chargedUnitCount counts — alive matches, plus charged cancellations, slot-collapsed
+ * where the venue still carries the reservation flag — but each one priced at the rate for ITS
+ * weekday. With no rate_days every match is `single`, so the sum is exactly count × single and
+ * nothing that had one rate moves. Used for what is billed (per_match_rate) and for Cities'
+ * normalized cost (cost_per_match); the caller names which single rate applies. */
+export function chargedAmount(
+  data: FinanceData,
+  venue: FinVenue,
+  month: Q2Month,
+  single: number | null,
+  keep?: (s: FinMasterSchedule) => boolean,
+): number {
+  const rates: DayRate[] | null = venue.rate_days ?? null;
+  if (!rates) return chargedUnitCount(data, venue, month, keep) * (single ?? 0);
+  const perReservation = venue.bills_per_reservation === true;
+  const slots = new Map<string, number>();
+  let total = 0;
+  const take = (s: FinMasterSchedule) => {
+    const r = rateForYmd(rates, single, s.match_date);
+    if (perReservation) slots.set(`${s.mdapi_field_id ?? "?"}|${s.match_date}|${s.match_time}`, r);
+    else total += r;
+  };
+  for (const s of data.masterSchedule) {
+    if (isEventSchedule(s)) continue;
+    if (s.venue_id === venue.id && s.month === month && (!keep || keep(s))) take(s);
+  }
+  if (venue.charge_on_cancel) {
+    for (const s of data.cancelledSchedule) {
+      if (isEventSchedule(s)) continue;
+      if (s.venue_id === venue.id && s.month === month && (!keep || keep(s))) take(s);
+    }
+  }
+  if (perReservation) for (const r of slots.values()) total += r;
+  return Math.round(total * 100) / 100;
+}
+
+/** "4 Mon–Thu × $0 + 13 Fri–Sun × $140" — the formula for a multi-rate month, counted on the same
+ *  rows chargedAmount prices. Null for a single-rate venue (the caller prints "N × $rate"). */
+export function chargedFormulaByRate(data: FinanceData, venue: FinVenue, month: Q2Month): string | null {
+  const rates = venue.rate_days ?? null;
+  if (!rates || rates.length < 2) return null;
+  const counts = rates.map(() => 0);
+  const add = (s: FinMasterSchedule) => {
+    const wd = (new Date(`${s.match_date}T00:00:00Z`).getUTCDay() + 6) % 7;
+    const i = rates.findIndex((r) => r.days.includes(wd));
+    if (i >= 0) counts[i] += 1;
+  };
+  for (const s of data.masterSchedule) {
+    if (isEventSchedule(s)) continue;
+    if (s.venue_id === venue.id && s.month === month) add(s);
+  }
+  if (venue.charge_on_cancel) {
+    for (const s of data.cancelledSchedule) {
+      if (isEventSchedule(s)) continue;
+      if (s.venue_id === venue.id && s.month === month) add(s);
+    }
+  }
+  const money = (v: number) => `$${(Math.round(v * 100) / 100).toLocaleString("en-US")}`;
+  return rates.map((r, i) => `${counts[i]} ${dayRange(r.days)} × ${money(r.v)}`).join(" + ");
+}
+
 /**
  * The RAW match count for a venue-month, ignoring the reservation flag. The page shows both
  * numbers — "12 · 8 reservations" — so the collapse can never quietly produce a figure smaller
@@ -214,7 +277,9 @@ function autoCost(
     // as-billed truth: no invoice landed. Reading cost_per_match in as-billed mode would
     // manufacture an invoice that was never sent.
     const rate = venue.per_match_rate ?? 0;
-    const amount = matchCount * rate;
+    // BY WEEKDAY when the venue has day-of-week rates (0201); otherwise exactly count × rate.
+    const amount = venue.rate_days ? chargedAmount(data, venue, month, venue.per_match_rate) : matchCount * rate;
+    const byRate = chargedFormulaByRate(data, venue, month);
     return {
       amount,
       kind: "per_match",
@@ -222,7 +287,7 @@ function autoCost(
       totalHours: 0,
       formula:
         matchCount > 0
-          ? (venue.bills_per_reservation === true
+          ? byRate ?? (venue.bills_per_reservation === true
               // BOTH NUMBERS, ALWAYS. The collapse must never render a figure smaller than the
               // match count implies without saying where the difference went.
               ? `${matchCount} ${matchCount === 1 ? "reservation" : "reservations"} × $${rate} = $${(matchCount * rate).toLocaleString()} · ${venueRawMatchCount(data, venue, month)} matches`

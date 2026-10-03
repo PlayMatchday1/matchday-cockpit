@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Field Costs v2 · simplified</title>
+<style>
+  :root{--nav:#0b3a28;--accent:#22c55e;--bg:#eef1ec;--card:#fff;--line:#e3e7e1;--line-2:#eef1ec;--ink:#10231a;--ink-2:#44564c;--muted:#7a8a81}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  .mocknote{background:#fff7d6;border-bottom:1px solid #eadb9c;color:#5b4a00;font-size:12px;padding:6px 20px}
+  .nav{background:var(--nav);height:56px;display:flex;align-items:center;padding:0 24px}
+  .logo{color:var(--accent);font-weight:800;font-style:italic;font-size:21px}.logo small{font-size:12px;margin-left:4px}
+  main{max-width:1480px;margin:0 auto;padding:22px 24px 60px}
+  h1{font-size:28px;margin:0 0 14px;font-weight:800}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .filters{display:flex;gap:14px;align-items:flex-end;padding:12px 18px;margin-bottom:14px}
+  .f label{display:block;font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:4px}
+  .filters select{font:inherit;border:1px solid #cfd6d1;border-radius:8px;padding:6px 10px;background:#fff}
+  .sp{flex:1}
+  .btn{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px;font:inherit;font-weight:700;cursor:pointer}
+  .btn.pri{background:var(--accent);border-color:var(--accent);color:#06301b}
+  table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+  th,td{padding:11px 16px;text-align:left;border-bottom:1px solid var(--line-2);vertical-align:middle}
+  th{font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);font-weight:700;background:#f7f9f6}
+  th.r,td.r{text-align:right}
+  td.v b{display:block;font-size:15px}td.v span{font-size:12px;color:var(--muted)}
+  .tag{display:inline-block;border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;color:var(--ink-2);background:#f7f9f6}
+  .tag.share{background:#eef4ff;border-color:#cfdcf5;color:#2b4f8a}
+  td.cost b{font-size:15px}td.cost small{display:block;font-size:11px;color:var(--muted);font-weight:500}
+  td.cost small.ov{color:#8a6d00}
+  td.when b{font-size:14px;display:block}td.when span{font-size:12px;color:var(--muted)}
+  tr.row{cursor:pointer}tr.row:hover td{background:#fafbf9}
+  tr.row[aria-expanded="true"] td{background:#f3f6f2}
+  .chev{color:var(--muted);font-size:12px}
+  .mt{color:var(--muted)}
+
+  /* panel */
+  tr.panel td{padding:0;background:#f7f9f6}
+  .pan{padding:12px 22px 14px;border-top:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:0 56px}
+  .g{display:grid;grid-template-columns:92px 1fr;gap:6px 12px;align-content:start;align-items:center}
+  .g .l{font-size:10.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);font-weight:700}
+  .g .v{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:30px;font-size:13.5px;color:var(--ink-2)}
+  .in{font:inherit;font-size:13.5px;color:var(--ink);background:#fff;border:1px solid #cfd6d1;border-radius:7px;padding:3px 8px;font-weight:700;height:28px}
+  select.in{padding-right:22px;appearance:none;-webkit-appearance:none;background:#fff url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%237a8a81'/></svg>") no-repeat right 7px center;cursor:pointer}
+  input.in{width:84px;text-align:right}
+  input.in::placeholder{color:#b7c0ba;font-weight:600}
+  .in.ov{border-color:#e0c25a;background:#fffbea}
+  .rate{display:inline-flex;align-items:center;gap:4px}
+  .days{display:inline-flex;gap:2px;margin-left:4px}
+  .dy{width:20px;height:22px;border-radius:5px;border:1px solid #cfd6d1;background:#fff;font:inherit;font-size:10.5px;font-weight:700;color:#b7c0ba;cursor:pointer;padding:0}
+  .dy.on{background:var(--nav);border-color:var(--nav);color:#fff}
+  .x{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:15px;padding:0 2px;line-height:1}
+  .x:hover{color:#b42318}
+  textarea.in.note{width:100%;max-width:420px;height:auto;min-height:30px;font-weight:500;font-size:13px;resize:vertical;line-height:1.4;padding:5px 8px}
+  .u{color:var(--muted);font-size:12.5px}
+  .lnk{color:#15803d;font-weight:700;cursor:pointer;font-size:12.5px}
+  .chk{display:inline-flex;align-items:center;gap:6px;font-size:13.5px;color:var(--ink-2)}
+  .chk input{width:15px;height:15px;margin:0;accent-color:#15803d}
+
+  /* when: mode row + mini calendar */
+  .when{display:grid;gap:8px;align-content:start}
+  .modes{display:inline-flex;border:1px solid #cfd6d1;border-radius:999px;background:#fff;padding:2px;width:max-content}
+  .modes button{border:0;background:transparent;padding:4px 12px;border-radius:999px;font:inherit;font-size:12.5px;font-weight:700;color:var(--muted);cursor:pointer}
+  .modes button[aria-pressed="true"]{background:var(--nav);color:#fff}
+  .cal{display:grid;grid-template-columns:repeat(7,32px);gap:3px;width:max-content}
+  .cal .h{font-size:9.5px;letter-spacing:.6px;color:var(--muted);font-weight:700;text-align:center;text-transform:uppercase}
+  .cal .mh{grid-column:1/-1;font-size:12px;font-weight:800;color:var(--ink-2);padding:0 2px 2px}
+  .cal .d{height:30px;border-radius:7px;border:1px solid transparent;background:#fff;font:inherit;font-size:12px;color:var(--ink-2);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
+  .cal .d:hover{border-color:#9fc9ad}
+  .cal .d.out{visibility:hidden}
+  .cal .d.on{background:var(--nav);color:#fff;font-weight:800}
+  .cal .d.m{box-shadow:inset 0 -3px 0 #a7d3b6}
+  .cal .d.m.on{box-shadow:inset 0 -3px 0 #22c55e}
+  .cal .d[disabled]{cursor:default}
+  .cal .d[disabled]:hover{border-color:transparent}
+  .amts{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12.5px;color:var(--ink-2)}
+  .amts .a{display:inline-flex;align-items:center;gap:4px}
+  .amts .a b{color:var(--ink)}
+  .amts input.in{width:72px;height:26px;font-size:12.5px}
+  .out{font-size:12.5px;color:var(--muted)}.out b{color:var(--ink-2)}
+  .out.warn,.out.warn b{color:#8a6d00}
+  .matches{padding:10px 22px 14px;border-top:1px solid var(--line)}
+  .k{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:8px}
+  .matches table td,.matches table th{padding:5px 10px;font-size:12.5px}
+  .matches td.mono{font-family:ui-monospace,Menlo,monospace}
+</style>
+</head>
+<body>
+<div class="mocknote" data-testid="mock-note">MOCK. Field Costs venue panel: two billing models, and payment dates picked on a small calendar. Numbers are illustrative, from the live October view.</div>
+<div class="nav"><div class="logo">MATCHDAY<small>Clubhouse</small></div></div>
+<main>
+  <h1>Field Costs</h1>
+  <div class="card filters">
+    <div class="f"><label>Month</label><select><option>Oct 2026</option></select></div>
+    <div class="f"><label>City</label><select><option>All</option></select></div>
+    <div class="f"><label>Billing</label><select><option>All</option><option>Per match</option><option>Profit share</option></select></div>
+    <span class="sp"></span>
+    <button class="btn pri">+ Add venue</button>
+  </div>
+  <div class="card">
+    <table data-testid="venues">
+      <thead><tr><th>Venue</th><th>Billing</th><th class="r">Oct matches</th><th class="r">Oct cost</th><th>Pays on <small style="text-transform:none;letter-spacing:0;font-weight:500">when the money leaves</small></th><th></th></tr></thead>
+      <tbody id="body"></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+const fmt = v => "$" + Math.round(v).toLocaleString("en-US");
+const Y = 2026, M = 9, DAYS = 31, DOWS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"], LONG = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+const dow = d => (new Date(Y, M, d).getDay() + 6) % 7;
+const matchDays = v => v.list ? v.list.map(s => +s.split("-")[1]) : Array.from({ length: v.matches }, (_, i) => 1 + Math.floor(i * DAYS / v.matches));
+
+// pay: { mode: 'match' | 'weekly' | 'biweekly' | 'dates', anchor, dates: [{ d, v }], prepaid }
+const V = [
+  { name: "Ann Richards School", city: "Austin", model: "match", rates: [{ v: 180, days: [0,1,2,3,4,5,6] }], cancelsBilled: true, override: 710, matches: 8, cancelled: 0,
+    fields: [{ n: "Ann Richards School", on: true }], pay: { mode: "dates", dates: [{ d: 7 }], prepaid: false }, open: true,
+    list: ["10-03","10-04","10-10","10-11","10-17","10-18","10-25","10-31"] },
+  { name: "ATH Katy", city: "Houston", model: "match", rates: [{ v: 0, days: [0,1,2,3] }, { v: 140, days: [4,5,6] }], cancelsBilled: true, override: null, matches: 17, cancelled: 0, list: ["10-02","10-03","10-04","10-06","10-09","10-10","10-11","10-13","10-16","10-17","10-18","10-20","10-23","10-24","10-25","10-27","10-30"],
+    fields: [{ n: "ATH Katy", on: true }], pay: { mode: "dates", dates: [{ d: 1, v: 500 }, { d: 15 }], prepaid: false }, open: false, notes: "Mon to Thu free under the ATH agreement; Fri to Sun $140." },
+  { name: "ATH Pearland", city: "Houston", model: "match", rates: [{ v: 160, days: [0,1,2,3,4,5,6] }], cancelsBilled: true, override: null, matches: 37, cancelled: 2,
+    fields: [{ n: "ATH Pearland", on: true }], pay: { mode: "dates", dates: [{ d: 17 }], prepaid: false }, open: false },
+  { name: "Bob Jones Park", city: "Dallas", model: "match", rates: [{ v: 125, days: [0,1,2,3,4,5,6] }], cancelsBilled: true, override: null, matches: 18, cancelled: 0,
+    fields: [{ n: "Bob Jones Park", on: true }], pay: { mode: "dates", dates: [{ d: 10 }], prepaid: true }, open: false, notes: "Bills on the 10th for the following month. Contact: Parks dept, Maria." },
+  { name: "Crockett High School", city: "Austin", model: "match", rates: [{ v: 80, days: [0,1,2,3,4,5,6] }], cancelsBilled: false, override: null, matches: 4, cancelled: 1,
+    fields: [{ n: "Crockett High School", on: true }], pay: { mode: "match" }, open: false, list: ["10-02","10-09","10-16","10-23"] },
+  { name: "Crossbar Rowlett", city: "Dallas", model: "share", matches: 21, cancelled: 0, shareText: "Match revenue minus manager pay", shareAmt: 100, override: null,
+    fields: [{ n: "Crossbar Rowlett", on: true }], pay: { mode: "dates", dates: [{ d: 5 }], prepaid: false }, open: false },
+  { name: "PARMER Stadium", city: "Austin", model: "share", matches: 26, cancelled: 1, shareText: "Rental profit share with a monthly floor", shareAmt: 630, override: 4334.40,
+    fields: [{ n: "PARMER Stadium", on: true }], pay: { mode: "dates", dates: [{ d: 3 }], prepaid: false }, open: false, notes: "Invoice = last month's share + next month's floor. Enter the invoice total." },
+  { name: "NEMP", city: "Austin", model: "match", rates: [{ v: 77, days: [0,1,2,3,4,5,6] }], cancelsBilled: true, override: 0, matches: 20, cancelled: 3,
+    fields: [{ n: "North East Metropolitan Park", on: true }, { n: "NEMP Tournaments", on: false }], pay: { mode: "biweekly", anchor: 2 }, open: false },
+  { name: "Soccer Central", city: "San Antonio", model: "match", rates: [{ v: 90, days: [0,1,2,3,4,5,6] }], cancelsBilled: true, override: null, matches: 9, cancelled: 0,
+    fields: [{ n: "Soccer Central", on: true }, { n: "Soccer Central Tournament", on: false }], pay: { mode: "match" }, open: false },
+];
+const countM = v => (v.counted ?? v.matches) - (v.cancelsBilled ? 0 : v.cancelled);
+const DAYL = ["M","T","W","T","F","S","S"];
+const dowCounts = v => { const c = [0,0,0,0,0,0,0]; matchDays(v).forEach(d => c[dow(d)]++); return c; };
+const rateCount = (v, r) => { const c = dowCounts(v); let n = r.days.reduce((a, d) => a + c[d], 0); if (!v.cancelsBilled && v.cancelled && r === v.rates[v.rates.length - 1]) n = Math.max(0, n - v.cancelled); return n; };
+const computed = v => v.model === "share" ? v.shareAmt : v.rates.reduce((a, r) => a + rateCount(v, r) * r.v, 0);
+const dayRange = days => { const ds = [...days].sort((a, b) => a - b); if (ds.length === 7) return ""; const L = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]; let runs = [], run = [ds[0]]; for (let i = 1; i < ds.length; i++) { if (ds[i] === ds[i - 1] + 1) run.push(ds[i]); else { runs.push(run); run = [ds[i]]; } } runs.push(run); return runs.map(r => r.length > 2 ? `${L[r[0]]}–${L[r[r.length - 1]]}` : r.map(d => L[d]).join(", ")).join(", "); };
+const calcText = v => v.rates.length === 1 ? `${countM(v)} × ${fmt(v.rates[0].v)}` : v.rates.map(r => `${rateCount(v, r)} ${dayRange(r.days)} × ${fmt(r.v)}`).join(" + ");
+const rateText = v => v.rates.length === 1 ? fmt(v.rates[0].v) : v.rates.map(r => `${fmt(r.v)} ${dayRange(r.days)}`).join(" · ");
+const rate0 = v => v.rates[0].v;
+const cost = v => v.override == null ? computed(v) : v.override;
+
+// which days the money leaves, and how much on each
+function payDays(v){
+  const p = v.pay, total = cost(v);
+  if (p.mode === "match") { const ds = matchDays(v); return { days: ds.map(d => ({ d, a: total / ds.length })), left: 0, mon: "Oct" }; }
+  if (p.mode === "weekly" || p.mode === "biweekly") { const a = p.anchor ?? 1; const ds = []; for (let d = 1; d <= DAYS; d++) if (dow(d) === dow(a)) ds.push(d); const sel = p.mode === "biweekly" ? ds.filter(d => Math.round((d - a) / 7) % 2 === 0) : ds; return { days: sel.map(d => ({ d, a: total / sel.length })), left: 0, mon: "Oct" }; }
+  const ds = [...p.dates].sort((x, y) => x.d - y.d);
+  const fixed = ds.filter(x => x.v != null).reduce((a, x) => a + x.v, 0), blanks = ds.filter(x => x.v == null).length;
+  const each = blanks ? Math.max(total - fixed, 0) / blanks : 0;
+  const days = ds.map(x => ({ d: x.d, a: x.v == null ? each : x.v }));
+  const left = total - days.reduce((a, x) => a + x.a, 0);
+  return { days, left: Math.round(left), mon: p.prepaid ? "Sep" : "Oct" };
+}
+function whenRow(v){
+  const p = v.pay, r = payDays(v);
+  if (p.mode === "match") return { b: "Each match date", s: `${v.matches} dates in Oct` };
+  if (p.mode === "weekly" || p.mode === "biweekly") return { b: `Every ${p.mode === "biweekly" ? "other " : ""}${LONG[dow(p.anchor ?? 1)]}`, s: `${r.days.length} payments in Oct` };
+  if (r.days.length === 1) return p.prepaid ? { b: `Paid Sep ${r.days[0].d}`, s: "prepaid, month before" } : { b: `Oct ${r.days[0].d}`, s: "monthly" };
+  return { b: r.days.map(x => `${fmt(x.a)} ${r.mon} ${x.d}`).join(" · "), s: `${r.days.length} payments${p.prepaid ? ", prepaid" : ""}` };
+}
+function outLine(v){
+  const r = payDays(v), p = v.pay;
+  let t = p.mode === "match" ? `<b>${fmt(cost(v))}</b> over ${r.days.length} match dates`
+    : r.days.length === 1 ? `<b>${fmt(r.days[0].a)}</b> ${r.mon} ${r.days[0].d}${p.prepaid ? " · prepaid, for October" : ""}`
+    : p.mode === "dates" ? r.days.map(x => `<b>${fmt(x.a)}</b> ${r.mon} ${x.d}`).join(" · ") : `<b>${fmt(r.days[0].a)}</b> × ${r.days.length} · ${r.days.map(x => "Oct " + x.d).join(", ")}`;
+  if (r.left > 0) return { t: `${t} · <b>${fmt(r.left)} unscheduled</b>`, warn: true };
+  if (r.left < 0) return { t: `${t} · over the month total`, warn: true };
+  return { t, warn: false };
+}
+
+function render(){
+  document.getElementById("body").innerHTML = V.map((v, i) => {
+    const c = cost(v), comp = computed(v), ov = v.override != null, w = whenRow(v);
+    return `<tr class="row" data-testid="row-${i}" data-i="${i}" aria-expanded="${v.open}">
+      <td class="v"><b>${v.name}</b><span>${v.city}</span></td>
+      <td><span class="tag ${v.model === "share" ? "share" : ""}" data-testid="tag-${i}">${v.model === "share" ? "Profit share" : `Per match · ${rateText(v)}`}</span></td>
+      <td class="r">${v.matches}</td>
+      <td class="r cost" data-cost="${c}"><b>${fmt(c)}</b>${ov ? `<small class="ov">set by hand · computed ${fmt(comp)}</small>` : v.model === "share" ? `<small>partner payout</small>` : `<small>${calcText(v)}</small>`}</td>
+      <td class="when" data-testid="when-${i}"><b>${w.b}</b><span>${w.s}</span></td>
+      <td class="chev">${v.open ? "▾" : "▸"}</td></tr>` + (v.open ? panel(v, i) : "");
+  }).join("");
+}
+const sel = (f, opts, val, extra = "") => `<select class="in" data-f="${f}" ${extra}>${opts.map(([k, l]) => `<option value="${k}" ${String(k) === String(val) ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+const row = (l, v) => `<div class="l">${l}</div><div class="v">${v}</div>`;
+function panel(v, i){
+  const comp = computed(v), ov = v.override != null, p = v.pay;
+  const model = sel("model", [["match","Per match"],["share","Profit share"]], v.model, 'data-testid="model"');
+  const what = v.model === "share"
+    ? row("Billing", `${model} <span class="u">${v.shareText} · <span class="lnk">Partners</span></span>`)
+    + row("This month", `$<input class="in ${ov ? "ov" : ""}" data-f="override" placeholder="${comp}" value="${ov ? v.override : ""}" data-testid="override"><span class="u" data-testid="calc">${ov ? `set by hand · payout ${fmt(comp)} · <span class="lnk" data-clear>reset</span>` : `auto · this month's payout`}</span>`)
+    : row("Billing", `${model}` + v.rates.map((r, j) => `<span class="rate" data-testid="rate-${j}">$<input class="in" data-f="rate:${j}" value="${r.v}" data-testid="rate"> ${v.rates.length > 1 ? `<span class="days">${DAYL.map((l, d) => `<button class="dy ${r.days.includes(d) ? "on" : ""}" data-day="${j}:${d}" title="${LONG[d]}">${l}</button>`).join("")}</span><button class="x" data-delrate="${j}" aria-label="Remove rate">×</button>` : `<span class="u">/ match</span>`}</span>`).join("") + (v.rates.length < 3 ? `<span class="lnk" data-addrate data-testid="add-rate">+ rate for other days</span>` : ""))
+    + row("Cancelled", `<label class="chk"><input type="checkbox" data-f="cancels" ${v.cancelsBilled ? "checked" : ""} data-testid="cancels"> billed</label>`)
+    + row("This month", `$<input class="in ${ov ? "ov" : ""}" data-f="override" placeholder="${comp}" value="${ov ? v.override : ""}" data-testid="override"><span class="u" data-testid="calc">${ov ? `set by hand · auto ${fmt(comp)} · <span class="lnk" data-clear>reset</span>` : `auto · ${calcText(v)}`}</span>`);
+  const notes = row("Notes", `<textarea class="in note" data-f="notes" rows="1" placeholder="Anything worth remembering about this venue" data-testid="notes">${v.notes || ""}</textarea>`);
+  const fields = v.fields.length < 2 ? "" : row("Fields", v.fields.map((f, j) => `<label class="chk"><input type="checkbox" data-field="${j}" ${f.on ? "checked" : ""}>${f.n}</label>`).join(""));
+
+  const r = payDays(v), on = new Set(r.days.map(x => x.d)), md = new Set(matchDays(v));
+  const modes = `<div class="modes" data-testid="modes">${[["dates","Pick dates"],["weekly","Weekly"],["biweekly","Every 2 weeks"],["match","Each match"]].map(([k, l]) => `<button data-mode="${k}" aria-pressed="${p.mode === k}">${l}</button>`).join("")}</div>`;
+  const lead = dow(1); let cal = `<div class="cal" data-testid="cal"><div class="mh">${p.prepaid && p.mode === "dates" ? "September 2026 · pays for October" : "October 2026"}</div>${DOWS.map(d => `<div class="h">${d}</div>`).join("")}`;
+  for (let k = 0; k < lead; k++) cal += `<div class="d out"></div>`;
+  for (let d = 1; d <= DAYS; d++) cal += `<button class="d ${on.has(d) ? "on" : ""} ${md.has(d) ? "m" : ""}" data-d="${d}" data-testid="cal-${d}" ${p.mode === "match" ? "disabled" : ""} title="${md.has(d) ? "match day" : ""}">${d}</button>`;
+  cal += `</div>`;
+  const amts = p.mode === "dates" && p.dates.length > 1 ? `<div class="amts" data-testid="amts">${[...p.dates].sort((a, b) => a.d - b.d).map((x, j, arr) => `<span class="a"><b>${r.mon} ${x.d}</b> $<input class="in" data-f="amt:${x.d}" placeholder="split" value="${x.v ?? ""}" data-testid="amt-${x.d}"></span>`).join("")}</div>` : "";
+  const prepaid = p.mode === "dates" ? `<label class="chk" style="font-size:12.5px"><input type="checkbox" data-f="prepaid" ${p.prepaid ? "checked" : ""} data-testid="prepaid"> prepaid, month before</label>` : "";
+  const o = outLine(v);
+  const when = p.mode === "match"
+    ? `<div class="when">${modes}<div class="out" data-testid="when-calc" style="margin-top:4px">${v.matches} matches · <b>${v.model === "share" ? "its share" : rateText(v)}</b> each, on the match date · auto</div></div>`
+    : `<div class="when">${modes}${cal}${amts}${prepaid}<div class="out ${o.warn ? "warn" : ""}" data-testid="when-calc">${o.t}</div></div>`;
+  const matches = v.list ? `<div class="matches"><div class="k">Underlying matches · from MatchDay</div><table><thead><tr><th>Date</th><th>Field</th><th>Status</th><th class="r">Cost</th></tr></thead><tbody>${v.list.map(d => `<tr><td class="mono">2026-${d}</td><td>${v.fields[0].n}</td><td class="mt">ran</td><td class="r">${fmt(v.rates.find(r => r.days.includes(dow(+d.split("-")[1])))?.v ?? 0)}</td></tr>`).join("")}</tbody></table></div>` : "";
+  return `<tr class="panel" data-testid="panel-${i}"><td colspan="6"><div class="pan"><div class="g">${what}${fields}${notes}</div>${when}</div>${matches}</td></tr>`;
+}
+render();
+const cur = () => V.find(x => x.open);
+document.addEventListener("click", e => {
+  const r = e.target.closest("tr.row"); if (r) { const v = V[+r.dataset.i]; const was = v.open; V.forEach(x => x.open = false); v.open = !was; render(); return; }
+  if (!e.target.closest("tr.panel")) return; const v = cur(), p = v.pay;
+  if (e.target.closest("[data-clear]")) { v.override = null; render(); return; }
+  if (e.target.closest("[data-addrate]")) { const used = new Set(v.rates.flatMap(r => r.days)); const free = [0,1,2,3,4,5,6].filter(d => !used.has(d)); const take = free.length ? free : [5, 6]; v.rates.forEach(r => r.days = r.days.filter(d => !take.includes(d))); v.rates.push({ v: v.rates[0].v, days: take }); render(); return; }
+  const dr = e.target.closest("[data-delrate]"); if (dr) { const j = +dr.dataset.delrate; const gone = v.rates.splice(j, 1)[0]; v.rates[0].days.push(...gone.days); render(); return; }
+  const dy = e.target.closest("[data-day]"); if (dy) { const [j, d] = dy.dataset.day.split(":").map(Number); const r = v.rates[j]; if (r.days.includes(d)) { if (r.days.length > 1) { r.days = r.days.filter(x => x !== d); const other = v.rates.find((x, k) => k !== j); other.days.push(d); } } else { v.rates.forEach(x => x.days = x.days.filter(y => y !== d)); r.days.push(d); } render(); return; }
+  const m = e.target.closest("[data-mode]"); if (m) { const k = m.dataset.mode;
+    if (k === "dates") { p.mode = "dates"; p.dates = p.dates?.length ? p.dates : [{ d: p.anchor ?? 1 }]; p.prepaid = !!p.prepaid; }
+    else if (k === "match") p.mode = "match";
+    else { p.mode = k; p.anchor = p.anchor ?? (p.dates?.[0]?.d ?? 1); }
+    render(); return; }
+  const d = e.target.closest(".cal .d[data-d]:not([disabled])"); if (d) { const day = +d.dataset.d;
+    if (p.mode === "dates") { const k = p.dates.findIndex(x => x.d === day); if (k >= 0) { if (p.dates.length > 1) p.dates.splice(k, 1); } else p.dates.push({ d: day }); }
+    else p.anchor = day;
+    render(); return; }
+  const f = e.target.closest("[data-field]"); if (f) { v.fields[+f.dataset.field].on = f.checked; render(); }
+});
+document.addEventListener("change", e => {
+  const v = cur(); const t = e.target; if (!t.dataset.f) return; const [k, j] = t.dataset.f.split(":");
+  if (k === "model") { v.model = t.value; if (v.model === "share" && v.shareAmt == null) { v.shareAmt = 0; v.shareText = "Set on the Partners page"; } if (v.model === "match" && !v.rates) v.rates = [{ v: 0, days: [0,1,2,3,4,5,6] }]; }
+  if (k === "rate") v.rates[+j].v = +t.value || 0;
+  if (k === "cancels") v.cancelsBilled = t.checked;
+  if (k === "override") v.override = t.value.trim() === "" ? null : +t.value;
+  if (k === "prepaid") v.pay.prepaid = t.checked;
+  if (k === "notes") { v.notes = t.value; return; }
+  if (k === "amt") { const x = v.pay.dates.find(y => y.d === +j); x.v = t.value.trim() === "" ? undefined : +t.value; }
+  render();
+});
+</script>
+</body>
+</html>

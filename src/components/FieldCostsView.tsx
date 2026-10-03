@@ -1,22 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import {
-  ChevronDown,
-  ChevronRight,
-  Lock,
-  Pencil,
-  Pin,
-  Plus,
-  Trash2,
-} from "lucide-react";
+import { Plus } from "lucide-react";
 import AddVenueDialog, { type AddVenueDraft } from "@/components/AddVenueDialog";
 import { insertFinVenue } from "@/lib/venueCreate";
-import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
 import { logChange } from "@/lib/financeAudit";
-import { venueCategory } from "@/lib/venueResolver";
-import { COMBINED_LEG_LABELS } from "@/lib/venueGroups";
 import {
   buildFieldCostRows,
   fieldCostsFor,
@@ -28,8 +17,21 @@ import {
 } from "@/lib/financeCosts";
 import { isSoccerCentralTwoPitch } from "@/lib/soccerCentralTwoPitch";
 import { useFinanceQuarter } from "@/lib/financeQuarter";
-// THE SINGLE BILLING-DATE DERIVATION — the same call OpEx makes. See its note in opexSources.ts.
-import { resolveBillingDates } from "@/lib/opexSources";
+import {
+  ALL_DAYS,
+  DAY_CHIP,
+  DAY_LONG,
+  DAY_SHORT,
+  cashDays,
+  monthName as venuePayMonthName,
+  monthShort as venuePayMonthShort,
+  payResultText,
+  paysOnText,
+  rateForYmd,
+  rateLabel,
+  type DayRate,
+  type PaySchedule,
+} from "@/lib/venuePay";
 import {
   getCurrentMonthInQuarter,
   type Q2Month,
@@ -47,28 +49,22 @@ import {
 } from "@/lib/useFinanceData";
 
 // TWO RATE COLUMNS, TWO DIFFERENT FACTS — neither is a stale copy of the other.
-//   cost_per_match  = the rate AGREED with the venue. Reference data, read deliberately.
-//   per_match_rate  = whether we AUTO-BILL per match. NULL is a real answer: not auto-billed,
-//                     so a month with no override correctly costs $0 (financeCosts.ts:136
-//                     `venue.per_match_rate ?? 0`), and which months were $0 is a thing this
-//                     page is read for.
-// The panel labels them apart. Never write one from the other.
-// savePrice is column-generic, so this needs no new write path.
-type PriceField = "dpp_price" | "member_price" | "cost_per_match" | "per_match_rate";
+//   cost_per_match  = the rate AGREED with the venue. Reference data; Cities reads it.
+//   per_match_rate  = what the venue INVOICES per match; the panel's rate box writes this one.
+// The panel never writes one from the other. With day-of-week rates (rate_days, 0201) both
+// paths price each match by its weekday instead.
 type EditableField =
-  | PriceField
+  | "per_match_rate"
+  | "rate_days"
   | "billing_type"
   | "charge_on_cancel"
-  | "bills_per_reservation"
-  | "billing_cadence"
-  | "billing_day"
-  | "billing_anchor_month"
-  | "billing_weekday"
-  | "billing_custom_days";
-// "custom_amount" is a virtual key for the CUSTOM cadence's per-month
-// amount cell — it writes fin_venue_cost_overrides, not a fin_venues
-// column, but shares the same saving/flash/error cell-state map.
-type CellStateKey = EditableField | "custom_amount";
+  | "pay_schedule"
+  | "notes";
+type VenuePatch = Partial<Pick<FinVenue, "per_match_rate" | "rate_days" | "billing_type" | "charge_on_cancel" | "pay_schedule" | "notes">>;
+// "custom_amount" is a virtual key for the "This month" box — it writes
+// fin_venue_cost_overrides, not a fin_venues column, but shares the same
+// saving/error cell-state map.
+type CellStateKey = EditableField | "custom_amount" | "fields";
 type CellState = { saving: boolean; error: string | null; flash: boolean };
 type EditMap = Map<string, CellState>;
 
@@ -87,37 +83,11 @@ function monthParts(monthKey: string): { year: number; month0: number } | null {
   const y = Number(yr);
   return m < 0 || !Number.isFinite(y) ? null : { year: y, month0: m };
 }
-// THE DATE COMES FROM opexSources, NEVER FROM THIS FILE. resolveBillingDates is the single
-// derivation — the same call OpEx makes to decide where the money lands. This file previously
-// re-derived it from billing_day alone, which is wrong for CUSTOM cadence (that reads
-// billing_custom_days and ignores billing_day entirely), so five venues showed a date the money
-// does not land on. Billing is SAME-MONTH, so the date is always in the month above it.
-function billingDatesFor(venue: FinVenue | null, monthKey: string): { labels: string[]; cadence: string } {
-  const p = monthParts(monthKey);
-  if (!p) return { labels: [], cadence: "monthly" };
-  const { days, cadence } = resolveBillingDates(venue, p.year, p.month0);
-  return { labels: days.map((d) => `${MONTHS_SHORT[p.month0]} ${d}`), cadence };
-}
-const BILLING_LABEL: Record<string, string> = {
-  per_match: "Per match",
-  profit_share: "Profit share",
-  monthly_flat: "Monthly flat",
-};
-
 function editKey(venueId: number, field: CellStateKey): string {
   return `${venueId}|${field}`;
 }
 
-const BILLING_TYPE_OPTIONS: FinVenue["billing_type"][] = [
-  "per_match",
-  "monthly_flat",
-  "profit_share",
-];
-
-type BillingFilter =
-  | "ALL"
-  | FinVenue["billing_type"]
-  | "OVERRIDE";
+type BillingFilter = "ALL" | "match" | "share";
 
 const ALL = "ALL";
 
@@ -148,9 +118,9 @@ export default function FieldCostsView() {
   }, [quarter, month]);
   const [cityFilter, setCityFilter] = useState<string>(ALL);
   const [billingFilter, setBillingFilter] = useState<BillingFilter>("ALL");
-  const [hasOverrideOnly, setHasOverrideOnly] = useState(false);
 
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const openedFirst = useRef(false);
 
 
 
@@ -183,33 +153,30 @@ export default function FieldCostsView() {
     });
   }
 
-  async function saveVenueField(
-    venueId: number,
-    field: EditableField,
-    nextValue: number | string | boolean | null | Record<string, number[]>,
-    parsedValid: boolean,
-  ): Promise<void> {
+  /* ONE WRITE PATH FOR EVERY fin_venues EDIT ON THIS PAGE. The diff IS the request body: only the
+   * columns whose value differs from the row on file are sent, and an edit that changes nothing
+   * sends nothing. Optimistic, with the captured values put back on failure; one fin_change_log
+   * entry per write. No retry. */
+  async function saveVenuePatch(venueId: number, patch: VenuePatch, field: EditableField): Promise<void> {
     const email = appUser?.email;
     const venue = venueById.get(venueId);
     if (!email || !venue) return;
     const key = editKey(venueId, field);
-    if (!parsedValid) {
-      setEditState(key, { saving: false, error: "Invalid value.", flash: false });
-      return;
+    const diff: Record<string, unknown> = {};
+    const before: Record<string, unknown> = { id: venue.id };
+    for (const [k, v] of Object.entries(patch)) {
+      const old = (venue as Record<string, unknown>)[k] ?? null;
+      if (JSON.stringify(old) === JSON.stringify(v ?? null)) continue;
+      diff[k] = v ?? null;
+      before[k] = old;
     }
-    const oldValue = venue[field];
-    const before: Record<string, unknown> = { id: venue.id, [field]: oldValue };
-
-    // Optimistic: swap this one field in the cached row now, so the cell
-    // and this row's derived cost/warnings update in place. No cache clear,
-    // no reload, no lost scroll. Persist in the background; roll back on
-    // failure.
-    patchVenueOptimistic(venueId, { [field]: nextValue } as Partial<FinVenue>);
+    if (Object.keys(diff).length === 0) return;
+    patchVenueOptimistic(venueId, diff as Partial<FinVenue>);
     setEditState(key, { saving: true, error: null, flash: false });
     try {
       const { data: updated, error } = await supabase
         .from("fin_venues")
-        .update({ [field]: nextValue })
+        .update(diff)
         .eq("id", venueId)
         .select()
         .single();
@@ -222,44 +189,20 @@ export default function FieldCostsView() {
         before,
         after: updated as Record<string, unknown>,
       });
-      setEditState(key, { saving: false, error: null, flash: true });
-      // Clear flash + state after the animation settles.
-      setTimeout(() => setEditState(key, null), 900);
+      setEditState(key, null);
     } catch (e) {
-      // Revert the optimistic change to the value we captured.
-      patchVenueOptimistic(venueId, { [field]: oldValue } as Partial<FinVenue>);
+      const revert: Record<string, unknown> = {};
+      for (const k of Object.keys(diff)) revert[k] = before[k];
+      patchVenueOptimistic(venueId, revert as Partial<FinVenue>);
       setEditState(key, {
         saving: false,
-        error: e instanceof Error ? e.message : "Save failed.",
+        error: `Not saved: ${e instanceof Error ? e.message : String(e)}`,
         flash: false,
       });
     }
   }
 
-  function savePrice(venueId: number, field: PriceField, raw: string): void {
-    const trimmed = raw.trim();
-    const parsed = trimmed === "" ? null : parseFloat(trimmed);
-    const valid = parsed === null || (!Number.isNaN(parsed) && parsed >= 0);
-    void saveVenueField(venueId, field, parsed, valid);
-  }
-
-  function saveBillingType(
-    venueId: number,
-    nextValue: FinVenue["billing_type"],
-  ): void {
-    const valid = BILLING_TYPE_OPTIONS.includes(nextValue);
-    void saveVenueField(venueId, "billing_type", nextValue, valid);
-  }
-
-  function saveChargeOnCancel(venueId: number, next: boolean): void {
-    void saveVenueField(venueId, "charge_on_cancel", next, true);
-  }
-
-  // ONE RESERVATION PER TIME SLOT. Same write path as every other venue field — optimistic patch
-  // plus a fin_change_log entry, and fin_venues is already on that table's CHECK allowlist.
-  /* THE LINKS A VENUE IS MADE OF, and their classification. isEvent is read from the SAME regex
-   * the cost path uses (venueCategory) against the SAME title — reading it any other way here
-   * would let the panel say "counts" about a match the cost path is dropping. */
+  /* THE LINKS A VENUE IS MADE OF — counted and excluded — for the Fields checkboxes. */
   const fieldTitleById = useMemo(() => {
     const m = new Map<number, string>();
     for (const r of [...(data?.masterSchedule ?? []), ...(data?.cancelledSchedule ?? [])]) {
@@ -270,110 +213,49 @@ export default function FieldCostsView() {
     return m;
   }, [data]);
 
-  function linksFor(venueId: number) {
-    return (data?.venueFieldLinks ?? [])
-      .filter((l) => l.fin_venue_id === venueId)
-      .map((l) => {
-        const title = fieldTitleById.get(l.mdapi_field_id) ?? l.field_title_at_link ?? `field ${l.mdapi_field_id}`;
-        return {
-          mdapi_field_id: l.mdapi_field_id,
-          title,
-          isEvent: venueCategory(title) === "event",
-          countsAsRegular: l.counts_as_regular_play,
-        };
-      })
-      .sort((a, b) => Number(a.isEvent) - Number(b.isEvent) || a.title.localeCompare(b.title));
+  function fieldsFor(row: FieldCostRow): { fieldId: number; title: string; on: boolean }[] {
+    const ids = new Set(row.legs.map((l) => l.venueId));
+    ids.add(row.primaryVenueId);
+    const title = (l: { mdapi_field_id: number; field_title_at_link: string }) =>
+      fieldTitleById.get(l.mdapi_field_id) ?? (l.field_title_at_link || `field ${l.mdapi_field_id}`);
+    return [
+      ...(data?.venueFieldLinks ?? []).filter((l) => ids.has(l.fin_venue_id)).map((l) => ({ fieldId: l.mdapi_field_id, title: title(l), on: true })),
+      ...(data?.excludedFieldLinks ?? []).filter((l) => ids.has(l.fin_venue_id)).map((l) => ({ fieldId: l.mdapi_field_id, title: title(l), on: false })),
+    ].sort((a, b) => a.fieldId - b.fieldId);
   }
 
-  /* THE EXCEPTION TOGGLE. fin_venue_fields, not fin_venues, so it does not go through
-   * saveVenueField — but it takes the same shape: write, then audit, and report the outcome.
-   * fin_venue_fields was added to the fin_change_log allowlist in 0130; without that the audit
-   * step would refuse the row and the write would be reported as failed. */
-  async function saveCountsAsRegular(fieldId: number, next: boolean): Promise<void> {
-    const email = appUser?.email;
-    if (!email) return;
-    const key = `link-${fieldId}`;
+  /* A FIELD CHECKBOX GOES THROUGH /api/admin/fields/exclude — the only write path for
+   * excluded_from_venue, which records the verdict from its read-back. Unchecked = the field stays
+   * linked and leaves this venue's matches, spots, revenue and cost. The data is re-read on
+   * LANDED: the flag is upstream of every figure on the page. No retry. */
+  async function saveFieldCounted(venueId: number, fieldId: number, counted: boolean): Promise<void> {
+    const key = editKey(venueId, "fields");
     setEditState(key, { saving: true, error: null, flash: false });
     try {
-      const { data: updated, error } = await supabase
-        .from("fin_venue_fields")
-        .update({ counts_as_regular_play: next })
-        .eq("mdapi_field_id", fieldId)
-        .select()
-        .single();
-      if (error) throw error;
-      await logChange({
-        tableName: "fin_venue_fields",
-        rowId: fieldId,
-        action: "update",
-        changedBy: email,
-        before: { mdapi_field_id: fieldId, counts_as_regular_play: !next },
-        after: updated as Record<string, unknown>,
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token;
+      if (!token) throw new Error("Not signed in.");
+      const res = await fetch("/api/admin/fields/exclude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ fieldId, excluded: !counted }),
       });
-      setEditState(key, { saving: false, error: null, flash: true });
-      setTimeout(() => setEditState(key, null), 900);
-      // A COST RELOAD, NOT AN OPTIMISTIC PATCH. This flag changes `category` on every match at the
-      // field, which is upstream of every cost figure on the page — there is no single cell to
-      // swap, so the data is re-read.
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
+      if (j.verdict !== "LANDED") throw new Error(`${j.verdict} — refresh and check before clicking again.`);
+      setEditState(key, null);
       await refetchFinanceData();
     } catch (e) {
-      setEditState(key, { saving: false, error: e instanceof Error ? e.message : "Save failed.", flash: false });
+      setEditState(key, { saving: false, error: `Field not saved: ${e instanceof Error ? e.message : String(e)}`, flash: false });
     }
   }
 
-  function savePerReservation(venueId: number, next: boolean): void {
-    void saveVenueField(venueId, "bills_per_reservation", next, true);
-  }
+  /** The first error any write for this venue left behind, for the panel to show. */
+  const errorFor = (venueId: number): string | null => {
+    for (const [k, st] of edits) if (k.startsWith(`${venueId}|`) && st.error) return st.error;
+    return null;
+  };
 
-  // OpEx billing-timing edits (migration 0069). These place a
-  // flat/quarterly venue's monthly cost on a real day in the OpEx
-  // calendar; they don't affect any cost total here.
-  function saveBillingCadence(
-    venueId: number,
-    next: FinVenue["billing_cadence"],
-  ): void {
-    void saveVenueField(venueId, "billing_cadence", next, true);
-  }
-  function saveBillingDay(venueId: number, raw: string): void {
-    const trimmed = raw.trim();
-    if (trimmed === "") {
-      void saveVenueField(venueId, "billing_day", null, true);
-      return;
-    }
-    const n = parseInt(trimmed, 10);
-    const valid = Number.isInteger(n) && n >= 1 && n <= 31;
-    void saveVenueField(venueId, "billing_day", valid ? n : trimmed, valid);
-  }
-  function saveBillingAnchorMonth(venueId: number, raw: string): void {
-    if (raw === "") {
-      void saveVenueField(venueId, "billing_anchor_month", null, true);
-      return;
-    }
-    const n = parseInt(raw, 10);
-    const valid = Number.isInteger(n) && n >= 1 && n <= 12;
-    void saveVenueField(venueId, "billing_anchor_month", valid ? n : raw, valid);
-  }
-  // WEEKLY cadence (migration 0070): day of week 0=Sun..6=Sat.
-  function saveBillingWeekday(venueId: number, raw: string): void {
-    if (raw === "") {
-      void saveVenueField(venueId, "billing_weekday", null, true);
-      return;
-    }
-    const n = parseInt(raw, 10);
-    const valid = Number.isInteger(n) && n >= 0 && n <= 6;
-    void saveVenueField(venueId, "billing_weekday", valid ? n : raw, valid);
-  }
-  // CUSTOM cadence (migration 0070): set/clear the current month's entry in
-  // the venue's per-month billing_custom_days map. Reads the whole map,
-  // updates one ISO-month key, writes it back (jsonb column).
-  function saveCustomDays(venueId: number, monthIso: string, days: number[]): void {
-    const venue = venueById.get(venueId);
-    if (!venue) return;
-    const next: Record<string, number[]> = { ...(venue.billing_custom_days ?? {}) };
-    if (days.length === 0) delete next[monthIso];
-    else next[monthIso] = days;
-    void saveVenueField(venueId, "billing_custom_days", next, true);
-  }
   // Write (or clear) one fin_venue_cost_overrides row for (venue, month),
   // optimistically, with an audit entry. amount null = delete. Shared by the
   // primary write and the combined-venue secondary mirror.
@@ -390,21 +272,30 @@ export default function FieldCostsView() {
       ) ?? null;
     if (amount == null) {
       if (!existing) return;
-      await logChange({
-        tableName: "fin_venue_cost_overrides",
-        rowId: existing.id,
-        action: "delete",
-        changedBy: email,
-        before: existing as unknown as Record<string, unknown>,
-      });
-      const { error } = await supabase
-        .from("fin_venue_cost_overrides")
-        .delete()
-        .eq("id", existing.id);
-      if (error) throw new Error(error.message);
+      // RESET IS OPTIMISTIC, like every venue edit: the row reads auto at once, and the hand-set
+      // amount is put back if the delete fails.
       patchOverrideOptimistic({ type: "remove", venueId, month: forMonth });
+      try {
+        await logChange({
+          tableName: "fin_venue_cost_overrides",
+          rowId: existing.id,
+          action: "delete",
+          changedBy: email,
+          before: existing as unknown as Record<string, unknown>,
+        });
+        const { error } = await supabase
+          .from("fin_venue_cost_overrides")
+          .delete()
+          .eq("id", existing.id);
+        if (error) throw new Error(error.message);
+      } catch (e) {
+        patchOverrideOptimistic({ type: "upsert", row: existing });
+        throw e;
+      }
       return;
     }
+    // The same amount again is not a change, and sends nothing.
+    if (existing && Number(existing.override_amount) === amount) return;
     if (existing) {
       const { data: updated, error } = await supabase
         .from("fin_venue_cost_overrides")
@@ -485,18 +376,6 @@ export default function FieldCostsView() {
     }
   }
 
-  // Venues whose cost is a partner-dashboard payout (Crossbar's
-  // per_match_minus_manager) are stored as per_match but can't be dated
-  // off the schedule, so they DO get a billing-timing editor like
-  // flat/profit_share venues.
-  const dashboardDrivenIds = useMemo(() => {
-    const s = new Set<number>();
-    for (const d of data?.partnerDashboards ?? []) {
-      if (d.revenueModel === "per_match_minus_manager") s.add(d.venueId);
-    }
-    return s;
-  }, [data?.partnerDashboards]);
-
   const allRows: FieldCostRow[] = useMemo(() => {
     if (!data) return [];
     return buildFieldCostRows(data, month);
@@ -550,14 +429,15 @@ export default function FieldCostsView() {
   const filtered = useMemo(() => {
     let rows = allRows.slice();
     if (cityFilter !== ALL) rows = rows.filter((r) => r.city === cityFilter);
-    if (billingFilter === "OVERRIDE") {
-      rows = rows.filter((r) => r.override !== null);
-    } else if (billingFilter !== "ALL") {
-      rows = rows.filter((r) => r.billingType === billingFilter);
-    }
-    if (hasOverrideOnly) rows = rows.filter((r) => r.override !== null);
+    if (billingFilter !== "ALL") rows = rows.filter((r) => modelOf(r) === billingFilter);
     return rows.sort((a, b) => a.displayName.localeCompare(b.displayName));
-  }, [allRows, cityFilter, billingFilter, hasOverrideOnly]);
+  }, [allRows, cityFilter, billingFilter]);
+
+  useEffect(() => {
+    if (openedFirst.current || filtered.length === 0) return;
+    openedFirst.current = true;
+    setExpandedKey(filtered[0].key);
+  }, [filtered]);
 
   // Reconciliation: fieldCostsFor is now the canonical Cash Flow line, so
   // its sum always matches the per-row total here by construction. We
@@ -725,31 +605,17 @@ export default function FieldCostsView() {
             ))}
           </select>
         </Filter>
-        <Filter label="Billing Type">
+        <Filter label="Billing">
           <select
             value={billingFilter}
-            onChange={(e) =>
-              setBillingFilter(e.target.value as BillingFilter)
-            }
+            onChange={(e) => setBillingFilter(e.target.value as BillingFilter)}
             className="rounded-md border border-cream-line bg-cream-soft px-3 py-1.5 text-sm font-bold text-deep-green focus:border-deep-green focus:outline-none"
           >
             <option value="ALL">All</option>
-            {BILLING_TYPE_OPTIONS.map((opt) => (
-              <option key={opt} value={opt}>
-                {opt}
-              </option>
-            ))}
-            <option value="OVERRIDE">Month value</option>
+            <option value="match">Per match</option>
+            <option value="share">Profit share</option>
           </select>
         </Filter>
-        <label className="flex cursor-pointer items-center gap-2 text-xs text-deep-green/75">
-          <input
-            type="checkbox"
-            checked={hasOverrideOnly}
-            onChange={(e) => setHasOverrideOnly(e.target.checked)}
-          />
-          Has a month value only
-        </label>
         <button
           type="button"
           onClick={() => {
@@ -797,124 +663,79 @@ export default function FieldCostsView() {
         </div>
       )}
 
-      <section className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
+      <section className="fc2 overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
+        <style>{FC2_CSS}</style>
         <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead className="bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
-              {/* SEVEN COLUMNS. City folded into Venue; Pay-on-cancel folded into the Rate
-                  sub-line; DPP and Member price moved into the row panel — they are what a PLAYER
-                  pays, and they held the two widest columns on a table about what MatchDay pays. */}
-              <tr className="border-b border-cream-line">
-                <th className="px-3 py-2 pl-5 text-left">Venue</th>
-                <th className="px-3 py-2 text-left">Billing</th>
-                <th className="px-3 py-2 text-left">Rate</th>
-                <th className="px-3 py-2 text-right">Matches</th>
-                <th className="px-3 py-2 text-right">{monthShort(month)} cost</th>
-                <th className="px-3 py-2 text-left">
-                  Bills on
-                  <span className="block text-[8.5px] font-bold normal-case tracking-normal text-deep-green/35">
-                    when the money leaves
-                  </span>
+          <table data-testid="venues">
+            <thead>
+              <tr>
+                <th>Venue</th>
+                <th>Billing</th>
+                <th className="r">{`${monthShort(month)} matches`}</th>
+                <th className="r">{`${monthShort(month)} cost`}</th>
+                <th>
+                  Pays on{" "}
+                  <small style={{ textTransform: "none", letterSpacing: 0, fontWeight: 500 }}>when the money leaves</small>
                 </th>
-                <th className="w-8 px-3 py-2"></th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
               {loading && filtered.length === 0 ? (
                 <tr>
-                  <td
-                    colSpan={7}
-                    className="px-3 py-8 text-center text-sm text-deep-green/55"
-                  >
-                    Loading field costs…
-                  </td>
+                  <td colSpan={6} className="text-center text-sm text-deep-green/55">Loading field costs…</td>
                 </tr>
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td
-                    colSpan={7}
-                    className="px-3 py-8 text-center text-sm text-deep-green/55"
-                  >
-                    No venues match these filters.
-                  </td>
+                  <td colSpan={6} className="text-center text-sm text-deep-green/55">No venues match these filters.</td>
                 </tr>
               ) : (
-                filtered.map((row) => {
+                filtered.map((row, i) => {
                   const expanded = expandedKey === row.key;
-                  const expandable =
-                    row.billingType === "per_match" && row.legs.length > 0;
-                  const primaryVenue = venueById.get(row.primaryVenueId) ?? null;
+                  const venue = venueById.get(row.primaryVenueId) ?? null;
+                  const md = data ? matchDaysOf(data, row, month, venue) : [];
                   return (
-                    <FieldCostTableRow
-                      key={row.key}
-                      row={row}
-                      slotExtra={slotExtraFor(row)}
-                      expanded={expanded}
-                      expandable={expandable}
-                      onToggleExpand={() =>
-                        setExpandedKey(expanded ? null : row.key)
-                      }
-                      primaryVenue={primaryVenue}
-                      highlight={
-                        lastAdded?.venueId === row.primaryVenueId
-                      }
-                      cellState={(field) =>
-                        edits.get(editKey(row.primaryVenueId, field)) ?? null
-                      }
-                      onSavePrice={(field, raw) =>
-                        savePrice(row.primaryVenueId, field, raw)
-                      }
-                      onSaveBillingType={(next) =>
-                        saveBillingType(row.primaryVenueId, next)
-                      }
-                      onSavePerReservation={(next) => savePerReservation(row.primaryVenueId, next)}
-                      links={linksFor(row.primaryVenueId)}
-                      onSaveCountsAsRegular={(fid, next) => saveCountsAsRegular(fid, next)}
-                      onSaveChargeOnCancel={(next) =>
-                        saveChargeOnCancel(row.primaryVenueId, next)
-                      }
-                      dashboardDriven={dashboardDrivenIds.has(row.primaryVenueId)}
-                      onSaveBillingCadence={(next) =>
-                        saveBillingCadence(row.primaryVenueId, next)
-                      }
-                      onSaveBillingDay={(raw) =>
-                        saveBillingDay(row.primaryVenueId, raw)
-                      }
-                      onSaveBillingAnchorMonth={(raw) =>
-                        saveBillingAnchorMonth(row.primaryVenueId, raw)
-                      }
-                      onSaveBillingWeekday={(raw) =>
-                        saveBillingWeekday(row.primaryVenueId, raw)
-                      }
-                      onSaveCustomDays={(iso, days) =>
-                        saveCustomDays(row.primaryVenueId, iso, days)
-                      }
-                      onSaveCustomAmount={(raw) =>
-                        void saveCustomAmount(row.primaryVenueId, month, raw)
-                      }
-                      isCombinedPrimary={row.secondaryVenueIds.length > 0}
-                      month={month}
-                      autoAmount={row.autoAmount}
-                      scheduleRows={
-                        data ? buildMatchLineItems(data, row, month) : []
-                      }
-                    />
+                    <Fragment key={row.key}>
+                      <FieldCostTableRow
+                        index={i}
+                        row={row}
+                        venue={venue}
+                        slotExtra={slotExtraFor(row)}
+                        expanded={expanded}
+                        highlight={lastAdded?.venueId === row.primaryVenueId}
+                        onToggle={() => setExpandedKey(expanded ? null : row.key)}
+                        month={month}
+                        matchDays={md}
+                      />
+                      {expanded && venue && data && (
+                        <VenuePanel
+                          index={i}
+                          row={row}
+                          venue={venue}
+                          month={month}
+                          matchDays={md}
+                          fields={fieldsFor(row)}
+                          error={errorFor(row.primaryVenueId)}
+                          scheduleRows={buildMatchLineItems(data, row, month)}
+                          onPatch={(patch, field) => void saveVenuePatch(row.primaryVenueId, patch, field)}
+                          onOverride={(raw) => void saveCustomAmount(row.primaryVenueId, month, raw)}
+                          onField={(fieldId, counted) => void saveFieldCounted(row.primaryVenueId, fieldId, counted)}
+                        />
+                      )}
+                    </Fragment>
                   );
                 })
               )}
             </tbody>
-            <tfoot className="border-t-2 border-deep-green bg-[#fbfdfc] text-deep-green">
+            <tfoot>
               <tr>
-                <td className="px-3 py-3.5 pl-5 text-left text-[15px] font-extrabold">{monthFull(month)}</td>
-                <td /><td />
-                <td className="px-3 py-3.5 text-right text-[15px] font-extrabold tabular-nums">
-                  {filtered.reduce((a, r) => a + r.matchCount, 0)}
-                </td>
+                <td>{monthFull(month)}</td>
+                <td />
+                <td className="r">{filtered.reduce((a, r) => a + r.matchCount, 0)}</td>
                 {/* THE SAME SUM AS THE HEADLINE — both are the rows on screen, so they cannot drift. */}
-                <td className="px-3 py-3.5 text-right text-[19px] font-extrabold tabular-nums">
-                  {fmtMoney(filtered.reduce((a, r) => a + r.amount, 0))}
-                </td>
-                <td /><td />
+                <td className="r">{fmtMoney(filtered.reduce((a, r) => a + r.amount, 0))}</td>
+                <td />
+                <td />
               </tr>
             </tfoot>
           </table>
@@ -981,1120 +802,574 @@ export default function FieldCostsView() {
   );
 }
 
+/* ── FIELD COSTS v2: THE LIST ROW AND THE VENUE PANEL ──────────────────────────────────────────
+ * Spec: scripts/mocks/field-costs-v2.html, asserted by scripts/mocks/field-costs-v2.assert.mjs.
+ * Two billing models (per match, profit share), rates by day of week (fin_venues.rate_days), a
+ * pay schedule (fin_venues.pay_schedule), a "This month" box that IS the month override, field
+ * checkboxes (fin_venue_fields.excluded_from_venue) and notes. Migration 0201.
+ *
+ * COST vs CASH. Everything in the left column changes what a month COSTS. The pay schedule on the
+ * right changes only WHEN the cash leaves — OpEx reads it; Cost and Cities do not.
+ *
+ * The class names (.pan .g .l .d .on .m .dy …) are the mock's, on purpose: the assert reads them. */
+
+const FC2_CSS = `
+.fc2 table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+.fc2 th,.fc2 td{padding:11px 16px;text-align:left;border-bottom:1px solid #eef1ec;vertical-align:middle}
+.fc2 th{font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:#7a8a81;font-weight:700;background:#f7f9f6}
+.fc2 th.r,.fc2 td.r{text-align:right}
+.fc2 td.v b{display:block;font-size:15px;color:#10231a}.fc2 td.v span{font-size:12px;color:#7a8a81}
+.fc2 .tag{display:inline-block;border:1px solid #e3e7e1;border-radius:6px;padding:3px 8px;font-size:11px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;color:#44564c;background:#f7f9f6}
+.fc2 .tag.share{background:#eef4ff;border-color:#cfdcf5;color:#2b4f8a}
+.fc2 td.cost b{font-size:15px;color:#10231a}.fc2 td.cost small{display:block;font-size:11px;color:#7a8a81;font-weight:500}
+.fc2 td.cost small.ov{color:#8a6d00}.fc2 td.cost small.norate{color:#b42318;font-weight:700}
+.fc2 td.when b{font-size:14px;display:block;color:#10231a}.fc2 td.when span{font-size:12px;color:#7a8a81}
+.fc2 tr.row{cursor:pointer}.fc2 tr.row:hover td{background:#fafbf9}
+.fc2 tr.row[aria-expanded="true"] td{background:#f3f6f2}
+.fc2 tr.row.hl td{background:#e8f7ee}
+.fc2 .chev{color:#7a8a81;font-size:12px}
+.fc2 tr.panel td{padding:0;background:#f7f9f6}
+.fc2 .pan{padding:12px 22px 14px;border-top:1px solid #e3e7e1;display:grid;grid-template-columns:1fr auto;gap:0 56px}
+.fc2 .g{display:grid;grid-template-columns:92px 1fr;gap:6px 12px;align-content:start;align-items:center}
+.fc2 .g .l{font-size:10.5px;letter-spacing:.8px;text-transform:uppercase;color:#7a8a81;font-weight:700}
+.fc2 .g .v{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:30px;font-size:13.5px;color:#44564c}
+.fc2 .in{font:inherit;font-size:13.5px;color:#10231a;background:#fff;border:1px solid #cfd6d1;border-radius:7px;padding:3px 8px;font-weight:700;height:28px}
+.fc2 select.in{cursor:pointer}
+.fc2 input.in{width:84px;text-align:right}
+.fc2 input.in::placeholder{color:#b7c0ba;font-weight:600}
+.fc2 .in.ov{border-color:#e0c25a;background:#fffbea}
+.fc2 .rate{display:inline-flex;align-items:center;gap:4px}
+.fc2 .days{display:inline-flex;gap:2px;margin-left:4px}
+.fc2 .dy{width:20px;height:22px;border-radius:5px;border:1px solid #cfd6d1;background:#fff;font:inherit;font-size:10.5px;font-weight:700;color:#b7c0ba;cursor:pointer;padding:0}
+.fc2 .dy.on{background:#0b3a28;border-color:#0b3a28;color:#fff}
+.fc2 .x{border:0;background:transparent;color:#7a8a81;cursor:pointer;font-size:15px;padding:0 2px;line-height:1}
+.fc2 .x:hover{color:#b42318}
+.fc2 textarea.in.note{width:100%;max-width:420px;height:auto;min-height:30px;font-weight:500;font-size:13px;resize:vertical;line-height:1.4;padding:5px 8px}
+.fc2 .u{color:#7a8a81;font-size:12.5px}
+.fc2 .lnk{color:#15803d;font-weight:700;cursor:pointer;font-size:12.5px}
+.fc2 .chk{display:inline-flex;align-items:center;gap:6px;font-size:13.5px;color:#44564c}
+.fc2 .chk input{width:15px;height:15px;margin:0;accent-color:#15803d}
+.fc2 .err{color:#b42318;font-size:12px;font-weight:700}
+.fc2 .when{display:grid;gap:8px;align-content:start}
+.fc2 .modes{display:inline-flex;border:1px solid #cfd6d1;border-radius:999px;background:#fff;padding:2px;width:max-content}
+.fc2 .modes button{border:0;background:transparent;padding:4px 12px;border-radius:999px;font:inherit;font-size:12.5px;font-weight:700;color:#7a8a81;cursor:pointer}
+.fc2 .modes button[aria-pressed="true"]{background:#0b3a28;color:#fff}
+.fc2 .cal{display:grid;grid-template-columns:repeat(7,32px);gap:3px;width:max-content}
+.fc2 .cal .h{font-size:9.5px;letter-spacing:.6px;color:#7a8a81;font-weight:700;text-align:center;text-transform:uppercase}
+.fc2 .cal .mh{grid-column:1/-1;font-size:12px;font-weight:800;color:#44564c;padding:0 2px 2px}
+.fc2 .cal .d{height:30px;border-radius:7px;border:1px solid transparent;background:#fff;font:inherit;font-size:12px;color:#44564c;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
+.fc2 .cal .d:hover{border-color:#9fc9ad}
+.fc2 .cal .d.out{visibility:hidden}
+.fc2 .cal .d.on{background:#0b3a28;color:#fff;font-weight:800}
+.fc2 .cal .d.m{box-shadow:inset 0 -3px 0 #a7d3b6}
+.fc2 .cal .d.m.on{box-shadow:inset 0 -3px 0 #22c55e}
+.fc2 .amts{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12.5px;color:#44564c}
+.fc2 .amts .a{display:inline-flex;align-items:center;gap:4px}
+.fc2 .amts .a b{color:#10231a}
+.fc2 .amts input.in{width:72px;height:26px;font-size:12.5px}
+.fc2 .out{font-size:12.5px;color:#7a8a81}
+.fc2 .out.warn{color:#8a6d00;font-weight:700}
+.fc2 .matches{padding:10px 22px 14px;border-top:1px solid #e3e7e1}
+.fc2 .matches th,.fc2 .matches td{padding:4px 10px 4px 0;border-bottom:0;background:transparent}
+.fc2 tfoot td{border-top:2px solid #0b3a28;font-weight:800;color:#10231a;background:#fbfdfc}
+`;
+
+const money0 = (v: number) => `$${Math.round(v).toLocaleString("en-US")}`;
+const r2 = (n: number) => Math.round(n * 100) / 100;
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** "share" covers profit_share AND a partner-dashboard-priced per_match venue (Crossbar): both are
+ *  priced by the partner payout, not by a rate. */
+function modelOf(row: FieldCostRow): "match" | "share" {
+  return row.billingType === "profit_share" || row.dashboardPriced ? "share" : "match";
+}
+
+/** The rates the panel edits: rate_days, or one rate on every day from per_match_rate. */
+function ratesOf(v: FinVenue | null): DayRate[] {
+  if (v?.rate_days && v.rate_days.length) return v.rate_days.map((r) => ({ v: r.v, days: [...r.days] }));
+  return [{ v: v?.per_match_rate ?? 0, days: [...ALL_DAYS] }];
+}
+
+/** An ACTIVE per-match venue with no rate on file costs $0 and says so (Stony Point, The Sports
+ *  Yard, Turf on, 2026-10-02). A rate of 0 that someone TYPED is a rate; NULL is "never set".
+ *  Inactive venues are not flagged: nothing is owed there to get wrong. */
+function hasNoRate(row: FieldCostRow, v: FinVenue | null): boolean {
+  return modelOf(row) === "match" && !!v && v.is_active && v.per_match_rate == null && !v.rate_days;
+}
+
+/** The calc line: "8 × $180", or by weekday "4 Mon–Thu × $0 + 13 Fri–Sun × $140". */
+function calcText(row: FieldCostRow): string {
+  return row.autoFormula.replace(/(\d+) (?:matches|match|reservations|reservation) × /g, "$1 × ");
+}
+
+/** The days of the cost month that carry a match, with each one's cost — for the calendar's
+ *  underline and for "each match" cash. Charged cancellations count; they are paid. */
+function matchDaysOf(data: FinanceData, row: FieldCostRow, month: Q2Month, venue: FinVenue | null): { d: number; amount: number }[] {
+  return buildMatchLineItems(data, row, month).map((it) => ({
+    d: Number(it.date.slice(8, 10)),
+    amount: venue?.rate_days ? rateForYmd(venue.rate_days, venue.per_match_rate, it.date) : it.rate,
+  }));
+}
+
 function FieldCostTableRow({
+  index,
   row,
-  // Display-only: how many of this row's matches took both pitches, and the extra units they add
-  // to the COUNT. Never reaches a cost expression — see slotCountByVenue.
+  venue,
   slotExtra,
   expanded,
-  expandable,
-  onToggleExpand,
-  primaryVenue,
-  cellState,
-  onSavePrice,
-  onSaveBillingType,
-  onSaveChargeOnCancel,
-  onSavePerReservation, links, onSaveCountsAsRegular,
-  dashboardDriven,
-  onSaveBillingCadence,
-  onSaveBillingDay,
-  onSaveBillingAnchorMonth,
-  onSaveBillingWeekday,
-  onSaveCustomDays,
-  onSaveCustomAmount,
-  isCombinedPrimary,
-  month,
-  autoAmount,
-  scheduleRows,
   highlight,
+  onToggle,
+  month,
+  matchDays,
 }: {
+  index: number;
   row: FieldCostRow;
+  venue: FinVenue | null;
   slotExtra: { extra: number; twoPitch: number };
   expanded: boolean;
-  expandable: boolean;
-  onToggleExpand: () => void;
-  primaryVenue: FinVenue | null;
-  cellState: (field: CellStateKey) => CellState | null;
-  onSavePrice: (field: PriceField, raw: string) => void;
-  onSaveBillingType: (next: FinVenue["billing_type"]) => void;
-  onSaveChargeOnCancel: (next: boolean) => void;
-  onSavePerReservation: (next: boolean) => void;
-  links: { mdapi_field_id: number; title: string; isEvent: boolean; countsAsRegular: boolean }[];
-  onSaveCountsAsRegular: (fieldId: number, next: boolean) => void;
-  dashboardDriven: boolean;
-  onSaveBillingCadence: (next: FinVenue["billing_cadence"]) => void;
-  onSaveBillingDay: (raw: string) => void;
-  onSaveBillingAnchorMonth: (raw: string) => void;
-  onSaveBillingWeekday: (raw: string) => void;
-  onSaveCustomDays: (monthIso: string, days: number[]) => void;
-  onSaveCustomAmount: (raw: string) => void;
-  isCombinedPrimary: boolean;
+  highlight: boolean;
+  onToggle: () => void;
   month: Q2Month;
-  autoAmount: number;
-  scheduleRows: MatchLineItem[];
-  // Set briefly when the Match P&L tab links back to this row.
-  // Renders a soft mint pulse so the operator can find the row.
-  highlight?: boolean;
+  matchDays: { d: number; amount: number }[];
 }) {
-  const isOverride = Boolean(row.override);
-  const isCombined = row.secondaryVenueIds.length > 0;
-  const v = primaryVenue;
-  const zero = Math.abs(row.amount) < 0.005;
-  // An agreed rate on record — cost_per_match, or an auto-bill rate. Drives the "not billed"
-  // sub-line and keeps a genuinely rate-less venue from claiming one.
-  const hasAgreedRate = (v?.cost_per_match ?? null) !== null || (v?.per_match_rate ?? null) !== null;
-
-  // THE AGREED RATE IS REFERENCE DATA, NOT A BUG.
-  //
-  // cost_per_match is the rate AGREED WITH THE VENUE. per_match_rate is a different fact: whether
-  // we auto-bill per match. A NULL per_match_rate is INTENTIONAL — it means the venue is not
-  // auto-billed per match, so a month with no override correctly costs $0, and "which months were
-  // $0" is something this page is read for.
-  //
-  // So the cell shows the agreed rate, LABELLED so it cannot be mistaken for what drives the cost.
-  // An agreed rate differing from what we paid this month is normal.
-  let rateMain: React.ReactNode;
-  let rateSub = v?.charge_on_cancel ? "cancelled matches billed" : "cancels not billed";
-  /* HOW MANY RATES THIS CELL STATES. Asserted on, because the failure being fixed is a cell that
-   * states ONE rate the cost was never computed from. */
-  let rateCount = 1;
-  // NO AMBER ON THIS CELL. A rate that differs from what we paid this month is normal under this
-  // model, not a fault, so there is no warning state left for the rate to be in.
-
-  /* ── A RATE THAT DRIVES NOTHING IS NOT A RATE ───────────────────────────────────────────────
-   * Crossbar Rowlett is stored per_match with a $100 rate, but autoCost checks the partner
-   * dashboard FIRST (financeCosts.ts:188) and returns match revenue minus manager pay — which is
-   * why $625 is not a multiple of $100 and never could be. Printing "$100 / match" there describes
-   * an arithmetic nobody performed.
-   *
-   * KEYED OFF THE BRANCH autoCost TOOK, never off a venue list, so the next per_match_minus_manager
-   * venue inherits this automatically. The three flat_percentage dashboards do NOT reach this
-   * branch and keep rendering "Share of revenue" exactly as they do today. */
-  if (row.dashboardPriced) {
-    rateMain = <>Partner <span className="font-semibold text-deep-green/45">payout</span></>;
-    rateSub = "match revenue minus manager pay";
-    rateCount = 0;
-  } else if (isCombined && new Set(row.legs.map((l) => l.rate)).size > 1) {
-    /* ── BOTH RATES, NAMED ───────────────────────────────────────────────────────────────────
-     * COMBINED_LEG_LABELS already holds "weekday"/"Sunday" and "normal"/"tournament" in
-     * per_match_rate ASC order — the same order groupVenues sorts the legs into — so they are read
-     * positionally and never re-sorted. A leg with no label falls back to its own venue name
-     * rather than going unlabelled. */
-    const labels = COMBINED_LEG_LABELS[row.displayName] ?? [];
-    rateCount = row.legs.length;
-    rateMain = (
-      <span className="inline-flex flex-wrap items-baseline gap-x-1.5">
-        {row.legs.map((l, i) => (
-          <span key={l.venueId} data-testid="fc-rate-leg">
-            {i > 0 && <span className="text-deep-green/30">· </span>}
-            {fmtMoney(l.rate, true)}
-            <span className="ml-0.5 font-semibold text-deep-green/45">{labels[i] ?? l.venueName}</span>
-          </span>
-        ))}
-      </span>
-    );
-    rateSub = `${row.legs.length} rates · ${rateSub}`;
-  } else if (row.billingType === "per_match") {
-    if (v?.cost_per_match === 0 || v?.per_match_rate === 0) {
-      rateMain = "Free";
-      rateSub = "no charge from venue";
-    } else if (v?.per_match_rate != null) {
-      rateMain = <>{fmtMoney(v.per_match_rate)} <span className="font-semibold text-deep-green/45">/ match</span></>;
-    } else if (v?.cost_per_match != null) {
-      // Agreed, but not auto-billed — the cost comes from a monthly override instead.
-      rateMain = <>{fmtMoney(v.cost_per_match)} <span className="font-semibold text-deep-green/45">/ match agreed</span></>;
-      rateSub = "billed monthly, not per match";
-    } else {
-      rateMain = <span className="text-deep-green/40">—</span>;
-      rateSub = "no rate on record";
-    }
-  } else if (row.billingType === "profit_share") {
-    rateMain = <>Share <span className="font-semibold text-deep-green/45">of revenue</span></>;
-  } else {
-    rateMain = v?.monthly_flat != null
-      ? <>{fmtMoney(v.monthly_flat)} <span className="font-semibold text-deep-green/45">/ month</span></>
-      : <span className="text-deep-green/40">Per month</span>;
-    rateSub = "flat, regardless of matches";
-  }
-
-  // BILLS ON — three states, and only three.
-  const perMatchDated = row.billingType === "per_match" && v?.billing_day == null;
-  const bill = billingDatesFor(v, month);
-  // RED ONLY WHERE MONEY IS. A month with no billing is normal under this model, so an undated $0
-  // is not an error — it is the ordinary case. The cell turns red on its own the month the venue
-  // actually carries cost, which is the state worth interrupting for.
-  const undatedWithMoney = !perMatchDated && bill.labels.length === 0 && !zero;
+  const model = modelOf(row);
+  const p = monthParts(month);
+  const ov = row.override != null;
+  const when = p
+    ? paysOnText(venue?.pay_schedule ?? null, p.year, p.month0, row.amount, row.matchCount, matchDays)
+    : { b: "—", s: "" };
   return (
+    <tr
+      className={`row${highlight ? " hl" : ""}`}
+      data-testid={`row-${index}`}
+      aria-expanded={expanded}
+      onClick={onToggle}
+    >
+      <td className="v">
+        <b>{row.displayName}</b>
+        <span>{row.city}</span>
+      </td>
+      <td>
+        <span className={`tag${model === "share" ? " share" : ""}`} data-testid={`tag-${index}`}>
+          {model === "share" ? "Profit share" : `Per match · ${rateLabel(venue?.rate_days ?? null, venue?.per_match_rate ?? 0)}`}
+        </span>
+      </td>
+      <td className="r">
+        {row.matchCount + slotExtra.extra}
+        {slotExtra.twoPitch > 0 && (
+          <small
+            data-testid="fc-two-pitch"
+            className="block text-[10.5px] text-deep-green/50"
+            title={`${slotExtra.twoPitch} match${slotExtra.twoPitch === 1 ? "" : "es"} occupied both 9v9 pitches and counts as two. Cost is unaffected — each is billed once, at the two-pitch rate.`}
+          >
+            {row.matchCount - slotExtra.twoPitch}+{slotExtra.twoPitch}×2
+          </small>
+        )}
+      </td>
+      <td className="r cost" data-cost={r2(row.amount)}>
+        <b>{money0(row.amount)}</b>
+        {ov ? (
+          <small className="ov">set by hand · computed {money0(row.autoAmount)}</small>
+        ) : model === "share" ? (
+          <small>partner payout</small>
+        ) : (
+          <small>{calcText(row)}</small>
+        )}
+        {hasNoRate(row, venue) && <small className="norate">no rate</small>}
+      </td>
+      <td className="when" data-testid={`when-${index}`}>
+        <b>{when.b}</b>
+        <span>{when.s}</span>
+      </td>
+      <td className="chev">{expanded ? "▾" : "▸"}</td>
+    </tr>
+  );
+}
+
+/* A TEXT BOX THAT SAVES ON COMMIT — the DOM's own "change": Enter, or leaving the box after
+ * editing it. Never per keystroke: typing "500" must be one write, not three ($5, $50, $500).
+ * React's onChange is the per-keystroke "input" event, so the native listener is attached here. */
+function CommitInput({ onCommit, ...rest }: Omit<React.InputHTMLAttributes<HTMLInputElement>, "onChange"> & { onCommit: (raw: string) => void } & Record<`data-${string}`, unknown>) {
+  const ref = useRef<HTMLInputElement>(null);
+  const cb = useRef(onCommit);
+  cb.current = onCommit;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const h = () => cb.current(el.value);
+    el.addEventListener("change", h);
+    return () => el.removeEventListener("change", h);
+  }, []);
+  return <input ref={ref} {...rest} />;
+}
+
+type FieldBox = { fieldId: number; title: string; on: boolean };
+
+function VenuePanel({
+  index,
+  row,
+  venue,
+  month,
+  matchDays,
+  fields,
+  error,
+  scheduleRows,
+  onPatch,
+  onOverride,
+  onField,
+}: {
+  index: number;
+  row: FieldCostRow;
+  venue: FinVenue;
+  month: Q2Month;
+  matchDays: { d: number; amount: number }[];
+  fields: FieldBox[];
+  error: string | null;
+  scheduleRows: MatchLineItem[];
+  /** Write these fin_venues columns. The caller sends only what differs from the row on file. */
+  onPatch: (patch: VenuePatch, key: EditableField) => void;
+  onOverride: (raw: string) => void;
+  onField: (fieldId: number, counted: boolean) => void;
+}) {
+  const model = modelOf(row);
+  const ov = row.override != null;
+  const comp = r2(row.autoAmount);
+  const rates = ratesOf(venue);
+  const sched: PaySchedule = venue.pay_schedule ?? { mode: "match" };
+  const p = monthParts(month) ?? { year: 2026, month0: 0 };
+  const prepaid = sched.mode === "dates" && sched.prepaid === true;
+  const dy = prepaid && p.month0 === 0 ? p.year - 1 : p.year;
+  const dm = prepaid ? (p.month0 + 11) % 12 : p.month0;
+  const dim = new Date(Date.UTC(dy, dm + 1, 0)).getUTCDate();
+  const ymd = (d: number) => `${dy}-${pad2(dm + 1)}-${pad2(d)}`;
+  const cash = cashDays(sched, dy, dm, row.amount, matchDays);
+  const onDays = new Set(cash.days.map((x) => x.d));
+  const md = new Set(prepaid ? [] : matchDays.map((m) => m.d));
+  const result = payResultText(sched, p.year, p.month0, row.amount, matchDays);
+
+  // ── rates ──
+  const saveRates = (next: DayRate[]) => {
+    if (next.length === 1) onPatch({ rate_days: null, per_match_rate: next[0].v }, "rate_days");
+    else onPatch({ rate_days: next.map((r) => ({ v: r.v, days: [...r.days].sort((a, b) => a - b) })) }, "rate_days");
+  };
+  const addRate = () => {
+    const used = new Set(rates.flatMap((r) => r.days));
+    let take = ALL_DAYS.filter((d) => !used.has(d));
+    if (!take.length) {
+      if (rates.length === 1) take = [5, 6];   // the weekend, as the mock does
+      else {
+        const big = [...rates].sort((a, b) => b.days.length - a.days.length)[0];
+        if (big.days.length < 2) return;
+        take = [big.days[big.days.length - 1]];
+      }
+    }
+    const next = rates.map((r) => ({ ...r, days: r.days.filter((d) => !take.includes(d)) }));
+    next.push({ v: rates[0].v, days: take });
+    saveRates(next.filter((r) => r.days.length));
+  };
+  const delRate = (j: number) => {
+    const next = rates.map((r) => ({ ...r, days: [...r.days] }));
+    const gone = next.splice(j, 1)[0];
+    next[0].days.push(...gone.days);
+    saveRates(next);
+  };
+  const flipDay = (j: number, d: number) => {
+    const next = rates.map((r) => ({ ...r, days: [...r.days] }));
+    const r = next[j];
+    if (r.days.includes(d)) {
+      // Each day belongs to exactly one rate: a day taken off this rate goes to another.
+      if (r.days.length < 2) return;
+      r.days = r.days.filter((x) => x !== d);
+      next.find((_, k) => k !== j)!.days.push(d);
+    } else {
+      const from = next.find((x) => x.days.includes(d));
+      if (from && from.days.length < 2) return;   // never leave a rate with no days
+      for (const x of next) x.days = x.days.filter((y) => y !== d);
+      r.days.push(d);
+    }
+    saveRates(next);
+  };
+  const setRate = (j: number, raw: string) => {
+    const n = raw.trim() === "" ? null : Number(raw);
+    if (n == null || !Number.isFinite(n) || n < 0) return;
+    if (rates.length === 1) { onPatch({ per_match_rate: n }, "per_match_rate"); return; }
+    saveRates(rates.map((r, k) => (k === j ? { ...r, v: n } : r)));
+  };
+
+  // ── pay schedule ──
+  const saveSched = (next: PaySchedule) => onPatch({ pay_schedule: next }, "pay_schedule");
+  const setMode = (k: PaySchedule["mode"]) => {
+    if (k === sched.mode) return;
+    if (k === "match") return saveSched({ mode: "match" });
+    if (k === "dates") {
+      const d = sched.mode === "weekly" || sched.mode === "biweekly" ? Number(sched.anchor.slice(8, 10)) : 1;
+      return saveSched({ mode: "dates", dates: [{ d, v: null }], prepaid: false });
+    }
+    const anchor = sched.mode === "weekly" || sched.mode === "biweekly"
+      ? sched.anchor
+      : `${p.year}-${pad2(p.month0 + 1)}-${pad2(sched.mode === "dates" ? Math.min(sched.dates[0]?.d ?? 1, new Date(Date.UTC(p.year, p.month0 + 1, 0)).getUTCDate()) : 1)}`;
+    saveSched({ mode: k, anchor });
+  };
+  const clickDay = (d: number) => {
+    if (sched.mode === "dates") {
+      const has = sched.dates.some((x) => x.d === d);
+      if (has && sched.dates.length < 2) return;   // the last date stays
+      const dates = has ? sched.dates.filter((x) => x.d !== d) : [...sched.dates, { d, v: null }];
+      saveSched({ ...sched, dates: dates.sort((a, b) => a.d - b.d) });
+    } else if (sched.mode === "weekly" || sched.mode === "biweekly") {
+      saveSched({ mode: sched.mode, anchor: ymd(d) });
+    }
+  };
+  const setAmt = (d: number, raw: string) => {
+    if (sched.mode !== "dates") return;
+    const t = raw.trim();
+    const v = t === "" ? null : Number(t);
+    if (v != null && (!Number.isFinite(v) || v < 0)) return;
+    saveSched({ ...sched, dates: sched.dates.map((x) => (x.d === d ? { d, v } : x)) });
+  };
+
+  const lead = (new Date(Date.UTC(dy, dm, 1)).getUTCDay() + 6) % 7;
+  const dateList = sched.mode === "dates" ? [...sched.dates].sort((a, b) => a.d - b.d) : [];
+
+  const shareText = row.dashboardPriced ? "Match revenue minus manager pay" : "Partner payout";
+  const modelSelect = (
+    <select
+      className="in"
+      data-testid="model"
+      value={model}
+      disabled={row.dashboardPriced}
+      title={row.dashboardPriced ? "Priced by its partner dashboard" : undefined}
+      onChange={(e) => onPatch({ billing_type: e.target.value === "share" ? "profit_share" : "per_match" }, "billing_type")}
+    >
+      <option value="match">Per match</option>
+      <option value="share">Profit share</option>
+    </select>
+  );
+  const overrideBox = (
     <>
-      <tr
-        id={`venue-row-${row.primaryVenueId}`}
-        className={
-          "border-b border-cream-line/70 transition " +
-          (expanded ? "bg-cream-soft/40" : "hover:bg-cream-soft/30") +
-          (highlight ? " animate-pulse bg-mint/20" : "")
-        }
-      >
-        {/* VENUE — city (and "combined") as a sub-line. Kills the separate City column. */}
-        <td className="px-3 py-2.5 pl-5">
-          <div className="text-[14.5px] font-bold text-deep-green">{row.displayName}</div>
-          <div className="mt-0.5 text-[11px] text-deep-green/45">
-            {row.city}{isCombined ? " · combined" : ""}
-          </div>
-        </td>
-
-        {/* BILLING — a quiet tag, title case, never the raw enum. */}
-        <td className="px-3 py-2.5">
-          <span className="inline-block whitespace-nowrap rounded border border-cream-line bg-cream-soft px-[7px] py-[3px] text-[10px] font-extrabold uppercase tracking-[0.05em] text-deep-green/70">
-            {BILLING_LABEL[row.billingType ?? ""] ?? "—"}
-          </span>
-        </td>
-
-        {/* RATE — unit is part of the value; pay-on-cancel folded into the sub-line. */}
-        {/* data-rates is the count of per-match rates this cell STATES: 2 for a split-rate
-            combined venue, 0 where a partner payout decides the money, 1 everywhere else. It is
-            what the assertions read, because "renders one rate" is the exact claim being made. */}
-        <td className="px-3 py-2.5" data-testid="fc-rate" data-rates={rateCount}>
-          <div className="text-[13.5px] font-bold text-deep-green">{rateMain}</div>
-          <div className="mt-0.5 text-[11px] text-deep-green/45" data-testid="fc-rate-sub">{rateSub}</div>
-        </td>
-
-        <td className={"px-3 py-2.5 text-right tabular-nums " + (row.matchCount === 0 ? "text-deep-green/30" : "text-deep-green")}>
-          {/* WHEN THE VENUE BILLS PER RESERVATION, BOTH NUMBERS SHOW. A collapsed figure that
-              only printed the smaller number would be indistinguishable from a venue that simply
-              had fewer matches. */}
-          {row.perReservation ? (
-            <span data-testid="fc-matches">
-              {row.rawMatchCount}
-              <span className="ml-1 text-[11px] font-bold text-deep-green/45" data-testid="fc-reservations">
-                · {row.matchCount} reservation{row.matchCount === 1 ? "" : "s"}
-              </span>
-            </span>
-          ) : (
-            /* THE COUNT, WITH TWO-PITCH MATCHES COUNTED TWICE — display only. The cost cell beside
-               it is untouched: 1 × $180, never 2 × $180. */
-            <span data-testid="fc-matches">
-              {row.matchCount + slotExtra.extra}
-              {slotExtra.twoPitch > 0 && (
-                <span className="ml-1 text-[11px] font-bold text-deep-green/45" data-testid="fc-two-pitch"
-                  title={`${slotExtra.twoPitch} match${slotExtra.twoPitch === 1 ? "" : "es"} occupied both 9v9 pitches and counts as two. Cost is unaffected — each is billed once, at the two-pitch rate.`}>
-                  · {row.matchCount - slotExtra.twoPitch}+{slotExtra.twoPitch}×2
-                </span>
-              )}
-            </span>
-          )}
-        </td>
-
-        {/* MONTH COST — dim when zero. An amber sub-line only when the figure was entered by hand,
-            and it only claims an auto figure for a billing type that HAS one. */}
-        <td className="px-3 py-2.5 text-right" data-testid="fc-cost">
-          {/* ZERO IS A VALUE WHEN SOMEBODY KEYED IT.
-              fmtMoney renders 0 as an em dash unless signZero is set, so a deliberate $0 override
-              was indistinguishable from "nothing keyed and nothing billable". Seven of those exist
-              — Centennial Commons in FOUR consecutive months, plus San Juan Diego, Scissortail and
-              Lou Fusz Outdoor — and four straight months of dashes reads as "this venue is free".
-              signZero is passed exactly when an override exists, so a keyed zero prints $0 and an
-              unkeyed zero still prints —. The two are now different marks for different facts. */}
-          <div className={zero && !isOverride ? "text-[15px] font-semibold tabular-nums text-deep-green/30" : "text-[15px] font-extrabold tabular-nums text-deep-green"}
-               data-testid="fc-cost-amount">
-            {fmtMoney(row.amount, isOverride)}
-          </div>
-          {isOverride ? (
-            /* ONE MARKER FOR ALL 31 KEYED VALUES. The keyed figure is the big number above and
-               wins on sight; the derived one is named beside it so a difference is legible rather
-               than hidden — Centennial's old "—" with "auto $300" beside it had the derived figure
-               winning the eye and the real one absent. Nothing here reads the reason string. */
-            <div className="mt-0.5 text-[10.5px] font-bold text-[#8a5a00]" data-testid="fc-keyed">
-              <span className="rounded-sm bg-[#8a5a00]/10 px-1 py-px">KEYED</span>{" "}
-              {monthFull(month)}
-              {row.billingType === "per_match" && <> · derived {fmtMoney(autoAmount, true)}</>}
-            </div>
-          ) : zero && hasAgreedRate ? (
-            // THE STATE RYAN SCANS FOR. Plain, uncoloured: a venue with an agreed rate that we did
-            // not bill this month. Normal, not a warning.
-            <div className="mt-0.5 text-[10.5px] text-deep-green/40">
-              not billed in {monthShort(month)}
-            </div>
-          ) : null}
-        </td>
-
-        {/* BILLS ON */}
-        <td className={"px-3 py-2.5 " + (undatedWithMoney ? "bg-[#fdeceb]" : "")}>
-          {perMatchDated ? (
-            <>
-              <div className="text-[13.5px] font-bold text-deep-green/70">On each match date</div>
-              <div className="mt-0.5 text-[11px] text-deep-green/45">
-                {row.matchCount === 0 ? `no matches in ${monthShort(month)}` : `${row.matchCount} dates in ${monthShort(month)}`}
-              </div>
-            </>
-          ) : bill.labels.length > 0 ? (
-            <>
-              <div className="text-[14.5px] font-extrabold text-deep-green">{bill.labels.join(", ")}</div>
-              <div className="mt-0.5 text-[11px] text-deep-green/45">
-                {zero
-                  ? "nothing to bill"
-                  : bill.labels.length > 1
-                    ? `${bill.labels.length} dates · ${bill.cadence}`
-                    : bill.cadence}
-              </div>
-            </>
-          ) : undatedWithMoney ? (
-            <>
-              {/* THE ONLY RED ON THE PAGE, and only when there is money to misplace. It is NOT
-                  lost — it is in the month's subtotal (opexSources.ts:371) and lands on no day
-                  (:437). */}
-              <div className="text-[14.5px] font-extrabold text-[#a8321f]">No billing day</div>
-              <div className="mt-0.5 text-[11px] font-bold text-[#a8321f]">
-                in {monthFull(month)}&rsquo;s total, on no day
-              </div>
-            </>
-          ) : (
-            <div className="text-[13.5px] text-deep-green/40">not billed in {monthShort(month)}</div>
-          )}
-        </td>
-
-        <td className="px-3 py-2.5 text-center text-deep-green/35">
-          <button type="button" onClick={onToggleExpand} aria-expanded={expanded}
-            className="px-1 text-base leading-none hover:text-deep-green">
-            {expanded ? "⌄" : "›"}
-          </button>
-        </td>
-      </tr>
-
-      {expanded && (
-        <tr className="border-b border-cream-line bg-[#fbfdfc]">
-          <td colSpan={7} className="px-5 pb-5 pt-1">
-            <VenuePanel
-              row={row} venue={v} month={month} autoAmount={autoAmount}
-              cellState={cellState} onSavePrice={onSavePrice}
-              onSaveBillingType={onSaveBillingType}
-              onSaveChargeOnCancel={onSaveChargeOnCancel}
-              onSavePerReservation={onSavePerReservation}
-              links={links} onSaveCountsAsRegular={onSaveCountsAsRegular}
-              onSaveBillingDay={onSaveBillingDay}
-              onSaveCustomAmount={onSaveCustomAmount}
-              isOverride={isOverride}
-              timing={
-                // THE NON-MONTHLY EDITOR, PRESERVED. Seven venues are on `custom` cadence — five
-                // of them active, carrying real billing_custom_days (NEMP {"2026-07":[29]},
-                // Scissortail three months of them). BillingTimingCell is their ONLY editor for
-                // cadence, anchor month, weekday and custom days; dropping it with the old table
-                // would have deleted that ability silently.
-                <BillingTimingCell
-                  venue={v} dashboardDriven={dashboardDriven}
-                  isCombinedPrimary={isCombinedPrimary} month={month}
-                  autoAmount={autoAmount} monthOverride={row.override}
-                  cadenceState={cellState("billing_cadence")} dayState={cellState("billing_day")}
-                  anchorState={cellState("billing_anchor_month")} weekdayState={cellState("billing_weekday")}
-                  customDaysState={cellState("billing_custom_days")} customAmountState={cellState("custom_amount")}
-                  onSaveCadence={onSaveBillingCadence} onSaveDay={onSaveBillingDay}
-                  onSaveAnchorMonth={onSaveBillingAnchorMonth} onSaveWeekday={onSaveBillingWeekday}
-                  onSaveCustomDays={onSaveCustomDays} onSaveCustomAmount={onSaveCustomAmount}
-                />
-              }
-            />
-            {expandable && <PerMatchExpand row={row} scheduleRows={scheduleRows} />}
-          </td>
-        </tr>
-      )}
+      $
+      <CommitInput
+        key={`ov-${venue.id}-${month}-${row.override?.override_amount ?? "auto"}`}
+        className={`in${ov ? " ov" : ""}`}
+        data-testid="override"
+        placeholder={String(comp)}
+        defaultValue={ov ? String(row.override!.override_amount) : ""}
+        onCommit={onOverride}
+      />
+      <span className="u" data-testid="calc">
+        {ov ? (
+          <>
+            set by hand · {model === "share" ? "payout" : "auto"} {money0(comp)} ·{" "}
+            <span className="lnk" data-clear onClick={() => onOverride("")}>reset</span>
+          </>
+        ) : model === "share" ? (
+          "auto · this month's payout"
+        ) : (
+          `auto · ${calcText(row)}`
+        )}
+      </span>
     </>
   );
-}
-
-
-
-// ── THE ROW PANEL — this is where the boxes went ───────────────────────────────────────────────
-//
-// Nine venues by four editable fields was thirty-six bordered inputs on a page you mostly come to
-// READ. The table is text now; every control lives here, in the row you opened.
-//
-// Three groups in one card: what MatchDay pays, when it bills, and what a PLAYER pays — the last
-// labelled as not-a-cost, because it sat in the two widest columns of a cost table.
-function VenuePanel({
-  row, venue, month, autoAmount, cellState, onSavePrice, onSaveBillingType,
-  onSaveChargeOnCancel, onSaveBillingDay, onSaveCustomAmount, onSavePerReservation, isOverride, timing,
-  links, onSaveCountsAsRegular, dashboardDriven = false,
-}: {
-  row: FieldCostRow;
-  venue: FinVenue | null;
-  // True when this venue's cost comes from a partner-dashboard payout rather than a rate here.
-  dashboardDriven?: boolean;
-  month: Q2Month;
-  autoAmount: number;
-  cellState: (field: CellStateKey) => CellState | null;
-  onSavePrice: (field: PriceField, raw: string) => void;
-  onSaveBillingType: (next: FinVenue["billing_type"]) => void;
-  onSaveChargeOnCancel: (next: boolean) => void;
-  onSaveBillingDay: (raw: string) => void;
-  onSaveCustomAmount: (raw: string) => void;
-  onSavePerReservation: (next: boolean) => void;
-  // What this venue is actually made of. Nobody caught ATH Pearland's zero for 26 months because
-  // the page never showed which mdapi fields a venue was built from.
-  links: { mdapi_field_id: number; title: string; isEvent: boolean; countsAsRegular: boolean }[];
-  onSaveCountsAsRegular: (fieldId: number, next: boolean) => void;
-  isOverride: boolean;
-  timing: React.ReactNode;
-}) {
-  // AUTO-BILL IS per_match_rate BEING SET AT ALL. NULL means "not auto-billed per match", which is
-  // a real, deliberate state for six venues — the money arrives as a monthly override instead.
-  const autoBill = (venue?.per_match_rate ?? null) !== null;
-  const perReservation = venue?.bills_per_reservation === true;
-  /* IS THIS VENUE'S COST THE PARTNER PAYOUT? groupCost's share branch returns before any per-match
-   * machinery exists, so on these venues the Cancels setting and the month cost box are both read
-   * by nothing. Keyed off the same two facts groupCost branches on — the venue's billing_type and
-   * the partner's payout model — never off a venue name. */
-  const shareDriven = venue?.billing_type === "profit_share" || dashboardDriven;
-
-  // ONE RATE, TWO COLUMNS. The agreed rate always lands in cost_per_match. per_match_rate mirrors
-  // it while auto-bill is on and is cleared when it is off, so the switch and the stored shape can
-  // never disagree. No value is invented for a venue that had none.
-  const onSaveRate = (raw: string) => {
-    onSavePrice("cost_per_match", raw);
-    if (autoBill) onSavePrice("per_match_rate", raw);
-  };
-  const onToggleAutoBill = (next: boolean) => {
-    // On → mirror the agreed rate. Off → NULL, never "0", which would be a real £0 rate.
-    onSavePrice("per_match_rate", next ? String(venue?.cost_per_match ?? "") : "");
-  };
-
-  const day = venue?.billing_day ?? null;
-  const nonMonthly = venue != null && venue.billing_cadence !== "monthly";
-  const resolved = billingDatesFor(venue, month).labels.join(", ") || null;
-  const glab = "mb-2.5 text-[9.5px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45";
-  const fld = "mb-2 flex items-center gap-2.5";
-  const lab = "w-[104px] flex-none text-[12.5px] font-semibold text-deep-green/60";
-  const inp = "w-[130px] rounded-md border border-cream-line bg-white px-2 py-1.5 text-[13.5px] font-bold tabular-nums text-deep-green focus:border-deep-green focus:outline-none";
-
-  // The days actually in use, so the select never omits a value the data already holds.
-  // ANY DAY OF THE MONTH. This offered 1st, 5th, 15th, 28th and "Last day" — a shortlist that
-  // could not express the day a real invoice actually falls on.
-  //
-  // 31 IS THE ONLY "LAST DAY" THERE IS. A separate "Last day" option stored 31 too, so the two
-  // were the same row in the database wearing different labels — nothing downstream could tell
-  // them apart, and a reader who picked one and saw the other on reload would be right to distrust
-  // the control. There is one option now, labelled for what 31 does.
-  const days = Array.from({ length: 31 }, (_, i) => i + 1);
 
   return (
-    <div className="grid grid-cols-1 overflow-hidden rounded-[10px] border border-cream-line bg-white lg:grid-cols-3">
-      {/* ── WHAT MATCHDAY PAYS ─────────────────────────────────────────────────────────────── */}
-      <div className="border-b border-cream-line p-4 lg:border-b-0 lg:border-r">
-        <div className={glab}>What MatchDay pays</div>
-
-        {/* ── FIELDS ─────────────────────────────────────────────────────────────────────────
-            One row per fin_venue_fields link. A venue whose links are all clean shows the titles
-            and no toggle at all — the control only appears where the marker has actually fired. */}
-        {links.length > 0 && (
-          <div className="mb-3" data-testid="venue-fields">
-            <label className={lab}>Fields</label>
-            <div className="mt-1 flex flex-col gap-1">
-              {links.map((l) => {
-                const counted = !l.isEvent || l.countsAsRegular;
-                return (
-                  <div key={l.mdapi_field_id} className="flex items-center gap-2 text-[12px]"
-                       data-testid="venue-field-row" data-field-id={l.mdapi_field_id}
-                       data-counted={counted ? "yes" : "no"}>
-                    <span className="min-w-0 flex-1 truncate text-deep-green" title={l.title}>{l.title}</span>
-                    <span className={counted ? "text-deep-green/55" : "text-deep-green/45"}
-                          data-testid="venue-field-status">
-                      {counted
-                        ? (l.isEvent ? "counts (exception)" : "counts")
-                        : "excluded as an event"}
-                    </span>
-                    {/* THE TOGGLE ONLY EXISTS WHERE THE MARKER FIRED. On a clean link there is
-                        nothing to except, and a control that can only be a no-op is noise. */}
-                    {l.isEvent && (
-                      <button
-                        type="button"
-                        data-testid="venue-field-toggle"
-                        onClick={() => onSaveCountsAsRegular(l.mdapi_field_id, !l.countsAsRegular)}
-                        className="shrink-0 rounded-[6px] border border-cream-line px-2 py-[3px] text-[11px] font-semibold text-deep-green hover:bg-cream-bg"
-                      >
-                        {l.countsAsRegular ? "exclude it" : "count it"}
-                      </button>
+    <tr className="panel" data-testid={`panel-${index}`}>
+      <td colSpan={6}>
+        <div className="pan">
+          <div className="g">
+            <div className="l">Billing</div>
+            {model === "share" ? (
+              <div className="v">
+                {modelSelect}
+                <span className="u">
+                  {shareText} · <Link className="lnk" href="/match-ops/partner-dashboards">Partners</Link>
+                </span>
+              </div>
+            ) : (
+              <div className="v">
+                {modelSelect}
+                {rates.map((r, j) => (
+                  <span className="rate" data-testid={`rate-${j}`} key={`${venue.id}-${j}-${rates.length}`}>
+                    $
+                    <CommitInput
+                      key={`${venue.id}-${j}-${r.v}-${rates.length}`}
+                      className="in"
+                      data-testid="rate"
+                      defaultValue={rates.length === 1 && venue.per_match_rate == null && !venue.rate_days ? "" : String(r.v)}
+                      placeholder="rate"
+                      onCommit={(raw) => setRate(j, raw)}
+                    />{" "}
+                    {rates.length > 1 ? (
+                      <>
+                        <span className="days">
+                          {DAY_CHIP.map((l, d) => (
+                            <button
+                              type="button"
+                              key={d}
+                              className={`dy${r.days.includes(d) ? " on" : ""}`}
+                              title={DAY_LONG[d]}
+                              onClick={() => flipDay(j, d)}
+                            >
+                              {l}
+                            </button>
+                          ))}
+                        </span>
+                        <button type="button" className="x" data-delrate={j} aria-label="Remove rate" onClick={() => delRate(j)}>
+                          ×
+                        </button>
+                      </>
+                    ) : (
+                      <span className="u">/ match</span>
                     )}
-                  </div>
-                );
-              })}
+                  </span>
+                ))}
+                {rates.length < 3 && (
+                  <span className="lnk" data-testid="add-rate" onClick={addRate}>
+                    + rate for other days
+                  </span>
+                )}
+              </div>
+            )}
+            {model === "match" && (
+              <>
+                <div className="l">Cancelled</div>
+                <div className="v">
+                  <label className="chk">
+                    <input
+                      type="checkbox"
+                      data-testid="cancels"
+                      checked={venue.charge_on_cancel === true}
+                      onChange={(e) => onPatch({ charge_on_cancel: e.target.checked }, "charge_on_cancel")}
+                    />{" "}
+                    billed
+                  </label>
+                </div>
+              </>
+            )}
+            <div className="l">This month</div>
+            <div className="v">{overrideBox}</div>
+            {fields.length > 1 && (
+              <>
+                <div className="l">Fields</div>
+                <div className="v">
+                  {fields.map((f, j) => (
+                    <label className="chk" key={f.fieldId} title="An unchecked field stays linked but leaves this venue's matches, revenue and cost">
+                      <input
+                        type="checkbox"
+                        data-field={j}
+                        checked={f.on}
+                        onChange={(e) => onField(f.fieldId, e.target.checked)}
+                      />
+                      {f.title}
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+            <div className="l">Notes</div>
+            <div className="v">
+              <textarea
+                key={`notes-${venue.id}`}
+                className="in note"
+                rows={1}
+                data-testid="notes"
+                placeholder="Anything worth remembering about this venue"
+                defaultValue={venue.notes ?? ""}
+                onBlur={(e) => {
+                  const next = e.target.value.trim() === "" ? null : e.target.value;
+                  if (next !== (venue.notes ?? null)) onPatch({ notes: next }, "notes");
+                }}
+              />
             </div>
+            {error && (
+              <>
+                <div />
+                <div className="v err" data-testid="panel-error">{error}</div>
+              </>
+            )}
           </div>
-        )}
-        <div className={fld}>
-          <label className={lab}>Billing</label>
-          <select
-            value={row.billingType ?? "per_match"}
-            onChange={(e) => onSaveBillingType(e.target.value as FinVenue["billing_type"])}
-            className={inp + " w-[170px]"}
-          >
-            <option value="per_match">Per match</option>
-            <option value="profit_share">Profit share</option>
-            <option value="monthly_flat">Monthly flat</option>
-          </select>
-        </div>
-        {row.billingType === "per_match" && (
-          <>
-            {/* ONE RATE AND A SWITCH, not two money boxes showing the same number.
-                cost_per_match is the AGREED rate — reference. per_match_rate is whether we
-                AUTO-BILL it against the match count. For ATH Katy both are $140, so the panel
-                showed one figure twice under two labels with nothing to distinguish them.
-                The columns are unchanged; this is the same two fields shown as what they mean. */}
-            <div className={fld}>
-              <label className={lab}>Rate</label>
-              <PriceCell stored={venue?.cost_per_match ?? null} state={cellState("cost_per_match")}
-                onSave={(raw) => onSaveRate(raw)} />
-            </div>
-            <div className={fld}>
-              <label className={lab}>Auto-bill</label>
-              <button type="button" role="switch" aria-checked={autoBill}
-                data-testid="autobill-switch" disabled={cellState("per_match_rate")?.saving === true}
-                onClick={() => onToggleAutoBill(!autoBill)}
-                className={"relative h-[24px] w-[44px] flex-none rounded-full border transition "
-                  + (autoBill ? "border-[#2fa36b] bg-[#cfeee0]" : "border-cream-line bg-white")}>
-                <span className={"absolute top-[2px] h-[18px] w-[18px] rounded-full transition-all "
-                  + (autoBill ? "left-[23px] bg-[#2fa36b]" : "left-[2px] bg-deep-green/30")} />
-              </button>
-              <span className="text-[12px] font-bold text-deep-green/60">{autoBill ? "On" : "Off"}</span>
-            </div>
-            {/* WHICH ONE IS IN FORCE, in this month's numbers. The switch says what the setting is;
-                this says what it does to the money on screen. */}
-            <div className="mb-2.5 ml-[116px] text-[11px] leading-snug text-deep-green/55"
-              data-testid="autobill-effect">
-              {autoBill
-                // A COMBINED VENUE HAS LEGS AT DIFFERENT RATES — ATH Katy is $140 and its Sunday
-                // leg $160, so "16 × $140" would not produce the $2,340 printed beside it. Where
-                // the row is combined, the row's own formula is shown instead of a multiplication
-                // that does not check out.
-                ? (row.legs.length > 1
-                    ? <>{monthFull(month)}: <b className="text-deep-green">{fmtMoney(row.autoAmount)}</b> — {row.autoFormula}</>
-                    : <>{monthFull(month)}: {row.matchCount} match{row.matchCount === 1 ? "" : "es"}
-                        {" × "}{fmtMoney(venue?.cost_per_match ?? 0)} = <b className="text-deep-green">{fmtMoney(row.autoAmount)}</b></>)
-                : <>Billed monthly — {monthFull(month)}&rsquo;s cost comes from the month value below,
-                    not the match count.</>}
-            </div>
-          </>
-        )}
-        {/* ONE RESERVATION PER TIME SLOT. A property of the venue's booking arrangement, so it
-            sits with the other things MatchDay pays on — not in a filter and not behind a
-            tooltip. Off is the default and is stated, not implied by an unlit control. */}
-        <div className={fld}>
-          <label className={lab}>Slots</label>
-          <button type="button" role="switch" data-testid="fc-per-reservation"
-            aria-checked={perReservation}
-            onClick={() => onSavePerReservation(!perReservation)}
-            className={`relative h-[21px] w-9 flex-none rounded-full transition ${perReservation ? "bg-mint" : "bg-[#e6eae8]"}`}>
-            <span className={`absolute top-0.5 h-[17px] w-[17px] rounded-full bg-white shadow-sm transition ${perReservation ? "left-[17px]" : "left-0.5"}`} />
-          </button>
-          <span className="text-[12.5px] font-semibold text-deep-green/70">
-            One reservation per time slot
-          </span>
-        </div>
-        {perReservation && (
-          <div className="mb-2.5 ml-[116px] text-[11px] leading-snug text-deep-green/55" data-testid="fc-per-reservation-effect">
-            Two matches in one slot count once. {monthFull(month)}:{" "}
-            <b className="text-deep-green">{row.rawMatchCount} matches</b> →{" "}
-            <b className="text-deep-green">{row.matchCount} reservations</b>.
-          </div>
-        )}
-        {/* CANCELS IS INERT ON A SHARE VENUE, and was silently so.
-            charge_on_cancel is read only by chargedUnitCount, which is reached only from the
-            PER-MATCH branch of groupCost. A profit-share or partner-payout venue returns before
-            that code exists, so the setting has never affected its cost by a cent. PARMER carries
-            charge_on_cancel = TRUE today and it has never done anything.
-            The value is LEFT ALONE — it becomes load-bearing again the moment the venue is moved
-            to a per-match rate, and clearing it would quietly change that future. It is disabled
-            and says why, because a control that looks live and does nothing is the thing we do not
-            ship. */}
-        <div className={fld}>
-          <label className={lab}>Cancels</label>
-          <select
-            value={venue?.charge_on_cancel ? "yes" : "no"}
-            onChange={(e) => onSaveChargeOnCancel(e.target.value === "yes")}
-            className={inp + " w-[170px]" + (shareDriven ? " opacity-50 cursor-not-allowed" : "")}
-            disabled={shareDriven}
-            data-testid="fc-cancels"
-          >
-            <option value="yes">Billed</option>
-            <option value="no">Not billed</option>
-          </select>
-        </div>
-        {shareDriven && (
-          <p className="mb-2.5 ml-[116px] text-[11px] leading-snug text-deep-green/55" data-testid="fc-cancels-inert">
-            Not used by this venue. Its cost is the partner payout, which prices matches
-            individually — a cancelled match earns nothing and so shares nothing. This setting
-            applies only to a per-match rate.
-          </p>
-        )}
-        {/* ONE FIELD, ONE RULE. There is no "override" — there is a month box, and if there is a
-            number in it that number is the cost. Empty with auto-bill on computes; empty with it
-            off means nothing has been entered. That is the whole thing, so there is no Set button
-            to press, no mode to be in, and nothing to name. */}
-        {/* AND THE MONTH BOX IS INERT HERE TOO. This page does not read fin_venue_cost_overrides at
-            all (fieldEconomics.ts:112 — Ryan's ruling: an overridden month still carries a rate, so
-            the rate is what this page uses). For a share venue the figure comes from the partner
-            payout, so a number typed here would be stored and never shown. Disabled with the
-            reason rather than removed, so nobody wonders where the box went. */}
-        <div className={fld}>
-          <label className={lab}>{monthFull(month)} cost</label>
-          <PriceCell
-            stored={row.override?.override_amount ?? null}
-            state={cellState("custom_amount")}
-            onSave={(raw) => onSaveCustomAmount(raw)}
-            // The placeholder is what leaving it empty actually produces.
-            placeholder={shareDriven ? "from the partner payout" : autoBill ? `auto ${fmtMoney(autoAmount)}` : "—"}
-            emptyOk={autoBill || shareDriven}
-            disabled={shareDriven}
-          />
-        </div>
-        <p className="mt-2 text-[11.5px] leading-relaxed text-deep-green/45" data-testid="month-help">
-          {autoBill
-            ? (row.legs.length > 1
-                // autoFormula already ends with its own total — appending one printed it twice.
-                ? <>Empty computes {row.autoFormula}.</>
-                : <>Empty computes {row.matchCount} × {fmtMoney(venue?.cost_per_match ?? 0)} = <b className="text-deep-green/70">{fmtMoney(autoAmount)}</b>.</>)
-            : shareDriven
-              ? <>This venue&rsquo;s cost IS the partner payout for {monthFull(month)}, computed from
-                  its own deal terms on the partner dashboard. Nothing entered here is read.</>
-              : <>This venue is not billed per match — enter {monthFull(month)}&rsquo;s cost.</>}
-        </p>
-      </div>
-
-      {/* ── WHEN IT BILLS ──────────────────────────────────────────────────────────────────── */}
-      <div className="border-b border-cream-line p-4 lg:border-b-0 lg:border-r">
-        <div className={glab}>When it bills</div>
-        {nonMonthly ? (
-          <div className="mb-2">{timing}</div>
-        ) : (
-        <div className={fld}>
-          <label className={lab}>Billing day</label>
-          {/* A SELECT, not a number field. No timing toggle: the code has ONE behaviour
-              (same-month), so a month-after option would be a control that does nothing. */}
-          <select
-            value={day == null ? "" : String(day)}
-            onChange={(e) => onSaveBillingDay(e.target.value)}
-            className={inp + " w-[170px]"}
-          >
-            <option value="">— not set —</option>
-            {days.map((d) => (
-              <option key={d} value={String(d)}>
-                {d === 31 ? "31st — last day of the month" : ordinalDay(d)}
-              </option>
-            ))}
-          </select>
-        </div>
-        )}
-        <div className="mt-1 rounded-md bg-cream-soft px-2.5 py-2 text-[12.5px] text-deep-green/70">
-          {resolved
-            ? <>{monthFull(month)}&rsquo;s {fmtMoney(row.amount)} bills <b className="text-deep-green">{resolved}</b></>
-            : <><b className="text-deep-green">{monthShort(month)} —</b> · pick a day to date it</>}
-        </div>
-        {day == null && row.billingType !== "per_match" && (
-          <div className="mt-2 rounded-md border border-[#f2cdc8] bg-[#fdeceb] px-2.5 py-2 text-[12px] font-bold leading-relaxed text-[#a8321f]">
-            Without a day the {fmtMoney(row.amount)} still counts in {monthFull(month)}&rsquo;s total
-            — it just lands on no day, and OpEx files it under &ldquo;Undated — timing not set&rdquo;.
-            Cash Flow is unaffected; it never reads the billing day.
-          </div>
-        )}
-      </div>
-
-      {/* PLAYER PRICING (fin_venues.dpp_price / member_price) IS NO LONGER SHOWN (Ryan, 2026-10-02).
-          The columns stay. Partner payouts value member spots from actual drop-in charges now, so
-          nothing that pays anyone reads a typed price; see currentMatchPriceCents in partnerStats. */}
-    </div>
-  );
-}
-
-function ordinalDay(d: number): string {
-  const s = ["th", "st", "nd", "rd"][(d % 100 - 20) % 10] ?? ["th", "st", "nd", "rd"][d % 100] ?? "th";
-  return `${d}${s}`;
-}
-
-
-// Click-to-toggle Yes/No pill for fin_venues.charge_on_cancel. Same
-// optimistic save + flash/error pattern as BillingTypeCell — drives
-// straight into saveVenueField via the onSave prop. Yes = mint
-// highlight (positive, matches the "active" affordance used by the
-// As Billed / Per-Match toggle), No = cream-soft.
-
-const CADENCE_OPTIONS: FinVenue["billing_cadence"][] = [
-  "monthly",
-  "quarterly",
-  "annual",
-  "weekly",
-  "custom",
-];
-const WEEKDAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const MONTH_ABBR = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-
-// Q2Month ("Jul 2026") → ISO year-month ("2026-07"), the key format
-// fin_venues.billing_custom_days uses.
-function monthToIso(month: string): string | null {
-  const m = /^([A-Za-z]{3})\s+(\d{4})$/.exec(month.trim());
-  if (!m) return null;
-  const idx = MONTH_ABBR.indexOf(m[1]);
-  if (idx < 0) return null;
-  return `${m[2]}-${String(idx + 1).padStart(2, "0")}`;
-}
-
-// Billing-timing editor for the OpEx calendar (migrations 0069 + 0070).
-// Editing here writes fin_venues.billing_* (and, for CUSTOM amounts, the
-// per-month override) via the same optimistic path as the price cells; it
-// never changes any cost total, only WHEN the money lands in OpEx.
-//
-// Cadences and the controls they reveal:
-//   monthly/quarterly/annual → billing_day (+ anchor month) single lump.
-//   weekly                   → billing_weekday; the month splits across it.
-//   custom                   → this month's day(s), captured month by month
-//                              in billing_custom_days. For a flat venue the
-//                              AMOUNT input writes the per-month override
-//                              (single source of truth); per-match custom
-//                              keeps its auto matches × rate amount.
-//
-// Flat / profit_share and dashboard-driven per_match (Crossbar) always need
-// a hit-date. Schedule-dated per_match venues default to "per match · auto"
-// (each match dated on its day); picking a cadence switches them off auto.
-const parseCustomDays = (raw: string): number[] =>
-  [
-    ...new Set(
-      raw
-        .split(/[,\s]+/)
-        .map((s) => parseInt(s, 10))
-        .filter((n) => Number.isInteger(n) && n >= 1 && n <= 31),
-    ),
-  ].sort((a, b) => a - b);
-
-function BillingTimingCell({
-  venue,
-  dashboardDriven,
-  isCombinedPrimary,
-  month,
-  autoAmount,
-  monthOverride,
-  cadenceState,
-  dayState,
-  anchorState,
-  weekdayState,
-  customDaysState,
-  customAmountState,
-  onSaveCadence,
-  onSaveDay,
-  onSaveAnchorMonth,
-  onSaveWeekday,
-  onSaveCustomDays,
-  onSaveCustomAmount,
-}: {
-  venue: FinVenue | null;
-  dashboardDriven: boolean;
-  isCombinedPrimary: boolean;
-  month: Q2Month;
-  autoAmount: number;
-  monthOverride: FinVenueCostOverride | null;
-  cadenceState: CellState | null;
-  dayState: CellState | null;
-  anchorState: CellState | null;
-  weekdayState: CellState | null;
-  customDaysState: CellState | null;
-  customAmountState: CellState | null;
-  onSaveCadence: (next: FinVenue["billing_cadence"]) => void;
-  onSaveDay: (raw: string) => void;
-  onSaveAnchorMonth: (raw: string) => void;
-  onSaveWeekday: (raw: string) => void;
-  onSaveCustomDays: (monthIso: string, days: number[]) => void;
-  onSaveCustomAmount: (raw: string) => void;
-}) {
-  const iso = monthToIso(month);
-  const storedDays = (iso && venue?.billing_custom_days?.[iso]) || [];
-  const storedDaysStr = storedDays.join(", ");
-  const storedAmt = monthOverride ? String(monthOverride.override_amount) : "";
-
-  const [day, setDay] = useState(
-    venue?.billing_day == null ? "" : String(venue.billing_day),
-  );
-  const [daysInput, setDaysInput] = useState(storedDaysStr);
-  const [amtInput, setAmtInput] = useState(storedAmt);
-
-  // Resync each input from its stored value when idle, and also on error so
-  // a failed save visibly reverts (the optimistic patch rolled it back).
-  useEffect(() => {
-    if (!dayState || dayState.error) {
-      setDay(venue?.billing_day == null ? "" : String(venue.billing_day));
-    }
-  }, [venue?.billing_day, dayState]);
-  useEffect(() => {
-    if (!customDaysState || customDaysState.error) setDaysInput(storedDaysStr);
-  }, [storedDaysStr, customDaysState]);
-  useEffect(() => {
-    if (!customAmountState || customAmountState.error) setAmtInput(storedAmt);
-  }, [storedAmt, customAmountState]);
-
-  if (!venue) return null;
-
-  // Schedule-dated per_match venues (not Crossbar-style dashboard payouts)
-  // get an "auto" mode: cadence monthly + billing_day null → dated on match
-  // days. Any explicit cadence takes over. weekly/custom don't use
-  // billing_day, so mode follows the cadence directly for them.
-  const isSchedulePerMatch =
-    venue.billing_type === "per_match" && !dashboardDriven;
-  const cadence = venue.billing_cadence ?? "monthly";
-  const mode: "auto" | FinVenue["billing_cadence"] =
-    isSchedulePerMatch && cadence === "monthly" && venue.billing_day == null
-      ? "auto"
-      : cadence;
-
-  const anySaving = Boolean(
-    cadenceState?.saving ||
-      dayState?.saving ||
-      anchorState?.saving ||
-      weekdayState?.saving ||
-      customDaysState?.saving ||
-      customAmountState?.saving,
-  );
-  const anyError =
-    cadenceState?.error ||
-    dayState?.error ||
-    anchorState?.error ||
-    weekdayState?.error ||
-    customDaysState?.error ||
-    customAmountState?.error;
-  const showDay = mode === "monthly" || mode === "quarterly" || mode === "annual";
-  const showAnchor = mode === "quarterly" || mode === "annual";
-  const showWeekday = mode === "weekly";
-  const showCustom = mode === "custom";
-  // Every billing type now takes a per-month amount override in the custom
-  // cell. per_match venues show the auto matches × rate as the baseline
-  // (placeholder + "auto: $X"); a typed value creates the override. flat /
-  // profit_share have no meaningful auto, so the amount IS the cost.
-  const hasAuto = venue.billing_type === "per_match";
-  const isOverridden = monthOverride != null;
-
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-1.5">
-        <select
-          value={mode}
-          disabled={anySaving}
-          onChange={(e) => {
-            const next = e.target.value;
-            if (next === "auto") {
-              // Back to schedule-dated: monthly cadence, no billing day.
-              if (cadence !== "monthly") onSaveCadence("monthly");
-              if (venue.billing_day != null) onSaveDay("");
-              return;
-            }
-            const nextCadence = next as FinVenue["billing_cadence"];
-            if (nextCadence !== cadence) onSaveCadence(nextCadence);
-            // A schedule per-match venue's "auto" state IS cadence monthly +
-            // billing_day null. Picking "monthly" leaves cadence unchanged,
-            // so seed a billing_day or mode snaps back to "auto" and the day
-            // box never appears. weekly/custom/quarterly/annual leave auto
-            // via the cadence change itself, so no seed.
-            if (
-              isSchedulePerMatch &&
-              nextCadence === "monthly" &&
-              venue.billing_day == null
-            ) {
-              onSaveDay("1");
-            }
-          }}
-          className="rounded-md border border-cream-line bg-cream-soft px-1.5 py-1 font-mono text-[10px] uppercase tracking-wider text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60"
-        >
-          {isSchedulePerMatch && (
-            <option value="auto">per match · auto</option>
-          )}
-          {CADENCE_OPTIONS.map((o) => (
-            <option key={o} value={o}>
-              {o}
-            </option>
-          ))}
-        </select>
-        {showDay && (
-          <>
-            <span className="text-[10px] text-deep-green/45">day</span>
-            <input
-              type="number"
-              min="1"
-              max="31"
-              value={day}
-              placeholder="—"
-              disabled={anySaving}
-              onChange={(e) => setDay(e.target.value)}
-              onBlur={() => {
-                const cur = venue.billing_day == null ? "" : String(venue.billing_day);
-                if (day !== cur) onSaveDay(day);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
-                else if (e.key === "Escape") {
-                  setDay(venue.billing_day == null ? "" : String(venue.billing_day));
-                  (e.currentTarget as HTMLInputElement).blur();
-                }
-              }}
-              className="w-12 rounded-md border border-cream-line bg-cream-soft px-1.5 py-1 text-right font-mono text-[11px] tabular-nums text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60"
-            />
-          </>
-        )}
-        {showWeekday && (
-          <>
-            <span className="text-[10px] text-deep-green/45">on</span>
-            <select
-              value={venue.billing_weekday ?? ""}
-              disabled={anySaving}
-              onChange={(e) => onSaveWeekday(e.target.value)}
-              className="rounded-md border border-cream-line bg-cream-soft px-1.5 py-1 font-mono text-[10px] text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60"
-            >
-              <option value="">— day —</option>
-              {WEEKDAY_ABBR.map((w, i) => (
-                <option key={w} value={i}>
-                  {w}
-                </option>
+          <div className="when">
+            <div className="modes" data-testid="modes">
+              {([["dates", "Pick dates"], ["weekly", "Weekly"], ["biweekly", "Every 2 weeks"], ["match", "Each match"]] as const).map(([k, l]) => (
+                <button type="button" key={k} data-mode={k} aria-pressed={sched.mode === k} onClick={() => setMode(k)}>
+                  {l}
+                </button>
               ))}
-            </select>
-          </>
+            </div>
+            {sched.mode === "match" ? (
+              <div className="out" data-testid="when-calc" style={{ marginTop: 4 }}>
+                {row.matchCount} matches · <b>{model === "share" ? "its share" : rateLabel(venue.rate_days ?? null, venue.per_match_rate ?? 0)}</b> each, on the match date · auto
+              </div>
+            ) : (
+              <>
+                <div className="cal" data-testid="cal">
+                  <div className="mh">
+                    {prepaid ? `${venuePayMonthName(dm)} ${dy} · pays for ${venuePayMonthName(p.month0)}` : `${venuePayMonthName(dm)} ${dy}`}
+                  </div>
+                  {DAY_SHORT.map((d) => (
+                    <div className="h" key={d}>{d}</div>
+                  ))}
+                  {Array.from({ length: lead }, (_, k) => (
+                    <div className="d out" key={`o${k}`} />
+                  ))}
+                  {Array.from({ length: dim }, (_, k) => k + 1).map((d) => (
+                    <button
+                      type="button"
+                      key={d}
+                      className={`d${onDays.has(d) ? " on" : ""}${md.has(d) ? " m" : ""}`}
+                      data-d={d}
+                      data-testid={`cal-${d}`}
+                      title={md.has(d) ? "match day" : ""}
+                      onClick={() => clickDay(d)}
+                    >
+                      {d}
+                    </button>
+                  ))}
+                </div>
+                {sched.mode === "dates" && dateList.length > 1 && (
+                  <div className="amts" data-testid="amts">
+                    {dateList.map((x) => (
+                      <span className="a" key={x.d}>
+                        <b>{venuePayMonthShort(dm)} {x.d}</b> $
+                        <CommitInput
+                          key={`amt-${venue.id}-${x.d}-${x.v ?? ""}`}
+                          className="in"
+                          data-testid={`amt-${x.d}`}
+                          placeholder="split"
+                          defaultValue={x.v == null ? "" : String(x.v)}
+                          onCommit={(raw) => setAmt(x.d, raw)}
+                        />
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {sched.mode === "dates" && (
+                  <label className="chk" style={{ fontSize: 12.5 }}>
+                    <input
+                      type="checkbox"
+                      data-testid="prepaid"
+                      checked={prepaid}
+                      onChange={(e) => saveSched({ ...sched, prepaid: e.target.checked })}
+                    />{" "}
+                    prepaid, month before
+                  </label>
+                )}
+                <div className={`out${result.warn ? " warn" : ""}`} data-testid="when-calc">
+                  {result.html}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+        {row.billingType === "per_match" && row.legs.length > 0 && (
+          <div className="matches">
+            <PerMatchExpand row={row} scheduleRows={scheduleRows} />
+          </div>
         )}
-      </div>
-      {showAnchor && (
-        <div className="flex items-center gap-1.5">
-          <span className="text-[10px] text-deep-green/45">
-            {mode === "quarterly" ? "every 3mo from" : "in"}
-          </span>
-          <select
-            value={venue.billing_anchor_month ?? ""}
-            disabled={anySaving}
-            onChange={(e) => onSaveAnchorMonth(e.target.value)}
-            className="rounded-md border border-cream-line bg-cream-soft px-1.5 py-1 font-mono text-[10px] text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60"
-          >
-            <option value="">— month —</option>
-            {MONTH_ABBR.map((m, i) => (
-              <option key={m} value={i + 1}>
-                {m}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-      {showCustom && (
-        <div className="flex items-center gap-1.5">
-          <span className="text-[10px] font-semibold text-deep-green/55">
-            {month}
-          </span>
-          <span className="text-[10px] text-deep-green/45">day(s)</span>
-          <input
-            value={daysInput}
-            placeholder="—"
-            disabled={anySaving || !iso}
-            onChange={(e) => setDaysInput(e.target.value)}
-            onBlur={() => {
-              if (!iso) return;
-              const days = parseCustomDays(daysInput);
-              if (days.join(",") !== storedDays.join(",")) onSaveCustomDays(iso, days);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
-              else if (e.key === "Escape") {
-                setDaysInput(storedDaysStr);
-                (e.currentTarget as HTMLInputElement).blur();
-              }
-            }}
-            className="w-16 rounded-md border border-cream-line bg-cream-soft px-1.5 py-1 text-right font-mono text-[11px] tabular-nums text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60"
-          />
-          <span className="text-[10px] text-deep-green/45">$</span>
-          <input
-            value={amtInput}
-            // per_match shows the auto matches × rate as ghost text; a typed
-            // value creates the override for this month.
-            placeholder={hasAuto ? String(Math.round(autoAmount)) : "—"}
-            disabled={anySaving}
-            onChange={(e) => setAmtInput(e.target.value)}
-            onBlur={() => {
-              if (amtInput.trim() !== storedAmt) onSaveCustomAmount(amtInput);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
-              else if (e.key === "Escape") {
-                setAmtInput(storedAmt);
-                (e.currentTarget as HTMLInputElement).blur();
-              }
-            }}
-            className={`w-20 rounded-md border bg-cream-soft px-1.5 py-1 text-right font-mono text-[11px] tabular-nums text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60 ${
-              isOverridden ? "border-mint-hover ring-1 ring-mint/50" : "border-cream-line"
-            }`}
-          />
-          {isOverridden && (
-            <>
-              <span className="inline-flex items-center gap-0.5 rounded-full bg-mint px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-deep-green">
-                <Pin size={9} aria-hidden />
-                set
-              </span>
-              <button
-                type="button"
-                disabled={anySaving}
-                onClick={() => onSaveCustomAmount("")}
-                className="text-[9px] font-semibold text-coral/80 underline underline-offset-2 hover:text-coral disabled:opacity-60"
-              >
-                clear → auto
-              </button>
-            </>
-          )}
-        </div>
-      )}
-      {showCustom && hasAuto && !anySaving && (
-        <span className="text-[9px] text-deep-green/45">
-          auto: {fmtMoney(autoAmount, true)}
-          {isOverridden ? " · overridden" : ""}
-        </span>
-      )}
-      {/* Combined-primary override covers this leg only; secondaries bill
-          their own cost unless explicitly $0-overridden. */}
-      {showCustom && isCombinedPrimary && !anySaving && (
-        <span className="text-[9px] font-semibold text-[#9a6a00]">
-          secondary legs still bill their own cost — enter $0 on a leg if this
-          invoice covers it
-        </span>
-      )}
-      {/* per_match caveat, surfaced (not silent): quarterly/annual only
-          dates the billing-month total; off-cycle months land undated */}
-      {isSchedulePerMatch && showAnchor && venue.billing_day != null && !anySaving && (
-        <span className="text-[9px] font-semibold text-[#9a6a00]">
-          off-cycle months land undated
-        </span>
-      )}
-      {/* flat / dashboard venue with no date → undated (no auto fallback) */}
-      {!isSchedulePerMatch && showDay && venue.billing_day == null && !anySaving && (
-        <span className="text-[9px] font-semibold text-coral/80">
-          no date → undated in OpEx
-        </span>
-      )}
-      {showAnchor && venue.billing_anchor_month == null && !anySaving && (
-        <span className="text-[9px] font-semibold text-coral/80">
-          set anchor month
-        </span>
-      )}
-      {showWeekday && venue.billing_weekday == null && !anySaving && (
-        <span className="text-[9px] font-semibold text-coral/80">
-          pick a weekday → undated
-        </span>
-      )}
-      {/* custom per-month hints (this is a month-scoped entry). A month
-          "has a cost" if it's overridden or the per-match auto is non-zero. */}
-      {showCustom && !anySaving && (() => {
-        const hasDay = storedDays.length > 0;
-        const hasAmt = isOverridden || (hasAuto && autoAmount > 0.005);
-        if (!hasDay && !hasAmt)
-          return (
-            <span className="text-[9px] italic text-deep-green/45">
-              no payment this month
-            </span>
-          );
-        if (!hasDay && hasAmt)
-          return (
-            <span className="text-[9px] font-semibold text-coral/80">
-              no day → undated in OpEx
-            </span>
-          );
-        if (hasDay && !hasAmt && !hasAuto)
-          return (
-            <span className="text-[9px] font-semibold text-coral/80">
-              set an amount for {month}
-            </span>
-          );
-        return null;
-      })()}
-      {anyError && <span className="text-[9px] text-coral">! {anyError}</span>}
-    </div>
+      </td>
+    </tr>
   );
 }
 
-function PriceCell({
-  stored,
-  state,
-  onSave,
-  placeholder = "—",
-  emptyOk = false,
-  // A box whose value is read by nothing is disabled, never merely styled — a control that looks
-  // live and does nothing is the thing we do not ship.
-  disabled = false,
-}: {
-  stored: number | null;
-  state: CellState | null;
-  onSave: (raw: string) => void;
-  // What an empty box shows when empty is a legitimate state — for the month field that is the
-  // figure it WOULD compute, so the box says what leaving it alone gets you.
-  placeholder?: string;
-  // Suppresses the coral "you have not filled this in" ring. Empty is not a gap on the month
-  // field; it is the normal state that means "use the computed figure".
-  emptyOk?: boolean;
-  disabled?: boolean;
-}) {
-  const [local, setLocal] = useState<string>(stored == null ? "" : String(stored));
-
-  // Resync local input from the stored value when idle, and also on error
-  // so a failed save visibly reverts the cell (the optimistic patch already
-  // rolled the stored value back).
-  useEffect(() => {
-    if (!state || state.error) {
-      setLocal(stored == null ? "" : String(stored));
-    }
-  }, [stored, state]);
-
-  const isEmpty = stored == null && !state && !emptyOk;
-  const showFlash = state?.flash;
-  const showError = Boolean(state?.error);
-  const showSaving = Boolean(state?.saving);
-
-  return (
-    <div
-      className={`relative inline-flex w-24 items-center rounded-md ${
-        showError
-          ? "ring-2 ring-coral"
-          : isEmpty
-            ? "ring-1 ring-coral/40"
-            : "ring-1 ring-cream-line"
-      } ${showFlash ? "flash-mint" : ""}`}
-      title={state?.error ?? ""}
-    >
-      <span className="pl-2 pr-0.5 text-xs text-deep-green/50">$</span>
-      <input
-        type="number"
-        min="0"
-        step="0.01"
-        value={local}
-        placeholder={placeholder}
-        onChange={(e) => setLocal(e.target.value)}
-        onBlur={() => {
-          const cur = stored == null ? "" : String(stored);
-          if (local !== cur) onSave(local);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            (e.currentTarget as HTMLInputElement).blur();
-          } else if (e.key === "Escape") {
-            setLocal(stored == null ? "" : String(stored));
-            (e.currentTarget as HTMLInputElement).blur();
-          }
-        }}
-        // Disabled while saving, and permanently when the value is read by nothing.
-        disabled={showSaving || disabled}
-        className="w-full bg-transparent py-1.5 pr-6 text-right font-mono text-xs tabular-nums text-deep-green placeholder:text-[10px] placeholder:font-bold placeholder:text-deep-green/35 focus:outline-none disabled:opacity-60"
-      />
-      {showSaving && (
-        <span className="absolute right-2 top-1/2 inline-block h-2 w-2 -translate-y-1/2 animate-pulse rounded-full bg-deep-green/50" />
-      )}
-      {showError && !showSaving && (
-        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-coral">
-          !
-        </span>
-      )}
-    </div>
-  );
-}
-
-// One row per actual match for this venue/month, straight from
-// mdapi_matches (data.masterSchedule = alive, data.cancelledSchedule =
-// cancelled). Built per leg by resolved venue_id so split-rate venues
-// (ATH Katy) attribute to the right leg + rate. Cancelled matches are
-// included only when that leg's venue charges on cancel — so the rows
-// sum exactly to the calc total.
 type MatchLineItem = {
   date: string;
   venue: string;

@@ -23,9 +23,10 @@ export type AddVenueDraft = {
   mdapi_field_id: number | null;
 };
 
+// TWO BILLING MODELS (Field Costs v2, 2026-10-02). monthly_flat stays legal in the CHECK
+// constraint for old rows; nothing offers it.
 const BILLING_TYPE_OPTIONS: FinVenue["billing_type"][] = [
   "per_match",
-  "monthly_flat",
   "profit_share",
 ];
 
