@@ -135,7 +135,18 @@ export default function PartnerMonthlyView({ partnerName, sub, terms, since, mon
                       <span className="sub" data-testid="rev-member-unvalued">Member spots not yet calculated</span>
                     )}
                   </td>
-                  <td>{m.payment == null ? <>{em}<span className="sub">Not yet calculated</span></> : <>{money(m.payment)}{m.diverged && <span className="diverge" title={`Figures changed after payment — ${money(m.frozenPaid ?? 0)} was paid; a fresh recompute now reads ${money(m.livePayment ?? 0)}. The paid amount stands.`}> ✱</span>}</>}</td>
+                  <td>{m.payment == null ? <>{em}<span className="sub">Not yet calculated</span></> : <>{money(m.payment)}{m.diverged && <span className="diverge" title={`Figures changed after payment — ${money(m.frozenPaid ?? 0)} was paid; a fresh recompute now reads ${money(m.livePayment ?? 0)}. The paid amount stands.`}> ✱</span>}</>}
+                    {/* THE MEMBER RATE AND WHERE IT CAME FROM (Ryan, 2026-10-02: "so the number is
+                        never a mystery again"). Under the PAYMENT, not the revenue cell, which
+                        carries no member breakdown by his earlier ruling. */}
+                    {m.payment != null && m.memberRateCents != null && m.memberRateSource && (
+                      <span className="sub" data-testid="member-rate" data-source={m.memberRateSource.kind}>
+                        Member spots at ${(m.memberRateCents / 100).toFixed(2)} · {m.memberRateSource.kind === "avg"
+                          ? `avg of ${num(m.memberRateSource.dropIns)} drop-ins this period`
+                          : m.memberRateSource.kind === "current" ? "current match price" : "rate when paid"}
+                      </span>
+                    )}
+                  </td>
                   <td style={{ textAlign: "right" }}>{statusPill(m)}</td>
                   <td><span className={`when ${w.cls}`}>{w.t}</span></td>
                 </tr>

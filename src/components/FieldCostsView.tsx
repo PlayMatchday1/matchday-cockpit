@@ -1595,26 +1595,9 @@ function VenuePanel({
         )}
       </div>
 
-      {/* ── PLAYER PRICING · NOT A COST ────────────────────────────────────────────────────── */}
-      <div className="p-4">
-        <div className={glab}>Player pricing · not a cost</div>
-        {/* EDITABLE, because the write lands: fin_venues UPDATE from the browser affects the row
-            (unlike app_users, where RLS made the same shape a silent no-op). */}
-        <div className={fld}>
-          <label className={lab}>DPP price</label>
-          <PriceCell stored={venue?.dpp_price ?? null} state={cellState("dpp_price")}
-            onSave={(raw) => onSavePrice("dpp_price", raw)} />
-        </div>
-        <div className={fld}>
-          <label className={lab}>Member price</label>
-          <PriceCell stored={venue?.member_price ?? null} state={cellState("member_price")}
-            onSave={(raw) => onSavePrice("member_price", raw)} />
-        </div>
-        <p className="mt-2 text-[11.5px] leading-relaxed text-deep-green/45">
-          What a player pays to join a match here. Changing it changes <b className="text-deep-green/70">revenue</b>,
-          not field cost.
-        </p>
-      </div>
+      {/* PLAYER PRICING (fin_venues.dpp_price / member_price) IS NO LONGER SHOWN (Ryan, 2026-10-02).
+          The columns stay. Partner payouts value member spots from actual drop-in charges now, so
+          nothing that pays anyone reads a typed price; see currentMatchPriceCents in partnerStats. */}
     </div>
   );
 }

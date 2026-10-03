@@ -338,9 +338,10 @@ export async function POST(req: Request) {
            * so marking a period paid still works and only the difference is not recorded. */
           const paidCols = paidAmount == null ? {} : { paid_amount: paidAmount };
           /* ── FREEZE THE MEMBER RATE AT MARK-PAID TIME (0189) ──────────────────────────────────
-           * fin_venues.dpp_price is one live config value with an editor in Field Costs and no
-           * history. Recomputed from it on every render, an edit would re-value every period that
-           * recomputes, including this one after it is paid, on a page the partner reads.
+           * The live rate is the period's average actual drop-in charge, falling back to the
+           * venue's current mdapi match price (since 2026-10-02; it was fin_venues.dpp_price). Both
+           * can move after the fact — a late cancellation, a price change — so recomputed on every
+           * render they would re-value this period after it is paid, on a page the partner reads.
            *
            * BOTH COLUMNS OR NEITHER, which the DB also constrains: the rate alone lets the
            * dashboard show a price but not re-derive the total. Written only when this period

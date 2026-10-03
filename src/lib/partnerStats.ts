@@ -601,6 +601,29 @@ export async function fetchPartnerWeeklyPayments(
 // Returned `extra` are fin_revenue rows (Venmo / Stripe / Manual —
 // excluding PROJECTION bootstrap estimates) attributable to the venue;
 // callers add them to weekly + monthly totals.
+/* THE VENUE'S CURRENT MATCH PRICE, from mdapi — the fallback member rate when a period has no
+ * drop-ins. The next upcoming, non-cancelled match on any of the venue's mapped mdapi fields
+ * (fin_venue_fields, an ID join), priced above $0: registration_price is CENTS and 0 is a real
+ * value meaning a free match, which is not a drop-in price (docs/matchday-api-facts.md).
+ * start_date is LOCAL WALL CLOCK with a Z it does not mean, so "upcoming" compares it as a string
+ * against Chicago's wall clock now — never new Date(start_date). Null when nothing qualifies. */
+export async function currentMatchPriceCents(supabase: SupabaseClient, venueId: number, now: Date = new Date()): Promise<number | null> {
+  const { data: links } = await supabase.from("fin_venue_fields").select("mdapi_field_id").eq("fin_venue_id", venueId);
+  const ids = (links ?? []).map((l) => Number(l.mdapi_field_id)).filter(Number.isFinite);
+  if (!ids.length) return null;
+  const wallNow = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).format(now).replace(" ", "T");
+  const { data, error } = await supabase.from("mdapi_matches")
+    .select("start_date, registration_price")
+    .in("field_id", ids).gte("start_date", wallNow).gt("registration_price", 0)
+    .eq("is_cancelled", false).is("deleted_at", null)
+    .order("start_date", { ascending: true }).limit(1);
+  if (error || !data?.length) return null;
+  const c = Math.round(Number(data[0].registration_price));
+  return Number.isFinite(c) && c > 0 ? c : null;
+}
+
 export async function fetchPartnerRows(
   supabase: SupabaseClient,
   venueId: number,
@@ -608,21 +631,23 @@ export async function fetchPartnerRows(
   rows: PartnerRegRow[];
   extra: PartnerExtraRevRow[];
   venueName: string;
-  /** fin_venues.dpp_price in CENTS, or null when the venue carries no list price. */
+  /** The FALLBACK member rate, in cents: the venue's current match price in mdapi (the next
+   *  upcoming match priced above $0), or null when there is none. A period with drop-ins does not
+   *  use it — periodOwed values member spots at that period's average drop-in charge. */
   memberSpotRateCents: number | null;
   matches: PartnerMatchRow[];
 }> {
   const { data: venue, error: venueErr } = await supabase
     .from("fin_venues")
-    /* dpp_price COMES FROM HERE AND NOWHERE ELSE. Resolved through the partner's venue_id, which
-     * is the only join that is safe: fin_pricing has its own id space (its id 10 is ATH Pearland
-     * while fin_venues id 10 is PAC Global) and its rows were all last touched 2026-04-25. */
-    .select("venue_name, dpp_price")
+    /* fin_venues.dpp_price IS NO LONGER READ for payouts (Ryan, 2026-10-02): a typed price must not
+     * decide what a partner is paid. Only the venue's name comes from here. */
+    .select("venue_name")
     .eq("id", venueId)
     .maybeSingle();
   if (venueErr || !venue) {
     throw new Error("Venue lookup failed");
   }
+  const memberSpotRateCents = await currentMatchPriceCents(supabase, venueId);
 
   // Read this venue's matches+players from mdapi_matches /
   // mdapi_match_players via the shared lib. ILIKE filter on
@@ -693,7 +718,7 @@ export async function fetchPartnerRows(
 
   return {
     rows: out, extra, venueName: venue.venue_name, matches,
-    memberSpotRateCents: dppPriceToCents(venue.dpp_price),
+    memberSpotRateCents,
   };
 }
 
@@ -1091,6 +1116,8 @@ export type PartnerWeeklyPayment = {
   memberFrozen?: boolean;
   /** Why the member component is absent when it should have been present. */
   memberUnvalued?: string | null;
+  /** Where memberRateCents came from: the period's drop-in average, the current match price, or the paid row. */
+  memberRateSource?: MemberRateSource | null;
   status: "pending" | "paid" | "disputed";
   // When a partner_weekly_payments row exists for this week, these
   // mirror the persisted row. When no row exists, status='pending'
@@ -1309,9 +1336,24 @@ function applyFrozenMemberRate(
     memberRateCents: frozenCents,
     // A frozen period is valued by definition; any live-config complaint is not its problem.
     memberUnvalued: null,
+    memberRateSource: { kind: "frozen" },
     memberFrozen: true,
   };
 }
+
+/* ── WHERE A PERIOD'S MEMBER RATE CAME FROM (Ryan, 2026-10-02) ────────────────────────────────
+ * Partner payouts no longer depend on a typed price. A member spot is valued at the AVERAGE ACTUAL
+ * DROP-IN CHARGE per spot at the venue in the payout period — the played DAILY PAID rows of
+ * mdapi_match_players, the very rows the partner's drop-in revenue is summed from, so the member
+ * term and the drop-in term are priced from one source, pre-tax and per spot (a host's $16 row and
+ * its guest's $0 row average to $8). With no drop-ins in the period it falls back to the venue's
+ * CURRENT match price in mdapi (the next upcoming match with a price above $0). With neither, the
+ * term is not valued and the period says so. A paid period keeps the rate frozen on its row.
+ * NOT fin_txn: its charges carry 8.25% sales tax and are one row per checkout, not per spot. */
+export type MemberRateSource =
+  | { kind: "avg"; dropIns: number }
+  | { kind: "current" }
+  | { kind: "frozen" };
 
 export function periodOwed(
   matchActive: PartnerRegRow[],
@@ -1331,6 +1373,7 @@ export function periodOwed(
    * a silent $0 is worse than one who reads "not yet calculated", so this carries the reason to
    * the surface instead of letting a missing price look like a month with no members. */
   memberUnvalued: string | null;
+  memberRateSource?: MemberRateSource | null;
 } {
   const model = modelForPeriod(cfg, periodStart);
 
@@ -1478,6 +1521,7 @@ export function periodOwed(
   let memberRevenue: number | null = null;
   let memberRateCents: number | null = null;
   let memberUnvalued: string | null = null;
+  let memberRateSource: MemberRateSource | null = null;
   if (valuesMembers) {
     memberSpots = 0;
     for (const r of matchActive) {
@@ -1488,13 +1532,27 @@ export function periodOwed(
       if (r.user_type === "GUEST") continue; // a host's second seat, not a second member
       memberSpots += 1;
     }
-    const cents = cfg.memberSpotRateCents;
-    if (cents == null || !Number.isFinite(cents) || cents <= 0) {
+    /* THE RATE: the period's average actual drop-in charge per PLAYED spot, from the same rows and
+     * the same DAILY PAID test as dpRev above, guests included (their $0 rows are what make a $16
+     * host row average to $8 a spot). Whole cents, so a paid period's frozen rate re-derives. */
+    let dropIns = 0, dropInSum = 0;
+    for (const r of matchActive) {
+      if (r.payment_type !== "DAILY PAID") continue;
+      const matchYmd = r.match_start.slice(0, 10);
+      if (matchYmd < periodStart || matchYmd > periodEnd) continue;
+      if (isCanceled(r)) continue;          // a cancelled drop-in is not an actual charge
+      dropIns += 1;
+      dropInSum += Number(r.match_price_paid ?? 0) || 0;
+    }
+    const avgCents = dropIns > 0 ? Math.round((dropInSum / dropIns) * 100) : 0;
+    const fallback = cfg.memberSpotRateCents;      // the venue's current match price, in cents
+    let cents: number | null = null;
+    if (avgCents > 0) { cents = avgCents; memberRateSource = { kind: "avg", dropIns }; }
+    else if (fallback != null && Number.isFinite(fallback) && fallback > 0) { cents = fallback; memberRateSource = { kind: "current" }; }
+    if (cents == null) {
       /* NOT $0 OF MEMBER REVENUE. The spots are counted and reported; the money is withheld with a
        * reason, so the surface can say "not yet calculated" instead of quietly paying nothing. */
-      memberUnvalued = cents == null
-        ? "No DPP list price is set for this venue, so member spots could not be valued."
-        : "The venue's DPP list price is zero or invalid, so member spots could not be valued.";
+      memberUnvalued = "No drop-ins this period and no current match price for this venue, so member spots could not be valued.";
     } else {
       memberRateCents = cents;
       memberRevenue = (memberSpots * cents) / 100;
@@ -1508,7 +1566,7 @@ export function periodOwed(
     matches: flatMatches.size,
     managerPay: 0, // flat_percentage has no manager-pay subtraction
     matchesCancelled: cancelledInPeriod(cfg, periodStart, periodEnd),
-    memberSpots, memberRevenue, memberRateCents, memberUnvalued,
+    memberSpots, memberRevenue, memberRateCents, memberUnvalued, memberRateSource,
   };
 }
 

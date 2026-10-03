@@ -82,7 +82,9 @@ console.log("\na missing rate is NOT zero revenue");
   is("the period says WHY", (p.memberUnvalued ?? "").includes("could not be valued"), true);
   const zero = sep(rows, { memberSpotRateCents: 0 });
   is("a zero rate is refused the same way", zero.memberRevenue, null);
-  is("  …with its own reason", (zero.memberUnvalued ?? "").includes("zero or invalid"), true);
+  /* CHANGED 2026-10-02 (the rate rule changed): a zero price is now simply no price, with the same
+   * reason as a missing one; it used to have its own "zero or invalid" wording. */
+  is("  …with the same reason as a missing price", (zero.memberUnvalued ?? "").includes("could not be valued"), true);
   is("CONTROL — with a real rate there is no complaint", sep(rows).memberUnvalued ?? null, null);
 }
 
@@ -115,6 +117,51 @@ console.log("\nTHE FREEZE: a paid period is paid at the rate it was paid at");
   /* THE COUNT IS FROZEN TOO, so a late-arriving cancellation cannot restate a paid month. */
   const fewerRows = sep([reg({})], { memberSpotRateCents: 2000 }, [rec]);
   is("a paid period keeps its frozen SPOT COUNT as well as its rate", fewerRows.memberSpots, 3);
+}
+
+console.log("\nTHE RATE IS THE PERIOD'S AVERAGE ACTUAL DROP-IN CHARGE, NOT A TYPED PRICE (Ryan, 2026-10-02)");
+{
+  const dp = (over: Partial<PartnerRegRow>) => reg({ payment_type: "DAILY PAID", ...over });
+  const members = [reg({ user_id: "m1", match_api_id: 1 }), reg({ user_id: "m2", match_api_id: 2 })];
+  /* A host's $16 row and its guest's $0 row ARE TWO SPOTS AT $8, so guests stay in the average. */
+  const dropIns = [
+    dp({ user_id: "a", match_price_paid: 9, match_api_id: 1 }),
+    dp({ user_id: "b", match_price_paid: 16, match_api_id: 2 }),
+    dp({ user_id: "b", match_price_paid: 0, match_api_id: 2, user_type: "GUEST" }),
+    dp({ user_id: "c", match_price_paid: 30, match_api_id: 3, player_canceled_at: "2026-09-09T10:00:00Z" }),
+  ];
+  const p = sep([...members, ...dropIns], { memberSpotRateCents: 2000 });
+  is("rate = played drop-in revenue / played drop-in spots: (9+16+0)/3 = $8.33", p.memberRateCents, 833);
+  is("  …and says so: the average of 3 drop-ins", p.memberRateSource, { kind: "avg", dropIns: 3 });
+  is("  …applied to the member spots: 2 x $8.33", p.memberRevenue, 16.66);
+  is("CONTROL — the cancelled $30 drop-in is NOT in the average (it would make it $13.75)",
+    Math.round(((9 + 16 + 0 + 30) / 4) * 100) !== p.memberRateCents, true);
+  is("CONTROL — the $20 fallback was available and NOT used", p.memberRateCents !== 2000, true);
+
+  const outside = [dp({ user_id: "z", match_price_paid: 50, match_start: "2026-08-20T19:00:00Z" })];
+  const noDrops = sep([...members, ...outside], { memberSpotRateCents: 800 });
+  is("no drop-ins IN THE PERIOD → the venue's current match price", noDrops.memberRateCents, 800);
+  is("  …and says so", noDrops.memberRateSource, { kind: "current" });
+  is("CONTROL — an August drop-in does not price September", noDrops.memberRateCents !== 5000, true);
+
+  const neither = sep(members, { memberSpotRateCents: null });
+  is("neither → not valued, not $0", [neither.memberRevenue, neither.memberRateCents, neither.memberRateSource ?? null], [null, null, null]);
+  is("  …with the reason on the period", (neither.memberUnvalued ?? "").includes("could not be valued"), true);
+
+  /* ALL-FREE DROP-INS ARE NO PRICE. A period whose drop-ins all came to $0 has no average to use,
+   * so it falls back rather than valuing members at nothing. */
+  const freeOnly = sep([...members, dp({ user_id: "f", match_price_paid: 0 })], { memberSpotRateCents: 800 });
+  is("drop-ins that all cost $0 fall back to the current price", [freeOnly.memberRateCents, freeOnly.memberRateSource], [800, { kind: "current" }]);
+
+  /* PAID STAYS PAID: the frozen rate wins over the average, and says it is the paid rate. */
+  const rec = {
+    id: "r2", partner_dashboard_id: "d1", week_start_date: "2026-09-01", calculated_amount: 8, paid_amount: null,
+    status: "paid", paid_at: "2026-10-05", paid_notes: null, dispute_note: null, disputed_at: null,
+    is_pre_system_settlement: false, member_spot_rate_cents: 800, member_spots: 2,
+  } as PartnerWeeklyPaymentRecord;
+  const frozen = sep([...members, ...dropIns], { memberSpotRateCents: 2000 }, [rec]);
+  is("a PAID period keeps its frozen rate, not the average", [frozen.memberRateCents, frozen.memberRevenue], [800, 16]);
+  is("  …and its source says so", frozen.memberRateSource, { kind: "frozen" });
 }
 
 console.log(`\n${pass} passed, ${fails.length} failed`);

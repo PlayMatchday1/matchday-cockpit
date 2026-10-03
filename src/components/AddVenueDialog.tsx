@@ -230,34 +230,9 @@ export default function AddVenueDialog({
               THE COLUMN IS UNTOUCHED. No migration, no drop, no backfill: the 26 stored values stay
               exactly where they are. It just stops being written. */}
 
-          <Field label="DPP price ($)">
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              value={draft.dpp_price ?? ""}
-              onChange={(e) =>
-                setDraft({ ...draft, dpp_price: parseNum(e.target.value) })
-              }
-              className="w-full rounded-md border border-cream-line bg-white px-3 py-2 text-right font-mono text-sm tabular-nums text-deep-green focus:border-deep-green focus:outline-none"
-            />
-          </Field>
-
-          <Field label="Member price ($)">
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              value={draft.member_price ?? ""}
-              onChange={(e) =>
-                setDraft({
-                  ...draft,
-                  member_price: parseNum(e.target.value),
-                })
-              }
-              className="w-full rounded-md border border-cream-line bg-white px-3 py-2 text-right font-mono text-sm tabular-nums text-deep-green focus:border-deep-green focus:outline-none"
-            />
-          </Field>
+          {/* DPP AND MEMBER PRICE ARE NO LONGER ASKED FOR (Ryan, 2026-10-02): the columns stay and a new
+              venue saves them blank, as it always did when they were left empty. Nothing that pays
+              anyone reads a typed price any more. */}
 
           <Field label="Launch date">
             <input

@@ -14,7 +14,7 @@ import "server-only";
 // aggregates; nothing row-level ever reaches the client.
 
 import { isFakePlayerEmail } from "./mdapiFakePlayer";
-import { partnerLabelForType, type PartnerRegRow, type PartnerExtraRevRow, type PartnerPaymentInfo, type PartnerWeeklyPayment } from "./partnerStats";
+import { partnerLabelForType, type PartnerRegRow, type PartnerExtraRevRow, type PartnerPaymentInfo, type PartnerWeeklyPayment, type MemberRateSource } from "./partnerStats";
 import { derivePeriodRow, type PeriodRow, type PeriodState } from "./partnerDashboardView";
 
 const parse = (s: string) => new Date(`${s}T00:00:00Z`);
@@ -44,6 +44,8 @@ export type GrainRow = {
   memberSpots: number | null; memberRevenue: number | null; memberRateCents: number | null;
   /** Set when the period should have had a member term and could not be valued. */
   memberUnvalued: string | null;
+  /** Where memberRateCents came from — shown beside the payment so the rate is never a mystery. */
+  memberRateSource: MemberRateSource | null;
   payment: number | null; paymentUnavailable: boolean;
   state: PeriodState; paidOn: string | null; dueDate: string; periodEnd: string;
   diverged: boolean; frozenPaid: number | null; livePayment: number | null;
@@ -104,6 +106,7 @@ function rowFromPeriod(pw: PartnerWeeklyPayment, pr: PeriodRow, rows: PartnerReg
     memberRevenue: pw.isPreSystem ? null : (pw.memberRevenue ?? null),
     memberRateCents: pw.isPreSystem ? null : (pw.memberRateCents ?? null),
     memberUnvalued: pw.isPreSystem ? null : (pw.memberUnvalued ?? null),
+    memberRateSource: pw.isPreSystem ? null : (pw.memberRateSource ?? null),
     payment: pr.payment, paymentUnavailable: false,
     state: pr.state, paidOn: pr.paidOn, dueDate: pr.dueDate, periodEnd: end,
     diverged, frozenPaid: diverged ? pw.calculatedAmount : null, livePayment: diverged ? pw.owedAmount : null,
@@ -131,7 +134,7 @@ function rollMonth(monthKey: string, weeks: { pw: PartnerWeeklyPayment; pr: Peri
     key: start, label, isOpening: false, isOpen: open,
     matches: seats.matches, spots: seats.spots, daily: seats.daily, guests: seats.guests,
     matchesBillable: null, matchesCancelled: null,   // weekly roll-up; the fee partner is monthly
-    memberSpots: null, memberRevenue: null, memberRateCents: null, memberUnvalued: null,
+    memberSpots: null, memberRevenue: null, memberRateCents: null, memberUnvalued: null, memberRateSource: null,
     revenue, rentals: rentalsIn(extra, start, end),
     payment: open ? null : payment, paymentUnavailable: false,
     state, paidOn, dueDate: "", periodEnd: end, diverged, frozenPaid: null, livePayment: null,
@@ -182,7 +185,7 @@ export function derivePartnerGrains(
           key: cur, label: `Week of ${MON[+cur.slice(5, 7) - 1]} ${+cur.slice(8, 10)}`, isOpening: false, isOpen: end >= today,
           matches: seats.matches, spots: seats.spots, daily: seats.daily, guests: seats.guests,
           matchesBillable: null, matchesCancelled: null,   // display-only week strip; no payment
-          memberSpots: null, memberRevenue: null, memberRateCents: null, memberUnvalued: null,
+          memberSpots: null, memberRevenue: null, memberRateCents: null, memberUnvalued: null, memberRateSource: null,
           revenue: null, rentals: rentalsIn(extra, cur, end),
           payment: null, paymentUnavailable: true, state: "nothing", paidOn: null, dueDate: "", periodEnd: end,
           diverged: false, frozenPaid: null, livePayment: null,

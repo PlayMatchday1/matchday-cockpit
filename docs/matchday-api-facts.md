@@ -6653,3 +6653,21 @@ read off the screen by whoever sends in Klaviyo or WhatsApp.
   0199 adds two permissive policies scoped to `ops_plan_anchor_threshold_spots` only.
 - **Trailing-30-day anchors, 2026-09-02 → 2026-10-01, ≥ 670 spots:** NEMP 1,187, ATH Pearland,
   Soccer Central, PARMER at exactly 670 (generator output, `scripts/gen-ops-plan-seed.mts`).
+
+## Partner member spots: valued at actual drop-in charges, not a typed price (2026-10-02)
+
+- **`fin_txn` charges are TAX-INCLUSIVE and PER CHECKOUT.** Hattrick (venue 3), September 2026:
+  307 of 380 DPP charges are 866¢ = $8.00 + 8.25% sales tax; 1732¢ is two seats in one checkout.
+  The mean charge is $10.17, which is neither a pre-tax nor a per-spot price. Read-only probe of
+  `fin_txn` (kind='charge', type='DPP', fin_venue_id=3), 2026-10-02.
+- **`mdapi_match_players` amounts are PRE-TAX and PER ROW**, and a guest row is $0 under the host
+  who paid for it, so the mean over DAILY PAID rows (guests included) is the per-spot price:
+  Hattrick September, 389 rows at $8, 44 at $16, 93 guest rows at $0, 28 at $9.
+- **The rule (Ryan, 2026-10-02), `periodOwed` in `src/lib/partnerStats.ts`:** a member spot is
+  valued at the period's average actual drop-in charge — played DAILY PAID rows on the payout's own
+  row set (`matchActive`: no cancelled matches, no staff/fill accounts), player-cancelled rows out.
+  Hattrick September: 496 rows, 802¢, owed $2,762.42 (was $2,761.00 at the typed $8.00). With no
+  drop-ins: the venue's next upcoming non-cancelled match `registration_price` > 0, through
+  `fin_venue_fields` (`currentMatchPriceCents`). With neither: not valued, and the period says so.
+  A paid period keeps the rate frozen on its row (0189). `fin_venues.dpp_price` is no longer read
+  by any payout and is no longer shown in Field Costs.
