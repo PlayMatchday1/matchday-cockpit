@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpEx v3 · month calendar</title>
+<style>
+  :root{--nav:#0b3a28;--accent:#22c55e;--bg:#eef1ec;--card:#fff;--line:#e3e7e1;--line-2:#eef1ec;--ink:#10231a;--ink-2:#44564c;--muted:#7a8a81;
+    --c-pers:#2f6b4f;--c-field:#5aa77a;--c-equip:#8a7fd1;--c-mkt:#e0a33a;--c-subs:#4f8fc9;--c-misc:#9aa5a0}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  .mocknote{background:#fff7d6;border-bottom:1px solid #eadb9c;color:#5b4a00;font-size:12px;padding:6px 20px}
+  .nav{background:var(--nav);height:56px;display:flex;align-items:center;padding:0 24px}
+  .logo{color:var(--accent);font-weight:800;font-style:italic;font-size:21px}.logo small{font-size:12px;margin-left:4px}
+  main{max-width:1640px;margin:0 auto;padding:22px 24px 60px}
+  .top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+  h1{font-size:28px;margin:0;font-weight:800}
+  .month{display:flex;align-items:center;gap:8px;font-weight:800;font-size:18px}
+  .nb{border:1px solid var(--line);background:#fff;border-radius:999px;width:30px;height:30px;cursor:pointer;font:inherit}
+  .sp{flex:1}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;background:#fff;padding:2px}
+  .seg button{border:0;background:transparent;padding:6px 14px;border-radius:999px;font:inherit;font-weight:700;color:var(--muted);cursor:pointer}
+  .seg button[aria-pressed="true"]{background:var(--nav);color:#fff}
+
+  /* header card */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px}
+  .hdr{display:grid;grid-template-columns:300px 1fr;gap:0}
+  .hdr .l{padding:18px 22px;border-right:1px solid var(--line)}
+  .k{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--muted);font-weight:700}
+  .big{font-size:38px;font-weight:800;letter-spacing:-.5px;margin:2px 0 8px;font-variant-numeric:tabular-nums}
+  .bar{height:8px;border-radius:999px;background:#e6ebe7;overflow:hidden}.bar i{display:block;height:100%;background:var(--accent)}
+  .pl{display:flex;justify-content:space-between;font-size:12.5px;color:var(--ink-2);margin-top:6px}.pl b{color:var(--ink)}
+  .hdr .r{padding:16px 22px;display:flex;flex-direction:column;gap:10px}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px 7px 10px;font:inherit;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:8px;color:var(--ink)}
+  .chip .sw{width:10px;height:10px;border-radius:3px;display:inline-block}
+  .chip b{font-variant-numeric:tabular-nums}.chip small{color:var(--muted);font-weight:600}
+  .chip[aria-pressed="false"]{color:#b7c0ba;background:#f7f9f6}.chip[aria-pressed="false"] .sw{opacity:.3}.chip[aria-pressed="false"] b,.chip[aria-pressed="false"] small{color:#b7c0ba}
+  .hint{font-size:12.5px;color:var(--muted)}
+  .hint a{color:var(--ink-2);cursor:pointer;text-decoration:underline}
+
+  /* calendar */
+  .cal{margin-top:14px;overflow:hidden}
+  .wk{display:grid;grid-template-columns:repeat(7,1fr)}
+  .wk.h div{padding:10px 12px;font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--muted);font-weight:700;border-bottom:1px solid var(--line)}
+  .wk.h div:nth-child(n+6){background:#f7f9f6}
+  .day{min-height:118px;border-right:1px solid var(--line-2);border-bottom:1px solid var(--line-2);padding:8px 8px 6px;position:relative;display:flex;flex-direction:column;gap:4px;background:#fff}
+  .day:nth-child(7n){border-right:0}
+  .day.wkend{background:#fafbf9}
+  .day.out{background:#f3f5f2}.day.out .n{color:#c3cbc6}.day.out .pay{display:none}
+  .day.today{box-shadow:inset 0 0 0 2px #22a05a}
+  .day.past{background:#f6f8f5}.day.past.wkend{background:#f2f4f1}
+  .dh{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:2px}
+  .n{font-weight:800;font-size:15px}
+  .today .n::after{content:"TODAY";font-size:9.5px;letter-spacing:.6px;background:#dff5e6;color:#15803d;border-radius:999px;padding:2px 6px;margin-left:6px;vertical-align:2px}
+  .dt{font-weight:800;font-size:13px;font-variant-numeric:tabular-nums}.dt.none{color:#d3d9d5;font-weight:600}
+  .pay{display:flex;align-items:center;gap:6px;padding:3px 8px 3px 7px;border-radius:999px;border:1px solid transparent;background:#eef4ef;cursor:pointer;min-width:0;text-align:left;font:inherit;font-size:11.5px;color:var(--ink);width:100%}
+  .pay .nm small{color:var(--muted);font-weight:600;font-size:10.5px}
+  .pay .sw{width:7px;height:7px;border-radius:2px;flex:none}
+  .pay .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pay .v{font-weight:700;font-variant-numeric:tabular-nums;flex:none}
+  .pay.proj{background:#fff;border:1px dashed #cfd6d1;color:var(--ink-2)}
+  .pay.proj .v{color:var(--ink)}
+  .pay:hover{border-color:#22a05a}
+  .pay.off{display:none}
+  .more{font-size:11px;color:#16803c;font-weight:700;background:none;border:0;padding:2px 6px;text-align:left;cursor:pointer;font:inherit;font-size:11px;font-weight:700;color:#16803c}
+  .wkt{position:absolute;right:8px;bottom:6px;font-size:10.5px;color:var(--muted)}
+
+  /* ledger */
+  .led{margin-top:16px}
+  .led .hd{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line)}
+  .fchip{display:inline-flex;align-items:center;gap:6px;background:#dff5e6;color:#15532d;border-radius:999px;padding:4px 6px 4px 12px;font-weight:700;font-size:12.5px}
+  .fchip button{border:0;background:#fff;border-radius:50%;width:18px;height:18px;cursor:pointer;font:inherit;line-height:1;color:#15532d}
+  .day[data-day]{cursor:pointer}.day.sel{background:#fff9e6}.day.sel.today{background:#fff9e6}
+  .led .hd h2{margin:0;font-size:13px;letter-spacing:.9px;text-transform:uppercase;color:var(--muted);font-weight:700}
+  table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+  th,td{padding:9px 14px;text-align:left;border-bottom:1px solid var(--line-2);white-space:nowrap}
+  th{font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);font-weight:700;background:#f7f9f6}
+  td.r,th.r{text-align:right}
+  tr.wh td{background:#f3f6f2;font-weight:800;font-size:12px;letter-spacing:.4px;text-transform:uppercase;color:var(--ink-2);padding:7px 14px}
+  tr.wh td.r{color:var(--ink)}
+  td .sw{width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:7px;vertical-align:1px}
+  td.cat{color:var(--ink-2)}
+  td.city{color:var(--muted)}
+  .st{font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px}
+  .st.paid{background:#dff5e6;color:#15803d}.st.proj{background:#fff;border:1px dashed #cfd6d1;color:var(--muted)}
+  td.cum{color:var(--muted)}
+  tr.hl td{background:#fff9e6}
+  tr.tot td{background:#eef3ef;font-weight:800;border-top:2px solid var(--line);border-bottom:0}
+
+  .i{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;border:1px solid #c7d0ca;color:var(--muted);font:italic 700 10px/1 Georgia,serif;cursor:pointer;background:#fff;padding:0}
+  .pop{position:absolute;z-index:40;width:300px;background:#10231a;color:#fff;border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.45;box-shadow:0 10px 30px rgba(0,0,0,.2)}
+  .pop[hidden]{display:none}.pop .h{font-weight:800;margin-bottom:4px}
+  .pop dl{display:grid;grid-template-columns:1fr auto;align-items:baseline;gap:3px 10px;margin:6px 0 0}.pop dt{color:#a9bdb1}.pop dd{margin:0}
+</style>
+</head>
+<body>
+<div class="mocknote" data-testid="mock-note">MOCK. Layout only: amounts and payees are illustrative, taken from the live October view. The build uses actual bank payments for past days and the venue, pay and expense settings for future days.</div>
+<div class="nav"><div class="logo">MATCHDAY<small>Clubhouse</small></div></div>
+<main>
+  <div class="top">
+    <h1>OpEx</h1>
+    <div class="month"><button class="nb">‹</button><span data-testid="month-label">October 2026</span><button class="nb">›</button></div>
+    <span class="sp"></span>
+    <div class="seg" data-testid="view-seg"><button aria-pressed="true">Calendar</button><button aria-pressed="false">Ledger only</button></div>
+  </div>
+
+  <div class="card hdr">
+    <div class="l">
+      <div class="k">Cash out · October 2026</div>
+      <div class="big" data-testid="sum-month"></div>
+      <div class="bar"><i id="paidFill"></i></div>
+      <div class="pl"><span><b data-testid="sum-paid"></b> paid</span><span><b data-testid="sum-left"></b> still to go</span></div>
+    </div>
+    <div class="r">
+      <div class="chips" id="chips"></div>
+      <div class="hint">Click a category to see only that one, everywhere on the page. Click it again for <a id="all">all categories</a> · <button class="i" data-pop="how" aria-label="How this page works">i</button></div>
+    </div>
+  </div>
+
+  <div class="card cal" data-testid="calendar">
+    <div class="wk h"><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div><div>Sun</div></div>
+    <div id="weeks"></div>
+  </div>
+
+  <div class="card led" data-testid="ledger">
+    <div class="hd"><h2>Ledger · what hits when</h2><span id="lfilter"></span><span class="hint">Click a day above to see only that day.</span></div>
+    <table data-testid="ledger-table">
+      <thead><tr><th>Date</th><th>Payee</th><th>Category</th><th>City</th><th>Status</th><th class="r">Amount</th><th class="r">Running total</th></tr></thead>
+      <tbody id="lbody"></tbody>
+    </table>
+  </div>
+</main>
+<div class="pop" id="pop" data-testid="popover" hidden></div>
+
+<script>
+const Y = 2026, M = 9, TODAY = 2; // October 2026, today Oct 2
+const DAYS = new Date(Y, M + 1, 0).getDate();
+const DOW = d => (new Date(Y, M, d).getDay() + 6) % 7; // Mon = 0
+const fmt = v => "$" + v.toLocaleString("en-US", { minimumFractionDigits: Number.isInteger(v) ? 0 : 2, maximumFractionDigits: 2 });
+const CATS = {
+  pers:  { name: "Personnel",     col: "var(--c-pers)",  how: "City manager pay, match manager pay, corporate salaries and contractors." },
+  field: { name: "Field Costs",   col: "var(--c-field)", how: "What we pay each venue. From the Field Costs page." },
+  equip: { name: "Equipment",     col: "var(--c-equip)", how: "Cameras, goals, gear. Includes VEO camera plans." },
+  mkt:   { name: "Marketing",     col: "var(--c-mkt)",   how: "Ads and agency. From the Expenses page." },
+  subs:  { name: "Subscriptions", col: "var(--c-subs)",  how: "Software and services billed monthly." },
+  misc:  { name: "Misc",          col: "var(--c-misc)",  how: "Anything else on the Expenses page." },
+};
+// one row per payment: day, payee, category, city, amount, sub (what it is)
+const P = [
+  [1, "Garrett", "pers", "Austin", 1850, "City manager pay"], [1, "Payroll", "pers", "", 5500, "Corporate salaries"],
+  [3, "Miguel", "pers", "Houston", 3000, "Corporate salaries"], [3, "KISC (Katy Intl)", "field", "Houston", 2310], [3, "Ann Richards School", "field", "Austin", 1440], [3, "STAR", "field", "San Antonio", 1210], [3, "New Braunfels", "field", "San Antonio", 260],
+  [4, "Soccer Central Tournament", "field", "San Antonio", 90],
+  [5, "PARMER Stadium", "field", "Austin", 3900], [5, "NEMP", "field", "Austin", 1540], [5, "Lowell H. Strike M.S.", "field", "Dallas", 894.40], [5, "Dee", "pers", "", 3100, "Corporate salaries"],
+  [6, "Austin", "pers", "Austin", 940, "Match manager pay"], [6, "San Antonio", "pers", "San Antonio", 640, "Match manager pay"], [6, "Houston", "pers", "Houston", 480, "Match manager pay"], [6, "Dallas", "pers", "Dallas", 120, "Match manager pay"], [6, "One Touch", "field", "Atlanta", 100],
+  [7, "Scissortail Park", "field", "OKC", 2600], [7, "Ann Richards School", "field", "Austin", 1440], [7, "ATH Katy", "field", "Houston", 130],
+  [8, "One Touch", "field", "Atlanta", 100], [8, "Google Workspace", "subs", "", 312, "Subscriptions"],
+  [9, "Crockett High School", "field", "Austin", 80],
+  [10, "Bob Jones Park", "field", "Dallas", 400],
+  [10, "Meta Ads", "mkt", "", 191.21, "Marketing"],
+  [13, "One Touch", "field", "Atlanta", 100], [13, "Austin", "pers", "Austin", 940, "Match manager pay"], [13, "San Antonio", "pers", "San Antonio", 640, "Match manager pay"],
+  [14, "One Touch", "field", "Atlanta", 100], [14, "Veo", "equip", "", 1188, "VEO camera plans"],
+  [15, "Rodrigo", "pers", "OKC", 500, "City manager pay"], [15, "Ben", "pers", "Atlanta", 500, "City manager pay"], [15, "Marcus", "pers", "St. Louis", 800, "City manager pay"], [15, "ATH Pearland", "field", "Houston", 3860],
+  [16, "Crockett High School", "field", "Austin", 80], [16, "Payroll", "pers", "", 5500, "Corporate salaries"],
+  [17, "ATH Pearland", "field", "Houston", 5920],
+  [20, "Austin", "pers", "Austin", 940, "Match manager pay"], [20, "Houston", "pers", "Houston", 480, "Match manager pay"], [20, "One Touch", "field", "Atlanta", 100],
+  [21, "One Touch", "field", "Atlanta", 100], [21, "Slack", "subs", "", 96, "Subscriptions"],
+  [22, "One Touch", "field", "Atlanta", 100],
+  [23, "Crockett High School", "field", "Austin", 80],
+  [27, "Austin", "pers", "Austin", 940, "Match manager pay"], [27, "San Antonio", "pers", "San Antonio", 640, "Match manager pay"], [27, "One Touch", "field", "Atlanta", 100],
+  [28, "ATH Katy", "field", "Houston", 140], [28, "One Touch", "field", "Atlanta", 100],
+  [29, "One Touch", "field", "Atlanta", 100],
+  [31, "Westlake", "field", "Austin", 1350], [31, "Field paint, goals", "misc", "Dallas", 240, "Misc"],
+].map(([d, name, cat, city, v, sub]) => ({ d, name, cat, city, v, sub: sub || "Field cost" }));
+
+const SHORT = { pers: "Personnel", field: "Fields", equip: "Equipment", mkt: "Marketing", subs: "Subscriptions", misc: "Misc" };
+const on = Object.fromEntries(Object.keys(CATS).map(k => [k, true]));
+const vis = P.filter(p => on[p.cat]);
+const sum = a => a.reduce((s, p) => s + p.v, 0);
+const expanded = new Set();
+let dayFilter = null;
+
+function render(){
+  const V = P.filter(p => on[p.cat]);
+  const total = sum(P), paid = sum(P.filter(p => p.d <= TODAY));
+  document.querySelector('[data-testid="sum-month"]').textContent = fmt(total);
+  document.querySelector('[data-testid="sum-paid"]').textContent = fmt(paid);
+  document.querySelector('[data-testid="sum-left"]').textContent = fmt(total - paid);
+  document.getElementById("paidFill").style.width = (paid / total * 100).toFixed(1) + "%";
+  document.getElementById("chips").innerHTML = Object.entries(CATS).map(([k, c]) => { const t = sum(P.filter(p => p.cat === k));
+    return `<button class="chip" data-cat="${k}" data-testid="chip-${k}" aria-pressed="${on[k]}"><span class="sw" style="background:${c.col}"></span>${c.name} <b>${fmt(t)}</b><small>${Math.round(t / total * 100)}%</small></button>`; }).join("");
+
+  // calendar
+  const lead = DOW(1), cells = [];
+  for (let i = 0; i < lead; i++) cells.push({ out: true, n: new Date(Y, M, 1 - lead + i).getDate() });
+  for (let d = 1; d <= DAYS; d++) cells.push({ d, n: d });
+  while (cells.length % 7) cells.push({ out: true, n: cells.length - lead - DAYS + 1 });
+  let h = "";
+  for (let w = 0; w < cells.length / 7; w++) {
+    const row = cells.slice(w * 7, w * 7 + 7);
+    const wt = sum(V.filter(p => row.some(c => c.d === p.d)));
+    h += `<div class="wk" data-testid="week">` + row.map((c, i) => {
+      if (c.out) return `<div class="day out ${i >= 5 ? "wkend" : ""}"><div class="dh"><span class="n">${c.n}</span></div></div>`;
+      const ps = V.filter(p => p.d === c.d), t = sum(ps);
+      const g = {}; ps.forEach(p => { (g[p.cat] ||= []).push(p); });
+      const groups = Object.entries(g).sort((a, b) => sum(b[1]) - sum(a[1]));
+      return `<div class="day ${i >= 5 ? "wkend" : ""} ${c.d === TODAY ? "today" : ""} ${c.d < TODAY ? "past" : ""} ${dayFilter === c.d ? "sel" : ""}" data-testid="day-${c.d}" data-day="${c.d}">
+        <div class="dh"><span class="n">${c.n}</span><span class="dt ${t ? "" : "none"}" data-total="${t}">${t ? fmt(t) : "—"}</span></div>
+        ${groups.map(([k, arr]) => `<button class="pay ${c.d <= TODAY ? "paid" : "proj"}" data-day="${c.d}" data-cat="${k}" title="${CATS[k].name} · ${arr.length} payment${arr.length > 1 ? "s" : ""}"><span class="sw" style="background:${CATS[k].col}"></span><span class="nm">${SHORT[k]}${arr.length > 1 ? ` <small>${arr.length}</small>` : ""}</span><span class="v">${fmt(sum(arr))}</span></button>`).join("")}
+        ${i === 6 && wt ? `<span class="wkt">week ${fmt(wt)}</span>` : ""}
+      </div>`; }).join("") + `</div>`;
+  }
+  document.getElementById("weeks").innerHTML = h;
+
+  // ledger
+  let run = 0, lb = "", wk = -1;
+  const sorted = [...V].filter(p => dayFilter == null || p.d === dayFilter).sort((a, b) => a.d - b.d || b.v - a.v);
+  document.getElementById("lfilter").innerHTML = dayFilter == null ? "" : `<span class="fchip" data-testid="ledger-filter">Showing Oct ${dayFilter} <button id="lclear" aria-label="Show the whole month">×</button></span>`;
+  document.querySelector(".led .hint").textContent = dayFilter == null ? "Click a day above to see only that day." : "Click the day again or × for the whole month.";
+  for (const p of sorted) {
+    const w = Math.floor((p.d - 1 + lead) / 7);
+    if (w !== wk && dayFilter == null) { wk = w; const rows = sorted.filter(q => Math.floor((q.d - 1 + lead) / 7) === w); const a = Math.max(1, w * 7 - lead + 1), b = Math.min(DAYS, w * 7 - lead + 7);
+      lb += `<tr class="wh" data-testid="ledger-week"><td colspan="5">Oct ${a} – ${b}</td><td class="r">${fmt(sum(rows))}</td><td></td></tr>`; }
+    run += p.v;
+    lb += `<tr data-testid="ledger-row" data-day="${p.d}" data-cat="${p.cat}"><td>Oct ${p.d}</td><td><b>${p.name}</b></td><td class="cat"><span class="sw" style="background:${CATS[p.cat].col}"></span>${CATS[p.cat].name}${p.sub !== "Field cost" && p.sub !== CATS[p.cat].name ? ` · ${p.sub}` : ""}</td><td class="city">${p.city || "—"}</td><td><span class="st ${p.d <= TODAY ? "paid" : "proj"}">${p.d <= TODAY ? "Paid" : "Projected"}</span></td><td class="r"><b>${fmt(p.v)}</b></td><td class="r cum">${fmt(run)}</td></tr>`;
+  }
+  if (!sorted.length) lb += `<tr><td colspan="7" style="color:var(--muted);text-align:center;padding:18px">Nothing hits on Oct ${dayFilter}.</td></tr>`;
+  lb += `<tr class="tot" data-testid="ledger-total"><td colspan="5">${dayFilter == null ? "October" : "Oct " + dayFilter}${V.length !== P.length ? " · shown categories" : ""}</td><td class="r" data-total="${sum(sorted)}">${fmt(sum(sorted))}</td><td></td></tr>`;
+  document.getElementById("lbody").innerHTML = lb;
+}
+render();
+
+document.addEventListener("click", e => {
+  const ch = e.target.closest(".chip"); if (ch) { const k = ch.dataset.cat, solo = on[k] && Object.values(on).filter(Boolean).length === 1;
+    Object.keys(on).forEach(x => on[x] = solo ? true : x === k); closePop(); render(); return; }
+  if (e.target.id === "all") { Object.keys(on).forEach(k => on[k] = true); render(); return; }
+  const mo = e.target.closest(".more"); if (mo) { const d = +mo.dataset.more; expanded.has(d) ? expanded.delete(d) : expanded.add(d); render(); return; }
+  const pay = e.target.closest(".pay"); if (pay) { e.stopPropagation(); if (openBtn === pay) return closePop(); showGroup(pay); return; }
+  const ib = e.target.closest(".i"); if (ib) { e.stopPropagation(); if (openBtn === ib) return closePop(); closePop();
+    pop.innerHTML = `<div class="h">How this page works</div>Every payment MatchDay makes in the month, on the day the money leaves. Solid is paid (bank). Dashed is projected from the venue, pay and expense settings.<dl>${Object.values(CATS).map(c => `<dt><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${c.col};margin-right:6px"></span>${c.name}</dt><dd>${c.how}</dd>`).join("")}</dl>`;
+    place(ib); return; }
+  if (e.target.id === "lclear") { dayFilter = null; render(); return; }
+  const day = e.target.closest(".day[data-day]"); if (day) { closePop(); const d = +day.dataset.day; dayFilter = dayFilter === d ? null : d; render(); return; }
+  if (!e.target.closest("#pop")) closePop();
+});
+const pop = document.getElementById("pop"); let openBtn = null;
+function closePop(){ pop.hidden = true; if (openBtn) openBtn.setAttribute("aria-expanded", "false"); openBtn = null; }
+function place(b){ pop.hidden = false; openBtn = b; b.setAttribute("aria-expanded", "true"); const rc = b.getBoundingClientRect();
+  pop.style.left = Math.min(innerWidth - 316, rc.left + scrollX) + "px"; pop.style.top = (rc.bottom + scrollY + 8) + "px"; }
+function showGroup(b){ closePop(); const d = +b.dataset.day, k = b.dataset.cat, arr = P.filter(p => p.d === d && p.cat === k).sort((a, b) => b.v - a.v);
+  pop.innerHTML = `<div class="h">Oct ${d} · ${CATS[k].name} · ${fmt(sum(arr))}</div><div style="color:#a9bdb1;font-size:12px">${d <= TODAY ? "Paid (bank)" : "Projected from settings"}</div><dl>${arr.map(p => `<dt>${p.name}${p.city && p.city !== p.name ? `<span style="color:#7f968a"> · ${p.city}</span>` : ""}${p.sub !== "Field cost" && p.sub !== CATS[k].name ? `<span style="color:#7f968a"> · ${p.sub}</span>` : ""}</dt><dd style="text-align:right">${fmt(p.v)}</dd>`).join("")}</dl>`;
+  place(b); }
+function showPay(b, p){ closePop();
+  pop.innerHTML = `<div class="h">${p.name}${p.city ? ", " + p.city : ""}</div><dl><dt>Category</dt><dd>${CATS[p.cat].name}${p.sub !== CATS[p.cat].name ? " · " + p.sub : ""}</dd><dt>Amount</dt><dd>${fmt(p.v)}</dd><dt>Date</dt><dd>Oct ${p.d}</dd><dt>Status</dt><dd>${p.d <= TODAY ? "Paid (bank)" : "Projected from settings"}</dd></dl>`;
+  place(b); }
+document.addEventListener("keydown", e => { if (e.key === "Escape") closePop(); });
+</script>
+</body>
+</html>

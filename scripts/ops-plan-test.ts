@@ -246,7 +246,9 @@ console.log("\n— every 2027 gap is the displayed goal minus the displayed base
   is("footer (both baselines), To find and a finished month, in day / week / spots: printed gap = printed goal - printed baseline", { checked, wrong }, { checked: 12, wrong: 0 });
   is("Spots: the plain difference of the two totals shown, no scaling", planGap(36673, 31, 8931, 30, "spots")?.shown, 36673 - 8931);
   yes("CONTROL: the old scaled gap was a different number", Math.round(36673 - (8931 / 30) * 31) !== 36673 - 8931);
-  is("To find in spots is 36,673 - 14,550", planGap(dec, 31, FORECAST_DEC_2026_SPOTS, 31, "spots")?.shown, Math.round(dec) - 14550);
+  /* LABEL CHANGED 2026-10-02 (body unchanged): the 2027 "To find" tile now reads the footer gap,
+   * measured from the baseline; this checks planGap itself against the Dec 2026 start. */
+  is("planGap from the Dec 2026 start, in spots, is 36,673 - 14,550", planGap(dec, 31, FORECAST_DEC_2026_SPOTS, 31, "spots")?.shown, Math.round(dec) - 14550);
   is("a city that has never played has its whole December to find", planGap(3026, 31, null, 30, "spots")?.shown, 3026);
   is("month to date on the 1st (no completed day) is no gap", planGap(3026, 31, 0, 0, "day"), null);
   const w = planGap(dec, 31, 8931, 30, "week") as { shown: number; daily: number };

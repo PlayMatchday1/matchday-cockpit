@@ -259,9 +259,10 @@ export default function OpsPlan2027() {
   const show = (spots: number | null, key: string, days?: number) =>
     spots == null ? DASH : fmtPlan(spotsToUnit(spots, days ?? daysInMonthOf(key), unit), unit);
   const fmtCounts = (a: Counts, p: Counts, k: keyof Counts) => `${a[k]} / ${p[k]}`;
-  /* "TO FIND": the displayed December 2027 goal minus the displayed December 2026 start — the
-   * same shownGap, both months of 31 days (Ryan, 2026-10-02). */
-  const toFind = planGap(view.all.roll.est[11], daysInMonthOf(DEC_KEY), view.start.spots, daysInMonthOf(START_MONTH), unit);
+  /* "TO FIND" IS THE FOOTER'S GAP — the displayed December 2027 goal minus the displayed BASELINE,
+   * the very number in the All MatchDay row (Ryan, 2026-10-02: "Two numbers for the same gap on one
+   * page is confusing"). It replaces "goal minus the Dec 2026 start"; that start stays its own tile. */
+  const toFind = view.allGap;
   const asOfOptions = (() => {
     const out: string[] = []; let k = view.cur < KEYS[0] ? view.cur : KEYS[0];
     while (k <= KEYS[11]) { out.push(k); k = addMonths(k, 1); }
