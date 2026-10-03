@@ -461,12 +461,12 @@ export default function FieldGoals2026() {
   );
 }
 
-export function Big({ k, v, u, tone, testId }: { k: string; v: string; u: string; tone?: string; testId: string }) {
+export function Big({ k, v, u, tone, testId }: { k: string; v: string; u: ReactNode; tone?: string; testId: string }) {
   return (
     <div className="min-w-[170px] rounded-2xl border-[1.5px] bg-white px-4 py-3" style={{ borderColor: "#D3DCD8" }} data-testid={testId}>
       <div className="text-[10.5px] font-extrabold uppercase tracking-widest" style={{ color: "#5C6F66" }}>{k}</div>
       <div className="mt-0.5 text-[34px] font-black leading-none tracking-tight tabular-nums" style={{ color: tone ?? "#003326" }} data-testid={`${testId}-v`}>{v}</div>
-      <div className="mt-0.5 text-[11.5px]" style={{ color: "#5C6F66" }}>{u}</div>
+      <div className="mt-0.5 text-[11.5px]" style={{ color: "#5C6F66" }} data-testid={`${testId}-u`}>{u}</div>
     </div>
   );
 }

@@ -21,14 +21,14 @@
  * whole or not at all. Removal is a status, never a DELETE — except a hire, which feeds nothing.
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { supabase } from "@/lib/supabase";
 import { errorText } from "@/lib/errorText";
 import { MONTH_LABELS, SPOTS_PER_MATCH, baselineMonth, roundTo, type CompareFrom } from "@/lib/fieldGoals";
 import {
-  ANCHOR_SETTING_KEY, FORECAST_DEC_2026_SPOTS, PLAN_YEAR, START_MONTH, addMonths, daysInMonthOf,
-  estimateAt, fieldFlags, fmtPlan, inPlan, isActualAnchor, isActuallyLive, isDefaultEstimate, planMonthKeys,
-  planGap, rollFields, shortMonth, sortCities, spotsToUnit, sumRollups, sumSpots, unitToSpots,
+  ANCHOR_SETTING_KEY, FORECAST_DEC_2026_SPOTS, PLAN_YEAR, START_MONTH, addMonths, citiesLine, cityTally, daysInMonthOf,
+  estimateAt, fieldFlags, fmtPlan, headlineTiles, inPlan, isActualAnchor, isActuallyLive, isDefaultEstimate, monthYear, planCounts,
+  planMonthKeys, planGap, regionTally, regionsLine, rollFields, shortMonth, sortCities, spotsToUnit, sumRollups, sumSpots, unitToSpots,
   type Counts, type PlanField, type PlanGap, type PlanSort, type PlanType, type Rollup, type Unit,
 } from "@/lib/opsPlan";
 import { BaselineTag, Big, CompareSeg, DaysTag, GoalInput, GrainSeg, HistorySeg, type Grain } from "@/components/FieldGoals2026";
@@ -40,7 +40,8 @@ async function authFetch(path: string): Promise<Response> {
 }
 
 type City = { id: string; name: string; regionKey: string; launchMonth: string | null; anchorSlots: number; mature: number;
-  status: "active" | "removed"; sortOrder: number; venueAliases: string[]; cityIds: string[] };
+  status: "active" | "removed"; sortOrder: number; venueAliases: string[]; cityIds: string[];
+  /** Any counted match played in the city, ever (the route reads every match on record). */ everPlayed: boolean };
 type Region = { key: string; name: string; shortName: string; note: string | null; sortOrder: number };
 type Hire = { id: string; hireMonth: string; runningMonth: string | null; role: string; kind: "regional_manager" | "hq" | "other";
   regionKey: string | null; notes: string | null; sortOrder: number };
@@ -190,7 +191,6 @@ export default function OpsPlan2027() {
     const fieldsOf = new Map<string, PlanField[]>();
     for (const f of data.fields) fieldsOf.set(f.cityId, [...(fieldsOf.get(f.cityId) ?? []), f]);
 
-    type Line = { roll: Rollup; live: number | null; base: number | null; hist: (number | null)[]; trailing: number };
     const lineOf = (fields: PlanField[], mature: number): Line => {
       const roll = rollFields(fields, { mature }, KEYS, asOf, data.threshold);
       const sumAct = (k: string) => {
@@ -198,14 +198,13 @@ export default function OpsPlan2027() {
         for (const f of fields) { const a = f.actual[k]; if (a) { m += a.matches; s += a.spots; } }
         return m > 0 ? s : null;
       };
-      return { roll, live: sumAct(cur), base: sumAct(baseKey), hist: histKeys.map(sumAct), trailing: fields.reduce((a, f) => a + f.trailing.spots, 0) };
+      return { roll, live: sumAct(cur), base: sumAct(baseKey), hist: histKeys.map(sumAct) };
     };
     const sumLines = (ls: Line[]): Line => ({
       roll: sumRollups(ls.map((l) => l.roll), 12),
       live: sumSpots(ls.map((l) => l.live)),
       base: sumSpots(ls.map((l) => l.base)),
       hist: histKeys.map((_, i) => sumSpots(ls.map((l) => l.hist[i]))),
-      trailing: ls.reduce((a, l) => a + l.trailing, 0),
     });
     /* THE GAP IS lib/fieldGoals.shownGap: the DISPLAYED December 2027 estimate minus the DISPLAYED
      * baseline, each converted to the unit on screen exactly as its own cell converts it. In Spots
@@ -234,9 +233,17 @@ export default function OpsPlan2027() {
     const decDone = cur > START_MONTH;
     const decActual = sumSpots(regions.flatMap((r) => r.cities.flatMap((c) => c.fields.map((f) => f.actual[START_MONTH]?.spots ?? null))));
     const start = decDone ? { spots: decActual ?? 0, label: "actual" } : { spots: FORECAST_DEC_2026_SPOTS, label: "forecast" };
-    const liveCities = regions.reduce((a, r) => a + r.cities.filter((c) => c.line.roll.actual.fields > 0).length, 0);
+    /* THE CITIES TILE, BY RULE (lib/opsPlan.cityState). "Playing now" is the BASELINE month — the
+     * window the Now tile, the chart and the table's baseline column use — not the trailing 30 days. */
+    const tally = cityTally(regions.flatMap((r) => r.cities.map((c) => ({
+      launchMonth: c.city.launchMonth, everPlayed: c.city.everPlayed,
+      playingNow: baseDays > 0 && c.fields.some((f) => (f.actual[baseKey]?.matches ?? 0) > 0),
+    }))));
+    const regionCount = regionTally(regions.map((r) => ({ key: r.region.key, cityNames: r.cities.map((c) => c.name) })));
+    /* PLANNED BY DECEMBER 2027, over the same fields the "Plan as of" count reads. */
+    const plannedDec = planCounts(regions.flatMap((r) => r.cities.flatMap((c) => c.fields)), KEYS[11]).fields;
     return { cur, asOf, liveDays, histKeys, baseKey, baseIsLive, baseDays, compareFrom: bl.compareFrom,
-      regions, all, allGap: gapOf(all), removedCities, start, liveCities, cityById };
+      regions, all, allGap: gapOf(all), removedCities, start, tally, regionCount, plannedDec, cityById };
   }, [data, KEYS, asOfPick, showHistory, sort, compareOverride, unit]);
 
   if (loadErr) return <p className="p-6 text-[13px] text-red-700" data-testid="op-error">{loadErr}</p>;
@@ -258,11 +265,14 @@ export default function OpsPlan2027() {
   const DEC_KEY = KEYS[11];
   const show = (spots: number | null, key: string, days?: number) =>
     spots == null ? DASH : fmtPlan(spotsToUnit(spots, days ?? daysInMonthOf(key), unit), unit);
-  const fmtCounts = (a: Counts, p: Counts, k: keyof Counts) => `${a[k]} / ${p[k]}`;
-  /* "TO FIND" IS THE FOOTER'S GAP — the displayed December 2027 goal minus the displayed BASELINE,
-   * the very number in the All MatchDay row (Ryan, 2026-10-02: "Two numbers for the same gap on one
-   * page is confusing"). It replaces "goal minus the Dec 2026 start"; that start stays its own tile. */
-  const toFind = view.allGap;
+  /* NOW, GOAL, TO FIND READ ACROSS (Ryan, 2026-10-02). "To find" is the footer's gap — the displayed
+   * December 2027 goal minus the displayed BASELINE — and Now is that baseline, so the three tiles
+   * subtract on screen. lib/opsPlan.headlineTiles, which the guard suite asserts in every unit and
+   * both compare modes. The Dec 2026 start is a small line under Now, no longer a headline. */
+  const tiles = headlineTiles(view.all.roll.est[11], daysInMonthOf(DEC_KEY), view.all.base, view.baseDays, unit);
+  const baseMon = MONTH_LABELS[Number(view.baseKey.slice(5, 7)) - 1];
+  const baseName = view.baseIsLive ? `${baseMon} to date` : baseMon;
+  const { actual: nowC, plan: planC } = view.all.roll;
   const asOfOptions = (() => {
     const out: string[] = []; let k = view.cur < KEYS[0] ? view.cur : KEYS[0];
     while (k <= KEYS[11]) { out.push(k); k = addMonths(k, 1); }
@@ -282,14 +292,24 @@ export default function OpsPlan2027() {
 
       {/* ── 1. STAT TILES ─────────────────────────────────────────────────────────────────────── */}
       <div className="mb-3 flex flex-wrap items-stretch gap-3">
-        <Big k={`Dec 2026 start · ${view.start.label}`} v={show(view.start.spots, START_MONTH)} u={u} testId="op-start" />
-        <Big k="Dec 2027 goal" v={show(view.all.roll.est[11], DEC_KEY)} u={u} tone="#12694A" testId="op-goal" />
-        <Big k="To find" v={toFind == null ? DASH : fmtPlan(toFind.shown, unit)} u={u} tone={RED} testId="op-find" />
-        <Big k="Fields · actual / plan" v={fmtCounts(view.all.roll.actual, view.all.roll.plan, "fields")}
-          u={`anchors ${fmtCounts(view.all.roll.actual, view.all.roll.plan, "anchors")} · satellites ${fmtCounts(view.all.roll.actual, view.all.roll.plan, "satellites")}`}
-          testId="op-fields" />
-        <Big k="Cities" v={String(view.regions.reduce((a, r) => a + r.cities.length, 0))}
-          u={`${view.liveCities} playing now, across ${view.regions.filter((r) => r.cities.length).length} regions`} testId="op-cities" />
+        <Big k={view.baseIsLive ? `Now · ${baseMon} to date` : `Now · ${baseMon}, last full month`} v={tiles.now}
+          u={`Dec 2026 ${view.start.label} ${show(view.start.spots, START_MONTH)}`} testId="op-now" />
+        <Big k="Dec 2027 goal" v={tiles.goal} u={u} tone="#12694A" testId="op-goal" />
+        <Big k="To find" v={tiles.toFind} u={u} tone={RED} testId="op-find" />
+        {/* FIELDS STAY ON THE TRAILING 30 DAYS, and the label says so: they are the table's Fields /
+          * Anchors / Satellites columns, and the anchor threshold is spots in 30 days, which a
+          * one-day "to date" window cannot be measured against. */}
+        <Big k="Fields · playing, last 30 days" v={String(nowC.fields)} testId="op-tile-fields"
+          u={<div style={{ maxWidth: 250 }}>
+            {/* Each phrase stays whole; a narrow tile breaks the line at its "·", never mid-phrase. */}
+            <div><Nw>{planC.fields} planned by {monthYear(view.asOf)}</Nw> · <Nw>{view.plannedDec} by {monthYear(DEC_KEY)}</Nw></div>
+            <div><Nw>anchors {nowC.anchors} now, {planC.anchors} planned</Nw> · <Nw>satellites {nowC.satellites} now, {planC.satellites} planned</Nw></div>
+          </div>} />
+        <Big k="Cities" v={String(view.tally.total)} testId="op-cities"
+          u={<>
+            <div data-testid="op-cities-states">{citiesLine(view.tally)}</div>
+            <div data-testid="op-cities-regions">{regionsLine(view.regionCount)}</div>
+          </>} />
       </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -315,7 +335,8 @@ export default function OpsPlan2027() {
       </div>
 
       {/* ── 2. REGION CHART ───────────────────────────────────────────────────────────────────── */}
-      <RegionChart regions={view.regions.filter((r) => r.cities.length)} unit={unit} decKey={DEC_KEY} />
+      <RegionChart regions={view.regions.filter((r) => r.cities.length)} unit={unit} decKey={DEC_KEY}
+        baseName={baseName} baseDays={view.baseDays} />
 
       {/* ── 3. MONTH BY MONTH ─────────────────────────────────────────────────────────────────── */}
       <MonthStrip data={data} keys={KEYS} all={view.all.roll} unit={unit} cur={view.cur}
@@ -383,6 +404,8 @@ export default function OpsPlan2027() {
 
 /* ════════════════════════════════════════════════════════════════════════════════════════════════ */
 
+const Nw = ({ children }: { children: ReactNode }) => <span className="whitespace-nowrap">{children}</span>;
+
 type Ctx = {
   unit: Unit; keys: string[]; cur: string; liveDays: number; histKeys: string[]; threshold: number;
   /** The baseline month (lib/fieldGoals.baselineMonth) and its days: full days for the last full
@@ -400,7 +423,7 @@ type Ctx = {
   cityById: Map<string, City>;
   showRemoved: boolean; asOf: string;
 };
-type Line = { roll: Rollup; live: number | null; base: number | null; hist: (number | null)[]; trailing: number };
+type Line = { roll: Rollup; live: number | null; base: number | null; hist: (number | null)[] };
 type CityView = { city: City; name: string; fields: PlanField[]; line: Line; gap: Gap | null; plannedAnchors: number };
 type RegionView = { region: Region; cities: CityView[]; line: Line; gap: Gap | null; rm: Hire | null };
 
@@ -779,36 +802,42 @@ function ThresholdInput({ value, busy, revert, onCommit }: { value: number; busy
   );
 }
 
-/* ── REGION CHART: the last 30 days against the December 2027 estimate ─────────────────────────────
- * "Latest actual" is the trailing 30 completed days — the same window the field counts use, and it
- * has a value on the 1st of a month, when the live month does not. One scale across regions. */
-function RegionChart({ regions, unit, decKey }: { regions: RegionView[]; unit: Unit; decKey: string }) {
+/* ── REGION CHART: the baseline against the December 2027 estimate ─────────────────────────────────
+ * The solid bar is the BASELINE month (Sep, or Oct to date) — the region card's left-hand figure and
+ * the Now tile's month — so the chart, the tiles and the table agree. It used to be the trailing 30
+ * days, which none of them showed. Month to date on the 1st has no completed day: no solid bar. One
+ * scale across regions. */
+function RegionChart({ regions, unit, decKey, baseName, baseDays }: {
+  regions: RegionView[]; unit: Unit; decKey: string; baseName: string; baseDays: number;
+}) {
   const val = (spots: number, days: number) => spotsToUnit(spots, days, unit);
-  const pairs = regions.map((r) => ({ name: r.region.shortName, act: val(r.line.trailing, 30), goal: val(r.line.roll.est[11] ?? 0, daysInMonthOf(decKey)) }));
+  const pairs = regions.map((r) => ({ name: r.region.shortName,
+    act: baseDays > 0 && r.line.base != null ? val(r.line.base, baseDays) : null,
+    goal: val(r.line.roll.est[11] ?? 0, daysInMonthOf(decKey)) }));
   const Wd = 920, H = 240, L = 44, R = 8, T = 18, B = 30;
-  const peak = Math.max(1, ...pairs.flatMap((p) => [p.act, p.goal]));
+  const peak = Math.max(1, ...pairs.flatMap((p) => [p.act ?? 0, p.goal]));
   const max = Math.ceil(peak / 4) * 4 || 4;
   const ih = H - T - B, step = (Wd - L - R) / Math.max(1, pairs.length), bw = Math.min(30, (step - 16) / 2);
   return (
     <div className="mb-4 rounded-2xl border-[1.5px] bg-white px-4 pb-2 pt-3" style={{ borderColor: LINE }} data-testid="op-chart">
       <div className="mb-1 flex flex-wrap items-start justify-between gap-3">
-        <div className="text-[13px] font-extrabold">Last 30 days against the Dec 2027 goal, by region</div>
+        <div className="text-[13px] font-extrabold" data-testid="op-chart-title">{baseName} against the Dec 2027 goal, by region</div>
         <div className="flex gap-3 text-[11.5px]" style={{ color: MUTED }}>
-          <span className="inline-flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-[3px]" style={{ background: CHART_HUE }} />last 30 days</span>
+          <span className="inline-flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-[3px]" style={{ background: CHART_HUE }} />{baseName}</span>
           <span className="inline-flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-[3px] border-2" style={{ borderColor: CHART_HUE, background: "#fff" }} />Dec 2027 goal</span>
         </div>
       </div>
-      <svg viewBox={`0 0 ${Wd} ${H}`} className="block w-full" role="img" aria-label="Last 30 days against the December 2027 goal, by region">
+      <svg viewBox={`0 0 ${Wd} ${H}`} className="block w-full" role="img" aria-label={`${baseName} against the December 2027 goal, by region`}>
         {[0, 1, 2, 3, 4].map((g) => {
           const v = (max / 4) * g, y = T + ih - (v / max) * ih;
           return <g key={g}><line x1={L} x2={Wd - R} y1={y} y2={y} stroke="#E8EEEA" /><text x={L - 8} y={y + 3.5} textAnchor="end" fontSize={10} fill="#8FA096">{fmtPlan(v, unit)}</text></g>;
         })}
         {pairs.map((p, i) => {
           const cx = L + i * step + step / 2;
-          const ha = Math.max(1.5, (p.act / max) * ih), hg = Math.max(1.5, (p.goal / max) * ih);
+          const ha = p.act == null ? 0 : Math.max(1.5, (p.act / max) * ih), hg = Math.max(1.5, (p.goal / max) * ih);
           return (
             <g key={p.name}>
-              <rect data-testid="op-bact" x={cx - bw - 2} y={T + ih - ha} width={bw} height={ha} rx={3} fill={CHART_HUE}><title>{`${p.name} · last 30 days ${fmtPlan(p.act, unit)}`}</title></rect>
+              <rect data-testid="op-bact" x={cx - bw - 2} y={T + ih - ha} width={bw} height={ha} rx={3} fill={CHART_HUE}><title>{`${p.name} · ${baseName} ${p.act == null ? DASH : fmtPlan(p.act, unit)}`}</title></rect>
               <rect data-testid="op-bgoal" x={cx + 2} y={T + ih - hg} width={bw} height={hg} rx={3} fill="#fff" stroke={CHART_HUE} strokeWidth={2}><title>{`${p.name} · Dec 2027 ${fmtPlan(p.goal, unit)}`}</title></rect>
               <text x={cx + 2 + bw / 2} y={T + ih - hg - 5} textAnchor="middle" fontSize={10} fontWeight={700} fill="#12694A">{fmtPlan(p.goal, unit)}</text>
               <text x={cx} y={H - 10} textAnchor="middle" fontSize={10} fontWeight={600} fill="#54655C">{p.name}</text>

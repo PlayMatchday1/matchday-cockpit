@@ -15,12 +15,13 @@
  */
 import fs from "node:fs";
 import {
-  FORECAST_DEC_2026_SPOTS, fmtPlan, planGap, sortCities, PLAN_YEAR, RAMP_SPOTS, actualCounts, defaultRamp, estimateAt, fieldFlags, inPlan, isDefaultEstimate, planCounts,
+  FORECAST_DEC_2026_SPOTS, UNASSIGNED_REGION_KEY, citiesLine, cityState, cityTally, daysInMonthOf, headlineTiles, monthYear, regionTally, regionsLine,
+  fmtPlan, planGap, sortCities, PLAN_YEAR, RAMP_SPOTS, actualCounts, defaultRamp, estimateAt, fieldFlags, inPlan, isDefaultEstimate, planCounts,
   planMonthKeys, rollFields, splitByWeights, spotsToUnit, sumRollups, sumSpots, unitToSpots, actualSpots,
   type PlanField,
 } from "@/lib/opsPlan";
 import { FORECAST_CITIES, HEADLINE, seedEstimates } from "@/lib/opsPlanForecast";
-import { roundTo, rowBelongsToGoalYear, targetBelongsToGoalYear } from "@/lib/fieldGoals";
+import { baselineMonth, roundTo, rowBelongsToGoalYear, targetBelongsToGoalYear } from "@/lib/fieldGoals";
 
 let pass = 0, fail = 0;
 const ok = (n: string) => { pass++; console.log(`  ok  ${n}`); };
@@ -260,6 +261,68 @@ console.log("\n— every 2027 gap is the displayed goal minus the displayed base
     { name: "E", sortOrder: 4, gap: null },
   ];
   is("by gap: the gap on screen, then the daily gap, then the name; no gap last", sortCities(xs, "gap").map((x) => x.name), ["D", "C", "A", "B", "E"]);
+}
+
+console.log("\n— the stat tiles: Now, goal and To find read across; cities add up; Unassigned is no region (Ryan, 2026-10-02) —");
+{
+  /* NOW + TO FIND = GOAL, AS PRINTED, in every unit and both compare modes. The strings are the
+   * tiles' own (headlineTiles), parsed the way a reader would. Baselines are derived from
+   * baselineMonth, so the month lengths are whatever that rule picks, not pinned here. */
+  const seeded = seededFields();
+  const dec = sumRollups([...seeded.values()].map((s) => rollFields(s.fields, { mature: s.mature }, KEYS, KEYS[11], 670)), 12).est[11] as number;
+  const num = (s: string) => Number(s.replace(/,/g, ""));
+  let checked = 0, wrong = 0, nonzero = 0;
+  for (const today of ["2026-10-02", "2026-10-20", "2027-03-15"]) {
+    for (const mode of ["last-full", "to-date"] as const) {
+      const bl = baselineMonth(today, mode);
+      const baseDays = bl.baseIsLive ? bl.completedDays : daysInMonthOf(bl.baseKey);
+      for (const base of [8931, 520, 7, 14549.95, 23456.4]) {
+        for (const u of ["day", "week", "spots"] as const) {
+          const t = headlineTiles(dec, 31, base, baseDays, u);
+          checked++;
+          if (roundTo(num(t.goal) - num(t.now), 1) !== roundTo(num(t.toFind), 1)) { wrong++; bad(`${today} ${mode} ${base} ${u}`, JSON.stringify(t)); }
+          if (num(t.toFind) !== 0) nonzero++;
+        }
+      }
+    }
+  }
+  is("goal - now = to find, as printed: 3 dates × 2 compare modes × 5 baselines × 3 units", { checked, wrong }, { checked: 90, wrong: 0 });
+  /* CONTROL: the identity is not 0 = 0 — every To find printed a real number. */
+  is("CONTROL: every To find was non-zero", nonzero, 90);
+  /* CONTROL: the tiles are NOT the old Dec-2026-start subtraction, which a 31-day start would match. */
+  yes("CONTROL: Now is the baseline, not the Dec 2026 start", headlineTiles(dec, 31, 8931, 30, "spots").now !== fmtPlan(FORECAST_DEC_2026_SPOTS, "spots"));
+  is("to date on the 1st: no Now, no To find, the goal still shows",
+    (({ now, toFind }) => [now, toFind])(headlineTiles(dec, 31, null, baselineMonth("2026-11-01", "to-date").completedDays, "day")), ["–", "–"]);
+  is("nothing played in the baseline: Now is a dash and the whole goal is to find",
+    (({ goal, toFind }) => goal === toFind)(headlineTiles(3026, 31, null, 30, "spots")), true);
+
+  /* THE REGION COUNT EXCLUDES UNASSIGNED — over the forecast's own regions and cities. */
+  const regionsOf = new Map<string, string[]>();
+  for (const c of FORECAST_CITIES) regionsOf.set(c.region, [...(regionsOf.get(c.region) ?? []), c.name]);
+  const rt = regionTally([...regionsOf.entries()].map(([key, cityNames]) => ({ key, cityNames })));
+  is("region count excludes Unassigned; St. Louis is the one unassigned city", rt, { regions: regionsOf.size - 1, unassigned: ["St. Louis"] });
+  /* CONTROL: Unassigned really is among the regions with cities, so the exclusion did something. */
+  yes("CONTROL: the forecast does have an Unassigned region with a city", (regionsOf.get(UNASSIGNED_REGION_KEY) ?? []).length > 0);
+  is("the line names it", regionsLine(rt), `${regionsOf.size - 1} regions, St. Louis unassigned`);
+  is("an empty Unassigned is not counted either", regionTally([{ key: "a", cityNames: ["x"] }, { key: UNASSIGNED_REGION_KEY, cityNames: [] }]), { regions: 1, unassigned: [] });
+
+  /* PLAYING + TO LAUNCH + NOT PLAYING = TOTAL, with every state present at least once. */
+  const cs = FORECAST_CITIES.map((c, i) => ({
+    launchMonth: c.launch, everPlayed: c.launch == null && i % 4 !== 1, playingNow: c.launch == null && i % 4 === 0,
+  }));
+  cs.push({ launchMonth: "2027-05-01", everPlayed: true, playingNow: true });     // a launch city already playing
+  cs.push({ launchMonth: "2027-05-01", everPlayed: true, playingNow: false });    // …that played, then stopped
+  const ct = cityTally(cs);
+  is("playing + to launch + not playing = the city total", ct.playing + ct.toLaunch + ct.notPlaying, ct.total);
+  yes("CONTROL: all three states occur in the fixture", ct.playing > 0 && ct.toLaunch > 0 && ct.notPlaying > 0, JSON.stringify(ct));
+  is("by rule: playing in the baseline wins, even with a launch month",
+    cityState({ launchMonth: "2027-05-01", everPlayed: true, playingNow: true }), "playing");
+  is("…a launch month and never played is to launch", cityState({ launchMonth: "2026-10-01", everPlayed: false, playingNow: false }), "to-launch");
+  is("…a launch month that has played before is not playing", cityState({ launchMonth: "2027-05-01", everPlayed: true, playingNow: false }), "not-playing");
+  is("…no launch month and never played is not playing", cityState({ launchMonth: null, everPlayed: false, playingNow: false }), "not-playing");
+  is("the line omits not playing at zero", citiesLine({ total: 23, playing: 7, toLaunch: 16, notPlaying: 0 }), "7 playing now · 16 to launch");
+  is("…and appends it above zero", citiesLine({ total: 23, playing: 6, toLaunch: 16, notPlaying: 1 }), "6 playing now · 16 to launch · 1 not playing");
+  is("months spelled with the year", [monthYear("2026-10-01"), monthYear("2027-12-01")], ["Oct 2026", "Dec 2027"]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

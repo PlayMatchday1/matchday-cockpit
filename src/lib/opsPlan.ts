@@ -314,6 +314,62 @@ export function sortCities<T extends { name: string; gap: { shown: number; daily
   });
 }
 
+/* ── THE STAT TILES ───────────────────────────────────────────────────────────────────────────
+ * NOW, DEC 2027 GOAL, TO FIND read across: To find is the goal minus Now AS DISPLAYED (planGap), and
+ * Now is the very baseline that subtraction uses — the footer's baseline, not the Dec 2026 start.
+ * A baseline month with no completed day (month to date on the 1st) has no Now and no gap; a
+ * baseline of nothing played is a dash, and the whole goal is to find. */
+const TILE_DASH = "–";
+export function headlineTiles(decSpots: number | null, decDays: number, baseSpots: number | null, baseDays: number, unit: Unit):
+  { now: string; goal: string; toFind: string } {
+  const now = baseDays <= 0 || baseSpots == null ? TILE_DASH : fmtPlan(spotsToUnit(baseSpots, baseDays, unit), unit);
+  const goal = decSpots == null ? TILE_DASH : fmtPlan(spotsToUnit(decSpots, decDays, unit), unit);
+  const gap = planGap(decSpots, decDays, baseSpots, baseDays, unit);
+  return { now, goal, toFind: gap == null ? TILE_DASH : fmtPlan(gap.shown, unit) };
+}
+
+/** "Oct 2026" — the year spelled out, where "Oct 26" would read as a date. */
+export const monthYear = (key: string): string => {
+  const [y, m] = key.split("-").map(Number);
+  return `${MONTH_LABELS[m - 1]} ${y}`;
+};
+
+/* A CITY'S STATE, BY RULE (Ryan, 2026-10-02):
+ *   playing     at least one field played in the BASELINE month (the window the tiles and chart use)
+ *   to launch   has a launch month and has never played
+ *   not playing everything else — has played before, or has no launch month, and is not playing now
+ * So the three always add up to the total. "Never played" is over every counted match on record. */
+export type CityState = "playing" | "to-launch" | "not-playing";
+export const cityState = (c: { launchMonth: string | null; everPlayed: boolean; playingNow: boolean }): CityState =>
+  c.playingNow ? "playing" : c.launchMonth != null && !c.everPlayed ? "to-launch" : "not-playing";
+
+export type CityTally = { total: number; playing: number; toLaunch: number; notPlaying: number };
+export function cityTally(cities: { launchMonth: string | null; everPlayed: boolean; playingNow: boolean }[]): CityTally {
+  const t: CityTally = { total: cities.length, playing: 0, toLaunch: 0, notPlaying: 0 };
+  for (const c of cities) {
+    const s = cityState(c);
+    if (s === "playing") t.playing += 1; else if (s === "to-launch") t.toLaunch += 1; else t.notPlaying += 1;
+  }
+  return t;
+}
+/** "7 playing now · 16 to launch", with "· N not playing" only when there are any. */
+export const citiesLine = (t: CityTally): string =>
+  `${t.playing} playing now · ${t.toLaunch} to launch${t.notPlaying > 0 ? ` · ${t.notPlaying} not playing` : ""}`;
+
+/* UNASSIGNED IS NOT A REGION. It holds cities with no regional manager (St. Louis); it keeps its card
+ * and its bar, but it is never counted as one. */
+export const UNASSIGNED_REGION_KEY = "unassigned";
+export function regionTally(regions: { key: string; cityNames: string[] }[]): { regions: number; unassigned: string[] } {
+  const withCities = regions.filter((r) => r.cityNames.length > 0);
+  return {
+    regions: withCities.filter((r) => r.key !== UNASSIGNED_REGION_KEY).length,
+    unassigned: withCities.filter((r) => r.key === UNASSIGNED_REGION_KEY).flatMap((r) => r.cityNames),
+  };
+}
+/** "6 regions, St. Louis unassigned". */
+export const regionsLine = (t: { regions: number; unassigned: string[] }): string =>
+  `${t.regions} region${t.regions === 1 ? "" : "s"}${t.unassigned.length ? `, ${t.unassigned.join(" and ")} unassigned` : ""}`;
+
 /* ── CITY MATCHING ────────────────────────────────────────────────────────────────────────────
  * A row reaches a plan city by its 2027 plan entry if it has one, else by alias: a venue's
  * fin_venues.city, an unmapped field's mdapi city_identifier, a 2026 slot's typed city. Case and

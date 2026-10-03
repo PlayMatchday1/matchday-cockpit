@@ -75,10 +75,13 @@ export async function GET(req: Request) {
     const threshold = Number.isFinite(thresholdRaw) && thresholdRaw > 0 ? thresholdRaw : DEFAULT_ANCHOR_THRESHOLD;
 
     // ── matches, through the 2026 page's filter ─────────────────────────────────────────────
+    /* EVERY MATCH ON RECORD, not just the months the page shows: a city's "to launch" state is "has
+     * never played", which a window cannot answer (8,423 counted matches all-time on 2026-10-02).
+     * Only the months from `from` on become actuals, exactly as before. */
     const matches = (await selectAll<GoalMatch & { field_title: string | null; city_identifier: string | null }>(() =>
       sb.from("mdapi_matches")
         .select("field_id, field_title, city_identifier, start_date, player_count, is_cancelled")
-        .gte("start_date", `${from}T00:00:00`).lt("start_date", `${PLAN_YEAR + 1}-01-01T00:00:00`)
+        .lt("start_date", `${PLAN_YEAR + 1}-01-01T00:00:00`)
         .is("deleted_at", null).order("api_id") as never)).filter(countsTowardGoals);
 
     const venueOf = new Map<number, number>((links.data ?? []).map((l) => [Number(l.mdapi_field_id), Number(l.fin_venue_id)]));
@@ -86,17 +89,24 @@ export async function GET(req: Request) {
       (venues.data ?? []).map((v) => [Number(v.id), { venue_name: v.venue_name as string | null, city: v.city as string | null }]));
 
     type Acc = { fieldId: number | null; venueId: number | null; title: string | null; cityId: string | null;
-      actual: Record<string, { spots: number; matches: number }>; trailing: { spots: number; matches: number } };
+      actual: Record<string, { spots: number; matches: number }>; trailing: { spots: number; matches: number };
+      /** Any counted match played, ever. */ everPlayed: boolean;
+      /** Any match on or after `from` — what made an entry before the read went all-time. An entry
+       *  without one is used for nothing but everPlayed, so names, city codes and actuals are exactly
+       *  what they were. */ inRange: boolean };
     const acc = new Map<string, Acc>();
     for (const m of matches) {
       const fid = m.field_id as number;
       const key = rowKeyForField(fid, venueOf);
       const vid = venueOf.get(fid) ?? null;
       const a = acc.get(key) ?? { fieldId: vid == null ? fid : null, venueId: vid, title: m.field_title, cityId: m.city_identifier,
-        actual: {}, trailing: { spots: 0, matches: 0 } };
+        actual: {}, trailing: { spots: 0, matches: 0 }, everPlayed: false, inRange: false };
       acc.set(key, a);
-      if (!playedByYesterday(m.start_date, yesterday)) continue;   // the row exists; only played matches count
       const day = String(m.start_date).slice(0, 10);
+      if (day >= from && !a.inRange) { a.inRange = true; a.title = m.field_title; a.cityId = m.city_identifier; }
+      if (!playedByYesterday(m.start_date, yesterday)) continue;   // the row exists; only played matches count
+      a.everPlayed = true;
+      if (day < from) continue;   // played, but before any month the page shows
       const mk = `${day.slice(0, 7)}-01`;
       const s = m.player_count ?? 0;
       const cell = (a.actual[mk] ??= { spots: 0, matches: 0 });
@@ -140,22 +150,28 @@ export async function GET(req: Request) {
     const keys = new Set<string>([...storedByKey.keys(), ...acc.keys()]);
 
     const fields: PlanField[] = [];
+    /** Plan cities with at least one counted match played, ever, through the same row-to-city rule. */
+    const playedCities = new Set<string>();
     for (const key of keys) {
       const r = storedByKey.get(key) ?? null;
-      const a = acc.get(key) ?? null;
+      const all = acc.get(key) ?? null;
+      /* `a` is the entry as it was before the read went all-time; `all` adds fields that only played
+       * earlier, which can only resolve a city for playedCities and then drop out as not playing. */
+      const a = all?.inRange ? all : null;
       const plan = r ? planByRow.get(r.id as string) : undefined;
-      const venueId = r?.venue_id != null ? Number(r.venue_id) : a?.venueId ?? null;
-      const fieldId = r?.field_id != null ? Number(r.field_id) : a?.fieldId ?? null;
+      const venueId = r?.venue_id != null ? Number(r.venue_id) : all?.venueId ?? null;
+      const fieldId = r?.field_id != null ? Number(r.field_id) : all?.fieldId ?? null;
       const kind: PlanField["kind"] = venueId != null ? "venue" : fieldId != null ? "field" : "slot";
 
       let cityId: string | null = (plan?.plan_city_id as string | undefined) ?? null;
       if (!cityId) {
         if (r && !rowCountsTowardTotals({ notCounted: r.not_counted === true })) continue;   // stays out
         if (kind === "venue") cityId = byVenueAlias.get(normAlias(venueById.get(venueId as number)?.city)) ?? null;
-        else if (kind === "field") cityId = byIdAlias.get(normAlias(a?.cityId ?? (r?.city as string | null))) ?? null;
+        else if (kind === "field") cityId = byIdAlias.get(normAlias((r ? a : all)?.cityId ?? (r?.city as string | null))) ?? null;
         else if (r && r.plan_year == null) cityId = byVenueAlias.get(normAlias(r.city as string | null)) ?? null;
       }
       if (!cityId) continue;
+      if (all?.everPlayed) playedCities.add(cityId);
 
       const role: PlanRole = plan ? (plan.role as PlanRole) : "unplanned";
       const actual = a?.actual ?? {};
@@ -186,7 +202,7 @@ export async function GET(req: Request) {
         id: c.id, name: c.name, regionKey: c.region_key,
         launchMonth: c.launch_month ? String(c.launch_month).slice(0, 10) : null,
         anchorSlots: Number(c.anchor_slots), mature: Number(c.mature_spots_per_field),
-        status: c.status, sortOrder: Number(c.sort_order),
+        status: c.status, sortOrder: Number(c.sort_order), everPlayed: playedCities.has(c.id as string),
         venueAliases: c.venue_city_aliases ?? [], cityIds: c.city_identifiers ?? [],
       })),
       hires: (hires.data ?? []).map((h) => ({
