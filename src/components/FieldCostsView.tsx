@@ -8,6 +8,7 @@ import { insertFinVenue } from "@/lib/venueCreate";
 import { logChange } from "@/lib/financeAudit";
 import {
   buildFieldCostRows,
+  capacitySplitOf,
   fieldCostMatchLines,
   fieldCostSplit,
   fieldCostSplitText,
@@ -16,6 +17,7 @@ import {
   overrideOnlyTotalFor,
   perMatchTotalFor,
   totalOverrideAmountFor,
+  type CapacityPart,
   type FieldCostMatchLine,
   type FieldCostRow,
   type FieldCostSplit,
@@ -725,6 +727,7 @@ export default function FieldCostsView() {
                   const expanded = expandedKey === row.key;
                   const venue = venueById.get(row.primaryVenueId) ?? null;
                   const md = data ? matchDaysOf(data, row, month) : [];
+                  const cap = data ? capacitySplitOf(data, row) : null;
                   return (
                     <Fragment key={row.key}>
                       <FieldCostTableRow
@@ -738,6 +741,7 @@ export default function FieldCostsView() {
                         month={month}
                         matchDays={md}
                         inactive={inactiveKeys.has(row.key)}
+                        cap={cap}
                       />
                       {expanded && venue && data && (
                         <VenuePanel
@@ -747,11 +751,13 @@ export default function FieldCostsView() {
                           month={month}
                           matchDays={md}
                           fields={fieldsFor(row)}
-                          error={errorFor(row.primaryVenueId)}
+                          error={[row.primaryVenueId, ...row.secondaryVenueIds].map(errorFor).find((e) => e != null) ?? null}
                           scheduleRows={fieldCostMatchLines(data, row, month)}
                           split={fieldCostSplit(data, row, month, kickedAt(nowMs))}
                           nowMs={nowMs}
                           onPatch={(patch, field) => void saveVenuePatch(row.primaryVenueId, patch, field)}
+                          cap={cap}
+                          onLegRate={(venueId, rate) => void saveVenuePatch(venueId, { per_match_rate: rate }, "per_match_rate")}
                           onOverride={(raw) => void saveCustomAmount(row.primaryVenueId, month, raw)}
                           onField={(fieldId, counted) => void saveFieldCounted(row.primaryVenueId, fieldId, counted)}
                         />
@@ -955,6 +961,7 @@ function FieldCostTableRow({
   month,
   matchDays,
   inactive,
+  cap,
 }: {
   index: number;
   row: FieldCostRow;
@@ -967,6 +974,8 @@ function FieldCostTableRow({
   matchDays: { d: number; amount: number }[];
   /** Shown only with "Show inactive" on: one step back in ink, and says so. */
   inactive: boolean;
+  /** Soccer Central's two rates by match size (financeCosts.capacitySplitOf); null elsewhere. */
+  cap: CapacityPart[] | null;
 }) {
   const model = modelOf(row);
   const p = monthParts(month);
@@ -988,7 +997,11 @@ function FieldCostTableRow({
       </td>
       <td>
         <span className={`tag${model === "share" ? " share" : ""}`} data-testid={`tag-${index}`}>
-          {model === "share" ? "Profit share" : `Per match · ${rateLabel(venue?.rate_days ?? null, venue?.per_match_rate ?? 0)}`}
+          {model === "share"
+            ? "Profit share"
+            : cap
+              ? cap.map((c) => `${money0(c.rate ?? 0)} ${c.label.toLowerCase()}`).join(" · ")
+              : `Per match · ${rateLabel(venue?.rate_days ?? null, venue?.per_match_rate ?? 0)}`}
         </span>
       </td>
       <td className="r">
@@ -1009,6 +1022,12 @@ function FieldCostTableRow({
             beside the box where it is edited. */}
         {ov ? null : model === "share" ? (
           <small>partner payout</small>
+        ) : cap ? (
+          cap.map((c) => (
+            <small key={c.venueId} data-testid={`cap-line-${c.label.toLowerCase()}`} data-amount={c.amount}>
+              {c.label}: {c.count} × {money0(c.rate ?? 0)} = {money0(c.amount)}
+            </small>
+          ))
         ) : (
           <small>{calcText(row)}</small>
         )}
@@ -1030,10 +1049,20 @@ function CommitInput({ onCommit, ...rest }: Omit<React.InputHTMLAttributes<HTMLI
   const ref = useRef<HTMLInputElement>(null);
   const cb = useRef(onCommit);
   cb.current = onCommit;
+  /* ONE COMMIT PER VALUE. A save re-keys this box, so React removes the old element while it can
+   * still hold focus; Chromium then fires a second "change" on it with the same value, and the
+   * write went out twice (two PATCHes, two fin_change_log rows — measured on the rate box, Enter
+   * to commit). A value equal to the last one committed (or to where the box started) is not a
+   * change. Writes never retry, so a duplicate must not leave here. */
+  const last = useRef(String(rest.defaultValue ?? ""));
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const h = () => cb.current(el.value);
+    const h = () => {
+      if (el.value === last.current) return;
+      last.current = el.value;
+      cb.current(el.value);
+    };
     el.addEventListener("change", h);
     return () => el.removeEventListener("change", h);
   }, []);
@@ -1054,6 +1083,8 @@ function VenuePanel({
   split,
   nowMs,
   onPatch,
+  cap,
+  onLegRate,
   onOverride,
   onField,
 }: {
@@ -1070,6 +1101,10 @@ function VenuePanel({
   nowMs: number;
   /** Write these fin_venues columns. The caller sends only what differs from the row on file. */
   onPatch: (patch: VenuePatch, key: EditableField) => void;
+  /** Soccer Central's two rates by match size; null for every other venue. */
+  cap: CapacityPart[] | null;
+  /** Save one capacity row's invoice rate (venue 11 or 53) through the same audited write. */
+  onLegRate: (venueId: number, rate: number) => void;
   onOverride: (raw: string) => void;
   onField: (fieldId: number, counted: boolean) => void;
 }) {
@@ -1232,7 +1267,28 @@ function VenuePanel({
             ) : (
               <div className="v">
                 {modelSelect}
-                {rates.map((r, j) => (
+                {cap ? (
+                  cap.map((c) => (
+                    <span className="rate" data-testid={`cap-${c.label.toLowerCase()}`} key={`cap-${c.venueId}-${c.rate}`}>
+                      <span className="u">{c.label} · {c.rule}</span> $
+                      <CommitInput
+                        key={`cap-in-${c.venueId}-${c.rate}`}
+                        className="in"
+                        data-testid={`cap-rate-${c.label.toLowerCase()}`}
+                        defaultValue={c.rate == null ? "" : String(c.rate)}
+                        placeholder="rate"
+                        onCommit={(raw) => {
+                          const n = raw.trim() === "" ? null : Number(raw);
+                          if (n == null || !Number.isFinite(n) || n < 0) return;
+                          onLegRate(c.venueId, n);
+                        }}
+                      />{" "}
+                      <span className="u">
+                        {money0(c.rate ?? 0)} each · {c.count} in {monthFull(month)} = {money0(c.amount)}
+                      </span>
+                    </span>
+                  ))
+                ) : rates.map((r, j) => (
                   <span className="rate" data-testid={`rate-${j}`} key={`${venue.id}-${j}-${rates.length}`}>
                     $
                     <CommitInput
@@ -1267,7 +1323,7 @@ function VenuePanel({
                     )}
                   </span>
                 ))}
-                {rates.length < 3 && (
+                {!cap && rates.length < 3 && (
                   <span className="lnk" data-testid="add-rate" onClick={addRate}>
                     + rate for other days
                   </span>
@@ -1342,7 +1398,7 @@ function VenuePanel({
             </div>
             {sched.mode === "match" ? (
               <div className="out" data-testid="when-calc" style={{ marginTop: 4 }}>
-                {row.matchCount} matches · <b>{model === "share" ? "its share" : rateLabel(venue.rate_days ?? null, venue.per_match_rate ?? 0)}</b> each, on the match date · auto
+                {row.matchCount} matches · <b>{model === "share" ? "its share" : cap ? cap.map((c) => `${money0(c.rate ?? 0)} ${c.label.toLowerCase()}`).join(", ") : rateLabel(venue.rate_days ?? null, venue.per_match_rate ?? 0)}</b> each, on the match date · auto
               </div>
             ) : (
               <>

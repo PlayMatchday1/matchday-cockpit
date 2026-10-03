@@ -138,15 +138,28 @@ export function cashDays(
       ds.push(d);
     }
     if (!ds.length) return { days: [], unscheduled: r2(total) };
-    return { days: ds.map((d) => ({ d, amount: r2(total / ds.length) })), unscheduled: 0 };
+    const parts = splitCents(total, ds.length);
+    return { days: ds.map((d, i) => ({ d, amount: parts[i] })), unscheduled: 0 };
   }
   const dates = [...(sched as DatesSchedule).dates].sort((a, b) => a.d - b.d);
   const fixed = dates.reduce((a, x) => a + (x.v != null ? x.v : 0), 0);
   const blanks = dates.filter((x) => x.v == null).length;
-  const each = blanks ? Math.max(total - fixed, 0) / blanks : 0;
-  const days = dates.map((x) => ({ d: clamp(x.d), amount: r2(x.v != null ? x.v : each) }));
+  const shares = splitCents(blanks ? Math.max(total - fixed, 0) : 0, Math.max(blanks, 1));
+  let k = 0;
+  const days = dates.map((x) => ({ d: clamp(x.d), amount: r2(x.v != null ? x.v : shares[k++]) }));
   const unscheduled = r2(total - days.reduce((a, x) => a + x.amount, 0));
   return { days, unscheduled };
+}
+
+/** `total` in `n` parts that ADD UP to it to the cent: the leftover cents go one each to the first
+ *  parts ($200 in 3 → $66.67, $66.67, $66.66). Dividing and rounding each part ($66.67 × 3) is
+ *  $200.01, and OpEx's days must sum to the Field Costs figure (scripts/opex-field-sum-test.ts). */
+export function splitCents(total: number, n: number): number[] {
+  if (n <= 0) return [];
+  const cents = Math.round(total * 100);
+  const base = Math.trunc(cents / n);
+  const rest = cents - base * n;
+  return Array.from({ length: n }, (_, i) => (base + (i < Math.abs(rest) ? Math.sign(rest) : 0)) / 100);
 }
 
 /** Months the cash sits before the cost month: 1 for a prepaid Pick-dates schedule, else 0. */

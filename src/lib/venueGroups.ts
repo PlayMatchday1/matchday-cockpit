@@ -47,7 +47,7 @@ export const COMBINED_LEG_LABELS: Record<string, string[]> = {
 // returns null for these to signal "drop this row from the cost
 // rollup entirely" (existing null-venue-id path in
 // venueChargedMatchCountFor and friends already filters them out).
-const SC_TOURNAMENT_THRESHOLD = 22;
+export const SC_TOURNAMENT_THRESHOLD = 22;
 
 export type VenueGroup = {
   key: string; // unique

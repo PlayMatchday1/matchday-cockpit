@@ -10,7 +10,7 @@ import type {
   FinMasterSchedule,
 } from "./useFinanceData";
 import type { Q2Month } from "./financeStats";
-import { getLegLabel, groupVenues, type VenueGroup } from "./venueGroups";
+import { COMBINE_BY_NAME, SC_TOURNAMENT_THRESHOLD, getLegLabel, groupVenues, type VenueGroup } from "./venueGroups";
 import { isCityHidden } from "./types";
 import { partnerPaymentOwedForMonth } from "./partnerStats";
 import { dayRange, rateForYmd, type DayRate } from "./venuePay";
@@ -416,6 +416,29 @@ function autoCost(
   };
 }
 
+/** The legs of each venue's group, cached per venue list (groupVenues is not free, and
+ *  canonicalVenueCost runs per venue per month on every page). */
+const legsCache = new WeakMap<FinVenue[], Map<number, FinVenue[]>>();
+function groupLegsOf(data: FinanceData, venueId: number): FinVenue[] {
+  let m = legsCache.get(data.venues);
+  if (!m) {
+    m = new Map();
+    for (const g of groupVenues(data.venues)) for (const l of g.legs) m.set(l.id, g.legs);
+    legsCache.set(data.venues, m);
+  }
+  return m.get(venueId) ?? [];
+}
+
+/** Another leg of `venue`'s combined group that carries an amount for `month`, if any. */
+function coveringLegOverride(data: FinanceData, venue: FinVenue, month: Q2Month): FinVenueCostOverride | null {
+  for (const leg of groupLegsOf(data, venue.id)) {
+    if (leg.id === venue.id) continue;
+    const o = findOverride(data, leg.id, month);
+    if (o) return o;
+  }
+  return null;
+}
+
 export function canonicalVenueCost(
   data: FinanceData,
   venueId: number,
@@ -434,6 +457,26 @@ export function canonicalVenueCost(
     };
   }
   const override = findOverride(data, venueId, month);
+  /* A LOADED OR HAND-SET MONTH COVERS THE WHOLE VENUE (Ryan, 2026-10-03). In a combined group
+   * (Soccer Central + its Tournament row), an amount on ANY leg is the month's figure for every leg:
+   * a leg with no amount of its own then contributes $0 rather than its per-match auto cost, so
+   * tournament matches are never added on top of an invoice that already covers them. The rates
+   * only apply in a month where no leg carries an amount. Replaces the "no auto-mirror" rule. */
+  if (!override) {
+    const covering = coveringLegOverride(data, venue, month);
+    if (covering) {
+      const by = data.venues.find((v) => v.id === covering.venue_id);
+      return {
+        amount: 0,
+        kind: "override",
+        matchCount: venueMatchCount(data, venue, month),
+        totalHours: 0,
+        formula: `Covered by ${by?.raw_venue_name || by?.venue_name || "the venue"}'s amount for the month`,
+        source: "Covered by the venue's loaded or hand-set amount",
+        override: null,
+      };
+    }
+  }
   if (override) {
     return {
       amount: override.override_amount,
@@ -800,4 +843,35 @@ export function fieldCostMatchLines(data: FinanceData, row: FieldCostRow, month:
     }
   }
   return out;
+}
+
+/* ── SOCCER CENTRAL: ONE VENUE, TWO RATES, CHOSEN BY THE SIZE OF THE MATCH ──────────────────────
+ * Its matches route by capacity (venueGroups.resolveSplitRateVenueId): more than
+ * SC_TOURNAMENT_THRESHOLD (22) players → the Tournament row (venue 53), otherwise the normal row
+ * (venue 11); a missing or zero capacity drops out as a special event. Each part is that row's own
+ * charged count × its own invoice rate — exactly the per-leg auto cost the row sums — so the two
+ * parts add up to the computed figure (scripts/field-cost-split-test.ts). Null for any other row. */
+export type CapacityPart = {
+  venueId: number;
+  label: "Normal" | "Tournament";
+  rule: string;
+  rate: number | null;
+  count: number;
+  amount: number;
+};
+export function capacitySplitOf(data: FinanceData, row: FieldCostRow): CapacityPart[] | null {
+  if (row.secondaryVenueIds.length !== 1) return null;
+  const p = data.venues.find((v) => v.id === row.primaryVenueId);
+  const t = data.venues.find((v) => v.id === row.secondaryVenueIds[0]);
+  if (!p || !t) return null;
+  const cfg = COMBINE_BY_NAME.find((c) => c.primary === "Soccer Central");
+  if (!cfg || (p.raw_venue_name || p.venue_name) !== cfg.primary || (t.raw_venue_name || t.venue_name) !== cfg.secondary) return null;
+  const part = (v: FinVenue, label: CapacityPart["label"], rule: string): CapacityPart => {
+    const leg = row.legs.find((l) => l.venueId === v.id);
+    return { venueId: v.id, label, rule, rate: v.per_match_rate, count: leg?.matchCount ?? 0, amount: leg?.autoAmount ?? 0 };
+  };
+  return [
+    part(p, "Normal", `${SC_TOURNAMENT_THRESHOLD} players or fewer`),
+    part(t, "Tournament", `more than ${SC_TOURNAMENT_THRESHOLD} players`),
+  ];
 }

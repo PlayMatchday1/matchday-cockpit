@@ -101,9 +101,10 @@ function makeData(opts: {
 const rep = (n: number, venueId: number) =>
   Array.from({ length: n }, () => sched(venueId));
 
-test("combined group: overridden primary + unoverridden secondary sums BOTH legs (tab == Cash Flow)", () => {
-  // Soccer Central: #11 normal ($60) with a flat monthly override ($5,600);
-  // #53 tournament ($120) with no override → 3 matches bill $360 on top.
+test("combined group: an amount on the primary covers the WHOLE venue (tab == Cash Flow)", () => {
+  // Soccer Central: #11 normal ($60) with a monthly amount ($5,600); #53 tournament ($120) with
+  // none. RULE CHANGED 2026-10-03 (Ryan): a loaded or hand-set month covers both rates, so the
+  // tournament leg's 3 matches are NOT added on top. Was 5600 + 360 = 5960.
   const data = makeData({
     venues: [
       venue({ id: 11, venue_name: "Soccer Central", city: "San Antonio", billing_type: "per_match", per_match_rate: 60 }),
@@ -117,14 +118,12 @@ test("combined group: overridden primary + unoverridden secondary sums BOTH legs
   const sc = rows.find((r) => r.displayName === "Soccer Central")!;
   assert.ok(sc, "combined Soccer Central row present");
   assert.deepEqual(sc.secondaryVenueIds, [53], "#53 is the secondary leg");
-  // primary override 5600 + secondary auto (3 × 120 = 360) = 5960 — NOT just
-  // the 5600 override.
-  assert.equal(sc.amount, 5960);
+  assert.equal(sc.amount, 5600);
 
   // Reconciliation clears: Field Costs tab total == Cash Flow total.
   const tabTotal = rows.reduce((s, r) => s + r.amount, 0);
   assert.equal(tabTotal, fieldCostsFor(data, MONTH));
-  assert.equal(fieldCostsFor(data, MONTH), 5960);
+  assert.equal(fieldCostsFor(data, MONTH), 5600);
 });
 
 test("combined group: a $0 secondary override nets to the primary (explicit one-invoice case)", () => {
@@ -146,11 +145,10 @@ test("combined group: a $0 secondary override nets to the primary (explicit one-
   assert.equal(rows.reduce((s, r) => s + r.amount, 0), fieldCostsFor(data, MONTH));
 });
 
-test("no auto-mirror: overriding the primary leaves the secondary at its own auto cost, not $0", () => {
-  // The write paths (handleSubmitOverride, saveCustomAmount) no longer write a
-  // $0 mirror onto secondary legs. At the data layer that means: with ONLY a
-  // primary override present, the secondary leg carries NO override and bills
-  // its own auto cost — and that cost flows into the combined row.
+test("a primary amount covers the secondary leg: no mirror row needed, and the leg adds $0", () => {
+  // RULE CHANGED 2026-10-03 (Ryan): the secondary leg still carries NO override of its own (no
+  // mirror row is written), but a month with an amount on any leg uses that amount for the whole
+  // venue, so the leg contributes $0 rather than its own auto cost. Was: leg bills 4 × 120 = 480.
   const data = makeData({
     venues: [
       venue({ id: 11, venue_name: "Soccer Central", city: "San Antonio", billing_type: "per_match", per_match_rate: 60 }),
@@ -162,10 +160,10 @@ test("no auto-mirror: overriding the primary leaves the secondary at its own aut
 
   const sec = canonicalVenueCost(data, 53, MONTH);
   assert.equal(sec.override, null, "secondary leg has no (mirror) override");
-  assert.equal(sec.amount, 480, "secondary bills its own auto cost (4 × 120)");
+  assert.equal(sec.amount, 0, "secondary is covered by the primary's amount");
 
   const sc = buildFieldCostRows(data, MONTH).find((r) => r.displayName === "Soccer Central")!;
-  assert.equal(sc.amount, 5600 + 480);
+  assert.equal(sc.amount, 5600);
 });
 
 test("combined group with no overrides sums both legs' auto cost (unchanged behavior)", () => {

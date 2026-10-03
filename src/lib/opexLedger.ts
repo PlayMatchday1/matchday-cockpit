@@ -23,7 +23,7 @@ export type CatKey = "pers" | "field" | "equip" | "mkt" | "subs" | "misc";
 
 export const CATS: { key: CatKey; name: string; short: string; col: string; how: string }[] = [
   { key: "pers", name: "Personnel", short: "Personnel", col: "#2f6b4f", how: "City manager pay, match manager pay, corporate salaries and contractors." },
-  { key: "field", name: "Field Costs", short: "Fields", col: "#5aa77a", how: "What we pay each venue. Paid days are bank payments; later days are projected from each venue's billing settings." },
+  { key: "field", name: "Field Costs", short: "Fields", col: "#5aa77a", how: "What we pay each venue, on its pay schedule. A day that has passed is paid; a later day is expected." },
   { key: "equip", name: "Equipment", short: "Equipment", col: "#8a7fd1", how: "Cameras, goals and gear. Includes VEO camera plans." },
   { key: "mkt", name: "Marketing", short: "Marketing", col: "#e0a33a", how: "Ads and agency spend, from the Expenses page." },
   { key: "subs", name: "Subscriptions", short: "Subscriptions", col: "#4f8fc9", how: "Software and services billed monthly, from the Expenses page." },

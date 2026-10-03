@@ -79,7 +79,8 @@ ok(true, "instrument ran: table rendered");
 
 const body = await p.textContent("main");
 ok(!/Auto-bill|Slots|One reservation per time slot|MONTHLY FLAT|Monthly flat|KEYED|DPP price|Member price|Player pricing|cadence/i.test(body), "absence: no Auto-bill, Slots, Monthly flat, KEYED, player pricing or cadence dropdowns");
-const tags = await p.$$eval('[data-testid^="tag-"]', e => [...new Set(e.map(x => x.textContent.replace(/ · \$.*/, "")))]);
+// Soccer Central's tag names its two per-match rates by size ("$90 normal · $160 tournament"): per match.
+const tags = await p.$$eval('[data-testid^="tag-"]', e => [...new Set(e.map(x => /^\$[\d,.]+ normal · \$[\d,.]+ tournament$/.test(x.textContent.trim()) ? "Per match" : x.textContent.replace(/ · \$.*/, "")))]);
 ok(JSON.stringify(tags.sort()) === JSON.stringify(["Per match", "Profit share"]), `only two billing tags in the list: ${tags.join(", ")}`);
 if (!LIVE) {
 const heads = await p.$$eval(`${tid("venues")} thead th`, e => e.map(x => (x.childNodes[0]?.textContent || "").trim()));

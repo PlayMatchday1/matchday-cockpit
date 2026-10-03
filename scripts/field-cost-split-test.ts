@@ -15,7 +15,7 @@
 //      future match below has a wall clock that reads as already past; a split keyed on it would
 //      call tonight's fixture played. The cut must go through hasKickedOff on start_utc_ms.
 
-import { buildFieldCostRows, fieldCostMatchLines, fieldCostSplit, fieldCostSplitText } from "../src/lib/financeCosts";
+import { buildFieldCostRows, capacitySplitOf, fieldCostMatchLines, fieldCostSplit, fieldCostSplitText } from "../src/lib/financeCosts";
 import { hasKickedOff } from "../src/lib/fieldEconomics";
 import { costPerMatchOn } from "../src/lib/venuePay";
 import { readFileSync } from "node:fs";
@@ -222,6 +222,39 @@ console.log("\nMATCH P&L — cost per match, weekday-aware (cost_per_match + the
   is("Match P&L prices both passes with venueCostPerMatch(venues, baseVenueId, r.match_start)", (src.match(/venueCostPerMatch\(venues, baseVenueId, r\.match_start\)/g) ?? []).length, 2);
   is("...the helper goes through costPerMatchOn", /costPerMatchOn\(v, matchStartWall\.slice\(0, 10\)\)/.test(src), true);
   is("NEGATIVE — no two-argument (day-blind) call is left", /venueCostPerMatch\(venues, baseVenueId\)/.test(src), false);
+}
+
+console.log("\nSOCCER CENTRAL — two rates by match size; the two lines add up to the amount; a set month covers both");
+{
+  const sc = (extra: Record<string, unknown> = {}) => {
+    const d = financeData();
+    (d as unknown as { venues: unknown[] }).venues = [
+      { ...d.venues[0], id: 11, venue_name: "Soccer Central", raw_venue_name: "Soccer Central", per_match_rate: 90, rate_days: null, charge_on_cancel: false },
+      { ...d.venues[0], id: 53, venue_name: "Soccer Central Tournament", raw_venue_name: "Soccer Central Tournament", per_match_rate: 160, rate_days: null, charge_on_cancel: true, is_active: false },
+    ];
+    (d as unknown as { masterSchedule: unknown[] }).masterSchedule = [
+      ...[1, 2, 3, 4].map((k) => sched(11, `2026-10-0${k}`, "2026-10-01T15:00:00Z")),
+      ...Array.from({ length: 55 }, (_, k) => sched(53, `2026-10-${String(5 + (k % 25)).padStart(2, "0")}`, "2026-10-30T15:00:00Z")),
+    ];
+    (d as unknown as { cancelledSchedule: unknown[] }).cancelledSchedule = [];
+    (d as unknown as { overrides: unknown[] }).overrides = (extra.overrides as unknown[]) ?? [];
+    return d;
+  };
+  const d = sc();
+  const r = buildFieldCostRows(d, MONTH).find((x) => x.primaryVenueId === 11)!;
+  const parts = capacitySplitOf(d, r)!;
+  is("Soccer Central's row has a two-part split", parts?.length, 2);
+  is("Normal: 4 × $90 = $360", JSON.stringify([parts[0].label, parts[0].count, parts[0].rate, parts[0].amount]), JSON.stringify(["Normal", 4, 90, 360]));
+  is("Tournament: 55 × $160 = $8,800", JSON.stringify([parts[1].label, parts[1].count, parts[1].rate, parts[1].amount]), JSON.stringify(["Tournament", 55, 160, 8800]));
+  is("the two lines add up to the amount: $9,160", parts[0].amount + parts[1].amount, r.amount);
+  is("...and the amount is $9,160", r.amount, 9160);
+  is("the rule text comes from the code's threshold", `${parts[0].rule} / ${parts[1].rule}`, "22 players or fewer / more than 22 players");
+  is("CONTROL — an ordinary row has no split", capacitySplitOf(data, row("Plain Pitch")), null);
+  const set = sc({ overrides: [{ id: 1, venue_id: 11, month: "Oct 2026", override_amount: 5600, reason: "invoice", created_at: "", created_by: "x" }] });
+  const rs = buildFieldCostRows(set, MONTH).find((x) => x.primaryVenueId === 11)!;
+  is("a month with an amount on the venue uses it for BOTH rates: $5,600, not $5,600 + $8,800", rs.amount, 5600);
+  const bank53 = sc({ overrides: [{ id: 2, venue_id: 53, month: "Oct 2026", override_amount: 0, reason: "twin leg", created_at: "", created_by: "field-cost-2026-reconciliation" }, { id: 3, venue_id: 11, month: "Oct 2026", override_amount: 2340, reason: "bank", created_at: "", created_by: "field-cost-2026-reconciliation" }] });
+  is("a loaded month on both rows ($2,340 + $0) stays $2,340", buildFieldCostRows(bank53, MONTH).find((x) => x.primaryVenueId === 11)!.amount, 2340);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

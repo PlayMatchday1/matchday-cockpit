@@ -333,6 +333,10 @@ const NODE_SUITES = [
   // the OpEx calendar alone misses it, and proves the inactive rule still keeps it. Also: the
   // footer's totals are identical with inactive venues shown or hidden.
   "scripts/field-cost-activity-test.ts",
+  // OpEx follows each venue's pay schedule, past and future; a set month is the total. Every field
+  // venue's days must add up to its Field Costs figure on EVERY day of the month as "today" —
+  // two pages, two code paths, and a moving today. Caught a $200.01 three-way split on the way in.
+  "scripts/opex-field-sum-test.ts",
   // Match Promotion's NEW badge. Both decisions that carry the rule are invisible in the DOM — the
   // prior slate INCLUDING cancelled matches (excluding them mis-flagged 21 of 31), and the tests
   // nesting per field rather than per city (a city-wide reading lost 19 cases). A badge is a badge

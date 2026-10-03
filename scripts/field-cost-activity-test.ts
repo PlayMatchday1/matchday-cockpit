@@ -87,12 +87,14 @@ console.log("\nPOSITIVE CONTROL — the fixture has every case");
   is("Prepaid Pitch has 0 October matches (it plays in November)", name(5).matchCount, 0);
 }
 
-console.log("\nTHE TRAP — a prepaid payment on a day already past, with no bank record");
+console.log("\nA PREPAID PAYMENT ON A DAY ALREADY PAST, WITH NO BANK RECORD — never hidden");
 {
   const cal = buildOpexCalendarAsOf(data, 2026, 9, NOW);
   const calOnly = new Set<number>();
   for (const g of cal.groups) if (g.key === "field") for (const r of g.rows) if (r.lock?.kind === "field-cost") calOnly.add(r.lock.venueId);
-  is("the OpEx calendar alone does NOT show Prepaid Pitch (Oct 1 is past; no bank row)", calOnly.has(5), false);
+  // RULE CHANGED 2026-10-03: OpEx now follows the schedule on past days too (no bank feed), so the
+  // calendar ITSELF shows this payment. This was `false` — the trap the whole-month check closed.
+  is("the OpEx calendar now shows Prepaid Pitch's Oct 1 payment though Oct 1 is past and there is no bank row", calOnly.has(5), true);
   is("...CONTROL — the calendar does show Bank Pitch, from its bank amount", calOnly.has(6), true);
   is("fieldCostPayeesIn DOES include Prepaid Pitch: the whole-month schedule sees its Oct 1 payment", payees.has(5), true);
   is("...so Prepaid Pitch is not hidden", isInactiveFieldCostRow(data, name(5), MONTH, payees), false);

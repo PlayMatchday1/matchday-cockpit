@@ -135,7 +135,7 @@ export default function OpExCalendarView() {
         <td><b>{p.payee}</b></td>
         <td className="cat"><span className="sw" style={{ background: CAT_BY_KEY[p.cat].col }} />{CAT_BY_KEY[p.cat].name}{sub ? ` · ${sub}` : ""}</td>
         <td className="city">{p.city || "—"}</td>
-        <td><span className={`st ${p.paid ? "paid" : "proj"}`}>{p.paid ? "Paid" : "Projected"}</span></td>
+        <td><span className={`st ${p.paid ? "paid" : "proj"}`}>{p.paid ? "Paid" : p.cat === "field" ? "Expected" : "Projected"}</span></td>
         <td className="r"><b>{fmt(p.amount)}</b></td>
         <td className="r cum">{fmt(Math.round(run * 100) / 100)}</td>
       </tr>,
@@ -331,7 +331,7 @@ export default function OpExCalendarView() {
         {pop?.kind === "pill" && (
           <>
             <div className="h">{mon} {pop.day} · {CAT_BY_KEY[pop.cat].name} · {fmt(sumOf(popPayments))}</div>
-            <div className="sub">{pop.day <= cal.paidThrough ? "Paid (bank)" : "Projected from settings"}</div>
+            <div className="sub">{pop.day <= cal.paidThrough ? (pop.cat === "field" ? "Paid" : "Paid (bank)") : pop.cat === "field" ? "Expected, from each venue's pay schedule" : "Projected from settings"}</div>
             <dl className="pp">
               {popPayments.map((p) => {
                 const city = cityLabel(p), sub = subLabel(p);

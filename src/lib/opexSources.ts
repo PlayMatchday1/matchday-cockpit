@@ -813,10 +813,6 @@ function fieldCostGroupAsOf(
 
   const bank = data.overrides.filter((o) => o.created_by === BANK_SOURCE);
   const byPrimary = new Map<number, CalRow>();
-  const placedOnBillingDay = new Set<number>();
-  // NAMED FOR THE VENUE THE BANK PAID. A group's primary is its cheapest leg (venueGroups sorts by
-  // rate), so Soccer Central's money would otherwise sit under "Soccer Central Tournament" at $0.
-  const paidVenueOf = new Map<number, number>();
   const getRow = (venueId: number): { row: CalRow; primary: FinVenue | undefined } => {
     const g = groupOf.get(venueId);
     const primary = g?.legs[0] ?? venueById.get(venueId);
@@ -836,85 +832,48 @@ function fieldCostGroupAsOf(
     return { row, primary };
   };
 
-  // ── PAID: the bank, for any month that has started.
-  if (state !== "future") {
-    for (const o of bank) {
-      if (o.month !== monthKey || Math.abs(o.override_amount) < 0.005) continue;
-      const { row } = getRow(o.venue_id);
-      const paidVenue = venueById.get(o.venue_id);
-      if (paidVenue && row.lock?.kind === "field-cost") {
-        paidVenueOf.set(row.lock.venueId, paidVenue.id);
-        row.label = paidVenue.venue_name;
-        row.lock.venueName = paidVenue.venue_name;
-      }
-      /* THE BANK MONTH IS THE CASH MONTH, so a bank payment sits on the venue's PAY SCHEDULE dates in
-       * that month (0201) — never shifted for prepaid, which only moves projected cash. "Each match"
-       * has no single date for a lump, so it stays in the Month total, as an undated bank row did. */
-      const sched = paidVenue?.pay_schedule ?? null;
-      let days: number[]; let cadence: string;
-      if (sched) {
-        cadence = sched.mode === "dates" && sched.dates.length > 1 ? "custom" : sched.mode;
-        days = sched.mode === "match" ? [] : cashDays(sched, year, month0, o.override_amount).days.map((x) => x.d);
-      } else {
-        ({ days, cadence } = resolveBillingDates(paidVenue, year, month0));
-      }
-      const usable = days.filter((d) => d <= paidThrough);
-      if (usable.length === 0) {
-        row.paidUndated = Math.round(((row.paidUndated ?? 0) + o.override_amount) * 100) / 100;
-      } else {
-        addCells(row.cells, cadence === "custom" || cadence === "weekly" || cadence === "biweekly" ? splitEven(o.override_amount, usable) : { [usable[0]]: o.override_amount });
-        placedOnBillingDay.add(row.lock!.kind === "field-cost" ? row.lock!.venueId : 0);
-      }
-    }
+  /* ── EVERY DAY FOLLOWS THE SCHEDULE (Ryan, 2026-10-03). There is no bank feed, so a past day no
+   * longer waits for a bank row: each venue's payments sit on its scheduled days at its scheduled
+   * amounts for the WHOLE month — paid once the day has passed (paidThrough), expected before it.
+   * The amount is the month's Field Costs figure (canonicalVenueCost): an amount typed in by hand
+   * or loaded for the month IS the month's total and the days follow it; otherwise the rates. So a
+   * venue's days add up to its Field Costs figure (scripts/opex-field-sum-test.ts). A prepaid
+   * venue's cash for next month still sits in this month, marked "for <month>". */
+  const proj = fieldCostGroup(data, monthKey, year, month0, true);
+  for (const pr of proj.rows) {
+    const venueId = pr.lock?.kind === "field-cost" ? pr.lock.venueId : null;
+    if (venueId == null) continue;
+    const { row } = getRow(venueId);
+    if (pr.forMonth) row.forMonth = pr.forMonth;
+    addCells(row.cells, pr.cells);
+    if (pr.undated) row.undated = Math.round(((row.undated ?? 0) + pr.undated) * 100) / 100;
+    row.tag = pr.tag;
   }
-
-  // ── PROJECTED: venue settings, for days after today. Bank rows are taken out first so the
-  // projection is the model (or an operator's planned override), never a bank figure re-dated.
-  if (state !== "past") {
-    const planned: FinanceData = { ...data, overrides: data.overrides.filter((o) => o.created_by !== BANK_SOURCE) };
-    const proj = fieldCostGroup(planned, monthKey, year, month0, true);
-    for (const pr of proj.rows) {
-      const venueId = pr.lock?.kind === "field-cost" ? pr.lock.venueId : null;
-      if (venueId == null) continue;
-      const { row } = getRow(venueId);
-      if (pr.forMonth) row.forMonth = pr.forMonth;   // a prepaid venue's next-month cash
-      const future: Record<number, number> = {};
-      for (const [d, v] of Object.entries(pr.cells)) if (Number(d) > paidThrough) future[Number(d)] = v;
-      addCells(row.cells, future);
-      if (pr.undated) row.undated = Math.round(((row.undated ?? 0) + pr.undated) * 100) / 100;
-      row.tag = pr.tag;
-    }
-  }
+  void paidThrough;
 
   // ── The i, per row.
   const yearNum = year;
   const rows = [...byPrimary.values()].filter((r) => Math.abs(rowTotal(r)) >= 0.005);
   for (const r of rows) {
     const pid = r.lock?.kind === "field-cost" ? r.lock.venueId : -1;
-    const primary = venueById.get(paidVenueOf.get(pid) ?? pid);
+    const primary = venueById.get(pid);
     const legs = new Set((groupOf.get(pid)?.legs ?? []).map((l) => l.id).concat(pid));
     const ytd = bank
       .filter((o) => legs.has(o.venue_id) && o.month.endsWith(String(yearNum)))
       .reduce((s, o) => s + o.override_amount, 0);
     const { billed, rate } = billedAndRate(primary, data);
     const notes: string[] = [];
-    if (placedOnBillingDay.has(pid)) {
-      notes.push("The bank records the month a payment cleared, not the day. It is shown on this venue's billing day.");
-    }
-    if (r.paidUndated) {
-      notes.push(`${fmtUsd(r.paidUndated)} paid this month with no billing day set. It is in the Month total, not on a day.`);
-    }
     if (r.undated) {
-      notes.push(`${fmtUsd(r.undated)} projected with no billing day set. It is in the Month total, not on a day.`);
+      notes.push(`${fmtUsd(r.undated)} with no pay day set. It is in the Month total, not on a day.`);
     }
     r.info = {
       title: `${r.label}${r.sublabel ? `, ${r.sublabel}` : ""}`,
       billed,
       rate,
       source:
-        state === "past" ? "Paid: bank payments."
-        : state === "future" ? "Projected from venue settings."
-        : "Up to today: bank payments. After today: projected from venue settings.",
+        state === "past" ? "From each venue's pay schedule: paid."
+        : state === "future" ? "From each venue's pay schedule: expected."
+        : "From each venue's pay schedule: paid up to today, expected after.",
       ytd: `${fmtUsd(Math.round(ytd * 100) / 100)} paid${bankThrough ? ` (bank, through ${bankThrough})` : ""}`,
       notes,
     };
@@ -929,9 +888,7 @@ function fieldCostGroupAsOf(
     name: "Field Costs",
     src: "",
     how:
-      "What we pay each venue. Days up to today show what the bank paid" +
-      (bankThrough ? ` (loaded through ${bankThrough}; a later past month shows nothing until it is loaded)` : "") +
-      ". Days after today are projected from each venue's billing settings. The bank records the month, not the day: a paid amount sits on the venue's billing day, or only in the Month total if none is set. Solid amounts are paid (bank payments). Dashed amounts are projected from each venue's billing settings. Today is highlighted.",
+      "What we pay each venue, on its pay schedule, at the month's Field Costs figure. A day that has passed is paid (solid); a later day is expected (dashed). A month with an amount typed in or loaded uses that amount as its total, and the days follow it. Today is highlighted.",
     defaultOpen: true,
     rows,
     agg,
