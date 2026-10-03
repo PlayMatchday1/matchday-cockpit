@@ -24,14 +24,14 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { errorText } from "@/lib/errorText";
-import { MONTH_LABELS, SPOTS_PER_MATCH, roundTo } from "@/lib/fieldGoals";
+import { MONTH_LABELS, SPOTS_PER_MATCH, baselineMonth, roundTo, type CompareFrom } from "@/lib/fieldGoals";
 import {
   ANCHOR_SETTING_KEY, FORECAST_DEC_2026_SPOTS, PLAN_YEAR, START_MONTH, addMonths, daysInMonthOf,
   estimateAt, fieldFlags, fmtPlan, inPlan, isActualAnchor, isActuallyLive, isDefaultEstimate, planMonthKeys,
   rollFields, shortMonth, sortCities, spotsToUnit, sumRollups, sumSpots, unitToSpots,
   type Counts, type PlanField, type PlanSort, type PlanType, type Rollup, type Unit,
 } from "@/lib/opsPlan";
-import { Big, GoalInput, GrainSeg, HistorySeg, type Grain } from "@/components/FieldGoals2026";
+import { BaselineTag, Big, CompareSeg, DaysTag, GoalInput, GrainSeg, HistorySeg, type Grain } from "@/components/FieldGoals2026";
 
 async function authFetch(path: string): Promise<Response> {
   const { data } = await supabase.auth.getSession();
@@ -58,8 +58,6 @@ const DASH = "–";
  * it"). Its plan count is whatever rows it holds; the flag says the forecast did not supply one. */
 const FORECAST_FIELDS_UNKNOWN = new Set(["Philadelphia"]);
 
-/** Completed days in the live month: through yesterday, Chicago. Zero on the 1st. */
-const liveDaysOf = (today: string) => Number(today.slice(8, 10)) - 1;
 
 export default function OpsPlan2027() {
   const [data, setData] = useState<Payload | null>(null);
@@ -75,6 +73,9 @@ export default function OpsPlan2027() {
   const [openCities, setOpenCities] = useState<Set<string>>(() => new Set());
   const [showRemoved, setShowRemoved] = useState(false);
   const [asOfPick, setAsOfPick] = useState<string | null>(null);
+  /* COMPARE FROM — the 2026 page's control and lib/fieldGoals.baselineMonth's rule; null follows
+   * the rule, a press overrides it for this visit. There is no second copy of the rule here. */
+  const [compareOverride, setCompareOverride] = useState<CompareFrom | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -177,13 +178,19 @@ export default function OpsPlan2027() {
     if (!data || data.setup !== "ready") return null;
     const cur = data.currentMonth;
     const asOf = asOfPick ?? (cur < KEYS[0] ? cur : cur > KEYS[11] ? KEYS[11] : cur);
-    const liveDays = liveDaysOf(data.today);
-    const histKeys = showHistory ? [3, 2, 1].map((n) => addMonths(cur, -n)) : [];
+    const bl = baselineMonth(data.today, compareOverride);
+    const liveDays = bl.completedDays;
+    const baseKey = bl.baseKey, baseIsLive = bl.baseIsLive;
+    const baseDays = baseIsLive ? liveDays : daysInMonthOf(baseKey);
+    /* THE LEAD COLUMNS: the history months when history is open (the baseline is always the last
+     * of them), else the baseline alone when it is the last full month — the gap is measured from
+     * it, so it is on screen either way. The live month always follows. */
+    const histKeys = showHistory ? [3, 2, 1].map((n) => addMonths(cur, -n)) : baseIsLive ? [] : [baseKey];
     const cityById = new Map(data.cities.map((c) => [c.id, c]));
     const fieldsOf = new Map<string, PlanField[]>();
     for (const f of data.fields) fieldsOf.set(f.cityId, [...(fieldsOf.get(f.cityId) ?? []), f]);
 
-    type Line = { roll: Rollup; live: number | null; hist: (number | null)[]; trailing: number };
+    type Line = { roll: Rollup; live: number | null; base: number | null; hist: (number | null)[]; trailing: number };
     const lineOf = (fields: PlanField[], mature: number): Line => {
       const roll = rollFields(fields, { mature }, KEYS, asOf, data.threshold);
       const sumAct = (k: string) => {
@@ -191,21 +198,23 @@ export default function OpsPlan2027() {
         for (const f of fields) { const a = f.actual[k]; if (a) { m += a.matches; s += a.spots; } }
         return m > 0 ? s : null;
       };
-      return { roll, live: sumAct(cur), hist: histKeys.map(sumAct), trailing: fields.reduce((a, f) => a + f.trailing.spots, 0) };
+      return { roll, live: sumAct(cur), base: sumAct(baseKey), hist: histKeys.map(sumAct), trailing: fields.reduce((a, f) => a + f.trailing.spots, 0) };
     };
     const sumLines = (ls: Line[]): Line => ({
       roll: sumRollups(ls.map((l) => l.roll), 12),
       live: sumSpots(ls.map((l) => l.live)),
+      base: sumSpots(ls.map((l) => l.base)),
       hist: histKeys.map((_, i) => sumSpots(ls.map((l) => l.hist[i]))),
       trailing: ls.reduce((a, l) => a + l.trailing, 0),
     });
-    /* THE GAP, ON ONE BASIS: what December 2027 needs over what the live month is running at, in
-     * December's spots. A month with no completed day has no rate, so no gap. */
+    /* THE GAP, ON ONE BASIS: what December 2027 needs over what the BASELINE month ran at, in
+     * December's spots. Month to date on the 1st has no completed day, so no rate and no gap. A city
+     * that has never played has a baseline of nothing, and its gap is the whole December goal. */
     const gapOf = (l: Line): number | null => {
       const dec = l.roll.est[11];
-      if (dec == null || liveDays <= 0) return null;
-      const liveDaily = (l.live ?? 0) / SPOTS_PER_MATCH / liveDays;
-      return dec - liveDaily * SPOTS_PER_MATCH * daysInMonthOf(KEYS[11]);
+      if (dec == null || baseDays <= 0) return null;
+      const baseDaily = (l.base ?? 0) / SPOTS_PER_MATCH / baseDays;
+      return dec - baseDaily * SPOTS_PER_MATCH * daysInMonthOf(KEYS[11]);
     };
 
     const regions = data.regions.map((r) => {
@@ -227,8 +236,9 @@ export default function OpsPlan2027() {
     const decActual = sumSpots(regions.flatMap((r) => r.cities.flatMap((c) => c.fields.map((f) => f.actual[START_MONTH]?.spots ?? null))));
     const start = decDone ? { spots: decActual ?? 0, label: "actual" } : { spots: FORECAST_DEC_2026_SPOTS, label: "forecast" };
     const liveCities = regions.reduce((a, r) => a + r.cities.filter((c) => c.line.roll.actual.fields > 0).length, 0);
-    return { cur, asOf, liveDays, histKeys, regions, all, allGap: gapOf(all), removedCities, start, liveCities, cityById };
-  }, [data, KEYS, asOfPick, showHistory, sort]);
+    return { cur, asOf, liveDays, histKeys, baseKey, baseIsLive, baseDays, compareFrom: bl.compareFrom,
+      regions, all, allGap: gapOf(all), removedCities, start, liveCities, cityById };
+  }, [data, KEYS, asOfPick, showHistory, sort, compareOverride]);
 
   if (loadErr) return <p className="p-6 text-[13px] text-red-700" data-testid="op-error">{loadErr}</p>;
   if (!data) return <p className="p-8 text-center text-[13px]" style={{ color: "#8C9E93" }}>Loading…</p>;
@@ -258,6 +268,7 @@ export default function OpsPlan2027() {
   })();
   const ctx: Ctx = {
     unit, keys: KEYS, cur: view.cur, liveDays: view.liveDays, histKeys: view.histKeys, threshold: data.threshold, busy, revert,
+    baseKey: view.baseKey, baseIsLive: view.baseIsLive, baseDays: view.baseDays,
     writeErr, show, setEstimate, setPlan, removeField, restoreField, renameField, linkVenue, addToPlan, venues: data.venues,
     cityById: view.cityById, showRemoved, asOf: view.asOf,
   };
@@ -287,6 +298,8 @@ export default function OpsPlan2027() {
               style={unit === x ? { background: INK, color: "#fff" } : { background: "#fff", color: "#3C4F44" }}>{label}</button>
           ))}
         </span>
+        <CompareSeg value={view.compareFrom} set={setCompareOverride}
+          lastFull={MONTH_LABELS[Number(addMonths(view.cur, -1).slice(5, 7)) - 1]} live={MONTH_LABELS[Number(view.cur.slice(5, 7)) - 1]} />
         <span className="text-[11.5px]" style={{ color: MUTED }} data-testid="op-formula">
           18 spots = 1 match · real days in each month (the forecast quotes its headline on a 30-day month)
         </span>
@@ -370,6 +383,9 @@ export default function OpsPlan2027() {
 
 type Ctx = {
   unit: Unit; keys: string[]; cur: string; liveDays: number; histKeys: string[]; threshold: number;
+  /** The baseline month (lib/fieldGoals.baselineMonth) and its days: full days for the last full
+   *  month, completed days for the live month. */
+  baseKey: string; baseIsLive: boolean; baseDays: number;
   busy: boolean; revert: number; writeErr: { key: string; message: string } | null;
   show: (spots: number | null, key: string, days?: number) => string;
   setEstimate: (f: PlanField, month: string, spots: number | null) => unknown;
@@ -382,7 +398,7 @@ type Ctx = {
   cityById: Map<string, City>;
   showRemoved: boolean; asOf: string;
 };
-type Line = { roll: Rollup; live: number | null; hist: (number | null)[]; trailing: number };
+type Line = { roll: Rollup; live: number | null; base: number | null; hist: (number | null)[]; trailing: number };
 type CityView = { city: City; name: string; fields: PlanField[]; line: Line; gap: number | null; plannedAnchors: number };
 type RegionView = { region: Region; cities: CityView[]; line: Line; gap: number | null; rm: Hire | null };
 
@@ -434,11 +450,11 @@ function LeadCells({ line, ctx }: { line: Line; ctx: Ctx }) {
   return (
     <>
       {ctx.histKeys.map((k, i) => (
-        <td key={k} className="border-t px-1.5 py-1.5 text-right text-[12px] tabular-nums" style={{ borderColor: HAIR, color: line.hist[i] == null ? "#C3CEC8" : "#3A4D44" }} data-testid="op-hist">
+        <td key={k} className={`border-t px-1.5 py-1.5 text-right text-[12px] tabular-nums ${k === ctx.baseKey ? "font-bold" : ""}`} style={{ borderColor: HAIR, color: line.hist[i] == null ? "#C3CEC8" : k === ctx.baseKey ? INK : "#3A4D44" }} data-testid="op-hist">
           {ctx.show(line.hist[i], k)}
         </td>
       ))}
-      <td className="border-t px-1.5 py-1.5 text-right text-[12.5px] font-bold tabular-nums" style={{ borderColor: HAIR, color: INK }} data-testid="op-live">
+      <td className={`border-t px-1.5 py-1.5 text-right text-[12.5px] tabular-nums ${ctx.baseIsLive ? "font-bold" : "font-semibold"}`} style={{ borderColor: HAIR, color: ctx.baseIsLive ? INK : "#5C6F66" }} data-testid="op-live">
         {ctx.liveDays <= 0 ? DASH : ctx.show(line.live, ctx.cur, ctx.liveDays)}
       </td>
     </>
@@ -469,9 +485,10 @@ function HeadRow({ ctx, first }: { ctx: Ctx; first: string }) {
     <tr>
       <th className={`${th} text-left`} style={st}>{first}</th>
       <th className={`${th} text-left`} style={st}>Progress</th>
-      {ctx.histKeys.map((k) => <th key={k} className={`${th} text-right`} style={st}>{shortMonth(k)}</th>)}
+      {ctx.histKeys.map((k) => <th key={k} className={`${th} text-right`} style={st}>{shortMonth(k)}{k === ctx.baseKey && <BaselineTag />}</th>)}
       <th className={`${th} text-right`} style={st}>{shortMonth(ctx.cur)}
-        <span className="ml-1 rounded px-1 text-[8.5px] font-bold tracking-normal" style={{ background: "#FFF3E0", color: AMBER }}>live</span></th>
+        <span className="ml-1 rounded px-1 text-[8.5px] font-bold tracking-normal" style={{ background: "#FFF3E0", color: AMBER }}>live</span>
+        {ctx.baseIsLive ? <BaselineTag /> : <DaysTag days={ctx.liveDays} />}</th>
       {ctx.keys.map((k, i) => <th key={k} className={`${th} text-right`} style={st}>{MONTH_LABELS[i]}</th>)}
       <th className={`${th} text-right`} style={st}>Gap</th>
       <th className={`${th} text-right`} style={st}>Fields</th>
@@ -497,10 +514,10 @@ function TotalRow({ label, line, gap, ctx, strong, testId }: { label: string; li
 /* PROGRESS: the live month's rate against the December 2027 estimate, on real days both sides. */
 function Progress({ line, ctx }: { line: Line; ctx: Ctx }) {
   const dec = line.roll.est[11];
-  if (dec == null || dec <= 0 || ctx.liveDays <= 0) return null;
-  const liveDaily = (line.live ?? 0) / SPOTS_PER_MATCH / ctx.liveDays;
+  if (dec == null || dec <= 0 || ctx.baseDays <= 0) return null;
+  const baseDaily = (line.base ?? 0) / SPOTS_PER_MATCH / ctx.baseDays;
   const decDaily = dec / SPOTS_PER_MATCH / daysInMonthOf(ctx.keys[11]);
-  const pct = Math.max(0, Math.min(100, (liveDaily / decDaily) * 100));
+  const pct = Math.max(0, Math.min(100, (baseDaily / decDaily) * 100));
   return (
     <span className="relative mx-2 inline-block h-[7px] w-16 overflow-hidden rounded-full border align-middle" style={{ background: HEAD, borderColor: LINE }} title={`${Math.round(pct)}%`}>
       <i className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${pct}%`, background: "#2CDB87" }} />
@@ -531,8 +548,8 @@ function RegionCard({ r, grain, ctx, openCities, toggleCity, addField, removeCit
         </div>
         <div className="flex flex-wrap gap-6 text-[11.5px]" style={{ color: MUTED }}>
           <div><b className="block text-[17px] tabular-nums" style={{ color: INK }}>
-            {ctx.liveDays <= 0 ? DASH : ctx.show(r.line.live, ctx.cur, ctx.liveDays)} → {ctx.show(r.line.roll.est[11], ctx.keys[11])}</b>
-            {shortMonth(ctx.cur)} to Dec 27</div>
+            {ctx.baseDays <= 0 ? DASH : ctx.show(r.line.base, ctx.baseKey, ctx.baseDays)} → {ctx.show(r.line.roll.est[11], ctx.keys[11])}</b>
+            {shortMonth(ctx.baseKey)}{ctx.baseIsLive ? " to date" : ""} to Dec 27</div>
           <div><b className="block text-[17px] tabular-nums" style={{ color: INK }}>{r.line.roll.actual.fields} / {r.line.roll.plan.fields}</b>fields</div>
           <div><b className="block text-[17px] tabular-nums" style={{ color: INK }}>{r.line.roll.actual.anchors} / {r.line.roll.plan.anchors}</b>anchors</div>
           <div><b className="block text-[17px] tabular-nums" style={{ color: INK }}>{r.line.roll.actual.satellites} / {r.line.roll.plan.satellites}</b>satellites</div>
@@ -688,7 +705,7 @@ function FieldRow({ f, city, ctx, span, showCity }: { f: PlanField; city: City; 
             {f.actual[k]?.matches ? ctx.show(f.actual[k].spots, k) : DASH}
           </td>
         ))}
-        <td className={`${td} text-right tabular-nums`} style={{ ...st, color: "#3A4D44" }}>
+        <td className={`${td} text-right tabular-nums`} style={{ ...st, color: ctx.baseIsLive ? "#3A4D44" : "#5C6F66" }}>
           {ctx.liveDays > 0 && f.actual[ctx.cur]?.matches ? ctx.show(f.actual[ctx.cur].spots, ctx.cur, ctx.liveDays) : DASH}
         </td>
         {ctx.keys.map((k) => {

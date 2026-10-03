@@ -10,7 +10,9 @@ import {
   daysElapsed, fmtSigned, fmtUnit, historyIndexes, isDormantIn, matchMonthIndex, monthKey, ramp,
   rowCountsTowardTotals, rowKeyForField, roundTo, sortGoalRows, sumTargets, trendKind,
   TREND_DEAD_BAND, weekly, type RollupRow,
+  BASELINE_MIN_COMPLETED_DAYS, baselineMonth, isDormantFor,
 } from "@/lib/fieldGoals";
+import fs from "node:fs";
 
 let pass = 0, fail = 0;
 const ok = (n: string) => { pass++; console.log(`  ok  ${n}`); };
@@ -198,7 +200,7 @@ console.log("\n— a city equals the sum of the fields AS DISPLAYED —");
 
   const shownSep = RAW.map((d) => roundTo(d, 1));           // what each field row prints
   const sumShownSep = roundTo(shownSep.reduce((a, b) => a + b, 0), 1);
-  is("the city September equals the sum of the field Septembers as printed", austin.sep, sumShownSep);
+  is("the city September equals the sum of the field Septembers as printed", austin.live, sumShownSep);
   /* THE CONTROL THAT MAKES THIS A TEST. Under the OLD rule the city would print the rounded
    * full-precision sum, which on this fixture is a different number. If these ever coincide the
    * fixture has stopped exercising the bug. */
@@ -221,17 +223,17 @@ console.log("\n— a city equals the sum of the fields AS DISPLAYED —");
    * September is null — it does not exist yet, which is not the same as having run no matches. */
   const withSlot = cityRollup([...rows, { key: "s1", kind: "slot", name: "New Field - ", city: "Austin",
     monthly: Array.from({ length: 12 }, () => ({ daily: 0 })), targets: {} }], year, cur, "gap")[0];
-  is("a new field with no goal leaves the city September untouched", withSlot.sep, austin.sep);
+  is("a new field with no goal leaves the city September untouched", withSlot.live, austin.live);
   is("  …and its GAP untouched", withSlot.gapDaily, austin.gapDaily);
   is("  …and it carries a null September so it renders a dash",
-    withSlot.fields.find((f) => f.kind === "slot")?.sep, null);
+    withSlot.fields.find((f) => f.kind === "slot")?.live, null);
 
   /* THE FOOTER IS THE SUM OF THE COLUMN ABOVE IT, with the same guarantee one level up. */
   const many = cityRollup([...rows, mk(50, 0.1499, 0.4499), { key: "h1", kind: "existing", name: "H", city: "Houston",
     monthly: Array.from({ length: 12 }, (_, m) => ({ daily: m === cur ? 0.1499 : 0 })), targets: { [decKey]: 0.4499 } }], year, cur, "gap");
   const tot = cityTotals(many);
   is("the footer September equals the sum of the city Septembers",
-    tot.sep, roundTo(many.reduce((a, c) => a + c.sep, 0), 1));
+    tot.live, roundTo(many.reduce((a, c) => a + c.live, 0), 1));
   is("  and the footer GAP the sum of the city GAPs",
     tot.gapDaily, roundTo(many.reduce((a, c) => a + c.gapDaily, 0), 1));
   yes("  CONTROL: more than one city, so the footer is not one row wearing a total", many.length > 1);
@@ -289,8 +291,8 @@ console.log("\n— history: a dash is not a zero, and a trend is not a gap —")
   yes("  CONTROL: which is a different number from June, so the columns are not one value repeated",
     austin.hist[2] !== austin.hist[0]);
   is("the trend runs from the EARLIEST history month to the live one",
-    austin.trend, roundTo(austin.sep - (austin.hist[0] as number), 1));
-  yes("  CONTROL: and is not the gap", austin.trend !== austin.dec - austin.sep);
+    austin.trend, roundTo(austin.live - (austin.hist[0] as number), 1));
+  yes("  CONTROL: and is not the gap", austin.trend !== austin.dec - austin.live);
 
   // A city where NOTHING was ever open: every history month dashes, it is new, and it has no trend.
   const brandNew = cityRollup([mk("p1", "Philadelphia", zeros, zeros, 0.5)], year, cur, "gap")[0];
@@ -299,6 +301,77 @@ console.log("\n— history: a dash is not a zero, and a trend is not a gap —")
   is("  …and carries NO trend rather than a fabricated one", brandNew.trend, null);
   yes("  CONTROL: while the climbing city is not flagged new", austin.isNew === false);
   yes("  CONTROL: …and does have a trend, so the null above is specific", austin.trend != null);
+}
+
+console.log("\n— THE BASELINE: the month the gap, trend and progress are measured from —");
+{
+  /* Ryan, 2026-10-02: on the 2nd the live month has one completed day, and that day was the "now"
+   * every gap, trend and progress bar read. Days 1-7 read the last full month; the 8th onward reads
+   * the live month to date. */
+  is("the threshold is seven completed days", BASELINE_MIN_COMPLETED_DAYS, 7);
+  const days = Array.from({ length: 31 }, (_, i) => i + 1);
+  const keyOn = (d: number) => baselineMonth(`2026-10-${String(d).padStart(2, "0")}`).baseKey;
+  is("days 1 to 7 read the last full month", days.filter((d) => d <= 7).map(keyOn), Array(7).fill("2026-09-01"));
+  is("the 8th onward reads the live month", days.filter((d) => d >= 8).map(keyOn), Array(24).fill("2026-10-01"));
+  is("…the 7th has six completed days, the 8th seven", [baselineMonth("2026-10-07").completedDays, baselineMonth("2026-10-08").completedDays], [6, 7]);
+  is("January's last full month is last December", baselineMonth("2027-01-03").baseKey, "2026-12-01");
+  is("an override wins: month to date on the 2nd", baselineMonth("2026-10-02", "to-date").baseKey, "2026-10-01");
+  is("an override wins: last full month on the 20th", baselineMonth("2026-10-20", "last-full").baseKey, "2026-09-01");
+  is("…and the default is still reported", baselineMonth("2026-10-02", "to-date").defaultCompareFrom, "last-full");
+
+  /* MONTH TO DATE IS THE CURRENT BUILD, EVERY COLUMN. scripts/fixtures/field-goals-mtd-golden.json
+   * was written by the rollup as it stood at 07920d2/e2417dc (before the baseline existed), over an
+   * October-2nd world. The rollup with the baseline on the live month must reproduce it exactly —
+   * including the suggested October and November, which in this mode still ramp from the live month.
+   * The one renamed key (sep → live) is mapped back; `base` is new and must equal `live` here. */
+  type G = { year: number; cur: number; rows: RollupRow[] } & Record<"gap" | "city" | "name", { cities: unknown[]; totals: unknown }>;
+  const g = JSON.parse(fs.readFileSync("scripts/fixtures/field-goals-mtd-golden.json", "utf8")) as G;
+  const asOld = (x: unknown): unknown => JSON.parse(JSON.stringify(x, (k, v) => (k === "base" ? undefined : v)).replace(/"live":/g, '"sep":'));
+  for (const sort of ["gap", "city", "name"] as const) {
+    const now = cityRollup(g.rows, g.year, g.cur, sort, g.cur);
+    is(`month to date reproduces the current build exactly (sort ${sort})`, asOld({ cities: now, totals: cityTotals(now) }), g[sort]);
+  }
+  const mtd = cityRollup(g.rows, g.year, g.cur, "gap");
+  yes("CONTROL: the golden is not trivial — 5 cities, suggestions present", (g.gap.cities as unknown[]).length === 5 && mtd.some((c) => c.oct > 0));
+  yes("in month to date the baseline IS the live month, every city and field",
+    mtd.every((c) => c.base === c.live && c.fields.every((f) => f.base === f.live)));
+
+  // THE LAST FULL MONTH AS BASELINE, over the same world
+  const lf = cityRollup(g.rows, g.year, g.cur, "gap", g.cur - 1);
+  const austin = lf.find((c) => c.city === "Austin")!;
+  const rowsA = g.rows.filter((r) => r.city === "Austin" && !r.notCounted);
+  const sepOf = (r: RollupRow) => r.monthly[8].daily;
+  is("the city baseline is September, summed as displayed", austin.base, roundTo(rowsA.reduce((a, r) => a + roundTo(sepOf(r), 1), 0), 1));
+  is("the gap is December minus September, field by field", austin.gapDaily,
+    roundTo(rowsA.reduce((a, r) => a + roundTo((r.targets[monthKey(g.year, 11)] as number) - sepOf(r), 1), 0), 1));
+  yes("CONTROL: and is not the month-to-date gap", austin.gapDaily !== mtd.find((c) => c.city === "Austin")!.gapDaily);
+  const nemp = austin.fields.find((f) => f.key === "v1")!;
+  is("October's suggestion is the September-to-December line, not one from October's partial day",
+    roundTo(nemp.oct as number, 4), roundTo(ramp(2.13, 3.0)[0] as number, 4));
+  yes("CONTROL: the month-to-date suggestion runs from October's own day",
+    roundTo(mtd.find((c) => c.city === "Austin")!.fields.find((f) => f.key === "v1")!.oct as number, 4) === roundTo(ramp(0.9, 3.0)[0] as number, 4));
+  is("a typed October target is never replaced by a suggestion", austin.fields.find((f) => f.key === "v2")!.oct, 1.5);
+  is("the live month still shows, unchanged", austin.live, mtd.find((c) => c.city === "Austin")!.live);
+  is("the trend runs from the earliest history month to the baseline (Jul → Sep)", austin.trend, roundTo(austin.base - (austin.hist[0] as number), 1));
+  yes("CONTROL: …which is not the month-to-date trend", austin.trend !== mtd.find((c) => c.city === "Austin")!.trend);
+
+  // A CITY THAT HAS NEVER PLAYED STILL DASHES, AND ITS GAP IS THE WHOLE DECEMBER GOAL
+  const sd = lf.find((c) => c.city === "San Diego")!;
+  is("a city with no history still dashes every history month", sd.hist, [null, null, null]);
+  is("…carries no trend", sd.trend, null);
+  yes("…and is new", sd.isNew);
+  is("…and its gap is the full December goal", sd.gapDaily, 1.0);
+  is("…and its field has no baseline figure, a dash not 0.0", sd.fields[0].base, null);
+
+  // DORMANT FOLLOWS THE BASELINE
+  const westlake = g.rows.find((r) => r.key === "v3")!;   // all September, nothing yet in October
+  const quiet = g.rows.find((r) => r.key === "v5")!;      // nothing since June
+  yes("a field with September matches and none yet in October is NOT dormant", !isDormantFor(westlake, 8, 9));
+  yes("CONTROL: the live-month-only rule would have folded it", isDormantIn(westlake, 9));
+  yes("a field with neither is dormant", isDormantFor(quiet, 8, 9));
+  const startedInOct = { monthly: [...Array(8).fill({ daily: 0, matches: 0 }), { daily: 0, matches: 0 }, { daily: 0.5, matches: 1 }] };
+  yes("a field that has played in the live month is never folded, whichever baseline", !isDormantFor(startedInOct, 8, 9) && !isDormantFor(startedInOct, 9, 9));
+  yes("in month to date, dormant is exactly today's rule", [westlake, quiet, startedInOct].every((r) => isDormantFor(r, 9, 9) === isDormantIn(r, 9)));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

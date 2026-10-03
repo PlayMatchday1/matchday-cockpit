@@ -1,0 +1,1397 @@
+{
+ "year": 2026,
+ "cur": 9,
+ "rows": [
+  {
+   "key": "v1",
+   "kind": "existing",
+   "name": "NEMP",
+   "city": "Austin",
+   "monthly": [
+    {
+     "daily": 1.5,
+     "matches": 30
+    },
+    {
+     "daily": 1.6,
+     "matches": 30
+    },
+    {
+     "daily": 1.7,
+     "matches": 30
+    },
+    {
+     "daily": 1.8,
+     "matches": 30
+    },
+    {
+     "daily": 1.9,
+     "matches": 30
+    },
+    {
+     "daily": 2,
+     "matches": 30
+    },
+    {
+     "daily": 2.1,
+     "matches": 30
+    },
+    {
+     "daily": 2.2,
+     "matches": 30
+    },
+    {
+     "daily": 2.13,
+     "matches": 30
+    },
+    {
+     "daily": 0.9,
+     "matches": 1
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    }
+   ],
+   "targets": {
+    "2026-12-01": 3
+   }
+  },
+  {
+   "key": "v2",
+   "kind": "existing",
+   "name": "Parmer",
+   "city": "Austin",
+   "monthly": [
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0.4,
+     "matches": 9
+    },
+    {
+     "daily": 0.6,
+     "matches": 9
+    },
+    {
+     "daily": 0.8,
+     "matches": 9
+    },
+    {
+     "daily": 1,
+     "matches": 9
+    },
+    {
+     "daily": 1.1,
+     "matches": 9
+    },
+    {
+     "daily": 1.24,
+     "matches": 9
+    },
+    {
+     "daily": 0.5,
+     "matches": 1
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    }
+   ],
+   "targets": {
+    "2026-12-01": 2,
+    "2026-10-01": 1.5
+   }
+  },
+  {
+   "key": "v3",
+   "kind": "existing",
+   "name": "Westlake",
+   "city": "Austin",
+   "monthly": [
+    {
+     "daily": 0.3,
+     "matches": 5
+    },
+    {
+     "daily": 0.3,
+     "matches": 5
+    },
+    {
+     "daily": 0.3,
+     "matches": 5
+    },
+    {
+     "daily": 0.3,
+     "matches": 5
+    },
+    {
+     "daily": 0.3,
+     "matches": 5
+    },
+    {
+     "daily": 0.3,
+     "matches": 5
+    },
+    {
+     "daily": 0.3,
+     "matches": 5
+    },
+    {
+     "daily": 0.3,
+     "matches": 5
+    },
+    {
+     "daily": 0.33,
+     "matches": 5
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    }
+   ],
+   "targets": {
+    "2026-12-01": 0.8
+   }
+  },
+  {
+   "key": "v4",
+   "kind": "existing",
+   "name": "Soccer Central",
+   "city": "San Antonio",
+   "monthly": [
+    {
+     "daily": 2.6,
+     "matches": 60
+    },
+    {
+     "daily": 2.5,
+     "matches": 60
+    },
+    {
+     "daily": 2.4,
+     "matches": 60
+    },
+    {
+     "daily": 2.6,
+     "matches": 60
+    },
+    {
+     "daily": 3.1,
+     "matches": 60
+    },
+    {
+     "daily": 3.4,
+     "matches": 60
+    },
+    {
+     "daily": 3.9,
+     "matches": 60
+    },
+    {
+     "daily": 3.9,
+     "matches": 60
+    },
+    {
+     "daily": 4.68,
+     "matches": 69
+    },
+    {
+     "daily": 2,
+     "matches": 2
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    }
+   ],
+   "targets": {
+    "2026-12-01": 5.5
+   }
+  },
+  {
+   "key": "v5",
+   "kind": "existing",
+   "name": "Quiet",
+   "city": "San Antonio",
+   "monthly": [
+    {
+     "daily": 0.2,
+     "matches": 3
+    },
+    {
+     "daily": 0.2,
+     "matches": 3
+    },
+    {
+     "daily": 0.2,
+     "matches": 3
+    },
+    {
+     "daily": 0.2,
+     "matches": 3
+    },
+    {
+     "daily": 0.2,
+     "matches": 3
+    },
+    {
+     "daily": 0.2,
+     "matches": 3
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    }
+   ],
+   "targets": {}
+  },
+  {
+   "key": "v6",
+   "kind": "existing",
+   "name": "ATH Pearland",
+   "city": "Houston",
+   "monthly": [
+    {
+     "daily": 1,
+     "matches": 30
+    },
+    {
+     "daily": 1.1,
+     "matches": 30
+    },
+    {
+     "daily": 1.2,
+     "matches": 30
+    },
+    {
+     "daily": 1.3,
+     "matches": 30
+    },
+    {
+     "daily": 1.4,
+     "matches": 30
+    },
+    {
+     "daily": 1.5,
+     "matches": 30
+    },
+    {
+     "daily": 2,
+     "matches": 30
+    },
+    {
+     "daily": 1.8,
+     "matches": 30
+    },
+    {
+     "daily": 2.52,
+     "matches": 35
+    },
+    {
+     "daily": 1.1,
+     "matches": 1
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    }
+   ],
+   "targets": {
+    "2026-12-01": 3.2
+   }
+  },
+  {
+   "key": "s1",
+   "kind": "slot",
+   "name": "TBD",
+   "city": "San Diego",
+   "monthly": [
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    }
+   ],
+   "targets": {
+    "2026-12-01": 1
+   }
+  },
+  {
+   "key": "s2",
+   "kind": "slot",
+   "name": "TBD",
+   "city": "Philadelphia",
+   "monthly": [
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    }
+   ],
+   "targets": {
+    "2026-12-01": 0.5
+   }
+  },
+  {
+   "key": "s3",
+   "kind": "slot",
+   "name": "Turf On",
+   "city": "Houston",
+   "monthly": [
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    }
+   ],
+   "targets": {
+    "2026-12-01": 1.2
+   }
+  },
+  {
+   "key": "v7",
+   "kind": "existing",
+   "name": "Excluded",
+   "city": "Austin",
+   "notCounted": true,
+   "monthly": [
+    {
+     "daily": 5,
+     "matches": 9
+    },
+    {
+     "daily": 5,
+     "matches": 9
+    },
+    {
+     "daily": 5,
+     "matches": 9
+    },
+    {
+     "daily": 5,
+     "matches": 9
+    },
+    {
+     "daily": 5,
+     "matches": 9
+    },
+    {
+     "daily": 5,
+     "matches": 9
+    },
+    {
+     "daily": 5,
+     "matches": 9
+    },
+    {
+     "daily": 5,
+     "matches": 9
+    },
+    {
+     "daily": 5,
+     "matches": 9
+    },
+    {
+     "daily": 5,
+     "matches": 9
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    },
+    {
+     "daily": 0,
+     "matches": 0
+    }
+   ],
+   "targets": {
+    "2026-12-01": 9
+   }
+  }
+ ],
+ "gap": {
+  "cities": [
+   {
+    "city": "Austin",
+    "hasCity": true,
+    "sep": 1.4,
+    "oct": 3.4,
+    "nov": 4.3,
+    "dec": 5.8,
+    "gapDaily": 4.4,
+    "existing": 3,
+    "slots": 0,
+    "noGoal": 0,
+    "fields": [
+     {
+      "key": "v1",
+      "name": "NEMP",
+      "kind": "existing",
+      "hist": [
+       2.1,
+       2.2,
+       2.13
+      ],
+      "sep": 0.9,
+      "oct": 1.6,
+      "nov": 2.3,
+      "dec": 3,
+      "gapDaily": 2.1,
+      "city": "Austin"
+     },
+     {
+      "key": "v2",
+      "name": "Parmer",
+      "kind": "existing",
+      "hist": [
+       1,
+       1.1,
+       1.24
+      ],
+      "sep": 0.5,
+      "oct": 1.5,
+      "nov": 1.5,
+      "dec": 2,
+      "gapDaily": 1.5,
+      "city": "Austin"
+     },
+     {
+      "key": "v3",
+      "name": "Westlake",
+      "kind": "existing",
+      "hist": [
+       0.3,
+       0.3,
+       0.33
+      ],
+      "sep": 0,
+      "oct": 0.26666666666666666,
+      "nov": 0.5333333333333333,
+      "dec": 0.8,
+      "gapDaily": 0.8,
+      "city": "Austin"
+     }
+    ],
+    "hist": [
+     3.4,
+     3.6,
+     3.6
+    ],
+    "trend": -2,
+    "isNew": false,
+    "name": "Austin"
+   },
+   {
+    "city": "San Antonio",
+    "hasCity": true,
+    "sep": 2,
+    "oct": 3.2,
+    "nov": 4.3,
+    "dec": 5.5,
+    "gapDaily": 3.5,
+    "existing": 2,
+    "slots": 0,
+    "noGoal": 1,
+    "fields": [
+     {
+      "key": "v4",
+      "name": "Soccer Central",
+      "kind": "existing",
+      "hist": [
+       3.9,
+       3.9,
+       4.68
+      ],
+      "sep": 2,
+      "oct": 3.1666666666666665,
+      "nov": 4.333333333333333,
+      "dec": 5.5,
+      "gapDaily": 3.5,
+      "city": "San Antonio"
+     },
+     {
+      "key": "v5",
+      "name": "Quiet",
+      "kind": "existing",
+      "hist": [
+       0,
+       0,
+       0
+      ],
+      "sep": 0,
+      "oct": null,
+      "nov": null,
+      "dec": null,
+      "gapDaily": null,
+      "city": "San Antonio"
+     }
+    ],
+    "hist": [
+     3.9,
+     3.9,
+     4.7
+    ],
+    "trend": -1.9,
+    "isNew": false,
+    "name": "San Antonio"
+   },
+   {
+    "city": "Houston",
+    "hasCity": true,
+    "sep": 1.1,
+    "oct": 2.2,
+    "nov": 3.3,
+    "dec": 4.4,
+    "gapDaily": 3.3,
+    "existing": 1,
+    "slots": 1,
+    "noGoal": 0,
+    "fields": [
+     {
+      "key": "v6",
+      "name": "ATH Pearland",
+      "kind": "existing",
+      "hist": [
+       2,
+       1.8,
+       2.52
+      ],
+      "sep": 1.1,
+      "oct": 1.8,
+      "nov": 2.5,
+      "dec": 3.2,
+      "gapDaily": 2.1,
+      "city": "Houston"
+     },
+     {
+      "key": "s3",
+      "name": "Turf On",
+      "kind": "slot",
+      "hist": [
+       null,
+       null,
+       null
+      ],
+      "sep": null,
+      "oct": 0.39999999999999997,
+      "nov": 0.7999999999999999,
+      "dec": 1.2,
+      "gapDaily": 1.2,
+      "city": "Houston"
+     }
+    ],
+    "hist": [
+     2,
+     1.8,
+     2.5
+    ],
+    "trend": -0.9,
+    "isNew": false,
+    "name": "Houston"
+   },
+   {
+    "city": "San Diego",
+    "hasCity": true,
+    "sep": 0,
+    "oct": 0.3,
+    "nov": 0.7,
+    "dec": 1,
+    "gapDaily": 1,
+    "existing": 0,
+    "slots": 1,
+    "noGoal": 0,
+    "fields": [
+     {
+      "key": "s1",
+      "name": "TBD",
+      "kind": "slot",
+      "hist": [
+       null,
+       null,
+       null
+      ],
+      "sep": null,
+      "oct": 0.3333333333333333,
+      "nov": 0.6666666666666666,
+      "dec": 1,
+      "gapDaily": 1,
+      "city": "San Diego"
+     }
+    ],
+    "hist": [
+     null,
+     null,
+     null
+    ],
+    "trend": null,
+    "isNew": true,
+    "name": "San Diego"
+   },
+   {
+    "city": "Philadelphia",
+    "hasCity": true,
+    "sep": 0,
+    "oct": 0.2,
+    "nov": 0.3,
+    "dec": 0.5,
+    "gapDaily": 0.5,
+    "existing": 0,
+    "slots": 1,
+    "noGoal": 0,
+    "fields": [
+     {
+      "key": "s2",
+      "name": "TBD",
+      "kind": "slot",
+      "hist": [
+       null,
+       null,
+       null
+      ],
+      "sep": null,
+      "oct": 0.16666666666666666,
+      "nov": 0.3333333333333333,
+      "dec": 0.5,
+      "gapDaily": 0.5,
+      "city": "Philadelphia"
+     }
+    ],
+    "hist": [
+     null,
+     null,
+     null
+    ],
+    "trend": null,
+    "isNew": true,
+    "name": "Philadelphia"
+   }
+  ],
+  "totals": {
+   "sep": 4.5,
+   "oct": 9.3,
+   "nov": 12.9,
+   "dec": 17.2,
+   "gapDaily": 12.7,
+   "existing": 6,
+   "slots": 3
+  }
+ },
+ "city": {
+  "cities": [
+   {
+    "city": "Austin",
+    "hasCity": true,
+    "sep": 1.4,
+    "oct": 3.4,
+    "nov": 4.3,
+    "dec": 5.8,
+    "gapDaily": 4.4,
+    "existing": 3,
+    "slots": 0,
+    "noGoal": 0,
+    "fields": [
+     {
+      "key": "v1",
+      "name": "NEMP",
+      "kind": "existing",
+      "hist": [
+       2.1,
+       2.2,
+       2.13
+      ],
+      "sep": 0.9,
+      "oct": 1.6,
+      "nov": 2.3,
+      "dec": 3,
+      "gapDaily": 2.1,
+      "city": "Austin"
+     },
+     {
+      "key": "v2",
+      "name": "Parmer",
+      "kind": "existing",
+      "hist": [
+       1,
+       1.1,
+       1.24
+      ],
+      "sep": 0.5,
+      "oct": 1.5,
+      "nov": 1.5,
+      "dec": 2,
+      "gapDaily": 1.5,
+      "city": "Austin"
+     },
+     {
+      "key": "v3",
+      "name": "Westlake",
+      "kind": "existing",
+      "hist": [
+       0.3,
+       0.3,
+       0.33
+      ],
+      "sep": 0,
+      "oct": 0.26666666666666666,
+      "nov": 0.5333333333333333,
+      "dec": 0.8,
+      "gapDaily": 0.8,
+      "city": "Austin"
+     }
+    ],
+    "hist": [
+     3.4,
+     3.6,
+     3.6
+    ],
+    "trend": -2,
+    "isNew": false,
+    "name": "Austin"
+   },
+   {
+    "city": "Houston",
+    "hasCity": true,
+    "sep": 1.1,
+    "oct": 2.2,
+    "nov": 3.3,
+    "dec": 4.4,
+    "gapDaily": 3.3,
+    "existing": 1,
+    "slots": 1,
+    "noGoal": 0,
+    "fields": [
+     {
+      "key": "v6",
+      "name": "ATH Pearland",
+      "kind": "existing",
+      "hist": [
+       2,
+       1.8,
+       2.52
+      ],
+      "sep": 1.1,
+      "oct": 1.8,
+      "nov": 2.5,
+      "dec": 3.2,
+      "gapDaily": 2.1,
+      "city": "Houston"
+     },
+     {
+      "key": "s3",
+      "name": "Turf On",
+      "kind": "slot",
+      "hist": [
+       null,
+       null,
+       null
+      ],
+      "sep": null,
+      "oct": 0.39999999999999997,
+      "nov": 0.7999999999999999,
+      "dec": 1.2,
+      "gapDaily": 1.2,
+      "city": "Houston"
+     }
+    ],
+    "hist": [
+     2,
+     1.8,
+     2.5
+    ],
+    "trend": -0.9,
+    "isNew": false,
+    "name": "Houston"
+   },
+   {
+    "city": "Philadelphia",
+    "hasCity": true,
+    "sep": 0,
+    "oct": 0.2,
+    "nov": 0.3,
+    "dec": 0.5,
+    "gapDaily": 0.5,
+    "existing": 0,
+    "slots": 1,
+    "noGoal": 0,
+    "fields": [
+     {
+      "key": "s2",
+      "name": "TBD",
+      "kind": "slot",
+      "hist": [
+       null,
+       null,
+       null
+      ],
+      "sep": null,
+      "oct": 0.16666666666666666,
+      "nov": 0.3333333333333333,
+      "dec": 0.5,
+      "gapDaily": 0.5,
+      "city": "Philadelphia"
+     }
+    ],
+    "hist": [
+     null,
+     null,
+     null
+    ],
+    "trend": null,
+    "isNew": true,
+    "name": "Philadelphia"
+   },
+   {
+    "city": "San Antonio",
+    "hasCity": true,
+    "sep": 2,
+    "oct": 3.2,
+    "nov": 4.3,
+    "dec": 5.5,
+    "gapDaily": 3.5,
+    "existing": 2,
+    "slots": 0,
+    "noGoal": 1,
+    "fields": [
+     {
+      "key": "v4",
+      "name": "Soccer Central",
+      "kind": "existing",
+      "hist": [
+       3.9,
+       3.9,
+       4.68
+      ],
+      "sep": 2,
+      "oct": 3.1666666666666665,
+      "nov": 4.333333333333333,
+      "dec": 5.5,
+      "gapDaily": 3.5,
+      "city": "San Antonio"
+     },
+     {
+      "key": "v5",
+      "name": "Quiet",
+      "kind": "existing",
+      "hist": [
+       0,
+       0,
+       0
+      ],
+      "sep": 0,
+      "oct": null,
+      "nov": null,
+      "dec": null,
+      "gapDaily": null,
+      "city": "San Antonio"
+     }
+    ],
+    "hist": [
+     3.9,
+     3.9,
+     4.7
+    ],
+    "trend": -1.9,
+    "isNew": false,
+    "name": "San Antonio"
+   },
+   {
+    "city": "San Diego",
+    "hasCity": true,
+    "sep": 0,
+    "oct": 0.3,
+    "nov": 0.7,
+    "dec": 1,
+    "gapDaily": 1,
+    "existing": 0,
+    "slots": 1,
+    "noGoal": 0,
+    "fields": [
+     {
+      "key": "s1",
+      "name": "TBD",
+      "kind": "slot",
+      "hist": [
+       null,
+       null,
+       null
+      ],
+      "sep": null,
+      "oct": 0.3333333333333333,
+      "nov": 0.6666666666666666,
+      "dec": 1,
+      "gapDaily": 1,
+      "city": "San Diego"
+     }
+    ],
+    "hist": [
+     null,
+     null,
+     null
+    ],
+    "trend": null,
+    "isNew": true,
+    "name": "San Diego"
+   }
+  ],
+  "totals": {
+   "sep": 4.5,
+   "oct": 9.3,
+   "nov": 12.9,
+   "dec": 17.2,
+   "gapDaily": 12.7,
+   "existing": 6,
+   "slots": 3
+  }
+ },
+ "name": {
+  "cities": [
+   {
+    "city": "Austin",
+    "hasCity": true,
+    "sep": 1.4,
+    "oct": 3.4,
+    "nov": 4.3,
+    "dec": 5.8,
+    "gapDaily": 4.4,
+    "existing": 3,
+    "slots": 0,
+    "noGoal": 0,
+    "fields": [
+     {
+      "key": "v1",
+      "name": "NEMP",
+      "kind": "existing",
+      "hist": [
+       2.1,
+       2.2,
+       2.13
+      ],
+      "sep": 0.9,
+      "oct": 1.6,
+      "nov": 2.3,
+      "dec": 3,
+      "gapDaily": 2.1,
+      "city": "Austin"
+     },
+     {
+      "key": "v2",
+      "name": "Parmer",
+      "kind": "existing",
+      "hist": [
+       1,
+       1.1,
+       1.24
+      ],
+      "sep": 0.5,
+      "oct": 1.5,
+      "nov": 1.5,
+      "dec": 2,
+      "gapDaily": 1.5,
+      "city": "Austin"
+     },
+     {
+      "key": "v3",
+      "name": "Westlake",
+      "kind": "existing",
+      "hist": [
+       0.3,
+       0.3,
+       0.33
+      ],
+      "sep": 0,
+      "oct": 0.26666666666666666,
+      "nov": 0.5333333333333333,
+      "dec": 0.8,
+      "gapDaily": 0.8,
+      "city": "Austin"
+     }
+    ],
+    "hist": [
+     3.4,
+     3.6,
+     3.6
+    ],
+    "trend": -2,
+    "isNew": false,
+    "name": "Austin"
+   },
+   {
+    "city": "Houston",
+    "hasCity": true,
+    "sep": 1.1,
+    "oct": 2.2,
+    "nov": 3.3,
+    "dec": 4.4,
+    "gapDaily": 3.3,
+    "existing": 1,
+    "slots": 1,
+    "noGoal": 0,
+    "fields": [
+     {
+      "key": "v6",
+      "name": "ATH Pearland",
+      "kind": "existing",
+      "hist": [
+       2,
+       1.8,
+       2.52
+      ],
+      "sep": 1.1,
+      "oct": 1.8,
+      "nov": 2.5,
+      "dec": 3.2,
+      "gapDaily": 2.1,
+      "city": "Houston"
+     },
+     {
+      "key": "s3",
+      "name": "Turf On",
+      "kind": "slot",
+      "hist": [
+       null,
+       null,
+       null
+      ],
+      "sep": null,
+      "oct": 0.39999999999999997,
+      "nov": 0.7999999999999999,
+      "dec": 1.2,
+      "gapDaily": 1.2,
+      "city": "Houston"
+     }
+    ],
+    "hist": [
+     2,
+     1.8,
+     2.5
+    ],
+    "trend": -0.9,
+    "isNew": false,
+    "name": "Houston"
+   },
+   {
+    "city": "Philadelphia",
+    "hasCity": true,
+    "sep": 0,
+    "oct": 0.2,
+    "nov": 0.3,
+    "dec": 0.5,
+    "gapDaily": 0.5,
+    "existing": 0,
+    "slots": 1,
+    "noGoal": 0,
+    "fields": [
+     {
+      "key": "s2",
+      "name": "TBD",
+      "kind": "slot",
+      "hist": [
+       null,
+       null,
+       null
+      ],
+      "sep": null,
+      "oct": 0.16666666666666666,
+      "nov": 0.3333333333333333,
+      "dec": 0.5,
+      "gapDaily": 0.5,
+      "city": "Philadelphia"
+     }
+    ],
+    "hist": [
+     null,
+     null,
+     null
+    ],
+    "trend": null,
+    "isNew": true,
+    "name": "Philadelphia"
+   },
+   {
+    "city": "San Antonio",
+    "hasCity": true,
+    "sep": 2,
+    "oct": 3.2,
+    "nov": 4.3,
+    "dec": 5.5,
+    "gapDaily": 3.5,
+    "existing": 2,
+    "slots": 0,
+    "noGoal": 1,
+    "fields": [
+     {
+      "key": "v4",
+      "name": "Soccer Central",
+      "kind": "existing",
+      "hist": [
+       3.9,
+       3.9,
+       4.68
+      ],
+      "sep": 2,
+      "oct": 3.1666666666666665,
+      "nov": 4.333333333333333,
+      "dec": 5.5,
+      "gapDaily": 3.5,
+      "city": "San Antonio"
+     },
+     {
+      "key": "v5",
+      "name": "Quiet",
+      "kind": "existing",
+      "hist": [
+       0,
+       0,
+       0
+      ],
+      "sep": 0,
+      "oct": null,
+      "nov": null,
+      "dec": null,
+      "gapDaily": null,
+      "city": "San Antonio"
+     }
+    ],
+    "hist": [
+     3.9,
+     3.9,
+     4.7
+    ],
+    "trend": -1.9,
+    "isNew": false,
+    "name": "San Antonio"
+   },
+   {
+    "city": "San Diego",
+    "hasCity": true,
+    "sep": 0,
+    "oct": 0.3,
+    "nov": 0.7,
+    "dec": 1,
+    "gapDaily": 1,
+    "existing": 0,
+    "slots": 1,
+    "noGoal": 0,
+    "fields": [
+     {
+      "key": "s1",
+      "name": "TBD",
+      "kind": "slot",
+      "hist": [
+       null,
+       null,
+       null
+      ],
+      "sep": null,
+      "oct": 0.3333333333333333,
+      "nov": 0.6666666666666666,
+      "dec": 1,
+      "gapDaily": 1,
+      "city": "San Diego"
+     }
+    ],
+    "hist": [
+     null,
+     null,
+     null
+    ],
+    "trend": null,
+    "isNew": true,
+    "name": "San Diego"
+   }
+  ],
+  "totals": {
+   "sep": 4.5,
+   "oct": 9.3,
+   "nov": 12.9,
+   "dec": 17.2,
+   "gapDaily": 12.7,
+   "existing": 6,
+   "slots": 3
+  }
+ }
+}

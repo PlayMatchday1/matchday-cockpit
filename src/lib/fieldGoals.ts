@@ -117,6 +117,53 @@ export function businessMonthIndex(now: Date): { year: number; monthIndex0: numb
   return { year: y, monthIndex0: m - 1 };
 }
 
+/* ── THE BASELINE: WHICH MONTH THE GAP, TREND AND PROGRESS ARE MEASURED FROM ──────────────────
+ * Ryan, 2026-10-02: on the 2nd the live month has ONE completed day, and that day was the "now"
+ * every gap, trend and progress bar read — Austin at 2.4 against a September of 6.1, a gap of +7.3,
+ * a trend of -4.4; the estate at 9.2 a day and +18.4 to find, when September ran 16.5.
+ *
+ * THE RULE: until the live month has BASELINE_MIN_COMPLETED_DAYS completed days, the baseline is
+ * the LAST FULL MONTH; from then on it is the live month to date. Seven covers each weekday once —
+ * a month read on a Saturday-heavy first week is not the month. On the calendar: days 1 to 7 read
+ * the last full month, the 8th onward reads the live month (the 8th is the first day with seven
+ * completed behind it).
+ *
+ * ONE RULE, BOTH PAGES. The 2026 Daily Matches page and the 2027 Operations Plan both call
+ * baselineMonth(); neither carries a copy. A person can override it with the "Compare from"
+ * toggle; the override is not persisted, so every load opens on the rule.
+ *
+ * `today` is the CHICAGO calendar date (todayBusinessDate), never a runtime getter. */
+export const BASELINE_MIN_COMPLETED_DAYS = 7;
+export type CompareFrom = "last-full" | "to-date";
+
+export const defaultCompareFrom = (completedDays: number): CompareFrom =>
+  completedDays < BASELINE_MIN_COMPLETED_DAYS ? "last-full" : "to-date";
+
+export type Baseline = {
+  compareFrom: CompareFrom; defaultCompareFrom: CompareFrom;
+  /** YYYY-MM-01 of the live month, and of the month the figures are measured from. */
+  liveKey: string; baseKey: string;
+  /** Completed days in the live month (today excluded). */
+  completedDays: number;
+  baseIsLive: boolean;
+};
+
+export function baselineMonth(today: string, override?: CompareFrom | null): Baseline {
+  const [y, m, d] = today.split("-").map(Number);
+  const completedDays = d - 1;
+  const def = defaultCompareFrom(completedDays);
+  const compareFrom = override ?? def;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const liveKey = `${y}-${pad(m)}-01`;
+  const lastFull = m === 1 ? `${y - 1}-12-01` : `${y}-${pad(m - 1)}-01`;
+  const baseKey = compareFrom === "last-full" ? lastFull : liveKey;
+  return { compareFrom, defaultCompareFrom: def, liveKey, baseKey, completedDays, baseIsLive: baseKey === liveKey };
+}
+
+/** A month key as an index into a one-year page, or null when it falls outside that year. */
+export const monthIndexIn = (key: string, year: number): number | null =>
+  key.startsWith(`${year}-`) ? Number(key.slice(5, 7)) - 1 : null;
+
 /* ── WHICH MATCHES THE CURRENT MONTH'S NUMERATOR MAY COUNT ────────────────────────────────────
  * Only those that have actually been played: start_date on or before yesterday. A match later
  * today, or later this month, brings its bookings-so-far with it and inflates a figure whose
@@ -249,6 +296,17 @@ export const isDormantIn = (
   monthIndex0: number,
 ): boolean => (row.monthly?.[monthIndex0]?.matches ?? 0) === 0;
 
+/* ── DORMANT, AGAINST THE BASELINE ───────────────────────────────────────────────────────────────
+ * Ryan, 2026-10-02: a field is dormant when it has no match in the baseline month AND none in the
+ * live month so far. On the 2nd, a field that played all September but not yet on the 1st is not
+ * dormant; a field that has played in the live month is never folded, whichever baseline is active.
+ * With the baseline on the live month this is exactly isDormantIn(row, live). */
+export const isDormantFor = (
+  row: { monthly: { matches?: number }[] },
+  baselineIndex0: number,
+  liveIndex0: number,
+): boolean => isDormantIn(row, baselineIndex0) && isDormantIn(row, liveIndex0);
+
 /* ── NO NUMBER RENDERS AS "-0" ───────────────────────────────────────────────────────────────────
  * ATH Pearland sits 0.004 above its goal, so the gap rounded to one decimal and printed with its
  * sign came out as "-0.0". A minus sign in front of a zero is not a number anybody means. The fix
@@ -343,7 +401,12 @@ export const NO_CITY = "No city set";
 /** A field inside a city's drawer. Nulls are absences and render as a dash, never as a zero. */
 export type CityFieldRow = {
   key: string; name: string; kind: "existing" | "slot";
-  sep: number | null;   // null for a new field: it has no September, and 0.0 would be a claim
+  /** The live month to date. Null for a new field: it has no live month, and 0.0 would be a claim.
+   *  (Was `sep`, from when the page was built in September. It always meant the live month.) */
+  live: number | null;
+  /** The BASELINE month the gap, trend and ramp are measured from — the live month itself in
+   *  month-to-date mode, else the last full month. Null for a new field, as above. */
+  base: number | null;
   oct: number | null; nov: number | null;
   dec: number | null;   // null is "no goal"
   gapDaily: number | null;
@@ -353,12 +416,15 @@ export type CityFieldRow = {
 
 export type CityRow = {
   city: string; hasCity: boolean;
-  sep: number; oct: number; nov: number; dec: number; gapDaily: number;
+  /** The live month to date, and the baseline month (equal in month-to-date mode). */
+  live: number; base: number;
+  oct: number; nov: number; dec: number; gapDaily: number;
   existing: number; slots: number; noGoal: number;
   fields: CityFieldRow[];
   /** The three months before the live one, oldest first. Null is "no market yet", never 0.0. */
   hist: (number | null)[];
-  /** Live month minus the EARLIEST history month. Null when there is no history to trend from. */
+  /** Baseline month minus the EARLIEST history month (the live month itself in month-to-date
+   *  mode, which is today's trend unchanged). Null when there is no history to trend from. */
   trend: number | null;
   /** No activity in any history month — a market that did not exist yet, not one at zero. */
   isNew: boolean;
@@ -402,7 +468,12 @@ export const trendKind = (t: number | null): TrendKind | null =>
 
 /** The rollup. `rows` is every row the page holds, existing AND slots: a city's December goal
  *  spans both tables and this is the only place they meet. */
-export function cityRollup(rows: RollupRow[], year: number, currentMonth: number, sort: GoalSort = "gap"): CityRow[] {
+export function cityRollup(
+  rows: RollupRow[], year: number, currentMonth: number, sort: GoalSort = "gap",
+  /** The baseline month index (baselineMonth). Defaults to the live month: month-to-date mode,
+   *  which is the rollup exactly as it was before the baseline existed. */
+  baseline: number = currentMonth,
+): CityRow[] {
   const decKey = monthKey(year, DEC_INDEX);
   const byCity = new Map<string, CityRow>();
   const HIST = historyIndexes(currentMonth);
@@ -428,19 +499,24 @@ export function cityRollup(rows: RollupRow[], year: number, currentMonth: number
     const label = r.city != null && r.city.trim() !== "" ? r.city.trim() : NO_CITY;
     let c = byCity.get(label);
     if (!c) {
-      c = { city: label, hasCity: label !== NO_CITY, sep: 0, oct: 0, nov: 0, dec: 0, gapDaily: 0,
+      c = { city: label, hasCity: label !== NO_CITY, live: 0, base: 0, oct: 0, nov: 0, dec: 0, gapDaily: 0,
             existing: 0, slots: 0, noGoal: 0, fields: [], hist: HIST.map(() => null), trend: null, isNew: false };
       byCity.set(label, c);
     }
 
-    const sep = r.monthly[currentMonth]?.daily ?? 0;
+    const live = r.monthly[currentMonth]?.daily ?? 0;
+    /* THE GAP AND THE RAMP RUN FROM THE BASELINE. In month-to-date mode that is the live month, as
+     * it always was; with the last full month as baseline, October's suggestion is the line from
+     * September to December, never a line from October's own partial actual. */
+    const base = r.monthly[baseline]?.daily ?? 0;
     const dec = r.targets[decKey] ?? null;
-    const suggested = ramp(sep, dec);
+    const suggested = ramp(base, dec);
     const monthAt = (i: 0 | 1): number | null =>
       r.targets[monthKey(year, RAMP_INDEXES[i])] ?? suggested[i] ?? null;
     const oct = monthAt(0), nov = monthAt(1);
 
-    c.sep += sep;
+    c.live += live;
+    c.base += base;
     c.dec += dec ?? 0;
     c.oct += oct ?? 0;
     c.nov += nov ?? 0;
@@ -454,9 +530,10 @@ export function cityRollup(rows: RollupRow[], year: number, currentMonth: number
       key: r.key, name: r.name, kind: r.kind, hist: fHist,
       /* A NEW FIELD HAS NO SEPTEMBER. Its spots are zero because it does not exist, which is not
        * the same statement as a field that ran no matches, and 0.0 would read as the second. */
-      sep: r.kind === "slot" ? null : sep,
+      live: r.kind === "slot" ? null : live,
+      base: r.kind === "slot" ? null : base,
       oct, nov, dec,
-      gapDaily: dec == null ? null : dec - sep,
+      gapDaily: dec == null ? null : dec - base,
     });
   }
 
@@ -501,14 +578,17 @@ export function cityRollup(rows: RollupRow[], year: number, currentMonth: number
     });
     /* NEW MEANS NO ACTIVITY IN ANY HISTORY MONTH — the state that earns the dash and the label. */
     c.isNew = c.hist.every((v) => v == null);
-    /* THE TREND RUNS FROM THE EARLIEST HISTORY MONTH TO THE LIVE ONE, and only if that month is a
+    /* THE TREND RUNS FROM THE EARLIEST HISTORY MONTH TO THE BASELINE (the live month in
+     * month-to-date mode, as it always did; the last full month otherwise, so a partial month is
+     * never set against a full one), and only if that month is a
      * real figure. A city whose June dashes gets NO trend rather than one computed from July: a
      * shorter window is a different measurement wearing the same column, and a reader comparing
      * two cities would be comparing three months against two without being told. */
-    c.sep = sumRounded(c.fields.map((f) => f.sep));
-    /* AFTER c.sep, deliberately: the trend is the change in the number the ROW SHOWS, so it is
-     * built from the displayed September and the displayed June and cannot disagree with either. */
-    c.trend = c.hist[0] == null ? null : roundTo(c.sep - c.hist[0], 1);
+    c.live = sumRounded(c.fields.map((f) => f.live));
+    c.base = sumRounded(c.fields.map((f) => f.base));
+    /* AFTER c.base, deliberately: the trend is the change in the number the ROW SHOWS, so it is
+     * built from the displayed baseline and the displayed earliest month and cannot disagree. */
+    c.trend = c.hist[0] == null ? null : roundTo(c.base - c.hist[0], 1);
     c.oct = sumRounded(c.fields.map((f) => f.oct));
     c.nov = sumRounded(c.fields.map((f) => f.nov));
     c.dec = sumRounded(c.fields.map((f) => f.dec));
@@ -532,9 +612,9 @@ export function cityRollup(rows: RollupRow[], year: number, currentMonth: number
  *  its own drawer. GAP is summed from the city gaps for that reason and not re-derived. */
 export function cityTotals(cities: CityRow[]) {
   const r1 = (v: number) => roundTo(v, 1);
-  const s = (k: "sep" | "oct" | "nov" | "dec" | "gapDaily") => r1(cities.reduce((a, c) => a + c[k], 0));
-  const sep = s("sep"), dec = s("dec");
-  return { sep, oct: s("oct"), nov: s("nov"), dec, gapDaily: s("gapDaily"),
+  const s = (k: "live" | "base" | "oct" | "nov" | "dec" | "gapDaily") => r1(cities.reduce((a, c) => a + c[k], 0));
+  const live = s("live"), base = s("base"), dec = s("dec");
+  return { live, base, oct: s("oct"), nov: s("nov"), dec, gapDaily: s("gapDaily"),
            existing: cities.reduce((a, c) => a + c.existing, 0),
            slots: cities.reduce((a, c) => a + c.slots, 0) };
 }
