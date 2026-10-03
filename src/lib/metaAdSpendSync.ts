@@ -566,3 +566,25 @@ const CITY_LABEL: Record<string, string> = {
 function cityLabel(code: string | null): string | null { return code ? (CITY_LABEL[code] ?? code) : null; }
 
 export { cityForMarket };
+
+/* ── THE CHARGES META LOGGED, for OpEx's cash calendar (src/lib/metaCharges.ts) ────────────────
+ * READ-ONLY: the account activity log, filtered to "Account billed" (ad_account_billing_charge).
+ * Known to be INCOMPLETE (probed 2026-10-03): OpEx uses these where they exist and reproduces the
+ * rest from daily spend. Same GET helpers, same header token, same redaction as the sync. */
+export async function fetchMetaLoggedCharges(adAccountId: string, sinceYmd: string): Promise<{ at: string; cents: number }[]> {
+  const id = adAccountId.startsWith("act_") ? adAccountId : `act_${adAccountId}`;
+  const rows = await pageAll(`${id}/activities`, {
+    fields: "event_time,event_type,extra_data", since: sinceYmd, limit: "100",
+  });
+  const out: { at: string; cents: number }[] = [];
+  for (const r of rows) {
+    if (r.event_type !== "ad_account_billing_charge") continue;
+    let x: { currency?: string; new_value?: number } = {};
+    try { x = JSON.parse(String(r.extra_data ?? "{}")); } catch { continue; }
+    if (x.currency && x.currency !== "USD") continue;
+    const cents = Number(x.new_value);
+    if (!Number.isInteger(cents) || cents <= 0) continue;
+    out.push({ at: new Date(String(r.event_time)).toISOString(), cents });
+  }
+  return out.sort((a, b) => a.at.localeCompare(b.at));
+}

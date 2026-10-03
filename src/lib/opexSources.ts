@@ -50,6 +50,11 @@ import type { FinanceData, FinVenue, FinExpense } from "./useFinanceData";
 import { buildFieldCostRows } from "./financeCosts";
 import { projectionCells, type OpexProjection, type ProjCat } from "./opexProjectionModel";
 import { autoMatchManagerPay, type AutoMatchPay } from "./opexAutoProjection";
+import { META_CASH_FLOOR_YMD, chicagoYmdOf, type MetaCashModel } from "./metaCharges";
+import { ownsExpenseRow } from "./metaAdSpend";
+
+/** What the automatic Meta projection's popover explains. */
+export type AutoMetaInfo = { dailyAvgCents: number; avgFrom: string | null; avgTo: string | null; thresholdCents: number };
 import { daysInMonth } from "./checkIns";
 import { groupVenues, type VenueGroup } from "./venueGroups";
 
@@ -107,7 +112,9 @@ export type CalRow = {
   forMonth?: string;
   /** A PROJECTION: added by hand on OpEx (opex_projections), or `auto` — the calculated match
    *  manager pay projection (opexAutoProjection). Never paid; gone once its day is over. */
-  projected?: { id: number; cat: ProjCat; auto?: AutoMatchPay };
+  projected?: { id: number; cat: ProjCat; auto?: AutoMatchPay; autoMeta?: AutoMetaInfo };
+  /** The ledger's sub-type for this row, when the group's own is not right ("From Meta's record"). */
+  sub?: string;
 };
 
 // What the row's i says. Plain words; no table names.
@@ -593,10 +600,13 @@ function expenseCategoryGroups(
   monthKey: string,
   year: number,
   month0: number,
+  /** Rows to leave out — the month-end Meta rows, when OpEx shows Meta's charges instead. */
+  skip: ((r: FinExpense) => boolean) | null = null,
 ): CalGroup[] {
   const byCat = new Map<string, FinExpense[]>();
   for (const r of data.expenses) {
     if (r.month !== monthKey) continue;
+    if (skip && skip(r)) continue;
     if (DEDICATED_EXPENSE_CATEGORIES.has(r.category)) continue;
     const arr = byCat.get(r.category);
     if (arr) arr.push(r);
@@ -946,6 +956,12 @@ export function buildOpexCalendarAsOf(
   /* THE AUTOMATIC MATCH MANAGER PAY PROJECTION (opexAutoProjection). Only the OpEx page turns it on,
    * and only while "Show projections" is ticked. Off, nothing below changes. */
   autoMatchPay = false,
+  /* META AD CHARGES ON THEIR DAYS (src/lib/metaCharges.ts). When given, the month-end Meta rows from
+   * Expenses are NOT shown — the charges replace them, so ad spend is never on the calendar twice —
+   * and the charges are: past ones paid, future ones automatic projections (with autoMatchPay, i.e.
+   * "Show projections"). Absent (null, or the inputs did not load): the month-end rows, as before.
+   * Expenses itself is never touched, so the Cost report and the P&L keep showing spend. */
+  meta: MetaCashModel | null = null,
 ): OpexCalendarAsOf {
   const state = monthStateOf(year, month0, now);
   const days = daysInMonth(year, month0);
@@ -968,7 +984,31 @@ export function buildOpexCalendarAsOf(
     match.how = "Weekly pay to match managers, by city, from the Manager Pay page. It is recomputed there, so it is changed there.";
     for (const r of match.rows) r.info = ledgerInfo(data, r, "match", "Match Manager Pay", year, now);
     const field = fieldCostGroupAsOf(data, monthKey, year, month0, state, paidThrough, bankThrough);
-    const rest = expenseCategoryGroups(data, monthKey, year, month0);
+    const monthIso = `${year}-${String(month0 + 1).padStart(2, "0")}`;
+    // From the month the Meta rows in Expenses start (Aug 2026); earlier months keep their hand rows.
+    const metaHere = !!meta && `${monthIso}-01` >= META_CASH_FLOOR_YMD;
+    const rest = expenseCategoryGroups(data, monthKey, year, month0, metaHere ? ownsExpenseRow : null);
+    if (metaHere) {
+      // The charges that have happened (Meta's record, or worked out from spend), on their days.
+      const past = meta!.charges.filter((c) => c.source !== "auto" && chicagoYmdOf(c.at).slice(0, 7) === monthIso);
+      if (past.length) {
+        let g = rest.find((x) => x.key === "expcat:Marketing");
+        if (!g) {
+          g = { key: "expcat:Marketing", name: "Marketing", src: "", defaultOpen: false, rows: [], agg: {}, subtotal: 0, undated: 0 };
+          rest.push(g);
+        }
+        for (const c of past) {
+          const day = Number(chicagoYmdOf(c.at).slice(8, 10));
+          g.rows.push({
+            key: `meta:${c.at}`, label: "Meta ads", cells: { [day]: c.cents / 100 },
+            sub: c.source === "meta" ? "From Meta's record" : "Worked out from spend",
+          });
+        }
+        const { agg } = aggregateAndSubtotal(g.rows);
+        g.agg = agg;
+        g.subtotal = Math.round(g.rows.reduce((t, r) => t + rowTotal(r), 0) * 100) / 100;
+      }
+    }
     for (const g of rest) {
       g.how = `${g.name} spending from the Expenses ledger, on the date of each expense.`;
       for (const r of g.rows) r.info = ledgerInfo(data, r, "expense", g.name, year, now);
@@ -982,6 +1022,7 @@ export function buildOpexCalendarAsOf(
     groups = [city, match, field, ...rest];
   }
   if (projections.length || autoMatchPay) {
+    const monthIso = `${year}-${String(month0 + 1).padStart(2, "0")}`;
     /* A PROJECTION WHOSE DAY IS OVER IS NOT SHOWN OR COUNTED (Ryan, 2026-10-03; replaces "a past one
      * stays projected"). Today still shows. For a repeating one only the passed dates drop off —
      * the stored row is untouched. */
@@ -1007,6 +1048,24 @@ export function buildOpexCalendarAsOf(
       const kept = keepOpen(cells);
       if (Object.keys(kept).length) {
         rows.push({ key: "auto:match-pay", label: "Match manager pay", cells: kept, projected: { id: 0, cat: "pers", auto } });
+      }
+    }
+    if (autoMatchPay && meta && `${monthIso}-01` >= META_CASH_FLOOR_YMD) {
+      // The Meta charges still to come: the 28-day daily average, turned into charges.
+      const cells: Record<number, number> = {};
+      for (const c of meta.charges) {
+        if (c.source !== "auto") continue;
+        const ymd = chicagoYmdOf(c.at);
+        if (ymd.slice(0, 7) !== monthIso) continue;
+        const d = Number(ymd.slice(8, 10));
+        cells[d] = Math.round(((cells[d] ?? 0) + c.cents / 100) * 100) / 100;
+      }
+      const kept = keepOpen(cells);
+      if (Object.keys(kept).length) {
+        rows.push({
+          key: "auto:meta", label: "Meta ads", cells: kept,
+          projected: { id: 0, cat: "mkt", autoMeta: { dailyAvgCents: meta.dailyAvgCents, avgFrom: meta.avgFrom, avgTo: meta.avgTo, thresholdCents: meta.threshold.inUse } },
+        });
       }
     }
     if (rows.length) {

@@ -341,6 +341,10 @@ const NODE_SUITES = [
   // OpEx draws its own header; projections: off == the build without them, paid + expected +
   // projected == the header, a weekly projection lands where it should, a past one is never paid.
   "scripts/opex-projections-test.ts",
+  // OpEx Meta ad charges on their real days: charges + unbilled = spend to the cent; Meta's logged
+  // charges kept; a gap between two logged bill charges closes exactly; no month-end Meta row once
+  // charges show; the Cost report's monthly marketing (spend) unchanged; the auto projection.
+  "scripts/opex-meta-charges-test.ts",
   // Match Promotion's NEW badge. Both decisions that carry the rule are invisible in the DOM — the
   // prior slate INCLUDING cancelled matches (excluding them mis-flagged 21 of 31), and the tests
   // nesting per field rather than per city (a city-wide reading lost 19 cases). A badge is a badge

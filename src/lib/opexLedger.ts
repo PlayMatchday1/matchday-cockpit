@@ -19,6 +19,7 @@
 
 import type { CalGroup, CalRow, OpexCalendarAsOf } from "./opexSources";
 import type { AutoMatchPay } from "./opexAutoProjection";
+import type { AutoMetaInfo } from "./opexSources";
 
 export type CatKey = "pers" | "field" | "equip" | "mkt" | "subs" | "misc";
 
@@ -58,7 +59,7 @@ export type Payment = {
   amount: number;
   paid: boolean;
   /** A projection: added by hand (opex_projections) or `auto` (the match manager pay average). */
-  projected?: { id: number; auto?: AutoMatchPay };
+  projected?: { id: number; auto?: AutoMatchPay; autoMeta?: AutoMetaInfo };
 };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -95,14 +96,14 @@ export function paymentsOf(cal: OpexCalendarAsOf): Payment[] {
       if (r.projected) {
         for (const [d, v] of Object.entries(r.cells)) {
           if (Math.abs(v) < 0.005) continue;
-          out.push({ key: `${r.key}:${d}`, day: Number(d), payee: r.label, cat: r.projected.cat, sub: r.projected.auto ? "Match manager pay" : "Projection", city: null, amount: r2(v), paid: false, projected: { id: r.projected.id, auto: r.projected.auto } });
+          out.push({ key: `${r.key}:${d}`, day: Number(d), payee: r.label, cat: r.projected.cat, sub: r.projected.auto ? "Match manager pay" : r.projected.autoMeta ? "Meta ads" : "Projection", city: null, amount: r2(v), paid: false, projected: { id: r.projected.id, auto: r.projected.auto, autoMeta: r.projected.autoMeta } });
         }
         continue;
       }
       const cat = groupCatKey;
       const city = rowCity(g, r);
       // A PREPAID venue's cash for next month's matches reads "for November" (Field Costs v2).
-      const sub = r.forMonth ?? groupSub;
+      const sub = r.sub ?? r.forMonth ?? groupSub;
       for (const [d, v] of Object.entries(r.cells)) {
         if (Math.abs(v) < 0.005) continue;
         const day = Number(d);

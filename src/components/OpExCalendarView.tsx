@@ -23,6 +23,9 @@ import { CATS, CAT_BY_KEY, cityLabel, paymentsOf, subLabel, sumOf, type CatKey, 
 import { useFinancePeriod } from "@/lib/financePeriodContext";
 import { currentPeriod, stepPeriod } from "@/lib/financePeriod";
 import type { AutoMatchPay } from "@/lib/opexAutoProjection";
+import type { AutoMetaInfo } from "@/lib/opexSources";
+import { META_BILLING_THRESHOLD_CENTS, buildMetaCash, type DailySpend, type LoggedCharge } from "@/lib/metaCharges";
+import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import { isWeekendColumn, monthLayout, weekdayHeaders } from "@/lib/weekStart";
 import {
@@ -46,11 +49,12 @@ function fmt(n: number): string {
 /** Which kind of money a pill holds: real (""), a projection added by hand ("p"), or the automatic
  *  match manager pay projection ("a"). Each gets its own pill, never mixed. */
 type PillKind = "" | "p" | "a";
-const pillKindOf = (p: Payment): PillKind => (p.projected ? (p.projected.auto ? "a" : "p") : "");
+const pillKindOf = (p: Payment): PillKind => (p.projected ? (p.projected.auto || p.projected.autoMeta ? "a" : "p") : "");
 type Pop =
   | { id: string; x: number; y: number; kind: "how" }
   | { id: string; x: number; y: number; kind: "pill"; day: number; cat: CatKey; pk: PillKind }
   | { id: string; x: number; y: number; kind: "auto"; auto: AutoMatchPay; day: number | null }
+  | { id: string; x: number; y: number; kind: "autometa"; info: AutoMetaInfo; day: number | null; amount: number }
   | null;
 
 /* THE PROJECTION FORM. `occurrence` is the payment it was opened from (a day on the calendar or a
@@ -103,9 +107,36 @@ export default function OpExCalendarView() {
     return () => { live = false; };
   }, []);
 
+  /* ── META AD CHARGES (src/lib/metaCharges.ts) ─────────────────────────────────────────────────
+   * Daily spend and Meta's logged charges, from /api/finance/meta-cash (finance only, read-only).
+   * If they do not load, OpEx keeps the month-end Meta rows and says so — never neither, never both. */
+  const [metaIn, setMetaIn] = useState<{ daily: DailySpend[]; logged: LoggedCharge[] } | null>(null);
+  const [metaErr, setMetaErr] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const { data: sess } = await supabase.auth.getSession();
+        const token = sess.session?.access_token;
+        const r = await fetch("/api/finance/meta-cash", { cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {} });
+        const j = await r.json().catch(() => ({}));
+        if (!live) return;
+        if (!r.ok) { setMetaErr(String(j?.error ?? `HTTP ${r.status}`)); return; }
+        setMetaIn({ daily: j.daily ?? [], logged: j.logged ?? [] });
+      } catch (e) { if (live) setMetaErr(e instanceof Error ? e.message : String(e)); }
+    })();
+    return () => { live = false; };
+  }, []);
+  const meta = useMemo(() => {
+    if (!metaIn) return null;
+    // The rest of this month and the next two: through the first day of the month after, Central.
+    const horizonEndMs = new Date(now.getFullYear(), now.getMonth() + 3, 1).getTime();
+    return buildMetaCash({ daily: metaIn.daily, logged: metaIn.logged, now, horizonEndMs });
+  }, [metaIn, now]);
+
   const cal = useMemo(
-    () => buildOpexCalendarAsOf(data, year, month0, now, showProj ? projections : [], showProj),
-    [data, year, month0, now, showProj, projections],
+    () => buildOpexCalendarAsOf(data, year, month0, now, showProj ? projections : [], showProj, meta),
+    [data, year, month0, now, showProj, projections, meta],
   );
   const all = useMemo(() => paymentsOf(cal), [cal]);
   const shown = useMemo(() => all.filter((p) => solo == null || p.cat === solo), [all, solo]);
@@ -243,11 +274,13 @@ export default function OpExCalendarView() {
         onClick={p.projected
           ? (e) => (p.projected!.auto
             ? setPop({ ...place(`auto:${p.key}`, e.currentTarget), kind: "auto", auto: p.projected!.auto, day: p.day })
-            : openEdit(p.projected!.id, p.day != null ? iso(p.day) : null))
+            : p.projected!.autoMeta
+              ? setPop({ ...place(`autometa:${p.key}`, e.currentTarget), kind: "autometa", info: p.projected!.autoMeta, day: p.day, amount: p.amount })
+              : openEdit(p.projected!.id, p.day != null ? iso(p.day) : null))
           : undefined}
-        title={p.projected ? (p.projected.auto ? "Calculated: click to see how" : "A projection: click to change or remove it") : undefined}>
+        title={p.projected ? (p.projected.auto || p.projected.autoMeta ? "Calculated: click to see how" : "A projection: click to change or remove it") : undefined}>
         <td>{p.day == null ? "—" : `${mon} ${p.day}`}</td>
-        <td>{p.projected && <span className="ptag">{p.projected.auto ? "auto" : "proj"}</span>}<b>{p.payee}</b></td>
+        <td>{p.projected && <span className="ptag">{p.projected.auto || p.projected.autoMeta ? "auto" : "proj"}</span>}<b>{p.payee}</b></td>
         <td className="cat"><span className="sw" style={{ background: CAT_BY_KEY[p.cat].col }} />{CAT_BY_KEY[p.cat].name}{sub ? ` · ${sub}` : ""}</td>
         <td className="city">{p.city || "—"}</td>
         <td>{p.projected ? <span className="st prj">Projected</span> : <span className={`st ${p.paid ? "paid" : "proj"}`}>{p.paid ? "Paid" : "Expected"}</span>}</td>
@@ -335,6 +368,14 @@ export default function OpExCalendarView() {
             <input type="checkbox" data-testid="show-projections" checked={showProj} onChange={(e) => setShowProj(e.target.checked)} />
             Show projections
           </label>
+          {metaErr && (
+            <div className="pjnote" data-testid="meta-status">Meta charges did not load ({metaErr}). Ad spend shows as one month-end amount instead.</div>
+          )}
+          {meta?.threshold.changed && (
+            <div className="pjnote" data-testid="meta-threshold-changed">
+              Meta&rsquo;s billing threshold looks like {fmt(meta.threshold.inUse / 100)} now (its last two charges), not the {fmt(META_BILLING_THRESHOLD_CENTS / 100)} on file. Using {fmt(meta.threshold.inUse / 100)}.
+            </div>
+          )}
           {(projMissing || projLoadError || projNote) && (
             <div className="pjnote" data-testid="projection-status">
               {projMissing ? "Projections are not saved yet: the table does not exist (migration 0202)." : projLoadError ? `Projections did not load: ${projLoadError}` : projNote}
@@ -414,7 +455,10 @@ export default function OpExCalendarView() {
                               e.stopPropagation();
                               if (pop?.id === id) return setPop(null);
                               const auto = x.pk === "a" ? x.ps[0].projected?.auto : undefined;
-                              setPop(auto ? { ...place(id, e.currentTarget), kind: "auto", auto, day: d } : { ...place(id, e.currentTarget), kind: "pill", day: d, cat: x.cat, pk: x.pk });
+                              const autoMeta = x.pk === "a" ? x.ps[0].projected?.autoMeta : undefined;
+                              setPop(auto ? { ...place(id, e.currentTarget), kind: "auto", auto, day: d }
+                                : autoMeta ? { ...place(id, e.currentTarget), kind: "autometa", info: autoMeta, day: d, amount: x.total }
+                                : { ...place(id, e.currentTarget), kind: "pill", day: d, cat: x.cat, pk: x.pk });
                             }}>
                             <span className="sw" style={{ background: CAT_BY_KEY[x.cat].col }} />
                             <span className="nm">{x.proj && <span className="ptag">{x.pk === "a" ? "auto" : "proj"}</span>}{CAT_BY_KEY[x.cat].short}{x.ps.length > 1 && <small> {x.ps.length}</small>}</span>
@@ -560,6 +604,17 @@ export default function OpExCalendarView() {
                 </span>
               ))}
               <dt><b>Average of {pop.auto.basis.length}</b></dt><dd data-testid="auto-basis-mean" data-total={pop.auto.amount}><b>{fmt(pop.auto.amount)}</b></dd>
+            </dl>
+          </div>
+        )}
+        {pop?.kind === "autometa" && (
+          <div data-testid="auto-meta-basis">
+            <div className="h">{pop.day != null ? `${mon} ${pop.day} · ` : ""}Meta ads · {fmt(pop.amount)}</div>
+            <div className="sub">Projected automatically from the average daily ad spend of the last 4 weeks, turned into card charges: one each time the unbilled balance would reach the billing threshold, and the rest on the bill date (the 6th).</div>
+            <dl className="pp">
+              <dt>Daily average{pop.info.avgFrom && pop.info.avgTo ? <span className="m"> · {MON3[Number(pop.info.avgFrom.slice(5, 7)) - 1]} {Number(pop.info.avgFrom.slice(8, 10))} – {MON3[Number(pop.info.avgTo.slice(5, 7)) - 1]} {Number(pop.info.avgTo.slice(8, 10))}</span> : null}</dt>
+              <dd data-testid="auto-meta-avg" data-cents={pop.info.dailyAvgCents}>{fmt(pop.info.dailyAvgCents / 100)}</dd>
+              <dt>Billing threshold</dt><dd>{fmt(pop.info.thresholdCents / 100)}</dd>
             </dl>
           </div>
         )}
