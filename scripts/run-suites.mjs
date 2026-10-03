@@ -345,6 +345,11 @@ const NODE_SUITES = [
   // charges kept; a gap between two logged bill charges closes exactly; no month-end Meta row once
   // charges show; the Cost report's monthly marketing (spend) unchanged; the auto projection.
   "scripts/opex-meta-charges-test.ts",
+  // Finance › Expenses, one month grouped by category: category totals sum to the month (Match
+  // Manager Pay included); one bubble shows one category; an added expense appears once and raises
+  // its category and the month by its amount ("every month" writes 12, skipping months booked); the
+  // Cost report's monthly figures are unchanged.
+  "scripts/expenses-page-test.ts",
   // Match Promotion's NEW badge. Both decisions that carry the rule are invisible in the DOM — the
   // prior slate INCLUDING cancelled matches (excluding them mis-flagged 21 of 31), and the tests
   // nesting per field rather than per city (a city-wide reading lost 19 cases). A badge is a badge

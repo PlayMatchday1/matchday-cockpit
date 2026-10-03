@@ -33,6 +33,7 @@ export const SECTION_GRAINS: Record<string, SectionGrains> = {
   "/admin/finance/cost":          { grains: ["month", "quarter", "year"], why: "" },
   "/admin/finance/cash-flow":     { grains: ["quarter"], why: "Cash Flow is built around a quarter — starting cash, quarter P&L and a three-month expense forecast. It has no month or year form." },
   "/admin/finance/opex":          { grains: ["month"], why: "OpEx draws a day-by-day calendar for one month. A quarter or a year has no calendar grid." },
+  "/admin/finance/ledger/expenses": { grains: ["month"], why: "Expenses lists one month, grouped by category." },
 };
 
 function I({ children }: { children: React.ReactNode }) {

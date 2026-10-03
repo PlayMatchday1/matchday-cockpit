@@ -8,6 +8,7 @@
 //
 // A replaced instruction said to keep the Finance period control on OpEx and leave arrows out.
 
-export const OWN_HEADER_SECTIONS: ReadonlySet<string> = new Set(["/admin/finance/opex"]);
+// Expenses joined OpEx on 2026-10-03: one month, its own arrows (Ryan).
+export const OWN_HEADER_SECTIONS: ReadonlySet<string> = new Set(["/admin/finance/opex", "/admin/finance/ledger/expenses"]);
 
 export const drawsOwnHeader = (pathname: string): boolean => OWN_HEADER_SECTIONS.has(pathname);

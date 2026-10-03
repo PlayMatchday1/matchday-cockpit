@@ -1,396 +1,193 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+// FINANCE › EXPENSES — one month, one list grouped by category (Ryan, 2026-10-03).
+//
+// Replaces the Recurring / Ledger tabs. The model is src/lib/expensesMonth.ts (pure, asserted by
+// scripts/expenses-page-test.ts); this file draws it. NOTHING STORED CHANGES: every write is the
+// audited finExpenseWrites path the page always used (insertFinExpense / updateFinExpense /
+// deleteFinExpense), with its refusals for imported rows and Match Manager Pay.
+//
+// THE PAGE IS ALWAYS ONE MONTH. The shell leaves out the FINANCE title and the period bar here
+// (src/lib/financeChrome.ts); the month arrows step the same period state, so ?p= and the data
+// window follow. The total includes Match Manager Pay and the Meta ad rows, as read-only "auto"
+// rows, so it is the number OpEx, the Cost report and the P&L read from the same table.
+
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Lock, Pencil, Plus, Trash2 } from "lucide-react";
+import { Lock, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
-import ExpenseRowEditor, {
-  type ExpenseDraft,
-} from "@/components/ExpenseRowEditor";
-import {
-  insertFinExpense,
-  updateFinExpense,
-  deleteFinExpense,
-} from "@/lib/finExpenseWrites";
-import RecurringExpensesGrid from "@/components/RecurringExpensesGrid";
+import ExpenseRowEditor, { type ExpenseDraft } from "@/components/ExpenseRowEditor";
 import BatchExpenseDrawer from "@/components/BatchExpenseDrawer";
-import {
-  buildColumns,
-  buildRecurringSeries,
-  columnTotals,
-  recurringFlags,
-  RECURRING_EXCLUDED_CATEGORIES,
-  type RecurringCell,
-  type RecurringSeries,
-} from "@/lib/recurringExpenses";
-import { type Q2Month } from "@/lib/financeStats";
+import { insertFinExpense, updateFinExpense, deleteFinExpense } from "@/lib/finExpenseWrites";
 import { useFinancePeriod } from "@/lib/financePeriodContext";
 import { useFinanceQuarter } from "@/lib/financeQuarter";
+import { currentPeriod, stepPeriod } from "@/lib/financePeriod";
 import { useAuth } from "@/lib/useAuth";
 import { isCityHidden } from "@/lib/types";
+import { refetchFinanceData, useFinanceData, type FinExpense } from "@/lib/useFinanceData";
 import {
-  refetchFinanceData,
-  useFinanceData,
-  type FinExpense,
-} from "@/lib/useFinanceData";
-
-type SortKey = "date" | "city" | "category" | "vendor" | "amount";
-type SortDir = "asc" | "desc";
-
-type MonthFilter = Q2Month | "ALL" | "RANGE";
-
-const ALL = "All";
+  ALL_CITIES, COMPANY_WIDE, MATCH_PAY, addProblem, categoryColor, changeText, expensesMonth,
+  monthKeyOf, planAdd, visibleCategories, type AddDraft, type ExpLine,
+} from "@/lib/expensesMonth";
 
 const CITY_DISPLAY = [
-  "Austin",
-  "Houston",
-  "San Antonio",
-  "Dallas",
-  "Atlanta",
-  "St. Louis",
-  "OKC",
-  "El Paso",
-  "Company-wide",
+  "Austin", "Houston", "San Antonio", "Dallas", "Atlanta", "St. Louis", "OKC", "El Paso", "Company-wide",
 ].filter((c) => !isCityHidden(c));
+const BASE_CATEGORIES = ["City Manager", "Equipment", "Marketing", "Misc"];
+const MONTHS_FULL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
-function fmtMoney(n: number, signZero = false): string {
-  const r = Math.round(n);
-  if (r === 0 && !signZero) return "—";
-  const abs = Math.abs(r);
-  return `${r < 0 ? "-" : ""}$${abs.toLocaleString("en-US")}`;
+function money(n: number): string {
+  const r = Math.round(n * 100) / 100;
+  return `${r < 0 ? "−" : ""}$${Math.abs(r).toLocaleString("en-US", { minimumFractionDigits: Number.isInteger(r) ? 0 : 2, maximumFractionDigits: 2 })}`;
 }
-
-const chipAct = "text-[12px] font-bold text-deep-green/60 underline decoration-cream-line underline-offset-2 hover:text-deep-green";
-
 /** "2026-09-30" → "Sep 2026". Only used when a row carries no explicit month string. */
 function monthOf(date: string): string {
-  const M = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const M = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const [y, m] = (date ?? "").split("-");
   const i = Number(m) - 1;
   return M[i] ? `${M[i]} ${y}` : (date ?? "");
 }
-
-/**
- * HOW MANY OTHER MONTHS OF THE SAME LINE ITEM SURVIVE THIS DELETE.
- *
- * fin_expenses has no recurrence column — "City Manager · Dallas · $800, monthly" is not one row
- * with a repeat rule, it is one row per month. So a delete can only ever remove a single month, and
- * this counts what is left so the confirmation can say so with a number rather than a reassurance.
- *
- * Identity is city + category + vendor, all compared case-insensitively and null-tolerantly, and
- * NOT amount — a raise mid-year is the same line item at a different price.
- */
+/** How many other months of the same line survive a one-month delete (fin_expenses stores one row
+ *  per month; a delete removes one month only, and the confirmation says how many remain). */
 function otherMonthsOf(row: FinExpense, all: FinExpense[]): number {
-  const key = (r: FinExpense) =>
-    [r.city ?? "", r.category ?? "", r.vendor ?? ""].map((v) => v.trim().toLowerCase()).join("|");
+  const key = (r: FinExpense) => [r.city ?? "", r.category ?? "", r.vendor ?? ""].map((v) => v.trim().toLowerCase()).join("|");
   const k = key(row);
   const months = new Set<string>();
-  for (const r of all) {
-    if (r.id === row.id) continue;
-    if (key(r) !== k) continue;
-    months.add(r.month || monthOf(r.date));
-  }
+  for (const r of all) if (r.id !== row.id && key(r) === k) months.add(r.month || monthOf(r.date));
   months.delete(row.month || monthOf(row.date));
   return months.size;
 }
+const fmtMoney = (n: number, _signZero?: boolean) => money(n);
 
 export default function ExpenseAdminView() {
   const { data, loading } = useFinanceData();
   const { appUser } = useAuth();
   const quarter = useFinanceQuarter();
-  /* THE HEADER PICKER IS THE ONLY PERIOD CONTROL. The recurring grid used to render a fixed
-   * quarter and carry its own All/Jul/Aug/Sep row, so the page had two period controls with no
-   * relationship — the chips summed one window and the header named another. `period.months` is
-   * whatever the header says, month or quarter or year. */
-  const { period } = useFinancePeriod();
+  const { period, now, setPeriod } = useFinancePeriod();
+  const year = period.start.getFullYear(), month0 = period.start.getMonth();
+  const monthKey = monthKeyOf(year, month0);
+  const allRows = useMemo(() => data?.expenses ?? [], [data]);
 
-  const [monthFilter, setMonthFilter] = useState<MonthFilter>("ALL");
-  const [rangeFrom, setRangeFrom] = useState("");
-  const [rangeTo, setRangeTo] = useState("");
-  const [cityFilter, setCityFilter] = useState<string>(ALL);
-  // CHIPS, NOT A DROPDOWN. Eight categories were invisible inside a single-select that could only
-  // ever show one, and picking one meant guessing whether it had any spend. Each chip carries its
-  // own period total, so the choice is informed before it is made.
-  //
-  // A CATEGORY WITH NO SPEND STARTS OFF. That is what removes the fifteen $0.00 rows — a DEFAULT,
-  // not a rule: the chip is still there, still tappable, and turning it on brings its rows back.
-  // Dim-and-off and unavailable are drawn differently for exactly that reason.
-  //
-  // REMEMBERED BETWEEN VISITS, so a deliberate selection is not undone by navigating away.
-  const [selectedCats, setSelectedCats] = useState<Set<string> | null>(null);
+  const [city, setCity] = useState<string>(ALL_CITIES);
+  // ONE BUBBLE AT A TIME (Ryan): click to show only that category, click again for everything.
+  const [selected, setSelected] = useState<string | null>(null);
 
-  const [sortKey, setSortKey] = useState<SortKey>("date");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const month = useMemo(() => expensesMonth(allRows, monthKey, city), [allRows, monthKey, city]);
+  const shown = visibleCategories(month, selected);
+  const selCat = selected ? month.categories.find((c) => c.name === selected) ?? null : null;
+  const bigNumber = selected ? (selCat?.total ?? 0) : month.total;
+  const share = selected && month.total ? Math.round(((selCat?.total ?? 0) / month.total) * 100) : null;
+  const includesMatchPay = month.matchPay > 0 && (selected == null || selected === MATCH_PAY);
 
-  const [editorOpen, setEditorOpen] = useState(false);
-  const [editorMode, setEditorMode] = useState<"add" | "edit">("add");
-  const [editorRow, setEditorRow] = useState<FinExpense | null>(null);
+  // Every category the page knows (so a bubble can open one with nothing this month), money first.
+  const allCats = useMemo(() => {
+    const names = new Set<string>([...BASE_CATEGORIES, ...allRows.map((r) => r.category).filter(Boolean)]);
+    const totals = new Map(month.categories.map((c) => [c.name, c.total]));
+    return [...names].map((n) => ({ name: n, total: totals.get(n) ?? 0 }))
+      .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
+  }, [allRows, month]);
+  const addableCats = allCats.map((c) => c.name).filter((c) => c !== MATCH_PAY).sort();
 
-  const [deleteRow, setDeleteRow] = useState<FinExpense | null>(null);
-
-  // Recurring vs Ledger view. Recurring is the default — it groups the flat
-  // rows into line items so a missing month shows as a gap.
-  const [view, setView] = useState<"rec" | "led">("rec");
-  // NO GRID-LEVEL PERIOD STATE. There was a gridMonth drill-down here; the page header's picker
-  // is now the only period control, so the grid holds no window of its own to disagree with it.
-  // Multi-month batch add drawer (+ optional seed from a clicked gap cell).
-  const [batchOpen, setBatchOpen] = useState(false);
-  const [batchSeed, setBatchSeed] = useState<
-    { city: string; category: string; vendor: string; month?: string } | null
-  >(null);
-  // Multi-row cell inspector (a month-cell holding >1 fin_expenses row).
-  const [multiCell, setMultiCell] = useState<
-    { series: RecurringSeries; cell: RecurringCell } | null
-  >(null);
-
-  const allRows = data?.expenses ?? [];
-
-  // "Now" as a month ordinal (year*12 + month) — distinguishes future months
-  // (not booked yet) from real gaps in the recurring grid.
-  const nowOrd = useMemo(() => {
-    const n = new Date();
-    return n.getFullYear() * 12 + (n.getMonth() + 1);
-  }, []);
-
-  const knownCategories = useMemo(() => {
-    const set = new Set<string>();
-    for (const r of allRows) if (r.category) set.add(r.category);
-    return [...set].sort();
-  }, [allRows]);
-
-  // Always-visible categories — surfaced in the Add Expense dropdown
-  // even before any rows exist. City Manager / Marketing / Equipment
-  // are line-item categories as of the 2026-05-07 migration; they were
-  // formerly placeholder columns in fin_monthly_expenses. Misc is the
-  // generic catch-all bucket.
-  const BASE_CATEGORIES = useMemo(
-    () => ["City Manager", "Equipment", "Marketing", "Misc"],
-    [],
-  );
-
-  // Categories the user can SELECT when filtering or adding a new row.
-  // Excludes Match Manager Pay (managed on /admin/finance/manager-pay).
-  // Existing MMP rows still display in the table — only the dropdowns
-  // are filtered.
-  const selectableCategories = useMemo(() => {
-    const set = new Set<string>([...knownCategories, ...BASE_CATEGORIES]);
-    set.delete("Match Manager Pay");
-    return [...set].sort();
-  }, [knownCategories, BASE_CATEGORIES]);
-
-  // Per-category spend for the ACTIVE PERIOD — the number on the chip, and what decides which
-  // chips open on.
-  const categorySpend = useMemo(() => {
-    // THE HEADER'S WINDOW, not the containing quarter. These chips read $12,971 for Marketing
-    // with August selected — Jul + Aug + Sep — while the header said August ($5,721).
-    const months = new Set(period.months);
-    const out = new Map<string, number>();
-    for (const c of selectableCategories) out.set(c, 0);
-    for (const r of allRows) {
-      if (!months.has(r.month)) continue;
-      if (!out.has(r.category)) continue;
-      out.set(r.category, (out.get(r.category) ?? 0) + Number(r.amount || 0));
-    }
-    return out;
-  }, [allRows, selectableCategories, period.months]);
-
-  const CHIP_KEY = "finance:expenses:categories";
-  // Restore a remembered selection; otherwise open on "only the ones with spend".
-  useEffect(() => {
-    // WAIT FOR THE DATA. This ran on the first render, when allRows is empty and every category
-    // therefore looks like $0 — so "only with spend" resolved to NOTHING and the guard below kept
-    // it that way once the rows arrived. The page opened with every chip off and an empty table.
-    if (selectedCats !== null || selectableCategories.length === 0) return;
-    if (allRows.length === 0) return;
-    let restored: Set<string> | null = null;
-    try {
-      const raw = window.localStorage.getItem(CHIP_KEY);
-      if (raw) {
-        const arr = JSON.parse(raw) as string[];
-        // Intersect with what exists today — a category that has since disappeared must not
-        // resurrect, and a NEW one must not be silently excluded by an old selection.
-        restored = new Set(arr.filter((c) => selectableCategories.includes(c)));
-      }
-    } catch { /* private mode */ }
-    setSelectedCats(
-      restored && restored.size > 0
-        ? restored
-        : new Set(selectableCategories.filter((c) => (categorySpend.get(c) ?? 0) !== 0)),
-    );
-  }, [selectedCats, selectableCategories, categorySpend, allRows.length]);
-
-  const activeCats = selectedCats ?? new Set(selectableCategories);
-  const setCats = (next: Set<string>) => {
-    setSelectedCats(next);
-    try { window.localStorage.setItem(CHIP_KEY, JSON.stringify([...next])); } catch { /* private mode */ }
-  };
-
-  // Filter dropdown options. Real city names come from row data;
-  // "Company-wide" is synthetic — included when any row has city
-  // null/empty or the legacy "Company-wide" literal, and the filter
-  // logic below matches it against both shapes.
   const cityOptions = useMemo(() => {
     const set = new Set<string>();
-    let hasCompanyWide = false;
-    for (const r of allRows) {
-      if (!r.city || r.city === "Company-wide") {
-        hasCompanyWide = true;
-        continue;
-      }
-      set.add(r.city);
-    }
-    const ordered: string[] = [ALL];
-    for (const c of CITY_DISPLAY) {
-      if (c === "Company-wide") {
-        if (hasCompanyWide) ordered.push(c);
-      } else if (set.has(c)) {
-        ordered.push(c);
-      }
-    }
-    for (const c of [...set].sort()) {
-      if (!CITY_DISPLAY.includes(c)) ordered.push(c);
-    }
-    return ordered;
+    for (const r of allRows) if (r.city && r.city !== COMPANY_WIDE) set.add(r.city);
+    return [ALL_CITIES, ...CITY_DISPLAY.filter((c) => c === COMPANY_WIDE || set.has(c)), ...[...set].filter((c) => !CITY_DISPLAY.includes(c)).sort()];
   }, [allRows]);
 
-  const filtered = useMemo(() => {
-    // Hide Match Manager Pay rows from this view at render time —
-    // they're managed on /admin/finance/manager-pay. Display-layer
-    // filter only; fin_expenses rows still exist and every other
-    // surface (city P&L cards, Cash Flow, Q2 hero) reads them.
-    let rows = allRows.filter((r) => r.category !== "Match Manager Pay");
-    if (monthFilter === "RANGE") {
-      if (rangeFrom) rows = rows.filter((r) => r.date && r.date >= rangeFrom);
-      if (rangeTo) rows = rows.filter((r) => r.date && r.date <= rangeTo);
-    } else if (monthFilter !== "ALL") {
-      rows = rows.filter((r) => r.month === monthFilter);
-    } else {
-      // ALL inside the active quarter only — match the page-level
-      // selector's mental model (admin views are quarter-scoped).
-      const monthSet = new Set(quarter.months.map((m) => m.key));
-      rows = rows.filter((r) => monthSet.has(r.month));
-    }
-    if (cityFilter !== ALL) {
-      if (cityFilter === "Company-wide") {
-        rows = rows.filter((r) => !r.city || r.city === "Company-wide");
-      } else {
-        rows = rows.filter((r) => r.city === cityFilter);
-      }
-    }
-    rows = rows.filter((r) => activeCats.has(r.category));
-    return rows;
-  }, [allRows, monthFilter, rangeFrom, rangeTo, cityFilter, activeCats, quarter]);
+  /* ── THE ADD ROW ─────────────────────────────────────────────────────────────────────────── */
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const todayInMonth = () => {
+    const dim = new Date(year, month0 + 1, 0).getDate();
+    const d = now.getFullYear() === year && now.getMonth() === month0 ? now.getDate() : 1;
+    return `${year}-${pad(month0 + 1)}-${pad(Math.min(d, dim))}`;
+  };
+  const blank = () => ({ what: "", category: "", amount: "", how: "monthly" as "monthly" | "once", city: "", day: String(now.getDate()), date: todayInMonth() });
+  const [add, setAdd] = useState(blank);
+  const [adding, setAdding] = useState(false);
+  const [addMsg, setAddMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => { setAdd((a) => ({ ...a, date: todayInMonth() })); }, [year, month0]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const sorted = useMemo(() => {
-    const rows = filtered.slice();
-    rows.sort((a, b) => {
-      const av = a[sortKey];
-      const bv = b[sortKey];
-      if (typeof av === "number" && typeof bv === "number") {
-        return sortDir === "desc" ? bv - av : av - bv;
-      }
-      const as = String(av ?? "");
-      const bs = String(bv ?? "");
-      return sortDir === "desc" ? bs.localeCompare(as) : as.localeCompare(bs);
-    });
-    return rows;
-  }, [filtered, sortKey, sortDir]);
-
-  const totalAmount = useMemo(
-    () => filtered.reduce((s, r) => s + r.amount, 0),
-    [filtered],
-  );
-
-  // ---- Recurring view ----
-  // Rows feeding the series: city + category filters applied, but NOT the month
-  // filter — series stats (median, booked-month count, gaps) are computed over
-  // a line item's whole history, then projected onto the visible columns.
-  const seriesRows = useMemo(() => {
-    let rows = allRows;
-    if (cityFilter !== ALL) {
-      if (cityFilter === "Company-wide") {
-        rows = rows.filter((r) => !r.city || r.city === "Company-wide");
-      } else {
-        rows = rows.filter((r) => r.city === cityFilter);
-      }
-    }
-    rows = rows.filter((r) => activeCats.has(r.category));
-    return rows;
-  }, [allRows, cityFilter, activeCats]);
-
-  const columns = useMemo(() => buildColumns(period.months), [period.months]);
-  const series = useMemo(
-    () => buildRecurringSeries(seriesRows, columns, nowOrd),
-    [seriesRows, columns, nowOrd],
-  );
-  const colTot = useMemo(() => columnTotals(series, columns), [series, columns]);
-  const grandTotal = useMemo(
-    () => series.reduce((s, x) => s + x.rowTotal, 0),
-    [series],
-  );
-  const flags = useMemo(() => recurringFlags(series), [series]);
-
-  // Per-month row counts for the recurring month segments (excludes MMP, which
-  // isn't a recurring line item on this page).
-  const monthCounts = useMemo(() => {
-    const m: Record<string, number> = {};
-    for (const mm of quarter.months) m[mm.key] = 0;
-    for (const r of seriesRows) {
-      if (RECURRING_EXCLUDED_CATEGORIES.has(r.category)) continue;
-      if (m[r.month] !== undefined) m[r.month]++;
-    }
-    return m;
-  }, [seriesRows, quarter]);
-
-  function openBatch() {
-    setBatchSeed(null);
-    setBatchOpen(true);
-  }
-  function fillCell(s: RecurringSeries, month: string) {
-    setBatchSeed({
-      city: s.city ?? "Company-wide",
-      category: s.category,
-      vendor: s.vendor ?? "",
-      month,
-    });
-    setBatchOpen(true);
-  }
-
-  function toggleSort(key: SortKey) {
-    if (sortKey === key) {
-      setSortDir((d) => (d === "desc" ? "asc" : "desc"));
-    } else {
-      setSortKey(key);
-      setSortDir("desc");
-    }
-  }
-
-  function openEdit(row: FinExpense) {
-    setEditorMode("edit");
-    setEditorRow(row);
-    setEditorOpen(true);
-  }
-
-  async function handleSubmit(draft: ExpenseDraft): Promise<void> {
-    if (!appUser) throw new Error("Not signed in");
-    const fields = {
-      date: draft.date,
-      month: draft.month,
-      city: draft.city || null,
-      category: draft.category,
-      vendor: draft.vendor || null,
-      amount: draft.amount,
-      notes: draft.notes || null,
+  async function submitAdd() {
+    if (adding) return;
+    if (!appUser) { setAddMsg({ ok: false, text: "Not signed in." }); return; }
+    const draft: AddDraft = {
+      what: add.what, category: add.category, amount: Number(add.amount), how: add.how, city: add.city || null,
+      day: Number(add.day), date: add.how === "monthly" ? `${year}-${pad(month0 + 1)}-01` : add.date,
     };
-    if (editorMode === "add") {
-      await insertFinExpense(fields, appUser);
-    } else if (editorMode === "edit" && editorRow) {
-      await updateFinExpense(editorRow, fields, appUser);
+    const problem = addProblem(draft);
+    if (problem) { setAddMsg({ ok: false, text: problem }); return; }
+    const plan = planAdd(draft, allRows);
+    setAdding(true);
+    setAddMsg(null);
+    let written = 0;
+    try {
+      // ONE AUDITED INSERT PER ROW, IN ORDER, NO RETRY. A failure stops the run and says how far it got.
+      for (const r of plan.rows) {
+        await insertFinExpense({ date: r.date, month: r.month, city: r.city, category: r.category, vendor: r.vendor, amount: r.amount, notes: null }, appUser);
+        written++;
+      }
+      const skipped = plan.skipped.length;
+      setAddMsg({
+        ok: true,
+        text: draft.how === "once"
+          ? `Added ${draft.what.trim()} · ${money(draft.amount)} on ${plan.rows[0].date}.`
+          : `Added ${written} month${written === 1 ? "" : "s"} (${plan.rows[0]?.month ?? "—"} to ${plan.rows[plan.rows.length - 1]?.month ?? "—"})${skipped ? `; skipped ${skipped} that already had this line (${plan.skipped.join(", ")})` : ""}.`,
+      });
+      setAdd(blank());
+    } catch (e) {
+      setAddMsg({ ok: false, text: `Not saved after ${written} of ${plan.rows.length}: ${e instanceof Error ? e.message : String(e)}` });
+    } finally {
+      setAdding(false);
+      await refetchFinanceData();
     }
+  }
+
+  /* ── IN-PLACE AMOUNT EDIT ────────────────────────────────────────────────────────────────── */
+  const [editKey, setEditKey] = useState<string | null>(null);
+  const [editVal, setEditVal] = useState("");
+  const [editErr, setEditErr] = useState<{ key: string; text: string } | null>(null);
+  const committing = useRef(false);
+  // ESCAPE MUST NOT SAVE. Closing the input blurs it, and onBlur saves — so Escape (and Enter,
+  // which has already saved) mark the blur that follows as one to ignore.
+  const skipBlur = useRef(false);
+  async function commitEdit(line: ExpLine) {
+    if (committing.current) return;
+    const row = line.thisRows[0];
+    const v = Number(editVal);
+    setEditKey(null);
+    if (!row || !appUser) return;
+    if (!Number.isFinite(v) || v < 0) { setEditErr({ key: line.key, text: "Not saved: enter an amount." }); return; }
+    if (Math.abs(v - Number(row.amount)) < 0.005) return;            // nothing changed, nothing sent
+    committing.current = true;
+    try {
+      await updateFinExpense(row, { amount: Math.round(v * 100) / 100 }, appUser);
+      setEditErr(null);
+      await refetchFinanceData();
+    } catch (e) {
+      setEditErr({ key: line.key, text: `Not saved: ${e instanceof Error ? e.message : String(e)}` });
+    } finally {
+      committing.current = false;
+    }
+  }
+
+  /* ── DIALOGS KEPT FROM THE OLD PAGE ─────────────────────────────────────────────────────── */
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchSeed, setBatchSeed] = useState<{ city: string; category: string; vendor: string; month?: string } | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorRow, setEditorRow] = useState<FinExpense | null>(null);
+  const [deleteRow, setDeleteRow] = useState<FinExpense | null>(null);
+  const [multi, setMulti] = useState<ExpLine | null>(null);
+  const [menuKey, setMenuKey] = useState<string | null>(null);
+  const openEdit = (row: FinExpense) => { setMenuKey(null); setEditorRow(row); setEditorOpen(true); };
+  async function handleSubmit(draft: ExpenseDraft): Promise<void> {
+    if (!appUser || !editorRow) throw new Error("Not signed in");
+    await updateFinExpense(editorRow, {
+      date: draft.date, month: draft.month, city: draft.city || null, category: draft.category,
+      vendor: draft.vendor || null, amount: draft.amount, notes: draft.notes || null,
+    }, appUser);
     await refetchFinanceData();
     setEditorOpen(false);
   }
-
   async function handleDelete(): Promise<void> {
     if (!appUser) throw new Error("Not signed in");
     if (!deleteRow) return;
@@ -399,398 +196,205 @@ export default function ExpenseAdminView() {
     setDeleteRow(null);
   }
 
+  const prevShort = month.prevKey.split(" ")[0];
+  const mon = MONTHS_FULL[month0];
+
   return (
-    <>
-      <div className="mb-6 text-sm">
-      </div>
+    <div className="xp">
+      <style>{CSS}</style>
 
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
-            Expenses
-          </h1>
-          <p className="mt-1 text-xs text-deep-green/55">
-            Match Manager Pay is managed separately on the{" "}
-            <Link
-              href="/admin/finance/manager-pay"
-              className="font-bold text-mint-hover hover:underline"
-            >
-              Manager Pay page
-            </Link>
-            .
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={openBatch}
-          className="inline-flex items-center gap-2 rounded-full bg-mint px-5 py-2 text-sm font-bold text-deep-green hover:bg-mint-hover"
-        >
-          <Plus size={16} aria-hidden />
-          Add Expense
-        </button>
-      </div>
-
-      {/* View toggle */}
-      <div className="mb-4 inline-flex gap-1 rounded-full border border-cream-line bg-white p-1">
-        {(["rec", "led"] as const).map((v) => (
-          <button
-            key={v}
-            type="button"
-            onClick={() => setView(v)}
-            className={`rounded-full px-4 py-1.5 text-xs font-black transition ${
-              view === v
-                ? "bg-deep-green text-white"
-                : "text-deep-green/55 hover:text-deep-green"
-            }`}
-          >
-            {v === "rec" ? "Recurring" : "Ledger"}
-          </button>
-        ))}
-      </div>
-
-      <div className="mb-5 flex flex-wrap items-end gap-3 rounded-2xl border-[1.5px] border-cream-line bg-white p-4 shadow-md shadow-deep-green/10">
-        {view === "rec" ? (
-          /* THE SECOND PERIOD CONTROL IS GONE. This row was a QUARTER selector with its own
-             All/Jul/Aug/Sep, sitting on a page whose header already names a period — two controls
-             with no relationship, and the grid obeyed this one while every label obeyed the other.
-             The header picker is now the only period control on the page. */
-          <div className="text-[11.5px] leading-snug text-deep-green/50" data-testid="rec-window">
-            Showing <b className="text-deep-green/70">{period.label}</b>
-            {period.months.length > 1 && <> · {period.months.length} months</>}
-            . Greyed columns before it are context and are not in any total.
-          </div>
-        ) : (
-          <>
-            <Filter label="Month">
-              <select
-                value={monthFilter}
-                onChange={(e) => setMonthFilter(e.target.value as MonthFilter)}
-                className="rounded-md border border-cream-line bg-cream-soft px-3 py-1.5 text-sm font-bold text-deep-green focus:border-deep-green focus:outline-none"
-              >
-                <option value="ALL">All months</option>
-                {quarter.months.map((m) => (
-                  <option key={m.key} value={m.key}>
-                    {m.key}
-                  </option>
-                ))}
-                <option value="RANGE">Custom range</option>
-              </select>
-            </Filter>
-
-            {monthFilter === "RANGE" && (
-              <>
-                <Filter label="From">
-                  <input
-                    type="date"
-                    value={rangeFrom}
-                    onChange={(e) => setRangeFrom(e.target.value)}
-                    className="rounded-md border border-cream-line bg-cream-soft px-3 py-1.5 text-sm text-deep-green focus:border-deep-green focus:outline-none"
-                  />
-                </Filter>
-                <Filter label="To">
-                  <input
-                    type="date"
-                    value={rangeTo}
-                    onChange={(e) => setRangeTo(e.target.value)}
-                    className="rounded-md border border-cream-line bg-cream-soft px-3 py-1.5 text-sm text-deep-green focus:border-deep-green focus:outline-none"
-                  />
-                </Filter>
-              </>
-            )}
-          </>
-        )}
-
-        <Filter label="City">
-          <select
-            value={cityFilter}
-            onChange={(e) => setCityFilter(e.target.value)}
-            className="rounded-md border border-cream-line bg-cream-soft px-3 py-1.5 text-sm font-bold text-deep-green focus:border-deep-green focus:outline-none"
-          >
-            {cityOptions.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
+      {/* ── HEADER: the page's own month control (the shell's FINANCE title and period bar are off) ── */}
+      <div className="xp-top">
+        <h1 className="font-display">Expenses</h1>
+        <span className="xp-nav" data-testid="month-nav">
+          <button type="button" className="arw" data-testid="month-prev" aria-label="Previous month" onClick={() => setPeriod(stepPeriod(period, -1, now))}>‹</button>
+          <span className="mo" data-testid="month">{mon} {year}</span>
+          <button type="button" className="arw" data-testid="month-next" aria-label="Next month" onClick={() => setPeriod(stepPeriod(period, 1, now))}>›</button>
+          {!(now.getFullYear() === year && now.getMonth() === month0) && (
+            <a className="tm" role="button" tabIndex={0} data-testid="this-month" onClick={() => setPeriod(currentPeriod("month", now))}
+              onKeyDown={(e) => { if (e.key === "Enter") setPeriod(currentPeriod("month", now)); }}>This month</a>
+          )}
+        </span>
+        <span className="sp" />
+        <label className="xp-city">City
+          <select data-testid="city-filter" value={city} onChange={(e) => setCity(e.target.value)}>
+            {cityOptions.map((c) => <option key={c} value={c}>{c === ALL_CITIES ? "All cities" : c}</option>)}
           </select>
-        </Filter>
-
-
+        </label>
       </div>
 
-      {/* ── THE CATEGORIES ARE THE CONTROL ───────────────────────────────────────────────────── */}
-      <div className="mb-5">
-        <div className="mb-2 flex items-baseline gap-3">
-          <span className="text-[9.5px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">
-            Show
-          </span>
-          <button type="button" className={chipAct} onClick={() => setCats(new Set(selectableCategories))}>All</button>
-          <button type="button" className={chipAct} onClick={() => setCats(new Set())}>None</button>
-          <button type="button" className={chipAct}
-            onClick={() => setCats(new Set(selectableCategories.filter((c) => (categorySpend.get(c) ?? 0) !== 0)))}>
-            Only with spend
-          </button>
+      {/* ── SUMMARY BAND ─────────────────────────────────────────────────────────────────────── */}
+      <section className="xp-band" data-testid="summary">
+        <div className="xp-tot">
+          <span className="k">{selected ? selected : `Spent · ${mon} ${year}`}</span>
+          <b className="big" data-testid="month-total" data-total={bigNumber}>{money(bigNumber)}</b>
+          {share != null && <span className="sh" data-testid="share">{share}% of the month</span>}
+          {includesMatchPay && <span className="note" data-testid="mmp-note">includes match manager pay</span>}
         </div>
-        <div className="flex flex-wrap gap-[7px]">
-          {selectableCategories.map((c) => {
-            const spend = categorySpend.get(c) ?? 0;
-            const on = activeCats.has(c);
-            // DIM = no spend this period. Still tappable — off and unavailable must not look alike.
-            const dim = spend === 0;
-            return (
-              <button
-                key={c}
-                type="button"
-                aria-pressed={on}
-                data-testid="expense-cat-chip"
-                onClick={() => {
-                  const next = new Set(activeCats);
-                  if (next.has(c)) next.delete(c); else next.add(c);
-                  setCats(next);
-                }}
-                className={
-                  "inline-flex min-h-[36px] items-center gap-[7px] rounded-full border px-3 py-1 text-[12.5px] transition " +
-                  (on
-                    ? "border-[#d5ded8] bg-[#f2f5f3] font-bold text-deep-green"
-                    : dim
-                      ? "border-[#eef2ef] bg-white font-semibold text-deep-green/25"
-                      : "border-cream-line bg-white font-semibold text-deep-green/55")
-                }
-              >
-                {c}
-                <span className={"text-[11.5px] font-bold tabular-nums " + (on ? "text-deep-green/60" : "text-deep-green/25")}>
-                  {spend === 0 ? "$0" : fmtMoney(spend)}
-                </span>
-              </button>
-            );
-          })}
+        <div className="xp-bar" data-testid="split-bar" aria-hidden>
+          {month.total > 0 && month.categories.filter((c) => c.total > 0).map((c) => (
+            <i key={c.name} style={{ width: `${(c.total / month.total) * 100}%`, background: c.color, opacity: selected && selected !== c.name ? 0.25 : 1 }} title={`${c.name} ${money(c.total)}`} />
+          ))}
         </div>
-      </div>
-
-
-      {view === "rec" && (
-        <>
-          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-            <div className="text-xs text-deep-green/60">
-              Grouped by city + category + vendor. Click a cell to edit that
-              month · click a gap to fill it.
-            </div>
-            <div className="text-xs font-bold text-deep-green/70">
-              {flags.gaps > 0 && (
-                <span className="text-amber-700">
-                  {flags.gaps} gap{flags.gaps === 1 ? "" : "s"}
-                </span>
-              )}
-              {flags.gaps > 0 && flags.changed > 0 && " · "}
-              {flags.changed > 0 && (
-                <span>
-                  {flags.changed} amount change{flags.changed === 1 ? "" : "s"}
-                </span>
-              )}
-              {flags.gaps === 0 && flags.changed === 0 && "Nothing unexpected this quarter"}
-            </div>
-          </div>
-          <RecurringExpensesGrid
-            series={series}
-            columns={columns}
-            colTotals={colTot}
-            grandTotal={grandTotal}
-            // The Total column must NAME the window it sums. A column headed plain TOTAL sitting
-            // beside context columns it excludes is the bug, not the columns.
-            windowLabel={period.grain === "month" ? period.label.split(" ")[0].slice(0, 3).toUpperCase() : period.label.toUpperCase()}
-            onEditRow={openEdit}
-            onOpenCell={(s, cell) => setMultiCell({ series: s, cell })}
-            onFillCell={fillCell}
-          />
-        </>
-      )}
-
-      {view === "led" && (
-      <section className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead className="bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
-              <tr className="border-b border-cream-line">
-                <Th
-                  label="Date"
-                  active={sortKey === "date"}
-                  dir={sortDir}
-                  onClick={() => toggleSort("date")}
-                />
-                <Th
-                  label="City"
-                  active={sortKey === "city"}
-                  dir={sortDir}
-                  onClick={() => toggleSort("city")}
-                />
-                <Th
-                  label="Category"
-                  active={sortKey === "category"}
-                  dir={sortDir}
-                  onClick={() => toggleSort("category")}
-                />
-                <Th
-                  label="Vendor"
-                  active={sortKey === "vendor"}
-                  dir={sortDir}
-                  onClick={() => toggleSort("vendor")}
-                />
-                <Th
-                  label="Amount"
-                  align="right"
-                  active={sortKey === "amount"}
-                  dir={sortDir}
-                  onClick={() => toggleSort("amount")}
-                />
-                <th className="px-3 py-2 text-left">Notes</th>
-                <th className="px-3 py-2 text-right">&nbsp;</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading && sorted.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={7}
-                    className="px-3 py-8 text-center text-sm text-deep-green/55"
-                  >
-                    Loading expenses…
-                  </td>
-                </tr>
-              ) : sorted.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={7}
-                    className="px-3 py-8 text-center text-sm text-deep-green/55"
-                  >
-                    No expense rows match these filters.
-                  </td>
-                </tr>
-              ) : (
-                sorted.map((row) => (
-                  <tr
-                    key={row.id}
-                    className="group border-t border-cream-line/40 hover:bg-cream-soft/50"
-                  >
-                    <td className="whitespace-nowrap px-3 py-2 font-mono tabular-nums text-deep-green">
-                      {row.date}
-                    </td>
-                    <td className="px-3 py-2 text-deep-green">
-                      {!row.city || row.city === "Company-wide" ? (
-                        <span className="text-deep-green/45">
-                          Company-wide
-                        </span>
-                      ) : (
-                        row.city
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-deep-green/85">
-                      {row.category}
-                    </td>
-                    <td className="px-3 py-2 text-deep-green/65">
-                      {row.vendor ?? ""}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono font-bold tabular-nums text-coral">
-                      {fmtMoney(row.amount)}
-                    </td>
-                    <td className="max-w-[280px] truncate px-3 py-2 text-deep-green/65">
-                      {row.notes ?? ""}
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      {row.manual_entry ? (
-                        <div className="inline-flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
-                          <button
-                            type="button"
-                            onClick={() => openEdit(row)}
-                            className="rounded-full p-1 text-deep-green/60 hover:bg-cream-soft hover:text-deep-green"
-                            aria-label="Edit row"
-                            title="Edit"
-                          >
-                            <Pencil size={14} aria-hidden />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setDeleteRow(row)}
-                            className="rounded-full p-1 text-coral/70 hover:bg-coral-soft/50 hover:text-coral"
-                            aria-label="Delete row"
-                            title="Delete"
-                          >
-                            <Trash2 size={14} aria-hidden />
-                          </button>
-                        </div>
-                      ) : (
-                        <span
-                          title="Imported from CSV — re-upload to modify"
-                          className="inline-flex items-center text-deep-green/30"
-                        >
-                          <Lock size={12} aria-hidden />
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-        <div className="flex flex-wrap items-baseline justify-between gap-2 border-t border-cream-line/60 bg-cream-soft/40 px-4 py-3 text-xs text-deep-green/70">
-          <div>
-            Showing{" "}
-            <span className="font-mono font-bold tabular-nums text-deep-green">
-              {filtered.length.toLocaleString()}
-            </span>{" "}
-            of{" "}
-            <span className="font-mono tabular-nums">
-              {allRows.length.toLocaleString()}
-            </span>{" "}
-            rows
-          </div>
-          <div>
-            Total Amount:{" "}
-            <span className="font-mono font-bold tabular-nums text-coral">
-              {fmtMoney(totalAmount, true)}
-            </span>
-          </div>
+        <div className="xp-bubbles" data-testid="bubbles">
+          {allCats.map((c) => (
+            <button key={c.name} type="button" className="bub" data-testid={`bubble-${c.name}`} data-total={c.total}
+              aria-pressed={selected === c.name} data-faded={selected != null && selected !== c.name ? "" : undefined}
+              onClick={() => setSelected((s) => (s === c.name ? null : c.name))}>
+              <span className="dot" style={{ background: categoryColor(c.name) }} />{c.name} <b>{money(c.total)}</b>
+            </button>
+          ))}
         </div>
       </section>
-      )}
+
+      {/* ── THE ADD ROW ──────────────────────────────────────────────────────────────────────── */}
+      <form className="xp-add" data-testid="add-row" onSubmit={(e) => { e.preventDefault(); void submitAdd(); }}>
+        <input className="w" data-testid="add-what" placeholder="What or who" value={add.what} onChange={(e) => setAdd({ ...add, what: e.target.value })} />
+        <select data-testid="add-category" value={add.category} onChange={(e) => setAdd({ ...add, category: e.target.value })}>
+          <option value="">Category</option>
+          {addableCats.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <span className="amt">$<input data-testid="add-amount" inputMode="decimal" placeholder="Amount" value={add.amount} onChange={(e) => setAdd({ ...add, amount: e.target.value })} /></span>
+        <select data-testid="add-how" value={add.how} onChange={(e) => setAdd({ ...add, how: e.target.value as "monthly" | "once" })}>
+          <option value="monthly">Every month</option>
+          <option value="once">Once</option>
+        </select>
+        <select data-testid="add-city" value={add.city} onChange={(e) => setAdd({ ...add, city: e.target.value })}>
+          <option value="">City (optional)</option>
+          {CITY_DISPLAY.filter((c) => c !== COMPANY_WIDE).map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        {add.how === "monthly" ? (
+          <label className="day">Day
+            <input data-testid="add-day" type="number" min={1} max={31} value={add.day} onChange={(e) => setAdd({ ...add, day: e.target.value })} />
+          </label>
+        ) : (
+          <input data-testid="add-date" type="date" value={add.date} onChange={(e) => setAdd({ ...add, date: e.target.value })} />
+        )}
+        <button type="submit" className="go" data-testid="add-save" disabled={adding}>{adding ? "Adding…" : "Add"}</button>
+        <a className="more" role="button" tabIndex={0} data-testid="more-options" onClick={() => { setBatchSeed(null); setBatchOpen(true); }}
+          onKeyDown={(e) => { if (e.key === "Enter") { setBatchSeed(null); setBatchOpen(true); } }}>More options</a>
+        {addMsg && <div className={`msg${addMsg.ok ? "" : " bad"}`} data-testid="add-msg">{addMsg.text}</div>}
+        {add.how === "monthly" && !addMsg && <div className="hint">Every month: {mon} {year} and the next 11 months, on that day. A month that already has this line is skipped.</div>}
+      </form>
+
+      {/* ── ONE LIST, GROUPED BY CATEGORY ────────────────────────────────────────────────────── */}
+      {loading && !data && <div className="xp-card xp-empty">Loading expenses…</div>}
+      {data && shown.length === 0 && <div className="xp-card xp-empty">{selected ? `Nothing in ${selected} for ${mon}.` : `No expenses for ${mon} ${year}.`}</div>}
+      {shown.map((c) => (
+        <section key={c.name} className="xp-card" data-testid={`cat-${c.name}`} data-total={c.total}>
+          <div className="ch">
+            <span className="dot" style={{ background: c.color }} /><b>{c.name}</b>
+            {c.name === MATCH_PAY && <Link className="lnk" href="/admin/finance/manager-pay">Manager Pay page</Link>}
+            <span className="sp" />
+            <b className="ct">{money(c.total)}</b>
+          </div>
+          {c.lines.map((l) => {
+            // A line not booked yet this month is a gap to fill, not a change: no "−$X vs Sep".
+            const diff = l.thisRows.length ? changeText(l, month.prevKey) : null;
+            const single = l.thisRows.length === 1 ? l.thisRows[0] : null;
+            const editable = !l.auto && !l.locked && !!single && single.manual_entry === true;
+            return (
+              <div key={l.key} className="ln" data-testid="line" data-auto={l.auto ?? undefined} data-this={l.thisAmount}>
+                <div className="nm">
+                  <b>{l.auto && <span className="atag">auto</span>}{l.label}</b>
+                  <small>{l.city || "Company-wide"} · {l.frequency}{l.locked && !l.auto ? " · imported" : ""}</small>
+                </div>
+                <span className="last" title={`${prevShort}`}>{l.lastRows.length ? money(l.lastAmount) : "—"}<small> {prevShort}</small></span>
+                <span className="cur">
+                  {editKey === l.key ? (
+                    <input autoFocus className="pill-in" data-testid="pill-input" inputMode="decimal" value={editVal}
+                      onChange={(e) => setEditVal(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { e.preventDefault(); skipBlur.current = true; void commitEdit(l); }
+                        if (e.key === "Escape") { e.preventDefault(); skipBlur.current = true; setEditKey(null); }
+                      }}
+                      onBlur={() => { if (skipBlur.current) { skipBlur.current = false; return; } void commitEdit(l); }} />
+                  ) : (
+                    <button type="button" data-testid="pill"
+                      className={`pill ${l.thisRows.length === 0 ? "gap" : Math.abs(l.thisAmount - l.lastAmount) < 0.005 ? "same" : "chg"}${editable || l.thisRows.length !== 1 ? "" : " ro"}`}
+                      title={l.auto ? (l.auto === "match-pay" ? "From the Manager Pay page — read-only" : "From the Meta sync — read-only") : l.locked ? "Imported — read-only" : l.thisRows.length === 0 ? `Add ${mon}` : l.thisRows.length > 1 ? `${l.thisRows.length} rows this month` : "Click to change"}
+                      onClick={() => {
+                        if (l.auto || l.locked) return;
+                        if (l.thisRows.length === 0) { setBatchSeed({ city: l.city ?? "Company-wide", category: l.category, vendor: l.vendor ?? "", month: monthKey }); setBatchOpen(true); return; }
+                        if (l.thisRows.length > 1) { setMulti(l); return; }
+                        if (editable) { setEditErr(null); setEditVal(String(single!.amount)); setEditKey(l.key); }
+                      }}>
+                      {(l.auto || l.locked) && <Lock size={10} aria-hidden />}{l.thisRows.length ? money(l.thisAmount) : l.auto || l.locked ? "—" : "+ add"}
+                    </button>
+                  )}
+                  {diff && <small className="diff" data-testid="diff">{diff}</small>}
+                  {editErr?.key === l.key && <small className="err">{editErr.text}</small>}
+                </span>
+                <span className="act">
+                  {editable && (
+                    <>
+                      <button type="button" className="mn" aria-label="More" onClick={() => setMenuKey((k) => (k === l.key ? null : l.key))}><MoreHorizontal size={14} aria-hidden /></button>
+                      {menuKey === l.key && (
+                        <span className="menu">
+                          <button type="button" onClick={() => openEdit(single!)}><Pencil size={12} aria-hidden /> Edit date, notes…</button>
+                          <button type="button" className="del" onClick={() => { setMenuKey(null); setDeleteRow(single!); }}><Trash2 size={12} aria-hidden /> Delete {mon.slice(0, 3)}</button>
+                        </span>
+                      )}
+                    </>
+                  )}
+                </span>
+              </div>
+            );
+          })}
+        </section>
+      ))}
 
       <BatchExpenseDrawer
         open={batchOpen}
         quarter={quarter}
         expenses={allRows}
         cities={CITY_DISPLAY}
-        categories={selectableCategories}
+        categories={addableCats}
         appUser={appUser}
         seed={batchSeed}
         onClose={() => setBatchOpen(false)}
         onDone={refetchFinanceData}
       />
 
-      <MultiCellModal
-        data={multiCell}
-        onClose={() => setMultiCell(null)}
-        onEdit={(row) => {
-          setMultiCell(null);
-          openEdit(row);
-        }}
-        onDelete={(row) => {
-          setMultiCell(null);
-          setDeleteRow(row);
-        }}
-      />
+      {multi && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-deep-green/40 p-4" onClick={() => setMulti(null)}>
+          <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-cream-line px-5 py-4">
+              <div>
+                <div className="text-sm font-black text-deep-green">{multi.label}</div>
+                <div className="text-xs text-deep-green/55">{multi.city ?? "Company-wide"} · {multi.category} · {monthKey} · {multi.thisRows.length} rows</div>
+              </div>
+              <button type="button" onClick={() => setMulti(null)} className="text-2xl leading-none text-deep-green/50 hover:text-deep-green" aria-label="Close">×</button>
+            </div>
+            <div className="max-h-[320px] divide-y divide-cream-line/60 overflow-auto">
+              {multi.thisRows.map((row) => (
+                <div key={row.id} className="flex items-center gap-3 px-5 py-3 text-xs">
+                  <span className="font-mono tabular-nums text-deep-green">{row.date}</span>
+                  <span className="flex-1 truncate text-deep-green/55">{row.notes ?? ""}</span>
+                  <span className="font-mono font-bold tabular-nums text-coral">{money(row.amount)}</span>
+                  {row.manual_entry ? (
+                    <span className="flex gap-1">
+                      <button type="button" onClick={() => { setMulti(null); openEdit(row); }} className="rounded-full p-1 text-deep-green/60 hover:bg-cream-soft hover:text-deep-green" aria-label="Edit row"><Pencil size={13} aria-hidden /></button>
+                      <button type="button" onClick={() => { setMulti(null); setDeleteRow(row); }} className="rounded-full p-1 text-coral/70 hover:bg-coral-soft/50 hover:text-coral" aria-label="Delete row"><Trash2 size={13} aria-hidden /></button>
+                    </span>
+                  ) : (
+                    <span title="Imported — read-only" className="text-deep-green/30"><Lock size={12} aria-hidden /></span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       <ExpenseRowEditor
         open={editorOpen}
-        mode={editorMode}
+        mode="edit"
         initial={editorRow}
-        knownCategories={selectableCategories}
+        knownCategories={addableCats}
         onClose={() => setEditorOpen(false)}
         onSubmit={handleSubmit}
-        onDelete={(row) => {
-          // Close the editor first so the confirmation is the only thing on screen. Leaving a form
-          // full of half-typed edits behind a delete prompt invites confirming the wrong thing.
-          setEditorOpen(false);
-          setDeleteRow(row);
-        }}
+        onDelete={(row) => { setEditorOpen(false); setDeleteRow(row); }}
       />
 
       <ConfirmDeleteDialog
@@ -847,159 +451,72 @@ export default function ExpenseAdminView() {
         onCancel={() => setDeleteRow(null)}
         onConfirm={handleDelete}
       />
-    </>
-  );
-}
-
-function Filter({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="block">
-      <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-deep-green/55">
-        {label}
-      </div>
-      {children}
-    </label>
-  );
-}
-
-function Seg({
-  on,
-  onClick,
-  children,
-}: {
-  on: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-md px-3 py-1.5 text-xs font-black transition ${
-        on ? "bg-deep-green text-white" : "text-deep-green/60 hover:bg-cream"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
-// Inspector for a month-cell that holds more than one fin_expenses row (recon
-// 0c). The grid never silently sums into an editor — it opens this list so the
-// operator edits/deletes a specific underlying row.
-function MultiCellModal({
-  data,
-  onClose,
-  onEdit,
-  onDelete,
-}: {
-  data: { series: RecurringSeries; cell: RecurringCell } | null;
-  onClose: () => void;
-  onEdit: (row: FinExpense) => void;
-  onDelete: (row: FinExpense) => void;
-}) {
-  if (!data) return null;
-  const { series, cell } = data;
-  return (
-    <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-deep-green/40 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-cream-line px-5 py-4">
-          <div>
-            <div className="text-sm font-black text-deep-green">{series.label}</div>
-            <div className="text-xs text-deep-green/55">
-              {series.city ?? "Company-wide"} · {series.category} · {cell.month} ·{" "}
-              {cell.rows.length} rows
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-2xl leading-none text-deep-green/50 hover:text-deep-green"
-            aria-label="Close"
-          >
-            ×
-          </button>
-        </div>
-        <div className="max-h-[320px] divide-y divide-cream-line/60 overflow-auto">
-          {cell.rows.map((row) => (
-            <div key={row.id} className="flex items-center gap-3 px-5 py-3 text-xs">
-              <span className="font-mono tabular-nums text-deep-green">{row.date}</span>
-              <span className="flex-1 truncate text-deep-green/55">{row.notes ?? ""}</span>
-              <span className="font-mono font-bold tabular-nums text-coral">
-                ${row.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-              {row.manual_entry ? (
-                <span className="flex gap-1">
-                  <button
-                    type="button"
-                    onClick={() => onEdit(row)}
-                    className="rounded-full p-1 text-deep-green/60 hover:bg-cream-soft hover:text-deep-green"
-                    aria-label="Edit row"
-                  >
-                    <Pencil size={13} aria-hidden />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onDelete(row)}
-                    className="rounded-full p-1 text-coral/70 hover:bg-coral-soft/50 hover:text-coral"
-                    aria-label="Delete row"
-                  >
-                    <Trash2 size={13} aria-hidden />
-                  </button>
-                </span>
-              ) : (
-                <span title="Imported — read-only" className="text-deep-green/30">
-                  <Lock size={12} aria-hidden />
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }
 
-function Th({
-  label,
-  align = "left",
-  active,
-  dir,
-  onClick,
-}: {
-  label: string;
-  align?: "left" | "right";
-  active: boolean;
-  dir: SortDir;
-  onClick: () => void;
-}) {
-  return (
-    <th
-      onClick={onClick}
-      className={`cursor-pointer select-none px-3 py-2 ${
-        align === "right" ? "text-right" : "text-left"
-      } ${active ? "text-deep-green" : ""} hover:bg-cream`}
-    >
-      <span
-        className={`inline-flex items-center gap-1 ${
-          align === "right" ? "justify-end" : ""
-        }`}
-      >
-        {label}
-        {active && <span aria-hidden>{dir === "desc" ? "▼" : "▲"}</span>}
-      </span>
-    </th>
-  );
-}
+const CSS = `
+.xp{--line:#e3e7e1;--ink:#10231a;--ink-2:#44564c;--muted:#7a8a81;display:grid;gap:12px;color:var(--ink)}
+.xp>*{min-width:0}
+.xp-top{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.xp-top h1{margin:0;font-size:28px;font-weight:800;text-transform:uppercase}
+.xp-nav{display:inline-flex;align-items:center;gap:6px}
+.xp-nav .mo{font-weight:800;font-size:18px}
+.xp-nav .arw{border:1px solid var(--line);background:#fff;border-radius:8px;width:28px;height:28px;font:inherit;font-size:16px;line-height:1;cursor:pointer;color:var(--ink-2)}
+.xp-nav .tm{font-size:12.5px;font-weight:700;color:var(--ink-2);text-decoration:underline;cursor:pointer;margin-left:4px}
+.xp .sp{flex:1}
+.xp-city{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+.xp-city select{font:inherit;font-size:13px;text-transform:none;letter-spacing:0;font-weight:600;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:4px 8px;background:#fff}
+.xp-band{background:#0f2a1e;color:#fff;border-radius:14px;padding:14px 16px;display:grid;gap:10px}
+.xp-tot{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.xp-tot .k{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:#a9bdb1;font-weight:700}
+.xp-tot .big{font-size:30px;font-weight:800;letter-spacing:-.4px;font-variant-numeric:tabular-nums}
+.xp-tot .sh{font-size:13px;color:#d6e4dc;font-weight:700}
+.xp-tot .note{font-size:11.5px;color:#a9bdb1;font-style:italic}
+.xp-bar{display:flex;height:6px;border-radius:999px;overflow:hidden;background:#24402f}
+.xp-bar i{display:block;height:100%}
+.xp-bubbles{display:flex;flex-wrap:wrap;gap:6px}
+.xp-bubbles .bub{display:inline-flex;align-items:center;gap:6px;border:1px solid #2c4a3a;background:#173526;color:#fff;border-radius:999px;padding:4px 11px;font:inherit;font-size:12px;font-weight:700;cursor:pointer}
+.xp-bubbles .bub b{font-variant-numeric:tabular-nums}
+.xp-bubbles .bub .dot{width:8px;height:8px;border-radius:2px;display:inline-block}
+.xp-bubbles .bub[aria-pressed="true"]{background:#fff;color:var(--ink);border-color:#fff}
+.xp-bubbles .bub[data-faded]{opacity:.38}
+.xp-add{display:flex;flex-wrap:wrap;align-items:center;gap:8px;background:#e9f7ee;border:1px solid #c9ead5;border-radius:12px;padding:10px 12px}
+.xp-add input,.xp-add select{font:inherit;font-size:13.5px;border:1px solid #c9d8cd;border-radius:8px;padding:6px 8px;background:#fff;color:var(--ink)}
+.xp-add .w{flex:1;min-width:180px}
+.xp-add .amt{display:inline-flex;align-items:center;gap:3px;font-weight:700}.xp-add .amt input{width:96px}
+.xp-add .day{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;color:var(--ink-2)}.xp-add .day input{width:58px}
+.xp-add .go{border:0;background:#22c55e;color:#06301d;font:inherit;font-weight:800;font-size:13px;padding:7px 16px;border-radius:9px;cursor:pointer}
+.xp-add .go:disabled{opacity:.6;cursor:default}
+.xp-add .more{font-size:12px;font-weight:700;color:var(--ink-2);text-decoration:underline;cursor:pointer}
+.xp-add .msg{flex-basis:100%;font-size:12.5px;color:#15532d;font-weight:600}.xp-add .msg.bad{color:#b42318}
+.xp-add .hint{flex-basis:100%;font-size:11.5px;color:var(--muted)}
+.xp-card{background:#fff;border:1px solid var(--line);border-radius:14px;overflow:visible}
+.xp-empty{padding:28px;text-align:center;color:var(--muted)}
+.xp-card .ch{display:flex;align-items:center;gap:8px;padding:11px 16px;border-bottom:1px solid #eef1ec}
+.xp-card .ch .dot{width:10px;height:10px;border-radius:3px;display:inline-block}
+.xp-card .ch .ct{font-variant-numeric:tabular-nums;font-size:15px}
+.xp-card .ch .lnk{font-size:12px;font-weight:700;color:#1a7f4b;text-decoration:underline}
+.xp .ln{display:grid;grid-template-columns:minmax(0,1fr) 110px 190px 34px;align-items:center;gap:10px;padding:8px 16px;border-bottom:1px solid #f3f5f2}
+.xp .ln:last-child{border-bottom:0}
+.xp .ln .nm b{display:block;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.xp .ln .nm small{display:block;font-size:11.5px;color:var(--muted)}
+.xp .atag{display:inline-block;font-size:9px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:#7a4e06;background:#fde9bf;border-radius:4px;padding:0 4px;margin-right:5px;vertical-align:1px}
+.xp .ln .last{font-size:12px;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+.xp .ln .last small{font-size:10.5px}
+.xp .ln .cur{display:flex;flex-direction:column;align-items:flex-end;gap:2px}
+.xp .pill{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:3px 11px;font:inherit;font-size:13px;font-weight:800;font-variant-numeric:tabular-nums;cursor:pointer;border:1px solid transparent}
+.xp .pill.same{background:#dff5e6;color:#15803d}
+.xp .pill.chg{background:#e3eefb;color:#1d4f91}
+.xp .pill.gap{background:#fff;border:1px dashed #cfd6d1;color:var(--muted);font-weight:700}
+.xp .pill.ro{cursor:default}
+.xp .pill-in{width:110px;text-align:right;font:inherit;font-size:13px;font-weight:700;border:1px solid #1d4f91;border-radius:999px;padding:3px 10px}
+.xp .diff{font-size:11px;color:#1d4f91;font-weight:700}
+.xp .err{font-size:11px;color:#b42318;font-weight:700}
+.xp .act{position:relative;text-align:right}
+.xp .mn{border:0;background:transparent;color:var(--muted);cursor:pointer;padding:2px;border-radius:6px}.xp .mn:hover{background:#f3f5f2;color:var(--ink)}
+.xp .menu{position:absolute;right:0;top:24px;z-index:20;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);display:grid;min-width:170px;padding:4px}
+.xp .menu button{display:flex;align-items:center;gap:6px;border:0;background:transparent;font:inherit;font-size:12.5px;padding:7px 10px;border-radius:7px;cursor:pointer;text-align:left;color:var(--ink)}
+.xp .menu button:hover{background:#f3f5f2}.xp .menu .del{color:#b42318}
+@media (max-width:760px){.xp .ln{grid-template-columns:minmax(0,1fr) 120px 30px}.xp .ln .last{display:none}}
+`;
