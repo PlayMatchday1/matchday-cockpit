@@ -21,8 +21,7 @@ import {
   type FieldCostSplit,
 } from "@/lib/financeCosts";
 import { hasKickedOff } from "@/lib/fieldEconomics";
-import { fieldCostTotals, isInactiveFieldCostRow } from "@/lib/fieldCostActivity";
-import { fieldCostPayeesIn } from "@/lib/opexSources";
+import { fieldCostTotals, inactiveFieldCostKeys, rateMismatches } from "@/lib/fieldCostActivity";
 import { isSoccerCentralTwoPitch } from "@/lib/soccerCentralTwoPitch";
 import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
@@ -448,14 +447,10 @@ export default function FieldCostsView() {
    * keep and every total below sums it, so a hidden row can never move a figure (it has no matches
    * and $0 by definition; scripts/field-cost-activity-test.ts). The toggle is not persisted. */
   const [showInactive, setShowInactive] = useState(false);
-  const inactiveKeys = useMemo(() => {
-    const out = new Set<string>();
-    const p = monthParts(month);
-    if (!data || !p) return out;
-    const payees = fieldCostPayeesIn(data, p.year, p.month0, new Date(nowMs));
-    for (const r of filtered) if (isInactiveFieldCostRow(data, r, month, payees)) out.add(r.key);
-    return out;
-  }, [data, filtered, month, nowMs]);
+  const inactiveKeys = useMemo(
+    () => (data ? inactiveFieldCostKeys(data, filtered, month, new Date(nowMs)) : new Set<string>()),
+    [data, filtered, month, nowMs],
+  );
   const shown = useMemo(
     () => (showInactive ? filtered : filtered.filter((r) => !inactiveKeys.has(r.key))),
     [filtered, inactiveKeys, showInactive],
@@ -743,6 +738,7 @@ export default function FieldCostsView() {
                         month={month}
                         matchDays={md}
                         inactive={inactiveKeys.has(row.key)}
+                        rateMismatch={data ? rateMismatches(data, row) : []}
                       />
                       {expanded && venue && data && (
                         <VenuePanel
@@ -960,6 +956,7 @@ function FieldCostTableRow({
   month,
   matchDays,
   inactive,
+  rateMismatch,
 }: {
   index: number;
   row: FieldCostRow;
@@ -972,6 +969,8 @@ function FieldCostTableRow({
   matchDays: { d: number; amount: number }[];
   /** Shown only with "Show inactive" on: one step back in ink, and says so. */
   inactive: boolean;
+  /** Legs whose cost per match and invoice rate disagree (fieldCostActivity.rateMismatches). */
+  rateMismatch: { venueId: number; name: string; cost: number; invoice: number }[];
 }) {
   const model = modelOf(row);
   const p = monthParts(month);
@@ -1018,6 +1017,16 @@ function FieldCostTableRow({
           <small>{calcText(row)}</small>
         )}
         {hasNoRate(row, venue) && <small className="norate">no rate</small>}
+        {rateMismatch.map((m) => (
+          <small
+            key={m.venueId}
+            className="norate"
+            data-testid={`rates-differ-${index}`}
+            title="This venue bills per match, but its cost per match (Match P&L, Cities) and its invoice rate (this page) are different numbers. Check which one is current."
+          >
+            rates differ{m.venueId !== row.primaryVenueId ? ` (${m.name})` : ""} · cost {money0(m.cost)} · invoice {money0(m.invoice)}
+          </small>
+        ))}
       </td>
       <td className="when" data-testid={`when-${index}`}>
         <b>{when.b}</b>

@@ -12,9 +12,42 @@
 //      hide a venue that is due to be paid.
 //
 // A venue with matches and a $0 cost (Bob Jones Park, the $0-rate venues) fails 1 and stays.
+//
+// A MONTH AFTER THE CURRENT ONE (Ryan, 2026-10-03): its matches mostly do not exist in MatchDay yet
+// (on Oct 3 the table ended on Nov 1), so the four tests alone hid 40 of 41 venues in November. A
+// venue is inactive in a future month only if it is ALSO inactive in the current month. Past and
+// current months use the four tests alone.
 
-import type { FieldCostRow } from "./financeCosts";
+import { buildFieldCostRows, type FieldCostRow } from "./financeCosts";
+import { fieldCostPayeesIn, monthKeyFor } from "./opexSources";
 import type { FinanceData } from "./useFinanceData";
+
+const MONS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function parts(month: string): { year: number; month0: number } | null {
+  const [m, y] = month.split(" ");
+  const month0 = MONS.indexOf(m);
+  return month0 < 0 || !Number.isFinite(Number(y)) ? null : { year: Number(y), month0 };
+}
+
+/** The keys of the rows to hide for `month`, as of `now`. */
+export function inactiveFieldCostKeys(data: FinanceData, rows: FieldCostRow[], month: string, now: Date): Set<string> {
+  const out = new Set<string>();
+  const p = parts(month);
+  if (!p) return out;
+  const payees = fieldCostPayeesIn(data, p.year, p.month0, now);
+  for (const r of rows) if (isInactiveFieldCostRow(data, r, month, payees)) out.add(r.key);
+  const isFuture = p.year * 12 + p.month0 > now.getFullYear() * 12 + now.getMonth();
+  if (!isFuture || out.size === 0) return out;
+  // Future month: keep hidden only what is inactive in the current month as well.
+  const curKey = monthKeyFor(now.getFullYear(), now.getMonth());
+  const curPayees = fieldCostPayeesIn(data, now.getFullYear(), now.getMonth(), now);
+  const idleNow = new Set<number>();
+  for (const r of buildFieldCostRows(data, curKey as never)) {
+    if (isInactiveFieldCostRow(data, r, curKey, curPayees)) idleNow.add(r.primaryVenueId);
+  }
+  for (const r of rows) if (out.has(r.key) && !idleNow.has(r.primaryVenueId)) out.delete(r.key);
+  return out;
+}
 
 export function isInactiveFieldCostRow(
   data: FinanceData,
@@ -37,4 +70,27 @@ export function fieldCostTotals(rows: FieldCostRow[]): { matches: number; amount
     matches: rows.reduce((a, r) => a + r.matchCount, 0),
     amount: Math.round(rows.reduce((a, r) => a + r.amount, 0) * 100) / 100,
   };
+}
+
+/**
+ * "RATES DIFFER" — a per-match venue whose cost per match (what the pitch costs to run, used by
+ * Match P&L and Cities) and invoice rate (per_match_rate, what Field Costs charges) disagree
+ * (Ryan, 2026-10-03). One entry per leg that disagrees. Exempt: profit-share rows and dashboard-
+ * priced ones (Crossbar), and any leg not billed per match — their two numbers are meant to differ.
+ * A missing value is not a disagreement: a missing invoice rate is the "no rate" flag's job.
+ */
+export function rateMismatches(
+  data: FinanceData,
+  row: FieldCostRow,
+): { venueId: number; name: string; cost: number; invoice: number }[] {
+  if (row.dashboardPriced || row.billingType === "profit_share") return [];
+  const out: { venueId: number; name: string; cost: number; invoice: number }[] = [];
+  for (const id of [row.primaryVenueId, ...row.secondaryVenueIds]) {
+    const v = data.venues.find((x) => x.id === id);
+    if (!v || v.billing_type !== "per_match") continue;
+    if (v.cost_per_match == null || v.per_match_rate == null) continue;
+    if (Math.abs(v.cost_per_match - v.per_match_rate) < 0.005) continue;
+    out.push({ venueId: v.id, name: v.raw_venue_name || v.venue_name, cost: v.cost_per_match, invoice: v.per_match_rate });
+  }
+  return out;
 }

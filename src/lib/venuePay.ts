@@ -193,3 +193,22 @@ export function payResultText(
 
 export const monthName = (m0: number) => MONTH_FULL[m0];
 export const monthShort = (m0: number) => MON3[m0];
+
+/**
+ * COST PER MATCH ON A GIVEN DAY — Match P&L's per-match cost, made weekday-aware (Ryan, 2026-10-03).
+ *
+ * cost_per_match (what a pitch costs to run) and per_match_rate / rate_days (what the venue invoices)
+ * are DIFFERENT columns and both stay. rate_days holds invoice rates, so it is not copied over
+ * cost_per_match; its weekday SURCHARGE is: cost_per_match + (that day's rate − per_match_rate).
+ * ATH Katy: $140 + ($160 − $140) = $160 on a Sunday, $140 otherwise. A venue with no rate_days, no
+ * cost_per_match or no per_match_rate to measure the surcharge from keeps cost_per_match unchanged.
+ * `ymd` is the match's WALL-CLOCK date (YYYY-MM-DD), the same date rate_days is keyed on.
+ */
+export function costPerMatchOn(
+  v: { cost_per_match: number | null; per_match_rate: number | null; rate_days?: DayRate[] | null },
+  ymd: string,
+): number | null {
+  const base = v.cost_per_match ?? null;
+  if (base == null || !v.rate_days || v.rate_days.length === 0 || v.per_match_rate == null) return base;
+  return Math.round((base + rateForYmd(v.rate_days, v.per_match_rate, ymd) - v.per_match_rate) * 100) / 100;
+}

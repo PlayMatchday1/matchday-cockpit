@@ -17,6 +17,8 @@
 
 import { buildFieldCostRows, fieldCostMatchLines, fieldCostSplit, fieldCostSplitText } from "../src/lib/financeCosts";
 import { hasKickedOff } from "../src/lib/fieldEconomics";
+import { costPerMatchOn } from "../src/lib/venuePay";
+import { readFileSync } from "node:fs";
 import { emptyMdapiMemberSpotIndex } from "../src/lib/financeStats";
 import type { FinanceData, FinMasterSchedule } from "../src/lib/useFinanceData";
 
@@ -197,6 +199,29 @@ console.log("\nUNDERLYING MATCHES — each line at the rate it is charged; the l
   is("Plain Pitch does not list a cancellation it is not charged for", fieldCostMatchLines(data, row("Plain Pitch"), MONTH).some((l) => l.cancelled), false);
   is("Twin Pitch lists both legs, each at its own rate", JSON.stringify(fieldCostMatchLines(data, row("Twin Pitch"), MONTH).map((l) => l.rate).sort()), "[120,50]");
   is("a payout venue has no per-match lines", fieldCostMatchLines(data, row("Share Pitch"), MONTH).length, 0);
+}
+
+console.log("\nMATCH P&L — cost per match, weekday-aware (cost_per_match + the venue's weekday surcharge)");
+{
+  const katy = { cost_per_match: 140, per_match_rate: 140, rate_days: [{ days: [0, 1, 2, 3, 4, 5], v: 140 }, { days: [6], v: 160 }] };
+  is("ATH Katy on a Sunday (2026-10-04): $160", costPerMatchOn(katy, "2026-10-04"), 160);
+  is("CONTROL — ATH Katy on a Monday (2026-10-05): $140", costPerMatchOn(katy, "2026-10-05"), 140);
+  // The two columns stay distinct: a venue whose run cost differs from its invoice rate keeps its own
+  // base and only gains the surcharge — it is NOT switched to the invoice rate.
+  const split = { cost_per_match: 114, per_match_rate: 135, rate_days: [{ days: [0, 1, 2, 3, 4, 5], v: 135 }, { days: [6], v: 150 }] };
+  is("cost $114 / invoice $135, Sunday invoice $150: Sunday costs $114 + $15 = $129", costPerMatchOn(split, "2026-10-04"), 129);
+  is("...and a weekday stays $114, never the $135 invoice rate", costPerMatchOn(split, "2026-10-05"), 114);
+  is("no rate_days: cost_per_match unchanged", costPerMatchOn({ cost_per_match: 125, per_match_rate: 105, rate_days: null }, "2026-10-04"), 125);
+  is("no cost_per_match: null, as before", costPerMatchOn({ cost_per_match: null, per_match_rate: 140, rate_days: katy.rate_days }, "2026-10-04"), null);
+  is("no per_match_rate to measure a surcharge from: cost_per_match unchanged", costPerMatchOn({ cost_per_match: 140, per_match_rate: null, rate_days: katy.rate_days }, "2026-10-04"), 140);
+
+  // SOURCE PAIRING, because fetchWeekMatchPnL sits behind Supabase and cannot run in the gate: both
+  // of Match P&L's cost reads (played and cancelled) go through the weekday-aware helper with the
+  // match's own wall-clock start, and neither reads a venue's flat cost_per_match by id any more.
+  const src = readFileSync(new URL("../src/lib/matchPnL.ts", import.meta.url), "utf8");
+  is("Match P&L prices both passes with venueCostPerMatch(venues, baseVenueId, r.match_start)", (src.match(/venueCostPerMatch\(venues, baseVenueId, r\.match_start\)/g) ?? []).length, 2);
+  is("...the helper goes through costPerMatchOn", /costPerMatchOn\(v, matchStartWall\.slice\(0, 10\)\)/.test(src), true);
+  is("NEGATIVE — no two-argument (day-blind) call is left", /venueCostPerMatch\(venues, baseVenueId\)/.test(src), false);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

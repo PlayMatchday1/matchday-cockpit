@@ -14,7 +14,7 @@
 //      shown or hidden. Asserted on the computed totals, both ways.
 
 import { buildFieldCostRows } from "../src/lib/financeCosts";
-import { fieldCostTotals, isInactiveFieldCostRow } from "../src/lib/fieldCostActivity";
+import { fieldCostTotals, inactiveFieldCostKeys, isInactiveFieldCostRow, rateMismatches } from "../src/lib/fieldCostActivity";
 import { BANK_SOURCE, buildOpexCalendarAsOf, fieldCostPayeesIn } from "../src/lib/opexSources";
 import type { FinanceData, FinVenue } from "../src/lib/useFinanceData";
 
@@ -115,6 +115,46 @@ console.log("\nTHE TOGGLE MOVES NO FIGURE");
   is("cost: identical with inactive shown and hidden", off.amount, on.amount);
   is("...and the toggle really removes rows here (2 of 7)", rows.length - inactive.length, 5);
   is("...and the totals are not trivially zero", on.matches > 0 && on.amount > 0, true);
+}
+
+console.log("\nA FUTURE MONTH HIDES ONLY WHAT IS ALSO IDLE NOW (matches there are mostly not created yet)");
+{
+  // December: no venue has a December match in the fixture — exactly what the live table looks like.
+  const dec = buildFieldCostRows(data, "Dec 2026" as never);
+  const decPayees = fieldCostPayeesIn(data, 2026, 11, NOW);
+  const fourTests = dec.filter((r) => isInactiveFieldCostRow(data, r, "Dec 2026", decPayees)).map((r) => r.primaryVenueId).sort();
+  is("CONTROL — the four tests alone would hide Busy Pitch in December (no December matches yet)", fourTests.includes(1), true);
+  const hidden = [...inactiveFieldCostKeys(data, dec, "Dec 2026", NOW)].map((k) => dec.find((r) => r.key === k)!.primaryVenueId).sort();
+  is("December hides only the venues that are idle in October too: Idle Pitch and Idle Pitch Two", JSON.stringify(hidden), "[3,7]");
+  is("...so Busy Pitch, which plays in October, stays visible in December", hidden.includes(1), false);
+  const decOn = fieldCostTotals(dec), decOff = fieldCostTotals(dec.filter((r) => !hidden.includes(r.primaryVenueId)));
+  is("December's totals are identical with the toggle on and off", JSON.stringify(decOff), JSON.stringify(decOn));
+
+  // A PAST month keeps the four tests alone: Busy Pitch has no September matches and nothing to pay.
+  const sep = buildFieldCostRows(data, "Sep 2026" as never);
+  const sepHidden = [...inactiveFieldCostKeys(data, sep, "Sep 2026", NOW)].map((k) => sep.find((r) => r.key === k)!.primaryVenueId);
+  is("a past month (September) uses the rule as built: Busy Pitch, idle in September, is hidden", sepHidden.includes(1), true);
+  const oct = [...inactiveFieldCostKeys(data, rows, MONTH, NOW)].map((k) => rows.find((r) => r.key === k)!.primaryVenueId).sort();
+  is("the current month (October) is unchanged: [3,7]", JSON.stringify(oct), "[3,7]");
+}
+
+console.log("\n\"RATES DIFFER\" — per-match venues whose cost per match and invoice rate disagree");
+{
+  const d = makeData();
+  d.venues = [
+    venue(11, "Westlake Like", { cost_per_match: 114, per_match_rate: 135 }),
+    venue(12, "Katy Like", { cost_per_match: 140, per_match_rate: 140 }),
+    venue(13, "Share Like", { billing_type: "profit_share", cost_per_match: 32, per_match_rate: null }),
+    venue(14, "Flat Like", { billing_type: "monthly_flat", cost_per_match: 32, per_match_rate: 90 }),
+    venue(15, "No Rate Like", { cost_per_match: 40, per_match_rate: null }),
+  ];
+  const rs = buildFieldCostRows(d, MONTH as never);
+  const flag = (id: number) => rateMismatches(d, rs.find((r) => r.primaryVenueId === id)!);
+  is("a per-match venue at $114 cost vs $135 invoice is flagged, with both numbers", JSON.stringify(flag(11).map((m) => [m.cost, m.invoice])), "[[114,135]]");
+  is("CONTROL — equal cost and invoice raise nothing", flag(12).length, 0);
+  is("a profit-share venue is exempt", flag(13).length, 0);
+  is("a flat-rate venue is exempt", flag(14).length, 0);
+  is("a missing invoice rate is not 'differ' (that is the no-rate flag)", flag(15).length, 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

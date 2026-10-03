@@ -73,6 +73,7 @@ const monthKey = async () => (await p.$eval(`${tid("venues")} thead th:nth-child
 const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const openRow = async (i) => { if (await p.locator(tid(`panel-${i}`)).count() === 0) { await p.click(tid(`row-${i}`)); await p.waitForSelector(tid(`panel-${i}`)); } };
+let SUBJ = 0;   // LIVE: the row the panel walk used
 const closeRow = async (i) => { if (await p.locator(tid(`panel-${i}`)).count() === 1) await p.click(tid(`row-${i}`)); };
 ok(true, "instrument ran: table rendered");
 
@@ -80,6 +81,7 @@ const body = await p.textContent("main");
 ok(!/Auto-bill|Slots|One reservation per time slot|MONTHLY FLAT|Monthly flat|KEYED|DPP price|Member price|Player pricing|cadence/i.test(body), "absence: no Auto-bill, Slots, Monthly flat, KEYED, player pricing or cadence dropdowns");
 const tags = await p.$$eval('[data-testid^="tag-"]', e => [...new Set(e.map(x => x.textContent.replace(/ · \$.*/, "")))]);
 ok(JSON.stringify(tags.sort()) === JSON.stringify(["Per match", "Profit share"]), `only two billing tags in the list: ${tags.join(", ")}`);
+if (!LIVE) {
 const heads = await p.$$eval(`${tid("venues")} thead th`, e => e.map(x => (x.childNodes[0]?.textContent || "").trim()));
 ok(JSON.stringify(heads.slice(0, 5)) === JSON.stringify(["Venue", "Billing", "Oct matches", "Oct cost", "Pays on"]), `columns: ${heads.join(" | ")}`);
 
@@ -92,25 +94,10 @@ const words = await p.$eval(`${tid("panel-0")} .pan`, e => e.innerText.split(/\s
 ok(words < 55, `panel has fewer than 55 words (${words})`);
 const labels = await p.$$eval(`${tid("panel-0")} .g .l`, e => e.map(x => x.textContent));
 ok(JSON.stringify(labels) === JSON.stringify(["Billing", "Cancelled", "This month", "Notes"]), `left rows for a one-field venue: ${labels.join(" · ")} (no Fields row)`);
-if (!LIVE) {
 ok(await p.locator(tid("notes")).count() === 1 && (await p.inputValue(tid("notes"))) === "", "a free-text notes box, empty here");
 await p.click(tid("row-0")); await p.click(tid("row-3"));
 ok(/following month/.test(await p.inputValue(tid("notes"))), "Bob Jones Park carries its note");
 await p.click(tid("row-3")); await p.click(tid("row-0"));
-} else {
-  // LIVE: the box shows exactly what fin_venues holds for THIS venue, and switching venues shows the
-  // other venue's note, not a stale one. Subject: row 0, and the first other row with a different note.
-  const names = await rowNames();
-  const v0 = venueOfRow(names[0]);
-  ok(await p.locator(tid("notes")).count() === 1 && !!v0 && (await p.inputValue(tid("notes"))) === (v0.notes ?? ""), `LIVE a free-text notes box showing ${names[0].name}'s stored note (${JSON.stringify(v0?.notes ?? "")})`);
-  const other = names.slice(1).map(n => ({ n, v: venueOfRow(n) })).find(x => x.v && (x.v.notes ?? "") !== "" && (x.v.notes ?? "") !== (v0?.notes ?? ""));
-  ok(!!other, "LIVE positive control: another venue on the page has a different, non-empty note");
-  if (other) {
-    await closeRow(0); await openRow(other.n.i);
-    ok((await p.inputValue(`${tid(`panel-${other.n.i}`)} ${tid("notes")}`)) === other.v.notes, `LIVE ${other.n.name} carries its own note, not row 0's`);
-    await closeRow(other.n.i); await openRow(0);
-  }
-}
 ok(await p.locator(`${tid("panel-0")} select`).count() === 1, "one dropdown only (the billing model)");
 
 // override
@@ -169,6 +156,133 @@ await p.selectOption(tid("model"), "share");
 ok(await p.locator(tid("rate")).count() === 0 && await p.locator(tid("override")).count() === 1 && /Partners/.test(await p.textContent(tid("panel-0"))), "profit share: no rate, keeps the This month box, link to Partners");
 ok(/Profit share/.test(await p.textContent(tid("tag-0"))), "the list tag follows the model");
 await p.selectOption(tid("model"), "match");
+} else {
+// ── LIVE: the same walk through one venue's panel, on a SUBJECT chosen from the data, with every
+// expected value derived from what the page loaded (fin_venues, the overrides, the panel's own
+// underlying-matches table) rather than from the mock's Ann Richards in October.
+const names = await rowNames();
+const monSel = await p.$eval("select", e => e.value);                 // "Oct 2026": the Month filter
+const mon = monSel.split(" ")[0], year = Number(monSel.split(" ")[1]), m0 = MON.indexOf(mon);
+const FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const dim = new Date(Date.UTC(year, m0 + 1, 0)).getUTCDate();
+const wdOf = (d) => (new Date(Date.UTC(year, m0, d)).getUTCDay() + 6) % 7;        // Monday = 0
+const fmt0 = (n) => `$${Math.round(n).toLocaleString("en-US")}`;
+const amt = (s) => Number(String(s).replace(/[$,]/g, ""));
+const heads = await p.$$eval(`${tid("venues")} thead th`, e => e.map(x => (x.childNodes[0]?.textContent || "").trim()));
+ok(JSON.stringify(heads.slice(0, 5)) === JSON.stringify(["Venue", "Billing", `${mon} matches`, `${mon} cost`, "Pays on"]), `LIVE columns for ${monSel}: ${heads.join(" | ")}`);
+
+// THE SUBJECT: a per-match venue on one picked date, not prepaid, one rate, not slot-billed, with
+// matches this month and a computed figure big enough to split. The walk below needs that shape.
+const linksOf = (vid) => [...loaded.fin_venue_fields.values()].filter(l => l.fin_venue_id === vid);
+const ovFor = (vid) => [...loaded.fin_venue_cost_overrides.values()].find(o => o.venue_id === vid && o.month === monSel);
+let S = null;
+for (const n of names) {
+  const v = venueOfRow(n), ps = v?.pay_schedule;
+  if (!v || v.billing_type !== "per_match" || v.rate_days || v.bills_per_reservation || !(v.per_match_rate > 0)) continue;
+  if (ps?.mode !== "dates" || ps.dates.length !== 1 || ps.prepaid) continue;
+  await openRow(n.i);
+  const lines = await p.$$eval(`${tid(`panel-${n.i}`)} ${tid("match-lines")} tbody tr`, rs => rs.map(r => r.dataset.date));
+  const C = num(await p.getAttribute(`${tid(`panel-${n.i}`)} ${tid("override")}`, "placeholder"));
+  if (lines.length > 0 && C >= 100) { S = { ...n, v, lines, C }; break; }
+  await closeRow(n.i);
+}
+ok(!!S, `LIVE positive control: a subject venue for the panel walk (${S ? S.name : "none found"})`);
+if (S) {
+  SUBJ = S.i;
+  const I = S.i, panel = tid(`panel-${I}`), v = S.v, C = S.C, R = v.per_match_rate, D = v.pay_schedule.dates[0].d;
+  const P = await p.getAttribute(`${panel} ${tid("override")}`, "placeholder");
+  const panelH = await p.$eval(`${panel} .pan`, e => e.getBoundingClientRect().height);
+  ok(panelH < 340, `open panel without the matches table is under 340px (${Math.round(panelH)}px)`);
+  const words = await p.$eval(`${panel} .pan`, e => e.innerText.split(/\s+/).filter(w => /[a-z]{3,}/i.test(w)).length);
+  ok(words < 55, `panel has fewer than 55 words (${words})`);
+  const labels = await p.$$eval(`${panel} .g .l`, e => e.map(x => x.textContent));
+  const wantLabels = ["Billing", "Cancelled", "This month", ...(linksOf(v.id).length >= 2 ? ["Fields"] : []), "Notes"];
+  ok(JSON.stringify(labels) === JSON.stringify(wantLabels), `LIVE left rows for ${S.name} (${linksOf(v.id).length} field link(s)): ${labels.join(" · ")}`);
+
+  // notes: the box shows exactly this venue's stored note; another venue shows its own, not a stale one
+  ok(await p.locator(`${panel} ${tid("notes")}`).count() === 1 && (await p.inputValue(`${panel} ${tid("notes")}`)) === (v.notes ?? ""), `LIVE a free-text notes box showing ${S.name}'s stored note (${JSON.stringify(v.notes ?? "")})`);
+  const other = names.filter(n => n.i !== I).map(n => ({ n, v: venueOfRow(n) })).find(x => x.v && (x.v.notes ?? "") !== "" && (x.v.notes ?? "") !== (v.notes ?? ""));
+  ok(!!other, "LIVE positive control: another venue on the page has a different, non-empty note");
+  if (other) {
+    await closeRow(I); await openRow(other.n.i);
+    ok((await p.inputValue(`${tid(`panel-${other.n.i}`)} ${tid("notes")}`)) === other.v.notes, `LIVE ${other.n.name} carries its own note, not ${S.name}'s`);
+    await closeRow(other.n.i); await openRow(I);
+  }
+  ok(await p.locator(`${panel} select`).count() === 1, "one dropdown only (the billing model)");
+
+  // override: flagged when set (from fin_venue_cost_overrides), and reset shows the computed figure
+  if (ovFor(v.id)) {
+    ok((await p.textContent(tid("calc"))).includes(`set by hand · auto ${fmt0(C)}`) && (await p.textContent(`${tid(`row-${I}`)} td.cost`)).includes(`set by hand · computed ${fmt0(C)}`), `LIVE ${S.name}'s hand-set month is flagged in the panel and the list (computed ${fmt0(C)})`);
+    await p.click(`${panel} [data-clear]`);
+  } else {
+    ok(/^auto ·/.test((await p.textContent(tid("calc"))).trim()), `LIVE ${S.name} has nothing set by hand for ${monSel}, and the panel says auto`);
+  }
+  ok(num(await p.getAttribute(`${tid(`row-${I}`)} td.cost`, "data-cost")) === C && (await p.getAttribute(tid("override"), "placeholder")) === P, `LIVE with nothing set by hand the cost is the computed ${fmt0(C)} and the empty box shows it`);
+
+  // calendar: pick dates
+  ok(await p.locator(`${tid("cal")} .d[data-d]`).count() === dim && await p.locator(`${tid("cal")} .d.on`).count() === 1 && await p.locator(`${tid(`cal-${D}`)}.on`).count() === 1, `LIVE calendar shows ${FULL[m0]} (${dim} days) with the ${D}th selected, as the pay schedule says`);
+  const matchDays = new Set(S.lines.map(d => d.slice(8, 10))).size;
+  ok(await p.locator(`${tid("cal")} .d.m`).count() === matchDays, `LIVE the ${matchDays} match days in the matches table are marked on the calendar`);
+  ok((await p.textContent(tid("when-calc"))).includes(`${fmt0(C)} ${mon} ${D}`), `LIVE result line: ${fmt0(C)} ${mon} ${D}`);
+  const E = D === 20 ? 21 : 20, [lo, hi] = [Math.min(D, E), Math.max(D, E)];
+  await p.click(tid(`cal-${E}`));
+  const two = new RegExp(`\\$([\\d,]+) ${mon} ${lo} · \\$([\\d,]+) ${mon} ${hi}`).exec(await p.textContent(tid("when-calc")));
+  ok(await p.locator(`${tid("cal")} .d.on`).count() === 2 && await p.locator(tid("amts")).count() === 1 && !!two && Math.abs(amt(two[1]) + amt(two[2]) - C) <= 1 && Math.abs(amt(two[1]) - amt(two[2])) <= 1, `LIVE clicking a second date (${E}) selects it, shows amount boxes, and splits ${fmt0(C)} evenly (${two ? two[1] + " + " + two[2] : "no split line"})`);
+  const X = Math.floor(C / 3), Y = Math.floor(C / 6);
+  await p.fill(tid(`amt-${D}`), String(X)); await p.dispatchEvent(tid(`amt-${D}`), "change");
+  const want = lo === D ? `${fmt0(X)} ${mon} ${lo} · ${fmt0(C - X)} ${mon} ${hi}` : `${fmt0(C - X)} ${mon} ${lo} · ${fmt0(X)} ${mon} ${hi}`;
+  ok((await p.textContent(tid("when-calc"))).includes(want) && (await p.textContent(tid(`when-${I}`))).includes(want), `LIVE ${fmt0(X)} on the ${D}th, the rest on the ${E}th, in the panel and the list (${want})`);
+  await p.fill(tid(`amt-${E}`), String(Y)); await p.dispatchEvent(tid(`amt-${E}`), "change");
+  ok((await p.textContent(tid("when-calc"))).includes(`${fmt0(C - X - Y)} unscheduled`) && (await p.getAttribute(tid("when-calc"), "class")).includes("warn"), `LIVE if the dates don't cover the month it warns with the gap (${fmt0(C - X - Y)})`);
+  await p.click(tid(`cal-${E}`));
+  ok(await p.locator(`${tid("cal")} .d.on`).count() === 1 && await p.locator(tid("amts")).count() === 0, "clicking a selected date removes it; amount boxes go away with one date");
+  await p.click(tid(`cal-${D}`));
+  ok(await p.locator(`${tid("cal")} .d.on`).count() === 1, "the last date can't be removed");
+
+  // prepaid
+  const pm0 = (m0 + 11) % 12, py = m0 === 0 ? year - 1 : year;
+  await p.check(tid("prepaid"));
+  ok((await p.textContent(tid("cal"))).includes(`${FULL[pm0]} ${py} · pays for ${FULL[m0]}`) && (await p.textContent(tid("when-calc"))).includes(`${MON[pm0]} ${D}`) && (await p.textContent(tid(`when-${I}`))).includes(`Paid ${MON[pm0]} ${D}`), `LIVE prepaid relabels the calendar to ${FULL[pm0]} and the list reads Paid ${MON[pm0]} ${D}`);
+  await p.uncheck(tid("prepaid"));
+
+  // weekly / biweekly / each match
+  const daysOn = (wd) => Array.from({ length: dim }, (_, k) => k + 1).filter(d => wdOf(d) === wd);
+  await p.click(`${tid("modes")} [data-mode="weekly"]`);
+  ok(await p.locator(`${tid("cal")} .d.on`).count() === daysOn(wdOf(D)).length && await p.locator(tid("prepaid")).count() === 0, `LIVE weekly highlights every ${DAYS[wdOf(D)]} (${daysOn(wdOf(D)).length} in ${mon}) and hides prepaid`);
+  const F = [1, 2].find(d => wdOf(d) !== wdOf(D)), fdays = daysOn(wdOf(F));
+  await p.click(tid(`cal-${F}`));
+  ok((await p.textContent(tid("when-calc"))).includes(`× ${fdays.length} · ${fdays.map(d => `${mon} ${d}`).join(", ")}`) && (await p.textContent(tid(`when-${I}`))).includes(`Every ${DAYS[wdOf(F)]}`), `LIVE clicking the ${F}th in weekly sets the weekday: every ${DAYS[wdOf(F)]}`);
+  await p.click(`${tid("modes")} [data-mode="biweekly"]`);
+  const alt = [F, F + 14, F + 28].filter(d => d <= dim);
+  ok(await p.locator(`${tid("cal")} .d.on`).count() === alt.length && (await p.textContent(tid("when-calc"))).includes(alt.map(d => `${mon} ${d}`).join(", ")), `LIVE every 2 weeks keeps alternate ${DAYS[wdOf(F)]}s (${alt.join(", ")})`);
+  ok((await p.textContent(tid(`when-${I}`))).includes(`Every other ${DAYS[wdOf(F)]}`), `LIVE the list reads Every other ${DAYS[wdOf(F)]} for an every-2-weeks venue`);
+  await p.click(`${tid("modes")} [data-mode="match"]`);
+  ok(await p.locator(tid("cal")).count() === 0 && (await p.textContent(tid("when-calc"))).includes(`${S.lines.length} matches · $${R} each, on the match date · auto`), `LIVE each match hides the calendar: ${S.lines.length} matches · $${R} each`);
+  await p.click(`${tid("modes")} [data-mode="dates"]`);
+  ok(await p.locator(`${tid("cal")} .d.on`).count() === 1 && await p.locator(tid("prepaid")).count() === 1, "back to pick dates: one date, prepaid box back");
+
+  // rates by day of week
+  await p.click(tid("add-rate"));
+  ok(await p.locator('[data-testid^="rate-"]').count() === 2 && await p.locator(".dy").count() === 14, "+ rate adds a second rate with day-of-week chips on both");
+  const d1 = await p.$$eval('[data-testid="rate-1"] .dy.on', e => e.map(x => x.title));
+  ok(JSON.stringify(d1) === JSON.stringify(["Saturday", "Sunday"]), `second rate defaults to the weekend (${d1.join(", ")})`);
+  await p.click('[data-testid="rate-1"] .dy[title="Friday"]');
+  ok((await p.$$eval('[data-testid="rate-1"] .dy.on', e => e.length)) === 3 && (await p.$$eval('[data-testid="rate-0"] .dy.on', e => e.length)) === 4, "clicking Friday on the second rate moves it off the first: each day belongs to one rate");
+  await p.fill('[data-testid="rate-1"] [data-testid="rate"]', "200"); await p.dispatchEvent('[data-testid="rate-1"] [data-testid="rate"]', "change");
+  const lineWd = S.lines.map(d => (new Date(d + "T00:00:00Z").getUTCDay() + 6) % 7);
+  const A = lineWd.filter(w => w <= 3).length, B = lineWd.length - A;
+  ok((await p.textContent(tid("calc"))).includes(`${A} Mon–Thu × $${R} + ${B} Fri–Sun × $200`) && num(await p.getAttribute(`${tid(`row-${I}`)} td.cost`, "data-cost")) === A * R + B * 200, `LIVE ${S.name}: ${A} Mon–Thu × $${R} + ${B} Fri–Sun × $200 = ${fmt0(A * R + B * 200)}, counted from its matches table`);
+  ok((await p.textContent(tid(`tag-${I}`))).includes(`$${R} Mon–Thu · $200 Fri–Sun`), "the list tag shows each rate with its days");
+  await p.click('[data-testid="rate-1"] [data-delrate]');
+  ok(await p.locator('[data-testid^="rate-"]').count() === 1 && num(await p.getAttribute(`${tid(`row-${I}`)} td.cost`, "data-cost")) === C, `LIVE removing the second rate gives its days back; ${fmt0(C)} again`);
+
+  // model
+  await p.selectOption(tid("model"), "share");
+  ok(await p.locator(tid("rate")).count() === 0 && await p.locator(tid("override")).count() === 1 && /Partners/.test(await p.textContent(panel)), "profit share: no rate, keeps the This month box, link to Partners");
+  ok(/Profit share/.test(await p.textContent(tid(`tag-${I}`))), "the list tag follows the model");
+  await p.selectOption(tid("model"), "match");
+}
+}
 
 // other rows
 if (!LIVE) {
@@ -184,7 +298,7 @@ ok(await p.locator(tid("panel-0")).count() === 0, "opening one venue closes the 
   const names = await rowNames();
   const mon = await monthKey(), m0 = MON.indexOf(mon), prev = MON[(m0 + 11) % 12], year = 2026;
   const monthKeyFull = `${mon} ${year}`;
-  mockOnly("ATH Katy row shows its two dates: $500 then the rest", "$500 on the 7th, the rest ($940) on the 20th, in the panel and the list");
+  mockOnly("ATH Katy row shows its two dates: $500 then the rest", "LIVE <amount> on the <D>th, the rest on the <E>th, in the panel and the list");
 
   // LIVE: every venue with day-of-week rates shows each rate with its days in the tag.
   const multi = names.map(n => ({ n, v: venueOfRow(n) })).filter(x => Array.isArray(x.v?.rate_days) && x.v.rate_days.length > 1);
@@ -193,7 +307,7 @@ ok(await p.locator(tid("panel-0")).count() === 0, "opening one venue closes the 
     const tag = await p.textContent(tid(`tag-${x.n.i}`));
     ok(x.v.rate_days.every(r => tag.includes(`$${r.v}`)), `LIVE ${x.n.name}: the tag shows each of its rates (${tag.trim()})`);
   }
-  mockOnly("ATH Katy: Mon–Thu free, Fri–Sun $140, 13 matches = $1,820", "Ann Richards plays Fri to Sun only: 8 × $200 = $1,600, plus the Rate-column checks below");
+  mockOnly("ATH Katy: Mon–Thu free, Fri–Sun $140, 13 matches = $1,820", "LIVE <A> Mon–Thu × $<rate> + <B> Fri–Sun × $200, the tag checks and the Rate-column checks");
 
   // LIVE: every prepaid venue's list cell reads "Paid <previous month> <its date>".
   const prepaid = names.map(n => ({ n, v: venueOfRow(n) })).filter(x => x.v?.pay_schedule?.mode === "dates" && x.v.pay_schedule.prepaid === true);
@@ -203,7 +317,7 @@ ok(await p.locator(tid("panel-0")).count() === 0, "opening one venue closes the 
     ok(new RegExp(`Paid ${prev} ${d}(?!\\d)`).test(await p.textContent(tid(`when-${x.n.i}`))), `LIVE ${x.n.name} (prepaid) reads Paid ${prev} ${d}`);
   }
 
-  mockOnly("NEMP row reads Every other Friday", "the list reads Every other Friday for an every-2-weeks venue");
+  mockOnly("NEMP row reads Every other Friday", "LIVE the list reads Every other <day> for an every-2-weeks venue");
 
   // LIVE: every profit-share row with an amount set for the month shows that amount, flagged, with the payout underneath.
   const ovFor = (vid) => [...loaded.fin_venue_cost_overrides.values()].find(o => o.venue_id === vid && o.month === monthKeyFull);
@@ -218,16 +332,16 @@ ok(await p.locator(tid("panel-0")).count() === 0, "opening one venue closes the 
   // LIVE: a venue with two or more linked fields shows the Fields row, one box per field, ticked
   // exactly where fin_venue_fields says the field is counted.
   const linksOf = (vid) => [...loaded.fin_venue_fields.values()].filter(l => l.fin_venue_id === vid);
-  const multiField = names.map(n => ({ n, v: venueOfRow(n) })).find(x => x.v && linksOf(x.v.id).length >= 2);
+  const multiField = names.map(n => ({ n, v: venueOfRow(n) })).find(x => x.v && x.n.i !== SUBJ && linksOf(x.v.id).length >= 2);
   ok(!!multiField, `LIVE positive control: a venue with two or more fields (${multiField?.n.name ?? "none"})`);
   if (multiField) {
     const links = linksOf(multiField.v.id), i = multiField.n.i;
-    await closeRow(0); await openRow(i);
+    await openRow(SUBJ); await openRow(i);
     const boxes = p.locator(`${tid(`panel-${i}`)} [data-field]`);
     const checked = await boxes.evaluateAll(es => es.filter(e => e.checked).length);
     ok(await p.locator(`${tid(`panel-${i}`)} .g .l`).filter({ hasText: "Fields" }).count() === 1 && await boxes.count() === links.length && checked === links.filter(l => !l.excluded_from_venue).length,
        `LIVE ${multiField.n.name}: the Fields row has ${links.length} boxes, ${links.filter(l => !l.excluded_from_venue).length} ticked, as fin_venue_fields says`);
-    ok(await p.locator(tid("panel-0")).count() === 0, "opening one venue closes the other");
+    ok(await p.locator(tid(`panel-${SUBJ}`)).count() === 0, "opening one venue closes the other");
     await closeRow(i);
   }
 
@@ -258,6 +372,29 @@ ok(await p.locator(tid("panel-0")).count() === 0, "opening one venue closes the 
   }
   ok(tables >= 1, `LIVE positive control: ${tables} per-match venues have an underlying-matches table`);
   console.log(`INFO  weekday-rate rows checked that fall on a Sunday this month: ${sundays}`);
+
+  // LIVE, RATES DIFFER: every flag names a leg (the row's own venue, or "(leg name)" for another leg of
+  // a combined row) whose cost per match and invoice rate, both on file, really differ — with both
+  // numbers. And a row whose OWN venue's rates differ carries its unnamed flag. Profit share exempt.
+  let flagged = 0, quiet = 0;
+  const differs = (v) => v && v.billing_type === "per_match" && v.cost_per_match != null && v.per_match_rate != null && Math.abs(v.cost_per_match - v.per_match_rate) >= 0.005;
+  const m0$ = (n) => `$${Math.round(n).toLocaleString("en-US")}`;
+  for (const n of names) {
+    const v = venueOfRow(n);
+    if (!v) continue;
+    const share = /Profit share/.test(await p.textContent(tid(`tag-${n.i}`)));
+    const texts = await p.$$eval(`[data-testid="rates-differ-${n.i}"]`, es => es.map(e => e.textContent.trim()));
+    if (share) { ok(texts.length === 0, `LIVE ${n.name} (profit share) carries no "rates differ" flag`); continue; }
+    if (!texts.length) { if (differs(v)) ok(false, `LIVE ${n.name}: cost $${v.cost_per_match} vs invoice $${v.per_match_rate} but no flag`); else quiet++; continue; }
+    for (const t of texts) {
+      const leg = /^rates differ \((.+?)\)/.exec(t)?.[1];
+      const lv = leg ? [...loaded.fin_venues.values()].find(x => x.venue_name === leg && (x.city ?? "") === n.city) : v;
+      flagged++;
+      ok(differs(lv) && t.includes(`cost ${m0$(lv.cost_per_match)}`) && t.includes(`invoice ${m0$(lv.per_match_rate)}`), `LIVE ${n.name}${leg ? ` (leg ${leg})` : ""}: "${t}" matches fin_venues (cost $${lv?.cost_per_match}, invoice $${lv?.per_match_rate})`);
+    }
+    if (differs(v)) ok(texts.some(t => !/^rates differ \(/.test(t)), `LIVE ${n.name}: its own rates differ, and the unnamed flag is there`);
+  }
+  ok(flagged >= 1 && quiet >= 1, `LIVE positive and negative control: ${flagged} flag(s) checked, ${quiet} venue(s) correctly quiet`);
 
   // LIVE, SHOW INACTIVE: the footer reads the same with inactive venues hidden and shown.
   const foot = async () => [await p.textContent(tid("total-matches")), await p.getAttribute(tid("total-cost"), "data-total")].join(" | ");
