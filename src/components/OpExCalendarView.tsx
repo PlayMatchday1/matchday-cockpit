@@ -183,32 +183,46 @@ export default function OpExCalendarView() {
 
       {error && <div className="ox-err">Failed to load finance data: {error}</div>}
 
+      {/* ── ONE COMPACT BAR, ~90px (Ryan, 2026-10-02), in the Master Schedule header's manner ──
+          Left: the month's cash out on one line, the paid bar and paid / still to go under it.
+          Right: the six chips in one row and, only when there is any, the no-day line. The helper
+          sentence lives in the i. "Show all" appears only while a category is selected — it is the
+          reset the chips' second click also gives, and costs no room when nothing is filtered. */}
       <section className="card hdr" data-testid="summary">
         <div className="l">
-          <div className="k">Cash out · {monthLabel(year, month0)}</div>
-          <div className="big" data-testid="sum-month">{fmt(monthTotal)}</div>
-          <div className="bar" data-testid="paid-bar"><i style={{ width: `${paidPct.toFixed(1)}%` }} /></div>
-          <div className="pl"><span><b data-testid="sum-paid">{fmt(paid)}</b> paid</span><span><b data-testid="sum-left">{fmt(left)}</b> still to go</span></div>
-        </div>
-        <div className="r">
-          <div className="chips" id="chips">
-            {CATS.map((c) => {
-              const t = chipTotal(c.key);
-              return (
-                <button key={c.key} type="button" className="chip" data-cat={c.key} data-testid={`chip-${c.key}`}
-                  aria-pressed={solo == null || solo === c.key} onClick={() => clickChip(c.key)}>
-                  <span className="sw" style={{ background: c.col }} />{c.name} <b>{fmt(t)}</b>
-                  <small>{monthTotal > 0 ? Math.round((t / monthTotal) * 100) : 0}%</small>
-                </button>
-              );
-            })}
+          <div className="tl">
+            <span className="k">Cash out · {monthLabel(year, month0)}</span>
+            <b className="big" data-testid="sum-month">{fmt(monthTotal)}</b>
           </div>
-          <div className="hint">
-            Click a category to see only that one, everywhere on the page. Click it again for{" "}
-            <a id="all" role="button" tabIndex={0} onClick={() => { setPop(null); setSolo(null); }}
-              onKeyDown={(e) => { if (e.key === "Enter") setSolo(null); }}>all categories</a>{" · "}
+          <div className="bar" data-testid="paid-bar"><i style={{ width: `${paidPct.toFixed(1)}%` }} /></div>
+          <div className="pl"><b data-testid="sum-paid">{fmt(paid)}</b> paid · <b data-testid="sum-left">{fmt(left)}</b> still to go{" "}
+            {/* THE i SITS HERE, after the paid line, so the chip row has the header's full width. */}
             <button type="button" className="i" data-pop="how" aria-label="How this page works" aria-expanded={pop?.kind === "how"}
               onClick={(e) => (pop?.kind === "how" ? setPop(null) : setPop({ ...place("how", e.currentTarget), kind: "how" }))}>i</button>
+          </div>
+        </div>
+        <div className="r">
+          <div className="chiprow">
+            <div className="chips" id="chips">
+              {CATS.map((c) => {
+                const t = chipTotal(c.key);
+                const share = monthTotal > 0 ? Math.round((t / monthTotal) * 100) : 0;
+                /* ONE ROW AT 1440 (Ryan, 2026-10-02): the chip shows WHOLE dollars and the pills'
+                   short label ("Fields"); the exact amount and the share are in the hover text,
+                   and the exact amount is data-total, so nothing that adds up reads a rounded figure. */
+                return (
+                  <button key={c.key} type="button" className="chip" data-cat={c.key} data-testid={`chip-${c.key}`} data-total={t}
+                    aria-pressed={solo == null || solo === c.key} onClick={() => clickChip(c.key)}
+                    title={`${c.name} · ${fmt(t)} · ${share}% of the month`}>
+                    <span className="sw" style={{ background: c.col }} />{c.short} <b>{fmt(Math.round(t))}</b>
+                  </button>
+                );
+              })}
+            </div>
+            {solo != null && (
+              <a id="all" className="all" role="button" tabIndex={0} onClick={() => { setPop(null); setSolo(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter") setSolo(null); }}>Show all</a>
+            )}
           </div>
           {/* DON'T HIDE THE PROBLEM (Ryan, 2026-10-02). Money in the month with no day is in every
               total and on no calendar day, so the cells cannot add to the header without this. */}
@@ -350,24 +364,26 @@ const CSS = `
 .opex-v3 .ox-loading{padding:40px;text-align:center;color:var(--muted)}
 .opex-v3 .ox-add{border:0;background:#22c55e;color:#06301d;font-weight:700;font-size:13px;padding:7px 13px;border-radius:10px}
 .opex-v3 .card{background:#fff;border:1px solid var(--line);border-radius:14px}
-.opex-v3 .hdr{display:grid;grid-template-columns:300px 1fr}
-@media (max-width:900px){.opex-v3 .hdr{grid-template-columns:1fr}.opex-v3 .hdr .l{border-right:0;border-bottom:1px solid var(--line)}}
-.opex-v3 .hdr .l{padding:18px 22px;border-right:1px solid var(--line)}
+.opex-v3 .hdr{display:flex;align-items:center;gap:22px;padding:12px 14px}
+@media (max-width:900px){.opex-v3 .hdr{flex-direction:column;align-items:stretch;gap:10px}}
+.opex-v3 .hdr .l{flex:none;max-width:100%}
+.opex-v3 .tl{display:flex;align-items:baseline;gap:10px;white-space:nowrap}
 .opex-v3 .k{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--muted);font-weight:700}
-.opex-v3 .big{font-size:38px;font-weight:800;letter-spacing:-.5px;margin:2px 0 8px;font-variant-numeric:tabular-nums}
-.opex-v3 .bar{height:8px;border-radius:999px;background:#e6ebe7;overflow:hidden}.opex-v3 .bar i{display:block;height:100%;background:#22c55e}
-.opex-v3 .pl{display:flex;justify-content:space-between;font-size:12.5px;color:var(--ink-2);margin-top:6px}.opex-v3 .pl b{color:var(--ink)}
-.opex-v3 .hdr .r{padding:16px 22px;display:flex;flex-direction:column;gap:10px;min-width:0}
-.opex-v3 .chips{display:flex;gap:8px;flex-wrap:wrap}
-.opex-v3 .chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px 7px 10px;font:inherit;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:8px;color:var(--ink)}
-.opex-v3 .chip .sw{width:10px;height:10px;border-radius:3px;display:inline-block}
-.opex-v3 .chip b{font-variant-numeric:tabular-nums}.opex-v3 .chip small{color:var(--muted);font-weight:600}
+.opex-v3 .big{font-size:26px;font-weight:800;letter-spacing:-.4px;line-height:1.15;font-variant-numeric:tabular-nums}
+.opex-v3 .bar{height:6px;border-radius:999px;background:#e6ebe7;overflow:hidden;margin-top:6px}.opex-v3 .bar i{display:block;height:100%;background:#22c55e}
+.opex-v3 .pl{font-size:12px;color:var(--ink-2);margin-top:4px;white-space:nowrap;display:flex;align-items:center;gap:4px}.opex-v3 .pl b{color:var(--ink)}
+.opex-v3 .hdr .r{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+.opex-v3 .chiprow{display:flex;align-items:center;gap:8px;min-width:0}
+.opex-v3 .chips{flex:1;min-width:0;display:flex;flex-wrap:wrap;gap:4px}
+.opex-v3 .chip{flex:none;border:1px solid var(--line);background:#fff;border-radius:999px;padding:4px 10px;font:inherit;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px;color:var(--ink);white-space:nowrap}
+.opex-v3 .chip .sw{width:8px;height:8px;border-radius:2px;display:inline-block;flex:none}
+.opex-v3 .chip b{font-variant-numeric:tabular-nums}.opex-v3 .chip small{color:var(--muted);font-weight:600;font-size:11px}
 .opex-v3 .chip[aria-pressed="false"]{color:#b7c0ba;background:#f7f9f6}.opex-v3 .chip[aria-pressed="false"] .sw{opacity:.3}
 .opex-v3 .chip[aria-pressed="false"] b,.opex-v3 .chip[aria-pressed="false"] small{color:#b7c0ba}
+.opex-v3 .all{font-size:12px;font-weight:700;color:var(--ink-2);text-decoration:underline;cursor:pointer;white-space:nowrap}
 .opex-v3 .hint{font-size:12.5px;color:var(--muted)}
-.opex-v3 .hint a{color:var(--ink-2);cursor:pointer;text-decoration:underline}
-.opex-v3 .noday{font-size:12.5px;color:#7a4b00;background:#fff7e0;border:1px solid #f0dca8;border-radius:8px;padding:6px 10px;align-self:flex-start}
-.opex-v3 .noday a{color:#7a4b00;text-decoration:underline;font-weight:700}
+.opex-v3 .noday{font-size:12px;color:#8a5a12}
+.opex-v3 .noday a{color:#8a5a12;text-decoration:underline;font-weight:700}
 .opex-v3>*{min-width:0}
 .opex-v3 .cal{overflow:hidden}
 .opex-v3 .calx{overflow-x:auto}.opex-v3 .calin{min-width:840px}
