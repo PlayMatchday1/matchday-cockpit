@@ -41,7 +41,7 @@ import {
   hasMembershipAtMatchTime,
   loadMembershipWindowsByUserId,
 } from "./mdapiMatchesRead";
-import { buildFieldIdToVenueIdMap, resolveVenueForMatch } from "./venueNormalization";
+import { buildFieldIdToVenueIdMap } from "./venueNormalization";
 import { venueCategory } from "./venueResolver";
 import { isTwoPitchCapacity, survivesEventDrop, matchUnits } from "./soccerCentralTwoPitch";
 import { selectAll } from "./supabasePagination";
@@ -199,6 +199,12 @@ function timeLabelFromDate(d: Date): string {
 // "YYYY-MM-DD HH:MM:SS" / "YYYY-MM-DDTHH:MM:SS" / etc → local Date.
 // Mirrors useMatchData's parseLocal so timezones don't shift matches
 // across day boundaries.
+/** A venue's cost_per_match by id; null when the venue is unknown or has none. */
+function venueCostPerMatch(venues: { id: number; cost_per_match: number | null }[], venueId: number | null): number | null {
+  if (venueId == null) return null;
+  return venues.find((v) => v.id === venueId)?.cost_per_match ?? null;
+}
+
 function parseLocalTimestamp(s: string): Date | null {
   const parts = s.slice(0, 16).split(/[- T:]/);
   if (parts.length < 3) return null;
@@ -440,9 +446,8 @@ export async function fetchWeekMatchPnL(
     promoRevenue: number;
     promoSpots: number;
     credit: number;
-    // Day-aware cost captured at row time so the bucket records the
-    // resolved rate (incl. the sibling-cost-null fallback to base
-    // venue's rate). See resolveVenueForMatch.
+    // The venue's cost_per_match, captured at row time (Soccer Central's
+    // capacity split may replace it below).
     cost: number | null;
     isTournament: boolean;
     isEvent: boolean;
@@ -453,14 +458,10 @@ export async function fetchWeekMatchPnL(
     if (!matchStart) continue;
     const baseVenueId =
       r.field_id != null ? (fieldToVenue.get(r.field_id) ?? null) : null;
-    // Day-of-week swap: ATH Katy + Sun match → ATH Katy Sunday venue.
-    // Sibling missing-cost falls back to base rate with a console.warn.
-    const resolved =
-      baseVenueId !== null
-        ? resolveVenueForMatch(baseVenueId, matchStart, venues)
-        : null;
-    let venueId = resolved?.venueId ?? null;
-    let cost: number | null = resolved?.cost ?? null;
+    // NO DAY-OF-WEEK SWAP. A match stays on the venue its field links to; a weekday rate lives on that
+    // venue (rate_days, migration 0201). The old "<venue> Sunday" sibling lookup is gone.
+    let venueId: number | null = baseVenueId;
+    let cost: number | null = venueCostPerMatch(venues, baseVenueId);
     let isTournament = false;
     const isEvent = matchIsEvent.get(`${r.field_id}|${r.match_start.slice(0, 16)}`) ?? false;
     // Soccer Central second pass: route to the $120 Tournament leg
@@ -620,12 +621,8 @@ export async function fetchWeekMatchPnL(
     if (!matchStart) continue;
     const baseVenueId =
       r.field_id != null ? (fieldToVenue.get(r.field_id) ?? null) : null;
-    const resolved =
-      baseVenueId !== null
-        ? resolveVenueForMatch(baseVenueId, matchStart, venues)
-        : null;
-    let venueId = resolved?.venueId ?? null;
-    let cost: number | null = resolved?.cost ?? null;
+    let venueId: number | null = baseVenueId;
+    let cost: number | null = venueCostPerMatch(venues, baseVenueId);
     let isTournament = false;
     const isEvent = matchIsEvent.get(`${r.field_id}|${r.match_start.slice(0, 16)}`) ?? false;
     if (venueId !== null) {

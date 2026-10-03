@@ -218,11 +218,13 @@ console.log("\nTHE CONSEQUENCE — what the operator commits against");
   is("a monthly flat venue genuinely adds $0, and that IS a number", flat.cost.amount, 0);
 }
 {
-  const sunday = venue({ split: { kind: "sunday", partnerName: "ATH Katy Sunday", partnerRate: 160 } });
-  const withSun = previewAssignment(field({ billableLive: 9, sundayLive: 3 }), sunday);
-  is("a split venue names the leg the Sunday matches will route to", /ATH Katy Sunday/.test(withSun.splitNote ?? ""), true);
-  is("...and the count, and the other rate", /3 of these live matches/.test(withSun.splitNote ?? "") && /\$160/.test(withSun.splitNote ?? ""), true);
-  is("with no Sunday matches it says so rather than staying silent", /None of this field/.test(previewAssignment(field({ sundayLive: 0 }), sunday).splitNote ?? ""), true);
+  // THE SUNDAY SPLIT IS GONE (2026-10-03): day-of-week rates live on the venue (rate_days). Sunday
+  // matches on a plain venue route nowhere, so they raise no note — positive control: the capacity
+  // split still raises its note, so a null below is the rule, not a dead branch.
+  const withSun = previewAssignment(field({ billableLive: 9, sundayLive: 3 }), venue());
+  is("Sunday matches on a venue raise no routing note any more", withSun.splitNote, null);
+  const sc = venue({ split: { kind: "capacity", partnerName: "Soccer Central Tournament", partnerRate: 120 } });
+  is("CONTROL — the capacity split still names its partner leg", /Soccer Central Tournament/.test(previewAssignment(field({ billableLive: 9 }), sc).splitNote ?? ""), true);
   is("a venue with no split raises no split note at all", previewAssignment(field(), venue()).splitNote, null);
 }
 {

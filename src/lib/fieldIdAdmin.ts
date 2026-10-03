@@ -76,7 +76,8 @@ export type FieldIdRow = {
    *  carries counts_as_regular_play, because then every match is regular play. */
   allSlotsLive: number;
   allSlotsWithCancelled: number;
-  /** Live matches falling on a Sunday — the ATH Katy split leg (venueGroups.resolveSplitRateVenueId). */
+  /** Live matches falling on a Sunday. Informational only since 2026-10-03: no venue routes Sunday
+   *  matches anywhere any more (day-of-week rates live on the venue, migration 0201). */
   sundayLive: number;
   /** CADENCE — distinct calendar days and distinct calendar weeks carrying a live match.
    *  This is the evidence that separates a real tournament from a pitch permanently NAMED after
@@ -105,8 +106,9 @@ export type VenueOption = {
   /** Live matches / revenue this venue already collects across its linked field IDs. */
   liveMatches: number;
   dppRevenue: number;
-  /** Set when this venue routes through a split-rate rule (ATH Katy Sunday, Soccer Central). */
-  split: { kind: "sunday" | "capacity"; partnerName: string; partnerRate: number | null } | null;
+  /** Set when this venue routes through a split rule. Only Soccer Central's capacity split remains;
+   *  the ATH Katy Sunday split was removed on 2026-10-03. */
+  split: { kind: "capacity"; partnerName: string; partnerRate: number | null } | null;
 };
 
 export type FieldsPayload = {
@@ -571,13 +573,7 @@ export function previewAssignment(
       : null;
 
   let splitNote: string | null = null;
-  if (venue.split?.kind === "sunday") {
-    splitNote =
-      row.sundayLive > 0
-        ? `${row.sundayLive} of these live matches fall on a Sunday and will route to "${venue.split.partnerName}"` +
-          (venue.split.partnerRate != null ? ` at $${venue.split.partnerRate}/match, not $${rate ?? "—"}.` : ".")
-        : `This venue splits Sunday matches to "${venue.split.partnerName}". None of this field's live matches fall on a Sunday, so nothing routes there.`;
-  } else if (venue.split?.kind === "capacity") {
+  if (venue.split?.kind === "capacity") {
     splitNote =
       `This venue splits by capacity: matches over the tournament threshold route to "${venue.split.partnerName}", ` +
       "and a match with null/0 max_player_count drops out of cost entirely as a special event.";

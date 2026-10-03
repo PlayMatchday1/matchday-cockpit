@@ -206,7 +206,7 @@ export async function fieldsPayload(sb: SupabaseClient, agg: FieldAggregate): Pr
       const partnerName = cfg.primary === v.venue_name ? cfg.secondary : cfg.primary;
       const partner = byRawName.get(`${partnerName}|${v.city ?? ""}`);
       split = {
-        kind: cfg.primary === "Soccer Central" ? "capacity" : "sunday",
+        kind: "capacity",
         partnerName,
         partnerRate: partner?.per_match_rate ?? null,
       };

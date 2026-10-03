@@ -15,7 +15,7 @@
 //      future match below has a wall clock that reads as already past; a split keyed on it would
 //      call tonight's fixture played. The cut must go through hasKickedOff on start_utc_ms.
 
-import { buildFieldCostRows, fieldCostSplit, fieldCostSplitText } from "../src/lib/financeCosts";
+import { buildFieldCostRows, fieldCostMatchLines, fieldCostSplit, fieldCostSplitText } from "../src/lib/financeCosts";
 import { hasKickedOff } from "../src/lib/fieldEconomics";
 import { emptyMdapiMemberSpotIndex } from "../src/lib/financeStats";
 import type { FinanceData, FinMasterSchedule } from "../src/lib/useFinanceData";
@@ -171,6 +171,32 @@ console.log("\nROUNDING — the line adds up even when the parts round apart");
   is("Odd Rate Pitch: $66.66 ran, $33.33 scheduled", `${s.ran}/${s.scheduled}`, "66.66/33.33");
   is("...shown as $67 + $33 = $100, the figure as displayed (99.99 → $100)",
      fieldCostSplitText(s, row("Odd Rate Pitch").autoAmount), "$67 ran so far · $33 scheduled");
+}
+
+console.log("\nUNDERLYING MATCHES — each line at the rate it is charged; the lines add up to the computed figure");
+{
+  let lined = 0;
+  for (const r of rows) {
+    if (!fieldCostSplit(data, r, MONTH, kicked).priced) continue;
+    lined += 1;
+    const lines = fieldCostMatchLines(data, r, MONTH);
+    const total = Math.round(lines.reduce((a, l) => a + l.cost, 0) * 100);
+    is(`${r.displayName}: Σ line cost (${total / 100}) === computed ${r.autoAmount}`, total, Math.round(r.autoAmount * 100));
+  }
+  is("...checked every per-match row (7)", lined, 7);
+  const w = fieldCostMatchLines(data, row("Weekday Pitch"), MONTH);
+  is("Weekday Pitch has its three October lines (Sep 27 is another month)", w.length, 3);
+  is("a Sunday line reads the Sunday rate, $160", w.find((l) => l.date === "2026-10-04")?.rate, 160);
+  is("CONTROL — the Friday line reads the base rate, $140", w.find((l) => l.date === "2026-10-02")?.rate, 140);
+  const sl = fieldCostMatchLines(data, row("Slot Pitch"), MONTH);
+  is("Slot Pitch shows all three matches", sl.length, 3);
+  is("...one of them is the second match in a slot", sl.filter((l) => l.sameSlot).length, 1);
+  is("...and it costs $0 while still showing the slot's rate", JSON.stringify(sl.filter((l) => l.sameSlot).map((l) => [l.rate, l.cost])), "[[75,0]]");
+  const c = fieldCostMatchLines(data, row("Cancel Pitch"), MONTH);
+  is("Cancel Pitch lists its two charged cancellations", c.filter((l) => l.cancelled).length, 2);
+  is("Plain Pitch does not list a cancellation it is not charged for", fieldCostMatchLines(data, row("Plain Pitch"), MONTH).some((l) => l.cancelled), false);
+  is("Twin Pitch lists both legs, each at its own rate", JSON.stringify(fieldCostMatchLines(data, row("Twin Pitch"), MONTH).map((l) => l.rate).sort()), "[120,50]");
+  is("a payout venue has no per-match lines", fieldCostMatchLines(data, row("Share Pitch"), MONTH).length, 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

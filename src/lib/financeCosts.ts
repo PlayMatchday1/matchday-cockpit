@@ -749,3 +749,55 @@ export function fieldCostSplitText(split: FieldCostSplit, computed: number): str
   const ran = Math.round(split.ran);
   return `${usd(ran)} ran so far · ${usd(Math.round(computed) - ran)} scheduled`;
 }
+
+/* ── THE UNDERLYING MATCHES, EACH AT THE RATE IT IS CHARGED ─────────────────────────────────────
+ * One line per row chargedAmount prices, in the same order of passes, with the rate for THAT match's
+ * weekday (rate_days) — so a Sunday at ATH Katy reads $160, not the base $140. In a slot-billed
+ * venue (bills_per_reservation) the first match in a slot carries the slot's charge and the others
+ * read $0 "same slot". So Σ cost over the lines === autoAmount for every per-match row
+ * (scripts/field-cost-split-test.ts). Not built for payout venues: they have no price per match. */
+export type FieldCostMatchLine = {
+  date: string;
+  /** Pre-alias leg name, for a combined row's Leg column. */
+  venue: string;
+  rate: number;
+  cost: number;
+  cancelled: boolean;
+  /** True on the second and later match in one reserved slot: charged once, on the first. */
+  sameSlot: boolean;
+  /** The true instant (start_date_utc), for the ran / scheduled label. Never match_date: wall clock. */
+  startUtcMs: number | null;
+};
+
+export function fieldCostMatchLines(data: FinanceData, row: FieldCostRow, month: Q2Month): FieldCostMatchLine[] {
+  const out: FieldCostMatchLine[] = [];
+  for (const leg of row.legs) {
+    const venue = data.venues.find((v) => v.id === leg.venueId);
+    // A leg billed some other way (a flat or share leg in a combined row) has no per-match price.
+    if (!venue || venue.billing_type !== "per_match") continue;
+    const label = leg.rawVenueName || leg.venueName;
+    const rates = venue.rate_days ?? null;
+    const slots = venue.bills_per_reservation === true ? new Set<string>() : null;
+    const take = (s: FinMasterSchedule, cancelled: boolean) => {
+      const rate = rates ? rateForYmd(rates, venue.per_match_rate, s.match_date) : (venue.per_match_rate ?? 0);
+      let sameSlot = false;
+      if (slots) {
+        const key = `${s.mdapi_field_id ?? "?"}|${s.match_date}|${s.match_time}`;
+        sameSlot = slots.has(key);
+        slots.add(key);
+      }
+      out.push({ date: s.match_date, venue: label, rate, cost: sameSlot ? 0 : rate, cancelled, sameSlot, startUtcMs: s.start_utc_ms });
+    };
+    for (const s of data.masterSchedule) {
+      if (isEventSchedule(s)) continue;
+      if (s.venue_id === venue.id && s.month === month) take(s, false);
+    }
+    if (venue.charge_on_cancel) {
+      for (const s of data.cancelledSchedule) {
+        if (isEventSchedule(s)) continue;
+        if (s.venue_id === venue.id && s.month === month) take(s, true);
+      }
+    }
+  }
+  return out;
+}

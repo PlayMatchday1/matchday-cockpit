@@ -1,19 +1,79 @@
 // Assertions for scripts/mocks/field-costs-v2.html (Field Costs venue panel: two models, tight rows, calendar date picker)
-// Run: node scripts/mocks/field-costs-v2.assert.mjs [url]
+// Run: node scripts/mocks/field-costs-v2.assert.mjs                     (the mock)
+//      node --env-file=.env.local scripts/mocks/field-costs-v2.assert.mjs http://localhost:3017/admin/finance/ledger/field-costs
+//
+// LIVE MODE (an http(s) url). Signs in, and BLOCKS EVERY WRITE: each non-GET except Supabase auth is
+// answered here and never reaches a server, because the checks below click through rates, dates,
+// the model and the override and each click would be a production write. A suite must not write
+// production.
+//
+// DERIVE, DO NOT PIN. Eight checks were written against the mock's rows (ATH Katy at row 1, NEMP at
+// row 7, an empty note on row 0…) and failed on every live run because live data is different, which
+// told us nothing. In live mode each now either:
+//   · LIVE: derives its subject and its expected value from the data the page itself loaded (the
+//     fin_venues / fin_venue_fields / fin_venue_cost_overrides responses, read off the network), or
+//   · MOCK-ONLY: is skipped, naming the interactive check that guards the same behaviour on any
+//     venue. Skips are counted and printed; they never count as passes.
 import { chromium } from "playwright";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const url = process.argv[2] || "file://" + path.join(here, "field-costs-v2.html");
 const tid = id => `[data-testid="${id}"]`;
-let pass = 0, fail = 0;
+let pass = 0, fail = 0, skip = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log((c ? "PASS " : "FAIL ") + m); };
+const LIVE = /^https?:/.test(url);
+const mockOnly = (m, coveredBy) => { skip++; console.log(`SKIP (mock-only; live data differs — covered by "${coveredBy}") ${m}`); };
 const num = s => Number(String(s).replace(/[^0-9.]/g, ""));
 
 const b = await chromium.launch();
-const p = await b.newPage({ viewport: { width: 1500, height: 1100 } });
+// What the live page loaded, read off the network (GETs only; pages concatenated, last copy wins).
+const loaded = { fin_venues: new Map(), fin_venue_fields: new Map(), fin_venue_cost_overrides: new Map() };
+const blocked = [];
+let p;
+if (LIVE) {
+  const { storageStateFor } = await import("../e2e/_session.mjs");
+  const { storageState } = await storageStateFor("rmancuso@playmatchday.com", new URL(url).origin);
+  const ctx = await b.newContext({ storageState, viewport: { width: 1500, height: 1100 } });
+  await ctx.route("**/*", async (route) => {
+    const r = route.request(), m = r.method();
+    if (m === "GET" || m === "HEAD" || m === "OPTIONS" || r.url().includes("/auth/v1/")) return route.continue();
+    const u = new URL(r.url());
+    blocked.push(`${m} ${u.pathname}`);
+    let body = {}; try { body = JSON.parse(r.postData() || "{}"); } catch {}
+    if (u.pathname === "/api/admin/fields/exclude") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ verdict: "LANDED", excluded: body.excluded }) });
+    if (m === "DELETE") return route.fulfill({ status: 204, body: "" });
+    const id = Number((u.searchParams.get("id") || "").replace("eq.", "")) || -1;
+    const row = Array.isArray(body) ? body[0] : { id, ...body };
+    if ((r.headers()["accept"] || "").includes("vnd.pgrst.object")) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(row) });
+    return route.fulfill({ status: 201, contentType: "application/json", body: "[]" });
+  });
+  p = await ctx.newPage();
+  p.on("response", async (res) => {
+    if (res.request().method() !== "GET") return;
+    const m = /\/rest\/v1\/(fin_venues|fin_venue_fields|fin_venue_cost_overrides)(\?|$)/.exec(res.url());
+    if (!m) return;
+    try {
+      const rows = await res.json();
+      if (!Array.isArray(rows)) return;
+      for (const r of rows) loaded[m[1]].set(m[1] === "fin_venue_fields" ? r.mdapi_field_id : r.id, r);
+    } catch {}
+  });
+} else {
+  p = await b.newPage({ viewport: { width: 1500, height: 1100 } });
+}
 const errs = []; p.on("pageerror", e => errs.push(e.message));
 await p.goto(url); await p.waitForSelector(tid("venues"));
+if (LIVE) await p.waitForSelector(tid("row-0"), { timeout: 60000 });   // presence first: data loads after the shell
+
+// LIVE helpers — every expected value below comes from `loaded`, never from a constant.
+const rowNames = async () => p.$$eval('[data-testid^="row-"]', rs => rs.map(r => ({ i: +r.dataset.testid.slice(4), name: r.querySelector("td.v b")?.textContent.trim(), city: (r.querySelector("td.v span")?.textContent || "").split(" · ")[0].trim() })));
+const venueOfRow = (rn) => [...loaded.fin_venues.values()].find(v => v.venue_name === rn.name && (v.city ?? "") === rn.city);
+const monthKey = async () => (await p.$eval(`${tid("venues")} thead th:nth-child(3)`, e => e.textContent)).replace(" matches", "").trim();   // "Oct"
+const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+const openRow = async (i) => { if (await p.locator(tid(`panel-${i}`)).count() === 0) { await p.click(tid(`row-${i}`)); await p.waitForSelector(tid(`panel-${i}`)); } };
+const closeRow = async (i) => { if (await p.locator(tid(`panel-${i}`)).count() === 1) await p.click(tid(`row-${i}`)); };
 ok(true, "instrument ran: table rendered");
 
 const body = await p.textContent("main");
@@ -32,10 +92,25 @@ const words = await p.$eval(`${tid("panel-0")} .pan`, e => e.innerText.split(/\s
 ok(words < 55, `panel has fewer than 55 words (${words})`);
 const labels = await p.$$eval(`${tid("panel-0")} .g .l`, e => e.map(x => x.textContent));
 ok(JSON.stringify(labels) === JSON.stringify(["Billing", "Cancelled", "This month", "Notes"]), `left rows for a one-field venue: ${labels.join(" · ")} (no Fields row)`);
+if (!LIVE) {
 ok(await p.locator(tid("notes")).count() === 1 && (await p.inputValue(tid("notes"))) === "", "a free-text notes box, empty here");
 await p.click(tid("row-0")); await p.click(tid("row-3"));
 ok(/following month/.test(await p.inputValue(tid("notes"))), "Bob Jones Park carries its note");
 await p.click(tid("row-3")); await p.click(tid("row-0"));
+} else {
+  // LIVE: the box shows exactly what fin_venues holds for THIS venue, and switching venues shows the
+  // other venue's note, not a stale one. Subject: row 0, and the first other row with a different note.
+  const names = await rowNames();
+  const v0 = venueOfRow(names[0]);
+  ok(await p.locator(tid("notes")).count() === 1 && !!v0 && (await p.inputValue(tid("notes"))) === (v0.notes ?? ""), `LIVE a free-text notes box showing ${names[0].name}'s stored note (${JSON.stringify(v0?.notes ?? "")})`);
+  const other = names.slice(1).map(n => ({ n, v: venueOfRow(n) })).find(x => x.v && (x.v.notes ?? "") !== "" && (x.v.notes ?? "") !== (v0?.notes ?? ""));
+  ok(!!other, "LIVE positive control: another venue on the page has a different, non-empty note");
+  if (other) {
+    await closeRow(0); await openRow(other.n.i);
+    ok((await p.inputValue(`${tid(`panel-${other.n.i}`)} ${tid("notes")}`)) === other.v.notes, `LIVE ${other.n.name} carries its own note, not row 0's`);
+    await closeRow(other.n.i); await openRow(0);
+  }
+}
 ok(await p.locator(`${tid("panel-0")} select`).count() === 1, "one dropdown only (the billing model)");
 
 // override
@@ -70,6 +145,7 @@ await p.click(tid("cal-2"));
 ok(/× 5 · Oct 2, Oct 9, Oct 16, Oct 23, Oct 30/.test(await p.textContent(tid("when-calc"))) && /Every Friday/.test(await p.textContent(tid("when-0"))), "clicking a date in weekly sets the weekday: every Friday");
 await p.click(`${tid("modes")} [data-mode="biweekly"]`);
 ok(await p.locator(`${tid("cal")} .d.on`).count() === 3 && /Oct 2, Oct 16, Oct 30/.test(await p.textContent(tid("when-calc"))), "every 2 weeks keeps alternate Fridays");
+ok(/Every other Friday/.test(await p.textContent(tid("when-0"))), "the list reads Every other Friday for an every-2-weeks venue");
 await p.click(`${tid("modes")} [data-mode="match"]`);
 ok(await p.locator(tid("cal")).count() === 0 && /8 matches · \$180 each, on the match date · auto/.test(await p.textContent(tid("when-calc"))), "each match hides the calendar: nothing to pick, it's automatic");
 await p.click(`${tid("modes")} [data-mode="dates"]`);
@@ -95,6 +171,7 @@ ok(/Profit share/.test(await p.textContent(tid("tag-0"))), "the list tag follows
 await p.selectOption(tid("model"), "match");
 
 // other rows
+if (!LIVE) {
 ok(/\$500 Oct 1 · \$1,320 Oct 15/.test(await p.textContent(tid("when-1"))), "ATH Katy row shows its two dates: $500 then the rest");
 ok(/\$0 Mon–Thu · \$140 Fri–Sun/.test(await p.textContent(tid("tag-1"))) && /4 Mon–Thu × \$0 \+ 13 Fri–Sun × \$140/.test(await p.textContent(`${tid("row-1")} td.cost`)) && num(await p.getAttribute(`${tid("row-1")} td.cost`, "data-cost")) === 1820, "ATH Katy: Mon–Thu free, Fri–Sun $140, 13 matches = $1,820");
 ok(/Paid Sep 10/.test(await p.textContent(tid("when-3"))), "Bob Jones Park row reads Paid Sep 10");
@@ -103,6 +180,97 @@ ok(/Profit share/.test(await p.textContent(tid("tag-6"))) && /set by hand · com
 await p.click(tid("row-7"));
 ok(await p.locator(`${tid("panel-7")} .g .l`).filter({ hasText: "Fields" }).count() === 1 && await p.locator(`${tid("panel-7")} [data-field]`).count() === 2 && !(await p.isChecked(`${tid("panel-7")} [data-field="1"]`)), "a venue with two fields shows the Fields row; NEMP's tournament field is unchecked");
 ok(await p.locator(tid("panel-0")).count() === 0, "opening one venue closes the other");
+} else {
+  const names = await rowNames();
+  const mon = await monthKey(), m0 = MON.indexOf(mon), prev = MON[(m0 + 11) % 12], year = 2026;
+  const monthKeyFull = `${mon} ${year}`;
+  mockOnly("ATH Katy row shows its two dates: $500 then the rest", "$500 on the 7th, the rest ($940) on the 20th, in the panel and the list");
+
+  // LIVE: every venue with day-of-week rates shows each rate with its days in the tag.
+  const multi = names.map(n => ({ n, v: venueOfRow(n) })).filter(x => Array.isArray(x.v?.rate_days) && x.v.rate_days.length > 1);
+  ok(multi.length >= 1, `LIVE positive control: at least one venue has day-of-week rates (${multi.map(x => x.n.name).join(", ")})`);
+  for (const x of multi) {
+    const tag = await p.textContent(tid(`tag-${x.n.i}`));
+    ok(x.v.rate_days.every(r => tag.includes(`$${r.v}`)), `LIVE ${x.n.name}: the tag shows each of its rates (${tag.trim()})`);
+  }
+  mockOnly("ATH Katy: Mon–Thu free, Fri–Sun $140, 13 matches = $1,820", "Ann Richards plays Fri to Sun only: 8 × $200 = $1,600, plus the Rate-column checks below");
+
+  // LIVE: every prepaid venue's list cell reads "Paid <previous month> <its date>".
+  const prepaid = names.map(n => ({ n, v: venueOfRow(n) })).filter(x => x.v?.pay_schedule?.mode === "dates" && x.v.pay_schedule.prepaid === true);
+  ok(prepaid.length >= 1, `LIVE positive control: at least one prepaid venue (${prepaid.map(x => x.n.name).join(", ")})`);
+  for (const x of prepaid) {
+    const d = x.v.pay_schedule.dates[0]?.d;
+    ok(new RegExp(`Paid ${prev} ${d}(?!\\d)`).test(await p.textContent(tid(`when-${x.n.i}`))), `LIVE ${x.n.name} (prepaid) reads Paid ${prev} ${d}`);
+  }
+
+  mockOnly("NEMP row reads Every other Friday", "the list reads Every other Friday for an every-2-weeks venue");
+
+  // LIVE: every profit-share row with an amount set for the month shows that amount, flagged, with the payout underneath.
+  const ovFor = (vid) => [...loaded.fin_venue_cost_overrides.values()].find(o => o.venue_id === vid && o.month === monthKeyFull);
+  const shareSet = [];
+  for (const n of names) { const v = venueOfRow(n); const o = v && ovFor(v.id); if (o && /Profit share/.test(await p.textContent(tid(`tag-${n.i}`)))) shareSet.push({ n, o }); }
+  ok(shareSet.length >= 1, `LIVE positive control: at least one profit-share venue has an amount set for ${monthKeyFull} (${shareSet.map(x => x.n.name).join(", ")})`);
+  for (const x of shareSet) {
+    const cell = `${tid(`row-${x.n.i}`)} td.cost`;
+    ok(/set by hand · computed \$[\d,]+/.test(await p.textContent(cell)) && Math.abs(num(await p.getAttribute(cell, "data-cost")) - Number(x.o.override_amount)) < 0.005, `LIVE ${x.n.name}: profit share with a hand-set total ($${x.o.override_amount}), payout shown underneath`);
+  }
+
+  // LIVE: a venue with two or more linked fields shows the Fields row, one box per field, ticked
+  // exactly where fin_venue_fields says the field is counted.
+  const linksOf = (vid) => [...loaded.fin_venue_fields.values()].filter(l => l.fin_venue_id === vid);
+  const multiField = names.map(n => ({ n, v: venueOfRow(n) })).find(x => x.v && linksOf(x.v.id).length >= 2);
+  ok(!!multiField, `LIVE positive control: a venue with two or more fields (${multiField?.n.name ?? "none"})`);
+  if (multiField) {
+    const links = linksOf(multiField.v.id), i = multiField.n.i;
+    await closeRow(0); await openRow(i);
+    const boxes = p.locator(`${tid(`panel-${i}`)} [data-field]`);
+    const checked = await boxes.evaluateAll(es => es.filter(e => e.checked).length);
+    ok(await p.locator(`${tid(`panel-${i}`)} .g .l`).filter({ hasText: "Fields" }).count() === 1 && await boxes.count() === links.length && checked === links.filter(l => !l.excluded_from_venue).length,
+       `LIVE ${multiField.n.name}: the Fields row has ${links.length} boxes, ${links.filter(l => !l.excluded_from_venue).length} ticked, as fin_venue_fields says`);
+    ok(await p.locator(tid("panel-0")).count() === 0, "opening one venue closes the other");
+    await closeRow(i);
+  }
+
+  // LIVE, THE RATE COLUMN: every per-match venue's underlying matches show the rate CHARGED for that
+  // match (its weekday's rate), and rate-or-$0-same-slot summed over the rows shown equals the
+  // computed figure. Subjects and expected rates come from fin_venues.rate_days.
+  const rateFor = (v, ymd) => { const wd = (new Date(ymd + "T00:00:00Z").getUTCDay() + 6) % 7; const r = (v.rate_days ?? []).find(x => x.days.includes(wd)); return r ? r.v : (v.per_match_rate ?? 0); };
+  let tables = 0, sundays = 0;
+  for (const n of names) {
+    if (!/Per match/.test(await p.textContent(tid(`tag-${n.i}`)))) continue;
+    await openRow(n.i);
+    const panel = tid(`panel-${n.i}`);
+    if (await p.locator(`${panel} ${tid("match-lines")}`).count() === 1) {
+      tables++;
+      const v = venueOfRow(n);
+      const lines = await p.$$eval(`${panel} ${tid("match-lines")} tbody tr`, rs => rs.map(r => ({ date: r.dataset.date, rate: +r.dataset.rate, cost: +r.dataset.cost })));
+      const total = num(await p.getAttribute(`${panel} ${tid("match-lines-total")}`, "data-total"));
+      const computed = num(await p.getAttribute(`${panel} ${tid("override")}`, "placeholder"));
+      const sum = Math.round(lines.reduce((a, l) => a + l.cost, 0) * 100) / 100;
+      ok(Math.abs(sum - total) < 0.005 && Math.abs(total - computed) < 0.005, `LIVE ${n.name}: ${lines.length} rows add to $${sum}, the computed $${computed}`);
+      if (v && Array.isArray(v.rate_days) && v.rate_days.length > 1) {
+        const wrong = lines.filter(l => l.rate !== rateFor(v, l.date));
+        sundays += lines.filter(l => new Date(l.date + "T00:00:00Z").getUTCDay() === 0).length;
+        ok(wrong.length === 0, `LIVE ${n.name}: every row shows its weekday's rate${wrong.length ? " — wrong: " + wrong.map(l => `${l.date} $${l.rate}`).join(", ") : ""}`);
+      }
+    }
+    await closeRow(n.i);
+  }
+  ok(tables >= 1, `LIVE positive control: ${tables} per-match venues have an underlying-matches table`);
+  console.log(`INFO  weekday-rate rows checked that fall on a Sunday this month: ${sundays}`);
+
+  // LIVE, SHOW INACTIVE: the footer reads the same with inactive venues hidden and shown.
+  const foot = async () => [await p.textContent(tid("total-matches")), await p.getAttribute(tid("total-cost"), "data-total")].join(" | ");
+  const label = await p.textContent(`label:has(${tid("show-inactive")})`);
+  const hiddenN = Number((/\((\d+)\)/.exec(label) || [])[1]);
+  const before = { foot: await foot(), rows: names.length };
+  await p.check(tid("show-inactive"));
+  const after = { foot: await foot(), rows: await p.locator('[data-testid^="row-"]').count(), dim: await p.locator('[data-testid^="row-"][data-inactive]').count() };
+  ok(after.rows === before.rows + hiddenN && after.dim === hiddenN, `LIVE "Show inactive (${hiddenN})" adds exactly ${hiddenN} rows, each marked inactive (${before.rows} → ${after.rows})`);
+  ok(after.foot === before.foot, `LIVE the month total is identical with inactive venues hidden and shown (${before.foot})`);
+  await p.uncheck(tid("show-inactive"));
+}
 
 ok(errs.length === 0, `no page errors (${errs.join("; ")})`);
-await b.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
+if (LIVE) console.log(`\nwrites blocked (never sent): ${blocked.length}${blocked.length ? " — " + [...new Set(blocked)].join(", ") : ""}`);
+await b.close(); console.log(`\n${pass} passed, ${fail} failed${skip ? `, ${skip} skipped (mock-only)` : ""}`); process.exit(fail ? 1 : 0);

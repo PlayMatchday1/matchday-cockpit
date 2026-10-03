@@ -111,26 +111,14 @@ export function getLegLabel(group: VenueGroup, legIndex: number): string {
   return `leg ${legIndex + 1}`;
 }
 
-// Route a schedule row's resolved venue_id to the correct split-rate leg by
-// day-of-week. ATH Katy is the live case: the weekday leg ($140) has
-// mdapi_field_id 892; the Sunday leg ($160) has no field_id, so every
-// schedule_master row resolves to the weekday leg via the field_id path
-// and Sunday matches would silently underbill by $20 each. Sunday
-// (UTC-day-of-week = 0) routes to `secondary`; every other day stays on
-// `primary`. Symmetric: works whether the initial venue_id matched the
-// primary OR the secondary leg, so future split-rate configs can wire
-// fin_venue_fields up to either side without changing this code.
+// Route a schedule row's resolved venue_id to the correct split leg. The only split left is Soccer
+// Central's, by CAPACITY (max_player_count), which day-of-week rates cannot express. The ATH Katy
+// day-of-week split (Sunday → a separate "ATH Katy Sunday" row) was removed on 2026-10-03; a
+// weekday rate now lives on the venue as rate_days (migration 0201).
 //
-// Comparison + lookup go through `raw_venue_name` (the unaliased DB
-// venue_name) rather than `venue_name`. fin_venue_aliases collapses
-// "ATH Katy Sunday" onto canonical "ATH Katy" in `venue_name`, so the
-// post-alias name reads identical for both legs and the Sunday lookup
-// would fail. `raw_venue_name` preserves the pre-alias distinction,
-// which matches the strings registered in COMBINE_BY_NAME.
-//
-// matchDate must be YYYY-MM-DD. UTC math is correct here because the date
-// column is a calendar date with no timezone — same approach as
-// scripts/backfill-schedule-master-from-mdapi.mjs.
+// Comparison + lookup go through `raw_venue_name` (the unaliased DB venue_name), which matches the
+// strings registered in COMBINE_BY_NAME. `matchDate` is kept in the signature for the callers and
+// is no longer read.
 export function resolveSplitRateVenueId(
   initialVenueId: number,
   matchDate: string,
@@ -159,17 +147,10 @@ export function resolveSplitRateVenueId(
     return target?.id ?? initialVenueId;
   }
 
-  // Default split rule (ATH Katy and any future name-based config) —
-  // Sunday matches go to the secondary leg; every other day stays
-  // on the primary.
-  const d = new Date(`${matchDate}T00:00:00Z`);
-  if (Number.isNaN(d.getTime())) return initialVenueId;
-  const targetName = d.getUTCDay() === 0 ? cfg.secondary : cfg.primary;
-  if (targetName === v.raw_venue_name) return initialVenueId;
-  const target = venues.find(
-    (x) => x.city === v.city && x.raw_venue_name === targetName,
-  );
-  return target?.id ?? initialVenueId;
+  // NO DAY-OF-WEEK SPLIT. The Sunday → secondary-leg rule that sat here was removed on 2026-10-03:
+  // a weekday rate lives on the venue (rate_days, migration 0201). Any other pair stays put.
+  void matchDate;
+  return initialVenueId;
 }
 
 // True iff this venue would route through the Soccer Central split.

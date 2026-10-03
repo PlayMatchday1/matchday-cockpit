@@ -8,6 +8,7 @@ import { insertFinVenue } from "@/lib/venueCreate";
 import { logChange } from "@/lib/financeAudit";
 import {
   buildFieldCostRows,
+  fieldCostMatchLines,
   fieldCostSplit,
   fieldCostSplitText,
   fieldCostsFor,
@@ -15,10 +16,13 @@ import {
   overrideOnlyTotalFor,
   perMatchTotalFor,
   totalOverrideAmountFor,
+  type FieldCostMatchLine,
   type FieldCostRow,
   type FieldCostSplit,
 } from "@/lib/financeCosts";
 import { hasKickedOff } from "@/lib/fieldEconomics";
+import { fieldCostTotals, isInactiveFieldCostRow } from "@/lib/fieldCostActivity";
+import { fieldCostPayeesIn } from "@/lib/opexSources";
 import { isSoccerCentralTwoPitch } from "@/lib/soccerCentralTwoPitch";
 import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
@@ -440,6 +444,24 @@ export default function FieldCostsView() {
     return rows.sort((a, b) => a.displayName.localeCompare(b.displayName));
   }, [allRows, cityFilter, billingFilter]);
 
+  /* INACTIVE VENUES ARE HIDDEN BY DEFAULT — display only. `filtered` is still every row the filters
+   * keep and every total below sums it, so a hidden row can never move a figure (it has no matches
+   * and $0 by definition; scripts/field-cost-activity-test.ts). The toggle is not persisted. */
+  const [showInactive, setShowInactive] = useState(false);
+  const inactiveKeys = useMemo(() => {
+    const out = new Set<string>();
+    const p = monthParts(month);
+    if (!data || !p) return out;
+    const payees = fieldCostPayeesIn(data, p.year, p.month0, new Date(nowMs));
+    for (const r of filtered) if (isInactiveFieldCostRow(data, r, month, payees)) out.add(r.key);
+    return out;
+  }, [data, filtered, month, nowMs]);
+  const shown = useMemo(
+    () => (showInactive ? filtered : filtered.filter((r) => !inactiveKeys.has(r.key))),
+    [filtered, inactiveKeys, showInactive],
+  );
+  const totals = fieldCostTotals(filtered);
+
   // Reconciliation: fieldCostsFor is now the canonical Cash Flow line, so
   // its sum always matches the per-row total here by construction. We
   // surface the breakdown for trust — per-match auto, override-billed,
@@ -617,6 +639,15 @@ export default function FieldCostsView() {
             <option value="share">Profit share</option>
           </select>
         </Filter>
+        <label className="mb-1.5 flex cursor-pointer items-center gap-2 self-end text-sm font-bold text-deep-green/75" title="Venues with no matches, no cost, nothing set by hand and no payment leaving this month">
+          <input
+            type="checkbox"
+            data-testid="show-inactive"
+            checked={showInactive}
+            onChange={(e) => setShowInactive(e.target.checked)}
+          />
+          Show inactive ({inactiveKeys.size})
+        </label>
         <button
           type="button"
           onClick={() => {
@@ -686,15 +717,19 @@ export default function FieldCostsView() {
                 <tr>
                   <td colSpan={6} className="text-center text-sm text-deep-green/55">Loading field costs…</td>
                 </tr>
-              ) : filtered.length === 0 ? (
+              ) : shown.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="text-center text-sm text-deep-green/55">No venues match these filters.</td>
+                  <td colSpan={6} className="text-center text-sm text-deep-green/55">
+                    {filtered.length === 0
+                      ? "No venues match these filters."
+                      : `Every venue here is inactive this month (${filtered.length}). Tick “Show inactive” to see them.`}
+                  </td>
                 </tr>
               ) : (
-                filtered.map((row, i) => {
+                shown.map((row, i) => {
                   const expanded = expandedKey === row.key;
                   const venue = venueById.get(row.primaryVenueId) ?? null;
-                  const md = data ? matchDaysOf(data, row, month, venue) : [];
+                  const md = data ? matchDaysOf(data, row, month) : [];
                   return (
                     <Fragment key={row.key}>
                       <FieldCostTableRow
@@ -707,6 +742,7 @@ export default function FieldCostsView() {
                         onToggle={() => setExpandedKey(expanded ? null : row.key)}
                         month={month}
                         matchDays={md}
+                        inactive={inactiveKeys.has(row.key)}
                       />
                       {expanded && venue && data && (
                         <VenuePanel
@@ -717,7 +753,7 @@ export default function FieldCostsView() {
                           matchDays={md}
                           fields={fieldsFor(row)}
                           error={errorFor(row.primaryVenueId)}
-                          scheduleRows={buildMatchLineItems(data, row, month)}
+                          scheduleRows={fieldCostMatchLines(data, row, month)}
                           split={fieldCostSplit(data, row, month, kickedAt(nowMs))}
                           nowMs={nowMs}
                           onPatch={(patch, field) => void saveVenuePatch(row.primaryVenueId, patch, field)}
@@ -734,9 +770,10 @@ export default function FieldCostsView() {
               <tr>
                 <td>{monthFull(month)}</td>
                 <td />
-                <td className="r">{filtered.reduce((a, r) => a + r.matchCount, 0)}</td>
-                {/* THE SAME SUM AS THE HEADLINE — both are the rows on screen, so they cannot drift. */}
-                <td className="r">{fmtMoney(filtered.reduce((a, r) => a + r.amount, 0))}</td>
+                {/* EVERY ROW THE FILTERS KEEP, hidden inactive ones included (they add 0 and $0), so the
+                    footer reads the same with "Show inactive" on or off. Same sum as the headline. */}
+                <td className="r" data-testid="total-matches">{totals.matches}</td>
+                <td className="r" data-testid="total-cost" data-total={totals.amount}>{fmtMoney(totals.amount)}</td>
                 <td />
                 <td />
               </tr>
@@ -830,6 +867,7 @@ const FC2_CSS = `
 .fc2 tr.row{cursor:pointer}.fc2 tr.row:hover td{background:#fafbf9}
 .fc2 tr.row[aria-expanded="true"] td{background:#f3f6f2}
 .fc2 tr.row.hl td{background:#e8f7ee}
+.fc2 tr.row.inactive td{opacity:.55}
 .fc2 .chev{color:#7a8a81;font-size:12px}
 .fc2 tr.panel td{padding:0;background:#f7f9f6}
 .fc2 .pan{padding:12px 22px 14px;border-top:1px solid #e3e7e1;display:grid;grid-template-columns:1fr auto;gap:0 56px}
@@ -907,11 +945,8 @@ function calcText(row: FieldCostRow): string {
 
 /** The days of the cost month that carry a match, with each one's cost — for the calendar's
  *  underline and for "each match" cash. Charged cancellations count; they are paid. */
-function matchDaysOf(data: FinanceData, row: FieldCostRow, month: Q2Month, venue: FinVenue | null): { d: number; amount: number }[] {
-  return buildMatchLineItems(data, row, month).map((it) => ({
-    d: Number(it.date.slice(8, 10)),
-    amount: venue?.rate_days ? rateForYmd(venue.rate_days, venue.per_match_rate, it.date) : it.rate,
-  }));
+function matchDaysOf(data: FinanceData, row: FieldCostRow, month: Q2Month): { d: number; amount: number }[] {
+  return fieldCostMatchLines(data, row, month).map((it) => ({ d: Number(it.date.slice(8, 10)), amount: it.rate }));
 }
 
 function FieldCostTableRow({
@@ -924,6 +959,7 @@ function FieldCostTableRow({
   onToggle,
   month,
   matchDays,
+  inactive,
 }: {
   index: number;
   row: FieldCostRow;
@@ -934,6 +970,8 @@ function FieldCostTableRow({
   onToggle: () => void;
   month: Q2Month;
   matchDays: { d: number; amount: number }[];
+  /** Shown only with "Show inactive" on: one step back in ink, and says so. */
+  inactive: boolean;
 }) {
   const model = modelOf(row);
   const p = monthParts(month);
@@ -943,14 +981,15 @@ function FieldCostTableRow({
     : { b: "—", s: "" };
   return (
     <tr
-      className={`row${highlight ? " hl" : ""}`}
+      className={`row${highlight ? " hl" : ""}${inactive ? " inactive" : ""}`}
       data-testid={`row-${index}`}
+      data-inactive={inactive || undefined}
       aria-expanded={expanded}
       onClick={onToggle}
     >
       <td className="v">
         <b>{row.displayName}</b>
-        <span>{row.city}</span>
+        <span>{row.city}{inactive ? " · inactive this month" : ""}</span>
       </td>
       <td>
         <span className={`tag${model === "share" ? " share" : ""}`} data-testid={`tag-${index}`}>
@@ -1030,7 +1069,7 @@ function VenuePanel({
   matchDays: { d: number; amount: number }[];
   fields: FieldBox[];
   error: string | null;
-  scheduleRows: MatchLineItem[];
+  scheduleRows: FieldCostMatchLine[];
   /** The computed figure split at now (financeCosts.fieldCostSplit). */
   split: FieldCostSplit;
   nowMs: number;
@@ -1371,9 +1410,9 @@ function VenuePanel({
             )}
           </div>
         </div>
-        {row.billingType === "per_match" && row.legs.length > 0 && (
+        {model === "match" && row.legs.length > 0 && (
           <div className="matches">
-            <PerMatchExpand row={row} scheduleRows={scheduleRows} nowMs={nowMs} />
+            <PerMatchExpand scheduleRows={scheduleRows} computed={comp} nowMs={nowMs} />
           </div>
         )}
       </td>
@@ -1381,59 +1420,26 @@ function VenuePanel({
   );
 }
 
-type MatchLineItem = {
-  date: string;
-  venue: string;
-  rate: number;
-  cancelled: boolean;
-  /** The true instant (start_date_utc), for the ran / scheduled label. Never match_date: wall clock. */
-  startUtcMs: number | null;
-};
-
 /** Has this schedule row kicked off? fieldEconomics.hasKickedOff on start_utc_ms — the same cut the
  *  Cost page and the Match panel use. A null instant reads as not yet. */
 const kickedAt = (nowMs: number) => (s: FinMasterSchedule) => hasKickedOff({ startUtcMs: s.start_utc_ms }, nowMs);
 
 /** The status a line reads. A label only: every one of these is in the month's cost. */
-function matchStatus(it: MatchLineItem, nowMs: number): string {
+function matchStatus(it: FieldCostMatchLine, nowMs: number): string {
   const past = hasKickedOff({ startUtcMs: it.startUtcMs }, nowMs);
   if (it.cancelled) return past ? "cancelled, charged" : "cancelled, will be charged";
   return past ? "ran" : "scheduled";
 }
 
-function buildMatchLineItems(
-  data: FinanceData,
-  row: FieldCostRow,
-  month: Q2Month,
-): MatchLineItem[] {
-  const items: MatchLineItem[] = [];
-  for (const leg of row.legs) {
-    const label = leg.rawVenueName || leg.venueName;
-    for (const s of data.masterSchedule) {
-      if (isEventSchedule(s)) continue;
-      if (s.venue_id === leg.venueId && s.month === month) {
-        items.push({ date: s.match_date, venue: label, rate: leg.rate, cancelled: false, startUtcMs: s.start_utc_ms });
-      }
-    }
-    const venue = data.venues.find((v) => v.id === leg.venueId);
-    if (venue?.charge_on_cancel) {
-      for (const s of data.cancelledSchedule) {
-        if (isEventSchedule(s)) continue;
-        if (s.venue_id === leg.venueId && s.month === month) {
-          items.push({ date: s.match_date, venue: label, rate: leg.rate, cancelled: true, startUtcMs: s.start_utc_ms });
-        }
-      }
-    }
-  }
-  return items;
-}
-
+/** The matches behind a per-match venue's computed figure, each at the rate it is charged. The
+ *  total line is Σ cost, which is the computed figure (financeCosts.fieldCostMatchLines). */
 function PerMatchExpand({
   scheduleRows,
+  computed,
   nowMs,
 }: {
-  row: FieldCostRow;
-  scheduleRows: MatchLineItem[];
+  scheduleRows: FieldCostMatchLine[];
+  computed: number;
   nowMs: number;
 }) {
   if (scheduleRows.length === 0) {
@@ -1443,12 +1449,13 @@ function PerMatchExpand({
       </div>
     );
   }
+  const total = r2(scheduleRows.reduce((a, s) => a + s.cost, 0));
   return (
     <div>
       <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
         Underlying matches · from MatchDay
       </div>
-      <table className="w-full font-mono text-[11px]">
+      <table className="w-full font-mono text-[11px]" data-testid="match-lines">
         <thead className="text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
           <tr>
             <th className="py-1 text-left">Date</th>
@@ -1462,7 +1469,7 @@ function PerMatchExpand({
           {[...scheduleRows]
             .sort((a, b) => a.date.localeCompare(b.date))
             .map((s, i) => (
-              <tr key={i} className="border-t border-cream-line/40">
+              <tr key={i} className="border-t border-cream-line/40" data-rate={s.rate} data-cost={s.cost} data-date={s.date}>
                 <td className="py-1 pr-3 text-deep-green">{s.date}</td>
                 <td className="py-1 pr-3 text-deep-green/65">{s.venue}</td>
                 <td
@@ -1471,14 +1478,32 @@ function PerMatchExpand({
                   {matchStatus(s, nowMs)}
                 </td>
                 <td className="py-1 pr-3 text-right tabular-nums text-deep-green/55">
-                  ${s.rate}
+                  {fmtMoney(s.rate, true)}
                 </td>
                 <td className="py-1 text-right font-bold tabular-nums text-deep-green">
-                  {fmtMoney(s.rate, true)}
+                  {s.sameSlot ? (
+                    <span title="Same reserved slot as the match above: the slot is charged once.">
+                      <span className="font-normal text-deep-green/45">same slot · </span>
+                      {fmtMoney(0, true)}
+                    </span>
+                  ) : (
+                    fmtMoney(s.cost, true)
+                  )}
                 </td>
               </tr>
             ))}
         </tbody>
+        <tfoot>
+          <tr className="border-t border-cream-line" data-testid="match-lines-total" data-total={total}>
+            <td className="py-1 pr-3 font-bold text-deep-green" colSpan={4}>
+              {scheduleRows.length} {scheduleRows.length === 1 ? "match" : "matches"}
+              {Math.abs(total - computed) >= 0.005 && (
+                <span className="ml-2 font-normal text-coral">does not match the computed {fmtMoney(computed, true)}</span>
+              )}
+            </td>
+            <td className="py-1 text-right font-bold tabular-nums text-deep-green">{fmtMoney(total, true)}</td>
+          </tr>
+        </tfoot>
       </table>
     </div>
   );

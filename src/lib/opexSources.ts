@@ -1048,3 +1048,32 @@ export function buildOpexCalendarAsOf(
     bankThrough,
   };
 }
+
+/**
+ * EVERY VENUE THAT HAS MONEY LEAVING IN THE MONTH, by Field Costs row (group primary id).
+ * Field Costs hides a venue as "inactive" only when it is NOT in this set, so the set errs wide:
+ *
+ *   1. The OpEx calendar itself (buildOpexCalendarAsOf) — bank payments for days up to today, and
+ *      the projection for days after it. Exactly what the OpEx page draws.
+ *   2. PLUS the pay-schedule projection over the WHOLE month, past days included. The calendar
+ *      shows only the bank for a day that has passed, so a scheduled payment the bank feed has not
+ *      recorded yet (a prepaid Oct 1 payment for November, say) would otherwise vanish, and a
+ *      missing bank record must never hide a venue.
+ *
+ * A row counts when its total — dated cells, undated, paid-undated — is non-zero, so a refund
+ * (negative) counts as money moving too. Prepaid rows ("for November") carry the venue's id.
+ */
+export function fieldCostPayeesIn(data: FinanceData, year: number, month0: number, now: Date): Set<number> {
+  const out = new Set<number>();
+  const take = (rows: CalRow[]) => {
+    for (const r of rows) {
+      if (r.lock?.kind !== "field-cost" || Math.abs(rowTotal(r)) < 0.005) continue;
+      out.add(r.lock.venueId);
+    }
+  };
+  const cal = buildOpexCalendarAsOf(data, year, month0, now);
+  for (const g of cal.groups) if (g.key === "field") take(g.rows);
+  const planned: FinanceData = { ...data, overrides: data.overrides.filter((o) => o.created_by !== BANK_SOURCE) };
+  take(fieldCostGroup(planned, monthKeyFor(year, month0), year, month0, true).rows);
+  return out;
+}

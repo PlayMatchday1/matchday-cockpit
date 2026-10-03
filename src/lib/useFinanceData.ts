@@ -104,10 +104,9 @@ export type FinManagerPay = {
 //
 // `venue_id` is resolved at load time via mdapi_field_id → venueFields,
 // with a (city, venue_name) string fallback for legacy rows whose
-// mdapi_field_id is null. Split-rate venues (ATH Katy) re-route by
-// day-of-week through resolveSplitRateVenueId — Sunday matches go to
-// the Sunday leg id even though their mdapi_field_id points at the
-// weekday leg.
+// mdapi_field_id is null. resolveSplitRateVenueId then applies the one
+// remaining split, Soccer Central's by capacity. There is no day-of-week
+// re-route: ATH Katy's Sunday rate lives on the venue (rate_days, 0201).
 //
 // `duration_hours` is parsed from the match_time range ("7:00 PM -
 // 8:00 PM" → 1). Falls back to 1 when the time string isn't a parseable
@@ -422,8 +421,7 @@ function monthFromMatchDate(dateStr: string): string {
 
 // Map a raw mdapi_matches row to the FinMasterSchedule shape the cost
 // calc consumes. Resolves field_id → fin_venue_id via fin_venue_fields,
-// then split-rate routing (ATH Katy by day-of-week, Soccer Central by
-// capacity). Both masterSchedule (is_cancelled=false) and
+// then split-rate routing (Soccer Central by capacity). Both masterSchedule (is_cancelled=false) and
 // cancelledSchedule (is_cancelled=true) go through this, so they resolve
 // identically and form disjoint halves of mdapi_matches — no overlap,
 // no double-count. Replaces schedule_master as the billing source on

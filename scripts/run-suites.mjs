@@ -328,6 +328,11 @@ const NODE_SUITES = [
   // legs — and the cut must be the true instant, not the wall clock. Pure arithmetic, so it is
   // checked on computed values; the page cannot show a drift of a cent.
   "scripts/field-cost-split-test.ts",
+  // Field Costs' "Show inactive". Hiding a venue that is due money is the failure that cannot be
+  // seen on the page doing it: the fixture prepays on a day already past with no bank record, proves
+  // the OpEx calendar alone misses it, and proves the inactive rule still keeps it. Also: the
+  // footer's totals are identical with inactive venues shown or hidden.
+  "scripts/field-cost-activity-test.ts",
   // Match Promotion's NEW badge. Both decisions that carry the rule are invisible in the DOM — the
   // prior slate INCLUDING cancelled matches (excluding them mis-flagged 21 of 31), and the tests
   // nesting per field rather than per city (a city-wide reading lost 19 cases). A badge is a badge

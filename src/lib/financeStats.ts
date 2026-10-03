@@ -28,7 +28,6 @@ import { groupVenues, type VenueGroup } from "./venueGroups";
 import {
   buildFieldIdToVenueIdMap,
   normalizeMatchName,
-  resolveVenueForMatch,
 } from "./venueNormalization";
 
 // Q2Month is a month-key string (e.g. "Apr 2026"). Kept as a named
@@ -2224,16 +2223,12 @@ export function buildMdapiMemberSpotIndex(
     if (r.field_id == null) continue;
     const baseVenueId = fieldToVenue.get(r.field_id);
     if (baseVenueId == null) continue;
-    // Day-of-week swap: ATH Katy + Sun match → ATH Katy Sunday venue,
-    // so member spots bucket under the right rate-tier row. r.match_start
-    // is the wall-clock-stable ISO produced by toLegacyShape; new Date()
-    // parses as local, .getDay() is the local day-of-week.
-    const matchStart = new Date(r.match_start);
-    const resolved = resolveVenueForMatch(baseVenueId, matchStart, venues);
-    const v = venueById.get(resolved.venueId);
+    // No day-of-week swap: a member spot buckets under the venue its field links to (rate_days,
+    // migration 0201, replaced the "<venue> Sunday" sibling row).
+    const v = venueById.get(baseVenueId);
     if (!v) continue;
 
-    bucket(byVenueMonth, `${resolved.venueId}|${month}`)[category] += 1;
+    bucket(byVenueMonth, `${baseVenueId}|${month}`)[category] += 1;
     bucket(byCityMonth, `${v.city}|${month}`)[category] += 1;
   }
 
