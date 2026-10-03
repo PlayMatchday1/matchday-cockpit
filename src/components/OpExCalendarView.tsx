@@ -270,7 +270,9 @@ export default function OpExCalendarView() {
       )}
 
       {data && (
-        <section className="card led" data-testid="ledger">
+        /* data-payments: how many payments the data layer produced for the month (paymentsOf), so
+           scripts/mocks/opex-calendar-v3.assert.mjs can check the ledger renders every one. */
+        <section className="card led" data-testid="ledger" data-payments={all.length}>
           <div className="hd">
             <h2>Ledger · what hits when</h2>
             {dayFilter != null && (

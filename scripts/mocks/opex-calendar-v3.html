@@ -229,6 +229,8 @@ function render(){
   document.getElementById("lbody").innerHTML = lb;
 }
 render();
+// How many payments the month has, for the assert (the live page sets the same attribute).
+document.querySelector('[data-testid="ledger"]').dataset.payments = P.length;
 
 document.addEventListener("click", e => {
   const ch = e.target.closest(".chip"); if (ch) { const k = ch.dataset.cat, solo = on[k] && Object.values(on).filter(Boolean).length === 1;
