@@ -10,7 +10,9 @@
 //        · with "Show projections" off, every figure equals the build without projections
 //        · paid + expected + projected = the header total, with them on
 //        · a weekly projection from the 5th lands on the 5th, 12th, 19th and 26th
-//        · a projection dated in the past is still projected, never paid
+//        · a projection whose day is over is not shown and not counted (was: "still projected")
+//   4. THE AUTOMATIC MATCH MANAGER PAY PROJECTION: the mean of the four closed weeks it shows; none on a
+//      Tuesday that has real match manager pay rows; every Tuesday through two months out.
 // The mock assert (scripts/mocks/opex-calendar-v3.assert.mjs) is left to the session editing it.
 
 import { buildOpexCalendarAsOf } from "../src/lib/opexSources";
@@ -18,6 +20,7 @@ import { paymentsOf, sumOf } from "../src/lib/opexLedger";
 import { projectionDatesIn, type OpexProjection } from "../src/lib/opexProjectionModel";
 import { WEEK_START, isWeekendColumn, monthLayout, weekdayHeaders, weekEndOnOrAfter, weekStartOf, weekStartOnOrBefore } from "../src/lib/weekStart";
 import { drawsOwnHeader } from "../src/lib/financeChrome";
+import { autoMatchManagerPay } from "../src/lib/opexAutoProjection";
 import type { FinanceData, FinVenue } from "../src/lib/useFinanceData";
 
 let pass = 0, fail = 0;
@@ -130,7 +133,9 @@ console.log("\n3b. PAID + EXPECTED + PROJECTED = THE HEADER TOTAL");
 console.log("\n3c. A WEEKLY PROJECTION FROM THE 5TH: THE 5TH, 12TH, 19TH AND 26TH");
 {
   is("dates", projectionDatesIn(PROJ[0], 2026, 9), ["2026-10-05", "2026-10-12", "2026-10-19", "2026-10-26"]);
-  const on = buildOpexCalendarAsOf(data, 2026, 9, NOW, PROJ);
+  // Seen on Oct 1, before its first date, so none of the four has passed (a passed one now drops off
+  // — 3d). Was seen on Oct 20 before that rule.
+  const on = buildOpexCalendarAsOf(data, 2026, 9, new Date(2026, 9, 1, 9), PROJ);
   const days = paymentsOf(on).filter((p) => p.projected?.id === 1).map((p) => p.day).sort((a, b) => (a ?? 0) - (b ?? 0));
   is("...and those are the calendar days its payments land on", days, [5, 12, 19, 26]);
   is("it carries forward: November's are the 2nd, 9th, 16th, 23rd and 30th", projectionDatesIn(PROJ[0], 2026, 10).map((d) => +d.slice(8)), [2, 9, 16, 23, 30]);
@@ -141,16 +146,62 @@ console.log("\n3c. A WEEKLY PROJECTION FROM THE 5TH: THE 5TH, 12TH, 19TH AND 26T
   is("nothing before the first date", projectionDatesIn(PROJ[0], 2026, 8), []);
 }
 
-console.log("\n3d. A PROJECTION DATED IN THE PAST IS STILL PROJECTED, NOT PAID");
+console.log("\n3d. A PROJECTION WHOSE DAY IS OVER IS NOT SHOWN AND NOT COUNTED (rule changed 2026-10-03)");
 {
-  const on = buildOpexCalendarAsOf(data, 2026, 9, NOW, PROJ);
-  const p2 = paymentsOf(on).find((p) => p.projected?.id === 2)!;
-  is("the Oct 1 projection, seen on Oct 20: day 1", p2.day, 1);
-  is("...is not paid", p2.paid, false);
-  is("...and is still marked projected", !!p2.projected, true);
+  // Was: "a projection dated in the past is still projected, not paid". Ryan replaced that rule: once
+  // its day is over a projection drops off; for a repeating one only the passed dates go.
+  const on = buildOpexCalendarAsOf(data, 2026, 9, NOW, PROJ);   // NOW = Oct 20
+  const ps = paymentsOf(on);
+  is("the one-off Oct 1 projection is not shown on Oct 20", ps.some((p) => p.projected?.id === 2), false);
+  is("the weekly one keeps only its days from today on: Oct 26 (5th, 12th and 19th have passed)", ps.filter((p) => p.projected?.id === 1).map((p) => p.day), [26]);
+  is("...the stored row is untouched — its dates are still all four", projectionDatesIn(PROJ[0], 2026, 9).length, 4);
+  const today = buildOpexCalendarAsOf(data, 2026, 9, new Date(2026, 9, 26, 9), PROJ);
+  is("today's own date still shows (Oct 26, seen on Oct 26)", paymentsOf(today).some((p) => p.projected?.id === 1 && p.day === 26), true);
   const without = buildOpexCalendarAsOf(data, 2026, 9, NOW);
-  is("...and adds nothing to the paid figure", on.paidTotal, without.paidTotal);
-  is("CONTROL — the real Oct 1 payment that day IS paid", paymentsOf(on).some((p) => p.day === 1 && !p.projected && p.paid), true);
+  const proj = sumOf(ps.filter((p) => p.projected));
+  is("passed projections are not counted: month total = the build without + only the open ones", Math.round(on.monthTotal * 100), Math.round((without.monthTotal + proj) * 100));
+  is("CONTROL — the open projections really are there (Oct 26 weekly, Oct 28 goals, Oct 31 tool)", ps.filter((p) => p.projected).map((p) => p.day).sort((a, b) => (a ?? 0) - (b ?? 0)), [26, 28, 31]);
+  const past = buildOpexCalendarAsOf(data, 2026, 8, NOW, PROJ);   // September, entirely over
+  is("a month that is over shows no projections at all", paymentsOf(past).some((p) => p.projected), false);
+  const future = buildOpexCalendarAsOf(data, 2026, 10, NOW, PROJ);
+  is("CONTROL — a future month shows them all (November's weekly: 5 dates)", paymentsOf(future).filter((p) => p.projected?.id === 1).length, 5);
+}
+
+console.log("\n4. THE AUTOMATIC MATCH MANAGER PAY PROJECTION");
+{
+  // Real rows for the last six Tuesdays, two cities each — Sep 8–29 as on 2026-10-03 — plus the
+  // week in progress (Oct 6, $2,000) which must NOT be averaged and must keep its real amount.
+  const mm = (id: number, date: string, city: string, amount: number) =>
+    ({ id, date, month: `${["Sep", "Oct"][Number(date.slice(5, 7)) - 9]} 2026`, city, category: "Match Manager Pay", vendor: "Weekly payroll", notes: null, amount, manual_entry: false });
+  const weeks: [string, number][] = [["2026-09-01", 2215], ["2026-09-08", 2110], ["2026-09-15", 2160], ["2026-09-22", 2525], ["2026-09-29", 2165], ["2026-10-06", 2000]];
+  let id = 100;
+  const expenses = weeks.flatMap(([d, t]) => [mm(id++, d, "Austin", t - 500), mm(id++, d, "Dallas", 500)]);
+  const d2 = { ...data, expenses } as unknown as FinanceData;
+  const OCT3 = new Date(2026, 9, 3, 12);
+  const auto = autoMatchManagerPay(expenses as never, OCT3);
+  is("the four weeks are the last four CLOSED ones: Sep 29, 22, 15, 8 (not Oct 6, in progress)", auto.basis.map((w) => w.tuesday), ["2026-09-29", "2026-09-22", "2026-09-15", "2026-09-08"]);
+  is("...each with its real total across cities", auto.basis.map((w) => w.total), [2165, 2525, 2160, 2110]);
+  is("...and its work week (Monday, eight days before)", auto.basis[0].weekStart, "2026-09-21");
+  const mean = Math.round(auto.basis.reduce((s, w) => s + w.total, 0) / auto.basis.length * 100) / 100;
+  is(`the projected amount is the mean of the four weeks shown: $${mean}`, auto.amount, mean);
+  is("...which is $2,240 here", auto.amount, 2240);
+  is("Tuesdays projected: Oct 13 through Dec 1 (Oct 6 has real rows; Dec 8 is past two months)", auto.tuesdays, ["2026-10-13", "2026-10-20", "2026-10-27", "2026-11-03", "2026-11-10", "2026-11-17", "2026-11-24", "2026-12-01"]);
+
+  const on = buildOpexCalendarAsOf(d2, 2026, 9, OCT3, [], true);
+  const ps = paymentsOf(on);
+  const autoPs = ps.filter((p) => p.projected?.auto);
+  is("on the calendar: Oct 13, 20 and 27, each $2,240", autoPs.map((p) => [p.day, p.amount]), [[13, 2240], [20, 2240], [27, 2240]]);
+  is("a Tuesday with real match manager pay rows shows no automatic projection (Oct 6)", autoPs.some((p) => p.day === 6), false);
+  is("...and shows its real amount instead: $2,000, not projected", sumOf(ps.filter((p) => p.day === 6 && p.sub === "Match manager pay" && !p.projected)), 2000);
+  is("the auto rows are Personnel and counted as projected, never paid", autoPs.every((p) => p.cat === "pers" && !p.paid), true);
+  const off = buildOpexCalendarAsOf(d2, 2026, 9, OCT3, [], false);
+  is("\"Show projections\" off: every figure equals the build without projections", JSON.stringify(off), JSON.stringify(buildOpexCalendarAsOf(d2, 2026, 9, OCT3)));
+  is("CONTROL — on, the month really is $6,720 more (3 × $2,240)", Math.round((on.monthTotal - off.monthTotal) * 100), 672000);
+  const nov = paymentsOf(buildOpexCalendarAsOf(d2, 2026, 10, OCT3, [], true)).filter((p) => p.projected?.auto).map((p) => p.day);
+  is("it rolls into November: the 3rd, 10th, 17th and 24th", nov, [3, 10, 17, 24]);
+  const late = autoMatchManagerPay(expenses as never, new Date(2026, 9, 10, 12));
+  is("the window rolls: on Oct 10 the closed weeks are Oct 6, Sep 29, 22, 15", late.basis.map((w) => w.tuesday), ["2026-10-06", "2026-09-29", "2026-09-22", "2026-09-15"]);
+  is("with fewer than four closed weeks there is no automatic projection", autoMatchManagerPay(expenses.slice(0, 6) as never, OCT3).tuesdays, []);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

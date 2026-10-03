@@ -18,6 +18,7 @@
 // "No day set" group, and on no calendar day. The sum of all payments is the calendar's monthTotal.
 
 import type { CalGroup, CalRow, OpexCalendarAsOf } from "./opexSources";
+import type { AutoMatchPay } from "./opexAutoProjection";
 
 export type CatKey = "pers" | "field" | "equip" | "mkt" | "subs" | "misc";
 
@@ -56,8 +57,8 @@ export type Payment = {
   city: string | null;
   amount: number;
   paid: boolean;
-  /** Added by hand on OpEx (opex_projections). Never paid, whatever its date. */
-  projected?: { id: number };
+  /** A projection: added by hand (opex_projections) or `auto` (the match manager pay average). */
+  projected?: { id: number; auto?: AutoMatchPay };
 };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -94,7 +95,7 @@ export function paymentsOf(cal: OpexCalendarAsOf): Payment[] {
       if (r.projected) {
         for (const [d, v] of Object.entries(r.cells)) {
           if (Math.abs(v) < 0.005) continue;
-          out.push({ key: `${r.key}:${d}`, day: Number(d), payee: r.label, cat: r.projected.cat, sub: "Projection", city: null, amount: r2(v), paid: false, projected: { id: r.projected.id } });
+          out.push({ key: `${r.key}:${d}`, day: Number(d), payee: r.label, cat: r.projected.cat, sub: r.projected.auto ? "Match manager pay" : "Projection", city: null, amount: r2(v), paid: false, projected: { id: r.projected.id, auto: r.projected.auto } });
         }
         continue;
       }

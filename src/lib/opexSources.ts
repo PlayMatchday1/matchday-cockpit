@@ -49,6 +49,7 @@ import { cashDays, cashMonthOffset, monthName, rateForYmd } from "./venuePay";
 import type { FinanceData, FinVenue, FinExpense } from "./useFinanceData";
 import { buildFieldCostRows } from "./financeCosts";
 import { projectionCells, type OpexProjection, type ProjCat } from "./opexProjectionModel";
+import { autoMatchManagerPay, type AutoMatchPay } from "./opexAutoProjection";
 import { daysInMonth } from "./checkIns";
 import { groupVenues, type VenueGroup } from "./venueGroups";
 
@@ -104,8 +105,9 @@ export type CalRow = {
   info?: RowInfo;
   /** A PREPAID venue's cash drawn in this month for NEXT month's matches: "for November". */
   forMonth?: string;
-  /** A PROJECTION, added by hand on OpEx (opex_projections). Never paid, whatever its date. */
-  projected?: { id: number; cat: ProjCat };
+  /** A PROJECTION: added by hand on OpEx (opex_projections), or `auto` — the calculated match
+   *  manager pay projection (opexAutoProjection). Never paid; gone once its day is over. */
+  projected?: { id: number; cat: ProjCat; auto?: AutoMatchPay };
 };
 
 // What the row's i says. Plain words; no table names.
@@ -941,6 +943,9 @@ export function buildOpexCalendarAsOf(
    * passes none and gets exactly what it got before. With none, nothing below changes: the
    * projections group is not added at all. */
   projections: readonly OpexProjection[] = [],
+  /* THE AUTOMATIC MATCH MANAGER PAY PROJECTION (opexAutoProjection). Only the OpEx page turns it on,
+   * and only while "Show projections" is ticked. Off, nothing below changes. */
+  autoMatchPay = false,
 ): OpexCalendarAsOf {
   const state = monthStateOf(year, month0, now);
   const days = daysInMonth(year, month0);
@@ -976,12 +981,33 @@ export function buildOpexCalendarAsOf(
     }
     groups = [city, match, field, ...rest];
   }
-  if (projections.length) {
+  if (projections.length || autoMatchPay) {
+    /* A PROJECTION WHOSE DAY IS OVER IS NOT SHOWN OR COUNTED (Ryan, 2026-10-03; replaces "a past one
+     * stays projected"). Today still shows. For a repeating one only the passed dates drop off —
+     * the stored row is untouched. */
+    const open = (d: number) => (state === "past" ? false : state === "current" ? d >= now.getDate() : true);
+    const keepOpen = (cells: Record<number, number>) => {
+      const out: Record<number, number> = {};
+      for (const [d, v] of Object.entries(cells)) if (open(Number(d))) out[Number(d)] = v;
+      return out;
+    };
     const rows: CalRow[] = [];
     for (const p of projections) {
-      const cells = projectionCells(p, year, month0);
+      const cells = keepOpen(projectionCells(p, year, month0));
       if (!Object.keys(cells).length) continue;
       rows.push({ key: `proj:${p.id}`, label: p.description, cells, projected: { id: p.id, cat: p.category } });
+    }
+    if (autoMatchPay && data) {
+      const auto = autoMatchManagerPay(data.expenses, now);
+      const cells: Record<number, number> = {};
+      for (const t of auto.tuesdays) {
+        if (Number(t.slice(0, 4)) !== year || Number(t.slice(5, 7)) !== month0 + 1) continue;
+        cells[Number(t.slice(8, 10))] = auto.amount;
+      }
+      const kept = keepOpen(cells);
+      if (Object.keys(kept).length) {
+        rows.push({ key: "auto:match-pay", label: "Match manager pay", cells: kept, projected: { id: 0, cat: "pers", auto } });
+      }
     }
     if (rows.length) {
       const { agg } = aggregateAndSubtotal(rows);

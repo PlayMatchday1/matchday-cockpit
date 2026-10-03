@@ -22,6 +22,7 @@ import { buildOpexCalendarAsOf } from "@/lib/opexSources";
 import { CATS, CAT_BY_KEY, cityLabel, paymentsOf, subLabel, sumOf, type CatKey, type Payment } from "@/lib/opexLedger";
 import { useFinancePeriod } from "@/lib/financePeriodContext";
 import { currentPeriod, stepPeriod } from "@/lib/financePeriod";
+import type { AutoMatchPay } from "@/lib/opexAutoProjection";
 import { useAuth } from "@/lib/useAuth";
 import { isWeekendColumn, monthLayout, weekdayHeaders } from "@/lib/weekStart";
 import {
@@ -42,7 +43,15 @@ function fmt(n: number): string {
   })}`;
 }
 
-type Pop = { id: string; x: number; y: number; kind: "how" } | { id: string; x: number; y: number; kind: "pill"; day: number; cat: CatKey; proj: boolean } | null;
+/** Which kind of money a pill holds: real (""), a projection added by hand ("p"), or the automatic
+ *  match manager pay projection ("a"). Each gets its own pill, never mixed. */
+type PillKind = "" | "p" | "a";
+const pillKindOf = (p: Payment): PillKind => (p.projected ? (p.projected.auto ? "a" : "p") : "");
+type Pop =
+  | { id: string; x: number; y: number; kind: "how" }
+  | { id: string; x: number; y: number; kind: "pill"; day: number; cat: CatKey; pk: PillKind }
+  | { id: string; x: number; y: number; kind: "auto"; auto: AutoMatchPay; day: number | null }
+  | null;
 
 /* THE PROJECTION FORM. `occurrence` is the payment it was opened from (a day on the calendar or a
  * ledger row), so "remove this payment only" knows which date to drop. */
@@ -95,7 +104,7 @@ export default function OpExCalendarView() {
   }, []);
 
   const cal = useMemo(
-    () => buildOpexCalendarAsOf(data, year, month0, now, showProj ? projections : []),
+    () => buildOpexCalendarAsOf(data, year, month0, now, showProj ? projections : [], showProj),
     [data, year, month0, now, showProj, projections],
   );
   const all = useMemo(() => paymentsOf(cal), [cal]);
@@ -133,10 +142,11 @@ export default function OpExCalendarView() {
   /* One pill per category per day — and a SEPARATE pill for that category's projections, so a
    * projection never shares a solid or dashed pill with real money. */
   const pillsOf = (d: number) => {
-    const g = new Map<string, { cat: CatKey; proj: boolean; ps: Payment[] }>();
+    const g = new Map<string, { cat: CatKey; pk: PillKind; proj: boolean; ps: Payment[] }>();
     for (const p of byDay.get(d) ?? []) {
-      const k = `${p.cat}${p.projected ? ":p" : ""}`;
-      const e = g.get(k) ?? { cat: p.cat, proj: !!p.projected, ps: [] };
+      const pk = pillKindOf(p);
+      const k = `${p.cat}:${pk}`;
+      const e = g.get(k) ?? { cat: p.cat, pk, proj: pk !== "", ps: [] };
       e.ps.push(p);
       g.set(k, e);
     }
@@ -175,7 +185,7 @@ export default function OpExCalendarView() {
   const chipTotal = (k: CatKey) => sumOf(all.filter((p) => p.cat === k));
   const clickChip = (k: CatKey) => { setPop(null); setSolo((s) => (s === k ? null : k)); };
 
-  const popPayments = pop?.kind === "pill" ? all.filter((p) => p.day === pop.day && p.cat === pop.cat && !!p.projected === pop.proj).sort((a, b) => b.amount - a.amount) : [];
+  const popPayments = pop?.kind === "pill" ? all.filter((p) => p.day === pop.day && p.cat === pop.cat && pillKindOf(p) === pop.pk).sort((a, b) => b.amount - a.amount) : [];
 
   /* ── THE PROJECTION FORM ───────────────────────────────────────────────────────────────────── */
   const iso = (d: number) => `${year}-${String(month0 + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
@@ -230,10 +240,14 @@ export default function OpExCalendarView() {
     ledgerBody.push(
       <tr key={p.key} data-testid="ledger-row" data-day={p.day ?? ""} data-cat={p.cat} data-proj={p.projected ? p.projected.id : undefined}
         className={[dayFilter != null && p.day === dayFilter ? "hl" : "", p.projected ? "prjrow" : ""].filter(Boolean).join(" ") || undefined}
-        onClick={p.projected ? () => openEdit(p.projected!.id, p.day != null ? iso(p.day) : null) : undefined}
-        title={p.projected ? "A projection: click to change or remove it" : undefined}>
+        onClick={p.projected
+          ? (e) => (p.projected!.auto
+            ? setPop({ ...place(`auto:${p.key}`, e.currentTarget), kind: "auto", auto: p.projected!.auto, day: p.day })
+            : openEdit(p.projected!.id, p.day != null ? iso(p.day) : null))
+          : undefined}
+        title={p.projected ? (p.projected.auto ? "Calculated: click to see how" : "A projection: click to change or remove it") : undefined}>
         <td>{p.day == null ? "—" : `${mon} ${p.day}`}</td>
-        <td>{p.projected && <span className="ptag">proj</span>}<b>{p.payee}</b></td>
+        <td>{p.projected && <span className="ptag">{p.projected.auto ? "auto" : "proj"}</span>}<b>{p.payee}</b></td>
         <td className="cat"><span className="sw" style={{ background: CAT_BY_KEY[p.cat].col }} />{CAT_BY_KEY[p.cat].name}{sub ? ` · ${sub}` : ""}</td>
         <td className="city">{p.city || "—"}</td>
         <td>{p.projected ? <span className="st prj">Projected</span> : <span className={`st ${p.paid ? "paid" : "proj"}`}>{p.paid ? "Paid" : "Expected"}</span>}</td>
@@ -389,16 +403,21 @@ export default function OpExCalendarView() {
                           onClick={(e) => { e.stopPropagation(); openNew(d); }}>+</button>
                         <span className={`dt${t ? "" : " none"}`} data-total={t}>{t ? fmt(t) : "—"}</span></div>
                       {pills.map((x) => {
-                        const id = `pill:${d}:${x.cat}${x.proj ? ":p" : ""}`;
+                        const id = `pill:${d}:${x.cat}:${x.pk}`;
                         // THREE STATES BY BORDER AND FILL: paid solid, expected dashed, projected dotted amber.
                         const cls = x.proj ? "prj" : d <= cal.paidThrough ? "paid" : "proj";
                         return (
-                          <button key={`${x.cat}${x.proj ? ":p" : ""}`} type="button" className={`pay ${cls}`} data-day={d} data-cat={x.cat} data-proj={x.proj || undefined}
+                          <button key={`${x.cat}:${x.pk}`} type="button" className={`pay ${cls}`} data-day={d} data-cat={x.cat} data-proj={x.proj || undefined} data-auto={x.pk === "a" || undefined}
                             aria-expanded={pop?.id === id}
                             title={`${CAT_BY_KEY[x.cat].name} · ${x.ps.length} payment${x.ps.length > 1 ? "s" : ""}`}
-                            onClick={(e) => { e.stopPropagation(); if (pop?.id === id) return setPop(null); setPop({ ...place(id, e.currentTarget), kind: "pill", day: d, cat: x.cat, proj: x.proj }); }}>
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (pop?.id === id) return setPop(null);
+                              const auto = x.pk === "a" ? x.ps[0].projected?.auto : undefined;
+                              setPop(auto ? { ...place(id, e.currentTarget), kind: "auto", auto, day: d } : { ...place(id, e.currentTarget), kind: "pill", day: d, cat: x.cat, pk: x.pk });
+                            }}>
                             <span className="sw" style={{ background: CAT_BY_KEY[x.cat].col }} />
-                            <span className="nm">{x.proj && <span className="ptag">proj</span>}{CAT_BY_KEY[x.cat].short}{x.ps.length > 1 && <small> {x.ps.length}</small>}</span>
+                            <span className="nm">{x.proj && <span className="ptag">{x.pk === "a" ? "auto" : "proj"}</span>}{CAT_BY_KEY[x.cat].short}{x.ps.length > 1 && <small> {x.ps.length}</small>}</span>
                             <span className="v">{fmt(x.total)}</span>
                           </button>
                         );
@@ -515,9 +534,11 @@ export default function OpExCalendarView() {
           <>
             <div className="h">How this page works</div>
             Every payment MatchDay makes in the month, on the day the money leaves. Solid is paid. Dashed is
-            expected: scheduled from real records, not yet paid. Dotted amber is a projection you added by
-            hand: money that might leave, never counted as paid. &ldquo;Show projections&rdquo; takes them out
-            of every figure on the page.
+            expected: scheduled from real records, not yet paid. Dotted amber is a projection: money that
+            might leave, never counted as paid. &ldquo;proj&rdquo; ones you added by hand; &ldquo;auto&rdquo; is match
+            manager pay on a Tuesday with no real amount yet, at the average of the last four closed weeks.
+            A projection drops off once its day is over. &ldquo;Show projections&rdquo; takes them all out of every
+            figure on the page.
             <dl>
               {CATS.map((c) => (
                 <span key={c.key} style={{ display: "contents" }}>
@@ -527,10 +548,25 @@ export default function OpExCalendarView() {
             </dl>
           </>
         )}
+        {pop?.kind === "auto" && (
+          <div data-testid="auto-basis">
+            <div className="h">{pop.day != null ? `${mon} ${pop.day} · ` : ""}Match manager pay · {fmt(pop.auto.amount)}</div>
+            <div className="sub">Projected automatically: the average of the last 4 weeks of match manager pay with a closed work week. The week in progress is not included. It is replaced by the real amount once the Manager Pay page has written that Tuesday.</div>
+            <dl className="pp">
+              {pop.auto.basis.map((w) => (
+                <span key={w.tuesday} style={{ display: "contents" }}>
+                  <dt>Paid {MON3[Number(w.tuesday.slice(5, 7)) - 1]} {Number(w.tuesday.slice(8, 10))} <span className="m">· week of {MON3[Number(w.weekStart.slice(5, 7)) - 1]} {Number(w.weekStart.slice(8, 10))}</span></dt>
+                  <dd data-testid="auto-basis-week" data-total={w.total}>{fmt(w.total)}</dd>
+                </span>
+              ))}
+              <dt><b>Average of {pop.auto.basis.length}</b></dt><dd data-testid="auto-basis-mean" data-total={pop.auto.amount}><b>{fmt(pop.auto.amount)}</b></dd>
+            </dl>
+          </div>
+        )}
         {pop?.kind === "pill" && (
           <>
             <div className="h">{mon} {pop.day} · {CAT_BY_KEY[pop.cat].name} · {fmt(sumOf(popPayments))}</div>
-            <div className="sub">{pop.proj ? "Projected, added by hand. Click one to change or remove it." : pop.day <= cal.paidThrough ? "Paid" : "Expected"}</div>
+            <div className="sub">{pop.pk === "p" ? "Projected, added by hand. Click one to change or remove it." : pop.day <= cal.paidThrough ? "Paid" : "Expected"}</div>
             <dl className="pp">
               {popPayments.map((p) => {
                 const city = cityLabel(p), sub = subLabel(p);
