@@ -13,8 +13,9 @@ import { readFileSync } from "node:fs";
 import { buildCopyBody, droppedByCopy, copyConfirmLine, wallClockLabel, COPY_FIELDS } from "../src/lib/copyMatch";
 import {
   buildMonthGrid, applyFilters, fieldsAvailable, reconcileFields, fieldCountLabel,
-  defaultRange, rangeTitle, isoDow, mondayOnOrBefore, sundayOnOrAfter, priceLabel, type GridMatch,
+  defaultRange, rangeTitle, isoDow, priceLabel, type GridMatch,
 } from "../src/lib/monthGrid";
+import { weekEndOnOrAfter, weekStartOnOrBefore } from "../src/lib/weekStart";
 import { EDITABLE_KEYS } from "../src/lib/matchEditModel";
 
 let pass = 0; const fails: string[] = [];
@@ -187,7 +188,7 @@ console.log("\nEXPORT WORKLIST IS GONE FROM THE TOOLBAR");
     [/exportWorklist/.test(VIEW), /needEmoji/.test(VIEW)], [true, true]);
 }
 
-console.log("\nTHE MONTH GRID: whole weeks, Monday first, padding empty");
+console.log("\nTHE MONTH GRID: whole weeks, Sunday first (src/lib/weekStart.ts), padding empty");
 {
   const M = (id: number, date: string, minutes: number, venue: string, city = "Austin"): GridMatch =>
     ({ apiId: id, city, date, time: "7:00 PM", minutes, venue, name: `m${id}`, veo: false });
@@ -202,14 +203,18 @@ console.log("\nTHE MONTH GRID: whole weeks, Monday first, padding empty");
 
   const g = buildMonthGrid(r.from, r.to, MS, "2026-09-15");
   is("  every row is exactly seven days", g.every((w) => w.length === 7), true);
-  is("  it starts on a Monday", isoDow(g[0][0].iso), 1);
-  is("  …and ends on a Sunday", isoDow(g[g.length - 1][6].iso), 7);
+  // SUNDAY START (2026-10-03): was "starts on a Monday" (isoDow 1) / "ends on a Sunday" (7).
+  is("  it starts on a Sunday", isoDow(g[0][0].iso), 7);
+  is("  …and ends on a Saturday", isoDow(g[g.length - 1][6].iso), 6);
   is("  September 2026 is five rows", g.length, 5);
   const first = g[0][0];
-  is("  the leading pad is out of range", [first.iso, first.inRange], ["2026-08-31", false]);
+  // SUNDAY START: the first pad is Sunday 30 Aug (was Monday 31 Aug).
+  is("  the leading pad is out of range", [first.iso, first.inRange], ["2026-08-30", false]);
   /* AN OUT-OF-RANGE DAY HOLDS NO MATCHES even when one falls on it — a padding cell must be
-   * genuinely empty, not merely styled as though it were. */
-  is("  …and holds no matches, though match 4 is on that date", first.matches.length, 0);
+   * genuinely empty, not merely styled as though it were. Match 4 is on 31 Aug, now the SECOND pad
+   * cell, so that is the cell checked (was the first). */
+  const aug31 = g[0][1];
+  is("  …and the 31 Aug pad holds no matches, though match 4 is on that date", [aug31.iso, aug31.inRange, aug31.matches.length], ["2026-08-31", false, 0]);
   is("  control: match 4 IS in the input on that date", MS.some((m) => m.date === "2026-08-31"), true);
   const sep1 = g.flat().find((d) => d.iso === "2026-09-01")!;
   is("  a day's matches sort by time", sep1.matches.map((m) => m.minutes), [1110, 1140]);
@@ -217,10 +222,12 @@ console.log("\nTHE MONTH GRID: whole weeks, Monday first, padding empty");
 
   /* A RANGE ACROSS A MONTH BOUNDARY KEEPS GOING AS CONSECUTIVE WEEKS. */
   const x = buildMonthGrid("2026-09-28", "2026-10-11", MS, "2026-09-15");
+  // SUNDAY START: Mon 28 Sep – Sun 11 Oct now spans three Sunday weeks, 27 Sep – 17 Oct (was two,
+  // 28 Sep – 11 Oct).
   is("  a cross-month range is consecutive weeks", [x.length, x[0][0].iso, x[x.length - 1][6].iso],
-    [2, "2026-09-28", "2026-10-11"]);
-  is("  …with no gap between them", mondayOnOrBefore("2026-10-05"), "2026-10-05");
-  is("  control: sundayOnOrAfter of a Sunday is itself", sundayOnOrAfter("2026-10-11"), "2026-10-11");
+    [3, "2026-09-27", "2026-10-17"]);
+  is("  …with no gap between them", weekStartOnOrBefore("2026-10-04"), "2026-10-04");
+  is("  control: weekEndOnOrAfter of a Saturday is itself", weekEndOnOrAfter("2026-10-10"), "2026-10-10");
 }
 
 console.log("\nTHE FILTERS: city single, field MULTI, count always honest");

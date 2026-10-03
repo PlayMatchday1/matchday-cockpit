@@ -56,13 +56,15 @@ export type Payment = {
   city: string | null;
   amount: number;
   paid: boolean;
+  /** Added by hand on OpEx (opex_projections). Never paid, whatever its date. */
+  projected?: { id: number };
 };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 /** The sub-type worth printing: nothing when it only repeats the category ("Marketing · Marketing"). */
 export const subLabel = (p: Payment): string | null =>
-  p.sub === CAT_BY_KEY[p.cat].name || p.sub === "Field cost" ? null : p.sub;
+  p.sub === CAT_BY_KEY[p.cat].name || p.sub === "Field cost" || p.sub === "Projection" ? null : p.sub;
 
 /** The city worth printing beside a payee: nothing when it IS the payee ("Austin · Austin"). */
 export const cityLabel = (p: Payment): string | null =>
@@ -86,8 +88,17 @@ function rowCity(g: CalGroup, r: CalRow): string | null {
 export function paymentsOf(cal: OpexCalendarAsOf): Payment[] {
   const out: Payment[] = [];
   for (const g of cal.groups) {
-    const { cat, sub: groupSub } = groupCat(g);
+    const { cat: groupCatKey, sub: groupSub } = groupCat(g);
     for (const r of g.rows) {
+      // A PROJECTION carries its own category, and is never paid — whatever its day.
+      if (r.projected) {
+        for (const [d, v] of Object.entries(r.cells)) {
+          if (Math.abs(v) < 0.005) continue;
+          out.push({ key: `${r.key}:${d}`, day: Number(d), payee: r.label, cat: r.projected.cat, sub: "Projection", city: null, amount: r2(v), paid: false, projected: { id: r.projected.id } });
+        }
+        continue;
+      }
+      const cat = groupCatKey;
       const city = rowCity(g, r);
       // A PREPAID venue's cash for next month's matches reads "for November" (Field Costs v2).
       const sub = r.forMonth ?? groupSub;

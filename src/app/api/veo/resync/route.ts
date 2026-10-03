@@ -27,6 +27,7 @@
  * pointed at staging and overwrite a production row that happens to share a number.
  */
 
+import { weekStartOnOrBefore } from "@/lib/weekStart";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { createClient } from "@supabase/supabase-js";
 import { syncMdapiMatches } from "@/lib/mdapiMatchesSync";
@@ -53,7 +54,11 @@ export async function POST(req: Request) {
    * not a rolling seven days starting Wednesday. Dates stay YYYY-MM-DD strings throughout: these
    * are calendar bounds for a query, and a Date would re-shift them by the server's offset. */
   const base = week || new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
-  const monday = mondayOf(base);
+  /* ?ws=0 re-pulls a SUNDAY-start week — the Master Schedule's week on screen (src/lib/weekStart.ts).
+   * Absent keeps the Monday week. Without it, a Sunday week passed here re-pulled the Monday week
+   * ending on that Sunday: six of the seven days on screen were not refreshed. */
+  const sundayStart = new URL(req.url).searchParams.get("ws") === "0";
+  const monday = sundayStart ? weekStartOnOrBefore(base, 0) : mondayOf(base);
   if (!monday) return Response.json({ error: `could not resolve a Monday for ${base}` }, { status: 400 });
   const sunday = addDays(monday, 6);
 

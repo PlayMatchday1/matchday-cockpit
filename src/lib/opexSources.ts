@@ -48,6 +48,7 @@
 import { cashDays, cashMonthOffset, monthName, rateForYmd } from "./venuePay";
 import type { FinanceData, FinVenue, FinExpense } from "./useFinanceData";
 import { buildFieldCostRows } from "./financeCosts";
+import { projectionCells, type OpexProjection, type ProjCat } from "./opexProjectionModel";
 import { daysInMonth } from "./checkIns";
 import { groupVenues, type VenueGroup } from "./venueGroups";
 
@@ -103,6 +104,8 @@ export type CalRow = {
   info?: RowInfo;
   /** A PREPAID venue's cash drawn in this month for NEXT month's matches: "for November". */
   forMonth?: string;
+  /** A PROJECTION, added by hand on OpEx (opex_projections). Never paid, whatever its date. */
+  projected?: { id: number; cat: ProjCat };
 };
 
 // What the row's i says. Plain words; no table names.
@@ -934,6 +937,10 @@ export function buildOpexCalendarAsOf(
   year: number,
   month0: number,
   now: Date,
+  /* MONEY THAT MIGHT LEAVE (opexProjectionModel). Only the OpEx page passes any; every other caller
+   * passes none and gets exactly what it got before. With none, nothing below changes: the
+   * projections group is not added at all. */
+  projections: readonly OpexProjection[] = [],
 ): OpexCalendarAsOf {
   const state = monthStateOf(year, month0, now);
   const days = daysInMonth(year, month0);
@@ -969,6 +976,28 @@ export function buildOpexCalendarAsOf(
     }
     groups = [city, match, field, ...rest];
   }
+  if (projections.length) {
+    const rows: CalRow[] = [];
+    for (const p of projections) {
+      const cells = projectionCells(p, year, month0);
+      if (!Object.keys(cells).length) continue;
+      rows.push({ key: `proj:${p.id}`, label: p.description, cells, projected: { id: p.id, cat: p.category } });
+    }
+    if (rows.length) {
+      const { agg } = aggregateAndSubtotal(rows);
+      groups.push({
+        key: "proj",
+        name: "Projections",
+        src: "",
+        how: "Money that might leave, added by hand on this page. It stays projected until you remove it.",
+        defaultOpen: true,
+        rows,
+        agg,
+        subtotal: Math.round(rows.reduce((s, r) => s + rowTotal(r), 0) * 100) / 100,
+        undated: 0,
+      });
+    }
+  }
 
   const dayTotal = new Array<number>(days + 1).fill(0);
   for (const g of groups) for (const [d, v] of Object.entries(g.agg)) dayTotal[Number(d)] += v;
@@ -981,6 +1010,7 @@ export function buildOpexCalendarAsOf(
   let paidTotal = 0;
   for (const g of groups) {
     for (const r of g.rows) {
+      if (r.projected) continue;   // a projection is never paid, whatever its date
       for (const [d, v] of Object.entries(r.cells)) if (Number(d) <= paidThrough) paidTotal += v;
       paidTotal += r.paidUndated ?? 0;
       if (state === "past") paidTotal += r.undated ?? 0;

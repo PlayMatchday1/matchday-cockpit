@@ -21,6 +21,13 @@ import { monthLabel } from "@/lib/opex";
 import { buildOpexCalendarAsOf } from "@/lib/opexSources";
 import { CATS, CAT_BY_KEY, cityLabel, paymentsOf, subLabel, sumOf, type CatKey, type Payment } from "@/lib/opexLedger";
 import { useFinancePeriod } from "@/lib/financePeriodContext";
+import { currentPeriod, stepPeriod } from "@/lib/financePeriod";
+import { useAuth } from "@/lib/useAuth";
+import { isWeekendColumn, monthLayout, weekdayHeaders } from "@/lib/weekStart";
+import {
+  REPEAT_LABEL, deleteProjection, fetchProjections, insertProjection, skipProjectionDate, updateProjection,
+  type OpexProjection, type ProjCat, type ProjRepeat, type ProjectionDraft,
+} from "@/lib/opexProjections";
 
 const MON3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const FIELD_COSTS_HREF = "/admin/finance/ledger/field-costs";
@@ -35,11 +42,23 @@ function fmt(n: number): string {
   })}`;
 }
 
-type Pop = { id: string; x: number; y: number; kind: "how" } | { id: string; x: number; y: number; kind: "pill"; day: number; cat: CatKey } | null;
+type Pop = { id: string; x: number; y: number; kind: "how" } | { id: string; x: number; y: number; kind: "pill"; day: number; cat: CatKey; proj: boolean } | null;
+
+/* THE PROJECTION FORM. `occurrence` is the payment it was opened from (a day on the calendar or a
+ * ledger row), so "remove this payment only" knows which date to drop. */
+type ProjForm = {
+  editing: OpexProjection | null;
+  occurrence: string | null;
+  draft: { category: ProjCat; description: string; amount: string; first_date: string; repeat: ProjRepeat; end_date: string };
+  busy: boolean;
+  error: string | null;
+  confirmDelete: boolean;
+} | null;
 
 export default function OpExCalendarView() {
   const { data, error } = useFinanceData();
-  const { period, now } = useFinancePeriod();
+  const { period, now, setPeriod } = useFinancePeriod();
+  const { appUser } = useAuth();
   const year = period.start.getFullYear();
   const month0 = period.start.getMonth();
   const days = daysInMonth(year, month0);
@@ -54,22 +73,49 @@ export default function OpExCalendarView() {
   // A new month clears the day filter: Oct 15 means nothing in November.
   useEffect(() => { setDayFilter(null); setPop(null); }, [year, month0]);
 
-  const cal = useMemo(() => buildOpexCalendarAsOf(data, year, month0, now), [data, year, month0, now]);
+  /* ── PROJECTIONS: money that might leave, added by hand here and nowhere else ──────────────────
+   * Loaded by this page only (src/lib/opexProjections.ts). "Show projections" (on by default, not
+   * persisted) decides whether the builder gets them at all: off, it gets none, so every figure on
+   * the page is exactly the build without this feature (scripts/opex-projections-test.ts). */
+  const [projections, setProjections] = useState<OpexProjection[]>([]);
+  const [projMissing, setProjMissing] = useState(false);
+  const [projLoadError, setProjLoadError] = useState<string | null>(null);
+  const [showProj, setShowProj] = useState(true);
+  const [form, setForm] = useState<ProjForm>(null);
+  const [projNote, setProjNote] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    void fetchProjections().then((r) => {
+      if (!live) return;
+      setProjections(r.rows);
+      setProjMissing(r.missing);
+      setProjLoadError(r.error);
+    });
+    return () => { live = false; };
+  }, []);
+
+  const cal = useMemo(
+    () => buildOpexCalendarAsOf(data, year, month0, now, showProj ? projections : []),
+    [data, year, month0, now, showProj, projections],
+  );
   const all = useMemo(() => paymentsOf(cal), [cal]);
   const shown = useMemo(() => all.filter((p) => solo == null || p.cat === solo), [all, solo]);
 
   // The header is the WHOLE month whatever is filtered (Ryan: "The header month total never changes").
+  // THREE FIGURES THAT ADD UP TO IT: paid, expected (from real records, not yet paid) and projected.
   const monthTotal = sumOf(all);
   const paid = sumOf(all.filter((p) => p.paid));
-  const left = Math.round((monthTotal - paid) * 100) / 100;
+  const projected = sumOf(all.filter((p) => p.projected));
+  const expected = Math.round((monthTotal - paid - projected) * 100) / 100;
   const paidPct = monthTotal > 0 ? (paid / monthTotal) * 100 : 0;
   const noDay = all.filter((p) => p.day == null);
 
   const today = cal.state === "current" ? now.getDate() : -1;
   const isPast = (d: number) => (cal.state === "past" ? true : cal.state === "current" ? d < today : false);
 
-  // ── the calendar's cells, Monday first, as the Master Schedule lays them out ──────────────────
-  const lead = (new Date(year, month0, 1).getDay() + 6) % 7;
+  // ── the calendar's cells, SUNDAY first, as the Master Schedule lays them out (src/lib/weekStart) ──
+  const layout = monthLayout(year, month0);
+  const lead = layout.lead;
   type Cell = { d: number | null; n: number };
   const cells: Cell[] = [];
   const prevDays = daysInMonth(month0 === 0 ? year - 1 : year, (month0 + 11) % 12);
@@ -84,14 +130,21 @@ export default function OpExCalendarView() {
     for (const p of shown) if (p.day != null) m.set(p.day, [...(m.get(p.day) ?? []), p]);
     return m;
   }, [shown]);
+  /* One pill per category per day — and a SEPARATE pill for that category's projections, so a
+   * projection never shares a solid or dashed pill with real money. */
   const pillsOf = (d: number) => {
-    const g = new Map<CatKey, Payment[]>();
-    for (const p of byDay.get(d) ?? []) g.set(p.cat, [...(g.get(p.cat) ?? []), p]);
-    return [...g.entries()].map(([cat, ps]) => ({ cat, ps, total: sumOf(ps) })).sort((a, b) => b.total - a.total);
+    const g = new Map<string, { cat: CatKey; proj: boolean; ps: Payment[] }>();
+    for (const p of byDay.get(d) ?? []) {
+      const k = `${p.cat}${p.projected ? ":p" : ""}`;
+      const e = g.get(k) ?? { cat: p.cat, proj: !!p.projected, ps: [] };
+      e.ps.push(p);
+      g.set(k, e);
+    }
+    return [...g.values()].map((e) => ({ ...e, total: sumOf(e.ps) })).sort((a, b) => Number(a.proj) - Number(b.proj) || b.total - a.total);
   };
 
   // ── the ledger ────────────────────────────────────────────────────────────────────────────────
-  const weekOf = (d: number) => Math.floor((d - 1 + lead) / 7);
+  const weekOf = layout.weekOf;
   const ledgerRows = dayFilter == null ? shown : shown.filter((p) => p.day === dayFilter);
   const ledgerTotal = sumOf(ledgerRows);
 
@@ -122,7 +175,52 @@ export default function OpExCalendarView() {
   const chipTotal = (k: CatKey) => sumOf(all.filter((p) => p.cat === k));
   const clickChip = (k: CatKey) => { setPop(null); setSolo((s) => (s === k ? null : k)); };
 
-  const popPayments = pop?.kind === "pill" ? all.filter((p) => p.day === pop.day && p.cat === pop.cat).sort((a, b) => b.amount - a.amount) : [];
+  const popPayments = pop?.kind === "pill" ? all.filter((p) => p.day === pop.day && p.cat === pop.cat && !!p.projected === pop.proj).sort((a, b) => b.amount - a.amount) : [];
+
+  /* ── THE PROJECTION FORM ───────────────────────────────────────────────────────────────────── */
+  const iso = (d: number) => `${year}-${String(month0 + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  const openNew = (d: number | null) => {
+    setPop(null);
+    setForm({
+      editing: null, occurrence: null, busy: false, error: null, confirmDelete: false,
+      draft: { category: solo ?? "misc", description: "", amount: "", first_date: iso(d ?? (cal.state === "current" ? now.getDate() : 1)), repeat: "once", end_date: "" },
+    });
+  };
+  const openEdit = (id: number, occurrence: string | null) => {
+    const p = projections.find((x) => x.id === id);
+    if (!p) return;
+    setPop(null);
+    setForm({
+      editing: p, occurrence, busy: false, error: null, confirmDelete: false,
+      draft: { category: p.category, description: p.description, amount: String(p.amount), first_date: p.first_date, repeat: p.repeat, end_date: p.end_date ?? "" },
+    });
+  };
+  const draftOf = (f: NonNullable<ProjForm>): ProjectionDraft => ({
+    category: f.draft.category,
+    description: f.draft.description,
+    amount: Number(f.draft.amount),
+    first_date: f.draft.first_date,
+    repeat: f.draft.repeat,
+    end_date: f.draft.end_date || null,
+  });
+  /* ONE REQUEST PER CLICK. busy disables the buttons until it answers; nothing retries. The list is
+   * updated from what the server returned, never from what was typed. */
+  const runForm = async (op: "save" | "skip" | "delete") => {
+    if (!form || form.busy) return;
+    const by = appUser?.email;
+    if (!by) { setForm({ ...form, error: "Not signed in." }); return; }
+    setForm({ ...form, busy: true, error: null });
+    const r =
+      op === "save" ? (form.editing ? await updateProjection(form.editing, draftOf(form), by) : await insertProjection(draftOf(form), by))
+      : op === "skip" ? await skipProjectionDate(form.editing!, form.occurrence!, by)
+      : await deleteProjection(form.editing!, by);
+    if (!r.ok) { setForm((f) => (f ? { ...f, busy: false, error: r.error } : f)); return; }
+    if (op === "delete") setProjections((ps) => ps.filter((x) => x.id !== form.editing!.id));
+    else if (r.row) setProjections((ps) => (ps.some((x) => x.id === r.row!.id) ? ps.map((x) => (x.id === r.row!.id ? r.row! : x)) : [...ps, r.row!]));
+    if (r.row || op === "delete") setProjMissing(false);
+    setProjNote(r.warning ?? null);
+    setForm(null);
+  };
 
   let run = 0;
   const ledgerBody: React.ReactNode[] = [];
@@ -130,12 +228,15 @@ export default function OpExCalendarView() {
     run += p.amount;
     const sub = subLabel(p);
     ledgerBody.push(
-      <tr key={p.key} data-testid="ledger-row" data-day={p.day ?? ""} data-cat={p.cat} className={dayFilter != null && p.day === dayFilter ? "hl" : undefined}>
+      <tr key={p.key} data-testid="ledger-row" data-day={p.day ?? ""} data-cat={p.cat} data-proj={p.projected ? p.projected.id : undefined}
+        className={[dayFilter != null && p.day === dayFilter ? "hl" : "", p.projected ? "prjrow" : ""].filter(Boolean).join(" ") || undefined}
+        onClick={p.projected ? () => openEdit(p.projected!.id, p.day != null ? iso(p.day) : null) : undefined}
+        title={p.projected ? "A projection: click to change or remove it" : undefined}>
         <td>{p.day == null ? "—" : `${mon} ${p.day}`}</td>
-        <td><b>{p.payee}</b></td>
+        <td>{p.projected && <span className="ptag">proj</span>}<b>{p.payee}</b></td>
         <td className="cat"><span className="sw" style={{ background: CAT_BY_KEY[p.cat].col }} />{CAT_BY_KEY[p.cat].name}{sub ? ` · ${sub}` : ""}</td>
         <td className="city">{p.city || "—"}</td>
-        <td><span className={`st ${p.paid ? "paid" : "proj"}`}>{p.paid ? "Paid" : p.cat === "field" ? "Expected" : "Projected"}</span></td>
+        <td>{p.projected ? <span className="st prj">Projected</span> : <span className={`st ${p.paid ? "paid" : "proj"}`}>{p.paid ? "Paid" : "Expected"}</span>}</td>
         <td className="r"><b>{fmt(p.amount)}</b></td>
         <td className="r cum">{fmt(Math.round(run * 100) / 100)}</td>
       </tr>,
@@ -171,10 +272,25 @@ export default function OpExCalendarView() {
     <div className="opex-v3">
       <style>{CSS}</style>
 
+      {/* THE PAGE'S OWN HEADER (Ryan, 2026-10-03): the shell leaves out the FINANCE title and the
+          period bar here (src/lib/financeChrome.ts). OpEx is always one month, stepped by the arrows,
+          through the same period state, so ?p= in the URL and the data window follow it. */}
       <div className="top">
         <h1 className="font-display">OpEx</h1>
-        <span className="month" data-testid="month">{monthLabel(year, month0)}</span>
+        <span className="mnav" data-testid="month-nav">
+          <button type="button" className="arw" data-testid="month-prev" aria-label="Previous month"
+            onClick={() => setPeriod(stepPeriod(period, -1, now))}>‹</button>
+          <span className="month" data-testid="month">{monthLabel(year, month0)}</span>
+          <button type="button" className="arw" data-testid="month-next" aria-label="Next month"
+            onClick={() => setPeriod(stepPeriod(period, 1, now))}>›</button>
+          {cal.state !== "current" && (
+            <a className="tm" role="button" tabIndex={0} data-testid="this-month"
+              onClick={() => setPeriod(currentPeriod("month", now))}
+              onKeyDown={(e) => { if (e.key === "Enter") setPeriod(currentPeriod("month", now)); }}>This month</a>
+          )}
+        </span>
         <span className="sp" />
+        <button type="button" className="ox-addp" data-testid="add-projection" onClick={() => openNew(null)}>+ Add projection</button>
         <div className="seg" data-testid="view-seg">
           <button type="button" aria-pressed={view === "cal"} onClick={() => setView("cal")}>Calendar</button>
           <button type="button" aria-pressed={view === "ledger"} onClick={() => setView("ledger")}>Ledger only</button>
@@ -195,11 +311,21 @@ export default function OpExCalendarView() {
             <b className="big" data-testid="sum-month">{fmt(monthTotal)}</b>
           </div>
           <div className="bar" data-testid="paid-bar"><i style={{ width: `${paidPct.toFixed(1)}%` }} /></div>
-          <div className="pl"><b data-testid="sum-paid">{fmt(paid)}</b> paid · <b data-testid="sum-left">{fmt(left)}</b> still to go{" "}
+          <div className="pl"><b data-testid="sum-paid">{fmt(paid)}</b> paid · <b data-testid="sum-expected">{fmt(expected)}</b> expected · <b data-testid="sum-projected" className="pj">{fmt(projected)}</b> projected{" "}
             {/* THE i SITS HERE, after the paid line, so the chip row has the header's full width. */}
             <button type="button" className="i" data-pop="how" aria-label="How this page works" aria-expanded={pop?.kind === "how"}
               onClick={(e) => (pop?.kind === "how" ? setPop(null) : setPop({ ...place("how", e.currentTarget), kind: "how" }))}>i</button>
           </div>
+          {/* SMALL ON PURPOSE: a checkbox and a label, not a segmented control (Ryan). */}
+          <label className="shp" data-testid="show-projections-label">
+            <input type="checkbox" data-testid="show-projections" checked={showProj} onChange={(e) => setShowProj(e.target.checked)} />
+            Show projections
+          </label>
+          {(projMissing || projLoadError || projNote) && (
+            <div className="pjnote" data-testid="projection-status">
+              {projMissing ? "Projections are not saved yet: the table does not exist (migration 0202)." : projLoadError ? `Projections did not load: ${projLoadError}` : projNote}
+            </div>
+          )}
         </div>
         <div className="r">
           <div className="chiprow">
@@ -241,13 +367,13 @@ export default function OpExCalendarView() {
         <section className="card cal" data-testid="calendar">
           {/* ON A PHONE THE MONTH SCROLLS INSIDE ITS CARD; the page itself never scrolls sideways. */}
           <div className="calx"><div className="calin">
-          <div className="wk h"><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div><div>Sun</div></div>
+          <div className="wk h">{weekdayHeaders().map((h, i) => <div key={h} className={isWeekendColumn(i) ? "we" : undefined}>{h}</div>)}</div>
           {weeks.map((row, w) => {
             const wt = sumOf(row.flatMap((c) => (c.d == null ? [] : byDay.get(c.d) ?? [])));
             return (
               <div key={w} className="wk" data-testid="week">
                 {row.map((c, i) => {
-                  const wkend = i >= 5 ? " wkend" : "";
+                  const wkend = isWeekendColumn(i) ? " wkend" : "";
                   if (c.d == null) {
                     return <div key={`o${w}-${i}`} className={`day out${wkend}`}><div className="dh"><span className="n">{c.n}</span></div></div>;
                   }
@@ -258,16 +384,21 @@ export default function OpExCalendarView() {
                   return (
                     <div key={d} className={cls} data-testid={`day-${d}`} data-day={d}
                       onClick={(e) => { if ((e.target as HTMLElement).closest(".pay")) return; setPop(null); setDayFilter((f) => (f === d ? null : d)); }}>
-                      <div className="dh"><span className="n">{d}</span><span className={`dt${t ? "" : " none"}`} data-total={t}>{t ? fmt(t) : "—"}</span></div>
+                      <div className="dh"><span className="n">{d}</span>
+                        <button type="button" className="addd" data-testid={`add-${d}`} aria-label={`Add a projection on ${mon} ${d}`} title={`Add a projection on ${mon} ${d}`}
+                          onClick={(e) => { e.stopPropagation(); openNew(d); }}>+</button>
+                        <span className={`dt${t ? "" : " none"}`} data-total={t}>{t ? fmt(t) : "—"}</span></div>
                       {pills.map((x) => {
-                        const id = `pill:${d}:${x.cat}`;
+                        const id = `pill:${d}:${x.cat}${x.proj ? ":p" : ""}`;
+                        // THREE STATES BY BORDER AND FILL: paid solid, expected dashed, projected dotted amber.
+                        const cls = x.proj ? "prj" : d <= cal.paidThrough ? "paid" : "proj";
                         return (
-                          <button key={x.cat} type="button" className={`pay ${d <= cal.paidThrough ? "paid" : "proj"}`} data-day={d} data-cat={x.cat}
+                          <button key={`${x.cat}${x.proj ? ":p" : ""}`} type="button" className={`pay ${cls}`} data-day={d} data-cat={x.cat} data-proj={x.proj || undefined}
                             aria-expanded={pop?.id === id}
                             title={`${CAT_BY_KEY[x.cat].name} · ${x.ps.length} payment${x.ps.length > 1 ? "s" : ""}`}
-                            onClick={(e) => { e.stopPropagation(); if (pop?.id === id) return setPop(null); setPop({ ...place(id, e.currentTarget), kind: "pill", day: d, cat: x.cat }); }}>
+                            onClick={(e) => { e.stopPropagation(); if (pop?.id === id) return setPop(null); setPop({ ...place(id, e.currentTarget), kind: "pill", day: d, cat: x.cat, proj: x.proj }); }}>
                             <span className="sw" style={{ background: CAT_BY_KEY[x.cat].col }} />
-                            <span className="nm">{CAT_BY_KEY[x.cat].short}{x.ps.length > 1 && <small> {x.ps.length}</small>}</span>
+                            <span className="nm">{x.proj && <span className="ptag">proj</span>}{CAT_BY_KEY[x.cat].short}{x.ps.length > 1 && <small> {x.ps.length}</small>}</span>
                             <span className="v">{fmt(x.total)}</span>
                           </button>
                         );
@@ -313,12 +444,80 @@ export default function OpExCalendarView() {
         </section>
       )}
 
+      {form && (
+        <div className="pform-bg" onClick={() => !form.busy && setForm(null)}>
+          <form className="pform" data-testid="projection-form" onClick={(e) => e.stopPropagation()}
+            onSubmit={(e) => { e.preventDefault(); void runForm("save"); }}>
+            <div className="ph">{form.editing ? "Change projection" : "Add projection"}</div>
+            <label>Category
+              <select data-testid="pf-category" value={form.draft.category}
+                onChange={(e) => setForm({ ...form, draft: { ...form.draft, category: e.target.value as ProjCat } })}>
+                {CATS.map((c) => <option key={c.key} value={c.key}>{c.short}</option>)}
+              </select>
+            </label>
+            <label>What it is
+              <input data-testid="pf-description" value={form.draft.description} placeholder="A field we might open, a hire, a purchase"
+                onChange={(e) => setForm({ ...form, draft: { ...form.draft, description: e.target.value } })} />
+            </label>
+            <label>Amount per payment
+              <span className="amt">$<input data-testid="pf-amount" inputMode="decimal" value={form.draft.amount}
+                onChange={(e) => setForm({ ...form, draft: { ...form.draft, amount: e.target.value } })} /></span>
+            </label>
+            <label>First pay date
+              <input type="date" data-testid="pf-first" value={form.draft.first_date}
+                onChange={(e) => setForm({ ...form, draft: { ...form.draft, first_date: e.target.value } })} />
+            </label>
+            <label>Repeats
+              <select data-testid="pf-repeat" value={form.draft.repeat}
+                onChange={(e) => setForm({ ...form, draft: { ...form.draft, repeat: e.target.value as ProjRepeat } })}>
+                {(Object.keys(REPEAT_LABEL) as ProjRepeat[]).map((k) => <option key={k} value={k}>{REPEAT_LABEL[k]}</option>)}
+              </select>
+            </label>
+            {form.draft.repeat !== "once" && (
+              <label>End date <small>(optional)</small>
+                <input type="date" data-testid="pf-end" value={form.draft.end_date}
+                  onChange={(e) => setForm({ ...form, draft: { ...form.draft, end_date: e.target.value } })} />
+              </label>
+            )}
+            {form.error && <div className="perr" data-testid="pf-error">{form.error}</div>}
+            {form.confirmDelete ? (
+              <div className="pdel" data-testid="pf-delete-choice">
+                {form.editing!.repeat !== "once" && form.occurrence ? (
+                  <>
+                    <span>Remove which?</span>
+                    <button type="button" disabled={form.busy} data-testid="pf-remove-one" onClick={() => void runForm("skip")}>
+                      This payment only ({mon} {Number(form.occurrence.slice(8, 10))})
+                    </button>
+                    <button type="button" disabled={form.busy} data-testid="pf-remove-all" onClick={() => void runForm("delete")}>The whole series</button>
+                  </>
+                ) : (
+                  <button type="button" disabled={form.busy} data-testid="pf-remove-all" onClick={() => void runForm("delete")}>Yes, remove it</button>
+                )}
+                <button type="button" className="lnk" disabled={form.busy} onClick={() => setForm({ ...form, confirmDelete: false })}>Keep it</button>
+              </div>
+            ) : (
+              <div className="pbtns">
+                {form.editing && (
+                  <button type="button" className="danger" disabled={form.busy} data-testid="pf-remove"
+                    onClick={() => setForm({ ...form, confirmDelete: true })}>Remove</button>
+                )}
+                <span className="sp" />
+                <button type="button" className="lnk" disabled={form.busy} onClick={() => setForm(null)}>Cancel</button>
+                <button type="submit" className="go" disabled={form.busy} data-testid="pf-save">{form.busy ? "Saving…" : "Save"}</button>
+              </div>
+            )}
+          </form>
+        </div>
+      )}
+
       <div ref={popRef} className="pop" data-testid="popover" hidden={!pop} style={pop ? { left: pop.x, top: pop.y } : undefined}>
         {pop?.kind === "how" && (
           <>
             <div className="h">How this page works</div>
-            Every payment MatchDay makes in the month, on the day the money leaves. Solid is paid: bank
-            payments and booked expenses. Dashed is projected from the venue, pay and expense settings.
+            Every payment MatchDay makes in the month, on the day the money leaves. Solid is paid. Dashed is
+            expected: scheduled from real records, not yet paid. Dotted amber is a projection you added by
+            hand: money that might leave, never counted as paid. &ldquo;Show projections&rdquo; takes them out
+            of every figure on the page.
             <dl>
               {CATS.map((c) => (
                 <span key={c.key} style={{ display: "contents" }}>
@@ -331,13 +530,15 @@ export default function OpExCalendarView() {
         {pop?.kind === "pill" && (
           <>
             <div className="h">{mon} {pop.day} · {CAT_BY_KEY[pop.cat].name} · {fmt(sumOf(popPayments))}</div>
-            <div className="sub">{pop.day <= cal.paidThrough ? (pop.cat === "field" ? "Paid" : "Paid (bank)") : pop.cat === "field" ? "Expected, from each venue's pay schedule" : "Projected from settings"}</div>
+            <div className="sub">{pop.proj ? "Projected, added by hand. Click one to change or remove it." : pop.day <= cal.paidThrough ? "Paid" : "Expected"}</div>
             <dl className="pp">
               {popPayments.map((p) => {
                 const city = cityLabel(p), sub = subLabel(p);
                 return (
                   <span key={p.key} style={{ display: "contents" }}>
-                    <dt>{p.payee}{city && <span className="m"> · {city}</span>}{sub && <span className="m"> · {sub}</span>}</dt>
+                    <dt>{p.projected
+                      ? <button type="button" className="pedit" onClick={() => openEdit(p.projected!.id, iso(pop.day))}>{p.payee}</button>
+                      : p.payee}{city && <span className="m"> · {city}</span>}{sub && <span className="m"> · {sub}</span>}</dt>
                     <dd>{fmt(p.amount)}</dd>
                   </span>
                 );
@@ -356,6 +557,37 @@ const CSS = `
 .opex-v3 .top{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .opex-v3 h1{margin:0;font-size:28px;font-weight:800}
 .opex-v3 .month{font-weight:800;font-size:18px}
+.opex-v3 .mnav{display:inline-flex;align-items:center;gap:6px}
+.opex-v3 .arw{border:1px solid var(--line);background:#fff;border-radius:8px;width:28px;height:28px;font:inherit;font-size:16px;line-height:1;cursor:pointer;color:var(--ink-2)}
+.opex-v3 .arw:hover{background:#f4f7f4}
+.opex-v3 .tm{font-size:12.5px;font-weight:700;color:var(--ink-2);text-decoration:underline;cursor:pointer;margin-left:4px}
+.opex-v3 .ox-addp{border:1px dotted #c98a12;background:#fff7e6;color:#7a4e06;font-weight:700;font-size:13px;padding:6px 12px;border-radius:10px;cursor:pointer}
+.opex-v3 .pl .pj{color:#8a5a12}
+.opex-v3 .shp{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-2);margin-top:4px;cursor:pointer}
+.opex-v3 .shp input{margin:0}
+.opex-v3 .pjnote{font-size:11.5px;color:#8a5a12;margin-top:3px}
+.opex-v3 .addd{margin-left:auto;border:0;background:transparent;color:#b7c0ba;font:inherit;font-weight:800;font-size:14px;line-height:1;padding:0 2px;cursor:pointer;opacity:0}
+.opex-v3 .day:hover .addd,.opex-v3 .addd:focus{opacity:1}.opex-v3 .addd:hover{color:#8a5a12}
+.opex-v3 .pay.prj{background:#fff7e6;border:1px dotted #c98a12;color:#5b3d06}
+.opex-v3 .ptag{display:inline-block;font-size:9px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:#7a4e06;background:#fde9bf;border-radius:4px;padding:0 4px;margin-right:4px;vertical-align:1px}
+.opex-v3 .st.prj{background:#fff7e6;border:1px dotted #c98a12;color:#7a4e06}
+.opex-v3 tr.prjrow{cursor:pointer}.opex-v3 tr.prjrow td{background:#fffbf2}
+.opex-v3 .pedit{border:0;background:none;color:#fde9bf;font:inherit;text-decoration:underline;cursor:pointer;padding:0;text-align:left}
+.opex-v3 .pform-bg{position:fixed;inset:0;z-index:70;background:rgba(16,35,26,.25);display:flex;align-items:flex-start;justify-content:center;padding-top:12vh}
+.opex-v3 .pform{background:#fff;border-radius:14px;border:1px solid var(--line);box-shadow:0 20px 50px rgba(0,0,0,.2);padding:16px 18px;width:min(380px,calc(100vw - 32px));display:grid;gap:10px}
+.opex-v3 .pform .ph{font-weight:800;font-size:15px}
+.opex-v3 .pform label{display:grid;gap:4px;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)}
+.opex-v3 .pform label small{text-transform:none;letter-spacing:0;font-weight:500}
+.opex-v3 .pform input,.opex-v3 .pform select{font:inherit;font-size:14px;text-transform:none;letter-spacing:0;font-weight:500;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:#fff}
+.opex-v3 .pform .amt{display:flex;align-items:center;gap:4px;font-size:14px;color:var(--ink);text-transform:none;font-weight:600}.opex-v3 .pform .amt input{flex:1}
+.opex-v3 .pform .perr{font-size:12.5px;color:#b42318;font-weight:600}
+.opex-v3 .pbtns,.opex-v3 .pdel{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.opex-v3 .pdel span{font-size:12.5px;font-weight:700}
+.opex-v3 .pform button{font:inherit;font-size:13px;font-weight:700;border-radius:9px;padding:7px 12px;cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--ink-2)}
+.opex-v3 .pform button.go{background:#22c55e;border-color:#22c55e;color:#06301d}
+.opex-v3 .pform button.danger{color:#b42318}
+.opex-v3 .pform button.lnk{border:0;background:none;text-decoration:underline}
+.opex-v3 .pform button:disabled{opacity:.55;cursor:default}
 .opex-v3 .sp{flex:1}
 .opex-v3 .seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;background:#fff;padding:2px}
 .opex-v3 .seg button{border:0;background:transparent;padding:6px 14px;border-radius:999px;font:inherit;font-weight:700;color:var(--muted);cursor:pointer}
@@ -389,7 +621,7 @@ const CSS = `
 .opex-v3 .calx{overflow-x:auto}.opex-v3 .calin{min-width:840px}
 .opex-v3 .wk{display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}
 .opex-v3 .wk.h div{padding:10px 12px;font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--muted);font-weight:700;border-bottom:1px solid var(--line)}
-.opex-v3 .wk.h div:nth-child(n+6){background:#f7f9f6}
+.opex-v3 .wk.h div.we{background:#f7f9f6}
 .opex-v3 .day{min-height:118px;border-right:1px solid var(--line-2);border-bottom:1px solid var(--line-2);padding:8px 8px 22px;position:relative;display:flex;flex-direction:column;gap:4px;background:#fff;min-width:0}
 .opex-v3 .day:nth-child(7n){border-right:0}
 .opex-v3 .day.wkend{background:#fafbf9}

@@ -1,0 +1,13 @@
+// WHICH FINANCE PAGES DRAW THEIR OWN HEADER (Ryan, 2026-10-03).
+//
+// The Finance shell draws the large "FINANCE" title and the period bar (Month / Quarter / Year,
+// the partial-days chip) above every section. OpEx is always ONE month and carries its own
+// "‹ October 2026 › · This month" beside its heading instead, so the shell leaves both out there.
+// Every other Finance page keeps them unchanged. "Last synced" stays on every page; on these pages
+// it is drawn small.
+//
+// A replaced instruction said to keep the Finance period control on OpEx and leave arrows out.
+
+export const OWN_HEADER_SECTIONS: ReadonlySet<string> = new Set(["/admin/finance/opex"]);
+
+export const drawsOwnHeader = (pathname: string): boolean => OWN_HEADER_SECTIONS.has(pathname);

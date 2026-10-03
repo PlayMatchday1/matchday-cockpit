@@ -7,7 +7,9 @@ export type AuditTable =
   | "fin_venues"
   // Added by 0130, together with the widening of fin_change_log's own CHECK allowlist — the
   // constraint refuses any table_name not listed there, so the two must move together.
-  | "fin_venue_fields";
+  | "fin_venue_fields"
+  // Added by 0202 (OpEx projections), with the same widening of fin_change_log's allowlist.
+  | "opex_projections";
 export type AuditAction = "insert" | "update" | "delete";
 
 type LogChangeOpts = {

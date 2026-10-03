@@ -35,6 +35,7 @@ import {
 } from "@/lib/financePeriod";
 import { FinanceQuarterProvider } from "@/lib/financeQuarter";
 import { FINANCE_SECTIONS, SECTION_GRAINS } from "./financeSections";
+import { drawsOwnHeader } from "@/lib/financeChrome";
 
 const COLLAPSE_KEY = "finance:rail-collapsed";
 // Which Configure sub-tab was last open, so leaving Configure and coming back lands where you
@@ -133,6 +134,8 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
     : changeGrain(period, grainSupport.grains[0], now);
 
   const railW = collapsed ? "60px" : "212px";
+  // OpEx draws its own month header (src/lib/financeChrome.ts): no FINANCE title, no period bar.
+  const ownHeader = drawsOwnHeader(pathname);
 
   return (
     <FinancePeriodProvider value={{ period: shownPeriod, now, setPeriod }}>
@@ -153,23 +156,27 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
         {/* THE WORDMARK IS DESKTOP-ONLY. On a phone it cost ~600px of scroll before the first
             dollar, and MatchOpsMobileBar directly above it already says which page this is —
             so it was the same word twice, the larger one pushing every figure off the screen. */}
-        <h1 data-testid="finance-title" className="hidden font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:block md:text-6xl">
-          Finance
-        </h1>
+        {!ownHeader && (
+          <h1 data-testid="finance-title" className="hidden font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:block md:text-6xl">
+            Finance
+          </h1>
+        )}
 
         {/* ONE control, THREE grains, read by every section. The Configure / Check-Ins / Managers
             links ride in this bar rather than a strip of their own — they were already a quiet
             right-aligned row, and the bar is where the page-level controls now live. */}
-        <FinancePeriodBar
-          period={shownPeriod}
-          now={now}
-          supportedGrains={grainSupport.grains}
-          unsupportedReason={grainSupport.why}
-          onChangeGrain={(g: Grain) => setPeriod(changeGrain(shownPeriod, g, now))}
-          onStep={(dir) => setPeriod(stepPeriod(shownPeriod, dir, now))}
-          onJumpToNow={() => setPeriod(currentPeriod(shownPeriod.grain, now))}
-          links={null}
-        />
+        {!ownHeader && (
+          <FinancePeriodBar
+            period={shownPeriod}
+            now={now}
+            supportedGrains={grainSupport.grains}
+            unsupportedReason={grainSupport.why}
+            onChangeGrain={(g: Grain) => setPeriod(changeGrain(shownPeriod, g, now))}
+            onStep={(dir) => setPeriod(stepPeriod(shownPeriod, dir, now))}
+            onJumpToNow={() => setPeriod(currentPeriod(shownPeriod.grain, now))}
+            links={null}
+          />
+        )}
 
         {/* ── HOW FRESH THE NUMBERS ARE, ON EVERY FINANCE PAGE ──────────────────────────────────
             In the shell rather than on two pages, because every figure under Finance comes from
@@ -181,8 +188,8 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
             source: a Sync now that fills fin_txn while the figures still come from fin_revenue is
             a control that visibly changes nothing. `source` moves to "stripe-txn" at the same
             moment, and both are this one line. */}
-        <div className="mb-6">
-          <SyncNowCard source="stripe-api" canSync={false} />
+        <div className={ownHeader ? "mb-2" : "mb-6"}>
+          <SyncNowCard source="stripe-api" canSync={false} compact={ownHeader} />
         </div>
 
         {/* The exec banner is Cash-Flow context (quarter P&L, current-month gross, MTD vs prior).

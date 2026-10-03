@@ -13,6 +13,8 @@
  * them something outside the range they set.
  */
 
+import { weekEndOnOrAfter, weekStartOnOrBefore } from "./weekStart";
+
 export type GridMatch = {
   apiId: number; city: string; date: string; time: string; minutes: number;
   venue: string;
@@ -130,15 +132,11 @@ const shift = (isoStr: string, n: number) => { const d = D(isoStr); d.setUTCDate
 /** ISO weekday, 1 = Monday … 7 = Sunday. getUTCDay is 0 = Sunday, hence the rotation. */
 export const isoDow = (isoStr: string): number => ((D(isoStr).getUTCDay() + 6) % 7) + 1;
 
-/** The Monday on or before `isoStr`. */
-export const mondayOnOrBefore = (isoStr: string): string => shift(isoStr, -(isoDow(isoStr) - 1));
-/** The Sunday on or after `isoStr`. */
-export const sundayOnOrAfter = (isoStr: string): string => shift(isoStr, 7 - isoDow(isoStr));
-
 /**
- * Build the grid. Weeks are rows of exactly seven days, Monday first, from the Monday on or before
- * `from` to the Sunday on or after `to` — so a range crossing a month boundary simply keeps going
- * as consecutive weeks rather than starting a second calendar.
+ * Build the grid. Weeks are rows of exactly seven days, starting on WEEK_START (Sunday — shared with
+ * the OpEx calendar, src/lib/weekStart.ts), from the week start on or before `from` to the week end
+ * on or after `to` — so a range crossing a month boundary simply keeps going as consecutive weeks
+ * rather than starting a second calendar.
  */
 export function buildMonthGrid(
   from: string, to: string, matches: readonly GridMatch[], todayIso: string,
@@ -155,8 +153,8 @@ export function buildMonthGrid(
   }
 
   const weeks: GridDay[][] = [];
-  const last = sundayOnOrAfter(to);
-  let cursor = mondayOnOrBefore(from);
+  const last = weekEndOnOrAfter(to);
+  let cursor = weekStartOnOrBefore(from);
   /* A HARD CEILING. The route caps the range at 92 days, so 20 weeks is unreachable in practice —
    * it is here so a bad `to` can never spin this loop rather than throw. */
   for (let guard = 0; cursor <= last && guard < 20; guard++) {

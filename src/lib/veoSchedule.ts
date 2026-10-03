@@ -5,6 +5,7 @@
 // surface downstream renders the raw glyph. Read-only mdapi; writes go to the two
 // Clubhouse tables only.
 
+import { weekStartOf, weekdayHeaders } from "./weekStart";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { CITY_CODE_TO_DISPLAY } from "./scheduleReconcile";
 import { canonicalVenueName } from "./venueResolver";
@@ -21,7 +22,6 @@ function fmtTime(d: Date): string {
   return `${h}:${String(m).padStart(2, "0")} ${ap}`;
 }
 const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 
 /* ── CAMERA INTENT: THE OVERRIDE, THEN THE PATTERN, THEN OFF ──────────────────────────────────
  * veo_intent is per match and is the OVERRIDE. veo_slot_intent is the recurring rule for a slot
@@ -127,7 +127,7 @@ export function weekMonday(now: Date): Date {
 export type VeoMatch = {
   apiId: number;
   city: string;
-  dayIdx: number; // 0=Mon..6=Sun
+  dayIdx: number; // days from the week's first day: 0..6 (Monday-first unless fetchVeoWeek got weekStart)
   time: string; // "6:30 PM"
   minutes: number; // sort key
   venue: string; // canonical venue (canonicalVenueName rules)
@@ -214,11 +214,15 @@ export type VeoWeek = {
  * the fleet-city filter and the deleted-row exclusion. A separate prior-week fetch would be a
  * second place for the wall-clock trap to be got wrong, which is the thing this module exists to
  * prevent. Default false: every existing caller keeps play-only semantics. */
-export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date = now, scopeCity: string | null = null, includeCancelled = false): Promise<VeoWeek> {
-  const mon = weekMonday(weekRef);
+/* `weekStart` (getDay() numbering) picks the first day of the week. DEFAULT 1 = MONDAY, which is what
+ * every caller had before and still gets: Match Promotion, the Veo dashboard, the review count. The
+ * Master Schedule passes weekStart.WEEK_START (Sunday) through ?ws= on /api/veo. `mon` keeps its
+ * name but is the week's FIRST DAY, and dayIdx counts from it. */
+export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date = now, scopeCity: string | null = null, includeCancelled = false, weekStart = 1): Promise<VeoWeek> {
+  const mon = weekStartOf(weekRef, weekStart);
   const sun = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 6);
   const todayIso = ymd(now);
-  const days = DOW.map((dow, i) => {
+  const days = weekdayHeaders(weekStart).map((dow, i) => {
     const d = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + i);
     return { dow, date: d.getDate(), iso: ymd(d), today: ymd(d) === todayIso };
   });

@@ -337,6 +337,10 @@ const NODE_SUITES = [
   // venue's days must add up to its Field Costs figure on EVERY day of the month as "today" —
   // two pages, two code paths, and a moving today. Caught a $200.01 three-way split on the way in.
   "scripts/opex-field-sum-test.ts",
+  // OpEx and Master Schedule weeks start on Sunday from one constant (and Monday pages keep Monday);
+  // OpEx draws its own header; projections: off == the build without them, paid + expected +
+  // projected == the header, a weekly projection lands where it should, a past one is never paid.
+  "scripts/opex-projections-test.ts",
   // Match Promotion's NEW badge. Both decisions that carry the rule are invisible in the DOM — the
   // prior slate INCLUDING cancelled matches (excluding them mis-flagged 21 of 31), and the tests
   // nesting per field rather than per city (a city-wide reading lost 19 cases). A badge is a badge

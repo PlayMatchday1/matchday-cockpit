@@ -32,6 +32,7 @@ import { usePhone } from "@/lib/usePhone";
 // THE SERVER'S OWN RESOLVERS, called on the client. venueResolver is pure — no supabase, no
 // fetch, no async — so the two cannot disagree about what a venue is called.
 import { canonicalVenueName } from "@/lib/venueResolver";
+import { WEEK_START, weekdayHeaders } from "@/lib/weekStart";
 import { CITY_SCOPES } from "@/lib/cityScope";
 import { CITY_CODE_TO_DISPLAY } from "@/lib/scheduleReconcile";
 import { downloadCsv, plural } from "@/components/growth/format";
@@ -119,7 +120,7 @@ const sortMatches = (a: VeoMatch, b: VeoMatch) =>
 const MON_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
-// Shift a Monday (YYYY-MM-DD) by whole weeks, returning the new Monday. Parsed as
+// Shift a week's first day (YYYY-MM-DD; a Sunday here, WEEK_START) by whole weeks. Parsed as
 // a LOCAL date so month/year boundaries roll over correctly.
 function shiftWeek(mondayIso: string, deltaWeeks: number): string {
   const [y, m, d] = mondayIso.split("-").map(Number);
@@ -127,8 +128,8 @@ function shiftWeek(mondayIso: string, deltaWeeks: number): string {
   return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
 }
 
-// "Mon 3 – Sun 9 Aug 2026", collapsing the shared month/year; spans months/years
-// when the week straddles a boundary ("Mon 30 Jun – Sun 6 Jul 2026").
+// "Sun 2 – Sat 8 Aug 2026", collapsing the shared month/year; spans months/years
+// when the week straddles a boundary ("Sun 28 Jun – Sat 4 Jul 2026"). Labels come from the server.
 function weekRangeLabel(days: VeoDay[]): string {
   if (days.length < 7) return "";
   const a = days[0], b = days[6];
@@ -340,7 +341,8 @@ export default function VeoMasterSchedule() {
        * better than showing nothing, but claiming it is fresh would be the original lie. */
       if (repull) {
         try {
-          const q = ref ? `?week=${encodeURIComponent(ref)}` : "";
+          // ws = this page's week start (Sunday, src/lib/weekStart.ts) so the re-pull is the week on screen.
+          const q = ref ? `?week=${encodeURIComponent(ref)}&ws=${WEEK_START}` : `?ws=${WEEK_START}`;
           const rs = await fetch(`/api/veo/resync${q}`, { method: "POST", headers, cache: "no-store" });
           if (!rs.ok) {
             const j = await rs.json().catch(() => ({}));
@@ -351,7 +353,7 @@ export default function VeoMasterSchedule() {
         }
       }
 
-      const url = ref ? `/api/veo?week=${encodeURIComponent(ref)}` : "/api/veo";
+      const url = ref ? `/api/veo?week=${encodeURIComponent(ref)}&ws=${WEEK_START}` : `/api/veo?ws=${WEEK_START}`;
       const res = await fetch(url, { cache: "no-store", headers });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = (await res.json()) as VeoWeek;
@@ -398,7 +400,7 @@ export default function VeoMasterSchedule() {
         let failed: string | null = null;
         for (let cur = r.from; cur <= r.to; ) {
           try {
-            const rs = await fetch(`/api/veo/resync?week=${encodeURIComponent(cur)}`, { method: "POST", headers, cache: "no-store" });
+            const rs = await fetch(`/api/veo/resync?week=${encodeURIComponent(cur)}&ws=${WEEK_START}`, { method: "POST", headers, cache: "no-store" });
             if (!rs.ok) failed ??= (await rs.json().catch(() => ({})))?.error ?? `HTTP ${rs.status}`;
           } catch (e) { failed ??= e instanceof Error ? e.message : String(e); }
           const d = new Date(`${cur}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + 7);
@@ -462,7 +464,7 @@ export default function VeoMasterSchedule() {
       new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" })) : []),
     [range, monthVisible]);
 
-  // Week navigation: shift from the displayed Monday (always a Monday), or jump
+  // Week navigation: shift from the displayed week's first day (always a WEEK_START day), or jump
   // back to the current week. Shared by both views (it lives in the card header).
   async function navigate(ref: string) {
     if (navBusy) return;
@@ -1024,15 +1026,15 @@ export default function VeoMasterSchedule() {
                 {/* JUMP TO A WEEK. Same pattern and same reasoning as GamedayBoard's day picker —
                     see the comment on `day-pick` there, which is written out in full. The short of
                     it is that this control does NO date arithmetic: <input type="date"> yields
-                    "YYYY-MM-DD", fetchVeoWeek snaps ANY date inside a week to that week's Monday,
+                    "YYYY-MM-DD", fetchVeoWeek snaps ANY date inside a week to that week's first day (Sunday, ?ws=),
                     and the value goes straight into navigate() — the same function ‹ › and Today
                     call. No parse, no format, no new Date(), so the picker and the arrows cannot
                     disagree about which week is showing: they are one state and one setter.
 
                     THE VALUE IS week.weekStart, NOT weekRef. weekRef is "" for the current week
-                    and would render an empty box; weekStart is the displayed week's Monday, which
+                    and would render an empty box; weekStart is the displayed week's Sunday, which
                     is always a real date. It is also why picking a Wednesday visibly SNAPS: the
-                    server answers with that week's Monday and the input re-renders holding it.
+                    server answers with that week's Sunday and the input re-renders holding it.
 
                     NOT <input type="week">. It is the semantically right control and Safari
                     degrades it to a plain text box with no warning, which is worse than a day
@@ -2148,7 +2150,7 @@ function MonthView({ weeks, count, onOpen, selectedId, singleField, pick }: {
   return (
     <div className="vms-card vms-month" data-testid="month-grid">
       <div className="vms-mdow">
-        {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => <div key={d}>{d}</div>)}
+        {weekdayHeaders().map((d) => <div key={d}>{d}</div>)}
       </div>
       {count === 0 ? (
         <div className="vms-mempty">No matches in this range with these filters.</div>

@@ -48,10 +48,13 @@ function centralStamp(iso: string | null): string {
 export default function SyncNowCard({
   source = "stripe-api",
   canSync = false,
+  compact = false,
 }: {
   source?: "stripe-api" | "stripe-txn";
   /** False until fin_txn is the page's source. The button is not rendered at all when false. */
   canSync?: boolean;
+  /** Small type, for a page that draws its own header (OpEx). */
+  compact?: boolean;
 }) {
   const [last, setLast] = useState<string | null>(null);
   const [state, setState] = useState<State>({ k: "idle" });
@@ -100,7 +103,7 @@ export default function SyncNowCard({
 
   const busy = state.k === "running";
   return (
-    <div className="sn" data-testid="sync-now-card">
+    <div className={compact ? "sn sn-compact" : "sn"} data-testid="sync-now-card">
       {canSync && (
         <button
           type="button" data-testid="sync-now" onClick={() => void run()} disabled={busy}
@@ -129,6 +132,7 @@ export default function SyncNowCard({
         .sn button:hover:not(:disabled) { background: #f4f7f4; }
         .sn button:disabled { opacity: 0.55; cursor: default; }
         .sn-last { color: #7a8a81; white-space: nowrap; }
+        .sn-compact { font-size: 11.5px; }
         .sn-note { color: #8a6d1f; font-weight: 600; }
         .sn-err { color: #b42318; font-weight: 600; }
       `}</style>
