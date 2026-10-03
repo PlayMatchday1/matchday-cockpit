@@ -28,7 +28,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { supabase } from "@/lib/supabase";
 import { errorText } from "@/lib/errorText";
 import {
-  MONTH_LABELS, bandForDisplay, baselineMonth, cityRollup, hasNoCompletedDay, cityTotals, fmtSigned, fmtUnit, isDormantFor,
+  MONTH_LABELS, bandForDisplay, baselineMonth, cityRollup, dailyIn, fmtShownSigned, shownGap, shownTrend, hasNoCompletedDay, cityTotals, fmtSigned, fmtUnit, isDormantFor,
   historyIndexes, monthIndexIn, monthKey, ramp, rowCountsTowardTotals, roundTo, sortGoalRows, trendKind, weekly,
   type Band, type CityFieldRow, type CityRow, type CompareFrom, type GoalSort,
 } from "@/lib/fieldGoals";
@@ -283,22 +283,22 @@ export default function FieldGoals2026() {
    *
    * THE HEADLINE MOVES BY UP TO A TENTH as a result (measured 16.5 to 16.7 on 2026-09-29). That is
    * the number the rows have always added up to. */
-  const totals = useMemo(() => {
-    const counted = all.filter(rowCountsTowardTotals);
-    const r1 = (v: number) => roundTo(v, 1);
-    const now = r1(counted.reduce((s, r) => s + r1(r.monthly[baseIdx]?.daily ?? 0), 0));
-    const goal = r1(counted.reduce((s, r) => s + r1(r.targets[monthKey(data?.year ?? 2026, DEC)] ?? 0), 0));
-    return { now, goal, gap: r1(goal - now) };
-  }, [all, baseIdx, data?.year]);
 
   /* ONE ROLLUP, OVER THE SAME `all` THE TOTALS AND THE CHART USE, through the same predicate. A
    * city sum built on its own filter would miss the headline above it by a rounding amount nobody
    * could find. Existing fields and slots go in together: a city's December goal spans both tables
    * and this is the only place they meet. */
   const cities = useMemo(
-    () => cityRollup(all, data?.year ?? 2026, cur, sort, baseIdx),
-    [all, data?.year, cur, sort, baseIdx]);
+    () => cityRollup(all, data?.year ?? 2026, cur, sort, baseIdx, unit),
+    [all, data?.year, cur, sort, baseIdx, unit]);
   const cityTot = useMemo(() => cityTotals(cities), [cities]);
+  /* THE TILES READ THE FOOTER. They used to sum the rows separately — the same figures by a second
+   * path — and "To find" was its own subtraction, which is how the tile read 11.1 under a footer
+   * of +11.2. Now the tile's baseline, goal and gap ARE the footer's, through shownGap. */
+  const totals = useMemo(() => ({
+    now: cityTot.base, goal: cityTot.dec,
+    gap: shownGap(dailyIn(cityTot.dec, unit), dailyIn(cityTot.base, unit), unit) as number,
+  }), [cityTot, unit]);
   /* THE ROLLUP KEEPS ONLY WHAT IT NEEDS TO ADD UP — a CityFieldRow, not a page Row — so the drawer
    * needs a way back to the row the write handlers take. `key` is the same string on both sides
    * (cityRollup copies `r.key` straight onto the field line), which is what makes this a lookup and
@@ -379,7 +379,7 @@ export default function FieldGoals2026() {
           v={noBase ? DASH : fmtUnit(totals.now, unit)}
           u={noBase ? "no completed days yet" : u} testId="fg-now" />
         <Big k={`Dec ${data.year} goal`} v={fmtUnit(totals.goal, unit)} u={u} tone="#12694A" testId="fg-goal" />
-        <Big k="To find" v={noBase ? DASH : fmtUnit(totals.gap, unit)}
+        <Big k="To find" v={noBase ? DASH : (unit === "day" ? totals.gap.toFixed(1) : totals.gap.toFixed(0))}
           u={noBase ? "needs a completed day" : u} tone="#A8341F" testId="fg-gap" />
         {!noBase && (
         <div className="flex min-w-[240px] flex-1 flex-col justify-center rounded-2xl border-[1.5px] bg-white px-4 py-3" style={{ borderColor: "#D3DCD8" }}>
@@ -689,7 +689,7 @@ function CityChart({ cities, unit, baseIdx, noCompletedDay }: { cities: CityRow[
                   setTip({ x: e.clientX - (box?.left ?? 0) + 12, y: e.clientY - (box?.top ?? 0) - 10,
                     html: noCompletedDay
                       ? `${c.city} · Dec ${fmtUnit(c.dec, unit)} · no completed days yet this month`
-                      : `${c.city} · ${MONTH_LABELS[cur]} ${fmtUnit(c.base, unit)} · Dec ${fmtUnit(c.dec, unit)} · gap ${fmtSigned(c.gapDaily, unit)}` });
+                      : `${c.city} · ${MONTH_LABELS[cur]} ${fmtUnit(c.base, unit)} · Dec ${fmtUnit(c.dec, unit)} · gap ${fmtShownSigned(c.gapSort, unit)}` });
                 }}
                 onMouseLeave={() => setTip(null)} />
               <text x={cx} y={H - 10} textAnchor="middle" fontSize={9.5} fontWeight={600}
@@ -927,11 +927,13 @@ function CityTable({
                               <span aria-hidden className="mr-1 text-[10px]">
                                 {trendKind(c.trend) === "up" ? "\u25b2" : trendKind(c.trend) === "dn" ? "\u25bc" : "\u2013"}
                               </span>
-                              {fmtSigned(c.trend, unit)}
+                              {/* WEEKLY SUBTRACTS THE TWO WEEKLY FIGURES SHOWN; the arrow and its dead
+                                  band stay on the daily trend, so a unit press never flips it. */}
+                              {fmtShownSigned(shownTrend(dailyIn(c.base, unit), c.hist[0] == null ? null : dailyIn(c.hist[0], unit), unit) as number, unit)}
                             </span>}
                       </td>
                     )}
-                    <td className="border-t px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#EDF2EF", color: BAND_HUE[band] }} data-v={c.gapDaily.toFixed(4)} data-testid="gap">{noBase ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtSigned(c.gapDaily, unit)}</td>
+                    <td className="border-t px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#EDF2EF", color: BAND_HUE[band] }} data-v={c.gapDaily.toFixed(4)} data-testid="gap">{noBase ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtShownSigned(c.gapSort, unit)}</td>
                     {/* "9 +2 new · 2 no goal". A city with no unsigned fields says nothing rather than
                         "+0 new", and a December figure carrying absent targets says so here rather
                         than reading as low. */}
@@ -973,7 +975,7 @@ function CityTable({
               <td className="border-t-2 px-3 py-2 text-right text-[13px] tabular-nums" style={{ borderColor: "#D3DCD8", color: "#9AA8A1", fontWeight: 500 }} data-v={totals.nov.toFixed(4)} data-testid="tnov">{noBase ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtUnit(totals.nov, unit)}</td>
               <td className="border-t-2 px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#D3DCD8", color: "#003326" }} data-v={totals.dec.toFixed(4)} data-testid="tdec">{fmtUnit(totals.dec, unit)}</td>
               {showHistory && <td className="border-t-2" style={{ borderColor: "#D3DCD8" }} />}
-              <td className="border-t-2 px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#D3DCD8", color: "#A8341F" }} data-v={totals.gapDaily.toFixed(4)} data-testid="tgap">{noBase ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtSigned(totals.gapDaily, unit)}</td>
+              <td className="border-t-2 px-3 py-2 text-right text-[13px] font-extrabold tabular-nums" style={{ borderColor: "#D3DCD8", color: "#A8341F" }} data-v={totals.gapDaily.toFixed(4)} data-testid="tgap">{noBase ? <span style={{ color: "#C3CEC8" }}>{"\u2014"}</span> : fmtShownSigned(shownGap(dailyIn(totals.dec, unit), dailyIn(totals.base, unit), unit) as number, unit)}</td>
               <td className="border-t-2 px-3 py-2 text-[11px]" style={{ borderColor: "#D3DCD8", color: "#9AA8A1" }}>
                 {totals.existing}{totals.slots > 0 && <>{" "}<span className="font-bold" style={{ color: CHART_HUE }}>+{totals.slots} new</span></>}
               </td>
@@ -1040,7 +1042,10 @@ function CityFieldTr({
   /* A FIELD TRENDS ON THE SAME RULE AS ITS CITY: earliest history month to the live one, and
    * nothing at all when that month is a dash. Built here and INJECTED into GoalCells so it lands
    * between Dec and the gap, where the header puts it. */
-  const fTrend = f.hist[0] == null || f.base == null ? null : roundTo(f.base - (f.hist[0] as number), 1);
+  /* THE SAME shownTrend AS THE CITY ROW: daily for the arrow, the unit on screen for the number. */
+  const fTrend = shownTrend(f.base, f.hist[0], "day");
+  const fTrendShown = f.base == null || f.hist[0] == null ? null
+    : shownTrend(dailyIn(f.base, unit), dailyIn(f.hist[0] as number, unit), unit);
   const fk = trendKind(fTrend);
   const trendCell = showHistory ? (
     <td className="border-t px-3 py-1.5 text-right text-[12px] tabular-nums" style={{ borderColor: "#EDF2EF", background: "#FAFCFB" }}>
@@ -1049,7 +1054,7 @@ function CityFieldTr({
         : <span data-testid="trend" data-t={fk!} className="font-bold"
             style={{ color: fk === "up" ? "#12694A" : fk === "dn" ? "#A8341F" : "#8C9E93" }}>
             <span aria-hidden className="mr-1 text-[9px]">{fk === "up" ? "\u25b2" : fk === "dn" ? "\u25bc" : "\u2013"}</span>
-            {fmtSigned(fTrend, unit)}
+            {fmtShownSigned(fTrendShown as number, unit)}
           </span>}
     </td>
   ) : undefined;
@@ -1115,7 +1120,7 @@ function CityFieldTr({
                 {f.gapDaily == null
                   ? <span data-testid="nogoal" className="text-[11px] font-normal italic" style={{ color: "#9AA8A1" }}>no goal</span>
                   : noBase ? dash
-                  : <span style={{ color: roundTo(f.gapDaily, 1) < 0 ? "#12694A" : "#003326" }}>{fmtSigned(f.gapDaily, unit)}</span>}
+                  : <span style={{ color: f.gapDaily < 0 ? "#12694A" : "#003326" }}>{fmtShownSigned(f.gapSort as number, unit)}</span>}
               </td>
             </>}
         {/* THE LAST COLUMN IS "FIELDS" ON A CITY ROW AND ACTIONS ON A FIELD ROW, which is what it
@@ -1183,7 +1188,10 @@ function GoalCells({
   const base = r.monthly[baseIdx]?.daily ?? 0;
   const dec = r.targets[decKey] ?? null;
   const noGoal = dec == null;
-  const gap = noGoal ? 0 : dec - base;
+  /* THE GAP IS lib/fieldGoals.shownGap: the displayed December minus the displayed baseline. Daily
+   * for the colour (a unit press never recolours), the unit on screen for the printed number. */
+  const gap = noGoal ? 0 : shownGap(dec, base, "day") as number;
+  const gapShown = noGoal ? 0 : shownGap(dailyIn(dec, unit), dailyIn(base, unit), unit) as number;
   /* No baseline figure means nothing to ramp FROM, so there is no suggestion to make. With the
    * last full month as baseline, a target month that is also the live month (October, on the 2nd)
    * gets the baseline-to-December line, never one starting from its own partial actual. */
@@ -1222,7 +1230,7 @@ function GoalCells({
           : /* SIGN-SAFE. ATH Pearland sits 0.004 above goal, which rounded to one decimal and
                printed with its sign came out "-0.0". fmtSigned normalises the rounded value, so the
                number and the dot agree. */
-            <span style={{ color: roundTo(gap, 1) < 0 ? "#12694A" : "#003326" }}>{fmtSigned(gap, unit)}</span>}
+            <span style={{ color: gap < 0 ? "#12694A" : "#003326" }}>{fmtShownSigned(gapShown, unit)}</span>}
       </td>
     </>
   );
@@ -1314,7 +1322,9 @@ function GoalTable({
   const withGap = rows.map((r) => {
     const dec = r.targets[decKey] ?? null;
     const base = r.monthly[baseIdx]?.daily ?? 0;
-    return { r, gapDaily: dec == null ? null : dec - base, name: r.name, city: r.city };
+    return { r, name: r.name, city: r.city,
+      gapDaily: shownGap(dec, base, "day"),
+      gapSort: dec == null ? null : shownGap(dailyIn(dec, unit), dailyIn(base, unit), unit) };
   });
   const ordered = sortGoalRows(withGap, sort);
   const live = ordered.filter((x) => x.r.kind === "slot" || !isDormantFor(x.r, baseIdx, cur));
@@ -1368,7 +1378,7 @@ function GoalTable({
               const base = r.monthly[baseIdx]?.daily ?? 0;
               const dec = r.targets[decKey] ?? null;
               const noGoal = dec == null;
-              const gap = noGoal ? 0 : dec - base;
+              const gap = noGoal ? 0 : shownGap(dec, base, "day") as number;   // daily: the dot's colour
               const over = !noGoal && gap < 0;
               const openN = r.actions.filter((a) => !a.done).length;
               const out = r.notCounted === true;   // deliberate, stored, and out of every total

@@ -11,6 +11,7 @@ import {
   rowCountsTowardTotals, rowKeyForField, roundTo, sortGoalRows, sumTargets, trendKind,
   TREND_DEAD_BAND, weekly, type RollupRow,
   BASELINE_MIN_COMPLETED_DAYS, baselineMonth, isDormantFor,
+  dailyIn, fmtShownSigned, shownGap, shownTrend,
 } from "@/lib/fieldGoals";
 import fs from "node:fs";
 
@@ -208,16 +209,19 @@ console.log("\n— a city equals the sum of the fields AS DISPLAYED —");
   yes("  CONTROL: the old full-precision rule gives a different answer on this fixture",
     oldWay !== sumShownSep, `both ${sumShownSep}`);
 
-  const shownGap = rows.map(() => roundTo(0.4499 - 0.1499, 1));
-  is("the city GAP equals the sum of the field GAPs as printed",
-    austin.gapDaily, roundTo(shownGap.reduce((a, b) => a + b, 0), 1));
+  /* REPLACED 2026-10-02 (Ryan reversed the rule): the city GAP was the sum of the field gaps; it is
+   * now the city's own displayed December minus its own displayed baseline. */
+  is("the city GAP equals the city's displayed Dec minus its displayed baseline",
+    austin.gapDaily, roundTo(roundTo(austin.dec, 1) - roundTo(austin.live, 1), 1));
   is("  and Dec likewise", austin.dec, roundTo(rows.map(() => roundTo(0.4499, 1)).reduce((a, b) => a + b, 0), 1));
 
   /* A NEGATIVE GAP STILL COUNTS. Onion Creek sits at -0.3 — already past its goal — and dropping
    * it would overstate the city's remaining work by exactly that much. */
   const withOver = cityRollup([...rows, mk(99, 1.0, 0.7)], year, cur, "gap")[0];
+  /* REPLACED 2026-10-02, same reason: displayed Dec minus displayed baseline, one level up. */
   is("a field already past its goal pulls the city GAP down",
-    withOver.gapDaily, roundTo(shownGap.reduce((a, b) => a + b, 0) + roundTo(0.7 - 1.0, 1), 1));
+    withOver.gapDaily, roundTo(withOver.dec - withOver.live, 1));
+  yes("  CONTROL: …and it is lower than without that field", withOver.gapDaily < austin.gapDaily);
 
   /* A NEW FIELD WITH NO DATA CONTRIBUTES NOTHING, which is what it did before this change. Its
    * September is null — it does not exist yet, which is not the same as having run no matches. */
@@ -234,8 +238,10 @@ console.log("\n— a city equals the sum of the fields AS DISPLAYED —");
   const tot = cityTotals(many);
   is("the footer September equals the sum of the city Septembers",
     tot.live, roundTo(many.reduce((a, c) => a + c.live, 0), 1));
-  is("  and the footer GAP the sum of the city GAPs",
-    tot.gapDaily, roundTo(many.reduce((a, c) => a + c.gapDaily, 0), 1));
+  /* REPLACED 2026-10-02: the footer GAP was the sum of the city gaps (+11.2 under 16.5 and 27.6);
+   * it is now the footer's displayed December minus its displayed baseline. */
+  is("  and the footer GAP is the footer's displayed Dec minus its displayed baseline",
+    tot.gapDaily, roundTo(tot.dec - tot.base, 1));
   yes("  CONTROL: more than one city, so the footer is not one row wearing a total", many.length > 1);
 }
 
@@ -326,10 +332,18 @@ console.log("\n— THE BASELINE: the month the gap, trend and progress are measu
    * The one renamed key (sep → live) is mapped back; `base` is new and must equal `live` here. */
   type G = { year: number; cur: number; rows: RollupRow[] } & Record<"gap" | "city" | "name", { cities: unknown[]; totals: unknown }>;
   const g = JSON.parse(fs.readFileSync("scripts/fixtures/field-goals-mtd-golden.json", "utf8")) as G;
-  const asOld = (x: unknown): unknown => JSON.parse(JSON.stringify(x, (k, v) => (k === "base" ? undefined : v)).replace(/"live":/g, '"sep":'));
+  /* CHANGED 2026-10-02: the gap rule was reversed (displayed goal minus displayed baseline), so the
+   * golden's gap keys — and the gap SORT's order, which follows them — are the old rule's. Every
+   * other key is still compared; the gap is asserted against the new rule in its own section. */
+  const GAPKEYS = new Set(["base", "gapDaily", "gapSort"]);
+  const strip = (x: unknown): unknown => JSON.parse(JSON.stringify(x, (k, v) => (GAPKEYS.has(k) ? undefined : v)).replace(/"live":/g, '"sep":'));
+  const byCity = (x: { cities: { city: string; fields: { key: string }[] }[]; totals: unknown }) => ({
+    cities: [...x.cities].map((c) => ({ ...c, fields: [...c.fields].sort((a, b) => a.key.localeCompare(b.key)) })).sort((a, b) => a.city.localeCompare(b.city)),
+    totals: x.totals });
   for (const sort of ["gap", "city", "name"] as const) {
     const now = cityRollup(g.rows, g.year, g.cur, sort, g.cur);
-    is(`month to date reproduces the current build exactly (sort ${sort})`, asOld({ cities: now, totals: cityTotals(now) }), g[sort]);
+    is(`month to date reproduces the current build in every non-gap column (sort ${sort})`,
+      byCity(strip({ cities: now, totals: cityTotals(now) }) as never), byCity(strip(g[sort]) as never));
   }
   const mtd = cityRollup(g.rows, g.year, g.cur, "gap");
   yes("CONTROL: the golden is not trivial — 5 cities, suggestions present", (g.gap.cities as unknown[]).length === 5 && mtd.some((c) => c.oct > 0));
@@ -342,8 +356,9 @@ console.log("\n— THE BASELINE: the month the gap, trend and progress are measu
   const rowsA = g.rows.filter((r) => r.city === "Austin" && !r.notCounted);
   const sepOf = (r: RollupRow) => r.monthly[8].daily;
   is("the city baseline is September, summed as displayed", austin.base, roundTo(rowsA.reduce((a, r) => a + roundTo(sepOf(r), 1), 0), 1));
-  is("the gap is December minus September, field by field", austin.gapDaily,
-    roundTo(rowsA.reduce((a, r) => a + roundTo((r.targets[monthKey(g.year, 11)] as number) - sepOf(r), 1), 0), 1));
+  /* REPLACED 2026-10-02: was "December minus September, field by field" (summed field gaps). */
+  is("the gap is the city's displayed December minus its displayed September", austin.gapDaily,
+    roundTo(roundTo(austin.dec, 1) - roundTo(austin.base, 1), 1));
   yes("CONTROL: and is not the month-to-date gap", austin.gapDaily !== mtd.find((c) => c.city === "Austin")!.gapDaily);
   const nemp = austin.fields.find((f) => f.key === "v1")!;
   is("October's suggestion is the September-to-December line, not one from October's partial day",
@@ -372,6 +387,64 @@ console.log("\n— THE BASELINE: the month the gap, trend and progress are measu
   const startedInOct = { monthly: [...Array(8).fill({ daily: 0, matches: 0 }), { daily: 0, matches: 0 }, { daily: 0.5, matches: 1 }] };
   yes("a field that has played in the live month is never folded, whichever baseline", !isDormantFor(startedInOct, 8, 9) && !isDormantFor(startedInOct, 9, 9));
   yes("in month to date, dormant is exactly today's rule", [westlake, quiet, startedInOct].every((r) => isDormantFor(r, 9, 9) === isDormantIn(r, 9)));
+}
+
+console.log("\n— EVERY GAP IS THE DISPLAYED GOAL MINUS THE DISPLAYED BASELINE (Ryan, 2026-10-02) —");
+{
+  /* Checked against the PRINTED STRINGS — fmtUnit for the goal and baseline cells, fmtShownSigned
+   * for the gap — so this is the subtraction a reader does, not shownGap checked against itself. */
+  const g = JSON.parse(fs.readFileSync("scripts/fixtures/field-goals-mtd-golden.json", "utf8")) as { year: number; cur: number; rows: RollupRow[] };
+  const decKey = monthKey(g.year, 11);
+  let rowsChecked = 0, bad1 = 0;
+  for (const mode of ["to-date", "last-full"] as const) {
+    const baseIdx = mode === "to-date" ? g.cur : g.cur - 1;
+    for (const unit of ["day", "week"] as const) {
+      const cities = cityRollup(g.rows, g.year, g.cur, "gap", baseIdx, unit);
+      const tot = cityTotals(cities);
+      const printedGap = (dec: number, base: number) => Number(fmtShownSigned(shownGap(dailyIn(dec, unit), dailyIn(base, unit), unit) as number, unit));
+      const reader = (dec: number, base: number) => roundTo(Number(fmtUnit(dec, unit)) - Number(fmtUnit(base, unit)), unit === "day" ? 1 : 0);
+      // city rows (city grain)
+      for (const c of cities) { rowsChecked++; if (printedGap(c.dec, c.base) !== reader(c.dec, c.base)) { bad1++; bad(`${mode}/${unit} ${c.city}`, `${printedGap(c.dec, c.base)} vs ${reader(c.dec, c.base)}`); } }
+      // field rows (the drawer, and the Fields grain: the same page rows through the same shownGap)
+      for (const r of g.rows) {
+        const dec = r.targets[decKey]; if (dec == null) continue;
+        const base = r.kind === "slot" ? 0 : r.monthly[baseIdx].daily;
+        rowsChecked++; if (printedGap(dec, base) !== reader(dec, base)) { bad1++; bad(`${mode}/${unit} field ${r.key}`); }
+      }
+      // footer and tile
+      rowsChecked++; if (printedGap(tot.dec, tot.base) !== reader(tot.dec, tot.base)) { bad1++; bad(`${mode}/${unit} footer`); }
+      // sort: by the gap on screen, ties on the daily gap, then the name
+      const keys = cities.map((c) => [c.gapSort, c.gapDaily, c.city] as const);
+      const sorted = keys.every((k, i) => i === 0 || keys[i - 1][0] > k[0] || (keys[i - 1][0] === k[0] && (keys[i - 1][1] > k[1] || (keys[i - 1][1] === k[1] && keys[i - 1][2] <= k[2]))));
+      yes(`${mode}/${unit}: by gap sorts by the gap on screen, ties daily then name`, sorted, JSON.stringify(keys));
+    }
+  }
+  /* DERIVED, NOT PINNED: 4 mode/unit pairs × (every city + every field with a December goal + the footer). */
+  const expectRows = 4 * (cityRollup(g.rows, g.year, g.cur).length + g.rows.filter((r) => r.targets[decKey] != null).length + 1);
+  is("every city row, field row and footer, both modes, both units: gap = displayed goal - displayed baseline", { rowsChecked, bad: bad1 }, { rowsChecked: expectRows, bad: 0 });
+  yes("CONTROL: rows were actually checked", rowsChecked > 20);
+
+  // THE TWO CASES IN THE BRIEF, on the numbers as printed
+  is("OKC: 0.7 and 1.0 is +0.3, not +0.4", shownGap(1.0, 0.7, "day"), 0.3);
+  is("All MatchDay: 16.5 and 27.6 is +11.1, not +11.2", shownGap(27.6, 16.5, "day"), 11.1);
+  /* A GAP OF UNROUNDED PARTS IS THE BUG. OKC's fields: 0.96 goal, 0.66 baseline → 0.30, which
+   * summed from unrounded parts printed +0.4 under 0.7 and 1.0. */
+  yes("CONTROL: the unrounded difference really did differ", roundTo(0.96 + 0.04 - (0.66 + 0.04), 1) === 0.3 && roundTo(1.04 - 0.66, 1) === 0.4);
+  is("Weekly subtracts the two weekly figures shown (27.6 and 16.5 a day → 193 - 116 = 77)", shownGap(27.6 * 7, 16.5 * 7, "week"), 77);
+  yes("CONTROL: …which is not 7 × the daily gap rounded (78)", Math.round(11.1 * 7) !== 77);
+  is("a row with no baseline has the whole December goal to find", shownGap(1.0, null, "day"), 1.0);
+  is("a row with no goal has no gap", shownGap(null, 0.7, "day"), null);
+  is("a trend with no earliest month is no trend, not a zero", shownTrend(6.1, null, "day"), null);
+  is("Weekly trend subtracts the two weekly figures shown", shownTrend(6.1 * 7, 6.8 * 7, "week"), 43 - 48);
+  is("spots: the plain difference of the two totals shown", shownGap(36673.4, 14549.6, "spots"), 36673 - 14550);
+
+  // THE "TO FIND" TILE IS THE FOOTER GAP — the page reads the tile's three figures off the footer
+  for (const mode of ["to-date", "last-full"] as const) for (const unit of ["day", "week"] as const) {
+    const tot = cityTotals(cityRollup(g.rows, g.year, g.cur, "gap", mode === "to-date" ? g.cur : g.cur - 1, unit));
+    const tile = shownGap(dailyIn(tot.dec, unit), dailyIn(tot.base, unit), unit);
+    const footerPrinted = Number(fmtShownSigned(shownGap(dailyIn(tot.dec, unit), dailyIn(tot.base, unit), unit) as number, unit));
+    is(`2026 "To find" equals the footer gap (${mode}, ${unit})`, tile, footerPrinted);
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

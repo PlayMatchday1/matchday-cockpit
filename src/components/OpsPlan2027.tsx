@@ -28,8 +28,8 @@ import { MONTH_LABELS, SPOTS_PER_MATCH, baselineMonth, roundTo, type CompareFrom
 import {
   ANCHOR_SETTING_KEY, FORECAST_DEC_2026_SPOTS, PLAN_YEAR, START_MONTH, addMonths, daysInMonthOf,
   estimateAt, fieldFlags, fmtPlan, inPlan, isActualAnchor, isActuallyLive, isDefaultEstimate, planMonthKeys,
-  rollFields, shortMonth, sortCities, spotsToUnit, sumRollups, sumSpots, unitToSpots,
-  type Counts, type PlanField, type PlanSort, type PlanType, type Rollup, type Unit,
+  planGap, rollFields, shortMonth, sortCities, spotsToUnit, sumRollups, sumSpots, unitToSpots,
+  type Counts, type PlanField, type PlanGap, type PlanSort, type PlanType, type Rollup, type Unit,
 } from "@/lib/opsPlan";
 import { BaselineTag, Big, CompareSeg, DaysTag, GoalInput, GrainSeg, HistorySeg, type Grain } from "@/components/FieldGoals2026";
 
@@ -207,15 +207,14 @@ export default function OpsPlan2027() {
       hist: histKeys.map((_, i) => sumSpots(ls.map((l) => l.hist[i]))),
       trailing: ls.reduce((a, l) => a + l.trailing, 0),
     });
-    /* THE GAP, ON ONE BASIS: what December 2027 needs over what the BASELINE month ran at, in
-     * December's spots. Month to date on the 1st has no completed day, so no rate and no gap. A city
+    /* THE GAP IS lib/fieldGoals.shownGap: the DISPLAYED December 2027 estimate minus the DISPLAYED
+     * baseline, each converted to the unit on screen exactly as its own cell converts it. In Spots
+     * that is the plain difference of the two totals shown — December's total is the target, so
+     * the difference is the spots to find (Ryan, 2026-10-02: "Drop the scaling"). `daily` keeps the
+     * colour fixed whatever the unit. Month to date on the 1st has no baseline, so no gap; a city
      * that has never played has a baseline of nothing, and its gap is the whole December goal. */
-    const gapOf = (l: Line): number | null => {
-      const dec = l.roll.est[11];
-      if (dec == null || baseDays <= 0) return null;
-      const baseDaily = (l.base ?? 0) / SPOTS_PER_MATCH / baseDays;
-      return dec - baseDaily * SPOTS_PER_MATCH * daysInMonthOf(KEYS[11]);
-    };
+    const decDays = daysInMonthOf(KEYS[11]);
+    const gapOf = (l: Line): Gap | null => planGap(l.roll.est[11], decDays, l.base, baseDays, unit);
 
     const regions = data.regions.map((r) => {
       const cities = data.cities.filter((c) => c.regionKey === r.key && c.status === "active").map((c) => {
@@ -238,7 +237,7 @@ export default function OpsPlan2027() {
     const liveCities = regions.reduce((a, r) => a + r.cities.filter((c) => c.line.roll.actual.fields > 0).length, 0);
     return { cur, asOf, liveDays, histKeys, baseKey, baseIsLive, baseDays, compareFrom: bl.compareFrom,
       regions, all, allGap: gapOf(all), removedCities, start, liveCities, cityById };
-  }, [data, KEYS, asOfPick, showHistory, sort, compareOverride]);
+  }, [data, KEYS, asOfPick, showHistory, sort, compareOverride, unit]);
 
   if (loadErr) return <p className="p-6 text-[13px] text-red-700" data-testid="op-error">{loadErr}</p>;
   if (!data) return <p className="p-8 text-center text-[13px]" style={{ color: "#8C9E93" }}>Loading…</p>;
@@ -260,7 +259,9 @@ export default function OpsPlan2027() {
   const show = (spots: number | null, key: string, days?: number) =>
     spots == null ? DASH : fmtPlan(spotsToUnit(spots, days ?? daysInMonthOf(key), unit), unit);
   const fmtCounts = (a: Counts, p: Counts, k: keyof Counts) => `${a[k]} / ${p[k]}`;
-  const toFind = view.all.roll.est[11] == null ? null : (view.all.roll.est[11] as number) - view.start.spots;
+  /* "TO FIND": the displayed December 2027 goal minus the displayed December 2026 start — the
+   * same shownGap, both months of 31 days (Ryan, 2026-10-02). */
+  const toFind = planGap(view.all.roll.est[11], daysInMonthOf(DEC_KEY), view.start.spots, daysInMonthOf(START_MONTH), unit);
   const asOfOptions = (() => {
     const out: string[] = []; let k = view.cur < KEYS[0] ? view.cur : KEYS[0];
     while (k <= KEYS[11]) { out.push(k); k = addMonths(k, 1); }
@@ -282,7 +283,7 @@ export default function OpsPlan2027() {
       <div className="mb-3 flex flex-wrap items-stretch gap-3">
         <Big k={`Dec 2026 start · ${view.start.label}`} v={show(view.start.spots, START_MONTH)} u={u} testId="op-start" />
         <Big k="Dec 2027 goal" v={show(view.all.roll.est[11], DEC_KEY)} u={u} tone="#12694A" testId="op-goal" />
-        <Big k="To find" v={toFind == null ? DASH : show(toFind, DEC_KEY)} u={u} tone={RED} testId="op-find" />
+        <Big k="To find" v={toFind == null ? DASH : fmtPlan(toFind.shown, unit)} u={u} tone={RED} testId="op-find" />
         <Big k="Fields · actual / plan" v={fmtCounts(view.all.roll.actual, view.all.roll.plan, "fields")}
           u={`anchors ${fmtCounts(view.all.roll.actual, view.all.roll.plan, "anchors")} · satellites ${fmtCounts(view.all.roll.actual, view.all.roll.plan, "satellites")}`}
           testId="op-fields" />
@@ -399,8 +400,8 @@ type Ctx = {
   showRemoved: boolean; asOf: string;
 };
 type Line = { roll: Rollup; live: number | null; base: number | null; hist: (number | null)[]; trailing: number };
-type CityView = { city: City; name: string; fields: PlanField[]; line: Line; gap: number | null; plannedAnchors: number };
-type RegionView = { region: Region; cities: CityView[]; line: Line; gap: number | null; rm: Hire | null };
+type CityView = { city: City; name: string; fields: PlanField[]; line: Line; gap: Gap | null; plannedAnchors: number };
+type RegionView = { region: Region; cities: CityView[]; line: Line; gap: Gap | null; rm: Hire | null };
 
 /* ── ONE GRID FOR EVERY TABLE ON THE PAGE ─────────────────────────────────────────────────────────
  * Fixed layout and one column set, so a region's subtotal, the next region's rows and the All
@@ -427,13 +428,16 @@ function MonthCell({ est, act, k, ctx, bold }: { est: number | null; act: number
   const done = k < ctx.cur, live = k === ctx.cur;
   const actDays = live ? ctx.liveDays : daysInMonthOf(k);
   if ((done || live) && act != null && actDays > 0) {
-    const gap = done && est != null ? act - est : null;
+    /* ACTUAL MINUS ESTIMATE AS DISPLAYED (shownGap), in the unit on screen; the colour reads the
+     * daily version, so a unit press never recolours a month. */
+    const days = daysInMonthOf(k);
+    const gap = done && est != null ? planGap(act, days, est, days, ctx.unit) : null;
     return (
       <td className="border-t px-1.5 py-1.5 text-right text-[12.5px] tabular-nums" style={{ borderColor: HAIR }} data-testid="op-mcell" data-m={k} data-state="actual">
         <b style={{ color: INK }}>{ctx.show(act, k, actDays)}</b>
         <div className="text-[10px]" style={{ color: FAINT }}>
           {est == null ? "no est." : `est ${ctx.show(est, k)}`}
-          {gap != null && <span style={{ color: gap >= 0 ? "#12694A" : RED }}> {gap >= 0 ? "+" : ""}{ctx.show(gap, k)}</span>}
+          {gap != null && <span style={{ color: gap.daily >= 0 ? "#12694A" : RED }}> {gap.shown > 0 ? "+" : ""}{fmtPlan(gap.shown, ctx.unit)}</span>}
         </div>
       </td>
     );
@@ -461,10 +465,12 @@ function LeadCells({ line, ctx }: { line: Line; ctx: Ctx }) {
   );
 }
 
-function GapCell({ gap, ctx }: { gap: number | null; ctx: Ctx }) {
+/** A gap as lib/opsPlan.planGap made it: the number in the unit on screen, and its daily twin. */
+type Gap = PlanGap;
+function GapCell({ gap, ctx }: { gap: Gap | null; ctx: Ctx }) {
   return (
-    <td className="border-t px-1.5 py-1.5 text-right text-[12.5px] font-extrabold tabular-nums" style={{ borderColor: HAIR, color: gap == null ? "#C3CEC8" : gap <= 0 ? "#12694A" : RED }} data-testid="op-gap">
-      {gap == null ? DASH : `${gap > 0 ? "+" : ""}${ctx.show(gap, ctx.keys[11])}`}
+    <td className="border-t px-1.5 py-1.5 text-right text-[12.5px] font-extrabold tabular-nums" style={{ borderColor: HAIR, color: gap == null ? "#C3CEC8" : gap.daily <= 0 ? "#12694A" : RED }} data-testid="op-gap">
+      {gap == null ? DASH : `${gap.shown > 0 ? "+" : ""}${fmtPlan(gap.shown, ctx.unit)}`}
     </td>
   );
 }
@@ -498,7 +504,7 @@ function HeadRow({ ctx, first }: { ctx: Ctx; first: string }) {
   );
 }
 
-function TotalRow({ label, line, gap, ctx, strong, testId }: { label: string; line: Line; gap: number | null; ctx: Ctx; strong?: boolean; testId: string }) {
+function TotalRow({ label, line, gap, ctx, strong, testId }: { label: string; line: Line; gap: Gap | null; ctx: Ctx; strong?: boolean; testId: string }) {
   return (
     <tr data-testid={testId} style={{ background: "#F7FAF8" }}>
       <td className="border-t-2 px-3 py-2 text-[13px] font-extrabold" style={{ borderColor: LINE, color: INK }}>{label}</td>

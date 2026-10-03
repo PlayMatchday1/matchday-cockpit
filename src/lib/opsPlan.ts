@@ -19,7 +19,7 @@
  * and actual are both shown on real days, and compared in spots for the month.
  */
 
-import { SPOTS_PER_MATCH, monthKey, MONTH_LABELS, roundTo } from "./fieldGoals";
+import { SPOTS_PER_MATCH, monthKey, MONTH_LABELS, roundTo, shownGap } from "./fieldGoals";
 
 /** The year this plan is about. */
 export const PLAN_YEAR = 2027;
@@ -276,6 +276,20 @@ export function unitToSpots(v: number, days: number, unit: Unit): number {
   return roundTo(daily * SPOTS_PER_MATCH * days, 1);
 }
 
+/* ── A GAP ON THIS PAGE, as displayed ─────────────────────────────────────────────────────────────
+ * lib/fieldGoals.shownGap — the one subtraction both pages use — applied to two monthly-spot figures,
+ * each converted to the unit exactly as its own cell converts it (spots ÷ 18 ÷ ITS month's real
+ * days). In Spots it is the plain difference of the two totals shown. `daily` is the same gap in
+ * matches a day, which the colours read so a unit press never recolours anything. A missing
+ * baseline is zero (the whole goal to find); a missing goal, or a baseline month with no days to
+ * divide by, is no gap. */
+export type PlanGap = { shown: number; daily: number };
+export function planGap(goalSpots: number | null, goalDays: number, baseSpots: number | null, baseDays: number, unit: Unit): PlanGap | null {
+  if (goalSpots == null || baseDays <= 0) return null;
+  const g = (u: Unit) => shownGap(spotsToUnit(goalSpots, goalDays, u), baseSpots == null ? null : spotsToUnit(baseSpots, baseDays, u), u) as number;
+  return { shown: g(unit), daily: g("day") };
+}
+
 export function fmtPlan(v: number, unit: Unit): string {
   if (unit === "spots") return Math.round(v).toLocaleString("en-US");
   return unit === "day" ? roundTo(v, 1).toFixed(1) : roundTo(v, 0).toFixed(0);
@@ -285,11 +299,16 @@ export function fmtPlan(v: number, unit: Unit): string {
  * The 2026 page's three orders. By gap puts the most to find first; a city with no gap (no Dec
  * estimate) goes last under every order. */
 export type PlanSort = "gap" | "city" | "name";
-export function sortCities<T extends { name: string; gap: number | null; sortOrder: number }>(xs: T[], sort: PlanSort): T[] {
+/* `gap` is the gap ON SCREEN in the unit showing (lib/fieldGoals.shownGap); ties break on the daily
+ * displayed gap, then the name — Ryan, 2026-10-02 — so rows do not shuffle between units. */
+export function sortCities<T extends { name: string; gap: { shown: number; daily: number } | null; sortOrder: number }>(xs: T[], sort: PlanSort): T[] {
   return [...xs].sort((a, b) => {
     const an = a.gap == null, bn = b.gap == null;
     if (an !== bn) return an ? 1 : -1;
-    if (sort === "gap" && !an) return (b.gap as number) - (a.gap as number) || a.name.localeCompare(b.name);
+    if (sort === "gap" && !an) {
+      const ag = a.gap as { shown: number; daily: number }, bg = b.gap as { shown: number; daily: number };
+      return bg.shown - ag.shown || bg.daily - ag.daily || a.name.localeCompare(b.name);
+    }
     if (sort === "city") return a.sortOrder - b.sortOrder || a.name.localeCompare(b.name);
     return a.name.localeCompare(b.name);
   });

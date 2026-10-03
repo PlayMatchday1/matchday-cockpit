@@ -15,12 +15,12 @@
  */
 import fs from "node:fs";
 import {
-  PLAN_YEAR, RAMP_SPOTS, actualCounts, defaultRamp, estimateAt, fieldFlags, inPlan, isDefaultEstimate, planCounts,
+  FORECAST_DEC_2026_SPOTS, fmtPlan, planGap, sortCities, PLAN_YEAR, RAMP_SPOTS, actualCounts, defaultRamp, estimateAt, fieldFlags, inPlan, isDefaultEstimate, planCounts,
   planMonthKeys, rollFields, splitByWeights, spotsToUnit, sumRollups, sumSpots, unitToSpots, actualSpots,
   type PlanField,
 } from "@/lib/opsPlan";
 import { FORECAST_CITIES, HEADLINE, seedEstimates } from "@/lib/opsPlanForecast";
-import { rowBelongsToGoalYear, targetBelongsToGoalYear } from "@/lib/fieldGoals";
+import { roundTo, rowBelongsToGoalYear, targetBelongsToGoalYear } from "@/lib/fieldGoals";
 
 let pass = 0, fail = 0;
 const ok = (n: string) => { pass++; console.log(`  ok  ${n}`); };
@@ -215,6 +215,49 @@ console.log("\n— 4. the 2026 route's two filters: a 2027 row never reaches the
   const keptT = targets.filter((t) => targetBelongsToGoalYear(t, 2026)).map((t) => `${t.row_id}${t.month}`);
   is("2026 goal_daily targets stay; 2027 spot estimates go, even on a shared venue row", keptT, ["a2026-12-01", "b2026-10-01"]);
   yes("CONTROL: the 2026 set the filter must preserve is not empty", keptT.length === 2 && kept.length === 3);
+}
+
+console.log("\n— every 2027 gap is the displayed goal minus the displayed baseline (Ryan, 2026-10-02) —");
+{
+  /* Against the PRINTED strings (fmtPlan), so this is the reader's subtraction, every unit. */
+  const seeded = seededFields();
+  const roll = sumRollups([...seeded.values()].map((s) => rollFields(s.fields, { mature: s.mature }, KEYS, KEYS[11], 670)), 12);
+  const dec = roll.est[11] as number;
+  const reader = (goal: number, gDays: number, base: number, bDays: number, u: "day" | "week" | "spots") =>
+    Number(fmtPlan(spotsToUnit(goal, gDays, u), u).replace(/,/g, "")) - Number(fmtPlan(spotsToUnit(base, bDays, u), u).replace(/,/g, ""));
+  const printed = (gp: { shown: number } | null, u: "day" | "week" | "spots") => Number(fmtPlan((gp as { shown: number }).shown, u).replace(/,/g, ""));
+  let checked = 0, wrong = 0;
+  for (const u of ["day", "week", "spots"] as const) {
+    // the footer against both baselines: a September of 8,931 spots (30 days) and an October-to-date of 520 (1 day)
+    for (const [base, bDays] of [[8931, 30], [520, 1]] as const) {
+      checked++;
+      const gp = planGap(dec, 31, base, bDays, u);
+      if (roundTo(printed(gp, u) - reader(dec, 31, base, bDays, u), 1) !== 0) { wrong++; bad(`footer ${u} base ${base}`, `${printed(gp, u)} vs ${reader(dec, 31, base, bDays, u)}`); }
+    }
+    // "To find": the displayed Dec 2027 goal minus the displayed Dec 2026 start, both 31-day months
+    checked++;
+    const tf = planGap(dec, 31, FORECAST_DEC_2026_SPOTS, 31, u);
+    if (roundTo(printed(tf, u) - reader(dec, 31, FORECAST_DEC_2026_SPOTS, 31, u), 1) !== 0) { wrong++; bad(`To find ${u}`); }
+    // a finished month: displayed actual minus displayed estimate
+    checked++;
+    const mg = planGap(17020, 31, 16585, 31, u);
+    if (roundTo(printed(mg, u) - reader(17020, 31, 16585, 31, u), 1) !== 0) { wrong++; bad(`month cell ${u}`); }
+  }
+  is("footer (both baselines), To find and a finished month, in day / week / spots: printed gap = printed goal - printed baseline", { checked, wrong }, { checked: 12, wrong: 0 });
+  is("Spots: the plain difference of the two totals shown, no scaling", planGap(36673, 31, 8931, 30, "spots")?.shown, 36673 - 8931);
+  yes("CONTROL: the old scaled gap was a different number", Math.round(36673 - (8931 / 30) * 31) !== 36673 - 8931);
+  is("To find in spots is 36,673 - 14,550", planGap(dec, 31, FORECAST_DEC_2026_SPOTS, 31, "spots")?.shown, Math.round(dec) - 14550);
+  is("a city that has never played has its whole December to find", planGap(3026, 31, null, 30, "spots")?.shown, 3026);
+  is("month to date on the 1st (no completed day) is no gap", planGap(3026, 31, 0, 0, "day"), null);
+  const w = planGap(dec, 31, 8931, 30, "week") as { shown: number; daily: number };
+  yes("the colour twin is the daily gap whatever the unit", w.daily === (planGap(dec, 31, 8931, 30, "day") as { daily: number }).daily);
+  /* THE SORT: by the gap on screen, ties on the daily gap, then the name. */
+  const xs = [
+    { name: "B", sortOrder: 1, gap: { shown: 5, daily: 0.7 } }, { name: "A", sortOrder: 0, gap: { shown: 5, daily: 0.7 } },
+    { name: "C", sortOrder: 2, gap: { shown: 5, daily: 0.8 } }, { name: "D", sortOrder: 3, gap: { shown: 9, daily: 0.1 } },
+    { name: "E", sortOrder: 4, gap: null },
+  ];
+  is("by gap: the gap on screen, then the daily gap, then the name; no gap last", sortCities(xs, "gap").map((x) => x.name), ["D", "C", "A", "B", "E"]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

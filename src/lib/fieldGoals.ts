@@ -324,6 +324,48 @@ export const fmtSigned = (daily: number, unit: "day" | "week"): string => {
   return shown > 0 ? `+${s}` : s;
 };
 
+/* ════════════════════════════════════════════════════════════════════════════════════════════════
+ * THE ONE GAP. Every gap and every trend on the 2026 Daily Matches page AND the 2027 Operations
+ * Plan comes out of shownGap(), and there is no second copy of the subtraction anywhere.
+ *
+ * Ryan, 2026-10-02: "Every gap on screen must equal the displayed goal minus the displayed baseline
+ * on that same row, using the values exactly as rendered." OKC read Sep 0.7, Dec 1.0 and a gap of
+ * +0.4, because the gap was 0.96 - 0.66 = 0.30 per field, summed and rounded from unrounded parts;
+ * All MatchDay read 16.5, 27.6 and +11.2 for the same reason. A reader subtracts the two numbers in
+ * front of them, so that is what the gap is.
+ *
+ * BOTH ARGUMENTS ARE ALREADY IN THE UNIT ON SCREEN — daily, weekly (daily × 7) or monthly spots —
+ * and each is rounded to what that unit prints (a tenth for daily, whole for weekly and spots)
+ * before the subtraction. So Weekly subtracts the two weekly figures shown, not 7 × the daily gap.
+ *
+ * A MISSING BASELINE IS ZERO: a row that dashes (a field that does not exist yet, a city that has
+ * never played) has the whole December goal to find. A missing goal is no gap at all.
+ *
+ * TREND is the same subtraction with the earliest history month in place of the goal; there, a
+ * missing month is NO trend (shownTrend), never a zero. */
+export type ShowUnit = "day" | "week" | "spots";
+
+/** A figure as the page prints it, as a number: one decimal daily, whole weekly and spots. */
+export const asShown = (v: number, unit: ShowUnit): number => roundTo(v, unit === "day" ? 1 : 0);
+
+export function shownGap(goal: number | null | undefined, base: number | null | undefined, unit: ShowUnit): number | null {
+  if (goal == null) return null;
+  return asShown(asShown(goal, unit) - asShown(base ?? 0, unit), unit);   // re-rounded: float noise only
+}
+
+/** Displayed baseline month minus displayed earliest history month. Null when either is missing. */
+export const shownTrend = (base: number | null | undefined, earliest: number | null | undefined, unit: ShowUnit): number | null =>
+  base == null || earliest == null ? null : shownGap(base, earliest, unit);
+
+/** A daily figure in the 2026 page's unit (it has no spots unit). */
+export const dailyIn = (daily: number, unit: "day" | "week"): number => (unit === "week" ? daily * 7 : daily);
+
+/** A gap or trend that is ALREADY in its unit, printed with its sign. */
+export const fmtShownSigned = (v: number, unit: ShowUnit): string => {
+  const s = unit === "day" ? v.toFixed(1) : v.toFixed(0);
+  return v > 0 ? `+${s}` : s;
+};
+
 /* ── THE BAND IS KEYED ON WHAT THE PAGE SHOWS ────────────────────────────────────────────────────
  * Still the DAILY gap in both units — a threshold that moves when you press Weekly is a different
  * metric wearing one name — but on the ROUNDED daily gap, so the dot and the printed number can
@@ -342,7 +384,10 @@ export const bandForDisplay = (dailyGap: number): Band => band(roundTo(dailyGap,
  * on the field name, so the order is stable between loads. */
 export type GoalSort = "gap" | "city" | "name";
 
-export function sortGoalRows<T extends { name: string; city?: string | null; gapDaily: number | null }>(
+/* BY GAP SORTS ON THE GAP ON SCREEN, in whichever unit is showing (`gapSort`, when given), and
+ * breaks ties on the daily displayed gap and then the name — Ryan, 2026-10-02 — so rows level in
+ * Weekly do not shuffle at random. Without a `gapSort` the daily gap is the key, as it always was. */
+export function sortGoalRows<T extends { name: string; city?: string | null; gapDaily: number | null; gapSort?: number | null }>(
   rows: T[],
   sort: GoalSort,
 ): T[] {
@@ -352,7 +397,8 @@ export function sortGoalRows<T extends { name: string; city?: string | null; gap
     if (aNo !== bNo) return aNo ? 1 : -1;          // no goal, no gap, last
     if (sort === "gap") {
       if (aNo && bNo) return byName(a, b);
-      return (b.gapDaily as number) - (a.gapDaily as number) || byName(a, b);
+      const ak = (a.gapSort ?? a.gapDaily) as number, bk = (b.gapSort ?? b.gapDaily) as number;
+      return bk - ak || (b.gapDaily as number) - (a.gapDaily as number) || byName(a, b);
     }
     if (sort === "city") {
       return (a.city ?? "").localeCompare(b.city ?? "") || byName(a, b);
@@ -409,7 +455,10 @@ export type CityFieldRow = {
   base: number | null;
   oct: number | null; nov: number | null;
   dec: number | null;   // null is "no goal"
+  /** shownGap(dec, base) in DAILY — what the dot and the bar colour key on. Null with no goal. */
   gapDaily: number | null;
+  /** The gap in the unit on screen, for the sort. */
+  gapSort: number | null;
   /** The three months before the live one, oldest first. A null is "not yet a pitch", never 0.0. */
   hist: (number | null)[];
 };
@@ -418,7 +467,9 @@ export type CityRow = {
   city: string; hasCity: boolean;
   /** The live month to date, and the baseline month (equal in month-to-date mode). */
   live: number; base: number;
-  oct: number; nov: number; dec: number; gapDaily: number;
+  oct: number; nov: number; dec: number;
+  /** shownGap(dec, base) in DAILY, and in the unit on screen for the sort. */
+  gapDaily: number; gapSort: number;
   existing: number; slots: number; noGoal: number;
   fields: CityFieldRow[];
   /** The three months before the live one, oldest first. Null is "no market yet", never 0.0. */
@@ -473,6 +524,8 @@ export function cityRollup(
   /** The baseline month index (baselineMonth). Defaults to the live month: month-to-date mode,
    *  which is the rollup exactly as it was before the baseline existed. */
   baseline: number = currentMonth,
+  /** The unit on screen. Only the gap SORT reads it; every stored figure stays daily. */
+  unit: "day" | "week" = "day",
 ): CityRow[] {
   const decKey = monthKey(year, DEC_INDEX);
   const byCity = new Map<string, CityRow>();
@@ -499,7 +552,7 @@ export function cityRollup(
     const label = r.city != null && r.city.trim() !== "" ? r.city.trim() : NO_CITY;
     let c = byCity.get(label);
     if (!c) {
-      c = { city: label, hasCity: label !== NO_CITY, live: 0, base: 0, oct: 0, nov: 0, dec: 0, gapDaily: 0,
+      c = { city: label, hasCity: label !== NO_CITY, live: 0, base: 0, oct: 0, nov: 0, dec: 0, gapDaily: 0, gapSort: 0,
             existing: 0, slots: 0, noGoal: 0, fields: [], hist: HIST.map(() => null), trend: null, isNew: false };
       byCity.set(label, c);
     }
@@ -533,7 +586,8 @@ export function cityRollup(
       live: r.kind === "slot" ? null : live,
       base: r.kind === "slot" ? null : base,
       oct, nov, dec,
-      gapDaily: dec == null ? null : dec - base,
+      gapDaily: shownGap(dec, base, "day"),
+      gapSort: dec == null ? null : shownGap(dailyIn(dec, unit), dailyIn(base, unit), unit),
     });
   }
 
@@ -588,11 +642,14 @@ export function cityRollup(
     c.base = sumRounded(c.fields.map((f) => f.base));
     /* AFTER c.base, deliberately: the trend is the change in the number the ROW SHOWS, so it is
      * built from the displayed baseline and the displayed earliest month and cannot disagree. */
-    c.trend = c.hist[0] == null ? null : roundTo(c.base - c.hist[0], 1);
+    c.trend = shownTrend(c.base, c.hist[0], "day");
     c.oct = sumRounded(c.fields.map((f) => f.oct));
     c.nov = sumRounded(c.fields.map((f) => f.nov));
     c.dec = sumRounded(c.fields.map((f) => f.dec));
-    c.gapDaily = sumRounded(c.fields.map((f) => f.gapDaily));
+    /* THE CITY'S GAP IS ITS OWN DISPLAYED DECEMBER MINUS ITS OWN DISPLAYED BASELINE — not the sum
+     * of its fields' gaps, which is how OKC printed +0.4 under 0.7 and 1.0. */
+    c.gapDaily = shownGap(c.dec, c.base, "day") as number;
+    c.gapSort = shownGap(dailyIn(c.dec, unit), dailyIn(c.base, unit), unit) as number;
     c.fields = sortGoalRows(c.fields.map((f) => ({ ...f, city: c.city })), sort);
   }
 
@@ -612,9 +669,12 @@ export function cityRollup(
  *  its own drawer. GAP is summed from the city gaps for that reason and not re-derived. */
 export function cityTotals(cities: CityRow[]) {
   const r1 = (v: number) => roundTo(v, 1);
-  const s = (k: "live" | "base" | "oct" | "nov" | "dec" | "gapDaily") => r1(cities.reduce((a, c) => a + c[k], 0));
+  const s = (k: "live" | "base" | "oct" | "nov" | "dec") => r1(cities.reduce((a, c) => a + c[k], 0));
   const live = s("live"), base = s("base"), dec = s("dec");
-  return { live, base, oct: s("oct"), nov: s("nov"), dec, gapDaily: s("gapDaily"),
+  /* THE FOOTER GAP IS THE FOOTER'S DECEMBER MINUS THE FOOTER'S BASELINE (shownGap), never the sum of
+   * the city gaps above it — that sum is what printed +11.2 under 16.5 and 27.6. The "To find" tile
+   * reads this same footer, so the two cannot disagree. */
+  return { live, base, oct: s("oct"), nov: s("nov"), dec, gapDaily: shownGap(dec, base, "day") as number,
            existing: cities.reduce((a, c) => a + c.existing, 0),
            slots: cities.reduce((a, c) => a + c.slots, 0) };
 }
