@@ -46,17 +46,14 @@ function monthLength(ord: number): number {
   const m0 = (ord - 1) % 12;
   return new Date(year, m0 + 1, 0).getDate();
 }
-// The day the generated rows land on. Recon 0e showed real days include 2, 4,
-// 5, 10, 15, 23, 24, 28, 30, 31, so the operator types a free day (1-31) or
-// "last day". If a chosen day exceeds a short month, clamp to that month's last
-// day and flag it (never silently roll into the next month).
+// The day the generated rows land on: the day of the one "Pay date" picker
+// (Ryan, 2026-10-04), used in every chosen month. If that day does not exist in
+// a month, use the month's last day and flag it (never roll into the next month).
 function resolveDate(
   ord: number,
   dayNum: number,
-  useLast: boolean,
 ): { date: string; clamped: boolean } {
   const len = monthLength(ord);
-  if (useLast) return { date: ymd(ord, len), clamped: false };
   const wanted = Number.isFinite(dayNum) ? dayNum : 1;
   const dd = Math.min(Math.max(1, wanted), len);
   return { date: ymd(ord, dd), clamped: wanted > len };
@@ -101,12 +98,8 @@ export default function BatchExpenseDrawer({
   const [vendor, setVendor] = useState("");
   const [amount, setAmount] = useState("");
   const [notes, setNotes] = useState("");
-  // Single source of truth for the day the rows land on. In single-month mode a
-  // native date input edits these (its day-of-month → dayNum); in multi-month
-  // mode a number input + "last day" toggle edit them directly. Carrying them
-  // across the mode switch is automatic — 1↔many never loses the typed day.
-  const [dayNum, setDayNum] = useState("1");
-  const [useLast, setUseLast] = useState(false);
+  // ONE "Pay date" picker. Only its day is used: it lands in every chosen month.
+  const [payDate, setPayDate] = useState("");
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -116,8 +109,12 @@ export default function BatchExpenseDrawer({
     if (!open) return;
     setErr(null);
     setSaving(false);
-    setDayNum("1");
-    setUseLast(false);
+    {
+      // Default: the 1st of the seeded month, else of this month.
+      const n = new Date();
+      const ord = seed?.month ? monthOrd(seed.month) : n.getFullYear() * 12 + (n.getMonth() + 1);
+      setPayDate(ymd(ord, 1));
+    }
     if (seed) {
       setCity(seed.city || "Company-wide");
       setCategory(seed.category);
@@ -146,36 +143,22 @@ export default function BatchExpenseDrawer({
       return n;
     });
   }
-  function preset(kind: "thisq" | "nextq" | "rest" | "none") {
-    if (kind === "none") return setPicked(new Set());
-    const startOrd = monthOrd(quarter.months[0].key);
-    if (kind === "thisq") return setPicked(new Set([startOrd, startOrd + 1, startOrd + 2]));
-    if (kind === "nextq") return setPicked(new Set([startOrd + 3, startOrd + 4, startOrd + 5]));
-    // rest of the viewed quarter's calendar year, from now forward
-    const yr = quarter.year;
-    setPicked(
-      new Set(
-        windowOrds.filter((o) => Math.floor((o - 1) / 12) === yr && o >= nowOrd),
-      ),
-    );
-  }
 
   const amt = parseFloat(amount || "");
   const chosen = [...picked].sort((a, b) => a - b);
-  const singleOrd = chosen.length === 1 ? chosen[0] : null; // native-date mode
-  const dayInt = parseInt(dayNum || "", 10);
+  const dayInt = parseInt(payDate.split("-")[2] ?? "", 10);
   const rowsToWrite = useMemo(() => {
     return chosen.map((ord) => {
-      const { date, clamped } = resolveDate(ord, dayInt, useLast);
+      const { date, clamped } = resolveDate(ord, dayInt);
       const dupe = existing.has(dupeKey(city, category, vendor, ord));
       return { ord, date, clamped, dupe };
     });
-  }, [chosen, existing, city, category, vendor, dayInt, useLast]);
+  }, [chosen, existing, city, category, vendor, dayInt]);
   const willCreate = rowsToWrite.filter((r) => !r.dupe);
   const dupes = rowsToWrite.length - willCreate.length;
   const total = willCreate.length * (Number.isFinite(amt) ? amt : 0);
   const canSave =
-    !!appUser && willCreate.length > 0 && Number.isFinite(amt) && !saving;
+    !!appUser && willCreate.length > 0 && Number.isFinite(amt) && Number.isFinite(dayInt) && !saving;
 
   async function save() {
     if (!appUser) {
@@ -306,18 +289,7 @@ export default function BatchExpenseDrawer({
 
           {/* When */}
           <section>
-            <SecTitle>
-              When — pick every month this should be booked
-              <span className="ml-1 font-normal normal-case tracking-normal text-deep-green/45">
-                · not limited to the quarter you&apos;re viewing
-              </span>
-            </SecTitle>
-            <div className="mb-3 flex flex-wrap gap-2">
-              <Quick onClick={() => preset("thisq")}>This quarter ({quarter.label})</Quick>
-              <Quick onClick={() => preset("nextq")}>Next quarter</Quick>
-              <Quick onClick={() => preset("rest")}>Rest of {quarter.year}</Quick>
-              <Quick onClick={() => preset("none")}>Clear</Quick>
-            </div>
+            <SecTitle>Months to book</SecTitle>
             <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
               {windowOrds.map((ord) => {
                 const on = picked.has(ord);
@@ -344,56 +316,16 @@ export default function BatchExpenseDrawer({
                 );
               })}
             </div>
-            {singleOrd !== null ? (
-              // Exactly one month → record the real date. Constrained to that
-              // month; the value written is this date verbatim.
-              <div className="mt-4 max-w-[240px]">
-                <Field label="Date">
-                  <input
-                    type="date"
-                    value={resolveDate(singleOrd, dayInt, useLast).date}
-                    min={ymd(singleOrd, 1)}
-                    max={ymd(singleOrd, monthLength(singleOrd))}
-                    onChange={(e) => {
-                      const d = parseInt((e.target.value.split("-")[2] ?? ""), 10);
-                      if (Number.isFinite(d)) {
-                        setDayNum(String(d));
-                        setUseLast(false);
-                      }
-                    }}
-                    className={INPUT}
-                  />
-                </Field>
-              </div>
-            ) : (
-              // Two or more months → one day-of-month applied to each. Free
-              // 1-31 (recon 0e), or last day; short months clamp (flagged in
-              // the preview).
-              <div className="mt-4 flex flex-wrap items-end gap-4">
-                <div className="max-w-[150px]">
-                  <Field label="Day of month">
-                    <input
-                      type="number"
-                      min={1}
-                      max={31}
-                      value={dayNum}
-                      disabled={useLast}
-                      onChange={(e) => setDayNum(e.target.value)}
-                      className={`${INPUT} ${useLast ? "opacity-50" : ""}`}
-                    />
-                  </Field>
-                </div>
-                <label className="flex items-center gap-2 pb-2.5 text-xs font-bold text-deep-green">
-                  <input
-                    type="checkbox"
-                    checked={useLast}
-                    onChange={(e) => setUseLast(e.target.checked)}
-                    className="h-4 w-4 accent-deep-green"
-                  />
-                  Last day of month
-                </label>
-              </div>
-            )}
+            <div className="mt-4 max-w-[240px]">
+              <Field label="Pay date">
+                <input
+                  type="date"
+                  value={payDate}
+                  onChange={(e) => setPayDate(e.target.value)}
+                  className={INPUT}
+                />
+              </Field>
+            </div>
             {dupes > 0 && (
               <div className="mt-3 flex gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2.5 text-[11.5px] leading-relaxed text-amber-800">
                 <span aria-hidden>⚠</span>
@@ -519,16 +451,5 @@ function SecTitle({ children }: { children: React.ReactNode }) {
       <span>{children}</span>
       <span className="h-px flex-1 bg-cream-line" />
     </div>
-  );
-}
-function Quick({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="rounded-full border border-cream-line bg-white px-3 py-1.5 text-[11px] font-bold text-deep-green hover:border-mint"
-    >
-      {children}
-    </button>
   );
 }

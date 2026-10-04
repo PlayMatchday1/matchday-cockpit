@@ -46,6 +46,14 @@ export function categoryColor(name: string): string {
   return FALLBACK[h % FALLBACK.length];
 }
 
+/** THE PAGE'S CATEGORY ORDER (Ryan, 2026-10-04): these four first, then the rest by name. One
+ *  order for the bubbles, the cards, the split bar and the add row's dropdown. */
+export const CATEGORY_ORDER = ["Marketing", "Corporate Salaries", "City Manager", MATCH_PAY];
+export function compareCategories(a: string, b: string): number {
+  const ra = CATEGORY_ORDER.indexOf(a), rb = CATEGORY_ORDER.indexOf(b);
+  return (ra < 0 ? CATEGORY_ORDER.length : ra) - (rb < 0 ? CATEGORY_ORDER.length : rb) || a.localeCompare(b);
+}
+
 export type ExpLine = {
   key: string;
   category: string;
@@ -130,7 +138,7 @@ export function expensesMonth(expenses: readonly FinExpense[], monthKey: string,
   }
   const categories = [...byCat.values()]
     .map((c) => ({ ...c, lines: c.lines.sort((a, b) => b.thisAmount - a.thisAmount || a.label.localeCompare(b.label)) }))
-    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
+    .sort((a, b) => compareCategories(a.name, b.name));
   return { monthKey, prevKey, total: r2(categories.reduce((s, c) => s + c.total, 0)), matchPay: r2(mpThis), categories };
 }
 
@@ -199,4 +207,44 @@ export function planAdd(d: AddDraft, existing: readonly FinExpense[]): { rows: P
     if (m0 === 12) { m0 = 0; y++; }
   }
   return { rows, skipped };
+}
+
+/** "Paid on the 5th of each month, through Sep 2027." / "One payment on that date." — the line
+ *  under the add row, following its choices. Null until the date is a date. */
+export function addHint(how: AddDraft["how"], date: string): string | null {
+  if (how === "once") return "One payment on that date.";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const y = Number(date.slice(0, 4)), m0 = Number(date.slice(5, 7)) - 1 + 11, day = Number(date.slice(8, 10));
+  const sfx = day % 10 === 1 && day !== 11 ? "st" : day % 10 === 2 && day !== 12 ? "nd" : day % 10 === 3 && day !== 13 ? "rd" : "th";
+  return `Paid on the ${day}${sfx} of each month, through ${monthKeyOf(y + Math.floor(m0 / 12), m0 % 12)}.`;
+}
+
+/* ── SIMILAR NAMES ────────────────────────────────────────────────────────────────────────────
+ * "Deeona" and "Deonna" are two lines because the names differ. Before adding, the page asks
+ * whether the new name is a line that already exists in the same category and city. It never
+ * blocks: both answers save. An exact match (ignoring case and spaces) is the same line already,
+ * so it is not "similar". Close = an edit distance of 1, or 2 for names of five letters or more. */
+function editDistance(a: string, b: string): number {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)] as number[]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+export function similarLine(what: string, category: string, city: string | null, existing: readonly FinExpense[]): string | null {
+  const name = what.trim().toLowerCase();
+  if (name.length < 3 || !category) return null;
+  const cityK = (c: string | null | undefined) => { const t = (c ?? "").trim(); return t === "" || t === COMPANY_WIDE ? "" : t; };
+  const want = cityK(city);
+  let best: { vendor: string; dist: number } | null = null;
+  for (const r of existing) {
+    if (r.category !== category || cityK(r.city) !== want) continue;
+    const v = (r.vendor ?? "").trim();
+    const lv = v.toLowerCase();
+    if (!lv || lv === name) { if (lv === name) return null; continue; }
+    const dist = editDistance(name, lv);
+    if (dist <= (Math.min(name.length, lv.length) >= 5 ? 2 : 1) && (!best || dist < best.dist)) best = { vendor: v, dist };
+  }
+  return best?.vendor ?? null;
 }

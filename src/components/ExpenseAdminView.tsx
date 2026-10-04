@@ -26,8 +26,8 @@ import { useAuth } from "@/lib/useAuth";
 import { isCityHidden } from "@/lib/types";
 import { refetchFinanceData, useFinanceData, type FinExpense } from "@/lib/useFinanceData";
 import {
-  ALL_CITIES, COMPANY_WIDE, MATCH_PAY, addProblem, categoryColor, changeText, expensesMonth,
-  monthKeyOf, planAdd, visibleCategories, type AddDraft, type ExpLine,
+  ALL_CITIES, COMPANY_WIDE, MATCH_PAY, addHint, addProblem, categoryColor, compareCategories, expensesMonth,
+  monthKeyOf, planAdd, similarLine, visibleCategories, type AddDraft, type ExpLine,
 } from "@/lib/expensesMonth";
 
 const CITY_DISPLAY = [
@@ -79,14 +79,15 @@ export default function ExpenseAdminView() {
   const share = selected && month.total ? Math.round(((selCat?.total ?? 0) / month.total) * 100) : null;
   const includesMatchPay = month.matchPay > 0 && (selected == null || selected === MATCH_PAY);
 
-  // Every category the page knows (so a bubble can open one with nothing this month), money first.
+  // Every category the page knows (so a bubble can open one with nothing this month), in the
+  // page's one order (expensesMonth.CATEGORY_ORDER) — the same for bubbles, cards and dropdown.
   const allCats = useMemo(() => {
     const names = new Set<string>([...BASE_CATEGORIES, ...allRows.map((r) => r.category).filter(Boolean)]);
     const totals = new Map(month.categories.map((c) => [c.name, c.total]));
     return [...names].map((n) => ({ name: n, total: totals.get(n) ?? 0 }))
-      .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
+      .sort((a, b) => compareCategories(a.name, b.name));
   }, [allRows, month]);
-  const addableCats = allCats.map((c) => c.name).filter((c) => c !== MATCH_PAY).sort();
+  const addableCats = allCats.map((c) => c.name).filter((c) => c !== MATCH_PAY);
 
   const cityOptions = useMemo(() => {
     const set = new Set<string>();
@@ -101,21 +102,31 @@ export default function ExpenseAdminView() {
     const d = now.getFullYear() === year && now.getMonth() === month0 ? now.getDate() : 1;
     return `${year}-${pad(month0 + 1)}-${pad(Math.min(d, dim))}`;
   };
-  const blank = () => ({ what: "", category: "", amount: "", how: "monthly" as "monthly" | "once", city: "", day: String(now.getDate()), date: todayInMonth() });
+  const blank = () => ({ what: "", category: "", amount: "", how: "monthly" as "monthly" | "once", city: "", date: todayInMonth() });
   const [add, setAdd] = useState(blank);
   const [adding, setAdding] = useState(false);
   const [addMsg, setAddMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // SIMILAR NAME (Ryan): "Looks like Deonna already exists. Add to that line instead?" — asked once
+  // before saving, never blocking; either answer saves.
+  const [similar, setSimilar] = useState<string | null>(null);
   useEffect(() => { setAdd((a) => ({ ...a, date: todayInMonth() })); }, [year, month0]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function submitAdd() {
+  async function submitAdd(answer?: { use: string }) {
     if (adding) return;
     if (!appUser) { setAddMsg({ ok: false, text: "Not signed in." }); return; }
+    // ONE DATE PICKER: "First payment" when it repeats (its day is the day of every month, its month
+    // the first of the twelve), "Date" when it does not.
     const draft: AddDraft = {
-      what: add.what, category: add.category, amount: Number(add.amount), how: add.how, city: add.city || null,
-      day: Number(add.day), date: add.how === "monthly" ? `${year}-${pad(month0 + 1)}-01` : add.date,
+      what: answer?.use ?? add.what, category: add.category, amount: Number(add.amount), how: add.how, city: add.city || null,
+      day: Number(add.date.slice(8, 10)), date: add.date,
     };
     const problem = addProblem(draft);
     if (problem) { setAddMsg({ ok: false, text: problem }); return; }
+    if (!answer) {
+      const near = similarLine(draft.what, draft.category, draft.city, allRows);
+      if (near) { setAddMsg(null); setSimilar(near); return; }
+    }
+    setSimilar(null);
     const plan = planAdd(draft, allRows);
     setAdding(true);
     setAddMsg(null);
@@ -196,8 +207,8 @@ export default function ExpenseAdminView() {
     setDeleteRow(null);
   }
 
-  const prevShort = month.prevKey.split(" ")[0];
   const mon = MONTHS_FULL[month0];
+  const prevFull = MONTHS_FULL[(month0 + 11) % 12];
 
   return (
     <div className="xp">
@@ -249,8 +260,8 @@ export default function ExpenseAdminView() {
 
       {/* ── THE ADD ROW ──────────────────────────────────────────────────────────────────────── */}
       <form className="xp-add" data-testid="add-row" onSubmit={(e) => { e.preventDefault(); void submitAdd(); }}>
-        <input className="w" data-testid="add-what" placeholder="What or who" value={add.what} onChange={(e) => setAdd({ ...add, what: e.target.value })} />
-        <select data-testid="add-category" value={add.category} onChange={(e) => setAdd({ ...add, category: e.target.value })}>
+        <input className="w" data-testid="add-what" placeholder="What or who" value={add.what} onChange={(e) => { setSimilar(null); setAdd({ ...add, what: e.target.value }); }} />
+        <select data-testid="add-category" value={add.category} onChange={(e) => { setSimilar(null); setAdd({ ...add, category: e.target.value }); }}>
           <option value="">Category</option>
           {addableCats.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
@@ -259,22 +270,25 @@ export default function ExpenseAdminView() {
           <option value="monthly">Every month</option>
           <option value="once">Once</option>
         </select>
-        <select data-testid="add-city" value={add.city} onChange={(e) => setAdd({ ...add, city: e.target.value })}>
+        <select data-testid="add-city" value={add.city} onChange={(e) => { setSimilar(null); setAdd({ ...add, city: e.target.value }); }}>
           <option value="">City (optional)</option>
           {CITY_DISPLAY.filter((c) => c !== COMPANY_WIDE).map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
-        {add.how === "monthly" ? (
-          <label className="day">Day
-            <input data-testid="add-day" type="number" min={1} max={31} value={add.day} onChange={(e) => setAdd({ ...add, day: e.target.value })} />
-          </label>
-        ) : (
+        <label className="day">{add.how === "monthly" ? "First payment" : "Date"}
           <input data-testid="add-date" type="date" value={add.date} onChange={(e) => setAdd({ ...add, date: e.target.value })} />
-        )}
+        </label>
         <button type="submit" className="go" data-testid="add-save" disabled={adding}>{adding ? "Adding…" : "Add"}</button>
         <a className="more" role="button" tabIndex={0} data-testid="more-options" onClick={() => { setBatchSeed(null); setBatchOpen(true); }}
           onKeyDown={(e) => { if (e.key === "Enter") { setBatchSeed(null); setBatchOpen(true); } }}>More options</a>
+        {similar && (
+          <div className="sim" data-testid="similar">
+            Looks like {similar} already exists. Add to that line instead?
+            <button type="button" data-testid="similar-use" disabled={adding} onClick={() => { const use = similar; setAdd((a) => ({ ...a, what: use })); void submitAdd({ use }); }}>Add to {similar}</button>
+            <button type="button" data-testid="similar-new" disabled={adding} onClick={() => void submitAdd({ use: add.what })}>Add as {add.what.trim()}</button>
+          </div>
+        )}
         {addMsg && <div className={`msg${addMsg.ok ? "" : " bad"}`} data-testid="add-msg">{addMsg.text}</div>}
-        {add.how === "monthly" && !addMsg && <div className="hint">Every month: {mon} {year} and the next 11 months, on that day. A month that already has this line is skipped.</div>}
+        {addHint(add.how, add.date) && <div className="hint" data-testid="add-hint">{addHint(add.how, add.date)}</div>}
       </form>
 
       {/* ── ONE LIST, GROUPED BY CATEGORY ────────────────────────────────────────────────────── */}
@@ -283,14 +297,15 @@ export default function ExpenseAdminView() {
       {shown.map((c) => (
         <section key={c.name} className="xp-card" data-testid={`cat-${c.name}`} data-total={c.total}>
           <div className="ch">
-            <span className="dot" style={{ background: c.color }} /><b>{c.name}</b>
-            {c.name === MATCH_PAY && <Link className="lnk" href="/admin/finance/manager-pay">Manager Pay page</Link>}
-            <span className="sp" />
-            <b className="ct">{money(c.total)}</b>
+            <span className="cn">
+              <span className="dot" style={{ background: c.color }} /><b>{c.name}</b>
+              {c.name === MATCH_PAY && <Link className="lnk" href="/admin/finance/manager-pay">Manager Pay page</Link>}
+            </span>
+            <span className="mc" data-testid="col-prev"><small>{prevFull}</small><b>{money(c.lastTotal)}</b></span>
+            <span className="mc" data-testid="col-this"><small>{mon}</small><b className="ct">{money(c.total)}</b></span>
+            <span />
           </div>
           {c.lines.map((l) => {
-            // A line not booked yet this month is a gap to fill, not a change: no "−$X vs Sep".
-            const diff = l.thisRows.length ? changeText(l, month.prevKey) : null;
             const single = l.thisRows.length === 1 ? l.thisRows[0] : null;
             const editable = !l.auto && !l.locked && !!single && single.manual_entry === true;
             return (
@@ -299,7 +314,7 @@ export default function ExpenseAdminView() {
                   <b>{l.auto && <span className="atag">auto</span>}{l.label}</b>
                   <small>{l.city || "Company-wide"} · {l.frequency}{l.locked && !l.auto ? " · imported" : ""}</small>
                 </div>
-                <span className="last" title={`${prevShort}`}>{l.lastRows.length ? money(l.lastAmount) : "—"}<small> {prevShort}</small></span>
+                <span className="last">{l.lastRows.length ? money(l.lastAmount) : "—"}</span>
                 <span className="cur">
                   {editKey === l.key ? (
                     <input autoFocus className="pill-in" data-testid="pill-input" inputMode="decimal" value={editVal}
@@ -311,7 +326,7 @@ export default function ExpenseAdminView() {
                       onBlur={() => { if (skipBlur.current) { skipBlur.current = false; return; } void commitEdit(l); }} />
                   ) : (
                     <button type="button" data-testid="pill"
-                      className={`pill ${l.thisRows.length === 0 ? "gap" : Math.abs(l.thisAmount - l.lastAmount) < 0.005 ? "same" : "chg"}${editable || l.thisRows.length !== 1 ? "" : " ro"}`}
+                      className={`pill ${l.thisRows.length === 0 ? "gap" : "same"}${editable || l.thisRows.length !== 1 ? "" : " ro"}`}
                       title={l.auto ? (l.auto === "match-pay" ? "From the Manager Pay page — read-only" : "From the Meta sync — read-only") : l.locked ? "Imported — read-only" : l.thisRows.length === 0 ? `Add ${mon}` : l.thisRows.length > 1 ? `${l.thisRows.length} rows this month` : "Click to change"}
                       onClick={() => {
                         if (l.auto || l.locked) return;
@@ -322,7 +337,6 @@ export default function ExpenseAdminView() {
                       {(l.auto || l.locked) && <Lock size={10} aria-hidden />}{l.thisRows.length ? money(l.thisAmount) : l.auto || l.locked ? "—" : "+ add"}
                     </button>
                   )}
-                  {diff && <small className="diff" data-testid="diff">{diff}</small>}
                   {editErr?.key === l.key && <small className="err">{editErr.text}</small>}
                 </span>
                 <span className="act">
@@ -485,7 +499,7 @@ const CSS = `
 .xp-add input,.xp-add select{font:inherit;font-size:13.5px;border:1px solid #c9d8cd;border-radius:8px;padding:6px 8px;background:#fff;color:var(--ink)}
 .xp-add .w{flex:1;min-width:180px}
 .xp-add .amt{display:inline-flex;align-items:center;gap:3px;font-weight:700}.xp-add .amt input{width:96px}
-.xp-add .day{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;color:var(--ink-2)}.xp-add .day input{width:58px}
+.xp-add .day{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;color:var(--ink-2)}.xp-add .day input{width:150px}
 .xp-add .go{border:0;background:#22c55e;color:#06301d;font:inherit;font-weight:800;font-size:13px;padding:7px 16px;border-radius:9px;cursor:pointer}
 .xp-add .go:disabled{opacity:.6;cursor:default}
 .xp-add .more{font-size:12px;font-weight:700;color:var(--ink-2);text-decoration:underline;cursor:pointer}
@@ -493,7 +507,11 @@ const CSS = `
 .xp-add .hint{flex-basis:100%;font-size:11.5px;color:var(--muted)}
 .xp-card{background:#fff;border:1px solid var(--line);border-radius:14px;overflow:visible}
 .xp-empty{padding:28px;text-align:center;color:var(--muted)}
-.xp-card .ch{display:flex;align-items:center;gap:8px;padding:11px 16px;border-bottom:1px solid #eef1ec}
+.xp-card .ch{display:grid;grid-template-columns:minmax(0,1fr) 110px 190px 34px;align-items:end;gap:10px;padding:11px 16px;border-bottom:1px solid #eef1ec}
+.xp-card .ch .cn{display:flex;align-items:center;gap:8px;min-width:0;align-self:center}
+.xp-card .ch .mc{display:flex;flex-direction:column;align-items:flex-end;font-variant-numeric:tabular-nums}
+.xp-card .ch .mc small{font-size:10px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+.xp-card .ch .mc b{font-size:13px;color:var(--ink-2)}
 .xp-card .ch .dot{width:10px;height:10px;border-radius:3px;display:inline-block}
 .xp-card .ch .ct{font-variant-numeric:tabular-nums;font-size:15px}
 .xp-card .ch .lnk{font-size:12px;font-weight:700;color:#1a7f4b;text-decoration:underline}
@@ -503,20 +521,19 @@ const CSS = `
 .xp .ln .nm small{display:block;font-size:11.5px;color:var(--muted)}
 .xp .atag{display:inline-block;font-size:9px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:#7a4e06;background:#fde9bf;border-radius:4px;padding:0 4px;margin-right:5px;vertical-align:1px}
 .xp .ln .last{font-size:12px;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
-.xp .ln .last small{font-size:10.5px}
 .xp .ln .cur{display:flex;flex-direction:column;align-items:flex-end;gap:2px}
 .xp .pill{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:3px 11px;font:inherit;font-size:13px;font-weight:800;font-variant-numeric:tabular-nums;cursor:pointer;border:1px solid transparent}
 .xp .pill.same{background:#dff5e6;color:#15803d}
-.xp .pill.chg{background:#e3eefb;color:#1d4f91}
 .xp .pill.gap{background:#fff;border:1px dashed #cfd6d1;color:var(--muted);font-weight:700}
 .xp .pill.ro{cursor:default}
-.xp .pill-in{width:110px;text-align:right;font:inherit;font-size:13px;font-weight:700;border:1px solid #1d4f91;border-radius:999px;padding:3px 10px}
-.xp .diff{font-size:11px;color:#1d4f91;font-weight:700}
+.xp .pill-in{width:110px;text-align:right;font:inherit;font-size:13px;font-weight:700;border:1px solid #15803d;border-radius:999px;padding:3px 10px}
+.xp-add .sim{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12.5px;font-weight:600;color:#7a4e06}
+.xp-add .sim button{border:1px solid #c9d8cd;background:#fff;border-radius:8px;padding:4px 10px;font:inherit;font-size:12px;font-weight:700;color:var(--ink);cursor:pointer}
 .xp .err{font-size:11px;color:#b42318;font-weight:700}
 .xp .act{position:relative;text-align:right}
 .xp .mn{border:0;background:transparent;color:var(--muted);cursor:pointer;padding:2px;border-radius:6px}.xp .mn:hover{background:#f3f5f2;color:var(--ink)}
 .xp .menu{position:absolute;right:0;top:24px;z-index:20;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);display:grid;min-width:170px;padding:4px}
 .xp .menu button{display:flex;align-items:center;gap:6px;border:0;background:transparent;font:inherit;font-size:12.5px;padding:7px 10px;border-radius:7px;cursor:pointer;text-align:left;color:var(--ink)}
 .xp .menu button:hover{background:#f3f5f2}.xp .menu .del{color:#b42318}
-@media (max-width:760px){.xp .ln{grid-template-columns:minmax(0,1fr) 120px 30px}.xp .ln .last{display:none}}
+@media (max-width:760px){.xp .ln,.xp-card .ch{grid-template-columns:minmax(0,1fr) 78px 104px 26px;gap:6px}}
 `;
