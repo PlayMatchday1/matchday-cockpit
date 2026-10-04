@@ -280,7 +280,7 @@ export default function OpExCalendarView() {
           : undefined}
         title={p.projected ? (p.projected.auto || p.projected.autoMeta ? "Calculated: click to see how" : "A projection: click to change or remove it") : undefined}>
         <td>{p.day == null ? "—" : `${mon} ${p.day}`}</td>
-        <td>{p.projected && <span className="ptag">{p.projected.auto || p.projected.autoMeta ? "auto" : "proj"}</span>}<b>{p.payee}</b></td>
+        <td>{p.projected && <span className="ptag">proj</span>}<b>{p.payee}</b></td>
         <td className="cat"><span className="sw" style={{ background: CAT_BY_KEY[p.cat].col }} />{CAT_BY_KEY[p.cat].name}{sub ? ` · ${sub}` : ""}</td>
         <td className="city">{p.city || "—"}</td>
         <td>{p.projected ? <span className="st prj">Projected</span> : <span className={`st ${p.paid ? "paid" : "proj"}`}>{p.paid ? "Paid" : "Expected"}</span>}</td>
@@ -461,7 +461,7 @@ export default function OpExCalendarView() {
                                 : { ...place(id, e.currentTarget), kind: "pill", day: d, cat: x.cat, pk: x.pk });
                             }}>
                             <span className="sw" style={{ background: CAT_BY_KEY[x.cat].col }} />
-                            <span className="nm">{x.proj && <span className="ptag">{x.pk === "a" ? "auto" : "proj"}</span>}{CAT_BY_KEY[x.cat].short}{x.ps.length > 1 && <small> {x.ps.length}</small>}</span>
+                            <span className="nm">{x.proj && <span className="ptag">proj</span>}{CAT_BY_KEY[x.cat].short}{x.ps.length > 1 && <small> {x.ps.length}</small>}</span>
                             <span className="v">{fmt(x.total)}</span>
                           </button>
                         );
@@ -579,8 +579,9 @@ export default function OpExCalendarView() {
             <div className="h">How this page works</div>
             Every payment MatchDay makes in the month, on the day the money leaves. Solid is paid. Dashed is
             expected: scheduled from real records, not yet paid. Dotted amber is a projection: money that
-            might leave, never counted as paid. &ldquo;proj&rdquo; ones you added by hand; &ldquo;auto&rdquo; is match
-            manager pay on a Tuesday with no real amount yet, at the average of the last four closed weeks.
+            might leave, never counted as paid, and every one says &ldquo;proj&rdquo;: ones you added by hand, match
+            manager pay on a Tuesday with no real amount yet (the average of the last four closed weeks), and
+            Meta ad charges from the last four weeks&apos; average daily spend.
             A projection drops off once its day is over. &ldquo;Show projections&rdquo; takes them all out of every
             figure on the page.
             <dl>
