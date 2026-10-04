@@ -8,6 +8,8 @@
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { getMatchdayApiClient, MatchdayApiError } from "@/lib/matchdayApi";
 import type { PromoRow } from "@/lib/promoModel";
+import { createClient } from "@supabase/supabase-js";
+import { statsFor } from "@/lib/promoRedemptions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,6 +23,23 @@ export async function GET(req: Request) {
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const url = new URL(req.url);
+
+  // ── ?redeemed=1,2,3 — THE LIST'S REDEEMED COLUMN, from OUR copy, one request per visible page ──
+  // Same rule as the drawer (lib/promoRedemptions): standing bookings on played matches. Counts
+  // only — no player is named here, so the Match Ops read gate is the right one.
+  const want = url.searchParams.get("redeemed");
+  if (want != null) {
+    const ids = [...new Set(want.split(",").map((x) => Number(x)).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 200);
+    const sbUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim(), key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+    if (!sbUrl || !key) return Response.json({ error: "Supabase env not configured" }, { status: 500 });
+    try {
+      const m = await statsFor(createClient(sbUrl, key, { auth: { persistSession: false } }), ids);
+      return Response.json({ redeemed: Object.fromEntries(m) }, { headers: { "Cache-Control": "no-store" } });
+    } catch (e) {
+      return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+    }
+  }
+
   const code = (url.searchParams.get("code") ?? "").trim();
   const bucket = url.searchParams.get("bucket") === "live" ? "live" : "past";
   const page = Math.max(1, Number(url.searchParams.get("page") ?? "1") || 1);

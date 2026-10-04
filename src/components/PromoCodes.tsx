@@ -4,17 +4,18 @@
 // browsing opens on the server's (heap) order, honestly labelled, and search is the workflow.
 // Two tables split by END DATE the way the server splits them (LIVE = endDateMin, PAST =
 // endDateMax); state is a per-row badge derived from the row's own dates + deletedAt, never a
-// server filter (there is none). CAP is on the list; REDEEMED/LEFT are on the detail drawer
-// only (usageCount is detail-only — no N+1). All times are TRUE UTC shown in America/Chicago
+// server filter (there is none). CAP and REDEEMED are on the list; LEFT is on the detail drawer.
+// REDEEMED everywhere is lib/promoRedemptions (our copy), never MatchDay's usageCount. All times are TRUE UTC shown in America/Chicago
 // (promoTz) — the OPPOSITE model from the match screens; the two must never share helpers.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { byTime, money, type UseRow } from "@/lib/promoUsesModel";
+import { leftFromStats, notPlayedLine, type RedemptionStats } from "@/lib/promoRedemptions";
 import { supabase } from "@/lib/supabase";
 import { useAuth, canManagePromos, canReadPromos } from "@/lib/useAuth";
 import {
   type PromoRow, type PromoState, type DiscountType, type TargetUserType, type TargetMatchType,
-  promoState, promoBucket, discountLabel, capLabel, leftLabel, leftTone, usageLine, createSummary,
+  promoState, promoBucket, discountLabel, capLabel, usageLine, createSummary,
   USER_TYPE_LABEL, MATCH_TYPE_LABEL,
 } from "@/lib/promoModel";
 import { promoDiff, consequenceLine, DELETE_CONSEQUENCE, type PromoEditable } from "@/lib/promoEditModel";
@@ -55,13 +56,13 @@ function sortByCreatedDesc(rows: PromoRow[]): PromoRow[] {
   return [...rows].sort((a, b) => t(b) - t(a) || b.id - a.id);
 }
 
-// ── REDEEMED per-row lazy fetch (Phase 20 C). usageCount is detail-only, so the ban on N+1 is
-// lifted for the VISIBLE page only, under strict rules: render immediately (never block), fill in
-// after; cap 5 concurrent; cache by id for the session (paging back / reopening = zero calls);
-// and CANCEL in-flight when the visible id set changes so a late response can't write into the
-// wrong row. Four visually distinct states — a pending or failed fetch must NEVER read as "0". ──
+// ── REDEEMED for the visible rows, from OUR copy (lib/promoRedemptions — the drawer's rule:
+// standing bookings on played matches; MatchDay's usageCount is not used). ONE request per visible
+// id set (/api/promos/list?redeemed=…), rendered immediately and filled in after; cached by id for
+// the session; a late response for a superseded id set is dropped. Four visually distinct states —
+// a pending or failed fetch must NEVER read as "0". ──
 type RedeemState = { state: "loading" | "loaded" | "failed"; value?: number };
-const redeemedCache = new Map<number, number>(); // session cache: promo id -> usageCount
+const redeemedCache = new Map<number, number>(); // session cache: promo id -> played redemptions
 
 function useRedeemed(ids: number[]): { get: (id: number) => RedeemState; retry: (id: number) => void } {
   const [cells, setCells] = useState<Record<number, RedeemState>>({});
@@ -69,18 +70,27 @@ function useRedeemed(ids: number[]): { get: (id: number) => RedeemState; retry: 
   const inflight = useRef<Map<number, AbortController>>(new Map());
   const key = ids.join(",");
 
-  const fetchOne = useCallback((id: number, gen: number): Promise<void> => {
+  const fetchMany = useCallback((want: number[], gen: number): Promise<void> => {
+    if (!want.length) return Promise.resolve();
     const ac = new AbortController();
-    inflight.current.set(id, ac);
-    return authFetch(`/api/promos/detail/${id}`, { signal: ac.signal })
+    for (const id of want) inflight.current.set(id, ac);
+    return authFetch(`/api/promos/list?redeemed=${want.join(",")}`, { signal: ac.signal })
       .then(async (res) => {
         const j = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
-        return typeof j.usageCount === "number" ? j.usageCount : 0;
+        return (j.redeemed ?? {}) as Record<string, { played?: number }>;
       })
-      .then((uc) => { redeemedCache.set(id, uc); if (gen === genRef.current) setCells((p) => ({ ...p, [id]: { state: "loaded", value: uc } })); })
-      .catch(() => { if (gen === genRef.current && !ac.signal.aborted) setCells((p) => ({ ...p, [id]: { state: "failed" } })); })
-      .finally(() => { inflight.current.delete(id); });
+      .then((m) => {
+        const next: Record<number, RedeemState> = {};
+        for (const id of want) {
+          const v = m[String(id)]?.played;
+          // AN ID THE ANSWER LEFT OUT IS A FAILURE, not a zero.
+          if (typeof v === "number") { redeemedCache.set(id, v); next[id] = { state: "loaded", value: v }; } else next[id] = { state: "failed" };
+        }
+        if (gen === genRef.current) setCells((p) => ({ ...p, ...next }));
+      })
+      .catch(() => { if (gen === genRef.current && !ac.signal.aborted) setCells((p) => ({ ...p, ...Object.fromEntries(want.map((id) => [id, { state: "failed" as const }])) })); })
+      .finally(() => { for (const id of want) inflight.current.delete(id); });
   }, []);
 
   useEffect(() => {
@@ -89,20 +99,12 @@ function useRedeemed(ids: number[]): { get: (id: number) => RedeemState; retry: 
     inflight.current = new Map();
     // seed: cached → loaded (0 calls); everything else → loading (NEVER a bare 0 while pending)
     setCells(() => { const next: Record<number, RedeemState> = {}; for (const id of ids) next[id] = redeemedCache.has(id) ? { state: "loaded", value: redeemedCache.get(id)! } : { state: "loading" }; return next; });
-    const queue = ids.filter((id) => !redeemedCache.has(id));
-    let idx = 0, active = 0;
-    const pump = () => {
-      while (active < 5 && idx < queue.length) {
-        const id = queue[idx++]; active++;
-        void fetchOne(id, gen).finally(() => { active--; if (gen === genRef.current) pump(); });
-      }
-    };
-    pump();
+    void fetchMany(ids.filter((id) => !redeemedCache.has(id)), gen);
     return () => { for (const ac of inflight.current.values()) ac.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, fetchOne]);
+  }, [key, fetchMany]);
 
-  const retry = useCallback((id: number) => { redeemedCache.delete(id); setCells((p) => ({ ...p, [id]: { state: "loading" } })); void fetchOne(id, genRef.current); }, [fetchOne]);
+  const retry = useCallback((id: number) => { redeemedCache.delete(id); setCells((p) => ({ ...p, [id]: { state: "loading" } })); void fetchMany([id], genRef.current); }, [fetchMany]);
   return { get: (id) => cells[id] ?? { state: "loading" }, retry };
 }
 type Redeemed = ReturnType<typeof useRedeemed>;
@@ -458,7 +460,7 @@ function MoreBar({ mode, loaded, total, onMore }: { mode: "browse" | "search" | 
   return <div className="more" data-testid="more"><span>Showing {loaded.toLocaleString()} of {total.toLocaleString()}</span><button className="btn" data-testid="show-more" onClick={onMore}>Show {Math.min(PAGE, left)} more</button></div>;
 }
 
-// ── DETAIL drawer: the ONLY place redemptions (usageCount) appear → REDEEMED / LEFT here ──
+// ── DETAIL drawer: REDEEMED / CAP / LEFT from our copy (lib/promoRedemptions), never usageCount ──
 function DetailDrawer({ id, onClose, onEdit, onChanged, mayManage, noWrite }: {
   id: number; onClose: () => void;
   onEdit?: (row: PromoRow) => void; onChanged?: () => void;
@@ -472,20 +474,22 @@ function DetailDrawer({ id, onClose, onEdit, onChanged, mayManage, noWrite }: {
   const [confirmKind, setConfirmKind] = useState<null | "delete" | "restore">(null);
   const [busy, setBusy] = useState(false);
   const [actionMsg, setActionMsg] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
-  const [state, setState] = useState<{ promo?: PromoRow & { usageCount?: number }; usageCount?: number; nowIso?: string; loading: boolean; error?: string }>({ loading: true });
+  const [state, setState] = useState<{ promo?: PromoRow; redeemed?: RedemptionStats | null; redeemedError?: string | null; nowIso?: string; loading: boolean; error?: string }>({ loading: true });
   useEffect(() => {
     let live = true;
     (async () => {
       try { const res = await authFetch(`/api/promos/detail/${id}`); const j = await res.json();
         if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
-        if (live) setState({ promo: j.promo, usageCount: j.usageCount, nowIso: j.nowIso, loading: false });
+        if (live) setState({ promo: j.promo, redeemed: j.redeemed ?? null, redeemedError: j.redeemedError ?? null, nowIso: j.nowIso, loading: false });
       } catch (e) { if (live) setState({ loading: false, error: e instanceof Error ? e.message : String(e) }); }
     })();
     return () => { live = false; };
   }, [id]);
   useEffect(() => { const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); }; document.addEventListener("keydown", h); return () => document.removeEventListener("keydown", h); }, [onClose]);
 
-  const p = state.promo; const uc = state.usageCount ?? 0;
+  const p = state.promo; const rs = state.redeemed ?? null;
+  const left = p && rs ? leftFromStats(p, rs) : null;
+  const notPlayed = rs ? notPlayedLine(rs) : null;
   return (
     <div className="scrim" data-testid="detail-scrim" onClick={(e) => { if ((e.target as HTMLElement).classList.contains("scrim")) onClose(); }}>
       <div className="drawer" role="dialog" aria-modal="true" aria-label="Promo code detail">
@@ -494,11 +498,13 @@ function DetailDrawer({ id, onClose, onEdit, onChanged, mayManage, noWrite }: {
           {state.loading ? <p className="empty">Loading…</p> : state.error ? <p className="empty err">{state.error}</p> : p ? <>
             <div className="dcode"><span className="code big">{p.code}</span><span className="st inline">{promoState(p, state.nowIso ?? new Date().toISOString()).toUpperCase()}</span><span className="cid">ID {p.id}</span></div>
             <div className="usebox" data-testid="detail-usage">
-              <div className="usecol"><span className="ul">REDEEMED</span><span className="uv" data-testid="detail-redeemed">{uc.toLocaleString()}</span></div>
+              <div className="usecol"><span className="ul">REDEEMED</span>
+                <span className="uv" data-testid="detail-redeemed" title={state.redeemedError ?? undefined}>{rs ? rs.played.toLocaleString() : "?"}</span>
+                {notPlayed && <span className="unp" data-testid="detail-notplayed">{notPlayed}</span>}</div>
               <div className="usecol"><span className="ul">CAP</span><span className="uv">{capLabel(p)}</span></div>
-              <div className="usecol"><span className="ul">LEFT</span><span className={"uv left-" + leftTone(p, uc)} data-testid="detail-left">{leftLabel(p, uc)}</span></div>
+              <div className="usecol"><span className="ul">LEFT</span><span className={"uv left-" + (left?.tone ?? "normal")} data-testid="detail-left">{left?.label ?? "?"}</span></div>
             </div>
-            <p className="useline" data-testid="detail-useline">{usageLine(p, uc)}</p>
+            <p className="useline" data-testid="detail-useline">{rs ? usageLine(p, rs.played) : `Couldn't read redemptions${state.redeemedError ? `: ${state.redeemedError}` : ""}`}</p>
             <dl className="facts">
               <div><dt>Discount</dt><dd>{discountLabel(p)} <small>{p.discountType}</small></dd></div>
               <div><dt>Window</dt><dd>{fmtChicagoFull(p.startDateUtc)} → {fmtChicagoFull(p.endDateUtc)}<small>{PROMO_TZ_LABEL}</small></dd></div>
@@ -596,6 +602,7 @@ function DetailDrawer({ id, onClose, onEdit, onChanged, mayManage, noWrite }: {
 // The arithmetic lives in promoUsesModel; this renders it.
 type UsesPayload = {
   uses: UseRow[];
+  stats: RedemptionStats;
   summary: { total: number; distinctUsers: number; capPerUser: number; usesPerUser: number;
     worthCents: number; breach: boolean; breachWorthCents: number;
     breachers: { playerId: number | null; name: string | null; deleted: boolean; uses: number; worthCents: number }[] };
@@ -628,7 +635,8 @@ function UsesPanel({ promoId }: { promoId: number }) {
       {/* the three numbers that answer the question */}
       <div className="utiles" data-testid="uses-tiles">
         <div className="utile"><div className="uk">REDEEMED</div><div className="uv" data-testid="uses-total">{s.total}</div>
-          <div className="us">{money(s.worthCents)} of spots</div></div>
+          <div className="us">{money(s.worthCents)} of spots at list price</div>
+          {notPlayedLine(data.stats) && <div className="us" data-testid="uses-notplayed">{notPlayedLine(data.stats)}</div>}</div>
         <div className={"utile" + (s.breach ? " alarm" : "")}><div className="uk">DISTINCT USERS</div>
           <div className="uv" data-testid="uses-distinct">{s.distinctUsers}</div>
           <div className="us">{s.distinctUsers ? s.usesPerUser.toFixed(1) : "0"} uses each on average</div></div>
@@ -655,8 +663,9 @@ function UsesPanel({ promoId }: { promoId: number }) {
       <div className="ugrp" data-testid="uses-by-time-list">
         <ul className="ulist">
           {timeRows.map((r) => (
-            <li className="uline" key={r.id} data-testid="uses-time-row" data-dead={r.deleted ? "true" : "false"}>
+            <li className="uline" key={r.id} data-testid="uses-time-row" data-dead={r.deleted ? "true" : "false"} data-kind={r.kind}>
               <span className="uwhen">{fmtChicagoFull(r.at)}</span>
+              <span className={`ukind k-${r.kind}`} data-testid="uses-kind">{r.kind === "played" ? "played" : r.kind === "cancelled-match" ? "match cancelled" : "upcoming"}</span>
               <span className="umatch"><span className="umn">{r.deleted ? "Account deleted" : (r.name ?? `Player ${r.playerId}`)}</span>
                 <span className="umk"> · {r.match ?? "—"}{r.kickoff ? ` · ${fmtChicagoFull(r.kickoff)}` : ""}</span></span>
               {r.city && <span className="ucity">{r.city}</span>}
@@ -666,7 +675,7 @@ function UsesPanel({ promoId }: { promoId: number }) {
       </div>
 
       <p className="ufoot" data-testid="uses-foot">
-        {s.total} use{s.total === 1 ? "" : "s"} by {s.distinctUsers} account{s.distinctUsers === 1 ? "" : "s"}. Times are {PROMO_TZ_LABEL}.
+        {s.total} use{s.total === 1 ? "" : "s"} on played matches by {s.distinctUsers} account{s.distinctUsers === 1 ? "" : "s"}. Only bookings that stand are listed: cancelled bookings and unfinished checkouts are left out. Times are {PROMO_TZ_LABEL}.
         {" "}Redemptions survive account deletion, so a deleted player still shows their uses.
       </p>
     </div>
@@ -1190,6 +1199,9 @@ const CSS = `
 .promo .usecol{background:#f6faf8;border:1px solid #dde6e1;border-radius:10px;padding:10px 12px}
 .promo .ul{display:block;font-size:9.5px;font-weight:800;letter-spacing:.11em;color:#5c7168;margin-bottom:4px}
 .promo .uv{display:block;font-size:19px;font-weight:800;font-variant-numeric:tabular-nums;color:#0e1a13}
+.promo .unp{display:block;margin-top:3px;font-size:11px;color:#5c7168}
+.promo .ukind{font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;border-radius:4px;padding:1px 6px;white-space:nowrap}
+.promo .ukind.k-played{background:#dff5e6;color:#15803d}.promo .ukind.k-cancelled-match{background:#fdecea;color:#b42318}.promo .ukind.k-upcoming{background:#eef2f0;color:#5c7168}
 .promo .uv.left-over{color:#8a5600}.promo .uv.left-spent{color:#b42318}
 .promo .useline{margin:0 0 16px;font-size:12.5px;color:#3d5349;font-variant-numeric:tabular-nums}
 .promo .facts{margin:0;display:grid;gap:11px}.promo .facts div{display:grid;grid-template-columns:96px 1fr;gap:10px}
@@ -1283,7 +1295,7 @@ const CSS = `
 /* the advisory sentence on the CREATE form — the one place the cap is chosen, so the one place
    it still says so. The short badge that repeated it on the list and in the drawer is gone. */
 .promo .ulist{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
-.promo .uline{display:grid;grid-template-columns:170px 1fr auto;gap:12px;align-items:baseline;
+.promo .uline{display:grid;grid-template-columns:170px auto 1fr auto;gap:12px;align-items:baseline;
   padding:9px 14px;border-bottom:1px solid #f0f4f0;font-size:13.5px}
 .promo .uline:last-child{border-bottom:0}
 .promo .uwhen{color:var(--ink2);font-variant-numeric:tabular-nums}

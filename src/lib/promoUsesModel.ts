@@ -32,6 +32,8 @@ export type UseRow = {
   kickoff: string | null;
   city: string | null;
   amountCents: number;        // what this spot was worth
+  /** lib/promoRedemptions.useKind — every row the uses route returns stands; this says which kind. */
+  kind?: "played" | "cancelled-match" | "upcoming";
 };
 
 export type UseGroup = {
