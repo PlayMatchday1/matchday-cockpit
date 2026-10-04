@@ -271,7 +271,8 @@ export default function ExpenseAdminView() {
           <option value="once">Once</option>
         </select>
         <select data-testid="add-city" value={add.city} onChange={(e) => { setSimilar(null); setAdd({ ...add, city: e.target.value }); }}>
-          <option value="">City (optional)</option>
+          {/* "" saves with no city — Company-wide, as the empty choice always did. */}
+          <option value="">Company-wide</option>
           {CITY_DISPLAY.filter((c) => c !== COMPANY_WIDE).map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
         <label className="day">{add.how === "monthly" ? "First payment" : "Date"}

@@ -64,7 +64,8 @@ export type ExpLine = {
   lastRows: FinExpense[];
   thisAmount: number;
   lastAmount: number;
-  frequency: "every month" | "once";
+  /** "every week" only for Match Manager Pay, paid each Tuesday from the Manager Pay page. */
+  frequency: "every month" | "every week" | "once";
   /** Read-only and calculated elsewhere: Match Manager Pay, or the Meta ad rows. */
   auto: null | "match-pay" | "meta";
   /** Imported (manual_entry false) and not auto: shown with a lock, not editable. */
@@ -122,7 +123,7 @@ export function expensesMonth(expenses: readonly FinExpense[], monthKey: string,
     lines.set(`auto:${MATCH_PAY}`, {
       key: `auto:${MATCH_PAY}`, category: MATCH_PAY, label: "Match manager pay", city: city === ALL_CITIES ? null : city, vendor: null,
       thisRows: mpThisRows, lastRows: mpLastRows, thisAmount: mpThis, lastAmount: mpLast,
-      frequency: "every month", auto: "match-pay", locked: true,
+      frequency: "every week", auto: "match-pay", locked: true,
     });
   }
 
