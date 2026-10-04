@@ -26,9 +26,9 @@ import { supabase } from "@/lib/supabase";
 import { errorText } from "@/lib/errorText";
 import { MONTH_LABELS, SPOTS_PER_MATCH, baselineMonth, roundTo, type CompareFrom } from "@/lib/fieldGoals";
 import {
-  ANCHOR_SETTING_KEY, FORECAST_DEC_2026_SPOTS, PLAN_YEAR, START_MONTH, addMonths, citiesLine, cityTally, daysInMonthOf,
-  estimateAt, fieldFlags, fmtPlan, headlineTiles, inPlan, isActualAnchor, isActuallyLive, isDefaultEstimate, monthYear, planCounts,
-  planMonthKeys, planGap, regionTally, regionsLine, rollFields, shortMonth, sortCities, spotsToUnit, sumRollups, sumSpots, unitToSpots,
+  ANCHOR_SETTING_KEY, FORECAST_DEC_2026_SPOTS, PLAN_YEAR, START_MONTH, ZERO_COUNTS, addCounts, addMonths, citiesLine, cityTally, daysInMonthOf,
+  estimateAt, fieldFlags, fmtPlan, headlineTiles, inPlan, isActualAnchor, isActuallyLive, isDefaultEstimate,
+  planMonthKeys, planGap, regionTally, regionsLine, rollFields, shortMonth, sortCities, spotsToUnit, sumRollups, sumSpots, tilePlanCounts, unitToSpots,
   type Counts, type PlanField, type PlanGap, type PlanSort, type PlanType, type Rollup, type Unit,
 } from "@/lib/opsPlan";
 import { BaselineTag, Big, CompareSeg, DaysTag, GoalInput, GrainSeg, HistorySeg, type Grain } from "@/components/FieldGoals2026";
@@ -224,7 +224,12 @@ export default function OpsPlan2027() {
       });
       const line = sumLines(cities.map((c) => c.line));
       const rm = data.hires.find((h) => h.kind === "regional_manager" && h.regionKey === r.key) ?? null;
-      return { region: r, cities: sortCities(cities, sort), line, gap: gapOf(line), rm };
+      /* THE REGION TILES (Ryan, 2026-10-04): now / Dec 2027 plan. Cities now is the Cities tile's
+       * "playing now" (the baseline month); cities planned is every active city in the region. Fields
+       * planned are counted at DECEMBER 2027, not at "Plan as of" (which drives the table). */
+      const dec = tilePlanCounts(cities.flatMap((c) => c.fields), KEYS[11]);
+      const citiesNow = cities.filter((c) => baseDays > 0 && c.fields.some((f) => (f.actual[baseKey]?.matches ?? 0) > 0)).length;
+      return { region: r, cities: sortCities(cities, sort), line, gap: gapOf(line), rm, dec, citiesNow };
     });
     const all = sumLines(regions.map((r) => r.line));
     const removedCities = data.cities.filter((c) => c.status === "removed");
@@ -241,9 +246,10 @@ export default function OpsPlan2027() {
     }))));
     const regionCount = regionTally(regions.map((r) => ({ key: r.region.key, cityNames: r.cities.map((c) => c.name) })));
     /* PLANNED BY DECEMBER 2027, over the same fields the "Plan as of" count reads. */
-    const plannedDec = planCounts(regions.flatMap((r) => r.cities.flatMap((c) => c.fields)), KEYS[11]).fields;
+    // The page's Dec 2027 plan IS the sum of the regions' tiles, so the regions add up to it.
+    const allDec = regions.reduce((a, r) => addCounts(a, r.dec), ZERO_COUNTS);
     return { cur, asOf, liveDays, histKeys, baseKey, baseIsLive, baseDays, compareFrom: bl.compareFrom,
-      regions, all, allGap: gapOf(all), removedCities, start, tally, regionCount, plannedDec, cityById };
+      regions, all, allGap: gapOf(all), removedCities, start, tally, regionCount, allDec, cityById };
   }, [data, KEYS, asOfPick, showHistory, sort, compareOverride, unit]);
 
   if (loadErr) return <p className="p-6 text-[13px] text-red-700" data-testid="op-error">{loadErr}</p>;
@@ -272,7 +278,7 @@ export default function OpsPlan2027() {
   const tiles = headlineTiles(view.all.roll.est[11], daysInMonthOf(DEC_KEY), view.all.base, view.baseDays, unit);
   const baseMon = MONTH_LABELS[Number(view.baseKey.slice(5, 7)) - 1];
   const baseName = view.baseIsLive ? `${baseMon} to date` : baseMon;
-  const { actual: nowC, plan: planC } = view.all.roll;
+  const { actual: nowC } = view.all.roll;
   const asOfOptions = (() => {
     const out: string[] = []; let k = view.cur < KEYS[0] ? view.cur : KEYS[0];
     while (k <= KEYS[11]) { out.push(k); k = addMonths(k, 1); }
@@ -296,14 +302,14 @@ export default function OpsPlan2027() {
           u={`Dec 2026 ${view.start.label} ${show(view.start.spots, START_MONTH)}`} testId="op-now" />
         <Big k="Dec 2027 goal" v={tiles.goal} u={u} tone="#12694A" testId="op-goal" />
         <Big k="To find" v={tiles.toFind} u={u} tone={RED} testId="op-find" />
-        {/* FIELDS STAY ON THE TRAILING 30 DAYS, and the label says so: they are the table's Fields /
-          * Anchors / Satellites columns, and the anchor threshold is spots in 30 days, which a
-          * one-day "to date" window cannot be measured against. */}
-        <Big k="Fields · playing, last 30 days" v={String(nowC.fields)} testId="op-tile-fields"
+        {/* FIELDS: NOW / DEC 2027 PLAN, the region tiles' definition (Ryan, 2026-10-04). Now is the
+          * trailing 30 days — the anchor threshold is spots in 30 days. The plan is December 2027,
+          * and anchors + satellites equal fields on both sides (lib/opsPlan.tilePlanCounts). */}
+        <Big k="Fields · now / Dec 2027 plan" v={`${nowC.fields} / ${view.allDec.fields}`} testId="op-tile-fields"
           u={<div style={{ maxWidth: 250 }}>
             {/* Each phrase stays whole; a narrow tile breaks the line at its "·", never mid-phrase. */}
-            <div><Nw>{planC.fields} planned by {monthYear(view.asOf)}</Nw> · <Nw>{view.plannedDec} by {monthYear(DEC_KEY)}</Nw></div>
-            <div><Nw>anchors {nowC.anchors} now, {planC.anchors} planned</Nw> · <Nw>satellites {nowC.satellites} now, {planC.satellites} planned</Nw></div>
+            <div data-testid="op-tile-split"><Nw>Anchors {nowC.anchors} / {view.allDec.anchors}</Nw> · <Nw>Satellites {nowC.satellites} / {view.allDec.satellites}</Nw></div>
+            <div>now: playing in the last 30 days</div>
           </div>} />
         <Big k="Cities" v={String(view.tally.total)} testId="op-cities"
           u={<>
@@ -367,7 +373,7 @@ export default function OpsPlan2027() {
       <p className="mb-3 flex flex-wrap items-center gap-1.5 text-[11.5px]" style={{ color: MUTED }}>
         Fields, anchors and satellites read actual / plan. Actual is the last 30 completed days; an anchor runs at or above
         <ThresholdInput value={data.threshold} busy={busy} revert={revert} onCommit={setThreshold} />
-        spots in them. Plan counts fields open by {shortMonth(view.asOf)}.
+        spots in them. In the table, plan counts fields open by {shortMonth(view.asOf)}; the region tiles plan to Dec 27.
         {writeErr?.key === "threshold" && <span style={{ color: RED }}>{writeErr.message}</span>}
       </p>
 
@@ -425,7 +431,7 @@ type Ctx = {
 };
 type Line = { roll: Rollup; live: number | null; base: number | null; hist: (number | null)[] };
 type CityView = { city: City; name: string; fields: PlanField[]; line: Line; gap: Gap | null; plannedAnchors: number };
-type RegionView = { region: Region; cities: CityView[]; line: Line; gap: Gap | null; rm: Hire | null };
+type RegionView = { region: Region; cities: CityView[]; line: Line; gap: Gap | null; rm: Hire | null; dec: Counts; citiesNow: number };
 
 /* ── ONE GRID FOR EVERY TABLE ON THE PAGE ─────────────────────────────────────────────────────────
  * Fixed layout and one column set, so a region's subtotal, the next region's rows and the All
@@ -585,13 +591,23 @@ function RegionCard({ r, grain, ctx, openCities, toggleCity, addField, removeCit
           <div className="text-[16px] font-black uppercase tracking-tight" style={{ color: INK }}>{r.region.name}</div>
           <div className="text-[12px]" style={{ color: MUTED }} data-testid="op-rm">{rmLine}</div>
         </div>
-        <div className="flex flex-wrap gap-6 text-[11.5px]" style={{ color: MUTED }}>
-          <div><b className="block text-[17px] tabular-nums" style={{ color: INK }}>
-            {ctx.baseDays <= 0 ? DASH : ctx.show(r.line.base, ctx.baseKey, ctx.baseDays)} → {ctx.show(r.line.roll.est[11], ctx.keys[11])}</b>
-            {shortMonth(ctx.baseKey)}{ctx.baseIsLive ? " to date" : ""} to Dec 27</div>
-          <div><b className="block text-[17px] tabular-nums" style={{ color: INK }}>{r.line.roll.actual.fields} / {r.line.roll.plan.fields}</b>fields</div>
-          <div><b className="block text-[17px] tabular-nums" style={{ color: INK }}>{r.line.roll.actual.anchors} / {r.line.roll.plan.anchors}</b>anchors</div>
-          <div><b className="block text-[17px] tabular-nums" style={{ color: INK }}>{r.line.roll.actual.satellites} / {r.line.roll.plan.satellites}</b>satellites</div>
+        {/* THREE TILES, EACH NOW / DEC 2027 PLAN (Ryan, 2026-10-04). Fields carries its own split. */}
+        <div className="flex flex-wrap gap-6 text-[11.5px]" style={{ color: MUTED }} data-testid="op-rtiles">
+          <div data-testid="op-rtile-matches">
+            <div className="text-[10px] font-extrabold uppercase tracking-wider">{ctx.unit === "spots" ? "Spots" : ctx.unit === "day" ? "Daily matches" : "Weekly matches"}</div>
+            <div className="text-[10.5px]">{shortMonth(ctx.baseKey)}{ctx.baseIsLive ? " to date" : ""} to Dec 27</div>
+            <b className="block text-[17px] tabular-nums" style={{ color: INK }}>
+              {ctx.baseDays <= 0 ? DASH : ctx.show(r.line.base, ctx.baseKey, ctx.baseDays)} / {ctx.show(r.line.roll.est[11], ctx.keys[11])}</b>
+          </div>
+          <div data-testid="op-rtile-cities">
+            <div className="text-[10px] font-extrabold uppercase tracking-wider">Cities</div>
+            <b className="block text-[17px] tabular-nums" style={{ color: INK }}>{r.citiesNow} / {r.cities.length}</b>
+          </div>
+          <div data-testid="op-rtile-fields">
+            <div className="text-[10px] font-extrabold uppercase tracking-wider">Fields</div>
+            <b className="block text-[17px] tabular-nums" style={{ color: INK }}>{r.line.roll.actual.fields} / {r.dec.fields}</b>
+            <div className="tabular-nums" data-testid="op-rtile-split">Anchors {r.line.roll.actual.anchors} / {r.dec.anchors} · Satellites {r.line.roll.actual.satellites} / {r.dec.satellites}</div>
+          </div>
         </div>
       </div>
       <div className="overflow-x-auto">

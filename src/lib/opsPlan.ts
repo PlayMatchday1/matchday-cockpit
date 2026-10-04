@@ -198,6 +198,13 @@ export function planCounts(fields: PlanField[], asOf: string): Counts {
   return c;
 }
 
+/** THE TILES' PLAN (Ryan, 2026-10-04): planned fields at a month, where anchors + satellites ALWAYS
+ *  equal fields — a planned field with no type is counted as a satellite, never dropped. */
+export function tilePlanCounts(fields: PlanField[], asOf: string): Counts {
+  const c = planCounts(fields, asOf);
+  return { ...c, satellites: c.fields - c.anchors };
+}
+
 export const isActuallyLive = (f: PlanField): boolean => f.trailing.matches > 0;
 export const isActualAnchor = (f: PlanField, threshold: number): boolean =>
   isActuallyLive(f) && f.trailing.spots >= threshold;
