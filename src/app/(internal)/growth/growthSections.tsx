@@ -43,7 +43,7 @@ export const GROWTH_SECTIONS: RailItem[] = [
   {
     // THE 2027 VERSION OF THE PAGE ABOVE, grouped by region. Same tables, same actuals; see
     // components/OpsPlan2027 and migration 0199.
-    key: "ops-plan", group: "Fields", label: "2027 Operations Plan", href: "/growth/ops-plan",
+    key: "ops-plan", group: "Fields", label: "2027 Growth Plan", href: "/growth/ops-plan",
     desc: "The 2027 plan by region, against what is played",
     icon: <I><path d="M3 20h18M5 20V9l4-3 4 3v11M13 20v-6l4-3 2 1.5V20" /></I>,
   },

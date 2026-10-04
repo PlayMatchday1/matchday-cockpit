@@ -251,7 +251,7 @@ export default function OpsPlan2027() {
   if (data.setup !== "ready" || !view) {
     return (
       <div className="px-4 pb-16 pt-3" data-testid="op-page">
-        <h1 className="mb-3 text-[27px] font-black uppercase tracking-tight" style={{ color: INK }}>2027 Operations Plan</h1>
+        <h1 className="mb-3 text-[27px] font-black uppercase tracking-tight" style={{ color: INK }}>2027 Growth Plan</h1>
         <p className="text-[13px]" style={{ color: MUTED }} data-testid="op-setup">
           {data.setup === "missing"
             ? "The plan tables are not in the database yet. Migration 0199 has not been applied."
@@ -287,7 +287,7 @@ export default function OpsPlan2027() {
 
   return (
     <div className="px-4 pb-16 pt-3" data-testid="op-page">
-      <h1 className="mb-1 text-[27px] font-black uppercase tracking-tight" style={{ color: INK }}>2027 Operations Plan</h1>
+      <h1 className="mb-1 text-[27px] font-black uppercase tracking-tight" style={{ color: INK }}>2027 Growth Plan</h1>
       <p className="mb-3 text-[12px]" style={{ color: MUTED }}>Built from MatchDay Forecast, Sep 2026.</p>
 
       {/* ── 1. STAT TILES ─────────────────────────────────────────────────────────────────────── */}
@@ -508,6 +508,10 @@ function CountCells({ line }: { line: Line }) {
   return <>{c("fields")}{c("anchors")}{c("satellites")}</>;
 }
 
+/** A header's tag line: under the month, right-aligned with it. Two tags that do not fit the
+ *  column (OCT 26: live + 3 days, ~67px in ~60px) stack, one per line, rather than spill. */
+const TAGLINE = "mt-0.5 flex flex-wrap justify-end gap-0.5 whitespace-normal leading-[1.4] [&>span]:ml-0";
+
 function HeadRow({ ctx, first }: { ctx: Ctx; first: string }) {
   const th = "whitespace-nowrap border-b px-1.5 py-2 text-[10px] font-extrabold uppercase tracking-wider";
   const st = { color: MUTED, background: HEAD, borderColor: LINE };
@@ -515,10 +519,15 @@ function HeadRow({ ctx, first }: { ctx: Ctx; first: string }) {
     <tr>
       <th className={`${th} text-left`} style={st}>{first}</th>
       <th className={`${th} text-left`} style={st}>Progress</th>
-      {ctx.histKeys.map((k) => <th key={k} className={`${th} text-right`} style={st}>{shortMonth(k)}{k === ctx.baseKey && <BaselineTag />}</th>)}
-      <th className={`${th} text-right`} style={st}>{shortMonth(ctx.cur)}
-        <span className="ml-1 rounded px-1 text-[8.5px] font-bold tracking-normal" style={{ background: "#FFF3E0", color: AMBER }}>live</span>
-        {ctx.baseIsLive ? <BaselineTag /> : <DaysTag days={ctx.liveDays} />}</th>
+      {/* THE TAGS GO ON A SECOND LINE, INSIDE THE COLUMN. The columns are fixed-width (W) and the
+        * header does not wrap, so a tag beside the month spilled into the next column. */}
+      {ctx.histKeys.map((k) => <th key={k} className={`${th} text-right align-bottom`} style={st}>{shortMonth(k)}
+        {k === ctx.baseKey && <span className={TAGLINE}><BaselineTag /></span>}</th>)}
+      <th className={`${th} text-right align-bottom`} style={st}>{shortMonth(ctx.cur)}
+        <span className={TAGLINE}>
+          <span className="rounded px-1 text-[8.5px] font-bold tracking-normal" style={{ background: "#FFF3E0", color: AMBER }}>live</span>
+          {ctx.baseIsLive ? <BaselineTag /> : <DaysTag days={ctx.liveDays} />}
+        </span></th>
       {ctx.keys.map((k, i) => <th key={k} className={`${th} text-right`} style={st}>{MONTH_LABELS[i]}</th>)}
       <th className={`${th} text-right`} style={st}>Gap</th>
       <th className={`${th} text-right`} style={st}>Fields</th>
