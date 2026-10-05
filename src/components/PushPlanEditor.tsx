@@ -34,6 +34,7 @@
 // that pair is the thing this screen gets wrong silently if it is wrong at all.
 
 import { useMemo } from "react";
+import MarkPushSent from "@/components/MarkPushSent";
 import {
   CHANNELS, codeAlsoOnChannels, defaultPushAt, draftSummary, fromInputValue, leadToKickoff,
   listChannels, newDraftKey,
@@ -48,15 +49,24 @@ export function pitchClock(m: PromoMatch): string {
   return `${DOW[m.dayIdx]} ${m.time}`;
 }
 
+/* ── A CANCELLED MATCH, IN THIS EDITOR (Ryan, 2026-10-05) ─────────────────────────────────────
+ * `cancelled`: existing pushes are shown read-only, each with ✕ to remove it and Mark sent / Sent to
+ * record whether it went out; no push can be added and an off channel cannot be switched on (the
+ * route refuses a new push on a cancelled match too). Turning a lit channel OFF is still allowed —
+ * it is the same as removing all its pushes. */
 export default function PushPlanEditor({
-  m, draft, setDraft, zone, setZone,
+  m, draft, setDraft, zone, setZone, cancelled = false, onMarked, onError,
 }: {
   m: PromoMatch;
   draft: PushDraft;
   setDraft: (d: PushDraft) => void;
   zone: ZoneMode;
   setZone: (z: ZoneMode) => void;
+  cancelled?: boolean;
+  onMarked?: () => void | Promise<void>;
+  onError?: (msg: string) => void;
 }) {
+  const savedPush = (id: number | undefined) => (id == null ? null : m.plan?.pushes.find((p) => p.id === id) ?? null);
   /* THE VENUE'S OWN OFFSET, DERIVED FROM THIS MATCH'S OWN PAIR. No city-to-timezone map, and
    * America/Chicago — which is hardcoded elsewhere as the BUSINESS zone — is never used as one. */
   const venueOffset = useMemo(() => venueOffsetMs(m.startDate ?? null, m.startDateUtc), [m.startDate, m.startDateUtc]);
@@ -86,7 +96,12 @@ export default function PushPlanEditor({
     });
 
   return (
-    <div data-testid="push-editor">
+    <div data-testid="push-editor" data-cancelled={cancelled ? "1" : "0"}>
+      {cancelled && (
+        <div data-testid="cancelled-note" className="mb-2.5 rounded-lg border border-cream-line bg-[#f7f8f7] px-3 py-2 text-[12px] font-semibold text-deep-green/70">
+          This match was cancelled. Remove pushes or mark them sent; new pushes can&apos;t be added.
+        </div>
+      )}
       {/* ── THE MATCH TIME, AND WHOSE CLOCK EVERYTHING ELSE IS IN ──────────────────────────── */}
       <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
         <span className="text-[12.5px] font-bold text-deep-green/65" data-testid="kick">
@@ -129,13 +144,14 @@ export default function PushPlanEditor({
                 : ch.on ? "border-cream-line bg-white" : "border-cream-line bg-[#fcfdfc]"}`}>
             <div className={`flex flex-wrap items-center gap-2.5 px-3 py-2.5 ${ch.on ? "border-b border-cream-line/70" : ""}`}>
               <button type="button" data-testid="tog" role="switch" aria-checked={ch.on} aria-label={c.label}
+                disabled={cancelled && !ch.on}
                 onClick={(e) => {
                   e.stopPropagation();
                   /* THE ROWS SURVIVE THE TOGGLE. Nothing is written until Save, so turning a
                    * channel off is undone by turning it back on. That is the confirm. */
                   set(c.key, { on: !ch.on });
                 }}
-                className={`relative h-[22px] w-[38px] flex-none rounded-full transition ${ch.on ? "bg-mint" : "bg-[#dfe6e2]"}`}>
+                className={`relative h-[22px] w-[38px] flex-none rounded-full transition disabled:opacity-40 ${ch.on ? "bg-mint" : "bg-[#dfe6e2]"}`}>
                 <span className={`absolute top-[3px] h-4 w-4 rounded-full bg-white shadow-sm transition-all ${ch.on ? "left-[19px]" : "left-[3px]"}`} />
               </button>
               <span className="min-w-[104px] text-[13.5px] font-bold">{c.label}</span>
@@ -172,7 +188,7 @@ export default function PushPlanEditor({
                       {/* LINE 1: WHEN. flex, not grid — the ✕ is flex-none and the input takes the
                           rest, so there is no column for the message to be squeezed out of. */}
                       <div className="flex min-w-0 items-center gap-2.5">
-                        <input type="datetime-local" data-testid="at" data-key={c.key}
+                        <input type="datetime-local" data-testid="at" data-key={c.key} readOnly={cancelled} disabled={cancelled}
                           value={toInputValue(r.pushAt, zone, venueOffset)}
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) => {
@@ -189,6 +205,9 @@ export default function PushPlanEditor({
                           className={`flex-none whitespace-nowrap text-[11.5px] font-bold ${lead?.late ? "text-coral" : "text-deep-green/55"}`}>
                           {lead ? lead.text : "no date"}
                         </span>
+                        {cancelled && savedPush(r.id) && (
+                          <MarkPushSent push={savedPush(r.id)!} onDone={() => onMarked?.()} onError={onError} />
+                        )}
                         <button type="button" data-testid="rm" aria-label="Remove this push"
                           onClick={(e) => { e.stopPropagation(); set(c.key, { rows: rows.filter((x) => x.key !== r.key) }); }}
                           className="h-8 w-8 flex-none rounded-lg border border-cream-line bg-white text-[15px] font-bold text-deep-green/40 hover:border-coral/40 hover:bg-coral-soft/40 hover:text-coral">
@@ -202,7 +221,7 @@ export default function PushPlanEditor({
                         <label htmlFor={`code-${c.key}-${r.key}`} className="text-[10px] font-extrabold uppercase tracking-[0.08em] text-deep-green/55">
                           Promo code
                         </label>
-                        <input id={`code-${c.key}-${r.key}`} data-testid="push-code" data-key={c.key}
+                        <input id={`code-${c.key}-${r.key}`} data-testid="push-code" data-key={c.key} readOnly={cancelled} disabled={cancelled}
                           value={r.code} autoComplete="off" placeholder="e.g. PARMER10"
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) => set(c.key, { rows: rows.map((x) => (x.key === r.key ? { ...x, code: e.target.value.toUpperCase() } : x)) })}
@@ -235,7 +254,7 @@ export default function PushPlanEditor({
                         <label htmlFor={`msg-${c.key}-${r.key}`} className="text-[10px] font-extrabold uppercase tracking-[0.08em] text-deep-green/55">
                           Message
                         </label>
-                        <textarea id={`msg-${c.key}-${r.key}`} data-testid="topic" data-key={c.key}
+                        <textarea id={`msg-${c.key}-${r.key}`} data-testid="topic" data-key={c.key} readOnly={cancelled} disabled={cancelled}
                           value={r.topic} placeholder="What players will read" rows={3}
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) => set(c.key, { rows: rows.map((x) => (x.key === r.key ? { ...x, topic: e.target.value } : x)) })}
@@ -249,7 +268,7 @@ export default function PushPlanEditor({
                     </div>
                   );
                 })}
-                <button type="button" data-testid="add"
+                {!cancelled && <button type="button" data-testid="add"
                   onClick={(e) => {
                     e.stopPropagation();
                     /* 8h BEFORE KICK-OFF, AS AN INSTANT, so it is right in every zone at once —
@@ -259,7 +278,7 @@ export default function PushPlanEditor({
                   }}
                   className="mt-1.5 min-h-[32px] rounded-lg border border-dashed border-[#cfdbd4] bg-white px-3 text-[11.5px] font-bold text-deep-green/65 hover:border-mint hover:bg-mint-soft/30 hover:text-emerald-700">
                   + Add a push
-                </button>
+                </button>}
               </div>
             )}
           </div>

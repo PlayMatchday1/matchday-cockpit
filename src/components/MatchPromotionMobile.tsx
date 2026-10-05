@@ -441,7 +441,8 @@ function Panel(p: MobileProps) {
       {/* THE SAME EDITOR THE DESKTOP RENDERS. Its own grid collapses to one column below 640px,
           which is what a channel block has to do on a phone — not a second tree that has to be
           kept in step by hand. */}
-      <PushPlanEditor m={m} draft={draft} setDraft={setDraft} zone={zone} setZone={setZone} />
+      <PushPlanEditor m={m} draft={draft} setDraft={setDraft} zone={zone} setZone={setZone}
+        cancelled={m.state === "cancelled"} onMarked={p.onReload} onError={(msg) => p.onError?.(msg)} />
 
       <div className="mt-3 flex gap-2.5">
         <button type="button" data-testid="m-save" onClick={onSave} disabled={saving}

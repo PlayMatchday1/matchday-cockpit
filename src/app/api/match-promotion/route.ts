@@ -230,6 +230,22 @@ export async function POST(req: Request) {
       }
     }
 
+    /* ── A CANCELLED MATCH TAKES NO NEW PUSHES (Ryan, 2026-10-05) ────────────────────────────
+     * The panel now opens on a cancelled match so its planned pushes can be removed or marked sent
+     * (STAR, cancelled after its pushes were planned, could not be cleaned up). Adding one is still
+     * refused — here as well as in the panel, because a UI check is not a rule. Removing and editing
+     * existing rows is allowed and goes through the same audit below. */
+    if (parsed.some((p) => p.id == null)) {
+      const { data: mrow, error: mErr } = await sb.from("mdapi_matches").select("is_cancelled").eq("api_id", id).maybeSingle();
+      if (mErr) return Response.json({ outcome: "FAILED", error: `Could not check the match: ${mErr.message}. Nothing was written.` }, { status: 500 });
+      if (mrow?.is_cancelled === true) {
+        return Response.json({
+          outcome: "NOT APPLIED",
+          error: "This match was cancelled, so new pushes can't be added. Existing pushes can still be removed or marked. Nothing was written.",
+        }, { status: 409 });
+      }
+    }
+
     const log: LogRow[] = [];
 
     // 1. UPDATE the rows that survive. pushed_at and pushed_by are NOT touched here: editing a

@@ -183,9 +183,10 @@ export default function MatchPromotionView() {
   }
 
   function openMatch(m: PromoMatch, el: HTMLElement) {
-    /* A CANCELLED MATCH HAS NOTHING TO PLAN. The match was called off; a push for it is moot, and
-     * an editor that opens on one invites a plan nobody can use. */
-    if (m.state === "cancelled") return;
+    /* A CANCELLED MATCH OPENS (Ryan, 2026-10-05). It used to return here, so pushes planned before
+     * the cancellation could never be removed (STAR, Oct 5). The panel opens in cancelled mode:
+     * existing pushes can be removed or marked sent / not sent; adding one is blocked here and in
+     * the route. The tile keeps its CANCELLED state. Past matches and past weeks open as normal. */
     /* AN UNSAVED PANEL IS NOT SWAPPED OUT FROM UNDER YOU. The click is ignored rather than
      * silently discarding what was typed; Save or Cancel is the only way out. Nothing is flashed
      * at the operator here beyond the Unsaved marker the panel already carries — see `dirty`. */
@@ -541,6 +542,7 @@ Which matches get promoted, on which channels, and when the push goes out.
         <MatchEditorPanel m={open} draft={draft} setDraft={setDraft} zone={zone} setZone={setZone}
           dirty={dirty} saving={saving} toast={toast} tags={tagsOf(open)}
           onToggleTag={(t, on) => void toggleTag(open, t, on)}
+          onMarked={() => load(weekRef)} onError={(msg) => setToast({ msg, bad: true })}
           onSave={() => void save()} onClose={closePanel} />
       )}
       {toast && !open && (
@@ -606,13 +608,14 @@ const TILE_STATE_KEY: readonly [ReturnType<typeof coverageOf>, string, string][]
  * channel and none inside an off one, so this panel does not touch codes at all — putting one on
  * this header would undo the per-channel split in the one place an operator types it.
  */
-function MatchEditorPanel({ m, draft, setDraft, zone, setZone, dirty, saving, toast, tags, onToggleTag, onSave, onClose }: {
+function MatchEditorPanel({ m, draft, setDraft, zone, setZone, dirty, saving, toast, tags, onToggleTag, onMarked, onError, onSave, onClose }: {
   m: PromoMatch; draft: PushDraft; setDraft: (d: PushDraft) => void;
   zone: ZoneMode; setZone: (z: ZoneMode) => void;
   dirty: boolean; saving: boolean; toast: { msg: string; bad: boolean } | null;
   /** This match's tags at both scopes, raw and unsuppressed. */
   tags: TagKey[];
   onToggleTag: (t: TagKey, on: boolean) => void;
+  onMarked: () => void | Promise<void>; onError: (msg: string) => void;
   onSave: () => void; onClose: () => void;
 }) {
   return (
@@ -671,7 +674,8 @@ function MatchEditorPanel({ m, draft, setDraft, zone, setZone, dirty, saving, to
           })}
         </div>
         {/* ONE EDITOR, SHARED WITH THE PHONE. Not a desktop copy of a channel block. */}
-        <PushPlanEditor m={m} draft={draft} setDraft={setDraft} zone={zone} setZone={setZone} />
+        <PushPlanEditor m={m} draft={draft} setDraft={setDraft} zone={zone} setZone={setZone}
+          cancelled={m.state === "cancelled"} onMarked={onMarked} onError={onError} />
       </div>
       <div className="flex flex-none flex-wrap items-center gap-2.5 border-t border-cream-line px-3.5 py-2.5">
         <button onClick={onSave} disabled={saving} data-testid="save"
@@ -900,9 +904,9 @@ function QueueRow({ e, zone, late, past, week, onMarked, onError }: {
       {p.topic && <span data-testid="queue-topic" className={`min-w-0 truncate text-[12px] ${sent ? "text-deep-green/40" : "text-deep-green/55"}`}>{p.topic}</span>}
       {late && <span data-testid="queue-late" className="rounded-[5px] bg-coral px-[5px] py-px text-[9.5px] font-extrabold text-white">past due</span>}
       {sent && <span data-testid="queue-stamp" className="text-[11.5px] text-deep-green/45">{sentStamp(p)}</span>}
-      {/* A PAST WEEK OFFERS NO MARK SENT. Nothing in a week that has been and gone should ask the
-          operator to do something they can no longer do. */}
-      {!sent && !past && <MarkPushSent push={p} onDone={onMarked} onError={onError} />}
+      {/* PAST WEEKS TAKE MARK SENT TOO (Ryan, 2026-10-05): a push that went out last week still
+          needs recording, so the past-week lock is gone. `past` stays for the row's other states. */}
+      {!sent && <MarkPushSent push={p} onDone={onMarked} onError={onError} />}
     </div>
   );
 }
