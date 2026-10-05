@@ -8,7 +8,7 @@
 // panel can never disagree. Returns the breakdown too, so the count is auditable.
 
 import { authenticateCapability } from "@/lib/capabilityAuth";
-import { computeWeeklyPayments, fetchPartnerRows, fetchPartnerWeeklyPayments, type PartnerConfig } from "@/lib/partnerStats";
+import { partnerPaymentFor, fetchPartnerRows, fetchPartnerWeeklyPayments, type PartnerConfig } from "@/lib/partnerStats";
 import { actionableCounts, derivePeriodRows, todayYmd } from "@/lib/partnerDashboardView";
 
 export const runtime = "nodejs";
@@ -76,11 +76,12 @@ export async function GET(req: Request) {
       cancellationFeeEnabled: false, cancellationNoticeHours: 12,
     };
     // The two reads for ONE partner do not depend on each other either.
-    const [{ rows, extra, memberSpotRateCents }, records] = await Promise.all([
+    const [{ rows, extra, matches, memberSpotRateCents }, records] = await Promise.all([
       fetchPartnerRows(supabase, p.venue_id),
       fetchPartnerWeeklyPayments(supabase, p.id),
     ]);
-    const payment = computeWeeklyPayments(rows, extra, { ...cfg, memberSpotRateCents }, records);
+    // THE SHARED BUILDER, with the match list and clock, so the badge counts what the page shows.
+    const payment = partnerPaymentFor(cfg, { rows, extra, matches, memberSpotRateCents }, records, new Date());
     const c = actionableCounts(derivePeriodRows(payment, today));
     return { partner: p.partner_name as string, awaiting: c.awaiting, disputed: c.disputed, diverged: c.diverged, total: c.total };
   }));

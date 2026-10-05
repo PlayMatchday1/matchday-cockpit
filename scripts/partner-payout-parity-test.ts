@@ -22,7 +22,9 @@ import "server-only"; // no-op under --conditions=react-server
 
 import type { PayoutModel } from "../src/lib/partnerPayoutModel";
 import { payoutForMatch, totalsOf } from "../src/lib/partnerPayoutModel";
-import { buildPartnerPayoutsByVenueMonth, matchListFromRegs, rentalParamsOf, periodOwed } from "../src/lib/partnerStats";
+import { buildPartnerPayoutsByVenueMonth, matchListFromRegs, rentalParamsOf, periodOwed, computeWeeklyPayments, partnerPaymentFor } from "../src/lib/partnerStats";
+import { derivePeriodRows, partitionPayments } from "../src/lib/partnerDashboardView";
+import { readFileSync } from "node:fs";
 import type { PartnerConfig, PartnerRegRow } from "../src/lib/partnerStats";
 
 let pass = 0, fail = 0;
@@ -157,6 +159,50 @@ const COVERED: PayoutModel[] = ["REVENUE_SHARE", "PER_MATCH_MINUS_MANAGER", "REN
 const ALL: PayoutModel[] = ["REVENUE_SHARE", "PER_MATCH_MINUS_MANAGER", "RENTAL_PLUS_PROFIT_SHARE", "RENTAL_FLOOR_PROFIT_SHARE"];
 is("every PayoutModel has a parity case above", COVERED.slice().sort(), ALL.slice().sort());
 ok("  (if you added a PayoutModel and this failed: add a case, do not widen the list)");
+
+// ── THE ADMIN ROUTE AND THE PARTNER PAGE: ONE BUILDER (Ryan, 2026-10-05) ──────────────────────
+/* THE BUG. src/app/api/partner-dashboards/route.ts called computeWeeklyPayments without `now` and
+ * the match list (GET and mark-paid), and so did the actionable badge route. A per-match-fee period
+ * counts billable matches from the match list, so on the admin side Crossbar's Aug/Sep computed $0,
+ * read "nothing owed" and dropped out of the list. All three now call partnerPaymentFor — the same
+ * function the partner page calls — with what fetchPartnerRows returned. */
+console.log("\nADMIN = PAGE: the shared payment builder");
+{
+  const cfg = baseCfg({
+    payoutModel: "PER_MATCH_MINUS_MANAGER", revenueModel: "per_match_minus_manager",
+    managerPayBase: 20, managerPayHigh: 30, managerPayThreshold: 25,
+    revenueModelNext: "per_match_fee", revenueModelFrom: "2026-08-01", perMatchFeeCents: 10000,
+  });
+  const rows = [...spots(1, "2026-08-05", 10, 15, PAST), ...spots(2, "2026-08-06", 10, 15, PAST), ...spots(3, "2026-08-30", 10, 15, FUTURE)];
+  const matches = matchListFromRegs(rows, NOW);
+  const shared = partnerPaymentFor(cfg, { rows, extra: [], matches, memberSpotRateCents: null }, [], NOW);
+  const aug = (p: { weeklyPayments: { weekStartDate: string; owedAmount: number }[] }) => p.weeklyPayments.find((w) => w.weekStartDate === "2026-08-01")?.owedAmount ?? null;
+  is("the shared builder bills the fee period: 2 played x $100", aug(shared), 200);
+  is("…and equals the shared venue-month path", aug(shared), sharedAug(cfg, rows));
+  /* THE OLD ADMIN CALL, reproduced: no clock, no match list. It is what the route did — and why
+   * Crossbar's August read $0 there while the partner's page read the real figure. */
+  const oldAdmin = computeWeeklyPayments(rows, [], { ...cfg, memberSpotRateCents: null }, []);
+  is("CONTROL: the old admin call (no match list) billed the fee period $0", aug(oldAdmin), 0);
+
+  // A CLOSED $0 PERIOD IS KEPT, not dropped (the list shows it as "$0 · nothing owed").
+  const zeroCfg = baseCfg({ revenueModel: "flat_percentage", revenueSharePct: 50, paymentStartDate: "2026-07-01" });
+  const zero = partnerPaymentFor(zeroCfg, { rows: [], extra: [], matches: [], memberSpotRateCents: null }, [], NOW);
+  const part = partitionPayments(derivePeriodRows(zero, "2026-08-26"));
+  is("a closed $0 period lands in `nothing`, not nowhere", part.nothing.map((r) => r.pw.weekStartDate), ["2026-07-01"]);
+  is("  CONTROL: and it is in neither awaiting nor settled", [part.awaiting.length, part.settled.length], [0, 0]);
+}
+
+/* ── THE CALL SITES, AT THE HTTP BOUNDARY ──────────────────────────────────────────────────────
+ * WHY A SOURCE CHECK. The routes read the database per request, so their arguments cannot be
+ * observed inside this gate; the drift this suite exists for arrived as a call site that spelled the
+ * arguments out by hand. So: each surface calls partnerPaymentFor (positive) and none calls
+ * computeWeeklyPayments directly (negative) — an ADDED direct call is how it would come back. */
+console.log("\nCALL SITES: every payout surface uses partnerPaymentFor");
+for (const f of ["src/app/api/partner-dashboards/route.ts", "src/app/api/partner-dashboards/actionable/route.ts", "src/lib/partnerDashboardData.ts"]) {
+  const code = readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  is(`${f} calls partnerPaymentFor`, /partnerPaymentFor\(/.test(code), true);
+  is(`  ${f} does not call computeWeeklyPayments directly`, /computeWeeklyPayments\(/.test(code), false);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

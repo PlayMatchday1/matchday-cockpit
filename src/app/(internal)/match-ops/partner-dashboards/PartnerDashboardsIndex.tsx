@@ -316,8 +316,14 @@ function PaymentsCard({ partner, today, busy, onMark }: {
   onMark: (partnerId: string, weekStartDate: string, action: "paid" | "unpaid") => void;
 }) {
   const [open, setOpen] = useState(false);
-  const { awaiting, settled, latest, older, foldTotal, flaggedInFold } = partitionPayments(derivePeriodRows(partner.payment, today));
-  const summary = `${settled.length} settled · ${awaiting.length ? `${awaiting.length} awaiting` : "nothing awaiting"}`;
+  const [zeroOpen, setZeroOpen] = useState(false);
+  const { awaiting, nothing, settled, latest, older, foldTotal, flaggedInFold } = partitionPayments(derivePeriodRows(partner.payment, today));
+  const summary = `${settled.length} settled · ${awaiting.length ? `${awaiting.length} awaiting` : "nothing awaiting"}${nothing.length ? ` · ${nothing.length} at $0` : ""}`;
+  /* A CLOSED $0 PERIOD IS SHOWN, NOT DROPPED (Ryan, 2026-10-05) — a missing figure must be visible.
+   * The newest three are listed; any more are behind one line, so a weekly partner with a quiet
+   * stretch (PAC Global: 9) does not bury the payments that matter. */
+  const ZERO_SHOWN = 3;
+  const zeroRows = zeroOpen ? nothing : nothing.slice(0, ZERO_SHOWN);
 
   const rowBase: React.CSSProperties = { display: "flex", alignItems: "center", gap: 13, padding: "12px 17px", borderTop: `1px solid #EDF1EC` };
   const rp: React.CSSProperties = { fontSize: 13, fontWeight: 900, minWidth: 132 };
@@ -390,6 +396,21 @@ function PaymentsCard({ partner, today, busy, onMark }: {
       {awaiting.length
         ? awaiting.map(awaitingRow)
         : <div data-testid="pay-none" style={{ padding: "15px 17px", fontSize: 12, color: PAY.muted }}><b style={{ color: PAY.mintInk, fontWeight: 900 }}>Nothing owed.</b> Every closed period has been settled.</div>}
+
+      {/* 1b · CLOSED PERIODS THAT CAME TO $0 */}
+      {zeroRows.map((r) => (
+        <div key={r.pw.weekStartDate} data-testid="pay-zero-row" data-week={r.pw.weekStartDate} style={rowBase}>
+          <span style={{ ...rp, color: PAY.muted }}>{r.label}</span>
+          <span style={{ ...ra, color: PAY.muted }}>$0</span>
+          <span style={{ fontSize: 11.5, fontWeight: 800, color: PAY.muted }}>nothing owed</span>
+        </div>
+      ))}
+      {nothing.length > ZERO_SHOWN && (
+        <button type="button" data-testid="pay-zero-fold" onClick={() => setZeroOpen((v) => !v)}
+          style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: 0, borderTop: "1px solid #EDF1EC", padding: "9px 17px", fontSize: 11.5, fontWeight: 850, color: PAY.muted, cursor: "pointer" }}>
+          {zeroOpen ? "Show fewer $0 periods" : `${nothing.length - ZERO_SHOWN} more $0 period${nothing.length - ZERO_SHOWN === 1 ? "" : "s"}`}
+        </button>
+      )}
 
       {/* 2 · THE LATEST SETTLED PAYMENT */}
       {latest && settledRow(latest, "pay-latest-row")}

@@ -220,6 +220,10 @@ export function actionableCounts(rows: PeriodRow[]): ActionableCounts {
 // settlement at the bottom of the fold), split into the single latest + the rest.
 export function partitionPayments(rows: PeriodRow[]): {
   awaiting: PeriodRow[];
+  /** CLOSED periods that computed $0 (Ryan, 2026-10-05). They used to fall out of every bucket, so a
+   *  missing figure (Crossbar Aug/Sep before the match-list fix) vanished instead of showing. Newest
+   *  first; the page shows them as "$0 · nothing owed". */
+  nothing: PeriodRow[];
   settled: PeriodRow[];
   latest: PeriodRow | null;
   older: PeriodRow[];
@@ -229,9 +233,10 @@ export function partitionPayments(rows: PeriodRow[]): {
   const sorted = [...rows].sort((a, b) => b.pw.weekStartDate.localeCompare(a.pw.weekStartDate));
   const awaiting = sorted.filter((r) => r.state === "scheduled" || r.state === "past_due" || r.state === "disputed");
   const settled = sorted.filter((r) => r.state === "paid" || r.state === "presystem");
+  const nothing = sorted.filter((r) => r.state === "nothing" && !r.isOpen);
   const latest = settled[0] ?? null;
   const older = settled.slice(1);
   const foldTotal = older.reduce((s, r) => s + Math.round(r.payment ?? 0), 0);
   const flaggedInFold = older.filter(isDiverged).length;
-  return { awaiting, settled, latest, older, foldTotal, flaggedInFold };
+  return { awaiting, nothing, settled, latest, older, foldTotal, flaggedInFold };
 }

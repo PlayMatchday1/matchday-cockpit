@@ -8,7 +8,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PartnerRevenueModelNext } from "./partnerStats";
-import { computePartnerStats, computeWeeklyPayments, fetchPartnerBySlug, fetchPartnerRows, fetchPartnerWeeklyPayments, fetchRentalOverrides, rentalParamsOf } from "./partnerStats";
+import { computePartnerStats, partnerPaymentFor, fetchPartnerBySlug, fetchPartnerRows, fetchPartnerWeeklyPayments, fetchRentalOverrides, rentalParamsOf } from "./partnerStats";
 import { buildRentalDashboard, type RentalDashboardProps } from "./partnerRentalDashboard";
 import type { PeriodLedger } from "./partnerPayoutModel";
 import { derivePartnerGrains } from "./partnerGrain";
@@ -94,21 +94,7 @@ export async function buildPartnerDashboardData(
     stats = { ...stats, byMonth: stats.byMonth.filter((m) => m.ym !== partialYm) };
   }
   // Payment stays on the UNFILTERED rows (pre-system records + identical math).
-  const payment = computeWeeklyPayments(rows, extra, {
-    revenueSharePct: partner.revenueSharePct,
-    paymentStartDate: partner.paymentStartDate,
-    paymentDayOfWeek: partner.paymentDayOfWeek,
-    paymentCadence: partner.paymentCadence,
-    revenueModel: partner.revenueModel,
-    managerPayBase: partner.managerPayBase,
-    managerPayHigh: partner.managerPayHigh,
-    managerPayThreshold: partner.managerPayThreshold,
-    revenueModelNext: partner.revenueModelNext,
-    revenueModelFrom: partner.revenueModelFrom,
-    perMatchFeeCents: partner.perMatchFeeCents,
-    // fin_venues.dpp_price for this partner's own venue, resolved by fetchPartnerRows.
-    memberSpotRateCents,
-  }, records, now, matchList);
+  const payment = partnerPaymentFor(partner, { rows, extra, matches: matchList, memberSpotRateCents }, records, now);
 
   const grains = derivePartnerGrains(statsRows, statsExtra, payment, now);
   const totalMatches = stats.weeks.reduce((s, w) => s + (w.voided ? 0 : w.matches), 0);

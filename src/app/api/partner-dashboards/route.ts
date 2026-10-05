@@ -21,7 +21,7 @@ import { buildRentalDashboard } from "@/lib/partnerRentalDashboard";
 import {
   fetchAllEnabledPartnerDashboards,
   computePartnerStats,
-  computeWeeklyPayments,
+  partnerPaymentFor,
   fetchPartnerRows,
   fetchPartnerWeeklyPayments,
   fetchRentalOverrides,
@@ -91,37 +91,16 @@ export async function GET(req: Request) {
   const venueMeta = new Map<number, { city: string | null; launch: string | null }>();
   for (const v of venues ?? []) venueMeta.set(v.id as number, { city: (v.city as string | null) ?? null, launch: (v.launch_date as string | null) ?? null });
 
+  // ONE CLOCK FOR THE WHOLE INDEX, as the partner page takes one per request.
+  const now = new Date();
   const out = [];
   for (const p of partners) {
-    const { rows, extra, venueName, memberSpotRateCents } = await fetchPartnerRows(supabase, p.venueId);
+    const { rows, extra, venueName, matches, memberSpotRateCents } = await fetchPartnerRows(supabase, p.venueId);
     const records = await fetchPartnerWeeklyPayments(supabase, p.id);
     const stats = computePartnerStats(rows, extra);
-    const payment = computeWeeklyPayments(
-      rows,
-      extra,
-      {
-        revenueSharePct: p.revenueSharePct,
-        paymentStartDate: p.paymentStartDate,
-        paymentDayOfWeek: p.paymentDayOfWeek,
-        paymentCadence: p.paymentCadence,
-        revenueModel: p.revenueModel,
-        managerPayBase: p.managerPayBase,
-        managerPayHigh: p.managerPayHigh,
-        managerPayThreshold: p.managerPayThreshold,
-        /* ── THE DATED SUCCESSOR WAS NOT PASSED HERE AND SHOULD HAVE BEEN ───────────────────────
-         * partnerDashboardData (the page the partner reads) passes these three; this route did
-         * not, so Crossbar's dated move to per_match_fee never applied on the admin index and the
-         * two surfaces disagreed for that partner. Adding them is a correction, and it is required
-         * either way: without them Hattrick's member-spot model would never fire on the route that
-         * SNAPSHOTS calculated_amount at mark-paid time, so the frozen figure would disagree with
-         * the partner's own page. */
-        revenueModelNext: p.revenueModelNext,
-        revenueModelFrom: p.revenueModelFrom,
-        perMatchFeeCents: p.perMatchFeeCents,
-        memberSpotRateCents,
-      },
-      records,
-    );
+    /* THE PARTNER PAGE'S OWN BUILDER, with the match list and the clock. Without them a per-match-
+     * fee period billed nothing here (Crossbar Aug/Sep, $0, dropped from the list). */
+    const payment = partnerPaymentFor(p, { rows, extra, matches, memberSpotRateCents }, records, now);
     const meta = venueMeta.get(p.venueId);
     out.push({
       id: p.id,
@@ -205,7 +184,7 @@ export async function POST(req: Request) {
   // Both branches end at the same table (partner_weekly_payments) and the same key
   // (week_start_date), so a rental partner is not a second ledger — only a second way of
   // computing the authoritative amount to snapshot. The amount is NEVER taken from the client.
-  const { rows, extra, memberSpotRateCents } = await fetchPartnerRows(supabase, partner.venueId);
+  const { rows, extra, matches, memberSpotRateCents } = await fetchPartnerRows(supabase, partner.venueId);
   const records = await fetchPartnerWeeklyPayments(supabase, partner.id);
 
   const rentalParams = rentalParamsOf(partner);
@@ -233,27 +212,8 @@ export async function POST(req: Request) {
     periodIsOpen = month.open;
     periodLabel = month.label;
   } else {
-    const payment = computeWeeklyPayments(
-      rows,
-      extra,
-      {
-        revenueSharePct: partner.revenueSharePct,
-        paymentStartDate: partner.paymentStartDate,
-        paymentDayOfWeek: partner.paymentDayOfWeek,
-        paymentCadence: partner.paymentCadence,
-        revenueModel: partner.revenueModel,
-        managerPayBase: partner.managerPayBase,
-        managerPayHigh: partner.managerPayHigh,
-        managerPayThreshold: partner.managerPayThreshold,
-        // See the note on the other call site: the successor and the member rate are required for
-        // the snapshot written below to agree with the partner's own page.
-        revenueModelNext: partner.revenueModelNext,
-        revenueModelFrom: partner.revenueModelFrom,
-        perMatchFeeCents: partner.perMatchFeeCents,
-        memberSpotRateCents,
-      },
-      records,
-    );
+    // THE SAME BUILDER THE PARTNER'S PAGE USES, so the figure snapshotted here is the one they saw.
+    const payment = partnerPaymentFor(partner, { rows, extra, matches, memberSpotRateCents }, records, new Date());
     const period = payment.weeklyPayments.find((w) => w.weekStartDate === weekStartDate);
     if (!period) return Response.json({ error: "No payment period for that date" }, { status: 400 });
     if (period.isPreSystem) return Response.json({ error: "Historical settlements can't be changed here" }, { status: 400 });

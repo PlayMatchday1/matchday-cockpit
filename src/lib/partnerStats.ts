@@ -1589,6 +1589,37 @@ export function periodOwed(
 //
 // Past + current month only: rows for months whose first day is ≤
 // today. Future months don't appear.
+/* ── ONE PAYMENT BUILDER FOR EVERY SURFACE (Ryan, 2026-10-05) ───────────────────────────────────
+ * The partner's own page (partnerDashboardData) and the admin Partner Dashboards route (the index
+ * AND the mark-paid snapshot) each spelled out computeWeeklyPayments' arguments by hand, and the
+ * route stopped at `records` — no `now`, no `matchList`. A per-match-fee period counts its billable
+ * matches from the match list, so on the admin route Crossbar's August and September (per_match_fee
+ * from August) computed $0, read "nothing owed", and vanished from the list. Every caller now goes
+ * through THIS, with what fetchPartnerRows returned, so the arguments cannot drift apart again. */
+export function partnerPaymentFor(
+  partner: Pick<PartnerConfig, "revenueSharePct" | "paymentStartDate" | "paymentDayOfWeek" | "paymentCadence" | "revenueModel"
+    | "managerPayBase" | "managerPayHigh" | "managerPayThreshold" | "revenueModelNext" | "revenueModelFrom" | "perMatchFeeCents">,
+  fetched: { rows: PartnerRegRow[]; extra: PartnerExtraRevRow[]; matches: PartnerMatchRow[]; memberSpotRateCents?: number | null },
+  records: PartnerWeeklyPaymentRecord[],
+  now: Date,
+): PartnerPaymentInfo {
+  return computeWeeklyPayments(fetched.rows, fetched.extra, {
+    revenueSharePct: partner.revenueSharePct,
+    paymentStartDate: partner.paymentStartDate,
+    paymentDayOfWeek: partner.paymentDayOfWeek,
+    paymentCadence: partner.paymentCadence,
+    revenueModel: partner.revenueModel,
+    managerPayBase: partner.managerPayBase,
+    managerPayHigh: partner.managerPayHigh,
+    managerPayThreshold: partner.managerPayThreshold,
+    revenueModelNext: partner.revenueModelNext,
+    revenueModelFrom: partner.revenueModelFrom,
+    perMatchFeeCents: partner.perMatchFeeCents,
+    // fin_venues.dpp_price for this partner's own venue, resolved by fetchPartnerRows.
+    memberSpotRateCents: fetched.memberSpotRateCents ?? null,
+  }, records, now, fetched.matches);
+}
+
 export function computeWeeklyPayments(
   matchRows: PartnerRegRow[],
   finRevRows: PartnerExtraRevRow[],
