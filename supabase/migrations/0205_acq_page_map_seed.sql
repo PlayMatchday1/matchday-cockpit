@@ -4,7 +4,11 @@
 -- its city. Everything else (careers, FAQ, blog, typo URLs, …) stays unmapped and is counted under
 -- "Other pages". Drafted from the 120 paths the Jul 1 backfill found; the visit counts in the
 -- comments are Jul 1 to Oct 4. Exact paths only, so a new page shows up under "Other pages" until a
--- row here moves it. Applied by hand in the Supabase SQL Editor.
+-- row here moves it.
+--
+-- ALREADY APPLIED — DO NOT RUN. Ryan approved the list (with the two city blog posts added) and these
+-- 30 rows were inserted on 2026-10-04 through the service-role key, then read back (all 30 present).
+-- This file is the record of what went in; the guard below refuses a second run.
 --
 -- market_key: ATL ATX DFW HTX OKC SATX STL (the ad markets), ELP (El Paso — not live, so the page
 -- shows it under "Other cities").
@@ -44,11 +48,15 @@ INSERT INTO public.acq_page_map (match_kind, pattern, market_key, page_kind, lab
   ('path_exact', '/pickup-soccer-lou-fusz-athletic-st-louis/',         'STL',  'venue', 'Lou Fusz Athletic',       20),  -- 15
   ('path_exact', '/pickup-soccer-lou-fusz-training-center-st-louis/',  'STL',  'venue', 'Lou Fusz Training Center', 20), -- 12
   ('path_exact', '/pickup-soccer-centennial-commons-st-louis/',        'STL',  'venue', 'Centennial Commons',      20),  -- 8
-  ('path_exact', '/pickup-soccer-galatzan-park-el-paso/',              'ELP',  'venue', 'Galatzan Park',           20);  -- 13
+  ('path_exact', '/pickup-soccer-galatzan-park-el-paso/',              'ELP',  'venue', 'Galatzan Park',           20),  -- 13
+
+  -- city blog posts (Ryan: these two to their city; every other blog post stays in Other pages)
+  ('path_exact', '/blog/soccer-in-austin/',                            'ATX',  'blog',  'Blog: soccer in Austin',  30),  -- 62
+  ('path_exact', '/blog/where-to-watch-soccer-in-houston/',            'HTX',  'blog',  'Blog: where to watch soccer in Houston', 30);  -- 59
 
 DO $$ BEGIN
-  IF (SELECT count(*) FROM public.acq_page_map) <> 28 THEN
-    RAISE EXCEPTION 'expected 28 page-map rows (was the table empty before?) — rolled back';
+  IF (SELECT count(*) FROM public.acq_page_map) <> 30 THEN
+    RAISE EXCEPTION 'expected 30 page-map rows (was the table empty before?) — rolled back';
   END IF;
 END $$;
 

@@ -117,7 +117,7 @@ export async function GET(req: Request) {
     const wC = webByMarket(current.website), wP = cmp ? webByMarket(cmp.website) : null;
     const keys = [...LIVE_MARKETS, OTHER_CITIES];
     const side = (k: string, m: ReturnType<typeof metaSide> | null, metaWin: Window | null, o: Map<string, { registrations: number; newPlayers: number }>, w: ReturnType<typeof webByMarket>): MarketSide => ({
-      meta: metaWin && m ? m.by.get(k) ?? (k === OTHER_CITIES || k === "WAW" ? null : { spendCents: 0, installs: null, metaRegs: null, regSpendCents: 0, metaPlayers: 0 }) : null,
+      meta: metaWin && m ? m.by.get(k) ?? (k === OTHER_CITIES ? null : { spendCents: 0, installs: null, metaRegs: null, regSpendCents: 0, metaPlayers: 0 }) : null,
       ours: o.get(k) ?? { registrations: 0, newPlayers: 0 },
       web: w.get(k)?.m ?? emptyMeasures(),
     });
@@ -131,7 +131,12 @@ export async function GET(req: Request) {
       for (const r of markets) { const s2 = sideOf(r); if (!s2) continue; addMeasures(web, s2.web); regs += s2.ours.registrations; players += s2.ours.newPlayers; if (s2.meta) { anyMeta = true; spend += s2.meta.spendCents; } }
       return { spendCents: anyMeta || notAttr ? spend : null, registrations: regs, newPlayers: players, web };
     };
-    const totals = { cur: sum((r) => r.cur, mC.notAttributedCents), prev: compare ? sum((r) => r.prev, mP?.notAttributedCents ?? 0) : null };
+    /* THE TOTAL ROW'S WEBSITE COLUMNS ARE THE WHOLE SITE (Ryan, 2026-10-04): the markets plus
+     * Homepage and site-wide plus Other pages, so they match the Website store clicks tile. */
+    const totals = {
+      cur: { ...sum((r) => r.cur, mC.notAttributedCents), web: current.website.total },
+      prev: compare ? { ...sum((r) => r.prev, mP?.notAttributedCents ?? 0), web: cmp?.website.total ?? emptyMeasures() } : null,
+    };
     const siteGroup = (w: typeof current.website, key: string) => w.groups.find((g) => g.key === key) ?? null;
 
     return Response.json({

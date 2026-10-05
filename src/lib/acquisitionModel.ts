@@ -156,16 +156,17 @@ export const MILESTONES: { day: string; label: string }[] = [
 /* ── THE MAIN TABLE: ONE ROW PER MARKET (Ryan, 2026-10-04 redesign) ───────────────────────────────
  * Ad spend and the Meta detail come from lib/adsOverview over Meta's own window (from Aug 1, the
  * rebuild); registrations and new players are ours over the range; website numbers are the city's
- * mapped pages (city page + venue pages) over each Google source's own window. Live markets are the
- * seven we buy ads in plus Warsaw; every other declared city and every page mapped to a city that is
- * not live (El Paso) is one "Other cities" row, so the rows always add up to the tiles. */
-export const LIVE_MARKETS = ["ATL", "ATX", "DFW", "HTX", "OKC", "SATX", "STL", "WAW"] as const;
+ * mapped pages (city page + venue pages) over each Google source's own window. Markets are the seven
+ * active cities — the Player Funnel's grouping: New York, Warsaw (not a MatchDay market, Ryan
+ * 2026-10-04) and El Paso (a fleet city not yet running) are one "Other cities" row, with every other
+ * declared city, so the rows always add up to the tiles. */
+export const LIVE_MARKETS = ["ATL", "ATX", "DFW", "HTX", "OKC", "SATX", "STL"] as const;
 export const OTHER_CITIES = "OTHER";
 const LIVE_LABEL: Record<string, string> = { ATL: "Atlanta", ATX: "Austin", DFW: "Dallas", HTX: "Houston", OKC: "OKC", SATX: "San Antonio", STL: "St. Louis", WAW: "Warsaw", OTHER: "Other cities" };
 export const marketLabel = (k: string) => LIVE_LABEL[k] ?? k;
 const DECLARED: Record<string, string> = {
   "Atlanta": "ATL", "Austin": "ATX", "Dallas / Fort Worth": "DFW", "Houston": "HTX", "Oklahoma City": "OKC",
-  "San Antonio": "SATX", "St. Louis": "STL", "Warsaw": "WAW",
+  "San Antonio": "SATX", "St. Louis": "STL",
 };
 export const marketOfDeclared = (city: string | null) => (city && DECLARED[city]) || OTHER_CITIES;
 export const marketOfPageKey = (k: string | null) => (k && (LIVE_MARKETS as readonly string[]).includes(k) ? k : OTHER_CITIES);
