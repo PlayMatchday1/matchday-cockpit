@@ -48,14 +48,18 @@ export function mapPath(path: string, map: readonly PageMapRow[]): PageMapRow | 
   return best;
 }
 
-export function websiteTable(input: { since: string; until: string; map: readonly PageMapRow[]; gsc: readonly GscRow[]; web: readonly WebRow[]; clicks: readonly ClickRow[] }): WebsiteTable {
-  const { since, until, map } = input;
-  const inR = (d: string) => d >= since && d <= until;
+/** EACH SOURCE IN ITS OWN WINDOW (sourceWindows): Search Console columns read the gsc window, the
+ *  website columns the web window — so a source that lags is never compared against more days than
+ *  it has. */
+export function websiteTable(input: { win: { gsc: Window; web: Window }; map: readonly PageMapRow[]; gsc: readonly GscRow[]; web: readonly WebRow[]; clicks: readonly ClickRow[] }): WebsiteTable {
+  const { win, map } = input;
+  const inW = (d: string, w: Window) => d >= w.since && d <= w.until;
   const perPage = new Map<string, Measures>();
   const at = (p: string) => perPage.get(p) ?? (perPage.set(p, zero()), perPage.get(p)!);
-  for (const r of input.gsc) if (inR(r.day)) { const m = at(r.page_url); m.impressions += r.impressions; m.px += Number(r.position_x_impressions); m.searchClicks += r.clicks; }
-  for (const r of input.web) if (inR(r.day)) at(r.page_path).visits += r.sessions;
-  for (const r of input.clicks) if (inR(r.day) && r.method === "outbound_link") at(r.page_path).storeClicks += r.clicks;
+  for (const r of input.gsc) if (inW(r.day, win.gsc)) { const m = at(r.page_url); m.impressions += r.impressions; m.px += Number(r.position_x_impressions); m.searchClicks += r.clicks; }
+  for (const r of input.web) if (inW(r.day, win.web)) at(r.page_path).visits += r.sessions;
+  for (const r of input.clicks) if (inW(r.day, win.web) && r.method === "outbound_link") at(r.page_path).storeClicks += r.clicks;
+  const since = win.web.since < win.gsc.since ? win.web.since : win.gsc.since;
 
   const groups = new Map<string, Group>();
   const group = (key: string, label: string, kind: Group["kind"]) =>
@@ -77,6 +81,27 @@ export function websiteTable(input: { since: string; until: string; map: readonl
     .sort((a, b) => order(a) - order(b) || b.visits - a.visits || a.label.localeCompare(b.label));
   const total = zero(); for (const g of list) add(total, g);
   return { groups: list, total, skewed: since < SKEWED_BEFORE };
+}
+
+/* ── EACH SOURCE'S WINDOW, TRIMMED TO ITS OWN "DATA THROUGH" ─────────────────────────────────────
+ * Ryan, 2026-10-04: Search Console runs ~2 days behind, so MTD on Oct 4 has search data for Oct 1-2
+ * only, and comparing that with all of Sep 1-4 read as a 44% fall that was really two missing days.
+ * So every source's CURRENT window ends at min(range end, that source's latest day), and its
+ * COMPARISON is that trimmed window moved back a month (Oct 1-2 vs Sep 1-2). A source with no data
+ * at all keeps the range as asked (nothing to trim to). Apple uses the same rule when it lands. */
+export type Window = { since: string; until: string };
+export type SourceKey = "gsc" | "web" | "app" | "meta" | "apple";
+export type SourceWindow = { cur: Window; cmp: Window | null; trimmed: boolean; through: string | null };
+
+export function sourceWindow(range: Window, through: string | null, compare: boolean): SourceWindow {
+  const until = through && through < range.until ? through : range.until;
+  const cur = { since: range.since, until };
+  return { cur, cmp: compare ? sameDaysLastMonth(cur.since, cur.until) : null, trimmed: until !== range.until, through };
+}
+
+export function sourceWindows(range: Window, through: Partial<Record<SourceKey, string | null>>, compare: boolean): Record<SourceKey, SourceWindow> {
+  const keys: SourceKey[] = ["gsc", "web", "app", "meta", "apple"];
+  return Object.fromEntries(keys.map((k) => [k, sourceWindow(range, through[k] ?? null, compare)])) as Record<SourceKey, SourceWindow>;
 }
 
 export type LinkSplit = { share: number; ig_social: number; paid: number; other: number; total: number };

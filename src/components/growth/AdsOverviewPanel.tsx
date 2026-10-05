@@ -247,8 +247,11 @@ function Delta({ cur, prev, invert }: { cur: number | null | undefined; prev: nu
   return <span className={styles.adsDelta} data-testid="ads-delta" style={{ color: good ? "#15803d" : bad ? "#b42318" : undefined }}> {t}</span>;
 }
 
-export default function AdsOverviewPanel({ authHeaders, range, compare, apple }: {
-  authHeaders: Record<string, string>; range?: AdsRange; compare?: AdsRange | null; apple?: boolean;
+/* TWO COMPARISON WINDOWS. `compare` is for our own counts (players, registrations — through today);
+ * `compareMeta` is for Meta's columns, trimmed to the last day Meta has data for, so a lagging day
+ * is never compared against a full one (Ryan, 2026-10-04). Without compareMeta, both use compare. */
+export default function AdsOverviewPanel({ authHeaders, range, compare, compareMeta, apple }: {
+  authHeaders: Record<string, string>; range?: AdsRange; compare?: AdsRange | null; compareMeta?: AdsRange | null; apple?: boolean;
 }) {
   const [mode, setMode] = useState<Mode>("floor");
   const [ownSince, setSince] = useState(FLOOR);
@@ -256,6 +259,7 @@ export default function AdsOverviewPanel({ authHeaders, range, compare, apple }:
   const since = range?.since ?? ownSince, until = range?.until ?? ownUntil;
   const [data, setData] = useState<AdsPayload | null>(null);
   const [prev, setPrev] = useState<AdsPayload | null>(null);
+  const [prevMeta, setPrevMeta] = useState<AdsPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
@@ -281,6 +285,16 @@ export default function AdsOverviewPanel({ authHeaders, range, compare, apple }:
       .then((r) => r.json()).then((j) => { if (alive) setPrev(j.error ? null : j); }).catch(() => { if (alive) setPrev(null); });
     return () => { alive = false; };
   }, [compare?.since, compare?.until, authHeaders]); // eslint-disable-line react-hooks/exhaustive-deps
+  const metaCmp = compareMeta ?? null;
+  const metaSame = !metaCmp || (metaCmp.since === compare?.since && metaCmp.until === compare?.until);
+  useEffect(() => {
+    let alive = true;
+    if (!metaCmp || metaSame) { setPrevMeta(null); return; }
+    if (!authHeaders.Authorization && !authHeaders.authorization) return;
+    fetch(`/api/lifecycle/ads?since=${metaCmp.since}&until=${metaCmp.until}`, { headers: authHeaders })
+      .then((r) => r.json()).then((j) => { if (alive) setPrevMeta(j.error ? null : j); }).catch(() => { if (alive) setPrevMeta(null); });
+    return () => { alive = false; };
+  }, [metaCmp?.since, metaCmp?.until, metaSame, authHeaders]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const preset = useCallback((m: Mode, s: string) => { setMode(m); setSince(s); setUntil(todayChicago()); }, []);
 
@@ -299,21 +313,24 @@ export default function AdsOverviewPanel({ authHeaders, range, compare, apple }:
    * Sep 12 when the range starts before. prevBy: the comparison range, for the change. */
   const extra: RowExtra = useMemo(() => {
     const prevRows = new Map((prev?.rows ?? []).map((r) => [r.marketKey, r]));
+    // Meta's figures compare against Meta's own trimmed window when it differs.
+    const metaPrev = prevMeta ?? prev;
+    const metaRows = new Map((metaPrev?.rows ?? []).map((r) => [r.marketKey, r]));
     const partial = !!data?.requestedSince && data.requestedSince < data.since;
     return {
       ours: partial ? data?.ours ?? null : null,
       reg: !regUsable ? data?.reg ?? null : null,
       prev: prev ? (k: string) => {
-        const r = prevRows.get(k), o = prev.requestedSince && prev.requestedSince < prev.since ? prev.ours?.[k] : undefined;
+        const r = prevRows.get(k), m = metaRows.get(k), o = prev.requestedSince && prev.requestedSince < prev.since ? prev.ours?.[k] : undefined;
         // Meta's registrations only compare when the COMPARISON range could count them too (Sep 12+).
-        return { spendCents: r?.spendCents ?? null, installs: r?.installs ?? null,
-          metaRegistrations: metaRegistrationsUsable(prev.since) ? r?.metaRegistrations ?? null : null,
+        return { spendCents: m?.spendCents ?? null, installs: m?.installs ?? null,
+          metaRegistrations: metaPrev && metaRegistrationsUsable(metaPrev.since) ? m?.metaRegistrations ?? null : null,
           registrations: o?.registrations ?? r?.registrations ?? null, becamePlayers: o?.becamePlayers ?? r?.becamePlayers ?? null,
-          cpnp: r && r.spendCents > 0 ? perUnit(r.spendCents, r.becamePlayers) : null };
+          cpnp: m && m.spendCents > 0 ? perUnit(m.spendCents, m.becamePlayers) : null };
       } : null,
       apple: !!apple,
     };
-  }, [data, prev, regUsable, apple]);
+  }, [data, prev, prevMeta, regUsable, apple]);
   const oursTotal = extra.ours ? Object.values(extra.ours).reduce((a, o) => ({ registrations: a.registrations + o.registrations, becamePlayers: a.becamePlayers + o.becamePlayers }), { registrations: 0, becamePlayers: 0 }) : null;
   const regTotal = extra.reg ? Object.values(extra.reg).reduce((a, r) => ({ regs: a.regs + (r.metaRegistrations ?? 0), spend: a.spend + r.spendCents }), { regs: 0, spend: 0 }) : { regs: 0, spend: 0 };
   const prevTotals = prev ? (prev.requestedSince && prev.requestedSince < prev.since && prev.ours
@@ -582,8 +599,8 @@ export default function AdsOverviewPanel({ authHeaders, range, compare, apple }:
                   ))}
                   <tr className={styles.adsTotal} data-testid="ads-total-row">
                     <td>Total</td>
-                    <td>{money0(totals?.spendCents ?? 0)}<Delta cur={totals?.spendCents} prev={prev?.totals?.spendCents} /></td>
-                    <td className={styles.adsGroupStart}>{fmtInt(totals?.installs ?? 0)}<Delta cur={totals?.installs} prev={prev?.totals?.installs} /></td>
+                    <td>{money0(totals?.spendCents ?? 0)}<Delta cur={totals?.spendCents} prev={(prevMeta ?? prev)?.totals?.spendCents} /></td>
+                    <td className={styles.adsGroupStart}>{fmtInt(totals?.installs ?? 0)}<Delta cur={totals?.installs} prev={(prevMeta ?? prev)?.totals?.installs} /></td>
                     <td className={styles.adsMuted}>{money2(perUnit(totals?.spendCents ?? 0, totals?.installs ?? 0))}</td>
                     <td>{regUsable ? fmtInt(totals?.metaRegistrations ?? 0) : extra.reg ? <>{fmtInt(regTotal.regs)} <span className={styles.adsThin}>since {shortDay(META_REG_FROM)}</span></> : "—"}</td>
                     <td className={styles.adsMuted}>{regUsable ? money2(perUnit(totals?.spendCents ?? 0, totals?.metaRegistrations ?? 0)) : extra.reg ? money2(perUnit(regTotal.spend, regTotal.regs)) : "—"}</td>

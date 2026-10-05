@@ -18,7 +18,7 @@ import { fmtInt } from "./format";
 import AdsOverviewPanel from "./AdsOverviewPanel";
 import {
   MILESTONES, SKEWED_BEFORE, avgPosition, clickRate, presetRange, sameDaysLastMonth,
-  type Group, type LinkSplit, type Measures, type Preset, type WebsiteTable,
+  type Group, type LinkSplit, type Measures, type Preset, type SourceKey, type SourceWindow, type WebsiteTable,
 } from "@/lib/acquisitionModel";
 
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -29,8 +29,9 @@ const WAIT = "Waiting for Apple";
 
 type Payload = {
   since: string; until: string;
+  windows: Record<SourceKey, SourceWindow>;
   current: { website: WebsiteTable; links: LinkSplit };
-  compare: { since: string; until: string; website: WebsiteTable; links: LinkSplit } | null;
+  compare: { website: WebsiteTable; links: LinkSplit } | null;
   freshness: { gsc: string | null; web: string | null; app: string | null; meta: string | null; apple: string | null };
   mappedRows: number;
 };
@@ -65,7 +66,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
     // The sign-in header arrives a moment after mount; asking before it only earns a 401.
     if (!authHeaders.Authorization && !authHeaders.authorization) return;
     setLoading(true); setErr(null);
-    const qs = new URLSearchParams({ since: range.since, until: range.until, ...(cmp ? { cmpSince: cmp.since, cmpUntil: cmp.until } : {}) });
+    const qs = new URLSearchParams({ since: range.since, until: range.until, ...(cmp ? { compare: "1" } : {}) });
     fetch(`/api/lifecycle/acquisition?${qs}`, { headers: authHeaders })
       .then((r) => r.json())
       .then((j) => { if (!alive) return; if (j.error) setErr(j.error); else setData(j); setLoading(false); })
@@ -75,6 +76,9 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
 
   const links = data?.current.links, prevLinks = data?.compare?.links;
   const vs = cmp ? ` vs ${span(cmp.since, cmp.until)}` : "";
+  /* SOURCES WHOSE DATA STOPS SHORT OF THE RANGE are compared on their own days (sourceWindows). */
+  const SOURCE_NAME: Record<SourceKey, string> = { gsc: "Google Search", web: "Website analytics", app: "App analytics", meta: "Meta", apple: "App Store" };
+  const trimmed = data ? (Object.entries(data.windows) as [SourceKey, SourceWindow][]).filter(([, w]) => w.trimmed && w.through) : [];
   const appleLagging = range.until >= today;   // Apple runs 1–2 days behind: early-month MTD reads low
 
   return (
@@ -120,6 +124,14 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
         {range.since < SKEWED_BEFORE && " Website numbers before Jul 15 are marked “skewed by ads”: that traffic included Meta ads."}
         {appleLagging && " Apple runs a day or two behind, so the newest days will read low once its downloads are in."}
       </div>
+      {trimmed.length > 0 && (
+        <div className="acq-note" data-testid="acq-trimmed">
+          Each source is compared on the days it has data for:{" "}
+          {trimmed.map(([k, w], i) => (
+            <span key={k} data-testid={`acq-trim-${k}`}>{i ? " · " : ""}{SOURCE_NAME[k]} {span(w.cur.since, w.cur.until)}{w.cmp && compareOn ? ` vs ${span(w.cmp.since, w.cmp.until)}` : ""}</span>
+          ))}.
+        </div>
+      )}
 
       {err && <div className={`${styles.stateMsg} ${styles.errorMsg}`} data-testid="acq-error">Could not load: {err}</div>}
       {loading && !data && <div className={styles.stateMsg}>Loading acquisition data…</div>}
@@ -171,7 +183,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
       <section style={{ marginTop: 18 }} data-testid="acq-ads">
         <div className="acq-h">2 · Ads by market</div>
         <div className="acq-note">Spend appears only here: the website, player shares and the App Store cost $0. Meta can only see registrations from Sep 12 on; for a range starting earlier those columns show the count since Sep 12.</div>
-        <AdsOverviewPanel authHeaders={authHeaders} range={range} compare={cmp} apple />
+        <AdsOverviewPanel authHeaders={authHeaders} range={range} compare={cmp} compareMeta={compareOn ? data?.windows.meta.cmp ?? null : null} apple />
       </section>
 
       {/* ── 3 · WEBSITE BY CITY AND PAGE ────────────────────────────────────────────────────── */}
