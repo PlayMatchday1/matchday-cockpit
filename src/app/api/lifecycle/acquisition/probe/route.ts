@@ -18,10 +18,11 @@
 import { authenticateLifecycle } from "@/lib/lifecycleAuth";
 import { mintToken, AppleAuthError } from "@/lib/appStoreInstallsSync";
 import { JWT } from "google-auth-library";
+import { gunzipSync } from "node:zlib";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const APP_ID = "1666868601";
 const ASC = "https://api.appstoreconnect.apple.com";
@@ -44,6 +45,7 @@ export async function GET(req: Request) {
   const auth = await authenticateLifecycle(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   if (new URL(req.url).searchParams.get("google") === "1") return Response.json(await googleChecks(), { headers: { "Cache-Control": "no-store" } });
+  if (new URL(req.url).searchParams.get("apple") === "deep") return Response.json(await appleDeep(), { headers: { "Cache-Control": "no-store" } });
 
   let token: string;
   try { token = mintToken().token; }
@@ -165,4 +167,85 @@ async function googleChecks(): Promise<Record<string, unknown>> {
     metrics: [{ name: "eventCount" }], dimensionFilter: { filter: { fieldName: "eventName", stringFilter: { value: "dynamic_link_first_open" } } },
     orderBys: [{ metric: { metricName: "eventCount" }, desc: true }], limit: 30 }, rowsOf));
   return { checkedAt: new Date().toISOString(), today, google: out };
+}
+
+/* ── APPLE, DEEP, READ ONLY (?apple=deep) ─────────────────────────────────────────────────────────
+ * For the two report requests: the download and discovery reports, every instance Apple lists for
+ * them (granularity, processing date), and for the newest instance of each granularity the first
+ * segment's file — its column header, the dates it covers, and the values in the source columns.
+ * GETs only; the file is read and summarised here, nothing is stored. */
+const REQUESTS = { ONGOING: "25012829-700a-4d29-9af5-a8a355f4b59b", ONE_TIME_SNAPSHOT: "bdc34702-e989-4c4f-a06e-f23edee877c8" };
+const WANT = /^(App Downloads (Standard|Detailed)|App Store Discovery and Engagement (Standard|Detailed))$/;
+
+async function appleDeep(): Promise<Record<string, unknown>> {
+  let token: string;
+  try { token = mintToken().token; } catch (e) { return { error: e instanceof AppleAuthError ? e.message : "could not sign a token" }; }
+  const get = async (path: string) => {
+    const res = await fetch(path.startsWith("http") ? path : `${ASC}${path}`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+    const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    return { status: res.status, ok: res.ok, j };
+  };
+  const all = async (path: string) => {
+    const out: Res[] = []; let next: string | null = path; let status = 200;
+    while (next) {
+      const r = await get(next); status = r.status;
+      if (!r.ok) return { status, items: out, error: JSON.stringify(r.j.errors ?? r.j).slice(0, 300) };
+      out.push(...((r.j.data as Res[]) ?? []));
+      next = ((r.j.links as { next?: string } | undefined)?.next) ?? null;
+    }
+    return { status, items: out, error: null as string | null };
+  };
+  const out: Record<string, unknown> = { checkedAt: new Date().toISOString() };
+  for (const [kind, reqId] of Object.entries(REQUESTS)) {
+    const req = await get(`/v1/analyticsReportRequests/${reqId}`);
+    const reports = await all(`/v1/analyticsReportRequests/${reqId}/reports?limit=200`);
+    const wanted = reports.items.filter((r) => WANT.test(String(r.attributes?.name)));
+    const perReport: Record<string, unknown>[] = [];
+    for (const rep of wanted) {
+      const inst = await all(`/v1/analyticsReports/${rep.id}/instances?limit=200`);
+      const instances = inst.items.map((i) => ({ id: i.id, granularity: i.attributes?.granularity, processingDate: i.attributes?.processingDate }));
+      const byGran: Record<string, { count: number; first: string | null; last: string | null }> = {};
+      for (const i of instances) {
+        const g = String(i.granularity); const d = String(i.processingDate ?? "");
+        const e = byGran[g] ?? (byGran[g] = { count: 0, first: null, last: null });
+        e.count++; if (!e.first || d < e.first) e.first = d; if (!e.last || d > e.last) e.last = d;
+      }
+      // The newest instance of each granularity: open its first segment.
+      const samples: Record<string, unknown>[] = [];
+      for (const g of Object.keys(byGran)) {
+        const newest = instances.filter((i) => i.granularity === g).sort((a, b) => String(b.processingDate).localeCompare(String(a.processingDate)))[0];
+        if (!newest) continue;
+        const segs = await all(`/v1/analyticsReportInstances/${newest.id}/segments?limit=50`);
+        const seg = segs.items[0];
+        const url = seg?.attributes?.url as string | undefined;
+        if (!url) { samples.push({ granularity: g, instance: newest.processingDate, segments: segs.items.length, note: segs.error ?? "no segment url" }); continue; }
+        try {
+          const fileRes = await fetch(url, { cache: "no-store" });
+          const buf = Buffer.from(await fileRes.arrayBuffer());
+          let text: string; try { text = gunzipSync(buf).toString("utf8"); } catch { text = buf.toString("utf8"); }
+          const lines = text.split(/\r?\n/).filter(Boolean);
+          const header = (lines[0] ?? "").split("\t");
+          const rows = lines.slice(1).map((l) => l.split("\t"));
+          const col = (name: string) => header.findIndex((h) => h.trim().toLowerCase() === name.toLowerCase());
+          const distinct = (name: string, n = 40) => {
+            const i = col(name); if (i < 0) return null;
+            const c: Record<string, number> = {}; for (const r of rows) c[r[i] ?? ""] = (c[r[i] ?? ""] ?? 0) + 1;
+            return Object.entries(c).sort((a, b) => b[1] - a[1]).slice(0, n);
+          };
+          const dates = distinct("Date", 1000)?.map(([d]) => d).sort() ?? [];
+          samples.push({
+            granularity: g, instance: newest.processingDate, segments: segs.items.length, httpStatus: fileRes.status,
+            rows: rows.length, header,
+            dates: dates.length ? { first: dates[0], last: dates[dates.length - 1], distinct: dates.length } : null,
+            sourceType: distinct("Source Type"), sourceInfo: distinct("Source Info"), campaign: distinct("Campaign"),
+            downloadType: distinct("Download Type"), pageType: distinct("Page Type"), event: distinct("Event"),
+            sampleRows: rows.slice(0, 3),
+          });
+        } catch (e) { samples.push({ granularity: g, instance: newest.processingDate, error: e instanceof Error ? e.message : String(e) }); }
+      }
+      perReport.push({ name: rep.attributes?.name, category: rep.attributes?.category, reportId: rep.id, instancesStatus: inst.status, instancesError: inst.error, instanceCount: instances.length, byGranularity: byGran, samples });
+    }
+    out[kind] = { requestStatus: req.status, request: (req.j.data as Res | undefined)?.attributes ?? req.j.errors, reportsListed: reports.items.length, reportsError: reports.error, reports: perReport };
+  }
+  return out;
 }
