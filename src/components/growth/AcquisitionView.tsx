@@ -62,6 +62,8 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     let alive = true;
+    // The sign-in header arrives a moment after mount; asking before it only earns a 401.
+    if (!authHeaders.Authorization && !authHeaders.authorization) return;
     setLoading(true); setErr(null);
     const qs = new URLSearchParams({ since: range.since, until: range.until, ...(cmp ? { cmpSince: cmp.since, cmpUntil: cmp.until } : {}) });
     fetch(`/api/lifecycle/acquisition?${qs}`, { headers: authHeaders })

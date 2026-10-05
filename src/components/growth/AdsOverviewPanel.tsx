@@ -264,6 +264,8 @@ export default function AdsOverviewPanel({ authHeaders, range, compare, apple }:
 
   useEffect(() => {
     let alive = true;
+    // The sign-in header arrives a moment after mount; asking before it only earns a 401.
+    if (!authHeaders.Authorization && !authHeaders.authorization) return;
     setLoading(true); setErr(null);
     fetch(`/api/lifecycle/ads?since=${since}&until=${until}`, { headers: authHeaders })
       .then((r) => r.json())
@@ -274,6 +276,7 @@ export default function AdsOverviewPanel({ authHeaders, range, compare, apple }:
   useEffect(() => {
     let alive = true;
     if (!compare) { setPrev(null); return; }
+    if (!authHeaders.Authorization && !authHeaders.authorization) return;
     fetch(`/api/lifecycle/ads?since=${compare.since}&until=${compare.until}`, { headers: authHeaders })
       .then((r) => r.json()).then((j) => { if (alive) setPrev(j.error ? null : j); }).catch(() => { if (alive) setPrev(null); });
     return () => { alive = false; };
