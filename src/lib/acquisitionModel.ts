@@ -152,3 +152,40 @@ export const MILESTONES: { day: string; label: string }[] = [
   { day: "2026-09-21", label: "Sep 21 · ads rebuild" },
   { day: "2026-10-01", label: "Oct 1 · SEO changes" },
 ];
+
+/* ── THE MAIN TABLE: ONE ROW PER MARKET (Ryan, 2026-10-04 redesign) ───────────────────────────────
+ * Ad spend and the Meta detail come from lib/adsOverview over Meta's own window (from Aug 1, the
+ * rebuild); registrations and new players are ours over the range; website numbers are the city's
+ * mapped pages (city page + venue pages) over each Google source's own window. Live markets are the
+ * seven we buy ads in plus Warsaw; every other declared city and every page mapped to a city that is
+ * not live (El Paso) is one "Other cities" row, so the rows always add up to the tiles. */
+export const LIVE_MARKETS = ["ATL", "ATX", "DFW", "HTX", "OKC", "SATX", "STL", "WAW"] as const;
+export const OTHER_CITIES = "OTHER";
+const LIVE_LABEL: Record<string, string> = { ATL: "Atlanta", ATX: "Austin", DFW: "Dallas", HTX: "Houston", OKC: "OKC", SATX: "San Antonio", STL: "St. Louis", WAW: "Warsaw", OTHER: "Other cities" };
+export const marketLabel = (k: string) => LIVE_LABEL[k] ?? k;
+const DECLARED: Record<string, string> = {
+  "Atlanta": "ATL", "Austin": "ATX", "Dallas / Fort Worth": "DFW", "Houston": "HTX", "Oklahoma City": "OKC",
+  "San Antonio": "SATX", "St. Louis": "STL", "Warsaw": "WAW",
+};
+export const marketOfDeclared = (city: string | null) => (city && DECLARED[city]) || OTHER_CITIES;
+export const marketOfPageKey = (k: string | null) => (k && (LIVE_MARKETS as readonly string[]).includes(k) ? k : OTHER_CITIES);
+
+export type MetaSide = { spendCents: number; installs: number | null; metaRegs: number | null; regSpendCents: number; metaPlayers: number };
+export type OursSide = { registrations: number; newPlayers: number };
+export type MarketSide = { meta: MetaSide | null; ours: OursSide; web: Measures };
+export type MarketRowView = { key: string; label: string; cur: MarketSide; prev: MarketSide | null; pages: PageLine[] };
+
+/** Group the website table's city groups and the "Other cities" fold into one Measures per market. */
+export function webByMarket(w: WebsiteTable): Map<string, { m: Measures; pages: PageLine[] }> {
+  const out = new Map<string, { m: Measures; pages: PageLine[] }>();
+  for (const g of w.groups) {
+    if (g.kind !== "city") continue;
+    const k = marketOfPageKey(g.key.replace(/^city:/, ""));
+    const e = out.get(k) ?? { m: zero(), pages: [] };
+    add(e.m, g); e.pages.push(...g.pages); out.set(k, e);
+  }
+  return out;
+}
+export const emptyMeasures = zero;
+export const addMeasures = add;
+export const costPer = (cents: number, n: number | null) => (n && n > 0 ? cents / n : null);

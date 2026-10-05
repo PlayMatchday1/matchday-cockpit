@@ -14,7 +14,7 @@ export default function LifecycleAcquisitionPage() {
   return (
     <SectionFrame
       title="Acquisition"
-      subtitle="Where new players come from: ads, the website, player shares and the App Store. Updated every morning."
+      subtitle="Where new players come from."
       period={false}
       needsGrowthData={false}
     >
