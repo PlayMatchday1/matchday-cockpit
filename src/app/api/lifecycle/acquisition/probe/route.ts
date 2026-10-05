@@ -74,8 +74,10 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const auth = await authenticateLifecycle(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
+  // THE SETUP KEY (Admin), not the sync key: the Sales-and-Reports key was refused with 403
+  // FORBIDDEN_ERROR on 2026-10-05. Revoked once both requests exist.
   let token: string;
-  try { token = mintToken().token; }
+  try { token = mintToken("setup").token; }
   catch (e) { return Response.json({ error: e instanceof AppleAuthError ? e.message : "could not sign an App Store Connect token" }, { status: 500 }); }
 
   const list = async () => ascGet(token, `/v1/apps/${APP_ID}/analyticsReportRequests?limit=50`,
