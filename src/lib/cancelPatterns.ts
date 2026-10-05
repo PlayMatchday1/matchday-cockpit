@@ -26,6 +26,7 @@
 // Display order is newest-first regardless of mode.
 
 import type { MatchRow } from "./useMatchData";
+import type { ScheduledMatch } from "./mdapiMatchesRead";
 import { normalizeMatchName } from "./venueNormalization";
 import { getMonday, mostRecentCompletedWeekMonday } from "./weekWindow";
 
@@ -137,11 +138,19 @@ function fmtMonthDay(d: Date): string {
   return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/* ── THE SLOTS COME FROM THE SCHEDULE, THE BOOKED COUNT FROM THE ROWS (Ryan, 2026-10-05) ─────────
+ * `rows` are PLAYER BOOKING rows, so a match cancelled with nobody booked had no row and vanished
+ * from the grid: San Antonio STAR Thu Oct 1 and Fri Oct 2 8:30pm, cancelled at 0/20, showed no chip.
+ * Given `scheduled` (useMatchData().scheduledMatches — every match in the window, empty ones
+ * included), each slot-week's played/cancelled state is read from the schedule, and the rows supply
+ * only bookedCount (cancelled-match bookings, as before). Without `scheduled` the old row-only
+ * behaviour stands, so a caller that has not been moved over is unchanged. */
 export function getCancelPatterns(
   rows: MatchRow[],
   venueAliases: Map<string, string>,
   mode: CancelPatternsMode = "patterns",
   now: Date = new Date(),
+  scheduled?: readonly ScheduledMatch[],
 ): CancelPatternsResult {
   // Build the 4 weeks chronologically (oldest → newest). Streak
   // walk-back is more natural this direction; we reverse for display
@@ -207,31 +216,60 @@ export function getCancelPatterns(
   };
   const slotMeta = new Map<SlotKey, SlotMeta>();
 
-  for (const r of rows) {
-    const ms = r.matchStart.getTime();
-    if (ms < earliestMs || ms >= latestExclusiveMs) continue;
-    if (!r.field) continue;
-    const canonical = normalizeMatchName(r.field, venueAliases).canonical;
-    if (!canonical) continue;
-
-    const di = dowIdxFromDate(r.matchStart);
-    const time = formatTimeCompact(r.matchStart);
-    const key: SlotKey = `${canonical}|${di}|${time}`;
-
+  // One match (schedule entry or booking row) → its slot key and week, or null outside the window.
+  const place = (field: string | null | undefined, start: Date): { key: SlotKey; weekIdx: number; canonical: string; di: number; time: string } | null => {
+    const ms = start.getTime();
+    if (ms < earliestMs || ms >= latestExclusiveMs) return null;
+    if (!field) return null;
+    const canonical = normalizeMatchName(field, venueAliases).canonical;
+    if (!canonical) return null;
+    const di = dowIdxFromDate(start);
+    const time = formatTimeCompact(start);
     let weekIdx = -1;
     for (let i = 0; i < weeks.length; i++) {
       const startMs = weeks[i].weekStart.getTime();
-      const endMs = new Date(
-        weeks[i].weekEnd.getFullYear(),
-        weeks[i].weekEnd.getMonth(),
-        weeks[i].weekEnd.getDate() + 1,
-      ).getTime();
-      if (ms >= startMs && ms < endMs) {
-        weekIdx = i;
-        break;
-      }
+      const endMs = new Date(weeks[i].weekEnd.getFullYear(), weeks[i].weekEnd.getMonth(), weeks[i].weekEnd.getDate() + 1).getTime();
+      if (ms >= startMs && ms < endMs) { weekIdx = i; break; }
     }
-    if (weekIdx === -1) continue;
+    return weekIdx === -1 ? null : { key: `${canonical}|${di}|${time}`, weekIdx, canonical, di, time };
+  };
+
+  const markWeek = (key: SlotKey, weekIdx: number, canonical: string, di: number, time: string, start: Date, canceled: boolean) => {
+    let weekMap = slotWeeks.get(key);
+    if (!weekMap) {
+      weekMap = new Map();
+      slotWeeks.set(key, weekMap);
+      slotMeta.set(key, { canonical, dowIdx: di, time, timeMinutes: totalMinutes(start) });
+    }
+    const existing = weekMap.get(weekIdx);
+    // Don't overwrite a "played" mark — partial success keeps the slot "played" for streak purposes.
+    if (canceled) { if (existing !== "played") weekMap.set(weekIdx, "canceled"); }
+    else weekMap.set(weekIdx, "played");
+  };
+  const countBooked = (key: SlotKey, weekIdx: number) => {
+    let cellMap = bookedByCell.get(key);
+    if (!cellMap) { cellMap = new Map(); bookedByCell.set(key, cellMap); }
+    cellMap.set(weekIdx, (cellMap.get(weekIdx) ?? 0) + 1);
+  };
+
+  if (scheduled) {
+    // THE SCHEDULE DECIDES WHICH SLOTS EXIST AND WHAT HAPPENED TO THEM — empty matches included.
+    for (const m of scheduled) {
+      const p = place(m.field, m.matchStart);
+      if (p) markWeek(p.key, p.weekIdx, p.canonical, p.di, p.time, m.matchStart, m.matchCanceled);
+    }
+    // The rows only count bookings on cancelled matches, exactly as before.
+    for (const r of rows) {
+      if (!r.matchCanceled) continue;
+      const p = place(r.field, r.matchStart);
+      if (p) countBooked(p.key, p.weekIdx);
+    }
+  }
+
+  for (const r of scheduled ? [] : rows) {
+    const p = place(r.field, r.matchStart);
+    if (!p) continue;
+    const { key, weekIdx, canonical, di, time } = p;
 
     let weekMap = slotWeeks.get(key);
     if (!weekMap) {

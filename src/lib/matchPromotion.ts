@@ -452,7 +452,8 @@ export const NEW_LOOKBACK_WEEKS = 4;
  * for a slot that merely moved. One tag meant two things and two tags meant one thing. The question
  * is not day-versus-time; it is: does this slot have history, and what happened to it?
  *
- *   RETURNING SLATE  this field has run this slot before, and it went missing. NOT new.
+ *   RETURNING SLATE  this slot (venue + weekday + time cluster) was not on last week's slate but has
+ *                    been on an earlier one. NOT new. (Ryan, 2026-10-05.)
  *   NEW FIELD        the venue has never been on a slate.
  *   NEW MATCH        the venue ran, this slot did not, and nothing was dropped to make room.
  *                    Covers a new weekday AND a time added beside one still running.
@@ -470,7 +471,7 @@ export const NEW_FLAG_LABEL: Record<NewFlag, string> = {
 
 /** One line each, for the key. Read weekly by people who know what they mean already. */
 export const NEW_FLAG_NOTE: Record<NewFlag, string> = {
-  back: "Ran here before, missed last time. Not new.",
+  back: "Not on last week's slate, but has run here before. Not new.",
   field: "Venue is new.",
   match: "A slot this field has never run. New day, or an extra time.",
   time: "An existing match moved. The old time is gone.",
@@ -599,10 +600,36 @@ export type EverSeen = {
   venues: Set<string>;
   /** `city|venue|dayIdx` — every venue-weekday that has ever been on a slate. */
   venueDay: Set<string>;
+  /* `city|venue|dayIdx` -> every kick-off minute that venue-day has ever had. THE SLOT LEVEL
+   * (Ryan, 2026-10-05): keyed only on venue|day, a second time added beside a running one — OKC
+   * Scissortail Tue 9pm beside last week's 8pm — matched the venue-day's history and was relabelled
+   * RETURNING when it is a NEW MATCH. The minutes let the test ask the TIME CLUSTER, with the same
+   * clusterMinutes / slotRiskKey the cancel ramp and the NEW tests use. */
+  venueDayTimes: Map<string, Set<number>>;
 };
 
 /** Empty history. Used by callers that do not have it, which then get the NEW tags unmodified. */
-export const NO_HISTORY: EverSeen = { venues: new Set(), venueDay: new Set() };
+export const NO_HISTORY: EverSeen = { venues: new Set(), venueDay: new Set(), venueDayTimes: new Map() };
+
+/** Has this slot's time cluster EVER been on a slate at this venue-day? */
+function everRanSlot(m: SlotLike, history: EverSeen): boolean {
+  const times = history.venueDayTimes.get(`${m.city}|${m.venue}|${m.dayIdx}`);
+  if (!times || times.size === 0) return false;
+  const clusters = clusterMinutes([...times, m.minutes]);
+  const key = slotRiskKey(m.venue, m.dayIdx, m.minutes, clusters);
+  for (const t of times) if (slotRiskKey(m.venue, m.dayIdx, t, clusters) === key) return true;
+  return false;
+}
+
+/** RETURNING SLATE (Ryan, 2026-10-05): the slot — venue + weekday + time cluster — was NOT on the
+ *  immediately prior week's slate, but HAS been on some earlier one. Cancelled matches count as on
+ *  the slate on both sides (the prior week is fetched with cancelled included, and so is history).
+ *  Needs both the last-week slate and the history; without either it never fires. */
+export function isReturning(m: SlotLike, lastWeek: PriorSlate | null, history: EverSeen): boolean {
+  if (!lastWeek) return false;
+  if (timeSeenNear(m, lastWeek).hit) return false;
+  return everRanSlot(m, history);
+}
 
 /** This week's kick-offs per `city|venue|dayIdx`, which step 3 needs to tell a move from an
  *  addition. Built by fetchPromoWeek from the week it is already holding. */
@@ -651,43 +678,29 @@ function droppedTimeAt(m: SlotLike, slate: PriorSlate, current: CurrentTimes): n
  *                                                                 time if a prior time went away
  *   4. otherwise                                               -> null
  *
- * ── RETURNING IS A PRECEDENCE RULE, NOT A FOURTH TAG ─────────────────────────────────────────
- * Its whole job is to stop a slot that went missing from coming back wearing NEW. So it fires ONLY
- * where one of the three NEW tests would have fired — it intercepts a claim, it does not decorate a
- * tile nothing was claiming anything about.
+ * ── RETURNING COMES FIRST, AND IT IS NO LONGER ONLY AN INTERCEPTION (Ryan, 2026-10-05) ─────────
+ * Was: fire only where a NEW test fired AND the venue-day had any history, so a slot that skipped
+ * last week but sat inside the four-week window got no tag at all. Now: a slot that is not on last
+ * week's slate but has been on an earlier one reads RETURNING whether or not a NEW test would have
+ * fired (isReturning). History is matched at the TIME-CLUSTER level, so a time added beside a
+ * running one is still NEW MATCH.
  *
- * THAT DISTINCTION IS THE DIFFERENCE BETWEEN A USEFUL BADGE AND A FLOOD. Measured over 13 settled
- * weeks, 1,038 tiles: as an interception it lands on 11 tiles (1.1%). Fired on any slot whose last
- * outing was cancelled — the other reading of "it did not happen" — it lands on 179 (17.2%), one
- * tile in six, which drowns the eleven it exists for. The mock asserts the interception directly:
- * the returning tile carries `wouldbe="match"`, "not filling a gap where no tag would have
- * rendered".
+ * A VENUE THAT RAN BEFORE IS NOT A NEW FIELD. If step 1 says "field" but the venue is in history,
+ * the venue is known and this slot simply never ran there: NEW MATCH.
  *
- * AND THE CANCELLED CASE IS ALREADY HANDLED, which is why it does not need its own trigger. A
- * cancelled match COUNTS AS PRESENT in the prior slate — deliberate, with 109 matches of
- * measurement behind it (see the block above NEW_LOOKBACK_WEEKS): a cancelled slot was still
- * scheduled, still published and still copied forward. So a slot cancelled last week is IN the
- * 4-week slate, reads as no change, and needs no interception. A slot cancelled six weeks ago and
- * absent since is outside that window, would read NEW, and this is what catches it. "Cancelled" and
- * "absent" are one rule rather than two precisely because of that decision.
- *
- * NOT APPLIED TO A MOVE. Step 3's `time` means the venue-day IS on the recent slate — there is no
- * gap to return from, so there is nothing to intercept.
- *
- * `history` DEFAULTS TO EMPTY so every existing caller keeps the NEW tags unchanged and only
- * fetchPromoWeek, which has the unbounded read, gets the interception.
+ * `history` and `lastWeek` DEFAULT TO NONE so a caller without them gets the NEW tags unchanged;
+ * fetchPromoWeek passes both.
  */
 export function newnessOf(
   m: SlotLike,
   slate: PriorSlate,
   history: EverSeen = NO_HISTORY,
   current: CurrentTimes = new Map(),
+  lastWeek: PriorSlate | null = null,
 ): NewFlag | null {
+  if (isReturning(m, lastWeek, history)) return "back";
   const flag = newFlagOf(m, slate, current);
-  if (flag == null) return null;
-  // THE INTERCEPTION. Only the two "never ran this" claims can be wrong about a returning slot.
-  if (flag === "field" && history.venues.has(`${m.city}|${m.venue}`)) return "back";
-  if (flag === "match" && history.venueDay.has(`${m.city}|${m.venue}|${m.dayIdx}`)) return "back";
+  if (flag === "field" && history.venues.has(`${m.city}|${m.venue}`)) return "match";
   return flag;
 }
 
@@ -867,6 +880,7 @@ async function fetchPlans(
 export async function fetchEverSeen(sb: SupabaseClient, beforeIso: string): Promise<EverSeen> {
   const venues = new Set<string>();
   const venueDay = new Set<string>();
+  const venueDayTimes = new Map<string, Set<number>>();
   for (let from = 0; ; from += 1000) {
     const { data, error } = await sb.from("mdapi_matches")
       .select("start_date, city_identifier, field_title")
@@ -879,11 +893,14 @@ export async function fetchEverSeen(sb: SupabaseClient, beforeIso: string): Prom
       const d = new Date(String(r.start_date).replace(/([+-]\d\d:\d\d|Z)$/, ""));
       const venue = canonicalVenueName((r.field_title as string) ?? "") || ((r.field_title as string) ?? "Unknown");
       venues.add(`${city}|${venue}`);
-      venueDay.add(`${city}|${venue}|${(d.getDay() + 6) % 7}`);
+      const vd = `${city}|${venue}|${(d.getDay() + 6) % 7}`;
+      venueDay.add(vd);
+      // Minutes from the same wall clock fetchVeoWeek uses (veoSchedule: getHours()*60+getMinutes()).
+      (venueDayTimes.get(vd) ?? venueDayTimes.set(vd, new Set()).get(vd)!).add(d.getHours() * 60 + d.getMinutes());
     }
     if ((data ?? []).length < 1000) break;
   }
-  return { venues, venueDay };
+  return { venues, venueDay, venueDayTimes };
 }
 
 export async function fetchPromoWeek(
@@ -921,6 +938,9 @@ export async function fetchPromoWeek(
   /* EACH PRIOR WEEK TAGGED WITH ITS OWN MONDAY, so "ran 3 of the last 4 weeks" counts weeks and not
    * matches — a pitch running twice on one Friday is one week, not two. */
   const slate = buildPriorSlate(priors.flatMap((w) => w.matches.map((m) => ({ ...m, weekKey: w.weekStart }))));
+  /* LAST WEEK ALONE, for RETURNING: "not on the immediately prior week's slate". priors[0] is one
+   * week back (cancelled included, like the four-week slate). */
+  const lastWeek = buildPriorSlate(priors[0].matches.map((m) => ({ ...m, weekKey: priors[0].weekStart })));
 
   /* THIS WEEK'S KICK-OFFS PER venue|day, which is what tells a time ADDED beside a running one
    * from a time that MOVED. Built from the week already in hand — the slate cannot answer it,
@@ -933,10 +953,10 @@ export async function fetchPromoWeek(
      * would mean shipping four weeks of matches to the browser to answer a tooltip. */
     return {
       ...m, plan, state: stateOf(plan, m.isCancelled),
-      newFlag: newnessOf(m, slate, history, current),
-      /* WHAT RETURNING DISPLACED. Null unless the interception fired — it is the only way to check
-       * from the screen that the rule ran rather than that no tag happened to apply. */
-      wouldBe: newnessOf(m, slate, history, current) === "back" ? newFlagOf(m, slate, current) : null,
+      newFlag: newnessOf(m, slate, history, current, lastWeek),
+      /* WHAT RETURNING DISPLACED, if anything. Null when RETURNING did not fire, and also null when
+       * it fired on a slot no NEW test would have tagged (inside the four-week window). */
+      wouldBe: newnessOf(m, slate, history, current, lastWeek) === "back" ? newFlagOf(m, slate, current) : null,
       /** The time a move left behind, so NEW TIME can say what makes it a move. */
       movedFrom: movedFromTime(m, slate, current),
       shiftedFrom: priorTimesFor(m, slate),

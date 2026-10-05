@@ -414,43 +414,115 @@ console.log("\n— NEW MATCH or NEW TIME: an addition is not a move —");
     newFlagOf(slot("Atlanta", "PRUMC", MON, at(18, 15)), prior, drift), null);
 }
 
-console.log("\n— RETURNING SLATE intercepts a claim; it does not decorate a quiet tile —");
+console.log("\n— RETURNING SLATE: not on last week's slate, but on an earlier one (Ryan, 2026-10-05) —");
 {
+  /* THE RULE CHANGED ON 2026-10-05. It was an interception (fire only where a NEW test fired and the
+   * venue-day had ANY history). Now: the SLOT — venue + weekday + time cluster — was not on the
+   * immediately prior week's slate but has been on some earlier one, and it beats no-tag too.
+   * History is keyed at the time-cluster level, so an added time is still NEW MATCH. */
   const prior = buildPriorSlate([slot("Austin", "NEMP", MON, at(19))]);  // the last 4 weeks
+  const lastWeek = prior;                                                 // ...and last week, here the same
   const hist: EverSeen = {
     venues: new Set(["Austin|Stony Point", "Austin|NEMP"]),
     venueDay: new Set(["Austin|Stony Point|2", "Austin|NEMP|0"]),
+    venueDayTimes: new Map([["Austin|Stony Point|2", new Set([at(19, 30)])], ["Austin|NEMP|0", new Set([at(19)])]]),
   };
   const stony = slot("Austin", "Stony Point", WED, at(19, 30));
-  /* WITHOUT HISTORY THIS READS NEW FIELD — the 4-week slate has never seen Stony Point. That is the
-   * badge the interception exists to stop, and asserting it first is what proves the rule fired
-   * rather than that no tag happened to apply. */
+  /* WITHOUT HISTORY THIS READS NEW FIELD — the 4-week slate has never seen Stony Point. Asserting
+   * it first is what proves RETURNING fired rather than that no tag happened to apply. */
   is("without history the slot reads NEW FIELD", newnessOf(stony, prior), "field");
-  is("  with history it reads RETURNING SLATE instead", newnessOf(stony, prior, hist), "back");
+  is("  with history (same time cluster) and a last-week slate it reads RETURNING SLATE", newnessOf(stony, prior, hist, new Map(), lastWeek), "back");
   is("  and newFlagOf still reports what was displaced", newFlagOf(stony, prior), "field");
 
-  /* THE OTHER INTERCEPTION: a known field on a weekday the 4-week window never saw, which HAS run
-   * that weekday further back. This is the mock's case. */
+  /* A known field on a weekday the 4-week window never saw, which HAS run that weekday-and-time
+   * further back. */
   const nempWed = slot("Austin", "NEMP", WED, at(19));
   is("a venue-day that ran long ago reads NEW MATCH without history", newnessOf(nempWed, prior), "match");
-  const histWed: EverSeen = { venues: hist.venues, venueDay: new Set([...hist.venueDay, "Austin|NEMP|2"]) };
-  is("  and RETURNING SLATE with it", newnessOf(nempWed, prior, histWed), "back");
+  const histWed: EverSeen = { ...hist, venueDay: new Set([...hist.venueDay, "Austin|NEMP|2"]),
+    venueDayTimes: new Map([...hist.venueDayTimes, ["Austin|NEMP|2", new Set([at(19)])]]) };
+  is("  and RETURNING SLATE with it", newnessOf(nempWed, prior, histWed, new Map(), lastWeek), "back");
 
-  /* IT DOES NOT FILL A GAP WHERE NO TAG WOULD HAVE RENDERED. A slot that ran last week is untagged,
-   * and having run before must not turn that into a badge — that reading lands on 179 of 1,038
-   * tiles (17.2%) against 11 (1.1%) for the interception. */
-  is("a slot already on the recent slate stays untagged even though it has history",
-    newnessOf(slot("Austin", "NEMP", MON, at(19)), prior, hist), null);
-  /* NOR DOES IT INTERCEPT A MOVE. Step 3's `time` means the venue-day IS on the recent slate, so
-   * there is no gap to return from. */
+  // A slot that WAS on last week's slate is untagged, history or not.
+  is("a slot on last week's slate stays untagged even though it has history",
+    newnessOf(slot("Austin", "NEMP", MON, at(19)), prior, hist, new Map(), lastWeek), null);
+  // A move to a time NEVER run before is still NEW TIME: the new time's cluster has no history.
   const cur = currentTimesOf([slot("Austin", "NEMP", MON, at(20))]);
-  is("a move is still NEW TIME, not RETURNING", newnessOf(slot("Austin", "NEMP", MON, at(20)), prior, hist, cur), "time");
-  is("  CONTROL: and that slot IS in history, so the absence of interception is the rule not the data",
+  is("a move to a never-run time is still NEW TIME, not RETURNING", newnessOf(slot("Austin", "NEMP", MON, at(20)), prior, hist, cur, lastWeek), "time");
+  is("  CONTROL: the venue-day IS in history, so it is the time cluster that decided",
     hist.venueDay.has("Austin|NEMP|0"), true);
-  /* A GENUINELY NEW FIELD KEEPS ITS BADGE. If history intercepted everything this would be dead. */
+  // A genuinely new field keeps its badge.
   is("a field nothing has ever run is still NEW FIELD",
-    newnessOf(slot("Austin", "Brand New Pitch", FRI, at(19)), prior, hist), "field");
+    newnessOf(slot("Austin", "Brand New Pitch", FRI, at(19)), prior, hist, new Map(), lastWeek), "field");
   is("  CONTROL: NO_HISTORY changes nothing for it", newnessOf(slot("Austin", "Brand New Pitch", FRI, at(19)), prior, NO_HISTORY), "field");
+  // Without a last-week slate RETURNING never fires (callers that do not have one keep the NEW tags).
+  // (It reads NEW MATCH, not NEW FIELD: the venue is in history, so the venue is not new.)
+  is("  CONTROL: history alone, no last-week slate, does not fire RETURNING", newnessOf(stony, prior, hist), "match");
+}
+
+console.log("\n— RETURNING beats no-tag: the week of Oct 5 —");
+{
+  /* Ryan's examples. Four weeks Sep 7 .. Sep 28; Austin LBJ Mon/Tue/Wed 20:00 and Dallas Lowell H.
+   * Strike Thu/Fri 20:00 ran in earlier weeks, were ABSENT from the Sep 28 week, and are back on
+   * Oct 5. They are inside the four-week window, so the NEW tests say nothing — the old rule left
+   * them untagged. The new rule reads RETURNING. */
+  const LBJ = "LBJ Early College High School", LOWELL = "Lowell H. Strike Middle School";
+  const sep7 = [slot("Austin", LBJ, MON, at(20)), slot("Austin", LBJ, TUE, at(20)), slot("Austin", LBJ, WED, at(20)),
+    slot("Dallas", LOWELL, THU, at(20)), slot("Dallas", LOWELL, FRI, at(20))];
+  const sep14 = sep7, sep21 = sep7;
+  const sep28 = [slot("Austin", LBJ, SAT, at(9, 30)), slot("Dallas", LOWELL, MON, at(20))];  // the five slots absent
+  const four = buildPriorSlate([...sep7, ...sep14, ...sep21, ...sep28]);
+  const last = buildPriorSlate(sep28);
+  const histOf = (rows: SlotLike[]): EverSeen => {
+    const h: EverSeen = { venues: new Set(), venueDay: new Set(), venueDayTimes: new Map() };
+    for (const r of rows) {
+      h.venues.add(`${r.city}|${r.venue}`); h.venueDay.add(`${r.city}|${r.venue}|${r.dayIdx}`);
+      const k = `${r.city}|${r.venue}|${r.dayIdx}`; (h.venueDayTimes.get(k) ?? h.venueDayTimes.set(k, new Set()).get(k)!).add(r.minutes);
+    }
+    return h;
+  };
+  const hist = histOf([...sep7, ...sep14, ...sep21, ...sep28]);
+  for (const [city, venue, d, label] of [["Austin", LBJ, MON, "LBJ Mon"], ["Austin", LBJ, TUE, "LBJ Tue"], ["Austin", LBJ, WED, "LBJ Wed"],
+    ["Dallas", LOWELL, THU, "Lowell Thu"], ["Dallas", LOWELL, FRI, "Lowell Fri"]] as const) {
+    const m = slot(city, venue, d, at(20));
+    is(`${label} 8pm, absent from the Sep 28 week, reads RETURNING SLATE`, newnessOf(m, four, hist, new Map(), last), "back");
+    is(`  CONTROL: ${label} 8pm had no NEW tag to displace (inside the 4-week window)`, newFlagOf(m, four), null);
+  }
+  is("CONTROL: Lowell Mon 8pm, ON the Sep 28 slate, stays untagged", newnessOf(slot("Dallas", LOWELL, MON, at(20)), four, hist, new Map(), last), null);
+  /* CANCELLED COUNTS AS ON THE SLATE. A Sep 28 match that was cancelled is still in `last` (the
+   * week is fetched with cancelled included), so it cannot read RETURNING. */
+  const lastWithCancelled = buildPriorSlate([...sep28, slot("Austin", LBJ, MON, at(20))]);
+  is("CONTROL: LBJ Mon 8pm cancelled on Sep 28 is still on the slate, so no RETURNING",
+    newnessOf(slot("Austin", LBJ, MON, at(20)), four, hist, new Map(), lastWithCancelled), null);
+}
+
+console.log("\n— an added time is NEW MATCH, not RETURNING: OKC Scissortail Tue 9pm —");
+{
+  /* THE INTERCEPTION BUG. History keyed only on venue|day matched Tue 9pm against the Tuesday 8pm
+   * that ran last week and relabelled the addition RETURNING. Keyed at the time cluster, 9pm has no
+   * history (60 minutes from 8pm is past SLOT_CLUSTER_GAP_MIN), so it stays NEW MATCH. */
+  const SCI = "Scissortail Park";
+  const lastWeek = buildPriorSlate([slot("Oklahoma City", SCI, TUE, at(20))]);
+  const four = lastWeek;
+  const hist: EverSeen = { venues: new Set([`Oklahoma City|${SCI}`]), venueDay: new Set([`Oklahoma City|${SCI}|${TUE}`]),
+    venueDayTimes: new Map([[`Oklahoma City|${SCI}|${TUE}`, new Set([at(20)])]]) };
+  const cur = currentTimesOf([slot("Oklahoma City", SCI, TUE, at(20)), slot("Oklahoma City", SCI, TUE, at(21))]);
+  is("OKC Scissortail Tue 9pm, added beside 8pm, reads NEW MATCH", newnessOf(slot("Oklahoma City", SCI, TUE, at(21)), four, hist, cur, lastWeek), "match");
+  is("  CONTROL: and Tue 8pm, which ran last week, is untagged", newnessOf(slot("Oklahoma City", SCI, TUE, at(20)), four, hist, cur, lastWeek), null);
+  /* AND THE OLD KEYING WOULD HAVE GOT IT WRONG: with history at venue|day only — a 9pm "time" that
+   * sits in the 8pm's day — the slot would have matched. Shown by putting 9pm into history. */
+  const histWith9: EverSeen = { ...hist, venueDayTimes: new Map([[`Oklahoma City|${SCI}|${TUE}`, new Set([at(20), at(21)])]]) };
+  is("  CONTROL: if 9pm HAD run before (and not last week), it would read RETURNING", newnessOf(slot("Oklahoma City", SCI, TUE, at(21)), four, histWith9, cur, lastWeek), "back");
+}
+
+console.log("\n— a venue that ran before is not a NEW FIELD —");
+{
+  const prior = buildPriorSlate([slot("Austin", "NEMP", MON, at(19))]);
+  const hist: EverSeen = { venues: new Set(["Austin|Stony Point"]), venueDay: new Set(["Austin|Stony Point|2"]),
+    venueDayTimes: new Map([["Austin|Stony Point|2", new Set([at(19, 30)])]]) };
+  // Stony Point ran Wednesdays long ago; a FRIDAY slot there has never run. Known venue, new slot.
+  is("Stony Point on a never-run Friday reads NEW MATCH, not NEW FIELD",
+    newnessOf(slot("Austin", "Stony Point", FRI, at(19)), prior, hist, new Map(), prior), "match");
+  is("  CONTROL: without history it reads NEW FIELD", newnessOf(slot("Austin", "Stony Point", FRI, at(19)), prior), "field");
 }
 
 console.log("\n— the four labels, and the one that is not a kind of new —");

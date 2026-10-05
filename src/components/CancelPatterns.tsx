@@ -19,7 +19,7 @@ const PILL_COLORS: Record<ColorTier, string> = {
 };
 
 export default function CancelPatterns({ city }: { city?: string } = {}) {
-  const { rows, meta, loading } = useMatchData();
+  const { rows, scheduledMatches, meta, loading } = useMatchData();
   const { data: finData } = useFinanceData();
   const aliases = finData?.venueAliases ?? new Map<string, string>();
   const [mode, setMode] = useState<CancelPatternsMode>("patterns");
@@ -32,10 +32,15 @@ export default function CancelPatterns({ city }: { city?: string } = {}) {
     if (!city) return rows;
     return rows.filter((r) => r.city === city);
   }, [rows, city]);
+  // THE SCHEDULE, SCOPED THE SAME WAY: it is what makes a cancelled match with 0 bookings appear.
+  const scopedScheduled = useMemo(() => {
+    if (!city) return scheduledMatches;
+    return scheduledMatches.filter((m) => m.city === city);
+  }, [scheduledMatches, city]);
 
   const result = useMemo(
-    () => getCancelPatterns(scopedRows, aliases, mode),
-    [scopedRows, aliases, mode],
+    () => getCancelPatterns(scopedRows, aliases, mode, new Date(), scopedScheduled),
+    [scopedRows, scopedScheduled, aliases, mode],
   );
 
   if (loading || !meta) return null;

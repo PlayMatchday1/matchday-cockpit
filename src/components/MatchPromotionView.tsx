@@ -1501,7 +1501,7 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shif
                the only way to check from the screen that the interception fired rather than that
                no tag happened to apply. */
             title={m.newFlag === "back"
-              ? `This slot has run at ${m.venue} before and went missing — it is not on the last ${priorWeeks} weeks' slates for ${m.city} (${priorLabel}), so without this it would read ${m.wouldBe ? NEW_FLAG_LABEL[m.wouldBe] : "NEW"}. Every slate on record was searched, not just the last ${priorWeeks} weeks. Cancelled matches count as scheduled.`
+              ? `This slot was not on last week's slate for ${m.city}, but it has run at ${m.venue} at this time before.${m.wouldBe ? ` Without this it would read ${NEW_FLAG_LABEL[m.wouldBe]}.` : ""} Every slate on record was searched. Cancelled matches count as scheduled.`
               : m.newFlag === "time"
               ? `This field and weekday ran at a nearby kick-off on the last ${priorWeeks} weeks' slates for ${m.city} (${priorLabel})${m.movedFrom ? `, and ${m.movedFrom} is gone` : ""} — so this is a move, not an extra match.`
               : `This ${m.newFlag === "field" ? "field" : "slot for this field"} was not on the last ${priorWeeks} weeks' slates for ${m.city} (${priorLabel}), and nothing was dropped to make room for it. Cancelled matches count, because a cancelled slot was still scheduled and still published.`}
@@ -1750,7 +1750,7 @@ const WASH: Record<1 | 2 | 3 | 4, string> = {
  * anchoring on today; the anchor is passed in.
  */
 function useTileCancelHistory(weekStart: string | null) {
-  const { rows, meta, loading } = useMatchData();
+  const { rows, scheduledMatches, meta, loading } = useMatchData();
   const { data: finData } = useFinanceData();
   const aliases = useMemo(() => finData?.venueAliases ?? new Map<string, string>(), [finData]);
 
@@ -1765,8 +1765,10 @@ function useTileCancelHistory(weekStart: string | null) {
   }, [weekStart]);
 
   const result = useMemo(
-    () => (anchor ? getCancelPatterns(rows, aliases, "patterns", anchor) : null),
-    [rows, aliases, anchor],
+    /* THE SCHEDULE, NOT ONLY THE BOOKINGS: a match cancelled with nobody booked has no row and used
+     * to vanish from the tile's history (STAR Thu/Fri Oct 1–2, 8:30pm, cancelled at 0/20). */
+    () => (anchor ? getCancelPatterns(rows, aliases, "patterns", anchor, scheduledMatches) : null),
+    [rows, scheduledMatches, aliases, anchor],
   );
   const canonicalOf = useCallback(
     (fieldRaw: string) => normalizeMatchName(fieldRaw, aliases).canonical, [aliases]);
