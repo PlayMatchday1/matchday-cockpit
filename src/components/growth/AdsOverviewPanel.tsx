@@ -218,11 +218,44 @@ function Th({ label, tip, className }: { label: string; tip?: React.ReactNode; c
   );
 }
 
-export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<string, string> }) {
+/* ── ON THE ACQUISITION PAGE (Ryan, 2026-10-04) ───────────────────────────────────────────────
+ * The page's date bar drives this table (`range`), so its own presets and Custom are hidden; a
+ * `compare` range adds the change beside each count; `apple` adds the From Apple column, which
+ * reads "Waiting for Apple" until Apple's reports are wired in. The route clamps META to Aug 1 and
+ * not us: before the rebuild Meta's columns say so, and All registrations / New players cover the
+ * whole range. Registrations from ads for a range starting before Sep 12 show the Sep 12+ count. */
+type MarketCounts = { registrations: number; becamePlayers: number };
+type AdsPayload = Partial<AdsOverview> & {
+  since: string; until: string; requestedSince?: string; metaCovered?: boolean;
+  ours?: Record<string, MarketCounts>; regSince?: string | null;
+  reg?: Record<string, { metaRegistrations: number | null; spendCents: number }> | null;
+};
+export type AdsRange = { since: string; until: string };
+
+/** "+12%" / "−8%" / "new" — the change against the comparison range, or null when there is none. */
+function delta(cur: number | null | undefined, prev: number | null | undefined): string | null {
+  if (cur == null || prev == null) return null;
+  if (prev === 0) return cur === 0 ? "0%" : "new";
+  const d = Math.round(((cur - prev) / prev) * 100);
+  return `${d > 0 ? "+" : d < 0 ? "−" : ""}${Math.abs(d)}%`;
+}
+function Delta({ cur, prev, invert }: { cur: number | null | undefined; prev: number | null | undefined; invert?: boolean }) {
+  const t = delta(cur, prev);
+  if (t == null) return null;
+  const up = t.startsWith("+") || t === "new", down = t.startsWith("−");
+  const good = invert ? down : up, bad = invert ? up : down;
+  return <span className={styles.adsDelta} data-testid="ads-delta" style={{ color: good ? "#15803d" : bad ? "#b42318" : undefined }}> {t}</span>;
+}
+
+export default function AdsOverviewPanel({ authHeaders, range, compare, apple }: {
+  authHeaders: Record<string, string>; range?: AdsRange; compare?: AdsRange | null; apple?: boolean;
+}) {
   const [mode, setMode] = useState<Mode>("floor");
-  const [since, setSince] = useState(FLOOR);
-  const [until, setUntil] = useState(todayChicago);
-  const [data, setData] = useState<(AdsOverview & { since: string; until: string }) | null>(null);
+  const [ownSince, setSince] = useState(FLOOR);
+  const [ownUntil, setUntil] = useState(todayChicago);
+  const since = range?.since ?? ownSince, until = range?.until ?? ownUntil;
+  const [data, setData] = useState<AdsPayload | null>(null);
+  const [prev, setPrev] = useState<AdsPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
@@ -238,6 +271,13 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
       .catch((e) => { if (alive) { setErr(String(e)); setLoading(false); } });
     return () => { alive = false; };
   }, [since, until, authHeaders]);
+  useEffect(() => {
+    let alive = true;
+    if (!compare) { setPrev(null); return; }
+    fetch(`/api/lifecycle/ads?since=${compare.since}&until=${compare.until}`, { headers: authHeaders })
+      .then((r) => r.json()).then((j) => { if (alive) setPrev(j.error ? null : j); }).catch(() => { if (alive) setPrev(null); });
+    return () => { alive = false; };
+  }, [compare?.since, compare?.until, authHeaders]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const preset = useCallback((m: Mode, s: string) => { setMode(m); setSince(s); setUntil(todayChicago()); }, []);
 
@@ -251,6 +291,31 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
   /* META'S COLUMNS ARE BLANK FOR A WINDOW THAT PREDATES THE EVENT. Keyed on the window the SERVER
    * actually used, not on what the control asked for, because the route clamps to the floor. */
   const regUsable = data ? metaRegistrationsUsable(data.since) : false;
+  /* WHAT THE ROWS BORROW FROM THE OTHER WINDOWS. ours: when the range reaches before the rebuild,
+   * All registrations / New players come from the whole range. reg: Meta's registrations since
+   * Sep 12 when the range starts before. prevBy: the comparison range, for the change. */
+  const extra: RowExtra = useMemo(() => {
+    const prevRows = new Map((prev?.rows ?? []).map((r) => [r.marketKey, r]));
+    const partial = !!data?.requestedSince && data.requestedSince < data.since;
+    return {
+      ours: partial ? data?.ours ?? null : null,
+      reg: !regUsable ? data?.reg ?? null : null,
+      prev: prev ? (k: string) => {
+        const r = prevRows.get(k), o = prev.requestedSince && prev.requestedSince < prev.since ? prev.ours?.[k] : undefined;
+        // Meta's registrations only compare when the COMPARISON range could count them too (Sep 12+).
+        return { spendCents: r?.spendCents ?? null, installs: r?.installs ?? null,
+          metaRegistrations: metaRegistrationsUsable(prev.since) ? r?.metaRegistrations ?? null : null,
+          registrations: o?.registrations ?? r?.registrations ?? null, becamePlayers: o?.becamePlayers ?? r?.becamePlayers ?? null,
+          cpnp: r && r.spendCents > 0 ? perUnit(r.spendCents, r.becamePlayers) : null };
+      } : null,
+      apple: !!apple,
+    };
+  }, [data, prev, regUsable, apple]);
+  const oursTotal = extra.ours ? Object.values(extra.ours).reduce((a, o) => ({ registrations: a.registrations + o.registrations, becamePlayers: a.becamePlayers + o.becamePlayers }), { registrations: 0, becamePlayers: 0 }) : null;
+  const regTotal = extra.reg ? Object.values(extra.reg).reduce((a, r) => ({ regs: a.regs + (r.metaRegistrations ?? 0), spend: a.spend + r.spendCents }), { regs: 0, spend: 0 }) : { regs: 0, spend: 0 };
+  const prevTotals = prev ? (prev.requestedSince && prev.requestedSince < prev.since && prev.ours
+    ? Object.values(prev.ours).reduce((a, o) => ({ registrations: a.registrations + o.registrations, becamePlayers: a.becamePlayers + o.becamePlayers }), { registrations: 0, becamePlayers: 0 })
+    : { registrations: prev.totals?.registrations ?? 0, becamePlayers: prev.totals?.becamePlayers ?? 0 }) : null;
   const example = useMemo(
     () => spendVsAverageExample(rows, blended),
     [rows, blended],
@@ -328,10 +393,10 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
              * and wondering which one they misread. Saying "none before Sep 12" costs four words
              * and answers the question the gap was raising. */
             ? `${money0(totals.spendCents)} spend · ${fmtInt(totals.installs)} installs · ${regUsable ? `${fmtInt(totals.metaRegistrations)} registrations from ads` : `no registrations from ads before ${shortDay(META_REG_FROM)}`} · ${fmtInt(totals.registrations)} all registrations · ${fmtInt(totals.becamePlayers)} new players · ${money2(blended)} blended`
-            : "…"}
+            : data?.metaCovered === false ? "Before the Aug 1 ads rebuild: our own counts only." : "…"}
         </span>
         <div className={styles.adsControls}>
-          <div className={styles.adsPills} data-testid="ads-presets">
+          {!range && <><div className={styles.adsPills} data-testid="ads-presets">
             {/* ── SINCE REBUILD, AND IT DOES NOT EXIST YET ────────────────────────────────────
                 Rendered only when the server found a registration-optimized ad set that has
                 actually spent. Today none has: the live cohort is APP_INSTALLS and the old
@@ -364,7 +429,7 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
               <input type="date" className={styles.adsBtn} value={until} min={since}
                 aria-label="To" data-testid="ads-until" onChange={(e) => setUntil(e.target.value)} />
             </>
-          )}
+          )}</>}
           <button type="button" data-testid="ads-allcols"
             className={allCols ? `${styles.adsBtn} ${styles.adsBtnOn}` : styles.adsBtn}
             aria-pressed={allCols} onClick={() => setAllCols((v) => !v)}>All columns</button>
@@ -413,7 +478,36 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
       {err && <div className={`${styles.stateMsg} ${styles.errorMsg}`} data-testid="ads-error">Could not load: {err}</div>}
       {loading && !data && <div className={styles.stateMsg} data-testid="ads-loading">Loading ads data…</div>}
 
-      {data && (
+      {/* ── THE WHOLE RANGE IS BEFORE THE ADS REBUILD ────────────────────────────────────────────
+          Meta's ad-set tables start Aug 1, when the account was rebuilt; earlier is a different
+          campaign structure, not an empty month. Our own counts still answer for every market. */}
+      {data && data.metaCovered === false && (
+        <div className={styles.card} style={{ marginTop: 12, overflow: "hidden" }} data-testid="ads-before-rebuild">
+          <div className={styles.tableWrap}>
+            <table className={styles.adsTable}>
+              <thead><tr>
+                <Th label="Market" /><Th label="Spend" /><Th label="Installs" /><Th label="Registrations from ads" />
+                {apple && <Th label="App Store downloads from ads" />}
+                <Th label="All registrations" /><Th label="New players" /><Th label="Cost / new player" />
+              </tr></thead>
+              <tbody>
+                {Object.entries(data.ours ?? {}).map(([k, o]) => (
+                  <tr key={k} data-testid="ads-row" data-market={k}>
+                    <td>{CITY_LABEL[k] ?? k}</td>
+                    <td colSpan={3} className={styles.adsMuted}>before the ads rebuild (Aug 1)</td>
+                    {apple && <td className={styles.adsMuted}>Waiting for Apple</td>}
+                    <td>{fmtInt(o.registrations)}<Delta cur={o.registrations} prev={extra.prev?.(k).registrations} /></td>
+                    <td>{fmtInt(o.becamePlayers)}<Delta cur={o.becamePlayers} prev={extra.prev?.(k).becamePlayers} /></td>
+                    <td className={styles.adsMuted}>before the ads rebuild</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {data && data.metaCovered !== false && (
         <>
           <div className={styles.card} style={{ marginTop: 12, overflow: "hidden" }}>
             <div className={styles.tableWrap}>
@@ -427,7 +521,10 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
                       both sides at once. */}
                   <tr className={styles.adsGroupRow} data-testid="ads-group-row">
                     <th colSpan={2} />
-                    <th colSpan={4} className={styles.adsGroupMeta} data-testid="ads-group-meta">From Meta</th>
+                    <th colSpan={4} className={styles.adsGroupMeta} data-testid="ads-group-meta">
+                      From Meta{data.requestedSince && data.requestedSince < data.since ? ` · since ${shortDay(data.since)}` : ""}
+                    </th>
+                    {apple && <th colSpan={1} className={styles.adsGroupOurs} data-testid="ads-group-apple">From Apple</th>}
                     {/* 7d and 30d are ours; Home, Unattributed and Other are Meta's view of where
                         it served the money, so under All columns they get their own Meta group
                         rather than being labelled as ours for being positioned late. */}
@@ -452,6 +549,8 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
                         ? "Spend divided by registrations from ads. Reads high, because Meta can't credit every signup the ads brought in."
                         : REG_BLANK_TIP} />
 
+                    {apple && <Th label="App Store downloads from ads" className={styles.adsGroupStart}
+                      tip="First-time iPhone downloads Apple counts from Instagram and Facebook (App Referrer). Filled in once Apple's daily reports arrive." />}
                     {/* ── FROM OUR DATA ──────────────────────────────────────────────────────── */}
                     {/* ALL REGISTRATIONS IS NO LONGER BEHIND "All columns". The two registration
                         counts only mean anything beside each other: one of them alone is a number
@@ -474,19 +573,20 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
                 </thead>
                 <tbody>
                   {view.map((v) => (
-                    <Row key={v.r.marketKey} v={v} open={open === v.r.marketKey} allCols={allCols} regUsable={regUsable}
+                    <Row key={v.r.marketKey} v={v} open={open === v.r.marketKey} allCols={allCols} regUsable={regUsable} extra={extra}
                       onToggle={() => setOpen((o) => (o === v.r.marketKey ? null : v.r.marketKey))}
                       windowDays={windowDays} />
                   ))}
                   <tr className={styles.adsTotal} data-testid="ads-total-row">
                     <td>Total</td>
-                    <td>{money0(totals?.spendCents ?? 0)}</td>
-                    <td className={styles.adsGroupStart}>{fmtInt(totals?.installs ?? 0)}</td>
+                    <td>{money0(totals?.spendCents ?? 0)}<Delta cur={totals?.spendCents} prev={prev?.totals?.spendCents} /></td>
+                    <td className={styles.adsGroupStart}>{fmtInt(totals?.installs ?? 0)}<Delta cur={totals?.installs} prev={prev?.totals?.installs} /></td>
                     <td className={styles.adsMuted}>{money2(perUnit(totals?.spendCents ?? 0, totals?.installs ?? 0))}</td>
-                    <td>{regUsable ? fmtInt(totals?.metaRegistrations ?? 0) : "—"}</td>
-                    <td className={styles.adsMuted}>{regUsable ? money2(perUnit(totals?.spendCents ?? 0, totals?.metaRegistrations ?? 0)) : "—"}</td>
-                    <td className={styles.adsGroupStart}>{fmtInt(totals?.registrations ?? 0)}</td>
-                    <td>{fmtInt(totals?.becamePlayers ?? 0)}</td>
+                    <td>{regUsable ? fmtInt(totals?.metaRegistrations ?? 0) : extra.reg ? <>{fmtInt(regTotal.regs)} <span className={styles.adsThin}>since {shortDay(META_REG_FROM)}</span></> : "—"}</td>
+                    <td className={styles.adsMuted}>{regUsable ? money2(perUnit(totals?.spendCents ?? 0, totals?.metaRegistrations ?? 0)) : extra.reg ? money2(perUnit(regTotal.spend, regTotal.regs)) : "—"}</td>
+                    {apple && <td className={`${styles.adsGroupStart} ${styles.adsMuted}`} data-testid="ads-apple">Waiting for Apple</td>}
+                    <td className={styles.adsGroupStart}>{fmtInt(oursTotal?.registrations ?? totals?.registrations ?? 0)}<Delta cur={oursTotal?.registrations ?? totals?.registrations} prev={prevTotals?.registrations} /></td>
+                    <td>{fmtInt(oursTotal?.becamePlayers ?? totals?.becamePlayers ?? 0)}<Delta cur={oursTotal?.becamePlayers ?? totals?.becamePlayers} prev={prevTotals?.becamePlayers} /></td>
                     <td className={styles.adsKey}>{money2(blended)}</td>
                     {allCols && <td>{fmtInt(totals?.playedWithin7d ?? 0)}</td>}
                     {allCols && <td>{fmtInt(rows.reduce((a, r) => a + r.playedWithin30d, 0))}</td>}
@@ -506,7 +606,7 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
                 dashes mean. It names the presets that DO answer, so the next click is obvious
                 rather than a hunt. It disappears entirely on a window that has the data, because
                 a permanent caveat is a caveat nobody reads. */}
-            {!regUsable && (
+            {!regUsable && !extra.reg && (
               <div className={styles.adsBlankNote} data-testid="ads-reg-blank-note">
                 Meta could not see registrations before {shortDay(META_REG_FROM)}, so this window
                 has none to show. Pick{" "}
@@ -515,7 +615,7 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
             )}
           </div>
 
-          {data.notAttributed.length > 0 && (
+          {(data.notAttributed?.length ?? 0) > 0 && (
             <div className={styles.card} style={{ marginTop: 12 }} data-testid="ads-notattributed">
               <div className={styles.cardHead}>
                 <div>
@@ -528,7 +628,7 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
               </div>
               <div className={styles.adsDetail} style={{ paddingLeft: 20 }}>
                 <div className={styles.adsDetailCol}>
-                  {data.notAttributed.map((n) => (
+                  {(data.notAttributed ?? []).map((n) => (
                     <div key={n.adsetId} className={styles.adsLine} data-testid="ads-notattributed-row">
                       <span className={styles.adsLineName}>{n.adsetName ?? n.adsetId}</span>
                       <span className={styles.adsMuted}>{n.topMarkets.map((t) => t.marketRaw).join(", ") || "—"}</span>
@@ -547,18 +647,29 @@ export default function AdsOverviewPanel({ authHeaders }: { authHeaders: Record<
 
 type ViewRow = { r: MarketRow; span: number; dark: boolean; cpnp: number | null; band: Band | null; over: number | null; noSpend: boolean; thin: boolean };
 
-function Row({ v, open, onToggle, windowDays, allCols, regUsable }: {
+type RowExtra = {
+  ours: Record<string, MarketCounts> | null;
+  reg: Record<string, { metaRegistrations: number | null; spendCents: number }> | null;
+  prev: ((k: string) => { spendCents: number | null; installs: number | null; metaRegistrations: number | null; registrations: number | null; becamePlayers: number | null; cpnp: number | null }) | null;
+  apple: boolean;
+};
+
+function Row({ v, open, onToggle, windowDays, allCols, regUsable, extra }: {
   v: ViewRow; open: boolean; onToggle: () => void;
   windowDays: number; allCols: boolean;
   /** False when the window starts before Meta could count registrations. See REG_BLANK_TIP. */
   regUsable: boolean;
+  extra: RowExtra;
 }) {
+  const p = extra.prev?.(v.r.marketKey) ?? null;
+  const o = extra.ours?.[v.r.marketKey] ?? null;
+  const rg = extra.reg?.[v.r.marketKey] ?? null;
   const { r, band, cpnp, over, dark, thin } = v;
   const keyCls = band ? KEY_CLASS[band] : "";
   const dupes = duplicateNames(r.adsets);
   const maxServed = Math.max(1, ...r.served.map((s) => s.spendCents));
   // Two bar columns went; the expansion spans what is left.
-  const cols = 10 + (allCols ? 5 : 0);
+  const cols = 10 + (allCols ? 5 : 0) + (extra.apple ? 1 : 0);
 
   return (
     <>
@@ -577,18 +688,22 @@ function Row({ v, open, onToggle, windowDays, allCols, regUsable }: {
             )}
           </span>
         </td>
-        <td data-testid="ads-spend">{money0(r.spendCents)}</td>
-        <td className={styles.adsGroupStart}>{r.installs == null ? "—" : fmtInt(r.installs)}</td>
+        <td data-testid="ads-spend">{money0(r.spendCents)}<Delta cur={r.spendCents} prev={p?.spendCents} /></td>
+        <td className={styles.adsGroupStart}>{r.installs == null ? "—" : fmtInt(r.installs)}<Delta cur={r.installs} prev={p?.installs} /></td>
         <td className={styles.adsMuted} data-testid="ads-cpi">{money2(perUnit(r.spendCents, r.installs))}</td>
         {/* BLANK, NOT ZERO, FOR A WINDOW THAT PREDATES THE EVENT. See REG_BLANK_TIP. */}
-        <td data-testid="ads-metareg">{!regUsable ? <span className={styles.adsMuted} title={REG_BLANK_TIP}>—</span> : r.metaRegistrations == null ? "—" : fmtInt(r.metaRegistrations)}</td>
+        <td data-testid="ads-metareg">{regUsable
+          ? (r.metaRegistrations == null ? "—" : <>{fmtInt(r.metaRegistrations)}<Delta cur={r.metaRegistrations} prev={p?.metaRegistrations} /></>)
+          : rg ? <>{rg.metaRegistrations == null ? "—" : fmtInt(rg.metaRegistrations)} <span className={styles.adsThin} data-testid="ads-since-sep12">since {shortDay(META_REG_FROM)}</span></>
+          : <span className={styles.adsMuted} title={REG_BLANK_TIP}>—</span>}</td>
         <td className={styles.adsMuted} data-testid="ads-costreg">
-          {!regUsable ? <span title={REG_BLANK_TIP}>—</span> : money2(perUnit(r.spendCents, r.metaRegistrations))}
+          {regUsable ? money2(perUnit(r.spendCents, r.metaRegistrations)) : rg ? money2(perUnit(rg.spendCents, rg.metaRegistrations)) : <span title={REG_BLANK_TIP}>—</span>}
         </td>
-        <td className={styles.adsGroupStart} data-testid="ads-allreg">{fmtInt(r.registrations)}</td>
-        <td data-testid="ads-newplayers">{fmtInt(r.becamePlayers)}</td>
+        {extra.apple && <td className={`${styles.adsGroupStart} ${styles.adsMuted}`} data-testid="ads-apple">Waiting for Apple</td>}
+        <td className={styles.adsGroupStart} data-testid="ads-allreg">{fmtInt(o?.registrations ?? r.registrations)}<Delta cur={o?.registrations ?? r.registrations} prev={p?.registrations} /></td>
+        <td data-testid="ads-newplayers">{fmtInt(o?.becamePlayers ?? r.becamePlayers)}<Delta cur={o?.becamePlayers ?? r.becamePlayers} prev={p?.becamePlayers} /></td>
         <td className={`${styles.adsKey} ${keyCls}`} data-testid="ads-cpnp">
-          {money2(cpnp)}
+          {money2(cpnp)}<Delta cur={cpnp} prev={p?.cpnp} invert />
           {/* THE FIGURE STAYS, THE VERDICT GOES. An operator watching a new market wants to see
               the first numbers arrive; what they must not get is a colour telling them what the
               numbers mean while one player still moves the answer by a tenth. */}

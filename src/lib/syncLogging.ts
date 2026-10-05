@@ -49,7 +49,11 @@ export type SourceName =
   // insert fails CLOSED (ok:false, no throw), so the sync would otherwise write every row and
   // never appear in Recent Syncs.
   | "stripe-txn"
-  | "stripe-txn-backfill";
+  | "stripe-txn-backfill"
+  // The Acquisition page's Google syncs (lib/acqGoogleSync). Added to the DB CHECK by 0203.
+  | "gsc-pages"
+  | "ga4-web"
+  | "ga4-app";
 
 // fin_sync_log columns the orchestrator/manual routes write on
 // success. Stripe-specific columns (charges_*) stay null for mdapi

@@ -60,8 +60,8 @@ export const LIFECYCLE_SECTIONS: RailItem[] = [
      others do — where do players come from — with money on one side of it. A group of one is not
      structure, it is a heading. */
   {
-    key: "growth-ads", group: "Reports", label: "Ads", href: "/lifecycle/ads",
-    desc: "Meta spend by market, and what it bought",
+    key: "growth-ads", group: "Reports", label: "Acquisition", href: "/lifecycle/acquisition",
+    desc: "Where downloads and new players come from: ads, website, shares, App Store",
     icon: <I><path d="M3.5 9.5h4l7-4.5v14l-7-4.5h-4z" /><path d="M18 9.2a4 4 0 0 1 0 5.6" /></I>,
   },
   {
