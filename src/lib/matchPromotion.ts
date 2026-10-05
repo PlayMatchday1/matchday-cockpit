@@ -757,6 +757,9 @@ export type PromoWeek = {
   /** match api_id -> its MATCH-scoped tags (priority). Dies with the match, so there is nothing to
    *  expire: see the note on TAG_META. */
   tagsByMatch: Record<number, string[]>;
+  /** field_id -> tag -> its dates (0207). Only rows that carry a date appear; an undated row is
+   *  absent here and shows on every match, as it always has. The page filters per MATCH DATE. */
+  tagDatesByField: Record<number, Record<string, { startsOn: string | null; endsOn: string | null }>>;
   /** The Monday of the EARLIEST week the NEW test compared against — printed on the page so the
    *  rule is legible without asking, and so a wrong window is visible rather than silent. */
   priorWeekStart: string;
@@ -980,6 +983,7 @@ export async function fetchPromoWeek(
     generals,
     tagsByField: tags.byField,
     tagsByMatch: tags.byMatch,
+    tagDatesByField: tags.datesByField,
     planTableReady: ready,
     generatedAt: now.toISOString(),
   };
@@ -1246,9 +1250,10 @@ async function fetchGeneralPushes(sb: SupabaseClient, days: { iso: string }[]): 
  * than through the page, because empty is also what a broken read looks like here. */
 async function fetchPromoTags(
   sb: SupabaseClient, fieldIds: number[], matchIds: number[],
-): Promise<{ byField: Record<number, string[]>; byMatch: Record<number, string[]> }> {
+): Promise<{ byField: Record<number, string[]>; byMatch: Record<number, string[]>; datesByField: Record<number, Record<string, { startsOn: string | null; endsOn: string | null }>> }> {
   const byField: Record<number, string[]> = {};
   const byMatch: Record<number, string[]> = {};
+  const datesByField: Record<number, Record<string, { startsOn: string | null; endsOn: string | null }>> = {};
   const fids = [...new Set(fieldIds)];
   const mids = [...new Set(matchIds)];
   /* TWO `in` FILTERS, OR'd, so one round trip covers both scopes. A row is field-scoped or
@@ -1269,7 +1274,7 @@ async function fetchPromoTags(
     if (f.length) ors.push(`field_id.in.(${f.join(",")})`);
     if (m.length) ors.push(`match_id.in.(${m.join(",")})`);
     const { data, error } = await sb.from("promo_tags").select("*").or(ors.join(","));
-    if (error) return { byField: {}, byMatch: {} };
+    if (error) return { byField: {}, byMatch: {}, datesByField: {} };
     for (const r of data ?? []) {
       const tag = String(r.tag);
       if (r.match_id != null) {
@@ -1278,9 +1283,12 @@ async function fetchPromoTags(
       } else if (r.field_id != null) {
         const k = Number(r.field_id);
         (byField[k] ?? (byField[k] = [])).push(tag);
+        if (r.starts_on != null || r.ends_on != null) {
+          (datesByField[k] ?? (datesByField[k] = {}))[tag] = { startsOn: (r.starts_on as string | null) ?? null, endsOn: (r.ends_on as string | null) ?? null };
+        }
       }
     }
   }
-  return { byField, byMatch };
+  return { byField, byMatch, datesByField };
 }
 

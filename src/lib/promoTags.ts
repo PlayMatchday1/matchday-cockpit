@@ -84,6 +84,28 @@ export const TAG_KEY_ORDER: readonly TagKey[] = ["starting_11", "priority", "key
 export const tagTitle = (k: TagKey): string =>
   `${TAG_META[k].label}: ${TAG_META[k].why}${TAG_META[k].note ? ` ${TAG_META[k].note}` : ""}`;
 
+/* ── A TAG'S DATES (0207, Ryan 2026-10-05) ─────────────────────────────────────────────────────
+ * starting_11 is a FIELD row and used to show on every week forever. starts_on / ends_on bound it:
+ * a match shows the tag only if its date is between them, INCLUSIVE. ends_on null = still live.
+ * Both null (every row before 0207) = always, until someone edits it. Dates are calendar days
+ * (YYYY-MM-DD), compared as strings — no zone, no Date. */
+export type TagDates = { startsOn: string | null; endsOn: string | null };
+export const tagLiveOn = (d: TagDates | null | undefined, ymd: string): boolean =>
+  !d || ((d.startsOn == null || ymd >= d.startsOn) && (d.endsOn == null || ymd <= d.endsOn));
+
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const shortDay = (ymd: string) => { const [y, m, d] = ymd.split("-").map(Number); return `${MON[m - 1]} ${d}, ${y}`; };
+/** "Oct 1, 2026 – still live", "Sep 1, 2026 – Sep 30, 2026", or null when the row has no dates. */
+export function tagRangeLabel(d: TagDates | null | undefined): string | null {
+  if (!d || (d.startsOn == null && d.endsOn == null)) return null;
+  return `${d.startsOn ? shortDay(d.startsOn) : "Any start"} – ${d.endsOn ? shortDay(d.endsOn) : "still live"}`;
+}
+/** tagTitle, with the date range when the tag carries one. */
+export const tagTitleWithDates = (k: TagKey, d: TagDates | null | undefined): string => {
+  const r = tagRangeLabel(d);
+  return r ? `${tagTitle(k)} Dates: ${r}.` : tagTitle(k);
+};
+
 /** The tags at one scope, for the panel's two groups. */
 export const tagsAtScope = (s: TagScope): TagKey[] => TAG_KEYS.filter((k) => TAG_META[k].scope === s);
 

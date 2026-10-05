@@ -19,7 +19,8 @@
 // and passed in; nothing is re-derived and no count is redefined.
 
 import { CHANNELS, NEW_FLAG_LABEL, channelsOn, coverLabel, coverageCaption, coverageOf, coverageStateOf, coverageSummary, datedPushes, fmtPushIn, isPushOverdue, isPushSent, leadToKickoff, matchCodes, sentStamp, venueOffsetMs, type GeneralPush, type PromoMatch, type PromoPush, type PromoWeek, type PushDraft, type ZoneMode } from "@/lib/matchPromotion";
-import { TAG_META, splitTags, tagTitle, tagsAtScope, type TagKey } from "@/lib/promoTags";
+import { TAG_META, splitTags, tagTitle, tagsAtScope, type TagDates, type TagKey } from "@/lib/promoTags";
+import Starting11Control from "@/components/Starting11Control";
 /* THE VIEW LIST AND ITS LABELS COME FROM THE DESKTOP. Not a second list to keep in step — a
  * phone tab the desktop does not have is how the two surfaces end up offering different views. */
 import { MOBILE_VIEWS, VIEW_LABEL, type MobileView } from "@/components/MatchPromotionView";
@@ -49,8 +50,14 @@ export type MobileProps = {
   coversOf: (m: PromoMatch) => GeneralPush[];
   /** This match's tags at BOTH scopes, raw and unsuppressed — the panel needs the true set. */
   tagsOf: (m: PromoMatch) => TagKey[];
+  /** Every tag row, dates ignored — the panel reads this (0207). */
+  tagsOfRaw: (m: PromoMatch) => TagKey[];
+  /** A field tag's dates, or null when undated (0207). */
+  tagDatesOf: (m: PromoMatch, t: TagKey) => TagDates | null;
+  /** A tag's tooltip on one match, with its date range (0207). */
+  tagTitleFor: (m: PromoMatch, t: TagKey) => string;
   /** Sets or clears one tag. The SCOPE is derived from the tag upstream, never passed from here. */
-  onToggleTag: (m: PromoMatch, t: TagKey, on: boolean) => void;
+  onToggleTag: (m: PromoMatch, t: TagKey, on: boolean, dates?: TagDates) => void;
   tab: MobileView;
   setTab: (t: MobileView) => void;
   /* THE SAME ROWS THE DESKTOP QUEUE HOLDS, general pushes included. `m` is null on a general
@@ -313,7 +320,7 @@ function WeekByDay(p: MobileProps & { panel: React.ReactNode; viewTag?: TagKey |
                       {/* DERIVED, AND FIRST. No data-t, which is how the assertion separates the
                           read-only badge from the two tags a person can set. */}
                       {shownTags.map((t) => (
-                        <i key={t} data-testid="m-tag" data-t={t} title={tagTitle(t)}
+                        <i key={t} data-testid="m-tag" data-t={t} title={p.tagTitleFor(m, t)}
                           className="rounded-[4px] border px-[5px] py-px text-[9px] font-extrabold not-italic tracking-[0.03em]"
                           style={{ color: TAG_META[t].colour, borderColor: TAG_META[t].colour, background: "transparent" }}>
                           {TAG_META[t].label}
@@ -404,7 +411,7 @@ function Panel(p: MobileProps) {
         {(["match", "field"] as const).map((scope) => {
           const keys = tagsAtScope(scope);
           if (keys.length === 0 || (scope === "field" && m.fieldId == null)) return null;
-          const tags = p.tagsOf(m);
+          const tags = p.tagsOfRaw(m);
           return (
             <div key={scope} data-testid="m-tagscope" data-scope={scope}
               className="mb-1.5 rounded-[9px] border border-cream-line bg-white px-2.5 py-2">
@@ -414,6 +421,10 @@ function Panel(p: MobileProps) {
               <span className="flex flex-wrap gap-1.5">
                 {keys.map((t) => {
                   const on = tags.includes(t);
+                  // STARTING 11 IS DATED (0207): the desktop's own control, not a second copy.
+                  if (t === "starting_11") return <Starting11Control key={t} on={on} dates={p.tagDatesOf(m, t)} saving={saving}
+                    defaultStart={m.startDate ? String(m.startDate).slice(0, 10) : ""}
+                    onSet={(d) => p.onToggleTag(m, t, true, d)} onClear={() => p.onToggleTag(m, t, false)} />;
                   return (
                     <button key={t} type="button" data-testid="m-tag-toggle" data-t={t} data-on={on ? "1" : "0"}
                       aria-pressed={on} disabled={saving} title={tagTitle(t)}

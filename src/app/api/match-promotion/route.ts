@@ -73,7 +73,9 @@ type SaveBody = {
    * priority carries matchId; key_field and starting_11 carry fieldId. THE SCOPE IS NOT TRUSTED
    * FROM THE CLIENT: it is re-derived from the tag via TAG_META, and 0193's promo_tags_scope_ck is
    * the backstop if this route is ever wrong. */
-  tag?: { fieldId?: number; matchId?: number; tag?: string; on?: boolean };
+  /* startsOn / endsOn (0207): YYYY-MM-DD, starting_11 only. Turning Starting 11 on requires
+   * startsOn; endsOn empty = still live. `on: true` on a tag that is already set EDITS its dates. */
+  tag?: { fieldId?: number; matchId?: number; tag?: string; on?: boolean; startsOn?: string | null; endsOn?: string | null };
 };
 
 /** "" and whitespace collapse to NULL. An empty string is not a value, it is a cleared field. */
@@ -436,18 +438,47 @@ async function saveTag(
      * operators can both pass through, and the loser sees an error for a tag that is in the state
      * they asked for. The constraint is the arbiter; the duplicate is not a failure, it is the
      * answer. */
-    const row: Record<string, unknown> = { [col]: id, tag: t.tag, set_by: auth.email ?? null };
+    /* ── STARTING 11 CARRIES DATES (0207) ─────────────────────────────────────────────────
+     * A start date is required to turn it on; the end is optional (empty = still live) and may not
+     * come before the start. Other tags take no dates. */
+    const YMD = /^\d{4}-\d{2}-\d{2}$/;
+    const dated = t.tag === "starting_11";
+    const startsOn = dated && typeof t.startsOn === "string" && YMD.test(t.startsOn) ? t.startsOn : null;
+    const endsOn = dated && typeof t.endsOn === "string" && YMD.test(t.endsOn) ? t.endsOn : null;
+    if (dated && !startsOn) {
+      return Response.json({ outcome: "FAILED", error: "Starting 11 needs a start date. Nothing written." }, { status: 400 });
+    }
+    if (startsOn && endsOn && endsOn < startsOn) {
+      return Response.json({ outcome: "FAILED", error: "The end date is before the start date. Nothing written." }, { status: 400 });
+    }
+    const row: Record<string, unknown> = { [col]: id, tag: t.tag, set_by: auth.email ?? null, ...(dated ? { starts_on: startsOn, ends_on: endsOn } : {}) };
     const { data, error } = await sb.from("promo_tags").insert(row).select("id");
     if (error) {
       // 23505 = unique_violation. The row already exists, which is the state the caller wanted.
       if (error.code === "23505") {
-        return Response.json({ outcome: "LANDED", scope, id, tag: t.tag, on: true, already: true });
+        if (!dated) return Response.json({ outcome: "LANDED", scope, id, tag: t.tag, on: true, already: true });
+        /* ALREADY ON: THIS IS A DATE EDIT. Read the row, write only the dates, read back, audit. */
+        const { data: before, error: rErr } = await sb.from("promo_tags").select("*").eq(col, id).eq("tag", t.tag).maybeSingle();
+        if (rErr || !before) return Response.json({ outcome: "FAILED", error: rErr?.message ?? "The tag row could not be read." }, { status: 500 });
+        if ((before.starts_on ?? null) === startsOn && (before.ends_on ?? null) === endsOn) {
+          return Response.json({ outcome: "LANDED", scope, id, tag: t.tag, on: true, already: true });
+        }
+        const { data: after, error: uErr } = await sb.from("promo_tags").update({ starts_on: startsOn, ends_on: endsOn })
+          .eq("id", before.id).select("*").maybeSingle();
+        if (uErr) return Response.json({ outcome: "FAILED", error: uErr.message }, { status: 500 });
+        if (!after || (after.starts_on ?? null) !== startsOn || (after.ends_on ?? null) !== endsOn) {
+          return Response.json({ outcome: "NOT APPLIED", error: "The dates read back different. Nothing was retried." }, { status: 409 });
+        }
+        await auditTag(sb, "update", Number(before.id), t.tag, col, id, auth.email ?? null,
+          { starts_on: before.starts_on ?? null, ends_on: before.ends_on ?? null }, { starts_on: startsOn, ends_on: endsOn });
+        return Response.json({ outcome: "LANDED", scope, id, tag: t.tag, on: true, startsOn, endsOn });
       }
       const named = missingTableError(error.message);
       return Response.json({ outcome: "FAILED", error: named ?? error.message }, { status: named ? 503 : 500 });
     }
-    await auditTag(sb, "insert", data?.[0]?.id ?? null, t.tag, col, id, auth.email ?? null);
-    return Response.json({ outcome: "LANDED", scope, id, tag: t.tag, on: true });
+    await auditTag(sb, "insert", data?.[0]?.id ?? null, t.tag, col, id, auth.email ?? null, null,
+      { [col]: id, tag: t.tag, ...(dated ? { starts_on: startsOn, ends_on: endsOn } : {}) });
+    return Response.json({ outcome: "LANDED", scope, id, tag: t.tag, on: true, ...(dated ? { startsOn, endsOn } : {}) });
   } catch (e) {
     return Response.json({ outcome: "FAILED", error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
@@ -469,8 +500,9 @@ async function saveTag(
  * A TAG CARRIES NO PLAYER PII, so the row is logged whole.
  */
 async function auditTag(
-  sb: SupabaseClient, action: "insert" | "delete", rowId: number | null,
+  sb: SupabaseClient, action: "insert" | "delete" | "update", rowId: number | null,
   tag: string, col: "match_id" | "field_id", id: number, email: string | null,
+  before: Record<string, unknown> | null = null, after: Record<string, unknown> | null = null,
 ): Promise<void> {
   try {
     const { error } = await sb.from("fin_change_log").insert({
@@ -478,9 +510,9 @@ async function auditTag(
       row_id: rowId,
       action,
       changed_by: email ?? "unknown",
-      before_json: null,
-      after_json: action === "delete" ? null : { [col]: id, tag },
-      note: `promo tag ${tag} ${action === "delete" ? "cleared" : "set"} on ${col} ${id}`,
+      before_json: before,
+      after_json: action === "delete" ? null : after ?? { [col]: id, tag },
+      note: `promo tag ${tag} ${action === "delete" ? "cleared" : action === "update" ? "dates changed" : "set"} on ${col} ${id}`,
     });
     if (error) throw new Error(error.message);
   } catch (e) {

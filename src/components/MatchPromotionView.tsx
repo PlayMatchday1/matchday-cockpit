@@ -23,7 +23,7 @@ import { useMatchData } from "@/lib/useMatchData";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { getCancelPatterns, rollUpSlotRisk, clustersForField, slotRiskKey, type SlotRisk } from "@/lib/cancelPatterns";
 import { normalizeMatchName } from "@/lib/venueNormalization";
-import { TAG_KEYS, TAG_KEY_ORDER, TAG_META, splitTags, tagTitle, tagsAtScope, tagsInUse, isTagKey, type TagKey } from "@/lib/promoTags";
+import { TAG_KEYS, TAG_KEY_ORDER, TAG_META, splitTags, tagTitle, tagTitleWithDates, tagLiveOn, tagRangeLabel, tagsAtScope, tagsInUse, isTagKey, type TagDates, type TagKey } from "@/lib/promoTags";
 import { weekQueueEntries, weekQueues, isPastWeek, defaultDayIdx, tabCounts, type QueueEntry } from "@/lib/promoDayQueue";
 import {
   CHANNELS, NEW_FLAG_LABEL, channelsOn, coverageCaption, coverageStateOf, coverageSummary, matchCodes,
@@ -34,6 +34,7 @@ import {
 } from "@/lib/matchPromotion";
 import MarkPushSent from "@/components/MarkPushSent";
 import PushPlanEditor from "@/components/PushPlanEditor";
+import Starting11Control from "@/components/Starting11Control";
 
 /* ── THE FOUR VIEWS, AND WHY THE TAG ONES ARE NOT THEIR OWN COMPONENT ────────────────────────
  *
@@ -292,11 +293,25 @@ export default function MatchPromotionView() {
    * priority under key_field for display (tagsForDisplay) and THE PANEL MUST NOT — a toggle reading
    * the suppressed set would come up dark on a priority that IS set, and the next save would
    * silently clear it. */
-  const tagsOf = useCallback((m: PromoMatch): TagKey[] => {
+  /* THE RAW SET — every tag row on this match and its field, dates ignored. The PANEL reads this,
+   * so a Starting 11 whose end date has passed still comes up lit (with its dates) and is edited
+   * rather than re-added. */
+  const tagsOfRaw = useCallback((m: PromoMatch): TagKey[] => {
     const field = m.fieldId != null ? (week?.tagsByField?.[m.fieldId] ?? []) : [];
     const match = week?.tagsByMatch?.[m.apiId] ?? [];
     return [...match, ...field].filter(isTagKey);
   }, [week]);
+  /** A field tag's dates, or null when the row is undated (0207). */
+  const tagDatesOf = useCallback((m: PromoMatch, t: TagKey): TagDates | null =>
+    (m.fieldId != null ? week?.tagDatesByField?.[m.fieldId]?.[t] : null) ?? null, [week]);
+  /* WHAT A TILE SHOWS: the raw set, minus a dated field tag whose range does not include THIS
+   * MATCH'S DAY (0207). The day is the calendar date of the tile's column. */
+  const tagsOf = useCallback((m: PromoMatch): TagKey[] => {
+    const ymd = week?.days[m.dayIdx]?.iso ?? "";
+    return tagsOfRaw(m).filter((t) => TAG_META[t].scope !== "field" || tagLiveOn(tagDatesOf(m, t), ymd));
+  }, [week, tagsOfRaw, tagDatesOf]);
+  /** A tag's tooltip on this match, with its date range when it has one. */
+  const tagTitleFor = useCallback((m: PromoMatch, t: TagKey) => tagTitleWithDates(t, tagDatesOf(m, t)), [tagDatesOf]);
   /* ONE SHEET, TWO JOBS. `push` null is "create a new one for this city"; a push is "edit that
    * one". The route has always taken an id on the same payload — it was only the page that had no
    * way to hand it one, because there was nothing on screen to click. */
@@ -319,12 +334,12 @@ export default function MatchPromotionView() {
 
   /* THE SCOPE IS DERIVED FROM THE TAG, never passed in: TAG_META owns it and the database enforces
    * it (promo_tags_scope_ck), so a caller cannot address the wrong column even by accident. */
-  const toggleTag = useCallback(async (m: PromoMatch, tag: TagKey, on: boolean) => {
+  const toggleTag = useCallback(async (m: PromoMatch, tag: TagKey, on: boolean, dates?: TagDates) => {
     setSaving(true);
     try {
       const scoped = TAG_META[tag].scope === "match"
         ? { matchId: m.apiId, tag, on }
-        : { fieldId: m.fieldId, tag, on };
+        : { fieldId: m.fieldId, tag, on, ...(dates ? { startsOn: dates.startsOn, endsOn: dates.endsOn } : {}) };
       const { res, j } = await postPromo({ tag: scoped });
       if (!res.ok || j?.outcome !== "LANDED") {
         setToast({ msg: String(j?.error ?? "That tag did not save."), bad: true });
@@ -412,7 +427,8 @@ export default function MatchPromotionView() {
         week={week} tab={mTab} setTab={setMTab}
         jobs={jobs} overdue={overdue} onReload={() => load(weekRef)} riskOf={riskOf}
         coverOf={(m) => coverage.get(m.apiId) ?? "none"} coversOf={coversOf} tagsOf={tagsOf}
-        onToggleTag={(m, t, on) => void toggleTag(m, t, on)}
+        tagsOfRaw={tagsOfRaw} tagDatesOf={tagDatesOf} tagTitleFor={tagTitleFor}
+        onToggleTag={(m, t, on, dates) => void toggleTag(m, t, on, dates)}
         openId={openId} draft={draft} setDraft={setDraft} dirty={dirty}
         onOpen={openMatch} onClose={closePanel} onSave={() => void save()}
         saving={saving} toast={toast}
@@ -485,7 +501,7 @@ Which matches get promoted, on which channels, and when the push goes out.
           ? <Coverage week={week} zone={zone} />
           : <Plan week={week} byCity={tab === "plan" ? byCity : byCityTagged} openId={openId} onOpen={openMatch}
                    zone={zone} riskOf={riskOf}
-                   coverage={coverage} coversOf={coversOf} tagsOf={tagsOf}
+                   coverage={coverage} coversOf={coversOf} tagsOf={tagsOf} tagTitleFor={tagTitleFor}
                    onAddGeneral={openGeneral} onOpenGeneral={editGeneral} viewTag={viewTag}
                    editing={open != null && draft != null} />}
 
@@ -540,8 +556,9 @@ Which matches get promoted, on which channels, and when the push goes out.
           so that was the wrong shape. */}
       {open && draft && (
         <MatchEditorPanel m={open} draft={draft} setDraft={setDraft} zone={zone} setZone={setZone}
-          dirty={dirty} saving={saving} toast={toast} tags={tagsOf(open)}
-          onToggleTag={(t, on) => void toggleTag(open, t, on)}
+          dirty={dirty} saving={saving} toast={toast} tags={tagsOfRaw(open)}
+          tagDates={(t) => tagDatesOf(open, t)}
+          onToggleTag={(t, on, dates) => void toggleTag(open, t, on, dates)}
           onMarked={() => load(weekRef)} onError={(msg) => setToast({ msg, bad: true })}
           onSave={() => void save()} onClose={closePanel} />
       )}
@@ -608,13 +625,15 @@ const TILE_STATE_KEY: readonly [ReturnType<typeof coverageOf>, string, string][]
  * channel and none inside an off one, so this panel does not touch codes at all — putting one on
  * this header would undo the per-channel split in the one place an operator types it.
  */
-function MatchEditorPanel({ m, draft, setDraft, zone, setZone, dirty, saving, toast, tags, onToggleTag, onMarked, onError, onSave, onClose }: {
+function MatchEditorPanel({ m, draft, setDraft, zone, setZone, dirty, saving, toast, tags, tagDates, onToggleTag, onMarked, onError, onSave, onClose }: {
   m: PromoMatch; draft: PushDraft; setDraft: (d: PushDraft) => void;
   zone: ZoneMode; setZone: (z: ZoneMode) => void;
   dirty: boolean; saving: boolean; toast: { msg: string; bad: boolean } | null;
   /** This match's tags at both scopes, raw and unsuppressed. */
   tags: TagKey[];
-  onToggleTag: (t: TagKey, on: boolean) => void;
+  /** A field tag's dates (0207), or null when undated. */
+  tagDates: (t: TagKey) => TagDates | null;
+  onToggleTag: (t: TagKey, on: boolean, dates?: TagDates) => void;
   onMarked: () => void | Promise<void>; onError: (msg: string) => void;
   onSave: () => void; onClose: () => void;
 }) {
@@ -656,6 +675,10 @@ function MatchEditorPanel({ m, draft, setDraft, zone, setZone, dirty, saving, to
                 <span className="flex flex-wrap gap-1.5">
                   {keys.map((t) => {
                     const on = tags.includes(t);
+                    // STARTING 11 IS DATED (0207): its own control, with a required start date.
+                    if (t === "starting_11") return <Starting11Control key={t} on={on} dates={tagDates(t)} saving={saving}
+                      defaultStart={m.startDate ? String(m.startDate).slice(0, 10) : ""}
+                      onSet={(d) => onToggleTag(t, true, d)} onClear={() => onToggleTag(t, false)} />;
                     return (
                       <button key={t} type="button" data-testid="tag-toggle" data-t={t} data-on={on ? "1" : "0"}
                         aria-pressed={on} disabled={saving} title={tagTitle(t)}
@@ -1153,7 +1176,7 @@ function GeneralPushSheet({ city, push, week, saving, onClose, onSave, onRemove 
   );
 }
 
-function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, coversOf, tagsOf, onAddGeneral, onOpenGeneral, viewTag }: {
+function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, coversOf, tagsOf, tagTitleFor, onAddGeneral, onOpenGeneral, viewTag }: {
   week: PromoWeek; byCity: [string, PromoMatch[]][]; openId: number | null; zone: ZoneMode;
   /** The tile's cancel history, keyed on field and weekday with times CLUSTERED. See cancelPatterns. */
   riskOf: (m: PromoMatch) => SlotRisk | null;
@@ -1161,6 +1184,8 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
   coverage: Map<number, ReturnType<typeof coverageOf>>;
   coversOf: (m: PromoMatch) => GeneralPush[];
   tagsOf: (m: PromoMatch) => TagKey[];
+  /** A tag's tooltip on one match, with its date range when it has one (0207). */
+  tagTitleFor: (m: PromoMatch, t: TagKey) => string;
   /** Non-null on a tag view: the grid is already filtered to it, and the heading says which. */
   viewTag: TagKey | null;
   onAddGeneral: (city: string) => void;
@@ -1292,6 +1317,22 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
           state that actually renders — and a page that just stops after the heading reads as a load
           failure. It also gives the assertion something to find, which is what separates a real zero
           from a filter that matched nothing because it was broken. */}
+      {/* THE STARTING 11 TAG VIEW SAYS WHICH FIELDS CARRY IT AND FOR WHICH DATES (0207). */}
+      {viewTag === "starting_11" && (() => {
+        const names = new Map<number, string>();
+        for (const m of week.matches) if (m.fieldId != null && !names.has(m.fieldId)) names.set(m.fieldId, `${m.venue} · ${m.city}`);
+        const rows = Object.entries(week.tagsByField ?? {}).filter(([, ts]) => ts.includes("starting_11"))
+          .map(([fid]) => ({ fid: Number(fid), name: names.get(Number(fid)) ?? `Field ${fid}`, range: tagRangeLabel(week.tagDatesByField?.[Number(fid)]?.starting_11) }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        if (rows.length === 0) return null;
+        return (
+          <ul className="m-0 list-none px-5 pb-3 pt-1 text-[12px] text-deep-green/60" data-testid="s11-list">
+            {rows.map((r) => (
+              <li key={r.fid} data-testid="s11-list-row"><b className="text-deep-green/80">{r.name}</b> · {r.range ?? "no dates set, shows on every week"}</li>
+            ))}
+          </ul>
+        );
+      })()}
       {viewTag && byCity.length === 0 && (
         <p className="px-5 pb-4 pt-1 text-[12.5px] text-deep-green/45" data-testid="grid-empty">
           No match this week is at a field tagged {TAG_META[viewTag].label}. Tags are set from a
@@ -1359,7 +1400,7 @@ function Plan({ week, byCity, openId, onOpen, zone, editing, riskOf, coverage, c
                     {dayMatches.length === 0 && <div className="pt-1.5 text-[11.5px] text-deep-green/30">No sessions</div>}
                     {dayMatches.map((m) => <Tile key={m.apiId} m={m} open={m.apiId === openId} onOpen={onOpen} zone={zone}
                       priorLabel={priorLabel} priorWeeks={week.priorWeeks} risk={riskOf(m)} cover={coverage.get(m.apiId) ?? "none"}
-                      covers={coversOf(m)} tags={tagsOf(m)} shifted={m.shiftedFrom} />)}
+                      covers={coversOf(m)} tags={tagsOf(m)} tagTitle={(t) => tagTitleFor(m, t)} shifted={m.shiftedFrom} />)}
                   </div>
                 );
               })}
@@ -1405,8 +1446,10 @@ const AGE_CLASS: Record<1 | 2 | 3 | 4, string> = {
   4: "border-[#e4dbd8] bg-transparent text-[#a9a09c]",
 };
 
-function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shifted, covers, tags }: {
+function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shifted, covers, tags, tagTitle: titleOf }: {
   m: PromoMatch; open: boolean; onOpen: (m: PromoMatch, el: HTMLElement) => void; zone: ZoneMode;
+  /** The tag's tooltip on THIS match, dates included (0207). */
+  tagTitle?: (t: TagKey) => string;
   priorLabel: string; priorWeeks: number; risk?: SlotRisk | null;
   /** planned | covered | none | needs-decision | cancelled, derived once at page level. */
   cover: ReturnType<typeof coverageOf>;
@@ -1541,7 +1584,7 @@ function Tile({ m, open, onOpen, zone, priorLabel, priorWeeks, risk, cover, shif
                ALL THREE STAY OUTLINED, NEVER FILLED. The tile already spends filled pills on the
                cancel ratio and the NEW badge; a filled tag reads as a 4/4 cancel at a glance.
                PRIORITY IS STILL SWALLOWED where a KEY FIELD covers it — see splitTags above. */
-            <i key={t} data-testid="tag" data-t={t} data-scope={TAG_META[t].scope} title={tagTitle(t)}
+            <i key={t} data-testid="tag" data-t={t} data-scope={TAG_META[t].scope} title={titleOf ? titleOf(t) : tagTitle(t)}
               className="rounded-[4px] border border-solid px-[4px] py-px text-[8.5px] font-extrabold not-italic tracking-[0.03em]"
               style={{ color: TAG_META[t].colour, borderColor: TAG_META[t].colour, background: "transparent" }}>
               {TAG_META[t].label}
