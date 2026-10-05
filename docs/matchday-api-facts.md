@@ -6671,3 +6671,37 @@ read off the screen by whoever sends in Klaviyo or WhatsApp.
   `fin_venue_fields` (`currentMatchPriceCents`). With neither: not valued, and the period says so.
   A paid period keeps the rate frozen on its row (0189). `fin_venues.dpp_price` is no longer read
   by any payout and is no longer shown in Field Costs.
+
+## Who counts as a player: one shared rule, and three traps under it (2026-10-05)
+
+**`is_first_match` marks the first BOOKING, not the first match played.** When that booking or its
+match is cancelled, the flag stays on the cancelled row and the match the person actually played
+first carries none. Prod, Sep 2026: 984 people had their first participating match in September
+(`growth_player_profile.first_match_month`), 902 had the flag on a September row; of the 85 the flag
+missed, 84 had it on a cancelled booking or a cancelled match (55 of those before the real first
+match, 28 the same day, 1 after). Evidence: `mdapi_match_players.is_first_match` joined to
+`mdapi_matches.is_cancelled` / `canceled_at`, read-only probe 2026-10-05. **First match = the
+earliest participating row** (growth_participation), never the flag.
+
+**`user_is_fake_player` on a roster row is a fact about the BOOKING.** Five accounts that are not
+fake today (and not staff) carry 3,012 live roster rows booked as fake roster fills, plus a handful
+of unflagged rows each. The account flag (`mdapi_users.is_fake_player`) and `raw.isFakePlayer` are
+both false on them. So the booking-level check stays in `growth_participation` (0208); dropping it
+would add ~3,000 fake spots to every play metric.
+
+**@playmatchday.com is not "staff".** 2,154 accounts carry it: 2,148 are deleted-account tombstones
+(`del_` + 40 hex, "Deleted" "Account", phone null — see "A DELETED PLAYER IS SCRUBBED IN PLACE"),
+which are real players (67% played; 2,884 PAID spots; $4,485.93), and 6 are staff. **@matchday.com**:
+210, of which 200 are `is_fake_player` and 10 are not (numbered local parts, created Oct 2025, nine
+declaring Atlanta, 1–33 matches each).
+
+**Re-registration.** Old roster rows of a deleted account sometimes still hold the pre-deletion email
+or phone (167 of 2,148 do). Matching those to a live account: 103 deleted accounts → 95 people
+(email 75, phone 28 where exactly one live account holds the phone).
+
+**The rule (migration 0208):** `growth_internal_account` (fake flag, any @matchday.com, @playmatchday.com
+not matching the tombstone pattern) is excluded everywhere; `growth_person_link` maps a deleted
+account to its live person; `growth_account.status` counts each person's EARLIEST signup once.
+growth_participation, growth_registration, growth_acquisition_daily and (through participation)
+growth_player_profile and everything built on it apply it. `/api/lifecycle/behavior-weekly` reads
+those views and re-checks nothing.

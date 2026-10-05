@@ -172,7 +172,12 @@ export const marketOfDeclared = (city: string | null) => (city && DECLARED[city]
 export const marketOfPageKey = (k: string | null) => (k && (LIVE_MARKETS as readonly string[]).includes(k) ? k : OTHER_CITIES);
 
 export type MetaSide = { spendCents: number; installs: number | null; metaRegs: number | null; regSpendCents: number; metaPlayers: number };
-export type OursSide = { registrations: number; newPlayers: number };
+/* OURS (0208). newPlayers is "Registrants who played": people who REGISTERED in the window and have
+ * played since, the person counted once. played7d / matured7d is the settled companion — of the
+ * registrants whose signup is at least 7 days old, how many played within 7 days of it — because
+ * newPlayers keeps filling in for weeks after a recent window closes. */
+export type OursSide = { registrations: number; newPlayers: number; played7d: number; matured7d: number };
+export const emptyOurs = (): OursSide => ({ registrations: 0, newPlayers: 0, played7d: 0, matured7d: 0 });
 export type MarketSide = { meta: MetaSide | null; ours: OursSide; web: Measures };
 export type MarketRowView = { key: string; label: string; cur: MarketSide; prev: MarketSide | null; pages: PageLine[] };
 

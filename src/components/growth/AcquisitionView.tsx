@@ -4,7 +4,7 @@
  * in ten seconds). Replaces the Ads page; /lifecycle/ads redirects here.
  *
  *   date bar · "Data through" (hover: each source) · "skewed by ads" before Jul 15
- *   four tiles: New players, Registrations, Ad spend, Website store clicks
+ *   four tiles: Registrants who played (with its 7-day rate), Registrations, Ad spend, Website store clicks
  *   one table, a row per market, expandable to its Meta detail and its city + venue pages
  *   Homepage and site-wide · Other pages (closed) · Sources (closed)
  *
@@ -28,7 +28,16 @@ const todayChicago = () => new Date().toLocaleDateString("en-CA", { timeZone: "A
 const money = (c: number | null | undefined) => (c == null ? "—" : `$${Math.round(c / 100).toLocaleString("en-US")}`);
 const money2 = (c: number | null | undefined) => (c == null ? "—" : `$${(c / 100).toFixed(2)}`);
 
-type Totals = { spendCents: number | null; registrations: number; newPlayers: number; web: Measures };
+type Totals = { spendCents: number | null; registrations: number; newPlayers: number; played7d: number; matured7d: number; web: Measures };
+
+/* TWO DEFINITIONS OF "NEW", NAMED APART (Ryan, 2026-10-05). This page counts by SIGNUP: people who
+ * registered in the range and have played since. Player Activity counts by FIRST MATCH and calls it
+ * "First-time players". Same people, different months, so the two never tie — hence the names. */
+const PLAYED_LABEL = "Registrants who played";
+const PLAYED_TIP = "People who registered in this period and have played at least once since. Recent periods fill in over time.";
+const RATE7_TIP = "Of the people who registered in this period at least 7 days ago, the share who played within 7 days of signing up. Unlike the count beside it, this does not keep filling in.";
+const rate7 = (o: { played7d: number; matured7d: number } | null | undefined) => (o && o.matured7d > 0 ? o.played7d / o.matured7d : null);
+const pct7 = (v: number | null) => (v == null ? "—" : `${Math.round(v * 100)}%`);
 type Payload = {
   since: string; until: string;
   windows: Record<SourceKey, SourceWindow>;
@@ -42,6 +51,7 @@ type Payload = {
   site: { cur: Group | null; prev: Group | null };
   cities: { cur: Group | null; prev: Group | null };
   otherPages: { cur: Group | null; prev: Group | null };
+  excluded: { internal: number; reRegistrations: number };
 };
 
 function change(cur: number | null | undefined, prev: number | null | undefined): string | null {
@@ -145,7 +155,8 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
         <>
           {/* ── 2 · FOUR TILES ──────────────────────────────────────────────────────────────── */}
           <div className="acq-tiles" data-testid="acq-tiles">
-            <Tile k="New players" v={fmtInt(t.newPlayers)} cur={t.newPlayers} prev={tp?.newPlayers} />
+            <Tile k={PLAYED_LABEL} tip={PLAYED_TIP} v={fmtInt(t.newPlayers)} cur={t.newPlayers} prev={tp?.newPlayers}
+              sub={<span title={RATE7_TIP} data-testid="acq-tile-rate7">{pct7(rate7(t))} within 7 days</span>} />
             <Tile k="Registrations" v={fmtInt(t.registrations)} cur={t.registrations} prev={tp?.registrations} />
             <Tile k="Ad spend" v={money(t.spendCents)} cur={t.spendCents} prev={tp?.spendCents} />
             <Tile k="Website store clicks" v={fmtInt(web?.storeClicks ?? 0)} cur={web?.storeClicks} prev={webP?.storeClicks} />
@@ -159,7 +170,8 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                   <th>Market</th>
                   <th>Ad spend <Info tip={spendTip} /></th>
                   <th>Registrations</th>
-                  <th>New players</th>
+                  <th>{PLAYED_LABEL} <Info tip={PLAYED_TIP} /></th>
+                  <th>Played within 7 days <Info tip={RATE7_TIP} /></th>
                   <th>Website visits</th>
                   <th>Store clicks</th>
                   <th>Search clicks <Info tip={`Google Search runs about 2 days behind; compared on the days it has (through ${short(data.freshness.gsc)}).`} /></th>
@@ -175,6 +187,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                           <Cell v={r.cur.meta ? money(r.cur.meta.spendCents) : "—"} cur={r.cur.meta?.spendCents} prev={p?.meta?.spendCents} />
                           <Cell v={fmtInt(r.cur.ours.registrations)} cur={r.cur.ours.registrations} prev={p?.ours.registrations} />
                           <Cell v={fmtInt(r.cur.ours.newPlayers)} cur={r.cur.ours.newPlayers} prev={p?.ours.newPlayers} />
+                          <td data-testid="acq-rate7"><span className="acq-n">{pct7(rate7(r.cur.ours))}</span></td>
                           <Cell v={fmtInt(r.cur.web.visits)} cur={r.cur.web.visits} prev={p?.web.visits} />
                           <Cell v={fmtInt(r.cur.web.storeClicks)} cur={r.cur.web.storeClicks} prev={p?.web.storeClicks} />
                           <Cell v={fmtInt(r.cur.web.searchClicks)} cur={r.cur.web.searchClicks} prev={p?.web.searchClicks} />
@@ -188,7 +201,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                     <tr data-testid="acq-notattributed">
                       <td className="acq-muted">Spend not tied to a market</td>
                       <Cell v={money(data.notAttributed.cur)} cur={data.notAttributed.cur} prev={compareOn ? data.notAttributed.prev : null} />
-                      <td colSpan={6} />
+                      <td colSpan={7} />
                     </tr>
                   )}
                   <tr className={`${styles.adsTotal} acq-total`} data-testid="acq-total">
@@ -196,6 +209,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                     <Cell v={money(t.spendCents)} cur={t.spendCents} prev={tp?.spendCents} />
                     <Cell v={fmtInt(t.registrations)} cur={t.registrations} prev={tp?.registrations} />
                     <Cell v={fmtInt(t.newPlayers)} cur={t.newPlayers} prev={tp?.newPlayers} />
+                    <td data-testid="acq-rate7-total"><span className="acq-n">{pct7(rate7(t))}</span></td>
                     <Cell v={fmtInt(t.web.visits)} cur={t.web.visits} prev={tp?.web.visits} />
                     <Cell v={fmtInt(t.web.storeClicks)} cur={t.web.storeClicks} prev={tp?.web.storeClicks} />
                     <Cell v={fmtInt(t.web.searchClicks)} cur={t.web.searchClicks} prev={tp?.web.searchClicks} />
@@ -204,6 +218,13 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                 </tbody>
               </table>
             </div>
+          </div>
+
+          {/* THE EXCLUSION, STATED (0208). Staff, @matchday.com and fake accounts are not players, and a
+            * player who deleted their account and signed up again is one person. Leaving them out
+            * silently would make the counts drop with no visible reason. */}
+          <div className="acq-foot" data-testid="acq-excluded">
+            Not counted, signups in this range: {fmtInt(data.excluded.internal)} staff, test or fake {data.excluded.internal === 1 ? "account" : "accounts"} · {fmtInt(data.excluded.reRegistrations)} {data.excluded.reRegistrations === 1 ? "re-registration" : "re-registrations"} of an existing player.
           </div>
 
           {/* ── 4 · THE REST OF THE WEBSITE ─────────────────────────────────────────────────── */}
@@ -232,12 +253,13 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
   );
 }
 
-function Tile({ k, v, cur, prev }: { k: string; v: string; cur: number | null | undefined; prev: number | null | undefined }) {
+function Tile({ k, v, cur, prev, tip, sub }: { k: string; v: string; cur: number | null | undefined; prev: number | null | undefined; tip?: string; sub?: React.ReactNode }) {
   return (
     <div className="acq-tile" data-testid="acq-tile">
-      <div className="acq-tk">{k}</div>
+      <div className="acq-tk">{k}{tip && <> <Info tip={tip} /></>}</div>
       <div className="acq-tv">{v}</div>
       <Chg cur={cur} prev={prev} />
+      {sub && <div className="acq-tsub">{sub}</div>}
     </div>
   );
 }
@@ -249,13 +271,13 @@ function MarketDetail({ r, p, regSince }: { r: MarketRowView; p: MarketSide | nu
   const regTip = `Signups Meta could credit to an ad. Meta could only see registrations from Sep 12${regSince ? `, so this range counts from ${short(regSince)}` : ""}.`;
   return (
     <tr className="acq-detail" data-testid="acq-detail">
-      <td colSpan={8}>
+      <td colSpan={9}>
         {m && (
           <div className="acq-meta">
             <div><span className="acq-dk">Meta installs</span><span className="acq-n">{m.installs == null ? "—" : fmtInt(m.installs)}</span><Chg cur={m.installs} prev={mp?.installs} /></div>
             <div><span className="acq-dk">Meta registrations <Info tip={regTip} /></span><span className="acq-n">{m.metaRegs == null ? "—" : fmtInt(m.metaRegs)}</span><Chg cur={m.metaRegs} prev={mp?.metaRegs} /></div>
             <div><span className="acq-dk">Cost per registration <Info tip={regTip} /></span><span className="acq-n">{money2(cpr)}</span><Chg cur={cpr} prev={cprP} invert /></div>
-            <div><span className="acq-dk">Cost per new player <Info tip="Ad spend divided by every new player in the market, including ones who found us on their own. Under 10 new players the figure moves a lot." /></span><span className="acq-n">{money2(cpnp)}</span><Chg cur={cpnp} prev={cpnpP} invert /></div>
+            <div><span className="acq-dk">Cost per registrant who played <Info tip="Ad spend divided by every registrant who played in the market, including ones who found us on their own. Under 10 the figure moves a lot." /></span><span className="acq-n">{money2(cpnp)}</span><Chg cur={cpnp} prev={cpnpP} invert /></div>
           </div>
         )}
         {r.pages.length > 0 ? (
@@ -342,6 +364,8 @@ const CSS = `
 .acq .acq-caret{display:inline-block;width:14px;color:var(--muted,#5c7168);font-size:11px}
 .acq .acq-dash{color:var(--muted,#5c7168)}
 .acq .acq-muted{color:var(--muted,#5c7168);font-size:.78rem}
+.acq .acq-foot{margin:-4px 2px 14px;font-size:11.5px;color:var(--muted,#5c7168)}
+.acq .acq-tsub{margin-top:2px;font-size:11.5px;color:var(--muted,#5c7168)}
 .acq .acq-i{display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;border-radius:50%;border:1px solid currentColor;font-size:9px;font-weight:800;font-style:normal;text-transform:none;cursor:help;opacity:.6;vertical-align:1px;margin-left:2px}
 .acq .acq-detail td{background:#f7faf8;padding:12px 18px 14px 32px;text-align:left}
 .acq .acq-meta{display:flex;flex-wrap:wrap;gap:22px;margin-bottom:12px}

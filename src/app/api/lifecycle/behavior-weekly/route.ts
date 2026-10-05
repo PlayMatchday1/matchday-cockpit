@@ -6,15 +6,17 @@
  * week whose MONDAY falls inside them (see weeksInMonthRange). `?weeks=N` remains as a fallback
  * for a caller with no period in hand — it means "the last N weeks ending today".
  *
- * ── WHY THIS EXISTS INSTEAD OF READING THE GROWTH VIEWS ───────────────────────────────────────
- * Every growth_* materialized view is pre-aggregated to a MONTH — growth_registration exposes
- * `signup_month` and no date at all, growth_player_month is keyed on `activity_month`. There is
- * nothing in them to bucket by week. So the weekly path re-derives from the mirrors, which is the
- * only place a date survives.
+ * ── IT READS THE SAME ROWS AS THE MONTHLY GRAIN (0208, 2026-10-05) ───────────────────────────
+ * Registrations come from growth_registration (it now carries completed_sign_up_at), play from
+ * growth_participation, first-time players from growth_player_profile. Those three apply the ONE
+ * definition of who counts — staff, @matchday.com and fake accounts out, re-registrations as one
+ * person — so nothing here re-checks a flag. Only mdapi_matches is read raw, for the match's day,
+ * city and field, with the same live/not-cancelled filter the participation view applies.
  *
  * ── THE TWO CLOCKS, AND THEY ARE HANDLED DIFFERENTLY ON PURPOSE ───────────────────────────────
- *   mdapi_users.completed_sign_up_at   TRUE UTC INSTANT → converted to its America/Chicago day.
+ *   completed_sign_up_at               TRUE UTC INSTANT → converted to its America/Chicago day.
  *   mdapi_matches.start_date           LOCAL WALL CLOCK carrying a Z it does not mean → SLICED.
+ *   first_match_date                   ALREADY a wall-clock DAY (the view slices start_date) → as-is.
  * Swapping those two produces plausible numbers and wrong ones. See weekBuckets.ts.
  *
  * ── THIS WILL NOT SUM TO THE MONTHLY VIEW, FOR TWO REASONS, BOTH STRUCTURAL ───────────────────
@@ -199,27 +201,27 @@ export async function GET(req: Request) {
     const addTo = (m: Map<string, Set<number>>, k: string, uid: number) =>
       (m.get(k) ?? m.set(k, new Set()).get(k)!).add(uid);
 
-    /* ── REGISTRATIONS. A UTC instant, bucketed by its CHICAGO day. Fake players excluded, the
-     * same rule growth_registration applies. Only completed signups count — an abandoned
-     * onboarding is not a registration. */
+    /* ── REGISTRATIONS. A UTC instant, bucketed by its CHICAGO day. Read from growth_registration,
+     * the same rows the monthly grain counts (0208): one per PERSON at their earliest signup, with
+     * staff, @matchday.com and fake accounts already out. No exclusion is re-applied here — a second
+     * copy of the rule is how the two grains drifted apart. Only completed signups count. */
     const users = await selectAll<Record<string, unknown>>(() =>
-      sb.from("mdapi_users")
-        .select("id, completed_sign_up_at, is_fake_player, preferable_city_name")
-        .not("completed_sign_up_at", "is", null)
+      sb.from("growth_registration")
+        .select("user_id, completed_sign_up_at, declared_city_raw")
+        .eq("completed", true)
         .gte("completed_sign_up_at", first).lt("completed_sign_up_at", upper)
-        .order("id"),
+        .order("user_id"),
     );
     const regByWeek = new Map<string, number>();
     const regByWeekCity = new Map<string, Map<string, number>>();
     for (const u of users) {
-      if (u.is_fake_player === true) continue;
       /* CHICAGO DAY FIRST, then the bucket. The window test uses the DAY, because a window is a day
        * range; the bucket test is separate and can legitimately exclude a row a window includes. */
       const regDay = chicagoYmd(String(u.completed_sign_up_at));
       /* THE DECLARED CITY IS RESOLVED BEFORE THE AXIS GUARD, because the window needs it and the
        * window can reach outside the axis. Same normaliser and same Unassigned fallback as below;
        * resolving it twice with two different rules is how the two halves drift apart. */
-      const regCity = normalizeDeclared(u.preferable_city_name as string | null) ?? UNASSIGNED_CITY;
+      const regCity = normalizeDeclared(u.declared_city_raw as string | null) ?? UNASSIGNED_CITY;
       windowSpec.forEach((wd, wi) => {
         if (regDay >= wd.from && regDay <= wd.to) { winReg[wi] += 1; bump(winRegCity[wi], regCity); }
       });
@@ -288,8 +290,7 @@ export async function GET(req: Request) {
     const spotsByWeekCity = new Map<string, Map<string, number>>();
     const activeByWeek = new Map<string, Set<number>>();
     const activeByWeekCity = new Map<string, Map<string, Set<number>>>();
-    /* FIRST-EVER PLAY, for newPlayers. `is_first_match` is carried on the roster row by the API
-     * and is what the monthly path's cohort logic ultimately rests on too. */
+    /* FIRST-TIME PLAYERS ARE READ FROM growth_player_profile BELOW, not from the roster. */
     const newByWeek = new Map<string, number>();
     const newByWeekCity = new Map<string, Map<string, number>>();
     const spotsByWeekField = new Map<string, Map<string, number>>();
@@ -306,23 +307,29 @@ export async function GET(req: Request) {
      * them wrong. The tell was the 1,000 itself.
      *
      * Fixed by paging INSIDE each chunk until a short page comes back, and asserting the read is
-     * complete rather than trusting the chunking. */
+     * complete rather than trusting the chunking.
+     *
+     * ── THE ROWS ARE growth_participation's, NOT THE RAW ROSTER'S (0208) ─────────────────────
+     * The same view every monthly play figure is built from, so there is one participation rule:
+     * cancelled and unsettled (WAITING) bookings out, fake-fill bookings out, staff / @matchday.com /
+     * fake accounts out, and a re-registered player's two accounts as ONE user_id. This route used to
+     * re-check cancellation and the fake flag itself and kept WAITING rows the monthly grain drops,
+     * so its spots and players ran higher than monthly's for the same days. */
     for (let i = 0; i < ids.length; i += 200) {
       const chunk = ids.slice(i, i + 200);
       const rows: Record<string, unknown>[] = [];
       for (let off = 0; ; off += 1000) {
-        const { data, error } = await sb.from("mdapi_match_players")
-          .select("match_api_id, user_id, is_cancelled, user_is_fake_player, is_first_match, deleted_at")
-          .in("match_api_id", chunk).is("deleted_at", null)
+        const { data, error } = await sb.from("growth_participation")
+          .select("player_api_id, match_api_id, user_id")
+          .in("match_api_id", chunk)
           // A STABLE ORDER IS REQUIRED for offset paging, or a row can be skipped or repeated
-          // across the boundary. api_id is the table's own unique key.
-          .order("api_id").range(off, off + 999);
-        if (error) throw new Error(`mdapi_match_players: ${error.message}`);
+          // across the boundary. player_api_id is the roster row's own unique key.
+          .order("player_api_id").range(off, off + 999);
+        if (error) throw new Error(`growth_participation: ${error.message}`);
         rows.push(...(data ?? []));
         if ((data ?? []).length < 1000) break;
       }
       for (const p of rows) {
-        if (p.is_cancelled === true || p.user_is_fake_player === true) continue;
         /* WINDOWS FIRST, AXIS SECOND. A roster row whose match falls outside the displayed axis can
          * still belong to a compared window; skipping on `!w` before the window test is what would
          * make the previous period's window read zero. */
@@ -337,16 +344,13 @@ export async function GET(req: Request) {
             if (dayOfMatch0 >= wd.from && dayOfMatch0 <= wd.to) {
               winActive[wi].add(uid0);
               winSpots[wi] += 1;
-              if (p.is_first_match === true) winNew[wi] += 1;
               if (wCity) {
                 addTo(winActiveCity[wi], wCity, uid0);
                 bump(winSpotsCity[wi], wCity);
-                if (p.is_first_match === true) bump(winNewCity[wi], wCity);
               }
               if (wField) {
                 addTo(winActiveField[wi], wField, uid0);
                 bump(winSpotsField[wi], wField);
-                if (p.is_first_match === true) bump(winNewField[wi], wField);
               }
             }
           });
@@ -376,17 +380,48 @@ export async function GET(req: Request) {
           (fa.get(w) ?? fa.set(w, new Set()).get(w)!).add(uid);
           activeByWeekField.set(field, fa);
         }
-        if (p.is_first_match === true) {
-          newByWeek.set(w, (newByWeek.get(w) ?? 0) + 1);
-          if (field) {
-            const fm = newByWeekField.get(field) ?? new Map<string, number>();
-            fm.set(w, (fm.get(w) ?? 0) + 1); newByWeekField.set(field, fm);
-          }
-          if (city) {
-            const m = newByWeekCity.get(city) ?? new Map<string, number>();
-            m.set(w, (m.get(w) ?? 0) + 1); newByWeekCity.set(city, m);
-          }
+      }
+    }
+
+    /* ── FIRST-TIME PLAYERS: growth_player_profile, THE MONTHLY GRAIN'S OWN SOURCE (2026-10-05) ──
+     * A person counts in the bucket holding their first match EVER, in that match's city — the
+     * profile row the monthly grain counts by first_match_month. Day, week and month are therefore
+     * the same rows cut three ways, and a month's days sum to the month exactly.
+     *
+     * THIS USED TO BE THE ROSTER'S `is_first_match`, AND THAT FLAG MARKS THE FIRST *BOOKING*. When
+     * that booking or its match is cancelled the flag stays on the cancelled row, and the match the
+     * person actually played first carries none. Sep 2026: monthly 984, weekly 902; of the 85 people
+     * monthly had and weekly did not, 84 had their flag on a cancelled booking or match.
+     *
+     * first_match_date is already a DAY on the match's wall clock (growth_participation slices
+     * start_date), so it is used as-is — converting it to Chicago would shift it. */
+    const firsts = await selectAll<Record<string, unknown>>(() =>
+      sb.from("growth_player_profile")
+        .select("user_id, first_match_date, first_match_city, first_match_field_title")
+        .gte("first_match_date", first).lt("first_match_date", upper)
+        .order("user_id"),
+    );
+    for (const f of firsts) {
+      const day = String(f.first_match_date);
+      const city = normalizeMatchCity(String(f.first_match_city ?? ""));
+      const field = canonicalVenueName(String(f.first_match_field_title ?? ""));
+      windowSpec.forEach((wd, wi) => {
+        if (day >= wd.from && day <= wd.to) {
+          winNew[wi] += 1;
+          if (city) bump(winNewCity[wi], city);
+          if (field) bump(winNewField[wi], field);
         }
+      });
+      const w = bucketOf(day);
+      if (!inAxis.has(w)) continue;
+      newByWeek.set(w, (newByWeek.get(w) ?? 0) + 1);
+      if (field) {
+        const fm = newByWeekField.get(field) ?? new Map<string, number>();
+        fm.set(w, (fm.get(w) ?? 0) + 1); newByWeekField.set(field, fm);
+      }
+      if (city) {
+        const m = newByWeekCity.get(city) ?? new Map<string, number>();
+        m.set(w, (m.get(w) ?? 0) + 1); newByWeekCity.set(city, m);
       }
     }
 

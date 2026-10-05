@@ -11,9 +11,9 @@
 import { authenticateLifecycle } from "@/lib/lifecycleAuth";
 import { selectAll } from "@/lib/supabasePagination";
 import {
-  LIVE_MARKETS, OTHER_CITIES, addMeasures, emptyMeasures, linkSplit, marketLabel, marketOfDeclared, sameDaysLastMonth, sourceWindows,
+  LIVE_MARKETS, OTHER_CITIES, addMeasures, emptyMeasures, emptyOurs, linkSplit, marketLabel, marketOfDeclared, sameDaysLastMonth, sourceWindows,
   webByMarket, websiteTable, type AppRow, type ClickRow, type GscRow, type MarketRowView, type MarketSide, type MetaSide,
-  type PageMapRow, type WebRow, type Window,
+  type OursSide, type PageMapRow, type WebRow, type Window,
 } from "@/lib/acquisitionModel";
 import { buildAdsOverview, META_REG_FROM, type AcqRow, type DimRow, type FlatRow, type GeoRow } from "@/lib/adsOverview";
 import { META_ADSET_FLOOR_YMD } from "@/lib/metaAdSpend";
@@ -91,16 +91,39 @@ export async function GET(req: Request) {
       }));
       return { by, notAttributedCents: main.notAttributed.reduce((a, n) => a + n.spendCents, 0), regSince: regFrom && regFrom !== w.since ? regFrom : null };
     };
+    /* "TODAY" FOR THE 7-DAY RATE: a signup is settled once 7 days have passed since its Chicago day. */
+    const todayChi = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
+    const settledBy = (() => { const d = new Date(`${todayChi}T12:00:00Z`); d.setUTCDate(d.getUTCDate() - 7); return d.toISOString().slice(0, 10); })();
     const oursSide = (w: Window | null) => {
-      const by = new Map<string, { registrations: number; newPlayers: number }>();
+      const by = new Map<string, OursSide>();
       if (!w) return by;
       for (const r of acq) {
         if (r.signup_date < w.since || r.signup_date > w.until) continue;
         const k = marketOfDeclared(r.declared_city_raw);
-        const e = by.get(k) ?? { registrations: 0, newPlayers: 0 };
-        e.registrations += Number(r.registrations); e.newPlayers += Number(r.became_players); by.set(k, e);
+        const e = by.get(k) ?? emptyOurs();
+        e.registrations += Number(r.registrations); e.newPlayers += Number(r.became_players);
+        if (r.signup_date <= settledBy) { e.matured7d += Number(r.registrations); e.played7d += Number(r.played_within_7d); }
+        by.set(k, e);
       }
       return by;
+    };
+
+    /* ── WHAT THE SHARED RULE LEFT OUT OF THIS RANGE (0208), so the exclusion is visible ────────
+     * Accounts that completed signup in the range and are not counted: staff, @matchday.com and fake
+     * accounts ('internal'), and a re-registered player's second account ('re_registration'). A few
+     * hundred rows in all, so they are read whole and dated here on the same Chicago clock the
+     * registrations use. */
+    const notCounted = await selectAll<{ account_id: number; status: string; completed_sign_up_at: string | null }>(() =>
+      sb.from("growth_account").select("account_id, status, completed_sign_up_at").neq("status", "counted").order("account_id"));
+    const excludedIn = (w: Window) => {
+      const out = { internal: 0, reRegistrations: 0 };
+      for (const a of notCounted) {
+        if (!a.completed_sign_up_at) continue;
+        const d = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date(a.completed_sign_up_at));
+        if (d < w.since || d > w.until) continue;
+        if (a.status === "internal") out.internal += 1; else out.reRegistrations += 1;
+      }
+      return out;
     };
 
     const current = {
@@ -116,9 +139,9 @@ export async function GET(req: Request) {
     const oC = oursSide(oursCur), oP = compare ? oursSide(oursCmp) : null;
     const wC = webByMarket(current.website), wP = cmp ? webByMarket(cmp.website) : null;
     const keys = [...LIVE_MARKETS, OTHER_CITIES];
-    const side = (k: string, m: ReturnType<typeof metaSide> | null, metaWin: Window | null, o: Map<string, { registrations: number; newPlayers: number }>, w: ReturnType<typeof webByMarket>): MarketSide => ({
+    const side = (k: string, m: ReturnType<typeof metaSide> | null, metaWin: Window | null, o: Map<string, OursSide>, w: ReturnType<typeof webByMarket>): MarketSide => ({
       meta: metaWin && m ? m.by.get(k) ?? (k === OTHER_CITIES ? null : { spendCents: 0, installs: null, metaRegs: null, regSpendCents: 0, metaPlayers: 0 }) : null,
-      ours: o.get(k) ?? { registrations: 0, newPlayers: 0 },
+      ours: o.get(k) ?? emptyOurs(),
       web: w.get(k)?.m ?? emptyMeasures(),
     });
     const markets: MarketRowView[] = keys.map((k) => ({
@@ -127,9 +150,14 @@ export async function GET(req: Request) {
       prev: compare && oP && wP ? side(k, mP, metaCmp, oP, wP) : null,
     })).filter((r) => LIVE_MARKETS.includes(r.key as never) || r.cur.ours.registrations > 0 || r.cur.web.visits > 0);
     const sum = (sideOf: (r: MarketRowView) => MarketSide | null, notAttr: number) => {
-      const web = emptyMeasures(); let spend = notAttr, regs = 0, players = 0, anyMeta = false;
-      for (const r of markets) { const s2 = sideOf(r); if (!s2) continue; addMeasures(web, s2.web); regs += s2.ours.registrations; players += s2.ours.newPlayers; if (s2.meta) { anyMeta = true; spend += s2.meta.spendCents; } }
-      return { spendCents: anyMeta || notAttr ? spend : null, registrations: regs, newPlayers: players, web };
+      const web = emptyMeasures(); let spend = notAttr, anyMeta = false; const ours = emptyOurs();
+      for (const r of markets) {
+        const s2 = sideOf(r); if (!s2) continue; addMeasures(web, s2.web);
+        ours.registrations += s2.ours.registrations; ours.newPlayers += s2.ours.newPlayers;
+        ours.played7d += s2.ours.played7d; ours.matured7d += s2.ours.matured7d;
+        if (s2.meta) { anyMeta = true; spend += s2.meta.spendCents; }
+      }
+      return { spendCents: anyMeta || notAttr ? spend : null, ...ours, web };
     };
     /* THE TOTAL ROW'S WEBSITE COLUMNS ARE THE WHOLE SITE (Ryan, 2026-10-04): the markets plus
      * Homepage and site-wide plus Other pages, so they match the Website store clicks tile. */
@@ -143,6 +171,7 @@ export async function GET(req: Request) {
       since, until, windows, current, compare: cmp, freshness, mappedRows: map.length, generatedAt: new Date().toISOString(),
       markets, totals,
       notAttributed: { cur: mC.notAttributedCents, prev: mP?.notAttributedCents ?? null },
+      excluded: excludedIn(oursCur),
       metaWindow: { cur: metaCur, regSince: mC.regSince },
       site: { cur: siteGroup(current.website, "site"), prev: cmp ? siteGroup(cmp.website, "site") : null },
       otherPages: { cur: siteGroup(current.website, "unmapped"), prev: cmp ? siteGroup(cmp.website, "unmapped") : null },

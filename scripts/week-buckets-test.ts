@@ -153,9 +153,30 @@ console.log("\nTHE ROUTE READS THE RIGHT CLOCK FOR EACH SOURCE, AND PAGES PAST T
    * came back with exactly 1,000 roster rows and metrics of 554, 15, 535, 45, which read as
    * seasonality and were truncation. */
   is("  the roster read pages inside each chunk", /for \(let off = 0; ; off \+= 1000\)/.test(code), true);
-  is("  …with a stable order, or offset paging skips rows", /\.order\("api_id"\)\.range\(off, off \+ 999\)/.test(code), true);
+  /* SELECTOR PATH, 2026-10-05 (0208): the roster read moved from mdapi_match_players to
+   * growth_participation, whose unique key is player_api_id. Same property — a stable unique order. */
+  is("  …with a stable order, or offset paging skips rows", /\.order\("player_api_id"\)\.range\(off, off \+ 999\)/.test(code), true);
   is("  …and stops on a short page", /if \(\(data \?\? \[\]\)\.length < 1000\) break;/.test(code), true);
-  is("  fake players and cancelled rows are excluded", /p\.is_cancelled === true \|\| p\.user_is_fake_player === true/.test(code), true);
+  /* ── REPLACED 2026-10-05 (0208), because the thing it pinned was removed on purpose ─────────
+   * This asserted the route's OWN fake/cancelled check. Ryan's decision: one definition of who
+   * counts, in SQL, and no page re-checking it. So the route now reads growth_participation, and
+   * the exclusion is asserted where it lives — in the migration — with the negative here guarding
+   * against a re-check coming back as an ADDED line. */
+  is("  play rows come from growth_participation", /sb\.from\("growth_participation"\)/.test(code), true);
+  is("  control: the route re-checks no flag of its own",
+    /user_is_fake_player|is_fake_player|is_cancelled === true|is_first_match/.test(code), false);
+  is("  control: …and still reads matches, so the scan above ran on real code", /sb\.from\("mdapi_matches"\)/.test(code), true);
+  is("  first-time players come from the profile, not the booking flag", /sb\.from\("growth_player_profile"\)/.test(code), true);
+  {
+    const M208 = readFileSync("supabase/migrations/0208_growth_shared_exclusion.sql", "utf8").replace(/--.*$/gm, "");
+    const part = M208.slice(M208.indexOf("CREATE OR REPLACE VIEW public.growth_participation"), M208.indexOf("DROP MATERIALIZED VIEW IF EXISTS public.growth_registration"));
+    is("  0208: participation excludes the shared internal accounts", /NOT EXISTS \(SELECT 1 FROM public\.growth_internal_account i WHERE i\.user_id = p\.user_id\)/.test(part), true);
+    is("  0208: …drops cancelled and unsettled bookings", /p\.canceled_at IS NULL/.test(part) && /paid_status IS DISTINCT FROM 'WAITING'/.test(part), true);
+    is("  0208: …keeps the BOOKING-level fake-fill check", /COALESCE\(p\.user_is_fake_player, false\) = false/.test(part), true);
+    is("  0208: …and plays as the PERSON", /COALESCE\(l\.person_id, p\.user_id\)\s+AS user_id/.test(part), true);
+    is("  control: the slice is the participation view, not empty", part.length > 500, true);
+    is("  0208: deleted accounts are NOT internal", M208.includes("!~ '^del_[0-9a-f]{40}@playmatchday\\.com$'"), true);
+  }
   is("  totalPlayers is DISTINCT people, not spots", /activeByWeek\.get\(w\).*\.add\(uid\)/.test(code) || /\.add\(uid\)/.test(code), true);
   /* CHANGED BY THIS TASK, DELIBERATELY. Migration 0157 moved growth_registration to Chicago, so
    * the route's note now says BOTH sides are Chicago. It used to say monthly was UTC, and leaving
@@ -180,8 +201,9 @@ console.log("\nAND THE MONTHLY BUCKETS ARE UTC — stated where it can be checke
   /* THE LIVE DEFINITION IS 0157, NOT 0096. This guard used to read 0096 and assert UTC. 0096 is
    * still on disk and still says UTC — it is history and correctly so — which is exactly why
    * pointing at it was no longer a guard: it would have gone on passing forever while describing a
-   * view that had been replaced. It reads the migration that is actually in effect. */
-  const MIG = readFileSync("supabase/migrations/0157_growth_registration_chicago.sql", "utf8");
+   * view that had been replaced. It reads the migration that is actually in effect.
+   * REPOINTED 2026-10-05: 0208 rebuilt growth_registration, so 0208 is the one in effect now. */
+  const MIG = readFileSync("supabase/migrations/0208_growth_shared_exclusion.sql", "utf8");
   is("  growth_registration buckets in America/Chicago", /AT TIME ZONE 'America\/Chicago', 'YYYY-MM'\) END AS signup_month/.test(MIG), true);
   // CONTROL: the same scan run against the SUPERSEDED migration finds UTC — so the pattern above
   // is discriminating between the two files and not just matching any signup_month line.
@@ -535,8 +557,11 @@ console.log("\nONE CITY VOCABULARY — the weekly path used to group on two");
   /* THE CAUSE. Registrations were keyed on the RAW preferable_city_name and play on
    * cityFromAbbr(city_identifier) — "Dallas / Fort Worth" against "Dallas", "Oklahoma City"
    * against "OKC" — so 1,802 of 9,482 registrations belonged to no listed row. */
-  is("  weekly registrations are NORMALISED, not raw", /normalizeDeclared\(u\.preferable_city_name/.test(rt), true);
+  /* SELECTOR PATH, 2026-10-05 (0208): registrations come from growth_registration, whose column is
+   * declared_city_raw. Same property — the declared city goes through the normaliser. */
+  is("  weekly registrations are NORMALISED, not raw", /normalizeDeclared\(u\.declared_city_raw/.test(rt), true);
   is("  control: the raw grouping is gone", /String\(u\.preferable_city_name \?\? ""\)\.trim\(\)/.test(rt), false);
+  is("  control: …under the new column name too", /String\(u\.declared_city_raw \?\? ""\)\.trim\(\)/.test(rt), false);
   is("  weekly play uses normalizeMatchCity", /normalizeMatchCity\(String\(m\.city_identifier/.test(rt), true);
   /* cityFromAbbr IS NOT INTERCHANGEABLE with normalizeMatchCity. It is a second, older map that
    * never received Warsaw and returns null for an unknown code where normalizeMatchCity falls back
