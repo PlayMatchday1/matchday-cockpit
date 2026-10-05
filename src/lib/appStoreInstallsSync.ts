@@ -52,28 +52,18 @@ export class AppleAuthError extends Error {}
 const ISSUER_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const KEY_ID_RE = /^[A-Z0-9]{10}$/i;
 
-// WHICH KEY. "sync" is the Sales-and-Reports key every job uses. "setup" is the short-lived Admin key
-// (APP_STORE_CONNECT_SETUP_*) used ONLY to create the Acquisition page's analytics report requests,
-// then revoked; the issuer id is the team's and is shared.
-type KeyKind = "sync" | "setup";
-const KEY_VARS: Record<KeyKind, { id: string; p8: string }> = {
-  sync: { id: "APP_STORE_CONNECT_KEY_ID", p8: "APP_STORE_CONNECT_P8_B64" },
-  setup: { id: "APP_STORE_CONNECT_SETUP_KEY_ID", p8: "APP_STORE_CONNECT_SETUP_P8_B64" },
-};
-
-function creds(kind: KeyKind = "sync"): { issuerId: string; keyId: string; p8: string; vendor: string } {
-  const V = KEY_VARS[kind];
+function creds(): { issuerId: string; keyId: string; p8: string; vendor: string } {
   // Trim AT THE READ SITE so nothing downstream can pick up the raw value. A
   // trailing newline/space on APP_STORE_CONNECT_ISSUER_ID made the `iss` claim 37
   // chars → Apple 401 even though the token was correctly signed. Trim ends only —
   // a genuinely malformed value must still fail the shape assertions below.
   const issuerId = process.env.APP_STORE_CONNECT_ISSUER_ID?.trim();
-  const keyId = process.env[V.id]?.trim();
-  const p8b64 = process.env[V.p8]?.trim();
+  const keyId = process.env.APP_STORE_CONNECT_KEY_ID?.trim();
+  const p8b64 = process.env.APP_STORE_CONNECT_P8_B64?.trim();
   const vendor = process.env.APP_STORE_CONNECT_VENDOR_NUMBER?.trim();
   if (!issuerId || !keyId || !p8b64 || !vendor) {
     throw new AppleAuthError(
-      `App Store Connect credentials are not fully set (need ISSUER_ID, ${V.id}, ${V.p8}, VENDOR_NUMBER).`,
+      "App Store Connect credentials are not fully set (need ISSUER_ID, KEY_ID, P8_B64, VENDOR_NUMBER).",
     );
   }
   // Shape assertions — fail LOUDLY before any HTTP call, naming the bad var and its
@@ -82,16 +72,16 @@ function creds(kind: KeyKind = "sync"): { issuerId: string; keyId: string; p8: s
     throw new AppleAuthError(`APP_STORE_CONNECT_ISSUER_ID is malformed (expected a 36-char UUID; got length ${issuerId.length}).`);
   }
   if (!KEY_ID_RE.test(keyId)) {
-    throw new AppleAuthError(`${V.id} is malformed (expected 10 alphanumerics; got length ${keyId.length}).`);
+    throw new AppleAuthError(`APP_STORE_CONNECT_KEY_ID is malformed (expected 10 alphanumerics; got length ${keyId.length}).`);
   }
   let p8: string;
   try {
     p8 = Buffer.from(p8b64, "base64").toString("utf8");
   } catch {
-    throw new AppleAuthError(`${V.p8} did not base64-decode.`); // no key bytes in message
+    throw new AppleAuthError("APP_STORE_CONNECT_P8_B64 did not base64-decode."); // no key bytes in message
   }
   if (!p8.includes("BEGIN PRIVATE KEY")) {
-    throw new AppleAuthError(`Decoded ${V.p8} is not a PEM private key.`);
+    throw new AppleAuthError("Decoded APP_STORE_CONNECT_P8_B64 is not a PEM private key.");
   }
   return { issuerId, keyId, p8, vendor };
 }
@@ -100,8 +90,8 @@ const b64url = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64ur
 
 // Mint a fresh ES256 JWT. Never cached. The signature is raw R||S (ieee-p1363),
 // which is exactly the JOSE format App Store Connect expects.
-export function mintToken(kind: KeyKind = "sync"): { token: string; vendor: string } {
-  const { issuerId, keyId, p8, vendor } = creds(kind);
+export function mintToken(): { token: string; vendor: string } {
+  const { issuerId, keyId, p8, vendor } = creds();
   const now = Math.floor(Date.now() / 1000);
   const signingInput = `${b64url({ alg: "ES256", kid: keyId, typ: "JWT" })}.${b64url({
     iss: issuerId,
