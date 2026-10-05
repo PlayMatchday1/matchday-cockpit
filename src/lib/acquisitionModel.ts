@@ -83,6 +83,63 @@ export function websiteTable(input: { win: { gsc: Window; web: Window }; map: re
   return { groups: list, total, skewed: since < SKEWED_BEFORE };
 }
 
+/* ── GOOGLE RANK (Ryan, 2026-10-05) ──────────────────────────────────────────────────────────────
+ * The average Google position of a market's CITY page for "pickup soccer [city]", plus "pick up
+ * soccer [city]" and "pickup soccer near me" where Search Console has them for that page.
+ * Impression-weighted, like Avg position: Σ(position × impressions) / Σ impressions over the
+ * matching queries in the Search Console window. Lower is better. Venue and blog pages get the same
+ * figure over the same queries, for the expansion. A page with no impressions on any of them has no
+ * rank ("—"), never a zero. */
+export type QueryRow = { day: string; page_url: string; query: string; impressions: number; position_x_impressions: number };
+export type RankQuery = { query: string; position: number; impressions: number };
+export type PageRank = { rank: number | null; queries: RankQuery[] };
+
+const RANK_CITY_NAMES: Record<string, string[]> = {
+  ATX: ["austin"], HTX: ["houston"], DFW: ["dallas"], ATL: ["atlanta"], SATX: ["san antonio"],
+  STL: ["st louis", "st. louis", "saint louis"], OKC: ["okc", "oklahoma city"], ELP: ["el paso"],
+};
+/** The exact queries behind a market's rank, lower-cased. */
+export function rankQueriesFor(market: string): Set<string> {
+  const out = new Set<string>(["pickup soccer near me"]);
+  for (const c of RANK_CITY_NAMES[market] ?? []) { out.add(`pickup soccer ${c}`); out.add(`pick up soccer ${c}`); }
+  return out;
+}
+
+/** Rank per page path over one Search Console window; only mapped pages of a market are ranked. */
+export function pageRanks(rows: readonly QueryRow[], win: Window, map: readonly PageMapRow[]): Map<string, PageRank> {
+  const acc = new Map<string, Map<string, { impressions: number; px: number }>>();
+  const want = new Map<string, Set<string>>();
+  for (const r of rows) {
+    if (r.day < win.since || r.day > win.until) continue;
+    const m = mapPath(r.page_url, map);
+    if (!m?.market_key) continue;
+    const set = want.get(m.market_key) ?? (want.set(m.market_key, rankQueriesFor(m.market_key)), want.get(m.market_key)!);
+    const q = r.query.trim().toLowerCase();
+    if (!set.has(q)) continue;
+    const byQ = acc.get(r.page_url) ?? (acc.set(r.page_url, new Map()), acc.get(r.page_url)!);
+    const a = byQ.get(q) ?? { impressions: 0, px: 0 };
+    a.impressions += Number(r.impressions); a.px += Number(r.position_x_impressions);
+    byQ.set(q, a);
+  }
+  const out = new Map<string, PageRank>();
+  for (const [path, byQ] of acc) {
+    let imp = 0, px = 0; const queries: RankQuery[] = [];
+    for (const [query, a] of byQ) {
+      if (a.impressions <= 0) continue;
+      imp += a.impressions; px += a.px;
+      queries.push({ query, position: a.px / a.impressions, impressions: a.impressions });
+    }
+    out.set(path, { rank: imp > 0 ? px / imp : null, queries: queries.sort((a, b) => b.impressions - a.impressions || a.query.localeCompare(b.query)) });
+  }
+  return out;
+}
+
+/** A market's rank is its CITY page's. */
+export function marketRank(market: string, ranks: Map<string, PageRank>, map: readonly PageMapRow[]): number | null {
+  const city = map.find((m) => m.market_key === market && m.page_kind === "city");
+  return city ? ranks.get(city.pattern.toLowerCase())?.rank ?? null : null;
+}
+
 /* ── EACH SOURCE'S WINDOW, TRIMMED TO ITS OWN "DATA THROUGH" ─────────────────────────────────────
  * Ryan, 2026-10-04: Search Console runs ~2 days behind, so MTD on Oct 4 has search data for Oct 1-2
  * only, and comparing that with all of Sep 1-4 read as a 44% fall that was really two missing days.
@@ -178,8 +235,9 @@ export type MetaSide = { spendCents: number; installs: number | null; metaRegs: 
  * newPlayers keeps filling in for weeks after a recent window closes. */
 export type OursSide = { registrations: number; newPlayers: number; played7d: number; matured7d: number };
 export const emptyOurs = (): OursSide => ({ registrations: 0, newPlayers: 0, played7d: 0, matured7d: 0 });
-export type MarketSide = { meta: MetaSide | null; ours: OursSide; web: Measures };
-export type MarketRowView = { key: string; label: string; cur: MarketSide; prev: MarketSide | null; pages: PageLine[] };
+export type MarketSide = { meta: MetaSide | null; ours: OursSide; web: Measures; rank: number | null };
+export type RankedPage = PageLine & PageRank;
+export type MarketRowView = { key: string; label: string; cur: MarketSide; prev: MarketSide | null; pages: RankedPage[] };
 
 /** Group the website table's city groups and the "Other cities" fold into one Measures per market. */
 export function webByMarket(w: WebsiteTable): Map<string, { m: Measures; pages: PageLine[] }> {

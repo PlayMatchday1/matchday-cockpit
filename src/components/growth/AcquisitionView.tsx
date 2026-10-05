@@ -5,8 +5,13 @@
  *
  *   date bar · "Data through" (hover: each source) · "skewed by ads" before Jul 15
  *   four tiles: Registrants who played (with its 7-day rate), Registrations, Ad spend, Website store clicks
- *   one table, a row per market, expandable to its Meta detail and its city + venue pages
- *   Homepage and site-wide · Other pages (closed) · Sources (closed)
+ *   (Ryan, 2026-10-05, from the mock) three tables:
+ *     Meta ads             a row per market: Meta's spend / installs / registrations / cost per
+ *                          registration beside our own registrations and registrants who played
+ *     Website              a row per market (Google rank first), expandable to its pages and the exact
+ *                          rank queries; Homepage and site-wide; Other pages (collapsed); whole-site Total
+ *     Downloads by source  Apple's split, one Instagram and Facebook row; "—" until the Apple sync
+ *   page.link first opens, collapsed at the very bottom until the Apple sync replaces it
  *
  * NO EXPLANATORY TEXT ON THE PAGE. Caveats live in (i) hovers on the column that needs them. Every
  * source is compared on the days it has data for (lib/acquisitionModel.sourceWindows). Downloads
@@ -17,8 +22,8 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import styles from "./growth.module.css";
 import { fmtInt } from "./format";
 import {
-  MILESTONES, SKEWED_BEFORE, avgPosition, costPer, presetRange, sameDaysLastMonth,
-  type Group, type LinkSplit, type MarketRowView, type MarketSide, type Measures, type PageLine, type Preset,
+  MILESTONES, SKEWED_BEFORE, clickRate, costPer, presetRange, sameDaysLastMonth,
+  type Group, type LinkSplit, type MarketRowView, type Measures, type PageLine, type Preset, type RankedPage,
   type SourceKey, type SourceWindow, type WebsiteTable, type Window,
 } from "@/lib/acquisitionModel";
 
@@ -28,7 +33,25 @@ const todayChicago = () => new Date().toLocaleDateString("en-CA", { timeZone: "A
 const money = (c: number | null | undefined) => (c == null ? "—" : `$${Math.round(c / 100).toLocaleString("en-US")}`);
 const money2 = (c: number | null | undefined) => (c == null ? "—" : `$${(c / 100).toFixed(2)}`);
 
-type Totals = { spendCents: number | null; registrations: number; newPlayers: number; played7d: number; matured7d: number; web: Measures };
+type Totals = {
+  spendCents: number | null; installs: number | null; metaRegs: number | null; regSpendCents: number;
+  registrations: number; newPlayers: number; played7d: number; matured7d: number; web: Measures;
+};
+
+/* EVERY HOVER IN ONE PLACE, in the mock's wording (Ryan, 2026-10-05): one plain sentence on how the
+ * number is calculated and where it comes from. The few that depend on the range are built below. */
+const TIP = {
+  installs: "Installs Meta credits to an ad. Meta's own count.",
+  allRegs: "Every MatchDay sign-up in this market from any source, from our own database, by the city chosen at signup.",
+  rank: "Average Google position of the city page for \"pickup soccer [city]\", plus \"pick up soccer [city]\" and \"pickup soccer near me\" where Google has them for that page. 1 is the top result; lower is better.",
+  visits: "Website sessions on these pages (Google Analytics). One person on one trip to the site counts once.",
+  storeClicks: "Taps on an App Store or Google Play button on these pages. An intent to download, not a download.",
+  clickRate: "Store clicks divided by visits: how many visitors tapped an App Store or Google Play button.",
+  webDownloads: "iPhone first-time downloads Apple credits to these pages (App Store web referrer). Apple reports 1 to 2 days late. Shows — until Apple's reports arrive.",
+  iphone: "First-time iPhone downloads, from Apple App Store analytics. Re-downloads are not counted. Android comes later. Shows — until Apple's reports arrive.",
+  share: "This source as a share of all iPhone downloads in the range.",
+  cost: "What we paid for this source in the range: Meta spend on Instagram and Facebook, nothing on the others.",
+};
 
 /* TWO DEFINITIONS OF "NEW", NAMED APART (Ryan, 2026-10-05). This page counts by SIGNUP: people who
  * registered in the range and have played since. Player Activity counts by FIRST MATCH and calls it
@@ -113,7 +136,11 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
       + "\nEach source is compared on the days it has data for."
     : "";
   const metaFrom = data?.metaWindow.cur?.since;
-  const spendTip = `Meta spend. Meta's columns start Aug 1, when the ad account was rebuilt${metaFrom && metaFrom > range.since ? ` (this range: from ${short(metaFrom)})` : ""}.`;
+  const spendTip = `What Meta charged us in this date range, per market. Meta reporting starts Aug 1${metaFrom && metaFrom > range.since ? ` (this range: from ${short(metaFrom)})` : ""}.`;
+  const regSince = data?.metaWindow.regSince;
+  const regTip = `Registrations Meta credits to an ad (someone tapped an ad, installed, and signed up within 7 days). Meta's own count. Available from Sep 12${regSince ? ` (this range: from ${short(regSince)})` : ""}.`;
+  const cprTip = `Ad spend divided by Meta registrations, both from Sep 12 on, when Meta could first see registrations.`;
+  const searchTip = `Clicks from Google search results to these pages (Search Console). Google reports about 2 days late (through ${short(data?.freshness.gsc)}).`;
 
   return (
     <div className="acq" data-testid="acq">
@@ -162,20 +189,75 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
             <Tile k="Website store clicks" v={fmtInt(web?.storeClicks ?? 0)} cur={web?.storeClicks} prev={webP?.storeClicks} />
           </div>
 
-          {/* ── 3 · ONE ROW PER MARKET ──────────────────────────────────────────────────────── */}
-          <div className={`${styles.card} acq-card`} data-testid="acq-markets">
+          {/* ── 3 · META ADS ────────────────────────────────────────────────────────────────── */}
+          <section className={`${styles.card} acq-card`} data-testid="acq-meta">
+            <h2 className="acq-h2">Meta ads</h2>
             <div className={styles.tableWrap}>
               <table className={`${styles.adsTable} acq-table`}>
                 <thead><tr>
                   <th>Market</th>
                   <th>Ad spend <Info tip={spendTip} /></th>
-                  <th>Registrations</th>
+                  <th>Meta installs <Info tip={TIP.installs} /></th>
+                  <th>Meta registrations <Info tip={regTip} /></th>
+                  <th>Cost per registration <Info tip={cprTip} /></th>
+                  <th>All registrations <Info tip={TIP.allRegs} /></th>
                   <th>{PLAYED_LABEL} <Info tip={PLAYED_TIP} /></th>
-                  <th>Played within 7 days <Info tip={RATE7_TIP} /></th>
-                  <th>Website visits</th>
-                  <th>Store clicks</th>
-                  <th>Search clicks <Info tip={`Google Search runs about 2 days behind; compared on the days it has (through ${short(data.freshness.gsc)}).`} /></th>
-                  <th>Downloads <Info tip="iPhone downloads from App Store Connect. Shown once Apple's daily reports are wired in." /></th>
+                </tr></thead>
+                <tbody>
+                  {data.markets.map((r) => {
+                    const p = compareOn ? r.prev : null, m = r.cur.meta, mp = p?.meta ?? null;
+                    return (
+                      <tr key={r.key} data-testid="acq-meta-row" data-market={r.key}>
+                        <td>{r.label}</td>
+                        <Cell v={m ? money(m.spendCents) : "—"} cur={m?.spendCents} prev={mp?.spendCents} />
+                        <Cell v={m?.installs == null ? "—" : fmtInt(m.installs)} cur={m?.installs} prev={mp?.installs} />
+                        <Cell v={m?.metaRegs == null ? "—" : fmtInt(m.metaRegs)} cur={m?.metaRegs} prev={mp?.metaRegs} />
+                        <Cell v={money2(m ? costPer(m.regSpendCents, m.metaRegs) : null)} cur={m ? costPer(m.regSpendCents, m.metaRegs) : null} prev={mp ? costPer(mp.regSpendCents, mp.metaRegs) : null} invert />
+                        <Cell v={fmtInt(r.cur.ours.registrations)} cur={r.cur.ours.registrations} prev={p?.ours.registrations} />
+                        <Cell v={fmtInt(r.cur.ours.newPlayers)} cur={r.cur.ours.newPlayers} prev={p?.ours.newPlayers} />
+                      </tr>
+                    );
+                  })}
+                  {data.notAttributed.cur > 0 && (
+                    <tr data-testid="acq-notattributed">
+                      <td className="acq-muted">Spend not tied to a market</td>
+                      <Cell v={money(data.notAttributed.cur)} cur={data.notAttributed.cur} prev={compareOn ? data.notAttributed.prev : null} />
+                      <td colSpan={5} />
+                    </tr>
+                  )}
+                  <tr className={`${styles.adsTotal} acq-total`} data-testid="acq-meta-total">
+                    <td>Total</td>
+                    <Cell v={money(t.spendCents)} cur={t.spendCents} prev={tp?.spendCents} />
+                    <Cell v={t.installs == null ? "—" : fmtInt(t.installs)} cur={t.installs} prev={tp?.installs} />
+                    <Cell v={t.metaRegs == null ? "—" : fmtInt(t.metaRegs)} cur={t.metaRegs} prev={tp?.metaRegs} />
+                    <Cell v={money2(costPer(t.regSpendCents, t.metaRegs))} cur={costPer(t.regSpendCents, t.metaRegs)} prev={tp ? costPer(tp.regSpendCents, tp.metaRegs) : null} invert />
+                    <Cell v={fmtInt(t.registrations)} cur={t.registrations} prev={tp?.registrations} />
+                    <Cell v={fmtInt(t.newPlayers)} cur={t.newPlayers} prev={tp?.newPlayers} />
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            {/* THE EXCLUSION, STATED (0208). Staff, @matchday.com and fake accounts are not players, and a
+              * player who deleted their account and signed up again is one person. Leaving them out
+              * silently would make the counts drop with no visible reason. */}
+            <div className="acq-foot" data-testid="acq-excluded">
+              Not counted, signups in this range: {fmtInt(data.excluded.internal)} staff, test or fake {data.excluded.internal === 1 ? "account" : "accounts"} · {fmtInt(data.excluded.reRegistrations)} {data.excluded.reRegistrations === 1 ? "re-registration" : "re-registrations"} of an existing player.
+            </div>
+          </section>
+
+          {/* ── 4 · WEBSITE ─────────────────────────────────────────────────────────────────── */}
+          <section className={`${styles.card} acq-card`} data-testid="acq-markets">
+            <h2 className="acq-h2">Website</h2>
+            <div className={styles.tableWrap}>
+              <table className={`${styles.adsTable} acq-table`}>
+                <thead><tr>
+                  <th>Market</th>
+                  <th>Google rank <Info tip={TIP.rank} /></th>
+                  <th>Search clicks <Info tip={searchTip} /></th>
+                  <th>Visits <Info tip={TIP.visits} /></th>
+                  <th>Store clicks <Info tip={TIP.storeClicks} /></th>
+                  <th>Click rate <Info tip={TIP.clickRate} /></th>
+                  <th>Downloads <Info tip={TIP.webDownloads} /></th>
                 </tr></thead>
                 <tbody>
                   {data.markets.map((r) => {
@@ -184,68 +266,61 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                       <Fragment key={r.key}>
                         <tr className="acq-row" data-testid="acq-market" data-market={r.key} aria-expanded={isOpen} onClick={() => toggle(r.key)}>
                           <td><span className="acq-caret">{isOpen ? "▾" : "▸"}</span>{r.label}</td>
-                          <Cell v={r.cur.meta ? money(r.cur.meta.spendCents) : "—"} cur={r.cur.meta?.spendCents} prev={p?.meta?.spendCents} />
-                          <Cell v={fmtInt(r.cur.ours.registrations)} cur={r.cur.ours.registrations} prev={p?.ours.registrations} />
-                          <Cell v={fmtInt(r.cur.ours.newPlayers)} cur={r.cur.ours.newPlayers} prev={p?.ours.newPlayers} />
-                          <td data-testid="acq-rate7"><span className="acq-n">{pct7(rate7(r.cur.ours))}</span></td>
-                          <Cell v={fmtInt(r.cur.web.visits)} cur={r.cur.web.visits} prev={p?.web.visits} />
-                          <Cell v={fmtInt(r.cur.web.storeClicks)} cur={r.cur.web.storeClicks} prev={p?.web.storeClicks} />
-                          <Cell v={fmtInt(r.cur.web.searchClicks)} cur={r.cur.web.searchClicks} prev={p?.web.searchClicks} />
-                          <td className="acq-dash">—</td>
+                          <RankCell rank={r.cur.rank} prev={p ? p.rank : undefined} />
+                          <WebCells m={r.cur.web} p={p?.web ?? null} />
                         </tr>
-                        {isOpen && <MarketDetail r={r} p={p} regSince={data.metaWindow.regSince} />}
+                        {isOpen && (r.pages.length
+                          ? r.pages.map((pg) => <PageRow key={pg.path} pg={pg} />)
+                          : <tr className="acq-sub"><td colSpan={7} className="acq-muted">No website pages for this market in this range.</td></tr>)}
                       </Fragment>
                     );
                   })}
-                  {data.notAttributed.cur > 0 && (
-                    <tr data-testid="acq-notattributed">
-                      <td className="acq-muted">Spend not tied to a market</td>
-                      <Cell v={money(data.notAttributed.cur)} cur={data.notAttributed.cur} prev={compareOn ? data.notAttributed.prev : null} />
-                      <td colSpan={7} />
-                    </tr>
-                  )}
+                  <SiteRow label="Homepage and site-wide" testId="acq-site-home" open={open.has("home")} onToggle={() => toggle("home")}
+                    groups={[data.site.cur, data.cities.cur]} prevGroups={compareOn ? [data.site.prev, data.cities.prev] : []} />
+                  <SiteRow label="Other pages" testId="acq-site-other" count open={open.has("other")} onToggle={() => toggle("other")}
+                    groups={[data.otherPages.cur]} prevGroups={compareOn ? [data.otherPages.prev] : []} />
                   <tr className={`${styles.adsTotal} acq-total`} data-testid="acq-total">
                     <td>Total</td>
-                    <Cell v={money(t.spendCents)} cur={t.spendCents} prev={tp?.spendCents} />
-                    <Cell v={fmtInt(t.registrations)} cur={t.registrations} prev={tp?.registrations} />
-                    <Cell v={fmtInt(t.newPlayers)} cur={t.newPlayers} prev={tp?.newPlayers} />
-                    <td data-testid="acq-rate7-total"><span className="acq-n">{pct7(rate7(t))}</span></td>
-                    <Cell v={fmtInt(t.web.visits)} cur={t.web.visits} prev={tp?.web.visits} />
-                    <Cell v={fmtInt(t.web.storeClicks)} cur={t.web.storeClicks} prev={tp?.web.storeClicks} />
-                    <Cell v={fmtInt(t.web.searchClicks)} cur={t.web.searchClicks} prev={tp?.web.searchClicks} />
                     <td className="acq-dash">—</td>
+                    <WebCells m={t.web} p={tp?.web ?? null} />
                   </tr>
                 </tbody>
               </table>
             </div>
-          </div>
+          </section>
 
-          {/* THE EXCLUSION, STATED (0208). Staff, @matchday.com and fake accounts are not players, and a
-            * player who deleted their account and signed up again is one person. Leaving them out
-            * silently would make the counts drop with no visible reason. */}
-          <div className="acq-foot" data-testid="acq-excluded">
-            Not counted, signups in this range: {fmtInt(data.excluded.internal)} staff, test or fake {data.excluded.internal === 1 ? "account" : "accounts"} · {fmtInt(data.excluded.reRegistrations)} {data.excluded.reRegistrations === 1 ? "re-registration" : "re-registrations"} of an existing player.
-          </div>
-
-          {/* ── 4 · THE REST OF THE WEBSITE ─────────────────────────────────────────────────── */}
-          <div className={`${styles.card} acq-card`} data-testid="acq-site">
+          {/* ── 5 · DOWNLOADS BY SOURCE ─────────────────────────────────────────────────────── */}
+          <section className={`${styles.card} acq-card`} data-testid="acq-sources-table">
+            <h2 className="acq-h2">Downloads by source</h2>
             <div className={styles.tableWrap}>
-              <table className={`${styles.adsTable} acq-table acq-small`}>
-                <thead><tr><th>Website</th><th>Visits</th><th>Store clicks</th><th>Search clicks</th><th>Avg position</th></tr></thead>
+              <table className={`${styles.adsTable} acq-table`}>
+                <thead><tr>
+                  <th>Source</th>
+                  <th>iPhone downloads <Info tip={TIP.iphone} /></th>
+                  <th>Share <Info tip={TIP.share} /></th>
+                  <th>Cost <Info tip={TIP.cost} /></th>
+                </tr></thead>
                 <tbody>
-                  <SiteRow label="Homepage and site-wide" testId="acq-site-home"
-                    groups={[data.site.cur, data.cities.cur]} prevGroups={compareOn ? [data.site.prev, data.cities.prev] : []} />
-                  <SiteRow label="Other pages" testId="acq-site-other" expandable open={open.has("other")} onToggle={() => toggle("other")}
-                    groups={[data.otherPages.cur]} prevGroups={compareOn ? [data.otherPages.prev] : []} />
+                  {DL_SOURCES.map((src) => (
+                    <tr key={src.key} data-testid="acq-source-row" data-source={src.key}>
+                      <td><b>{src.label}</b> <Info tip={src.tip} /><span className="acq-srcsub">{src.sub}</span></td>
+                      <td className="acq-dash">—</td>
+                      <td className="acq-dash">—</td>
+                      <td><span className="acq-n">{src.key === "meta" ? money(t.spendCents) : "$0"}</span></td>
+                    </tr>
+                  ))}
+                  <tr className={`${styles.adsTotal} acq-total`}>
+                    <td>Total</td><td className="acq-dash">—</td><td className="acq-dash">—</td><td />
+                  </tr>
                 </tbody>
               </table>
             </div>
-          </div>
+          </section>
 
-          {/* ── 5 · SOURCES (closed) ────────────────────────────────────────────────────────── */}
+          {/* ── 6 · page.link FIRST OPENS — collapsed at the bottom until the Apple sync replaces it ── */}
           <details className="acq-sources" data-testid="acq-sources">
-            <summary>Sources</summary>
-            <Sources links={data.current.links} prev={compareOn ? data.compare?.links ?? null : null} />
+            <summary>page.link first opens</summary>
+            <LinkOpens links={data.current.links} prev={compareOn ? data.compare?.links ?? null : null} />
           </details>
         </>
       )}
@@ -264,32 +339,46 @@ function Tile({ k, v, cur, prev, tip, sub }: { k: string; v: string; cur: number
   );
 }
 
-function MarketDetail({ r, p, regSince }: { r: MarketRowView; p: MarketSide | null; regSince: string | null }) {
-  const m = r.cur.meta, mp = p?.meta ?? null;
-  const cpr = m ? costPer(m.regSpendCents, m.metaRegs) : null, cprP = mp ? costPer(mp.regSpendCents, mp.metaRegs) : null;
-  const cpnp = m && m.spendCents > 0 ? costPer(m.spendCents, m.metaPlayers) : null, cpnpP = mp && mp.spendCents > 0 ? costPer(mp.spendCents, mp.metaPlayers) : null;
-  const regTip = `Signups Meta could credit to an ad. Meta could only see registrations from Sep 12${regSince ? `, so this range counts from ${short(regSince)}` : ""}.`;
+/** Google rank: one decimal; its change is the move in positions, and DOWN is good (green). */
+function RankCell({ rank, prev }: { rank: number | null; prev?: number | null }) {
+  const d = rank != null && prev != null ? Math.round((rank - prev) * 10) / 10 : null;
   return (
-    <tr className="acq-detail" data-testid="acq-detail">
-      <td colSpan={9}>
-        {m && (
-          <div className="acq-meta">
-            <div><span className="acq-dk">Meta installs</span><span className="acq-n">{m.installs == null ? "—" : fmtInt(m.installs)}</span><Chg cur={m.installs} prev={mp?.installs} /></div>
-            <div><span className="acq-dk">Meta registrations <Info tip={regTip} /></span><span className="acq-n">{m.metaRegs == null ? "—" : fmtInt(m.metaRegs)}</span><Chg cur={m.metaRegs} prev={mp?.metaRegs} /></div>
-            <div><span className="acq-dk">Cost per registration <Info tip={regTip} /></span><span className="acq-n">{money2(cpr)}</span><Chg cur={cpr} prev={cprP} invert /></div>
-            <div><span className="acq-dk">Cost per registrant who played <Info tip="Ad spend divided by every registrant who played in the market, including ones who found us on their own. Under 10 the figure moves a lot." /></span><span className="acq-n">{money2(cpnp)}</span><Chg cur={cpnp} prev={cpnpP} invert /></div>
-          </div>
-        )}
-        {r.pages.length > 0 ? (
-          <table className="acq-pages">
-            <thead><tr><th>Page</th><th>Visits</th><th>Store clicks</th><th>Search clicks</th><th>Avg position</th></tr></thead>
-            <tbody>{r.pages.map((pg: PageLine) => (
-              <tr key={pg.path} data-testid="acq-page"><td title={pg.path}>{pg.label}</td><td>{fmtInt(pg.visits)}</td><td>{fmtInt(pg.storeClicks)}</td><td>{fmtInt(pg.searchClicks)}</td><td>{avgPosition(pg) == null ? "—" : avgPosition(pg)!.toFixed(1)}</td></tr>
-            ))}</tbody>
-          </table>
-        ) : <div className="acq-muted">No website pages for this market.</div>}
-      </td>
-    </tr>
+    <td data-testid="acq-rank">
+      <span className="acq-n">{rank == null ? "—" : rank.toFixed(1)}</span>
+      {d != null && d !== 0 && <span className={`acq-chg ${d < 0 ? "up" : "down"}`} data-testid="acq-chg">{d > 0 ? "+" : "−"}{Math.abs(d).toFixed(1)}</span>}
+    </td>
+  );
+}
+/** Search clicks · Visits · Store clicks · Click rate · Downloads — the same five on every row. */
+function WebCells({ m, p }: { m: Measures; p: Measures | null }) {
+  const cr = clickRate(m);
+  return (
+    <>
+      <Cell v={fmtInt(m.searchClicks)} cur={m.searchClicks} prev={p?.searchClicks} />
+      <Cell v={fmtInt(m.visits)} cur={m.visits} prev={p?.visits} />
+      <Cell v={fmtInt(m.storeClicks)} cur={m.storeClicks} prev={p?.storeClicks} />
+      <td><span className="acq-n">{cr == null ? "—" : `${Math.round(cr * 100)}%`}</span></td>
+      <td className="acq-dash">—</td>
+    </>
+  );
+}
+/** A page inside an expanded market: the same columns, then the exact rank queries and positions. */
+function PageRow({ pg }: { pg: RankedPage }) {
+  return (
+    <>
+      <tr className="acq-sub" data-testid="acq-page">
+        <td title={pg.path}>{pg.label}</td>
+        <RankCell rank={pg.rank} />
+        <WebCells m={pg} p={null} />
+      </tr>
+      {pg.queries.length > 0 && (
+        <tr className="acq-sub acq-qrow" data-testid="acq-page-queries">
+          <td colSpan={7}>{pg.queries.map((q) => (
+            <span key={q.query} className="acq-q">“{q.query}” <b>{q.position.toFixed(1)}</b></span>
+          ))}</td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -298,40 +387,53 @@ function sumGroups(gs: (Group | null | undefined)[]): Measures & { pages: PageLi
   for (const g of gs) { if (!g) continue; m.impressions += g.impressions; m.px += g.px; m.searchClicks += g.searchClicks; m.visits += g.visits; m.storeClicks += g.storeClicks; m.pages.push(...g.pages); }
   return m;
 }
-function SiteRow({ label, groups, prevGroups, expandable, open, onToggle, testId }: {
-  label: string; groups: (Group | null)[]; prevGroups: (Group | null)[]; expandable?: boolean; open?: boolean; onToggle?: () => void; testId: string;
+function SiteRow({ label, groups, prevGroups, count, open, onToggle, testId }: {
+  label: string; groups: (Group | null)[]; prevGroups: (Group | null)[]; count?: boolean; open: boolean; onToggle: () => void; testId: string;
 }) {
   const m = sumGroups(groups), p = prevGroups.length ? sumGroups(prevGroups) : null;
   return (
     <>
-      <tr data-testid={testId} className={expandable ? "acq-row" : undefined} onClick={expandable ? onToggle : undefined}>
-        <td>{expandable && <span className="acq-caret">{open ? "▾" : "▸"}</span>}{label}{expandable && <span className="acq-muted"> · {m.pages.length}</span>}</td>
-        <Cell v={fmtInt(m.visits)} cur={m.visits} prev={p?.visits} />
-        <Cell v={fmtInt(m.storeClicks)} cur={m.storeClicks} prev={p?.storeClicks} />
-        <Cell v={fmtInt(m.searchClicks)} cur={m.searchClicks} prev={p?.searchClicks} />
-        <Cell v={avgPosition(m) == null ? "—" : avgPosition(m)!.toFixed(1)} cur={avgPosition(m)} prev={p ? avgPosition(p) : null} invert />
+      <tr data-testid={testId} className="acq-row acq-siterow" onClick={onToggle} aria-expanded={open}>
+        <td><span className="acq-caret">{open ? "▾" : "▸"}</span>{label}{count && <span className="acq-muted"> · {m.pages.length}</span>}</td>
+        <td className="acq-dash">—</td>
+        <WebCells m={m} p={p} />
       </tr>
-      {expandable && open && m.pages.map((pg) => (
+      {open && m.pages.map((pg) => (
         <tr key={pg.path} className="acq-sub" data-testid="acq-other-page">
-          <td title={pg.path}>{pg.path}</td><td>{fmtInt(pg.visits)}</td><td>{fmtInt(pg.storeClicks)}</td><td>{fmtInt(pg.searchClicks)}</td>
-          <td>{avgPosition(pg) == null ? "—" : avgPosition(pg)!.toFixed(1)}</td>
+          <td title={pg.path}>{pg.label === pg.path ? pg.path : pg.label}</td>
+          <td className="acq-dash">—</td>
+          <WebCells m={pg} p={null} />
         </tr>
       ))}
     </>
   );
 }
 
-const SOURCES = ["Ads", "Player shares", "Instagram organic", "Website", "Google, direct", "App Store search", "App Store browse", "Other / unknown"];
+/* THE SOURCES APPLE'S DOWNLOAD REPORTS SPLIT BY, in the mock's wording. Instagram and Facebook is ONE
+ * row: Apple's app referrer cannot tell a paid ad from an organic post, so it is never split here. */
+const DL_SOURCES: { key: string; label: string; sub: string; tip: string }[] = [
+  { key: "meta", label: "Instagram and Facebook", sub: "Ads + organic",
+    tip: "Downloads where Apple says the person came from the Instagram or Facebook app (App Store \"app referrer\"). Apple cannot tell a paid ad from an organic post, so this is both. For ads alone, see Meta installs in the Meta ads table." },
+  { key: "share", label: "Player share links", sub: "In-app shares",
+    tip: "Downloads that came through a MatchDay share link (page.link). Apple counts these as web referrer page.link." },
+  { key: "web", label: "Website", sub: "playmatchday.com",
+    tip: "Downloads where Apple says the person came from playmatchday.com (web referrer). Mostly Safari on iPhone." },
+  { key: "google", label: "Google", sub: "google.com",
+    tip: "Downloads straight from a Google search result to the App Store, without visiting our site." },
+  { key: "search", label: "App Store search", sub: "Searched in the App Store",
+    tip: "People who searched inside the App Store and downloaded (Apple source type \"App Store search\")." },
+  { key: "browse", label: "App Store browse", sub: "Charts, Today tab, similar apps",
+    tip: "People who found us browsing the App Store (Apple source type \"App Store browse\")." },
+  { key: "other", label: "Other", sub: "Unknown or other",
+    tip: "Everything Apple cannot attribute or attributes elsewhere: other apps, other websites, \"unavailable\"." },
+];
+
 const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "—");
-function Sources({ links, prev }: { links: LinkSplit; prev: LinkSplit | null }) {
+function LinkOpens({ links, prev }: { links: LinkSplit; prev: LinkSplit | null }) {
   return (
     <div className="acq-src">
       <table className="acq-pages">
-        <thead><tr><th>Downloads by source</th><th>iPhone downloads <Info tip="From App Store Connect, once Apple's daily reports are wired in. page.link downloads will be split by the shares below, marked est." /></th></tr></thead>
-        <tbody>{SOURCES.map((s) => <tr key={s} data-testid="acq-source-row"><td>{s}</td><td className="acq-dash">—</td></tr>)}</tbody>
-      </table>
-      <table className="acq-pages">
-        <thead><tr><th>page.link first opens <Info tip="App first opens through page.link links, from app analytics (iPhone and Android), by where the link came from. Share links are the player-shares floor." /></th><th>Opens</th><th>Share</th></tr></thead>
+        <thead><tr><th>Source <Info tip="App first opens through page.link links, from app analytics (iPhone and Android), by where the link came from. Share links are the player-shares floor. Replaced by the Downloads by source table once Apple's reports arrive." /></th><th>Opens</th><th>Share</th></tr></thead>
         <tbody>
           {([["Share links", links.share, prev?.share], ["Instagram organic", links.ig_social, prev?.ig_social], ["Meta ads", links.paid, prev?.paid], ["Other", links.other, prev?.other]] as const).map(([k, n, pv]) => (
             <tr key={k} data-testid="acq-link-row"><td>{k}</td><td><span className="acq-n">{fmtInt(n)}</span><Chg cur={n} prev={pv} /></td><td>{pct(n, links.total)}</td></tr>
@@ -379,8 +481,17 @@ const CSS = `
 .acq .acq-sub td:first-child{padding-left:32px;font-size:.76rem;color:var(--muted,#5c7168)}
 .acq .acq-sources{margin-top:14px;background:#fff;border:1px solid var(--line,#e3e7e1);border-radius:12px;padding:10px 16px}
 .acq .acq-sources summary{cursor:pointer;font-weight:800;font-size:13px}
+.acq .acq-h2{margin:14px 16px 6px;font-size:16px;font-weight:800;color:var(--ink,#003326)}
+.acq .acq-siterow td{background:#f7f9f7}
+.acq .acq-qrow td{padding-top:0;white-space:normal}
+.acq .acq-q{display:inline-block;margin:0 14px 4px 0;font-size:.74rem;color:var(--muted,#5c7168)}
+.acq .acq-q b{color:var(--ink,#13261f);font-weight:700}
+.acq .acq-srcsub{display:block;font-size:11.5px;color:var(--muted,#5c7168);font-weight:400}
 .acq .acq-src{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;margin-top:10px}
 @media (max-width:760px){
+  .acq .acq-table th:first-child,.acq .acq-table td:first-child{position:sticky;left:0;z-index:1;background:#fff;box-shadow:1px 0 0 #eef1ec}
+  .acq .acq-table .acq-total td:first-child,.acq .acq-table .acq-siterow td:first-child{background:#f1f4f1}
+  .acq .acq-table .acq-qrow td:first-child{position:static}
   .acq .acq-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
   .acq .acq-through{margin-left:0}
   .acq .acq-tv{font-size:22px}

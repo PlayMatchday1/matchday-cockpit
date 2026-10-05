@@ -3,6 +3,7 @@
 //
 //   gsc-pages  Search Console, https://www.playmatchday.com/, clicks / impressions / position per
 //              page per day                                              → acq_gsc_page_daily
+//              and per page × "soccer" query per day (0209)              → acq_gsc_query_daily
 //   ga4-web    GA4 property 485975225: sessions / users / views per page per day → acq_web_page_daily
 //              and store clicks per page per day                         → acq_web_store_click_daily
 //   ga4-app    GA4 property 349835849 (Firebase matchday-sc): first_open and dynamic_link_first_open
@@ -83,7 +84,7 @@ async function upsert(sb: SupabaseClient, table: string, rows: Record<string, un
 /* ── SEARCH CONSOLE ───────────────────────────────────────────────────────────────────────────── */
 type GscRow = { keys: string[]; clicks: number; impressions: number; position: number };
 
-export async function syncGsc(sb: SupabaseClient, token: string, since: string, until: string): Promise<{ rows: number; days: number }> {
+export async function syncGsc(sb: SupabaseClient, token: string, since: string, until: string): Promise<{ rows: number; days: number; queryRows: number }> {
   const url = `https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(GSC_SITE)}/searchAnalytics/query`;
   // Several full URLs can normalise to one path (a query string, a missing slash); they are summed.
   const acc = new Map<string, { day: string; page_url: string; clicks: number; impressions: number; px: number }>();
@@ -105,7 +106,32 @@ export async function syncGsc(sb: SupabaseClient, token: string, since: string, 
     position_x_impressions: Math.round(a.px * 100) / 100, synced_at: new Date().toISOString(),
   }));
   await upsert(sb, "acq_gsc_page_daily", out, "day,page_url");
-  return { rows: out.length, days: new Set(out.map((r) => r.day)).size };
+
+  /* BY QUERY TOO (0209), for the Website table's Google rank. Only queries containing "soccer" —
+   * Search Console filters server-side — so the table stays small; the page picks the exact rank
+   * queries ("pickup soccer [city]" …) out of these. Same normalised path, same summing. */
+  const qacc = new Map<string, { day: string; page_url: string; query: string; clicks: number; impressions: number; px: number }>();
+  for (let startRow = 0; ; startRow += 25000) {
+    const j = await post<{ rows?: GscRow[] }>(token, url, {
+      startDate: since, endDate: until, dimensions: ["date", "page", "query"], rowLimit: 25000, startRow, dataState: "final",
+      dimensionFilterGroups: [{ filters: [{ dimension: "query", operator: "contains", expression: "soccer" }] }],
+    });
+    const rows = j.rows ?? [];
+    for (const r of rows) {
+      const day = r.keys[0], page = normPath(r.keys[1]), query = r.keys[2].trim().toLowerCase();
+      const k = `${day}|${page}|${query}`;
+      const a = qacc.get(k) ?? { day, page_url: page, query, clicks: 0, impressions: 0, px: 0 };
+      a.clicks += r.clicks; a.impressions += r.impressions; a.px += r.position * r.impressions;
+      qacc.set(k, a);
+    }
+    if (rows.length < 25000) break;
+  }
+  const qout = [...qacc.values()].map((a) => ({
+    day: a.day, page_url: a.page_url, query: a.query, clicks: Math.round(a.clicks), impressions: Math.round(a.impressions),
+    position_x_impressions: Math.round(a.px * 100) / 100, synced_at: new Date().toISOString(),
+  }));
+  await upsert(sb, "acq_gsc_query_daily", qout, "day,page_url,query");
+  return { rows: out.length, days: new Set(out.map((r) => r.day)).size, queryRows: qout.length };
 }
 
 /* ── GA4 ──────────────────────────────────────────────────────────────────────────────────────── */

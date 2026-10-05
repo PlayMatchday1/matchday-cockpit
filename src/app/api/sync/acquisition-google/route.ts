@@ -1,6 +1,6 @@
 // POST|GET /api/sync/acquisition-google — the Acquisition page's three Google syncs, daily.
 //
-//   gsc-pages  Search Console by page and day       → acq_gsc_page_daily
+//   gsc-pages  Search Console by page and day       → acq_gsc_page_daily (+ by "soccer" query → acq_gsc_query_daily)
 //   ga4-web    website traffic and store clicks      → acq_web_page_daily, acq_web_store_click_daily
 //   ga4-app    app first opens by platform / source  → acq_app_event_daily
 //
@@ -67,7 +67,7 @@ export async function POST(req: Request) {
   catch (e) { return Response.json({ error: e instanceof Error ? e.message : "Google token failed" }, { status: 500 }); }
 
   const steps: [SourceName, () => Promise<Record<string, number>>, (r: Record<string, number>) => number][] = [
-    ["gsc-pages", () => syncGsc(sb, gToken, since, until), (r) => r.rows],
+    ["gsc-pages", () => syncGsc(sb, gToken, since, until), (r) => r.rows + r.queryRows],
     ["ga4-web", () => syncGa4Web(sb, gToken, since, until), (r) => r.pageRows + r.clickRows],
     ["ga4-app", () => syncGa4App(sb, gToken, since, until), (r) => r.rows],
   ];

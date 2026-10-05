@@ -11,9 +11,9 @@
 import { authenticateLifecycle } from "@/lib/lifecycleAuth";
 import { selectAll } from "@/lib/supabasePagination";
 import {
-  LIVE_MARKETS, OTHER_CITIES, addMeasures, emptyMeasures, emptyOurs, linkSplit, marketLabel, marketOfDeclared, sameDaysLastMonth, sourceWindows,
-  webByMarket, websiteTable, type AppRow, type ClickRow, type GscRow, type MarketRowView, type MarketSide, type MetaSide,
-  type OursSide, type PageMapRow, type WebRow, type Window,
+  LIVE_MARKETS, OTHER_CITIES, addMeasures, emptyMeasures, emptyOurs, linkSplit, marketLabel, marketOfDeclared, marketRank, pageRanks,
+  sameDaysLastMonth, sourceWindows, webByMarket, websiteTable, type AppRow, type ClickRow, type GscRow, type MarketRowView, type MarketSide,
+  type MetaSide, type OursSide, type PageMapRow, type PageRank, type QueryRow, type WebRow, type Window,
 } from "@/lib/acquisitionModel";
 import { buildAdsOverview, META_REG_FROM, type AcqRow, type DimRow, type FlatRow, type GeoRow } from "@/lib/adsOverview";
 import { META_ADSET_FLOOR_YMD } from "@/lib/metaAdSpend";
@@ -60,7 +60,7 @@ export async function GET(req: Request) {
     const metaFrom = [metaCur?.since, metaCmp?.since].filter(Boolean).sort()[0] as string | undefined;
     const oursFrom = oursCmp && oursCmp.since < since ? oursCmp.since : since;
     const none = <T,>() => Promise.resolve([] as T[]);
-    const [map, gsc, web, clicks, app, geo, flat, dim, acq] = await Promise.all([
+    const [map, gsc, web, clicks, app, geo, flat, dim, acq, gscQ] = await Promise.all([
       selectAll<PageMapRow>(() => sb.from("acq_page_map").select("match_kind, pattern, market_key, page_kind, label, sort_order").order("id")),
       selectAll<GscRow>(() => sb.from("acq_gsc_page_daily").select("day, page_url, clicks, impressions, position_x_impressions").gte("day", from).lte("day", to).order("day").order("page_url")),
       selectAll<WebRow>(() => sb.from("acq_web_page_daily").select("day, page_path, sessions").gte("day", from).lte("day", to).order("day").order("page_path")),
@@ -70,7 +70,17 @@ export async function GET(req: Request) {
       metaFrom ? selectAll<FlatRow>(() => sb.from("fin_meta_adset_daily").select("spend_date, adset_id, spend_cents, installs, clicks, registrations").gte("spend_date", metaFrom).lte("spend_date", until).order("spend_date")) : none<FlatRow>(),
       selectAll<DimRow>(() => sb.from("fin_meta_adset").select("adset_id, adset_name, campaign_name, market_key, market_raw, market_confidence, optimization_goal, attribution_spec").order("adset_id")),
       selectAll<AcqRow>(() => sb.from("growth_acquisition_daily").select("signup_date, declared_city_raw, registrations, became_players, played_within_7d, played_within_30d").gte("signup_date", oursFrom).lte("signup_date", until).order("signup_date")),
+      // GOOGLE RANK (0209): only the "pickup soccer …" / "pick up soccer …" queries are read; the
+      // model picks each market's exact set out of them (lib/acquisitionModel.rankQueriesFor).
+      /* BEFORE 0209 IS APPLIED the table does not exist: that ONE read falls back to no ranks
+       * ("—"), because code can deploy before a migration does. Any other failure still throws. */
+      selectAll<QueryRow>(() => sb.from("acq_gsc_query_daily").select("day, page_url, query, impressions, position_x_impressions")
+        .gte("day", from).lte("day", to).or("query.ilike.pickup soccer%,query.ilike.pick up soccer%")
+        .order("day").order("page_url").order("query"))
+        .catch((e: unknown) => { if (/acq_gsc_query_daily/.test(String((e as Error)?.message)) && /schema cache|does not exist/.test(String((e as Error)?.message))) return [] as QueryRow[]; throw e; }),
     ]);
+    const ranksC = pageRanks(gscQ, windows.gsc.cur, map);
+    const ranksP = windows.gsc.cmp ? pageRanks(gscQ, windows.gsc.cmp, map) : new Map<string, PageRank>();
 
     /* ── META, PER MARKET, OVER ONE WINDOW ─────────────────────────────────────────────────────
      * Spend / installs / cost per new player over the window; Meta's registrations only from Sep 12
@@ -143,21 +153,30 @@ export async function GET(req: Request) {
       meta: metaWin && m ? m.by.get(k) ?? (k === OTHER_CITIES ? null : { spendCents: 0, installs: null, metaRegs: null, regSpendCents: 0, metaPlayers: 0 }) : null,
       ours: o.get(k) ?? emptyOurs(),
       web: w.get(k)?.m ?? emptyMeasures(),
+      rank: null,
     });
     const markets: MarketRowView[] = keys.map((k) => ({
-      key: k, label: marketLabel(k), pages: wC.get(k)?.pages ?? [],
-      cur: side(k, mC, metaCur, oC, wC),
-      prev: compare && oP && wP ? side(k, mP, metaCmp, oP, wP) : null,
+      key: k, label: marketLabel(k),
+      pages: (wC.get(k)?.pages ?? []).map((p) => ({ ...p, ...(ranksC.get(p.path) ?? { rank: null, queries: [] }) })),
+      cur: { ...side(k, mC, metaCur, oC, wC), rank: k === OTHER_CITIES ? null : marketRank(k, ranksC, map) },
+      prev: compare && oP && wP ? { ...side(k, mP, metaCmp, oP, wP), rank: k === OTHER_CITIES ? null : marketRank(k, ranksP, map) } : null,
     })).filter((r) => LIVE_MARKETS.includes(r.key as never) || r.cur.ours.registrations > 0 || r.cur.web.visits > 0);
     const sum = (sideOf: (r: MarketRowView) => MarketSide | null, notAttr: number) => {
       const web = emptyMeasures(); let spend = notAttr, anyMeta = false; const ours = emptyOurs();
+      /* META'S OWN COUNTS, TOTALLED for the Meta ads table. null stays null — a market Meta reported
+       * nothing for adds nothing, and a column with no market reporting reads "—", not 0. */
+      let installs: number | null = null, metaRegs: number | null = null, regSpendCents = 0;
       for (const r of markets) {
         const s2 = sideOf(r); if (!s2) continue; addMeasures(web, s2.web);
         ours.registrations += s2.ours.registrations; ours.newPlayers += s2.ours.newPlayers;
         ours.played7d += s2.ours.played7d; ours.matured7d += s2.ours.matured7d;
-        if (s2.meta) { anyMeta = true; spend += s2.meta.spendCents; }
+        if (s2.meta) {
+          anyMeta = true; spend += s2.meta.spendCents; regSpendCents += s2.meta.regSpendCents;
+          if (s2.meta.installs != null) installs = (installs ?? 0) + s2.meta.installs;
+          if (s2.meta.metaRegs != null) metaRegs = (metaRegs ?? 0) + s2.meta.metaRegs;
+        }
       }
-      return { spendCents: anyMeta || notAttr ? spend : null, ...ours, web };
+      return { spendCents: anyMeta || notAttr ? spend : null, installs, metaRegs, regSpendCents, ...ours, web };
     };
     /* THE TOTAL ROW'S WEBSITE COLUMNS ARE THE WHOLE SITE (Ryan, 2026-10-04): the markets plus
      * Homepage and site-wide plus Other pages, so they match the Website store clicks tile. */
