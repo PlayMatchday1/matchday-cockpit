@@ -567,6 +567,10 @@ export type FetchJoinedOpts = {
   // ILIKE pattern on mdapi_matches.field_title. e.g. "%PRUMC%"
   // for partner views.
   fieldLike?: string;
+  /* EXACT mdapi field ids (Ryan, 2026-10-05). Partner dashboards are scoped by the venue's LINKED
+   * fields (fin_venue_fields), not by name: the name "Hattrick" also matched Tomball's "The
+   * Hattrick T.". An empty list matches nothing — a venue with no linked field has no matches. */
+  fieldIds?: number[];
   // Exact match on mdapi_matches.city_identifier (e.g. "ATX").
   // Drives the per-city detail-page payload reduction — Austin
   // alone is ~40% of network volume; STL/ATL are ~5% each. With
@@ -636,6 +640,7 @@ export async function fetchJoinedMatchPlayers(
       q = q.lte("start_date", to);
     }
     if (opts.fieldLike) q = q.ilike("field_title", opts.fieldLike);
+    if (opts.fieldIds) q = q.in("field_id", opts.fieldIds.length ? opts.fieldIds : [-1]);
     if (opts.cityIdentifier) q = q.eq("city_identifier", opts.cityIdentifier);
     return q.order("api_id");
   });
@@ -649,6 +654,7 @@ export async function fetchJoinedMatchPlayers(
     opts.fromDate ||
     opts.toDate ||
     opts.fieldLike ||
+    opts.fieldIds ||
     opts.cityIdentifier
   );
   const players: PlayerSelect[] = [];

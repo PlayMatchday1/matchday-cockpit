@@ -69,7 +69,10 @@ function countSeats(rows: PartnerRegRow[]): { matches: number; spots: number; da
   const byUserMatch = new Map<string, PartnerRegRow[]>();
   for (const r of showed) { const k = `${r.user_id}|${r.match_start}`; const a = byUserMatch.get(k) ?? []; a.push(r); byUserMatch.set(k, a); }
   const daily = [...byUserMatch.values()].filter((v) => v[0].payment_type === "DAILY PAID").length;
-  const matches = new Set(wrows.map((r) => r.match_start)).size;
+  /* DISTINCT MATCHES, NOT DISTINCT START TIMES (Ryan, 2026-10-05). Keyed on the start time, two
+   * matches kicking off together on different fields counted as one — Tomball's 8pm matches folded
+   * into Lakeline's. The match id is the identity; the start time is the fallback for a row without. */
+  const matches = new Set(wrows.map((r) => (r.match_api_id != null ? `id:${r.match_api_id}` : `ts:${r.match_start}`))).size;
   return { matches, spots, daily, guests };
 }
 function rentalsIn(extra: PartnerExtraRevRow[], start: string, end: string): RentalLine[] {

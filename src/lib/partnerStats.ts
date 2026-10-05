@@ -3,6 +3,7 @@
 // numbers reconcile between the old export-to-HTML flow and the live
 // partner page.
 
+import { includedLinks } from "./venueLinkFilter";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { isRentalModel, type PayoutModel, type RentalProfitShareParams } from "./partnerPayoutModel";
 import {
@@ -649,9 +650,18 @@ export async function fetchPartnerRows(
   }
   const memberSpotRateCents = await currentMatchPriceCents(supabase, venueId);
 
+  /* ── THE VENUE'S OWN LINKED FIELDS, NOT ITS NAME (Ryan, 2026-10-05) ─────────────────────────
+   * Matches used to be found by ILIKE '%<venue_name>%' on field_title. Venue 3 "Hattrick" matched
+   * Tomball's "The Hattrick T." too, so the Lakeline dashboard counted Tomball's matches from Aug 14;
+   * and venue 52 "Hattrick T. - Tomball" matched no field title at all. A venue's matches are now its
+   * fin_venue_fields links — field 1024 for Lakeline, 1288 for Tomball — the mapping Finance already
+   * uses (buildPartnerPayoutsByVenueMonth), minus links excluded from the venue (0155). */
+  const { data: linkRows, error: linkErr } = await supabase.from("fin_venue_fields").select("*").eq("fin_venue_id", venueId);
+  if (linkErr) throw new Error(`Venue field lookup failed: ${linkErr.message}`);
+  const fieldIds = includedLinks(linkRows as never[]).map((l: { mdapi_field_id: unknown }) => Number(l.mdapi_field_id)).filter(Number.isFinite);
+
   // Read this venue's matches+players from mdapi_matches /
-  // mdapi_match_players via the shared lib. ILIKE filter on
-  // mdapi_matches.field_title mirrors the CSV-era venue match.
+  // mdapi_match_players via the shared lib, scoped to its linked fields.
   //
   // Subs map is passed so paid_status=FREE rows split into real
   // MEMBER vs FREE_NON_MEMBER (first-match-free, guest passes,
@@ -660,14 +670,14 @@ export async function fetchPartnerRows(
   const membershipWindows = await loadMembershipWindowsByUserId(supabase);
   const out: PartnerRegRow[] = await fetchLegacyMatchRegistrations(
     supabase,
-    { fieldLike: `%${venue.venue_name}%` },
+    { fieldIds },
     membershipWindows,
   );
 
   /* THE MATCH LIST — one row per match, for the per-match fee model.
    *
-   * Same ILIKE-on-field_title filter as the registrations above, so the two describe the same
-   * venue by construction rather than by a second mapping that could drift.
+   * Same linked-field filter as the registrations above, so the two describe the same venue by
+   * construction rather than by a second mapping that could drift.
    *
    * `played` COMES FROM end_date_utc, the true instant. start_date/end_date are LOCAL WALL CLOCK
    * wearing a Z: new Date() re-shifts them and lands hours off, which under a per-match fee would
@@ -677,7 +687,7 @@ export async function fetchPartnerRows(
   const { data: mrows, error: mErr } = await supabase
     .from("mdapi_matches")
     .select("api_id, start_date, end_date_utc, is_cancelled, deleted_at")
-    .ilike("field_title", `%${venue.venue_name}%`);
+    .in("field_id", fieldIds.length ? fieldIds : [-1]);
   if (mErr) throw new Error(`Match list fetch failed: ${mErr.message}`);
   const nowMs = Date.now();
   const matches: PartnerMatchRow[] = (mrows ?? [])
