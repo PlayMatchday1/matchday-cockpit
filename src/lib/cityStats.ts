@@ -374,7 +374,11 @@ export function getCancelHeatmap(
   city: string,
   weeksBack = 8,
   now: Date = new Date(),
-  options: { includeAllSlots?: boolean } = {},
+  /* `scheduled` (Ryan, 2026-10-05): every match in the window, empty ones included. Given it, a
+   * CANCELLED match with no booking rows still makes its slot-week — booked 0 — instead of
+   * vanishing (San Antonio STAR Thu/Fri Oct 1–2, 8:30pm, cancelled at 0/20). Played weeks and every
+   * booked count still come from the rows. Without it, the row-only behaviour stands. */
+  options: { includeAllSlots?: boolean; scheduled?: readonly ScheduledMatch[] } = {},
 ): { weeks: string[]; slots: SlotRow[] } {
   const { currentMonday, earliestMonday, windowEnd } = windowBounds(weeksBack, now);
 
@@ -396,6 +400,7 @@ export function getCancelHeatmap(
     weeks: Map<string, MatchRow[]>;
   };
   const slots = new Map<string, Slot>();
+  const emptyCancelled = new Set<string>();
 
   for (const row of rows) {
     if (row.city !== city) continue;
@@ -426,12 +431,29 @@ export function getCancelHeatmap(
     wkRows.push(row);
   }
 
+  // THE EMPTY CANCELLATIONS, FROM THE SCHEDULE. Only where the rows left no trace of that slot-week.
+  for (const m of options.scheduled ?? []) {
+    if (!m.matchCanceled || m.city !== city || !m.field) continue;
+    if (m.matchStart < earliestMonday || m.matchStart >= windowEnd) continue;
+    const dIdx = dowIdx(m.matchStart);
+    const time = formatTime(m.matchStart);
+    const slotKey = `${m.field}|${dIdx}|${time}`;
+    const wk = weekKey(m.matchStart);
+    let slot = slots.get(slotKey);
+    if (!slot) {
+      slot = { field: m.field, dow: DOW_ABBR[dIdx], dowIdx: dIdx, time, weeks: new Map() };
+      slots.set(slotKey, slot);
+    }
+    if (!slot.weeks.has(wk)) slot.weeks.set(wk, []);   // a cancelled week with no booking rows
+    emptyCancelled.add(`${slotKey}|${wk}`);
+  }
+
   const result: SlotRow[] = [];
-  for (const slot of slots.values()) {
+  for (const [slotKey, slot] of slots) {
     const weeksOut: Record<string, SlotWeekData> = {};
     let hasCancelled = false;
     for (const [wk, wkRows] of slot.weeks) {
-      const cancelled = wkRows.some((r) => r.matchCanceled);
+      const cancelled = wkRows.some((r) => r.matchCanceled) || (wkRows.length === 0 && emptyCancelled.has(`${slotKey}|${wk}`));
       if (cancelled) {
         hasCancelled = true;
         weeksOut[wk] = { cancelled: true, spots: wkRows.length, players: 0 };

@@ -14,7 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 import { usePhone } from "@/lib/usePhone";
 import CancelRanking, { type RankTone } from "@/components/CancelRanking";
 import { supabase } from "@/lib/supabase";
-import { useMatchWindowData } from "@/lib/useMatchData";
+import { useMatchWindowData, type ScheduledMatch } from "@/lib/useMatchData";
 import { getCancelHeatmap, type SlotRow } from "@/lib/cityStats";
 import { useWeeklyDemand, type DemandWeek } from "@/lib/slateDemand";
 import { fieldCodeMap, fieldCode } from "@/lib/slateFieldCodes";
@@ -195,7 +195,7 @@ export default function SlateReviewView() {
       <SlateWeekSchedule city={city} weekStart={weekStart} onWeekStartChange={setWeekStart} />
 
       {/* cancel patterns */}
-      <CancelCard rows={rows} city={city} fields={fields} />
+      <CancelCard rows={rows} scheduled={scheduledMatches} city={city} fields={fields} />
 
       {/* match P&L by field */}
       <SlateFieldPnL city={city} />
@@ -470,12 +470,13 @@ function CaptureBar({ city, fields, weekStart }: { city: string; fields: string[
 }
 
 // ── cancel patterns (Patterns view only; Numbers view removed) ────────────────
-function CancelCard({ rows, city, fields }: { rows: Parameters<typeof getCancelHeatmap>[0]; city: string; fields: string[] }) {
+function CancelCard({ rows, scheduled, city, fields }: { rows: Parameters<typeof getCancelHeatmap>[0]; scheduled: ScheduledMatch[]; city: string; fields: string[] }) {
   // Single source of chip labels — the curated hand-chosen shorthand, shared by
   // the Patterns view and the footer key. NOT title initials.
   const codes = useMemo(() => fieldCodeMap(fields), [fields]);
   // Cancelled-only heatmap over the last 4 completed weeks (Patterns' window).
-  const hmCx = useMemo(() => getCancelHeatmap(rows, city, 8, new Date(), { includeAllSlots: false }), [rows, city]);
+  // THE SCHEDULE TOO, so a cancellation with 0 bookings shows (STAR Thu/Fri Oct 1–2, 8:30pm).
+  const hmCx = useMemo(() => getCancelHeatmap(rows, city, 8, new Date(), { includeAllSlots: false, scheduled }), [rows, scheduled, city]);
 
   return (
     <Card>
