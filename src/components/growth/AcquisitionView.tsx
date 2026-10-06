@@ -64,6 +64,10 @@ const TIP = {
   browse: "People who found us browsing the App Store.",
   other: "Downloads Apple can't place, including small numbers it hides for privacy.",
 };
+/* THE EXCLUSION (0208), stated in the All registrations tooltip (Ryan, 2026-10-06; it replaced the
+ * "Not counted …" line under the Meta table). Re-registrations are still left out of every count but
+ * are not mentioned on the page. */
+const allRegsTip = (internal: number) => `${TIP.allRegs} Staff, test and fake accounts are left out (${fmtInt(internal)} this period).`;
 const totalTip = (outsideUS: number, poland: number) =>
   "All first-time iPhone downloads." + (outsideUS > 0 ? ` Includes ${fmtInt(outsideUS)} from outside the US (${fmtInt(poland)} from Poland, the licensee).` : "");
 const FIRST_LABEL = "First-time players";
@@ -255,7 +259,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
           {/* ── 2 · FOUR TILES ──────────────────────────────────────────────────────────────── */}
           <div className="acq-tiles" data-testid="acq-tiles">
             <Tile k={FIRST_LABEL} tip={TIP.firstTime} v={fmtInt(t.firstTime)} cur={t.firstTime} prev={tp?.firstTime} />
-            <Tile k="Registrations" tip={TIP.allRegs} v={fmtInt(t.registrations)} cur={t.registrations} prev={tp?.registrations} />
+            <Tile k="Registrations" tip={allRegsTip(data.excluded.internal)} v={fmtInt(t.registrations)} cur={t.registrations} prev={tp?.registrations} />
             <Tile k="Ad spend" v={money(t.spendCents)} cur={t.spendCents} prev={tp?.spendCents} />
             <Tile k="Website store clicks" v={fmtInt(web?.storeClicks ?? 0)} cur={web?.storeClicks} prev={webP?.storeClicks} />
           </div>
@@ -271,7 +275,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                   <th>Meta installs <Info tip={TIP.installs} /></th>
                   <th>Meta registrations <Info tip={TIP.metaRegs} /></th>
                   <th>Cost per registration <Info tip={TIP.cpr} /></th>
-                  <th>All registrations <Info tip={TIP.allRegs} /></th>
+                  <th>All registrations <Info tip={allRegsTip(data.excluded.internal)} /></th>
                   <th>{FIRST_LABEL} <Info tip={TIP.firstTime} /></th>
                 </tr></thead>
                 <tbody>
@@ -307,12 +311,6 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                   </tr>
                 </tbody>
               </table>
-            </div>
-            {/* THE EXCLUSION, STATED (0208). Staff, @matchday.com and fake accounts are not players, and a
-              * player who deleted their account and signed up again is one person. Leaving them out
-              * silently would make the counts drop with no visible reason. */}
-            <div className="acq-foot" data-testid="acq-excluded">
-              Not counted, signups in this range: {fmtInt(data.excluded.internal)} staff, test or fake {data.excluded.internal === 1 ? "account" : "accounts"} · {fmtInt(data.excluded.reRegistrations)} {data.excluded.reRegistrations === 1 ? "re-registration" : "re-registrations"} of an existing player.
             </div>
           </section>
 
