@@ -22,11 +22,12 @@ export type AscReport = "standard" | "detailed";
 const REPORT_NAMES: Record<string, AscReport> = { "App Downloads Standard": "standard", "App Downloads Detailed": "detailed" };
 
 export type AscInstance = { id: string; request: AscRequestKind; report: AscReport; granularity: string; processingDate: string };
-/* One stored row: the file's Counts summed over the columns the page uses. Page Type, device and
- * version are summed away. */
+/* One stored row: the file's Counts summed over the columns the page uses. Device and version are
+ * summed away. Page Type and Page Title (0211) are kept so a custom product page ("Meta ads …") can be
+ * read; before 0211 is applied they are summed away too (`withPage` false). */
 export type AscRow = {
   day: string; report: AscReport; download_type: string; source_type: string; source_info: string;
-  campaign: string; territory: string; counts: number;
+  campaign: string; territory: string; counts: number; page_type?: string; page_title?: string;
 };
 
 type Res = { id: string; attributes?: Record<string, unknown> };
@@ -84,10 +85,10 @@ export async function readAscInstance(token: string, instanceId: string): Promis
 }
 
 /** Sum a file's Counts over (day, download type, source type, source info, campaign, territory). */
-export function aggregateAsc(report: AscReport, header: string[], rows: string[][]): AscRow[] {
+export function aggregateAsc(report: AscReport, header: string[], rows: string[][], withPage = false): AscRow[] {
   const col = (name: string) => header.findIndex((h) => h.toLowerCase() === name.toLowerCase());
   const iDate = col("Date"), iType = col("Download Type"), iSrc = col("Source Type"), iInfo = col("Source Info"),
-    iCamp = col("Campaign"), iTerr = col("Territory"), iCount = col("Counts");
+    iCamp = col("Campaign"), iTerr = col("Territory"), iCount = col("Counts"), iPage = col("Page Type"), iTitle = col("Page Title");
   const missing = [["Date", iDate], ["Download Type", iType], ["Source Type", iSrc], ["Territory", iTerr], ["Counts", iCount]].filter(([, i]) => i === -1).map(([n]) => n);
   if (missing.length) throw new Error(`App Downloads ${report}: missing column(s) ${missing.join(", ")}`);
   const by = new Map<string, AscRow>();
@@ -100,8 +101,9 @@ export function aggregateAsc(report: AscReport, header: string[], rows: string[]
       day, report, download_type: (r[iType] ?? "").trim(), source_type: (r[iSrc] ?? "").trim(),
       source_info: iInfo >= 0 ? (r[iInfo] ?? "").trim() : "", campaign: iCamp >= 0 ? (r[iCamp] ?? "").trim() : "",
       territory: (r[iTerr] ?? "").trim(), counts: 0,
+      ...(withPage ? { page_type: iPage >= 0 ? (r[iPage] ?? "").trim() : "", page_title: iTitle >= 0 ? (r[iTitle] ?? "").trim() : "" } : {}),
     };
-    const k = [row.day, row.download_type, row.source_type, row.source_info, row.campaign, row.territory].join("\u0001");
+    const k = [row.day, row.download_type, row.source_type, row.source_info, row.campaign, row.territory, row.page_type ?? "", row.page_title ?? ""].join("\u0001");
     const e = by.get(k) ?? (by.set(k, row), row);
     e.counts += n;
   }
@@ -109,26 +111,42 @@ export function aggregateAsc(report: AscReport, header: string[], rows: string[]
 }
 
 /* ── THE SYNC (source 'asc-analytics', run after the Google steps in /api/sync/acquisition-google) ──
- * Every App Downloads instance Apple lists that is not yet in acq_asc_instance is read and stored,
- * oldest processing date first. A file REPLACES the days it covers for its report: the audit
+ * Every DAILY App Downloads instance Apple lists that is not yet in acq_asc_instance is read and
+ * stored, oldest processing date first. A file REPLACES the days it covers for its report: the audit
  * (2026-10-06) found the daily file restating Oct 4 and Oct 5 exactly as the history file had them
  * (157 / 251 and 134 / 193), so a later file is the newer statement of a whole day, never an
  * increment. The instance row is written LAST, so a run that dies midway re-reads that file next
  * time. Days before `floor` (Jul 1, 2026, the page's floor) are not stored.
  *
- * The one-time Detailed history does not exist yet; when Apple delivers it, it is a new instance
- * like any other and the next run stores it from Jul 1 — nothing to switch on. */
+ * DAILY ONLY (2026-10-06). The one-time Detailed history arrived as a DAILY and a WEEKLY instance
+ * (deep probe: 11,050 and 11,275 rows, both processed 2026-10-05). A WEEKLY file's Date is the week's
+ * first day, so storing it would replace that day with a whole week. Weekly and monthly are skipped.
+ *
+ * A NEWER FILE WINS A DAY. A file never replaces a day that a stored file of the same report with a
+ * LATER processing date already covers (the Detailed history, processed Oct 5, arrives after the
+ * Oct 6 daily file was stored).
+ *
+ * PAGE TYPE AND TITLE (0211) are stored once the columns exist; until then rows are written without
+ * them, as before. 0211 clears acq_asc_instance so every file is read again with them. */
 type Sb = import("@supabase/supabase-js").SupabaseClient;
 export async function syncAscDownloads(sb: Sb, token: string, floor: string): Promise<{ instances: number; stored: number; rows: number; files: string[] }> {
-  const all = await listAscInstances(token);
-  const { data: done, error } = await sb.from("acq_asc_instance").select("instance_id");
+  const all = (await listAscInstances(token)).filter((i) => i.granularity === "DAILY");
+  const { data: done, error } = await sb.from("acq_asc_instance").select("instance_id, report, processing_date, first_day, last_day");
   if (error) throw new Error(`acq_asc_instance: ${error.message}`);
-  const seen = new Set((done ?? []).map((d) => d.instance_id as string));
+  type Done = { instance_id: string; report: string; processing_date: string; first_day: string | null; last_day: string | null };
+  const stored0 = (done ?? []) as Done[];
+  const seen = new Set(stored0.map((d) => d.instance_id));
+  /* Whether 0211 is applied: a column that does not exist yet fails this read. */
+  const probe = await sb.from("acq_asc_downloads_daily").select("page_type").limit(1);
+  const withPage = !probe.error;
+  if (probe.error && !/page_type/.test(probe.error.message)) throw new Error(`acq_asc_downloads_daily: ${probe.error.message}`);
   let stored = 0, rowsOut = 0; const files: string[] = [];
   for (const inst of all) {
     if (seen.has(inst.id)) continue;
+    const newer = stored0.filter((d) => d.report === inst.report && d.processing_date > inst.processingDate && d.first_day && d.last_day);
+    const coveredByNewer = (day: string) => newer.some((d) => day >= d.first_day! && day <= d.last_day!);
     const f = await readAscInstance(token, inst.id);
-    const rows = aggregateAsc(inst.report, f.header, f.rows).filter((r) => r.day >= floor);
+    const rows = aggregateAsc(inst.report, f.header, f.rows, withPage).filter((r) => r.day >= floor && !coveredByNewer(r.day));
     const days = [...new Set(rows.map((r) => r.day))].sort();
     for (let i = 0; i < days.length; i += 100) {
       const { error: de } = await sb.from("acq_asc_downloads_daily").delete().eq("report", inst.report).in("day", days.slice(i, i + 100));
@@ -138,13 +156,15 @@ export async function syncAscDownloads(sb: Sb, token: string, floor: string): Pr
       const { error: ie } = await sb.from("acq_asc_downloads_daily").insert(rows.slice(i, i + 1000));
       if (ie) throw new Error(`storing ${inst.report} ${inst.processingDate}: ${ie.message}`);
     }
-    const { error: le } = await sb.from("acq_asc_instance").insert({
+    const rec = {
       instance_id: inst.id, request: inst.request, report: inst.report, granularity: inst.granularity, processing_date: inst.processingDate,
       first_day: days[0] ?? null, last_day: days[days.length - 1] ?? null, file_rows: f.rows.length, stored_rows: rows.length,
-    });
+    };
+    const { error: le } = await sb.from("acq_asc_instance").insert(rec);
     if (le) throw new Error(`acq_asc_instance: ${le.message}`);
+    stored0.push({ instance_id: rec.instance_id, report: rec.report, processing_date: rec.processing_date, first_day: rec.first_day, last_day: rec.last_day });
     stored += 1; rowsOut += rows.length;
-    files.push(`${inst.request} ${inst.report} ${inst.processingDate}: ${rows.length} rows, ${days[0] ?? "-"}..${days[days.length - 1] ?? "-"}`);
+    files.push(`${inst.request} ${inst.report} ${inst.processingDate}: ${rows.length} rows, ${days[0] ?? "-"}..${days[days.length - 1] ?? "-"}${withPage ? "" : " (no page type: 0211 not applied)"}`);
   }
   return { instances: all.length, stored, rows: rowsOut, files };
 }

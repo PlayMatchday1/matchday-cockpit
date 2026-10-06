@@ -6729,3 +6729,23 @@ segment of every instance; `src/lib/ascAnalytics.ts`), then the first `asc-analy
 - **Territory:** first-time downloads since Jul 1: US 9,238, PL 141 (Aug 32, Sep 84, Oct 1–5 25).
 - Standard first-time since Jul 1 = **9,616** (search 3,470, app referrer 4,661, web referrer 1,381,
   browse 103, Unavailable 1) — the audit and the stored rows agree.
+
+### Page Type, and the Detailed history (2026-10-06)
+
+Evidence: prod `GET /api/lifecycle/acquisition/probe?apple=deep` at 2026-10-06 (≈18:00Z), the newest
+instance of each granularity, first segment; `acq_asc_instance` read back the same hour.
+
+- **Page Type values in every App Downloads file today: `No page`, `Product page`, `Store sheet`.**
+  (Discovery and Engagement adds `Developer page`, `App version history`, `App privacy`.) **No custom
+  product page appears anywhere.** Detailed also carries `Page Title`; a custom product page's name is
+  expected there — UNKNOWN until one exists. The page treats a Detailed row whose Page Title starts
+  "Meta ads" as Apple's count of ad downloads (lib/acquisitionModel.isMetaAdsPage).
+- **The one-time Detailed history ARRIVED** (processed 2026-10-05): a DAILY instance (11,050 rows,
+  964 distinct days, 2024-01-01..2026-10-05) AND a WEEKLY one (11,275 rows, 145 week-start dates).
+  It names far more sources than the daily file: `playmatchday.com` (408 rows), `google.com` (66),
+  `com.apple.MobileSMS`, `com.apple.Spotlight`, `net.whatsapp.WhatsApp`, `com.zhiliaoapp.musically`,
+  `qrco.de`, … **Campaign is blank on every DAILY row**; the Discovery WEEKLY Detailed has `web-home` ×3.
+- **A WEEKLY file's Date is the week's first day.** Storing it as daily rows would replace that day
+  with a whole week, so the sync stores DAILY instances only (lib/ascAnalytics).
+- Ongoing Discovery and Engagement files now exist too (Standard 550 rows, Detailed 94, Oct 3–5). Not
+  stored.

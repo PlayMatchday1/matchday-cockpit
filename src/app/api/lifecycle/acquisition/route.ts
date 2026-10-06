@@ -1,7 +1,7 @@
 /* GET /api/lifecycle/acquisition?since=&until=[&compare=1]
  *
  * The Acquisition page's own payload: the Website table (current and comparison), Apple's first-time
- * downloads by source and per Website row (0210, lib/acquisitionModel.downloadsBySource), how current
+ * downloads by source and per Website row (0210, lib/acquisitionModel.downloadsTable), how current
  * each source is — and EACH SOURCE'S WINDOW, trimmed
  * to that source's own "data through" day, with its comparison the trimmed window a month earlier
  * (lib/acquisitionModel.sourceWindows). The Ads table comes from /api/lifecycle/ads, given the meta
@@ -12,7 +12,7 @@
 import { authenticateLifecycle } from "@/lib/lifecycleAuth";
 import { selectAll } from "@/lib/supabasePagination";
 import {
-  LIVE_MARKETS, OTHER_CITIES, FIRST_TIME, addMeasures, downloadsBySource, websiteDownloads, type DlRow, emptyMeasures, emptyOurs, marketLabel, marketOfDeclared, marketOfMatchCity, marketRank, pageRanks,
+  LIVE_MARKETS, OTHER_CITIES, FIRST_TIME, WEB_FEED_FROM, addMeasures, downloadsTable, metaIphoneDays, websiteDownloads, websiteEstimate, websiteFallbackOn, type Coverage, type DlRow, emptyMeasures, emptyOurs, marketLabel, marketOfDeclared, marketOfMatchCity, marketRank, pageRanks,
   sameDaysLastMonth, sourceWindows, webByMarket, websiteTable, type ClickRow, type GscRow, type MarketRowView, type MarketSide,
   type MetaSide, type OursSide, type PageMapRow, type PageRank, type QueryRow, type WebRow, type Window,
 } from "@/lib/acquisitionModel";
@@ -49,7 +49,20 @@ export async function GET(req: Request) {
       if (error) throw new Error(`acq_asc_downloads_daily: ${error.message}`);
       return (data?.[0]?.day as string | undefined) ?? null;
     };
-    const [appleThrough, splitFrom] = await Promise.all([appleDay("standard", false), appleDay("detailed", true)]);
+    /* Detailed COVERAGE is each stored Detailed file's first..last day (acq_asc_instance), not the
+     * days that have rows: Detailed drops small rows, so a covered day can be empty. Every DAILY
+     * instance is stored (lib/ascAnalytics), so the union of their ranges is what Apple has split. */
+    const covRead = sb.from("acq_asc_instance").select("first_day, last_day").eq("report", "detailed").eq("granularity", "DAILY");
+    const [appleThrough, covRes, siteRes] = await Promise.all([
+      appleDay("standard", false), covRead,
+      // Has Apple's daily Detailed feed named playmatchday.com yet? (the Website total's fallback)
+      sb.from("acq_asc_downloads_daily").select("day").eq("report", "detailed").ilike("source_info", "%playmatchday.com%").gte("day", WEB_FEED_FROM).limit(1),
+    ]);
+    if (covRes.error) throw new Error(`acq_asc_instance: ${covRes.error.message}`);
+    if (siteRes.error) throw new Error(`acq_asc_downloads_daily: ${siteRes.error.message}`);
+    const coverage = (covRes.data ?? []) as Coverage;
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    const webFallback = websiteFallbackOn(today, (siteRes.data ?? []).length > 0);
     const freshness = { gsc: gscThrough, web: webThrough, app: appThrough, meta: metaThrough, apple: appleThrough };
     const windows = sourceWindows({ since, until }, freshness, compare);
 
@@ -86,8 +99,18 @@ export async function GET(req: Request) {
         .order("day").order("page_url").order("query"))
         .catch((e: unknown) => { if (/acq_gsc_query_daily/.test(String((e as Error)?.message)) && /schema cache|does not exist/.test(String((e as Error)?.message))) return [] as QueryRow[]; throw e; }),
       // APPLE (0210): first-time downloads only, both reports; nothing until the first file is stored.
-      appleThrough ? selectAll<DlRow>(() => sb.from("acq_asc_downloads_daily").select("day, report, download_type, source_type, source_info, campaign, territory, counts")
-        .eq("download_type", FIRST_TIME).gte("day", from).lte("day", to).order("day").order("report").order("source_type").order("source_info").order("campaign").order("territory")) : none<DlRow>(),
+      /* Page Type and Page Title arrive with 0211; BEFORE it is applied the read falls back to the
+       * columns 0210 has (no custom product page can be seen). Any other failure still throws. */
+      appleThrough ? selectAll<DlRow>(() => sb.from("acq_asc_downloads_daily")
+        .select("day, report, download_type, source_type, source_info, campaign, territory, counts, page_type, page_title")
+        .eq("download_type", FIRST_TIME).gte("day", from).lte("day", to)
+        .order("day").order("report").order("source_type").order("source_info").order("campaign").order("territory").order("page_type").order("page_title"))
+        .catch((e: unknown) => {
+          if (!/page_type|page_title/.test(String((e as Error)?.message))) throw e;
+          return selectAll<DlRow>(() => sb.from("acq_asc_downloads_daily").select("day, report, download_type, source_type, source_info, campaign, territory, counts")
+            .eq("download_type", FIRST_TIME).gte("day", from).lte("day", to)
+            .order("day").order("report").order("source_type").order("source_info").order("campaign").order("territory"));
+        }) : none<DlRow>(),
     ]);
     const ranksC = pageRanks(gscQ, windows.gsc.cur, map);
     const ranksP = windows.gsc.cmp ? pageRanks(gscQ, windows.gsc.cmp, map) : new Map<string, PageRank>();
@@ -196,7 +219,15 @@ export async function GET(req: Request) {
       cur: { ...sum((r) => r.cur, mC.notAttributedCents), web: current.website.total },
       prev: compare ? { ...sum((r) => r.prev, mP?.notAttributedCents ?? 0), web: cmp?.website.total ?? emptyMeasures() } : null,
     };
-    const webDl = (w: Window) => { const r = websiteDownloads(dl, w, map); return { byRow: Object.fromEntries(r.byRow), site: r.site }; };
+    /* APPLE'S TABLE, every number over the Apple window. Meta's iPhone installs and spend come per day
+     * from the same ad-set rows as the Meta table, over exactly those days. */
+    const campaignOf = new Map(dim.map((d) => [d.adset_id, d.campaign_name ?? null]));
+    const meta = { floor: META_ADSET_FLOOR_YMD, byDay: metaIphoneDays(flat, (id) => campaignOf.get(id) ?? null) };
+    const dlTable = (w: Window) => downloadsTable(dl, w, coverage, meta);
+    const webDl = (w: Window) => {
+      const r = websiteDownloads(dl, w, map);
+      return { byRow: Object.fromEntries(r.byRow), site: r.site, est: webFallback ? websiteEstimate(dlTable(w)) : null };
+    };
     const siteGroup = (w: typeof current.website, key: string) => w.groups.find((g) => g.key === key) ?? null;
 
     return Response.json({
@@ -211,9 +242,11 @@ export async function GET(req: Request) {
       // Apple, over Apple's own window (its "data through" day); null until the first file is stored.
       downloads: appleThrough ? {
         window: windows.apple.cur,
-        cur: downloadsBySource(dl, windows.apple.cur, splitFrom),
-        prev: windows.apple.cmp ? downloadsBySource(dl, windows.apple.cmp, splitFrom) : null,
+        cur: dlTable(windows.apple.cur),
+        prev: windows.apple.cmp ? dlTable(windows.apple.cmp) : null,
         web: { cur: webDl(windows.apple.cur), prev: windows.apple.cmp ? webDl(windows.apple.cmp) : null },
+        webFallback,
+        splitStart: coverage.map((c) => c.first_day).filter(Boolean).sort()[0] ?? null,
       } : null,
     }, { headers: { "Cache-Control": "private, max-age=60" } });
   } catch (e) {

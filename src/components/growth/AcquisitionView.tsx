@@ -10,23 +10,25 @@
  *                          registration beside our own registrations and first-time players
  *     Website              a row per market (Google rank first), expandable to its pages and the exact
  *                          rank queries; Homepage and site-wide; Other pages (collapsed); whole-site Total
- *     Downloads by source  Apple's first-time downloads (lib/acquisitionModel.downloadsBySource):
- *                          Standard's total, split by Detailed's named sources; one Instagram and
- *                          Facebook row (Ryan, 2026-10-06; the page.link first-opens box it replaced
- *                          is gone)
+ *     iPhone downloads by source  Apple's first-time downloads (lib/acquisitionModel.downloadsTable):
+ *                          Standard's top-level rows, always complete; Detailed's sub-rows only when
+ *                          Detailed covers every day of the range (Ryan, 2026-10-06)
  *
- * NO EXPLANATORY TEXT ON THE PAGE. Caveats live in (i) hovers on the column that needs them. Every
- * source is compared on the days it has data for (lib/acquisitionModel.sourceWindows).
+ * NO EXPLANATORY TEXT ON THE PAGE. Caveats live in (i) tooltips, in Ryan's exact wording (TIP). Every
+ * source is compared on the days it has data for (lib/acquisitionModel.sourceWindows). Target badges
+ * (green / amber / red) read lib/acquisitionTargets.
  */
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import styles from "./growth.module.css";
 import { fmtInt } from "./format";
 import {
   MILESTONES, SKEWED_BEFORE, clickRate, costPer, presetRange, sameDaysLastMonth,
-  type DownloadsBySource, type DlKey, type Group, type MarketRowView, type Measures, type PageLine, type Preset, type RankedPage,
+  type DownloadsTable, type DlSub, type DlTag, type DlTop, type Group, type MarketRowView, type Measures, type PageLine, type Preset, type RankedPage,
   type SourceKey, type SourceWindow, type WebsiteTable, type Window,
 } from "@/lib/acquisitionModel";
+import { clickRateBand, cprBand, rankBand, type Band } from "@/lib/acquisitionTargets";
 
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const short = (ymd: string | null | undefined) => { if (!ymd) return "—"; const [, m, d] = ymd.split("-"); return `${MON[Number(m) - 1]} ${Number(d)}`; };
@@ -39,27 +41,32 @@ type Totals = {
   registrations: number; firstTime: number; web: Measures;
 };
 
-/* EVERY HOVER IN ONE PLACE, in the mock's wording (Ryan, 2026-10-05): one plain sentence on how the
- * number is calculated and where it comes from. The few that depend on the range are built below. */
+/* EVERY (i) IN ONE PLACE, in Ryan's exact wording (2026-10-06). */
 const TIP = {
-  installs: "Installs Meta credits to an ad. Meta's own count.",
-  allRegs: "Every MatchDay sign-up in this range from any source, not only ads, from our own database, by the city chosen at signup.",
-  rank: "Average Google position of the city page for \"pickup soccer [city]\", plus \"pick up soccer [city]\" and \"pickup soccer near me\" where Google has them for that page. 1 is the top result; lower is better.",
-  visits: "Website sessions on these pages (Google Analytics). One person on one trip to the site counts once.",
-  storeClicks: "Taps on an App Store or Google Play button on these pages. An intent to download, not a download.",
-  clickRate: "Store clicks divided by visits: how many visitors tapped an App Store or Google Play button.",
-  webDownloads: "First-time iPhone downloads from store links tagged with this market (Apple's Campaign field). Apple knows the site, not the page, and hides small counts, so a market with none shows —. Total: every download Apple credits to playmatchday.com. Downloads from Poland count under Other cities.",
-  iphone: "First-time iPhone downloads, from Apple App Store analytics. Updates, restores and re-downloads are not counted. Android comes later.",
-  share: "This source as a share of all iPhone downloads in the range.",
-  cost: "What we paid for this source in the range: Meta spend on Instagram and Facebook, nothing on the others.",
+  spend: "What we paid Meta in this period. Data starts Aug 1.",
+  installs: "App installs Meta says came from our ads. Meta's own count.",
+  metaRegs: "Sign-ups Meta says came from our ads. Meta's own count, from Sep 12.",
+  cpr: "Ad spend divided by Meta registrations. Target: under $5.",
+  allRegs: "Every new sign-up in this market, from any source.",
+  firstTime: "People who played their first MatchDay match in this period, from any source.",
+  rank: "Where our city page shows on Google for \"pickup soccer [city]\". 1 is the top. Lower is better. Target: 3 or better.",
+  searchClicks: "People who clicked through to us from Google search.",
+  visits: "Visits to these pages on our website.",
+  storeClicks: "Taps on the App Store or Google Play button. Wanting to download, not a download yet.",
+  clickRate: "Store clicks divided by visits. Target: 20% or more.",
+  webDownloads: "iPhone downloads Apple says came from our website.",
+  iphone: "First-time iPhone downloads, counted by Apple. Android comes later.",
+  share: "Percent of all iPhone downloads.",
+  cost: "What we paid for this source.",
+  apps: "People who tapped through from another app, mostly Instagram and Facebook. Includes ads and normal posts.",
+  web: "People who tapped through from a website: share links, our site, or Google.",
+  search: "People who searched in the App Store and downloaded.",
+  browse: "People who found us browsing the App Store.",
+  other: "Downloads Apple can't place, including small numbers it hides for privacy.",
 };
-
-/* FIRST-TIME PLAYERS, PLAYER ACTIVITY'S DEFINITION (Ryan, 2026-10-05). People whose first MatchDay
- * match ever was in the range, from any source, in that match's city — the same rows Player Activity
- * counts, so the two pages tie. It replaced "Registrants who played" (counted by signup) and its
- * 7-day rate. It is not linked to ads; it sits beside spend to be read over time. */
+const totalTip = (outsideUS: number, poland: number) =>
+  "All first-time iPhone downloads." + (outsideUS > 0 ? ` Includes ${fmtInt(outsideUS)} from outside the US (${fmtInt(poland)} from Poland, the licensee).` : "");
 const FIRST_LABEL = "First-time players";
-const FIRST_TIP = "Everyone who played their first MatchDay match in this range, from any source. Not linked to ads; compare it against ad spend over time.";
 type Payload = {
   since: string; until: string;
   windows: Record<SourceKey, SourceWindow>;
@@ -76,11 +83,13 @@ type Payload = {
   excluded: { internal: number; reRegistrations: number };
   downloads: null | {
     window: Window;
-    cur: DownloadsBySource; prev: DownloadsBySource | null;
+    cur: DownloadsTable; prev: DownloadsTable | null;
     web: { cur: WebDl; prev: WebDl | null };
+    webFallback: boolean;
+    splitStart: string | null;
   };
 };
-type WebDl = { byRow: Record<string, number>; site: number };
+type WebDl = { byRow: Record<string, number>; site: number; est: number | null };
 
 function change(cur: number | null | undefined, prev: number | null | undefined): string | null {
   if (cur == null || prev == null) return null;
@@ -96,11 +105,67 @@ function Chg({ cur, prev, invert }: { cur: number | null | undefined; prev: numb
   const cls = (invert ? down : up) ? "up" : (invert ? up : down) ? "down" : "flat";
   return <span className={`acq-chg ${cls}`} data-testid="acq-chg">{t}</span>;
 }
-function Info({ tip }: { tip: string }) {
-  return <span className="acq-i" title={tip} aria-label={tip} tabIndex={0}>i</span>;
+/* THE TOOLTIP (Ryan, 2026-10-06: the browser's title hover was slow and never opened on a phone).
+ * Opens at once on mouse hover, on tap (touch) or on Enter / Space; closes on mouse leave, a tap
+ * anywhere else, scroll or Escape. One open at a time. Rendered into <body> with fixed position, so a
+ * table's scroll box never clips it, and kept inside the viewport, at most 260px wide. */
+let closeOpenTip: (() => void) | null = null;
+function Info({ tip, children, testId }: { tip: string; children?: React.ReactNode; testId?: string }) {
+  const btn = useRef<HTMLButtonElement>(null), box = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const pointer = useRef<string>("mouse");
+  const hide = useRef(() => { setOpen(false); setPos(null); }).current;
+  const show = () => { if (closeOpenTip && closeOpenTip !== hide) closeOpenTip(); closeOpenTip = hide; setOpen(true); };
+  useLayoutEffect(() => {
+    if (!open || !btn.current || !box.current) return;
+    const r = btn.current.getBoundingClientRect(), b = box.current.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth;
+    const left = Math.max(8, Math.min(r.left + r.width / 2 - b.width / 2, vw - b.width - 8));
+    const top = r.top - b.height - 8 >= 8 ? r.top - b.height - 8 : r.bottom + 8;
+    setPos({ left, top });
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const outside = (e: PointerEvent) => { const t = e.target as Node; if (!btn.current?.contains(t) && !box.current?.contains(t)) hide(); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") hide(); };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", esc);
+    window.addEventListener("scroll", hide, true);
+    window.addEventListener("resize", hide);
+    return () => {
+      document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", esc);
+      window.removeEventListener("scroll", hide, true); window.removeEventListener("resize", hide);
+      if (closeOpenTip === hide) closeOpenTip = null;
+    };
+  }, [open, hide]);
+  return (
+    <>
+      <button type="button" ref={btn} className={children ? "acq-tipbtn" : "acq-i"} aria-label={children ? undefined : "More info"} aria-expanded={open}
+        data-testid={testId ?? "acq-i"}
+        onPointerDown={(e) => { pointer.current = e.pointerType; }}
+        onPointerEnter={(e) => { if (e.pointerType === "mouse") show(); }}
+        onPointerLeave={(e) => { if (e.pointerType === "mouse") hide(); }}
+        onClick={(e) => { e.stopPropagation(); if (e.detail !== 0 && pointer.current === "mouse") show(); else if (open) hide(); else show(); }}>
+        {children ?? "i"}
+      </button>
+      {open && typeof document !== "undefined" && createPortal(
+        <div ref={box} role="tooltip" data-testid="acq-tip"
+          style={{ position: "fixed", left: pos?.left ?? 0, top: pos?.top ?? 0, visibility: pos ? "visible" : "hidden", zIndex: 1000,
+            maxWidth: "min(260px, calc(100vw - 16px))", width: "max-content", boxSizing: "border-box", background: "#003326", color: "#fff",
+            font: "400 13px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif", letterSpacing: "normal", textTransform: "none", textAlign: "left",
+            whiteSpace: "pre-line", padding: "9px 12px", borderRadius: 10, boxShadow: "0 6px 18px rgba(0,0,0,.18)", pointerEvents: "none" }}>
+          {tip}
+        </div>, document.body)}
+    </>
+  );
 }
-function Cell({ v, cur, prev, invert, cls }: { v: React.ReactNode; cur?: number | null; prev?: number | null; invert?: boolean; cls?: string }) {
-  return <td className={cls}><span className="acq-n">{v}</span><Chg cur={cur} prev={prev} invert={invert} /></td>;
+/** A value on a soft target badge (green / amber / red); plain when there is no band. */
+function Badge({ band, children }: { band: Band | null; children: React.ReactNode }) {
+  return band ? <span className={`acq-badge ${band}`} data-testid="acq-badge" data-band={band}>{children}</span> : <>{children}</>;
+}
+function Cell({ v, cur, prev, invert, cls, band }: { v: React.ReactNode; cur?: number | null; prev?: number | null; invert?: boolean; cls?: string; band?: Band | null }) {
+  return <td className={cls}><span className="acq-n"><Badge band={band ?? null}>{v}</Badge></span><Chg cur={cur} prev={prev} invert={invert} /></td>;
 }
 
 const SOURCE_NAME: Record<SourceKey, string> = { gsc: "Google Search", web: "Website analytics", app: "App analytics", meta: "Meta", apple: "App Store" };
@@ -140,16 +205,14 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
       + "\nApp Store runs 1 to 2 days behind.\nOur players: today"
       + "\nEach source is compared on the days it has data for."
     : "";
-  const metaFrom = data?.metaWindow.cur?.since;
-  const spendTip = `What Meta charged us in this date range, per market. Meta reporting starts Aug 1${metaFrom && metaFrom > range.since ? ` (this range: from ${short(metaFrom)})` : ""}.`;
-  const regSince = data?.metaWindow.regSince;
-  const regTip = `Registrations Meta credits to an ad (someone tapped an ad, installed, and signed up within 7 days). Meta's own count. Available from Sep 12${regSince ? ` (this range: from ${short(regSince)})` : ""}.`;
-  const cprTip = `Ad spend divided by Meta registrations, both from Sep 12 on, when Meta could first see registrations.`;
   const dl = data?.downloads ?? null;
   const webDl = dl?.web.cur ?? null, webDlP = compareOn ? dl?.web.prev ?? null : null;
   /* A Website row's downloads: its tagged count, or "—" (never 0) when it has none. */
   const rowDl = (key: string) => (webDl ? { n: webDl.byRow[key] || null, p: webDlP ? webDlP.byRow[key] ?? 0 : null } : undefined);
-  const searchTip = `Clicks from Google search results to these pages (Search Console). Google reports about 2 days late (through ${short(data?.freshness.gsc)}).`;
+  /* The Website total: Apple's playmatchday.com count, or — once the fallback is on (Oct 13 with the
+   * site still unnamed in Apple's daily feed) — the estimate, marked "est.". */
+  const fb = !!dl?.webFallback;
+  const siteDl = webDl ? { n: (fb ? webDl.est : webDl.site) || null, p: webDlP ? (fb ? webDlP.est : webDlP.site) : null, est: fb } : undefined;
 
   return (
     <div className="acq" data-testid="acq">
@@ -180,8 +243,8 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
         <label className="acq-cmp" data-testid="acq-compare">
           <input type="checkbox" checked={compareOn} onChange={(e) => setCompareOn(e.target.checked)} /> vs same days last month
         </label>
-        {range.since < SKEWED_BEFORE && <span className="acq-tag" data-testid="acq-skewed" title="Website traffic before Jul 15 included Meta ads.">skewed by ads</span>}
-        <span className="acq-through" data-testid="acq-through" title={throughTip}>Data through {short(through)}</span>
+        {range.since < SKEWED_BEFORE && <Info tip="Website traffic before Jul 15 included Meta ads." testId="acq-skewed"><span className="acq-tag">skewed by ads</span></Info>}
+        <span className="acq-throughwrap"><Info tip={throughTip} testId="acq-through"><span className="acq-through">Data through {short(through)}</span></Info></span>
       </div>
 
       {err && <div className={`${styles.stateMsg} ${styles.errorMsg}`} data-testid="acq-error">Could not load: {err}</div>}
@@ -191,7 +254,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
         <>
           {/* ── 2 · FOUR TILES ──────────────────────────────────────────────────────────────── */}
           <div className="acq-tiles" data-testid="acq-tiles">
-            <Tile k={FIRST_LABEL} tip={FIRST_TIP} v={fmtInt(t.firstTime)} cur={t.firstTime} prev={tp?.firstTime} />
+            <Tile k={FIRST_LABEL} tip={TIP.firstTime} v={fmtInt(t.firstTime)} cur={t.firstTime} prev={tp?.firstTime} />
             <Tile k="Registrations" tip={TIP.allRegs} v={fmtInt(t.registrations)} cur={t.registrations} prev={tp?.registrations} />
             <Tile k="Ad spend" v={money(t.spendCents)} cur={t.spendCents} prev={tp?.spendCents} />
             <Tile k="Website store clicks" v={fmtInt(web?.storeClicks ?? 0)} cur={web?.storeClicks} prev={webP?.storeClicks} />
@@ -204,12 +267,12 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
               <table className={`${styles.adsTable} acq-table`}>
                 <thead><tr>
                   <th>Market</th>
-                  <th>Ad spend <Info tip={spendTip} /></th>
+                  <th>Ad spend <Info tip={TIP.spend} /></th>
                   <th>Meta installs <Info tip={TIP.installs} /></th>
-                  <th>Meta registrations <Info tip={regTip} /></th>
-                  <th>Cost per registration <Info tip={cprTip} /></th>
+                  <th>Meta registrations <Info tip={TIP.metaRegs} /></th>
+                  <th>Cost per registration <Info tip={TIP.cpr} /></th>
                   <th>All registrations <Info tip={TIP.allRegs} /></th>
-                  <th>{FIRST_LABEL} <Info tip={FIRST_TIP} /></th>
+                  <th>{FIRST_LABEL} <Info tip={TIP.firstTime} /></th>
                 </tr></thead>
                 <tbody>
                   {data.markets.map((r) => {
@@ -220,7 +283,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                         <Cell v={m ? money(m.spendCents) : "—"} cur={m?.spendCents} prev={mp?.spendCents} />
                         <Cell v={m?.installs == null ? "—" : fmtInt(m.installs)} cur={m?.installs} prev={mp?.installs} />
                         <Cell v={m?.metaRegs == null ? "—" : fmtInt(m.metaRegs)} cur={m?.metaRegs} prev={mp?.metaRegs} />
-                        <Cell v={money2(m ? costPer(m.regSpendCents, m.metaRegs) : null)} cur={m ? costPer(m.regSpendCents, m.metaRegs) : null} prev={mp ? costPer(mp.regSpendCents, mp.metaRegs) : null} invert />
+                        <Cell v={money2(m ? costPer(m.regSpendCents, m.metaRegs) : null)} cur={m ? costPer(m.regSpendCents, m.metaRegs) : null} prev={mp ? costPer(mp.regSpendCents, mp.metaRegs) : null} invert band={cprBand(m ? costPer(m.regSpendCents, m.metaRegs) : null)} />
                         <Cell v={fmtInt(r.cur.ours.registrations)} cur={r.cur.ours.registrations} prev={p?.ours.registrations} />
                         <Cell v={fmtInt(r.cur.ours.firstTime)} cur={r.cur.ours.firstTime} prev={p?.ours.firstTime} />
                       </tr>
@@ -238,7 +301,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                     <Cell v={money(t.spendCents)} cur={t.spendCents} prev={tp?.spendCents} />
                     <Cell v={t.installs == null ? "—" : fmtInt(t.installs)} cur={t.installs} prev={tp?.installs} />
                     <Cell v={t.metaRegs == null ? "—" : fmtInt(t.metaRegs)} cur={t.metaRegs} prev={tp?.metaRegs} />
-                    <Cell v={money2(costPer(t.regSpendCents, t.metaRegs))} cur={costPer(t.regSpendCents, t.metaRegs)} prev={tp ? costPer(tp.regSpendCents, tp.metaRegs) : null} invert />
+                    <Cell v={money2(costPer(t.regSpendCents, t.metaRegs))} cur={costPer(t.regSpendCents, t.metaRegs)} prev={tp ? costPer(tp.regSpendCents, tp.metaRegs) : null} invert band={cprBand(costPer(t.regSpendCents, t.metaRegs))} />
                     <Cell v={fmtInt(t.registrations)} cur={t.registrations} prev={tp?.registrations} />
                     <Cell v={fmtInt(t.firstTime)} cur={t.firstTime} prev={tp?.firstTime} />
                   </tr>
@@ -261,11 +324,11 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                 <thead><tr>
                   <th>Market</th>
                   <th>Google rank <Info tip={TIP.rank} /></th>
-                  <th>Search clicks <Info tip={searchTip} /></th>
+                  <th>Search clicks <Info tip={TIP.searchClicks} /></th>
                   <th>Visits <Info tip={TIP.visits} /></th>
                   <th>Store clicks <Info tip={TIP.storeClicks} /></th>
                   <th>Click rate <Info tip={TIP.clickRate} /></th>
-                  <th>Downloads <Info tip={TIP.webDownloads} /></th>
+                  <th>iPhone downloads <Info tip={TIP.webDownloads} /></th>
                 </tr></thead>
                 <tbody>
                   {data.markets.map((r) => {
@@ -274,8 +337,8 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                       <Fragment key={r.key}>
                         <tr className="acq-row" data-testid="acq-market" data-market={r.key} aria-expanded={isOpen} onClick={() => toggle(r.key)}>
                           <td><span className="acq-caret">{isOpen ? "▾" : "▸"}</span>{r.label}</td>
-                          <RankCell rank={r.cur.rank} prev={p ? p.rank : undefined} />
-                          <WebCells m={r.cur.web} p={p?.web ?? null} dl={rowDl(r.key)} />
+                          <RankCell rank={r.cur.rank} prev={p ? p.rank : undefined} badge />
+                          <WebCells m={r.cur.web} p={p?.web ?? null} dl={rowDl(r.key)} badge />
                         </tr>
                         {isOpen && (r.pages.length
                           ? r.pages.map((pg) => <PageRow key={pg.path} pg={pg} />)
@@ -290,16 +353,16 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                   <tr className={`${styles.adsTotal} acq-total`} data-testid="acq-total">
                     <td>Total</td>
                     <td className="acq-dash">—</td>
-                    <WebCells m={t.web} p={tp?.web ?? null} dl={webDl ? { n: webDl.site || null, p: webDlP ? webDlP.site : null } : undefined} />
+                    <WebCells m={t.web} p={tp?.web ?? null} dl={siteDl} badge />
                   </tr>
                 </tbody>
               </table>
             </div>
           </section>
 
-          {/* ── 5 · DOWNLOADS BY SOURCE ─────────────────────────────────────────────────────── */}
+          {/* ── 5 · IPHONE DOWNLOADS BY SOURCE ──────────────────────────────────────────────── */}
           <section className={`${styles.card} acq-card`} data-testid="acq-sources-table">
-            <h2 className="acq-h2">Downloads by source</h2>
+            <h2 className="acq-h2">iPhone downloads by source</h2>
             <div className={styles.tableWrap}>
               <table className={`${styles.adsTable} acq-table`}>
                 <thead><tr>
@@ -309,30 +372,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                   <th>Cost <Info tip={TIP.cost} /></th>
                 </tr></thead>
                 <tbody>
-                  {DL_SOURCES.filter((src) => !src.unsplit || (dl && dl.cur.by[src.key] > 0)).map((src) => {
-                    /* A split-dependent row compares only when BOTH windows are fully split; against a window
-                     * Apple had not split yet it would read "new" for no real reason. */
-                    const splitDependent = src.key !== "search" && src.key !== "browse";
-                    const comparable = !!(dl && dl.prev && (!splitDependent || (dl.cur.unsplitDays === 0 && dl.prev.unsplitDays === 0)));
-                    const n = dl ? dl.cur.by[src.key] : null, pv = dl && compareOn && comparable ? dl.prev!.by[src.key] : null;
-                    /* The named rows exist only from the first day Detailed covers; say so when the range
-                     * starts earlier, and show "—" while there is no Detailed file at all. */
-                    const named = NAMED.has(src.key), noSplit = named && (!dl?.cur.splitFrom || dl.cur.splitFrom > dl.window.until);
-                    const fromNote = named && dl?.cur.splitFrom && !noSplit && dl.window.since < dl.cur.splitFrom ? `from ${short(dl.cur.splitFrom)}` : null;
-                    return (
-                      <tr key={src.key} data-testid="acq-source-row" data-source={src.key}>
-                        <td><b>{src.label}</b> <Info tip={src.tip} /><span className="acq-srcsub">{fromNote ? <span data-testid="acq-source-from">{fromNote}</span> : src.sub}</span></td>
-                        {n == null || noSplit ? <td className="acq-dash">—</td> : <Cell v={fmtInt(n)} cur={n} prev={pv} />}
-                        <td>{n == null || noSplit ? <span className="acq-dash">—</span> : <span className="acq-n">{pct(n, dl!.cur.total)}</span>}</td>
-                        <td><span className="acq-n">{src.key === "meta" ? money(t.spendCents) : "$0"}</span></td>
-                      </tr>
-                    );
-                  })}
-                  <tr className={`${styles.adsTotal} acq-total`} data-testid="acq-source-total">
-                    <td>Total{dl && dl.cur.outsideUS > 0 && <> <Info tip={`Includes ${fmtInt(dl.cur.outsideUS)} downloads from outside the US, ${fmtInt(dl.cur.poland)} of them from Poland (Warsaw, the licensee).`} /></>}</td>
-                    {dl ? <Cell v={fmtInt(dl.cur.total)} cur={dl.cur.total} prev={compareOn ? dl.prev?.total : null} /> : <td className="acq-dash">—</td>}
-                    <td>{dl ? <span className="acq-n">100%</span> : <span className="acq-dash">—</span>}</td><td />
-                  </tr>
+                  <DownloadRows dl={dl} compareOn={compareOn} />
                 </tbody>
               </table>
             </div>
@@ -356,25 +396,31 @@ function Tile({ k, v, cur, prev, tip, sub }: { k: string; v: string; cur: number
 }
 
 /** Google rank: one decimal; its change is the move in positions, and DOWN is good (green). */
-function RankCell({ rank, prev }: { rank: number | null; prev?: number | null }) {
+function RankCell({ rank, prev, badge }: { rank: number | null; prev?: number | null; badge?: boolean }) {
   const d = rank != null && prev != null ? Math.round((rank - prev) * 10) / 10 : null;
+  // The band reads the number as shown (one decimal), so "3.0" is never amber.
+  const band = badge && rank != null ? rankBand(Math.round(rank * 10) / 10) : null;
   return (
     <td data-testid="acq-rank">
-      <span className="acq-n">{rank == null ? "—" : rank.toFixed(1)}</span>
+      <span className="acq-n"><Badge band={band}>{rank == null ? "—" : rank.toFixed(1)}</Badge></span>
       {d != null && d !== 0 && <span className={`acq-chg ${d < 0 ? "up" : "down"}`} data-testid="acq-chg">{d > 0 ? "+" : "−"}{Math.abs(d).toFixed(1)}</span>}
     </td>
   );
 }
 /** Search clicks · Visits · Store clicks · Click rate · Downloads — the same five on every row. */
-function WebCells({ m, p, dl }: { m: Measures; p: Measures | null; dl?: { n: number | null; p: number | null } }) {
+function WebCells({ m, p, dl, badge }: { m: Measures; p: Measures | null; dl?: { n: number | null; p: number | null; est?: boolean }; badge?: boolean }) {
   const cr = clickRate(m);
+  // The band reads the rate as shown (whole percent).
+  const band = badge && cr != null ? clickRateBand(Math.round(cr * 100) / 100) : null;
   return (
     <>
       <Cell v={fmtInt(m.searchClicks)} cur={m.searchClicks} prev={p?.searchClicks} />
       <Cell v={fmtInt(m.visits)} cur={m.visits} prev={p?.visits} />
       <Cell v={fmtInt(m.storeClicks)} cur={m.storeClicks} prev={p?.storeClicks} />
-      <td><span className="acq-n">{cr == null ? "—" : `${Math.round(cr * 100)}%`}</span></td>
-      {dl && dl.n != null ? <Cell v={fmtInt(dl.n)} cur={dl.n} prev={dl.p} /> : <td className="acq-dash" data-testid="acq-dl-dash">—</td>}
+      <td><span className="acq-n"><Badge band={band}>{cr == null ? "—" : `${Math.round(cr * 100)}%`}</Badge></span></td>
+      {dl && dl.n != null
+        ? <Cell v={<>{fmtInt(dl.n)}{dl.est && <span className="acq-est" data-testid="acq-web-est"> est.</span>}</>} cur={dl.n} prev={dl.p} />
+        : <td className="acq-dash" data-testid="acq-dl-dash">—</td>}
     </>
   );
 }
@@ -413,7 +459,7 @@ function SiteRow({ label, groups, prevGroups, count, open, onToggle, testId, dl 
       <tr data-testid={testId} className="acq-row acq-siterow" onClick={onToggle} aria-expanded={open}>
         <td><span className="acq-caret">{open ? "▾" : "▸"}</span>{label}{count && <span className="acq-muted"> · {m.pages.length}</span>}</td>
         <td className="acq-dash">—</td>
-        <WebCells m={m} p={p} dl={dl} />
+        <WebCells m={m} p={p} dl={dl} badge />
       </tr>
       {open && m.pages.map((pg) => (
         <tr key={pg.path} className="acq-sub" data-testid="acq-other-page">
@@ -426,30 +472,74 @@ function SiteRow({ label, groups, prevGroups, count, open, onToggle, testId, dl 
   );
 }
 
-/* THE SOURCES APPLE'S DOWNLOAD REPORTS SPLIT BY, in the mock's wording. Instagram and Facebook is ONE
- * row: Apple's app referrer cannot tell a paid ad from an organic post, so it is never split here.
- * The two "not split" rows appear only for days Apple's Detailed report does not cover. */
-const NAMED = new Set<DlKey>(["meta", "share", "web", "google"]);
-const DL_SOURCES: { key: DlKey; label: string; sub: string; tip: string; unsplit?: boolean }[] = [
-  { key: "meta", label: "Instagram and Facebook", sub: "Ads + organic",
-    tip: "Downloads where Apple says the person came from the Instagram or Facebook app (App Store \"app referrer\"). Apple cannot tell a paid ad from an organic post, so this is both. For ads alone, see Meta installs in the Meta ads table." },
-  { key: "share", label: "Player share links", sub: "In-app shares",
-    tip: "Downloads that came through a MatchDay share link (page.link). Apple counts these as web referrer page.link." },
-  { key: "web", label: "Website", sub: "playmatchday.com",
-    tip: "Downloads where Apple says the person came from playmatchday.com (web referrer). Mostly Safari on iPhone." },
-  { key: "google", label: "Google", sub: "google.com",
-    tip: "Downloads straight from a Google search result to the App Store, without visiting our site." },
-  { key: "search", label: "App Store search", sub: "Searched in the App Store",
-    tip: "People who searched inside the App Store and downloaded (Apple source type \"App Store search\")." },
-  { key: "browse", label: "App Store browse", sub: "Charts, Today tab, similar apps",
-    tip: "People who found us browsing the App Store (Apple source type \"App Store browse\")." },
-  { key: "appref", label: "Another app, not split", sub: "Before Apple names the app", unsplit: true,
-    tip: "Downloads from another app (Apple's \"app referrer\") on days before Apple's detailed report, which names the app, begins. Instagram and Facebook are inside this." },
-  { key: "webref", label: "A website, not split", sub: "Before Apple names the site", unsplit: true,
-    tip: "Downloads from a website (Apple's \"web referrer\") on days before Apple's detailed report, which names the site, begins. Share links, our website and Google are inside this." },
-  { key: "other", label: "Other", sub: "Unknown or other",
-    tip: "Downloads Apple doesn't name the source for, including small counts it hides for privacy." },
-];
+/* THE iPHONE DOWNLOADS TABLE (Ryan, 2026-10-06). Top-level rows are Apple's Standard report and
+ * always complete. Sub-rows are Detailed's and appear only when it covers every day of the range
+ * (DownloadsTable.split); otherwise the two parents say from which day the breakdown exists. A row
+ * compares only against a window with the same shape: a sub-row only when both windows are split.
+ * Cost is Meta's iPhone spend over exactly the same days as the downloads. */
+const SUB_LABEL: Record<DlSub, string> = {
+  igfb: "Instagram and Facebook", otherApps: "Other apps", share: "Player share links", site: "Our website", google: "Google", otherSites: "Other sites",
+};
+function DownloadRows({ dl, compareOn }: { dl: Payload["downloads"]; compareOn: boolean }) {
+  if (!dl) {
+    return (<>
+      {(["From apps", "From websites", "App Store search", "App Store browse", "Other"]).map((l) => (
+        <tr key={l} data-testid="acq-source-row"><td><b>{l}</b></td><td className="acq-dash">—</td><td className="acq-dash">—</td><td /></tr>
+      ))}
+      <tr className="acq-total" data-testid="acq-source-total"><td>Total</td><td className="acq-dash">—</td><td className="acq-dash">—</td><td /></tr>
+    </>);
+  }
+  const D = dl.cur, P = compareOn ? dl.prev : null, sp = D.split, spP = P?.split ?? null;
+  const cost = (c: number | null) => (c == null ? "—" : money(c));
+  const row = (o: { key: string; level: 0 | 1 | 2 | 3; label: React.ReactNode; tip?: string; n: number | null; prev?: number | null; cost: string; note?: string | null; flag?: boolean; testId?: string }) => (
+    <tr key={o.key} className={o.level ? "acq-dlsub" : undefined} data-testid={o.testId ?? (o.level ? "acq-source-sub" : "acq-source-row")} data-source={o.key} data-level={o.level}>
+      <td className={`acq-lvl${o.level}`}>
+        {o.level === 0 ? <b>{o.label}</b> : o.label}{o.tip && <> <Info tip={o.tip} /></>}
+        {o.flag && <> <Info tip="Meta claims more than Apple counted" testId="acq-meta-over"><span className="acq-flag">!</span></Info></>}
+        {o.note && <span className="acq-srcsub" data-testid="acq-split-note">{o.note}</span>}
+      </td>
+      {o.n == null ? <td className="acq-dash">—</td> : <Cell v={fmtInt(o.n)} cur={o.n} prev={o.prev ?? null} band={o.flag ? "red" : null} />}
+      <td>{o.n == null ? <span className="acq-dash">—</span> : <span className="acq-n">{pct(o.n, D.total)}</span>}</td>
+      <td><span className="acq-n">{o.cost}</span></td>
+    </tr>
+  );
+  const from = !sp ? (D.splitFrom && D.splitFrom > dl.window.since ? D.splitFrom : dl.splitStart) : null;
+  const note = !sp && from ? `Breakdown available from ${short(from)}` : null;
+  const subPrev = (k: DlSub) => (sp && spP ? spP.sub[k] : null);
+  const tagRows = (under: DlSub | DlTop, level: 2 | 3) => (sp?.tags ?? []).filter((t: DlTag) => t.under === under).map((t) =>
+    row({ key: `tag:${under}:${t.tag}`, level, label: t.tag, n: t.n, prev: spP ? spP.tags.find((x) => x.under === under && x.tag === t.tag)?.n ?? 0 : null, cost: "$0", testId: "acq-source-tag" }));
+  const out: React.ReactNode[] = [];
+  out.push(row({ key: "apps", level: 0, label: "From apps", tip: TIP.apps, n: D.top.apps, prev: P?.top.apps, cost: cost(D.spendCents), note }));
+  if (sp) {
+    out.push(row({ key: "igfb", level: 1, label: SUB_LABEL.igfb, n: sp.sub.igfb, prev: subPrev("igfb"), cost: cost(D.spendCents), flag: sp.metaOver }));
+    if (sp.metaApple != null) out.push(row({ key: "meta-apple", level: 2, label: "Meta ads (Apple's count)", n: sp.metaApple, prev: spP?.metaApple, cost: cost(sp.metaAppleSpendCents) }));
+    if (sp.metaEst != null || sp.metaApple == null) out.push(row({ key: "meta-est", level: 2, label: "Meta ads (est.)", n: sp.metaEst, prev: spP?.metaEst, cost: cost(sp.metaEstSpendCents) }));
+    out.push(row({ key: "organic", level: 2, label: "Organic (est.)", n: sp.organic, prev: spP?.organic, cost: "$0" }));
+    out.push(...tagRows("igfb", 2));
+    out.push(row({ key: "otherApps", level: 1, label: SUB_LABEL.otherApps, n: sp.sub.otherApps, prev: subPrev("otherApps"), cost: "$0" }));
+    out.push(...tagRows("otherApps", 2));
+  }
+  out.push(row({ key: "web", level: 0, label: "From websites", tip: TIP.web, n: D.top.web, prev: P?.top.web, cost: "$0", note }));
+  if (sp) for (const k of ["share", "site", "google", "otherSites"] as const) {
+    out.push(row({ key: k, level: 1, label: SUB_LABEL[k], n: sp.sub[k], prev: subPrev(k), cost: "$0" }));
+    out.push(...tagRows(k, 2));
+  }
+  out.push(row({ key: "search", level: 0, label: "App Store search", tip: TIP.search, n: D.top.search, prev: P?.top.search, cost: "$0" }));
+  if (sp) out.push(...tagRows("search", 2));
+  out.push(row({ key: "browse", level: 0, label: "App Store browse", tip: TIP.browse, n: D.top.browse, prev: P?.top.browse, cost: "$0" }));
+  if (sp) out.push(...tagRows("browse", 2));
+  out.push(row({ key: "other", level: 0, label: "Other", tip: TIP.other, n: D.top.other, prev: P?.top.other, cost: "$0" }));
+  if (sp) out.push(...tagRows("other", 2));
+  out.push(
+    <tr key="total" className="acq-total" data-testid="acq-source-total">
+      <td>Total <Info tip={totalTip(D.outsideUS, D.poland)} /></td>
+      <Cell v={fmtInt(D.total)} cur={D.total} prev={P?.total} />
+      <td><span className="acq-n">100%</span></td>
+      <td><span className="acq-n">{cost(D.spendCents)}</span></td>
+    </tr>,
+  );
+  return <>{out}</>;
+}
 
 const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "—");
 
@@ -459,7 +549,7 @@ const CSS = `
 .acq .acq-ms{width:auto;max-width:160px}
 .acq .acq-cmp{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600}
 .acq .acq-tag{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;background:#fde9bf;color:#7a4e06;border-radius:4px;padding:2px 6px}
-.acq .acq-through{margin-left:auto;font-size:11.5px;color:var(--muted,#5c7168);border-bottom:1px dotted currentColor;cursor:help}
+.acq .acq-through{font-size:11.5px;color:var(--muted,#5c7168);border-bottom:1px dotted currentColor;cursor:help}
 .acq .acq-tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:14px}
 .acq .acq-tile{background:#fff;border:1px solid var(--line,#e3e7e1);border-radius:12px;padding:12px 14px}
 .acq .acq-tk{font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted,#5c7168)}
@@ -476,7 +566,22 @@ const CSS = `
 .acq .acq-muted{color:var(--muted,#5c7168);font-size:.78rem}
 .acq .acq-foot{margin:-4px 2px 14px;font-size:11.5px;color:var(--muted,#5c7168)}
 .acq .acq-tsub{margin-top:2px;font-size:11.5px;color:var(--muted,#5c7168)}
-.acq .acq-i{display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;border-radius:50%;border:1px solid currentColor;font-size:9px;font-weight:800;font-style:normal;text-transform:none;cursor:help;opacity:.6;vertical-align:1px;margin-left:2px}
+.acq .acq-i{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;padding:0;border-radius:50%;border:1px solid currentColor;background:transparent;color:inherit;font:800 9.5px/1 system-ui,sans-serif;text-transform:none;cursor:help;opacity:.6;vertical-align:1px;margin-left:2px;position:relative}
+.acq .acq-i::after{content:"";position:absolute;inset:-9px}
+.acq .acq-i[aria-expanded=true]{opacity:1}
+.acq .acq-tipbtn{all:unset;cursor:help;display:inline-flex}
+.acq .acq-tipbtn:focus-visible,.acq .acq-i:focus-visible{outline:2px solid #2cdb87;outline-offset:2px}
+.acq .acq-throughwrap{margin-left:auto}
+.acq .acq-badge{display:inline-block;min-width:40px;text-align:right;padding:2px 7px;border-radius:6px;font-weight:600}
+.acq .acq-badge.green{background:#e3f4ea;color:#14532d}
+.acq .acq-badge.amber{background:#fff1d2;color:#7a4b00}
+.acq .acq-badge.red{background:#fbe3e1;color:#8e1b14}
+.acq .acq-flag{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:#b42318;color:#fff;font-size:11px;font-weight:800}
+.acq .acq-est{font-size:11px;color:var(--muted,#5c7168);font-weight:500}
+.acq .acq-dlsub td{background:#f7faf8}
+.acq .acq-lvl1{padding-left:28px!important}
+.acq .acq-lvl2{padding-left:46px!important;font-size:.8rem}
+.acq .acq-lvl3{padding-left:64px!important;font-size:.78rem}
 .acq .acq-detail td{background:#f7faf8;padding:12px 18px 14px 32px;text-align:left}
 .acq .acq-meta{display:flex;flex-wrap:wrap;gap:22px;margin-bottom:12px}
 .acq .acq-meta>div{display:flex;flex-direction:column}
@@ -501,7 +606,7 @@ const CSS = `
   .acq .acq-table .acq-total td:first-child,.acq .acq-table .acq-siterow td:first-child{background:#f1f4f1}
   .acq .acq-table .acq-qrow td:first-child{position:static}
   .acq .acq-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .acq .acq-through{margin-left:0}
+  .acq .acq-throughwrap{margin-left:0}
   .acq .acq-tv{font-size:22px}
 }
 `;

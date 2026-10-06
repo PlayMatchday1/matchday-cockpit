@@ -258,86 +258,153 @@ export const emptyMeasures = zero;
 export const addMeasures = add;
 export const costPer = (cents: number, n: number | null) => (n && n > 0 ? cents / n : null);
 
-/* ── APPLE DOWNLOADS (Ryan, 2026-10-06) ────────────────────────────────────────────────────────────
+/* ── APPLE DOWNLOADS (Ryan, 2026-10-06; restructured the same day) ───────────────────────────────
  * First-time iPhone downloads only (auto-updates, restores and re-downloads are not new people).
  *
- * TOTALS ARE STANDARD'S; DETAILED ONLY SPLITS. Detailed leaves small rows out (23 rows against
- * Standard's 181 for Oct 4–5), so it never sets a total. Per day:
- *   App Store search / browse   straight from Standard's source type
- *   every other source type     Detailed's NAMED sources inside it (Instagram + Facebook, page.link,
- *                               playmatchday.com, google.com); the rest of Standard's count → Other
- *   a day Detailed does not cover  Standard's App referrer / Web referrer rows, "not split"
- *   Unavailable (and anything else) → Other
- * so every table adds up to Standard's total.
+ * TOP-LEVEL ROWS ARE STANDARD'S, ALWAYS COMPLETE: From apps (App referrer), From websites (Web
+ * referrer), App Store search, App Store browse, Other (Unavailable and anything else), Total.
  *
- * WEBSITE BY CITY. Apple knows the site, not the page: a download reaches a city only through the
- * store link's Campaign tag (ct=web-austin …), read from Detailed. No tag for a city = "—", never 0.
- * A download from Poland goes to "Other cities" whatever its tag (Warsaw is the licensee). The
- * Website total is Detailed's playmatchday.com — the same figure as the Website source row. */
-export type DlRow = { day: string; report: "standard" | "detailed"; download_type: string; source_type: string; source_info: string; campaign: string; territory: string; counts: number };
+ * SUB-ROWS COME FROM DETAILED AND NEVER MIX SPLIT AND UNSPLIT DAYS. They exist only when a stored
+ * Detailed file covers EVERY day of the window (coverage = the first..last day of each stored
+ * Detailed file, not "a row that day": Detailed drops small rows, so a quiet day can be covered and
+ * empty). Otherwise `split` is null and the page says from which day the breakdown exists.
+ *   From apps      Instagram and Facebook (com.burbn.instagram, com.facebook.Facebook), Other apps
+ *                  = the rest of Standard's App referrer count
+ *   From websites  Player share links (page.link), Our website (playmatchday.com), Google
+ *                  (google.com / google.<tld>), Other sites = the rest of Standard's Web referrer
+ *   Under Instagram and Facebook:
+ *     Meta ads (Apple's count)  Detailed rows whose Page Title is a custom product page "Meta ads…"
+ *     Meta ads (est.)           Meta-claimed installs (iPhone campaigns) on the days with no such page
+ *     Organic (est.)            Instagram and Facebook minus both, floored at 0; null with `metaOver`
+ *                               when Meta claims more than Apple counted
+ *   Campaign tags (ct=…)        each tag with downloads, under the sub-row its source lands in
+ *
+ * Every number reads the same days: the Apple window. Meta's spend and installs are summed over
+ * exactly those days. */
+export type DlRow = {
+  day: string; report: "standard" | "detailed"; download_type: string; source_type: string; source_info: string; campaign: string; territory: string; counts: number;
+  page_type?: string; page_title?: string;
+};
 export const FIRST_TIME = "First-time download";
-export type DlKey = "meta" | "share" | "web" | "google" | "search" | "browse" | "appref" | "webref" | "other";
+export type DlTop = "apps" | "web" | "search" | "browse" | "other";
+export type DlSub = "igfb" | "otherApps" | "share" | "site" | "google" | "otherSites";
+export type DlTag = { tag: string; under: DlSub | DlTop; n: number };
+/** Meta, per day, iPhone campaigns only: installs (null = Meta did not say) and spend. */
+export type MetaDay = { installs: number | null; spendCents: number };
+export type DlSplit = {
+  sub: Record<DlSub, number>; tags: DlTag[];
+  metaApple: number | null;   // Apple's count through a "Meta ads" custom product page; null = no such page in the window
+  metaEst: number | null;     // Meta's installs on the other days; null = none of those days, or unknown
+  organic: number | null;     // null when unknown, or when Meta claims more than Apple counted
+  metaOver: boolean;
+  metaAppleSpendCents: number | null;   // Meta spend on the days Apple's count is used
+  metaEstSpendCents: number | null;     // Meta spend on the days Meta's count is used
+};
+export type DownloadsTable = {
+  top: Record<DlTop, number>; total: number; outsideUS: number; poland: number;
+  split: DlSplit | null;
+  splitFrom: string | null;   // the first day of the covered run reaching the window's end
+  spendCents: number | null;  // Meta iPhone spend over the same days; null when Meta has no data for some of them
+};
 const hostOf = (s: string) => s.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
-export function namedSource(info: string): DlKey | null {
+/** The sub-row a Detailed row lands in, from its source type and Source Info. */
+export function subOf(sourceType: string, info: string): DlSub | null {
   const h = hostOf(info);
-  if (h === "com.burbn.instagram" || h === "com.facebook.facebook") return "meta";
-  if (h === "page.link" || h.endsWith(".page.link")) return "share";
-  if (h === "playmatchday.com") return "web";
-  if (h === "google.com") return "google";
+  if (sourceType === "App referrer") return h === "com.burbn.instagram" || h === "com.facebook.facebook" ? "igfb" : "otherApps";
+  if (sourceType === "Web referrer") {
+    if (h === "page.link" || h.endsWith(".page.link")) return "share";
+    if (h === "playmatchday.com") return "site";
+    if (/^google\.[a-z.]+$/.test(h)) return "google";
+    return "otherSites";
+  }
   return null;
 }
-export type DownloadsBySource = {
-  by: Record<DlKey, number>; total: number; outsideUS: number; poland: number;
-  splitFrom: string | null;            // the first day Detailed covers, over all stored data
-  unsplitDays: number;                 // days in the window Detailed does not cover
-  overNamed: number;                   // named > Standard inside a source type (should stay 0)
-};
-const emptyBy = (): Record<DlKey, number> => ({ meta: 0, share: 0, web: 0, google: 0, search: 0, browse: 0, appref: 0, webref: 0, other: 0 });
-export function downloadsBySource(rows: readonly DlRow[], win: Window, splitFrom: string | null): DownloadsBySource {
-  const std = new Map<string, Map<string, number>>(), det = new Map<string, Map<string, Map<DlKey, number>>>();
-  let outsideUS = 0, poland = 0;
+export const topOf = (sourceType: string): DlTop =>
+  sourceType === "App referrer" ? "apps" : sourceType === "Web referrer" ? "web" : sourceType === "App Store search" ? "search" : sourceType === "App Store browse" ? "browse" : "other";
+export const isMetaAdsPage = (title: string | undefined) => !!title && /^meta ads\b/i.test(title.trim());
+
+/** Every day of a window, in order. */
+export function daysOf(w: Window): string[] { const out: string[] = []; for (let d = w.since; d <= w.until; d = addDays(d, 1)) out.push(d); return out; }
+/** Detailed coverage: the days inside any stored Detailed file's first..last day. */
+export type Coverage = readonly { first_day: string | null; last_day: string | null }[];
+const covers = (cov: Coverage, day: string) => cov.some((c) => !!c.first_day && !!c.last_day && day >= c.first_day && day <= c.last_day);
+/** The first day of the covered run that reaches `until` (null when `until` itself is not covered). */
+export function coveredFrom(cov: Coverage, until: string): string | null {
+  if (!covers(cov, until)) return null;
+  let d = until;
+  for (let i = 0; i < 5000 && covers(cov, addDays(d, -1)); i++) d = addDays(d, -1);
+  return d;
+}
+
+export function downloadsTable(rows: readonly DlRow[], win: Window, cov: Coverage, meta: { floor: string; byDay: Map<string, MetaDay> }): DownloadsTable {
+  const top: Record<DlTop, number> = { apps: 0, web: 0, search: 0, browse: 0, other: 0 };
+  let total = 0, outsideUS = 0, poland = 0;
+  const named: Record<DlSub, number> = { igfb: 0, otherApps: 0, share: 0, site: 0, google: 0, otherSites: 0 };
+  const tags = new Map<string, DlTag>();
+  const cppByDay = new Map<string, number>();
   for (const r of rows) {
     if (r.download_type !== FIRST_TIME || r.day < win.since || r.day > win.until) continue;
     if (r.report === "standard") {
-      const m = std.get(r.day) ?? (std.set(r.day, new Map()), std.get(r.day)!);
-      m.set(r.source_type, (m.get(r.source_type) ?? 0) + r.counts);
+      top[topOf(r.source_type)] += r.counts; total += r.counts;
       if (r.territory !== "US") outsideUS += r.counts;
       if (r.territory === "PL") poland += r.counts;
-    } else {
-      const k = namedSource(r.source_info);
-      const d = det.get(r.day) ?? (det.set(r.day, new Map()), det.get(r.day)!);
-      const t = d.get(r.source_type) ?? (d.set(r.source_type, new Map()), d.get(r.source_type)!);
-      if (k) t.set(k, (t.get(k) ?? 0) + r.counts);
+      continue;
+    }
+    const sub = subOf(r.source_type, r.source_info);
+    if (sub && sub !== "otherApps" && sub !== "otherSites") named[sub] += r.counts;
+    if (isMetaAdsPage(r.page_title)) cppByDay.set(r.day, (cppByDay.get(r.day) ?? 0) + r.counts);
+    const tag = r.campaign.trim().toLowerCase();
+    if (tag) {
+      const under = sub ?? topOf(r.source_type), k = `${under}\u0001${tag}`;
+      const e = tags.get(k) ?? (tags.set(k, { tag, under, n: 0 }), tags.get(k)!);
+      e.n += r.counts;
     }
   }
-  const by = emptyBy(); let total = 0, unsplitDays = 0, overNamed = 0;
-  for (const [day, types] of std) {
-    const d = det.get(day);
-    if (!d) unsplitDays += 1;
-    for (const [t, n] of types) {
-      total += n;
-      if (t === "App Store search") { by.search += n; continue; }
-      if (t === "App Store browse") { by.browse += n; continue; }
-      if (!d) { if (t === "App referrer") by.appref += n; else if (t === "Web referrer") by.webref += n; else by.other += n; continue; }
-      /* Detailed is a subset of Standard, so named ≤ Standard. If a day ever says otherwise, the named
-       * counts are scaled down to Standard's (largest remainder) so the rows still add to the total,
-       * and the excess is reported in overNamed rather than shown. */
-      const parts = [...(d.get(t) ?? [])];
-      const named = parts.reduce((x, [, c]) => x + c, 0);
-      if (named > n) {
-        overNamed += named - n;
-        const scaled = parts.map(([k, c]) => ({ k, exact: (c * n) / named }));
-        const fl = scaled.map((x) => ({ k: x.k, v: Math.floor(x.exact), r: x.exact - Math.floor(x.exact) }));
-        let left = n - fl.reduce((x, y) => x + y.v, 0);
-        for (const x of [...fl].sort((p, q) => q.r - p.r)) { if (left <= 0) break; x.v += 1; left -= 1; }
-        for (const x of fl) by[x.k] += x.v;
-      } else {
-        for (const [k, c] of parts) by[k] += c;
-        by.other += n - named;
-      }
+  const days = daysOf(win);
+  const metaKnown = win.since >= meta.floor;
+  const spendCents = metaKnown ? days.reduce((a, d) => a + (meta.byDay.get(d)?.spendCents ?? 0), 0) : null;
+  const splitFrom = coveredFrom(cov, win.until);
+  let split: DlSplit | null = null;
+  if (splitFrom && splitFrom <= win.since) {
+    const sub: Record<DlSub, number> = {
+      ...named,
+      otherApps: Math.max(0, top.apps - named.igfb),
+      otherSites: Math.max(0, top.web - named.share - named.site - named.google),
+    };
+    let metaApple: number | null = null, metaEst: number | null = null, estUnknown = false, appleSpend = 0, estSpend = 0;
+    for (const d of days) {
+      const cpp = cppByDay.get(d) ?? 0, spend = meta.byDay.get(d)?.spendCents ?? 0;
+      if (cpp > 0) { metaApple = (metaApple ?? 0) + cpp; appleSpend += spend; continue; }
+      estSpend += spend;
+      if (d < meta.floor) { estUnknown = true; continue; }
+      const m = meta.byDay.get(d);
+      if (m && m.installs == null) { estUnknown = true; continue; }
+      metaEst = (metaEst ?? 0) + (m?.installs ?? 0);
     }
+    if (estUnknown) metaEst = null;
+    const claimed = (metaApple ?? 0) + (metaEst ?? 0);
+    const left = named.igfb - claimed;
+    const metaOver = !estUnknown && left < 0;
+    split = {
+      sub, tags: [...tags.values()].filter((t) => t.n > 0).sort((a, b) => b.n - a.n || a.tag.localeCompare(b.tag)),
+      metaApple, metaEst, organic: estUnknown || metaOver ? null : left, metaOver,
+      metaAppleSpendCents: metaKnown ? appleSpend : null, metaEstSpendCents: metaKnown ? estSpend : null,
+    };
   }
-  return { by, total, outsideUS, poland, splitFrom, unsplitDays, overNamed };
+  return { top, total, outsideUS, poland, split, splitFrom, spendCents };
+}
+
+/** Meta's iPhone days: installs and spend per day from fin_meta_adset_daily, leaving out ad sets in a
+ *  campaign named for Android (their installs are not iPhone downloads). */
+export function metaIphoneDays(flat: readonly { spend_date: string; adset_id: string; spend_cents: number; installs: number | null }[], campaignOf: (adsetId: string) => string | null): Map<string, MetaDay> {
+  const out = new Map<string, MetaDay>();
+  for (const r of flat) {
+    if (/android/i.test(campaignOf(r.adset_id) ?? "")) continue;
+    const e = out.get(r.spend_date) ?? (out.set(r.spend_date, { installs: null, spendCents: 0 }), out.get(r.spend_date)!);
+    e.spendCents += Number(r.spend_cents);
+    if (r.installs != null) e.installs = (e.installs ?? 0) + Number(r.installs);
+  }
+  return out;
 }
 
 /* A store-link tag → the Website table row it belongs to: a market key, "site" (Homepage and
@@ -364,7 +431,7 @@ export function websiteDownloads(rows: readonly DlRow[], win: Window, map: reado
   const byRow = new Map<string, number>(); let site = 0;
   for (const r of rows) {
     if (r.report !== "detailed" || r.download_type !== FIRST_TIME || r.day < win.since || r.day > win.until) continue;
-    if (namedSource(r.source_info) === "web") site += r.counts;
+    if (subOf(r.source_type, r.source_info) === "site") site += r.counts;
     if (!r.campaign) continue;
     let row = marketOfTag(r.campaign, map);
     if (!row) continue;
@@ -373,3 +440,14 @@ export function websiteDownloads(rows: readonly DlRow[], win: Window, map: reado
   }
   return { byRow, site };
 }
+
+/* WEBSITE DOWNLOADS FALLBACK (Ryan, 2026-10-06). If Apple's daily Detailed feed (from Oct 4) still has
+ * not named playmatchday.com by Oct 13, the Website total switches to an estimate: Standard's Web
+ * referrer total minus Player share links and Google, labelled "est.". Before Oct 13, or once Apple
+ * names the site, the total is Apple's own playmatchday.com count. */
+export const WEB_FALLBACK_FROM = "2026-10-13";
+export const WEB_FEED_FROM = "2026-10-04";
+export function websiteFallbackOn(today: string, siteNamedInFeed: boolean): boolean {
+  return today >= WEB_FALLBACK_FROM && !siteNamedInFeed;
+}
+export const websiteEstimate = (t: DownloadsTable): number | null => (t.split ? Math.max(0, t.top.web - t.split.sub.share - t.split.sub.google) : null);
