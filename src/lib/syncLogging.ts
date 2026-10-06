@@ -53,7 +53,9 @@ export type SourceName =
   // The Acquisition page's Google syncs (lib/acqGoogleSync). Added to the DB CHECK by 0203.
   | "gsc-pages"
   | "ga4-web"
-  | "ga4-app";
+  | "ga4-app"
+  // The Acquisition page's Apple App Downloads files (lib/ascAnalytics). In the DB CHECK since 0203.
+  | "asc-analytics";
 
 // fin_sync_log columns the orchestrator/manual routes write on
 // success. Stripe-specific columns (charges_*) stay null for mdapi

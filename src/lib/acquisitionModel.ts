@@ -257,3 +257,119 @@ export function webByMarket(w: WebsiteTable): Map<string, { m: Measures; pages: 
 export const emptyMeasures = zero;
 export const addMeasures = add;
 export const costPer = (cents: number, n: number | null) => (n && n > 0 ? cents / n : null);
+
+/* ── APPLE DOWNLOADS (Ryan, 2026-10-06) ────────────────────────────────────────────────────────────
+ * First-time iPhone downloads only (auto-updates, restores and re-downloads are not new people).
+ *
+ * TOTALS ARE STANDARD'S; DETAILED ONLY SPLITS. Detailed leaves small rows out (23 rows against
+ * Standard's 181 for Oct 4–5), so it never sets a total. Per day:
+ *   App Store search / browse   straight from Standard's source type
+ *   every other source type     Detailed's NAMED sources inside it (Instagram + Facebook, page.link,
+ *                               playmatchday.com, google.com); the rest of Standard's count → Other
+ *   a day Detailed does not cover  Standard's App referrer / Web referrer rows, "not split"
+ *   Unavailable (and anything else) → Other
+ * so every table adds up to Standard's total.
+ *
+ * WEBSITE BY CITY. Apple knows the site, not the page: a download reaches a city only through the
+ * store link's Campaign tag (ct=web-austin …), read from Detailed. No tag for a city = "—", never 0.
+ * A download from Poland goes to "Other cities" whatever its tag (Warsaw is the licensee). The
+ * Website total is Detailed's playmatchday.com — the same figure as the Website source row. */
+export type DlRow = { day: string; report: "standard" | "detailed"; download_type: string; source_type: string; source_info: string; campaign: string; territory: string; counts: number };
+export const FIRST_TIME = "First-time download";
+export type DlKey = "meta" | "share" | "web" | "google" | "search" | "browse" | "appref" | "webref" | "other";
+const hostOf = (s: string) => s.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
+export function namedSource(info: string): DlKey | null {
+  const h = hostOf(info);
+  if (h === "com.burbn.instagram" || h === "com.facebook.facebook") return "meta";
+  if (h === "page.link" || h.endsWith(".page.link")) return "share";
+  if (h === "playmatchday.com") return "web";
+  if (h === "google.com") return "google";
+  return null;
+}
+export type DownloadsBySource = {
+  by: Record<DlKey, number>; total: number; outsideUS: number; poland: number;
+  splitFrom: string | null;            // the first day Detailed covers, over all stored data
+  unsplitDays: number;                 // days in the window Detailed does not cover
+  overNamed: number;                   // named > Standard inside a source type (should stay 0)
+};
+const emptyBy = (): Record<DlKey, number> => ({ meta: 0, share: 0, web: 0, google: 0, search: 0, browse: 0, appref: 0, webref: 0, other: 0 });
+export function downloadsBySource(rows: readonly DlRow[], win: Window, splitFrom: string | null): DownloadsBySource {
+  const std = new Map<string, Map<string, number>>(), det = new Map<string, Map<string, Map<DlKey, number>>>();
+  let outsideUS = 0, poland = 0;
+  for (const r of rows) {
+    if (r.download_type !== FIRST_TIME || r.day < win.since || r.day > win.until) continue;
+    if (r.report === "standard") {
+      const m = std.get(r.day) ?? (std.set(r.day, new Map()), std.get(r.day)!);
+      m.set(r.source_type, (m.get(r.source_type) ?? 0) + r.counts);
+      if (r.territory !== "US") outsideUS += r.counts;
+      if (r.territory === "PL") poland += r.counts;
+    } else {
+      const k = namedSource(r.source_info);
+      const d = det.get(r.day) ?? (det.set(r.day, new Map()), det.get(r.day)!);
+      const t = d.get(r.source_type) ?? (d.set(r.source_type, new Map()), d.get(r.source_type)!);
+      if (k) t.set(k, (t.get(k) ?? 0) + r.counts);
+    }
+  }
+  const by = emptyBy(); let total = 0, unsplitDays = 0, overNamed = 0;
+  for (const [day, types] of std) {
+    const d = det.get(day);
+    if (!d) unsplitDays += 1;
+    for (const [t, n] of types) {
+      total += n;
+      if (t === "App Store search") { by.search += n; continue; }
+      if (t === "App Store browse") { by.browse += n; continue; }
+      if (!d) { if (t === "App referrer") by.appref += n; else if (t === "Web referrer") by.webref += n; else by.other += n; continue; }
+      /* Detailed is a subset of Standard, so named ≤ Standard. If a day ever says otherwise, the named
+       * counts are scaled down to Standard's (largest remainder) so the rows still add to the total,
+       * and the excess is reported in overNamed rather than shown. */
+      const parts = [...(d.get(t) ?? [])];
+      const named = parts.reduce((x, [, c]) => x + c, 0);
+      if (named > n) {
+        overNamed += named - n;
+        const scaled = parts.map(([k, c]) => ({ k, exact: (c * n) / named }));
+        const fl = scaled.map((x) => ({ k: x.k, v: Math.floor(x.exact), r: x.exact - Math.floor(x.exact) }));
+        let left = n - fl.reduce((x, y) => x + y.v, 0);
+        for (const x of [...fl].sort((p, q) => q.r - p.r)) { if (left <= 0) break; x.v += 1; left -= 1; }
+        for (const x of fl) by[x.k] += x.v;
+      } else {
+        for (const [k, c] of parts) by[k] += c;
+        by.other += n - named;
+      }
+    }
+  }
+  return { by, total, outsideUS, poland, splitFrom, unsplitDays, overNamed };
+}
+
+/* A store-link tag → the Website table row it belongs to: a market key, "site" (Homepage and
+ * site-wide), "other" (Other pages), or null (not ours / unreadable). Venue tags are cut short at
+ * the source (web-venue-hammond-par), so a venue tag matches the ONE venue page whose slug starts
+ * with it; two or none → Other pages. */
+export function marketOfTag(tag: string, map: readonly PageMapRow[]): string | null {
+  const t = tag.trim().toLowerCase();
+  if (!t.startsWith("web-")) return null;
+  const rest = t.slice(4);
+  if (["home", "header", "footer", "home-popup"].includes(rest)) return "site";
+  if (rest === "blog" || rest.startsWith("blog-")) return "other";
+  const key = (m: PageMapRow) => (m.market_key && (LIVE_MARKETS as readonly string[]).includes(m.market_key) ? m.market_key : OTHER_CITIES);
+  if (rest.startsWith("venue-")) {
+    const slug = rest.slice(6);
+    const hits = map.filter((m) => m.page_kind === "venue" && m.pattern.toLowerCase().replace(/^\/pickup-soccer-/, "").startsWith(slug));
+    return slug && hits.length === 1 ? key(hits[0]) : "other";
+  }
+  const city = map.find((m) => m.page_kind === "city" && m.pattern.toLowerCase() === `/pickup-soccer-in-${rest}/`);
+  return city ? key(city) : "other";
+}
+/** First-time downloads per Website row from Detailed's campaign tags, and the playmatchday.com total. */
+export function websiteDownloads(rows: readonly DlRow[], win: Window, map: readonly PageMapRow[]): { byRow: Map<string, number>; site: number } {
+  const byRow = new Map<string, number>(); let site = 0;
+  for (const r of rows) {
+    if (r.report !== "detailed" || r.download_type !== FIRST_TIME || r.day < win.since || r.day > win.until) continue;
+    if (namedSource(r.source_info) === "web") site += r.counts;
+    if (!r.campaign) continue;
+    let row = marketOfTag(r.campaign, map);
+    if (!row) continue;
+    if (r.territory === "PL") row = OTHER_CITIES;
+    byRow.set(row, (byRow.get(row) ?? 0) + r.counts);
+  }
+  return { byRow, site };
+}

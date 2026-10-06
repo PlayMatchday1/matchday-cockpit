@@ -107,3 +107,44 @@ export function aggregateAsc(report: AscReport, header: string[], rows: string[]
   }
   return [...by.values()];
 }
+
+/* ── THE SYNC (source 'asc-analytics', run after the Google steps in /api/sync/acquisition-google) ──
+ * Every App Downloads instance Apple lists that is not yet in acq_asc_instance is read and stored,
+ * oldest processing date first. A file REPLACES the days it covers for its report: the audit
+ * (2026-10-06) found the daily file restating Oct 4 and Oct 5 exactly as the history file had them
+ * (157 / 251 and 134 / 193), so a later file is the newer statement of a whole day, never an
+ * increment. The instance row is written LAST, so a run that dies midway re-reads that file next
+ * time. Days before `floor` (Jul 1, 2026, the page's floor) are not stored.
+ *
+ * The one-time Detailed history does not exist yet; when Apple delivers it, it is a new instance
+ * like any other and the next run stores it from Jul 1 — nothing to switch on. */
+type Sb = import("@supabase/supabase-js").SupabaseClient;
+export async function syncAscDownloads(sb: Sb, token: string, floor: string): Promise<{ instances: number; stored: number; rows: number; files: string[] }> {
+  const all = await listAscInstances(token);
+  const { data: done, error } = await sb.from("acq_asc_instance").select("instance_id");
+  if (error) throw new Error(`acq_asc_instance: ${error.message}`);
+  const seen = new Set((done ?? []).map((d) => d.instance_id as string));
+  let stored = 0, rowsOut = 0; const files: string[] = [];
+  for (const inst of all) {
+    if (seen.has(inst.id)) continue;
+    const f = await readAscInstance(token, inst.id);
+    const rows = aggregateAsc(inst.report, f.header, f.rows).filter((r) => r.day >= floor);
+    const days = [...new Set(rows.map((r) => r.day))].sort();
+    for (let i = 0; i < days.length; i += 100) {
+      const { error: de } = await sb.from("acq_asc_downloads_daily").delete().eq("report", inst.report).in("day", days.slice(i, i + 100));
+      if (de) throw new Error(`clearing ${inst.report} days: ${de.message}`);
+    }
+    for (let i = 0; i < rows.length; i += 1000) {
+      const { error: ie } = await sb.from("acq_asc_downloads_daily").insert(rows.slice(i, i + 1000));
+      if (ie) throw new Error(`storing ${inst.report} ${inst.processingDate}: ${ie.message}`);
+    }
+    const { error: le } = await sb.from("acq_asc_instance").insert({
+      instance_id: inst.id, request: inst.request, report: inst.report, granularity: inst.granularity, processing_date: inst.processingDate,
+      first_day: days[0] ?? null, last_day: days[days.length - 1] ?? null, file_rows: f.rows.length, stored_rows: rows.length,
+    });
+    if (le) throw new Error(`acq_asc_instance: ${le.message}`);
+    stored += 1; rowsOut += rows.length;
+    files.push(`${inst.request} ${inst.report} ${inst.processingDate}: ${rows.length} rows, ${days[0] ?? "-"}..${days[days.length - 1] ?? "-"}`);
+  }
+  return { instances: all.length, stored, rows: rowsOut, files };
+}

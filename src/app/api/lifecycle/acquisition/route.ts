@@ -1,7 +1,8 @@
 /* GET /api/lifecycle/acquisition?since=&until=[&compare=1]
  *
- * The Acquisition page's own payload: the Website table (current and comparison), the page.link
- * split and the player-shares floor, how current each source is — and EACH SOURCE'S WINDOW, trimmed
+ * The Acquisition page's own payload: the Website table (current and comparison), Apple's first-time
+ * downloads by source and per Website row (0210, lib/acquisitionModel.downloadsBySource), how current
+ * each source is — and EACH SOURCE'S WINDOW, trimmed
  * to that source's own "data through" day, with its comparison the trimmed window a month earlier
  * (lib/acquisitionModel.sourceWindows). The Ads table comes from /api/lifecycle/ads, given the meta
  * window from here. A server route because every acq_* table is service-role only (0203). Gated on
@@ -11,8 +12,8 @@
 import { authenticateLifecycle } from "@/lib/lifecycleAuth";
 import { selectAll } from "@/lib/supabasePagination";
 import {
-  LIVE_MARKETS, OTHER_CITIES, addMeasures, emptyMeasures, emptyOurs, linkSplit, marketLabel, marketOfDeclared, marketOfMatchCity, marketRank, pageRanks,
-  sameDaysLastMonth, sourceWindows, webByMarket, websiteTable, type AppRow, type ClickRow, type GscRow, type MarketRowView, type MarketSide,
+  LIVE_MARKETS, OTHER_CITIES, FIRST_TIME, addMeasures, downloadsBySource, websiteDownloads, type DlRow, emptyMeasures, emptyOurs, marketLabel, marketOfDeclared, marketOfMatchCity, marketRank, pageRanks,
+  sameDaysLastMonth, sourceWindows, webByMarket, websiteTable, type ClickRow, type GscRow, type MarketRowView, type MarketSide,
   type MetaSide, type OursSide, type PageMapRow, type PageRank, type QueryRow, type WebRow, type Window,
 } from "@/lib/acquisitionModel";
 import { buildAdsOverview, META_REG_FROM, type AcqRow, type DimRow, type FlatRow, type GeoRow } from "@/lib/adsOverview";
@@ -42,7 +43,14 @@ export async function GET(req: Request) {
     const [gscThrough, webThrough, appThrough, metaThrough] = await Promise.all([
       latest("acq_gsc_page_daily", "day"), latest("acq_web_page_daily", "day"), latest("acq_app_event_daily", "day"), latest("fin_meta_adset_daily", "spend_date"),
     ]);
-    const freshness = { gsc: gscThrough, web: webThrough, app: appThrough, meta: metaThrough, apple: null as string | null };
+    /* Apple: the newest STANDARD day stored (Detailed only splits, so it never sets "through"). */
+    const appleDay = async (report: string, asc: boolean) => {
+      const { data, error } = await sb.from("acq_asc_downloads_daily").select("day").eq("report", report).order("day", { ascending: asc }).limit(1);
+      if (error) throw new Error(`acq_asc_downloads_daily: ${error.message}`);
+      return (data?.[0]?.day as string | undefined) ?? null;
+    };
+    const [appleThrough, splitFrom] = await Promise.all([appleDay("standard", false), appleDay("detailed", true)]);
+    const freshness = { gsc: gscThrough, web: webThrough, app: appThrough, meta: metaThrough, apple: appleThrough };
     const windows = sourceWindows({ since, until }, freshness, compare);
 
     // 2 — the rows, from the earliest window any source needs
@@ -60,12 +68,11 @@ export async function GET(req: Request) {
     const metaFrom = [metaCur?.since, metaCmp?.since].filter(Boolean).sort()[0] as string | undefined;
     const oursFrom = oursCmp && oursCmp.since < since ? oursCmp.since : since;
     const none = <T,>() => Promise.resolve([] as T[]);
-    const [map, gsc, web, clicks, app, geo, flat, dim, acq, gscQ] = await Promise.all([
+    const [map, gsc, web, clicks, geo, flat, dim, acq, gscQ, dl] = await Promise.all([
       selectAll<PageMapRow>(() => sb.from("acq_page_map").select("match_kind, pattern, market_key, page_kind, label, sort_order").order("id")),
       selectAll<GscRow>(() => sb.from("acq_gsc_page_daily").select("day, page_url, clicks, impressions, position_x_impressions").gte("day", from).lte("day", to).order("day").order("page_url")),
       selectAll<WebRow>(() => sb.from("acq_web_page_daily").select("day, page_path, sessions").gte("day", from).lte("day", to).order("day").order("page_path")),
       selectAll<ClickRow>(() => sb.from("acq_web_store_click_daily").select("day, page_path, method, clicks").eq("method", "outbound_link").gte("day", from).lte("day", to).order("day").order("page_path")),
-      selectAll<AppRow>(() => sb.from("acq_app_event_daily").select("day, event_name, platform, source_bucket, event_count").gte("day", from).lte("day", to).order("day")),
       metaFrom ? selectAll<GeoRow>(() => sb.from("fin_meta_adset_market_daily").select("spend_date, adset_id, market_raw, market_key, spend_cents, clicks").gte("spend_date", metaFrom).lte("spend_date", until).order("spend_date")) : none<GeoRow>(),
       metaFrom ? selectAll<FlatRow>(() => sb.from("fin_meta_adset_daily").select("spend_date, adset_id, spend_cents, installs, clicks, registrations").gte("spend_date", metaFrom).lte("spend_date", until).order("spend_date")) : none<FlatRow>(),
       selectAll<DimRow>(() => sb.from("fin_meta_adset").select("adset_id, adset_name, campaign_name, market_key, market_raw, market_confidence, optimization_goal, attribution_spec").order("adset_id")),
@@ -78,6 +85,9 @@ export async function GET(req: Request) {
         .gte("day", from).lte("day", to).or("query.ilike.pickup soccer%,query.ilike.pick up soccer%")
         .order("day").order("page_url").order("query"))
         .catch((e: unknown) => { if (/acq_gsc_query_daily/.test(String((e as Error)?.message)) && /schema cache|does not exist/.test(String((e as Error)?.message))) return [] as QueryRow[]; throw e; }),
+      // APPLE (0210): first-time downloads only, both reports; nothing until the first file is stored.
+      appleThrough ? selectAll<DlRow>(() => sb.from("acq_asc_downloads_daily").select("day, report, download_type, source_type, source_info, campaign, territory, counts")
+        .eq("download_type", FIRST_TIME).gte("day", from).lte("day", to).order("day").order("report").order("source_type").order("source_info").order("campaign").order("territory")) : none<DlRow>(),
     ]);
     const ranksC = pageRanks(gscQ, windows.gsc.cur, map);
     const ranksP = windows.gsc.cmp ? pageRanks(gscQ, windows.gsc.cmp, map) : new Map<string, PageRank>();
@@ -143,11 +153,9 @@ export async function GET(req: Request) {
 
     const current = {
       website: websiteTable({ win: { gsc: windows.gsc.cur, web: windows.web.cur }, map, gsc, web, clicks }),
-      links: linkSplit(app, windows.app.cur.since, windows.app.cur.until),
     };
     const cmp = compare && windows.gsc.cmp && windows.web.cmp && windows.app.cmp ? {
       website: websiteTable({ win: { gsc: windows.gsc.cmp, web: windows.web.cmp }, map, gsc, web, clicks }),
-      links: linkSplit(app, windows.app.cmp.since, windows.app.cmp.until),
     } : null;
     /* ── THE MARKET ROWS ──────────────────────────────────────────────────────────────────────── */
     const mC = metaSide(metaCur), mP = compare ? metaSide(metaCmp) : null;
@@ -188,6 +196,7 @@ export async function GET(req: Request) {
       cur: { ...sum((r) => r.cur, mC.notAttributedCents), web: current.website.total },
       prev: compare ? { ...sum((r) => r.prev, mP?.notAttributedCents ?? 0), web: cmp?.website.total ?? emptyMeasures() } : null,
     };
+    const webDl = (w: Window) => { const r = websiteDownloads(dl, w, map); return { byRow: Object.fromEntries(r.byRow), site: r.site }; };
     const siteGroup = (w: typeof current.website, key: string) => w.groups.find((g) => g.key === key) ?? null;
 
     return Response.json({
@@ -199,6 +208,13 @@ export async function GET(req: Request) {
       site: { cur: siteGroup(current.website, "site"), prev: cmp ? siteGroup(cmp.website, "site") : null },
       otherPages: { cur: siteGroup(current.website, "unmapped"), prev: cmp ? siteGroup(cmp.website, "unmapped") : null },
       cities: { cur: siteGroup(current.website, "cities"), prev: cmp ? siteGroup(cmp.website, "cities") : null },
+      // Apple, over Apple's own window (its "data through" day); null until the first file is stored.
+      downloads: appleThrough ? {
+        window: windows.apple.cur,
+        cur: downloadsBySource(dl, windows.apple.cur, splitFrom),
+        prev: windows.apple.cmp ? downloadsBySource(dl, windows.apple.cmp, splitFrom) : null,
+        web: { cur: webDl(windows.apple.cur), prev: windows.apple.cmp ? webDl(windows.apple.cmp) : null },
+      } : null,
     }, { headers: { "Cache-Control": "private, max-age=60" } });
   } catch (e) {
     console.error("[api/lifecycle/acquisition] failed", e);

@@ -3,6 +3,8 @@
 //   gsc-pages  Search Console by page and day       → acq_gsc_page_daily (+ by "soccer" query → acq_gsc_query_daily)
 //   ga4-web    website traffic and store clicks      → acq_web_page_daily, acq_web_store_click_daily
 //   ga4-app    app first opens by platform / source  → acq_app_event_daily
+//   asc-analytics  Apple App Downloads files, AFTER the Google steps → acq_asc_downloads_daily
+//              (lib/ascAnalytics: every Apple file not yet stored; independent of the window below)
 //
 // READ-ONLY AGAINST GOOGLE (lib/acqGoogleSync). Each source is its own fin_sync_log row, so one
 // failing never hides the other two. A scheduled run re-reads the trailing ACQ_TRAILING_DAYS; a
@@ -13,6 +15,8 @@
 import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { runWithLog, type SourceName, type TriggeredBy } from "@/lib/syncLogging";
+import { mintToken } from "@/lib/appStoreInstallsSync";
+import { syncAscDownloads } from "@/lib/ascAnalytics";
 import { ACQ_FLOOR, ACQ_TRAILING_DAYS, googleAnalyticsToken, syncGa4App, syncGa4Web, syncGsc } from "@/lib/acqGoogleSync";
 
 export const maxDuration = 300;
@@ -62,14 +66,16 @@ export async function POST(req: Request) {
   if (until > today) until = today;
   if (until < since) return Response.json({ error: "until is before since" }, { status: 400 });
 
-  let gToken: string;
-  try { gToken = await googleAnalyticsToken(); }
-  catch (e) { return Response.json({ error: e instanceof Error ? e.message : "Google token failed" }, { status: 500 }); }
+  /* A Google token failure fails the three Google steps (each logged) and still runs Apple's. */
+  let gToken: string | null = null, gErr = "Google token failed";
+  try { gToken = await googleAnalyticsToken(); } catch (e) { if (e instanceof Error) gErr = e.message; }
+  const google = <T,>(fn: (t: string) => Promise<T>) => () => (gToken ? fn(gToken) : Promise.reject(new Error(gErr)));
 
   const steps: [SourceName, () => Promise<Record<string, number>>, (r: Record<string, number>) => number][] = [
-    ["gsc-pages", () => syncGsc(sb, gToken, since, until), (r) => r.rows + r.queryRows],
-    ["ga4-web", () => syncGa4Web(sb, gToken, since, until), (r) => r.pageRows + r.clickRows],
-    ["ga4-app", () => syncGa4App(sb, gToken, since, until), (r) => r.rows],
+    ["gsc-pages", google((t) => syncGsc(sb, t, since, until)), (r) => r.rows + r.queryRows],
+    ["ga4-web", google((t) => syncGa4Web(sb, t, since, until)), (r) => r.pageRows + r.clickRows],
+    ["ga4-app", google((t) => syncGa4App(sb, t, since, until)), (r) => r.rows],
+    ["asc-analytics", async () => { const r = await syncAscDownloads(sb, mintToken().token, ACQ_FLOOR); return { rows: r.rows, stored: r.stored, instances: r.instances }; }, (r) => r.rows],
   ];
   const results: Record<string, unknown> = {};
   let anyFailed = false;

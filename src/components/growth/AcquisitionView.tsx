@@ -10,12 +10,13 @@
  *                          registration beside our own registrations and first-time players
  *     Website              a row per market (Google rank first), expandable to its pages and the exact
  *                          rank queries; Homepage and site-wide; Other pages (collapsed); whole-site Total
- *     Downloads by source  Apple's split, one Instagram and Facebook row; "—" until the Apple sync
- *   page.link first opens, collapsed at the very bottom until the Apple sync replaces it
+ *     Downloads by source  Apple's first-time downloads (lib/acquisitionModel.downloadsBySource):
+ *                          Standard's total, split by Detailed's named sources; one Instagram and
+ *                          Facebook row (Ryan, 2026-10-06; the page.link first-opens box it replaced
+ *                          is gone)
  *
  * NO EXPLANATORY TEXT ON THE PAGE. Caveats live in (i) hovers on the column that needs them. Every
- * source is compared on the days it has data for (lib/acquisitionModel.sourceWindows). Downloads
- * read "—" until the Apple sync lands.
+ * source is compared on the days it has data for (lib/acquisitionModel.sourceWindows).
  */
 
 import { Fragment, useEffect, useMemo, useState } from "react";
@@ -23,7 +24,7 @@ import styles from "./growth.module.css";
 import { fmtInt } from "./format";
 import {
   MILESTONES, SKEWED_BEFORE, clickRate, costPer, presetRange, sameDaysLastMonth,
-  type Group, type LinkSplit, type MarketRowView, type Measures, type PageLine, type Preset, type RankedPage,
+  type DownloadsBySource, type DlKey, type Group, type MarketRowView, type Measures, type PageLine, type Preset, type RankedPage,
   type SourceKey, type SourceWindow, type WebsiteTable, type Window,
 } from "@/lib/acquisitionModel";
 
@@ -47,8 +48,8 @@ const TIP = {
   visits: "Website sessions on these pages (Google Analytics). One person on one trip to the site counts once.",
   storeClicks: "Taps on an App Store or Google Play button on these pages. An intent to download, not a download.",
   clickRate: "Store clicks divided by visits: how many visitors tapped an App Store or Google Play button.",
-  webDownloads: "iPhone first-time downloads Apple credits to these pages (App Store web referrer). Apple reports 1 to 2 days late. Shows — until Apple's reports arrive.",
-  iphone: "First-time iPhone downloads, from Apple App Store analytics. Re-downloads are not counted. Android comes later. Shows — until Apple's reports arrive.",
+  webDownloads: "First-time iPhone downloads from store links tagged with this market (Apple's Campaign field). Apple knows the site, not the page, and hides small counts, so a market with none shows —. Total: every download Apple credits to playmatchday.com. Downloads from Poland count under Other cities.",
+  iphone: "First-time iPhone downloads, from Apple App Store analytics. Updates, restores and re-downloads are not counted. Android comes later.",
   share: "This source as a share of all iPhone downloads in the range.",
   cost: "What we paid for this source in the range: Meta spend on Instagram and Facebook, nothing on the others.",
 };
@@ -63,8 +64,8 @@ type Payload = {
   since: string; until: string;
   windows: Record<SourceKey, SourceWindow>;
   freshness: Record<SourceKey, string | null>;
-  current: { website: WebsiteTable; links: LinkSplit };
-  compare: { website: WebsiteTable; links: LinkSplit } | null;
+  current: { website: WebsiteTable };
+  compare: { website: WebsiteTable } | null;
   markets: MarketRowView[];
   totals: { cur: Totals; prev: Totals | null };
   notAttributed: { cur: number; prev: number | null };
@@ -73,7 +74,13 @@ type Payload = {
   cities: { cur: Group | null; prev: Group | null };
   otherPages: { cur: Group | null; prev: Group | null };
   excluded: { internal: number; reRegistrations: number };
+  downloads: null | {
+    window: Window;
+    cur: DownloadsBySource; prev: DownloadsBySource | null;
+    web: { cur: WebDl; prev: WebDl | null };
+  };
 };
+type WebDl = { byRow: Record<string, number>; site: number };
 
 function change(cur: number | null | undefined, prev: number | null | undefined): string | null {
   if (cur == null || prev == null) return null;
@@ -127,10 +134,10 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
   const t = data?.totals.cur, tp = compareOn ? data?.totals.prev ?? null : null;
   const web = data?.current.website.total, webP = compareOn ? data?.compare?.website.total : undefined;
   // "Data through": the latest day any live source has; the hover lists each source's own day.
-  const through = data ? (["gsc", "web", "app", "meta"] as SourceKey[]).map((k) => data.freshness[k]).filter(Boolean).sort().pop() : null;
+  const through = data ? (["gsc", "web", "app", "meta", "apple"] as SourceKey[]).map((k) => data.freshness[k]).filter(Boolean).sort().pop() : null;
   const throughTip = data
-    ? (["gsc", "web", "app", "meta"] as SourceKey[]).map((k) => `${SOURCE_NAME[k]}: ${short(data.freshness[k])}`).join("\n")
-      + "\nApp Store: waiting for Apple (runs 1 to 2 days behind)\nOur players: today"
+    ? (["gsc", "web", "app", "meta", "apple"] as SourceKey[]).map((k) => `${SOURCE_NAME[k]}: ${data.freshness[k] ? short(data.freshness[k]) : "waiting for Apple"}`).join("\n")
+      + "\nApp Store runs 1 to 2 days behind.\nOur players: today"
       + "\nEach source is compared on the days it has data for."
     : "";
   const metaFrom = data?.metaWindow.cur?.since;
@@ -138,6 +145,10 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
   const regSince = data?.metaWindow.regSince;
   const regTip = `Registrations Meta credits to an ad (someone tapped an ad, installed, and signed up within 7 days). Meta's own count. Available from Sep 12${regSince ? ` (this range: from ${short(regSince)})` : ""}.`;
   const cprTip = `Ad spend divided by Meta registrations, both from Sep 12 on, when Meta could first see registrations.`;
+  const dl = data?.downloads ?? null;
+  const webDl = dl?.web.cur ?? null, webDlP = compareOn ? dl?.web.prev ?? null : null;
+  /* A Website row's downloads: its tagged count, or "—" (never 0) when it has none. */
+  const rowDl = (key: string) => (webDl ? { n: webDl.byRow[key] || null, p: webDlP ? webDlP.byRow[key] ?? 0 : null } : undefined);
   const searchTip = `Clicks from Google search results to these pages (Search Console). Google reports about 2 days late (through ${short(data?.freshness.gsc)}).`;
 
   return (
@@ -264,7 +275,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                         <tr className="acq-row" data-testid="acq-market" data-market={r.key} aria-expanded={isOpen} onClick={() => toggle(r.key)}>
                           <td><span className="acq-caret">{isOpen ? "▾" : "▸"}</span>{r.label}</td>
                           <RankCell rank={r.cur.rank} prev={p ? p.rank : undefined} />
-                          <WebCells m={r.cur.web} p={p?.web ?? null} />
+                          <WebCells m={r.cur.web} p={p?.web ?? null} dl={rowDl(r.key)} />
                         </tr>
                         {isOpen && (r.pages.length
                           ? r.pages.map((pg) => <PageRow key={pg.path} pg={pg} />)
@@ -272,14 +283,14 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                       </Fragment>
                     );
                   })}
-                  <SiteRow label="Homepage and site-wide" testId="acq-site-home" open={open.has("home")} onToggle={() => toggle("home")}
+                  <SiteRow label="Homepage and site-wide" testId="acq-site-home" dl={rowDl("site")} open={open.has("home")} onToggle={() => toggle("home")}
                     groups={[data.site.cur, data.cities.cur]} prevGroups={compareOn ? [data.site.prev, data.cities.prev] : []} />
-                  <SiteRow label="Other pages" testId="acq-site-other" count open={open.has("other")} onToggle={() => toggle("other")}
+                  <SiteRow label="Other pages" testId="acq-site-other" dl={rowDl("other")} count open={open.has("other")} onToggle={() => toggle("other")}
                     groups={[data.otherPages.cur]} prevGroups={compareOn ? [data.otherPages.prev] : []} />
                   <tr className={`${styles.adsTotal} acq-total`} data-testid="acq-total">
                     <td>Total</td>
                     <td className="acq-dash">—</td>
-                    <WebCells m={t.web} p={tp?.web ?? null} />
+                    <WebCells m={t.web} p={tp?.web ?? null} dl={webDl ? { n: webDl.site || null, p: webDlP ? webDlP.site : null } : undefined} />
                   </tr>
                 </tbody>
               </table>
@@ -298,27 +309,31 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                   <th>Cost <Info tip={TIP.cost} /></th>
                 </tr></thead>
                 <tbody>
-                  {DL_SOURCES.map((src) => (
-                    <tr key={src.key} data-testid="acq-source-row" data-source={src.key}>
-                      <td><b>{src.label}</b> <Info tip={src.tip} /><span className="acq-srcsub">{src.sub}</span></td>
-                      <td className="acq-dash">—</td>
-                      <td className="acq-dash">—</td>
-                      <td><span className="acq-n">{src.key === "meta" ? money(t.spendCents) : "$0"}</span></td>
-                    </tr>
-                  ))}
-                  <tr className={`${styles.adsTotal} acq-total`}>
-                    <td>Total</td><td className="acq-dash">—</td><td className="acq-dash">—</td><td />
+                  {DL_SOURCES.filter((src) => !src.unsplit || (dl && dl.cur.by[src.key] > 0)).map((src) => {
+                    const n = dl ? dl.cur.by[src.key] : null, pv = dl && compareOn && dl.prev ? dl.prev.by[src.key] : null;
+                    /* The named rows exist only from the first day Detailed covers; say so when the range
+                     * starts earlier, and show "—" while there is no Detailed file at all. */
+                    const named = NAMED.has(src.key), noSplit = named && (!dl?.cur.splitFrom || dl.cur.splitFrom > dl.window.until);
+                    const fromNote = named && dl?.cur.splitFrom && !noSplit && dl.window.since < dl.cur.splitFrom ? `from ${short(dl.cur.splitFrom)}` : null;
+                    return (
+                      <tr key={src.key} data-testid="acq-source-row" data-source={src.key}>
+                        <td><b>{src.label}</b> <Info tip={src.tip} /><span className="acq-srcsub">{fromNote ? <span data-testid="acq-source-from">{fromNote}</span> : src.sub}</span></td>
+                        {n == null || noSplit ? <td className="acq-dash">—</td> : <Cell v={fmtInt(n)} cur={n} prev={pv} />}
+                        <td>{n == null || noSplit ? <span className="acq-dash">—</span> : <span className="acq-n">{pct(n, dl!.cur.total)}</span>}</td>
+                        <td><span className="acq-n">{src.key === "meta" ? money(t.spendCents) : "$0"}</span></td>
+                      </tr>
+                    );
+                  })}
+                  <tr className={`${styles.adsTotal} acq-total`} data-testid="acq-source-total">
+                    <td>Total{dl && dl.cur.outsideUS > 0 && <> <Info tip={`Includes ${fmtInt(dl.cur.outsideUS)} downloads from outside the US, ${fmtInt(dl.cur.poland)} of them from Poland (Warsaw, the licensee).`} /></>}</td>
+                    {dl ? <Cell v={fmtInt(dl.cur.total)} cur={dl.cur.total} prev={compareOn ? dl.prev?.total : null} /> : <td className="acq-dash">—</td>}
+                    <td>{dl ? <span className="acq-n">100%</span> : <span className="acq-dash">—</span>}</td><td />
                   </tr>
                 </tbody>
               </table>
             </div>
           </section>
 
-          {/* ── 6 · page.link FIRST OPENS — collapsed at the bottom until the Apple sync replaces it ── */}
-          <details className="acq-sources" data-testid="acq-sources">
-            <summary>page.link first opens</summary>
-            <LinkOpens links={data.current.links} prev={compareOn ? data.compare?.links ?? null : null} />
-          </details>
         </>
       )}
     </div>
@@ -347,7 +362,7 @@ function RankCell({ rank, prev }: { rank: number | null; prev?: number | null })
   );
 }
 /** Search clicks · Visits · Store clicks · Click rate · Downloads — the same five on every row. */
-function WebCells({ m, p }: { m: Measures; p: Measures | null }) {
+function WebCells({ m, p, dl }: { m: Measures; p: Measures | null; dl?: { n: number | null; p: number | null } }) {
   const cr = clickRate(m);
   return (
     <>
@@ -355,7 +370,7 @@ function WebCells({ m, p }: { m: Measures; p: Measures | null }) {
       <Cell v={fmtInt(m.visits)} cur={m.visits} prev={p?.visits} />
       <Cell v={fmtInt(m.storeClicks)} cur={m.storeClicks} prev={p?.storeClicks} />
       <td><span className="acq-n">{cr == null ? "—" : `${Math.round(cr * 100)}%`}</span></td>
-      <td className="acq-dash">—</td>
+      {dl && dl.n != null ? <Cell v={fmtInt(dl.n)} cur={dl.n} prev={dl.p} /> : <td className="acq-dash" data-testid="acq-dl-dash">—</td>}
     </>
   );
 }
@@ -384,8 +399,9 @@ function sumGroups(gs: (Group | null | undefined)[]): Measures & { pages: PageLi
   for (const g of gs) { if (!g) continue; m.impressions += g.impressions; m.px += g.px; m.searchClicks += g.searchClicks; m.visits += g.visits; m.storeClicks += g.storeClicks; m.pages.push(...g.pages); }
   return m;
 }
-function SiteRow({ label, groups, prevGroups, count, open, onToggle, testId }: {
+function SiteRow({ label, groups, prevGroups, count, open, onToggle, testId, dl }: {
   label: string; groups: (Group | null)[]; prevGroups: (Group | null)[]; count?: boolean; open: boolean; onToggle: () => void; testId: string;
+  dl?: { n: number | null; p: number | null };
 }) {
   const m = sumGroups(groups), p = prevGroups.length ? sumGroups(prevGroups) : null;
   return (
@@ -393,7 +409,7 @@ function SiteRow({ label, groups, prevGroups, count, open, onToggle, testId }: {
       <tr data-testid={testId} className="acq-row acq-siterow" onClick={onToggle} aria-expanded={open}>
         <td><span className="acq-caret">{open ? "▾" : "▸"}</span>{label}{count && <span className="acq-muted"> · {m.pages.length}</span>}</td>
         <td className="acq-dash">—</td>
-        <WebCells m={m} p={p} />
+        <WebCells m={m} p={p} dl={dl} />
       </tr>
       {open && m.pages.map((pg) => (
         <tr key={pg.path} className="acq-sub" data-testid="acq-other-page">
@@ -407,8 +423,10 @@ function SiteRow({ label, groups, prevGroups, count, open, onToggle, testId }: {
 }
 
 /* THE SOURCES APPLE'S DOWNLOAD REPORTS SPLIT BY, in the mock's wording. Instagram and Facebook is ONE
- * row: Apple's app referrer cannot tell a paid ad from an organic post, so it is never split here. */
-const DL_SOURCES: { key: string; label: string; sub: string; tip: string }[] = [
+ * row: Apple's app referrer cannot tell a paid ad from an organic post, so it is never split here.
+ * The two "not split" rows appear only for days Apple's Detailed report does not cover. */
+const NAMED = new Set<DlKey>(["meta", "share", "web", "google"]);
+const DL_SOURCES: { key: DlKey; label: string; sub: string; tip: string; unsplit?: boolean }[] = [
   { key: "meta", label: "Instagram and Facebook", sub: "Ads + organic",
     tip: "Downloads where Apple says the person came from the Instagram or Facebook app (App Store \"app referrer\"). Apple cannot tell a paid ad from an organic post, so this is both. For ads alone, see Meta installs in the Meta ads table." },
   { key: "share", label: "Player share links", sub: "In-app shares",
@@ -421,26 +439,15 @@ const DL_SOURCES: { key: string; label: string; sub: string; tip: string }[] = [
     tip: "People who searched inside the App Store and downloaded (Apple source type \"App Store search\")." },
   { key: "browse", label: "App Store browse", sub: "Charts, Today tab, similar apps",
     tip: "People who found us browsing the App Store (Apple source type \"App Store browse\")." },
+  { key: "appref", label: "Another app, not split", sub: "Before Apple names the app", unsplit: true,
+    tip: "Downloads from another app (Apple's \"app referrer\") on days before Apple's detailed report, which names the app, begins. Instagram and Facebook are inside this." },
+  { key: "webref", label: "A website, not split", sub: "Before Apple names the site", unsplit: true,
+    tip: "Downloads from a website (Apple's \"web referrer\") on days before Apple's detailed report, which names the site, begins. Share links, our website and Google are inside this." },
   { key: "other", label: "Other", sub: "Unknown or other",
-    tip: "Everything Apple cannot attribute or attributes elsewhere: other apps, other websites, \"unavailable\"." },
+    tip: "Downloads Apple doesn't name the source for, including small counts it hides for privacy." },
 ];
 
 const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "—");
-function LinkOpens({ links, prev }: { links: LinkSplit; prev: LinkSplit | null }) {
-  return (
-    <div className="acq-src">
-      <table className="acq-pages">
-        <thead><tr><th>Source <Info tip="App first opens through page.link links, from app analytics (iPhone and Android), by where the link came from. Share links are the player-shares floor. Replaced by the Downloads by source table once Apple's reports arrive." /></th><th>Opens</th><th>Share</th></tr></thead>
-        <tbody>
-          {([["Share links", links.share, prev?.share], ["Instagram organic", links.ig_social, prev?.ig_social], ["Meta ads", links.paid, prev?.paid], ["Other", links.other, prev?.other]] as const).map(([k, n, pv]) => (
-            <tr key={k} data-testid="acq-link-row"><td>{k}</td><td><span className="acq-n">{fmtInt(n)}</span><Chg cur={n} prev={pv} /></td><td>{pct(n, links.total)}</td></tr>
-          ))}
-          <tr className="acq-total"><td>Total</td><td><span className="acq-n">{fmtInt(links.total)}</span><Chg cur={links.total} prev={prev?.total} /></td><td>100%</td></tr>
-        </tbody>
-      </table>
-    </div>
-  );
-}
 
 const CSS = `
 .acq .acq-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
