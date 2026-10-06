@@ -310,7 +310,11 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                 </tr></thead>
                 <tbody>
                   {DL_SOURCES.filter((src) => !src.unsplit || (dl && dl.cur.by[src.key] > 0)).map((src) => {
-                    const n = dl ? dl.cur.by[src.key] : null, pv = dl && compareOn && dl.prev ? dl.prev.by[src.key] : null;
+                    /* A split-dependent row compares only when BOTH windows are fully split; against a window
+                     * Apple had not split yet it would read "new" for no real reason. */
+                    const splitDependent = src.key !== "search" && src.key !== "browse";
+                    const comparable = !!(dl && dl.prev && (!splitDependent || (dl.cur.unsplitDays === 0 && dl.prev.unsplitDays === 0)));
+                    const n = dl ? dl.cur.by[src.key] : null, pv = dl && compareOn && comparable ? dl.prev!.by[src.key] : null;
                     /* The named rows exist only from the first day Detailed covers; say so when the range
                      * starts earlier, and show "—" while there is no Detailed file at all. */
                     const named = NAMED.has(src.key), noSplit = named && (!dl?.cur.splitFrom || dl.cur.splitFrom > dl.window.until);

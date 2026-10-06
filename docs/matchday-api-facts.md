@@ -6705,3 +6705,27 @@ account to its live person; `growth_account.status` counts each person's EARLIES
 growth_participation, growth_registration, growth_acquisition_daily and (through participation)
 growth_player_profile and everything built on it apply it. `/api/lifecycle/behavior-weekly` reads
 those views and re-checks nothing.
+
+## Apple Analytics Reports: App Downloads files (2026-10-06)
+
+Evidence: prod `GET /api/lifecycle/acquisition/probe?apple=audit` at 2026-10-06T15:59:40Z (reads every
+segment of every instance; `src/lib/ascAnalytics.ts`), then the first `asc-analytics` sync run
+(fin_sync_log 43edaee6…, 2,893 rows) read back from `acq_asc_downloads_daily`.
+
+- **Files are tab-separated, gzipped, one segment each so far.** Standard: Date, App Name, App Apple
+  Identifier, Download Type, App Version, Device, Platform Version, Source Type, Page Type, Pre-Order,
+  Territory, Counts. Detailed adds **Source Info, Campaign, Page Title**.
+- **A later file RESTATES whole days, it does not add to them.** Oct 4 and Oct 5 read 157 / 251 and
+  134 / 193 (first-time / all) in BOTH the history file (processed Oct 5) and the daily file (processed
+  Oct 6). The sync therefore replaces a day per report. Proven for Standard only; Detailed has one file.
+- **The history (ONE_TIME_SNAPSHOT) Standard file has no gaps:** 1,009 distinct days, 2024-01-01 to
+  2026-10-05, every day with first-time downloads. The earlier "1,000 days" was the deep probe's own
+  `distinct("Date", 1000)` cap, not the file. No Detailed history instance yet.
+- **Detailed drops small rows:** 23 rows against Standard's 181 for Oct 4–5; first-time 193 against
+  291. It never sets a total.
+- **Source Info values seen:** `com.burbn.instagram`, `com.facebook.Facebook` (App referrer),
+  `page.link` (Web referrer), blank (App Store search). No `playmatchday.com` or `google.com` yet.
+  **Campaign is blank on every row.**
+- **Territory:** first-time downloads since Jul 1: US 9,238, PL 141 (Aug 32, Sep 84, Oct 1–5 25).
+- Standard first-time since Jul 1 = **9,616** (search 3,470, app referrer 4,661, web referrer 1,381,
+  browse 103, Unavailable 1) — the audit and the stored rows agree.
