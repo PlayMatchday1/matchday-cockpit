@@ -6749,3 +6749,9 @@ instance of each granularity, first segment; `acq_asc_instance` read back the sa
   with a whole week, so the sync stores DAILY instances only (lib/ascAnalytics).
 - Ongoing Discovery and Engagement files now exist too (Standard 550 rows, Detailed 94, Oct 3–5). Not
   stored.
+- **Page Title values (Detailed, stored after 0211, 2026-10-06):** `Default product page` (on Page Type
+  `Product page` and `Store sheet`) and `No page`. Nothing else since Jul 1. A custom product page is
+  expected to carry its own name here — still UNKNOWN until one has downloads. Evidence: the manual
+  `asc-analytics` run after 0211 (4 files, 5,325 rows) read back from `acq_asc_downloads_daily`; Standard
+  first-time since Jul 1 = 9,616 (No page 3,479 · Store sheet 3,559 · Product page 2,578), the same total
+  the audit found, so the re-read double counted nothing.
