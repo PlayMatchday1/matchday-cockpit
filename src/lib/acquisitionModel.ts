@@ -291,8 +291,12 @@ export type DlSub = "igfb" | "otherApps" | "share" | "site" | "google" | "otherS
 export type DlTag = { tag: string; under: DlSub | DlTop; n: number };
 /** Meta, per day, iPhone campaigns only: installs (null = Meta did not say) and spend. */
 export type MetaDay = { installs: number | null; spendCents: number };
+/** One app Apple names under Other apps (Detailed Source Info), and the label shown for it. */
+export type DlApp = { info: string; label: string; n: number };
 export type DlSplit = {
   sub: Record<DlSub, number>; tags: DlTag[];
+  apps: DlApp[];              // each app Apple names inside Other apps, most downloads first
+  unnamedApps: number;        // the rest of Other apps: Apple's App referrer count it does not name
   metaApple: number | null;   // Apple's count through a "Meta ads" custom product page; null = no such page in the window
   metaEst: number | null;     // Meta's installs on the other days; null = none of those days, or unknown
   organic: number | null;     // null when unknown, or when Meta claims more than Apple counted
@@ -321,6 +325,23 @@ export function subOf(sourceType: string, info: string): DlSub | null {
 }
 export const topOf = (sourceType: string): DlTop =>
   sourceType === "App referrer" ? "apps" : sourceType === "Web referrer" ? "web" : sourceType === "App Store search" ? "search" : sourceType === "App Store browse" ? "browse" : "other";
+/* APP NAMES FOR APPLE'S SOURCE INFO (bundle ids), Ryan 2026-10-06. A bundle id not listed here is
+ * shown as Apple wrote it, so a new app is visible the day it appears rather than folded away. */
+const APP_LABEL: Record<string, string> = {
+  "net.whatsapp.whatsapp": "WhatsApp", "net.whatsapp.whatsappsmb": "WhatsApp Business",
+  "com.apple.mobilesms": "Messages", "com.apple.mobilemail": "Mail", "com.apple.sharingd": "AirDrop",
+  "com.apple.spotlight": "Spotlight search", "com.apple.camera": "QR code / Camera", "com.apple.barcodesupport.qrcode": "QR code / Camera",
+  "com.apple.askpermissionui": "Ask to Buy", "com.apple.mobilesafari": "Safari",
+  "com.zhiliaoapp.musically": "TikTok", "com.toyopagroup.picaboo": "Snapchat", "com.facebook.messenger": "Messenger",
+  "com.google.googlemobile": "Google app", "com.google.gmail": "Gmail", "com.google.chrome.ios": "Chrome", "com.google.chrome": "Chrome",
+  "com.google.gemini": "Gemini", "com.groupme.iphone-app": "GroupMe", "com.tinyspeck.chatlyio": "Slack",
+  "com.brave.ios.browser": "Brave", "com.microsoft.msedge": "Edge", "org.mozilla.ios.firefox": "Firefox",
+  "com.duckduckgo.mobile.ios": "DuckDuckGo", "com.ecosia.ecosiaapp": "Ecosia", "com.opera.operatouch": "Opera",
+  "company.thebrowser.arcmobile2": "Arc", "com.linkedin.linkedin": "LinkedIn", "ph.telegra.telegraph": "Telegram",
+  "ai.x.grokapp": "Grok", "com.burbn.threads": "Threads", "com.atebits.tweetie2": "X", "com.reddit.reddit": "Reddit",
+  "com.hammerandchisel.discord": "Discord", "com.matchday-app": "MatchDay",
+};
+export const appLabel = (info: string) => APP_LABEL[info.trim().toLowerCase()] ?? info.trim();
 export const isMetaAdsPage = (title: string | undefined) => !!title && /^meta ads\b/i.test(title.trim());
 
 /** Every day of a window, in order. */
@@ -342,6 +363,7 @@ export function downloadsTable(rows: readonly DlRow[], win: Window, cov: Coverag
   const named: Record<DlSub, number> = { igfb: 0, otherApps: 0, share: 0, site: 0, google: 0, otherSites: 0 };
   const tags = new Map<string, DlTag>();
   const cppByDay = new Map<string, number>();
+  const appN = new Map<string, number>();     // Other apps, by the app Apple names
   for (const r of rows) {
     if (r.download_type !== FIRST_TIME || r.day < win.since || r.day > win.until) continue;
     if (r.report === "standard") {
@@ -352,6 +374,7 @@ export function downloadsTable(rows: readonly DlRow[], win: Window, cov: Coverag
     }
     const sub = subOf(r.source_type, r.source_info);
     if (sub && sub !== "otherApps" && sub !== "otherSites") named[sub] += r.counts;
+    if (sub === "otherApps" && r.source_info.trim()) { const k = appLabel(r.source_info); appN.set(k, (appN.get(k) ?? 0) + r.counts); }
     if (isMetaAdsPage(r.page_title)) cppByDay.set(r.day, (cppByDay.get(r.day) ?? 0) + r.counts);
     const tag = r.campaign.trim().toLowerCase();
     if (tag) {
@@ -385,8 +408,12 @@ export function downloadsTable(rows: readonly DlRow[], win: Window, cov: Coverag
     const claimed = (metaApple ?? 0) + (metaEst ?? 0);
     const left = named.igfb - claimed;
     const metaOver = !estUnknown && left < 0;
+    /* Each named app under Other apps, by label (two bundle ids with one label are one row); what Apple
+     * does not name is the rest of Standard's App referrer count. Never negative. */
+    const apps = [...appN].map(([label, n]) => ({ info: label, label, n })).filter((a) => a.n > 0).sort((a, b) => b.n - a.n || a.label.localeCompare(b.label));
+    const unnamedApps = Math.max(0, sub.otherApps - apps.reduce((x, a) => x + a.n, 0));
     split = {
-      sub, tags: [...tags.values()].filter((t) => t.n > 0).sort((a, b) => b.n - a.n || a.tag.localeCompare(b.tag)),
+      sub, apps, unnamedApps, tags: [...tags.values()].filter((t) => t.n > 0).sort((a, b) => b.n - a.n || a.tag.localeCompare(b.tag)),
       metaApple, metaEst, organic: estUnknown || metaOver ? null : left, metaOver,
       metaAppleSpendCents: metaKnown ? appleSpend : null, metaEstSpendCents: metaKnown ? estSpend : null,
     };

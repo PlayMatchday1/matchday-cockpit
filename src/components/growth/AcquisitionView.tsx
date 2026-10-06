@@ -515,6 +515,9 @@ function DownloadRows({ dl, compareOn }: { dl: Payload["downloads"]; compareOn: 
     out.push(row({ key: "organic", level: 2, label: "Organic (est.)", n: sp.organic, prev: spP?.organic, cost: "$0" }));
     out.push(...tagRows("igfb", 2));
     out.push(row({ key: "otherApps", level: 1, label: SUB_LABEL.otherApps, n: sp.sub.otherApps, prev: subPrev("otherApps"), cost: "$0" }));
+    /* Each app Apple names, most downloads first, then what it does not name (Ryan, 2026-10-06). */
+    for (const a of sp.apps) out.push(row({ key: `app:${a.label}`, level: 2, label: a.label, n: a.n, prev: spP ? spP.apps.find((x) => x.label === a.label)?.n ?? 0 : null, cost: "$0", testId: "acq-source-app" }));
+    if (sp.unnamedApps > 0) out.push(row({ key: "unnamedApps", level: 2, label: "Unnamed apps", n: sp.unnamedApps, prev: spP?.unnamedApps, cost: "$0", testId: "acq-source-app" }));
     out.push(...tagRows("otherApps", 2));
   }
   out.push(row({ key: "web", level: 0, label: "From websites", tip: TIP.web, n: D.top.web, prev: P?.top.web, cost: "$0", note }));
