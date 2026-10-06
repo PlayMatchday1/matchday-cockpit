@@ -83,6 +83,10 @@ export type MetaSyncResult = {
 };
 
 const GRAPH = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
+/* Every effective_status, so archived ad sets are listed too (the default list omits them). Proven
+ * against the live account 2026-10-06: this filter returns 110 ad sets, the default 92. */
+const ADSET_STATUSES = ["ACTIVE", "PAUSED", "DELETED", "ARCHIVED", "CAMPAIGN_PAUSED", "ADSET_PAUSED", "IN_PROCESS", "WITH_ISSUES",
+  "PENDING_REVIEW", "DISAPPROVED", "PREAPPROVED", "PENDING_BILLING_INFO"];
 /** The parameter discovery proved works. Named, not guessed — `dma` returns a hard 400. */
 export const BREAKDOWN_PARAM = "comscore_market";
 
@@ -241,8 +245,14 @@ export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string, opts
     /* THE DIMENSION. attribution_spec is read on every run rather than assumed: every active ad set
      * is CLICK_THROUGH window_days 1 today, which is what decides how long an install can restate,
      * and a change by the agency has to be visible here instead of inferred from a number drifting. */
+    /* ARCHIVED AD SETS ARE ASKED FOR BY NAME (2026-10-06). The default /adsets list leaves them out
+     * (92 listed against 110 with this filter, the 18 missing all ARCHIVED). An archived ad set that
+     * still had spend in the window got NULL names from here, and the upsert below wrote them over the
+     * stored ones: 120249622094930381, the Android ad set in "MD / ATL / Android App Promotion -
+     * September 2026", lost both names, and the Acquisition page counted its $286.97 as iPhone spend. */
     const adsetMeta = await pageAll(`${account.id}/adsets`, {
       fields: "id,name,campaign_id,campaign{name},optimization_goal,attribution_spec,effective_status",
+      filtering: JSON.stringify([{ field: "effective_status", operator: "IN", value: ADSET_STATUSES }]),
       limit: "200",
     });
     const geo = await pageAll(`${account.id}/insights`, {
@@ -251,7 +261,7 @@ export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string, opts
     });
     const flat = await pageAll(`${account.id}/insights`, {
       ...adsetCommon, level: "adset",
-      fields: "adset_id,campaign_id,spend,impressions,clicks,reach,actions",
+      fields: "adset_id,adset_name,campaign_id,campaign_name,spend,impressions,clicks,reach,actions",
     });
 
     // ── geo rows ──────────────────────────────────────────────────────────────────────────────
@@ -355,10 +365,33 @@ export async function syncMetaAdSpend(sb: SupabaseClient, todayYmd: string, opts
         spec: a.attribution_spec ?? null,
       });
     }
+    /* A NAME IS NEVER WRITTEN AS NULL OVER ONE WE HAVE. For an ad set the list still did not return,
+     * the names come from the insight rows (Meta reports them for any status), and failing that, from
+     * what is already stored; the goal and attribution spec likewise keep their stored values. */
+    const insightName = new Map<string, { name: string | null; campaignName: string | null }>();
+    for (const r of flat) {
+      const id = String(r.adset_id ?? "");
+      if (id && !insightName.has(id)) insightName.set(id, { name: (r.adset_name as string) || null, campaignName: (r.campaign_name as string) || null });
+    }
+    const unnamed = [...byAdset.keys()].filter((id) => !nameOf.get(id)?.name || !nameOf.get(id)?.campaignName || !nameOf.get(id)?.goal);
+    const stored = new Map<string, { adset_name: string | null; campaign_name: string | null; optimization_goal: string | null; attribution_spec: unknown }>();
+    for (let i = 0; i < unnamed.length; i += 100) {
+      const { data, error } = await sb.from("fin_meta_adset").select("adset_id, adset_name, campaign_name, optimization_goal, attribution_spec")
+        .eq("ad_account_id", account.id).in("adset_id", unnamed.slice(i, i + 100));
+      if (error) throw new Error(`fin_meta_adset read failed: ${error.message}`);
+      for (const d of data ?? []) stored.set(String(d.adset_id), d);
+    }
     const dimRows: Record<string, unknown>[] = [];
     for (const [adsetId, rows] of byAdset) {
       const parent: DerivedParent = deriveParentMarket(rows);
-      const meta = nameOf.get(adsetId);
+      const listed = nameOf.get(adsetId), ins = insightName.get(adsetId), st = stored.get(adsetId);
+      const meta = {
+        name: listed?.name || ins?.name || st?.adset_name || null,
+        campaignId: listed?.campaignId || "",
+        campaignName: listed?.campaignName || ins?.campaignName || st?.campaign_name || null,
+        goal: listed?.goal || st?.optimization_goal || null,
+        spec: listed?.spec ?? st?.attribution_spec ?? null,
+      };
       if (parent.attributed) parentsAttributed++;
       else parentsNotAttributed.push({
         adsetId, adsetName: meta?.name ?? null,

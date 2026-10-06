@@ -6765,3 +6765,18 @@ sibling ad set `120249947428080381`. Together they are $326.46 / 92 installs in 
 Ads Manager. **Resolve a campaign's name by `campaign_id` across all ad sets, never from the ad set's
 own row** (lib/acquisitionModel.androidAdsets). Names are the latest Meta reported; no history is kept.
 Ad-set targeting (platform) is not stored anywhere.
+
+**CAUSE (found the same day): the sync's `/{account}/adsets` list omits ARCHIVED ad sets by default.**
+Evidence: live GET 2026-10-06 — default list 92 ad sets (ACTIVE 8, PAUSED 77, CAMPAIGN_PAUSED 6,
+WITH_ISSUES 1); with `filtering=[{field:"effective_status",operator:"IN",value:[…every status…]}]` 110,
+the extra 18 all ARCHIVED. `120249622094930381` is ARCHIVED (GET on the ad set: name "ATL", campaign "MD /
+ATL / Android App Promotion - September 2026", `targeting.user_os ["Android"]`, promoted_object a Google
+Play URL). It still had spend inside the 28-day window, so the sync upserted NULL names over the stored
+ones. Fixed in lib/metaAdSpendSync: the list asks for every status, names fall back to the insight rows
+(`adset_name`, `campaign_name`) and then to what is stored — a NULL is never written over a name. The one
+blanked row was filled from that GET (read back: APP_INSTALLS, market ATL unchanged). It was the only
+blank row in `fin_meta_adset` (43 rows).
+
+**September 2026 spend per market reconciles to the cent** between the page's Meta ads table (live
+`/api/lifecycle/acquisition`) and Meta's ad-set insights for Sep 1–30 grouped by each ad set's market:
+DFW 1,273.35 · ATL 1,430.37 · HTX 1,162.95 · ATX 1,156.73 · SATX 435.93 · STL 324.80 · total 5,784.13.
