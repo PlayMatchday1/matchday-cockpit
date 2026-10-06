@@ -19,6 +19,7 @@ import { authenticateLifecycle } from "@/lib/lifecycleAuth";
 import { mintToken, AppleAuthError } from "@/lib/appStoreInstallsSync";
 import { JWT } from "google-auth-library";
 import { gunzipSync } from "node:zlib";
+import { aggregateAsc, listAscInstances, readAscInstance, type AscRow } from "@/lib/ascAnalytics";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,6 +46,7 @@ export async function GET(req: Request) {
   const auth = await authenticateLifecycle(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   if (new URL(req.url).searchParams.get("google") === "1") return Response.json(await googleChecks(), { headers: { "Cache-Control": "no-store" } });
+  if (new URL(req.url).searchParams.get("apple") === "audit") return Response.json(await appleAudit(), { headers: { "Cache-Control": "no-store" } });
   if (new URL(req.url).searchParams.get("apple") === "deep") return Response.json(await appleDeep(), { headers: { "Cache-Control": "no-store" } });
 
   let token: string;
@@ -248,4 +250,98 @@ async function appleDeep(): Promise<Record<string, unknown>> {
     out[kind] = { requestStatus: req.status, request: (req.j.data as Res | undefined)?.attributes ?? req.j.errors, reportsListed: reports.items.length, reportsError: reports.error, reports: perReport };
   }
   return out;
+}
+
+/* ── APPLE, AUDIT, READ ONLY (?apple=audit) — before the sync is built (Ryan, 2026-10-06) ─────────
+ * Reads EVERY segment of every App Downloads instance and answers, from the whole files:
+ *   gaps       which calendar days between the history's first and last date have no row at all,
+ *              and the first-time totals on the days either side
+ *   overlap    the same day in two files (history vs daily, daily vs daily): equal totals mean a
+ *              file restates whole days, so a later file can replace a day rather than add to it
+ *   split      Standard vs Detailed first-time downloads per day and source type, with Detailed's
+ *              Source Info and Campaign values
+ *   territory  first-time downloads by territory since Jul 1, Poland on its own
+ * GETs only; nothing is stored. */
+async function appleAudit(): Promise<Record<string, unknown>> {
+  let token: string;
+  try { token = mintToken().token; } catch (e) { return { error: e instanceof AppleAuthError ? e.message : "could not sign a token" }; }
+  const FT = "First-time download";
+  const instances = await listAscInstances(token);
+  const files: { inst: (typeof instances)[number]; rows: AscRow[]; segments: number; rawRows: number; header: string[] }[] = [];
+  for (const inst of instances) {
+    try {
+      const f = await readAscInstance(token, inst.id);
+      files.push({ inst, rows: aggregateAsc(inst.report, f.header, f.rows), segments: f.segments, rawRows: f.rows.length, header: f.header });
+    } catch (e) { files.push({ inst, rows: [], segments: -1, rawRows: -1, header: [e instanceof Error ? e.message : String(e)] }); }
+  }
+  const ftByDay = (rows: AscRow[]) => { const m = new Map<string, number>(); for (const r of rows) if (r.download_type === FT) m.set(r.day, (m.get(r.day) ?? 0) + r.counts); return m; };
+  const allByDay = (rows: AscRow[]) => { const m = new Map<string, number>(); for (const r of rows) m.set(r.day, (m.get(r.day) ?? 0) + r.counts); return m; };
+  const addDays = (d: string, n: number) => { const x = new Date(`${d}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+
+  const summary = files.map((f) => {
+    const days = [...new Set(f.rows.map((r) => r.day))].sort();
+    return { request: f.inst.request, report: f.inst.report, granularity: f.inst.granularity, processingDate: f.inst.processingDate,
+      segments: f.segments, rawRows: f.rawRows, header: f.header, firstDay: days[0] ?? null, lastDay: days[days.length - 1] ?? null, distinctDays: days.length,
+      firstTimeTotal: f.rows.filter((r) => r.download_type === FT).reduce((a, r) => a + r.counts, 0) };
+  });
+
+  // GAPS, in the history file(s)
+  const gaps = files.filter((f) => f.inst.request === "snapshot").map((f) => {
+    const days = [...new Set(f.rows.map((r) => r.day))].sort();
+    const have = new Set(days), ft = ftByDay(f.rows), all = allByDay(f.rows);
+    const missing: { day: string; prevDay: string; prevFirstTime: number; prevAll: number; nextDay: string; nextFirstTime: number; nextAll: number }[] = [];
+    if (days.length) for (let d = days[0]; d <= days[days.length - 1]; d = addDays(d, 1)) {
+      if (have.has(d)) continue;
+      let p = addDays(d, -1); while (!have.has(p) && p >= days[0]) p = addDays(p, -1);
+      let n = addDays(d, 1); while (!have.has(n) && n <= days[days.length - 1]) n = addDays(n, 1);
+      missing.push({ day: d, prevDay: p, prevFirstTime: ft.get(p) ?? 0, prevAll: all.get(p) ?? 0, nextDay: n, nextFirstTime: ft.get(n) ?? 0, nextAll: all.get(n) ?? 0 });
+    }
+    // how many days have zero first-time downloads but other rows (a quiet day still gets a row?)
+    const zeroFtDays = days.filter((d) => !ft.get(d)).length;
+    return { report: f.inst.report, processingDate: f.inst.processingDate, first: days[0], last: days[days.length - 1], distinctDays: days.length, missing, daysWithRowsButNoFirstTime: zeroFtDays };
+  });
+
+  // OVERLAP: the same report, the same day, in two files
+  const overlap: { report: string; day: string; files: { request: string; processingDate: string; firstTime: number; all: number }[] }[] = [];
+  for (const report of ["standard", "detailed"] as const) {
+    const fs = files.filter((f) => f.inst.report === report);
+    const days = new Map<string, { request: string; processingDate: string; firstTime: number; all: number }[]>();
+    for (const f of fs) {
+      const ft = ftByDay(f.rows), all = allByDay(f.rows);
+      for (const [d, n] of all) { if (d < "2026-09-20") continue; (days.get(d) ?? days.set(d, []).get(d)!).push({ request: f.inst.request, processingDate: f.inst.processingDate, firstTime: ft.get(d) ?? 0, all: n }); }
+    }
+    for (const [day, list] of [...days].sort()) if (list.length > 1) overlap.push({ report, day, files: list });
+  }
+
+  // SPLIT: Standard vs Detailed first-time downloads per day and source type, on the days Detailed has
+  const newestByDay = (report: "standard" | "detailed") => {
+    const m = new Map<string, AscRow[]>();
+    for (const f of files.filter((x) => x.inst.report === report).sort((a, b) => a.inst.processingDate.localeCompare(b.inst.processingDate))) {
+      const days = new Set(f.rows.map((r) => r.day));
+      for (const d of days) m.set(d, f.rows.filter((r) => r.day === d));
+    }
+    return m;
+  };
+  const std = newestByDay("standard"), det = newestByDay("detailed");
+  const split = [...det.keys()].sort().map((day) => {
+    const s: Record<string, number> = {}, dd: Record<string, Record<string, number>> = {};
+    for (const r of std.get(day) ?? []) if (r.download_type === FT) s[r.source_type] = (s[r.source_type] ?? 0) + r.counts;
+    for (const r of det.get(day) ?? []) if (r.download_type === FT) { const e = dd[r.source_type] ?? (dd[r.source_type] = {}); const k = `${r.source_info || "(blank)"} | campaign:${r.campaign || "(blank)"}`; e[k] = (e[k] ?? 0) + r.counts; }
+    return { day, standardFirstTimeBySourceType: s, detailedFirstTimeBySourceType: dd };
+  });
+
+  // TERRITORY, first-time, since Jul 1, from the newest file holding each Standard day
+  const terr: Record<string, number> = {}; const terrAll: Record<string, number> = {};
+  for (const [d, rows] of std) for (const r of rows) if (r.download_type === FT) { terrAll[r.territory] = (terrAll[r.territory] ?? 0) + r.counts; if (d >= "2026-07-01") terr[r.territory] = (terr[r.territory] ?? 0) + r.counts; }
+  const plByMonth: Record<string, number> = {};
+  for (const [d, rows] of std) for (const r of rows) if (r.download_type === FT && r.territory === "PL") plByMonth[d.slice(0, 7)] = (plByMonth[d.slice(0, 7)] ?? 0) + r.counts;
+  const top = (o: Record<string, number>) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, 12);
+
+  // the Standard source types and download types in use
+  const srcTypes: Record<string, number> = {};
+  for (const [d, rows] of std) if (d >= "2026-07-01") for (const r of rows) if (r.download_type === FT) srcTypes[r.source_type] = (srcTypes[r.source_type] ?? 0) + r.counts;
+
+  return { checkedAt: new Date().toISOString(), instances: summary, gaps, overlap, split,
+    territoryFirstTimeSinceJul1: top(terr), territoryFirstTimeAllHistory: top(terrAll), polandFirstTimeByMonth: plByMonth,
+    standardFirstTimeBySourceTypeSinceJul1: srcTypes };
 }
