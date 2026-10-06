@@ -394,17 +394,37 @@ export function downloadsTable(rows: readonly DlRow[], win: Window, cov: Coverag
   return { top, total, outsideUS, poland, split, splitFrom, spendCents };
 }
 
-/** Meta's iPhone days: installs and spend per day from fin_meta_adset_daily, leaving out ad sets in a
- *  campaign named for Android (their installs are not iPhone downloads). */
-export function metaIphoneDays(flat: readonly { spend_date: string; adset_id: string; spend_cents: number; installs: number | null }[], campaignOf: (adsetId: string) => string | null): Map<string, MetaDay> {
+/** Meta's iPhone days: installs and spend per day from fin_meta_adset_daily, leaving out every Android
+ *  ad set (`isAndroid`). */
+export function metaIphoneDays<R extends { spend_date: string; adset_id: string; campaign_id?: string | null; spend_cents: number; installs: number | null }>(
+  flat: readonly R[], isAndroid: (r: R) => boolean,
+): Map<string, MetaDay> {
   const out = new Map<string, MetaDay>();
   for (const r of flat) {
-    if (/android/i.test(campaignOf(r.adset_id) ?? "")) continue;
+    if (isAndroid(r)) continue;
     const e = out.get(r.spend_date) ?? (out.set(r.spend_date, { installs: null, spendCents: 0 }), out.get(r.spend_date)!);
     e.spendCents += Number(r.spend_cents);
     if (r.installs != null) e.installs = (e.installs ?? 0) + Number(r.installs);
   }
   return out;
+}
+
+/* WHICH AD SETS ARE ANDROID (Ryan, 2026-10-06). Every ad set in a campaign whose name contains
+ * "Android", plus any ad set whose own name does. The campaign is the one ON THE SPEND ROW
+ * (fin_meta_adset_daily.campaign_id), and its name is looked up BY CAMPAIGN ID across every ad set in
+ * fin_meta_adset — an ad set can carry a null campaign_name of its own: 120249622094930381 ($286.97 /
+ * 66 installs in Sep) has null names while its sibling in campaign 120249622094940381 carries
+ * "MD / ATL / Android App Promotion - September 2026". Names are the latest Meta reported (fin_meta_adset
+ * keeps no history). Targeting is not stored, so it cannot be read here. */
+export function androidAdsets(dims: readonly { adset_id: string; campaign_id: string | null; adset_name: string | null; campaign_name: string | null }[]) {
+  const campaignName = new Map<string, string>();
+  for (const d of dims) if (d.campaign_id && d.campaign_name && !campaignName.has(d.campaign_id)) campaignName.set(d.campaign_id, d.campaign_name);
+  const byAdset = new Map(dims.map((d) => [d.adset_id, d]));
+  return (r: { adset_id: string; campaign_id?: string | null }) => {
+    const d = byAdset.get(r.adset_id);
+    const camp = (r.campaign_id && campaignName.get(r.campaign_id)) || (d?.campaign_id && campaignName.get(d.campaign_id)) || d?.campaign_name || "";
+    return /android/i.test(camp) || /android/i.test(d?.adset_name ?? "");
+  };
 }
 
 /* A store-link tag → the Website table row it belongs to: a market key, "site" (Homepage and

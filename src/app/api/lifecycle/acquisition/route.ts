@@ -12,7 +12,7 @@
 import { authenticateLifecycle } from "@/lib/lifecycleAuth";
 import { selectAll } from "@/lib/supabasePagination";
 import {
-  LIVE_MARKETS, OTHER_CITIES, FIRST_TIME, WEB_FEED_FROM, addMeasures, downloadsTable, metaIphoneDays, websiteDownloads, websiteEstimate, websiteFallbackOn, type Coverage, type DlRow, emptyMeasures, emptyOurs, marketLabel, marketOfDeclared, marketOfMatchCity, marketRank, pageRanks,
+  LIVE_MARKETS, OTHER_CITIES, FIRST_TIME, WEB_FEED_FROM, addMeasures, androidAdsets, downloadsTable, metaIphoneDays, websiteDownloads, websiteEstimate, websiteFallbackOn, type Coverage, type DlRow, emptyMeasures, emptyOurs, marketLabel, marketOfDeclared, marketOfMatchCity, marketRank, pageRanks,
   sameDaysLastMonth, sourceWindows, webByMarket, websiteTable, type ClickRow, type GscRow, type MarketRowView, type MarketSide,
   type MetaSide, type OursSide, type PageMapRow, type PageRank, type QueryRow, type WebRow, type Window,
 } from "@/lib/acquisitionModel";
@@ -87,8 +87,8 @@ export async function GET(req: Request) {
       selectAll<WebRow>(() => sb.from("acq_web_page_daily").select("day, page_path, sessions").gte("day", from).lte("day", to).order("day").order("page_path")),
       selectAll<ClickRow>(() => sb.from("acq_web_store_click_daily").select("day, page_path, method, clicks").eq("method", "outbound_link").gte("day", from).lte("day", to).order("day").order("page_path")),
       metaFrom ? selectAll<GeoRow>(() => sb.from("fin_meta_adset_market_daily").select("spend_date, adset_id, market_raw, market_key, spend_cents, clicks").gte("spend_date", metaFrom).lte("spend_date", until).order("spend_date")) : none<GeoRow>(),
-      metaFrom ? selectAll<FlatRow>(() => sb.from("fin_meta_adset_daily").select("spend_date, adset_id, spend_cents, installs, clicks, registrations").gte("spend_date", metaFrom).lte("spend_date", until).order("spend_date")) : none<FlatRow>(),
-      selectAll<DimRow>(() => sb.from("fin_meta_adset").select("adset_id, adset_name, campaign_name, market_key, market_raw, market_confidence, optimization_goal, attribution_spec").order("adset_id")),
+      metaFrom ? selectAll<FlatRow & { campaign_id: string | null }>(() => sb.from("fin_meta_adset_daily").select("spend_date, adset_id, campaign_id, spend_cents, installs, clicks, registrations").gte("spend_date", metaFrom).lte("spend_date", until).order("spend_date")) : none<FlatRow & { campaign_id: string | null }>(),
+      selectAll<DimRow & { campaign_id: string | null }>(() => sb.from("fin_meta_adset").select("adset_id, campaign_id, adset_name, campaign_name, market_key, market_raw, market_confidence, optimization_goal, attribution_spec").order("adset_id")),
       selectAll<AcqRow>(() => sb.from("growth_acquisition_daily").select("signup_date, declared_city_raw, registrations, became_players, played_within_7d, played_within_30d").gte("signup_date", oursFrom).lte("signup_date", until).order("signup_date")),
       // GOOGLE RANK (0209): only the "pickup soccer …" / "pick up soccer …" queries are read; the
       // model picks each market's exact set out of them (lib/acquisitionModel.rankQueriesFor).
@@ -221,8 +221,7 @@ export async function GET(req: Request) {
     };
     /* APPLE'S TABLE, every number over the Apple window. Meta's iPhone installs and spend come per day
      * from the same ad-set rows as the Meta table, over exactly those days. */
-    const campaignOf = new Map(dim.map((d) => [d.adset_id, d.campaign_name ?? null]));
-    const meta = { floor: META_ADSET_FLOOR_YMD, byDay: metaIphoneDays(flat, (id) => campaignOf.get(id) ?? null) };
+    const meta = { floor: META_ADSET_FLOOR_YMD, byDay: metaIphoneDays(flat, androidAdsets(dim)) };
     const dlTable = (w: Window) => downloadsTable(dl, w, coverage, meta);
     const webDl = (w: Window) => {
       const r = websiteDownloads(dl, w, map);
