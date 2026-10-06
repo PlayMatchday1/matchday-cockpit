@@ -6755,3 +6755,13 @@ instance of each granularity, first segment; `acq_asc_instance` read back the sa
   `asc-analytics` run after 0211 (4 files, 5,325 rows) read back from `acq_asc_downloads_daily`; Standard
   first-time since Jul 1 = 9,616 (No page 3,479 · Store sheet 3,559 · Product page 2,578), the same total
   the audit found, so the re-read double counted nothing.
+
+## fin_meta_adset can hold an ad set with NULL names (2026-10-06)
+
+Evidence: `fin_meta_adset` read 2026-10-06. Ad set `120249622094930381` (Sep 9–28: $286.97, 66 installs,
+geo rows Atlanta / Nashville / Birmingham / Columbus-Auburn) has `campaign_name` and `adset_name` NULL.
+Its campaign id `120249622094940381` carries "MD / ATL / Android App Promotion - September 2026" on its
+sibling ad set `120249947428080381`. Together they are $326.46 / 92 installs in September, which matches
+Ads Manager. **Resolve a campaign's name by `campaign_id` across all ad sets, never from the ad set's
+own row** (lib/acquisitionModel.androidAdsets). Names are the latest Meta reported; no history is kept.
+Ad-set targeting (platform) is not stored anywhere.
