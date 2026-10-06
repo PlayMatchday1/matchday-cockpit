@@ -4,10 +4,10 @@
  * in ten seconds). Replaces the Ads page; /lifecycle/ads redirects here.
  *
  *   date bar · "Data through" (hover: each source) · "skewed by ads" before Jul 15
- *   four tiles: Registrants who played (with its 7-day rate), Registrations, Ad spend, Website store clicks
+ *   four tiles: First-time players, Registrations, Ad spend, Website store clicks
  *   (Ryan, 2026-10-05, from the mock) three tables:
  *     Meta ads             a row per market: Meta's spend / installs / registrations / cost per
- *                          registration beside our own registrations and registrants who played
+ *                          registration beside our own registrations and first-time players
  *     Website              a row per market (Google rank first), expandable to its pages and the exact
  *                          rank queries; Homepage and site-wide; Other pages (collapsed); whole-site Total
  *     Downloads by source  Apple's split, one Instagram and Facebook row; "—" until the Apple sync
@@ -35,14 +35,14 @@ const money2 = (c: number | null | undefined) => (c == null ? "—" : `$${(c / 1
 
 type Totals = {
   spendCents: number | null; installs: number | null; metaRegs: number | null; regSpendCents: number;
-  registrations: number; newPlayers: number; played7d: number; matured7d: number; web: Measures;
+  registrations: number; firstTime: number; web: Measures;
 };
 
 /* EVERY HOVER IN ONE PLACE, in the mock's wording (Ryan, 2026-10-05): one plain sentence on how the
  * number is calculated and where it comes from. The few that depend on the range are built below. */
 const TIP = {
   installs: "Installs Meta credits to an ad. Meta's own count.",
-  allRegs: "Every MatchDay sign-up in this market from any source, from our own database, by the city chosen at signup.",
+  allRegs: "Every MatchDay sign-up in this range from any source, not only ads, from our own database, by the city chosen at signup.",
   rank: "Average Google position of the city page for \"pickup soccer [city]\", plus \"pick up soccer [city]\" and \"pickup soccer near me\" where Google has them for that page. 1 is the top result; lower is better.",
   visits: "Website sessions on these pages (Google Analytics). One person on one trip to the site counts once.",
   storeClicks: "Taps on an App Store or Google Play button on these pages. An intent to download, not a download.",
@@ -53,14 +53,12 @@ const TIP = {
   cost: "What we paid for this source in the range: Meta spend on Instagram and Facebook, nothing on the others.",
 };
 
-/* TWO DEFINITIONS OF "NEW", NAMED APART (Ryan, 2026-10-05). This page counts by SIGNUP: people who
- * registered in the range and have played since. Player Activity counts by FIRST MATCH and calls it
- * "First-time players". Same people, different months, so the two never tie — hence the names. */
-const PLAYED_LABEL = "Registrants who played";
-const PLAYED_TIP = "People who registered in this period and have played at least once since. Recent periods fill in over time.";
-const RATE7_TIP = "Of the people who registered in this period at least 7 days ago, the share who played within 7 days of signing up. Unlike the count beside it, this does not keep filling in.";
-const rate7 = (o: { played7d: number; matured7d: number } | null | undefined) => (o && o.matured7d > 0 ? o.played7d / o.matured7d : null);
-const pct7 = (v: number | null) => (v == null ? "—" : `${Math.round(v * 100)}%`);
+/* FIRST-TIME PLAYERS, PLAYER ACTIVITY'S DEFINITION (Ryan, 2026-10-05). People whose first MatchDay
+ * match ever was in the range, from any source, in that match's city — the same rows Player Activity
+ * counts, so the two pages tie. It replaced "Registrants who played" (counted by signup) and its
+ * 7-day rate. It is not linked to ads; it sits beside spend to be read over time. */
+const FIRST_LABEL = "First-time players";
+const FIRST_TIP = "Everyone who played their first MatchDay match in this range, from any source. Not linked to ads; compare it against ad spend over time.";
 type Payload = {
   since: string; until: string;
   windows: Record<SourceKey, SourceWindow>;
@@ -182,9 +180,8 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
         <>
           {/* ── 2 · FOUR TILES ──────────────────────────────────────────────────────────────── */}
           <div className="acq-tiles" data-testid="acq-tiles">
-            <Tile k={PLAYED_LABEL} tip={PLAYED_TIP} v={fmtInt(t.newPlayers)} cur={t.newPlayers} prev={tp?.newPlayers}
-              sub={<span title={RATE7_TIP} data-testid="acq-tile-rate7">{pct7(rate7(t))} within 7 days</span>} />
-            <Tile k="Registrations" v={fmtInt(t.registrations)} cur={t.registrations} prev={tp?.registrations} />
+            <Tile k={FIRST_LABEL} tip={FIRST_TIP} v={fmtInt(t.firstTime)} cur={t.firstTime} prev={tp?.firstTime} />
+            <Tile k="Registrations" tip={TIP.allRegs} v={fmtInt(t.registrations)} cur={t.registrations} prev={tp?.registrations} />
             <Tile k="Ad spend" v={money(t.spendCents)} cur={t.spendCents} prev={tp?.spendCents} />
             <Tile k="Website store clicks" v={fmtInt(web?.storeClicks ?? 0)} cur={web?.storeClicks} prev={webP?.storeClicks} />
           </div>
@@ -201,7 +198,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                   <th>Meta registrations <Info tip={regTip} /></th>
                   <th>Cost per registration <Info tip={cprTip} /></th>
                   <th>All registrations <Info tip={TIP.allRegs} /></th>
-                  <th>{PLAYED_LABEL} <Info tip={PLAYED_TIP} /></th>
+                  <th>{FIRST_LABEL} <Info tip={FIRST_TIP} /></th>
                 </tr></thead>
                 <tbody>
                   {data.markets.map((r) => {
@@ -214,7 +211,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                         <Cell v={m?.metaRegs == null ? "—" : fmtInt(m.metaRegs)} cur={m?.metaRegs} prev={mp?.metaRegs} />
                         <Cell v={money2(m ? costPer(m.regSpendCents, m.metaRegs) : null)} cur={m ? costPer(m.regSpendCents, m.metaRegs) : null} prev={mp ? costPer(mp.regSpendCents, mp.metaRegs) : null} invert />
                         <Cell v={fmtInt(r.cur.ours.registrations)} cur={r.cur.ours.registrations} prev={p?.ours.registrations} />
-                        <Cell v={fmtInt(r.cur.ours.newPlayers)} cur={r.cur.ours.newPlayers} prev={p?.ours.newPlayers} />
+                        <Cell v={fmtInt(r.cur.ours.firstTime)} cur={r.cur.ours.firstTime} prev={p?.ours.firstTime} />
                       </tr>
                     );
                   })}
@@ -232,7 +229,7 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
                     <Cell v={t.metaRegs == null ? "—" : fmtInt(t.metaRegs)} cur={t.metaRegs} prev={tp?.metaRegs} />
                     <Cell v={money2(costPer(t.regSpendCents, t.metaRegs))} cur={costPer(t.regSpendCents, t.metaRegs)} prev={tp ? costPer(tp.regSpendCents, tp.metaRegs) : null} invert />
                     <Cell v={fmtInt(t.registrations)} cur={t.registrations} prev={tp?.registrations} />
-                    <Cell v={fmtInt(t.newPlayers)} cur={t.newPlayers} prev={tp?.newPlayers} />
+                    <Cell v={fmtInt(t.firstTime)} cur={t.firstTime} prev={tp?.firstTime} />
                   </tr>
                 </tbody>
               </table>

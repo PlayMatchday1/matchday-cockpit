@@ -59,9 +59,8 @@ const GRID_OF: Record<PaKey, GridMetric> = {
 const METRICS: { key: PaKey; label: string; kind: Kind; field: boolean; desc: string }[] = [
   { key: "registrations", label: "Registrations", kind: "add", field: false,
     desc: "Completed signups, grouped by city selected at signup." },
-  /* "FIRST-TIME PLAYERS", NOT "NEW PLAYERS" (Ryan, 2026-10-05). Acquisition counts by SIGNUP and
-   * calls its figure "Registrants who played"; this counts by FIRST MATCH. Same people, different
-   * months, so the two are named apart rather than left to disagree under one name. */
+  /* "FIRST-TIME PLAYERS", NOT "NEW PLAYERS" (Ryan, 2026-10-05): counted by FIRST MATCH. Acquisition
+   * shows the same figure from the same rows (growth_player_profile), so the two pages tie. */
   { key: "newPlayers", label: "First-time players", kind: "add", field: true,
     desc: "People whose first MatchDay match was in this period, in the city where they played it." },
   { key: "totalPlayers", label: "Total players", kind: "distinct", field: true,

@@ -11,7 +11,7 @@
 import { authenticateLifecycle } from "@/lib/lifecycleAuth";
 import { selectAll } from "@/lib/supabasePagination";
 import {
-  LIVE_MARKETS, OTHER_CITIES, addMeasures, emptyMeasures, emptyOurs, linkSplit, marketLabel, marketOfDeclared, marketRank, pageRanks,
+  LIVE_MARKETS, OTHER_CITIES, addMeasures, emptyMeasures, emptyOurs, linkSplit, marketLabel, marketOfDeclared, marketOfMatchCity, marketRank, pageRanks,
   sameDaysLastMonth, sourceWindows, webByMarket, websiteTable, type AppRow, type ClickRow, type GscRow, type MarketRowView, type MarketSide,
   type MetaSide, type OursSide, type PageMapRow, type PageRank, type QueryRow, type WebRow, type Window,
 } from "@/lib/acquisitionModel";
@@ -101,19 +101,24 @@ export async function GET(req: Request) {
       }));
       return { by, notAttributedCents: main.notAttributed.reduce((a, n) => a + n.spendCents, 0), regSince: regFrom && regFrom !== w.since ? regFrom : null };
     };
-    /* "TODAY" FOR THE 7-DAY RATE: a signup is settled once 7 days have passed since its Chicago day. */
-    const todayChi = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
-    const settledBy = (() => { const d = new Date(`${todayChi}T12:00:00Z`); d.setUTCDate(d.getUTCDate() - 7); return d.toISOString().slice(0, 10); })();
+    /* FIRST-TIME PLAYERS, PLAYER ACTIVITY'S OWN ROWS (Ryan, 2026-10-05): growth_player_profile, a
+     * person in the day of their first match ever and that match's city. first_match_date is already
+     * a wall-clock DAY (growth_participation slices start_date), so it is compared as-is. */
+    const firsts = await selectAll<{ user_id: number; first_match_date: string; first_match_city: string | null }>(() =>
+      sb.from("growth_player_profile").select("user_id, first_match_date, first_match_city")
+        .gte("first_match_date", oursFrom).lte("first_match_date", until).order("user_id"));
     const oursSide = (w: Window | null) => {
       const by = new Map<string, OursSide>();
       if (!w) return by;
+      const at = (k: string) => { const e = by.get(k) ?? emptyOurs(); by.set(k, e); return e; };
       for (const r of acq) {
         if (r.signup_date < w.since || r.signup_date > w.until) continue;
-        const k = marketOfDeclared(r.declared_city_raw);
-        const e = by.get(k) ?? emptyOurs();
-        e.registrations += Number(r.registrations); e.newPlayers += Number(r.became_players);
-        if (r.signup_date <= settledBy) { e.matured7d += Number(r.registrations); e.played7d += Number(r.played_within_7d); }
-        by.set(k, e);
+        at(marketOfDeclared(r.declared_city_raw)).registrations += Number(r.registrations);
+      }
+      for (const f of firsts) {
+        const d = String(f.first_match_date).slice(0, 10);
+        if (d < w.since || d > w.until) continue;
+        at(marketOfMatchCity(f.first_match_city)).firstTime += 1;
       }
       return by;
     };
@@ -160,7 +165,7 @@ export async function GET(req: Request) {
       pages: (wC.get(k)?.pages ?? []).map((p) => ({ ...p, ...(ranksC.get(p.path) ?? { rank: null, queries: [] }) })),
       cur: { ...side(k, mC, metaCur, oC, wC), rank: k === OTHER_CITIES ? null : marketRank(k, ranksC, map) },
       prev: compare && oP && wP ? { ...side(k, mP, metaCmp, oP, wP), rank: k === OTHER_CITIES ? null : marketRank(k, ranksP, map) } : null,
-    })).filter((r) => LIVE_MARKETS.includes(r.key as never) || r.cur.ours.registrations > 0 || r.cur.web.visits > 0);
+    })).filter((r) => LIVE_MARKETS.includes(r.key as never) || r.cur.ours.registrations > 0 || r.cur.ours.firstTime > 0 || r.cur.web.visits > 0);
     const sum = (sideOf: (r: MarketRowView) => MarketSide | null, notAttr: number) => {
       const web = emptyMeasures(); let spend = notAttr, anyMeta = false; const ours = emptyOurs();
       /* META'S OWN COUNTS, TOTALLED for the Meta ads table. null stays null — a market Meta reported
@@ -168,8 +173,7 @@ export async function GET(req: Request) {
       let installs: number | null = null, metaRegs: number | null = null, regSpendCents = 0;
       for (const r of markets) {
         const s2 = sideOf(r); if (!s2) continue; addMeasures(web, s2.web);
-        ours.registrations += s2.ours.registrations; ours.newPlayers += s2.ours.newPlayers;
-        ours.played7d += s2.ours.played7d; ours.matured7d += s2.ours.matured7d;
+        ours.registrations += s2.ours.registrations; ours.firstTime += s2.ours.firstTime;
         if (s2.meta) {
           anyMeta = true; spend += s2.meta.spendCents; regSpendCents += s2.meta.regSpendCents;
           if (s2.meta.installs != null) installs = (installs ?? 0) + s2.meta.installs;

@@ -229,12 +229,16 @@ export const marketOfDeclared = (city: string | null) => (city && DECLARED[city]
 export const marketOfPageKey = (k: string | null) => (k && (LIVE_MARKETS as readonly string[]).includes(k) ? k : OTHER_CITIES);
 
 export type MetaSide = { spendCents: number; installs: number | null; metaRegs: number | null; regSpendCents: number; metaPlayers: number };
-/* OURS (0208). newPlayers is "Registrants who played": people who REGISTERED in the window and have
- * played since, the person counted once. played7d / matured7d is the settled companion — of the
- * registrants whose signup is at least 7 days old, how many played within 7 days of it — because
- * newPlayers keeps filling in for weeks after a recent window closes. */
-export type OursSide = { registrations: number; newPlayers: number; played7d: number; matured7d: number };
-export const emptyOurs = (): OursSide => ({ registrations: 0, newPlayers: 0, played7d: 0, matured7d: 0 });
+/* OURS (0208). firstTime is "First-time players" — Player Activity's definition and source
+ * (growth_player_profile): people whose first MatchDay match EVER was in the window, from any
+ * source, in that match's city (Ryan, 2026-10-05; it replaced "Registrants who played", which
+ * counted by signup and so never tied to Player Activity). */
+export type OursSide = { registrations: number; firstTime: number };
+export const emptyOurs = (): OursSide => ({ registrations: 0, firstTime: 0 });
+/* A first match's city is an mdapi city code (HOU, ATX, …), not a declared city name. Warsaw, El
+ * Paso and anything unknown fall into "Other cities", as declared cities do. */
+const MATCH_CITY: Record<string, string> = { ATL: "ATL", ATX: "ATX", DFW: "DFW", HOU: "HTX", OKC: "OKC", SATX: "SATX", STL: "STL" };
+export const marketOfMatchCity = (code: string | null) => (code && MATCH_CITY[code]) || OTHER_CITIES;
 export type MarketSide = { meta: MetaSide | null; ours: OursSide; web: Measures; rank: number | null };
 export type RankedPage = PageLine & PageRank;
 export type MarketRowView = { key: string; label: string; cur: MarketSide; prev: MarketSide | null; pages: RankedPage[] };
