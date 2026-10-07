@@ -13,7 +13,7 @@ import { authenticateLifecycle } from "@/lib/lifecycleAuth";
 import { selectAll } from "@/lib/supabasePagination";
 import {
   LIVE_MARKETS, OTHER_CITIES, FIRST_TIME, WEB_FEED_FROM, addMeasures, androidAdsets, downloadsTable, metaIphoneDays, websiteDownloads, websiteEstimate, websiteFallbackOn, type Coverage, type DlRow, emptyMeasures, emptyOurs, marketLabel, marketOfDeclared, marketOfMatchCity, marketRank, pageRanks,
-  sameDaysLastMonth, sourceWindows, webByMarket, websiteTable, type ClickRow, type GscRow, type MarketRowView, type MarketSide,
+  comparisonWindow, sourceWindows, type CompareMode, webByMarket, websiteTable, type ClickRow, type GscRow, type MarketRowView, type MarketSide,
   type MetaSide, type OursSide, type PageMapRow, type PageRank, type QueryRow, type WebRow, type Window,
 } from "@/lib/acquisitionModel";
 import { buildAdsOverview, META_REG_FROM, type AcqRow, type DimRow, type FlatRow, type GeoRow } from "@/lib/adsOverview";
@@ -31,6 +31,8 @@ export async function GET(req: Request) {
   const since = q("since"), until = q("until");
   if (!since || !until || until < since) return Response.json({ error: "since and until (YYYY-MM-DD) are required" }, { status: 400 });
   const compare = url.searchParams.get("compare") === "1";
+  // vs=prev: the same number of days just before; anything else: the same days last month (default).
+  const mode: CompareMode = url.searchParams.get("vs") === "prev" ? "prev" : "month";
 
   try {
     const sb = auth.supabase;
@@ -64,13 +66,13 @@ export async function GET(req: Request) {
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
     const webFallback = websiteFallbackOn(today, (siteRes.data ?? []).length > 0);
     const freshness = { gsc: gscThrough, web: webThrough, app: appThrough, meta: metaThrough, apple: appleThrough };
-    const windows = sourceWindows({ since, until }, freshness, compare);
+    const windows = sourceWindows({ since, until }, freshness, compare, mode);
 
     // 2 — the rows, from the earliest window any source needs
     const starts = Object.values(windows).flatMap((w) => [w.cur.since, ...(w.cmp ? [w.cmp.since] : [])]).sort();
     const from = starts[0], to = until;
     // Our own counts: the range through today, against the same days last month.
-    const oursCur: Window = { since, until }, oursCmp: Window | null = compare ? sameDaysLastMonth(since, until) : null;
+    const oursCur: Window = { since, until }, oursCmp: Window | null = compare ? comparisonWindow(mode, since, until) : null;
     // Meta never reaches before the Aug 1 rebuild (a different account structure, not an empty month).
     const clampMeta = (w: Window | null): Window | null => {
       if (!w) return null;

@@ -145,21 +145,34 @@ export function marketRank(market: string, ranks: Map<string, PageRank>, map: re
  * only, and comparing that with all of Sep 1-4 read as a 44% fall that was really two missing days.
  * So every source's CURRENT window ends at min(range end, that source's latest day), and its
  * COMPARISON is that trimmed window moved back a month (Oct 1-2 vs Sep 1-2). A source with no data
- * at all keeps the range as asked (nothing to trim to). Apple uses the same rule when it lands. */
+ * at all keeps the range as asked (nothing to trim to). Apple uses the same rule when it lands.
+ *
+ * TWO COMPARISONS (Ryan, 2026-10-06). "month" = the trimmed window moved back a calendar month (the
+ * default); "prev" = the same number of days immediately before it (Sep 21–Oct 6 against Sep 5–20), which
+ * is what a milestone read wants: before against after. */
 export type Window = { since: string; until: string };
+export type CompareMode = "month" | "prev";
 export type SourceKey = "gsc" | "web" | "app" | "meta" | "apple";
 export type SourceWindow = { cur: Window; cmp: Window | null; trimmed: boolean; through: string | null };
 
-export function sourceWindow(range: Window, through: string | null, compare: boolean): SourceWindow {
+export function sourceWindow(range: Window, through: string | null, compare: boolean, mode: CompareMode = "month"): SourceWindow {
   const until = through && through < range.until ? through : range.until;
   const cur = { since: range.since, until };
-  return { cur, cmp: compare ? sameDaysLastMonth(cur.since, cur.until) : null, trimmed: until !== range.until, through };
+  return { cur, cmp: compare ? comparisonWindow(mode, cur.since, cur.until) : null, trimmed: until !== range.until, through };
 }
 
-export function sourceWindows(range: Window, through: Partial<Record<SourceKey, string | null>>, compare: boolean): Record<SourceKey, SourceWindow> {
+export function sourceWindows(range: Window, through: Partial<Record<SourceKey, string | null>>, compare: boolean, mode: CompareMode = "month"): Record<SourceKey, SourceWindow> {
   const keys: SourceKey[] = ["gsc", "web", "app", "meta", "apple"];
-  return Object.fromEntries(keys.map((k) => [k, sourceWindow(range, through[k] ?? null, compare)])) as Record<SourceKey, SourceWindow>;
+  return Object.fromEntries(keys.map((k) => [k, sourceWindow(range, through[k] ?? null, compare, mode)])) as Record<SourceKey, SourceWindow>;
 }
+
+/** The same number of days immediately before the window. */
+export function previousPeriod(since: string, until: string): Window {
+  const n = Math.round((Date.parse(`${until}T00:00:00Z`) - Date.parse(`${since}T00:00:00Z`)) / 86400000) + 1;
+  return { since: addDays(since, -n), until: addDays(since, -1) };
+}
+export const comparisonWindow = (mode: CompareMode, since: string, until: string): Window =>
+  mode === "prev" ? previousPeriod(since, until) : sameDaysLastMonth(since, until);
 
 export type LinkSplit = { share: number; ig_social: number; paid: number; other: number; total: number };
 /** dynamic_link_first_open by source bucket (iPhone and Android) over the range. */

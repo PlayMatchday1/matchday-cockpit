@@ -24,7 +24,7 @@ import { createPortal } from "react-dom";
 import styles from "./growth.module.css";
 import { fmtInt } from "./format";
 import {
-  MILESTONES, SKEWED_BEFORE, clickRate, costPer, presetRange, sameDaysLastMonth,
+  MILESTONES, SKEWED_BEFORE, clickRate, comparisonWindow, costPer, presetRange, type CompareMode,
   type DownloadsTable, type DlSub, type DlTag, type DlTop, type Group, type MarketRowView, type Measures, type PageLine, type Preset, type RankedPage,
   type SourceKey, type SourceWindow, type WebsiteTable, type Window,
 } from "@/lib/acquisitionModel";
@@ -180,7 +180,12 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
   const [custom, setCustom] = useState(() => presetRange("mtd", today));
   const [compareOn, setCompareOn] = useState(true);
   const range = preset === "custom" ? custom : presetRange(preset, today);
-  const cmp = useMemo(() => (compareOn ? sameDaysLastMonth(range.since, range.until) : null), [compareOn, range.since, range.until]);
+  /* THE COMPARISON (Ryan, 2026-10-06): same days last month (default) or the previous period of the
+   * same length. Choosing a milestone switches to the previous period, so a milestone reads before vs
+   * after. Every badge, tile and table reads whichever is chosen: the server builds every comparison
+   * window from `vs`. */
+  const [vsMode, setVsMode] = useState<CompareMode>("month");
+  const cmp = useMemo(() => (compareOn ? comparisonWindow(vsMode, range.since, range.until) : null), [compareOn, vsMode, range.since, range.until]);
 
   const [data, setData] = useState<Payload | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -189,13 +194,13 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
     // The sign-in header arrives a moment after mount; asking before it only earns a 401.
     if (!authHeaders.Authorization && !authHeaders.authorization) return;
     setErr(null);
-    const qs = new URLSearchParams({ since: range.since, until: range.until, ...(cmp ? { compare: "1" } : {}) });
+    const qs = new URLSearchParams({ since: range.since, until: range.until, ...(cmp ? { compare: "1", vs: vsMode } : {}) });
     fetch(`/api/lifecycle/acquisition?${qs}`, { headers: authHeaders })
       .then((r) => r.json())
       .then((j) => { if (!alive) return; if (j.error) setErr(j.error); else setData(j); })
       .catch((e) => { if (alive) setErr(String(e)); });
     return () => { alive = false; };
-  }, [range.since, range.until, cmp, authHeaders]);
+  }, [range.since, range.until, cmp, vsMode, authHeaders]);
 
   const [open, setOpen] = useState<Set<string>>(new Set());
   const toggle = (k: string) => setOpen((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
@@ -240,13 +245,20 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
           </span>
         )}
         <select className={`${styles.adsBtn} acq-ms`} data-testid="acq-milestones" value="" aria-label="Milestones"
-          onChange={(e) => { const d = e.target.value; if (d) { setCustom({ since: d, until: today }); setPreset("custom"); } }}>
+          onChange={(e) => { const d = e.target.value; if (d) { setCustom({ since: d, until: today }); setPreset("custom"); setVsMode("prev"); setCompareOn(true); } }}>
           <option value="">Milestones</option>
           {MILESTONES.map((m) => <option key={m.day} value={m.day}>{m.label}</option>)}
         </select>
-        <label className="acq-cmp" data-testid="acq-compare">
-          <input type="checkbox" checked={compareOn} onChange={(e) => setCompareOn(e.target.checked)} /> vs same days last month
-        </label>
+        <span className="acq-cmp" data-testid="acq-compare">
+          <label className="acq-cmpon"><input type="checkbox" checked={compareOn} onChange={(e) => setCompareOn(e.target.checked)} aria-label="Compare" /> vs</label>
+          <span className={styles.adsPills} role="radiogroup" aria-label="Compare with">
+            {([["month", "same days last month"], ["prev", "previous period"]] as const).map(([k, label]) => (
+              <button key={k} type="button" role="radio" aria-checked={vsMode === k} data-testid={`acq-vs-${k}`} disabled={!compareOn}
+                className={vsMode === k && compareOn ? `${styles.adsPill} ${styles.adsPillOn}` : styles.adsPill}
+                onClick={() => setVsMode(k)}>{label}</button>
+            ))}
+          </span>
+        </span>
         {range.since < SKEWED_BEFORE && <Info tip="Website traffic before Jul 15 included Meta ads." testId="acq-skewed"><span className="acq-tag">skewed by ads</span></Info>}
         <span className="acq-throughwrap"><Info tip={throughTip} testId="acq-through"><span className="acq-through">Data through {short(through)}</span></Info></span>
       </div>
@@ -543,7 +555,7 @@ function DownloadsChart({ dl }: { dl: Payload["downloads"] }) {
       <div className="acq-bars" role="list" aria-label={D ? `iPhone downloads by source, ${rangeLabel(dl!.window)}` : "iPhone downloads by source"}>
         {bars.map((b) => (
           <div key={b.key} role="listitem">
-            <Info tip={b.tip} testId="acq-bar" className="acq-bar">
+            <Info tip={b.tip} testId="acq-bar" className="acq-hbar">
               <span className="acq-barlabel">{b.label}{b.tag && <span className="acq-bartag">{b.tag}</span>}{b.flag && <span className="acq-flag" data-testid="acq-meta-over">!</span>}</span>
               <span className="acq-bartrack"><span className="acq-barfill" data-kind={b.kind} style={{ width: `${max > 0 ? Math.max(0.6, (b.n / max) * 100) : 0}%`, background: b.kind === "paid" ? PAID : b.kind === "free" ? FREE : MIXED }} /></span>
               <span className="acq-barval"><b>{fmtInt(b.n)}</b><span> · {pct(b.n, D!.total)}</span>{b.kind !== "free" && b.cost != null && <span> · {money(b.cost)}</span>}</span>
@@ -635,7 +647,9 @@ const CSS = `
 .acq .acq-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .acq .acq-dates{display:inline-flex;gap:6px}
 .acq .acq-ms{width:auto;max-width:160px}
-.acq .acq-cmp{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600}
+.acq .acq-cmp{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12.5px;font-weight:600}
+.acq .acq-cmpon{display:inline-flex;align-items:center;gap:6px}
+.acq .acq-cmp button:disabled{opacity:.45;cursor:default}
 .acq .acq-tag{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;background:#fde9bf;color:#7a4e06;border-radius:4px;padding:2px 6px}
 .acq .acq-through{font-size:11.5px;color:var(--muted,#5c7168);border-bottom:1px dotted currentColor;cursor:help}
 .acq .acq-tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:14px}
@@ -677,9 +691,9 @@ const CSS = `
 .acq .acq-legend i{display:inline-block;width:14px;height:10px;border-radius:2px}
 .acq .acq-chartnote{font-size:11.5px;color:var(--muted,#5c7168);margin:-2px 0 6px}
 .acq .acq-bars{display:flex;flex-direction:column}
-.acq .acq-bar{all:unset;box-sizing:border-box;width:100%;cursor:help;display:grid;grid-template-columns:minmax(150px,220px) 1fr minmax(120px,170px);align-items:center;gap:14px;padding:7px 6px;border-radius:8px}
-.acq .acq-bar:hover,.acq .acq-bar[aria-expanded=true]{background:#f7f9f7}
-.acq .acq-bar:focus-visible{outline:2px solid #2cdb87;outline-offset:1px}
+.acq .acq-hbar{all:unset;box-sizing:border-box;width:100%;cursor:help;display:grid;grid-template-columns:minmax(150px,220px) 1fr minmax(120px,170px);align-items:center;gap:14px;padding:7px 6px;border-radius:8px}
+.acq .acq-hbar:hover,.acq .acq-hbar[aria-expanded=true]{background:#f7f9f7}
+.acq .acq-hbar:focus-visible{outline:2px solid #2cdb87;outline-offset:1px}
 .acq .acq-barlabel{text-align:right;font-size:13.5px;color:#13261f}
 .acq .acq-bartag{font-size:10.5px;color:#5b6b64;background:#eef2ef;border-radius:999px;padding:1px 7px;margin-left:6px;white-space:nowrap}
 .acq .acq-barlabel .acq-flag{margin-left:6px;vertical-align:1px}
@@ -712,7 +726,7 @@ const CSS = `
 .acq .acq-srcsub{display:block;font-size:11.5px;color:var(--muted,#5c7168);font-weight:400}
 .acq .acq-src{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;margin-top:10px}
 @media (max-width:760px){
-  .acq .acq-bar{grid-template-columns:1fr auto;grid-template-areas:"label val" "track track";gap:4px 10px;padding:7px 4px}
+  .acq .acq-hbar{grid-template-columns:1fr auto;grid-template-areas:"label val" "track track";gap:4px 10px;padding:7px 4px}
   .acq .acq-barlabel{grid-area:label;text-align:left}
   .acq .acq-barval{grid-area:val}
   .acq .acq-bartrack{grid-area:track}
