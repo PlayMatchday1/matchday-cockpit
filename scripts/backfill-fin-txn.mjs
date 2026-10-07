@@ -24,13 +24,18 @@ const DRY = process.argv.includes("--dry");
 const from = arg("from"), to = arg("to");
 if (!from || !to) { console.error("usage: --from YYYY-MM --to YYYY-MM"); process.exit(2); }
 const ADMIN = process.env.BACKFILL_AS || "rmancuso@playmatchday.com";
-let token = null;
+/* ── THE TOKEN IS MINTED PER MONTH, NOT ONCE ────────────────────────────────────────────────────
+ * A Supabase access token lives about an hour and the full walk takes longer: minting once meant
+ * 2025-06 onwards all failed `HTTP 401 — Not signed in`, fifteen months in a row, after the first
+ * twenty-five had landed. sessionFor caches and VALIDATES against the server, so calling it every month
+ * is nearly free and re-mints the moment the cached one stops being honoured. */
+let sessionFor = null;
 if (!DRY) {
   process.loadEnvFile(".env.local");
-  const { sessionFor } = await import("./e2e/_session.mjs");
-  token = (await sessionFor(ADMIN)).access_token;
-  console.log(`authenticating as ${ADMIN} (manual mode, session token — no secret on disk)`);
+  ({ sessionFor } = await import("./e2e/_session.mjs"));
+  console.log(`authenticating as ${ADMIN} (manual mode, session token minted per month — no secret on disk)`);
 }
+const freshToken = async () => (await sessionFor(ADMIN)).access_token;
 
 const months = [];
 {
@@ -54,6 +59,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function attempt(month) {
   let res, j;
   try {
+    const token = await freshToken();
     res = await fetch(`${BASE}/api/sync/fin-txn?month=${month}`, {
       method: "POST", headers: { Authorization: `Bearer ${token}` },
     });
