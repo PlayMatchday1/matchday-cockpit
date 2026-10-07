@@ -97,16 +97,33 @@ export function allocateCity(maps: CityMaps, a: { type: string; cityIdentifier: 
 /* MEMBERSHIP CHARGES ARE INVOICE CHARGES: Stripe puts the member's email on the CUSTOMER, not the
  * charge. stripeSync gets it by expanding data.customer on charges.list; balance_transactions.list
  * cannot expand a field of its polymorphic source safely, so the customers are fetched here — once
- * each per run, FOUR at a time. Eight tripped Stripe's rate limiter on the first history re-run
+ * each per run, THREE at a time. Eight tripped Stripe's rate limiter on the first history re-run
  * (2023-07, "Request rate limit exceeded"); the client also retries a 429 with backoff, which is safe
  * because every call here is a GET. A deleted customer has no email and lands Unassigned, as in
  * fin_revenue. Emails are held in memory for the run and never stored. */
+/* ── STRIPE'S RATE LIMIT, WAITED OUT ───────────────────────────────────────────────────────────
+ * The SDK does not retry a 429 unless Stripe sends `stripe-should-retry: true`, and its rate-limit
+ * answers do not — so `maxNetworkRetries` alone did nothing for them (2023-12 and 2024-01 still
+ * failed on the re-run). Every call wrapped here is a GET, so trying again cannot duplicate
+ * anything: back off 1, 2, 4, 8, 16 s (plus jitter) and give up after the sixth attempt. */
+async function readWithBackoff<T>(call: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try { return await call(); }
+    catch (e) {
+      const rateLimited = (e as { statusCode?: number; type?: string }).statusCode === 429
+        || (e as { type?: string }).type === "StripeRateLimitError";
+      if (!rateLimited || attempt >= 6) throw e;
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** (attempt - 1) + Math.random() * 500));
+    }
+  }
+}
+
 async function customerEmails(stripe: Stripe, ids: string[]): Promise<Map<string, string | null>> {
   const out = new Map<string, string | null>();
   const queue = [...new Set(ids)];
-  await Promise.all(Array.from({ length: 4 }, async () => {
+  await Promise.all(Array.from({ length: 3 }, async () => {
     for (let id = queue.pop(); id; id = queue.pop()) {
-      const c = await stripe.customers.retrieve(id);
+      const c = await readWithBackoff(() => stripe.customers.retrieve(id));
       out.set(id, "deleted" in c && c.deleted ? null : ((c as Stripe.Customer).email ?? null));
     }
   }));
@@ -131,14 +148,20 @@ export async function syncFinTxn(
   const maps = await cityMaps(sb);
   const unmapped = new Set<number>();
 
+  // PAGED BY HAND so each page can wait out a rate limit (readWithBackoff); auto-pagination gives
+  // no place to put the retry.
   const all: Stripe.BalanceTransaction[] = [];
-  for await (const bt of stripe.balanceTransactions.list({
-    created: { gte: Math.floor(opts.since.getTime() / 1000), lt: Math.floor(opts.until.getTime() / 1000) },
-    limit: 100,
-    expand: ["data.source"],
-  })) {
-    all.push(bt);
-    if (opts.onProgress && all.length % 500 === 0) opts.onProgress(all.length);
+  for (let after: string | undefined; ;) {
+    const page = await readWithBackoff(() => stripe.balanceTransactions.list({
+      created: { gte: Math.floor(opts.since.getTime() / 1000), lt: Math.floor(opts.until.getTime() / 1000) },
+      limit: 100,
+      expand: ["data.source"],
+      ...(after ? { starting_after: after } : {}),
+    }));
+    all.push(...page.data);
+    if (opts.onProgress) opts.onProgress(all.length);
+    if (!page.has_more || page.data.length === 0) break;
+    after = page.data[page.data.length - 1].id;
   }
   const fetched = all.length;
 
