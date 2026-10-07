@@ -50,11 +50,17 @@ import type { FinanceData, FinVenue, FinExpense } from "./useFinanceData";
 import { buildFieldCostRows } from "./financeCosts";
 import { projectionCells, type OpexProjection, type ProjCat } from "./opexProjectionModel";
 import { autoMatchManagerPay, type AutoMatchPay } from "./opexAutoProjection";
-import { META_CASH_FLOOR_YMD, chicagoYmdOf, type MetaCashModel } from "./metaCharges";
+import { META_CASH_FLOOR_YMD, chicagoYmdOf, type DailyBudget, type MetaCashModel } from "./metaCharges";
 import { ownsExpenseRow } from "./metaAdSpend";
 
 /** What the automatic Meta projection's popover explains. */
-export type AutoMetaInfo = { dailyAvgCents: number; avgFrom: string | null; avgTo: string | null; thresholdCents: number };
+export type AutoMetaInfo = {
+  dailyAvgCents: number; avgFrom: string | null; avgTo: string | null; thresholdCents: number;
+  budget: DailyBudget | null;
+  /** The rest of the month's SPEND at the budget, on the last day: shown while Meta's charges have
+   *  not loaded (or failed), beside the month-end spend rows. `days` is how many days it covers. */
+  restOfMonth?: { days: number };
+};
 import { daysInMonth } from "./checkIns";
 import { groupVenues, type VenueGroup } from "./venueGroups";
 
@@ -962,6 +968,10 @@ export function buildOpexCalendarAsOf(
    * "Show projections"). Absent (null, or the inputs did not load): the month-end rows, as before.
    * Expenses itself is never touched, so the Cost report and the P&L keep showing spend. */
   meta: MetaCashModel | null = null,
+  /* THE BUDGET FOR A MONTH WITHOUT META'S CHARGES (OpEx passes META_DAILY_BUDGET). While `meta` is
+   * null — loading, or failed — and projections are on, the rest of the month's spend at this
+   * budget is projected on the month's last day. Null: nothing is added. */
+  metaBudget: DailyBudget | null = null,
 ): OpexCalendarAsOf {
   const state = monthStateOf(year, month0, now);
   const days = daysInMonth(year, month0);
@@ -1064,7 +1074,24 @@ export function buildOpexCalendarAsOf(
       if (Object.keys(kept).length) {
         rows.push({
           key: "auto:meta", label: "Meta ads", cells: kept,
-          projected: { id: 0, cat: "mkt", autoMeta: { dailyAvgCents: meta.dailyAvgCents, avgFrom: meta.avgFrom, avgTo: meta.avgTo, thresholdCents: meta.threshold.inUse } },
+          projected: { id: 0, cat: "mkt", autoMeta: { dailyAvgCents: meta.dailyAvgCents, avgFrom: meta.avgFrom, avgTo: meta.avgTo, thresholdCents: meta.threshold.inUse, budget: meta.budget } },
+        });
+      }
+    }
+    if (autoMatchPay && data && !meta && metaBudget && state !== "past" && `${monthIso}-01` >= META_CASH_FLOOR_YMD) {
+      /* META'S CHARGES NOT LOADED (still loading, or failed): the month-end rows in Expenses are
+       * spend TO DATE only. The rest of the month at the daily budget goes on the last day, so the
+       * month reads spend to date + budget × days left (from today, or the budget's first day). */
+      const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+      let left = 0;
+      for (let d = 1; d <= days; d++) {
+        const iso = `${monthIso}-${String(d).padStart(2, "0")}`;
+        if (iso >= todayIso && iso >= metaBudget.from) left++;
+      }
+      if (left > 0) {
+        rows.push({
+          key: "auto:meta-rest", label: "Meta ads", cells: { [days]: (left * metaBudget.cents) / 100 },
+          projected: { id: 0, cat: "mkt", autoMeta: { dailyAvgCents: 0, avgFrom: null, avgTo: null, thresholdCents: 0, budget: metaBudget, restOfMonth: { days: left } } },
         });
       }
     }

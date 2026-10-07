@@ -37,6 +37,12 @@ export const META_BILLING_THRESHOLD_CENTS = 90_000;   // $900
 export const META_BILL_DAY = 6;
 export const META_BILL_HOUR_UTC = 8;
 
+/* ── THE DAILY BUDGET ON FILE. Change it here. ────────────────────────────────────────────────
+ * What OpEx projects Meta to spend each day from `from` on (Ryan, 2026-10-07: Miguel's budget,
+ * $190/day from Oct 7). Days before `from` that are still to come use the 28-day average. */
+export const META_DAILY_BUDGET = { cents: 19_000, from: "2026-10-07" } as const;
+export type DailyBudget = { cents: number; from: string };
+
 export type LoggedCharge = { at: string; cents: number };          // ISO UTC instant
 export type DailySpend = { date: string; cents: number };         // a Bogota day, YYYY-MM-DD
 
@@ -57,8 +63,10 @@ export type MetaCashModel = {
   spendToDateCents: number;
   chargedToDateCents: number;
   unbilledCents: number;
-  /** The projection's daily spend: the mean of the last 28 complete days. */
+  /** The mean of the last 28 complete days: the projection's daily spend before the budget starts. */
   dailyAvgCents: number;
+  /** The daily budget the projection uses from its `from` day, when one was given. */
+  budget: DailyBudget | null;
   avgFrom: string | null;
   avgTo: string | null;
 };
@@ -84,8 +92,9 @@ export function thresholdInUse(logged: readonly LoggedCharge[], stored = META_BI
 /**
  * Reproduce the card charges from `anchor` (or the first day of spend) through `horizonEndMs`.
  * Hours before `now` use the real daily spend (today's partial figure spread over the hours that
- * have run); hours after use the 28-day average. Charges before `now` are "meta" or "spend";
- * charges after are "auto".
+ * have run); hours after use the daily budget from its day on, and the 28-day average before it
+ * (or throughout, with no budget). Charges before `now` are "meta" or "spend"; charges after are
+ * "auto".
  */
 export function buildMetaCash(input: {
   daily: readonly DailySpend[];
@@ -93,7 +102,9 @@ export function buildMetaCash(input: {
   now: Date;
   horizonEndMs: number;
   stored?: number;
+  budget?: DailyBudget | null;
 }): MetaCashModel {
+  const budget = input.budget ?? null;
   const nowMs = input.now.getTime();
   const threshold = thresholdInUse(input.logged, input.stored);
   const T = threshold.inUse;
@@ -119,7 +130,7 @@ export function buildMetaCash(input: {
   const anchorCharge = logged.find((c) => c.at.slice(0, 10) >= META_CASH_FLOOR_YMD && Date.parse(c.at) < nowMs && isBillCharge(c)) ?? null;
   const firstDay = [...daily.keys()].sort()[0];
   if (!anchorCharge && !firstDay) {
-    return { charges: [], threshold, anchor: null, spendToDateCents: 0, chargedToDateCents: 0, unbilledCents: 0, dailyAvgCents, avgFrom: null, avgTo: null };
+    return { charges: [], threshold, anchor: null, spendToDateCents: 0, chargedToDateCents: 0, unbilledCents: 0, dailyAvgCents, budget, avgFrom: null, avgTo: null };
   }
   const startMs = anchorCharge ? Math.floor(Date.parse(anchorCharge.at) / HOUR) * HOUR + HOUR : dayStartUtcMs(firstDay!);
 
@@ -130,7 +141,8 @@ export function buildMetaCash(input: {
     const day = bogotaDay(h);
     const idx = Math.floor((h - dayStartUtcMs(day)) / HOUR);
     if (h >= nowMs) {
-      if (!hourCache.has(`avg:${day}`)) hourCache.set(`avg:${day}`, parts(dailyAvgCents, 24));
+      const rate = budget && day >= budget.from ? budget.cents : dailyAvgCents;
+      if (!hourCache.has(`avg:${day}`)) hourCache.set(`avg:${day}`, parts(rate, 24));
       return hourCache.get(`avg:${day}`)![idx];
     }
     if (day === today) {
@@ -232,6 +244,7 @@ export function buildMetaCash(input: {
     chargedToDateCents: chargedToDate,
     unbilledCents: balanceAtNow ?? balance,
     dailyAvgCents,
+    budget,
     avgFrom: complete[0] ?? null,
     avgTo: complete[complete.length - 1] ?? null,
   };
