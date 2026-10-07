@@ -97,12 +97,14 @@ export function allocateCity(maps: CityMaps, a: { type: string; cityIdentifier: 
 /* MEMBERSHIP CHARGES ARE INVOICE CHARGES: Stripe puts the member's email on the CUSTOMER, not the
  * charge. stripeSync gets it by expanding data.customer on charges.list; balance_transactions.list
  * cannot expand a field of its polymorphic source safely, so the customers are fetched here — once
- * each per run, eight at a time. A deleted customer has no email and lands Unassigned, as in
+ * each per run, FOUR at a time. Eight tripped Stripe's rate limiter on the first history re-run
+ * (2023-07, "Request rate limit exceeded"); the client also retries a 429 with backoff, which is safe
+ * because every call here is a GET. A deleted customer has no email and lands Unassigned, as in
  * fin_revenue. Emails are held in memory for the run and never stored. */
 async function customerEmails(stripe: Stripe, ids: string[]): Promise<Map<string, string | null>> {
   const out = new Map<string, string | null>();
   const queue = [...new Set(ids)];
-  await Promise.all(Array.from({ length: 8 }, async () => {
+  await Promise.all(Array.from({ length: 4 }, async () => {
     for (let id = queue.pop(); id; id = queue.pop()) {
       const c = await stripe.customers.retrieve(id);
       out.set(id, "deleted" in c && c.deleted ? null : ((c as Stripe.Customer).email ?? null));
@@ -122,7 +124,9 @@ export async function syncFinTxn(
   sb: SupabaseClient,
   opts: { since: Date; until: Date; apiKey: string; onProgress?: (n: number) => void },
 ): Promise<FinTxnSyncResult> {
-  const stripe = new Stripe(opts.apiKey);
+  // READ-ONLY CLIENT: every call below is a GET, so retrying a 429 or a dropped connection cannot
+  // duplicate anything. The SDK backs off between attempts.
+  const stripe = new Stripe(opts.apiKey, { maxNetworkRetries: 4 });
   const venueOf = await fieldToVenue(sb);
   const maps = await cityMaps(sb);
   const unmapped = new Set<number>();
