@@ -109,7 +109,11 @@ export function mapBalanceTxn(
   bt: Stripe.BalanceTransaction,
   opts: {
     classify: (a: { stripeType: string | null; description: string | null; hasMatchId: boolean }) => string;
-    cityOf: (code: string | null) => string;
+    /** The city, decided the way fin_revenue's stripeSync decides it (finTxnSync.allocateCity). */
+    cityOf: (a: { type: string; cityIdentifier: string | null; matchId: string | null; email: string | null }) => string;
+    /** The member's email when the charge itself carries none (an invoice charge: Stripe puts the
+     *  email on the customer). Looked up by the sync before mapping. */
+    customerEmail?: (customerId: string) => string | null;
     /** mdapi field id → fin_venues.id, from fin_venue_fields. */
     venueOfField: (fieldId: number) => number | null;
   },
@@ -122,19 +126,37 @@ export function mapBalanceTxn(
   // attribution flows from there — a refund inherits its charge's city, type and field.
   const charge: Stripe.Charge | null =
     src && (src as Stripe.Charge).object === "charge" ? (src as Stripe.Charge) : null;
+  /* THE CHARGE A REVERSAL REVERSES. A refund (re_, pyr_) and a dispute (du_) carry it as `.charge`;
+   * a failure's source IS the charge. Stored as charge_id so the sync can copy the charge row's city,
+   * type and field onto the reversal — the reversal's own source has no metadata at all. */
+  const reversed = src && ((src as Stripe.Refund).object === "refund" || (src as Stripe.Dispute).object === "dispute")
+    ? (src as Stripe.Refund | Stripe.Dispute).charge : null;
+  const reversedChargeId = reversed == null ? null : typeof reversed === "string" ? reversed : reversed.id;
   const meta = ((charge?.metadata ?? {}) as Meta);
 
   const stripeType = typeof meta.type === "string" && meta.type.trim() ? meta.type.trim() : null;
-  const matchId = meta.matchId ?? null;
+  // metadata.matchId, else userMatchId — stripeSync's rule (the same value on some charges).
+  const matchId = (meta.matchId?.trim() || meta.userMatchId?.trim()) || null;
   const description = bt.description ?? charge?.description ?? null;
-  const email = charge?.billing_details?.email ?? charge?.receipt_email ?? null;
+  const type = opts.classify({ stripeType, description, hasMatchId: matchId != null });
+  /* THE EMAIL, IN stripeSync.extractEmail's ORDER: billing_details → receipt_email →
+   * metadata.email → the customer's. Membership charges are invoice charges and usually carry only
+   * the customer. Used for the membership city. */
+  const chargeEmail = charge?.billing_details?.email ?? charge?.receipt_email ?? null;
+  const customerId = charge && typeof charge.customer === "string" ? charge.customer : null;
+  const email = chargeEmail
+    ?? (typeof meta.email === "string" && meta.email.trim() ? meta.email : null)
+    ?? (customerId && opts.customerEmail ? opts.customerEmail(customerId) : null);
   const matchName = meta.matchName ?? null;
 
   const fieldRaw = meta.fieldId;
   const field_id = fieldRaw != null && String(fieldRaw).trim() !== "" && Number.isFinite(Number(fieldRaw))
     ? Number(fieldRaw) : null;
 
-  const is_internal = !!email && INTERNAL_EMAIL_RX.test(email);
+  /* THE INTERNAL FLAG STAYS ON billing_details / receipt_email, as it was when September tied. Widening it to
+   * the customer's email is an EXCLUSION change, which flags months "Adjusted after final" — not
+   * part of the attribution fix (Ryan, 2026-10-07). */
+  const is_internal = !!chargeEmail && INTERNAL_EMAIL_RX.test(chargeEmail);
   const is_test = !!matchName && TEST_NAME_RX.test(matchName);
 
   return {
@@ -145,12 +167,12 @@ export function mapBalanceTxn(
     gross_cents: bt.amount,
     fee_cents: bt.fee ?? 0,
     net_cents: bt.net,
-    city: opts.cityOf(meta.cityIdentifier ?? null),
-    type: opts.classify({ stripeType, description, hasMatchId: matchId != null }),
+    city: opts.cityOf({ type, cityIdentifier: meta.cityIdentifier?.trim() || null, matchId, email: email ? email.trim().toLowerCase() : null }),
+    type,
     field_id,
     fin_venue_id: field_id == null ? null : opts.venueOfField(field_id),
     balance_txn_id: bt.id,
-    charge_id: charge?.id ?? null,
+    charge_id: charge?.id ?? reversedChargeId,
     payment_intent_id: (charge?.payment_intent as string | null) ?? null,
     subscription_id: null,
     /* INVOICE AND SUBSCRIPTION COME FROM THE INVOICE, NOT THE CHARGE. The Stripe types do not put

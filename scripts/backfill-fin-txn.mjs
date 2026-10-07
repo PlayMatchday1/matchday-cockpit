@@ -48,7 +48,7 @@ const months = [];
 }
 console.log(`${months.length} months: ${months[0]} … ${months[months.length - 1]}${DRY ? "  (DRY RUN — no calls)" : ""}`);
 
-let totalIns = 0, totalUpd = 0, totalFetched = 0;
+let totalIns = 0, totalUpd = 0, totalFetched = 0, totalAttr = 0, totalUnlinked = 0;
 const unmapped = new Set();
 const failed = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -92,11 +92,13 @@ for (const month of months) {
   totalIns += j.inserted ?? 0; totalUpd += j.updated ?? 0; totalFetched += j.fetched ?? 0;
   const un = j.unmappedFieldIds ?? [];
   for (const f of un) unmapped.add(f);
-  console.log(`  ${month}  fetched ${String(j.fetched).padStart(6)}  inserted ${String(j.inserted).padStart(6)}  updated ${String(j.updated).padStart(5)}  ${String(secs).padStart(4)}s${un.length ? `  unmapped fieldIds: ${un.join(", ")}` : ""}`);
+  totalAttr += j.attributed ?? 0; totalUnlinked += j.reversalsUnlinked ?? 0;
+  // "updated" = an AMOUNT or EXCLUSION moved (stamps updated_at); "attributed" = city/type/field/charge link only.
+  console.log(`  ${month}  fetched ${String(j.fetched).padStart(6)}  inserted ${String(j.inserted).padStart(6)}  updated ${String(j.updated).padStart(5)}  attributed ${String(j.attributed ?? "?").padStart(5)}  reversals unlinked ${j.reversalsUnlinked ?? "?"}  ${String(secs).padStart(4)}s${un.length ? `  unmapped fieldIds: ${un.join(", ")}` : ""}`);
 }
 
 if (!DRY) {
-  console.log(`\ntotal: ${totalFetched} fetched · ${totalIns} inserted · ${totalUpd} updated`);
+  console.log(`\ntotal: ${totalFetched} fetched · ${totalIns} inserted · ${totalUpd} updated · ${totalAttr} attributed · ${totalUnlinked} reversals unlinked`);
   console.log(`unmapped fieldIds across the whole walk: ${unmapped.size ? [...unmapped].sort((a,b)=>a-b).join(", ") : "none"}`);
   console.log(failed.length
     ? `MONTHS THAT FAILED TWICE (${failed.length}): ${failed.map((f) => `${f.month} (${f.why})`).join(" · ")}`

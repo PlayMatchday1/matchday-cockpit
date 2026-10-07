@@ -5,7 +5,8 @@
  *   ?month=2026-09     one month, for the historical back-fill
  *
  * ── IT NEVER TOUCHES fin_revenue AND IT NEVER DELETES ───────────────────────────────────────────
- * Upsert on balance_txn_id, nothing else. fin_revenue keeps its own nightly 06:00 Central job,
+ * Upsert on balance_txn_id, nothing else — except the Venmo copy, which READS fin_revenue's Venmo rows.
+ * fin_revenue keeps its own nightly 06:00 Central job,
  * unchanged, and stays the live source for every Finance page until the switch.
  *
  * ── AUTH: THE SAME TWO MODES AS EVERY OTHER SYNC ROUTE ──────────────────────────────────────────
@@ -26,6 +27,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 import { syncFinTxn, finTxnLogPatch, windowDaysBack, windowForMonth } from "@/lib/finTxnSync";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
+import { mirrorVenmo } from "@/lib/finTxnVenmo";
 
 /* 300s IS THE CEILING AND A MONTH IS THE UNIT. September alone is ~6,100 balance transactions at
  * 100 per page with `expand[]=data.source` — about 61 sequential Stripe calls. A 3-day window is a
@@ -124,8 +126,12 @@ export async function runFinTxnSync(req: Request, forced?: { days: number }) {
     );
   }
 
-  const run = await runWithLog(source, triggeredBy, supabase, (sb) =>
-    syncFinTxn(sb, { since, until, apiKey }), finTxnLogPatch);
+  /* VENMO RIDES ALONG ON THE RECURRING RUNS, never the month back-fill: it copies all of
+   * fin_revenue's Venmo rows each time, so one run covers every month (finTxnVenmo.ts). */
+  const run = await runWithLog(source, triggeredBy, supabase, async (sb) => {
+    const r = await syncFinTxn(sb, { since, until, apiKey });
+    return source === "stripe-txn" ? { ...r, venmo: await mirrorVenmo(sb) } : r;
+  }, finTxnLogPatch);
 
   if (!run.ok) return Response.json({ error: run.error, outcome: "FAILED" }, { status: 500 });
 

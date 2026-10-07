@@ -20,9 +20,12 @@
 
 import Stripe from "stripe";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { classifyCharge, cityFromIdentifier } from "./financeImport";
+import { classifyCharge, cityFromIdentifier, DELETED_ACCOUNT_CITY } from "./financeImport";
+import { cityFromAbbr } from "./cityMap";
+import { selectAll } from "./supabasePagination";
 import { mapBalanceTxn, isTransferCategory, type FinTxnRow } from "./finTxnMap";
 import { BUSINESS_TZ, zonedWallClockToUtcMs } from "./businessHours";
+import type { VenmoMirrorResult } from "./finTxnVenmo";
 
 export type FinTxnSyncResult = {
   fetched: number;
@@ -34,6 +37,11 @@ export type FinTxnSyncResult = {
   skippedTransfers: number;
   /** A category this build does not recognise. SKIPPED AND REPORTED — never bucketed. */
   unknownCategories: { category: string; count: number; grossCents: number }[];
+  /** Rows whose city, type, field or charge link was filled in or corrected. Written, NOT stamped:
+   *  only an amount or an exclusion moving sets updated_at ("Adjusted after final"). */
+  attributed: number;
+  /** Refunds and disputes whose charge is not in fin_txn — they keep no city. */
+  reversalsUnlinked: number;
   sinceIso: string;
   untilIso: string;
 };
@@ -43,6 +51,64 @@ async function fieldToVenue(sb: SupabaseClient): Promise<Map<number, number>> {
   const { data, error } = await sb.from("fin_venue_fields").select("fin_venue_id,mdapi_field_id");
   if (error) throw new Error(`fin_venue_fields read failed: ${error.message}`);
   return new Map((data ?? []).map((r) => [Number(r.mdapi_field_id), Number(r.fin_venue_id)]));
+}
+
+/* ── THE CITY, DECIDED THE WAY fin_revenue DECIDES IT ───────────────────────────────────────────
+ * A copy of stripeSync.syncStripeCharges' allocation (src/lib/stripeSync.ts, "Build email→city"
+ * and the per-type branch), so both tables put a charge in the same city:
+ *   Strike          cityIdentifier
+ *   Membership      email → mdapi_subscriptions.city_identifier, else mdapi_users.preferable_city
+ *   DPP             cityIdentifier, else metadata.matchId → mdapi_matches.city_identifier
+ *   everything else cityIdentifier, else the matchId join
+ * Anything that resolves to nothing is DELETED_ACCOUNT_CITY, which the Revenue page shows as
+ * "Unassigned". stripeSync is NOT imported or changed: it feeds fin_revenue's nightly job, which
+ * stays as it is. If one changes, change both. */
+type CityMaps = { emailToCity: Map<string, string>; matchToCity: Map<string, string> };
+
+async function cityMaps(sb: SupabaseClient): Promise<CityMaps> {
+  const emailToCity = new Map<string, string>();
+  const subs = await selectAll<{ member_email: string | null; city_identifier: string | null }>(() =>
+    sb.from("mdapi_subscriptions").select("member_email, city_identifier").order("membership_id"));
+  for (const m of subs) if (m.member_email) emailToCity.set(m.member_email.toLowerCase().trim(), cityFromAbbr(m.city_identifier) ?? DELETED_ACCOUNT_CITY);
+  const users = await selectAll<{ email: string | null; preferable_city_normalized: string | null }>(() =>
+    sb.from("mdapi_users").select("email, preferable_city_normalized").not("email", "is", null).not("preferable_city_normalized", "is", null).order("id"));
+  for (const u of users) {
+    if (!u.email) continue;
+    const e = u.email.toLowerCase().trim();
+    if (!emailToCity.has(e)) emailToCity.set(e, cityFromAbbr(u.preferable_city_normalized) ?? DELETED_ACCOUNT_CITY);
+  }
+  const matchToCity = new Map<string, string>();
+  const matches = await selectAll<{ api_id: number | null; city_identifier: string | null }>(() =>
+    sb.from("mdapi_matches").select("api_id, city_identifier").order("api_id"));
+  for (const m of matches) { const c = cityFromAbbr(m.city_identifier); if (m.api_id != null && c) matchToCity.set(String(m.api_id), c); }
+  return { emailToCity, matchToCity };
+}
+
+export function allocateCity(maps: CityMaps, a: { type: string; cityIdentifier: string | null; matchId: string | null; email: string | null }): string {
+  if (a.type === "Membership") {
+    const hit = a.email ? maps.emailToCity.get(a.email) : undefined;
+    return hit && hit !== DELETED_ACCOUNT_CITY ? hit : DELETED_ACCOUNT_CITY;
+  }
+  const byCode = cityFromIdentifier(a.cityIdentifier);
+  if (a.type === "Strike" || byCode !== DELETED_ACCOUNT_CITY) return byCode;
+  return (a.matchId ? maps.matchToCity.get(a.matchId) : undefined) ?? DELETED_ACCOUNT_CITY;
+}
+
+/* MEMBERSHIP CHARGES ARE INVOICE CHARGES: Stripe puts the member's email on the CUSTOMER, not the
+ * charge. stripeSync gets it by expanding data.customer on charges.list; balance_transactions.list
+ * cannot expand a field of its polymorphic source safely, so the customers are fetched here — once
+ * each per run, eight at a time. A deleted customer has no email and lands Unassigned, as in
+ * fin_revenue. Emails are held in memory for the run and never stored. */
+async function customerEmails(stripe: Stripe, ids: string[]): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>();
+  const queue = [...new Set(ids)];
+  await Promise.all(Array.from({ length: 8 }, async () => {
+    for (let id = queue.pop(); id; id = queue.pop()) {
+      const c = await stripe.customers.retrieve(id);
+      out.set(id, "deleted" in c && c.deleted ? null : ((c as Stripe.Customer).email ?? null));
+    }
+  }));
+  return out;
 }
 
 /**
@@ -58,22 +124,38 @@ export async function syncFinTxn(
 ): Promise<FinTxnSyncResult> {
   const stripe = new Stripe(opts.apiKey);
   const venueOf = await fieldToVenue(sb);
+  const maps = await cityMaps(sb);
   const unmapped = new Set<number>();
 
-  const rows: (FinTxnRow & { fin_venue_id: number | null })[] = [];
-  const unknown = new Map<string, { count: number; grossCents: number }>();
-  let fetched = 0, skippedTransfers = 0;
+  const all: Stripe.BalanceTransaction[] = [];
   for await (const bt of stripe.balanceTransactions.list({
     created: { gte: Math.floor(opts.since.getTime() / 1000), lt: Math.floor(opts.until.getTime() / 1000) },
     limit: 100,
     expand: ["data.source"],
   })) {
-    fetched++;
-    if (opts.onProgress && fetched % 500 === 0) opts.onProgress(fetched);
+    all.push(bt);
+    if (opts.onProgress && all.length % 500 === 0) opts.onProgress(all.length);
+  }
+  const fetched = all.length;
+
+  // The customers whose email a membership city needs: charges with no email of their own.
+  const needEmail = all.flatMap((bt) => {
+    const c = bt.source as Stripe.Charge | null;
+    if (!c || typeof c !== "object" || c.object !== "charge" || typeof c.customer !== "string") return [];
+    if (c.billing_details?.email || c.receipt_email || (typeof c.metadata?.email === "string" && c.metadata.email.trim())) return [];
+    return [c.customer];
+  });
+  const emails = await customerEmails(stripe, needEmail);
+
+  const rows: (FinTxnRow & { fin_venue_id: number | null })[] = [];
+  const unknown = new Map<string, { count: number; grossCents: number }>();
+  let skippedTransfers = 0;
+  for (const bt of all) {
     const cat = String(bt.reporting_category ?? "");
     const row = mapBalanceTxn(bt, {
       classify: classifyCharge,
-      cityOf: cityFromIdentifier,
+      cityOf: (a) => allocateCity(maps, a),
+      customerEmail: (id) => emails.get(id) ?? null,
       venueOfField: (id) => {
         const v = venueOf.get(id);
         if (v == null) unmapped.add(id);
@@ -92,29 +174,62 @@ export async function syncFinTxn(
     rows.push(row);
   }
 
-  /* ── THE UPSERT, AND WHY updated_at IS NOT SET BLINDLY ──────────────────────────────────────
-   * Ryan: set updated_at only when a value actually changes. An upsert that stamps every row on
-   * every run makes "Adjusted after final" fire on every sync and therefore mean nothing. So the
-   * existing rows in the window are read first and compared on the fields that can move; only a
-   * genuine difference carries a new updated_at. */
+  /* ── A REFUND OR DISPUTE TAKES ITS CHARGE'S CITY, TYPE AND FIELD ───────────────────────────────
+   * Its own source carries no metadata. The charge is found in this run's rows first, then in
+   * fin_txn (a refund usually lands days or weeks after its charge). Not found → it keeps what it
+   * has, Unassigned, and is counted. The exclusion flags come with it: a refund of an internal
+   * account's charge is internal too. */
+  const chargeRow = new Map<string, Pick<FinTxnRow, "city" | "type" | "field_id" | "is_test" | "is_internal" | "exclude_reason"> & { fin_venue_id: number | null }>();
+  for (const r of rows) if (r.kind === "charge" && r.charge_id) chargeRow.set(r.charge_id, r);
+  const reversals = rows.filter((r) => (r.kind === "refund" || r.kind === "dispute") && r.charge_id);
+  const missing = [...new Set(reversals.map((r) => r.charge_id!).filter((id) => !chargeRow.has(id)))];
+  for (let i = 0; i < missing.length; i += 200) {
+    const { data, error } = await sb.from("fin_txn")
+      .select("charge_id,city,type,field_id,fin_venue_id,is_test,is_internal,exclude_reason")
+      .eq("kind", "charge").in("charge_id", missing.slice(i, i + 200));
+    if (error) throw new Error(`fin_txn charge lookup failed: ${error.message}`);
+    for (const c of data ?? []) chargeRow.set(String(c.charge_id), c as never);
+  }
+  let reversalsUnlinked = 0;
+  for (const r of rows) {
+    if (r.kind !== "refund" && r.kind !== "dispute") continue;
+    const c = r.charge_id ? chargeRow.get(r.charge_id) : undefined;
+    if (!c) { reversalsUnlinked++; continue; }
+    Object.assign(r, { city: c.city, type: c.type, field_id: c.field_id, fin_venue_id: c.fin_venue_id,
+      is_test: c.is_test, is_internal: c.is_internal, exclude_reason: c.exclude_reason });
+  }
+
+  /* ── THE UPSERT, AND WHAT SETS updated_at ───────────────────────────────────────────────────
+   * updated_at is what "Adjusted after final" reads, so it is set ONLY when an AMOUNT or an
+   * EXCLUSION moves (Ryan, 2026-10-07). A city, type, field or charge link being filled in or
+   * corrected is written but not stamped — it moves a row between cities, never the month's total.
+   *
+   * THE EXISTING updated_at IS CARRIED FORWARD on every other row. A bulk upsert sends one column
+   * list for the whole batch, and a row without the key gets NULL — so once any row in a batch is
+   * stamped, every unstamped row beside it would have its history wiped. */
   const ids = rows.map((r) => r.balance_txn_id);
   const existing = new Map<string, Record<string, unknown>>();
   for (let i = 0; i < ids.length; i += 500) {
     const { data, error } = await sb.from("fin_txn")
-      .select("balance_txn_id,gross_cents,fee_cents,net_cents,city,type,field_id,fin_venue_id,is_test,is_internal,dispute_reason")
+      .select("balance_txn_id,gross_cents,fee_cents,net_cents,city,type,field_id,fin_venue_id,is_test,is_internal,dispute_reason,charge_id,updated_at")
       .in("balance_txn_id", ids.slice(i, i + 500));
     if (error) throw new Error(`fin_txn read-before failed: ${error.message}`);
     for (const r of data ?? []) existing.set(String(r.balance_txn_id), r);
   }
 
-  const MOVES = ["gross_cents","fee_cents","net_cents","city","type","field_id","fin_venue_id","is_test","is_internal","dispute_reason"] as const;
-  let inserted = 0, updated = 0;
+  const AMOUNTS = ["gross_cents","fee_cents","net_cents","is_test","is_internal"] as const;
+  const ATTRIBUTION = ["city","type","field_id","fin_venue_id","dispute_reason","charge_id"] as const;
+  const differs = (was: Record<string, unknown>, r: Record<string, unknown>, keys: readonly string[]) =>
+    keys.some((k) => (was[k] ?? null) !== (r[k] ?? null));
+  let inserted = 0, updated = 0, attributed = 0;
+  const stamp = new Date().toISOString();
   const payload = rows.map((r) => {
     const was = existing.get(r.balance_txn_id);
-    if (!was) { inserted++; return r; }
-    const changed = MOVES.some((k) => (was[k] ?? null) !== ((r as Record<string, unknown>)[k] ?? null));
-    if (changed) updated++;
-    return changed ? { ...r, updated_at: new Date().toISOString() } : r;
+    if (!was) { inserted++; return { ...r, updated_at: null }; }
+    const moved = differs(was, r as Record<string, unknown>, AMOUNTS);
+    if (moved) updated++;
+    else if (differs(was, r as Record<string, unknown>, ATTRIBUTION)) attributed++;
+    return { ...r, updated_at: moved ? stamp : ((was.updated_at as string | null) ?? null) };
   });
 
   for (let i = 0; i < payload.length; i += 500) {
@@ -124,7 +239,7 @@ export async function syncFinTxn(
   }
 
   return {
-    fetched, upserted: payload.length, inserted, updated,
+    fetched, upserted: payload.length, inserted, updated, attributed, reversalsUnlinked,
     unmappedFieldIds: [...unmapped].sort((a, b) => a - b),
     skippedTransfers,
     unknownCategories: [...unknown].map(([category, e]) => ({ category, ...e }))
@@ -134,7 +249,7 @@ export async function syncFinTxn(
 }
 
 /** What runWithLog writes onto the fin_sync_log row. */
-export const finTxnLogPatch = (r: FinTxnSyncResult) => {
+export const finTxnLogPatch = (r: FinTxnSyncResult & { venmo?: VenmoMirrorResult }) => {
   /* BOTH ADVISORIES ON ONE LINE. error_message on a COMPLETED row is the house's advisory channel —
    * the run succeeded, and something about it needs a human. An unknown category is the louder of
    * the two: it means money moved in a shape this build has never seen and did not store. */
@@ -148,10 +263,16 @@ export const finTxnLogPatch = (r: FinTxnSyncResult) => {
   if (r.unmappedFieldIds.length) {
     notes.push(`${r.unmappedFieldIds.length} fieldId(s) map to no fin_venue_fields row: ${r.unmappedFieldIds.join(", ")}`);
   }
+  if (r.reversalsUnlinked) {
+    notes.push(`${r.reversalsUnlinked} refund(s)/dispute(s) whose charge is not in fin_txn — left Unassigned`);
+  }
+  if (r.venmo?.orphaned.length) {
+    notes.push(`${r.venmo.orphaned.length} Venmo row(s) in fin_txn no longer in fin_revenue, NOT deleted: ${r.venmo.orphaned.join(", ")}`);
+  }
   return {
     charges_fetched: r.fetched,
-    rows_imported: r.inserted,
-    rows_replaced: r.updated,
+    rows_imported: r.inserted + (r.venmo?.inserted ?? 0),
+    rows_replaced: r.updated + (r.venmo?.updated ?? 0),
     ...(notes.length ? { error_message: `ADVISORY (sync OK) — ${notes.join(" · ")}` } : {}),
   };
 };
