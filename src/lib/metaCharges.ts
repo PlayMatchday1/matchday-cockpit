@@ -41,9 +41,12 @@ export const META_BILL_DAY = 6;
 export const META_BILL_HOUR_UTC = 8;
 
 /* ── THE DAILY BUDGET ON FILE. Change it here. ────────────────────────────────────────────────
- * What OpEx projects Meta to spend each day (Ryan, 2026-10-07: Miguel's budget, $190/day from
- * Oct 7). `from` records when it took effect; every projected day uses `cents`. */
-export const META_DAILY_BUDGET = { cents: 19_000, from: "2026-10-07" } as const;
+ * What OpEx projects Meta to spend each day. `from` records when it took effect; every projected
+ * day uses `cents`.
+ * 2026-10-07 (Ryan): $175/day — the live ad sets: Atlanta iOS $30, Austin $25, Dallas $40,
+ * Houston $30, OKC $15, San Antonio $20, St. Louis $15 (Atlanta Android off). Goes to $190 when
+ * Fort Worth launches; Ryan will say when. */
+export const META_DAILY_BUDGET = { cents: 17_500, from: "2026-10-07" } as const;
 export type DailyBudget = { cents: number; from: string };
 
 /** A paid charge (or, negative, a refund) from Meta's record. `at` is an ISO UTC instant. */
