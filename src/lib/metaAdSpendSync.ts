@@ -600,24 +600,74 @@ function cityLabel(code: string | null): string | null { return code ? (CITY_LAB
 
 export { cityForMarket };
 
-/* ── THE CHARGES META LOGGED, for OpEx's cash calendar (src/lib/metaCharges.ts) ────────────────
- * READ-ONLY: the account activity log, filtered to "Account billed" (ad_account_billing_charge).
- * Known to be INCOMPLETE (probed 2026-10-03): OpEx uses these where they exist and reproduces the
- * rest from daily spend. Same GET helpers, same header token, same redaction as the sync. */
-export async function fetchMetaLoggedCharges(adAccountId: string, sinceYmd: string): Promise<{ at: string; cents: number }[]> {
+/* ── META BILLING CHARGES AND BALANCE, SAVED DAILY (Ryan, 2026-10-07; migration 0212) ───────────
+ * OpEx used to read Meta's activity log on every page load: every ad edit since Jul 1, ~3 s a page,
+ * to find a handful of charges. The sync now saves them and OpEx reads the tables.
+ *
+ * WHAT IS SAVED
+ *   fin_meta_billing_charge   each "ad_account_billing_charge" (Account billed) the log returns,
+ *                             keyed on Meta's transaction_id. Upsert: a charge read again is the
+ *                             same row; its time and amount come from the log. A charge the log
+ *                             stops returning is KEPT — the log is incomplete and unstable (two
+ *                             reads on 2026-10-07 returned 27 and 25 charges for the same window).
+ *                             History Jul 1 – Oct 7 came from Meta's Payment activity page
+ *                             (scripts/backfill-meta-billing.mjs), paid rows only.
+ *   fin_meta_billing_balance  the account's `balance` (unbilled, cents) and `amount_spent`.
+ *
+ * ONLY PAID CHARGES REACH THE LOG: none of the 12 failed payments on the Payment activity page
+ * (Jul 1 – Oct 7) appears in it, matched by transaction_id. The log carries no status field.
+ *
+ * THE WINDOW: from 7 days before the latest saved charge (late entries do appear), or Jul 1 on an
+ * empty table. A page that fails or a run that hits the page cap THROWS: a short read must not look
+ * like "no charges". Reads only from Meta; the writes are to these two tables only. */
+export const META_BILLING_SINCE_YMD = "2026-07-01";
+export type MetaBillingResult = { since: string; logged: number; upserted: number; balanceCents: number; amountSpentCents: number };
+
+export async function syncMetaBilling(sb: SupabaseClient, adAccountId: string): Promise<MetaBillingResult> {
   const id = adAccountId.startsWith("act_") ? adAccountId : `act_${adAccountId}`;
-  const rows = await pageAll(`${id}/activities`, {
-    fields: "event_time,event_type,extra_data", since: sinceYmd, limit: "100",
-  });
-  const out: { at: string; cents: number }[] = [];
+  const latest = await sb.from("fin_meta_billing_charge").select("charged_at").eq("ad_account_id", id).order("charged_at", { ascending: false }).limit(1);
+  if (latest.error) throw new Error(`fin_meta_billing_charge read failed: ${latest.error.message}`);
+  const last = latest.data?.[0]?.charged_at as string | undefined;
+  const since = last ? new Date(Date.parse(last) - 7 * 86_400_000).toISOString().slice(0, 10) : META_BILLING_SINCE_YMD;
+
+  const rows: Record<string, unknown>[] = [];
+  let body = await graphGet(`${id}/activities`, { fields: "event_time,event_type,extra_data", since, limit: "100" });
+  rows.push(...((body.data as Record<string, unknown>[]) ?? []));
+  for (let pages = 1; (body.paging as { next?: string } | undefined)?.next; pages++) {
+    if (pages >= 100) throw new Error(`meta billing: activity log still paging after ${pages} pages since ${since}; nothing saved`);
+    apiCalls++;
+    const r = await fetch((body.paging as { next: string }).next, { method: "GET", headers: { Authorization: `Bearer ${token()}` }, cache: "no-store" });
+    if (!r.ok) throw new Error(`meta billing: activity log page ${pages + 1} returned ${r.status}; nothing saved`);
+    body = (await r.json()) as Record<string, unknown>;
+    rows.push(...((body.data as Record<string, unknown>[]) ?? []));
+  }
+
+  const now = new Date().toISOString();
+  const charges: Record<string, unknown>[] = [];
   for (const r of rows) {
     if (r.event_type !== "ad_account_billing_charge") continue;
-    let x: { currency?: string; new_value?: number } = {};
-    try { x = JSON.parse(String(r.extra_data ?? "{}")); } catch { continue; }
-    if (x.currency && x.currency !== "USD") continue;
+    let x: { currency?: string; new_value?: number; transaction_id?: string } = {};
+    try { x = JSON.parse(String(r.extra_data ?? "{}")); } catch { throw new Error(`meta billing: unreadable extra_data on a charge at ${String(r.event_time)}`); }
     const cents = Number(x.new_value);
-    if (!Number.isInteger(cents) || cents <= 0) continue;
-    out.push({ at: new Date(String(r.event_time)).toISOString(), cents });
+    if (!x.transaction_id) throw new Error(`meta billing: a charge at ${String(r.event_time)} has no transaction_id`);
+    if (x.currency !== "USD") throw new Error(`meta billing: charge ${x.transaction_id} is in ${x.currency ?? "no currency"}`);
+    if (!Number.isInteger(cents) || cents === 0) throw new Error(`meta billing: charge ${x.transaction_id} has amount ${String(x.new_value)}`);
+    charges.push({
+      transaction_id: x.transaction_id, ad_account_id: id, charged_at: new Date(String(r.event_time)).toISOString(),
+      amount_cents: cents, kind: cents < 0 ? "refund" : "charge", event_type: "ad_account_billing_charge", currency: "USD", last_seen_at: now,
+    });
   }
-  return out.sort((a, b) => a.at.localeCompare(b.at));
+  if (charges.length) {
+    const { error } = await sb.from("fin_meta_billing_charge").upsert(charges, { onConflict: "transaction_id" });
+    if (error) throw new Error(`fin_meta_billing_charge upsert failed: ${error.message}`);
+  }
+
+  const acct = await graphGet(id, { fields: "balance,amount_spent,currency" });
+  assertUsd(String(acct.currency ?? ""));
+  const balanceCents = Number(acct.balance), amountSpentCents = Number(acct.amount_spent);
+  if (!Number.isInteger(balanceCents) || !Number.isInteger(amountSpentCents)) throw new Error(`meta billing: balance ${String(acct.balance)} / amount_spent ${String(acct.amount_spent)} are not whole cents`);
+  const ins = await sb.from("fin_meta_billing_balance").insert({ ad_account_id: id, read_at: now, balance_cents: balanceCents, amount_spent_cents: amountSpentCents });
+  if (ins.error) throw new Error(`fin_meta_billing_balance insert failed: ${ins.error.message}`);
+
+  return { since, logged: charges.length, upserted: charges.length, balanceCents, amountSpentCents };
 }

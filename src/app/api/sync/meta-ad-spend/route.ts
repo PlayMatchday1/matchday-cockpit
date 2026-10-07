@@ -28,7 +28,7 @@
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { syncMetaAdSpend, coverageVerdict, notAttributedVerdict, type MetaSyncResult } from "@/lib/metaAdSpendSync";
+import { syncMetaAdSpend, syncMetaBilling, coverageVerdict, notAttributedVerdict, type MetaBillingResult, type MetaSyncResult } from "@/lib/metaAdSpendSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 
 /* A 28-day window at day granularity with one geo breakdown is a handful of paged GETs plus two
@@ -141,8 +141,18 @@ export async function POST(req: Request) {
     "meta-ad-spend",
     triggeredBy,
     supabase,
-    (sb) => syncMetaAdSpend(sb, todayYmd, opts),
-    (r: MetaSyncResult) => ({
+    /* THE BILLING CHARGES AND BALANCE (OpEx) are saved AFTER the spend sync, on every run. A billing
+     * failure does not undo or fail the spend writes, which have landed; it is reported in the log
+     * WITHOUT the "ADVISORY" prefix, so the row reads red, not amber — OpEx shows stale charges until
+     * it is fixed, and nobody should mistake that for a note. */
+    async (sb) => {
+      const r = await syncMetaAdSpend(sb, todayYmd, opts);
+      let billing: MetaBillingResult | { error: string };
+      try { billing = await syncMetaBilling(sb, r.adAccountId); }
+      catch (e) { billing = { error: e instanceof Error ? e.message : String(e) }; }
+      return { ...r, billing };
+    },
+    (r: MetaSyncResult & { billing: MetaBillingResult | { error: string } }) => ({
       rows_imported: r.marketRows + r.unallocatedRows,
       rows_replaced: r.expenseRowsWritten,
       /* THE DAILY VARIANCE IS IN THE VERDICT, not only in a return value nobody reads. A growing
@@ -170,6 +180,7 @@ export async function POST(req: Request) {
         ].filter(Boolean);
         // 500 chars is what the catch path truncates to; the patch path does not, so it is done
         // here rather than discovered as a rejected update on a run nobody was watching.
+        if ("error" in r.billing) return `BILLING NOT SAVED (spend sync OK): ${r.billing.error}${parts.length ? ` · ${parts.join(" · ")}` : ""}`.slice(0, 500);
         return parts.length ? `ADVISORY (sync OK). ${parts.join(" · ")}`.slice(0, 500) : undefined;
       })(),
     }),

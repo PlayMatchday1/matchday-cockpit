@@ -24,7 +24,7 @@ import { useFinancePeriod } from "@/lib/financePeriodContext";
 import { currentPeriod, stepPeriod } from "@/lib/financePeriod";
 import type { AutoMatchPay } from "@/lib/opexAutoProjection";
 import type { AutoMetaInfo } from "@/lib/opexSources";
-import { META_BILLING_THRESHOLD_CENTS, META_DAILY_BUDGET, buildMetaCash, type DailySpend, type LoggedCharge } from "@/lib/metaCharges";
+import { META_DAILY_BUDGET, metaCashFromRecord, type BalanceRead, type PaidCharge } from "@/lib/metaCharges";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import { isWeekendColumn, monthLayout, weekdayHeaders } from "@/lib/weekStart";
@@ -109,9 +109,10 @@ export default function OpExCalendarView() {
   }, []);
 
   /* ── META AD CHARGES (src/lib/metaCharges.ts) ─────────────────────────────────────────────────
-   * Daily spend and Meta's logged charges, from /api/finance/meta-cash (finance only, read-only).
-   * If they do not load, OpEx keeps the month-end Meta rows and says so — never neither, never both. */
-  const [metaIn, setMetaIn] = useState<{ daily: DailySpend[]; logged: LoggedCharge[] } | null>(null);
+   * The paid charges and Meta's balance the daily sync saved, from /api/finance/meta-cash (finance
+   * only, read-only, database only). Until they arrive — or if they fail — the Meta rows are a
+   * placeholder: never the month-end spend rows, never a different projection. */
+  const [metaIn, setMetaIn] = useState<{ paid: PaidCharge[]; balance: BalanceRead } | null>(null);
   const [metaErr, setMetaErr] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
@@ -123,21 +124,26 @@ export default function OpExCalendarView() {
         const j = await r.json().catch(() => ({}));
         if (!live) return;
         if (!r.ok) { setMetaErr(String(j?.error ?? `HTTP ${r.status}`)); return; }
-        setMetaIn({ daily: j.daily ?? [], logged: j.logged ?? [] });
+        if (!j?.balance) { setMetaErr("no saved balance"); return; }
+        setMetaIn({ paid: j.paid ?? [], balance: j.balance });
       } catch (e) { if (live) setMetaErr(e instanceof Error ? e.message : String(e)); }
     })();
     return () => { live = false; };
   }, []);
   const meta = useMemo(() => {
-    if (!metaIn) return null;
+    if (!metaIn) return "pending" as const;
     // The rest of this month and the next two: through the first day of the month after, Central.
     const horizonEndMs = new Date(now.getFullYear(), now.getMonth() + 3, 1).getTime();
-    return buildMetaCash({ daily: metaIn.daily, logged: metaIn.logged, now, horizonEndMs, budget: META_DAILY_BUDGET });
+    return metaCashFromRecord({ paid: metaIn.paid, balance: metaIn.balance, now, horizonEndMs, budget: META_DAILY_BUDGET });
   }, [metaIn, now]);
 
+  /* ONE VIEW FROM THE FIRST FIGURE (Ryan, 2026-10-07): the page waits for Meta's charges as it waits
+   * for the finance data, so the Meta rows never arrive after the rest. Failed: the page shows,
+   * with the Meta placeholder and no Meta money. */
+  const ready = !!data && (!!metaIn || !!metaErr);
   const cal = useMemo(
-    () => buildOpexCalendarAsOf(data, year, month0, now, showProj ? projections : [], showProj, meta, META_DAILY_BUDGET),
-    [data, year, month0, now, showProj, projections, meta],
+    () => buildOpexCalendarAsOf(ready ? data : null, year, month0, now, showProj ? projections : [], showProj, meta),
+    [ready, data, year, month0, now, showProj, projections, meta],
   );
   const all = useMemo(() => paymentsOf(cal), [cal]);
   const shown = useMemo(() => all.filter((p) => solo == null || p.cat === solo), [all, solo]);
@@ -369,12 +375,9 @@ export default function OpExCalendarView() {
             <input type="checkbox" data-testid="show-projections" checked={showProj} onChange={(e) => setShowProj(e.target.checked)} />
             Show projections
           </label>
-          {metaErr && (
-            <div className="pjnote" data-testid="meta-status">Meta charges did not load ({metaErr}). Ad spend shows as one month-end amount instead.</div>
-          )}
-          {meta?.threshold.changed && (
-            <div className="pjnote" data-testid="meta-threshold-changed">
-              Meta&rsquo;s billing threshold looks like {fmt(meta.threshold.inUse / 100)} now (its last two charges), not the {fmt(META_BILLING_THRESHOLD_CENTS / 100)} on file. Using {fmt(meta.threshold.inUse / 100)}.
+          {cal.metaPending && (
+            <div className="pjnote" data-testid="meta-pending">
+              {metaErr ? `Meta ads did not load (${metaErr}). They are not in these figures.` : "Meta ads: loading…"}
             </div>
           )}
           {(projMissing || projLoadError || projNote) && (
@@ -417,9 +420,9 @@ export default function OpExCalendarView() {
         </div>
       </section>
 
-      {!data && <div className="card ox-loading">{error ? "Finance data did not load." : "Loading finance data…"}</div>}
+      {!ready && <div className="card ox-loading">{error ? "Finance data did not load." : "Loading finance data…"}</div>}
 
-      {data && view === "cal" && (
+      {ready && view === "cal" && (
         <section className="card cal" data-testid="calendar">
           {/* ON A PHONE THE MONTH SCROLLS INSIDE ITS CARD; the page itself never scrolls sideways. */}
           <div className="calx"><div className="calin">
@@ -478,7 +481,7 @@ export default function OpExCalendarView() {
         </section>
       )}
 
-      {data && (
+      {ready && (
         /* data-payments: how many payments the data layer produced for the month (paymentsOf), so
            scripts/mocks/opex-calendar-v3.assert.mjs can check the ledger renders every one. */
         <section className="card led" data-testid="ledger" data-payments={all.length}>
@@ -612,27 +615,12 @@ export default function OpExCalendarView() {
         {pop?.kind === "autometa" && (
           <div data-testid="auto-meta-basis">
             <div className="h">{pop.day != null ? `${mon} ${pop.day} · ` : ""}Meta ads · {fmt(pop.amount)}</div>
-            {pop.info.restOfMonth ? (
-              <>
-                <div className="sub">Projected ad spend for the rest of the month: the daily budget times the days left. The Meta rows beside it are spend to date.</div>
-                <dl className="pp">
-                  <dt>Daily budget{budgetFrom(pop.info.budget)}</dt><dd data-testid="auto-meta-budget">{fmt((pop.info.budget?.cents ?? 0) / 100)}</dd>
-                  <dt>Days left</dt><dd>{pop.info.restOfMonth.days}</dd>
-                </dl>
-              </>
-            ) : (
-              <>
-                <div className="sub">Projected automatically from the daily ad budget, turned into card charges: one each time the unbilled balance would reach the billing threshold, and the rest on the bill date (the 6th). Charges already made are Meta&rsquo;s record.</div>
-                <dl className="pp">
-                  {pop.info.budget && <><dt>Daily budget{budgetFrom(pop.info.budget)}</dt><dd data-testid="auto-meta-budget">{fmt(pop.info.budget.cents / 100)}</dd></>}
-                  {(!pop.info.budget || (pop.day != null && iso(pop.day) < pop.info.budget.from)) && (
-                    <><dt>Daily average{pop.info.avgFrom && pop.info.avgTo ? <span className="m"> · {MON3[Number(pop.info.avgFrom.slice(5, 7)) - 1]} {Number(pop.info.avgFrom.slice(8, 10))} – {MON3[Number(pop.info.avgTo.slice(5, 7)) - 1]} {Number(pop.info.avgTo.slice(8, 10))}</span> : null}</dt>
-                    <dd data-testid="auto-meta-avg" data-cents={pop.info.dailyAvgCents}>{fmt(pop.info.dailyAvgCents / 100)}</dd></>
-                  )}
-                  <dt>Billing threshold</dt><dd>{fmt(pop.info.thresholdCents / 100)}</dd>
-                </dl>
-              </>
-            )}
+            <div className="sub">Projected from Meta&rsquo;s unbilled balance plus the daily ad budget: a charge each time the balance reaches the billing threshold, and the rest on the bill date (the 6th). Paid charges are Meta&rsquo;s record. A real charge replaces the projected one once the daily sync saves it.</div>
+            <dl className="pp">
+              <dt>Daily budget{budgetFrom(pop.info.budget)}</dt><dd data-testid="auto-meta-budget">{fmt(pop.info.budget.cents / 100)}</dd>
+              <dt>Unbilled balance<span className="m"> · {new Date(pop.info.balance.at).toLocaleString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span></dt><dd data-testid="auto-meta-balance">{fmt(pop.info.balance.cents / 100)}</dd>
+              <dt>Billing threshold</dt><dd>{fmt(pop.info.thresholdCents / 100)}</dd>
+            </dl>
           </div>
         )}
         {pop?.kind === "pill" && (

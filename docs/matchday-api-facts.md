@@ -6780,3 +6780,32 @@ blank row in `fin_meta_adset` (43 rows).
 **September 2026 spend per market reconciles to the cent** between the page's Meta ads table (live
 `/api/lifecycle/acquisition`) and Meta's ad-set insights for Sep 1–30 grouped by each ad set's market:
 DFW 1,273.35 · ATL 1,430.37 · HTX 1,162.95 · ATX 1,156.73 · SATX 435.93 · STL 324.80 · total 5,784.13.
+
+## Meta billing: the activity log is incomplete and unstable; the Payment activity page is complete (2026-10-07)
+
+- **No billing endpoint.** `act_…/transactions` → 400 "nonexisting field"; `/activities` has no
+  billing category (allowed: ACCOUNT, AD, AD_KEYWORDS, AD_SET, AUDIENCE, BID, BUDGET, CAMPAIGN, DATE,
+  STATUS, TARGETING); account field `billing_threshold` → 400. Probe 2026-10-07, GET only
+  (`scripts/_meta_bill_probe.ts`, deleted after).
+- **Charges are `event_type = ad_account_billing_charge`** ("Account billed"), `extra_data` =
+  `{"currency":"USD","new_value":<cents>,"transaction_id":"<n>-<n>","action":67,"type":"payment_amount"}`.
+  Since 2025-03-05: 98 of them, all positive; no refund/reversal event type exists in the log.
+- **The log misses charges and returns different sets on different reads**: Jul 1 – Oct 7 it held
+  25–27 of the 34 paid card charges on Meta's Billing & payments > Payment activity page; the same
+  window read twice on 2026-10-07 returned 27 then 25 (Sep 13 and Sep 18 $900 dropped). Missing in
+  every read: Jul 17 $506, Aug 9 $691, Aug 21 $900, Aug 27 $900, Sep 4 $1,392.44, Sep 6 $160.80,
+  Sep 22 $900.
+- **Failed payments are never in the log**: 0 of the 12 failed rows on the Payment activity page,
+  matched by transaction_id. **The log's transaction_id is the page's transaction ID** (25/25 matched).
+- **Reading it is slow**: 1,588 activities in 16 pages at ~3.3 s a page since Jul 1, every ad edit
+  included — why OpEx took ~10–50 s while it read the log live.
+- **The account's own `balance` field is the unbilled amount in cents** ("11584" = $115.84 at
+  2026-10-07 ~17:00Z; Ryan read $107.52 on the Billing page at 8:30 CT). `timezone_name` is
+  **America/Bogota**.
+- **Reconciliation, Jul 6 bill → Oct 7**: paid card charges after the Jul 6 bill $13,995.85 + balance
+  $115.84 − insights spend Jul 7 → Oct 7 $13,992.98 = $118.71, against ~$52 of Jul 6 spend after the
+  02:02 Bogota bill. **~$67 over, UNEXPLAINED** (the $0.51 Aug 21 ad credit is excluded from charges).
+- **Stored since 2026-10-07**: `fin_meta_billing_charge` (34 paid card charges from the Payment
+  activity page via `scripts/backfill-meta-billing.mjs`, times from the log where it has the ID, else
+  17:00 UTC on the page's date) and `fin_meta_billing_balance`; the meta-ad-spend sync adds to both
+  daily (`syncMetaBilling`, `src/lib/metaAdSpendSync.ts`). OpEx reads only these.

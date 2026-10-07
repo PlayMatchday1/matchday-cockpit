@@ -50,17 +50,11 @@ import type { FinanceData, FinVenue, FinExpense } from "./useFinanceData";
 import { buildFieldCostRows } from "./financeCosts";
 import { projectionCells, type OpexProjection, type ProjCat } from "./opexProjectionModel";
 import { autoMatchManagerPay, type AutoMatchPay } from "./opexAutoProjection";
-import { META_CASH_FLOOR_YMD, chicagoYmdOf, type DailyBudget, type MetaCashModel } from "./metaCharges";
+import { META_CASH_FLOOR_YMD, chicagoYmdOf, type BalanceRead, type DailyBudget, type MetaCashModel } from "./metaCharges";
 import { ownsExpenseRow } from "./metaAdSpend";
 
 /** What the automatic Meta projection's popover explains. */
-export type AutoMetaInfo = {
-  dailyAvgCents: number; avgFrom: string | null; avgTo: string | null; thresholdCents: number;
-  budget: DailyBudget | null;
-  /** The rest of the month's SPEND at the budget, on the last day: shown while Meta's charges have
-   *  not loaded (or failed), beside the month-end spend rows. `days` is how many days it covers. */
-  restOfMonth?: { days: number };
-};
+export type AutoMetaInfo = { budget: DailyBudget; thresholdCents: number; balance: BalanceRead };
 import { daysInMonth } from "./checkIns";
 import { groupVenues, type VenueGroup } from "./venueGroups";
 
@@ -759,6 +753,8 @@ export type OpexCalendarAsOf = OpexCalendar & {
   paidThrough: number;
   paidTotal: number;
   bankThrough: string | null; // "Aug 2026" — the last month the bank load covers
+  /** OpEx only: Meta's charges have not loaded, so this month shows no Meta money (a placeholder). */
+  metaPending: boolean;
 };
 
 const fmtUsd = (n: number) =>
@@ -962,16 +958,13 @@ export function buildOpexCalendarAsOf(
   /* THE AUTOMATIC MATCH MANAGER PAY PROJECTION (opexAutoProjection). Only the OpEx page turns it on,
    * and only while "Show projections" is ticked. Off, nothing below changes. */
   autoMatchPay = false,
-  /* META AD CHARGES ON THEIR DAYS (src/lib/metaCharges.ts). When given, the month-end Meta rows from
-   * Expenses are NOT shown — the charges replace them, so ad spend is never on the calendar twice —
-   * and the charges are: past ones paid, future ones automatic projections (with autoMatchPay, i.e.
-   * "Show projections"). Absent (null, or the inputs did not load): the month-end rows, as before.
-   * Expenses itself is never touched, so the Cost report and the P&L keep showing spend. */
-  meta: MetaCashModel | null = null,
-  /* THE BUDGET FOR A MONTH WITHOUT META'S CHARGES (OpEx passes META_DAILY_BUDGET). While `meta` is
-   * null — loading, or failed — and projections are on, the rest of the month's spend at this
-   * budget is projected on the month's last day. Null: nothing is added. */
-  metaBudget: DailyBudget | null = null,
+  /* META AD CHARGES ON THEIR DAYS (src/lib/metaCharges.ts). OpEx passes the model, or "pending"
+   * while it loads (or if it failed). Either way the month-end Meta rows from Expenses are NOT shown,
+   * so ad spend is never on the calendar twice and never as a different figure: loaded, the paid
+   * charges and (with "Show projections") the projected ones; pending, NO Meta money at all, and
+   * `metaPending` says so for the page's placeholder. null — every other caller — keeps the
+   * month-end rows. Expenses itself is never touched, so the Cost report and the P&L keep spend. */
+  meta: MetaCashModel | "pending" | null = null,
 ): OpexCalendarAsOf {
   const state = monthStateOf(year, month0, now);
   const days = daysInMonth(year, month0);
@@ -979,6 +972,7 @@ export function buildOpexCalendarAsOf(
   const monthKey = monthKeyFor(year, month0);
 
   let bankThrough: string | null = null;
+  let metaPending = false;
   let groups: CalGroup[] = [];
   if (data) {
     let best = -1;
@@ -996,11 +990,12 @@ export function buildOpexCalendarAsOf(
     const field = fieldCostGroupAsOf(data, monthKey, year, month0, state, paidThrough, bankThrough);
     const monthIso = `${year}-${String(month0 + 1).padStart(2, "0")}`;
     // From the month the Meta rows in Expenses start (Aug 2026); earlier months keep their hand rows.
-    const metaHere = !!meta && `${monthIso}-01` >= META_CASH_FLOOR_YMD;
+    const metaHere = meta !== null && `${monthIso}-01` >= META_CASH_FLOOR_YMD;
+    metaPending = metaHere && meta === "pending";
     const rest = expenseCategoryGroups(data, monthKey, year, month0, metaHere ? ownsExpenseRow : null);
-    if (metaHere) {
-      // The charges that have happened (Meta's record, or worked out from spend), on their days.
-      const past = meta!.charges.filter((c) => c.source !== "auto" && chicagoYmdOf(c.at).slice(0, 7) === monthIso);
+    if (metaHere && meta !== "pending") {
+      // The charges that have been paid (Meta's record), on their days.
+      const past = meta.charges.filter((c) => c.source === "meta" && chicagoYmdOf(c.at).slice(0, 7) === monthIso);
       if (past.length) {
         let g = rest.find((x) => x.key === "expcat:Marketing");
         if (!g) {
@@ -1011,7 +1006,7 @@ export function buildOpexCalendarAsOf(
           const day = Number(chicagoYmdOf(c.at).slice(8, 10));
           g.rows.push({
             key: `meta:${c.at}`, label: "Meta ads", cells: { [day]: c.cents / 100 },
-            sub: c.source === "meta" ? "From Meta's record" : "Worked out from spend",
+            sub: c.cents < 0 ? "Refund, Meta's record" : "From Meta's record",
           });
         }
         const { agg } = aggregateAndSubtotal(g.rows);
@@ -1060,8 +1055,8 @@ export function buildOpexCalendarAsOf(
         rows.push({ key: "auto:match-pay", label: "Match manager pay", cells: kept, projected: { id: 0, cat: "pers", auto } });
       }
     }
-    if (autoMatchPay && meta && `${monthIso}-01` >= META_CASH_FLOOR_YMD) {
-      // The Meta charges still to come: the 28-day daily average, turned into charges.
+    if (autoMatchPay && meta && meta !== "pending" && `${monthIso}-01` >= META_CASH_FLOOR_YMD) {
+      // The Meta charges still to come: Meta's balance plus the daily budget, turned into charges.
       const cells: Record<number, number> = {};
       for (const c of meta.charges) {
         if (c.source !== "auto") continue;
@@ -1074,24 +1069,7 @@ export function buildOpexCalendarAsOf(
       if (Object.keys(kept).length) {
         rows.push({
           key: "auto:meta", label: "Meta ads", cells: kept,
-          projected: { id: 0, cat: "mkt", autoMeta: { dailyAvgCents: meta.dailyAvgCents, avgFrom: meta.avgFrom, avgTo: meta.avgTo, thresholdCents: meta.threshold.inUse, budget: meta.budget } },
-        });
-      }
-    }
-    if (autoMatchPay && data && !meta && metaBudget && state !== "past" && `${monthIso}-01` >= META_CASH_FLOOR_YMD) {
-      /* META'S CHARGES NOT LOADED (still loading, or failed): the month-end rows in Expenses are
-       * spend TO DATE only. The rest of the month at the daily budget goes on the last day, so the
-       * month reads spend to date + budget × days left (from today, or the budget's first day). */
-      const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-      let left = 0;
-      for (let d = 1; d <= days; d++) {
-        const iso = `${monthIso}-${String(d).padStart(2, "0")}`;
-        if (iso >= todayIso && iso >= metaBudget.from) left++;
-      }
-      if (left > 0) {
-        rows.push({
-          key: "auto:meta-rest", label: "Meta ads", cells: { [days]: (left * metaBudget.cents) / 100 },
-          projected: { id: 0, cat: "mkt", autoMeta: { dailyAvgCents: 0, avgFrom: null, avgTo: null, thresholdCents: 0, budget: metaBudget, restOfMonth: { days: left } } },
+          projected: { id: 0, cat: "mkt", autoMeta: { budget: meta.budget, thresholdCents: meta.thresholdCents, balance: meta.balance } },
         });
       }
     }
@@ -1145,6 +1123,7 @@ export function buildOpexCalendarAsOf(
     paidThrough,
     paidTotal: Math.round(paidTotal * 100) / 100,
     bankThrough,
+    metaPending,
   };
 }
 

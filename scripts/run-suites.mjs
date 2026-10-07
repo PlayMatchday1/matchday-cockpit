@@ -344,7 +344,7 @@ const NODE_SUITES = [
   // OpEx Meta ad charges on their real days: charges + unbilled = spend to the cent; Meta's logged
   // charges kept; a gap between two logged bill charges closes exactly; no month-end Meta row once
   // charges show; the Cost report's monthly marketing (spend) unchanged; the auto projection.
-  "scripts/opex-meta-charges-test.ts",
+  "scripts/opex-meta-billing-test.ts",
   // Finance › Expenses, one month grouped by category: category totals sum to the month (Match
   // Manager Pay included); one bubble shows one category; an added expense appears once and raises
   // its category and the month by its amount ("every month" writes 12, skipping months booked); the

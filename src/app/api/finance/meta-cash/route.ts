@@ -1,21 +1,20 @@
 // GET /api/finance/meta-cash — the inputs OpEx needs to place Meta ad charges on their days
-// (src/lib/metaCharges.ts): daily spend from fin_meta_ad_spend_daily, and the charges Meta's
-// activity log recorded. READ-ONLY on both: no write to Supabase, GET only to Meta.
+// (src/lib/metaCharges.ts): the paid charges and Meta's latest unbilled balance, as the daily
+// meta-ad-spend sync saved them (fin_meta_billing_charge, fin_meta_billing_balance; migration 0212).
+//
+// DATABASE ONLY. It used to read Meta's activity log on every page load — ~3 s a page, 16 pages,
+// to find a few charges — which is why OpEx showed a different Meta view for its first ~10 s.
+// READ-ONLY: no write, no call to Meta.
 //
 // FINANCE ONLY. authenticateCapability(req, "finance") checks can_access_finance and refuses a
-// confined account. The Meta token never leaves the server; errors are redacted before they return.
+// confined account.
 
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { createClient } from "@supabase/supabase-js";
-import { fetchMetaLoggedCharges } from "@/lib/metaAdSpendSync";
-import { redactMetaError } from "@/lib/metaAdSpend";
 import { selectAll } from "@/lib/supabasePagination";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-/** How far back to read: enough to find the last bill-date charge (the 6th–9th) before today. */
-const SINCE = "2026-07-01";
 
 export async function GET(req: Request) {
   const auth = await authenticateCapability(req, "finance");
@@ -24,22 +23,19 @@ export async function GET(req: Request) {
   const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!.trim(), process.env.SUPABASE_SERVICE_ROLE_KEY!.trim(), {
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  let rows: { spend_date: string; spend_cents: number; ad_account_id: string }[];
+  let charges: { charged_at: string; amount_cents: number }[];
   try {
-    rows = await selectAll(() => sb.from("fin_meta_ad_spend_daily").select("spend_date, spend_cents, ad_account_id").gte("spend_date", SINCE).order("spend_date"));
+    charges = await selectAll(() => sb.from("fin_meta_billing_charge").select("charged_at, amount_cents, transaction_id").order("charged_at").order("transaction_id"));
   } catch (e) {
-    return Response.json({ error: `daily spend did not load: ${e instanceof Error ? e.message : String(e)}` }, { status: 500 });
+    return Response.json({ error: `Meta charges did not load: ${e instanceof Error ? e.message : String(e)}` }, { status: 500 });
   }
-  const byDay = new Map<string, number>();
-  for (const r of rows) byDay.set(r.spend_date, (byDay.get(r.spend_date) ?? 0) + Number(r.spend_cents));
-  const daily = [...byDay.entries()].map(([date, cents]) => ({ date, cents }));
-  const account = rows.find((r) => r.ad_account_id)?.ad_account_id ?? null;
+  const bal = await sb.from("fin_meta_billing_balance").select("read_at, balance_cents").order("read_at", { ascending: false }).limit(1);
+  if (bal.error) return Response.json({ error: `Meta's balance did not load: ${bal.error.message}` }, { status: 500 });
+  const b = bal.data?.[0];
+  if (!b) return Response.json({ error: "no Meta balance saved yet (the daily sync has not run since 0212)" }, { status: 500 });
 
-  if (!account) return Response.json({ error: "no Meta ad account in the daily spend table" }, { status: 500 });
-  try {
-    const logged = await fetchMetaLoggedCharges(account, SINCE);
-    return Response.json({ daily, logged }, { headers: { "Cache-Control": "no-store" } });
-  } catch (e) {
-    return Response.json({ error: `Meta's charge log did not load: ${redactMetaError(e instanceof Error ? e.message : String(e))}` }, { status: 502 });
-  }
+  return Response.json({
+    paid: charges.map((c) => ({ at: new Date(c.charged_at).toISOString(), cents: Number(c.amount_cents) })),
+    balance: { at: new Date(b.read_at).toISOString(), cents: Number(b.balance_cents) },
+  }, { headers: { "Cache-Control": "no-store" } });
 }
