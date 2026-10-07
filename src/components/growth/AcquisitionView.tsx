@@ -114,7 +114,7 @@ function Chg({ cur, prev, invert }: { cur: number | null | undefined; prev: numb
  * anywhere else, scroll or Escape. One open at a time. Rendered into <body> with fixed position, so a
  * table's scroll box never clips it, and kept inside the viewport, at most 260px wide. */
 let closeOpenTip: (() => void) | null = null;
-function Info({ tip, children, testId }: { tip: string; children?: React.ReactNode; testId?: string }) {
+function Info({ tip, children, testId, className }: { tip: string; children?: React.ReactNode; testId?: string; className?: string }) {
   const btn = useRef<HTMLButtonElement>(null), box = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
@@ -145,7 +145,7 @@ function Info({ tip, children, testId }: { tip: string; children?: React.ReactNo
   }, [open, hide]);
   return (
     <>
-      <button type="button" ref={btn} className={children ? "acq-tipbtn" : "acq-i"} aria-label={children ? undefined : "More info"} aria-expanded={open}
+      <button type="button" ref={btn} className={className ?? (children ? "acq-tipbtn" : "acq-i")} aria-label={children ? undefined : "More info"} aria-expanded={open}
         data-testid={testId ?? "acq-i"}
         onPointerDown={(e) => { pointer.current = e.pointerType; }}
         onPointerEnter={(e) => { if (e.pointerType === "mouse") show(); }}
@@ -264,6 +264,27 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
             <Tile k="Website store clicks" v={fmtInt(web?.storeClicks ?? 0)} cur={web?.storeClicks} prev={webP?.storeClicks} />
           </div>
 
+          {/* ── 3 · WHERE IPHONE DOWNLOADS COME FROM (Ryan, 2026-10-06, from the mock) ───────────── */}
+          <section className={`${styles.card} acq-card acq-chartcard`} data-testid="acq-sources-table">
+            <DownloadsChart dl={dl} />
+            <details className="acq-showtable" data-testid="acq-showtable">
+              <summary>Show table</summary>
+              <div className={styles.tableWrap}>
+                <table className={`${styles.adsTable} acq-table`}>
+                  <thead><tr>
+                    <th>Source</th>
+                    <th>iPhone downloads <Info tip={TIP.iphone} /></th>
+                    <th>Share <Info tip={TIP.share} /></th>
+                    <th>Cost <Info tip={TIP.cost} /></th>
+                  </tr></thead>
+                  <tbody>
+                    <DownloadRows dl={dl} compareOn={compareOn} />
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          </section>
+
           {/* ── 3 · META ADS ────────────────────────────────────────────────────────────────── */}
           <section className={`${styles.card} acq-card`} data-testid="acq-meta">
             <h2 className="acq-h2">Meta ads</h2>
@@ -358,23 +379,6 @@ export default function AcquisitionView({ authHeaders }: { authHeaders: Record<s
             </div>
           </section>
 
-          {/* ── 5 · IPHONE DOWNLOADS BY SOURCE ──────────────────────────────────────────────── */}
-          <section className={`${styles.card} acq-card`} data-testid="acq-sources-table">
-            <h2 className="acq-h2">iPhone downloads by source</h2>
-            <div className={styles.tableWrap}>
-              <table className={`${styles.adsTable} acq-table`}>
-                <thead><tr>
-                  <th>Source</th>
-                  <th>iPhone downloads <Info tip={TIP.iphone} /></th>
-                  <th>Share <Info tip={TIP.share} /></th>
-                  <th>Cost <Info tip={TIP.cost} /></th>
-                </tr></thead>
-                <tbody>
-                  <DownloadRows dl={dl} compareOn={compareOn} />
-                </tbody>
-              </table>
-            </div>
-          </section>
 
         </>
       )}
@@ -466,6 +470,92 @@ function SiteRow({ label, groups, prevGroups, count, open, onToggle, testId, dl 
           <WebCells m={pg} p={null} />
         </tr>
       ))}
+    </>
+  );
+}
+
+/* WHERE IPHONE DOWNLOADS COME FROM — a ranked horizontal bar chart (Ryan, 2026-10-06, from the mock).
+ * One bar per source, largest first, zeros hidden. Paid #0B7A45 / free #3FBF7F (validated pair: CVD ΔE
+ * 20.8; the free green is under 3:1 against white, so every bar is direct-labelled and the table sits
+ * below). Each bar is the tooltip trigger: hover on desktop, tap on a phone.
+ *
+ * Bars need Apple's split (DownloadsTable.split). Without it the five top-level sources are drawn
+ * instead, From apps as a mixed bar (ads and posts cannot be told apart there). When Meta claims more
+ * than Apple counted, the posts bar is not drawn and Meta ads carries the red flag.
+ * ANDROID: when Google Play data lands, an iPhone / Android / Both toggle goes above this chart. */
+const PAID = "#0B7A45", FREE = "#3FBF7F", MIXED = "#9AA8A1";
+type Bar = { key: string; label: string; n: number; kind: "paid" | "free" | "mixed"; tip: string; tag?: string; cost?: number | null; flag?: boolean };
+const BAR_TIP = {
+  metaAds: "Instagram and Facebook ads. Meta's own count until the ads App Store page is live.",
+  posts: "Instagram and Facebook downloads that were not from ads.",
+  otherApps: "WhatsApp, Messages, TikTok, QR codes and other apps.",
+  otherSites: "Websites Apple can't name, likely including ours and share links.",
+  share: "Downloads through the in-app share button. Apple hides small numbers, so this is a floor.",
+  site: "Downloads from playmatchday.com. Apple hides small numbers, so this is a floor.",
+  google: "People who tapped through to the App Store from Google search.",
+  igfb: "Instagram and Facebook, ads and posts together.",
+};
+function rangeLabel(w: Window): string {
+  const [y, m] = w.since.split("-").map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  if (w.since.endsWith("-01") && w.until === `${w.since.slice(0, 8)}${String(last).padStart(2, "0")}`) return `${MON[m - 1]} ${y}`;
+  return w.since === w.until ? short(w.since) : `${short(w.since)} – ${short(w.until)}`;
+}
+function chartBars(D: DownloadsTable): Bar[] {
+  const sp = D.split, bars: Bar[] = [];
+  if (!sp) {
+    bars.push({ key: "apps", label: "From apps", n: D.top.apps, kind: "mixed", tip: TIP.apps, cost: D.spendCents });
+    bars.push({ key: "web", label: "From websites", n: D.top.web, kind: "free", tip: TIP.web });
+  } else {
+    const meta = sp.metaApple != null || sp.metaEst != null ? (sp.metaApple ?? 0) + (sp.metaEst ?? 0) : null;
+    if (meta == null) bars.push({ key: "igfb", label: "Instagram & Facebook", n: sp.sub.igfb, kind: "mixed", tip: BAR_TIP.igfb, cost: D.spendCents });
+    else {
+      bars.push({ key: "meta", label: "Meta ads", n: meta, kind: "paid", tip: sp.metaOver ? `${BAR_TIP.metaAds} Meta claims more than Apple counted.` : BAR_TIP.metaAds, tag: sp.metaEst != null ? "est." : undefined, cost: D.spendCents, flag: sp.metaOver });
+      if (sp.organic != null) bars.push({ key: "posts", label: "Instagram & Facebook posts", n: sp.organic, kind: "free", tip: BAR_TIP.posts, tag: "est." });
+    }
+    bars.push({ key: "otherApps", label: "Other apps", n: sp.sub.otherApps, kind: "free", tip: BAR_TIP.otherApps });
+    bars.push({ key: "otherSites", label: "Other websites", n: sp.sub.otherSites, kind: "free", tip: BAR_TIP.otherSites });
+    bars.push({ key: "share", label: "Player share links", n: sp.sub.share, kind: "free", tip: BAR_TIP.share, tag: "minimum" });
+    bars.push({ key: "site", label: "Our website", n: sp.sub.site, kind: "free", tip: BAR_TIP.site, tag: "minimum" });
+    bars.push({ key: "google", label: "Google", n: sp.sub.google, kind: "free", tip: BAR_TIP.google, tag: "minimum" });
+  }
+  bars.push({ key: "search", label: "App Store search", n: D.top.search, kind: "free", tip: TIP.search });
+  bars.push({ key: "browse", label: "App Store browse", n: D.top.browse, kind: "free", tip: TIP.browse });
+  bars.push({ key: "other", label: "Other", n: D.top.other, kind: "free", tip: TIP.other });
+  return bars.filter((b) => b.n > 0).sort((a, b) => b.n - a.n || a.label.localeCompare(b.label));
+}
+function DownloadsChart({ dl }: { dl: Payload["downloads"] }) {
+  const D = dl?.cur ?? null;
+  const bars = D ? chartBars(D) : [];
+  const max = bars.reduce((m, b) => Math.max(m, b.n), 0);
+  const kinds = new Set(bars.map((b) => b.kind));
+  return (
+    <>
+      <div className="acq-charthead">
+        <div className="acq-charttitle">
+          <h2 className="acq-h2c">Where iPhone downloads come from</h2>
+          <span className="acq-chartsub" data-testid="acq-chart-total">{D ? `${fmtInt(D.total)} total · ${rangeLabel(dl!.window)}` : "—"}</span>
+        </div>
+        <div className="acq-legend" data-testid="acq-chart-legend">
+          <span><i style={{ background: PAID }} />Paid</span>
+          <span><i style={{ background: FREE }} />Free</span>
+          {kinds.has("mixed") && <span><i style={{ background: MIXED }} />Paid and free</span>}
+        </div>
+      </div>
+      {D && !D.split && (D.splitFrom || dl!.splitStart) && <div className="acq-chartnote" data-testid="acq-split-note">Breakdown available from {short(D.splitFrom && D.splitFrom > dl!.window.since ? D.splitFrom : dl!.splitStart)}</div>}
+      <div className="acq-bars" role="list" aria-label={D ? `iPhone downloads by source, ${rangeLabel(dl!.window)}` : "iPhone downloads by source"}>
+        {bars.map((b) => (
+          <div key={b.key} role="listitem">
+            <Info tip={b.tip} testId="acq-bar" className="acq-bar">
+              <span className="acq-barlabel">{b.label}{b.tag && <span className="acq-bartag">{b.tag}</span>}{b.flag && <span className="acq-flag" data-testid="acq-meta-over">!</span>}</span>
+              <span className="acq-bartrack"><span className="acq-barfill" data-kind={b.kind} style={{ width: `${max > 0 ? Math.max(0.6, (b.n / max) * 100) : 0}%`, background: b.kind === "paid" ? PAID : b.kind === "free" ? FREE : MIXED }} /></span>
+              <span className="acq-barval"><b>{fmtInt(b.n)}</b><span> · {pct(b.n, D!.total)}</span>{b.kind !== "free" && b.cost != null && <span> · {money(b.cost)}</span>}</span>
+            </Info>
+          </div>
+        ))}
+        {D && bars.length === 0 && <div className="acq-muted">No iPhone downloads in this range.</div>}
+        {!D && <div className="acq-muted">—</div>}
+      </div>
     </>
   );
 }
@@ -580,6 +670,28 @@ const CSS = `
 .acq .acq-flag{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:#b42318;color:#fff;font-size:11px;font-weight:800}
 .acq .acq-est{font-size:11px;color:var(--muted,#5c7168);font-weight:500}
 .acq .acq-dlsub td{background:#f7faf8}
+.acq .acq-chartcard{padding:4px 18px 10px}
+.acq .acq-charthead{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:8px 16px;margin:14px 0 8px}
+.acq .acq-charttitle{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px}
+.acq .acq-h2c{margin:0;font-size:16px;font-weight:800;color:var(--ink,#003326)}
+.acq .acq-chartsub{font-size:13px;color:var(--muted,#5c7168)}
+.acq .acq-legend{display:flex;gap:14px;font-size:12.5px;color:#2e433b}
+.acq .acq-legend span{display:inline-flex;align-items:center;gap:6px}
+.acq .acq-legend i{display:inline-block;width:14px;height:10px;border-radius:2px}
+.acq .acq-chartnote{font-size:11.5px;color:var(--muted,#5c7168);margin:-2px 0 6px}
+.acq .acq-bars{display:flex;flex-direction:column}
+.acq .acq-bar{all:unset;box-sizing:border-box;width:100%;cursor:help;display:grid;grid-template-columns:minmax(150px,220px) 1fr minmax(120px,170px);align-items:center;gap:14px;padding:7px 6px;border-radius:8px}
+.acq .acq-bar:hover,.acq .acq-bar[aria-expanded=true]{background:#f7f9f7}
+.acq .acq-bar:focus-visible{outline:2px solid #2cdb87;outline-offset:1px}
+.acq .acq-barlabel{text-align:right;font-size:13.5px;color:#13261f}
+.acq .acq-bartag{font-size:10.5px;color:#5b6b64;background:#eef2ef;border-radius:999px;padding:1px 7px;margin-left:6px;white-space:nowrap}
+.acq .acq-barlabel .acq-flag{margin-left:6px;vertical-align:1px}
+.acq .acq-bartrack{display:block;height:16px}
+.acq .acq-barfill{display:block;height:16px;border-radius:0 4px 4px 0}
+.acq .acq-barval{font-size:13.5px;color:#13261f;white-space:nowrap;font-variant-numeric:tabular-nums}
+.acq .acq-barval span{color:#5b6b64}
+.acq .acq-showtable{margin-top:10px;border-top:1px solid #eaefeb;padding-top:8px}
+.acq .acq-showtable summary{cursor:pointer;font-size:13.5px;font-weight:600;color:#1e6b47;padding:6px 2px;width:max-content}
 .acq .acq-lvl1{padding-left:28px!important}
 .acq .acq-lvl2{padding-left:46px!important;font-size:.8rem}
 .acq .acq-lvl3{padding-left:64px!important;font-size:.78rem}
@@ -603,6 +715,10 @@ const CSS = `
 .acq .acq-srcsub{display:block;font-size:11.5px;color:var(--muted,#5c7168);font-weight:400}
 .acq .acq-src{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;margin-top:10px}
 @media (max-width:760px){
+  .acq .acq-bar{grid-template-columns:1fr auto;grid-template-areas:"label val" "track track";gap:4px 10px;padding:7px 4px}
+  .acq .acq-barlabel{grid-area:label;text-align:left}
+  .acq .acq-barval{grid-area:val}
+  .acq .acq-bartrack{grid-area:track}
   .acq .acq-table th:first-child,.acq .acq-table td:first-child{position:sticky;left:0;z-index:1;background:#fff;box-shadow:1px 0 0 #eef1ec}
   .acq .acq-table .acq-total td:first-child,.acq .acq-table .acq-siterow td:first-child{background:#f1f4f1}
   .acq .acq-table .acq-qrow td:first-child{position:static}
