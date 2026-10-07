@@ -489,10 +489,6 @@ const BAR_TIP = {
   metaAds: "Instagram and Facebook ads. Meta's own count until the ads App Store page is live.",
   posts: "Instagram and Facebook downloads that were not from ads.",
   otherApps: "WhatsApp, Messages, TikTok, QR codes and other apps.",
-  otherSites: "Websites Apple can't name, likely including ours and share links.",
-  share: "Downloads through the in-app share button. Apple hides small numbers, so this is a floor.",
-  site: "Downloads from playmatchday.com. Apple hides small numbers, so this is a floor.",
-  google: "People who tapped through to the App Store from Google search.",
   igfb: "Instagram and Facebook, ads and posts together.",
 };
 function rangeLabel(w: Window): string {
@@ -505,7 +501,7 @@ function chartBars(D: DownloadsTable): Bar[] {
   const sp = D.split, bars: Bar[] = [];
   if (!sp) {
     bars.push({ key: "apps", label: "From apps", n: D.top.apps, kind: "mixed", tip: TIP.apps, cost: D.spendCents });
-    bars.push({ key: "web", label: "From websites", n: D.top.web, kind: "free", tip: TIP.web });
+    bars.push({ key: "web", label: "Websites and share links", n: D.top.web, kind: "free", tip: TIP.web });
   } else {
     const meta = sp.metaApple != null || sp.metaEst != null ? (sp.metaApple ?? 0) + (sp.metaEst ?? 0) : null;
     if (meta == null) bars.push({ key: "igfb", label: "Instagram & Facebook", n: sp.sub.igfb, kind: "mixed", tip: BAR_TIP.igfb, cost: D.spendCents });
@@ -514,10 +510,11 @@ function chartBars(D: DownloadsTable): Bar[] {
       if (sp.organic != null) bars.push({ key: "posts", label: "Instagram & Facebook posts", n: sp.organic, kind: "free", tip: BAR_TIP.posts, tag: "est." });
     }
     bars.push({ key: "otherApps", label: "Other apps", n: sp.sub.otherApps, kind: "free", tip: BAR_TIP.otherApps });
-    bars.push({ key: "otherSites", label: "Other websites", n: sp.sub.otherSites, kind: "free", tip: BAR_TIP.otherSites });
-    bars.push({ key: "share", label: "Player share links", n: sp.sub.share, kind: "free", tip: BAR_TIP.share, tag: "minimum" });
-    bars.push({ key: "site", label: "Our website", n: sp.sub.site, kind: "free", tip: BAR_TIP.site, tag: "minimum" });
-    bars.push({ key: "google", label: "Google", n: sp.sub.google, kind: "free", tip: BAR_TIP.google, tag: "minimum" });
+    /* ONE WEBSITE BAR (Ryan, 2026-10-06): Apple's full Web referrer total, with the named parts in the
+     * hover. Google is named there only when it has downloads, so the parts always add to the bar. */
+    const g = sp.sub.google > 0 ? ` · Google: at least ${fmtInt(sp.sub.google)}` : "";
+    bars.push({ key: "web", label: "Websites and share links", n: D.top.web, kind: "free",
+      tip: `Share links: at least ${fmtInt(sp.sub.share)} · Our website: at least ${fmtInt(sp.sub.site)}${g} · Site not named by Apple: ${fmtInt(sp.sub.otherSites)}. Apple hides small daily counts, so most unnamed ones are likely our site and share links.` });
   }
   bars.push({ key: "search", label: "App Store search", n: D.top.search, kind: "free", tip: TIP.search });
   bars.push({ key: "browse", label: "App Store browse", n: D.top.browse, kind: "free", tip: TIP.browse });
@@ -566,7 +563,7 @@ function DownloadsChart({ dl }: { dl: Payload["downloads"] }) {
  * compares only against a window with the same shape: a sub-row only when both windows are split.
  * Cost is Meta's iPhone spend over exactly the same days as the downloads. */
 const SUB_LABEL: Record<DlSub, string> = {
-  igfb: "Instagram and Facebook", otherApps: "Other apps", share: "Player share links", site: "Our website", google: "Google", otherSites: "Other sites",
+  igfb: "Instagram and Facebook", otherApps: "Other apps", share: "Player share links", site: "Our website", google: "Google", otherSites: "Site not named by Apple",
 };
 function DownloadRows({ dl, compareOn }: { dl: Payload["downloads"]; compareOn: boolean }) {
   if (!dl) {
