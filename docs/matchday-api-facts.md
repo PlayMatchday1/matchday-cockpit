@@ -6892,3 +6892,10 @@ Evidence: a read-only full walk of prod `GET /admin/players` (`sortColumn=create
   corrected the same day.)
 - **Coming, not in evidence:** a set-at timestamp and a "changed location since <time>" filter on
   `GET /admin/players` (Vitalii, in progress). Name, format and semantics UNKNOWN until probed.
+- **GPS shares DO arrive without a `zipCode` — observed, contradicting the relay above.**
+  `player_area_seen` after sync run 4 (manual, 2026-10-08 20:18:22 → 20:21:26 UTC, complete): 12
+  non-internal players with an area, all `areaSource:"gps"`; **8 of the 12 have `zipCode` null with
+  `lat`/`lng` and an `areaLabel`** (e.g. "San Antonio, United States", "New Braunfels, United
+  States"). So "a GPS share also gets a zipCode" holds for some shares, not all. Clubhouse groups
+  a no-zip player by a ~1-mile grid cell of their coordinates (`areaGroupKey`,
+  `src/lib/playerAreaModel.ts`), never into one city-wide "no zip" bucket.

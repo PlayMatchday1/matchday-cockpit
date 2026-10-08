@@ -21,7 +21,7 @@ export async function GET(req: Request) {
   try {
     const [rows, lastRun, okRun, firstRun] = await Promise.all([
       selectAll<SeenRow>(() => sb.from("player_area_seen")
-        .select("player_id,first_seen_at,seeded,has_area,zip,area_label,area_source,is_internal,verdict,verdict_city_id,nearest_city_id,nearest_city_mi")
+        .select("player_id,first_seen_at,seeded,has_area,zip,lat,lng,area_label,area_source,is_internal,verdict,verdict_city_id,nearest_city_id,nearest_city_mi")
         .order("player_id")),
       sb.from("player_area_sync_runs").select("started_at,finished_at,ok,error,complete")
         .order("started_at", { ascending: false }).limit(1).maybeSingle(),

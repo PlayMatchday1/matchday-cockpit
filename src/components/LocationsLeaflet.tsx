@@ -17,7 +17,8 @@ export const GAP = "#eb6834";
 const FOREST = "#003326";
 const MI_TO_M = 1609.344;
 
-export type Selection = { kind: "field"; id: number } | { kind: "zip"; zip: string } | null;
+/** A zip bubble is selected by its KEY: a no-zip bubble is a grid cell, and has no zip. */
+export type Selection = { kind: "field"; id: number } | { kind: "zip"; key: string } | null;
 
 const pinIcon = (on: boolean) => L.divIcon({
   className: "loc-pin-wrap",
@@ -250,18 +251,18 @@ export default function LocationsLeaflet(props: {
 
       {city && zips.map((z) => {
         const covered = z.inReach[reach];
-        const sel = selected?.kind === "zip" && selected.zip === z.zip;
+        const sel = selected?.kind === "zip" && selected.key === z.key;
         return (
-          <CircleMarker key={`zip-${z.zip}`} center={[z.lat, z.lng]}
+          <CircleMarker key={`zip-${z.key}`} center={[z.lat, z.lng]}
             radius={7 + 16 * Math.sqrt(z.players / maxZipPlayers)}
             pathOptions={covered
               // dashArray "" is deliberate: Leaflet's setStyle MERGES, so omitting it leaves the old
               // dash on a bubble that just came into reach (seen in a browser at 10 mi).
               ? { color: "#04583A", weight: sel ? 3.5 : 2, dashArray: "", fillColor: IN_REACH, fillOpacity: 0.7 }
               : { color: GAP, weight: sel ? 3.5 : 2.2, dashArray: "5 4", fillColor: GAP, fillOpacity: 0.18 }}
-            eventHandlers={{ click: () => onSelect({ kind: "zip", zip: z.zip }) }}>
+            eventHandlers={{ click: () => onSelect({ kind: "zip", key: z.key }) }}>
             {(z.players >= 3 || sel) && (
-              <Tooltip permanent direction="center" className="loc-tip loc-tip-zip">{z.zip}</Tooltip>
+              <Tooltip permanent direction="center" className="loc-tip loc-tip-zip">{z.area}</Tooltip>
             )}
           </CircleMarker>
         );

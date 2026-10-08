@@ -25,7 +25,8 @@ import LocationsSyncNow from "@/components/LocationsSyncNow";
 import { supabase } from "@/lib/supabase";
 import RefreshIcon from "@/components/RefreshIcon";
 import { downloadCsv } from "@/components/growth/format";
-import { NO_ZIP, type LocationsReport, type ZipRow, type DayPoint } from "@/lib/locationsReport";
+import { GPS_NO_ZIP } from "@/lib/playerAreaModel";
+import { type LocationsReport, type ZipRow, type DayPoint } from "@/lib/locationsReport";
 
 const CHI = "America/Chicago";
 const fmtWhen = (iso: string) =>
@@ -109,7 +110,7 @@ export default function LocationsBoard() {
   const exportZips = () => {
     const rows: (string | number)[][] = [["Zip", "Area label", "Players", "Nearest city", "Distance (mi)", "Inside radius", "Verdict"]];
     for (const r of zipView) rows.push([
-      r.verdict === "no_area" ? "No area" : r.zip ?? (r.label ? "" : NO_ZIP), r.label ?? "", r.players,
+      r.verdict === "no_area" ? "No area" : r.zip ?? "", r.zip ? r.label ?? "" : r.area, r.players,
       r.verdict === "no_area" || r.verdict === "unidentified" ? "" : cityName(r.nearestCityId),
       r.nearestMi ?? "", r.verdict === "in_market" ? "Yes" : r.verdict === "waitlist" ? "No" : "",
       verdictLabel(r),
@@ -266,7 +267,7 @@ export default function LocationsBoard() {
                     const placed = r.verdict === "in_market" || r.verdict === "waitlist";
                     return (
                       <tr key={r.key}>
-                        <td>{r.verdict === "no_area" ? <span className="loc-muted">No area</span> : r.zip ?? (r.label ? <>{r.label} <span className="loc-muted">· no zip</span></> : <span className="loc-muted">{NO_ZIP}</span>)}</td>
+                        <td>{r.verdict === "no_area" ? <span className="loc-muted">No area</span> : r.zip ?? (r.area === GPS_NO_ZIP ? <span className="loc-muted">{r.area}</span> : <>{r.area} <span className="loc-muted">· no zip</span></>)}</td>
                         <td className="loc-num">{int(r.players)}</td>
                         <td>{placed ? cityName(r.nearestCityId) : "—"}</td>
                         <td className="loc-num">{placed ? mi(r.nearestMi) : "—"}</td>
@@ -305,7 +306,7 @@ export default function LocationsBoard() {
                 <tbody>
                   {data.outside.length === 0 && <tr><td colSpan={5} className="loc-td-empty">No player outside every city radius yet.</td></tr>}
                   {data.outside.map((p) => (
-                    <tr key={p.place}>
+                    <tr key={p.key}>
                       <td>{p.place}</td><td className="loc-num">{int(p.players)}</td><td className="loc-num">{int(p.last30)}</td>
                       <td>{cityName(p.nearestCityId)}</td><td className="loc-num">{mi(p.nearestMi)}</td>
                     </tr>

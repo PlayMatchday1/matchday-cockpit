@@ -87,7 +87,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
   const gaps = zips.filter((z) => !z.inReach[reach]).slice(0, 4);
   const covered = city ? city.coverage[reach] : 0;
   const selField: MapField | null = selected?.kind === "field" ? fieldById.get(selected.id) ?? null : null;
-  const selZip: MapZip | null = selected?.kind === "zip" ? zips.find((z) => z.zip === selected.zip) ?? null : null;
+  const selZip: MapZip | null = selected?.kind === "zip" ? zips.find((z) => z.key === selected.key) ?? null : null;
   const selNational: NationalZip | null = selNat ? data.national.find((z) => z.key === selNat) ?? null : null;
   const cityLabel = (id: number | null) => (id == null ? "—" : cityById.get(id)?.name ?? `City ${id}`);
 
@@ -171,7 +171,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
             {selNational && (
               <div className="lm-pcard lm-detail" data-testid="map-nat-detail">
                 <div className="lm-ptitle-row">
-                  <div className="lm-ptitle">Zip {selNational.zip}</div>
+                  <div className="lm-ptitle">{selNational.zip ? `Zip ${selNational.zip}` : selNational.area}</div>
                   <button type="button" className="loc-btn lm-clear" onClick={() => setSelNat(null)}>Clear</button>
                 </div>
                 {selNational.label && <div className="lm-sub">{selNational.label}</div>}
@@ -206,7 +206,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
                   <thead><tr><th>Place</th><th className="loc-num">Players</th><th>Nearest city</th></tr></thead>
                   <tbody>
                     {data.outside.map((o) => (
-                      <tr key={o.place} className={"lm-row" + (selNational && o.zipKeys.includes(selNational.key) ? " lm-row-on" : "")} tabIndex={0}
+                      <tr key={`${o.place}|${o.zipKeys[0]}`} className={"lm-row" + (selNational && o.zipKeys.includes(selNational.key) ? " lm-row-on" : "")} tabIndex={0}
                         onClick={() => {
                           if (natFilter === "in_market") setNatFilter("all");
                           setFocus({ lat: o.lat, lng: o.lng, zoom: 10, n: Date.now() });
@@ -241,7 +241,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
               {(selField || selZip) && (
                 <div className="lm-pcard lm-detail" data-testid="map-detail">
                   <div className="lm-ptitle-row">
-                    <div className="lm-ptitle">{selField ? selField.title : `Zip ${selZip!.zip}`}</div>
+                    <div className="lm-ptitle">{selField ? selField.title : selZip!.zip ? `Zip ${selZip!.zip}` : selZip!.area}</div>
                     <button type="button" className="loc-btn lm-clear" onClick={() => setSelected(null)}>Clear</button>
                   </div>
                   {selField ? (
@@ -283,13 +283,15 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
                   <div className="lm-empty">Every zip here has a field within {reach} mi.</div>
                 ) : (
                   <table className="lm-list" data-testid="map-gaps">
-                    <thead><tr><th>Zip</th><th className="loc-num">Players</th><th className="loc-num">Nearest field</th></tr></thead>
+                    <thead><tr><th>Area</th><th className="loc-num">Players</th><th>Miles to nearest field</th></tr></thead>
                     <tbody>
                       {gaps.map((z) => (
-                        <tr key={z.zip} className={"lm-row" + (selZip?.zip === z.zip ? " lm-row-on" : "")} tabIndex={0}
-                          onClick={() => { setSelected({ kind: "zip", zip: z.zip }); setHighlight(null); }}
-                          onKeyDown={(e) => { if (e.key === "Enter") setSelected({ kind: "zip", zip: z.zip }); }}>
-                          <td>{z.zip}</td><td className="loc-num">{int(z.players)}</td><td className="loc-num">{mi(z.nearestFieldMi)}</td>
+                        <tr key={z.key} className={"lm-row" + (selZip?.key === z.key ? " lm-row-on" : "")} tabIndex={0}
+                          onClick={() => { setSelected({ kind: "zip", key: z.key }); setHighlight(null); }}
+                          onKeyDown={(e) => { if (e.key === "Enter") setSelected({ kind: "zip", key: z.key }); }}>
+                          <td>{z.area}</td><td className="loc-num">{int(z.players)}</td>
+                          <td>{z.nearestFieldMi == null ? "No active field"
+                            : `${mi(z.nearestFieldMi)}, ${z.nearestFieldId != null ? fieldById.get(z.nearestFieldId)?.title ?? `Field ${z.nearestFieldId}` : "—"}`}</td>
                         </tr>
                       ))}
                     </tbody>

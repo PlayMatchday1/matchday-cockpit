@@ -9,7 +9,7 @@
 // the first sync run, not the day the player set anything.
 
 import { chicagoYmd } from "./weekBuckets";
-import { sourceKind, type AreaCity, type SourceKind, type Verdict } from "./playerAreaModel";
+import { areaGroupKey, areaGroupName, sourceKind, type AreaCity, type SourceKind, type Verdict } from "./playerAreaModel";
 
 export type SeenRow = {
   player_id: number;
@@ -17,6 +17,8 @@ export type SeenRow = {
   seeded: boolean;
   has_area: boolean;
   zip: string | null;
+  lat: number | null;
+  lng: number | null;
   area_label: string | null;
   area_source: string | null;
   is_internal: boolean;
@@ -32,12 +34,14 @@ export type RecentRow = {
   zip: string | null; label: string | null; sourceRaw: string | null; source: SourceKind;
   verdict: Verdict; cityId: number | null;
 };
+/** `area` is what the row is called: its zip, or for a no-zip ~1-mile grid cell the area label its
+ *  players share, else "GPS, no zip" (playerAreaModel.areaGroupName). */
 export type ZipRow = {
-  key: string; zip: string | null; label: string | null; players: number;
+  key: string; zip: string | null; area: string; label: string | null; players: number;
   nearestCityId: number | null; nearestMi: number | null;
   verdict: Verdict | "no_area"; verdictCityId: number | null;
 };
-export type PlaceRow = { place: string; players: number; last30: number; nearestCityId: number | null; nearestMi: number | null };
+export type PlaceRow = { key: string; place: string; players: number; last30: number; nearestCityId: number | null; nearestMi: number | null };
 
 export type LocationsReport = {
   dataAsOf: string | null;
@@ -58,7 +62,8 @@ export type LocationsReport = {
 const DAY_MS = 86_400_000;
 const kindOf = (r: SeenRow) => sourceKind(r.area_source);
 /** A set area with no zip at all — not expected (GPS shares get a zip looked up), kept so none is lost. */
-export const NO_ZIP = "No zip";
+/** A set area with neither a zip nor coordinates — nothing to group it on. Not expected. */
+const NO_LOCATION = "No zip or location";
 
 /** Next calendar day of a YYYY-MM-DD, by UTC-noon arithmetic on the date alone (no time zone). */
 function nextYmd(ymd: string): string {
@@ -133,11 +138,12 @@ export function buildLocationsReport(input: {
       source: kindOf(r), verdict: r.verdict, cityId: r.verdict_city_id,
     }));
 
-  // Grouped by zip — GPS shares carry a zip too (the backend looks it up from the coordinates). A
-  // set area with no zip is not expected; if one appears it groups by its label, else one "No zip" row.
+  // Grouped by zip; a player with no zip groups by ~1-mile grid cell of their coordinates — the same
+  // rule as the Map (playerAreaModel.areaGroupKey), so one city-wide "no zip" row never averages
+  // players miles apart.
   const groups = new Map<string, SeenRow[]>();
   for (const r of live) {
-    const key = r.zip != null ? `zip:${r.zip}` : r.area_label != null ? `label:${r.area_label}` : "no-zip";
+    const key = areaGroupKey(r.zip, r.lat, r.lng) ?? "no-location";
     const g = groups.get(key) ?? [];
     g.push(r);
     groups.set(key, g);
@@ -146,14 +152,16 @@ export function buildLocationsReport(input: {
     const verdict = mode(g.map((r) => r.verdict));
     const mis = g.map((r) => r.nearest_city_mi).filter((m): m is number => m != null);
     return {
-      key, zip: g[0].zip, label: g.find((r) => r.area_label)?.area_label ?? null, players: g.length,
+      key, zip: g[0].zip,
+      area: key === "no-location" ? NO_LOCATION : areaGroupName(g[0].zip, g.map((r) => r.area_label)),
+      label: g.find((r) => r.area_label)?.area_label ?? null, players: g.length,
       nearestCityId: mode(g.map((r) => r.nearest_city_id)),
       nearestMi: mis.length ? Math.min(...mis) : null,
       verdict, verdictCityId: verdict === "in_market" ? mode(g.map((r) => r.verdict_city_id)) : null,
     };
   });
   if (kpis.never != null) {
-    zips.push({ key: "no_area", zip: null, label: null, players: kpis.never, nearestCityId: null,
+    zips.push({ key: "no_area", zip: null, area: "No area", label: null, players: kpis.never, nearestCityId: null,
       nearestMi: null, verdict: "no_area", verdictCityId: null });
   }
   zips.sort((a, b) => b.players - a.players || a.key.localeCompare(b.key));
@@ -168,15 +176,18 @@ export function buildLocationsReport(input: {
 
   const places = new Map<string, SeenRow[]>();
   for (const r of live) if (r.verdict === "waitlist") {
-    const p = r.area_label ?? r.zip ?? NO_ZIP;
+    // Label, else zip, else grid cell — two unlabelled no-zip players miles apart are two places.
+    const p = r.area_label ? `label:${r.area_label}` : areaGroupKey(r.zip, r.lat, r.lng) ?? "no-location";
     const g = places.get(p) ?? [];
     g.push(r);
     places.set(p, g);
   }
-  const outside: PlaceRow[] = [...places].map(([place, g]) => {
+  const outside: PlaceRow[] = [...places].map(([key, g]) => {
     const mis = g.map((r) => r.nearest_city_mi).filter((m): m is number => m != null);
+    const place = key.startsWith("label:") ? key.slice(6)
+      : key === "no-location" ? NO_LOCATION : areaGroupName(g[0].zip, g.map((r) => r.area_label));
     return {
-      place, players: g.length,
+      key, place, players: g.length,
       last30: g.filter((r) => !r.seeded && Date.parse(r.first_seen_at) >= monthAgo).length,
       nearestCityId: mode(g.map((r) => r.nearest_city_id)),
       nearestMi: mis.length ? Math.min(...mis) : null,

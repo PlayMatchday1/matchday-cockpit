@@ -93,3 +93,36 @@ export function usCities(raw: unknown[]): AreaCity[] {
 export function geometryKey(cities: AreaCity[]): string {
   return cities.map((c) => `${c.id}:${c.lat},${c.lng},${c.radiusMiles}`).join("|");
 }
+
+/* ── GROUPING A PLAYER'S AREA (Ryan, 2026-10-08) ────────────────────────────────────────────────
+ * A player WITH a zip groups by zip. A player WITHOUT one groups by a ~1-mile grid cell of their
+ * coordinates — never into one city-wide "No zip" bubble, whose average position would land between
+ * players miles apart. The cell is 1/69° of latitude by the same distance in longitude (scaled by
+ * the cosine of the cell's middle latitude), so ~1 mile square anywhere in the US. One rule for the
+ * Map (city and all-cities views) and the Overview's Player locations table. */
+export const GPS_NO_ZIP = "GPS, no zip";
+const CELL_DEG_LAT = 1 / 69;
+
+export function gridCellKey(lat: number, lng: number): string {
+  const iLat = Math.floor(lat / CELL_DEG_LAT);
+  const midLat = (iLat + 0.5) * CELL_DEG_LAT;
+  const cellLng = CELL_DEG_LAT / Math.max(0.05, Math.cos((midLat * Math.PI) / 180));
+  return `cell:${iLat}:${Math.floor(lng / cellLng)}`;
+}
+
+/** The group a player's area belongs to: `zip:<zip>`, else their grid cell, else null (no zip and
+ *  no usable coordinates — nothing to group on). */
+export function areaGroupKey(zip: string | null, lat: unknown, lng: unknown): string | null {
+  if (zip != null) return `zip:${zip}`;
+  const la = num(lat), ln = num(lng);
+  return la != null && ln != null ? gridCellKey(la, ln) : null;
+}
+
+/** What a group is called: its zip; for a no-zip cell, the area label its players SHARE, otherwise
+ *  "GPS, no zip". `labels` = every member's area label, nulls included. */
+export function areaGroupName(zip: string | null, labels: Iterable<string | null>): string {
+  if (zip != null) return zip;
+  const set = new Set(labels);
+  const [only] = set;
+  return set.size === 1 && only ? only : GPS_NO_ZIP;
+}
