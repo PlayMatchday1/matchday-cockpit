@@ -6907,3 +6907,24 @@ Evidence: a read-only full walk of prod `GET /admin/players` (`sortColumn=create
   `/status` now sit behind the Growth gate, Sync now additionally `is_admin`. Access on the day of
   the move: 9 accounts could open it under Match Ops, 6 under Growth — three Match-Ops-only
   accounts lost it, none gained it.
+- **The player location model changed upstream on 2026-10-08, between 16:53 and 18:40 UTC.**
+  Evidence: `GET /admin/players?id=<id>` (one list row; the `id` filter is at line ~1157) and
+  page 1 of `/admin/players` at limit 250, both 2026-10-08 ~21:40 UTC. New list keys:
+  `currentLat`, `currentLng`, `currentZipCode`, `zipCodeUpdatedAt`, `coordinatesUpdatedAt`,
+  `locationUpdatedAt` (the detail endpoint carries the first four, not `areaSource`/`areaLabel`).
+  - A GPS share: `zipCode` null, `currentZipCode` = the zip looked up from the coordinates
+    (e.g. 94099: `currentZipCode` "10580"), `coordinatesUpdatedAt` set, `areaSource` "gps".
+  - **A zip typed before the change reads `areaSource: "none"`** although the zip is still stored:
+    70077 (`zipCode` "78723") and 86278 (`zipCode` "78257") both have `needsLocation: false`,
+    `areaSource: "none"`, and `zipCodeUpdatedAt` / `coordinatesUpdatedAt` / `locationUpdatedAt` all
+    null. Clubhouse follows `areaSource`, so both show as having no location since the 18:40 sync.
+  - Player 78 genuinely changed: `coordinatesUpdatedAt` 2026-10-08T18:13:50Z (shared GPS).
+  - Newest 250 players at ~21:40 UTC: 19 `"gps"`, 231 `"none"`, 0 `"zip"`. Whether a NEWLY typed
+    zip saves as `"zip"` is NOT in evidence — nobody had typed one since the change.
+- **A city with no active field is not a market (Ryan, 2026-10-08).** The sync reads the active
+  field set from Supabase (`mdapi_matches.raw.field`, the Map's set) and only cities with one can
+  hold an in-market player; the nearest city is still the nearest of all. Both page tabs apply the
+  same rule on read (`effectiveVerdict`, `src/lib/locationsInsights.ts`).
+- **Field 664 Lou Fusz and 1849 Wheatley Heights were corrected upstream**; the corrected
+  coordinates reached `mdapi_matches` with the match sync at 2026-10-08 22:16:52 UTC (664: 38.700056,
+  −90.49893; 1849: 29.4195, −98.4194), and the map's missing-field warning went to none.

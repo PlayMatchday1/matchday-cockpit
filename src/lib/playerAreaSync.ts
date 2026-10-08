@@ -41,6 +41,8 @@ import {
   computeVerdict, geometryKey, hasArea, isInternalEmail, usCities, zipOf, type AreaCity,
 } from "./playerAreaModel";
 import { stateForPoint } from "./usState";
+import { activeFields } from "./locationsMap";
+import { fetchFieldSnapshots } from "./locationsData";
 
 export const PAGE_LIMIT = 250;
 const INTER_PAGE_DELAY_MS = 500;
@@ -171,7 +173,13 @@ export async function syncPlayerAreas(
     const rawCities = await client.get<unknown>("/admin/cities", undefined, NO_RETRY);
     cities = usCities(Array.isArray(rawCities) ? rawCities : []);
     if (cities.length === 0) throw new Error("/admin/cities returned no US city with lat/lng/radiusMiles — refusing to compute verdicts");
-    const geom = geometryKey(cities);
+    // MARKETS = cities with at least one active field (Supabase only — the field set the Map uses).
+    // An empty set means the read went wrong, not that every city closed: refuse rather than mark
+    // every player outside coverage.
+    const { fields: liveFields } = activeFields(await fetchFieldSnapshots(supabase), cities);
+    const markets = new Set(liveFields.map((f) => f.cityId));
+    if (markets.size === 0) throw new Error("no active field in any city — refusing to compute statuses");
+    const geom = geometryKey(cities, markets);
 
     // --- walk every player, newest first ---
     // TODO(api): Vitalii is adding a set-at timestamp and a "changed location since <time>" filter
@@ -230,7 +238,7 @@ export async function syncPlayerAreas(
         continue;
       }
       result.areasSeen++;
-      const v = computeVerdict(p.lat, p.lng, cities);
+      const v = computeVerdict(p.lat, p.lng, cities, markets);
       const next: AreaRow = {
         player_id: id,
         first_seen_at: prev?.first_seen_at ?? now,
@@ -258,7 +266,7 @@ export async function syncPlayerAreas(
     // moved, from the coordinates we stored.
     for (const prev of stored) {
       if (seen.has(prev.player_id) || prev.verdict_geometry === geom) continue;
-      const v = computeVerdict(prev.lat, prev.lng, cities);
+      const v = computeVerdict(prev.lat, prev.lng, cities, markets);
       updates.push({ ...prev, verdict: v.verdict, verdict_city_id: v.verdictCityId,
         nearest_city_id: v.nearestCityId, nearest_city_mi: v.nearestCityMi, verdict_geometry: geom, updated_at: now });
     }

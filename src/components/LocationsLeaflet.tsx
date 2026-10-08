@@ -9,7 +9,7 @@
 // THREE MARKS THAT CANNOT BE CONFUSED (Ryan, 2026-10-08):
 //   players  a ROUND bubble with a soccer-player figure; the count under it when 2 or more.
 //            Green solid = a field in reach (city view) / in a market; orange dashed = none / outside.
-//   fields   a PIN with a soccer ball in its head — never round, so never read as players.
+//   fields   a PIN with a small pitch in its head — never round, so never read as players.
 //   cities   a dark green NAME TAG with a pointer (All cities view); the count sits in a player badge.
 
 import "leaflet/dist/leaflet.css";

@@ -11,6 +11,9 @@ import { authenticateCapability } from "@/lib/capabilityAuth";
 import { selectAll } from "@/lib/supabasePagination";
 import { buildLocationsReport, type SeenRow } from "@/lib/locationsReport";
 import { activePlayerIds } from "@/lib/playerActivity";
+import { activeFields } from "@/lib/locationsMap";
+import { fetchFieldSnapshots } from "@/lib/locationsData";
+import type { AreaCity } from "@/lib/playerAreaModel";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,6 +28,7 @@ export async function GET(req: Request) {
     // ACTIVE players (the Users lens's 30-day definition) and the staff ids to remove — @matchday.com
     // and @playmatchday.com, the same rule as the rest of this page, matched on the synced emails.
     const activeP = activePlayerIds(sb, new Date());
+    const snapsP = fetchFieldSnapshots(sb);
     const staffP = selectAll<{ id: number }>(() => sb.from("mdapi_users").select("id")
       .or("email.ilike.*@matchday.com,email.ilike.*@playmatchday.com").order("id"));
     const [rows, lastRun, okRun, firstRun] = await Promise.all([
@@ -56,9 +60,12 @@ export async function GET(req: Request) {
     }
 
     // The active figure must never take the page down: if it fails, the card says so and the rest stands.
-    const [activeIds, staff] = await Promise.all([activeP.catch(() => null), staffP.catch(() => null)]);
+    const [activeIds, staff, snaps] = await Promise.all([activeP.catch(() => null), staffP.catch(() => null), snapsP]);
+    // Market cities = cities with an active field (the Map's field set); see effectiveVerdict.
+    const cityList = (Array.isArray(okRun.data?.cities) ? okRun.data!.cities : []) as AreaCity[];
+    const markets = new Set(activeFields(snaps, cityList).fields.map((f) => f.cityId));
     const report = buildLocationsReport({
-      activeIds, internalIds: staff ? new Set(staff.map((u) => u.id)) : null,
+      activeIds, internalIds: staff ? new Set(staff.map((u) => u.id)) : null, markets,
       rows, names,
       run: lastRun.data ?? null,
       okRun: okRun.data ?? null,

@@ -9,6 +9,7 @@
 // the first sync run, not the day the player set anything.
 
 import { chicagoYmd } from "./weekBuckets";
+import { clusterOutside, effectiveVerdict } from "./locationsInsights";
 import { areaGroupKey, areaGroupName, placeName, sourceKind, type AreaCity, type SourceKind, type Verdict } from "./playerAreaModel";
 
 export type SeenRow = {
@@ -43,7 +44,8 @@ export type ZipRow = {
   nearestCityId: number | null; nearestMi: number | null;
   verdict: Verdict | "no_area"; verdictCityId: number | null;
 };
-export type PlaceRow = { key: string; place: string; players: number; last30: number; nearestCityId: number | null; nearestMi: number | null };
+/** A "New markets" row: outside-coverage players clustered within 25 miles of each other. */
+export type PlaceRow = { key: string; place: string; players: number; nearestCityId: number | null; nearestMi: number | null };
 
 export type LocationsReport = {
   dataAsOf: string | null;
@@ -55,6 +57,8 @@ export type LocationsReport = {
   /** Location set among ACTIVE players (src/lib/playerActivity.ts — the Users lens's active-30-day
    *  definition), staff accounts removed. null if the active set could not be read. */
   active: { withLocation: number; total: number } | null;
+  /** Cities with an active field — the only ones offered as city pills. null = not known. */
+  marketIds: number[] | null;
   today: number;
   last7: number;
   days: DayPoint[];
@@ -89,6 +93,9 @@ export function buildLocationsReport(input: {
   firstRunAt: string | null;
   /** Active player ids (any email) and the staff ids to remove from them. */
   activeIds?: Set<number> | null;
+  /** Cities with an active field. A player "in market" for any other city counts as outside
+   *  coverage (the sync stores the same; applying it here keeps the page right before the next run). */
+  markets?: ReadonlySet<number> | null;
   internalIds?: Set<number> | null;
   now: Date;
 }): LocationsReport {
@@ -96,7 +103,8 @@ export function buildLocationsReport(input: {
   // Labels become "City, ST" ONCE, here, so every group, name and export below carries the state —
   // and Grandview, MO and Grandview, WA are two places, not one.
   const live = input.rows.filter((r) => r.has_area && !r.is_internal)
-    .map((r) => ({ ...r, area_label: placeName(r.area_label, r.state) }));
+    .map((r) => ({ ...r, area_label: placeName(r.area_label, r.state) }))
+    .map((r) => (input.markets ? effectiveVerdict(r, input.markets) : r));
   const cities = (Array.isArray(input.okRun?.cities) ? input.okRun!.cities : []) as AreaCity[];
   const playersTotal = input.okRun?.players_total != null
     ? input.okRun.players_total - (input.okRun.players_internal ?? 0) : null;
@@ -121,7 +129,6 @@ export function buildLocationsReport(input: {
 
   const todayYmd = chicagoYmd(now.toISOString());
   const weekAgo = now.getTime() - 7 * DAY_MS;
-  const monthAgo = now.getTime() - 30 * DAY_MS;
   const fresh = live.filter((r) => !r.seeded);
   const today = fresh.filter((r) => chicagoYmd(r.first_seen_at) === todayYmd).length;
   const last7 = fresh.filter((r) => Date.parse(r.first_seen_at) >= weekAgo).length;
@@ -178,10 +185,7 @@ export function buildLocationsReport(input: {
       verdict, verdictCityId: verdict === "in_market" ? mode(g.map((r) => r.verdict_city_id)) : null,
     };
   });
-  if (kpis.never != null) {
-    zips.push({ key: "no_area", zip: null, area: "No area", label: null, players: kpis.never, nearestCityId: null,
-      nearestMi: null, verdict: "no_area", verdictCityId: null });
-  }
+  // "No area" is no longer a table row — the page states kpis.never in a line above the table.
   zips.sort((a, b) => b.players - a.players || a.key.localeCompare(b.key));
 
   const unid = new Map<string, number>();
@@ -192,32 +196,19 @@ export function buildLocationsReport(input: {
   const unidentified = [...unid].map(([zip, players]) => ({ zip, players }))
     .sort((a, b) => b.players - a.players || a.zip.localeCompare(b.zip));
 
-  const places = new Map<string, SeenRow[]>();
-  for (const r of live) if (r.verdict === "waitlist") {
-    // Label, else zip, else grid cell — two unlabelled no-zip players miles apart are two places.
-    const p = r.area_label ? `label:${r.area_label}` : areaGroupKey(r.zip, r.lat, r.lng) ?? "no-location";
-    const g = places.get(p) ?? [];
-    g.push(r);
-    places.set(p, g);
-  }
-  const outside: PlaceRow[] = [...places].map(([key, g]) => {
-    const mis = g.map((r) => r.nearest_city_mi).filter((m): m is number => m != null);
-    const raw = key.startsWith("label:") ? key.slice(6)
-      : key === "no-location" ? NO_LOCATION : areaGroupName(g[0].zip, g.map((r) => r.area_label));
-    const place = placeName(raw) ?? raw;
-    return {
-      key, place, players: g.length,
-      last30: g.filter((r) => !r.seeded && Date.parse(r.first_seen_at) >= monthAgo).length,
-      nearestCityId: mode(g.map((r) => r.nearest_city_id)),
-      nearestMi: mis.length ? Math.min(...mis) : null,
-    };
-  }).sort((a, b) => b.players - a.players || a.place.localeCompare(b.place));
+  // NEW MARKETS: outside-coverage players clustered within 25 miles of each other — the same
+  // clusters the Map tab lists (src/lib/locationsInsights.ts).
+  const outside: PlaceRow[] = clusterOutside(
+    live.filter((r) => r.verdict === "waitlist" && r.lat != null && r.lng != null)
+      .map((r) => ({ lat: r.lat as number, lng: r.lng as number, label: r.area_label, zip: r.zip, key: String(r.player_id) })),
+    cities,
+  ).map((c) => ({ key: c.key, place: c.name, players: c.players, nearestCityId: c.nearestCityId, nearestMi: c.nearestCityMi }));
 
   return {
     dataAsOf: input.okRun?.finished_at ?? null,
     lastRun: input.run ? { startedAt: input.run.started_at, finishedAt: input.run.finished_at, ok: input.run.ok,
       error: input.run.error, complete: input.run.complete } : null,
     trackingSince: input.firstRunAt,
-    cities, playersTotal, kpis, active, today, last7, days, recent, zips, unidentified, outside,
+    cities, playersTotal, kpis, active, marketIds: input.markets ? [...input.markets] : null, today, last7, days, recent, zips, unidentified, outside,
   };
 }

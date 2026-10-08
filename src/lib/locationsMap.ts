@@ -20,6 +20,7 @@
 // computed from the unrounded averages.
 
 import { areaGroupKey, areaGroupName, milesBetween, placeName, type AreaCity } from "./playerAreaModel";
+import { clusterOutside, effectiveVerdict, type OutsidePoint } from "./locationsInsights";
 
 export const REACHES = [3, 5, 10, 15] as const;
 export type Reach = (typeof REACHES)[number];
@@ -62,6 +63,8 @@ export type MapZip = {
   nearby: { fieldId: number; mi: number; minReach: Reach }[];
 };
 export type MapCity = AreaCity & {
+  /** False for a city with no active field: not a market (kept out of the pills and the city list). */
+  hasFields: boolean;
   players: number; fields: number; coverage: ByReach;
   unplaced: number; // in this city's market but no lat/lng to place (unidentified zips have no city)
 };
@@ -140,10 +143,12 @@ export function buildLocationsMap(input: {
   fieldSnapshots: FieldSnapshot[];
 }): LocationsMap {
   const cityIds = new Set(input.cities.map((c) => c.id));
-  // Labels become "City, ST" ONCE, here, so every bubble, place and detail card carries the state.
-  input = { ...input, players: input.players.map((p) => ({ ...p, area_label: placeName(p.area_label, p.state) })) };
-
   const { fields: fieldsRaw, badFields } = activeFields(input.fieldSnapshots, input.cities);
+  // A city with no active field is not a market: its players count as outside coverage (the sync
+  // stores the same; applying it here keeps the page right before the next run).
+  const markets = new Set(fieldsRaw.map((f) => f.cityId));
+  // Labels become "City, ST" ONCE, here, so every bubble, place and detail card carries the state.
+  input = { ...input, players: input.players.map((p) => effectiveVerdict({ ...p, area_label: placeName(p.area_label, p.state) }, markets)) };
 
   // --- national bubbles + outside places: every placed player, in market or not ---
   const nearestCity = (lat: number, lng: number) => {
@@ -168,15 +173,13 @@ export function buildLocationsMap(input: {
     return [...c].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
   };
   const nat = new Map<string, Acc>();
-  const out = new Map<string, Acc>();
+  const outPts: OutsidePoint[] = [];
   for (const p of input.players) {
     if (p.verdict === "unidentified" || !validCoord(p.lat, p.lng)) continue;
     const area = areaGroupKey(p.zip, p.lat, p.lng)!; // valid coordinates, so never null
     const key = `${p.verdict}|${p.verdict === "in_market" ? p.verdict_city_id : ""}|${area}`;
     add(nat, key, p, key);
-    // A place is its label, else its zip, else its grid cell — so two unlabelled no-zip players
-    // miles apart are two places, not one.
-    if (p.verdict === "waitlist") add(out, p.area_label ? `label:${p.area_label}` : area, p, key);
+    if (p.verdict === "waitlist") outPts.push({ lat: p.lat as number, lng: p.lng as number, label: p.area_label, zip: p.zip, key });
   }
   const national: NationalZip[] = [...nat].map(([key, g]) => {
     const verdict = key.slice(0, key.indexOf("|")) as "in_market" | "waitlist";
@@ -186,14 +189,12 @@ export function buildLocationsMap(input: {
     return { cityId: g.cityId, key, zip: g.zip, area: g.zip ? area : placeName(area) ?? area, label: placeName(topLabel(g)), verdict,
       lat: r2(lat), lng: r2(lng), players: g.n, nearestCityId: nc?.id ?? null, nearestCityMi: nc ? r1(nc.mi) : null };
   }).sort((a, b) => b.players - a.players || a.key.localeCompare(b.key));
-  const outside: OutsidePlace[] = [...out].map(([placeKey, g]) => {
-    const lat = g.sLat / g.n, lng = g.sLng / g.n;
-    const nc = nearestCity(lat, lng);
-    const raw = placeKey.startsWith("label:") ? placeKey.slice(6) : areaGroupName(g.zip, g.labels);
-    const place = placeName(raw) ?? raw;
-    return { place, players: g.n, nearestCityId: nc?.id ?? null, nearestCityMi: nc ? r1(nc.mi) : null,
-      lat: r2(lat), lng: r2(lng), zipKeys: [...g.zipKeys] };
-  }).sort((a, b) => b.players - a.players || a.place.localeCompare(b.place));
+  // NEW MARKETS: outside-coverage players clustered within 25 miles of each other (the Overview
+  // shows the same clusters). zipKeys = the national bubbles in the cluster, for selecting one.
+  const outside: OutsidePlace[] = clusterOutside(outPts, input.cities).map((c) => ({
+    place: c.name, players: c.players, nearestCityId: c.nearestCityId, nearestCityMi: c.nearestCityMi,
+    lat: c.lat, lng: c.lng, zipKeys: c.memberKeys,
+  }));
 
   // --- city bubbles: in-market players with coordinates, grouped by (city, zip or grid cell) ---
   let waitlistPlayers = 0, unidentifiedPlayers = 0;
@@ -252,7 +253,7 @@ export function buildLocationsMap(input: {
       const mi = nearestExact.get(z.key);
       for (const r of REACHES) if (mi != null && mi <= r) coverage[r] += z.players;
     }
-    return { ...c, players: cz.reduce((s, z) => s + z.players, 0), fields: fields.filter((f) => f.cityId === c.id).length,
+    return { ...c, hasFields: markets.has(c.id), players: cz.reduce((s, z) => s + z.players, 0), fields: fields.filter((f) => f.cityId === c.id).length,
       coverage, unplaced: unplaced.get(c.id) ?? 0 };
   }).sort((a, b) => b.players - a.players || b.fields - a.fields || a.name.localeCompare(b.name));
 

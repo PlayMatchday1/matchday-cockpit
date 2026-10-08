@@ -79,7 +79,7 @@ export default function LocationsPlayerDetail({ playerId }: { playerId: number }
         <dl className="loc-dl">
           <dt>Area</dt><dd>{placeName(d.area) ?? "Not named"}</dd>
           <dt>Zip</dt><dd>{d.zip ?? "None"}</dd>
-          <dt>Source</dt><dd>{sourceName(d.source)} <span className="loc-raw">{d.source ?? "null"}</span></dd>
+          <dt>Source</dt><dd>{sourceName(d.source)}</dd>
           <dt>First seen</dt><dd>{d.seeded ? "Before tracking began" : fmtWhen(d.firstSeenAt)}</dd>
         </dl>
         <dl className="loc-dl">

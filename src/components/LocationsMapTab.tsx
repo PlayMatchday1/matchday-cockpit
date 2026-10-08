@@ -43,7 +43,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
 }) {
   const [data, setData] = useState<LocationsMap | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [reach, setReach] = useState<Reach>(5);
+  const [reach, setReach] = useState<Reach>(10); // default reach is 10 miles everywhere (Ryan, 2026-10-08)
   const [selected, setSelected] = useState<Selection>(null);
   const [highlight, setHighlight] = useState<number | null>(null);
   const [natFilter, setNatFilter] = useState<NatFilter>("all");
@@ -77,7 +77,9 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
   const zips = useMemo(() => (city ? (data?.zips ?? []).filter((z) => z.cityId === city.id) : []), [data, city]);
   const fieldById = useMemo(() => new Map((data?.fields ?? []).map((f) => [f.id, f])), [data]);
   // Pills keep the city table's own order (by id), like Master Schedule; the list ranks by players.
-  const pillCities = useMemo(() => [...(data?.cities ?? [])].sort((a, b) => a.id - b.id), [data]);
+  // Only cities with an active field are markets: they get pills and rows; the others are named once.
+  const pillCities = useMemo(() => [...(data?.cities ?? [])].filter((c) => c.hasFields).sort((a, b) => a.id - b.id), [data]);
+  const noFieldCities = useMemo(() => (data?.cities ?? []).filter((c) => !c.hasFields), [data]);
   const cityById = useMemo(() => new Map((data?.cities ?? []).map((c) => [c.id, c])), [data]);
   const national = useMemo(() => (data?.national ?? []).filter((z) => natFilter === "all" || z.verdict === natFilter), [data, natFilter]);
   // A selection the filter has hidden is dropped, so the detail card never describes an absent bubble.
@@ -189,13 +191,18 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
         </div>
 
         <div className="lm-panel">
-          {data.badFields.length > 0 && (
-            <div className="lm-warnrow" data-testid="map-missing-fields">
-              {data.badFields.length === 1
-                ? `1 field is missing from the map: ${data.badFields[0].title}. Its location needs fixing in MatchDay.`
-                : `${data.badFields.length} fields are missing from the map: ${data.badFields.map((f) => f.title).join(", ")}. Their locations need fixing in MatchDay.`}
-            </div>
-          )}
+          {/* The missing-field warning: every one on All cities, only the city's own inside a city. */}
+          {(() => {
+            const bad = city ? data.badFields.filter((f) => f.cityId === city.id) : data.badFields;
+            if (bad.length === 0) return null;
+            return (
+              <div className="lm-warnrow" data-testid="map-missing-fields">
+                {bad.length === 1
+                  ? `1 field is missing from the map: ${bad[0].title}. Its location needs fixing in MatchDay.`
+                  : `${bad.length} fields are missing from the map: ${bad.map((f) => f.title).join(", ")}. Their locations need fixing in MatchDay.`}
+              </div>
+            );
+          })()}
           {!city ? (
             <>
             {selNational && (
@@ -214,21 +221,24 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
               <table className="lm-list" data-testid="map-city-list">
                 <thead><tr><th>City</th><th className="loc-num">Players</th><th className="loc-num">Fields</th><th className="loc-num">Near a field</th></tr></thead>
                 <tbody>
-                  {data.cities.map((c) => (
+                  {data.cities.filter((c) => c.hasFields).map((c) => (
                     <tr key={c.id} className="lm-row" tabIndex={0} onClick={() => onCity(c.id)}
                       onKeyDown={(e) => { if (e.key === "Enter") onCity(c.id); }}>
                       <td>{c.name}</td>
                       <td className="loc-num">{int(c.players)}</td>
                       <td className="loc-num">{int(c.fields)}</td>
-                      <td className="loc-num">{c.players ? pct(c.coverage[5], c.players) : "—"}</td>
+                      <td className="loc-num">{c.players ? pct(c.coverage[10], c.players) : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <div className="lm-note">Near a field = players within 5 miles of an active field.</div>
+              <div className="lm-note">Near a field = players within 10 miles of an active field.</div>
+              {noFieldCities.length > 0 && (
+                <div className="lm-note" data-testid="map-no-fields">No fields yet: {noFieldCities.map((c) => c.name).join(", ")}.</div>
+              )}
             </div>
             <div className="lm-pcard">
-              <div className="lm-ptitle">Outside coverage</div>
+              <div className="lm-ptitle">New markets</div>
               {data.outside.length === 0 ? (
                 <div className="lm-empty" data-testid="map-outside-empty">No players outside coverage yet</div>
               ) : (

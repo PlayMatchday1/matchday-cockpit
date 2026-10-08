@@ -23,11 +23,12 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import LocationsMapTab from "@/components/LocationsMapTab";
 import LocationsSyncNow from "@/components/LocationsSyncNow";
 import LocationsPlayerDetail from "@/components/LocationsPlayerDetail";
+import LocationsOpenNext from "@/components/LocationsOpenNext";
 import { Fragment } from "react";
 import { supabase } from "@/lib/supabase";
 import RefreshIcon from "@/components/RefreshIcon";
 import { downloadCsv } from "@/components/growth/format";
-import { GPS_NO_ZIP, placeName } from "@/lib/playerAreaModel";
+import { placeName } from "@/lib/playerAreaModel";
 import { type LocationsReport, type ZipRow, type DayPoint } from "@/lib/locationsReport";
 
 const CHI = "America/Chicago";
@@ -44,8 +45,8 @@ const GPS_COLOR = "#2a78d6";
 
 type VerdictFilter = "all" | "in_market" | "waitlist" | "unidentified" | "no_area";
 const VERDICT_FILTERS: { key: VerdictFilter; label: string }[] = [
-  { key: "all", label: "All" }, { key: "in_market", label: "In market" }, { key: "waitlist", label: "Waitlist" },
-  { key: "unidentified", label: "Unidentified" }, { key: "no_area", label: "No area" },
+  { key: "all", label: "All" }, { key: "in_market", label: "In market" }, { key: "waitlist", label: "Outside coverage" },
+  { key: "unidentified", label: "Unidentified" },
 ];
 
 export default function LocationsBoard() {
@@ -92,7 +93,8 @@ export default function LocationsBoard() {
   }, []);
   useEffect(() => { void load(); }, [load]);
   // Refresh and a finished Sync now re-read BOTH tabs (Supabase only).
-  const reloadAll = useCallback(() => { void load(); setMapReload((k) => k + 1); }, [load]);
+  const [openNextReload, setOpenNextReload] = useState(0);
+  const reloadAll = useCallback(() => { void load(); setMapReload((k) => k + 1); setOpenNextReload((k) => k + 1); }, [load]);
 
   const cityName = useMemo(() => {
     const m = new Map<number, string>();
@@ -102,8 +104,13 @@ export default function LocationsBoard() {
 
   const verdictLabel = useCallback((r: Pick<ZipRow, "verdict" | "verdictCityId">) =>
     r.verdict === "in_market" ? cityName(r.verdictCityId)
-      : r.verdict === "waitlist" ? "Waitlist"
+      : r.verdict === "waitlist" ? "Outside coverage"
       : r.verdict === "unidentified" ? "Unidentified" : "No area", [cityName]);
+  // City pills: only cities with an active field (a city without one is not a market).
+  const pillCities = useMemo(() => {
+    const ids = data?.marketIds ? new Set(data.marketIds) : null;
+    return (data?.cities ?? []).filter((c) => !ids || ids.has(c.id));
+  }, [data]);
 
   const zipView = useMemo(() => (data?.zips ?? []).filter((r) => {
     if (vf !== "all" && r.verdict !== vf) return false;
@@ -112,11 +119,11 @@ export default function LocationsBoard() {
   }), [data, vf, city]);
 
   const exportZips = () => {
-    const rows: (string | number)[][] = [["Zip", "Area label", "Players", "Nearest city", "Distance (mi)", "Inside radius", "Status"]];
+    const rows: (string | number)[][] = [["Area", "Zip", "Place", "Players", "Nearest city", "Distance (mi)", "Status"]];
     for (const r of zipView) rows.push([
-      r.verdict === "no_area" ? "No area" : r.zip ?? "", r.zip ? r.label ?? "" : r.area, r.players,
-      r.verdict === "no_area" || r.verdict === "unidentified" ? "" : cityName(r.nearestCityId),
-      r.nearestMi ?? "", r.verdict === "in_market" ? "Yes" : r.verdict === "waitlist" ? "No" : "",
+      r.zip ?? placeName(r.area) ?? r.area, r.zip ?? "", placeName(r.label) ?? "", r.players,
+      r.verdict === "unidentified" ? "" : cityName(r.nearestCityId),
+      r.verdict === "unidentified" ? "" : r.nearestMi ?? "",
       verdictLabel(r),
     ]);
     const tag = [city != null ? cityName(city) : "", vf !== "all" ? vf : ""].filter(Boolean).join("-").replace(/[^A-Za-z0-9-]+/g, "_");
@@ -187,24 +194,20 @@ export default function LocationsBoard() {
 
           {/* 1 — KPI cards */}
           <div className="loc-kpis" data-testid="loc-kpis">
-            {/* LOCATION SET — "coverage" on this tab used to mean this, and means "near a field" on the
-                Map tab; here it is "Location set" everywhere. Main number: ACTIVE players (the Users
-                lens's 30-day definition, src/lib/playerActivity.ts); underneath: all players. */}
+            {/* LOCATION SET — "coverage" means "near a field" on the Map tab, so here it is "Location
+                set" everywhere. Main number: ACTIVE players (the Users lens's 30-day definition,
+                src/lib/playerActivity.ts); underneath: all players. */}
             <Kpi label="Location set" testId="kpi-location-set"
               value={data.active
                 ? <>{int(data.active.withLocation)} of {int(data.active.total)} <span className="loc-kpi-unit">active players</span></>
                 : <>{int(data.kpis.areaSet)} <span className="loc-kpi-unit">players</span></>}
               sub={data.playersTotal != null ? `${int(data.kpis.areaSet)} of ${int(data.playersTotal)} all players` : `${int(data.kpis.areaSet)} players`}
               note={data.active ? undefined : "Active players could not be read just now."} />
-            {/* THE NOTE IS SELF-REMOVING: it renders only while GPS is 0. A backend bug labels GPS
-                shares "zip" (Vitalii is fixing it, 2026-10-08); the first real GPS value hides it.
-                Delete the note prop once that has happened. */}
-            <Kpi label="GPS" value={int(data.kpis.gps)} sub="live distance on tiles"
-              note={data.kpis.gps === 0 && data.kpis.areaSet > 0 ? "Reads 0 for now: a backend bug labels GPS shares as zip. A fix is on the way." : undefined} />
-            <Kpi label="Zip only" value={int(data.kpis.zip)} sub="entered a home zip" />
-            <Kpi label="Never set an area" value={data.kpis.never == null ? "—" : int(data.kpis.never)} sub="no zip, no location" />
-            <Kpi label="Outside every radius" value={int(data.kpis.outside)} sub="waitlist" />
-            <Kpi label="Unidentified zips" value={int(data.kpis.unidentified)} sub="zip with no lat/lng" />
+            <Kpi label="GPS" value={int(data.kpis.gps)} sub="shared their location" />
+            <Kpi label="Zip only" value={int(data.kpis.zip)} sub="typed a home zip" />
+            <Kpi label="Never set a location" value={data.kpis.never == null ? "—" : int(data.kpis.never)} sub="have not set a location" />
+            <Kpi label="Outside coverage" value={int(data.kpis.outside)} sub="no city within range" />
+            <Kpi label="Unidentified zips" value={int(data.kpis.unidentified)} sub="zip we could not place" />
           </div>
 
           {/* 2 — Recent activity */}
@@ -219,8 +222,7 @@ export default function LocationsBoard() {
             <div className="loc-body">
               {data.days.length === 0 ? (
                 <div className="loc-empty">
-                  No new areas since tracking began{data.trackingSince ? ` on ${fmtWhen(data.trackingSince)}` : ""}.
-                  {data.kpis.seeded > 0 && ` ${int(data.kpis.seeded)} ${data.kpis.seeded === 1 ? "player" : "players"} already had an area before then and ${data.kpis.seeded === 1 ? "is" : "are"} counted in the location-set share, not in the daily bars.`}
+                  No new locations since tracking began{data.trackingSince ? ` on ${fmtWhen(data.trackingSince)}` : ""}.
                 </div>
               ) : (
                 <AdoptionCharts days={data.days} seeded={data.kpis.seeded} />
@@ -230,7 +232,7 @@ export default function LocationsBoard() {
               <table className="loc-table" data-testid="loc-recent">
                 <thead><tr><th>First seen</th><th>Player</th><th>Area</th><th>Source</th><th>City</th></tr></thead>
                 <tbody>
-                  {data.recent.length === 0 && <tr><td colSpan={5} className="loc-td-empty">No player has set an area yet.</td></tr>}
+                  {data.recent.length === 0 && <tr><td colSpan={5} className="loc-td-empty">No player has set a location yet.</td></tr>}
                   {data.recent.map((r) => {
                     const open = openPlayer === r.playerId;
                     return (
@@ -239,11 +241,11 @@ export default function LocationsBoard() {
                           data-testid={`recent-row-${r.playerId}`}
                           onClick={(e) => { if ((e.target as HTMLElement).closest("a")) return; setOpenPlayer(open ? null : r.playerId); }}
                           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpenPlayer(open ? null : r.playerId); } }}>
-                          <td className="loc-nowrap">{r.seeded ? <span className="loc-muted" title="Set before tracking began; the real time is unknown">Before tracking</span> : fmtWhen(r.firstSeenAt)}</td>
+                          <td className="loc-nowrap">{r.seeded ? <span className="loc-muted" title="Set before tracking began">Before tracking</span> : fmtWhen(r.firstSeenAt)}</td>
                           <td><a className="loc-link" href={`/match-ops/player-lookup?id=${r.playerId}`}>{r.name ?? `Player ${r.playerId}`}</a></td>
                           <td>{r.zip ?? placeName(r.label) ?? "—"}{r.zip && r.label ? <span className="loc-muted"> ({placeName(r.label)})</span> : null}</td>
-                          <td className="loc-nowrap">{r.source === "gps" ? "GPS" : r.source === "zip" ? "Zip" : "Not set"} <span className="loc-raw">{r.sourceRaw ?? "null"}</span></td>
-                          <td>{r.verdict === "in_market" ? cityName(r.cityId) : r.verdict === "waitlist" ? "Outside our cities" : "Unidentified"}</td>
+                          <td className="loc-nowrap">{r.source === "zip" ? "Zip" : "GPS"}</td>
+                          <td>{r.verdict === "in_market" ? cityName(r.cityId) : r.verdict === "waitlist" ? "Outside coverage" : "Unidentified"}</td>
                         </tr>
                         {open && (
                           <tr className="loc-row-detail"><td colSpan={5} style={{ padding: 0 }}><LocationsPlayerDetail playerId={r.playerId} /></td></tr>
@@ -254,9 +256,7 @@ export default function LocationsBoard() {
                 </tbody>
               </table>
             </div>
-            <div className="loc-foot">
-              The most recent 100. &ldquo;First seen&rdquo; is when Clubhouse&apos;s sync first saw the area, accurate to within one sync interval (6 hours); MatchDay does not record when it was set. Times in Chicago.
-            </div>
+            <div className="loc-foot">First seen is when Clubhouse first saw the location, within 6 hours of when it was set.</div>
           </div>
 
           {/* 3 — Player locations */}
@@ -268,7 +268,7 @@ export default function LocationsBoard() {
             <div className="loc-filter" role="group" aria-label="Filter cities">
               <span className="loc-control-label">Cities</span>
               <button type="button" aria-pressed={city === null} className={"loc-chip" + (city === null ? " loc-chip-on" : "")} onClick={() => setCity(null)}>All cities</button>
-              {data.cities.map((c) => (
+              {pillCities.map((c) => (
                 <button type="button" key={c.id} aria-pressed={city === c.id} className={"loc-chip" + (city === c.id ? " loc-chip-on" : "")}
                   onClick={() => setCity(c.id)}>{c.name}</button>
               ))}
@@ -280,20 +280,22 @@ export default function LocationsBoard() {
                   onClick={() => setVf(f.key)}>{f.label}</button>
               ))}
             </div>
+            {data.kpis.never != null && (
+              <div className="loc-line" data-testid="loc-no-area">{int(data.kpis.never)} {data.kpis.never === 1 ? "player has" : "players have"} not set a location.</div>
+            )}
             <div className="loc-tablewrap">
               <table className="loc-table" data-testid="loc-zips">
-                <thead><tr><th>Zip</th><th className="loc-num">Players</th><th>Nearest city</th><th className="loc-num">Distance</th><th>Inside radius</th><th>Status</th></tr></thead>
+                <thead><tr><th>Area</th><th className="loc-num">Players</th><th>Nearest city</th><th className="loc-num">Distance</th><th>Status</th></tr></thead>
                 <tbody>
-                  {zipView.length === 0 && <tr><td colSpan={6} className="loc-td-empty">Nothing matches these filters.</td></tr>}
+                  {zipView.length === 0 && <tr><td colSpan={5} className="loc-td-empty">Nothing matches these filters.</td></tr>}
                   {zipView.map((r) => {
                     const placed = r.verdict === "in_market" || r.verdict === "waitlist";
                     return (
                       <tr key={r.key}>
-                        <td>{r.verdict === "no_area" ? <span className="loc-muted">No area</span> : r.zip ?? (r.area === GPS_NO_ZIP ? <span className="loc-muted">{r.area}</span> : <>{placeName(r.area)} <span className="loc-muted">(no zip)</span></>)}</td>
+                        <td>{r.zip ?? placeName(r.area) ?? r.area}</td>
                         <td className="loc-num">{int(r.players)}</td>
                         <td>{placed ? cityName(r.nearestCityId) : "—"}</td>
                         <td className="loc-num">{placed ? mi(r.nearestMi) : "—"}</td>
-                        <td>{r.verdict === "in_market" ? "Yes" : r.verdict === "waitlist" ? "No" : "—"}</td>
                         <td><span className={`loc-badge loc-badge-${r.verdict}`}>{verdictLabel(r)}</span></td>
                       </tr>
                     );
@@ -301,42 +303,43 @@ export default function LocationsBoard() {
                 </tbody>
               </table>
             </div>
-            <div className="loc-foot">Verdicts are computed by the sync from the player&apos;s lat/lng against each city&apos;s centre and radius, and recomputed when a city changes. Sorted by players.</div>
           </div>
 
-          {/* 4 — Unidentified zips */}
-          <div className="loc-card">
-            <div className="loc-sec-head"><div className="loc-sec-title">Unidentified zips</div></div>
-            <div className="loc-tablewrap">
-              <table className="loc-table" data-testid="loc-unidentified">
-                <thead><tr><th>Zip entered</th><th className="loc-num">Players</th></tr></thead>
-                <tbody>
-                  {data.unidentified.length === 0 && <tr><td colSpan={2} className="loc-td-empty">Every zip entered so far resolved to a location.</td></tr>}
-                  {data.unidentified.map((u) => <tr key={u.zip}><td>{u.zip}</td><td className="loc-num">{int(u.players)}</td></tr>)}
-                </tbody>
-              </table>
+          {/* 4 — Unidentified zips: only when there are any */}
+          {data.unidentified.length > 0 && (
+            <div className="loc-card">
+              <div className="loc-sec-head"><div className="loc-sec-title">Unidentified zips</div></div>
+              <div className="loc-tablewrap">
+                <table className="loc-table" data-testid="loc-unidentified">
+                  <thead><tr><th>Zip entered</th><th className="loc-num">Players</th></tr></thead>
+                  <tbody>
+                    {data.unidentified.map((u) => <tr key={u.zip}><td>{u.zip}</td><td className="loc-num">{int(u.players)}</td></tr>)}
+                  </tbody>
+                </table>
+              </div>
             </div>
-            <div className="loc-foot">A zip MatchDay stored without a latitude and longitude.</div>
-          </div>
+          )}
 
-          {/* 5 — Outside coverage */}
+          {/* 5 — Where to open next: new fields inside the cities we serve (server-computed). */}
+          <LocationsOpenNext cities={pillCities} reloadKey={openNextReload} />
+
+          {/* 6 — New markets: clusters of players outside every city (within 25 miles of each other). */}
           <div className="loc-card">
-            <div className="loc-sec-head"><div className="loc-sec-title">Outside our cities — where to open next</div></div>
+            <div className="loc-sec-head"><div className="loc-sec-title">New markets</div></div>
             <div className="loc-tablewrap">
               <table className="loc-table" data-testid="loc-outside">
-                <thead><tr><th>Place</th><th className="loc-num">Players</th><th className="loc-num">Last 30 days</th><th>Nearest city</th><th className="loc-num">Distance</th></tr></thead>
+                <thead><tr><th>Place</th><th className="loc-num">Players</th><th>Nearest city</th><th className="loc-num">Distance</th></tr></thead>
                 <tbody>
-                  {data.outside.length === 0 && <tr><td colSpan={5} className="loc-td-empty">No player outside every city radius yet.</td></tr>}
+                  {data.outside.length === 0 && <tr><td colSpan={4} className="loc-td-empty">No players outside coverage yet.</td></tr>}
                   {data.outside.map((p) => (
                     <tr key={p.key}>
-                      <td>{p.place}</td><td className="loc-num">{int(p.players)}</td><td className="loc-num">{int(p.last30)}</td>
+                      <td>{p.place}</td><td className="loc-num">{int(p.players)}</td>
                       <td>{cityName(p.nearestCityId)}</td><td className="loc-num">{mi(p.nearestMi)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <div className="loc-foot">Grouped by area label, or zip where there is no label. &ldquo;Last 30 days&rdquo; counts first-seen dates and leaves out areas set before tracking began.</div>
           </div>
         </>
       )}
@@ -462,6 +465,8 @@ const CSS = `
 .loc-kpi{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:0 9px 26px rgba(0,43,34,.05)}
 .loc-kpi-label{font-size:9.5px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--muted)}
 .loc-kpi-value{font-size:24px;font-weight:900;color:var(--forest);margin-top:6px;letter-spacing:-.4px;font-variant-numeric:tabular-nums}
+.loc-row-muted td{color:var(--muted)}
+.loc-line{padding:10px 20px;font-size:12.5px;color:var(--ink);border-bottom:1px solid var(--line)}
 .loc-kpi-unit{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:0}
 .loc-kpi-sub{font-size:11.5px;color:var(--muted);margin-top:2px}
 .loc-kpi-note{font-size:10.5px;line-height:1.35;color:#8A5300;margin-top:6px}

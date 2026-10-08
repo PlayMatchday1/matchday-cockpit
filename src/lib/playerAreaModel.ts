@@ -58,7 +58,11 @@ export type VerdictResult = {
 /** Unidentified = no usable lat/lng (a zip the backend did not resolve). Otherwise IN MARKET if the
  *  point is inside ANY city's radius — the nearest such city wins, since Austin and San Antonio
  *  overlap — and WAITLIST if it is outside every radius. nearestCity is the nearest overall. */
-export function computeVerdict(lat: unknown, lng: unknown, cities: AreaCity[]): VerdictResult {
+/* A CITY WITH NO ACTIVE FIELD IS NOT A MARKET (Ryan, 2026-10-08 — New York City and El Paso that
+ * day). `marketIds` = the cities with at least one active field; a player can only be IN MARKET for
+ * one of those. The NEAREST city is still the nearest of ALL cities, so a player near New York shows
+ * New York as nearest while counting as outside coverage. Omit marketIds and every city counts. */
+export function computeVerdict(lat: unknown, lng: unknown, cities: AreaCity[], marketIds?: ReadonlySet<number>): VerdictResult {
   const la = num(lat), ln = num(lng);
   if (la == null || ln == null || cities.length === 0) {
     return { verdict: "unidentified", verdictCityId: null, nearestCityId: null, nearestCityMi: null };
@@ -68,7 +72,8 @@ export function computeVerdict(lat: unknown, lng: unknown, cities: AreaCity[]): 
   for (const c of cities) {
     const mi = milesBetween(la, ln, c.lat, c.lng);
     if (!nearest || mi < nearest.mi) nearest = { id: c.id, mi };
-    if (mi <= c.radiusMiles && (!inside || mi < inside.mi)) inside = { id: c.id, mi };
+    const isMarket = !marketIds || marketIds.has(c.id);
+    if (isMarket && mi <= c.radiusMiles && (!inside || mi < inside.mi)) inside = { id: c.id, mi };
   }
   return {
     verdict: inside ? "in_market" : "waitlist",
@@ -90,8 +95,11 @@ export function usCities(raw: unknown[]): AreaCity[] {
 }
 
 /** Changes whenever any city's centre or radius changes, or a city is added or removed. */
-export function geometryKey(cities: AreaCity[]): string {
-  return cities.map((c) => `${c.id}:${c.lat},${c.lng},${c.radiusMiles}`).join("|");
+/** Changes whenever any city's centre or radius changes, a city is added or removed, or a city
+ *  gains or loses its last active field — every one of those can change a stored status. */
+export function geometryKey(cities: AreaCity[], marketIds?: ReadonlySet<number>): string {
+  const g = cities.map((c) => `${c.id}:${c.lat},${c.lng},${c.radiusMiles}`).join("|");
+  return marketIds ? `${g}|markets:${[...marketIds].sort((a, b) => a - b).join(",")}` : g;
 }
 
 /* ── GROUPING A PLAYER'S AREA (Ryan, 2026-10-08) ────────────────────────────────────────────────

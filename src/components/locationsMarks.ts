@@ -2,7 +2,7 @@
 // can draw the exact same marks during server rendering. LocationsLeaflet wraps these in divIcons.
 //
 // Three marks that cannot be confused: a ROUND player bubble with a soccer-player figure, a field
-// PIN with a soccer ball, and a city NAME TAG with a pointer.
+// PIN with a soccer pitch, and a city NAME TAG with a pointer.
 
 // ── ICONS (inline SVG, currentColor) ───────────────────────────────────────────────────────────
 // A figure kicking a ball. Drawn on a 24-unit grid with round 2.4 strokes so it survives 14px.
@@ -16,10 +16,13 @@ export const KICKER_SVG = (px: number) =>
 export const PERSON_SVG = (px: number) =>
   `<svg width="${px}" height="${px}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">` +
   `<circle cx="12" cy="7.5" r="4"/><path d="M4 21a8 8 0 0 1 16 0z"/></svg>`;
-export const BALL_SVG = (px: number) =>
-  `<svg width="${px}" height="${px}" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10.5" fill="#fff" stroke="#0d1f18" stroke-width="1.6"/>` +
-  `<path d="M12 7.6 15.8 10.4 14.4 14.9H9.6L8.2 10.4z" fill="#0d1f18"/>` +
-  `<path d="M12 7.6V2.4M15.8 10.4 20.6 8.6M14.4 14.9 17.4 19.4M9.6 14.9 6.6 19.4M8.2 10.4 3.4 8.6" stroke="#0d1f18" stroke-width="1.4" fill="none"/></svg>`;
+// A soccer pitch seen from above — rectangle, halfway line, centre circle — for the field pin. It
+// replaced a ball, which read as a star at 14px (Ryan, 2026-10-08).
+export const PITCH_SVG = (px: number) =>
+  `<svg width="${px}" height="${px}" viewBox="0 0 24 24" aria-hidden="true">` +
+  `<rect x="2.5" y="5" width="19" height="14" rx="1.2" fill="#2CDB87" stroke="#fff" stroke-width="1.8"/>` +
+  `<path d="M12 5v14" stroke="#fff" stroke-width="1.6"/>` +
+  `<circle cx="12" cy="12" r="3" fill="none" stroke="#fff" stroke-width="1.6"/></svg>`;
 
 /* BUBBLE SIZE. One player: 24px, icon only. Two or more: room for the icon AND the count under it
  * (30px minimum), growing with the square root of the count. SMALL_ICON switches the smallest
@@ -33,7 +36,7 @@ export function bubbleHtml(n: number, tone: "in" | "gap", selected = false) {
   return `<div class="loc-pb loc-pb-${tone}${selected ? " loc-pb-sel" : ""}" style="width:${d}px;height:${d}px">${icon}${n >= 2 ? `<b>${n}</b>` : ""}</div>`;
 }
 
-export const pinHtml = (on: boolean) => `<div class="loc-fpin${on ? " loc-fpin-on" : ""}"><span class="loc-fpin-head">${BALL_SVG(14)}</span></div>`;
+export const pinHtml = (on: boolean) => `<div class="loc-fpin${on ? " loc-fpin-on" : ""}"><span class="loc-fpin-head">${PITCH_SVG(16)}</span></div>`;
 export type Dir = "right" | "left" | "top" | "bottom";
 export const cityTagHtml = (name: string, count: number | null, dir: Dir = "top") =>
   `<div class="loc-ct loc-ct-${dir}"><span class="loc-ct-name">${name}</span>` +
@@ -51,12 +54,12 @@ export const MARKS_CSS = `
 .loc-pb-in{background:#0b7d55;border:2px solid #fff;color:#fff}
 .loc-pb-gap{background:#FFF1EA;border:2px dashed #eb6834;color:#8A3A12}
 .loc-pb-sel{outline:3px solid #003326;outline-offset:1px}
-/* FIELD PIN — a teardrop with a soccer ball in its head: never round, never a player. */
+/* FIELD PIN — a teardrop with a small pitch in its head: never round, never a player. */
 .loc-fpin{position:relative;width:26px;height:34px}
 .loc-fpin::before{content:"";position:absolute;left:2px;top:1px;width:22px;height:22px;background:#003326;border:2px solid #fff;
   border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 1px 3px rgba(0,0,0,.3)}
 .loc-fpin-on::before{background:#0b7d55;box-shadow:0 0 0 3px rgba(11,125,85,.35)}
-.loc-fpin-head{position:absolute;left:6px;top:5px;width:14px;height:14px;display:block}
+.loc-fpin-head{position:absolute;left:5px;top:4px;width:16px;height:16px;display:block}
 .loc-fpin-head svg{display:block}
 /* CITY TAG — dark green name tag, pointer touching the city, count in a player badge. */
 .loc-ct-wrap{background:transparent;border:0}
