@@ -8,8 +8,8 @@
 // Styling borrows Master Schedule's card / chip / refresh vocabulary (VeoMasterSchedule's CSS),
 // copied rather than imported because that CSS is a string private to that component.
 //
-// TODO(phase 2): a map of player areas against city radii and fields. Depends on field latitude and
-// longitude being wired into Clubhouse; not built in this pass.
+// TWO TABS, KEPT IN THE URL: ?tab=map opens the Map (LocationsMapTab), and ?city=<id> opens a city
+// inside it, so a link lands on exactly what was shared. No tab param = Overview.
 //
 // TODO(api): four fields the MatchDay API does not expose yet, so this page leaves them out entirely
 // (no empty columns, no placeholder cards). Wire each in when /admin/players carries it:
@@ -19,6 +19,8 @@
 //   - notify requested time → "tapped notify me" counts and the notify-me CSV on Outside coverage
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import LocationsMapTab from "@/components/LocationsMapTab";
 import { supabase } from "@/lib/supabase";
 import RefreshIcon from "@/components/RefreshIcon";
 import { downloadCsv } from "@/components/growth/format";
@@ -48,6 +50,21 @@ export default function LocationsBoard() {
   const [refreshing, setRefreshing] = useState(false);
   const [city, setCity] = useState<number | null>(null);
   const [vf, setVf] = useState<VerdictFilter>("all");
+  const [mapReload, setMapReload] = useState(0);
+
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const tab: "overview" | "map" = params.get("tab") === "map" ? "map" : "overview";
+  const mapCityRaw = Number(params.get("city"));
+  const mapCity = Number.isInteger(mapCityRaw) && mapCityRaw > 0 ? mapCityRaw : null;
+  const go = useCallback((next: { tab: "overview" | "map"; city?: number | null }) => {
+    const p = new URLSearchParams();
+    if (next.tab === "map") p.set("tab", "map");
+    if (next.tab === "map" && next.city != null) p.set("city", String(next.city));
+    const q = p.toString();
+    router.replace(q ? `${pathname}?${q}` : pathname, { scroll: false });
+  }, [pathname, router]);
 
   const load = useCallback(async () => {
     setRefreshing(true);
@@ -120,7 +137,7 @@ export default function LocationsBoard() {
             <span className="loc-fresh">
               <button type="button" className="loc-refresh" data-testid="loc-refresh" disabled={refreshing}
                 title="Re-read Clubhouse. The sync from MatchDay runs every 6 hours; this button does not call MatchDay."
-                onClick={() => void load()}>
+                onClick={() => { void load(); setMapReload((k) => k + 1); }}>
                 <RefreshIcon size={14} spinning={refreshing} />
                 <span>{refreshing ? "Refreshing…" : "Refresh"}</span>
               </button>
@@ -132,6 +149,12 @@ export default function LocationsBoard() {
             </span>
           </div>
         </div>
+        <div className="loc-tabs" role="tablist" aria-label="View">
+          <button type="button" role="tab" aria-selected={tab === "overview"} data-testid="tab-overview"
+            className={"loc-tab" + (tab === "overview" ? " loc-tab-on" : "")} onClick={() => go({ tab: "overview" })}>Overview</button>
+          <button type="button" role="tab" aria-selected={tab === "map"} data-testid="tab-map"
+            className={"loc-tab" + (tab === "map" ? " loc-tab-on" : "")} onClick={() => go({ tab: "map", city: mapCity })}>Map</button>
+        </div>
         {lastFailed && data?.lastRun?.error && (
           <div className="loc-warn">Last sync failed at {fmtWhen(data.lastRun.startedAt)}: {data.lastRun.error}</div>
         )}
@@ -140,7 +163,10 @@ export default function LocationsBoard() {
         )}
       </div>
 
-      {error && !data ? (
+      {tab === "map" ? (
+        <LocationsMapTab cityId={mapCity} reloadKey={mapReload}
+          onCity={(id) => go({ tab: "map", city: id })} />
+      ) : error && !data ? (
         <div className="loc-card"><div className="loc-state">{error} <button type="button" className="loc-btn" onClick={() => void load()}>Retry</button></div></div>
       ) : !data ? (
         <div className="loc-card"><div className="loc-state">Loading locations…</div></div>
@@ -380,6 +406,11 @@ const CSS = `
 .loc *{box-sizing:border-box}
 .loc-card{background:var(--paper);border:1px solid var(--line);border-radius:16px;
   box-shadow:0 9px 26px rgba(0,43,34,.075);overflow:hidden;margin-bottom:18px}
+.loc-tabs{display:flex;gap:4px;padding:0 20px;border-top:1px solid var(--line)}
+.loc-tab{border:0;background:transparent;font:inherit;font-size:12.5px;font-weight:800;color:var(--muted);
+  padding:11px 12px 10px;cursor:pointer;border-bottom:2.5px solid transparent;margin-bottom:-1px}
+.loc-tab:hover{color:var(--forest)}
+.loc-tab-on{color:var(--forest);border-bottom-color:var(--forest)}
 .loc-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:18px 20px;flex-wrap:wrap}
 .loc-h-title{font-size:16px;font-weight:900;letter-spacing:-.2px;color:var(--forest)}
 .loc-h-sub{font-size:12px;color:var(--muted);margin-top:3px}

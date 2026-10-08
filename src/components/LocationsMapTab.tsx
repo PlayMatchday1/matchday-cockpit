@@ -1,0 +1,291 @@
+"use client";
+
+// THE MAP TAB of /match-ops/locations. Data: GET /api/matchops/locations/map — Supabase only, never
+// MatchDay (the API dyno's 512 MB quota; Ryan's hard rule). Every number on this tab is computed on
+// the server (src/lib/locationsMap.ts); this file only picks which of them to show.
+//
+// The city lives in the URL (?tab=map&city=<id>) via onCity, so a shared link opens that city.
+// Reach (3 / 5 / 10 mi) and the selected pin or bubble are view state, not URL state.
+
+import dynamic from "next/dynamic";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { supabase } from "@/lib/supabase";
+import { REACHES, type LocationsMap, type MapField, type MapZip, type Reach } from "@/lib/locationsMap";
+import type { Selection } from "@/components/LocationsLeaflet";
+
+// Leaflet needs `window` on import — client-only, and only once this tab is opened.
+const LocationsLeaflet = dynamic(() => import("@/components/LocationsLeaflet"), {
+  ssr: false,
+  loading: () => <div className="lm-map lm-map-loading">Loading map…</div>,
+});
+
+const IN_REACH = "#1baf7a";
+const GAP = "#eb6834";
+const int = (n: number) => n.toLocaleString("en-US");
+const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "—");
+const mi = (n: number | null) => (n == null ? "—" : `${n < 10 ? n.toFixed(1) : Math.round(n)} mi`);
+const NO_PLAYERS = "No players have set a location here yet.";
+
+export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
+  cityId: number | null;
+  reloadKey: number;
+  onCity: (id: number | null) => void;
+}) {
+  const [data, setData] = useState<LocationsMap | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [reach, setReach] = useState<Reach>(5);
+  const [selected, setSelected] = useState<Selection>(null);
+  const [highlight, setHighlight] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token;
+      const res = await fetch("/api/matchops/locations/map", {
+        cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
+      setData(body as LocationsMap);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load, reloadKey]);
+
+  // A new city starts with nothing selected.
+  useEffect(() => { setSelected(null); setHighlight(null); }, [cityId]);
+
+  const city = data?.cities.find((c) => c.id === cityId) ?? null;
+  const fields = useMemo(() => (city ? (data?.fields ?? []).filter((f) => f.cityId === city.id) : []), [data, city]);
+  const zips = useMemo(() => (city ? (data?.zips ?? []).filter((z) => z.cityId === city.id) : []), [data, city]);
+  const fieldById = useMemo(() => new Map((data?.fields ?? []).map((f) => [f.id, f])), [data]);
+  // Pills keep the city table's own order (by id), like Master Schedule; the list ranks by players.
+  const pillCities = useMemo(() => [...(data?.cities ?? [])].sort((a, b) => a.id - b.id), [data]);
+
+  if (error && !data) {
+    return <div className="loc-card"><div className="loc-state">{error} <button type="button" className="loc-btn" onClick={() => void load()}>Retry</button></div></div>;
+  }
+  if (!data) return <div className="loc-card"><div className="loc-state">Loading map…</div></div>;
+  if (data.cities.length === 0) {
+    return <div className="loc-card"><div className="loc-state">No city centres yet: they come from the location sync, which has not completed a run.</div></div>;
+  }
+
+  const fieldsSorted = [...fields].sort((a, b) => b.reach[reach] - a.reach[reach] || a.title.localeCompare(b.title));
+  const gaps = zips.filter((z) => !z.inReach[reach]).slice(0, 4);
+  const covered = city ? city.coverage[reach] : 0;
+  const selField: MapField | null = selected?.kind === "field" ? fieldById.get(selected.id) ?? null : null;
+  const selZip: MapZip | null = selected?.kind === "zip" ? zips.find((z) => z.zip === selected.zip) ?? null : null;
+
+  return (
+    <div className="loc-card" data-testid="loc-map-tab">
+      <style>{CSS}</style>
+      {error && <div className="loc-warn">Couldn&apos;t refresh the map: {error}. Showing the last data loaded.</div>}
+
+      <div className="loc-filter" role="group" aria-label="Map city">
+        <span className="loc-control-label">Cities</span>
+        <button type="button" aria-pressed={!city} className={"loc-chip" + (!city ? " loc-chip-on" : "")} onClick={() => onCity(null)}>All cities</button>
+        {pillCities.map((c) => (
+          <button type="button" key={c.id} aria-pressed={city?.id === c.id} className={"loc-chip" + (city?.id === c.id ? " loc-chip-on" : "")}
+            onClick={() => onCity(c.id)}>{c.name}</button>
+        ))}
+      </div>
+
+      {city && (
+        <div className="lm-bar">
+          <button type="button" className="loc-btn" data-testid="map-back" onClick={() => onCity(null)}>← All cities</button>
+          <div className="lm-bar-title">{city.name}</div>
+          <div className="lm-reach" role="group" aria-label="Field reach">
+            <span className="loc-control-label">Reach</span>
+            <div className="lm-seg">
+              {REACHES.map((r) => (
+                <button type="button" key={r} aria-pressed={reach === r} data-testid={`reach-${r}`}
+                  className={"lm-seg-btn" + (reach === r ? " lm-seg-on" : "")} onClick={() => setReach(r)}>{r} mi</button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="lm-body">
+        <div className="lm-left">
+          <div className="lm-map" data-testid="loc-map">
+            <LocationsLeaflet cities={data.cities} city={city} fields={fields} zips={zips} reach={reach}
+              selected={selected} highlightFieldId={highlight}
+              onCity={(id) => onCity(id)} onSelect={(s) => { setSelected(s); setHighlight(null); }} />
+          </div>
+          <div className="lm-legend" data-testid="map-legend">
+            {city ? (
+              <>
+                <span><i className="lm-dot" style={{ background: IN_REACH, borderColor: "#04583A" }} />Zip with a field within {reach} mi</span>
+                <span><i className="lm-dot lm-dot-gap" style={{ background: "rgba(235,104,52,.18)", borderColor: GAP }} />No field within {reach} mi (dashed)</span>
+                <span><i className="lm-pin" />Active field</span>
+                <span><i className="lm-ring" />Field reach, {reach} mi</span>
+                <span className="lm-legend-note">Bubble size = players; placed at the players&apos; average location, rounded to about 1 km.</span>
+              </>
+            ) : (
+              <>
+                <span><i className="lm-dot" style={{ background: "rgba(0,51,38,.28)", borderColor: "#003326" }} />City, sized by players who have set a location there</span>
+                <span className="lm-legend-note">Click a circle, a pill or a row to open a city.</span>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="lm-panel">
+          {!city ? (
+            <div className="lm-pcard">
+              <div className="lm-ptitle">Pick a city</div>
+              <table className="lm-list" data-testid="map-city-list">
+                <thead><tr><th>City</th><th className="loc-num">Players</th><th className="loc-num">Fields</th><th className="loc-num">≤ 5 mi</th></tr></thead>
+                <tbody>
+                  {data.cities.map((c) => (
+                    <tr key={c.id} className="lm-row" tabIndex={0} onClick={() => onCity(c.id)}
+                      onKeyDown={(e) => { if (e.key === "Enter") onCity(c.id); }}>
+                      <td>{c.name}</td>
+                      <td className="loc-num">{int(c.players)}</td>
+                      <td className="loc-num">{int(c.fields)}</td>
+                      <td className="loc-num">{c.players ? pct(c.coverage[5], c.players) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="lm-note">&ldquo;≤ 5 mi&rdquo; is the share of a city&apos;s players with an active field within 5 miles. — means no players there yet.</div>
+            </div>
+          ) : (
+            <>
+              <div className="lm-pcard" data-testid="map-coverage">
+                <div className="lm-ptitle">Coverage at {reach} mi</div>
+                {city.players === 0 ? (
+                  <div className="lm-empty">{NO_PLAYERS}</div>
+                ) : (
+                  <>
+                    <div className="lm-big">{pct(covered, city.players)}</div>
+                    <div className="lm-sub">{int(covered)} of {int(city.players)} players have a field within {reach} mi</div>
+                    <div className="lm-sub">{int(city.players - covered)} with no field in reach</div>
+                  </>
+                )}
+                {city.unplaced > 0 && <div className="lm-note">{int(city.unplaced)} more in this market have no coordinates to place.</div>}
+              </div>
+
+              {(selField || selZip) && (
+                <div className="lm-pcard lm-detail" data-testid="map-detail">
+                  <div className="lm-ptitle-row">
+                    <div className="lm-ptitle">{selField ? selField.title : `Zip ${selZip!.zip}`}</div>
+                    <button type="button" className="loc-btn lm-clear" onClick={() => setSelected(null)}>Clear</button>
+                  </div>
+                  {selField ? (
+                    <div className="lm-sub">{city.players === 0 ? NO_PLAYERS : `${int(selField.reach[reach])} ${selField.reach[reach] === 1 ? "player" : "players"} within ${reach} mi`}</div>
+                  ) : (
+                    <>
+                      <div className="lm-sub">{int(selZip!.players)} {selZip!.players === 1 ? "player" : "players"}</div>
+                      <div className="lm-sub">Nearest field: {selZip!.nearestFieldId != null ? fieldById.get(selZip!.nearestFieldId)?.title ?? `Field ${selZip!.nearestFieldId}` : "none"} · {mi(selZip!.nearestFieldMi)}</div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <div className="lm-pcard">
+                <div className="lm-ptitle">Fields</div>
+                {fieldsSorted.length === 0 ? (
+                  <div className="lm-empty">No active fields here (none with a match in the last {data.activeWindowDays} days or upcoming).</div>
+                ) : (
+                  <table className="lm-list" data-testid="map-fields">
+                    <thead><tr><th>Field</th><th className="loc-num">Within {reach} mi</th></tr></thead>
+                    <tbody>
+                      {fieldsSorted.map((f) => (
+                        <tr key={f.id} className={"lm-row" + (highlight === f.id ? " lm-row-on" : "")} tabIndex={0}
+                          onClick={() => setHighlight(highlight === f.id ? null : f.id)}
+                          onKeyDown={(e) => { if (e.key === "Enter") setHighlight(highlight === f.id ? null : f.id); }}>
+                          <td>{f.title}</td><td className="loc-num">{int(f.reach[reach])}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              <div className="lm-pcard">
+                <div className="lm-ptitle">Biggest gaps</div>
+                {city.players === 0 ? (
+                  <div className="lm-empty">{NO_PLAYERS}</div>
+                ) : gaps.length === 0 ? (
+                  <div className="lm-empty">Every zip here has a field within {reach} mi.</div>
+                ) : (
+                  <table className="lm-list" data-testid="map-gaps">
+                    <thead><tr><th>Zip</th><th className="loc-num">Players</th><th className="loc-num">Nearest field</th></tr></thead>
+                    <tbody>
+                      {gaps.map((z) => (
+                        <tr key={z.zip} className={"lm-row" + (selZip?.zip === z.zip ? " lm-row-on" : "")} tabIndex={0}
+                          onClick={() => { setSelected({ kind: "zip", zip: z.zip }); setHighlight(null); }}
+                          onKeyDown={(e) => { if (e.key === "Enter") setSelected({ kind: "zip", zip: z.zip }); }}>
+                          <td>{z.zip}</td><td className="loc-num">{int(z.players)}</td><td className="loc-num">{mi(z.nearestFieldMi)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="loc-foot">
+        Straight-line distance. Active field = not deleted, with a match in the last {data.activeWindowDays} days or upcoming; coordinates from the synced match records.
+        {data.waitlistPlayers + data.unidentifiedPlayers > 0 && ` Not on the map: ${int(data.waitlistPlayers)} outside every city radius, ${int(data.unidentifiedPlayers)} with an unidentified zip (see Overview).`}
+        {data.badFields.length > 0 && ` Not placed — coordinates invalid in MatchDay: ${data.badFields.map((f) => `${f.title} (${f.id})`).join(", ")}.`}
+      </div>
+    </div>
+  );
+}
+
+const CSS = `
+.lm-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 20px;border-bottom:1px solid var(--line)}
+.lm-bar-title{font-size:15px;font-weight:900;color:var(--forest)}
+.lm-reach{display:flex;align-items:center;gap:8px;margin-left:auto}
+.lm-seg{display:inline-flex;background:var(--slot);border:1px solid var(--line);border-radius:10px;padding:3px}
+.lm-seg-btn{border:0;background:transparent;font:inherit;font-size:11.5px;font-weight:800;color:var(--muted);padding:6px 12px;border-radius:8px;cursor:pointer}
+.lm-seg-on{background:#fff;color:var(--forest);box-shadow:0 1px 3px rgba(0,43,34,.13)}
+.lm-body{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:0}
+.lm-left{min-width:0;border-right:1px solid var(--line)}
+.lm-map{height:560px;position:relative;z-index:0}
+.lm-map-loading{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px;background:var(--slot)}
+.loc-leaflet{height:100%;width:100%}
+.lm-legend{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;padding:10px 16px;font-size:12px;color:var(--ink);border-top:1px solid var(--line);background:#FAFCFA}
+.lm-legend-note{color:var(--muted);flex-basis:100%}
+.lm-dot{display:inline-block;width:12px;height:12px;border-radius:50%;border:2px solid;margin-right:6px;vertical-align:-2px}
+.lm-dot-gap{border-style:dashed}
+.lm-pin{display:inline-block;width:10px;height:10px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:#003326;margin-right:7px;vertical-align:-1px}
+.lm-ring{display:inline-block;width:14px;height:14px;border-radius:50%;border:1.5px solid rgba(0,51,38,.55);background:rgba(0,51,38,.06);margin-right:6px;vertical-align:-3px}
+.lm-panel{display:flex;flex-direction:column;gap:0;min-width:0}
+.lm-pcard{padding:14px 16px;border-bottom:1px solid var(--line)}
+.lm-pcard:last-child{border-bottom:0}
+.lm-ptitle{font-size:10px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+.lm-ptitle-row{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.lm-ptitle-row .lm-ptitle{text-transform:none;letter-spacing:0;font-size:13px;color:var(--forest);margin:0}
+.lm-clear{padding:4px 10px;font-size:11px}
+.lm-detail{background:#F6FBF8}
+.lm-big{font-size:28px;font-weight:900;color:var(--forest);letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+.lm-sub{font-size:12.5px;color:var(--ink);margin-top:4px}
+.lm-empty{font-size:12.5px;color:var(--muted)}
+.lm-note{font-size:11.5px;color:var(--muted);margin-top:8px}
+.lm-list{width:100%;border-collapse:collapse;font-size:12.5px}
+.lm-list th{text-align:left;font-size:9.5px;font-weight:900;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);padding:6px 6px;border-bottom:1px solid var(--line)}
+.lm-list td{padding:7px 6px;border-bottom:1px solid #EEF2EC}
+.lm-row{cursor:pointer}
+.lm-row:hover td{background:var(--slot)}
+.lm-row:focus-visible{outline:2px solid #2CDB87;outline-offset:-2px}
+.lm-row-on td{background:#E3F7EC}
+.loc-tip{font:700 11px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;color:#0d1f18;border-radius:6px;padding:3px 6px}
+.loc-tip-zip{background:transparent;border:0;box-shadow:none;color:#0d1f18}
+.loc-tip-zip::before{display:none}
+.loc-pin-wrap{background:transparent;border:0}
+@media (max-width:900px){
+  .lm-body{grid-template-columns:1fr}
+  .lm-left{border-right:0;border-bottom:1px solid var(--line)}
+  .lm-map{height:420px}
+  .lm-reach{margin-left:0}
+}
+`;

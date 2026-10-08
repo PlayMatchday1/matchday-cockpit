@@ -171,6 +171,8 @@ is("authenticateMatchOpsRead is imported by EXACTLY the 22 intended routes", imp
    * as the player reads above; this gate refuses a city-confined account outright, which is what
    * this page wants since it is not one of the confined six. */
   "matchops/locations/route.ts",
+  // …and its Map tab: the same table plus mdapi_matches field coordinates. Read only, Supabase only.
+  "matchops/locations/map/route.ts",
   /* …and the sync that writes that table. CRON_SECRET for the schedule; a MANUAL run needs Match
    * Ops read. It READS MatchDay and writes only Clubhouse's table, so no write flag on top. */
   "sync/player-areas/route.ts",
