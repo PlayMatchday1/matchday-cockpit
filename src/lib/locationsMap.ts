@@ -27,6 +27,7 @@ type ByReach = Record<Reach, number>;
 
 export type MapPlayerRow = {
   zip: string | null;
+  area_label: string | null;
   lat: number | null;
   lng: number | null;
   verdict: "in_market" | "waitlist" | "unidentified";
@@ -54,10 +55,24 @@ export type MapCity = AreaCity & {
   players: number; fields: number; coverage: ByReach;
   unplaced: number; // in this city's market but no lat/lng to place (unidentified zips have no city)
 };
+/** All-cities view: one bubble per (verdict, zip) across the country — in-market AND outside
+ *  coverage. Same rounding and averaging as MapZip. nearestCity is the nearest US city CENTRE. */
+export type NationalZip = {
+  key: string; zip: string; label: string | null; verdict: "in_market" | "waitlist";
+  lat: number; lng: number; players: number; nearestCityId: number | null; nearestCityMi: number | null;
+};
+/** Outside coverage grouped by place (area label, falling back to zip). lat/lng = the players'
+ *  average (rounded), so a row can zoom the map to its bubble. */
+export type OutsidePlace = {
+  place: string; players: number; nearestCityId: number | null; nearestCityMi: number | null;
+  lat: number; lng: number; zipKeys: string[];
+};
 export type LocationsMap = {
   cities: MapCity[];
   fields: MapField[];
   zips: MapZip[];
+  national: NationalZip[];
+  outside: OutsidePlace[];
   badFields: { id: number; title: string; cityId: number | null; lat: unknown; lng: unknown }[];
   waitlistPlayers: number;
   unidentifiedPlayers: number;
@@ -98,6 +113,46 @@ export function buildLocationsMap(input: {
     }
     fieldsRaw.push({ id: s.fieldId, title: s.title ?? `Field ${s.fieldId}`, cityId: s.cityId, lat: s.lat, lng: s.lng as number });
   }
+
+  // --- national bubbles + outside places: every placed player, in market or not ---
+  const nearestCity = (lat: number, lng: number) => {
+    let best: { id: number; mi: number } | null = null;
+    for (const c of input.cities) {
+      const d = milesBetween(lat, lng, c.lat, c.lng);
+      if (!best || d < best.mi) best = { id: c.id, mi: d };
+    }
+    return best;
+  };
+  type Acc = { sLat: number; sLng: number; n: number; labels: Map<string, number>; zipKeys: Set<string> };
+  const add = (m: Map<string, Acc>, key: string, p: MapPlayerRow, zipKey: string) => {
+    const g = m.get(key) ?? { sLat: 0, sLng: 0, n: 0, labels: new Map(), zipKeys: new Set() };
+    g.sLat += p.lat as number; g.sLng += p.lng as number; g.n++;
+    if (p.area_label) g.labels.set(p.area_label, (g.labels.get(p.area_label) ?? 0) + 1);
+    g.zipKeys.add(zipKey);
+    m.set(key, g);
+  };
+  const topLabel = (g: Acc) => [...g.labels].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  const nat = new Map<string, Acc>();
+  const out = new Map<string, Acc>();
+  for (const p of input.players) {
+    if (p.verdict === "unidentified" || !validCoord(p.lat, p.lng)) continue;
+    const key = `${p.verdict}|${p.zip ?? "No zip"}`;
+    add(nat, key, p, key);
+    if (p.verdict === "waitlist") add(out, p.area_label ?? p.zip ?? "No zip", p, key);
+  }
+  const national: NationalZip[] = [...nat].map(([key, g]) => {
+    const [verdict, zip] = key.split("|") as ["in_market" | "waitlist", string];
+    const lat = g.sLat / g.n, lng = g.sLng / g.n;
+    const nc = nearestCity(lat, lng);
+    return { key, zip, label: topLabel(g), verdict, lat: r2(lat), lng: r2(lng), players: g.n,
+      nearestCityId: nc?.id ?? null, nearestCityMi: nc ? r1(nc.mi) : null };
+  }).sort((a, b) => b.players - a.players || a.key.localeCompare(b.key));
+  const outside: OutsidePlace[] = [...out].map(([place, g]) => {
+    const lat = g.sLat / g.n, lng = g.sLng / g.n;
+    const nc = nearestCity(lat, lng);
+    return { place, players: g.n, nearestCityId: nc?.id ?? null, nearestCityMi: nc ? r1(nc.mi) : null,
+      lat: r2(lat), lng: r2(lng), zipKeys: [...g.zipKeys] };
+  }).sort((a, b) => b.players - a.players || a.place.localeCompare(b.place));
 
   // --- zips: in-market players with coordinates, grouped by (city, zip) ---
   let waitlistPlayers = 0, unidentifiedPlayers = 0;
@@ -152,5 +207,5 @@ export function buildLocationsMap(input: {
       coverage, unplaced: unplaced.get(c.id) ?? 0 };
   }).sort((a, b) => b.players - a.players || b.fields - a.fields || a.name.localeCompare(b.name));
 
-  return { cities, fields, zips, badFields, waitlistPlayers, unidentifiedPlayers, activeWindowDays: ACTIVE_WINDOW_DAYS };
+  return { cities, fields, zips, national, outside, badFields, waitlistPlayers, unidentifiedPlayers, activeWindowDays: ACTIVE_WINDOW_DAYS };
 }

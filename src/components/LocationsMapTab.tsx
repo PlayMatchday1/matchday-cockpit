@@ -10,7 +10,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { REACHES, type LocationsMap, type MapField, type MapZip, type Reach } from "@/lib/locationsMap";
+import { REACHES, type LocationsMap, type MapField, type MapZip, type NationalZip, type Reach } from "@/lib/locationsMap";
 import type { Selection } from "@/components/LocationsLeaflet";
 
 // Leaflet needs `window` on import — client-only, and only once this tab is opened.
@@ -25,6 +25,10 @@ const int = (n: number) => n.toLocaleString("en-US");
 const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "—");
 const mi = (n: number | null) => (n == null ? "—" : `${n < 10 ? n.toFixed(1) : Math.round(n)} mi`);
 const NO_PLAYERS = "No players have set a location here yet.";
+type NatFilter = "all" | "in_market" | "waitlist";
+const NAT_FILTERS: { key: NatFilter; label: string }[] = [
+  { key: "all", label: "All players" }, { key: "in_market", label: "In market" }, { key: "waitlist", label: "Outside coverage" },
+];
 
 export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
   cityId: number | null;
@@ -36,6 +40,9 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
   const [reach, setReach] = useState<Reach>(5);
   const [selected, setSelected] = useState<Selection>(null);
   const [highlight, setHighlight] = useState<number | null>(null);
+  const [natFilter, setNatFilter] = useState<NatFilter>("all");
+  const [selNat, setSelNat] = useState<string | null>(null);
+  const [focus, setFocus] = useState<{ lat: number; lng: number; zoom: number; n: number } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -55,7 +62,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
   useEffect(() => { void load(); }, [load, reloadKey]);
 
   // A new city starts with nothing selected.
-  useEffect(() => { setSelected(null); setHighlight(null); }, [cityId]);
+  useEffect(() => { setSelected(null); setHighlight(null); setSelNat(null); setFocus(null); }, [cityId]);
 
   const city = data?.cities.find((c) => c.id === cityId) ?? null;
   const fields = useMemo(() => (city ? (data?.fields ?? []).filter((f) => f.cityId === city.id) : []), [data, city]);
@@ -63,6 +70,10 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
   const fieldById = useMemo(() => new Map((data?.fields ?? []).map((f) => [f.id, f])), [data]);
   // Pills keep the city table's own order (by id), like Master Schedule; the list ranks by players.
   const pillCities = useMemo(() => [...(data?.cities ?? [])].sort((a, b) => a.id - b.id), [data]);
+  const cityById = useMemo(() => new Map((data?.cities ?? []).map((c) => [c.id, c])), [data]);
+  const national = useMemo(() => (data?.national ?? []).filter((z) => natFilter === "all" || z.verdict === natFilter), [data, natFilter]);
+  // A selection the filter has hidden is dropped, so the detail card never describes an absent bubble.
+  useEffect(() => { if (selNat && !national.some((z) => z.key === selNat)) setSelNat(null); }, [national, selNat]);
 
   if (error && !data) {
     return <div className="loc-card"><div className="loc-state">{error} <button type="button" className="loc-btn" onClick={() => void load()}>Retry</button></div></div>;
@@ -77,6 +88,8 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
   const covered = city ? city.coverage[reach] : 0;
   const selField: MapField | null = selected?.kind === "field" ? fieldById.get(selected.id) ?? null : null;
   const selZip: MapZip | null = selected?.kind === "zip" ? zips.find((z) => z.zip === selected.zip) ?? null : null;
+  const selNational: NationalZip | null = selNat ? data.national.find((z) => z.key === selNat) ?? null : null;
+  const cityLabel = (id: number | null) => (id == null ? "—" : cityById.get(id)?.name ?? `City ${id}`);
 
   return (
     <div className="loc-card" data-testid="loc-map-tab">
@@ -91,6 +104,20 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
             onClick={() => onCity(c.id)}>{c.name}</button>
         ))}
       </div>
+
+      {!city && (
+        <div className="lm-bar">
+          <div className="lm-reach" role="group" aria-label="Players shown" style={{ marginLeft: 0 }}>
+            <span className="loc-control-label">Show</span>
+            <div className="lm-seg">
+              {NAT_FILTERS.map((f) => (
+                <button type="button" key={f.key} aria-pressed={natFilter === f.key} data-testid={`nat-${f.key}`}
+                  className={"lm-seg-btn" + (natFilter === f.key ? " lm-seg-on" : "")} onClick={() => setNatFilter(f.key)}>{f.label}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {city && (
         <div className="lm-bar">
@@ -113,7 +140,9 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
           <div className="lm-map" data-testid="loc-map">
             <LocationsLeaflet cities={data.cities} city={city} fields={fields} zips={zips} reach={reach}
               selected={selected} highlightFieldId={highlight}
-              onCity={(id) => onCity(id)} onSelect={(s) => { setSelected(s); setHighlight(null); }} />
+              onCity={(id) => onCity(id)} onSelect={(s) => { setSelected(s); setHighlight(null); }}
+              national={national} nationalAll={data.national} selectedNational={selNat}
+              onSelectNational={setSelNat} focus={focus} />
           </div>
           <div className="lm-legend" data-testid="map-legend">
             {city ? (
@@ -126,8 +155,11 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
               </>
             ) : (
               <>
-                <span><i className="lm-dot" style={{ background: "rgba(0,51,38,.28)", borderColor: "#003326" }} />City, sized by players who have set a location there</span>
-                <span className="lm-legend-note">Click a circle, a pill or a row to open a city.</span>
+                <span><i className="lm-dot" style={{ background: IN_REACH, borderColor: "#04583A" }} />In a market</span>
+                <span><i className="lm-dot lm-dot-gap" style={{ background: "rgba(235,104,52,.22)", borderColor: GAP }} />Outside every city&apos;s radius (dashed)</span>
+                <span><i className="lm-dot" style={{ background: "rgba(0,51,38,.28)", borderColor: "#003326" }} />City, sized by its players</span>
+                <span><i className="lm-ring" />City coverage radius</span>
+                <span className="lm-legend-note">Bubble = a zip, sized by players and placed at their average location (rounded to about 1 km). Overlapping bubbles of the same colour merge into one with the combined count and split as you zoom in. Click a city circle, pill or row to open a city.</span>
               </>
             )}
           </div>
@@ -135,6 +167,18 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
 
         <div className="lm-panel">
           {!city ? (
+            <>
+            {selNational && (
+              <div className="lm-pcard lm-detail" data-testid="map-nat-detail">
+                <div className="lm-ptitle-row">
+                  <div className="lm-ptitle">Zip {selNational.zip}</div>
+                  <button type="button" className="loc-btn lm-clear" onClick={() => setSelNat(null)}>Clear</button>
+                </div>
+                {selNational.label && <div className="lm-sub">{selNational.label}</div>}
+                <div className="lm-sub">{int(selNational.players)} {selNational.players === 1 ? "player" : "players"} · {selNational.verdict === "in_market" ? "in market" : "outside coverage"}</div>
+                <div className="lm-sub">Nearest city: {cityLabel(selNational.nearestCityId)} · {mi(selNational.nearestCityMi)}</div>
+              </div>
+            )}
             <div className="lm-pcard">
               <div className="lm-ptitle">Pick a city</div>
               <table className="lm-list" data-testid="map-city-list">
@@ -153,6 +197,31 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
               </table>
               <div className="lm-note">&ldquo;≤ 5 mi&rdquo; is the share of a city&apos;s players with an active field within 5 miles. — means no players there yet.</div>
             </div>
+            <div className="lm-pcard">
+              <div className="lm-ptitle">Outside coverage</div>
+              {data.outside.length === 0 ? (
+                <div className="lm-empty" data-testid="map-outside-empty">No players outside coverage yet</div>
+              ) : (
+                <table className="lm-list" data-testid="map-outside">
+                  <thead><tr><th>Place</th><th className="loc-num">Players</th><th>Nearest city</th></tr></thead>
+                  <tbody>
+                    {data.outside.map((o) => (
+                      <tr key={o.place} className={"lm-row" + (selNational && o.zipKeys.includes(selNational.key) ? " lm-row-on" : "")} tabIndex={0}
+                        onClick={() => {
+                          if (natFilter === "in_market") setNatFilter("all");
+                          setFocus({ lat: o.lat, lng: o.lng, zoom: 10, n: Date.now() });
+                          setSelNat(o.zipKeys[0] ?? null);
+                        }}
+                        onKeyDown={(e) => { if (e.key === "Enter") { setFocus({ lat: o.lat, lng: o.lng, zoom: 10, n: Date.now() }); setSelNat(o.zipKeys[0] ?? null); } }}>
+                        <td>{o.place}</td><td className="loc-num">{int(o.players)}</td>
+                        <td>{cityLabel(o.nearestCityId)} · {mi(o.nearestCityMi)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            </>
           ) : (
             <>
               <div className="lm-pcard" data-testid="map-coverage">
@@ -234,7 +303,8 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
 
       <div className="loc-foot">
         Straight-line distance. Active field = not deleted, with a match in the last {data.activeWindowDays} days or upcoming; coordinates from the synced match records.
-        {data.waitlistPlayers + data.unidentifiedPlayers > 0 && ` Not on the map: ${int(data.waitlistPlayers)} outside every city radius, ${int(data.unidentifiedPlayers)} with an unidentified zip (see Overview).`}
+        {city && data.waitlistPlayers > 0 && ` Players outside every city's radius are on the All cities view.`}
+        {data.unidentifiedPlayers > 0 && ` Not on the map: ${int(data.unidentifiedPlayers)} with an unidentified zip (no location; see Overview).`}
         {data.badFields.length > 0 && ` Not placed — coordinates invalid in MatchDay: ${data.badFields.map((f) => `${f.title} (${f.id})`).join(", ")}.`}
       </div>
     </div>
@@ -281,6 +351,7 @@ const CSS = `
 .loc-tip{font:700 11px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;color:#0d1f18;border-radius:6px;padding:3px 6px}
 .loc-tip-zip{background:transparent;border:0;box-shadow:none;color:#0d1f18}
 .loc-tip-zip::before{display:none}
+.loc-tip-count{font-size:10.5px;color:#fff;text-shadow:0 0 2px rgba(0,0,0,.45)}
 .loc-pin-wrap{background:transparent;border:0}
 @media (max-width:900px){
   .lm-body{grid-template-columns:1fr}
