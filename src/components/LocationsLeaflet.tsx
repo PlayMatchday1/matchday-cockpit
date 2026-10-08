@@ -4,65 +4,72 @@
 // ONLY through next/dynamic with ssr:false (LocationsMapTab): Leaflet touches `window` on import.
 //
 // Draws what the server already aggregated (/api/matchops/locations/map). Nothing here computes a
-// distance or a coverage number: zip.inReach[reach] is the server's exact-distance verdict.
+// distance or a coverage number: zip.inReach / zip.nearby are the server's exact-distance results.
+//
+// THREE MARKS THAT CANNOT BE CONFUSED (Ryan, 2026-10-08):
+//   players  a ROUND bubble with a soccer-player figure; the count under it when 2 or more.
+//            Green solid = a field in reach (city view) / in a market; orange dashed = none / outside.
+//   fields   a PIN with a soccer ball in its head — never round, so never read as players.
+//   cities   a dark green NAME TAG with a pointer (All cities view); the count sits in a player badge.
 
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { useEffect, useMemo, useState } from "react";
-import { Circle, CircleMarker, MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
+import { Circle, MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import type { MapCity, MapField, MapZip, NationalZip, Reach } from "@/lib/locationsMap";
+import { bubbleD, bubbleHtml, cityTagHtml, pinHtml, type Dir } from "@/components/locationsMarks";
 
 export const IN_REACH = "#1baf7a";
 export const GAP = "#eb6834";
 const FOREST = "#003326";
 const MI_TO_M = 1609.344;
 
-/* THE ALL-CITIES VIEW (Ryan, 2026-10-08): ONE solid green bubble per city at its centre, sized by
- * players, count inside, name beside; a city with no players is a small hollow marker with its name.
- * In-market players never appear as their own bubbles at this zoom — they roll up into their own
- * city, never a neighbour's. Zip bubbles appear only in the city view, or here once the map is
- * zoomed to DEEP_ZOOM (about one metro filling the map), and even then merge only within a city.
- * Outside-coverage players stay orange dashed bubbles, count inside, merging only with each other. */
+/* THE ALL-CITIES VIEW: one name tag per city; in-market players roll up into their own city's tag,
+ * never a neighbour's. Zip bubbles appear only in the city view, or here from DEEP_ZOOM (about one
+ * metro filling the map), merging only within a city. Outside-coverage players are orange dashed
+ * bubbles, merging only with each other. */
 export const DEEP_ZOOM = 9;
 export type NatFilter = "all" | "in_market" | "waitlist";
-// Kept small: Austin and San Antonio sit ~30px apart at the national fit, and bigger bubbles buried
-// one city's label under the other's bubble (seen in a browser).
-const cityBubbleR = (n: number) => Math.min(24, 8 + 4 * Math.sqrt(n));
-const HOLLOW_R = 5;
-
-const countIcon = (n: number, cls: string) => L.divIcon({
-  className: "loc-count-wrap",
-  html: `<span class="loc-count ${cls}">${n}</span>`,
-  iconSize: [0, 0],
-});
 
 /** A zip bubble is selected by its KEY: a no-zip bubble is a grid cell, and has no zip. */
 export type Selection = { kind: "field"; id: number } | { kind: "zip"; key: string } | null;
 
+const players = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "player" : "players"}`;
+
+function bubbleIcon(n: number, tone: "in" | "gap", selected: boolean) {
+  const d = bubbleD(n);
+  return L.divIcon({
+    className: "loc-pb-wrap",
+    html: bubbleHtml(n, tone, selected),
+    iconSize: [d, d],
+    iconAnchor: [d / 2, d / 2],
+    tooltipAnchor: [0, -d / 2],
+  });
+}
+
 const pinIcon = (on: boolean) => L.divIcon({
   className: "loc-pin-wrap",
-  html: `<svg width="22" height="30" viewBox="0 0 22 30" aria-hidden="true"><path d="M11 29s9-9.6 9-17A9 9 0 0 0 2 12c0 7.4 9 17 9 17z" fill="${on ? "#0F5B44" : FOREST}" stroke="#fff" stroke-width="2"/><circle cx="11" cy="12" r="3.4" fill="#fff"/></svg>`,
-  iconSize: [22, 30],
-  iconAnchor: [11, 29],
-  tooltipAnchor: [0, -26],
+  html: pinHtml(on),
+  iconSize: [26, 34],
+  iconAnchor: [13, 33],
+  tooltipAnchor: [0, -30],
 });
 
-type Dir = "right" | "left" | "top" | "bottom";
-// Leaflet anchors a CircleMarker's tooltip at the CENTRE plus this offset (and its CSS adds ~6px for
-// the arrow), so the offset carries the radius — otherwise a big circle swallows its own label.
-const offsetFor = (d: Dir, r: number): [number, number] =>
-  d === "right" ? [r + 4, 0] : d === "left" ? [-(r + 4), 0] : d === "top" ? [0, -(r + 2)] : [0, r + 2];
+const cityTagIcon = (c: MapCity, dir: Dir, showCount: boolean) => L.divIcon({
+  className: "loc-ct-wrap",
+  html: cityTagHtml(c.name, showCount ? c.players : null, dir),
+  iconSize: [0, 0],
+  iconAnchor: [0, 0],
+});
+const tagWidth = (c: MapCity, showCount: boolean) => c.name.length * 7 + 22 + (showCount ? 16 + String(c.players).length * 7 + 14 : 0);
 
-/* CITY LABEL PLACEMENT, in PIXELS. Texas puts four cities within a few degrees, and at the
- * all-cities zoom any fixed rule collides somewhere (checked in a browser: a lat/lng rule overlapped
- * Austin with DFW and El Paso; a one-pass greedy boxed El Paso in behind DFW). So: every label
- * starts on the right, then for a few passes each city re-picks whichever of right / left / top /
- * bottom overlaps least with every OTHER label's current box and every circle. Re-run on every
- * zoom and resize. Label sizes are estimates (~7.2px per char plus padding, erring wide). */
-function CityLabelLayout({ cities, radius, obstacles, onLayout }: {
-  cities: MapCity[]; radius: (c: MapCity) => number;
-  /** Bubbles on the map: a label must not sit on one and hide its count. */
-  obstacles: NationalZip[];
+/* CITY TAG PLACEMENT, in PIXELS. Texas puts four cities within a few degrees; at the national fit
+ * Austin and San Antonio are ~13px apart. Each tag can sit above, below, left or right of its city
+ * (the pointer always touches the city's point). A few passes: every city re-picks the side whose
+ * box overlaps least with the other tags, every city point and every bubble, and a side that would
+ * sit nearer another city than its own is penalised so a tag never reads as its neighbour's. */
+function CityTagLayout({ cities, showCount, obstacles, onLayout }: {
+  cities: MapCity[]; showCount: (c: MapCity) => boolean; obstacles: NationalZip[];
   onLayout: (d: Record<number, Dir>) => void;
 }) {
   const map = useMap();
@@ -72,39 +79,35 @@ function CityLabelLayout({ cities, radius, obstacles, onLayout }: {
     const run = () => {
       const pts = cities.map((c) => {
         const p = map.latLngToContainerPoint([c.lat, c.lng]);
-        const r = radius(c);
-        const w = c.name.length * 7.2 + 20, h = 24;
-        // The same geometry offsetFor produces: centre + offset + the 6px arrow margin.
+        const w = tagWidth(c, showCount(c)), h = 26, g = 8; // g = pointer length
         const boxes: Record<Dir, Box> = {
-          right: { x: p.x + r + 10, y: p.y - h / 2, w, h },
-          left: { x: p.x - r - 10 - w, y: p.y - h / 2, w, h },
-          top: { x: p.x - w / 2, y: p.y - r - 8 - h, w, h },
-          bottom: { x: p.x - w / 2, y: p.y + r + 8, w, h },
+          top: { x: p.x - w / 2, y: p.y - g - h, w, h },
+          bottom: { x: p.x - w / 2, y: p.y + g, w, h },
+          right: { x: p.x + g, y: p.y - h / 2, w, h },
+          left: { x: p.x - g - w, y: p.y - h / 2, w, h },
         };
-        return { id: c.id, cx: p.x, cy: p.y, circle: { x: p.x - r, y: p.y - r, w: 2 * r, h: 2 * r } as Box, boxes };
+        return { id: c.id, cx: p.x, cy: p.y, dot: { x: p.x - 4, y: p.y - 4, w: 8, h: 8 } as Box, boxes };
       });
       const bubbles: Box[] = obstacles.map((z) => {
         const p = map.latLngToContainerPoint([z.lat, z.lng]);
-        const r = natRadius(z.players);
+        const r = bubbleD(z.players) / 2;
         return { x: p.x - r, y: p.y - r, w: 2 * r, h: 2 * r };
       });
-      const dir: Record<number, Dir> = Object.fromEntries(pts.map((q) => [q.id, "right" as Dir]));
-      for (let pass = 0; pass < 4; pass++) {
+      const dir: Record<number, Dir> = Object.fromEntries(pts.map((q) => [q.id, "top" as Dir]));
+      for (let pass = 0; pass < 5; pass++) {
         let changed = false;
         for (const q of pts) {
           let best: Dir = dir[q.id], bestCost = Infinity;
-          for (const d of ["right", "left", "top", "bottom"] as Dir[]) {
+          for (const d of ["top", "right", "left", "bottom"] as Dir[]) {
+            const b = q.boxes[d];
             let cost = 0;
-            for (const b of bubbles) cost += area(q.boxes[d], b);
-            // A label must read as its OWN city's: if its centre is nearer another city than its
-            // own, penalise it (seen: "Austin" placed under San Antonio's bubble at national zoom).
-            const bx = q.boxes[d].x + q.boxes[d].w / 2, by = q.boxes[d].y + q.boxes[d].h / 2;
-            const own = Math.hypot(bx - q.cx, by - q.cy);
-            if (pts.some((o) => o.id !== q.id && Math.hypot(bx - o.cx, by - o.cy) < own)) cost += 2000;
+            for (const bb of bubbles) cost += area(b, bb);
             for (const o of pts) {
-              cost += area(q.boxes[d], o.circle);
-              if (o.id !== q.id) cost += area(q.boxes[d], o.boxes[dir[o.id]]);
+              cost += area(b, o.dot);
+              if (o.id !== q.id) cost += area(b, o.boxes[dir[o.id]]);
             }
+            const bx = b.x + b.w / 2, by = b.y + b.h / 2, own = Math.hypot(bx - q.cx, by - q.cy);
+            if (pts.some((o) => o.id !== q.id && Math.hypot(bx - o.cx, by - o.cy) < own)) cost += 2000;
             if (cost < bestCost - 0.5) { best = d; bestCost = cost; }
           }
           if (best !== dir[q.id]) { dir[q.id] = best; changed = true; }
@@ -116,7 +119,7 @@ function CityLabelLayout({ cities, radius, obstacles, onLayout }: {
     run();
     map.on("zoomend resize", run);
     return () => { map.off("zoomend resize", run); };
-  }, [map, cities, radius, obstacles, onLayout]);
+  }, [map, cities, showCount, obstacles, onLayout]);
   return null;
 }
 
@@ -126,28 +129,28 @@ function ZoomWatch({ onZoom }: { onZoom: (z: number) => void }) {
   return null;
 }
 
-/* NATIONAL BUBBLES, CLUSTERED IN PIXELS. At national zoom neighbouring zips sit on top of each
- * other, so after every zoom/resize bubbles of the SAME verdict whose circles would overlap merge
- * into one, at the player-weighted centre, sized by the combined count. Never across verdicts — a
- * merged bubble must not turn an outside-coverage player green. Clicking a merged bubble zooms to
- * its members, which splits it. Size is an absolute scale so a bubble means the same at any zoom. */
-export const natRadius = (n: number) => Math.min(28, 6 + 5 * Math.sqrt(n));
-type Cluster = { key: string; verdict: NationalZip["verdict"]; cityId: number | null; lat: number; lng: number; players: number; members: NationalZip[] };
+/* PLAYER BUBBLES, CLUSTERED IN PIXELS — both views. After every zoom/resize, bubbles in the same
+ * GROUP whose circles would overlap merge into one at the player-weighted centre with the combined
+ * count, so a busy map never hides one count under another. Groups: national = kind + city (never
+ * across cities, never in-market with outside coverage); city view = green vs orange at the current
+ * reach (a merged bubble never mixes players with and without a field in reach). Clicking a merged
+ * bubble zooms to its members, which splits it; a single bubble is selected. */
+export type BubbleItem = { key: string; group: string; tone: "in" | "gap"; lat: number; lng: number; players: number };
+type Cluster = { key: string; group: string; tone: "in" | "gap"; lat: number; lng: number; players: number; members: BubbleItem[] };
 
-function NationalClusters({ bubbles, selectedKey, onSelect }: {
-  bubbles: NationalZip[]; selectedKey: string | null; onSelect: (key: string) => void;
+function ClusteredBubbles({ items, selectedKey, onSelect }: {
+  items: BubbleItem[]; selectedKey: string | null; onSelect: (key: string) => void;
 }) {
   const map = useMap();
   const [clusters, setClusters] = useState<Cluster[]>([]);
   useEffect(() => {
     const run = () => {
       const out: (Cluster & { px: number; py: number })[] = [];
-      for (const b of [...bubbles].sort((x, y) => y.players - x.players || x.key.localeCompare(y.key))) {
+      for (const b of [...items].sort((x, y) => y.players - x.players || x.key.localeCompare(y.key))) {
         const p = map.latLngToContainerPoint([b.lat, b.lng]);
-        // Same verdict AND same city (null for outside coverage): two cities never share a bubble.
-        const hit = out.find((c) => c.verdict === b.verdict && c.cityId === b.cityId
-          && Math.hypot(c.px - p.x, c.py - p.y) < natRadius(c.players) + natRadius(b.players) - 2);
-        if (!hit) { out.push({ key: b.key, verdict: b.verdict, cityId: b.cityId, lat: b.lat, lng: b.lng, players: b.players, members: [b], px: p.x, py: p.y }); continue; }
+        const hit = out.find((c) => c.group === b.group
+          && Math.hypot(c.px - p.x, c.py - p.y) < (bubbleD(c.players) + bubbleD(b.players)) / 2 - 2);
+        if (!hit) { out.push({ key: b.key, group: b.group, tone: b.tone, lat: b.lat, lng: b.lng, players: b.players, members: [b], px: p.x, py: p.y }); continue; }
         const n = hit.players + b.players;
         hit.lat = (hit.lat * hit.players + b.lat * b.players) / n;
         hit.lng = (hit.lng * hit.players + b.lng * b.players) / n;
@@ -162,28 +165,27 @@ function NationalClusters({ bubbles, selectedKey, onSelect }: {
     run();
     map.on("zoomend resize", run);
     return () => { map.off("zoomend resize", run); };
-  }, [map, bubbles]);
+  }, [map, items]);
 
   return (
     <>
       {clusters.map((c) => {
         const merged = c.members.length > 1;
         const sel = !merged && c.members[0].key === selectedKey;
-        const style = c.verdict === "in_market"
-          ? { color: "#04583A", weight: sel ? 3.5 : 2, dashArray: "", fillColor: IN_REACH, fillOpacity: 0.75 }
-          : { color: GAP, weight: sel ? 3.5 : 2.2, dashArray: "5 4", fillColor: GAP, fillOpacity: 0.22 };
         return (
-          <CircleMarker key={c.key} center={[c.lat, c.lng]} radius={natRadius(c.players)} pathOptions={style}
-            eventHandlers={{ click: () => {
+          // STABLE key: react-leaflet swaps the icon in place (setIcon), so selecting a bubble does not
+          // remount it — a remount would close the "N players" tooltip that a tap just opened.
+          <Marker key={c.key} position={[c.lat, c.lng]} icon={bubbleIcon(c.players, c.tone, sel)}
+            eventHandlers={{ click: (e) => {
+              (e.target as L.Marker).openTooltip(); // a TAP shows "N players" too, not only a hover
               if (!merged) { onSelect(c.members[0].key); return; }
               const bounds = L.latLngBounds(c.members.map((m) => [m.lat, m.lng] as [number, number]));
               // Members on one rounded point never split by zooming; pick the biggest instead.
-              if (map.getZoom() >= 12 || bounds.getNorthEast().equals(bounds.getSouthWest())) { onSelect(c.members[0].key); return; }
-              map.fitBounds(bounds.pad(0.4), { maxZoom: 12 });
+              if (map.getZoom() >= 13 || bounds.getNorthEast().equals(bounds.getSouthWest())) { onSelect(c.members[0].key); return; }
+              map.fitBounds(bounds.pad(0.5), { maxZoom: 13 });
             } }}>
-            <Tooltip key={`${c.key}-${c.players}`} permanent direction="center"
-              className={"loc-tip loc-tip-zip loc-tip-count" + (c.verdict === "waitlist" ? " loc-tip-count-gap" : "")}>{c.players}</Tooltip>
-          </CircleMarker>
+            <Tooltip direction="top" className="loc-tip">{players(c.players)}</Tooltip>
+          </Marker>
         );
       })}
     </>
@@ -200,7 +202,7 @@ function Fit({ points, fallback, zoom }: { points: [number, number][]; fallback:
   const map = useMap();
   const key = JSON.stringify(points);
   useEffect(() => {
-    if (points.length >= 2) map.fitBounds(L.latLngBounds(points), { padding: [36, 36], maxZoom: 12 });
+    if (points.length >= 2) map.fitBounds(L.latLngBounds(points), { padding: [40, 40], maxZoom: 12 });
     else map.setView(points[0] ?? fallback, zoom);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
@@ -231,10 +233,15 @@ export default function LocationsLeaflet(props: {
     national, nationalAll, selectedNational, onSelectNational, focus, natFilter, showRadius } = props;
   const [zoom, setZoom] = useState(5);
   const deep = zoom >= DEEP_ZOOM;
-  // What the all-cities view draws as separate bubbles: outside coverage always (if the filter
-  // allows), in-market zips only once zoomed in to a metro.
   const bubbles = useMemo(() => national.filter((z) => z.verdict === "waitlist" || deep), [national, deep]);
-  const greenCity = (c: MapCity) => !deep && natFilter !== "waitlist" && c.players > 0;
+  const showCount = useMemo(() => (c: MapCity) => !deep && natFilter !== "waitlist" && c.players > 0, [deep, natFilter]);
+  const [dirs, setDirs] = useState<Record<number, Dir>>({});
+  const nationalItems = useMemo<BubbleItem[]>(() => bubbles.map((z) => ({ key: z.key, group: `${z.verdict}|${z.cityId ?? ""}`,
+    tone: z.verdict === "in_market" ? "in" : "gap", lat: z.lat, lng: z.lng, players: z.players })), [bubbles]);
+  const zipItems = useMemo<BubbleItem[]>(() => zips.map((z) => {
+    const tone = z.inReach[reach] ? "in" : "gap";
+    return { key: z.key, group: tone, tone, lat: z.lat, lng: z.lng, players: z.players };
+  }), [zips, reach]);
 
   const points = useMemo<[number, number][]>(() => {
     if (!city) return [...cities.map((c) => [c.lat, c.lng] as [number, number]), ...nationalAll.map((z) => [z.lat, z.lng] as [number, number])];
@@ -242,10 +249,9 @@ export default function LocationsLeaflet(props: {
     return pts.length ? pts : [[city.lat, city.lng]];
   }, [cities, city, fields, zips, nationalAll]);
 
-  const cityRadius = useMemo(() => (c: MapCity) => (!deep && natFilter !== "waitlist" && c.players > 0 ? cityBubbleR(c.players) : HOLLOW_R),
-    [deep, natFilter]);
-  const [dirs, setDirs] = useState<Record<number, Dir>>({});
-  const maxZipPlayers = Math.max(1, ...zips.map((z) => z.players));
+  // City view: the selected bubble, and the fields inside ITS ring at the current reach.
+  const selZip = city && selected?.kind === "zip" ? zips.find((z) => z.key === selected.key) ?? null : null;
+  const fieldsInSelRing = useMemo(() => new Set((selZip?.nearby ?? []).filter((n) => n.minReach <= reach).map((n) => n.fieldId)), [selZip, reach]);
 
   return (
     <MapContainer center={[33, -92]} zoom={5} scrollWheelZoom={false} className="loc-leaflet" attributionControl>
@@ -256,7 +262,7 @@ export default function LocationsLeaflet(props: {
       />
       <Fit points={points} fallback={city ? [city.lat, city.lng] : [33, -92]} zoom={city ? 10 : 5} />
       <ZoomWatch onZoom={setZoom} />
-      {!city && <CityLabelLayout cities={cities} radius={cityRadius} obstacles={bubbles} onLayout={setDirs} />}
+      {!city && <CityTagLayout cities={cities} showCount={showCount} obstacles={bubbles} onLayout={setDirs} />}
       <Focus focus={focus} />
 
       {/* Coverage radius per city — only when "Show coverage radius" is on: a thin outline, no fill. */}
@@ -265,61 +271,39 @@ export default function LocationsLeaflet(props: {
           pathOptions={{ color: FOREST, weight: 1, opacity: 0.5, fill: false }} />
       ))}
 
+      {!city && <ClusteredBubbles items={nationalItems} selectedKey={selectedNational} onSelect={onSelectNational} />}
+
       {!city && cities.map((c) => {
-        const green = greenCity(c);
-        const d = dirs[c.id] ?? "right";
+        const d = dirs[c.id] ?? "top";
+        const sc = showCount(c);
         return (
-          <CircleMarker key={`city-${c.id}-${green ? "g" : "h"}`} center={[c.lat, c.lng]} radius={cityRadius(c)}
-            pathOptions={green
-              // White ring, so two touching city bubbles keep a visible edge between them.
-              ? { color: "#fff", weight: 2, dashArray: "", fillColor: IN_REACH, fillOpacity: 1 }
-              : { color: FOREST, weight: 2, dashArray: "", fillColor: "#fff", fillOpacity: 1 }}
-            eventHandlers={{ click: () => onCity(c.id) }}>
-            {/* keyed on direction: react-leaflet fixes a tooltip's direction at mount */}
-            <Tooltip key={d} permanent direction={d} offset={offsetFor(d, cityRadius(c))} className="loc-tip">{c.name}</Tooltip>
-          </CircleMarker>
+          <Marker key={`tag-${c.id}-${d}-${sc ? c.players : "n"}`} position={[c.lat, c.lng]} icon={cityTagIcon(c, d, sc)}
+            zIndexOffset={1000} eventHandlers={{ click: () => onCity(c.id) }}
+            title={sc ? `${c.name}: ${players(c.players)}` : c.name} />
         );
       })}
-      {/* The count INSIDE a green city bubble — a second layer, since the bubble's one tooltip is its name. */}
-      {!city && cities.filter(greenCity).map((c) => (
-        <Marker key={`count-${c.id}`} position={[c.lat, c.lng]} icon={countIcon(c.players, "")}
-          eventHandlers={{ click: () => onCity(c.id) }} />
-      ))}
 
-      {!city && <NationalClusters bubbles={bubbles} selectedKey={selectedNational} onSelect={onSelectNational} />}
-
+      {/* Reach rings stay on FIELDS. A ring around a player bubble appears only when one is selected. */}
       {city && fields.map((f) => {
-        const on = highlightFieldId === f.id || (selected?.kind === "field" && selected.id === f.id);
+        const on = highlightFieldId === f.id || (selected?.kind === "field" && selected.id === f.id) || fieldsInSelRing.has(f.id);
         return (
           <Circle key={`ring-${f.id}`} center={[f.lat, f.lng]} radius={reach * MI_TO_M}
-            pathOptions={{ color: FOREST, weight: on ? 3 : 1.2, opacity: on ? 0.9 : 0.35, fillColor: FOREST, fillOpacity: on ? 0.1 : 0.03 }}
+            pathOptions={{ color: FOREST, weight: on ? 2.5 : 1.2, opacity: on ? 0.8 : 0.3, fillColor: FOREST, fillOpacity: on ? 0.07 : 0.025 }}
             interactive={false} />
         );
       })}
+      {selZip && (
+        <Circle key={`selring-${selZip.key}-${reach}`} center={[selZip.lat, selZip.lng]} radius={reach * MI_TO_M} interactive={false}
+          pathOptions={{ color: "#0b7d55", weight: 2.5, dashArray: "7 5", fillColor: "#0b7d55", fillOpacity: 0.06 }} />
+      )}
 
-      {city && zips.map((z) => {
-        const covered = z.inReach[reach];
-        const sel = selected?.kind === "zip" && selected.key === z.key;
-        return (
-          <CircleMarker key={`zip-${z.key}`} center={[z.lat, z.lng]}
-            radius={7 + 16 * Math.sqrt(z.players / maxZipPlayers)}
-            pathOptions={covered
-              // dashArray "" is deliberate: Leaflet's setStyle MERGES, so omitting it leaves the old
-              // dash on a bubble that just came into reach (seen in a browser at 10 mi).
-              ? { color: "#04583A", weight: sel ? 3.5 : 2, dashArray: "", fillColor: IN_REACH, fillOpacity: 0.7 }
-              : { color: GAP, weight: sel ? 3.5 : 2.2, dashArray: "5 4", fillColor: GAP, fillOpacity: 0.18 }}
-            eventHandlers={{ click: () => onSelect({ kind: "zip", key: z.key }) }}>
-            {(z.players >= 3 || sel) && (
-              <Tooltip permanent direction="center" className="loc-tip loc-tip-zip">{z.area}</Tooltip>
-            )}
-          </CircleMarker>
-        );
-      })}
+      {city && <ClusteredBubbles items={zipItems} selectedKey={selected?.kind === "zip" ? selected.key : null}
+        onSelect={(key) => onSelect({ kind: "zip", key })} />}
 
       {city && fields.map((f) => {
-        const on = highlightFieldId === f.id || (selected?.kind === "field" && selected.id === f.id);
+        const on = highlightFieldId === f.id || (selected?.kind === "field" && selected.id === f.id) || fieldsInSelRing.has(f.id);
         return (
-          <Marker key={`pin-${f.id}`} position={[f.lat, f.lng]} icon={pinIcon(on)}
+          <Marker key={`pin-${f.id}`} position={[f.lat, f.lng]} icon={pinIcon(on)} zIndexOffset={500}
             eventHandlers={{ click: () => onSelect({ kind: "field", id: f.id }) }}>
             {/* keyed on `on`: react-leaflet fixes `permanent` at mount, so a change needs a remount */}
             <Tooltip key={on ? "pinned" : "hover"} direction="top" permanent={on} className="loc-tip">{f.title}</Tooltip>

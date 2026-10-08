@@ -40,6 +40,7 @@ import { selectAll } from "./supabasePagination";
 import {
   computeVerdict, geometryKey, hasArea, isInternalEmail, usCities, zipOf, type AreaCity,
 } from "./playerAreaModel";
+import { stateForPoint } from "./usState";
 
 export const PAGE_LIMIT = 250;
 const INTER_PAGE_DELAY_MS = 500;
@@ -65,6 +66,9 @@ export type AreaRow = {
   lng: number | null;
   area_label: string | null;
   area_source: string | null;
+  /** Two-letter US state from lat/lng against Census boundaries (usState.ts); null = outside every
+   *  state or no coordinates. Migration 0216. */
+  state: string | null;
   is_internal: boolean;
   verdict: "in_market" | "waitlist" | "unidentified";
   verdict_city_id: number | null;
@@ -75,7 +79,8 @@ export type AreaRow = {
 };
 
 const COMPARED: (keyof AreaRow)[] = [
-  "has_area", "zip", "lat", "lng", "area_label", "area_source", "is_internal",
+  // `state` is compared, so rows stored before 0216 (state undefined → null) fill in on the next run.
+  "has_area", "zip", "lat", "lng", "area_label", "area_source", "state", "is_internal",
   "verdict", "verdict_city_id", "nearest_city_id", "nearest_city_mi", "verdict_geometry",
 ];
 
@@ -236,6 +241,7 @@ export async function syncPlayerAreas(
         lng: num(p.lng),
         area_label: str(p.areaLabel),
         area_source: str(p.areaSource),
+        state: num(p.lat) != null && num(p.lng) != null ? stateForPoint(num(p.lat)!, num(p.lng)!) : null,
         is_internal: isInternalEmail(p.email),
         verdict: v.verdict,
         verdict_city_id: v.verdictCityId,

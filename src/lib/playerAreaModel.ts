@@ -127,10 +127,12 @@ export function areaGroupName(zip: string | null, labels: Iterable<string | null
   return set.size === 1 && only ? only : GPS_NO_ZIP;
 }
 
-/** A place as the page shows it. areaLabel is "City, United States" and the data carries NO state
- *  (raw.address is {city, street, country} only; checked 2026-10-08), so "City, ST" is not
- *  available: the country is dropped — every city on this page is in the US — and nothing is guessed. */
-export function placeName(label: string | null): string | null {
+/** A place as the page shows it: "City, ST". areaLabel is "City, United States" and MatchDay carries
+ *  no state, so `state` is the one the sync worked out from the player's coordinates (usState.ts,
+ *  stored in player_area_seen.state). No state — outside every state, or no coordinates — shows the
+ *  city alone. The country is always dropped: every city on this page is in the US. */
+export function placeName(label: string | null, state?: string | null): string | null {
   if (!label) return null;
-  return label.replace(/,\s*United States$/i, "").trim() || label;
+  const city = label.replace(/,\s*United States$/i, "").trim() || label;
+  return state ? `${city}, ${state}` : city;
 }

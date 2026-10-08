@@ -29,6 +29,8 @@ const zeroByReach = () => Object.fromEntries(REACHES.map((r) => [r, 0])) as ByRe
 export type MapPlayerRow = {
   zip: string | null;
   area_label: string | null;
+  /** Migration 0216: worked out by the sync from lat/lng. */
+  state: string | null;
   lat: number | null;
   lng: number | null;
   verdict: "in_market" | "waitlist" | "unidentified";
@@ -54,6 +56,10 @@ export type MapZip = {
   nearestFieldId: number | null; nearestFieldMi: number | null;
   /** Exact-distance verdict per reach, so the browser never compares a rounded number. */
   inReach: Record<Reach, boolean>;
+  /** Every active field within the LARGEST reach, nearest first: `mi` is for display (rounded),
+   *  `minReach` the smallest reach that contains it on the EXACT distance. Selecting a bubble lists
+   *  the fields with minReach <= the current reach. */
+  nearby: { fieldId: number; mi: number; minReach: Reach }[];
 };
 export type MapCity = AreaCity & {
   players: number; fields: number; coverage: ByReach;
@@ -103,6 +109,8 @@ export function buildLocationsMap(input: {
   fieldSnapshots: FieldSnapshot[];
 }): LocationsMap {
   const cityIds = new Set(input.cities.map((c) => c.id));
+  // Labels become "City, ST" ONCE, here, so every bubble, place and detail card carries the state.
+  input = { ...input, players: input.players.map((p) => ({ ...p, area_label: placeName(p.area_label, p.state) })) };
 
   // --- fields: newest snapshot per field, active (not deleted upstream), in a US city ---
   const latest = new Map<number, FieldSnapshot>();
@@ -115,7 +123,13 @@ export function buildLocationsMap(input: {
   for (const s of latest.values()) {
     if (s.deletedAt) continue;
     if (s.cityId == null || !cityIds.has(s.cityId)) continue; // Warsaw / unknown city
-    if (!validCoord(s.lat, s.lng)) {
+    /* A LOCATION THAT CANNOT BE RIGHT is a missing one. Invalid numbers (664 Lou Fusz: lat/lng
+     * swapped), and a field farther from its own city's centre than that city's radius — 1849
+     * Wheatley Heights (San Antonio) is stored at lng +98.42, a dropped minus sign that put it in
+     * China and zoomed the San Antonio map out to the whole world. Every other active field is
+     * within 28 miles of its centre (2026-10-08). Both go to the "missing from the map" warning. */
+    const city = input.cities.find((c) => c.id === s.cityId)!;
+    if (!validCoord(s.lat, s.lng) || milesBetween(s.lat, s.lng as number, city.lat, city.lng) > city.radiusMiles) {
       badFields.push({ id: s.fieldId, title: s.title ?? `Field ${s.fieldId}`, cityId: s.cityId, lat: s.lat, lng: s.lng });
       continue;
     }
@@ -200,10 +214,17 @@ export function buildLocationsMap(input: {
     }
     if (best) nearestExact.set(z.key, best.mi);
     const inReach = Object.fromEntries(REACHES.map((r) => [r, best != null && best.mi <= r])) as Record<Reach, boolean>;
+    const nearby: MapZip["nearby"] = [];
+    for (const f of fieldsRaw) {
+      const d = milesBetween(z.lat, z.lng, f.lat, f.lng);
+      const minReach = REACHES.find((r) => d <= r);
+      if (minReach != null) nearby.push({ fieldId: f.id, mi: r1(d), minReach });
+    }
+    nearby.sort((a, b) => a.mi - b.mi || a.fieldId - b.fieldId);
     const name = areaGroupName(z.zip, z.labels);
     return { key: z.key, zip: z.zip, area: z.zip ? name : placeName(name) ?? name, cityId: z.cityId,
       lat: r2(z.lat), lng: r2(z.lng), players: z.n,
-      nearestFieldId: best?.id ?? null, nearestFieldMi: best ? r1(best.mi) : null, inReach };
+      nearestFieldId: best?.id ?? null, nearestFieldMi: best ? r1(best.mi) : null, inReach, nearby };
   }).sort((a, b) => b.players - a.players || a.key.localeCompare(b.key));
 
   const fields: MapField[] = fieldsRaw.map((f) => {

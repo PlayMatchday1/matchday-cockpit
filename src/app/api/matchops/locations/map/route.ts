@@ -33,7 +33,7 @@ export async function GET(req: Request) {
   try {
     const [players, matches, okRun] = await Promise.all([
       selectAll<MapPlayerRow>(() => sb.from("player_area_seen")
-        .select("zip,area_label,lat,lng,verdict,verdict_city_id")
+        .select("zip,area_label,state,lat,lng,verdict,verdict_city_id")
         .eq("has_area", true).eq("is_internal", false)
         .order("player_id")),
       selectAll<MatchFieldRow>(() => sb.from("mdapi_matches")

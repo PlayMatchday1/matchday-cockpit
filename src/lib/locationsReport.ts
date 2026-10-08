@@ -20,6 +20,8 @@ export type SeenRow = {
   lat: number | null;
   lng: number | null;
   area_label: string | null;
+  /** Migration 0216: worked out by the sync from lat/lng. */
+  state: string | null;
   area_source: string | null;
   is_internal: boolean;
   verdict: Verdict;
@@ -85,7 +87,10 @@ export function buildLocationsReport(input: {
   now: Date;
 }): LocationsReport {
   const { names, now } = input;
-  const live = input.rows.filter((r) => r.has_area && !r.is_internal);
+  // Labels become "City, ST" ONCE, here, so every group, name and export below carries the state —
+  // and Grandview, MO and Grandview, WA are two places, not one.
+  const live = input.rows.filter((r) => r.has_area && !r.is_internal)
+    .map((r) => ({ ...r, area_label: placeName(r.area_label, r.state) }));
   const cities = (Array.isArray(input.okRun?.cities) ? input.okRun!.cities : []) as AreaCity[];
   const playersTotal = input.okRun?.players_total != null
     ? input.okRun.players_total - (input.okRun.players_internal ?? 0) : null;
