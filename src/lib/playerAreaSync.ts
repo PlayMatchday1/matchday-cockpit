@@ -4,7 +4,7 @@
 // no updatedAt and silently ignores unknown sort columns (docs/matchday-api-facts.md, "Player
 // location / home area"), so there is no way to ask "who changed since". mdapi_users' hourly walk
 // is createdAt-only and its full walk is daily — an area set at 10:00 would surface tomorrow. This
-// walk is what makes first_seen_at accurate to one sync interval (hourly).
+// walk is what makes first_seen_at accurate to one sync interval (6 hours).
 //
 // ── THE RULES OF THE WALK (Ryan, 2026-10-08, after a 503 storm) ──────────────────────────────────
 // The first seeding attempt walked limit=1000 OLDEST FIRST. Pages 1-7 landed, page 8 returned 503
@@ -14,7 +14,8 @@
 //   1. limit=250, NEWEST FIRST — the page size and order the daily mdapi_users walk has run for
 //      months. A signup mid-walk shifts rows down one, so DISTINCT IDS are counted against the
 //      API's totalItems, and only a complete walk may mark anyone's area as cleared.
-//   2. Hourly, never more often (vercel.json).
+//   2. Every 6 hours at :40 UTC (vercel.json, set by Ryan after reviewing dyno memory from the
+//      seeding run). Never more often than hourly.
 //   3. ~half a second between page requests.
 //   4. NO RETRIES. Every call passes maxRetries: 0 (including the sign-in it may trigger). The first
 //      5xx, network error or bad body aborts the whole run, which is logged failed. The next

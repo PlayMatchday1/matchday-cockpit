@@ -1,8 +1,8 @@
-// GET|POST /api/sync/player-areas — the HOURLY walk that feeds the Locations page.
+// GET|POST /api/sync/player-areas — the 6-hourly walk that feeds the Locations page.
 //
-// NOT SCHEDULED YET. There is deliberately no vercel.json cron entry: Ryan sets the schedule after
-// reviewing the API dyno's memory during the seeding run (2026-10-08). The code is written for
-// HOURLY at most. Until then it runs only when called by hand.
+// SCHEDULED every 6 hours at :40 UTC — 00:40, 06:40, 12:40, 18:40 (vercel.json, `40 */6 * * *`),
+// set by Ryan after reviewing the API dyno's memory during the seeding run (2026-10-08). Clear of
+// the 09:00 UTC mdapi_users full walk, which already takes the dyno past its quota on its own.
 //
 // Reads GET /admin/cities and every page of GET /admin/players (~140 calls at limit=250, half a
 // second apart, no retries) and writes player_area_seen + one player_area_sync_runs row. The rules

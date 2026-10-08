@@ -1,7 +1,7 @@
 "use client";
 
 // LOCATIONS — where players say they live, and how fast they are telling us (Ryan, 2026-10-08).
-// Data: GET /api/matchops/locations, which reads player_area_seen (written hourly by
+// Data: GET /api/matchops/locations, which reads player_area_seen (written every 6 hours by
 // /api/sync/player-areas). This page never calls MatchDay. Aggregation is server-side; the only
 // thing computed here is the filtered VIEW of rows the server already grouped.
 //
@@ -33,6 +33,7 @@ const int = (n: number) => n.toLocaleString("en-US");
 const mi = (n: number | null) => (n == null ? "—" : `${n < 10 ? n.toFixed(1) : Math.round(n)} mi`);
 
 const ZIP_COLOR = "#1baf7a";
+const STALE_AFTER_MINS = 6 * 60 + 30;
 const GPS_COLOR = "#2a78d6";
 
 type VerdictFilter = "all" | "in_market" | "waitlist" | "unidentified" | "no_area";
@@ -100,6 +101,9 @@ export default function LocationsBoard() {
   // Freshness stamp: the last SUCCESSFUL sync's finish time. A newer failed run is said out loud.
   const asOf = data?.dataAsOf ?? null;
   const staleMins = asOf ? Math.floor((Date.now() - Date.parse(asOf)) / 60000) : 0;
+  // The sync runs every 6 hours at :40 UTC (vercel.json). Stale = one interval plus 30 minutes of
+  // slack for a slow or in-progress run — so a single missed run is what turns the stamp grey.
+  const stale = staleMins > STALE_AFTER_MINS;
   const lastFailed = data?.lastRun && data.lastRun.ok === false;
 
   return (
@@ -115,15 +119,15 @@ export default function LocationsBoard() {
           <div className="loc-h-right">
             <span className="loc-fresh">
               <button type="button" className="loc-refresh" data-testid="loc-refresh" disabled={refreshing}
-                title="Re-read Clubhouse. The sync from MatchDay runs hourly; this button does not call MatchDay."
+                title="Re-read Clubhouse. The sync from MatchDay runs every 6 hours; this button does not call MatchDay."
                 onClick={() => void load()}>
                 <RefreshIcon size={14} spinning={refreshing} />
                 <span>{refreshing ? "Refreshing…" : "Refresh"}</span>
               </button>
-              <span className={"loc-stamp" + (lastFailed ? " loc-stamp-failed" : staleMins > 90 ? " loc-stamp-stale" : "")} data-testid="data-as-of">
+              <span className={"loc-stamp" + (lastFailed ? " loc-stamp-failed" : stale ? " loc-stamp-stale" : "")} data-testid="data-as-of">
                 {!data ? "Loading…"
                   : !asOf ? "No sync has completed yet"
-                  : `Data as of ${fmtWhen(asOf)}${staleMins > 90 ? ` · ${staleMins >= 120 ? `${Math.floor(staleMins / 60)}h` : `${staleMins}m`} ago` : ""}${lastFailed ? " · last sync failed" : ""}`}
+                  : `Data as of ${fmtWhen(asOf)}${stale ? ` · ${staleMins >= 120 ? `${Math.floor(staleMins / 60)}h` : `${staleMins}m`} ago` : ""}${lastFailed ? " · last sync failed" : ""}`}
               </span>
             </span>
           </div>
@@ -141,7 +145,7 @@ export default function LocationsBoard() {
       ) : !data ? (
         <div className="loc-card"><div className="loc-state">Loading locations…</div></div>
       ) : !data.dataAsOf ? (
-        <div className="loc-card"><div className="loc-state">The location sync has not completed a run yet. It runs hourly.</div></div>
+        <div className="loc-card"><div className="loc-state">The location sync has not completed a run yet. It runs every 6 hours.</div></div>
       ) : (
         <>
           {error && <div className="loc-card"><div className="loc-warn">Couldn&apos;t refresh: {error}. Showing the last data loaded.</div></div>}
@@ -198,7 +202,7 @@ export default function LocationsBoard() {
               </table>
             </div>
             <div className="loc-foot">
-              The most recent 100. &ldquo;First seen&rdquo; is when Clubhouse&apos;s sync first saw the area, accurate to within one sync interval (one hour); MatchDay does not record when it was set. Times in Chicago.
+              The most recent 100. &ldquo;First seen&rdquo; is when Clubhouse&apos;s sync first saw the area, accurate to within one sync interval (6 hours); MatchDay does not record when it was set. Times in Chicago.
             </div>
           </div>
 
