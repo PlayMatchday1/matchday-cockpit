@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import LocationsMapTab from "@/components/LocationsMapTab";
+import LocationsSyncNow from "@/components/LocationsSyncNow";
 import { supabase } from "@/lib/supabase";
 import RefreshIcon from "@/components/RefreshIcon";
 import { downloadCsv } from "@/components/growth/format";
@@ -85,6 +86,8 @@ export default function LocationsBoard() {
     }
   }, []);
   useEffect(() => { void load(); }, [load]);
+  // Refresh and a finished Sync now re-read BOTH tabs (Supabase only).
+  const reloadAll = useCallback(() => { void load(); setMapReload((k) => k + 1); }, [load]);
 
   const cityName = useMemo(() => {
     const m = new Map<number, string>();
@@ -137,7 +140,7 @@ export default function LocationsBoard() {
             <span className="loc-fresh">
               <button type="button" className="loc-refresh" data-testid="loc-refresh" disabled={refreshing}
                 title="Re-read Clubhouse. The sync from MatchDay runs every 6 hours; this button does not call MatchDay."
-                onClick={() => { void load(); setMapReload((k) => k + 1); }}>
+                onClick={reloadAll}>
                 <RefreshIcon size={14} spinning={refreshing} />
                 <span>{refreshing ? "Refreshing…" : "Refresh"}</span>
               </button>
@@ -147,6 +150,7 @@ export default function LocationsBoard() {
                   : `Data as of ${fmtWhen(asOf)}${stale ? ` · ${staleMins >= 120 ? `${Math.floor(staleMins / 60)}h` : `${staleMins}m`} ago` : ""}${lastFailed ? " · last sync failed" : ""}`}
               </span>
             </span>
+            <LocationsSyncNow onFinished={reloadAll} />
           </div>
         </div>
         <div className="loc-tabs" role="tablist" aria-label="View">
@@ -420,6 +424,7 @@ const CSS = `
   padding:8px 15px;border-radius:10px;cursor:pointer;font-family:inherit}
 .loc-btn:hover{background:var(--slot)}
 .loc-btn:disabled{opacity:.55;cursor:default}
+.loc-sync{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
 .loc-fresh{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
 .loc-refresh{display:inline-flex;align-items:center;gap:6px;min-height:32px;border:1px solid var(--line);
   border-radius:9px;background:#fff;color:var(--forest);font:inherit;font-size:12px;font-weight:700;padding:0 10px;cursor:pointer}

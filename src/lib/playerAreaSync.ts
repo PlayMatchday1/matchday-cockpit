@@ -41,13 +41,13 @@ import {
   computeVerdict, geometryKey, hasArea, isInternalEmail, usCities, zipOf, type AreaCity,
 } from "./playerAreaModel";
 
-const PAGE_LIMIT = 250;
+export const PAGE_LIMIT = 250;
 const INTER_PAGE_DELAY_MS = 500;
 const WRITE_BATCH = 500;
 const NO_RETRY = { maxRetries: 0 } as const;
 // A run cannot outlive the route's maxDuration (300s). An unfinished row older than this is a run
 // that was killed, not one in progress — it no longer holds the lock, and it counts as a failure.
-const LOCK_WINDOW_MS = 6 * 60 * 1000;
+export const LOCK_WINDOW_MS = 6 * 60 * 1000;
 
 type ApiPlayer = {
   id?: number; email?: string | null; zipCode?: unknown; lat?: unknown; lng?: unknown;
@@ -183,6 +183,14 @@ export async function syncPlayerAreas(
       if (page === 1) totalItems = typeof res.totalItems === "number" ? res.totalItems : 0;
       const rows = Array.isArray(res.data) ? res.data : [];
       for (const r of rows) if (typeof r.id === "number") seen.set(r.id, r);
+      /* LIVE PROGRESS for the Sync now button, written to the run row's own counters rather than new
+       * columns: WHILE A RUN IS UNFINISHED, api_calls = player pages fetched so far and players_total =
+       * the API's totalItems (so pages total = ceil(players_total / 250)). The final update below
+       * overwrites both with their real meanings. Supabase only; a failed progress write is ignored —
+       * it must never cost the run. */
+      await supabase.from("player_area_sync_runs")
+        .update({ api_calls: page, players_total: totalItems }).eq("id", runId)
+        .then(() => undefined, () => undefined);
       if (rows.length < PAGE_LIMIT) break;
       if (page >= Math.ceil(totalItems / PAGE_LIMIT) + 2) break; // runaway guard
     }

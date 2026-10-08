@@ -10,13 +10,18 @@
 //
 // It never writes MatchDay — reads only — so there is no host guard or change_log entry to make.
 //
-// Auth: CRON_SECRET for the schedule; otherwise a session with Match Ops read access.
-// Vercel cron sends GET, so GET is the same handler (see users-recent for the 405 story).
+// Auth: CRON_SECRET for the schedule (GET or POST). A MANUAL run — the Locations page's Sync now —
+// is POST only and ADMIN only (is_admin, read fresh by the gate), and is refused while a run is in
+// progress and for 30 minutes after the last run started (playerAreaSyncStatus.ts). It answers 202
+// at once and runs via after(); the page polls /api/sync/player-areas/status for progress. No retry
+// anywhere: a failed run is recorded and shown, and the next one is a person's or the cron's call.
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
+import { after } from "next/server";
 import { syncPlayerAreas } from "@/lib/playerAreaSync";
+import { readSyncStatus } from "@/lib/playerAreaSyncStatus";
 
 /* ~140 pages × (≈0.75s response + 0.5s pause) ≈ 3 minutes. 300s is the ceiling. A run killed here
  * leaves an unfinished run row; the lock treats it as dead after 6 minutes and the next run opens
@@ -41,18 +46,32 @@ export async function POST(req: Request) {
     return Response.json({ error: "Supabase env not configured" }, { status: 500 });
   }
 
-  let triggeredBy: "cron" | "manual";
-  if (token && cronSecret && constantTimeMatch(token, cronSecret)) {
-    triggeredBy = "cron";
-  } else {
-    const auth = await authenticateMatchOpsRead(req);
-    if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
-    triggeredBy = "manual";
-  }
-
   const supabase = createClient(supabaseUrl, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  const isCron = !!(token && cronSecret && constantTimeMatch(token, cronSecret));
+  if (!isCron) {
+    if (req.method !== "POST") return Response.json({ error: "A manual sync is POST only." }, { status: 405 });
+    const auth = await authenticateMatchOpsRead(req);
+    if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
+    if (!auth.isAdmin) return Response.json({ error: "Only admins can start a sync." }, { status: 403 });
+
+    const status = await readSyncStatus(supabase).catch((e: unknown) => e instanceof Error ? e : new Error(String(e)));
+    if (status instanceof Error) return Response.json({ error: `Could not read sync state: ${status.message}` }, { status: 500 });
+    if (status.running) {
+      return Response.json({ error: "A sync is already running.", running: status.running }, { status: 409 });
+    }
+    if (status.availableAt) {
+      return Response.json({ error: "Sync now is cooling down.", availableAt: status.availableAt }, { status: 429 });
+    }
+    // Claimed inside syncPlayerAreas (its lock settles a race between two clicks); the response does
+    // not wait for the ~3 minute walk.
+    after(async () => { await syncPlayerAreas(supabase, "manual").catch(() => undefined); });
+    return Response.json({ accepted: true, triggeredBy: "manual" }, { status: 202 });
+  }
+
+  const triggeredBy = "cron" as const;
   try {
     const result = await syncPlayerAreas(supabase, triggeredBy);
     // A skipped run (another pass in progress) is ok:true with `skipped` — not an error.
@@ -63,4 +82,6 @@ export async function POST(req: Request) {
   }
 }
 
+// Vercel cron sends GET (see users-recent for the 405 story). A GET that is not the cron is refused
+// inside POST's manual branch, so a link or a prefetch can never start a run.
 export const GET = POST;
