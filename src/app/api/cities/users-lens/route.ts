@@ -26,6 +26,7 @@ import { KNOWN_CITY_CODES } from "@/lib/cityNormalization";
 import { selectAll } from "@/lib/supabasePagination";
 import { canonicalVenueName } from "@/lib/venueResolver";
 import { matchStartMs } from "@/lib/matchTime";
+import { isActiveByLastPlay, isPaidActiveSub, isValidPlayRow } from "@/lib/playerActivity";
 
 export const runtime = "nodejs";
 // Heaviest computation: paginated fetch of 24k users + 38k match_players
@@ -395,9 +396,8 @@ export function aggregate(
   >();
   for (const p of players) {
     if (!p.user_id || p.match_api_id == null) continue;
-    if (p.is_cancelled) continue;
-    if (p.user_is_fake_player) continue;
-    if (p.user_type !== "PLAYER") continue;
+    // THE valid-play rule, shared with the Locations page (src/lib/playerActivity.ts).
+    if (!isValidPlayRow(p)) continue;
     const m = matchInfo.get(p.match_api_id);
     if (!m) continue; // match cancelled or missing
     let arr = playsByUser.get(p.user_id);
@@ -427,16 +427,13 @@ export function aggregate(
   const memberUserIds = new Set<number>();
   for (const s of subs) {
     if (!s.user_id) continue;
-    if (s.status !== "ACTIVE") continue;
-    if (s.price === null || s.price === undefined) continue;
-    if (Number(s.price) <= 0) continue;
+    if (!isPaidActiveSub(s)) continue; // shared with Locations (src/lib/playerActivity.ts)
     memberUserIds.add(s.user_id);
   }
 
   // --- Derive per-user stats ---
   // Recency boundaries are genuine instants, so they are compared against
   // the match's true instant (startUtcMs), never the wall-clock Date.
-  const thirtyDaysAgoMs = now.getTime() - 30 * 24 * 60 * 60 * 1000;
   const sixtyDaysAgoMs = now.getTime() - 60 * 24 * 60 * 60 * 1000;
 
   const derived: DerivedUser[] = filteredUsers.map((u) => {
@@ -446,7 +443,7 @@ export function aggregate(
     const thirdPlay = plays[2] ?? null;
     const lastPlay = plays[plays.length - 1] ?? null;
     const lastUtcMs = lastPlay?.startUtcMs ?? null;
-    const active30d = lastUtcMs != null && lastUtcMs >= thirtyDaysAgoMs;
+    const active30d = isActiveByLastPlay(lastUtcMs, now); // shared with Locations (playerActivity.ts)
     const active60d = lastUtcMs != null && lastUtcMs >= sixtyDaysAgoMs;
     const member = memberUserIds.has(u.id);
     return {

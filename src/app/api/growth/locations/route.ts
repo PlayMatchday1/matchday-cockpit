@@ -10,6 +10,7 @@
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { selectAll } from "@/lib/supabasePagination";
 import { buildLocationsReport, type SeenRow } from "@/lib/locationsReport";
+import { activePlayerIds } from "@/lib/playerActivity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,6 +22,11 @@ export async function GET(req: Request) {
   const sb = auth.supabase;
 
   try {
+    // ACTIVE players (the Users lens's 30-day definition) and the staff ids to remove — @matchday.com
+    // and @playmatchday.com, the same rule as the rest of this page, matched on the synced emails.
+    const activeP = activePlayerIds(sb, new Date());
+    const staffP = selectAll<{ id: number }>(() => sb.from("mdapi_users").select("id")
+      .or("email.ilike.*@matchday.com,email.ilike.*@playmatchday.com").order("id"));
     const [rows, lastRun, okRun, firstRun] = await Promise.all([
       selectAll<SeenRow>(() => sb.from("player_area_seen")
         .select("player_id,first_seen_at,seeded,has_area,zip,lat,lng,area_label,state,area_source,is_internal,verdict,verdict_city_id,nearest_city_id,nearest_city_mi")
@@ -49,7 +55,10 @@ export async function GET(req: Request) {
       }
     }
 
+    // The active figure must never take the page down: if it fails, the card says so and the rest stands.
+    const [activeIds, staff] = await Promise.all([activeP.catch(() => null), staffP.catch(() => null)]);
     const report = buildLocationsReport({
+      activeIds, internalIds: staff ? new Set(staff.map((u) => u.id)) : null,
       rows, names,
       run: lastRun.data ?? null,
       okRun: okRun.data ?? null,

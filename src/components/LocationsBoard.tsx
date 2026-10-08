@@ -22,6 +22,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import LocationsMapTab from "@/components/LocationsMapTab";
 import LocationsSyncNow from "@/components/LocationsSyncNow";
+import LocationsPlayerDetail from "@/components/LocationsPlayerDetail";
+import { Fragment } from "react";
 import { supabase } from "@/lib/supabase";
 import RefreshIcon from "@/components/RefreshIcon";
 import { downloadCsv } from "@/components/growth/format";
@@ -52,6 +54,8 @@ export default function LocationsBoard() {
   const [refreshing, setRefreshing] = useState(false);
   const [city, setCity] = useState<number | null>(null);
   const [vf, setVf] = useState<VerdictFilter>("all");
+  // ONE expanded Recent activity row at a time; clicking it again closes it.
+  const [openPlayer, setOpenPlayer] = useState<number | null>(null);
   const [mapReload, setMapReload] = useState(0);
 
   const params = useSearchParams();
@@ -183,8 +187,15 @@ export default function LocationsBoard() {
 
           {/* 1 — KPI cards */}
           <div className="loc-kpis" data-testid="loc-kpis">
-            <Kpi label="Area set" value={data.playersTotal ? `${((data.kpis.areaSet / data.playersTotal) * 100).toFixed(data.kpis.areaSet / data.playersTotal < 0.01 ? 2 : 1)}%` : "—"}
-              sub={data.playersTotal != null ? `${int(data.kpis.areaSet)} of ${int(data.playersTotal)} players` : `${int(data.kpis.areaSet)} players`} />
+            {/* LOCATION SET — "coverage" on this tab used to mean this, and means "near a field" on the
+                Map tab; here it is "Location set" everywhere. Main number: ACTIVE players (the Users
+                lens's 30-day definition, src/lib/playerActivity.ts); underneath: all players. */}
+            <Kpi label="Location set" testId="kpi-location-set"
+              value={data.active
+                ? <>{int(data.active.withLocation)} of {int(data.active.total)} <span className="loc-kpi-unit">active players</span></>
+                : <>{int(data.kpis.areaSet)} <span className="loc-kpi-unit">players</span></>}
+              sub={data.playersTotal != null ? `${int(data.kpis.areaSet)} of ${int(data.playersTotal)} all players` : `${int(data.kpis.areaSet)} players`}
+              note={data.active ? undefined : "Active players could not be read just now."} />
             {/* THE NOTE IS SELF-REMOVING: it renders only while GPS is 0. A backend bug labels GPS
                 shares "zip" (Vitalii is fixing it, 2026-10-08); the first real GPS value hides it.
                 Delete the note prop once that has happened. */}
@@ -209,7 +220,7 @@ export default function LocationsBoard() {
               {data.days.length === 0 ? (
                 <div className="loc-empty">
                   No new areas since tracking began{data.trackingSince ? ` on ${fmtWhen(data.trackingSince)}` : ""}.
-                  {data.kpis.seeded > 0 && ` ${int(data.kpis.seeded)} ${data.kpis.seeded === 1 ? "player" : "players"} already had an area before then and ${data.kpis.seeded === 1 ? "is" : "are"} counted in coverage, not in the daily bars.`}
+                  {data.kpis.seeded > 0 && ` ${int(data.kpis.seeded)} ${data.kpis.seeded === 1 ? "player" : "players"} already had an area before then and ${data.kpis.seeded === 1 ? "is" : "are"} counted in the location-set share, not in the daily bars.`}
                 </div>
               ) : (
                 <AdoptionCharts days={data.days} seeded={data.kpis.seeded} />
@@ -220,15 +231,26 @@ export default function LocationsBoard() {
                 <thead><tr><th>First seen</th><th>Player</th><th>Area</th><th>Source</th><th>City</th></tr></thead>
                 <tbody>
                   {data.recent.length === 0 && <tr><td colSpan={5} className="loc-td-empty">No player has set an area yet.</td></tr>}
-                  {data.recent.map((r) => (
-                    <tr key={r.playerId}>
-                      <td className="loc-nowrap">{r.seeded ? <span className="loc-muted" title="Set before tracking began; the real time is unknown">Before tracking</span> : fmtWhen(r.firstSeenAt)}</td>
-                      <td><a className="loc-link" href={`/match-ops/player-lookup?id=${r.playerId}`}>{r.name ?? `Player ${r.playerId}`}</a></td>
-                      <td>{r.zip ?? placeName(r.label) ?? "—"}{r.zip && r.label ? <span className="loc-muted"> ({placeName(r.label)})</span> : null}</td>
-                      <td className="loc-nowrap">{r.source === "gps" ? "GPS" : r.source === "zip" ? "Zip" : "Not set"} <span className="loc-raw">{r.sourceRaw ?? "null"}</span></td>
-                      <td>{r.verdict === "in_market" ? cityName(r.cityId) : r.verdict === "waitlist" ? "Outside coverage" : "Unidentified"}</td>
-                    </tr>
-                  ))}
+                  {data.recent.map((r) => {
+                    const open = openPlayer === r.playerId;
+                    return (
+                      <Fragment key={r.playerId}>
+                        <tr className={"loc-row-x" + (open ? " loc-row-open" : "")} tabIndex={0} aria-expanded={open}
+                          data-testid={`recent-row-${r.playerId}`}
+                          onClick={(e) => { if ((e.target as HTMLElement).closest("a")) return; setOpenPlayer(open ? null : r.playerId); }}
+                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpenPlayer(open ? null : r.playerId); } }}>
+                          <td className="loc-nowrap">{r.seeded ? <span className="loc-muted" title="Set before tracking began; the real time is unknown">Before tracking</span> : fmtWhen(r.firstSeenAt)}</td>
+                          <td><a className="loc-link" href={`/match-ops/player-lookup?id=${r.playerId}`}>{r.name ?? `Player ${r.playerId}`}</a></td>
+                          <td>{r.zip ?? placeName(r.label) ?? "—"}{r.zip && r.label ? <span className="loc-muted"> ({placeName(r.label)})</span> : null}</td>
+                          <td className="loc-nowrap">{r.source === "gps" ? "GPS" : r.source === "zip" ? "Zip" : "Not set"} <span className="loc-raw">{r.sourceRaw ?? "null"}</span></td>
+                          <td>{r.verdict === "in_market" ? cityName(r.cityId) : r.verdict === "waitlist" ? "Outside our cities" : "Unidentified"}</td>
+                        </tr>
+                        {open && (
+                          <tr className="loc-row-detail"><td colSpan={5} style={{ padding: 0 }}><LocationsPlayerDetail playerId={r.playerId} /></td></tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -299,7 +321,7 @@ export default function LocationsBoard() {
 
           {/* 5 — Outside coverage */}
           <div className="loc-card">
-            <div className="loc-sec-head"><div className="loc-sec-title">Outside coverage — where to open next</div></div>
+            <div className="loc-sec-head"><div className="loc-sec-title">Outside our cities — where to open next</div></div>
             <div className="loc-tablewrap">
               <table className="loc-table" data-testid="loc-outside">
                 <thead><tr><th>Place</th><th className="loc-num">Players</th><th className="loc-num">Last 30 days</th><th>Nearest city</th><th className="loc-num">Distance</th></tr></thead>
@@ -322,9 +344,9 @@ export default function LocationsBoard() {
   );
 }
 
-function Kpi({ label, value, sub, note }: { label: string; value: string; sub: string; note?: string }) {
+function Kpi({ label, value, sub, note, testId }: { label: string; value: React.ReactNode; sub: string; note?: string; testId?: string }) {
   return (
-    <div className="loc-kpi">
+    <div className="loc-kpi" data-testid={testId}>
       <div className="loc-kpi-label">{label}</div>
       <div className="loc-kpi-value">{value}</div>
       <div className="loc-kpi-sub">{sub}</div>
@@ -334,7 +356,7 @@ function Kpi({ label, value, sub, note }: { label: string; value: string; sub: s
 }
 
 // Two charts on one shared day axis rather than bars and a % line on two y-scales: daily counts
-// stacked by source on top, running coverage beneath. Hovering a day highlights it in both.
+// stacked by source on top, the running share of players with a location beneath. Hovering a day highlights it in both.
 function AdoptionCharts({ days, seeded }: { days: DayPoint[]; seeded: number }) {
   const [hover, setHover] = useState<number | null>(null);
   const W = 720, PADL = 40, PADR = 12, BAR_H = 150, LINE_H = 90;
@@ -357,11 +379,11 @@ function AdoptionCharts({ days, seeded }: { days: DayPoint[]; seeded: number }) 
         <span><i style={{ background: ZIP_COLOR }} />Zip</span>
         <span><i style={{ background: GPS_COLOR }} />GPS</span>
         <span className="loc-legend-tip">
-          {h ? <>{fmtDay(h.day)}: <b>{h.zip}</b> zip, <b>{h.gps}</b> GPS, coverage <b>{h.coveragePct == null ? "—" : pctFmt(h.coveragePct)}</b></>
-            : seeded > 0 ? `${seeded} set before tracking began are in coverage, not in the bars` : "Hover a day for its numbers"}
+          {h ? <>{fmtDay(h.day)}: <b>{h.zip}</b> zip, <b>{h.gps}</b> GPS, location set <b>{h.coveragePct == null ? "—" : pctFmt(h.coveragePct)}</b></>
+            : seeded > 0 ? `${seeded} set before tracking began are in the location-set share, not in the bars` : "Hover a day for its numbers"}
         </span>
       </div>
-      <div className="loc-chart-title">Players setting an area, per day</div>
+      <div className="loc-chart-title">Players setting a location, per day</div>
       <svg viewBox={`0 0 ${W} ${BAR_H}`} className="loc-svg" role="img" aria-label="Players setting an area per day, by source">
         <line x1={PADL} x2={W - PADR} y1={yBar(0)} y2={yBar(0)} stroke="#dfe4da" />
         <text x={PADL - 6} y={yBar(maxBar) + 4} textAnchor="end" className="loc-axis">{maxBar}</text>
@@ -381,8 +403,8 @@ function AdoptionCharts({ days, seeded }: { days: DayPoint[]; seeded: number }) 
           );
         })}
       </svg>
-      <div className="loc-chart-title">Coverage — share of players with an area</div>
-      <svg viewBox={`0 0 ${W} ${LINE_H}`} className="loc-svg" role="img" aria-label="Running coverage percent">
+      <div className="loc-chart-title">Share of players who have set a location</div>
+      <svg viewBox={`0 0 ${W} ${LINE_H}`} className="loc-svg" role="img" aria-label="Running share of players who have set a location">
         <line x1={PADL} x2={W - PADR} y1={yLine(0)} y2={yLine(0)} stroke="#dfe4da" />
         <text x={PADL - 6} y={yLine(0) + 4} textAnchor="end" className="loc-axis">0%</text>
         <text x={PADL - 6} y={yLine(covs[n - 1]) + 4} textAnchor="end" className="loc-axis">{pctFmt(covs[n - 1])}</text>
@@ -440,6 +462,7 @@ const CSS = `
 .loc-kpi{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:0 9px 26px rgba(0,43,34,.05)}
 .loc-kpi-label{font-size:9.5px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--muted)}
 .loc-kpi-value{font-size:24px;font-weight:900;color:var(--forest);margin-top:6px;letter-spacing:-.4px;font-variant-numeric:tabular-nums}
+.loc-kpi-unit{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:0}
 .loc-kpi-sub{font-size:11.5px;color:var(--muted);margin-top:2px}
 .loc-kpi-note{font-size:10.5px;line-height:1.35;color:#8A5300;margin-top:6px}
 .loc-sec-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
@@ -465,6 +488,11 @@ const CSS = `
 .loc-td-empty{color:var(--muted);text-align:center;padding:22px 14px !important}
 .loc-muted{color:var(--muted)}
 .loc-raw{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;color:#7C8A83;background:var(--slot);border-radius:4px;padding:1px 5px}
+.loc-row-x{cursor:pointer}
+.loc-row-x:hover td{background:var(--slot)}
+.loc-row-x:focus-visible{outline:2px solid #2CDB87;outline-offset:-2px}
+.loc-row-open td{background:#EAF6EF}
+.loc-row-detail td{border-bottom:1px solid var(--line)}
 .loc-link{color:var(--forest);font-weight:700;text-decoration:none}
 .loc-link:hover{text-decoration:underline}
 .loc-foot{padding:10px 20px;font-size:11.5px;color:var(--muted);border-top:1px solid var(--line);background:#FAFCFA}

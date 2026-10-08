@@ -52,6 +52,9 @@ export type LocationsReport = {
   cities: AreaCity[];
   playersTotal: number | null;
   kpis: { areaSet: number; gps: number; zip: number; never: number | null; outside: number; unidentified: number; seeded: number };
+  /** Location set among ACTIVE players (src/lib/playerActivity.ts — the Users lens's active-30-day
+   *  definition), staff accounts removed. null if the active set could not be read. */
+  active: { withLocation: number; total: number } | null;
   today: number;
   last7: number;
   days: DayPoint[];
@@ -84,6 +87,9 @@ export function buildLocationsReport(input: {
   run: { started_at: string; finished_at: string | null; ok: boolean | null; error: string | null; complete: boolean | null } | null;
   okRun: { finished_at: string; players_total: number | null; players_internal: number | null; cities: unknown } | null;
   firstRunAt: string | null;
+  /** Active player ids (any email) and the staff ids to remove from them. */
+  activeIds?: Set<number> | null;
+  internalIds?: Set<number> | null;
   now: Date;
 }): LocationsReport {
   const { names, now } = input;
@@ -105,6 +111,13 @@ export function buildLocationsReport(input: {
     unidentified: live.filter((r) => r.verdict === "unidentified").length,
     seeded: live.filter((r) => r.seeded).length,
   };
+  let active: LocationsReport["active"] = null;
+  if (input.activeIds) {
+    const staff = input.internalIds ?? new Set<number>();
+    let total = 0;
+    for (const id of input.activeIds) if (!staff.has(id)) total++;
+    active = { withLocation: live.filter((r) => input.activeIds!.has(r.player_id)).length, total };
+  }
 
   const todayYmd = chicagoYmd(now.toISOString());
   const weekAgo = now.getTime() - 7 * DAY_MS;
@@ -205,6 +218,6 @@ export function buildLocationsReport(input: {
     lastRun: input.run ? { startedAt: input.run.started_at, finishedAt: input.run.finished_at, ok: input.run.ok,
       error: input.run.error, complete: input.run.complete } : null,
     trackingSince: input.firstRunAt,
-    cities, playersTotal, kpis, today, last7, days, recent, zips, unidentified, outside,
+    cities, playersTotal, kpis, active, today, last7, days, recent, zips, unidentified, outside,
   };
 }

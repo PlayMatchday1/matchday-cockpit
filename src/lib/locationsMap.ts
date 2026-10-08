@@ -102,19 +102,13 @@ const validCoord = (lat: unknown, lng: unknown): lat is number =>
 const r1 = (n: number) => Math.round(n * 10) / 10;
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
-export function buildLocationsMap(input: {
-  players: MapPlayerRow[];
-  cities: AreaCity[];
-  /** One snapshot per match row in the active window; the newest updatedAt per field wins. */
-  fieldSnapshots: FieldSnapshot[];
-}): LocationsMap {
-  const cityIds = new Set(input.cities.map((c) => c.id));
-  // Labels become "City, ST" ONCE, here, so every bubble, place and detail card carries the state.
-  input = { ...input, players: input.players.map((p) => ({ ...p, area_label: placeName(p.area_label, p.state) })) };
-
+/** The ACTIVE fields with a believable location, and the ones without (shown as "missing from the
+ *  map"). Shared by the map and the Overview's player detail, so both mean the same field set. */
+export function activeFields(snaps: FieldSnapshot[], cities: AreaCity[]): { fields: Omit<MapField, "reach">[]; badFields: LocationsMap["badFields"] } {
+  const cityIds = new Set(cities.map((c) => c.id));
   // --- fields: newest snapshot per field, active (not deleted upstream), in a US city ---
   const latest = new Map<number, FieldSnapshot>();
-  for (const s of input.fieldSnapshots) {
+  for (const s of snaps) {
     const prev = latest.get(s.fieldId);
     if (!prev || s.updatedAt >= prev.updatedAt) latest.set(s.fieldId, s);
   }
@@ -128,13 +122,28 @@ export function buildLocationsMap(input: {
      * Wheatley Heights (San Antonio) is stored at lng +98.42, a dropped minus sign that put it in
      * China and zoomed the San Antonio map out to the whole world. Every other active field is
      * within 28 miles of its centre (2026-10-08). Both go to the "missing from the map" warning. */
-    const city = input.cities.find((c) => c.id === s.cityId)!;
+    const city = cities.find((c) => c.id === s.cityId)!;
     if (!validCoord(s.lat, s.lng) || milesBetween(s.lat, s.lng as number, city.lat, city.lng) > city.radiusMiles) {
       badFields.push({ id: s.fieldId, title: s.title ?? `Field ${s.fieldId}`, cityId: s.cityId, lat: s.lat, lng: s.lng });
       continue;
     }
     fieldsRaw.push({ id: s.fieldId, title: s.title ?? `Field ${s.fieldId}`, cityId: s.cityId, lat: s.lat, lng: s.lng as number });
   }
+
+  return { fields: fieldsRaw, badFields };
+}
+
+export function buildLocationsMap(input: {
+  players: MapPlayerRow[];
+  cities: AreaCity[];
+  /** One snapshot per match row in the active window; the newest updatedAt per field wins. */
+  fieldSnapshots: FieldSnapshot[];
+}): LocationsMap {
+  const cityIds = new Set(input.cities.map((c) => c.id));
+  // Labels become "City, ST" ONCE, here, so every bubble, place and detail card carries the state.
+  input = { ...input, players: input.players.map((p) => ({ ...p, area_label: placeName(p.area_label, p.state) })) };
+
+  const { fields: fieldsRaw, badFields } = activeFields(input.fieldSnapshots, input.cities);
 
   // --- national bubbles + outside places: every placed player, in market or not ---
   const nearestCity = (lat: number, lng: number) => {
