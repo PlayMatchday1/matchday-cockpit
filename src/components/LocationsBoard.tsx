@@ -1,7 +1,7 @@
 "use client";
 
 // LOCATIONS — where players say they live, and how fast they are telling us (Ryan, 2026-10-08).
-// Data: GET /api/matchops/locations, which reads player_area_seen (written every 6 hours by
+// Data: GET /api/growth/locations, which reads player_area_seen (written every 6 hours by
 // /api/sync/player-areas). This page never calls MatchDay. Aggregation is server-side; the only
 // thing computed here is the filtered VIEW of rows the server already grouped.
 //
@@ -73,7 +73,7 @@ export default function LocationsBoard() {
     try {
       const { data: sess } = await supabase.auth.getSession();
       const token = sess.session?.access_token;
-      const res = await fetch("/api/matchops/locations", {
+      const res = await fetch("/api/growth/locations", {
         cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       const body = await res.json();

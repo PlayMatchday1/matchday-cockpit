@@ -6899,3 +6899,11 @@ Evidence: a read-only full walk of prod `GET /admin/players` (`sortColumn=create
   States"). So "a GPS share also gets a zipCode" holds for some shares, not all. Clubhouse groups
   a no-zip player by a ~1-mile grid cell of their coordinates (`areaGroupKey`,
   `src/lib/playerAreaModel.ts`), never into one city-wide "no zip" bucket.
+- **The Locations page lives in Growth (moved 2026-10-08).** Page `/growth/locations` (Growth rail,
+  Fields group, after Competitors); `/match-ops/locations` 308s there with its query string, so
+  `?tab=map&city=<id>` links keep working (`next.config.ts`). Data: `/api/growth/locations` and
+  `/api/growth/locations/map`, on `authenticateCapability("growth")`. The sync stays at
+  `/api/sync/player-areas` (cron `40 */6 * * *`, unchanged); its manual Sync now and
+  `/status` now sit behind the Growth gate, Sync now additionally `is_admin`. Access on the day of
+  the move: 9 accounts could open it under Match Ops, 6 under Growth — three Match-Ops-only
+  accounts lost it, none gained it.

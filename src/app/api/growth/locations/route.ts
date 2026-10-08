@@ -1,11 +1,13 @@
-// GET /api/matchops/locations — the Locations page's data. READ ONLY, Supabase only.
+// GET /api/growth/locations — the Locations page's data. READ ONLY, Supabase only.
+// Growth's own gate (authenticateCapability "growth"), like every /api/growth route; moved from
+// /api/matchops/locations with the page on 2026-10-08.
 //
 // Never calls MatchDay on a page load (Ryan, 2026-10-08): /api/sync/player-areas refreshes
 // player_area_seen every 6 hours and this route reads what it wrote. no-store, so Refresh is a
 // real re-read. Aggregation happens here (src/lib/locationsReport.ts); the browser gets totals and
 // groups, not player rows — except the 100 most recent, which the page lists by name.
 
-import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { selectAll } from "@/lib/supabasePagination";
 import { buildLocationsReport, type SeenRow } from "@/lib/locationsReport";
 
@@ -14,7 +16,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 export async function GET(req: Request) {
-  const auth = await authenticateMatchOpsRead(req);
+  const auth = await authenticateCapability(req, "growth");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const sb = auth.supabase;
 

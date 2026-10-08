@@ -56,6 +56,14 @@ export const GROWTH_SECTIONS: RailItem[] = [
     icon: <I><path d="M4 20V8m5 12V4m5 16v-9m5 9V6" /><path d="M2 20h20" /></I>,
   },
   {
+    // DEMAND, NOT SUPPLY: where players say they live, against our cities and fields, and the
+    // outside-coverage list of where to open next. Beside Competitors, the other market page.
+    // Moved from Match Ops › Fields on 2026-10-08.
+    key: "locations", group: "Fields", label: "Locations", href: "/growth/locations",
+    desc: "Where players live, and where to open next",
+    icon: <I><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z" /><circle cx="12" cy="10" r="2.4" /></I>,
+  },
+  {
     key: "vc-outreach", group: "Fundraising", label: "VC Outreach", href: "/growth/vc-outreach",
     desc: "Firms we're raising from",
     icon: <I><path d="M4 19V9m5 10V5m5 14v-7m5 7V8" /></I>,

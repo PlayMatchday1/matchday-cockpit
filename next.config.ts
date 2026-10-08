@@ -35,6 +35,13 @@ const nextConfig: NextConfig = {
         destination: "/growth/field-pipeline",
         permanent: true,
       },
+      // LOCATIONS MOVED OUT OF MATCH OPS to /growth/locations (2026-10-08). 308, and Next carries
+      // the query string across a redirect, so ?tab=map&city=3 lands on the same tab and city.
+      {
+        source: "/match-ops/locations",
+        destination: "/growth/locations",
+        permanent: true,
+      },
       // ═══ THE PLAYER LIFECYCLE SECTION MOVED: /growth → /lifecycle (2026-08-23) ═══════════════
       //
       // THESE ARE ENUMERATED, NOT A WILDCARD, AND THAT IS THE WHOLE POINT. `/growth/:path*` is one

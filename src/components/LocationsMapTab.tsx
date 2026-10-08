@@ -1,6 +1,6 @@
 "use client";
 
-// THE MAP TAB of /match-ops/locations. Data: GET /api/matchops/locations/map — Supabase only, never
+// THE MAP TAB of /growth/locations. Data: GET /api/growth/locations/map — Supabase only, never
 // MatchDay (the API dyno's 512 MB quota; Ryan's hard rule). Every number on this tab is computed on
 // the server (src/lib/locationsMap.ts); this file only picks which of them to show.
 //
@@ -56,7 +56,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
     try {
       const { data: sess } = await supabase.auth.getSession();
       const token = sess.session?.access_token;
-      const res = await fetch("/api/matchops/locations/map", {
+      const res = await fetch("/api/growth/locations/map", {
         cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       const body = await res.json();

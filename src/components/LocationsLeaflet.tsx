@@ -3,7 +3,7 @@
 // The Locations map itself — Leaflet via react-leaflet, OpenStreetMap tiles, no API key. Imported
 // ONLY through next/dynamic with ssr:false (LocationsMapTab): Leaflet touches `window` on import.
 //
-// Draws what the server already aggregated (/api/matchops/locations/map). Nothing here computes a
+// Draws what the server already aggregated (/api/growth/locations/map). Nothing here computes a
 // distance or a coverage number: zip.inReach / zip.nearby are the server's exact-distance results.
 //
 // THREE MARKS THAT CANNOT BE CONFUSED (Ryan, 2026-10-08):

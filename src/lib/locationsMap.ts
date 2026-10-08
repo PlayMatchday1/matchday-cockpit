@@ -1,4 +1,4 @@
-// THE LOCATIONS MAP, aggregated — pure. /api/matchops/locations/map reads Supabase and hands the rows
+// THE LOCATIONS MAP, aggregated — pure. /api/growth/locations/map reads Supabase and hands the rows
 // here; the browser gets cities, fields and per-zip bubbles, never a player row.
 //
 // NO MATCHDAY CALLS, NO NEW SYNC. Every input is already in Supabase:

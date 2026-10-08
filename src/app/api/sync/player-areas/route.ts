@@ -11,14 +11,14 @@
 // It never writes MatchDay — reads only — so there is no host guard or change_log entry to make.
 //
 // Auth: CRON_SECRET for the schedule (GET or POST). A MANUAL run — the Locations page's Sync now —
-// is POST only and ADMIN only (is_admin, read fresh by the gate), and is refused while a run is in
+// is POST only, behind the Growth gate AND admin only (is_admin, read fresh by the gate), and is refused while a run is in
 // progress and for 30 minutes after the last run started (playerAreaSyncStatus.ts). It answers 202
 // at once and runs via after(); the page polls /api/sync/player-areas/status for progress. No retry
 // anywhere: a failed run is recorded and shown, and the next one is a person's or the cron's call.
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { after } from "next/server";
 import { syncPlayerAreas } from "@/lib/playerAreaSync";
 import { readSyncStatus } from "@/lib/playerAreaSyncStatus";
@@ -53,7 +53,8 @@ export async function POST(req: Request) {
   const isCron = !!(token && cronSecret && constantTimeMatch(token, cronSecret));
   if (!isCron) {
     if (req.method !== "POST") return Response.json({ error: "A manual sync is POST only." }, { status: 405 });
-    const auth = await authenticateMatchOpsRead(req);
+    // The Growth gate (the page moved there 2026-10-08), THEN admin: Sync now is admin only.
+    const auth = await authenticateCapability(req, "growth");
     if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
     if (!auth.isAdmin) return Response.json({ error: "Only admins can start a sync." }, { status: 403 });
 
