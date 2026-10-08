@@ -6843,3 +6843,52 @@ DFW 1,273.35 · ATL 1,430.37 · HTX 1,162.95 · ATX 1,156.73 · SATX 435.93 · S
   cause: the nightly job only re-reads from its newest stored date (`defaultStripeSince`,
   `src/app/api/cron/route.ts:76`) and skips charges not yet `succeeded`, so a charge pending at import
   is never picked up. Not traced — Ryan: fin_revenue is being retired.
+
+## Player location / home area (probed 2026-10-08)
+
+Evidence: a read-only full walk of prod `GET /admin/players` (`sortColumn=createdAt`, `limit=250`,
+140 pages, `totalItems` 34,978), one `GET /admin/players/{id}`, and a read of `mdapi_users.raw`.
+
+- **The list payload carries `zipCode`, `lat`, `lng`, `areaLabel`, `areaSource`, `needsLocation`,
+  `address`.** camelCase, flat on the player. `zipCode` is a **string** ("78723"). `areaSource` was
+  `"none"` on 34,976 rows and `"zip"` on 2; no `"gps"` value was observed, so its spelling is UNKNOWN.
+  `areaLabel` reads like "Austin, United States". `address` is `{city, street, country}`.
+  `needsLocation` was `true` exactly where `areaSource` was `"none"`.
+- **The detail endpoint `GET /admin/players/{id}` has `zipCode`, `lat`, `lng`, `address` but NOT
+  `areaSource`, `areaLabel` or `needsLocation`.**
+- **NOT exposed anywhere in either payload:** an area city id, an area set-at timestamp, location
+  permission, and a notify-me request time. Unknown sort columns (`areaSetAt`, `updatedAt`) are
+  silently ignored and return the default createdAt order, so "who set an area most recently" cannot
+  be asked of the API.
+- **Cities carry `radiusMiles`, `lat`, `lng`** (seen on the embedded `preferableCity` object in the
+  same payload; `radiusMiles` 100 for US cities, 1000 for Warsaw). There is no `centroidLat`.
+- **Adoption on 2026-10-08:** 2 of 34,978 players had an area set (both `zip`, neither internal).
+- **`mdapi_users` sees an area edit only on the 09:00 UTC full sync.** The hourly `users-recent` run
+  is a createdAt walk and catches new signups only (`src/lib/mdapiUsersSync.ts` header), so an
+  existing player who sets an area is invisible here for up to 24 hours. The 2026-10-08 09:00 full
+  run predates the API emitting these keys: only the 246 rows synced after it carry them at all.
+- **Large oldest-first pages took the production API down: the dyno ran out of memory.**
+  2026-10-08 16:29 UTC: `GET /admin/players?limit=1000&sortColumn=createdAt&sortDirection=asc`.
+  Pages 1–7 returned 200; page 8 returned HTTP 503 (Heroku "Application Error" HTML) on all four
+  attempts (the shared client's retries), and about a minute later `POST /auth/signin` itself
+  returned 503. **Cause, from Heroku metrics (Ryan, 2026-10-08):** the API dyno's memory quota is
+  **512 MB** and it peaked at **1,278 MB total (804 MB of it swap)** during that run. Every player
+  row carries its `matches`, so oldest-first pages are the heaviest. **The same chart rises to about
+  850 MB around 09:00 UTC daily**, when `/api/sync/users-full` walks `/admin/players` at
+  `limit=250` — so even the existing daily walk takes the dyno well past its quota.
+  **Rule since:** walk at `limit=250`, newest first, ~0.5s between pages, no retries, abort the run
+  on the first 5xx (`src/lib/playerAreaSync.ts`). `limit=1000` must not be used on this endpoint.
+- **The seeding walk at `limit=250`, newest first: 2026-10-08 16:50:48.486 → 16:53:44.633 UTC**
+  (176 s, 142 GETs: one `limit=1` test read, `/admin/cities`, 140 pages). No 5xx. 34,980 distinct
+  ids = `totalItems` 34,980. 3 players had an area, all `areaSource:"zip"`. Its effect on dyno memory
+  is for the Heroku chart to say; it has not been read here.
+- **Source is the `areaSource` value; zip and coordinates cannot tell Zip from GPS** — per the
+  backend developer (Vitalii, relayed by Ryan, 2026-10-08), NOT yet observed for GPS: a zip share
+  gets `lat`/`lng` looked up from the zip, and a GPS share gets a `zipCode` looked up from the
+  coordinates, so both kinds carry both. Clubhouse classifies `"zip"` → Zip, `"none"` → not set,
+  anything else → GPS (`sourceKind`, `src/lib/playerAreaModel.ts`). **Known backend bug on
+  2026-10-08: GPS shares are labelled `"zip"`** (fix in progress), so a GPS count of 0 is not
+  evidence that no one shared GPS. (An earlier relay that GPS players carry no `zipCode` was
+  corrected the same day.)
+- **Coming, not in evidence:** a set-at timestamp and a "changed location since <time>" filter on
+  `GET /admin/players` (Vitalii, in progress). Name, format and semantics UNKNOWN until probed.

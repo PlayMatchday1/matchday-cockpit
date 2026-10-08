@@ -151,6 +151,10 @@ type FetchOpts = {
   // new headers to merge into init for the retry. Returning null
   // signals "auth refresh not available" and we throw immediately.
   refreshAuth?: () => Promise<HeadersInit | null>;
+  // Retries after the first attempt on 429/502/503/504, network errors and parse failures. Defaults
+  // to MAX_RETRIES. 0 = ONE attempt, fail on the first 5xx — the player-areas sync's rule: a
+  // struggling upstream gets no second request from it (a 503 storm on 2026-10-08 is why).
+  maxRetries?: number;
 };
 
 // The single transport for every MatchDay-API call. Public so test
@@ -162,8 +166,9 @@ export async function fetchMatchDayJson<T = unknown>(
   opts: FetchOpts = {},
 ): Promise<T> {
   let didRefreshAuth = false;
+  const maxRetries = opts.maxRetries ?? MAX_RETRIES;
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
       const backoff = BACKOFF_MS[Math.min(attempt - 1, BACKOFF_MS.length - 1)];
       await sleep(backoff);
@@ -174,7 +179,7 @@ export async function fetchMatchDayJson<T = unknown>(
       res = await fetch(url, init);
     } catch (e) {
       // Network-level failure (DNS, ECONNRESET, fetch timeout). Retry.
-      if (attempt < MAX_RETRIES) continue;
+      if (attempt < maxRetries) continue;
       const msg = e instanceof Error ? e.message : String(e);
       throw new MatchdayApiError(
         0,
@@ -217,7 +222,7 @@ export async function fetchMatchDayJson<T = unknown>(
     }
 
     if (RETRYABLE_STATUS.has(res.status)) {
-      if (attempt < MAX_RETRIES) {
+      if (attempt < maxRetries) {
         // Respect Retry-After on 429 — sleep the suggested duration
         // INSTEAD of (or in addition to, whichever is longer) the
         // loop's next exponential backoff.
@@ -270,7 +275,7 @@ export async function fetchMatchDayJson<T = unknown>(
       // Parse failures can happen on truncated/streaming responses
       // during upstream restarts — retry along with the transient
       // status codes.
-      if (attempt < MAX_RETRIES) continue;
+      if (attempt < maxRetries) continue;
       const msg = e instanceof Error ? e.message : String(e);
       throw new MatchdayApiError(
         res.status,
@@ -298,7 +303,7 @@ export async function fetchMatchDayJson<T = unknown>(
 // Tolerant of common shape variations (camelCase, snake_case,
 // data-envelope) so a small server-side rename doesn't break us
 // silently.
-async function signIn(): Promise<string> {
+async function signIn(maxRetries?: number): Promise<string> {
   const { email, password, baseUrl } = getCreds();
   const url = buildUrl(baseUrl, "/auth/signin");
   let json: Record<string, unknown>;
@@ -307,7 +312,7 @@ async function signIn(): Promise<string> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
-    });
+    }, { maxRetries });
   } catch (e) {
     if (e instanceof MatchdayApiError && e.status === 401) {
       throw new MatchdayApiAuthError(
@@ -338,9 +343,9 @@ function pickString(obj: unknown, key: string): string | undefined {
   return undefined;
 }
 
-async function ensureToken(): Promise<string> {
+async function ensureToken(maxRetries?: number): Promise<string> {
   if (cachedToken) return cachedToken;
-  cachedToken = await signIn();
+  cachedToken = await signIn(maxRetries);
   return cachedToken;
 }
 
@@ -348,6 +353,7 @@ export interface MatchdayApiClient {
   get<T = unknown>(
     path: string,
     query?: Record<string, string | number>,
+    opts?: { maxRetries?: number },
   ): Promise<T>;
 }
 
@@ -360,9 +366,11 @@ export function getMatchdayApiClient(): MatchdayApiClient {
     async get<T>(
       path: string,
       query?: Record<string, string | number>,
+      callOpts: { maxRetries?: number } = {},
     ): Promise<T> {
       const url = buildUrl(baseUrl, path, query);
-      const token = await ensureToken();
+      // maxRetries reaches the sign-in too: a no-retry caller must not get retries through the back door.
+      const token = await ensureToken(callOpts.maxRetries);
       return fetchMatchDayJson<T>(
         url,
         { headers: { Authorization: `Bearer ${token}` } },
@@ -372,9 +380,10 @@ export function getMatchdayApiClient(): MatchdayApiClient {
             // re-sign-in. The returned headers replace the bearer
             // for the one-shot retry inside fetchMatchDayJson.
             cachedToken = null;
-            const fresh = await ensureToken();
+            const fresh = await ensureToken(callOpts.maxRetries);
             return { Authorization: `Bearer ${fresh}` };
           },
+          maxRetries: callOpts.maxRetries,
         },
       );
     },

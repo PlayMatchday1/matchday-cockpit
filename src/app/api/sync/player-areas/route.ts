@@ -1,0 +1,66 @@
+// GET|POST /api/sync/player-areas — the HOURLY walk that feeds the Locations page.
+//
+// NOT SCHEDULED YET. There is deliberately no vercel.json cron entry: Ryan sets the schedule after
+// reviewing the API dyno's memory during the seeding run (2026-10-08). The code is written for
+// HOURLY at most. Until then it runs only when called by hand.
+//
+// Reads GET /admin/cities and every page of GET /admin/players (~140 calls at limit=250, half a
+// second apart, no retries) and writes player_area_seen + one player_area_sync_runs row. The rules
+// of the walk — and the 503 storm that set them — are in src/lib/playerAreaSync.ts.
+//
+// It never writes MatchDay — reads only — so there is no host guard or change_log entry to make.
+//
+// Auth: CRON_SECRET for the schedule; otherwise a session with Match Ops read access.
+// Vercel cron sends GET, so GET is the same handler (see users-recent for the 405 story).
+
+import { timingSafeEqual } from "node:crypto";
+import { createClient } from "@supabase/supabase-js";
+import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
+import { syncPlayerAreas } from "@/lib/playerAreaSync";
+
+/* ~140 pages × (≈0.75s response + 0.5s pause) ≈ 3 minutes. 300s is the ceiling. A run killed here
+ * leaves an unfinished run row; the lock treats it as dead after 6 minutes and the next run opens
+ * with a limit=1 test read. */
+export const maxDuration = 300;
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+function constantTimeMatch(a: string, b: string): boolean {
+  const ab = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
+export async function POST(req: Request) {
+  const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/, "").trim();
+  const cronSecret = process.env.CRON_SECRET;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (!supabaseUrl || !serviceKey) {
+    return Response.json({ error: "Supabase env not configured" }, { status: 500 });
+  }
+
+  let triggeredBy: "cron" | "manual";
+  if (token && cronSecret && constantTimeMatch(token, cronSecret)) {
+    triggeredBy = "cron";
+  } else {
+    const auth = await authenticateMatchOpsRead(req);
+    if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
+    triggeredBy = "manual";
+  }
+
+  const supabase = createClient(supabaseUrl, serviceKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  try {
+    const result = await syncPlayerAreas(supabase, triggeredBy);
+    // A skipped run (another pass in progress) is ok:true with `skipped` — not an error.
+    return Response.json({ triggeredBy, ...result }, { status: result.ok ? 200 : 500 });
+  } catch (e) {
+    // Only the run-row insert throws — e.g. migration 0215 not applied yet. Say so loudly.
+    return Response.json({ triggeredBy, ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
+}
+
+export const GET = POST;

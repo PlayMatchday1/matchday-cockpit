@@ -1,0 +1,444 @@
+"use client";
+
+// LOCATIONS — where players say they live, and how fast they are telling us (Ryan, 2026-10-08).
+// Data: GET /api/matchops/locations, which reads player_area_seen (written hourly by
+// /api/sync/player-areas). This page never calls MatchDay. Aggregation is server-side; the only
+// thing computed here is the filtered VIEW of rows the server already grouped.
+//
+// Styling borrows Master Schedule's card / chip / refresh vocabulary (VeoMasterSchedule's CSS),
+// copied rather than imported because that CSS is a string private to that component.
+//
+// TODO(phase 2): a map of player areas against city radii and fields. Depends on field latitude and
+// longitude being wired into Clubhouse; not built in this pass.
+//
+// TODO(api): four fields the MatchDay API does not expose yet, so this page leaves them out entirely
+// (no empty columns, no placeholder cards). Wire each in when /admin/players carries it:
+//   - area city id        → replace the computed verdict with the backend's own assignment
+//   - area set time        → replace "First seen" (accurate to one sync interval) with the real time
+//   - location permission  → a permission column on Recent activity and a KPI split
+//   - notify requested time → "tapped notify me" counts and the notify-me CSV on Outside coverage
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { supabase } from "@/lib/supabase";
+import RefreshIcon from "@/components/RefreshIcon";
+import { downloadCsv } from "@/components/growth/format";
+import { NO_ZIP, type LocationsReport, type ZipRow, type DayPoint } from "@/lib/locationsReport";
+
+const CHI = "America/Chicago";
+const fmtWhen = (iso: string) =>
+  new Intl.DateTimeFormat("en-US", { timeZone: CHI, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(iso));
+const fmtDay = (ymd: string) =>
+  new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric" }).format(new Date(`${ymd}T12:00:00Z`));
+const int = (n: number) => n.toLocaleString("en-US");
+const mi = (n: number | null) => (n == null ? "—" : `${n < 10 ? n.toFixed(1) : Math.round(n)} mi`);
+
+const ZIP_COLOR = "#1baf7a";
+const GPS_COLOR = "#2a78d6";
+
+type VerdictFilter = "all" | "in_market" | "waitlist" | "unidentified" | "no_area";
+const VERDICT_FILTERS: { key: VerdictFilter; label: string }[] = [
+  { key: "all", label: "All" }, { key: "in_market", label: "In market" }, { key: "waitlist", label: "Waitlist" },
+  { key: "unidentified", label: "Unidentified" }, { key: "no_area", label: "No area" },
+];
+
+export default function LocationsBoard() {
+  const [data, setData] = useState<LocationsReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [city, setCity] = useState<number | null>(null);
+  const [vf, setVf] = useState<VerdictFilter>("all");
+
+  const load = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token;
+      const res = await fetch("/api/matchops/locations", {
+        cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
+      setData(body as LocationsReport);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  const cityName = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const c of data?.cities ?? []) m.set(c.id, c.name);
+    return (id: number | null) => (id == null ? "—" : m.get(id) ?? `City ${id}`);
+  }, [data]);
+
+  const verdictLabel = useCallback((r: Pick<ZipRow, "verdict" | "verdictCityId">) =>
+    r.verdict === "in_market" ? cityName(r.verdictCityId)
+      : r.verdict === "waitlist" ? "Waitlist"
+      : r.verdict === "unidentified" ? "Unidentified" : "No area", [cityName]);
+
+  const zipView = useMemo(() => (data?.zips ?? []).filter((r) => {
+    if (vf !== "all" && r.verdict !== vf) return false;
+    if (city == null) return true;
+    return (r.verdict === "in_market" && r.verdictCityId === city) || (r.verdict === "waitlist" && r.nearestCityId === city);
+  }), [data, vf, city]);
+
+  const exportZips = () => {
+    const rows: (string | number)[][] = [["Zip", "Area label", "Players", "Nearest city", "Distance (mi)", "Inside radius", "Verdict"]];
+    for (const r of zipView) rows.push([
+      r.verdict === "no_area" ? "No area" : r.zip ?? (r.label ? "" : NO_ZIP), r.label ?? "", r.players,
+      r.verdict === "no_area" || r.verdict === "unidentified" ? "" : cityName(r.nearestCityId),
+      r.nearestMi ?? "", r.verdict === "in_market" ? "Yes" : r.verdict === "waitlist" ? "No" : "",
+      verdictLabel(r),
+    ]);
+    const tag = [city != null ? cityName(city) : "", vf !== "all" ? vf : ""].filter(Boolean).join("-").replace(/[^A-Za-z0-9-]+/g, "_");
+    downloadCsv(`player-locations${tag ? "-" + tag : ""}.csv`, rows);
+  };
+
+  // Freshness stamp: the last SUCCESSFUL sync's finish time. A newer failed run is said out loud.
+  const asOf = data?.dataAsOf ?? null;
+  const staleMins = asOf ? Math.floor((Date.now() - Date.parse(asOf)) / 60000) : 0;
+  const lastFailed = data?.lastRun && data.lastRun.ok === false;
+
+  return (
+    <div className="loc">
+      <style>{CSS}</style>
+
+      <div className="loc-card">
+        <div className="loc-head">
+          <div>
+            <div className="loc-h-title">Locations</div>
+            <div className="loc-h-sub">Home areas players have shared in the app · internal accounts excluded</div>
+          </div>
+          <div className="loc-h-right">
+            <span className="loc-fresh">
+              <button type="button" className="loc-refresh" data-testid="loc-refresh" disabled={refreshing}
+                title="Re-read Clubhouse. The sync from MatchDay runs hourly; this button does not call MatchDay."
+                onClick={() => void load()}>
+                <RefreshIcon size={14} spinning={refreshing} />
+                <span>{refreshing ? "Refreshing…" : "Refresh"}</span>
+              </button>
+              <span className={"loc-stamp" + (lastFailed ? " loc-stamp-failed" : staleMins > 90 ? " loc-stamp-stale" : "")} data-testid="data-as-of">
+                {!data ? "Loading…"
+                  : !asOf ? "No sync has completed yet"
+                  : `Data as of ${fmtWhen(asOf)}${staleMins > 90 ? ` · ${staleMins >= 120 ? `${Math.floor(staleMins / 60)}h` : `${staleMins}m`} ago` : ""}${lastFailed ? " · last sync failed" : ""}`}
+              </span>
+            </span>
+          </div>
+        </div>
+        {lastFailed && data?.lastRun?.error && (
+          <div className="loc-warn">Last sync failed at {fmtWhen(data.lastRun.startedAt)}: {data.lastRun.error}</div>
+        )}
+        {data?.lastRun?.ok && data.lastRun.complete === false && (
+          <div className="loc-warn">The last sync did not receive every player from MatchDay; counts may be short until the next run.</div>
+        )}
+      </div>
+
+      {error && !data ? (
+        <div className="loc-card"><div className="loc-state">{error} <button type="button" className="loc-btn" onClick={() => void load()}>Retry</button></div></div>
+      ) : !data ? (
+        <div className="loc-card"><div className="loc-state">Loading locations…</div></div>
+      ) : !data.dataAsOf ? (
+        <div className="loc-card"><div className="loc-state">The location sync has not completed a run yet. It runs hourly.</div></div>
+      ) : (
+        <>
+          {error && <div className="loc-card"><div className="loc-warn">Couldn&apos;t refresh: {error}. Showing the last data loaded.</div></div>}
+
+          {/* 1 — KPI cards */}
+          <div className="loc-kpis" data-testid="loc-kpis">
+            <Kpi label="Area set" value={data.playersTotal ? `${((data.kpis.areaSet / data.playersTotal) * 100).toFixed(data.kpis.areaSet / data.playersTotal < 0.01 ? 2 : 1)}%` : "—"}
+              sub={data.playersTotal != null ? `${int(data.kpis.areaSet)} of ${int(data.playersTotal)} players` : `${int(data.kpis.areaSet)} players`} />
+            {/* THE NOTE IS SELF-REMOVING: it renders only while GPS is 0. A backend bug labels GPS
+                shares "zip" (Vitalii is fixing it, 2026-10-08); the first real GPS value hides it.
+                Delete the note prop once that has happened. */}
+            <Kpi label="GPS" value={int(data.kpis.gps)} sub="live distance on tiles"
+              note={data.kpis.gps === 0 && data.kpis.areaSet > 0 ? "Reads 0 for now: a backend bug labels GPS shares as zip. A fix is on the way." : undefined} />
+            <Kpi label="Zip only" value={int(data.kpis.zip)} sub="entered a home zip" />
+            <Kpi label="Never set an area" value={data.kpis.never == null ? "—" : int(data.kpis.never)} sub="no zip, no location" />
+            <Kpi label="Outside every radius" value={int(data.kpis.outside)} sub="waitlist" />
+            <Kpi label="Unidentified zips" value={int(data.kpis.unidentified)} sub="zip with no lat/lng" />
+          </div>
+
+          {/* 2 — Recent activity */}
+          <div className="loc-card">
+            <div className="loc-sec-head">
+              <div className="loc-sec-title">Recent activity</div>
+              <div className="loc-mini">
+                <span><b data-testid="loc-today">{int(data.today)}</b> today</span>
+                <span><b data-testid="loc-last7">{int(data.last7)}</b> last 7 days</span>
+              </div>
+            </div>
+            <div className="loc-body">
+              {data.days.length === 0 ? (
+                <div className="loc-empty">
+                  No new areas since tracking began{data.trackingSince ? ` on ${fmtWhen(data.trackingSince)}` : ""}.
+                  {data.kpis.seeded > 0 && ` ${int(data.kpis.seeded)} ${data.kpis.seeded === 1 ? "player" : "players"} already had an area before then and ${data.kpis.seeded === 1 ? "is" : "are"} counted in coverage, not in the daily bars.`}
+                </div>
+              ) : (
+                <AdoptionCharts days={data.days} seeded={data.kpis.seeded} />
+              )}
+            </div>
+            <div className="loc-tablewrap">
+              <table className="loc-table" data-testid="loc-recent">
+                <thead><tr><th>First seen</th><th>Player</th><th>Zip / area</th><th>Source</th><th>City</th></tr></thead>
+                <tbody>
+                  {data.recent.length === 0 && <tr><td colSpan={5} className="loc-td-empty">No player has set an area yet.</td></tr>}
+                  {data.recent.map((r) => (
+                    <tr key={r.playerId}>
+                      <td className="loc-nowrap">{r.seeded ? <span className="loc-muted" title="Set before tracking began; the real time is unknown">Before tracking</span> : fmtWhen(r.firstSeenAt)}</td>
+                      <td><a className="loc-link" href={`/match-ops/player-lookup?id=${r.playerId}`}>{r.name ?? `Player ${r.playerId}`}</a></td>
+                      <td>{r.zip ?? r.label ?? "—"}{r.zip && r.label ? <span className="loc-muted"> · {r.label}</span> : null}</td>
+                      <td className="loc-nowrap">{r.source === "gps" ? "GPS" : r.source === "zip" ? "Zip" : "Not set"} <span className="loc-raw">{r.sourceRaw ?? "null"}</span></td>
+                      <td>{r.verdict === "in_market" ? cityName(r.cityId) : r.verdict === "waitlist" ? "Outside coverage" : "Unidentified"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="loc-foot">
+              The most recent 100. &ldquo;First seen&rdquo; is when Clubhouse&apos;s sync first saw the area, accurate to within one sync interval (one hour); MatchDay does not record when it was set. Times in Chicago.
+            </div>
+          </div>
+
+          {/* 3 — Player locations */}
+          <div className="loc-card">
+            <div className="loc-sec-head">
+              <div className="loc-sec-title">Player locations</div>
+              <button type="button" className="loc-btn" onClick={exportZips} disabled={zipView.length === 0}>Export CSV</button>
+            </div>
+            <div className="loc-filter" role="group" aria-label="Filter cities">
+              <span className="loc-control-label">Cities</span>
+              <button type="button" aria-pressed={city === null} className={"loc-chip" + (city === null ? " loc-chip-on" : "")} onClick={() => setCity(null)}>All cities</button>
+              {data.cities.map((c) => (
+                <button type="button" key={c.id} aria-pressed={city === c.id} className={"loc-chip" + (city === c.id ? " loc-chip-on" : "")}
+                  onClick={() => setCity(c.id)}>{c.name}</button>
+              ))}
+            </div>
+            <div className="loc-filter" role="group" aria-label="Filter verdict">
+              <span className="loc-control-label">Verdict</span>
+              {VERDICT_FILTERS.map((f) => (
+                <button type="button" key={f.key} aria-pressed={vf === f.key} className={"loc-chip" + (vf === f.key ? " loc-chip-on" : "")}
+                  onClick={() => setVf(f.key)}>{f.label}</button>
+              ))}
+            </div>
+            <div className="loc-tablewrap">
+              <table className="loc-table" data-testid="loc-zips">
+                <thead><tr><th>Zip</th><th className="loc-num">Players</th><th>Nearest city</th><th className="loc-num">Distance</th><th>Inside radius</th><th>Verdict</th></tr></thead>
+                <tbody>
+                  {zipView.length === 0 && <tr><td colSpan={6} className="loc-td-empty">Nothing matches these filters.</td></tr>}
+                  {zipView.map((r) => {
+                    const placed = r.verdict === "in_market" || r.verdict === "waitlist";
+                    return (
+                      <tr key={r.key}>
+                        <td>{r.verdict === "no_area" ? <span className="loc-muted">No area</span> : r.zip ?? (r.label ? <>{r.label} <span className="loc-muted">· no zip</span></> : <span className="loc-muted">{NO_ZIP}</span>)}</td>
+                        <td className="loc-num">{int(r.players)}</td>
+                        <td>{placed ? cityName(r.nearestCityId) : "—"}</td>
+                        <td className="loc-num">{placed ? mi(r.nearestMi) : "—"}</td>
+                        <td>{r.verdict === "in_market" ? "Yes" : r.verdict === "waitlist" ? "No" : "—"}</td>
+                        <td><span className={`loc-badge loc-badge-${r.verdict}`}>{verdictLabel(r)}</span></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="loc-foot">Verdicts are computed by the sync from the player&apos;s lat/lng against each city&apos;s centre and radius, and recomputed when a city changes. Sorted by players.</div>
+          </div>
+
+          {/* 4 — Unidentified zips */}
+          <div className="loc-card">
+            <div className="loc-sec-head"><div className="loc-sec-title">Unidentified zips</div></div>
+            <div className="loc-tablewrap">
+              <table className="loc-table" data-testid="loc-unidentified">
+                <thead><tr><th>Zip entered</th><th className="loc-num">Players</th></tr></thead>
+                <tbody>
+                  {data.unidentified.length === 0 && <tr><td colSpan={2} className="loc-td-empty">Every zip entered so far resolved to a location.</td></tr>}
+                  {data.unidentified.map((u) => <tr key={u.zip}><td>{u.zip}</td><td className="loc-num">{int(u.players)}</td></tr>)}
+                </tbody>
+              </table>
+            </div>
+            <div className="loc-foot">A zip MatchDay stored without a latitude and longitude.</div>
+          </div>
+
+          {/* 5 — Outside coverage */}
+          <div className="loc-card">
+            <div className="loc-sec-head"><div className="loc-sec-title">Outside coverage — where to open next</div></div>
+            <div className="loc-tablewrap">
+              <table className="loc-table" data-testid="loc-outside">
+                <thead><tr><th>Place</th><th className="loc-num">Players</th><th className="loc-num">Last 30 days</th><th>Nearest city</th><th className="loc-num">Distance</th></tr></thead>
+                <tbody>
+                  {data.outside.length === 0 && <tr><td colSpan={5} className="loc-td-empty">No player outside every city radius yet.</td></tr>}
+                  {data.outside.map((p) => (
+                    <tr key={p.place}>
+                      <td>{p.place}</td><td className="loc-num">{int(p.players)}</td><td className="loc-num">{int(p.last30)}</td>
+                      <td>{cityName(p.nearestCityId)}</td><td className="loc-num">{mi(p.nearestMi)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="loc-foot">Grouped by area label, or zip where there is no label. &ldquo;Last 30 days&rdquo; counts first-seen dates and leaves out areas set before tracking began.</div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Kpi({ label, value, sub, note }: { label: string; value: string; sub: string; note?: string }) {
+  return (
+    <div className="loc-kpi">
+      <div className="loc-kpi-label">{label}</div>
+      <div className="loc-kpi-value">{value}</div>
+      <div className="loc-kpi-sub">{sub}</div>
+      {note && <div className="loc-kpi-note" data-testid="gps-note">{note}</div>}
+    </div>
+  );
+}
+
+// Two charts on one shared day axis rather than bars and a % line on two y-scales: daily counts
+// stacked by source on top, running coverage beneath. Hovering a day highlights it in both.
+function AdoptionCharts({ days, seeded }: { days: DayPoint[]; seeded: number }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const W = 720, PADL = 40, PADR = 12, BAR_H = 150, LINE_H = 90;
+  const n = days.length;
+  const slot = (W - PADL - PADR) / n;
+  const barW = Math.max(2, Math.min(28, slot - 2));
+  const x = (i: number) => PADL + i * slot + slot / 2;
+  const maxBar = Math.max(1, ...days.map((d) => d.zip + d.gps));
+  const yBar = (v: number) => 10 + (BAR_H - 30) * (1 - v / maxBar);
+  const covs = days.map((d) => d.coveragePct ?? 0);
+  const maxCov = Math.max(0.01, ...covs) * 1.15;
+  const yLine = (v: number) => 8 + (LINE_H - 28) * (1 - v / maxCov);
+  const labelEvery = Math.max(1, Math.ceil(n / 8));
+  const h = hover != null ? days[hover] : null;
+  const pctFmt = (v: number) => `${v < 1 ? v.toFixed(2) : v.toFixed(1)}%`;
+
+  return (
+    <div className="loc-chart">
+      <div className="loc-legend">
+        <span><i style={{ background: ZIP_COLOR }} />Zip</span>
+        <span><i style={{ background: GPS_COLOR }} />GPS</span>
+        <span className="loc-legend-tip">
+          {h ? <>{fmtDay(h.day)}: <b>{h.zip}</b> zip · <b>{h.gps}</b> GPS · coverage <b>{h.coveragePct == null ? "—" : pctFmt(h.coveragePct)}</b></>
+            : seeded > 0 ? `${seeded} set before tracking began are in coverage, not in the bars` : "Hover a day for its numbers"}
+        </span>
+      </div>
+      <div className="loc-chart-title">Players setting an area, per day</div>
+      <svg viewBox={`0 0 ${W} ${BAR_H}`} className="loc-svg" role="img" aria-label="Players setting an area per day, by source">
+        <line x1={PADL} x2={W - PADR} y1={yBar(0)} y2={yBar(0)} stroke="#dfe4da" />
+        <text x={PADL - 6} y={yBar(maxBar) + 4} textAnchor="end" className="loc-axis">{maxBar}</text>
+        <text x={PADL - 6} y={yBar(0) + 4} textAnchor="end" className="loc-axis">0</text>
+        {days.map((d, i) => {
+          const zipTop = yBar(d.zip), gpsTop = yBar(d.zip + d.gps);
+          return (
+            <g key={d.day}>
+              <g opacity={hover == null || hover === i ? 1 : 0.45}>
+                {d.zip > 0 && <rect x={x(i) - barW / 2} y={zipTop} width={barW} height={yBar(0) - zipTop} rx={d.gps > 0 ? 0 : 3} fill={ZIP_COLOR} />}
+                {d.gps > 0 && <rect x={x(i) - barW / 2} y={gpsTop} width={barW} height={Math.max(0, zipTop - gpsTop - (d.zip > 0 ? 2 : 0))} rx={3} fill={GPS_COLOR} />}
+              </g>
+              {i % labelEvery === 0 && <text x={x(i)} y={BAR_H - 4} textAnchor="middle" className="loc-axis">{fmtDay(d.day)}</text>}
+              <rect x={x(i) - slot / 2} y={0} width={slot} height={BAR_H} fill="transparent"
+                onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)} />
+            </g>
+          );
+        })}
+      </svg>
+      <div className="loc-chart-title">Coverage — share of players with an area</div>
+      <svg viewBox={`0 0 ${W} ${LINE_H}`} className="loc-svg" role="img" aria-label="Running coverage percent">
+        <line x1={PADL} x2={W - PADR} y1={yLine(0)} y2={yLine(0)} stroke="#dfe4da" />
+        <text x={PADL - 6} y={yLine(0) + 4} textAnchor="end" className="loc-axis">0%</text>
+        <text x={PADL - 6} y={yLine(covs[n - 1]) + 4} textAnchor="end" className="loc-axis">{pctFmt(covs[n - 1])}</text>
+        <polyline fill="none" stroke="#003326" strokeWidth={2} strokeLinejoin="round"
+          points={days.map((d, i) => `${x(i)},${yLine(d.coveragePct ?? 0)}`).join(" ")} />
+        {hover != null && <line x1={x(hover)} x2={x(hover)} y1={4} y2={yLine(0)} stroke="#9fb3a8" strokeDasharray="3 3" />}
+        {days.map((d, i) => (
+          <g key={d.day}>
+            {(hover === i || i === n - 1) && <circle cx={x(i)} cy={yLine(d.coveragePct ?? 0)} r={4} fill="#003326" stroke="#fff" strokeWidth={2} />}
+            {i % labelEvery === 0 && <text x={x(i)} y={LINE_H - 4} textAnchor="middle" className="loc-axis">{fmtDay(d.day)}</text>}
+            <rect x={x(i) - slot / 2} y={0} width={slot} height={LINE_H} fill="transparent"
+              onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)} />
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+const CSS = `
+.loc{
+  --forest:#003326;--ink:#0d1f18;--muted:#5C6B62;--paper:#fff;
+  --line:#dfe4da;--slot:#EFF4EF;--mint:#2CDB87;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);-webkit-font-smoothing:antialiased;max-width:1360px;margin:0 auto}
+.loc *{box-sizing:border-box}
+.loc-card{background:var(--paper);border:1px solid var(--line);border-radius:16px;
+  box-shadow:0 9px 26px rgba(0,43,34,.075);overflow:hidden;margin-bottom:18px}
+.loc-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:18px 20px;flex-wrap:wrap}
+.loc-h-title{font-size:16px;font-weight:900;letter-spacing:-.2px;color:var(--forest)}
+.loc-h-sub{font-size:12px;color:var(--muted);margin-top:3px}
+.loc-h-right{display:flex;align-items:center;gap:11px;flex-wrap:wrap}
+.loc-control-label{font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+.loc-btn{border:1px solid var(--line);background:#fff;color:var(--forest);font-size:12px;font-weight:800;
+  padding:8px 15px;border-radius:10px;cursor:pointer;font-family:inherit}
+.loc-btn:hover{background:var(--slot)}
+.loc-btn:disabled{opacity:.55;cursor:default}
+.loc-fresh{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+.loc-refresh{display:inline-flex;align-items:center;gap:6px;min-height:32px;border:1px solid var(--line);
+  border-radius:9px;background:#fff;color:var(--forest);font:inherit;font-size:12px;font-weight:700;padding:0 10px;cursor:pointer}
+.loc-refresh:hover:not(:disabled){background:var(--slot)}
+.loc-refresh:disabled{opacity:.6;cursor:default}
+.loc-stamp{font-size:12px;color:#3D5349}
+.loc-stamp-stale{color:#7C8A83}
+.loc-stamp-failed{color:#A8391A;font-weight:600}
+.loc-warn{padding:10px 20px;font-size:12.5px;color:#A8391A;background:#FFF4F0;border-top:1px solid var(--line)}
+.loc-state{padding:26px 20px;font-size:13px;color:var(--muted);font-weight:650;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.loc-kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:18px}
+.loc-kpi{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:0 9px 26px rgba(0,43,34,.05)}
+.loc-kpi-label{font-size:9.5px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--muted)}
+.loc-kpi-value{font-size:24px;font-weight:900;color:var(--forest);margin-top:6px;letter-spacing:-.4px;font-variant-numeric:tabular-nums}
+.loc-kpi-sub{font-size:11.5px;color:var(--muted);margin-top:2px}
+.loc-kpi-note{font-size:10.5px;line-height:1.35;color:#8A5300;margin-top:6px}
+.loc-sec-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.loc-sec-title{font-size:14px;font-weight:900;color:var(--forest)}
+.loc-mini{display:flex;gap:16px;font-size:12.5px;color:var(--muted)}
+.loc-mini b{font-size:18px;color:var(--forest);margin-right:4px;font-variant-numeric:tabular-nums}
+.loc-body{padding:14px 20px;border-bottom:1px solid var(--line)}
+.loc-empty{font-size:13px;color:var(--muted);padding:8px 0}
+.loc-filter{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 20px;border-bottom:1px solid var(--line)}
+.loc-chip{border:1px solid var(--line);background:#fff;color:var(--forest);font-family:inherit;font-size:11.5px;font-weight:800;
+  padding:6px 13px;border-radius:99px;cursor:pointer}
+.loc-chip:hover{background:var(--slot)}
+.loc-chip-on{background:var(--forest);border-color:var(--forest);color:#fff}
+.loc-chip-on:hover{background:var(--forest)}
+.loc-tablewrap{overflow-x:auto}
+.loc-table{width:100%;border-collapse:collapse;font-size:12.5px}
+.loc-table th{text-align:left;font-size:9.5px;font-weight:900;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);
+  padding:9px 14px;border-bottom:1px solid var(--line);background:#FAFCFA;white-space:nowrap}
+.loc-table td{padding:9px 14px;border-bottom:1px solid #EEF2EC;vertical-align:top}
+.loc-table tr:last-child td{border-bottom:0}
+.loc-num{text-align:right !important;font-variant-numeric:tabular-nums}
+.loc-nowrap{white-space:nowrap}
+.loc-td-empty{color:var(--muted);text-align:center;padding:22px 14px !important}
+.loc-muted{color:var(--muted)}
+.loc-raw{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;color:#7C8A83;background:var(--slot);border-radius:4px;padding:1px 5px}
+.loc-link{color:var(--forest);font-weight:700;text-decoration:none}
+.loc-link:hover{text-decoration:underline}
+.loc-foot{padding:10px 20px;font-size:11.5px;color:var(--muted);border-top:1px solid var(--line);background:#FAFCFA}
+.loc-badge{display:inline-block;font-size:11px;font-weight:800;border-radius:99px;padding:2px 9px;white-space:nowrap;border:1px solid transparent}
+.loc-badge-in_market{background:#E3F7EC;color:#04583A;border-color:#BFE8D2}
+.loc-badge-waitlist{background:#FFF3DC;color:#8A5300;border-color:#F2D9A6}
+.loc-badge-unidentified{background:#FDEAE4;color:#A8391A;border-color:#F0BDA9}
+.loc-badge-no_area{background:var(--slot);color:var(--muted);border-color:var(--line)}
+.loc-chart{max-width:900px}
+.loc-legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--ink);margin-bottom:8px}
+.loc-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.loc-legend-tip{color:var(--muted);margin-left:auto}
+.loc-chart-title{font-size:11px;font-weight:800;color:var(--muted);margin:6px 0 2px}
+.loc-svg{width:100%;height:auto;display:block}
+.loc-axis{font-size:10px;fill:#7C8A83}
+@media (max-width:1100px){.loc-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:640px){.loc-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.loc-legend-tip{margin-left:0;width:100%}}
+`;
