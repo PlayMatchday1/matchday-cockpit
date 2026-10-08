@@ -11,7 +11,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { REACHES, type LocationsMap, type MapField, type MapZip, type NationalZip, type Reach } from "@/lib/locationsMap";
-import type { Selection } from "@/components/LocationsLeaflet";
+import type { NatFilter, Selection } from "@/components/LocationsLeaflet";
 
 // Leaflet needs `window` on import — client-only, and only once this tab is opened.
 const LocationsLeaflet = dynamic(() => import("@/components/LocationsLeaflet"), {
@@ -25,7 +25,6 @@ const int = (n: number) => n.toLocaleString("en-US");
 const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "—");
 const mi = (n: number | null) => (n == null ? "—" : `${n < 10 ? n.toFixed(1) : Math.round(n)} mi`);
 const NO_PLAYERS = "No players have set a location here yet.";
-type NatFilter = "all" | "in_market" | "waitlist";
 const NAT_FILTERS: { key: NatFilter; label: string }[] = [
   { key: "all", label: "All players" }, { key: "in_market", label: "In market" }, { key: "waitlist", label: "Outside coverage" },
 ];
@@ -43,6 +42,8 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
   const [natFilter, setNatFilter] = useState<NatFilter>("all");
   const [selNat, setSelNat] = useState<string | null>(null);
   const [focus, setFocus] = useState<{ lat: number; lng: number; zoom: number; n: number } | null>(null);
+  const [showRadius, setShowRadius] = useState(false);
+  const [howOpen, setHowOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -116,6 +117,10 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
               ))}
             </div>
           </div>
+          <label className="lm-check">
+            <input type="checkbox" checked={showRadius} data-testid="show-radius" onChange={(e) => setShowRadius(e.target.checked)} />
+            Show coverage radius
+          </label>
         </div>
       )}
 
@@ -142,30 +147,48 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
               selected={selected} highlightFieldId={highlight}
               onCity={(id) => onCity(id)} onSelect={(s) => { setSelected(s); setHighlight(null); }}
               national={national} nationalAll={data.national} selectedNational={selNat}
-              onSelectNational={setSelNat} focus={focus} />
+              onSelectNational={setSelNat} focus={focus} natFilter={natFilter} showRadius={showRadius} />
           </div>
           <div className="lm-legend" data-testid="map-legend">
             {city ? (
               <>
-                <span><i className="lm-dot" style={{ background: IN_REACH, borderColor: "#04583A" }} />Zip with a field within {reach} mi</span>
-                <span><i className="lm-dot lm-dot-gap" style={{ background: "rgba(235,104,52,.18)", borderColor: GAP }} />No field within {reach} mi (dashed)</span>
-                <span><i className="lm-pin" />Active field</span>
-                <span><i className="lm-ring" />Field reach, {reach} mi</span>
-                <span className="lm-legend-note">Bubble size = players; placed at the players&apos; average location, rounded to about 1 km.</span>
+                <span><i className="lm-dot" style={{ background: IN_REACH, borderColor: "#04583A" }} />Has a field within {reach} mi</span>
+                <span><i className="lm-dot lm-dot-gap" style={{ background: "rgba(235,104,52,.18)", borderColor: GAP }} />No field within {reach} mi</span>
+                <span><i className="lm-pin" />Field</span>
+                <span><i className="lm-ring" />Field reach</span>
               </>
             ) : (
               <>
-                <span><i className="lm-dot" style={{ background: IN_REACH, borderColor: "#04583A" }} />In a market</span>
-                <span><i className="lm-dot lm-dot-gap" style={{ background: "rgba(235,104,52,.22)", borderColor: GAP }} />Outside every city&apos;s radius (dashed)</span>
-                <span><i className="lm-dot" style={{ background: "rgba(0,51,38,.28)", borderColor: "#003326" }} />City, sized by its players</span>
-                <span><i className="lm-ring" />City coverage radius</span>
-                <span className="lm-legend-note">Bubble = a zip, sized by players and placed at their average location (rounded to about 1 km). Overlapping bubbles of the same colour merge into one with the combined count and split as you zoom in. Click a city circle, pill or row to open a city.</span>
+                <span><i className="lm-dot" style={{ background: IN_REACH, borderColor: "#04583A" }} />City (number = players with a location)</span>
+                <span><i className="lm-dot lm-dot-gap" style={{ background: "rgba(235,104,52,.22)", borderColor: GAP }} />Outside coverage</span>
+                {showRadius && <span><i className="lm-ring lm-ring-line" />Coverage radius</span>}
               </>
+            )}
+            <span className="lm-legend-note" data-testid="map-hint">
+              {city ? "Tap a bubble or a field to see its details." : "Tap a city to see its players and fields."}
+              {" "}<button type="button" className="lm-how" aria-expanded={howOpen} onClick={() => setHowOpen((o) => !o)}>How this works</button>
+            </span>
+            {howOpen && (
+              <div className="lm-how-body" data-testid="map-how">
+                <p>Each green bubble on the national map is a city. The number inside is how many players have shared a location there.</p>
+                <p>Orange bubbles are players outside every city&apos;s area. Bubbles that overlap are combined and split apart as you zoom in.</p>
+                <p>In a city, each bubble is a zip code. Players without a zip are grouped by the square mile they are in.</p>
+                <p>Bubbles are placed a little off each player&apos;s exact spot, within about half a mile, to protect their privacy.</p>
+                <p>Distances are in a straight line, not driving distance.</p>
+                <p>A field shows if it has a match coming up or had one in the last {data.activeWindowDays} days.</p>
+              </div>
             )}
           </div>
         </div>
 
         <div className="lm-panel">
+          {data.badFields.length > 0 && (
+            <div className="lm-warnrow" data-testid="map-missing-fields">
+              {data.badFields.length === 1
+                ? `1 field is missing from the map: ${data.badFields[0].title}. Its location needs fixing in MatchDay.`
+                : `${data.badFields.length} fields are missing from the map: ${data.badFields.map((f) => f.title).join(", ")}. Their locations need fixing in MatchDay.`}
+            </div>
+          )}
           {!city ? (
             <>
             {selNational && (
@@ -174,15 +197,15 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
                   <div className="lm-ptitle">{selNational.zip ? `Zip ${selNational.zip}` : selNational.area}</div>
                   <button type="button" className="loc-btn lm-clear" onClick={() => setSelNat(null)}>Clear</button>
                 </div>
-                {selNational.label && <div className="lm-sub">{selNational.label}</div>}
-                <div className="lm-sub">{int(selNational.players)} {selNational.players === 1 ? "player" : "players"} · {selNational.verdict === "in_market" ? "in market" : "outside coverage"}</div>
-                <div className="lm-sub">Nearest city: {cityLabel(selNational.nearestCityId)} · {mi(selNational.nearestCityMi)}</div>
+                {selNational.label && selNational.label !== selNational.area && <div className="lm-sub">{selNational.label}</div>}
+                <div className="lm-sub">{int(selNational.players)} {selNational.players === 1 ? "player" : "players"}, {selNational.verdict === "in_market" ? "inside a city's area" : "outside coverage"}</div>
+                <div className="lm-sub">Nearest city: {cityLabel(selNational.nearestCityId)}, {mi(selNational.nearestCityMi)} away</div>
               </div>
             )}
             <div className="lm-pcard">
               <div className="lm-ptitle">Pick a city</div>
               <table className="lm-list" data-testid="map-city-list">
-                <thead><tr><th>City</th><th className="loc-num">Players</th><th className="loc-num">Fields</th><th className="loc-num">≤ 5 mi</th></tr></thead>
+                <thead><tr><th>City</th><th className="loc-num">Players</th><th className="loc-num">Fields</th><th className="loc-num">Near a field</th></tr></thead>
                 <tbody>
                   {data.cities.map((c) => (
                     <tr key={c.id} className="lm-row" tabIndex={0} onClick={() => onCity(c.id)}
@@ -195,7 +218,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
                   ))}
                 </tbody>
               </table>
-              <div className="lm-note">&ldquo;≤ 5 mi&rdquo; is the share of a city&apos;s players with an active field within 5 miles. — means no players there yet.</div>
+              <div className="lm-note">Near a field = players within 5 miles of an active field.</div>
             </div>
             <div className="lm-pcard">
               <div className="lm-ptitle">Outside coverage</div>
@@ -214,7 +237,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
                         }}
                         onKeyDown={(e) => { if (e.key === "Enter") { setFocus({ lat: o.lat, lng: o.lng, zoom: 10, n: Date.now() }); setSelNat(o.zipKeys[0] ?? null); } }}>
                         <td>{o.place}</td><td className="loc-num">{int(o.players)}</td>
-                        <td>{cityLabel(o.nearestCityId)} · {mi(o.nearestCityMi)}</td>
+                        <td>{cityLabel(o.nearestCityId)}, {mi(o.nearestCityMi)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -232,10 +255,10 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
                   <>
                     <div className="lm-big">{pct(covered, city.players)}</div>
                     <div className="lm-sub">{int(covered)} of {int(city.players)} players have a field within {reach} mi</div>
-                    <div className="lm-sub">{int(city.players - covered)} with no field in reach</div>
+                    <div className="lm-sub">{int(city.players - covered)} {city.players - covered === 1 ? "has" : "have"} no field within {reach} mi</div>
                   </>
                 )}
-                {city.unplaced > 0 && <div className="lm-note">{int(city.unplaced)} more in this market have no coordinates to place.</div>}
+                {city.unplaced > 0 && <div className="lm-note">{int(city.unplaced)} more {city.unplaced === 1 ? "player has" : "players have"} no location we can map.</div>}
               </div>
 
               {(selField || selZip) && (
@@ -249,7 +272,9 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
                   ) : (
                     <>
                       <div className="lm-sub">{int(selZip!.players)} {selZip!.players === 1 ? "player" : "players"}</div>
-                      <div className="lm-sub">Nearest field: {selZip!.nearestFieldId != null ? fieldById.get(selZip!.nearestFieldId)?.title ?? `Field ${selZip!.nearestFieldId}` : "none"} · {mi(selZip!.nearestFieldMi)}</div>
+                      <div className="lm-sub">{selZip!.nearestFieldId != null
+                        ? `Nearest field: ${fieldById.get(selZip!.nearestFieldId)?.title ?? `Field ${selZip!.nearestFieldId}`}, ${mi(selZip!.nearestFieldMi)} away`
+                        : "No active field nearby."}</div>
                     </>
                   )}
                 </div>
@@ -258,10 +283,10 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
               <div className="lm-pcard">
                 <div className="lm-ptitle">Fields</div>
                 {fieldsSorted.length === 0 ? (
-                  <div className="lm-empty">No active fields here (none with a match in the last {data.activeWindowDays} days or upcoming).</div>
+                  <div className="lm-empty">No active fields here.</div>
                 ) : (
                   <table className="lm-list" data-testid="map-fields">
-                    <thead><tr><th>Field</th><th className="loc-num">Within {reach} mi</th></tr></thead>
+                    <thead><tr><th>Field</th><th className="loc-num">Players within {reach} mi</th></tr></thead>
                     <tbody>
                       {fieldsSorted.map((f) => (
                         <tr key={f.id} className={"lm-row" + (highlight === f.id ? " lm-row-on" : "")} tabIndex={0}
@@ -280,7 +305,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
                 {city.players === 0 ? (
                   <div className="lm-empty">{NO_PLAYERS}</div>
                 ) : gaps.length === 0 ? (
-                  <div className="lm-empty">Every zip here has a field within {reach} mi.</div>
+                  <div className="lm-empty">Every area here has a field within {reach} mi.</div>
                 ) : (
                   <table className="lm-list" data-testid="map-gaps">
                     <thead><tr><th>Area</th><th className="loc-num">Players</th><th>Miles to nearest field</th></tr></thead>
@@ -291,7 +316,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
                           onKeyDown={(e) => { if (e.key === "Enter") setSelected({ kind: "zip", key: z.key }); }}>
                           <td>{z.area}</td><td className="loc-num">{int(z.players)}</td>
                           <td>{z.nearestFieldMi == null ? "No active field"
-                            : `${mi(z.nearestFieldMi)}, ${z.nearestFieldId != null ? fieldById.get(z.nearestFieldId)?.title ?? `Field ${z.nearestFieldId}` : "—"}`}</td>
+                            : `${mi(z.nearestFieldMi)}, ${z.nearestFieldId != null ? fieldById.get(z.nearestFieldId)?.title ?? `Field ${z.nearestFieldId}` : ""}`}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -303,12 +328,6 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
         </div>
       </div>
 
-      <div className="loc-foot">
-        Straight-line distance. Active field = not deleted, with a match in the last {data.activeWindowDays} days or upcoming; coordinates from the synced match records.
-        {city && data.waitlistPlayers > 0 && ` Players outside every city's radius are on the All cities view.`}
-        {data.unidentifiedPlayers > 0 && ` Not on the map: ${int(data.unidentifiedPlayers)} with an unidentified zip (no location; see Overview).`}
-        {data.badFields.length > 0 && ` Not placed — coordinates invalid in MatchDay: ${data.badFields.map((f) => `${f.title} (${f.id})`).join(", ")}.`}
-      </div>
     </div>
   );
 }
@@ -327,6 +346,16 @@ const CSS = `
 .loc-leaflet{height:100%;width:100%}
 .lm-legend{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;padding:10px 16px;font-size:12px;color:var(--ink);border-top:1px solid var(--line);background:#FAFCFA}
 .lm-legend-note{color:var(--muted);flex-basis:100%}
+.lm-how{border:0;background:none;padding:0;font:inherit;color:var(--forest);font-weight:700;text-decoration:underline;cursor:pointer}
+.lm-how-body{flex-basis:100%;font-size:12px;color:var(--ink);line-height:1.45}
+.lm-how-body p{margin:0 0 4px}
+.lm-check{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--forest);cursor:pointer}
+.lm-check input{accent-color:#046B45;width:15px;height:15px;margin:0}
+.lm-ring-line{background:transparent}
+.lm-warnrow{padding:10px 16px;font-size:12px;color:#8A5300;background:#FFF6E5;border-bottom:1px solid #F2D9A6}
+.loc-count-wrap{background:transparent;border:0}
+.loc-count{display:block;transform:translate(-50%,-50%);font:800 12px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;color:#fff;text-shadow:0 0 2px rgba(0,0,0,.4);white-space:nowrap;pointer-events:auto;cursor:pointer}
+.loc-tip-count-gap{color:#8A3A12;text-shadow:none}
 .lm-dot{display:inline-block;width:12px;height:12px;border-radius:50%;border:2px solid;margin-right:6px;vertical-align:-2px}
 .lm-dot-gap{border-style:dashed}
 .lm-pin{display:inline-block;width:10px;height:10px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:#003326;margin-right:7px;vertical-align:-1px}

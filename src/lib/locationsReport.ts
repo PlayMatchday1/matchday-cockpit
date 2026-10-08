@@ -9,7 +9,7 @@
 // the first sync run, not the day the player set anything.
 
 import { chicagoYmd } from "./weekBuckets";
-import { areaGroupKey, areaGroupName, sourceKind, type AreaCity, type SourceKind, type Verdict } from "./playerAreaModel";
+import { areaGroupKey, areaGroupName, placeName, sourceKind, type AreaCity, type SourceKind, type Verdict } from "./playerAreaModel";
 
 export type SeenRow = {
   player_id: number;
@@ -184,8 +184,9 @@ export function buildLocationsReport(input: {
   }
   const outside: PlaceRow[] = [...places].map(([key, g]) => {
     const mis = g.map((r) => r.nearest_city_mi).filter((m): m is number => m != null);
-    const place = key.startsWith("label:") ? key.slice(6)
+    const raw = key.startsWith("label:") ? key.slice(6)
       : key === "no-location" ? NO_LOCATION : areaGroupName(g[0].zip, g.map((r) => r.area_label));
+    const place = placeName(raw) ?? raw;
     return {
       key, place, players: g.length,
       last30: g.filter((r) => !r.seeded && Date.parse(r.first_seen_at) >= monthAgo).length,

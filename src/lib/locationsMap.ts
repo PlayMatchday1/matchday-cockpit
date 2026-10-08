@@ -19,7 +19,7 @@
 // share is a home, and a one-player zip would otherwise place that player exactly. Distances are
 // computed from the unrounded averages.
 
-import { areaGroupKey, areaGroupName, milesBetween, type AreaCity } from "./playerAreaModel";
+import { areaGroupKey, areaGroupName, milesBetween, placeName, type AreaCity } from "./playerAreaModel";
 
 export const REACHES = [3, 5, 10, 15] as const;
 export type Reach = (typeof REACHES)[number];
@@ -62,6 +62,9 @@ export type MapCity = AreaCity & {
 /** All-cities view: one bubble per (verdict, zip) across the country — in-market AND outside
  *  coverage. Same rounding and averaging as MapZip. nearestCity is the nearest US city CENTRE. */
 export type NationalZip = {
+  /** In market: the player's own city (verdict_city_id); null outside coverage. Bubbles never merge
+   *  across cities, so an in-market zip only ever rolls up into its own city. */
+  cityId: number | null;
   key: string; zip: string | null; area: string; label: string | null; verdict: "in_market" | "waitlist";
   lat: number; lng: number; players: number; nearestCityId: number | null; nearestCityMi: number | null;
 };
@@ -128,9 +131,9 @@ export function buildLocationsMap(input: {
     }
     return best;
   };
-  type Acc = { zip: string | null; sLat: number; sLng: number; n: number; labels: (string | null)[]; zipKeys: Set<string> };
+  type Acc = { zip: string | null; cityId: number | null; sLat: number; sLng: number; n: number; labels: (string | null)[]; zipKeys: Set<string> };
   const add = (m: Map<string, Acc>, key: string, p: MapPlayerRow, zipKey: string) => {
-    const g = m.get(key) ?? { zip: p.zip, sLat: 0, sLng: 0, n: 0, labels: [], zipKeys: new Set() };
+    const g = m.get(key) ?? { zip: p.zip, cityId: p.verdict === "in_market" ? p.verdict_city_id : null, sLat: 0, sLng: 0, n: 0, labels: [], zipKeys: new Set() };
     g.sLat += p.lat as number; g.sLng += p.lng as number; g.n++;
     g.labels.push(p.area_label);
     g.zipKeys.add(zipKey);
@@ -146,7 +149,7 @@ export function buildLocationsMap(input: {
   for (const p of input.players) {
     if (p.verdict === "unidentified" || !validCoord(p.lat, p.lng)) continue;
     const area = areaGroupKey(p.zip, p.lat, p.lng)!; // valid coordinates, so never null
-    const key = `${p.verdict}|${area}`;
+    const key = `${p.verdict}|${p.verdict === "in_market" ? p.verdict_city_id : ""}|${area}`;
     add(nat, key, p, key);
     // A place is its label, else its zip, else its grid cell — so two unlabelled no-zip players
     // miles apart are two places, not one.
@@ -156,13 +159,15 @@ export function buildLocationsMap(input: {
     const verdict = key.slice(0, key.indexOf("|")) as "in_market" | "waitlist";
     const lat = g.sLat / g.n, lng = g.sLng / g.n;
     const nc = nearestCity(lat, lng);
-    return { key, zip: g.zip, area: areaGroupName(g.zip, g.labels), label: topLabel(g), verdict,
+    const area = areaGroupName(g.zip, g.labels);
+    return { cityId: g.cityId, key, zip: g.zip, area: g.zip ? area : placeName(area) ?? area, label: placeName(topLabel(g)), verdict,
       lat: r2(lat), lng: r2(lng), players: g.n, nearestCityId: nc?.id ?? null, nearestCityMi: nc ? r1(nc.mi) : null };
   }).sort((a, b) => b.players - a.players || a.key.localeCompare(b.key));
   const outside: OutsidePlace[] = [...out].map(([placeKey, g]) => {
     const lat = g.sLat / g.n, lng = g.sLng / g.n;
     const nc = nearestCity(lat, lng);
-    const place = placeKey.startsWith("label:") ? placeKey.slice(6) : areaGroupName(g.zip, g.labels);
+    const raw = placeKey.startsWith("label:") ? placeKey.slice(6) : areaGroupName(g.zip, g.labels);
+    const place = placeName(raw) ?? raw;
     return { place, players: g.n, nearestCityId: nc?.id ?? null, nearestCityMi: nc ? r1(nc.mi) : null,
       lat: r2(lat), lng: r2(lng), zipKeys: [...g.zipKeys] };
   }).sort((a, b) => b.players - a.players || a.place.localeCompare(b.place));
@@ -195,7 +200,8 @@ export function buildLocationsMap(input: {
     }
     if (best) nearestExact.set(z.key, best.mi);
     const inReach = Object.fromEntries(REACHES.map((r) => [r, best != null && best.mi <= r])) as Record<Reach, boolean>;
-    return { key: z.key, zip: z.zip, area: areaGroupName(z.zip, z.labels), cityId: z.cityId,
+    const name = areaGroupName(z.zip, z.labels);
+    return { key: z.key, zip: z.zip, area: z.zip ? name : placeName(name) ?? name, cityId: z.cityId,
       lat: r2(z.lat), lng: r2(z.lng), players: z.n,
       nearestFieldId: best?.id ?? null, nearestFieldMi: best ? r1(best.mi) : null, inReach };
   }).sort((a, b) => b.players - a.players || a.key.localeCompare(b.key));

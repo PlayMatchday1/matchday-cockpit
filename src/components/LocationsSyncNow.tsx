@@ -106,7 +106,7 @@ export default function LocationsSyncNow({ onFinished }: { onFinished: () => voi
   const cooling = !r && status?.availableAt ? status.availableAt : null;
   const label = starting || (awaiting && !r) ? "Starting…"
     : r ? `Syncing… ${r.pagesDone}${r.pagesTotal ? ` / ${r.pagesTotal}` : ""} pages`
-    : cooling ? `Sync now · available ${fmtTime(cooling)}`
+    : cooling ? `Sync now (available at ${fmtTime(cooling)})`
     : "Sync now";
 
   return (

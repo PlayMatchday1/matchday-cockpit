@@ -9,13 +9,32 @@
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { useEffect, useMemo, useState } from "react";
-import { Circle, CircleMarker, MapContainer, Marker, TileLayer, Tooltip, useMap } from "react-leaflet";
+import { Circle, CircleMarker, MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import type { MapCity, MapField, MapZip, NationalZip, Reach } from "@/lib/locationsMap";
 
 export const IN_REACH = "#1baf7a";
 export const GAP = "#eb6834";
 const FOREST = "#003326";
 const MI_TO_M = 1609.344;
+
+/* THE ALL-CITIES VIEW (Ryan, 2026-10-08): ONE solid green bubble per city at its centre, sized by
+ * players, count inside, name beside; a city with no players is a small hollow marker with its name.
+ * In-market players never appear as their own bubbles at this zoom — they roll up into their own
+ * city, never a neighbour's. Zip bubbles appear only in the city view, or here once the map is
+ * zoomed to DEEP_ZOOM (about one metro filling the map), and even then merge only within a city.
+ * Outside-coverage players stay orange dashed bubbles, count inside, merging only with each other. */
+export const DEEP_ZOOM = 9;
+export type NatFilter = "all" | "in_market" | "waitlist";
+// Kept small: Austin and San Antonio sit ~30px apart at the national fit, and bigger bubbles buried
+// one city's label under the other's bubble (seen in a browser).
+const cityBubbleR = (n: number) => Math.min(24, 8 + 4 * Math.sqrt(n));
+const HOLLOW_R = 5;
+
+const countIcon = (n: number, cls: string) => L.divIcon({
+  className: "loc-count-wrap",
+  html: `<span class="loc-count ${cls}">${n}</span>`,
+  iconSize: [0, 0],
+});
 
 /** A zip bubble is selected by its KEY: a no-zip bubble is a grid cell, and has no zip. */
 export type Selection = { kind: "field"; id: number } | { kind: "zip"; key: string } | null;
@@ -42,7 +61,7 @@ const offsetFor = (d: Dir, r: number): [number, number] =>
  * zoom and resize. Label sizes are estimates (~7.2px per char plus padding, erring wide). */
 function CityLabelLayout({ cities, radius, obstacles, onLayout }: {
   cities: MapCity[]; radius: (c: MapCity) => number;
-  /** National bubbles: a label must not sit on one and hide its count. */
+  /** Bubbles on the map: a label must not sit on one and hide its count. */
   obstacles: NationalZip[];
   onLayout: (d: Record<number, Dir>) => void;
 }) {
@@ -54,7 +73,7 @@ function CityLabelLayout({ cities, radius, obstacles, onLayout }: {
       const pts = cities.map((c) => {
         const p = map.latLngToContainerPoint([c.lat, c.lng]);
         const r = radius(c);
-        const w = `${c.name} · ${c.players}`.length * 7.2 + 20, h = 24;
+        const w = c.name.length * 7.2 + 20, h = 24;
         // The same geometry offsetFor produces: centre + offset + the 6px arrow margin.
         const boxes: Record<Dir, Box> = {
           right: { x: p.x + r + 10, y: p.y - h / 2, w, h },
@@ -62,7 +81,7 @@ function CityLabelLayout({ cities, radius, obstacles, onLayout }: {
           top: { x: p.x - w / 2, y: p.y - r - 8 - h, w, h },
           bottom: { x: p.x - w / 2, y: p.y + r + 8, w, h },
         };
-        return { id: c.id, circle: { x: p.x - r, y: p.y - r, w: 2 * r, h: 2 * r } as Box, boxes };
+        return { id: c.id, cx: p.x, cy: p.y, circle: { x: p.x - r, y: p.y - r, w: 2 * r, h: 2 * r } as Box, boxes };
       });
       const bubbles: Box[] = obstacles.map((z) => {
         const p = map.latLngToContainerPoint([z.lat, z.lng]);
@@ -77,6 +96,11 @@ function CityLabelLayout({ cities, radius, obstacles, onLayout }: {
           for (const d of ["right", "left", "top", "bottom"] as Dir[]) {
             let cost = 0;
             for (const b of bubbles) cost += area(q.boxes[d], b);
+            // A label must read as its OWN city's: if its centre is nearer another city than its
+            // own, penalise it (seen: "Austin" placed under San Antonio's bubble at national zoom).
+            const bx = q.boxes[d].x + q.boxes[d].w / 2, by = q.boxes[d].y + q.boxes[d].h / 2;
+            const own = Math.hypot(bx - q.cx, by - q.cy);
+            if (pts.some((o) => o.id !== q.id && Math.hypot(bx - o.cx, by - o.cy) < own)) cost += 2000;
             for (const o of pts) {
               cost += area(q.boxes[d], o.circle);
               if (o.id !== q.id) cost += area(q.boxes[d], o.boxes[dir[o.id]]);
@@ -96,13 +120,19 @@ function CityLabelLayout({ cities, radius, obstacles, onLayout }: {
   return null;
 }
 
+function ZoomWatch({ onZoom }: { onZoom: (z: number) => void }) {
+  const map = useMapEvents({ zoomend: () => onZoom(map.getZoom()) });
+  useEffect(() => { onZoom(map.getZoom()); }, [map, onZoom]);
+  return null;
+}
+
 /* NATIONAL BUBBLES, CLUSTERED IN PIXELS. At national zoom neighbouring zips sit on top of each
  * other, so after every zoom/resize bubbles of the SAME verdict whose circles would overlap merge
  * into one, at the player-weighted centre, sized by the combined count. Never across verdicts — a
  * merged bubble must not turn an outside-coverage player green. Clicking a merged bubble zooms to
  * its members, which splits it. Size is an absolute scale so a bubble means the same at any zoom. */
 export const natRadius = (n: number) => Math.min(28, 6 + 5 * Math.sqrt(n));
-type Cluster = { key: string; verdict: NationalZip["verdict"]; lat: number; lng: number; players: number; members: NationalZip[] };
+type Cluster = { key: string; verdict: NationalZip["verdict"]; cityId: number | null; lat: number; lng: number; players: number; members: NationalZip[] };
 
 function NationalClusters({ bubbles, selectedKey, onSelect }: {
   bubbles: NationalZip[]; selectedKey: string | null; onSelect: (key: string) => void;
@@ -114,9 +144,10 @@ function NationalClusters({ bubbles, selectedKey, onSelect }: {
       const out: (Cluster & { px: number; py: number })[] = [];
       for (const b of [...bubbles].sort((x, y) => y.players - x.players || x.key.localeCompare(y.key))) {
         const p = map.latLngToContainerPoint([b.lat, b.lng]);
-        const hit = out.find((c) => c.verdict === b.verdict
+        // Same verdict AND same city (null for outside coverage): two cities never share a bubble.
+        const hit = out.find((c) => c.verdict === b.verdict && c.cityId === b.cityId
           && Math.hypot(c.px - p.x, c.py - p.y) < natRadius(c.players) + natRadius(b.players) - 2);
-        if (!hit) { out.push({ key: b.key, verdict: b.verdict, lat: b.lat, lng: b.lng, players: b.players, members: [b], px: p.x, py: p.y }); continue; }
+        if (!hit) { out.push({ key: b.key, verdict: b.verdict, cityId: b.cityId, lat: b.lat, lng: b.lng, players: b.players, members: [b], px: p.x, py: p.y }); continue; }
         const n = hit.players + b.players;
         hit.lat = (hit.lat * hit.players + b.lat * b.players) / n;
         hit.lng = (hit.lng * hit.players + b.lng * b.players) / n;
@@ -150,9 +181,8 @@ function NationalClusters({ bubbles, selectedKey, onSelect }: {
               if (map.getZoom() >= 12 || bounds.getNorthEast().equals(bounds.getSouthWest())) { onSelect(c.members[0].key); return; }
               map.fitBounds(bounds.pad(0.4), { maxZoom: 12 });
             } }}>
-            {c.players >= 2 && (
-              <Tooltip key={`${c.key}-${c.players}`} permanent direction="center" className="loc-tip loc-tip-zip loc-tip-count">{c.players}</Tooltip>
-            )}
+            <Tooltip key={`${c.key}-${c.players}`} permanent direction="center"
+              className={"loc-tip loc-tip-zip loc-tip-count" + (c.verdict === "waitlist" ? " loc-tip-count-gap" : "")}>{c.players}</Tooltip>
           </CircleMarker>
         );
       })}
@@ -194,9 +224,17 @@ export default function LocationsLeaflet(props: {
   selectedNational: string | null;
   onSelectNational: (key: string) => void;
   focus: { lat: number; lng: number; zoom: number; n: number } | null;
+  natFilter: NatFilter;
+  showRadius: boolean;
 }) {
   const { cities, city, fields, zips, reach, selected, highlightFieldId, onCity, onSelect,
-    national, nationalAll, selectedNational, onSelectNational, focus } = props;
+    national, nationalAll, selectedNational, onSelectNational, focus, natFilter, showRadius } = props;
+  const [zoom, setZoom] = useState(5);
+  const deep = zoom >= DEEP_ZOOM;
+  // What the all-cities view draws as separate bubbles: outside coverage always (if the filter
+  // allows), in-market zips only once zoomed in to a metro.
+  const bubbles = useMemo(() => national.filter((z) => z.verdict === "waitlist" || deep), [national, deep]);
+  const greenCity = (c: MapCity) => !deep && natFilter !== "waitlist" && c.players > 0;
 
   const points = useMemo<[number, number][]>(() => {
     if (!city) return [...cities.map((c) => [c.lat, c.lng] as [number, number]), ...nationalAll.map((z) => [z.lat, z.lng] as [number, number])];
@@ -204,8 +242,8 @@ export default function LocationsLeaflet(props: {
     return pts.length ? pts : [[city.lat, city.lng]];
   }, [cities, city, fields, zips, nationalAll]);
 
-  const maxCityPlayers = Math.max(1, ...cities.map((c) => c.players));
-  const cityRadius = useMemo(() => (c: MapCity) => 7 + 11 * Math.sqrt(c.players / maxCityPlayers), [maxCityPlayers]);
+  const cityRadius = useMemo(() => (c: MapCity) => (!deep && natFilter !== "waitlist" && c.players > 0 ? cityBubbleR(c.players) : HOLLOW_R),
+    [deep, natFilter]);
   const [dirs, setDirs] = useState<Record<number, Dir>>({});
   const maxZipPlayers = Math.max(1, ...zips.map((z) => z.players));
 
@@ -217,28 +255,38 @@ export default function LocationsLeaflet(props: {
         maxZoom={18}
       />
       <Fit points={points} fallback={city ? [city.lat, city.lng] : [33, -92]} zoom={city ? 10 : 5} />
-      {!city && <CityLabelLayout cities={cities} radius={cityRadius} obstacles={national} onLayout={setDirs} />}
+      <ZoomWatch onZoom={setZoom} />
+      {!city && <CityLabelLayout cities={cities} radius={cityRadius} obstacles={bubbles} onLayout={setDirs} />}
       <Focus focus={focus} />
 
-      {/* Coverage radius per city, faint: why a bubble is in or out. Drawn first = underneath. */}
-      {!city && cities.map((c) => (
+      {/* Coverage radius per city — only when "Show coverage radius" is on: a thin outline, no fill. */}
+      {!city && showRadius && cities.map((c) => (
         <Circle key={`radius-${c.id}`} center={[c.lat, c.lng]} radius={c.radiusMiles * MI_TO_M} interactive={false}
-          pathOptions={{ color: FOREST, weight: 1, opacity: 0.3, fillColor: FOREST, fillOpacity: 0.035 }} />
+          pathOptions={{ color: FOREST, weight: 1, opacity: 0.5, fill: false }} />
       ))}
 
-      {!city && cities.map((c) => (
-        <CircleMarker key={c.id} center={[c.lat, c.lng]}
-          radius={cityRadius(c)}
-          pathOptions={{ color: FOREST, weight: 2, fillColor: FOREST, fillOpacity: c.players > 0 ? 0.28 : 0.08 }}
-          eventHandlers={{ click: () => onCity(c.id) }}>
-          {/* keyed on direction: react-leaflet fixes a tooltip's direction at mount */}
-          <Tooltip key={dirs[c.id] ?? "right"} permanent direction={dirs[c.id] ?? "right"} offset={offsetFor(dirs[c.id] ?? "right", cityRadius(c))} className="loc-tip">
-            {c.name} · {c.players}
-          </Tooltip>
-        </CircleMarker>
+      {!city && cities.map((c) => {
+        const green = greenCity(c);
+        const d = dirs[c.id] ?? "right";
+        return (
+          <CircleMarker key={`city-${c.id}-${green ? "g" : "h"}`} center={[c.lat, c.lng]} radius={cityRadius(c)}
+            pathOptions={green
+              // White ring, so two touching city bubbles keep a visible edge between them.
+              ? { color: "#fff", weight: 2, dashArray: "", fillColor: IN_REACH, fillOpacity: 1 }
+              : { color: FOREST, weight: 2, dashArray: "", fillColor: "#fff", fillOpacity: 1 }}
+            eventHandlers={{ click: () => onCity(c.id) }}>
+            {/* keyed on direction: react-leaflet fixes a tooltip's direction at mount */}
+            <Tooltip key={d} permanent direction={d} offset={offsetFor(d, cityRadius(c))} className="loc-tip">{c.name}</Tooltip>
+          </CircleMarker>
+        );
+      })}
+      {/* The count INSIDE a green city bubble — a second layer, since the bubble's one tooltip is its name. */}
+      {!city && cities.filter(greenCity).map((c) => (
+        <Marker key={`count-${c.id}`} position={[c.lat, c.lng]} icon={countIcon(c.players, "")}
+          eventHandlers={{ click: () => onCity(c.id) }} />
       ))}
 
-      {!city && <NationalClusters bubbles={national} selectedKey={selectedNational} onSelect={onSelectNational} />}
+      {!city && <NationalClusters bubbles={bubbles} selectedKey={selectedNational} onSelect={onSelectNational} />}
 
       {city && fields.map((f) => {
         const on = highlightFieldId === f.id || (selected?.kind === "field" && selected.id === f.id);

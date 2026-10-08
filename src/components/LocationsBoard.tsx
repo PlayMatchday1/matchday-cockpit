@@ -25,7 +25,7 @@ import LocationsSyncNow from "@/components/LocationsSyncNow";
 import { supabase } from "@/lib/supabase";
 import RefreshIcon from "@/components/RefreshIcon";
 import { downloadCsv } from "@/components/growth/format";
-import { GPS_NO_ZIP } from "@/lib/playerAreaModel";
+import { GPS_NO_ZIP, placeName } from "@/lib/playerAreaModel";
 import { type LocationsReport, type ZipRow, type DayPoint } from "@/lib/locationsReport";
 
 const CHI = "America/Chicago";
@@ -108,7 +108,7 @@ export default function LocationsBoard() {
   }), [data, vf, city]);
 
   const exportZips = () => {
-    const rows: (string | number)[][] = [["Zip", "Area label", "Players", "Nearest city", "Distance (mi)", "Inside radius", "Verdict"]];
+    const rows: (string | number)[][] = [["Zip", "Area label", "Players", "Nearest city", "Distance (mi)", "Inside radius", "Status"]];
     for (const r of zipView) rows.push([
       r.verdict === "no_area" ? "No area" : r.zip ?? "", r.zip ? r.label ?? "" : r.area, r.players,
       r.verdict === "no_area" || r.verdict === "unidentified" ? "" : cityName(r.nearestCityId),
@@ -135,7 +135,7 @@ export default function LocationsBoard() {
         <div className="loc-head">
           <div>
             <div className="loc-h-title">Locations</div>
-            <div className="loc-h-sub">Home areas players have shared in the app · internal accounts excluded</div>
+            <div className="loc-h-sub">Home areas players have shared in the app. Staff accounts are not counted.</div>
           </div>
           <div className="loc-h-right">
             <span className="loc-fresh">
@@ -148,7 +148,7 @@ export default function LocationsBoard() {
               <span className={"loc-stamp" + (lastFailed ? " loc-stamp-failed" : stale ? " loc-stamp-stale" : "")} data-testid="data-as-of">
                 {!data ? "Loading…"
                   : !asOf ? "No sync has completed yet"
-                  : `Data as of ${fmtWhen(asOf)}${stale ? ` · ${staleMins >= 120 ? `${Math.floor(staleMins / 60)}h` : `${staleMins}m`} ago` : ""}${lastFailed ? " · last sync failed" : ""}`}
+                  : `Data as of ${fmtWhen(asOf)}${stale ? ` (${staleMins >= 120 ? `${Math.floor(staleMins / 60)} hours` : `${staleMins} minutes`} ago)` : ""}${lastFailed ? ". Last sync failed." : ""}`}
               </span>
             </span>
             <LocationsSyncNow onFinished={reloadAll} />
@@ -217,14 +217,14 @@ export default function LocationsBoard() {
             </div>
             <div className="loc-tablewrap">
               <table className="loc-table" data-testid="loc-recent">
-                <thead><tr><th>First seen</th><th>Player</th><th>Zip / area</th><th>Source</th><th>City</th></tr></thead>
+                <thead><tr><th>First seen</th><th>Player</th><th>Area</th><th>Source</th><th>City</th></tr></thead>
                 <tbody>
                   {data.recent.length === 0 && <tr><td colSpan={5} className="loc-td-empty">No player has set an area yet.</td></tr>}
                   {data.recent.map((r) => (
                     <tr key={r.playerId}>
                       <td className="loc-nowrap">{r.seeded ? <span className="loc-muted" title="Set before tracking began; the real time is unknown">Before tracking</span> : fmtWhen(r.firstSeenAt)}</td>
                       <td><a className="loc-link" href={`/match-ops/player-lookup?id=${r.playerId}`}>{r.name ?? `Player ${r.playerId}`}</a></td>
-                      <td>{r.zip ?? r.label ?? "—"}{r.zip && r.label ? <span className="loc-muted"> · {r.label}</span> : null}</td>
+                      <td>{r.zip ?? placeName(r.label) ?? "—"}{r.zip && r.label ? <span className="loc-muted"> ({placeName(r.label)})</span> : null}</td>
                       <td className="loc-nowrap">{r.source === "gps" ? "GPS" : r.source === "zip" ? "Zip" : "Not set"} <span className="loc-raw">{r.sourceRaw ?? "null"}</span></td>
                       <td>{r.verdict === "in_market" ? cityName(r.cityId) : r.verdict === "waitlist" ? "Outside coverage" : "Unidentified"}</td>
                     </tr>
@@ -251,8 +251,8 @@ export default function LocationsBoard() {
                   onClick={() => setCity(c.id)}>{c.name}</button>
               ))}
             </div>
-            <div className="loc-filter" role="group" aria-label="Filter verdict">
-              <span className="loc-control-label">Verdict</span>
+            <div className="loc-filter" role="group" aria-label="Filter status">
+              <span className="loc-control-label">Status</span>
               {VERDICT_FILTERS.map((f) => (
                 <button type="button" key={f.key} aria-pressed={vf === f.key} className={"loc-chip" + (vf === f.key ? " loc-chip-on" : "")}
                   onClick={() => setVf(f.key)}>{f.label}</button>
@@ -260,14 +260,14 @@ export default function LocationsBoard() {
             </div>
             <div className="loc-tablewrap">
               <table className="loc-table" data-testid="loc-zips">
-                <thead><tr><th>Zip</th><th className="loc-num">Players</th><th>Nearest city</th><th className="loc-num">Distance</th><th>Inside radius</th><th>Verdict</th></tr></thead>
+                <thead><tr><th>Zip</th><th className="loc-num">Players</th><th>Nearest city</th><th className="loc-num">Distance</th><th>Inside radius</th><th>Status</th></tr></thead>
                 <tbody>
                   {zipView.length === 0 && <tr><td colSpan={6} className="loc-td-empty">Nothing matches these filters.</td></tr>}
                   {zipView.map((r) => {
                     const placed = r.verdict === "in_market" || r.verdict === "waitlist";
                     return (
                       <tr key={r.key}>
-                        <td>{r.verdict === "no_area" ? <span className="loc-muted">No area</span> : r.zip ?? (r.area === GPS_NO_ZIP ? <span className="loc-muted">{r.area}</span> : <>{r.area} <span className="loc-muted">· no zip</span></>)}</td>
+                        <td>{r.verdict === "no_area" ? <span className="loc-muted">No area</span> : r.zip ?? (r.area === GPS_NO_ZIP ? <span className="loc-muted">{r.area}</span> : <>{placeName(r.area)} <span className="loc-muted">(no zip)</span></>)}</td>
                         <td className="loc-num">{int(r.players)}</td>
                         <td>{placed ? cityName(r.nearestCityId) : "—"}</td>
                         <td className="loc-num">{placed ? mi(r.nearestMi) : "—"}</td>
@@ -357,7 +357,7 @@ function AdoptionCharts({ days, seeded }: { days: DayPoint[]; seeded: number }) 
         <span><i style={{ background: ZIP_COLOR }} />Zip</span>
         <span><i style={{ background: GPS_COLOR }} />GPS</span>
         <span className="loc-legend-tip">
-          {h ? <>{fmtDay(h.day)}: <b>{h.zip}</b> zip · <b>{h.gps}</b> GPS · coverage <b>{h.coveragePct == null ? "—" : pctFmt(h.coveragePct)}</b></>
+          {h ? <>{fmtDay(h.day)}: <b>{h.zip}</b> zip, <b>{h.gps}</b> GPS, coverage <b>{h.coveragePct == null ? "—" : pctFmt(h.coveragePct)}</b></>
             : seeded > 0 ? `${seeded} set before tracking began are in coverage, not in the bars` : "Hover a day for its numbers"}
         </span>
       </div>

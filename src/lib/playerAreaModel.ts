@@ -126,3 +126,11 @@ export function areaGroupName(zip: string | null, labels: Iterable<string | null
   const [only] = set;
   return set.size === 1 && only ? only : GPS_NO_ZIP;
 }
+
+/** A place as the page shows it. areaLabel is "City, United States" and the data carries NO state
+ *  (raw.address is {city, street, country} only; checked 2026-10-08), so "City, ST" is not
+ *  available: the country is dropped — every city on this page is in the US — and nothing is guessed. */
+export function placeName(label: string | null): string | null {
+  if (!label) return null;
+  return label.replace(/,\s*United States$/i, "").trim() || label;
+}
