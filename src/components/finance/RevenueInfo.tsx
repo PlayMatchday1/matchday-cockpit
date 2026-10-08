@@ -27,20 +27,20 @@ export const POP: Record<PopKey, React.ReactNode> = {
   </ul></>),
   status: (<><div className="h">Updating and final</div>Stripe makes each day&apos;s payments available by noon the next day, so the last days of a month can still be arriving. September shows <b>Updating</b> until Sep 30 has fully synced, then <b>Final</b>. A final month does not change on its own: new refunds and disputes count in the month they happen. If anything is entered or edited for a final month later, such as a Venmo rental, it shows <b>Adjusted after final</b> with the amount.</>),
   net: (<><div className="h">Net revenue</div>Everything customers paid in the month (Stripe and Venmo), minus refunds, failed payments, disputes and sales tax. It is the money that is ours before Stripe&apos;s fees.</>),
-  dpp: (<><div className="h">DPP</div>Drop-in pay-per-play: single match bookings and strike fees. Net of sales tax.</>),
-  mem: (<><div className="h">Membership</div>Monthly membership charges. Most bill on the 1st; members who joined mid-month bill on their own date. Net of sales tax.</>),
+  dpp: (<><div className="h">DPP</div>Drop-in pay-per-play: single match bookings and strike fees. Net of sales tax. In the tiles and the four-month table it is also after its own refunds and disputes, so DPP + Membership + Other = Net revenue; the city and field tables show refunds and disputes in their own column instead.</>),
+  mem: (<><div className="h">Membership</div>Monthly membership charges. Most bill on the 1st; members who joined mid-month bill on their own date. Net of sales tax, and in the tiles and the four-month table after membership refunds and disputes. On the Field tab, a city&apos;s membership is credited to its fields by their share of the city&apos;s member spots that month, the rule the Cities page uses.</>),
   avg: (<><div className="h">Avg daily DPP</div>DPP for the month divided by the days in it. Membership is left out because most of it bills on the 1st and would distort a daily average.</>),
-  rev: (<><div className="h">Refunds &amp; disputes</div>Money returned to customers this month, net of the tax that came back with it. A dispute is a chargeback: the cardholder&apos;s bank reversed the payment. Each dispute also costs a $15 Stripe fee, shown under Stripe fees.</>),
+  rev: (<><div className="h">Refunds &amp; disputes</div>Money returned to customers this month, net of the tax that came back with it. A dispute is a chargeback: the cardholder&apos;s bank reversed the payment. Each dispute also costs a $15 Stripe fee, shown under Stripe fees. <b>Every refund and dispute figure on this page is net of tax</b>, so Sales tax is the tax on the month&apos;s charges.</>),
   fields: (<><div className="h">Fields</div>Lists only real fields that had revenue in the selected month and city, matched by field ID, not by match name.</>),
   gross: (<><div className="h">Gross collected</div>Every successful charge in the month, including sales tax, plus Venmo payments entered by hand.</>),
-  tax: (<><div className="h">Sales tax</div>Collected from customers on behalf of the state, so it is not our revenue. Calculated per city from its rate.</>),
+  tax: (<><div className="h">Sales tax</div>Collected from customers on behalf of the state, so it is not our revenue. Calculated per city from its rate, on the month&apos;s charges. The tax returned with a refund is already out of the refund figure.</>),
   fees: (<><div className="h">Stripe fees</div>Card processing, invoicing and billing fees, and dispute fees, as Stripe reports them for the month.</>),
   failed: (<><div className="h">Failed payments</div>Charges that looked successful and were later reversed by the bank before settling.</>),
   venmo: (<><div className="h">Venmo (manual)</div>Private rental payments received outside Stripe and entered by hand.</>),
   // ── Not in the mock: the build's own, where the mock had nothing to say ──
   unassigned: (<><div className="h">Unassigned</div>Payments whose member has no city on file: the account was deleted, or the email matches no member. They stay in the total so the cities add up. Sales tax is taken at the Texas rate, 8.25%.</>),
-  other: (<><div className="h">Also in net revenue</div>Private rentals and charges that are neither DPP nor membership. They count in the row&apos;s net revenue but have no column of their own.</>),
-  pace: (<><div className="h">Pace to month end</div>Net revenue so far, plus the days left at the daily rate. The rate leaves out day 1, when most memberships bill, and today, which is still arriving.</>),
+  other: (<><div className="h">Other</div>Private rentals (Venmo and Stripe) and charges that are neither DPP nor membership, net of tax and of their own refunds. In the city and field tables they count in the row&apos;s net revenue but have no column of their own.</>),
+  pace: (<><div className="h">Pace to month end</div>Net revenue so far, plus the days left × a daily rate. The rate is net revenue so far less day 1 (when most memberships bill) and less today (still arriving), divided by the days that leaves. Day 1 and today are still counted in the total; they are only left out of the rate.</>),
   matchmoney: (<><div className="h">DPP revenue per match</div>From Stripe: each match&apos;s charges, less its refunds and disputes, net of sales tax. Joined to the match by the payment, not by name. Dated by kick-off, so a total here is not a month&apos;s net revenue.</>),
 };
 
@@ -128,10 +128,10 @@ export const RV2_CSS = `
 .rv2 .status.final{background:#e5f6ea;color:#14532d;border-color:#b7e3c4}
 .rv2 .status.adjusted{background:#fdecea;color:#912018;border-color:#f3c3bd}
 .rv2 .hero{padding:20px 22px;display:grid;gap:14px;background:#fff;border:1.5px solid var(--cream-line,#e6e2d8);border-radius:18px}
-.rv2 .hero-top{display:flex;align-items:flex-start;gap:28px;flex-wrap:wrap}
+.rv2 .hero-top{display:grid;grid-template-columns:minmax(300px,380px) 1fr;gap:28px;align-items:stretch}
 .rv2 .big .k{font-size:12px;letter-spacing:.8px;text-transform:uppercase;color:#7b8b82;font-weight:700;display:flex;gap:6px;align-items:center}
 .rv2 .big .v{font-size:40px;font-weight:800;line-height:1.1;margin-top:4px;color:#10231a}
-.rv2 .calc{margin-top:10px;width:340px;max-width:100%;display:grid;gap:2px;font-size:14px}
+.rv2 .calc{margin-top:10px;width:100%;display:grid;gap:2px;font-size:14px}
 .rv2 .cl{display:flex;justify-content:space-between;gap:16px;padding:3px 0;color:#46594e}
 .rv2 .cl span:first-child{display:flex;align-items:center;gap:6px}
 .rv2 .cl.neg span:last-child{color:#b42318}
@@ -140,10 +140,14 @@ export const RV2_CSS = `
 .rv2 .cl.fee span:last-child,.rv2 .cl.kept span:last-child{color:#7b8b82}
 .rv2 .cl.kept{color:#7b8b82;font-size:13px}
 .rv2 .toggle{margin:12px 0 0;border:1px solid #e2e7df;background:#fff;border-radius:999px;padding:6px 12px;font-weight:700;cursor:pointer;color:#10231a}
-.rv2 .minis{display:flex;gap:28px;flex-wrap:wrap;margin-left:auto;align-self:flex-start;padding-top:6px}
-.rv2 .mini .k{font-size:12px;color:#7b8b82;font-weight:600;display:flex;gap:6px;align-items:center}
-.rv2 .mini .v{font-size:20px;font-weight:800;color:#10231a}
-.rv2 .mini .s{font-size:11px;color:#7b8b82}
+.rv2 .tiles{display:grid;gap:12px;align-content:stretch;grid-auto-rows:1fr}
+.rv2 .tiles>.tile:last-child{grid-column:var(--last-span,auto)}
+.rv2 .tile{background:#f6f8f5;border:1px solid #eef1ec;border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;justify-content:center;min-height:104px}
+.rv2 .tile .k{font-size:12px;letter-spacing:.6px;text-transform:uppercase;color:#7b8b82;font-weight:700;display:flex;gap:6px;align-items:center}
+.rv2 .tile .v{font-size:30px;font-weight:800;line-height:1.15;margin-top:6px;color:#10231a}
+.rv2 .tile .s{font-size:12px;color:#7b8b82;margin-top:2px}
+.rv2-title{margin:0 8px 0 0;font-size:30px;font-weight:800;display:flex;align-items:center;gap:8px;color:#10231a}
+.rv2-status{display:inline-flex;align-items:center;gap:6px}
 .rv2 table.items{border-collapse:collapse;width:100%;font-size:14px}
 .rv2 table.items td{padding:8px 4px;border-bottom:1px solid #eef1ec}
 .rv2 table.items td.amt{text-align:right;font-weight:600;width:140px}
@@ -166,5 +170,5 @@ export const RV2_CSS = `
 .rv2 table.city tr.un td{color:#7b8b82;font-style:italic}
 .rv2 table.city tr.tot td{font-weight:800;background:#f6f8f5;border-bottom:0}
 .rv2 table.city tr.tot td.net{background:#d5f2de}
-@media (max-width:767px){.rv2 .big .v{font-size:32px}.rv2 .minis{margin-left:0;gap:18px}.rv2 .hero{padding:16px}}
+@media (max-width:767px){.rv2 .big .v{font-size:32px}.rv2 .hero-top{grid-template-columns:1fr;gap:18px}.rv2 .tiles{grid-template-columns:1fr 1fr!important}.rv2 .tiles>.tile:last-child{grid-column:auto}.rv2 .tile .v{font-size:24px}.rv2 .hero{padding:16px}.rv2-title{font-size:24px}}
 `;

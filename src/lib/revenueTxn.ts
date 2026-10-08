@@ -76,24 +76,41 @@ export function taxCentsOf(r: Pick<RollupRow, "kind" | "source" | "city" | "gros
 /** True for a row that is part of revenue at all (not a fee row, not test or internal). */
 export const isRevenueRow = (r: RollupRow) => !r.excluded && MONEY.has(r.kind);
 
+/* ── ONE BASIS FOR REFUNDS AND DISPUTES: NET OF THE TAX THAT CAME BACK WITH THEM (2026-10-07) ──
+ * The calculation used to show a refund at its gross (tax included) and take the returned tax off
+ * inside "Sales tax", while the city table showed the same refund net of tax: October read −$318 at
+ * the top and −$293 in the table. Now every refund, failed payment and dispute on the page is net
+ * of tax, and "Sales tax" is the tax on the month's charges. Net revenue is the same number either
+ * way:  gross + Σ reversal gross − Σ all tax  =  gross + Σ reversal net − Σ tax on charges.
+ *
+ * DPP, MEMBERSHIP AND OTHER ARE AFTER THEIR OWN REFUNDS AND DISPUTES, so the three add up to net
+ * revenue (Ryan, 2026-10-07). A reversal is taken off the line its charge was on, by the type it
+ * inherited from that charge. The city and field tables keep the mock's separate "Refunds &
+ * disputes" column, so their DPP and Membership cells are BEFORE reversals; GroupRow says which. */
 export type Totals = {
   charges: number; chargesN: number;
   venmo: number; venmoN: number;
-  refunds: number; refundsN: number;
-  failed: number; failedN: number;
-  disputes: number; disputesN: number;
-  tax: number;            // NEGATIVE: what comes off gross
+  refunds: number; refundsN: number;     // net of tax
+  failed: number; failedN: number;       // net of tax
+  disputes: number; disputesN: number;   // net of tax
+  /** The same three at Stripe's amounts, tax included — what ties to the Stripe export. */
+  refundsGross: number; failedGross: number; disputesGross: number;
+  tax: number;            // NEGATIVE: the sales tax on this period's charges
   gross: number;          // charges + venmo
   net: number;
   fees: number;           // NEGATIVE
   kept: number;
-  dpp: number; membership: number; other: number; reversals: number;  // net of tax; sum to net
+  /** After their own refunds and disputes, net of tax. dpp + membership + other = net. */
+  dpp: number; membership: number; other: number;
+  /** All refunds, failed payments and disputes, net of tax (= refunds + failed + disputes). */
+  reversals: number;
   missingRate: string[];
 };
 
 export const emptyTotals = (): Totals => ({
   charges: 0, chargesN: 0, venmo: 0, venmoN: 0, refunds: 0, refundsN: 0, failed: 0, failedN: 0,
-  disputes: 0, disputesN: 0, tax: 0, gross: 0, net: 0, fees: 0, kept: 0,
+  disputes: 0, disputesN: 0, refundsGross: 0, failedGross: 0, disputesGross: 0,
+  tax: 0, gross: 0, net: 0, fees: 0, kept: 0,
   dpp: 0, membership: 0, other: 0, reversals: 0, missingRate: [],
 });
 
@@ -109,15 +126,14 @@ export function totalsOf(rows: RollupRow[]): Totals {
     const tax = taxCentsOf(r);
     const m = taxRateOf(r.city).missing;
     if (m && r.source === "Stripe") missing.add(m);
-    t.tax -= tax;
     const net = r.gross_cents - tax;
-    if (r.kind === "charge") { t.charges += r.gross_cents; t.chargesN += r.n; }
-    else if (r.kind === "manual") { t.venmo += r.gross_cents; t.venmoN += r.n; }
-    else if (r.kind === "refund") { t.refunds += r.gross_cents; t.refundsN += r.n; }
-    else if (r.kind === "failed") { t.failed += r.gross_cents; t.failedN += r.n; }
-    else if (r.kind === "dispute") { t.disputes += r.gross_cents; t.disputesN += r.n; }
+    if (r.kind === "charge") { t.charges += r.gross_cents; t.chargesN += r.n; t.tax -= tax; }
+    else if (r.kind === "manual") { t.venmo += r.gross_cents; t.venmoN += r.n; t.tax -= tax; }
+    else if (r.kind === "refund") { t.refunds += net; t.refundsGross += r.gross_cents; t.refundsN += r.n; }
+    else if (r.kind === "failed") { t.failed += net; t.failedGross += r.gross_cents; t.failedN += r.n; }
+    else if (r.kind === "dispute") { t.disputes += net; t.disputesGross += r.gross_cents; t.disputesN += r.n; }
     if (REVERSAL.has(r.kind)) t.reversals += net;
-    else t[bucketOf(r.type)] += net;
+    t[bucketOf(r.type)] += net;
   }
   t.gross = t.charges + t.venmo;
   t.net = t.gross + t.refunds + t.failed + t.disputes + t.tax;
@@ -171,32 +187,63 @@ export function byCityRows(rows: RollupRow[]): GroupRow[] {
 export const NO_FIELD_MEMBERSHIP = "Membership (no field)";
 export const NO_FIELD_OTHER = "No field";
 
+/** A city-month's member-spot shares: venue id → that venue's member spots ÷ the city's. */
+export type MemberShares = (city: string, period: string) => { venueId: number; share: number }[] | null;
+
+/** Split `cents` by `shares` (summing to ≤ 1) to the cent, largest remainder first. What the shares
+ *  do not cover is returned as `rest`, so nothing is created or lost. */
+export function splitCents(cents: number, shares: { venueId: number; share: number }[]): { parts: Map<number, number>; rest: number } {
+  const parts = new Map<number, number>();
+  const raw = shares.map((s) => ({ id: s.venueId, v: cents * s.share }));
+  const covered = Math.round(raw.reduce((a, r) => a + r.v, 0));
+  const fl = raw.map((r) => ({ id: r.id, n: Math.trunc(r.v), f: r.v - Math.trunc(r.v) }));
+  let left = covered - fl.reduce((a, r) => a + r.n, 0);
+  fl.sort((x, y) => Math.abs(y.f) - Math.abs(x.f));
+  for (const r of fl) { if (left === 0) break; const step = Math.sign(left); r.n += step; left -= step; }
+  for (const r of fl) if (r.n !== 0) parts.set(r.id, (parts.get(r.id) ?? 0) + r.n);
+  return { parts, rest: cents - covered };
+}
+
 /** BY FIELD (fin_venue), in cents. A field is the venue its Stripe field ID maps to, never a match
- *  name. Money with no field — membership, and anything else without one — gets its own rows, so
- *  the table still adds up to net revenue. */
+ *  name.
+ *
+ *  MEMBERSHIP IS CREDITED TO FIELDS BY THE CITIES PAGE'S RULE (cityPnl.ts, "ALLOCATE membership
+ *  onto the pitches"): a field gets the city's membership for the month × (the field's member spots
+ *  that month ÷ the city's member spots that month). `memberShares` supplies those shares from the
+ *  same helpers (venueMemberSpotsFor, cityTotalMemberSpotsFor). Membership refunds and disputes are
+ *  split the same way. Only what cannot be placed — Unassigned members, a city-month with no member
+ *  spots — stays in "Membership (no field)". */
 export function byFieldRows(
   rows: RollupRow[],
   venues: Map<number, { name: string; city: string | null }>,
+  memberShares?: MemberShares,
 ): GroupRow[] {
   const m = new Map<string, GroupRow>();
+  const venueGroup = (vid: number, rowCity: string | null): GroupRow => {
+    // ONE ROW PER FIELD, NOT PER fin_venues ROW. A field can span several venue rows (split-rate
+    // legs), so the key is the name AND the city — names repeat across cities ("Hattrick").
+    const v = venues.get(vid);
+    const label = v?.name ?? `Venue ${vid}`, city = v?.city ?? cityLabel(rowCity);
+    const key = `f${label}|${city}`;
+    const g = m.get(key) ?? blankGroup(key, label, city, vid);
+    m.set(key, g);
+    return g;
+  };
+  const named = (key: string, label: string): GroupRow => {
+    const g = m.get(key) ?? blankGroup(key, label, null, null);
+    m.set(key, g);
+    return g;
+  };
   for (const r of rows) {
     if (!isRevenueRow(r)) continue;
-    let key: string, label: string, city: string | null, vid: number | null = null;
-    if (r.fin_venue_id != null) {
-      // ONE ROW PER FIELD, NOT PER fin_venues ROW. A field can span several venue rows (split-rate
-      // legs), so the key is the name AND the city — names repeat across cities ("Hattrick").
-      const v = venues.get(r.fin_venue_id);
-      label = v?.name ?? `Venue ${r.fin_venue_id}`; city = v?.city ?? cityLabel(r.city);
-      key = `f${label}|${city}`;
-      vid = r.fin_venue_id;
-    } else if (bucketOf(r.type) === "membership") {
-      key = "membership"; label = NO_FIELD_MEMBERSHIP; city = null;
-    } else {
-      key = "nofield"; label = NO_FIELD_OTHER; city = null;
-    }
-    const g = m.get(key) ?? blankGroup(key, label, city, vid);
-    addTo(g, r);
-    m.set(key, g);
+    if (r.fin_venue_id != null) { addTo(venueGroup(r.fin_venue_id, r.city), r); continue; }
+    if (bucketOf(r.type) !== "membership") { addTo(named("nofield", NO_FIELD_OTHER), r); continue; }
+    const shares = memberShares && cityLabel(r.city) !== UNASSIGNED ? memberShares(cityLabel(r.city), r.period) : null;
+    const net = r.gross_cents - taxCentsOf(r);
+    const col = REVERSAL.has(r.kind) ? "reversals" : "membership";
+    const { parts, rest } = shares && shares.length ? splitCents(net, shares) : { parts: new Map<number, number>(), rest: net };
+    for (const [vid, c] of parts) { const g = venueGroup(vid, r.city); g[col] += c; g.net += c; }
+    if (rest !== 0 || parts.size === 0) { const g = named("membership", NO_FIELD_MEMBERSHIP); g[col] += rest; g.net += rest; }
   }
   return [...m.values()].sort((a, b) =>
     (a.venueId == null ? 1 : 0) - (b.venueId == null ? 1 : 0) || b.net - a.net);

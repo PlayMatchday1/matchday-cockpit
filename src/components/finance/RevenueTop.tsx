@@ -10,7 +10,9 @@
  * the app has one for every Finance page). */
 import { useMemo, useState } from "react";
 import type { FinancePeriod } from "@/lib/financePeriod";
-import { projectMonthEnd } from "@/lib/financePeriod";
+import { changeGrain, currentPeriod, projectMonthEnd, stepPeriod } from "@/lib/financePeriod";
+import { useFinancePeriod } from "@/lib/financePeriodContext";
+import FinancePeriodBar from "./FinancePeriodBar";
 import { BUSINESS_TZ, zonedWallClockToUtcMs } from "@/lib/businessHours";
 import {
   finalThreshold, money, monthStatus, totalsOf, isRevenueRow, taxCentsOf,
@@ -33,6 +35,7 @@ export default function RevenueTop({ period, rows, error }: {
   error: string | null;
 }) {
   const uid = useReaderId();
+  const { now, setPeriod } = useFinancePeriod();
   const [open, setOpen] = useState(false);
   const t: Totals | null = useMemo(() => (rows ? totalsOf(rows) : null), [rows]);
 
@@ -60,11 +63,12 @@ export default function RevenueTop({ period, rows, error }: {
     const netOn = (pred: (d: number) => boolean) => day.data!
       .filter((r) => isRevenueRow(r) && pred(Number(r.period.slice(8, 10))))
       .reduce((a, r) => a + r.gross_cents - taxCentsOf(r), 0);
+    const day1 = netOn((d) => d <= 1), today = netOn((d) => d === period.elapsedDays);
     const p = projectMonthEnd({
-      soFar: t.net, excludedRevenue: netOn((d) => d <= 1), currentDayRevenue: netOn((d) => d === period.elapsedDays),
+      soFar: t.net, excludedRevenue: day1, currentDayRevenue: today,
       daysElapsed: period.elapsedDays, daysInMonth: period.totalDays, excludedDays: 1, isCurrentMonth: true,
     });
-    return p.ok ? p : null;
+    return p.ok ? { ...p, day1, today } : null;
   }, [isCurMonth, day.data, t, period.elapsedDays, period.totalDays]);
 
   // AVG DAILY DPP: a closed period divides by its days; the period in progress by the days so far,
@@ -75,27 +79,35 @@ export default function RevenueTop({ period, rows, error }: {
   const items: [string, number, number | null, string, Parameters<typeof InfoI>[0]["pop"] | null, string][] = t ? [
     ["Card charges", t.charges, t.chargesN, "Stripe", "gross", ""],
     ["Venmo (manual)", t.venmo, t.venmoN, "Entered by hand", "venmo", ""],
-    ["Refunds", t.refunds, t.refundsN, "Stripe", "rev", ""],
-    ["Failed payments", t.failed, t.failedN, "Stripe", "failed", ""],
-    ["Disputes", t.disputes, t.disputesN, "Stripe", "rev", ""],
-    ["Sales tax", t.tax, null, "Calculated by city", "tax", ""],
+    ["Refunds", t.refunds, t.refundsN, "Stripe, net of tax", "rev", ""],
+    ["Failed payments", t.failed, t.failedN, "Stripe, net of tax", "failed", ""],
+    ["Disputes", t.disputes, t.disputesN, "Stripe, net of tax", "rev", ""],
+    ["Sales tax", t.tax, null, "On charges, by city", "tax", ""],
     ["Net revenue", t.net, null, "", "net", "sub"],
     ["Stripe fees", t.fees, null, `${pct(t.fees)} of gross`, "fees", ""],
     ["Kept after fees", t.kept, null, "", null, "sub2"],
   ] : [];
 
   const statusText = !status ? "…"
-    : status.k === "updating" ? `Updating · final by ${status.finalBy}`
+    : status.k === "updating" ? `Updating · ${period.isCurrent ? `${period.elapsedDays} of ${period.totalDays} days · ` : ""}final by ${status.finalBy}`
     : status.k === "final" ? "Final"
     : `Adjusted after final · ${status.cents >= 0 ? "+" : ""}${$c(status.cents)} in ${status.n} ${status.n === 1 ? "row" : "rows"}`;
 
   return (
     <div className="rv2" data-testid="revenue-top" style={{ display: "grid", gap: 14 }}>
-      <div className="rv2-head">
-        <h2>Revenue <InfoI pop="how" large label="How we count revenue" testid="info-how" /></h2>
-        <span className={`status ${status?.k ?? ""}`} data-testid="status" data-status={status?.k ?? ""}>{statusText}</span>
-        <InfoI pop="status" label="What updating and final mean" testid="info-status" />
-      </div>
+      {/* THE PAGE'S OWN HEADER: "Revenue" with the Finance period bar beside it, and ONE status pill
+          in place of the bar's partial-days chip (financeChrome lists this page as drawing its own). */}
+      <FinancePeriodBar
+        period={period} now={now} supportedGrains={["month", "quarter", "year"]} unsupportedReason="" links={null}
+        onChangeGrain={(g) => setPeriod(changeGrain(period, g, now))}
+        onStep={(dir) => setPeriod(stepPeriod(period, dir, now))}
+        onJumpToNow={() => setPeriod(currentPeriod(period.grain, now))}
+        lead={<h1 className="rv2-title">Revenue <InfoI pop="how" large label="How we count revenue" testid="info-how" /></h1>}
+        status={<span className="rv2-status">
+          <span className={`status ${status?.k ?? ""}`} data-testid="status" data-status={status?.k ?? ""}>{statusText}</span>
+          <InfoI pop="status" label="What updating and final mean" testid="info-status" />
+        </span>}
+      />
 
       {error && <div className="warn" data-testid="revenue-error">Revenue did not load: {error}</div>}
       {t && t.missingRate.length > 0 && (
@@ -126,26 +138,39 @@ export default function RevenueTop({ period, rows, error }: {
             <button type="button" className="toggle" data-testid="toggle-items" aria-expanded={open}
               onClick={() => setOpen((o) => !o)}>{open ? "Hide line items" : "Show line items"}</button>
           </div>
-          <div className="minis">
-            <div className="mini"><div className="k">DPP <InfoI pop="dpp" label="What DPP is" /></div>
-              <div className="v num" data-testid="mini-dpp" data-cents={t?.dpp}>{t ? money(t.dpp) : "…"}</div><div className="s">net</div></div>
-            <div className="mini"><div className="k">Membership <InfoI pop="mem" label="What membership is" /></div>
-              <div className="v num" data-testid="mini-mem" data-cents={t?.membership}>{t ? money(t.membership) : "…"}</div><div className="s">net</div></div>
-            <div className="mini"><div className="k">Avg daily DPP <InfoI pop="avg" label="How average daily is calculated" /></div>
-              <div className="v num" data-testid="mini-avg" data-days={days}>{t ? money(t.dpp / days) : "…"}</div>
+          {/* THE TILES FILL THE CARD: a grid beside the calculation, as tall as it, numbers at full
+              size. DPP + Membership + Other = Net revenue (each after its own refunds and disputes). */}
+          <div className="tiles" style={(() => {
+            // COLUMNS FROM THE COUNT, so no hole is left: 3 → one row, 4 → 2 × 2, 5 → 3 + 2 with the
+            // last tile two columns wide.
+            const n = 3 + (t.other !== 0 ? 1 : 0) + (isCurMonth ? 1 : 0);
+            return { gridTemplateColumns: `repeat(${n === 4 ? 2 : 3}, minmax(0, 1fr))`, ["--last-span" as string]: n === 5 ? "span 2" : "auto" };
+          })()}>
+            <div className="tile"><div className="k">DPP <InfoI pop="dpp" label="What DPP is" /></div>
+              <div className="v num" data-testid="mini-dpp" data-cents={t.dpp}>{money(t.dpp)}</div><div className="s">net</div></div>
+            <div className="tile"><div className="k">Membership <InfoI pop="mem" label="What membership is" /></div>
+              <div className="v num" data-testid="mini-mem" data-cents={t.membership}>{money(t.membership)}</div><div className="s">net</div></div>
+            {t.other !== 0 && (
+              <div className="tile"><div className="k">Other <InfoI pop="other" label="What other is" /></div>
+                <div className="v num" data-testid="mini-other" data-cents={t.other}>{money(t.other)}</div><div className="s">net · rentals and other charges</div></div>
+            )}
+            <div className="tile"><div className="k">Avg daily DPP <InfoI pop="avg" label="How average daily is calculated" /></div>
+              <div className="v num" data-testid="mini-avg" data-days={days}>{money(t.dpp / days)}</div>
               <div className="s">net · ÷ {days} {period.isCurrent ? "days so far" : "days"}</div></div>
             {isCurMonth && (
-              <div className="mini" data-testid="mini-pace"><div className="k">Pace to month end <InfoI pop="pace" label="How pace to month end is calculated">
+              <div className="tile" data-testid="mini-pace"><div className="k">Pace to month end <InfoI pop="pace" label="How pace to month end is calculated">
                 {pace && (
-                  <table><tbody>
-                    <tr><td>Net so far, days 1–{period.elapsedDays}</td><td>{money(t!.net)}</td></tr>
-                    <tr><td>Daily rate, {pace.rateDays} days</td><td>{money(pace.rate)}</td></tr>
-                    <tr><td>{pace.remaining} {pace.remaining === 1 ? "day" : "days"} remaining</td><td>{money(Math.round(pace.projection) - t!.net)}</td></tr>
-                    <tr><td><b>Projected</b></td><td><b>{money(pace.projection)}</b></td></tr>
+                  <table data-testid="pace-explain"><tbody>
+                    <tr><td>Net revenue so far, days 1–{period.elapsedDays}</td><td>{money(t.net, true)}</td></tr>
+                    <tr><td>less day 1 (memberships bill)</td><td>{money(-pace.day1, true)}</td></tr>
+                    {pace.todayExcluded && <tr><td>less today, day {period.elapsedDays} (still arriving)</td><td>{money(-pace.today, true)}</td></tr>}
+                    <tr><td>= {money(pace.windowRevenue, true)} over {pace.rateDays} days</td><td>{money(pace.rate, true)}/day</td></tr>
+                    <tr><td>× {pace.remaining} {pace.remaining === 1 ? "day" : "days"} left</td><td>+{money(pace.remaining * pace.rate, true)}</td></tr>
+                    <tr><td><b>Projected: so far + days left × rate</b></td><td><b>{money(pace.projection, true)}</b></td></tr>
                   </tbody></table>
                 )}
               </InfoI></div>
-                <div className="v num" data-testid="mini-pace-value">{pace ? money(pace.projection) : "—"}</div><div className="s">net, projected</div></div>
+                <div className="v num" data-testid="mini-pace-value" data-cents={pace ? Math.round(pace.projection) : ""}>{pace ? money(pace.projection) : "—"}</div><div className="s">net, projected</div></div>
             )}
           </div>
         </div>
@@ -174,6 +199,9 @@ export function totalsByMonth(rows: RollupRow[]): Map<string, Totals> {
   for (const r of rows) { const a = by.get(r.period) ?? []; a.push(r); by.set(r.period, a); }
   return new Map([...by].map(([k, v]) => [k, totalsOf(v)]));
 }
+
+/** "2026-09-01" → "Sep 2026", the roster loaders' month label. */
+export const monthLabelOf = (key: string): string => `${MONTH_SHORT[Number(key.slice(5, 7)) - 1]} ${key.slice(0, 4)}`;
 
 /** "Sep 2026" → "2026-09-01", the rollup's month key. */
 export const monthKeyOf = (label: string): string => {

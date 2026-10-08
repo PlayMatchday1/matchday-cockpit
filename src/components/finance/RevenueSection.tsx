@@ -34,17 +34,17 @@ import {
   buildFieldCostSlots, buildFieldMonths, buildMatchRows, canonCity, hasKickedOff,
   type MatchRow,
 } from "@/lib/fieldEconomics";
-import { unattributedVenues } from "@/lib/financeStats";
+import { cityTotalMemberSpotsFor, unattributedVenues, venueMemberSpotsFor } from "@/lib/financeStats";
 import { loadMembershipWindowsByUserId, type MembershipWindowsByUserId } from "@/lib/mdapiMatchesRead";
 import {
   byCityRows, byFieldRows, cityLabel, taxCentsOf, money, UNASSIGNED,
-  type GroupRow, type RollupRow, type Totals,
+  type GroupRow, type MemberShares, type RollupRow, type Totals,
 } from "@/lib/revenueTxn";
 import { loadMatchRollup, loadRollup, useAsync, useReaderId } from "@/lib/useRevenueTxn";
 import { downloadCsv } from "@/components/growth/format";
 import MatchView from "./MatchView";
 import DailyRevenuePace from "./DailyRevenuePace";
-import RevenueTop, { monthKeyOf, totalsByMonth, ymdOf } from "./RevenueTop";
+import RevenueTop, { monthKeyOf, monthLabelOf, totalsByMonth, ymdOf } from "./RevenueTop";
 import RevenueNetTable from "./RevenueNetTable";
 import { InfoI, RV2_CSS } from "./RevenueInfo";
 import s from "./financeSection.module.css";
@@ -102,9 +102,13 @@ export default function RevenueSection() {
    * and is named here rather than dropped silently. Renders only when there is something to say. */
   const unattributed = useMemo(() => (data ? unattributedVenues(data) : []), [data]);
 
+  /* MATCHES THAT HAVE KICKED OFF, by now. The current month used to count its whole schedule (544
+   * for October on the 7th) against revenue so far; the realized cut is the one Cost uses. A closed
+   * month is unchanged by it — every match in it has kicked off. These rows feed match COUNTS and
+   * the member-spot shares only; no money on this page comes from them. */
   const fieldRows = useMemo(
-    () => (data ? buildFieldMonths(data, matchRegistrations, span.months, null) : []),
-    [data, matchRegistrations, span.months],
+    () => (data ? buildFieldMonths(data, matchRegistrations, span.months, now.getTime()) : []),
+    [data, matchRegistrations, span.months, now],
   );
 
   /* ── THE MATCH PANEL'S OWN WINDOW ──────────────────────────────────────────────────────────
@@ -159,11 +163,25 @@ export default function RevenueSection() {
     () => new Map((data?.venues ?? []).map((v) => [Number(v.id), { name: v.venue_name, city: v.city ?? null }])),
     [data],
   );
+  /* MEMBERSHIP ONTO FIELDS — the Cities page's rule (cityPnl.ts, "ALLOCATE membership onto the
+   * pitches"): field share = the field's member spots that month ÷ the city's member spots that
+   * month, from the same two helpers. Applied to fin_txn membership in byFieldRows. */
+  const memberShares = useCallback<MemberShares>((city, periodKey) => {
+    if (!data) return null;
+    const month = monthLabelOf(periodKey);
+    const legs = data.venues.filter((v) => canonCity(v.city) === canonCity(city));
+    if (legs.length === 0) return null;
+    const citySpots = cityTotalMemberSpotsFor(data, legs[0].city, month);
+    if (!(citySpots > 0)) return null;
+    return legs
+      .map((v) => ({ venueId: Number(v.id), share: venueMemberSpotsFor(data, v.id, month).member / citySpots }))
+      .filter((x) => x.share > 0);
+  }, [data]);
   const fieldGroups = useMemo(() => {
     if (!periodRows) return [];
     const rows = cityFilter === "all" ? periodRows : periodRows.filter((r) => cityLabel(r.city) === cityFilter);
-    return byFieldRows(rows, venues);
-  }, [periodRows, cityFilter, venues]);
+    return byFieldRows(rows, venues, memberShares);
+  }, [periodRows, cityFilter, venues, memberShares]);
   // Field-view city chips: the cities with revenue in the period, Unassigned last.
   const chipCities = useMemo(() => cityGroups.map((g) => g.label), [cityGroups]);
 
@@ -196,11 +214,12 @@ export default function RevenueSection() {
   }, [monthTotals]);
   const SUMMARY_ROWS: { key: string; label: string; pick: (t: Totals) => number; strong?: boolean }[] = [
     { key: "gross", label: "Gross collected", pick: (t) => t.gross },
-    { key: "reversals", label: "Refunds and disputes", pick: (t) => t.refunds + t.failed + t.disputes },
+    { key: "reversals", label: "Refunds and disputes", pick: (t) => t.reversals },
     { key: "tax", label: "Sales tax", pick: (t) => t.tax },
     { key: "net", label: "Net revenue", pick: (t) => t.net, strong: true },
     { key: "dpp", label: "DPP (net)", pick: (t) => t.dpp },
     { key: "membership", label: "Membership (net)", pick: (t) => t.membership },
+    { key: "other", label: "Other (net)", pick: (t) => t.other },
     { key: "fees", label: "Stripe fees", pick: (t) => t.fees },
   ];
 
@@ -214,7 +233,8 @@ export default function RevenueSection() {
       const done = panelRows.filter((r) => hasKickedOff(r, now.getTime())).length;
       return `${done} ${noun(done)}`;
     }
-    if (grain === "city") return `${cityGroups.length} ${noun(cityGroups.length)}`;
+    // REAL CITIES ONLY: Unassigned is a row so the table adds up, not a city.
+    if (grain === "city") { const n = cityGroups.filter((g) => g.label !== UNASSIGNED).length; return `${n} ${noun(n)}`; }
     const real = fieldGroups.filter((g) => g.venueId != null).length;
     return `${real} ${noun(real)}`;
   }, [grain, panelRows, cityGroups, fieldGroups, now]);
@@ -328,7 +348,7 @@ export default function RevenueSection() {
               </tr>
             </thead>
             <tbody>
-              {SUMMARY_ROWS.map((row) => (
+              {SUMMARY_ROWS.filter((row) => row.key !== "other" || periods.some((p) => (periodTotal(p.months, row.pick) ?? 0) !== 0)).map((row) => (
                 <tr key={row.key} data-testid="revenue-summary-row" data-row={row.key}>
                   <td className="l">{row.strong ? <b>{row.label}</b> : row.label}</td>
                   {periods.map((p) => {

@@ -18,7 +18,7 @@
 
 import { readFileSync } from "node:fs";
 import { CITY_TAX_RATE, preTaxOf, taxRateFor, hasTaxRate, citiesWithoutRate, UnknownTaxCityError } from "../src/lib/salesTax";
-import { taxCentsOf, totalsOf, type RollupRow } from "../src/lib/revenueTxn";
+import { splitCents, taxCentsOf, totalsOf, type RollupRow } from "../src/lib/revenueTxn";
 
 let pass = 0; const fails: string[] = [];
 const ok = (m: string) => { pass++; console.log(`  ✓ ${m}`); };
@@ -172,8 +172,16 @@ console.log("\nthe Revenue page reads fin_txn, net of sales tax");
   is("Venmo carries no tax", taxCentsOf(row("manual", "Austin", 10000, "Venmo")), 0);
   is("Warsaw's real zero stays zero", taxCentsOf(row("charge", "Warsaw", 10000)), 0);
   const t = totalsOf([row("charge", "Austin", 10825), row("refund", "Austin", -10825), row("charge", "Atlanta", 10890), row("manual", "Austin", 10000, "Venmo")]);
-  is("net = gross − refunds − tax, to the cent", [t.gross, t.refunds, t.tax, t.net], [31715, -10825, -890, 20000]);
-  is("…and the parts add to it", t.dpp + t.membership + t.other + t.reversals, t.net);
+  // 2026-10-07: refunds are NET OF TAX everywhere; Sales tax is the tax on charges (Ryan, fix 4).
+  is("net = gross + refunds (net of tax) − tax on charges, to the cent", [t.gross, t.refunds, t.tax, t.net], [31715, -10000, -1715, 20000]);
+  is("…the refund at Stripe's amount is kept for the tie-out", t.refundsGross, -10825);
+  // DPP, Membership and Other are after their own reversals and add to net (Ryan, fix 3).
+  is("DPP + Membership + Other = Net revenue", t.dpp + t.membership + t.other, t.net);
+  // Membership onto fields by member-spot share (Ryan, fix 2): split to the cent, rest kept.
+  const sp = splitCents(-1001, [{ venueId: 1, share: 1 / 3 }, { venueId: 2, share: 1 / 3 }, { venueId: 3, share: 1 / 3 }]);
+  is("a split keeps every cent", [...sp.parts.values()].reduce((a, v) => a + v, 0) + sp.rest, -1001);
+  const half = splitCents(1000, [{ venueId: 1, share: 0.25 }]);
+  is("…and what the shares do not cover stays unplaced", [half.parts.get(1), half.rest], [250, 750]);
   // CONTROL: a city with no rate is NAMED, never silently taxed at zero.
   is("control: a city with no rate is reported", totalsOf([row("charge", "Fort Worth", 10000)]).missingRate, ["Fort Worth"]);
 }

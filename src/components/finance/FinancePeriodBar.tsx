@@ -24,7 +24,7 @@ import { GRAINS, GRAIN_LABEL, THIS_LABEL, RECORD_STARTS, canStepBack, canStepFor
 import s from "./periodBar.module.css";
 
 export default function FinancePeriodBar({
-  period, now, onChangeGrain, onStep, onJumpToNow, supportedGrains, unsupportedReason, links,
+  period, now, onChangeGrain, onStep, onJumpToNow, supportedGrains, unsupportedReason, links, lead, status,
 }: {
   period: FinancePeriod;
   now: Date;
@@ -34,6 +34,11 @@ export default function FinancePeriodBar({
   supportedGrains: readonly Grain[];
   unsupportedReason: string;
   links: React.ReactNode;
+  /** In place of the "Period" label: a page that draws its own header puts its title here. */
+  lead?: React.ReactNode;
+  /** In place of the Partial / Not started chip: a page with its own status pill folds the elapsed
+   *  days into it, so there is one pill and not two (Revenue, 2026-10-07). */
+  status?: React.ReactNode;
 }) {
   // Both bounds come from the model, not from arithmetic repeated here — the stepper and the
   // period must agree about where the record starts and where today is.
@@ -42,7 +47,7 @@ export default function FinancePeriodBar({
 
   return (
     <div className={s.bar} data-testid="finance-period-bar">
-      <span className={s.lab}>Period</span>
+      {lead ?? <span className={s.lab}>Period</span>}
 
       <div className={s.grain} role="group" aria-label="Period grain">
         {GRAINS.map((g) => {
@@ -77,7 +82,8 @@ export default function FinancePeriodBar({
         </span>
       )}
 
-      {period.isCurrent && (
+      {status}
+      {!status && period.isCurrent && (
         <span className={s.partial} data-testid="period-partial">
           Partial · <b>{period.elapsedDays} of {period.totalDays} days</b>
         </span>
@@ -85,7 +91,7 @@ export default function FinancePeriodBar({
       {/* NOT STARTED IS NOT FINISHED. A closed period carries no chip, and that absence is what
           says its numbers are final — so a period that has not begun needs a mark of its own or it
           would borrow the wrong meaning. Reachable by URL only; the forward arrow is dead. */}
-      {period.isFuture && (
+      {!status && period.isFuture && (
         <span className={s.future} data-testid="period-future">
           Not started · <b>0 of {period.totalDays} days</b>
         </span>

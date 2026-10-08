@@ -47,10 +47,12 @@ console.log("\n1. THE WEEK STARTS ON SUNDAY — one constant, both pages");
   is("CONTROL — ws = 1 column labels still run Mon to Sun", weekdayHeaders(1), ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
 }
 
-console.log("\n2. OPEX DRAWS ITS OWN HEADER — and only OpEx");
+console.log("\n2. OPEX AND REVENUE DRAW THEIR OWN HEADER — the report pages that do not keep theirs");
 {
   is("OpEx: no FINANCE title, no period bar", drawsOwnHeader("/admin/finance/opex"), true);
-  for (const p of ["/admin/finance/cost", "/admin/finance/cities", "/admin/finance/revenue", "/admin/finance/cash-flow", "/admin/finance/ledger/field-costs"]) {
+  // Revenue draws its own header too since 2026-10-07 (its title sits in the period bar).
+  is("Revenue: no FINANCE title; its own heading carries the period bar", drawsOwnHeader("/admin/finance/revenue"), true);
+  for (const p of ["/admin/finance/cost", "/admin/finance/cities", "/admin/finance/cash-flow", "/admin/finance/ledger/field-costs"]) {
     is(`${p} keeps the Finance title and period bar`, drawsOwnHeader(p), false);
   }
 }

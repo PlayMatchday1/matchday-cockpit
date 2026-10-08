@@ -205,14 +205,18 @@ export async function syncFinTxn(
     rows.push(row);
   }
 
-  /* ── A REFUND OR DISPUTE TAKES ITS CHARGE'S CITY, TYPE AND FIELD ───────────────────────────────
+  /* ── A REFUND, DISPUTE OR FAILED PAYMENT TAKES ITS CHARGE'S CITY, TYPE AND FIELD ───────────────
+   * FAILED ADDED 2026-10-07: a failed payment's own description ("Funds reversed due to payment …
+   * failed") classified as Unclassified, so a failed membership charge landed in Other at −$71.99
+   * and Unassigned, while its charge was Membership. It now inherits like the other two.
    * Its own source carries no metadata. The charge is found in this run's rows first, then in
    * fin_txn (a refund usually lands days or weeks after its charge). Not found → it keeps what it
    * has, Unassigned, and is counted. The exclusion flags come with it: a refund of an internal
    * account's charge is internal too. */
   const chargeRow = new Map<string, Pick<FinTxnRow, "city" | "type" | "field_id" | "is_test" | "is_internal" | "exclude_reason"> & { fin_venue_id: number | null }>();
   for (const r of rows) if (r.kind === "charge" && r.charge_id) chargeRow.set(r.charge_id, r);
-  const reversals = rows.filter((r) => (r.kind === "refund" || r.kind === "dispute") && r.charge_id);
+  const isReversal = (k: string) => k === "refund" || k === "dispute" || k === "failed";
+  const reversals = rows.filter((r) => isReversal(r.kind) && r.charge_id);
   const missing = [...new Set(reversals.map((r) => r.charge_id!).filter((id) => !chargeRow.has(id)))];
   for (let i = 0; i < missing.length; i += 200) {
     const { data, error } = await sb.from("fin_txn")
@@ -223,7 +227,7 @@ export async function syncFinTxn(
   }
   let reversalsUnlinked = 0;
   for (const r of rows) {
-    if (r.kind !== "refund" && r.kind !== "dispute") continue;
+    if (!isReversal(r.kind)) continue;
     const c = r.charge_id ? chargeRow.get(r.charge_id) : undefined;
     if (!c) { reversalsUnlinked++; continue; }
     Object.assign(r, { city: c.city, type: c.type, field_id: c.field_id, fin_venue_id: c.fin_venue_id,
