@@ -7,7 +7,8 @@
  * mapping, so the first run after that load finds nothing to do. If it ever reports inserts or
  * updates for old rows, the two mappings have drifted.
  *
- *   new row in fin_revenue      → inserted
+ *   new row in fin_revenue      → inserted; stamped if its month is already final (a rental
+ *                                 entered late is "Adjusted after final", the mock's own example)
  *   amount or date changed      → updated, updated_at stamped ("Adjusted after final") — a new
  *                                 date moves the money between months
  *   city, type, venue or note   → updated, NOT stamped — the same rule as a Stripe row's city
@@ -18,6 +19,7 @@
  * It only READS fin_revenue. */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { BUSINESS_TZ, zonedWallClockToUtcMs } from "./businessHours";
+import { isAfterFinal } from "./revenueTxn";
 
 export type VenmoMirrorResult = { inserted: number; updated: number; attributed: number; orphaned: string[] };
 
@@ -41,6 +43,7 @@ export async function mirrorVenmo(sb: SupabaseClient): Promise<VenmoMirrorResult
   const keys = new Set<string>();
   const inserts: Record<string, unknown>[] = [];
   let updated = 0, attributed = 0;
+  const nowMs = Date.now();
 
   for (const r of src.data ?? []) {
     const key = `fin_revenue:${r.id}`;
@@ -55,7 +58,12 @@ export async function mirrorVenmo(sb: SupabaseClient): Promise<VenmoMirrorResult
       source: "Venmo", description: r.notes,
     };
     const was = byKey.get(key);
-    if (!was) { inserts.push(row); continue; }
+    if (!was) {
+      const late = isAfterFinal(row.created_at_utc, nowMs,
+        (y, m, d) => zonedWallClockToUtcMs(y, m, d, 0, 0, BUSINESS_TZ));
+      inserts.push(late ? { ...row, updated_at: new Date(nowMs).toISOString() } : row);
+      continue;
+    }
     const amount = was.gross_cents !== cents || Date.parse(String(was.created_at_utc)) !== Date.parse(row.created_at_utc);
     const other = was.city !== row.city
       || was.type !== row.type || (was.fin_venue_id ?? null) !== row.fin_venue_id || (was.description ?? null) !== (row.description ?? null);

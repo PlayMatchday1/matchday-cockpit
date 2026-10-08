@@ -25,8 +25,20 @@
       "schedule": "20 * * * *"
     },
     {
-      "path": "/api/sync/fin-txn/catchup",
+      "path": "/api/sync/fin-txn/catchup/1",
+      "schedule": "30 12 * * *"
+    },
+    {
+      "path": "/api/sync/fin-txn/catchup/2",
       "schedule": "40 12 * * *"
+    },
+    {
+      "path": "/api/sync/fin-txn/catchup/3",
+      "schedule": "50 12 * * *"
+    },
+    {
+      "path": "/api/sync/fin-txn/catchup/4",
+      "schedule": "0 13 * * *"
     },
     {
       "path": "/api/sync/acquisition-google",

@@ -26,6 +26,10 @@ import { selectAll } from "./supabasePagination";
 import { mapBalanceTxn, isTransferCategory, type FinTxnRow } from "./finTxnMap";
 import { BUSINESS_TZ, zonedWallClockToUtcMs } from "./businessHours";
 import type { VenmoMirrorResult } from "./finTxnVenmo";
+import { isAfterFinal } from "./revenueTxn";
+
+/** Midnight Central on a calendar date, as epoch ms — the "final" threshold's clock (revenueTxn). */
+export const toCentralMidnight = (y: number, m: number, d: number) => zonedWallClockToUtcMs(y, m, d, 0, 0, BUSINESS_TZ);
 
 export type FinTxnSyncResult = {
   fetched: number;
@@ -250,9 +254,12 @@ export async function syncFinTxn(
     keys.some((k) => (was[k] ?? null) !== (r[k] ?? null));
   let inserted = 0, updated = 0, attributed = 0;
   const stamp = new Date().toISOString();
+  const nowMs = Date.parse(stamp);
   const payload = rows.map((r) => {
     const was = existing.get(r.balance_txn_id);
-    if (!was) { inserted++; return { ...r, updated_at: null }; }
+    // A NEW ROW IN A MONTH ALREADY FINAL changes that month's total, so it is stamped like an
+    // amount change. A new row in a month still updating is ordinary and is not.
+    if (!was) { inserted++; return { ...r, updated_at: isAfterFinal(r.created_at_utc, nowMs, toCentralMidnight) ? stamp : null }; }
     const moved = differs(was, r as Record<string, unknown>, AMOUNTS);
     if (moved) updated++;
     else if (differs(was, r as Record<string, unknown>, ATTRIBUTION)) attributed++;
@@ -326,6 +333,25 @@ export function windowDaysBack(days: number, now = new Date()): { since: Date; u
 }
 
 /** The Central calendar month [first, next first) as UTC instants. The back-fill's unit of work. */
+/* ── A WINDOW IN PIECES ─────────────────────────────────────────────────────────────────────────
+ * One invocation has 300 s. July 2026 took 296 s as a single month (the membership email lookups
+ * added since f3434d9 are the slow part), and the daily 60-day catch-up took 236-252 s BEFORE them.
+ * So both are run in pieces: piece `part` of `parts`, cut at Central midnights, contiguous, and
+ * together exactly the original window. The last piece keeps the original `until`. Ryan, 2026-10-07. */
+export function windowPart(w: { since: Date; until: Date }, part: number, parts: number): { since: Date; until: Date } {
+  if (parts <= 1) return w;
+  if (!Number.isInteger(part) || part < 1 || part > parts) throw new Error(`part must be 1..${parts}`);
+  const total = w.until.getTime() - w.since.getTime();
+  const cut = (i: number): Date => {
+    if (i === 0) return w.since;
+    if (i === parts) return w.until;
+    const [y, m, d] = new Intl.DateTimeFormat("en-CA", { timeZone: BUSINESS_TZ })
+      .format(new Date(w.since.getTime() + (total * i) / parts)).split("-").map(Number);
+    return new Date(zonedWallClockToUtcMs(y, m, d, 0, 0, BUSINESS_TZ));
+  };
+  return { since: cut(part - 1), until: cut(part) };
+}
+
 export function windowForMonth(year: number, month1to12: number): { since: Date; until: Date } {
   return {
     since: new Date(zonedWallClockToUtcMs(year, month1to12, 1, 0, 0, BUSINESS_TZ)),

@@ -36,6 +36,7 @@ import {
 import { FinanceQuarterProvider } from "@/lib/financeQuarter";
 import { FINANCE_SECTIONS, SECTION_GRAINS } from "./financeSections";
 import { drawsOwnHeader } from "@/lib/financeChrome";
+import { useAuth } from "@/lib/useAuth";
 
 const COLLAPSE_KEY = "finance:rail-collapsed";
 // Which Configure sub-tab was last open, so leaving Configure and coming back lands where you
@@ -57,6 +58,7 @@ export default function FinanceShell({ children }: { children: React.ReactNode }
 
 function FinanceShellInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() ?? "";
+  const { appUser } = useAuth();
   /* PUBLISHED TO THE SHELL'S ONE APP BAR instead of rendering a second one inside <main>.
    * See src/components/SectionNav.tsx for why the bar cannot live in here. */
   useSectionNav({ items: FINANCE_SECTIONS, label: "Finance", showSwitch: false });
@@ -179,17 +181,18 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
         )}
 
         {/* ── HOW FRESH THE NUMBERS ARE, ON EVERY FINANCE PAGE ──────────────────────────────────
-            In the shell rather than on two pages, because every figure under Finance comes from
-            the same sync and the question "is this current?" is the same question on all of them.
-            On 1 October the Revenue page was $1,821 short of September until the 06:00 Central job
-            caught up, and nothing on screen said the number was waiting on anything.
+            In the shell rather than on each page, because "is this current?" is the same question
+            everywhere. On 1 October the Revenue page was $1,821 short of September until the 06:00
+            Central job caught up, and nothing on screen said the number was waiting on anything.
 
-            THE BUTTON IS NOT RENDERED YET. `canSync` stays false until fin_txn is the page's
-            source: a Sync now that fills fin_txn while the figures still come from fin_revenue is
-            a control that visibly changes nothing. `source` moves to "stripe-txn" at the same
-            moment, and both are this one line. */}
+            THE REVENUE PAGE READS fin_txn (2026-10-07), so there "Last synced" names the stripe-txn
+            sync and admins get Sync now, which fills fin_txn and reloads the page. Every other
+            Finance page still reads fin_revenue: it keeps the stripe-api label and no button, since
+            a Sync now there would fill a table that page does not read. */}
         <div className={ownHeader ? "mb-2" : "mb-6"}>
-          <SyncNowCard source="stripe-api" canSync={false} compact={ownHeader} />
+          {pathname === "/admin/finance/revenue"
+            ? <SyncNowCard source="stripe-txn" canSync={!!appUser?.is_admin} compact={ownHeader} />
+            : <SyncNowCard source="stripe-api" canSync={false} compact={ownHeader} />}
         </div>
 
         {/* The exec banner is Cash-Flow context (quarter P&L, current-month gross, MTD vs prior).

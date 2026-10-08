@@ -6809,3 +6809,37 @@ DFW 1,273.35 · ATL 1,430.37 · HTX 1,162.95 · ATX 1,156.73 · SATX 435.93 · S
   activity page via `scripts/backfill-meta-billing.mjs`, times from the log where it has the ID, else
   17:00 UTC on the page's date) and `fin_meta_billing_balance`; the meta-ad-spend sync adds to both
   daily (`syncMetaBilling`, `src/lib/metaAdSpendSync.ts`). OpEx reads only these.
+
+## fin_txn: reversals, rate limits, the match join and run time (2026-10-07)
+
+- **Every refund and dispute in fin_txn now carries its charge.** Refund (`re_`/`pyr_`) and Dispute
+  (`du_`) balance-transaction sources carry `.charge`; the sync stores it as `charge_id` and copies the
+  charge row's city, type, field and venue (`src/lib/finTxnMap.ts`, `src/lib/finTxnSync.ts`, f3434d9).
+  History re-run 2026-10-07: `161167 fetched · 29 inserted · 0 updated · 65339 attributed · 0
+  reversals unlinked`; every month 2023-05 → 2026-09 identical to the cent before and after
+  (`scripts/_fin_txn_month_totals.mjs diff`).
+- **Still Unassigned across history after that fix** (query 2026-10-07): refunds 1 of 2,881
+  (−$5.44), disputes 21 of 241 (−$736.27), membership charges 322 of 9,000 ($8,966.32). Every one of
+  those reversals has a charge link; the charge itself has no city (deleted account, or no email).
+- **Stripe's SDK does NOT retry a 429** unless the response carries `stripe-should-retry: true`;
+  the history re-run failed `Request rate limit exceeded` at 2023-07 and again at 2023-12/2024-01 with
+  `maxNetworkRetries: 4`. Fixed with explicit backoff (1-16 s + jitter, 6 tries) and hand paging
+  (30719c7). Failed months wrote nothing: the upsert runs after all reads.
+- **Run time.** July 2026 took 296 s of the 300 s ceiling as one month call once membership email
+  lookups (`customers.retrieve`, 3 at a time) were added; the hourly 3-day run went from ~10 s to ~38 s
+  at the same change (fin_sync_log, 18:20Z vs 20:20Z). The daily 60-day catch-up took 236-252 s
+  BEFORE it. Both now run in pieces (`windowPart`): months in 3 (`?month=&part=&parts=`), the
+  catch-up as `/api/sync/fin-txn/catchup/1..4`, 10 minutes apart.
+- **fin_txn joins to a match through the payment intent.** `fin_txn.payment_intent_id` =
+  `mdapi_match_players.payment_intent_id`. September 2026: 5,047 of 5,048 DPP charges join and no
+  payment intent maps to more than one match (`scratchpad pi.mjs`, 2026-10-07). Refunds and disputes
+  have NO payment intent of their own (0 of 17 in September) and reach the match via `charge_id`; the
+  one failed payment carries the charge's payment intent. Used by `fin_txn_match_rollup` (0213).
+- **PostgREST aggregates are off on this project**: `select=kind,gross_cents.sum()` → "Use of
+  aggregate functions is not allowed". Paging all of fin_txn from a client took 23 s (117,951 rows),
+  which is why the Revenue page reads the 0213 functions.
+- **fin_revenue runs short of Stripe, INFERRED not proven**: fin_txn (which ties to Stripe's export to
+  the cent) is +$332.33 over fin_revenue for September 2026 and +$397.28 for August on UTC dates. Likely
+  cause: the nightly job only re-reads from its newest stored date (`defaultStripeSince`,
+  `src/app/api/cron/route.ts:76`) and skips charges not yet `succeeded`, so a charge pending at import
+  is never picked up. Not traced — Ryan: fin_revenue is being retired.

@@ -18,6 +18,7 @@
 
 import { readFileSync } from "node:fs";
 import { CITY_TAX_RATE, preTaxOf, taxRateFor, hasTaxRate, citiesWithoutRate, UnknownTaxCityError } from "../src/lib/salesTax";
+import { taxCentsOf, totalsOf, type RollupRow } from "../src/lib/revenueTxn";
 
 let pass = 0; const fails: string[] = [];
 const ok = (m: string) => { pass++; console.log(`  ✓ ${m}`); };
@@ -29,9 +30,11 @@ const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:]
 
 /* WHO MAY READ WHICH. The right-hand column is what that surface JOINS the membership figure to,
  * which is the whole reason the split exists. */
-const TAX_INCLUSIVE_CALLERS = [
-  ["src/components/finance/RevenueSection.tsx", "the Revenue page — reports money collected"],
-] as const;
+/* EMPTY SINCE 2026-10-07. The Revenue page was the one tax-inclusive caller; it now reads fin_txn
+ * through src/lib/revenueTxn.ts and is net of sales tax (Ryan's Phase 2). Its own check is below,
+ * under "the Revenue page reads fin_txn". The loop is kept so a new tax-inclusive caller is added
+ * here, where the pairing rule applies to it. */
+const TAX_INCLUSIVE_CALLERS: readonly (readonly [string, string])[] = [];
 const PRE_TAX_CALLERS = [
   ["src/lib/matchPnL.ts", "joined to roster-derived DPP"],
   ["src/components/SlateMatchPnLSection.tsx", "joined to Slate Review's $12.00 pre-tax DPP"],
@@ -146,11 +149,33 @@ console.log("\nthe allocator, and the wiring");
     ok("COST NOT RECORDED says the COST is held out, not the revenue");
   else bad("COST NOT RECORDED says the cost is held out", "it still reads as if revenue leaves the denominator");
 
-  const rev = readFileSync("src/components/finance/RevenueSection.tsx", "utf8");
-  if (/THAT DIAGNOSIS WAS WRONG/.test(rev)) ok("the Revenue page's 7-8% comment carries its correction");
-  else bad("the Revenue page's comment is corrected", "a wrong reason will justify the next wrong decision");
-  if (/7\.65%/.test(rev)) ok("…with the measured figure beside it");
-  else bad("…with the measured figure beside it");
+}
+
+/* ── THE REVENUE PAGE READS fin_txn (2026-10-07) ────────────────────────────────────────────────
+ * Replaces two source checks on a comment explaining the old page's 7-8% gap (it was sales tax).
+ * That page and its comment are gone: the page now takes sales tax OUT, per city, in one module.
+ * So the check moves from the comment to the arithmetic — runtime values from revenueTxn, plus one
+ * source pairing: the page reads revenueTxn and NEITHER membership helper (one figure, one basis). */
+console.log("\nthe Revenue page reads fin_txn, net of sales tax");
+{
+  const rev = strip(readFileSync("src/components/finance/RevenueSection.tsx", "utf8"));
+  if (/from "@\/lib\/revenueTxn"/.test(rev)) ok("RevenueSection derives its money from revenueTxn");
+  else bad("RevenueSection derives its money from revenueTxn");
+  if (!/cityMembershipRevenue(PreTax)?For\b/.test(rev)) ok("…and reads neither membership helper");
+  else bad("RevenueSection reads a fin_revenue membership helper", "ONE PAGE, TWO BASES");
+  const row = (kind: RollupRow["kind"], city: string | null, gross: number, source = "Stripe"): RollupRow =>
+    ({ period: "2026-09-01", kind, source, type: "DPP", city, fin_venue_id: null, excluded: false, n: 1, gross_cents: gross, fee_cents: 0 });
+  is("a $108.25 Austin charge carries $8.25 of tax", taxCentsOf(row("charge", "Austin", 10825)), 825);
+  is("an Atlanta charge is taxed at 8.9%", taxCentsOf(row("charge", "Atlanta", 10890)), 890);
+  is("a refund returns its tax (signed like the row)", taxCentsOf(row("refund", "Austin", -10825)), -825);
+  is("Unassigned is taxed at the Texas rate", taxCentsOf(row("charge", "Deleted Account Revenue", 10825)), 825);
+  is("Venmo carries no tax", taxCentsOf(row("manual", "Austin", 10000, "Venmo")), 0);
+  is("Warsaw's real zero stays zero", taxCentsOf(row("charge", "Warsaw", 10000)), 0);
+  const t = totalsOf([row("charge", "Austin", 10825), row("refund", "Austin", -10825), row("charge", "Atlanta", 10890), row("manual", "Austin", 10000, "Venmo")]);
+  is("net = gross − refunds − tax, to the cent", [t.gross, t.refunds, t.tax, t.net], [31715, -10825, -890, 20000]);
+  is("…and the parts add to it", t.dpp + t.membership + t.other + t.reversals, t.net);
+  // CONTROL: a city with no rate is NAMED, never silently taxed at zero.
+  is("control: a city with no rate is reported", totalsOf([row("charge", "Fort Worth", 10000)]).missingRate, ["Fort Worth"]);
 }
 
 console.log(`\nrevenue-basis: ${pass} passed, ${fails.length} failed`);

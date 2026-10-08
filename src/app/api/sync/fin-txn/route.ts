@@ -25,7 +25,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
-import { syncFinTxn, finTxnLogPatch, windowDaysBack, windowForMonth } from "@/lib/finTxnSync";
+import { syncFinTxn, finTxnLogPatch, windowDaysBack, windowForMonth, windowPart } from "@/lib/finTxnSync";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { mirrorVenmo } from "@/lib/finTxnVenmo";
 
@@ -59,7 +59,7 @@ async function runInFlight(sb: SupabaseClient): Promise<{ since: string } | null
  * Vercel's docs allow `?days=3` in a cron path, but no cron in this project uses one and
  * cron-verb-test resolves every scheduled path to a route file on disk — it failed on exactly that,
  * which is the guard doing its job. A bare path is the house pattern and removes the question. */
-export async function runFinTxnSync(req: Request, forced?: { days: number }) {
+export async function runFinTxnSync(req: Request, forced?: { days: number; part?: number; parts?: number }) {
   const url = new URL(req.url);
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
@@ -115,6 +115,17 @@ export async function runFinTxnSync(req: Request, forced?: { days: number }) {
       : Math.max(1, Math.min(400, Number(url.searchParams.get("days") ?? 3)));
     ({ since, until } = windowDaysBack(days));
     label = `last ${days} day${days === 1 ? "" : "s"}`;
+  }
+  /* PIECES (windowPart). ?part=2&parts=3 runs the second third of the window; the catch-up passes
+   * its own. Validated before anything runs: a bad piece is a 400, never a partial window. */
+  const parts = forced?.parts ?? Number(url.searchParams.get("parts") ?? 1);
+  const part = forced?.part ?? Number(url.searchParams.get("part") ?? 1);
+  if (!Number.isInteger(parts) || parts < 1 || parts > 10 || !Number.isInteger(part) || part < 1 || part > parts) {
+    return Response.json({ error: "part and parts must be integers with 1 <= part <= parts <= 10" }, { status: 400 });
+  }
+  if (parts > 1) {
+    ({ since, until } = windowPart({ since, until }, part, parts));
+    label = `${label}, part ${part} of ${parts}`;
   }
   const source = monthParam ? "stripe-txn-backfill" : "stripe-txn";
 

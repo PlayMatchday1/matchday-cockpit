@@ -144,13 +144,17 @@ console.log("\nno prior month means no rate, and never a fallback");
  * one screen, and the 8.25% between them was sales tax with nothing saying so. The tempting "fix"
  * is to make the main table pre-tax so the two agree. It is wrong: that column is money billed and
  * is deliberately tax-inclusive. So the assertion is inverted and kept. */
-console.log("\nthe main table's membership column stays tax-inclusive");
+/* 2026-10-07: THE REVENUE PAGE NO LONGER PRICES MEMBERSHIP FROM fin_revenue AT ALL. It reads fin_txn
+ * through revenueTxn and is net of sales tax (Ryan's Phase 2); the tax-inclusive column this guarded
+ * is gone. The risk it guarded — two bases in one view — is now "the view reaches for EITHER
+ * fin_revenue helper", so both are asserted absent, with revenueTxn present as the positive. */
+console.log("\nthe Revenue page's membership comes from fin_txn, not a fin_revenue helper");
 {
   const view = readFileSync("src/components/finance/RevenueSection.tsx", "utf8");
-  yes("the view prices its membership column with the TAX-INCLUSIVE helper",
-    /cityMembershipRevenueFor\(/.test(view));
-  yes("…and never reaches for the pre-tax one",
-    !/cityMembershipRevenuePreTaxFor/.test(view));
+  yes("the view takes its money from revenueTxn",
+    /from "@\/lib\/revenueTxn"/.test(view));
+  yes("…and never reaches for either fin_revenue membership helper",
+    !/cityMembershipRevenue(PreTax)?For\b/.test(view));
   /* AND THE PRE-TAX HELPER IS STILL ALIVE where it belongs — inside the rate, whose two halves
    * must both be pre-tax. A grep that passed because the function had been deleted everywhere
    * would prove nothing. */

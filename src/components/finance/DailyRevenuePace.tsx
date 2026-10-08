@@ -48,13 +48,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useFinancePeriod } from "@/lib/financePeriodContext";
-import { useAuth } from "@/lib/useAuth";
-import { EARLIEST_QUARTER } from "@/lib/quarters";
 import type { Grain } from "@/lib/financePeriod";
 import { fmtMoney } from "@/components/growth/format";
+import { bucketOf, cityLabel, isRevenueRow, taxCentsOf, type RollupRow } from "@/lib/revenueTxn";
+import { loadRollup, useAsync, useReaderId } from "@/lib/useRevenueTxn";
+import { InfoI } from "./RevenueInfo";
 import s from "./financeSection.module.css";
 
-type Row = { date: string; city: string; venue: string | null; type: string; gross: number };
+/* ── THE NUMBERS ARE NET REVENUE FROM fin_txn (2026-10-07) ─────────────────────────────────────
+ * Each point is that day's net revenue in Central time: charges less sales tax, with refunds,
+ * failed payments and disputes on the day THEY happened — the same per-row amounts as the headline
+ * (src/lib/revenueTxn.ts). The day rollup comes from the database (fin_txn_rollup), folded across
+ * venues; choosing a field loads that field's own rows. The old whole-record fin_revenue read and
+ * its module cache are gone: loadRollup caches per range.
+ *
+ * "DPP + Membership" is exactly that: DPP (with strike fees) plus membership, each with its own
+ * refunds and disputes. Private rentals are not in this chart; they are in net revenue above. */
+type Row = { date: string; city: string; venue: string | null; bucket: "dpp" | "membership" | "other"; net: number };
 type Compare = "period" | "quarter" | "year";
 
 const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -69,8 +79,6 @@ const GRAIN_WORD: Record<Grain, { title: string; by: string }> = {
   year: { title: "Monthly", by: "by month" },
 };
 
-const RECORD_FLOOR = `${EARLIEST_QUARTER.year}-${String((EARLIEST_QUARTER.quarter - 1) * 3 + 1).padStart(2, "0")}-01`;
-
 const ymd = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -79,77 +87,9 @@ const addDays = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), 
 const mondayOf = (d: Date) => addDays(d, -((d.getDay() + 6) % 7));
 const shortDate = (d: Date) => `${MONTH_SHORT[d.getMonth()]} ${d.getDate()}`;
 
-// MEMBERSHIP vs DPP is a `type` on the row. Anything not obviously a membership is direct play.
-const isMembership = (t: string) => /member/i.test(t ?? "");
-
-/* ── THE ROW CACHE LIVES OUTSIDE THE COMPONENT, DELIBERATELY ───────────────────────────────────
- * RevenueSection.tsx:426 returns a bare "Loading…" for the WHOLE section while its own data
- * reloads, so this card is UNMOUNTED and remounted on every period change. A useRef high-water mark
- * therefore never survives to be read — measured: the Year switch still issued 16 requests with the
- * ref in place. Module scope is the only scope that outlives the parent's unmount.
- *
- * IT IS ONE SLOT WITH A SUPERSET TEST, not a map. A map keyed on the exact range would refetch to
- * answer a NARROWER question while the wider row set is already in hand, which is the whole reason
- * this is fast: every period inside the current year asks for the same upper bound, and a period in
- * a future year is answered by the wider slot rather than by a second read.
- *
- * WHAT THE SLOT RECORDS IS THE RANGE THE COMPLETED FETCH ACTUALLY COVERED, and BOTH bounds of it.
- * The lower bound is a constant today, so keying on the upper alone is sound — but sound by
- * coincidence of the constant rather than by the record, and a floor that later varies would make
- * a stale slot answer for a range it never read.
- *
- * IT IS KEYED ON THE IDENTITY THE ROWS WERE READ AS. RLS resolves against the logged-in user, so a
- * user swap with no document navigation could otherwise be served another account's rows. The id is
- * compared, never rendered, never logged and never put in the DOM.
- *
- * THE WRITE IS MONOTONIC. Two fetches can be in flight with different upper bounds, and they can
- * finish in either order: a late-finishing NARROW fetch must not replace a wider slot, or the next
- * period that needs the wide range silently reads a row set that never covered it. */
-type Range = { uid: string; from: string; to: string };
-let CACHE: (Range & { rows: Row[] }) | null = null;
-let INFLIGHT: (Range & { p: Promise<Row[]> }) | null = null;
-
-/** Same reader, and a range that contains the one being asked for. Both are required. */
-const covers = (have: Range | null, want: Range) =>
-  !!have && have.uid === want.uid && have.from <= want.from && have.to >= want.to;
-
-/** For assertions only — the range and the SIZE of what is held. Never the identity. */
-export function paceCacheSnapshot(): { from: string; to: string; rows: number } | null {
-  return CACHE ? { from: CACHE.from, to: CACHE.to, rows: CACHE.rows.length } : null;
-}
-
-async function loadRows(want: Range): Promise<Row[]> {
-  if (covers(CACHE, want)) return CACHE!.rows;
-  // ONE IN-FLIGHT SLOT, reusable only when what is already flying covers the request. A WIDER
-  // request starts its own fetch — correct, and rare enough to be worth no machinery.
-  if (covers(INFLIGHT, want)) return INFLIGHT!.p;
-  const p = (async () => {
-    // PAGED. PostgREST caps a response at 1,000 rows, and an unpaged read silently returned the
-    // OLDEST 1,000 and nothing since — the current month charted empty and both comparisons read
-    // "no revenue on record" for months holding tens of thousands of dollars.
-    const page = 1000;
-    const acc: Row[] = [];
-    for (let from = 0; ; from += page) {
-      const { data, error } = await supabase
-        .from("fin_revenue").select("date, city, venue, type, gross")
-        .gte("date", want.from).lte("date", want.to).order("date").range(from, from + page - 1);
-      // A FAILED PAGE IS NOT AN EMPTY MONTH. Throwing leaves CACHE untouched so the next mount
-      // retries, rather than pinning a truncated read as the answer for the rest of the session.
-      // It also means a slot is only ever written by a fetch that reached the end of its range.
-      if (error) throw error;
-      if (!data) break;
-      acc.push(...(data as Row[]));
-      if (data.length < page) break;
-    }
-    // MONOTONIC. Skip the write when what is already there covers this range — that is a wider slot
-    // for the same reader, and this fetch has nothing to add. A different reader never covers, so a
-    // swap replaces rather than being blocked by a stale width.
-    if (!covers(CACHE, want)) CACHE = { ...want, rows: acc };
-    return acc;
-  })();
-  INFLIGHT = { ...want, p };
-  try { return await p; } finally { if (INFLIGHT?.p === p) INFLIGHT = null; }
-}
+const toRows = (rs: RollupRow[], venue: string | null): Row[] => rs.filter(isRevenueRow).map((r) => ({
+  date: r.period, city: cityLabel(r.city), venue, bucket: bucketOf(r.type), net: (r.gross_cents - taxCentsOf(r)) / 100,
+}));
 
 type Bucket = {
   /** Inclusive calendar span of the bucket itself, BEFORE the period clips it. */
@@ -221,10 +161,11 @@ function seriesFor(
     if (!date || date < lo || date > hi) continue;
     if (city !== "All cities" && r.city !== city) continue;
     if (field !== "All fields" && (r.venue ?? "") !== field) continue;
-    if (kind === "dpp" && isMembership(r.type)) continue;
-    if (kind === "member" && !isMembership(r.type)) continue;
+    if (r.bucket === "other") continue;
+    if (kind === "dpp" && r.bucket !== "dpp") continue;
+    if (kind === "member" && r.bucket !== "membership") continue;
     const i = index.get(date);
-    if (i !== undefined) out[i] += Number(r.gross ?? 0);
+    if (i !== undefined) out[i] += r.net;
   }
   return out;
 }
@@ -259,9 +200,8 @@ function comparisonWindow(grain: Grain, start: Date, mode: Compare): { start: Da
 
 export default function DailyRevenuePace() {
   const { period, now } = useFinancePeriod();
-  // THE IDENTITY THE ROWS ARE READ AS — compared inside the cache, never rendered or logged.
-  // useAuth is a module singleton with its own subscriber list, so this costs no extra request.
-  const { appUser, isLoading: authLoading } = useAuth();
+  // THE IDENTITY THE ROWS ARE READ AS — part of the cache key, never rendered or logged.
+  const uid = useReaderId();
   const grain = period.grain;
   const today = useMemo(() => midnight(now), [now]);
 
@@ -280,46 +220,80 @@ export default function DailyRevenuePace() {
   const [city, setCity] = useState("All cities");
   const [field, setField] = useState("All fields");
   const [kind, setKind] = useState("total");
-  const [rows, setRows] = useState<Row[] | null>(null);
 
-  /* ── ONE QUERY, KEPT ─────────────────────────────────────────────────────────────────────────
-   * MEASURED CAUSE OF THE SLOWNESS. The old effect was keyed on the anchor month with a lower bound
-   * of `year - 1` January, so every period change refetched ~6,300 rows over seven pages. The window
-   * here is the whole record up to the end of the CURRENT year, which covers month, quarter and year
-   * of the selected year in one read — so a grain switch issues no request at all. The high-water
-   * mark is what makes that true across navigation: only a period reaching past what has already
-   * been fetched triggers a second read, and it then covers everything below it too. */
-  const needTo = useMemo(() => {
-    const endOfThisYear = new Date(now.getFullYear(), 11, 31);
-    return ymd(period.end > endOfThisYear ? period.end : endOfThisYear);
-  }, [period.end, now]);
+  /* ── TWO READS, BOTH CACHED PER RANGE ──────────────────────────────────────────────────────
+   * NEAR: the period and the windows "previous period" and "previous quarter avg" need — a few
+   * months, a few pages. YEAR: last calendar year, for "previous year avg" at month grain only,
+   * read after NEAR so the chart is not waiting on it. Both are day rollups folded across venues. */
+  const near = useMemo(() => {
+    const starts = [period.start, comparisonWindow(grain, period.start, "period").start];
+    if (grain === "month") starts.push(comparisonWindow(grain, period.start, "quarter").start);
+    return { from: ymd(new Date(Math.min(...starts.map((d) => d.getTime())))), to: ymd(period.end) };
+  }, [grain, period.start, period.end]);
+  const yearWin = useMemo(() => {
+    if (grain !== "month") return null;
+    const w = comparisonWindow(grain, period.start, "year");
+    return { from: ymd(w.start), to: ymd(w.end) };
+  }, [grain, period.start]);
 
-  const want = useMemo(
-    () => ({ uid: appUser?.id ?? "", from: RECORD_FLOOR, to: needTo }),
-    [appUser?.id, needTo],
-  );
+  const nearQ = useAsync(uid ? `pace-near|${uid}|${near.from}|${near.to}` : null,
+    () => loadRollup(uid!, { from: near.from, to: near.to, grain: "day", byVenue: false }));
+  const yearQ = useAsync(uid && yearWin && nearQ.data ? `pace-year|${uid}|${yearWin.from}|${yearWin.to}` : null,
+    () => loadRollup(uid!, { from: yearWin!.from, to: yearWin!.to, grain: "day", byVenue: false }));
 
+  /* ── THE FIELD LIST: real fields with revenue in the SELECTED period and city ──────────────
+   * By field ID (fin_txn.fin_venue_id, mapped from Stripe's fieldId), never a match name. A name
+   * that exists in two cities is labelled with its city. */
+  const venuesQ = useAsync("pace-venues", async () => {
+    const { data, error } = await supabase.from("fin_venues").select("id, venue_name, city");
+    if (error) throw new Error(`fin_venues: ${error.message}`);
+    return new Map((data ?? []).map((v) => [Number(v.id), { name: String(v.venue_name), city: (v.city as string | null) ?? null }]));
+  });
+  const periodQ = useAsync(uid ? `pace-fields|${uid}|${ymd(period.start)}|${ymd(period.end)}` : null,
+    () => loadRollup(uid!, { from: ymd(period.start), to: ymd(period.end), grain: "month", byVenue: true }));
+  const fieldIds = useMemo(() => {
+    const out = new Map<string, number[]>();
+    const vmap = venuesQ.data;
+    if (!vmap || !periodQ.data) return out;
+    const named = new Map<string, Set<string>>();   // name -> cities, to spot a shared name
+    for (const v of vmap.values()) named.set(v.name, (named.get(v.name) ?? new Set()).add(v.city ?? ""));
+    for (const r of periodQ.data) {
+      if (!isRevenueRow(r) || r.fin_venue_id == null || r.kind === "dispute" || r.kind === "refund" || r.kind === "failed") continue;
+      if (r.gross_cents <= 0) continue;
+      if (city !== "All cities" && cityLabel(r.city) !== city) continue;
+      const v = vmap.get(r.fin_venue_id);
+      if (!v) continue;
+      const label = (named.get(v.name)?.size ?? 0) > 1 ? `${v.name} (${v.city ?? "—"})` : v.name;
+      const ids = out.get(label) ?? [];
+      if (!ids.includes(r.fin_venue_id)) ids.push(r.fin_venue_id);
+      out.set(label, ids);
+    }
+    return out;
+  }, [venuesQ.data, periodQ.data, city]);
+  const fields = useMemo(() => ["All fields", ...[...fieldIds.keys()].sort()], [fieldIds]);
+  // A field that is not in the list for this period and city cannot stay selected.
   useEffect(() => {
-    // WAIT FOR AUTH RATHER THAN FETCHING AS NOBODY. Reading under a placeholder identity and then
-    // again under the real one would double every cold load and cache a row set nobody asked for.
-    if (authLoading || !want.uid) return;
-    let live = true;
-    // SYNCHRONOUS WHEN IT IS ALREADY CACHED — no flash of "Loading…" on a grain change, because
-    // there is nothing to load.
-    if (covers(CACHE, want)) { setRows(CACHE!.rows); return; }
-    void loadRows(want).then((r) => { if (live) setRows(r); }).catch(() => { if (live) setRows([]); });
-    return () => { live = false; };
-  }, [want, authLoading]);
+    if (field !== "All fields" && periodQ.data && venuesQ.data && !fieldIds.has(field)) setField("All fields");
+  }, [field, fieldIds, periodQ.data, venuesQ.data]);
 
-  // THE OPTION LISTS COME FROM THE WHOLE RECORD, not from the selected window. Deriving them from a
-  // narrow window would drop a city from the dropdown in a month it happened not to trade.
+  const ids = field === "All fields" ? null : fieldIds.get(field) ?? null;
+  const fieldQ = useAsync(uid && ids ? `pace-field|${uid}|${ids.join(",")}|${near.from}|${(yearWin ?? near).from}|${near.to}` : null,
+    async () => {
+      const lo = yearWin && yearWin.from < near.from ? yearWin.from : near.from;
+      return (await Promise.all(ids!.map((id) =>
+        loadRollup(uid!, { from: lo, to: near.to, grain: "day", byVenue: true, venueId: id })))).flat();
+    });
+
+  const rows = useMemo<Row[] | null>(() => {
+    if (ids) return fieldQ.data ? toRows(fieldQ.data, field) : null;
+    if (!nearQ.data) return null;
+    return [...toRows(nearQ.data, null), ...(yearQ.data ? toRows(yearQ.data, null) : [])];
+  }, [ids, fieldQ.data, field, nearQ.data, yearQ.data]);
+  const loadError = nearQ.error ?? yearQ.error ?? fieldQ.error ?? periodQ.error ?? venuesQ.error;
+
   const cities = useMemo(
-    () => ["All cities", ...[...new Set((rows ?? []).map((r) => r.city).filter(Boolean))].sort()],
-    [rows],
-  );
-  const fields = useMemo(
-    () => ["All fields", ...[...new Set((rows ?? []).map((r) => r.venue ?? "").filter(Boolean))].sort()],
-    [rows],
+    () => ["All cities", ...[...new Set(toRows(periodQ.data ?? [], null).map((r) => r.city))].sort()],
+    [periodQ.data],
   );
 
   const buckets = useMemo(
@@ -483,9 +457,6 @@ export default function DailyRevenuePace() {
   }, [hoverAt, buckets, current, drawnTo, comp, period.label]);
 
   const scope = field !== "All fields" ? field : city !== "All cities" ? city : "All Matchday";
-  // Read during render so every re-render republishes it — a late-resolving fetch changes the slot
-  // without re-rendering anyone, and the next render is when it becomes observable.
-  const cacheSnap = paceCacheSnapshot();
   const word = GRAIN_WORD[grain];
   const partialIdx = useMemo(
     () => buckets.map((b, i) => (b.partial && i < drawnTo ? i : -1)).filter((i) => i >= 0),
@@ -493,12 +464,7 @@ export default function DailyRevenuePace() {
   );
 
   return (
-    <div className={s.card} data-testid="pace-card" data-grain={grain}
-      // THE CACHE'S OWN STATE, for assertions: the range it holds and HOW MANY rows it holds. A
-      // range without its matching row count is the exact bug the monotonic write exists to stop,
-      // so both are published. The identity in the key is deliberately NOT here.
-      data-cacherange={cacheSnap ? `${cacheSnap.from}..${cacheSnap.to}` : ""}
-      data-cacherows={cacheSnap ? String(cacheSnap.rows) : ""}>
+    <div className={s.card} data-testid="pace-card" data-grain={grain}>
       <div className={s.cardHead}>
         <div>
           <div className={s.cardTitle} data-testid="pace-title">{word.title} revenue pace</div>
@@ -536,12 +502,13 @@ export default function DailyRevenuePace() {
           </div>{/* ctrlGroup */}
           <div className={s.ctrlGroup}>
             <span className={s.ctrlLab}>View</span>
-            <select className={s.sel} data-testid="pace-city" value={city} onChange={(e) => setCity(e.target.value)}>
+            <select className={s.sel} data-testid="pace-city" aria-label="City" value={city} onChange={(e) => setCity(e.target.value)}>
               {cities.map((c) => <option key={c}>{c}</option>)}
             </select>
-            <select className={s.sel} data-testid="pace-field" value={field} onChange={(e) => setField(e.target.value)}>
+            <select className={s.sel} data-testid="field-select" aria-label="Field" value={field} onChange={(e) => setField(e.target.value)}>
               {fields.map((f) => <option key={f}>{f}</option>)}
             </select>
+            <InfoI pop="fields" label="How fields are listed" />
             <select className={s.sel} data-testid="pace-kind" value={kind} onChange={(e) => setKind(e.target.value)}>
               <option value="total">DPP + Membership</option>
               <option value="dpp">DPP only</option>
@@ -551,7 +518,9 @@ export default function DailyRevenuePace() {
         </div>
       </div>
 
-      {rows === null ? (
+      {loadError ? (
+        <div className={s.legend} data-testid="pace-error">Revenue did not load: {loadError}</div>
+      ) : rows === null ? (
         <div className={s.legend} data-testid="pace-loading">Loading…</div>
       ) : (
         <div className={s.paceWrap}>
