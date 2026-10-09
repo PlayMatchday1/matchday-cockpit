@@ -207,21 +207,32 @@ export function payResultText(
 export const monthName = (m0: number) => MONTH_FULL[m0];
 export const monthShort = (m0: number) => MON3[m0];
 
+/* ── ONE RATE PER FIELD (Ryan, 2026-10-09) ─────────────────────────────────────────────────────────
+ * Field Costs is the single source for cost per match: per_match_rate, with rate_days for a weekday
+ * split. The separate cost_per_match (the Fields page's "Cost / match") is no longer read anywhere —
+ * it had drifted: Wheatley Heights $100 against a $150 rate, Westlake $114 against $135, Stony Point
+ * never set and read as $0. The one exception is cost_override_per_match (0219), set in Field Costs
+ * WITH a note, for the rare field whose cost per match is not its invoice rate: when set it wins on
+ * every day and on every page. Soccer Central's two-pitch rule is untouched — a two-pitch match is
+ * the Tournament leg (fin_venues 53) at its own $180 rate, counted as two matches elsewhere. */
+export type UnitCostVenue = {
+  per_match_rate: number | null; rate_days?: DayRate[] | null;
+  cost_override_per_match?: number | null;
+};
+
+/** The field's cost per match with no day in mind: the override, else the per-match rate. */
+export function unitCostOf(v: UnitCostVenue): number | null {
+  return v.cost_override_per_match ?? v.per_match_rate ?? null;
+}
+
 /**
- * COST PER MATCH ON A GIVEN DAY — Match P&L's per-match cost, made weekday-aware (Ryan, 2026-10-03).
- *
- * cost_per_match (what a pitch costs to run) and per_match_rate / rate_days (what the venue invoices)
- * are DIFFERENT columns and both stay. rate_days holds invoice rates, so it is not copied over
- * cost_per_match; its weekday SURCHARGE is: cost_per_match + (that day's rate − per_match_rate).
- * ATH Katy: $140 + ($160 − $140) = $160 on a Sunday, $140 otherwise. A venue with no rate_days, no
- * cost_per_match or no per_match_rate to measure the surcharge from keeps cost_per_match unchanged.
+ * COST PER MATCH ON A GIVEN DAY: the override if set; otherwise that weekday's Field Costs rate
+ * (rate_days), else per_match_rate. Null when the field has no rate at all — never $0 for unknown.
  * `ymd` is the match's WALL-CLOCK date (YYYY-MM-DD), the same date rate_days is keyed on.
  */
-export function costPerMatchOn(
-  v: { cost_per_match: number | null; per_match_rate: number | null; rate_days?: DayRate[] | null },
-  ymd: string,
-): number | null {
-  const base = v.cost_per_match ?? null;
-  if (base == null || !v.rate_days || v.rate_days.length === 0 || v.per_match_rate == null) return base;
-  return Math.round((base + rateForYmd(v.rate_days, v.per_match_rate, ymd) - v.per_match_rate) * 100) / 100;
+export function costPerMatchOn(v: UnitCostVenue, ymd: string): number | null {
+  if (v.cost_override_per_match != null) return v.cost_override_per_match;
+  if (v.per_match_rate == null && !(v.rate_days && v.rate_days.length)) return null;
+  if (!v.rate_days || v.rate_days.length === 0) return v.per_match_rate;
+  return rateForYmd(v.rate_days, v.per_match_rate, ymd);
 }

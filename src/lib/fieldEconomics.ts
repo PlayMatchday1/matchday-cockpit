@@ -28,6 +28,7 @@
 // MONTH KEYS are Q2Month — "Aug 2026" — the same string financeStats uses.
 
 import { chargedAmount, chargedUnitCount, isEventSchedule, perMatchMinusManagerOwed, type VenueCostKind } from "./financeCosts";
+import { unitCostOf } from "./venuePay";
 import {
   cityMembershipRevenuePreTaxFor,
   venueAllocatedMemberRevenueFor,
@@ -193,7 +194,7 @@ function groupCost({ data, group, month, realizedThroughMs }: CostArgs): { amoun
   if (basis === "monthly_flat") return { amount: null, kind: "needs_override" };
 
   // PER-MATCH. Unknown only when NO leg carries a unit cost in either column.
-  const hasUnit = group.legs.some((l) => l.cost_per_match != null || l.per_match_rate != null);
+  const hasUnit = group.legs.some((l) => unitCostOf(l) != null);
   if (!hasUnit) return { amount: null, kind: "needs_override" };
   // legPerMatchUnitCost is the RATE half (financeStats) and chargedUnitCount is the COUNT half
   // (financeCosts) — the same two helpers the estate's other cost paths use, paired here with a

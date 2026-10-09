@@ -412,8 +412,11 @@ export async function fetchWeekMatchPnL(
     const targetName = isTournament
       ? "Soccer Central Tournament"
       : "Soccer Central";
+    // ONE RATE PER FIELD (2026-10-09): each leg's Field Costs rate on the match's day (costPerMatchOn) —
+    // $90 on Soccer Central, $180 on the Tournament leg — never the retired cost_per_match.
+    const day = matchStartIso.slice(0, 10);
     if (v.raw_venue_name === targetName) {
-      return { venueId: v.id, cost: v.cost_per_match, isTournament };
+      return { venueId: v.id, cost: costPerMatchOn(v, day), isTournament };
     }
     const target = venues.find(
       (x) => x.city === v.city && x.raw_venue_name === targetName,
@@ -426,7 +429,7 @@ export async function fetchWeekMatchPnL(
     }
     return {
       venueId: target.id,
-      cost: target.cost_per_match,
+      cost: costPerMatchOn(target, day),
       isTournament,
     };
   }

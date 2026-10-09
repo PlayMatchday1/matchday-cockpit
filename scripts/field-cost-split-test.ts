@@ -201,19 +201,26 @@ console.log("\nUNDERLYING MATCHES — each line at the rate it is charged; the l
   is("a payout venue has no per-match lines", fieldCostMatchLines(data, row("Share Pitch"), MONTH).length, 0);
 }
 
-console.log("\nMATCH P&L — cost per match, weekday-aware (cost_per_match + the venue's weekday surcharge)");
+console.log("\nMATCH P&L — cost per match: ONE RATE PER FIELD, weekday-aware (Field Costs rates; an override wins)");
 {
+  /* ITEMISED (2026-10-09) — BEHAVIOUR CHANGED BY RYAN'S DECISION: "one rate per field; Field Costs is
+   * the single source for cost per match", the retired cost_per_match is no longer read, and an
+   * optional override (0219) wins on every day. The old assertions here pinned the opposite ruling
+   * (2026-10-03: "a weekday stays $114, never the $135 invoice rate"); they are replaced, not edited
+   * to pass. Each still holds a CONTROL on a day that must differ. */
   const katy = { cost_per_match: 140, per_match_rate: 140, rate_days: [{ days: [0, 1, 2, 3, 4, 5], v: 140 }, { days: [6], v: 160 }] };
   is("ATH Katy on a Sunday (2026-10-04): $160", costPerMatchOn(katy, "2026-10-04"), 160);
   is("CONTROL — ATH Katy on a Monday (2026-10-05): $140", costPerMatchOn(katy, "2026-10-05"), 140);
-  // The two columns stay distinct: a venue whose run cost differs from its invoice rate keeps its own
-  // base and only gains the surcharge — it is NOT switched to the invoice rate.
   const split = { cost_per_match: 114, per_match_rate: 135, rate_days: [{ days: [0, 1, 2, 3, 4, 5], v: 135 }, { days: [6], v: 150 }] };
-  is("cost $114 / invoice $135, Sunday invoice $150: Sunday costs $114 + $15 = $129", costPerMatchOn(split, "2026-10-04"), 129);
-  is("...and a weekday stays $114, never the $135 invoice rate", costPerMatchOn(split, "2026-10-05"), 114);
-  is("no rate_days: cost_per_match unchanged", costPerMatchOn({ cost_per_match: 125, per_match_rate: 105, rate_days: null }, "2026-10-04"), 125);
-  is("no cost_per_match: null, as before", costPerMatchOn({ cost_per_match: null, per_match_rate: 140, rate_days: katy.rate_days }, "2026-10-04"), null);
-  is("no per_match_rate to measure a surcharge from: cost_per_match unchanged", costPerMatchOn({ cost_per_match: 140, per_match_rate: null, rate_days: katy.rate_days }, "2026-10-04"), 140);
+  is("a stale cost_per_match ($114) is ignored: the Sunday rate is $150", costPerMatchOn(split, "2026-10-04"), 150);
+  is("...and a weekday is the $135 Field Costs rate", costPerMatchOn(split, "2026-10-05"), 135);
+  is("no rate_days: the per-match rate, whatever cost_per_match says", costPerMatchOn({ cost_per_match: 125, per_match_rate: 105, rate_days: null }, "2026-10-04"), 105);
+  is("no cost_per_match: the rate still prices it (Stony Point read $0 before)", costPerMatchOn({ cost_per_match: null, per_match_rate: 140, rate_days: katy.rate_days }, "2026-10-04"), 160);
+  is("no rate at all: null, never $0", costPerMatchOn({ cost_per_match: 140, per_match_rate: null, rate_days: null }, "2026-10-04"), null);
+  const ov = { ...split, cost_override_per_match: 110 };
+  is("an override wins on a Sunday", costPerMatchOn(ov, "2026-10-04"), 110);
+  is("...and on a weekday", costPerMatchOn(ov, "2026-10-05"), 110);
+  is("CONTROL — cleared, the weekday rate is back", costPerMatchOn({ ...ov, cost_override_per_match: null }, "2026-10-05"), 135);
 
   // SOURCE PAIRING, because fetchWeekMatchPnL sits behind Supabase and cannot run in the gate: both
   // of Match P&L's cost reads (played and cancelled) go through the weekday-aware helper with the

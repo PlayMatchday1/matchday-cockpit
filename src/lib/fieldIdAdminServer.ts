@@ -218,7 +218,8 @@ export async function fieldsPayload(sb: SupabaseClient, agg: FieldAggregate): Pr
       isActive: v.is_active === true,
       billingType: v.billing_type,
       perMatchRate: v.per_match_rate,
-      costPerMatch: v.cost_per_match,
+      // ONE RATE PER FIELD (2026-10-09): the cost per match IS the Field Costs rate; cost_per_match is retired.
+      costPerMatch: v.per_match_rate,
       chargeOnCancel: v.charge_on_cancel === true,
       billsPerReservation: v.bills_per_reservation === true,
       fieldCount: t.fields,

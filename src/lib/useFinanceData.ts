@@ -182,6 +182,12 @@ export type FinVenue = {
   // per venue via the Field Costs config table; nullable until set.
   // Migration 0010 added the column.
   cost_per_match: number | null;
+  /* ONE RATE PER FIELD (Ryan, 2026-10-09). cost_per_match above is NO LONGER READ for any cost: it
+   * stays in the table, unread, until it is dropped. Cost per match is the Field Costs setup —
+   * per_match_rate and rate_days — unless this override is set (migration 0219), and then the
+   * override wins everywhere and its note says why. venuePay.unitCostOf / costPerMatchOn. */
+  cost_override_per_match: number | null;
+  cost_override_note: string | null;
   notes: string | null;
   launch_date: string | null;
   is_active: boolean;
@@ -856,6 +862,12 @@ async function load(quarter: QuarterInfo): Promise<void> {
         r.cost_per_match === null || r.cost_per_match === undefined
           ? null
           : asNumber(r.cost_per_match),
+      // 0219: absent before the migration applies → null, which is "no override".
+      cost_override_per_match:
+        r.cost_override_per_match === null || r.cost_override_per_match === undefined
+          ? null
+          : asNumber(r.cost_override_per_match),
+      cost_override_note: cleanTextNullable(r.cost_override_note),
       notes: cleanTextNullable(r.notes),
       launch_date: cleanTextNullable(r.launch_date),
       is_active:

@@ -38,7 +38,9 @@ import {
   venueRealizedCostFor,
   type Q2Month,
 } from "@/lib/financeStats";
-import { canonicalVenueCost, type VenueCostKind } from "@/lib/financeCosts";
+import { canonicalVenueCost, perMatchMinusManagerOwed, type VenueCostKind } from "@/lib/financeCosts";
+import { partnerPaymentOwedForMonth } from "@/lib/partnerStats";
+import { unitCostOf } from "@/lib/venuePay";
 import { groupVenues } from "@/lib/venueGroups";
 
 export type CityCostMode = "as_billed" | "per_match";
@@ -47,9 +49,6 @@ export type CityCostScope = "realized" | "fullMonth";
 // A field's cost basis is UNMAPPED (held out of net) iff its canonical kind is
 // one of these — i.e. no rate, no override, no partner dashboard.
 const UNMAPPED_KINDS: ReadonlySet<VenueCostKind> = new Set(["unknown", "needs_override"]);
-// Share-like billing computes cost from the partner dashboard, not a per-match
-// rate — so even in Per-Match mode the cost is the amount owed, never rate × n.
-const SHARE_KINDS: ReadonlySet<VenueCostKind> = new Set(["profit_share", "per_match_minus_manager"]);
 
 export type PnlField = {
   venue: string;
@@ -99,23 +98,33 @@ export type CityPnl = {
 // the bug this table fixes. So a "per_match" kind only counts as mapped when the
 // leg actually carries a rate (per_match_rate or cost_per_match). per_match_minus_
 // manager (Crossbar) keeps its own kind and stays mapped.
+/* A SHARE FIELD IS DECIDED BY ITS OWN SETUP, NOT BY A MONTH'S OVERRIDE (2026-10-09). This used to read
+ * canonicalVenueCost's kind, which checks fin_venue_cost_overrides first — so in October, when Hattrick
+ * and PARMER carried a hand-entered "Custom billing month" override, they stopped being share fields:
+ * Hattrick fell to the retired $32 cost_per_match and PARMER to $0. A field is share-like when it is
+ * billed profit_share or its partner is on per_match_minus_manager, every month. */
+function shareOwed(data: FinanceData, legId: number, m: Q2Month): number | null {
+  return perMatchMinusManagerOwed(data, legId, m)
+    ?? partnerPaymentOwedForMonth(data.partnerDashboards, data.partnerPayoutsByVenueMonth, legId, m);
+}
 function classifyGroup(
   data: FinanceData,
-  legs: { id: number; per_match_rate: number | null; cost_per_match: number | null }[],
+  legs: { id: number; billing_type: string; per_match_rate: number | null; cost_override_per_match: number | null; rate_days?: unknown }[],
   months: Q2Month[],
 ): { mapped: boolean; isShare: boolean } {
   let mapped = false;
   let isShare = false;
   for (const leg of legs) {
     for (const m of months) {
-      const k = canonicalVenueCost(data, leg.id, m).kind;
-      if (SHARE_KINDS.has(k)) {
+      if (leg.billing_type === "profit_share" || perMatchMinusManagerOwed(data, leg.id, m) != null) {
         isShare = true;
-        mapped = true;
+        // No partner dashboard → no basis to compute the share from: unmapped, never $0.
+        if (shareOwed(data, leg.id, m) != null) mapped = true;
         continue;
       }
+      const k = canonicalVenueCost(data, leg.id, m).kind;
       if (UNMAPPED_KINDS.has(k)) continue;
-      if (k === "per_match" && leg.per_match_rate == null && leg.cost_per_match == null) continue; // null-rate → unmapped
+      if (k === "per_match" && unitCostOf(leg as Parameters<typeof unitCostOf>[0]) == null) continue; // no rate → unmapped
       mapped = true;
     }
   }
@@ -151,7 +160,12 @@ export function computeCityPnl(
         // never rate × n, which is the "1 × $0" bug. Plain per-match uses the
         // mode-appropriate helper; as-billed uses the canonical amount per leg.
         if (mapped) {
-          if (isShare || costMode === "as_billed") {
+          if (isShare) {
+            // THE PARTNER'S SHARE, from the payout engine (what the partner page shows) — never an
+            // override and never rate × n. It is a share of PLAYED matches, so realized and full-month
+            // read the same figure.
+            for (const id of legIds) cost += shareOwed(data, id, m) ?? 0;
+          } else if (costMode === "as_billed") {
             for (const id of legIds) {
               cost += realized ? venueRealizedCostFor(data, id, m, now) : canonicalVenueCost(data, id, m).amount;
             }
@@ -181,7 +195,7 @@ export function computeCityPnl(
           !mapped || isShare || g.legs[0].billing_type === "monthly_flat"
             ? null
             : costMode === "per_match"
-              ? g.legs[0].cost_per_match ?? g.legs[0].per_match_rate ?? null
+              ? unitCostOf(g.legs[0])
               : g.legs[0].per_match_rate ?? null,
         memberRev: null,
         totalRev: dppRev,

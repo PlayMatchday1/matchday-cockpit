@@ -75,7 +75,9 @@ const sched = (id: string, venueId: number, utc: string | null, cat = "regular")
 function financeData(over: Partial<Record<string, unknown>> = {}): FinanceData {
   const venue = (id: number, name: string, billing: string, extra: Record<string, unknown> = {}) => ({
     id, venue_name: name, raw_venue_name: name, city: "Austin", billing_type: billing,
-    per_match_rate: 100, cost_per_match: 40, charge_on_cancel: false, bills_per_reservation: false,
+    // ITEMISED (2026-10-09) — FIXTURE ONLY: the unit is now the Field Costs rate (one rate per field),
+    // so the $40 moves from the retired cost_per_match to per_match_rate. The assertions are unchanged.
+    per_match_rate: 40, cost_per_match: 40, charge_on_cancel: false, bills_per_reservation: false,
     is_active: true, hourly_rate: null, monthly_flat: null, max_spots: 20, dpp_price: 12,
     member_price: null, notes: null, launch_date: null, ...extra,
   });

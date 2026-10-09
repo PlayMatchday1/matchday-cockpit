@@ -237,8 +237,8 @@ export default function VenuesFieldsView() {
                   ? `${num(v.excludedMatches)} excluded · ${num(v.cancelledMatches)} cancelled`
                   : `${num(v.cancelledMatches)} cancelled`}</small></div>
               <div className="vf-num">{num(v.spots)}</div>
-              {/* THE RATE IS cost_per_match, the column Field Economics reads. Where per_match_rate
-                  disagrees BOTH are shown with a marker — nothing is picked silently. */}
+              {/* THE RATE IS THE FIELD COSTS RATE — one rate per field (2026-10-09). The old separate
+                  cost_per_match is no longer read, so the two can no longer disagree here. */}
               <div className="vf-rate">{money(v.revenue)}
                 <small className={v.rateDisagrees ? "vf-split" : undefined} data-testid={`rate-${v.venueId}`}>
                   {v.rate == null ? "no rate" : `$${v.rate}/match`}

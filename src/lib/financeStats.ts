@@ -13,6 +13,7 @@ import {
 
 import { isFakePlayerEmail } from "./mdapiFakePlayer";
 import { partnerPaymentOwedForMonth } from "./partnerStats";
+import { unitCostOf } from "./venuePay";
 import {
   canonicalVenueCost,
   fieldCostsFor,
@@ -1538,12 +1539,10 @@ export function venueChargedMatchCountFor(
 // EXPORTED so Finance › Cost can pair this unit rule with its OWN realized match count without
 // re-implementing either. It is the rate half; chargedUnitCount is the count half; multiplying
 // them anywhere else would be a fourth derivation of a venue's cost.
+/* ONE RATE PER FIELD (2026-10-09): a leg's unit is its override or its Field Costs rate, falling back
+ * to the group's primary leg (a twin leg with no rate of its own). cost_per_match is not read. */
 export function legPerMatchUnitCost(leg: FinVenue, primary: FinVenue): number {
-  if (leg.cost_per_match != null) return leg.cost_per_match;
-  if (leg.id !== primary.id && leg.per_match_rate != null) {
-    return leg.per_match_rate;
-  }
-  return primary.cost_per_match ?? 0;
+  return unitCostOf(leg) ?? unitCostOf(primary) ?? 0;
 }
 
 // Per-match-normalized cost for a venue group in a given month:

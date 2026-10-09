@@ -108,7 +108,7 @@ export default function AddVenueDialog({
       // retired — the DB column lingers for legacy rows.
       per_match_rate: showPerMatch ? draft.per_match_rate : null,
       hourly_rate: null,
-      cost_per_match: showPerMatch ? draft.cost_per_match : null,
+      cost_per_match: null, // retired column (2026-10-09): never written
     };
     setSaving(true);
     try {
@@ -200,23 +200,8 @@ export default function AddVenueDialog({
             </Field>
           )}
 
-          {showPerMatch && (
-            <Field label="Cost/match ($) — for Match P&L">
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                value={draft.cost_per_match ?? ""}
-                onChange={(e) =>
-                  setDraft({
-                    ...draft,
-                    cost_per_match: parseNum(e.target.value),
-                  })
-                }
-                className="w-full rounded-md border border-cream-line bg-white px-3 py-2 text-right font-mono text-sm tabular-nums text-deep-green focus:border-deep-green focus:outline-none"
-              />
-            </Field>
-          )}
+          {/* No "Cost/match" box (2026-10-09): one rate per field — the per-match rate above is the cost.
+              A field whose cost differs gets a Cost per match override, with a note, in Field Costs. */}
 
           {/* NO "MAX SPOTS" FIELD. It wrote fin_venues.max_spots, which nothing could then see,
               edit or read: this dialog's INSERT was the only writer, no UPDATE anywhere touched it,

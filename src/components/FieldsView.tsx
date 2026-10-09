@@ -308,7 +308,7 @@ export default function FieldsView() {
     // THE SAME SHAPE EITHER WAY, so the form does not branch on whether a venue exists yet.
     const seed = {
       venue_name: row.venue_name ?? "", city: row.city ?? "", billing_type: row.billing_type ?? "per_match",
-      per_match_rate: row.per_match_rate ?? "", cost_per_match: row.cost_per_match ?? "",
+      per_match_rate: row.per_match_rate ?? "",
       charge_on_cancel: row.charge_on_cancel === true,
       min_players: row.min_players ?? "", max_players: row.max_players ?? "",
       contact_name: row.contact_name ?? "", contact_number: row.contact_number ?? "",
@@ -327,7 +327,7 @@ export default function FieldsView() {
     try {
       const num = (v: unknown) => (v === "" || v == null ? null : Number(v));
       const payload = { ...vd,
-        per_match_rate: num(vd.per_match_rate), cost_per_match: num(vd.cost_per_match),
+        per_match_rate: num(vd.per_match_rate),
         min_players: num(vd.min_players), max_players: num(vd.max_players),
         field_title_at_link: cur.title ?? null };
       const linkTo = venueCur ?? (venueMode === "existing" ? venuePick : null);
@@ -641,9 +641,8 @@ export default function FieldsView() {
                   <F label="Per-match rate">
                     <input data-testid="fv-rate" inputMode="decimal" value={String(vd.per_match_rate ?? "")} disabled={venueLocked}
                       onChange={(e) => setVd({ ...vd, per_match_rate: e.target.value })} placeholder="160" /></F>
-                  <F label="Cost / match">
-                    <input data-testid="fv-cost" inputMode="decimal" value={String(vd.cost_per_match ?? "")} disabled={venueLocked}
-                      onChange={(e) => setVd({ ...vd, cost_per_match: e.target.value })} placeholder="160" /></F>
+                  {/* "Cost / match" IS GONE (2026-10-09): one rate per field, set in Field Costs. A field whose
+                      cost differs from its invoice rate gets a Cost per match override there, with a note. */}
                 </div>
                 <div style={{ marginTop: 12 }}>
                   {/* EXPOSED. A per-venue yes/no the person setting the field up knows.

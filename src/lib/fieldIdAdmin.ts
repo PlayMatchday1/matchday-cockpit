@@ -541,8 +541,8 @@ export function previewAssignment(
     };
     if (venue.costPerMatch != null) {
       warnings.push(
-        `This venue carries cost_per_match = $${venue.costPerMatch} but per_match_rate is NULL. ` +
-          "As Billed reads per_match_rate only — the two columns are two different models, not one fact entered twice.",
+        `This venue carries a cost per match of $${venue.costPerMatch} but per_match_rate is NULL. ` +
+          "Cost per match is read from the Field Costs rate only.",
       );
     }
   } else {
