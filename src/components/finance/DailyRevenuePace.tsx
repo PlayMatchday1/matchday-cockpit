@@ -219,7 +219,7 @@ export default function DailyRevenuePace() {
   const [compare, setCompare] = useState<Compare>("period");
   const [city, setCity] = useState("All cities");
   const [field, setField] = useState("All fields");
-  const [kind, setKind] = useState("total");
+  const [kind, setKind] = useState("dpp");   // DPP only by default: day 1's membership billing flattens every other day
 
   /* ── TWO READS, BOTH CACHED PER RANGE ──────────────────────────────────────────────────────
    * NEAR: the period and the windows "previous period" and "previous quarter avg" need — a few
@@ -326,7 +326,7 @@ export default function DailyRevenuePace() {
         const w = comparisonWindow("month", period.start, mode);
         out[mode] = {
           label: w.label, data: [], has: false,
-          why: `An average day of ${w.label.replace(/ avg$/, "")} cannot be plotted against ${GRAIN_WORD[grain].by.replace("by ", "")}s — switch to the Month view for that comparison.`,
+          why: "An average day can only be compared in the Month view.",
         };
         continue;
       }
@@ -494,7 +494,7 @@ export default function DailyRevenuePace() {
                     aria-pressed={compare === v}
                     className={compare === v ? s.on : ""}
                     // DISABLED WITH THE REASON, never hidden and never silently empty.
-                    title={has ? undefined : (c?.why ?? `No revenue on record for ${c?.label ?? "that period"} — nothing to compare against.`)}
+                    title={has ? undefined : (c?.why ?? `No revenue on record for ${c?.label ?? "that period"}, so there is nothing to compare.`)}
                     onClick={() => has && setCompare(v)}>{t}</button>
                 );
               })}

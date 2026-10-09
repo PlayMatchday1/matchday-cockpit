@@ -35,8 +35,8 @@ export default function RevenueNetTable({ grain, groups, matchesOf, launchOf }: 
           {field && <th className="l"><span className="lbl">City</span></th>}
           {field && <th className="l"><span className="lbl">Launched</span></th>}
           <th><span className="lbl">Matches</span></th>
-          <th><span className="lbl">DPP <InfoI pop="dpp" label="What DPP is" /></span></th>
-          <th><span className="lbl">Membership <InfoI pop="mem" label="What membership is" /></span></th>
+          <th><span className="lbl">DPP <InfoI pop="dppTable" label="What DPP is here" /></span></th>
+          <th><span className="lbl">Membership <InfoI pop="memTable" label="What membership is here" /></span></th>
           <th><span className="lbl">Refunds &amp; disputes <InfoI pop="rev" label="Refunds and disputes" /></span></th>
           <th className="net"><span className="lbl">Net revenue</span></th>
           <th><span className="lbl">Share</span></th>

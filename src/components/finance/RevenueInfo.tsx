@@ -1,7 +1,7 @@
 "use client";
 
-/* THE REVENUE PAGE'S INFO POPOVERS — the mock's words (scripts/mocks/finance-revenue-v2.html,
- * <template id="t-…">), verbatim, and the mock's behaviour: click opens, a second click on the same
+/* THE REVENUE PAGE'S INFO POPOVERS — the copy is below (POP); the behaviour is the mock's
+ * (scripts/mocks/finance-revenue-v2.html): click opens, a second click on the same
  * i closes, a click anywhere else or Esc closes, and only one is ever open.
  *
  * The panel is portalled to <body> with position:fixed off the button's rect, so a table's
@@ -10,38 +10,32 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 export type PopKey =
-  | "how" | "status" | "net" | "dpp" | "mem" | "avg" | "rev" | "fields" | "gross" | "tax"
+  | "how" | "status" | "net" | "dpp" | "mem" | "dppTable" | "memTable" | "avg" | "rev" | "fields" | "gross" | "tax"
   | "fees" | "failed" | "venmo" | "unassigned" | "other" | "pace" | "matchmoney";
 
+/* ONE OR TWO SHORT SENTENCES EACH, 140 characters at most, no worked calculations and no pointers
+ * to other pages (Ryan, 2026-10-08). The tiles' DPP and Membership are AFTER refunds; the city,
+ * field and match tables' are BEFORE refunds, so each set has its own copy. */
 export const POP: Record<PopKey, React.ReactNode> = {
-  how: (<><div className="h">How we count revenue</div><ul>
-    <li>Days and months are <b>Central time</b>. A charge at 9pm on Sep 30 counts in September.</li>
-    <li><b>Net revenue</b> is what customers paid, minus refunds, disputes and sales tax.</li>
-    <li>Refunds and disputes count in the month they happen, even if the original charge was earlier.</li>
-    <li>Sales tax is calculated from each city&apos;s rate (Texas 8.25%).</li>
-    <li>Stripe fees are shown separately and are not taken out of net revenue.</li>
-    <li>Includes Venmo payments for private rentals, entered by hand.</li>
-    <li>Excludes test matches and internal accounts.</li>
-    <li>Members with no city on file are shown as Unassigned, so cities always add up to the total.</li>
-    <li>A month shows <b>Updating</b> until Stripe&apos;s data for its last day has synced, about 2 days later, then <b>Final</b>.</li>
-  </ul></>),
-  status: (<><div className="h">Updating and final</div>Stripe makes each day&apos;s payments available by noon the next day, so the last days of a month can still be arriving. September shows <b>Updating</b> until Sep 30 has fully synced, then <b>Final</b>. A final month does not change on its own: new refunds and disputes count in the month they happen. If anything is entered or edited for a final month later, such as a Venmo rental, it shows <b>Adjusted after final</b> with the amount.</>),
-  net: (<><div className="h">Net revenue</div>Everything customers paid in the month (Stripe and Venmo), minus refunds, failed payments, disputes and sales tax. It is the money that is ours before Stripe&apos;s fees.</>),
-  dpp: (<><div className="h">DPP</div>Drop-in pay-per-play: single match bookings and strike fees. Net of sales tax. In the tiles and the four-month table it is also after its own refunds and disputes, so DPP + Membership + Other = Net revenue; the city and field tables show refunds and disputes in their own column instead.</>),
-  mem: (<><div className="h">Membership</div>Monthly membership charges. Most bill on the 1st; members who joined mid-month bill on their own date. Net of sales tax, and in the tiles and the four-month table after membership refunds and disputes. On the Field tab, a city&apos;s membership is credited to its fields by their share of the city&apos;s member spots that month, the rule the Cities page uses.</>),
-  avg: (<><div className="h">Avg daily DPP</div>DPP for the month divided by the days in it. Membership is left out because most of it bills on the 1st and would distort a daily average.</>),
-  rev: (<><div className="h">Refunds &amp; disputes</div>Money returned to customers this month, net of the tax that came back with it. A dispute is a chargeback: the cardholder&apos;s bank reversed the payment. Each dispute also costs a $15 Stripe fee, shown under Stripe fees. <b>Every refund and dispute figure on this page is net of tax</b>, so Sales tax is the tax on the month&apos;s charges.</>),
-  fields: (<><div className="h">Fields</div>Lists only real fields that had revenue in the selected month and city, matched by field ID, not by match name.</>),
-  gross: (<><div className="h">Gross collected</div>Every successful charge in the month, including sales tax, plus Venmo payments entered by hand.</>),
-  tax: (<><div className="h">Sales tax</div>Collected from customers on behalf of the state, so it is not our revenue. Calculated per city from its rate, on the month&apos;s charges. The tax returned with a refund is already out of the refund figure.</>),
-  fees: (<><div className="h">Stripe fees</div>Card processing, invoicing and billing fees, and dispute fees, as Stripe reports them for the month.</>),
-  failed: (<><div className="h">Failed payments</div>Charges that looked successful and were later reversed by the bank before settling.</>),
+  how: (<><div className="h">How we count revenue</div>Days are Central time. Test matches and internal accounts are left out.</>),
+  status: (<><div className="h">Updating and final</div>A month is Updating until Stripe has synced its last day, about 2 days later. Then it is Final.</>),
+  net: (<><div className="h">Net revenue</div>What customers paid, minus refunds, disputes and sales tax. Before Stripe fees.</>),
+  dpp: (<><div className="h">DPP</div>Single match bookings and strike fees, after tax and refunds.</>),
+  mem: (<><div className="h">Membership</div>Monthly membership charges, after tax and refunds. Most bill on the 1st.</>),
+  dppTable: (<><div className="h">DPP</div>Before refunds. Refunds are in their own column.</>),
+  memTable: (<><div className="h">Membership</div>Before refunds. Refunds are in their own column.</>),
+  avg: (<><div className="h">Avg daily DPP</div>DPP from completed days divided by the number of completed days.</>),
+  rev: (<><div className="h">Refunds &amp; disputes</div>Money returned to customers, after the tax that came back with it. A dispute is a chargeback by the bank.</>),
+  fields: (<><div className="h">Fields</div>Only fields that had revenue in the selected month and city.</>),
+  gross: (<><div className="h">Gross collected</div>Every successful charge this month, including sales tax and hand-entered Venmo payments.</>),
+  tax: (<><div className="h">Sales tax</div>Collected for the state, so it is not our revenue.</>),
+  fees: (<><div className="h">Stripe fees</div>Card processing and billing fees. Not taken out of net revenue.</>),
+  failed: (<><div className="h">Failed payments</div>Charges that looked successful but the bank reversed before they settled.</>),
   venmo: (<><div className="h">Venmo (manual)</div>Private rental payments received outside Stripe and entered by hand.</>),
-  // ── Not in the mock: the build's own, where the mock had nothing to say ──
-  unassigned: (<><div className="h">Unassigned</div>Payments whose member has no city on file: the account was deleted, or the email matches no member. They stay in the total so the cities add up. Sales tax is taken at the Texas rate, 8.25%.</>),
-  other: (<><div className="h">Other</div>Private rentals (Venmo and Stripe) and charges that are neither DPP nor membership, net of tax and of their own refunds. In the city and field tables they count in the row&apos;s net revenue but have no column of their own.</>),
-  pace: (<><div className="h">Pace to month end</div>Net revenue so far, plus the days left × a daily rate. The rate is net revenue so far less day 1 (when most memberships bill) and less today (still arriving), divided by the days that leaves. Day 1 and today are still counted in the total; they are only left out of the rate.</>),
-  matchmoney: (<><div className="h">DPP revenue per match</div>From Stripe: each match&apos;s charges, less its refunds and disputes, net of sales tax. Joined to the match by the payment, not by name. Dated by kick-off, so a total here is not a month&apos;s net revenue.</>),
+  unassigned: (<><div className="h">Unassigned</div>Members with no city on file.</>),
+  other: (<><div className="h">Other</div>Private rentals and charges that are neither DPP nor membership, after tax and refunds.</>),
+  pace: (<><div className="h">Pace to month end</div>Revenue so far plus the recent daily average, adjusted for how last month trended, times the days left.</>),
+  matchmoney: (<><div className="h">DPP revenue per match</div>Each match&apos;s bookings less its refunds, after tax. Dated by kickoff.</>),
 };
 
 let closeOpen: (() => void) | null = null;

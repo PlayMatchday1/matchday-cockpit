@@ -10,7 +10,7 @@
  * the app has one for every Finance page). */
 import { useMemo, useState } from "react";
 import type { FinancePeriod } from "@/lib/financePeriod";
-import { changeGrain, currentPeriod, projectMonthEnd, stepPeriod } from "@/lib/financePeriod";
+import { changeGrain, currentPeriod, priorMonthShape, projectMonthEnd, stepPeriod } from "@/lib/financePeriod";
 import { useFinancePeriod } from "@/lib/financePeriodContext";
 import FinancePeriodBar from "./FinancePeriodBar";
 import { BUSINESS_TZ, zonedWallClockToUtcMs } from "@/lib/businessHours";
@@ -58,22 +58,58 @@ export default function RevenueTop({ period, rows, error }: {
     isCurMonth && uid ? `pace|${uid}|${ymdOf(period.start)}` : null,
     () => loadRollup(uid!, { from: ymdOf(period.start), to: ymdOf(period.end), grain: "day", byVenue: false }),
   );
+  // LAST MONTH, BY DAY, for the rate's shape factor (priorMonthShape). Used only once it is final.
+  const [prevStart, prevEnd] = useMemo(() => [
+    new Date(period.start.getFullYear(), period.start.getMonth() - 1, 1),
+    new Date(period.start.getFullYear(), period.start.getMonth(), 0),
+  ], [period.start]);
+  const prevDay = useAsync(
+    isCurMonth && uid ? `pace-prev|${uid}|${ymdOf(prevStart)}` : null,
+    () => loadRollup(uid!, { from: ymdOf(prevStart), to: ymdOf(prevEnd), grain: "day", byVenue: false }),
+  );
+  const prevFinal = useMemo(() => {
+    if (!st.data?.lastSyncMs) return false;
+    const th = finalThreshold(prevEnd.getFullYear(), prevEnd.getMonth() + 1, (yy, mm, dd) => zonedWallClockToUtcMs(yy, mm, dd, 0, 0, BUSINESS_TZ));
+    return st.data.lastSyncMs >= th;
+  }, [st.data, prevEnd]);
   const pace = useMemo(() => {
     if (!isCurMonth || !day.data || !t) return null;
-    const netOn = (pred: (d: number) => boolean) => day.data!
-      .filter((r) => isRevenueRow(r) && pred(Number(r.period.slice(8, 10))))
-      .reduce((a, r) => a + r.gross_cents - taxCentsOf(r), 0);
-    const day1 = netOn((d) => d <= 1), today = netOn((d) => d === period.elapsedDays);
+    const byDay = (rows: RollupRow[]) => {
+      const m = new Map<number, number>();
+      for (const r of rows) if (isRevenueRow(r)) {
+        const d = Number(r.period.slice(8, 10));
+        m.set(d, (m.get(d) ?? 0) + r.gross_cents - taxCentsOf(r));
+      }
+      return m;
+    };
+    const cur = byDay(day.data);
+    const day1 = cur.get(1) ?? 0, today = cur.get(period.elapsedDays) ?? 0;
+    // Waits for the sync status and last month's rows rather than flashing a flat figure and then
+    // changing. A failed read of either projects flat.
+    if (!st.data && !st.error) return null;
+    if (prevFinal && !prevDay.data && !prevDay.error) return null;
+    const ratio = prevFinal && prevDay.data ? priorMonthShape(byDay(prevDay.data), prevEnd.getDate(), period.elapsedDays) : null;
     const p = projectMonthEnd({
       soFar: t.net, excludedRevenue: day1, currentDayRevenue: today,
       daysElapsed: period.elapsedDays, daysInMonth: period.totalDays, excludedDays: 1, isCurrentMonth: true,
+      rateFactor: ratio ?? 1,
     });
-    return p.ok ? { ...p, day1, today } : null;
-  }, [isCurMonth, day.data, t, period.elapsedDays, period.totalDays]);
+    return p.ok ? { ...p, ratio } : null;
+  }, [isCurMonth, day.data, t, period.elapsedDays, period.totalDays, st.data, st.error, prevFinal, prevDay.data, prevDay.error, prevEnd]);
 
-  // AVG DAILY DPP: a closed period divides by its days; the period in progress by the days so far,
-  // because dividing a partial month by its full length understates every day of it.
-  const days = period.isCurrent ? Math.max(1, period.elapsedDays) : period.totalDays;
+  // AVG DAILY DPP: a closed period divides by its days. The period in progress divides by its
+  // COMPLETED days and leaves today's DPP out of the total too, because today is still arriving
+  // (the same reason Pace leaves it out of its rate).
+  const todayYmd = ymdOf(new Date(period.start.getFullYear(), period.start.getMonth(), period.start.getDate() + period.elapsedDays - 1));
+  const todayQ = useAsync(
+    period.isCurrent && uid ? `avg-today|${uid}|${todayYmd}` : null,
+    () => loadRollup(uid!, { from: todayYmd, to: todayYmd, grain: "day", byVenue: false }),
+  );
+  const days = period.isCurrent ? period.elapsedDays - 1 : period.totalDays;
+  const avgDpp = !t ? null
+    : !period.isCurrent ? t.dpp / days
+    : days < 1 || !todayQ.data ? null
+    : (t.dpp - totalsOf(todayQ.data).dpp) / days;
 
   const pct = (v: number) => (t && t.gross ? `${((Math.abs(v) / t.gross) * 100).toFixed(1)}%` : "");
   const items: [string, number, number | null, string, Parameters<typeof InfoI>[0]["pop"] | null, string][] = t ? [
@@ -155,22 +191,12 @@ export default function RevenueTop({ period, rows, error }: {
                 <div className="v num" data-testid="mini-other" data-cents={t.other}>{money(t.other)}</div><div className="s">net · rentals and other charges</div></div>
             )}
             <div className="tile"><div className="k">Avg daily DPP <InfoI pop="avg" label="How average daily is calculated" /></div>
-              <div className="v num" data-testid="mini-avg" data-days={days}>{money(t.dpp / days)}</div>
-              <div className="s">net · ÷ {days} {period.isCurrent ? "days so far" : "days"}</div></div>
+              <div className="v num" data-testid="mini-avg" data-days={days}>{avgDpp == null ? "—" : money(avgDpp)}</div>
+              <div className="s">net · ÷ {days} {period.isCurrent ? (days === 1 ? "completed day" : "completed days") : "days"}</div></div>
             {isCurMonth && (
-              <div className="tile" data-testid="mini-pace"><div className="k">Pace to month end <InfoI pop="pace" label="How pace to month end is calculated">
-                {pace && (
-                  <table data-testid="pace-explain"><tbody>
-                    <tr><td>Net revenue so far, days 1–{period.elapsedDays}</td><td>{money(t.net, true)}</td></tr>
-                    <tr><td>less day 1 (memberships bill)</td><td>{money(-pace.day1, true)}</td></tr>
-                    {pace.todayExcluded && <tr><td>less today, day {period.elapsedDays} (still arriving)</td><td>{money(-pace.today, true)}</td></tr>}
-                    <tr><td>= {money(pace.windowRevenue, true)} over {pace.rateDays} days</td><td>{money(pace.rate, true)}/day</td></tr>
-                    <tr><td>× {pace.remaining} {pace.remaining === 1 ? "day" : "days"} left</td><td>+{money(pace.remaining * pace.rate, true)}</td></tr>
-                    <tr><td><b>Projected: so far + days left × rate</b></td><td><b>{money(pace.projection, true)}</b></td></tr>
-                  </tbody></table>
-                )}
-              </InfoI></div>
-                <div className="v num" data-testid="mini-pace-value" data-cents={pace ? Math.round(pace.projection) : ""}>{pace ? money(pace.projection) : "—"}</div><div className="s">net, projected</div></div>
+              <div className="tile" data-testid="mini-pace"><div className="k">Pace to month end <InfoI pop="pace" label="How pace to month end is calculated" /></div>
+                <div className="v num" data-testid="mini-pace-value" data-cents={pace ? Math.round(pace.projection) : ""}
+                  data-rate={pace ? Math.round(pace.rate) : ""} data-ratio={pace?.ratio == null ? "flat" : pace.ratio.toFixed(4)}>{pace ? money(pace.projection) : "—"}</div><div className="s">net, projected</div></div>
             )}
           </div>
         </div>

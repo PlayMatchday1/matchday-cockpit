@@ -378,10 +378,12 @@ export function projectMonthEnd(input: {
   daysInMonth: number;
   excludedDays: number;
   isCurrentMonth?: boolean;
+  /** Multiplies the rate before it is projected over the days left (priorMonthShape). 1 = flat. */
+  rateFactor?: number;
 }): MonthEndPace {
   const {
     soFar, excludedRevenue, currentDayRevenue = 0,
-    daysElapsed, daysInMonth, excludedDays, isCurrentMonth = false,
+    daysElapsed, daysInMonth, excludedDays, isCurrentMonth = false, rateFactor = 1,
   } = input;
   const remaining = Math.max(0, daysInMonth - daysElapsed);
   // ONLY SUBTRACT TODAY IF IT IS NOT ALREADY IN THE EXCLUDED WINDOW. On day 1 of a month "today"
@@ -392,9 +394,30 @@ export function projectMonthEnd(input: {
   // estimate, it is not an estimate — the card shows a dash.
   if (rateDays < 1) return { ok: false, reason: "not-enough-days", remaining };
   const windowRevenue = soFar - excludedRevenue - (todayExcluded ? currentDayRevenue : 0);
-  const rate = windowRevenue / rateDays;
+  const rate = (windowRevenue / rateDays) * rateFactor;
   // remaining === 0 makes this exactly soFar, which is what the last day of a month and a closed
   // month must both produce — to the cent, not to the nearest rounding.
   return { ok: true, rate, rateDays, remaining, projection: soFar + remaining * rate, todayExcluded,
            windowRevenue };
+}
+
+/* THE PRIOR MONTH'S SHAPE (Ryan, 2026-10-08). The first week of a month runs hotter than the rest
+ * (September 2026: days 2–7 averaged $2,432.10/day net, days 8–30 $2,167.13), so a flat rate taken
+ * from the early days overshoots. The factor is last month's
+ *   average daily net on the days AFTER today's day-of-month
+ *   ÷ average daily net on days 2 through the last COMPLETED day-of-month (today − 1),
+ * the same two windows the current rate and the projection use. Null means "project flat": too few
+ * completed days (fewer than two after day 1), or a prior month with nothing to compare. The caller
+ * also passes null when the prior month is not final. */
+export function priorMonthShape(priorNetByDay: Map<number, number>, priorDaysInMonth: number, today: number): number | null {
+  const lastDone = Math.min(today - 1, priorDaysInMonth);
+  if (today - 2 < 2 || lastDone < 2 || today + 1 > priorDaysInMonth || priorNetByDay.size === 0) return null;
+  const avg = (a: number, b: number) => {
+    let s = 0;
+    for (let d = a; d <= b; d++) s += priorNetByDay.get(d) ?? 0;
+    return s / (b - a + 1);
+  };
+  const early = avg(2, lastDone), late = avg(today + 1, priorDaysInMonth);
+  if (!(early > 0) || !(late > 0)) return null;
+  return late / early;
 }
