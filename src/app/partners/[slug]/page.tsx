@@ -4,6 +4,7 @@ import { buildPartnerDashboardData } from "@/lib/partnerDashboardData";
 import PartnerDashboardV14 from "./PartnerDashboardV14";
 import PartnerMonthlyView from "./PartnerMonthlyView";
 import PartnerRentalView from "./PartnerRentalView";
+import PartnerSimpleView from "./PartnerSimpleView";
 import type { RentalDashboardProps } from "@/lib/partnerRentalDashboard";
 
 // Server component. Slug → venue_id resolution and stats fetch run
@@ -75,6 +76,7 @@ export default async function PartnerPage({
   if (!data) notFound(); // 404 — generic, no leak about why
 
   if (data.kind === "rental") return <PartnerRentalView {...stripMatchdayShare(data.rental)} />;
+  if (data.kind === "simple") return <PartnerSimpleView {...data.simple} />;
   return data.kind === "monthly"
     ? <PartnerMonthlyView {...data.monthly} />
     : <PartnerDashboardV14 {...data.weekly} />;

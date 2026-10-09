@@ -24,6 +24,7 @@ import type { PartnerDashboardData } from "@/lib/partnerDashboardData";
 import PartnerDashboardV14 from "@/app/partners/[slug]/PartnerDashboardV14";
 import PartnerMonthlyView from "@/app/partners/[slug]/PartnerMonthlyView";
 import PartnerRentalView, { type RentalAdmin } from "@/app/partners/[slug]/PartnerRentalView";
+import PartnerSimpleView from "@/app/partners/[slug]/PartnerSimpleView";
 
 type AdminPartner = {
   id: string; slug: string; partnerName: string; venue: string; city: string | null;
@@ -436,5 +437,6 @@ function PreviewDashboard({ data, err, admin }: { data: PartnerDashboardData | n
   // ONE DIFFERENCE, AND IT IS PASSED IN: `admin`. The public route omits it, so Mark paid / Undo
   // are absent from the partner's markup rather than hidden in it.
   if (data.kind === "rental") return <PartnerRentalView {...data.rental} admin={admin} />;
+  if (data.kind === "simple") return <PartnerSimpleView {...data.simple} />;
   return data.kind === "monthly" ? <PartnerMonthlyView {...data.monthly} /> : <PartnerDashboardV14 {...data.weekly} />;
 }

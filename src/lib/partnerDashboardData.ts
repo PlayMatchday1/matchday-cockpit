@@ -15,6 +15,7 @@ import { derivePartnerGrains } from "./partnerGrain";
 import { dfull, dshort, todayYmd } from "./partnerDashboardView";
 import type { PartnerV14Props } from "@/app/partners/[slug]/PartnerDashboardV14";
 import type { PartnerMonthlyProps } from "@/app/partners/[slug]/PartnerMonthlyView";
+import { buildSimpleDashboard, simpleLayoutApplies, type PartnerSimpleProps } from "./partnerSimpleDashboard";
 
 const MONTH_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 /** The month BEFORE a change date, as YYYY-MM-01. STRING MATHS ONLY — the dates in this system are
@@ -32,7 +33,8 @@ export const PARTNER_DATA_BASELINE: Record<string, string> = {
 export type PartnerDashboardData =
   | { kind: "weekly"; weekly: PartnerV14Props }
   | { kind: "monthly"; monthly: PartnerMonthlyProps }
-  | { kind: "rental"; rental: RentalDashboardProps };
+  | { kind: "rental"; rental: RentalDashboardProps }
+  | { kind: "simple"; simple: PartnerSimpleProps };
 
 export async function buildPartnerDashboardData(
   supabase: SupabaseClient,
@@ -97,6 +99,18 @@ export async function buildPartnerDashboardData(
   const payment = partnerPaymentFor(partner, { rows, extra, matches: matchList, memberSpotRateCents }, records, now);
 
   const grains = derivePartnerGrains(statsRows, statsExtra, payment, now);
+
+  /* THE SIMPLE LAYOUT — chosen by partner_dashboards.layout (migration 0217), never by slug. Read on
+   * its own so the shared partner loader is untouched; any error (a schema without the column)
+   * reads as the standard page. Flat-percentage partners only: the simple page's deal sentence and
+   * share column are a percentage. Every other partner falls through to the code below, unchanged. */
+  {
+    const { data: lay, error: layErr } = await supabase.from("partner_dashboards").select("layout").eq("id", partner.id).maybeSingle();
+    if (!layErr && lay?.layout === "simple" && simpleLayoutApplies(partner)) {
+      const { data: v } = await supabase.from("fin_venues").select("city").eq("id", partner.venueId).maybeSingle();
+      return { kind: "simple", simple: buildSimpleDashboard(partner, (v?.city as string | null) ?? null, rows, payment, grains, now) };
+    }
+  }
   const totalMatches = stats.weeks.reduce((s, w) => s + (w.voided ? 0 : w.matches), 0);
   const paid = payment.weeklyPayments.filter((w) => w.status === "paid").reduce((s, w) => s + Math.round(w.calculatedAmount ?? w.owedAmount), 0);
   const city = (venueRow?.city as string | null) ?? null;
