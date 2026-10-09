@@ -6928,3 +6928,26 @@ Evidence: a read-only full walk of prod `GET /admin/players` (`sortColumn=create
 - **Field 664 Lou Fusz and 1849 Wheatley Heights were corrected upstream**; the corrected
   coordinates reached `mdapi_matches` with the match sync at 2026-10-08 22:16:52 UTC (664: 38.700056,
   −90.49893; 1849: 29.4195, −98.4194), and the map's missing-field warning went to none.
+
+## Turf On partner (created 2026-10-09 ~00:38 UTC)
+
+- **Venue and field:** `fin_venues` 87 "Turf on" (Houston), linked to MatchDay field **1882** "Turf On"
+  (11523 Bammel North Houston Rd) in `fin_venue_fields`. First match on record Oct 1, 2026
+  (cancelled, as was Oct 3); first match that went ahead Oct 6, 2026.
+- **Partner row:** `partner_dashboards` slug `turf-on-8vm72bt7`, 60% (`revenue_share_pct` and
+  `payout_share_pct`), `payout_model` REVENUE_SHARE, monthly from 2026-10-01. The members model is
+  carried the way Hattrick carries it — base `revenue_model` `flat_percentage`, `revenue_model_next`
+  `flat_percentage_with_members` from 2026-10-01 — because the base CHECK
+  (`partner_dashboards_revenue_model_range`, migration 0150) does not admit the members value; an
+  insert with it as the base is rejected. `modelForPeriod` switches on `periodStart >= from`, so
+  every Turf On period uses the members model. Field Costs: venue 87 `billing_type` `profit_share`,
+  no per-match rate.
+- **Same rules as every partner (Ryan):** refunds not subtracted (so no negative period and no $0
+  floor rule), only synthetic `@matchday.com` fills excluded, no MatchDay-share line on the page.
+- **Before and after:** every period of PAC Global (24), Hattrick (8), Crossbar Rowlett (6), Parmer
+  (3) and Hattrick Tomball (2) identical, from the admin route at 00:37:25 and 00:38:35 UTC.
+- **A `del_…@playmatchday.com` email is a DELETED account, not staff.** Oct 6 at Turf On, user 93024
+  ("Deleted Account", `del_74dd98e7…@playmatchday.com`) paid `amount` 200 / `total_amount` 217 for two
+  $1.00 spots (`registration_price` 100), no credit, no promo; the second spot is a GUEST row at 0
+  created 11 ms after the host row. Any rule that drops `@playmatchday.com` as "staff" also drops
+  deleted players (the Locations page's exclusion does).
