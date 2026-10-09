@@ -52,7 +52,7 @@ export default function LocationsSyncNow({ onFinished }: { onFinished: () => voi
         setAwaiting(false);
         setOutcome(s.last.ok
           ? { kind: "ok", text: `Sync finished at ${fmtTime(s.last.finishedAt)}: ${s.last.rowsInserted} new, ${s.last.rowsUpdated} changed.` }
-          : { kind: "err", text: `Sync failed at ${fmtTime(s.last.finishedAt)}: ${s.last.error ?? "no error recorded"}. Not retried.` });
+          : { kind: "err", text: `Sync stopped at ${fmtTime(s.last.finishedAt)}: ${s.last.error ?? "no error recorded"}. Not retried.` });
         onFinished();
       }
     } catch (e) {
@@ -103,9 +103,11 @@ export default function LocationsSyncNow({ onFinished }: { onFinished: () => voi
   };
 
   const r = status?.running;
-  const cooling = !r && status?.availableAt ? status.availableAt : null;
+  const cooling = !r && !status?.blocked && status?.availableAt ? status.availableAt : null;
   const paused = !r ? status?.paused ?? null : null;
+  const blocked = !r && !paused ? status?.blocked ?? null : null;
   const label = paused ? "Sync paused"
+    : blocked ? "No syncs in match hours"
     : starting || (awaiting && !r) ? "Starting…"
     : r ? `Syncing… ${r.pagesDone}${r.pagesTotal ? ` / ${r.pagesTotal}` : ""} pages`
     : cooling ? `Sync now (available at ${fmtTime(cooling)})`
@@ -114,14 +116,16 @@ export default function LocationsSyncNow({ onFinished }: { onFinished: () => voi
   return (
     <span className="loc-sync">
       <button type="button" className="loc-refresh" data-testid="loc-sync-now"
-        disabled={!status || starting || awaiting || !!r || !!cooling || !!paused}
-        title={paused ? paused : r ? `A ${r.triggeredBy} sync started at ${fmtTime(r.startedAt)}; a full pass takes about 3 minutes.`
+        disabled={!status || starting || awaiting || !!r || !!cooling || !!paused || !!blocked}
+        title={paused ? paused : blocked ? `${blocked} Available again at ${fmtTime(status!.availableAt!)}.`
+          : r ? `A ${r.triggeredBy} sync started at ${fmtTime(r.startedAt)}; a full pass takes about 30 minutes, 50 players a page.`
           : cooling ? `One sync per 30 minutes, to protect the MatchDay API. Available again at ${fmtTime(cooling)}.`
-          : "Pull every player's location from MatchDay now (about 3 minutes). Admins only; once per 30 minutes; never retried."}
+          : "Pull every player's location from MatchDay now (about 30 minutes, gently). Admins only; once per 30 minutes; never in evening match hours; never retried."}
         onClick={() => void start()}>
         {label}
       </button>
-      {r && <span className="loc-stamp" data-testid="loc-sync-progress">about 3 min in total</span>}
+      {r && <span className="loc-stamp" data-testid="loc-sync-progress">
+        {r.pagesTotal ? `${Math.round((r.pagesDone / r.pagesTotal) * 100)}%, ` : ""}about {Math.max(1, Math.round(((r.pagesTotal ?? 700) - r.pagesDone) * 2.3 / 60))} min left</span>}
       {outcome && (
         <span className={"loc-stamp" + (outcome.kind === "err" ? " loc-stamp-failed" : "")} data-testid="loc-sync-outcome">{outcome.text}</span>
       )}

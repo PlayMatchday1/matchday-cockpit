@@ -2,7 +2,7 @@
 // here; the browser gets cities, fields and per-zip bubbles, never a player row.
 //
 // NO MATCHDAY CALLS, NO NEW SYNC. Every input is already in Supabase:
-//   players  player_area_seen (written by the 6-hourly player-areas sync)
+//   players  player_area_seen (written by the player-areas sync, three times a day)
 //   cities   player_area_sync_runs.cities — the US city lat/lng/radiusMiles that sync read
 //   fields   mdapi_matches.raw.field — the field object every synced match carries (lat, lng,
 //            cityId, deletedAt, title). A field that never hosted a match is absent, which the

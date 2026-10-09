@@ -3,7 +3,7 @@
 // /api/matchops/locations with the page on 2026-10-08.
 //
 // Never calls MatchDay on a page load (Ryan, 2026-10-08): /api/sync/player-areas refreshes
-// player_area_seen every 6 hours and this route reads what it wrote. no-store, so Refresh is a
+// player_area_seen three times a day and this route reads what it wrote. no-store, so Refresh is a
 // real re-read. Aggregation happens here (src/lib/locationsReport.ts); the browser gets totals and
 // groups, not player rows — except the 100 most recent, which the page lists by name.
 

@@ -1,7 +1,7 @@
 "use client";
 
 // LOCATIONS — where players say they live, and how fast they are telling us (Ryan, 2026-10-08).
-// Data: GET /api/growth/locations, which reads player_area_seen (written every 6 hours by
+// Data: GET /api/growth/locations, which reads player_area_seen (written three times a day by
 // /api/sync/player-areas). This page never calls MatchDay. Aggregation is server-side; the only
 // thing computed here is the filtered VIEW of rows the server already grouped.
 //
@@ -40,7 +40,7 @@ const int = (n: number) => n.toLocaleString("en-US");
 const mi = (n: number | null) => (n == null ? "—" : `${n < 10 ? n.toFixed(1) : Math.round(n)} mi`);
 
 const ZIP_COLOR = "#1baf7a";
-const STALE_AFTER_MINS = 6 * 60 + 30;
+const STALE_AFTER_MINS = 13 * 60;
 const GPS_COLOR = "#2a78d6";
 
 type VerdictFilter = "all" | "in_market" | "waitlist" | "unidentified" | "no_area";
@@ -138,8 +138,9 @@ export default function LocationsBoard() {
   // Freshness stamp: the last SUCCESSFUL sync's finish time. A newer failed run is said out loud.
   const asOf = data?.dataAsOf ?? null;
   const staleMins = asOf ? Math.floor((Date.now() - Date.parse(asOf)) / 60000) : 0;
-  // The sync runs every 6 hours at :40 UTC (vercel.json). Stale = one interval plus 30 minutes of
-  // slack for a slow or in-progress run — so a single missed run is what turns the stamp grey.
+  // The sync runs at 05:10, 11:10 and 17:10 UTC (vercel.json), never in evening match hours, so the
+  // longest gap is the overnight 12 hours. Stale = that plus a pass (~30 minutes) and 30 minutes of
+  // slack — so a single missed run is what turns the stamp grey.
   const stale = staleMins > STALE_AFTER_MINS;
   const lastFailed = data?.lastRun && data.lastRun.ok === false;
 
@@ -156,7 +157,7 @@ export default function LocationsBoard() {
           <div className="loc-h-right">
             <span className="loc-fresh">
               <button type="button" className="loc-refresh" data-testid="loc-refresh" disabled={refreshing}
-                title="Re-read Clubhouse. The sync from MatchDay runs every 6 hours; this button does not call MatchDay."
+                title="Re-read Clubhouse. The sync from MatchDay runs three times a day, outside evening match hours; this button does not call MatchDay."
                 onClick={reloadAll}>
                 <RefreshIcon size={14} spinning={refreshing} />
                 <span>{refreshing ? "Refreshing…" : "Refresh"}</span>
@@ -192,7 +193,7 @@ export default function LocationsBoard() {
       ) : !data ? (
         <div className="loc-card"><div className="loc-state">Loading locations…</div></div>
       ) : !data.dataAsOf ? (
-        <div className="loc-card"><div className="loc-state">The location sync has not completed a run yet. It runs every 6 hours.</div></div>
+        <div className="loc-card"><div className="loc-state">The location sync has not completed a run yet. It runs three times a day, outside evening match hours.</div></div>
       ) : (
         <>
           {error && <div className="loc-card"><div className="loc-warn">Couldn&apos;t refresh: {error}. Showing the last data loaded.</div></div>}
