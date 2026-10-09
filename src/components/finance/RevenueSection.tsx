@@ -291,7 +291,7 @@ export default function RevenueSection() {
   const cellOfField = (f: FieldAgg): PnLCell => ({
     matches: f.matches, revPM: f.revPM, costPM: f.costPM, netPM: f.netPM, coverage: null,
     costText: f.bucket === "model" ? f.costLabel : f.bucket === "unmapped" ? "No venue cost" : null,
-    profitShare: f.bucket === "share", provisionalMonths: f.provisionalMonths,
+    profitShare: f.bucket === "share", provisionalMonths: f.provisionalMonths, costNote: f.costNote,
   });
   const fieldAggOf = useCallback((g: GroupRow): FieldAgg | null => {
     if (!fp.fields || g.venueId == null) return null;

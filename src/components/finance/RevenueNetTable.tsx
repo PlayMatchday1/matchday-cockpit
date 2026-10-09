@@ -35,6 +35,8 @@ export type PnLCell = {
   costText: string | null;
   profitShare: boolean;
   provisionalMonths: string[];
+  /** The field's cost per match override note (Field Costs), when its cost is overridden. */
+  costNote?: string | null;
 };
 
 export default function RevenueNetTable({ grain, groups, matchesOf, venuesOf, launchOf, pnl }: {
@@ -68,8 +70,9 @@ export default function RevenueNetTable({ grain, groups, matchesOf, venuesOf, la
         <td className="num w4 w4l" data-testid="nt-w4-matches">{c.matches.toLocaleString("en-US")}
           {c.coverage && <span className="sub" data-testid="nt-w4-coverage">averages cover {c.coverage}</span>}</td>
         <td className="num w4" data-testid="nt-w4-rev">{c.revPM == null ? "—" : m2(c.revPM)}</td>
-        <td className="num w4" data-testid="nt-w4-cost">
+        <td className="num w4" data-testid="nt-w4-cost" title={c.costNote ? `Cost per match override: ${c.costNote}` : undefined}>
           {c.costPM != null ? m2(c.costPM) : c.costText ?? "—"}
+          {c.costNote && <span className="sub tag" data-testid="nt-w4-override">Override</span>}
           {c.profitShare && c.costPM != null && <span className="sub tag" data-testid="nt-w4-share">Profit share</span>}
         </td>
         <td className={`num w4 ${c.netPM != null && c.netPM < 0 ? "neg" : ""}`} data-testid="nt-w4-net">{c.netPM == null ? "—" : m2(c.netPM)}</td>

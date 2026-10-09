@@ -204,6 +204,8 @@ export type FieldAgg = {
   revenue: number; cost: number | null;
   // per-match (dollars, 2dp)
   dppPM: number; memberPM: number; promoPM: number; revPM: number; costPM: number | null; netPM: number | null;
+  /** A cost per match override's note (Field Costs, 0219), when this field's cost is overridden. */
+  costNote: string | null;
   /** True when any match's cost uses a member rate from a month that has not closed. */
   provisional: boolean;
   /** The months whose rates are not final, as "October" — for the note on the cost. */
@@ -245,6 +247,7 @@ export function aggregateFieldPnL(active: MatchPnLRow[], venueById: Map<number, 
       g = { key, label: fieldCode(canonicalVenueName(nm)), fullName: nm, city: r.city, bucket, costLabel,
         venueIds: [], matches: 0, dpp: 0, member: 0, promo: 0, promoSpots: 0,
         cost: bucket === "flat" || bucket === "share" ? 0 : null, costKnown: true, provisional: false, provisionalMonths: [],
+        costNote: bucket === "flat" && v?.cost_override_per_match != null ? v.cost_override_note ?? null : null,
         unmappedNames: [], onePitchMatches: 0, twoPitchMatches: 0, twoPitchCost: 0 };
       groups.set(key, g);
     }

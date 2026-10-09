@@ -69,8 +69,10 @@ type EditableField =
   | "billing_type"
   | "charge_on_cancel"
   | "pay_schedule"
-  | "notes";
-type VenuePatch = Partial<Pick<FinVenue, "per_match_rate" | "rate_days" | "billing_type" | "charge_on_cancel" | "pay_schedule" | "notes">>;
+  | "notes"
+  | "cost_override";
+type VenuePatch = Partial<Pick<FinVenue, "per_match_rate" | "rate_days" | "billing_type" | "charge_on_cancel" | "pay_schedule" | "notes"
+  | "cost_override_per_match" | "cost_override_note">>;
 // "custom_amount" is a virtual key for the "This month" box — it writes
 // fin_venue_cost_overrides, not a fin_venues column, but shares the same
 // saving/error cell-state map.
@@ -1346,6 +1348,13 @@ function VenuePanel({
                 </div>
               </>
             )}
+            {model === "match" && (
+              <>
+                <div className="l">Cost per match override</div>
+                <div className="v"><CostOverrideEditor key={`cov-${venue.id}`} venue={venue}
+                  onSave={(amount, note) => onPatch({ cost_override_per_match: amount, cost_override_note: note }, "cost_override")} /></div>
+              </>
+            )}
             <div className="l">This month</div>
             <div className="v">{overrideBox}</div>
             {fields.length > 1 && (
@@ -1574,5 +1583,45 @@ function Filter({
       </div>
       {children}
     </label>
+  );
+}
+
+/* COST PER MATCH OVERRIDE (Ryan, 2026-10-09; migration 0219). For the rare field whose cost per match
+ * is not its invoice rate. Optional, and never without a note: the database refuses one without the
+ * other. When set it wins everywhere cost per match is read (venuePay.costPerMatchOn) — Revenue's
+ * 4-week columns, Slate Review, Cities — and the Field cost / match hover shows the note. It does not
+ * change what the venue is billed: that is still the rate above. */
+function CostOverrideEditor({ venue, onSave }: { venue: FinVenue; onSave: (amount: number | null, note: string | null) => void }) {
+  const [amount, setAmount] = useState(venue.cost_override_per_match == null ? "" : String(venue.cost_override_per_match));
+  const [note, setNote] = useState(venue.cost_override_note ?? "");
+  const [err, setErr] = useState<string | null>(null);
+  const set = venue.cost_override_per_match != null;
+  const save = () => {
+    const n = Number(amount);
+    if (amount.trim() === "" || !Number.isFinite(n) || n < 0) { setErr("Enter a cost per match of $0 or more."); return; }
+    if (note.trim() === "") { setErr("A note is required: say why this field's cost is not its rate."); return; }
+    setErr(null);
+    onSave(Math.round(n * 100) / 100, note.trim());
+  };
+  return (
+    <div data-testid="cost-override">
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        <span>$</span>
+        <input className="in" data-testid="cost-override-amount" inputMode="decimal" style={{ width: 90 }}
+          placeholder={venue.per_match_rate == null ? "" : String(venue.per_match_rate)} value={amount} onChange={(e) => setAmount(e.target.value)} />
+        <input className="in" data-testid="cost-override-note" style={{ flex: "1 1 200px", minWidth: 0 }}
+          placeholder="Why the cost is not the rate (required)" value={note} onChange={(e) => setNote(e.target.value)} />
+        <button type="button" className="btn" data-testid="cost-override-save" onClick={save}>Save</button>
+        {set && (
+          <button type="button" className="btn" data-testid="cost-override-clear"
+            onClick={() => { setAmount(""); setNote(""); setErr(null); onSave(null, null); }}>Clear</button>
+        )}
+      </div>
+      <div style={{ fontSize: 11.5, marginTop: 4, opacity: 0.75 }}>
+        {set ? `In use everywhere: $${venue.cost_override_per_match} a match. Billing still uses the rate.`
+          : "Optional. Leave empty to use the rate above as the cost per match."}
+      </div>
+      {err && <div className="err" data-testid="cost-override-error">{err}</div>}
+    </div>
   );
 }

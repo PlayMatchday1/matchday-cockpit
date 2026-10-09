@@ -299,6 +299,10 @@ const FIELD_COST_TIP = "The field's cost per match. For profit share it is compu
 /* THE TAG ON A PROFIT-SHARE COST: it is a computed share, not a rate — and, while the month whose
  * member rate it uses is open, provisional. */
 function CostTags({ g }: { g: FieldAgg }) {
+  if (g.costNote) {
+    return <span className="block text-[10.5px] font-semibold" style={{ color: C.goldInk }} title={`Cost per match override: ${g.costNote}`}
+      data-testid="fp-override-tag">Override</span>;
+  }
   if (g.bucket !== "share") return null;
   return (
     <span className="block text-[10.5px] font-semibold" style={{ color: C.goldInk }} data-testid="fp-share-tag">
