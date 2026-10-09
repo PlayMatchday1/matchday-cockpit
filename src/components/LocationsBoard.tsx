@@ -57,6 +57,11 @@ export default function LocationsBoard() {
   const [vf, setVf] = useState<VerdictFilter>("all");
   // ONE expanded Recent activity row at a time; clicking it again closes it.
   const [openPlayer, setOpenPlayer] = useState<number | null>(null);
+  // The two long tables start COLLAPSED behind a "Show …" bar. Their open state lives here, above
+  // the data, so a Refresh or the reload after Sync now never snaps them shut; it is also kept for
+  // the browser session (sessionStorage) so a page reload keeps it too.
+  const [showPlayers, setShowPlayers] = useSessionFlag("loc:showPlayers");
+  const [showAreas, setShowAreas] = useSessionFlag("loc:showAreas");
   const [mapReload, setMapReload] = useState(0);
 
   const params = useSearchParams();
@@ -228,81 +233,93 @@ export default function LocationsBoard() {
                 <AdoptionCharts days={data.days} seeded={data.kpis.seeded} />
               )}
             </div>
-            <div className="loc-tablewrap">
-              <table className="loc-table" data-testid="loc-recent">
-                <thead><tr><th>First seen</th><th>Player</th><th>Area</th><th>Source</th><th>City</th></tr></thead>
-                <tbody>
-                  {data.recent.length === 0 && <tr><td colSpan={5} className="loc-td-empty">No player has set a location yet.</td></tr>}
-                  {data.recent.map((r) => {
-                    const open = openPlayer === r.playerId;
-                    return (
-                      <Fragment key={r.playerId}>
-                        <tr className={"loc-row-x" + (open ? " loc-row-open" : "")} tabIndex={0} aria-expanded={open}
-                          data-testid={`recent-row-${r.playerId}`}
-                          onClick={(e) => { if ((e.target as HTMLElement).closest("a")) return; setOpenPlayer(open ? null : r.playerId); }}
-                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpenPlayer(open ? null : r.playerId); } }}>
-                          <td className="loc-nowrap">{r.seeded ? <span className="loc-muted" title="Set before tracking began">Before tracking</span> : fmtWhen(r.firstSeenAt)}</td>
-                          <td><a className="loc-link" href={`/match-ops/player-lookup?id=${r.playerId}`}>{r.name ?? `Player ${r.playerId}`}</a></td>
-                          <td>{r.zip ?? placeName(r.label) ?? "—"}{r.zip && r.label ? <span className="loc-muted"> ({placeName(r.label)})</span> : null}</td>
-                          <td className="loc-nowrap">{r.source === "zip" ? "Zip" : "GPS"}</td>
-                          <td>{r.verdict === "in_market" ? cityName(r.cityId) : r.verdict === "waitlist" ? "Outside coverage" : "Unidentified"}</td>
-                        </tr>
-                        {open && (
-                          <tr className="loc-row-detail"><td colSpan={5} style={{ padding: 0 }}><LocationsPlayerDetail playerId={r.playerId} /></td></tr>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <div className="loc-foot">First seen is when Clubhouse first saw the location, within 6 hours of when it was set.</div>
+            <ShowBar open={showPlayers} onToggle={() => setShowPlayers(!showPlayers)} testId="show-players"
+              label={`Show players (${int(data.recent.length)})`} openLabel={`Hide players (${int(data.recent.length)})`} />
+            {showPlayers && (
+              <>
+                <div className="loc-tablewrap">
+                  <table className="loc-table" data-testid="loc-recent">
+                    <thead><tr><th>First seen</th><th>Player</th><th>Area</th><th>Source</th><th>City</th></tr></thead>
+                    <tbody>
+                      {data.recent.length === 0 && <tr><td colSpan={5} className="loc-td-empty">No player has set a location yet.</td></tr>}
+                      {data.recent.map((r) => {
+                        const open = openPlayer === r.playerId;
+                        return (
+                          <Fragment key={r.playerId}>
+                            <tr className={"loc-row-x" + (open ? " loc-row-open" : "")} tabIndex={0} aria-expanded={open}
+                              data-testid={`recent-row-${r.playerId}`}
+                              onClick={(e) => { if ((e.target as HTMLElement).closest("a")) return; setOpenPlayer(open ? null : r.playerId); }}
+                              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpenPlayer(open ? null : r.playerId); } }}>
+                              <td className="loc-nowrap">{r.seeded ? <span className="loc-muted" title="Set before tracking began">Before tracking</span> : fmtWhen(r.firstSeenAt)}</td>
+                              <td><a className="loc-link" href={`/match-ops/player-lookup?id=${r.playerId}`}>{r.name ?? `Player ${r.playerId}`}</a></td>
+                              <td>{r.zip ?? placeName(r.label) ?? "—"}{r.zip && r.label ? <span className="loc-muted"> ({placeName(r.label)})</span> : null}</td>
+                              <td className="loc-nowrap">{r.source === "zip" ? "Zip" : "GPS"}</td>
+                              <td>{r.verdict === "in_market" ? cityName(r.cityId) : r.verdict === "waitlist" ? "Outside coverage" : "Unidentified"}</td>
+                            </tr>
+                            {open && (
+                              <tr className="loc-row-detail"><td colSpan={5} style={{ padding: 0 }}><LocationsPlayerDetail playerId={r.playerId} /></td></tr>
+                            )}
+                          </Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="loc-foot">First seen is when Clubhouse first saw the location, within 6 hours of when it was set.</div>
+              </>
+            )}
           </div>
 
           {/* 3 — Player locations */}
           <div className="loc-card">
             <div className="loc-sec-head">
               <div className="loc-sec-title">Player locations</div>
-              <button type="button" className="loc-btn" onClick={exportZips} disabled={zipView.length === 0}>Export CSV</button>
+              {showAreas && <button type="button" className="loc-btn" onClick={exportZips} disabled={zipView.length === 0}>Export CSV</button>}
             </div>
-            <div className="loc-filter" role="group" aria-label="Filter cities">
-              <span className="loc-control-label">Cities</span>
-              <button type="button" aria-pressed={city === null} className={"loc-chip" + (city === null ? " loc-chip-on" : "")} onClick={() => setCity(null)}>All cities</button>
-              {pillCities.map((c) => (
-                <button type="button" key={c.id} aria-pressed={city === c.id} className={"loc-chip" + (city === c.id ? " loc-chip-on" : "")}
-                  onClick={() => setCity(c.id)}>{c.name}</button>
-              ))}
-            </div>
-            <div className="loc-filter" role="group" aria-label="Filter status">
-              <span className="loc-control-label">Status</span>
-              {VERDICT_FILTERS.map((f) => (
-                <button type="button" key={f.key} aria-pressed={vf === f.key} className={"loc-chip" + (vf === f.key ? " loc-chip-on" : "")}
-                  onClick={() => setVf(f.key)}>{f.label}</button>
-              ))}
-            </div>
-            {data.kpis.never != null && (
-              <div className="loc-line" data-testid="loc-no-area">{int(data.kpis.never)} {data.kpis.never === 1 ? "player has" : "players have"} not set a location.</div>
+            <ShowBar open={showAreas} onToggle={() => setShowAreas(!showAreas)} testId="show-areas"
+              label={`Show areas (${int(zipView.length)})`} openLabel={`Hide areas (${int(zipView.length)})`} />
+            {showAreas && (
+              <>
+                <div className="loc-filter" role="group" aria-label="Filter cities">
+                  <span className="loc-control-label">Cities</span>
+                  <button type="button" aria-pressed={city === null} className={"loc-chip" + (city === null ? " loc-chip-on" : "")} onClick={() => setCity(null)}>All cities</button>
+                  {pillCities.map((c) => (
+                    <button type="button" key={c.id} aria-pressed={city === c.id} className={"loc-chip" + (city === c.id ? " loc-chip-on" : "")}
+                      onClick={() => setCity(c.id)}>{c.name}</button>
+                  ))}
+                </div>
+                <div className="loc-filter" role="group" aria-label="Filter status">
+                  <span className="loc-control-label">Status</span>
+                  {VERDICT_FILTERS.map((f) => (
+                    <button type="button" key={f.key} aria-pressed={vf === f.key} className={"loc-chip" + (vf === f.key ? " loc-chip-on" : "")}
+                      onClick={() => setVf(f.key)}>{f.label}</button>
+                  ))}
+                </div>
+                {data.kpis.never != null && (
+                  <div className="loc-line" data-testid="loc-no-area">{int(data.kpis.never)} {data.kpis.never === 1 ? "player has" : "players have"} not set a location.</div>
+                )}
+                <div className="loc-tablewrap">
+                  <table className="loc-table" data-testid="loc-zips">
+                    <thead><tr><th>Area</th><th className="loc-num">Players</th><th>Nearest city</th><th className="loc-num">Distance</th><th>Status</th></tr></thead>
+                    <tbody>
+                      {zipView.length === 0 && <tr><td colSpan={5} className="loc-td-empty">Nothing matches these filters.</td></tr>}
+                      {zipView.map((r) => {
+                        const placed = r.verdict === "in_market" || r.verdict === "waitlist";
+                        return (
+                          <tr key={r.key}>
+                            <td>{r.zip ?? placeName(r.area) ?? r.area}</td>
+                            <td className="loc-num">{int(r.players)}</td>
+                            <td>{placed ? cityName(r.nearestCityId) : "—"}</td>
+                            <td className="loc-num">{placed ? mi(r.nearestMi) : "—"}</td>
+                            <td><span className={`loc-badge loc-badge-${r.verdict}`}>{verdictLabel(r)}</span></td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
-            <div className="loc-tablewrap">
-              <table className="loc-table" data-testid="loc-zips">
-                <thead><tr><th>Area</th><th className="loc-num">Players</th><th>Nearest city</th><th className="loc-num">Distance</th><th>Status</th></tr></thead>
-                <tbody>
-                  {zipView.length === 0 && <tr><td colSpan={5} className="loc-td-empty">Nothing matches these filters.</td></tr>}
-                  {zipView.map((r) => {
-                    const placed = r.verdict === "in_market" || r.verdict === "waitlist";
-                    return (
-                      <tr key={r.key}>
-                        <td>{r.zip ?? placeName(r.area) ?? r.area}</td>
-                        <td className="loc-num">{int(r.players)}</td>
-                        <td>{placed ? cityName(r.nearestCityId) : "—"}</td>
-                        <td className="loc-num">{placed ? mi(r.nearestMi) : "—"}</td>
-                        <td><span className={`loc-badge loc-badge-${r.verdict}`}>{verdictLabel(r)}</span></td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
           </div>
 
           {/* 4 — Unidentified zips: only when there are any */}
@@ -344,6 +361,32 @@ export default function LocationsBoard() {
         </>
       )}
     </div>
+  );
+}
+
+/** A boolean kept for the browser session. Read AFTER mount (the first render is the default, false)
+ *  so server and client render the same markup; storage can be unavailable, so every access is
+ *  guarded and the flag simply works for the page's lifetime without it. */
+function useSessionFlag(key: string): [boolean, (v: boolean) => void] {
+  const [v, setV] = useState(false);
+  useEffect(() => {
+    try { if (window.sessionStorage.getItem(key) === "1") setV(true); } catch { /* storage unavailable */ }
+  }, [key]);
+  const set = useCallback((next: boolean) => {
+    setV(next);
+    try { window.sessionStorage.setItem(key, next ? "1" : "0"); } catch { /* storage unavailable */ }
+  }, [key]);
+  return [v, set];
+}
+
+/** The bar a collapsed table hides behind: "Show players (18)" with a chevron. */
+function ShowBar({ open, onToggle, label, openLabel, testId }: { open: boolean; onToggle: () => void; label: string; openLabel: string; testId: string }) {
+  return (
+    <button type="button" className="loc-showbar" aria-expanded={open} data-testid={testId} onClick={onToggle}>
+      <span>{open ? openLabel : label}</span>
+      <svg className={"loc-chev" + (open ? " loc-chev-open" : "")} width="14" height="14" viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+    </button>
   );
 }
 
@@ -466,6 +509,12 @@ const CSS = `
 .loc-kpi-label{font-size:9.5px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--muted)}
 .loc-kpi-value{font-size:24px;font-weight:900;color:var(--forest);margin-top:6px;letter-spacing:-.4px;font-variant-numeric:tabular-nums}
 .loc-row-muted td{color:var(--muted)}
+.loc-showbar{display:flex;width:100%;align-items:center;justify-content:space-between;gap:10px;padding:11px 20px;border:0;
+  border-top:1px solid var(--line);background:#FAFCFA;font:inherit;font-size:12.5px;font-weight:800;color:var(--forest);cursor:pointer;text-align:left}
+.loc-showbar:hover{background:var(--slot)}
+.loc-showbar:focus-visible{outline:2px solid #2CDB87;outline-offset:-2px}
+.loc-chev{transition:transform .15s ease;flex:0 0 auto}
+.loc-chev-open{transform:rotate(180deg)}
 .loc-line{padding:10px 20px;font-size:12.5px;color:var(--ink);border-bottom:1px solid var(--line)}
 .loc-kpi-unit{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:0}
 .loc-kpi-sub{font-size:11.5px;color:var(--muted);margin-top:2px}
