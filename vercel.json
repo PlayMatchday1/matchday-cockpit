@@ -43,10 +43,6 @@
     {
       "path": "/api/sync/acquisition-google",
       "schedule": "30 11 * * *"
-    },
-    {
-      "path": "/api/sync/player-areas",
-      "schedule": "40 */6 * * *"
     }
   ]
 }

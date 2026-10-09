@@ -11,6 +11,13 @@ import { LOCK_WINDOW_MS, PAGE_LIMIT } from "./playerAreaSync";
 
 export const MANUAL_COOLDOWN_MS = 30 * 60 * 1000;
 
+/* PAUSED (Ryan, 2026-10-08, after the 00:40 UTC run hit a 503 on page 113 — the third MatchDay outage
+ * of the day during a full walk). Nothing runs, cron or manual, until the gentler resumable walk
+ * ships (50 per page, 2s apart, health checks, no evening runs). The cron is also out of vercel.json.
+ * Set to null to lift. */
+export const SYNC_PAUSED: string | null =
+  "Paused while the location sync is rebuilt to go easier on the MatchDay API. It will restart on a gentler schedule.";
+
 type RunRow = {
   id: number; started_at: string; finished_at: string | null; ok: boolean | null; triggered_by: string;
   error: string | null; rows_inserted: number | null; rows_updated: number | null;
@@ -24,6 +31,8 @@ export type SyncStatus = {
     error: string | null; rowsInserted: number; rowsUpdated: number } | null;
   /** When a manual run may start again; null = now. */
   availableAt: string | null;
+  /** Why no run may start at all; null = not paused. */
+  paused: string | null;
 };
 
 export async function readSyncStatus(sb: SupabaseClient, now = new Date()): Promise<SyncStatus> {
@@ -53,5 +62,6 @@ export async function readSyncStatus(sb: SupabaseClient, now = new Date()): Prom
       rowsInserted: done.rows_inserted ?? 0, rowsUpdated: done.rows_updated ?? 0,
     } : null,
     availableAt: live ? null : until != null && until > t ? new Date(until).toISOString() : null,
+    paused: SYNC_PAUSED,
   };
 }

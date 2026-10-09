@@ -104,7 +104,9 @@ export default function LocationsSyncNow({ onFinished }: { onFinished: () => voi
 
   const r = status?.running;
   const cooling = !r && status?.availableAt ? status.availableAt : null;
-  const label = starting || (awaiting && !r) ? "Starting…"
+  const paused = !r ? status?.paused ?? null : null;
+  const label = paused ? "Sync paused"
+    : starting || (awaiting && !r) ? "Starting…"
     : r ? `Syncing… ${r.pagesDone}${r.pagesTotal ? ` / ${r.pagesTotal}` : ""} pages`
     : cooling ? `Sync now (available at ${fmtTime(cooling)})`
     : "Sync now";
@@ -112,8 +114,8 @@ export default function LocationsSyncNow({ onFinished }: { onFinished: () => voi
   return (
     <span className="loc-sync">
       <button type="button" className="loc-refresh" data-testid="loc-sync-now"
-        disabled={!status || starting || awaiting || !!r || !!cooling}
-        title={r ? `A ${r.triggeredBy} sync started at ${fmtTime(r.startedAt)}; a full pass takes about 3 minutes.`
+        disabled={!status || starting || awaiting || !!r || !!cooling || !!paused}
+        title={paused ? paused : r ? `A ${r.triggeredBy} sync started at ${fmtTime(r.startedAt)}; a full pass takes about 3 minutes.`
           : cooling ? `One sync per 30 minutes, to protect the MatchDay API. Available again at ${fmtTime(cooling)}.`
           : "Pull every player's location from MatchDay now (about 3 minutes). Admins only; once per 30 minutes; never retried."}
         onClick={() => void start()}>

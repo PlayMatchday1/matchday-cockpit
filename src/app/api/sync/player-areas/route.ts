@@ -21,7 +21,7 @@ import { createClient } from "@supabase/supabase-js";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { after } from "next/server";
 import { syncPlayerAreas } from "@/lib/playerAreaSync";
-import { readSyncStatus } from "@/lib/playerAreaSyncStatus";
+import { readSyncStatus, SYNC_PAUSED } from "@/lib/playerAreaSyncStatus";
 
 /* ~140 pages × (≈0.75s response + 0.5s pause) ≈ 3 minutes. 300s is the ceiling. A run killed here
  * leaves an unfinished run row; the lock treats it as dead after 6 minutes and the next run opens
@@ -38,6 +38,8 @@ function constantTimeMatch(a: string, b: string): boolean {
 }
 
 export async function POST(req: Request) {
+  // PAUSED: refused before anything else, cron and manual alike — no MatchDay call, no run row.
+  if (SYNC_PAUSED) return Response.json({ error: SYNC_PAUSED, paused: true }, { status: 503 });
   const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/, "").trim();
   const cronSecret = process.env.CRON_SECRET;
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
