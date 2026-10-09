@@ -1545,6 +1545,13 @@ export function legPerMatchUnitCost(leg: FinVenue, primary: FinVenue): number {
   return unitCostOf(leg) ?? unitCostOf(primary) ?? 0;
 }
 
+/* THE RATE ONLY — for Finance › Cost (fieldEconomics). The cost per match override (0219) is
+ * DISPLAY-SIDE (Ryan, 2026-10-09): it must never move a Cost, OpEx or month-bill figure, so this
+ * variant never reads it. With no override set it equals legPerMatchUnitCost exactly. */
+export function legRateUnitCost(leg: FinVenue, primary: FinVenue): number {
+  return leg.per_match_rate ?? primary.per_match_rate ?? 0;
+}
+
 // Per-match-normalized cost for a venue group in a given month:
 //   Σ over legs of legPerMatchUnitCost(leg, primary)
 //   × venueChargedMatchCountFor(leg.id, month)
@@ -1571,6 +1578,8 @@ export function groupPerMatchCostFor(
   let total = 0;
   for (const leg of group.legs) {
     const cpm = legPerMatchUnitCost(leg, primary);
+    // AN OVERRIDE WINS ON EVERY DAY (0219), so it is checked before the weekday rates.
+    if (leg.cost_override_per_match != null) { total += leg.cost_override_per_match * venueChargedMatchCountFor(data, leg.id, month); continue; }
     // Charged count (alive + cancelled-when-charge_on_cancel) so the
     // Per-Match cost view reflects what we'd actually pay. Cancelled
     // matches at a no-cancel-fee venue contribute zero.
@@ -1611,8 +1620,9 @@ export function groupPerMatchCostRealizedFor(
   let total = 0;
   for (const leg of group.legs) {
     const cpm = legPerMatchUnitCost(leg, primary);
-    // DAY-OF-WEEK RATES (0201): the same played-by-today rows, each at its weekday's rate.
-    if (leg.rate_days) { total += chargedAmount(data, leg, month, cpm, (s) => s.match_date <= today); continue; }
+    // DAY-OF-WEEK RATES (0201): the same played-by-today rows, each at its weekday's rate — unless an
+    // override is set (0219), which wins on every day: priced below at the flat cpm.
+    if (leg.rate_days && leg.cost_override_per_match == null) { total += chargedAmount(data, leg, month, cpm, (s) => s.match_date <= today); continue; }
     let count = 0;
     for (const s of data.masterSchedule) {
       if (isEventSchedule(s)) continue;

@@ -28,11 +28,10 @@
 // MONTH KEYS are Q2Month — "Aug 2026" — the same string financeStats uses.
 
 import { chargedAmount, chargedUnitCount, isEventSchedule, perMatchMinusManagerOwed, type VenueCostKind } from "./financeCosts";
-import { unitCostOf } from "./venuePay";
 import {
   cityMembershipRevenuePreTaxFor,
   venueAllocatedMemberRevenueFor,
-  legPerMatchUnitCost,
+  legRateUnitCost,
   venuePartnerRevenueFor,
   matchAllocatedMemberRevenueFor,
   type Q2Month,
@@ -194,7 +193,7 @@ function groupCost({ data, group, month, realizedThroughMs }: CostArgs): { amoun
   if (basis === "monthly_flat") return { amount: null, kind: "needs_override" };
 
   // PER-MATCH. Unknown only when NO leg carries a unit cost in either column.
-  const hasUnit = group.legs.some((l) => unitCostOf(l) != null);
+  const hasUnit = group.legs.some((l) => l.per_match_rate != null);
   if (!hasUnit) return { amount: null, kind: "needs_override" };
   // legPerMatchUnitCost is the RATE half (financeStats) and chargedUnitCount is the COUNT half
   // (financeCosts) — the same two helpers the estate's other cost paths use, paired here with a
@@ -203,8 +202,9 @@ function groupCost({ data, group, month, realizedThroughMs }: CostArgs): { amoun
   for (const leg of group.legs) {
     const keep = (s: Parameters<typeof kickedOffSchedule>[0]) => kickedOffSchedule(s, realizedThroughMs);
     // DAY-OF-WEEK RATES (0201): each kicked-off match at its weekday's rate.
-    total += leg.rate_days ? chargedAmount(data, leg, month, legPerMatchUnitCost(leg, primary), keep)
-      : legPerMatchUnitCost(leg, primary) * chargedUnitCount(data, leg, month, keep);
+    // THE RATE ONLY (legRateUnitCost): an override is display-side and never reaches Finance › Cost.
+    total += leg.rate_days ? chargedAmount(data, leg, month, legRateUnitCost(leg, primary), keep)
+      : legRateUnitCost(leg, primary) * chargedUnitCount(data, leg, month, keep);
   }
   return { amount: total, kind: "per_match" };
 }
