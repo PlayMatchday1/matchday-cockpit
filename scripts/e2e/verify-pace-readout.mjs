@@ -225,8 +225,17 @@ console.log("\n── it never leaves the chart's box ──");
 console.log("\n── it reads the same series the chart draws ──");
 {
   const g = await geom();
+  /* ITEMISED (2026-10-08) — DATED, DERIVED. This hovered a flat 25% across the plot, which on Oct 8
+   * is day 9: a day the current month had not reached, where both views read "—" and the switch
+   * cannot change anything. The day is now one the current series HAS reached (its middle). */
+  const reachedFrac = await page.evaluate(() => {
+    const svg = document.querySelector('[data-testid="pace-chart"]');
+    const n = JSON.parse(svg.getAttribute("data-labels")).length;
+    const cur = JSON.parse(svg.getAttribute("data-current")).length;
+    return n > 1 ? Math.floor((cur - 1) / 2) / (n - 1) : 0.5;
+  });
   const at = async () => {
-    await page.mouse.move(g.hit.l + g.hit.w * 0.25, g.hit.t + g.hit.h / 2);
+    await page.mouse.move(g.hit.l + g.hit.w * reachedFrac, g.hit.t + g.hit.h / 2);
     await page.waitForTimeout(160);
     return readTip();
   };
@@ -319,22 +328,43 @@ console.log("\n── two lines of different lengths ──");
     const svg = document.querySelector('[data-testid="pace-chart"]');
     const cur = JSON.parse(svg.getAttribute("data-current"));
     const cmp = JSON.parse(svg.getAttribute("data-compare"));
-    // The axis labels are the gridline values; the first is the top of the scale.
-    const axis = [...svg.querySelectorAll("text")].map((t) => Number(t.textContent.replace(/[^0-9.]/g, "")))
-      .filter((n) => Number.isFinite(n));
+    // The axis labels are the gridline values; the first is the top of the scale. Read from the
+    // ticks themselves: the off-scale labels are text in the same SVG and are not gridlines.
+    const axis = [...svg.querySelectorAll('[data-testid="pace-tick"]')].map((t) => Number(t.getAttribute("data-v")));
+    const off = [...svg.querySelectorAll('[data-testid="pace-offscale"][data-who="cmp"]')]
+      .map((e) => ({ v: Number(e.getAttribute("data-v")), text: e.textContent }));
+    const tail = cmp.slice(1);
     return { cur: cur.length, cmp: cmp.length, cmpMax: Math.max(...cmp),
              cmpMaxDay: cmp.indexOf(Math.max(...cmp)) + 1, axisTop: Math.max(...axis),
-             cmpTailMax: Math.max(...cmp.slice(cur.length)) };
+             cmpTailMax: Math.max(...cmp.slice(cur.length)), cmpFrom2Max: Math.max(...tail),
+             day1: cmp[0], off };
   });
   eq("  control — both series carry points", [S.cur > 0, S.cmp > 0], [true, true]);
-  eq("the comparison runs the full month", S.cmp, new Date(2026, 7, 0).getDate());
+  /* ITEMISED (2026-10-08) — DATED, DERIVED. This compared against new Date(2026, 7, 0), July's 31
+   * days, which was the comparison month when it was written. It is now the length of the month
+   * before the one on screen, read from the period label. */
+  const prevLen = await page.evaluate(() => {
+    const m = document.querySelector('[data-testid="period-label"]')?.textContent?.match(/([A-Za-z]+) (\d{4})/);
+    const mi = m ? new Date(`${m[1]} 1, ${m[2]}`).getMonth() : NaN;
+    return new Date(Number(m?.[2]), mi, 0).getDate();
+  });
+  eq("the comparison runs the full month", S.cmp, prevLen);
   eq("the current month stops at its last recorded day", S.cur < S.cmp, true);
   eq("  …so the two counts differ", S.cur === S.cmp, false);
   console.log(`     current ${S.cur} days · comparison ${S.cmp} days`);
 
   // THE AXIS MUST COVER THE COMPARISON'S PEAK WHEREVER IT FALLS, including after the current
   // month's last day — that stretch is newly drawn and was never on the scale before.
-  eq("the y-axis covers the comparison's maximum", S.axisTop >= S.cmpMax, true);
+  /* ITEMISED (2026-10-08) — BEHAVIOUR CHANGED ON PURPOSE (Ryan's brief: "scale the axis to days 2
+   * onward, clip day 1 at the top of the plot, and label the clipped point with its real value").
+   * This view is DPP + Membership, so day 1 is no longer on the scale. What must hold now: the axis
+   * covers the comparison's peak from day 2 on, and any point above the axis is labelled with its
+   * real value — so no point is silently cut off. */
+  eq("the y-axis covers the comparison's maximum from day 2 on", S.axisTop >= S.cmpFrom2Max, true);
+  eq("  every comparison point above the axis carries its real value",
+     [S.cmpMax <= S.axisTop || S.off.some((o) => Math.abs(o.v - S.cmpMax) < 0.01),
+      S.off.every((o) => o.text.includes(`$${Math.round(o.v).toLocaleString("en-US")}`))], [true, true]);
+  eq("  control — day 1 is above the axis in this view, so the labelled path is exercised", S.day1 > S.axisTop, true);
   eq("  control — the axis top is a real number above zero", S.axisTop > 0, true);
   console.log(`     axis top ${S.axisTop} · comparison peak ${S.cmpMax} on day ${S.cmpMaxDay} · peak after day ${S.cur} is ${S.cmpTailMax}`);
 }
@@ -347,8 +377,9 @@ console.log("\n── days the current month has not reached ──");
       const svg = document.querySelector('[data-testid="pace-chart"]');
       const r = svg.getBoundingClientRect();
       const W = 980, ML = 68, MR = 24, plotW = W - ML - MR;
-      const n = Math.max(JSON.parse(svg.getAttribute("data-compare")).length,
-                         JSON.parse(svg.getAttribute("data-current")).length);
+      // ITEMISED (2026-10-08): the x grid is the period's own days (data-labels), not the longer of
+      // the two series — a 30-day comparison under a 31-day month put every probe a day off.
+      const n = JSON.parse(svg.getAttribute("data-labels")).length;
       return { x: r.left + ((ML + ((d - 1) * plotW) / (n - 1)) * r.width) / W, y: r.top + r.height / 2 };
     }, d);
     await page.mouse.move(box.x, box.y);
@@ -364,8 +395,12 @@ console.log("\n── days the current month has not reached ──");
   };
   // POSITIVE CONTROL: a day the current month HAS reached shows a figure and a difference row, so
   // the dashes below are the rule working rather than a readout that never populated.
-  const early = await at(10);
-  eq("  control — day 10 shows a figure for both series and a difference", 
+  // ITEMISED (2026-10-08) — DATED, DERIVED: day 10 had not been reached on Oct 8. The control day
+  // is now the current series' last FULL day (the one before the partial last point), or day 1.
+  const reachedDay = await page.evaluate(() =>
+    Math.max(1, JSON.parse(document.querySelector('[data-testid="pace-chart"]').getAttribute("data-current")).length - 1));
+  const early = await at(reachedDay);
+  eq(`  control — day ${reachedDay} shows a figure for both series and a difference`, 
      [early?.cur !== "—", early?.cmp !== "—", early?.hasDiff], [true, true, true]);
   /* ITEMISED — A DATED ASSERTION, DERIVED. This read `for (const d of [25, 31])`, which was true
    * when written and false on 2026-08-25: the current month HAD reached day 25 by then and it read

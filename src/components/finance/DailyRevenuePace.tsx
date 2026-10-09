@@ -170,6 +170,32 @@ function seriesFor(
   return out;
 }
 
+/* ── THE Y-AXIS FITS THE DATA (Ryan, 2026-10-08) ─────────────────────────────────────────────
+ * From zero, a DPP day of $1,300 to $2,900 sat in the top half of the plot. The axis now runs from
+ * the visible minimum less ~10% of the range to the maximum plus the same, on clean ticks, and
+ * starts at zero when the minimum is within ~25% of it (or anything is at or below zero). Never a
+ * negative tick, never a zero-height range. 4 to 7 intervals, whatever lands on a clean step. */
+const NICE = [1, 2, 2.5, 4, 5];
+function niceStep(raw: number): number {
+  const p = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const n of NICE) if (n * p >= raw - 1e-9) return n * p;
+  return 10 * p;
+}
+export function fitAxis(values: number[]): { lo: number; hi: number; step: number } {
+  const v = values.filter(Number.isFinite);
+  const max = v.length ? Math.max(...v) : 0;
+  if (!(max > 0)) return { lo: 0, hi: 100, step: 25 };
+  const min = Math.min(...v);
+  const pad = Math.max((max - min) * 0.1, max * 0.02);
+  let lo = min - pad;
+  if (min <= 0 || lo <= 0 || min <= max * 0.25) lo = 0;
+  const top = max + pad;
+  const step = niceStep((top - lo) / 5);
+  lo = Math.max(0, Math.floor(lo / step) * step);
+  const hi = Math.max(lo + step, Math.ceil(top / step) * step);
+  return { lo, hi, step };
+}
+
 /** The window the comparison covers, and what to call it. */
 function comparisonWindow(grain: Grain, start: Date, mode: Compare): { start: Date; end: Date; label: string } {
   const y = start.getFullYear(), m = start.getMonth();
@@ -373,17 +399,34 @@ export default function DailyRevenuePace() {
   /* THE PLOT IS TALLER AND THE TYPE IS BIGGER ON A PHONE. A 980x260 viewBox squeezed into 393px
    * renders 10px axis type at about 4px. Narrow uses a viewBox whose aspect ratio matches the space
    * it actually gets, so nothing has to be scaled down to fit. */
+  // Taller than it was (260): about 320px of plot on a desktop-width card.
   const W = narrow ? 360 : 980;
-  const H = narrow ? 240 : 260;
-  const ML = narrow ? 42 : 68, MR = narrow ? 10 : 24, MT = 14, MB = narrow ? 26 : 34;
+  const H = narrow ? 290 : 330;
+  const ML = narrow ? 54 : 68, MR = narrow ? 10 : 24, MT = 24, MB = narrow ? 26 : 34;
   const plotW = W - ML - MR, plotH = H - MT - MB;
   const nPts = Math.max(buckets.length || 1, compData.length);
-  const peak = Math.max(1, ...curData, ...compData);
-  // A rounded ceiling, so the axis reads in round money rather than the exact maximum.
-  const step = Math.pow(10, Math.max(0, String(Math.round(peak)).length - 2));
-  const maxY = Math.max(step, Math.ceil((peak * 1.12) / step) * step);
+  /* DAY 1 IS OFF THE SCALE WHEN MEMBERSHIP IS IN THE LINE. Most memberships renew on the 1st, so in
+   * "DPP + Membership" and "Membership only" day 1 is several times any other day. The axis is fitted
+   * to days 2 onward (both series), day 1 is drawn clipped at the top, and its real value is printed
+   * beside it. Day grain only: a weekly or monthly point already carries its own month's renewals. */
+  const clipFirst = grain === "month" && kind !== "dpp";
+  const axis = useMemo(
+    () => fitAxis(clipFirst ? [...curData.slice(1), ...compData.slice(1)] : [...curData, ...compData]),
+    [clipFirst, curData, compData],
+  );
   const x = (i: number) => ML + (nPts === 1 ? plotW / 2 : (i * plotW) / (nPts - 1));
-  const y = (v: number) => MT + plotH - (v / maxY) * plotH;
+  /* Clamped into the plot: a value above the axis (day 1, labelled) sits on the top edge, and one
+   * below zero (a refund-heavy day on a small field) on the bottom edge rather than off the chart. */
+  const y = (v: number) => MT + plotH - ((Math.min(axis.hi, Math.max(axis.lo, v)) - axis.lo) / (axis.hi - axis.lo)) * plotH;
+  const ticks = useMemo(() => {
+    const out: number[] = [];
+    for (let t = axis.hi; t >= axis.lo - axis.step / 2; t -= axis.step) out.push(Math.round(t * 100) / 100);
+    return out;
+  }, [axis]);
+  const offScale = [
+    ...curData.map((v, i) => ({ v, i, who: "cur" as const })),
+    ...compData.map((v, i) => ({ v, i, who: "cmp" as const })),
+  ].filter((p) => p.v > axis.hi || p.v < axis.lo).map((p) => ({ ...p, up: p.v > axis.hi }));
   const path = (d: number[]) => d.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" ");
 
   /* NEVER CROWD THE AXIS — and on a phone "not crowded" is FIVE labels, not twelve.
@@ -467,9 +510,9 @@ export default function DailyRevenuePace() {
     <div className={s.card} data-testid="pace-card" data-grain={grain}>
       <div className={s.cardHead}>
         <div>
-          <div className={s.cardTitle} data-testid="pace-title">{word.title} revenue pace</div>
+          <div className={s.cardTitle} data-testid="pace-title">{word.title} revenue pace <InfoI pop="paceChart" label="What this chart shows" /></div>
           <div className={s.cardSub} data-testid="pace-sub">
-            {scope} · {period.label} {word.by} compared with {comp?.has ? comp.label : "—"}
+            {scope} · {period.label} {word.by}, net revenue, compared with {comp?.has ? comp.label : "—"}
           </div>
         </div>
         <div className={s.ctrlStack}>
@@ -543,17 +586,24 @@ export default function DailyRevenuePace() {
             setHoverAt(d);
             setPinned(true);
           }}>
-          {[0, 1, 2, 3, 4].map((i) => {
-            const yy = MT + (i * plotH) / 4;
+          {ticks.map((t) => {
+            const yy = y(t);
             return (
-              <g key={i}>
+              <g key={t} data-testid="pace-tick" data-v={t}>
                 <line x1={ML} y1={yy} x2={ML + plotW} y2={yy} stroke="#e6e2d8" strokeWidth={1} />
                 <text x={ML - 8} y={yy + 4} textAnchor="end" fontSize={narrow ? 12 : 10} fill="#7b8b82">
-                  {fmtMoney(maxY - (maxY * i) / 4)}
+                  {fmtMoney(t)}
                 </text>
               </g>
             );
           })}
+          {/* THE AXIS BREAK: two short strokes at the foot of the axis when it does not start at $0. */}
+          {axis.lo > 0 && (
+            <g data-testid="pace-axis-break" stroke="#7b8b82" strokeWidth={1.5}>
+              <line x1={ML - 6} y1={MT + plotH + 3} x2={ML + 2} y2={MT + plotH - 3} />
+              <line x1={ML - 6} y1={MT + plotH + 8} x2={ML + 2} y2={MT + plotH + 2} />
+            </g>
+          )}
           {buckets.map((b, i) => (i % tickEvery === 0 || i === buckets.length - 1 ? (
             <text key={i} x={x(i)} y={H - 9} textAnchor="middle" fontSize={narrow ? 12 : 10} fill="#7b8b82">{b.axis}</text>
           ) : null))}
@@ -571,6 +621,23 @@ export default function DailyRevenuePace() {
             <circle key={i} cx={x(i)} cy={y(current[i] ?? 0)} r={4} fill="#fff" stroke="#2fa36b"
               strokeWidth={2} data-testid="pace-dot-partial" data-i={i} />
           ))}
+
+          {/* OFF-SCALE POINTS: day 1 with membership in the line (top edge), or a day below $0 on a
+              small slice (bottom edge). Drawn on the edge with the real value beside it, so nothing
+              is hidden or misread as the edge value. */}
+          {offScale.map((p) => {
+            const stacked = p.who === "cmp" && offScale.some((q) => q.who === "cur" && q.i === p.i && q.up === p.up);
+            const cy = p.up ? MT : MT + plotH;
+            return (
+              <g key={`${p.who}-${p.i}`} data-testid="pace-offscale" data-v={p.v} data-who={p.who}>
+                <circle cx={x(p.i)} cy={cy} r={3.5} fill={p.who === "cur" ? "#2fa36b" : "#3f7fd6"} />
+                <text x={x(p.i) + 7} y={p.up ? MT - 4 + (stacked ? 12 : 0) : MT + plotH - 6 - (stacked ? 12 : 0)}
+                  fontSize={narrow ? 12 : 10.5} fontWeight={700} fill={p.who === "cur" ? "#1f7a4f" : "#2f64ad"}>
+                  {p.up ? "↑" : "↓"} {p.v < 0 ? "−" : ""}{fmtMoney(Math.abs(p.v))}
+                </text>
+              </g>
+            );
+          })}
 
           {readout && (
             <g data-testid="pace-crosshair" pointerEvents="none">
@@ -611,12 +678,12 @@ export default function DailyRevenuePace() {
             <div className={s.paceTipDay} data-testid="pace-readout-label">{readout.pointLabel}</div>
             <div className={s.paceTipRow}>
               <span><i className={s.dot} style={{ background: "#2fa36b" }} />{readout.curLabel}</span>
-              <b data-testid="pace-readout-current">{readout.cur == null ? "—" : fmtMoney(readout.cur)}</b>
+              <b data-testid="pace-readout-current">{readout.cur == null ? "—" : `${fmtMoney(readout.cur)} net`}</b>
             </div>
             {readout.cmpLabel && (
               <div className={s.paceTipRow}>
                 <span><i className={s.dot} style={{ background: "#3f7fd6" }} />{readout.cmpLabel}</span>
-                <b data-testid="pace-readout-compare">{readout.cmp == null ? "—" : fmtMoney(readout.cmp)}</b>
+                <b data-testid="pace-readout-compare">{readout.cmp == null ? "—" : `${fmtMoney(readout.cmp)} net`}</b>
               </div>
             )}
             {/* NO DIFFERENCE ROW WHEN EITHER SIDE IS MISSING — a difference against nothing is not
@@ -629,7 +696,7 @@ export default function DailyRevenuePace() {
             )}
             {readout.partial && (
               <div className={s.paceTipPartial} data-testid="pace-readout-partial">
-                Still open — not comparable on volume.
+                Still open, not comparable on volume.
               </div>
             )}
           </div>
@@ -642,14 +709,15 @@ export default function DailyRevenuePace() {
         {comp?.has
           ? <span><i className={s.dot} style={{ background: "#3f7fd6" }} />{comp.label}</span>
           : <span data-testid="pace-cmp-empty">
-              No revenue on record for {comp?.label ?? "the comparison period"} — that comparison is unavailable, not zero.
+              No revenue on record for {comp?.label ?? "the comparison period"}. That comparison is unavailable, not zero.
             </span>}
         {partialIdx.length > 0 && (
           <span data-testid="pace-partial-note">
             <i className={s.dotHollow} />
-            Hollow point{partialIdx.length === 1 ? "" : "s"} — still open, not comparable on volume.
+            Hollow point{partialIdx.length === 1 ? "" : "s"}: still open, not comparable on volume.
           </span>
         )}
+        {axis.lo > 0 && <span data-testid="pace-axis-note">Axis does not start at $0.</span>}
       </div>
     </div>
   );
