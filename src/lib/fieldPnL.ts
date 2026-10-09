@@ -258,7 +258,12 @@ export function aggregateFieldPnL(active: MatchPnLRow[], venueById: Map<number, 
     g.member += r.allocatedMemberRev;
     g.promo += r.promoRevenue;
     g.promoSpots += r.promoSpots;
-    if (bucket === "flat") g.cost = (g.cost ?? 0) + (r.fieldCost ?? 0);
+    /* A MISSING COST IS NOT $0 (2026-10-09). Stony Point had no cost_per_match and read $0.00 a match
+     * here (and net = all of its revenue). A flat match with no cost leaves the line without one. */
+    if (bucket === "flat") {
+      if (r.fieldCost == null) g.costKnown = false;
+      else g.cost = (g.cost ?? 0) + r.fieldCost;
+    }
     if (bucket === "share" && r.venueId != null) {
       const c = share.byMatch.get(matchKey(r.venueId, r.matchStartIso));
       // A played match the partner engine did not price: the line has no complete cost.
@@ -278,6 +283,7 @@ export function aggregateFieldPnL(active: MatchPnLRow[], venueById: Map<number, 
     const { costKnown, ...rest } = g;
     let cost = rest.cost;
     let bucket = rest.bucket, costLabel = rest.costLabel;
+    if (bucket === "flat" && !costKnown) { bucket = "model"; costLabel = "No cost per match set"; cost = null; }
     if (bucket === "share") {
       if (!costKnown) { bucket = "model"; costLabel = "Profit share (a match was not priced)"; cost = null; }
       // A cancelled date that owes the rental is a cost of the window with no match of its own.

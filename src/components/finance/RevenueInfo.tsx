@@ -12,7 +12,7 @@ import { createPortal } from "react-dom";
 export type PopKey =
   | "how" | "status" | "net" | "dpp" | "mem" | "dppTable" | "memTable" | "avg" | "rev" | "fields" | "gross" | "tax"
   | "fees" | "failed" | "venmo" | "unassigned" | "other" | "pace" | "matchmoney" | "paceChart"
-  | "matchesMonth" | "matches4w" | "fieldCost4w";
+  | "matchesMonth" | "matches4w" | "fieldCost4w" | "netTable";
 
 /* ONE OR TWO SHORT SENTENCES EACH, 140 characters at most, no worked calculations and no pointers
  * to other pages (Ryan, 2026-10-08). The tiles' DPP and Membership are AFTER refunds; the city,
@@ -27,7 +27,8 @@ export const POP: Record<PopKey, React.ReactNode> = {
   memTable: (<><div className="h">Membership</div>Before refunds and disputes, which come off in Net revenue.</>),
   matchesMonth: (<><div className="h">Matches</div>Matches that have kicked off in the selected period.</>),
   matches4w: (<><div className="h">Matches, last 4 weeks</div>Matches played in the last 4 completed weeks, a Soccer Central match on both pitches counting as two.</>),
-  fieldCost4w: (<><div className="h">Field cost / match</div>The field&apos;s cost per match. For profit share it is computed from the partner&apos;s terms and can differ from the billed amount on Field Costs.</>),
+  fieldCost4w: (<><div className="h">Field cost / match</div>The field&apos;s cost per match. For profit share it is computed from the partner&apos;s terms and can differ from the billed amount on Field Costs. Profit share costs for the current month can still change until the month closes.</>),
+  netTable: (<><div className="h">Net revenue</div>After refunds, disputes and sales tax. Hover a figure for its DPP and Membership.</>),
   avg: (<><div className="h">Avg daily DPP</div>DPP from completed days divided by the number of completed days.</>),
   rev: (<><div className="h">Refunds &amp; disputes</div>Money returned to customers, after the tax that came back with it. A dispute is a chargeback by the bank.</>),
   fields: (<><div className="h">Fields</div>Only fields that had revenue in the selected month and city.</>),
@@ -177,6 +178,19 @@ export const RV2_CSS = `
 .rv2 table.city tr.grp th.w4{color:#24406b}
 .rv2 table.city .sub{display:block;font-size:11px;font-weight:500;color:#7b8b82;text-transform:none;letter-spacing:0;font-style:normal;margin-top:2px}
 .rv2 table.city .sub.tag{color:#8a6300;font-weight:700}
+/* NARROWED (2026-10-09): fits 1,440 px; the first column is pinned when the box scrolls. */
+.rv2 .nt-wrap{overflow-x:auto;max-width:100%}
+.rv2 table.city.nt{min-width:0}
+.rv2 table.city.nt th,.rv2 table.city.nt td{padding:9px 10px}
+.rv2 table.city.nt .pin{position:sticky;left:0;z-index:1;background:#fff;box-shadow:1px 0 0 #e2e7df;white-space:normal;min-width:120px;max-width:200px}
+.rv2 table.city.nt tr.tot .pin{background:#f6f8f5}
+.rv2 table.city.nt tr.grp .pin{background:#fff}
+.rv2 table.city.nt .nt-city{white-space:nowrap}
+.rv2 table.city.nt thead tr:last-child th{white-space:normal;vertical-align:bottom;line-height:1.25}
+.rv2 table.city.nt thead tr:last-child th .lbl{flex-wrap:wrap;row-gap:2px}
+.rv2 table.city.nt .sub{white-space:normal;max-width:118px;margin-left:auto}
+.rv2 table.city.nt tr.grp th.w4 .sub{max-width:none}
+@media (max-width:760px){.rv2 table.city.nt{min-width:760px}.rv2 table.city.nt .pin{min-width:120px;max-width:150px}}
 .rv2 table.city tr.tot td{font-weight:800;background:#f6f8f5;border-bottom:0}
 .rv2 table.city tr.tot td.net{background:#d5f2de}
 @media (max-width:767px){.rv2 .big .v{font-size:32px}.rv2 .hero-top{grid-template-columns:1fr;gap:18px}.rv2 .tiles{grid-template-columns:1fr 1fr!important}.rv2 .tiles>.tile:last-child{grid-column:auto}.rv2 .tile .v{font-size:24px}.rv2 .hero{padding:16px}.rv2-title{font-size:24px}}

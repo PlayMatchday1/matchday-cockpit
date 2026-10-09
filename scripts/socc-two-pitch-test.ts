@@ -127,7 +127,12 @@ console.log("\none line for Soccer Central");
    * config list, it has stopped being one venue's special case. */
   is("no generic grouping helper crept in", /groupFieldsByPartner|partnerGroups|GROUP_BY_PARTNER/.test(code), false);
   is("the count uses matchUnits", /g\.matches \+= r\.matchUnits/.test(code), true);
-  is("…and the cost does not", /g\.cost = \(g\.cost \?\? 0\) \+ \(r\.fieldCost \?\? 0\)/.test(code), true);
+  /* ITEMISED (2026-10-09) — the cost line changed to treat a missing cost as unknown, not $0
+   * (`g.cost = (g.cost ?? 0) + r.fieldCost` inside a null check). Narrowed to the PAIRING this guards:
+   * the cost adds r.fieldCost, and no line that assigns g.cost mentions matchUnits. The runtime
+   * checks in section 8 prove the arithmetic (one two-pitch match costs $180 once). */
+  is("…and the cost does not", /g\.cost = \(g\.cost \?\? 0\) \+ \(?r\.fieldCost/.test(code), true);
+  is("  …no line that sets g.cost mentions matchUnits", code.split("\n").some((l) => /g\.cost\s*=/.test(l) && /matchUnits/.test(l)), false);
   is("the split is on screen", /data-testid="fp-split"/.test(v), true);
   is("…and beside the count", /data-testid="fp-matches"/.test(v), true);
   // fin_venues 53 must stay a real row — the merge must not fold its rate into venue 11.
@@ -183,6 +188,11 @@ console.log("\nthe two-pitch match joins Soccer Central even with venue 53 inact
   is("…counting the two-pitch match as two", [sc?.matches, sc?.onePitchMatches, sc?.twoPitchMatches], [3, 1, 1]);
   is("…and costing it once at $180", [sc?.cost, sc?.twoPitchCost], [270, 180]);
   is("…so cost per match is $90", sc?.costPM, 90);
+  // A FLAT MATCH WITH NO COST IS UNKNOWN, NOT $0 (2026-10-09: Stony Point read $0.00 a match).
+  const nocost = aggregateFieldPnL([row(11, "2026-09-12T19:00", 90, 1), { ...row(11, "2026-09-13T19:00", 90, 1), fieldCost: null } as MatchPnLRow],
+    venues, share).find((g) => g.key === "v:11");
+  is("a field with a match missing its cost has no cost per match", [nocost?.costPM, nocost?.netPM], [null, null]);
+  is("  …and says so instead of a number", [nocost?.bucket, nocost?.costLabel], ["model", "No cost per match set"]);
   // CONTROL: an inactive venue that is NOT Soccer Central is still Unmapped — the test is not vacuous.
   is("control — another inactive venue is still Unmapped", out.find((g) => g.venueIds.includes(99))?.bucket, "unmapped");
 }

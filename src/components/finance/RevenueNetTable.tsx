@@ -1,6 +1,11 @@
 "use client";
 
-/* CITY AND FIELD TABLES ON fin_txn — two column groups (Ryan, 2026-10-08).
+/* CITY AND FIELD TABLES ON fin_txn — two column groups (Ryan, 2026-10-08; narrowed 2026-10-09).
+ *
+ * NARROWED TO FIT 1,440 px (2026-10-09): Launched, DPP, Membership and Share are off the table and
+ * stay in the Export; DPP and Membership are in the Net revenue cell's hover. The first column is
+ * pinned, so it stays put when a narrow screen scrolls the table inside its own box. "Provisional"
+ * is no longer printed in cells — the Field cost / match hover says it once.
  *
  * THE SELECTED PERIOD (follows the month picker): Venues (city), Matches, DPP, Membership, Net
  * revenue, Avg revenue / venue (city), Member mix, Share — with the Unassigned row (city) or the
@@ -14,7 +19,6 @@
  * city row is match-weighted across the city's fields that have a cost, with "60 of 113 matches"
  * when that is not all of them. */
 import { money, UNASSIGNED, NO_FIELD_MEMBERSHIP, NO_FIELD_OTHER, type GroupRow } from "@/lib/revenueTxn";
-import { provisionalNote } from "@/lib/fieldPnL";
 import { InfoI } from "./RevenueInfo";
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -50,16 +54,15 @@ export default function RevenueNetTable({ grain, groups, matchesOf, venuesOf, la
     net: a.net + g.net, matches: a.matches + (matchesOf(g) ?? 0), venues: a.venues + ((venuesOf && venuesOf(g)) ?? 0),
   }), { dpp: 0, membership: 0, net: 0, matches: 0, venues: 0 });
   const isNoRow = (g: GroupRow) => g.label === UNASSIGNED || g.label === NO_FIELD_MEMBERSHIP || g.label === NO_FIELD_OTHER;
-  const share = (c: number) => (T.net ? `${((c / T.net) * 100).toFixed(1)}%` : "—");
   const mix = (mem: number, net: number) => (net > 0 ? `${((mem / net) * 100).toFixed(1)}%` : "—");
   const perVenue = (net: number, v: number | null) => (v ? money(Math.round(net / v)) : "—");
-  const monthCols = field ? 8 : 9;
+  const monthCols = field ? 4 : 6;
+  const netTitle = (dpp: number, mem: number) => `DPP ${money(dpp)} · Membership ${money(mem)} (both before refunds and disputes)`;
 
   const pnlCells = (c: PnLCell | null) => {
     if (pnl.error) return <td className="num w4 w4l" colSpan={4} data-testid="nt-w4-error">Did not load: {pnl.error}</td>;
     if (pnl.loading) return <td className="num w4 w4l" colSpan={4} data-testid="nt-w4-loading">Loading…</td>;
     if (!c) return (<><td className="num w4 w4l">—</td><td className="num w4">—</td><td className="num w4">—</td><td className="num w4">—</td></>);
-    const prov = provisionalNote(c.provisionalMonths);
     return (
       <>
         <td className="num w4 w4l" data-testid="nt-w4-matches">{c.matches.toLocaleString("en-US")}
@@ -68,7 +71,6 @@ export default function RevenueNetTable({ grain, groups, matchesOf, venuesOf, la
         <td className="num w4" data-testid="nt-w4-cost">
           {c.costPM != null ? m2(c.costPM) : c.costText ?? "—"}
           {c.profitShare && c.costPM != null && <span className="sub tag" data-testid="nt-w4-share">Profit share</span>}
-          {prov && <span className="sub" data-testid="nt-w4-prov">{prov}</span>}
         </td>
         <td className={`num w4 ${c.netPM != null && c.netPM < 0 ? "neg" : ""}`} data-testid="nt-w4-net">{c.netPM == null ? "—" : m2(c.netPM)}</td>
       </>
@@ -76,28 +78,25 @@ export default function RevenueNetTable({ grain, groups, matchesOf, venuesOf, la
   };
 
   return (
-    <div className="tw" style={{ overflowX: "auto" }}>
-      <table className="city" data-testid={field ? "field-table" : "city-table"}>
+    <div className="tw nt-wrap">
+      <table className="city nt" data-testid={field ? "field-table" : "city-table"}>
         <thead>
           <tr className="grp">
-            <th className="l" colSpan={monthCols}><span className="lbl">Selected period</span></th>
+            <th className="l pin" colSpan={1}><span className="lbl">Selected period</span></th>
+            <th className="l" colSpan={monthCols} />
             <th className="l w4 w4l" colSpan={4} data-testid="nt-w4-head">
               <span className="lbl">Last 4 completed weeks · {pnl.label}</span>
               <span className="sub">play revenue, before tax, refunds and Stripe fees</span>
             </th>
           </tr>
           <tr>
-            <th className="l"><span className="lbl">{field ? "Field" : "City"}</span></th>
+            <th className="l pin"><span className="lbl">{field ? "Field" : "City"}</span></th>
             {field && <th className="l"><span className="lbl">City</span></th>}
-            {field && <th className="l"><span className="lbl">Launched</span></th>}
             {!field && <th><span className="lbl">Venues</span></th>}
             <th><span className="lbl">Matches <InfoI pop="matchesMonth" label="Which matches are counted" /></span></th>
-            <th><span className="lbl">DPP <InfoI pop="dppTable" label="What DPP is here" /></span></th>
-            <th><span className="lbl">Membership <InfoI pop="memTable" label="What membership is here" /></span></th>
-            <th className="net"><span className="lbl">Net revenue</span></th>
-            {!field && <th><span className="lbl">Avg revenue / venue</span></th>}
+            <th className="net"><span className="lbl">Net revenue <InfoI pop="netTable" label="What net revenue is here" /></span></th>
+            {!field && <th><span className="lbl">Avg / venue</span></th>}
             <th><span className="lbl">Member mix</span></th>
-            <th><span className="lbl">Share</span></th>
             <th className="w4 w4l"><span className="lbl">Matches <InfoI pop="matches4w" label="Which matches are counted in the 4 weeks" /></span></th>
             <th className="w4"><span className="lbl">Revenue / match</span></th>
             <th className="w4"><span className="lbl">Field cost / match <InfoI pop="fieldCost4w" label="What field cost per match is" /></span></th>
@@ -113,39 +112,32 @@ export default function RevenueNetTable({ grain, groups, matchesOf, venuesOf, la
             return (
               <tr key={g.key} className={un ? "un" : ""} data-testid={g.label === UNASSIGNED ? "row-un" : `row-${slug(g.label)}`}
                 data-label={g.label}>
-                <td className="l"><span className="lbl">{g.label}
+                <td className="l pin"><span className="lbl">{g.label}
                   {g.label === UNASSIGNED && <InfoI pop="unassigned" label="Unassigned" />}
                   {others.length > 0 && (
                     <InfoI pop="other" label={`Also in ${g.label}'s net revenue`}>
                       <table><tbody>{others.map(([k, x]) => <tr key={k}><td>{k}</td><td>{money(x, true)}</td></tr>)}</tbody></table>
                     </InfoI>
                   )}</span></td>
-                {field && <td className="l">{g.city ?? "—"}</td>}
-                {field && <td className="l">{(launchOf && launchOf(g)) ?? "—"}</td>}
+                {field && <td className="l nt-city">{g.city ?? "—"}</td>}
                 {!field && <td className="num" data-testid="nt-venues">{v == null ? "—" : v}</td>}
                 <td className="num" data-testid="nt-matches">{m == null ? "—" : m.toLocaleString("en-US")}</td>
-                <td className="num" data-testid="nt-dpp" data-cents={g.dpp}>{money(g.dpp)}</td>
-                <td className="num" data-testid="nt-mem" data-cents={g.membership}>{money(g.membership)}</td>
-                <td className="num net" data-net={dollars(g.net)} data-cents={g.net}>{money(g.net)}</td>
+                <td className="num net" data-net={dollars(g.net)} data-cents={g.net} data-dpp={g.dpp} data-mem={g.membership}
+                  title={netTitle(g.dpp, g.membership)}>{money(g.net)}</td>
                 {!field && <td className="num" data-testid="nt-avgvenue">{perVenue(g.net, v)}</td>}
                 <td className="num" data-testid="nt-mix">{un ? "—" : mix(g.membership, g.net)}</td>
-                <td className="num">{share(g.net)}</td>
                 {pnlCells(un ? null : pnl.of(g))}
               </tr>
             );
           })}
           <tr className="tot" data-testid="row-total">
-            <td className="l">Total</td>
-            {field && <td className="l">—</td>}
+            <td className="l pin">Total</td>
             {field && <td className="l">—</td>}
             {!field && <td className="num">{T.venues}</td>}
             <td className="num">{T.matches.toLocaleString("en-US")}</td>
-            <td className="num">{money(T.dpp)}</td>
-            <td className="num">{money(T.membership)}</td>
-            <td className="num net" data-net={dollars(T.net)} data-cents={T.net}>{money(T.net)}</td>
+            <td className="num net" data-net={dollars(T.net)} data-cents={T.net} title={netTitle(T.dpp, T.membership)}>{money(T.net)}</td>
             {!field && <td className="num">{perVenue(T.net, T.venues)}</td>}
             <td className="num">{mix(T.membership, T.net)}</td>
-            <td className="num">100%</td>
             {pnlCells(pnl.total)}
           </tr>
         </tbody>
