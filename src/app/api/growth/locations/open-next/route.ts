@@ -10,7 +10,8 @@
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { selectAll } from "@/lib/supabasePagination";
 import { activeFields } from "@/lib/locationsMap";
-import { fetchFieldSnapshots, fetchLatestCities } from "@/lib/locationsData";
+import { fetchFieldSnapshots, fetchLatestCities, fetchVenueLinks } from "@/lib/locationsData";
+import { groupIntoUnits } from "@/lib/venueUnits";
 import { placeName } from "@/lib/playerAreaModel";
 import { effectiveVerdict, openNextForCity, MIN_PLAYERS_FOR_SUGGESTIONS, type CityOpenNext, type Verdict } from "@/lib/locationsInsights";
 
@@ -32,9 +33,11 @@ export async function GET(req: Request) {
   if (!REACHES.has(reach)) return Response.json({ error: "reach must be 3, 5, 10 or 15" }, { status: 400 });
 
   try {
-    const [latest, snaps] = await Promise.all([fetchLatestCities(sb), fetchFieldSnapshots(sb)]);
-    const { fields } = activeFields(snaps, latest.cities);
-    const fieldsKey = fields.map((f) => `${f.id}:${f.lat},${f.lng}`).sort().join("|");
+    const [latest, snaps, venueLinks] = await Promise.all([fetchLatestCities(sb), fetchFieldSnapshots(sb), fetchVenueLinks(sb)]);
+    // VENUES, not field records (venueUnits.ts): a suggestion's "nearest field" names the place once.
+    const fields = groupIntoUnits(activeFields(snaps, latest.cities).fields, venueLinks);
+    // The venue grouping is in the key too, so linking a field to a venue recomputes.
+    const fieldsKey = fields.map((f) => `${f.id}:${f.lat},${f.lng}:${f.fields.map((x) => x.id).join("+")}`).sort().join("|");
     const generation = `${latest.asOf}|${fieldsKey}`;
     const key = `${generation}|${reach}`;
     const hit = cache.get(key);

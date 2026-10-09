@@ -9,6 +9,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAll } from "./supabasePagination";
 import { ACTIVE_WINDOW_DAYS, type FieldSnapshot } from "./locationsMap";
 import type { AreaCity } from "./playerAreaModel";
+import type { VenueLink } from "./venueUnits";
 
 type MatchFieldRow = {
   api_id: number; field_id: number | null; field_title: string | null;
@@ -43,4 +44,18 @@ export async function fetchLatestCities(sb: SupabaseClient): Promise<{ cities: A
     .eq("ok", true).order("finished_at", { ascending: false }).limit(1).maybeSingle();
   if (error) throw new Error(error.message);
   return { cities: (Array.isArray(data?.cities) ? data!.cities : []) as AreaCity[], asOf: data?.finished_at ?? null };
+}
+
+/** Field -> canonical venue (fin_venue_fields + fin_venues.venue_name), for grouping field records into
+ *  venues on the Locations page (venueUnits.ts). Every link, excluded_from_venue included. */
+export async function fetchVenueLinks(sb: SupabaseClient): Promise<Map<number, VenueLink>> {
+  const [links, venues] = await Promise.all([
+    selectAll<{ mdapi_field_id: number; fin_venue_id: number }>(() => sb.from("fin_venue_fields").select("mdapi_field_id,fin_venue_id").order("mdapi_field_id")),
+    selectAll<{ id: number; venue_name: string }>(() => sb.from("fin_venues").select("id,venue_name").order("id")),
+  ]);
+  const name = new Map(venues.map((v) => [Number(v.id), v.venue_name]));
+  const out = new Map<number, VenueLink>();
+  for (const l of links) if (l.mdapi_field_id != null && l.fin_venue_id != null)
+    out.set(Number(l.mdapi_field_id), { venueId: Number(l.fin_venue_id), venueName: name.get(Number(l.fin_venue_id)) ?? `Venue ${l.fin_venue_id}` });
+  return out;
 }

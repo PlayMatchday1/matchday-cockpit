@@ -35,7 +35,6 @@ export async function GET(req: Request) {
         .select("id,email,first_name,last_name,phone_number,is_member").in("id", chunk).order("id"))) users.set(Number(u.id), u);
     }
     const cityName = new Map(input.cities.map((c) => [c.id, c.name]));
-    const fieldTitle = (id: number | null) => (id == null ? null : input.history.fields.get(id)?.title ?? `Field ${id}`);
     const rows: AreaPlayer[] = places.map((p) => {
       const u = users.get(p.playerId);
       const scrubbed = isScrubbed(u?.first_name ?? null, u?.last_name ?? null);
@@ -47,7 +46,7 @@ export async function GET(req: Request) {
         area: p.area, zip: p.zip,
         city: p.cityId != null ? cityName.get(p.cityId) ?? null : (p.label ? p.label.split(",")[0].trim() : null),
         state: p.state, verdict: p.verdict, cityId: p.cityId,
-        lastPlayed: p.lastDay, activity: p.activity, matches: p.matches, favouriteField: fieldTitle(p.favouriteFieldId),
+        lastPlayed: p.lastDay, activity: p.activity, matches: p.matches, favouriteField: p.favouriteTitle,
         member: u?.is_member === true, keys: p.keys, fieldReach: p.fieldReach, fromZip: p.fromZip,
       };
     });

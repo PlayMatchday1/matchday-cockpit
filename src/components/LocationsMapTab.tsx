@@ -391,7 +391,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
                 <p>In a city, each bubble is a zip code. Players without a zip are grouped by the square mile they are in.</p>
                 <p>Bubbles are placed a little off each player&apos;s exact spot, within about half a mile, to protect their privacy.</p>
                 <p>Distances are in a straight line, not driving distance.</p>
-                <p>A field shows if it has a match coming up or had one in the last {data.activeWindowDays} days.</p>
+                <p>Each pin is a venue: MatchDay field records at the same place (Round Rock&apos;s three, for example) are one pin, grouped by the venue they are linked to on the Fields page. A venue shows if any of its fields has a match coming up or had one in the last {data.activeWindowDays} days.</p>
                 <p>Activity colours each bubble by when its players last played a match: not cancelled, not a fake player. A bubble only ever holds players from one of the five groups.</p>
                 <p>Selecting a bubble highlights it and lights up the fields its players have played at. A grey pin is a field that has closed.</p>
               </div>
@@ -531,7 +531,21 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
                     <button type="button" className="loc-btn lm-clear" onClick={() => setSelected(null)}>Clear</button>
                   </div>
                   {selField ? (
+                    <>
                     <div className="lm-sub">{city.players === 0 ? NO_PLAYERS : `${int(selField.reach[reach])} ${selField.reach[reach] === 1 ? "player" : "players"} within ${reach} mi`}</div>
+                    {selField.venueId != null ? (
+                      <>
+                        <div className="lw-title lm-within-title">MatchDay fields here</div>
+                        <ul className="lm-near" data-testid="venue-fields">
+                          {selField.fields.map((m) => <li key={m.id}><span>{m.title}</span><span>field {m.id}</span></li>)}
+                        </ul>
+                      </>
+                    ) : (
+                      <div className="lm-unmapped" data-testid="field-unmapped">
+                        <b>Unmapped.</b> MatchDay field {selField.fields[0]?.id} is not linked to a venue, so it shows on its own. Link it on the <a href="/admin/fields">Fields page</a>.
+                      </div>
+                    )}
+                    </>
                   ) : (
                     <>
                       <div className="lm-sub">{int(selZip!.players)} {selZip!.players === 1 ? "player" : "players"}{selZip!.bucket ? `, ${ACTIVITY_LABEL[selZip!.bucket].toLowerCase()}` : ""}</div>
@@ -569,7 +583,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
                         <tr key={f.id} className={"lm-row" + (highlight === f.id ? " lm-row-on" : "")} tabIndex={0}
                           onClick={() => setHighlight(highlight === f.id ? null : f.id)}
                           onKeyDown={(e) => { if (e.key === "Enter") setHighlight(highlight === f.id ? null : f.id); }}>
-                          <td>{f.title}</td><td className="loc-num">{int(f.reach[reach])}</td>
+                          <td>{f.title}{f.fields.length > 1 && <span className="lm-nfields"> · {f.fields.length} fields</span>}{f.venueId == null && <span className="lm-unmapped-tag" title="Not linked to a venue: fix it on the Fields page">Unmapped</span>}</td><td className="loc-num">{int(f.reach[reach])}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -629,6 +643,10 @@ const CSS = `
 .lm-how-body p{margin:0 0 4px}
 .lm-check{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--forest);cursor:pointer}
 .lm-check input{accent-color:#046B45;width:15px;height:15px;margin:0}
+.lm-nfields{color:var(--muted);font-size:11.5px}
+.lm-unmapped{margin-top:8px;font-size:12px;color:#8A5300;background:#FFF6E5;border:1px solid #F2D9A6;border-radius:8px;padding:6px 8px}
+.lm-unmapped a{color:#8A5300;font-weight:800}
+.lm-unmapped-tag{display:inline-block;margin-left:6px;font-size:10px;font-weight:800;color:#8A5300;background:#FFF3C4;border-radius:4px;padding:0 5px}
 .lm-fromzip{color:#6a4d00;background:#FFF8E3;border:1px solid #F0E3BC;border-radius:8px;padding:5px 8px}
 .lm-check-off{color:var(--muted);cursor:not-allowed}
 .lm-legend-comp{display:inline-flex;flex-wrap:wrap;gap:6px 14px;align-items:center}

@@ -21,7 +21,8 @@
 
 import { areaGroupKey, areaGroupName, milesBetween, placeName, type AreaCity } from "./playerAreaModel";
 import { clusterOutside, effectiveVerdict, type OutsidePoint } from "./locationsInsights";
-import { activityOf, emptyActivity, summarizePlays, type Activity, type BubblePlays, type Play, type PlayField } from "./wherePlayed";
+import { activityOf, emptyActivity, summarizePlays, venuePlayFields, type Activity, type BubblePlays, type Play, type PlayField } from "./wherePlayed";
+import { groupIntoUnits, unitIdOf, venueUnitId, type UnitMember, type VenueLink } from "./venueUnits";
 
 export const REACHES = [3, 5, 10, 15] as const;
 export type Reach = (typeof REACHES)[number];
@@ -53,7 +54,11 @@ export type FieldSnapshot = {
   updatedAt: string;
 };
 
-export type MapField = { id: number; title: string; cityId: number; lat: number; lng: number; reach: ByReach };
+/** A pin on the map is a VENUE (venueUnits.ts): `id` is its unit id (minus fin_venue_id), `title` the
+ *  venue's name, `fields` the MatchDay field records inside it. An unmapped field is its own unit
+ *  (`venueId` null, id = its field id). */
+export type MapField = { id: number; title: string; cityId: number; lat: number; lng: number; reach: ByReach;
+  venueId: number | null; fields: UnitMember[] };
 /** A city-view bubble: one zip, or — for players with no zip — one ~1-mile grid cell
  *  (playerAreaModel.areaGroupKey). `area` is what to call it: the zip, the cell's shared area
  *  label, or "GPS, no zip". `key` is unique within a city. */
@@ -130,7 +135,10 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 
 /** The ACTIVE fields with a believable location, and the ones without (shown as "missing from the
  *  map"). Shared by the map and the Overview's player detail, so both mean the same field set. */
-export function activeFields(snaps: FieldSnapshot[], cities: AreaCity[]): { fields: Omit<MapField, "reach">[]; badFields: LocationsMap["badFields"] } {
+/** A MatchDay field RECORD (one row per field id), before grouping into venues. */
+export type FieldRecord = { id: number; title: string; cityId: number; lat: number; lng: number };
+
+export function activeFields(snaps: FieldSnapshot[], cities: AreaCity[]): { fields: FieldRecord[]; badFields: LocationsMap["badFields"] } {
   const cityIds = new Set(cities.map((c) => c.id));
   // --- fields: newest snapshot per field, active (not deleted upstream), in a US city ---
   const latest = new Map<number, FieldSnapshot>();
@@ -138,7 +146,7 @@ export function activeFields(snaps: FieldSnapshot[], cities: AreaCity[]): { fiel
     const prev = latest.get(s.fieldId);
     if (!prev || s.updatedAt >= prev.updatedAt) latest.set(s.fieldId, s);
   }
-  const fieldsRaw: Omit<MapField, "reach">[] = [];
+  const fieldsRaw: FieldRecord[] = [];
   const badFields: LocationsMap["badFields"] = [];
   for (const s of latest.values()) {
     if (s.deletedAt) continue;
@@ -166,12 +174,21 @@ export function buildLocationsMap(input: {
   fieldSnapshots: FieldSnapshot[];
   /** Each player's plays (playHistory.ts) and the fields they were at. Optional: absent = none known. */
   history?: { playsByPlayer: Map<number, Play[]>; fields: Map<number, PlayField> };
+  /** Field -> canonical venue (locationsData.fetchVenueLinks). Absent = every field is its own unit. */
+  venueLinks?: ReadonlyMap<number, VenueLink>;
   now?: Date;
 }): LocationsMap {
   const core = buildCore(input, null);
   const split = buildCore(input, "activity");
-  return { ...core, zipsActivity: split.zips, nationalActivity: split.national,
-    playFields: [...(input.history?.fields.values() ?? [])] };
+  return { ...core, zipsActivity: split.zips, nationalActivity: split.national, playFields: playFieldsWithVenues(input) };
+}
+
+/** Every played field record AND every venue they belong to, so "Where they play" can name both. */
+export function playFieldsWithVenues(input: { history?: { fields: Map<number, PlayField> }; venueLinks?: ReadonlyMap<number, VenueLink> }): PlayField[] {
+  const raw = [...(input.history?.fields.values() ?? [])];
+  const links = input.venueLinks ?? new Map<number, VenueLink>();
+  const nameOf = new Map([...links.values()].map((l) => [venueUnitId(l.venueId), l.venueName]));
+  return [...raw, ...venuePlayFields(raw, (id) => unitIdOf(id, links), (u) => nameOf.get(u) ?? null)];
 }
 
 /* THE BUBBLES, built once per mode. `split` = "activity" adds each player's activity bucket to every
@@ -190,12 +207,17 @@ function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activ
     return activityOf(plays.length ? Math.max(...plays.map((x) => x.ms)) : null, nowMs);
   };
   const sfx = (p: MapPlayerRow) => (split ? `|a:${actOf(p)}` : "");
-  const fieldById = input.history?.fields ?? new Map<number, PlayField>();
-  const summarize = (members: MapPlayerRow[], lat: number, lng: number) => summarizePlays(members.map(playsOf), { lat, lng }, fieldById);
+  const links = input.venueLinks ?? new Map<number, VenueLink>();
+  const fieldById = new Map(playFieldsWithVenues(input).map((f) => [f.id, f]));
+  const unitOf = (id: number) => unitIdOf(id, links);
+  const summarize = (members: MapPlayerRow[], lat: number, lng: number) => summarizePlays(members.map(playsOf), { lat, lng }, fieldById, unitOf);
   const tally = (members: MapPlayerRow[]) => { const a = emptyActivity(); for (const m of members) a[actOf(m)]++; return a; };
   const fromZipOf = (members: MapPlayerRow[]) => members.filter((m) => m.location_source === "zip_centroid").length;
   const cityIds = new Set(input.cities.map((c) => c.id));
-  const { fields: fieldsRaw, badFields } = activeFields(input.fieldSnapshots, input.cities);
+  const { fields: fieldRecords, badFields } = activeFields(input.fieldSnapshots, input.cities);
+  // THE UNIT IS THE VENUE: field records at one place become one pin (venueUnits.ts). Active if any
+  // of its fields is active, which is exactly "any of its records survived activeFields".
+  const fieldsRaw = groupIntoUnits(fieldRecords, links);
   // A city with no active field is not a market: its players count as outside coverage (the sync
   // stores the same; applying it here keeps the page right before the next run).
   const markets = new Set(fieldsRaw.map((f) => f.cityId));
@@ -349,7 +371,9 @@ export type PlayerPlace = {
   activity: Activity;
   matches: number;
   lastDay: string | null;
+  /** Their favourite VENUE (unit id) and its name. */
   favouriteFieldId: number | null;
+  favouriteTitle: string | null;
   keys: { nat: string; natAct: string; city: string | null; cityAct: string | null };
   /** Field id -> the smallest reach that contains this player's bubble. */
   fieldReach: Record<number, Reach>;
@@ -366,6 +390,8 @@ export function locatePlayers(input: Parameters<typeof buildLocationsMap>[0]): P
   const stateOf = new Map(input.players.map((p) => [p.player_id, p.state]));
   const zipOf = new Map(input.players.map((p) => [p.player_id, p.zip]));
   const srcOf = new Map(input.players.map((p) => [p.player_id, p.location_source ?? null]));
+  const links = input.venueLinks ?? new Map<number, VenueLink>();
+  const unitTitle = new Map(playFieldsWithVenues(input).map((f) => [f.id, f.title]));
   const out: PlayerPlace[] = [];
   for (const [id, e] of cov) {
     if (!e.nat || !e.verdict) continue;
@@ -375,9 +401,10 @@ export function locatePlayers(input: Parameters<typeof buildLocationsMap>[0]): P
     const byField = new Map<number, { n: number; ms: number }>();
     for (const p of plays) {
       if (!last || p.ms > last.ms) last = p;
-      const g = byField.get(p.fieldId) ?? { n: 0, ms: 0 };
+      const u = unitIdOf(p.fieldId, links);
+      const g = byField.get(u) ?? { n: 0, ms: 0 };
       g.n++; g.ms = Math.max(g.ms, p.ms);
-      byField.set(p.fieldId, g);
+      byField.set(u, g);
     }
     // FAVOURITE = the most matches; a tie goes to the one played most recently.
     const fav = [...byField].sort((x, y) => y[1].n - x[1].n || y[1].ms - x[1].ms)[0]?.[0] ?? null;
@@ -386,7 +413,7 @@ export function locatePlayers(input: Parameters<typeof buildLocationsMap>[0]): P
       area: areaOf.get(e.city ?? e.nat) ?? areaOf.get(e.nat) ?? "",
       zip: zipOf.get(id) ?? null, label: e.label ?? null, state: stateOf.get(id) ?? null,
       activity: activityOf(last ? last.ms : null, nowMs), matches: plays.length, lastDay: last?.day ?? null,
-      favouriteFieldId: fav,
+      favouriteFieldId: fav, favouriteTitle: fav == null ? null : unitTitle.get(fav) ?? `Field ${fav}`,
       keys: { nat: e.nat, natAct: a.nat ?? e.nat, city: e.city ?? null, cityAct: a.city ?? null },
       fieldReach: e.fieldReach ?? {},
       fromZip: srcOf.get(id) === "zip_centroid",

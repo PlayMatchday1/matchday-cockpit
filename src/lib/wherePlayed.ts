@@ -13,7 +13,9 @@ export type Play = { fieldId: number; ms: number; day: string };
 /** Every field a play happened at: its own record from the match, active or not. */
 export type PlayField = { id: number; title: string; cityId: number | null; lat: number | null; lng: number | null; closed: boolean };
 
-export type FieldPlays = { fieldId: number; matches: number; players: number; mi: number | null };
+/** One "Where they play" line. `fieldId` is a VENUE UNIT id when grouped (venueUnits.ts); `parts` are
+ *  the MatchDay field records inside that venue, shown as smaller lines under it. */
+export type FieldPlays = { fieldId: number; matches: number; players: number; mi: number | null; parts?: FieldPlays[] };
 export type BubblePlays = {
   /** Every field played at, most matches first. */
   fields: FieldPlays[];
@@ -55,6 +57,8 @@ export const emptyActivity = (): Record<Activity, number> => ({ d30: 0, m6: 0, y
  *  (the bubble's EXACT average position, or the player's exact position). */
 export function summarizePlays(
   memberPlays: Play[][], origin: { lat: number; lng: number } | null, fieldById: Map<number, PlayField>,
+  /** Group field records into venues (venueUnits.unitIdOf). fieldById must then also hold the units. */
+  unitOf?: (fieldId: number) => number,
 ): BubblePlays {
   const byField = new Map<number, { matches: number; players: Set<number> }>();
   const dists: number[] = [];
@@ -71,11 +75,25 @@ export function summarizePlays(
       if (p.ms > lastMs) { lastMs = p.ms; lastDay = p.day; }
     }
   });
-  const fields: FieldPlays[] = [...byField].map(([fieldId, g]) => {
-    const f = fieldById.get(fieldId);
-    const mi = origin && f && f.lat != null && f.lng != null ? r1(milesBetween(origin.lat, origin.lng, f.lat, f.lng)) : null;
-    return { fieldId, matches: g.matches, players: g.players.size, mi };
-  }).sort((a, b) => b.matches - a.matches || a.fieldId - b.fieldId);
+  const miTo = (id: number) => {
+    const f = fieldById.get(id);
+    return origin && f && f.lat != null && f.lng != null ? r1(milesBetween(origin.lat, origin.lng, f.lat, f.lng)) : null;
+  };
+  const line = (fieldId: number, g: { matches: number; players: Set<number> }): FieldPlays => ({ fieldId, matches: g.matches, players: g.players.size, mi: miTo(fieldId) });
+  const order = (a: FieldPlays, b: FieldPlays) => b.matches - a.matches || a.fieldId - b.fieldId;
+  let fields: FieldPlays[];
+  if (!unitOf) fields = [...byField].map(([id, g]) => line(id, g)).sort(order);
+  else {
+    // VENUE TOTALS: matches summed, players DISTINCT across the venue's fields (not summed).
+    const units = new Map<number, { matches: number; players: Set<number>; parts: FieldPlays[] }>();
+    for (const [id, g] of byField) {
+      const u = units.get(unitOf(id)) ?? { matches: 0, players: new Set<number>(), parts: [] };
+      u.matches += g.matches; for (const p of g.players) u.players.add(p);
+      u.parts.push(line(id, g));
+      units.set(unitOf(id), u);
+    }
+    fields = [...units].map(([uid, u]) => ({ ...line(uid, u), parts: u.parts.sort(order) })).sort(order);
+  }
   return { fields, matches, medianMi: dists.length ? r1(median(dists)) : null, lastDay, players: memberPlays.length, playersPlayed };
 }
 
@@ -85,3 +103,23 @@ function median(xs: number[]): number {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 const r1 = (n: number) => Math.round(n * 10) / 10;
+
+/** The VENUE entries for "Where they play": one PlayField per venue unit that any played field belongs
+ *  to, named after the venue, at the mean of its fields' known positions. CLOSED only if none of its
+ *  fields is active (a venue is active if any of its fields is). Unmapped fields need no entry: their
+ *  unit id is their own id. */
+export function venuePlayFields(played: Iterable<PlayField>, unitOf: (fieldId: number) => number, venueName: (unitId: number) => string | null): PlayField[] {
+  const g = new Map<number, PlayField[]>();
+  for (const f of played) { const u = unitOf(f.id); if (u !== f.id) g.set(u, [...(g.get(u) ?? []), f]); }
+  return [...g].map(([id, fs]) => {
+    const pos = fs.filter((f) => f.lat != null && f.lng != null);
+    const cities = fs.map((f) => f.cityId).filter((c): c is number => c != null);
+    return {
+      id, title: venueName(id) ?? fs[0].title,
+      cityId: cities.length ? cities.sort((a, b) => cities.filter((x) => x === b).length - cities.filter((x) => x === a).length)[0] : null,
+      lat: pos.length ? pos.reduce((s, f) => s + (f.lat as number), 0) / pos.length : null,
+      lng: pos.length ? pos.reduce((s, f) => s + (f.lng as number), 0) / pos.length : null,
+      closed: fs.every((f) => f.closed),
+    };
+  });
+}

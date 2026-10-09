@@ -7022,3 +7022,21 @@ Evidence: a read-only full walk of prod `GET /admin/players` (`sortColumn=create
   with `location_source = 'zip_centroid'` and labelled "located from zip". All 43 zips are ZCTAs; where
   MatchDay also had coordinates the ZCTA point was 0.07–1.26 mi from them. Unidentified now means a
   zip with no ZCTA.
+
+## Locations page: the unit is the venue, not the field record (2026-10-09)
+
+- **Grouping:** `fin_venue_fields` (`mdapi_field_id` unique → `fin_venue_id`) + `fin_venues.venue_name`,
+  in `src/lib/venueUnits.ts`. A venue's unit id is minus its `fin_venue_id`; an unlinked field keeps its
+  own id and shows "Unmapped". A venue is active if any of its fields is (the 60-day rule), NOT
+  `fin_venues.is_active`. `activeFields()` is unchanged (the player-areas sync uses it for markets).
+- **Field counts per city, prod vs the grouped build, same data (2026-10-09 ~19:20 UTC):** Austin 13 → 10,
+  San Antonio 5 → 4, Houston 7 → 6, Dallas / Fort Worth 4, Atlanta 2, St. Louis 3, Oklahoma City 1;
+  35 → 30. Multi-field venues: Round Rock (12, 18, 25), NEMP (10, 17), Soccer Central (102, 199),
+  ATH Katy (892, 1552). Players and coverage per city unchanged (each venue's fields share coordinates);
+  "Where to open next" suggestions identical at 3/5/10/15 mi apart from naming the venue.
+- **Unmapped:** no ACTIVE field. 16 PLAYED fields (all closed) have no `fin_venue_fields` row: 2 SEU
+  Practice Field, 11 The Crossover at Round Rock, 14 MatchDay Winter Tournament, 15 Special Events at
+  RR, 20 NEMP Grass Fields, 28 Special Events at SJD, 30 EPL Kickoff Tournamanet at SJD - Group Stage,
+  34 Robin Bledsoe Park, 100 Mainland Sports Complex, 133 Special Events at Onion Creek, 232 Special
+  Events at OC, 397 NEMP Grass, 529 NYCSC at Pier 40, 562 NYCSC at Nike Field, 727 Dripping Springs,
+  1684 Hala Piłkarska Bemowo.

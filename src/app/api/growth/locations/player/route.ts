@@ -15,8 +15,9 @@
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { selectAll } from "@/lib/supabasePagination";
 import { matchStartMs } from "@/lib/matchTime";
-import { activeFields } from "@/lib/locationsMap";
-import { fetchFieldSnapshots, fetchLatestCities } from "@/lib/locationsData";
+import { activeFields, playFieldsWithVenues } from "@/lib/locationsMap";
+import { groupIntoUnits, unitIdOf } from "@/lib/venueUnits";
+import { fetchFieldSnapshots, fetchLatestCities, fetchVenueLinks } from "@/lib/locationsData";
 import { milesBetween, placeName } from "@/lib/playerAreaModel";
 import { isActiveByLastPlay, isPaidActiveSub, isValidPlayRow, type PlayRowLike } from "@/lib/playerActivity";
 import { fetchPlayHistory } from "@/lib/playHistory";
@@ -73,7 +74,10 @@ export async function GET(req: Request) {
     const lastPlayedDay = played.length ? (played[played.length - 1].wall ?? "").slice(0, 10) || null : null;
 
     // Fields: the Map's active set, distances from the player's exact position.
-    const { fields } = activeFields(snaps, latest.cities);
+    // VENUES, not field records (venueUnits.ts): nearest, within and the mini map count each place once.
+    const venueLinks = await fetchVenueLinks(sb);
+    const { fields: records } = activeFields(snaps, latest.cities);
+    const fields = groupIntoUnits(records, venueLinks);
     const near: { id: number; title: string; lat: number; lng: number; mi: number }[] = [];
     let nearest: { id: number; title: string; mi: number } | null = null;
     if (a.lat != null && a.lng != null) {
@@ -92,18 +96,19 @@ export async function GET(req: Request) {
     const mapFields = near.length ? near : nearestField && nearest!.mi <= 50 ? [{ ...nearestField, mi: nearest!.mi }] : [];
 
     // WHERE THEY PLAY: the same summary as a Map bubble, from this player's exact position.
-    const history = await fetchPlayHistory(sb, [id], new Set(fields.map((f) => f.id)), now);
+    const history = await fetchPlayHistory(sb, [id], new Set(records.map((f) => f.id)), now);
     for (const f of history.fields.values()) {
       const c = f.cityId != null ? latest.cities.find((x) => x.id === f.cityId) : undefined;
       if (c && f.lat != null && f.lng != null && milesBetween(f.lat, f.lng, c.lat, c.lng) > c.radiusMiles) { f.lat = null; f.lng = null; }
     }
+    const playFields = playFieldsWithVenues({ history, venueLinks });
     const wherePlays = summarizePlays([history.playsByPlayer.get(id) ?? []],
-      a.lat != null && a.lng != null ? { lat: a.lat, lng: a.lng } : null, history.fields);
+      a.lat != null && a.lng != null ? { lat: a.lat, lng: a.lng } : null, new Map(playFields.map((f) => [f.id, f])), (fid) => unitIdOf(fid, venueLinks));
 
     const u = user.data;
     return Response.json({
       plays: wherePlays,
-      playFields: [...history.fields.values()],
+      playFields,
       id,
       name: u ? [u.first_name, u.last_name].filter(Boolean).join(" ").trim() || null : null,
       signedUpAt: u?.completed_sign_up_at ?? u?.created_at ?? null,

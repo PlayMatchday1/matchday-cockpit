@@ -24,8 +24,8 @@ export async function GET(req: Request) {
   const sb = auth.supabase;
 
   try {
-    const { players, cities, citiesAsOf, fieldSnapshots, history, now } = await loadLocationsInputs(sb);
-    const map = buildLocationsMap({ players, cities, fieldSnapshots, history, now });
+    const { players, cities, citiesAsOf, fieldSnapshots, history, venueLinks, now } = await loadLocationsInputs(sb);
+    const map = buildLocationsMap({ players, cities, fieldSnapshots, history, venueLinks, now });
     return Response.json({ ...map, citiesAsOf }, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });

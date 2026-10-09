@@ -3,7 +3,7 @@
 // WHERE THEY PLAY — one table, two homes: the Map tab's bubble card and the Overview's expanded player
 // row. Every number arrives computed (src/lib/wherePlayed.ts on the server); this only lays it out.
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import type { BubblePlays, PlayField } from "@/lib/wherePlayed";
 
 const TOP = 6;
@@ -39,8 +39,12 @@ export default function LocationsWherePlay({ plays, fieldById, outsideView }: {
           {rows.map((r) => {
             const f = fieldById.get(r.fieldId);
             const out = outsideView ? outsideView(f, r.fieldId) : false;
+            /* A VENUE's MatchDay field records, as smaller lines under its total — shown when there is
+             * more than one, or when the one is named differently from the venue. */
+            const parts = (r.parts ?? []).filter((p) => (r.parts!.length > 1) || (fieldById.get(p.fieldId)?.title ?? "") !== (f?.title ?? ""));
             return (
-              <tr key={r.fieldId} data-testid="where-play-row">
+              <Fragment key={r.fieldId}>
+              <tr data-testid="where-play-row">
                 <td className="lw-name">
                   {f?.title ?? `Field ${r.fieldId}`}
                   {f?.closed && <span className="lw-tag">closed</span>}
@@ -53,6 +57,15 @@ export default function LocationsWherePlay({ plays, fieldById, outsideView }: {
                 </td>
                 <td className="lw-mi">{mi(r.mi)}</td>
               </tr>
+              {parts.map((p) => (
+                <tr key={p.fieldId} className="lw-part" data-testid="where-play-part">
+                  <td className="lw-name">{fieldById.get(p.fieldId)?.title ?? `Field ${p.fieldId}`}{fieldById.get(p.fieldId)?.closed && !f?.closed && <span className="lw-tag">closed</span>}</td>
+                  <td />
+                  <td className="lw-n">{p.matches}</td>
+                  <td />
+                </tr>
+              ))}
+              </Fragment>
             );
           })}
         </tbody>
@@ -86,6 +99,9 @@ const CSS = `
 .lw-sub{display:block;font-size:10.5px;font-weight:600;color:var(--muted);white-space:nowrap}
 .lw-tag{display:inline-block;margin-left:6px;font-size:10px;font-weight:800;color:#6b5600;background:#FFF3C4;border-radius:4px;padding:0 5px;vertical-align:1px}
 .lw-tag-out{color:#33403a;background:#E8ECE9}
+.lw-part td{padding:2px 4px 3px;border-bottom:1px solid #F3F6F3;font-size:11.5px;color:var(--muted)}
+.lw-part .lw-name{padding-left:14px;color:var(--muted)}
+.lw-part .lw-n{font-weight:600;color:var(--muted)}
 .lw-more{margin-top:6px;border:0;background:none;padding:0;font:inherit;font-size:12px;font-weight:700;color:var(--forest);text-decoration:underline;cursor:pointer}
 .lw-summary{margin-top:6px;font-size:12px;color:var(--ink)}
 `;

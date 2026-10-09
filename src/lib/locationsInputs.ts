@@ -6,18 +6,19 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAll } from "./supabasePagination";
 import { activeFields, type MapPlayerRow } from "./locationsMap";
-import { fetchFieldSnapshots, fetchLatestCities } from "./locationsData";
+import { fetchFieldSnapshots, fetchLatestCities, fetchVenueLinks } from "./locationsData";
 import { fetchPlayHistory } from "./playHistory";
 import { milesBetween } from "./playerAreaModel";
 
 export async function loadLocationsInputs(sb: SupabaseClient) {
-  const [players, fieldSnapshots, latest] = await Promise.all([
+  const [players, fieldSnapshots, latest, venueLinks] = await Promise.all([
     selectAll<MapPlayerRow>(() => sb.from("player_area_seen")
       .select("player_id,zip,area_label,state,lat,lng,verdict,verdict_city_id,location_source")
       .eq("has_area", true).eq("is_internal", false)
       .order("player_id")),
     fetchFieldSnapshots(sb),
     fetchLatestCities(sb),
+    fetchVenueLinks(sb),
   ]);
   const now = new Date();
   const { fields: live } = activeFields(fieldSnapshots, latest.cities);
@@ -28,5 +29,5 @@ export async function loadLocationsInputs(sb: SupabaseClient) {
     const c = f.cityId != null ? latest.cities.find((x) => x.id === f.cityId) : undefined;
     if (c && f.lat != null && f.lng != null && milesBetween(f.lat, f.lng, c.lat, c.lng) > c.radiusMiles) { f.lat = null; f.lng = null; }
   }
-  return { players, cities: latest.cities, citiesAsOf: latest.asOf, fieldSnapshots, history, now };
+  return { players, cities: latest.cities, citiesAsOf: latest.asOf, fieldSnapshots, history, venueLinks, now };
 }
