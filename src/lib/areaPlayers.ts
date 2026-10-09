@@ -33,6 +33,8 @@ export type AreaPlayer = {
   member: boolean;
   keys: { nat: string; natAct: string; city: string | null; cityAct: string | null };
   fieldReach: Record<number, Reach>;
+  /** Placed at their zip's Census centre because MatchDay sent no coordinates. */
+  fromZip: boolean;
 };
 
 /* A DELETED ACCOUNT IS SCRUBBED IN PLACE: "Deleted" / "Account", phone null, email a tombstone at

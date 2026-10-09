@@ -85,7 +85,7 @@ export default function LocationsPlayersPanel({ title, rows, loading, error }: {
                   <td className="lp-name">{[r.firstName, r.lastName].filter(Boolean).join(" ") || "—"}</td>
                   <td>{r.email ?? "—"}</td>
                   <td className="lp-nowrap">{r.phoneE164 ?? r.phone ?? "—"}</td>
-                  <td>{r.area || "—"}</td>
+                  <td>{r.area || "—"}{r.fromZip && <span className="lp-fromzip" title="MatchDay sent no coordinates; placed at the zip's Census centre">located from zip</span>}</td>
                   <td>{r.zip ?? "—"}</td>
                   <td>{r.city ? `${r.city}${r.state ? `, ${r.state}` : ""}` : "—"}</td>
                   <td className="lp-nowrap">{fmtDay(r.lastPlayed)}</td>
@@ -118,5 +118,6 @@ const CSS = `
 .lp-table td{padding:7px 8px;border-bottom:1px solid #EEF2EC;vertical-align:top}
 .lp-name{font-weight:700;color:var(--forest);white-space:nowrap}
 .lp-nowrap{white-space:nowrap}
+.lp-fromzip{display:inline-block;margin-left:6px;padding:0 6px;border-radius:99px;font-size:10.5px;font-weight:800;color:#6a4d00;background:#FFF4D6;border:1px solid #EBD9A0;white-space:nowrap}
 @media (max-width:900px){ .lp{padding:12px 14px 16px} }
 `;

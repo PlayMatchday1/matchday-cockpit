@@ -24,6 +24,8 @@ export type SeenRow = {
   /** Migration 0216: worked out by the sync from lat/lng. */
   state: string | null;
   area_source: string | null;
+  /** Migration 0221: 'zip_centroid' = located from zip (MatchDay sent no coordinates). */
+  location_source?: string | null;
   is_internal: boolean;
   verdict: Verdict;
   verdict_city_id: number | null;
@@ -36,6 +38,8 @@ export type RecentRow = {
   playerId: number; name: string | null; firstSeenAt: string; seeded: boolean;
   zip: string | null; label: string | null; sourceRaw: string | null; source: SourceKind;
   verdict: Verdict; cityId: number | null;
+  /** Placed at its zip's Census centroid, because MatchDay sent no coordinates. */
+  fromZip: boolean;
 };
 /** `area` is what the row is called: its zip, or for a no-zip ~1-mile grid cell the area label its
  *  players share, else "GPS, no zip" (playerAreaModel.areaGroupName). */
@@ -43,6 +47,8 @@ export type ZipRow = {
   key: string; zip: string | null; area: string; label: string | null; players: number;
   nearestCityId: number | null; nearestMi: number | null;
   verdict: Verdict | "no_area"; verdictCityId: number | null;
+  /** How many of these players are located from zip. */
+  fromZip: number;
 };
 /** A "New markets" row: outside-coverage players clustered within 25 miles of each other. */
 export type PlaceRow = { key: string; place: string; players: number; nearestCityId: number | null; nearestMi: number | null };
@@ -53,7 +59,9 @@ export type LocationsReport = {
   trackingSince: string | null;
   cities: AreaCity[];
   playersTotal: number | null;
-  kpis: { areaSet: number; gps: number; zip: number; never: number | null; outside: number; unidentified: number; seeded: number };
+  kpis: { areaSet: number; gps: number; zip: number; never: number | null; outside: number; unidentified: number; seeded: number;
+    /** Placed from their zip's Census centroid because MatchDay sent no coordinates. */
+    fromZip: number };
   /** Location set among ACTIVE players (src/lib/playerActivity.ts — the Users lens's active-30-day
    *  definition), staff accounts removed. null if the active set could not be read. */
   active: { withLocation: number; total: number } | null;
@@ -118,6 +126,7 @@ export function buildLocationsReport(input: {
     outside: live.filter((r) => r.verdict === "waitlist").length,
     unidentified: live.filter((r) => r.verdict === "unidentified").length,
     seeded: live.filter((r) => r.seeded).length,
+    fromZip: live.filter((r) => r.location_source === "zip_centroid").length,
   };
   let active: LocationsReport["active"] = null;
   if (input.activeIds) {
@@ -161,6 +170,7 @@ export function buildLocationsReport(input: {
       playerId: r.player_id, name: names.get(r.player_id) ?? null, firstSeenAt: r.first_seen_at,
       seeded: r.seeded, zip: r.zip, label: r.area_label, sourceRaw: r.area_source,
       source: kindOf(r), verdict: r.verdict, cityId: r.verdict_city_id,
+      fromZip: r.location_source === "zip_centroid",
     }));
 
   // Grouped by zip; a player with no zip groups by ~1-mile grid cell of their coordinates — the same
@@ -183,6 +193,7 @@ export function buildLocationsReport(input: {
       nearestCityId: mode(g.map((r) => r.nearest_city_id)),
       nearestMi: mis.length ? Math.min(...mis) : null,
       verdict, verdictCityId: verdict === "in_market" ? mode(g.map((r) => r.verdict_city_id)) : null,
+      fromZip: g.filter((r) => r.location_source === "zip_centroid").length,
     };
   });
   // "No area" is no longer a table row — the page states kpis.never in a line above the table.

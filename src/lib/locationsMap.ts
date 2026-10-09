@@ -39,6 +39,8 @@ export type MapPlayerRow = {
   lng: number | null;
   verdict: "in_market" | "waitlist" | "unidentified";
   verdict_city_id: number | null;
+  /** Migration 0221: 'zip_centroid' = located from zip (MatchDay sent no coordinates). */
+  location_source?: string | null;
 };
 
 export type FieldSnapshot = {
@@ -69,6 +71,8 @@ export type MapZip = {
   activity: Record<Activity, number>;
   /** Set on the Activity-mode bubbles only: every player in this bubble is in this bucket. */
   bucket?: Activity;
+  /** Players in this bubble located from zip (placed at the zip's Census centre). */
+  fromZip: number;
 };
 export type MapCity = AreaCity & {
   /** False for a city with no active field: not a market (kept out of the pills and the city list). */
@@ -89,6 +93,7 @@ export type NationalZip = {
   plays: BubblePlays;
   activity: Record<Activity, number>;
   bucket?: Activity;
+  fromZip: number;
 };
 /** Outside coverage grouped by place: area label, falling back to zip, falling back to the ~1-mile
  *  grid cell (shown as "GPS, no zip"). lat/lng = the players' average (rounded), so a row can zoom
@@ -188,6 +193,7 @@ function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activ
   const fieldById = input.history?.fields ?? new Map<number, PlayField>();
   const summarize = (members: MapPlayerRow[], lat: number, lng: number) => summarizePlays(members.map(playsOf), { lat, lng }, fieldById);
   const tally = (members: MapPlayerRow[]) => { const a = emptyActivity(); for (const m of members) a[actOf(m)]++; return a; };
+  const fromZipOf = (members: MapPlayerRow[]) => members.filter((m) => m.location_source === "zip_centroid").length;
   const cityIds = new Set(input.cities.map((c) => c.id));
   const { fields: fieldsRaw, badFields } = activeFields(input.fieldSnapshots, input.cities);
   // A city with no active field is not a market: its players count as outside coverage (the sync
@@ -236,7 +242,7 @@ function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activ
     const area = areaGroupName(g.zip, g.labels);
     return { cityId: g.cityId, key, zip: g.zip, area: g.zip ? area : placeName(area) ?? area, label: placeName(topLabel(g)), verdict,
       lat: r2(lat), lng: r2(lng), players: g.n, nearestCityId: nc?.id ?? null, nearestCityMi: nc ? r1(nc.mi) : null,
-      plays: summarize(g.members, lat, lng), activity: tally(g.members), ...(split ? { bucket: actOf(g.members[0]) } : {}) };
+      plays: summarize(g.members, lat, lng), activity: tally(g.members), fromZip: fromZipOf(g.members), ...(split ? { bucket: actOf(g.members[0]) } : {}) };
   }).sort((a, b) => b.players - a.players || a.key.localeCompare(b.key));
   // NEW MARKETS: outside-coverage players clustered within 25 miles of each other (the Overview
   // shows the same clusters). zipKeys = the national bubbles in the cluster, for selecting one.
@@ -286,7 +292,7 @@ function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activ
     return { key: z.key, zip: z.zip, area: z.zip ? name : placeName(name) ?? name, cityId: z.cityId,
       lat: r2(z.lat), lng: r2(z.lng), players: z.n,
       nearestFieldId: best?.id ?? null, nearestFieldMi: best ? r1(best.mi) : null, inReach, nearby,
-      plays: summarize(z.members, z.lat, z.lng), activity: tally(z.members), ...(split ? { bucket: actOf(z.members[0]) } : {}) };
+      plays: summarize(z.members, z.lat, z.lng), activity: tally(z.members), fromZip: fromZipOf(z.members), ...(split ? { bucket: actOf(z.members[0]) } : {}) };
   }).sort((a, b) => b.players - a.players || a.key.localeCompare(b.key));
 
   /* A FIELD'S PLAYERS are the ones whose bubble centre is within reach of it — the rule field.reach
@@ -347,6 +353,8 @@ export type PlayerPlace = {
   keys: { nat: string; natAct: string; city: string | null; cityAct: string | null };
   /** Field id -> the smallest reach that contains this player's bubble. */
   fieldReach: Record<number, Reach>;
+  /** Placed at their zip's Census centre because MatchDay sent no coordinates. */
+  fromZip: boolean;
 };
 
 export function locatePlayers(input: Parameters<typeof buildLocationsMap>[0]): PlayerPlace[] {
@@ -357,6 +365,7 @@ export function locatePlayers(input: Parameters<typeof buildLocationsMap>[0]): P
   const nowMs = (input.now ?? new Date()).getTime();
   const stateOf = new Map(input.players.map((p) => [p.player_id, p.state]));
   const zipOf = new Map(input.players.map((p) => [p.player_id, p.zip]));
+  const srcOf = new Map(input.players.map((p) => [p.player_id, p.location_source ?? null]));
   const out: PlayerPlace[] = [];
   for (const [id, e] of cov) {
     if (!e.nat || !e.verdict) continue;
@@ -380,6 +389,7 @@ export function locatePlayers(input: Parameters<typeof buildLocationsMap>[0]): P
       favouriteFieldId: fav,
       keys: { nat: e.nat, natAct: a.nat ?? e.nat, city: e.city ?? null, cityAct: a.city ?? null },
       fieldReach: e.fieldReach ?? {},
+      fromZip: srcOf.get(id) === "zip_centroid",
     });
   }
   return out;

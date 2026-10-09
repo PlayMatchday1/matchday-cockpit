@@ -32,7 +32,33 @@ export function zipOf(raw: unknown): string | null {
   return z === "" ? null : z;
 }
 
+/** The 5-digit zip to LOOK UP (zip_centroids, migration 0221): text only, trimmed, ZIP+4 cut to its
+ *  first five. A number is refused, not padded — it would already have lost any leading zero, and
+ *  MatchDay sends zips as text (every stored value, 2026-10-09). */
+export function zip5(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const m = /^(\d{5})(?:[- ]?\d{4})?$/.exec(raw.trim());
+  return m ? m[1] : null;
+}
+
+/* WHERE THE COORDINATES CAME FROM, stored in player_area_seen.location_source: MatchDay's own, or the
+ * Census centroid of the player's zip when MatchDay sent none ("located from zip"). */
+export type LocationSource = "matchday" | "zip_centroid";
+
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+/* WHERE A PLAYER IS — `currentLat`/`currentLng` first, then the legacy `lat`/`lng`, always as a PAIR.
+ * Since MatchDay's location change (2026-10-08) a ZIP share carries `lat`/`lng` NULL and its
+ * coordinates only in `currentLat`/`currentLng` (5 players read singly, 2026-10-09: e.g. 1957, zip
+ * 78702, currentLat 30.2603535). Reading only `lat`/`lng` left 43 valid zips "unidentified". On every
+ * stored record that carries both pairs (62 GPS shares) they are identical, so preferring `current*`
+ * moves nobody who was already placed. docs/matchday-api-facts.md, "Unidentified zips". */
+export function apiCoords(p: { lat?: unknown; lng?: unknown; currentLat?: unknown; currentLng?: unknown }): { lat: number | null; lng: number | null } {
+  const cLat = num(p.currentLat), cLng = num(p.currentLng);
+  if (cLat != null && cLng != null) return { lat: cLat, lng: cLng };
+  const lat = num(p.lat), lng = num(p.lng);
+  return lat != null && lng != null ? { lat, lng } : { lat: null, lng: null };
+}
 
 /** A player has an area when areaSource says so — "none" is not set, whatever else the row carries. */
 export function hasArea(p: { areaSource?: unknown }): boolean {

@@ -48,7 +48,7 @@ export async function GET(req: Request) {
         city: p.cityId != null ? cityName.get(p.cityId) ?? null : (p.label ? p.label.split(",")[0].trim() : null),
         state: p.state, verdict: p.verdict, cityId: p.cityId,
         lastPlayed: p.lastDay, activity: p.activity, matches: p.matches, favouriteField: fieldTitle(p.favouriteFieldId),
-        member: u?.is_member === true, keys: p.keys, fieldReach: p.fieldReach,
+        member: u?.is_member === true, keys: p.keys, fieldReach: p.fieldReach, fromZip: p.fromZip,
       };
     });
     return Response.json({ players: rows, missingUsers: places.length - places.filter((p) => users.has(p.playerId)).length },

@@ -13,7 +13,7 @@ import { milesBetween } from "./playerAreaModel";
 export async function loadLocationsInputs(sb: SupabaseClient) {
   const [players, fieldSnapshots, latest] = await Promise.all([
     selectAll<MapPlayerRow>(() => sb.from("player_area_seen")
-      .select("player_id,zip,area_label,state,lat,lng,verdict,verdict_city_id")
+      .select("player_id,zip,area_label,state,lat,lng,verdict,verdict_city_id,location_source")
       .eq("has_area", true).eq("is_internal", false)
       .order("player_id")),
     fetchFieldSnapshots(sb),

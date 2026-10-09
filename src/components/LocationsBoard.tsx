@@ -222,8 +222,13 @@ export default function LocationsBoard() {
             <Kpi label="Zip only" value={int(data.kpis.zip)} sub="typed a home zip" />
             <Kpi label="Never set a location" value={data.kpis.never == null ? "—" : int(data.kpis.never)} sub="have not set a location" />
             <Kpi label="Outside coverage" value={int(data.kpis.outside)} sub="no city within range" />
-            <Kpi label="Unidentified zips" value={int(data.kpis.unidentified)} sub="zip we could not place" />
+            <Kpi label="Unidentified zips" value={int(data.kpis.unidentified)} sub="zip that does not exist" />
           </div>
+          {data.kpis.fromZip > 0 && (
+            <div className="loc-note-line" data-testid="loc-from-zip">
+              {int(data.kpis.fromZip)} {data.kpis.fromZip === 1 ? "player is" : "players are"} <b>located from zip</b>: MatchDay sent no coordinates, so they are placed at their zip&apos;s Census centre.
+            </div>
+          )}
 
           {/* 2 — Recent activity */}
           <div className="loc-card">
@@ -263,7 +268,7 @@ export default function LocationsBoard() {
                               <td className="loc-nowrap">{r.seeded ? <span className="loc-muted" title="Set before tracking began">Before tracking</span> : fmtWhen(r.firstSeenAt)}</td>
                               <td><a className="loc-link" href={`/match-ops/player-lookup?id=${r.playerId}`}>{r.name ?? `Player ${r.playerId}`}</a></td>
                               <td>{r.zip ?? placeName(r.label) ?? "—"}{r.zip && r.label ? <span className="loc-muted"> ({placeName(r.label)})</span> : null}</td>
-                              <td className="loc-nowrap">{r.source === "zip" ? "Zip" : "GPS"}</td>
+                              <td className="loc-nowrap">{r.source === "zip" ? "Zip" : "GPS"}{r.fromZip && <span className="loc-fromzip" title="MatchDay sent no coordinates; placed at the zip's Census centre">located from zip</span>}</td>
                               <td>{r.verdict === "in_market" ? cityName(r.cityId) : r.verdict === "waitlist" ? "Outside coverage" : "Unidentified"}</td>
                             </tr>
                             {open && (
@@ -317,7 +322,7 @@ export default function LocationsBoard() {
                         const placed = r.verdict === "in_market" || r.verdict === "waitlist";
                         return (
                           <tr key={r.key}>
-                            <td>{r.zip ?? placeName(r.area) ?? r.area}</td>
+                            <td>{r.zip ?? placeName(r.area) ?? r.area}{r.fromZip > 0 && <span className="loc-fromzip" title="MatchDay sent no coordinates; placed at the zip's Census centre">{r.fromZip === r.players ? "located from zip" : `${r.fromZip} located from zip`}</span>}</td>
                             <td className="loc-num">{int(r.players)}</td>
                             <td>{placed ? cityName(r.nearestCityId) : "—"}</td>
                             <td className="loc-num">{placed ? mi(r.nearestMi) : "—"}</td>
@@ -565,6 +570,8 @@ const CSS = `
 .loc-badge{display:inline-block;font-size:11px;font-weight:800;border-radius:99px;padding:2px 9px;white-space:nowrap;border:1px solid transparent}
 .loc-badge-in_market{background:#E3F7EC;color:#04583A;border-color:#BFE8D2}
 .loc-badge-waitlist{background:#FFF3DC;color:#8A5300;border-color:#F2D9A6}
+.loc-fromzip{display:inline-block;margin-left:6px;padding:0 6px;border-radius:99px;font-size:10.5px;font-weight:800;color:#6a4d00;background:#FFF4D6;border:1px solid #EBD9A0;white-space:nowrap}
+.loc-note-line{font-size:12.5px;color:var(--ink);margin:-4px 0 14px;padding:8px 12px;background:#FFFBEF;border:1px solid #F0E3BC;border-radius:10px}
 .loc-badge-unidentified{background:#FDEAE4;color:#A8391A;border-color:#F0BDA9}
 .loc-badge-no_area{background:var(--slot);color:var(--muted);border-color:var(--line)}
 .loc-chart{max-width:900px}

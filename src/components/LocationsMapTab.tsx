@@ -458,6 +458,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
                 <div className="lm-sub">{int(selNational.players)} {selNational.players === 1 ? "player" : "players"}, {selNational.verdict === "in_market" ? "inside a city's area" : "outside coverage"}</div>
                 <div className="lm-sub">Nearest city: {cityLabel(selNational.nearestCityId)}, {mi(selNational.nearestCityMi)} away</div>
                 {selNational.bucket && <div className="lm-sub">{ACTIVITY_LABEL[selNational.bucket]}</div>}
+                {selNational.fromZip > 0 && <div className="lm-sub lm-fromzip" data-testid="bubble-from-zip">{selNational.fromZip === selNational.players ? "Located from zip" : `${selNational.fromZip} located from zip`}: MatchDay sent no coordinates, so this is the zip&apos;s Census centre.</div>}
                 <LocationsWherePlay plays={selNational.plays} fieldById={playFieldById} outsideView={(f) => outsideView(f)} />
               </div>
             )}
@@ -534,6 +535,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
                   ) : (
                     <>
                       <div className="lm-sub">{int(selZip!.players)} {selZip!.players === 1 ? "player" : "players"}{selZip!.bucket ? `, ${ACTIVITY_LABEL[selZip!.bucket].toLowerCase()}` : ""}</div>
+                      {selZip!.fromZip > 0 && <div className="lm-sub lm-fromzip" data-testid="bubble-from-zip">{selZip!.fromZip === selZip!.players ? "Located from zip" : `${selZip!.fromZip} located from zip`}: MatchDay sent no coordinates, so this is the zip&apos;s Census centre.</div>}
                       <LocationsWherePlay plays={selZip!.plays} fieldById={playFieldById} outsideView={(f) => outsideView(f)} />
                       <div className="lw-title lm-within-title">Fields within {reach} miles</div>
                       {/* The fields within the current reach of THIS bubble. minReach is the server's
@@ -627,6 +629,7 @@ const CSS = `
 .lm-how-body p{margin:0 0 4px}
 .lm-check{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--forest);cursor:pointer}
 .lm-check input{accent-color:#046B45;width:15px;height:15px;margin:0}
+.lm-fromzip{color:#6a4d00;background:#FFF8E3;border:1px solid #F0E3BC;border-radius:8px;padding:5px 8px}
 .lm-check-off{color:var(--muted);cursor:not-allowed}
 .lm-legend-comp{display:inline-flex;flex-wrap:wrap;gap:6px 14px;align-items:center}
 .lm-legend-comp > span{display:inline-flex;align-items:center;gap:5px}

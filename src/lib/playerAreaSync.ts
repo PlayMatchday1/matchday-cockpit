@@ -41,7 +41,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getMatchdayApiClient } from "./matchdayApi";
 import { selectAll } from "./supabasePagination";
 import {
-  computeVerdict, geometryKey, hasArea, isInternalEmail, usCities, zipOf, type AreaCity,
+  apiCoords, computeVerdict, geometryKey, hasArea, isInternalEmail, usCities, zip5, zipOf, type AreaCity, type LocationSource,
 } from "./playerAreaModel";
 import { stateForPoint } from "./usState";
 import { activeFields } from "./locationsMap";
@@ -73,6 +73,8 @@ export const EVENING_MESSAGE = "No location syncs between 5 PM and 11 PM Central
 
 type ApiPlayer = {
   id?: number; email?: string | null; zipCode?: unknown; lat?: unknown; lng?: unknown;
+  /** Since 2026-10-08 the coordinates of a ZIP share are only here (apiCoords). */
+  currentLat?: unknown; currentLng?: unknown;
   areaLabel?: unknown; areaSource?: unknown;
 };
 type ApiPage = { totalItems?: number; data?: ApiPlayer[] };
@@ -89,6 +91,8 @@ export type AreaRow = {
   area_source: string | null;
   /** Two-letter US state from lat/lng against Census boundaries (usState.ts). Migration 0216. */
   state: string | null;
+  /** Migration 0221: 'matchday' (the record's coordinates) or 'zip_centroid' (located from zip). */
+  location_source: LocationSource | null;
   is_internal: boolean;
   verdict: "in_market" | "waitlist" | "unidentified";
   verdict_city_id: number | null;
@@ -99,7 +103,7 @@ export type AreaRow = {
 };
 
 const COMPARED: (keyof AreaRow)[] = [
-  "has_area", "zip", "lat", "lng", "area_label", "area_source", "state", "is_internal",
+  "has_area", "zip", "lat", "lng", "area_label", "area_source", "state", "location_source", "is_internal",
   "verdict", "verdict_city_id", "nearest_city_id", "nearest_city_mi", "verdict_geometry",
 ];
 
@@ -330,16 +334,28 @@ async function writePage(sb: SupabaseClient, runId: number, rows: ApiPlayer[], g
     : { data: [] as AreaRow[], error: null };
   if (stored.error) throw new Error(`player_area_seen read: ${stored.error.message}`);
   const byId = new Map(((stored.data ?? []) as AreaRow[]).map((r) => [r.player_id, r]));
+  /* LOCATED FROM ZIP — only for a player whose record has a zip and NO coordinates: the Census ZCTA
+   * centroid of that zip (zip_centroids, migration 0221). A zip with no centroid stays unidentified. */
+  const needZip = [...new Set(withArea.filter((p) => apiCoords(p).lat == null).map((p) => zip5(p.zipCode)).filter((z): z is string => z != null))];
+  const centroid = new Map<string, { lat: number; lng: number }>();
+  if (needZip.length) {
+    const { data, error } = await sb.from("zip_centroids").select("zip,lat,lng").in("zip", needZip);
+    if (error) throw new Error(`zip_centroids: ${error.message}`);
+    for (const z of data ?? []) centroid.set(z.zip as string, { lat: Number(z.lat), lng: Number(z.lng) });
+  }
   const inserts: AreaRow[] = [], updates: AreaRow[] = [];
   for (const p of withArea) {
     const id = p.id as number;
     const prev = byId.get(id);
-    const v = computeVerdict(p.lat, p.lng, g.cities, g.markets);
-    const lat = num(p.lat), lng = num(p.lng);
+    const own = apiCoords(p);
+    const fromZip = own.lat == null ? centroid.get(zip5(p.zipCode) ?? "") ?? null : null;
+    const lat = own.lat ?? fromZip?.lat ?? null, lng = own.lng ?? fromZip?.lng ?? null;
+    const location_source: LocationSource | null = own.lat != null ? "matchday" : fromZip ? "zip_centroid" : null;
+    const v = computeVerdict(lat, lng, g.cities, g.markets);
     const next: AreaRow = {
       player_id: id, first_seen_at: prev?.first_seen_at ?? now, seeded: prev?.seeded ?? g.bootstrap, has_area: true,
       zip: zipOf(p.zipCode), lat, lng, area_label: str(p.areaLabel), area_source: str(p.areaSource),
-      state: lat != null && lng != null ? stateForPoint(lat, lng) : null,
+      state: lat != null && lng != null ? stateForPoint(lat, lng) : null, location_source,
       is_internal: isInternalEmail(p.email), verdict: v.verdict, verdict_city_id: v.verdictCityId,
       nearest_city_id: v.nearestCityId, nearest_city_mi: v.nearestCityMi, verdict_geometry: g.geom, updated_at: now,
     };
@@ -397,4 +413,3 @@ async function completePass(sb: SupabaseClient, runId: number, totalItems: numbe
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
-const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);

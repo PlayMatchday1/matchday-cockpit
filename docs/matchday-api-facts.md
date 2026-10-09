@@ -6998,3 +6998,27 @@ Evidence: a read-only full walk of prod `GET /admin/players` (`sortColumn=create
 - **The HatTrick Patio is shown as a competitor** (Ryan, 2026-10-09), like HatTrick Oakridge. Both carry
   a "Partner brand" tag: Hattrick is a field partner of ours (matched on the name, `PARTNER_BRANDS` in
   `/api/growth/locations/competitors`).
+
+## Unidentified zips: the coordinates were in `currentLat`/`currentLng` (2026-10-09)
+
+- **A ZIP share carries its coordinates ONLY in `currentLat`/`currentLng`; `lat`/`lng` are null.**
+  Single reads, `GET /admin/players?id=<id>&limit=1`, 2026-10-09 ~19:00 UTC, five of the 43
+  "unidentified" players (1957 78702, 35477 78749, 59375 63122, 81051 73112, 91500 78213): every one
+  `zipCode` = `currentZipCode` (same 5-digit text), `lat`/`lng` null, `currentLat`/`currentLng` set,
+  `areaSource` "zip", `needsLocation` false, `coordinatesUpdatedAt` null, `zipCodeUpdatedAt` =
+  `locationUpdatedAt` between 14:55:44 and 17:30:56 UTC that day. Two more (94147, 94191) show the same
+  in `mdapi_users.raw` (synced 18:05 UTC).
+- **The sync read only `lat`/`lng`**, so all 43 were stored with a zip and no coordinates. Fixed:
+  `apiCoords()` (`src/lib/playerAreaModel.ts`) takes `currentLat`/`currentLng` first, then `lat`/`lng`,
+  always as a pair. Across all 35,068 stored records, every record carrying both pairs (62 GPS shares)
+  has them identical, so 0 placed players moved and 0 lost a position.
+- **All 43 set their zip on 2026-10-09**, none before the 2026-10-08 change: 41 had `zipCode` null and
+  `areaSource` "none" in the 09:00:35 UTC full-sync copy, and the 17:10 pass first saw all 43 between
+  17:10:08 and 17:45:35 UTC.
+- **Zip format is clean.** `zipCode`: always 5-digit text (all stored values). `currentZipCode` (not
+  read): 68 five-digit, one Polish `99-999`, one 2-digit value. No integers, whitespace or ZIP+4.
+- **Fallback: zip centroids** (migration 0221, `zip_centroids`, Census 2024 ZCTA gazetteer, 33,791
+  ZCTAs, internal points). Used only when a record has a zip and no coordinates; the player is stored
+  with `location_source = 'zip_centroid'` and labelled "located from zip". All 43 zips are ZCTAs; where
+  MatchDay also had coordinates the ZCTA point was 0.07–1.26 mi from them. Unidentified now means a
+  zip with no ZCTA.
