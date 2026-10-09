@@ -6991,3 +6991,10 @@ Evidence: a read-only full walk of prod `GET /admin/players` (`sortColumn=create
   and an unplaced venue has none. On 2026-10-09 no `competitor_venues` row had `updated_at`, no
   `change_log` row had source "Growth — competitor venue", and Vercel production logs (6 h) held no
   PATCH to `/api/growth/locations/competitors`.
+- **Placing an unplaced venue (2026-10-09):** admins press "Place on map" in the map's "Not on the map"
+  list; a draggable square starts at the city's centre and ONE PATCH carries `lat`, `lng` and only the
+  changed address fields (checked with the request intercepted: `{"id":30,"set":{"lat":…,"lng":…,
+  "street_address":"…"}}`). Save is disabled until the square has moved.
+- **The HatTrick Patio is shown as a competitor** (Ryan, 2026-10-09), like HatTrick Oakridge. Both carry
+  a "Partner brand" tag: Hattrick is a field partner of ours (matched on the name, `PARTNER_BRANDS` in
+  `/api/growth/locations/competitors`).

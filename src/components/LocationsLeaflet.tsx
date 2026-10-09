@@ -235,12 +235,12 @@ function CompetitorSquares({ venues, selectedId, movableId, onSelect, onMove }: 
         const side = compSide(v.spots, max), sel = v.id === selectedId, drag = v.id === movableId;
         return (
           <Marker key={`cq-${v.id}-${drag ? "d" : "s"}`} position={[v.lat, v.lng]} zIndexOffset={sel ? 800 : 300} draggable={drag}
-            icon={L.divIcon({ className: "loc-cq-wrap" + (drag ? " loc-cq-drag" : ""), html: compHtml(v.sources, side, sel), iconSize: [side, side], iconAnchor: [side / 2, side / 2], tooltipAnchor: [0, -side / 2] })}
+            icon={L.divIcon({ className: "loc-cq-wrap" + (drag ? " loc-cq-drag" : ""), html: compHtml(v.sources, side, sel, v.partnerBrand), iconSize: [side, side], iconAnchor: [side / 2, side / 2], tooltipAnchor: [0, -side / 2] })}
             eventHandlers={{
               click: () => onSelect(v.id),
               dragend: (e) => { const ll = (e.target as L.Marker).getLatLng(); onMove(v.id, ll.lat, ll.lng); },
             }}>
-            <Tooltip direction="top" className="loc-tip">{v.name} · {v.sources.map((x) => SOURCE_NAME[x]).join(" + ")} · {v.spots.toLocaleString("en-US")} spots/wk</Tooltip>
+            <Tooltip direction="top" className="loc-tip">{drag ? `Drag to place ${v.name}` : `${v.name} · ${v.sources.map((x) => SOURCE_NAME[x]).join(" + ")} · ${v.spots.toLocaleString("en-US")} spots/wk${v.partnerBrand ? ` · Partner brand (${v.partnerBrand})` : ""}`}</Tooltip>
           </Marker>
         );
       })}

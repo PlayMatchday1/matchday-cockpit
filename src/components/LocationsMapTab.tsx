@@ -16,7 +16,7 @@ import { MARKS_CSS, bubbleHtml, cityTagHtml, pinHtml } from "@/components/locati
 import LocationsWherePlay from "@/components/LocationsWherePlay";
 import LocationsPlayersPanel from "@/components/LocationsPlayersPanel";
 import type { AreaPlayer } from "@/lib/areaPlayers";
-import LocationsCompetitorCard, { SharedVenueCard } from "@/components/LocationsCompetitorCard";
+import LocationsCompetitorCard, { PlaceVenueCard, SharedVenueCard, type Placing } from "@/components/LocationsCompetitorCard";
 import { COMP_CSS, SOURCE_FILL, SOURCE_NAME, compHtml, sharedHtml, type CompetitorPayload, type CompetitorVenue, type SharedVenue } from "@/lib/competitorVenues";
 import { ACTIVITIES, ACTIVITY_FILL, ACTIVITY_INK, ACTIVITY_LABEL, ACTIVITY_SHORT, type Activity, type BubblePlays, type PlayField } from "@/lib/wherePlayed";
 
@@ -91,6 +91,9 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
   const [showComp, setShowComp] = useState(false);
   const [selComp, setSelComp] = useState<number | null>(null);
   const [selShared, setSelShared] = useState<number | null>(null);
+  /* PLACING (Ryan, 2026-10-09): an admin drops an unplaced venue's square in its city, drags it, and
+   * saves pin and address together in ONE request. Nothing is written until Save. */
+  const [placing, setPlacing] = useState<Placing | null>(null);
   const [moving, setMoving] = useState<number | null>(null);
   const [compMsg, setCompMsg] = useState<{ text: string; bad: boolean } | null>(null);
   const loadComp = useCallback(async () => {
@@ -148,7 +151,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
   }, [isAdmin, reloadKey]);
 
   // A new city starts with nothing selected; so does a new colouring (its bubbles are a different set).
-  useEffect(() => { setSelected(null); setHighlight(null); setSelNat(null); setFocus(null); setSelComp(null); setSelShared(null); setMoving(null); setCompMsg(null); }, [cityId]);
+  useEffect(() => { setSelected(null); setHighlight(null); setSelNat(null); setFocus(null); setSelComp(null); setSelShared(null); setMoving(null); setCompMsg(null); setPlacing(null); }, [cityId]);
   useEffect(() => { setSelected(null); setSelNat(null); if (colourBy === "coverage") setActFilter("all"); }, [colourBy]);
   const act = colourBy === "activity";
   const keep = useCallback((b: Activity | undefined) => !act || actFilter === "all" || b === actFilter, [act, actFilter]);
@@ -210,11 +213,29 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
    * name), All cities shows every one. The checkbox names the markets that have any. */
   const compAll = comp?.venues ?? [];
   const compMarkets = [...new Set(compAll.map((v) => v.market))].sort();
-  const compInView: CompetitorVenue[] = !showComp ? [] : city ? compAll.filter((v) => v.market === city.name) : compAll;
+  const compShown: CompetitorVenue[] = !showComp ? [] : city ? compAll.filter((v) => v.market === city.name) : compAll;
+  // The venue being placed rides along as one more square — the only draggable one while placing.
+  const compInView: CompetitorVenue[] = placing ? [...compShown, {
+    id: placing.venueId, market: placing.market, name: placing.name, street: null, city: null, state: null, zip: null,
+    lat: placing.lat, lng: placing.lng, confidence: null, updatedAt: null, updatedBy: null, sources: placing.sources,
+    listings: [], spots: 0, lowCents: null, highCents: null, formats: [], partnerBrand: null,
+  }] : compShown;
   const compOff = !showComp ? [] : (comp?.offMap ?? []).filter((o) => !city || o.market === city.name);
   const sharedInView: SharedVenue[] = !showComp ? [] : (comp?.shared ?? []).filter((x) => x.field && (!city || x.cityLabel === city.name));
   const selSharedV = selShared != null ? sharedInView.find((x) => x.supplyId === selShared) ?? null : null;
-  const selCompV = selComp != null ? compInView.find((v) => v.id === selComp) ?? null : null;
+  const selCompV = selComp != null ? compShown.find((v) => v.id === selComp) ?? null : null;
+  const startPlacing = (o: NonNullable<CompetitorPayload["offMap"]>[number]) => {
+    // Its city's centre: the capture's city label is the map's city name.
+    const c = data?.cities.find((x) => x.name === o.market);
+    if (!c || o.venueId == null) return;
+    setSelComp(null); setSelShared(null); setMoving(null); setCompMsg(null);
+    setPlacing({ venueId: o.venueId, name: o.name, market: o.market, sources: o.sources as ("plei" | "goodrec")[],
+      lat: c.lat, lng: c.lng, moved: false, street: o.street ?? null, city: o.city ?? null, state: o.state ?? null, zip: o.zip ?? null });
+    setFocus({ lat: c.lat, lng: c.lng, zoom: 11, n: Date.now() });
+    // On a phone the list sits below the map: bring the map (and the square to drag) into view.
+    // After the placing card has rendered (it shifts the layout), and instant: a smooth scroll is cut short.
+    setTimeout(() => document.querySelector('[data-testid="loc-map"]')?.scrollIntoView({ block: "center" }), 60);
+  };
   const compTitle = !comp ? (compErr ? `Couldn't load competitors: ${compErr}` : "Loading competitors…")
     : !comp.ready ? "Competitor locations are not in the database yet (migration 0220)."
     : compMarkets.length === 0 ? "No competitor venues have a location yet."
@@ -300,7 +321,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
         )}
         <label className={"lm-check lm-check-comp" + (!comp?.ready || compMarkets.length === 0 ? " lm-check-off" : "")} title={compTitle} data-testid="show-competitors-label">
           <input type="checkbox" checked={showComp} data-testid="show-competitors" disabled={!comp?.ready || compMarkets.length === 0}
-            onChange={(e) => { setShowComp(e.target.checked); if (!e.target.checked) { setSelComp(null); setSelShared(null); setMoving(null); } }} />
+            onChange={(e) => { setShowComp(e.target.checked); if (!e.target.checked) { setSelComp(null); setSelShared(null); setMoving(null); setPlacing(null); } }} />
           Show competitors
         </label>
       </div>
@@ -314,11 +335,14 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
               national={national} nationalAll={data.national} selectedNational={selNat}
               onSelectNational={(k) => { setSelNat(k); setSelComp(null); setSelShared(null); setMoving(null); }} focus={focus} natFilter={natFilter} showRadius={showRadius}
               colourBy={colourBy} playedClosed={playedClosed} playedFieldIds={playedFieldIds} showReach={showReach} onBounds={setBounds}
-              competitors={compInView} selectedCompetitor={selComp} movableCompetitor={moving}
+              competitors={compInView} selectedCompetitor={selComp} movableCompetitor={placing ? placing.venueId : moving}
               onSelectCompetitor={(id) => { setSelComp(id); setSelShared(null); setCompMsg(null); if (moving !== id) setMoving(null); }}
               shared={sharedInView} selectedShared={selShared}
               onSelectShared={(id) => { setSelShared(id); setSelComp(null); setMoving(null); setCompMsg(null); }}
-              onMoveCompetitor={(id, lat, lng) => { void saveComp(id, { lat, lng }).then((ok) => { if (ok) setMoving(null); }); }} />
+              onMoveCompetitor={(id, lat, lng) => {
+                if (placing && id === placing.venueId) { setPlacing({ ...placing, lat, lng, moved: true }); return; }
+                void saveComp(id, { lat, lng }).then((ok) => { if (ok) setMoving(null); });
+              }} />
           </div>
           <div className="lm-legend" data-testid="map-legend">
             {act ? (
@@ -351,6 +375,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
                 <span><Sample html={compHtml(["plei"], 14)} scale={1} />{SOURCE_NAME.plei}</span>
                 <span><Sample html={compHtml(["goodrec"], 14)} scale={1} />{SOURCE_NAME.goodrec}</span>
                 <span><Sample html={compHtml(["plei", "goodrec"], 14)} scale={1} />Both</span>
+                {compShown.some((v) => v.partnerBrand) && <span data-testid="legend-partner"><Sample html={compHtml(["plei"], 12, false, "x")} scale={0.9} />{[...new Set(compShown.map((v) => v.partnerBrand).filter(Boolean))].join(", ")}, a field partner of ours</span>}
                 {sharedInView.length > 0 && <span data-testid="legend-shared"><Sample html={sharedHtml("plei", false, 14)} scale={1} />Shared: competitor also runs here</span>}
                 <span className="lm-legend-sub">Competitor venue, sized by spots per week</span>
               </span>
@@ -394,6 +419,16 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
               onMove={(on) => { setMoving(on ? selCompV.id : null); setCompMsg(null); }}
               onSave={(set) => saveComp(selCompV.id, set)} />
           )}
+          {placing && (
+            <PlaceVenueCard key={placing.venueId} p={placing} msg={compMsg}
+              onCancel={() => { setPlacing(null); setCompMsg(null); }}
+              onSave={async (set) => {
+                const id = placing.venueId;
+                const ok = await saveComp(id, { lat: placing.lat, lng: placing.lng, ...set });
+                if (ok) { setPlacing(null); setSelComp(id); }
+                return ok;
+              }} />
+          )}
           {showComp && compOff.length > 0 && (
             <div className="lm-pcard" data-testid="comp-offmap">
               <div className="lm-ptitle">Not on the map</div>
@@ -402,6 +437,10 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
                   <li key={`${o.market}|${o.name}|${o.sources.join("+")}`}>
                     <b>{o.name}</b> <span className="lm-off-src">{o.sources.map((x) => SOURCE_NAME[x as "plei" | "goodrec"] ?? x).join(" + ")}{city ? "" : `, ${o.market}`}</span>
                     <div className="lm-off-why">{o.reason}</div>
+                    {comp?.canEdit && o.venueId != null && (
+                      <button type="button" className="loc-btn lm-place" data-testid="comp-place" disabled={placing?.venueId === o.venueId}
+                        onClick={() => startPlacing(o)}>{placing?.venueId === o.venueId ? "Placing…" : "Place on map"}</button>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -596,6 +635,7 @@ const CSS = `
 .lm-off li{padding:5px 0;border-bottom:1px solid #EEF2EC}
 .lm-off li:last-child{border-bottom:0}
 .lm-off-src{color:var(--muted)}
+.lm-place{margin-top:5px;padding:4px 10px;font-size:11px}
 .lm-off-why{color:var(--muted);font-size:11.5px;margin-top:2px}
 .lm-ring-line{background:transparent}
 .lm-seg-wrap{flex-wrap:wrap}

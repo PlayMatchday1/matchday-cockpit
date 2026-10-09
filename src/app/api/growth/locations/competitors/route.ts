@@ -11,7 +11,6 @@
 //   • a SHARED venue (a listing the Competitors page marks ALSO OUR FIELD or LOOKS LIKE OURS) is not a
 //     competitor square: it is returned under `shared` and drawn at OUR field with its own mark
 //     (sharedVenues, competitorProposals.ts). Only one whose venue has no linked field stays off.
-//   • The HatTrick Patio, held back: it may be our Hattrick T. field
 //   • a captured facility with no row in the address file
 // Every one is returned under `offMap` with its reason, so the page can say what it did not draw.
 
@@ -28,13 +27,13 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-/** Held back from the map until Ryan decides. CHECKED 2026-10-09: NOT our Hattrick T. Tomball — the
- *  Patio is 25155 Hufsmith-Kohrville Rd (30.12693, -95.59403), our field 1288 is 11121 Hufsmith Road
- *  (30.12466, -95.58874), 568 m apart, and the Competitors page ruling (2026-09-16) says "same owner,
- *  different facility". */
-const HELD_BACK: { source: string; city_label: string; facility: string; reason: string }[] = [
-  { source: "plei", city_label: "Houston", facility: "The HatTrick Patio", reason: "Held back: not our Hattrick T. (different address, 568 m away; same owner, different facility). Not yet shown as a competitor." },
-];
+/* PARTNER BRAND (Ryan, 2026-10-09): Hattrick is a field partner of ours, and two Hattrick facilities
+ * list on Plei — The HatTrick Oakridge and The HatTrick Patio. Both are COMPETITOR venues (ruled
+ * "same owner, different facility" on 2026-09-16; the Patio is 568 m from our Hattrick T., at a
+ * different address), shown like any other, and tagged so nobody reads them as strangers. Matched on
+ * the venue or listing name, so a third Hattrick listing is tagged too. */
+const PARTNER_BRANDS: { brand: string; match: RegExp }[] = [{ brand: "Hattrick", match: /hat\s*-?\s*trick/i }];
+const partnerBrandOf = (names: string[]) => PARTNER_BRANDS.find((b) => names.some((n) => b.match.test(n)))?.brand ?? null;
 
 type VenueRow = {
   id: number; market: string; name: string; street_address: string | null; city: string | null; state: string | null; zip: string | null;
@@ -109,14 +108,14 @@ export async function GET(req: Request) {
       const ls = listingsBy.get(v.id) ?? [];
       for (const l of ls) seen.add(key(l));
       const sources = [...new Set(ls.map((l) => l.source))].sort((a, b) => (a === "plei" ? -1 : b === "plei" ? 1 : 0));
-      const off = (reason: string) => offMap.push({ name: v.name, market: v.market, sources, reason });
+      const off = (reason: string, placeable = false) => offMap.push({ name: v.name, market: v.market, sources, reason,
+        ...(placeable ? { venueId: v.id, street: v.street_address, city: v.city, state: v.state, zip: v.zip } : {}) });
       const sup = ls.map((l) => supplyByKey.get(key(l)) ?? null);
       const sh = sup.map((s) => (s ? sharedBy.get(Number(s.id)) : undefined)).find(Boolean);
       if (sh) { const why = sharedReason(sh); if (why) off(why); continue; }
-      const held = HELD_BACK.find((h) => ls.some((l) => key(l) === key(h)));
-      if (held) { off(held.reason); continue; }
       if (v.lat == null || v.lng == null) {
-        off(ls.map((l) => l.notes).filter(Boolean).join(" ") || "No coordinates in the address file");
+        // PLACEABLE: an admin can drop its square on the map and save pin and address together.
+        off(ls.map((l) => l.notes).filter(Boolean).join(" ") || "No coordinates in the address file", true);
         continue;
       }
       const ll: CompetitorListing[] = ls.map((l, i) => {
@@ -137,7 +136,7 @@ export async function GET(req: Request) {
       placed.push({
         id: v.id, market: v.market, name: v.name, street: v.street_address, city: v.city, state: v.state, zip: v.zip,
         lat: v.lat, lng: v.lng, confidence: v.confidence, updatedAt: v.updated_at, updatedBy: v.updated_by,
-        sources, listings: ll,
+        sources, listings: ll, partnerBrand: partnerBrandOf([v.name, ...ls.map((l) => l.facility)]),
         spots: ll.reduce((a, l) => a + (l.spots ?? 0), 0),
         lowCents: lows.length ? Math.min(...lows) : null, highCents: highs.length ? Math.max(...highs) : null,
         formats: sortFormats(ll.flatMap((l) => l.formats)),

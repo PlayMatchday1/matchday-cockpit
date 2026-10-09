@@ -26,7 +26,8 @@ export default function LocationsCompetitorCard({ venue: v, canEdit, moving, msg
   // THE DIFF IS THE REQUEST: only the fields that differ from what is stored.
   const diff = Object.fromEntries(TEXT.filter(([k]) => draft[k].trim() !== current[k]).map(([k]) => [k, draft[k].trim() || null]));
   const address = [v.street, [v.city, [v.state, v.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ")].filter(Boolean).join(", ");
-  const unsure = v.confidence && v.confidence !== "high";
+  // An admin-set location supersedes the address file's confidence note.
+  const unsure = !v.updatedAt && v.confidence && v.confidence !== "high";
 
   return (
     <div className="lm-pcard lm-detail lc" data-testid="comp-card">
@@ -37,7 +38,9 @@ export default function LocationsCompetitorCard({ venue: v, canEdit, moving, msg
       </div>
       <div className="lc-srcs">
         {v.sources.map((s) => <span key={s} className="lc-src" style={{ background: SOURCE_FILL[s] }}>{SOURCE_NAME[s]}</span>)}
+        {v.partnerBrand && <span className="lc-src lc-pb" data-testid="comp-partner">Partner brand</span>}
       </div>
+      {v.partnerBrand && <div className="lc-mut lc-note" data-testid="comp-partner-note">{v.partnerBrand} is a field partner of ours. This is their own facility, not one of our fields.</div>}
       <dl className="lc-dl">
         <dt>Address</dt><dd data-testid="comp-address">{address || "—"}</dd>
         <dt>Spots per week</dt><dd data-testid="comp-spots">{v.spots.toLocaleString("en-US")}</dd>
@@ -107,6 +110,7 @@ export default function LocationsCompetitorCard({ venue: v, canEdit, moving, msg
 
 const CSS = `
 .lc-srcs{display:flex;gap:6px;margin-top:6px}
+.lc-pb{background:#fff7dd !important;color:#7a5a00 !important;border:1px solid #e2c46b}
 .lc-src{color:#fff;font-size:10.5px;font-weight:800;letter-spacing:.3px;padding:2px 8px;border-radius:99px}
 .lc-dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:10px 0 0;font-size:12.5px}
 .lc-dl dt{color:var(--muted)}
@@ -158,6 +162,55 @@ export function SharedVenueCard({ x, onClose }: { x: SharedVenue; onClose: () =>
         {x.status === "confirmed" ? "Confirmed as our field on the Competitors page."
           : "Proposed by a name match on the Competitors page; nobody has confirmed it yet."}
       </div>
+    </div>
+  );
+}
+
+/* ── PLACING AN UNPLACED VENUE (admin) ─────────────────────────────────────────────────────────
+ * Its square starts at its city's centre. The admin drags it to the venue and fills the address;
+ * ONE save sends the pin and only the address fields that changed. Save stays off until the square
+ * has been moved, so a venue cannot be saved sitting on the city centre by accident. */
+export type Placing = {
+  venueId: number; name: string; market: string; sources: ("plei" | "goodrec")[];
+  lat: number; lng: number; moved: boolean;
+  street: string | null; city: string | null; state: string | null; zip: string | null;
+};
+export function PlaceVenueCard({ p, msg, onCancel, onSave }: {
+  p: Placing; msg: { text: string; bad: boolean } | null;
+  onCancel: () => void; onSave: (set: Record<string, string | null>) => Promise<boolean>;
+}) {
+  const current: Record<TextKey, string> = { street_address: p.street ?? "", city: p.city ?? "", state: p.state ?? "", zip: p.zip ?? "" };
+  const [draft, setDraft] = useState(current);
+  const [busy, setBusy] = useState(false);
+  const diff = Object.fromEntries(TEXT.filter(([k]) => draft[k].trim() !== current[k]).map(([k]) => [k, draft[k].trim() || null]));
+  return (
+    <div className="lm-pcard lm-detail lc" data-testid="place-card">
+      <style>{CSS}</style>
+      <div className="lm-ptitle-row">
+        <div className="lm-ptitle">Place {p.name}</div>
+        <button type="button" className="loc-btn lm-clear" onClick={onCancel}>Cancel</button>
+      </div>
+      <div className="lc-srcs">{p.sources.map((s) => <span key={s} className="lc-src" style={{ background: SOURCE_FILL[s] }}>{SOURCE_NAME[s]}</span>)}</div>
+      <div className="lc-move" style={{ marginTop: 10 }}>
+        {p.moved ? `Pin set at ${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}. Drag again to adjust.` : `Drag the dashed square from the centre of ${p.market} to the venue.`}
+      </div>
+      <div className="lc-form">
+        {TEXT.map(([k, label]) => (
+          <label key={k} className={k === "street_address" ? "lc-wide" : ""}>
+            <span>{label}</span>
+            <input value={draft[k]} onChange={(e) => setDraft({ ...draft, [k]: e.target.value })} data-testid={`place-${k}`} />
+          </label>
+        ))}
+      </div>
+      <div className="lc-btns">
+        <button type="button" className="loc-btn" data-testid="place-save" disabled={busy || !p.moved}
+          title={p.moved ? undefined : "Move the square first"}
+          onClick={async () => { setBusy(true); await onSave(diff); setBusy(false); }}>
+          {busy ? "Saving…" : "Save pin and address"}
+        </button>
+      </div>
+      <div className="lc-mut lc-note">No address lookup: the pin is where you drop it, and the address is the text you type.</div>
+      {msg && <div className={"lc-msg" + (msg.bad ? " lc-bad" : "")} data-testid="comp-msg">{msg.text}</div>}
     </div>
   );
 }
