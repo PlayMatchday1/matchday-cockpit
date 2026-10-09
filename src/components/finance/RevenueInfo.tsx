@@ -11,7 +11,8 @@ import { createPortal } from "react-dom";
 
 export type PopKey =
   | "how" | "status" | "net" | "dpp" | "mem" | "dppTable" | "memTable" | "avg" | "rev" | "fields" | "gross" | "tax"
-  | "fees" | "failed" | "venmo" | "unassigned" | "other" | "pace" | "matchmoney" | "paceChart";
+  | "fees" | "failed" | "venmo" | "unassigned" | "other" | "pace" | "matchmoney" | "paceChart"
+  | "matchesMonth" | "matches4w" | "fieldCost4w";
 
 /* ONE OR TWO SHORT SENTENCES EACH, 140 characters at most, no worked calculations and no pointers
  * to other pages (Ryan, 2026-10-08). The tiles' DPP and Membership are AFTER refunds; the city,
@@ -22,8 +23,11 @@ export const POP: Record<PopKey, React.ReactNode> = {
   net: (<><div className="h">Net revenue</div>What customers paid, minus refunds, disputes and sales tax. Before Stripe fees.</>),
   dpp: (<><div className="h">DPP</div>Single match bookings and strike fees, after tax and refunds.</>),
   mem: (<><div className="h">Membership</div>Monthly membership charges, after tax and refunds. Most bill on the 1st.</>),
-  dppTable: (<><div className="h">DPP</div>Before refunds. Refunds are in their own column.</>),
-  memTable: (<><div className="h">Membership</div>Before refunds. Refunds are in their own column.</>),
+  dppTable: (<><div className="h">DPP</div>Before refunds and disputes, which come off in Net revenue.</>),
+  memTable: (<><div className="h">Membership</div>Before refunds and disputes, which come off in Net revenue.</>),
+  matchesMonth: (<><div className="h">Matches</div>Matches that have kicked off in the selected period.</>),
+  matches4w: (<><div className="h">Matches, last 4 weeks</div>Matches played in the last 4 completed weeks, a Soccer Central match on both pitches counting as two.</>),
+  fieldCost4w: (<><div className="h">Field cost / match</div>The field&apos;s cost per match. For profit share it is computed from the partner&apos;s terms and can differ from the billed amount on Field Costs.</>),
   avg: (<><div className="h">Avg daily DPP</div>DPP from completed days divided by the number of completed days.</>),
   rev: (<><div className="h">Refunds &amp; disputes</div>Money returned to customers, after the tax that came back with it. A dispute is a chargeback by the bank.</>),
   fields: (<><div className="h">Fields</div>Only fields that had revenue in the selected month and city.</>),
@@ -163,6 +167,12 @@ export const RV2_CSS = `
 .rv2 table.city th.net{background:#e5f6ea;color:#14532d}
 .rv2 table.city td.neg{color:#b42318}
 .rv2 table.city tr.un td{color:#7b8b82;font-style:italic}
+.rv2 table.city .w4{background:#f6f8fb}
+.rv2 table.city .w4l{border-left:2px solid #c9d3e3}
+.rv2 table.city tr.grp th{text-transform:none;letter-spacing:0;font-size:12px;color:#46594e;border-bottom:1px solid #e2e7df;padding-top:8px;padding-bottom:6px}
+.rv2 table.city tr.grp th.w4{color:#24406b}
+.rv2 table.city .sub{display:block;font-size:11px;font-weight:500;color:#7b8b82;text-transform:none;letter-spacing:0;font-style:normal;margin-top:2px}
+.rv2 table.city .sub.tag{color:#8a6300;font-weight:700}
 .rv2 table.city tr.tot td{font-weight:800;background:#f6f8f5;border-bottom:0}
 .rv2 table.city tr.tot td.net{background:#d5f2de}
 @media (max-width:767px){.rv2 .big .v{font-size:32px}.rv2 .hero-top{grid-template-columns:1fr;gap:18px}.rv2 .tiles{grid-template-columns:1fr 1fr!important}.rv2 .tiles>.tile:last-child{grid-column:auto}.rv2 .tile .v{font-size:24px}.rv2 .hero{padding:16px}.rv2-title{font-size:24px}}

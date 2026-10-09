@@ -5,25 +5,20 @@
 // directly with one that ran 6. A window selector (1 / 2 / 4 completed weeks,
 // default 4) recomputes from its own set of ran matches — never scaled.
 //
-// Ran matches only (is_cancelled=false). Fakes / WAITING / player-cancelled are
-// excluded upstream; absents count. Revenue is GROSS, before Stripe fees, split
-// three ways: DPP (DAILY PAID) + membership (allocated at the benchmark rate) +
-// promo (PROMOCODE rows — usually $0/comped, but the spots are real and it's a
-// genuine computed $0, never an unknown). The three revenue shares sum to 100%.
+// THE CALCULATION LIVES IN src/lib/fieldPnL.ts (Ryan, 2026-10-08), shared with Finance › Revenue's
+// 4-week columns so a field reads the same numbers on both pages. This file renders it.
 //
-// Three cost buckets, never merged: flat per-match (the only rankable one, by
-// NET PER MATCH), profit share (shown, labelled, excluded from the ranking), and
-// unmapped (no venue / a link to a deactivated venue). A cost cell NEVER prints
-// "$0" for an unknown cost — it prints an em-dash with its bucket. Cents (2dp)
-// everywhere, tabular numerals. City-scoped; page-level match-ops guard only.
+// ONE RANKED LIST. Flat-rate fields and profit-share fields rank together by NET PER MATCH: a
+// profit-share field's cost is computed per match from the partner's terms (fieldPnL, ruling 1) and
+// carries a "Profit share" tag, plus a provisional note while a month's member rate is open. A field
+// whose cost cannot be computed shows the model's name and is not ranked; unmapped fields (no venue
+// cost) are listed last. A cost cell NEVER prints "$0" for an unknown cost. Cents (2dp) everywhere,
+// tabular numerals. City-scoped; page-level match-ops guard only.
 
-import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase";
-import { useFinanceData } from "@/lib/useFinanceData";
-import { fetchWeekMatchPnL, type MatchPnLRow } from "@/lib/matchPnL";
-import { fieldCode } from "@/lib/slateFieldCodes";
-import { canonicalVenueName } from "@/lib/venueResolver";
+import { useMemo, useState } from "react";
 import { usePhone } from "@/lib/usePhone";
+import { provisionalNote, rankFields, type FieldAgg } from "@/lib/fieldPnL";
+import { useFieldPnL } from "@/lib/useFieldPnL";
 
 const C = {
   forest: "#0d3b2e", forestDeep: "#072a20", accent: "#35c77f", mint: "#e0f2e7",
@@ -36,30 +31,6 @@ const MO = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"
 const money = (v: number) => `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const round2 = (v: number) => Math.round(v * 100) / 100;
 const fmtDay = (d: Date) => `${MO[d.getMonth()]} ${d.getDate()}`;
-
-// Last completed Sunday on or before today, then the Monday `weeks` back.
-function windowFor(weeks: number, now = new Date()): { start: Date; end: Date } {
-  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const back = d.getDay(); // Sun=0 → today is the last completed Sunday
-  const lastSun = new Date(d.getFullYear(), d.getMonth(), d.getDate() - back);
-  const start = new Date(lastSun.getFullYear(), lastSun.getMonth(), lastSun.getDate() - (7 * weeks - 1));
-  const end = new Date(lastSun.getFullYear(), lastSun.getMonth(), lastSun.getDate(), 23, 59, 59);
-  return { start, end };
-}
-
-type Bucket = "flat" | "share" | "unmapped";
-type FieldAgg = {
-  key: string; label: string; fullName: string; bucket: Bucket; costLabel: string;
-  matches: number;
-  dpp: number; member: number; promo: number; promoSpots: number; // window totals
-  revenue: number; cost: number | null;
-  // per-match (cents)
-  dppPM: number; memberPM: number; promoPM: number; revPM: number; costPM: number | null; netPM: number | null;
-  unmappedNames: string[];
-  /* THE SPLIT, SHOWN NOT BURIED. A merged Soccer Central line has to say which of its matches took
-   * both pitches, or a reader cannot tell a $90 night from a $180 one. */
-  onePitchMatches: number; twoPitchMatches: number; twoPitchCost: number;
-};
 
 // Three shares that sum to exactly 100.0 (1dp): round each, push drift onto the
 // largest so colour+number always reconcile to a whole.
@@ -74,99 +45,23 @@ function sharesTo100(parts: number[], total: number): number[] {
 
 export default function SlateFieldPnL({ city }: { city: string }) {
   const isPhone = usePhone();
-  const { data, loading: dataLoading } = useFinanceData();
   const [win, setWin] = useState<1 | 2 | 4>(4);
-  const [active, setActive] = useState<MatchPnLRow[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
-
-  const { start, end } = useMemo(() => windowFor(win), [win]);
-  const rangeLabel = `${fmtDay(start)} – ${fmtDay(end)}`;
-
-  useEffect(() => {
-    if (dataLoading || !data) return;
-    let cancelled = false;
-    setActive(null); setError(null);
-    fetchWeekMatchPnL(supabase, start, end, data)
-      .then((r) => { if (!cancelled) setActive(r.active); })
-      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); });
-    return () => { cancelled = true; };
-  }, [data, dataLoading, start, end]);
-
-  const venueById = useMemo(() => new Map((data?.venues ?? []).map((v) => [v.id, v])), [data]);
+  const { win: w, fields, error } = useFieldPnL(win);
+  const rangeLabel = `${fmtDay(w.start)} – ${fmtDay(w.end)}`;
 
   const agg = useMemo(() => {
-    if (!active) return null;
-    const rows = active.filter((r) => r.city === city);
-    type Raw = Omit<FieldAgg, "revenue" | "dppPM" | "memberPM" | "promoPM" | "revPM" | "costPM" | "netPM">;
-    const groups = new Map<string, Raw>();
-    for (const r of rows) {
-      // Special events carry no venue cost and must not dilute a pitch's
-      // per-match average — excluded from the frozen non-cancelled denominator.
-      if (r.isEvent) continue;
-      const v = r.venueId != null ? venueById.get(r.venueId) : undefined;
-      let bucket: Bucket; let costLabel = "";
-      if (r.venueId == null || !v || v.is_active === false) bucket = "unmapped";
-      else if (v.billing_type === "per_match") bucket = "flat";
-      else { bucket = "share"; costLabel = v.billing_type === "profit_share" ? "profit share" : "monthly flat"; }
-      /* ── SOCCER CENTRAL IS ONE LINE. This venue only. ─────────────────────────────────────────
-       * Soccer Central runs on two 9v9 pitches side by side, and a tournament-size match occupies
-       * both. fin_venues carries that as a second row — 11 "Soccer Central" at $90 and 53 "Soccer
-       * Central Tournament" at $180 — which is the right DATA MODEL and the wrong thing to show:
-       * one pitch reading as two fields, one of which looks twice as expensive.
-       *
-       * SO THE MERGE IS HERE, AT THE PRESENTATION LAYER, AND NOWHERE ELSE. Venue 53 stays a real
-       * row carrying the real rate; nothing is folded into venue 11 and no rate is rewritten. The
-       * split is shown on the line rather than buried.
-       *
-       * NOT A GENERIC GROUPING RULE, deliberately. Finance already has one — COMBINE_BY_NAME in
-       * venueGroups.ts, which pairs exactly these two — and this is the same special case for the
-       * one panel that groups by venueId instead of by group. Two venues, named, and that is all. */
-      const SOCC_BASE = 11, SOCC_TOURNEY = 53;
-      const isSocc = r.venueId === SOCC_BASE || r.venueId === SOCC_TOURNEY;
-      const key = bucket === "unmapped" ? `unmapped:${r.venueId ?? r.venueRawName}`
-        : isSocc ? `v:${SOCC_BASE}` : `v:${r.venueId}`;
-      let g = groups.get(key);
-      if (!g) {
-        // The merged line is named for the BASE venue, never "Soccer Central Tournament".
-        const nm = isSocc ? (venueById.get(SOCC_BASE)?.venue_name ?? "Soccer Central") : (v?.venue_name ?? r.venueRawName);
-        g = { key, label: fieldCode(canonicalVenueName(nm)), fullName: nm,
-          bucket, costLabel, matches: 0, dpp: 0, member: 0, promo: 0, promoSpots: 0, cost: bucket === "flat" ? 0 : null, unmappedNames: [],
-          onePitchMatches: 0, twoPitchMatches: 0, twoPitchCost: 0 };
-        groups.set(key, g);
-      }
-      /* TWO PITCHES IS TWO MATCHES — counts and denominators only. The COST doubling is already in
-       * the rate ($180 on venue 53) and the charged unit count stays 1; doubling both would bill
-       * $360. So this line adds units, and the cost line below adds r.fieldCost unchanged. */
-      g.matches += r.matchUnits;
-      if (r.matchUnits > 1) { g.twoPitchMatches += 1; g.twoPitchCost += r.fieldCost ?? 0; }
-      else { g.onePitchMatches += 1; }
-      g.dpp += r.grossRevenue;
-      g.member += r.allocatedMemberRev;
-      g.promo += r.promoRevenue;
-      g.promoSpots += r.promoSpots;
-      if (bucket === "flat") g.cost = (g.cost ?? 0) + (r.fieldCost ?? 0);
-      if (bucket === "unmapped" && !g.unmappedNames.includes(r.venueRawName)) g.unmappedNames.push(r.venueRawName);
-    }
-    const finalize = (g: Raw): FieldAgg => {
-      const dppPM = round2(g.dpp / g.matches), memberPM = round2(g.member / g.matches), promoPM = round2(g.promo / g.matches);
-      const revPM = round2(dppPM + memberPM + promoPM); // sum of components → drill-down always foots
-      const costPM = g.cost == null ? null : round2(g.cost / g.matches);
-      return { ...g, revenue: g.dpp + g.member + g.promo, dppPM, memberPM, promoPM, revPM, costPM, netPM: costPM == null ? null : round2(revPM - costPM) };
-    };
-    const all = [...groups.values()].map(finalize);
+    if (!fields) return null;
+    const all = fields.filter((g) => g.city === city);
     // Footing assertion (Part 6): DPP + member + promo per match = revenue per match, every field.
     for (const g of all) {
       if (Math.abs(g.dppPM + g.memberPM + g.promoPM - g.revPM) > 0.005) console.error(`[SlateFieldPnL] footing failed for ${g.label}`);
     }
-    return {
-      flat: all.filter((g) => g.bucket === "flat").sort((a, b) => (b.netPM ?? 0) - (a.netPM ?? 0)),
-      share: all.filter((g) => g.bucket === "share").sort((a, b) => b.revPM - a.revPM),
-      unmapped: all.filter((g) => g.bucket === "unmapped").sort((a, b) => b.matches - a.matches),
-    };
-  }, [active, city, venueById]);
+    return rankFields(all);
+  }, [fields, city]);
 
   const unmappedCount = agg ? agg.unmapped.reduce((n, g) => n + g.unmappedNames.length, 0) : 0;
+  const total = agg ? agg.ranked.length + agg.model.length + agg.unmapped.length : 0;
 
   return (
     <div className="mb-[18px] rounded-2xl border p-[18px_18px_16px]" style={{ background: C.surface, borderColor: C.line }}>
@@ -197,7 +92,7 @@ export default function SlateFieldPnL({ city }: { city: string }) {
         <div className="mt-4 rounded-[10px] border px-3 py-2 text-[12.5px]" style={{ borderColor: "#f0cec2", background: "#fbe9e3", color: C.loss }}>{error}</div>
       ) : !agg ? (
         <div className="py-8 text-center text-[13px]" style={{ color: C.muted }}>Loading match P&amp;L…</div>
-      ) : agg.flat.length + agg.share.length + agg.unmapped.length === 0 ? (
+      ) : total === 0 ? (
         <div className="py-8 text-center text-[13px]" style={{ color: C.muted }}>No ran matches in this window for {city}.</div>
       ) : (
         isPhone ? (
@@ -210,10 +105,10 @@ export default function SlateFieldPnL({ city }: { city: string }) {
            the flat-rate group, and dropping them would leave a ranked list beside an unranked one
            with nothing saying why. */
         <div className="mt-4 flex flex-col gap-2" data-testid="fp-cards">
-          {agg.flat.length > 0 && <PhoneGroup label="Flat per-match rate" note="ranked by net per match" />}
-          {agg.flat.map((g, i) => <PhoneCard key={g.key} g={g} rank={i + 1} />)}
-          {agg.share.length > 0 && <PhoneGroup label="Profit share" note="billing is a share of revenue, not a fixed per-match number, so these cannot be ranked against flat-rate fields" />}
-          {agg.share.map((g) => <PhoneCard key={g.key} g={g} />)}
+          {agg.ranked.length > 0 && <PhoneGroup label="Ranked by net per match" note="profit share costs are computed per match from the partner's terms" />}
+          {agg.ranked.map((g, i) => <PhoneCard key={g.key} g={g} rank={i + 1} />)}
+          {agg.model.length > 0 && <PhoneGroup label="No computed cost" note="the cost model cannot be split by match, so these are not ranked" />}
+          {agg.model.map((g) => <PhoneCard key={g.key} g={g} />)}
           {agg.unmapped.length > 0 && <PhoneGroup label="Unmapped" note="no usable venue cost — field 1552 (no fin_venue_fields link) plus links pointing at deactivated venues" />}
           {agg.unmapped.length > 0 && (
             <div className="rounded-[10px] border px-3 py-2.5 text-[12.5px] font-semibold" style={{ borderColor: C.line, color: C.muted }}>
@@ -230,15 +125,15 @@ export default function SlateFieldPnL({ city }: { city: string }) {
                 <Th left>Field</Th>
                 <Th>Matches</Th>
                 <Th right>Revenue / match<span className="block text-[9px] font-semibold normal-case tracking-normal" style={{ color: C.muted }}>gross, before Stripe fees</span></Th>
-                <Th right>Field cost / match</Th>
+                <Th right title={FIELD_COST_TIP}>Field cost / match</Th>
                 <Th right>Net / match</Th>
               </tr>
             </thead>
             <tbody>
-              {agg.flat.length > 0 && <GroupHead label="Flat per-match rate" note="ranked by net per match" />}
-              {agg.flat.map((g, i) => <FieldRows key={g.key} g={g} rank={i + 1} open={open === g.key} onToggle={() => setOpen(open === g.key ? null : g.key)} />)}
-              {agg.share.length > 0 && <GroupHead label="Profit share" note="billing is a share of revenue, not a fixed per-match number, so these cannot be ranked against flat-rate fields" />}
-              {agg.share.map((g) => <FieldRows key={g.key} g={g} open={open === g.key} onToggle={() => setOpen(open === g.key ? null : g.key)} />)}
+              {agg.ranked.length > 0 && <GroupHead label="Ranked by net per match" note="profit share costs are computed per match from the partner's terms" />}
+              {agg.ranked.map((g, i) => <FieldRows key={g.key} g={g} rank={i + 1} open={open === g.key} onToggle={() => setOpen(open === g.key ? null : g.key)} />)}
+              {agg.model.length > 0 && <GroupHead label="No computed cost" note="the cost model cannot be split by match, so these are not ranked" />}
+              {agg.model.map((g) => <FieldRows key={g.key} g={g} open={open === g.key} onToggle={() => setOpen(open === g.key ? null : g.key)} />)}
               {agg.unmapped.length > 0 && <GroupHead label="Unmapped" note={`no usable venue cost — field 1552 (no fin_venue_fields link) plus links pointing at deactivated venues`} />}
               {agg.unmapped.length > 0 && (
                 <tr><td className="l" style={{ padding: "12px 0 12px 10px", textAlign: "left", fontWeight: 600, color: C.muted, borderBottom: `1px solid ${C.hair}` }}>{unmappedCount} {unmappedCount === 1 ? "field" : "fields"} with no venue mapping{agg.unmapped.some((g) => g.unmappedNames.length) ? ` (${agg.unmapped.flatMap((g) => g.unmappedNames).join(", ")})` : ""}</td>
@@ -264,10 +159,10 @@ function PhoneGroup({ label, note }: { label: string; note: string }) {
 }
 
 function PhoneCard({ g, rank }: { g: FieldAgg; rank?: number }) {
-  /* A PROFIT-SHARE FIELD SAYS "SHARE", NOT A NUMBER. It has no per-match cost, and printing $0
-     there asserts that the field was free — which is the opposite of what a share deal means. */
-  const cost = g.bucket === "share" ? "Share" : g.costPM == null ? "—" : money(g.costPM);
-  const net = g.bucket === "share" ? "Not ranked" : g.netPM == null ? "—" : money(g.netPM);
+  /* A FIELD WITH NO COMPUTED COST SAYS ITS MODEL, NOT A NUMBER. Printing $0 there would assert the
+     field was free. A profit-share field with a computed cost shows it, tagged. */
+  const cost = g.costPM == null ? (g.bucket === "model" ? g.costLabel : "—") : <>{money(g.costPM)}<CostTags g={g} /></>;
+  const net = g.netPM == null ? (g.bucket === "model" ? "Not ranked" : "—") : money(g.netPM);
   return (
     <div data-testid="fp-card" data-bucket={g.bucket} className="rounded-[11px] border px-3 py-2.5"
       style={{ borderColor: C.line, background: "#fff" }}>
@@ -300,8 +195,8 @@ function Fig({ label, v }: { label: string; v: React.ReactNode }) {
 }
 
 const mut: React.CSSProperties = { padding: "12px 0", textAlign: "right", color: C.nsInk, fontWeight: 600, borderBottom: `1px solid ${C.hair}` };
-function Th({ children, right, left }: { children: React.ReactNode; right?: boolean; left?: boolean }) {
-  return <th className={`border-b px-0 pb-2.5 align-bottom text-[11px] font-bold uppercase tracking-[0.6px] ${right ? "text-right" : left ? "pl-2.5 text-left" : "text-right"}`} style={{ color: C.muted, borderColor: C.line }}>{children}</th>;
+function Th({ children, right, left, title }: { children: React.ReactNode; right?: boolean; left?: boolean; title?: string }) {
+  return <th title={title} className={`border-b px-0 pb-2.5 align-bottom text-[11px] font-bold uppercase tracking-[0.6px] ${right ? "text-right" : left ? "pl-2.5 text-left" : "text-right"}`} style={{ color: C.muted, borderColor: C.line }}>{children}</th>;
 }
 function GroupHead({ label, note }: { label: string; note: string }) {
   return <tr><td colSpan={5} className="px-2.5 py-[7px] text-[11px] font-bold uppercase tracking-[0.7px]" style={{ background: C.hair, color: C.nsInk }}>{label}<span className="ml-2 font-semibold normal-case tracking-normal" style={{ color: C.muted }}>{note}</span></td></tr>;
@@ -309,12 +204,12 @@ function GroupHead({ label, note }: { label: string; note: string }) {
 
 function FieldRows({ g, rank, open, onToggle }: { g: FieldAgg; rank?: number; open: boolean; onToggle: () => void }) {
   const td: React.CSSProperties = { padding: "12px 0", fontSize: 14, fontWeight: 700, textAlign: "right", color: C.ink, borderBottom: `1px solid ${C.hair}`, cursor: "pointer" };
-  const costCell = g.bucket === "flat" && g.costPM != null ? <span style={{ color: C.ink }}>{money(g.costPM)}</span>
-    : g.bucket === "share" ? <span style={{ color: C.goldInk, fontWeight: 700 }}>Profit share</span>
+  const costCell = g.costPM != null ? <span style={{ color: C.ink }}>{money(g.costPM)}<CostTags g={g} /></span>
+    : g.bucket === "model" ? <span style={{ color: C.goldInk, fontWeight: 700 }}>{g.costLabel}</span>
       : <span style={{ color: C.nsInk }}>—</span>;
-  const netCell = g.bucket === "flat" && g.netPM != null
+  const netCell = g.netPM != null
     ? <span style={{ fontWeight: 800, fontSize: 15, color: g.netPM < 0 ? C.loss : C.ok }}>{money(g.netPM)}</span>
-    : g.bucket === "share" ? <span style={{ color: C.nsInk }}>Not ranked</span> : <span style={{ color: C.nsInk }}>—</span>;
+    : g.bucket === "model" ? <span style={{ color: C.nsInk }}>Not ranked</span> : <span style={{ color: C.nsInk }}>—</span>;
   return (
     <>
       <tr onClick={onToggle} className="hover:bg-[#f9fbfa]">
@@ -322,7 +217,7 @@ function FieldRows({ g, rank, open, onToggle }: { g: FieldAgg; rank?: number; op
           {rank != null && <span className="mr-[9px] inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-extrabold" style={{ background: C.chipBg, border: `1px solid ${C.chipLine}`, color: C.nsInk }}>{rank}</span>}
           <span className="text-[14px] font-extrabold" style={{ color: C.ink }}>{g.label}</span>
           <span className="ml-2 text-[11.5px] font-semibold" style={{ color: C.muted }}>{g.fullName}</span>
-          {g.bucket === "flat" && <span className="ml-2 text-[10px]" style={{ color: C.muted }}>{open ? "▾" : "▸"}</span>}
+          {g.netPM != null && <span className="ml-2 text-[10px]" style={{ color: C.muted }}>{open ? "▾" : "▸"}</span>}
         </td>
         {/* A two-pitch match counts as the two slots it took, and the cell says so rather than
             leaving a reader to wonder why the total exceeds the nights played. */}
@@ -338,7 +233,7 @@ function FieldRows({ g, rank, open, onToggle }: { g: FieldAgg; rank?: number; op
         <td style={td}>{costCell}</td>
         <td style={{ ...td, paddingRight: 10 }}>{netCell}</td>
       </tr>
-      {open && g.bucket === "flat" && (
+      {open && g.netPM != null && (
         <tr><td colSpan={5} style={{ background: C.colBg, padding: 0, borderBottom: `1px solid ${C.line}` }}><Drill g={g} /></td></tr>
       )}
     </>
@@ -395,5 +290,19 @@ function Drill({ g }: { g: FieldAgg }) {
         )}
       </p>
     </div>
+  );
+}
+
+/** The field cost header's tooltip — the same sentence as Finance › Revenue's. */
+const FIELD_COST_TIP = "The field's cost per match. For profit share it is computed from the partner's terms and can differ from the billed amount on Field Costs.";
+
+/* THE TAG ON A PROFIT-SHARE COST: it is a computed share, not a rate — and, while the month whose
+ * member rate it uses is open, provisional. */
+function CostTags({ g }: { g: FieldAgg }) {
+  if (g.bucket !== "share") return null;
+  return (
+    <span className="block text-[10.5px] font-semibold" style={{ color: C.goldInk }} data-testid="fp-share-tag">
+      Profit share{g.provisional ? ` · ${provisionalNote(g.provisionalMonths)}` : ""}
+    </span>
   );
 }

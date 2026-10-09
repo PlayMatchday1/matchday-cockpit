@@ -14,6 +14,9 @@ import {
   isSoccerCentralTwoPitchField, isTwoPitchCapacity, isSoccerCentralTwoPitch, matchUnits, survivesEventDrop,
 } from "../src/lib/soccerCentralTwoPitch";
 import { readFileSync } from "node:fs";
+import { aggregateFieldPnL, type ShareCosts } from "../src/lib/fieldPnL";
+import type { MatchPnLRow } from "../src/lib/matchPnL";
+import type { FinVenue } from "../src/lib/useFinanceData";
 
 let pass = 0, fail = 0;
 const ok = (n: string) => { pass++; console.log(`  ok  ${n}`); };
@@ -112,7 +115,10 @@ console.log("\nthe event drop");
 console.log("\none line for Soccer Central");
 {
   const v = readFileSync("src/components/SlateFieldPnL.tsx", "utf8");
-  const code = v.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\{\/\*[\s\S]*?\*\/\}/g, " ").replace(/^\s*\/\/.*$/gm, " ");
+  /* ITEMISED (2026-10-08) — PATH EDIT ONLY. The grouping moved out of SlateFieldPnL.tsx into
+   * src/lib/fieldPnL.ts (shared with Finance › Revenue). The five pairing assertions below read that
+   * file now; their bodies are unchanged. The two testid checks still read the view (`v`). */
+  const code = readFileSync("src/lib/fieldPnL.ts", "utf8").replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\{\/\*[\s\S]*?\*\/\}/g, " ").replace(/^\s*\/\/.*$/gm, " ");
   is("venues 11 and 53 share one group key", /isSocc \? `v:\$\{SOCC_BASE\}`/.test(code), true);
   is("…named for the base venue, never 'Soccer Central Tournament'", /venueById\.get\(SOCC_BASE\)\?\.venue_name/.test(code), true);
   is("the two ids are named constants, not literals in a condition", /const SOCC_BASE = 11, SOCC_TOURNEY = 53/.test(code), true);
@@ -152,6 +158,33 @@ console.log("\nmatch-count parity: Slate Review and Field Cost");
   is("control — the pattern finds the import in the view", /isSoccerCentralTwoPitch/.test(fc), true);
   // Cancelled matches are counted exactly where they are charged, never more widely.
   is("a cancelled match counts only when the venue charges for it", /v\?\.charge_on_cancel\) add\(s\)/.test(code), true);
+}
+
+// ── 8. THE MERGE WORKS WHEN THE TOURNAMENT ROW IS INACTIVE (Ryan, 2026-10-08) ───────────────────
+/* A RUNTIME CHECK, not a source one: aggregateFieldPnL is pure, so the bug is reproduced with rows.
+ * fin_venues 53 is is_active=false in production, and the grouping used to test is_active BEFORE it
+ * merged, so every two-pitch match fell into Unmapped and Soccer Central read 16 matches, not 108. */
+console.log("\nthe two-pitch match joins Soccer Central even with venue 53 inactive");
+{
+  const venue = (id: number, name: string, active: boolean) =>
+    ({ id, venue_name: name, raw_venue_name: name, city: "San Antonio", billing_type: "per_match", is_active: active }) as unknown as FinVenue;
+  const venues = new Map([[11, venue(11, "Soccer Central", true)], [53, venue(53, "Soccer Central Tournament", false)],
+    [99, venue(99, "Somewhere Closed", false)]]);
+  const row = (venueId: number, start: string, cost: number, units: number) => ({
+    venueId, venueRawName: venues.get(venueId)!.raw_venue_name, city: "San Antonio", matchStartIso: start, isEvent: false,
+    matchUnits: units, fieldCost: cost, grossRevenue: 100, allocatedMemberRev: 0, promoRevenue: 0, promoSpots: 0,
+  }) as unknown as MatchPnLRow;
+  const share: ShareCosts = { byMatch: new Map(), extraByVenue: new Map(), modelOnly: new Map(), termsByVenue: new Map() };
+  const out = aggregateFieldPnL([row(11, "2026-09-08T19:00", 90, 1), row(53, "2026-09-09T19:00", 180, 2),
+    row(99, "2026-09-10T19:00", 70, 1)], venues, share);
+  const sc = out.find((g) => g.key === "v:11");
+  is("one Soccer Central line", out.filter((g) => g.fullName === "Soccer Central" || g.fullName === "Soccer Central Tournament").length, 1);
+  is("…which is a flat-rate line, not Unmapped", sc?.bucket, "flat");
+  is("…counting the two-pitch match as two", [sc?.matches, sc?.onePitchMatches, sc?.twoPitchMatches], [3, 1, 1]);
+  is("…and costing it once at $180", [sc?.cost, sc?.twoPitchCost], [270, 180]);
+  is("…so cost per match is $90", sc?.costPM, 90);
+  // CONTROL: an inactive venue that is NOT Soccer Central is still Unmapped — the test is not vacuous.
+  is("control — another inactive venue is still Unmapped", out.find((g) => g.venueIds.includes(99))?.bucket, "unmapped");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

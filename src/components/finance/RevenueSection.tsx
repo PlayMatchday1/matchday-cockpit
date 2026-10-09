@@ -45,7 +45,9 @@ import { downloadCsv } from "@/components/growth/format";
 import MatchView from "./MatchView";
 import DailyRevenuePace from "./DailyRevenuePace";
 import RevenueTop, { monthKeyOf, monthLabelOf, totalsByMonth, ymdOf } from "./RevenueTop";
-import RevenueNetTable from "./RevenueNetTable";
+import RevenueNetTable, { type PnLCell } from "./RevenueNetTable";
+import { useFieldPnL } from "@/lib/useFieldPnL";
+import { rollupFields, type FieldAgg, type PnLRollup } from "@/lib/fieldPnL";
 import { InfoI, RV2_CSS } from "./RevenueInfo";
 import s from "./financeSection.module.css";
 
@@ -194,6 +196,44 @@ export default function RevenueSection() {
     : periodFieldRows.filter((r) => canonCity(r.city) === canonCity(g.label)).reduce((a, r) => a + r.matches, 0), [periodFieldRows]);
   const fieldMatches = useCallback((g: GroupRow) => g.venueId == null ? null
     : periodFieldRows.filter((r) => r.venueIds.includes(g.venueId!)).reduce((a, r) => a + r.matches, 0), [periodFieldRows]);
+  // VENUES: the city's fields with a kicked-off match in the period — the same rows as Matches.
+  const cityVenues = useCallback((g: GroupRow) => g.label === UNASSIGNED ? null
+    : new Set(periodFieldRows.filter((r) => canonCity(r.city) === canonCity(g.label) && r.matches > 0).map((r) => r.key)).size, [periodFieldRows]);
+
+  /* ── THE LAST 4 COMPLETED WEEKS — Slate Review's Match P&L by field (src/lib/fieldPnL.ts) ───────
+   * Always that window, whatever the month picker says. A field row is the field's Slate line,
+   * found through the venue ids on it (a field's legs, from the roster rows); a city row is
+   * match-weighted across the city's fields that have a cost. */
+  const fp = useFieldPnL(4);
+  const cellOfRollup = (r: PnLRollup): PnLCell => ({
+    matches: r.matches, revPM: r.revPM, costPM: r.costPM, netPM: r.netPM,
+    coverage: r.covered < r.matches ? `${r.covered.toLocaleString("en-US")} of ${r.matches.toLocaleString("en-US")} matches` : null,
+    costText: null, profitShare: false, provisionalMonths: r.provisionalMonths,
+  });
+  const cellOfField = (f: FieldAgg): PnLCell => ({
+    matches: f.matches, revPM: f.revPM, costPM: f.costPM, netPM: f.netPM, coverage: null,
+    costText: f.bucket === "model" ? f.costLabel : f.bucket === "unmapped" ? "No venue cost" : null,
+    profitShare: f.bucket === "share", provisionalMonths: f.provisionalMonths,
+  });
+  const fieldAggOf = useCallback((g: GroupRow): FieldAgg | null => {
+    if (!fp.fields || g.venueId == null) return null;
+    const legs = new Set<number>([g.venueId]);
+    for (const r of periodFieldRows) if (r.venueIds.includes(g.venueId)) for (const id of r.venueIds) legs.add(id);
+    return fp.fields.find((f) => f.bucket !== "unmapped" && f.venueIds.some((id) => legs.has(id))) ?? null;
+  }, [fp.fields, periodFieldRows]);
+  const cityFields = useCallback((label: string) =>
+    (fp.fields ?? []).filter((f) => canonCity(f.city) === canonCity(label)), [fp.fields]);
+  const pnlFor = (gr: "city" | "field") => ({
+    label: fp.win.label, loading: !fp.fields && !fp.error, error: fp.error,
+    of: (g: GroupRow) => {
+      if (gr === "city") return fp.fields ? cellOfRollup(rollupFields(cityFields(g.label))) : null;
+      const f = fieldAggOf(g);
+      return f ? cellOfField(f) : null;
+    },
+    total: !fp.fields ? null : cellOfRollup(rollupFields(
+      gr === "field" && cityFilter !== "all" ? cityFields(cityFilter) : fp.fields)),
+  });
+
   // fin_venues.launch_date: the earliest among the field's venue rows.
   const launchOf = useCallback((g: GroupRow): string | null => {
     if (g.venueId == null) return null;
@@ -260,17 +300,30 @@ export default function RevenueSection() {
       ]);
       return;
     }
-    // THE TABLE ON SCREEN, cell for cell: the same GroupRows, in dollars to the cent.
+    // THE TABLE ON SCREEN, cell for cell: the same GroupRows, in dollars to the cent, and the same
+    // 4-week cells, with the window in their headers.
     const d = (c: number) => (c / 100).toFixed(2);
     const groups = grain === "city" ? cityGroups : fieldGroups;
     const total = groups.reduce((a, g) => a + g.net, 0);
+    const city = grain === "city";
+    const p = pnlFor(grain);
+    const w = `last 4 completed weeks ${fp.win.label}`;
+    const n2 = (v: number | null) => (v == null ? "" : v.toFixed(2));
     downloadCsv(`matchday-revenue-${grain}-${period.key}.csv`, [
-      [grain === "city" ? "City" : "Field", ...(grain === "field" ? ["City", "Launched"] : []), "Period", "Matches",
-        "DPP (net)", "Membership (net)", "Other (net)", "Refunds and disputes (net)", "Net revenue", "Share"],
+      [city ? "City" : "Field", ...(city ? ["Venues"] : ["City", "Launched"]), "Period", "Matches (kicked off)",
+        "DPP (before refunds)", "Membership (before refunds)", "Net revenue", ...(city ? ["Avg revenue / venue"] : []), "Member mix", "Share",
+        `Matches (${w})`, `Revenue / match (${w}, play revenue before tax, refunds and Stripe fees)`, `Field cost / match (${w})`,
+        `Net / match (${w})`, `Cost note (${w})`],
       ...groups.map((g) => {
-        const m = grain === "city" ? cityMatches(g) : fieldMatches(g);
-        return [g.label, ...(grain === "field" ? [g.city ?? "", launchOf(g) ?? ""] : []), period.label, m ?? "",
-          d(g.dpp), d(g.membership), d(g.other), d(g.reversals), d(g.net), total ? `${((g.net / total) * 100).toFixed(1)}%` : ""];
+        const m = city ? cityMatches(g) : fieldMatches(g);
+        const v = city ? cityVenues(g) : null;
+        const c = g.label === UNASSIGNED ? null : p.of(g);
+        const note = !c ? "" : [c.costText, c.profitShare ? "Profit share" : null, c.coverage ? `averages cover ${c.coverage}` : null,
+          c.provisionalMonths.length ? `provisional until ${c.provisionalMonths.join(" and ")} closes` : null].filter(Boolean).join("; ");
+        return [g.label, ...(city ? [v ?? ""] : [g.city ?? "", launchOf(g) ?? ""]), period.label, m ?? "",
+          d(g.dpp), d(g.membership), d(g.net), ...(city ? [v ? d(Math.round(g.net / v)) : ""] : []),
+          g.net > 0 ? `${((g.membership / g.net) * 100).toFixed(1)}%` : "", total ? `${((g.net / total) * 100).toFixed(1)}%` : "",
+          c ? c.matches : "", n2(c?.revPM ?? null), n2(c?.costPM ?? null), n2(c?.netPM ?? null), note];
       }),
     ]);
   }
@@ -446,9 +499,9 @@ export default function RevenueSection() {
         ) : !periodRows ? (
           <div className={s.empty}>Loading…</div>
         ) : grain === "city" ? (
-          <RevenueNetTable grain="city" groups={cityGroups} matchesOf={cityMatches} />
+          <RevenueNetTable grain="city" groups={cityGroups} matchesOf={cityMatches} venuesOf={cityVenues} pnl={pnlFor("city")} />
         ) : (
-          <RevenueNetTable grain="field" groups={fieldGroups} matchesOf={fieldMatches} launchOf={launchOf} />
+          <RevenueNetTable grain="field" groups={fieldGroups} matchesOf={fieldMatches} launchOf={launchOf} pnl={pnlFor("field")} />
         )}
       </div>
     </div>
