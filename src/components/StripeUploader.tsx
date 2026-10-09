@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { isSyncAdvisory } from "@/lib/syncAdvisory";
+import type { RecentPass } from "@/lib/playerAreaSyncStatus";
 
 // Stripe data section. Two blocks:
 //   1. Sync from Stripe API (button + status)
@@ -304,10 +305,33 @@ function RecentSyncsCard() {
       )
       .order("started_at", { ascending: false })
       .limit(10);
+    /* THE PLAYER-LOCATIONS PASSES TOO (2026-10-08). They log to player_area_sync_runs, a server-only
+     * table, so they come through the status route and are merged here by start time — a stopped
+     * pass shows red beside the other syncs. A failed read of them is said, never shown as none. */
+    let passes: SyncLogRow[] = [];
+    let passErr: string | null = null;
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token;
+      const res = await fetch("/api/sync/player-areas/status", { cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
+      passes = ((body.recent ?? []) as RecentPass[]).map((p) => ({
+        id: `player-areas-${p.runId}`, source: "player-areas", triggered_by: p.triggeredBy as "manual" | "cron",
+        started_at: p.startedAt, completed_at: p.live ? null : p.finishedAt ?? p.startedAt,
+        rows_imported: p.ok ? p.rowsInserted + p.rowsUpdated : null, rows_replaced: null,
+        charges_fetched: null, charges_succeeded: null, charges_skipped: null,
+        error_message: p.live || p.ok ? null : (p.error ?? (p.finishedAt ? "stopped" : "did not finish")),
+      }));
+    } catch (e) {
+      passErr = `player locations: ${e instanceof Error ? e.message : String(e)}`;
+    }
     if (qErr) {
       setError(qErr.message);
     } else {
-      setRows((data ?? []) as SyncLogRow[]);
+      setRows([...((data ?? []) as SyncLogRow[]), ...passes]
+        .sort((a, b) => b.started_at.localeCompare(a.started_at)).slice(0, 10));
+      if (passErr) setError(passErr);
     }
     setLoading(false);
   }
@@ -327,7 +351,7 @@ function RecentSyncsCard() {
         <div>
           <h3 className="text-base font-bold text-deep-green">Recent syncs</h3>
           <p className="mt-1 text-xs text-deep-green/65">
-            Last 10 attempts (manual + cron). Click an error row to expand.
+            Last 10 attempts (manual + cron), including player locations. Click an error row to expand.
           </p>
         </div>
         <button
@@ -452,7 +476,7 @@ function FragmentRow({
             </span>
           )}
         </td>
-        <td className="px-3 py-2 text-deep-green/65">{r.triggered_by}</td>
+        <td className="px-3 py-2 text-deep-green/65">{r.source === "player-areas" ? "player locations" : r.source} · {r.triggered_by}</td>
       </tr>
       {isExpandable && isOpen && r.error_message && (
         <tr className={isAdvisory ? "bg-gold-soft/40" : "bg-coral-soft/30"}>

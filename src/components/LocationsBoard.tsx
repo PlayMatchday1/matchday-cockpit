@@ -21,12 +21,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import LocationsMapTab from "@/components/LocationsMapTab";
-import LocationsSyncNow from "@/components/LocationsSyncNow";
 import LocationsPlayerDetail from "@/components/LocationsPlayerDetail";
 import LocationsOpenNext from "@/components/LocationsOpenNext";
 import { Fragment } from "react";
 import { supabase } from "@/lib/supabase";
 import RefreshIcon from "@/components/RefreshIcon";
+import Link from "next/link";
+import { useAuth } from "@/lib/useAuth";
 import { downloadCsv } from "@/components/growth/format";
 import { placeName } from "@/lib/playerAreaModel";
 import { type LocationsReport, type ZipRow, type DayPoint } from "@/lib/locationsReport";
@@ -50,6 +51,7 @@ const VERDICT_FILTERS: { key: VerdictFilter; label: string }[] = [
 ];
 
 export default function LocationsBoard() {
+  const { appUser } = useAuth();
   const [data, setData] = useState<LocationsReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -168,7 +170,11 @@ export default function LocationsBoard() {
                   : `Data as of ${fmtWhen(asOf)}${stale ? ` (${staleMins >= 120 ? `${Math.floor(staleMins / 60)} hours` : `${staleMins} minutes`} ago)` : ""}${lastFailed ? ". Last sync failed." : ""}`}
               </span>
             </span>
-            <LocationsSyncNow onFinished={reloadAll} />
+            {/* NO SYNC FROM HERE (2026-10-08). Sync now lives on the Data page, with the other syncs;
+                admins get a link to it. */}
+            {appUser?.is_admin && (
+              <Link href="/data#player-locations" className="loc-settings" data-testid="loc-sync-settings">Sync settings</Link>
+            )}
           </div>
         </div>
         <div className="loc-tabs" role="tablist" aria-label="View">
@@ -504,6 +510,7 @@ const CSS = `
 .loc-refresh:hover:not(:disabled){background:var(--slot)}
 .loc-refresh:disabled{opacity:.6;cursor:default}
 .loc-stamp{font-size:12px;color:#3D5349}
+.loc-settings{font-size:12px;font-weight:700;color:#0d3b2e;text-decoration:underline;text-underline-offset:2px;white-space:nowrap}
 .loc-stamp-stale{color:#7C8A83}
 .loc-stamp-failed{color:#A8391A;font-weight:600}
 .loc-warn{padding:10px 20px;font-size:12.5px;color:#A8391A;background:#FFF4F0;border-top:1px solid var(--line)}

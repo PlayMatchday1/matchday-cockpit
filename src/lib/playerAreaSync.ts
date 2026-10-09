@@ -162,8 +162,9 @@ async function finishPass(sb: SupabaseClient, runId: number, f: {
 }): Promise<void> {
   await sb.from("player_area_sync_runs").update({
     ...(f.extra ?? {}), finished_at: new Date().toISOString(), ok: f.ok, stop_reason: f.stopReason,
-    complete: f.stopReason === "complete", error: f.error ?? null, next_page: null,
+    complete: f.stopReason === "complete", error: f.error ?? null,
   }).eq("id", runId);
+  // next_page is KEPT on a finished pass: pages read = next_page − 1, which the sync history shows.
   // The pass's seen-set has done its job (or can no longer be used): drop it.
   await sb.from("player_area_pass_seen").delete().eq("run_id", runId);
 }

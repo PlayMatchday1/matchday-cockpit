@@ -4,6 +4,7 @@ import PageHeader from "@/components/PageHeader";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import StripeUploader from "@/components/StripeUploader";
 import SyncCard from "@/components/SyncCard";
+import PlayerAreasSyncCard from "@/components/PlayerAreasSyncCard";
 import { canAccess, useAuth } from "@/lib/useAuth";
 
 export default function DataPage() {
@@ -156,6 +157,15 @@ export default function DataPage() {
             estimatedDuration="~6 seconds"
           />
         </div>
+      </section>
+
+      {/* 6b. Player locations (growth — ungated). Moved here from the Locations page, 2026-10-08. */}
+      <section className="mb-12">
+        <SectionHeader
+          title="Player locations"
+          subtitle="Home areas players have shared in the app, for Growth › Locations."
+        />
+        <PlayerAreasSyncCard />
       </section>
 
       {/* 7a. Membership prices (finance-domain) */}

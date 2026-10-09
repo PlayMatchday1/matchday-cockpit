@@ -17,7 +17,7 @@
 // It never writes MatchDay — reads only — so there is no host guard or change_log entry to make.
 //
 // Auth: CRON_SECRET for the schedule and for hand-ons (GET or POST). A MANUAL pass — Sync now — is
-// POST only, behind the Growth gate AND admin only, refused in the evening block, while a pass is in
+// POST only, from the Data page: behind the Tech gate AND admin only, refused in the evening block, while a pass is in
 // progress, and for 30 minutes after the last pass started (playerAreaSyncStatus.ts). No retry
 // anywhere: a failed pass is recorded and shown, and the next one is a person's or the cron's call.
 
@@ -45,7 +45,7 @@ async function legAndHandOn(sb: SupabaseClient, runId: number, origin: string, s
   if (!leg.more) return;
   const fail = async (why: string) => {
     await sb.from("player_area_sync_runs").update({
-      finished_at: new Date().toISOString(), ok: false, stop_reason: "error", next_page: null,
+      finished_at: new Date().toISOString(), ok: false, stop_reason: "error",
       error: `stopped: the hand-on to the next leg failed (${why})`,
     }).eq("id", runId).is("finished_at", null);
     await sb.from("player_area_pass_seen").delete().eq("run_id", runId);
@@ -90,7 +90,8 @@ export async function POST(req: Request) {
 
   if (!isCron) {
     if (req.method !== "POST") return Response.json({ error: "A manual sync is POST only." }, { status: 405 });
-    const auth = await authenticateCapability(req, "growth");
+    // The Data page's gate (Sync now lives there since 2026-10-08), THEN admin.
+    const auth = await authenticateCapability(req, "tech");
     if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
     if (!auth.isAdmin) return Response.json({ error: "Only admins can start a sync." }, { status: 403 });
   }
