@@ -109,6 +109,18 @@ export default function CompetitorsView() {
   }, []);
   useEffect(() => { void load(); }, [load]);
 
+  /* ?open=<supply id> — the Locations map's competitor card links here: that facility's row opens and
+   * scrolls into view, once the data has loaded. */
+  const [deepLinked, setDeepLinked] = useState(false);
+  useEffect(() => {
+    if (!data || deepLinked) return;
+    setDeepLinked(true);
+    const id = new URLSearchParams(window.location.search).get("open");
+    if (!id || !/^\d+$/.test(id)) return;
+    setOpen((prev) => new Set(prev).add(`s-${id}`));
+    setTimeout(() => document.querySelector(`[data-sid="${id}"]`)?.scrollIntoView({ block: "center" }), 50);
+  }, [data, deepLinked]);
+
   const acceptLink = useCallback(async (supplyId: number, venueId: number | null, notOurs = false) => {
     const { data: sess } = await supabase.auth.getSession();
     const token = sess.session?.access_token;
@@ -437,7 +449,7 @@ function FacilityRow({ r, maxSpots, ourFloor, fmts, matches, isOpen, onToggle, o
   }, [matches]);
 
   return (
-    <div className="fwrap" data-testid="wrap" data-fac={r.facility}>
+    <div className="fwrap" data-testid="wrap" data-fac={r.facility} data-sid={r.supplyId ?? undefined}>
       <button type="button" className={`frow${r.isOurs ? " ours" : ""}`} data-testid="row"
         data-fac={r.facility} data-src={r.isOurs ? "us" : r.source} aria-expanded={isOpen} onClick={onToggle}>
         <div className="fname">

@@ -6951,3 +6951,22 @@ Evidence: a read-only full walk of prod `GET /admin/players` (`sortColumn=create
   $1.00 spots (`registration_price` 100), no credit, no promo; the second spot is a GUEST row at 0
   created 11 ms after the host row. Any rule that drops `@playmatchday.com` as "staff" also drops
   deleted players (the Locations page's exclusion does).
+
+## Competitor venues on the Locations map (0220 applied 2026-10-09)
+
+- **Tables:** `competitor_venues` (one place, address, lat/lng) and `competitor_venue_listings` (one Plei
+  or GoodRec listing, keyed `(source, city_label, facility)` like `competitor_facility_rulings`). Seeded
+  from `data/competitor-locations.csv`: 52 rows → **45 venues, 54 listings, 40 with coordinates**
+  (counted on prod after Ryan applied 0220). Merge rule: same market and identical coordinates; rows
+  the CSV only calls "probably" the same venue were not merged.
+- **All 54 listings match a `competitor_facility_supply` row exactly**; spots, price and formats are read
+  from the capture, never stored here. The 5 captured facilities with no CSV row are exactly the ones
+  ruled ours (Pac Global, Crossbar Rowlett) or proposed as ours (Katy Intl, Turf On, ATH Katy).
+- **On the map: 39** (21 Dallas / Fort Worth, 18 Houston), from `GET /api/growth/locations/competitors`.
+  Off the map, 11: 5 with no coordinates, The HatTrick Patio (held back, may be our Hattrick T.), and
+  the 5 ours/proposed. "Looks like ours" is `competitorProposals()` (`src/lib/competitorProposals.ts`),
+  the same function the Competitors page calls; its payload was byte-identical to production after
+  the move.
+- **Player contact for Locations export:** `mdapi_users` holds email, phone, names and `is_member`.
+  On 2026-10-09 the 58 placed non-internal players all had an email; 57 phones were `+1` + 10 digits
+  and 1 was `+` + 11 digits, i.e. already E.164.

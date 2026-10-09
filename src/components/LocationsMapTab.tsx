@@ -16,6 +16,8 @@ import { MARKS_CSS, bubbleHtml, cityTagHtml, pinHtml } from "@/components/locati
 import LocationsWherePlay from "@/components/LocationsWherePlay";
 import LocationsPlayersPanel from "@/components/LocationsPlayersPanel";
 import type { AreaPlayer } from "@/lib/areaPlayers";
+import LocationsCompetitorCard from "@/components/LocationsCompetitorCard";
+import { COMP_CSS, SOURCE_FILL, SOURCE_NAME, compHtml, type CompetitorPayload, type CompetitorVenue } from "@/lib/competitorVenues";
 import { ACTIVITIES, ACTIVITY_FILL, ACTIVITY_INK, ACTIVITY_LABEL, ACTIVITY_SHORT, type Activity, type BubblePlays, type PlayField } from "@/lib/wherePlayed";
 
 // Legend samples: the SAME HTML the map draws (locationsMarks), shrunk — so the legend cannot drift
@@ -82,6 +84,46 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
   }, []);
   useEffect(() => { void load(); }, [load, reloadKey]);
 
+  /* COMPETITORS (Ryan, 2026-10-09): venues from competitor_venues, what they sell from the
+   * Competitors page's capture. Read for anyone with Growth; "Show competitors" is off by default. */
+  const [comp, setComp] = useState<CompetitorPayload | null>(null);
+  const [compErr, setCompErr] = useState<string | null>(null);
+  const [showComp, setShowComp] = useState(false);
+  const [selComp, setSelComp] = useState<number | null>(null);
+  const [moving, setMoving] = useState<number | null>(null);
+  const [compMsg, setCompMsg] = useState<{ text: string; bad: boolean } | null>(null);
+  const loadComp = useCallback(async () => {
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token;
+      const res = await fetch("/api/growth/locations/competitors", { cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
+      setComp(body as CompetitorPayload); setCompErr(null);
+    } catch (e) { setCompErr(e instanceof Error ? e.message : String(e)); }
+  }, []);
+  useEffect(() => { void loadComp(); }, [loadComp, reloadKey]);
+  /* An admin's correction: ONLY the changed fields go in the body; the outcome comes from the read-back. */
+  const saveComp = useCallback(async (id: number, set: Record<string, string | number | null>) => {
+    setCompMsg(null);
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token;
+      const res = await fetch("/api/growth/locations/competitors", {
+        method: "PATCH", headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ id, set }),
+      });
+      const body = await res.json().catch(() => ({}));
+      const outcome = String(body?.outcome ?? `HTTP ${res.status}`);
+      setCompMsg({ text: outcome === "LANDED" ? "Saved." : `${outcome}${body?.error ? `: ${body.error}` : ""}`, bad: outcome !== "LANDED" });
+      await loadComp();
+      return outcome === "LANDED";
+    } catch (e) {
+      setCompMsg({ text: `UNKNOWN: ${e instanceof Error ? e.message : String(e)}. Reload before trying again.`, bad: true });
+      return false;
+    }
+  }, [loadComp]);
+
   /* PLAYERS IN THIS AREA — admin only, fetched only for an admin. One request for every placed
    * player; the selection below picks who is shown, so clicking around never refetches. */
   const [people, setPeople] = useState<AreaPlayer[] | null>(null);
@@ -105,7 +147,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
   }, [isAdmin, reloadKey]);
 
   // A new city starts with nothing selected; so does a new colouring (its bubbles are a different set).
-  useEffect(() => { setSelected(null); setHighlight(null); setSelNat(null); setFocus(null); }, [cityId]);
+  useEffect(() => { setSelected(null); setHighlight(null); setSelNat(null); setFocus(null); setSelComp(null); setMoving(null); setCompMsg(null); }, [cityId]);
   useEffect(() => { setSelected(null); setSelNat(null); if (colourBy === "coverage") setActFilter("all"); }, [colourBy]);
   const act = colourBy === "activity";
   const keep = useCallback((b: Activity | undefined) => !act || actFilter === "all" || b === actFilter, [act, actFilter]);
@@ -163,12 +205,24 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
     if (selNational) return { title: selNational.zip ? `Zip ${selNational.zip}` : selNational.area, rows: all.filter((p) => (act ? p.keys.natAct : p.keys.nat) === selNational.key) };
     return { title: "All cities", rows: all };
   })();
+  /* Competitor venues in view: a city shows its own market (the capture's city label is the map's city
+   * name), All cities shows every one. The checkbox names the markets that have any. */
+  const compAll = comp?.venues ?? [];
+  const compMarkets = [...new Set(compAll.map((v) => v.market))].sort();
+  const compInView: CompetitorVenue[] = !showComp ? [] : city ? compAll.filter((v) => v.market === city.name) : compAll;
+  const compOff = !showComp ? [] : (comp?.offMap ?? []).filter((o) => !city || o.market === city.name);
+  const selCompV = selComp != null ? compInView.find((v) => v.id === selComp) ?? null : null;
+  const compTitle = !comp ? (compErr ? `Couldn't load competitors: ${compErr}` : "Loading competitors…")
+    : !comp.ready ? "Competitor locations are not in the database yet (migration 0220)."
+    : compMarkets.length === 0 ? "No competitor venues have a location yet."
+    : `Competitors are mapped for ${compMarkets.join(" and ")} only: the cities with a Plei or GoodRec capture.`;
   const cityLabel = (id: number | null) => (id == null ? "—" : cityById.get(id)?.name ?? `City ${id}`);
 
   return (
     <div className="loc-card" data-testid="loc-map-tab">
       <style>{CSS}</style>
       <style>{MARKS_CSS}</style>
+      <style>{COMP_CSS}</style>
       {error && <div className="loc-warn">Couldn&apos;t refresh the map: {error}. Showing the last data loaded.</div>}
 
       <div className="loc-filter" role="group" aria-label="Map city">
@@ -241,6 +295,11 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
             </div>
           </div>
         )}
+        <label className={"lm-check lm-check-comp" + (!comp?.ready || compMarkets.length === 0 ? " lm-check-off" : "")} title={compTitle} data-testid="show-competitors-label">
+          <input type="checkbox" checked={showComp} data-testid="show-competitors" disabled={!comp?.ready || compMarkets.length === 0}
+            onChange={(e) => { setShowComp(e.target.checked); if (!e.target.checked) { setSelComp(null); setMoving(null); } }} />
+          Show competitors
+        </label>
       </div>
 
       <div className="lm-body">
@@ -248,10 +307,13 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
           <div className="lm-map" data-testid="loc-map">
             <LocationsLeaflet cities={data.cities} city={city} fields={fields} zips={zips} reach={reach}
               selected={selected} highlightFieldId={highlight}
-              onCity={(id) => onCity(id)} onSelect={(s) => { setSelected(s); setHighlight(null); }}
+              onCity={(id) => onCity(id)} onSelect={(s) => { setSelected(s); setHighlight(null); setSelComp(null); setMoving(null); }}
               national={national} nationalAll={data.national} selectedNational={selNat}
-              onSelectNational={setSelNat} focus={focus} natFilter={natFilter} showRadius={showRadius}
-              colourBy={colourBy} playedClosed={playedClosed} playedFieldIds={playedFieldIds} showReach={showReach} onBounds={setBounds} />
+              onSelectNational={(k) => { setSelNat(k); setSelComp(null); setMoving(null); }} focus={focus} natFilter={natFilter} showRadius={showRadius}
+              colourBy={colourBy} playedClosed={playedClosed} playedFieldIds={playedFieldIds} showReach={showReach} onBounds={setBounds}
+              competitors={compInView} selectedCompetitor={selComp} movableCompetitor={moving}
+              onSelectCompetitor={(id) => { setSelComp(id); setCompMsg(null); if (moving !== id) setMoving(null); }}
+              onMoveCompetitor={(id, lat, lng) => { void saveComp(id, { lat, lng }).then((ok) => { if (ok) setMoving(null); }); }} />
           </div>
           <div className="lm-legend" data-testid="map-legend">
             {act ? (
@@ -278,6 +340,14 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
                 <span><Sample html={cityTagHtml("City", null, "top")} scale={0.85} />City</span>
                 {showRadius && <span><i className="lm-ring lm-ring-line" />Coverage radius</span>}
               </>
+            )}
+            {showComp && (
+              <span data-testid="legend-competitors" className="lm-legend-comp">
+                <span><Sample html={compHtml(["plei"], 14)} scale={1} />{SOURCE_NAME.plei}</span>
+                <span><Sample html={compHtml(["goodrec"], 14)} scale={1} />{SOURCE_NAME.goodrec}</span>
+                <span><Sample html={compHtml(["plei", "goodrec"], 14)} scale={1} />Both</span>
+                <span className="lm-legend-sub">Competitor venue, sized by spots per week</span>
+              </span>
             )}
             <span className="lm-legend-note" data-testid="map-hint">
               {city ? "Tap a bubble or a field to see its details." : "Tap a city to see its players and fields."}
@@ -311,6 +381,25 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
               </div>
             );
           })()}
+          {selCompV && (
+            <LocationsCompetitorCard key={selCompV.id} venue={selCompV} canEdit={comp?.canEdit === true} moving={moving === selCompV.id}
+              msg={compMsg} onClose={() => { setSelComp(null); setMoving(null); setCompMsg(null); }}
+              onMove={(on) => { setMoving(on ? selCompV.id : null); setCompMsg(null); }}
+              onSave={(set) => saveComp(selCompV.id, set)} />
+          )}
+          {showComp && compOff.length > 0 && (
+            <div className="lm-pcard" data-testid="comp-offmap">
+              <div className="lm-ptitle">Not on the map</div>
+              <ul className="lm-off">
+                {compOff.map((o) => (
+                  <li key={`${o.market}|${o.name}|${o.sources.join("+")}`}>
+                    <b>{o.name}</b> <span className="lm-off-src">{o.sources.map((x) => SOURCE_NAME[x as "plei" | "goodrec"] ?? x).join(" + ")}{city ? "" : `, ${o.market}`}</span>
+                    <div className="lm-off-why">{o.reason}</div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {!city ? (
             <>
             {selNational && (
@@ -492,6 +581,15 @@ const CSS = `
 .lm-how-body p{margin:0 0 4px}
 .lm-check{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--forest);cursor:pointer}
 .lm-check input{accent-color:#046B45;width:15px;height:15px;margin:0}
+.lm-check-off{color:var(--muted);cursor:not-allowed}
+.lm-legend-comp{display:inline-flex;flex-wrap:wrap;gap:6px 14px;align-items:center}
+.lm-legend-comp > span{display:inline-flex;align-items:center;gap:5px}
+.lm-legend-sub{color:var(--muted)}
+.lm-off{list-style:none;margin:0;padding:0;font-size:12px}
+.lm-off li{padding:5px 0;border-bottom:1px solid #EEF2EC}
+.lm-off li:last-child{border-bottom:0}
+.lm-off-src{color:var(--muted)}
+.lm-off-why{color:var(--muted);font-size:11.5px;margin-top:2px}
 .lm-ring-line{background:transparent}
 .lm-seg-wrap{flex-wrap:wrap}
 .lm-swatch{display:inline-block;width:10px;height:10px;border-radius:50%;border:1px solid #1d2b25;margin-right:5px;vertical-align:-1px}

@@ -19,6 +19,7 @@ import { Circle, MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents 
 import type { MapCity, MapField, MapZip, NationalZip, Reach } from "@/lib/locationsMap";
 import { bubbleD, bubbleHtml, cityTagHtml, pinHtml, type Dir } from "@/components/locationsMarks";
 import { ACTIVITIES, ACTIVITY_FILL, ACTIVITY_INK, type Activity } from "@/lib/wherePlayed";
+import { compHtml, compSide, SOURCE_NAME, type CompetitorVenue } from "@/lib/competitorVenues";
 
 export const IN_REACH = "#1baf7a";
 export const GAP = "#eb6834";
@@ -221,6 +222,32 @@ function PlayedClosedPins({ fields }: { fields: PlayedClosed }) {
   );
 }
 
+/* COMPETITOR VENUES — small squares, under the player bubbles and our field pins. One is draggable only
+ * while an admin has pressed "Move pin" on its card; the drop is saved by the tab, never here. */
+function CompetitorSquares({ venues, selectedId, movableId, onSelect, onMove }: {
+  venues: CompetitorVenue[]; selectedId: number | null; movableId: number | null;
+  onSelect: (id: number) => void; onMove: (id: number, lat: number, lng: number) => void;
+}) {
+  const max = Math.max(1, ...venues.map((v) => v.spots));
+  return (
+    <>
+      {venues.map((v) => {
+        const side = compSide(v.spots, max), sel = v.id === selectedId, drag = v.id === movableId;
+        return (
+          <Marker key={`cq-${v.id}-${drag ? "d" : "s"}`} position={[v.lat, v.lng]} zIndexOffset={sel ? 800 : 300} draggable={drag}
+            icon={L.divIcon({ className: "loc-cq-wrap" + (drag ? " loc-cq-drag" : ""), html: compHtml(v.sources, side, sel), iconSize: [side, side], iconAnchor: [side / 2, side / 2], tooltipAnchor: [0, -side / 2] })}
+            eventHandlers={{
+              click: () => onSelect(v.id),
+              dragend: (e) => { const ll = (e.target as L.Marker).getLatLng(); onMove(v.id, ll.lat, ll.lng); },
+            }}>
+            <Tooltip direction="top" className="loc-tip">{v.name} · {v.sources.map((x) => SOURCE_NAME[x]).join(" + ")} · {v.spots.toLocaleString("en-US")} spots/wk</Tooltip>
+          </Marker>
+        );
+      })}
+    </>
+  );
+}
+
 function Focus({ focus }: { focus: { lat: number; lng: number; zoom: number; n: number } | null }) {
   const map = useMap();
   useEffect(() => { if (focus) map.setView([focus.lat, focus.lng], focus.zoom); }, [map, focus]);
@@ -277,11 +304,18 @@ export default function LocationsLeaflet(props: {
   playedFieldIds: Set<number>;
   /** "Show field reach": every field's ring. Off by default; a selected field shows its own ring regardless. */
   showReach: boolean;
+  /** "Show competitors": the venues to draw (already narrowed to the city), or empty when off. */
+  competitors: CompetitorVenue[];
+  selectedCompetitor: number | null;
+  movableCompetitor: number | null;
+  onSelectCompetitor: (id: number) => void;
+  onMoveCompetitor: (id: number, lat: number, lng: number) => void;
   onBounds: (b: ViewBounds) => void;
 }) {
   const { cities, city, fields, zips, reach, selected, highlightFieldId, onCity, onSelect,
     national, nationalAll, selectedNational, onSelectNational, focus, natFilter, showRadius,
-    colourBy, playedClosed, playedFieldIds, showReach, onBounds } = props;
+    colourBy, playedClosed, playedFieldIds, showReach, onBounds,
+    competitors, selectedCompetitor, movableCompetitor, onSelectCompetitor, onMoveCompetitor } = props;
   const act = colourBy === "activity";
   const [zoom, setZoom] = useState(5);
   const deep = zoom >= DEEP_ZOOM;
@@ -347,6 +381,9 @@ export default function LocationsLeaflet(props: {
       })}
 
       <PlayedClosedPins fields={playedClosed} />
+
+      <CompetitorSquares venues={competitors} selectedId={selectedCompetitor} movableId={movableCompetitor}
+        onSelect={onSelectCompetitor} onMove={onMoveCompetitor} />
 
       {city && <ClusteredBubbles items={zipItems} selectedKey={selected?.kind === "zip" ? selected.key : null}
         onSelect={(key) => onSelect({ kind: "zip", key })} />}
