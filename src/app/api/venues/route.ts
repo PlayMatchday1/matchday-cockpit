@@ -1,5 +1,7 @@
 // POST  /api/venues  { venue, fieldId }  — create a fin_venues row and link it to one mdapi field.
 // PATCH /api/venues  { id, patch }       — edit a venue's own columns.
+// PUT   /api/venues  { fieldId, venueId } — link one field to an EXISTING venue. One fin_venue_fields
+//                                          insert; the venue row is never written.
 //
 // WHY THIS EXISTS: Ryan, "I dont think you should have to go to finance page to add field, you
 // should be able to put field cost etc whatever you need for mapping here". The Fields drawer is
@@ -33,7 +35,10 @@
 // surface a PARTIAL SUCCESS rather than a lie. Here the field record itself is a third write and it
 // goes to the MatchDay API from the client, so this route owns two of the three and reports its own
 // two honestly. It never returns LANDED for a half-done job.
+import { randomUUID } from "node:crypto";
 import { authenticateCapability } from "@/lib/capabilityAuth";
+import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
+import { invalidateFieldAggregate } from "@/lib/fieldIdAdminServer";
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { apiGet } from "@/lib/matchdayStageApi";
 import { pickVenueFields as pick, emptiedRequiredField } from "@/lib/venueWriteFields";
@@ -98,14 +103,21 @@ export async function GET(req: Request) {
       };
     }
   }
-  // Field counts per venue, so the picker can say what choosing one would join.
+  // Field counts per venue, so the picker can say what choosing one would join — and the fields
+  // themselves, so "Use an existing venue" can NAME what the picked venue already covers before the
+  // link is made, the same warning a field already sharing a venue gets.
   const counts: Record<number, number> = {};
-  for (const l of all) counts[Number(l.fin_venue_id)] = (counts[Number(l.fin_venue_id)] ?? 0) + 1;
+  const members: Record<number, { fieldId: number; title: string | null }[]> = {};
+  for (const l of all) {
+    const v = Number(l.fin_venue_id);
+    counts[v] = (counts[v] ?? 0) + 1;
+    (members[v] ??= []).push({ fieldId: Number(l.mdapi_field_id), title: l.field_title_at_link ?? null });
+  }
 
   /* NO canEdit IN THE PAYLOAD. The client computes it from canAccess(appUser, "finance") to
    * disable the control; the REAL gate is POST/PATCH above refusing without the capability. Two
    * sources of truth for a permission is how one of them drifts. */
-  return Response.json({ venues: venues ?? [], current, counts },
+  return Response.json({ venues: venues ?? [], current, counts, members },
     { status: 200, headers: { "Cache-Control": "no-store" } });
 }
 
@@ -217,4 +229,122 @@ export async function PATCH(req: Request) {
     .from("fin_venues").update(patch).eq("id", id).select("id, venue_name, city").single();
   if (error) return Response.json({ error: error.message }, { status: 500 });
   return Response.json({ ok: true, venue: data }, { status: 200 });
+}
+
+/* ── LINK TO AN EXISTING VENUE ─────────────────────────────────────────────────────────────────
+ * THE BUG THIS EXISTS FOR (2026-10-09): the drawer's "Use an existing venue" picked a venue and
+ * then POSTed here anyway, so the pick was ignored and a SECOND venue row was created. Linking is a
+ * different write from creating: one fin_venue_fields insert, the venue row untouched — its rate,
+ * limits and contact are the venue's and are shared by every field on it.
+ *
+ * WHY NOT /api/admin/fields/assign, which already links: it is admin-gated where this drawer is
+ * finance-gated, and it refuses a field with no row in mdapi_matches — which is every brand-new
+ * field, the exact case this drawer is for (1948 and 1949 had none when this was written).
+ *
+ * LOGGED THE WAY ASSIGN LOGS IT: change_log for the verdict (recordWrite, outcome from the
+ * read-back), fin_change_log for the table's history (row_id = mdapi_field_id, the convention both
+ * existing writers use). One attempt, no retry; the UNIQUE on mdapi_field_id is the race guard. */
+export async function PUT(req: Request) {
+  const auth = await authenticateCapability(req, "finance");
+  if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
+
+  const body = (await req.json().catch(() => ({}))) as { fieldId?: unknown; venueId?: unknown };
+  const fieldId = Number(body.fieldId), venueId = Number(body.venueId);
+  if (!Number.isInteger(fieldId) || fieldId <= 0) return Response.json({ error: "fieldId required" }, { status: 400 });
+  if (!Number.isInteger(venueId) || venueId <= 0) return Response.json({ error: "venueId required" }, { status: 400 });
+
+  // The same existence check POST makes, for the same reason: never link a field that is not real.
+  const known = await apiGet<{ id: number; title?: string | null }[]>("production", "/admin/fields").catch(() => null);
+  if (known == null) return Response.json({ error: "Could not read the field list to verify the field — nothing was written." }, { status: 502 });
+  const field = known.find((f) => Number(f.id) === fieldId);
+  if (!field) return Response.json({ error: `Field ${fieldId} is not in /admin/fields. Nothing was written.` }, { status: 404 });
+
+  // An ACTIVE venue only — the picker offers active venues, and the server does not take the
+  // client's word for which venue that was.
+  const { data: venue } = await auth.supabase.from("fin_venues").select("id, venue_name, city, is_active").eq("id", venueId).maybeSingle();
+  if (!venue) return Response.json({ error: `Venue ${venueId} does not exist. Nothing was written.` }, { status: 404 });
+  if (!venue.is_active) return Response.json({ error: `${venue.venue_name} is not active. Nothing was written.` }, { status: 409 });
+
+  const { data: link } = await auth.supabase.from("fin_venue_fields").select("fin_venue_id").eq("mdapi_field_id", fieldId).maybeSingle();
+  if (link) {
+    const held = Number(link.fin_venue_id);
+    const { data: hv } = await auth.supabase.from("fin_venues").select("venue_name, city").eq("id", held).maybeSingle();
+    return Response.json({
+      error: `Field ${fieldId} is already mapped to ${hv?.venue_name ?? `venue ${held}`}${hv?.city ? ` (${hv.city})` : ""}. `
+        + "One field maps to exactly one venue — unmap it on Field Costs first.",
+      heldBy: held,
+    }, { status: 409 });
+  }
+
+  const LINK_COLS = "fin_venue_id, mdapi_field_id, field_title_at_link, counts_as_regular_play, excluded_from_venue, created_at";
+  const titleAtLink = field.title ? String(field.title) : null;
+  let linkRow: Record<string, unknown> | null = null;
+  let writeErr: string | null = null;
+  const { outcome, logged, error } = await recordWrite(
+    {
+      env: "production",
+      source: "Match Ops · Fields · Link venue",
+      actorName: auth.email,
+      actorEmail: auth.email,
+      saveId: randomUUID(),
+      matchId: null,
+      matchName: null,
+      method: "POST",
+      path: `/fin_venue_fields/${fieldId}`,
+      body: { mdapi_field_id: fieldId, fin_venue_id: venueId, venue: venue.venue_name },
+      keys: ["link"],
+      label: (k) => k,
+      // LANDED only if the read-back shows the link pointing at the venue we meant.
+      applied: (_b, after) => {
+        const l = after.link as Record<string, unknown> | null | undefined;
+        return !!l && Number(l.fin_venue_id) === venueId;
+      },
+      changes: [
+        { key: "mdapi_field_id", field: "Field ID", before: "—", after: fieldId },
+        { key: "fin_venue_id", field: "Venue", before: "UNMAPPED", after: `${venue.venue_name} (#${venueId})` },
+        { key: "field_title_at_link", field: "Title at link", before: "—", after: titleAtLink ?? "—" },
+      ],
+    },
+    {
+      readResource: async () => {
+        const r = await auth.supabase.from("fin_venue_fields").select(LINK_COLS).eq("mdapi_field_id", fieldId).maybeSingle();
+        return { link: r.data ?? null };
+      },
+      write: async () => {
+        const l = await auth.supabase.from("fin_venue_fields")
+          .insert({ fin_venue_id: venueId, mdapi_field_id: fieldId, field_title_at_link: titleAtLink })
+          .select(LINK_COLS).single();
+        if (l.error) { writeErr = l.error.message; throw new Error(l.error.message); }
+        linkRow = l.data as Record<string, unknown>;
+        return l.data;
+      },
+      now: () => new Date().toISOString(),
+    },
+    supabaseLogStore(),
+  );
+
+  if (writeErr || error) {
+    const msg = writeErr ?? error?.message ?? "Link failed.";
+    return Response.json({
+      error: /duplicate key|unique/i.test(msg)
+        ? `Field ${fieldId} was mapped by someone else while this drawer was open. Reload and look at where it points now.`
+        : msg,
+      outcome, logRecorded: logged,
+    }, { status: 409 });
+  }
+
+  // fin_change_log: the table's history. Best-effort and reported; the write already happened.
+  let finLogged = false;
+  try {
+    const { error: fe } = await auth.supabase.from("fin_change_log").insert({
+      table_name: "fin_venue_fields", row_id: fieldId, action: "insert", changed_by: auth.email,
+      before_json: null, after_json: linkRow,
+      note: `Fields drawer — field ${fieldId} "${titleAtLink ?? "untitled"}" linked to existing venue "${venue.venue_name}" (#${venueId}); venue unchanged`,
+    });
+    finLogged = !fe;
+    if (fe) console.error("fin_change_log insert failed (link already applied):", fe.message);
+  } catch (e) { console.error("fin_change_log insert failed (link already applied):", e); }
+
+  invalidateFieldAggregate();
+  return Response.json({ ok: true, outcome, logRecorded: logged, finLogRecorded: finLogged, venue: { id: venueId, venue_name: venue.venue_name, city: venue.city }, link: linkRow });
 }

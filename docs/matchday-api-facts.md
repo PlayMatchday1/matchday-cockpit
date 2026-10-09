@@ -7040,3 +7040,15 @@ Evidence: a read-only full walk of prod `GET /admin/players` (`sortColumn=create
   34 Robin Bledsoe Park, 100 Mainland Sports Complex, 133 Special Events at Onion Creek, 232 Special
   Events at OC, 397 NEMP Grass, 529 NYCSC at Pier 40, 562 NYCSC at Nike Field, 727 Dripping Springs,
   1684 Hala Piłkarska Bemowo.
+
+## Fields drawer: linking a field to an existing venue (2026-10-09)
+
+- **"Use an existing venue" used to create a second venue.** The drawer's save called `POST /api/venues` whatever the mode, and that route always inserts a `fin_venues` row. The picked venue id was never sent. Evidence: `src/components/FieldsView.tsx` `saveVenue` before this commit; the PATCH branch needed `venueCur != null`.
+- **A link is one `fin_venue_fields` insert, with no schema change.** `mdapi_field_id` is `UNIQUE` (0041), so a field holds at most one venue, while a venue can hold many fields. Linking now goes through `PUT /api/venues { fieldId, venueId }`, which never writes `fin_venues`. Evidence: `src/app/api/venues/route.ts` PUT.
+- **`/api/admin/fields/assign` cannot link a brand-new field.** `validateAssignment` refuses a field with no `mdapi_matches` row. Fields 1948 and 1949 had 0 rows when they were linked. Evidence: `src/lib/fieldIdAdmin.ts` `validateAssignment`, and a Supabase count of `mdapi_matches` for `field_id` in (1948, 1949), run 2026-10-09.
+- **Proven 2026-10-09:**
+  - Linked 1948 → venue 54 and 1949 → venue 51 through the drawer.
+  - The `fin_venues` rows for 51 and 54 read back identical to the snapshot taken before.
+  - `fin_venues` stayed at 44 rows (max id 88).
+  - `change_log` holds 2 rows with source "Match Ops · Fields · Link venue", both outcome `landed`.
+  - `fin_change_log` holds 2 `fin_venue_fields` inserts.

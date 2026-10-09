@@ -49,6 +49,18 @@ const draftOf = (f: Field): Draft => ({
   orderPosition: f.orderPosition ?? "",
 });
 
+/* THE SAME SHAPE EITHER WAY, so the form does not branch on whether a venue exists yet. */
+function seedOf(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    venue_name: row.venue_name ?? "", city: row.city ?? "", billing_type: row.billing_type ?? "per_match",
+    per_match_rate: row.per_match_rate ?? "",
+    charge_on_cancel: row.charge_on_cancel === true,
+    min_players: row.min_players ?? "", max_players: row.max_players ?? "",
+    contact_name: row.contact_name ?? "", contact_number: row.contact_number ?? "",
+    schedule_url: row.schedule_url ?? "",
+  };
+}
+
 export default function FieldsView() {
   const [data, setData] = useState<Payload | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -102,6 +114,7 @@ export default function FieldsView() {
   type VenueRow = { id: number; venue_name: string; city: string } & Record<string, unknown>;
   const [venueList, setVenueList] = useState<VenueRow[]>([]);
   const [venueCounts, setVenueCounts] = useState<Record<number, number>>({});
+  const [venueMembers, setVenueMembers] = useState<Record<number, { fieldId: number; title: string | null }[]>>({});
   const [venueCur, setVenueCur] = useState<number | null>(null);
   const [siblings, setSiblings] = useState<{ fieldId: number; title: string | null }[]>([]);
   const [venueMode, setVenueMode] = useState<"new" | "existing">("new");
@@ -119,8 +132,12 @@ export default function FieldsView() {
    * write. The warning above still names them, and saving a SHARED venue now asks once, listing
    * the fields, so the operator says yes to that specific set. Locked only without finance, while
    * a save is in flight, or before a venue has been picked. */
-  const venueLocked = !canFinance || venueBusy
-    || (venueCur == null && venueMode === "existing" && venuePick == null);
+  /* LINKING IS NOT EDITING. In "Use an existing venue" the values shown are the PICKED venue's
+   * own, shared with every field already on it, and the only write is the link — so the boxes are
+   * read-only in that mode, picked or not. Changing a shared rate stays a separate, confirmed save
+   * once the field is on the venue. */
+  const linking = venueCur == null && venueMode === "existing";
+  const venueLocked = !canFinance || venueBusy || linking;
   const venueDirty = useMemo(
     () => JSON.stringify(vd) !== JSON.stringify(vdOrig), [vd, vdOrig]);
   /* PHOTO WRITES ARE THEIR OWN BUSY AND THEIR OWN MESSAGE, separate from Save's. They do not
@@ -293,7 +310,7 @@ export default function FieldsView() {
     const r = await fetch(`/api/venues${fieldId ? `?fieldId=${fieldId}` : ""}`, { headers: h, cache: "no-store" });
     const j = await r.json();
     if (!r.ok) { setVenueList([]); setVenueCur(null); setSiblings([]); return; }
-    setVenueList(j.venues ?? []); setVenueCounts(j.counts ?? {});
+    setVenueList(j.venues ?? []); setVenueCounts(j.counts ?? {}); setVenueMembers(j.members ?? {});
     const curVenueId: number | null = j.current?.venueId ?? null;
     setVenueCur(curVenueId);
     setSiblings(j.current?.siblings ?? []);
@@ -305,17 +322,51 @@ export default function FieldsView() {
     const row = (j.current?.row
       ?? (j.venues ?? []).find((v: { id: number }) => v.id === curVenueId)
       ?? {}) as Record<string, unknown>;
-    // THE SAME SHAPE EITHER WAY, so the form does not branch on whether a venue exists yet.
-    const seed = {
-      venue_name: row.venue_name ?? "", city: row.city ?? "", billing_type: row.billing_type ?? "per_match",
-      per_match_rate: row.per_match_rate ?? "",
-      charge_on_cancel: row.charge_on_cancel === true,
-      min_players: row.min_players ?? "", max_players: row.max_players ?? "",
-      contact_name: row.contact_name ?? "", contact_number: row.contact_number ?? "",
-      schedule_url: row.schedule_url ?? "",
-    };
+    const seed = seedOf(row);
     setVd(seed); setVdOrig(seed);
   }, [headers]);
+
+  /* SHOW WHAT YOU ARE LINKING TO. Picking an existing venue seeds the boxes from THAT venue's row
+   * (read-only, see `linking`), and switching back to "Create a new venue" clears them — a new
+   * venue must not inherit the last venue looked at. vd and vdOrig move together so neither is a
+   * pending edit. */
+  const pickVenue = (id: number | null) => {
+    setVenuePick(id); setVenueMsg(null);
+    const seed = seedOf((id != null ? venueList.find((v) => v.id === id) : null) ?? {});
+    setVd(seed); setVdOrig(seed);
+  };
+  const setVenueModeTo = (m: "new" | "existing") => {
+    if (m === venueMode) return;
+    setVenueMode(m); setVenuePick(null); setVenueMsg(null);
+    const seed = seedOf({}); setVd(seed); setVdOrig(seed);
+  };
+
+  /* LINK ONLY. PUT /api/venues inserts one fin_venue_fields row and never writes fin_venues — the
+   * fix for "Use an existing venue" creating a second venue. Then both reloads: /api/fields for the
+   * table's Venue column and /api/venues for the picker counts and this field's shared warning. */
+  const linkVenue = async () => {
+    if (venueBusy || !cur?.id || venuePick == null) return;
+    const h = await headers(); if (!h) { setVenueMsg({ text: "No active session.", bad: true }); return; }
+    const target = venueList.find((v) => v.id === venuePick);
+    setVenueBusy(true); setVenueMsg(null);
+    try {
+      const r = await fetch("/api/venues", { method: "PUT", headers: { ...h, "Content-Type": "application/json" },
+        body: JSON.stringify({ fieldId: cur.id, venueId: venuePick }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setVenueMsg({ text: j.error ?? `HTTP ${r.status}`, bad: true }); return; }
+      // THE VERDICT IS THE READ-BACK'S, not the status code.
+      const verdict = j.outcome === "landed" ? "LANDED" : j.outcome === "failed" ? "FAILED" : j.outcome === "notapplied" ? "NOT APPLIED" : "UNKNOWN";
+      const said = verdict === "LANDED"
+        ? { text: `LANDED — field ${cur.id} linked to ${target?.venue_name ?? `venue ${venuePick}`}. The venue's settings were not changed.`, bad: false }
+        : { text: `${verdict} — the read-back does not show the link. Reload before trying again.`, bad: true };
+      await load();
+      await loadVenue(cur.id);
+      setVenueMsg(said); // after loadVenue, which clears it
+    } catch (e) {
+      setVenueMsg({ text: `UNKNOWN: ${e instanceof Error ? e.message : String(e)}. Reload before acting.`, bad: true });
+    } finally { setVenueBusy(false); }
+  };
+  const pickedMembers = venuePick != null ? venueMembers[venuePick] ?? [] : [];
 
   /* THREE WRITES CAN FAIL INDEPENDENTLY and this owns two of them. The route reports its own
    * partial — venue created, link failed — and this never turns that into a success line. */
@@ -582,9 +633,9 @@ export default function FieldsView() {
                 {!venueCur && (
                   <div className="fv-vmode" data-testid="fv-venue-mode">
                     <button type="button" className={"fv-chip" + (venueMode === "new" ? " on" : "")}
-                      disabled={!canFinance} onClick={() => setVenueMode("new")}>Create a new venue</button>
+                      disabled={!canFinance || venueBusy} onClick={() => setVenueModeTo("new")}>Create a new venue</button>
                     <button type="button" className={"fv-chip" + (venueMode === "existing" ? " on" : "")}
-                      disabled={!canFinance} onClick={() => setVenueMode("existing")}>Use an existing venue</button>
+                      disabled={!canFinance || venueBusy} onClick={() => setVenueModeTo("existing")}>Use an existing venue</button>
                   </div>
                 )}
 
@@ -592,8 +643,8 @@ export default function FieldsView() {
                     You choose, then you are told, then you see what you cannot change. */}
                 {!venueCur && venueMode === "existing" && (
                   <F label="Venue">
-                    <select data-testid="fv-venue" disabled={!canFinance} value={venuePick ?? ""}
-                      onChange={(e) => setVenuePick(e.target.value ? Number(e.target.value) : null)}>
+                    <select data-testid="fv-venue" disabled={!canFinance || venueBusy} value={venuePick ?? ""}
+                      onChange={(e) => pickVenue(e.target.value ? Number(e.target.value) : null)}>
                       <option value="">Select a venue</option>
                       {venueList.map((v) => (
                         <option key={v.id} value={v.id}>{v.venue_name} · {v.city}{(venueCounts[v.id] ?? 0) > 0 ? ` — ${venueCounts[v.id]} field${venueCounts[v.id] === 1 ? "" : "s"}` : ""}</option>
@@ -615,6 +666,20 @@ export default function FieldsView() {
                     </div>
                   </div>
                 )}
+                {/* PICKED, NOT YET LINKED: the same warning, about the venue being joined. */}
+                {linking && venuePick != null && (pickedMembers.length > 0 ? (
+                  <div className="fv-share" data-testid="fv-venue-shared" data-n={pickedMembers.length}>
+                    <span>⚠</span>
+                    <div>
+                      <b>{pickedMembers.length} other field{pickedMembers.length === 1 ? "" : "s"} already use{pickedMembers.length === 1 ? "s" : ""} this venue</b>
+                      Cost, rates, player limits and the field contact below are this venue&apos;s and are shared. Linking
+                      does not change them. Fields on it now:
+                      <ul>{pickedMembers.map((sb) => <li key={sb.fieldId}>{sb.title ?? "Field"} · {sb.fieldId}</li>)}</ul>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="fv-only" data-testid="fv-venue-only">This venue has no fields yet. Linking does not change its settings.</p>
+                ))}
                 {venueCur && siblings.length === 0 && (
                   <p className="fv-only" data-testid="fv-venue-only">✓ This venue covers this field only.</p>
                 )}
@@ -653,6 +718,14 @@ export default function FieldsView() {
                       <option value="no">No</option><option value="yes">Yes</option>
                     </select></F>
                 </div>
+                {linking && canFinance && (
+                  <div className="fv-addrow" style={{ marginTop: 12 }}>
+                    <button className="fv-add" data-testid="fv-venue-link" disabled={venueBusy || venuePick == null}
+                      onClick={() => void linkVenue()}>
+                      {venueBusy ? "Linking…" : "Link to this venue"}
+                    </button>
+                  </div>
+                )}
               </>
             )}
           </Sect>
@@ -675,7 +748,7 @@ export default function FieldsView() {
               <F label="Schedule link"><input data-testid="fv-sched" value={String(vd.schedule_url ?? "")} disabled={venueLocked}
                 onChange={(e) => setVd({ ...vd, schedule_url: e.target.value })} placeholder="https://" /></F>
             </div>
-            {venueDirty && canFinance && !venueLocked && (
+            {venueDirty && canFinance && !venueLocked && !linking && (
               venueAsk ? (
                 /* ONE LINE, THE FIELDS NAMED, TWO BUTTONS — the reduce-to-2-teams shape from
                    1301b20. NAMED, not counted: "3 fields" cannot tell you whether you meant it. */
