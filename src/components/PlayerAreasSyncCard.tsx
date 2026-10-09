@@ -20,6 +20,13 @@ const fmtTime = (iso: string) =>
 const fmtWhen = (iso: string) =>
   new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(iso));
 
+/** Reading time (~2.3 s a page) plus the wait between legs (a leg is ~95 pages; the next starts on
+ *  the 5-minute continuation tick, about a minute after the last ends). */
+const minsLeft = (total: number | null, done: number) => {
+  const left = Math.max(0, (total ?? 700) - done);
+  return Math.max(1, Math.round(left * 2.3 / 60 + left / 95));
+};
+
 /** An error as one readable line: the API's HTML error page (the "Body: …" a 503 carries) is cut. */
 export const shortError = (e: string | null) => {
   if (!e) return null;
@@ -132,7 +139,7 @@ export default function PlayerAreasSyncCard() {
     : blocked ? `${blocked} Available again at ${fmtTime(status!.availableAt!)}.`
     : r ? `A ${r.triggeredBy} pass started at ${fmtTime(r.startedAt)}.`
     : cooling ? `One sync per 30 minutes, to protect the MatchDay API. Available again at ${fmtTime(cooling)}.`
-    : "Reads every player's home area from MatchDay, 50 a page, 2 seconds apart (about 30 minutes). Never retried.";
+    : "Reads every player's home area from MatchDay, 50 a page, 2 seconds apart (about 40 minutes). Never retried.";
 
   return (
     <section id="player-locations" data-testid="player-areas-card"
@@ -143,13 +150,13 @@ export default function PlayerAreasSyncCard() {
           <p className="mt-1 text-xs text-deep-green/65">
             Reads every player&apos;s home area from MatchDay (/admin/players) into player_area_seen, for Growth › Locations.
             Runs at 05:10, 11:10 and 17:10 UTC; nothing runs from 5 PM to 11 PM Central. A pass reads 50 players a page,
-            2 seconds apart, checks the server&apos;s response time every 10 pages and stops if it is slow.
+            2 seconds apart (about 40 minutes, in legs of 4 minutes), checks the server&apos;s response time every 10 pages and stops if it is slow.
           </p>
           <p className="mt-1 text-[11px] text-deep-green/50" data-testid="player-areas-fresh">
             {loadError ? <span className="text-coral">Couldn&apos;t read sync state: {loadError}</span>
               : !status ? "Loading…"
               : r ? <>Running since {fmtTime(r.startedAt)} ({r.triggeredBy}) · {r.pagesTotal ? `${Math.round((r.pagesDone / r.pagesTotal) * 100)}%, ` : ""}
-                  about {Math.max(1, Math.round(((r.pagesTotal ?? 700) - r.pagesDone) * 2.3 / 60))} min left</>
+                  about {minsLeft(r.pagesTotal, r.pagesDone)} min left</>
               : status.last ? (status.last.ok
                 ? <>Last pass complete: {fmtWhen(status.last.finishedAt)} · {status.last.rowsInserted} new, {status.last.rowsUpdated} changed</>
                 : <span className="text-coral">Last pass stopped: {fmtWhen(status.last.finishedAt)} · {shortError(status.last.error)}</span>)

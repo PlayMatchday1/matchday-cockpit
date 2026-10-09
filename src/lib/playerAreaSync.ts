@@ -13,8 +13,9 @@
 //      page with at least totalItems distinct ids may mark anyone's area as cleared.
 //   2. 2 seconds between pages.
 //   3. RESUMABLE. ~700 pages × ~2.3 s ≈ 30 minutes, longer than one function run, so a pass is a
-//      chain of LEGS. A leg reads pages until LEG_BUDGET_MS is spent, saves next_page on the run
-//      row, and the route hands on to the next leg (see the route for the chaining). Each page's
+//      chain of LEGS. A leg reads pages until LEG_BUDGET_MS is spent and saves next_page on the run
+//      row; the continuation cron (/api/sync/player-areas/continue, every 5 minutes) runs the next
+//      leg of an open pass — continueOpenPass below. Each page's
 //      players are written as they arrive, so a pass that stops part way has still recorded what
 //      it read — it just clears nobody.
 //   4. HEALTH CHECK before every 10th page: one limit=1 request, timed. Over 5 seconds, or any
@@ -54,9 +55,13 @@ const HEALTH_EVERY = 10;
 const HEALTH_MAX_MS = 5000;
 const WRITE_BATCH = 500;
 const NO_RETRY = { maxRetries: 0 } as const;
-/** A pass whose heartbeat is older than this has stalled (a leg was killed or the hand-on failed):
- *  it no longer holds the lock. Longer than one leg, so a live leg is never mistaken for dead. */
-export const LOCK_WINDOW_MS = 6 * 60 * 1000;
+/** A pass whose heartbeat is older than this has stalled (a leg was killed, or no continuation came):
+ *  it no longer holds the lock. Legs run every 5 minutes and last under 4, so an open pass's heartbeat
+ *  is never more than a few minutes old; 12 minutes tolerates one missed tick. */
+export const LOCK_WINDOW_MS = 12 * 60 * 1000;
+/** A heartbeat this fresh means a leg is reading pages RIGHT NOW (it beats every ~2.3 s): a
+ *  continuation tick must not start a second leg beside it. */
+export const LEG_RUNNING_MS = 45 * 1000;
 
 /* ── THE EVENING BLOCK, 22:00–04:00 UTC ─────────────────────────────────────────────────────────── */
 export const EVENING_FROM_UTC = 22, EVENING_TO_UTC = 4;
@@ -167,6 +172,31 @@ async function finishPass(sb: SupabaseClient, runId: number, f: {
   // next_page is KEPT on a finished pass: pages read = next_page − 1, which the sync history shows.
   // The pass's seen-set has done its job (or can no longer be used): drop it.
   await sb.from("player_area_pass_seen").delete().eq("run_id", runId);
+}
+
+/* ── THE CONTINUATION ─────────────────────────────────────────────────────────────────────────────
+ * Called every 5 minutes by the cron. With no open pass it does one Supabase read and returns. With
+ * one, it runs the next leg — unless a leg is reading pages right now (heartbeat under 45 s old), or
+ * the pass has stalled (heartbeat past the lock window), which it closes instead.
+ *
+ * WHY A CRON AND NOT A REQUEST TO ITSELF. The first version handed on with a POST to this route. On
+ * 2026-10-09 05:10 UTC that POST came back HTTP 200 instead of 202: Vercel deployment protection
+ * covers every host except custom domains (ssoProtection all_except_custom_domains), so the request
+ * was sent to Vercel's login page. Cron invocations pass that protection; a function's own request
+ * does not. */
+export async function continueOpenPass(sb: SupabaseClient, now = new Date()): Promise<LegResult | { idle: string }> {
+  const open = await sb.from("player_area_sync_runs").select(RUN_COLS).is("finished_at", null).order("id", { ascending: false }).limit(1).maybeSingle<RunRow>();
+  if (open.error) throw new Error(open.error.message);
+  const run = open.data;
+  if (!run) return { idle: "no pass open" };
+  const age = now.getTime() - Date.parse(run.heartbeat_at ?? run.started_at);
+  if (age < LEG_RUNNING_MS) return { idle: `a leg of pass ${run.id} is running` };
+  if (!isLive(run, now.getTime())) {
+    await finishPass(sb, run.id, { ok: false, stopReason: "stalled",
+      error: `stalled after page ${(run.next_page ?? 1) - 1}: no leg for ${Math.round(age / 60000)} minutes` });
+    return { idle: `pass ${run.id} had stalled and was closed` };
+  }
+  return runLeg(sb, run.id);
 }
 
 /* ── ONE LEG ──────────────────────────────────────────────────────────────────────────────────────
