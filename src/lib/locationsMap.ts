@@ -171,7 +171,13 @@ export function buildLocationsMap(input: {
 
 /* THE BUBBLES, built once per mode. `split` = "activity" adds each player's activity bucket to every
  * grouping key, so no bubble mixes buckets (the browser's pixel clustering keeps them apart too). */
-function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activity" | null): Omit<LocationsMap, "zipsActivity" | "nationalActivity" | "playFields"> {
+/* WHICH BUBBLE EACH PLAYER IS IN — the admin-only "Players in this area" table (locate() below).
+ * Recorded by the SAME loops that build the bubbles, so a bubble's player list cannot disagree with
+ * its count. Never part of the map payload. */
+type KeySink = Map<number, { nat?: string; city?: string; fieldReach?: Record<number, Reach>; verdict?: "in_market" | "waitlist"; cityId?: number | null; label?: string | null }>;
+const sinkOf = (sink: KeySink, id: number) => { const e = sink.get(id) ?? {}; sink.set(id, e); return e; };
+
+function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activity" | null, sink?: KeySink): Omit<LocationsMap, "zipsActivity" | "nationalActivity" | "playFields"> {
   const nowMs = (input.now ?? new Date()).getTime();
   const playsOf = (p: MapPlayerRow): Play[] => (p.player_id != null ? input.history?.playsByPlayer.get(p.player_id) ?? [] : []);
   const actOf = (p: MapPlayerRow): Activity => {
@@ -220,6 +226,7 @@ function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activ
     const area = areaGroupKey(p.zip, p.lat, p.lng)!; // valid coordinates, so never null
     const key = `${p.verdict}|${p.verdict === "in_market" ? p.verdict_city_id : ""}|${area}${sfx(p)}`;
     add(nat, key, p, key);
+    if (sink && p.player_id != null) Object.assign(sinkOf(sink, p.player_id), { nat: key, verdict: p.verdict, cityId: p.verdict === "in_market" ? p.verdict_city_id : null, label: p.area_label });
     if (p.verdict === "waitlist") outPts.push({ lat: p.lat as number, lng: p.lng as number, label: p.area_label, zip: p.zip, key });
   }
   const national: NationalZip[] = [...nat].map(([key, g]) => {
@@ -250,6 +257,7 @@ function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activ
     if (!validCoord(p.lat, p.lng)) { unplaced.set(cityId, (unplaced.get(cityId) ?? 0) + 1); continue; }
     const key = `${cityId}|${areaGroupKey(p.zip, p.lat, p.lng)}${sfx(p)}`;
     const g = groups.get(key) ?? { key, zip: p.zip, labels: [], cityId, sLat: 0, sLng: 0, n: 0, members: [] };
+    if (sink && p.player_id != null) sinkOf(sink, p.player_id).city = key;
     g.sLat += p.lat; g.sLng += p.lng as number; g.n++;
     g.members.push(p);
     g.labels.push(p.area_label);
@@ -281,6 +289,17 @@ function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activ
       plays: summarize(z.members, z.lat, z.lng), activity: tally(z.members), ...(split ? { bucket: actOf(z.members[0]) } : {}) };
   }).sort((a, b) => b.players - a.players || a.key.localeCompare(b.key));
 
+  /* A FIELD'S PLAYERS are the ones whose bubble centre is within reach of it — the rule field.reach
+   * counts by just below — so "within 10 mi of X" lists exactly the field card's number. */
+  if (sink) for (const z of zipsExact) {
+    const fr: Record<number, Reach> = {};
+    for (const f of fieldsRaw) {
+      const r = REACHES.find((x) => milesBetween(z.lat, z.lng, f.lat, f.lng) <= x);
+      if (r != null) fr[f.id] = r;
+    }
+    for (const m of z.members) if (m.player_id != null) sinkOf(sink, m.player_id).fieldReach = fr;
+  }
+
   const fields: MapField[] = fieldsRaw.map((f) => {
     const reach = zeroByReach();
     for (const z of zipsExact) {
@@ -304,4 +323,64 @@ function buildCore(input: Parameters<typeof buildLocationsMap>[0], split: "activ
   }).sort((a, b) => b.players - a.players || b.fields - a.fields || a.name.localeCompare(b.name));
 
   return { cities, fields, zips, national, outside, badFields, waitlistPlayers, unidentifiedPlayers, activeWindowDays: ACTIVE_WINDOW_DAYS };
+}
+
+/* ── ONE ROW PER PLAYER, for the admin-only "Players in this area" table ─────────────────────────
+ * Each placed player with the keys of the bubbles they sit in (Coverage and Activity, city and
+ * national), the fields whose reach holds their bubble, and their own play summary. Built by the
+ * same buildCore as the map, so selecting a bubble lists exactly the players it counts. */
+export type PlayerPlace = {
+  playerId: number;
+  verdict: "in_market" | "waitlist";
+  /** In market: their market city. Null outside coverage. */
+  cityId: number | null;
+  /** What their bubble is called (the zip, or the shared area label). */
+  area: string;
+  zip: string | null;
+  /** "City, ST", from their area label. */
+  label: string | null;
+  state: string | null;
+  activity: Activity;
+  matches: number;
+  lastDay: string | null;
+  favouriteFieldId: number | null;
+  keys: { nat: string; natAct: string; city: string | null; cityAct: string | null };
+  /** Field id -> the smallest reach that contains this player's bubble. */
+  fieldReach: Record<number, Reach>;
+};
+
+export function locatePlayers(input: Parameters<typeof buildLocationsMap>[0]): PlayerPlace[] {
+  const cov: KeySink = new Map(), actS: KeySink = new Map();
+  const core = buildCore(input, null, cov);
+  buildCore(input, "activity", actS);
+  const areaOf = new Map<string, string>([...core.national.map((z) => [z.key, z.area] as const), ...core.zips.map((z) => [z.key, z.area] as const)]);
+  const nowMs = (input.now ?? new Date()).getTime();
+  const stateOf = new Map(input.players.map((p) => [p.player_id, p.state]));
+  const zipOf = new Map(input.players.map((p) => [p.player_id, p.zip]));
+  const out: PlayerPlace[] = [];
+  for (const [id, e] of cov) {
+    if (!e.nat || !e.verdict) continue;
+    const a = actS.get(id) ?? {};
+    const plays = input.history?.playsByPlayer.get(id) ?? [];
+    let last: (typeof plays)[number] | null = null;
+    const byField = new Map<number, { n: number; ms: number }>();
+    for (const p of plays) {
+      if (!last || p.ms > last.ms) last = p;
+      const g = byField.get(p.fieldId) ?? { n: 0, ms: 0 };
+      g.n++; g.ms = Math.max(g.ms, p.ms);
+      byField.set(p.fieldId, g);
+    }
+    // FAVOURITE = the most matches; a tie goes to the one played most recently.
+    const fav = [...byField].sort((x, y) => y[1].n - x[1].n || y[1].ms - x[1].ms)[0]?.[0] ?? null;
+    out.push({
+      playerId: id, verdict: e.verdict, cityId: e.cityId ?? null,
+      area: areaOf.get(e.city ?? e.nat) ?? areaOf.get(e.nat) ?? "",
+      zip: zipOf.get(id) ?? null, label: e.label ?? null, state: stateOf.get(id) ?? null,
+      activity: activityOf(last ? last.ms : null, nowMs), matches: plays.length, lastDay: last?.day ?? null,
+      favouriteFieldId: fav,
+      keys: { nat: e.nat, natAct: a.nat ?? e.nat, city: e.city ?? null, cityAct: a.city ?? null },
+      fieldReach: e.fieldReach ?? {},
+    });
+  }
+  return out;
 }

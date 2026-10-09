@@ -64,7 +64,8 @@ export const MARKS_CSS = `
 .loc-pb b{font:800 11px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;margin-top:1px}
 .loc-pb-in{background:#0b7d55;border:2px solid #fff;color:#fff}
 .loc-pb-gap{background:#FFF1EA;border:2px dashed #eb6834;color:#8A3A12}
-.loc-pb-sel{outline:3px solid #003326;outline-offset:1px}
+/* SELECTED: a dark outline and a mint halo, drawn above its neighbours (zIndexOffset). */
+.loc-pb-sel{outline:3px solid #003326;outline-offset:1px;box-shadow:0 0 0 7px rgba(44,219,135,.55),0 1px 3px rgba(0,0,0,.25)}
 /* FIELD PIN — a teardrop with a small pitch in its head: never round, never a player. */
 .loc-fpin{position:relative;width:26px;height:34px}
 .loc-fpin::before{content:"";position:absolute;left:2px;top:1px;width:22px;height:22px;background:#003326;border:2px solid #fff;

@@ -11,9 +11,11 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { REACHES, type LocationsMap, type MapField, type MapZip, type NationalZip, type Reach } from "@/lib/locationsMap";
-import type { NatFilter, PlayLines, Selection, ViewBounds } from "@/components/LocationsLeaflet";
+import type { NatFilter, PlayedClosed, Selection, ViewBounds } from "@/components/LocationsLeaflet";
 import { MARKS_CSS, bubbleHtml, cityTagHtml, pinHtml } from "@/components/locationsMarks";
 import LocationsWherePlay from "@/components/LocationsWherePlay";
+import LocationsPlayersPanel from "@/components/LocationsPlayersPanel";
+import type { AreaPlayer } from "@/lib/areaPlayers";
 import { ACTIVITIES, ACTIVITY_FILL, ACTIVITY_INK, ACTIVITY_LABEL, ACTIVITY_SHORT, type Activity, type BubblePlays, type PlayField } from "@/lib/wherePlayed";
 
 // Legend samples: the SAME HTML the map draws (locationsMarks), shrunk — so the legend cannot drift
@@ -38,10 +40,12 @@ const NAT_FILTERS: { key: NatFilter; label: string }[] = [
   { key: "all", label: "All players" }, { key: "in_market", label: "In market" }, { key: "waitlist", label: "Outside coverage" },
 ];
 
-export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
+export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: {
   cityId: number | null;
   reloadKey: number;
   onCity: (id: number | null) => void;
+  /** Admins see "Players in this area" under the map (the route also refuses anyone else). */
+  isAdmin: boolean;
 }) {
   const [data, setData] = useState<LocationsMap | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +56,8 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
   const [selNat, setSelNat] = useState<string | null>(null);
   const [focus, setFocus] = useState<{ lat: number; lng: number; zoom: number; n: number } | null>(null);
   const [showRadius, setShowRadius] = useState(false);
+  // FIELD REACH RINGS are off by default (Ryan, 2026-10-09); a selected field still shows its own.
+  const [showReach, setShowReach] = useState(false);
   const [howOpen, setHowOpen] = useState(false);
   // COLOUR BY (Ryan, 2026-10-08): Coverage is today's map; Activity colours bubbles by when their
   // players last played, from bubbles the server already split so no bubble mixes two buckets.
@@ -75,6 +81,28 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
     }
   }, []);
   useEffect(() => { void load(); }, [load, reloadKey]);
+
+  /* PLAYERS IN THIS AREA — admin only, fetched only for an admin. One request for every placed
+   * player; the selection below picks who is shown, so clicking around never refetches. */
+  const [people, setPeople] = useState<AreaPlayer[] | null>(null);
+  const [peopleErr, setPeopleErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isAdmin) return;
+    let live = true;
+    (async () => {
+      try {
+        const { data: sess } = await supabase.auth.getSession();
+        const token = sess.session?.access_token;
+        const res = await fetch("/api/growth/locations/players", { cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {} });
+        const body = await res.json();
+        if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
+        if (live) { setPeople(body.players as AreaPlayer[]); setPeopleErr(null); }
+      } catch (e) {
+        if (live) setPeopleErr(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => { live = false; };
+  }, [isAdmin, reloadKey]);
 
   // A new city starts with nothing selected; so does a new colouring (its bubbles are a different set).
   useEffect(() => { setSelected(null); setHighlight(null); setSelNat(null); setFocus(null); }, [cityId]);
@@ -111,21 +139,30 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
   const selField: MapField | null = selected?.kind === "field" ? fieldById.get(selected.id) ?? null : null;
   const selZip: MapZip | null = selected?.kind === "zip" ? zips.find((z) => z.key === selected.key) ?? null : null;
   const selNational: NationalZip | null = selNat ? nationalSet.find((z) => z.key === selNat) ?? null : null;
-  /* WHERE THE SELECTED BUBBLE PLAYS: lines to each of its fields (a field in another city is listed,
-   * never drawn — the map does not zoom out for it), those field pins lit, and the table's "outside
-   * this view" for a field the map is not showing. */
+  /* WHERE THE SELECTED BUBBLE PLAYS: those field pins lit (a closed one gets a grey pin; a field in
+   * another city is listed, never drawn — the map does not zoom out for it), and the table's "outside
+   * this view" for a field the map is not showing. No lines and no ring (Ryan, 2026-10-09). */
   const selBubble: { lat: number; lng: number; plays: BubblePlays } | null = selZip ?? selNational ?? null;
   const inView = (f: PlayField) => f.lat != null && f.lng != null && (!bounds || (f.lat >= bounds.s && f.lat <= bounds.n && f.lng >= bounds.w && f.lng <= bounds.e));
   const outsideView = (f: PlayField | undefined) => !f || f.lat == null || (!!city && f.cityId !== city.id) || !inView(f);
-  const lines: PlayLines | null = selBubble && selBubble.plays.fields.length ? {
-    from: { lat: selBubble.lat, lng: selBubble.lng },
-    to: selBubble.plays.fields.flatMap((r) => {
-      const f = playFieldById.get(r.fieldId);
-      if (!f || f.lat == null || f.lng == null || (city && f.cityId !== city.id)) return [];
-      return [{ id: f.id, lat: f.lat, lng: f.lng, matches: r.matches, closed: f.closed, title: f.title }];
-    }),
-  } : null;
+  const playedClosed: PlayedClosed = selBubble ? selBubble.plays.fields.flatMap((r) => {
+    const f = playFieldById.get(r.fieldId);
+    if (!f || !f.closed || f.lat == null || f.lng == null || (city && f.cityId !== city.id)) return [];
+    return [{ id: f.id, lat: f.lat, lng: f.lng, title: f.title }];
+  }) : [];
   const playedFieldIds = new Set(selBubble ? selBubble.plays.fields.map((r) => r.fieldId) : []);
+
+  /* WHO "PLAYERS IN THIS AREA" LISTS — the same keys the map's bubbles are built on, so the count in
+   * the heading is the bubble's, the field card's or the city's own number. */
+  const areaField: MapField | null = city ? selField ?? (highlight != null ? fieldById.get(highlight) ?? null : null) : null;
+  const area: { title: string; rows: AreaPlayer[] } = (() => {
+    const all = people ?? [];
+    if (city && selZip) return { title: selZip.zip ? `Zip ${selZip.zip}` : selZip.area, rows: all.filter((p) => (act ? p.keys.cityAct : p.keys.city) === selZip.key) };
+    if (city && areaField) return { title: `Within ${reach} mi of ${areaField.title}`, rows: all.filter((p) => (p.fieldReach[areaField.id] ?? Infinity) <= reach) };
+    if (city) return { title: city.name, rows: all.filter((p) => p.verdict === "in_market" && p.cityId === city.id && p.keys.city != null) };
+    if (selNational) return { title: selNational.zip ? `Zip ${selNational.zip}` : selNational.area, rows: all.filter((p) => (act ? p.keys.natAct : p.keys.nat) === selNational.key) };
+    return { title: "All cities", rows: all };
+  })();
   const cityLabel = (id: number | null) => (id == null ? "—" : cityById.get(id)?.name ?? `City ${id}`);
 
   return (
@@ -173,6 +210,10 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
                   className={"lm-seg-btn" + (reach === r ? " lm-seg-on" : "")} onClick={() => setReach(r)}>{r} mi</button>
               ))}
             </div>
+            <label className="lm-check">
+              <input type="checkbox" checked={showReach} data-testid="show-reach" onChange={(e) => setShowReach(e.target.checked)} />
+              Show field reach
+            </label>
           </div>
         </div>
       )}
@@ -210,7 +251,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
               onCity={(id) => onCity(id)} onSelect={(s) => { setSelected(s); setHighlight(null); }}
               national={national} nationalAll={data.national} selectedNational={selNat}
               onSelectNational={setSelNat} focus={focus} natFilter={natFilter} showRadius={showRadius}
-              colourBy={colourBy} lines={lines} playedFieldIds={playedFieldIds} onBounds={setBounds} />
+              colourBy={colourBy} playedClosed={playedClosed} playedFieldIds={playedFieldIds} showReach={showReach} onBounds={setBounds} />
           </div>
           <div className="lm-legend" data-testid="map-legend">
             {act ? (
@@ -230,7 +271,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
             {city ? (
               <>
                 <span><Sample html={pinHtml(false)} scale={0.8} />Field</span>
-                <span><i className="lm-ring" />Field reach</span>
+                {(showReach || areaField) && <span><i className="lm-ring" />Field reach, {reach} mi</span>}
               </>
             ) : (
               <>
@@ -251,7 +292,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
                 <p>Distances are in a straight line, not driving distance.</p>
                 <p>A field shows if it has a match coming up or had one in the last {data.activeWindowDays} days.</p>
                 <p>Activity colours each bubble by when its players last played a match: not cancelled, not a fake player. A bubble only ever holds players from one of the five groups.</p>
-                <p>Selecting a bubble draws a line to every field its players have played at, thicker for more matches, with the count at the field end.</p>
+                <p>Selecting a bubble highlights it and lights up the fields its players have played at. A grey pin is a field that has closed.</p>
               </div>
             )}
           </div>
@@ -360,8 +401,8 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
                       <div className="lm-sub">{int(selZip!.players)} {selZip!.players === 1 ? "player" : "players"}{selZip!.bucket ? `, ${ACTIVITY_LABEL[selZip!.bucket].toLowerCase()}` : ""}</div>
                       <LocationsWherePlay plays={selZip!.plays} fieldById={playFieldById} outsideView={(f) => outsideView(f)} />
                       <div className="lw-title lm-within-title">Fields within {reach} miles</div>
-                      {/* The fields inside THIS bubble's ring at the current reach (the ring is drawn on
-                          the map). minReach is the server's exact-distance answer. */}
+                      {/* The fields within the current reach of THIS bubble. minReach is the server's
+                          exact-distance answer. */}
                       {(() => {
                         const inRing = selZip!.nearby.filter((n) => n.minReach <= reach);
                         return inRing.length === 0 ? (
@@ -427,6 +468,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity }: {
         </div>
       </div>
 
+      {isAdmin && <LocationsPlayersPanel title={area.title} rows={area.rows} loading={people == null && !peopleErr} error={peopleErr} />}
     </div>
   );
 }

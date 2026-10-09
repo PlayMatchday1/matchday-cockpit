@@ -193,7 +193,7 @@ export default function LocationsBoard() {
 
       {tab === "map" ? (
         <LocationsMapTab cityId={mapCity} reloadKey={mapReload}
-          onCity={(id) => go({ tab: "map", city: id })} />
+          onCity={(id) => go({ tab: "map", city: id })} isAdmin={appUser?.is_admin === true} />
       ) : error && !data ? (
         <div className="loc-card"><div className="loc-state">{error} <button type="button" className="loc-btn" onClick={() => void load()}>Retry</button></div></div>
       ) : !data ? (

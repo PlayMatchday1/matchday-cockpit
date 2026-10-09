@@ -11,11 +11,8 @@
 // on the server — the browser still never receives a player row or a player id.
 
 import { authenticateCapability } from "@/lib/capabilityAuth";
-import { selectAll } from "@/lib/supabasePagination";
-import { activeFields, buildLocationsMap, type MapPlayerRow } from "@/lib/locationsMap";
-import { fetchFieldSnapshots, fetchLatestCities } from "@/lib/locationsData";
-import { fetchPlayHistory } from "@/lib/playHistory";
-import { milesBetween } from "@/lib/playerAreaModel";
+import { buildLocationsMap } from "@/lib/locationsMap";
+import { loadLocationsInputs } from "@/lib/locationsInputs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,25 +24,9 @@ export async function GET(req: Request) {
   const sb = auth.supabase;
 
   try {
-    const [players, fieldSnapshots, latest] = await Promise.all([
-      selectAll<MapPlayerRow>(() => sb.from("player_area_seen")
-        .select("player_id,zip,area_label,state,lat,lng,verdict,verdict_city_id")
-        .eq("has_area", true).eq("is_internal", false)
-        .order("player_id")),
-      fetchFieldSnapshots(sb),
-      fetchLatestCities(sb),
-    ]);
-    const now = new Date();
-    const { fields: live } = activeFields(fieldSnapshots, latest.cities);
-    const history = await fetchPlayHistory(sb, players.map((p) => p.player_id!).filter((x) => x != null), new Set(live.map((f) => f.id)), now);
-    /* A played field's stored position is held to the same rule as the map's: farther from its own
-     * city's centre than that city's radius (1849 Wheatley Heights once sat in China) is no position. */
-    for (const f of history.fields.values()) {
-      const c = f.cityId != null ? latest.cities.find((x) => x.id === f.cityId) : undefined;
-      if (c && f.lat != null && f.lng != null && milesBetween(f.lat, f.lng, c.lat, c.lng) > c.radiusMiles) { f.lat = null; f.lng = null; }
-    }
-    const map = buildLocationsMap({ players, cities: latest.cities, fieldSnapshots, history, now });
-    return Response.json({ ...map, citiesAsOf: latest.asOf }, { headers: { "Cache-Control": "no-store" } });
+    const { players, cities, citiesAsOf, fieldSnapshots, history, now } = await loadLocationsInputs(sb);
+    const map = buildLocationsMap({ players, cities, fieldSnapshots, history, now });
+    return Response.json({ ...map, citiesAsOf }, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
   }
