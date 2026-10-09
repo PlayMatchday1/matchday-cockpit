@@ -9,6 +9,8 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { placeName } from "@/lib/playerAreaModel";
 import { MARKS_CSS } from "@/components/locationsMarks";
+import LocationsWherePlay from "@/components/LocationsWherePlay";
+import type { BubblePlays, PlayField } from "@/lib/wherePlayed";
 
 const LocationsMiniMap = dynamic(() => import("@/components/LocationsMiniMap"), {
   ssr: false,
@@ -23,6 +25,8 @@ type Detail = {
   nearest: { id: number; title: string; mi: number } | null;
   within: { 5: number; 10: number; 15: number };
   fields: { id: number; title: string; lat: number; lng: number; mi: number }[];
+  plays: BubblePlays;
+  playFields: PlayField[];
 };
 
 const CHI = "America/Chicago";
@@ -86,6 +90,7 @@ export default function LocationsPlayerDetail({ playerId }: { playerId: number }
           <dt>Nearest field</dt><dd>{d.nearest ? `${d.nearest.title}, ${mi(d.nearest.mi)}` : "No active field"}</dd>
           <dt>Fields nearby</dt><dd>{d.within[5]} within 5 mi, {d.within[10]} within 10 mi, {d.within[15]} within 15 mi</dd>
         </dl>
+        <LocationsWherePlay plays={d.plays} fieldById={new Map(d.playFields.map((f) => [f.id, f]))} />
       </div>
       {d.position ? (
         <div className="loc-mini-map" data-testid="loc-mini-map">

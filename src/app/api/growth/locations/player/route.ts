@@ -19,6 +19,8 @@ import { activeFields } from "@/lib/locationsMap";
 import { fetchFieldSnapshots, fetchLatestCities } from "@/lib/locationsData";
 import { milesBetween, placeName } from "@/lib/playerAreaModel";
 import { isActiveByLastPlay, isPaidActiveSub, isValidPlayRow, type PlayRowLike } from "@/lib/playerActivity";
+import { fetchPlayHistory } from "@/lib/playHistory";
+import { summarizePlays } from "@/lib/wherePlayed";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -89,8 +91,19 @@ export async function GET(req: Request) {
     const nearestField = nearest ? fields.find((f) => f.id === nearest!.id)! : null;
     const mapFields = near.length ? near : nearestField && nearest!.mi <= 50 ? [{ ...nearestField, mi: nearest!.mi }] : [];
 
+    // WHERE THEY PLAY: the same summary as a Map bubble, from this player's exact position.
+    const history = await fetchPlayHistory(sb, [id], new Set(fields.map((f) => f.id)), now);
+    for (const f of history.fields.values()) {
+      const c = f.cityId != null ? latest.cities.find((x) => x.id === f.cityId) : undefined;
+      if (c && f.lat != null && f.lng != null && milesBetween(f.lat, f.lng, c.lat, c.lng) > c.radiusMiles) { f.lat = null; f.lng = null; }
+    }
+    const wherePlays = summarizePlays([history.playsByPlayer.get(id) ?? []],
+      a.lat != null && a.lng != null ? { lat: a.lat, lng: a.lng } : null, history.fields);
+
     const u = user.data;
     return Response.json({
+      plays: wherePlays,
+      playFields: [...history.fields.values()],
       id,
       name: u ? [u.first_name, u.last_name].filter(Boolean).join(" ").trim() || null : null,
       signedUpAt: u?.completed_sign_up_at ?? u?.created_at ?? null,

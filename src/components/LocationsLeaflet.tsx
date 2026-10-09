@@ -15,9 +15,10 @@
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { useEffect, useMemo, useState } from "react";
-import { Circle, MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
+import { Circle, MapContainer, Marker, Polyline, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import type { MapCity, MapField, MapZip, NationalZip, Reach } from "@/lib/locationsMap";
 import { bubbleD, bubbleHtml, cityTagHtml, pinHtml, type Dir } from "@/components/locationsMarks";
+import { ACTIVITIES, ACTIVITY_FILL, ACTIVITY_INK, type Activity } from "@/lib/wherePlayed";
 
 export const IN_REACH = "#1baf7a";
 export const GAP = "#eb6834";
@@ -36,28 +37,29 @@ export type Selection = { kind: "field"; id: number } | { kind: "zip"; key: stri
 
 const players = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "player" : "players"}`;
 
-function bubbleIcon(n: number, tone: "in" | "gap", selected: boolean) {
+function bubbleIcon(n: number, tone: "in" | "gap", selected: boolean, bucket?: Activity) {
   const d = bubbleD(n);
   return L.divIcon({
     className: "loc-pb-wrap",
-    html: bubbleHtml(n, tone, selected),
+    html: bubbleHtml(n, tone, selected, bucket ? { fill: ACTIVITY_FILL[bucket], ink: ACTIVITY_INK[bucket] } : undefined),
     iconSize: [d, d],
     iconAnchor: [d / 2, d / 2],
     tooltipAnchor: [0, -d / 2],
   });
 }
 
-const pinIcon = (on: boolean) => L.divIcon({
-  className: "loc-pin-wrap",
+const pinIcon = (on: boolean, closed = false) => L.divIcon({
+  className: "loc-pin-wrap" + (closed ? " loc-pin-closed" : ""),
   html: pinHtml(on),
   iconSize: [26, 34],
   iconAnchor: [13, 33],
   tooltipAnchor: [0, -30],
 });
 
-const cityTagIcon = (c: MapCity, dir: Dir, showCount: boolean) => L.divIcon({
+const cityTagIcon = (c: MapCity, dir: Dir, showCount: boolean, activity: boolean) => L.divIcon({
   className: "loc-ct-wrap",
-  html: cityTagHtml(c.name, showCount ? c.players : null, dir),
+  html: cityTagHtml(c.name, showCount ? c.players : null, dir,
+    activity ? ACTIVITIES.map((a) => ({ fill: ACTIVITY_FILL[a], n: c.activity[a] })) : undefined),
   iconSize: [0, 0],
   iconAnchor: [0, 0],
 });
@@ -135,8 +137,8 @@ function ZoomWatch({ onZoom }: { onZoom: (z: number) => void }) {
  * across cities, never in-market with outside coverage); city view = green vs orange at the current
  * reach (a merged bubble never mixes players with and without a field in reach). Clicking a merged
  * bubble zooms to its members, which splits it; a single bubble is selected. */
-export type BubbleItem = { key: string; group: string; tone: "in" | "gap"; lat: number; lng: number; players: number };
-type Cluster = { key: string; group: string; tone: "in" | "gap"; lat: number; lng: number; players: number; members: BubbleItem[] };
+export type BubbleItem = { key: string; group: string; tone: "in" | "gap"; lat: number; lng: number; players: number; bucket?: Activity };
+type Cluster = { key: string; group: string; tone: "in" | "gap"; lat: number; lng: number; players: number; members: BubbleItem[]; bucket?: Activity };
 
 function ClusteredBubbles({ items, selectedKey, onSelect }: {
   items: BubbleItem[]; selectedKey: string | null; onSelect: (key: string) => void;
@@ -150,7 +152,7 @@ function ClusteredBubbles({ items, selectedKey, onSelect }: {
         const p = map.latLngToContainerPoint([b.lat, b.lng]);
         const hit = out.find((c) => c.group === b.group
           && Math.hypot(c.px - p.x, c.py - p.y) < (bubbleD(c.players) + bubbleD(b.players)) / 2 - 2);
-        if (!hit) { out.push({ key: b.key, group: b.group, tone: b.tone, lat: b.lat, lng: b.lng, players: b.players, members: [b], px: p.x, py: p.y }); continue; }
+        if (!hit) { out.push({ key: b.key, group: b.group, tone: b.tone, bucket: b.bucket, lat: b.lat, lng: b.lng, players: b.players, members: [b], px: p.x, py: p.y }); continue; }
         const n = hit.players + b.players;
         hit.lat = (hit.lat * hit.players + b.lat * b.players) / n;
         hit.lng = (hit.lng * hit.players + b.lng * b.players) / n;
@@ -175,7 +177,7 @@ function ClusteredBubbles({ items, selectedKey, onSelect }: {
         return (
           // STABLE key: react-leaflet swaps the icon in place (setIcon), so selecting a bubble does not
           // remount it — a remount would close the "N players" tooltip that a tap just opened.
-          <Marker key={c.key} position={[c.lat, c.lng]} icon={bubbleIcon(c.players, c.tone, sel)}
+          <Marker key={c.key} position={[c.lat, c.lng]} icon={bubbleIcon(c.players, c.tone, sel, c.bucket)}
             eventHandlers={{ click: (e) => {
               (e.target as L.Marker).openTooltip(); // a TAP shows "N players" too, not only a hover
               if (!merged) { onSelect(c.members[0].key); return; }
@@ -192,18 +194,61 @@ function ClusteredBubbles({ items, selectedKey, onSelect }: {
   );
 }
 
+/* THE VISIBLE AREA, reported after every move — the "Where they play" table marks a field outside it
+ * rather than zooming out to show it. */
+export type ViewBounds = { s: number; w: number; n: number; e: number };
+function BoundsWatch({ onBounds }: { onBounds: (b: ViewBounds) => void }) {
+  const map = useMapEvents({ moveend: () => report(), zoomend: () => report(), resize: () => report() });
+  const report = () => { const b = map.getBounds(); onBounds({ s: b.getSouth(), w: b.getWest(), n: b.getNorth(), e: b.getEast() }); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { report(); }, [map]);
+  return null;
+}
+
+/* LINES FROM THE SELECTED BUBBLE to every field its players have played at: thicker for more matches,
+ * the match count at the field end. Dashed to a closed field. Drawn only while a bubble is selected. */
+export type PlayLines = { from: { lat: number; lng: number }; to: { id: number; lat: number; lng: number; matches: number; closed: boolean; title: string }[] };
+const countIcon = (n: number) => L.divIcon({ className: "loc-pl-wrap", html: `<span class="loc-pl-n">${n}</span>`, iconSize: [0, 0], iconAnchor: [0, 0] });
+function PlayLinesLayer({ lines }: { lines: PlayLines }) {
+  const max = Math.max(1, ...lines.to.map((t) => t.matches));
+  return (
+    <>
+      {lines.to.map((t) => (
+        <Polyline key={`pl-${t.id}`} positions={[[lines.from.lat, lines.from.lng], [t.lat, t.lng]]} interactive={false}
+          pathOptions={{ color: "#1d2b25", opacity: 0.75, weight: 1.5 + 5 * Math.sqrt(t.matches / max), dashArray: t.closed ? "6 6" : undefined }} />
+      ))}
+      {lines.to.map((t) => (
+        <Marker key={`pln-${t.id}`} interactive={false} zIndexOffset={1200}
+          position={[lines.from.lat + (t.lat - lines.from.lat) * 0.82, lines.from.lng + (t.lng - lines.from.lng) * 0.82]} icon={countIcon(t.matches)} />
+      ))}
+      {lines.to.filter((t) => t.closed).map((t) => (
+        <Marker key={`plc-${t.id}`} position={[t.lat, t.lng]} icon={pinIcon(false, true)} zIndexOffset={400}>
+          <Tooltip direction="top" className="loc-tip">{t.title} (closed)</Tooltip>
+        </Marker>
+      ))}
+    </>
+  );
+}
+
 function Focus({ focus }: { focus: { lat: number; lng: number; zoom: number; n: number } | null }) {
   const map = useMap();
   useEffect(() => { if (focus) map.setView([focus.lat, focus.lng], focus.zoom); }, [map, focus]);
   return null;
 }
 
-function Fit({ points, fallback, zoom }: { points: [number, number][]; fallback: [number, number]; zoom: number }) {
+/* THE REFIT REPORTS ITS OWN ZOOM. Going back from a deep-zoomed city to All cities refits from zoom
+ * 14 to 4 in one jump, and no zoomend reached ZoomWatch (measured 2026-10-08, and on production
+ * before this change): the zoom state stayed deep, so the city tags lost their counts and every
+ * city's bubbles stayed drawn. So the refit reads the zoom itself — now, and once any animation ends. */
+function Fit({ points, fallback, zoom, onZoom }: { points: [number, number][]; fallback: [number, number]; zoom: number; onZoom: (z: number) => void }) {
   const map = useMap();
   const key = JSON.stringify(points);
   useEffect(() => {
     if (points.length >= 2) map.fitBounds(L.latLngBounds(points), { padding: [40, 40], maxZoom: 12 });
     else map.setView(points[0] ?? fallback, zoom);
+    onZoom(map.getZoom());
+    const t = setTimeout(() => onZoom(map.getZoom()), 600);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
   return null;
@@ -228,19 +273,29 @@ export default function LocationsLeaflet(props: {
   focus: { lat: number; lng: number; zoom: number; n: number } | null;
   natFilter: NatFilter;
   showRadius: boolean;
+  /** Activity mode: bubbles are the bucket-split set and carry `bucket`; city tags show the split. */
+  colourBy: "coverage" | "activity";
+  /** The selected bubble's lines to the fields its players played at; null when nothing is selected. */
+  lines: PlayLines | null;
+  /** Field pins to light up: the fields in the selected bubble's "Where they play". */
+  playedFieldIds: Set<number>;
+  onBounds: (b: ViewBounds) => void;
 }) {
   const { cities, city, fields, zips, reach, selected, highlightFieldId, onCity, onSelect,
-    national, nationalAll, selectedNational, onSelectNational, focus, natFilter, showRadius } = props;
+    national, nationalAll, selectedNational, onSelectNational, focus, natFilter, showRadius,
+    colourBy, lines, playedFieldIds, onBounds } = props;
+  const act = colourBy === "activity";
   const [zoom, setZoom] = useState(5);
   const deep = zoom >= DEEP_ZOOM;
   const bubbles = useMemo(() => national.filter((z) => z.verdict === "waitlist" || deep), [national, deep]);
   const showCount = useMemo(() => (c: MapCity) => !deep && natFilter !== "waitlist" && c.players > 0, [deep, natFilter]);
   const [dirs, setDirs] = useState<Record<number, Dir>>({});
-  const nationalItems = useMemo<BubbleItem[]>(() => bubbles.map((z) => ({ key: z.key, group: `${z.verdict}|${z.cityId ?? ""}`,
-    tone: z.verdict === "in_market" ? "in" : "gap", lat: z.lat, lng: z.lng, players: z.players })), [bubbles]);
+  // The bucket is part of every GROUP, so pixel clustering never merges two buckets either.
+  const nationalItems = useMemo<BubbleItem[]>(() => bubbles.map((z) => ({ key: z.key, group: `${z.verdict}|${z.cityId ?? ""}|${z.bucket ?? ""}`,
+    tone: z.verdict === "in_market" ? "in" : "gap", lat: z.lat, lng: z.lng, players: z.players, bucket: z.bucket })), [bubbles]);
   const zipItems = useMemo<BubbleItem[]>(() => zips.map((z) => {
     const tone = z.inReach[reach] ? "in" : "gap";
-    return { key: z.key, group: tone, tone, lat: z.lat, lng: z.lng, players: z.players };
+    return { key: z.key, group: `${tone}|${z.bucket ?? ""}`, tone, lat: z.lat, lng: z.lng, players: z.players, bucket: z.bucket };
   }), [zips, reach]);
 
   const points = useMemo<[number, number][]>(() => {
@@ -260,8 +315,9 @@ export default function LocationsLeaflet(props: {
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         maxZoom={18}
       />
-      <Fit points={points} fallback={city ? [city.lat, city.lng] : [33, -92]} zoom={city ? 10 : 5} />
+      <Fit points={points} fallback={city ? [city.lat, city.lng] : [33, -92]} zoom={city ? 10 : 5} onZoom={setZoom} />
       <ZoomWatch onZoom={setZoom} />
+      <BoundsWatch onBounds={onBounds} />
       {!city && <CityTagLayout cities={cities} showCount={showCount} obstacles={bubbles} onLayout={setDirs} />}
       <Focus focus={focus} />
 
@@ -277,7 +333,7 @@ export default function LocationsLeaflet(props: {
         const d = dirs[c.id] ?? "top";
         const sc = showCount(c);
         return (
-          <Marker key={`tag-${c.id}-${d}-${sc ? c.players : "n"}`} position={[c.lat, c.lng]} icon={cityTagIcon(c, d, sc)}
+          <Marker key={`tag-${c.id}-${d}-${sc ? c.players : "n"}-${act ? "a" : "c"}`} position={[c.lat, c.lng]} icon={cityTagIcon(c, d, sc, act && sc)}
             zIndexOffset={1000} eventHandlers={{ click: () => onCity(c.id) }}
             title={sc ? `${c.name}: ${players(c.players)}` : c.name} />
         );
@@ -297,13 +353,18 @@ export default function LocationsLeaflet(props: {
           pathOptions={{ color: "#0b7d55", weight: 2.5, dashArray: "7 5", fillColor: "#0b7d55", fillOpacity: 0.06 }} />
       )}
 
+      {lines && <PlayLinesLayer lines={lines} />}
+
       {city && <ClusteredBubbles items={zipItems} selectedKey={selected?.kind === "zip" ? selected.key : null}
         onSelect={(key) => onSelect({ kind: "zip", key })} />}
 
       {city && fields.map((f) => {
         const on = highlightFieldId === f.id || (selected?.kind === "field" && selected.id === f.id) || fieldsInSelRing.has(f.id);
+        // A field the selected bubble has played at is LIT, but keeps its name to the hover: the match
+        // count sits at its end of the line, and a dozen permanent names would bury the map.
+        const lit = on || playedFieldIds.has(f.id);
         return (
-          <Marker key={`pin-${f.id}`} position={[f.lat, f.lng]} icon={pinIcon(on)} zIndexOffset={500}
+          <Marker key={`pin-${f.id}`} position={[f.lat, f.lng]} icon={pinIcon(lit)} zIndexOffset={500}
             eventHandlers={{ click: () => onSelect({ kind: "field", id: f.id }) }}>
             {/* keyed on `on`: react-leaflet fixes `permanent` at mount, so a change needs a remount */}
             <Tooltip key={on ? "pinned" : "hover"} direction="top" permanent={on} className="loc-tip">{f.title}</Tooltip>
