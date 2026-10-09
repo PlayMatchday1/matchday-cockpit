@@ -10,6 +10,16 @@ const dfull = (ymd: string) => `${MONS[Number(ymd.slice(5, 7)) - 1]} ${Number(ym
 const money = (n: number | null) => (n == null ? "—" : `$${n.toLocaleString("en-US", { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 })}`);
 const money2 = (n: number | null) => (n == null ? "—" : `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 const num = (n: number | null) => (n == null ? "—" : n.toLocaleString("en-US"));
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+/** A match's LOCAL wall-clock start "YYYY-MM-DDTHH:MM" as "Tue, Oct 6, 8:00 pm" — the venue's own
+ *  time (Central for these fields). String maths only: the weekday comes from the date parts alone. */
+function kickoffText(w: string): string {
+  const y = Number(w.slice(0, 4)), mo = Number(w.slice(5, 7)), d = Number(w.slice(8, 10));
+  const hh = Number(w.slice(11, 13)), mm = w.slice(14, 16);
+  const dow = DOW[new Date(Date.UTC(y, mo - 1, d)).getUTCDay()];
+  const h12 = hh % 12 === 0 ? 12 : hh % 12;
+  return `${dow}, ${MONS[mo - 1]} ${d}, ${h12}:${mm} ${hh < 12 ? "am" : "pm"}`;
+}
 
 export default function PartnerSimpleView(p: PartnerSimpleProps) {
   const c = p.current;
@@ -51,7 +61,8 @@ export default function PartnerSimpleView(p: PartnerSimpleProps) {
         <div className="psv-scroll">
           <table data-testid="psv-table">
             <thead><tr>
-              <th>{Unit === "week" ? "Week" : "Month"}</th><th className="n">Matches</th><th className="n">Spots</th>
+              <th>{Unit === "week" ? "Week" : "Month"}</th><th className="n">Matches</th><th className="n">Total spots</th>
+              <th className="n">Daily paid</th><th className="n">Members</th><th className="n">Promo</th>
               <th className="n">Revenue</th><th className="n">Your {p.sharePct}%</th><th>Status</th>
             </tr></thead>
             <tbody>
@@ -59,8 +70,11 @@ export default function PartnerSimpleView(p: PartnerSimpleProps) {
                 <tr key={m.key} className={m.isOpen ? "open" : ""}>
                   <td>{m.label}</td>
                   <td className="n">{num(m.matches)}</td>
-                  <td className="n">{num(m.spots)}</td>
-                  <td className="n">{money(m.revenue)}</td>
+                  <td className="n">{num(m.total)}</td>
+                  <td className="n">{num(m.daily)}</td>
+                  <td className="n">{num(m.members)}</td>
+                  <td className="n">{num(m.promo)}</td>
+                  <td className="n">{money(m.revenue)}{m.mismatch && <span className="psv-sub psv-warn">{m.mismatch}</span>}</td>
                   <td className="n">{money2(m.share)}{m.diverged && <span className="psv-sub">Figures changed after payment; the paid amount stands.</span>}</td>
                   <td>{m.status}</td>
                 </tr>
@@ -70,7 +84,10 @@ export default function PartnerSimpleView(p: PartnerSimpleProps) {
               <tfoot><tr>
                 <td>All time</td>
                 <td className="n">{num(sum((m) => m.matches))}</td>
-                <td className="n">{num(sum((m) => m.spots))}</td>
+                <td className="n">{num(sum((m) => m.total))}</td>
+                <td className="n">{num(sum((m) => m.daily))}</td>
+                <td className="n">{num(sum((m) => m.members))}</td>
+                <td className="n">{num(sum((m) => m.promo))}</td>
                 <td className="n">{money(sum((m) => m.revenue))}</td>
                 <td className="n">{money2(sum((m) => m.share))}</td>
                 <td />
@@ -80,18 +97,32 @@ export default function PartnerSimpleView(p: PartnerSimpleProps) {
         </div>
       </section>
 
-      <details className="psv-how" data-testid="psv-how">
-        <summary>How this is calculated</summary>
-        <ul>
-          <li>Revenue is what players paid to book, before sales tax.</li>
-          <li>Spots cancelled within 24 hours of a match are not refunded, so they count.</li>
-          {c?.memberRateCents != null && (
-            <li>Members&apos; spots count at the average drop-in price: ${(c.memberRateCents / 100).toFixed(2)} this {Unit}
-              {c.memberRateSource?.kind === "avg" ? `, the average of ${num(c.memberRateSource.dropIns)} drop-ins.`
-                : c.memberRateSource?.kind === "current" ? ", the current match price, as there were no drop-ins yet." : "."}</li>
-          )}
-        </ul>
-      </details>
+      <section className="psv-tablecard">
+        <h2>Matches</h2>
+        <div className="psv-scroll">
+          <table data-testid="psv-match-table">
+            <thead><tr>
+              <th>Date and kickoff</th><th className="n">Match price</th><th className="n">Total spots</th>
+              <th className="n">Daily paid</th><th className="n">Members</th><th className="n">Promo</th><th className="n">Revenue</th>
+            </tr></thead>
+            <tbody>
+              {p.matchRows.length === 0 && <tr><td colSpan={7} className="psv-empty">No matches with bookings yet.</td></tr>}
+              {p.matchRows.map((m) => (
+                <tr key={m.apiId}>
+                  <td className="psv-nw">{kickoffText(m.kickoff)}</td>
+                  <td className="n">{m.priceCents == null ? "—" : money2(m.priceCents / 100)}</td>
+                  <td className="n">{num(m.total)}</td>
+                  <td className="n">{num(m.daily)}</td>
+                  <td className="n">{num(m.members)}</td>
+                  <td className="n">{num(m.promo)}</td>
+                  <td className="n">{money2(m.revenue)}
+                    {m.cancelledRevenue > 0 && <span className="psv-sub">includes {money2(m.cancelledRevenue)} from a cancelled booking</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       <a className="psv-wrong" href="mailto:ryan@playmatchday.com?subject=Partner%20payment%20question">Something look wrong? Tell us</a>
     </div>
@@ -126,9 +157,9 @@ const CSS = `
 .psv tr.open td{background:var(--mint)}
 .psv tfoot td{font-weight:800;background:var(--slot);border-top:1px solid var(--line);border-bottom:0}
 .psv-sub{display:block;font-size:11px;font-weight:400;color:var(--muted);white-space:normal;margin-top:2px}
-.psv-how{background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px 20px;margin-bottom:14px}
-.psv-how summary{cursor:pointer;font-weight:800;color:var(--forest);font-size:14px}
-.psv-how ul{margin:10px 0 2px;padding-left:18px;font-size:13.5px;line-height:1.6;color:var(--ink)}
+.psv-nw{white-space:nowrap}
+.psv-empty{text-align:center;color:var(--muted)}
+.psv-warn{color:#A83120;font-weight:700}
 .psv-wrong{display:inline-block;font-size:13px;font-weight:700;color:var(--forest);text-decoration:underline;text-underline-offset:2px;padding:6px 0}
 @media (max-width:760px){
   .psv-cards{grid-template-columns:1fr}

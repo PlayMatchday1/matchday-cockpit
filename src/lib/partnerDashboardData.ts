@@ -15,7 +15,7 @@ import { derivePartnerGrains } from "./partnerGrain";
 import { dfull, dshort, todayYmd } from "./partnerDashboardView";
 import type { PartnerV14Props } from "@/app/partners/[slug]/PartnerDashboardV14";
 import type { PartnerMonthlyProps } from "@/app/partners/[slug]/PartnerMonthlyView";
-import { buildSimpleDashboard, simpleLayoutApplies, type PartnerSimpleProps } from "./partnerSimpleDashboard";
+import { buildSimpleDashboard, simpleLayoutApplies, type MatchMeta, type PartnerSimpleProps } from "./partnerSimpleDashboard";
 
 const MONTH_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 /** The month BEFORE a change date, as YYYY-MM-01. STRING MATHS ONLY — the dates in this system are
@@ -108,7 +108,17 @@ export async function buildPartnerDashboardData(
     const { data: lay, error: layErr } = await supabase.from("partner_dashboards").select("layout").eq("id", partner.id).maybeSingle();
     if (!layErr && lay?.layout === "simple" && simpleLayoutApplies(partner)) {
       const { data: v } = await supabase.from("fin_venues").select("city").eq("id", partner.venueId).maybeSingle();
-      return { kind: "simple", simple: buildSimpleDashboard(partner, (v?.city as string | null) ?? null, rows, payment, grains, now) };
+      // Each match's drop-in price and its LOCAL wall-clock start (start_date, sliced, never parsed),
+      // for the match-by-match table. Supabase only; the ids are the rows' own matches.
+      const ids = [...new Set(rows.map((r) => r.match_api_id).filter((x): x is number => x != null))];
+      const { data: mm } = ids.length
+        ? await supabase.from("mdapi_matches").select("api_id, start_date, start_date_utc, registration_price, is_cancelled").in("api_id", ids)
+        : { data: [] as Record<string, unknown>[] };
+      const metas: MatchMeta[] = (mm ?? []).map((m) => ({
+        apiId: Number(m.api_id), startWall: String(m.start_date ?? ""), startUtc: (m.start_date_utc as string | null) ?? null,
+        priceCents: m.registration_price == null ? null : Number(m.registration_price), cancelled: m.is_cancelled === true,
+      }));
+      return { kind: "simple", simple: buildSimpleDashboard(partner, (v?.city as string | null) ?? null, rows, payment, grains, now, metas) };
     }
   }
   const totalMatches = stats.weeks.reduce((s, w) => s + (w.voided ? 0 : w.matches), 0);
