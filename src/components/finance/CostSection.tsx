@@ -231,7 +231,7 @@ export default function CostSection() {
           </span>
         </div>
         <div className={s.tile}>
-          <span className={s.tileLab}>Field cost</span>
+          <span className={s.tileLab} title={FIELD_COST_HOVER} data-testid="cost-hover-tile" style={{ textDecoration: "underline dotted", textUnderlineOffset: 3, cursor: "help" }}>Field cost</span>
           <span className={s.tileVal}>
             {fmtMoney(T.cost)}
             {/* NOTHING AT ALL WHEN NOTHING IS EXCLUDED. The marker is the whole signal — no
@@ -387,7 +387,7 @@ function EconomicsTable({
               {grain === "field" && <th className="l">City</th>}
               {grain === "field" && <th className="l">Cost structure</th>}
               <th>Revenue</th>
-              <th>Field cost</th>
+              <th><span title={FIELD_COST_HOVER} data-testid="cost-hover-th" style={{ textDecoration: "underline dotted", textUnderlineOffset: 3, cursor: "help" }}>Field cost</span></th>
               <th>Cost ratio</th>
               <th>Prior month ratio</th>
               <th>Prior quarter ratio</th>
@@ -445,3 +445,7 @@ function EconomicsTable({
     </div>
   );
 }
+
+/* WHAT THIS PAGE'S FIELD COST IS (Ryan, 2026-10-09): the rate side, in the month the matches happen —
+ * never the month bill, and never a cost per match override (fieldEconomics reads legRateUnitCost). */
+const FIELD_COST_HOVER = "Field Costs rate × matches played, in the month they were played. OpEx shows when the bill is paid.";

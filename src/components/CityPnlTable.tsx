@@ -189,7 +189,7 @@ export default function CityPnlTable() {
             <thead>
               <tr>
                 <th className={styles.thCity6}>City</th>
-                <th>Revenue</th>
+                <th><span title={CITY_REVENUE_HOVER} data-testid="citypnl-rev-hover" style={{ textDecoration: "underline dotted", textUnderlineOffset: 3, cursor: "help" }}>Revenue</span></th>
                 <th>&minus; Field cost</th>
                 <th>&minus; Overhead</th>
                 <th>Net P&amp;L</th>
@@ -239,7 +239,7 @@ export default function CityPnlTable() {
             </div>
             <div className={styles.card6bar}><RevBar rev={T.total} net={T.net} maxRev={T.total} /></div>
             <dl className={styles.card6three}>
-              <div><dt>Revenue</dt><dd className={styles.rev6}>{usd(T.total)}</dd></div>
+              <div><dt title={CITY_REVENUE_HOVER} style={{ textDecoration: "underline dotted", textUnderlineOffset: 3, cursor: "help" }}>Revenue</dt><dd className={styles.rev6}>{usd(T.total)}</dd></div>
               <div><dt>&minus; Field</dt><dd className={styles.cost}>{usdNeg(T.cost)}</dd></div>
               <div><dt>&minus; Overhead</dt><dd className={styles.cost}>{usdNeg(T.over)}</dd></div>
             </dl>
@@ -288,7 +288,7 @@ function CityCard({ k, maxRev, open, onToggle }: { k: CityPnl; maxRev: number; o
       </button>
       <div className={styles.card6bar}><RevBar rev={k.gross} net={k.net} maxRev={maxRev} /></div>
       <dl className={styles.card6three}>
-        <div><dt>Revenue</dt><dd className={styles.rev6} data-testid="citypnl-card-rev">{usd(k.gross)}</dd></div>
+        <div><dt title={CITY_REVENUE_HOVER} style={{ textDecoration: "underline dotted", textUnderlineOffset: 3, cursor: "help" }}>Revenue</dt><dd className={styles.rev6} data-testid="citypnl-card-rev">{usd(k.gross)}</dd></div>
         <div><dt>&minus; Field</dt><dd className={styles.cost}>{usdNeg(k.fieldCost)}</dd></div>
         <div><dt>&minus; Overhead</dt><dd className={styles.cost}>{usdNeg(k.overheadTotal)}</dd></div>
       </dl>
@@ -477,3 +477,8 @@ function OverheadMakeup({ k }: { k: CityPnl }) {
     </div>
   );
 }
+
+/* WHAT CITIES COUNTS AS REVENUE (Ryan, 2026-10-09): matches PLAYED, credit-paid ones included. Not
+ * Stripe charges — that is the Revenue page — so a cancelled match's kept money shows there and not
+ * here, and credit spent later shows here and not there. Neither counts a dollar twice. */
+const CITY_REVENUE_HOVER = "Value of matches played at this field, including matches paid with credit. The Revenue page shows Stripe charges, so the two can differ.";
