@@ -204,9 +204,12 @@ export default function LocationsBoard() {
                 src/lib/playerActivity.ts); underneath: all players. */}
             <Kpi label="Location set" testId="kpi-location-set"
               value={data.active
-                ? <>{int(data.active.withLocation)} of {int(data.active.total)} <span className="loc-kpi-unit">active players</span></>
+                // "or booked", not just "played": the Users lens definition counts an upcoming booking,
+                // and on 2026-10-08 six of the nine active players with a location had booked but not
+                // yet played. "Played" alone would have been false for most of them.
+                ? <>{int(data.active.withLocation)} of {int(data.active.total)}<span className="loc-kpi-unit loc-kpi-unit-line">active players (played or booked in the last 30 days)</span></>
                 : <>{int(data.kpis.areaSet)} <span className="loc-kpi-unit">players</span></>}
-              sub={data.playersTotal != null ? `${int(data.kpis.areaSet)} of ${int(data.playersTotal)} all players` : `${int(data.kpis.areaSet)} players`}
+              sub={data.playersTotal != null ? `${int(data.kpis.areaSet)} of ${int(data.playersTotal)} including inactive and new signups` : `${int(data.kpis.areaSet)} players`}
               note={data.active ? undefined : "Active players could not be read just now."} />
             <Kpi label="GPS" value={int(data.kpis.gps)} sub="shared their location" />
             <Kpi label="Zip only" value={int(data.kpis.zip)} sub="typed a home zip" />
@@ -517,6 +520,7 @@ const CSS = `
 .loc-chev-open{transform:rotate(180deg)}
 .loc-line{padding:10px 20px;font-size:12.5px;color:var(--ink);border-bottom:1px solid var(--line)}
 .loc-kpi-unit{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:0}
+.loc-kpi-unit-line{display:block;margin-top:3px;line-height:1.3}
 .loc-kpi-sub{font-size:11.5px;color:var(--muted);margin-top:2px}
 .loc-kpi-note{font-size:10.5px;line-height:1.35;color:#8A5300;margin-top:6px}
 .loc-sec-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
