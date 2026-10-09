@@ -8,9 +8,9 @@
 //
 // ══ WHAT IS LEFT OFF THE MAP, AND WHY (Ryan, 2026-10-09) ═════════════════════════════════════
 //   • a venue with no coordinates (the CSV could not place it) — with the CSV's own note
-//   • a venue any of whose listings the Competitors page marks ALSO OUR FIELD (our_venue_id set) or
-//     LOOKS LIKE OURS (a name-match proposal nobody has ruled on) — competitorProposals.ts, the same
-//     function the Competitors page calls
+//   • a SHARED venue (a listing the Competitors page marks ALSO OUR FIELD or LOOKS LIKE OURS) is not a
+//     competitor square: it is returned under `shared` and drawn at OUR field with its own mark
+//     (sharedVenues, competitorProposals.ts). Only one whose venue has no linked field stays off.
 //   • The HatTrick Patio, held back: it may be our Hattrick T. field
 //   • a captured facility with no row in the address file
 // Every one is returned under `offMap` with its reason, so the page can say what it did not draw.
@@ -20,18 +20,20 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateCapability } from "@/lib/capabilityAuth";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { STATE_LABEL } from "@/lib/changeLogModel";
-import { competitorProposals } from "@/lib/competitorProposals";
+import { competitorProposals, sharedVenues } from "@/lib/competitorProposals";
 import { sortFormats } from "@/lib/competitorSupply";
-import type { CompetitorListing, CompetitorOffMap, CompetitorVenue } from "@/lib/competitorVenues";
+import type { CompetitorListing, CompetitorOffMap, CompetitorVenue, SharedVenue } from "@/lib/competitorVenues";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-/** Held back from the map for now: about 0.5 km from our field The Hattrick T. (11121 Hufsmith Rd);
- *  probably the same complex (the address file says to check before showing it). */
+/** Held back from the map until Ryan decides. CHECKED 2026-10-09: NOT our Hattrick T. Tomball — the
+ *  Patio is 25155 Hufsmith-Kohrville Rd (30.12693, -95.59403), our field 1288 is 11121 Hufsmith Road
+ *  (30.12466, -95.58874), 568 m apart, and the Competitors page ruling (2026-09-16) says "same owner,
+ *  different facility". */
 const HELD_BACK: { source: string; city_label: string; facility: string; reason: string }[] = [
-  { source: "plei", city_label: "Houston", facility: "The HatTrick Patio", reason: "Held back for now: it may be our Hattrick T. field" },
+  { source: "plei", city_label: "Houston", facility: "The HatTrick Patio", reason: "Held back: not our Hattrick T. (different address, 568 m away; same owner, different facility). Not yet shown as a competitor." },
 ];
 
 type VenueRow = {
@@ -63,11 +65,11 @@ export async function GET(req: Request) {
     venues = await all<VenueRow>(sb, "competitor_venues", "*");
     listings = await all<ListingRow>(sb, "competitor_venue_listings", "*");
   } catch (e) {
-    return Response.json({ ready: false, reason: e instanceof Error ? e.message : String(e), venues: [], offMap: [], canEdit: auth.isAdmin }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json({ ready: false, reason: e instanceof Error ? e.message : String(e), venues: [], offMap: [], shared: [], canEdit: auth.isAdmin }, { headers: { "Cache-Control": "no-store" } });
   }
 
   try {
-    const captures = await all<{ id: number; source: string; city_label: string; window_start: string; window_end: string }>(sb, "competitor_captures", "id,source,city_label,window_start,window_end");
+    const captures = await all<{ id: number; source: string; city_label: string; window_start: string; window_end: string; captured_at: string }>(sb, "competitor_captures", "id,source,city_label,window_start,window_end,captured_at");
     const supply = await all<Record<string, unknown>>(sb, "competitor_facility_supply", "*");
     const finVenues = await all<{ id: number; venue_name: string; city: string }>(sb, "fin_venues", "id, venue_name, city");
     const links = await (async () => {
@@ -82,7 +84,13 @@ export async function GET(req: Request) {
     })();
     const venueFields = new Map<number, number>();
     for (const l of links) if (l.mdapi_field_id != null) venueFields.set(Number(l.mdapi_field_id), Number(l.fin_venue_id));
-    const proposed = new Set((await competitorProposals(sb, captures, supply, finVenues, venueFields, true)).map((p) => p.supplyId));
+    const proposals = await competitorProposals(sb, captures, supply, finVenues, venueFields, true);
+    /* SHARED VENUES are drawn at OUR field (a distinct mark), so they leave "Not on the map" — unless
+     * our venue has no linked field, when the location is unknown and the list says so. */
+    const shared: SharedVenue[] = await sharedVenues(sb, captures, supply, finVenues, venueFields, proposals);
+    const sharedBy = new Map(shared.map((x) => [x.supplyId, x]));
+    const sharedReason = (x: SharedVenue) => (x.field ? null
+      : `Shared with our ${x.ourVenueName}${x.status === "proposed" ? " (proposed match)" : ""}, which has no MatchDay field linked, so its location is unknown`);
 
     const capById = new Map(captures.map((c) => [c.id, c]));
     const supplyByKey = new Map<string, Record<string, unknown>>();
@@ -103,8 +111,8 @@ export async function GET(req: Request) {
       const sources = [...new Set(ls.map((l) => l.source))].sort((a, b) => (a === "plei" ? -1 : b === "plei" ? 1 : 0));
       const off = (reason: string) => offMap.push({ name: v.name, market: v.market, sources, reason });
       const sup = ls.map((l) => supplyByKey.get(key(l)) ?? null);
-      if (sup.some((s) => s && s.our_venue_id != null)) { off("Also our field (Competitors page)"); continue; }
-      if (sup.some((s) => s && proposed.has(Number(s.id)))) { off("Looks like ours (Competitors page)"); continue; }
+      const sh = sup.map((s) => (s ? sharedBy.get(Number(s.id)) : undefined)).find(Boolean);
+      if (sh) { const why = sharedReason(sh); if (why) off(why); continue; }
       const held = HELD_BACK.find((h) => ls.some((l) => key(l) === key(h)));
       if (held) { off(held.reason); continue; }
       if (v.lat == null || v.lng == null) {
@@ -139,12 +147,12 @@ export async function GET(req: Request) {
     for (const [k, s] of supplyByKey) {
       if (seen.has(k)) continue;
       const [source, market] = k.split("|");
-      const reason = s.our_venue_id != null ? "Also our field (Competitors page)"
-        : proposed.has(Number(s.id)) ? "Looks like ours (Competitors page)" : "No row in the address file";
-      offMap.push({ name: String(s.facility), market, sources: [source], reason });
+      const sh = sharedBy.get(Number(s.id));
+      const reason = sh ? sharedReason(sh) : "No row in the address file";
+      if (reason) offMap.push({ name: String(s.facility), market, sources: [source], reason });
     }
     offMap.sort((a, b) => a.market.localeCompare(b.market) || a.name.localeCompare(b.name));
-    return Response.json({ ready: true, venues: placed, offMap, canEdit: auth.isAdmin }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json({ ready: true, venues: placed, offMap, shared, canEdit: auth.isAdmin }, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
   }

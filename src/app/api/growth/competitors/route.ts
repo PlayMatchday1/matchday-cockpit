@@ -19,7 +19,7 @@ import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import {
   MD_STANDARD_SPOTS, PROPOSE_AT, parseCapture, parseMatchLog, sortFormats, type ParsedRow,
 } from "@/lib/competitorSupply";
-import { CITY_LABEL_TO_OURS, competitorProposals } from "@/lib/competitorProposals";
+import { CITY_LABEL_TO_OURS, competitorProposals, sharedVenues } from "@/lib/competitorProposals";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -133,6 +133,8 @@ export async function GET(req: Request) {
 
     /* THE PROPOSALS ("Looks like ours") — src/lib/competitorProposals.ts, shared with the map. */
     const proposals = await competitorProposals(sb, captures, supply, venues, venueFields, tableReady);
+    /* SHARED VENUES — confirmed links and proposals, with our field; the Locations map uses the same. */
+    const shared = tableReady ? await sharedVenues(sb, captures, supply, venues, venueFields, proposals) : [];
 
     /* THE CITIES WE OPERATE IN. Coverage is stated before any row: a city missing from this page
      * has not been LOOKED AT, which is not the same as a competitor being absent there. */
@@ -147,6 +149,7 @@ export async function GET(req: Request) {
       venues,
       ours,
       proposals,
+      shared,
       proposeAt: PROPOSE_AT,
       ourCities,
       capturedOurCities,

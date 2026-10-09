@@ -5,7 +5,7 @@
 // listing's row there. Admins can correct the address or move the pin; the tab saves, this only asks.
 
 import { useState } from "react";
-import { SOURCE_FILL, SOURCE_NAME, priceText, type CompetitorVenue } from "@/lib/competitorVenues";
+import { SOURCE_FILL, SOURCE_NAME, priceText, type CompetitorVenue, type SharedVenue } from "@/lib/competitorVenues";
 
 const TEXT = [["street_address", "Street"], ["city", "City"], ["state", "State"], ["zip", "Zip"]] as const;
 type TextKey = (typeof TEXT)[number][0];
@@ -130,3 +130,34 @@ const CSS = `
 .lc-bad{color:#B42318}
 .lc-note{margin-top:6px}
 `;
+
+/* ── A SHARED VENUE: a competitor also runs at one of OUR fields ─────────────────────────────── */
+export function SharedVenueCard({ x, onClose }: { x: SharedVenue; onClose: () => void }) {
+  const day = x.firstCapturedAt ? new Date(x.firstCapturedAt).toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", year: "numeric" }) : "—";
+  return (
+    <div className="lm-pcard lm-detail lc" data-testid="shared-card">
+      <style>{CSS}</style>
+      <div className="lm-ptitle-row">
+        <div className="lm-ptitle">{x.field?.title ?? x.ourVenueName}</div>
+        <button type="button" className="loc-btn lm-clear" onClick={onClose}>Close</button>
+      </div>
+      <div className="lc-srcs">
+        <span className="lc-src" style={{ background: "#0b7d55" }}>Shared</span>
+        <span className="lc-src" style={{ background: SOURCE_FILL[x.source] }}>{SOURCE_NAME[x.source]}</span>
+      </div>
+      <dl className="lc-dl">
+        <dt>Our field</dt><dd data-testid="shared-ours">{x.field?.title ?? "—"}{x.ourVenueName !== x.field?.title ? ` (${x.ourVenueName})` : ""}</dd>
+        <dt>Competitor</dt><dd>{SOURCE_NAME[x.source]}</dd>
+        <dt>Their listing</dt><dd><a href={`/growth/competitors?open=${x.supplyId}`} data-testid="shared-link">{x.facility}</a></dd>
+        <dt>Their spots per week</dt><dd data-testid="shared-spots">{x.spots.toLocaleString("en-US")}</dd>
+        <dt>Their price per player</dt><dd data-testid="shared-price">{priceText(x.lowCents, x.highCents)}</dd>
+        <dt>Formats</dt><dd>{x.formats.length ? x.formats.join(", ") : "—"}</dd>
+        <dt>Captured</dt><dd>{day}</dd>
+      </dl>
+      <div className={x.status === "confirmed" ? "lc-mut lc-note" : "lc-warn"} data-testid="shared-status">
+        {x.status === "confirmed" ? "Confirmed as our field on the Competitors page."
+          : "Proposed by a name match on the Competitors page; nobody has confirmed it yet."}
+      </div>
+    </div>
+  );
+}

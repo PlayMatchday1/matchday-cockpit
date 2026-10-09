@@ -21,6 +21,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import type { SharedVenue } from "@/lib/competitorVenues";
 import {
   fmtMdStandard, fmtPrice, fmtWindow, medianFloorCents, mdStandard,
   sortFormats, undercutsUs, windowsAlign, type WindowSpec,
@@ -50,6 +51,8 @@ type Payload = {
   cityLabelToOurs: Record<string, string>;
   /* PROPOSED shared-field links. our_venue_id is still NULL on these; a person accepts. */
   proposals: { supplyId: number; facility: string; venueId: number | null; venueName: string | null; via: string | null; score: number; why: string }[];
+  /* SHARED VENUES: a competitor listing at one of our fields (src/lib/competitorProposals.ts). */
+  shared: SharedVenue[];
 };
 type Proposal = Payload["proposals"][number];
 
@@ -192,6 +195,34 @@ export default function CompetitorsView() {
           <b>{data.capturedOurCities.length} of {data.ourCities.length} cities captured.</b>
           {uncaptured.length > 0 && <> Missing: {uncaptured.join(", ")}.</>}
         </div>
+
+        {/* SHARED VENUES — where a competitor also runs at one of our fields. Confirmed = a person
+            linked it below; proposed = a name match nobody has ruled on. */}
+        {(data.shared ?? []).length > 0 && (
+          <div className="shv" data-testid="shared-venues">
+            <div className="shv-h">Shared venues <span>A competitor also runs at these fields of ours</span></div>
+            <div className="shv-scroll">
+              <table>
+                <thead><tr><th>Our field</th><th>City</th><th>Competitor</th><th>Their listing</th><th className="r">Spots / wk</th><th className="r">Price</th><th>First captured</th><th></th></tr></thead>
+                <tbody>
+                  {data.shared.map((x) => (
+                    <tr key={x.supplyId} data-testid="shared-row">
+                      <td className="b">{x.field?.title ?? x.ourVenueName}</td>
+                      <td>{x.ourCity ?? x.cityLabel}</td>
+                      <td><span className={`src ${srcClass(x.source)}`}>{srcLabel(x.source)}</span></td>
+                      <td>{x.facility}</td>
+                      <td className="r num">{commas(x.spots)}</td>
+                      <td className="r num">{fmtPrice({ lowCents: x.lowCents, highCents: x.highCents }).text}</td>
+                      <td className="num">{x.firstCapturedAt ? new Date(x.firstCapturedAt).toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", year: "numeric" }) : "—"}</td>
+                      <td>{x.status === "confirmed" ? <span className="ourschip">ALSO OUR FIELD</span> : <span className="ourschip" style={{ background: "var(--amb)" }}>LOOKS LIKE OURS</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="shv-n">First captured = the capture this listing is in. Re-importing a week replaces its capture, so an earlier one is not kept.</div>
+          </div>
+        )}
 
         {allFormats.length > 0 && (
           <div className="ffilter" data-testid="fbar">
@@ -683,6 +714,16 @@ const CSS = [
   "  .cmp .cov { margin-top:14px; border:1px solid var(--ambline); background:var(--ambbg); border-radius:9px;",
   "        padding:11px 13px; font-size:12.5px; color:var(--amb); line-height:1.5 }",
   "  .cmp .cov b { font-weight:800 }",
+  "  .cmp .shv { margin-top:12px; background:#fff; border:1px solid var(--line); border-radius:9px; padding:10px 12px }",
+  "  .cmp .shv-h { font-weight:800; font-size:13px; color:var(--grn) }",
+  "  .cmp .shv-h span { font-weight:500; color:var(--mut); font-size:12px; margin-left:6px }",
+  "  .cmp .shv-scroll { overflow-x:auto; margin-top:6px }",
+  "  .cmp .shv table { width:100%; border-collapse:collapse; font-size:12.5px }",
+  "  .cmp .shv th { text-align:left; font-size:10px; letter-spacing:.5px; text-transform:uppercase; color:var(--mut); padding:5px 8px; border-bottom:1px solid var(--line); white-space:nowrap }",
+  "  .cmp .shv td { padding:6px 8px; border-bottom:1px solid var(--hair); white-space:nowrap }",
+  "  .cmp .shv .r { text-align:right }",
+  "  .cmp .shv .b { font-weight:700 }",
+  "  .cmp .shv-n { font-size:11px; color:var(--faint); margin-top:6px }",
   "",
   "  .cmp .city { margin-top:20px; background:#fff; border:1px solid var(--line); border-radius:11px; overflow:hidden }",
   "  .cmp .chead { padding:12px 14px; display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; border-bottom:1px solid var(--hair) }",

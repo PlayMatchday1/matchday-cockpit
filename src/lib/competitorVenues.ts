@@ -22,8 +22,22 @@ export type CompetitorVenue = {
   spots: number;
   lowCents: number | null; highCents: number | null; formats: string[];
 };
+/** A competitor listing at one of OUR fields (src/lib/competitorProposals.ts sharedVenues). */
+export type SharedVenue = {
+  supplyId: number; source: "plei" | "goodrec"; cityLabel: string; facility: string;
+  spots: number; lowCents: number | null; highCents: number | null; formats: string[];
+  /** When the capture holding this row was taken. A re-import replaces a capture, so this is the
+   *  earliest SURVIVING capture of the facility, not necessarily the first ever. */
+  firstCapturedAt: string | null;
+  status: "confirmed" | "proposed";
+  ourVenueId: number; ourVenueName: string; ourCity: string | null;
+  field: { id: number; title: string; lat: number; lng: number } | null;
+};
+
 export type CompetitorOffMap = { name: string; market: string; sources: string[]; reason: string };
-export type CompetitorPayload = { ready: boolean; reason?: string; venues: CompetitorVenue[]; offMap: CompetitorOffMap[]; canEdit: boolean };
+export type CompetitorPayload = { ready: boolean; reason?: string; venues: CompetitorVenue[]; offMap: CompetitorOffMap[]; canEdit: boolean;
+  /** Shared venues; the ones with a `field` are drawn on the map at our field. */
+  shared: SharedVenue[] };
 
 /** The Competitors page's colours (CompetitorsView --plei / --gr). */
 export const SOURCE_FILL = { plei: "#5b4b8a", goodrec: "#12657a" } as const;
@@ -39,10 +53,20 @@ export function compHtml(sources: ("plei" | "goodrec")[], side: number, selected
   return `<div class="loc-cq${selected ? " loc-cq-sel" : ""}" style="width:${side}px;height:${side}px;background:${bg}"></div>`;
 }
 
+/* SHARED: a competitor also runs at one of OUR fields. Split down the middle — our green on the left,
+ * the competitor's colour on the right — inside a mint ring, so it reads as neither a plain competitor
+ * square (diagonal split, no ring) nor our field pin. Fixed size: it marks a relationship, not supply. */
+export const SHARED_SIDE = 18;
+export function sharedHtml(source: "plei" | "goodrec", selected = false, side = SHARED_SIDE) {
+  return `<div class="loc-cq loc-cs${selected ? " loc-cq-sel" : ""}" style="width:${side}px;height:${side}px;background:linear-gradient(90deg,#0b7d55 0 50%,${SOURCE_FILL[source]} 50% 100%)"></div>`;
+}
+
 export const COMP_CSS = `
 .loc-cq-wrap{background:transparent;border:0}
 .loc-cq{box-sizing:border-box;border:1.5px solid #fff;border-radius:2px;box-shadow:0 0 0 1px rgba(13,31,24,.55),0 1px 3px rgba(0,0,0,.3);cursor:pointer}
 .loc-cq-sel{box-shadow:0 0 0 2px #0d1f18,0 0 0 6px rgba(91,75,138,.35)}
+.loc-cs{border:2px solid #fff;box-shadow:0 0 0 2.5px #2CDB87,0 1px 4px rgba(0,0,0,.35)}
+.loc-cs.loc-cq-sel{box-shadow:0 0 0 2.5px #2CDB87,0 0 0 5px #0d1f18}
 .loc-cq-drag .loc-cq{cursor:move;outline:2px dashed #0d1f18;outline-offset:3px}
 `;
 

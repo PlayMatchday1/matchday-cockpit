@@ -6970,3 +6970,24 @@ Evidence: a read-only full walk of prod `GET /admin/players` (`sortColumn=create
 - **Player contact for Locations export:** `mdapi_users` holds email, phone, names and `is_member`.
   On 2026-10-09 the 58 placed non-internal players all had an email; 57 phones were `+1` + 10 digits
   and 1 was `+` + 11 digits, i.e. already E.164.
+
+## Shared venues and the ATH Katy tie (2026-10-09)
+
+- **The HatTrick Patio is NOT our Hattrick T. Tomball.** Patio (CSV, Google place id): 25155
+  Hufsmith-Kohrville Rd, Tomball 77375, 30.12693,-95.59403. Ours: field 1288 "The Hattrick T." (fin
+  venue 52), `raw.field` address "11121 Hufsmith Road, Tomball", 30.12466,-95.58874. **568 m apart**
+  (haversine), different street address. `competitor_facility_rulings` id 2 (Ryan, 2026-09-16): "Same
+  owner as our Hattrick T., different facility."
+- **The name-match proposal had a tie decided by row order.** "Athlete Training and Health | Katy"
+  scores 0.9 against both ATH Katy (venue 7, fields 892 and 1552) and ATH Katy Sunday (venue 23, no
+  field). `fin_venues` was read with no ORDER BY and `proposeLink` keeps the first of equal scores, so
+  production proposed ATH Katy Sunday while an id-ordered read proposed ATH Katy. Ties now go to a
+  venue with a linked field, then the lower id (`competitorProposals`).
+- **Shared venues** (`sharedVenues`, `src/lib/competitorProposals.ts`): confirmed = Crossbar Rowlett
+  (51), PAC Global (10); proposed = ATH Katy (7), KISC (9), Turf on (87). All five have a field with
+  coordinates. Every capture is dated 2026-09-16; re-imports replace captures, so "first captured" is
+  the earliest surviving capture.
+- **The map's competitor card cannot edit a venue with no coordinates**: the card opens from a square,
+  and an unplaced venue has none. On 2026-10-09 no `competitor_venues` row had `updated_at`, no
+  `change_log` row had source "Growth — competitor venue", and Vercel production logs (6 h) held no
+  PATCH to `/api/growth/locations/competitors`.

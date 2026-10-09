@@ -16,8 +16,8 @@ import { MARKS_CSS, bubbleHtml, cityTagHtml, pinHtml } from "@/components/locati
 import LocationsWherePlay from "@/components/LocationsWherePlay";
 import LocationsPlayersPanel from "@/components/LocationsPlayersPanel";
 import type { AreaPlayer } from "@/lib/areaPlayers";
-import LocationsCompetitorCard from "@/components/LocationsCompetitorCard";
-import { COMP_CSS, SOURCE_FILL, SOURCE_NAME, compHtml, type CompetitorPayload, type CompetitorVenue } from "@/lib/competitorVenues";
+import LocationsCompetitorCard, { SharedVenueCard } from "@/components/LocationsCompetitorCard";
+import { COMP_CSS, SOURCE_FILL, SOURCE_NAME, compHtml, sharedHtml, type CompetitorPayload, type CompetitorVenue, type SharedVenue } from "@/lib/competitorVenues";
 import { ACTIVITIES, ACTIVITY_FILL, ACTIVITY_INK, ACTIVITY_LABEL, ACTIVITY_SHORT, type Activity, type BubblePlays, type PlayField } from "@/lib/wherePlayed";
 
 // Legend samples: the SAME HTML the map draws (locationsMarks), shrunk — so the legend cannot drift
@@ -90,6 +90,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
   const [compErr, setCompErr] = useState<string | null>(null);
   const [showComp, setShowComp] = useState(false);
   const [selComp, setSelComp] = useState<number | null>(null);
+  const [selShared, setSelShared] = useState<number | null>(null);
   const [moving, setMoving] = useState<number | null>(null);
   const [compMsg, setCompMsg] = useState<{ text: string; bad: boolean } | null>(null);
   const loadComp = useCallback(async () => {
@@ -147,7 +148,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
   }, [isAdmin, reloadKey]);
 
   // A new city starts with nothing selected; so does a new colouring (its bubbles are a different set).
-  useEffect(() => { setSelected(null); setHighlight(null); setSelNat(null); setFocus(null); setSelComp(null); setMoving(null); setCompMsg(null); }, [cityId]);
+  useEffect(() => { setSelected(null); setHighlight(null); setSelNat(null); setFocus(null); setSelComp(null); setSelShared(null); setMoving(null); setCompMsg(null); }, [cityId]);
   useEffect(() => { setSelected(null); setSelNat(null); if (colourBy === "coverage") setActFilter("all"); }, [colourBy]);
   const act = colourBy === "activity";
   const keep = useCallback((b: Activity | undefined) => !act || actFilter === "all" || b === actFilter, [act, actFilter]);
@@ -211,6 +212,8 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
   const compMarkets = [...new Set(compAll.map((v) => v.market))].sort();
   const compInView: CompetitorVenue[] = !showComp ? [] : city ? compAll.filter((v) => v.market === city.name) : compAll;
   const compOff = !showComp ? [] : (comp?.offMap ?? []).filter((o) => !city || o.market === city.name);
+  const sharedInView: SharedVenue[] = !showComp ? [] : (comp?.shared ?? []).filter((x) => x.field && (!city || x.cityLabel === city.name));
+  const selSharedV = selShared != null ? sharedInView.find((x) => x.supplyId === selShared) ?? null : null;
   const selCompV = selComp != null ? compInView.find((v) => v.id === selComp) ?? null : null;
   const compTitle = !comp ? (compErr ? `Couldn't load competitors: ${compErr}` : "Loading competitors…")
     : !comp.ready ? "Competitor locations are not in the database yet (migration 0220)."
@@ -297,7 +300,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
         )}
         <label className={"lm-check lm-check-comp" + (!comp?.ready || compMarkets.length === 0 ? " lm-check-off" : "")} title={compTitle} data-testid="show-competitors-label">
           <input type="checkbox" checked={showComp} data-testid="show-competitors" disabled={!comp?.ready || compMarkets.length === 0}
-            onChange={(e) => { setShowComp(e.target.checked); if (!e.target.checked) { setSelComp(null); setMoving(null); } }} />
+            onChange={(e) => { setShowComp(e.target.checked); if (!e.target.checked) { setSelComp(null); setSelShared(null); setMoving(null); } }} />
           Show competitors
         </label>
       </div>
@@ -307,12 +310,14 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
           <div className="lm-map" data-testid="loc-map">
             <LocationsLeaflet cities={data.cities} city={city} fields={fields} zips={zips} reach={reach}
               selected={selected} highlightFieldId={highlight}
-              onCity={(id) => onCity(id)} onSelect={(s) => { setSelected(s); setHighlight(null); setSelComp(null); setMoving(null); }}
+              onCity={(id) => onCity(id)} onSelect={(s) => { setSelected(s); setHighlight(null); setSelComp(null); setSelShared(null); setMoving(null); }}
               national={national} nationalAll={data.national} selectedNational={selNat}
-              onSelectNational={(k) => { setSelNat(k); setSelComp(null); setMoving(null); }} focus={focus} natFilter={natFilter} showRadius={showRadius}
+              onSelectNational={(k) => { setSelNat(k); setSelComp(null); setSelShared(null); setMoving(null); }} focus={focus} natFilter={natFilter} showRadius={showRadius}
               colourBy={colourBy} playedClosed={playedClosed} playedFieldIds={playedFieldIds} showReach={showReach} onBounds={setBounds}
               competitors={compInView} selectedCompetitor={selComp} movableCompetitor={moving}
-              onSelectCompetitor={(id) => { setSelComp(id); setCompMsg(null); if (moving !== id) setMoving(null); }}
+              onSelectCompetitor={(id) => { setSelComp(id); setSelShared(null); setCompMsg(null); if (moving !== id) setMoving(null); }}
+              shared={sharedInView} selectedShared={selShared}
+              onSelectShared={(id) => { setSelShared(id); setSelComp(null); setMoving(null); setCompMsg(null); }}
               onMoveCompetitor={(id, lat, lng) => { void saveComp(id, { lat, lng }).then((ok) => { if (ok) setMoving(null); }); }} />
           </div>
           <div className="lm-legend" data-testid="map-legend">
@@ -346,6 +351,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
                 <span><Sample html={compHtml(["plei"], 14)} scale={1} />{SOURCE_NAME.plei}</span>
                 <span><Sample html={compHtml(["goodrec"], 14)} scale={1} />{SOURCE_NAME.goodrec}</span>
                 <span><Sample html={compHtml(["plei", "goodrec"], 14)} scale={1} />Both</span>
+                {sharedInView.length > 0 && <span data-testid="legend-shared"><Sample html={sharedHtml("plei", false, 14)} scale={1} />Shared: competitor also runs here</span>}
                 <span className="lm-legend-sub">Competitor venue, sized by spots per week</span>
               </span>
             )}
@@ -381,6 +387,7 @@ export default function LocationsMapTab({ cityId, reloadKey, onCity, isAdmin }: 
               </div>
             );
           })()}
+          {selSharedV && <SharedVenueCard key={selSharedV.supplyId} x={selSharedV} onClose={() => setSelShared(null)} />}
           {selCompV && (
             <LocationsCompetitorCard key={selCompV.id} venue={selCompV} canEdit={comp?.canEdit === true} moving={moving === selCompV.id}
               msg={compMsg} onClose={() => { setSelComp(null); setMoving(null); setCompMsg(null); }}

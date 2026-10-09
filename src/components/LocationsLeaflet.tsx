@@ -19,7 +19,7 @@ import { Circle, MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents 
 import type { MapCity, MapField, MapZip, NationalZip, Reach } from "@/lib/locationsMap";
 import { bubbleD, bubbleHtml, cityTagHtml, pinHtml, type Dir } from "@/components/locationsMarks";
 import { ACTIVITIES, ACTIVITY_FILL, ACTIVITY_INK, type Activity } from "@/lib/wherePlayed";
-import { compHtml, compSide, SOURCE_NAME, type CompetitorVenue } from "@/lib/competitorVenues";
+import { compHtml, compSide, sharedHtml, SHARED_SIDE, SOURCE_NAME, type CompetitorVenue, type SharedVenue } from "@/lib/competitorVenues";
 
 export const IN_REACH = "#1baf7a";
 export const GAP = "#eb6834";
@@ -248,6 +248,23 @@ function CompetitorSquares({ venues, selectedId, movableId, onSelect, onMove }: 
   );
 }
 
+/* SHARED VENUES — at OUR field's position, nudged up and right so the field pin underneath stays
+ * visible and clickable. */
+function SharedSquares({ items, selectedId, onSelect }: { items: SharedVenue[]; selectedId: number | null; onSelect: (supplyId: number) => void }) {
+  const h = SHARED_SIDE / 2;
+  return (
+    <>
+      {items.filter((x) => x.field).map((x) => (
+        <Marker key={`cs-${x.supplyId}`} position={[x.field!.lat, x.field!.lng]} zIndexOffset={x.supplyId === selectedId ? 850 : 650}
+          icon={L.divIcon({ className: "loc-cq-wrap", html: sharedHtml(x.source, x.supplyId === selectedId), iconSize: [SHARED_SIDE, SHARED_SIDE], iconAnchor: [h - 15, h + 24], tooltipAnchor: [15, -24 - h] })}
+          eventHandlers={{ click: () => onSelect(x.supplyId) }}>
+          <Tooltip direction="top" className="loc-tip">Shared: {SOURCE_NAME[x.source]} also runs at {x.field!.title}</Tooltip>
+        </Marker>
+      ))}
+    </>
+  );
+}
+
 function Focus({ focus }: { focus: { lat: number; lng: number; zoom: number; n: number } | null }) {
   const map = useMap();
   useEffect(() => { if (focus) map.setView([focus.lat, focus.lng], focus.zoom); }, [map, focus]);
@@ -310,12 +327,17 @@ export default function LocationsLeaflet(props: {
   movableCompetitor: number | null;
   onSelectCompetitor: (id: number) => void;
   onMoveCompetitor: (id: number, lat: number, lng: number) => void;
+  /** Shared venues to draw (already narrowed to the city), or empty when "Show competitors" is off. */
+  shared: SharedVenue[];
+  selectedShared: number | null;
+  onSelectShared: (supplyId: number) => void;
   onBounds: (b: ViewBounds) => void;
 }) {
   const { cities, city, fields, zips, reach, selected, highlightFieldId, onCity, onSelect,
     national, nationalAll, selectedNational, onSelectNational, focus, natFilter, showRadius,
     colourBy, playedClosed, playedFieldIds, showReach, onBounds,
-    competitors, selectedCompetitor, movableCompetitor, onSelectCompetitor, onMoveCompetitor } = props;
+    competitors, selectedCompetitor, movableCompetitor, onSelectCompetitor, onMoveCompetitor,
+    shared, selectedShared, onSelectShared } = props;
   const act = colourBy === "activity";
   const [zoom, setZoom] = useState(5);
   const deep = zoom >= DEEP_ZOOM;
@@ -384,6 +406,7 @@ export default function LocationsLeaflet(props: {
 
       <CompetitorSquares venues={competitors} selectedId={selectedCompetitor} movableId={movableCompetitor}
         onSelect={onSelectCompetitor} onMove={onMoveCompetitor} />
+      <SharedSquares items={shared} selectedId={selectedShared} onSelect={onSelectShared} />
 
       {city && <ClusteredBubbles items={zipItems} selectedKey={selected?.kind === "zip" ? selected.key : null}
         onSelect={(key) => onSelect({ kind: "zip", key })} />}
