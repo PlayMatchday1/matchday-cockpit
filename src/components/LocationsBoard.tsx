@@ -205,7 +205,7 @@ export default function LocationsBoard() {
           {error && <div className="loc-card"><div className="loc-warn">Couldn&apos;t refresh: {error}. Showing the last data loaded.</div></div>}
 
           {/* 1 — KPI cards */}
-          <div className="loc-kpis" data-testid="loc-kpis">
+          <div className="loc-kpis" data-testid="loc-kpis" style={{ ["--kpi-cols" as string]: data.kpis.unidentified > 0 ? 5 : 4 }}>
             {/* LOCATION SET — "coverage" means "near a field" on the Map tab, so here it is "Location
                 set" everywhere. Main number: ACTIVE players (the Users lens's 30-day definition,
                 src/lib/playerActivity.ts); underneath: all players. */}
@@ -220,9 +220,9 @@ export default function LocationsBoard() {
               note={data.active ? undefined : "Active players could not be read just now."} />
             <Kpi label="GPS" value={int(data.kpis.gps)} sub="shared their location" />
             <Kpi label="Zip only" value={int(data.kpis.zip)} sub="typed a home zip" />
-            <Kpi label="Never set a location" value={data.kpis.never == null ? "—" : int(data.kpis.never)} sub="have not set a location" />
             <Kpi label="Outside coverage" value={int(data.kpis.outside)} sub="no city within range" />
-            <Kpi label="Unidentified zips" value={int(data.kpis.unidentified)} sub="zip that does not exist" />
+            {/* Only when there are any: since the zip-centroid fallback (0221) this is normally 0. */}
+            {data.kpis.unidentified > 0 && <Kpi label="Unidentified zips" value={int(data.kpis.unidentified)} sub="zip that does not exist" />}
           </div>
           {data.kpis.fromZip > 0 && (
             <div className="loc-note-line" data-testid="loc-from-zip">
@@ -520,7 +520,7 @@ const CSS = `
 .loc-stamp-failed{color:#A8391A;font-weight:600}
 .loc-warn{padding:10px 20px;font-size:12.5px;color:#A8391A;background:#FFF4F0;border-top:1px solid var(--line)}
 .loc-state{padding:26px 20px;font-size:13px;color:var(--muted);font-weight:650;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-.loc-kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:18px}
+.loc-kpis{display:grid;grid-template-columns:repeat(var(--kpi-cols,4),minmax(0,1fr));gap:12px;margin-bottom:18px}
 .loc-kpi{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:0 9px 26px rgba(0,43,34,.05)}
 .loc-kpi-label{font-size:9.5px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--muted)}
 .loc-kpi-value{font-size:24px;font-weight:900;color:var(--forest);margin-top:6px;letter-spacing:-.4px;font-variant-numeric:tabular-nums}
@@ -581,6 +581,6 @@ const CSS = `
 .loc-chart-title{font-size:11px;font-weight:800;color:var(--muted);margin:6px 0 2px}
 .loc-svg{width:100%;height:auto;display:block}
 .loc-axis{font-size:10px;fill:#7C8A83}
-@media (max-width:1100px){.loc-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:1100px){.loc-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:640px){.loc-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.loc-legend-tip{margin-left:0;width:100%}}
 `;
