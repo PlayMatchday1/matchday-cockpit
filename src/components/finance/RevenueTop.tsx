@@ -18,7 +18,7 @@ import {
   finalThreshold, money, monthStatus, totalsOf, isRevenueRow, taxCentsOf,
   type RollupRow, type Totals,
 } from "@/lib/revenueTxn";
-import { loadRollup, loadStatusInputs, useAsync, useReaderId } from "@/lib/useRevenueTxn";
+import { loadStatusInputs, useAsync } from "@/lib/useRevenueTxn";
 import { InfoI } from "./RevenueInfo";
 
 const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -28,13 +28,20 @@ const centralMidnight = (d: Date) => zonedWallClockToUtcMs(d.getFullYear(), d.ge
 const $c = (cents: number) => money(cents, true);
 const dollars = (cents: number) => (cents / 100).toFixed(2);
 
-export default function RevenueTop({ period, rows, error }: {
+export default function RevenueTop({ period, rows, error, dayRows, prevDay, todayRows, filters }: {
   period: FinancePeriod;
-  /** The period's fin_txn rollup (month grain). Null while loading. */
+  /** The period's fin_txn rows (month grain), already narrowed by the page's City / Field filter. */
   rows: RollupRow[] | null;
   error: string | null;
+  /** The current month's DAY rows, narrowed the same way — for Pace to month end. */
+  dayRows?: RollupRow[] | null;
+  /** Last month's DAY rows, narrowed the same way — Pace's shape factor. */
+  prevDay?: { rows: RollupRow[] | null; error: string | null };
+  /** Today's DAY rows, narrowed the same way — taken out of Avg daily DPP in a period in progress. */
+  todayRows?: RollupRow[] | null;
+  /** The page's City and Field selects, drawn in the header bar. */
+  filters?: React.ReactNode;
 }) {
-  const uid = useReaderId();
   const { now, setPeriod } = useFinancePeriod();
   const [open, setOpen] = useState(false);
   const t: Totals | null = useMemo(() => (rows ? totalsOf(rows) : null), [rows]);
@@ -54,26 +61,15 @@ export default function RevenueTop({ period, rows, error }: {
 
   // ── PACE TO MONTH END: the current month only, on net revenue, from the day rollup. ──
   const isCurMonth = period.grain === "month" && period.isCurrent;
-  const day = useAsync(
-    isCurMonth && uid ? `pace|${uid}|${ymdOf(period.start)}` : null,
-    () => loadRollup(uid!, { from: ymdOf(period.start), to: ymdOf(period.end), grain: "day", byVenue: false }),
-  );
-  // LAST MONTH, BY DAY, for the rate's shape factor (priorMonthShape). Used only once it is final.
-  const [prevStart, prevEnd] = useMemo(() => [
-    new Date(period.start.getFullYear(), period.start.getMonth() - 1, 1),
-    new Date(period.start.getFullYear(), period.start.getMonth(), 0),
-  ], [period.start]);
-  const prevDay = useAsync(
-    isCurMonth && uid ? `pace-prev|${uid}|${ymdOf(prevStart)}` : null,
-    () => loadRollup(uid!, { from: ymdOf(prevStart), to: ymdOf(prevEnd), grain: "day", byVenue: false }),
-  );
+  // LAST MONTH, BY DAY (on the page's narrowing), for the rate's shape factor. Used only once it is final.
+  const prevEnd = useMemo(() => new Date(period.start.getFullYear(), period.start.getMonth(), 0), [period.start]);
   const prevFinal = useMemo(() => {
     if (!st.data?.lastSyncMs) return false;
     const th = finalThreshold(prevEnd.getFullYear(), prevEnd.getMonth() + 1, (yy, mm, dd) => zonedWallClockToUtcMs(yy, mm, dd, 0, 0, BUSINESS_TZ));
     return st.data.lastSyncMs >= th;
   }, [st.data, prevEnd]);
   const pace = useMemo(() => {
-    if (!isCurMonth || !day.data || !t) return null;
+    if (!isCurMonth || !dayRows || !t) return null;
     const byDay = (rows: RollupRow[]) => {
       const m = new Map<number, number>();
       for (const r of rows) if (isRevenueRow(r)) {
@@ -82,34 +78,29 @@ export default function RevenueTop({ period, rows, error }: {
       }
       return m;
     };
-    const cur = byDay(day.data);
+    const cur = byDay(dayRows);
     const day1 = cur.get(1) ?? 0, today = cur.get(period.elapsedDays) ?? 0;
     // Waits for the sync status and last month's rows rather than flashing a flat figure and then
     // changing. A failed read of either projects flat.
     if (!st.data && !st.error) return null;
-    if (prevFinal && !prevDay.data && !prevDay.error) return null;
-    const ratio = prevFinal && prevDay.data ? priorMonthShape(byDay(prevDay.data), prevEnd.getDate(), period.elapsedDays) : null;
+    if (prevFinal && !prevDay?.rows && !prevDay?.error) return null;
+    const ratio = prevFinal && prevDay?.rows ? priorMonthShape(byDay(prevDay.rows), prevEnd.getDate(), period.elapsedDays) : null;
     const p = projectMonthEnd({
       soFar: t.net, excludedRevenue: day1, currentDayRevenue: today,
       daysElapsed: period.elapsedDays, daysInMonth: period.totalDays, excludedDays: 1, isCurrentMonth: true,
       rateFactor: ratio ?? 1,
     });
     return p.ok ? { ...p, ratio } : null;
-  }, [isCurMonth, day.data, t, period.elapsedDays, period.totalDays, st.data, st.error, prevFinal, prevDay.data, prevDay.error, prevEnd]);
+  }, [isCurMonth, dayRows, t, period.elapsedDays, period.totalDays, st.data, st.error, prevFinal, prevDay?.rows, prevDay?.error, prevEnd]);
 
   // AVG DAILY DPP: a closed period divides by its days. The period in progress divides by its
   // COMPLETED days and leaves today's DPP out of the total too, because today is still arriving
-  // (the same reason Pace leaves it out of its rate).
-  const todayYmd = ymdOf(new Date(period.start.getFullYear(), period.start.getMonth(), period.start.getDate() + period.elapsedDays - 1));
-  const todayQ = useAsync(
-    period.isCurrent && uid ? `avg-today|${uid}|${todayYmd}` : null,
-    () => loadRollup(uid!, { from: todayYmd, to: todayYmd, grain: "day", byVenue: false }),
-  );
+  // (the same reason Pace leaves it out of its rate). Today's rows come narrowed like the rest.
   const days = period.isCurrent ? period.elapsedDays - 1 : period.totalDays;
   const avgDpp = !t ? null
     : !period.isCurrent ? t.dpp / days
-    : days < 1 || !todayQ.data ? null
-    : (t.dpp - totalsOf(todayQ.data).dpp) / days;
+    : days < 1 || !todayRows ? null
+    : (t.dpp - totalsOf(todayRows).dpp) / days;
 
   const pct = (v: number) => (t && t.gross ? `${((Math.abs(v) / t.gross) * 100).toFixed(1)}%` : "");
   const items: [string, number, number | null, string, Parameters<typeof InfoI>[0]["pop"] | null, string][] = t ? [
@@ -134,7 +125,7 @@ export default function RevenueTop({ period, rows, error }: {
       {/* THE PAGE'S OWN HEADER: "Revenue" with the Finance period bar beside it, and ONE status pill
           in place of the bar's partial-days chip (financeChrome lists this page as drawing its own). */}
       <FinancePeriodBar
-        period={period} now={now} supportedGrains={["month", "quarter", "year"]} unsupportedReason="" links={null}
+        period={period} now={now} supportedGrains={["month", "quarter", "year"]} unsupportedReason="" links={filters ?? null}
         onChangeGrain={(g) => setPeriod(changeGrain(period, g, now))}
         onStep={(dir) => setPeriod(stepPeriod(period, dir, now))}
         onJumpToNow={() => setPeriod(currentPeriod(period.grain, now))}

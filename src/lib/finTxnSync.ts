@@ -205,6 +205,39 @@ export async function syncFinTxn(
     rows.push(row);
   }
 
+  /* ── NO fieldId IN STRIPE'S METADATA → THE FIELD OF THE MATCH THE PAYMENT WAS FOR ──────────────
+   * Stripe has carried payment_metadata[fieldId] only since August 2026: May–July DPP charges have
+   * none, and August's first days neither. The payment intent joins to mdapi_match_players, the
+   * match carries its MatchDay field id — the same id space as fieldId — and fin_venue_fields maps
+   * it to the venue exactly as fieldId is mapped above. Still by field ID, never by match name.
+   * Measured 2026-10-08: of 80,167 DPP charges with no fieldId, 80,164 join to exactly one match.
+   * Without this, a re-run over those months would write the field back to null. */
+  const noField = rows.filter((r) => (r.kind === "charge" || r.kind === "failed") && r.field_id == null && r.payment_intent_id);
+  let fieldFromMatch = 0;
+  if (noField.length) {
+    const pis = [...new Set(noField.map((r) => r.payment_intent_id!))];
+    const piMatch = new Map<string, number>();
+    for (let i = 0; i < pis.length; i += 200) {
+      const { data, error } = await sb.from("mdapi_match_players").select("payment_intent_id,match_api_id").in("payment_intent_id", pis.slice(i, i + 200));
+      if (error) throw new Error(`mdapi_match_players read failed: ${error.message}`);
+      for (const d of data ?? []) if (!piMatch.has(String(d.payment_intent_id))) piMatch.set(String(d.payment_intent_id), Number(d.match_api_id));
+    }
+    const mids = [...new Set(piMatch.values())];
+    const matchField = new Map<number, number>();
+    for (let i = 0; i < mids.length; i += 200) {
+      const { data, error } = await sb.from("mdapi_matches").select("api_id,field_id").in("api_id", mids.slice(i, i + 200));
+      if (error) throw new Error(`mdapi_matches read failed: ${error.message}`);
+      for (const d of data ?? []) if (d.field_id != null) matchField.set(Number(d.api_id), Number(d.field_id));
+    }
+    for (const r of noField) {
+      const mid = piMatch.get(r.payment_intent_id!);
+      const fid = mid == null ? undefined : matchField.get(mid);
+      const vid = fid == null ? undefined : venueOf.get(fid);
+      if (fid == null || vid == null) continue;
+      r.field_id = fid; r.fin_venue_id = vid; fieldFromMatch++;
+    }
+  }
+
   /* ── A REFUND, DISPUTE OR FAILED PAYMENT TAKES ITS CHARGE'S CITY, TYPE AND FIELD ───────────────
    * FAILED ADDED 2026-10-07: a failed payment's own description ("Funds reversed due to payment …
    * failed") classified as Unclassified, so a failed membership charge landed in Other at −$71.99

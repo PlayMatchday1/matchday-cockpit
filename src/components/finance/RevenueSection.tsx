@@ -37,8 +37,8 @@ import {
 import { cityTotalMemberSpotsFor, unattributedVenues, venueMemberSpotsFor } from "@/lib/financeStats";
 import { loadMembershipWindowsByUserId, type MembershipWindowsByUserId } from "@/lib/mdapiMatchesRead";
 import {
-  byCityRows, byFieldRows, cityLabel, taxCentsOf, money, UNASSIGNED,
-  type GroupRow, type MemberShares, type RollupRow, type Totals,
+  bucketOf, byCityRows, byFieldRows, cityLabel, fieldKeyOf, filterRows, isRevenueRow, taxCentsOf, money, UNASSIGNED,
+  type GroupRow, type MemberShares, type PageFilter, type RollupRow, type Totals,
 } from "@/lib/revenueTxn";
 import { loadMatchRollup, loadRollup, useAsync, useReaderId } from "@/lib/useRevenueTxn";
 import { downloadCsv } from "@/components/growth/format";
@@ -145,7 +145,7 @@ export default function RevenueSection() {
     const out = new Map<number, number>();
     for (const r of mTxn.data ?? []) {
       if (r.excluded) continue;
-      const cents = r.gross_cents - taxCentsOf({ kind: r.kind as RollupRow["kind"], source: "Stripe", city: r.city, gross_cents: r.gross_cents });
+      const cents = r.gross_cents - taxCentsOf({ kind: r.kind as RollupRow["kind"], source: "Stripe", city: r.city, gross_cents: r.gross_cents, tax_cents: r.tax_cents });
       out.set(r.match_api_id, (out.get(r.match_api_id) ?? 0) + cents);
     }
     return out;
@@ -186,6 +186,84 @@ export default function RevenueSection() {
   }, [periodRows, cityFilter, venues, memberShares]);
   // Field-view city chips: the cities with revenue in the period, Unassigned last.
   const chipCities = useMemo(() => cityGroups.map((g) => g.label), [cityGroups]);
+
+  /* ── THE PAGE FILTER: ONE CITY, OR ONE FIELD (Ryan, 2026-10-07) ─────────────────────────────
+   * It narrows the top card, the four-month table and the chart together, through filterRows() in
+   * revenueTxn — the same rows the City and Field tabs group, so a filtered figure equals that
+   * city's row or that field's row to the cent. The City / Field / Match tables below stay whole,
+   * so the comparison can be made on one screen. Changing city resets the field. */
+  const [filter, setFilter] = useState<PageFilter>({ city: null, field: null });
+  const fieldOptions = useMemo(() => {
+    // Real fields with revenue in the selected period and city, by field ID — never a match name.
+    const out = new Map<string, { label: string; legs: number[] }>();
+    if (!periodRows || venues.size === 0) return out;
+    const names = new Map<string, Set<string>>();
+    for (const v of venues.values()) names.set(v.name, (names.get(v.name) ?? new Set()).add(v.city ?? ""));
+    for (const r of periodRows) {
+      if (!isRevenueRow(r) || r.fin_venue_id == null || (r.kind !== "charge" && r.kind !== "manual") || r.gross_cents <= 0) continue;
+      if (filter.city && cityLabel(r.city) !== filter.city) continue;
+      const v = venues.get(r.fin_venue_id);
+      if (!v) continue;
+      const key = fieldKeyOf(r.fin_venue_id, venues, r.city);
+      const o = out.get(key) ?? { label: (names.get(v.name)?.size ?? 0) > 1 && !filter.city ? `${v.name} (${v.city ?? "—"})` : v.name, legs: [] };
+      out.set(key, o);
+    }
+    // EVERY LEG OF THE FIELD, not only the ones that charged: membership is credited by member spots
+    // to any of them.
+    for (const [id] of venues) { const k = fieldKeyOf(id, venues); const o = out.get(k); if (o && !o.legs.includes(id)) o.legs.push(id); }
+    return new Map([...out].sort((a, b) => a[1].label.localeCompare(b[1].label)));
+  }, [periodRows, venues, filter.city]);
+  // A field not in the list for this period cannot stay selected.
+  useEffect(() => {
+    if (filter.field && periodRows && venues.size > 0 && !fieldOptions.has(filter.field)) setFilter((f) => ({ ...f, field: null }));
+  }, [filter.field, fieldOptions, periodRows, venues.size]);
+  const fieldLegs = filter.field ? fieldOptions.get(filter.field)?.legs ?? null : null;
+  const fieldName = filter.field ? filter.field.slice(0, filter.field.lastIndexOf("|")) : null;
+  const fieldCity = filter.field ? filter.field.slice(filter.field.lastIndexOf("|") + 1) : null;
+  const scopeLabel = filter.field ? `${fieldCity} · ${fieldName}` : filter.city ?? "All MatchDay";
+  /* Member-spot shares exist only for months the roster loader holds; a field needs them. */
+  const sharesCover = useCallback((monthKey: string) => {
+    const cov = data?.mdapiMemberSpots.coveredMonths;
+    return !!data && (!cov || cov.size === 0 || cov.has(monthLabelOf(monthKey)));
+  }, [data]);
+  const narrow = useCallback((rows: RollupRow[] | null): RollupRow[] | null => {
+    if (!rows) return null;
+    if (filter.field) return data ? filterRows(rows, filter, venues, memberShares) : null;
+    return filterRows(rows, filter, venues);
+  }, [filter, data, venues, memberShares]);
+  const topRows = useMemo(() => narrow(periodRows), [narrow, periodRows]);
+  const spanRows = useMemo(() => narrow(txn.data), [narrow, txn.data]);
+
+  /* THE TILES' DAY ROWS, ALL ON THE PAGE'S NARROWING (merged 2026-10-08). Pace to month end reads
+   * this month by day and, for its shape factor, last month by day; Avg daily DPP takes today's
+   * partial DPP out of a period in progress. All three come through useNarrowedDays, so a city or a
+   * field selected at the top narrows every one of them the same way. */
+  const isCurMonth = period.grain === "month" && period.isCurrent;
+  const pFrom = ymdOf(period.start), pTo = ymdOf(period.end);
+  const prevFrom = ymdOf(new Date(period.start.getFullYear(), period.start.getMonth() - 1, 1));
+  const prevTo = ymdOf(new Date(period.start.getFullYear(), period.start.getMonth(), 0));
+  const todayYmd = ymdOf(new Date(period.start.getFullYear(), period.start.getMonth(), period.start.getDate() + period.elapsedDays - 1));
+  const narrowing = { uid, filter, fieldLegs, narrow, ready: !!data, venues, memberShares };
+  const day = useNarrowedDays(isCurMonth, pFrom, pTo, narrowing);
+  const prevDay = useNarrowedDays(isCurMonth, prevFrom, prevTo, narrowing);
+  const todayDay = useNarrowedDays(period.isCurrent, todayYmd, todayYmd, narrowing);
+
+  const filters = (
+    <span className="rv2-filters" data-testid="page-filters">
+      <select aria-label="City" data-testid="filter-city" value={filter.city ?? ""}
+        onChange={(e) => setFilter({ city: e.target.value || null, field: null })}>
+        <option value="">All cities</option>
+        {chipCities.filter((c) => c !== UNASSIGNED).map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      <select aria-label="Field" data-testid="field-select" value={filter.field ?? ""} disabled={venues.size === 0}
+        onChange={(e) => setFilter((f) => ({ ...f, field: e.target.value || null }))}>
+        <option value="">All fields</option>
+        {[...fieldOptions].map(([k, o]) => <option key={k} value={k}>{o.label}</option>)}
+      </select>
+      <InfoI pop="fields" label="How fields are listed" />
+    </span>
+  );
+
 
   // MATCHES, FROM THE ROSTER, for the same months.
   const periodFieldRows = useMemo(() => {
@@ -247,7 +325,8 @@ export default function RevenueSection() {
   }, [data]);
 
   // ── THE FOUR-PERIOD TABLE ──
-  const monthTotals = useMemo(() => (txn.data ? totalsByMonth(txn.data) : null), [txn.data]);
+  // THE FOUR-MONTH TABLE FOLLOWS THE PAGE FILTER.
+  const monthTotals = useMemo(() => (spanRows ? totalsByMonth(spanRows) : null), [spanRows]);
   const periodTotal = useCallback((months: string[], pick: (t: Totals) => number) => {
     if (!monthTotals) return null;
     return months.reduce((a, m) => { const t = monthTotals.get(monthKeyOf(m)); return a + (t ? pick(t) : 0); }, 0);
@@ -328,7 +407,9 @@ export default function RevenueSection() {
     ]);
   }
 
-  const top = <RevenueTop period={period} rows={periodRows} error={txn.error} />;
+  const top = <RevenueTop period={period} rows={topRows} error={txn.error} dayRows={day.rows} prevDay={prevDay} todayRows={todayDay.rows} filters={filters} />;
+  const pace = <DailyRevenuePace filter={filter} scopeLabel={scopeLabel} venues={venues} fieldLegs={fieldLegs}
+    memberShares={data ? memberShares : undefined} sharesCover={sharesCover} />;
 
   /* THE TOP AND THE PACE CARD ARE NOT GATED ON THE ROSTER. They read fin_txn only, and a switch to
    * Quarter blanks the roster-backed parts for ~20 seconds while mdapi_match_players pages in.
@@ -339,7 +420,7 @@ export default function RevenueSection() {
       <div className={`${s.wrap} rv2`} data-testid="finance-revenue-loading">
         <style>{RV2_CSS}</style>
         {top}
-        <DailyRevenuePace />
+        {pace}
         <div className={s.empty}>Loading…</div>
       </div>
     );
@@ -349,7 +430,7 @@ export default function RevenueSection() {
       <div className={`${s.wrap} rv2`} data-testid="finance-revenue-nodata">
         <style>{RV2_CSS}</style>
         {top}
-        <DailyRevenuePace />
+        {pace}
         <div className={s.empty}>No finance data for this period.</div>
       </div>
     );
@@ -359,7 +440,7 @@ export default function RevenueSection() {
     <div className={`${s.wrap} rv2`} data-testid="finance-revenue">
       <style>{RV2_CSS}</style>
       {top}
-      <DailyRevenuePace />
+      {pace}
 
       {unattributed.length > 0 && (
         <div className={s.unattributed} data-testid="revenue-unattributed">
@@ -381,7 +462,8 @@ export default function RevenueSection() {
       <div className={s.card}>
         <div className={s.cardHead}>
           <div>
-            <span className={s.cardTitle}>Matchday revenue</span>
+            <span className={s.cardTitle} data-testid="revenue-summary-title">{fieldName ?? filter.city ?? "Matchday revenue"}</span>
+            <span className="rv2-tag" data-testid="summary-scope-tag" style={{ marginLeft: 10 }}>{scopeLabel}</span>
             <div className={s.cardSub} data-testid="revenue-summary-sub">
               Current {period.grain} and prior three · oldest to newest · Central time
             </div>
@@ -508,3 +590,25 @@ export default function RevenueSection() {
   );
 }
 
+
+/* DAY ROWS FOR ONE RANGE, NARROWED THE WAY THE PAGE IS. All of MatchDay, a city (filterRows on the
+ * rows), or a field: that field's own legs plus the city's membership rows, which filterRows credits
+ * to it by member spots. `rows` is null while loading; `error` is a failed read. */
+function useNarrowedDays(on: boolean, from: string, to: string, n: {
+  uid: string | null; filter: PageFilter; fieldLegs: number[] | null; narrow: (rows: RollupRow[] | null) => RollupRow[] | null;
+  ready: boolean; venues: Map<number, { name: string; city: string | null }>; memberShares: MemberShares;
+}): { rows: RollupRow[] | null; error: string | null } {
+  const all = useAsync(on && n.uid ? `day|${n.uid}|${from}|${to}` : null,
+    () => loadRollup(n.uid!, { from, to, grain: "day", byVenue: false }));
+  const legs = useAsync(on && n.uid && n.filter.field && n.fieldLegs?.length ? `daylegs|${n.uid}|${from}|${to}|${n.fieldLegs.join(",")}` : null,
+    async () => (await Promise.all(n.fieldLegs!.map((id) => loadRollup(n.uid!, { from, to, grain: "day", byVenue: true, venueId: id })))).flat());
+  const { filter, narrow, ready, venues, memberShares } = n;
+  const rows = useMemo(() => {
+    if (!all.data) return null;
+    if (!filter.field) return narrow(all.data);
+    if (!legs.data) return null;
+    const rs = [...legs.data, ...all.data.filter((r) => r.fin_venue_id == null && bucketOf(r.type) === "membership")];
+    return ready ? filterRows(rs, filter, venues, memberShares, true) : null;
+  }, [all.data, legs.data, filter, narrow, ready, venues, memberShares]);
+  return { rows, error: all.error ?? legs.error };
+}

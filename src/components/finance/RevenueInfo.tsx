@@ -147,6 +147,10 @@ export const RV2_CSS = `
 .rv2 .tile .s{font-size:12px;color:#7b8b82;margin-top:2px}
 .rv2-title{margin:0 8px 0 0;font-size:30px;font-weight:800;display:flex;align-items:center;gap:8px;color:#10231a}
 .rv2-status{display:inline-flex;align-items:center;gap:6px}
+.rv2-filters{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rv2-filters select{border:1px solid #e2e7df;border-radius:10px;padding:7px 10px;background:#fff;font:inherit;font-weight:600;color:#10231a;max-width:240px}
+.rv2-filters select:disabled{opacity:.55}
+.rv2-tag{display:inline-flex;align-items:center;border-radius:999px;padding:3px 10px;font-size:12px;font-weight:700;background:#e5f6ea;color:#14532d;border:1px solid #b7e3c4;white-space:nowrap}
 .rv2 table.items{border-collapse:collapse;width:100%;font-size:14px}
 .rv2 table.items td{padding:8px 4px;border-bottom:1px solid #eef1ec}
 .rv2 table.items td.amt{text-align:right;font-weight:600;width:140px}

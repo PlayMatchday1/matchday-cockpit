@@ -46,11 +46,10 @@
 // be worse than no filter at all — it would invite a comparison between two different businesses.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { supabase } from "@/lib/supabase";
 import { useFinancePeriod } from "@/lib/financePeriodContext";
 import type { Grain } from "@/lib/financePeriod";
 import { fmtMoney } from "@/components/growth/format";
-import { bucketOf, cityLabel, isRevenueRow, taxCentsOf, type RollupRow } from "@/lib/revenueTxn";
+import { bucketOf, cityLabel, filterRows, isRevenueRow, taxCentsOf, type MemberShares, type PageFilter, type RollupRow } from "@/lib/revenueTxn";
 import { loadRollup, useAsync, useReaderId } from "@/lib/useRevenueTxn";
 import { InfoI } from "./RevenueInfo";
 import s from "./financeSection.module.css";
@@ -224,7 +223,20 @@ function comparisonWindow(grain: Grain, start: Date, mode: Compare): { start: Da
   return { start: new Date(y - 1, 0, 1), end: new Date(y - 1, 12, 0), label: String(y - 1) };
 }
 
-export default function DailyRevenuePace() {
+/* THE CITY AND FIELD ARE THE PAGE'S (2026-10-07). The chart's own two selects are gone: the one
+ * filter at the top of the Revenue page drives the top card, the four-month table and this chart
+ * together, through the same filterRows() — so a field here is that field's DPP plus the membership
+ * credited to it by member spots, exactly as on the Field tab. */
+export default function DailyRevenuePace({ filter = { city: null, field: null }, scopeLabel = "All MatchDay", venues, fieldLegs = null, memberShares, sharesCover }: {
+  filter?: PageFilter;
+  scopeLabel?: string;
+  venues?: Map<number, { name: string; city: string | null }>;
+  /** The selected field's venue ids (its legs), or null. */
+  fieldLegs?: number[] | null;
+  memberShares?: MemberShares;
+  /** Whether member-spot shares are loaded for a month ("2026-09-01"). */
+  sharesCover?: (monthKey: string) => boolean;
+} = {}) {
   const { period, now } = useFinancePeriod();
   // THE IDENTITY THE ROWS ARE READ AS — part of the cache key, never rendered or logged.
   const uid = useReaderId();
@@ -243,8 +255,8 @@ export default function DailyRevenuePace() {
   }, []);
 
   const [compare, setCompare] = useState<Compare>("period");
-  const [city, setCity] = useState("All cities");
-  const [field, setField] = useState("All fields");
+  // The series are already filtered (rows below), so the old per-row city / field test passes all.
+  const city = "All cities", field = "All fields";
   const [kind, setKind] = useState("dpp");   // DPP only by default: day 1's membership billing flattens every other day
 
   /* ── TWO READS, BOTH CACHED PER RANGE ──────────────────────────────────────────────────────
@@ -267,43 +279,10 @@ export default function DailyRevenuePace() {
   const yearQ = useAsync(uid && yearWin && nearQ.data ? `pace-year|${uid}|${yearWin.from}|${yearWin.to}` : null,
     () => loadRollup(uid!, { from: yearWin!.from, to: yearWin!.to, grain: "day", byVenue: false }));
 
-  /* ── THE FIELD LIST: real fields with revenue in the SELECTED period and city ──────────────
-   * By field ID (fin_txn.fin_venue_id, mapped from Stripe's fieldId), never a match name. A name
-   * that exists in two cities is labelled with its city. */
-  const venuesQ = useAsync("pace-venues", async () => {
-    const { data, error } = await supabase.from("fin_venues").select("id, venue_name, city");
-    if (error) throw new Error(`fin_venues: ${error.message}`);
-    return new Map((data ?? []).map((v) => [Number(v.id), { name: String(v.venue_name), city: (v.city as string | null) ?? null }]));
-  });
-  const periodQ = useAsync(uid ? `pace-fields|${uid}|${ymd(period.start)}|${ymd(period.end)}` : null,
-    () => loadRollup(uid!, { from: ymd(period.start), to: ymd(period.end), grain: "month", byVenue: true }));
-  const fieldIds = useMemo(() => {
-    const out = new Map<string, number[]>();
-    const vmap = venuesQ.data;
-    if (!vmap || !periodQ.data) return out;
-    const named = new Map<string, Set<string>>();   // name -> cities, to spot a shared name
-    for (const v of vmap.values()) named.set(v.name, (named.get(v.name) ?? new Set()).add(v.city ?? ""));
-    for (const r of periodQ.data) {
-      if (!isRevenueRow(r) || r.fin_venue_id == null || r.kind === "dispute" || r.kind === "refund" || r.kind === "failed") continue;
-      if (r.gross_cents <= 0) continue;
-      if (city !== "All cities" && cityLabel(r.city) !== city) continue;
-      const v = vmap.get(r.fin_venue_id);
-      if (!v) continue;
-      const label = (named.get(v.name)?.size ?? 0) > 1 ? `${v.name} (${v.city ?? "—"})` : v.name;
-      const ids = out.get(label) ?? [];
-      if (!ids.includes(r.fin_venue_id)) ids.push(r.fin_venue_id);
-      out.set(label, ids);
-    }
-    return out;
-  }, [venuesQ.data, periodQ.data, city]);
-  const fields = useMemo(() => ["All fields", ...[...fieldIds.keys()].sort()], [fieldIds]);
-  // A field that is not in the list for this period and city cannot stay selected.
-  useEffect(() => {
-    if (field !== "All fields" && periodQ.data && venuesQ.data && !fieldIds.has(field)) setField("All fields");
-  }, [field, fieldIds, periodQ.data, venuesQ.data]);
-
-  const ids = field === "All fields" ? null : fieldIds.get(field) ?? null;
-  const fieldQ = useAsync(uid && ids ? `pace-field|${uid}|${ids.join(",")}|${near.from}|${(yearWin ?? near).from}|${near.to}` : null,
+  /* A FIELD: its own venue rows over the whole window (one call per leg), plus the city's membership
+   * rows from the reads above, which allocateMembership credits to it. */
+  const ids = filter.field ? fieldLegs : null;
+  const fieldQ = useAsync(uid && ids && ids.length ? `pace-field|${uid}|${ids.join(",")}|${near.from}|${(yearWin ?? near).from}|${near.to}` : null,
     async () => {
       const lo = yearWin && yearWin.from < near.from ? yearWin.from : near.from;
       return (await Promise.all(ids!.map((id) =>
@@ -311,16 +290,25 @@ export default function DailyRevenuePace() {
     });
 
   const rows = useMemo<Row[] | null>(() => {
-    if (ids) return fieldQ.data ? toRows(fieldQ.data, field) : null;
     if (!nearQ.data) return null;
-    return [...toRows(nearQ.data, null), ...(yearQ.data ? toRows(yearQ.data, null) : [])];
-  }, [ids, fieldQ.data, field, nearQ.data, yearQ.data]);
-  const loadError = nearQ.error ?? yearQ.error ?? fieldQ.error ?? periodQ.error ?? venuesQ.error;
+    const all = [...nearQ.data, ...(yearQ.data ?? [])];
+    if (filter.field) {
+      if (!fieldQ.data || !venues || !memberShares) return null;
+      const membership = all.filter((r) => r.fin_venue_id == null && bucketOf(r.type) === "membership");
+      return toRows(filterRows([...fieldQ.data, ...membership], filter, venues, memberShares, true), null);
+    }
+    return toRows(filter.city ? filterRows(all, filter, venues ?? new Map()) : all, null);
+  }, [nearQ.data, yearQ.data, fieldQ.data, filter, venues, memberShares]);
+  const loadError = nearQ.error ?? yearQ.error ?? fieldQ.error;
 
-  const cities = useMemo(
-    () => ["All cities", ...[...new Set(toRows(periodQ.data ?? [], null).map((r) => r.city))].sort()],
-    [periodQ.data],
-  );
+  /** A field's membership is only placed where its member-spot shares are loaded (the page's months). */
+  const coversWindow = useCallback((start: Date, end: Date) => {
+    if (!filter.field || !sharesCover) return true;
+    for (let m = new Date(start.getFullYear(), start.getMonth(), 1); m <= end; m = new Date(m.getFullYear(), m.getMonth() + 1, 1)) {
+      if (!sharesCover(`${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, "0")}-01`)) return false;
+    }
+    return true;
+  }, [filter.field, sharesCover]);
 
   const buckets = useMemo(
     () => bucketsFor(grain, period.start, period.end, today),
@@ -357,6 +345,13 @@ export default function DailyRevenuePace() {
         continue;
       }
       const w = comparisonWindow(grain, period.start, mode);
+      if (!coversWindow(w.start, w.end)) {
+        out[mode] = {
+          label: w.label, data: [], has: false,
+          why: `A field's membership share needs that month's member spots, which this page has not loaded for ${w.label.replace(/ avg$/, "")}. Choose All fields, or compare with the previous ${grain}.`,
+        };
+        continue;
+      }
       if (mode === "period") {
         const cb = bucketsFor(grain, w.start, w.end, today);
         const data = seriesFor(rows, cb, w.start, w.end, city, field, kind);
@@ -380,7 +375,7 @@ export default function DailyRevenuePace() {
       }
     }
     return out;
-  }, [rows, grain, period.start, today, city, field, kind]);
+  }, [rows, grain, period.start, today, city, field, kind, coversWindow]);
 
   // A COMPARISON THAT IS NOT AVAILABLE AT THIS GRAIN MUST NOT STAY SELECTED. Switching from Month to
   // Quarter with "previous year avg" chosen would otherwise draw nothing and say nothing.
@@ -499,7 +494,7 @@ export default function DailyRevenuePace() {
     };
   }, [hoverAt, buckets, current, drawnTo, comp, period.label]);
 
-  const scope = field !== "All fields" ? field : city !== "All cities" ? city : "All Matchday";
+  const scope = scopeLabel;
   const word = GRAIN_WORD[grain];
   const partialIdx = useMemo(
     () => buckets.map((b, i) => (b.partial && i < drawnTo ? i : -1)).filter((i) => i >= 0),
@@ -545,13 +540,9 @@ export default function DailyRevenuePace() {
           </div>{/* ctrlGroup */}
           <div className={s.ctrlGroup}>
             <span className={s.ctrlLab}>View</span>
-            <select className={s.sel} data-testid="pace-city" aria-label="City" value={city} onChange={(e) => setCity(e.target.value)}>
-              {cities.map((c) => <option key={c}>{c}</option>)}
-            </select>
-            <select className={s.sel} data-testid="field-select" aria-label="Field" value={field} onChange={(e) => setField(e.target.value)}>
-              {fields.map((f) => <option key={f}>{f}</option>)}
-            </select>
-            <InfoI pop="fields" label="How fields are listed" />
+            {/* WHAT IS SELECTED, from the page filter at the top — the chart has no city or field
+                control of its own any more. */}
+            <span className="rv2-tag" data-testid="pace-scope-tag">{scopeLabel}</span>
             <select className={s.sel} data-testid="pace-kind" value={kind} onChange={(e) => setKind(e.target.value)}>
               <option value="total">DPP + Membership</option>
               <option value="dpp">DPP only</option>

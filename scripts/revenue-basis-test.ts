@@ -18,7 +18,7 @@
 
 import { readFileSync } from "node:fs";
 import { CITY_TAX_RATE, preTaxOf, taxRateFor, hasTaxRate, citiesWithoutRate, UnknownTaxCityError } from "../src/lib/salesTax";
-import { splitCents, taxCentsOf, totalsOf, type RollupRow } from "../src/lib/revenueTxn";
+import { filterRows, splitCents, taxCentsOf, totalsOf, type RollupRow } from "../src/lib/revenueTxn";
 
 let pass = 0; const fails: string[] = [];
 const ok = (m: string) => { pass++; console.log(`  ✓ ${m}`); };
@@ -182,6 +182,19 @@ console.log("\nthe Revenue page reads fin_txn, net of sales tax");
   is("a split keeps every cent", [...sp.parts.values()].reduce((a, v) => a + v, 0) + sp.rest, -1001);
   const half = splitCents(1000, [{ venueId: 1, share: 0.25 }]);
   is("…and what the shares do not cover stays unplaced", [half.parts.get(1), half.rest], [250, 750]);
+  // TAX IS PER CHARGE (0214): the One Touch charge, $13.07 in Atlanta, is $12.00 + $1.07 at 8.9%.
+  is("per-charge tax: $13.07 in Atlanta carries $1.07", taxCentsOf(row("charge", "Atlanta", 1307)), 107);
+  // THE PAGE FILTER (2026-10-08): a city keeps its rows; a field gets its rows plus the membership
+  // credited to it, and day rows allocated at the month add up to the month exactly.
+  const venues = new Map([[1, { name: "NEMP", city: "Austin" }], [2, { name: "Hattrick", city: "Austin" }]]);
+  const shares = () => [{ venueId: 1, share: 0.6 }, { venueId: 2, share: 0.3 }];
+  const mem = (period: string, gross: number): RollupRow => ({ ...row("charge", "Austin", gross), type: "Membership", period });
+  const month = [mem("2026-09-01", 100003), { ...row("charge", "Austin", 5000), fin_venue_id: 1, period: "2026-09-01" }];
+  const days = [mem("2026-09-01", 70001), mem("2026-09-02", 30002), { ...row("charge", "Austin", 5000), fin_venue_id: 1, period: "2026-09-03" }];
+  const f = { city: null, field: "NEMP|Austin" };
+  const mNet = totalsOf(filterRows(month, f, venues, shares)).net, dNet = totalsOf(filterRows(days, f, venues, shares, true)).net;
+  is("a field's day rows sum to its month figure, to the cent", dNet, mNet);
+  is("city filter keeps only that city", totalsOf(filterRows([...month, { ...row("charge", "Houston", 999) }], { city: "Austin", field: null }, venues)).gross, 105003);
   // CONTROL: a city with no rate is NAMED, never silently taxed at zero.
   is("control: a city with no rate is reported", totalsOf([row("charge", "Fort Worth", 10000)]).missingRate, ["Fort Worth"]);
 }
