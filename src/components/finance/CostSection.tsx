@@ -277,7 +277,9 @@ export default function CostSection() {
       <div className={s.tiles}>
         <div className={s.tile}>
           <span className={s.tileLab}>Field cost ratio</span>
-          <span className={s.tileVal} data-testid="cost-tile-ratio">{ratioOf(T) == null ? "—" : fmtPct(ratioOf(T)!)}{ratioOf(T) != null && soFar}</span>
+          <span className={s.tileVal} data-testid="cost-tile-ratio" data-partial={isPartial ? "1" : undefined}
+            title={isPartial ? IN_PROGRESS : undefined} style={isPartial ? PARTIAL_STYLE : undefined}>
+            {ratioOf(T) == null ? "—" : fmtPct(ratioOf(T)!)}{ratioOf(T) != null && soFar}</span>
         </div>
         <div className={s.tile}>
           <span className={s.tileLab} title={FIELD_COST_HOVER} data-testid="cost-hover-tile" style={{ textDecoration: "underline dotted", textUnderlineOffset: 3, cursor: "help" }}>Field cost</span>
@@ -308,7 +310,9 @@ export default function CostSection() {
         <div className={s.chart} data-testid="cost-chart">
           {series.map((p) => (
             <div key={p.ym} className={s.col} data-testid="cost-chart-col" data-month={p.ym} style={p.partial ? { opacity: 0.5 } : undefined}>
-              <span className={s.colVal}>{p.ratio == null ? "—" : fmtPct(p.ratio, 0)}</span>
+              <span className={s.colVal} data-testid="cost-chart-ratio" title={p.partial ? IN_PROGRESS : undefined}
+                style={p.partial ? { cursor: "help", textDecoration: "underline dotted", textUnderlineOffset: 3 } : undefined}>
+                {p.ratio == null ? "—" : fmtPct(p.ratio, 0)}</span>
               <div className={s.stack} style={{ flexDirection: "row", alignItems: "flex-end", gap: 4 }}>
                 <div className={s.barB} style={{ height: `${(p.revenue / max) * 150}px`, flex: 1, borderRadius: "4px 4px 0 0" }} />
                 <div className={s.barA} style={{ height: `${(p.cost / max) * 150}px`, flex: 1 }} />
@@ -349,7 +353,7 @@ export default function CostSection() {
 
       <EconomicsTable rows={ordered} grain={grain} total={{ cur: T, prior: total.prior }} priorYms={priorYms}
         totalLabel={cityFilter === "all" ? (grain === "city" ? "All cities" : "All fields") : cityFilter}
-        periodLabel={period.label} sort={sort} onSort={onSort} loaded={loaded} />
+        periodLabel={period.label} sort={sort} onSort={onSort} loaded={loaded} partial={isPartial} />
 
       {gaps.length > 0 && (
         <div className={s.gap} data-testid="cost-not-recorded">
@@ -370,9 +374,11 @@ export default function CostSection() {
   );
 }
 
-function EconomicsTable({ rows, grain, total, priorYms, totalLabel, periodLabel, sort, onSort, loaded }: {
+function EconomicsTable({ rows, grain, total, priorYms, totalLabel, periodLabel, sort, onSort, loaded, partial }: {
   rows: Row[]; grain: Grain; total: { cur: Cell; prior: (Cell | null)[] }; priorYms: string[];
   totalLabel: string; periodLabel: string; sort: SortState; onSort: (k: string) => void; loaded: (ym: string) => boolean;
+  /** The selected period is still in progress: its Cost ratio column renders lighter, with IN_PROGRESS. */
+  partial: boolean;
 }) {
   if (rows.length === 0) return <div className={s.empty}>No fields match this selection.</div>;
   const field = grain === "field";
@@ -389,8 +395,11 @@ function EconomicsTable({ rows, grain, total, priorYms, totalLabel, periodLabel,
   const tip = (ym: string | null, c: Cell | null) => (c ? `${ym ? labelOfYm(ym) : periodLabel}: revenue ${fmtMoney(c.revenue)} · field cost ${c.cost == null ? "not recorded" : fmtMoney(c.cost)}` : undefined);
   const ratioCell = (c: Cell | null, ym: string | null, why: string | null, testid: string, pill = false) => {
     const r = why ? null : ratioOf(c);
+    // THE SELECTED MONTH IN PROGRESS: lighter, and the hover says why the ratio reads low.
+    const inProgress = ym == null && partial;
     return (
-      <td className={r == null ? s.mut : ""} data-testid={testid} title={why ?? tip(ym, c)}>
+      <td className={r == null ? s.mut : ""} data-testid={testid} data-partial={inProgress ? "1" : undefined}
+        title={why ?? (inProgress ? IN_PROGRESS : tip(ym, c))} style={inProgress && r != null ? PARTIAL_STYLE : undefined}>
         {r == null ? "—" : pill ? (
           <span className={`${s.pill} ${s[ratioBand(r)]}`} data-testid="cost-ratio-pill" data-band={ratioBand(r)}><i className={s.pillDot} />{fmtPct(r)}</span>
         ) : fmtPct(r)}
@@ -408,7 +417,7 @@ function EconomicsTable({ rows, grain, total, priorYms, totalLabel, periodLabel,
               {field && th("city", "City", "l")}
               {th("rev", "Revenue", undefined, REVENUE_HOVER)}
               {th("cost", <span title={FIELD_COST_HOVER} data-testid="cost-hover-th">Field cost</span>)}
-              {th("ratio", "Cost ratio")}
+              {th("ratio", "Cost ratio", undefined, partial ? IN_PROGRESS : undefined)}
               {priorYms.map((ym, i) => th(`p${i}`, monName(ym), undefined, `Cost ratio, all of ${labelOfYm(ym)}`))}
             </tr>
           </thead>
@@ -448,3 +457,8 @@ function RatioTd({ c, ym, why, tip, testid }: { c: Cell | null; ym: string; why:
  * never the month bill, and never a cost per match override (fieldEconomics reads legRateUnitCost). */
 const FIELD_COST_HOVER = "Field Costs rate × matches played, in the month they were played. OpEx shows when the bill is paid.";
 const REVENUE_HOVER = "Net revenue, the same as the Revenue page.";
+/* A MONTH IN PROGRESS READS LOW (Ryan, 2026-10-10): revenue counts every charge so far — the
+ * memberships billed on the 1st and bookings for matches still to come — while field cost counts
+ * only matches already played. Shown, lighter, with this said on hover; never adjusted. */
+const IN_PROGRESS = "Month in progress. Revenue includes memberships billed on the 1st and bookings for matches not yet played; field cost counts only matches played so far. Compare full months.";
+const PARTIAL_STYLE: React.CSSProperties = { opacity: 0.5, cursor: "help" };
