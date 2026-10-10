@@ -399,7 +399,15 @@ export default function RevenueSection() {
     return n.from > n.to ? { from: n.to, to: n.from, preset: null } : n;
   });
   const rangeMonths = useMemo(() => monthsBetween(range.from, range.to), [range.from, range.to]);
-  const rangeNewest = useMemo(() => [...rangeMonths].reverse(), [rangeMonths]);
+  /* OLDEST TO NEWEST, LEFT TO RIGHT (Ryan, 2026-10-09: as it was before the rework). When the months
+   * do not fit, the box is scrolled to its right end so the latest months show, with the row labels
+   * pinned on the left — on load, and again whenever the range or the city / field changes. */
+  const monthBox = useRef<HTMLDivElement | null>(null);
+  // STABLE, so it fires when the box mounts (the card appears after the roster loads), not on every render.
+  const monthBoxRef = useCallback((el: HTMLDivElement | null) => {
+    monthBox.current = el;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, []);
   const monthOptions = useMemo(() => monthsBetween(firstYm && firstYm < range.from ? firstYm : range.from, curYm), [firstYm, range.from, curYm]);
   const rowsByMonth = useMemo(() => {
     const m = new Map<Ym, RollupRow[]>(rangeMonths.map((ym) => [ym, []]));
@@ -455,6 +463,12 @@ export default function RevenueSection() {
     }
     return out;
   }, [hist.data, rangeMonths, rowsByMonth, filter, venues, rangeShares, monthKnown]);
+
+  const monthsReady = !!monthly;
+  useEffect(() => {
+    const el = monthBox.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [range.from, range.to, filter.city, filter.field, monthsReady]);
   const SUMMARY_ROWS: { key: string; label: string; pick: (t: Totals) => number; strong?: boolean }[] = [
     { key: "gross", label: "Gross collected", pick: (t) => t.gross },
     { key: "reversals", label: "Refunds and disputes", pick: (t) => t.reversals },
@@ -601,7 +615,7 @@ export default function RevenueSection() {
         </div>
       )}
 
-      {/* ── THE MONTHLY CARD: "Revenue for <scope>", a month range, newest first ── */}
+      {/* ── THE MONTHLY CARD: "Revenue for <scope>", a month range, oldest to newest ── */}
       <div className={s.card} data-testid="revenue-monthly">
         <div className="rv2-mhead">
           <h2 className="rv2-mtitle" data-testid="revenue-summary-title">Revenue for {fieldName ?? filter.city ?? "All MatchDay"}</h2>
@@ -627,17 +641,17 @@ export default function RevenueSection() {
           </div>
         </div>
         <div className={s.cardSub} data-testid="revenue-summary-sub">
-          {shortYm(range.from)} to {shortYm(range.to)} · newest first · Central time
+          {shortYm(range.from)} to {shortYm(range.to)} · Central time
         </div>
         {hist.error ? (
           <div className={s.empty}>Revenue did not load: {hist.error}</div>
         ) : (
-        <div className={s.tblWrap}>
+        <div className={s.tblWrap} ref={monthBoxRef} data-testid="revenue-summary-box">
           <table className={s.tbl} data-testid="revenue-summary">
             <thead>
               <tr>
                 <th className="l">&nbsp;</th>
-                {rangeNewest.map((ym) => (
+                {rangeMonths.map((ym) => (
                   <th key={ym} data-testid="revenue-summary-month" data-month={ym}>
                     {shortYm(ym)}
                     {ym === curYm && <i className={s.soFar}>so far</i>}
@@ -649,7 +663,7 @@ export default function RevenueSection() {
               {SUMMARY_ROWS.filter((row) => row.key !== "other" || rangeMonths.some((ym) => (monthly?.get(ym)?.t?.other ?? 0) !== 0)).map((row) => (
                 <tr key={row.key} data-testid="revenue-summary-row" data-row={row.key}>
                   <td className="l" style={{ textAlign: "left" }}>{row.strong ? <b>{row.label}</b> : row.label}</td>
-                  {rangeNewest.map((ym) => {
+                  {rangeMonths.map((ym) => {
                     const c = monthly?.get(ym);
                     const v = c?.t ? row.pick(c.t) : null;
                     // A DASH, NOT $0, before launch — when the month holds nothing. A pre-launch month
