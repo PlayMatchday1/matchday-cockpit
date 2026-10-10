@@ -1,6 +1,5 @@
 /* FINANCE › REVENUE — the month range (From / To and the 4M / 6M / 12M / Since launch presets) and
- * the sortable City / Field tables. Pure helpers; no figure is computed here, only months, order
- * and the Change column's percent. Month keys are "YYYY-MM" (the rollup's period is "YYYY-MM-01").
+ * the sortable City / Field tables. Pure helpers; no figure is computed here, only months and order. Month keys are "YYYY-MM" (the rollup's period is "YYYY-MM-01").
  * Calendar arithmetic only — no Date parsing of stored timestamps, so no timezone can shift a month. */
 
 const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -35,17 +34,6 @@ export function presetRange(p: Preset, to: Ym, launch: Ym | null, first: Ym | nu
   }
   const from = addMonths(to, -(Number(p) - 1));
   return { from: first && from < first ? first : from, to, preset: p };
-}
-
-/** CHANGE: the last FULL month in range against the first month in range, as a whole percent. The
- *  month in progress is never the end point. Null when there are not two months to compare, or the
- *  first is zero or missing (a percent of nothing). */
-export function changePct(months: Ym[], valueOf: (ym: Ym) => number | null, currentYm: Ym): number | null {
-  const full = months.filter((m) => m < currentYm);
-  if (full.length < 2) return null;
-  const a = valueOf(full[0]), b = valueOf(full[full.length - 1]);
-  if (a == null || b == null || a === 0) return null;
-  return Math.round((b / a - 1) * 100);
 }
 
 /** SORTING. Numbers start highest first, text A to Z; a second click reverses. A missing value (a

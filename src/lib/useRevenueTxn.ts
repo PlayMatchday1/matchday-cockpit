@@ -139,3 +139,23 @@ export function loadCityLaunches(fieldsByCity: Record<string, number[]>): Promis
     return out;
   });
 }
+
+/** A FIELD WITH NO launch_date launches at its first PLAYED match: not cancelled, and already
+ *  kicked off (today or earlier, compared on the match's local wall-clock date). One ordered read
+ *  per venue, limit 1. Keyed by fin_venues.id → "YYYY-MM-DD" | null. */
+export function loadVenueFirstPlayed(fieldsByVenue: Record<string, number[]>, todayYmd: string): Promise<Record<string, string | null>> {
+  const key = `vfirst|${todayYmd}|${Object.entries(fieldsByVenue).sort().map(([v, ids]) => `${v}:${[...ids].sort((a, b) => a - b).join(",")}`).join(";")}`;
+  return cached(key, async () => {
+    const out: Record<string, string | null> = {};
+    await Promise.all(Object.entries(fieldsByVenue).map(async ([vid, ids]) => {
+      if (ids.length === 0) { out[vid] = null; return; }
+      const { data, error } = await supabase.from("mdapi_matches").select("start_date")
+        .in("field_id", ids).eq("is_cancelled", false).is("deleted_at", null)
+        .lte("start_date", `${todayYmd}T23:59:59Z`)
+        .order("start_date", { ascending: true }).limit(1);
+      if (error) throw new Error(`mdapi_matches (first match of venue ${vid}): ${error.message}`);
+      out[vid] = data?.[0]?.start_date ? String(data[0].start_date).slice(0, 10) : null;
+    }));
+    return out;
+  });
+}

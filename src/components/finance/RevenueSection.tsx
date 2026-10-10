@@ -38,7 +38,7 @@ import {
 } from "@/lib/fieldEconomics";
 import { cityTotalMemberSpotsFor, unattributedVenues, venueMemberSpotsFor } from "@/lib/financeStats";
 import {
-  addMonths, changePct, dateOfYm, monthsBetween, nextSort, periodKeyOfYm, presetRange, shortYm, ymOfDate, ymOfPeriodKey,
+  addMonths, dateOfYm, monthsBetween, nextSort, periodKeyOfYm, presetRange, shortYm, ymOfDate, ymOfPeriodKey,
   type MonthRange, type Preset, type SortState, type Ym,
 } from "@/lib/revenueRange";
 import { loadMembershipWindowsByUserId, type MembershipWindowsByUserId } from "@/lib/mdapiMatchesRead";
@@ -46,13 +46,13 @@ import {
   bucketOf, byCityRows, byFieldRows, cityLabel, fieldKeyOf, filterRows, isRevenueRow, taxCentsOf, totalsOf, money, UNASSIGNED,
   type GroupRow, type MemberShares, type PageFilter, type RollupRow, type Totals,
 } from "@/lib/revenueTxn";
-import { loadCityLaunches, loadMatchRollup, loadRollup, useAsync, useReaderId } from "@/lib/useRevenueTxn";
+import { loadCityLaunches, loadMatchRollup, loadVenueFirstPlayed, loadRollup, useAsync, useReaderId } from "@/lib/useRevenueTxn";
 import { downloadCsv } from "@/components/growth/format";
 import MatchView from "./MatchView";
 import DailyRevenuePace from "./DailyRevenuePace";
 import RevenueTop, { monthKeyOf, monthLabelOf, ymdOf } from "./RevenueTop";
 import RevenueNetTable, {
-  RevenueByMonthTable, TEXT_KEYS, monthCell, monthValue, orderRows, selectedValue, type MonthRow, type PnLCell,
+  TEXT_KEYS, orderRows, selectedValue, type PnLCell,
 } from "./RevenueNetTable";
 import { useFieldPnL } from "@/lib/useFieldPnL";
 import { rollupFields, type FieldAgg, type PnLRollup } from "@/lib/fieldPnL";
@@ -60,7 +60,6 @@ import { InfoI, RV2_CSS } from "./RevenueInfo";
 import s from "./financeSection.module.css";
 
 type Grain = "city" | "field" | "match";
-type View = "sum" | "month";
 
 /** Every month fin_txn holds, fetched once: month × venue over all history is ~700 rows and ~1.2 s
  *  (measured 2026-10-09), summed by the database — the range controls only pick months out of it. */
@@ -334,12 +333,24 @@ export default function RevenueSection() {
    * A FIELD: fin_venues.launch_date, the earliest among the field's venue rows (what the Field tab's
    * Export has always carried). A CITY: the first non-cancelled match on any field linked to the
    * city's venues (Ryan, 2026-10-09: "its earliest field's first match"), read in loadCityLaunches. */
-  const fieldLaunchYm = useCallback((name: string, city: string | null): Ym | null => {
-    const dates = (data?.venues ?? [])
-      .filter((v) => v.venue_name === name && (v.city ?? null) === city)
-      .map((v) => v.launch_date).filter((d): d is string => !!d).sort();
-    return dates.length ? dates[0].slice(0, 7) : null;
+  /* NO launch_date → THE FIELD'S FIRST PLAYED MATCH (Ryan, 2026-10-09: Hill Country Middle School
+   * printed $0 for months before it existed). Read only for the venues that need it. */
+  const noLaunch = useMemo(() => {
+    if (!data) return null;
+    const o: Record<string, number[]> = {};
+    for (const v of data.venues) if (!v.launch_date) o[String(v.id)] = [];
+    for (const [fid, vid] of data.venueFields) o[String(vid)]?.push(Number(fid));
+    return o;
   }, [data]);
+  const nowYmd = ymdOf(now);
+  const venueFirst = useAsync(noLaunch ? `vfirst|${nowYmd}|${JSON.stringify(noLaunch)}` : null, () => loadVenueFirstPlayed(noLaunch!, nowYmd));
+  const fieldLaunchYm = useCallback((name: string, city: string | null): Ym | null => {
+    const legs = (data?.venues ?? []).filter((v) => v.venue_name === name && (v.city ?? null) === city);
+    const dates = legs.map((v) => v.launch_date).filter((d): d is string => !!d).sort();
+    if (dates.length) return dates[0].slice(0, 7);
+    const first = legs.map((v) => venueFirst.data?.[String(v.id)]).filter((d): d is string => !!d).sort();
+    return first.length ? first[0].slice(0, 7) : null;
+  }, [data, venueFirst.data]);
   const fieldsByCity = useMemo(() => {
     if (!data) return null;
     const cityOf = new Map(data.venues.map((v) => [Number(v.id), canonCity(v.city)]));
@@ -400,8 +411,7 @@ export default function RevenueSection() {
    * onto fields), which come from the roster loader. The page already holds the period and the
    * prior three; a range reaching further loads the missing months — at most four quarters, the
    * loader's limit — and anything older prints a dash marked "not loaded", never a zero. */
-  const [view, setView] = useState<View>("sum");
-  const needShares = !!filter.field || (grain === "field" && view === "month");
+  const needShares = !!filter.field;
   const neededYms = needShares ? rangeMonths.filter((ym) => !covers(data, ym)) : [];
   const extraKey = neededYms.length ? `${neededYms[0]}|${neededYms[neededYms.length - 1]}` : "";
   const extraPeriod = useMemo(() => {
@@ -473,14 +483,13 @@ export default function RevenueSection() {
   }, [grain, panelRows, cityGroups, fieldGroups, now]);
 
   /* SWITCHING VIEW KEEPS WHAT THE NEXT VIEW CAN STILL USE: the page's City carries onto Match
-   * View's own City select. Each switch puts the sort back to its default. */
-  const defaultSort = (v: View): SortState => ({ key: v === "sum" ? "net" : "range", dir: -1 });
-  const [sort, setSort] = useState<SortState>(defaultSort("sum"));
+   * View's own City select. Each switch puts the sort back to Net revenue, highest first. */
+  const defaultSort = (): SortState => ({ key: "net", dir: -1 });
+  const [sort, setSort] = useState<SortState>(defaultSort());
   const changeGrain = (next: Grain) => {
     if (next === grain) return;
-    setGrain(next); setSort(defaultSort(view));
+    setGrain(next); setSort(defaultSort());
   };
-  const changeView = (next: View) => { if (next !== view) { setView(next); setSort(defaultSort(next)); } };
   const onSort = (k: string) => setSort((cur) => nextSort(cur, k, TEXT_KEYS.has(k)));
 
   /* A ROW SETS THE PINNED FILTER, and the page follows it as it would from the selects. The top of
@@ -497,34 +506,7 @@ export default function RevenueSection() {
       : grain === "city" && g.label !== UNASSIGNED ? () => openCity(g.label) : null,
   [grain, openCity, openField]);
 
-  // ── BY MONTH: one row per city or field, one cell per month in range ──
-  const monthRows = useMemo<MonthRow[]>(() => {
-    if (view !== "month" || grain === "match" || !hist.data) return [];
-    const field = grain === "field";
-    const unknown = new Set<Ym>(field ? rangeMonths.filter((ym) => !monthKnown(ym)) : []);
-    const out = new Map<string, MonthRow>();
-    for (const ym of rangeMonths) {
-      if (unknown.has(ym)) continue;
-      let rows = rowsByMonth.get(ym) ?? [];
-      if (field && filter.city) rows = rows.filter((r) => cityLabel(r.city) === filter.city);
-      for (const g of field ? byFieldRows(rows, venues, rangeShares) : byCityRows(rows)) {
-        const r = out.get(g.key) ?? {
-          key: g.key, label: g.label, city: g.city, launch: launchYmOf(g), byMonth: new Map<Ym, number>(),
-          unknown, range: null, change: null, open: openGroup(g),
-        };
-        r.byMonth.set(ym, g.net);
-        out.set(g.key, r);
-      }
-    }
-    for (const r of out.values()) {
-      const vals = rangeMonths.map((ym) => monthCell(r, ym)).filter((v): v is number => v != null);
-      r.range = vals.length ? vals.reduce((a, v) => a + v, 0) : null;
-      r.change = changePct(rangeMonths, (ym) => monthCell(r, ym), curYm);
-    }
-    return [...out.values()];
-  }, [view, grain, hist.data, rangeMonths, monthKnown, rowsByMonth, filter.city, venues, rangeShares, launchYmOf, openGroup, curYm]);
-
-  /* THE EXPORT IS THE TABLE ON SCREEN: the same view, rows in the same order, the same months. */
+  /* THE EXPORT IS THE TABLE ON SCREEN: the same rows, in the same order. */
   function exportTable() {
     if (grain === "match") {
       downloadCsv(`matchday-revenue-matches-${mPeriod.key}.csv`, [
@@ -539,16 +521,6 @@ export default function RevenueSection() {
     }
     const d = (c: number) => (c / 100).toFixed(2);
     const city = grain === "city";
-    if (view === "month") {
-      const rows = orderRows(monthRows, sort, monthValue);
-      downloadCsv(`matchday-revenue-${grain}-by-month-${range.from}-to-${range.to}.csv`, [
-        [city ? "City" : "Field", ...(city ? [] : ["City"]), "Launched", ...rangeNewest.map(shortYm), "Range total", "Change (last full month vs first month)"],
-        ...rows.map((r) => [r.label, ...(city ? [] : [r.city ?? ""]), r.launch ? shortYm(r.launch) : "",
-          ...rangeNewest.map((ym) => { const v = monthCell(r, ym); return v == null ? "" : d(v); }),
-          r.range == null ? "" : d(r.range), r.change == null ? "" : `${r.change}%`]),
-      ]);
-      return;
-    }
     // THE SELECTED VIEW, cell for cell: the same GroupRows, in dollars to the cent, and the same
     // 4-week cells, with the window in their headers.
     const groups = grain === "city" ? cityGroups : fieldGroups;
@@ -718,28 +690,14 @@ export default function RevenueSection() {
               </button>
             ))}
           </div>
-          {grain !== "match" && (
-            <div className={s.seg} role="group" aria-label="View">
-              {(["sum", "month"] as const).map((v) => (
-                <button key={v} type="button" data-testid={`view-${v}`} aria-pressed={view === v}
-                  className={view === v ? s.on : ""} onClick={() => changeView(v)}>
-                  {v === "sum" ? `Selected ${period.grain}` : "By month"}
-                </button>
-              ))}
-            </div>
-          )}
           <span className={s.brkCount} data-testid="breakdown-count">{breakdownCount}</span>
           {grain === "match" ? (
             <span className={s.brkCount} data-testid="breakdown-basis">
               · DPP revenue per match from Stripe, net of tax, dated by kick-off <InfoI pop="matchmoney" label="DPP revenue per match" />
             </span>
-          ) : view === "sum" ? (
-            <span className={s.brkCount} data-testid="breakdown-basis">
-              · {period.label}{grain === "field" && filter.city ? ` · ${filter.city}` : ""} · net revenue, Central time · click a column to sort, a row to show it above
-            </span>
           ) : (
             <span className={s.brkCount} data-testid="breakdown-basis">
-              · {shortYm(range.from)} to {shortYm(range.to)}, the same months as above{grain === "field" && filter.city ? ` · ${filter.city}` : ""} · net revenue
+              · {period.label}{grain === "field" && filter.city ? ` · ${filter.city}` : ""} · net revenue, Central time · click a column to sort, a row to show it above
             </span>
           )}
           <span className={s.brkGrow} />
@@ -761,20 +719,6 @@ export default function RevenueSection() {
               onShown={onPanelShown}
             />
           </>
-        ) : view === "month" ? (
-          hist.error ? <div className={s.empty}>Revenue did not load: {hist.error}</div>
-          : !hist.data || (grain === "field" && sharesPending && monthRows.length === 0) ? <div className={s.empty}>Loading…</div>
-          : (
-            <>
-              <RevenueByMonthTable grain={grain} rows={monthRows} months={rangeNewest} currentYm={curYm}
-                sort={sort} onSort={onSort} pending={sharesPending} unknownNote={notLoadedNote} />
-              {grain === "field" && fieldDataFrom && range.from < fieldDataFrom && (
-                <div className={s.legend} data-testid="field-history-note-table">
-                  <span>{`Before ${shortYm(fieldDataFrom)} Stripe charges do not carry a field, so a field's earlier months hold only its share of membership; the rest is in the no-field rows.`}</span>
-                </div>
-              )}
-            </>
-          )
         ) : txn.error ? (
           <div className={s.empty}>Revenue did not load: {txn.error}</div>
         ) : !periodRows ? (

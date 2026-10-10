@@ -213,8 +213,5 @@ export const RV2_CSS = `
 .rv2 table.city tbody tr.go:hover td{background:#f7faf8}
 .rv2 table.city tbody tr.go:hover td.net{background:#d9f1e1}
 .rv2 table.city tbody tr.go:focus-visible{outline:2px solid #2bd17e;outline-offset:-2px}
-.rv2 table.city td.up{color:#1f8a4c}
-.rv2 table.city.bm{min-width:0}
-.rv2 table.city.bm th .sub{display:block}
 @media (max-width:767px){.rv2 .big .v{font-size:32px}.rv2 .hero-top{grid-template-columns:1fr;gap:18px}.rv2 .tiles{grid-template-columns:1fr 1fr!important}.rv2 .tiles>.tile:last-child{grid-column:auto}.rv2 .tile .v{font-size:24px}.rv2 .hero{padding:16px}.rv2-title{font-size:24px}}
 `;

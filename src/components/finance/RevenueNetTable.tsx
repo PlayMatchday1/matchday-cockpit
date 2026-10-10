@@ -1,15 +1,13 @@
 "use client";
 
-/* CITY AND FIELD TABLES ON fin_txn — two views (Ryan, 2026-10-08; reworked 2026-10-09).
+/* CITY AND FIELD TABLES ON fin_txn (Ryan, 2026-10-08; reworked 2026-10-09).
  *
- * SELECTED PERIOD (follows the month picker): Launched, Venues (city), Matches, Net revenue, Avg /
+ * THE SELECTED PERIOD, always (the By month view came off 2026-10-09 — the monthly card above covers
+ * month by month for any city or field): Launched, Venues (city), Matches, Net revenue, Avg /
  * venue (city), Member mix, then the last 4 completed weeks — with the Unassigned row (city) or the
  * no-field rows (field), so the Total equals the net revenue figure above, to the cent. Every money
  * cell is a GroupRow from src/lib/revenueTxn.ts; DPP and Membership are in the Net revenue cell's
  * hover and in the Export.
- *
- * BY MONTH (follows the monthly card's range): one column per month, newest first, then Range total
- * and Change (the last full month against the first month in range).
  *
  * EVERY HEADER SORTS (a button, so Tab and Enter work): numbers highest first, text A to Z, a second
  * click reverses, dashes last both ways. The pinned rows — Unassigned, the no-field rows and Total —
@@ -221,112 +219,6 @@ export default function RevenueNetTable({ grain, groups, matchesOf, venuesOf, la
             {!field && <td className="num">{perVenue(T.net, T.venues)}</td>}
             <td className="num">{mix(T.membership, T.net)}</td>
             {pnlCells(pnl.total)}
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-/* ── BY MONTH ─────────────────────────────────────────────────────────────────────────────────── */
-
-/** One row of the By month view. `byMonth` holds cents; a month that is absent is "no revenue
- *  that month", and `dash` says which of those months print a dash rather than $0 (before launch,
- *  or not loaded). */
-export type MonthRow = {
-  key: string; label: string; city: string | null; launch: Ym | null;
-  byMonth: Map<Ym, number>;
-  /** Months whose figure is unknown (member spots not loaded): a dash, and left out of the total. */
-  unknown: Set<Ym>;
-  range: number | null; change: number | null;
-  open: (() => void) | null;
-};
-
-/** A cell's value, null for a dash. */
-export function monthCell(r: MonthRow, ym: Ym): number | null {
-  if (r.unknown.has(ym)) return null;
-  const v = r.byMonth.get(ym);
-  if (v != null) return v;
-  return r.launch && ym < r.launch ? null : 0;
-}
-
-export function monthValue(r: MonthRow, key: string): number | string | null {
-  if (key === "name") return r.label;
-  if (key === "city") return r.city;
-  if (key === "launch") return ymNum(r.launch);
-  if (key === "range") return r.range;
-  if (key === "change") return r.change;
-  if (key.startsWith("m:")) return monthCell(r, key.slice(2));
-  return null;
-}
-
-export function RevenueByMonthTable({ grain, rows, months, currentYm, sort, onSort, unknownNote, pending }: {
-  grain: "city" | "field";
-  rows: MonthRow[];
-  /** Newest first. */
-  months: Ym[];
-  currentYm: Ym;
-  sort: SortState;
-  onSort: (k: string) => void;
-  unknownNote: string;
-  /** Member spots for the unknown months are still loading: "…" rather than a dash. */
-  pending?: boolean;
-}) {
-  if (rows.length === 0) return <div style={{ padding: 16, color: "#7b8b82" }}>No revenue for this selection.</div>;
-  const field = grain === "field";
-  const ordered = orderRows(rows, sort, monthValue);
-  const th = (k: string, label: React.ReactNode, cls?: string) =>
-    <SortTh k={k} label={label} sort={sort} onSort={onSort} className={cls} testid={`bm-h-${k.replace(":", "-")}`} />;
-  const total = (ym: Ym) => rows.reduce((a, r) => a + (monthCell(r, ym) ?? 0), 0);
-  const anyUnknown = (ym: Ym) => rows.some((r) => r.unknown.has(ym));
-  const rangeTotal = rows.reduce((a, r) => a + (r.range ?? 0), 0);
-  const cell = (r: MonthRow, ym: Ym) => {
-    const v = monthCell(r, ym);
-    if (v == null) {
-      if (r.unknown.has(ym) && pending) return <td key={ym} className="num dim" data-month={ym}>…</td>;
-      const why = r.unknown.has(ym) ? unknownNote : `Before ${r.label} launched`;
-      return <td key={ym} className="num dim" title={why} data-month={ym}>—</td>;
-    }
-    return <td key={ym} className="num" data-month={ym} data-cents={v}>{money(v)}</td>;
-  };
-  return (
-    <div className="tw nt-wrap">
-      <table className="city nt bm" data-testid={field ? "field-month-table" : "city-month-table"}>
-        <thead>
-          <tr>
-            {th("name", field ? "Field" : "City", "l pin")}
-            {field && th("city", "City", "l")}
-            {th("launch", "Launched")}
-            {months.map((ym) => th(`m:${ym}`, <>{shortYm(ym)}{ym === currentYm && <span className="sub">so far</span>}</>))}
-            {th("range", "Range total", "net")}
-            {th("change", "Change")}
-          </tr>
-        </thead>
-        <tbody>
-          {ordered.map((r) => {
-            const un = isPinnedRow(r);
-            const rp = rowProps(un ? null : r.open, r.label);
-            return (
-              <tr key={r.key} {...rp} className={[un ? "un" : "", rp.className ?? ""].join(" ").trim()}
-                data-testid={r.label === UNASSIGNED ? "bm-row-un" : `bm-row-${slug(r.label)}`} data-label={r.label}>
-                <td className="l pin">{r.label}</td>
-                {field && <td className="l nt-city">{r.city ?? "—"}</td>}
-                <td className="num">{r.launch ? shortYm(r.launch) : "—"}</td>
-                {months.map((ym) => cell(r, ym))}
-                <td className="num net" data-cents={r.range ?? ""}>{r.range == null ? "—" : money(r.range)}</td>
-                <td className={`num ${r.change == null ? "dim" : r.change < 0 ? "neg" : "up"}`} data-testid="bm-change">
-                  {r.change == null ? "—" : `${r.change > 0 ? "+" : ""}${r.change}%`}</td>
-              </tr>
-            );
-          })}
-          <tr className="tot" data-testid="bm-row-total">
-            <td className="l pin">Total</td>
-            {field && <td className="l">—</td>}
-            <td className="num" />
-            {months.map((ym) => <td key={ym} className="num" data-cents={total(ym)} title={anyUnknown(ym) ? unknownNote : undefined}>
-              {anyUnknown(ym) ? (pending ? "…" : "—") : money(total(ym))}</td>)}
-            <td className="num net" data-cents={rangeTotal}>{money(rangeTotal)}</td>
-            <td className="num" />
           </tr>
         </tbody>
       </table>
