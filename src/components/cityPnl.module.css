@@ -184,7 +184,6 @@
 .cards { display: none; }
 
 @media (max-width: 899px) {
-  .tblWrap { display: none; }
   .cards { display: flex; flex-direction: column; gap: 10px; padding: 0 14px 4px; }
   .top { padding: 16px 14px 12px; }
   .ctrls { align-items: flex-start; width: 100%; }
@@ -303,11 +302,13 @@
 .split6 b { font-variant-numeric: tabular-nums; }
 
 /* ── PHONE: A CARD PER CITY. A six-column table does not survive 393px, so it is not attempted. */
+/* ── EVERY WIDTH: THE TABLE (2026-10-10). Below its natural width it scrolls sideways inside its
+   own box; the page never does. The city column stays put while the numbers scroll. */
 @media (max-width: 1023px) {
-  .tblWrap6 { display: none; }
-  .cards6 { display: grid; gap: 10px; }
+  .tbl6 { min-width: 760px; }
+  .tbl6 td.city6, .tbl6 th.thCity6, .tbl6 td.childName6 { position: sticky; left: 0; z-index: 1; background: #fff; }
+  .tbl6 tr.group6 td, .tbl6 tr.note6 td { position: static; }
 }
-@media (min-width: 1024px) { .cards6 { display: none; } }
 
 .card6 { border: 1px solid var(--line); border-radius: 12px; background: #fff; overflow: hidden; }
 .card6loss { background: #fdf6f4; }
@@ -330,3 +331,24 @@
 .ptable6 td { padding: 8px 0; border-bottom: 1px solid var(--line2); font-size: 13.5px;
   text-align: right; font-variant-numeric: tabular-nums; }
 .ptable6 td.city6 { text-align: left; }
+
+/* ── CITIES, 2026-10-10: plain costs, red only for a negative, child rows in the same columns ── */
+.tbl6 tbody td, .tbl6 tfoot td { color: var(--ink); }
+.tbl6 tbody td.neg6, .tbl6 tfoot td.neg6, .neg6 { color: var(--red); }
+.tbl6 tbody td.mar6 { color: var(--mute); }
+.tbl6 tbody td.na { color: #c3cfc8; }
+.sortBtn { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; border-radius: 4px; }
+.sortBtn:focus-visible { outline: 2px solid #2bd17e; outline-offset: 1px; }
+.sortArr { font-size: 9px; opacity: .25; }
+.sortOn { opacity: 1; }
+.tbl6 tr.group6 td { padding: 10px 16px 4px 38px; font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--mute); font-weight: 700; text-align: left; border-bottom: 0; background: #fbfdfa; }
+.tbl6 tr.child6 td { padding-top: 7px; padding-bottom: 7px; font-size: 13px; background: #fbfdfa; }
+.tbl6 tr.child6 td.net6 { font-size: 13px; font-weight: 600; }
+.tbl6 td.childName6 { text-align: left !important; padding-left: 38px; font-weight: 400; }
+.tbl6 tr.note6 td { padding: 6px 16px 12px 38px; font-size: 12px; color: var(--ink2); text-align: left; background: #fbfdfa; }
+.tbl6 tr.pinned6 td { color: var(--ink2); }
+/* City profit keeps its weight but not its green: plain ink, red only when negative. */
+.tbl6 tbody td.net6, .tbl6 tfoot td.net6 { color: var(--ink); }
+.tbl6 tbody td.net6.neg6, .tbl6 tfoot td.net6.neg6 { color: var(--red); }
+.tbl6 tr.pinned6 td.net6 { color: var(--ink2); }

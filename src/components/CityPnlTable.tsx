@@ -50,10 +50,10 @@ import { isCityHidden } from "@/lib/types";
 import { computeCityPnl, type CityCostMode, type CityCostScope, type CityPnl, type CityRevenue, type PnlField } from "@/lib/cityPnl";
 import { useNetRevenue } from "@/lib/useNetRevenue";
 import { canonCity } from "@/lib/fieldEconomics";
+import { nextSort, sortBy } from "@/lib/revenueRange";
 import styles from "./cityPnl.module.css";
 
 const usd = (v: number) => (v < 0 ? "−$" : "$") + Math.abs(Math.round(v)).toLocaleString("en-US");
-const usdNeg = (v: number) => (v === 0 ? "$0" : "−$" + Math.abs(Math.round(v)).toLocaleString("en-US"));
 // The same minus sign as the money cells — a hyphen next to "−$1,611" reads as a different mark.
 const pctInt = (x: number) => {
   const n = Math.round(x * 100);
@@ -90,6 +90,7 @@ export default function CityPnlTable() {
   const [basis, setBasis] = useState<BasisId>("per_match|realized");
   const [scope, setScope] = useState<string>("All cities");
   const [open, setOpen] = useState<string | null>(null);
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "rev", dir: -1 });
 
   const [costMode, costScope] = basis.split("|") as [CityCostMode, CityCostScope];
   const months = period.months;
@@ -152,7 +153,23 @@ export default function CityPnlTable() {
   );
   const T = showUn ? { ...T0, dpp: T0.dpp + unassigned, total: T0.total + unassigned, afterCost: T0.afterCost + unassigned, net: T0.net + unassigned } : T0;
 
-  const maxRev = Math.max(1, ...shown.map((k) => k.gross));
+  /* SORTING (Ryan, 2026-10-10): every header sorts the city rows; numbers start highest first,
+   * text A to Z, a second click reverses. Unassigned, the no-data cities and the total stay pinned
+   * at the bottom, and an expanded city's child rows travel with it in their own order. */
+  const valueOf = (k: CityPnl, key: SortKey): number | string =>
+    key === "city" ? k.city : key === "rev" ? k.gross : key === "cost" ? k.fieldCost : key === "exp" ? k.overheadTotal : key === "profit" ? k.net : k.margin;
+  const sorted = sortBy(shown, (k) => valueOf(k, sort.key), sort.dir);
+  const onSort = (key: SortKey) => setSort((cur) => nextSort(cur, key, key === "city") as { key: SortKey; dir: 1 | -1 });
+  const th = (key: SortKey, label: string, extra?: { title?: string; left?: boolean; testid?: string }) => {
+    const on = sort.key === key;
+    return (
+      <th className={extra?.left ? styles.thCity6 : undefined} aria-sort={on ? (sort.dir === 1 ? "ascending" : "descending") : "none"} data-testid={`citypnl-th-${key}`}>
+        <button type="button" className={styles.sortBtn} onClick={() => onSort(key)} title={extra?.title} data-testid={extra?.testid}>
+          {label}<span className={on ? `${styles.sortArr} ${styles.sortOn}` : styles.sortArr} aria-hidden="true">{on && sort.dir === 1 ? "▲" : "▼"}</span>
+        </button>
+      </th>
+    );
+  };
 
   return (
     <div className={styles.wrap}>
@@ -175,14 +192,12 @@ export default function CityPnlTable() {
         </div>
         {/* FULL MONTH ON A PARTIAL PERIOD IS A PROJECTION OF COST. venueChargedMatchCountFor counts
             every match SCHEDULED in the window, including the ones that have not been played, so
-            the cost column carries the whole period while revenue has only accrued to today. Field
-            net and both margins are understated for as long as the period is open. Realized is the
-            like-for-like basis; this says so rather than leaving it to be discovered. */}
+            the cost column carries the whole period while revenue has only accrued to today. */}
         {costScope === "fullMonth" && period.isCurrent && (
           <p className={styles.basisNote} data-testid="citypnl-fullmonth-note">
-            <b>Full month against a partial period.</b> Cost covers all {period.totalDays} days —
-            every match scheduled in {period.label}, played or not — while revenue has only accrued
-            over {period.elapsedDays}. Field net and both margins read low until the period closes.
+            <b>Full month against a partial period.</b> Field cost covers all {period.totalDays} days,
+            every match scheduled in {period.label}, played or not, while revenue has only accrued
+            over {period.elapsedDays}. City profit and margin read low until the period closes.
             Switch to Realized to compare like with like.
           </p>
         )}
@@ -199,15 +214,13 @@ export default function CityPnlTable() {
           ))}
         </div>
 
-        {/* SCALE IS INFORMATION. Every bar is drawn against the largest city's revenue, so a
-            27:1 gap reads as 27:1 instead of as two identical rows. */}
-        {/* ── DESKTOP: SIX COLUMNS, IN P&L ORDER ───────────────────────────
-            City · Revenue · − Field cost · − Overhead · Net P&L · Margin.
-            The minus signs live in the headers because it is a CHAIN, and the reader was
-            reconstructing revenue − field − overhead = net in their head on every row.
-            DPP rev, member rev, field net and field margin are not deleted — they moved into
-            the expansion, where they are the subject rather than four more numbers competing
-            with the answer. */}
+        {/* ── ONE TABLE, SIX COLUMNS, AT EVERY WIDTH (2026-10-10) ──────────────────────────────
+            City · Revenue · Field cost · City expenses · City profit · Margin. Costs are plain
+            positive amounts; only a negative profit or margin is red. Expanding a city adds its
+            expense lines and its fields as indented rows under the SAME columns — no second header,
+            no nested box. On a phone the table scrolls sideways inside its own box; the per-city
+            cards are gone. The revenue bars came off: drawn under every figure they made the
+            Revenue column harder to scan, and the profit and margin columns say what they did. */}
         <div className={`${styles.tblWrap} ${styles.tblWrap6}`}>
           <table className={`${styles.tbl} ${styles.tbl6}`} data-testid="citypnl-table">
             <colgroup>
@@ -217,41 +230,41 @@ export default function CityPnlTable() {
             </colgroup>
             <thead>
               <tr>
-                <th className={styles.thCity6}>City</th>
-                <th><span title={CITY_REVENUE_HOVER} data-testid="citypnl-rev-hover" style={{ textDecoration: "underline dotted", textUnderlineOffset: 3, cursor: "help" }}>Revenue</span></th>
-                <th>&minus; Field cost</th>
-                <th>&minus; Overhead</th>
-                <th>Net P&amp;L</th>
-                <th>Margin</th>
+                {th("city", "City", { left: true })}
+                {th("rev", "Revenue", { title: CITY_REVENUE_HOVER, testid: "citypnl-rev-hover" })}
+                {th("cost", "Field cost")}
+                {th("exp", "City expenses")}
+                {th("profit", "City profit")}
+                {th("margin", "Margin")}
               </tr>
             </thead>
             <tbody>
-              {shown.map((k) => (
-                <CityRows key={k.city} k={k} maxRev={maxRev} open={open === k.city}
+              {sorted.map((k) => (
+                <CityRows key={k.city} k={k} open={open === k.city}
                   onToggle={() => setOpen(open === k.city ? null : k.city)} />
               ))}
-              {showUn && (
-                <tr className={styles.blank} data-testid="citypnl-unassigned-row" data-city="Unassigned">
-                  <td className={styles.city6} title="Revenue with no city on file — members with no city. The Revenue page's Unassigned row.">Unassigned</td>
-                  <td className={styles.rev6} data-testid="citypnl-rev" data-cents={Math.round(unassigned * 100)}>{usd(unassigned)}</td>
-                  <td>—</td><td>—</td><td>{usd(unassigned)}</td><td>—</td>
-                </tr>
-              )}
               {!single && blank.map((k) => (
                 <tr key={k.city} className={styles.blank} data-testid="citypnl-blank-row">
                   <td className={styles.city6}>{k.city}</td>
                   <td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
                 </tr>
               ))}
+              {showUn && (
+                <tr className={styles.pinned6} data-testid="citypnl-unassigned-row" data-city="Unassigned">
+                  <td className={styles.city6} title="Revenue with no city on file — members with no city. The Revenue page's Unassigned row.">Unassigned</td>
+                  <td data-testid="citypnl-rev" data-cents={Math.round(unassigned * 100)}>{usd(unassigned)}</td>
+                  <td>—</td><td>—</td><td className={styles.net6}>{usd(unassigned)}</td><td>—</td>
+                </tr>
+              )}
             </tbody>
             <tfoot>
               <tr data-testid="citypnl-total-row">
                 <td className={styles.city6}>{single ? scope : "All cities"}</td>
-                <td className={styles.rev6} data-testid="citypnl-total-rev" data-cents={Math.round(T.total * 100)}>{usd(T.total)}</td>
-                <td className={styles.cost}>{usdNeg(T.cost)}</td>
-                <td className={styles.cost}>{usdNeg(T.over)}</td>
-                <td className={`${styles.net6} ${T.net < 0 ? styles.net6dn : ""}`} data-testid="citypnl-total-net">{usd(T.net)}</td>
-                <td className={styles.mar6} data-testid="citypnl-total-margin">
+                <td data-testid="citypnl-total-rev" data-cents={Math.round(T.total * 100)}>{usd(T.total)}</td>
+                <td>{usd(T.cost)}</td>
+                <td>{usd(T.over)}</td>
+                <td className={`${styles.net6} ${T.net < 0 ? styles.neg6 : ""}`} data-testid="citypnl-total-net">{usd(T.net)}</td>
+                <td className={T.total && T.net < 0 ? styles.neg6 : styles.mar6} data-testid="citypnl-total-margin">
                   {T.total ? pctInt(T.net / T.total) : "—"}
                 </td>
               </tr>
@@ -259,274 +272,83 @@ export default function CityPnlTable() {
           </table>
         </div>
 
-        {/* ── PHONE: A CARD PER CITY. A six-column table does not survive 393px, so it is
-            not attempted. Name and Net P&L on the first line with the answer right-aligned and
-            dominant, the revenue bar full width beneath, then revenue / field / overhead
-            three-up. Tapping opens the same detail the desktop expansion carries. */}
-        <div className={styles.cards6}>
-          {shown.map((k) => (
-            <CityCard key={k.city} k={k} maxRev={maxRev} open={open === k.city}
-              onToggle={() => setOpen(open === k.city ? null : k.city)} />
-          ))}
-          {showUn && (
-            <div className={styles.card6} data-testid="citypnl-card-unassigned">
-              <div className={styles.card6head}><span className={styles.card6city}>Unassigned</span><span className={styles.card6net}>{usd(unassigned)}</span></div>
-              <dl className={styles.card6three}>
-                <div><dt>Revenue</dt><dd className={styles.rev6}>{usd(unassigned)}</dd></div>
-                <div><dt>&minus; Field</dt><dd>—</dd></div>
-                <div><dt>&minus; Overhead</dt><dd>—</dd></div>
-              </dl>
-            </div>
-          )}
-          <div className={`${styles.card6} ${styles.mtotal}`} data-testid="citypnl-card-total">
-            <div className={styles.card6head}>
-              <span className={styles.card6city}>{single ? scope : "All cities"}</span>
-              <span className={`${styles.card6net} ${T.net < 0 ? styles.net6dn : ""}`}>{usd(T.net)}</span>
-            </div>
-            <div className={styles.card6bar}><RevBar rev={T.total} net={T.net} maxRev={T.total} /></div>
-            <dl className={styles.card6three}>
-              <div><dt title={CITY_REVENUE_HOVER} style={{ textDecoration: "underline dotted", textUnderlineOffset: 3, cursor: "help" }}>Revenue</dt><dd className={styles.rev6}>{usd(T.total)}</dd></div>
-              <div><dt>&minus; Field</dt><dd className={styles.cost}>{usdNeg(T.cost)}</dd></div>
-              <div><dt>&minus; Overhead</dt><dd className={styles.cost}>{usdNeg(T.over)}</dd></div>
-            </dl>
-          </div>
-        </div>
-
-        <p className={styles.foot}>Click a city for its pitches and its overhead.</p>
+        <p className={styles.foot}>Click a city for its city expenses and its fields.</p>
       </div>
     </div>
   );
 }
 
-// The stacked chain used by the phone cards. Same order and same colours as the table row.
-function Chain({ dpp, memb, total, cost, afterCost, over, net }: {
-  dpp: number; memb: number; total: number; cost: number; afterCost: number; over: number; net: number;
-}) {
-  const fieldMargin = total ? afterCost / total : null;
-  return (
-    <dl className={styles.chain}>
-      <div><dt>DPP &amp; other</dt><dd>{usd(dpp)}</dd></div>
-      <div><dt>+ Member rev</dt><dd>{usd(memb)}</dd></div>
-      <div className={styles.chainSum}><dt>= Total rev</dt><dd>{usd(total)}</dd></div>
-      <div><dt>Field cost</dt><dd className={styles.cost}>{usdNeg(cost)}</dd></div>
-      <div className={styles.chainSum}><dt>= Field net</dt><dd className={afterCost < 0 ? styles.negv : ""}>{usd(afterCost)}</dd></div>
-      <div><dt>Field margin</dt>
-        <dd><span className={`${styles.pill} ${afterCost >= 0 ? styles.pillUp : styles.pillDn}`}>
-          {fieldMargin == null ? "\u2014" : pctInt(fieldMargin)}</span></dd></div>
-      <div><dt>Overhead</dt><dd className={styles.cost}>{usdNeg(over)}</dd></div>
-      <div className={styles.chainSum}><dt>= Net P&amp;L</dt>
-        <dd className={`${styles.res} ${net >= 0 ? styles.up : styles.dn}`}>{usd(net)}</dd></div>
-    </dl>
-  );
-}
+type SortKey = "city" | "rev" | "cost" | "exp" | "profit" | "margin";
 
-function CityCard({ k, maxRev, open, onToggle }: { k: CityPnl; maxRev: number; open: boolean; onToggle: () => void }) {
+/* A CITY AND, WHEN OPEN, ITS CHILD ROWS — all in the city table's six columns.
+ *   City expenses: one row per category, the amount in the City expenses column only.
+ *   Fields: revenue, field cost, field profit (City profit column) and margin (blank at $0
+ *   revenue); highest field profit first, a field with no cost basis after them; then "No field",
+ *   the city's revenue that sits at no field, so the field rows add up to the city's revenue. */
+function CityRows({ k, open, onToggle }: { k: CityPnl; open: boolean; onToggle: () => void }) {
   const loss = k.net < 0;
-  return (
-    <div className={`${styles.card6} ${loss ? styles.card6loss : ""}`} data-testid="citypnl-card"
-      data-city={k.city} data-loss={loss ? "true" : "false"}>
-      {/* NAME AND THE ANSWER ON THE FIRST LINE, the answer right-aligned and dominant. The whole
-          head is the tap target — 48px tall, never a chevron someone has to hit. */}
-      <button type="button" className={styles.card6head} onClick={onToggle} aria-expanded={open}
-        data-testid="citypnl-card-head">
-        <span className={styles.card6city}>{k.city}</span>
-        <span className={`${styles.card6net} ${loss ? styles.net6dn : ""}`} data-testid="citypnl-card-net">{usd(k.net)}</span>
-      </button>
-      <div className={styles.card6bar}><RevBar rev={k.gross} net={k.net} maxRev={maxRev} /></div>
-      <dl className={styles.card6three}>
-        <div><dt title={CITY_REVENUE_HOVER} style={{ textDecoration: "underline dotted", textUnderlineOffset: 3, cursor: "help" }}>Revenue</dt><dd className={styles.rev6} data-testid="citypnl-card-rev">{usd(k.gross)}</dd></div>
-        <div><dt>&minus; Field</dt><dd className={styles.cost}>{usdNeg(k.fieldCost)}</dd></div>
-        <div><dt>&minus; Overhead</dt><dd className={styles.cost}>{usdNeg(k.overheadTotal)}</dd></div>
-      </dl>
-      {open && (
-        <div className={styles.mpitches} data-testid="citypnl-mobile-expansion">
-          <p className={styles.subhdText}>{k.city} · by pitch</p>
-          {k.fields.map((f) => (
-            <div key={f.venue} className={styles.mpitch} data-testid="citypnl-mobile-pitch">
-              <span className={styles.ven}>{f.venue}</span>
-              <span className={styles.vmeta}>{pitchMeta(f)}</span>
-              <dl className={styles.chain}>
-                <div><dt>DPP &amp; other</dt><dd>{usd(f.dppRev)}</dd></div>
-                <div><dt>+ Member rev <i className={styles.alloc}>alloc</i></dt>
-                  <dd className={f.memberRev == null ? styles.na : ""}>{f.memberRev == null ? "—" : usd(f.memberRev)}</dd></div>
-                <div className={styles.chainSum}><dt>= Total rev</dt>
-                  <dd data-testid="citypnl-mobile-pitch-rev">{usd(f.totalRev)}</dd></div>
-                <div><dt>Field cost</dt>
-                  <dd className={f.cost == null ? styles.na : styles.cost}>{f.cost == null ? "—" : usdNeg(f.cost)}</dd></div>
-                <div className={styles.chainSum}><dt>= Field net</dt>
-                  <dd className={f.net == null ? styles.na : f.net < 0 ? styles.negv : ""}>{f.net == null ? "—" : usd(f.net)}</dd></div>
-                <div><dt>Field margin</dt>
-                  <dd>{f.net == null || !f.totalRev ? <span className={styles.na}>—</span> : (
-                    <span className={`${styles.pill} ${f.net >= 0 ? styles.pillUp : styles.pillDn}`}>{pctInt(f.net / f.totalRev)}</span>
-                  )}</dd></div>
-              </dl>
-            </div>
-          ))}
-          {/* THE UNTRACKED NOTE IS PART OF THE CONTENT, not desktop chrome — without it the pitch
-              rows simply do not add up to the city figure above them, and the reader is left to
-              wonder which number is wrong. */}
-          {k.noFieldRev !== 0 && (
-            <p className={styles.gapNote} data-testid="citypnl-mobile-nofield"><b>{usd(k.noFieldRev)} at no pitch</b> — revenue with no field on it (DPP without a field, membership no member spot placed).</p>
-          )}
-          {k.untracked > 0 && (
-            <p className={styles.gapNote} data-testid="citypnl-mobile-untracked">
-              <b>{usd(k.untracked)} of revenue is at pitches with no cost basis</b> on file — it is in the
-              revenue, with no cost counted against it rather than $0.
-            </p>
-          )}
-          <OverheadMakeup k={k} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function pitchMeta(f: PnlField): string {
-  const spots = f.memberSpots != null ? `${f.memberSpots} spots` : "spots unavailable";
-  const rate =
-    f.basis === "share" ? "billed as a share of revenue"
-    : f.basis === "unmapped" ? "no cost on file"
-    : f.unitCost != null ? `per match $${f.unitCost}`
-    : "flat billing";
-  return `${spots} · ${rate}`;
-}
-
-
-/**
- * THE REVENUE BAR — two facts in one control.
- *   LENGTH        revenue against the largest city on screen.
- *   GREEN PORTION what survives cost, so the green share IS the margin.
- *
- * THE EDGE CASE THIS EXISTS FOR: St. Louis earns $15 on $965. A true-to-scale green segment is
- * 0.08px — "barely profitable" would draw identically to "losing", which is the one distinction
- * the bar is for. ANY positive net therefore gets a minimum visible sliver; a loss gets none, and
- * that asymmetry is deliberate rather than a rounding convenience.
- */
-function RevBar({ rev, net, maxRev }: { rev: number; net: number; maxRev: number }) {
-  const revW = maxRev > 0 ? Math.max(0, Math.min(100, (rev / maxRev) * 100)) : 0;
-  // Clamped at 1, so a city spending more than it earns shows a fully consumed bar rather than a
-  // negative-width segment.
-  const costShare = rev > 0 ? Math.min(1, Math.max(0, (rev - net) / rev)) : 1;
-  const netShare = 1 - costShare;
-  return (
-    <div className={styles.barwrap6} data-testid="citypnl-bar"
-      title="bar length = revenue · green = what survives cost">
-      <div className={styles.barrev6} data-testid="citypnl-bar-rev" style={{ width: `${revW.toFixed(2)}%` }}>
-        <div className={styles.segcost6} data-testid="citypnl-bar-cost" style={{ width: `${(costShare * 100).toFixed(2)}%` }} />
-        <div className={styles.segnet6} data-testid="citypnl-bar-net"
-          style={{ width: `${(netShare * 100).toFixed(2)}%`, ...(net > 0 ? { minWidth: 2 } : null) }} />
-      </div>
-    </div>
-  );
-}
-
-function CityRows({ k, maxRev, open, onToggle }: { k: CityPnl; maxRev: number; open: boolean; onToggle: () => void }) {
-  const loss = k.net < 0;
+  const fields = sortBy(k.fields, (f) => f.net, -1);
+  const showNoField = Math.abs(k.noFieldRev) >= 0.005;
   return (
     <>
-      <tr className={`${styles.row6} ${loss ? styles.row6loss : ""}`} onClick={onToggle}
+      <tr className={styles.row6} onClick={onToggle} aria-expanded={open}
         data-testid="citypnl-row" data-city={k.city} data-loss={loss ? "true" : "false"}>
         <td className={styles.city6}>
           <span className={styles.tw6}>{open ? "▾" : "▸"}</span>{k.city}
         </td>
-        <td>
-          <div className={styles.rev6} data-testid="citypnl-rev" data-cents={Math.round(k.gross * 100)}>{usd(k.gross)}</div>
-          <RevBar rev={k.gross} net={k.net} maxRev={maxRev} />
-        </td>
-        <td className={styles.cost} data-testid="citypnl-field" data-cents={Math.round(k.fieldCost * 100)}>{usdNeg(k.fieldCost)}</td>
-        <td className={styles.cost} data-testid="citypnl-overhead-cell">{usdNeg(k.overheadTotal)}</td>
-        <td className={`${styles.net6} ${loss ? styles.net6dn : ""}`} data-testid="citypnl-net">{usd(k.net)}</td>
-        {/* BADGES ONLY ON LOSSES. A pill on 69%, 80% and 82% is why the two red ones stopped
-            registering — if every row is badged the badge means nothing. */}
-        <td className={styles.mar6} data-testid="citypnl-margin">
-          {loss ? <span className={styles.flag6} data-testid="citypnl-loss-badge">{pctInt(k.margin)}</span>
-                : pctInt(k.margin)}
-        </td>
+        <td data-testid="citypnl-rev" data-cents={Math.round(k.gross * 100)}>{usd(k.gross)}</td>
+        <td data-testid="citypnl-field" data-cents={Math.round(k.fieldCost * 100)}>{usd(k.fieldCost)}</td>
+        <td data-testid="citypnl-overhead-cell">{usd(k.overheadTotal)}</td>
+        <td className={`${styles.net6} ${loss ? styles.neg6 : ""}`} data-testid="citypnl-net">{usd(k.net)}</td>
+        <td className={loss ? styles.neg6 : styles.mar6} data-testid="citypnl-margin">{pctInt(k.margin)}</td>
       </tr>
-      {open && <Drill k={k} />}
+      {open && (
+        <>
+          {k.overhead.length > 0 && (
+            <tr className={styles.group6} data-testid="citypnl-group" data-parent={k.city}><td colSpan={6}>City expenses</td></tr>
+          )}
+          {k.overhead.map((o) => (
+            <tr key={o.label} className={styles.child6} data-testid="citypnl-expense-row" data-parent={k.city} data-expense={o.label}>
+              <td className={styles.childName6}>{o.label}</td>
+              <td /><td />
+              <td>{usd(o.value)}</td>
+              <td /><td />
+            </tr>
+          ))}
+          <tr className={styles.group6} data-testid="citypnl-group" data-parent={k.city}><td colSpan={6}>Fields</td></tr>
+          {fields.map((f) => (
+            <FieldRow key={f.venue} f={f} city={k.city} />
+          ))}
+          {showNoField && (
+            <tr className={styles.child6} data-testid="citypnl-nofield-row" data-parent={k.city} data-field="No field"
+              title="Revenue with no field on it: DPP without a field, and membership no member spot placed.">
+              <td className={styles.childName6}><i>No field</i></td>
+              <td>{usd(k.noFieldRev)}</td>
+              <td /><td /><td /><td />
+            </tr>
+          )}
+          {k.untracked > 0 && (
+            <tr className={styles.note6} data-testid="citypnl-untracked" data-parent={k.city}>
+              <td colSpan={6}>{usd(k.untracked)} of this revenue is at fields with no cost basis on file: in the revenue, with no field cost counted against it.</td>
+            </tr>
+          )}
+        </>
+      )}
     </>
   );
 }
 
-// The pitches, IN THE SAME NINE COLUMNS. No nested table, no second set of widths.
-function Drill({ k }: { k: CityPnl }) {
-  const fieldMargin = k.gross ? k.netAfterFieldCost / k.gross : null;
+function FieldRow({ f, city }: { f: PnlField; city: string }) {
+  const neg = f.net != null && f.net < 0;
   return (
-    <tr className={styles.exp6} data-testid="citypnl-expansion">
-      <td colSpan={6}>
-        <div className={styles.expWrap6}>
-          {/* THE FOUR COLUMNS THAT LEFT THE TOP LEVEL. Not deleted — moved here, where they are
-              the subject rather than four more numbers competing with the answer. */}
-          <p className={styles.expHead6}>{k.city} · revenue split and field result</p>
-          <div className={styles.split6} data-testid="citypnl-split">
-            <span>DPP &amp; other <b data-testid="citypnl-dpp">{usd(k.mappedDpp)}</b></span>
-            <span>+ Member rev <b data-testid="citypnl-member">{usd(k.membership)}</b></span>
-            <span>= Total <b>{usd(k.gross)}</b></span>
-            <span>Field net <b data-testid="citypnl-fieldnet" className={k.netAfterFieldCost < 0 ? styles.negv : ""}>{usd(k.netAfterFieldCost)}</b></span>
-            <span>Field margin <b data-testid="citypnl-fieldmargin">{fieldMargin == null ? "—" : pctInt(fieldMargin)}</b></span>
-          </div>
-
-          <p className={styles.expHead6}>{k.city} · by pitch</p>
-          <table className={styles.ptable6} data-testid="citypnl-pitch-table">
-            <tbody>
-              {k.fields.map((f) => (
-                <tr key={f.venue} data-testid="citypnl-pitch-row">
-                  <td className={styles.city6}>
-                    <span className={styles.ven}>{f.venue}</span>
-                    <span className={styles.vmeta}>{pitchMeta(f)}</span>
-                  </td>
-                  <td className={styles.rev6} data-testid="citypnl-pitch-rev">{usd(f.totalRev)}</td>
-                  <td className={f.cost == null ? styles.na : styles.cost}>
-                    {f.cost == null ? "—" : usdNeg(f.cost)}
-                  </td>
-                  <td className={f.net == null ? styles.na : f.net < 0 ? styles.negv : ""} data-testid="citypnl-pitch-net">
-                    {f.net == null ? "—" : usd(f.net)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {k.noFieldRev !== 0 && (
-            <p className={styles.gapNote} data-testid="citypnl-nofield"><b>{usd(k.noFieldRev)} at no pitch</b> — revenue with no field on it (DPP without a field, membership no member spot placed).</p>
-          )}
-          {k.untracked > 0 && (
-            <p className={styles.gapNote} data-testid="citypnl-untracked">
-              <b>{usd(k.untracked)} of revenue is at pitches with no cost basis</b> on file — it is in the
-              revenue, with no cost counted against it rather than $0.
-            </p>
-          )}
-
-          {/* THE OVERHEAD MAKEUP — the other half of what the top level now only totals. */}
-          <OverheadMakeup k={k} />
-        </div>
-      </td>
+    <tr className={styles.child6} data-testid="citypnl-field-row" data-parent={city} data-field={f.venue}>
+      <td className={styles.childName6}>{f.venue}</td>
+      <td>{usd(f.totalRev)}</td>
+      <td className={f.cost == null ? styles.na : ""}>{f.cost == null ? "—" : usd(f.cost)}</td>
+      <td />
+      <td className={`${f.net == null ? styles.na : ""} ${neg ? styles.neg6 : ""}`}>{f.net == null ? "—" : usd(f.net)}</td>
+      <td className={neg ? styles.neg6 : styles.mar6}>{f.net == null ? "" : f.totalRev === 0 ? "" : pctInt(f.net / f.totalRev)}</td>
     </tr>
-  );
-}
-
-const OH_HUES = ["#2f7a4f", "var(--hdr, #0f2e1f)", "var(--gold-dot, #d8a72b)", "var(--accent, #5b7568)", "#93a89c"];
-
-function OverheadMakeup({ k }: { k: CityPnl }) {
-  const total = k.overheadTotal;
-  if (total === 0) return null;
-  return (
-    <div data-testid="citypnl-overhead">
-      <div className={styles.ohlab}>Overhead makeup · field cost excluded</div>
-      <div className={styles.ohbar}>
-        {k.overhead.map((o, i) => (
-          <span key={o.label} className={styles.ohseg}
-            style={{ width: `${(o.value / total) * 100}%`, background: OH_HUES[i % OH_HUES.length] }} />
-        ))}
-      </div>
-      <div className={styles.ohkey}>
-        {k.overhead.map((o, i) => (
-          <span key={o.label} data-testid="citypnl-oh-item">
-            <i className={styles.k} style={{ background: OH_HUES[i % OH_HUES.length] }} />
-            {o.label} <b>{usd(o.value)}</b> <span className={styles.ohpct}>{Math.round((o.value / total) * 100)}%</span>
-          </span>
-        ))}
-      </div>
-    </div>
   );
 }
 
