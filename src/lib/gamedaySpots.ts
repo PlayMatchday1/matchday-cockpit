@@ -171,8 +171,9 @@ export async function withSpots<T extends { id: number; startDateUtc: string; re
 /* ── THE TILES (Ryan, 2026-10-10) ────────────────────────────────────────────────────────────────
  * CANCELLED MATCHES COUNT NOWHERE: not in Matches, not in the MD Standard, not in the spot tiles,
  * not in Real spots filled (whose field spots drop them too). Paid, Member, Promo and Real spots
- * filled are taken over ONE set of matches — not cancelled, with field spots — so the three add up
- * to the real figure exactly, on every day and every city selection. */
+ * filled are taken over ONE set of matches — not cancelled, with field spots. Every real spot is
+ * classified, but the board's Promo tile shows coded spots only (Ryan, 2026-10-10): free and
+ * below-price spots count in Real spots filled and in no other tile. */
 export const MD_STANDARD_SPOTS = 18;
 export type SpotTiles = {
   matches: number; cancelled: number; mdStandard: number | null;

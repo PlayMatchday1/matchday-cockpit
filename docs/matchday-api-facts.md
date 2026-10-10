@@ -7117,3 +7117,7 @@ Evidence: production `GET /admin/matches?fromDate=2026-10-09&toDate=2026-10-09`,
 - **Gameday's tiles count no cancelled match** (Ryan, 2026-10-10). On 2026-10-09:
   - All cities: 16 matches, 26.4 MD standard, Paid 223 + Member 76 + Promo 68 = 367 real, of 476 field spots.
   - Houston: Paid 66 + Member 24 + Promo 14 = 104 real, of 114.
+- **Promo tile: codes only** (Ryan, 2026-10-10, later the same day).
+  - The number is the spots booked with a promo code: on 2026-10-09, 24 for All cities and 8 for Houston.
+  - Free and below-price spots appear in no tile; they still count in Real spots filled. So Paid + Member + Promo is deliberately less than Real.
+- **Guests are never flagged as a first match.** From Oct 1 to 9, 0 of 347 held GUEST rows had `isFirstMatch` true, against 307 of 2,791 PLAYER rows. A guest shares the host's `userId` and has no account of its own, so the API cannot say whether a guest is a first-timer.

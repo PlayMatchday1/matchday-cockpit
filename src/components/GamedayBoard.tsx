@@ -1277,7 +1277,11 @@ const CSS = `
 .gdo .gtile .v .vu{font-size:12px;font-weight:600;letter-spacing:0;color:#66786E;margin-left:2px}
 .gdo .gtile .s .md{display:block;font-weight:600;color:#3d4f45}
 .gdo .gtile .s .cx{display:block}
-.gdo .gtile-note{grid-column:1/-1;font-size:11.5px;color:#A83120}
+.gdo .gcodes{display:block}
+.gdo .gcode{display:flex;justify-content:space-between;gap:8px;line-height:1.5}
+.gdo .gcode .c{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.gdo .gcode .n{font-variant-numeric:tabular-nums;flex:none}
+.gdo .gcode.more{cursor:help;text-decoration:underline dotted}
 .gdo .gtile{background:#fff;border:1px solid #DCE5E0;border-radius:11px;padding:11px 13px;
   text-align:left;display:block;position:relative;font:inherit;color:inherit;width:100%}
 .gdo button.gtile{cursor:pointer}
@@ -1831,8 +1835,8 @@ const CSS = `
  * NEEDS ATTENTION IS RED ONLY WHEN IT IS NON-ZERO. A permanently red tile reading 0 trains the
  * operator to ignore the colour, which is the only thing the colour is for.
  *
- * CANCELLED MATCHES COUNT IN NO TILE (spotTiles), and Paid + Member + Promo is the Real spots filled
- * figure exactly: one set of matches, one classification per spot (src/lib/gamedaySpots.ts).
+ * CANCELLED MATCHES COUNT IN NO TILE (spotTiles). Promo shows coded spots only, so Paid + Member +
+ * Promo is less than Real spots filled by the free and below-price spots (src/lib/gamedaySpots.ts).
  */
 type StripStats = {
   soon: ApiMatch[]; live: ApiMatch[]; risk: ApiMatch[];
@@ -1840,15 +1844,24 @@ type StripStats = {
   tiles: SpotTiles; spotsErr: string | null;
   cityCount: number; nextKick: ApiMatch | null; allCount: number;
 };
+/* PROMO IS CODES ONLY (Ryan, 2026-10-10): the number is spots booked with a promo code, and under it
+ * one code per line, most used first — the top 4, then "+N more" with the full list on hover. Free
+ * and below-price spots are in no tile now; they still count in Real spots filled, so Paid + Member
+ * + Promo no longer adds up to it, by design. */
 const TOP_CODES = 4;
-function promoLine(t: SpotTiles): { text: string; title: string | undefined } {
-  const parts = t.codes.slice(0, TOP_CODES).map(([c, n]) => `${c} ×${n}`);
-  const more = t.codes.length - TOP_CODES;
-  if (more > 0) parts.push(`+${more} more`);
-  if (t.free) parts.push(`Free ×${t.free}`);
-  if (t.below) parts.push(`Below price ×${t.below}`);
-  const all = [...t.codes.map(([c, n]) => `${c} ×${n}`), ...(t.free ? [`Free ×${t.free}`] : []), ...(t.below ? [`Below price ×${t.below}`] : [])];
-  return { text: parts.length ? parts.join(" · ") : "none", title: more > 0 ? all.join("\n") : undefined };
+function PromoCodes({ codes }: { codes: [string, number][] }) {
+  if (codes.length === 0) return <>no codes used</>;
+  const more = codes.length - TOP_CODES;
+  return (
+    <span className="gcodes" data-testid="gtile-codes">
+      {codes.slice(0, TOP_CODES).map(([c, n]) => (
+        <span className="gcode" key={c} data-testid="gtile-code"><span className="c">{c}</span><span className="n">×{n}</span></span>
+      ))}
+      {more > 0 && (
+        <span className="gcode more" data-testid="gtile-codes-more" title={codes.map(([c, n]) => `${c} ×${n}`).join("\n")}>+{more} more</span>
+      )}
+    </span>
+  );
 }
 function StatStrip({ s, active, onPick }: {
   s: StripStats & { riskSub: string }; active: StripKey | null; onPick: (k: StripKey) => void; clockOf: (m: ApiMatch) => string;
@@ -1859,7 +1872,6 @@ function StatStrip({ s, active, onPick }: {
   const gone = !!s.spotsErr || t.missing;
   const why = s.spotsErr ? `Spot counts did not load: ${s.spotsErr}` : t.missing ? "Spot counts are missing for a match" : undefined;
   const num = (n: number) => (gone ? "—" : String(n));
-  const promo = promoLine(t);
   const T: { k: string; lab: string; val: React.ReactNode; sub: React.ReactNode; can: boolean; warn?: boolean; title?: string; subTitle?: string }[] = [
     { k: "all", lab: "Matches",
       val: <>{t.matches}<span className="vu"> matches</span></>,
@@ -1871,7 +1883,8 @@ function StatStrip({ s, active, onPick }: {
       sub: s.riskSub, can: true, warn: true },
     { k: "paid", lab: "Paid spots", val: num(t.paid), sub: gone ? why : "match price, incl. guests and credit", can: false },
     { k: "member", lab: "Member spots", val: num(t.member), sub: gone ? why : "MatchDay members", can: false },
-    { k: "promo", lab: "Promo spots", val: num(t.promo), sub: gone ? why : promo.text, subTitle: gone ? undefined : promo.title, can: false },
+    { k: "promo", lab: "Promo spots", val: num(t.codes.reduce((a, [, n]) => a + n, 0)),
+      sub: gone ? why : <PromoCodes codes={t.codes} />, can: false },
     /* THE FILL IS A RATIO OF SUMS over the matches that were not cancelled — see spotTiles. "—" and
      * not "0%" when nothing has capacity, because 0% is a claim about a day that had no spots. */
     { k: "fill", lab: "Real spots filled", val: pct == null ? "—" : `${Math.round(pct)}%`,
@@ -1898,11 +1911,6 @@ function StatStrip({ s, active, onPick }: {
               aria-pressed={on} onClick={() => onPick(x.k as StripKey)}>{inner}</button>
           : <div key={x.k} className={cls} data-testid={`gtile-${x.k}`} data-static="1" title={x.title}>{inner}</div>;
       })}
-      {!gone && t.unclassified > 0 && (
-        <div className="gtile-note" data-testid="gday-unclassified">
-          {t.unclassified} spot{t.unclassified === 1 ? "" : "s"} could not be classified as paid, member or promo.
-        </div>
-      )}
     </div>
   );
 }
