@@ -27,7 +27,7 @@ import { useFinancePeriodData } from "@/lib/useFinancePeriodData";
 import { useMatchRangeData } from "@/lib/useMatchData";
 import { useFinancePeriod } from "@/lib/financePeriodContext";
 import {
-  comparisonSpan, matchRange, matchPanelPeriod, monthSpanPeriod,
+  comparisonSpan, matchRange, matchPanelPeriod,
   type MatchWindowKind,
 } from "@/lib/financePeriod";
 import type { FinanceData } from "@/lib/useFinanceData";
@@ -38,7 +38,7 @@ import {
 } from "@/lib/fieldEconomics";
 import { cityTotalMemberSpotsFor, unattributedVenues, venueMemberSpotsFor } from "@/lib/financeStats";
 import {
-  addMonths, dateOfYm, monthsBetween, nextSort, periodKeyOfYm, presetRange, shortYm, ymOfDate, ymOfPeriodKey,
+  monthsBetween, nextSort, periodKeyOfYm, presetRange, shortYm, ymOfDate, ymOfPeriodKey,
   type MonthRange, type Preset, type SortState, type Ym,
 } from "@/lib/revenueRange";
 import { loadMembershipWindowsByUserId, type MembershipWindowsByUserId } from "@/lib/mdapiMatchesRead";
@@ -46,7 +46,7 @@ import {
   bucketOf, byCityRows, byFieldRows, cityLabel, fieldKeyOf, filterRows, isRevenueRow, taxCentsOf, totalsOf, money, UNASSIGNED,
   type GroupRow, type MemberShares, type PageFilter, type RollupRow, type Totals,
 } from "@/lib/revenueTxn";
-import { loadMatchRollup, loadRollup, loadVenueLaunches, useAsync, useReaderId } from "@/lib/useRevenueTxn";
+import { loadMatchRollup, loadMemberSpots, loadRollup, loadVenueLaunches, useAsync, useReaderId } from "@/lib/useRevenueTxn";
 import { downloadCsv } from "@/components/growth/format";
 import MatchView from "./MatchView";
 import DailyRevenuePace from "./DailyRevenuePace";
@@ -331,7 +331,7 @@ export default function RevenueSection() {
 
   /* ── LAUNCHED: THE FIRST PLAYED MATCH (Ryan, 2026-10-10) ─────────────────────────────────────
    * A FIELD: the first played match on any of its venue rows' linked fields, tournament and
-   * special-event fields left out (loadVenueLaunches). A CITY: the earliest of its fields',
+   * special-event fields left out unless flagged "counts as regular play" (loadVenueLaunches). A CITY: the earliest of its fields',
    * inactive venues included. A field with no played match yet falls back to fin_venues.launch_date. */
   const fieldsByVenue = useMemo(() => {
     if (!data) return null;
@@ -341,7 +341,9 @@ export default function RevenueSection() {
     return o;
   }, [data]);
   const nowYmd = ymdOf(now);
-  const venueLaunch = useAsync(fieldsByVenue ? `vlaunch|${nowYmd}|${JSON.stringify(fieldsByVenue)}` : null, () => loadVenueLaunches(fieldsByVenue!, nowYmd));
+  const regularFieldIds = useMemo(() => (data?.venueFieldLinks ?? []).filter((l) => l.counts_as_regular_play).map((l) => Number(l.mdapi_field_id)), [data]);
+  const venueLaunch = useAsync(fieldsByVenue ? `vlaunch|${nowYmd}|${regularFieldIds.join(",")}|${JSON.stringify(fieldsByVenue)}` : null,
+    () => loadVenueLaunches(fieldsByVenue!, nowYmd, regularFieldIds));
   const fieldLaunchYm = useCallback((name: string, city: string | null): Ym | null => {
     const legs = (data?.venues ?? []).filter((v) => v.venue_name === name && (v.city ?? null) === city);
     const first = legs.map((v) => venueLaunch.data?.[String(v.id)]).filter((d): d is string => !!d).sort();
@@ -407,40 +409,30 @@ export default function RevenueSection() {
   }, [hist.data, rangeMonths]);
 
   /* MEMBER SPOTS FOR THE RANGE. A field's months need the city's member spots per field (membership
-   * onto fields), which come from the roster loader. The page already holds the period and the
-   * prior three; a range reaching further loads the missing months — at most four quarters, the
-   * loader's limit — and anything older prints a dash marked "not loaded", never a zero. */
+   * onto fields). Months the page's roster already holds use it, as before; every other month in the
+   * range comes from fin_member_spots_by_venue_month (0222), summed in the database — no quarter
+   * limit. Compared 2026-10-10 with the roster's own count: Jul–Oct 2026 86 of 86 venue-months equal
+   * (7,306 spots), Jan–Jun 2025 35 of 35 (8,831). */
   const needShares = !!filter.field;
-  const neededYms = needShares ? rangeMonths.filter((ym) => !covers(data, ym)) : [];
-  const extraKey = neededYms.length ? `${neededYms[0]}|${neededYms[neededYms.length - 1]}` : "";
-  const extraPeriod = useMemo(() => {
-    if (!extraKey) return span;
-    const [a, b] = extraKey.split("|");
-    const qStart = addMonths(b, -(Number(b.slice(5, 7)) - 1) % 3); // first month of b's quarter
-    const floor = addMonths(qStart, -9);                              // four quarters back
-    return monthSpanPeriod(dateOfYm(a < floor ? floor : a), dateOfYm(b), now);
-  }, [extraKey, span, now]);
-  const { data: extra, loading: extraLoading } = useFinancePeriodData(extraPeriod);
-  const monthKnown = useCallback((ym: Ym) => covers(data, ym) || covers(extra, ym), [data, extra]);
+  const spotsFrom = needShares && rangeMonths.some((ym) => !covers(data, ym)) ? range.from : null;
+  const spots = useAsync(spotsFrom ? `spots|${spotsFrom}|${range.to}` : null,
+    () => loadMemberSpots(`${range.from}-01`, ymdOf(new Date(Number(range.to.slice(0, 4)), Number(range.to.slice(5, 7)), 0))));
+  const monthKnown = useCallback((ym: Ym) => covers(data, ym) || (!!data && !!spots.data), [data, spots.data]);
   const rangeShares = useCallback<MemberShares>((city, periodKey) => {
     const ym = ymOfPeriodKey(periodKey);
-    const d = covers(data, ym) ? data : covers(extra, ym) ? extra : null;
-    return d ? sharesOf(d, city, periodKey) : null;
-  }, [data, extra]);
-  const sharesPending = needShares && (primaryLoading || extraLoading);
-  const notLoadedNote = "Member spots for this month are not loaded: a field's months reach back four quarters from the end of the range.";
-  /* BEFORE AUG 2026 STRIPE CHARGES CARRY NO FIELD (measured 2026-10-09: 0% of DPP charges through
-   * July, 90% in August, 100% from September), so a field's earlier months hold only its membership
-   * share. Derived from the rows, not pinned: the first month where most DPP charges carry a field. */
-  const fieldDataFrom = useMemo(() => {
-    const by = new Map<Ym, { all: number; tied: number }>();
-    for (const r of hist.data ?? []) {
-      if (r.kind !== "charge" || r.excluded || bucketOf(r.type) !== "dpp") continue;
-      const ym = ymOfPeriodKey(r.period), o = by.get(ym) ?? { all: 0, tied: 0 };
-      o.all += r.gross_cents; if (r.fin_venue_id != null) o.tied += r.gross_cents; by.set(ym, o);
-    }
-    return [...by].sort(([a], [b]) => a.localeCompare(b)).find(([, o]) => o.all > 0 && o.tied * 2 >= o.all)?.[0] ?? null;
-  }, [hist.data]);
+    if (covers(data, ym)) return sharesOf(data!, city, periodKey);
+    if (!data || !spots.data) return null;
+    // THE ROSTER INDEX'S RULE, on the database's counts: the legs are the city's venues, and the
+    // city total is the bucket of the FIRST leg's city string (cityTotalMemberSpotsFor).
+    const legs = data.venues.filter((v) => canonCity(v.city) === canonCity(city));
+    if (legs.length === 0) return null;
+    const of = (vid: number) => spots.data!.get(`${vid}|${ym}`)?.spots ?? 0;
+    const citySpots = [...spots.data.values()].filter((x) => x.ym === ym && x.city === legs[0].city).reduce((a, x) => a + x.spots, 0);
+    if (!(citySpots > 0)) return null;
+    return legs.map((v) => ({ venueId: Number(v.id), share: of(Number(v.id)) / citySpots })).filter((x) => x.share > 0);
+  }, [data, spots.data]);
+  const sharesPending = needShares && ((primaryLoading && !data) || spots.loading);
+  const notLoadedNote = spots.error ? `Member spots did not load: ${spots.error}` : "Member spots for this month are not loaded.";
 
   // ── THE MONTHLY CARD: one Totals per month in range, on the page's narrowing ──
   const monthly = useMemo(() => {
@@ -675,11 +667,6 @@ export default function RevenueSection() {
             </tbody>
           </table>
         </div>
-        )}
-        {filter.field && fieldDataFrom && range.from < fieldDataFrom && (
-          <div className={s.legend} data-testid="field-history-note">
-            <span>{`Before ${shortYm(fieldDataFrom)} Stripe charges do not carry a field, so a field's earlier months hold only its share of membership.`}</span>
-          </div>
         )}
       </div>
 

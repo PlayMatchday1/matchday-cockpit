@@ -7082,3 +7082,23 @@ Evidence: a read-only full walk of prod `GET /admin/players` (`sortColumn=create
   | Lou Fusz Indoor (19) | 2026-02-16 | 2025-08-26 |
 
   Revenue's Field "Launched" uses `launch_date`. A city's "Launched" uses its earliest first match.
+
+## fin_txn field backfill and member spots in the database (2026-10-10)
+
+This supersedes the "field attribution starts Aug 2026" entry above.
+
+- **Field backfill (approved by Ryan, run 02:21–02:25 UTC).**
+  - **What it changed:** 80,963 fin_txn rows had neither `field_id` nor `fin_venue_id` and now have both:
+    - 78,201 charges and failed payments ($830,453.85), from the match their payment intent paid for (`mdapi_match_players` → `mdapi_matches` → `fin_venue_fields`);
+    - 2,762 refunds and disputes (−$24,051.93), from their charge.
+  - **What it did not touch:** amounts, city, type and `updated_at`.
+  - **Checks after the run:** count, gross, fee, net and every city-and-kind split are identical in all 42 months (118,481 rows before and after), and 0 rows have `updated_at` set since the start. `change_log` holds 41 entries with source "Finance · fin_txn field backfill", all landed.
+  - **Why the fill is trustworthy:** on the 11,576 charges that carry Stripe's own fieldId, the match-derived venue agreed in every case (field 11,408).
+- **What still has no field:** 1,990 DPP charges ($14,955) on match fields with no venue link: 14 Winter Tournament, 19 Free Agents, 15 Special Events at RR, and others.
+- **`fin_member_spots_by_venue_month` (0222), applied by Ryan.**
+  - Equal to the roster index (`buildMdapiMemberSpotIndex` over `fetchLegacyMatchRegistrations`) for Jul–Oct 2026: 86 of 86 venue-months, 7,306 spots, 285 ms.
+  - Equal for Jan–Jun 2025: 35 of 35, 8,831 spots.
+  - Revenue reads it for any field month the page's roster does not hold, so there is no four-quarter limit.
+- **Launch:** a city or field launches at its first played match (not cancelled, at least one player, kicked off).
+  - Fields whose title fires `EVENT_MARKERS` are left out, unless their link counts as regular play (17, 22, 199, 496, 1552).
+  - Evidence: `loadVenueLaunches` in `src/lib/useRevenueTxn.ts`.

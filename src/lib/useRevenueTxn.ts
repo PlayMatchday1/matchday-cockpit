@@ -124,28 +124,42 @@ export async function loadStatusInputs(fromIso: string, toIso: string): Promise<
  *  Played: not cancelled, not deleted, at least one player, kicked off by today (compared on the
  *  match's LOCAL wall-clock date — `start_date`'s trailing Z is not UTC). Matches on tournament and
  *  special-event fields do not count: a field title firing EVENT_MARKERS (venueResolver.ts — tourney,
- *  tournament, combine, cup, showcase, clinic, camp, invitational, special events). By NAME, as Ryan
- *  set it, so "Tourney ATH Pearland" is excluded here even though its link counts as regular play
- *  for cost. One ordered read per venue, paged until a non-event match is found.
+ *  tournament, combine, cup, showcase, clinic, camp, invitational, special events) — UNLESS the field's
+ *  link counts as regular play (0130; Ryan, 2026-10-10: the flag wins over the name, so "Tourney ATH
+ *  Pearland" counts). One ordered read per venue, paged until a match that counts is found.
  *  Resolves to { fin_venues.id: "YYYY-MM-DD" | null }. */
-export function loadVenueLaunches(fieldsByVenue: Record<string, number[]>, todayYmd: string): Promise<Record<string, string | null>> {
-  const key = `vlaunch|${todayYmd}|${Object.entries(fieldsByVenue).sort().map(([v, ids]) => `${v}:${[...ids].sort((a, b) => a - b).join(",")}`).join(";")}`;
+export function loadVenueLaunches(fieldsByVenue: Record<string, number[]>, todayYmd: string, regularFieldIds: number[]): Promise<Record<string, string | null>> {
+  const regular = new Set(regularFieldIds);
+  const key = `vlaunch|${todayYmd}|${[...regular].sort((a, b) => a - b).join(",")}|${Object.entries(fieldsByVenue).sort().map(([v, ids]) => `${v}:${[...ids].sort((a, b) => a - b).join(",")}`).join(";")}`;
   return cached(key, async () => {
     const out: Record<string, string | null> = {};
     await Promise.all(Object.entries(fieldsByVenue).map(async ([vid, ids]) => {
       out[vid] = null;
       if (ids.length === 0) return;
       for (let from = 0; from < 2000; from += 100) {
-        const { data, error } = await supabase.from("mdapi_matches").select("start_date, field_title")
+        const { data, error } = await supabase.from("mdapi_matches").select("start_date, field_title, field_id")
           .in("field_id", ids).eq("is_cancelled", false).is("deleted_at", null).gt("player_count", 0)
           .lte("start_date", `${todayYmd}T23:59:59Z`)
           .order("start_date", { ascending: true }).order("api_id", { ascending: true }).range(from, from + 99);
         if (error) throw new Error(`mdapi_matches (launch of venue ${vid}): ${error.message}`);
-        const hit = (data ?? []).find((m) => venueCategory(m.field_title) !== "event");
+        const hit = (data ?? []).find((m) => regular.has(Number(m.field_id)) || venueCategory(m.field_title) !== "event");
         if (hit?.start_date) { out[vid] = String(hit.start_date).slice(0, 10); return; }
         if (!data || data.length < 100) return;
       }
     }));
     return out;
+  });
+}
+
+/** MEMBER SPOTS PER VENUE PER MONTH from fin_member_spots_by_venue_month (0222): the roster index's
+ *  member count, summed in the database. Keyed `${fin_venue_id}|YYYY-MM`. */
+export function loadMemberSpots(from: string, to: string): Promise<Map<string, { ym: string; city: string | null; spots: number }>> {
+  return cached(`spots|${from}|${to}`, async () => {
+    const rows = await pagedRpc<{ fin_venue_id: number; city: string | null; month: string; member_spots: number }>(
+      "fin_member_spots_by_venue_month", { p_from: from, p_to: to });
+    return new Map(rows.map((r) => {
+      const ym = String(r.month).slice(0, 7);
+      return [`${Number(r.fin_venue_id)}|${ym}`, { ym, city: r.city ?? null, spots: Number(r.member_spots) }];
+    }));
   });
 }
