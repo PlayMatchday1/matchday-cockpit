@@ -421,3 +421,14 @@ export function priorMonthShape(priorNetByDay: Map<number, number>, priorDaysInM
   if (!(early > 0) || !(late > 0)) return null;
   return late / early;
 }
+
+/** A month-grain period spanning whole months from `start`'s month to `end`'s, for loaders that
+ *  need an arbitrary month range (Revenue's From / To). Same builder as every other period, so its
+ *  `quarters` and record floor behave identically. */
+export function monthSpanPeriod(start: Date, end: Date, now: Date): FinancePeriod {
+  const s0 = new Date(start.getFullYear(), start.getMonth(), 1);
+  const e0 = new Date(end.getFullYear(), end.getMonth() + 1, 0);
+  const lab = (d: Date) => `${MONTH_SHORT[d.getMonth()]} ${d.getFullYear()}`;
+  return build("month", s0, s0, e0, `${lab(s0)} – ${lab(e0)}`, `${ymKey(s0)}..${ymKey(e0)}`, now);
+}
+const ymKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;

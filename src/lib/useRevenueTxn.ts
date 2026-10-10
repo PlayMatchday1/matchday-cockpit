@@ -118,3 +118,24 @@ export async function loadStatusInputs(fromIso: string, toIso: string): Promise<
     })),
   };
 }
+
+/** A CITY'S LAUNCH: the first non-cancelled match on any field linked to the city's venues
+ *  (inactive venues included — they still launched the city). One small ordered read per city,
+ *  limit 1; nothing is summed in the browser. `start_date` is the match's LOCAL wall clock (the
+ *  trailing Z is not UTC — see docs/matchday-api-facts.md), so only its "YYYY-MM-DD" is used.
+ *  Resolves to { city: "YYYY-MM-DD" | null }. */
+export function loadCityLaunches(fieldsByCity: Record<string, number[]>): Promise<Record<string, string | null>> {
+  const key = `launch|${Object.entries(fieldsByCity).sort().map(([c, ids]) => `${c}:${[...ids].sort((a, b) => a - b).join(",")}`).join(";")}`;
+  return cached(key, async () => {
+    const out: Record<string, string | null> = {};
+    await Promise.all(Object.entries(fieldsByCity).map(async ([city, ids]) => {
+      if (ids.length === 0) { out[city] = null; return; }
+      const { data, error } = await supabase.from("mdapi_matches").select("start_date")
+        .in("field_id", ids).eq("is_cancelled", false).is("deleted_at", null)
+        .order("start_date", { ascending: true }).limit(1);
+      if (error) throw new Error(`mdapi_matches (launch of ${city}): ${error.message}`);
+      out[city] = data?.[0]?.start_date ? String(data[0].start_date).slice(0, 10) : null;
+    }));
+    return out;
+  });
+}

@@ -193,5 +193,28 @@ export const RV2_CSS = `
 @media (max-width:760px){.rv2 table.city.nt{min-width:760px}.rv2 table.city.nt .pin{min-width:120px;max-width:150px}}
 .rv2 table.city tr.tot td{font-weight:800;background:#f6f8f5;border-bottom:0}
 .rv2 table.city tr.tot td.net{background:#d5f2de}
+/* MONTHLY CARD + SORTABLE TABLES (2026-10-09) */
+.rv2-mhead{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:6px}
+.rv2-mtitle{margin:0;font-size:20px;font-weight:800;color:#10231a;letter-spacing:-.01em}
+.rv2-launch{font-size:12px;font-weight:700;background:#fff6e3;color:#7a5200;border-radius:99px;padding:3px 10px;white-space:nowrap}
+.rv2-grow{flex:1}
+.rv2-range{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;border:1px solid #e2e7df;border-radius:12px;padding:3px 8px;background:#fff;font-size:13px}
+.rv2-range select{border:0;background:none;font:inherit;font-weight:700;color:#10231a;padding:5px 2px;cursor:pointer}
+.rv2-rlab{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#7b8b82;font-weight:700}
+.rv2-pre{border:0;background:none;font:inherit;font-size:12px;font-weight:700;color:#5b7568;padding:6px 8px;border-radius:7px;cursor:pointer;min-height:32px}
+.rv2-pre[aria-pressed=true]{background:#e5f6ea;color:#10231a}
+.rv2-pre:disabled{opacity:.4;cursor:not-allowed}
+.rv2-pre:focus-visible,.rv2 .nt-sort:focus-visible{outline:2px solid #2bd17e;outline-offset:1px}
+.rv2 td.rv2-dim,.rv2 table.city td.dim{color:#b7c1bc}
+.rv2 .nt-sort{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:4px;border-radius:4px}
+.rv2 .nt-sort .arr{font-size:9px;opacity:.25}
+.rv2 .nt-sort .arr.on{opacity:1}
+.rv2 table.city tbody tr.go{cursor:pointer}
+.rv2 table.city tbody tr.go:hover td{background:#f7faf8}
+.rv2 table.city tbody tr.go:hover td.net{background:#d9f1e1}
+.rv2 table.city tbody tr.go:focus-visible{outline:2px solid #2bd17e;outline-offset:-2px}
+.rv2 table.city td.up{color:#1f8a4c}
+.rv2 table.city.bm{min-width:0}
+.rv2 table.city.bm th .sub{display:block}
 @media (max-width:767px){.rv2 .big .v{font-size:32px}.rv2 .hero-top{grid-template-columns:1fr;gap:18px}.rv2 .tiles{grid-template-columns:1fr 1fr!important}.rv2 .tiles>.tile:last-child{grid-column:auto}.rv2 .tile .v{font-size:24px}.rv2 .hero{padding:16px}.rv2-title{font-size:24px}}
 `;

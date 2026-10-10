@@ -27,31 +27,47 @@ import { useFinancePeriodData } from "@/lib/useFinancePeriodData";
 import { useMatchRangeData } from "@/lib/useMatchData";
 import { useFinancePeriod } from "@/lib/financePeriodContext";
 import {
-  comparisonSpan, matchRange, matchPanelPeriod,
+  comparisonSpan, matchRange, matchPanelPeriod, monthSpanPeriod,
   type MatchWindowKind,
 } from "@/lib/financePeriod";
+import type { FinanceData } from "@/lib/useFinanceData";
+import type { Q2Month } from "@/lib/financeStats";
 import {
   buildFieldCostSlots, buildFieldMonths, buildMatchRows, canonCity, hasKickedOff,
   type MatchRow,
 } from "@/lib/fieldEconomics";
 import { cityTotalMemberSpotsFor, unattributedVenues, venueMemberSpotsFor } from "@/lib/financeStats";
+import {
+  addMonths, changePct, dateOfYm, monthsBetween, nextSort, periodKeyOfYm, presetRange, shortYm, ymOfDate, ymOfPeriodKey,
+  type MonthRange, type Preset, type SortState, type Ym,
+} from "@/lib/revenueRange";
 import { loadMembershipWindowsByUserId, type MembershipWindowsByUserId } from "@/lib/mdapiMatchesRead";
 import {
-  bucketOf, byCityRows, byFieldRows, cityLabel, fieldKeyOf, filterRows, isRevenueRow, taxCentsOf, money, UNASSIGNED,
+  bucketOf, byCityRows, byFieldRows, cityLabel, fieldKeyOf, filterRows, isRevenueRow, taxCentsOf, totalsOf, money, UNASSIGNED,
   type GroupRow, type MemberShares, type PageFilter, type RollupRow, type Totals,
 } from "@/lib/revenueTxn";
-import { loadMatchRollup, loadRollup, useAsync, useReaderId } from "@/lib/useRevenueTxn";
+import { loadCityLaunches, loadMatchRollup, loadRollup, useAsync, useReaderId } from "@/lib/useRevenueTxn";
 import { downloadCsv } from "@/components/growth/format";
 import MatchView from "./MatchView";
 import DailyRevenuePace from "./DailyRevenuePace";
-import RevenueTop, { monthKeyOf, monthLabelOf, totalsByMonth, ymdOf } from "./RevenueTop";
-import RevenueNetTable, { type PnLCell } from "./RevenueNetTable";
+import RevenueTop, { monthKeyOf, monthLabelOf, ymdOf } from "./RevenueTop";
+import RevenueNetTable, {
+  RevenueByMonthTable, TEXT_KEYS, monthCell, monthValue, orderRows, selectedValue, type MonthRow, type PnLCell,
+} from "./RevenueNetTable";
 import { useFieldPnL } from "@/lib/useFieldPnL";
 import { rollupFields, type FieldAgg, type PnLRollup } from "@/lib/fieldPnL";
 import { InfoI, RV2_CSS } from "./RevenueInfo";
 import s from "./financeSection.module.css";
 
 type Grain = "city" | "field" | "match";
+type View = "sum" | "month";
+
+/** Every month fin_txn holds, fetched once: month × venue over all history is ~700 rows and ~1.2 s
+ *  (measured 2026-10-09), summed by the database — the range controls only pick months out of it. */
+const HISTORY_FROM = "2020-01-01";
+const PRESETS: { p: Preset; label: string }[] = [{ p: "4", label: "4M" }, { p: "6", label: "6M" }, { p: "12", label: "12M" }, { p: "since", label: "Since launch" }];
+const covers = (d: FinanceData | null | undefined, ym: Ym) =>
+  !!d && d.mdapiMemberSpots.coveredMonths.has(monthLabelOf(periodKeyOfYm(ym)) as Q2Month);
 
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const hourLabel = (d: Date) => {
@@ -67,7 +83,9 @@ export default function RevenueSection() {
   // THE TABLE IS THE SELECTED PERIOD PLUS THE PRIOR THREE AT THE SAME GRAIN. comparisonSpan
   // collapses those four into one synthetic span, and reports how many it had to drop.
   const { period, now } = useFinancePeriod();
-  const { periods, span, dropped } = useMemo(() => comparisonSpan(period, 4, now), [period, now]);
+  // THE ROSTER STILL LOADS THE PERIOD AND THE PRIOR THREE, as it did for the old four-period table:
+  // match counts and member-spot shares for those months come from it, unchanged.
+  const { span } = useMemo(() => comparisonSpan(period, 4, now), [period, now]);
   const uid = useReaderId();
 
   // ── fin_txn, MONTH GRAIN, BY VENUE, FOR THE WHOLE SPAN. One call; a few hundred rows. ──
@@ -98,7 +116,10 @@ export default function RevenueSection() {
   }, []);
 
   const [grain, setGrain] = useState<Grain>("city");
-  const [cityFilter, setCityFilter] = useState<string>("all");
+  /* THE PAGE FILTER: ONE CITY, OR ONE FIELD — the pinned bar's selects, the only city / field filter
+   * on the page (2026-10-09: the Field tab's own city chips are gone; it follows this City). */
+  const [filter, setFilter] = useState<PageFilter>({ city: null, field: null });
+  const cityFilter = filter.city ?? "all";
 
   /* A fin_venues row with a blank city is excluded from Match View's allocated member revenue,
    * and is named here rather than dropped silently. Renders only when there is something to say. */
@@ -168,17 +189,7 @@ export default function RevenueSection() {
   /* MEMBERSHIP ONTO FIELDS — the Cities page's rule (cityPnl.ts, "ALLOCATE membership onto the
    * pitches"): field share = the field's member spots that month ÷ the city's member spots that
    * month, from the same two helpers. Applied to fin_txn membership in byFieldRows. */
-  const memberShares = useCallback<MemberShares>((city, periodKey) => {
-    if (!data) return null;
-    const month = monthLabelOf(periodKey);
-    const legs = data.venues.filter((v) => canonCity(v.city) === canonCity(city));
-    if (legs.length === 0) return null;
-    const citySpots = cityTotalMemberSpotsFor(data, legs[0].city, month);
-    if (!(citySpots > 0)) return null;
-    return legs
-      .map((v) => ({ venueId: Number(v.id), share: venueMemberSpotsFor(data, v.id, month).member / citySpots }))
-      .filter((x) => x.share > 0);
-  }, [data]);
+  const memberShares = useCallback<MemberShares>((city, periodKey) => (data ? sharesOf(data, city, periodKey) : null), [data]);
   const fieldGroups = useMemo(() => {
     if (!periodRows) return [];
     const rows = cityFilter === "all" ? periodRows : periodRows.filter((r) => cityLabel(r.city) === cityFilter);
@@ -192,7 +203,11 @@ export default function RevenueSection() {
    * revenueTxn — the same rows the City and Field tabs group, so a filtered figure equals that
    * city's row or that field's row to the cent. The City / Field / Match tables below stay whole,
    * so the comparison can be made on one screen. Changing city resets the field. */
-  const [filter, setFilter] = useState<PageFilter>({ city: null, field: null });
+  /* A FIELD SET BY CLICKING ITS ROW stays selectable even when it has no charge of its own in the
+   * period (a field whose period figure is its membership share). Cleared when the period changes,
+   * so the "no revenue this period" reset below still applies to a field carried across periods. */
+  const [clickedField, setClickedField] = useState<string | null>(null);
+  useEffect(() => { setClickedField(null); }, [period.key]);
   const fieldOptions = useMemo(() => {
     // Real fields with revenue in the selected period and city, by field ID — never a match name.
     const out = new Map<string, { label: string; legs: number[] }>();
@@ -208,11 +223,15 @@ export default function RevenueSection() {
       const o = out.get(key) ?? { label: (names.get(v.name)?.size ?? 0) > 1 && !filter.city ? `${v.name} (${v.city ?? "—"})` : v.name, legs: [] };
       out.set(key, o);
     }
+    if (clickedField && !out.has(clickedField) && (!filter.city || clickedField.endsWith(`|${filter.city}`))) {
+      const nm = clickedField.slice(0, clickedField.lastIndexOf("|"));
+      out.set(clickedField, { label: (names.get(nm)?.size ?? 0) > 1 && !filter.city ? `${nm} (${clickedField.slice(clickedField.lastIndexOf("|") + 1)})` : nm, legs: [] });
+    }
     // EVERY LEG OF THE FIELD, not only the ones that charged: membership is credited by member spots
     // to any of them.
     for (const [id] of venues) { const k = fieldKeyOf(id, venues); const o = out.get(k); if (o && !o.legs.includes(id)) o.legs.push(id); }
     return new Map([...out].sort((a, b) => a[1].label.localeCompare(b[1].label)));
-  }, [periodRows, venues, filter.city]);
+  }, [periodRows, venues, filter.city, clickedField]);
   // A field not in the list for this period cannot stay selected.
   useEffect(() => {
     if (filter.field && periodRows && venues.size > 0 && !fieldOptions.has(filter.field)) setFilter((f) => ({ ...f, field: null }));
@@ -232,7 +251,6 @@ export default function RevenueSection() {
     return filterRows(rows, filter, venues);
   }, [filter, data, venues, memberShares]);
   const topRows = useMemo(() => narrow(periodRows), [narrow, periodRows]);
-  const spanRows = useMemo(() => narrow(txn.data), [narrow, txn.data]);
 
   /* THE TILES' DAY ROWS, ALL ON THE PAGE'S NARROWING (merged 2026-10-08). Pace to month end reads
    * this month by day and, for its shape factor, last month by day; Avg daily DPP takes today's
@@ -312,25 +330,121 @@ export default function RevenueSection() {
       gr === "field" && cityFilter !== "all" ? cityFields(cityFilter) : fp.fields)),
   });
 
-  // fin_venues.launch_date: the earliest among the field's venue rows.
-  const launchOf = useCallback((g: GroupRow): string | null => {
-    if (g.venueId == null) return null;
+  /* ── LAUNCHED ─────────────────────────────────────────────────────────────────────────────────
+   * A FIELD: fin_venues.launch_date, the earliest among the field's venue rows (what the Field tab's
+   * Export has always carried). A CITY: the first non-cancelled match on any field linked to the
+   * city's venues (Ryan, 2026-10-09: "its earliest field's first match"), read in loadCityLaunches. */
+  const fieldLaunchYm = useCallback((name: string, city: string | null): Ym | null => {
     const dates = (data?.venues ?? [])
-      .filter((v) => v.venue_name === g.label && (v.city ?? null) === g.city)
+      .filter((v) => v.venue_name === name && (v.city ?? null) === city)
       .map((v) => v.launch_date).filter((d): d is string => !!d).sort();
-    if (dates.length === 0) return null;
-    const d = new Date(`${dates[0].slice(0, 10)}T00:00:00`);
-    if (Number.isNaN(d.getTime())) return dates[0].slice(0, 10);
-    return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getMonth()]} ${d.getFullYear()}`;
+    return dates.length ? dates[0].slice(0, 7) : null;
   }, [data]);
+  const fieldsByCity = useMemo(() => {
+    if (!data) return null;
+    const cityOf = new Map(data.venues.map((v) => [Number(v.id), canonCity(v.city)]));
+    const o: Record<string, number[]> = {};
+    for (const [fid, vid] of data.venueFields) { const c = cityOf.get(Number(vid)); if (c) (o[c] ??= []).push(Number(fid)); }
+    return o;
+  }, [data]);
+  const cityLaunch = useAsync(fieldsByCity ? `launch|${JSON.stringify(fieldsByCity)}` : null, () => loadCityLaunches(fieldsByCity!));
+  const cityLaunchYm = useCallback((label: string): Ym | null => {
+    const d = cityLaunch.data?.[canonCity(label)];
+    return d ? d.slice(0, 7) : null;
+  }, [cityLaunch.data]);
+  const launchYmOf = useCallback((g: GroupRow): Ym | null =>
+    g.venueId != null ? fieldLaunchYm(g.label, g.city) : g.label === UNASSIGNED || g.city == null ? null : cityLaunchYm(g.label),
+  [fieldLaunchYm, cityLaunchYm]);
+  const scopeLaunch: Ym | null = filter.field ? fieldLaunchYm(fieldName!, fieldCity) : filter.city ? cityLaunchYm(filter.city) : null;
 
-  // ── THE FOUR-PERIOD TABLE ──
-  // THE FOUR-MONTH TABLE FOLLOWS THE PAGE FILTER.
-  const monthTotals = useMemo(() => (spanRows ? totalsByMonth(spanRows) : null), [spanRows]);
-  const periodTotal = useCallback((months: string[], pick: (t: Totals) => number) => {
-    if (!monthTotals) return null;
-    return months.reduce((a, m) => { const t = monthTotals.get(monthKeyOf(m)); return a + (t ? pick(t) : 0); }, 0);
-  }, [monthTotals]);
+  /* ── THE MONTH RANGE (From / To, 4M / 6M / 12M / Since launch) ────────────────────────────────
+   * Shared by the monthly card and the By month table. A preset ends at the selected period's last
+   * month (never past this month), so 4M is exactly the old "period and the prior three" for a month;
+   * picking a From or To by hand drops the preset and holds the range. Since launch needs a city or a
+   * field, and goes back to 4M when the filter returns to All MatchDay. */
+  const curYm = ymOfDate(now);
+  const hist = useAsync(uid ? `hist|${uid}|${curYm}` : null,
+    () => loadRollup(uid!, { from: HISTORY_FROM, to: ymdOf(new Date(now.getFullYear(), now.getMonth() + 1, 0)), grain: "month", byVenue: true }));
+  const firstYm = useMemo(() => {
+    let m: Ym | null = null;
+    for (const r of hist.data ?? []) if (isRevenueRow(r)) { const y = ymOfPeriodKey(r.period); if (!m || y < m) m = y; }
+    return m;
+  }, [hist.data]);
+  const periodEndYm = (() => { const y = ymOfDate(period.end); return y > curYm ? curYm : y; })();
+  const [range, setRange] = useState<MonthRange>(() => presetRange("4", periodEndYm, null, null));
+  const scopeKey = filter.field ?? filter.city ?? "";
+  useEffect(() => {
+    setRange((r) => {
+      if (r.preset == null) return r;
+      const next = r.preset === "since" && !scopeKey ? presetRange("4", periodEndYm, null, firstYm)
+        : r.preset === "since" && !scopeLaunch ? r
+        : presetRange(r.preset, periodEndYm, scopeLaunch, firstYm);
+      return next.from === r.from && next.to === r.to && next.preset === r.preset ? r : next;
+    });
+  }, [periodEndYm, scopeKey, scopeLaunch, firstYm]);
+  const choosePreset = (p: Preset) => setRange(presetRange(p, periodEndYm, scopeLaunch, firstYm));
+  const chooseMonth = (which: "from" | "to", ym: Ym) => setRange((r) => {
+    const n = { ...r, [which]: ym, preset: null };
+    return n.from > n.to ? { from: n.to, to: n.from, preset: null } : n;
+  });
+  const rangeMonths = useMemo(() => monthsBetween(range.from, range.to), [range.from, range.to]);
+  const rangeNewest = useMemo(() => [...rangeMonths].reverse(), [rangeMonths]);
+  const monthOptions = useMemo(() => monthsBetween(firstYm && firstYm < range.from ? firstYm : range.from, curYm), [firstYm, range.from, curYm]);
+  const rowsByMonth = useMemo(() => {
+    const m = new Map<Ym, RollupRow[]>(rangeMonths.map((ym) => [ym, []]));
+    for (const r of hist.data ?? []) m.get(ymOfPeriodKey(r.period))?.push(r);
+    return m;
+  }, [hist.data, rangeMonths]);
+
+  /* MEMBER SPOTS FOR THE RANGE. A field's months need the city's member spots per field (membership
+   * onto fields), which come from the roster loader. The page already holds the period and the
+   * prior three; a range reaching further loads the missing months — at most four quarters, the
+   * loader's limit — and anything older prints a dash marked "not loaded", never a zero. */
+  const [view, setView] = useState<View>("sum");
+  const needShares = !!filter.field || (grain === "field" && view === "month");
+  const neededYms = needShares ? rangeMonths.filter((ym) => !covers(data, ym)) : [];
+  const extraKey = neededYms.length ? `${neededYms[0]}|${neededYms[neededYms.length - 1]}` : "";
+  const extraPeriod = useMemo(() => {
+    if (!extraKey) return span;
+    const [a, b] = extraKey.split("|");
+    const qStart = addMonths(b, -(Number(b.slice(5, 7)) - 1) % 3); // first month of b's quarter
+    const floor = addMonths(qStart, -9);                              // four quarters back
+    return monthSpanPeriod(dateOfYm(a < floor ? floor : a), dateOfYm(b), now);
+  }, [extraKey, span, now]);
+  const { data: extra, loading: extraLoading } = useFinancePeriodData(extraPeriod);
+  const monthKnown = useCallback((ym: Ym) => covers(data, ym) || covers(extra, ym), [data, extra]);
+  const rangeShares = useCallback<MemberShares>((city, periodKey) => {
+    const ym = ymOfPeriodKey(periodKey);
+    const d = covers(data, ym) ? data : covers(extra, ym) ? extra : null;
+    return d ? sharesOf(d, city, periodKey) : null;
+  }, [data, extra]);
+  const sharesPending = needShares && (primaryLoading || extraLoading);
+  const notLoadedNote = "Member spots for this month are not loaded: a field's months reach back four quarters from the end of the range.";
+  /* BEFORE AUG 2026 STRIPE CHARGES CARRY NO FIELD (measured 2026-10-09: 0% of DPP charges through
+   * July, 90% in August, 100% from September), so a field's earlier months hold only its membership
+   * share. Derived from the rows, not pinned: the first month where most DPP charges carry a field. */
+  const fieldDataFrom = useMemo(() => {
+    const by = new Map<Ym, { all: number; tied: number }>();
+    for (const r of hist.data ?? []) {
+      if (r.kind !== "charge" || r.excluded || bucketOf(r.type) !== "dpp") continue;
+      const ym = ymOfPeriodKey(r.period), o = by.get(ym) ?? { all: 0, tied: 0 };
+      o.all += r.gross_cents; if (r.fin_venue_id != null) o.tied += r.gross_cents; by.set(ym, o);
+    }
+    return [...by].sort(([a], [b]) => a.localeCompare(b)).find(([, o]) => o.all > 0 && o.tied * 2 >= o.all)?.[0] ?? null;
+  }, [hist.data]);
+
+  // ── THE MONTHLY CARD: one Totals per month in range, on the page's narrowing ──
+  const monthly = useMemo(() => {
+    if (!hist.data) return null;
+    const out = new Map<Ym, { t: Totals | null; rows: number }>();
+    for (const ym of rangeMonths) {
+      if (filter.field && !monthKnown(ym)) { out.set(ym, { t: null, rows: 0 }); continue; }
+      const rows = rowsByMonth.get(ym) ?? [];
+      const n = filter.field ? filterRows(rows, filter, venues, rangeShares) : filterRows(rows, filter, venues);
+      out.set(ym, { t: totalsOf(n), rows: n.filter(isRevenueRow).length });
+    }
+    return out;
+  }, [hist.data, rangeMonths, rowsByMonth, filter, venues, rangeShares, monthKnown]);
   const SUMMARY_ROWS: { key: string; label: string; pick: (t: Totals) => number; strong?: boolean }[] = [
     { key: "gross", label: "Gross collected", pick: (t) => t.gross },
     { key: "reversals", label: "Refunds and disputes", pick: (t) => t.reversals },
@@ -358,15 +472,59 @@ export default function RevenueSection() {
     return `${real} ${noun(real)}`;
   }, [grain, panelRows, cityGroups, fieldGroups, now]);
 
-  /* SWITCHING VIEW KEEPS WHAT THE NEXT VIEW CAN STILL USE.
-   *   Field → Match  the city carries over onto Match View's own City select.
-   *   → City         everything drops: City View has no filter. */
+  /* SWITCHING VIEW KEEPS WHAT THE NEXT VIEW CAN STILL USE: the page's City carries onto Match
+   * View's own City select. Each switch puts the sort back to its default. */
+  const defaultSort = (v: View): SortState => ({ key: v === "sum" ? "net" : "range", dir: -1 });
+  const [sort, setSort] = useState<SortState>(defaultSort("sum"));
   const changeGrain = (next: Grain) => {
     if (next === grain) return;
-    if (next === "city") setCityFilter("all");
-    setGrain(next);
+    setGrain(next); setSort(defaultSort(view));
   };
+  const changeView = (next: View) => { if (next !== view) { setView(next); setSort(defaultSort(next)); } };
+  const onSort = (k: string) => setSort((cur) => nextSort(cur, k, TEXT_KEYS.has(k)));
 
+  /* A ROW SETS THE PINNED FILTER, and the page follows it as it would from the selects. The top of
+   * the page is where the change shows, so it scrolls there. */
+  const toTop = () => { try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch { /* old browsers */ } };
+  const openCity = useCallback((label: string) => { setFilter({ city: label, field: null }); toTop(); }, []);
+  const openField = useCallback((key: string, city: string | null) => {
+    setClickedField(key);
+    setFilter({ city: city && chipCities.includes(city) ? city : null, field: key });
+    toTop();
+  }, [chipCities]);
+  const openGroup = useCallback((g: GroupRow) =>
+    g.venueId != null ? () => openField(g.key.slice(1), g.city)
+      : grain === "city" && g.label !== UNASSIGNED ? () => openCity(g.label) : null,
+  [grain, openCity, openField]);
+
+  // ── BY MONTH: one row per city or field, one cell per month in range ──
+  const monthRows = useMemo<MonthRow[]>(() => {
+    if (view !== "month" || grain === "match" || !hist.data) return [];
+    const field = grain === "field";
+    const unknown = new Set<Ym>(field ? rangeMonths.filter((ym) => !monthKnown(ym)) : []);
+    const out = new Map<string, MonthRow>();
+    for (const ym of rangeMonths) {
+      if (unknown.has(ym)) continue;
+      let rows = rowsByMonth.get(ym) ?? [];
+      if (field && filter.city) rows = rows.filter((r) => cityLabel(r.city) === filter.city);
+      for (const g of field ? byFieldRows(rows, venues, rangeShares) : byCityRows(rows)) {
+        const r = out.get(g.key) ?? {
+          key: g.key, label: g.label, city: g.city, launch: launchYmOf(g), byMonth: new Map<Ym, number>(),
+          unknown, range: null, change: null, open: openGroup(g),
+        };
+        r.byMonth.set(ym, g.net);
+        out.set(g.key, r);
+      }
+    }
+    for (const r of out.values()) {
+      const vals = rangeMonths.map((ym) => monthCell(r, ym)).filter((v): v is number => v != null);
+      r.range = vals.length ? vals.reduce((a, v) => a + v, 0) : null;
+      r.change = changePct(rangeMonths, (ym) => monthCell(r, ym), curYm);
+    }
+    return [...out.values()];
+  }, [view, grain, hist.data, rangeMonths, monthKnown, rowsByMonth, filter.city, venues, rangeShares, launchYmOf, openGroup, curYm]);
+
+  /* THE EXPORT IS THE TABLE ON SCREEN: the same view, rows in the same order, the same months. */
   function exportTable() {
     if (grain === "match") {
       downloadCsv(`matchday-revenue-matches-${mPeriod.key}.csv`, [
@@ -379,27 +537,39 @@ export default function RevenueSection() {
       ]);
       return;
     }
-    // THE TABLE ON SCREEN, cell for cell: the same GroupRows, in dollars to the cent, and the same
-    // 4-week cells, with the window in their headers.
     const d = (c: number) => (c / 100).toFixed(2);
+    const city = grain === "city";
+    if (view === "month") {
+      const rows = orderRows(monthRows, sort, monthValue);
+      downloadCsv(`matchday-revenue-${grain}-by-month-${range.from}-to-${range.to}.csv`, [
+        [city ? "City" : "Field", ...(city ? [] : ["City"]), "Launched", ...rangeNewest.map(shortYm), "Range total", "Change (last full month vs first month)"],
+        ...rows.map((r) => [r.label, ...(city ? [] : [r.city ?? ""]), r.launch ? shortYm(r.launch) : "",
+          ...rangeNewest.map((ym) => { const v = monthCell(r, ym); return v == null ? "" : d(v); }),
+          r.range == null ? "" : d(r.range), r.change == null ? "" : `${r.change}%`]),
+      ]);
+      return;
+    }
+    // THE SELECTED VIEW, cell for cell: the same GroupRows, in dollars to the cent, and the same
+    // 4-week cells, with the window in their headers.
     const groups = grain === "city" ? cityGroups : fieldGroups;
     const total = groups.reduce((a, g) => a + g.net, 0);
-    const city = grain === "city";
     const p = pnlFor(grain);
+    const ordered = orderRows(groups, sort, (g, k) => selectedValue(g, k, { matchesOf: city ? cityMatches : fieldMatches, venuesOf: city ? cityVenues : undefined, launchOf: launchYmOf, pnl: p }));
     const w = `last 4 completed weeks ${fp.win.label}`;
     const n2 = (v: number | null) => (v == null ? "" : v.toFixed(2));
     downloadCsv(`matchday-revenue-${grain}-${period.key}.csv`, [
-      [city ? "City" : "Field", ...(city ? ["Venues"] : ["City", "Launched"]), "Period", "Matches (kicked off)",
+      [city ? "City" : "Field", ...(city ? ["Venues"] : ["City"]), "Launched", "Period", "Matches (kicked off)",
         "DPP (before refunds)", "Membership (before refunds)", "Net revenue", ...(city ? ["Avg revenue / venue"] : []), "Member mix", "Share",
         `Matches (${w})`, `Revenue / match (${w}, play revenue before tax, refunds and Stripe fees)`, `Field cost / match (${w})`,
         `Net / match (${w})`, `Cost note (${w})`],
-      ...groups.map((g) => {
+      ...ordered.map((g) => {
         const m = city ? cityMatches(g) : fieldMatches(g);
         const v = city ? cityVenues(g) : null;
         const c = g.label === UNASSIGNED ? null : p.of(g);
+        const l = launchYmOf(g);
         const note = !c ? "" : [c.costText, c.profitShare ? "Profit share" : null, c.coverage ? `averages cover ${c.coverage}` : null,
           c.provisionalMonths.length ? `provisional until ${c.provisionalMonths.join(" and ")} closes` : null].filter(Boolean).join("; ");
-        return [g.label, ...(city ? [v ?? ""] : [g.city ?? "", launchOf(g) ?? ""]), period.label, m ?? "",
+        return [g.label, ...(city ? [v ?? ""] : [g.city ?? ""]), l ? shortYm(l) : "", period.label, m ?? "",
           d(g.dpp), d(g.membership), d(g.net), ...(city ? [v ? d(Math.round(g.net / v)) : ""] : []),
           g.net > 0 ? `${((g.membership / g.net) * 100).toFixed(1)}%` : "", total ? `${((g.net / total) * 100).toFixed(1)}%` : "",
           c ? c.matches : "", n2(c?.revPM ?? null), n2(c?.costPM ?? null), n2(c?.netPM ?? null), note];
@@ -459,39 +629,68 @@ export default function RevenueSection() {
         </div>
       )}
 
-      <div className={s.card}>
-        <div className={s.cardHead}>
-          <div>
-            <span className={s.cardTitle} data-testid="revenue-summary-title">{fieldName ?? filter.city ?? "Matchday revenue"}</span>
-            <span className="rv2-tag" data-testid="summary-scope-tag" style={{ marginLeft: 10 }}>{scopeLabel}</span>
-            <div className={s.cardSub} data-testid="revenue-summary-sub">
-              Current {period.grain} and prior three · oldest to newest · Central time
-            </div>
+      {/* ── THE MONTHLY CARD: "Revenue for <scope>", a month range, newest first ── */}
+      <div className={s.card} data-testid="revenue-monthly">
+        <div className="rv2-mhead">
+          <h2 className="rv2-mtitle" data-testid="revenue-summary-title">Revenue for {fieldName ?? filter.city ?? "All MatchDay"}</h2>
+          {scopeLaunch && <span className="rv2-launch" data-testid="summary-launched">Launched {shortYm(scopeLaunch)}</span>}
+          <span className="rv2-grow" />
+          <div className="rv2-range" data-testid="range-controls">
+            <span className="rv2-rlab">Months</span>
+            <select aria-label="From month" data-testid="range-from" value={range.from} onChange={(e) => chooseMonth("from", e.target.value)}>
+              {monthOptions.map((ym) => <option key={ym} value={ym}>{shortYm(ym)}</option>)}
+            </select>
+            <span>to</span>
+            <select aria-label="To month" data-testid="range-to" value={range.to} onChange={(e) => chooseMonth("to", e.target.value)}>
+              {monthOptions.map((ym) => <option key={ym} value={ym}>{shortYm(ym)}</option>)}
+            </select>
+            {PRESETS.map(({ p, label }) => {
+              const off = p === "since" && (!scopeKey || !scopeLaunch);
+              return (
+                <button key={p} type="button" className="rv2-pre" aria-pressed={range.preset === p} data-testid={`range-${p}`}
+                  disabled={off} title={off ? (scopeKey ? "No launch date on file" : "Pick a city or a field first") : undefined}
+                  onClick={() => choosePreset(p)}>{label}</button>
+              );
+            })}
           </div>
         </div>
+        <div className={s.cardSub} data-testid="revenue-summary-sub">
+          {shortYm(range.from)} to {shortYm(range.to)} · newest first · Central time
+        </div>
+        {hist.error ? (
+          <div className={s.empty}>Revenue did not load: {hist.error}</div>
+        ) : (
         <div className={s.tblWrap}>
           <table className={s.tbl} data-testid="revenue-summary">
             <thead>
               <tr>
                 <th className="l">&nbsp;</th>
-                {periods.map((p) => (
-                  <th key={p.key} data-testid="revenue-summary-month">
-                    {p.label}
-                    {p.key === period.key && period.isCurrent && <i className={s.soFar}>so far</i>}
+                {rangeNewest.map((ym) => (
+                  <th key={ym} data-testid="revenue-summary-month" data-month={ym}>
+                    {shortYm(ym)}
+                    {ym === curYm && <i className={s.soFar}>so far</i>}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {SUMMARY_ROWS.filter((row) => row.key !== "other" || periods.some((p) => (periodTotal(p.months, row.pick) ?? 0) !== 0)).map((row) => (
+              {SUMMARY_ROWS.filter((row) => row.key !== "other" || rangeMonths.some((ym) => (monthly?.get(ym)?.t?.other ?? 0) !== 0)).map((row) => (
                 <tr key={row.key} data-testid="revenue-summary-row" data-row={row.key}>
-                  <td className="l">{row.strong ? <b>{row.label}</b> : row.label}</td>
-                  {periods.map((p) => {
-                    const v = periodTotal(p.months, row.pick);
+                  <td className="l" style={{ textAlign: "left" }}>{row.strong ? <b>{row.label}</b> : row.label}</td>
+                  {rangeNewest.map((ym) => {
+                    const c = monthly?.get(ym);
+                    const v = c?.t ? row.pick(c.t) : null;
+                    // A DASH, NOT $0, before launch — when the month holds nothing. A pre-launch month
+                    // that does hold money shows it (San Antonio and OKC have charges before their first match).
+                    const preLaunch = !!scopeLaunch && ym < scopeLaunch && c?.rows === 0;
+                    const text = !monthly || (c && !c.t && sharesPending) ? "…"
+                      : c && !c.t ? "—"
+                      : preLaunch ? "—"
+                      : v == null ? "…" : row.strong ? <b>{money(v)}</b> : money(v);
+                    const title = c && !c.t && !sharesPending ? notLoadedNote : preLaunch ? "Before launch" : undefined;
                     return (
-                      <td key={p.key} data-testid={`sum-${row.key}`} data-month={p.key} data-cents={v ?? ""}>
-                        {v == null ? "…" : row.strong ? <b>{money(v)}</b> : money(v)}
-                      </td>
+                      <td key={ym} data-testid={`sum-${row.key}`} data-month={ym} data-cents={preLaunch || v == null ? "" : v}
+                        className={text === "—" ? "rv2-dim" : undefined} title={title}>{text}</td>
                     );
                   })}
                 </tr>
@@ -499,22 +698,15 @@ export default function RevenueSection() {
             </tbody>
           </table>
         </div>
-        <div className={s.legend}>
-          {dropped > 0 && (
-            <span data-testid="revenue-span-dropped">
-              {dropped} earlier {dropped === 1 ? "period" : "periods"} not drawn — the span would
-              need more quarters than can be loaded at once.
-            </span>
-          )}
-          {periods.length < 4 && dropped === 0 && (
-            <span data-testid="revenue-span-short">
-              {periods.length} of 4 {periods.length === 1 ? "period" : "periods"} — the record does not go back further.
-            </span>
-          )}
-        </div>
+        )}
+        {filter.field && fieldDataFrom && range.from < fieldDataFrom && (
+          <div className={s.legend} data-testid="field-history-note">
+            <span>{`Before ${shortYm(fieldDataFrom)} Stripe charges do not carry a field, so a field's earlier months hold only its share of membership.`}</span>
+          </div>
+        )}
       </div>
 
-      {/* ── ONE CARD: TOGGLE, COUNT, FILTERS, TABLE ── */}
+      {/* ── ONE CARD: TOGGLES, COUNT, TABLE ── */}
       <div className={s.card} data-testid="breakdown-card">
         <div className={s.brkHead}>
           <div className={s.seg} role="group" aria-label="Breakdown">
@@ -526,41 +718,34 @@ export default function RevenueSection() {
               </button>
             ))}
           </div>
+          {grain !== "match" && (
+            <div className={s.seg} role="group" aria-label="View">
+              {(["sum", "month"] as const).map((v) => (
+                <button key={v} type="button" data-testid={`view-${v}`} aria-pressed={view === v}
+                  className={view === v ? s.on : ""} onClick={() => changeView(v)}>
+                  {v === "sum" ? `Selected ${period.grain}` : "By month"}
+                </button>
+              ))}
+            </div>
+          )}
           <span className={s.brkCount} data-testid="breakdown-count">{breakdownCount}</span>
-          {grain !== "match" ? (
+          {grain === "match" ? (
             <span className={s.brkCount} data-testid="breakdown-basis">
-              · {period.label} · net revenue, Central time{grain === "field" ? " · Launched is the field's first day" : ""}
+              · DPP revenue per match from Stripe, net of tax, dated by kick-off <InfoI pop="matchmoney" label="DPP revenue per match" />
+            </span>
+          ) : view === "sum" ? (
+            <span className={s.brkCount} data-testid="breakdown-basis">
+              · {period.label}{grain === "field" && filter.city ? ` · ${filter.city}` : ""} · net revenue, Central time · click a column to sort, a row to show it above
             </span>
           ) : (
             <span className={s.brkCount} data-testid="breakdown-basis">
-              · DPP revenue per match from Stripe, net of tax, dated by kick-off <InfoI pop="matchmoney" label="DPP revenue per match" />
+              · {shortYm(range.from)} to {shortYm(range.to)}, the same months as above{grain === "field" && filter.city ? ` · ${filter.city}` : ""} · net revenue
             </span>
           )}
           <span className={s.brkGrow} />
           <button type="button" className={s.btn} data-testid="breakdown-export"
             onClick={exportTable}>Export</button>
         </div>
-
-        {/* CITY VIEW RENDERS NO FILTER ROW AT ALL. The rows ARE the cities. */}
-        {grain === "field" && (
-          <div className={s.brkFilters} data-testid="breakdown-filters">
-            <span className={s.ctrlLab}>City</span>
-            <div className={s.seg}>
-              <button type="button" data-testid="city-chip" data-city="all"
-                className={cityFilter === "all" ? s.on : ""}
-                onClick={() => setCityFilter("all")}>All</button>
-              {chipCities.map((c) => (
-                <button key={c} type="button" data-testid="city-chip" data-city={c}
-                  className={cityFilter === c ? s.on : ""}
-                  onClick={() => setCityFilter(c)}>{c}</button>
-              ))}
-            </div>
-            {cityFilter !== "all" && (
-              <button type="button" className={s.brkClear} data-testid="breakdown-clear"
-                onClick={() => setCityFilter("all")}>Clear</button>
-            )}
-          </div>
-        )}
 
         {grain === "match" ? (
           <>
@@ -576,14 +761,30 @@ export default function RevenueSection() {
               onShown={onPanelShown}
             />
           </>
+        ) : view === "month" ? (
+          hist.error ? <div className={s.empty}>Revenue did not load: {hist.error}</div>
+          : !hist.data || (grain === "field" && sharesPending && monthRows.length === 0) ? <div className={s.empty}>Loading…</div>
+          : (
+            <>
+              <RevenueByMonthTable grain={grain} rows={monthRows} months={rangeNewest} currentYm={curYm}
+                sort={sort} onSort={onSort} pending={sharesPending} unknownNote={notLoadedNote} />
+              {grain === "field" && fieldDataFrom && range.from < fieldDataFrom && (
+                <div className={s.legend} data-testid="field-history-note-table">
+                  <span>{`Before ${shortYm(fieldDataFrom)} Stripe charges do not carry a field, so a field's earlier months hold only its share of membership; the rest is in the no-field rows.`}</span>
+                </div>
+              )}
+            </>
+          )
         ) : txn.error ? (
           <div className={s.empty}>Revenue did not load: {txn.error}</div>
         ) : !periodRows ? (
           <div className={s.empty}>Loading…</div>
         ) : grain === "city" ? (
-          <RevenueNetTable grain="city" groups={cityGroups} matchesOf={cityMatches} venuesOf={cityVenues} pnl={pnlFor("city")} />
+          <RevenueNetTable grain="city" groups={cityGroups} matchesOf={cityMatches} venuesOf={cityVenues} launchOf={launchYmOf}
+            pnl={pnlFor("city")} sort={sort} onSort={onSort} onOpen={openGroup} />
         ) : (
-          <RevenueNetTable grain="field" groups={fieldGroups} matchesOf={fieldMatches} launchOf={launchOf} pnl={pnlFor("field")} />
+          <RevenueNetTable grain="field" groups={fieldGroups} matchesOf={fieldMatches} launchOf={launchYmOf}
+            pnl={pnlFor("field")} sort={sort} onSort={onSort} onOpen={openGroup} />
         )}
       </div>
     </div>
@@ -611,4 +812,18 @@ function useNarrowedDays(on: boolean, from: string, to: string, n: {
     return ready ? filterRows(rs, filter, venues, memberShares, true) : null;
   }, [all.data, legs.data, filter, narrow, ready, venues, memberShares]);
   return { rows, error: all.error ?? legs.error };
+}
+
+/* MEMBERSHIP ONTO FIELDS for one city-month, from one loaded roster — the Cities page's rule
+ * (cityPnl.ts, "ALLOCATE membership onto the pitches"): field share = the field's member spots that
+ * month ÷ the city's member spots that month. Null when the month has no member spots in `d`. */
+function sharesOf(d: FinanceData, city: string, periodKey: string): { venueId: number; share: number }[] | null {
+  const month = monthLabelOf(periodKey);
+  const legs = d.venues.filter((v) => canonCity(v.city) === canonCity(city));
+  if (legs.length === 0) return null;
+  const citySpots = cityTotalMemberSpotsFor(d, legs[0].city, month);
+  if (!(citySpots > 0)) return null;
+  return legs
+    .map((v) => ({ venueId: Number(v.id), share: venueMemberSpotsFor(d, v.id, month).member / citySpots }))
+    .filter((x) => x.share > 0);
 }

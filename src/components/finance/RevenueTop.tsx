@@ -121,15 +121,20 @@ export default function RevenueTop({ period, rows, error, dayRows, prevDay, toda
     : `Adjusted after final · ${status.cents >= 0 ? "+" : ""}${$c(status.cents)} in ${status.n} ${status.n === 1 ? "row" : "rows"}`;
 
   return (
-    <div className="rv2" data-testid="revenue-top" style={{ display: "grid", gap: 14 }}>
-      {/* THE PAGE'S OWN HEADER: "Revenue" with the Finance period bar beside it, and ONE status pill
-          in place of the bar's partial-days chip (financeChrome lists this page as drawing its own). */}
+    /* display:contents — THE PINNED BAR'S CONTAINING BLOCK MUST BE THE PAGE. A sticky element only
+       sticks inside its parent, and this wrapper ends with the hero; as `contents` its children are
+       laid out by the page's column (RevenueSection's wrap) and the bar stays up all the way down. */
+    <div className="rv2" data-testid="revenue-top" style={{ display: "contents" }}>
+      <h1 className="rv2-title" style={{ margin: 0 }}>Revenue <InfoI pop="how" large label="How we count revenue" testid="info-how" /></h1>
+      {/* THE PAGE'S ONE FILTER BAR, pinned under the site header: period, ONE status pill in place
+          of the bar's partial-days chip (financeChrome lists this page as drawing its own), and the
+          City and Field selects. */}
       <FinancePeriodBar
         period={period} now={now} supportedGrains={["month", "quarter", "year"]} unsupportedReason="" links={filters ?? null}
         onChangeGrain={(g) => setPeriod(changeGrain(period, g, now))}
         onStep={(dir) => setPeriod(stepPeriod(period, dir, now))}
         onJumpToNow={() => setPeriod(currentPeriod(period.grain, now))}
-        lead={<h1 className="rv2-title">Revenue <InfoI pop="how" large label="How we count revenue" testid="info-how" /></h1>}
+        pinned
         status={<span className="rv2-status">
           <span className={`status ${status?.k ?? ""}`} data-testid="status" data-status={status?.k ?? ""}>{statusText}</span>
           <InfoI pop="status" label="What updating and final mean" testid="info-status" />

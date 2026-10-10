@@ -24,7 +24,7 @@ import { GRAINS, GRAIN_LABEL, THIS_LABEL, RECORD_STARTS, canStepBack, canStepFor
 import s from "./periodBar.module.css";
 
 export default function FinancePeriodBar({
-  period, now, onChangeGrain, onStep, onJumpToNow, supportedGrains, unsupportedReason, links, lead, status,
+  period, now, onChangeGrain, onStep, onJumpToNow, supportedGrains, unsupportedReason, links, lead, status, pinned,
 }: {
   period: FinancePeriod;
   now: Date;
@@ -39,6 +39,11 @@ export default function FinancePeriodBar({
   /** In place of the Partial / Not started chip: a page with its own status pill folds the elapsed
    *  days into it, so there is one pill and not two (Revenue, 2026-10-07). */
   status?: React.ReactNode;
+  /** STICKS UNDER THE SITE HEADER, compact: one row on desktop; on a phone two — the period on the
+   *  first, status / jump / links on the second, which scrolls sideways inside itself rather than
+   *  wrapping into a third (Revenue, 2026-10-09). No lead or "Period" label when pinned. The caller
+   *  must render it as a child of the page-long container, or it unsticks with its parent. */
+  pinned?: boolean;
 }) {
   // Both bounds come from the model, not from arithmetic repeated here — the stepper and the
   // period must agree about where the record starts and where today is.
@@ -46,8 +51,9 @@ export default function FinancePeriodBar({
   const backOk = canStepBack(period);
 
   return (
-    <div className={s.bar} data-testid="finance-period-bar">
-      {lead ?? <span className={s.lab}>Period</span>}
+    <div className={pinned ? `${s.bar} ${s.pinned}` : s.bar} data-testid="finance-period-bar" data-pinned={pinned ? "1" : undefined}>
+      {!pinned && (lead ?? <span className={s.lab}>Period</span>)}
+      <div className={s.r1}>
 
       <div className={s.grain} role="group" aria-label="Period grain">
         {GRAINS.map((g) => {
@@ -81,6 +87,8 @@ export default function FinancePeriodBar({
           {period.monthsOmitted} month{period.monthsOmitted === 1 ? "" : "s"} before {RECORD_STARTS} not on record
         </span>
       )}
+      </div>
+      <div className={s.r2}>
 
       {status}
       {!status && period.isCurrent && (
@@ -104,6 +112,7 @@ export default function FinancePeriodBar({
 
       <span className={s.spacer} />
       <span className={s.links}>{links}</span>
+      </div>
     </div>
   );
 }

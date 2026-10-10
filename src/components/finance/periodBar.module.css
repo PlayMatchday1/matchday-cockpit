@@ -59,6 +59,8 @@
 .future b { font-weight: 800; }
 .note { font-size: 12px; color: #8a5a00; }
 .spacer { flex: 1; }
+/* Row groups exist for the pinned phone layout only; everywhere else they are not boxes at all. */
+.r1, .r2 { display: contents; }
 .links { font-size: 12.5px; color: #5b7568; }
 
 @media (max-width: 899px) {
@@ -67,4 +69,45 @@
   .spacer { display: none; }
   .cur { min-width: 120px; font-size: 16px; }
   .links { width: 100%; }
+}
+
+/* ── PINNED (Revenue) ─────────────────────────────────────────────────────────────────────────
+   Sticks under the site header: TopNav (--nav-h) from 768px. Below that the mobile app bar scrolls
+   away with the page, so the bar sticks to the top edge (plus the notch inset). ONE ROW on desktop:
+   nothing wraps, and the City / Field selects are what give way (they shrink, then ellipsize). */
+.pinned {
+  position: sticky; top: var(--nav-h); z-index: 20; margin: 0;
+  gap: 8px; padding: 8px 12px; flex-wrap: nowrap;
+  box-shadow: 0 6px 14px -12px rgba(15, 46, 31, .35);
+}
+.pinned .grain button { min-height: 34px; padding: 4px 11px; font-size: 12.5px; }
+.pinned .nav { width: 34px; height: 34px; }
+.pinned .cur { min-width: 0; font-size: 15px; padding: 0 8px; }
+.pinned .jump { min-height: 34px; padding: 5px 11px; font-size: 12.5px; }
+.pinned .spacer { flex: 1 1 0; min-width: 0; }
+.pinned .links { width: auto; flex: 0 1 auto; min-width: 0; display: inline-flex; }
+.pinned :global(.rv2-status) { white-space: nowrap; flex: none; }
+.pinned :global(.rv2-status .status) { font-size: 12px; white-space: nowrap; }
+.pinned :global(.rv2-filters) { flex-wrap: nowrap; min-width: 0; }
+.pinned :global(.rv2-filters select) { min-width: 84px; max-width: 210px; flex: 0 1 auto; padding: 6px 8px; text-overflow: ellipsis; }
+@media (max-width: 899px) {
+  .pinned {
+    top: calc(var(--nav-h) + var(--sat, 0px));
+    flex-direction: column; align-items: stretch; gap: 6px; padding: 6px 8px;
+  }
+  .pinned .r1 { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; justify-content: space-between; min-width: 0; }
+  .pinned .r2 {
+    display: flex; align-items: center; gap: 8px; flex-wrap: nowrap;
+    overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+  .pinned .r2::-webkit-scrollbar { display: none; }
+  .pinned .r2 > * { flex: none; }
+  /* The filters come first on a phone: they are what a person reaches for; the status pill and
+     This month follow, a sideways swipe away. */
+  .pinned .links { order: -1; }
+  .pinned .spacer { display: none; }
+  .pinned .grain button { padding: 4px 9px; }
+  .pinned .stepper { min-width: 0; }
+  .pinned .cur { font-size: 14px; padding: 0 4px; overflow: hidden; text-overflow: ellipsis; }
+  .pinned :global(.rv2-filters select) { max-width: 150px; }
 }

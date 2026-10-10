@@ -7052,3 +7052,33 @@ Evidence: a read-only full walk of prod `GET /admin/players` (`sortColumn=create
   - `fin_venues` stayed at 44 rows (max id 88).
   - `change_log` holds 2 rows with source "Match Ops · Fields · Link venue", both outcome `landed`.
   - `fin_change_log` holds 2 `fin_venue_fields` inserts.
+
+## fin_txn field attribution starts Aug 2026; city launch dates (2026-10-09)
+
+- **DPP charges carry a field only from Aug 2026.**
+  - Share of DPP charge gross with `fin_venue_id` set: 0% in every month through Jul 2026, 90% in Aug 2026, 100% in Sep and Oct 2026.
+  - So a field's revenue before Aug 2026 is only its share of membership (allocated by member spots). The DPP money for those months is in the "No field" rows.
+  - Evidence: `fin_txn_sums` (`p_grain` month, `p_by_venue` true, 2023-01-01 to 2026-10-31), summed by month for `kind`=charge, not excluded, `bucketOf(type)`=dpp. Run 2026-10-09.
+  - Revenue derives this boundary from the rows (`fieldDataFrom` in `src/components/finance/RevenueSection.tsx`) rather than pinning it.
+- **The full history is cheap to fetch.** `fin_txn_sums` by month and venue over all history returned 680 rows in 1,169 ms (2026-10-09). The earliest month with a charge is May 2023 (Austin).
+- **Revenue before the first match:**
+
+  | City | First fin_txn month | First non-cancelled match |
+  |---|---|---|
+  | San Antonio | Jul 2024 | 2025-03-12 |
+  | OKC | Feb 2026 | 2026-03-03 |
+  | El Paso | May 2026 | none |
+
+  Evidence: the same rollup, and `mdapi_matches` minimum `start_date` per field via `fin_venue_fields`.
+- **`fin_venues.launch_date` disagrees with the first match month for 6 venues:**
+
+  | Venue (id) | `launch_date` | First match |
+  |---|---|---|
+  | Westlake (49) | 2026-07-01 | 2023-04-13 |
+  | ATH Pearland (8) | 2024-10-02 | 2024-06-27 |
+  | Onion Creek (5) | 2025-08-14 | 2024-08-14 |
+  | Stony Point High School (83) | 2026-09-14 | 2026-01-07 |
+  | Lou Fusz Outdoor (18) | 2025-08-26 | 2025-10-07 |
+  | Lou Fusz Indoor (19) | 2026-02-16 | 2025-08-26 |
+
+  Revenue's Field "Launched" uses `launch_date`. A city's "Launched" uses its earliest first match.
