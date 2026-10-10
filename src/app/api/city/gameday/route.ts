@@ -30,6 +30,7 @@ import { authenticateCityManager } from "@/lib/cityManagerAuth";
 import { cityNameFor } from "@/lib/cityScope";
 import { apiGet, StageHostGuardError, StageConfigError } from "@/lib/matchdayStageApi";
 import { fetchVenueMaxPlayers, trimMatch, withVenueMaxPlayers, apiCityNameOf, type Raw } from "@/lib/gamedayApiShape";
+import { withSpots } from "@/lib/gamedaySpots";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -85,7 +86,9 @@ export async function GET(req: Request) {
     // SCOPE, then derive. Nothing below this line sees another city's rows.
     const scoped = out.map(trimMatch).filter((m) => apiCityNameOf(m) === cityName);
     /* AND ONLY THEN the venue join — one query, applied to what the scope already allowed. */
-    const matches = withVenueMaxPlayers(scoped, await fetchVenueMaxPlayers(auth.supabase));
+    const decorated = withVenueMaxPlayers(scoped, await fetchVenueMaxPlayers(auth.supabase));
+    // Who holds each spot, as on /match-ops/gameday — counts only, after the scope.
+    const { matches, spotsError } = await withSpots(auth.supabase, decorated, out);
 
     return Response.json({
       date,
@@ -94,6 +97,7 @@ export async function GET(req: Request) {
       cityName,
       readOnly: true,
       matches,
+      spotsError,
     });
   } catch (e) {
     if (e instanceof StageHostGuardError) return Response.json({ error: e.message }, { status: 500 });

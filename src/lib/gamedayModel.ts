@@ -46,6 +46,10 @@ export type ApiMatch = {
    * field that says whether a rating exists. See src/lib/gamedayReviews.ts. */
   starRating?: number; starRatingCount?: number;
   _count?: ApiCount;
+  /** Who holds each spot — paid / member / promo — attached by the gameday routes (gamedaySpots.ts).
+   *  Null when its lookups failed; absent on payloads that predate it. */
+  spots?: import("./gamedaySpots").MatchSpots | null;
+  additionalSpotPrice?: number | null;
   field?: { title?: string | null; city?: { id?: number; name?: string | null; timeZone?: { abbr?: string | null; name?: string | null } | null } | null } | null;
   manager?: { firstName?: string; lastName?: string } | null;
   teams?: { teamNumber?: number }[] | null;

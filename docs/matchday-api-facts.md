@@ -7102,3 +7102,18 @@ This supersedes the "field attribution starts Aug 2026" entry above.
 - **Launch:** a city or field launches at its first played match (not cancelled, at least one player, kicked off).
   - Fields whose title fires `EVENT_MARKERS` are left out, unless their link counts as regular play (17, 22, 199, 496, 1552).
   - Evidence: `loadVenueLaunches` in `src/lib/useRevenueTxn.ts`.
+
+## Gameday roster rows on the `/admin/matches` LIST (2026-10-10)
+
+Evidence: production `GET /admin/matches?fromDate=2026-10-09&toDate=2026-10-09`, compared with `GET /admin/matches/{id}/players` for 19697 and 20128. Keys and counts were read, no values.
+
+- **The embedded `players[]` rows carry no `user` object.** There is no `isFakePlayer` and no email on them, so a fake cannot be told from a real player in those rows.
+  - On 19697 the list rows showed 12 bookings with nothing marking any as fake. `/players` showed 4 of them as fakes (`user.isFakePlayer` true, @matchday.com email).
+  - Gameday therefore identifies fakes by `userId` from `mdapi_users` (`is_fake_player`, or an @matchday.com email). See `src/lib/gamedaySpots.ts`.
+- **A @matchday.com account can be unflagged.** User 62408 (@matchday.com, `is_fake_player` false in both the API and `mdapi_users`) held a FREE spot on 19738, and `_count.fakePlayers` did not count it. Ryan's rule: exclude every @matchday.com account whether flagged or not.
+- **`amount` is the price charged, including credit.** `creditAmount` is the part paid from credit, and `totalAmount` is the card charge including fees and tax. Example: `amount` 3600, `creditAmount` 2598, `totalAmount` 1085. A host's `amount` covers their guests, whose own rows carry 0.
+- **`userType` has a third value, `ADDITIONAL_SPOT`, with its own `amount`.** Seen 2026-10-09: one at 500 on a 500 match. The match row also carries `additionalSpotPrice`, which was null on most rows.
+- **On a cancelled match, `_count.players` still counts refunded rows.** On 2026-10-09, 4 cancelled matches had `_count.players` totalling 30, of which 17 were refunded.
+- **Gameday's tiles count no cancelled match** (Ryan, 2026-10-10). On 2026-10-09:
+  - All cities: 16 matches, 26.4 MD standard, Paid 223 + Member 76 + Promo 68 = 367 real, of 476 field spots.
+  - Houston: Paid 66 + Member 24 + Promo 14 = 104 real, of 114.

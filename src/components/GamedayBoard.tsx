@@ -30,10 +30,11 @@ import {
   type ApiMatch, type BoardFilter, type MatchGroup, GROUPS, byKickoff, matchGroup, minsUntil, fmtDur, localClock, deadlineClock, tzAbbr,
   realCount, fakeCount, capacity, openSpots, teamCount, short, shortBy, fill, flags, attention,
   acLevel, minsToDeadline, nextRelease, nextMark, inCities, passesFilter, stillToCome, riskTier, snapRail, vsMin, vsMinDelta, STD_LEAD, MARKS, autoCancels,
-  atRisk, realFillPct, dayBucket, DAY_BUCKETS, passesStrip, meter, showsDeadline, type DayBucket, type StripKey,
+  atRisk, fieldSpots, dayBucket, DAY_BUCKETS, passesStrip, meter, showsDeadline, type DayBucket, type StripKey,
   bannerUrgent, riskSubtitle,
 } from "@/lib/gamedayModel";
 import { reviewCell } from "@/lib/gamedayReviews";
+import { spotTiles, type SpotTiles } from "@/lib/gamedaySpots";
 import {
   fakesFor, rungFor, markInForce, rungKey, spotsLeftWriteDiff, spotsLeftNow, type Ladder,
 } from "@/lib/fakeLadder";
@@ -143,6 +144,8 @@ export default function GamedayBoard({
    * wiring them to a no-op. Clicking the active tile again clears, which is why this is a single
    * nullable key and not a set. */
   const [strip, setStrip] = useState<StripKey | null>(null);
+  // The spot tiles' lookups failing is said on the tiles, not swallowed (gamedaySpots.withSpots).
+  const [spotsErr, setSpotsErr] = useState<string | null>(null);
   /* WHICH SECTIONS ARE OPEN. Finished starts CLOSED — it is the largest section by the end of a
    * day and it is the one nobody is acting on. */
   const [openSec, setOpenSec] = useState<Record<DayBucket, boolean>>({ soon: true, live: true, done: false, cx: false });
@@ -224,7 +227,7 @@ export default function GamedayBoard({
       const j = await res.json().catch(() => ({}));
       if (!res.ok) {
         if (quiet) setStaleFail(true); else { setErr(j?.error ?? `HTTP ${res.status}`); setMatches([]); }
-      } else { setMatches((j.matches ?? []) as ApiMatch[]); landed = true; }
+      } else { setMatches((j.matches ?? []) as ApiMatch[]); setSpotsErr(j.spotsError ?? null); landed = true; }
     } catch (e) {
       if (quiet) setStaleFail(true); else { setErr(e instanceof Error ? e.message : String(e)); setMatches([]); }
     }
@@ -318,12 +321,14 @@ export default function GamedayBoard({
     const soon = scope.filter((m) => dayBucket(m, now) === "soon");
     const live = scope.filter((m) => dayBucket(m, now) === "live");
     const risk = scope.filter((m) => atRisk(m, now));
-    const f = realFillPct(scope);
+    // CANCELLED MATCHES COUNT NOWHERE IN THE STRIP, and Paid + Member + Promo = Real by construction.
+    const tiles = spotTiles(scope, fieldSpots);
+    const f = tiles.fill;
     const cityCount = new Set(scope.map((m) => m.field?.city?.name).filter(Boolean)).size;
     const nextKick = soon.length ? soon.slice().sort(byKickoff)[0] : null;
-    return { soon, live, risk, fill: f, cityCount, nextKick, allCount: scope.length,
+    return { soon, live, risk, fill: f, tiles, spotsErr, cityCount, nextKick, allCount: scope.length,
              riskSub: riskSubtitle(scope, now, date === today) };
-  }, [scope, now]);
+  }, [scope, now, spotsErr]);
 
   /* THE GRID. City first, then the bucket — the two COMPOSE, so Austin + In play is Austin
    * matches in play and nothing else. Neither ever widens the other. */
@@ -1268,7 +1273,11 @@ const CSS = `
    before; the guard in gameday-strip-test.ts now scans for it. */
 
 /* ── the stat strip ── */
-.gdo .gstrip{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px}
+.gdo .gstrip{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.gdo .gtile .v .vu{font-size:12px;font-weight:600;letter-spacing:0;color:#66786E;margin-left:2px}
+.gdo .gtile .s .md{display:block;font-weight:600;color:#3d4f45}
+.gdo .gtile .s .cx{display:block}
+.gdo .gtile-note{grid-column:1/-1;font-size:11.5px;color:#A83120}
 .gdo .gtile{background:#fff;border:1px solid #DCE5E0;border-radius:11px;padding:11px 13px;
   text-align:left;display:block;position:relative;font:inherit;color:inherit;width:100%}
 .gdo button.gtile{cursor:pointer}
@@ -1813,66 +1822,87 @@ const CSS = `
 `;
 
 /* ── THE STAT STRIP ─────────────────────────────────────────────────────────────────────────────
- * Five tiles across the top, replacing the All / Needs attention / Still to come pill row.
+ * Six tiles (Ryan, 2026-10-10): Matches, Needs attention, Paid spots, Member spots, Promo spots,
+ * Real spots filled. In play and Still to come came off the strip; their GROUPS stay in the list.
  *
- * ONLY THREE OF THEM FILTER. All matches and Real spots filled are read-outs, and they are
- * rendered as <div>, never as a disabled <button> — a control that looks live and does nothing is
- * the one thing this estate does not ship, and the cheapest way to keep that promise is for the
- * non-controls not to be controls in the DOM.
+ * ONLY NEEDS ATTENTION FILTERS. The others are read-outs, rendered as <div>, never as a disabled
+ * <button> — a control that looks live and does nothing is the one thing this estate does not ship.
  *
  * NEEDS ATTENTION IS RED ONLY WHEN IT IS NON-ZERO. A permanently red tile reading 0 trains the
  * operator to ignore the colour, which is the only thing the colour is for.
+ *
+ * CANCELLED MATCHES COUNT IN NO TILE (spotTiles), and Paid + Member + Promo is the Real spots filled
+ * figure exactly: one set of matches, one classification per spot (src/lib/gamedaySpots.ts).
  */
 type StripStats = {
   soon: ApiMatch[]; live: ApiMatch[]; risk: ApiMatch[];
   fill: { pct: number | null; real: number; cap: number; fake: number };
+  tiles: SpotTiles; spotsErr: string | null;
   cityCount: number; nextKick: ApiMatch | null; allCount: number;
 };
-function StatStrip({ s, active, onPick, clockOf }: {
+const TOP_CODES = 4;
+function promoLine(t: SpotTiles): { text: string; title: string | undefined } {
+  const parts = t.codes.slice(0, TOP_CODES).map(([c, n]) => `${c} ×${n}`);
+  const more = t.codes.length - TOP_CODES;
+  if (more > 0) parts.push(`+${more} more`);
+  if (t.free) parts.push(`Free ×${t.free}`);
+  if (t.below) parts.push(`Below price ×${t.below}`);
+  const all = [...t.codes.map(([c, n]) => `${c} ×${n}`), ...(t.free ? [`Free ×${t.free}`] : []), ...(t.below ? [`Below price ×${t.below}`] : [])];
+  return { text: parts.length ? parts.join(" · ") : "none", title: more > 0 ? all.join("\n") : undefined };
+}
+function StatStrip({ s, active, onPick }: {
   s: StripStats & { riskSub: string }; active: StripKey | null; onPick: (k: StripKey) => void; clockOf: (m: ApiMatch) => string;
 }) {
   const pct = s.fill.pct;
-  const T: { k: StripKey; lab: string; val: string; sub: string; can: boolean; warn?: boolean }[] = [
-    { k: "all", lab: "All matches", val: String(s.allCount),
-      sub: `${s.cityCount} ${s.cityCount === 1 ? "city" : "cities"}`, can: false },
+  const t = s.tiles;
+  // A spot figure is "—" when its lookups failed or a counted match has no summary — never a short count.
+  const gone = !!s.spotsErr || t.missing;
+  const why = s.spotsErr ? `Spot counts did not load: ${s.spotsErr}` : t.missing ? "Spot counts are missing for a match" : undefined;
+  const num = (n: number) => (gone ? "—" : String(n));
+  const promo = promoLine(t);
+  const T: { k: string; lab: string; val: React.ReactNode; sub: React.ReactNode; can: boolean; warn?: boolean; title?: string; subTitle?: string }[] = [
+    { k: "all", lab: "Matches",
+      val: <>{t.matches}<span className="vu"> matches</span></>,
+      sub: <><span className="md" data-testid="gtile-md">· {t.mdStandard == null ? "—" : t.mdStandard.toFixed(1)} MD standard</span>
+        {t.cancelled ? <span className="cx" data-testid="gtile-cancelled">{t.cancelled} cancelled</span> : null}</>,
+      can: false,
+      title: "MD Standard = field spots ÷ 18, our standard match size." },
     { k: "risk", lab: "Needs attention", val: String(s.risk.length),
       sub: s.riskSub, can: true, warn: true },
-    { k: "soon", lab: "Still to come", val: String(s.soon.length),
-      sub: s.nextKick ? `next at ${clockOf(s.nextKick)}` : "none left today", can: true },
-    { k: "live", lab: "In play", val: String(s.live.length), sub: "kicked off", can: true },
-    /* THE FILL IS A RATIO OF SUMS, computed in the model — see realFillPct. "—" and not "0%" when
-     * nothing has capacity, because 0% is a claim about a day that had no spots to fill. */
-    /* THE BUMP CAVEAT IS GONE, AND IT WENT WITH THE BUG IT DESCRIBED. It said "N matches bumped"
-     * because the denominator MOVED when a match grew to four teams — maxPlayerCount is capacity
-     * now, so the percentage could fall while the night improved and the sentence existed to warn
-     * about that. realFillPct measures against maxSpots, which does not move, so there is nothing
-     * left to warn about. The fake count stays: that is real information about the numerator. */
+    { k: "paid", lab: "Paid spots", val: num(t.paid), sub: gone ? why : "match price, incl. guests and credit", can: false },
+    { k: "member", lab: "Member spots", val: num(t.member), sub: gone ? why : "MatchDay members", can: false },
+    { k: "promo", lab: "Promo spots", val: num(t.promo), sub: gone ? why : promo.text, subTitle: gone ? undefined : promo.title, can: false },
+    /* THE FILL IS A RATIO OF SUMS over the matches that were not cancelled — see spotTiles. "—" and
+     * not "0%" when nothing has capacity, because 0% is a claim about a day that had no spots. */
     { k: "fill", lab: "Real spots filled", val: pct == null ? "—" : `${Math.round(pct)}%`,
-      /* THE DENOMINATOR IS NAMED, because it no longer agrees with the rails and should not.
-         A row says "29 real · 1 fake · 30/32" — how full is what I can sell tonight. The tile says
-         "262 of 336 field spots" — how much of the pitch we are paying for did we monetise. Both
-         are honest and only one of them was labelled; two words stop them reading as a
-         contradiction. The rails are unchanged. */
-      sub: pct == null ? "no capacity today" : `${s.fill.real} of ${s.fill.cap} field spots · ${s.fill.fake} fake`,
+      /* THE DENOMINATOR IS NAMED, because it does not agree with the rails and should not. A row
+         says "29 real · 1 fake · 30/32" — how full is what I can sell tonight. The tile says
+         "262 of 336 field spots" — how much of the pitch we are paying for did we monetise. */
+      sub: pct == null ? (gone ? why : "no capacity today") : `${s.fill.real} of ${s.fill.cap} field spots · ${s.fill.fake} fake`,
       can: false },
   ];
   return (
     <div className="gstrip" data-testid="gday-strip">
-      {T.map((t) => {
-        const on = t.can && active === t.k;
+      {T.map((x) => {
+        const on = x.can && active === x.k;
         const cls = "gtile"
-          + (t.warn ? (Number(t.val) > 0 ? " warn" : " warn zero") : "")
-          + (on ? " on" : "") + (t.can ? "" : " static");
+          + (x.warn ? (Number(x.val) > 0 ? " warn" : " warn zero") : "")
+          + (on ? " on" : "") + (x.can ? "" : " static");
         const inner = (<>
-          <div className="k">{t.lab}</div>
-          <div className="v" data-testid={`gtile-v-${t.k}`}>{t.val}</div>
-          <div className="s" data-testid={`gtile-s-${t.k}`}>{t.sub}</div>
+          <div className="k">{x.lab}</div>
+          <div className="v" data-testid={`gtile-v-${x.k}`}>{x.val}</div>
+          {x.sub ? <div className="s" data-testid={`gtile-s-${x.k}`} title={x.subTitle}>{x.sub}</div> : null}
         </>);
-        return t.can
-          ? <button key={t.k} type="button" className={cls} data-testid={`gtile-${t.k}`} data-on={on ? "1" : "0"}
-              aria-pressed={on} onClick={() => onPick(t.k)}>{inner}</button>
-          : <div key={t.k} className={cls} data-testid={`gtile-${t.k}`} data-static="1">{inner}</div>;
+        return x.can
+          ? <button key={x.k} type="button" className={cls} data-testid={`gtile-${x.k}`} data-on={on ? "1" : "0"}
+              aria-pressed={on} onClick={() => onPick(x.k as StripKey)}>{inner}</button>
+          : <div key={x.k} className={cls} data-testid={`gtile-${x.k}`} data-static="1" title={x.title}>{inner}</div>;
       })}
+      {!gone && t.unclassified > 0 && (
+        <div className="gtile-note" data-testid="gday-unclassified">
+          {t.unclassified} spot{t.unclassified === 1 ? "" : "s"} could not be classified as paid, member or promo.
+        </div>
+      )}
     </div>
   );
 }
