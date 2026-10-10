@@ -70,7 +70,9 @@ eq("  control — the Cost page really was scanned (it still builds field months
    /buildFieldMonths\(/.test(cost), true);
 // The COST STRUCTURE column stays — each row must still say which model produced its figure.
 eq("the cost structure column survives the toggle removal", /COST_BASIS_LABEL/.test(cost), true);
-eq("  …and the derived-not-billed label is on the page", /cost-derived-note/.test(cost), true);
+// ITEMISED (2026-10-10): the one-line note under the table came off (Ryan); what field cost is now
+// lives in the Field cost header's info hover, so that hover is what must be on the page.
+eq("  …and what field cost is, is on the page (the Field cost info hover)", /pop="fieldCostDef"/.test(cost), true);
 
 // ── ONE PREDICATE FOR "HAS IT HAPPENED" ───────────────────────────────────────────────────────
 // The Match panel's hasKickedOff is the only one. A second definition is how the four-month

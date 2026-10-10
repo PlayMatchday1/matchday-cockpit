@@ -1,16 +1,14 @@
 "use client";
 
-// CITIES — the landing section. CityPnlTable, moved. It carries its own period tabs and basis
-// controls inside its gear popover; none of that changed.
-import RevenueBasisNote from "@/components/RevenueBasisNote";
+// CITIES — CityPnlTable. Since 2026-10-10 it draws its own page name and the shared pinned bar
+// (FinancePageBar), with a City select and a small "Field cost: Per match | As billed" toggle.
 import CityPnlTable from "@/components/CityPnlTable";
 
 export default function FinanceCitiesPage() {
-  /* THE BASIS, ON SCREEN: net revenue, the Revenue page's own (2026-10-10). Cost and Cities read
-   * it through useNetRevenue, so Revenue, Cost and Cities agree to the cent. */
+  /* THE BASIS IS IN THE REVENUE HOVERS (2026-10-10): net revenue, the Revenue page's own, read
+   * through useNetRevenue — said in the info icon on every Revenue header and tile, not a line. */
   return (
     <>
-      <RevenueBasisNote basis="net" />
       <CityPnlTable />
     </>
   );

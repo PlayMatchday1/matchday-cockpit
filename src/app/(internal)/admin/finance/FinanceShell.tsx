@@ -190,7 +190,8 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
             Finance page still reads fin_revenue: it keeps the stripe-api label and no button, since
             a Sync now there would fill a table that page does not read. */}
         <div className={ownHeader ? "mb-2" : "mb-6"}>
-          {pathname === "/admin/finance/revenue"
+          {/* Cost and Cities read fin_txn too since 2026-10-10, so they name the same sync. */}
+          {pathname === "/admin/finance/revenue" || pathname === "/admin/finance/cost" || pathname === "/admin/finance/cities"
             ? <SyncNowCard source="stripe-txn" canSync={!!appUser?.is_admin} compact={ownHeader} />
             : <SyncNowCard source="stripe-api" canSync={false} compact={ownHeader} />}
         </div>

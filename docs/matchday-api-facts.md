@@ -7136,3 +7136,15 @@ Evidence: production `GET /admin/matches?fromDate=2026-10-09&toDate=2026-10-09`,
   - Cost per field equals the Revenue page's Field tab.
   - Field cost is identical to before for every city and field. The only change is a new PARMER Stadium row in July 2026, with $0 cost and $142.50 of revenue.
   - October's "Sep" column now equals September's own ratio for every city.
+
+## One field cost on Cost and Cities (2026-10-10)
+
+- **Why the two pages differed on 2026-10-10:** Cities "Per-match · Realized" counted a current month's matches by wall-clock `match_date <= today`, so tonight's fixtures were billed from midnight. Evidence: `groupPerMatchCostRealizedFor` in `src/lib/financeStats.ts`. Cost counts a match only once it has kicked off, by its true UTC instant (`hasKickedOff`).
+  - At 13:28 UTC that was 9 matches, $1,415: Ann Richards $180, ATH Pearland $160, KISC $105, Westlake 2 × $135, LBJ $80, Keswick $80, and Soccer Central 3 two-pitch matches on field 199 (6 units × $90 = $540).
+  - September was identical on both pages for all 27 fields.
+- **Differences in code that did not move a number on these dates:** Cities read the cost-per-match override (`unitCostOf`) and Cost does not; the shared-slot count (`bills_per_reservation`) is applied differently in Cities' current-month path; and profit share is classified differently (`classifyGroup` vs `basisOf`).
+- **The one definition now:** Field Costs rate × matches played, plus billed cancellations (charge-on-cancel, once the slot has passed), plus profit-share payouts. Evidence: `fieldCostFor` in `fieldEconomics.ts`.
+  - Cost reads it, and so does Cities "Per match".
+  - Checked Jul–Oct 2026: field cost and revenue are equal on both pages for every city and field.
+  - "As billed" on Cities keeps its own invoice path, with overrides, still cut by match date.
+- **"Full month" is removed from Cities.** It counted every match scheduled in the month, played or not (`groupPerMatchCostFor`), so a month in progress carried its projected cost. The helper stays; Field Ranking and other callers use it.

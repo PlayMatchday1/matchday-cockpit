@@ -1,15 +1,13 @@
 "use client";
 
 // COST — new. See src/components/finance/CostSection.tsx.
-import RevenueBasisNote from "@/components/RevenueBasisNote";
 import CostSection from "@/components/finance/CostSection";
 
 export default function FinanceCostPage() {
-  /* THE BASIS, ON SCREEN: net revenue, the Revenue page's own (2026-10-10). Cost and Cities read
-   * it through useNetRevenue, so Revenue, Cost and Cities agree to the cent. */
+  /* THE BASIS IS IN THE REVENUE HOVERS (2026-10-10): net revenue, the Revenue page's own, read
+   * through useNetRevenue — said in the info icon on every Revenue header and tile, not a line. */
   return (
     <>
-      <RevenueBasisNote basis="net" />
       <CostSection />
     </>
   );

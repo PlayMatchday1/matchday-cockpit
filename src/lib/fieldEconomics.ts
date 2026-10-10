@@ -209,6 +209,15 @@ function groupCost({ data, group, month, realizedThroughMs }: CostArgs): { amoun
   return { amount: total, kind: "per_match" };
 }
 
+/** FIELD COST, THE ONE DEFINITION (Ryan, 2026-10-10): the Field Costs rate × matches played, plus
+ *  billed cancellations, plus profit-share payouts — groupCost, exported so Finance › Cities' "Per
+ *  match" reads the same figure Finance › Cost shows. Null when the field has no cost basis. Cities
+ *  used to count a current month's matches by their wall-clock DATE, so tonight's fixtures were
+ *  billed from midnight: on 2026-10-10 that was nine matches and $1,415 Cost did not count. */
+export function fieldCostFor(data: FinanceData, group: VenueGroup, month: Q2Month, realizedThroughMs: RealizedThroughMs): number | null {
+  return groupCost({ data, group, month, realizedThroughMs }).amount;
+}
+
 /* HAS THIS SCHEDULE ROW HAPPENED YET — the SAME predicate the Match panel uses, given the
  * schedule row's own instant. There is no second definition of "already played" in this file:
  * hasKickedOff is the one, and this is the adapter that hands it a FinMasterSchedule.

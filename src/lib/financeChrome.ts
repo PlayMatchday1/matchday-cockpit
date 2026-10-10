@@ -11,6 +11,8 @@
 // Expenses joined OpEx on 2026-10-03: one month, its own arrows (Ryan).
 // Revenue joined on 2026-10-07: "Revenue" is the heading, with the same period bar beside it (all
 // three grains), and one status pill in place of the partial-days chip (Ryan).
-export const OWN_HEADER_SECTIONS: ReadonlySet<string> = new Set(["/admin/finance/opex", "/admin/finance/ledger/expenses", "/admin/finance/revenue"]);
+// Cost and Cities joined on 2026-10-10: the page name, then the same pinned bar as Revenue
+// (FinancePageBar), with their own City (and, on Cost, Field) selects (Ryan).
+export const OWN_HEADER_SECTIONS: ReadonlySet<string> = new Set(["/admin/finance/opex", "/admin/finance/ledger/expenses", "/admin/finance/revenue", "/admin/finance/cost", "/admin/finance/cities"]);
 
 export const drawsOwnHeader = (pathname: string): boolean => OWN_HEADER_SECTIONS.has(pathname);

@@ -12,7 +12,7 @@ import { createPortal } from "react-dom";
 export type PopKey =
   | "how" | "status" | "net" | "dpp" | "mem" | "dppTable" | "memTable" | "avg" | "rev" | "fields" | "gross" | "tax"
   | "fees" | "failed" | "venmo" | "unassigned" | "other" | "pace" | "matchmoney" | "paceChart"
-  | "matchesMonth" | "matches4w" | "fieldCost4w" | "netTable";
+  | "matchesMonth" | "matches4w" | "fieldCost4w" | "netTable" | "netSame" | "fieldCostDef";
 
 /* ONE OR TWO SHORT SENTENCES EACH, 140 characters at most, no worked calculations and no pointers
  * to other pages (Ryan, 2026-10-08). The tiles' DPP and Membership are AFTER refunds; the city,
@@ -41,6 +41,8 @@ export const POP: Record<PopKey, React.ReactNode> = {
   other: (<><div className="h">Other</div>Private rentals and charges that are neither DPP nor membership, after tax and refunds.</>),
   pace: (<><div className="h">Pace to month end</div>Revenue so far plus the recent daily average, adjusted for how last month trended, times the days left.</>),
   paceChart: (<><div className="h">Daily revenue pace</div>Each day&apos;s DPP and membership after sales tax, refunds and disputes, before Stripe fees. The same net basis as the tiles.</>),
+  netSame: (<><div className="h">Revenue</div>Net revenue, after sales tax, refunds and disputes. Same as the Revenue page.</>),
+  fieldCostDef: (<><div className="h">Field cost</div>The Field Costs rate × matches played, plus billed cancellations, plus profit-share payouts, in the month they were played.</>),
   matchmoney: (<><div className="h">DPP revenue per match</div>Each match&apos;s bookings less its refunds, after tax. Dated by kickoff.</>),
 };
 

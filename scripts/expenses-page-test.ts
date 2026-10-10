@@ -129,7 +129,8 @@ console.log("\nTHE COST REPORT'S MONTHLY FIGURES ARE UNCHANGED");
 console.log("\nTHE HEADER — Expenses draws its own month header, like OpEx");
 {
   is("Expenses: no FINANCE title, no period bar", drawsOwnHeader("/admin/finance/ledger/expenses"), true);
-  is("CONTROL — the Cost report keeps them", drawsOwnHeader("/admin/finance/cost"), false);
+  // ITEMISED (2026-10-10): the control was the Cost report, which now draws its own header too.
+  is("CONTROL — the Cash Flow report keeps them", drawsOwnHeader("/admin/finance/cash-flow"), false);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -10,21 +10,18 @@
  * the app has one for every Finance page). */
 import { useMemo, useState } from "react";
 import type { FinancePeriod } from "@/lib/financePeriod";
-import { changeGrain, currentPeriod, priorMonthShape, projectMonthEnd, stepPeriod } from "@/lib/financePeriod";
-import { useFinancePeriod } from "@/lib/financePeriodContext";
-import FinancePeriodBar from "./FinancePeriodBar";
+import { priorMonthShape, projectMonthEnd } from "@/lib/financePeriod";
+import FinancePageBar, { usePeriodStatus } from "./FinancePageBar";
 import { BUSINESS_TZ, zonedWallClockToUtcMs } from "@/lib/businessHours";
 import {
-  finalThreshold, money, monthStatus, totalsOf, isRevenueRow, taxCentsOf,
+  finalThreshold, money, totalsOf, isRevenueRow, taxCentsOf,
   type RollupRow, type Totals,
 } from "@/lib/revenueTxn";
-import { loadStatusInputs, useAsync } from "@/lib/useRevenueTxn";
 import { InfoI } from "./RevenueInfo";
 
 const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 export const ymdOf = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-const centralMidnight = (d: Date) => zonedWallClockToUtcMs(d.getFullYear(), d.getMonth() + 1, d.getDate(), 0, 0, BUSINESS_TZ);
 const $c = (cents: number) => money(cents, true);
 const dollars = (cents: number) => (cents / 100).toFixed(2);
 
@@ -42,22 +39,11 @@ export default function RevenueTop({ period, rows, error, dayRows, prevDay, toda
   /** The page's City and Field selects, drawn in the header bar. */
   filters?: React.ReactNode;
 }) {
-  const { now, setPeriod } = useFinancePeriod();
   const [open, setOpen] = useState(false);
   const t: Totals | null = useMemo(() => (rows ? totalsOf(rows) : null), [rows]);
 
-  // ── STATUS: the period's last month decides it (a quarter is final when its last month is). ──
-  const end = period.end;
-  const y = end.getFullYear(), m1 = end.getMonth() + 1;
-  const threshold = useMemo(
-    () => finalThreshold(y, m1, (yy, mm, dd) => zonedWallClockToUtcMs(yy, mm, dd, 0, 0, BUSINESS_TZ)),
-    [y, m1],
-  );
-  const finalBy = `${MONTH_SHORT[m1 === 12 ? 0 : m1]} 2`;
-  const fromIso = new Date(centralMidnight(period.start)).toISOString();
-  const toIso = new Date(centralMidnight(new Date(end.getFullYear(), end.getMonth(), end.getDate() + 1))).toISOString();
-  const st = useAsync(`${fromIso}|${toIso}`, () => loadStatusInputs(fromIso, toIso));
-  const status = st.data ? monthStatus(threshold, st.data.lastSyncMs, st.data.adjustments, finalBy) : null;
+  // ── STATUS: the period's last month decides it; the shared bar draws the tag, pace reads `st`. ──
+  const { st } = usePeriodStatus(period);
 
   // ── PACE TO MONTH END: the current month only, on net revenue, from the day rollup. ──
   const isCurMonth = period.grain === "month" && period.isCurrent;
@@ -115,31 +101,16 @@ export default function RevenueTop({ period, rows, error, dayRows, prevDay, toda
     ["Kept after fees", t.kept, null, "", null, "sub2"],
   ] : [];
 
-  const statusText = !status ? "…"
-    : status.k === "updating" ? `Updating · ${period.isCurrent ? `${period.elapsedDays} of ${period.totalDays} days · ` : ""}final by ${status.finalBy}`
-    : status.k === "final" ? "Final"
-    : `Adjusted after final · ${status.cents >= 0 ? "+" : ""}${$c(status.cents)} in ${status.n} ${status.n === 1 ? "row" : "rows"}`;
 
   return (
     /* display:contents — THE PINNED BAR'S CONTAINING BLOCK MUST BE THE PAGE. A sticky element only
        sticks inside its parent, and this wrapper ends with the hero; as `contents` its children are
        laid out by the page's column (RevenueSection's wrap) and the bar stays up all the way down. */
     <div className="rv2" data-testid="revenue-top" style={{ display: "contents" }}>
-      <h1 className="rv2-title" style={{ margin: 0 }}>Revenue <InfoI pop="how" large label="How we count revenue" testid="info-how" /></h1>
-      {/* THE PAGE'S ONE FILTER BAR, pinned under the site header: period, ONE status pill in place
-          of the bar's partial-days chip (financeChrome lists this page as drawing its own), and the
-          City and Field selects. */}
-      <FinancePeriodBar
-        period={period} now={now} supportedGrains={["month", "quarter", "year"]} unsupportedReason="" links={filters ?? null}
-        onChangeGrain={(g) => setPeriod(changeGrain(period, g, now))}
-        onStep={(dir) => setPeriod(stepPeriod(period, dir, now))}
-        onJumpToNow={() => setPeriod(currentPeriod(period.grain, now))}
-        pinned
-        status={<span className="rv2-status">
-          <span className={`status ${status?.k ?? ""}`} data-testid="status" data-status={status?.k ?? ""}>{statusText}</span>
-          <InfoI pop="status" label="What updating and final mean" testid="info-status" />
-        </span>}
-      />
+      {/* THE PAGE NAME AND ITS ONE FILTER BAR, pinned under the site header — shared with Cost and
+          Cities (FinancePageBar): period, ONE status tag, and the City and Field selects. */}
+      <FinancePageBar title="Revenue" testid="revenue-title"
+        info={<InfoI pop="how" large label="How we count revenue" testid="info-how" />} filters={filters} />
 
       {error && <div className="warn" data-testid="revenue-error">Revenue did not load: {error}</div>}
       {t && t.missingRate.length > 0 && (

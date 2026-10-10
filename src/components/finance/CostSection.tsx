@@ -43,6 +43,8 @@ import { loadVenueLaunches, useAsync } from "@/lib/useRevenueTxn";
 import { addMonths, dateOfYm, nextSort, shortYm, sortBy, ymOfDate, type SortState } from "@/lib/revenueRange";
 import { downloadCsv, fmtInt, fmtMoney, fmtPct } from "@/components/growth/format";
 import s from "./financeSection.module.css";
+import FinancePageBar from "./FinancePageBar";
+import { InfoI, RV2_CSS } from "./RevenueInfo";
 
 type Grain = "city" | "field";
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -90,6 +92,9 @@ export default function CostSection() {
 
   const [grain, setGrain] = useState<Grain>("city");
   const [cityFilter, setCityFilter] = useState<string>("all");
+  /* THE FIELD SELECT (2026-10-10): one field — the tiles, the chart, the City tab's row for its city
+   * and the Field tab's row for it. Empty = every field in the city selection. */
+  const [fieldFilter, setFieldFilter] = useState<string>("");
   const [sort, setSort] = useState<SortState>({ key: "rev", dir: -1 });
   const realizedThroughMs = now.getTime();
   const isPartial = period.isCurrent;
@@ -108,6 +113,17 @@ export default function CostSection() {
       return { ...r, revenue: cents / 100, eventRevenue: 0, privateRental: 0, membership: null };
     });
   }, [data, net.byMonth, allYms, realizedThroughMs]);
+
+  /* THE FIELD SELECT'S OPTIONS: every field in the city selection with revenue, cost or a match in
+   * the loaded months, by name. A selected field narrows the City tab to its own city's row. */
+  const fieldOptions = useMemo(() => {
+    const m = new Map<string, { label: string; city: string }>();
+    for (const r of fieldMonths) if (inScope(r.city) && (r.revenue !== 0 || r.cost != null || r.matches > 0)) m.set(r.key, { label: r.field, city: r.city });
+    return [...m].sort((a, b) => a[1].label.localeCompare(b[1].label));
+  }, [fieldMonths, inScope]);
+  const fieldCity = fieldFilter ? fieldOptions.find(([k]) => k === fieldFilter)?.[1].city ?? null : null;
+  const fieldLabel = fieldFilter ? fieldOptions.find(([k]) => k === fieldFilter)?.[1].label ?? null : null;
+  const inFieldScope = useCallback((city: string | null) => !fieldFilter || canonCity(city) === canonCity(fieldCity), [fieldFilter, fieldCity]);
 
   // ── LAUNCHED — the Revenue page's rule: the first played match, event fields aside unless flagged regular. ──
   const fieldsByVenue = useMemo(() => {
@@ -146,11 +162,15 @@ export default function CostSection() {
   const scopeCell = useCallback((ym: string): Cell | null => {
     const nm = net.byMonth?.get(ym);
     if (!nm) return null;
+    if (fieldFilter) {
+      const r = fieldMonths.find((x) => x.key === fieldFilter && ymOfLabel(x.month) === ym);
+      return r ? { revenue: r.revenue, cost: r.cost } : ZERO;
+    }
     if (cityFilter !== "all") return cityCell(cityFilter, ym);
     let cost: number | null = null;
     for (const r of fieldMonths) if (ymOfLabel(r.month) === ym && r.cost != null) cost = (cost ?? 0) + r.cost;
     return { revenue: nm.total / 100, cost };
-  }, [net.byMonth, cityFilter, cityCell, fieldMonths]);
+  }, [net.byMonth, cityFilter, fieldFilter, cityCell, fieldMonths]);
   const sumOver = (yms: string[], f: (ym: string) => Cell | null): Cell | null => {
     const cells = yms.map(f);
     if (cells.every((c) => c == null)) return null;
@@ -166,12 +186,12 @@ export default function CostSection() {
       const names = new Set<string>();
       for (const ym of periodYms) for (const c of net.byMonth.get(ym)?.cities.keys() ?? []) names.add(c);
       for (const r of fieldMonths) if (periodYms.includes(ymOfLabel(r.month)) && (r.cost != null || r.matches > 0)) names.add(canonCity(r.city));
-      const out: Row[] = [...names].filter((c) => inScope(c)).map((c) => {
+      const out: Row[] = [...names].filter((c) => inScope(c) && inFieldScope(c)).map((c) => {
         const cur = sumOver(periodYms, (ym) => cityCell(c, ym)) ?? ZERO;
         return { key: `c-${c}`, label: c, city: c, pinned: false, launch: launchOfIds(cityVenueIds(c)), cur,
           prior: prior((ym) => cityCell(c, ym)), allUnknown: cur.cost == null };
       }).filter((r) => r.cur.revenue !== 0 || r.cur.cost != null);
-      if (cityFilter === "all") {
+      if (cityFilter === "all" && !fieldFilter) {
         const un = (ym: string): Cell => ({ revenue: (net.byMonth!.get(ym)?.unassigned?.net ?? 0) / 100, cost: null });
         const cur = sumOver(periodYms, un) ?? ZERO;
         if (cur.revenue !== 0) out.push({ key: "unassigned", label: "Unassigned", city: null, pinned: true, launch: null, cur, prior: prior(un), allUnknown: true });
@@ -179,7 +199,7 @@ export default function CostSection() {
       return out;
     }
     const byKey = new Map<string, FieldMonth[]>();
-    for (const r of fieldMonths) if (inScope(r.city)) { const a = byKey.get(r.key) ?? []; a.push(r); byKey.set(r.key, a); }
+    for (const r of fieldMonths) if (inScope(r.city) && (!fieldFilter || r.key === fieldFilter)) { const a = byKey.get(r.key) ?? []; a.push(r); byKey.set(r.key, a); }
     const out: Row[] = [];
     for (const [key, list] of byKey) {
       const cur = sumOver(periodYms, (ym) => fieldCell(key, ym)) ?? ZERO;
@@ -196,10 +216,10 @@ export default function CostSection() {
       return { revenue: Math.round((t.revenue - fields) * 100) / 100, cost: null };
     };
     const nfCur = sumOver(periodYms, nf) ?? ZERO;
-    if (Math.abs(nfCur.revenue) >= 0.005) out.push({ key: "nofield", label: "No field", city: null, pinned: true, launch: null, cur: nfCur, prior: prior(nf), allUnknown: true });
+    if (!fieldFilter && Math.abs(nfCur.revenue) >= 0.005) out.push({ key: "nofield", label: "No field", city: null, pinned: true, launch: null, cur: nfCur, prior: prior(nf), allUnknown: true });
     return out;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [net.byMonth, data, grain, periodYms, priorYms, fieldMonths, cityFilter, inScope, cityCell, fieldCell, scopeCell, launchOfIds, cityVenueIds, loadedFrom]);
+  }, [net.byMonth, data, grain, periodYms, priorYms, fieldMonths, cityFilter, fieldFilter, inScope, inFieldScope, cityCell, fieldCell, scopeCell, launchOfIds, cityVenueIds, loadedFrom]);
 
   const total = useMemo(() => ({
     cur: sumOver(periodYms, scopeCell) ?? ZERO,
@@ -209,7 +229,8 @@ export default function CostSection() {
 
   // Tiles and the not-recorded list read the field rows of the selected period, in scope.
   const periodFields = useMemo(() => fieldMonths.filter((r) => periodYms.includes(ymOfLabel(r.month)) && inScope(r.city)
-    && (r.revenue !== 0 || (r.cost ?? 0) !== 0 || r.matches > 0)), [fieldMonths, periodYms, inScope]);
+    && (!fieldFilter || r.key === fieldFilter)
+    && (r.revenue !== 0 || (r.cost ?? 0) !== 0 || r.matches > 0)), [fieldMonths, periodYms, inScope, fieldFilter]);
   const dashedCount = useMemo(() => {
     if (grain === "city") return rows.filter((r) => !r.pinned && r.cur.cost == null).length;
     let n = 0; for (const g of byField(periodFields).values()) if (g.every((x) => x.cost == null)) n += 1; return n;
@@ -250,7 +271,7 @@ export default function CostSection() {
     downloadCsv(`matchday-field-cost-${grain}-${period.key}.csv`, [
       [field ? "Field" : "City", ...(field ? ["City"] : []), "Launched", `Revenue (${period.label}, net, the Revenue page's)`, "Field cost", "Cost ratio",
         ...priorYms.map((ym) => `Cost ratio ${labelOfYm(ym)}`), ...priorYms.flatMap((ym) => [`Revenue ${labelOfYm(ym)}`, `Field cost ${labelOfYm(ym)}`])],
-      ...[...ordered, { key: "total", label: cityFilter === "all" ? (field ? "All fields" : "All cities") : cityFilter, city: null, pinned: true, launch: null, cur: T, prior: total.prior, allUnknown: false } as Row].map((r) => [
+      ...[...ordered, { key: "total", label: fieldLabel ?? (cityFilter === "all" ? (field ? "All fields" : "All cities") : cityFilter), city: null, pinned: true, launch: null, cur: T, prior: total.prior, allUnknown: false } as Row].map((r) => [
         r.label, ...(field ? [r.city ?? ""] : []), r.launch ? shortYm(r.launch) : "",
         r.cur.revenue.toFixed(2), r.cur.cost == null ? "" : r.cur.cost.toFixed(2), pct(r.cur),
         ...priorYms.map((ym, i) => (r.launch && ym < r.launch ? "" : pct(r.prior[i]))),
@@ -260,19 +281,27 @@ export default function CostSection() {
   }
 
   const soFar = isPartial ? <i className={s.soFar}>so far</i> : null;
+  /* THE SELECTED PERIOD'S RATIO COLUMN IS NAMED FOR IT (2026-10-10) — "Oct so far", "Sep", "Q3",
+   * "2026" — so it reads as one more month beside Sep, Aug and Jul. */
+  const ratioLabel = (period.grain === "month" ? monName(periodYms[0] ?? anchor)
+    : period.grain === "quarter" ? period.label.split(" ")[0] : period.label) + (isPartial ? " so far" : "");
   return (
-    <div className={s.wrap} data-testid="finance-cost">
-      <div className={s.ctrlRow}>
-        <div className={s.ctrlGroup}>
-          <span className={s.ctrlLab}>City</span>
-          <div className={s.seg}>
-            <button type="button" className={cityFilter === "all" ? s.on : ""} onClick={() => setCityFilter("all")}>All</button>
-            {cities.map((c) => (
-              <button key={c} type="button" className={cityFilter === c ? s.on : ""} onClick={() => setCityFilter(c)}>{c}</button>
-            ))}
-          </div>
-        </div>
-      </div>
+    <div className={`${s.wrap} rv2`} data-testid="finance-cost">
+      <style>{RV2_CSS}</style>
+      {/* THE PAGE NAME AND THE SHARED PINNED BAR (Revenue's), with the City and Field selects. */}
+      <FinancePageBar title="Cost" testid="cost-title" filters={
+        <span className="rv2-filters" data-testid="page-filters">
+          <select aria-label="City" data-testid="filter-city" value={cityFilter === "all" ? "" : cityFilter}
+            onChange={(e) => { setCityFilter(e.target.value || "all"); setFieldFilter(""); }}>
+            <option value="">All cities</option>
+            {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select aria-label="Field" data-testid="field-select" value={fieldFilter} onChange={(e) => setFieldFilter(e.target.value)}>
+            <option value="">All fields</option>
+            {fieldOptions.map(([k, o]) => <option key={k} value={k}>{cityFilter === "all" ? `${o.label} (${o.city})` : o.label}</option>)}
+          </select>
+        </span>
+      } />
 
       <div className={s.tiles}>
         <div className={s.tile}>
@@ -282,7 +311,7 @@ export default function CostSection() {
             {ratioOf(T) == null ? "—" : fmtPct(ratioOf(T)!)}{ratioOf(T) != null && soFar}</span>
         </div>
         <div className={s.tile}>
-          <span className={s.tileLab} title={FIELD_COST_HOVER} data-testid="cost-hover-tile" style={{ textDecoration: "underline dotted", textUnderlineOffset: 3, cursor: "help" }}>Field cost</span>
+          <span className={s.tileLab} data-testid="cost-hover-tile">Field cost <InfoI pop="fieldCostDef" label="What field cost is" /></span>
           <span className={s.tileVal} data-testid="cost-tile-cost">
             {fmtMoney(T.cost ?? 0)}
             {dashedCount > 0 && <i className={s.excl} data-testid="cost-excluded">· {dashedCount} excluded</i>}
@@ -290,7 +319,7 @@ export default function CostSection() {
           </span>
         </div>
         <div className={s.tile}>
-          <span className={s.tileLab} title={REVENUE_HOVER} style={{ textDecoration: "underline dotted", textUnderlineOffset: 3, cursor: "help" }}>Revenue</span>
+          <span className={s.tileLab}>Revenue <InfoI pop="netSame" label="What revenue is here" /></span>
           <span className={s.tileVal} data-testid="cost-tile-revenue">{fmtMoney(T.revenue)}{soFar}</span>
         </div>
         {/* THE LAST FULL MONTH, beside a month in progress: what a whole month cost. */}
@@ -325,35 +354,28 @@ export default function CostSection() {
         <div className={s.legend}>
           <span><i className={`${s.dot} ${s.barB}`} />Revenue</span>
           <span><i className={`${s.dot} ${s.barA}`} />Field cost</span>
-          <span>Ratio printed above each pair.</span>
         </div>
       </div>
 
-      <div className={s.ctrlRow}>
-        <div className={s.ctrlGroup}>
-          <span className={s.ctrlLab}>Breakdown</span>
-          <div className={s.seg}>
+      {/* CITY AND FIELD TABS, the Revenue page's, with the count and Export beside them. */}
+      <div className={s.card} data-testid="breakdown-card">
+        <div className={s.brkHead}>
+          <div className={s.seg} role="group" aria-label="Breakdown">
             <button type="button" data-testid="grain-city" aria-pressed={grain === "city"}
-              className={grain === "city" ? s.on : ""} onClick={() => setGrain("city")}>City Economics</button>
+              className={grain === "city" ? s.on : ""} onClick={() => setGrain("city")}>City</button>
             <button type="button" data-testid="grain-field" aria-pressed={grain === "field"}
-              className={grain === "field" ? s.on : ""} onClick={() => setGrain("field")}>Field Economics</button>
+              className={grain === "field" ? s.on : ""} onClick={() => setGrain("field")}>Field</button>
           </div>
-          <span className={s.ctrlLab} data-testid="breakdown-count">
+          <span className={s.brkCount} data-testid="breakdown-count">
             {fmtInt(rows.filter((r) => !r.pinned).length)} {grain === "city" ? "cities" : "fields"}
           </span>
+          <span className={s.brkGrow} />
+          <button type="button" className={s.btn} data-testid="breakdown-export" onClick={exportTable}>Export</button>
         </div>
-        <div className={s.ctrlGroup}>
-          <button type="button" className={s.btn} onClick={exportTable}>Export</button>
-        </div>
-      </div>
-
-      <p className={s.derivedNote} data-testid="cost-derived-note">
-        Field cost: per-match rate × the matches that have already kicked off. Revenue: net, the same as the Revenue page.
-      </p>
-
       <EconomicsTable rows={ordered} grain={grain} total={{ cur: T, prior: total.prior }} priorYms={priorYms}
-        totalLabel={cityFilter === "all" ? (grain === "city" ? "All cities" : "All fields") : cityFilter}
-        periodLabel={period.label} sort={sort} onSort={onSort} loaded={loaded} partial={isPartial} />
+        totalLabel={fieldLabel ?? (cityFilter === "all" ? (grain === "city" ? "All cities" : "All fields") : cityFilter)}
+        periodLabel={period.label} ratioLabel={ratioLabel} sort={sort} onSort={onSort} loaded={loaded} partial={isPartial} />
+      </div>
 
       {gaps.length > 0 && (
         <div className={s.gap} data-testid="cost-not-recorded">
@@ -374,21 +396,22 @@ export default function CostSection() {
   );
 }
 
-function EconomicsTable({ rows, grain, total, priorYms, totalLabel, periodLabel, sort, onSort, loaded, partial }: {
+function EconomicsTable({ rows, grain, total, priorYms, totalLabel, periodLabel, ratioLabel, sort, onSort, loaded, partial }: {
   rows: Row[]; grain: Grain; total: { cur: Cell; prior: (Cell | null)[] }; priorYms: string[];
-  totalLabel: string; periodLabel: string; sort: SortState; onSort: (k: string) => void; loaded: (ym: string) => boolean;
+  totalLabel: string; periodLabel: string; ratioLabel: string; sort: SortState; onSort: (k: string) => void; loaded: (ym: string) => boolean;
   /** The selected period is still in progress: its Cost ratio column renders lighter, with IN_PROGRESS. */
   partial: boolean;
 }) {
   if (rows.length === 0) return <div className={s.empty}>No fields match this selection.</div>;
   const field = grain === "field";
-  const th = (k: string, label: React.ReactNode, cls?: string, title?: string) => {
+  const th = (k: string, label: React.ReactNode, cls?: string, title?: string, info?: React.ReactNode) => {
     const on = sort.key === k;
     return (
-      <th className={cls} style={cls === "l" ? { textAlign: "left" } : undefined} aria-sort={on ? (sort.dir === 1 ? "ascending" : "descending") : "none"} data-testid={`cost-th-${k}`}>
+      <th key={k} className={cls} style={cls === "l" ? { textAlign: "left" } : undefined} aria-sort={on ? (sort.dir === 1 ? "ascending" : "descending") : "none"} data-testid={`cost-th-${k}`}>
         <button type="button" className={s.sortBtn} onClick={() => onSort(k)} title={title}>
           {label}<span className={on ? `${s.sortArr} ${s.sortOn}` : s.sortArr} aria-hidden="true">{on && sort.dir === 1 ? "▲" : "▼"}</span>
         </button>
+        {info ? <> {info}</> : null}
       </th>
     );
   };
@@ -415,9 +438,9 @@ function EconomicsTable({ rows, grain, total, priorYms, totalLabel, periodLabel,
             <tr>
               {th("name", field ? "Field" : "City", "l")}
               {field && th("city", "City", "l")}
-              {th("rev", "Revenue", undefined, REVENUE_HOVER)}
-              {th("cost", <span title={FIELD_COST_HOVER} data-testid="cost-hover-th">Field cost</span>)}
-              {th("ratio", "Cost ratio", undefined, partial ? IN_PROGRESS : undefined)}
+              {th("rev", "Revenue", undefined, undefined, <InfoI pop="netSame" label="What revenue is here" />)}
+              {th("cost", <span data-testid="cost-hover-th">Field cost</span>, undefined, undefined, <InfoI pop="fieldCostDef" label="What field cost is" />)}
+              {th("ratio", ratioLabel, undefined, partial ? IN_PROGRESS : `Cost ratio, ${periodLabel}`)}
               {priorYms.map((ym, i) => th(`p${i}`, monName(ym), undefined, `Cost ratio, all of ${labelOfYm(ym)}`))}
             </tr>
           </thead>
@@ -453,10 +476,9 @@ function RatioTd({ c, ym, why, tip, testid }: { c: Cell | null; ym: string; why:
   return <td className={r == null ? s.mut : ""} data-testid={testid} title={why ? why : why === "" ? undefined : tip(ym, c)}>{r == null ? "—" : fmtPct(r)}</td>;
 }
 
-/* WHAT THIS PAGE'S FIELD COST IS (Ryan, 2026-10-09): the rate side, in the month the matches happen —
- * never the month bill, and never a cost per match override (fieldEconomics reads legRateUnitCost). */
-const FIELD_COST_HOVER = "Field Costs rate × matches played, in the month they were played. OpEx shows when the bill is paid.";
-const REVENUE_HOVER = "Net revenue, the same as the Revenue page.";
+/* WHAT THIS PAGE'S FIELD COST IS (Ryan, 2026-10-10): the Field Costs rate × matches played, plus
+ * billed cancellations, plus profit-share payouts — fieldEconomics, never a cost per match override.
+ * Said in the Field cost header's info hover (RevenueInfo POP.fieldCostDef). */
 /* A MONTH IN PROGRESS READS LOW (Ryan, 2026-10-10): revenue counts every charge so far — the
  * memberships billed on the 1st and bookings for matches still to come — while field cost counts
  * only matches already played. Shown, lighter, with this said on hover; never adjusted. */

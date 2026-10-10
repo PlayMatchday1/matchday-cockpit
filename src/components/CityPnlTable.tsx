@@ -51,6 +51,8 @@ import { citiesTotal, computeCityPnl, type CityCostMode, type CityCostScope, typ
 import { useNetRevenue } from "@/lib/useNetRevenue";
 import { canonCity } from "@/lib/fieldEconomics";
 import { nextSort, sortBy } from "@/lib/revenueRange";
+import FinancePageBar from "@/components/finance/FinancePageBar";
+import { InfoI, RV2_CSS } from "@/components/finance/RevenueInfo";
 import styles from "./cityPnl.module.css";
 
 const usd = (v: number) => (v < 0 ? "−$" : "$") + Math.abs(Math.round(v)).toLocaleString("en-US");
@@ -63,12 +65,12 @@ const pctInt = (x: number) => {
 // BASIS IS ONE CONTROL over two dimensions; MONTH is its own. Folding the month in with them (the
 // old gear popover printed "Aug · Per-Match · Realized" as one string) made the month look like a
 // property of the cost basis, which it is not.
-type BasisId = `${CityCostMode}|${CityCostScope}`;
-const BASIS_OPTIONS: { id: BasisId; label: string }[] = [
-  { id: "per_match|realized", label: "Per-match · Realized" },
-  { id: "per_match|fullMonth", label: "Per-match · Full month" },
-  { id: "as_billed|realized", label: "As billed · Realized" },
-  { id: "as_billed|fullMonth", label: "As billed · Full month" },
+/* FIELD COST: PER MATCH | AS BILLED (2026-10-10). "Full month" is gone: it counted every match
+ * SCHEDULED in the month, played or not, so on a month in progress it projected the rest of the
+ * month's cost against revenue to date. No other page offered it. Both options are realized. */
+const BASIS_OPTIONS: { id: CityCostMode; label: string }[] = [
+  { id: "per_match", label: "Per match" },
+  { id: "as_billed", label: "As billed" },
 ];
 
 export default function CityPnlTable() {
@@ -87,12 +89,13 @@ export default function CityPnlTable() {
     [period]);
   const netRev = useNetRevenue(yms, data?.venues ?? null);
 
-  const [basis, setBasis] = useState<BasisId>("per_match|realized");
+  const [basis, setBasis] = useState<CityCostMode>("per_match");
   const [scope, setScope] = useState<string>("All cities");
   const [open, setOpen] = useState<string | null>(null);
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "rev", dir: -1 });
 
-  const [costMode, costScope] = basis.split("|") as [CityCostMode, CityCostScope];
+  const costMode = basis;
+  const costScope: CityCostScope = "realized";
   const months = period.months;
   const displayCities = useMemo(() => CITY_DISPLAY_ORDER.filter((c) => !isCityHidden(c)), []);
   // EVERY CITY WITH REVENUE gets a row, listed or not, so the cities plus Unassigned are the total.
@@ -150,58 +153,41 @@ export default function CityPnlTable() {
     key === "city" ? k.city : key === "rev" ? k.gross : key === "cost" ? k.fieldCost : key === "exp" ? k.overheadTotal : key === "profit" ? k.net : k.margin;
   const sorted = sortBy(shown, (k) => valueOf(k, sort.key), sort.dir);
   const onSort = (key: SortKey) => setSort((cur) => nextSort(cur, key, key === "city") as { key: SortKey; dir: 1 | -1 });
-  const th = (key: SortKey, label: string, extra?: { title?: string; left?: boolean; testid?: string }) => {
+  const th = (key: SortKey, label: string, extra?: { title?: string; left?: boolean; testid?: string; info?: React.ReactNode }) => {
     const on = sort.key === key;
     return (
       <th className={extra?.left ? styles.thCity6 : undefined} aria-sort={on ? (sort.dir === 1 ? "ascending" : "descending") : "none"} data-testid={`citypnl-th-${key}`}>
         <button type="button" className={styles.sortBtn} onClick={() => onSort(key)} title={extra?.title} data-testid={extra?.testid}>
           {label}<span className={on ? `${styles.sortArr} ${styles.sortOn}` : styles.sortArr} aria-hidden="true">{on && sort.dir === 1 ? "▲" : "▼"}</span>
         </button>
+        {extra?.info ? <> {extra.info}</> : null}
       </th>
     );
   };
 
   return (
-    <div className={styles.wrap}>
+    <div className={`${styles.wrap} rv2`}>
+      <style>{RV2_CSS}</style>
+      {/* THE PAGE NAME AND THE SHARED PINNED BAR (Revenue's), with the City select. */}
+      <FinancePageBar title="Cities" testid="cities-title" filters={
+        <span className="rv2-filters" data-testid="page-filters">
+          <select aria-label="City" data-testid="filter-city" value={single ? scope : ""}
+            onChange={(e) => { const c = e.target.value; setScope(c || "All cities"); setOpen(c || null); }}>
+            <option value="">All cities</option>
+            {live.map((k) => <option key={k.city} value={k.city}>{k.city}</option>)}
+          </select>
+        </span>
+      } />
       <div className={styles.card}>
-        <div className={styles.top}>
-          <div>
-            <p className={styles.eyebrow}>Finance · Cities</p>
-            <h1 className={styles.title}>City P&amp;L</h1>
+        {/* FIELD COST BASIS: one small toggle. Per match is Finance › Cost's field cost exactly. */}
+        <div className={styles.basisRow} data-testid="citypnl-basis">
+          <span className={styles.clab}>Field cost</span>
+          <div className={styles.basisSeg} role="group" aria-label="Field cost basis">
+            {BASIS_OPTIONS.map((o) => (
+              <button key={o.id} type="button" aria-pressed={basis === o.id} data-testid={`citypnl-basis-${o.id}`}
+                className={basis === o.id ? styles.on : ""} onClick={() => setBasis(o.id)}>{o.label}</button>
+            ))}
           </div>
-          <div className={styles.ctrls}>
-            {/* BASIS STAYS. It describes how field cost is COMPUTED, not which period is shown —
-                a different kind of choice, so a different home from the period bar. */}
-            <div className={styles.crow}>
-              <span className={styles.clab}>Basis</span>
-              <select className={styles.basis} aria-label="Cost basis" value={basis} onChange={(e) => setBasis(e.target.value as BasisId)}>
-                {BASIS_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-              </select>
-            </div>
-          </div>
-        </div>
-        {/* FULL MONTH ON A PARTIAL PERIOD IS A PROJECTION OF COST. venueChargedMatchCountFor counts
-            every match SCHEDULED in the window, including the ones that have not been played, so
-            the cost column carries the whole period while revenue has only accrued to today. */}
-        {costScope === "fullMonth" && period.isCurrent && (
-          <p className={styles.basisNote} data-testid="citypnl-fullmonth-note">
-            <b>Full month against a partial period.</b> Field cost covers all {period.totalDays} days,
-            every match scheduled in {period.label}, played or not, while revenue has only accrued
-            over {period.elapsedDays}. City profit and margin read low until the period closes.
-            Switch to Realized to compare like with like.
-          </p>
-        )}
-
-        <div className={styles.cities}>
-          <button type="button" aria-pressed={!single} className={!single ? styles.on : ""} onClick={() => { setScope("All cities"); setOpen(null); }}>
-            All cities
-          </button>
-          {live.map((k) => (
-            <button key={k.city} type="button" aria-pressed={scope === k.city} className={scope === k.city ? styles.on : ""}
-              onClick={() => { setScope(k.city); setOpen(k.city); }}>
-              {k.city}
-            </button>
-          ))}
         </div>
 
         {/* ── ONE TABLE, SIX COLUMNS, AT EVERY WIDTH (2026-10-10) ──────────────────────────────
@@ -221,7 +207,7 @@ export default function CityPnlTable() {
             <thead>
               <tr>
                 {th("city", "City", { left: true })}
-                {th("rev", "Revenue", { title: CITY_REVENUE_HOVER, testid: "citypnl-rev-hover" })}
+                {th("rev", "Revenue", { testid: "citypnl-rev-hover", info: <InfoI pop="netSame" label="What revenue is here" /> })}
                 {th("cost", "Field cost")}
                 {th("exp", "City expenses")}
                 {th("profit", "City profit")}
@@ -262,7 +248,6 @@ export default function CityPnlTable() {
           </table>
         </div>
 
-        <p className={styles.foot}>Click a city for its city expenses and its fields.</p>
       </div>
     </div>
   );
@@ -341,7 +326,3 @@ function FieldRow({ f, city }: { f: PnlField; city: string }) {
     </tr>
   );
 }
-
-/* WHAT CITIES COUNTS AS REVENUE (Ryan, 2026-10-10): the Revenue page's net revenue, from the same
- * code (useNetRevenue). It replaced "value of matches played, including credit" (2026-10-09). */
-const CITY_REVENUE_HOVER = "Net revenue, the same as the Revenue page.";

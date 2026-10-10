@@ -30,8 +30,6 @@ import type { JoinedMatchPlayerRow } from "@/lib/mdapiMatchesRead";
 import {
   cityOverheadFor,
   cityTotalMemberSpotsFor,
-  groupPerMatchCostFor,
-  groupPerMatchCostRealizedFor,
   venueMemberSpotsFor,
   venueRealizedCostFor,
   type Q2Month,
@@ -40,6 +38,7 @@ import { canonicalVenueCost, perMatchMinusManagerOwed, type VenueCostKind } from
 import { partnerPaymentOwedForMonth } from "@/lib/partnerStats";
 import { unitCostOf } from "@/lib/venuePay";
 import { groupVenues } from "@/lib/venueGroups";
+import { basisOf, fieldCostFor } from "@/lib/fieldEconomics";
 
 /* REVENUE IS THE REVENUE PAGE'S (Ryan, 2026-10-10): net revenue from fin_txn — after sales tax,
  * refunds and disputes — handed in by the caller from useNetRevenue, summed over the period's
@@ -160,7 +159,15 @@ export function computeCityPnl(
     .map((g): PnlField => {
       const legIds = g.legs.map((l) => l.id);
       const legIdSet = new Set(legIds);
-      const { mapped, isShare } = classifyGroup(data, g.legs, months);
+      /* PER MATCH IS FINANCE › COST'S FIELD COST (Ryan, 2026-10-10): fieldCostFor — the Field Costs
+       * rate × matches that have KICKED OFF, plus billed cancellations, plus profit-share payouts —
+       * so the two pages show one figure. Null for a field with no cost basis (unmapped). As billed
+       * keeps its own path below: it is the invoice view, overrides included. */
+      const perMatch = costMode === "per_match" ? months.map((m) => fieldCostFor(data, g, m, now.getTime())) : null;
+      const classified = perMatch
+        ? { mapped: perMatch.some((x) => x != null), isShare: basisOf(g.legs[0], data) === "profit_share" }
+        : classifyGroup(data, g.legs, months);
+      const { mapped, isShare } = classified;
 
       // The pitch's revenue: its legs' net, split into membership and the rest (DPP, other, refunds).
       const vn = rev.venueNet(legIds);
@@ -172,7 +179,9 @@ export function computeCityPnl(
         // Cost: share-like always via the canonical/realized amount (the owed) —
         // never rate × n, which is the "1 × $0" bug. Plain per-match uses the
         // mode-appropriate helper; as-billed uses the canonical amount per leg.
-        if (mapped) {
+        if (perMatch) {
+          // summed below, once, from fieldCostFor
+        } else if (mapped) {
           if (isShare) {
             // THE PARTNER'S SHARE, from the payout engine (what the partner page shows) — never an
             // override and never rate × n. It is a share of PLAYED matches, so realized and full-month
@@ -182,8 +191,6 @@ export function computeCityPnl(
             for (const id of legIds) {
               cost += realized ? venueRealizedCostFor(data, id, m, now) : canonicalVenueCost(data, id, m).amount;
             }
-          } else {
-            cost += realized ? groupPerMatchCostRealizedFor(data, g, m, now) : groupPerMatchCostFor(data, g, m);
           }
         }
         for (const id of legIds) {
@@ -192,6 +199,7 @@ export function computeCityPnl(
         }
       }
 
+      if (perMatch) cost = perMatch.reduce<number>((a, x) => a + (x ?? 0), 0);
       const basis: PnlField["basis"] = !mapped ? "unmapped" : isShare ? "share" : g.legs[0].billing_type === "monthly_flat" ? "flat" : "per_match";
       // memberRev / totalRev / net are filled in below: the allocation needs the CITY's member
       // revenue and spot total, which are not known until every field has been counted.

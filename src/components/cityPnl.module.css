@@ -352,3 +352,11 @@
 .tbl6 tbody td.net6, .tbl6 tfoot td.net6 { color: var(--ink); }
 .tbl6 tbody td.net6.neg6, .tbl6 tfoot td.net6.neg6 { color: var(--red); }
 .tbl6 tr.pinned6 td.net6 { color: var(--ink2); }
+
+/* THE FIELD COST TOGGLE (2026-10-10): one small segmented control, Per match | As billed. */
+.basisRow { display: flex; align-items: center; gap: 10px; padding: 14px 22px 12px; }
+.basisSeg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px; background: #f2f5f3; border: 1px solid var(--line); }
+.basisSeg button { border: 0; background: transparent; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--ink2);
+  padding: 5px 12px; border-radius: 999px; cursor: pointer; min-height: 30px; }
+.basisSeg button.on { background: var(--hdr); color: #fff; }
+@media (max-width: 899px) { .basisRow { padding: 12px 14px 10px; } }

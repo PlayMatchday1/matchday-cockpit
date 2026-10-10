@@ -52,7 +52,11 @@ console.log("\n2. OPEX AND REVENUE DRAW THEIR OWN HEADER — the report pages th
   is("OpEx: no FINANCE title, no period bar", drawsOwnHeader("/admin/finance/opex"), true);
   // Revenue draws its own header too since 2026-10-07 (its title sits in the period bar).
   is("Revenue: no FINANCE title; its own heading carries the period bar", drawsOwnHeader("/admin/finance/revenue"), true);
-  for (const p of ["/admin/finance/cost", "/admin/finance/cities", "/admin/finance/cash-flow", "/admin/finance/ledger/field-costs"]) {
+  // Cost and Cities draw their own since 2026-10-10 (FinancePageBar, Ryan). ITEMISED: they moved
+  // from the "keeps" list below to this one; Cash Flow and Field Costs stay as the controls.
+  is("Cost: its own heading and the shared bar", drawsOwnHeader("/admin/finance/cost"), true);
+  is("Cities: its own heading and the shared bar", drawsOwnHeader("/admin/finance/cities"), true);
+  for (const p of ["/admin/finance/cash-flow", "/admin/finance/ledger/field-costs"]) {
     is(`${p} keeps the Finance title and period bar`, drawsOwnHeader(p), false);
   }
 }

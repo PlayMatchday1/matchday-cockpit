@@ -101,7 +101,19 @@ export type StatusInputs = {
   adjustments: { createdMs: number; updatedMs: number; cents: number }[];
 };
 
-export async function loadStatusInputs(fromIso: string, toIso: string): Promise<StatusInputs> {
+/* ONE REQUEST WHILE ONE IS IN FLIGHT. The page bar and Revenue's pace both read the status for the
+ * same period at the same moment; they share the promise. Not cached past settling: the status is
+ * meant to move (a sync landing turns Updating into Final). */
+const STATUS_IN_FLIGHT = new Map<string, Promise<StatusInputs>>();
+export function loadStatusInputs(fromIso: string, toIso: string): Promise<StatusInputs> {
+  const k = `${fromIso}|${toIso}`;
+  const hit = STATUS_IN_FLIGHT.get(k);
+  if (hit) return hit;
+  const p = readStatusInputs(fromIso, toIso).finally(() => STATUS_IN_FLIGHT.delete(k));
+  STATUS_IN_FLIGHT.set(k, p);
+  return p;
+}
+async function readStatusInputs(fromIso: string, toIso: string): Promise<StatusInputs> {
   const log = await supabase.from("fin_sync_log").select("completed_at")
     // A completed run with an ADVISORY (finTxnLogPatch) succeeded; any other error_message did not.
     .eq("source", "stripe-txn").not("completed_at", "is", null)
