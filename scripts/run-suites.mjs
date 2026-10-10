@@ -323,6 +323,11 @@ const NODE_SUITES = [
   // times) with fixtures whose two readings disagree on purpose, and pins that NO path on that
   // page reads a cost override — the fixtures key one 100× the derived figure.
   "scripts/cost-realized-test.ts",
+  // FINANCE › CITIES ADDS UP (2026-10-10): each city's field rows plus its "No field" row equal its
+  // revenue and field cost, and the city rows plus Unassigned equal All cities — through
+  // computeCityPnl and citiesTotal, the page's own code. Replaced the browser suite
+  // verify-citypnl-redesign, which tested the layout this page no longer has.
+  "scripts/cities-sums-test.ts",
   // Field Costs' "$540 ran so far · $900 scheduled". The parts must add to the computed figure for
   // every row — weekday rates, reservation slots straddling now, charged cancellations, combined
   // legs — and the cut must be the true instant, not the wall clock. Pure arithmetic, so it is

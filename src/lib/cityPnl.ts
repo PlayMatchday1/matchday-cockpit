@@ -299,3 +299,12 @@ export function computeCityPnl(
     citySpots: citySpots > 0 ? citySpots : null,
   };
 }
+
+/** THE ALL CITIES ROW: the city rows plus Unassigned (revenue with no city, which has no field cost
+ *  and no city expenses, so it is all profit). One function for the page and its pre-push check
+ *  (scripts/cities-sums-test.ts), so the total on screen is the sum that check asserts. */
+export function citiesTotal(rows: CityPnl[], unassigned: number): { total: number; cost: number; over: number; net: number } {
+  const t = rows.reduce((a, k) => ({ total: a.total + k.gross, cost: a.cost + k.fieldCost, over: a.over + k.overheadTotal, net: a.net + k.net }),
+    { total: 0, cost: 0, over: 0, net: 0 });
+  return { ...t, total: t.total + unassigned, net: t.net + unassigned };
+}

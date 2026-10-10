@@ -47,7 +47,7 @@ import { useFinancePeriodData } from "@/lib/useFinancePeriodData";
 import { useFinancePeriod } from "@/lib/financePeriodContext";
 import { CITY_DISPLAY_ORDER } from "@/lib/financeStats";
 import { isCityHidden } from "@/lib/types";
-import { computeCityPnl, type CityCostMode, type CityCostScope, type CityPnl, type CityRevenue, type PnlField } from "@/lib/cityPnl";
+import { citiesTotal, computeCityPnl, type CityCostMode, type CityCostScope, type CityPnl, type CityRevenue, type PnlField } from "@/lib/cityPnl";
 import { useNetRevenue } from "@/lib/useNetRevenue";
 import { canonCity } from "@/lib/fieldEconomics";
 import { nextSort, sortBy } from "@/lib/revenueRange";
@@ -139,19 +139,9 @@ export default function CityPnlTable() {
 
   // UNASSIGNED IS PINNED and counted in the total (All cities only): revenue with no city, no cost.
   const showUn = !single && unassigned !== 0;
-  const T0 = shown.reduce(
-    (a, k) => ({
-      dpp: a.dpp + k.mappedDpp,
-      memb: a.memb + k.membership,
-      total: a.total + k.gross,
-      cost: a.cost + k.fieldCost,
-      afterCost: a.afterCost + k.netAfterFieldCost,
-      over: a.over + k.overheadTotal,
-      net: a.net + k.net,
-    }),
-    { dpp: 0, memb: 0, total: 0, cost: 0, afterCost: 0, over: 0, net: 0 },
-  );
-  const T = showUn ? { ...T0, dpp: T0.dpp + unassigned, total: T0.total + unassigned, afterCost: T0.afterCost + unassigned, net: T0.net + unassigned } : T0;
+  // THE TOTAL ROW: the cities on screen plus Unassigned (All cities only) — citiesTotal, asserted in
+  // scripts/cities-sums-test.ts on every push.
+  const T = citiesTotal(shown, showUn ? unassigned : 0);
 
   /* SORTING (Ryan, 2026-10-10): every header sorts the city rows; numbers start highest first,
    * text A to Z, a second click reverses. Unassigned, the no-data cities and the total stay pinned
