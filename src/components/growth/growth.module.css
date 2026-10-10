@@ -1556,3 +1556,21 @@
 
 /* Acquisition page: the change against the comparison range, beside a count. */
 .adsDelta { font-size: 10.5px; font-weight: 700; margin-left: 3px; color: #6b7c73; white-space: nowrap; }
+
+/* ── FUNNEL BY CITY (2026-10-10): the comparison's row design, five stages, city label pinned ── */
+.funnelByCity { margin-top: 16px; }
+.fbcMatrix { min-width: 980px; }
+.fbcRow { grid-template-columns: 170px repeat(4, minmax(118px, 1fr) 78px) minmax(118px, 1fr); }
+.fbcPin { position: sticky; left: 0; z-index: 1; background: var(--surface, #fff); }
+.funnelByCity .funnelConv { flex-direction: column; gap: 3px; }
+.funnelDelta { font-size: 10.5px; font-weight: 700; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.funnelDeltaUp { color: #1f8a4c; }
+.funnelDeltaDown { color: #b42318; }
+.fbcControls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.fbcMonth { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 800; color: var(--ink); }
+.fbcMonth button { width: 32px; height: 32px; border-radius: 9px; border: 1px solid var(--hair); background: #fff; cursor: pointer; font-size: 15px; color: var(--muted); }
+.fbcMonth button:disabled { opacity: .35; cursor: default; }
+.fbcSort { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.fbcSort .fieldLabel { margin: 0; }
+.fbcSort select { min-height: 32px; border-radius: 9px; border: 1px solid var(--hair); padding: 0 8px; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--ink); background: #fff; }
+.fbcDir { min-height: 32px; border-radius: 999px; border: 1px solid var(--hair); background: #fff; padding: 0 10px; font: inherit; font-size: 12px; font-weight: 700; color: var(--muted); cursor: pointer; }

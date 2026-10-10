@@ -25,6 +25,7 @@
 import { useMemo, useState } from "react";
 import KpiRow from "@/components/growth/KpiRow";
 import PlayerFunnel from "@/components/growth/PlayerFunnel";
+import FunnelByCity from "@/components/growth/FunnelByCity";
 import SectionFrame from "@/components/growth/SectionFrame";
 import { useGrowth } from "@/components/growth/GrowthDataProvider";
 import { clampMonthsToNow } from "@/lib/funnelMonth";
@@ -76,6 +77,8 @@ export default function LifecycleFunnelPage() {
           />
           <KpiRow data={g.data} period={range} />
           <PlayerFunnel data={g.data} period={range} />
+          {/* FUNNEL BY CITY (2026-10-10): one signup month, a row per city, its own month control. */}
+          <FunnelByCity data={g.data} />
         </>
       )}
     </SectionFrame>
