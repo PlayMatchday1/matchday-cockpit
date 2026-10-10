@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import { RATES_FOR_SQL, type RollupRow } from "@/lib/revenueTxn";
+import { venueCategory } from "@/lib/venueResolver";
 
 const PAGE = 1000;
 const CACHE = new Map<string, Promise<unknown>>();
@@ -119,42 +120,31 @@ export async function loadStatusInputs(fromIso: string, toIso: string): Promise<
   };
 }
 
-/** A CITY'S LAUNCH: the first non-cancelled match on any field linked to the city's venues
- *  (inactive venues included — they still launched the city). One small ordered read per city,
- *  limit 1; nothing is summed in the browser. `start_date` is the match's LOCAL wall clock (the
- *  trailing Z is not UTC — see docs/matchday-api-facts.md), so only its "YYYY-MM-DD" is used.
- *  Resolves to { city: "YYYY-MM-DD" | null }. */
-export function loadCityLaunches(fieldsByCity: Record<string, number[]>): Promise<Record<string, string | null>> {
-  const key = `launch|${Object.entries(fieldsByCity).sort().map(([c, ids]) => `${c}:${[...ids].sort((a, b) => a - b).join(",")}`).join(";")}`;
-  return cached(key, async () => {
-    const out: Record<string, string | null> = {};
-    await Promise.all(Object.entries(fieldsByCity).map(async ([city, ids]) => {
-      if (ids.length === 0) { out[city] = null; return; }
-      const { data, error } = await supabase.from("mdapi_matches").select("start_date")
-        .in("field_id", ids).eq("is_cancelled", false).is("deleted_at", null)
-        .order("start_date", { ascending: true }).limit(1);
-      if (error) throw new Error(`mdapi_matches (launch of ${city}): ${error.message}`);
-      out[city] = data?.[0]?.start_date ? String(data[0].start_date).slice(0, 10) : null;
-    }));
-    return out;
-  });
-}
-
-/** A FIELD WITH NO launch_date launches at its first PLAYED match: not cancelled, and already
- *  kicked off (today or earlier, compared on the match's local wall-clock date). One ordered read
- *  per venue, limit 1. Keyed by fin_venues.id → "YYYY-MM-DD" | null. */
-export function loadVenueFirstPlayed(fieldsByVenue: Record<string, number[]>, todayYmd: string): Promise<Record<string, string | null>> {
-  const key = `vfirst|${todayYmd}|${Object.entries(fieldsByVenue).sort().map(([v, ids]) => `${v}:${[...ids].sort((a, b) => a - b).join(",")}`).join(";")}`;
+/** LAUNCH = THE FIRST PLAYED MATCH (Ryan, 2026-10-10), for a field and, through its fields, a city.
+ *  Played: not cancelled, not deleted, at least one player, kicked off by today (compared on the
+ *  match's LOCAL wall-clock date — `start_date`'s trailing Z is not UTC). Matches on tournament and
+ *  special-event fields do not count: a field title firing EVENT_MARKERS (venueResolver.ts — tourney,
+ *  tournament, combine, cup, showcase, clinic, camp, invitational, special events). By NAME, as Ryan
+ *  set it, so "Tourney ATH Pearland" is excluded here even though its link counts as regular play
+ *  for cost. One ordered read per venue, paged until a non-event match is found.
+ *  Resolves to { fin_venues.id: "YYYY-MM-DD" | null }. */
+export function loadVenueLaunches(fieldsByVenue: Record<string, number[]>, todayYmd: string): Promise<Record<string, string | null>> {
+  const key = `vlaunch|${todayYmd}|${Object.entries(fieldsByVenue).sort().map(([v, ids]) => `${v}:${[...ids].sort((a, b) => a - b).join(",")}`).join(";")}`;
   return cached(key, async () => {
     const out: Record<string, string | null> = {};
     await Promise.all(Object.entries(fieldsByVenue).map(async ([vid, ids]) => {
-      if (ids.length === 0) { out[vid] = null; return; }
-      const { data, error } = await supabase.from("mdapi_matches").select("start_date")
-        .in("field_id", ids).eq("is_cancelled", false).is("deleted_at", null)
-        .lte("start_date", `${todayYmd}T23:59:59Z`)
-        .order("start_date", { ascending: true }).limit(1);
-      if (error) throw new Error(`mdapi_matches (first match of venue ${vid}): ${error.message}`);
-      out[vid] = data?.[0]?.start_date ? String(data[0].start_date).slice(0, 10) : null;
+      out[vid] = null;
+      if (ids.length === 0) return;
+      for (let from = 0; from < 2000; from += 100) {
+        const { data, error } = await supabase.from("mdapi_matches").select("start_date, field_title")
+          .in("field_id", ids).eq("is_cancelled", false).is("deleted_at", null).gt("player_count", 0)
+          .lte("start_date", `${todayYmd}T23:59:59Z`)
+          .order("start_date", { ascending: true }).order("api_id", { ascending: true }).range(from, from + 99);
+        if (error) throw new Error(`mdapi_matches (launch of venue ${vid}): ${error.message}`);
+        const hit = (data ?? []).find((m) => venueCategory(m.field_title) !== "event");
+        if (hit?.start_date) { out[vid] = String(hit.start_date).slice(0, 10); return; }
+        if (!data || data.length < 100) return;
+      }
     }));
     return out;
   });

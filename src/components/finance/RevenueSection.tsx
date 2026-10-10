@@ -46,7 +46,7 @@ import {
   bucketOf, byCityRows, byFieldRows, cityLabel, fieldKeyOf, filterRows, isRevenueRow, taxCentsOf, totalsOf, money, UNASSIGNED,
   type GroupRow, type MemberShares, type PageFilter, type RollupRow, type Totals,
 } from "@/lib/revenueTxn";
-import { loadCityLaunches, loadMatchRollup, loadVenueFirstPlayed, loadRollup, useAsync, useReaderId } from "@/lib/useRevenueTxn";
+import { loadMatchRollup, loadRollup, loadVenueLaunches, useAsync, useReaderId } from "@/lib/useRevenueTxn";
 import { downloadCsv } from "@/components/growth/format";
 import MatchView from "./MatchView";
 import DailyRevenuePace from "./DailyRevenuePace";
@@ -329,40 +329,31 @@ export default function RevenueSection() {
       gr === "field" && cityFilter !== "all" ? cityFields(cityFilter) : fp.fields)),
   });
 
-  /* ── LAUNCHED ─────────────────────────────────────────────────────────────────────────────────
-   * A FIELD: fin_venues.launch_date, the earliest among the field's venue rows (what the Field tab's
-   * Export has always carried). A CITY: the first non-cancelled match on any field linked to the
-   * city's venues (Ryan, 2026-10-09: "its earliest field's first match"), read in loadCityLaunches. */
-  /* NO launch_date → THE FIELD'S FIRST PLAYED MATCH (Ryan, 2026-10-09: Hill Country Middle School
-   * printed $0 for months before it existed). Read only for the venues that need it. */
-  const noLaunch = useMemo(() => {
+  /* ── LAUNCHED: THE FIRST PLAYED MATCH (Ryan, 2026-10-10) ─────────────────────────────────────
+   * A FIELD: the first played match on any of its venue rows' linked fields, tournament and
+   * special-event fields left out (loadVenueLaunches). A CITY: the earliest of its fields',
+   * inactive venues included. A field with no played match yet falls back to fin_venues.launch_date. */
+  const fieldsByVenue = useMemo(() => {
     if (!data) return null;
     const o: Record<string, number[]> = {};
-    for (const v of data.venues) if (!v.launch_date) o[String(v.id)] = [];
+    for (const v of data.venues) o[String(v.id)] = [];
     for (const [fid, vid] of data.venueFields) o[String(vid)]?.push(Number(fid));
     return o;
   }, [data]);
   const nowYmd = ymdOf(now);
-  const venueFirst = useAsync(noLaunch ? `vfirst|${nowYmd}|${JSON.stringify(noLaunch)}` : null, () => loadVenueFirstPlayed(noLaunch!, nowYmd));
+  const venueLaunch = useAsync(fieldsByVenue ? `vlaunch|${nowYmd}|${JSON.stringify(fieldsByVenue)}` : null, () => loadVenueLaunches(fieldsByVenue!, nowYmd));
   const fieldLaunchYm = useCallback((name: string, city: string | null): Ym | null => {
     const legs = (data?.venues ?? []).filter((v) => v.venue_name === name && (v.city ?? null) === city);
+    const first = legs.map((v) => venueLaunch.data?.[String(v.id)]).filter((d): d is string => !!d).sort();
+    if (first.length) return first[0].slice(0, 7);
     const dates = legs.map((v) => v.launch_date).filter((d): d is string => !!d).sort();
-    if (dates.length) return dates[0].slice(0, 7);
-    const first = legs.map((v) => venueFirst.data?.[String(v.id)]).filter((d): d is string => !!d).sort();
-    return first.length ? first[0].slice(0, 7) : null;
-  }, [data, venueFirst.data]);
-  const fieldsByCity = useMemo(() => {
-    if (!data) return null;
-    const cityOf = new Map(data.venues.map((v) => [Number(v.id), canonCity(v.city)]));
-    const o: Record<string, number[]> = {};
-    for (const [fid, vid] of data.venueFields) { const c = cityOf.get(Number(vid)); if (c) (o[c] ??= []).push(Number(fid)); }
-    return o;
-  }, [data]);
-  const cityLaunch = useAsync(fieldsByCity ? `launch|${JSON.stringify(fieldsByCity)}` : null, () => loadCityLaunches(fieldsByCity!));
+    return dates.length ? dates[0].slice(0, 7) : null;
+  }, [data, venueLaunch.data]);
   const cityLaunchYm = useCallback((label: string): Ym | null => {
-    const d = cityLaunch.data?.[canonCity(label)];
-    return d ? d.slice(0, 7) : null;
-  }, [cityLaunch.data]);
+    const first = (data?.venues ?? []).filter((v) => canonCity(v.city) === canonCity(label))
+      .map((v) => venueLaunch.data?.[String(v.id)]).filter((d): d is string => !!d).sort();
+    return first.length ? first[0].slice(0, 7) : null;
+  }, [data, venueLaunch.data]);
   const launchYmOf = useCallback((g: GroupRow): Ym | null =>
     g.venueId != null ? fieldLaunchYm(g.label, g.city) : g.label === UNASSIGNED || g.city == null ? null : cityLaunchYm(g.label),
   [fieldLaunchYm, cityLaunchYm]);
