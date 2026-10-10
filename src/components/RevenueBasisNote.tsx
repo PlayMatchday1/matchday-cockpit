@@ -20,11 +20,14 @@
  * rather than a promise to align later.
  */
 
-export type RevenueBasis = "pre-tax" | "tax-inclusive";
+/* NET (2026-10-10): Finance › Cost and Cities read the Revenue page's net revenue — fin_txn, after
+ * sales tax, refunds and disputes — through useNetRevenue, so the three pages agree to the cent. */
+export type RevenueBasis = "pre-tax" | "tax-inclusive" | "net";
 
 const COPY: Record<RevenueBasis, string> = {
   "pre-tax": "Revenue on this page is PRE-TAX — the price before city sales tax.",
   "tax-inclusive": "Revenue on this page is TAX-INCLUSIVE — the Stripe charge, sales tax included.",
+  net: "Revenue on this page is NET — the Revenue page's net revenue, after sales tax, refunds and disputes.",
 };
 
 export default function RevenueBasisNote({ basis }: { basis: RevenueBasis }) {

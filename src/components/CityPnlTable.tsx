@@ -42,14 +42,14 @@
 // below the table breakpoint each city becomes a card with the chain stacked. Same numbers, same
 // order, same colours.
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useFinancePeriodData } from "@/lib/useFinancePeriodData";
-import { useMatchRangeData } from "@/lib/useMatchData";
 import { useFinancePeriod } from "@/lib/financePeriodContext";
-import { matchRange } from "@/lib/financePeriod";
 import { CITY_DISPLAY_ORDER } from "@/lib/financeStats";
 import { isCityHidden } from "@/lib/types";
-import { computeCityPnl, type CityCostMode, type CityCostScope, type CityPnl, type PnlField } from "@/lib/cityPnl";
+import { computeCityPnl, type CityCostMode, type CityCostScope, type CityPnl, type CityRevenue, type PnlField } from "@/lib/cityPnl";
+import { useNetRevenue } from "@/lib/useNetRevenue";
+import { canonCity } from "@/lib/fieldEconomics";
 import styles from "./cityPnl.module.css";
 
 const usd = (v: number) => (v < 0 ? "−$" : "$") + Math.abs(Math.round(v)).toLocaleString("en-US");
@@ -78,11 +78,14 @@ export default function CityPnlTable() {
   // section, at whichever grain is asked for.
   const { period, now } = useFinancePeriod();
   const { data, loading } = useFinancePeriodData(period);
-  // THE PERIOD'S OWN WINDOW. This used to call useMatchData(), which fetches mdapi_match_players
-  // UNFILTERED — ~203,000 rows in 203 paginated round-trips, on every view. The table is bucketed
-  // by month against `period.months`, so anything outside the period was fetched and discarded.
-  const { fromDate, toDate } = useMemo(() => matchRange(period.start, period.end), [period]);
-  const { rows: matchRegistrations, loading: matchLoading } = useMatchRangeData(fromDate, toDate);
+  /* REVENUE IS THE REVENUE PAGE'S (Ryan, 2026-10-10): fin_txn net, through useNetRevenue — a city
+   * is its City-tab row, a pitch its legs' Field-tab net. No roster read any more: the ~2 MB of
+   * match-player rows this page fetched existed only to derive the revenue it now reads. */
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const yms = useMemo(() => period.months.map((m) => `${m.slice(-4)}-${String(MON.indexOf(m.slice(0, 3)) + 1).padStart(2, "0")}`),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [period]);
+  const netRev = useNetRevenue(yms, data?.venues ?? null);
 
   const [basis, setBasis] = useState<BasisId>("per_match|realized");
   const [scope, setScope] = useState<string>("All cities");
@@ -90,17 +93,40 @@ export default function CityPnlTable() {
 
   const [costMode, costScope] = basis.split("|") as [CityCostMode, CityCostScope];
   const months = period.months;
-  const cities = useMemo(() => CITY_DISPLAY_ORDER.filter((c) => !isCityHidden(c)), []);
+  const displayCities = useMemo(() => CITY_DISPLAY_ORDER.filter((c) => !isCityHidden(c)), []);
+  // EVERY CITY WITH REVENUE gets a row, listed or not, so the cities plus Unassigned are the total.
+  const cities = useMemo(() => {
+    const out: string[] = [...displayCities];
+    for (const nm of netRev.byMonth?.values() ?? []) for (const [c, g] of nm.cities) {
+      if (g.net !== 0 && !out.some((x) => canonCity(x) === c)) out.push(c);
+    }
+    return out;
+  }, [displayCities, netRev.byMonth]);
+  const revenueOf = useCallback((city: string): CityRevenue => {
+    const ms = yms.map((ym) => netRev.byMonth?.get(ym)).filter((x): x is NonNullable<typeof x> => !!x);
+    const g = ms.map((nm) => nm.cities.get(canonCity(city)));
+    return {
+      cityNet: g.reduce((a, x) => a + (x?.net ?? 0), 0) / 100,
+      cityMembership: g.reduce((a, x) => a + (x?.membership ?? 0), 0) / 100,
+      venueNet: (ids) => {
+        let n = 0, mem = 0;
+        for (const nm of ms) for (const id of ids) { const v = nm.venues.get(id); if (v) { n += v.net; mem += v.membership; } }
+        return { net: n / 100, membership: mem / 100 };
+      },
+    };
+  }, [yms, netRev.byMonth]);
+  const unassigned = useMemo(() => yms.reduce((a, ym) => a + (netRev.byMonth?.get(ym)?.unassigned?.net ?? 0), 0) / 100, [yms, netRev.byMonth]);
 
   const rows = useMemo(() => {
-    if (!data) return [];
-    return cities.map((c) => computeCityPnl(data, matchRegistrations, c, months, costMode, costScope, now));
-  }, [data, matchRegistrations, cities, months, costMode, costScope, now]);
+    if (!data || !netRev.byMonth) return [];
+    return cities.map((c) => computeCityPnl(data, revenueOf(c), c, months, costMode, costScope, now));
+  }, [data, netRev.byMonth, cities, revenueOf, months, costMode, costScope, now]);
 
   // BOTH loaders gate the render. useMatchData carries every DPP dollar and resolves long after
   // the finance fetch; rendering on the first alone printed a real-looking $0 in the DPP column of
   // every city until the second landed.
-  if (loading || matchLoading || !data) {
+  if (netRev.error) return <div className={styles.loading}>Revenue did not load: {netRev.error}</div>;
+  if (loading || !data || !netRev.byMonth) {
     return <div className={styles.loading}>Loading…</div>;
   }
 
@@ -110,7 +136,9 @@ export default function CityPnlTable() {
   const single = scope !== "All cities";
   const shown = single ? live.filter((k) => k.city === scope) : live;
 
-  const T = shown.reduce(
+  // UNASSIGNED IS PINNED and counted in the total (All cities only): revenue with no city, no cost.
+  const showUn = !single && unassigned !== 0;
+  const T0 = shown.reduce(
     (a, k) => ({
       dpp: a.dpp + k.mappedDpp,
       memb: a.memb + k.membership,
@@ -122,6 +150,7 @@ export default function CityPnlTable() {
     }),
     { dpp: 0, memb: 0, total: 0, cost: 0, afterCost: 0, over: 0, net: 0 },
   );
+  const T = showUn ? { ...T0, dpp: T0.dpp + unassigned, total: T0.total + unassigned, afterCost: T0.afterCost + unassigned, net: T0.net + unassigned } : T0;
 
   const maxRev = Math.max(1, ...shown.map((k) => k.gross));
 
@@ -201,6 +230,13 @@ export default function CityPnlTable() {
                 <CityRows key={k.city} k={k} maxRev={maxRev} open={open === k.city}
                   onToggle={() => setOpen(open === k.city ? null : k.city)} />
               ))}
+              {showUn && (
+                <tr className={styles.blank} data-testid="citypnl-unassigned-row" data-city="Unassigned">
+                  <td className={styles.city6} title="Revenue with no city on file — members with no city. The Revenue page's Unassigned row.">Unassigned</td>
+                  <td className={styles.rev6} data-testid="citypnl-rev" data-cents={Math.round(unassigned * 100)}>{usd(unassigned)}</td>
+                  <td>—</td><td>—</td><td>{usd(unassigned)}</td><td>—</td>
+                </tr>
+              )}
               {!single && blank.map((k) => (
                 <tr key={k.city} className={styles.blank} data-testid="citypnl-blank-row">
                   <td className={styles.city6}>{k.city}</td>
@@ -211,7 +247,7 @@ export default function CityPnlTable() {
             <tfoot>
               <tr data-testid="citypnl-total-row">
                 <td className={styles.city6}>{single ? scope : "All cities"}</td>
-                <td className={styles.rev6}>{usd(T.total)}</td>
+                <td className={styles.rev6} data-testid="citypnl-total-rev" data-cents={Math.round(T.total * 100)}>{usd(T.total)}</td>
                 <td className={styles.cost}>{usdNeg(T.cost)}</td>
                 <td className={styles.cost}>{usdNeg(T.over)}</td>
                 <td className={`${styles.net6} ${T.net < 0 ? styles.net6dn : ""}`} data-testid="citypnl-total-net">{usd(T.net)}</td>
@@ -232,6 +268,16 @@ export default function CityPnlTable() {
             <CityCard key={k.city} k={k} maxRev={maxRev} open={open === k.city}
               onToggle={() => setOpen(open === k.city ? null : k.city)} />
           ))}
+          {showUn && (
+            <div className={styles.card6} data-testid="citypnl-card-unassigned">
+              <div className={styles.card6head}><span className={styles.card6city}>Unassigned</span><span className={styles.card6net}>{usd(unassigned)}</span></div>
+              <dl className={styles.card6three}>
+                <div><dt>Revenue</dt><dd className={styles.rev6}>{usd(unassigned)}</dd></div>
+                <div><dt>&minus; Field</dt><dd>—</dd></div>
+                <div><dt>&minus; Overhead</dt><dd>—</dd></div>
+              </dl>
+            </div>
+          )}
           <div className={`${styles.card6} ${styles.mtotal}`} data-testid="citypnl-card-total">
             <div className={styles.card6head}>
               <span className={styles.card6city}>{single ? scope : "All cities"}</span>
@@ -259,7 +305,7 @@ function Chain({ dpp, memb, total, cost, afterCost, over, net }: {
   const fieldMargin = total ? afterCost / total : null;
   return (
     <dl className={styles.chain}>
-      <div><dt>DPP rev</dt><dd>{usd(dpp)}</dd></div>
+      <div><dt>DPP &amp; other</dt><dd>{usd(dpp)}</dd></div>
       <div><dt>+ Member rev</dt><dd>{usd(memb)}</dd></div>
       <div className={styles.chainSum}><dt>= Total rev</dt><dd>{usd(total)}</dd></div>
       <div><dt>Field cost</dt><dd className={styles.cost}>{usdNeg(cost)}</dd></div>
@@ -300,7 +346,7 @@ function CityCard({ k, maxRev, open, onToggle }: { k: CityPnl; maxRev: number; o
               <span className={styles.ven}>{f.venue}</span>
               <span className={styles.vmeta}>{pitchMeta(f)}</span>
               <dl className={styles.chain}>
-                <div><dt>DPP rev</dt><dd>{usd(f.dppRev)}</dd></div>
+                <div><dt>DPP &amp; other</dt><dd>{usd(f.dppRev)}</dd></div>
                 <div><dt>+ Member rev <i className={styles.alloc}>alloc</i></dt>
                   <dd className={f.memberRev == null ? styles.na : ""}>{f.memberRev == null ? "—" : usd(f.memberRev)}</dd></div>
                 <div className={styles.chainSum}><dt>= Total rev</dt>
@@ -319,10 +365,13 @@ function CityCard({ k, maxRev, open, onToggle }: { k: CityPnl; maxRev: number; o
           {/* THE UNTRACKED NOTE IS PART OF THE CONTENT, not desktop chrome — without it the pitch
               rows simply do not add up to the city figure above them, and the reader is left to
               wonder which number is wrong. */}
+          {k.noFieldRev !== 0 && (
+            <p className={styles.gapNote} data-testid="citypnl-mobile-nofield"><b>{usd(k.noFieldRev)} at no pitch</b> — revenue with no field on it (DPP without a field, membership no member spot placed).</p>
+          )}
           {k.untracked > 0 && (
             <p className={styles.gapNote} data-testid="citypnl-mobile-untracked">
-              <b>{usd(k.untracked)} of DPP is untracked</b> — it sits at pitches with no cost basis
-              on file, so it is held out of DPP rev and Field net rather than counted at $0.
+              <b>{usd(k.untracked)} of revenue is at pitches with no cost basis</b> on file — it is in the
+              revenue, with no cost counted against it rather than $0.
             </p>
           )}
           <OverheadMakeup k={k} />
@@ -381,10 +430,10 @@ function CityRows({ k, maxRev, open, onToggle }: { k: CityPnl; maxRev: number; o
           <span className={styles.tw6}>{open ? "▾" : "▸"}</span>{k.city}
         </td>
         <td>
-          <div className={styles.rev6} data-testid="citypnl-rev">{usd(k.gross)}</div>
+          <div className={styles.rev6} data-testid="citypnl-rev" data-cents={Math.round(k.gross * 100)}>{usd(k.gross)}</div>
           <RevBar rev={k.gross} net={k.net} maxRev={maxRev} />
         </td>
-        <td className={styles.cost} data-testid="citypnl-field">{usdNeg(k.fieldCost)}</td>
+        <td className={styles.cost} data-testid="citypnl-field" data-cents={Math.round(k.fieldCost * 100)}>{usdNeg(k.fieldCost)}</td>
         <td className={styles.cost} data-testid="citypnl-overhead-cell">{usdNeg(k.overheadTotal)}</td>
         <td className={`${styles.net6} ${loss ? styles.net6dn : ""}`} data-testid="citypnl-net">{usd(k.net)}</td>
         {/* BADGES ONLY ON LOSSES. A pill on 69%, 80% and 82% is why the two red ones stopped
@@ -410,7 +459,7 @@ function Drill({ k }: { k: CityPnl }) {
               the subject rather than four more numbers competing with the answer. */}
           <p className={styles.expHead6}>{k.city} · revenue split and field result</p>
           <div className={styles.split6} data-testid="citypnl-split">
-            <span>DPP rev <b data-testid="citypnl-dpp">{usd(k.mappedDpp)}</b></span>
+            <span>DPP &amp; other <b data-testid="citypnl-dpp">{usd(k.mappedDpp)}</b></span>
             <span>+ Member rev <b data-testid="citypnl-member">{usd(k.membership)}</b></span>
             <span>= Total <b>{usd(k.gross)}</b></span>
             <span>Field net <b data-testid="citypnl-fieldnet" className={k.netAfterFieldCost < 0 ? styles.negv : ""}>{usd(k.netAfterFieldCost)}</b></span>
@@ -437,10 +486,13 @@ function Drill({ k }: { k: CityPnl }) {
               ))}
             </tbody>
           </table>
+          {k.noFieldRev !== 0 && (
+            <p className={styles.gapNote} data-testid="citypnl-nofield"><b>{usd(k.noFieldRev)} at no pitch</b> — revenue with no field on it (DPP without a field, membership no member spot placed).</p>
+          )}
           {k.untracked > 0 && (
             <p className={styles.gapNote} data-testid="citypnl-untracked">
-              <b>{usd(k.untracked)} of DPP is untracked</b> — it sits at pitches with no cost basis
-              on file, so it is held out of DPP rev and Field net entirely rather than counted at $0.
+              <b>{usd(k.untracked)} of revenue is at pitches with no cost basis</b> on file — it is in the
+              revenue, with no cost counted against it rather than $0.
             </p>
           )}
 
@@ -478,7 +530,6 @@ function OverheadMakeup({ k }: { k: CityPnl }) {
   );
 }
 
-/* WHAT CITIES COUNTS AS REVENUE (Ryan, 2026-10-09): matches PLAYED, credit-paid ones included. Not
- * Stripe charges — that is the Revenue page — so a cancelled match's kept money shows there and not
- * here, and credit spent later shows here and not there. Neither counts a dollar twice. */
-const CITY_REVENUE_HOVER = "Value of matches played at this field, including matches paid with credit. The Revenue page shows Stripe charges, so the two can differ.";
+/* WHAT CITIES COUNTS AS REVENUE (Ryan, 2026-10-10): the Revenue page's net revenue, from the same
+ * code (useNetRevenue). It replaced "value of matches played, including credit" (2026-10-09). */
+const CITY_REVENUE_HOVER = "Net revenue, the same as the Revenue page.";

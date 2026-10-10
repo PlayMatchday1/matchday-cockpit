@@ -28,13 +28,11 @@
 import type { FinanceData } from "@/lib/useFinanceData";
 import type { JoinedMatchPlayerRow } from "@/lib/mdapiMatchesRead";
 import {
-  cityMembershipRevenuePreTaxFor,
   cityOverheadFor,
   cityTotalMemberSpotsFor,
   groupPerMatchCostFor,
   groupPerMatchCostRealizedFor,
   venueMemberSpotsFor,
-  venuePartnerRevenueFor,
   venueRealizedCostFor,
   type Q2Month,
 } from "@/lib/financeStats";
@@ -42,6 +40,18 @@ import { canonicalVenueCost, perMatchMinusManagerOwed, type VenueCostKind } from
 import { partnerPaymentOwedForMonth } from "@/lib/partnerStats";
 import { unitCostOf } from "@/lib/venuePay";
 import { groupVenues } from "@/lib/venueGroups";
+
+/* REVENUE IS THE REVENUE PAGE'S (Ryan, 2026-10-10): net revenue from fin_txn — after sales tax,
+ * refunds and disputes — handed in by the caller from useNetRevenue, summed over the period's
+ * months, in DOLLARS. A pitch's figure is its legs' Field-tab net, membership credited by member
+ * spots; the city's is its City-tab row. Nothing here derives revenue any more: the roster DPP and
+ * the pre-tax membership helper this file used to join are gone from it. Cost is unchanged. */
+export type CityRevenue = {
+  cityNet: number;
+  /** The city's membership (before its refunds, which sit in the net with the rest). */
+  cityMembership: number;
+  venueNet: (legIds: number[]) => { net: number; membership: number };
+};
 
 export type CityCostMode = "as_billed" | "per_match";
 export type CityCostScope = "realized" | "fullMonth";
@@ -81,7 +91,9 @@ export type CityPnl = {
   fieldCost: number;
   // Total rev − Field cost. See the header: this chains, `fieldNet` did not.
   netAfterFieldCost: number;
-  untracked: number; // DPP at unmapped fields — visible, not silently dropped
+  untracked: number; // revenue at pitches with no cost basis — in the revenue, named, never costed at $0
+  /** Revenue the city has that no pitch carries (DPP without a field, membership no spot placed). */
+  noFieldRev: number;
   membership: number;
   overhead: { label: string; value: number }[];
   overheadTotal: number;
@@ -133,7 +145,7 @@ function classifyGroup(
 
 export function computeCityPnl(
   data: FinanceData,
-  matchRegistrations: JoinedMatchPlayerRow[],
+  rev: CityRevenue,
   city: string,
   months: Q2Month[],
   costMode: CityCostMode,
@@ -150,12 +162,13 @@ export function computeCityPnl(
       const legIdSet = new Set(legIds);
       const { mapped, isShare } = classifyGroup(data, g.legs, months);
 
-      let dppRev = 0;
+      // The pitch's revenue: its legs' net, split into membership and the rest (DPP, other, refunds).
+      const vn = rev.venueNet(legIds);
+      const dppRev = vn.net - vn.membership;
       let cost = 0;
       let matchCount = 0;
       let memberSpots = 0;
       for (const m of months) {
-        dppRev += venuePartnerRevenueFor(data, matchRegistrations, legIdSet, m);
         // Cost: share-like always via the canonical/realized amount (the owed) —
         // never rate × n, which is the "1 × $0" bug. Plain per-match uses the
         // mode-appropriate helper; as-billed uses the canonical amount per leg.
@@ -197,26 +210,27 @@ export function computeCityPnl(
             : costMode === "per_match"
               ? unitCostOf(g.legs[0])
               : g.legs[0].per_match_rate ?? null,
-        memberRev: null,
-        totalRev: dppRev,
+        memberRev: vn.membership,
+        totalRev: vn.net,
         net: null,
       };
     })
-    .filter((f) => f.dppRev > 0 || (f.cost ?? 0) > 0)
-    .sort((a, b) => b.dppRev - a.dppRev);
+    .filter((f) => f.totalRev !== 0 || (f.cost ?? 0) > 0)
+    .sort((a, b) => b.totalRev - a.totalRev);
 
   // Aggregate under the unmapped rule.
   const mappedFields = fields.filter((f) => f.mapped);
   const unmappedFields = fields.filter((f) => !f.mapped);
-  const mappedDpp = mappedFields.reduce((s, f) => s + f.dppRev, 0);
+  // The city's revenue is its City-tab net: all of it, costed fields or not. Unmapped pitches stay
+  // in it (they are the Revenue page's money) and are named as `untracked`; their cost is unknown.
+  const membership = rev.cityMembership;
+  const mappedDpp = rev.cityNet - membership;
   const fieldCost = mappedFields.reduce((s, f) => s + (f.cost ?? 0), 0);
-  const untracked = unmappedFields.reduce((s, f) => s + f.dppRev, 0);
+  const untracked = unmappedFields.reduce((s, f) => s + f.totalRev, 0);
 
-  let membership = 0;
   const oh = { matchManagerPay: 0, cityManager: 0, marketing: 0, equipment: 0, misc: 0 };
   let citySpots = 0;
   for (const m of months) {
-    membership += cityMembershipRevenuePreTaxFor(data, city, m);
     const o = cityOverheadFor(data, city, m);
     oh.matchManagerPay += o.matchManagerPay;
     oh.cityManager += o.cityManager;
@@ -234,21 +248,16 @@ export function computeCityPnl(
   ].filter((o) => o.value !== 0);
   const overheadTotal = overhead.reduce((s, o) => s + o.value, 0);
 
-  const gross = mappedDpp + membership;
+  const gross = rev.cityNet;
   // THE CHAIN. Total rev − Field cost = Net after field cost; − Overhead = Net P&L.
   const netAfterFieldCost = gross - fieldCost;
   const net = netAfterFieldCost - overheadTotal;
   const margin = gross ? net / gross : 0;
 
-  // ALLOCATE membership onto the pitches, now that the city totals exist. A pitch does not sell
-  // memberships — this is the city's member revenue split by that pitch's share of member-spots,
-  // which is why every pitch row is marked ALLOC. A pitch with no spot data gets null, never 0.
-  const spotDenom = citySpots > 0 ? citySpots : null;
-  for (const f of fields) {
-    f.memberRev = spotDenom != null && f.memberSpots != null ? (membership * f.memberSpots) / spotDenom : null;
-    f.totalRev = f.dppRev + (f.memberRev ?? 0);
-    f.net = f.cost == null ? null : f.totalRev - f.cost;
-  }
+  // A pitch's membership is ALLOCATED — credited by its share of the city's member spots, the
+  // Revenue page's allocateMembership — which is why every pitch row is marked ALLOC.
+  for (const f of fields) f.net = f.cost == null ? null : f.totalRev - f.cost;
+  const noFieldRev = gross - fields.reduce((a, f) => a + f.totalRev, 0);
 
   // ASSERT the unmapped rule: no field with a null cost basis may contribute to
   // any net figure. Throw rather than render a flattering number.
@@ -266,12 +275,11 @@ export function computeCityPnl(
   if (Math.abs(netAfterFieldCost - (gross - fieldCost)) > 0.5 || Math.abs(net - (netAfterFieldCost - overheadTotal)) > 0.5) {
     throw new Error(`city-pnl: the chain does not close for ${city} (${gross} − ${fieldCost} − ${overheadTotal} != ${net})`);
   }
-  // Per-pitch DPP and cost must sum to the city's, exactly — the drill-down is the same money
-  // re-cut, not a second measurement.
-  const pitchDpp = mappedFields.reduce((s, f) => s + f.dppRev, 0);
+  // Per-pitch cost must sum to the city's, exactly. Revenue: the pitches plus noFieldRev ARE the
+  // city's net by construction, and the drill-down shows noFieldRev as its own line.
   const pitchCost = mappedFields.reduce((s, f) => s + (f.cost ?? 0), 0);
-  if (Math.abs(pitchDpp - mappedDpp) > 0.5 || Math.abs(pitchCost - fieldCost) > 0.5) {
-    throw new Error(`city-pnl: pitch rows do not sum to ${city} (dpp ${pitchDpp}/${mappedDpp}, cost ${pitchCost}/${fieldCost})`);
+  if (Math.abs(pitchCost - fieldCost) > 0.5) {
+    throw new Error(`city-pnl: pitch costs do not sum to ${city} (${pitchCost}/${fieldCost})`);
   }
 
   return {
@@ -281,6 +289,7 @@ export function computeCityPnl(
     fieldCost,
     netAfterFieldCost,
     untracked,
+    noFieldRev,
     membership,
     overhead,
     overheadTotal,

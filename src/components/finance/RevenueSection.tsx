@@ -36,7 +36,8 @@ import {
   buildFieldCostSlots, buildFieldMonths, buildMatchRows, canonCity, hasKickedOff,
   type MatchRow,
 } from "@/lib/fieldEconomics";
-import { cityTotalMemberSpotsFor, unattributedVenues, venueMemberSpotsFor } from "@/lib/financeStats";
+import { unattributedVenues } from "@/lib/financeStats";
+import { sharesFromData, sharesFromSpots } from "@/lib/memberShares";
 import {
   monthsBetween, nextSort, periodKeyOfYm, presetRange, shortYm, ymOfDate, ymOfPeriodKey,
   type MonthRange, type Preset, type SortState, type Ym,
@@ -188,7 +189,7 @@ export default function RevenueSection() {
   /* MEMBERSHIP ONTO FIELDS — the Cities page's rule (cityPnl.ts, "ALLOCATE membership onto the
    * pitches"): field share = the field's member spots that month ÷ the city's member spots that
    * month, from the same two helpers. Applied to fin_txn membership in byFieldRows. */
-  const memberShares = useCallback<MemberShares>((city, periodKey) => (data ? sharesOf(data, city, periodKey) : null), [data]);
+  const memberShares = useCallback<MemberShares>((city, periodKey) => (data ? sharesFromData(data, city, periodKey) : null), [data]);
   const fieldGroups = useMemo(() => {
     if (!periodRows) return [];
     const rows = cityFilter === "all" ? periodRows : periodRows.filter((r) => cityLabel(r.city) === cityFilter);
@@ -420,16 +421,9 @@ export default function RevenueSection() {
   const monthKnown = useCallback((ym: Ym) => covers(data, ym) || (!!data && !!spots.data), [data, spots.data]);
   const rangeShares = useCallback<MemberShares>((city, periodKey) => {
     const ym = ymOfPeriodKey(periodKey);
-    if (covers(data, ym)) return sharesOf(data!, city, periodKey);
+    if (covers(data, ym)) return sharesFromData(data!, city, periodKey);
     if (!data || !spots.data) return null;
-    // THE ROSTER INDEX'S RULE, on the database's counts: the legs are the city's venues, and the
-    // city total is the bucket of the FIRST leg's city string (cityTotalMemberSpotsFor).
-    const legs = data.venues.filter((v) => canonCity(v.city) === canonCity(city));
-    if (legs.length === 0) return null;
-    const of = (vid: number) => spots.data!.get(`${vid}|${ym}`)?.spots ?? 0;
-    const citySpots = [...spots.data.values()].filter((x) => x.ym === ym && x.city === legs[0].city).reduce((a, x) => a + x.spots, 0);
-    if (!(citySpots > 0)) return null;
-    return legs.map((v) => ({ venueId: Number(v.id), share: of(Number(v.id)) / citySpots })).filter((x) => x.share > 0);
+    return sharesFromSpots(data.venues, spots.data, city, periodKey);
   }, [data, spots.data]);
   const sharesPending = needShares && ((primaryLoading && !data) || spots.loading);
   const notLoadedNote = spots.error ? `Member spots did not load: ${spots.error}` : "Member spots for this month are not loaded.";
@@ -748,18 +742,4 @@ function useNarrowedDays(on: boolean, from: string, to: string, n: {
     return ready ? filterRows(rs, filter, venues, memberShares, true) : null;
   }, [all.data, legs.data, filter, narrow, ready, venues, memberShares]);
   return { rows, error: all.error ?? legs.error };
-}
-
-/* MEMBERSHIP ONTO FIELDS for one city-month, from one loaded roster — the Cities page's rule
- * (cityPnl.ts, "ALLOCATE membership onto the pitches"): field share = the field's member spots that
- * month ÷ the city's member spots that month. Null when the month has no member spots in `d`. */
-function sharesOf(d: FinanceData, city: string, periodKey: string): { venueId: number; share: number }[] | null {
-  const month = monthLabelOf(periodKey);
-  const legs = d.venues.filter((v) => canonCity(v.city) === canonCity(city));
-  if (legs.length === 0) return null;
-  const citySpots = cityTotalMemberSpotsFor(d, legs[0].city, month);
-  if (!(citySpots > 0)) return null;
-  return legs
-    .map((v) => ({ venueId: Number(v.id), share: venueMemberSpotsFor(d, v.id, month).member / citySpots }))
-    .filter((x) => x.share > 0);
 }

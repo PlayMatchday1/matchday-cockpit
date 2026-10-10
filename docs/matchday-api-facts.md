@@ -7121,3 +7121,18 @@ Evidence: production `GET /admin/matches?fromDate=2026-10-09&toDate=2026-10-09`,
   - The number is the spots booked with a promo code: on 2026-10-09, 24 for All cities and 8 for Houston.
   - Free and below-price spots appear in no tile; they still count in Real spots filled. So Paid + Member + Promo is deliberately less than Real.
 - **Guests are never flagged as a first match.** From Oct 1 to 9, 0 of 347 held GUEST rows had `isFirstMatch` true, against 307 of 2,791 PLAYER rows. A guest shares the host's `userId` and has no account of its own, so the API cannot say whether a guest is a first-timer.
+
+## Finance › Cost and Cities read the Revenue page's net revenue (2026-10-10)
+
+- **What Cost used to divide by:** roster revenue (`venuePartnerRevenueFor`), counting DAILY PAID bookings at booking price. That included credit spends and player-cancelled bookings, plus membership valued at the prior month's per-spot rate. Evidence: `src/lib/fieldEconomics.ts` `buildFieldMonths`.
+  - September 2026 came to $84,213 against the Revenue page's $80,554.
+  - My reconstruction of Cost's DPP from `mdapi_match_players` was $65,816. Of that, $5,742 was paid from credit and $3,189 sat on player-cancelled bookings. Neither is a Stripe charge in September.
+- **What Cities used to count:** DPP at known-cost fields only, plus `cityMembershipRevenuePreTaxFor`. The rest of the DPP was held out as "untracked".
+- **Why the prior columns were wrong:** they read months outside the loaded quarter.
+  - October's "prior month" divided September's full field cost by September's DPP alone, with no member spots for September in Q4 data. For San Antonio, $12,795 ÷ $17,208 = 74.4%, against September's own 54.9%.
+  - The "prior quarter" for September (Apr–Jun) was read out of Q3 data. That is how Austin showed 10.1%.
+- **Now:** both pages read `useNetRevenue` (fin_txn via `loadRollup` → `byCityRows`, and `byVenueRows` with `memberShares.sharesFromSpots`). The finance load spans every month on the page, at most 4 quarters.
+  - Checked Jul–Oct 2026: Cost and Cities revenue per city, Unassigned and total equal the Revenue page's City tab to the cent.
+  - Cost per field equals the Revenue page's Field tab.
+  - Field cost is identical to before for every city and field. The only change is a new PARMER Stadium row in July 2026, with $0 cost and $142.50 of revenue.
+  - October's "Sep" column now equals September's own ratio for every city.

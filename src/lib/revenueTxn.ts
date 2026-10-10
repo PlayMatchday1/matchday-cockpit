@@ -316,6 +316,23 @@ export function byFieldRows(
     (a.venueId == null ? 1 : 0) - (b.venueId == null ? 1 : 0) || b.net - a.net);
 }
 
+/** BY VENUE (fin_venues.id), in cents — byFieldRows' rows and arithmetic, keyed by the venue id
+ *  instead of the field's name, for pages whose fields are venue GROUPS (Finance › Cost, Cities).
+ *  A group's revenue is the sum of its legs; summing the legs of one byFieldRows key gives that
+ *  Field-tab row exactly. `noField` is what no venue carries (byFieldRows' two no-field rows). */
+export function byVenueRows(rows: RollupRow[], memberShares?: MemberShares): { venues: Map<number, GroupRow>; noField: GroupRow } {
+  const venues = new Map<number, GroupRow>();
+  const noField = blankGroup("nofield", NO_FIELD_OTHER, null, null);
+  for (const r of allocateMembership(rows, memberShares)) {
+    if (!isRevenueRow(r)) continue;
+    if (r.fin_venue_id == null) { addTo(noField, r); continue; }
+    const g = venues.get(r.fin_venue_id) ?? blankGroup(`v${r.fin_venue_id}`, `Venue ${r.fin_venue_id}`, cityLabel(r.city), r.fin_venue_id);
+    addTo(g, r);
+    venues.set(r.fin_venue_id, g);
+  }
+  return { venues, noField };
+}
+
 /* ── THE PAGE FILTER: ONE CITY, OR ONE FIELD ──────────────────────────────────────────────────
  * The rows the top card, the four-month table and the chart sum when a city or a field is chosen.
  * A city keeps that city's rows; a field keeps that field's rows after allocateMembership — the

@@ -499,3 +499,10 @@
   line-height: 1.5;
 }
 .unattributed strong { font-weight: 650; }
+
+/* Finance › Cost's sortable headers and pinned rows (2026-10-10). */
+.sortBtn { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; border-radius: 4px; }
+.sortBtn:focus-visible { outline: 2px solid #2bd17e; outline-offset: 1px; }
+.sortArr { font-size: 9px; opacity: .25; }
+.sortOn { opacity: 1; }
+.pinRow td { color: #7b8b82; background: #fafbf9; }

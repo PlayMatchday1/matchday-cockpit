@@ -5,12 +5,11 @@ import RevenueBasisNote from "@/components/RevenueBasisNote";
 import CostSection from "@/components/finance/CostSection";
 
 export default function FinanceCostPage() {
-  /* THE BASIS, ON SCREEN. Finance › Revenue and Cities are TAX-INCLUSIVE by design (money
-   * collected, ties to Stripe gross volume); Cost is PRE-TAX because it divides into
-   * roster-derived revenue. The ~8% between them is stated, not reconciled away. */
+  /* THE BASIS, ON SCREEN: net revenue, the Revenue page's own (2026-10-10). Cost and Cities read
+   * it through useNetRevenue, so Revenue, Cost and Cities agree to the cent. */
   return (
     <>
-      <RevenueBasisNote basis="pre-tax" />
+      <RevenueBasisNote basis="net" />
       <CostSection />
     </>
   );

@@ -38,7 +38,6 @@ const TAX_INCLUSIVE_CALLERS: readonly (readonly [string, string])[] = [];
 const PRE_TAX_CALLERS = [
   ["src/lib/matchPnL.ts", "joined to roster-derived DPP"],
   ["src/components/SlateMatchPnLSection.tsx", "joined to Slate Review's $12.00 pre-tax DPP"],
-  ["src/lib/cityPnl.ts", "joined to roster-derived field revenue"],
   ["src/lib/fieldEconomics.ts", "joined to roster-derived revenue"],
 ] as const;
 
@@ -98,6 +97,20 @@ for (const [path, why] of PRE_TAX_CALLERS) {
   // The bare name is a prefix of the pre-tax name, so match it only where NOT followed by PreTax.
   if (!/cityMembershipRevenueFor\b/.test(code)) ok("…and not the tax-inclusive one");
   else bad(`${path} also reads the TAX-INCLUSIVE helper`, "ONE FIGURE, TWO BASES");
+}
+
+/* CITIES READS THE REVENUE PAGE'S NET (2026-10-10). cityPnl.ts left PRE_TAX_CALLERS: it no longer
+ * joins any membership helper to roster DPP — its revenue arrives from useNetRevenue (fin_txn). The
+ * check is the negative of the old one, plus a control that the file was read. */
+console.log("\nCities takes its revenue from the Revenue page");
+{
+  const code = strip(readFileSync("src/lib/cityPnl.ts", "utf8"));
+  if (/export function computeCityPnl/.test(code)) ok("control: cityPnl was read");
+  else bad("control: cityPnl was read");
+  if (!/cityMembershipRevenue(PreTax)?For\b/.test(code)) ok("cityPnl reads neither membership helper");
+  else bad("cityPnl reads a fin_revenue membership helper", "ONE PAGE, TWO BASES");
+  if (/rev: CityRevenue/.test(code)) ok("…and takes its revenue as an input (CityRevenue)");
+  else bad("cityPnl takes its revenue as an input");
 }
 
 console.log("\nthe allocator, and the wiring");
